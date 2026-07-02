@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>DustGate — Provision</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: system-ui, -apple-system, sans-serif; background: #f0f0f0;
+         display: flex; justify-content: center; padding: 40px 16px; }
+  .card { background: #fff; border-radius: 12px; padding: 32px 28px;
+          width: 100%; max-width: 440px; box-shadow: 0 2px 12px rgba(0,0,0,.08); }
+  h1 { font-size: 20px; margin-bottom: 4px; }
+  .sub { font-size: 13px; color: #888; margin-bottom: 28px; }
+  label { display: block; font-size: 13px; font-weight: 600; color: #444;
+          margin-bottom: 5px; }
+  input { width: 100%; padding: 10px 12px; border: 1px solid #ddd;
+          border-radius: 7px; font-size: 14px; margin-bottom: 18px; outline: none; }
+  input:focus { border-color: #333; }
+  .row { display: flex; gap: 10px; margin-bottom: 18px; }
+  .row input { margin-bottom: 0; }
+  button { width: 100%; padding: 12px; border: none; border-radius: 7px;
+           font-size: 15px; font-weight: 600; cursor: pointer; transition: opacity .15s; }
+  button:disabled { opacity: .45; cursor: default; }
+  #btnConnect { background: #1c1c1c; color: #fff; margin-bottom: 12px; }
+  #btnSend    { background: #2563eb; color: #fff; }
+  #btnSend.mock { background: #7c3aed; }
+  .log { margin-top: 20px; background: #111; color: #0f0; border-radius: 8px;
+         padding: 14px; font-family: monospace; font-size: 12px;
+         min-height: 80px; max-height: 200px; overflow-y: auto;
+         white-space: pre-wrap; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 99px;
+           font-size: 11px; font-weight: 700; margin-left: 8px; }
+  .badge.connected { background: #d1fae5; color: #065f46; }
+  .badge.mock      { background: #ede9fe; color: #4c1d95; }
+  .badge.off       { background: #f3f4f6; color: #9ca3af; }
+  .divider { display: flex; align-items: center; gap: 10px; margin: 8px 0 20px; }
+  .divider hr { flex: 1; border: none; border-top: 1px solid #eee; }
+  .divider span { font-size: 12px; color: #aaa; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>DustGate Provision <span id="statusBadge" class="badge off">disconnected</span></h1>
+  <p class="sub">Write WiFi credentials and Anthropic key to NVS after a firmware flash.<br>
+     Requires Chrome/Edge (Web Serial API). Open DevTools console for verbose output.</p>
+
+  <button id="btnConnect">Connect to Board via USB Serial</button>
+
+  <div class="divider"><hr><span>or</span><hr></div>
+
+  <label>WiFi SSID</label>
+  <input id="ssid" type="text" placeholder="MyHomeNetwork" autocomplete="off">
+
+  <label>WiFi Password</label>
+  <input id="pass" type="password" placeholder="Leave blank for open networks" autocomplete="off">
+
+  <label>Anthropic API Key <span style="font-weight:400;color:#aaa">(optional)</span></label>
+  <input id="key" type="password" placeholder="sk-ant-..." autocomplete="off">
+
+  <button id="btnSend" disabled>Write Config to Board</button>
+
+  <div class="log" id="log">Waiting for connection…
+</div>
+</div>
+
+<script>
+let port = null;
+let writer = null;
+let reader = null;
+let mockMode = false;
+
+const $ = id => document.getElementById(id);
+const log = msg => {
+  const el = $('log');
+  el.textContent += msg + '\n';
+  el.scrollTop = el.scrollHeight;
+};
+
+// ── Web Serial ────────────────────────────────────────────────────────────
+$('btnConnect').addEventListener('click', async () => {
+  if (!('serial' in navigator)) {
+    log('⚠ Web Serial API not available.');
+    log('  Use Chrome or Edge. Make sure the page is served over https:// or file://');
+    log('');
+    log('Switching to MOCK MODE — config will not be written to a real device.');
+    enableMock();
+    return;
+  }
+
+  try {
+    port = await navigator.serial.requestPort();
+    await port.open({ baudRate: 115200 });
+
+    const enc = new TextEncoderStream();
+    enc.readable.pipeTo(port.writable);
+    writer = enc.writable.getWriter();
+
+    const dec = new TextDecoderStream();
+    port.readable.pipeTo(dec.writable);
+    reader = dec.readable.getReader();
+
+    $('statusBadge').textContent = 'connected';
+    $('statusBadge').className = 'badge connected';
+    $('btnConnect').textContent = 'Reconnect';
+    $('btnSend').disabled = false;
+    $('btnSend').className = '';
+    $('btnSend').textContent = 'Write Config to Board';
+
+    log('✓ Serial port opened at 115200 baud.');
+    log('  Waiting for ESP32 prompt…');
+    readLoop();
+  } catch (e) {
+    log('✗ Serial open failed: ' + e.message);
+  }
+});
+
+async function readLoop() {
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      log(value.trimEnd());
+    }
+  } catch (e) {
+    log('Serial read error: ' + e.message);
+  }
+}
+
+// ── Mock mode (no device) ─────────────────────────────────────────────────
+function enableMock() {
+  mockMode = true;
+  $('statusBadge').textContent = 'mock';
+  $('statusBadge').className = 'badge mock';
+  $('btnSend').disabled = false;
+  $('btnSend').className = 'mock';
+  $('btnSend').textContent = 'Simulate Write (mock)';
+}
+
+// ── Send provision command ─────────────────────────────────────────────────
+$('btnSend').addEventListener('click', async () => {
+  const ssid = $('ssid').value.trim();
+  const pass = $('pass').value;
+  const key  = $('key').value.trim();
+
+  if (!ssid) { log('✗ SSID is required.'); return; }
+
+  const payload = { ssid, pass };
+  if (key) payload.key = key;
+
+  const cmd = 'provision ' + JSON.stringify(payload) + '\n';
+
+  if (mockMode) {
+    log('');
+    log('[MOCK] Would send: ' + cmd.trim());
+    log('[MOCK] WiFi saved: ' + ssid);
+    if (key) log('[MOCK] Anthropic key saved.');
+    log('[MOCK] OK provision');
+    return;
+  }
+
+  if (!writer) { log('✗ Not connected.'); return; }
+
+  try {
+    log('');
+    log('→ ' + cmd.trim());
+    await writer.write(cmd);
+    // Response appears in the read loop above
+  } catch (e) {
+    log('✗ Write error: ' + e.message);
+  }
+});
+</script>
+</body>
+</html>
