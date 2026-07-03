@@ -11,6 +11,10 @@
 //
 // State is in-memory and resets on restart.
 
+// Load tools/.env regardless of cwd — keys never committed to git
+try { require('dotenv').config({ path: require('path').join(__dirname, '.env') }); }
+catch { /* dotenv not installed yet — run: cd tools && npm install */ }
+
 const http   = require('http');
 const https  = require('https');
 const url    = require('url');
@@ -228,5 +232,5 @@ server.listen(PORT, () => {
   console.log(`  API key: ${API_KEY}`);
   console.log(`  Claude: ${ANT_KEY ? 'PROXYING to Anthropic' : 'canned mock responses'}`);
   console.log(`\n  In dustgate-ui:  ng serve --proxy-config proxy.conf.json`);
-  console.log(`  Or set ANTHROPIC_KEY=sk-ant-... to use real Claude\n`);
+  console.log(`  Or add ANTHROPIC_KEY=sk-ant-... to tools/.env\n`);
 });

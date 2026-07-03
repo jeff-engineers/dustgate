@@ -4,9 +4,10 @@
   "description": "Dev tools for DustGate — mock API server and provisioning utilities",
   "scripts": {
     "mock": "node mock-api.js",
-    "mock:claude": "ANTHROPIC_KEY=$(cat ~/.anthropic-key 2>/dev/null || echo '') node mock-api.js"
+    "mock:claude": "node mock-api.js"
   },
   "dependencies": {
+    "dotenv": "^16.4.5",
     "ws": "^8.14.2"
   }
 }
