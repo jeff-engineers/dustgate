@@ -1,5 +1,5 @@
 {
-  "buildCommand": "cd dustgate-ui && npm install && npm run build",
+  "buildCommand": "cd dustgate-ui && npm ci && npm run build",
   "outputDirectory": "dustgate-ui/dist/dustgate-ui/browser",
   "rewrites": [
     { "source": "/(.*)", "destination": "/index.html" }
