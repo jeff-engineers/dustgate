@@ -58,6 +58,7 @@ public:
     // Call from the main loop when the HTTP API receives a manual move command.
     // -------------------------------------------------------------------------
     void setManualOverride(int stop);
+    bool isManualOverride();        // thread-safe read for status JSON
 
 private:
     SmartOutlet*      _outlets[SMART_OUTLET_COUNT];

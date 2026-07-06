@@ -1,0 +1,14 @@
+{
+  "name": "dustgate-api",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Vercel serverless API functions for the DustGate demo",
+  "dependencies": {
+    "@upstash/ratelimit": "^2.0.0",
+    "@upstash/redis": "^1.34.0",
+    "@vercel/node": "^5.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0"
+  }
+}

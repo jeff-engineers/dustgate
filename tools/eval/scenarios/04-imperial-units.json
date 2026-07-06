@@ -1,0 +1,42 @@
+{
+  "name": "Imperial distance inputs",
+  "description": "User provides all distances in feet and inches. Claude should convert and jog correctly without asking for metric.",
+  "turns": [
+    "let's do this",
+    "3 gates",
+    "endstop is on the left side",
+    "go for it",
+    "it went toward the endstop, looks good",
+    "the first gate is about 8 inches away",
+    "yep that's it",
+    "second gate is another 8 inches",
+    "perfect",
+    "third gate is another 8 inches",
+    "yes aligned",
+    "gate 1: table saw, 192.168.1.50, gen 1",
+    "gate 2: jointer, 192.168.1.51, gen 1",
+    "gate 3: planer, 192.168.1.52, gen 1"
+  ],
+  "assertions": {
+    "required_tools": [
+      "set_num_gates",
+      "set_home_side",
+      "home",
+      "save_stop",
+      "configure_outlet",
+      "save_config"
+    ],
+    "forbidden_tools": [],
+    "must_precede": [
+      ["home",           "save_stop"],
+      ["save_stop",      "configure_outlet"],
+      ["configure_outlet", "save_config"]
+    ],
+    "final_state": {
+      "num_active_stops": 3,
+      "homed": true,
+      "outlets_configured": 3
+    },
+    "max_turns": 40
+  }
+}

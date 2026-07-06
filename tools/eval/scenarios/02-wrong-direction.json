@@ -1,0 +1,35 @@
+{
+  "name": "Motor direction correction",
+  "description": "Actuator moves away from endstop on first home attempt. Claude should call set_motor_direction(invert=true) then home again.",
+  "turns": [
+    "let's get started",
+    "I have 1 gate",
+    "home endstop is on the right",
+    "go ahead",
+    "it moved AWAY from the endstop — wrong direction",
+    "ok it homed correctly this time",
+    "about 8 inches to the gate",
+    "yes that's the gate",
+    "no outlet needed for this gate, just save and we're done"
+  ],
+  "assertions": {
+    "required_tools": [
+      "set_num_gates",
+      "set_home_side",
+      "home",
+      "set_motor_direction",
+      "save_stop",
+      "save_config"
+    ],
+    "forbidden_tools": [],
+    "must_precede": [
+      ["set_motor_direction", "save_stop"],
+      ["home",               "save_stop"]
+    ],
+    "final_state": {
+      "num_active_stops": 1,
+      "homed": true
+    },
+    "max_turns": 30
+  }
+}

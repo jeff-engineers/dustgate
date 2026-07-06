@@ -3,6 +3,8 @@ import { Router } from '@angular/router';
 import { FormsModule } from '@angular/forms';
 import { CommonModule } from '@angular/common';
 import { ClaudeService, ChatMessage, TurnEvent, ToolCall } from '../services/claude.service';
+import { ApiService } from '../services/api.service';
+import { ManifoldVisualizerComponent } from '../visualizer/manifold-visualizer.component';
 
 interface DisplayMessage {
   role: 'user' | 'assistant' | 'tool';
@@ -15,7 +17,7 @@ interface DisplayMessage {
 @Component({
   selector: 'app-setup',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, ManifoldVisualizerComponent],
   styles: [`
     :host {
       display: flex;
@@ -52,6 +54,53 @@ interface DisplayMessage {
       font-size: 18px;
       font-weight: 700;
       flex: 1;
+    }
+
+    .reset-btn {
+      background: none;
+      border: none;
+      color: var(--muted);
+      font-size: 13px;
+      padding: 6px 8px;
+      border-radius: 8px;
+      flex-shrink: 0;
+    }
+    .reset-btn:active { opacity: 0.6; }
+
+    .confirm-reset {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      color: var(--muted);
+      flex-shrink: 0;
+    }
+    .confirm-reset span { white-space: nowrap; }
+    .confirm-yes {
+      border: none;
+      border-radius: 6px;
+      padding: 4px 10px;
+      font-size: 12px;
+      font-weight: 600;
+      background: var(--danger);
+      color: #fff;
+    }
+    .confirm-no {
+      border: none;
+      border-radius: 6px;
+      padding: 4px 10px;
+      font-size: 12px;
+      font-weight: 600;
+      background: var(--surface);
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+
+    /* ── Visualizer strip ────────────────────────────────────── */
+    .viz-section {
+      flex-shrink: 0;
+      padding: 10px 12px 0;
+      border-bottom: 1px solid var(--border);
     }
 
     /* ── Messages ─────────────────────────────────────────────── */
@@ -186,6 +235,24 @@ interface DisplayMessage {
     <div class="header">
       <button class="back-btn" (click)="goBack()" aria-label="Back">←</button>
       <h1>Setup Assistant</h1>
+
+      <!-- Normal state: show reset button -->
+      <button class="reset-btn"
+              *ngIf="!confirmingReset"
+              (click)="confirmingReset = true"
+              aria-label="Start over">↺ Start over</button>
+
+      <!-- Confirmation state -->
+      <div class="confirm-reset" *ngIf="confirmingReset">
+        <span>Reset?</span>
+        <button class="confirm-yes" (click)="doReset()">Yes</button>
+        <button class="confirm-no"  (click)="confirmingReset = false">No</button>
+      </div>
+    </div>
+
+    <!-- Visualizer strip -->
+    <div class="viz-section">
+      <app-manifold-visualizer></app-manifold-visualizer>
     </div>
 
     <!-- Messages -->
@@ -254,12 +321,13 @@ export class SetupComponent implements OnInit, AfterViewChecked {
   display: DisplayMessage[] = [];
   inputText = '';
   busy = false;
+  confirmingReset = false;
 
   /** Full Anthropic message history (kept in memory for this session). */
   private history: ChatMessage[] = [];
   private shouldScroll = false;
 
-  constructor(private claude: ClaudeService, private router: Router) {}
+  constructor(private claude: ClaudeService, private api: ApiService, private router: Router) {}
 
   ngOnInit() {}
 
@@ -274,6 +342,18 @@ export class SetupComponent implements OnInit, AfterViewChecked {
   // ── Actions ──────────────────────────────────────────────────────────────────
 
   goBack() { this.router.navigate(['/']); }
+
+  async doReset() {
+    this.confirmingReset = false;
+    try {
+      await this.api.resetSetup();
+      await this.api.refreshInfo();  // sync deviceInfo.numStops → visualizer shows placeholder
+    } catch { /* device may not respond — optimistic numStops=0 still collapses the viz */ }
+    this.display   = [];
+    this.history   = [];
+    this.inputText = '';
+    this.busy      = false;
+  }
 
   onEnter(e: Event) {
     const ke = e as KeyboardEvent;
@@ -303,47 +383,69 @@ export class SetupComponent implements OnInit, AfterViewChecked {
     this.scrollDown();
     this.busy = true;
 
-    // Placeholder for assistant response
-    const pendingIdx = this.display.length;
+    // Placeholder for the first assistant text segment.
     this.display.push({ role: 'assistant', text: '…', pending: true });
-    this.scrollDown();
-
-    let assistantText = '';
+    // pendingIdx tracks the slot for the CURRENT text segment.
+    // When it equals display.length the slot is "lazy" — created on first text event.
+    let pendingIdx = this.display.length - 1;
+    let segmentText = ''; // text accumulated in the current segment
 
     try {
       await this.claude.sendMessage(this.history, text, (event: TurnEvent) => {
         switch (event.type) {
+
           case 'text':
-            assistantText += (assistantText ? '\n' : '') + event.text;
-            this.display[pendingIdx] = { role: 'assistant', text: assistantText };
+            // Accumulate text into the current segment.
+            segmentText += (segmentText ? '\n' : '') + event.text;
+            if (pendingIdx < this.display.length) {
+              // Update existing bubble (initial "…" or continuation).
+              this.display[pendingIdx] = { role: 'assistant', text: segmentText };
+            } else {
+              // Post-tool text: create a new bubble (lazy slot becomes real).
+              this.display.push({ role: 'assistant', text: segmentText });
+              // pendingIdx was already set to display.length − 1 by tool_start.
+            }
             this.scrollDown();
             break;
 
           case 'tool_start':
-            this.display.splice(pendingIdx, 0, this.toolDisplay(event.tool!, false));
+            // Freeze the current text segment (or drop the empty "…" bubble).
+            if (!segmentText && pendingIdx < this.display.length &&
+                this.display[pendingIdx]?.pending) {
+              // No pre-tool text — remove the "…" placeholder.
+              this.display.splice(pendingIdx, 1);
+            }
+            // Append the tool pill at the end — never shift existing bubbles.
+            this.display.push(this.toolDisplay(event.tool!, false));
+            // Next text event will create a NEW bubble after this tool pill.
+            pendingIdx = this.display.length; // lazy slot
+            segmentText = '';
             this.scrollDown();
             break;
 
           case 'tool_done': {
-            // Find and update the matching tool pill
+            // Find the in-progress pill for this tool and mark it complete.
             const idx = this.display.findIndex(
               m => m.role === 'tool' && m.toolName === event.tool!.name && m.toolOk === undefined
             );
-            if (idx >= 0) {
-              this.display[idx] = this.toolDisplay(event.tool!, true);
-            }
+            if (idx >= 0) this.display[idx] = this.toolDisplay(event.tool!, true);
             break;
           }
 
           case 'error':
-            this.display[pendingIdx] = { role: 'assistant', text: `⚠️ ${event.text}` };
+            if (pendingIdx < this.display.length) {
+              this.display[pendingIdx] = { role: 'assistant', text: `⚠️ ${event.text}` };
+            } else {
+              this.display.push({ role: 'assistant', text: `⚠️ ${event.text}` });
+            }
             this.scrollDown();
             break;
         }
       });
     } finally {
-      // Remove pending placeholder if no text came back
-      if (!assistantText) {
+      // Clean up any trailing "…" placeholder that never received text.
+      if (!segmentText && pendingIdx < this.display.length &&
+          this.display[pendingIdx]?.pending) {
         this.display.splice(pendingIdx, 1);
       }
       this.busy = false;
@@ -365,15 +467,19 @@ export class SetupComponent implements OnInit, AfterViewChecked {
 
   private toolLabel(name: string, input: Record<string, unknown>): string {
     switch (name) {
-      case 'get_status':    return 'Reading system status';
-      case 'home':          return 'Homing actuator';
-      case 'move_to_stop':  return `Moving to stop ${input['stop']}`;
-      case 'jog':           return `Jogging ${input['mm']} mm`;
-      case 'ping_outlet':   return `Pinging ${input['ip']}`;
-      case 'configure_outlet': return `Configuring "${input['name']}" at ${input['ip']}`;
-      case 'save_config':   return 'Saving configuration';
-      case 'delete_outlet': return `Removing slot ${input['slot']}`;
-      default:              return name;
+      case 'get_status':         return 'Reading system status';
+      case 'home':               return 'Homing actuator';
+      case 'move_to_stop':       return `Moving to stop ${input['stop']}`;
+      case 'jog':                return `Jogging ${input['mm']} mm`;
+      case 'ping_outlet':        return `Pinging ${input['ip']}`;
+      case 'configure_outlet':   return `Configuring "${input['name']}" at ${input['ip']}`;
+      case 'save_config':        return 'Saving configuration';
+      case 'delete_outlet':      return `Removing slot ${input['slot']}`;
+      case 'save_stop':          return `Saving stop ${input['index']} position`;
+      case 'set_home_side':      return `Home side: ${input['home_on_right'] ? 'right' : 'left'}`;
+      case 'set_motor_direction':return `Motor direction: ${input['invert'] ? 'inverted' : 'normal'}`;
+      case 'set_num_gates':      return `Gates: ${input['num_gates']}`;
+      default:                   return name;
     }
   }
 

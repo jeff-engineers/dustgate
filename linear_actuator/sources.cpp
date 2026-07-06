@@ -15,18 +15,11 @@
 
 #include "motor/StepperTMC2209Driver.cpp"
 
-#include "feedback/SensorlessHoming.cpp"
 #include "feedback/LimitSwitchDistance.cpp"
-#include "feedback/LimitSwitchDetent.cpp"
 
-#include "control/RotaryControl.cpp"
 #include "control/SerialDebugControl.cpp"
-#include "control/WiFiControl.cpp"
 #include "control/SmartOutletControl.cpp"
-#include "control/AppControl.cpp"
 
 #include "output/RelayOutput.cpp"
 
 #include "training/CalibrationStore.cpp"
-#include "training/TrainingMode.cpp"
-#include "training/AutoTuner.cpp"

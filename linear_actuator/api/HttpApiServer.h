@@ -43,6 +43,7 @@ struct ApiStatus {
     bool homed;
     bool enabled;
     bool endstopHome;        // true = home switch currently triggered
+    int  numActiveStops;     // runtime gate count (set from g_numActiveStops)
 };
 
 // ---------------------------------------------------------------------------
@@ -73,9 +74,24 @@ public:
     bool consumeHomeRequest();
     bool consumeEnableRequest();
     bool consumeDisableRequest();
-    bool consumeMoveRequest(int& outStop);   // outStop: 0 = home, 1-N = gate
-    bool consumeJogRequest(float& outMM);   // outMM: + = away from home
+    bool consumeMoveRequest(int& outStop);      // outStop: 0 = home, 1-N = gate
+    bool consumeJogRequest(float& outMM);      // outMM: + = away from home
     bool consumeClearCalRequest();
+    // Save current motor position as a numbered stop (used by setup agent).
+    // Main loop must read current position and write it to g_stopPositionsMM.
+    bool consumeSetStopRequest(int& outIndex); // outIndex: 1-N
+
+    // Motor homing direction override (1 = normal, -1 = inverted).
+    // Written to NVS by the handler; consumed by main loop to update g_homeDirection.
+    bool consumeSetDirectionRequest(int& outDir);
+
+    // Active gate count (runtime; bounded by compile-time NUM_STOPS).
+    // Written to NVS by the handler; consumed by main loop to update g_numActiveStops.
+    bool consumeSetNumGatesRequest(int& outN);
+
+    // Visual orientation preference — home on right side vs left (default).
+    // Loaded from NVS; returned in /api/info so Angular can render correctly.
+    bool homeOnRight() const { return _homeOnRight; }
 
 #ifdef CONTROL_SMART_OUTLET
     // Outlet configuration commands — consumed by main loop, forwarded to
@@ -115,6 +131,12 @@ private:
     bool  _movePending;    int   _moveStop;
     bool  _jogPending;     float _jogMM;
     bool  _clearCalPending;
+    bool  _setStopPending;         int  _setStopIndex;
+    bool  _setDirectionPending;    int  _newDirection;        // 1 or -1
+    bool  _setNumGatesPending;     int  _newNumGates;
+    bool  _homeOnRight;            // persisted orientation preference
+    int   _homeDirection;          // runtime direction; loaded from NVS, updated via API
+    int   _cachedNumActiveStops;   // from ApiStatus.numActiveStops; returned in /api/info
 
 #ifdef CONTROL_SMART_OUTLET
     bool            _outletConfigPending;

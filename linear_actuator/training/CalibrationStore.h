@@ -32,8 +32,10 @@ struct CalibrationData {
     uint16_t crc;
 };
 
-// EEPROM size needed (add margin for future growth)
-static const int CALIB_EEPROM_SIZE = 64;
+// EEPROM size needed.
+// With NUM_STOPS=16: 2+1+1+(17×4)+4+4+2 = 82 bytes; 128 leaves 46 bytes of margin.
+// NOTE: changing NUM_STOPS invalidates the CRC of any existing cal data — run clearcal after reflash.
+static const int CALIB_EEPROM_SIZE = 128;
 
 class CalibrationStore {
 public:

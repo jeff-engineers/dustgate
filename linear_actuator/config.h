@@ -14,16 +14,9 @@
 #define MOTOR_STEPPER_TMC2209  // Stepper via TMC2209 (STEP/DIR + UART)
 
 // -----------------------------------------------------------------------------
-// FEEDBACK TYPE — select exactly one
+// FEEDBACK TYPE
 // -----------------------------------------------------------------------------
-// #define FEEDBACK_SENSORLESS    // StallGuard sensorless endstops (disabled — SG unreliable on Adafruit #6121)
-#define FEEDBACK_LIMIT_DISTANCE   // Home limit switch on left + step count for stop positions
-// #define FEEDBACK_LIMIT_DETENT     // 2 endstops + switch per detent position
-
-// Compile-time guard: sensorless homing requires TMC2209
-#if defined(FEEDBACK_SENSORLESS) && !defined(MOTOR_STEPPER_TMC2209)
-  #error "FEEDBACK_SENSORLESS requires MOTOR_STEPPER_TMC2209"
-#endif
+#define FEEDBACK_LIMIT_DISTANCE   // Home limit switch + step count for gate positions
 
 // PIN_ENDSTOP_HOME wiring: NC switch between D10 and GND, INPUT_PULLUP.
 //   Normal (contacts closed): pin pulled to GND → LOW → readHomeSwitch() = false
@@ -34,9 +27,7 @@
 // -----------------------------------------------------------------------------
 // CONTROL INPUT — select exactly one
 // -----------------------------------------------------------------------------
-// #define CONTROL_ROTARY          // 8-position rotary switch (resistor ladder on A0)
 #define CONTROL_SMART_OUTLET      // Shelly smart outlet polling (auto gate selection)
-// #define CONTROL_APP             // Smartphone app (stub)
 // #define CONTROL_SERIAL_DEBUG    // Serial Monitor — open at SERIAL_BAUD, type 'help'
 
 // -----------------------------------------------------------------------------
@@ -49,12 +40,16 @@
 // -----------------------------------------------------------------------------
 // POSITION CONFIGURATION
 // -----------------------------------------------------------------------------
-#define NUM_STOPS         2       // Number of selectable positions (max 7)
-                                  // Position 0 = disabled/home
+// Compile-time maximum — sets array sizes in CalibrationData and g_stopPositionsMM.
+// The runtime count (g_numActiveStops) is set via the setup agent and stored in NVS.
+// Bumping this requires clearing calibration (clearcal) because CalibrationData changes size.
+#define NUM_STOPS         16      // max selectable positions (position 0 = home)
 
-// Names for each stop (used in serial debug output)
+// Names for each stop (used in serial debug output — extend as needed)
 #define STOP_NAMES { "Home/Disabled", "Stop 1", "Stop 2", "Stop 3", \
-                     "Stop 4", "Stop 5", "Stop 6", "Stop 7" }
+                     "Stop 4", "Stop 5", "Stop 6", "Stop 7",        \
+                     "Stop 8", "Stop 9", "Stop 10", "Stop 11",      \
+                     "Stop 12", "Stop 13", "Stop 14", "Stop 15", "Stop 16" }
 
 // -----------------------------------------------------------------------------
 // MOTION PARAMETERS
@@ -79,38 +74,13 @@
 //   Steps per gate-to-gate = 82.9mm × 51.47 = ~4270 steps (measured: 4270 ✓)
 //   Endstop to gate 1      = ~155 steps = 3.01mm (measured)
 
-// -----------------------------------------------------------------------------
-// GEOMETRY-BASED STOP POSITIONS (sensorless mode, no training required)
-// These two parameters let the firmware compute gate positions analytically
-// from the known gear geometry rather than from EEPROM calibration.
-//
-// When FEEDBACK_SENSORLESS is active and no EEPROM calibration is present,
-// setup() calls computeStopPositions() to derive g_stopPositionsMM[] from:
-//   gate_1_mm = ENDSTOP_MARGIN_TEETH × RACK_PITCH_MM − backoff_mm
-//   gate_N_mm = gate_1_mm + (N−1) × STOP_SPACING_TEETH × RACK_PITCH_MM
-//
-// EEPROM calibration (training mode) always takes priority when present.
-// -----------------------------------------------------------------------------
-
-// Teeth of clearance between the physical hard endstop and gate 1 (and gate 7)
-// Used for HOMING_MAX_TRAVEL_MM calculation only — computeStopPositions() uses
-// ENDSTOP_MARGIN_STEPS (measured value) for the precise gate 1 position.
-#define ENDSTOP_MARGIN_TEETH    1
-
-// Measured distance from physical endstop to gate 1, in steps.
-// Physically measured: gate 1 at step -51 from home → margin = 51 + HOME_BACKOFF_STEPS = 101
-#define ENDSTOP_MARGIN_STEPS  101
-
-// Pinion teeth of travel between adjacent gates (1 full rev + 5 teeth = 20)
-#define STOP_SPACING_TEETH     20
-
-// Fallback compile-time distances (used only if both EEPROM and geometry-compute
-// are unavailable — should not normally be reached with FEEDBACK_SENSORLESS).
-#define STOP_DISTANCES_MM { 0.0f, 3.7f, 86.6f, 169.5f, 252.4f, 335.3f, 418.2f, 501.1f }
-
 // Homing: direction to drive toward home endstop
 // 1 = positive step direction, -1 = negative step direction
-#define HOME_DIRECTION      (1)
+// Compile-time default — overridden at runtime by g_homeDirection (loaded from NVS).
+// All files keep using HOME_DIRECTION unchanged; the macro now resolves to the global.
+#define HOME_DIRECTION_DEFAULT  (1)
+extern int g_homeDirection;        // defined in linear_actuator.ino
+#define HOME_DIRECTION           g_homeDirection
 
 // Speed & acceleration
 // steps/mm ≈ 102.94, so:
@@ -120,10 +90,11 @@
 #define HOMING_SPEED_STEPS_PER_SEC   500.0f
 #define ACCELERATION_STEPS_PER_SEC2  1000.0f
 
-// Maximum travel during homing before position is forced to home regardless of stall detection.
-// Set to full rack length + margin so a missed stall doesn't grind indefinitely.
-#define HOMING_MAX_TRAVEL_MM  ((float)(NUM_STOPS - 1) * (float)(STOP_SPACING_TEETH) * RACK_PITCH_MM \
-                               + 2.0f * (float)(ENDSTOP_MARGIN_TEETH) * RACK_PITCH_MM + 25.0f)
+// Maximum travel during homing — safety cutoff if the home switch is never triggered.
+// 700 mm covers an 8-gate installation (7 × 82.9 mm ≈ 580 mm) plus generous margin.
+// At homing speed (~9.7 mm/sec) this limits runaway to ~72 s before the firmware
+// forces the position to home regardless of the switch.
+#define HOMING_MAX_TRAVEL_MM  700.0f
 
 // After homing, back off this many steps before zeroing position.
 // Endstop margin = 1 tooth = ~427 steps; backoff just needs to clear the switch.
@@ -142,11 +113,8 @@
 #define TMC2209_CURRENT_MA       800    // Run current in mA — raise if stalls mid-travel
 #define TMC2209_HOLD_CURRENT_MA  150    // Hold current — motor held between moves (low = cool)
 
-// StallGuard threshold (0–255, higher = more sensitive / triggers more easily)
-// Tune this empirically:
-//   too high = false stalls mid-move
-//   too low  = endstop not detected (motor grinds against stop)
-// Start at 50 and increase by 10 until homing triggers reliably, then back off 5.
+// StallGuard threshold — not used for homing (physical limit switch) but left
+// as a safety floor; TMC2209 still raises DIAG on severe overload/stall.
 #define TMC2209_STALL_THRESHOLD   50
 
 // UART address (0–3, set by MS1/MS2 pins — Adafruit board default is 0)
@@ -174,13 +142,6 @@
 // Use resistor ladder on A1 (single analog pin) — see WIRING.md
 #define PIN_DETENT_ANALOG   A1  // Resistor ladder for up to 7 detent switches
 
-// -- Rotary switch (CONTROL_ROTARY) --
-// 3.3V pull-up, 12-bit ADC (0–4095) — see RotaryControl.cpp for thresholds
-#define PIN_ROTARY          A0
-
-// -- Toggle switch (CONTROL_ROTARY) --
-#define PIN_TOGGLE         12   // D12 — NC to GND; LOW = enabled
-
 // -- E-stop button --
 // NC momentary: one terminal to PIN_ESTOP, other to GND.
 // Normal: pin LOW (contacts closed). Triggered/broken: pin HIGH → RISING interrupt.
@@ -199,58 +160,6 @@
 #define RELAY_ON_DELAY_MS       0     // ms after reaching stop before relay ON
 #define RELAY_OFF_DELAY_MS    500     // ms after leaving stop before relay OFF
 #define RELAY_ACTIVE_HIGH      true   // true = HIGH energizes relay
-
-// -----------------------------------------------------------------------------
-// TRAINING MODE PARAMETERS (TMC2209 sensorless calibration)
-// -----------------------------------------------------------------------------
-// Speed during training (steps/sec). Slow enough for reliable stall detection.
-// Lower if stalls aren't detected consistently.
-#define TRAINING_SPEED_STEPS_PER_SEC    300.0f
-
-// Steps to back off from home endstop before zeroing position
-#define TRAINING_HOME_BACKOFF_STEPS      20
-
-// Verify pass tolerance: stall must occur within this fraction of trained distance
-// 0.08 = ±8%. Increase if your mechanism has variability.
-#define TRAINING_VERIFY_TOLERANCE       0.08f
-
-// Settle time (ms) before stall detection activates after motion starts
-#define TRAINING_STALL_SETTLE_MS        400
-
-// Pause (ms) between verify steps to let motor fully stop
-#define TRAINING_VERIFY_PAUSE_MS        600
-
-// -----------------------------------------------------------------------------
-// STALLGUARD AUTO-TUNE PARAMETERS
-// autotune command: binary-searches SGTHRS to find the minimum value that
-// reliably detects the endstop stall without false-stalling mid-travel.
-// -----------------------------------------------------------------------------
-
-// Retract distance: how far autotune backs away from the endstop before each attempt.
-#define AUTOTUNE_SEARCH_MM          15.0f
-
-// Extra approach distance past the retract point on each attempt (mm).
-// The motor drives AUTOTUNE_SEARCH_MM + AUTOTUNE_OVERSHOOT_MM toward the endstop,
-// so the approach always exceeds the retract — backlash cannot cause a short-stop.
-// Increase if the motor sometimes fails to contact the endstop.
-#define AUTOTUNE_OVERSHOOT_MM       10.0f
-
-// Stall settle time before checking for stall each attempt (ms).
-// Must be long enough for motor to reach full speed.
-#define AUTOTUNE_SETTLE_MS          450
-
-// If stall fires within the first N% of expected travel, classify as false stall.
-// Lower = more tolerant of early stalls (better for non-rigid mechanisms).
-// Higher = stricter (better for rigid mechanisms, separates zones more clearly).
-// For a non-rigid mechanism start at 25 and decrease if false stalls are rejected.
-#define AUTOTUNE_FALSE_STALL_PCT    25
-
-// Safety margin added to the minimum working SGTHRS.
-// Larger = more headroom against false stalls; smaller = more sensitive.
-#define AUTOTUNE_MARGIN             15
-
-// Pause after returning to start before next attempt (ms)
-#define AUTOTUNE_BACK_OFF_PAUSE_MS  300
 
 // -----------------------------------------------------------------------------
 // SMART OUTLET CONTROL (CONTROL_SMART_OUTLET)
@@ -282,31 +191,16 @@
 #define OUTLET_DEFAULT_THRESHOLD_W  5.0f
 
 // -----------------------------------------------------------------------------
-// WIFI CONTROL (CONTROL_WIFI only)
-// Default: AP mode — ESP32 creates its own hotspot. Connect phone to the SSID
-// below, then open http://192.168.4.1 in a browser.
-//
-// Station mode: uncomment WIFI_STA_SSID / WIFI_STA_PASS to join existing WiFi.
-// The IP address will be printed to Serial on boot.
-// -----------------------------------------------------------------------------
-// Setup portal: shown when no WiFi credentials are stored (end-user provisioning).
-// Connect to this SSID and visit http://192.168.4.1 to enter your network credentials.
-#define WIFI_PORTAL_SSID    "DustGate-Setup"
-
-// Web UI AP (CONTROL_WIFI only — used when in standalone hotspot mode)
-#define WIFI_AP_SSID        "DustGate"
-#define WIFI_AP_PASS        ""            // Empty = open (no password)
-
+// WIFI CREDENTIALS
 // Station mode credentials — uncomment to hardcode (developer / known network).
 // Leave commented for end-user deployments: credentials are stored via the setup portal.
 // #define WIFI_STA_SSID    "your-network-name"
 // #define WIFI_STA_PASS    "your-password"
 
-#define WIFI_PORT           80
+// Setup portal SSID: shown when no WiFi credentials are stored.
+// Connect to this hotspot and visit http://192.168.4.1 to enter your network credentials.
+#define WIFI_PORTAL_SSID    "DustGate-Setup"
 
-// -----------------------------------------------------------------------------
-// SERIAL / DEBUG
-// -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
 // HTTP API (ENABLE_HTTP_API)
 // -----------------------------------------------------------------------------

@@ -229,6 +229,13 @@ void SmartOutletControl::setManualOverride(int stop) {
     DEBUG_PRINT(F("[Outlets] Manual override → stop ")); Serial.println(stop);
 }
 
+bool SmartOutletControl::isManualOverride() {
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    bool v = _manualOverride;
+    xSemaphoreGive(_mutex);
+    return v;
+}
+
 void SmartOutletControl::printConfig() {
     Serial.println(F("--- Active Outlet Config ---"));
     for (int i = 0; i < _count; i++) {

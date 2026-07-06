@@ -18,9 +18,7 @@ SerialDebugControl::SerialDebugControl()
       _enabled(false),
       _eStopPending(false),
       _homePending(false),
-      _trainPending(false),
       _clearCalPending(false),
-      _autotunePending(false),
       _gconfPending(false),
       _stallThreshold(-1),
       _homeSpeed(-1.0f),
@@ -72,25 +70,9 @@ bool SerialDebugControl::consumeHomeRequest() {
     return false;
 }
 
-bool SerialDebugControl::consumeTrainRequest() {
-    if (_trainPending) {
-        _trainPending = false;
-        return true;
-    }
-    return false;
-}
-
 bool SerialDebugControl::consumeClearCalRequest() {
     if (_clearCalPending) {
         _clearCalPending = false;
-        return true;
-    }
-    return false;
-}
-
-bool SerialDebugControl::consumeAutotuneRequest() {
-    if (_autotunePending) {
-        _autotunePending = false;
         return true;
     }
     return false;
@@ -154,12 +136,6 @@ void SerialDebugControl::processLine(const String& line) {
         _eStopPending = false;     // clear any latched estop
         _homePending = true;
         Serial.println(F("[DEBUG] Homing requested."));
-
-    } else if (cmd == "train") {
-        Serial.println(F("[DEBUG] 'train' is reserved for the setup agent."));
-
-    } else if (cmd == "autotune") {
-        Serial.println(F("[DEBUG] 'autotune' is reserved for the setup agent."));
 
     } else if (cmd == "gconf") {
         _gconfPending = true;
@@ -228,12 +204,6 @@ void SerialDebugControl::processLine(const String& line) {
     } else if (cmd == "clearcal") {
         _clearCalPending = true;
         Serial.println(F("[DEBUG] Calibration erase requested — config.h defaults will be used."));
-
-    } else if (cmd.startsWith("sgthrs ")) {
-        Serial.println(F("[DEBUG] 'sgthrs' is reserved for the setup agent."));
-
-    } else if (cmd.startsWith("homespeed ")) {
-        Serial.println(F("[DEBUG] 'homespeed' is reserved for the setup agent."));
 
     } else if (cmd == "status") {
         printStatus();

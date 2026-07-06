@@ -3,6 +3,7 @@ import { Router } from '@angular/router';
 import { CommonModule } from '@angular/common';
 import { Subscription } from 'rxjs';
 import { ApiService, SystemStatus, OutletStatus } from '../services/api.service';
+import { ManifoldVisualizerComponent } from '../visualizer/manifold-visualizer.component';
 
 interface ToolButton {
   stop: number;
@@ -15,7 +16,7 @@ interface ToolButton {
 @Component({
   selector: 'app-dashboard',
   standalone: true,
-  imports: [CommonModule],
+  imports: [CommonModule, ManifoldVisualizerComponent],
   styles: [`
     :host {
       display: flex;
@@ -59,6 +60,12 @@ interface ToolButton {
       vertical-align: middle;
     }
 
+    .gear-btns {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+
     .gear-btn {
       background: var(--surface);
       border: 1px solid var(--border);
@@ -69,6 +76,20 @@ interface ToolButton {
       font-size: 18px;
     }
     .gear-btn:active { opacity: 0.6; }
+
+    .manual-btn {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 0 12px;
+      height: 40px;
+      display: flex; align-items: center;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .manual-btn:active { opacity: 0.6; }
 
     /* ── Scroll area ─────────────────────────────────────────── */
     .scroll {
@@ -210,6 +231,16 @@ interface ToolButton {
       font-weight: 700;
       border: none;
     }
+    .setup-cta-manual {
+      margin-top: 8px;
+      padding: 14px 32px;
+      border-radius: var(--radius);
+      background: var(--surface);
+      color: var(--text);
+      font-size: 16px;
+      font-weight: 600;
+      border: 1px solid var(--border);
+    }
 
     /* Error / homing banner */
     .banner {
@@ -243,7 +274,10 @@ interface ToolButton {
               [class.error]="!connected && status !== null"></span>
         <span class="state-label">{{ stateLabel }}</span>
       </div>
-      <button class="gear-btn" (click)="goSetup()" aria-label="Setup">⚙</button>
+      <div class="gear-btns">
+        <button class="manual-btn" (click)="goManualSetup()" aria-label="Manual Setup">Manual Setup</button>
+        <button class="gear-btn" (click)="goSetup()" aria-label="AI Setup">⚙</button>
+      </div>
     </div>
 
     <!-- Loading -->
@@ -256,8 +290,9 @@ interface ToolButton {
       <!-- No outlets configured yet -->
       <div class="setup-prompt" *ngIf="toolButtons.length === 0">
         <h2>Not configured</h2>
-        <p>Run the setup assistant to map your tools and Shelly outlets to blast gate positions.</p>
-        <button class="setup-cta" (click)="goSetup()">Open Setup →</button>
+        <p>Run the setup wizard to map your tools and Shelly outlets to blast gate positions.</p>
+        <button class="setup-cta" (click)="goSetup()">AI Setup →</button>
+        <button class="setup-cta-manual" (click)="goManualSetup()">Manual Setup →</button>
       </div>
 
       <!-- Main layout when configured -->
@@ -272,6 +307,12 @@ interface ToolButton {
         <div class="banner warn"   *ngIf="status && !status.homed && status.state !== 'HOMING'">
           Not homed — tap HOME first.
         </div>
+
+        <!-- Manifold visualizer -->
+        <app-manifold-visualizer
+          [dcOn]="dcOn"
+          [homeOnRight]="api.deviceInfo?.homeOnRight ?? false">
+        </app-manifold-visualizer>
 
         <!-- HOME -->
         <span class="section-label">Position</span>
@@ -320,7 +361,7 @@ export class DashboardComponent implements OnInit, OnDestroy {
 
   private subs = new Subscription();
 
-  constructor(private api: ApiService, private router: Router) {}
+  constructor(public api: ApiService, private router: Router) {}
 
   ngOnInit() {
     this.subs.add(
@@ -370,4 +411,5 @@ export class DashboardComponent implements OnInit, OnDestroy {
   sendMove(stop: number) { this.api.moveToStop(stop).catch(console.error); }
   toggleDc()          { this.dcOn = !this.dcOn; } // dummy — no API yet
   goSetup()           { this.router.navigate(['/setup']); }
+  goManualSetup()     { this.router.navigate(['/setup/manual']); }
 }

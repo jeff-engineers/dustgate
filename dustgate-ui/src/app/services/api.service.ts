@@ -14,6 +14,11 @@ export interface OutletStatus {
   thresholdW?: number;
 }
 
+export interface StopInfo {
+  index: number;
+  mm: string;             // millimetres from home as string (e.g. "25.00")
+}
+
 export interface SystemStatus {
   state: string;          // 'IDLE' | 'HOMING' | 'MOVING' | 'AT_STOP' | 'ERROR' | ...
   currentStop: number;    // -1 = unknown
@@ -22,6 +27,8 @@ export interface SystemStatus {
   homed: boolean;
   enabled: boolean;
   endstopHome: boolean;
+  manualOverride?: boolean;   // true while user-commanded move blocks outlet auto-select
+  stops?: StopInfo[];         // per-stop mm positions; embedded in every status push
   outlets: OutletStatus[];
 }
 
@@ -43,6 +50,8 @@ export interface DeviceInfo {
   apiKey: string;
   numStops: number;
   version: string;
+  homeOnRight?: boolean;    // true = home endstop is on the right side of the manifold
+  motorInverted?: boolean;  // true = homing direction was flipped via setup agent
 }
 
 // ── Service ────────────────────────────────────────────────────────────────────
@@ -54,7 +63,7 @@ export class ApiService {
   // In dev mode the Angular proxy rewrites /api → ESP32 IP (see proxy.conf.json).
   private readonly baseUrl = '';
 
-  private apiKey = '';
+  protected apiKey = '';
   private ws: WebSocket | null = null;
 
   /** Live system status pushed from the WebSocket. */
@@ -66,13 +75,13 @@ export class ApiService {
 
   deviceInfo: DeviceInfo | null = null;
 
-  constructor(private http: HttpClient) {
+  constructor(protected http: HttpClient) {
     this.init();
   }
 
   // ── Bootstrap ────────────────────────────────────────────────────────────────
 
-  private async init() {
+  protected async init() {
     try {
       // /api/info is unauthenticated — gives us the API key so we can make
       // all subsequent calls.  The app is served FROM the device, so this
@@ -93,7 +102,7 @@ export class ApiService {
 
   // ── WebSocket ─────────────────────────────────────────────────────────────────
 
-  private connectWebSocket() {
+  protected connectWebSocket() {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     const host  = location.host;  // same host as the page (ESP32 IP or dev proxy)
     const url   = `${proto}://${host}/ws`;
@@ -182,6 +191,65 @@ export class ApiService {
   saveOutletConfig() { return this.post('/api/outlets/save'); }
 
   deleteOutlet(slot: number) { return this.delete(`/api/outlets/${slot}`); }
+
+  /**
+   * Save current motor position as a numbered stop.
+   * Call while the motor is stationary at the desired gate position.
+   */
+  saveStop(index: number) { return this.post('/api/setstop', { index }); }
+
+  /**
+   * Persist orientation preference (which side the home endstop is on).
+   * Stored in device NVS; returned in /api/info on next boot.
+   */
+  setOrientation(homeOnRight: boolean) {
+    if (this.deviceInfo) this.deviceInfo.homeOnRight = homeOnRight;
+    return this.post('/api/config/orientation', { homeOnRight });
+  }
+
+  /**
+   * Flip the motor homing direction (normal vs inverted).
+   * Use when the actuator runs away from the endstop instead of toward it.
+   */
+  setMotorDirection(invert: boolean) {
+    if (this.deviceInfo) this.deviceInfo.motorInverted = invert;
+    return this.post('/api/config/motor', { invertDirection: invert });
+  }
+
+  /**
+   * Set the number of active blast gates.
+   * Updates /api/info and the visualizer gate count without recompiling.
+   */
+  setNumGates(n: number) {
+    if (this.deviceInfo) this.deviceInfo.numStops = n;
+    return this.post('/api/config/gates', { numGates: n });
+  }
+
+  /**
+   * Reset calibration and gate count — returns the device to unconfigured state
+   * so the setup wizard can run again from scratch.
+   */
+  resetSetup() {
+    if (this.deviceInfo) this.deviceInfo.numStops = 0;
+    return this.post('/api/clearcal', {});
+  }
+
+  /**
+   * Re-fetch /api/info and update deviceInfo in place.
+   * Call after any operation that changes the device's configuration state
+   * (e.g. start-over) so the visualizer reflects reality immediately.
+   */
+  async refreshInfo(): Promise<void> {
+    try {
+      const info = await firstValueFrom(
+        this.http.get<DeviceInfo>(`${this.baseUrl}/api/info`)
+      );
+      this.apiKey    = info.apiKey;
+      this.deviceInfo = info;
+    } catch {
+      // Non-fatal — optimistic update from resetSetup() already set numStops = 0
+    }
+  }
 
   // ── Agent ─────────────────────────────────────────────────────────────────────
 

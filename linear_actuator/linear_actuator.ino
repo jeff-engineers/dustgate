@@ -41,59 +41,33 @@
 // =============================================================================
 float g_stopPositionsMM[NUM_STOPS + 1];
 
-// Runtime gate count (may differ from compile-time NUM_STOPS when using CONTROL_WIFI).
+// Runtime gate count — set by setup wizard via set_num_gates API, stored in NVS.
 // MUST remain <= NUM_STOPS; array bounds are determined at compile time.
-int g_numActiveStops = NUM_STOPS;
+int g_numActiveStops = 0;   // 0 = unconfigured
 
-// Last autotune recommendation — set when STATE_AUTOTUNING completes.
-int   g_lastTuneSGTHRS = -1;
-float g_lastTuneSpeed  = -1.0f;
-bool  g_autotuneDone   = false;
-bool  g_notHomedWarnShown = false; // suppress repeated "not homed" warnings
+// Homing direction — loaded from NVS so the user can flip it via setup wizard without
+// recompiling.  All existing code references HOME_DIRECTION which now expands to this.
+int g_homeDirection = HOME_DIRECTION_DEFAULT;
 
-// Compute stop positions analytically from known gear geometry.
-// Called when FEEDBACK_SENSORLESS is active and no EEPROM data is present.
-// Positions are relative to code home (position 0), which is set after homing
-// backoff: the motor stalls at the physical endstop, then reverses HOME_BACKOFF_STEPS.
-//
-// gate_1_mm = (measured steps from endstop to gate 1 − backoff steps) / stepsPerMM()
-//           = (ENDSTOP_MARGIN_STEPS − HOME_BACKOFF_STEPS) / stepsPerMM()
-// gate_N_mm = gate_1_mm + (N−1) × STOP_SPACING_TEETH × RACK_PITCH_MM
-//
-// ENDSTOP_MARGIN_STEPS is measured empirically (see config.h).
-// Tune HOME_BACKOFF_STEPS if gates feel slightly off — each step ≈ 0.019mm.
-void computeStopPositions() {
-    float backoffMM   = (float)HOME_BACKOFF_STEPS / stepsPerMM();
-    float gate1MM     = (float)(ENDSTOP_MARGIN_STEPS - HOME_BACKOFF_STEPS) / stepsPerMM();
-    float spacingMM   = (float)STOP_SPACING_TEETH   * RACK_PITCH_MM;
-
-    g_stopPositionsMM[0] = 0.0f; // home/parked (code origin, just past endstop)
-    for (int i = 1; i <= NUM_STOPS; i++) {
-        g_stopPositionsMM[i] = gate1MM + (float)(i - 1) * spacingMM;
-    }
-
-    DEBUG_PRINTLN(F("Computed stop positions from gear geometry:"));
-    DEBUG_PRINT(F("  Backoff      = ")); Serial.print(backoffMM, 3); DEBUG_PRINTLN(F(" mm"));
-    DEBUG_PRINT(F("  Gate 1       = ")); Serial.print(gate1MM,   2); DEBUG_PRINTLN(F(" mm from home"));
-    DEBUG_PRINT(F("  Gate spacing = ")); Serial.print(spacingMM, 2); DEBUG_PRINTLN(F(" mm"));
-    DEBUG_PRINT(F("  Gate 7       = ")); Serial.print(g_stopPositionsMM[NUM_STOPS], 2); DEBUG_PRINTLN(F(" mm"));
-}
+bool g_notHomedWarnShown = false; // suppress repeated "not homed" warnings
 
 void loadCalibration() {
     CalibrationData cal;
     if (CalibrationStore::load(cal)) {
-        // EEPROM training data always takes priority
         for (int i = 0; i <= NUM_STOPS; i++) {
             g_stopPositionsMM[i] = (i <= (int)cal.numStops) ? cal.stopMM[i]
                                                              : cal.stopMM[cal.numStops];
         }
+        // Restore active gate count from cal (may be overridden by NVS below in setup)
+        if (cal.numStops > 0 && (int)cal.numStops <= NUM_STOPS)
+            g_numActiveStops = (int)cal.numStops;
         DEBUG_PRINTLN(F("Loaded calibration from EEPROM."));
         CalibrationStore::print(cal);
     } else {
-        // No EEPROM data — derive positions from gear geometry.
-        // Works for both sensorless and limit-switch modes: the math only
-        // depends on the physical rack/pinion dimensions, not how home is detected.
-        computeStopPositions();
+        // No calibration yet — zero all positions. Setup wizard will call
+        // save_stop for each gate to populate them via the HTTP API.
+        memset(g_stopPositionsMM, 0, sizeof(g_stopPositionsMM));
+        DEBUG_PRINTLN(F("No calibration data — awaiting setup wizard."));
     }
 }
 
@@ -102,35 +76,20 @@ void loadCalibration() {
 StepperTMC2209Driver motor;
 
 // -- Feedback system --
-#ifdef FEEDBACK_SENSORLESS
-  #include "feedback/SensorlessHoming.h"
-  SensorlessHoming feedback;
-#elif defined(FEEDBACK_LIMIT_DISTANCE)
+#ifdef FEEDBACK_LIMIT_DISTANCE
   #include "feedback/LimitSwitchDistance.h"
   LimitSwitchDistance feedback;
-#elif defined(FEEDBACK_LIMIT_DETENT)
-  #include "feedback/LimitSwitchDetent.h"
-  LimitSwitchDetent feedback;
 #else
-  #error "No feedback type defined in config.h"
+  #error "No feedback type defined in config.h — define FEEDBACK_LIMIT_DISTANCE in config.h"
 #endif
 
 // -- Control input --
-#ifdef CONTROL_ROTARY
-  #include "control/RotaryControl.h"
-  RotaryControl control;
-#elif defined(CONTROL_SMART_OUTLET)
+#ifdef CONTROL_SMART_OUTLET
   #include "control/SmartOutletControl.h"
   SmartOutletControl control;
-#elif defined(CONTROL_APP)
-  #include "control/AppControl.h"
-  AppControl control;
 #elif defined(CONTROL_SERIAL_DEBUG)
   #include "control/SerialDebugControl.h"
   SerialDebugControl control;
-#elif defined(CONTROL_WIFI)
-  #include "control/WiFiControl.h"
-  WiFiControl control;
 #else
   #error "No control type defined in config.h"
 #endif
@@ -146,16 +105,6 @@ StepperTMC2209Driver motor;
 
 // -- Relay output --
 RelayOutput relay;
-
-// -- Training mode --
-#include "training/TrainingMode.h"
-TrainingMode* trainer = nullptr;
-
-// -- StallGuard auto-tuner --
-#ifdef MOTOR_STEPPER_TMC2209
-  #include "training/AutoTuner.h"
-  AutoTuner* autotuner = nullptr;
-#endif
 
 // =============================================================================
 // E-stop
@@ -183,8 +132,6 @@ enum State {
     STATE_MOVING,
     STATE_AT_STOP,
     STATE_DISABLED,
-    STATE_TRAINING,
-    STATE_AUTOTUNING,
     STATE_ERROR
 };
 
@@ -224,6 +171,20 @@ void setup() {
     // Load calibration before feedback system initialises
     CalibrationStore::begin(); // Required on ESP32: allocates EEPROM flash region
     loadCalibration();
+
+    // Load runtime config from NVS — takes priority over cal defaults above.
+    // Uses the same namespace ("api_cfg") as HttpApiServer to avoid opening
+    // multiple Preferences namespaces for the same flash partition.
+    {
+        Preferences prefs;
+        prefs.begin("api_cfg", true);
+        g_homeDirection  = prefs.getInt("home_dir",  HOME_DIRECTION_DEFAULT);
+        int nvsGates     = prefs.getInt("num_gates", 0); // 0 = not saved yet
+        prefs.end();
+        if (nvsGates >= 1 && nvsGates <= NUM_STOPS) g_numActiveStops = nvsGates;
+    }
+    DEBUG_PRINT(F("[CFG] homeDirection=")); Serial.print(g_homeDirection);
+    DEBUG_PRINT(F("  numActiveStops="));   Serial.println(g_numActiveStops);
 
     pinMode(PIN_LED, OUTPUT);
     digitalWrite(PIN_LED, LOW);
@@ -324,20 +285,6 @@ void loop() {
         }
     }
 
-    if (_SC.consumeTrainRequest() &&
-        currentState != STATE_TRAINING &&
-        currentState != STATE_HOMING) {
-        if (g_hardwareFault) {
-            DEBUG_PRINTLN(F("[ERROR] Hardware fault — fix wiring and reset before training."));
-        } else {
-            if (trainer) { delete trainer; trainer = nullptr; }
-            trainer = new TrainingMode(&motor);
-            trainer->begin();
-            relay.forceOff();
-            currentState = STATE_TRAINING;
-        }
-    }
-
     if (_SC.consumeGconfRequest()) {
         motor.printDriverRegs();
     }
@@ -367,26 +314,6 @@ void loop() {
         loadCalibration();
         DEBUG_PRINTLN(F("Calibration cleared. config.h defaults loaded."));
     }
-
-#ifdef MOTOR_STEPPER_TMC2209
-    if (_SC.consumeAutotuneRequest() &&
-        currentState != STATE_AUTOTUNING &&
-        currentState != STATE_HOMING) {
-        if (g_hardwareFault) {
-            DEBUG_PRINTLN(F("[ERROR] Hardware fault — fix wiring and reset before autotuning."));
-        } else {
-            if (autotuner) { delete autotuner; autotuner = nullptr; }
-            autotuner = new AutoTuner(&motor);
-            float speed = _SC.homeSpeed();
-            float tuneSpeed = (speed < 0) ? HOMING_SPEED_STEPS_PER_SEC : speed;
-            g_autotuneDone = false;
-            autotuner->begin(tuneSpeed);
-            relay.forceOff();
-            motor.enable(true);
-            currentState = STATE_AUTOTUNING;
-        }
-    }
-#endif
 
     // Supplemental mode: translate serial position commands into direct moves.
     // In CONTROL_SERIAL_DEBUG mode STATE_IDLE already handles this via
@@ -473,7 +400,60 @@ void loop() {
     if (apiServer.consumeClearCalRequest()) {
         CalibrationStore::erase();
         loadCalibration();
-        DEBUG_PRINTLN(F("[API] Calibration cleared."));
+        g_numActiveStops = 0;  // return to unconfigured — setup wizard can restart
+        DEBUG_PRINTLN(F("[API] Calibration cleared. Gate count reset to 0."));
+    }
+
+    {
+        int stopIdx = -1;
+        if (apiServer.consumeSetStopRequest(stopIdx) && currentState == STATE_IDLE) {
+            // Convert current motor position (steps) to mm.
+            // HOME_DIRECTION inverts the step sign: positive steps are away from home.
+            float currentMM = (float)motor.getPosition() / stepsPerMM() / (-HOME_DIRECTION);
+            g_stopPositionsMM[stopIdx] = currentMM;
+
+            // Persist to CalibrationStore; reload other fields from existing data.
+            CalibrationData cal;
+            if (!CalibrationStore::load(cal)) {
+                // No valid cal yet — fill in what we know
+                cal.magic              = CALIB_MAGIC;
+                cal.version            = CALIB_VERSION;
+                cal.numStops           = 0;
+                cal.maxTravelMM        = 0.0f;
+                cal.measuredStepsPerMM = stepsPerMM();
+                memset(cal.stopMM, 0, sizeof(cal.stopMM));
+            }
+            cal.stopMM[stopIdx] = currentMM;
+            if (stopIdx > (int)cal.numStops) cal.numStops = (uint8_t)stopIdx;
+            CalibrationStore::save(cal);
+
+            // Keep runtime count in sync (expand; never shrink during a session)
+            if (stopIdx > g_numActiveStops) g_numActiveStops = stopIdx;
+
+            DEBUG_PRINT(F("[API] Stop ")); Serial.print(stopIdx);
+            DEBUG_PRINT(F(" saved at "));  Serial.print(currentMM, 2);
+            DEBUG_PRINTLN(F(" mm"));
+        }
+    }
+
+    // Motor direction (runtime NVS override)
+    {
+        int newDir = 0;
+        if (apiServer.consumeSetDirectionRequest(newDir)) {
+            g_homeDirection = newDir;
+            DEBUG_PRINT(F("[API] Motor direction: "));
+            DEBUG_PRINTLN(newDir > 0 ? F("normal") : F("inverted"));
+        }
+    }
+
+    // Active gate count (runtime NVS override)
+    {
+        int newGates = 0;
+        if (apiServer.consumeSetNumGatesRequest(newGates)) {
+            g_numActiveStops = newGates;
+            DEBUG_PRINT(F("[API] Active gates: "));
+            DEBUG_PRINTLN(g_numActiveStops);
+        }
     }
 
     // Enable / disable — TODO: add ControlInput::setEnabled() to the base class
@@ -496,91 +476,6 @@ void loop() {
     }
 #endif // CONTROL_SMART_OUTLET
 #endif // ENABLE_HTTP_API
-
-    // -- WiFi control commands ------------------------------------------------
-#ifdef CONTROL_WIFI
-    if (control.consumeEStop()) {
-        if (!g_eStopTriggered) {
-            DEBUG_PRINTLN(F("!!! E-STOP (web command)."));
-        }
-        g_eStopTriggered = true;
-    }
-
-    if (control.consumeHomeRequest() && currentState != STATE_HOMING) {
-        if (digitalRead(PIN_ESTOP) == LOW) {
-            g_eStopTriggered = false;
-            motor.enable(true);
-            currentState = STATE_HOMING;
-            startHoming();
-        }
-    }
-
-    // Gate count change from setup UI
-    {
-        int ng = control.pendingGateCount();
-        if (ng > 0 && ng <= NUM_STOPS) {
-            g_numActiveStops = ng;
-            control.clearPendingGateCount();
-            DEBUG_PRINT(F("[WiFi] Active gates set to ")); DEBUG_PRINTLN(g_numActiveStops);
-        }
-    }
-
-#ifdef MOTOR_STEPPER_TMC2209
-    if (control.consumeAutotuneRequest() &&
-        currentState != STATE_AUTOTUNING &&
-        currentState != STATE_HOMING) {
-        if (autotuner) { delete autotuner; autotuner = nullptr; }
-        autotuner = new AutoTuner(&motor);
-        float tuneSpeed = HOMING_SPEED_STEPS_PER_SEC;
-        g_autotuneDone = false;
-        autotuner->begin(tuneSpeed);
-        relay.forceOff();
-        motor.enable(true);
-        currentState = STATE_AUTOTUNING;
-    }
-#endif
-
-    if (control.consumeSaveRequest()) {
-        control.performSave(g_numActiveStops, g_lastTuneSGTHRS, g_lastTuneSpeed);
-        // Recompute positions in case gate count changed
-        computeStopPositions();
-    }
-
-    if (control.consumeReconfigureRequest()) {
-        control.clearConfiguration();
-        g_lastTuneSGTHRS = -1;
-        g_lastTuneSpeed  = -1.0f;
-        g_autotuneDone   = false;
-    }
-
-    // Push current status to web UI (cheap struct copy, safe every loop)
-    {
-        const char* stateStr = "UNKNOWN";
-        switch (currentState) {
-            case STATE_STARTUP:    stateStr = "STARTUP";    break;
-            case STATE_HOMING:     stateStr = "HOMING";     break;
-            case STATE_IDLE:       stateStr = "IDLE";       break;
-            case STATE_MOVING:     stateStr = "MOVING";     break;
-            case STATE_AT_STOP:    stateStr = "AT_STOP";    break;
-            case STATE_DISABLED:   stateStr = "DISABLED";   break;
-            case STATE_TRAINING:   stateStr = "TRAINING";   break;
-            case STATE_AUTOTUNING: stateStr = "AUTOTUNING"; break;
-            case STATE_ERROR:      stateStr = "ERROR";      break;
-        }
-        control.pushStatus(
-            stateStr,
-            g_numActiveStops,
-            currentStop,
-            relay.isOn(),
-            control.isEnabled(),
-            g_eStopTriggered,
-            currentState == STATE_AUTOTUNING,
-            g_autotuneDone,
-            g_lastTuneSGTHRS,
-            g_lastTuneSpeed
-        );
-    }
-#endif // CONTROL_WIFI
 
     switch (currentState) {
 
@@ -678,53 +573,6 @@ void loop() {
         }
 
         // ------------------------------------------------------------------
-        case STATE_TRAINING:
-            relay.forceOff();
-            if (trainer) {
-                trainer->update();
-                if (trainer->isDone()) {
-                    if (!trainer->hasError()) {
-                        const CalibrationData& cal = trainer->getResults();
-                        for (int i = 0; i <= (int)cal.numStops; i++) {
-                            g_stopPositionsMM[i] = cal.stopMM[i];
-                        }
-                        DEBUG_PRINTLN(F("Training complete — positions updated."));
-                    }
-                    delete trainer;
-                    trainer = nullptr;
-                    currentStop = 0;
-                    currentState = STATE_IDLE;
-                }
-            }
-            break;
-
-        // ------------------------------------------------------------------
-        case STATE_AUTOTUNING:
-            relay.forceOff();
-#ifdef MOTOR_STEPPER_TMC2209
-            if (autotuner) {
-                autotuner->update();
-                if (autotuner->isDone() || autotuner->hasError()) {
-                    if (autotuner->isDone()) {
-                        g_lastTuneSGTHRS = autotuner->recommendedSGTHRS();
-                        g_lastTuneSpeed  = autotuner->testedSpeed();
-                        g_autotuneDone   = true;
-                        DEBUG_PRINT(F("[AUTOTUNE] Recommended SGTHRS="));
-                        DEBUG_PRINT(g_lastTuneSGTHRS);
-                        DEBUG_PRINT(F("  speed="));
-                        Serial.println(g_lastTuneSpeed, 0);
-                        DEBUG_PRINTLN(F("[AUTOTUNE] Done. Home to apply new settings."));
-                    }
-                    delete autotuner;
-                    autotuner = nullptr;
-                    currentStop = -1; // motor moved — require re-home
-                    currentState = STATE_IDLE;
-                }
-            }
-#endif
-            break;
-
-        // ------------------------------------------------------------------
         case STATE_DISABLED:
             relay.forceOff();
             break;
@@ -765,18 +613,18 @@ void loop() {
             case STATE_MOVING:     stateStr = "MOVING";     break;
             case STATE_AT_STOP:    stateStr = "AT_STOP";    break;
             case STATE_DISABLED:   stateStr = "DISABLED";   break;
-            case STATE_TRAINING:   stateStr = "TRAINING";   break;
-            case STATE_AUTOTUNING: stateStr = "AUTOTUNING"; break;
+
             case STATE_ERROR:      stateStr = "ERROR";      break;
         }
         ApiStatus s;
-        s.stateName     = stateStr;
-        s.currentStop   = currentStop;
-        s.targetStop    = targetStop;
-        s.positionSteps = motor.getPosition();
-        s.homed         = (currentStop != -1);
-        s.enabled       = control.isEnabled();
-        s.endstopHome   = (digitalRead(PIN_ENDSTOP_HOME) == HIGH); // HIGH = triggered (NC switch open)
+        s.stateName      = stateStr;
+        s.currentStop    = currentStop;
+        s.targetStop     = targetStop;
+        s.positionSteps  = motor.getPosition();
+        s.homed          = (currentStop != -1);
+        s.enabled        = control.isEnabled();
+        s.endstopHome    = (digitalRead(PIN_ENDSTOP_HOME) == HIGH); // HIGH = triggered (NC switch open)
+        s.numActiveStops = g_numActiveStops;
 #ifdef CONTROL_SMART_OUTLET
         apiServer.update(s, &control);
 #else
@@ -787,9 +635,8 @@ void loop() {
 }
 
 // =============================================================================
-// startHoming() — apply live-tuned or saved parameters if available
-// control.stallThreshold() / control.homeSpeed() return -1 to use config.h
-// defaults; both SerialDebugControl and WiFiControl implement these.
+// startHoming() — apply live-tuned speed/SGTHRS if set, otherwise use config.h
+// defaults.  stallThreshold() / homeSpeed() return -1 when not overridden.
 // =============================================================================
 void startHoming() {
     feedback.resetHoming(); // clear _homed so updateHoming() actually runs

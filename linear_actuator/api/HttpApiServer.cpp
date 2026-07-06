@@ -39,6 +39,8 @@ static uint32_t statusFingerprint(const ApiStatus& s) {
     h = ((h << 5) + h) ^ (uint32_t)(s.homed      ? 1 : 0);
     h = ((h << 5) + h) ^ (uint32_t)(s.enabled    ? 2 : 0);
     h = ((h << 5) + h) ^ (uint32_t)(s.endstopHome? 4 : 0);
+    h = ((h << 5) + h) ^ (uint32_t)(s.numActiveStops & 0xFF);
+    // manualOverride state is in SmartOutletControl, not ApiStatus — fingerprinted separately
     return h;
 }
 
@@ -54,7 +56,13 @@ HttpApiServer::HttpApiServer()
       _disablePending(false),
       _movePending(false),  _moveStop(0),
       _jogPending(false),   _jogMM(0.0f),
-      _clearCalPending(false)
+      _clearCalPending(false),
+      _setStopPending(false),      _setStopIndex(0),
+      _setDirectionPending(false), _newDirection(HOME_DIRECTION_DEFAULT),
+      _setNumGatesPending(false),  _newNumGates(0),
+      _homeOnRight(false),
+      _homeDirection(HOME_DIRECTION_DEFAULT),
+      _cachedNumActiveStops(0)
 #ifdef CONTROL_SMART_OUTLET
     , _outletConfigPending(false),
       _outletDeletePending(false), _outletDeleteSlot(0),
@@ -74,6 +82,16 @@ bool HttpApiServer::begin() {
     }
 
     if (!loadOrGenerateKey()) return false;
+
+    // Load persisted orientation + direction preferences
+    {
+        Preferences prefs;
+        prefs.begin(NVS_NS, true);
+        _homeOnRight  = prefs.getBool("home_right", false);
+        _homeDirection = prefs.getInt("home_dir",  HOME_DIRECTION_DEFAULT);
+        _cachedNumActiveStops = prefs.getInt("num_gates", 0); // 0 = not yet configured
+        prefs.end();
+    }
 
     DEBUG_PRINT(F("[API] Key: ")); Serial.println(_apiKey);
     DEBUG_PRINTLN(F("[API] Include this as 'X-Api-Key: <key>' on all requests."));
@@ -117,6 +135,9 @@ void HttpApiServer::update(const ApiStatus& status
 #endif
 ) {
     _ws.cleanupClients();
+
+    // Cache runtime gate count so /api/info always reflects current value
+    if (status.numActiveStops > 0) _cachedNumActiveStops = status.numActiveStops;
 
     uint32_t fp = statusFingerprint(status);
     bool changed = !_statusHashValid || (fp != _lastStatusHash);
@@ -163,6 +184,30 @@ bool HttpApiServer::consumeMoveRequest(int& outStop) {
     return v;
 }
 
+bool HttpApiServer::consumeSetStopRequest(int& outIndex) {
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    bool v = _setStopPending;
+    if (v) { outIndex = _setStopIndex; _setStopPending = false; }
+    xSemaphoreGive(_mutex);
+    return v;
+}
+
+bool HttpApiServer::consumeSetDirectionRequest(int& outDir) {
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    bool v = _setDirectionPending;
+    if (v) { outDir = _newDirection; _setDirectionPending = false; }
+    xSemaphoreGive(_mutex);
+    return v;
+}
+
+bool HttpApiServer::consumeSetNumGatesRequest(int& outN) {
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    bool v = _setNumGatesPending;
+    if (v) { outN = _newNumGates; _setNumGatesPending = false; }
+    xSemaphoreGive(_mutex);
+    return v;
+}
+
 bool HttpApiServer::consumeJogRequest(float& outMM) {
     xSemaphoreTake(_mutex, portMAX_DELAY);
     bool v = _jogPending;
@@ -204,13 +249,124 @@ void HttpApiServer::registerRoutes() {
     // Security: only reachable on the local network (same as the device).
     // ------------------------------------------------------------------
     _server.on("/api/info", HTTP_GET, [this](AsyncWebServerRequest* req) {
-        StaticJsonDocument<128> doc;
-        doc["apiKey"]   = _apiKey;
-        doc["numStops"] = NUM_STOPS;
-        doc["version"]  = "1.0.0";
+        StaticJsonDocument<160> doc;
+        doc["apiKey"]        = _apiKey;
+        doc["numStops"]      = _cachedNumActiveStops;   // runtime; not compile-time NUM_STOPS
+        doc["version"]       = "1.0.0";
+        doc["homeOnRight"]   = _homeOnRight;
+        doc["motorInverted"] = (_homeDirection < 0);    // true when direction was flipped
         String out; serializeJson(doc, out);
         req->send(200, "application/json", out);
     });
+
+    // ------------------------------------------------------------------
+    // POST /api/setstop   body: {"index": N}
+    // Saves the current motor position as stop N in CalibrationStore.
+    // The main loop reads current position and writes g_stopPositionsMM[N].
+    // ------------------------------------------------------------------
+    _server.on("/api/setstop", HTTP_POST,
+        [](AsyncWebServerRequest* req) {},
+        nullptr,
+        [this](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t, size_t) {
+            if (!checkAuth(req)) return;
+            StaticJsonDocument<64> doc;
+            if (deserializeJson(doc, data, len)) { sendError(req, 400, "invalid JSON"); return; }
+            int idx = doc["index"] | -1;
+            if (idx < 1 || idx > NUM_STOPS) { sendError(req, 400, "index out of range (1–NUM_STOPS)"); return; }
+            xSemaphoreTake(_mutex, portMAX_DELAY);
+            _setStopPending = true; _setStopIndex = idx;
+            xSemaphoreGive(_mutex);
+            sendOk(req);
+        }
+    );
+
+    // ------------------------------------------------------------------
+    // POST /api/config/orientation   body: {"homeOnRight": true|false}
+    // Persists the visual orientation preference to NVS and updates the
+    // /api/info response so Angular renders the visualizer correctly.
+    // ------------------------------------------------------------------
+    _server.on("/api/config/orientation", HTTP_POST,
+        [](AsyncWebServerRequest* req) {},
+        nullptr,
+        [this](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t, size_t) {
+            if (!checkAuth(req)) return;
+            StaticJsonDocument<64> doc;
+            if (deserializeJson(doc, data, len)) { sendError(req, 400, "invalid JSON"); return; }
+            if (!doc.containsKey("homeOnRight")) { sendError(req, 400, "missing homeOnRight"); return; }
+            bool hor = doc["homeOnRight"].as<bool>();
+            xSemaphoreTake(_mutex, portMAX_DELAY);
+            _homeOnRight = hor;
+            xSemaphoreGive(_mutex);
+            Preferences prefs;
+            prefs.begin(NVS_NS, false);
+            prefs.putBool("home_right", hor);
+            prefs.end();
+            DEBUG_PRINT(F("[API] Orientation: home on "));
+            DEBUG_PRINTLN(hor ? F("right") : F("left"));
+            sendOk(req);
+        }
+    );
+
+    // ------------------------------------------------------------------
+    // POST /api/config/motor   body: {"invertDirection": true|false}
+    // Flips the homing direction.  Persists to NVS; takes effect immediately
+    // via the pending-command pattern (main loop updates g_homeDirection).
+    // ------------------------------------------------------------------
+    _server.on("/api/config/motor", HTTP_POST,
+        [](AsyncWebServerRequest* req) {},
+        nullptr,
+        [this](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t, size_t) {
+            if (!checkAuth(req)) return;
+            StaticJsonDocument<64> doc;
+            if (deserializeJson(doc, data, len)) { sendError(req, 400, "invalid JSON"); return; }
+            if (!doc.containsKey("invertDirection")) { sendError(req, 400, "missing invertDirection"); return; }
+            bool invert = doc["invertDirection"].as<bool>();
+            int  dir    = invert ? -HOME_DIRECTION_DEFAULT : HOME_DIRECTION_DEFAULT;
+            xSemaphoreTake(_mutex, portMAX_DELAY);
+            _homeDirection       = dir;
+            _setDirectionPending = true;
+            _newDirection        = dir;
+            xSemaphoreGive(_mutex);
+            Preferences prefs;
+            prefs.begin(NVS_NS, false);
+            prefs.putInt("home_dir", dir);
+            prefs.end();
+            DEBUG_PRINT(F("[API] Motor direction: "));
+            DEBUG_PRINTLN(invert ? F("inverted") : F("normal"));
+            sendOk(req);
+        }
+    );
+
+    // ------------------------------------------------------------------
+    // POST /api/config/gates   body: {"numGates": N}
+    // Sets the runtime active gate count (1–NUM_STOPS).
+    // Persists to NVS and takes effect immediately.
+    // ------------------------------------------------------------------
+    _server.on("/api/config/gates", HTTP_POST,
+        [](AsyncWebServerRequest* req) {},
+        nullptr,
+        [this](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t, size_t) {
+            if (!checkAuth(req)) return;
+            StaticJsonDocument<64> doc;
+            if (deserializeJson(doc, data, len)) { sendError(req, 400, "invalid JSON"); return; }
+            int n = doc["numGates"] | -1;
+            if (n < 1 || n > NUM_STOPS) {
+                sendError(req, 400, "numGates out of range (1–" + String(NUM_STOPS) + ")");
+                return;
+            }
+            xSemaphoreTake(_mutex, portMAX_DELAY);
+            _cachedNumActiveStops = n;
+            _setNumGatesPending   = true;
+            _newNumGates          = n;
+            xSemaphoreGive(_mutex);
+            Preferences prefs;
+            prefs.begin(NVS_NS, false);
+            prefs.putInt("num_gates", n);
+            prefs.end();
+            DEBUG_PRINT(F("[API] Active gates: ")); Serial.println(n);
+            sendOk(req);
+        }
+    );
 
     // ------------------------------------------------------------------
     // Static file serving — Angular front-end bundle from LittleFS.
@@ -241,9 +397,9 @@ void HttpApiServer::registerRoutes() {
     // ------------------------------------------------------------------
     _server.on("/api/stops", HTTP_GET, [this](AsyncWebServerRequest* req) {
         if (!checkAuth(req)) return;
-        StaticJsonDocument<512> doc;
+        StaticJsonDocument<1024> doc; // up to 17 stops × ~40B each
         JsonArray arr = doc.createNestedArray("stops");
-        for (int i = 0; i <= NUM_STOPS; i++) {
+        for (int i = 0; i <= _cachedNumActiveStops; i++) {
             JsonObject o = arr.createNestedObject();
             o["index"]  = i;
             o["mm"]     = serialized(String(g_stopPositionsMM[i], 2));
@@ -294,10 +450,20 @@ void HttpApiServer::registerRoutes() {
     });
 
     // POST /api/clearcal
+    // Erases calibration EEPROM and resets the runtime gate count so the
+    // device returns to an unconfigured state (setup wizard can restart).
     _server.on("/api/clearcal", HTTP_POST, [this](AsyncWebServerRequest* req) {
         if (!checkAuth(req)) return;
+        // Clear the NVS gate count so it doesn't persist across reboots
+        {
+            Preferences prefs;
+            prefs.begin(NVS_NS, false);
+            prefs.remove("num_gates");
+            prefs.end();
+        }
         xSemaphoreTake(_mutex, portMAX_DELAY);
-        _clearCalPending = true;
+        _clearCalPending      = true;
+        _cachedNumActiveStops = 0;
         xSemaphoreGive(_mutex);
         sendOk(req);
     });
@@ -592,7 +758,8 @@ String HttpApiServer::buildStatusJson(const ApiStatus& s
                                       , SmartOutletControl* outlets
 #endif
 ) {
-    StaticJsonDocument<1024> doc;
+    // Size: base fields ~150B + up to 17 stops×30B + up to 16 outlets×80B ≈ 2000B
+    StaticJsonDocument<2048> doc;
 
     doc["state"]         = s.stateName;
     doc["currentStop"]   = s.currentStop;
@@ -603,13 +770,16 @@ String HttpApiServer::buildStatusJson(const ApiStatus& s
     doc["endstopHome"]   = s.endstopHome;
 
     JsonArray stops = doc.createNestedArray("stops");
-    for (int i = 0; i <= NUM_STOPS; i++) {
+    for (int i = 0; i <= _cachedNumActiveStops; i++) {
         JsonObject o = stops.createNestedObject();
         o["index"] = i;
         o["mm"]    = serialized(String(g_stopPositionsMM[i], 2));
     }
 
 #ifdef CONTROL_SMART_OUTLET
+    if (outlets) {
+        doc["manualOverride"] = outlets->isManualOverride();
+    }
     JsonArray outArr = doc.createNestedArray("outlets");
     if (outlets) {
         for (int i = 0; i < outlets->outletCount(); i++) {

@@ -11,10 +11,12 @@
 //   disable          Emulate toggle switch OFF (actuator returns to home)
 //   estop / stop     Immediate stop — halts motion in place, disables system
 //   home             Re-trigger homing sequence (resets estop if latched)
-//   autotune         Binary-search SGTHRS to find optimal StallGuard threshold
+//   jog <mm>         Relative move: positive = away from home, negative = toward home
+//   gconf            Read GCONF + CHOPCONF registers from driver
+//   clearcal         Erase EEPROM calibration
+//   provision <json> Write WiFi + Anthropic key to NVS
+//   wifireset        Erase WiFi credentials, reboot into setup portal
 //   status           Print current state, position, and enable state
-//   sgthrs <0-255>   Set StallGuard threshold live (higher = triggers easier)
-//   homespeed <n>    Set homing speed live (steps/sec, e.g. 1500)
 //   help             Print this command list
 // =============================================================================
 
@@ -38,14 +40,8 @@ public:
     // Returns true once per home-request event, then clears the flag.
     bool consumeHomeRequest();
 
-    // Returns true once when user types 'train'.
-    bool consumeTrainRequest();
-
     // Returns true once when user types 'clearcal'.
     bool consumeClearCalRequest();
-
-    // Returns true once when user types 'autotune'.
-    bool consumeAutotuneRequest();
 
     // Returns true once when user types 'gconf' — caller should read and print
     // GCONF + CHOPCONF from the driver to verify writes are landing.
@@ -65,9 +61,7 @@ private:
     bool _enabled;
     bool _eStopPending;
     bool _homePending;
-    bool _trainPending;
     bool _clearCalPending;
-    bool _autotunePending;
     bool _gconfPending;
     int   _stallThreshold; // -1 = use config.h default
     float _homeSpeed;      // -1 = use config.h default

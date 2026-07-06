@@ -23,25 +23,26 @@ const { WebSocketServer } = require('ws');
 const PORT   = 3000;
 const API_KEY = 'dev-mock-key-1234';
 const ANT_KEY = process.env.ANTHROPIC_KEY || '';
-const NUM_STOPS = 7;
+const NUM_STOPS = 16;  // compile-time max — matches firmware #define NUM_STOPS
 
 // ── Simulated device state ────────────────────────────────────────────────
 const state = {
-  stateName:     'IDLE',
-  currentStop:   0,
-  targetStop:    0,
-  positionSteps: 0,
-  homed:         true,
-  enabled:       true,
-  endstopHome:   false,
+  state:          'IDLE',   // matches firmware JSON key ("state", not "stateName")
+  currentStop:    -1,       // -1 = unhomed
+  targetStop:     0,
+  positionSteps:  0,
+  homed:          false,
+  enabled:        true,
+  endstopHome:    false,
+  manualOverride: false,
+  homeOnRight:    false,
+  motorInverted:  false,
+  numActiveStops: 0,        // 0 = unconfigured until setup wizard runs
   stops: Array.from({ length: NUM_STOPS + 1 }, (_, i) => ({
     index: i,
     mm: (i * 25).toFixed(2),
   })),
-  outlets: [
-    { slot: 0, name: 'Table Saw',     stop: 1, powerW: '0.0', active: false, reachable: true },
-    { slot: 1, name: 'Router Table',  stop: 2, powerW: '0.0', active: false, reachable: true },
-  ],
+  outlets: [],              // empty until setup wizard configures them
 };
 
 function statusJson() { return JSON.stringify(state); }
@@ -77,7 +78,13 @@ function handler(req, res) {
 
   // ── Unauthenticated ──
   if (pathname === '/api/info' && req.method === 'GET') {
-    return json(res, { apiKey: API_KEY, numStops: NUM_STOPS, version: '1.0.0-mock' });
+    return json(res, {
+      apiKey:        API_KEY,
+      numStops:      state.numActiveStops,   // runtime; not compile-time constant
+      version:       '1.0.0-mock',
+      homeOnRight:   state.homeOnRight,
+      motorInverted: state.motorInverted,
+    });
   }
 
   // ── Auth check ──
@@ -95,10 +102,11 @@ function handler(req, res) {
   }
 
   if (pathname === '/api/home' && req.method === 'POST') {
-    state.stateName = 'HOMING';
+    state.state          = 'HOMING';
+    state.manualOverride = false;
     broadcast();
     setTimeout(() => {
-      state.stateName   = 'IDLE';
+      state.state       = 'IDLE';
       state.currentStop = 0;
       state.targetStop  = 0;
       state.homed       = true;
@@ -110,7 +118,7 @@ function handler(req, res) {
   if (pathname === '/api/enable'  && req.method === 'POST') { state.enabled = true;  return json(res, { ok: true }); }
   if (pathname === '/api/disable' && req.method === 'POST') { state.enabled = false; return json(res, { ok: true }); }
   if (pathname === '/api/estop'   && req.method === 'POST') {
-    state.stateName = 'ESTOP';
+    state.state = 'ESTOP';
     broadcast();
     return json(res, { ok: true });
   }
@@ -118,21 +126,36 @@ function handler(req, res) {
   if (pathname === '/api/move' && req.method === 'POST') {
     return body(req, data => {
       const stop = data.stop ?? 0;
-      state.stateName  = 'MOVING';
-      state.targetStop = stop;
+      const fromMm = parseFloat(state.stops[state.currentStop]?.mm ?? '0');
+      const toMm   = parseFloat(state.stops[stop]?.mm ?? '0');
+      const distMm = Math.abs(toMm - fromMm);
+      const durationMs = Math.max(400, distMm * 20); // ~50 mm/s mock speed
+      state.state          = 'MOVING';
+      state.targetStop     = stop;
+      state.manualOverride = true;
       broadcast();
       setTimeout(() => {
-        state.stateName   = 'IDLE';
-        state.currentStop = stop;
+        state.state          = 'IDLE';
+        state.currentStop    = stop;
         broadcast();
-      }, 800);
+      }, durationMs);
       json(res, { ok: true });
     });
   }
 
   if (pathname === '/api/jog' && req.method === 'POST') {
     return body(req, data => {
-      console.log(`  jog ${data.mm} mm (mock)`);
+      const mm = data.mm ?? 0;
+      console.log(`  jog ${mm} mm (mock)`);
+      // Simulate MOVING state briefly so the jog widget disables during motion
+      state.state = 'MOVING';
+      broadcast();
+      const durationMs = Math.max(200, Math.abs(mm) * 15);
+      setTimeout(() => {
+        state.positionSteps += Math.round(mm * 40); // 40 steps/mm mock resolution
+        state.state = 'IDLE';
+        broadcast();
+      }, durationMs);
       json(res, { ok: true });
     });
   }
@@ -151,7 +174,91 @@ function handler(req, res) {
     return json(res, { ok: true });
   }
 
+  // PUT /api/outlets/:slot — configure or update a single outlet
+  const outletPutMatch = pathname.match(/^\/api\/outlets\/(\d+)$/);
+  if (outletPutMatch && req.method === 'PUT') {
+    return body(req, data => {
+      const slot = parseInt(outletPutMatch[1], 10);
+      const existing = state.outlets.findIndex(o => o.slot === slot);
+      const record = {
+        slot,
+        name:       data.name   ?? `Gate ${slot + 1}`,
+        stop:       data.stop   ?? slot + 1,
+        powerW:     0,
+        active:     false,
+        reachable:  false,
+        thresholdW: data.threshold ?? 5.0,
+        gen:        data.gen    ?? 2,
+        ip:         data.ip     ?? '',
+      };
+      if (existing >= 0) {
+        state.outlets[existing] = record;
+      } else {
+        state.outlets.push(record);
+      }
+      console.log(`  [mock] Outlet slot ${slot} configured: ${record.name} @ ${record.ip}`);
+      broadcast();
+      json(res, { ok: true });
+    });
+  }
+
+  // DELETE /api/outlets/:slot — remove an outlet
+  const outletDelMatch = pathname.match(/^\/api\/outlets\/(\d+)$/);
+  if (outletDelMatch && req.method === 'DELETE') {
+    const slot = parseInt(outletDelMatch[1], 10);
+    state.outlets = state.outlets.filter(o => o.slot !== slot);
+    console.log(`  [mock] Outlet slot ${slot} deleted`);
+    broadcast();
+    return json(res, { ok: true });
+  }
+
+  if (pathname === '/api/setstop' && req.method === 'POST') {
+    return body(req, data => {
+      const idx = data.index ?? -1;
+      if (idx < 1 || idx > NUM_STOPS) return json(res, { error: 'index out of range' }, 400);
+      const currentMm = parseFloat(state.stops[state.currentStop]?.mm ?? '0');
+      state.stops[idx] = { index: idx, mm: currentMm.toFixed(2) };
+      console.log(`  [mock] Stop ${idx} saved at ${currentMm.toFixed(2)} mm`);
+      broadcast();
+      json(res, { ok: true });
+    });
+  }
+
+  if (pathname === '/api/config/orientation' && req.method === 'POST') {
+    return body(req, data => {
+      state.homeOnRight = !!data.homeOnRight;
+      console.log(`  [mock] Orientation: home on ${state.homeOnRight ? 'right' : 'left'}`);
+      json(res, { ok: true });
+    });
+  }
+
+  if (pathname === '/api/config/motor' && req.method === 'POST') {
+    return body(req, data => {
+      state.motorInverted = !!data.invertDirection;
+      console.log(`  [mock] Motor direction: ${state.motorInverted ? 'inverted' : 'normal'}`);
+      json(res, { ok: true });
+    });
+  }
+
+  if (pathname === '/api/config/gates' && req.method === 'POST') {
+    return body(req, data => {
+      const n = data.numGates;
+      if (n >= 1 && n <= NUM_STOPS) {
+        state.numActiveStops = n;
+        console.log(`  [mock] Active gates: ${n}`);
+      }
+      json(res, { ok: true });
+    });
+  }
+
   if (pathname === '/api/clearcal' && req.method === 'POST') {
+    // Reset to unconfigured — mirrors firmware behaviour on start-over
+    state.numActiveStops = 0;
+    state.stops    = Array.from({ length: NUM_STOPS + 1 }, (_, i) => ({ index: i, mm: (i * 25).toFixed(2) }));
+    state.outlets  = [];
+    state.homed    = false;
+    state.currentStop = -1;
+    broadcast();
     return json(res, { ok: true });
   }
 
@@ -161,7 +268,9 @@ function handler(req, res) {
   }
 
   // ── Claude proxy ─────────────────────────────────────────────────────────
-  if (pathname === '/api/agent/chat' && req.method === 'POST') {
+  // /api/claude   — used by DemoApiService (mirrors the Vercel serverless function)
+  // /api/agent/chat — used by ApiService (real ESP32 path, kept for compatibility)
+  if ((pathname === '/api/claude' || pathname === '/api/agent/chat') && req.method === 'POST') {
     if (!ANT_KEY) {
       // Canned mock response when no key is provided
       const mock = {

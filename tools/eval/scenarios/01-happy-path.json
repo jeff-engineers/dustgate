@@ -1,0 +1,41 @@
+{
+  "name": "Happy path — 2 gates, 2 outlets",
+  "description": "Nominal setup: 2 gates, home on left, motor direction correct, both gates get Shelly outlets.",
+  "turns": [
+    "let's get started",
+    "I have 2 blast gates",
+    "the home endstop is on the left",
+    "go ahead and home it",
+    "it moved toward the endstop — correct direction",
+    "about 6 inches to the first gate",
+    "yes that's aligned perfectly",
+    "about 6 more inches to the second gate",
+    "yes that looks right",
+    "gate 1 is my bandsaw. IP is 192.168.1.100, gen 2",
+    "gate 2 is my router table. IP is 192.168.1.101, gen 2"
+  ],
+  "assertions": {
+    "required_tools": [
+      "set_num_gates",
+      "set_home_side",
+      "home",
+      "save_stop",
+      "configure_outlet",
+      "save_config"
+    ],
+    "forbidden_tools": [],
+    "must_precede": [
+      ["set_num_gates",  "home"],
+      ["set_home_side",  "home"],
+      ["home",           "save_stop"],
+      ["save_stop",      "configure_outlet"],
+      ["configure_outlet", "save_config"]
+    ],
+    "final_state": {
+      "num_active_stops": 2,
+      "homed": true,
+      "outlets_configured": 2
+    },
+    "max_turns": 30
+  }
+}

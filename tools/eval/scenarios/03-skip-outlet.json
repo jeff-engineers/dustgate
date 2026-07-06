@@ -1,0 +1,34 @@
+{
+  "name": "Gate with no outlet",
+  "description": "User has a tool with no Shelly outlet — should still complete setup and call save_config without configure_outlet.",
+  "turns": [
+    "let's start",
+    "just 1 gate",
+    "home is on the left",
+    "yes go ahead",
+    "correct direction",
+    "about 200mm",
+    "yes perfect",
+    "that gate doesn't have a smart outlet, skip it"
+  ],
+  "assertions": {
+    "required_tools": [
+      "set_num_gates",
+      "set_home_side",
+      "home",
+      "save_stop",
+      "save_config"
+    ],
+    "forbidden_tools": [],
+    "must_precede": [
+      ["home",      "save_stop"],
+      ["save_stop", "save_config"]
+    ],
+    "final_state": {
+      "num_active_stops": 1,
+      "homed": true,
+      "outlets_configured": 0
+    },
+    "max_turns": 25
+  }
+}
