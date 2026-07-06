@@ -34,9 +34,6 @@ tools/.env
 # Uncomment the line below if you want to exclude pre-built UI from the repo.
 # linear_actuator/data/
 
-# ── Angular lock file (delete this line if you want reproducible CI installs) ─
-dustgate-ui/package-lock.json
-
 # ── macOS ─────────────────────────────────────────────────────────────────────
 .DS_Store
 **/.DS_Store
