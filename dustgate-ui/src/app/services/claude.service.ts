@@ -213,7 +213,19 @@ export class ClaudeService {
       try {
         response = await this.api.agentChat(body) as Record<string, unknown>;
       } catch (e: unknown) {
-        const msg = e instanceof Error ? e.message : String(e);
+        // Angular HttpClient throws HttpErrorResponse, not a standard Error.
+        // Extract the most useful message available.
+        let msg: string;
+        if (e && typeof e === 'object' && 'error' in e) {
+          const httpErr = e as { status?: number; error?: unknown };
+          const body = httpErr.error;
+          const detail = body && typeof body === 'object' && 'error' in body
+            ? (body as { error: string }).error
+            : JSON.stringify(body);
+          msg = `HTTP ${httpErr.status ?? '?'}: ${detail}`;
+        } else {
+          msg = e instanceof Error ? e.message : String(e);
+        }
         onEvent({ type: 'error', text: `API error: ${msg}` });
         return;
       }
