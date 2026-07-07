@@ -24,6 +24,8 @@ export interface SystemStatus {
   currentStop: number;    // -1 = unknown
   targetStop: number;
   positionSteps: number;
+  positionMM?: number;    // raw actuator position, independent of any saved stop (used to
+                          // render continuous movement while jogging between stops)
   homed: boolean;
   enabled: boolean;
   endstopHome: boolean;

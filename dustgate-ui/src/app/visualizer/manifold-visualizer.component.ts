@@ -140,6 +140,7 @@ interface GateInfo {
       background: transparent;
     }
 
+
     /* ── Flow arrow ───────────────────────────────────────────── */
     .flow-section {
       position: relative;
@@ -303,9 +304,9 @@ interface GateInfo {
         <div class="slider-plate"></div>
         <div class="slider-window"
              [class.unhomed]="!isHomed"
-             [style.left]="sliderLeftPct + '%'"
+             [style.left]="displaySliderLeftPct + '%'"
              [style.width]="sliderWidthPct + '%'"
-             [style.transition-duration]="sliderTransitionSec + 's'">
+             [style.transition-duration]="(isJogging ? jogTransitionSec : sliderTransitionSec) + 's'">
         </div>
       </div>
 
@@ -448,7 +449,7 @@ export class ManifoldVisualizerComponent implements OnInit, OnDestroy {
                      ?? (s?.stops ?? [])[i];
       result.push({
         index:  i,
-        label:  i === 0 ? 'home' : (outlet?.name ?? `S${i}`),
+        label:  i === 0 ? 'home' : (outlet?.name ?? `Gate${i}`),
         outlet,
         isHome: i === 0,
         stopMm: parseFloat(stop?.mm ?? '0'),
@@ -496,4 +497,80 @@ export class ManifoldVisualizerComponent implements OnInit, OnDestroy {
   get isAtHome():        boolean { return this.sliderDisplayStop === 0; }
   get isHomed():         boolean { return this.status?.homed ?? false; }
   get isManualOverride():boolean { return this.status?.manualOverride ?? false; }
+
+  // ── Jog tracking ──────────────────────────────────────────────────────────────
+  // Raw jogging (used during setup, before a stop is saved) never changes
+  // currentStop/targetStop, so the discrete slider window can't track it by
+  // itself. While jogging, the slider window's left edge instead follows
+  // positionMM continuously, interpolated between the nearest saved stop and
+  // the next (possibly not-yet-saved) column.
+
+  /** CSS transition duration applied to the slider window while jogging. */
+  readonly jogTransitionSec = 1.0;
+
+  private stopMmForIndex(idx: number): number {
+    const stops = this.status?.stops ?? [];
+    const found = stops.find((s: StopInfo) => s.index === idx);
+    return parseFloat(found?.mm ?? '0');
+  }
+
+  /**
+   * True if this index has an actual saved position. Home (0) is always known
+   * at mm 0; every other slot starts as an unsaved '0.00' placeholder in the
+   * stops array, so a positive mm is what distinguishes "saved" from "not yet".
+   */
+  private isStopSaved(idx: number): boolean {
+    return idx === 0 || this.stopMmForIndex(idx) > 0;
+  }
+
+  /** Highest saved stop index whose mm is at or below the current raw position. */
+  private get lowerBoundIndex(): number {
+    const pos = this.status?.positionMM ?? 0;
+    const known = (this.status?.stops ?? [])
+      .filter((s: StopInfo) => s.index < this.numGates && this.isStopSaved(s.index))
+      .map((s: StopInfo) => ({ index: s.index, mm: parseFloat(s.mm) }))
+      .sort((a, b) => a.mm - b.mm);
+    let idx = 0;
+    for (const s of known) {
+      if (s.mm <= pos) idx = s.index; else break;
+    }
+    return idx;
+  }
+
+  /** Average spacing between saved stops — used to scale the not-yet-saved segment. */
+  private get estimatedColumnSpanMm(): number {
+    const mms = (this.status?.stops ?? [])
+      .filter((s: StopInfo) => s.index > 0 && s.index < this.numGates && this.isStopSaved(s.index))
+      .map((s: StopInfo) => parseFloat(s.mm))
+      .sort((a, b) => a - b);
+    if (mms.length === 0) return 200; // no calibration data yet — reasonable default
+    if (mms.length === 1) return Math.max(mms[0], 20);
+    const gaps = mms.slice(1).map((mm, i) => mm - mms[i]).filter(g => g > 0);
+    return gaps.length ? gaps.reduce((a, b) => a + b, 0) / gaps.length : Math.max(mms[0], 20);
+  }
+
+  /** True while the actuator sits away from wherever the discrete slider is resting. */
+  get isJogging(): boolean {
+    if (!this.isHomed || this.status?.positionMM == null) return false;
+    const settledMm = this.stopMmForIndex(this.sliderDisplayStop);
+    return Math.abs(this.status.positionMM - settledMm) > 0.5;
+  }
+
+  /** Left edge of the slider window (as a %) while jogging, continuously interpolated. */
+  get jogWindowLeftPct(): number {
+    const pos      = this.status?.positionMM ?? 0;
+    const lowerIdx = this.lowerBoundIndex;
+    const upperIdx = Math.min(lowerIdx + 1, this.numGates - 1);
+    const progress = Math.max(0, Math.min(1, (pos - this.stopMmForIndex(lowerIdx)) / this.estimatedColumnSpanMm));
+
+    const lowerCol = this.homeOnRight ? (this.numGates - 1 - lowerIdx) : lowerIdx;
+    const upperCol = this.homeOnRight ? (this.numGates - 1 - upperIdx) : upperIdx;
+    const col      = lowerCol + (upperCol - lowerCol) * progress;
+    return col / this.numGates * 100;
+  }
+
+  /** Left edge actually applied to the slider window — continuous while jogging, discrete otherwise. */
+  get displaySliderLeftPct(): number {
+    return this.isJogging ? this.jogWindowLeftPct : this.sliderLeftPct;
+  }
 }

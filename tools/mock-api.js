@@ -24,6 +24,7 @@ const PORT   = 3000;
 const API_KEY = 'dev-mock-key-1234';
 const ANT_KEY = process.env.ANTHROPIC_KEY || '';
 const NUM_STOPS = 16;  // compile-time max — matches firmware #define NUM_STOPS
+const STEPS_PER_MM = 40;  // mock resolution — arbitrary, just needs to be consistent
 
 // ── Simulated device state ────────────────────────────────────────────────
 const state = {
@@ -31,6 +32,7 @@ const state = {
   currentStop:    -1,       // -1 = unhomed
   targetStop:     0,
   positionSteps:  0,
+  positionMM:     0,        // raw actuator position, independent of any saved stop
   homed:          false,
   enabled:        true,
   endstopHome:    false,
@@ -106,10 +108,12 @@ function handler(req, res) {
     state.manualOverride = false;
     broadcast();
     setTimeout(() => {
-      state.state       = 'IDLE';
-      state.currentStop = 0;
-      state.targetStop  = 0;
-      state.homed       = true;
+      state.state         = 'IDLE';
+      state.currentStop    = 0;
+      state.targetStop     = 0;
+      state.homed          = true;
+      state.positionSteps  = 0;
+      state.positionMM     = 0;
       broadcast();
     }, 1500);
     return json(res, { ok: true });
@@ -137,6 +141,8 @@ function handler(req, res) {
       setTimeout(() => {
         state.state          = 'IDLE';
         state.currentStop    = stop;
+        state.positionMM     = toMm;
+        state.positionSteps  = Math.round(toMm * STEPS_PER_MM);
         broadcast();
       }, durationMs);
       json(res, { ok: true });
@@ -152,7 +158,8 @@ function handler(req, res) {
       broadcast();
       const durationMs = Math.max(200, Math.abs(mm) * 15);
       setTimeout(() => {
-        state.positionSteps += Math.round(mm * 40); // 40 steps/mm mock resolution
+        state.positionMM    += mm;
+        state.positionSteps  = Math.round(state.positionMM * STEPS_PER_MM);
         state.state = 'IDLE';
         broadcast();
       }, durationMs);
@@ -216,7 +223,11 @@ function handler(req, res) {
     return body(req, data => {
       const idx = data.index ?? -1;
       if (idx < 1 || idx > NUM_STOPS) return json(res, { error: 'index out of range' }, 400);
-      const currentMm = parseFloat(state.stops[state.currentStop]?.mm ?? '0');
+      // Bug fix: this used to read state.stops[state.currentStop].mm, which is the
+      // last CONFIRMED stop's position — but currentStop never changes during a raw
+      // jog, so every save recorded the previous stop's mm instead of where the
+      // actuator actually was. positionMM tracks the real jogged position.
+      const currentMm = state.positionMM;
       state.stops[idx] = { index: idx, mm: currentMm.toFixed(2) };
       console.log(`  [mock] Stop ${idx} saved at ${currentMm.toFixed(2)} mm`);
       broadcast();

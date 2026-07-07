@@ -40,6 +40,9 @@ struct ApiStatus {
     int  currentStop;        // last confirmed stop index (-1 = unknown)
     int  targetStop;
     long positionSteps;
+    float positionMM;        // raw actuator position, independent of any saved stop —
+                              // lets the UI show continuous movement while jogging,
+                              // since currentStop/targetStop don't change during a jog
     bool homed;
     bool enabled;
     bool endstopHome;        // true = home switch currently triggered
@@ -122,6 +125,15 @@ private:
     // Fingerprint of trigger fields — avoids WS pushes on positionSteps jitter
     uint32_t          _lastStatusHash;
     bool              _statusHashValid;
+    // Throttled position-change push — positionSteps is excluded from the
+    // fingerprint above (it changes every loop during any real move and would
+    // flood the socket), but that also means a raw jog — which never touches
+    // currentStop/targetStop/state — produced zero WS pushes at all, leaving
+    // clients with a frozen position for the whole jog. This tracks the last
+    // pushed position and forces an extra push when it has moved meaningfully,
+    // no more often than every POSITION_PUSH_MIN_MS.
+    long              _lastPushedPositionSteps;
+    unsigned long     _lastPositionPushMs;
 
     // Pending commands (written by request handlers, read by main loop)
     bool  _estopPending;

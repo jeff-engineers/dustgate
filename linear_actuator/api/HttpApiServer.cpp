@@ -10,6 +10,7 @@
 #include <WiFiClientSecure.h>
 #include <LittleFS.h>
 #include <esp_random.h>      // hardware RNG for key generation
+#include <cstdlib>           // labs() — position-drift check in update()
 #include "../utils/MotionMath.h"
 // AgentConfig.h provides getAnthropicKey/setAnthropicKey/reset without pulling
 // in <WebServer.h>, which would conflict with ESPAsyncWebServer's HTTP enums.
@@ -24,6 +25,9 @@
 
 static const char* NVS_NS  = "api_cfg";
 static const char* NVS_KEY = "api_key";
+
+// Minimum interval between position-drift-triggered pushes (see update()).
+static const unsigned long POSITION_PUSH_MIN_MS = 150;
 
 // =============================================================================
 // Construction
@@ -50,6 +54,8 @@ HttpApiServer::HttpApiServer()
       _mutex(nullptr),
       _lastStatusHash(0),
       _statusHashValid(false),
+      _lastPushedPositionSteps(0),
+      _lastPositionPushMs(0),
       _estopPending(false),
       _homePending(false),
       _enablePending(false),
@@ -140,7 +146,19 @@ void HttpApiServer::update(const ApiStatus& status
     if (status.numActiveStops > 0) _cachedNumActiveStops = status.numActiveStops;
 
     uint32_t fp = statusFingerprint(status);
-    bool changed = !_statusHashValid || (fp != _lastStatusHash);
+    bool fieldsChanged = !_statusHashValid || (fp != _lastStatusHash);
+
+    // A raw jog (consumeJogRequest) moves positionSteps but touches none of
+    // the fingerprinted fields above, so on its own it would never trigger a
+    // push — clients would see a frozen position for the whole jog. Force a
+    // throttled push whenever the position has drifted by roughly a mm,
+    // capped to POSITION_PUSH_MIN_MS so this can't flood the socket the way
+    // pushing on every positionSteps tick would.
+    long driftSteps = labs(status.positionSteps - _lastPushedPositionSteps);
+    bool positionDrifted = driftSteps > (long)stepsPerMM()
+                        && (millis() - _lastPositionPushMs) >= POSITION_PUSH_MIN_MS;
+
+    bool changed = fieldsChanged || positionDrifted;
 
     if (!changed && _ws.count() == 0) return; // nothing to do
 
@@ -151,8 +169,10 @@ void HttpApiServer::update(const ApiStatus& status
 #else
         _lastStatusJson = buildStatusJson(status);
 #endif
-        _lastStatusHash  = fp;
-        _statusHashValid = true;
+        _lastStatusHash          = fp;
+        _statusHashValid         = true;
+        _lastPushedPositionSteps = status.positionSteps;
+        _lastPositionPushMs      = millis();
 
         if (_ws.count() > 0) {
             _ws.textAll(_lastStatusJson);
@@ -765,6 +785,7 @@ String HttpApiServer::buildStatusJson(const ApiStatus& s
     doc["currentStop"]   = s.currentStop;
     doc["targetStop"]    = s.targetStop;
     doc["positionSteps"] = s.positionSteps;
+    doc["positionMM"]    = s.positionMM;
     doc["homed"]         = s.homed;
     doc["enabled"]       = s.enabled;
     doc["endstopHome"]   = s.endstopHome;

@@ -14,14 +14,14 @@ const kv = Redis.fromEnv();
 
 const globalLimit = new Ratelimit({
   redis:     kv,
-  limiter:   Ratelimit.slidingWindow(50, '1 d'),
+  limiter:   Ratelimit.slidingWindow(200, '1 d'),
   prefix:    'dg:global',
   analytics: false,
 });
 
 const ipLimit = new Ratelimit({
   redis:     kv,
-  limiter:   Ratelimit.slidingWindow(3, '1 d'),
+  limiter:   Ratelimit.slidingWindow(25, '1 d'),
   prefix:    'dg:ip',
   analytics: false,
 });

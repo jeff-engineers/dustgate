@@ -88,6 +88,7 @@ export class DemoApiService extends ApiService {
       currentStop:    this.mock.currentStop,
       targetStop:     this.mock.targetStop,
       positionSteps:  this.mock.positionSteps,
+      positionMM:     this.mock.positionMM,
       homed:          this.mock.homed,
       enabled:        true,
       endstopHome:    this.mock.positionMM < 0.5,

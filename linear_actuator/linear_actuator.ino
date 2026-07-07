@@ -621,6 +621,9 @@ void loop() {
         s.currentStop    = currentStop;
         s.targetStop     = targetStop;
         s.positionSteps  = motor.getPosition();
+        // Same sign convention as consumeSetStopRequest's currentMM below:
+        // HOME_DIRECTION inverts the step sign so positive mm is away from home.
+        s.positionMM     = (float)s.positionSteps / stepsPerMM() / (-HOME_DIRECTION);
         s.homed          = (currentStop != -1);
         s.enabled        = control.isEnabled();
         s.endstopHome    = (digitalRead(PIN_ENDSTOP_HOME) == HIGH); // HIGH = triggered (NC switch open)

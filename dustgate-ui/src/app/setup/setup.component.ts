@@ -252,7 +252,7 @@ interface DisplayMessage {
 
     <!-- Visualizer strip -->
     <div class="viz-section">
-      <app-manifold-visualizer></app-manifold-visualizer>
+      <app-manifold-visualizer [homeOnRight]="api.deviceInfo?.homeOnRight ?? false"></app-manifold-visualizer>
     </div>
 
     <!-- Messages -->
@@ -327,7 +327,7 @@ export class SetupComponent implements OnInit, AfterViewChecked {
   private history: ChatMessage[] = [];
   private shouldScroll = false;
 
-  constructor(private claude: ClaudeService, private api: ApiService, private router: Router) {}
+  constructor(private claude: ClaudeService, public api: ApiService, private router: Router) {}
 
   ngOnInit() {}
 

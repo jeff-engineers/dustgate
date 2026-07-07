@@ -365,7 +365,7 @@ interface GateRecord {
 
     <!-- Visualizer strip -->
     <div class="viz-section">
-      <app-manifold-visualizer></app-manifold-visualizer>
+      <app-manifold-visualizer [homeOnRight]="api.deviceInfo?.homeOnRight ?? false"></app-manifold-visualizer>
     </div>
 
     <!-- Step content -->
