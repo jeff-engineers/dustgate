@@ -317,6 +317,7 @@ export class GatePositionerComponent implements OnInit, OnDestroy {
     this.cd.markForCheck();
     try {
       await this.api.saveStop(this.gateIndex);
+      this.isSaving = false;
       this.saved.emit(this.currentMm);
     } catch {
       this.errorMsg = `Could not save Gate ${this.gateIndex}. Check connection.`;
