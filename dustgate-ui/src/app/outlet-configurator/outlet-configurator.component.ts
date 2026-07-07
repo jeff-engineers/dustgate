@@ -1,6 +1,6 @@
 import {
   Component, Input, Output, EventEmitter,
-  OnInit, ChangeDetectionStrategy, ChangeDetectorRef
+  OnInit, OnChanges, SimpleChanges, ChangeDetectionStrategy, ChangeDetectorRef
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
@@ -242,7 +242,7 @@ import { ApiService, OutletConfigCmd } from '../services/api.service';
     </div>
   `
 })
-export class OutletConfiguratorComponent implements OnInit {
+export class OutletConfiguratorComponent implements OnInit, OnChanges {
 
   /** 1-based gate number being configured. */
   @Input() gateIndex = 1;
@@ -277,10 +277,32 @@ export class OutletConfiguratorComponent implements OnInit {
   constructor(private api: ApiService, private cd: ChangeDetectorRef) {}
 
   ngOnInit() {
+    this.applyExisting();
+  }
+
+  ngOnChanges(changes: SimpleChanges) {
+    // The wizard reuses this component instance across gates (the *ngIf stays
+    // true while step.id === 'outlet').  Reset all form + UI state whenever
+    // the gate changes so the previous gate's values don't bleed through.
+    if (changes['gateIndex'] && !changes['gateIndex'].firstChange) {
+      this.toolName   = '';
+      this.generation = 2;
+      this.ip         = '';
+      this.thresholdW = null;
+      this.pinging    = false;
+      this.saving     = false;
+      this.errorMsg   = '';
+      this.pingResult = null;
+      this.applyExisting();
+      this.cd.markForCheck();
+    }
+  }
+
+  private applyExisting() {
     if (this.existing) {
-      this.toolName   = this.existing.name      ?? '';
+      this.toolName   = this.existing.name       ?? '';
       this.generation = this.existing.generation ?? 2;
-      this.ip         = this.existing.ip         ?? '';
+      this.ip         = this.existing.ip          ?? '';
       this.thresholdW = this.existing.threshold_w ?? null;
     }
   }
@@ -329,6 +351,7 @@ export class OutletConfiguratorComponent implements OnInit {
 
     try {
       await this.api.configureOutlet(cmd);
+      this.saving = false;
       this.saved.emit(cmd);
     } catch {
       this.errorMsg = 'Could not save outlet. Check connection and try again.';

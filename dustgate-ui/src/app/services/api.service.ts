@@ -76,7 +76,9 @@ export class ApiService {
   deviceInfo: DeviceInfo | null = null;
 
   constructor(protected http: HttpClient) {
-    this.init();
+    // Deferred to a microtask so subclass field initializers (which run after
+    // super() returns) are set before an overridden init() can read them.
+    queueMicrotask(() => this.init());
   }
 
   // ── Bootstrap ────────────────────────────────────────────────────────────────
