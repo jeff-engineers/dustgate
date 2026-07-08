@@ -195,7 +195,7 @@ import { ApiService, OutletConfigCmd } from '../services/api.service';
       <div class="field">
         <label>IP address</label>
         <input type="text"
-               placeholder="192.168.1.100"
+               placeholder="e.g. 192.168.1.100"
                inputmode="decimal"
                [(ngModel)]="ip"
                (ngModelChange)="pingResult = null; clearError()" />
@@ -220,7 +220,7 @@ import { ApiService, OutletConfigCmd } from '../services/api.service';
       <div class="field">
         <label>Detection threshold (W)</label>
         <input type="number"
-               placeholder="5"
+               placeholder="e.g. 5"
                min="0"
                [(ngModel)]="thresholdW" />
       </div>

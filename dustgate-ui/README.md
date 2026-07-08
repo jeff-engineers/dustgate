@@ -87,9 +87,11 @@ src/app/
   gate-positioner/        Reusable jog widget for positioning the actuator at a stop
   visualizer/             Manifold visualizer — gate boxes, slider, dust collector
   services/
-    api.service.ts          Talks to the real device (HTTP + WebSocket)
-    demo-api.service.ts     In-memory drop-in replacement, used in demo mode
-    unit-preference.service.ts   mm/inches display preference
+    api.service.ts            Talks to the real device (HTTP + WebSocket)
+    demo-api.service.ts       In-memory drop-in replacement, used in demo mode
+    claude.service.ts         Tool-calling loop for the AI setup assistant
+    unit-preference.service.ts     mm/inches display preference
+    hardware-profile.service.ts    Port size (2.5"/4") — seeds expected gate spacing
 ```
 
 `ApiService` is swapped for `DemoApiService` via a DI override in `app.config.ts`

@@ -40,9 +40,11 @@ const state = {
   homeOnRight:    false,
   motorInverted:  false,
   numActiveStops: 0,        // 0 = unconfigured until setup wizard runs
+  // mm: null = position not yet saved (distinct from a gate saved at 0.00).
+  // Home (index 0) gets a real 0.00 once /api/home runs.
   stops: Array.from({ length: NUM_STOPS + 1 }, (_, i) => ({
     index: i,
-    mm: (i * 25).toFixed(2),
+    mm: null,
   })),
   outlets: [],              // empty until setup wizard configures them
 };
@@ -114,6 +116,7 @@ function handler(req, res) {
       state.homed          = true;
       state.positionSteps  = 0;
       state.positionMM     = 0;
+      state.stops[0]       = { index: 0, mm: '0.00' };
       broadcast();
     }, 1500);
     return json(res, { ok: true });
@@ -265,7 +268,7 @@ function handler(req, res) {
   if (pathname === '/api/clearcal' && req.method === 'POST') {
     // Reset to unconfigured — mirrors firmware behaviour on start-over
     state.numActiveStops = 0;
-    state.stops    = Array.from({ length: NUM_STOPS + 1 }, (_, i) => ({ index: i, mm: (i * 25).toFixed(2) }));
+    state.stops    = Array.from({ length: NUM_STOPS + 1 }, (_, i) => ({ index: i, mm: null }));
     state.outlets  = [];
     state.homed    = false;
     state.currentStop = -1;

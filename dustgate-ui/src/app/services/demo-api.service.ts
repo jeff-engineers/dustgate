@@ -9,6 +9,7 @@ import {
   PingResult,
   SystemStatus,
 } from './api.service';
+import { HardwareProfileService } from './hardware-profile.service';
 
 // ── In-browser mock state (mirrors tools/mock-api.js) ─────────────────────────
 
@@ -22,7 +23,7 @@ interface MockState {
   homeOnRight:    boolean;
   motorInverted:  boolean;
   numActiveStops: number;
-  stops:          Array<{ index: number; mm: string }>;
+  stops:          Array<{ index: number; mm: string | null }>;
   outlets:        OutletStatus[];
 }
 
@@ -50,12 +51,12 @@ export class DemoApiService extends ApiService {
     homeOnRight:    false,
     motorInverted:  false,
     numActiveStops: 0,
-    stops: Array.from({ length: NUM_STOPS + 1 }, (_, i) => ({ index: i, mm: '0.00' })),
+    stops: Array.from({ length: NUM_STOPS + 1 }, (_, i) => ({ index: i, mm: null as string | null })),
     outlets:        [],
   };
 
-  constructor(http: HttpClient) {
-    super(http);
+  constructor(http: HttpClient, hardwareProfile: HardwareProfileService) {
+    super(http, hardwareProfile);
     // super() triggers init() via the parent ctor;
     // our override runs instead — no HTTP calls made.
   }
@@ -170,6 +171,7 @@ export class DemoApiService extends ApiService {
 
   override async saveStop(index: number): Promise<{ ok: boolean }> {
     const mm = this.mock.positionMM;
+    this.checkStopConflict(index, mm);
     this.mock.stops[index] = { index, mm: mm.toFixed(2) };
     if (index > this.mock.numActiveStops) {
       this.mock.numActiveStops = index;
@@ -186,7 +188,7 @@ export class DemoApiService extends ApiService {
     this.mock.positionSteps  = 0;
     this.mock.numActiveStops = 0;
     this.mock.outlets        = [];
-    this.mock.stops = Array.from({ length: NUM_STOPS + 1 }, (_, i) => ({ index: i, mm: '0.00' }));
+    this.mock.stops = Array.from({ length: NUM_STOPS + 1 }, (_, i) => ({ index: i, mm: null as string | null }));
     if (this.deviceInfo) this.deviceInfo.numStops = 0;
     this.pushStatus();
     return Promise.resolve({ ok: true });

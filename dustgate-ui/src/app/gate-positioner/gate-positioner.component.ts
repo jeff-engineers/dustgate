@@ -1,6 +1,6 @@
 import {
   Component, Input, Output, EventEmitter,
-  OnInit, OnDestroy, ChangeDetectionStrategy, ChangeDetectorRef
+  OnInit, OnChanges, OnDestroy, SimpleChanges, ChangeDetectionStrategy, ChangeDetectorRef
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { Subscription } from 'rxjs';
@@ -117,9 +117,6 @@ import { UnitPreferenceService } from '../services/unit-preference.service';
     .jog-btn:active:not(:disabled) { background: var(--surface-2, #2a2a2a); }
     .jog-btn:disabled { opacity: 0.35; }
 
-    /* Toward-home row: large-to-small (reverse), colored cooler */
-    .toward { color: var(--muted); }
-
     .moving-banner {
       display: flex;
       align-items: center;
@@ -180,21 +177,18 @@ import { UnitPreferenceService } from '../services/unit-preference.service';
       </div>
 
       <!-- Error -->
-      <div class="error-banner" *ngIf="errorMsg">
-        ⚠ {{ errorMsg }}
-        <br><small>Check connection and try again.</small>
-      </div>
+      <div class="error-banner" *ngIf="errorMsg">⚠ {{ errorMsg }}</div>
 
       <!-- Jog controls — disabled while moving -->
       <div class="jog-section" *ngIf="!isMoving">
 
         <!-- Toward home row (reversed order: largest first) -->
         <div class="jog-direction">
-          <span class="dir-label">← toward home</span>
+          <span class="dir-label">{{ homeOnRight ? '→' : '←' }} toward home</span>
           <div class="jog-btns">
             <button *ngFor="let s of reversedSteps"
                     class="jog-btn toward"
-                    [disabled]="isMoving || isSaving"
+                    [disabled]="isMoving || isSaving || towardWouldPassHome(s.mm)"
                     (click)="jog(-s.mm)">
               {{ s.label }}
             </button>
@@ -203,7 +197,7 @@ import { UnitPreferenceService } from '../services/unit-preference.service';
 
         <!-- Away from home row (smallest first) -->
         <div class="jog-direction">
-          <span class="dir-label">away from home →</span>
+          <span class="dir-label">away from home {{ homeOnRight ? '←' : '→' }}</span>
           <div class="jog-btns">
             <button *ngFor="let s of units.jogSteps"
                     class="jog-btn"
@@ -227,7 +221,7 @@ import { UnitPreferenceService } from '../services/unit-preference.service';
     </div>
   `
 })
-export class GatePositionerComponent implements OnInit, OnDestroy {
+export class GatePositionerComponent implements OnInit, OnChanges, OnDestroy {
 
   /** Which stop index this widget is positioning (1-based gate number). */
   @Input() gateIndex = 1;
@@ -243,6 +237,9 @@ export class GatePositionerComponent implements OnInit, OnDestroy {
    * The widget skips the "you must be at this position" warning.
    */
   @Input() prePositioned = false;
+
+  /** True when home is on the right side of the manifold — flips the jog arrow labels. */
+  @Input() homeOnRight = false;
 
   /** Emits the final mm position when the stop is successfully saved. */
   @Output() saved = new EventEmitter<number>();
@@ -279,10 +276,33 @@ export class GatePositionerComponent implements OnInit, OnDestroy {
     );
   }
 
+  ngOnChanges(changes: SimpleChanges) {
+    // The wizard reuses this component instance across gates (the *ngIf stays
+    // true while step.id === 'position'). Reset the local jog accumulator +
+    // UI state whenever the gate changes so the previous gate's movement
+    // doesn't bleed into the new one's starting position.
+    if (changes['gateIndex'] && !changes['gateIndex'].firstChange) {
+      this.joggedMm = 0;
+      this.isSaving = false;
+      this.errorMsg = '';
+      this.cd.markForCheck();
+    }
+  }
+
   ngOnDestroy() { this.subs.unsubscribe(); }
 
   get currentMm(): number {
     return this.initialMm + this.joggedMm;
+  }
+
+  /**
+   * True if a toward-home jog of this many mm would drive past the home endstop
+   * (position 0). The actuator physically can't move beyond home, so we disable
+   * the button rather than let the local position tracking desync. At the home
+   * position this greys out the whole toward-home row.
+   */
+  towardWouldPassHome(stepMm: number): boolean {
+    return stepMm > this.currentMm + 1e-6;
   }
 
   get reversedSteps() {
@@ -319,8 +339,13 @@ export class GatePositionerComponent implements OnInit, OnDestroy {
       await this.api.saveStop(this.gateIndex);
       this.isSaving = false;
       this.saved.emit(this.currentMm);
-    } catch {
-      this.errorMsg = `Could not save Gate ${this.gateIndex}. Check connection.`;
+    } catch (e: unknown) {
+      // A plain Error means our own validation rejected the save (e.g. too
+      // close to another saved gate) — show that message. Anything else is
+      // a real request failure.
+      this.errorMsg = e instanceof Error
+        ? e.message
+        : `Could not save Gate ${this.gateIndex}. Check connection.`;
       this.isSaving = false;
     }
     this.cd.markForCheck();

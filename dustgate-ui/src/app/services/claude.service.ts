@@ -1,5 +1,6 @@
 import { Injectable } from '@angular/core';
 import { ApiService } from './api.service';
+import { HardwareProfileService, PortSize } from './hardware-profile.service';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -149,6 +150,17 @@ const TOOLS = [
       },
       required: ['num_gates']
     }
+  },
+  {
+    name: 'set_port_size',
+    description: 'Record which DustGate hardware size the user has. This only seeds a starting guess for how far to jog toward the next gate before any real position is known — call it once at the very start of setup after asking the user.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        size: { type: 'string', enum: ['2.5in', '4in'], description: '2.5in is the standard/reference size; 4in is the larger hose variant.' }
+      },
+      required: ['size']
+    }
   }
 ];
 
@@ -158,20 +170,21 @@ The system has a rack-and-pinion linear actuator that moves between numbered sto
 
 Your job is to walk the user through setup conversationally:
 1. Always ask the user before moving the actuator.
-2. Ask the user how many blast gates they have and call set_num_gates.
-3. Ask the user if the home endstop is on the left or right side of the manifold and call set_home_side.
-4. Home the actuator so you have a known position.  If the endstop is already triggered, ask them if it's alright to move it away from the endstop a bit to confirm it works.
-5. If the actuator moved AWAY from the endstop, call set_motor_direction with invert=true and home again.
-6. Confirm that the homing went in the correct direction.
-7. Ask the user to measure or estimate the distance to the next gate. Let them know they can reply in metric, imperial, or casual terms like "a little more" or "about 4 inches". When the user provides any distance or movement instruction — even an approximate one — treat that as permission to move immediately. Do NOT ask a separate "are you ready?" or "shall I move?" question.
-8. Move the actuator to the desired position.
-9. Confirm the actuator is aligned with the gate. Repeat jogging until the user confirms alignment, then call save_stop.
-10. Repeat steps 7–9 for all gates.
-11. Ask the user what tool is at each gate — accept whatever name they give ("Bandsaw", "Router Table", etc.). Don't offer a list; just ask.
-12. Ask for the Shelly outlet IP address for that tool, ping it to confirm it's reachable, then configure it. If the user is unsure, provide assistance. You may need to direct them to Shelly's website for help.
-13. Repeat for all tools. Typically, once a distance is known between two gates, the rest will be the same.
-14. If the user states that the distance moved is more/less than anticipated, try to recalculate the movement distance per step based on their feedback.
-14. Save the configuration, then tell the user setup is complete and they can tap the back arrow to use the dashboard.
+2. Ask which DustGate hardware size they have — 2.5" (standard) or 4" — and call set_port_size. On the 2.5" reference hardware, adjacent gates are spaced about 89mm apart; treat that as a rough starting expectation only, not a fact to enforce — the actual jogged position always wins.
+3. Ask the user how many blast gates they have and call set_num_gates.
+4. Ask the user if the home endstop is on the left or right side of the manifold and call set_home_side.
+5. Home the actuator so you have a known position.  If the endstop is already triggered, ask them if it's alright to move it away from the endstop a bit to confirm it works.
+6. If the actuator moved AWAY from the endstop, call set_motor_direction with invert=true and home again.
+7. Confirm that the homing went in the correct direction.
+8. Ask the user to measure or estimate the distance to the next gate. Let them know they can reply in metric, imperial, or casual terms like "a little more" or "about 4 inches". When the user provides any distance or movement instruction — even an approximate one — treat that as permission to move immediately. Do NOT ask a separate "are you ready?" or "shall I move?" question.
+9. Move the actuator to the desired position.
+10. Confirm the actuator is aligned with the gate. Repeat jogging until the user confirms alignment, then call save_stop.
+11. Repeat steps 8–10 for all gates.
+12. Ask the user what tool is at each gate — accept whatever name they give ("Bandsaw", "Router Table", etc.). Don't offer a list; just ask.
+13. Ask for the Shelly outlet IP address for that tool, ping it to confirm it's reachable, then configure it. If the user is unsure, provide assistance. You may need to direct them to Shelly's website for help.
+14. Repeat for all tools. Typically, once a distance is known between two gates, the rest will be the same.
+15. If the user states that the distance moved is more/less than anticipated, try to recalculate the movement distance per step based on their feedback.
+16. Save the configuration, then tell the user setup is complete and they can tap the back arrow to use the dashboard.
 
 Be friendly and concise. One thing at a time. If the user asks to reconfigure or change something mid-setup, accommodate them naturally. If a ping fails, suggest checking the outlet IP and trying again.`;
 
@@ -180,7 +193,7 @@ Be friendly and concise. One thing at a time. If the user asks to reconfigure or
 @Injectable({ providedIn: 'root' })
 export class ClaudeService {
 
-  constructor(private api: ApiService) {}
+  constructor(private api: ApiService, private hardwareProfile: HardwareProfileService) {}
 
   /**
    * Run one conversational turn.
@@ -337,6 +350,10 @@ export class ClaudeService {
 
       case 'set_num_gates':
         return this.api.setNumGates(input['num_gates'] as number);
+
+      case 'set_port_size':
+        this.hardwareProfile.set(input['size'] as PortSize);
+        return { ok: true };
 
       default:
         throw new Error(`Unknown tool: ${name}`);

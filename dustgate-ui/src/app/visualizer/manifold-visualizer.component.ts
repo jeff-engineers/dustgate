@@ -2,6 +2,7 @@ import { Component, Input, OnInit, OnDestroy } from '@angular/core';
 import { CommonModule, DecimalPipe } from '@angular/common';
 import { Subscription } from 'rxjs';
 import { ApiService, SystemStatus, OutletStatus, StopInfo } from '../services/api.service';
+import { HardwareProfileService } from '../services/hardware-profile.service';
 
 interface GateInfo {
   index:  number;
@@ -142,32 +143,58 @@ interface GateInfo {
 
 
     /* ── Flow arrow ───────────────────────────────────────────── */
+    /* An elbow connector: drops from the moving gate, bridges over to the
+       dust collector's fixed center position, then drops into it. This way
+       the arrow always visually terminates at the collector regardless of
+       which gate is active. */
     .flow-section {
       position: relative;
       height: 30px;
     }
 
-    .flow-line {
+    .flow-drop-gate {
       position: absolute;
-      top: 0; bottom: 7px;
+      top: 0;
+      height: 50%;
       width: 2px;
       margin-left: -1px;
       background: var(--accent);
       transition-property: left;
       transition-timing-function: linear;
     }
-    .flow-line.hidden { opacity: 0; }
+    .flow-drop-gate.hidden { opacity: 0; }
+
+    .flow-bridge {
+      position: absolute;
+      top: 50%;
+      height: 2px;
+      margin-top: -1px;
+      background: var(--accent);
+      transition-property: left, width;
+      transition-timing-function: linear;
+    }
+    .flow-bridge.hidden { opacity: 0; }
+
+    .flow-drop-dc {
+      position: absolute;
+      top: 50%;
+      bottom: 7px;
+      left: 50%;
+      width: 2px;
+      margin-left: -1px;
+      background: var(--accent);
+    }
+    .flow-drop-dc.hidden { opacity: 0; }
 
     .flow-head {
       position: absolute;
       bottom: 0;
+      left: 50%;
       margin-left: -5px;
       width: 0; height: 0;
       border-left:  5px solid transparent;
       border-right: 5px solid transparent;
       border-top:   7px solid var(--accent);
-      transition-property: left;
-      transition-timing-function: linear;
     }
     .flow-head.hidden { opacity: 0; }
 
@@ -310,18 +337,22 @@ interface GateInfo {
         </div>
       </div>
 
-      <!-- Flow arrow down to collector -->
+      <!-- Flow arrow down to collector — drops from the active gate, bridges
+           over to the collector's fixed center, then drops into it -->
       <div class="flow-section">
-        <div class="flow-line"
-             [class.hidden]="!isHomed || isAtHome"
-             [style.left]="arrowCenterPct + '%'"
-             [style.transition-duration]="sliderTransitionSec + 's'">
+        <div class="flow-drop-gate"
+             [class.hidden]="!isHomed || (isAtHome && !isJogging)"
+             [style.left]="displayArrowCenterPct + '%'"
+             [style.transition-duration]="(isJogging ? jogTransitionSec : sliderTransitionSec) + 's'">
         </div>
-        <div class="flow-head"
-             [class.hidden]="!isHomed || isAtHome"
-             [style.left]="arrowCenterPct + '%'"
-             [style.transition-duration]="sliderTransitionSec + 's'">
+        <div class="flow-bridge"
+             [class.hidden]="!isHomed || (isAtHome && !isJogging)"
+             [style.left]="flowBridgeLeftPct + '%'"
+             [style.width]="flowBridgeWidthPct + '%'"
+             [style.transition-duration]="(isJogging ? jogTransitionSec : sliderTransitionSec) + 's'">
         </div>
+        <div class="flow-drop-dc"    [class.hidden]="!isHomed || (isAtHome && !isJogging)"></div>
+        <div class="flow-head"      [class.hidden]="!isHomed || (isAtHome && !isJogging)"></div>
       </div>
 
       <!-- Manual override badge -->
@@ -370,7 +401,7 @@ export class ManifoldVisualizerComponent implements OnInit, OnDestroy {
   private initialized = false;
   private sub?: Subscription;
 
-  constructor(private api: ApiService) {}
+  constructor(private api: ApiService, private hardwareProfile: HardwareProfileService) {}
 
   ngOnInit() {
     this.sub = this.api.status$.subscribe(s => {
@@ -440,25 +471,57 @@ export class ManifoldVisualizerComponent implements OnInit, OnDestroy {
   // ── Computed layout ───────────────────────────────────────────────────────────
 
   get gates(): GateInfo[] {
+    return this.visualColumns.map((i: number) => this.gateInfoFor(i));
+  }
+
+  private gateInfoFor(i: number): GateInfo {
     const s = this.status;
-    const n = this.numGates;
-    const result: GateInfo[] = [];
-    for (let i = 0; i < n; i++) {
-      const outlet = s?.outlets?.find((o: OutletStatus) => o.stop === i) ?? null;
-      const stop   = (s?.stops ?? []).find((st: StopInfo) => st.index === i)
-                     ?? (s?.stops ?? [])[i];
-      result.push({
-        index:  i,
-        label:  i === 0 ? 'home' : (outlet?.name ?? `Gate${i}`),
-        outlet,
-        isHome: i === 0,
-        stopMm: parseFloat(stop?.mm ?? '0'),
-      });
-    }
-    // When home is on the right, render gates in reverse order so stop 0
-    // appears on the right and stops increase left-to-right visually becomes
-    // right-to-left — matching the physical layout.
-    return this.homeOnRight ? [...result].reverse() : result;
+    const outlet = s?.outlets?.find((o: OutletStatus) => o.stop === i) ?? null;
+    const stop   = (s?.stops ?? []).find((st: StopInfo) => st.index === i);
+    return {
+      index:  i,
+      label:  i === 0 ? 'home' : (outlet?.name ?? `Gate${i}`),
+      outlet,
+      isHome: i === 0,
+      stopMm: parseFloat(stop?.mm ?? '0'),
+    };
+  }
+
+  // ── Physical column ordering ───────────────────────────────────────────────────
+  // The rail is a physical space: columns are laid out by actual distance from
+  // home, not by the order the user happened to configure gates in. So if Gate 2
+  // was saved closer to the endstop than Gate 1, its box renders to the left of
+  // Gate 1's. Labels travel with their box; slider/marker/arrow all key off a
+  // stop's *rank* in this order, keeping the monotonic mm↔column relationship the
+  // position math depends on.
+
+  /** Stop indices ordered by physical distance from home (home first). Saved
+   *  gates sort by mm; gates not yet saved keep index order at the far end
+   *  until they're placed. */
+  private get physicalOrder(): number[] {
+    const gateIdxs: number[] = [];
+    for (let i = 1; i < this.numGates; i++) gateIdxs.push(i);
+    const saved   = gateIdxs.filter(i => this.isStopSaved(i))
+                            .sort((a, b) => this.stopMmForIndex(a) - this.stopMmForIndex(b));
+    const unsaved = gateIdxs.filter(i => !this.isStopSaved(i));
+    return [0, ...saved, ...unsaved];
+  }
+
+  /** Visual left-to-right column order (physical order, flipped for home-on-right). */
+  private get visualColumns(): number[] {
+    return this.homeOnRight ? [...this.physicalOrder].reverse() : this.physicalOrder;
+  }
+
+  /** Physical rank of a stop index (0 = home, increasing with distance from home). */
+  private physicalRankOf(stopIndex: number): number {
+    const r = this.physicalOrder.indexOf(stopIndex);
+    return r < 0 ? 0 : r;
+  }
+
+  /** Left edge % of the column at a (possibly fractional) physical rank. */
+  private leftPctForRank(rank: number): number {
+    const visualCol = this.homeOnRight ? (this.numGates - 1 - rank) : rank;
+    return visualCol / this.numGates * 100;
   }
 
   /** True once the device has reported a gate count > 0 (set via setup agent). */
@@ -480,18 +543,12 @@ export class ManifoldVisualizerComponent implements OnInit, OnDestroy {
 
   /** Left edge of the slider window as a percentage of rail width. */
   get sliderLeftPct(): number {
-    const stop = Math.max(0, this.sliderDisplayStop);
-    // When home is on the right the gates array is reversed, so the slider
-    // window must count from the opposite end.
-    const col = this.homeOnRight ? (this.numGates - 1 - stop) : stop;
-    return col / this.numGates * 100;
+    return this.leftPctForRank(this.physicalRankOf(Math.max(0, this.sliderDisplayStop)));
   }
 
   /** Center of the slider window — used to position the flow arrow. */
   get arrowCenterPct(): number {
-    const stop = Math.max(0, this.sliderDisplayStop);
-    const col  = this.homeOnRight ? (this.numGates - 1 - stop) : stop;
-    return (col + 0.5) / this.numGates * 100;
+    return this.leftPctForRank(this.physicalRankOf(Math.max(0, this.sliderDisplayStop))) + this.sliderWidthPct / 2;
   }
 
   get isAtHome():        boolean { return this.sliderDisplayStop === 0; }
@@ -516,34 +573,51 @@ export class ManifoldVisualizerComponent implements OnInit, OnDestroy {
 
   /**
    * True if this index has an actual saved position. Home (0) is always known
-   * at mm 0; every other slot starts as an unsaved '0.00' placeholder in the
-   * stops array, so a positive mm is what distinguishes "saved" from "not yet".
+   * at mm 0; every other slot's mm is null until it's saved, so a non-null mm
+   * is what distinguishes "saved" from "not yet".
    */
   private isStopSaved(idx: number): boolean {
-    return idx === 0 || this.stopMmForIndex(idx) > 0;
+    if (idx === 0) return true;
+    const found = (this.status?.stops ?? []).find((s: StopInfo) => s.index === idx);
+    return found?.mm != null;
   }
 
-  /** Highest saved stop index whose mm is at or below the current raw position. */
-  private get lowerBoundIndex(): number {
-    const pos = this.status?.positionMM ?? 0;
-    const known = (this.status?.stops ?? [])
-      .filter((s: StopInfo) => s.index < this.numGates && this.isStopSaved(s.index))
-      .map((s: StopInfo) => ({ index: s.index, mm: parseFloat(s.mm) }))
-      .sort((a, b) => a.mm - b.mm);
-    let idx = 0;
-    for (const s of known) {
-      if (s.mm <= pos) idx = s.index; else break;
+  /** Interpolated physical rank for a raw mm position. Uses saved stops as
+   *  anchors (home at mm 0, each saved gate at its mm) and extrapolates past the
+   *  last one by the estimated spacing. Because ranks come from physicalOrder,
+   *  they increase monotonically with mm, so the interpolation is well-behaved
+   *  even when gates were configured out of order. */
+  private physicalRankForPos(pos: number): number {
+    const anchors: { mm: number; rank: number }[] = [{ mm: 0, rank: 0 }];
+    for (let i = 1; i < this.numGates; i++) {
+      if (this.isStopSaved(i)) {
+        anchors.push({ mm: this.stopMmForIndex(i), rank: this.physicalRankOf(i) });
+      }
     }
-    return idx;
+    anchors.sort((a, b) => a.mm - b.mm);
+
+    let lower = anchors[0];
+    let upper: { mm: number; rank: number } | null = null;
+    for (const a of anchors) {
+      if (a.mm <= pos) lower = a;
+      else { upper = a; break; }
+    }
+    if (upper) {
+      const span = upper.mm - lower.mm;
+      const t = span > 0 ? (pos - lower.mm) / span : 0;
+      return lower.rank + t * (upper.rank - lower.rank);
+    }
+    // Beyond the last saved stop — extrapolate one column per estimated span.
+    return lower.rank + (pos - lower.mm) / this.estimatedColumnSpanMm;
   }
 
   /** Average spacing between saved stops — used to scale the not-yet-saved segment. */
   private get estimatedColumnSpanMm(): number {
     const mms = (this.status?.stops ?? [])
       .filter((s: StopInfo) => s.index > 0 && s.index < this.numGates && this.isStopSaved(s.index))
-      .map((s: StopInfo) => parseFloat(s.mm))
+      .map((s: StopInfo) => parseFloat(s.mm ?? '0'))
       .sort((a, b) => a - b);
-    if (mms.length === 0) return 200; // no calibration data yet — reasonable default
+    if (mms.length === 0) return this.hardwareProfile.expectedGateSpacingMm; // no calibration data yet
     if (mms.length === 1) return Math.max(mms[0], 20);
     const gaps = mms.slice(1).map((mm, i) => mm - mms[i]).filter(g => g > 0);
     return gaps.length ? gaps.reduce((a, b) => a + b, 0) / gaps.length : Math.max(mms[0], 20);
@@ -558,19 +632,31 @@ export class ManifoldVisualizerComponent implements OnInit, OnDestroy {
 
   /** Left edge of the slider window (as a %) while jogging, continuously interpolated. */
   get jogWindowLeftPct(): number {
-    const pos      = this.status?.positionMM ?? 0;
-    const lowerIdx = this.lowerBoundIndex;
-    const upperIdx = Math.min(lowerIdx + 1, this.numGates - 1);
-    const progress = Math.max(0, Math.min(1, (pos - this.stopMmForIndex(lowerIdx)) / this.estimatedColumnSpanMm));
-
-    const lowerCol = this.homeOnRight ? (this.numGates - 1 - lowerIdx) : lowerIdx;
-    const upperCol = this.homeOnRight ? (this.numGates - 1 - upperIdx) : upperIdx;
-    const col      = lowerCol + (upperCol - lowerCol) * progress;
-    return col / this.numGates * 100;
+    const rank = Math.max(0, Math.min(this.numGates - 1,
+      this.physicalRankForPos(this.status?.positionMM ?? 0)));
+    return this.leftPctForRank(rank);
   }
 
   /** Left edge actually applied to the slider window — continuous while jogging, discrete otherwise. */
   get displaySliderLeftPct(): number {
     return this.isJogging ? this.jogWindowLeftPct : this.sliderLeftPct;
+  }
+
+  /** Center of the slider window, following the same discrete/continuous split — used for the flow arrow. */
+  get displayArrowCenterPct(): number {
+    return this.isJogging ? this.jogWindowLeftPct + this.sliderWidthPct / 2 : this.arrowCenterPct;
+  }
+
+  /** Horizontal center of the dust collector box — always centered under the rail (see .dc-wrap). */
+  readonly dcCenterPct = 50;
+
+  /** Left edge of the horizontal bridge connecting the active gate to the collector. */
+  get flowBridgeLeftPct(): number {
+    return Math.min(this.displayArrowCenterPct, this.dcCenterPct);
+  }
+
+  /** Width of the horizontal bridge connecting the active gate to the collector. */
+  get flowBridgeWidthPct(): number {
+    return Math.abs(this.displayArrowCenterPct - this.dcCenterPct);
   }
 }

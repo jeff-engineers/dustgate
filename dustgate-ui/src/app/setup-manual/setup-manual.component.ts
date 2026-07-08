@@ -8,6 +8,7 @@ import { Subscription } from 'rxjs';
 
 import { ApiService, OutletConfigCmd, SystemStatus } from '../services/api.service';
 import { UnitPreferenceService } from '../services/unit-preference.service';
+import { HardwareProfileService } from '../services/hardware-profile.service';
 import { ManifoldVisualizerComponent } from '../visualizer/manifold-visualizer.component';
 import { GatePositionerComponent } from '../gate-positioner/gate-positioner.component';
 import { OutletConfiguratorComponent } from '../outlet-configurator/outlet-configurator.component';
@@ -15,6 +16,7 @@ import { OutletConfiguratorComponent } from '../outlet-configurator/outlet-confi
 // ── Step machine ──────────────────────────────────────────────────────────────
 
 type Step =
+  | { id: 'port-size' }
   | { id: 'gate-count' }
   | { id: 'unit-system' }
   | { id: 'home-side' }
@@ -371,6 +373,30 @@ interface GateRecord {
     <!-- Step content -->
     <div class="content">
 
+      <!-- ── Phase 0: Port size ── -->
+      <ng-container *ngIf="step.id === 'port-size'">
+        <div class="step-title">Which size DustGate system are you using?</div>
+        <div class="step-hint">
+          This just seeds a starting guess for gate spacing — jogging to the real
+          position always takes over once you have one saved.
+        </div>
+
+        <div class="big-toggle">
+          <button class="big-toggle-btn"
+                  [class.selected]="hardwareProfile.portSize === '2.5in'"
+                  (click)="hardwareProfile.set('2.5in')">
+            2.5"
+          </button>
+          <button class="big-toggle-btn"
+                  [class.selected]="hardwareProfile.portSize === '4in'"
+                  (click)="hardwareProfile.set('4in')">
+            4"
+          </button>
+        </div>
+
+        <button class="primary-btn" (click)="step = { id: 'gate-count' }">Next</button>
+      </ng-container>
+
       <!-- ── Phase 1.1: Gate Count ── -->
       <ng-container *ngIf="step.id === 'gate-count'">
         <div class="step-title">How many blast gates?</div>
@@ -494,6 +520,7 @@ interface GateRecord {
         <app-gate-positioner
           [gateIndex]="step.gate"
           [initialMm]="gateStartMm"
+          [homeOnRight]="api.deviceInfo?.homeOnRight ?? false"
           (saved)="onGateSaved($event)">
         </app-gate-positioner>
       </ng-container>
@@ -569,7 +596,7 @@ interface GateRecord {
 export class ManualSetupComponent implements OnInit, OnDestroy {
 
   // ── Step machine ──────────────────────────────────────────────────────────
-  step: Step = { id: 'gate-count' };
+  step: Step = { id: 'port-size' };
 
   // ── Phase 1 state ─────────────────────────────────────────────────────────
   numGates = 4;
@@ -594,6 +621,7 @@ export class ManualSetupComponent implements OnInit, OnDestroy {
   constructor(
     public units: UnitPreferenceService,
     public api: ApiService,
+    public hardwareProfile: HardwareProfileService,
     public router: Router,
     private cd: ChangeDetectorRef,
   ) {}
@@ -730,12 +758,17 @@ export class ManualSetupComponent implements OnInit, OnDestroy {
 
     const nextGate = posStep.gate + 1;
 
-    // After gate 2: offer equal spacing if we have 3+ gates
+    // After gate 2: offer equal spacing if we have 3+ gates — but only when the
+    // first two were placed in order (positive spacing). If they were saved out
+    // of order, an "equal spacing" extrapolation is meaningless, so fall through
+    // to positioning each remaining gate manually.
     if (posStep.gate === 2 && this.numGates >= 3) {
       const spacing = this.gates[1].mm - this.gates[0].mm;
-      this.step = { id: 'equal-spacing-offer', gate: nextGate, spacing };
-      this.cd.markForCheck();
-      return;
+      if (spacing > 0) {
+        this.step = { id: 'equal-spacing-offer', gate: nextGate, spacing };
+        this.cd.markForCheck();
+        return;
+      }
     }
 
     this.advanceToNextGateOrOutlets(nextGate);

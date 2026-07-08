@@ -1,6 +1,7 @@
 import { Injectable } from '@angular/core';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
 import { BehaviorSubject, Observable, Subject, firstValueFrom } from 'rxjs';
+import { HardwareProfileService } from './hardware-profile.service';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -16,7 +17,9 @@ export interface OutletStatus {
 
 export interface StopInfo {
   index: number;
-  mm: string;             // millimetres from home as string (e.g. "25.00")
+  mm: string | null;      // millimetres from home as string (e.g. "25.00");
+                          // null = position not yet saved (distinct from a
+                          // gate legitimately saved at 0.00, right at home)
 }
 
 export interface SystemStatus {
@@ -77,7 +80,7 @@ export class ApiService {
 
   deviceInfo: DeviceInfo | null = null;
 
-  constructor(protected http: HttpClient) {
+  constructor(protected http: HttpClient, protected hardwareProfile: HardwareProfileService) {
     // Deferred to a microtask so subclass field initializers (which run after
     // super() returns) are set before an overridden init() can read them.
     queueMicrotask(() => this.init());
@@ -200,7 +203,34 @@ export class ApiService {
    * Save current motor position as a numbered stop.
    * Call while the motor is stationary at the desired gate position.
    */
-  saveStop(index: number) { return this.post('/api/setstop', { index }); }
+  saveStop(index: number) {
+    this.checkStopConflict(index, this.status$.value?.positionMM ?? 0);
+    return this.post('/api/setstop', { index });
+  }
+
+  /**
+   * Guards against saving two gates on top of each other. Only compares
+   * against other saved GATES — home (stop 0) is excluded, since a gate
+   * legitimately being close to home isn't a conflict the same way two gates
+   * overlapping is. Minimum separation is half the expected gate spacing for
+   * the selected port size — loose enough to tolerate 3D-printed rack/pinion
+   * tolerance and non-uniform spacing, but tight enough to catch "forgot to
+   * jog" / accidental re-saves.
+   */
+  protected checkStopConflict(index: number, mm: number): void {
+    const stops = this.status$.value?.stops ?? [];
+    const minSpacingMm = this.hardwareProfile.expectedGateSpacingMm * 0.5;
+    for (const s of stops) {
+      if (s.index === index || s.index === 0) continue;
+      if (s.mm === null) continue; // position not yet saved — not a real gate
+      const stopMm = parseFloat(s.mm);
+      if (Math.abs(mm - stopMm) < minSpacingMm) {
+        throw new Error(
+          `This looks too close to Gate ${s.index}'s saved position (${stopMm.toFixed(1)} mm) — jog further away before saving.`
+        );
+      }
+    }
+  }
 
   /**
    * Persist orientation preference (which side the home endstop is on).

@@ -1,14 +1,16 @@
 # DustGate
 
 This project is a work in progress and is not considered complete or ready for use. Use at your own risk.
-F
+
 Automated dust collection manifold for a woodworking shop. A motorized rack-and-pinion linear actuator selects which blast gate is open based on which tool is running — no switches, no manual intervention.
 
-Each tool plugs into a [Shelly smart outlet](https://us.shelly.com). When a tool draws power above a configurable wattage threshold, the actuator moves to that tool's blast gate automatically. When all tools are off, it returns to the home (closed) position. An AI-powered setup assistant walks you through configuration from a phone browser.
+Each tool plugs into a [Shelly smart outlet](https://us.shelly.com). When a tool draws power above a configurable wattage threshold, the actuator moves to that tool's blast gate automatically. When all tools are off, it returns to the home (closed) position. A setup wizard (AI chat-based or manual step-by-step) walks you through configuration from a phone browser.
 
 ---
 
 ## Hardware
+
+![Actuator assembly](docs/images/actuator-assembly.png)
 
 | Part | Source | Notes |
 |------|--------|-------|
@@ -19,6 +21,8 @@ Each tool plugs into a [Shelly smart outlet](https://us.shelly.com). When a tool
 | NC mechanical limit switch | Various | Home endstop on D10 |
 | Shelly Plug US (one per tool) | [us.shelly.com](https://us.shelly.com) | ~$21 each, Gen 4 recommended |
 | 12–24V DC power supply (≥2A) | Various | Motor power |
+
+The reference build is a 2.5" dust port system, with adjacent gates spaced about 89mm apart. A 4" variant is planned but not yet built or measured — the setup wizard asks which size you have so the UI can seed a reasonable starting estimate either way.
 
 For wiring details see [`linear_actuator/WIRING.md`](linear_actuator/WIRING.md).
 
@@ -149,14 +153,18 @@ pio run --target uploadfs
 
 ## Setup Assistant
 
-On first run, the dashboard will say "Not configured" — no tools have been mapped yet.
+On first run, the dashboard will say "Not configured" — no tools have been mapped yet. You'll be offered two ways to set up:
 
-Tap the **⚙ gear icon** to open the setup assistant. It's a chat interface powered by Claude. It will:
+- **AI Setup** — a chat interface powered by Claude that walks you through everything conversationally, including adjusting on the fly if a jog moved more or less than expected.
+- **Manual Setup** — a step-by-step wizard with no AI involved, for the same result via explicit forms and jog buttons.
 
-1. Home the actuator to establish a reference position
-2. Walk you through each blast gate position — jogging the actuator to align it, then asking what tool is connected there ("Bandsaw", "Router Table", etc. — whatever you call it)
-3. Ask for the IP address of the Shelly outlet for each tool and confirm it's reachable
-4. Save the configuration
+Both wizards cover the same ground:
+
+1. Confirm your port size (2.5" or 4") — just seeds a starting estimate for gate spacing.
+2. Home the actuator to establish a reference position.
+3. Walk through each blast gate position — jogging the actuator to align it, then asking what tool is connected there ("Bandsaw", "Router Table", etc. — whatever you call it).
+4. Ask for the IP address of the Shelly outlet for each tool and confirm it's reachable.
+5. Save the configuration.
 
 When setup is complete, tap the back arrow to return to the dashboard. Your tool buttons will appear.
 
@@ -173,7 +181,7 @@ When setup is complete, tap the back arrow to return to the dashboard. Your tool
 
 ## Reconfiguration
 
-To add, remove, or reassign outlets: tap the **⚙ gear icon** on the dashboard and chat with the setup assistant. Changes take effect immediately and are saved to flash.
+To add, remove, or reassign outlets: tap the **⚙ gear icon** (AI Setup) or **Manual Setup** button on the dashboard header — both are available any time, not just on first run. Changes take effect immediately and are saved to flash.
 
 To reset WiFi credentials (e.g. new router): type `wifireset` in the serial monitor, or use the `wifireset` command in the serial debug interface. The Anthropic API key is preserved across WiFi resets.
 
@@ -209,16 +217,20 @@ linear_actuator/         Firmware (Arduino / PlatformIO)
   data/                  LittleFS filesystem image (generated — don't edit)
   WIRING.md              Wiring reference
 
-dustgate-ui/             Web UI (Angular 17)
-  src/app/
-    dashboard/           Operational view (tool buttons)
-    setup/               AI setup chat
-    services/            API + Claude services
-  deploy.sh              Build → compress → copy to data/
-  proxy.conf.json        Dev proxy (set ESP32 IP here)
+dustgate-ui/             Web UI (Angular 17) — see dustgate-ui/README.md for
+                         local dev instructions and a full breakdown
+
+tools/                   Dev tools — mock-api.js (local firmware stand-in),
+                         provisioning utilities
+
+api/                     Vercel serverless function (proxies the AI setup
+                         assistant's Claude calls for the hosted demo)
+
+docs/                    Design notes and reference images
 
 platformio.ini           PlatformIO build config
 REQUIREMENTS.md          Architecture decisions and spec
+vercel.json              Vercel deployment config (demo site)
 ```
 
 ---
