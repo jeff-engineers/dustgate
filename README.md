@@ -17,7 +17,8 @@ Each tool plugs into a [Shelly smart outlet](https://us.shelly.com). When a tool
 | Adafruit ESP32-S2 Feather | [Adafruit #5000](https://www.adafruit.com/product/5000) | Main controller |
 | Adafruit TMC2209 Breakout | [Adafruit #6121](https://www.adafruit.com/product/6121) | Stepper driver |
 | LDO-42STH48-2004MAH (NEMA 17) | Various | Stepper motor |
-| Rack & pinion | Various | 20T rack, 15T pinion, 4.145mm pitch |
+| Rack & pinion | 3d Printed | 20T rack, 15T pinion, 4.145mm pitch |
+| Mechanical Assembly | 3d printed | Integrates with COTS dust gate |
 | NC mechanical limit switch | Various | Home endstop on D10 |
 | Shelly Plug US (one per tool) | [us.shelly.com](https://us.shelly.com) | ~$21 each, Gen 4 recommended |
 | 12–24V DC power supply (≥2A) | Various | Motor power |
