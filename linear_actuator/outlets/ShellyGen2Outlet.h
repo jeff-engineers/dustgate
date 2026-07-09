@@ -19,6 +19,7 @@ public:
     ShellyGen2Outlet(const char* ip, const char* name);
 
     bool        poll()       override;
+    bool        setSwitch(bool on) override;
     const char* name()       const override { return _name; }
     const char* ip()         const override { return _ip; }
     int         generation() const override { return 2; }

@@ -186,7 +186,7 @@ import { UnitPreferenceService } from '../services/unit-preference.service';
         <div class="jog-direction">
           <span class="dir-label">{{ homeOnRight ? '→' : '←' }} toward home</span>
           <div class="jog-btns">
-            <button *ngFor="let s of reversedSteps"
+            <button *ngFor="let s of towardHomeSteps"
                     class="jog-btn toward"
                     [disabled]="isMoving || isSaving || towardWouldPassHome(s.mm)"
                     (click)="jog(-s.mm)">
@@ -199,7 +199,7 @@ import { UnitPreferenceService } from '../services/unit-preference.service';
         <div class="jog-direction">
           <span class="dir-label">away from home {{ homeOnRight ? '←' : '→' }}</span>
           <div class="jog-btns">
-            <button *ngFor="let s of units.jogSteps"
+            <button *ngFor="let s of awayFromHomeSteps"
                     class="jog-btn"
                     [disabled]="isMoving || isSaving"
                     (click)="jog(s.mm)">
@@ -305,8 +305,15 @@ export class GatePositionerComponent implements OnInit, OnChanges, OnDestroy {
     return stepMm > this.currentMm + 1e-6;
   }
 
-  get reversedSteps() {
-    return [...this.units.jogSteps].reverse();
+  // Jog buttons read as a number line: small steps near the center, big jumps
+  // at the outer edge, magnitude increasing in the row's direction. When home
+  // is on the right that number line mirrors, so both rows flip their order.
+  get towardHomeSteps() {
+    return this.homeOnRight ? [...this.units.jogSteps] : [...this.units.jogSteps].reverse();
+  }
+
+  get awayFromHomeSteps() {
+    return this.homeOnRight ? [...this.units.jogSteps].reverse() : [...this.units.jogSteps];
   }
 
   async jog(mm: number) {

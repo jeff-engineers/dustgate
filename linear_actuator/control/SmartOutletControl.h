@@ -53,6 +53,17 @@ public:
     SmartOutlet* outlet(int i)       { return (i >= 0 && i < _count) ? _outlets[i] : nullptr; }
 
     // -------------------------------------------------------------------------
+    // Dust collector plug — a switchable Shelly outlet (we turn it on/off)
+    // rather than a power sensor. The poll task drives it on whenever a tool is
+    // active (a real gate is selected) and off when idle, so its blocking HTTP
+    // switch calls stay off the motor loop. Persisted separately in NVS.
+    // -------------------------------------------------------------------------
+    void configureDustCollector(int generation, const char* ip); // replaces + persists
+    void removeDustCollector();
+    bool dcConfigured() const { return _dustCollector != nullptr; }
+    bool dcOn();                    // thread-safe read for status JSON
+
+    // -------------------------------------------------------------------------
     // Manual override — bypasses outlet-driven gate selection until the next
     // time any outlet crosses its threshold (tool turned on).
     // Call from the main loop when the HTTP API receives a manual move command.
@@ -63,6 +74,11 @@ public:
 private:
     SmartOutlet*      _outlets[SMART_OUTLET_COUNT];
     int               _count;
+
+    // Dust collector plug (switchable). nullptr = not configured.
+    SmartOutlet*      _dustCollector;
+    bool              _dcOn;              // last commanded state (protected by _mutex)
+    bool              _dcSynced;          // false = force a switch command on next reconcile
 
     // Shared state between poll task and main loop — protected by _mutex
     int               _requestedStop;
@@ -75,6 +91,7 @@ private:
 
     static void pollTaskFn(void* param);
     void        doPoll();
+    void        reconcileDustCollector();  // poll task: drive DC plug to desired state
 };
 
 #endif // CONTROL_SMART_OUTLET

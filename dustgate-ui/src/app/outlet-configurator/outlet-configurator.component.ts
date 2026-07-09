@@ -106,6 +106,18 @@ import { ApiService, OutletConfigCmd } from '../services/api.service';
       border-color: var(--accent);
     }
 
+    .plug-toggle {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .plug-label {
+      font-size: 14px;
+      font-weight: 500;
+    }
+    .plug-toggle .gen-toggle { flex: 0 0 auto; width: 140px; }
+
     .ping-row {
       display: flex;
       align-items: center;
@@ -170,60 +182,71 @@ import { ApiService, OutletConfigCmd } from '../services/api.service';
     <div class="configurator">
       <div class="config-header">
         Gate {{ gateIndex }}
-        <span class="sub">outlet setup</span>
+        <span class="sub">name &amp; outlet</span>
       </div>
 
-      <!-- Tool name -->
+      <!-- Gate name (required) -->
       <div class="field">
-        <label>Tool name</label>
+        <label>Gate name</label>
         <input type="text"
                placeholder="e.g. Bandsaw"
                [(ngModel)]="toolName"
                (ngModelChange)="clearError()" />
       </div>
 
-      <!-- Shelly generation -->
-      <div class="field">
-        <label>Shelly generation</label>
+      <!-- Smart plug (optional) -->
+      <div class="plug-toggle">
+        <span class="plug-label">Smart plug on this gate?</span>
         <div class="gen-toggle">
-          <button class="gen-btn" [class.selected]="generation === 1" (click)="generation = 1">Gen 1</button>
-          <button class="gen-btn" [class.selected]="generation === 2" (click)="generation = 2">Gen 2</button>
+          <button class="gen-btn" [class.selected]="hasPlug" (click)="setHasPlug(true)">Yes</button>
+          <button class="gen-btn" [class.selected]="!hasPlug" (click)="setHasPlug(false)">No</button>
         </div>
       </div>
 
-      <!-- IP address -->
-      <div class="field">
-        <label>IP address</label>
-        <input type="text"
-               placeholder="e.g. 192.168.1.100"
-               inputmode="decimal"
-               [(ngModel)]="ip"
-               (ngModelChange)="pingResult = null; clearError()" />
-      </div>
+      <ng-container *ngIf="hasPlug">
+        <!-- Shelly generation -->
+        <div class="field">
+          <label>Shelly generation</label>
+          <div class="gen-toggle">
+            <button class="gen-btn" [class.selected]="generation === 1" (click)="generation = 1">Gen 1</button>
+            <button class="gen-btn" [class.selected]="generation === 2" (click)="generation = 2">Gen 2</button>
+          </div>
+        </div>
 
-      <!-- Ping -->
-      <div class="ping-row">
-        <button class="ping-btn"
-                [disabled]="!isValidIp(ip) || pinging"
-                (click)="ping()">
-          {{ pinging ? 'Pinging…' : 'Ping' }}
-        </button>
-        <span class="ping-result ok"  *ngIf="pingResult?.reachable">
-          ✓ Reachable — {{ pingResult!.powerW | number:'1.0-0' }} W
-        </span>
-        <span class="ping-result err" *ngIf="pingResult !== null && !pingResult.reachable">
-          ✗ Not reachable
-        </span>
-      </div>
+        <!-- IP address -->
+        <div class="field">
+          <label>IP address</label>
+          <input type="text"
+                 placeholder="e.g. 192.168.1.100"
+                 inputmode="decimal"
+                 [(ngModel)]="ip"
+                 (ngModelChange)="pingResult = null; clearError()" />
+        </div>
 
-      <!-- Wattage threshold -->
-      <div class="field">
-        <label>Detection threshold (W)</label>
-        <input type="number"
-               placeholder="e.g. 5"
-               min="0"
-               [(ngModel)]="thresholdW" />
-      </div>
+        <!-- Ping -->
+        <div class="ping-row">
+          <button class="ping-btn"
+                  [disabled]="!isValidIp(ip) || pinging"
+                  (click)="ping()">
+            {{ pinging ? 'Pinging…' : 'Ping' }}
+          </button>
+          <span class="ping-result ok"  *ngIf="pingResult?.reachable">
+            ✓ Reachable — {{ pingResult!.powerW | number:'1.0-0' }} W
+          </span>
+          <span class="ping-result err" *ngIf="pingResult !== null && !pingResult.reachable">
+            ✗ Not reachable
+          </span>
+        </div>
+
+        <!-- Wattage threshold -->
+        <div class="field">
+          <label>Detection threshold (W)</label>
+          <input type="number"
+                 placeholder="e.g. 5"
+                 min="0"
+                 [(ngModel)]="thresholdW" />
+        </div>
+      </ng-container>
 
       <!-- Error -->
       <div class="error-banner" *ngIf="errorMsg">⚠ {{ errorMsg }}</div>
@@ -233,10 +256,7 @@ import { ApiService, OutletConfigCmd } from '../services/api.service';
         <button class="save-btn"
                 [disabled]="!canSave || saving"
                 (click)="saveOutlet()">
-          {{ saving ? 'Saving…' : 'Save outlet' }}
-        </button>
-        <button class="skip-btn" (click)="skip()">
-          Skip — no outlet for Gate {{ gateIndex }}
+          {{ saving ? 'Saving…' : 'Save &amp; continue' }}
         </button>
       </div>
     </div>
@@ -264,6 +284,7 @@ export class OutletConfiguratorComponent implements OnInit, OnChanges {
 
   // Form state
   toolName   = '';
+  hasPlug    = false;
   generation = 2;
   ip         = '';
   thresholdW: number | null = null;
@@ -286,6 +307,7 @@ export class OutletConfiguratorComponent implements OnInit, OnChanges {
     // the gate changes so the previous gate's values don't bleed through.
     if (changes['gateIndex'] && !changes['gateIndex'].firstChange) {
       this.toolName   = '';
+      this.hasPlug    = false;
       this.generation = 2;
       this.ip         = '';
       this.thresholdW = null;
@@ -301,14 +323,24 @@ export class OutletConfiguratorComponent implements OnInit, OnChanges {
   private applyExisting() {
     if (this.existing) {
       this.toolName   = this.existing.name       ?? '';
-      this.generation = this.existing.generation ?? 2;
       this.ip         = this.existing.ip          ?? '';
+      this.hasPlug    = this.ip.trim().length > 0;
+      this.generation = this.existing.generation ?? 2;
       this.thresholdW = this.existing.threshold_w ?? null;
     }
   }
 
+  setHasPlug(v: boolean) {
+    this.hasPlug = v;
+    this.pingResult = null;
+    this.clearError();
+  }
+
+  // Name is required for every gate. A smart plug is optional; when present its
+  // IP must be valid.
   get canSave(): boolean {
-    return this.toolName.trim().length > 0 && this.isValidIp(this.ip);
+    if (this.toolName.trim().length === 0) return false;
+    return this.hasPlug ? this.isValidIp(this.ip) : true;
   }
 
   isValidIp(ip: string): boolean {
@@ -340,10 +372,12 @@ export class OutletConfiguratorComponent implements OnInit, OnChanges {
     this.saving = true;
     this.cd.markForCheck();
 
+    // Name-only gates send an empty ip — the device stores the label but does no
+    // power polling for them.
     const cmd: OutletConfigCmd = {
       slot:        this.slotIndex,
       generation:  this.generation,
-      ip:          this.ip.trim(),
+      ip:          this.hasPlug ? this.ip.trim() : '',
       name:        this.toolName.trim(),
       stop:        this.gateIndex,
       threshold_w: this.thresholdW ?? 5.0,
@@ -354,13 +388,9 @@ export class OutletConfiguratorComponent implements OnInit, OnChanges {
       this.saving = false;
       this.saved.emit(cmd);
     } catch {
-      this.errorMsg = 'Could not save outlet. Check connection and try again.';
+      this.errorMsg = 'Could not save gate. Check connection and try again.';
       this.saving = false;
       this.cd.markForCheck();
     }
-  }
-
-  skip() {
-    this.saved.emit(null);
   }
 }

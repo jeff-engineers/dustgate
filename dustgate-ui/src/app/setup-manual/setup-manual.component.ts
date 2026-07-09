@@ -545,14 +545,15 @@ interface GateRecord {
         </div>
       </ng-container>
 
-      <!-- ── Phase 4: Outlet Configuration ── -->
+      <!-- ── Name + optional smart plug (per gate, right after locating it) ── -->
       <ng-container *ngIf="step.id === 'outlet'">
-        <div class="step-title">Set up Gate {{ step.gate }}'s outlet</div>
-        <div class="step-hint">Assign a Shelly smart plug, or skip if there's no outlet for this gate.</div>
+        <div class="step-title">Name Gate {{ step.gate }}</div>
+        <div class="step-hint">Give this gate a name. Add a smart plug too if a tool's power should open it automatically.</div>
 
         <app-outlet-configurator
           [gateIndex]="step.gate"
           [slotIndex]="step.gate - 1"
+          [existing]="editing ? outletCmdFor(step.gate) : undefined"
           (saved)="onOutletSaved($event)">
         </app-outlet-configurator>
       </ng-container>
@@ -566,7 +567,9 @@ interface GateRecord {
           <div class="review-row" *ngFor="let g of gates">
             <span class="gate-num">Gate {{ g.index }}</span>
             <span class="pos">{{ units.format(g.mm) }}</span>
-            <span class="tool">{{ g.outletCmd?.name ?? 'No outlet' }}</span>
+            <span class="tool">
+              {{ g.outletCmd?.name || 'Gate ' + g.index }}{{ g.outletCmd?.ip ? '' : ' · no plug' }}
+            </span>
             <button class="edit-btn" (click)="editGate(g.index)">Edit</button>
           </div>
         </div>
@@ -608,6 +611,10 @@ export class ManualSetupComponent implements OnInit, OnDestroy {
   gateStartMm = 0;
   /** True when the user chose equal spacing and we pre-calculated targets. */
   equalSpacingMm: number | null = null;
+  /** Equal spacing is offered at most once (after gate 2). */
+  private equalSpacingOffered = false;
+  /** True while editing a single gate from the review screen (return to review on save). */
+  editing = false;
 
   // ── UI state ──────────────────────────────────────────────────────────────
   confirmingReset = false;
@@ -664,6 +671,8 @@ export class ManualSetupComponent implements OnInit, OnDestroy {
     this.gates           = [];
     this.gateStartMm     = 0;
     this.equalSpacingMm  = null;
+    this.equalSpacingOffered = false;
+    this.editing         = false;
     this.homeSideSelected = null;
     this.errorMsg        = '';
     this.busy            = false;
@@ -744,25 +753,55 @@ export class ManualSetupComponent implements OnInit, OnDestroy {
   }
 
   private startPositioningPhase() {
-    this.gates       = [];
-    this.gateStartMm = 0;
-    this.step        = { id: 'position', gate: 1 };
+    this.gates               = [];
+    this.gateStartMm         = 0;
+    this.equalSpacingMm      = null;
+    this.equalSpacingOffered = false;
+    this.editing             = false;
+    this.step                = { id: 'position', gate: 1 };
     this.cd.markForCheck();
   }
 
-  // ── Phase 3 ───────────────────────────────────────────────────────────────
+  // ── Phase 3+4 interleaved: locate a gate, then name/configure it ────────────
 
   onGateSaved(mm: number) {
     const posStep = this.step as { id: 'position'; gate: number };
-    this.gates.push({ index: posStep.gate, mm, outletCmd: null });
 
-    const nextGate = posStep.gate + 1;
+    // Record (or update, on re-position) this gate's saved position.
+    const existing = this.gates.find(g => g.index === posStep.gate);
+    if (existing) existing.mm = mm;
+    else this.gates.push({ index: posStep.gate, mm, outletCmd: null });
 
-    // After gate 2: offer equal spacing if we have 3+ gates — but only when the
-    // first two were placed in order (positive spacing). If they were saved out
-    // of order, an "equal spacing" extrapolation is meaningless, so fall through
-    // to positioning each remaining gate manually.
-    if (posStep.gate === 2 && this.numGates >= 3) {
+    // Immediately prompt for this gate's name + optional smart plug.
+    this.step = { id: 'outlet', gate: posStep.gate };
+    this.cd.markForCheck();
+  }
+
+  onOutletSaved(cmd: OutletConfigCmd | null) {
+    const outletStep = this.step as { id: 'outlet'; gate: number };
+    const gateRec = this.gates.find(g => g.index === outletStep.gate);
+    if (gateRec) gateRec.outletCmd = cmd;
+
+    // Editing a single gate from the review screen — go straight back.
+    if (this.editing) {
+      this.editing = false;
+      this.step = { id: 'review' };
+      this.cd.markForCheck();
+      return;
+    }
+
+    const nextGate = outletStep.gate + 1;
+    if (nextGate > this.numGates) {
+      this.step = { id: 'review' };
+      this.cd.markForCheck();
+      return;
+    }
+
+    // Offer equal spacing once, moving from gate 2 → 3, if the first two gates
+    // were placed in order (positive spacing). Out-of-order makes the
+    // extrapolation meaningless, so skip it and position each gate manually.
+    if (nextGate === 3 && this.numGates >= 3 && !this.equalSpacingOffered) {
+      this.equalSpacingOffered = true;
       const spacing = this.gates[1].mm - this.gates[0].mm;
       if (spacing > 0) {
         this.step = { id: 'equal-spacing-offer', gate: nextGate, spacing };
@@ -771,66 +810,45 @@ export class ManualSetupComponent implements OnInit, OnDestroy {
       }
     }
 
-    this.advanceToNextGateOrOutlets(nextGate);
+    this.goToPosition(nextGate);
   }
 
   applyEqualSpacing() {
     const offerStep = this.step as { id: 'equal-spacing-offer'; gate: number; spacing: number };
     this.equalSpacingMm = offerStep.spacing;
-    this.advanceToNextGateOrOutlets(offerStep.gate);
+    this.goToPosition(offerStep.gate);
   }
 
   skipEqualSpacing() {
     const offerStep = this.step as { id: 'equal-spacing-offer'; gate: number; spacing: number };
     this.equalSpacingMm = null;
-    this.advanceToNextGateOrOutlets(offerStep.gate);
+    this.goToPosition(offerStep.gate);
   }
 
-  private advanceToNextGateOrOutlets(nextGate: number) {
-    if (nextGate > this.numGates) {
-      // All gates positioned — start outlet phase
-      this.step = { id: 'outlet', gate: 1 };
-      this.cd.markForCheck();
-      return;
-    }
-
-    // Calculate the start mm for the jog widget
+  private goToPosition(gate: number) {
+    // Calculate the start mm for the jog widget.
     const lastGate = this.gates[this.gates.length - 1];
     if (this.equalSpacingMm !== null) {
-      // Pre-position suggestion from equal spacing
-      this.gateStartMm = this.gates[0].mm + (nextGate - 1) * this.equalSpacingMm;
+      this.gateStartMm = this.gates[0].mm + (gate - 1) * this.equalSpacingMm;
     } else {
-      this.gateStartMm = lastGate.mm;
+      this.gateStartMm = lastGate ? lastGate.mm : 0;
     }
-
-    this.step = { id: 'position', gate: nextGate };
-    this.cd.markForCheck();
-  }
-
-  // ── Phase 4 ───────────────────────────────────────────────────────────────
-
-  onOutletSaved(cmd: OutletConfigCmd | null) {
-    const outletStep = this.step as { id: 'outlet'; gate: number };
-    // Record outlet result against the gate
-    const gateRec = this.gates.find(g => g.index === outletStep.gate);
-    if (gateRec) gateRec.outletCmd = cmd;
-
-    const nextGate = outletStep.gate + 1;
-    if (nextGate > this.numGates) {
-      this.step = { id: 'review' };
-    } else {
-      this.step = { id: 'outlet', gate: nextGate };
-    }
+    this.step = { id: 'position', gate };
     this.cd.markForCheck();
   }
 
   // ── Phase 5 ───────────────────────────────────────────────────────────────
 
   editGate(gateIndex: number) {
-    // Jump back to either positioning or outlet for this gate.
-    // For simplicity, re-open the outlet screen (position is already saved on device).
+    // Re-open the name/outlet screen for one gate; return to review on save.
+    // The saved position is untouched (already on the device).
+    this.editing = true;
     this.step = { id: 'outlet', gate: gateIndex };
     this.cd.markForCheck();
+  }
+
+  outletCmdFor(gate: number): Partial<OutletConfigCmd> | undefined {
+    return this.gates.find(g => g.index === gate)?.outletCmd ?? undefined;
   }
 
   async saveAll() {

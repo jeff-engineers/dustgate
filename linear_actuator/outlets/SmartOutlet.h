@@ -23,6 +23,12 @@ public:
     // Returns true on success; false if unreachable or parse error.
     virtual bool poll() = 0;
 
+    // Switch the outlet's relay on or off. Used for actuator-style outlets
+    // (e.g. the dust collector plug) rather than power sensing. Blocking —
+    // call only from the poll task. Returns true on success. Power-monitoring
+    // usage can ignore this; the base implementation is a no-op.
+    virtual bool setSwitch(bool on) { (void)on; return false; }
+
     // Human-readable label for this outlet (e.g. "Table Saw")
     virtual const char* name() const = 0;
 

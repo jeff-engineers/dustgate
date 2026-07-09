@@ -198,14 +198,16 @@ export class DemoApiService extends ApiService {
 
   override async configureOutlet(cmd: OutletConfigCmd): Promise<{ ok: boolean }> {
     const idx = this.mock.outlets.findIndex(o => o.slot === cmd.slot);
+    const hasSwitch = (cmd.ip ?? '').trim().length > 0;
     const record: OutletStatus = {
       slot:      cmd.slot,
       name:      cmd.name,
       stop:      cmd.stop,
       powerW:    0,
       active:    false,
-      reachable: true,
+      reachable: hasSwitch,   // name-only gates have no plug to reach
       thresholdW: cmd.threshold_w ?? 5.0,
+      hasSwitch,
     };
     if (idx >= 0) {
       this.mock.outlets[idx] = record;
@@ -250,6 +252,11 @@ export class DemoApiService extends ApiService {
   override setNumGates(n: number): Promise<{ ok: boolean }> {
     this.mock.numActiveStops = n;
     if (this.deviceInfo) this.deviceInfo.numStops = n;
+    // Clear any stale saved positions beyond the new count so they don't
+    // trip the proximity check if the count is raised again later.
+    for (const s of this.mock.stops) {
+      if (s.index > n) s.mm = null;
+    }
     this.pushStatus();
     return Promise.resolve({ ok: true });
   }

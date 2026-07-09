@@ -11,6 +11,9 @@
 //   o<N>_thr    float On-threshold in watts
 //   outlet_cnt  int   Number of configured outlet slots
 //
+//   dc_gen      int   Dust collector plug Shelly generation (1 or 2)
+//   dc_ip       str   Dust collector plug IP address
+//
 // The setup agent writes these; SmartOutletControl reads them at boot.
 // =============================================================================
 
@@ -26,6 +29,14 @@ struct OutletEntry {
     int   stopIndex;                // 1-based stop this outlet maps to
     float thresholdW;               // watts threshold for "tool on"
     bool  valid;                    // false = slot is empty
+};
+
+// The dust collector plug is a switchable outlet (we turn it on/off), not a
+// power sensor, so it has no stop/threshold — just a generation and IP.
+struct DustCollectorEntry {
+    int   generation;               // 1 or 2
+    char  ip[16];                   // "xxx.xxx.xxx.xxx\0"
+    bool  valid;                    // false = not configured
 };
 
 namespace OutletConfig {
@@ -49,7 +60,8 @@ namespace OutletConfig {
             snprintf(key, sizeof(key), "o%d_stop", i); e.stopIndex  = prefs.getInt(key, 0);
             snprintf(key, sizeof(key), "o%d_thr",  i); e.thresholdW = prefs.getFloat(key, OUTLET_DEFAULT_THRESHOLD_W);
 
-            e.valid = (strlen(e.ip) > 0 && e.stopIndex > 0);
+            // A valid entry maps to a stop; ip may be empty (name-only gate).
+            e.valid = (e.stopIndex > 0);
         }
 
         prefs.end();
@@ -73,6 +85,36 @@ namespace OutletConfig {
         int current = prefs.getInt("outlet_cnt", 0);
         if (slot + 1 > current) prefs.putInt("outlet_cnt", slot + 1);
 
+        prefs.end();
+    }
+
+    // Load the dust collector plug config from NVS. Returns false if none set.
+    inline bool loadDustCollector(DustCollectorEntry& e) {
+        e.ip[0] = '\0';  // getString leaves buf untouched if the key is missing
+        Preferences prefs;
+        prefs.begin(NVS_NS, /*readOnly=*/true);
+        e.generation = prefs.getInt("dc_gen", 2);
+        prefs.getString("dc_ip", e.ip, sizeof(e.ip));
+        prefs.end();
+        e.valid = (strlen(e.ip) > 0);
+        return e.valid;
+    }
+
+    // Save the dust collector plug config to NVS.
+    inline void saveDustCollector(const DustCollectorEntry& e) {
+        Preferences prefs;
+        prefs.begin(NVS_NS, /*readOnly=*/false);
+        prefs.putInt("dc_gen", e.generation);
+        prefs.putString("dc_ip", e.ip);
+        prefs.end();
+    }
+
+    // Clear the dust collector plug config from NVS.
+    inline void eraseDustCollector() {
+        Preferences prefs;
+        prefs.begin(NVS_NS, /*readOnly=*/false);
+        prefs.remove("dc_gen");
+        prefs.remove("dc_ip");
         prefs.end();
     }
 

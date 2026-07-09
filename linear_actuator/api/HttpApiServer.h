@@ -110,6 +110,15 @@ public:
     bool consumeOutletConfigRequest(OutletConfigCmd& out);
     bool consumeOutletDeleteRequest(int& outSlot);
     bool consumeOutletSaveRequest();
+
+    // Dust collector plug config — consumed by main loop, forwarded to
+    // SmartOutletControl.configureDustCollector() / removeDustCollector().
+    struct DustCollectorCmd {
+        int  generation;
+        char ip[16];
+    };
+    bool consumeDustCollectorConfigRequest(DustCollectorCmd& out);
+    bool consumeDustCollectorDeleteRequest();
 #endif
 
     // Expose the API key for the setup agent / serial display
@@ -155,6 +164,9 @@ private:
     OutletConfigCmd _outletConfigCmd;
     bool            _outletDeletePending;  int _outletDeleteSlot;
     bool            _outletSavePending;
+    bool            _dcConfigPending;
+    DustCollectorCmd _dcConfigCmd;
+    bool            _dcDeletePending;
 #endif
 
     // Helpers

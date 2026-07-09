@@ -189,6 +189,8 @@ function handler(req, res) {
   if (outletPutMatch && req.method === 'PUT') {
     return body(req, data => {
       const slot = parseInt(outletPutMatch[1], 10);
+      const ip = data.ip ?? '';
+      const hasSwitch = ip.trim().length > 0;  // empty ip = name-only gate
       const existing = state.outlets.findIndex(o => o.slot === slot);
       const record = {
         slot,
@@ -199,7 +201,8 @@ function handler(req, res) {
         reachable:  false,
         thresholdW: data.threshold ?? 5.0,
         gen:        data.gen    ?? 2,
-        ip:         data.ip     ?? '',
+        ip,
+        hasSwitch,
       };
       if (existing >= 0) {
         state.outlets[existing] = record;
@@ -259,6 +262,11 @@ function handler(req, res) {
       const n = data.numGates;
       if (n >= 1 && n <= NUM_STOPS) {
         state.numActiveStops = n;
+        // Clear stale saved positions beyond the new count so they don't
+        // reappear as phantom conflicts if the count is raised again later.
+        for (const s of state.stops) {
+          if (s.index > n) s.mm = null;
+        }
         console.log(`  [mock] Active gates: ${n}`);
       }
       json(res, { ok: true });

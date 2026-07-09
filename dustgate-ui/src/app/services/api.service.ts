@@ -13,6 +13,7 @@ export interface OutletStatus {
   active: boolean;
   reachable: boolean;
   thresholdW?: number;
+  hasSwitch?: boolean;   // false = name-only gate (no smart plug attached)
 }
 
 export interface StopInfo {
@@ -219,9 +220,11 @@ export class ApiService {
    */
   protected checkStopConflict(index: number, mm: number): void {
     const stops = this.status$.value?.stops ?? [];
+    const numGates = this.deviceInfo?.numStops ?? Infinity;
     const minSpacingMm = this.hardwareProfile.expectedGateSpacingMm * 0.5;
     for (const s of stops) {
       if (s.index === index || s.index === 0) continue;
+      if (s.index > numGates) continue; // beyond the currently configured gate count — stale, not a real gate
       if (s.mm === null) continue; // position not yet saved — not a real gate
       const stopMm = parseFloat(s.mm);
       if (Math.abs(mm - stopMm) < minSpacingMm) {

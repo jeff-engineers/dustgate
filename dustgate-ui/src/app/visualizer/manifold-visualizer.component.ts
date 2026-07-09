@@ -9,6 +9,7 @@ interface GateInfo {
   label:  string;
   outlet: OutletStatus | null;
   isHome: boolean;
+  isLocated: boolean;   // position has been saved — false = reserve slot, draw nothing
   stopMm: number;
 }
 
@@ -76,6 +77,11 @@ interface GateInfo {
     }
     .gate-box.home-gate { border-style: dashed; }
     .gate-box.unhomed   { opacity: 0.3; }
+    /* Reserve the column's width but draw nothing until the gate is located. */
+    .gate-box.pending {
+      border-color: transparent;
+      background: transparent;
+    }
 
     .outlet-dot {
       position: absolute;
@@ -109,6 +115,7 @@ interface GateInfo {
     }
     .gate-neck.active { background: var(--accent); }
     .gate-neck.home   { background: transparent; }
+    .gate-neck.pending { background: transparent; }
 
     /* ── Slider rail ──────────────────────────────────────────── */
     .slider-rail {
@@ -293,34 +300,39 @@ interface GateInfo {
 
     <div class="viz-card" *ngIf="isReady">
 
-      <!-- Gate columns -->
+      <!-- Gate columns. Unlocated gates reserve their rail slot but stay blank
+           until their position is saved, so the layout doesn't pre-populate. -->
       <div class="gates-row">
         <div class="gate-col" *ngFor="let g of gates">
 
           <div class="gate-label"
                [class.active]="g.index === sliderDisplayStop && isHomed"
                [class.home-lbl]="g.isHome">
-            {{ g.label }}
+            {{ (g.isHome || g.isLocated) ? g.label : '' }}
           </div>
 
           <div class="gate-box"
                [class.active]="g.index === sliderDisplayStop && isHomed"
                [class.home-gate]="g.isHome"
-               [class.unhomed]="!isHomed && !g.isHome">
-            <div *ngIf="g.outlet"
-                 class="outlet-dot"
-                 [class.tool-on]="g.outlet.active"
-                 [class.tool-off]="!g.outlet.active && g.outlet.reachable"
-                 [class.tool-dead]="!g.outlet.reachable">
-            </div>
-            <div *ngIf="g.outlet" class="outlet-power">
-              {{ g.outlet.powerW | number:'1.0-0' }} W
-            </div>
+               [class.pending]="!g.isHome && !g.isLocated"
+               [class.unhomed]="!isHomed && !g.isHome && g.isLocated">
+            <ng-container *ngIf="g.isHome || g.isLocated">
+              <div *ngIf="g.outlet?.hasSwitch"
+                   class="outlet-dot"
+                   [class.tool-on]="g.outlet!.active"
+                   [class.tool-off]="!g.outlet!.active && g.outlet!.reachable"
+                   [class.tool-dead]="!g.outlet!.reachable">
+              </div>
+              <div *ngIf="g.outlet?.hasSwitch" class="outlet-power">
+                {{ g.outlet!.powerW | number:'1.0-0' }} W
+              </div>
+            </ng-container>
           </div>
 
           <div class="gate-neck"
                [class.active]="g.index === sliderDisplayStop && isHomed"
-               [class.home]="g.isHome">
+               [class.home]="g.isHome"
+               [class.pending]="!g.isHome && !g.isLocated">
           </div>
 
         </div>
@@ -483,6 +495,7 @@ export class ManifoldVisualizerComponent implements OnInit, OnDestroy {
       label:  i === 0 ? 'home' : (outlet?.name ?? `Gate${i}`),
       outlet,
       isHome: i === 0,
+      isLocated: this.isStopSaved(i),
       stopMm: parseFloat(stop?.mm ?? '0'),
     };
   }

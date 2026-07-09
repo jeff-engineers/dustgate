@@ -49,4 +49,19 @@ bool ShellyGen2Outlet::poll() {
     return true;
 }
 
+// Gen 2 RPC switch: GET http://<ip>/rpc/Switch.Set?id=0&on=true|false
+bool ShellyGen2Outlet::setSwitch(bool on) {
+    char url[80];
+    snprintf(url, sizeof(url), "http://%s/rpc/Switch.Set?id=0&on=%s",
+             _ip, on ? "true" : "false");
+
+    HTTPClient http;
+    http.begin(url);
+    http.setTimeout(OUTLET_HTTP_TIMEOUT_MS);
+    int code = http.GET();
+    http.end();
+
+    return code == 200;
+}
+
 #endif // CONTROL_SMART_OUTLET

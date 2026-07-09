@@ -56,6 +56,17 @@ npm run start:mock
 Then open http://localhost:4200 (no `?demo=true` — this uses the real `ApiService`
 proxied through `proxy.conf.json` to `localhost:3000`).
 
+> **Common mistake:** running plain `npm start` here instead of `npm run start:mock`
+> looks like it works (the app loads), but `ng serve` isn't using `proxy.conf.json`
+> in that mode, so every `/api/*` call — including the AI Setup chatbot — fails
+> with `ECONNREFUSED` in the console. If you see a wall of `ws proxy error` /
+> `http proxy error: ECONNREFUSED` messages, check that (a) `node mock-api.js`
+> is running in another terminal and (b) you started Angular with
+> `npm run start:mock`, not `npm start`.
+>
+> For the AI Setup assistant to return real Claude responses instead of canned
+> mock replies, set `ANTHROPIC_KEY` in `tools/.env` before starting `mock-api.js`.
+
 ### 3. Against a real device
 
 Point `proxy.conf.json`'s `target` values at the ESP32's IP address, then:

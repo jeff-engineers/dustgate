@@ -450,7 +450,26 @@ void loop() {
     {
         int newGates = 0;
         if (apiServer.consumeSetNumGatesRequest(newGates)) {
+            // Clear saved positions beyond the new count so a stale gate can't
+            // reappear as a phantom proximity conflict if the count is later
+            // raised again (positions live in RAM here; the EEPROM copy is
+            // cleaned up below).
+            for (int i = newGates + 1; i <= NUM_STOPS; i++) {
+                g_stopPositionsMM[i] = 0.0f;
+            }
             g_numActiveStops = newGates;
+
+            // Trim the persisted calibration to match, so a reboot doesn't
+            // restore the old (higher) gate count from cal.numStops.
+            CalibrationData cal;
+            if (CalibrationStore::load(cal) && (int)cal.numStops > newGates) {
+                cal.numStops = (uint8_t)newGates;
+                for (int i = newGates + 1; i <= NUM_STOPS; i++) {
+                    cal.stopMM[i] = 0.0f;
+                }
+                CalibrationStore::save(cal);
+            }
+
             DEBUG_PRINT(F("[API] Active gates: "));
             DEBUG_PRINTLN(g_numActiveStops);
         }
@@ -472,6 +491,14 @@ void loop() {
         }
         if (apiServer.consumeOutletSaveRequest()) {
             control.saveAll();
+        }
+
+        HttpApiServer::DustCollectorCmd dcCmd;
+        if (apiServer.consumeDustCollectorConfigRequest(dcCmd)) {
+            control.configureDustCollector(dcCmd.generation, dcCmd.ip);
+        }
+        if (apiServer.consumeDustCollectorDeleteRequest()) {
+            control.removeDustCollector();
         }
     }
 #endif // CONTROL_SMART_OUTLET

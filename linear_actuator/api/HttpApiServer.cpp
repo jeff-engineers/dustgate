@@ -72,7 +72,9 @@ HttpApiServer::HttpApiServer()
 #ifdef CONTROL_SMART_OUTLET
     , _outletConfigPending(false),
       _outletDeletePending(false), _outletDeleteSlot(0),
-      _outletSavePending(false)
+      _outletSavePending(false),
+      _dcConfigPending(false),
+      _dcDeletePending(false)
 #endif
 {}
 
@@ -252,6 +254,15 @@ bool HttpApiServer::consumeOutletDeleteRequest(int& outSlot) {
     return v;
 }
 bool HttpApiServer::consumeOutletSaveRequest() { CONSUME(_outletSavePending) }
+
+bool HttpApiServer::consumeDustCollectorConfigRequest(DustCollectorCmd& out) {
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    bool v = _dcConfigPending;
+    if (v) { out = _dcConfigCmd; _dcConfigPending = false; }
+    xSemaphoreGive(_mutex);
+    return v;
+}
+bool HttpApiServer::consumeDustCollectorDeleteRequest() { CONSUME(_dcDeletePending) }
 #endif
 
 #undef CONSUME
@@ -624,8 +635,10 @@ void HttpApiServer::registerRoutes() {
             strlcpy(cmd.ip,   doc["ip"]   | "",  sizeof(cmd.ip));
             strlcpy(cmd.name, doc["name"] | "",  sizeof(cmd.name));
 
-            if (strlen(cmd.ip) == 0)   { sendError(req, 400, "missing 'ip'");   return; }
+            // ip is optional: an empty ip is a name-only gate (no smart plug —
+            // labelled, but not power-polled). name is always required.
             if (strlen(cmd.name) == 0) { sendError(req, 400, "missing 'name'"); return; }
+            if (cmd.stopIndex <= 0)    { sendError(req, 400, "missing 'stop'"); return; }
 
             xSemaphoreTake(_mutex, portMAX_DELAY);
             _outletConfigPending = true;
@@ -643,6 +656,39 @@ void HttpApiServer::registerRoutes() {
         if (slot < 0 || slot >= SMART_OUTLET_COUNT) { sendError(req, 400, "slot out of range"); return; }
         xSemaphoreTake(_mutex, portMAX_DELAY);
         _outletDeletePending = true; _outletDeleteSlot = slot;
+        xSemaphoreGive(_mutex);
+        sendOk(req);
+    });
+
+    // PUT /api/dustcollector   body: {"gen":2,"ip":"192.168.1.x"}
+    // Assigns the switchable Shelly plug that powers the dust collector.
+    _server.on("/api/dustcollector", HTTP_PUT,
+        [](AsyncWebServerRequest* req) {},
+        nullptr,
+        [this](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t, size_t) {
+            if (!checkAuth(req)) return;
+
+            StaticJsonDocument<128> doc;
+            if (deserializeJson(doc, data, len)) { sendError(req, 400, "invalid JSON"); return; }
+
+            DustCollectorCmd cmd;
+            cmd.generation = doc["gen"] | 2;
+            strlcpy(cmd.ip, doc["ip"] | "", sizeof(cmd.ip));
+            if (strlen(cmd.ip) == 0) { sendError(req, 400, "missing 'ip'"); return; }
+
+            xSemaphoreTake(_mutex, portMAX_DELAY);
+            _dcConfigPending = true;
+            _dcConfigCmd     = cmd;
+            xSemaphoreGive(_mutex);
+            sendOk(req);
+        }
+    );
+
+    // DELETE /api/dustcollector — unassign the dust collector plug
+    _server.on("/api/dustcollector", HTTP_DELETE, [this](AsyncWebServerRequest* req) {
+        if (!checkAuth(req)) return;
+        xSemaphoreTake(_mutex, portMAX_DELAY);
+        _dcDeletePending = true;
         xSemaphoreGive(_mutex);
         sendOk(req);
     });
@@ -800,6 +846,8 @@ String HttpApiServer::buildStatusJson(const ApiStatus& s
 #ifdef CONTROL_SMART_OUTLET
     if (outlets) {
         doc["manualOverride"] = outlets->isManualOverride();
+        doc["dcConfigured"]   = outlets->dcConfigured();
+        doc["dcOn"]           = outlets->dcOn();
     }
     JsonArray outArr = doc.createNestedArray("outlets");
     if (outlets) {
@@ -813,6 +861,7 @@ String HttpApiServer::buildStatusJson(const ApiStatus& s
             jo["powerW"]    = serialized(String(o->getPowerW(), 1));
             jo["active"]    = o->isActive();
             jo["reachable"] = o->isReachable();
+            jo["hasSwitch"] = (strlen(o->ip()) > 0);  // false = name-only gate
         }
     }
 #endif
