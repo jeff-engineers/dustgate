@@ -119,6 +119,8 @@ public:
     };
     bool consumeDustCollectorConfigRequest(DustCollectorCmd& out);
     bool consumeDustCollectorDeleteRequest();
+    // Manual dashboard on/off. outOn = requested state.
+    bool consumeDustCollectorSwitchRequest(bool& outOn);
 #endif
 
     // Expose the API key for the setup agent / serial display
@@ -167,6 +169,7 @@ private:
     bool            _dcConfigPending;
     DustCollectorCmd _dcConfigCmd;
     bool            _dcDeletePending;
+    bool            _dcSwitchPending;  bool _dcSwitchOn;
 #endif
 
     // Helpers

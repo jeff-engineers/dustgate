@@ -34,6 +34,8 @@ export interface SystemStatus {
   enabled: boolean;
   endstopHome: boolean;
   manualOverride?: boolean;   // true while user-commanded move blocks outlet auto-select
+  dcConfigured?: boolean;     // true once a dust collector plug has been assigned
+  dcOn?: boolean;             // current dust collector switch state
   stops?: StopInfo[];         // per-stop mm positions; embedded in every status push
   outlets: OutletStatus[];
 }
@@ -50,6 +52,8 @@ export interface OutletConfigCmd {
 export interface PingResult {
   reachable: boolean;
   powerW: number;
+  /** Shelly API generation the device answered on (1 or 2); 0 if unreachable. */
+  generation: number;
 }
 
 export interface DeviceInfo {
@@ -192,13 +196,28 @@ export class ApiService {
     });
   }
 
-  pingOutlet(gen: number, ip: string): Promise<PingResult> {
-    return this.post<PingResult>('/api/outlets/ping', { gen, ip });
+  /** Pings a Shelly outlet — the device auto-detects the API generation, trying Gen 1 then Gen 2. */
+  async pingOutlet(ip: string): Promise<PingResult> {
+    const raw = await this.post<{ reachable: boolean; powerW: number; gen: number }>(
+      '/api/outlets/ping', { ip }
+    );
+    return { reachable: raw.reachable, powerW: raw.powerW, generation: raw.gen };
   }
 
   saveOutletConfig() { return this.post('/api/outlets/save'); }
 
   deleteOutlet(slot: number) { return this.delete(`/api/outlets/${slot}`); }
+
+  /** Manually switch the dust collector on/off (holds until the next auto event). */
+  setDustCollector(on: boolean) { return this.post('/api/dustcollector/switch', { on }); }
+
+  /** Assign a Shelly outlet as the dust collector's switchable plug. */
+  configureDustCollector(generation: number, ip: string) {
+    return this.put('/api/dustcollector', { gen: generation, ip });
+  }
+
+  /** Unassign the dust collector's plug. */
+  deleteDustCollector() { return this.delete('/api/dustcollector'); }
 
   /**
    * Save current motor position as a numbered stop.

@@ -74,7 +74,8 @@ HttpApiServer::HttpApiServer()
       _outletDeletePending(false), _outletDeleteSlot(0),
       _outletSavePending(false),
       _dcConfigPending(false),
-      _dcDeletePending(false)
+      _dcDeletePending(false),
+      _dcSwitchPending(false), _dcSwitchOn(false)
 #endif
 {}
 
@@ -263,6 +264,13 @@ bool HttpApiServer::consumeDustCollectorConfigRequest(DustCollectorCmd& out) {
     return v;
 }
 bool HttpApiServer::consumeDustCollectorDeleteRequest() { CONSUME(_dcDeletePending) }
+bool HttpApiServer::consumeDustCollectorSwitchRequest(bool& outOn) {
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    bool v = _dcSwitchPending;
+    if (v) { outOn = _dcSwitchOn; _dcSwitchPending = false; }
+    xSemaphoreGive(_mutex);
+    return v;
+}
 #endif
 
 #undef CONSUME
@@ -563,7 +571,10 @@ void HttpApiServer::registerRoutes() {
         req->send(200, "application/json", _lastStatusJson.length() ? _lastStatusJson : "{}");
     });
 
-    // POST /api/outlets/ping   body: {"gen":1,"ip":"192.168.1.x"}
+    // POST /api/outlets/ping   body: {"ip":"192.168.1.x"}
+    // Auto-detects the Shelly API generation rather than requiring the caller
+    // to know it: tries the Gen 1 (/status) API first, and only falls back to
+    // Gen 2 (/rpc/) if that's unreachable. Returns whichever one answered.
     // Runs poll in a one-shot FreeRTOS task so the async handler never blocks.
     _server.on("/api/outlets/ping", HTTP_POST,
         [](AsyncWebServerRequest* req) {},
@@ -572,29 +583,35 @@ void HttpApiServer::registerRoutes() {
             if (!checkAuth(req)) return;
             StaticJsonDocument<128> doc;
             if (deserializeJson(doc, data, len)) { sendError(req, 400, "invalid JSON"); return; }
-            int gen = doc["gen"] | 1;
             const char* ip = doc["ip"] | "";
             if (strlen(ip) == 0) { sendError(req, 400, "missing 'ip'"); return; }
 
             struct PingArgs {
                 AsyncWebServerRequest* req;
-                SmartOutlet*           outlet;
+                char ip[40];
             };
-            auto* args = new PingArgs {
-                req,
-                (gen == 2) ? (SmartOutlet*)new ShellyGen2Outlet(ip, "ping")
-                           : (SmartOutlet*)new ShellyGen1Outlet(ip, "ping")
-            };
+            auto* args = new PingArgs { req };
+            strlcpy(args->ip, ip, sizeof(args->ip));
 
             xTaskCreate([](void* arg) {
                 auto* a = static_cast<PingArgs*>(arg);
-                bool ok  = a->outlet->poll();
-                float pw = a->outlet->getPowerW();
-                delete a->outlet;
+
+                ShellyGen1Outlet gen1(a->ip, "ping");
+                bool ok  = gen1.poll();
+                float pw = gen1.getPowerW();
+                int  gen = 1;
+
+                if (!ok) {
+                    ShellyGen2Outlet gen2(a->ip, "ping");
+                    ok  = gen2.poll();
+                    pw  = gen2.getPowerW();
+                    gen = 2;
+                }
 
                 StaticJsonDocument<64> resp;
                 resp["reachable"] = ok;
                 resp["powerW"]    = pw;
+                resp["gen"]       = ok ? gen : 0;
                 String out; serializeJson(resp, out);
                 a->req->send(200, "application/json", out);
                 delete a;
@@ -692,6 +709,23 @@ void HttpApiServer::registerRoutes() {
         xSemaphoreGive(_mutex);
         sendOk(req);
     });
+
+    // POST /api/dustcollector/switch   body: {"on": true|false}
+    // Manual dashboard override; holds until the next automatic tool event.
+    _server.on("/api/dustcollector/switch", HTTP_POST,
+        [](AsyncWebServerRequest* req) {},
+        nullptr,
+        [this](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t, size_t) {
+            if (!checkAuth(req)) return;
+            StaticJsonDocument<64> doc;
+            if (deserializeJson(doc, data, len)) { sendError(req, 400, "invalid JSON"); return; }
+            xSemaphoreTake(_mutex, portMAX_DELAY);
+            _dcSwitchPending = true;
+            _dcSwitchOn      = doc["on"] | false;
+            xSemaphoreGive(_mutex);
+            sendOk(req);
+        }
+    );
 
 #endif // CONTROL_SMART_OUTLET
 

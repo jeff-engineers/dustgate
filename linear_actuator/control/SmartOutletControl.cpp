@@ -20,6 +20,8 @@ SmartOutletControl::SmartOutletControl()
       _dustCollector(nullptr),
       _dcOn(false),
       _dcSynced(false),
+      _dcManualOverride(false),
+      _dcManualState(false),
       _requestedStop(0),
       _manualOverride(false),
       _mutex(nullptr),
@@ -181,6 +183,9 @@ void SmartOutletControl::doPoll() {
             if (!_manualOverride && _requestedStop != bestStop) {
                 DEBUG_PRINT(F("[Outlets] → stop ")); Serial.println(bestStop);
                 _requestedStop = bestStop;
+                // An automatic tool on/off event resumes automatic DC control,
+                // releasing any manual dashboard override.
+                _dcManualOverride = false;
             }
             xSemaphoreGive(_mutex);
         }
@@ -197,11 +202,12 @@ void SmartOutletControl::doPoll() {
 void SmartOutletControl::reconcileDustCollector() {
     if (!_dustCollector) return;
 
-    // Desired: collector ON whenever a real gate is selected (a tool is running
-    // or a manual move targeted a gate); OFF at home. _requestedStop is already
+    // Desired: while a manual override is active, follow the forced state;
+    // otherwise ON whenever a real gate is selected (a tool is running or a
+    // manual move targeted a gate) and OFF at home. _requestedStop is already
     // debounced by the poll logic above.
     xSemaphoreTake(_mutex, portMAX_DELAY);
-    bool desired = (_requestedStop > 0);
+    bool desired = _dcManualOverride ? _dcManualState : (_requestedStop > 0);
     bool needsSwitch = !_dcSynced || (desired != _dcOn);
     xSemaphoreGive(_mutex);
 
@@ -315,6 +321,15 @@ bool SmartOutletControl::dcOn() {
     bool v = _dcOn;
     xSemaphoreGive(_mutex);
     return v;
+}
+
+void SmartOutletControl::setDcManual(bool on) {
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    _dcManualOverride = true;
+    _dcManualState    = on;
+    xSemaphoreGive(_mutex);
+    DEBUG_PRINT(F("[Outlets] Dust collector manual → ")); DEBUG_PRINTLN(on ? F("ON") : F("OFF"));
+    // The poll task's next reconcile (≤ OUTLET_POLL_INTERVAL_MS) applies it.
 }
 
 void SmartOutletControl::setManualOverride(int stop) {

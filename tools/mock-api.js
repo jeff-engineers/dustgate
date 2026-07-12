@@ -40,6 +40,9 @@ const state = {
   homeOnRight:    false,
   motorInverted:  false,
   numActiveStops: 0,        // 0 = unconfigured until setup wizard runs
+  dcConfigured:   false,    // set true once a dust collector plug is assigned
+  dcOn:           false,    // dust collector switch state
+  dcIp:           null,     // ip of the assigned dust collector plug, for ping simulation
   // mm: null = position not yet saved (distinct from a gate saved at 0.00).
   // Home (index 0) gets a real 0.00 once /api/home runs.
   stops: Array.from({ length: NUM_STOPS + 1 }, (_, i) => ({
@@ -49,7 +52,40 @@ const state = {
   outlets: [],              // empty until setup wizard configures them
 };
 
-function statusJson() { return JSON.stringify(state); }
+// ── Ping simulation (demonstrates the wizard's "no load yet, try again"
+// behaviour without needing real hardware) ──────────────────────────────
+// The first two distinct IPs ever pinged (excluding the dust collector's own
+// plug, which already has real on/off-driven load below) simulate a tool
+// that hasn't spun up yet: gate 1's outlet reads 0W once then a steady load,
+// gate 2's outlet reads 0W twice then a random load. Any further IPs read a
+// realistic load immediately, since the scenario's been demonstrated already.
+const pingSim = { order: [], counts: {} };
+
+function resetPingSim() {
+  pingSim.order = [];
+  pingSim.counts = {};
+}
+
+function simulatedPingPower(ip) {
+  if (!(ip in pingSim.counts)) {
+    pingSim.counts[ip] = 0;
+    pingSim.order.push(ip);
+  }
+  pingSim.counts[ip]++;
+  const rank  = pingSim.order.indexOf(ip);
+  const count = pingSim.counts[ip];
+
+  if (rank === 0) return count === 1 ? 0 : 320;
+  if (rank === 1) return count <= 2 ? 0 : Math.round(150 + Math.random() * 250);
+  return Math.round(200 + Math.random() * 200);
+}
+
+function statusJson() {
+  // Only meaningful once homed — before that, position is unknown, so the
+  // sensor reads as untriggered rather than misleadingly "at home".
+  state.endstopHome = state.homed && state.positionMM < 0.5;
+  return JSON.stringify(state);
+}
 
 // ── WebSocket server ──────────────────────────────────────────────────────
 const server = http.createServer(handler);
@@ -116,6 +152,7 @@ function handler(req, res) {
       state.homed          = true;
       state.positionSteps  = 0;
       state.positionMM     = 0;
+      state.dcOn           = false;   // home → dust collector off
       state.stops[0]       = { index: 0, mm: '0.00' };
       broadcast();
     }, 1500);
@@ -146,6 +183,7 @@ function handler(req, res) {
         state.currentStop    = stop;
         state.positionMM     = toMm;
         state.positionSteps  = Math.round(toMm * STEPS_PER_MM);
+        state.dcOn           = stop > 0;   // collector follows gate selection
         broadcast();
       }, durationMs);
       json(res, { ok: true });
@@ -176,7 +214,18 @@ function handler(req, res) {
 
   if (pathname === '/api/outlets/ping' && req.method === 'POST') {
     return body(req, data => {
-      json(res, { reachable: true, powerW: 0 });
+      // The dust collector's own plug follows its real on/off switch state.
+      // Every other outlet runs through the ping simulation above, which
+      // mimics tools that haven't spun up yet on the first ping or two.
+      // Real generation auto-detect (Gen 1 then Gen 2) happens device-side;
+      // mock always answers as Gen 2 since there's no real outlet to distinguish.
+      let powerW = 0;
+      if (data.ip && data.ip === state.dcIp) {
+        powerW = state.dcOn ? 380 : 0;
+      } else if (data.ip) {
+        powerW = simulatedPingPower(data.ip);
+      }
+      json(res, { reachable: true, powerW, gen: 2 });
     });
   }
 
@@ -223,6 +272,32 @@ function handler(req, res) {
     console.log(`  [mock] Outlet slot ${slot} deleted`);
     broadcast();
     return json(res, { ok: true });
+  }
+
+  // ── Dust collector plug ──
+  if (pathname === '/api/dustcollector' && req.method === 'PUT') {
+    return body(req, data => {
+      state.dcConfigured = true;
+      state.dcIp = data.ip ?? '';
+      console.log(`  [mock] Dust collector configured: gen${data.gen ?? 2} @ ${data.ip ?? ''}`);
+      broadcast();
+      json(res, { ok: true });
+    });
+  }
+  if (pathname === '/api/dustcollector' && req.method === 'DELETE') {
+    state.dcConfigured = false;
+    state.dcOn = false;
+    state.dcIp = null;
+    broadcast();
+    return json(res, { ok: true });
+  }
+  if (pathname === '/api/dustcollector/switch' && req.method === 'POST') {
+    return body(req, data => {
+      state.dcOn = !!data.on;
+      console.log(`  [mock] Dust collector manual → ${state.dcOn ? 'ON' : 'OFF'}`);
+      broadcast();
+      json(res, { ok: true });
+    });
   }
 
   if (pathname === '/api/setstop' && req.method === 'POST') {
@@ -280,6 +355,7 @@ function handler(req, res) {
     state.outlets  = [];
     state.homed    = false;
     state.currentStop = -1;
+    resetPingSim();
     broadcast();
     return json(res, { ok: true });
   }

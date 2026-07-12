@@ -12,6 +12,7 @@ import { HardwareProfileService } from '../services/hardware-profile.service';
 import { ManifoldVisualizerComponent } from '../visualizer/manifold-visualizer.component';
 import { GatePositionerComponent } from '../gate-positioner/gate-positioner.component';
 import { OutletConfiguratorComponent } from '../outlet-configurator/outlet-configurator.component';
+import { DustCollectorConfiguratorComponent, DustCollectorCmd } from '../dust-collector-configurator/dust-collector-configurator.component';
 
 // ── Step machine ──────────────────────────────────────────────────────────────
 
@@ -25,6 +26,7 @@ type Step =
   | { id: 'position'; gate: number }
   | { id: 'equal-spacing-offer'; gate: number; spacing: number }
   | { id: 'outlet'; gate: number }
+  | { id: 'dust-collector' }
   | { id: 'review' }
   | { id: 'done' };
 
@@ -43,6 +45,7 @@ interface GateRecord {
     ManifoldVisualizerComponent,
     GatePositionerComponent,
     OutletConfiguratorComponent,
+    DustCollectorConfiguratorComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   styles: [`
@@ -367,7 +370,7 @@ interface GateRecord {
 
     <!-- Visualizer strip -->
     <div class="viz-section">
-      <app-manifold-visualizer [homeOnRight]="api.deviceInfo?.homeOnRight ?? false"></app-manifold-visualizer>
+      <app-manifold-visualizer [homeOnRight]="api.deviceInfo?.homeOnRight ?? false" [liveTravel]="false"></app-manifold-visualizer>
     </div>
 
     <!-- Step content -->
@@ -556,6 +559,13 @@ interface GateRecord {
           [existing]="editing ? outletCmdFor(step.gate) : undefined"
           (saved)="onOutletSaved($event)">
         </app-outlet-configurator>
+      </ng-container>
+
+      <!-- ── Phase 4.5: Optional dust collector outlet ── -->
+      <ng-container *ngIf="step.id === 'dust-collector'">
+        <app-dust-collector-configurator
+          (saved)="onDustCollectorSaved($event)">
+        </app-dust-collector-configurator>
       </ng-container>
 
       <!-- ── Phase 5.1: Review ── -->
@@ -792,7 +802,7 @@ export class ManualSetupComponent implements OnInit, OnDestroy {
 
     const nextGate = outletStep.gate + 1;
     if (nextGate > this.numGates) {
-      this.step = { id: 'review' };
+      this.step = { id: 'dust-collector' };
       this.cd.markForCheck();
       return;
     }
@@ -813,6 +823,13 @@ export class ManualSetupComponent implements OnInit, OnDestroy {
     this.goToPosition(nextGate);
   }
 
+  onDustCollectorSaved(_cmd: DustCollectorCmd | null) {
+    // Config (and any on/off test) already happened inside the child
+    // component — nothing more to record here, just move on.
+    this.step = { id: 'review' };
+    this.cd.markForCheck();
+  }
+
   applyEqualSpacing() {
     const offerStep = this.step as { id: 'equal-spacing-offer'; gate: number; spacing: number };
     this.equalSpacingMm = offerStep.spacing;
@@ -825,11 +842,30 @@ export class ManualSetupComponent implements OnInit, OnDestroy {
     this.goToPosition(offerStep.gate);
   }
 
-  private goToPosition(gate: number) {
+  private async goToPosition(gate: number) {
     // Calculate the start mm for the jog widget.
     const lastGate = this.gates[this.gates.length - 1];
     if (this.equalSpacingMm !== null) {
       this.gateStartMm = this.gates[0].mm + (gate - 1) * this.equalSpacingMm;
+
+      // The equal-spacing target is just a calculation — the actuator hasn't
+      // actually moved there yet. Drive it to that position now, otherwise
+      // the widget's displayed position (and the overlap check, which
+      // compares against the real device position) would disagree with
+      // where the actuator physically sits.
+      const currentMm = this.api.status$.value?.positionMM ?? 0;
+      const delta = this.gateStartMm - currentMm;
+      if (Math.abs(delta) > 0.5) {
+        this.busy = true;
+        this.cd.markForCheck();
+        try {
+          await this.api.jog(delta);
+        } catch {
+          this.errorMsg = 'Could not auto-travel to the calculated position. Check connection.';
+        } finally {
+          this.busy = false;
+        }
+      }
     } else {
       this.gateStartMm = lastGate ? lastGate.mm : 0;
     }

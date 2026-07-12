@@ -20,7 +20,6 @@
 #include "motor/MotorDriver.h"
 #include "feedback/FeedbackSystem.h"
 #include "control/ControlInput.h"
-#include "output/RelayOutput.h"
 #include "training/CalibrationStore.h"
 
 // WiFi provisioning — included for any mode that needs network access.
@@ -102,9 +101,6 @@ StepperTMC2209Driver motor;
   #include "control/SerialDebugControl.h"
   SerialDebugControl _serialCmds;
 #endif
-
-// -- Relay output --
-RelayOutput relay;
 
 // =============================================================================
 // E-stop
@@ -193,7 +189,6 @@ void setup() {
     ok &= motor.begin();
     ok &= feedback.begin(&motor);
     ok &= control.begin();
-    ok &= relay.begin();
 #if defined(ENABLE_SERIAL_COMMANDS) && !defined(CONTROL_SERIAL_DEBUG)
     _serialCmds.begin();   // supplemental serial processor (non-fatal if begin() returns false)
 #endif
@@ -236,12 +231,11 @@ void loop() {
     // -- Hardware e-stop: highest priority ------------------------------------
     if (g_eStopTriggered) {
         motor.stop();
-        relay.forceOff();
         motor.enable(false);
         if (currentState != STATE_ERROR) {
             currentState = STATE_ERROR;
             DEBUG_PRINTLN(F(""));
-            DEBUG_PRINTLN(F("!!! E-STOP ACTIVE — motor disabled, relay off."));
+            DEBUG_PRINTLN(F("!!! E-STOP ACTIVE — motor disabled."));
             DEBUG_PRINTLN(F("!!! Type 'home' to clear and re-home."));
             DEBUG_PRINTLN(F(""));
         }
@@ -500,6 +494,10 @@ void loop() {
         if (apiServer.consumeDustCollectorDeleteRequest()) {
             control.removeDustCollector();
         }
+        bool dcSwitchOn = false;
+        if (apiServer.consumeDustCollectorSwitchRequest(dcSwitchOn)) {
+            control.setDcManual(dcSwitchOn);
+        }
     }
 #endif // CONTROL_SMART_OUTLET
 #endif // ENABLE_HTTP_API
@@ -526,7 +524,6 @@ void loop() {
             int requested = control.readRequestedStop();
 
             if (!enabled) {
-                relay.update(false, false);
                 if (currentStop != 0 && currentStop != -1) {
                     targetStop = 0;
                     issueMove(0);
@@ -546,16 +543,12 @@ void loop() {
             if (requested != currentStop && requested >= 0) {
                 targetStop = requested;
                 issueMove(targetStop);
-            } else {
-                relay.update(currentStop > 0, enabled);
             }
             break;
         }
 
         // ------------------------------------------------------------------
         case STATE_MOVING:
-            relay.forceOff();
-
             if (!control.isEnabled()) {
                 motor.stop();
                 currentStop = -1;
@@ -583,10 +576,7 @@ void loop() {
             bool enabled = control.isEnabled();
             int requested = control.readRequestedStop();
 
-            relay.update(true, enabled);
-
             if (!enabled) {
-                relay.update(false, false);
                 targetStop = 0;
                 issueMove(0);
                 break;
@@ -601,12 +591,10 @@ void loop() {
 
         // ------------------------------------------------------------------
         case STATE_DISABLED:
-            relay.forceOff();
             break;
 
         // ------------------------------------------------------------------
         case STATE_ERROR:
-            relay.forceOff();
             motor.stop();
             motor.enable(false);
             digitalWrite(PIN_LED, (millis() / 100) % 2); // rapid blink
@@ -624,11 +612,6 @@ void loop() {
 #endif
             break;
     }
-
-    relay.update(
-        currentState == STATE_AT_STOP,
-        control.isEnabled()
-    );
 
 #ifdef ENABLE_HTTP_API
     {

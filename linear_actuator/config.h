@@ -148,18 +148,8 @@ extern int g_homeDirection;        // defined in linear_actuator.ino
 // Any GPIO on ESP32-S2 supports interrupts — not restricted to a specific pin.
 #define PIN_ESTOP           A3  // Interrupt-capable (all ESP32 GPIOs are)
 
-// -- Relay output --
-#define PIN_RELAY           A4  // HIGH = relay energized
-
 // -- Status LED --
 #define PIN_LED            13   // D13 — onboard LED on ESP32-S2 Feather
-
-// -----------------------------------------------------------------------------
-// RELAY OUTPUT CONFIGURATION
-// -----------------------------------------------------------------------------
-#define RELAY_ON_DELAY_MS       0     // ms after reaching stop before relay ON
-#define RELAY_OFF_DELAY_MS    500     // ms after leaving stop before relay OFF
-#define RELAY_ACTIVE_HIGH      true   // true = HIGH energizes relay
 
 // -----------------------------------------------------------------------------
 // SMART OUTLET CONTROL (CONTROL_SMART_OUTLET)

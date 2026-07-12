@@ -20,6 +20,4 @@
 #include "control/SerialDebugControl.cpp"
 #include "control/SmartOutletControl.cpp"
 
-#include "output/RelayOutput.cpp"
-
 #include "training/CalibrationStore.cpp"

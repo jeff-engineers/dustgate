@@ -24,7 +24,7 @@ via an AI-powered setup agent accessible from a browser on the local network.
 
 ### Planned carrier PCB (Task 5)
 - ESP32-S2 Feather + BTT TMC2209 StepStick on 2.54mm headers
-- Screw terminals for motor, endstop, e-stop, relay
+- Screw terminals for motor, endstop, e-stop
 - CNC-millable FR4 (no soldermask required)
 - Replaces current breadboard/breakout assembly
 
@@ -226,7 +226,7 @@ Source lives in `dustgate-ui/`. Served from ESP32 LittleFS flash.
 | `/#/setup` | **Setup chat** — Claude agentic loop, tool-call progress pills, back arrow → dashboard |
 
 - Tool buttons pull names from `status.outlets[].name` via WebSocket — no hardcoding
-- Dust collector toggle is UI-only for now (relay control planned)
+- Dust collector toggle drives a Shelly smart plug via `/api/dustcollector/switch`
 - Setup chat is always reachable via gear icon — not hidden after initial setup
 
 ### API key bootstrap
@@ -274,13 +274,12 @@ npm start
 
 ---
 
-## 9. Output — Dust Collector Relay
+## 9. Output — Dust Collector
 
-- Relay on A4 energizes when actuator is at a non-home stop AND system is enabled
-- `RELAY_ON_DELAY_MS` (0ms): delay after arriving at stop before relay ON
-- `RELAY_OFF_DELAY_MS` (500ms): delay after leaving stop before relay OFF (configurable — allows dust collector to clear chips)
-- `RELAY_ACTIVE_HIGH`: true = HIGH energizes relay
-- Alternative: Shelly smart switch for the dust collector — avoids relay wiring, adds remote control
+- Controlled by a dedicated switchable Shelly smart plug over WiFi (no local wiring)
+- Turns on automatically when the actuator is at a non-home stop (a tool is running) and off at home
+- Can also be toggled manually from the dashboard
+- Configured via `PUT /api/dustcollector` with `{"gen":2,"ip":"192.168.1.x"}`
 
 ---
 
@@ -297,7 +296,7 @@ npm start
 | Wire `HttpApiServer` into `linear_actuator.ino` | ✅ Done | estop/home/move/jog/clearcal/outlets all wired |
 | Angular front-end | ✅ Done | Dashboard + setup chat, served from LittleFS |
 | LittleFS static serving + `/api/info` | ✅ Done | Auto-serves .gz, bootstrap key endpoint |
-| Dust collector relay (UI) | ⏳ Dummy | Toggle exists in UI; no API call yet |
+| Dust collector (Shelly plug) | ✅ Done | Auto + manual dashboard toggle via `/api/dustcollector` |
 | Carrier PCB (KiCad) | ⏳ Planned | Task 5 |
 
 ---

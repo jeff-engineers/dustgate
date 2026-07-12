@@ -141,6 +141,24 @@ import { ApiService, OutletConfigCmd } from '../services/api.service';
     .ping-result.ok  { color: var(--success, #22c55e); }
     .ping-result.err { color: var(--danger); }
 
+    .ping-hint {
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.5;
+      margin: -4px 0 0;
+    }
+
+    .suggest-btn {
+      align-self: flex-start;
+      background: none;
+      border: 1px dashed var(--border);
+      border-radius: 8px;
+      padding: 6px 10px;
+      font-size: 12px;
+      color: var(--accent);
+    }
+    .suggest-btn:active { opacity: 0.6; }
+
     .error-banner {
       background: color-mix(in srgb, var(--danger) 10%, transparent);
       border: 1px solid var(--danger);
@@ -204,15 +222,6 @@ import { ApiService, OutletConfigCmd } from '../services/api.service';
       </div>
 
       <ng-container *ngIf="hasPlug">
-        <!-- Shelly generation -->
-        <div class="field">
-          <label>Shelly generation</label>
-          <div class="gen-toggle">
-            <button class="gen-btn" [class.selected]="generation === 1" (click)="generation = 1">Gen 1</button>
-            <button class="gen-btn" [class.selected]="generation === 2" (click)="generation = 2">Gen 2</button>
-          </div>
-        </div>
-
         <!-- IP address -->
         <div class="field">
           <label>IP address</label>
@@ -223,7 +232,8 @@ import { ApiService, OutletConfigCmd } from '../services/api.service';
                  (ngModelChange)="pingResult = null; clearError()" />
         </div>
 
-        <!-- Ping -->
+        <!-- Ping — the device tries Gen 1 then Gen 2 automatically, so there's
+             nothing to pick here, just an IP to confirm. -->
         <div class="ping-row">
           <button class="ping-btn"
                   [disabled]="!isValidIp(ip) || pinging"
@@ -231,12 +241,17 @@ import { ApiService, OutletConfigCmd } from '../services/api.service';
             {{ pinging ? 'Pinging…' : 'Ping' }}
           </button>
           <span class="ping-result ok"  *ngIf="pingResult?.reachable">
-            ✓ Reachable — {{ pingResult!.powerW | number:'1.0-0' }} W
+            ✓ Reachable (Gen {{ pingResult!.generation }}) — {{ pingResult!.powerW | number:'1.0-0' }} W
           </span>
           <span class="ping-result err" *ngIf="pingResult !== null && !pingResult.reachable">
             ✗ Not reachable
           </span>
         </div>
+
+        <p class="ping-hint" *ngIf="pingResult?.reachable">
+          Tip: turn the tool on at its lowest setting with no load (nothing feeding,
+          blade/bit spinning free), then ping again to capture its running wattage.
+        </p>
 
         <!-- Wattage threshold -->
         <div class="field">
@@ -245,6 +260,12 @@ import { ApiService, OutletConfigCmd } from '../services/api.service';
                  placeholder="e.g. 5"
                  min="0"
                  [(ngModel)]="thresholdW" />
+          <button type="button"
+                  class="suggest-btn"
+                  *ngIf="suggestedThreshold !== null"
+                  (click)="thresholdW = suggestedThreshold">
+            Use suggested {{ suggestedThreshold }} W (from {{ pingResult!.powerW | number:'1.0-0' }} W reading)
+          </button>
         </div>
       </ng-container>
 
@@ -285,15 +306,16 @@ export class OutletConfiguratorComponent implements OnInit, OnChanges {
   // Form state
   toolName   = '';
   hasPlug    = false;
-  generation = 2;
   ip         = '';
   thresholdW: number | null = null;
+  /** Populated from the existing config on reconfigure, until a fresh ping supersedes it. */
+  private existingGeneration: number | null = null;
 
   // UI state
   pinging    = false;
   saving     = false;
   errorMsg   = '';
-  pingResult: { reachable: boolean; powerW: number } | null = null;
+  pingResult: { reachable: boolean; powerW: number; generation: number } | null = null;
 
   constructor(private api: ApiService, private cd: ChangeDetectorRef) {}
 
@@ -308,13 +330,13 @@ export class OutletConfiguratorComponent implements OnInit, OnChanges {
     if (changes['gateIndex'] && !changes['gateIndex'].firstChange) {
       this.toolName   = '';
       this.hasPlug    = false;
-      this.generation = 2;
       this.ip         = '';
       this.thresholdW = null;
       this.pinging    = false;
       this.saving     = false;
       this.errorMsg   = '';
       this.pingResult = null;
+      this.existingGeneration = null;
       this.applyExisting();
       this.cd.markForCheck();
     }
@@ -325,7 +347,7 @@ export class OutletConfiguratorComponent implements OnInit, OnChanges {
       this.toolName   = this.existing.name       ?? '';
       this.ip         = this.existing.ip          ?? '';
       this.hasPlug    = this.ip.trim().length > 0;
-      this.generation = this.existing.generation ?? 2;
+      this.existingGeneration = this.existing.generation ?? null;
       this.thresholdW = this.existing.threshold_w ?? null;
     }
   }
@@ -336,11 +358,17 @@ export class OutletConfiguratorComponent implements OnInit, OnChanges {
     this.clearError();
   }
 
+  /** Generation to save: a fresh successful ping wins, else whatever was already configured. */
+  get resolvedGeneration(): number | null {
+    return this.pingResult?.reachable ? this.pingResult.generation : this.existingGeneration;
+  }
+
   // Name is required for every gate. A smart plug is optional; when present its
-  // IP must be valid.
+  // IP must be valid and its generation known — which means a successful ping,
+  // since there's no manual picker to fall back on.
   get canSave(): boolean {
     if (this.toolName.trim().length === 0) return false;
-    return this.hasPlug ? this.isValidIp(this.ip) : true;
+    return this.hasPlug ? (this.isValidIp(this.ip) && this.resolvedGeneration !== null) : true;
   }
 
   isValidIp(ip: string): boolean {
@@ -349,6 +377,19 @@ export class OutletConfiguratorComponent implements OnInit, OnChanges {
 
   clearError() { this.errorMsg = ''; }
 
+  /**
+   * Suggests a detection threshold from the last ping's power reading: ~10%
+   * below the reading (margin below running draw, clear of standby power),
+   * rounded to a clean step — nearest 50W above 200W, nearest 10W otherwise.
+   */
+  get suggestedThreshold(): number | null {
+    const w = this.pingResult?.reachable ? this.pingResult.powerW : null;
+    if (w === null || w <= 0) return null;
+    const target = w * 0.9;
+    const step = w >= 200 ? 50 : 10;
+    return Math.max(step, Math.round(target / step) * step);
+  }
+
   async ping() {
     if (!this.isValidIp(this.ip) || this.pinging) return;
     this.pinging = true;
@@ -356,10 +397,9 @@ export class OutletConfiguratorComponent implements OnInit, OnChanges {
     this.errorMsg = '';
     this.cd.markForCheck();
     try {
-      const result = await this.api.pingOutlet(this.generation, this.ip.trim());
-      this.pingResult = result;
+      this.pingResult = await this.api.pingOutlet(this.ip.trim());
     } catch {
-      this.pingResult = { reachable: false, powerW: 0 };
+      this.pingResult = { reachable: false, powerW: 0, generation: 0 };
     } finally {
       this.pinging = false;
       this.cd.markForCheck();
@@ -376,7 +416,7 @@ export class OutletConfiguratorComponent implements OnInit, OnChanges {
     // power polling for them.
     const cmd: OutletConfigCmd = {
       slot:        this.slotIndex,
-      generation:  this.generation,
+      generation:  this.resolvedGeneration ?? 2,
       ip:          this.hasPlug ? this.ip.trim() : '',
       name:        this.toolName.trim(),
       stop:        this.gateIndex,

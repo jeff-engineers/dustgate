@@ -46,7 +46,7 @@ of the in-browser demo:
 cd ../tools && npm install
 
 # terminal 1
-node mock-api.js
+x
 
 # terminal 2
 cd dustgate-ui

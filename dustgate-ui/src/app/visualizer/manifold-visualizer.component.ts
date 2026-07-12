@@ -83,6 +83,12 @@ interface GateInfo {
       background: transparent;
     }
 
+    /* ── Interactive tap targets (dashboard use) ─────────────────────────── */
+    .gate-col.clickable { cursor: pointer; }
+    .gate-col.clickable:active .gate-box { opacity: 0.7; }
+    .dc-entity.clickable { cursor: pointer; }
+    .dc-entity.clickable:active { opacity: 0.7; }
+
     .outlet-dot {
       position: absolute;
       top: 4px; right: 4px;
@@ -303,7 +309,10 @@ interface GateInfo {
       <!-- Gate columns. Unlocated gates reserve their rail slot but stay blank
            until their position is saved, so the layout doesn't pre-populate. -->
       <div class="gates-row">
-        <div class="gate-col" *ngFor="let g of gates">
+        <div class="gate-col"
+             *ngFor="let g of gates"
+             [class.clickable]="interactive && (g.isHome || g.isLocated)"
+             (click)="onGateClick(g)">
 
           <div class="gate-label"
                [class.active]="g.index === sliderDisplayStop && isHomed"
@@ -326,6 +335,14 @@ interface GateInfo {
               <div *ngIf="g.outlet?.hasSwitch" class="outlet-power">
                 {{ g.outlet!.powerW | number:'1.0-0' }} W
               </div>
+              <div *ngIf="g.isHome"
+                   class="outlet-dot"
+                   [class.tool-on]="endstopTriggered"
+                   [class.tool-off]="!endstopTriggered">
+              </div>
+              <div *ngIf="g.isHome" class="outlet-power">
+                {{ endstopTriggered ? 'triggered' : 'open' }}
+              </div>
             </ng-container>
           </div>
 
@@ -345,7 +362,7 @@ interface GateInfo {
              [class.unhomed]="!isHomed"
              [style.left]="displaySliderLeftPct + '%'"
              [style.width]="sliderWidthPct + '%'"
-             [style.transition-duration]="(isJogging ? jogTransitionSec : sliderTransitionSec) + 's'">
+             [style.transition-duration]="displayTransitionSec + 's'">
         </div>
       </div>
 
@@ -355,13 +372,13 @@ interface GateInfo {
         <div class="flow-drop-gate"
              [class.hidden]="!isHomed || (isAtHome && !isJogging)"
              [style.left]="displayArrowCenterPct + '%'"
-             [style.transition-duration]="(isJogging ? jogTransitionSec : sliderTransitionSec) + 's'">
+             [style.transition-duration]="displayTransitionSec + 's'">
         </div>
         <div class="flow-bridge"
              [class.hidden]="!isHomed || (isAtHome && !isJogging)"
              [style.left]="flowBridgeLeftPct + '%'"
              [style.width]="flowBridgeWidthPct + '%'"
-             [style.transition-duration]="(isJogging ? jogTransitionSec : sliderTransitionSec) + 's'">
+             [style.transition-duration]="displayTransitionSec + 's'">
         </div>
         <div class="flow-drop-dc"    [class.hidden]="!isHomed || (isAtHome && !isJogging)"></div>
         <div class="flow-head"      [class.hidden]="!isHomed || (isAtHome && !isJogging)"></div>
@@ -374,7 +391,10 @@ interface GateInfo {
 
       <!-- Dust collector entity -->
       <div class="dc-wrap">
-        <div class="dc-entity" [class.dc-on]="dcOn">
+        <div class="dc-entity"
+             [class.dc-on]="dcOn"
+             [class.clickable]="interactive && dcConfigured"
+             (click)="onDcClick()">
           <div class="dc-dot"></div>
           <div class="dc-text">
             <div class="dc-name">Dust collector</div>
@@ -388,6 +408,9 @@ interface GateInfo {
       <div class="unhomed-hint" *ngIf="!isHomed">
         position unknown — home before moving
       </div>
+      <div class="unhomed-hint" *ngIf="interactive && isHomed">
+        tap a gate to move it
+      </div>
 
     </div>
   `
@@ -395,8 +418,24 @@ interface GateInfo {
 export class ManifoldVisualizerComponent implements OnInit, OnDestroy {
 
   @Input() dcOn = false;
+  /** True once a dust-collector plug is assigned — gates whether tapping the DC entity does anything. */
+  @Input() dcConfigured = false;
+  /**
+   * When true, this becomes the actual dashboard control surface: tapping a
+   * located gate moves to it, tapping home homes, tapping the dust collector
+   * toggles it. False in the setup wizards, where the rail is a passive
+   * position readout.
+   */
+  @Input() interactive = false;
   /** When true, home is on the right — gates render right-to-left and slider animates accordingly. */
   @Input() homeOnRight = false;
+  /**
+   * When false, the slider window snaps directly to each reported stop with no
+   * travel animation and no continuous jog interpolation — used during the
+   * setup wizards, where gates aren't real yet and animating fake travel
+   * between them is just noise. Once a gate is located it's drawn in place.
+   */
+  @Input() liveTravel = true;
 
   status: SystemStatus | null = null;
 
@@ -435,6 +474,15 @@ export class ManifoldVisualizerComponent implements OnInit, OnDestroy {
   // ── Slider animation ──────────────────────────────────────────────────────────
 
   private updateSlider(s: SystemStatus) {
+    if (!this.liveTravel) {
+      // Setup wizards: no travel animation — just snap to wherever the gate
+      // actually is once it's located.
+      this.sliderTransitionSec = 0;
+      this.sliderDisplayStop   = Math.max(0, s.currentStop);
+      this.prevState           = s.state;
+      return;
+    }
+
     const isMoving  = s.state === 'MOVING';
     const wasMoving = this.prevState === 'MOVING';
     this.prevState  = s.state;
@@ -567,6 +615,20 @@ export class ManifoldVisualizerComponent implements OnInit, OnDestroy {
   get isAtHome():        boolean { return this.sliderDisplayStop === 0; }
   get isHomed():         boolean { return this.status?.homed ?? false; }
   get isManualOverride():boolean { return this.status?.manualOverride ?? false; }
+  get endstopTriggered():boolean { return this.status?.endstopHome ?? false; }
+
+  // ── Interactive controls (dashboard use only — see `interactive` input) ────────
+
+  onGateClick(g: GateInfo) {
+    if (!this.interactive) return;
+    if (g.isHome) { this.api.home().catch(console.error); return; }
+    if (g.isLocated) { this.api.moveToStop(g.index).catch(console.error); }
+  }
+
+  onDcClick() {
+    if (!this.interactive || !this.dcConfigured) return;
+    this.api.setDustCollector(!this.dcOn).catch(console.error);
+  }
 
   // ── Jog tracking ──────────────────────────────────────────────────────────────
   // Raw jogging (used during setup, before a stop is saved) never changes
@@ -636,9 +698,15 @@ export class ManifoldVisualizerComponent implements OnInit, OnDestroy {
     return gaps.length ? gaps.reduce((a, b) => a + b, 0) / gaps.length : Math.max(mms[0], 20);
   }
 
-  /** True while the actuator sits away from wherever the discrete slider is resting. */
+  /**
+   * True while the actuator sits away from wherever the discrete slider is
+   * resting. In wizards (!liveTravel) the slider has no travel animation to
+   * begin with, so it always tracks the raw jog position directly — that's
+   * what lets it snap to each tool as soon as a jog command lands it there.
+   */
   get isJogging(): boolean {
     if (!this.isHomed || this.status?.positionMM == null) return false;
+    if (!this.liveTravel) return true;
     const settledMm = this.stopMmForIndex(this.sliderDisplayStop);
     return Math.abs(this.status.positionMM - settledMm) > 0.5;
   }
@@ -658,6 +726,13 @@ export class ManifoldVisualizerComponent implements OnInit, OnDestroy {
   /** Center of the slider window, following the same discrete/continuous split — used for the flow arrow. */
   get displayArrowCenterPct(): number {
     return this.isJogging ? this.jogWindowLeftPct + this.sliderWidthPct / 2 : this.arrowCenterPct;
+  }
+
+  /** CSS transition-duration applied to the slider/arrow. Wizards (!liveTravel)
+   *  snap instantly to each new jog position rather than animating travel. */
+  get displayTransitionSec(): number {
+    if (!this.liveTravel) return 0;
+    return this.isJogging ? this.jogTransitionSec : this.sliderTransitionSec;
   }
 
   /** Horizontal center of the dust collector box — always centered under the rail (see .dc-wrap). */

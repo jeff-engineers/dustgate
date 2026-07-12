@@ -21,6 +21,7 @@ Each tool plugs into a [Shelly smart outlet](https://us.shelly.com). When a tool
 | Mechanical Assembly | 3d printed | Integrates with COTS dust gate |
 | NC mechanical limit switch | Various | Home endstop on D10 |
 | Shelly Plug US (one per tool) | [us.shelly.com](https://us.shelly.com) | ~$21 each, Gen 4 recommended |
+| Shelly Plug US (dust collector) | [us.shelly.com](https://us.shelly.com) | One more to switch the dust collector on/off |
 | 12–24V DC power supply (≥2A) | Various | Motor power |
 
 The reference build is a 2.5" dust port system, with adjacent gates spaced about 89mm apart. A 4" variant is planned but not yet built or measured — the setup wizard asks which size you have so the UI can seed a reasonable starting estimate either way.
@@ -176,7 +177,7 @@ When setup is complete, tap the back arrow to return to the dashboard. Your tool
 - **Automatic mode:** just turn on a tool. DustGate detects power draw within ~1 second and moves the gate. Turn the tool off and the gate returns home after a 3-second coast-down delay.
 - **Manual override:** tap any tool button on the dashboard to move the gate manually. Automatic mode resumes the next time a tool is detected.
 - **HOME button:** closes all gates (moves to home position).
-- **Dust collector:** switches on automatically whenever a gate is open (a tool is running) and off when the system returns home. Drive it either with the local relay (pin A4) or a dedicated switchable Shelly smart plug — see below. The dashboard toggle is still a UI placeholder (a manual override is not yet wired).
+- **Dust collector:** driven by a dedicated switchable Shelly smart plug. It turns on automatically whenever a gate is open (a tool is running) and off when the system returns home, and can also be toggled on/off manually from the dashboard.
 
 ---
 
@@ -239,5 +240,5 @@ vercel.json              Vercel deployment config (demo site)
 ## Limitations & Known Issues
 
 - HTTPS to the Anthropic API uses `setInsecure()` (no certificate validation). Acceptable for local network use; must be addressed before any cloud deployment.
-- The dust collector can be controlled by the local relay (pin A4) or a switchable Shelly plug (configured via `PUT /api/dustcollector` with `{"gen":2,"ip":"192.168.1.x"}`). Both follow gate state automatically. The dashboard's manual on/off toggle and a setup-wizard step to enter the plug's IP are not yet wired up.
+- The dust collector is controlled by a switchable Shelly plug (configured via `PUT /api/dustcollector` with `{"gen":2,"ip":"192.168.1.x"}`). It follows gate state automatically and can be toggled manually from the dashboard. A setup-wizard step to enter the plug's IP is not yet wired up (configure it via the API for now).
 - 240V tools cannot use Shelly plug-in outlets.

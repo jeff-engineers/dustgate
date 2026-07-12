@@ -125,26 +125,12 @@ accepting position commands.
 
 ---
 
-## 5. Relay Output
+## 5. Dust Collector
 
-Switches the dust collector on/off based on gate position.
-
-```
-Feather A4 ──── Relay module IN
-Feather 3V3 ─── Relay module VCC   (if relay module accepts 3.3V input)
-  OR
-External 5V ─── Relay module VCC   (if relay module requires 5V coil)
-GND         ─── Relay module GND
-
-Relay COM  ──── One leg of dust collector power
-Relay NO   ──── Other side of circuit
-```
-
-Most optoisolated relay modules trigger reliably at 3.3V input. Verify your
-module's datasheet. If the coil needs 5V, power VCC from the Feather's VBUS
-(USB 5V header pin) while keeping the control signal at 3.3V.
-
-Solid-state relays (SSR) also work directly — most accept 3–32V input.
+The dust collector is switched by a dedicated Shelly smart plug over WiFi — no
+local wiring to the Feather. See the main README for configuring the plug; it
+turns on automatically when a gate is open and can also be toggled from the
+dashboard.
 
 ---
 
@@ -225,15 +211,14 @@ Outlet-to-gate mappings are configured by the setup agent and stored in NVS.
 | Toggle switch             | D12          | CONTROL_ROTARY                       |
 | Status LED                | D13          | All (onboard LED)                    |
 | E-stop button (NC)        | A3           | All                                  |
-| Relay output              | A4           | All                                  |
 | Rotary switch (ladder)    | A0           | CONTROL_ROTARY (analog)              |
 | Detent switches (ladder)  | A1           | FEEDBACK_LIMIT_DETENT (analog)       |
 | TMC2209 UART TX           | TX (Serial1) | All (hardware UART)                  |
 | TMC2209 UART RX           | RX (Serial1) | All (hardware UART)                  |
 
-**Active config pins: 9** (D5, D6, D9, D10, D13, A3, A4, TX, RX)  
+**Active config pins: 8** (D5, D6, D9, D10, D13, A3, TX, RX)  
 Unused in current build: D11 (max endstop), D12 (toggle), A0 (rotary), A1 (detent)  
-Free for expansion: SCL, SDA, A2, A5
+Free for expansion: SCL, SDA, A2, A4, A5
 
 ---
 

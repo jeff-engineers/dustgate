@@ -10,6 +10,7 @@ import {
   SystemStatus,
 } from './api.service';
 import { HardwareProfileService } from './hardware-profile.service';
+import { getAccessCode } from './access-code';
 
 // ── In-browser mock state (mirrors tools/mock-api.js) ─────────────────────────
 
@@ -23,8 +24,20 @@ interface MockState {
   homeOnRight:    boolean;
   motorInverted:  boolean;
   numActiveStops: number;
+  dcOn:           boolean;
+  dcIp:           string | null;
   stops:          Array<{ index: number; mm: string | null }>;
   outlets:        OutletStatus[];
+}
+
+// Ping simulation (mirrors tools/mock-api.js): the first two distinct IPs
+// ever pinged (excluding the dust collector's own plug) simulate a tool that
+// hasn't spun up yet — gate 1's outlet reads 0W once then a steady load,
+// gate 2's outlet reads 0W twice then a random load — so the wizard's "no
+// load yet, try again" flow has something to demonstrate without hardware.
+interface PingSim {
+  order:  string[];
+  counts: Record<string, number>;
 }
 
 const NUM_STOPS = 16;
@@ -51,9 +64,27 @@ export class DemoApiService extends ApiService {
     homeOnRight:    false,
     motorInverted:  false,
     numActiveStops: 0,
+    dcOn:           false,
+    dcIp:           null,
     stops: Array.from({ length: NUM_STOPS + 1 }, (_, i) => ({ index: i, mm: null as string | null })),
     outlets:        [],
   };
+
+  private pingSim: PingSim = { order: [], counts: {} };
+
+  private simulatedPingPower(ip: string): number {
+    if (!(ip in this.pingSim.counts)) {
+      this.pingSim.counts[ip] = 0;
+      this.pingSim.order.push(ip);
+    }
+    this.pingSim.counts[ip]++;
+    const rank  = this.pingSim.order.indexOf(ip);
+    const count = this.pingSim.counts[ip];
+
+    if (rank === 0) return count === 1 ? 0 : 320;
+    if (rank === 1) return count <= 2 ? 0 : Math.round(150 + Math.random() * 250);
+    return Math.round(200 + Math.random() * 200);
+  }
 
   constructor(http: HttpClient, hardwareProfile: HardwareProfileService) {
     super(http, hardwareProfile);
@@ -92,9 +123,13 @@ export class DemoApiService extends ApiService {
       positionMM:     this.mock.positionMM,
       homed:          this.mock.homed,
       enabled:        true,
-      endstopHome:    this.mock.positionMM < 0.5,
+      // Only meaningful once homed — before that, position is unknown, so the
+      // sensor reads as untriggered rather than misleadingly "at home".
+      endstopHome:    this.mock.homed && this.mock.positionMM < 0.5,
       stops:          this.mock.stops,
       outlets:        this.mock.outlets,
+      dcConfigured:   true,   // demo simulates a dust collector plug so the toggle works
+      dcOn:           this.mock.dcOn,
     };
   }
 
@@ -124,9 +159,29 @@ export class DemoApiService extends ApiService {
     this.mock.positionSteps  = 0;
     this.mock.currentStop    = 0;
     this.mock.targetStop     = 0;
+    this.mock.dcOn           = false;   // home → dust collector off
     this.mock.stops[0]       = { index: 0, mm: '0.00' };
     this.pushStatus();
     return { ok: true };
+  }
+
+  /** Manual dashboard toggle — mirrors the firmware override. */
+  override setDustCollector(on: boolean): Promise<{ ok: boolean }> {
+    this.mock.dcOn = on;
+    this.pushStatus();
+    return Promise.resolve({ ok: true });
+  }
+
+  override configureDustCollector(generation: number, ip: string): Promise<{ ok: boolean }> {
+    this.mock.dcIp = ip;
+    this.pushStatus();
+    return Promise.resolve({ ok: true });
+  }
+
+  override deleteDustCollector(): Promise<{ ok: boolean }> {
+    this.mock.dcIp = null;
+    this.pushStatus();
+    return Promise.resolve({ ok: true });
   }
 
   override async moveToStop(stop: number): Promise<{ ok: boolean }> {
@@ -143,6 +198,7 @@ export class DemoApiService extends ApiService {
     this.mock.currentStop = stop;
     this.mock.positionMM  = toMM;
     this.mock.positionSteps = Math.round(toMM * 51.47);
+    this.mock.dcOn        = stop > 0;   // collector follows gate selection
     this.pushStatus();
     return { ok: true };
   }
@@ -187,7 +243,9 @@ export class DemoApiService extends ApiService {
     this.mock.positionMM     = 0;
     this.mock.positionSteps  = 0;
     this.mock.numActiveStops = 0;
+    this.mock.dcOn           = false;
     this.mock.outlets        = [];
+    this.pingSim             = { order: [], counts: {} };
     this.mock.stops = Array.from({ length: NUM_STOPS + 1 }, (_, i) => ({ index: i, mm: null as string | null }));
     if (this.deviceInfo) this.deviceInfo.numStops = 0;
     this.pushStatus();
@@ -218,10 +276,16 @@ export class DemoApiService extends ApiService {
     return { ok: true };
   }
 
-  override async pingOutlet(gen: number, ip: string): Promise<PingResult> {
-    // Always succeed in demo mode — simulates a reachable outlet at idle draw
+  override async pingOutlet(ip: string): Promise<PingResult> {
+    // Always succeed in demo mode. The dust collector's own plug follows its
+    // real on/off switch state; every other outlet runs through the ping
+    // simulation above. Real auto-detect (Gen 1 then Gen 2) happens
+    // device-side; there's no device to detect here, so we always report Gen 2.
     await this.delay(400);
-    return { reachable: true, powerW: 0.5 };
+    if (ip === this.mock.dcIp) {
+      return { reachable: true, powerW: this.mock.dcOn ? 380 : 0, generation: 2 };
+    }
+    return { reachable: true, powerW: this.simulatedPingPower(ip), generation: 2 };
   }
 
   override saveOutletConfig(): Promise<{ ok: boolean }> {
@@ -278,8 +342,10 @@ export class DemoApiService extends ApiService {
    * which has an equivalent /api/claude route.
    */
   override agentChat(body: unknown): Promise<unknown> {
+    const accessCode = getAccessCode();
+    const payload = accessCode ? { ...(body as Record<string, unknown>), accessCode } : body;
     return firstValueFrom(
-      this.http.post('/api/claude', body)
+      this.http.post('/api/claude', payload)
     );
   }
 

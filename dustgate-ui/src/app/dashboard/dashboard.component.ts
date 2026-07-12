@@ -101,112 +101,6 @@ interface ToolButton {
       gap: var(--gap);
     }
 
-    /* ── Section labels ──────────────────────────────────────── */
-    .section-label {
-      font-size: 11px;
-      font-weight: 600;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
-      color: var(--muted);
-      margin-top: 4px;
-    }
-
-    /* ── Base button ─────────────────────────────────────────── */
-    .tool-btn {
-      width: 100%;
-      min-height: var(--btn-h);
-      border-radius: var(--radius);
-      background: var(--surface);
-      border: 2px solid var(--border);
-      color: var(--text);
-      display: flex;
-      align-items: center;
-      padding: 0 20px;
-      gap: 14px;
-      transition: border-color 0.15s, background 0.15s;
-      text-align: left;
-    }
-
-    .tool-btn .btn-name {
-      font-size: 20px;
-      font-weight: 600;
-      flex: 1;
-    }
-
-    .tool-btn .btn-power {
-      font-size: 13px;
-      color: var(--muted);
-      white-space: nowrap;
-    }
-
-    .tool-btn .btn-dot {
-      width: 10px; height: 10px;
-      border-radius: 50%;
-      background: var(--border);
-      flex-shrink: 0;
-    }
-
-    /* Active (current gate) */
-    .tool-btn.current {
-      border-color: var(--accent);
-      background: color-mix(in srgb, var(--accent) 10%, var(--surface));
-    }
-    .tool-btn.current .btn-dot { background: var(--accent); }
-
-    /* Tool drawing power */
-    .tool-btn.tool-on .btn-dot { background: var(--success); }
-    .tool-btn.tool-on .btn-power { color: var(--success); }
-
-    /* Offline */
-    .tool-btn.offline { opacity: 0.45; }
-
-    /* HOME button */
-    .home-btn {
-      background: var(--surface);
-      border: 2px solid var(--border);
-      border-radius: var(--radius);
-      color: var(--text);
-      width: 100%;
-      min-height: var(--btn-h);
-      font-size: 20px;
-      font-weight: 700;
-      letter-spacing: 0.05em;
-    }
-    .home-btn.current {
-      border-color: var(--accent);
-      background: color-mix(in srgb, var(--accent) 10%, var(--surface));
-      color: var(--accent);
-    }
-
-    /* Dust collector toggle */
-    .dc-btn {
-      width: 100%;
-      min-height: var(--btn-h);
-      border-radius: var(--radius);
-      display: flex;
-      align-items: center;
-      padding: 0 20px;
-      gap: 14px;
-      font-size: 20px;
-      font-weight: 600;
-      border: 2px solid var(--border);
-      background: var(--surface);
-      color: var(--text);
-    }
-    .dc-btn .dc-icon { font-size: 22px; }
-    .dc-btn.dc-on {
-      border-color: var(--success);
-      background: color-mix(in srgb, var(--success) 10%, var(--surface));
-      color: var(--success);
-    }
-    .dc-btn .dc-status {
-      margin-left: auto;
-      font-size: 13px;
-      color: var(--muted);
-      font-weight: 400;
-    }
-    .dc-btn.dc-on .dc-status { color: var(--success); }
-
     /* Not-configured state */
     .setup-prompt {
       flex: 1;
@@ -242,7 +136,13 @@ interface ToolButton {
       border: 1px solid var(--border);
     }
 
-    /* Error / homing banner */
+    /* Error / homing / moving banner. This slot is always rendered — even
+       with nothing to show — so the state banner popping in and out (e.g.
+       every time a move starts or finishes) doesn't shift the layout below
+       it. Sized to the banner's own rendered height (line-height + padding). */
+    .banner-slot {
+      min-height: 44px;
+    }
     .banner {
       padding: 12px 16px;
       border-radius: var(--radius);
@@ -275,8 +175,13 @@ interface ToolButton {
         <span class="state-label">{{ stateLabel }}</span>
       </div>
       <div class="gear-btns">
+        <a class="gear-btn" href="https://github.com/jeff-engineers/dustgate" target="_blank" rel="noopener noreferrer" aria-label="View on GitHub">
+          <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+            <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/>
+          </svg>
+        </a>
         <button class="manual-btn" (click)="goManualSetup()" aria-label="Manual Setup">Manual Setup</button>
-        <button class="gear-btn" (click)="goSetup()" aria-label="AI Setup">⚙</button>
+        <button class="manual-btn" (click)="goSetup()" aria-label="Guided Setup">Guided Setup</button>
       </div>
     </div>
 
@@ -298,53 +203,26 @@ interface ToolButton {
       <!-- Main layout when configured -->
       <div class="scroll" *ngIf="toolButtons.length > 0">
 
-        <!-- Banners -->
-        <div class="banner warn"   *ngIf="status?.state === 'HOMING'">Homing in progress…</div>
-        <div class="banner warn"   *ngIf="status?.state === 'MOVING'">Moving to stop {{ status?.targetStop }}…</div>
-        <div class="banner danger" *ngIf="status?.state === 'ERROR'">
-          Error — type <code>home</code> in serial to recover, or use Setup.
+        <!-- Banners — fixed-height slots so a banner appearing/disappearing
+             (e.g. every time a move starts or finishes) doesn't shift the
+             rest of the page. -->
+        <div class="banner-slot">
+          <div class="banner" [class.warn]="stateBanner!.cls === 'warn'" [class.danger]="stateBanner!.cls === 'danger'" *ngIf="stateBanner as b">
+            {{ b.text }}
+          </div>
         </div>
-        <div class="banner warn"   *ngIf="status && !status.homed && status.state !== 'HOMING'">
-          Not homed — tap HOME first.
-        </div>
+        <div class="banner warn" *ngIf="notHomedBanner">Not homed — tap HOME first.</div>
 
-        <!-- Manifold visualizer -->
+        <!-- Manifold visualizer — the interactive control surface: tap a
+             gate to move to it, tap home to home, tap the dust collector to
+             toggle it. (Formerly a separate row of buttons below this — see
+             ManualControlsComponent if that needs to come back.) -->
         <app-manifold-visualizer
           [dcOn]="dcOn"
+          [dcConfigured]="dcConfigured"
+          [interactive]="true"
           [homeOnRight]="api.deviceInfo?.homeOnRight ?? false">
         </app-manifold-visualizer>
-
-        <!-- HOME -->
-        <span class="section-label">Position</span>
-        <button class="home-btn"
-                [class.current]="status?.currentStop === 0"
-                (click)="sendHome()">
-          HOME
-        </button>
-
-        <!-- Tool buttons -->
-        <span class="section-label" *ngIf="toolButtons.length > 0">Tools</span>
-        <button *ngFor="let t of toolButtons"
-                class="tool-btn"
-                [class.current]="status?.currentStop === t.stop"
-                [class.tool-on]="t.active"
-                [class.offline]="!t.reachable"
-                (click)="sendMove(t.stop)">
-          <span class="btn-dot"></span>
-          <span class="btn-name">{{ t.name }}</span>
-          <span class="btn-power" *ngIf="t.reachable">{{ t.powerW | number:'1.0-0' }} W</span>
-          <span class="btn-power" *ngIf="!t.reachable">offline</span>
-        </button>
-
-        <!-- Dust collector dummy -->
-        <span class="section-label">Dust Collector</span>
-        <button class="dc-btn"
-                [class.dc-on]="dcOn"
-                (click)="toggleDc()">
-          <span class="dc-icon">{{ dcOn ? '💨' : '🌀' }}</span>
-          <span>Dust Collector</span>
-          <span class="dc-status">{{ dcOn ? 'ON' : 'OFF' }}</span>
-        </button>
 
       </div>
     </ng-container>
@@ -355,7 +233,6 @@ export class DashboardComponent implements OnInit, OnDestroy {
   status: SystemStatus | null = null;
   connected = false;
   ready = false;
-  dcOn = false;  // dummy state — no API call yet
 
   toolButtons: ToolButton[] = [];
 
@@ -388,6 +265,33 @@ export class DashboardComponent implements OnInit, OnDestroy {
     return s;
   }
 
+  /**
+   * The state-driven banner (homing / moving / error), if any. 'state' only
+   * ever holds one value at a time so these are mutually exclusive — a single
+   * getter lets the template reserve one fixed-height slot for whichever is
+   * active instead of stacking/unstacking separate *ngIf elements, which is
+   * what caused the page to jump every time a move started or finished.
+   */
+  get stateBanner(): { text: string; cls: 'warn' | 'danger' } | null {
+    switch (this.status?.state) {
+      case 'HOMING': return { text: 'Homing in progress…', cls: 'warn' };
+      case 'MOVING': return { text: `Moving to stop ${this.status?.targetStop}…`, cls: 'warn' };
+      case 'ERROR':  return { text: 'Error — type home in serial to recover, or use Setup.', cls: 'danger' };
+      default:       return null;
+    }
+  }
+
+  /** Independent of stateBanner — can be true at the same time as e.g. ERROR. */
+  get notHomedBanner(): boolean {
+    return !!this.status && !this.status.homed && this.status.state !== 'HOMING';
+  }
+
+  /** Live dust-collector switch state from the device status. */
+  get dcOn(): boolean { return this.status?.dcOn ?? false; }
+
+  /** True once a dust-collector plug is assigned (toggle is otherwise inert). */
+  get dcConfigured(): boolean { return this.status?.dcConfigured ?? false; }
+
   private buildToolButtons(status: SystemStatus | null) {
     if (!status?.outlets?.length) {
       this.toolButtons = [];
@@ -406,10 +310,10 @@ export class DashboardComponent implements OnInit, OnDestroy {
   }
 
   // ── Actions ──────────────────────────────────────────────────────────────────
+  // Motion / dust-collector commands now live on the interactive visualizer
+  // itself (ManifoldVisualizerComponent.onGateClick / onDcClick) since it's
+  // the control surface. Only navigation stays here.
 
-  sendHome()          { this.api.home().catch(console.error); }
-  sendMove(stop: number) { this.api.moveToStop(stop).catch(console.error); }
-  toggleDc()          { this.dcOn = !this.dcOn; } // dummy — no API yet
   goSetup()           { this.router.navigate(['/setup']); }
   goManualSetup()     { this.router.navigate(['/setup/manual']); }
 }

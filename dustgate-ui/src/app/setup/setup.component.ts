@@ -5,6 +5,7 @@ import { CommonModule } from '@angular/common';
 import { ClaudeService, ChatMessage, TurnEvent, ToolCall } from '../services/claude.service';
 import { ApiService } from '../services/api.service';
 import { ManifoldVisualizerComponent } from '../visualizer/manifold-visualizer.component';
+import { getAccessCode, setAccessCode } from '../services/access-code';
 
 interface DisplayMessage {
   role: 'user' | 'assistant' | 'tool';
@@ -229,12 +230,42 @@ interface DisplayMessage {
       background: var(--border);
       color: var(--muted);
     }
+
+    /* ── Setup-complete banner ────────────────────────────────── */
+    .complete-banner {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+      padding: 16px;
+      margin: 4px 16px 0;
+      background: var(--surface);
+      border: 1px solid var(--accent);
+      border-radius: 14px;
+      text-align: center;
+    }
+    .complete-banner .msg {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text);
+    }
+    .complete-banner .dashboard-link {
+      background: var(--accent);
+      color: #111;
+      font-size: 15px;
+      font-weight: 700;
+      border: none;
+      border-radius: 12px;
+      padding: 12px 24px;
+      width: 100%;
+    }
+    .complete-banner .dashboard-link:active { opacity: 0.8; }
   `],
   template: `
     <!-- Header -->
     <div class="header">
       <button class="back-btn" (click)="goBack()" aria-label="Back">←</button>
-      <h1>Setup Assistant</h1>
+      <h1 (click)="onTitleTap()">Setup Assistant</h1>
 
       <!-- Normal state: show reset button -->
       <button class="reset-btn"
@@ -252,7 +283,7 @@ interface DisplayMessage {
 
     <!-- Visualizer strip -->
     <div class="viz-section">
-      <app-manifold-visualizer [homeOnRight]="api.deviceInfo?.homeOnRight ?? false"></app-manifold-visualizer>
+      <app-manifold-visualizer [homeOnRight]="api.deviceInfo?.homeOnRight ?? false" [liveTravel]="false"></app-manifold-visualizer>
     </div>
 
     <!-- Messages -->
@@ -291,6 +322,12 @@ interface DisplayMessage {
 
     </div>
 
+    <!-- Setup-complete banner — appears once save_config succeeds -->
+    <div class="complete-banner" *ngIf="setupComplete">
+      <span class="msg">✅ Setup complete!</span>
+      <button class="dashboard-link" (click)="goBack()">Go to dashboard</button>
+    </div>
+
     <!-- Input -->
     <div class="input-area">
       <div class="input-wrap">
@@ -322,6 +359,8 @@ export class SetupComponent implements OnInit, AfterViewChecked {
   inputText = '';
   busy = false;
   confirmingReset = false;
+  /** True once save_config has succeeded — shows a "Go to dashboard" link instead of relying on the header back arrow. */
+  setupComplete = false;
 
   /** Full Anthropic message history (kept in memory for this session). */
   private history: ChatMessage[] = [];
@@ -343,16 +382,38 @@ export class SetupComponent implements OnInit, AfterViewChecked {
 
   goBack() { this.router.navigate(['/']); }
 
+  // Tapping the title 5x within 2s opens a prompt for an access code (demo
+  // mode only) — an unobtrusive way to raise/bypass the shared rate limit
+  // for interviews without a visible settings UI.
+  private titleTapCount = 0;
+  private titleTapTimer: ReturnType<typeof setTimeout> | null = null;
+
+  onTitleTap() {
+    this.titleTapCount++;
+    if (this.titleTapTimer) clearTimeout(this.titleTapTimer);
+    this.titleTapTimer = setTimeout(() => { this.titleTapCount = 0; }, 2000);
+
+    if (this.titleTapCount >= 5) {
+      this.titleTapCount = 0;
+      const current = getAccessCode() ?? '';
+      const entered = window.prompt('Access code (blank to clear):', current);
+      if (entered !== null) {
+        setAccessCode(entered.trim() || null);
+      }
+    }
+  }
+
   async doReset() {
     this.confirmingReset = false;
     try {
       await this.api.resetSetup();
       await this.api.refreshInfo();  // sync deviceInfo.numStops → visualizer shows placeholder
     } catch { /* device may not respond — optimistic numStops=0 still collapses the viz */ }
-    this.display   = [];
-    this.history   = [];
-    this.inputText = '';
-    this.busy      = false;
+    this.display        = [];
+    this.history        = [];
+    this.inputText      = '';
+    this.busy           = false;
+    this.setupComplete  = false;
   }
 
   onEnter(e: Event) {
@@ -429,6 +490,9 @@ export class SetupComponent implements OnInit, AfterViewChecked {
               m => m.role === 'tool' && m.toolName === event.tool!.name && m.toolOk === undefined
             );
             if (idx >= 0) this.display[idx] = this.toolDisplay(event.tool!, true);
+            if (event.tool!.name === 'save_config' && event.tool!.error === undefined) {
+              this.setupComplete = true;
+            }
             break;
           }
 
@@ -479,6 +543,8 @@ export class SetupComponent implements OnInit, AfterViewChecked {
       case 'set_home_side':      return `Home side: ${input['home_on_right'] ? 'right' : 'left'}`;
       case 'set_motor_direction':return `Motor direction: ${input['invert'] ? 'inverted' : 'normal'}`;
       case 'set_num_gates':      return `Gates: ${input['num_gates']}`;
+      case 'configure_dust_collector': return `Configuring dust collector at ${input['ip']}`;
+      case 'switch_dust_collector':    return `Switching dust collector ${input['on'] ? 'on' : 'off'}`;
       default:                   return name;
     }
   }

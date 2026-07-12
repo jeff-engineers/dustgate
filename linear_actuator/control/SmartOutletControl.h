@@ -63,6 +63,10 @@ public:
     bool dcConfigured() const { return _dustCollector != nullptr; }
     bool dcOn();                    // thread-safe read for status JSON
 
+    // Manually force the dust collector on/off from the dashboard. Holds until
+    // the next automatic gate change (tool on/off), then automation resumes.
+    void setDcManual(bool on);
+
     // -------------------------------------------------------------------------
     // Manual override — bypasses outlet-driven gate selection until the next
     // time any outlet crosses its threshold (tool turned on).
@@ -79,6 +83,8 @@ private:
     SmartOutlet*      _dustCollector;
     bool              _dcOn;              // last commanded state (protected by _mutex)
     bool              _dcSynced;          // false = force a switch command on next reconcile
+    bool              _dcManualOverride;  // true = follow _dcManualState, not gate state
+    bool              _dcManualState;     // forced on/off while override active
 
     // Shared state between poll task and main loop — protected by _mutex
     int               _requestedStop;
