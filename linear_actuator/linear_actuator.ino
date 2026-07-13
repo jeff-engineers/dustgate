@@ -40,6 +40,10 @@
 // =============================================================================
 float g_stopPositionsMM[NUM_STOPS + 1];
 
+// Highest stop index actually trained/saved — see MotionMath.h for why this
+// is tracked separately from g_stopPositionsMM's raw values.
+int g_numTrainedStops = 0;
+
 // Runtime gate count — set by setup wizard via set_num_gates API, stored in NVS.
 // MUST remain <= NUM_STOPS; array bounds are determined at compile time.
 int g_numActiveStops = 0;   // 0 = unconfigured
@@ -60,12 +64,14 @@ void loadCalibration() {
         // Restore active gate count from cal (may be overridden by NVS below in setup)
         if (cal.numStops > 0 && (int)cal.numStops <= NUM_STOPS)
             g_numActiveStops = (int)cal.numStops;
+        g_numTrainedStops = (int)cal.numStops;
         DEBUG_PRINTLN(F("Loaded calibration from EEPROM."));
         CalibrationStore::print(cal);
     } else {
         // No calibration yet — zero all positions. Setup wizard will call
         // save_stop for each gate to populate them via the HTTP API.
         memset(g_stopPositionsMM, 0, sizeof(g_stopPositionsMM));
+        g_numTrainedStops = 0;
         DEBUG_PRINTLN(F("No calibration data — awaiting setup wizard."));
     }
 }
@@ -104,19 +110,11 @@ StepperTMC2209Driver motor;
 
 // =============================================================================
 // E-stop
-// Volatile flag set by ISR; checked at the top of every loop() iteration.
-// ISR also directly de-energizes the TMC2209 EN pin for an immediate hardware
-// fast-path (no software latency). IRAM_ATTR places ISR in IRAM on ESP32 for
-// reliable execution regardless of flash cache state.
+// Software-only: set via the 'estop' serial command or HTTP API. No physical
+// e-stop button — this hardware isn't powerful enough to need one.
 // =============================================================================
 volatile bool g_eStopTriggered = false;
 bool          g_hardwareFault  = false; // set when begin() fails — not clearable without reset
-
-void IRAM_ATTR eStopISR() {
-    // Fast-path: cut motor enable immediately.
-    // State machine transition uses debounced polling in loop() to avoid false triggers.
-    digitalWrite(PIN_TMC_EN, HIGH);
-}
 
 // =============================================================================
 // State machine
@@ -201,11 +199,6 @@ void setup() {
         return;
     }
 
-    // E-stop: hardware interrupt disabled — use 'stop' serial command instead.
-    // Re-enable by uncommenting the two lines below once switch wiring is verified.
-    // pinMode(PIN_ESTOP, INPUT_PULLUP);
-    // attachInterrupt(digitalPinToInterrupt(PIN_ESTOP), eStopISR, RISING);
-
     DEBUG_PRINTLN(F("Init OK. Type 'enable' to home and start."));
     currentState = STATE_IDLE;
 
@@ -228,7 +221,7 @@ void loop() {
 
     motor.update();
 
-    // -- Hardware e-stop: highest priority ------------------------------------
+    // -- E-stop (software-latched, no physical button): highest priority ------
     if (g_eStopTriggered) {
         motor.stop();
         motor.enable(false);
@@ -267,15 +260,12 @@ void loop() {
     if (_SC.consumeHomeRequest() && currentState != STATE_HOMING) {
         if (g_hardwareFault) {
             DEBUG_PRINTLN(F("[ERROR] Hardware fault — fix wiring and reset before homing."));
-        } else if (digitalRead(PIN_ESTOP) == LOW) {
-            DEBUG_PRINTLN(F("[ESTOP] Cleared. Re-homing..."));
+        } else {
             g_eStopTriggered = false;
             g_notHomedWarnShown = false;
             motor.enable(true);
             currentState = STATE_HOMING;
             startHoming();
-        } else {
-            DEBUG_PRINTLN(F("[ESTOP] Hardware button still active — release it first."));
         }
     }
 
@@ -395,6 +385,13 @@ void loop() {
         CalibrationStore::erase();
         loadCalibration();
         g_numActiveStops = 0;  // return to unconfigured — setup wizard can restart
+#ifdef CONTROL_SMART_OUTLET
+        // "Start Over" in the setup wizard means a full reset — without this,
+        // the previous run's tool-to-gate outlet mappings (names, IPs,
+        // thresholds) silently survived in NVS and kept driving gate
+        // selection even after the wizard restarted from gate-count 0.
+        control.clearAllOutlets();
+#endif
         DEBUG_PRINTLN(F("[API] Calibration cleared. Gate count reset to 0."));
     }
 
@@ -420,6 +417,8 @@ void loop() {
             cal.stopMM[stopIdx] = currentMM;
             if (stopIdx > (int)cal.numStops) cal.numStops = (uint8_t)stopIdx;
             CalibrationStore::save(cal);
+
+            if (stopIdx > g_numTrainedStops) g_numTrainedStops = stopIdx;
 
             // Keep runtime count in sync (expand; never shrink during a session)
             if (stopIdx > g_numActiveStops) g_numActiveStops = stopIdx;
@@ -599,10 +598,9 @@ void loop() {
             motor.enable(false);
             digitalWrite(PIN_LED, (millis() / 100) % 2); // rapid blink
 
-            // Physical recovery: e-stop released + toggle switch cycled
+            // Physical recovery: toggle switch cycled (no hardware e-stop to release)
 #ifndef CONTROL_SERIAL_DEBUG
-            if (digitalRead(PIN_ESTOP) == LOW &&
-                !g_eStopTriggered &&
+            if (!g_eStopTriggered &&
                 control.isEnabled()) {
                 motor.enable(true);
                 currentState = STATE_HOMING;

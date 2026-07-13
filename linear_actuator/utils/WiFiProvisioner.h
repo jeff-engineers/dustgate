@@ -21,6 +21,7 @@
 #include <WiFi.h>
 #include <WebServer.h>
 #include <Preferences.h>
+#include <ESPmDNS.h>
 #include "../config.h"
 // AgentConfig.h provides NVS constants, getAnthropicKey(), setAnthropicKey(),
 // and reset() without including <WebServer.h> — safe alongside ESPAsyncWebServer.
@@ -159,9 +160,44 @@ inline void _runPortal() {
     server.onNotFound(redirectToRoot);
     server.begin();
 
-    // Block here — device reboots when credentials are submitted
+    // Block here — device reboots when credentials are submitted, either via
+    // the web form above or a "provision {...}" command sent over serial.
+    // Without this serial listener, a device sitting here (e.g. right after
+    // a fresh erase, before WiFi has ever been configured) could never be
+    // reached by the "provision" command at all — this loop never returns
+    // control to the main setup()/loop(), where SerialDebugControl normally
+    // handles it.
+    String serialLine;
     while (true) {
         server.handleClient();
+
+        while (Serial.available()) {
+            char c = Serial.read();
+            if (c == '\n') {
+                serialLine.trim();
+                if (serialLine.startsWith("provision ")) {
+                    String json = serialLine.substring(10);
+                    json.trim();
+                    String errMsg;
+                    bool wifiSet = applyProvisionJson(json, &errMsg);
+                    if (errMsg.length() > 0) {
+                        Serial.print(F("[PROVISION] JSON parse error: "));
+                        Serial.println(errMsg);
+                    } else if (wifiSet) {
+                        Serial.println(F("OK provision"));
+                        Serial.println(F("[PROVISION] WiFi saved — rebooting to connect..."));
+                        delay(300);
+                        ESP.restart();
+                    } else {
+                        Serial.println(F("OK provision"));
+                    }
+                }
+                serialLine = "";
+            } else if (c != '\r') {
+                serialLine += c;
+            }
+        }
+
         delay(2);
     }
 }
@@ -215,9 +251,23 @@ inline bool begin() {
 
     DEBUG_PRINT(F("[WiFi] Connected. IP: "));
     Serial.println(WiFi.localIP().toString());
+
+    String hostname = getHostname();
+    if (MDNS.begin(hostname.c_str())) {
+        MDNS.addService("http", "tcp", 80);
+        DEBUG_PRINT(F("[WiFi] mDNS hostname: "));
+        Serial.print(hostname);
+        Serial.println(F(".local"));
+    } else {
+        DEBUG_PRINTLN(F("[WiFi] mDNS failed to start — use the IP address below instead."));
+    }
+
     DEBUG_PRINT(F("[WiFi] Web UI:       http://"));
-    Serial.println(WiFi.localIP().toString());
-    DEBUG_PRINTLN(F("[WiFi] Setup assistant available at  http://<IP>/#/setup"));
+    Serial.print(hostname);
+    Serial.print(F(".local  (or http://"));
+    Serial.print(WiFi.localIP().toString());
+    Serial.println(F(")"));
+    DEBUG_PRINTLN(F("[WiFi] Setup assistant available at  http://<host-or-ip>/#/setup"));
     return true;
 }
 

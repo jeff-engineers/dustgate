@@ -6,10 +6,26 @@ import { ApiService } from './services/api.service';
 import { DemoApiService } from './services/demo-api.service';
 import { setAccessCode } from './services/access-code';
 
-// Demo mode: active on any non-localhost host (i.e. the Vercel deployment),
-// or when ?demo=true is present in the URL (for local dev testing).
+// Demo mode: active on the public Vercel deployment, or when ?demo=true is
+// present (for local dev testing). NOT active for any way of reaching a real
+// device — localhost, its mDNS hostname (*.local), or a LAN IP — since the
+// UI is served directly from the device itself and real users reach it by
+// exactly those addresses. A plain "hostname !== localhost" check would
+// (and previously did) misclassify every real device as the demo, silently
+// swapping in the fully-simulated DemoApiService instead of talking to the
+// actual firmware — homing/moves would appear to succeed with zero physical
+// motion.
+function isLocalNetworkHost(hostname: string): boolean {
+  if (hostname === 'localhost' || hostname === '127.0.0.1') return true;
+  if (hostname.endsWith('.local')) return true; // mDNS, e.g. dustgate.local
+  if (/^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(hostname)) return true;
+  if (/^192\.168\.\d{1,3}\.\d{1,3}$/.test(hostname)) return true;
+  if (/^172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}$/.test(hostname)) return true;
+  return false;
+}
+
 const isDemo =
-  !['localhost', '127.0.0.1'].includes(window.location.hostname) ||
+  !isLocalNetworkHost(window.location.hostname) ||
   new URLSearchParams(window.location.search).has('demo');
 
 // Pick up ?code=... once (e.g. a link shared with an interviewer) and persist

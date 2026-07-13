@@ -21,7 +21,13 @@ export interface ToolCall {
   error?: string;
 }
 
-/** Emitted during a turn so the UI can show progress. */
+/**
+ * Emitted during a turn so the UI can show progress.
+ *
+ * 'text' now carries an incremental DELTA, not a whole block — with
+ * streaming, a single sentence arrives as many small 'text' events rather
+ * than one big one. Consumers should append, not replace.
+ */
 export interface TurnEvent {
   type: 'text' | 'tool_start' | 'tool_done' | 'error';
   text?: string;
@@ -184,7 +190,13 @@ const TOOLS = [
       required: ['size']
     }
   }
-];
+] as Array<Record<string, unknown>>;
+
+// A cache_control breakpoint on the LAST tool caches this entire tools array
+// (Anthropic caches everything up to and including the marked block). TOOLS
+// never changes at runtime, so every turn after the first reuses the cached
+// copy instead of re-processing ~1.5KB of schema — cheaper and faster per turn.
+TOOLS[TOOLS.length - 1] = { ...TOOLS[TOOLS.length - 1], cache_control: { type: 'ephemeral' } };
 
 const SYSTEM_PROMPT = `You are DustGate Setup Assistant, helping the user configure a motorized blast gate system for dust collection in a woodworking shop.
 
@@ -214,7 +226,19 @@ Your job is to walk the user through setup conversationally:
 
 Be friendly and concise. One thing at a time. If the user asks to reconfigure or change something mid-setup, accommodate them naturally. If a ping fails, suggest checking the outlet IP and trying again.`;
 
+// Same idea as the TOOLS cache_control above: this prompt is ~1.5KB and
+// identical on every turn of a setup session, so mark it cacheable rather
+// than paying full input-token price for it on every single API call.
+const SYSTEM_BLOCKS = [
+  { type: 'text', text: SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } }
+];
+
 // ── Service ────────────────────────────────────────────────────────────────────
+
+// Kept comfortably below api/claude.ts's server-side MAX_MESSAGES (60) so we
+// trim proactively and the conversation degrades gracefully, instead of the
+// server hard-rejecting the request once a long setup session crosses 60.
+const MAX_HISTORY_MESSAGES = 40;
 
 @Injectable({ providedIn: 'root' })
 export class ClaudeService {
@@ -237,52 +261,57 @@ export class ClaudeService {
     // Append user message
     history.push({ role: 'user', content: userText });
 
+    this.trimHistory(history);
+
     // Run the agentic loop
     let continueLoop = true;
     while (continueLoop) {
       const body = {
+        // Sonnet, not Haiku or Opus: this loop drives real hardware through
+        // multi-step tool calls (home, jog, configure_outlet, ...), so
+        // tool-call reliability matters more than shaving cost with Haiku,
+        // while Opus's extra cost isn't justified for this task's reasoning
+        // demands. Must match ALLOWED_MODELS in api/claude.ts, which rejects
+        // any other model server-side.
         model:      'claude-sonnet-4-6',
         max_tokens: 1024,
-        system:     SYSTEM_PROMPT,
+        system:     SYSTEM_BLOCKS,
         tools:      TOOLS,
         messages:   history
       };
 
-      let response: Record<string, unknown>;
+      let response: Response;
       try {
-        response = await this.api.agentChat(body) as Record<string, unknown>;
+        response = await this.api.agentChat(body);
       } catch (e: unknown) {
-        // Angular HttpClient throws HttpErrorResponse, not a standard Error.
-        // Extract the most useful message available.
-        let msg: string;
-        if (e && typeof e === 'object' && 'error' in e) {
-          const httpErr = e as { status?: number; error?: unknown };
-          const body = httpErr.error;
-          const detail = body && typeof body === 'object' && 'error' in body
-            ? (body as { error: string }).error
-            : JSON.stringify(body);
-          msg = `HTTP ${httpErr.status ?? '?'}: ${detail}`;
-        } else {
-          msg = e instanceof Error ? e.message : String(e);
-        }
-        onEvent({ type: 'error', text: `API error: ${msg}` });
+        onEvent({ type: 'error', text: `API error: ${e instanceof Error ? e.message : String(e)}` });
         return;
       }
 
-      const stopReason = response['stop_reason'] as string;
-      const content    = response['content']    as ContentBlock[];
+      if (!response.ok) {
+        let detail = `HTTP ${response.status}`;
+        try {
+          const errBody = await response.json() as Record<string, unknown>;
+          if (typeof errBody['error'] === 'string') detail += `: ${errBody['error']}`;
+        } catch {
+          // body wasn't JSON — stick with the bare status
+        }
+        onEvent({ type: 'error', text: `API error: ${detail}` });
+        return;
+      }
+
+      // The demo deployment (api/claude.ts) always streams SSE; the real
+      // ESP32 proxy and local mock server return one buffered JSON object.
+      // Content-Type tells us which we got, so one call site handles both.
+      const isStreaming = (response.headers.get('content-type') ?? '').includes('text/event-stream');
+      const { content, stopReason } = isStreaming
+        ? await this.readStreamedResponse(response, onEvent)
+        : await this.readBufferedResponse(response, onEvent);
 
       // Append assistant message to history
       history.push({ role: 'assistant', content });
 
-      // Process content blocks
       const toolUseBlocks = content.filter(b => b['type'] === 'tool_use');
-      const textBlocks    = content.filter(b => b['type'] === 'text');
-
-      // Emit any text first
-      for (const block of textBlocks) {
-        onEvent({ type: 'text', text: block['text'] as string });
-      }
 
       if (stopReason === 'tool_use' && toolUseBlocks.length > 0) {
         // Execute each tool call and collect results
@@ -326,6 +355,213 @@ export class ClaudeService {
     }
   }
 
+  // ── History trimming ──────────────────────────────────────────────────────────
+
+  /**
+   * Drops the oldest complete "rounds" once history grows past
+   * MAX_HISTORY_MESSAGES, so a long setup session keeps costing roughly the
+   * same per turn instead of growing forever.
+   *
+   * A round is one human-typed message plus everything that followed it
+   * (assistant text, tool_use, tool_result) up to the next human message.
+   * Anthropic requires each tool_use to be immediately followed by its
+   * tool_result, so we can only ever cut on round boundaries — never in the
+   * middle of one — or the next request would be malformed.
+   *
+   * Trimmed-away facts (gate count, port size, etc.) aren't lost from the
+   * device itself — they're persisted via tool calls — so the model can
+   * re-discover them with get_status if it needs to.
+   */
+  private trimHistory(history: ChatMessage[]): void {
+    const isRoundStart = (m: ChatMessage) => m.role === 'user' && typeof m.content === 'string';
+
+    while (history.length > MAX_HISTORY_MESSAGES) {
+      // Find the start of the second round — everything before it is the
+      // oldest round in full, safe to drop as one unit.
+      const secondRoundStart = history.findIndex((m, i) => i > 0 && isRoundStart(m));
+      if (secondRoundStart <= 0) break; // only one round left; nothing safe to cut
+      history.splice(0, secondRoundStart);
+    }
+  }
+
+  // ── Response readers ──────────────────────────────────────────────────────────
+
+  /** Real ESP32 proxy / local mock: one buffered JSON /v1/messages response. */
+  private async readBufferedResponse(
+    response: Response,
+    onEvent: (e: TurnEvent) => void
+  ): Promise<{ content: ContentBlock[]; stopReason: string }> {
+    const data = await response.json() as Record<string, unknown>;
+    const content = (data['content'] as ContentBlock[]) ?? [];
+    // No true streaming here, but emitting through the same 'text' event
+    // keeps the UI code path identical whether or not the deployment streams.
+    for (const block of content) {
+      if (block['type'] === 'text') onEvent({ type: 'text', text: block['text'] as string });
+    }
+    return { content, stopReason: data['stop_reason'] as string };
+  }
+
+  /**
+   * Demo deployment (api/claude.ts): parses Anthropic's SSE stream directly,
+   * emitting 'text' as each delta arrives and reassembling tool_use blocks
+   * from their incremental input_json_delta chunks. Returns the same
+   * {content, stopReason} shape as the buffered path so the caller doesn't
+   * need to know which one ran.
+   */
+  private async readStreamedResponse(
+    response: Response,
+    onEvent: (e: TurnEvent) => void
+  ): Promise<{ content: ContentBlock[]; stopReason: string }> {
+    const blocks: ContentBlock[] = [];
+    const partialJson: Record<number, string> = {};
+    let stopReason = 'end_turn';
+
+    for await (const evt of this.parseSSE(response)) {
+      const type = evt['type'] as string;
+
+      switch (type) {
+        case 'content_block_start': {
+          const index = evt['index'] as number;
+          const cb = evt['content_block'] as ContentBlock;
+          blocks[index] = cb['type'] === 'tool_use'
+            ? { type: 'tool_use', id: cb['id'], name: cb['name'], input: {} }
+            : { type: 'text', text: '' };
+          if (cb['type'] === 'tool_use') partialJson[index] = '';
+          break;
+        }
+
+        case 'content_block_delta': {
+          const index = evt['index'] as number;
+          const delta = evt['delta'] as Record<string, unknown>;
+          if (delta['type'] === 'text_delta') {
+            const chunk = delta['text'] as string;
+            blocks[index]['text'] = (blocks[index]['text'] as string) + chunk;
+            onEvent({ type: 'text', text: chunk });
+          } else if (delta['type'] === 'input_json_delta') {
+            partialJson[index] = (partialJson[index] ?? '') + (delta['partial_json'] as string);
+          }
+          break;
+        }
+
+        case 'content_block_stop': {
+          const index = evt['index'] as number;
+          if (blocks[index]?.['type'] === 'tool_use') {
+            try {
+              blocks[index]['input'] = partialJson[index] ? JSON.parse(partialJson[index]) : {};
+            } catch {
+              blocks[index]['input'] = {};
+            }
+          }
+          break;
+        }
+
+        case 'message_delta': {
+          const delta = evt['delta'] as Record<string, unknown> | undefined;
+          if (delta && typeof delta['stop_reason'] === 'string') stopReason = delta['stop_reason'];
+          break;
+        }
+
+        case 'error': {
+          const err = evt['error'] as Record<string, unknown> | undefined;
+          throw new Error(typeof err?.['message'] === 'string' ? err['message'] : 'Stream error');
+        }
+
+        // message_start, ping, message_stop — nothing to reconstruct
+        default:
+          break;
+      }
+    }
+
+    return { content: blocks, stopReason };
+  }
+
+  /** Decodes an SSE byte stream into parsed `data:` JSON payloads, one per event. */
+  private async *parseSSE(response: Response): AsyncGenerator<Record<string, unknown>> {
+    const reader = response.body?.getReader();
+    if (!reader) return;
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      let boundary: number;
+      while ((boundary = buffer.indexOf('\n\n')) !== -1) {
+        const rawEvent = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + 2);
+
+        const dataStr = rawEvent
+          .split('\n')
+          .filter(line => line.startsWith('data:'))
+          .map(line => line.slice(5).trim())
+          .join('');
+        if (!dataStr) continue;
+
+        try {
+          yield JSON.parse(dataStr);
+        } catch {
+          // Ignore a malformed/partial event rather than aborting the turn.
+        }
+      }
+    }
+  }
+
+  // ── Tool input validation ────────────────────────────────────────────────────
+  //
+  // Claude's tool arguments are model output, not trusted input — a
+  // hallucinated or manipulated value here goes straight to real hardware
+  // (a motor, a mains-voltage smart outlet) with no human in the loop for
+  // most calls. Every case below validates before calling the API so a bad
+  // value throws (which becomes a tool_result error Claude can see and
+  // correct) instead of reaching the device.
+
+  /**
+   * Rejects anything that isn't a syntactically valid, private-range IPv4
+   * address. Outlet IPs come from the model and are used by the ESP32 to
+   * make outbound HTTP requests on the local network — without this check,
+   * a manipulated or hallucinated IP could point the device at a public host
+   * or a sensitive local address (e.g. a cloud metadata endpoint) instead of
+   * a Shelly outlet on the user's own LAN.
+   */
+  private assertPrivateIp(value: unknown): string {
+    if (typeof value !== 'string') throw new Error('ip must be a string');
+    const octets = value.split('.');
+    if (octets.length !== 4 || !octets.every(o => /^\d{1,3}$/.test(o) && Number(o) <= 255)) {
+      throw new Error(`Invalid IPv4 address: ${value}`);
+    }
+    const [a, b] = octets.map(Number);
+    const isPrivate =
+      a === 10 ||                          // 10.0.0.0/8
+      (a === 172 && b >= 16 && b <= 31) || // 172.16.0.0/12
+      (a === 192 && b === 168) ||          // 192.168.0.0/16
+      (a === 169 && b === 254);            // 169.254.0.0/16 (link-local)
+    if (!isPrivate) throw new Error(`IP must be on the local network: ${value}`);
+    return value;
+  }
+
+  private assertIntInRange(value: unknown, min: number, max: number, label: string): number {
+    if (typeof value !== 'number' || !Number.isInteger(value) || value < min || value > max) {
+      throw new Error(`${label} must be an integer between ${min} and ${max}`);
+    }
+    return value;
+  }
+
+  private assertNumberInRange(value: unknown, min: number, max: number, label: string): number {
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < min || value > max) {
+      throw new Error(`${label} must be a number between ${min} and ${max}`);
+    }
+    return value;
+  }
+
+  private assertNonEmptyString(value: unknown, label: string): string {
+    if (typeof value !== 'string' || value.trim().length === 0) {
+      throw new Error(`${label} must be a non-empty string`);
+    }
+    return value;
+  }
+
   // ── Tool executor ─────────────────────────────────────────────────────────────
 
   private async executeTool(name: string, input: Record<string, unknown>): Promise<unknown> {
@@ -338,52 +574,62 @@ export class ClaudeService {
         return this.api.home();
 
       case 'move_to_stop':
-        return this.api.moveToStop(input['stop'] as number);
+        return this.api.moveToStop(this.assertIntInRange(input['stop'], 0, 16, 'stop'));
 
       case 'jog':
-        return this.api.jog(input['mm'] as number);
+        // Generous but bounded: a single jog shouldn't be able to run the
+        // actuator the length of a room from one tool call.
+        return this.api.jog(this.assertNumberInRange(input['mm'], -300, 300, 'mm'));
 
       case 'configure_outlet':
         return this.api.configureOutlet({
-          slot:        input['slot']        as number,
-          generation:  input['generation']  as number,
-          ip:          input['ip']          as string,
-          name:        input['name']        as string,
-          stop:        input['stop']        as number,
-          threshold_w: input['threshold_w'] as number | undefined
+          slot:        this.assertIntInRange(input['slot'], 0, 15, 'slot'),
+          generation:  this.assertIntInRange(input['generation'], 1, 2, 'generation'),
+          ip:          this.assertPrivateIp(input['ip']),
+          name:        this.assertNonEmptyString(input['name'], 'name'),
+          stop:        this.assertIntInRange(input['stop'], 0, 16, 'stop'),
+          threshold_w: input['threshold_w'] === undefined
+            ? undefined
+            : this.assertNumberInRange(input['threshold_w'], 0, 5000, 'threshold_w')
         });
 
       case 'ping_outlet':
-        return this.api.pingOutlet(input['ip'] as string);
+        return this.api.pingOutlet(this.assertPrivateIp(input['ip']));
 
       case 'save_config':
         return this.api.saveOutletConfig();
 
       case 'delete_outlet':
-        return this.api.deleteOutlet(input['slot'] as number);
+        return this.api.deleteOutlet(this.assertIntInRange(input['slot'], 0, 15, 'slot'));
 
       case 'save_stop':
-        return this.api.saveStop(input['index'] as number);
+        return this.api.saveStop(this.assertIntInRange(input['index'], 1, 16, 'index'));
 
       case 'set_home_side':
-        return this.api.setOrientation(input['home_on_right'] as boolean);
+        if (typeof input['home_on_right'] !== 'boolean') throw new Error('home_on_right must be a boolean');
+        return this.api.setOrientation(input['home_on_right']);
 
       case 'set_motor_direction':
-        return this.api.setMotorDirection(input['invert'] as boolean);
+        if (typeof input['invert'] !== 'boolean') throw new Error('invert must be a boolean');
+        return this.api.setMotorDirection(input['invert']);
 
       case 'set_num_gates':
-        return this.api.setNumGates(input['num_gates'] as number);
+        return this.api.setNumGates(this.assertIntInRange(input['num_gates'], 1, 16, 'num_gates'));
 
       case 'configure_dust_collector':
         return this.api.configureDustCollector(
-          input['generation'] as number,
-          input['ip']         as string
+          this.assertIntInRange(input['generation'], 1, 2, 'generation'),
+          this.assertPrivateIp(input['ip'])
         );
 
       case 'switch_dust_collector':
-        return this.api.setDustCollector(input['on'] as boolean);
+        if (typeof input['on'] !== 'boolean') throw new Error('on must be a boolean');
+        return this.api.setDustCollector(input['on']);
 
       case 'set_port_size':
+        if (input['size'] !== '2.5in' && input['size'] !== '4in') {
+          throw new Error('size must be "2.5in" or "4in"');
+        }
         this.hardwareProfile.set(input['size'] as PortSize);
         return { ok: true };
 

@@ -456,8 +456,9 @@ export class SetupComponent implements OnInit, AfterViewChecked {
         switch (event.type) {
 
           case 'text':
-            // Accumulate text into the current segment.
-            segmentText += (segmentText ? '\n' : '') + event.text;
+            // Text events are now incremental deltas (streaming), not whole
+            // blocks — append directly, no separator between chunks.
+            segmentText += event.text;
             if (pendingIdx < this.display.length) {
               // Update existing bubble (initial "…" or continuation).
               this.display[pendingIdx] = { role: 'assistant', text: segmentText };

@@ -11,6 +11,15 @@
 Import("env")
 import os, re
 
+# ── 1. Serialise the build ──────────────────────────────────────────────────
+# NOTE: env.SetOption("num_jobs", 1) does NOT reliably take effect here on
+# this PlatformIO/SCons version — verified empirically: the race still
+# happened with it set. The actual serialization has to come from `-j 1` on
+# the `pio run` command line itself (see dev.sh/deploy.sh), which does work.
+# Left commented rather than removed so it's not silently re-added as a fix
+# that looks right but isn't.
+# env.SetOption("num_jobs", 1)
+
 # ── Clear PlatformIO's dependency-file flag variable ────────────────────────
 # Without -MMD / -MF, GCC doesn't try to write .d files at all.
 # Incremental header-change detection is disabled; full recompiles on clean.

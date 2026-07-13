@@ -1,6 +1,5 @@
 import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
-import { firstValueFrom } from 'rxjs';
 import {
   ApiService,
   DeviceInfo,
@@ -341,12 +340,14 @@ export class DemoApiService extends ApiService {
    * In local dev (?demo=true), the Angular proxy forwards /api/* to mock-api.js
    * which has an equivalent /api/claude route.
    */
-  override agentChat(body: unknown): Promise<unknown> {
+  override agentChat(body: unknown): Promise<Response> {
     const accessCode = getAccessCode();
     const payload = accessCode ? { ...(body as Record<string, unknown>), accessCode } : body;
-    return firstValueFrom(
-      this.http.post('/api/claude', payload)
-    );
+    return fetch('/api/claude', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify(payload),
+    });
   }
 
   override setAnthropicKey(_key: string): Promise<{ ok: boolean }> {

@@ -35,7 +35,11 @@ static const unsigned long POSITION_PUSH_MIN_MS = 150;
 
 // djb2-style hash over the fields that should trigger a WS push.
 // positionSteps is intentionally excluded — it jitters every loop.
-static uint32_t statusFingerprint(const ApiStatus& s) {
+static uint32_t statusFingerprint(const ApiStatus& s
+#ifdef CONTROL_SMART_OUTLET
+                                  , SmartOutletControl* outlets = nullptr
+#endif
+) {
     uint32_t h = 5381;
     for (const char* p = s.stateName; *p; ++p) h = ((h << 5) + h) ^ (uint8_t)*p;
     h = ((h << 5) + h) ^ (uint32_t)(s.currentStop  & 0xFF);
@@ -45,6 +49,23 @@ static uint32_t statusFingerprint(const ApiStatus& s) {
     h = ((h << 5) + h) ^ (uint32_t)(s.endstopHome? 4 : 0);
     h = ((h << 5) + h) ^ (uint32_t)(s.numActiveStops & 0xFF);
     // manualOverride state is in SmartOutletControl, not ApiStatus — fingerprinted separately
+#ifdef CONTROL_SMART_OUTLET
+    // Outlet config (name/ip/stop mapping/threshold) was previously excluded
+    // entirely, so reconfiguring outlets without also changing one of the
+    // fields above (e.g. re-adding the same number of gates after "Start
+    // Over") never invalidated the cached WS push — clients kept seeing the
+    // previous session's outlet list indefinitely.
+    if (outlets) {
+        h = ((h << 5) + h) ^ (uint32_t)(outlets->outletCount() & 0xFF);
+        for (int i = 0; i < outlets->outletCount(); i++) {
+            SmartOutlet* o = outlets->outlet(i);
+            if (!o) continue;
+            for (const char* p = o->name(); *p; ++p) h = ((h << 5) + h) ^ (uint8_t)*p;
+            for (const char* p = o->ip();   *p; ++p) h = ((h << 5) + h) ^ (uint8_t)*p;
+            h = ((h << 5) + h) ^ (uint32_t)(o->getStopIndex() & 0xFF);
+        }
+    }
+#endif
     return h;
 }
 
@@ -107,7 +128,12 @@ bool HttpApiServer::begin() {
 
     // Mount LittleFS — serves the Angular front-end bundle from flash.
     // 'true' = format on first mount if partition is empty (safe, idempotent).
-    if (!LittleFS.begin(true)) {
+    // Partition label must be given explicitly: this board's default partition
+    // table (partitions-4MB-tinyuf2.csv, for the UF2/TinyUF2 bootloader) names
+    // the data partition "ffat" (it's meant for FATFS), not the "spiffs" label
+    // LittleFS.begin() assumes by default — without this, mount always fails
+    // even though the image itself is written and verified correctly.
+    if (!LittleFS.begin(true, "/littlefs", 10, "ffat")) {
         DEBUG_PRINTLN(F("[API] LittleFS mount failed — front-end will not be served."));
     } else {
         DEBUG_PRINTLN(F("[API] LittleFS mounted."));
@@ -148,7 +174,11 @@ void HttpApiServer::update(const ApiStatus& status
     // Cache runtime gate count so /api/info always reflects current value
     if (status.numActiveStops > 0) _cachedNumActiveStops = status.numActiveStops;
 
+#ifdef CONTROL_SMART_OUTLET
+    uint32_t fp = statusFingerprint(status, outlets);
+#else
     uint32_t fp = statusFingerprint(status);
+#endif
     bool fieldsChanged = !_statusHashValid || (fp != _lastStatusHash);
 
     // A raw jog (consumeJogRequest) moves positionSteps but touches none of
@@ -312,6 +342,7 @@ void HttpApiServer::registerRoutes() {
             if (deserializeJson(doc, data, len)) { sendError(req, 400, "invalid JSON"); return; }
             int idx = doc["index"] | -1;
             if (idx < 1 || idx > NUM_STOPS) { sendError(req, 400, "index out of range (1–NUM_STOPS)"); return; }
+            DEBUG_PRINT(F("[UI] Set stop position: ")); DEBUG_PRINTLN(idx);
             xSemaphoreTake(_mutex, portMAX_DELAY);
             _setStopPending = true; _setStopIndex = idx;
             xSemaphoreGive(_mutex);
@@ -390,7 +421,7 @@ void HttpApiServer::registerRoutes() {
             if (deserializeJson(doc, data, len)) { sendError(req, 400, "invalid JSON"); return; }
             int n = doc["numGates"] | -1;
             if (n < 1 || n > NUM_STOPS) {
-                sendError(req, 400, "numGates out of range (1–" + String(NUM_STOPS) + ")");
+                sendError(req, 400, ("numGates out of range (1-" + String(NUM_STOPS) + ")").c_str());
                 return;
             }
             xSemaphoreTake(_mutex, portMAX_DELAY);
@@ -441,7 +472,16 @@ void HttpApiServer::registerRoutes() {
         for (int i = 0; i <= _cachedNumActiveStops; i++) {
             JsonObject o = arr.createNestedObject();
             o["index"]  = i;
-            o["mm"]     = serialized(String(g_stopPositionsMM[i], 2));
+            // index 0 (home) is always real once homed; indices beyond what's
+            // actually been trained hold a placeholder value in
+            // g_stopPositionsMM (0.0, or an extrapolated default while
+            // loading calibration) that was never explicitly saved — report
+            // those as null rather than a false real position.
+            if (i > 0 && i > g_numTrainedStops) {
+                o["mm"] = nullptr;
+            } else {
+                o["mm"] = serialized(String(g_stopPositionsMM[i], 2));
+            }
             o["steps"]  = (long)(g_stopPositionsMM[i] * stepsPerMM()) * (-HOME_DIRECTION);
         }
         String out; serializeJson(doc, out);
@@ -455,6 +495,7 @@ void HttpApiServer::registerRoutes() {
     // POST /api/home
     _server.on("/api/home", HTTP_POST, [this](AsyncWebServerRequest* req) {
         if (!checkAuth(req)) return;
+        DEBUG_PRINTLN(F("[UI] Home requested."));
         xSemaphoreTake(_mutex, portMAX_DELAY);
         _homePending = true;
         xSemaphoreGive(_mutex);
@@ -464,6 +505,7 @@ void HttpApiServer::registerRoutes() {
     // POST /api/enable
     _server.on("/api/enable", HTTP_POST, [this](AsyncWebServerRequest* req) {
         if (!checkAuth(req)) return;
+        DEBUG_PRINTLN(F("[UI] Enable requested."));
         xSemaphoreTake(_mutex, portMAX_DELAY);
         _enablePending = true;
         xSemaphoreGive(_mutex);
@@ -473,6 +515,7 @@ void HttpApiServer::registerRoutes() {
     // POST /api/disable
     _server.on("/api/disable", HTTP_POST, [this](AsyncWebServerRequest* req) {
         if (!checkAuth(req)) return;
+        DEBUG_PRINTLN(F("[UI] Disable requested."));
         xSemaphoreTake(_mutex, portMAX_DELAY);
         _disablePending = true;
         xSemaphoreGive(_mutex);
@@ -482,6 +525,7 @@ void HttpApiServer::registerRoutes() {
     // POST /api/estop
     _server.on("/api/estop", HTTP_POST, [this](AsyncWebServerRequest* req) {
         if (!checkAuth(req)) return;
+        DEBUG_PRINTLN(F("[UI] E-STOP requested."));
         xSemaphoreTake(_mutex, portMAX_DELAY);
         _estopPending = true;
         xSemaphoreGive(_mutex);
@@ -493,6 +537,7 @@ void HttpApiServer::registerRoutes() {
     // device returns to an unconfigured state (setup wizard can restart).
     _server.on("/api/clearcal", HTTP_POST, [this](AsyncWebServerRequest* req) {
         if (!checkAuth(req)) return;
+        DEBUG_PRINTLN(F("[UI] Clear calibration (Start Over) requested."));
         // Clear the NVS gate count so it doesn't persist across reboots
         {
             Preferences prefs;
@@ -510,6 +555,7 @@ void HttpApiServer::registerRoutes() {
     // POST /api/reboot
     _server.on("/api/reboot", HTTP_POST, [this](AsyncWebServerRequest* req) {
         if (!checkAuth(req)) return;
+        DEBUG_PRINTLN(F("[UI] Reboot requested."));
         sendOk(req);
         delay(200);
         ESP.restart();
@@ -518,6 +564,7 @@ void HttpApiServer::registerRoutes() {
     // POST /api/wifireset
     _server.on("/api/wifireset", HTTP_POST, [this](AsyncWebServerRequest* req) {
         if (!checkAuth(req)) return;
+        DEBUG_PRINTLN(F("[UI] WiFi reset requested — erasing credentials."));
         sendOk(req);
         delay(200);
         WiFiProvisioner::reset(); // does not return
@@ -536,6 +583,7 @@ void HttpApiServer::registerRoutes() {
             if (deserializeJson(doc, data, len)) { sendError(req, 400, "invalid JSON"); return; }
             int stop = doc["stop"] | -1;
             if (stop < 0 || stop > NUM_STOPS) { sendError(req, 400, "stop out of range"); return; }
+            DEBUG_PRINT(F("[UI] Move to stop: ")); DEBUG_PRINTLN(stop);
             xSemaphoreTake(_mutex, portMAX_DELAY);
             _movePending = true; _moveStop = stop;
             xSemaphoreGive(_mutex);
@@ -552,6 +600,7 @@ void HttpApiServer::registerRoutes() {
             if (deserializeJson(doc, data, len)) { sendError(req, 400, "invalid JSON"); return; }
             if (!doc.containsKey("mm")) { sendError(req, 400, "missing 'mm'"); return; }
             float mm = doc["mm"].as<float>();
+            DEBUG_PRINT(F("[UI] Jog: ")); DEBUG_PRINTLN(mm);
             xSemaphoreTake(_mutex, portMAX_DELAY);
             _jogPending = true; _jogMM = mm;
             xSemaphoreGive(_mutex);
@@ -624,6 +673,7 @@ void HttpApiServer::registerRoutes() {
     // POST /api/outlets/save
     _server.on("/api/outlets/save", HTTP_POST, [this](AsyncWebServerRequest* req) {
         if (!checkAuth(req)) return;
+        DEBUG_PRINTLN(F("[UI] Save all outlet config to NVS."));
         xSemaphoreTake(_mutex, portMAX_DELAY);
         _outletSavePending = true;
         xSemaphoreGive(_mutex);
@@ -657,6 +707,9 @@ void HttpApiServer::registerRoutes() {
             if (strlen(cmd.name) == 0) { sendError(req, 400, "missing 'name'"); return; }
             if (cmd.stopIndex <= 0)    { sendError(req, 400, "missing 'stop'"); return; }
 
+            DEBUG_PRINT(F("[UI] Configure outlet slot ")); DEBUG_PRINT(slot);
+            DEBUG_PRINT(F(": ")); DEBUG_PRINT(cmd.name);
+            DEBUG_PRINT(F(" -> stop ")); DEBUG_PRINTLN(cmd.stopIndex);
             xSemaphoreTake(_mutex, portMAX_DELAY);
             _outletConfigPending = true;
             _outletConfigCmd     = cmd;
@@ -671,6 +724,7 @@ void HttpApiServer::registerRoutes() {
         String url = req->url();
         int slot = url.substring(url.lastIndexOf('/') + 1).toInt();
         if (slot < 0 || slot >= SMART_OUTLET_COUNT) { sendError(req, 400, "slot out of range"); return; }
+        DEBUG_PRINT(F("[UI] Delete outlet slot: ")); DEBUG_PRINTLN(slot);
         xSemaphoreTake(_mutex, portMAX_DELAY);
         _outletDeletePending = true; _outletDeleteSlot = slot;
         xSemaphoreGive(_mutex);
@@ -693,6 +747,7 @@ void HttpApiServer::registerRoutes() {
             strlcpy(cmd.ip, doc["ip"] | "", sizeof(cmd.ip));
             if (strlen(cmd.ip) == 0) { sendError(req, 400, "missing 'ip'"); return; }
 
+            DEBUG_PRINT(F("[UI] Configure dust collector: ")); DEBUG_PRINTLN(cmd.ip);
             xSemaphoreTake(_mutex, portMAX_DELAY);
             _dcConfigPending = true;
             _dcConfigCmd     = cmd;
@@ -704,6 +759,7 @@ void HttpApiServer::registerRoutes() {
     // DELETE /api/dustcollector — unassign the dust collector plug
     _server.on("/api/dustcollector", HTTP_DELETE, [this](AsyncWebServerRequest* req) {
         if (!checkAuth(req)) return;
+        DEBUG_PRINTLN(F("[UI] Remove dust collector."));
         xSemaphoreTake(_mutex, portMAX_DELAY);
         _dcDeletePending = true;
         xSemaphoreGive(_mutex);
@@ -719,9 +775,11 @@ void HttpApiServer::registerRoutes() {
             if (!checkAuth(req)) return;
             StaticJsonDocument<64> doc;
             if (deserializeJson(doc, data, len)) { sendError(req, 400, "invalid JSON"); return; }
+            bool on = doc["on"] | false;
+            DEBUG_PRINT(F("[UI] Dust collector manual switch: ")); DEBUG_PRINTLN(on ? F("ON") : F("OFF"));
             xSemaphoreTake(_mutex, portMAX_DELAY);
             _dcSwitchPending = true;
-            _dcSwitchOn      = doc["on"] | false;
+            _dcSwitchOn      = on;
             xSemaphoreGive(_mutex);
             sendOk(req);
         }
@@ -748,6 +806,10 @@ void HttpApiServer::registerRoutes() {
         [this](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t, size_t) {
             if (!checkAuth(req)) return;
             if (len == 0) { sendError(req, 400, "empty body"); return; }
+
+            // Not logging the body — it's the full chat history/tool payloads,
+            // too noisy and potentially sensitive for serial.
+            DEBUG_PRINTLN(F("[UI] AI setup assistant message sent."));
 
             String anthropicKey = WiFiProvisioner::getAnthropicKey();
             if (anthropicKey.length() == 0) {
@@ -874,7 +936,15 @@ String HttpApiServer::buildStatusJson(const ApiStatus& s
     for (int i = 0; i <= _cachedNumActiveStops; i++) {
         JsonObject o = stops.createNestedObject();
         o["index"] = i;
-        o["mm"]    = serialized(String(g_stopPositionsMM[i], 2));
+        // See the identical check in the /api/stops handler above — indices
+        // beyond what's actually been trained must read null, not a false
+        // real position, or the setup wizard's conflict check misreads a
+        // freshly-reset device's placeholder zeros as saved gates.
+        if (i > 0 && i > g_numTrainedStops) {
+            o["mm"] = nullptr;
+        } else {
+            o["mm"] = serialized(String(g_stopPositionsMM[i], 2));
+        }
     }
 
 #ifdef CONTROL_SMART_OUTLET

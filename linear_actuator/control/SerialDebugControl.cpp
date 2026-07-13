@@ -4,9 +4,7 @@
 
 #include "SerialDebugControl.h"
 #include "../utils/MotionMath.h"
-#include "../utils/AgentConfig.h"   // NVS constants — safe to include always
-#include <Preferences.h>
-#include <ArduinoJson.h>
+#include "../utils/AgentConfig.h"   // NVS constants + applyProvisionJson() — safe to include always
 #if defined(CONTROL_WIFI) || defined(CONTROL_SMART_OUTLET)
   #include "../utils/WiFiProvisioner.h"
 #endif
@@ -15,7 +13,6 @@
 
 SerialDebugControl::SerialDebugControl()
     : _requestedStop(0),
-      _enabled(false),
       _eStopPending(false),
       _homePending(false),
       _clearCalPending(false),
@@ -29,7 +26,7 @@ SerialDebugControl::SerialDebugControl()
 bool SerialDebugControl::begin() {
     // Serial already started in setup() via Serial.begin(SERIAL_BAUD)
     printHelp();
-    Serial.println(F("[DEBUG] System ready. Type 'home' to home and enable, or 'enable' to enable without homing."));
+    Serial.println(F("[DEBUG] System ready. Type 'home' to home."));
     return true;
 }
 
@@ -51,7 +48,8 @@ int SerialDebugControl::readRequestedStop() {
 }
 
 bool SerialDebugControl::isEnabled() {
-    return _enabled;
+    // No enable/disable concept — the system always runs; only e-stop halts it.
+    return true;
 }
 
 bool SerialDebugControl::consumeEStop() {
@@ -118,21 +116,11 @@ void SerialDebugControl::processLine(const String& line) {
     String cmd = line;
     cmd.toLowerCase();
 
-    if (cmd == "enable") {
-        _enabled = true;
-        Serial.println(F("[DEBUG] System ENABLED (toggle ON)."));
-
-    } else if (cmd == "disable") {
-        _enabled = false;
-        Serial.println(F("[DEBUG] System DISABLED — actuator will return to home."));
-
-    } else if (cmd == "estop" || cmd == "stop") {
-        _enabled = false;
+    if (cmd == "estop" || cmd == "stop") {
         _eStopPending = true;
         Serial.println(F("[DEBUG] E-STOP — motion halted. Type 'home' to recover."));
 
     } else if (cmd == "home") {
-        _enabled = true;           // system is enabled after homing completes
         _eStopPending = false;     // clear any latched estop
         _homePending = true;
         Serial.println(F("[DEBUG] Homing requested."));
@@ -155,40 +143,24 @@ void SerialDebugControl::processLine(const String& line) {
         }
 
     } else if (cmd.startsWith("provision ")) {
-        // provision {"ssid":"...","pass":"...","key":"..."}
-        // Writes WiFi credentials and/or Anthropic API key directly to NVS.
-        // Useful after reflash to restore config without running the setup portal.
-        // 'key' is optional — omit to leave the existing Anthropic key untouched.
+        // provision {"ssid":"...","pass":"...","key":"...","host":"..."}
+        // Writes WiFi/key/hostname directly to NVS via the shared helper in
+        // AgentConfig.h (also used by the captive portal's own serial
+        // listener). Doesn't reboot — this path only runs once WiFi is
+        // already connected, so changes apply on the next boot.
         // Use original 'line' (not lowercased 'cmd') to preserve credential case.
         String json = line.substring(10);
         json.trim();
-        StaticJsonDocument<384> doc;
-        DeserializationError err = deserializeJson(doc, json);
-        if (err) {
+        String errMsg;
+        bool wifiSet = WiFiProvisioner::applyProvisionJson(json, &errMsg);
+        if (errMsg.length() > 0) {
             Serial.print(F("[PROVISION] JSON parse error: "));
-            Serial.println(err.c_str());
-            Serial.println(F("[PROVISION] Usage: provision {\"ssid\":\"MyNet\",\"pass\":\"pw\",\"key\":\"sk-ant-...\"}"));
+            Serial.println(errMsg);
+            Serial.println(F("[PROVISION] Usage: provision {\"ssid\":\"MyNet\",\"pass\":\"pw\",\"key\":\"sk-ant-...\",\"host\":\"dustgate\"}"));
             return;
         }
-        const char* ssid = doc["ssid"] | "";
-        const char* pass = doc["pass"] | "";
-        const char* key  = doc["key"]  | "";
-
-        if (strlen(ssid) > 0) {
-            Preferences prefs;
-            prefs.begin(WiFiProvisioner::NVS_NS, false);
-            prefs.putString(WiFiProvisioner::NVS_SSID, ssid);
-            prefs.putString(WiFiProvisioner::NVS_PASS, pass);
-            prefs.end();
-            Serial.print(F("[PROVISION] WiFi saved: "));
-            Serial.println(ssid);
-        }
-        if (strlen(key) > 0) {
-            Preferences prefs;
-            prefs.begin(WiFiProvisioner::NVS_ANT_NS, false);
-            prefs.putString(WiFiProvisioner::NVS_ANT_KEY, key);
-            prefs.end();
-            Serial.println(F("[PROVISION] Anthropic key saved."));
+        if (wifiSet) {
+            Serial.println(F("[PROVISION] WiFi credentials saved."));
         }
         Serial.println(F("OK provision"));
 
@@ -220,7 +192,6 @@ void SerialDebugControl::processLine(const String& line) {
 
 void SerialDebugControl::printStatus() {
     Serial.println(F("--- Status ---"));
-    Serial.print(F("  Enabled:           ")); Serial.println(_enabled ? F("YES") : F("NO"));
     Serial.print(F("  Requested stop:    ")); Serial.println(_requestedStop);
     Serial.print(F("  EStop pending:     ")); Serial.println(_eStopPending ? F("YES") : F("no"));
     Serial.print(F("  StallGuard thresh: "));
@@ -247,8 +218,6 @@ void SerialDebugControl::printHelp() {
     Serial.println(F(""));
     Serial.println(F("=== Serial Debug Control ==="));
     Serial.println(F("  0-7               Select position (0=home)"));
-    Serial.println(F("  enable            Toggle switch ON"));
-    Serial.println(F("  disable           Toggle switch OFF (drives to home)"));
     Serial.println(F("  estop             Immediate stop (latches until 'home')"));
     Serial.println(F("  home              Re-trigger homing sequence"));
     Serial.println(F("  jog <mm>          Move relative: + = away from home, - = toward home"));
@@ -256,16 +225,20 @@ void SerialDebugControl::printHelp() {
     Serial.println(F("  wifireset         Erase WiFi credentials, reboot into setup portal"));
     Serial.println(F("  gconf             Read GCONF + CHOPCONF from driver"));
     Serial.println(F("  status            Print state, stop positions, endstop"));
-    Serial.println(F("  provision <json>  Write WiFi+key to NVS: {\"ssid\":\"x\",\"pass\":\"y\",\"key\":\"sk-ant-...\"}"));
+    Serial.println(F("  provision <json>  Write WiFi+key+host to NVS: {\"ssid\":\"x\",\"pass\":\"y\",\"key\":\"sk-ant-...\",\"host\":\"dustgate\"}"));
     Serial.println(F("  help              Show this list"));
 #if defined(CONTROL_SMART_OUTLET) || defined(ENABLE_HTTP_API)
     Serial.println(F("--- Network ---"));
     if (WiFi.status() == WL_CONNECTED) {
+        String host = WiFiProvisioner::getHostname();
         Serial.print(F("  Web UI:     http://"));
-        Serial.println(WiFi.localIP().toString());
-        Serial.print(F("  Setup:      http://"));
+        Serial.print(host);
+        Serial.print(F(".local  (or http://"));
         Serial.print(WiFi.localIP().toString());
-        Serial.println(F("/#/setup"));
+        Serial.println(F(")"));
+        Serial.print(F("  Setup:      http://"));
+        Serial.print(host);
+        Serial.println(F(".local/#/setup"));
     } else {
         Serial.println(F("  WiFi not connected."));
         Serial.println(F("  Connect to \"" WIFI_PORTAL_SSID "\" to run first-time setup."));

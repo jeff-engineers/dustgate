@@ -5,18 +5,18 @@
 // Open Arduino IDE Serial Monitor at SERIAL_BAUD (115200), set line ending to
 // "Newline" (bottom-right dropdown), then type commands and press Enter/Send.
 //
+// No enable/disable concept — the system always runs; only e-stop halts it.
+//
 // Commands:
-//   0-7              Select position (0 = home/disabled, 1-7 = stops)
-//   enable           Emulate toggle switch ON  (system runs normally)
-//   disable          Emulate toggle switch OFF (actuator returns to home)
-//   estop / stop     Immediate stop — halts motion in place, disables system
+//   0-7              Select position (0 = home)
+//   estop / stop     Immediate stop — halts motion in place
 //   home             Re-trigger homing sequence (resets estop if latched)
 //   jog <mm>         Relative move: positive = away from home, negative = toward home
 //   gconf            Read GCONF + CHOPCONF registers from driver
 //   clearcal         Erase EEPROM calibration
 //   provision <json> Write WiFi + Anthropic key to NVS
 //   wifireset        Erase WiFi credentials, reboot into setup portal
-//   status           Print current state, position, and enable state
+//   status           Print current state and position
 //   help             Print this command list
 // =============================================================================
 
@@ -58,7 +58,6 @@ public:
 
 private:
     int  _requestedStop;
-    bool _enabled;
     bool _eStopPending;
     bool _homePending;
     bool _clearCalPending;

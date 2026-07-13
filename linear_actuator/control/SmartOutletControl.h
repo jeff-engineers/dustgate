@@ -49,6 +49,11 @@ public:
     void saveAll();                // persist all slots to NVS
     void printConfig();            // dump current config to Serial
 
+    // Erases every outlet slot AND the dust collector (RAM + NVS). Used by
+    // the setup wizard's "Start Over" — a plain gate/calibration reset alone
+    // left old tool-to-gate outlet mappings from the previous run in place.
+    void clearAllOutlets();
+
     int          outletCount() const { return _count; }
     SmartOutlet* outlet(int i)       { return (i >= 0 && i < _count) ? _outlets[i] : nullptr; }
 

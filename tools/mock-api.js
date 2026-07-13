@@ -128,8 +128,13 @@ function handler(req, res) {
   }
 
   // ── Auth check ──
-  const key = req.headers['x-api-key'];
-  if (key !== API_KEY) return json(res, { error: 'unauthorized' }, 401);
+  // /api/claude is exempt: it mirrors the real Vercel serverless function,
+  // which never requires X-Api-Key (the demo deployment gates via the
+  // optional accessCode field instead — see api/claude.ts).
+  if (pathname !== '/api/claude') {
+    const key = req.headers['x-api-key'];
+    if (key !== API_KEY) return json(res, { error: 'unauthorized' }, 401);
+  }
 
   // ── Routes ───────────────────────────────────────────────────────────────
 

@@ -111,7 +111,7 @@ extern int g_homeDirection;        // defined in linear_actuator.ino
 // -----------------------------------------------------------------------------
 #define TMC2209_R_SENSE         0.11f   // Sense resistor (Ω) — verify on your board
 #define TMC2209_CURRENT_MA       800    // Run current in mA — raise if stalls mid-travel
-#define TMC2209_HOLD_CURRENT_MA  150    // Hold current — motor held between moves (low = cool)
+#define TMC2209_HOLD_CURRENT_MA   75    // Hold current — motor held between moves (low = cool)
 
 // StallGuard threshold — not used for homing (physical limit switch) but left
 // as a safety floor; TMC2209 still raises DIAG on severe overload/stall.
@@ -141,12 +141,6 @@ extern int g_homeDirection;        // defined in linear_actuator.ino
 // -- Detent switch pins (FEEDBACK_LIMIT_DETENT only) --
 // Use resistor ladder on A1 (single analog pin) — see WIRING.md
 #define PIN_DETENT_ANALOG   A1  // Resistor ladder for up to 7 detent switches
-
-// -- E-stop button --
-// NC momentary: one terminal to PIN_ESTOP, other to GND.
-// Normal: pin LOW (contacts closed). Triggered/broken: pin HIGH → RISING interrupt.
-// Any GPIO on ESP32-S2 supports interrupts — not restricted to a specific pin.
-#define PIN_ESTOP           A3  // Interrupt-capable (all ESP32 GPIOs are)
 
 // -- Status LED --
 #define PIN_LED            13   // D13 — onboard LED on ESP32-S2 Feather

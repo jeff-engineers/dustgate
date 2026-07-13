@@ -103,29 +103,7 @@ driver board.
 
 ---
 
-## 4. E-Stop Button
-
-NC momentary pushbutton. Fails safe on open circuit or broken wire.
-Currently wired but the interrupt is disabled in firmware (use the `estop`
-serial command instead until switch placement is finalised).
-
-```
-Feather A3 ──── [NC E-Stop button, one terminal]
-                [NC E-Stop button, other terminal] ──── GND
-Feather A3 ──── INPUT_PULLUP
-```
-
-| Button state            | D voltage | Action                                |
-|-------------------------|-----------|---------------------------------------|
-| Not pressed (NC closed) | LOW       | Normal operation                      |
-| Pressed / wire cut      | HIGH      | RISING interrupt → STATE_ERROR        |
-
-**Recovery:** type `home` in the serial terminal. The actuator re-homes before
-accepting position commands.
-
----
-
-## 5. Dust Collector
+## 4. Dust Collector
 
 The dust collector is switched by a dedicated Shelly smart plug over WiFi — no
 local wiring to the Feather. See the main README for configuring the plug; it
@@ -134,7 +112,7 @@ dashboard.
 
 ---
 
-## 6. Rotary Switch — Resistor Ladder (CONTROL_ROTARY, budget option)
+## 5. Rotary Switch — Resistor Ladder (CONTROL_ROTARY, budget option)
 
 SP8T rotary switch, common to GND. Each position connects A0 to GND through a
 different resistor. A 10kΩ pull-up from A0 to 3V3 completes the divider.
@@ -184,7 +162,7 @@ Switch closed = LOW = system enabled.
 
 ---
 
-## 7. Smart Outlet Control (CONTROL_SMART_OUTLET)
+## 6. Smart Outlet Control (CONTROL_SMART_OUTLET)
 
 No additional wiring required. The ESP32 communicates with Shelly smart outlets
 over your home WiFi network using their local HTTP API. Requires:
@@ -199,6 +177,37 @@ Outlet-to-gate mappings are configured by the setup agent and stored in NVS.
 
 ---
 
+## 7. Remote Boot & Reset Buttons (enclosure-mounted, optional)
+
+The Feather's onboard RESET and BOOT buttons become unreachable once the
+electronics are enclosed. Both are broken out to the header, so a pair of
+panel-mount momentary pushbuttons (normally-open, wired the same way as the
+onboard buttons) lets you reboot or force bootloader mode from outside the
+enclosure — useful for recovering from the WiFi/serial issues covered in the
+README's troubleshooting section without opening the case.
+
+```
+Feather RST ──── [Reset button] ──── GND
+Feather IO0 ──── [Boot button]  ──── GND
+```
+
+**Reset button:** momentary short to GND restarts the board — equivalent to
+power-cycling, but non-destructive to WiFi credentials/calibration (both live
+in NVS/EEPROM, not RAM).
+
+**Boot button:** momentary short to GND, held while RST is also pressed and
+released, forces the ROM bootloader (used for flashing over USB — see the
+manual BOOT+RESET sequence in the README's troubleshooting section). Not
+needed for day-to-day use; only matters if you'll be reflashing with the
+enclosure closed.
+
+> **Caution:** `IO0` (GPIO0) is a strapping pin — it's sampled at boot to
+> decide whether to enter the bootloader. Wire the button exactly as above
+> (momentary to GND, floating/HIGH otherwise) and don't tie anything else to
+> this pin, or you risk the board booting into flash mode unexpectedly.
+
+---
+
 ## 8. Pin Budget
 
 | Signal                    | Pin          | Mode(s)                              |
@@ -210,15 +219,20 @@ Outlet-to-gate mappings are configured by the setup agent and stored in NVS.
 | Max limit switch          | D11          | FEEDBACK_LIMIT_DISTANCE / _DETENT    |
 | Toggle switch             | D12          | CONTROL_ROTARY                       |
 | Status LED                | D13          | All (onboard LED)                    |
-| E-stop button (NC)        | A3           | All                                  |
 | Rotary switch (ladder)    | A0           | CONTROL_ROTARY (analog)              |
 | Detent switches (ladder)  | A1           | FEEDBACK_LIMIT_DETENT (analog)       |
 | TMC2209 UART TX           | TX (Serial1) | All (hardware UART)                  |
 | TMC2209 UART RX           | RX (Serial1) | All (hardware UART)                  |
+| Remote reset button       | RST          | All (optional, not code-visible)     |
+| Remote boot button        | IO0          | All (optional, not code-visible)     |
 
-**Active config pins: 8** (D5, D6, D9, D10, D13, A3, TX, RX)  
+**Active config pins: 7** (D5, D6, D9, D10, D13, TX, RX)  
 Unused in current build: D11 (max endstop), D12 (toggle), A0 (rotary), A1 (detent)  
-Free for expansion: SCL, SDA, A2, A4, A5
+Free for expansion: SCL, SDA, A2, A3, A4, A5
+
+RST/IO0 aren't GPIOs the firmware reads — they're hardware reset/bootloader
+lines, listed here only so the pin budget stays accurate if you wire the
+enclosure buttons from section 7.
 
 ---
 

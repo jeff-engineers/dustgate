@@ -260,6 +260,23 @@ void SmartOutletControl::removeOutlet(int slot) {
     _outlets[slot] = nullptr;
 }
 
+void SmartOutletControl::clearAllOutlets() {
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    for (int i = 0; i < SMART_OUTLET_COUNT; i++) {
+        delete _outlets[i];
+        _outlets[i] = nullptr;
+    }
+    _count = 0;
+    delete _dustCollector;
+    _dustCollector = nullptr;
+    _dcOn     = false;
+    _dcSynced = false;
+    xSemaphoreGive(_mutex);
+
+    OutletConfig::erase();
+    DEBUG_PRINTLN(F("[Outlets] All outlet config cleared (RAM + NVS)."));
+}
+
 void SmartOutletControl::saveSlot(int slot) {
     if (slot < 0 || slot >= _count || !_outlets[slot]) return;
     SmartOutlet* o = _outlets[slot];

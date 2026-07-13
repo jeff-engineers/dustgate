@@ -312,11 +312,21 @@ export class ApiService {
   /**
    * Forward a full Anthropic /v1/messages request through the ESP32 proxy.
    * body should be the complete request object (model, messages, tools, etc.)
+   *
+   * Returns the raw fetch Response rather than a parsed body: the demo
+   * deployment (DemoApiService, /api/claude) streams Server-Sent Events back
+   * so the UI can render text as it's generated, while the real ESP32 proxy
+   * (/api/agent/chat) still returns one buffered JSON object. ClaudeService
+   * tells the two apart by response Content-Type, so both work through the
+   * same call site — we use fetch here instead of HttpClient because
+   * HttpClient doesn't expose a readable byte stream for the SSE case.
    */
-  agentChat(body: unknown): Promise<unknown> {
-    return firstValueFrom(
-      this.http.post(`${this.baseUrl}/api/agent/chat`, body, { headers: this.headers() })
-    );
+  agentChat(body: unknown): Promise<Response> {
+    return fetch(`${this.baseUrl}/api/agent/chat`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Api-Key': this.apiKey },
+      body:    JSON.stringify(body),
+    });
   }
 
   setAnthropicKey(key: string) {

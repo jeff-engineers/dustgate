@@ -24,7 +24,7 @@ via an AI-powered setup agent accessible from a browser on the local network.
 
 ### Planned carrier PCB (Task 5)
 - ESP32-S2 Feather + BTT TMC2209 StepStick on 2.54mm headers
-- Screw terminals for motor, endstop, e-stop
+- Screw terminals for motor, endstop
 - CNC-millable FR4 (no soldermask required)
 - Replaces current breadboard/breakout assembly
 
