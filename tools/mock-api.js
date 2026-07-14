@@ -60,38 +60,25 @@ const state = {
 // that hasn't spun up yet: gate 1's outlet reads 0W once then a steady load,
 // gate 2's outlet reads 0W twice then a random load. Any further IPs read a
 // realistic load immediately, since the scenario's been demonstrated already.
-const pingSim = { order: [], counts: {}, base: {} };
+const pingSim = { base: {}, count: {} };
 
 function resetPingSim() {
-  pingSim.order = [];
-  pingSim.counts = {};
   pingSim.base = {};
+  pingSim.count = {};
 }
 
-// A tool's running draw once spun up: a stable per-outlet base in the
-// 500–1000W range (typical for corded power tools) with a few percent of
-// per-reading jiggle, so repeated pings on the same tool read consistently
-// like real hardware rather than jumping across the whole range each call.
-function runningWatts(ip) {
-  if (!(ip in pingSim.base)) pingSim.base[ip] = 500 + Math.random() * 500;
-  const jiggle = 1 + (Math.random() - 0.5) * 0.06; // ±3%
-  return Math.round(pingSim.base[ip] * jiggle);
-}
-
+// Power tools have real on/off switches — no standby draw. An outlet reads a
+// clean 0W until its tool is switched on, then a stable running draw in the
+// 500–1000W range (with a few percent of per-reading jiggle so repeated pings
+// read consistently like real hardware). The setup flow asks the user to turn
+// the tool on before capturing a threshold, so we model that: the FIRST ping
+// to an outlet catches it still off (0W), and subsequent pings read its
+// running draw once "switched on."
 function simulatedPingPower(ip) {
-  if (!(ip in pingSim.counts)) {
-    pingSim.counts[ip] = 0;
-    pingSim.order.push(ip);
-  }
-  pingSim.counts[ip]++;
-  const rank  = pingSim.order.indexOf(ip);
-  const count = pingSim.counts[ip];
-
-  // First one/two pings read 0W to demo the wizard's "no load yet, try again"
-  // flow; after that the tool has spun up to its running draw.
-  if (rank === 0) return count === 1 ? 0 : runningWatts(ip);
-  if (rank === 1) return count <= 2 ? 0 : runningWatts(ip);
-  return runningWatts(ip);
+  pingSim.count[ip] = (pingSim.count[ip] || 0) + 1;
+  if (pingSim.count[ip] === 1) return 0;   // still off on the first read
+  if (!(ip in pingSim.base)) pingSim.base[ip] = 500 + Math.random() * 500;
+  return Math.round(pingSim.base[ip] * (1 + (Math.random() - 0.5) * 0.06)); // ±3%
 }
 
 function statusJson() {
@@ -134,15 +121,22 @@ function ensureMockDiscovered() {
   if (mockDiscovered) return mockDiscovered;
   const usedIps = new Set();
   const count = 2 + Math.floor(Math.random() * 3); // 2-4, mirrors real mDNS variability
+  // Names are drawn from a shuffled pool and assigned WITHOUT replacement, so
+  // two devices never share a name (e.g. two "Drill Press" entries).
+  const namePool = [...MOCK_TOOL_NAMES].sort(() => Math.random() - 0.5);
   const namedIdx = new Set();
   while (namedIdx.size < Math.min(2, count)) namedIdx.add(Math.floor(Math.random() * count));
 
+  let nameCursor = 0;
   mockDiscovered = Array.from({ length: count }, (_, i) => ({
     ip:         randomLanIp(usedIps),
     hostname:   `ShellyPlugUSG4-${randomHex(12)}`,
-    name:       namedIdx.has(i) ? MOCK_TOOL_NAMES[Math.floor(Math.random() * MOCK_TOOL_NAMES.length)] : '',
+    name:       namedIdx.has(i) ? namePool[nameCursor++] : '',
     reachable:  true,
-    powerW:     Math.round(Math.random() * 8 * 10) / 10,  // idle standby draw
+    // Tools are off during the setup scan (real power switches, no standby),
+    // so a freshly discovered outlet reads a clean 0W. Its running draw shows
+    // up later at the threshold step, once the user switches the tool on.
+    powerW:     0,
     gen:        2,
   }));
   return mockDiscovered;
@@ -289,12 +283,14 @@ function handler(req, res) {
   }
 
   if (pathname === '/api/outlets/discover' && req.method === 'GET') {
-    // Slight wattage jitter per call, like a real poll would show, without
-    // regenerating the device list itself (mDNS would keep finding the same
-    // physical devices on repeated scans).
+    // Off tools read a clean 0W; only a non-zero (running) draw gets the
+    // slight per-call jitter a real poll would show. The device list itself
+    // isn't regenerated (mDNS keeps finding the same physical devices).
     const results = ensureMockDiscovered().map(d => ({
       ...d,
-      powerW: Math.max(0, Math.round((d.powerW + (Math.random() - 0.5) * 2) * 10) / 10),
+      powerW: d.powerW === 0
+        ? 0
+        : Math.max(0, Math.round((d.powerW + (Math.random() - 0.5) * 2) * 10) / 10),
     }));
     return json(res, results);
   }

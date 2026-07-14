@@ -331,13 +331,18 @@ interface DisplayMessage {
     <!-- Input -->
     <div class="input-area">
       <div class="input-wrap">
+        <!-- Intentionally NOT [disabled] while busy: disabling drops keyboard
+             focus, and mobile browsers block programmatic re-focus outside a
+             user gesture, so the keyboard would close after every turn and
+             never reopen. send() already guards on the busy flag, so leaving
+             this enabled is safe (you can even type your next message
+             mid-stream). -->
         <textarea
           [(ngModel)]="inputText"
-          placeholder="Message…"
+          [placeholder]="busy ? 'Working…' : 'Message…'"
           rows="1"
           (input)="autoResize($event)"
           (keydown.enter)="onEnter($event)"
-          [disabled]="busy"
           #textareaEl>
         </textarea>
       </div>
@@ -515,9 +520,6 @@ export class SetupComponent implements OnInit, AfterViewChecked {
       }
       this.busy = false;
       this.scrollDown();
-      // Disabling the textarea while busy drops focus; the disabled attribute
-      // clears right before this runs, so re-focus once it's interactive again.
-      setTimeout(() => this.textareaEl?.nativeElement.focus(), 0);
     }
   }
 

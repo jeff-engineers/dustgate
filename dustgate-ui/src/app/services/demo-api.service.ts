@@ -37,9 +37,8 @@ interface MockState {
 // gate 2's outlet reads 0W twice then a random load — so the wizard's "no
 // load yet, try again" flow has something to demonstrate without hardware.
 interface PingSim {
-  order:  string[];
-  counts: Record<string, number>;
-  base:   Record<string, number>;   // stable per-outlet running draw (W)
+  count: Record<string, number>;   // pings seen per IP (drives the turn-on model)
+  base:  Record<string, number>;   // stable per-outlet running draw (W)
 }
 
 const NUM_STOPS = 16;
@@ -110,17 +109,7 @@ export class DemoApiService extends ApiService {
     outlets:        [],
   };
 
-  private pingSim: PingSim = { order: [], counts: {}, base: {} };
-
-  // A tool's running draw once spun up: a stable per-outlet base in the
-  // 500–1000W range (typical for corded power tools) with a few percent of
-  // per-reading jiggle, so repeated pings on the same tool read consistently
-  // like real hardware rather than jumping across the whole range each call.
-  private runningWatts(ip: string): number {
-    if (!(ip in this.pingSim.base)) this.pingSim.base[ip] = 500 + Math.random() * 500;
-    const jiggle = 1 + (Math.random() - 0.5) * 0.06; // ±3%
-    return Math.round(this.pingSim.base[ip] * jiggle);
-  }
+  private pingSim: PingSim = { count: {}, base: {} };
 
   /** Lazily generated, stable for the life of the page (mirrors tools/mock-api.js). */
   private discovered: MockDiscoveredDevice[] | null = null;
@@ -129,15 +118,22 @@ export class DemoApiService extends ApiService {
     if (this.discovered) return this.discovered;
     const usedIps = new Set<string>();
     const count = 2 + Math.floor(Math.random() * 3); // 2-4, mirrors real mDNS variability
+    // Names drawn from a shuffled pool WITHOUT replacement, so two devices
+    // never share a name (e.g. two "Drill Press" entries).
+    const namePool = [...MOCK_TOOL_NAMES].sort(() => Math.random() - 0.5);
     const namedIdx = new Set<number>();
     while (namedIdx.size < Math.min(2, count)) namedIdx.add(Math.floor(Math.random() * count));
 
+    let nameCursor = 0;
     this.discovered = Array.from({ length: count }, (_, i) => ({
       ip:        randomLanIp(usedIps),
       hostname:  `ShellyPlugUSG4-${randomHex(12)}`,
-      name:      namedIdx.has(i) ? MOCK_TOOL_NAMES[Math.floor(Math.random() * MOCK_TOOL_NAMES.length)] : '',
+      name:      namedIdx.has(i) ? namePool[nameCursor++] : '',
       reachable: true,
-      powerW:    Math.round(Math.random() * 8 * 10) / 10,  // idle standby draw
+      // Tools are off during the setup scan (real power switches, no standby),
+      // so a freshly discovered outlet reads a clean 0W. Its running draw shows
+      // up later at the threshold step, once the user switches the tool on.
+      powerW:    0,
       gen:       2,
     }));
     return this.discovered;
@@ -149,20 +145,17 @@ export class DemoApiService extends ApiService {
     return d ? d.name : '';
   }
 
+  // Power tools have real on/off switches — no standby draw. An outlet reads a
+  // clean 0W until its tool is switched on, then a stable running draw in the
+  // 500–1000W range (with a few percent of per-reading jiggle). The setup flow
+  // asks the user to turn the tool on before capturing a threshold, so we model
+  // that: the FIRST ping to an outlet catches it still off (0W), and subsequent
+  // pings read its running draw once "switched on."
   private simulatedPingPower(ip: string): number {
-    if (!(ip in this.pingSim.counts)) {
-      this.pingSim.counts[ip] = 0;
-      this.pingSim.order.push(ip);
-    }
-    this.pingSim.counts[ip]++;
-    const rank  = this.pingSim.order.indexOf(ip);
-    const count = this.pingSim.counts[ip];
-
-    // First one/two pings read 0W to demo the wizard's "no load yet, try
-    // again" flow; after that the tool has spun up to its running draw.
-    if (rank === 0) return count === 1 ? 0 : this.runningWatts(ip);
-    if (rank === 1) return count <= 2 ? 0 : this.runningWatts(ip);
-    return this.runningWatts(ip);
+    this.pingSim.count[ip] = (this.pingSim.count[ip] || 0) + 1;
+    if (this.pingSim.count[ip] === 1) return 0;   // still off on the first read
+    if (!(ip in this.pingSim.base)) this.pingSim.base[ip] = 500 + Math.random() * 500;
+    return Math.round(this.pingSim.base[ip] * (1 + (Math.random() - 0.5) * 0.06)); // ±3%
   }
 
   constructor(http: HttpClient, hardwareProfile: HardwareProfileService) {
@@ -330,7 +323,7 @@ export class DemoApiService extends ApiService {
     this.mock.dcOn           = false;
     this.mock.dcIp           = null;
     this.mock.outlets        = [];
-    this.pingSim             = { order: [], counts: {}, base: {} };
+    this.pingSim             = { count: {}, base: {} };
     this.mock.stops = Array.from({ length: NUM_STOPS + 1 }, (_, i) => ({ index: i, mm: null as string | null }));
     if (this.deviceInfo) this.deviceInfo.numStops = 0;
     this.pushStatus();
@@ -384,7 +377,10 @@ export class DemoApiService extends ApiService {
       hostname:   d.hostname,
       name:       d.name,
       reachable:  d.reachable,
-      powerW:     Math.max(0, Math.round((d.powerW + (Math.random() - 0.5) * 2) * 10) / 10),
+      // Off tools read a clean 0W; only a running draw gets per-call jitter.
+      powerW:     d.powerW === 0
+        ? 0
+        : Math.max(0, Math.round((d.powerW + (Math.random() - 0.5) * 2) * 10) / 10),
       generation: d.gen,
     }));
   }
