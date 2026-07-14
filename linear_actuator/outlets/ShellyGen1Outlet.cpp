@@ -8,13 +8,30 @@
 
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
+#include <ESPmDNS.h>
 
 ShellyGen1Outlet::ShellyGen1Outlet(const char* ip, const char* name) {
     strlcpy(_ip,   ip,   sizeof(_ip));
     strlcpy(_name, name, sizeof(_name));
 }
 
+bool ShellyGen1Outlet::reresolve() {
+    if (_host[0] == '\0') return false;
+    IPAddress resolved = MDNS.queryHost(_host, 2000);
+    if (resolved == IPAddress(0, 0, 0, 0)) return false;
+    strlcpy(_ip, resolved.toString().c_str(), sizeof(_ip));
+    return true;
+}
+
 bool ShellyGen1Outlet::poll() {
+    if (doPoll()) return true;
+    // Poll failed — the IP may be stale after a DHCP lease change. If we know
+    // this outlet's mDNS hostname, re-resolve and retry once before giving up.
+    if (reresolve()) return doPoll();
+    return false;
+}
+
+bool ShellyGen1Outlet::doPoll() {
     char url[48];
     snprintf(url, sizeof(url), "http://%s/status", _ip);
 

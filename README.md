@@ -165,7 +165,7 @@ Both wizards cover the same ground:
 1. Confirm your port size (2.5" or 4") — just seeds a starting estimate for gate spacing.
 2. Home the actuator to establish a reference position.
 3. Walk through each blast gate position — jogging the actuator to align it, then asking what tool is connected there ("Bandsaw", "Router Table", etc. — whatever you call it).
-4. Ask for the IP address of the Shelly outlet for each tool and confirm it's reachable.
+4. Locate the Shelly outlet for each tool — both wizards scan the network via mDNS and let you pick it from a list (showing its Shelly-app name when one's set), falling back to manual IP entry if the scan doesn't find it.
 5. Save the configuration.
 
 When setup is complete, tap the back arrow to return to the dashboard. Your tool buttons will appear.
@@ -175,17 +175,24 @@ When setup is complete, tap the back arrow to return to the dashboard. Your tool
 ## Daily Use
 
 - **Automatic mode:** just turn on a tool. DustGate detects power draw within ~1 second and moves the gate. Turn the tool off and the gate returns home after a 3-second coast-down delay.
-- **Manual override:** tap any tool button on the dashboard to move the gate manually. Automatic mode resumes the next time a tool is detected.
+- **Manual override:** tap any tool button on the dashboard to move the gate manually. This holds until a tool is genuinely switched on (an edge, not just "still running") — moving manually while another gate's tool keeps running won't get immediately overridden.
 - **HOME button:** closes all gates (moves to home position).
 - **Dust collector:** driven by a dedicated switchable Shelly smart plug. It turns on automatically whenever a gate is open (a tool is running) and off when the system returns home, and can also be toggled on/off manually from the dashboard.
+- **Idle power-off:** if nothing moves for an hour (configurable in Settings, 0 = never), the motor driver powers off automatically. The next move re-homes first — this is invisible in normal use, just a brief extra step if the system has been sitting idle.
 
 ---
 
-## Reconfiguration
+## Settings
 
-To add, remove, or reassign outlets: tap the **⚙ gear icon** (AI Setup) or **Manual Setup** button on the dashboard header — both are available any time, not just on first run. Changes take effect immediately and are saved to flash.
+Tap the **⚙ gear icon** on the dashboard to reach Settings, which covers:
 
-To reset WiFi credentials (e.g. new router): type `wifireset` in the serial monitor, or use the `wifireset` command in the serial debug interface. The Anthropic API key is preserved across WiFi resets.
+- Links to re-run **Guided (AI) Setup** or **Manual Setup** any time, not just on first run
+- Idle power-off timeout
+- Home endstop side, motor direction, number of gates, port size
+- **Forget WiFi** — erases stored credentials and reboots into the setup portal (same effect as the serial `wifireset` command, no serial access needed)
+- **Reset gate calibration** ("Start Over") — clears trained positions and outlet mappings
+
+Changes take effect immediately and are saved to flash. The Anthropic API key has no UI entry point by design (a LAN-served settings page isn't the right place for it) — set it via the serial `provision` command or the WiFi captive portal's first-run flow; it's preserved across WiFi resets either way.
 
 ---
 
@@ -210,7 +217,7 @@ linear_actuator/         Firmware (Arduino / PlatformIO)
   config.h               All compile-time settings
   linear_actuator.ino    Main sketch + state machine
   api/                   HTTP REST + WebSocket server
-  control/               Control input modes (serial, outlet, rotary)
+  control/               Control input modes (serial, outlet)
   feedback/              Homing and position feedback
   motor/                 TMC2209 stepper driver
   outlets/               Shelly outlet polling

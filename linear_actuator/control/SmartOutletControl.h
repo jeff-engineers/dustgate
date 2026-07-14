@@ -42,7 +42,8 @@ public:
                          const char* ip,
                          const char* name,
                          int stopIndex,
-                         float thresholdW);
+                         float thresholdW,
+                         const char* host = ""); // mDNS hostname, if known (see SmartOutlet::setHost)
 
     void removeOutlet(int slot);
     void saveSlot(int slot);       // persist a single slot to NVS
@@ -63,7 +64,7 @@ public:
     // active (a real gate is selected) and off when idle, so its blocking HTTP
     // switch calls stay off the motor loop. Persisted separately in NVS.
     // -------------------------------------------------------------------------
-    void configureDustCollector(int generation, const char* ip); // replaces + persists
+    void configureDustCollector(int generation, const char* ip, const char* host = ""); // replaces + persists
     void removeDustCollector();
     bool dcConfigured() const { return _dustCollector != nullptr; }
     bool dcOn();                    // thread-safe read for status JSON
@@ -99,6 +100,11 @@ private:
     // Debounce tracking (poll task only — no mutex needed)
     int               _pendingStop;
     unsigned long     _pendingStartMs;
+    // Per-outlet active state from the previous poll tick — lets doPoll()
+    // detect a fresh OFF→ON transition (edge) instead of just "currently on"
+    // (level), so manual override isn't immediately re-clobbered by a tool
+    // that was already running before the manual move (poll task only).
+    bool              _prevActive[SMART_OUTLET_COUNT];
 
     static void pollTaskFn(void* param);
     void        doPoll();

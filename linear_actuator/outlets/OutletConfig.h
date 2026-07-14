@@ -6,6 +6,9 @@
 //
 //   o<N>_gen    int   Shelly generation (1 or 2)
 //   o<N>_ip     str   IP address ("192.168.1.x")
+//   o<N>_host   str   mDNS hostname (no ".local"), empty if manually entered.
+//                      Lets the outlet re-resolve its IP after a DHCP lease
+//                      change instead of going silently unreachable.
 //   o<N>_name   str   Display name ("Table Saw")
 //   o<N>_stop   int   Stop index this outlet maps to (1-based)
 //   o<N>_thr    float On-threshold in watts
@@ -13,6 +16,7 @@
 //
 //   dc_gen      int   Dust collector plug Shelly generation (1 or 2)
 //   dc_ip       str   Dust collector plug IP address
+//   dc_host     str   Dust collector plug mDNS hostname (see o<N>_host above)
 //
 // The setup agent writes these; SmartOutletControl reads them at boot.
 // =============================================================================
@@ -25,6 +29,7 @@
 struct OutletEntry {
     int   generation;               // 1 or 2
     char  ip[16];                   // "xxx.xxx.xxx.xxx\0"
+    char  host[40];                 // mDNS hostname, empty if manually entered
     char  name[32];                 // display name
     int   stopIndex;                // 1-based stop this outlet maps to
     float thresholdW;               // watts threshold for "tool on"
@@ -36,6 +41,7 @@ struct OutletEntry {
 struct DustCollectorEntry {
     int   generation;               // 1 or 2
     char  ip[16];                   // "xxx.xxx.xxx.xxx\0"
+    char  host[40];                 // mDNS hostname, empty if manually entered
     bool  valid;                    // false = not configured
 };
 
@@ -56,6 +62,8 @@ namespace OutletConfig {
 
             snprintf(key, sizeof(key), "o%d_gen",  i); e.generation = prefs.getInt(key, 1);
             snprintf(key, sizeof(key), "o%d_ip",   i); prefs.getString(key, e.ip,   sizeof(e.ip));
+            e.host[0] = '\0';
+            snprintf(key, sizeof(key), "o%d_host", i); prefs.getString(key, e.host, sizeof(e.host));
             snprintf(key, sizeof(key), "o%d_name", i); prefs.getString(key, e.name, sizeof(e.name));
             snprintf(key, sizeof(key), "o%d_stop", i); e.stopIndex  = prefs.getInt(key, 0);
             snprintf(key, sizeof(key), "o%d_thr",  i); e.thresholdW = prefs.getFloat(key, OUTLET_DEFAULT_THRESHOLD_W);
@@ -77,6 +85,7 @@ namespace OutletConfig {
         char key[12];
         snprintf(key, sizeof(key), "o%d_gen",  slot); prefs.putInt(key,    e.generation);
         snprintf(key, sizeof(key), "o%d_ip",   slot); prefs.putString(key, e.ip);
+        snprintf(key, sizeof(key), "o%d_host", slot); prefs.putString(key, e.host);
         snprintf(key, sizeof(key), "o%d_name", slot); prefs.putString(key, e.name);
         snprintf(key, sizeof(key), "o%d_stop", slot); prefs.putInt(key,    e.stopIndex);
         snprintf(key, sizeof(key), "o%d_thr",  slot); prefs.putFloat(key,  e.thresholdW);
@@ -90,11 +99,13 @@ namespace OutletConfig {
 
     // Load the dust collector plug config from NVS. Returns false if none set.
     inline bool loadDustCollector(DustCollectorEntry& e) {
-        e.ip[0] = '\0';  // getString leaves buf untouched if the key is missing
+        e.ip[0]   = '\0';  // getString leaves buf untouched if the key is missing
+        e.host[0] = '\0';
         Preferences prefs;
         prefs.begin(NVS_NS, /*readOnly=*/true);
         e.generation = prefs.getInt("dc_gen", 2);
         prefs.getString("dc_ip", e.ip, sizeof(e.ip));
+        prefs.getString("dc_host", e.host, sizeof(e.host));
         prefs.end();
         e.valid = (strlen(e.ip) > 0);
         return e.valid;
@@ -106,6 +117,7 @@ namespace OutletConfig {
         prefs.begin(NVS_NS, /*readOnly=*/false);
         prefs.putInt("dc_gen", e.generation);
         prefs.putString("dc_ip", e.ip);
+        prefs.putString("dc_host", e.host);
         prefs.end();
     }
 
@@ -115,6 +127,7 @@ namespace OutletConfig {
         prefs.begin(NVS_NS, /*readOnly=*/false);
         prefs.remove("dc_gen");
         prefs.remove("dc_ip");
+        prefs.remove("dc_host");
         prefs.end();
     }
 

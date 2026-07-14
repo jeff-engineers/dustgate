@@ -26,4 +26,9 @@ public:
 private:
     char _ip[16];    // "xxx.xxx.xxx.xxx\0"
     char _name[32];
+
+    bool doPoll();
+    // Re-resolves host() via mDNS and updates _ip on success. False if no
+    // hostname is set or the query didn't get a response.
+    bool reresolve();
 };

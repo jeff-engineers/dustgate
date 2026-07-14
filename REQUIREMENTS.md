@@ -1,4 +1,4 @@
-x`# DustGate — Requirements & Architecture
+# DustGate — Requirements & Architecture
 
 Motorized blast gate manifold controller. A rack-and-pinion linear actuator selects which dust
 collection port is open based on which shop tool is in use. The system is largely self-configuring
@@ -17,10 +17,6 @@ via an AI-powered setup agent accessible from a browser on the local network.
 | Smart outlets | Shelly Plug US Gen 4 (~$21 ea., us.shelly.com) | Fully local REST API, 1800W/15A, no cloud required |
 | Home endstop | NC mechanical limit switch on D10 | Fail-safe: open wire reads as triggered |
 
-### Hardware not selected (alternatives documented)
-- Continuous rotation servo (#2348) — viable for lower-torque builds
-- DC gear motor — viable with appropriate driver
-- Sensorless homing (StallGuard) — evaluated and abandoned; SG_RESULT returned 0 on #6121
 
 ### Planned carrier PCB (Task 5)
 - ESP32-S2 Feather + BTT TMC2209 StepStick on 2.54mm headers
@@ -32,13 +28,14 @@ via an AI-powered setup agent accessible from a browser on the local network.
 
 ## 2. Motion System
 
-- **Rack-and-pinion** linear actuator, 1 to 7 selectable stop positions (configurable at compile time via `NUM_STOPS`)
+- **Rack-and-pinion** linear actuator, up to `NUM_STOPS` selectable stop positions (compile-time max, currently 16); the runtime-active count (≤ max) is separately configurable via `/api/config/gates` or Settings without recompiling
 - **Stop 0** = home/disabled position
 - **Homing:** drive toward NC limit switch at `HOMING_SPEED_STEPS_PER_SEC`, back off `HOME_BACKOFF_STEPS` after trigger, zero position
 - **Positioning:** step-counted moves from home; stop distances trained by setup agent or computed from geometry constants
 - **Stop distance storage:** EEPROM/NVS via `Preferences`; `clearcal` command erases stale calibration
 - **Measured geometry:** gate 1 at step −51 from home; gate-to-gate ≈ 4270 steps (82.9mm × 51.47 steps/mm)
-- **Enable/disable:** `home` command enables and homes; system warns once if position commands arrive before homing
+- **No enable/disable concept:** the system always runs; only e-stop (software-only — no physical e-stop button) halts motion. `home` re-homes and clears any latched e-stop; the system warns once if position commands arrive before homing.
+- **Idle power-off:** if no move/home command arrives for `IDLE_TIMEOUT_SEC_DEFAULT` (3600s default, runtime-configurable via `POST /api/config/idle-timeout` or the Settings screen), the stepper driver is fully disabled and the position marked unknown, forcing a rehome on the next move instead of sitting energized indefinitely.
 
 ---
 
@@ -50,15 +47,10 @@ Exactly one control mode is active at compile time (`config.h`). The HTTP API ru
 - Human-readable serial commands: `home`, `1`–`7`, `jog <mm>`, `estop`, `status`, `clearcal`, `wifireset`, `help`
 - Commands reserved for setup agent (code present, disabled at runtime): `train`, `autotune`, `sgthrs`, `homespeed`
 
-### 3b. Rotary Switch (`CONTROL_ROTARY`) — budget option
-- SP8T rotary switch on resistor ladder → A0 (analog)
-- Toggle switch on D12 enables/disables system
-- Thresholds calibrated in `RotaryControl.cpp`
-
-### 3c. Smart Outlet (`CONTROL_SMART_OUTLET`)
+### 3b. Smart Outlet (`CONTROL_SMART_OUTLET`)
 - See Section 5 below
 
-### 3d. HTTP API (`ENABLE_HTTP_API`)
+### 3c. HTTP API (`ENABLE_HTTP_API`)
 - See Section 6 below
 
 ---
@@ -93,13 +85,21 @@ Exactly one control mode is active at compile time (`config.h`). The HTTP API ru
 - All outlets idle → return to home (stop 0)
 
 ### Manual override
-- `setManualOverride(int stop)` on `SmartOutletControl`: overrides outlet selection until next outlet threshold crossing
-- Cleared automatically when any outlet next crosses its threshold (tool turned on)
+- `setManualOverride(int stop)` on `SmartOutletControl`: overrides outlet selection until an outlet has a genuine OFF→ON transition
+- **Edge-triggered, not level-triggered:** a tool that was already running before the manual move does *not* immediately re-clobber the override just because it's still "active" — only a fresh power-on clears it. (An earlier level-triggered version had this bug: moving manually while another gate's tool kept running would snap back within one poll tick.)
 - Accessible via HTTP API (`POST /api/move` while in outlet mode)
 
+### Outlet discovery (mDNS)
+- `GET /api/outlets/discover` scans mDNS for `_http._tcp` services, filters to hostnames containing "shelly", and probes each match (Gen2 first, then Gen1) for reachability/power/generation — see `linear_actuator/utils/MdnsQuery.h`
+- Retries the mDNS query a few times (`DISCOVER_MDNS_ATTEMPTS`) and merges by IP, since UDP responses are lossy
+- Also fetches the outlet's own app-assigned name when available — Gen1 via `/settings`, Gen2 via `Switch.GetConfig?id=0` (falling back to `Sys.GetConfig`) — see `linear_actuator/outlets/ShellyDeviceName.h`
+- Lets the setup wizard's "Scan for outlets" list replace manual IP entry in most cases; manual entry remains as a fallback
+- **Must run on the main loop task**, not a spawned FreeRTOS task — ESP32's mDNS responder isn't safe to call concurrently with its own hostname-advertising; doing so from a separate task previously corrupted the heap and crashed the device
+- The mDNS hostname is persisted alongside the IP (`o<N>_host` in NVS) so an outlet can re-resolve its IP after a DHCP lease change instead of going silently unreachable
+
 ### Per-outlet configuration (NVS)
-- Stored in namespace `outlets`: generation, IP, name, stop index, threshold watts
-- Managed by setup agent via `OutletConfig` namespace + `SmartOutletControl::configureOutlet()` / `saveAll()`
+- Stored in namespace `outlets`: generation, IP, mDNS hostname, name, stop index, threshold watts
+- Managed by setup agent (or the manual wizard) via `OutletConfig` namespace + `SmartOutletControl::configureOutlet()` / `saveAll()`
 
 ### 240V tools
 - Plug-in smart outlets are 120V only
@@ -125,25 +125,35 @@ Runs alongside any control mode. Built on ESPAsyncWebServer + ArduinoJson v6.
 
 | Method | Path | Body / Params | Action |
 |--------|------|---------------|--------|
+| GET | `/api/info` | — | Unauthenticated bootstrap: API key, gate count, version, orientation, idle timeout |
 | GET | `/api/status` | — | Full system status JSON |
 | POST | `/api/home` | — | Home the actuator |
 | POST | `/api/move` | `{"stop": N}` | Move to stop N (0 = home) |
 | POST | `/api/jog` | `{"mm": ±F}` | Relative jog in mm |
-| POST | `/api/estop` | — | Emergency stop |
-| POST | `/api/enable` | — | Enable motor |
-| POST | `/api/disable` | — | Disable motor |
-| POST | `/api/clearcal` | — | Erase EEPROM calibration |
-| POST | `/api/outlets` | outlet config JSON | Add/update outlet slot |
+| POST | `/api/estop` | — | Software emergency stop (no physical e-stop button exists) |
+| POST | `/api/enable` / `/api/disable` | — | Legacy/vestigial — routes exist but `isEnabled()` is hardcoded `true`; the system always runs |
+| POST | `/api/clearcal` | — | Erase calibration, gate count, and outlet config — "Start Over" |
+| GET | `/api/outlets/discover` | — | Scan mDNS for Shelly outlets (see Section 5) |
+| POST | `/api/outlets/ping` | `{"ip": "..."}` | One-shot reachability check by IP (FreeRTOS task, non-blocking) |
+| PUT | `/api/outlets/:slot` | `{"gen","ip","host","name","stop","threshold"}` | Configure/update outlet slot |
 | DELETE | `/api/outlets/:slot` | — | Remove outlet slot |
 | POST | `/api/outlets/save` | — | Persist outlet config to NVS |
-| POST | `/api/outlets/:slot/ping` | — | One-shot reachability check (FreeRTOS task, non-blocking) |
+| PUT | `/api/dustcollector` | `{"gen","ip","host"}` | Assign the dust collector's switchable plug |
+| DELETE | `/api/dustcollector` | — | Unassign the dust collector plug |
+| POST | `/api/dustcollector/switch` | `{"on": bool}` | Manual dashboard on/off |
+| POST | `/api/config/orientation` | `{"homeOnRight": bool}` | Persist visual orientation |
+| POST | `/api/config/motor` | `{"invertDirection": bool}` | Flip homing direction |
+| POST | `/api/config/gates` | `{"numGates": N}` | Set active gate count |
+| POST | `/api/config/idle-timeout` | `{"seconds": N}` | Set idle power-off timeout (0 = never) |
+| POST | `/api/wifi/reset` | — | Erase WiFi credentials, reboot into setup portal |
 | POST | `/api/agent/chat` | `{"messages": [...]}` | Stateless Claude API proxy (see Section 7) |
-| PUT | `/api/agent/key` | `{"key": "sk-ant-..."}` | Update Anthropic key in NVS without re-running portal |
+| PUT | `/api/agent/key` | `{"key": "sk-ant-..."}` | Update Anthropic key in NVS — no UI entry point (removed deliberately; LAN-served page shouldn't expose it), only serial `provision` or the captive portal |
 
 ### WebSocket (`ws://<ip>/ws`)
 - Push-only: server sends status JSON when system state changes
 - Change detection via fingerprint struct (not full JSON string comparison) — avoids spurious pushes on floating sensor noise
-- Fields that trigger a push: `stateName`, `currentStop`, `targetStop`, `homed`, `enabled`, `endstopHome`
+- Fields that trigger a push: `stateName`, `currentStop`, `targetStop`, `homed`, `enabled`, `endstopHome`, `numActiveStops`, and (outlet mode) each outlet's name/ip/stop mapping, plus dust collector `dcOn`/`dcConfigured`
+- These last two were both bugs found and fixed in practice: outlet config changes and dust-collector on/off toggles were originally excluded from the fingerprint, so the UI could show stale outlet lists or a stale DC switch state until some *other* field happened to change too
 - Floating-point fields (positionSteps) do not trigger pushes alone
 
 ### Status JSON shape
@@ -218,16 +228,18 @@ Angular (browser)                  ESP32                        Anthropic API
 
 Source lives in `dustgate-ui/`. Served from ESP32 LittleFS flash.
 
-### Views (hash routing — no server-side redirects needed)
+### Views (hash routing via `withHashLocation()` — no server-side redirects needed)
 
 | Route | Description |
 |-------|-------------|
-| `/#/` | **Dashboard** — HOME button, one button per configured tool (names from outlet config), dust collector dummy toggle, gear icon → setup |
-| `/#/setup` | **Setup chat** — Claude agentic loop, tool-call progress pills, back arrow → dashboard |
+| `/#/` | **Dashboard** — interactive manifold visualizer (tap a gate to move, tap home, tap dust collector to toggle), gear icon → Settings |
+| `/#/setup` | **Guided (AI) setup** — Claude agentic loop, tool-call progress pills, back arrow → dashboard. Kept polished as a demo feature but expected to be excluded from the final release build. |
+| `/#/setup/manual` | **Manual setup wizard** — step through gate positions and outlet assignment without the AI; the primary supported setup path |
+| `/#/settings` | **Settings** — idle power-off timeout, home orientation, motor direction, gate count, port size (client-side only), forget-WiFi, reset-calibration, and links to both setup wizards. Consolidates settings that used to be wizard-only or not reachable post-setup at all. |
 
-- Tool buttons pull names from `status.outlets[].name` via WebSocket — no hardcoding
+- Gate/tool names pull from `status.outlets[].name` via WebSocket — no hardcoding
 - Dust collector toggle drives a Shelly smart plug via `/api/dustcollector/switch`
-- Setup chat is always reachable via gear icon — not hidden after initial setup
+- The Anthropic API key has no UI entry point (deliberately removed from Settings — see Section 6) — only settable via serial `provision` or the WiFi captive portal
 
 ### API key bootstrap
 
@@ -292,11 +304,16 @@ npm start
 | Shelly outlet polling | ✅ Done | Gen1 + Gen2, debounce, FreeRTOS task |
 | WiFi provisioning (captive portal) | ✅ Done | Collects WiFi creds + Anthropic API key |
 | HTTP REST + WebSocket API | ✅ Done | Auth, WS fingerprint push, non-blocking ping, `/api/agent/chat` proxy |
-| `setManualOverride()` on SmartOutletControl | ✅ Done | Clears on next tool-on event |
+| `setManualOverride()` on SmartOutletControl | ✅ Done | Edge-triggered — clears only on a fresh OFF→ON transition, not just "still on" |
 | Wire `HttpApiServer` into `linear_actuator.ino` | ✅ Done | estop/home/move/jog/clearcal/outlets all wired |
-| Angular front-end | ✅ Done | Dashboard + setup chat, served from LittleFS |
+| Angular front-end | ✅ Done | Dashboard, manual wizard, AI setup chat, Settings screen — served from LittleFS |
 | LittleFS static serving + `/api/info` | ✅ Done | Auto-serves .gz, bootstrap key endpoint |
-| Dust collector (Shelly plug) | ✅ Done | Auto + manual dashboard toggle via `/api/dustcollector` |
+| Dust collector (Shelly plug) | ✅ Done | Auto + manual dashboard toggle via `/api/dustcollector`; scan-first discovery |
+| Manual setup wizard | ✅ Done | `/#/setup/manual` — primary supported setup path, no AI dependency |
+| Settings screen | ✅ Done | `/#/settings` — idle timeout, orientation, motor direction, gate count, port size, forget-WiFi, reset-calibration |
+| Outlet mDNS discovery | ✅ Done | "Scan for outlets" — replaces manual IP entry as the primary path |
+| Idle power-off | ✅ Done | Driver disables after inactivity; forces rehome on next use |
+| Physical e-stop button | ❌ Removed | Hardware deemed too low-power to need one; software e-stop only |
 | Carrier PCB (KiCad) | ⏳ Planned | Task 5 |
 
 ---
@@ -305,17 +322,23 @@ npm start
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `NUM_STOPS` | 2 | Number of gate positions (max 7) |
+| `NUM_STOPS` | compile-time max | Number of gate positions (runtime-active count is separately configurable up to this max, via `/api/config/gates` or Settings) |
 | `MICROSTEPS` | 16 | TMC2209 microstep divisor |
 | `TMC2209_CURRENT_MA` | 800 | UART run current (mA) |
-| `HOME_DIRECTION` | 1 | Step direction toward home endstop |
+| `TMC2209_HOLD_CURRENT_MA` | 75 | UART hold current (mA) — kept low so the motor stays cool between moves |
+| `HOME_DIRECTION_DEFAULT` | 1 | Step direction toward home endstop (runtime override via `/api/config/motor`) |
 | `HOME_BACKOFF_STEPS` | 50 | Steps to back off after endstop triggers |
 | `MAX_SPEED_STEPS_PER_SEC` | 2000 | Normal move speed |
 | `HOMING_SPEED_STEPS_PER_SEC` | 500 | Homing speed |
+| `IDLE_TIMEOUT_SEC_DEFAULT` | 3600 | Seconds of inactivity before the driver powers off (0 = never); runtime override via `/api/config/idle-timeout` or Settings |
 | `OUTLET_POLL_INTERVAL_MS` | 500 | Shelly poll rate |
+| `OUTLET_HTTP_TIMEOUT_MS` | 400 | Per-request timeout for outlet HTTP calls (must stay under the poll interval) |
 | `OUTLET_ON_DEBOUNCE_MS` | 1000 | ON debounce |
 | `OUTLET_OFF_DEBOUNCE_MS` | 3000 | OFF debounce |
 | `OUTLET_DEFAULT_THRESHOLD_W` | 5.0 | Watts threshold for "tool on" |
+| `DISCOVER_MDNS_ATTEMPTS` | 3 | mDNS query retries for outlet discovery (UDP is lossy) |
+| `DISCOVER_MDNS_TIMEOUT_MS` | 400 | Per-attempt mDNS query timeout (bypasses ESPmDNS's hardcoded 3000ms — see `MdnsQuery.h`) |
+| `DISCOVER_MDNS_RETRY_DELAY_MS` | 150 | Delay between discovery attempts |
 | `API_KEY_BYTES` | 8 | RNG bytes for auto-generated API key |
 | `WIFI_PORTAL_SSID` | "DustGate-Setup" | Setup AP name |
 

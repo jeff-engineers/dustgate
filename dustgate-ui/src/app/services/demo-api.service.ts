@@ -3,6 +3,7 @@ import { HttpClient } from '@angular/common/http';
 import {
   ApiService,
   DeviceInfo,
+  DiscoveredOutlet,
   OutletConfigCmd,
   OutletStatus,
   PingResult,
@@ -23,6 +24,7 @@ interface MockState {
   homeOnRight:    boolean;
   motorInverted:  boolean;
   numActiveStops: number;
+  dcConfigured:   boolean;
   dcOn:           boolean;
   dcIp:           string | null;
   stops:          Array<{ index: number; mm: string | null }>;
@@ -37,9 +39,43 @@ interface MockState {
 interface PingSim {
   order:  string[];
   counts: Record<string, number>;
+  base:   Record<string, number>;   // stable per-outlet running draw (W)
 }
 
 const NUM_STOPS = 16;
+const STEPS_PER_MM = 40;  // mirrors tools/mock-api.js — was 51.47 here, an unintentional drift
+
+// ── mDNS discovery simulation (mirrors tools/mock-api.js) ─────────────────────
+// A handful of Shelly outlets "on the network," each with a plausible mDNS
+// hostname (ShellyPlugUSG4-<MAC-shaped hex>) and IP. Generated once per page
+// load so repeated scans return the same devices, like real mDNS would. Most
+// mock devices get no local name (real-world testing found most Shelly Plugs
+// never have one set) — only a couple get one, to exercise both code paths.
+const MOCK_TOOL_NAMES = ['Table Saw', 'Drill Press', 'Router Table'];
+
+interface MockDiscoveredDevice {
+  ip: string;
+  hostname: string;
+  name: string;
+  reachable: boolean;
+  powerW: number;
+  gen: number;
+}
+
+function randomHex(len: number): string {
+  let s = '';
+  for (let i = 0; i < len; i++) s += Math.floor(Math.random() * 16).toString(16);
+  return s.toUpperCase();
+}
+
+function randomLanIp(usedIps: Set<string>): string {
+  let ip: string;
+  do {
+    ip = `192.168.87.${20 + Math.floor(Math.random() * 60)}`;
+  } while (usedIps.has(ip));
+  usedIps.add(ip);
+  return ip;
+}
 
 // ── Service ────────────────────────────────────────────────────────────────────
 
@@ -64,12 +100,54 @@ export class DemoApiService extends ApiService {
     motorInverted:  false,
     numActiveStops: 0,
     dcOn:           false,
-    dcIp:           null,
+    // Seed the showcase with a pre-configured dust collector so the dashboard
+    // toggle works on a fresh page load without running the wizard. A start-over
+    // (clearCal) still clears it, matching firmware — this is just the initial
+    // demo state, not a hardcoded-always-true override.
+    dcIp:           '192.168.87.50',
+    dcConfigured:   true,
     stops: Array.from({ length: NUM_STOPS + 1 }, (_, i) => ({ index: i, mm: null as string | null })),
     outlets:        [],
   };
 
-  private pingSim: PingSim = { order: [], counts: {} };
+  private pingSim: PingSim = { order: [], counts: {}, base: {} };
+
+  // A tool's running draw once spun up: a stable per-outlet base in the
+  // 500–1000W range (typical for corded power tools) with a few percent of
+  // per-reading jiggle, so repeated pings on the same tool read consistently
+  // like real hardware rather than jumping across the whole range each call.
+  private runningWatts(ip: string): number {
+    if (!(ip in this.pingSim.base)) this.pingSim.base[ip] = 500 + Math.random() * 500;
+    const jiggle = 1 + (Math.random() - 0.5) * 0.06; // ±3%
+    return Math.round(this.pingSim.base[ip] * jiggle);
+  }
+
+  /** Lazily generated, stable for the life of the page (mirrors tools/mock-api.js). */
+  private discovered: MockDiscoveredDevice[] | null = null;
+
+  private ensureDiscovered(): MockDiscoveredDevice[] {
+    if (this.discovered) return this.discovered;
+    const usedIps = new Set<string>();
+    const count = 2 + Math.floor(Math.random() * 3); // 2-4, mirrors real mDNS variability
+    const namedIdx = new Set<number>();
+    while (namedIdx.size < Math.min(2, count)) namedIdx.add(Math.floor(Math.random() * count));
+
+    this.discovered = Array.from({ length: count }, (_, i) => ({
+      ip:        randomLanIp(usedIps),
+      hostname:  `ShellyPlugUSG4-${randomHex(12)}`,
+      name:      namedIdx.has(i) ? MOCK_TOOL_NAMES[Math.floor(Math.random() * MOCK_TOOL_NAMES.length)] : '',
+      reachable: true,
+      powerW:    Math.round(Math.random() * 8 * 10) / 10,  // idle standby draw
+      gen:       2,
+    }));
+    return this.discovered;
+  }
+
+  /** Real device name for a given IP if it's one of the discovered/simulated ones, else ''. */
+  private nameForIp(ip: string): string {
+    const d = this.ensureDiscovered().find(d => d.ip === ip);
+    return d ? d.name : '';
+  }
 
   private simulatedPingPower(ip: string): number {
     if (!(ip in this.pingSim.counts)) {
@@ -80,9 +158,11 @@ export class DemoApiService extends ApiService {
     const rank  = this.pingSim.order.indexOf(ip);
     const count = this.pingSim.counts[ip];
 
-    if (rank === 0) return count === 1 ? 0 : 320;
-    if (rank === 1) return count <= 2 ? 0 : Math.round(150 + Math.random() * 250);
-    return Math.round(200 + Math.random() * 200);
+    // First one/two pings read 0W to demo the wizard's "no load yet, try
+    // again" flow; after that the tool has spun up to its running draw.
+    if (rank === 0) return count === 1 ? 0 : this.runningWatts(ip);
+    if (rank === 1) return count <= 2 ? 0 : this.runningWatts(ip);
+    return this.runningWatts(ip);
   }
 
   constructor(http: HttpClient, hardwareProfile: HardwareProfileService) {
@@ -127,7 +207,7 @@ export class DemoApiService extends ApiService {
       endstopHome:    this.mock.homed && this.mock.positionMM < 0.5,
       stops:          this.mock.stops,
       outlets:        this.mock.outlets,
-      dcConfigured:   true,   // demo simulates a dust collector plug so the toggle works
+      dcConfigured:   this.mock.dcConfigured,
       dcOn:           this.mock.dcOn,
     };
   }
@@ -173,12 +253,15 @@ export class DemoApiService extends ApiService {
 
   override configureDustCollector(generation: number, ip: string): Promise<{ ok: boolean }> {
     this.mock.dcIp = ip;
+    this.mock.dcConfigured = true;
     this.pushStatus();
     return Promise.resolve({ ok: true });
   }
 
   override deleteDustCollector(): Promise<{ ok: boolean }> {
     this.mock.dcIp = null;
+    this.mock.dcConfigured = false;
+    this.mock.dcOn = false;
     this.pushStatus();
     return Promise.resolve({ ok: true });
   }
@@ -196,7 +279,7 @@ export class DemoApiService extends ApiService {
     this.mock.stateName  = stop === 0 ? 'IDLE' : 'AT_STOP';
     this.mock.currentStop = stop;
     this.mock.positionMM  = toMM;
-    this.mock.positionSteps = Math.round(toMM * 51.47);
+    this.mock.positionSteps = Math.round(toMM * STEPS_PER_MM);
     this.mock.dcOn        = stop > 0;   // collector follows gate selection
     this.pushStatus();
     return { ok: true };
@@ -207,7 +290,7 @@ export class DemoApiService extends ApiService {
     this.pushStatus();
     await this.delay(Math.max(200, Math.abs(mm) * 15));
     this.mock.positionMM    += mm;
-    this.mock.positionSteps  = Math.round(this.mock.positionMM * 51.47);
+    this.mock.positionSteps  = Math.round(this.mock.positionMM * STEPS_PER_MM);
     this.mock.stateName      = 'IDLE';
     this.pushStatus();
     return { ok: true };
@@ -242,9 +325,12 @@ export class DemoApiService extends ApiService {
     this.mock.positionMM     = 0;
     this.mock.positionSteps  = 0;
     this.mock.numActiveStops = 0;
+    // Dust collector is part of the outlet config firmware clears on start-over.
+    this.mock.dcConfigured   = false;
     this.mock.dcOn           = false;
+    this.mock.dcIp           = null;
     this.mock.outlets        = [];
-    this.pingSim             = { order: [], counts: {} };
+    this.pingSim             = { order: [], counts: {}, base: {} };
     this.mock.stops = Array.from({ length: NUM_STOPS + 1 }, (_, i) => ({ index: i, mm: null as string | null }));
     if (this.deviceInfo) this.deviceInfo.numStops = 0;
     this.pushStatus();
@@ -282,9 +368,25 @@ export class DemoApiService extends ApiService {
     // device-side; there's no device to detect here, so we always report Gen 2.
     await this.delay(400);
     if (ip === this.mock.dcIp) {
-      return { reachable: true, powerW: this.mock.dcOn ? 380 : 0, generation: 2 };
+      return { reachable: true, powerW: this.mock.dcOn ? 380 : 0, generation: 2, name: this.nameForIp(ip) };
     }
-    return { reachable: true, powerW: this.simulatedPingPower(ip), generation: 2 };
+    return { reachable: true, powerW: this.simulatedPingPower(ip), generation: 2, name: this.nameForIp(ip) };
+  }
+
+  /**
+   * Scans for Shelly outlets. Mirrors tools/mock-api.js's /api/outlets/discover:
+   * a stable set of simulated devices, with slight wattage jitter per call.
+   */
+  override async discoverOutlets(): Promise<DiscoveredOutlet[]> {
+    await this.delay(600);
+    return this.ensureDiscovered().map(d => ({
+      ip:         d.ip,
+      hostname:   d.hostname,
+      name:       d.name,
+      reachable:  d.reachable,
+      powerW:     Math.max(0, Math.round((d.powerW + (Math.random() - 0.5) * 2) * 10) / 10),
+      generation: d.gen,
+    }));
   }
 
   override saveOutletConfig(): Promise<{ ok: boolean }> {
@@ -326,6 +428,19 @@ export class DemoApiService extends ApiService {
 
   override resetSetup(): Promise<{ ok: boolean }> {
     return this.clearCal();
+  }
+
+  override setIdleTimeout(seconds: number): Promise<{ ok: boolean }> {
+    // No device to persist to — just reflect it in deviceInfo so the Settings
+    // screen shows the value the user picked (base impl would POST and 404).
+    if (this.deviceInfo) this.deviceInfo.idleTimeoutSec = seconds;
+    return Promise.resolve({ ok: true });
+  }
+
+  override forgetWifi(): Promise<{ ok: boolean }> {
+    // No real WiFi to forget in demo mode; no-op instead of POSTing to a
+    // nonexistent backend.
+    return Promise.resolve({ ok: true });
   }
 
   override async refreshInfo(): Promise<void> {

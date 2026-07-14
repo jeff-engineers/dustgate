@@ -17,6 +17,7 @@
 //   provision <json> Write WiFi + Anthropic key to NVS
 //   wifireset        Erase WiFi credentials, reboot into setup portal
 //   status           Print current state and position
+//   discover         Scan mDNS for Shelly outlets (CONTROL_SMART_OUTLET builds only)
 //   help             Print this command list
 // =============================================================================
 
@@ -72,6 +73,9 @@ private:
     void processLine(const String& line);
     void printStatus();
     void printHelp();
+#ifdef CONTROL_SMART_OUTLET
+    void runDiscover();
+#endif
 };
 
 #endif // CONTROL_SERIAL_DEBUG || ENABLE_SERIAL_COMMANDS

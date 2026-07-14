@@ -45,6 +45,15 @@
 // Bumping this requires clearing calibration (clearcal) because CalibrationData changes size.
 #define NUM_STOPS         16      // max selectable positions (position 0 = home)
 
+// Minimum spacing (mm) between two saved gate positions. Authoritative backstop
+// against saving two gates on top of each other (e.g. "forgot to jog" — saving
+// gate N+1 without having moved off gate N). The Angular UI does a friendlier,
+// port-size-aware version of this check before it ever calls /api/setstop; this
+// firmware check catches any client that skips the UI (curl, scripts). Kept
+// small so it only rejects genuine near-duplicates, never legitimately tight
+// real-world gate spacing. Home (stop 0) is excluded from the check.
+#define MIN_STOP_SEPARATION_MM   10.0f
+
 // Names for each stop (used in serial debug output — extend as needed)
 #define STOP_NAMES { "Home/Disabled", "Stop 1", "Stop 2", "Stop 3", \
                      "Stop 4", "Stop 5", "Stop 6", "Stop 7",        \
@@ -117,6 +126,13 @@ extern int g_homeDirection;        // defined in linear_actuator.ino
 // as a safety floor; TMC2209 still raises DIAG on severe overload/stall.
 #define TMC2209_STALL_THRESHOLD   50
 
+// Idle power-off: if no move/home command is issued for this many seconds,
+// the driver is fully disabled (not just dropped to hold current) and the
+// position is marked unknown, requiring a rehome before the next move.
+// User-configurable at runtime via PUT /api/config/idle-timeout (0 = never
+// sleep); this is only the default for a fresh device / after a NVS erase.
+#define IDLE_TIMEOUT_SEC_DEFAULT 3600
+
 // UART address (0–3, set by MS1/MS2 pins — Adafruit board default is 0)
 #define TMC2209_ADDRESS            0
 
@@ -160,6 +176,20 @@ extern int g_homeDirection;        // defined in linear_actuator.ino
 // HTTP request timeout per outlet — must be shorter than OUTLET_POLL_INTERVAL_MS
 // to avoid stalling the poll loop when a device is offline
 #define OUTLET_HTTP_TIMEOUT_MS      400
+
+// mDNS discovery (setup wizard's "Scan for outlets" / serial 'discover') is
+// UDP-based and lossy — a single query commonly misses devices that answer
+// on a repeat query. Re-querying a few times and merging by IP gives a much
+// more complete/consistent list. Each query blocks for DISCOVER_MDNS_TIMEOUT_MS
+// waiting for responses (see utils/MdnsQuery.h) — keep the total across all
+// attempts well under a few seconds: on a local LAN, devices that are going
+// to answer at all do so within tens of milliseconds, and blocking the main
+// loop for too long risked a watchdog reset / stale HTTP request (see
+// MdnsQuery.h for the full story).
+#define DISCOVER_MDNS_ATTEMPTS       3
+#define DISCOVER_MDNS_TIMEOUT_MS     400
+#define DISCOVER_MDNS_RETRY_DELAY_MS 150
+#define DISCOVER_MAX_RESULTS         16
 
 // How long a tool must be drawing above threshold before the gate moves (ms).
 // Prevents false triggers from motor startup inrush.

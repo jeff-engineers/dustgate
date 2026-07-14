@@ -8,6 +8,12 @@
 #if defined(CONTROL_WIFI) || defined(CONTROL_SMART_OUTLET)
   #include "../utils/WiFiProvisioner.h"
 #endif
+#ifdef CONTROL_SMART_OUTLET
+  #include "../utils/MdnsQuery.h"
+  #include "../outlets/ShellyGen1Outlet.h"
+  #include "../outlets/ShellyGen2Outlet.h"
+  #include "../outlets/ShellyDeviceName.h"
+#endif
 
 #if defined(CONTROL_SERIAL_DEBUG) || defined(ENABLE_SERIAL_COMMANDS)
 
@@ -177,6 +183,11 @@ void SerialDebugControl::processLine(const String& line) {
         _clearCalPending = true;
         Serial.println(F("[DEBUG] Calibration erase requested — config.h defaults will be used."));
 
+#ifdef CONTROL_SMART_OUTLET
+    } else if (cmd == "discover") {
+        runDiscover();
+#endif
+
     } else if (cmd == "status") {
         printStatus();
 
@@ -189,6 +200,101 @@ void SerialDebugControl::processLine(const String& line) {
         Serial.println(F("' — type 'help' for commands."));
     }
 }
+
+#ifdef CONTROL_SMART_OUTLET
+void SerialDebugControl::runDiscover() {
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.println(F("[DISCOVER] WiFi not connected — can't scan."));
+        return;
+    }
+    Serial.println(F("[DISCOVER] Querying mDNS for _http._tcp ..."));
+
+    // mDNS/UDP query is lossy — retry a few times and merge unique hosts by
+    // IP, same as the HTTP discover endpoint (see linear_actuator.ino).
+    String hitIp[DISCOVER_MAX_RESULTS];
+    String hitHost[DISCOVER_MAX_RESULTS];
+    int hitCount = 0;
+
+    for (int attempt = 0; attempt < DISCOVER_MDNS_ATTEMPTS; attempt++) {
+        MdnsHit mdnsHits[DISCOVER_MAX_RESULTS];
+        int n = mdnsQueryHttpTcp(DISCOVER_MDNS_TIMEOUT_MS, mdnsHits, DISCOVER_MAX_RESULTS);
+        Serial.print(F("[DISCOVER] attempt "));
+        Serial.print(attempt + 1);
+        Serial.print(F("/"));
+        Serial.print(DISCOVER_MDNS_ATTEMPTS);
+        Serial.print(F(": "));
+        Serial.print(n);
+        Serial.println(F(" host(s) responded:"));
+
+        for (int i = 0; i < n; i++) {
+            String host = mdnsHits[i].hostname;
+            String ip   = mdnsHits[i].ip;
+            String hostLower = host;
+            hostLower.toLowerCase();
+            bool matched = hostLower.indexOf("shelly") >= 0;
+
+            Serial.print(F("  - "));
+            Serial.print(host.length() ? host : String("(no hostname)"));
+            Serial.print(F("  "));
+            Serial.print(ip);
+            Serial.println(matched ? F("  [matches \"shelly\" filter]") : F("  [does NOT match \"shelly\" filter — won't show in wizard]"));
+
+            if (!matched) continue;
+
+            bool dup = false;
+            for (int j = 0; j < hitCount; j++) {
+                if (hitIp[j] == ip) { dup = true; break; }
+            }
+            if (dup || hitCount >= DISCOVER_MAX_RESULTS) continue;
+            hitIp[hitCount]   = ip;
+            hitHost[hitCount] = host;
+            hitCount++;
+        }
+
+        if (attempt < DISCOVER_MDNS_ATTEMPTS - 1) delay(DISCOVER_MDNS_RETRY_DELAY_MS);
+    }
+
+    Serial.print(F("[DISCOVER] "));
+    Serial.print(hitCount);
+    Serial.println(F(" unique host(s) across all attempts:"));
+
+    if (hitCount == 0) {
+        Serial.println(F("  (nothing found — check the outlet is powered, on the same WiFi network,"));
+        Serial.println(F("   and that mDNS is enabled in the Shelly app's device settings)"));
+        return;
+    }
+
+    for (int i = 0; i < hitCount; i++) {
+        const String& ip   = hitIp[i];
+        const String& host = hitHost[i];
+
+        // Gen 2 first — see linear_actuator.ino's discover handling for why.
+        ShellyGen2Outlet gen2(ip.c_str(), "discover");
+        bool ok  = gen2.poll();
+        float pw = gen2.getPowerW();
+        int  gen = 2;
+        if (!ok) {
+            ShellyGen1Outlet gen1(ip.c_str(), "discover");
+            ok  = gen1.poll();
+            pw  = gen1.getPowerW();
+            gen = 1;
+        }
+        String devName = ok ? fetchShellyDeviceName(ip.c_str(), gen) : String();
+        Serial.print(F("  - ")); Serial.print(host); Serial.print(F("  ")); Serial.print(ip);
+        Serial.print(F("  probe -> reachable="));
+        Serial.print(ok ? F("yes") : F("no"));
+        Serial.print(F(" gen="));
+        Serial.print(ok ? gen : 0);
+        Serial.print(F(" powerW="));
+        Serial.print(pw, 1);
+        Serial.print(F(" name="));
+        Serial.println(devName.length() ? devName : String("(none set)"));
+    }
+    Serial.print(F("[DISCOVER] "));
+    Serial.print(hitCount);
+    Serial.println(F(" would appear in the wizard's outlet list."));
+}
+#endif
 
 void SerialDebugControl::printStatus() {
     Serial.println(F("--- Status ---"));
@@ -225,6 +331,9 @@ void SerialDebugControl::printHelp() {
     Serial.println(F("  wifireset         Erase WiFi credentials, reboot into setup portal"));
     Serial.println(F("  gconf             Read GCONF + CHOPCONF from driver"));
     Serial.println(F("  status            Print state, stop positions, endstop"));
+#ifdef CONTROL_SMART_OUTLET
+    Serial.println(F("  discover          Scan mDNS for Shelly outlets, print raw + filtered results"));
+#endif
     Serial.println(F("  provision <json>  Write WiFi+key+host to NVS: {\"ssid\":\"x\",\"pass\":\"y\",\"key\":\"sk-ant-...\",\"host\":\"dustgate\"}"));
     Serial.println(F("  help              Show this list"));
 #if defined(CONTROL_SMART_OUTLET) || defined(ENABLE_HTTP_API)

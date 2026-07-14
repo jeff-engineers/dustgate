@@ -71,14 +71,15 @@ const TOOLS = [
   },
   {
     name: 'configure_outlet',
-    description: 'Assign a Shelly smart outlet to a blast gate stop. Call after ping_outlet confirms the device is reachable, using the generation it returned — there is no need to ask the user which generation their outlet is.',
+    description: 'Assign a Shelly smart outlet to a blast gate stop. Call after ping_outlet or discover_outlets confirms the device is reachable, using the generation it returned — there is no need to ask the user which generation their outlet is.',
     input_schema: {
       type: 'object',
       properties: {
         slot:        { type: 'integer', description: 'Outlet slot number (0–15)' },
-        generation:  { type: 'integer', enum: [1, 2], description: 'Shelly generation, as returned by ping_outlet for this IP — do not guess or ask the user.' },
+        generation:  { type: 'integer', enum: [1, 2], description: 'Shelly generation, as returned by ping_outlet/discover_outlets for this IP — do not guess or ask the user.' },
         ip:          { type: 'string',  description: 'IP address of the Shelly outlet (e.g. 192.168.1.101)' },
-        name:        { type: 'string',  description: 'Human-readable tool name chosen by the user, e.g. "Bandsaw"' },
+        host:        { type: 'string',  description: 'mDNS hostname of the outlet, from discover_outlets, if it was found via a scan. Omit for a manually-provided IP — this lets the device re-resolve the outlet after a DHCP IP change instead of losing it.' },
+        name:        { type: 'string',  description: 'Human-readable tool name chosen by the user, e.g. "Bandsaw". If discover_outlets or ping_outlet returned a device name the user set in the Shelly app, propose that as the default and let the user confirm or override it rather than asking them to come up with one from scratch.' },
         stop:        { type: 'integer', description: 'Stop index this tool maps to (1–7)' },
         threshold_w: { type: 'number',  description: 'Watt threshold to detect tool-on. Default 5W; increase for tools with a high standby draw.' }
       },
@@ -86,8 +87,13 @@ const TOOLS = [
     }
   },
   {
+    name: 'discover_outlets',
+    description: 'Scan the local network via mDNS for Shelly smart outlets — no IP needed. Returns each outlet found with its IP, mDNS hostname, the name the user gave it in the Shelly app (if any), reachability, API generation, and current power reading. Call this FIRST when locating an outlet for a gate or the dust collector, before asking the user for an IP address — it saves them from having to look it up. Only fall back to asking for a manual IP (then call ping_outlet) if the scan finds nothing, or the outlet the user wants isn\'t in the results.',
+    input_schema: { type: 'object', properties: {} }
+  },
+  {
     name: 'ping_outlet',
-    description: 'Check whether a Shelly outlet is reachable on the network and read its current power draw. The device auto-detects the Shelly API generation (tries Gen 1, falls back to Gen 2) — the response includes which one it found, so there is no need to ask the user their outlet\'s generation.',
+    description: 'Check whether a Shelly outlet at a specific IP is reachable on the network and read its current power draw and Shelly-app device name. The device auto-detects the Shelly API generation (tries Gen 1, falls back to Gen 2) — the response includes which one it found, so there is no need to ask the user their outlet\'s generation. Prefer discover_outlets first; use this when the user gives you a specific IP instead (e.g. discover_outlets didn\'t find it).',
     input_schema: {
       type: 'object',
       properties: {
@@ -158,12 +164,13 @@ const TOOLS = [
   },
   {
     name: 'configure_dust_collector',
-    description: 'Assign a Shelly smart outlet to the dust collector itself (separate from any gate), so DustGate can switch the collector on and off remotely. There is no wattage threshold to configure here — call ping_outlet first to confirm it is reachable, then call this using the generation ping_outlet returned.',
+    description: 'Assign a Shelly smart outlet to the dust collector itself (separate from any gate), so DustGate can switch the collector on and off remotely. There is no wattage threshold to configure here — call discover_outlets or ping_outlet first to confirm it is reachable, then call this using the generation that returned.',
     input_schema: {
       type: 'object',
       properties: {
-        generation: { type: 'integer', enum: [1, 2], description: 'Shelly generation, as returned by ping_outlet for this IP — do not guess or ask the user.' },
-        ip:         { type: 'string',  description: 'IP address of the Shelly outlet controlling the dust collector' }
+        generation: { type: 'integer', enum: [1, 2], description: 'Shelly generation, as returned by ping_outlet/discover_outlets for this IP — do not guess or ask the user.' },
+        ip:         { type: 'string',  description: 'IP address of the Shelly outlet controlling the dust collector' },
+        host:       { type: 'string',  description: 'mDNS hostname of the outlet, from discover_outlets, if it was found via a scan. Omit for a manually-provided IP.' }
       },
       required: ['generation', 'ip']
     }
@@ -213,12 +220,17 @@ Your job is to walk the user through setup conversationally:
 8. Ask the user to measure or estimate the distance to the next gate, offering your own starting estimate so they have something to react to rather than guessing cold: about 2mm for the very first gate (endstop to gate 1), and about 89mm for gate-to-gate distances after that. Let them know they can reply in metric, imperial, casual terms like "a little more" or "about 4 inches", or just confirm your estimate. When the user provides any distance or movement instruction — even an approximate one, or a simple "yes" to your estimate — treat that as permission to move immediately. Do NOT ask a separate "are you ready?" or "shall I move?" question.
 9. Move the actuator to the desired position.
 10. Confirm the actuator is aligned with the gate. Repeat jogging until the user confirms alignment, then call save_stop.
-11. Before moving on to the next gate, finish configuring THIS gate: ask what tool lives here — accept whatever name they give ("Bandsaw", "Router Table", etc.), don't offer a list, just ask. Then ask for the Shelly outlet IP address for that tool, and call ping_outlet to confirm it's reachable — it auto-detects whether the outlet is Gen 1 or Gen 2, so don't ask the user which generation they have. If the user is unsure of the IP, provide assistance; you may need to direct them to Shelly's website for help. Once reachable, help them pick a detection threshold: ask them to turn the tool on at its lowest setting with no load (e.g. no material feeding, blade/bit spinning free), then ping again to capture that running wattage. Suggest a threshold about 10% below that reading, rounded to a clean number (nearest 10W normally, nearest 50W for readings above a couple hundred watts) — this gives margin below the running draw while safely clearing standby power. Confirm the suggestion with the user (they can override it) before calling configure_outlet with the generation ping_outlet returned. If the tool has no smart plug, skip the outlet sub-steps and just note the gate's name for now — configure_outlet is only needed when there's a plug to assign.
+11. Before moving on to the next gate, finish configuring THIS gate — resolve the outlet question BEFORE asking for a name, so a detected Shelly device name can be offered as the name instead of making the user type one from scratch:
+    a. Ask whether this gate's tool has a Shelly smart plug. If not, skip to (e) and just ask for the gate/tool name directly.
+    b. If yes, call discover_outlets first (don't ask for an IP yet) and check the results against what the user describes (e.g. "the one near the bandsaw", or match by the device name if they mention it). Present any matches — mention the Shelly-app device name if one is set, plus the hostname/IP — and confirm with the user which one is theirs, rather than assuming. Never suggest or accept an IP already configured for a different gate earlier in this session (track which IPs you've already called configure_outlet with) — if the user picks one anyway, point out it's already assigned to that other gate and ask them to choose a different outlet or confirm they want to move it off the other gate first.
+    c. If discover_outlets finds nothing, or none of the results match, ask the user for the outlet's IP address directly and call ping_outlet to confirm it's reachable. You may need to direct them to Shelly's website for help finding the IP. Either way (scan or manual ping), the response tells you the generation and, if the outlet was named in the Shelly app, that name too — don't ask the user which generation they have.
+    d. Once the outlet is confirmed reachable, ask what tool lives here — if discover_outlets/ping_outlet returned a device name (e.g. "Drill Press"), propose that as the gate name and let the user confirm or override it; otherwise just ask, accepting whatever name they give without offering a list. Then help them pick a detection threshold: ask them to turn the tool on at its lowest setting with no load (e.g. no material feeding, blade/bit spinning free), then ping again to capture that running wattage. Suggest a threshold about 10% below that reading, rounded to a clean number (nearest 10W normally, nearest 50W for readings above a couple hundred watts) — this gives margin below the running draw while safely clearing standby power. Confirm the suggestion with the user (they can override it) before calling configure_outlet with the generation and host (if the outlet came from discover_outlets) it returned.
+    e. If the tool has no smart plug, just ask for and note the gate's name — configure_outlet is only needed when there's a plug to assign.
 12. Only once this gate is fully positioned AND named/configured (outlet or not) should you move on: repeat steps 8–11 for the next gate, one gate at a time, until every gate is done. Typically, once a distance is known between two gates, the rest will be the same — but still confirm alignment and finish naming/outlet setup for each gate before starting the next one.
 13. If the user states that the distance moved is more/less than anticipated, try to recalculate the movement distance per step based on their feedback.
 16. Once all gates are configured, ask if their dust collector is also on a Shelly smart plug, separate from any tool's gate — DustGate can switch it on and off automatically alongside the gates. This step is optional; skip it if they say no or don't have one. There's no wattage threshold to pick here since it's just a remote switch. If they want it:
-    a. Ask for its IP address, then call ping_outlet to confirm it's reachable — it auto-detects whether the outlet is Gen 1 or Gen 2, so don't ask the user which generation they have.
-    b. Once reachable, call configure_dust_collector with the generation ping_outlet returned.
+    a. Call discover_outlets first and check the results against what the user describes, rather than asking for an IP up front. If nothing matches (or nothing is found), ask for the IP address directly and call ping_outlet to confirm it's reachable — either way, the result tells you the generation, so don't ask the user which one they have.
+    b. Once reachable, call configure_dust_collector with the generation (and host, if it came from discover_outlets) that was returned.
     c. Ask the user to turn the collector on using its own physical switch so it's ready to draw power, and ask if it's OK for DustGate to switch it off and back on remotely to verify it can detect the collector running. If they'd rather skip this test, move on without it.
     d. If they agree, call switch_dust_collector with on=true, then call ping_outlet again on the same IP to read the live wattage. Look for at least roughly 100W — if you see that much, tell the user detection looks good; if not, suggest checking that the collector's own switch is on and it's plugged into the right outlet, and offer to check again.
     e. Once confirmed (or skipped), ask if it's OK to switch the collector back off, then call switch_dust_collector with on=false.
@@ -586,12 +598,16 @@ export class ClaudeService {
           slot:        this.assertIntInRange(input['slot'], 0, 15, 'slot'),
           generation:  this.assertIntInRange(input['generation'], 1, 2, 'generation'),
           ip:          this.assertPrivateIp(input['ip']),
+          host:        typeof input['host'] === 'string' ? input['host'] : undefined,
           name:        this.assertNonEmptyString(input['name'], 'name'),
           stop:        this.assertIntInRange(input['stop'], 0, 16, 'stop'),
           threshold_w: input['threshold_w'] === undefined
             ? undefined
             : this.assertNumberInRange(input['threshold_w'], 0, 5000, 'threshold_w')
         });
+
+      case 'discover_outlets':
+        return this.api.discoverOutlets();
 
       case 'ping_outlet':
         return this.api.pingOutlet(this.assertPrivateIp(input['ip']));
@@ -619,7 +635,8 @@ export class ClaudeService {
       case 'configure_dust_collector':
         return this.api.configureDustCollector(
           this.assertIntInRange(input['generation'], 1, 2, 'generation'),
-          this.assertPrivateIp(input['ip'])
+          this.assertPrivateIp(input['ip']),
+          typeof input['host'] === 'string' ? input['host'] : ''
         );
 
       case 'switch_dust_collector':

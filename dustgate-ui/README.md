@@ -91,12 +91,16 @@ After `npm run deploy`, upload the filesystem image from the repo root with
 
 ```
 src/app/
-  dashboard/              Operational view — tool buttons, HOME, dust collector toggle
+  dashboard/              Operational view — interactive manifold visualizer, gear icon → settings
+  settings/               Device settings hub — idle timeout, orientation, motor direction,
+                          gate count, port size, forget-WiFi, reset-calibration, wizard links
   setup/                  AI setup assistant (chat interface, powered by Claude)
-  setup-manual/           Manual setup wizard (step-by-step, no AI)
-  outlet-configurator/    Reusable form for assigning a Shelly outlet to a gate
+  setup-manual/           Manual setup wizard (step-by-step, no AI) — primary supported setup path
+  outlet-configurator/    Reusable form for assigning a Shelly outlet to a gate (scan-first
+                          mDNS discovery with manual-IP fallback)
+  dust-collector-configurator/  Same scan-first flow for the dust collector's plug
   gate-positioner/        Reusable jog widget for positioning the actuator at a stop
-  visualizer/             Manifold visualizer — gate boxes, slider, dust collector
+  visualizer/             Manifold visualizer — gate boxes, slider, dust collector, flow arrow
   services/
     api.service.ts            Talks to the real device (HTTP + WebSocket)
     demo-api.service.ts       In-memory drop-in replacement, used in demo mode

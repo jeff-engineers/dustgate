@@ -96,6 +96,11 @@ public:
     // Loaded from NVS; returned in /api/info so Angular can render correctly.
     bool homeOnRight() const { return _homeOnRight; }
 
+    // Seconds of no move/home activity before the driver is powered off
+    // (0 = never). Loaded from NVS; the main loop polls this directly each
+    // iteration to decide whether to sleep — see linear_actuator.ino.
+    int idleTimeoutSec() const { return _idleTimeoutSec; }
+
 #ifdef CONTROL_SMART_OUTLET
     // Outlet configuration commands — consumed by main loop, forwarded to
     // SmartOutletControl.
@@ -103,6 +108,7 @@ public:
         int   slot;
         int   generation;
         char  ip[16];
+        char  host[40];   // mDNS hostname, if known — empty for manual IP entry
         char  name[32];
         int   stopIndex;
         float thresholdW;
@@ -116,11 +122,29 @@ public:
     struct DustCollectorCmd {
         int  generation;
         char ip[16];
+        char host[40];   // mDNS hostname, if known — empty for manual IP entry
     };
     bool consumeDustCollectorConfigRequest(DustCollectorCmd& out);
     bool consumeDustCollectorDeleteRequest();
     // Manual dashboard on/off. outOn = requested state.
     bool consumeDustCollectorSwitchRequest(bool& outOn);
+
+    // Outlet discovery — true once when GET /api/outlets/discover is received.
+    // The actual mDNS query MUST run on the main loop task (see .cpp for why),
+    // so the main loop calls this, does the scan itself, then calls
+    // respondDiscover() with the built JSON to actually reply to the client.
+    bool consumeDiscoverRequest();
+    void respondDiscover(const String& json);
+
+    // Outlet ping — like discover, the probe runs on the main loop rather than
+    // a spawned task. Not for mDNS thread-safety (ping takes an IP, no mDNS),
+    // but because the probe blocks for up to a couple seconds on an
+    // unreachable host: holding a raw AsyncWebServerRequest* across that in a
+    // detached task risked a use-after-free if the browser disconnected or
+    // retried mid-probe. consumePingRequest() hands the requested IP to the
+    // main loop; respondPing() replies once the probe is done.
+    bool consumePingRequest(char* outIp, size_t ipLen);
+    void respondPing(const String& json);
 #endif
 
     // Expose the API key for the setup agent / serial display
@@ -160,6 +184,7 @@ private:
     bool  _homeOnRight;            // persisted orientation preference
     int   _homeDirection;          // runtime direction; loaded from NVS, updated via API
     int   _cachedNumActiveStops;   // from ApiStatus.numActiveStops; returned in /api/info
+    int   _idleTimeoutSec;         // persisted idle power-off timeout; see idleTimeoutSec()
 
 #ifdef CONTROL_SMART_OUTLET
     bool            _outletConfigPending;
@@ -170,6 +195,11 @@ private:
     DustCollectorCmd _dcConfigCmd;
     bool            _dcDeletePending;
     bool            _dcSwitchPending;  bool _dcSwitchOn;
+    bool            _discoverPending;
+    AsyncWebServerRequest* _discoverReq;
+    bool            _pingPending;
+    AsyncWebServerRequest* _pingReq;
+    char            _pingIp[40];
 #endif
 
     // Helpers

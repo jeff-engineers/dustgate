@@ -44,6 +44,8 @@ export interface OutletConfigCmd {
   slot: number;
   generation: number;     // 1 or 2
   ip: string;
+  /** mDNS hostname (no ".local"), if this outlet was picked from a scan rather than typed in. Lets the device re-resolve its IP after a DHCP change. */
+  host?: string;
   name: string;
   stop: number;
   threshold_w?: number;
@@ -54,6 +56,19 @@ export interface PingResult {
   powerW: number;
   /** Shelly API generation the device answered on (1 or 2); 0 if unreachable. */
   generation: number;
+  /** The name the user gave this device in the Shelly app, if any set. */
+  name?: string;
+}
+
+export interface DiscoveredOutlet {
+  ip: string;
+  hostname: string;
+  /** The name the user gave this device in the Shelly app (e.g. "Drill Press"), empty if unset. */
+  name: string;
+  reachable: boolean;
+  powerW: number;
+  /** Shelly API generation (1 or 2); 0 if the mDNS hit didn't respond to a probe. */
+  generation: number;
 }
 
 export interface DeviceInfo {
@@ -62,6 +77,7 @@ export interface DeviceInfo {
   version: string;
   homeOnRight?: boolean;    // true = home endstop is on the right side of the manifold
   motorInverted?: boolean;  // true = homing direction was flipped via setup agent
+  idleTimeoutSec?: number;  // seconds of inactivity before the driver powers off; 0 = never
 }
 
 // ── Service ────────────────────────────────────────────────────────────────────
@@ -156,6 +172,12 @@ export class ApiService {
     );
   }
 
+  private get<T>(path: string): Promise<T> {
+    return firstValueFrom(
+      this.http.get<T>(`${this.baseUrl}${path}`, { headers: this.headers() })
+    );
+  }
+
   private put<T = { ok: boolean }>(path: string, body: unknown): Promise<T> {
     return firstValueFrom(
       this.http.put<T>(`${this.baseUrl}${path}`, body, { headers: this.headers() })
@@ -190,6 +212,7 @@ export class ApiService {
     return this.put(`/api/outlets/${cmd.slot}`, {
       gen:       cmd.generation,
       ip:        cmd.ip,
+      host:      cmd.host ?? '',
       name:      cmd.name,
       stop:      cmd.stop,
       threshold: cmd.threshold_w ?? 5.0
@@ -198,10 +221,30 @@ export class ApiService {
 
   /** Pings a Shelly outlet — the device auto-detects the API generation, trying Gen 1 then Gen 2. */
   async pingOutlet(ip: string): Promise<PingResult> {
-    const raw = await this.post<{ reachable: boolean; powerW: number; gen: number }>(
+    const raw = await this.post<{ reachable: boolean; powerW: number; gen: number; name?: string }>(
       '/api/outlets/ping', { ip }
     );
-    return { reachable: raw.reachable, powerW: raw.powerW, generation: raw.gen };
+    return { reachable: raw.reachable, powerW: raw.powerW, generation: raw.gen, name: raw.name };
+  }
+
+  /**
+   * Scans the local network via mDNS for Shelly outlets (no manual IP entry
+   * required — devices show up as long as they're powered and on the same
+   * subnet, regardless of whether a static IP was ever set in the Shelly app).
+   * Each hit is already probed for reachability/generation/wattage, same as pingOutlet().
+   */
+  async discoverOutlets(): Promise<DiscoveredOutlet[]> {
+    const raw = await this.get<Array<{ ip: string; hostname: string; name: string; reachable: boolean; powerW: number; gen: number }>>(
+      '/api/outlets/discover'
+    );
+    return raw.map(r => ({
+      ip: r.ip,
+      hostname: r.hostname,
+      name: r.name,
+      reachable: r.reachable,
+      powerW: r.powerW,
+      generation: r.gen
+    }));
   }
 
   saveOutletConfig() { return this.post('/api/outlets/save'); }
@@ -212,8 +255,8 @@ export class ApiService {
   setDustCollector(on: boolean) { return this.post('/api/dustcollector/switch', { on }); }
 
   /** Assign a Shelly outlet as the dust collector's switchable plug. */
-  configureDustCollector(generation: number, ip: string) {
-    return this.put('/api/dustcollector', { gen: generation, ip });
+  configureDustCollector(generation: number, ip: string, host: string = '') {
+    return this.put('/api/dustcollector', { gen: generation, ip, host });
   }
 
   /** Unassign the dust collector's plug. */
@@ -288,6 +331,24 @@ export class ApiService {
   resetSetup() {
     if (this.deviceInfo) this.deviceInfo.numStops = 0;
     return this.post('/api/clearcal', {});
+  }
+
+  /**
+   * Set how many seconds of no move/home activity before the driver powers
+   * off (0 = never). Waking it back up always requires a rehome.
+   */
+  setIdleTimeout(seconds: number) {
+    if (this.deviceInfo) this.deviceInfo.idleTimeoutSec = seconds;
+    return this.post('/api/config/idle-timeout', { seconds });
+  }
+
+  /**
+   * Erases stored WiFi credentials and reboots the device into its captive
+   * setup portal. The device disappears from the network almost immediately,
+   * so callers should assume the response may not arrive.
+   */
+  forgetWifi() {
+    return this.post('/api/wifi/reset', {});
   }
 
   /**

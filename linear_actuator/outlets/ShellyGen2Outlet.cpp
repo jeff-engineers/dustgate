@@ -8,13 +8,28 @@
 
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
+#include <ESPmDNS.h>
 
 ShellyGen2Outlet::ShellyGen2Outlet(const char* ip, const char* name) {
     strlcpy(_ip,   ip,   sizeof(_ip));
     strlcpy(_name, name, sizeof(_name));
 }
 
+bool ShellyGen2Outlet::reresolve() {
+    if (_host[0] == '\0') return false;
+    IPAddress resolved = MDNS.queryHost(_host, 2000);
+    if (resolved == IPAddress(0, 0, 0, 0)) return false;
+    strlcpy(_ip, resolved.toString().c_str(), sizeof(_ip));
+    return true;
+}
+
 bool ShellyGen2Outlet::poll() {
+    if (doPoll()) return true;
+    if (reresolve()) return doPoll();
+    return false;
+}
+
+bool ShellyGen2Outlet::doPoll() {
     char url[64];
     snprintf(url, sizeof(url), "http://%s/rpc/Switch.GetStatus?id=0", _ip);
 

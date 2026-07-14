@@ -29,6 +29,7 @@ SmartOutletControl::SmartOutletControl()
       _pendingStartMs(0)
 {
     memset(_outlets, 0, sizeof(_outlets));
+    memset(_prevActive, 0, sizeof(_prevActive));
 }
 
 SmartOutletControl::~SmartOutletControl() {
@@ -72,6 +73,7 @@ bool SmartOutletControl::begin() {
         }
         o->setStopIndex(entries[i].stopIndex);
         o->setThresholdW(entries[i].thresholdW);
+        o->setHost(entries[i].host);
         _outlets[i] = o;
         _count = i + 1;
     }
@@ -89,6 +91,7 @@ bool SmartOutletControl::begin() {
         _dustCollector = (dc.generation == 2)
                        ? (SmartOutlet*)new ShellyGen2Outlet(dc.ip, "Dust Collector")
                        : (SmartOutlet*)new ShellyGen1Outlet(dc.ip, "Dust Collector");
+        _dustCollector->setHost(dc.host);
         _dcSynced = false; // force initial off/on sync on first poll
         DEBUG_PRINT(F("[Outlets] Dust collector plug: gen"));
         Serial.print(dc.generation); DEBUG_PRINT(F(" @ ")); Serial.println(dc.ip);
@@ -144,9 +147,16 @@ void SmartOutletControl::doPoll() {
         return;
     }
 
-    // Find the outlet drawing the most power above its threshold
-    int   bestStop  = 0;   // 0 = no active tool → home position
-    float bestPower = 0.0f;
+    // Find the outlet drawing the most power above its threshold, and detect
+    // whether any outlet just crossed OFF→ON this tick (edge, not level) —
+    // used below to decide whether to clear a manual override. Checking
+    // level (any outlet currently active) instead of edge was the bug: a
+    // tool already running before a manual move kept bestStop pinned to its
+    // gate, so the very next poll tick saw "a tool is active" and immediately
+    // clobbered the user's manual choice.
+    int   bestStop   = 0;   // 0 = no active tool → home position
+    float bestPower  = 0.0f;
+    bool  risingEdge = false;
 
     for (int i = 0; i < _count; i++) {
         SmartOutlet* o = _outlets[i];
@@ -155,10 +165,27 @@ void SmartOutletControl::doPoll() {
 
         o->poll();
 
-        if (o->isActive() && o->getPowerW() > bestPower) {
+        bool active = o->isActive();
+        if (active && !_prevActive[i]) risingEdge = true;
+        _prevActive[i] = active;
+
+        if (active && o->getPowerW() > bestPower) {
             bestPower = o->getPowerW();
             bestStop  = o->getStopIndex();
         }
+    }
+
+    // Clear manual override only on a fresh power-on, checked independently
+    // of the debounce window below (and every tick, not just when it
+    // commits) so a still-running tool from before the override can't
+    // re-trigger it just because it's still "active."
+    if (risingEdge) {
+        xSemaphoreTake(_mutex, portMAX_DELAY);
+        if (_manualOverride) {
+            _manualOverride = false;
+            DEBUG_PRINTLN(F("[Outlets] Manual override cleared — tool freshly powered on."));
+        }
+        xSemaphoreGive(_mutex);
     }
 
     // Debounce: the same stop must win for its full debounce window before we
@@ -175,11 +202,6 @@ void SmartOutletControl::doPoll() {
                                                : OUTLET_ON_DEBOUNCE_MS;
         if (now - _pendingStartMs >= window) {
             xSemaphoreTake(_mutex, portMAX_DELAY);
-            // A tool powering on clears any manual override so outlet control resumes
-            if (_manualOverride && bestStop != 0) {
-                _manualOverride = false;
-                DEBUG_PRINTLN(F("[Outlets] Manual override cleared — tool detected."));
-            }
             if (!_manualOverride && _requestedStop != bestStop) {
                 DEBUG_PRINT(F("[Outlets] → stop ")); Serial.println(bestStop);
                 _requestedStop = bestStop;
@@ -230,7 +252,8 @@ void SmartOutletControl::reconcileDustCollector() {
 
 void SmartOutletControl::configureOutlet(int slot, int generation,
                                          const char* ip, const char* name,
-                                         int stopIndex, float thresholdW) {
+                                         int stopIndex, float thresholdW,
+                                         const char* host) {
     if (slot < 0 || slot >= SMART_OUTLET_COUNT) return;
 
     // Replace existing outlet object
@@ -244,6 +267,7 @@ void SmartOutletControl::configureOutlet(int slot, int generation,
     }
     o->setStopIndex(stopIndex);
     o->setThresholdW(thresholdW);
+    o->setHost(host);
     _outlets[slot] = o;
 
     if (slot >= _count) _count = slot + 1;
@@ -284,6 +308,7 @@ void SmartOutletControl::saveSlot(int slot) {
     OutletEntry e;
     e.generation = o->generation();
     strlcpy(e.ip,   o->ip(),   sizeof(e.ip));
+    strlcpy(e.host, o->host(), sizeof(e.host));
     strlcpy(e.name, o->name(), sizeof(e.name));
     e.stopIndex  = o->getStopIndex();
     e.thresholdW = o->getThresholdW();
@@ -300,7 +325,7 @@ void SmartOutletControl::saveAll() {
 // Dust collector plug config (setup agent API)
 // -----------------------------------------------------------------------------
 
-void SmartOutletControl::configureDustCollector(int generation, const char* ip) {
+void SmartOutletControl::configureDustCollector(int generation, const char* ip, const char* host) {
     // Swap the plug object. Same lifetime assumption as configureOutlet: config
     // changes are rare and the poll task tolerates a brief window here.
     xSemaphoreTake(_mutex, portMAX_DELAY);
@@ -308,6 +333,7 @@ void SmartOutletControl::configureDustCollector(int generation, const char* ip) 
     _dustCollector = (generation == 2)
                    ? (SmartOutlet*)new ShellyGen2Outlet(ip, "Dust Collector")
                    : (SmartOutlet*)new ShellyGen1Outlet(ip, "Dust Collector");
+    _dustCollector->setHost(host);
     _dcOn     = false;
     _dcSynced = false;   // force a switch command on the next reconcile
     xSemaphoreGive(_mutex);
@@ -315,6 +341,7 @@ void SmartOutletControl::configureDustCollector(int generation, const char* ip) 
     DustCollectorEntry e;
     e.generation = generation;
     strlcpy(e.ip, ip, sizeof(e.ip));
+    strlcpy(e.host, host, sizeof(e.host));
     e.valid = true;
     OutletConfig::saveDustCollector(e);
 

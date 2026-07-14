@@ -356,6 +356,7 @@ interface GateRecord {
     <!-- Header -->
     <div class="header">
       <button class="back-btn" (click)="goBack()" aria-label="Back">←</button>
+      <button class="back-btn" *ngIf="future.length" (click)="stepForward()" aria-label="Forward">→</button>
       <h1>Manual Setup</h1>
 
       <button class="reset-btn" *ngIf="!confirmingReset" (click)="confirmingReset = true">
@@ -397,7 +398,7 @@ interface GateRecord {
           </button>
         </div>
 
-        <button class="primary-btn" (click)="step = { id: 'gate-count' }">Next</button>
+        <button class="primary-btn" (click)="goToStep({ id: 'gate-count' })">Next</button>
       </ng-container>
 
       <!-- ── Phase 1.1: Gate Count ── -->
@@ -436,7 +437,7 @@ interface GateRecord {
           </button>
         </div>
 
-        <button class="primary-btn" (click)="step = { id: 'home-side' }">Next</button>
+        <button class="primary-btn" (click)="goToStep({ id: 'home-side' })">Next</button>
       </ng-container>
 
       <!-- ── Phase 1.3: Home Side ── -->
@@ -557,6 +558,7 @@ interface GateRecord {
           [gateIndex]="step.gate"
           [slotIndex]="step.gate - 1"
           [existing]="editing ? outletCmdFor(step.gate) : undefined"
+          [excludeIps]="assignedOutletIps(step.gate)"
           (saved)="onOutletSaved($event)">
         </app-outlet-configurator>
       </ng-container>
@@ -564,6 +566,7 @@ interface GateRecord {
       <!-- ── Phase 4.5: Optional dust collector outlet ── -->
       <ng-container *ngIf="step.id === 'dust-collector'">
         <app-dust-collector-configurator
+          [excludeIps]="assignedOutletIps(0)"
           (saved)="onDustCollectorSaved($event)">
         </app-dust-collector-configurator>
       </ng-container>
@@ -610,6 +613,11 @@ export class ManualSetupComponent implements OnInit, OnDestroy {
 
   // ── Step machine ──────────────────────────────────────────────────────────
   step: Step = { id: 'port-size' };
+  /** Steps navigated away from — popped by stepBack() to return to them. */
+  private history: Step[] = [];
+  /** Steps undone by stepBack() — popped by stepForward() to redo them.
+   *  Cleared on any new forward navigation, same as browser back/forward. */
+  future: Step[] = [];
 
   // ── Phase 1 state ─────────────────────────────────────────────────────────
   numGates = 4;
@@ -651,7 +659,7 @@ export class ManualSetupComponent implements OnInit, OnDestroy {
 
         // Homing completed → advance from 'homing' to 'direction-confirm'
         if (wasHoming && !this.isHoming && this.step.id === 'homing') {
-          this.step = { id: 'direction-confirm' };
+          this.goToStep({ id: 'direction-confirm' });
         }
         // Re-homing after direction invert → advance to positioning
         if (wasHoming && !this.isHoming && this.step.id === 'direction-confirm') {
@@ -669,7 +677,33 @@ export class ManualSetupComponent implements OnInit, OnDestroy {
 
   // ── Navigation ────────────────────────────────────────────────────────────
 
-  goBack() { this.router.navigate(['/']); }
+  /** Move to a new step, recording the current one so stepBack() can return to it. */
+  goToStep(step: Step) {
+    this.history.push(this.step);
+    this.future = [];
+    this.step = step;
+    this.cd.markForCheck();
+  }
+
+  /** Header back button: previous wizard step if there is one, else leave the wizard. */
+  goBack() {
+    if (this.history.length > 0) { this.stepBack(); return; }
+    this.router.navigate(['/']);
+  }
+
+  stepBack() {
+    if (!this.history.length) return;
+    this.future.push(this.step);
+    this.step = this.history.pop()!;
+    this.cd.markForCheck();
+  }
+
+  stepForward() {
+    if (!this.future.length) return;
+    this.history.push(this.step);
+    this.step = this.future.pop()!;
+    this.cd.markForCheck();
+  }
 
   async doReset() {
     this.confirmingReset = false;
@@ -678,6 +712,8 @@ export class ManualSetupComponent implements OnInit, OnDestroy {
       await this.api.refreshInfo();
     } catch { /* optimistic */ }
     this.step            = { id: 'gate-count' };
+    this.history          = [];
+    this.future           = [];
     this.gates           = [];
     this.gateStartMm     = 0;
     this.equalSpacingMm  = null;
@@ -698,7 +734,7 @@ export class ManualSetupComponent implements OnInit, OnDestroy {
     this.cd.markForCheck();
     try {
       await this.api.setNumGates(this.numGates);
-      this.step = { id: 'unit-system' };
+      this.goToStep({ id: 'unit-system' });
     } catch {
       this.errorMsg = 'Could not set gate count. Check connection.';
     } finally {
@@ -714,7 +750,7 @@ export class ManualSetupComponent implements OnInit, OnDestroy {
     this.cd.markForCheck();
     try {
       await this.api.setOrientation(this.homeSideSelected === 'right');
-      this.step = { id: 'homing' };
+      this.goToStep({ id: 'homing' });
     } catch {
       this.errorMsg = 'Could not save home side. Check connection.';
     } finally {
@@ -768,8 +804,7 @@ export class ManualSetupComponent implements OnInit, OnDestroy {
     this.equalSpacingMm      = null;
     this.equalSpacingOffered = false;
     this.editing             = false;
-    this.step                = { id: 'position', gate: 1 };
-    this.cd.markForCheck();
+    this.goToStep({ id: 'position', gate: 1 });
   }
 
   // ── Phase 3+4 interleaved: locate a gate, then name/configure it ────────────
@@ -783,8 +818,7 @@ export class ManualSetupComponent implements OnInit, OnDestroy {
     else this.gates.push({ index: posStep.gate, mm, outletCmd: null });
 
     // Immediately prompt for this gate's name + optional smart plug.
-    this.step = { id: 'outlet', gate: posStep.gate };
-    this.cd.markForCheck();
+    this.goToStep({ id: 'outlet', gate: posStep.gate });
   }
 
   onOutletSaved(cmd: OutletConfigCmd | null) {
@@ -795,15 +829,13 @@ export class ManualSetupComponent implements OnInit, OnDestroy {
     // Editing a single gate from the review screen — go straight back.
     if (this.editing) {
       this.editing = false;
-      this.step = { id: 'review' };
-      this.cd.markForCheck();
+      this.goToStep({ id: 'review' });
       return;
     }
 
     const nextGate = outletStep.gate + 1;
     if (nextGate > this.numGates) {
-      this.step = { id: 'dust-collector' };
-      this.cd.markForCheck();
+      this.goToStep({ id: 'dust-collector' });
       return;
     }
 
@@ -814,8 +846,7 @@ export class ManualSetupComponent implements OnInit, OnDestroy {
       this.equalSpacingOffered = true;
       const spacing = this.gates[1].mm - this.gates[0].mm;
       if (spacing > 0) {
-        this.step = { id: 'equal-spacing-offer', gate: nextGate, spacing };
-        this.cd.markForCheck();
+        this.goToStep({ id: 'equal-spacing-offer', gate: nextGate, spacing });
         return;
       }
     }
@@ -826,8 +857,7 @@ export class ManualSetupComponent implements OnInit, OnDestroy {
   onDustCollectorSaved(_cmd: DustCollectorCmd | null) {
     // Config (and any on/off test) already happened inside the child
     // component — nothing more to record here, just move on.
-    this.step = { id: 'review' };
-    this.cd.markForCheck();
+    this.goToStep({ id: 'review' });
   }
 
   applyEqualSpacing() {
@@ -869,8 +899,7 @@ export class ManualSetupComponent implements OnInit, OnDestroy {
     } else {
       this.gateStartMm = lastGate ? lastGate.mm : 0;
     }
-    this.step = { id: 'position', gate };
-    this.cd.markForCheck();
+    this.goToStep({ id: 'position', gate });
   }
 
   // ── Phase 5 ───────────────────────────────────────────────────────────────
@@ -879,12 +908,18 @@ export class ManualSetupComponent implements OnInit, OnDestroy {
     // Re-open the name/outlet screen for one gate; return to review on save.
     // The saved position is untouched (already on the device).
     this.editing = true;
-    this.step = { id: 'outlet', gate: gateIndex };
-    this.cd.markForCheck();
+    this.goToStep({ id: 'outlet', gate: gateIndex });
   }
 
   outletCmdFor(gate: number): Partial<OutletConfigCmd> | undefined {
     return this.gates.find(g => g.index === gate)?.outletCmd ?? undefined;
+  }
+
+  /** IPs already assigned to gates other than `gate`, so the same outlet can't be picked twice. */
+  assignedOutletIps(gate: number): string[] {
+    return this.gates
+      .filter(g => g.index !== gate && g.outletCmd?.ip)
+      .map(g => g.outletCmd!.ip);
   }
 
   async saveAll() {
@@ -893,7 +928,7 @@ export class ManualSetupComponent implements OnInit, OnDestroy {
     this.cd.markForCheck();
     try {
       await this.api.saveOutletConfig();
-      this.step = { id: 'done' };
+      this.goToStep({ id: 'done' });
     } catch {
       this.errorMsg = 'Could not save configuration. Check connection.';
     } finally {

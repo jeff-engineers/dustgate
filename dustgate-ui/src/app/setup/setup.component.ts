@@ -515,6 +515,9 @@ export class SetupComponent implements OnInit, AfterViewChecked {
       }
       this.busy = false;
       this.scrollDown();
+      // Disabling the textarea while busy drops focus; the disabled attribute
+      // clears right before this runs, so re-focus once it's interactive again.
+      setTimeout(() => this.textareaEl?.nativeElement.focus(), 0);
     }
   }
 

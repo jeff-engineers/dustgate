@@ -27,4 +27,7 @@ public:
 private:
     char _ip[16];
     char _name[32];
+
+    bool doPoll();
+    bool reresolve();
 };

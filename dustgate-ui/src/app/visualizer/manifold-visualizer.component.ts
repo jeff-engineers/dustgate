@@ -1,16 +1,13 @@
-import { Component, Input, OnInit, OnDestroy } from '@angular/core';
+import { Component, Input, OnInit, OnDestroy, ViewChild, ElementRef, AfterViewInit } from '@angular/core';
 import { CommonModule, DecimalPipe } from '@angular/common';
 import { Subscription } from 'rxjs';
 import { ApiService, SystemStatus, OutletStatus, StopInfo } from '../services/api.service';
-import { HardwareProfileService } from '../services/hardware-profile.service';
 
 interface GateInfo {
   index:  number;
   label:  string;
   outlet: OutletStatus | null;
-  isHome: boolean;
   isLocated: boolean;   // position has been saved — false = reserve slot, draw nothing
-  stopMm: number;
 }
 
 @Component({
@@ -28,20 +25,52 @@ interface GateInfo {
       overflow: hidden;
     }
 
-    /* ── Gates row ────────────────────────────────────────────── */
+    /* ── Scroll viewport (gates only) ────────────────────────────────── */
+    .rail-scroll {
+      overflow-x: auto;
+      overflow-y: hidden;
+      scrollbar-width: thin;
+      position: relative;
+    }
+
+    /* Gate content only grows wider than the card once there are more gates
+       than comfortably fit at this minimum column width — up to that point
+       columns still stretch to fill. */
     .gates-row {
       display: flex;
       gap: 3px;
       align-items: flex-end;
+      min-width: 100%;
+      width: max-content;
     }
 
     .gate-col {
       flex: 1;
-      min-width: 0;
+      min-width: 46px;
       display: flex;
       flex-direction: column;
       align-items: center;
     }
+
+    /* ── Edge indicators — point toward the active gate when it has been
+       scrolled out of view, keeping the "active gate ↔ collector" link
+       legible even while the rail is scrolled. ─────────────────────── */
+    .edge-hint {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      width: 22px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--accent);
+      background: linear-gradient(to right, color-mix(in srgb, var(--bg) 85%, transparent), transparent);
+      pointer-events: none;
+    }
+    .edge-hint.left  { left: 0; }
+    .edge-hint.right { right: 0; transform: scaleX(-1); }
 
     .gate-label {
       font-size: 10px;
@@ -53,10 +82,8 @@ interface GateInfo {
       white-space: nowrap;
       width: 100%;
       padding: 0 1px;
-      transition: color 0.2s;
     }
-    .gate-label.active    { color: var(--accent); font-weight: 600; }
-    .gate-label.home-lbl  { font-style: italic; }
+    .gate-label.active { color: var(--accent); font-weight: 600; }
 
     .gate-box {
       width: 100%;
@@ -69,14 +96,12 @@ interface GateInfo {
       justify-content: center;
       position: relative;
       background: var(--bg);
-      transition: border-color 0.2s, background 0.2s;
     }
     .gate-box.active {
       border-color: var(--accent);
       background: color-mix(in srgb, var(--accent) 10%, var(--bg));
     }
-    .gate-box.home-gate { border-style: dashed; }
-    .gate-box.unhomed   { opacity: 0.3; }
+    .gate-box.unhomed { opacity: 0.3; }
     /* Reserve the column's width but draw nothing until the gate is located. */
     .gate-box.pending {
       border-color: transparent;
@@ -86,6 +111,8 @@ interface GateInfo {
     /* ── Interactive tap targets (dashboard use) ─────────────────────────── */
     .gate-col.clickable { cursor: pointer; }
     .gate-col.clickable:active .gate-box { opacity: 0.7; }
+    .home-pill.clickable { cursor: pointer; }
+    .home-pill.clickable:active { opacity: 0.7; }
     .dc-entity.clickable { cursor: pointer; }
     .dc-entity.clickable:active { opacity: 0.7; }
 
@@ -95,7 +122,6 @@ interface GateInfo {
       width: 5px; height: 5px;
       border-radius: 50%;
       background: var(--border);
-      transition: background 0.3s;
     }
     .outlet-dot.tool-on   { background: var(--success); }
     .outlet-dot.tool-off  { background: var(--muted); }
@@ -108,58 +134,22 @@ interface GateInfo {
       text-align: center;
       font-size: 9px;
       color: var(--muted);
-      transition: color 0.2s;
     }
     .gate-box.active .outlet-power { color: var(--accent); }
 
-    /* ── Neck (gate opening → slider body) ───────────────────── */
+    /* ── Neck (gate opening → flow arrow) ───────────────────── */
     .gate-neck {
       width: 35%;
       height: 8px;
       background: var(--border);
-      transition: background 0.2s;
     }
     .gate-neck.active { background: var(--accent); }
-    .gate-neck.home   { background: transparent; }
     .gate-neck.pending { background: transparent; }
 
-    /* ── Slider rail ──────────────────────────────────────────── */
-    .slider-rail {
-      position: relative;
-      height: 22px;
-    }
-
-    .slider-plate {
-      position: absolute;
-      inset: 0;
-      background: var(--surface);
-      border: 1.5px solid var(--border);
-      border-radius: 3px;
-    }
-
-    .slider-window {
-      position: absolute;
-      top: 0;
-      height: 100%;
-      border: 2px solid var(--accent);
-      border-top: none;
-      border-radius: 0 0 3px 3px;
-      background: color-mix(in srgb, var(--accent) 12%, var(--bg));
-      transition-property: left;
-      transition-timing-function: linear;
-    }
-    .slider-window.unhomed {
-      border-color: var(--muted);
-      border-style: dashed;
-      background: transparent;
-    }
-
-
     /* ── Flow arrow ───────────────────────────────────────────── */
-    /* An elbow connector: drops from the moving gate, bridges over to the
-       dust collector's fixed center position, then drops into it. This way
-       the arrow always visually terminates at the collector regardless of
-       which gate is active. */
+    /* An elbow connector: drops from the active gate, bridges over to the
+       dust collector's fixed center position, then drops into it. Positions
+       snap instantly — no travel animation. */
     .flow-section {
       position: relative;
       height: 30px;
@@ -172,8 +162,6 @@ interface GateInfo {
       width: 2px;
       margin-left: -1px;
       background: var(--accent);
-      transition-property: left;
-      transition-timing-function: linear;
     }
     .flow-drop-gate.hidden { opacity: 0; }
 
@@ -183,8 +171,6 @@ interface GateInfo {
       height: 2px;
       margin-top: -1px;
       background: var(--accent);
-      transition-property: left, width;
-      transition-timing-function: linear;
     }
     .flow-bridge.hidden { opacity: 0; }
 
@@ -211,12 +197,59 @@ interface GateInfo {
     }
     .flow-head.hidden { opacity: 0; }
 
-    /* ── Dust collector entity ────────────────────────────────── */
+    /* ── Status row: home indicator + dust collector entity ─────────────── */
+    /* Both are system-status readouts rather than gates, so they live
+       together below the rail. Home still leads/trails on whichever side
+       the endstop actually is, but as a compact badge rather than a
+       full-height column jammed against the gate rail. */
     .dc-wrap {
       display: flex;
       justify-content: center;
+      align-items: stretch;
+      gap: 8px;
       margin-top: 0;
     }
+    .dc-wrap.home-right { flex-direction: row-reverse; }
+
+    .home-pill {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 9px 14px;
+      border: 1.5px solid var(--border);
+      border-radius: 10px;
+      background: var(--bg);
+      transition: border-color 0.3s, background 0.3s;
+    }
+    .home-pill.homed {
+      border-color: var(--success);
+      background: color-mix(in srgb, var(--success) 10%, var(--bg));
+    }
+    /* A homing cycle is actively running — distinct from the settled
+       "homed" state, which reflects a completed, known-good home. */
+    .home-pill.homing-now {
+      border-color: var(--accent);
+      background: color-mix(in srgb, var(--accent) 10%, var(--bg));
+    }
+
+    .home-dot {
+      width: 9px; height: 9px;
+      border-radius: 50%;
+      background: var(--muted);
+      flex-shrink: 0;
+      transition: background 0.3s;
+    }
+    .home-pill.homed .home-dot { background: var(--success); }
+    .home-pill.homing-now .home-dot { background: var(--accent); }
+
+    .home-label {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--muted);
+      transition: color 0.3s;
+    }
+    .home-pill.homed .home-label { color: var(--success); }
+    .home-pill.homing-now .home-label { color: var(--accent); }
 
     .dc-entity {
       display: flex;
@@ -306,82 +339,66 @@ interface GateInfo {
 
     <div class="viz-card" *ngIf="isReady">
 
-      <!-- Gate columns. Unlocated gates reserve their rail slot but stay blank
-           until their position is saved, so the layout doesn't pre-populate. -->
-      <div class="gates-row">
-        <div class="gate-col"
-             *ngFor="let g of gates"
-             [class.clickable]="interactive && (g.isHome || g.isLocated)"
-             (click)="onGateClick(g)">
+      <!-- Scrollable rail: once there are more gates than fit comfortably,
+           this scrolls horizontally instead of squeezing columns further. -->
+      <div class="rail-scroll" #railScroll (scroll)="recomputeArrow()">
+        <div class="gates-row">
+          <div class="gate-col"
+               *ngFor="let g of gates"
+               [attr.data-gate-index]="g.index"
+               [class.clickable]="interactive && g.isLocated"
+               (click)="onGateClick(g)">
 
-          <div class="gate-label"
-               [class.active]="g.index === sliderDisplayStop && isHomed"
-               [class.home-lbl]="g.isHome">
-            {{ (g.isHome || g.isLocated) ? g.label : '' }}
+            <div class="gate-label" [class.active]="g.index === activeStop">
+              {{ g.isLocated ? g.label : '' }}
+            </div>
+
+            <div class="gate-box"
+                 [class.active]="g.index === activeStop"
+                 [class.pending]="!g.isLocated"
+                 [class.unhomed]="!isHomed && g.isLocated">
+              <ng-container *ngIf="g.isLocated">
+                <div *ngIf="g.outlet?.hasSwitch"
+                     class="outlet-dot"
+                     [class.tool-on]="g.outlet!.active"
+                     [class.tool-off]="!g.outlet!.active && g.outlet!.reachable"
+                     [class.tool-dead]="!g.outlet!.reachable">
+                </div>
+                <div *ngIf="g.outlet?.hasSwitch" class="outlet-power">
+                  {{ g.outlet!.powerW | number:'1.0-0' }} W
+                </div>
+              </ng-container>
+            </div>
+
+            <div class="gate-neck"
+                 [class.active]="g.index === activeStop"
+                 [class.pending]="!g.isLocated">
+            </div>
+
           </div>
-
-          <div class="gate-box"
-               [class.active]="g.index === sliderDisplayStop && isHomed"
-               [class.home-gate]="g.isHome"
-               [class.pending]="!g.isHome && !g.isLocated"
-               [class.unhomed]="!isHomed && !g.isHome && g.isLocated">
-            <ng-container *ngIf="g.isHome || g.isLocated">
-              <div *ngIf="g.outlet?.hasSwitch"
-                   class="outlet-dot"
-                   [class.tool-on]="g.outlet!.active"
-                   [class.tool-off]="!g.outlet!.active && g.outlet!.reachable"
-                   [class.tool-dead]="!g.outlet!.reachable">
-              </div>
-              <div *ngIf="g.outlet?.hasSwitch" class="outlet-power">
-                {{ g.outlet!.powerW | number:'1.0-0' }} W
-              </div>
-              <div *ngIf="g.isHome"
-                   class="outlet-dot"
-                   [class.tool-on]="endstopTriggered"
-                   [class.tool-off]="!endstopTriggered">
-              </div>
-              <div *ngIf="g.isHome" class="outlet-power">
-                {{ endstopTriggered ? 'triggered' : 'open' }}
-              </div>
-            </ng-container>
-          </div>
-
-          <div class="gate-neck"
-               [class.active]="g.index === sliderDisplayStop && isHomed"
-               [class.home]="g.isHome"
-               [class.pending]="!g.isHome && !g.isLocated">
-          </div>
-
         </div>
+
+        <!-- Edge hints — point toward the active gate once it's scrolled out
+             of view, so the active-gate ↔ collector link stays legible. -->
+        <div class="edge-hint left"  *ngIf="activeGateOffscreen === 'left'">‹</div>
+        <div class="edge-hint right" *ngIf="activeGateOffscreen === 'right'">›</div>
       </div>
 
-      <!-- Slider rail -->
-      <div class="slider-rail">
-        <div class="slider-plate"></div>
-        <div class="slider-window"
-             [class.unhomed]="!isHomed"
-             [style.left]="displaySliderLeftPct + '%'"
-             [style.width]="sliderWidthPct + '%'"
-             [style.transition-duration]="displayTransitionSec + 's'">
-        </div>
-      </div>
-
-      <!-- Flow arrow down to collector — drops from the active gate, bridges
-           over to the collector's fixed center, then drops into it -->
+      <!-- Flow arrow down to collector — drops from the active gate (clamped to
+           the visible edge if scrolled out of view), bridges over to the
+           collector's fixed center, then drops into it. Snaps, no animation. -->
       <div class="flow-section">
         <div class="flow-drop-gate"
-             [class.hidden]="!isHomed || (isAtHome && !isJogging)"
-             [style.left]="displayArrowCenterPct + '%'"
-             [style.transition-duration]="displayTransitionSec + 's'">
+             [class.hidden]="!showFlowArrow"
+             [style.left]="arrowViewportPct + '%'">
         </div>
         <div class="flow-bridge"
-             [class.hidden]="!isHomed || (isAtHome && !isJogging)"
+             [class.hidden]="!showFlowArrow"
              [style.left]="flowBridgeLeftPct + '%'"
-             [style.width]="flowBridgeWidthPct + '%'"
-             [style.transition-duration]="displayTransitionSec + 's'">
+             [style.width]="flowBridgeWidthPct + '%'">
         </div>
-        <div class="flow-drop-dc"    [class.hidden]="!isHomed || (isAtHome && !isJogging)"></div>
-        <div class="flow-head"      [class.hidden]="!isHomed || (isAtHome && !isJogging)"></div>
+        <div class="flow-drop-dc" [class.hidden]="!showFlowArrow"></div>
+        <div class="flow-head"   [class.hidden]="!showFlowArrow"></div>
       </div>
 
       <!-- Manual override badge -->
@@ -389,8 +406,21 @@ interface GateInfo {
         <span class="override-badge">MANUAL OVERRIDE</span>
       </div>
 
-      <!-- Dust collector entity -->
-      <div class="dc-wrap">
+      <!-- Status row: home indicator + dust collector entity. Home still
+           leads/trails on whichever side the endstop is on, but as a compact
+           badge next to the collector rather than a column jammed against
+           the gate rail. -->
+      <div class="dc-wrap" [class.home-right]="homeOnRight">
+        <div class="home-pill"
+             [class.homed]="isHomed"
+             [class.homing-now]="!isHomed && isHomingNow"
+             [class.clickable]="interactive"
+             (click)="onHomeClick()"
+             [title]="isHomed ? 'Homed' : (isHomingNow ? 'Homing…' : 'Not homed')">
+          <div class="home-dot"></div>
+          <span class="home-label">Home</span>
+        </div>
+
         <div class="dc-entity"
              [class.dc-on]="dcOn"
              [class.clickable]="interactive && dcConfigured"
@@ -415,7 +445,9 @@ interface GateInfo {
     </div>
   `
 })
-export class ManifoldVisualizerComponent implements OnInit, OnDestroy {
+export class ManifoldVisualizerComponent implements OnInit, OnDestroy, AfterViewInit {
+
+  @ViewChild('railScroll') railScroll?: ElementRef<HTMLElement>;
 
   @Input() dcOn = false;
   /** True once a dust-collector plug is assigned — gates whether tapping the DC entity does anything. */
@@ -427,162 +459,59 @@ export class ManifoldVisualizerComponent implements OnInit, OnDestroy {
    * position readout.
    */
   @Input() interactive = false;
-  /** When true, home is on the right — gates render right-to-left and slider animates accordingly. */
+  /** When true, home is on the right — the home pill and gate order flip accordingly. */
   @Input() homeOnRight = false;
-  /**
-   * When false, the slider window snaps directly to each reported stop with no
-   * travel animation and no continuous jog interpolation — used during the
-   * setup wizards, where gates aren't real yet and animating fake travel
-   * between them is just noise. Once a gate is located it's drawn in place.
-   */
+  /** Unused now that travel is never animated; kept so existing callers don't break. */
   @Input() liveTravel = true;
 
   status: SystemStatus | null = null;
 
-  /** Stop index the slider is currently animating toward (or resting at). */
-  sliderDisplayStop = 0;
-  /** CSS transition-duration in seconds applied to the slider window + arrow. */
-  sliderTransitionSec = 0; // 0 = instant snap on first render
-
-  private prevState   = '';
-  private moveStartMs = 0;
-  private moveStartStopIdx = 0;
-  /** Estimated mm/s — auto-calibrates after each real move completes. */
-  private speedMmPerSec = 50;
-  private initialized = false;
   private sub?: Subscription;
+  private prevActiveStop = -1;
 
-  constructor(private api: ApiService, private hardwareProfile: HardwareProfileService) {}
+  /** 'left' | 'right' | null — which edge the active gate is scrolled behind, if any. */
+  activeGateOffscreen: 'left' | 'right' | null = null;
+  /** Left position (%) of the flow arrow's drop from the gate, clamped to the visible rail viewport. */
+  arrowViewportPct = 50;
+
+  constructor(private api: ApiService) {}
 
   ngOnInit() {
     this.sub = this.api.status$.subscribe(s => {
-      if (!s) return;
-      if (!this.initialized) {
-        // First frame: snap to current position with no animation.
-        this.sliderDisplayStop  = Math.max(0, s.currentStop);
-        this.sliderTransitionSec = 0;
-        this.prevState           = s.state;
-        this.initialized         = true;
-      }
-      this.updateSlider(s);
       this.status = s;
+      if (s && this.activeStop !== this.prevActiveStop) {
+        this.prevActiveStop = this.activeStop;
+        setTimeout(() => this.scrollActiveIntoView(), 0);
+      } else {
+        setTimeout(() => this.recomputeArrow(), 0);
+      }
     });
+  }
+
+  ngAfterViewInit() {
+    setTimeout(() => this.recomputeArrow(), 0);
   }
 
   ngOnDestroy() { this.sub?.unsubscribe(); }
 
-  // ── Slider animation ──────────────────────────────────────────────────────────
-
-  private updateSlider(s: SystemStatus) {
-    if (!this.liveTravel) {
-      // Setup wizards: no travel animation — just snap to wherever the gate
-      // actually is once it's located.
-      this.sliderTransitionSec = 0;
-      this.sliderDisplayStop   = Math.max(0, s.currentStop);
-      this.prevState           = s.state;
-      return;
-    }
-
-    const isMoving  = s.state === 'MOVING';
-    const wasMoving = this.prevState === 'MOVING';
-    this.prevState  = s.state;
-
-    if (isMoving && s.targetStop !== this.sliderDisplayStop) {
-      // New move or target changed — calculate duration from mm distance.
-      const fromMm = this.stopMm(s, s.currentStop);
-      const toMm   = this.stopMm(s, s.targetStop);
-      const distMm = Math.abs(toMm - fromMm);
-      const dur    = distMm > 0 ? distMm / this.speedMmPerSec : 0.5;
-
-      this.sliderTransitionSec = dur;
-      this.sliderDisplayStop   = s.targetStop;
-      this.moveStartMs         = Date.now();
-      this.moveStartStopIdx    = s.currentStop;
-
-    } else if (!isMoving && wasMoving) {
-      // Move just completed — auto-calibrate speed from actual elapsed time.
-      if (this.moveStartMs > 0) {
-        const actualSec = (Date.now() - this.moveStartMs) / 1000;
-        const fromMm    = this.stopMm(s, this.moveStartStopIdx);
-        const toMm      = this.stopMm(s, s.currentStop);
-        const distMm    = Math.abs(toMm - fromMm);
-        if (distMm > 5 && actualSec > 0.2) {
-          // Exponential moving average; weight actual measurement heavily.
-          this.speedMmPerSec = this.speedMmPerSec * 0.3 + (distMm / actualSec) * 0.7;
-        }
-        this.moveStartMs = 0;
-      }
-      this.sliderTransitionSec = 0.3;
-      this.sliderDisplayStop   = s.currentStop;
-
-    } else if (!isMoving && this.sliderDisplayStop !== s.currentStop) {
-      // Steady state drift correction (e.g. after reconnect).
-      this.sliderTransitionSec = 0.3;
-      this.sliderDisplayStop   = s.currentStop;
-    }
-  }
-
-  private stopMm(s: SystemStatus, idx: number): number {
-    const stops = s.stops ?? [];
-    const found = stops.find((st: StopInfo) => st.index === idx) ?? stops[idx];
-    return parseFloat(found?.mm ?? '0');
-  }
-
   // ── Computed layout ───────────────────────────────────────────────────────────
 
   get gates(): GateInfo[] {
-    return this.visualColumns.map((i: number) => this.gateInfoFor(i));
+    const order: number[] = [];
+    for (let i = 1; i < this.numGates + 1; i++) order.push(i);
+    if (this.homeOnRight) order.reverse();
+    return order.map(i => this.gateInfoFor(i));
   }
 
   private gateInfoFor(i: number): GateInfo {
     const s = this.status;
     const outlet = s?.outlets?.find((o: OutletStatus) => o.stop === i) ?? null;
-    const stop   = (s?.stops ?? []).find((st: StopInfo) => st.index === i);
     return {
       index:  i,
-      label:  i === 0 ? 'home' : (outlet?.name ?? `Gate${i}`),
+      label:  outlet?.name ?? `Gate${i}`,
       outlet,
-      isHome: i === 0,
       isLocated: this.isStopSaved(i),
-      stopMm: parseFloat(stop?.mm ?? '0'),
     };
-  }
-
-  // ── Physical column ordering ───────────────────────────────────────────────────
-  // The rail is a physical space: columns are laid out by actual distance from
-  // home, not by the order the user happened to configure gates in. So if Gate 2
-  // was saved closer to the endstop than Gate 1, its box renders to the left of
-  // Gate 1's. Labels travel with their box; slider/marker/arrow all key off a
-  // stop's *rank* in this order, keeping the monotonic mm↔column relationship the
-  // position math depends on.
-
-  /** Stop indices ordered by physical distance from home (home first). Saved
-   *  gates sort by mm; gates not yet saved keep index order at the far end
-   *  until they're placed. */
-  private get physicalOrder(): number[] {
-    const gateIdxs: number[] = [];
-    for (let i = 1; i < this.numGates; i++) gateIdxs.push(i);
-    const saved   = gateIdxs.filter(i => this.isStopSaved(i))
-                            .sort((a, b) => this.stopMmForIndex(a) - this.stopMmForIndex(b));
-    const unsaved = gateIdxs.filter(i => !this.isStopSaved(i));
-    return [0, ...saved, ...unsaved];
-  }
-
-  /** Visual left-to-right column order (physical order, flipped for home-on-right). */
-  private get visualColumns(): number[] {
-    return this.homeOnRight ? [...this.physicalOrder].reverse() : this.physicalOrder;
-  }
-
-  /** Physical rank of a stop index (0 = home, increasing with distance from home). */
-  private physicalRankOf(stopIndex: number): number {
-    const r = this.physicalOrder.indexOf(stopIndex);
-    return r < 0 ? 0 : r;
-  }
-
-  /** Left edge % of the column at a (possibly fractional) physical rank. */
-  private leftPctForRank(rank: number): number {
-    const visualCol = this.homeOnRight ? (this.numGates - 1 - rank) : rank;
-    return visualCol / this.numGates * 100;
   }
 
   /** True once the device has reported a gate count > 0 (set via setup agent). */
@@ -590,39 +519,58 @@ export class ManifoldVisualizerComponent implements OnInit, OnDestroy {
     return (this.api.deviceInfo?.numStops ?? 0) > 0;
   }
 
+  /** Number of real tool gates (excludes home). */
   get numGates(): number {
-    // Always use the runtime-configured count from /api/info (numStops = g_numActiveStops).
-    // status.stops has NUM_STOPS+1 entries regardless of how many are active — never
-    // use its length for layout sizing.
-    return (this.api.deviceInfo?.numStops ?? 0) + 1; // +1 for home (stop 0)
+    return this.api.deviceInfo?.numStops ?? 0;
   }
 
-  /** Width of the slider window as a percentage of rail width. */
-  get sliderWidthPct(): number {
-    return 100 / this.numGates;
+  private isStopSaved(idx: number): boolean {
+    const found = (this.status?.stops ?? []).find((s: StopInfo) => s.index === idx);
+    return found?.mm != null;
   }
 
-  /** Left edge of the slider window as a percentage of rail width. */
-  get sliderLeftPct(): number {
-    return this.leftPctForRank(this.physicalRankOf(Math.max(0, this.sliderDisplayStop)));
-  }
+  /** Stop the actuator is currently at/moving to (0 = home). */
+  get activeStop(): number { return Math.max(0, this.status?.currentStop ?? 0); }
 
-  /** Center of the slider window — used to position the flow arrow. */
-  get arrowCenterPct(): number {
-    return this.leftPctForRank(this.physicalRankOf(Math.max(0, this.sliderDisplayStop))) + this.sliderWidthPct / 2;
-  }
-
-  get isAtHome():        boolean { return this.sliderDisplayStop === 0; }
+  get isAtHome():        boolean { return this.activeStop === 0; }
   get isHomed():         boolean { return this.status?.homed ?? false; }
   get isManualOverride():boolean { return this.status?.manualOverride ?? false; }
-  get endstopTriggered():boolean { return this.status?.endstopHome ?? false; }
+  /** True while a homing cycle is actively running (device is pressing toward the endstop). */
+  get isHomingNow():     boolean { return this.status?.state === 'HOMING'; }
+
+  /**
+   * Guards the flow arrow beyond just isHomed/isAtHome — those two alone
+   * previously let the arrow render pointing at a gate index with no
+   * corresponding gate element (e.g. right after "Start Over," when the
+   * device briefly reported homed=true at a stale gate while numGates had
+   * already dropped to 0). Bounding activeStop to the configured gate range
+   * closed that gap, but a gate can be "in range" (1..numGates) without a
+   * trained position yet (e.g. mid-wizard) or without a rendered DOM element
+   * for it — either way there's nothing for the arrow to point at. Requiring
+   * isStopSaved(activeStop) rules out the former; recomputeArrow()'s
+   * gateEl-not-found fallback still covers the latter as a last resort, but
+   * shouldn't be the primary guard.
+   */
+  get showFlowArrow(): boolean {
+    return (
+      this.isHomed &&
+      !this.isAtHome &&
+      this.activeStop >= 1 &&
+      this.activeStop <= this.numGates &&
+      this.isStopSaved(this.activeStop)
+    );
+  }
 
   // ── Interactive controls (dashboard use only — see `interactive` input) ────────
 
   onGateClick(g: GateInfo) {
     if (!this.interactive) return;
-    if (g.isHome) { this.api.home().catch(console.error); return; }
     if (g.isLocated) { this.api.moveToStop(g.index).catch(console.error); }
+  }
+
+  onHomeClick() {
+    if (!this.interactive) return;
+    this.api.home().catch(console.error);
   }
 
   onDcClick() {
@@ -630,121 +578,66 @@ export class ManifoldVisualizerComponent implements OnInit, OnDestroy {
     this.api.setDustCollector(!this.dcOn).catch(console.error);
   }
 
-  // ── Jog tracking ──────────────────────────────────────────────────────────────
-  // Raw jogging (used during setup, before a stop is saved) never changes
-  // currentStop/targetStop, so the discrete slider window can't track it by
-  // itself. While jogging, the slider window's left edge instead follows
-  // positionMM continuously, interpolated between the nearest saved stop and
-  // the next (possibly not-yet-saved) column.
-
-  /** CSS transition duration applied to the slider window while jogging. */
-  readonly jogTransitionSec = 1.0;
-
-  private stopMmForIndex(idx: number): number {
-    const stops = this.status?.stops ?? [];
-    const found = stops.find((s: StopInfo) => s.index === idx);
-    return parseFloat(found?.mm ?? '0');
-  }
-
-  /**
-   * True if this index has an actual saved position. Home (0) is always known
-   * at mm 0; every other slot's mm is null until it's saved, so a non-null mm
-   * is what distinguishes "saved" from "not yet".
-   */
-  private isStopSaved(idx: number): boolean {
-    if (idx === 0) return true;
-    const found = (this.status?.stops ?? []).find((s: StopInfo) => s.index === idx);
-    return found?.mm != null;
-  }
-
-  /** Interpolated physical rank for a raw mm position. Uses saved stops as
-   *  anchors (home at mm 0, each saved gate at its mm) and extrapolates past the
-   *  last one by the estimated spacing. Because ranks come from physicalOrder,
-   *  they increase monotonically with mm, so the interpolation is well-behaved
-   *  even when gates were configured out of order. */
-  private physicalRankForPos(pos: number): number {
-    const anchors: { mm: number; rank: number }[] = [{ mm: 0, rank: 0 }];
-    for (let i = 1; i < this.numGates; i++) {
-      if (this.isStopSaved(i)) {
-        anchors.push({ mm: this.stopMmForIndex(i), rank: this.physicalRankOf(i) });
-      }
-    }
-    anchors.sort((a, b) => a.mm - b.mm);
-
-    let lower = anchors[0];
-    let upper: { mm: number; rank: number } | null = null;
-    for (const a of anchors) {
-      if (a.mm <= pos) lower = a;
-      else { upper = a; break; }
-    }
-    if (upper) {
-      const span = upper.mm - lower.mm;
-      const t = span > 0 ? (pos - lower.mm) / span : 0;
-      return lower.rank + t * (upper.rank - lower.rank);
-    }
-    // Beyond the last saved stop — extrapolate one column per estimated span.
-    return lower.rank + (pos - lower.mm) / this.estimatedColumnSpanMm;
-  }
-
-  /** Average spacing between saved stops — used to scale the not-yet-saved segment. */
-  private get estimatedColumnSpanMm(): number {
-    const mms = (this.status?.stops ?? [])
-      .filter((s: StopInfo) => s.index > 0 && s.index < this.numGates && this.isStopSaved(s.index))
-      .map((s: StopInfo) => parseFloat(s.mm ?? '0'))
-      .sort((a, b) => a - b);
-    if (mms.length === 0) return this.hardwareProfile.expectedGateSpacingMm; // no calibration data yet
-    if (mms.length === 1) return Math.max(mms[0], 20);
-    const gaps = mms.slice(1).map((mm, i) => mm - mms[i]).filter(g => g > 0);
-    return gaps.length ? gaps.reduce((a, b) => a + b, 0) / gaps.length : Math.max(mms[0], 20);
-  }
-
-  /**
-   * True while the actuator sits away from wherever the discrete slider is
-   * resting. In wizards (!liveTravel) the slider has no travel animation to
-   * begin with, so it always tracks the raw jog position directly — that's
-   * what lets it snap to each tool as soon as a jog command lands it there.
-   */
-  get isJogging(): boolean {
-    if (!this.isHomed || this.status?.positionMM == null) return false;
-    if (!this.liveTravel) return true;
-    const settledMm = this.stopMmForIndex(this.sliderDisplayStop);
-    return Math.abs(this.status.positionMM - settledMm) > 0.5;
-  }
-
-  /** Left edge of the slider window (as a %) while jogging, continuously interpolated. */
-  get jogWindowLeftPct(): number {
-    const rank = Math.max(0, Math.min(this.numGates - 1,
-      this.physicalRankForPos(this.status?.positionMM ?? 0)));
-    return this.leftPctForRank(rank);
-  }
-
-  /** Left edge actually applied to the slider window — continuous while jogging, discrete otherwise. */
-  get displaySliderLeftPct(): number {
-    return this.isJogging ? this.jogWindowLeftPct : this.sliderLeftPct;
-  }
-
-  /** Center of the slider window, following the same discrete/continuous split — used for the flow arrow. */
-  get displayArrowCenterPct(): number {
-    return this.isJogging ? this.jogWindowLeftPct + this.sliderWidthPct / 2 : this.arrowCenterPct;
-  }
-
-  /** CSS transition-duration applied to the slider/arrow. Wizards (!liveTravel)
-   *  snap instantly to each new jog position rather than animating travel. */
-  get displayTransitionSec(): number {
-    if (!this.liveTravel) return 0;
-    return this.isJogging ? this.jogTransitionSec : this.sliderTransitionSec;
-  }
+  // ── Flow-arrow tracking ─────────────────────────────────────────────────────
+  // The arrow drops from wherever the active gate actually sits on screen. If
+  // the rail is scrolled so the active gate is off to one side, the drop point
+  // clamps to that edge of the visible rail (and an edge hint lights up) so the
+  // active-gate ↔ collector link is never just lost off-screen.
 
   /** Horizontal center of the dust collector box — always centered under the rail (see .dc-wrap). */
   readonly dcCenterPct = 50;
 
+  recomputeArrow() {
+    const railEl = this.railScroll?.nativeElement;
+    if (!railEl) return;
+
+    if (!this.showFlowArrow) {
+      this.activeGateOffscreen = null;
+      return;
+    }
+
+    const gateEl = railEl.querySelector<HTMLElement>(`[data-gate-index="${this.activeStop}"]`);
+    if (!gateEl) {
+      // Element not there yet (e.g. this ran before *ngFor re-rendered after
+      // numGates changed) — don't leave arrowViewportPct pointing at whatever
+      // stale position it last had. showFlowArrow is false-guarded above for
+      // the steady-state case; this covers the transient one.
+      this.activeGateOffscreen = null;
+      this.arrowViewportPct = this.dcCenterPct;
+      return;
+    }
+
+    const railRect = railEl.getBoundingClientRect();
+    const gateRect = gateEl.getBoundingClientRect();
+    const centerPx = gateRect.left + gateRect.width / 2 - railRect.left;
+
+    if (centerPx < 0) {
+      this.activeGateOffscreen = 'left';
+    } else if (centerPx > railRect.width) {
+      this.activeGateOffscreen = 'right';
+    } else {
+      this.activeGateOffscreen = null;
+    }
+
+    const clampedPx = Math.min(Math.max(centerPx, 0), railRect.width);
+    this.arrowViewportPct = railRect.width > 0 ? (clampedPx / railRect.width) * 100 : 50;
+  }
+
+  private scrollActiveIntoView() {
+    const railEl = this.railScroll?.nativeElement;
+    if (!railEl || this.isAtHome) { this.recomputeArrow(); return; }
+    const gateEl = railEl.querySelector<HTMLElement>(`[data-gate-index="${this.activeStop}"]`);
+    gateEl?.scrollIntoView({ block: 'nearest', inline: 'center' });
+    this.recomputeArrow();
+  }
+
   /** Left edge of the horizontal bridge connecting the active gate to the collector. */
   get flowBridgeLeftPct(): number {
-    return Math.min(this.displayArrowCenterPct, this.dcCenterPct);
+    return Math.min(this.arrowViewportPct, this.dcCenterPct);
   }
 
   /** Width of the horizontal bridge connecting the active gate to the collector. */
   get flowBridgeWidthPct(): number {
-    return Math.abs(this.displayArrowCenterPct - this.dcCenterPct);
+    return Math.abs(this.arrowViewportPct - this.dcCenterPct);
   }
 }

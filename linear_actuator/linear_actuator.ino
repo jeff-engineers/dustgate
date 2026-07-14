@@ -92,6 +92,14 @@ StepperTMC2209Driver motor;
 #ifdef CONTROL_SMART_OUTLET
   #include "control/SmartOutletControl.h"
   SmartOutletControl control;
+
+  // Outlet discovery — used by the /api/outlets/discover handling in loop()
+  // below. Must run on this (the main loop) task; see HttpApiServer.cpp's
+  // /api/outlets/discover route comment for why.
+  #include "utils/MdnsQuery.h"
+  #include "outlets/ShellyGen1Outlet.h"
+  #include "outlets/ShellyGen2Outlet.h"
+  #include "outlets/ShellyDeviceName.h"
 #elif defined(CONTROL_SERIAL_DEBUG)
   #include "control/SerialDebugControl.h"
   SerialDebugControl control;
@@ -132,6 +140,16 @@ enum State {
 State currentState = STATE_STARTUP;
 int   currentStop  = -1;
 int   targetStop   = 0;
+
+// =============================================================================
+// Idle power-off — see HttpApiServer::idleTimeoutSec(). Reset on every real
+// move/home command; if it goes unrefreshed past the configured timeout while
+// otherwise idle, the driver is fully disabled and the position marked
+// unknown, forcing a rehome (reuses the existing "not homed" gating below)
+// before the next move rather than sitting energized indefinitely.
+// =============================================================================
+unsigned long g_lastActivityMs = 0;
+bool          g_driverAsleep   = false;
 
 // Forward declarations
 void issueMove(int stop);
@@ -296,6 +314,14 @@ void loop() {
     if (_SC.consumeClearCalRequest()) {
         CalibrationStore::erase();
         loadCalibration();
+        // Without this, currentStop (and therefore homed, which is derived
+        // from it) survived a clearcal untouched — so the UI kept reporting
+        // "homed at gate N" from before the reset even though numActiveStops
+        // just dropped to 0 and no gates exist to be at. That stale combo is
+        // exactly what made the manifold visualizer's flow arrow appear
+        // pointing at a gate index with no corresponding DOM element.
+        currentStop = -1;
+        targetStop  = 0;
         DEBUG_PRINTLN(F("Calibration cleared. config.h defaults loaded."));
     }
 
@@ -385,6 +411,15 @@ void loop() {
         CalibrationStore::erase();
         loadCalibration();
         g_numActiveStops = 0;  // return to unconfigured — setup wizard can restart
+        // Same reasoning as the serial 'clearcal' handler above: currentStop
+        // (and homed, derived from it) previously survived a clearcal
+        // untouched, so the UI kept reporting "homed at gate N" from before
+        // Start Over even though there are now zero gates to be at — which is
+        // what made the manifold visualizer's flow arrow render pointing at a
+        // gate index with no corresponding DOM element (or, on a later
+        // restart, at a stale/mismatched position once gates existed again).
+        currentStop = -1;
+        targetStop  = 0;
 #ifdef CONTROL_SMART_OUTLET
         // "Start Over" in the setup wizard means a full reset — without this,
         // the previous run's tool-to-gate outlet mappings (names, IPs,
@@ -401,31 +436,55 @@ void loop() {
             // Convert current motor position (steps) to mm.
             // HOME_DIRECTION inverts the step sign: positive steps are away from home.
             float currentMM = (float)motor.getPosition() / stepsPerMM() / (-HOME_DIRECTION);
-            g_stopPositionsMM[stopIdx] = currentMM;
 
-            // Persist to CalibrationStore; reload other fields from existing data.
-            CalibrationData cal;
-            if (!CalibrationStore::load(cal)) {
-                // No valid cal yet — fill in what we know
-                cal.magic              = CALIB_MAGIC;
-                cal.version            = CALIB_VERSION;
-                cal.numStops           = 0;
-                cal.maxTravelMM        = 0.0f;
-                cal.measuredStepsPerMM = stepsPerMM();
-                memset(cal.stopMM, 0, sizeof(cal.stopMM));
+            // Authoritative overlap guard (see MIN_STOP_SEPARATION_MM). Reject a
+            // save that lands on top of another already-saved gate — home (0)
+            // and the slot being (re)saved itself are excluded. Only meaningful
+            // for gates within the active count; positions beyond it are stale.
+            bool conflict = false;
+            for (int j = 1; j <= g_numActiveStops && j <= NUM_STOPS; j++) {
+                if (j == stopIdx) continue;
+                if (g_stopPositionsMM[j] == 0.0f) continue; // unsaved slot
+                if (fabsf(currentMM - g_stopPositionsMM[j]) < MIN_STOP_SEPARATION_MM) {
+                    conflict = true;
+                    DEBUG_PRINT(F("[API] Rejected stop "));  Serial.print(stopIdx);
+                    DEBUG_PRINT(F(" at "));                   Serial.print(currentMM, 2);
+                    DEBUG_PRINT(F(" mm — too close to stop ")); Serial.print(j);
+                    DEBUG_PRINT(F(" ("));                     Serial.print(g_stopPositionsMM[j], 2);
+                    DEBUG_PRINTLN(F(" mm). Jog further away and retry."));
+                    break;
+                }
             }
-            cal.stopMM[stopIdx] = currentMM;
-            if (stopIdx > (int)cal.numStops) cal.numStops = (uint8_t)stopIdx;
-            CalibrationStore::save(cal);
+            // Only persist when the position clears the overlap guard —
+            // otherwise leave calibration untouched (can't return here: the
+            // rest of loop() must still run this iteration).
+            if (!conflict) {
+                g_stopPositionsMM[stopIdx] = currentMM;
 
-            if (stopIdx > g_numTrainedStops) g_numTrainedStops = stopIdx;
+                // Persist to CalibrationStore; reload other fields from existing data.
+                CalibrationData cal;
+                if (!CalibrationStore::load(cal)) {
+                    // No valid cal yet — fill in what we know
+                    cal.magic              = CALIB_MAGIC;
+                    cal.version            = CALIB_VERSION;
+                    cal.numStops           = 0;
+                    cal.maxTravelMM        = 0.0f;
+                    cal.measuredStepsPerMM = stepsPerMM();
+                    memset(cal.stopMM, 0, sizeof(cal.stopMM));
+                }
+                cal.stopMM[stopIdx] = currentMM;
+                if (stopIdx > (int)cal.numStops) cal.numStops = (uint8_t)stopIdx;
+                CalibrationStore::save(cal);
 
-            // Keep runtime count in sync (expand; never shrink during a session)
-            if (stopIdx > g_numActiveStops) g_numActiveStops = stopIdx;
+                if (stopIdx > g_numTrainedStops) g_numTrainedStops = stopIdx;
 
-            DEBUG_PRINT(F("[API] Stop ")); Serial.print(stopIdx);
-            DEBUG_PRINT(F(" saved at "));  Serial.print(currentMM, 2);
-            DEBUG_PRINTLN(F(" mm"));
+                // Keep runtime count in sync (expand; never shrink during a session)
+                if (stopIdx > g_numActiveStops) g_numActiveStops = stopIdx;
+
+                DEBUG_PRINT(F("[API] Stop ")); Serial.print(stopIdx);
+                DEBUG_PRINT(F(" saved at "));  Serial.print(currentMM, 2);
+                DEBUG_PRINTLN(F(" mm"));
+            }
         }
     }
 
@@ -476,7 +535,7 @@ void loop() {
         HttpApiServer::OutletConfigCmd cmd;
         if (apiServer.consumeOutletConfigRequest(cmd)) {
             control.configureOutlet(cmd.slot, cmd.generation, cmd.ip, cmd.name,
-                                    cmd.stopIndex, cmd.thresholdW);
+                                    cmd.stopIndex, cmd.thresholdW, cmd.host);
         }
         int delSlot = -1;
         if (apiServer.consumeOutletDeleteRequest(delSlot)) {
@@ -488,7 +547,7 @@ void loop() {
 
         HttpApiServer::DustCollectorCmd dcCmd;
         if (apiServer.consumeDustCollectorConfigRequest(dcCmd)) {
-            control.configureDustCollector(dcCmd.generation, dcCmd.ip);
+            control.configureDustCollector(dcCmd.generation, dcCmd.ip, dcCmd.host);
         }
         if (apiServer.consumeDustCollectorDeleteRequest()) {
             control.removeDustCollector();
@@ -497,8 +556,171 @@ void loop() {
         if (apiServer.consumeDustCollectorSwitchRequest(dcSwitchOn)) {
             control.setDcManual(dcSwitchOn);
         }
+
+        // Outlet discovery — runs synchronously here (main loop task) rather
+        // than in a spawned FreeRTOS task; see HttpApiServer.cpp's
+        // /api/outlets/discover route comment. Blocks the main loop for the
+        // duration of the scan (mDNS query + a couple short HTTP probes per
+        // match), which is fine since this only runs on an explicit,
+        // infrequent wizard action while the system is otherwise idle.
+        if (apiServer.consumeDiscoverRequest()) {
+            DynamicJsonDocument doc(2048);
+            JsonArray results = doc.to<JsonArray>();
+
+            // mDNS/UDP query is lossy — retry a few times and merge unique
+            // hosts by IP, so a device only needs to answer once across all
+            // attempts to show up in the final list.
+            String hitIp[DISCOVER_MAX_RESULTS];
+            String hitHost[DISCOVER_MAX_RESULTS];
+            int hitCount = 0;
+
+            for (int attempt = 0; attempt < DISCOVER_MDNS_ATTEMPTS; attempt++) {
+                MdnsHit mdnsHits[DISCOVER_MAX_RESULTS];
+                int n = mdnsQueryHttpTcp(DISCOVER_MDNS_TIMEOUT_MS, mdnsHits, DISCOVER_MAX_RESULTS);
+                DEBUG_PRINT(F("[DISCOVER] attempt "));
+                DEBUG_PRINT(attempt + 1);
+                DEBUG_PRINT(F("/"));
+                DEBUG_PRINT(DISCOVER_MDNS_ATTEMPTS);
+                DEBUG_PRINT(F(": mDNS _http._tcp query returned "));
+                DEBUG_PRINT(n);
+                DEBUG_PRINTLN(F(" host(s):"));
+
+                for (int i = 0; i < n; i++) {
+                    String host = mdnsHits[i].hostname;
+                    String ip   = mdnsHits[i].ip;
+                    String hostLower = host;
+                    hostLower.toLowerCase();
+                    bool matched = hostLower.indexOf("shelly") >= 0;
+
+                    DEBUG_PRINT(F("  - "));
+                    DEBUG_PRINT(host.length() ? host : String("(no hostname)"));
+                    DEBUG_PRINT(F("  "));
+                    DEBUG_PRINT(ip);
+                    DEBUG_PRINTLN(matched ? F("  [matched \"shelly\"]") : F("  [skipped — no \"shelly\" in hostname]"));
+
+                    if (!matched) continue;
+
+                    bool dup = false;
+                    for (int j = 0; j < hitCount; j++) {
+                        if (hitIp[j] == ip) { dup = true; break; }
+                    }
+                    if (dup || hitCount >= DISCOVER_MAX_RESULTS) continue;
+                    hitIp[hitCount]   = ip;
+                    hitHost[hitCount] = host;
+                    hitCount++;
+                }
+
+                if (attempt < DISCOVER_MDNS_ATTEMPTS - 1) delay(DISCOVER_MDNS_RETRY_DELAY_MS);
+            }
+
+            DEBUG_PRINT(F("[DISCOVER] "));
+            DEBUG_PRINT(hitCount);
+            DEBUG_PRINTLN(F(" unique host(s) across all attempts — probing:"));
+
+            for (int i = 0; i < hitCount; i++) {
+                const String& ip   = hitIp[i];
+                const String& host = hitHost[i];
+
+                // Gen 2 first — the vast majority of discoverable Shelly
+                // hardware today (including this project's reference "Plug US
+                // G4") speaks Gen2/RPC, so trying it first keeps discovery
+                // fast instead of eating a timeout on every device before
+                // falling back to Gen 1.
+                ShellyGen2Outlet gen2(ip.c_str(), "discover");
+                bool ok  = gen2.poll();
+                float pw = gen2.getPowerW();
+                int  gen = 2;
+                if (!ok) {
+                    ShellyGen1Outlet gen1(ip.c_str(), "discover");
+                    ok  = gen1.poll();
+                    pw  = gen1.getPowerW();
+                    gen = 1;
+                }
+                String devName = ok ? fetchShellyDeviceName(ip.c_str(), gen) : String();
+                DEBUG_PRINT(F("  - ")); DEBUG_PRINT(host); DEBUG_PRINT(F("  "));
+                DEBUG_PRINT(ip);
+                DEBUG_PRINT(F("  probe -> reachable="));
+                DEBUG_PRINT(ok ? F("yes") : F("no"));
+                DEBUG_PRINT(F(" gen="));
+                DEBUG_PRINT(ok ? gen : 0);
+                DEBUG_PRINT(F(" name="));
+                DEBUG_PRINTLN(devName.length() ? devName : String("(none set)"));
+
+                JsonObject o = results.createNestedObject();
+                o["ip"]        = ip;
+                o["hostname"]  = host;
+                o["name"]      = devName;   // app-assigned Shelly device name, "" if unset
+                o["reachable"] = ok;
+                o["powerW"]    = pw;
+                o["gen"]       = ok ? gen : 0;
+            }
+            if (hitCount == 0) {
+                DEBUG_PRINTLN(F("  (no _http._tcp responders at all — check the outlets are powered, "
+                                 "joined to WiFi, and that mDNS is enabled in the Shelly app's device settings)"));
+            }
+
+            String out; serializeJson(doc, out);
+            apiServer.respondDiscover(out);
+        }
+    }
+
+    // Outlet ping — probe a single IP on the main loop (see consumePingRequest
+    // in HttpApiServer for why it's here rather than a spawned task).
+    {
+        char pingIp[40];
+        if (apiServer.consumePingRequest(pingIp, sizeof(pingIp))) {
+            // Gen 2 first — same reasoning as discover above: today's Shelly
+            // hardware (incl. this project's reference Plug US G4) speaks
+            // Gen2/RPC, so probing it first avoids eating a Gen 1 timeout on
+            // every reachable device before falling back.
+            ShellyGen2Outlet gen2(pingIp, "ping");
+            bool ok  = gen2.poll();
+            float pw = gen2.getPowerW();
+            int  gen = 2;
+            if (!ok) {
+                ShellyGen1Outlet gen1(pingIp, "ping");
+                ok  = gen1.poll();
+                pw  = gen1.getPowerW();
+                gen = 1;
+            }
+            String devName = ok ? fetchShellyDeviceName(pingIp, gen) : String();
+
+            DEBUG_PRINT(F("[PING] ")); DEBUG_PRINT(pingIp);
+            DEBUG_PRINT(F(" -> reachable=")); DEBUG_PRINT(ok ? F("yes") : F("no"));
+            DEBUG_PRINT(F(" gen=")); DEBUG_PRINT(ok ? gen : 0);
+            DEBUG_PRINT(F(" name=")); DEBUG_PRINTLN(devName.length() ? devName : String("(none set)"));
+
+            StaticJsonDocument<192> resp;
+            resp["reachable"] = ok;
+            resp["powerW"]    = pw;
+            resp["gen"]       = ok ? gen : 0;
+            resp["name"]      = devName;  // app-assigned Shelly device name, "" if unset
+            String out; serializeJson(resp, out);
+            apiServer.respondPing(out);
+        }
     }
 #endif // CONTROL_SMART_OUTLET
+
+    // ------------------------------------------------------------------
+    // Idle power-off — only while genuinely at rest (home or a gate), never
+    // mid-move/homing. Reuses the existing "not homed" gating (currentStop ==
+    // -1) to force a rehome on the next move instead of adding a new state.
+    // ------------------------------------------------------------------
+    {
+        int timeoutSec = apiServer.idleTimeoutSec();
+        if (timeoutSec > 0 && !g_driverAsleep &&
+            (currentState == STATE_IDLE || currentState == STATE_AT_STOP) &&
+            currentStop != -1 &&
+            (millis() - g_lastActivityMs) > (unsigned long)timeoutSec * 1000UL) {
+            motor.enable(false);
+            currentStop      = -1;
+            currentState     = STATE_IDLE;
+            g_driverAsleep   = true;
+            g_notHomedWarnShown = false;
+            DEBUG_PRINT(F("[Power] Idle ")); DEBUG_PRINT(timeoutSec);
+            DEBUG_PRINTLN(F("s — driver powered off. Home to resume."));
+        }
+    }
 #endif // ENABLE_HTTP_API
 
     switch (currentState) {
@@ -650,6 +872,8 @@ void loop() {
 // defaults.  stallThreshold() / homeSpeed() return -1 when not overridden.
 // =============================================================================
 void startHoming() {
+    g_lastActivityMs = millis();
+    g_driverAsleep   = false;
     feedback.resetHoming(); // clear _homed so updateHoming() actually runs
 #ifdef MOTOR_STEPPER_TMC2209
     int   sg    = control.stallThreshold();
@@ -668,6 +892,7 @@ void startHoming() {
 // issueMove() — command motor to a stop position
 // =============================================================================
 void issueMove(int stop) {
+    g_lastActivityMs = millis();
     DEBUG_PRINT(F("Moving to stop "));
     DEBUG_PRINTLN(stop);
     motor.moveTo(feedback.stepsForStop(stop));

@@ -40,6 +40,7 @@ const state = {
   homeOnRight:    false,
   motorInverted:  false,
   numActiveStops: 0,        // 0 = unconfigured until setup wizard runs
+  idleTimeoutSec: 3600,     // matches firmware IDLE_TIMEOUT_SEC_DEFAULT
   dcConfigured:   false,    // set true once a dust collector plug is assigned
   dcOn:           false,    // dust collector switch state
   dcIp:           null,     // ip of the assigned dust collector plug, for ping simulation
@@ -59,11 +60,22 @@ const state = {
 // that hasn't spun up yet: gate 1's outlet reads 0W once then a steady load,
 // gate 2's outlet reads 0W twice then a random load. Any further IPs read a
 // realistic load immediately, since the scenario's been demonstrated already.
-const pingSim = { order: [], counts: {} };
+const pingSim = { order: [], counts: {}, base: {} };
 
 function resetPingSim() {
   pingSim.order = [];
   pingSim.counts = {};
+  pingSim.base = {};
+}
+
+// A tool's running draw once spun up: a stable per-outlet base in the
+// 500–1000W range (typical for corded power tools) with a few percent of
+// per-reading jiggle, so repeated pings on the same tool read consistently
+// like real hardware rather than jumping across the whole range each call.
+function runningWatts(ip) {
+  if (!(ip in pingSim.base)) pingSim.base[ip] = 500 + Math.random() * 500;
+  const jiggle = 1 + (Math.random() - 0.5) * 0.06; // ±3%
+  return Math.round(pingSim.base[ip] * jiggle);
 }
 
 function simulatedPingPower(ip) {
@@ -75,9 +87,11 @@ function simulatedPingPower(ip) {
   const rank  = pingSim.order.indexOf(ip);
   const count = pingSim.counts[ip];
 
-  if (rank === 0) return count === 1 ? 0 : 320;
-  if (rank === 1) return count <= 2 ? 0 : Math.round(150 + Math.random() * 250);
-  return Math.round(200 + Math.random() * 200);
+  // First one/two pings read 0W to demo the wizard's "no load yet, try again"
+  // flow; after that the tool has spun up to its running draw.
+  if (rank === 0) return count === 1 ? 0 : runningWatts(ip);
+  if (rank === 1) return count <= 2 ? 0 : runningWatts(ip);
+  return runningWatts(ip);
 }
 
 function statusJson() {
@@ -85,6 +99,61 @@ function statusJson() {
   // sensor reads as untriggered rather than misleadingly "at home".
   state.endstopHome = state.homed && state.positionMM < 0.5;
   return JSON.stringify(state);
+}
+
+// ── mDNS discovery simulation ─────────────────────────────────────────────
+// Mirrors /api/outlets/discover on real hardware: a handful of Shelly
+// outlets "on the network," each with a plausible mDNS hostname
+// (ShellyPlugUSG4-<MAC-shaped hex>, matching the real device naming scheme)
+// and IP. Generated once per server run (not per request) so repeated scans
+// return the same devices, like real mDNS would. Real-world testing found
+// most Shelly Plugs never have a local device/switch name configured (the
+// app's label is often cloud-only) even when the user thinks they renamed
+// it, so most mock devices get name: '' too — only a couple get a name, to
+// exercise both code paths in the wizard.
+const MOCK_TOOL_NAMES = ['Table Saw', 'Drill Press', 'Router Table'];
+
+function randomHex(len) {
+  let s = '';
+  for (let i = 0; i < len; i++) s += Math.floor(Math.random() * 16).toString(16);
+  return s.toUpperCase();
+}
+
+function randomLanIp(usedIps) {
+  let ip;
+  do {
+    ip = `192.168.87.${20 + Math.floor(Math.random() * 60)}`;
+  } while (usedIps.has(ip));
+  usedIps.add(ip);
+  return ip;
+}
+
+let mockDiscovered = null; // lazily generated, stable for the life of the process
+
+function ensureMockDiscovered() {
+  if (mockDiscovered) return mockDiscovered;
+  const usedIps = new Set();
+  const count = 2 + Math.floor(Math.random() * 3); // 2-4, mirrors real mDNS variability
+  const namedIdx = new Set();
+  while (namedIdx.size < Math.min(2, count)) namedIdx.add(Math.floor(Math.random() * count));
+
+  mockDiscovered = Array.from({ length: count }, (_, i) => ({
+    ip:         randomLanIp(usedIps),
+    hostname:   `ShellyPlugUSG4-${randomHex(12)}`,
+    name:       namedIdx.has(i) ? MOCK_TOOL_NAMES[Math.floor(Math.random() * MOCK_TOOL_NAMES.length)] : '',
+    reachable:  true,
+    powerW:     Math.round(Math.random() * 8 * 10) / 10,  // idle standby draw
+    gen:        2,
+  }));
+  return mockDiscovered;
+}
+
+// Real device name for a given IP if it's one of the discovered/simulated
+// ones, else '' — used by both /api/outlets/discover and /api/outlets/ping
+// so the two stay consistent for the same IP.
+function nameForIp(ip) {
+  const d = ensureMockDiscovered().find(d => d.ip === ip);
+  return d ? d.name : '';
 }
 
 // ── WebSocket server ──────────────────────────────────────────────────────
@@ -124,6 +193,7 @@ function handler(req, res) {
       version:       '1.0.0-mock',
       homeOnRight:   state.homeOnRight,
       motorInverted: state.motorInverted,
+      idleTimeoutSec: state.idleTimeoutSec,
     });
   }
 
@@ -167,7 +237,7 @@ function handler(req, res) {
   if (pathname === '/api/enable'  && req.method === 'POST') { state.enabled = true;  return json(res, { ok: true }); }
   if (pathname === '/api/disable' && req.method === 'POST') { state.enabled = false; return json(res, { ok: true }); }
   if (pathname === '/api/estop'   && req.method === 'POST') {
-    state.state = 'ESTOP';
+    state.state = 'ERROR';   // firmware maps e-stop to STATE_ERROR -> "ERROR"
     broadcast();
     return json(res, { ok: true });
   }
@@ -184,7 +254,8 @@ function handler(req, res) {
       state.manualOverride = true;
       broadcast();
       setTimeout(() => {
-        state.state          = 'IDLE';
+        // Firmware settles to AT_STOP at a real gate, plain IDLE at home (0).
+        state.state          = stop > 0 ? 'AT_STOP' : 'IDLE';
         state.currentStop    = stop;
         state.positionMM     = toMm;
         state.positionSteps  = Math.round(toMm * STEPS_PER_MM);
@@ -217,6 +288,17 @@ function handler(req, res) {
     return json(res, state);
   }
 
+  if (pathname === '/api/outlets/discover' && req.method === 'GET') {
+    // Slight wattage jitter per call, like a real poll would show, without
+    // regenerating the device list itself (mDNS would keep finding the same
+    // physical devices on repeated scans).
+    const results = ensureMockDiscovered().map(d => ({
+      ...d,
+      powerW: Math.max(0, Math.round((d.powerW + (Math.random() - 0.5) * 2) * 10) / 10),
+    }));
+    return json(res, results);
+  }
+
   if (pathname === '/api/outlets/ping' && req.method === 'POST') {
     return body(req, data => {
       // The dust collector's own plug follows its real on/off switch state.
@@ -230,7 +312,8 @@ function handler(req, res) {
       } else if (data.ip) {
         powerW = simulatedPingPower(data.ip);
       }
-      json(res, { reachable: true, powerW, gen: 2 });
+      const name = data.ip ? nameForIp(data.ip) : '';
+      json(res, { reachable: true, powerW, gen: 2, name });
     });
   }
 
@@ -245,17 +328,27 @@ function handler(req, res) {
       const slot = parseInt(outletPutMatch[1], 10);
       const ip = data.ip ?? '';
       const hasSwitch = ip.trim().length > 0;  // empty ip = name-only gate
+      // Match firmware validation: name always required, stop must be >= 1.
+      // ip is optional (empty = name-only gate). Firmware returns 400 here
+      // rather than silently defaulting, so the mock must too.
+      if (typeof data.name !== 'string' || data.name.trim().length === 0) {
+        return json(res, { error: "missing 'name'" }, 400);
+      }
+      if (typeof data.stop !== 'number' || data.stop <= 0) {
+        return json(res, { error: "missing 'stop'" }, 400);
+      }
       const existing = state.outlets.findIndex(o => o.slot === slot);
       const record = {
         slot,
-        name:       data.name   ?? `Gate ${slot + 1}`,
-        stop:       data.stop   ?? slot + 1,
+        name:       data.name,
+        stop:       data.stop,
         powerW:     0,
         active:     false,
         reachable:  false,
         thresholdW: data.threshold ?? 5.0,
         gen:        data.gen    ?? 2,
         ip,
+        host:       data.host ?? '',   // mDNS hostname, if the outlet came from a scan
         hasSwitch,
       };
       if (existing >= 0) {
@@ -284,6 +377,7 @@ function handler(req, res) {
     return body(req, data => {
       state.dcConfigured = true;
       state.dcIp = data.ip ?? '';
+      state.dcHost = data.host ?? '';
       console.log(`  [mock] Dust collector configured: gen${data.gen ?? 2} @ ${data.ip ?? ''}`);
       broadcast();
       json(res, { ok: true });
@@ -353,6 +447,27 @@ function handler(req, res) {
     });
   }
 
+  if (pathname === '/api/config/idle-timeout' && req.method === 'POST') {
+    return body(req, data => {
+      const sec = data.seconds;
+      if (typeof sec === 'number' && sec >= 0 && sec <= 86400) {
+        state.idleTimeoutSec = sec;
+        console.log(`  [mock] Idle timeout: ${sec === 0 ? 'disabled' : sec + 's'}`);
+      }
+      json(res, { ok: true });
+    });
+  }
+
+  if (pathname === '/api/wifi/reset' && req.method === 'POST') {
+    console.log('[MOCK] WiFi reset requested — ignoring (no real WiFi to forget)');
+    return json(res, { ok: true });
+  }
+
+  if (pathname === '/api/agent/key' && req.method === 'PUT') {
+    console.log('[MOCK] Anthropic key update requested — ignoring (mock always uses ANTHROPIC_KEY env var)');
+    return json(res, { ok: true });
+  }
+
   if (pathname === '/api/clearcal' && req.method === 'POST') {
     // Reset to unconfigured — mirrors firmware behaviour on start-over
     state.numActiveStops = 0;
@@ -360,6 +475,11 @@ function handler(req, res) {
     state.outlets  = [];
     state.homed    = false;
     state.currentStop = -1;
+    // Dust collector is part of the outlet config the firmware clears on
+    // start-over — reset it here too so the mock matches.
+    state.dcConfigured = false;
+    state.dcOn         = false;
+    state.dcIp         = null;
     resetPingSim();
     broadcast();
     return json(res, { ok: true });

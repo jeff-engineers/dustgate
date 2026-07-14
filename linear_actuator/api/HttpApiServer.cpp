@@ -21,6 +21,8 @@
   #include "../control/SmartOutletControl.h"
   #include "../outlets/ShellyGen1Outlet.h"
   #include "../outlets/ShellyGen2Outlet.h"
+  #include "../outlets/ShellyDeviceName.h"
+  #include <HTTPClient.h>
 #endif
 
 static const char* NVS_NS  = "api_cfg";
@@ -64,6 +66,13 @@ static uint32_t statusFingerprint(const ApiStatus& s
             for (const char* p = o->ip();   *p; ++p) h = ((h << 5) + h) ^ (uint8_t)*p;
             h = ((h << 5) + h) ^ (uint32_t)(o->getStopIndex() & 0xFF);
         }
+        // Dust collector on/off + assigned state were missing here too — same
+        // bug as the outlet list above: toggling the dashboard's DC switch
+        // changed real state but never invalidated the cached WS push, so the
+        // UI kept showing whatever dcOn value happened to be cached from the
+        // last push that changed a *different* fingerprinted field.
+        h = ((h << 5) + h) ^ (uint32_t)(outlets->dcOn()        ? 8  : 0);
+        h = ((h << 5) + h) ^ (uint32_t)(outlets->dcConfigured() ? 16 : 0);
     }
 #endif
     return h;
@@ -89,16 +98,23 @@ HttpApiServer::HttpApiServer()
       _setNumGatesPending(false),  _newNumGates(0),
       _homeOnRight(false),
       _homeDirection(HOME_DIRECTION_DEFAULT),
-      _cachedNumActiveStops(0)
+      _cachedNumActiveStops(0),
+      _idleTimeoutSec(IDLE_TIMEOUT_SEC_DEFAULT)
 #ifdef CONTROL_SMART_OUTLET
     , _outletConfigPending(false),
       _outletDeletePending(false), _outletDeleteSlot(0),
       _outletSavePending(false),
       _dcConfigPending(false),
       _dcDeletePending(false),
-      _dcSwitchPending(false), _dcSwitchOn(false)
+      _dcSwitchPending(false), _dcSwitchOn(false),
+      _discoverPending(false), _discoverReq(nullptr),
+      _pingPending(false), _pingReq(nullptr)
 #endif
-{}
+{
+#ifdef CONTROL_SMART_OUTLET
+    _pingIp[0] = '\0';
+#endif
+}
 
 // =============================================================================
 // begin()
@@ -120,6 +136,7 @@ bool HttpApiServer::begin() {
         _homeOnRight  = prefs.getBool("home_right", false);
         _homeDirection = prefs.getInt("home_dir",  HOME_DIRECTION_DEFAULT);
         _cachedNumActiveStops = prefs.getInt("num_gates", 0); // 0 = not yet configured
+        _idleTimeoutSec = prefs.getInt("idle_to", IDLE_TIMEOUT_SEC_DEFAULT);
         prefs.end();
     }
 
@@ -301,6 +318,39 @@ bool HttpApiServer::consumeDustCollectorSwitchRequest(bool& outOn) {
     xSemaphoreGive(_mutex);
     return v;
 }
+
+bool HttpApiServer::consumeDiscoverRequest() {
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    bool v = _discoverPending;
+    xSemaphoreGive(_mutex);
+    return v;
+}
+
+void HttpApiServer::respondDiscover(const String& json) {
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    AsyncWebServerRequest* req = _discoverReq;
+    _discoverPending = false;
+    _discoverReq     = nullptr;
+    xSemaphoreGive(_mutex);
+    if (req) req->send(200, "application/json", json);
+}
+
+bool HttpApiServer::consumePingRequest(char* outIp, size_t ipLen) {
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    bool v = _pingPending;
+    if (v) strlcpy(outIp, _pingIp, ipLen);
+    xSemaphoreGive(_mutex);
+    return v;
+}
+
+void HttpApiServer::respondPing(const String& json) {
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    AsyncWebServerRequest* req = _pingReq;
+    _pingPending = false;
+    _pingReq     = nullptr;
+    xSemaphoreGive(_mutex);
+    if (req) req->send(200, "application/json", json);
+}
 #endif
 
 #undef CONSUME
@@ -322,8 +372,9 @@ void HttpApiServer::registerRoutes() {
         doc["apiKey"]        = _apiKey;
         doc["numStops"]      = _cachedNumActiveStops;   // runtime; not compile-time NUM_STOPS
         doc["version"]       = "1.0.0";
-        doc["homeOnRight"]   = _homeOnRight;
-        doc["motorInverted"] = (_homeDirection < 0);    // true when direction was flipped
+        doc["homeOnRight"]    = _homeOnRight;
+        doc["motorInverted"]  = (_homeDirection < 0);    // true when direction was flipped
+        doc["idleTimeoutSec"] = _idleTimeoutSec;
         String out; serializeJson(doc, out);
         req->send(200, "application/json", out);
     });
@@ -437,6 +488,53 @@ void HttpApiServer::registerRoutes() {
             sendOk(req);
         }
     );
+
+    // ------------------------------------------------------------------
+    // POST /api/config/idle-timeout   body: {"seconds": N}
+    // Seconds of no move/home activity before the driver is powered off
+    // (0 = never sleep). Persists to NVS; the main loop polls idleTimeoutSec()
+    // directly each iteration, so this takes effect immediately with no
+    // pending-command plumbing needed.
+    // ------------------------------------------------------------------
+    _server.on("/api/config/idle-timeout", HTTP_POST,
+        [](AsyncWebServerRequest* req) {},
+        nullptr,
+        [this](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t, size_t) {
+            if (!checkAuth(req)) return;
+            StaticJsonDocument<64> doc;
+            if (deserializeJson(doc, data, len)) { sendError(req, 400, "invalid JSON"); return; }
+            if (!doc.containsKey("seconds")) { sendError(req, 400, "missing seconds"); return; }
+            int sec = doc["seconds"] | -1;
+            if (sec < 0 || sec > 86400) { sendError(req, 400, "seconds out of range (0-86400)"); return; }
+
+            _idleTimeoutSec = sec;
+            Preferences prefs;
+            prefs.begin(NVS_NS, false);
+            prefs.putInt("idle_to", sec);
+            prefs.end();
+            DEBUG_PRINT(F("[API] Idle timeout: "));
+            if (sec == 0) DEBUG_PRINTLN(F("disabled"));
+            else { Serial.print(sec); DEBUG_PRINTLN(F("s")); }
+            sendOk(req);
+        }
+    );
+
+    // ------------------------------------------------------------------
+    // POST /api/wifi/reset
+    // Erases stored WiFi credentials and reboots into the captive setup
+    // portal — the HTTP equivalent of the serial 'wifireset' command, for
+    // when a user needs to move the device to a different network without
+    // physical serial access. Does not return; WiFiProvisioner::reset()
+    // restarts the device after a short delay (long enough for this
+    // response to flush to the client first).
+    // ------------------------------------------------------------------
+    _server.on("/api/wifi/reset", HTTP_POST, [this](AsyncWebServerRequest* req) {
+        if (!checkAuth(req)) return;
+        DEBUG_PRINTLN(F("[UI] WiFi reset requested — erasing credentials and rebooting."));
+        sendOk(req);
+        delay(300);
+        WiFiProvisioner::reset(); // does not return
+    });
 
     // ------------------------------------------------------------------
     // Static file serving — Angular front-end bundle from LittleFS.
@@ -561,15 +659,6 @@ void HttpApiServer::registerRoutes() {
         ESP.restart();
     });
 
-    // POST /api/wifireset
-    _server.on("/api/wifireset", HTTP_POST, [this](AsyncWebServerRequest* req) {
-        if (!checkAuth(req)) return;
-        DEBUG_PRINTLN(F("[UI] WiFi reset requested — erasing credentials."));
-        sendOk(req);
-        delay(200);
-        WiFiProvisioner::reset(); // does not return
-    });
-
     // ------------------------------------------------------------------
     // POST /api/move   body: {"stop": 2}
     // POST /api/jog    body: {"mm": -5.0}
@@ -613,6 +702,36 @@ void HttpApiServer::registerRoutes() {
     // ------------------------------------------------------------------
 #ifdef CONTROL_SMART_OUTLET
 
+    // GET /api/outlets/discover
+    // Queries mDNS for _http._tcp services and filters to hostnames that look
+    // like Shelly devices, probing each match the same way /api/outlets/ping
+    // does so the response is ready to populate the wizard's outlet list.
+    //
+    // The actual mDNS query + probing happens on the MAIN LOOP TASK, not here
+    // and not in a spawned FreeRTOS task — see consumeDiscoverRequest() in
+    // linear_actuator.ino. ESP32's mDNS responder is not safe to call from a
+    // task other than the one that called MDNS.begin() (the main loop task,
+    // via WiFiProvisioner) while it's also actively advertising the device's
+    // own hostname service; doing so previously corrupted the heap and caused
+    // a crash-reboot shortly after almost every discover call, HTTP or serial.
+    // This handler just stashes the request; the main loop calls
+    // respondDiscover() once the scan is done.
+    //
+    // MUST be registered before GET /api/outlets below: ESPAsyncWebServer
+    // matches a registered URI as a prefix (uri == url() || url().startsWith(uri
+    // + "/")) and dispatches to the first match in registration order, so with
+    // the plain list route registered first every /api/outlets/discover request
+    // was being swallowed by it and returning the wrong (object, not array)
+    // JSON shape — which is why the wizard's scan silently found nothing.
+    _server.on("/api/outlets/discover", HTTP_GET, [this](AsyncWebServerRequest* req) {
+        if (!checkAuth(req)) return;
+        xSemaphoreTake(_mutex, portMAX_DELAY);
+        _discoverPending = true;
+        _discoverReq     = req;
+        xSemaphoreGive(_mutex);
+        // response sent later by the main loop via respondDiscover()
+    });
+
     // GET /api/outlets — list with live readings
     _server.on("/api/outlets", HTTP_GET, [this](AsyncWebServerRequest* req) {
         if (!checkAuth(req)) return;
@@ -622,9 +741,12 @@ void HttpApiServer::registerRoutes() {
 
     // POST /api/outlets/ping   body: {"ip":"192.168.1.x"}
     // Auto-detects the Shelly API generation rather than requiring the caller
-    // to know it: tries the Gen 1 (/status) API first, and only falls back to
-    // Gen 2 (/rpc/) if that's unreachable. Returns whichever one answered.
-    // Runs poll in a one-shot FreeRTOS task so the async handler never blocks.
+    // to know it. Like discover, the actual probe runs on the MAIN LOOP TASK
+    // (see consumePingRequest() in linear_actuator.ino), not a spawned task —
+    // the probe can block for a couple seconds on an unreachable host, and a
+    // detached task holding this raw request across that window risked a
+    // use-after-free if the browser disconnected/retried mid-probe. This
+    // handler just stashes the IP; the main loop calls respondPing() when done.
     _server.on("/api/outlets/ping", HTTP_POST,
         [](AsyncWebServerRequest* req) {},
         nullptr,
@@ -635,38 +757,12 @@ void HttpApiServer::registerRoutes() {
             const char* ip = doc["ip"] | "";
             if (strlen(ip) == 0) { sendError(req, 400, "missing 'ip'"); return; }
 
-            struct PingArgs {
-                AsyncWebServerRequest* req;
-                char ip[40];
-            };
-            auto* args = new PingArgs { req };
-            strlcpy(args->ip, ip, sizeof(args->ip));
-
-            xTaskCreate([](void* arg) {
-                auto* a = static_cast<PingArgs*>(arg);
-
-                ShellyGen1Outlet gen1(a->ip, "ping");
-                bool ok  = gen1.poll();
-                float pw = gen1.getPowerW();
-                int  gen = 1;
-
-                if (!ok) {
-                    ShellyGen2Outlet gen2(a->ip, "ping");
-                    ok  = gen2.poll();
-                    pw  = gen2.getPowerW();
-                    gen = 2;
-                }
-
-                StaticJsonDocument<64> resp;
-                resp["reachable"] = ok;
-                resp["powerW"]    = pw;
-                resp["gen"]       = ok ? gen : 0;
-                String out; serializeJson(resp, out);
-                a->req->send(200, "application/json", out);
-                delete a;
-                vTaskDelete(nullptr);
-            }, "ping_task", 4096, args, 1, nullptr);
-            // response sent from task — handler returns without calling send()
+            xSemaphoreTake(_mutex, portMAX_DELAY);
+            _pingPending = true;
+            _pingReq     = req;
+            strlcpy(_pingIp, ip, sizeof(_pingIp));
+            xSemaphoreGive(_mutex);
+            // response sent later by the main loop via respondPing()
         }
     );
 
@@ -691,7 +787,7 @@ void HttpApiServer::registerRoutes() {
             int slot = url.substring(url.lastIndexOf('/') + 1).toInt();
             if (slot < 0 || slot >= SMART_OUTLET_COUNT) { sendError(req, 400, "slot out of range"); return; }
 
-            StaticJsonDocument<256> doc;
+            StaticJsonDocument<320> doc;
             if (deserializeJson(doc, data, len)) { sendError(req, 400, "invalid JSON"); return; }
 
             OutletConfigCmd cmd;
@@ -700,6 +796,7 @@ void HttpApiServer::registerRoutes() {
             cmd.stopIndex  = doc["stop"]      | 0;
             cmd.thresholdW = doc["threshold"] | OUTLET_DEFAULT_THRESHOLD_W;
             strlcpy(cmd.ip,   doc["ip"]   | "",  sizeof(cmd.ip));
+            strlcpy(cmd.host, doc["host"] | "",  sizeof(cmd.host));
             strlcpy(cmd.name, doc["name"] | "",  sizeof(cmd.name));
 
             // ip is optional: an empty ip is a name-only gate (no smart plug —
@@ -739,12 +836,13 @@ void HttpApiServer::registerRoutes() {
         [this](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t, size_t) {
             if (!checkAuth(req)) return;
 
-            StaticJsonDocument<128> doc;
+            StaticJsonDocument<192> doc;
             if (deserializeJson(doc, data, len)) { sendError(req, 400, "invalid JSON"); return; }
 
             DustCollectorCmd cmd;
             cmd.generation = doc["gen"] | 2;
-            strlcpy(cmd.ip, doc["ip"] | "", sizeof(cmd.ip));
+            strlcpy(cmd.ip,   doc["ip"]   | "", sizeof(cmd.ip));
+            strlcpy(cmd.host, doc["host"] | "", sizeof(cmd.host));
             if (strlen(cmd.ip) == 0) { sendError(req, 400, "missing 'ip'"); return; }
 
             DEBUG_PRINT(F("[UI] Configure dust collector: ")); DEBUG_PRINTLN(cmd.ip);

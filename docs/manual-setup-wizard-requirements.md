@@ -8,7 +8,7 @@
 
 ## Navigation & Entry
 
-- A second button on the dashboard ("Manual Setup") opens `/setup/manual` alongside the existing "Setup Assistant" (AI) button.
+- Reached from the dashboard's ⚙ gear icon → Settings, which links to both `/setup/manual` and the AI setup assistant. (Older revisions of this doc/UI had separate "Manual Setup"/"Setup Assistant" buttons directly on the dashboard header — those were consolidated into the Settings screen.)
 - A back arrow on every screen returns to the previous step with a confirmation prompt if the step has unsaved changes.
 - The manifold visualizer strip is pinned at the top of every screen (same as the AI wizard), showing placeholder text until gate count is set.
 
@@ -143,8 +143,11 @@ All calls use the existing `ApiService` methods or trivial additions:
 | Home | `api.home()` |
 | Jog | `api.jog(mm)` |
 | Save stop position | `api.saveStop(index)` |
-| Ping outlet | `api.pingOutlet(gen, ip)` |
+| Scan for outlets | `api.discoverOutlets()` |
+| Ping outlet | `api.pingOutlet(ip)` |
 | Configure outlet | `api.configureOutlet(cmd)` |
+
+Note: gate count, home side, and motor direction are also editable post-setup from `/settings` — they're not wizard-only despite being introduced here first.
 | Save outlet config | `api.saveOutletConfig()` |
 | Watch status | `api.status$` (WebSocket) |
 | Reset (start over) | `api.resetSetup()` + `api.refreshInfo()` |
@@ -155,5 +158,4 @@ No new firmware endpoints are required.
 
 ## Out of Scope (for this wizard)
 
-- Autotune / StallGuard threshold calibration (legacy WiFiControl feature — no equivalent in the current firmware API).
 - Editing previously saved stop positions after setup is complete (dashboard can handle re-running the wizard).

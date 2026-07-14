@@ -1,13 +1,14 @@
 import {
-  Component, Output, EventEmitter, ChangeDetectionStrategy, ChangeDetectorRef
+  Component, Input, Output, EventEmitter, ChangeDetectionStrategy, ChangeDetectorRef
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { ApiService } from '../services/api.service';
+import { ApiService, DiscoveredOutlet } from '../services/api.service';
 
 export interface DustCollectorCmd {
   generation: number;
   ip: string;
+  host?: string;
 }
 
 type Phase = 'ask' | 'form' | 'confirm-on' | 'testing' | 'result' | 'confirm-off';
@@ -104,6 +105,50 @@ type Phase = 'ask' | 'form' | 'confirm-on' | 'testing' | 'result' | 'confirm-off
     .ping-result { font-size: 13px; flex: 1; }
     .ping-result.ok  { color: var(--success, #22c55e); }
     .ping-result.err { color: var(--danger); }
+
+    .scan-btn {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px 18px;
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text);
+    }
+    .scan-btn:disabled { opacity: 0.4; }
+
+    .scan-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .scan-item {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 2px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px 14px;
+      text-align: left;
+    }
+    .scan-item:active { opacity: 0.6; }
+    .scan-item:disabled { opacity: 0.4; }
+    .scan-item .host { font-size: 14px; font-weight: 600; }
+    .scan-item .meta { font-size: 12px; color: var(--muted); }
+    .scan-empty {
+      font-size: 13px;
+      color: var(--muted);
+    }
+    .manual-toggle {
+      align-self: flex-start;
+      background: none;
+      border: none;
+      font-size: 12px;
+      color: var(--accent);
+      padding: 0;
+    }
 
     .status-banner {
       background: var(--bg);
@@ -203,33 +248,72 @@ type Phase = 'ask' | 'form' | 'confirm-on' | 'testing' | 'result' | 'confirm-off
         </div>
       </ng-container>
 
-      <!-- Phase: ip form — the device tries Gen 1 then Gen 2 automatically,
-           so there's nothing to pick here, just an IP to confirm. -->
+      <!-- Phase: locate the outlet — scan-first, the device tries Gen 1 then
+           Gen 2 automatically so there's nothing to pick, just a device or
+           IP to confirm. -->
       <ng-container *ngIf="phase === 'form'">
-        <div class="field">
-          <label>IP address</label>
-          <input type="text"
-                 placeholder="e.g. 192.168.1.102"
-                 inputmode="decimal"
-                 [(ngModel)]="ip"
-                 (ngModelChange)="pingResult = null; clearError()" />
-        </div>
-
-        <div class="ping-row">
-          <button class="ping-btn"
-                  [disabled]="!isValidIp(ip) || pinging"
-                  (click)="ping()">
-            {{ pinging ? 'Pinging…' : 'Ping' }}
+        <ng-container *ngIf="!manualEntry">
+          <button class="scan-btn" [disabled]="scanning" (click)="scan()">
+            {{ scanning ? 'Scanning…' : (scanResults === null ? 'Scan for outlets' : 'Scan again') }}
           </button>
-          <span class="ping-result ok"  *ngIf="pingResult?.reachable">✓ Reachable (Gen {{ pingResult!.generation }})</span>
-          <span class="ping-result err" *ngIf="pingResult !== null && !pingResult.reachable">✗ Not reachable</span>
-        </div>
+
+          <div class="scan-list" *ngIf="scanResults !== null && scanResults.length > 0">
+            <button type="button" class="scan-item"
+                    *ngFor="let d of scanResults"
+                    [disabled]="isExcluded(d.ip)"
+                    (click)="selectDiscovered(d)">
+              <span class="host">{{ d.name || d.hostname }}</span>
+              <span class="meta">
+                {{ d.hostname }} · {{ d.ip }} —
+                {{ isExcluded(d.ip) ? 'already assigned to a gate' : (d.reachable ? ('Gen ' + d.generation + ' · ' + (d.powerW | number:'1.0-0') + ' W') : 'not responding') }}
+              </span>
+            </button>
+          </div>
+          <p class="scan-empty" *ngIf="scanResults !== null && scanResults.length === 0">
+            No Shelly outlets found on the network. Make sure it's powered on and
+            connected to the same WiFi, then scan again — or enter its IP manually.
+          </p>
+
+          <button type="button" class="manual-toggle" (click)="manualEntry = true">
+            Enter IP manually instead
+          </button>
+        </ng-container>
+
+        <ng-container *ngIf="manualEntry">
+          <div class="field">
+            <label>IP address</label>
+            <input type="text"
+                   placeholder="e.g. 192.168.1.102"
+                   inputmode="decimal"
+                   [(ngModel)]="ip"
+                   (ngModelChange)="pingResult = null; host = ''; clearError()" />
+          </div>
+
+          <div class="ping-row">
+            <button class="ping-btn"
+                    [disabled]="!isValidIp(ip) || pinging"
+                    (click)="ping()">
+              {{ pinging ? 'Pinging…' : 'Ping' }}
+            </button>
+            <span class="ping-result ok" *ngIf="pingResult?.reachable && !isExcluded(ip.trim())">
+              ✓ Reachable (Gen {{ pingResult!.generation }}){{ pingResult!.name ? ' — "' + pingResult!.name + '"' : '' }}
+            </span>
+            <span class="ping-result err" *ngIf="pingResult?.reachable && isExcluded(ip.trim())">
+              ⚠ Already assigned to a gate — pick a different outlet.
+            </span>
+            <span class="ping-result err" *ngIf="pingResult !== null && !pingResult.reachable">✗ Not reachable</span>
+          </div>
+
+          <button type="button" class="manual-toggle" (click)="manualEntry = false; ip = ''; pingResult = null">
+            Back to scan
+          </button>
+        </ng-container>
 
         <div class="error-banner" *ngIf="errorMsg">⚠ {{ errorMsg }}</div>
 
         <div class="actions">
           <button class="save-btn"
-                  [disabled]="!pingResult?.reachable || saving"
+                  [disabled]="!canContinue || saving"
                   (click)="confirmForm()">
             {{ saving ? 'Saving…' : 'Continue' }}
           </button>
@@ -286,16 +370,26 @@ type Phase = 'ask' | 'form' | 'confirm-on' | 'testing' | 'result' | 'confirm-off
 })
 export class DustCollectorConfiguratorComponent {
 
+  /** IPs already assigned to gate outlets — disabled in the scan list / blocked on manual entry. */
+  @Input() excludeIps: string[] = [];
+
   @Output() saved = new EventEmitter<DustCollectorCmd | null>();
 
   phase: Phase = 'ask';
 
-  ip = '';
+  ip   = '';
+  /** mDNS hostname of the selected outlet, if it came from a scan rather than manual entry. */
+  host = '';
 
   pinging = false;
   saving  = false;
   errorMsg = '';
-  pingResult: { reachable: boolean; powerW: number; generation: number } | null = null;
+  pingResult: { reachable: boolean; powerW: number; generation: number; name?: string } | null = null;
+
+  // Scan-first discovery state
+  manualEntry  = false;
+  scanning     = false;
+  scanResults: DiscoveredOutlet[] | null = null;
 
   loadOk = false;
   lastReadingW = 0;
@@ -309,10 +403,45 @@ export class DustCollectorConfiguratorComponent {
     return /^(\d{1,3}\.){3}\d{1,3}$/.test(ip.trim());
   }
 
+  /** True if this IP is already assigned to a gate. */
+  isExcluded(ip: string): boolean {
+    return this.excludeIps.includes(ip);
+  }
+
+  get canContinue(): boolean {
+    return !!this.pingResult?.reachable && !this.isExcluded(this.ip.trim());
+  }
+
   clearError() { this.errorMsg = ''; }
 
   skip() {
     this.saved.emit(null);
+  }
+
+  async scan() {
+    if (this.scanning) return;
+    this.scanning = true;
+    this.errorMsg = '';
+    this.cd.markForCheck();
+    try {
+      this.scanResults = await this.api.discoverOutlets();
+    } catch {
+      this.scanResults = [];
+      this.errorMsg = 'Scan failed. Check the device is connected, or enter the IP manually.';
+    } finally {
+      this.scanning = false;
+      this.cd.markForCheck();
+    }
+  }
+
+
+  selectDiscovered(d: DiscoveredOutlet) {
+    if (!d.reachable || this.isExcluded(d.ip)) return;
+    this.ip = d.ip;
+    this.host = d.hostname;
+    this.pingResult = { reachable: true, powerW: d.powerW, generation: d.generation, name: d.name };
+    this.clearError();
+    this.cd.markForCheck();
   }
 
   async ping() {
@@ -332,12 +461,12 @@ export class DustCollectorConfiguratorComponent {
   }
 
   async confirmForm() {
-    if (!this.pingResult?.reachable || this.saving) return;
+    if (!this.canContinue || this.saving) return;
     this.errorMsg = '';
     this.saving = true;
     this.cd.markForCheck();
     try {
-      await this.api.configureDustCollector(this.pingResult.generation, this.ip.trim());
+      await this.api.configureDustCollector(this.pingResult!.generation, this.ip.trim(), this.host);
       this.phase = 'confirm-on';
     } catch {
       this.errorMsg = 'Could not save the dust collector outlet. Check connection and try again.';
@@ -402,6 +531,6 @@ export class DustCollectorConfiguratorComponent {
   }
 
   finish() {
-    this.saved.emit({ generation: this.pingResult?.generation ?? 2, ip: this.ip.trim() });
+    this.saved.emit({ generation: this.pingResult?.generation ?? 2, ip: this.ip.trim(), host: this.host });
   }
 }
