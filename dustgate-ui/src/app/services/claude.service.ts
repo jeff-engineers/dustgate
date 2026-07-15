@@ -79,7 +79,7 @@ const TOOLS = [
         generation:  { type: 'integer', enum: [1, 2], description: 'Shelly generation, as returned by ping_outlet/discover_outlets for this IP — do not guess or ask the user.' },
         ip:          { type: 'string',  description: 'IP address of the Shelly outlet (e.g. 192.168.1.101)' },
         host:        { type: 'string',  description: 'mDNS hostname of the outlet, from discover_outlets, if it was found via a scan. Omit for a manually-provided IP — this lets the device re-resolve the outlet after a DHCP IP change instead of losing it.' },
-        name:        { type: 'string',  description: 'Human-readable tool name chosen by the user, e.g. "Bandsaw". If discover_outlets or ping_outlet returned a device name the user set in the Shelly app, propose that as the default and let the user confirm or override it rather than asking them to come up with one from scratch.' },
+        name:        { type: 'string',  description: 'Human-readable tool name, e.g. "Bandsaw". Always ask the user what to call this gate/tool and use their answer — do NOT default to the outlet\'s Shelly-app device name (it is often unset or a stale cloud label). Identify the outlet to them by its hostname and IP instead.' },
         stop:        { type: 'integer', description: 'Stop index this tool maps to (1–7)' },
         threshold_w: { type: 'number',  description: 'Watt threshold to detect tool-on. Default 5W; increase for tools with a high standby draw.' }
       },
@@ -220,11 +220,11 @@ Your job is to walk the user through setup conversationally:
 8. Ask the user to measure or estimate the distance to the next gate, offering your own starting estimate so they have something to react to rather than guessing cold: about 2mm for the very first gate (endstop to gate 1), and about 89mm for gate-to-gate distances after that. Let them know they can reply in metric, imperial, casual terms like "a little more" or "about 4 inches", or just confirm your estimate. When the user provides any distance or movement instruction — even an approximate one, or a simple "yes" to your estimate — treat that as permission to move immediately. Do NOT ask a separate "are you ready?" or "shall I move?" question.
 9. Move the actuator to the desired position.
 10. Confirm the actuator is aligned with the gate. Repeat jogging until the user confirms alignment, then call save_stop.
-11. Before moving on to the next gate, finish configuring THIS gate — resolve the outlet question BEFORE asking for a name, so a detected Shelly device name can be offered as the name instead of making the user type one from scratch:
+11. Before moving on to the next gate, finish configuring THIS gate. Resolve the outlet question first so that, when you ask the user to name the gate, you can point to the specific outlet (by hostname/IP) they're naming:
     a. Ask whether this gate's tool has a Shelly smart plug. If not, skip to (e) and just ask for the gate/tool name directly.
-    b. If yes, call discover_outlets first (don't ask for an IP yet) and check the results against what the user describes (e.g. "the one near the bandsaw", or match by the device name if they mention it). Present any matches — mention the Shelly-app device name if one is set, plus the hostname/IP — and confirm with the user which one is theirs, rather than assuming. Never suggest or accept an IP already configured for a different gate earlier in this session (track which IPs you've already called configure_outlet with) — if the user picks one anyway, point out it's already assigned to that other gate and ask them to choose a different outlet or confirm they want to move it off the other gate first.
+    b. If yes, call discover_outlets first (don't ask for an IP yet) and check the results against what the user describes (e.g. "the one near the bandsaw"). Present any matches by their hostname and IP (mention the Shelly-app name too only if one happens to be set, as extra context) and confirm with the user which one is theirs, rather than assuming. Never suggest or accept an IP already configured for a different gate earlier in this session (track which IPs you've already called configure_outlet with) — if the user picks one anyway, point out it's already assigned to that other gate and ask them to choose a different outlet or confirm they want to move it off the other gate first.
     c. If discover_outlets finds nothing, or none of the results match, ask the user for the outlet's IP address directly and call ping_outlet to confirm it's reachable. You may need to direct them to Shelly's website for help finding the IP. Either way (scan or manual ping), the response tells you the generation and, if the outlet was named in the Shelly app, that name too — don't ask the user which generation they have.
-    d. Once the outlet is confirmed reachable, ask what tool lives here — if discover_outlets/ping_outlet returned a device name (e.g. "Drill Press"), propose that as the gate name and let the user confirm or override it; otherwise just ask, accepting whatever name they give without offering a list. Then help them pick a detection threshold: ask them to turn the tool on at its lowest setting with no load (e.g. no material feeding, blade/bit spinning free), then ping again to capture that running wattage. Suggest a threshold about 10% below that reading, rounded to a clean number (nearest 10W normally, nearest 50W for readings above a couple hundred watts) — this gives margin below the running draw while safely clearing standby power. Confirm the suggestion with the user (they can override it) before calling configure_outlet with the generation and host (if the outlet came from discover_outlets) it returned.
+    d. Once the outlet is confirmed reachable, ask the user what they want to call this tool/gate, referring to the outlet by its hostname/IP so they know which one they're naming. Always let them choose the name themselves — do NOT propose the Shelly-app device name as the name (it's often unset or stale). Accept whatever name they give without offering a list. Then help them pick a detection threshold: ask them to turn the tool on at its lowest setting with no load (e.g. no material feeding, blade/bit spinning free), then ping again to capture that running wattage. Suggest a threshold about 10% below that reading, rounded to a clean number (nearest 10W normally, nearest 50W for readings above a couple hundred watts) — this gives margin below the running draw while safely clearing standby power. Confirm the suggestion with the user (they can override it) before calling configure_outlet with the generation and host (if the outlet came from discover_outlets) it returned.
     e. If the tool has no smart plug, just ask for and note the gate's name — configure_outlet is only needed when there's a plug to assign.
 12. Only once this gate is fully positioned AND named/configured (outlet or not) should you move on: repeat steps 8–11 for the next gate, one gate at a time, until every gate is done. Typically, once a distance is known between two gates, the rest will be the same — but still confirm alignment and finish naming/outlet setup for each gate before starting the next one.
 13. If the user states that the distance moved is more/less than anticipated, try to recalculate the movement distance per step based on their feedback.
@@ -289,7 +289,7 @@ export class ClaudeService {
         max_tokens: 1024,
         system:     SYSTEM_BLOCKS,
         tools:      TOOLS,
-        messages:   history
+        messages:   this.withConversationCache(history)
       };
 
       let response: Response;
@@ -365,6 +365,45 @@ export class ClaudeService {
         continueLoop = false;
       }
     }
+  }
+
+  // ── Prompt caching ────────────────────────────────────────────────────────────
+
+  /**
+   * Returns a shallow copy of `history` with an `ephemeral` cache_control
+   * breakpoint on the last content block of the last message, so Anthropic
+   * caches the whole conversation prefix (system + tools + all prior messages).
+   *
+   * Why this matters: one user turn triggers an agentic loop of several API
+   * calls (tool_use → tool_result → next call), and each call re-sends the
+   * entire growing message history. Without a breakpoint here, only the
+   * static system+tools prefix is cached and every message is re-billed at
+   * full input price on every call. Marking the last message caches the prefix
+   * up to it, so the *next* call reads all of that from cache (~10% of input
+   * price) and only pays full price for the newest turn. Anthropic matches the
+   * longest cached prefix, so moving the single breakpoint forward each call
+   * extends the cache incrementally rather than invalidating it.
+   *
+   * The breakpoint is applied to a COPY (the stored `history` stays plain),
+   * so exactly one message-level breakpoint exists per request — system(1) +
+   * tools(1) + message(1) = 3, comfortably under Anthropic's 4-breakpoint cap.
+   */
+  private withConversationCache(history: ChatMessage[]): ChatMessage[] {
+    if (history.length === 0) return history;
+    const out = history.slice();
+    const last = out[out.length - 1];
+    // Normalise string content to a text block so we have somewhere to hang
+    // cache_control; clone blocks so we never mutate the stored history.
+    const blocks: ContentBlock[] = typeof last.content === 'string'
+      ? [{ type: 'text', text: last.content }]
+      : last.content.map(b => ({ ...b }));
+    if (blocks.length === 0) return history;
+    blocks[blocks.length - 1] = {
+      ...blocks[blocks.length - 1],
+      cache_control: { type: 'ephemeral' },
+    };
+    out[out.length - 1] = { ...last, content: blocks };
+    return out;
   }
 
   // ── History trimming ──────────────────────────────────────────────────────────
