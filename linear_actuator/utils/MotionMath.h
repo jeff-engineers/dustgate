@@ -27,6 +27,13 @@ extern float g_stopPositionsMM[NUM_STOPS + 1];
 // check as every untrained gate already sitting saved at 0mm.
 extern int g_numTrainedStops;
 
+// Dual-endstop calibration + port roles (defined in linear_actuator.ino, loaded
+// from CalibrationData). See docs/dual-endstop-calibration.md.
+extern uint8_t g_stopRoles[NUM_STOPS + 1];  // PortRole per stop (0 = home)
+extern float   g_measuredStepsPerMM;        // calibrated steps/mm (0 = not calibrated)
+extern long    g_measuredSpanSteps;         // near→far span in steps (0 = not calibrated)
+extern char    g_manifoldModel[16];         // "rockler-2.5" | "rockler-4" | "custom"
+
 // Steps ↔ mm conversion using config.h gear parameters
 inline float stepsPerMM() {
     return (float)(STEPS_PER_REV * MICROSTEPS) /

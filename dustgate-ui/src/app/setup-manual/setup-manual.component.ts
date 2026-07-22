@@ -182,6 +182,18 @@ interface GateRecord {
       color: var(--text);
       background: color-mix(in srgb, var(--accent) 12%, transparent);
     }
+    .big-toggle-btn:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+    .soon-tag {
+      font-size: 0.6em;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      opacity: 0.8;
+      vertical-align: middle;
+      margin-left: 4px;
+    }
 
     /* ── Home side ── */
     .home-side-btns {
@@ -391,10 +403,11 @@ interface GateRecord {
                   (click)="hardwareProfile.set('2.5in')">
             2.5"
           </button>
-          <button class="big-toggle-btn"
-                  [class.selected]="hardwareProfile.portSize === '4in'"
-                  (click)="hardwareProfile.set('4in')">
-            4"
+          <!-- 4" is disabled until we have real 4" hardware to measure its
+               manifold profile. The logic (PortSize '4in', rockler-4 profile) is
+               kept in place for when it's available. -->
+          <button class="big-toggle-btn" disabled title="Coming soon — 4 inch not yet supported">
+            4" <span class="soon-tag">soon</span>
           </button>
         </div>
 

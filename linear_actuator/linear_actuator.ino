@@ -54,6 +54,17 @@ int g_homeDirection = HOME_DIRECTION_DEFAULT;
 
 bool g_notHomedWarnShown = false; // suppress repeated "not homed" warnings
 
+// Dual-endstop calibration + port roles (declared extern in MotionMath.h).
+uint8_t g_stopRoles[NUM_STOPS + 1];
+float   g_measuredStepsPerMM = 0.0f;   // 0 = not calibrated → status reports nominal
+long    g_measuredSpanSteps  = 0;      // 0 = not calibrated
+char    g_manifoldModel[16]  = "custom";
+
+// Default all roles: home at 0, unassigned elsewhere.
+static void resetStopRoles() {
+    for (int i = 0; i <= NUM_STOPS; i++) g_stopRoles[i] = (i == 0) ? ROLE_HOME : ROLE_UNASSIGNED;
+}
+
 void loadCalibration() {
     CalibrationData cal;
     if (CalibrationStore::load(cal)) {
@@ -65,6 +76,11 @@ void loadCalibration() {
         if (cal.numStops > 0 && (int)cal.numStops <= NUM_STOPS)
             g_numActiveStops = (int)cal.numStops;
         g_numTrainedStops = (int)cal.numStops;
+        // v2 fields: roles, manifold model, measured span/steps-per-mm.
+        for (int i = 0; i <= NUM_STOPS; i++) g_stopRoles[i] = cal.stopRole[i];
+        strlcpy(g_manifoldModel, cal.manifoldModel, sizeof(g_manifoldModel));
+        g_measuredStepsPerMM = cal.measuredStepsPerMM;
+        g_measuredSpanSteps  = (long)(cal.maxTravelMM * cal.measuredStepsPerMM);
         DEBUG_PRINTLN(F("Loaded calibration from EEPROM."));
         CalibrationStore::print(cal);
     } else {
@@ -72,8 +88,101 @@ void loadCalibration() {
         // save_stop for each gate to populate them via the HTTP API.
         memset(g_stopPositionsMM, 0, sizeof(g_stopPositionsMM));
         g_numTrainedStops = 0;
+        resetStopRoles();
+        strlcpy(g_manifoldModel, "custom", sizeof(g_manifoldModel));
+        g_measuredStepsPerMM = 0.0f;
+        g_measuredSpanSteps  = 0;
         DEBUG_PRINTLN(F("No calibration data — awaiting setup wizard."));
     }
+}
+
+// ── Manifold profile (mirror shared/device-model MANIFOLD_PROFILES) ──────────
+// Fills gatesMm[1..gateCount] and spanMm for a known model. Returns false for
+// 'custom'/unknown (→ manual jog, no auto-placement).
+static bool manifoldProfile(const char* model, int gateCount, float* gatesMm, float& spanMm) {
+    float first, pitch, endMargin;
+    if (strcmp(model, "rockler-2.5") == 0) {
+        first = MANIFOLD_2_5_FIRST_GATE_OFFSET_MM; pitch = MANIFOLD_2_5_GATE_PITCH_MM; endMargin = MANIFOLD_2_5_END_MARGIN_MM;
+    } else if (strcmp(model, "rockler-4") == 0) {
+        first = MANIFOLD_4_FIRST_GATE_OFFSET_MM;   pitch = MANIFOLD_4_GATE_PITCH_MM;   endMargin = MANIFOLD_4_END_MARGIN_MM;
+    } else {
+        return false;
+    }
+    for (int i = 1; i <= gateCount; i++) gatesMm[i] = first + (i - 1) * pitch;
+    spanMm = first + (gateCount - 1) * pitch + endMargin;
+    return true;
+}
+
+// Reference-sweep parameters, captured when a /api/calibrate request is consumed
+// and used by the STATE_HOMING → STATE_CALIBRATING flow.
+char  g_calModel[16] = "custom";
+int   g_calGateCount = 0;
+bool  g_calibratePending = false;   // calibrate requested → home, then sweep
+
+// Physical gate-to-gate pitch (mm) for a manifold model, or 0 for custom/unknown.
+static float manifoldPitchMm(const char* model) {
+    if (strcmp(model, "rockler-2.5") == 0) return MANIFOLD_2_5_GATE_PITCH_MM;
+    if (strcmp(model, "rockler-4")   == 0) return MANIFOLD_4_GATE_PITCH_MM;
+    return 0.0f;
+}
+
+// A model string is "recognised" if it names a real profile or the explicit
+// 'custom' fallback. Anything else (e.g. a typo like 'rockler2.5') still runs as
+// custom — span recorded, no auto-placement — but the caller warns so the typo
+// isn't silently swallowed.
+static bool isKnownManifoldModel(const char* model) {
+    return manifoldPitchMm(model) > 0.0f || strcmp(model, "custom") == 0;
+}
+
+// Finish the reference sweep: given the measured far-endstop trigger position (in
+// steps, from home datum 0), place all gates and persist. See the placement
+// derivation in docs/dual-endstop-calibration.md. Span-based: absorbs per-build
+// steps/mm + endstop-location variance; pitch is the fixed manifold property.
+static void finishCalibrationSweep(long farTriggerSteps) {
+    long farSpanSteps     = farTriggerSteps < 0 ? -farTriggerSteps : farTriggerSteps; // home→far
+    long triggerSpanSteps = farSpanSteps + HOME_BACKOFF_STEPS;   // near→far triggers
+    float spm = stepsPerMM();                                    // nominal (validated ~0.3%)
+
+    g_measuredSpanSteps  = triggerSpanSteps;
+    g_measuredStepsPerMM = spm;
+    g_numActiveStops     = g_calGateCount;
+    strlcpy(g_manifoldModel, g_calModel, sizeof(g_manifoldModel));
+    resetStopRoles();
+    for (int i = 1; i <= NUM_STOPS; i++) g_stopPositionsMM[i] = 0.0f;
+
+    float pitchMm = manifoldPitchMm(g_calModel);
+    if (pitchMm > 0.0f) {
+        // Center the (N-1)*pitch gate array in the measured trigger-to-trigger span.
+        // Work in mm-from-home (positive = away from home). Near trigger sits
+        // backoffMm toward home from the datum (negative); gate1 is slack/2 past it.
+        float backoffMm = (float)HOME_BACKOFF_STEPS / spm;
+        float slackMm   = ((float)triggerSpanSteps / spm) - (float)(g_calGateCount - 1) * pitchMm;
+        float gate1Mm   = -backoffMm + slackMm / 2.0f;
+        for (int i = 1; i <= g_calGateCount && i <= NUM_STOPS; i++) {
+            g_stopPositionsMM[i] = gate1Mm + (float)(i - 1) * pitchMm;
+        }
+        g_numTrainedStops = g_calGateCount;
+        DEBUG_PRINT(F("[CAL] placed gates: gate1=")); Serial.print(gate1Mm, 2);
+        DEBUG_PRINT(F("mm pitch=")); Serial.print(pitchMm, 1);
+        DEBUG_PRINT(F("mm span=")); Serial.print((float)triggerSpanSteps / spm, 1);
+        DEBUG_PRINTLN(F("mm"));
+    } else {
+        // Custom manifold — record the span but leave gate positions for manual jog.
+        g_numTrainedStops = 0;
+        DEBUG_PRINTLN(F("[CAL] custom manifold — span recorded, gates via manual jog."));
+    }
+
+    CalibrationData cal;
+    cal.magic   = CALIB_MAGIC;
+    cal.version = CALIB_VERSION;
+    cal.numStops = (uint8_t)g_calGateCount;
+    cal.maxTravelMM = (float)triggerSpanSteps / spm;
+    cal.measuredStepsPerMM = spm;
+    for (int i = 0; i <= NUM_STOPS; i++) cal.stopMM[i]   = g_stopPositionsMM[i];
+    for (int i = 0; i <= NUM_STOPS; i++) cal.stopRole[i] = g_stopRoles[i];
+    cal.stopMM[0] = 0.0f;
+    strlcpy(cal.manifoldModel, g_calModel, sizeof(cal.manifoldModel));
+    CalibrationStore::save(cal);
 }
 
 // -- Motor driver (TMC2209) --
@@ -133,6 +242,7 @@ enum State {
     STATE_IDLE,
     STATE_MOVING,
     STATE_AT_STOP,
+    STATE_CALIBRATING,   // dual-endstop reference sweep (home already done)
     STATE_DISABLED,
     STATE_ERROR
 };
@@ -237,7 +347,68 @@ void loop() {
     // Run background processing for control input (HTTP server, etc.)
     control.update();
 
+    // -- Endstop over-travel safety — runs BEFORE motor.update() -----------------
+    // Must run before the step, not after: motor.update() steps the carriage
+    // regardless of currentState, so reacting *after* it let one step through per
+    // loop — jogging into an already-triggered switch drifted the position +1 step
+    // each time. Checking here clamps the target before any step is taken.
+    // Directional: stops travel *toward* a triggered switch but allows backing
+    // AWAY to release it. Homing drives into the home switch on purpose;
+    // STATE_MOVING has its own endstop handling, so both are skipped here.
+#ifdef FEEDBACK_LIMIT_DISTANCE
+    // Applies to jogs AND commanded moves (STATE_MOVING). Homing drives into the
+    // home switch on purpose; the calibration sweep manages the far switch itself.
+    if (motor.isMoving() && currentState != STATE_HOMING && currentState != STATE_CALIBRATING) {
+        long dtg = motor.distanceToGo();               // signed steps to target
+        bool towardFar  = (dtg * (long)(-HOME_DIRECTION)) > 0; // away from home
+        bool towardHome = (dtg * (long)( HOME_DIRECTION)) > 0;
+        if ((digitalRead(PIN_ENDSTOP_MAX) == HIGH) && towardFar) {
+            motor.stop();
+            DEBUG_PRINTLN(F("[SAFETY] Far endstop triggered — halted travel toward far end."));
+        } else if ((digitalRead(PIN_ENDSTOP_HOME) == HIGH) && towardHome) {
+            motor.stop();
+            DEBUG_PRINTLN(F("[SAFETY] Home endstop triggered — halted travel toward home."));
+        }
+    }
+#endif
+
     motor.update();
+
+    // -- Endstop transition logging — AFTER update() so the logged position is
+    //    the post-step position at the actual trigger point. Change-gated (jogs
+    //    included, since jogs never enter STATE_MOVING).
+#ifdef FEEDBACK_LIMIT_DISTANCE
+    {
+        // Debounced transition logging. When parked exactly on the home datum the
+        // switch sits right at its trigger edge and chatters open/triggered; a raw
+        // change gate logs every flicker. Only log a transition once the new level
+        // has held stable for ENDSTOP_DEBOUNCE_MS.
+        static const unsigned long ENDSTOP_DEBOUNCE_MS = 40;
+        static bool esInit = false, lastHome = false, lastFar = false;
+        static bool candHome = false, candFar = false;
+        static unsigned long candHomeSince = 0, candFarSince = 0;
+        unsigned long nowMs = millis();
+        bool home = (digitalRead(PIN_ENDSTOP_HOME) == HIGH); // HIGH = triggered (NC open)
+        bool far  = (digitalRead(PIN_ENDSTOP_MAX)  == HIGH);
+        if (!esInit) {
+            lastHome = candHome = home; lastFar = candFar = far;
+            candHomeSince = candFarSince = nowMs; esInit = true;
+        }
+        // Track how long the current raw reading has been steady.
+        if (home != candHome) { candHome = home; candHomeSince = nowMs; }
+        if (far  != candFar ) { candFar  = far;  candFarSince  = nowMs; }
+        if (candHome != lastHome && (nowMs - candHomeSince) >= ENDSTOP_DEBOUNCE_MS) {
+            lastHome = candHome;
+            DEBUG_PRINT(F("[ENDSTOP] Home: ")); DEBUG_PRINT(lastHome ? F("TRIGGERED") : F("open"));
+            DEBUG_PRINT(F("  pos=")); DEBUG_PRINTLN(motor.getPosition());
+        }
+        if (candFar != lastFar && (nowMs - candFarSince) >= ENDSTOP_DEBOUNCE_MS) {
+            lastFar = candFar;
+            DEBUG_PRINT(F("[ENDSTOP] Far: ")); DEBUG_PRINT(lastFar ? F("TRIGGERED") : F("open"));
+            DEBUG_PRINT(F("  pos=")); DEBUG_PRINTLN(motor.getPosition());
+        }
+    }
+#endif
 
     // -- E-stop (software-latched, no physical button): highest priority ------
     if (g_eStopTriggered) {
@@ -291,6 +462,32 @@ void loop() {
         motor.printDriverRegs();
     }
 
+    // Serial 'calibrate <model> <gates>' — same home→sweep flow as POST /api/calibrate.
+    {
+        char calModel[16]; int calGates = 0;
+        if (_SC.consumeCalibrateRequest(calModel, sizeof(calModel), calGates)) {
+            if (g_hardwareFault) {
+                DEBUG_PRINTLN(F("[CAL] Hardware fault — fix wiring and reset first."));
+            } else if (currentState == STATE_HOMING || currentState == STATE_CALIBRATING ||
+                       currentState == STATE_MOVING) {
+                DEBUG_PRINTLN(F("[CAL] Busy — retry when idle."));
+            } else {
+                if (!isKnownManifoldModel(calModel)) {
+                    DEBUG_PRINT(F("[CAL] Unknown model '")); DEBUG_PRINT(calModel);
+                    DEBUG_PRINTLN(F("' — treating as custom (span only, no auto-placement)."));
+                }
+                strlcpy(g_calModel, calModel, sizeof(g_calModel));
+                g_calGateCount     = calGates;
+                g_calibratePending = true;
+                g_eStopTriggered   = false;
+                motor.enable(true);
+                DEBUG_PRINTLN(F("[CAL] Homing, then sweeping to far endstop..."));
+                startHoming();
+                currentState = STATE_HOMING;
+            }
+        }
+    }
+
     {
         float jogMM = 0.0f;
         if (_SC.consumeJogRequest(jogMM)) {
@@ -333,8 +530,11 @@ void loop() {
     {
         static int _scLastActioned = -1;
         int serialStop = _SC.readRequestedStop();
-        if (serialStop >= 0 && serialStop != _scLastActioned &&
-            currentState == STATE_IDLE && !g_eStopTriggered) {
+        // Fire from AT_STOP too, not just IDLE — otherwise after landing on a gate
+        // (which leaves us in STATE_AT_STOP) the next stop command is ignored until
+        // a re-home.
+        if (serialStop >= 0 && serialStop != _scLastActioned && !g_eStopTriggered &&
+            (currentState == STATE_IDLE || currentState == STATE_AT_STOP)) {
             _scLastActioned = serialStop;
             targetStop = serialStop;
             issueMove(serialStop);
@@ -377,7 +577,12 @@ void loop() {
         int moveStop = -1;
         if (apiServer.consumeMoveRequest(moveStop) && !g_hardwareFault &&
             currentState != STATE_HOMING) {
-            if (moveStop >= 0 && moveStop <= g_numActiveStops) {
+            if (moveStop >= 1 && moveStop <= NUM_STOPS && g_stopRoles[moveStop] == ROLE_BLOCKED) {
+                // Blocked ports (capped, or reserved as a v2 feed) are never move
+                // targets — see docs/dual-endstop-calibration.md.
+                DEBUG_PRINT(F("[API] Move: gate blocked, ignoring: "));
+                DEBUG_PRINTLN(moveStop);
+            } else if (moveStop >= 0 && moveStop <= g_numActiveStops) {
                 targetStop = moveStop;
 #ifdef CONTROL_SMART_OUTLET
                 // In outlet mode, a manual move sets an override so the poll
@@ -471,6 +676,10 @@ void loop() {
                     cal.maxTravelMM        = 0.0f;
                     cal.measuredStepsPerMM = stepsPerMM();
                     memset(cal.stopMM, 0, sizeof(cal.stopMM));
+                    // v2 fields: default roles (home at 0, unassigned elsewhere),
+                    // custom manifold — so a save path never persists garbage.
+                    for (int i = 0; i <= NUM_STOPS; i++) cal.stopRole[i] = (i == 0) ? ROLE_HOME : ROLE_UNASSIGNED;
+                    strlcpy(cal.manifoldModel, "custom", sizeof(cal.manifoldModel));
                 }
                 cal.stopMM[stopIdx] = currentMM;
                 if (stopIdx > (int)cal.numStops) cal.numStops = (uint8_t)stopIdx;
@@ -524,6 +733,57 @@ void loop() {
 
             DEBUG_PRINT(F("[API] Active gates: "));
             DEBUG_PRINTLN(g_numActiveStops);
+        }
+    }
+
+    // Reference-sweep calibration (dual endstop). Kicks off a home → sweep flow:
+    // this just records the request + re-homes; the sweep motion runs in
+    // STATE_HOMING → STATE_CALIBRATING. See docs/dual-endstop-calibration.md.
+    {
+        char model[16]; int gateCount = 0;
+        if (apiServer.consumeCalibrateRequest(model, sizeof(model), gateCount)) {
+            if (g_hardwareFault) {
+                DEBUG_PRINTLN(F("[CAL] Hardware fault — fix wiring and reset first."));
+            } else if (gateCount < 1 || gateCount > NUM_STOPS) {
+                DEBUG_PRINTLN(F("[CAL] Bad gate count — ignored."));
+            } else if (currentState == STATE_HOMING || currentState == STATE_CALIBRATING ||
+                       currentState == STATE_MOVING) {
+                DEBUG_PRINTLN(F("[CAL] Busy — retry when idle."));
+            } else {
+                if (!isKnownManifoldModel(model)) {
+                    DEBUG_PRINT(F("[CAL] Unknown model '")); DEBUG_PRINT(model);
+                    DEBUG_PRINTLN(F("' — treating as custom (span only, no auto-placement)."));
+                }
+                strlcpy(g_calModel, model, sizeof(g_calModel));
+                g_calGateCount     = gateCount;
+                g_calibratePending = true;
+                // Match the serial path: clear a latched e-stop and ensure the
+                // driver is powered so calibrate works even from ERROR/idle-sleep.
+                g_eStopTriggered   = false;
+                motor.enable(true);
+                DEBUG_PRINT(F("[CAL] Requested: ")); DEBUG_PRINT(model);
+                DEBUG_PRINT(F(" x")); DEBUG_PRINT(gateCount);
+                DEBUG_PRINTLN(F(" — homing, then sweeping to far endstop."));
+                startHoming();
+                currentState = STATE_HOMING;
+            }
+        }
+    }
+
+    // Port-role change (dual endstop / v2 topology).
+    {
+        int roleIdx = -1, roleVal = 0;
+        if (apiServer.consumePortRoleRequest(roleIdx, roleVal)) {
+            if (roleIdx >= 1 && roleIdx <= NUM_STOPS) {
+                g_stopRoles[roleIdx] = (uint8_t)roleVal;
+                CalibrationData cal;
+                if (CalibrationStore::load(cal)) {
+                    cal.stopRole[roleIdx] = (uint8_t)roleVal;
+                    CalibrationStore::save(cal);
+                }
+                DEBUG_PRINT(F("[API] Port role: gate ")); DEBUG_PRINT(roleIdx);
+                DEBUG_PRINT(F(" = ")); DEBUG_PRINTLN(roleVal);
+            }
         }
     }
 
@@ -733,11 +993,77 @@ void loop() {
             digitalWrite(PIN_LED, (millis() / 250) % 2);
             if (feedback.updateHoming()) {
                 currentStop = 0;
-                DEBUG_PRINTLN(F("Homed. Entering IDLE."));
-                currentState = STATE_IDLE;
                 digitalWrite(PIN_LED, LOW);
+                if (g_calibratePending) {
+                    // Homed → begin the reference sweep. Drive well past the
+                    // largest plausible span toward the far end; the far endstop
+                    // trips first (detected in STATE_CALIBRATING).
+                    float pitch = manifoldPitchMm(g_calModel);
+                    if (pitch <= 0.0f) pitch = MANIFOLD_2_5_GATE_PITCH_MM; // custom bound
+                    float boundMm = 10.0f + (float)g_calGateCount * pitch + 40.0f;
+                    long boundTarget = (long)(boundMm * stepsPerMM()) * (-HOME_DIRECTION);
+                    // Sweep at the gentler homing speed — safer approach to the far
+                    // switch. Restored to MAX_SPEED before the return-home move.
+                    motor.setMaxSpeed(HOMING_SPEED_STEPS_PER_SEC);
+                    motor.moveTo(boundTarget);
+                    DEBUG_PRINT(F("[CAL] Homed. Sweeping to far endstop (bound "));
+                    Serial.print(boundMm, 0); DEBUG_PRINTLN(F("mm)..."));
+                    currentState = STATE_CALIBRATING;
+                } else {
+                    DEBUG_PRINTLN(F("Homed. Entering IDLE."));
+                    currentState = STATE_IDLE;
+                }
             }
             break;
+
+        // ------------------------------------------------------------------
+        case STATE_CALIBRATING: {
+            // Sweeping toward the far endstop (moveTo issued when homing finished).
+            // The endstop safety supervisor is disabled for this state so we can
+            // detect the trigger ourselves. On trigger: record span, place gates,
+            // then return to the home datum.
+            static unsigned long calStart = 0;
+            static uint8_t farHighStreak = 0;
+            if (calStart == 0) { calStart = millis(); farHighStreak = 0; }
+            digitalWrite(PIN_LED, (millis() / 120) % 2); // fast blink during sweep
+
+            // Debounce the far switch: only accept the trigger after it reads HIGH
+            // for CAL_FAR_CONFIRM_LOOPS consecutive loops. A single spurious NC-open
+            // bounce (carriage vibration) would otherwise latch the sweep at a short
+            // farPos and mis-place every gate. Loop runs fast, so the confirmation
+            // delay is negligible against the sweep travel.
+            static const uint8_t CAL_FAR_CONFIRM_LOOPS = 3;
+            if (digitalRead(PIN_ENDSTOP_MAX) == HIGH) {
+                if (farHighStreak < 255) farHighStreak++;
+            } else {
+                farHighStreak = 0;
+            }
+
+            if (farHighStreak >= CAL_FAR_CONFIRM_LOOPS) {   // far endstop confirmed
+                farHighStreak = 0;
+                long farPos = motor.getPosition();
+                motor.stop();
+                DEBUG_PRINT(F("[CAL] Far endstop at pos=")); DEBUG_PRINTLN(farPos);
+                finishCalibrationSweep(farPos);
+                g_calibratePending = false;
+                calStart = 0;
+                digitalWrite(PIN_LED, LOW);
+                // Restore normal move speed for the return-home and all later moves.
+                motor.setMaxSpeed(MAX_SPEED_STEPS_PER_SEC);
+                // Return to the home datum (releases the far switch on the way).
+                targetStop = 0;
+                issueMove(0);
+            } else if (!motor.isMoving() || (millis() - calStart > 45000UL)) {
+                // Reached the bound or timed out without the far switch — fault.
+                motor.stop();
+                DEBUG_PRINTLN(F("[CAL] Far endstop not found — calibration aborted."));
+                g_calibratePending = false;
+                calStart = 0;
+                motor.setMaxSpeed(MAX_SPEED_STEPS_PER_SEC); // restore normal speed
+                currentState = STATE_ERROR;
+            }
+            break;
+        }
 
         // ------------------------------------------------------------------
         case STATE_IDLE: {
@@ -778,17 +1104,15 @@ void loop() {
                 break;
             }
 
+            // Far/home over-travel is enforced directionally by the always-on
+            // endstop supervisor at the top of loop() (stops travel *into* a
+            // triggered switch, allows travel away). updateMoving() just reports
+            // arrival — which is also true once the supervisor has stopped us.
             if (feedback.updateMoving(targetStop)) {
                 currentStop = targetStop;
                 DEBUG_PRINT(F("Arrived at stop "));
                 DEBUG_PRINTLN(currentStop);
                 currentState = (currentStop == 0) ? STATE_IDLE : STATE_AT_STOP;
-            }
-
-            if (feedback.isMaxTriggered()) {
-                motor.stop();
-                DEBUG_PRINTLN(F("MAX endstop hit — emergency stop."));
-                currentState = STATE_ERROR;
             }
             break;
 
@@ -842,6 +1166,7 @@ void loop() {
             case STATE_IDLE:       stateStr = "IDLE";       break;
             case STATE_MOVING:     stateStr = "MOVING";     break;
             case STATE_AT_STOP:    stateStr = "AT_STOP";    break;
+            case STATE_CALIBRATING: stateStr = "CALIBRATING"; break;
             case STATE_DISABLED:   stateStr = "DISABLED";   break;
 
             case STATE_ERROR:      stateStr = "ERROR";      break;
@@ -857,7 +1182,11 @@ void loop() {
         s.homed          = (currentStop != -1);
         s.enabled        = control.isEnabled();
         s.endstopHome    = (digitalRead(PIN_ENDSTOP_HOME) == HIGH); // HIGH = triggered (NC switch open)
+        s.endstopMax     = (digitalRead(PIN_ENDSTOP_MAX)  == HIGH); // HIGH = triggered (NC switch open)
         s.numActiveStops = g_numActiveStops;
+        s.measuredStepsPerMM = g_measuredStepsPerMM;
+        s.measuredSpanSteps  = g_measuredSpanSteps;
+        s.manifoldModel      = g_manifoldModel;
 #ifdef CONTROL_SMART_OUTLET
         apiServer.update(s, &control);
 #else
@@ -874,6 +1203,11 @@ void loop() {
 void startHoming() {
     g_lastActivityMs = millis();
     g_driverAsleep   = false;
+    // Guarantee normal move speed as a baseline. The calibration sweep lowers
+    // maxSpeed to homing speed and restores it on its own exits — but a global
+    // e-stop during the sweep goes straight to STATE_ERROR without restoring it,
+    // so a plain re-home here would otherwise leave every later move crawling.
+    motor.setMaxSpeed(MAX_SPEED_STEPS_PER_SEC);
     feedback.resetHoming(); // clear _homed so updateHoming() actually runs
 #ifdef MOTOR_STEPPER_TMC2209
     int   sg    = control.stallThreshold();

@@ -256,7 +256,9 @@ import { HardwareProfileService, PortSize } from '../services/hardware-profile.s
           <span class="row-label">Port size</span>
           <select [ngModel]="portSize" (ngModelChange)="setPortSize($event)">
             <option value="2.5in">2.5"</option>
-            <option value="4in">4"</option>
+            <!-- 4" disabled until real 4" hardware exists to measure its profile;
+                 logic (PortSize '4in', rockler-4) kept for later. -->
+            <option value="4in" disabled>4" (soon)</option>
           </select>
         </div>
       </div>

@@ -52,6 +52,10 @@ public:
     // negative = toward home. Caller issues the relative move.
     bool consumeJogRequest(float& outMM);
 
+    // Returns true once when user types 'calibrate <model> <gates>'. Kicks off the
+    // dual-endstop reference sweep (same path as POST /api/calibrate).
+    bool consumeCalibrateRequest(char* outModel, size_t modelLen, int& outGates);
+
     // Live-tuning values. Read these each homing cycle.
     // -1 means "use config.h default".
     int   stallThreshold() const { return _stallThreshold; }
@@ -66,6 +70,9 @@ private:
     int   _stallThreshold; // -1 = use config.h default
     float _homeSpeed;      // -1 = use config.h default
     bool  _jogPending;
+    bool  _calPending;
+    char  _calModel[16];
+    int   _calGates;
     float _jogMM;
 
     String _inputBuffer;

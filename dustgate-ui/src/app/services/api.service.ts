@@ -21,6 +21,7 @@ export interface StopInfo {
   mm: string | null;      // millimetres from home as string (e.g. "25.00");
                           // null = position not yet saved (distinct from a
                           // gate legitimately saved at 0.00, right at home)
+  role?: string;          // 'tool' | 'unassigned' | 'blocked' | 'feed' | 'home'
 }
 
 export interface SystemStatus {
@@ -34,6 +35,10 @@ export interface SystemStatus {
   enabled: boolean;
   endstopHome: boolean;
   manualOverride?: boolean;   // true while user-commanded move blocks outlet auto-select
+  farEndstop?: boolean;       // far-end limit switch triggered (dual-endstop builds)
+  manifoldModel?: string;     // manifold profile used for calibration ('custom' if none)
+  measuredSpanSteps?: number | null; // endstop-to-endstop span from the reference sweep
+  stepsPerMm?: number;        // calibrated steps/mm (nominal until a sweep runs)
   dcConfigured?: boolean;     // true once a dust collector plug has been assigned
   dcOn?: boolean;             // current dust collector switch state
   stops?: StopInfo[];         // per-stop mm positions; embedded in every status push
@@ -78,6 +83,8 @@ export interface DeviceInfo {
   homeOnRight?: boolean;    // true = home endstop is on the right side of the manifold
   motorInverted?: boolean;  // true = homing direction was flipped via setup agent
   idleTimeoutSec?: number;  // seconds of inactivity before the driver powers off; 0 = never
+  manifoldModel?: string;   // manifold profile last calibrated against
+  stepsPerMm?: number;      // calibrated steps/mm
 }
 
 // ── Service ────────────────────────────────────────────────────────────────────
@@ -322,6 +329,20 @@ export class ApiService {
   setNumGates(n: number) {
     if (this.deviceInfo) this.deviceInfo.numStops = n;
     return this.post('/api/config/gates', { numGates: n });
+  }
+
+  /**
+   * Run the dual-endstop reference sweep: auto-direction, home, sweep to the far
+   * endstop, calibrate steps/mm, and (for a known manifold) auto-place every gate.
+   * `model` is a manifold profile id ('rockler-2.5' | 'rockler-4' | 'custom').
+   */
+  calibrate(model: string, gateCount: number) {
+    return this.post('/api/calibrate', { model, gateCount });
+  }
+
+  /** Set a port's role: 'tool' | 'unassigned' | 'blocked' | 'feed'. */
+  setPortRole(index: number, role: string) {
+    return this.post('/api/config/port-role', { index, role });
   }
 
   /**

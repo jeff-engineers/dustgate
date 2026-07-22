@@ -96,6 +96,8 @@ HttpApiServer::HttpApiServer()
       _setStopPending(false),      _setStopIndex(0),
       _setDirectionPending(false), _newDirection(HOME_DIRECTION_DEFAULT),
       _setNumGatesPending(false),  _newNumGates(0),
+      _calibratePending(false),    _calGateCount(0),
+      _portRolePending(false),     _portRoleIndex(0), _portRoleValue(0),
       _homeOnRight(false),
       _homeDirection(HOME_DIRECTION_DEFAULT),
       _cachedNumActiveStops(0),
@@ -111,6 +113,7 @@ HttpApiServer::HttpApiServer()
       _pingPending(false), _pingReq(nullptr)
 #endif
 {
+    _calModel[0] = '\0';
 #ifdef CONTROL_SMART_OUTLET
     _pingIp[0] = '\0';
 #endif
@@ -278,6 +281,22 @@ bool HttpApiServer::consumeSetNumGatesRequest(int& outN) {
     return v;
 }
 
+bool HttpApiServer::consumeCalibrateRequest(char* outModel, size_t modelLen, int& outGateCount) {
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    bool v = _calibratePending;
+    if (v) { strlcpy(outModel, _calModel, modelLen); outGateCount = _calGateCount; _calibratePending = false; }
+    xSemaphoreGive(_mutex);
+    return v;
+}
+
+bool HttpApiServer::consumePortRoleRequest(int& outIndex, int& outRole) {
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    bool v = _portRolePending;
+    if (v) { outIndex = _portRoleIndex; outRole = _portRoleValue; _portRolePending = false; }
+    xSemaphoreGive(_mutex);
+    return v;
+}
+
 bool HttpApiServer::consumeJogRequest(float& outMM) {
     xSemaphoreTake(_mutex, portMAX_DELAY);
     bool v = _jogPending;
@@ -359,6 +378,8 @@ void HttpApiServer::respondPing(const String& json) {
 // Route registration
 // =============================================================================
 
+static const char* portRoleName(uint8_t role);  // defined below, used in routes + buildStatusJson
+
 void HttpApiServer::registerRoutes() {
 
     // ------------------------------------------------------------------
@@ -368,13 +389,15 @@ void HttpApiServer::registerRoutes() {
     // Security: only reachable on the local network (same as the device).
     // ------------------------------------------------------------------
     _server.on("/api/info", HTTP_GET, [this](AsyncWebServerRequest* req) {
-        StaticJsonDocument<160> doc;
+        StaticJsonDocument<256> doc;
         doc["apiKey"]        = _apiKey;
         doc["numStops"]      = _cachedNumActiveStops;   // runtime; not compile-time NUM_STOPS
         doc["version"]       = "1.0.0";
         doc["homeOnRight"]    = _homeOnRight;
         doc["motorInverted"]  = (_homeDirection < 0);    // true when direction was flipped
         doc["idleTimeoutSec"] = _idleTimeoutSec;
+        doc["manifoldModel"]  = g_manifoldModel;
+        doc["stepsPerMm"]     = serialized(String(g_measuredStepsPerMM > 0 ? g_measuredStepsPerMM : stepsPerMM(), 3));
         String out; serializeJson(doc, out);
         req->send(200, "application/json", out);
     });
@@ -490,6 +513,65 @@ void HttpApiServer::registerRoutes() {
     );
 
     // ------------------------------------------------------------------
+    // POST /api/calibrate   body: {"model": "rockler-2.5", "gateCount": N}
+    // Runs the dual-endstop reference sweep on the main loop (see the consume
+    // handler in linear_actuator.ino) — measures the span, derives steps/mm, and
+    // auto-places gates by proportion for a known manifold.
+    // ------------------------------------------------------------------
+    _server.on("/api/calibrate", HTTP_POST,
+        [](AsyncWebServerRequest* req) {},
+        nullptr,
+        [this](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t, size_t) {
+            if (!checkAuth(req)) return;
+            StaticJsonDocument<96> doc;
+            if (deserializeJson(doc, data, len)) { sendError(req, 400, "invalid JSON"); return; }
+            int n = doc["gateCount"] | -1;
+            if (n < 1 || n > NUM_STOPS) { sendError(req, 400, "gateCount out of range"); return; }
+            const char* model = doc["model"] | "custom";
+            xSemaphoreTake(_mutex, portMAX_DELAY);
+            strlcpy(_calModel, model, sizeof(_calModel));
+            _calGateCount     = n;
+            _calibratePending = true;
+            xSemaphoreGive(_mutex);
+            DEBUG_PRINT(F("[API] Calibrate: ")); DEBUG_PRINT(model);
+            DEBUG_PRINT(F(" x")); DEBUG_PRINTLN(n);
+            sendOk(req);
+        }
+    );
+
+    // ------------------------------------------------------------------
+    // POST /api/config/port-role   body: {"index": N, "role": "blocked"}
+    // Sets a gate's role (tool|unassigned|blocked|feed). Persisted to
+    // CalibrationData by the main loop; blocked ports are never move targets.
+    // ------------------------------------------------------------------
+    _server.on("/api/config/port-role", HTTP_POST,
+        [](AsyncWebServerRequest* req) {},
+        nullptr,
+        [this](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t, size_t) {
+            if (!checkAuth(req)) return;
+            StaticJsonDocument<96> doc;
+            if (deserializeJson(doc, data, len)) { sendError(req, 400, "invalid JSON"); return; }
+            int idx = doc["index"] | -1;
+            if (idx < 1 || idx > NUM_STOPS) { sendError(req, 400, "index out of range"); return; }
+            const char* r = doc["role"] | "";
+            int role;
+            if      (strcmp(r, "tool") == 0)       role = ROLE_TOOL;
+            else if (strcmp(r, "unassigned") == 0) role = ROLE_UNASSIGNED;
+            else if (strcmp(r, "blocked") == 0)    role = ROLE_BLOCKED;
+            else if (strcmp(r, "feed") == 0)       role = ROLE_FEED;
+            else { sendError(req, 400, "invalid role"); return; }
+            xSemaphoreTake(_mutex, portMAX_DELAY);
+            _portRoleIndex   = idx;
+            _portRoleValue   = role;
+            _portRolePending = true;
+            xSemaphoreGive(_mutex);
+            DEBUG_PRINT(F("[API] Port role: gate ")); DEBUG_PRINT(idx);
+            DEBUG_PRINT(F(" -> ")); DEBUG_PRINTLN(r);
+            sendOk(req);
+        }
+    );
+
+    // ------------------------------------------------------------------
     // POST /api/config/idle-timeout   body: {"seconds": N}
     // Seconds of no move/home activity before the driver is powered off
     // (0 = never sleep). Persists to NVS; the main loop polls idleTimeoutSec()
@@ -565,7 +647,7 @@ void HttpApiServer::registerRoutes() {
     // ------------------------------------------------------------------
     _server.on("/api/stops", HTTP_GET, [this](AsyncWebServerRequest* req) {
         if (!checkAuth(req)) return;
-        StaticJsonDocument<1024> doc; // up to 17 stops × ~40B each
+        StaticJsonDocument<1536> doc; // up to 17 stops × ~55B each (incl role)
         JsonArray arr = doc.createNestedArray("stops");
         for (int i = 0; i <= _cachedNumActiveStops; i++) {
             JsonObject o = arr.createNestedObject();
@@ -581,6 +663,7 @@ void HttpApiServer::registerRoutes() {
                 o["mm"] = serialized(String(g_stopPositionsMM[i], 2));
             }
             o["steps"]  = (long)(g_stopPositionsMM[i] * stepsPerMM()) * (-HOME_DIRECTION);
+            o["role"]   = portRoleName(g_stopRoles[i]);
         }
         String out; serializeJson(doc, out);
         req->send(200, "application/json", out);
@@ -1013,13 +1096,25 @@ void HttpApiServer::registerRoutes() {
 // Status JSON builder
 // =============================================================================
 
+// PortRole enum → wire string (mirrors shared/device-model PORT_ROLES).
+static const char* portRoleName(uint8_t role) {
+    switch (role) {
+        case ROLE_TOOL:       return "tool";
+        case ROLE_BLOCKED:    return "blocked";
+        case ROLE_FEED:       return "feed";
+        case ROLE_HOME:       return "home";
+        case ROLE_UNASSIGNED:
+        default:              return "unassigned";
+    }
+}
+
 String HttpApiServer::buildStatusJson(const ApiStatus& s
 #ifdef CONTROL_SMART_OUTLET
                                       , SmartOutletControl* outlets
 #endif
 ) {
-    // Size: base fields ~150B + up to 17 stops×30B + up to 16 outlets×80B ≈ 2000B
-    StaticJsonDocument<2048> doc;
+    // Size: base fields ~250B + up to 17 stops×~45B (incl role) + up to 16 outlets×80B ≈ 2800B
+    StaticJsonDocument<3072> doc;
 
     doc["state"]         = s.stateName;
     doc["currentStop"]   = s.currentStop;
@@ -1029,6 +1124,10 @@ String HttpApiServer::buildStatusJson(const ApiStatus& s
     doc["homed"]         = s.homed;
     doc["enabled"]       = s.enabled;
     doc["endstopHome"]   = s.endstopHome;
+    doc["farEndstop"]    = s.endstopMax;
+    doc["manifoldModel"] = s.manifoldModel;
+    doc["measuredSpanSteps"] = s.measuredSpanSteps > 0 ? s.measuredSpanSteps : (long)0;
+    doc["stepsPerMm"]    = serialized(String(s.measuredStepsPerMM > 0 ? s.measuredStepsPerMM : stepsPerMM(), 3));
 
     JsonArray stops = doc.createNestedArray("stops");
     for (int i = 0; i <= _cachedNumActiveStops; i++) {
@@ -1043,6 +1142,7 @@ String HttpApiServer::buildStatusJson(const ApiStatus& s
         } else {
             o["mm"] = serialized(String(g_stopPositionsMM[i], 2));
         }
+        o["role"] = portRoleName(g_stopRoles[i]);
     }
 
 #ifdef CONTROL_SMART_OUTLET

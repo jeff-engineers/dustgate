@@ -74,17 +74,36 @@ triggered → motor stops. This is the correct safe-fail behavior.
 slightly before the true mechanical hard stop. `ENDSTOP_MARGIN_STEPS` in
 config.h captures the measured step offset between trigger point and gate 1.
 
-### Max endstop (optional safety limit)
+### Far (max) endstop — REQUIRED
 
-A second NC switch can be wired on D11 as a hard travel limit at the far
-end of the rack. Not currently installed — the pin is INPUT_PULLUP and reads
-safe (not triggered) when floating.
+A second NC switch on D11 at the far end of the rack. Wired identically to the
+home switch (NC, INPUT_PULLUP, **HIGH = triggered**, fail-safe). It serves two
+purposes (see [`docs/dual-endstop-calibration.md`](../docs/dual-endstop-calibration.md)):
+
+1. **Over-travel safety** — halts motion if the carriage ever runs past the last
+   gate.
+2. **Reference for self-calibration** — the reference sweep measures the
+   endstop-to-endstop span to derive steps/mm and place gates by proportion.
 
 ```
 Feather D11 ──── [NC limit switch, C terminal]
                  [NC limit switch, NC terminal] ──── GND
-Feather D11 ──── INPUT_PULLUP
+Feather D11 ──── INPUT_PULLUP (no external resistor needed)
 ```
+
+**Pin states:**
+
+| Carriage position          | Switch contacts | D11 voltage | `readMaxSwitch()` |
+|----------------------------|-----------------|-------------|--------------------|
+| Away from switch (normal)  | Closed (NC)     | LOW → GND   | `false`            |
+| Contacting switch (far end)| Open            | HIGH (pull) | `true`             |
+
+> **Must be installed on new builds.** Because D11 is now an active NC input with
+> `HIGH = triggered`, a **floating/unwired D11 reads HIGH → triggered**, which the
+> firmware treats as "at the far limit" (fail-safe halt). This is intentional —
+> an absent far endstop fails safe rather than allowing an un-limited far end —
+> but it means the switch has to be present. Mount it so the carriage triggers it
+> slightly before the true mechanical hard stop, same as the home switch.
 
 ---
 
@@ -110,59 +129,7 @@ local wiring to the Feather. See the main README for configuring the plug; it
 turns on automatically when a gate is open and can also be toggled from the
 dashboard.
 
----
-
-## 5. Rotary Switch — Resistor Ladder (CONTROL_ROTARY, budget option)
-
-SP8T rotary switch, common to GND. Each position connects A0 to GND through a
-different resistor. A 10kΩ pull-up from A0 to 3V3 completes the divider.
-
-```
-3V3 ──── 10kΩ ──── A0
-                    │
-Rotary positions (common to GND):
-  Pos 0 (Home)  ── 0Ω (wire) ──┤
-  Pos 1         ── 1kΩ ─────── ┤
-  Pos 2         ── 2kΩ ─────── ┤
-  Pos 3         ── 3kΩ ─────── ┤
-  Pos 4         ── 4kΩ ─────── ┤
-  Pos 5         ── 5kΩ ─────── ┤
-  Pos 6         ── 6kΩ ─────── ┤
-  Pos 7         ── 7kΩ ─────── ┘
-                           │
-                          GND
-```
-
-**Expected ADC readings (12-bit, 0–4095, 3.3V reference):**
-
-| Position | Resistance | Voltage | ADC (~) |
-|----------|------------|---------|---------|
-| 0 (Home) | 0Ω         | 0.00V   | 0       |
-| 1        | 1kΩ        | 0.30V   | 372     |
-| 2        | 2kΩ        | 0.55V   | 683     |
-| 3        | 3kΩ        | 0.76V   | 946     |
-| 4        | 4kΩ        | 0.94V   | 1170    |
-| 5        | 5kΩ        | 1.10V   | 1365    |
-| 6        | 6kΩ        | 1.24V   | 1537    |
-| 7        | 7kΩ        | 1.36V   | 1688    |
-
-> **Calibrate before use.** The ESP32-S2 ADC is non-linear near 0V and 3.3V.
-> Switch to `CONTROL_SERIAL_DEBUG`, rotate through each position, print
-> `analogRead(A0)` each loop, and update `ROTARY_THRESHOLDS[]` in
-> `RotaryControl.cpp` to the midpoints between your observed values.
-
-### Toggle switch (CONTROL_ROTARY)
-
-```
-Feather D12 ──── [Toggle switch] ──── GND
-Feather D12 ──── INPUT_PULLUP
-```
-
-Switch closed = LOW = system enabled.
-
----
-
-## 6. Smart Outlet Control (CONTROL_SMART_OUTLET)
+## 5. Smart Outlet Control (CONTROL_SMART_OUTLET)
 
 No additional wiring required. The ESP32 communicates with Shelly smart outlets
 over your home WiFi network using their local HTTP API. Requires:
@@ -177,7 +144,7 @@ Outlet-to-gate mappings are configured by the setup agent and stored in NVS.
 
 ---
 
-## 7. Remote Boot & Reset Buttons (enclosure-mounted, optional)
+## 6. Remote Boot & Reset Buttons (enclosure-mounted, optional)
 
 The Feather's onboard RESET and BOOT buttons become unreachable once the
 electronics are enclosed. Both are broken out to the header, so a pair of
@@ -208,7 +175,7 @@ enclosure closed.
 
 ---
 
-## 8. Pin Budget
+## 7. Pin Budget
 
 | Signal                    | Pin          | Mode(s)                              |
 |---------------------------|--------------|--------------------------------------|
@@ -218,16 +185,14 @@ enclosure closed.
 | Home limit switch         | D10          | FEEDBACK_LIMIT_DISTANCE / _DETENT    |
 | Max limit switch          | D11          | FEEDBACK_LIMIT_DISTANCE / _DETENT    |
 | Toggle switch             | D12          | CONTROL_ROTARY                       |
-| Status LED                | D13          | All (onboard LED)                    |
-| Rotary switch (ladder)    | A0           | CONTROL_ROTARY (analog)              |
-| Detent switches (ladder)  | A1           | FEEDBACK_LIMIT_DETENT (analog)       |
+| Status LED                | D13          | All (onboard LED)                    |     |
 | TMC2209 UART TX           | TX (Serial1) | All (hardware UART)                  |
 | TMC2209 UART RX           | RX (Serial1) | All (hardware UART)                  |
 | Remote reset button       | RST          | All (optional, not code-visible)     |
 | Remote boot button        | IO0          | All (optional, not code-visible)     |
 
-**Active config pins: 7** (D5, D6, D9, D10, D13, TX, RX)  
-Unused in current build: D11 (max endstop), D12 (toggle), A0 (rotary), A1 (detent)  
+**Active config pins: 8** (D5, D6, D9, D10, D11, D13, TX, RX)  
+Unused in current build: D12 (toggle), A0 (rotary), A1 (detent)  
 Free for expansion: SCL, SDA, A2, A3, A4, A5
 
 RST/IO0 aren't GPIOs the firmware reads — they're hardware reset/bootloader

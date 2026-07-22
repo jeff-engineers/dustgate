@@ -4,7 +4,9 @@
   "description": "Dev tools for DustGate — mock API server and provisioning utilities",
   "scripts": {
     "mock": "node mock-api.js",
-    "mock:claude": "node mock-api.js"
+    "mock:claude": "node mock-api.js",
+    "conformance": "node ../shared/device-model/conformance.js",
+    "conformance:ci": "node mock-api.js & MOCK_PID=$!; sleep 2; node ../shared/device-model/conformance.js; RC=$?; kill $MOCK_PID; exit $RC"
   },
   "dependencies": {
     "dotenv": "^16.4.5",

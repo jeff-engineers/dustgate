@@ -46,7 +46,11 @@ struct ApiStatus {
     bool homed;
     bool enabled;
     bool endstopHome;        // true = home switch currently triggered
+    bool endstopMax;         // true = far switch currently triggered
     int  numActiveStops;     // runtime gate count (set from g_numActiveStops)
+    float measuredStepsPerMM; // calibrated steps/mm (0 = not calibrated → nominal)
+    long  measuredSpanSteps;  // near→far span in steps (0 = not calibrated)
+    const char* manifoldModel; // "rockler-2.5" | "rockler-4" | "custom"
 };
 
 // ---------------------------------------------------------------------------
@@ -91,6 +95,13 @@ public:
     // Active gate count (runtime; bounded by compile-time NUM_STOPS).
     // Written to NVS by the handler; consumed by main loop to update g_numActiveStops.
     bool consumeSetNumGatesRequest(int& outN);
+
+    // Reference-sweep calibration request (POST /api/calibrate). The main loop
+    // runs the sweep + placement and persists to CalibrationData.
+    bool consumeCalibrateRequest(char* outModel, size_t modelLen, int& outGateCount);
+
+    // Port-role change (POST /api/config/port-role). outRole is a PortRole value.
+    bool consumePortRoleRequest(int& outIndex, int& outRole);
 
     // Visual orientation preference — home on right side vs left (default).
     // Loaded from NVS; returned in /api/info so Angular can render correctly.
@@ -181,6 +192,8 @@ private:
     bool  _setStopPending;         int  _setStopIndex;
     bool  _setDirectionPending;    int  _newDirection;        // 1 or -1
     bool  _setNumGatesPending;     int  _newNumGates;
+    bool  _calibratePending;       char _calModel[16];  int _calGateCount;
+    bool  _portRolePending;        int  _portRoleIndex; int _portRoleValue;
     bool  _homeOnRight;            // persisted orientation preference
     int   _homeDirection;          // runtime direction; loaded from NVS, updated via API
     int   _cachedNumActiveStops;   // from ApiStatus.numActiveStops; returned in /api/info

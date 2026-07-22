@@ -157,8 +157,18 @@ void StepperTMC2209Driver::moveTo(long targetSteps) {
     DEBUG_PRINTLN(targetSteps);
 }
 
+void StepperTMC2209Driver::setMaxSpeed(float speedStepsPerSec) {
+    _stepper.setMaxSpeed(speedStepsPerSec);
+}
+
 void StepperTMC2209Driver::stop() {
-    _stepper.stop();
+    // IMMEDIATE stop — zero the remaining distance so run()/runSpeed() halts this
+    // instant. AccelStepper::stop() only sets a DECELERATION target, which keeps
+    // stepping toward the original target while slowing down — it coasts PAST a
+    // hard limit (endstop) and isn't what an e-stop or limit hit wants. Setting
+    // the current position to itself makes distanceToGo()==0 and zeroes speed
+    // while preserving the coordinate.
+    _stepper.setCurrentPosition(_stepper.currentPosition());
     _homing = false;
 }
 
@@ -174,6 +184,10 @@ void StepperTMC2209Driver::update() {
 
 bool StepperTMC2209Driver::isMoving() {
     return (_homing || _stepper.distanceToGo() != 0);
+}
+
+long StepperTMC2209Driver::distanceToGo() {
+    return _stepper.distanceToGo();
 }
 
 long StepperTMC2209Driver::getPosition() {

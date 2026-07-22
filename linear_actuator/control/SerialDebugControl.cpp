@@ -26,8 +26,10 @@ SerialDebugControl::SerialDebugControl()
       _stallThreshold(-1),
       _homeSpeed(-1.0f),
       _jogPending(false),
-      _jogMM(0.0f)
-{}
+      _jogMM(0.0f),
+      _calPending(false),
+      _calGates(0)
+{ _calModel[0] = '\0'; }
 
 bool SerialDebugControl::begin() {
     // Serial already started in setup() via Serial.begin(SERIAL_BAUD)
@@ -37,7 +39,12 @@ bool SerialDebugControl::begin() {
 }
 
 int SerialDebugControl::readRequestedStop() {
-    // Drain Serial into line buffer; process on newline
+    // Drain Serial into line buffer; process on newline. Handles line editing so
+    // pasted/typed control bytes don't corrupt the command:
+    //   - CR/LF        → end of line, process
+    //   - BS (0x08) / DEL (0x7F) → erase last char
+    //   - printable ASCII (0x20–0x7E) → append (bounded)
+    //   - anything else (tab, ESC/arrow-key sequences, other control bytes) → ignore
     while (Serial.available()) {
         char c = (char)Serial.read();
         if (c == '\n' || c == '\r') {
@@ -46,8 +53,10 @@ int SerialDebugControl::readRequestedStop() {
                 processLine(_inputBuffer);
                 _inputBuffer = "";
             }
-        } else {
-            _inputBuffer += c;
+        } else if (c == 0x08 || c == 0x7F) {
+            if (_inputBuffer.length() > 0) _inputBuffer.remove(_inputBuffer.length() - 1);
+        } else if (c >= 0x20 && c <= 0x7E) {
+            if (_inputBuffer.length() < 128) _inputBuffer += c; // guard runaway buffer
         }
     }
     return _requestedStop;
@@ -69,6 +78,16 @@ bool SerialDebugControl::consumeEStop() {
 bool SerialDebugControl::consumeHomeRequest() {
     if (_homePending) {
         _homePending = false;
+        return true;
+    }
+    return false;
+}
+
+bool SerialDebugControl::consumeCalibrateRequest(char* outModel, size_t modelLen, int& outGates) {
+    if (_calPending) {
+        _calPending = false;
+        strlcpy(outModel, _calModel, modelLen);
+        outGates = _calGates;
         return true;
     }
     return false;
@@ -148,6 +167,26 @@ void SerialDebugControl::processLine(const String& line) {
             Serial.println(mm < 0 ? F(" mm toward home") : F(" mm away from home"));
         }
 
+    } else if (cmd.startsWith("calibrate ")) {
+        // calibrate <model> <gates>   e.g. 'calibrate rockler-2.5 2'
+        String rest = cmd.substring(10); rest.trim();
+        int sp = rest.indexOf(' ');
+        if (sp < 0) {
+            Serial.println(F("[CAL] Usage: calibrate <model> <gates>  e.g. 'calibrate rockler-2.5 2'  (models: rockler-2.5, rockler-4, custom)"));
+        } else {
+            String model = rest.substring(0, sp); model.trim();
+            int gates = rest.substring(sp + 1).toInt();
+            if (gates < 1 || gates > NUM_STOPS) {
+                Serial.println(F("[CAL] gates must be 1..NUM_STOPS"));
+            } else {
+                strlcpy(_calModel, model.c_str(), sizeof(_calModel));
+                _calGates   = gates;
+                _calPending = true;
+                Serial.print(F("[CAL] Requested reference sweep: "));
+                Serial.print(model); Serial.print(F(" x")); Serial.println(gates);
+            }
+        }
+
     } else if (cmd.startsWith("provision ")) {
         // provision {"ssid":"...","pass":"...","key":"...","host":"..."}
         // Writes WiFi/key/hostname directly to NVS via the shared helper in
@@ -186,6 +225,16 @@ void SerialDebugControl::processLine(const String& line) {
 #ifdef CONTROL_SMART_OUTLET
     } else if (cmd == "discover") {
         runDiscover();
+#endif
+
+    } else if (cmd == "endstops" || cmd == "e") {
+#ifdef FEEDBACK_LIMIT_DISTANCE
+        Serial.print(F("[ENDSTOP] Home (D10): "));
+        Serial.print(digitalRead(PIN_ENDSTOP_HOME) == HIGH ? F("TRIGGERED") : F("open"));
+        Serial.print(F("   Far (D11): "));
+        Serial.println(digitalRead(PIN_ENDSTOP_MAX) == HIGH ? F("TRIGGERED") : F("open"));
+#else
+        Serial.println(F("[ENDSTOP] FEEDBACK_LIMIT_DISTANCE not enabled"));
 #endif
 
     } else if (cmd == "status") {
@@ -307,8 +356,10 @@ void SerialDebugControl::printStatus() {
     if (_homeSpeed < 0) { Serial.print(F("config.h default (")); Serial.print(HOMING_SPEED_STEPS_PER_SEC, 0); Serial.println(F(" steps/sec)")); }
     else { Serial.print(_homeSpeed, 0); Serial.println(F(" steps/sec")); }
 #ifdef FEEDBACK_LIMIT_DISTANCE
-    Serial.print(F("  Home endstop:      "));
+    Serial.print(F("  Home endstop (D10):")); Serial.print(F(" "));
     Serial.println(digitalRead(PIN_ENDSTOP_HOME) == HIGH ? F("TRIGGERED") : F("open"));
+    Serial.print(F("  Far endstop (D11): "));
+    Serial.println(digitalRead(PIN_ENDSTOP_MAX)  == HIGH ? F("TRIGGERED") : F("open"));
 #endif
     Serial.println(F("  Stop positions (from g_stopPositionsMM[]):"));
     for (int i = 0; i <= NUM_STOPS; i++) {
@@ -327,10 +378,12 @@ void SerialDebugControl::printHelp() {
     Serial.println(F("  estop             Immediate stop (latches until 'home')"));
     Serial.println(F("  home              Re-trigger homing sequence"));
     Serial.println(F("  jog <mm>          Move relative: + = away from home, - = toward home"));
+    Serial.println(F("  calibrate <m> <n> Dual-endstop reference sweep: model (rockler-2.5|rockler-4|custom) + gate count"));
     Serial.println(F("  clearcal          Erase EEPROM calibration (reload from config.h)"));
     Serial.println(F("  wifireset         Erase WiFi credentials, reboot into setup portal"));
     Serial.println(F("  gconf             Read GCONF + CHOPCONF from driver"));
-    Serial.println(F("  status            Print state, stop positions, endstop"));
+    Serial.println(F("  status            Print state, stop positions, both endstops"));
+    Serial.println(F("  endstops (e)      Print both endstop states (D10 home, D11 far)"));
 #ifdef CONTROL_SMART_OUTLET
     Serial.println(F("  discover          Scan mDNS for Shelly outlets, print raw + filtered results"));
 #endif

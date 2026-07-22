@@ -8,7 +8,8 @@
 #ifdef FEEDBACK_LIMIT_DISTANCE
 
 LimitSwitchDistance::LimitSwitchDistance()
-    : _motor(nullptr), _homed(false), _backingOff(false), _lastHomeState(false)
+    : _motor(nullptr), _homed(false), _backingOff(false),
+      _lastHomeState(false), _lastMaxState(false)
 {}
 
 void LimitSwitchDistance::resetHoming() {
@@ -25,18 +26,19 @@ bool LimitSwitchDistance::begin(MotorDriver* motor) {
     pinMode(PIN_ENDSTOP_MAX, INPUT_PULLUP);
 
     _lastHomeState = readHomeSwitch();
-    DEBUG_PRINT(F("LimitSwitchDistance initialized. Home endstop: "));
-    DEBUG_PRINTLN(_lastHomeState ? F("TRIGGERED") : F("open"));
+    _lastMaxState  = readMaxSwitch();
+    DEBUG_PRINT(F("LimitSwitchDistance initialized. Home: "));
+    DEBUG_PRINT(_lastHomeState ? F("TRIGGERED") : F("open"));
+    DEBUG_PRINT(F("  Far: "));
+    DEBUG_PRINTLN(_lastMaxState ? F("TRIGGERED") : F("open"));
     return true;
 }
 
 void LimitSwitchDistance::pollEndstopLog() {
-    bool current = readHomeSwitch();
-    if (current != _lastHomeState) {
-        _lastHomeState = current;
-        DEBUG_PRINT(F("[ENDSTOP] Home: "));
-        DEBUG_PRINTLN(current ? F("TRIGGERED") : F("open"));
-    }
+    // Endstop transition logging now lives in the main loop's always-on endstop
+    // supervisor (linear_actuator.ino) so it also covers jogs, which never enter
+    // STATE_MOVING. Kept as a no-op to preserve the call sites in
+    // updateHoming()/updateMoving() without double-printing.
 }
 
 bool LimitSwitchDistance::updateHoming() {
@@ -73,15 +75,11 @@ bool LimitSwitchDistance::updateHoming() {
 }
 
 bool LimitSwitchDistance::updateMoving(int /*targetStop*/) {
-    pollEndstopLog();
-    // Stop if max endstop triggered during normal motion (safety)
-    if (readMaxSwitch()) {
-        _motor->stop();
-        DEBUG_PRINTLN(F("Max endstop triggered during motion — stopped."));
-        return true; // treat as "arrived" to prevent re-trigger loop
-    }
-
-    // Motion complete when stepper reaches target
+    // Over-travel is enforced directionally by the main-loop endstop supervisor
+    // (stops travel INTO a triggered switch, allows travel away — needed so a
+    // move can leave the far switch, e.g. returning home after a sweep). Here we
+    // only report arrival: true once the stepper has reached target or been
+    // stopped.
     return !_motor->isMoving();
 }
 
@@ -112,7 +110,12 @@ bool LimitSwitchDistance::readHomeSwitch() {
 }
 
 bool LimitSwitchDistance::readMaxSwitch() {
-    return digitalRead(PIN_ENDSTOP_MAX) == LOW;
+    // Same NC + INPUT_PULLUP wiring as the home switch: triggered (contacts
+    // open) → pin pulled HIGH; also fail-safe (broken wire → HIGH → triggered).
+    // (Was `== LOW`, which is inverted — it only appeared to work while no max
+    // switch was installed and the floating pin read HIGH. With a real NC switch
+    // that inversion reads "triggered" whenever the switch is closed/normal.)
+    return digitalRead(PIN_ENDSTOP_MAX) == HIGH;
 }
 
 // mmToSteps() now delegated to MotionMath.h

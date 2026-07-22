@@ -16,11 +16,12 @@ via an AI-powered setup agent accessible from a browser on the local network.
 | Drive | 15-tooth pinion + 20T/4.145mm pitch rack | ~51.47 steps/mm at 16× microstep |
 | Smart outlets | Shelly Plug US Gen 4 (~$21 ea., us.shelly.com) | Fully local REST API, 1800W/15A, no cloud required |
 | Home endstop | NC mechanical limit switch on D10 | Fail-safe: open wire reads as triggered |
+| Far endstop | NC mechanical limit switch on D11 (required) | Over-travel safety + reference for self-calibration; wired identically (NC, HIGH = triggered) |
 
 
 ### Planned carrier PCB (Task 5)
 - ESP32-S2 Feather + BTT TMC2209 StepStick on 2.54mm headers
-- Screw terminals for motor, endstop
+- Screw terminals for motor, both endstops
 - CNC-millable FR4 (no soldermask required)
 - Replaces current breadboard/breakout assembly
 
@@ -30,10 +31,12 @@ via an AI-powered setup agent accessible from a browser on the local network.
 
 - **Rack-and-pinion** linear actuator, up to `NUM_STOPS` selectable stop positions (compile-time max, currently 16); the runtime-active count (≤ max) is separately configurable via `/api/config/gates` or Settings without recompiling
 - **Stop 0** = home/disabled position
-- **Homing:** drive toward NC limit switch at `HOMING_SPEED_STEPS_PER_SEC`, back off `HOME_BACKOFF_STEPS` after trigger, zero position
-- **Positioning:** step-counted moves from home; stop distances trained by setup agent or computed from geometry constants
-- **Stop distance storage:** EEPROM/NVS via `Preferences`; `clearcal` command erases stale calibration
-- **Measured geometry:** gate 1 at step −51 from home; gate-to-gate ≈ 4270 steps (82.9mm × 51.47 steps/mm)
+- **Homing:** drive toward the near NC limit switch at `HOMING_SPEED_STEPS_PER_SEC`, back off `HOME_BACKOFF_STEPS` after trigger, zero position
+- **Dual-endstop self-calibration:** a **reference sweep** (near endstop → far endstop) measures the step span, derives `steps/mm` empirically per unit, and places gates by **proportion of the measured span** — immune to per-unit mechanical variance. For a known manifold (Rockler 2.5") gate positions are computed from a stored profile; `custom` falls back to manual jog. Also provides over-travel safety, lost-step detection, and auto motor-direction detection. See [`docs/dual-endstop-calibration.md`](docs/dual-endstop-calibration.md). *(Model + mock + conformance implemented; firmware foundation done, sweep motion pending hardware.)*
+- **Positioning:** step-counted moves from home; stop distances from the sweep, the setup agent, or geometry constants
+- **Port roles:** each gate has a role — `tool | unassigned | blocked` (`feed` reserved for v2). Blocked ports are never move targets; this lets the actuator become a node in the v2 topology graph (see [`docs/v2-architecture-rfc.md`](docs/v2-architecture-rfc.md))
+- **Stop distance storage:** EEPROM/NVS via `Preferences`; `CalibrationData` v2 also stores per-port roles, manifold model, and measured span; `clearcal` erases stale calibration
+- **Measured geometry (2.5"):** symmetric — trigger-to-trigger span = 84.9mm at 2 gates, gate-to-gate pitch = 82.9mm → trigger→gate offset = 1mm/side. Backoff (`HOME_BACKOFF_STEPS` ≈ 1mm) cancels out of the pitch but must be added back to the home→far sweep count when deriving steps/mm (these feed the manifold profile / proportional placement)
 - **No enable/disable concept:** the system always runs; only e-stop (software-only — no physical e-stop button) halts motion. `home` re-homes and clears any latched e-stop; the system warns once if position commands arrive before homing.
 - **Idle power-off:** if no move/home command arrives for `IDLE_TIMEOUT_SEC_DEFAULT` (3600s default, runtime-configurable via `POST /api/config/idle-timeout` or the Settings screen), the stepper driver is fully disabled and the position marked unknown, forcing a rehome on the next move instead of sitting energized indefinitely.
 

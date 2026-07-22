@@ -20,6 +20,9 @@
               "zone.js"
             ],
             "tsConfig": "tsconfig.app.json",
+            "allowedCommonJsDependencies": [
+              "@device-model"
+            ],
             "assets": [],
             "styles": [
               "src/styles.css"

@@ -38,8 +38,9 @@ on the Vercel deployment (demo mode activates on any non-localhost hostname).
 ### 2. Mock firmware server — closer to the real device
 
 `tools/mock-api.js` is a small Node server that mimics the ESP32's HTTP + WebSocket
-API. Use this when you want to exercise the real `ApiService` / proxy path instead
-of the in-browser demo:
+API (a thin wrapper over the canonical device model in `../shared/device-model`,
+the same model the in-browser demo uses). Use this when you want to exercise the
+real `ApiService` / proxy path instead of the in-browser demo:
 
 ```bash
 # one-time setup
@@ -103,7 +104,10 @@ src/app/
   visualizer/             Manifold visualizer — gate boxes, slider, dust collector, flow arrow
   services/
     api.service.ts            Talks to the real device (HTTP + WebSocket)
-    demo-api.service.ts       In-memory drop-in replacement, used in demo mode
+    demo-api.service.ts       In-memory drop-in replacement used in demo mode —
+                              a thin async wrapper over the canonical device model
+                              in ../../shared/device-model (imported as @device-model),
+                              the same model that drives tools/mock-api.js
     claude.service.ts         Tool-calling loop for the AI setup assistant
     unit-preference.service.ts     mm/inches display preference
     hardware-profile.service.ts    Port size (2.5"/4") — seeds expected gate spacing

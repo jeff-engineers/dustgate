@@ -19,22 +19,35 @@
 #include "../config.h"
 
 static const uint16_t CALIB_MAGIC   = 0xCA1B;
-static const uint8_t  CALIB_VERSION = 1;
+static const uint8_t  CALIB_VERSION = 2;     // v2 adds stopRole[] + manifoldModel[]
 static const int      CALIB_ADDRESS = 0;    // EEPROM start address
+
+// Port roles — mirror shared/device-model PORT_ROLES. Stored per stop so a
+// blocked/feed port survives reboot. Index 0 (home) is always ROLE_HOME.
+enum PortRole : uint8_t {
+    ROLE_TOOL = 0,
+    ROLE_UNASSIGNED = 1,
+    ROLE_BLOCKED = 2,
+    ROLE_FEED = 3,        // reserved for v2 (feeds a downstream cluster)
+    ROLE_HOME = 4,
+};
 
 struct CalibrationData {
     uint16_t magic;
     uint8_t  version;
-    uint8_t  numStops;                  // number of trained intermediate stops (1–7)
+    uint8_t  numStops;                  // number of trained intermediate stops (1–N)
     float    stopMM[NUM_STOPS + 1];     // index 0 = home = 0.0, 1–N = measured mm
-    float    maxTravelMM;               // distance to far physical endstop
+    float    maxTravelMM;               // measured span in mm (near→far endstop)
     float    measuredStepsPerMM;        // derived from endstop-to-endstop travel
+    uint8_t  stopRole[NUM_STOPS + 1];   // PortRole per stop (v2 layout)
+    char     manifoldModel[16];         // "rockler-2.5" | "rockler-4" | "custom"
     uint16_t crc;
 };
 
 // EEPROM size needed.
-// With NUM_STOPS=16: 2+1+1+(17×4)+4+4+2 = 82 bytes; 128 leaves 46 bytes of margin.
-// NOTE: changing NUM_STOPS invalidates the CRC of any existing cal data — run clearcal after reflash.
+// With NUM_STOPS=16 (v2): 2+1+1+(17×4)+4+4+(17×1)+16+2 = 115 bytes; 128 leaves margin.
+// NOTE: changing NUM_STOPS or the struct layout invalidates the CRC/version of any
+// existing cal data — run clearcal after reflash (the version bump forces this too).
 static const int CALIB_EEPROM_SIZE = 128;
 
 class CalibrationStore {

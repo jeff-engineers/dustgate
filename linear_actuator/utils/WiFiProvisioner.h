@@ -193,9 +193,12 @@ inline void _runPortal() {
                     }
                 }
                 serialLine = "";
-            } else if (c != '\r') {
-                serialLine += c;
+            } else if (c == 0x08 || c == 0x7F) {          // backspace / delete
+                if (serialLine.length() > 0) serialLine.remove(serialLine.length() - 1);
+            } else if (c >= 0x20 && c <= 0x7E) {           // printable ASCII (covers JSON)
+                if (serialLine.length() < 512) serialLine += c; // guard runaway buffer
             }
+            // CR and other control bytes (tab, ESC/arrow-key sequences) are ignored.
         }
 
         delay(2);

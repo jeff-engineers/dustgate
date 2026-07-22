@@ -19,12 +19,12 @@ Each tool plugs into a [Shelly smart outlet](https://us.shelly.com). When a tool
 | LDO-42STH48-2004MAH (NEMA 17) | Various | Stepper motor |
 | Rack & pinion | 3d Printed | 20T rack, 15T pinion, 4.145mm pitch |
 | Mechanical Assembly | 3d printed | Integrates with COTS dust gate |
-| NC mechanical limit switch | Various | Home endstop on D10 |
+| NC mechanical limit switch ×2 | Various | Home endstop (D10) + far endstop (D11) — both required |
 | Shelly Plug US (one per tool) | [us.shelly.com](https://us.shelly.com) | ~$21 each, Gen 4 recommended |
 | Shelly Plug US (dust collector) | [us.shelly.com](https://us.shelly.com) | One more to switch the dust collector on/off |
 | 12–24V DC power supply (≥2A) | Various | Motor power |
 
-The reference build is a 2.5" dust port system, with adjacent gates spaced about 89mm apart. A 4" variant is planned but not yet built or measured — the setup wizard asks which size you have so the UI can seed a reasonable starting estimate either way.
+The reference build is a 2.5" dust port system, with adjacent gates spaced about 82.9mm apart (these measured numbers feed the dual-endstop self-calibration — see [`docs/dual-endstop-calibration.md`](docs/dual-endstop-calibration.md)). A 4" variant is planned but not yet built or measured, so it's **disabled in the UI** until real hardware exists to measure its manifold profile (the logic is kept in place for when it does).
 
 For wiring details see [`linear_actuator/WIRING.md`](linear_actuator/WIRING.md).
 
@@ -229,17 +229,49 @@ linear_actuator/         Firmware (Arduino / PlatformIO)
 dustgate-ui/             Web UI (Angular 17) — see dustgate-ui/README.md for
                          local dev instructions and a full breakdown
 
+shared/device-model/     Canonical device model + conformance suite — the single
+                         source of truth for device behaviour that drives both
+                         simulators (see shared/device-model/README.md)
+
 tools/                   Dev tools — mock-api.js (local firmware stand-in),
                          provisioning utilities
 
 api/                     Vercel serverless function (proxies the AI setup
                          assistant's Claude calls for the hosted demo)
 
+.github/workflows/       CI (conformance suite, UI build, firmware compile)
 docs/                    Design notes and reference images
 
 platformio.ini           PlatformIO build config
 REQUIREMENTS.md          Architecture decisions and spec
 vercel.json              Vercel deployment config (demo site)
+```
+
+---
+
+## Testing & CI
+
+Device behaviour is defined once in a **canonical model**
+([`shared/device-model/`](shared/device-model/README.md)) that drives both the
+local Node mock (`tools/mock-api.js`) and the in-browser demo
+(`dustgate-ui/.../demo-api.service.ts`), so the two can't drift. The C++ firmware
+can't share that JS, so it's kept in sync by an **executable contract**: 34
+scenarios in `conformance.js` that run over HTTP against any target.
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs three jobs on every
+push / PR:
+
+| Job | What it checks |
+|---|---|
+| **conformance** | `tools/mock-api.js` against the contract (`npm run conformance:ci`) |
+| **ui-build** | Angular production build (also type-checks the `@device-model` wiring) |
+| **firmware** | `pio run` — ESP32 firmware compiles |
+
+To certify **real hardware** against the same contract (DESTRUCTIVE — it homes,
+moves, and wipes calibration):
+
+```bash
+node shared/device-model/conformance.js http://<device-ip> <api-key> --force
 ```
 
 ---

@@ -20,11 +20,20 @@ public:
     void startHomingWithParams(float speedStepsPerSec, uint8_t stallThreshold);
     void moveTo(long targetSteps) override;
     void stop() override;
+
+    // Override the AccelStepper max speed for subsequent moveTo() moves. Used to
+    // run the calibration reference sweep at the gentler homing speed. Pass
+    // MAX_SPEED_STEPS_PER_SEC to restore normal move speed.
+    void setMaxSpeed(float speedStepsPerSec);
     void update() override;
     bool isMoving() override;
     long getPosition() override;
     void setHome() override;
     void enable(bool on) override;
+
+    // Signed steps remaining to the current target (sign = direction of travel).
+    // Used by the main-loop endstop supervisor to allow backing off a switch.
+    long distanceToGo();
 
     // Sensorless homing: check StallGuard flag via UART
     bool isStalled();

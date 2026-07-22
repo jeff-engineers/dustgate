@@ -31,6 +31,7 @@ private:
     void pollEndstopLog();
 
     bool _lastHomeState;
+    bool _lastMaxState;
 };
 
 #endif // FEEDBACK_LIMIT_DISTANCE

@@ -1,0 +1,71 @@
+name: CI
+
+# Three independent checks, run in parallel on every push / PR:
+#   conformance — certifies the device API contract against the Node mock
+#   ui-build    — builds the Angular app (also validates the @device-model wiring)
+#   firmware    — compiles the ESP32 firmware with PlatformIO
+#
+# The conformance job is the load-bearing one for the mock/demo/firmware sync
+# story: it runs shared/device-model/conformance.js against tools/mock-api.js.
+# To certify REAL hardware, run the same suite locally against the device:
+#   node shared/device-model/conformance.js http://<device-ip> <api-key> --force
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  conformance:
+    name: API conformance (mock)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: tools/package-lock.json
+      - name: Install tools deps
+        run: npm ci
+        working-directory: tools
+      - name: Run conformance suite against the mock
+        run: npm run conformance:ci
+        working-directory: tools
+
+  ui-build:
+    name: UI build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: dustgate-ui/package-lock.json
+      - name: Install UI deps
+        run: npm ci
+        working-directory: dustgate-ui
+      - name: Build (also type-checks the shared @device-model import)
+        run: npm run build
+        working-directory: dustgate-ui
+
+  firmware:
+    name: Firmware compile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+            ~/.cache/pip
+          key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+      - name: Install PlatformIO
+        run: pip install --upgrade platformio
+      - name: Compile firmware
+        run: pio run

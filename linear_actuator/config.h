@@ -22,7 +22,10 @@
 //   Normal (contacts closed): pin pulled to GND → LOW → readHomeSwitch() = false
 //   Triggered (contacts open): pullup wins → HIGH → readHomeSwitch() = true
 // Fail-safe: broken wire → HIGH → reads as triggered → motor stops.
-// No max endstop required for current build — single-switch homing only.
+// PIN_ENDSTOP_MAX (far end) is wired identically (NC, INPUT_PULLUP, HIGH =
+// triggered). It is REQUIRED on new builds: it provides over-travel safety and
+// is the far reference for the self-calibrating reference sweep — see
+// docs/dual-endstop-calibration.md.
 
 // -----------------------------------------------------------------------------
 // CONTROL INPUT — select exactly one
@@ -53,6 +56,37 @@
 // small so it only rejects genuine near-duplicates, never legitimately tight
 // real-world gate spacing. Home (stop 0) is excluded from the check.
 #define MIN_STOP_SEPARATION_MM   10.0f
+
+// -----------------------------------------------------------------------------
+// Manifold profiles + reference-sweep calibration (dual endstop)
+// See docs/dual-endstop-calibration.md. A profile gives the mm geometry of a
+// known manifold, referenced to the near (home) endstop trigger. The reference
+// sweep measures the endstop-to-endstop step span, derives steps/mm, and places
+// every gate by PROPORTION of the measured span (immune to steps/mm error).
+// Keep these in step with shared/device-model MANIFOLD_PROFILES.
+// -----------------------------------------------------------------------------
+// Rockler Dust Right 2.5" — MEASURED on the reference build. Symmetric. Two direct
+// measurements: trigger-to-trigger span = 84.9mm at 2 gates, gate-to-gate pitch =
+// 82.9mm → trigger→gate offset = (84.9−82.9)/2 = 1mm/side. span(N) = 2 + (N−1)·82.9.
+// NB: HOME_BACKOFF_STEPS does NOT affect pitch (cancels); it only shifts the
+// steps/mm span — the sweep must add HOME_BACKOFF_STEPS back to the home→far step
+// count before dividing by span mm.
+#define MANIFOLD_2_5_FIRST_GATE_OFFSET_MM   1.0f
+#define MANIFOLD_2_5_GATE_PITCH_MM          82.9f
+#define MANIFOLD_2_5_END_MARGIN_MM          1.0f
+// Rockler Dust Right 4" — PLACEHOLDER (no 4" hardware to measure yet). The 4"
+// path is disabled in the UI; these values are unused until real measurements.
+#define MANIFOLD_4_FIRST_GATE_OFFSET_MM     3.0f
+#define MANIFOLD_4_GATE_PITCH_MM            120.0f
+#define MANIFOLD_4_END_MARGIN_MM            3.0f
+
+// steps/mm sanity bound: reject a measured sweep whose derived steps/mm deviates
+// from the nominal geometric value by more than this — signals a wrong manifold
+// profile or a mechanical fault rather than trusting a bad measurement.
+#define STEPS_PER_MM_PLAUSIBILITY_PCT       15.0f
+// Span re-check tolerance (mm): on re-home, a measured span off by more than this
+// from the stored span flags possible lost steps (recalibrate).
+#define SPAN_CHECK_TOLERANCE_MM             5.0f
 
 // Names for each stop (used in serial debug output — extend as needed)
 #define STOP_NAMES { "Home/Disabled", "Stop 1", "Stop 2", "Stop 3", \
