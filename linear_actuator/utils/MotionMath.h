@@ -33,6 +33,9 @@ extern uint8_t g_stopRoles[NUM_STOPS + 1];  // PortRole per stop (0 = home)
 extern float   g_measuredStepsPerMM;        // calibrated steps/mm (0 = not calibrated)
 extern long    g_measuredSpanSteps;         // near→far span in steps (0 = not calibrated)
 extern char    g_manifoldModel[16];         // "rockler-2.5" | "rockler-4" | "custom"
+extern bool    g_homeIsMaxEndstop;          // which endstop is the home datum (= user's
+                                            //   LEFT): false = D10, true = D11. Homing
+                                            //   always drives to this one.
 
 // Steps ↔ mm conversion using config.h gear parameters
 inline float stepsPerMM() {

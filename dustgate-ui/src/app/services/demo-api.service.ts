@@ -51,7 +51,6 @@ export class DemoApiService extends ApiService {
       apiKey:        'demo',
       numStops:      0,
       version:       '1.0-demo',
-      homeOnRight:   false,
       motorInverted: false,
     } satisfies DeviceInfo;
     this.apiKey = 'demo';
@@ -82,7 +81,6 @@ export class DemoApiService extends ApiService {
   private syncInfo(): void {
     if (!this.deviceInfo) return;
     this.deviceInfo.numStops      = this.d.numActiveStops;
-    this.deviceInfo.homeOnRight   = this.d.homeOnRight;
     this.deviceInfo.motorInverted = this.d.motorInverted;
     this.deviceInfo.idleTimeoutSec = this.d.idleTimeoutSec;
   }
@@ -217,9 +215,10 @@ export class DemoApiService extends ApiService {
 
   // ── Config ────────────────────────────────────────────────────────────────────
 
-  override setOrientation(homeOnRight: boolean): Promise<{ ok: boolean }> {
-    model.setOrientation(this.d, homeOnRight);
+  override setHomedLeft(homedLeft: boolean): Promise<{ ok: boolean }> {
+    model.setHomedLeft(this.d, homedLeft);
     this.syncInfo();
+    this.pushStatus();
     return Promise.resolve({ ok: true });
   }
 

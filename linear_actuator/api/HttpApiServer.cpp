@@ -98,7 +98,7 @@ HttpApiServer::HttpApiServer()
       _setNumGatesPending(false),  _newNumGates(0),
       _calibratePending(false),    _calGateCount(0),
       _portRolePending(false),     _portRoleIndex(0), _portRoleValue(0),
-      _homeOnRight(false),
+      _orientationPending(false),  _orientationValue(false),
       _homeDirection(HOME_DIRECTION_DEFAULT),
       _cachedNumActiveStops(0),
       _idleTimeoutSec(IDLE_TIMEOUT_SEC_DEFAULT)
@@ -136,7 +136,8 @@ bool HttpApiServer::begin() {
     {
         Preferences prefs;
         prefs.begin(NVS_NS, true);
-        _homeOnRight  = prefs.getBool("home_right", false);
+        // Mounting orientation now lives in CalibrationData (persisted by the main
+        // loop), reported here via ApiStatus each update() — not loaded from NVS.
         _homeDirection = prefs.getInt("home_dir",  HOME_DIRECTION_DEFAULT);
         _cachedNumActiveStops = prefs.getInt("num_gates", 0); // 0 = not yet configured
         _idleTimeoutSec = prefs.getInt("idle_to", IDLE_TIMEOUT_SEC_DEFAULT);
@@ -297,6 +298,14 @@ bool HttpApiServer::consumePortRoleRequest(int& outIndex, int& outRole) {
     return v;
 }
 
+bool HttpApiServer::consumeOrientationRequest(bool& outHomedLeft) {
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    bool v = _orientationPending;
+    if (v) { outHomedLeft = _orientationValue; _orientationPending = false; }
+    xSemaphoreGive(_mutex);
+    return v;
+}
+
 bool HttpApiServer::consumeJogRequest(float& outMM) {
     xSemaphoreTake(_mutex, portMAX_DELAY);
     bool v = _jogPending;
@@ -393,7 +402,6 @@ void HttpApiServer::registerRoutes() {
         doc["apiKey"]        = _apiKey;
         doc["numStops"]      = _cachedNumActiveStops;   // runtime; not compile-time NUM_STOPS
         doc["version"]       = "1.0.0";
-        doc["homeOnRight"]    = _homeOnRight;
         doc["motorInverted"]  = (_homeDirection < 0);    // true when direction was flipped
         doc["idleTimeoutSec"] = _idleTimeoutSec;
         doc["manifoldModel"]  = g_manifoldModel;
@@ -425,9 +433,10 @@ void HttpApiServer::registerRoutes() {
     );
 
     // ------------------------------------------------------------------
-    // POST /api/config/orientation   body: {"homeOnRight": true|false}
-    // Persists the visual orientation preference to NVS and updates the
-    // /api/info response so Angular renders the visualizer correctly.
+    // POST /api/config/orientation   body: {"homedLeft": true|false}
+    // Reports which side the carriage homed to. The main loop keeps the home datum
+    // on the user's LEFT, switching to the other endstop (and re-homing on the next
+    // home) if it came up on the right.
     // ------------------------------------------------------------------
     _server.on("/api/config/orientation", HTTP_POST,
         [](AsyncWebServerRequest* req) {},
@@ -436,17 +445,16 @@ void HttpApiServer::registerRoutes() {
             if (!checkAuth(req)) return;
             StaticJsonDocument<64> doc;
             if (deserializeJson(doc, data, len)) { sendError(req, 400, "invalid JSON"); return; }
-            if (!doc.containsKey("homeOnRight")) { sendError(req, 400, "missing homeOnRight"); return; }
-            bool hor = doc["homeOnRight"].as<bool>();
+            if (!doc.containsKey("homedLeft")) { sendError(req, 400, "missing homedLeft"); return; }
+            bool homedLeft = doc["homedLeft"].as<bool>();
+            // Pending-command pattern: the main loop makes the home datum the user's
+            // left endstop, re-homing there if the carriage came up on the right.
             xSemaphoreTake(_mutex, portMAX_DELAY);
-            _homeOnRight = hor;
+            _orientationPending = true;
+            _orientationValue   = homedLeft;
             xSemaphoreGive(_mutex);
-            Preferences prefs;
-            prefs.begin(NVS_NS, false);
-            prefs.putBool("home_right", hor);
-            prefs.end();
-            DEBUG_PRINT(F("[API] Orientation: home on "));
-            DEBUG_PRINTLN(hor ? F("right") : F("left"));
+            DEBUG_PRINT(F("[API] Home side: homed on the "));
+            DEBUG_PRINTLN(homedLeft ? F("left") : F("right"));
             sendOk(req);
         }
     );

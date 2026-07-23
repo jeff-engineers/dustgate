@@ -35,20 +35,9 @@ public:
     // Used by the main-loop endstop supervisor to allow backing off a switch.
     long distanceToGo();
 
-    // Sensorless homing: check StallGuard flag via UART
-    bool isStalled();
-    uint32_t getDrvStatus(); // raw DRV_STATUS register (for diagnostics)
-    uint32_t getTStep();     // TSTEP register — actual step timing; 0 = motor stopped
-
     // Diagnostic: read GCONF, CHOPCONF, TCOOLTHRS from hardware and print to Serial.
     // Use the 'gconf' serial command to call this and verify writes are landing.
     void printDriverRegs();
-
-    // Training mode: drive forward/reverse with StallGuard active.
-    // Unlike moveTo(), these keep SpreadCycle + StallGuard enabled.
-    // Call stop() when isStalled() returns true.
-    void driveForwardWithStallGuard(float speedStepsPerSec);
-    void driveReverseWithStallGuard(float speedStepsPerSec);
 
 private:
     TMC2209Stepper _driver;

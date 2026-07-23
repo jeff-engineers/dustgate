@@ -209,7 +209,6 @@ interface GateInfo {
       gap: 8px;
       margin-top: 0;
     }
-    .dc-wrap.home-right { flex-direction: row-reverse; }
 
     .home-pill {
       display: flex;
@@ -410,7 +409,7 @@ interface GateInfo {
            leads/trails on whichever side the endstop is on, but as a compact
            badge next to the collector rather than a column jammed against
            the gate rail. -->
-      <div class="dc-wrap" [class.home-right]="homeOnRight">
+      <div class="dc-wrap">
         <div class="home-pill"
              [class.homed]="isHomed"
              [class.homing-now]="!isHomed && isHomingNow"
@@ -459,8 +458,6 @@ export class ManifoldVisualizerComponent implements OnInit, OnDestroy, AfterView
    * position readout.
    */
   @Input() interactive = false;
-  /** When true, home is on the right — the home pill and gate order flip accordingly. */
-  @Input() homeOnRight = false;
   /** Unused now that travel is never animated; kept so existing callers don't break. */
   @Input() liveTravel = true;
 
@@ -497,9 +494,12 @@ export class ManifoldVisualizerComponent implements OnInit, OnDestroy, AfterView
   // ── Computed layout ───────────────────────────────────────────────────────────
 
   get gates(): GateInfo[] {
+    // Gates always render Gate 1..N left-to-right. When installed inverted, the
+    // firmware has already stored positions in logical order (Gate 1 = leftmost =
+    // farthest from home), and only the home pill moves to the right (CSS), so the
+    // on-screen order never needs reversing here.
     const order: number[] = [];
     for (let i = 1; i < this.numGates + 1; i++) order.push(i);
-    if (this.homeOnRight) order.reverse();
     return order.map(i => this.gateInfoFor(i));
   }
 

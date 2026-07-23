@@ -1,5 +1,5 @@
 // =============================================================================
-// LimitSwitchDistance.h — 2 endstops + rotation distance for stop positions
+// LimitSwitchDistance.h — 2 endstops + step counting for stop positions
 // Stepper motors only (requires step counting)
 // =============================================================================
 
@@ -17,9 +17,6 @@ public:
     bool updateHoming() override;
     bool updateMoving(int targetStop) override;
     long stepsForStop(int stopIndex) override;
-    bool isHomeTriggered() override;
-    bool isMaxTriggered() override;
-    bool isHomed() override;
 
 private:
     MotorDriver* _motor;
@@ -28,10 +25,6 @@ private:
 
     bool readHomeSwitch();
     bool readMaxSwitch();
-    void pollEndstopLog();
-
-    bool _lastHomeState;
-    bool _lastMaxState;
 };
 
 #endif // FEEDBACK_LIMIT_DISTANCE

@@ -283,7 +283,7 @@ interface DisplayMessage {
 
     <!-- Visualizer strip -->
     <div class="viz-section">
-      <app-manifold-visualizer [homeOnRight]="api.deviceInfo?.homeOnRight ?? false" [liveTravel]="false"></app-manifold-visualizer>
+      <app-manifold-visualizer [liveTravel]="false"></app-manifold-visualizer>
     </div>
 
     <!-- Messages -->
@@ -546,9 +546,9 @@ export class SetupComponent implements OnInit, AfterViewChecked {
       case 'save_config':        return 'Saving configuration';
       case 'delete_outlet':      return `Removing slot ${input['slot']}`;
       case 'save_stop':          return `Saving stop ${input['index']} position`;
-      case 'set_home_side':      return `Home side: ${input['home_on_right'] ? 'right' : 'left'}`;
-      case 'set_motor_direction':return `Motor direction: ${input['invert'] ? 'inverted' : 'normal'}`;
+      case 'set_home_side':      return `Homed on the ${input['homed_left'] ? 'left' : 'right'}`;
       case 'set_num_gates':      return `Gates: ${input['num_gates']}`;
+      case 'calibrate_gates':    return `Auto-detecting spacing for ${input['gate_count']} gates`;
       case 'configure_dust_collector': return `Configuring dust collector at ${input['ip']}`;
       case 'switch_dust_collector':    return `Switching dust collector ${input['on'] ? 'on' : 'off'}`;
       default:                   return name;

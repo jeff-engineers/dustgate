@@ -12,7 +12,7 @@ const STORAGE_KEY = 'dustgate.portSize';
  */
 const GATE_SPACING_MM: Record<PortSize, number> = {
   '2.5in': 82.9, // measured gate-to-gate on the reference build (span 84.9mm at 2 gates, 1mm offset/side)
-  '4in':   82.9, // placeholder — no 4" hardware to measure yet; update once available
+  '4in':   127,  // Rockler 10" manifold ÷ 2 gates = 5" = 127mm center-to-center (unconfirmed on hardware)
 };
 
 @Injectable({ providedIn: 'root' })

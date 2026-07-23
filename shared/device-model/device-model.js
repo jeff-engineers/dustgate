@@ -51,7 +51,10 @@ const MANIFOLD_PROFILES = {
   // it only affects steps/mm — the sweep must add HOME_BACKOFF_STEPS back to the
   // home→far step count before dividing by the 84.9mm span. (Pitch validated at 2 gates.)
   'rockler-2.5': { firstGateOffsetMm: 1,  gatePitchMm: 82.9, endMarginMm: 1 },
-  'rockler-4':   { firstGateOffsetMm: 3,  gatePitchMm: 120,  endMarginMm: 3 }, // PLACEHOLDER
+  // rockler-4 pitch = Rockler 10" manifold width ÷ 2 gates = 5" = 127mm center-to-
+  // center; same rack pitch + endstop margin as 2.5", so offset/end-margin = 1mm.
+  // Unconfirmed on hardware (4" slider not built yet); 4" path disabled in the UI.
+  'rockler-4':   { firstGateOffsetMm: 1,  gatePitchMm: 127,  endMarginMm: 1 },
 };
 
 /** (model, gateCount) → { spanMm, gatesMm[] }, or null for custom/unknown. */
@@ -78,7 +81,6 @@ function createDevice() {
     homed:          false,
     enabled:        true,
     manualOverride: false,
-    homeOnRight:    false,
     motorInverted:  false,
     numActiveStops: 0,        // runtime-active gate count (0 = unconfigured)
     idleTimeoutSec: IDLE_TIMEOUT_SEC_DEFAULT,
@@ -137,7 +139,6 @@ function infoView(d, apiKey, version) {
     apiKey,
     numStops:       d.numActiveStops,
     version,
-    homeOnRight:    d.homeOnRight,
     motorInverted:  d.motorInverted,
     idleTimeoutSec: d.idleTimeoutSec,
     manifoldModel:  d.manifoldModel,
@@ -242,7 +243,12 @@ function estop(d) { d.state = 'ERROR'; return { ok: true }; }
 /** Vestigial enable/disable (firmware's isEnabled() is hardcoded true). */
 function setEnabled(d, on) { d.enabled = !!on; return { ok: true }; }
 
-function setOrientation(d, homeOnRight) { d.homeOnRight = !!homeOnRight; return { ok: true }; }
+// Record which side the actuator homed to. Home is always the user's LEFT endstop
+// and gates are numbered 1..N left→right from it, so there's nothing to reorder in
+// the sim — the firmware handles the physical datum/direction. No-op for the model.
+function setHomedLeft(_d, _homedLeft) {
+  return { ok: true };
+}
 function setMotorInverted(d, invert)    { d.motorInverted = !!invert;    return { ok: true }; }
 
 function setNumGates(d, n) {
@@ -494,7 +500,7 @@ module.exports = {
   // motion
   beginHome, completeHome, beginMove, completeMove, beginJog, completeJog, estop, setEnabled,
   // calibration / config
-  saveStop, setOrientation, setMotorInverted, setNumGates, setIdleTimeout, clearCal,
+  saveStop, setHomedLeft, setMotorInverted, setNumGates, setIdleTimeout, clearCal,
   // dual-endstop calibration + port roles
   manifoldProfile, beginCalibrate, completeCalibrate, setPortRole,
   // outlets

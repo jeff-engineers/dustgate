@@ -19,7 +19,7 @@
 #include "../config.h"
 
 static const uint16_t CALIB_MAGIC   = 0xCA1B;
-static const uint8_t  CALIB_VERSION = 2;     // v2 adds stopRole[] + manifoldModel[]
+static const uint8_t  CALIB_VERSION = 4;     // v4: homeIsMaxEndstop (left = home datum)
 static const int      CALIB_ADDRESS = 0;    // EEPROM start address
 
 // Port roles — mirror shared/device-model PORT_ROLES. Stored per stop so a
@@ -41,6 +41,10 @@ struct CalibrationData {
     float    measuredStepsPerMM;        // derived from endstop-to-endstop travel
     uint8_t  stopRole[NUM_STOPS + 1];   // PortRole per stop (v2 layout)
     char     manifoldModel[16];         // "rockler-2.5" | "rockler-4" | "custom"
+    uint8_t  homeIsMaxEndstop;          // which endstop is the HOME datum (= the user's
+                                        //   LEFT). 0 = D10/PIN_ENDSTOP_HOME, 1 = D11/
+                                        //   PIN_ENDSTOP_MAX. Set during first-home setup
+                                        //   so the carriage always homes to the left end.
     uint16_t crc;
 };
 

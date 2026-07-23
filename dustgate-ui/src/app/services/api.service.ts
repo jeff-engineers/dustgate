@@ -80,8 +80,7 @@ export interface DeviceInfo {
   apiKey: string;
   numStops: number;
   version: string;
-  homeOnRight?: boolean;    // true = home endstop is on the right side of the manifold
-  motorInverted?: boolean;  // true = homing direction was flipped via setup agent
+  motorInverted?: boolean;  // true = homing direction was auto-flipped during homing
   idleTimeoutSec?: number;  // seconds of inactivity before the driver powers off; 0 = never
   manifoldModel?: string;   // manifold profile last calibrated against
   stepsPerMm?: number;      // calibrated steps/mm
@@ -305,12 +304,12 @@ export class ApiService {
   }
 
   /**
-   * Persist orientation preference (which side the home endstop is on).
-   * Stored in device NVS; returned in /api/info on next boot.
+   * Report which side the actuator homed to. The home datum is always the user's
+   * LEFT endstop; if it homed right, the firmware switches the datum to the other
+   * endstop so the next home parks on the left and gates read Gate 1..N left→right.
    */
-  setOrientation(homeOnRight: boolean) {
-    if (this.deviceInfo) this.deviceInfo.homeOnRight = homeOnRight;
-    return this.post('/api/config/orientation', { homeOnRight });
+  setHomedLeft(homedLeft: boolean) {
+    return this.post('/api/config/orientation', { homedLeft });
   }
 
   /**

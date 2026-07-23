@@ -19,10 +19,10 @@ import { DustCollectorConfiguratorComponent, DustCollectorCmd } from '../dust-co
 type Step =
   | { id: 'port-size' }
   | { id: 'gate-count' }
-  | { id: 'unit-system' }
   | { id: 'home-side' }
   | { id: 'homing' }
-  | { id: 'direction-confirm' }
+  | { id: 'spacing-method' }
+  | { id: 'calibrating' }
   | { id: 'position'; gate: number }
   | { id: 'equal-spacing-offer'; gate: number; spacing: number }
   | { id: 'outlet'; gate: number }
@@ -383,7 +383,7 @@ interface GateRecord {
 
     <!-- Visualizer strip -->
     <div class="viz-section">
-      <app-manifold-visualizer [homeOnRight]="api.deviceInfo?.homeOnRight ?? false" [liveTravel]="false"></app-manifold-visualizer>
+      <app-manifold-visualizer [liveTravel]="false"></app-manifold-visualizer>
     </div>
 
     <!-- Step content -->
@@ -393,8 +393,8 @@ interface GateRecord {
       <ng-container *ngIf="step.id === 'port-size'">
         <div class="step-title">Which size DustGate system are you using?</div>
         <div class="step-hint">
-          This just seeds a starting guess for gate spacing — jogging to the real
-          position always takes over once you have one saved.
+          This sets the manifold profile we use to auto-space your gates after
+          measuring the actuator's travel.
         </div>
 
         <div class="big-toggle">
@@ -432,56 +432,6 @@ interface GateRecord {
         </button>
       </ng-container>
 
-      <!-- ── Phase 1.2: Unit System ── -->
-      <ng-container *ngIf="step.id === 'unit-system'">
-        <div class="step-title">Measurement units</div>
-        <div class="step-hint">You can switch at any time during setup.</div>
-
-        <div class="big-toggle">
-          <button class="big-toggle-btn"
-                  [class.selected]="units.unit === 'mm'"
-                  (click)="units.set('mm')">
-            mm
-          </button>
-          <button class="big-toggle-btn"
-                  [class.selected]="units.unit === 'in'"
-                  (click)="units.set('in')">
-            inches
-          </button>
-        </div>
-
-        <button class="primary-btn" (click)="goToStep({ id: 'home-side' })">Next</button>
-      </ng-container>
-
-      <!-- ── Phase 1.3: Home Side ── -->
-      <ng-container *ngIf="step.id === 'home-side'">
-        <div class="step-title">Which side is the endstop on?</div>
-        <div class="step-hint">This is the end the actuator travels toward when homing.</div>
-
-        <div class="home-side-btns">
-          <button class="side-btn"
-                  [class.selected]="homeSideSelected === 'left'"
-                  (click)="homeSideSelected = 'left'">
-            <span class="side-diagram">◀ |</span>
-            <span>Left</span>
-          </button>
-          <button class="side-btn"
-                  [class.selected]="homeSideSelected === 'right'"
-                  (click)="homeSideSelected = 'right'">
-            <span class="side-diagram">| ▶</span>
-            <span>Right</span>
-          </button>
-        </div>
-
-        <div class="error-banner" *ngIf="errorMsg">⚠ {{ errorMsg }}</div>
-
-        <button class="primary-btn"
-                [disabled]="!homeSideSelected || busy"
-                (click)="confirmHomeSide()">
-          {{ busy ? 'Saving…' : 'Next' }}
-        </button>
-      </ng-container>
-
       <!-- ── Phase 2.1: Homing ── -->
       <ng-container *ngIf="step.id === 'homing'">
         <div class="step-title">Home the actuator</div>
@@ -502,27 +452,58 @@ interface GateRecord {
         </div>
       </ng-container>
 
-      <!-- ── Phase 2.2: Direction Confirm ── -->
-      <ng-container *ngIf="step.id === 'direction-confirm'">
-        <div class="step-title">Did it move the right way?</div>
+
+      <!-- ── Phase 2.3: Home Side (observed) ── -->
+      <ng-container *ngIf="step.id === 'home-side'">
+        <div class="step-title">Did it home to the left?</div>
+        <div class="step-hint">
+          You just watched the actuator travel to its endstop. Which side did it stop on?
+          We always use the left end as home — if it stopped on the right, we'll switch
+          to the other endstop so it homes left from now on.
+        </div>
+
+        <div class="home-side-btns">
+          <button class="side-btn"
+                  [class.selected]="homeSideSelected === 'left'"
+                  (click)="homeSideSelected = 'left'">
+            <span class="side-diagram">◀ |</span>
+            <span>Yes — left</span>
+          </button>
+          <button class="side-btn"
+                  [class.selected]="homeSideSelected === 'right'"
+                  (click)="homeSideSelected = 'right'">
+            <span class="side-diagram">| ▶</span>
+            <span>No — right</span>
+          </button>
+        </div>
+
+        <div class="error-banner" *ngIf="errorMsg">⚠ {{ errorMsg }}</div>
+
+        <button class="primary-btn"
+                [disabled]="!homeSideSelected || busy"
+                (click)="confirmHomeSide()">
+          {{ busy ? 'Saving…' : 'Next' }}
+        </button>
+      </ng-container>
+
+      <!-- ── Phase 2.5: Auto-detect in progress ── -->
+      <ng-container *ngIf="step.id === 'calibrating'">
+        <div class="step-title">Detecting gate spacing…</div>
 
         <div class="info-card">
-          <p>Did the actuator move <strong>toward</strong> the endstop, or <strong>away</strong> from it?</p>
+          <p>The actuator will home, drive to the far end, and measure the full travel.<br>
+             <strong>Keep hands clear of the manifold.</strong></p>
 
-          <div class="status-banner" *ngIf="isHoming">
-            <span class="spinner">⟳</span> Re-homing…
+          <div class="status-banner" *ngIf="isCalibrating">
+            <span class="spinner">⟳</span> Measuring travel and placing gates…
           </div>
 
           <div class="error-banner" *ngIf="errorMsg">⚠ {{ errorMsg }}</div>
 
-          <div class="dir-btns" *ngIf="!isHoming">
-            <button class="primary-btn" (click)="directionCorrect()">
-              ✓ Toward — correct
-            </button>
-            <button class="danger-btn" (click)="directionWrong()">
-              ✗ Away — wrong direction
-            </button>
-          </div>
+          <button class="primary-btn" *ngIf="!isCalibrating && errorMsg"
+                  (click)="startAutoCalibrate()">
+            Try again
+          </button>
         </div>
       </ng-container>
 
@@ -537,7 +518,7 @@ interface GateRecord {
         <app-gate-positioner
           [gateIndex]="step.gate"
           [initialMm]="gateStartMm"
-          [homeOnRight]="api.deviceInfo?.homeOnRight ?? false"
+         
           (saved)="onGateSaved($event)">
         </app-gate-positioner>
       </ng-container>
@@ -646,6 +627,9 @@ export class ManualSetupComponent implements OnInit, OnDestroy {
   private equalSpacingOffered = false;
   /** True while editing a single gate from the review screen (return to review on save). */
   editing = false;
+  /** True when gates were auto-placed by the reference sweep (skip per-gate jogging;
+   *  the outlet-config loop advances straight from one gate to the next). */
+  autoSpacing = false;
 
   // ── UI state ──────────────────────────────────────────────────────────────
   confirmingReset = false;
@@ -653,6 +637,8 @@ export class ManualSetupComponent implements OnInit, OnDestroy {
   saving   = false;
   errorMsg = '';
   isHoming = false;
+  /** True while the reference sweep is running (drives the 'calibrating' screen). */
+  isCalibrating = false;
 
   private subs = new Subscription();
 
@@ -670,13 +656,27 @@ export class ManualSetupComponent implements OnInit, OnDestroy {
         const wasHoming = this.isHoming;
         this.isHoming = s?.state === 'HOMING';
 
-        // Homing completed → advance from 'homing' to 'direction-confirm'
+        // Homing completed → ask the one orientation question. The firmware
+        // auto-detects a backwards motor itself (via which endstop fired), so
+        // there's no "which way did it go?" step — just confirm the home side.
         if (wasHoming && !this.isHoming && this.step.id === 'homing') {
-          this.goToStep({ id: 'direction-confirm' });
+          this.homeSideSelected = 'left';   // default; user confirms/flips next
+          this.goToStep({ id: 'home-side' });
         }
-        // Re-homing after direction invert → advance to positioning
-        if (wasHoming && !this.isHoming && this.step.id === 'direction-confirm') {
-          this.startPositioningPhase();
+
+        // Reference-sweep completion. The sweep runs HOMING → CALIBRATING → back
+        // home; the device settles at IDLE/AT_STOP, homed, with gate positions
+        // now populated (stops[1].mm non-null for a known manifold). ERROR means
+        // the far endstop wasn't found. Only act while on the 'calibrating' screen.
+        if (this.isCalibrating && this.step.id === 'calibrating' && s) {
+          if (s.state === 'ERROR') {
+            this.isCalibrating = false;
+            this.errorMsg = 'Auto-detect failed — the far endstop was not reached. Check the far endstop wiring, then try again.';
+          } else if (s.homed && (s.state === 'IDLE' || s.state === 'AT_STOP') &&
+                     s.stops?.[1]?.mm != null) {
+            this.isCalibrating = false;
+            this.onCalibrationComplete(s);
+          }
         }
         this.cd.markForCheck();
       })
@@ -747,7 +747,7 @@ export class ManualSetupComponent implements OnInit, OnDestroy {
     this.cd.markForCheck();
     try {
       await this.api.setNumGates(this.numGates);
-      this.goToStep({ id: 'unit-system' });
+      this.goToStep({ id: 'homing' });
     } catch {
       this.errorMsg = 'Could not set gate count. Check connection.';
     } finally {
@@ -762,14 +762,61 @@ export class ManualSetupComponent implements OnInit, OnDestroy {
     this.busy     = true;
     this.cd.markForCheck();
     try {
-      await this.api.setOrientation(this.homeSideSelected === 'right');
-      this.goToStep({ id: 'homing' });
+      // Tell the firmware which side it homed to. If it came up on the right, the
+      // firmware switches the datum to the other (left) endstop; the sweep that
+      // follows then homes there. Auto-detect is the only placement path.
+      await this.api.setHomedLeft(this.homeSideSelected === 'left');
+      await this.startAutoCalibrate();
     } catch {
       this.errorMsg = 'Could not save home side. Check connection.';
     } finally {
       this.busy = false;
       this.cd.markForCheck();
     }
+  }
+
+  // ── Gate spacing: auto-detect (reference sweep) vs manual jog ───────────────
+
+  /** Manifold profile id for the reference sweep, from the chosen port size. */
+  private modelId(): string {
+    return this.hardwareProfile.portSize === '4in' ? 'rockler-4' : 'rockler-2.5';
+  }
+
+  /** Auto-detect: run the reference sweep, which homes, drives to the far endstop,
+   *  measures the span and auto-places every gate by the manifold profile. */
+  async startAutoCalibrate() {
+    this.errorMsg     = '';
+    this.autoSpacing  = true;
+    this.isCalibrating = true;
+    this.goToStep({ id: 'calibrating' });
+    try {
+      // Real device: POST returns immediately (pending pattern) and the WS status
+      // stream drives completion. Demo: resolves after the sim, whose final status
+      // emission also triggers onCalibrationComplete via the subscription.
+      await this.api.calibrate(this.modelId(), this.numGates);
+    } catch {
+      this.isCalibrating = false;
+      this.errorMsg = 'Could not start auto-detect. Check connection.';
+    }
+    this.cd.markForCheck();
+  }
+
+  /** Manual: jog to each gate and save it, the original per-gate flow. */
+  chooseManualSpacing() {
+    this.autoSpacing = false;
+    this.startPositioningPhase();
+  }
+
+  /** Sweep finished: seed gate records from the device's auto-placed positions,
+   *  then jump into the outlet-config loop (no jogging needed in auto mode). */
+  private onCalibrationComplete(s: SystemStatus) {
+    this.gates = [];
+    for (let i = 1; i <= this.numGates; i++) {
+      const mm = parseFloat((s.stops?.[i]?.mm as string | undefined) ?? '0');
+      this.gates.push({ index: i, mm: isNaN(mm) ? 0 : mm, outletCmd: null });
+    }
+    this.editing = false;
+    this.goToStep({ id: 'outlet', gate: 1 });
   }
 
   // ── Phase 2 ───────────────────────────────────────────────────────────────
@@ -790,33 +837,13 @@ export class ManualSetupComponent implements OnInit, OnDestroy {
     this.cd.markForCheck();
   }
 
-  directionCorrect() {
-    this.startPositioningPhase();
-  }
-
-  async directionWrong() {
-    this.errorMsg = '';
-    this.busy = true;
-    this.cd.markForCheck();
-    try {
-      await this.api.setMotorDirection(true);
-      await this.api.home();
-      // WS will set isHoming → true; when it transitions back to false the
-      // subscription fires and calls startPositioningPhase().
-    } catch {
-      this.errorMsg = 'Could not invert direction. Check connection.';
-      this.busy = false;
-    }
-    this.busy = false;
-    this.cd.markForCheck();
-  }
-
   private startPositioningPhase() {
     this.gates               = [];
     this.gateStartMm         = 0;
     this.equalSpacingMm      = null;
     this.equalSpacingOffered = false;
     this.editing             = false;
+    this.autoSpacing         = false;
     this.goToStep({ id: 'position', gate: 1 });
   }
 
@@ -849,6 +876,13 @@ export class ManualSetupComponent implements OnInit, OnDestroy {
     const nextGate = outletStep.gate + 1;
     if (nextGate > this.numGates) {
       this.goToStep({ id: 'dust-collector' });
+      return;
+    }
+
+    // Auto-detect: gates are already placed, so just advance to the next gate's
+    // outlet — no jogging, no equal-spacing offer.
+    if (this.autoSpacing) {
+      this.goToStep({ id: 'outlet', gate: nextGate });
       return;
     }
 

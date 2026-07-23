@@ -184,7 +184,7 @@ import { UnitPreferenceService } from '../services/unit-preference.service';
 
         <!-- Toward home row (reversed order: largest first) -->
         <div class="jog-direction">
-          <span class="dir-label">{{ homeOnRight ? '→' : '←' }} toward home</span>
+          <span class="dir-label">← toward home</span>
           <div class="jog-btns">
             <button *ngFor="let s of towardHomeSteps"
                     class="jog-btn toward"
@@ -197,7 +197,7 @@ import { UnitPreferenceService } from '../services/unit-preference.service';
 
         <!-- Away from home row (smallest first) -->
         <div class="jog-direction">
-          <span class="dir-label">away from home {{ homeOnRight ? '←' : '→' }}</span>
+          <span class="dir-label">away from home →</span>
           <div class="jog-btns">
             <button *ngFor="let s of awayFromHomeSteps"
                     class="jog-btn"
@@ -237,9 +237,6 @@ export class GatePositionerComponent implements OnInit, OnChanges, OnDestroy {
    * The widget skips the "you must be at this position" warning.
    */
   @Input() prePositioned = false;
-
-  /** True when home is on the right side of the manifold — flips the jog arrow labels. */
-  @Input() homeOnRight = false;
 
   /** Emits the final mm position when the stop is successfully saved. */
   @Output() saved = new EventEmitter<number>();
@@ -305,15 +302,15 @@ export class GatePositionerComponent implements OnInit, OnChanges, OnDestroy {
     return stepMm > this.currentMm + 1e-6;
   }
 
-  // Jog buttons read as a number line: small steps near the center, big jumps
-  // at the outer edge, magnitude increasing in the row's direction. When home
-  // is on the right that number line mirrors, so both rows flip their order.
+  // Jog buttons read as a number line: small steps near the center, big jumps at
+  // the outer edge. Home is always on the left, so the toward-home row descends
+  // (largest first) and the away row ascends.
   get towardHomeSteps() {
-    return this.homeOnRight ? [...this.units.jogSteps] : [...this.units.jogSteps].reverse();
+    return [...this.units.jogSteps].reverse();
   }
 
   get awayFromHomeSteps() {
-    return this.homeOnRight ? [...this.units.jogSteps].reverse() : [...this.units.jogSteps];
+    return [...this.units.jogSteps];
   }
 
   async jog(mm: number) {

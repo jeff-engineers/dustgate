@@ -171,7 +171,7 @@ function handler(req, res) {
   }
 
   if (pathname === '/api/config/orientation' && req.method === 'POST') {
-    return body(req, data => { M.setOrientation(d, data.homeOnRight); json(res, { ok: true }); });
+    return body(req, data => { M.setHomedLeft(d, data.homedLeft); json(res, { ok: true }); });
   }
   if (pathname === '/api/config/motor' && req.method === 'POST') {
     return body(req, data => { M.setMotorInverted(d, data.invertDirection); json(res, { ok: true }); });

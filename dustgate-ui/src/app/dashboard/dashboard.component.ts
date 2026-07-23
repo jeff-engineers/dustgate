@@ -211,7 +211,7 @@ interface ToolButton {
           [dcOn]="dcOn"
           [dcConfigured]="dcConfigured"
           [interactive]="true"
-          [homeOnRight]="api.deviceInfo?.homeOnRight ?? false">
+         >
         </app-manifold-visualizer>
 
       </div>

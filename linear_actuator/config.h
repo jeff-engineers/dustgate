@@ -74,11 +74,15 @@
 #define MANIFOLD_2_5_FIRST_GATE_OFFSET_MM   1.0f
 #define MANIFOLD_2_5_GATE_PITCH_MM          82.9f
 #define MANIFOLD_2_5_END_MARGIN_MM          1.0f
-// Rockler Dust Right 4" — PLACEHOLDER (no 4" hardware to measure yet). The 4"
-// path is disabled in the UI; these values are unused until real measurements.
-#define MANIFOLD_4_FIRST_GATE_OFFSET_MM     3.0f
-#define MANIFOLD_4_GATE_PITCH_MM            120.0f
-#define MANIFOLD_4_END_MARGIN_MM            3.0f
+// Rockler Dust Right 4": pitch derived from Rockler's 10" manifold width ÷ 2 gates
+// = 5.000" = 127.0mm center-to-center (their 6.5"/2 = 3.25" ≈ measured 82.9mm on the
+// 2.5" build confirms the width-per-gate method). Same rack pitch + endstop margin as
+// the 2.5" slider, so offset/end-margin stay 1mm/side → span(N) = 2 + (N−1)·127. Only
+// pitch drives sweep placement; the span is measured live. 4" path still disabled in
+// the UI until the slider is built and one sweep confirms these numbers.
+#define MANIFOLD_4_FIRST_GATE_OFFSET_MM     1.0f
+#define MANIFOLD_4_GATE_PITCH_MM            127.0f
+#define MANIFOLD_4_END_MARGIN_MM            1.0f
 
 // steps/mm sanity bound: reject a measured sweep whose derived steps/mm deviates
 // from the nominal geometric value by more than this — signals a wrong manifold
@@ -184,13 +188,11 @@ extern int g_homeDirection;        // defined in linear_actuator.ino
 // TMC2209 UART: wire Feather TX → 1kΩ → board UART pin; Feather RX → same node
 // Serial1 is automatically on the RX/TX header pins — no pin defines needed
 
-// -- Endstop pins (FEEDBACK_LIMIT_DISTANCE and FEEDBACK_LIMIT_DETENT) --
+// -- Endstop pins (FEEDBACK_LIMIT_DISTANCE) --
+// Both are required. Which one is "home" is chosen at setup (the user's LEFT);
+// see g_homeIsMaxEndstop in linear_actuator.ino.
 #define PIN_ENDSTOP_HOME   10   // D10 — NC switch, pulls LOW when triggered
 #define PIN_ENDSTOP_MAX    11   // D11 — NC switch, pulls LOW when triggered
-
-// -- Detent switch pins (FEEDBACK_LIMIT_DETENT only) --
-// Use resistor ladder on A1 (single analog pin) — see WIRING.md
-#define PIN_DETENT_ANALOG   A1  // Resistor ladder for up to 7 detent switches
 
 // -- Status LED --
 #define PIN_LED            13   // D13 — onboard LED on ESP32-S2 Feather

@@ -113,31 +113,6 @@ void StepperTMC2209Driver::startHoming() {
 
 void StepperTMC2209Driver::startHomingWithParams(float speedStepsPerSec, uint8_t stallThreshold) {
     _homing = true;
-
-#ifdef FEEDBACK_SENSORLESS
-    // Enable StallGuard for sensorless detection
-    // Direct GCONF write — avoids read-modify-write silently restoring I_scale_analog=1.
-    // Required bits for homing: en_spreadCycle=1, pdn_disable=1, mstep_reg_select=1, multistep_filt=1
-    // I_scale_analog=0 forces UART current control (ignores onboard pot if present)
-    _driver.GCONF(0x1C4); // 0b1_1100_0100: I_scale=0, Rsense=ext, SpreadCycle, PDN_uart, mstep_reg, multistep_filt
-    _driver.SGTHRS(stallThreshold);
-    _driver.TCOOLTHRS(0xFFFFF); // maximum window — StallGuard active at all motor speeds
-
-    // Readback: confirm writes actually landed
-    uint8_t  sgthrs_rb  = (uint8_t)_driver.SGTHRS();
-    uint32_t gconf_rb   = _driver.GCONF();
-    bool     spread_rb  = (gconf_rb >> 2) & 0x01;
-    bool     pdn_rb     = (gconf_rb >> 6) & 0x01;
-    DEBUG_PRINT(F("  TCOOLTHRS: 0xFFFFF (max)  SGTHRS written: ")); Serial.println(stallThreshold);
-    DEBUG_PRINT(F("  SGTHRS readback: ")); Serial.print(sgthrs_rb);
-    Serial.println((sgthrs_rb == stallThreshold) ? F(" OK") : F(" MISMATCH — write failed!"));
-    bool     iscale_rb  = (gconf_rb >> 0) & 0x01;
-    DEBUG_PRINT(F("  GCONF raw: 0x")); Serial.println(gconf_rb, HEX);
-    DEBUG_PRINT(F("  GCONF.I_scale_analog: ")); Serial.println(iscale_rb  ? F("1 (USING POT — overrides rms_current, StallGuard likely broken!)") : F("0 (UART current — good)"));
-    DEBUG_PRINT(F("  GCONF.en_spreadCycle: ")); Serial.println(spread_rb  ? F("1 (SpreadCycle ON)") : F("0 (StealthChop — StallGuard INACTIVE)"));
-    DEBUG_PRINT(F("  GCONF.pdn_disable:    ")); Serial.println(pdn_rb     ? F("1 (UART active — good)") : F("0 (PDN pin controls mode — UART writes to GCONF may not stick)"));
-#endif
-
     _stepper.setSpeed(speedStepsPerSec * HOME_DIRECTION);
     DEBUG_PRINT(F("Homing started — speed: ")); Serial.print(speedStepsPerSec, 0);
     DEBUG_PRINT(F(" steps/sec, SGTHRS: ")); Serial.println(stallThreshold);
@@ -145,13 +120,6 @@ void StepperTMC2209Driver::startHomingWithParams(float speedStepsPerSec, uint8_t
 
 void StepperTMC2209Driver::moveTo(long targetSteps) {
     _homing = false;
-
-#ifdef FEEDBACK_SENSORLESS
-    // Switch back to StealthChop for quiet running
-    _driver.en_spreadCycle(false);
-    _driver.TCOOLTHRS(0); // Disable StallGuard during normal motion
-#endif
-
     _stepper.moveTo(targetSteps);
     DEBUG_PRINT(F("Moving to step: "));
     DEBUG_PRINTLN(targetSteps);
@@ -203,20 +171,6 @@ void StepperTMC2209Driver::setHome() {
 void StepperTMC2209Driver::enable(bool on) {
     _enabled = on;
     digitalWrite(PIN_TMC_EN, on ? LOW : HIGH); // Active LOW
-}
-
-uint32_t StepperTMC2209Driver::getDrvStatus() {
-    return _driver.DRV_STATUS();
-}
-
-uint32_t StepperTMC2209Driver::getTStep() {
-    return _driver.TSTEP();
-}
-
-bool StepperTMC2209Driver::isStalled() {
-    // DIAG is push-pull active HIGH: TMC2209 drives LOW normally, HIGH on stall.
-    // INPUT_PULLUP is harmless (push-pull overrides it) and keeps pin defined if disconnected.
-    return digitalRead(PIN_TMC_DIAG) == HIGH;
 }
 
 void StepperTMC2209Driver::printDriverRegs() {
@@ -271,22 +225,6 @@ void StepperTMC2209Driver::printDriverRegs() {
 
     Serial.println(F("============================="));
     Serial.println(F(""));
-}
-
-void StepperTMC2209Driver::driveForwardWithStallGuard(float speedStepsPerSec) {
-    _driver.en_spreadCycle(true);
-    _driver.SGTHRS(TMC2209_STALL_THRESHOLD);
-    _driver.TCOOLTHRS(0xFFFFF);
-    _homing = true; // use runSpeed() path in update()
-    _stepper.setSpeed(speedStepsPerSec); // positive = forward
-}
-
-void StepperTMC2209Driver::driveReverseWithStallGuard(float speedStepsPerSec) {
-    _driver.en_spreadCycle(true);
-    _driver.SGTHRS(TMC2209_STALL_THRESHOLD);
-    _driver.TCOOLTHRS(0xFFFFF);
-    _homing = true;
-    _stepper.setSpeed(-speedStepsPerSec); // negative = reverse
 }
 
 #endif // MOTOR_STEPPER_TMC2209

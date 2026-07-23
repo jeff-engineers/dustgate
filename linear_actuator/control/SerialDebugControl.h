@@ -1,6 +1,6 @@
 // =============================================================================
 // SerialDebugControl.h — Serial Monitor control for development/testing
-// Use instead of the physical rotary + toggle switches while prototyping.
+// Drive the actuator by typing commands instead of using the HTTP API / outlets.
 //
 // Open Arduino IDE Serial Monitor at SERIAL_BAUD (115200), set line ending to
 // "Newline" (bottom-right dropdown), then type commands and press Enter/Send.
@@ -56,6 +56,10 @@ public:
     // dual-endstop reference sweep (same path as POST /api/calibrate).
     bool consumeCalibrateRequest(char* outModel, size_t modelLen, int& outGates);
 
+    // Returns true once when user types 'homeside left|right'. outHomedLeft is the
+    // reported side the carriage homed to (same path as POST /api/config/orientation).
+    bool consumeHomeSideRequest(bool& outHomedLeft);
+
     // Live-tuning values. Read these each homing cycle.
     // -1 means "use config.h default".
     int   stallThreshold() const { return _stallThreshold; }
@@ -73,6 +77,8 @@ private:
     bool  _calPending;
     char  _calModel[16];
     int   _calGates;
+    bool  _homeSidePending;
+    bool  _homedLeftValue;
     float _jogMM;
 
     String _inputBuffer;

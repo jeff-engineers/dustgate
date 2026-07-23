@@ -130,25 +130,26 @@ const TOOLS = [
     }
   },
   {
-    name: 'set_home_side',
-    description: 'Record which physical side the home endstop is on. This controls how the visualizer renders the gate layout. Call this once at the start of setup after asking the user.',
+    name: 'calibrate_gates',
+    description: 'Detect gate spacing with a reference sweep: the actuator homes, drives to the far endstop, measures the total travel, and auto-places all gates by the manifold profile. This is how gates are placed — call it once, after homing works and the mounting orientation is set. Takes a few seconds; the gate positions and count are updated when it finishes.',
     input_schema: {
       type: 'object',
       properties: {
-        home_on_right: { type: 'boolean', description: 'true if the home endstop / stop-0 position is on the RIGHT side of the manifold when viewed from the front; false if it is on the LEFT.' }
+        model: { type: 'string', description: "Manifold profile id from the chosen port size: 'rockler-2.5' (2.5\") or 'rockler-4' (4\")." },
+        gate_count: { type: 'integer', description: 'Number of gates to place (1–16), matching what was passed to set_num_gates.' }
       },
-      required: ['home_on_right']
+      required: ['model', 'gate_count']
     }
   },
   {
-    name: 'set_motor_direction',
-    description: 'Flip the motor homing direction. Call this if the actuator moves AWAY from the endstop when homing instead of TOWARD it — that means the direction is backwards and needs to be inverted.',
+    name: 'set_home_side',
+    description: 'Report which side the actuator homed to, based on what the user just watched. The home datum is always kept on the user\'s LEFT: if it homed to the right, the firmware moves the datum to the other endstop so the next home (the calibration sweep) parks on the left. Gates always read Gate 1..N left-to-right. Call this once, right after homing, when the user answers whether it homed to the left. (You do NOT need to check motor direction — the firmware auto-detects a backwards motor from which endstop it reached and corrects it during homing.)',
     input_schema: {
       type: 'object',
       properties: {
-        invert: { type: 'boolean', description: 'true to invert the homing direction, false to restore normal direction.' }
+        homed_left: { type: 'boolean', description: 'true if the actuator homed to the user\'s LEFT; false if it homed to the RIGHT.' }
       },
-      required: ['invert']
+      required: ['homed_left']
     }
   },
   {
@@ -211,23 +212,18 @@ The system has a rack-and-pinion linear actuator that moves between numbered sto
 
 Your job is to walk the user through setup conversationally:
 1. Always ask the user before moving the actuator.
-2. Ask which DustGate hardware size they have — 2.5" (standard) or 4" — and call set_port_size. On the reference hardware (both sizes, until 4" is measured separately), the endstop sits about 1mm from the first gate, and adjacent gates beyond that are spaced about 82.9mm apart; treat these as rough starting expectations only, not facts to enforce — the actual jogged position always wins.
+2. Ask which DustGate hardware size they have — 2.5" (standard) or 4" — and call set_port_size. This picks the manifold profile the reference sweep uses to place gates (adjacent gates are about 82.9mm / 3.26" apart on the reference hardware); the sweep measures the real travel, so you don't need to enforce any exact number with the user.
 3. Ask the user how many blast gates they have and call set_num_gates.
-4. Ask the user if the home endstop is on the left or right side of the manifold and call set_home_side.
-5. Home the actuator so you have a known position.  If the endstop is already triggered, ask them if it's alright to move it away from the endstop a bit to confirm it works.
-6. If the actuator moved AWAY from the endstop, call set_motor_direction with invert=true and home again.
-7. Confirm that the homing went in the correct direction.
-8. Ask the user to measure or estimate the distance to the next gate, offering your own starting estimate so they have something to react to rather than guessing cold: about 1mm for the very first gate (endstop to gate 1), and about 82.9mm for gate-to-gate distances after that. Let them know they can reply in metric, imperial, casual terms like "a little more" or "about 4 inches", or just confirm your estimate. When the user provides any distance or movement instruction — even an approximate one, or a simple "yes" to your estimate — treat that as permission to move immediately. Do NOT ask a separate "are you ready?" or "shall I move?" question.
-9. Move the actuator to the desired position.
-10. Confirm the actuator is aligned with the gate. Repeat jogging until the user confirms alignment, then call save_stop.
+4. Home the actuator so you have a known position. If an endstop is already triggered, ask if it's alright to move away from it a bit first to confirm homing works. The firmware auto-detects a backwards motor on its own (from which endstop it reaches), so you don't need to ask about or set motor direction — just let it home.
+5. Once it's homed, ask whether the actuator ended up on the user's LEFT or RIGHT, and call set_home_side with homed_left=true (left) or homed_left=false (right). The home datum is always kept on the left, so if it homed right the firmware moves the datum to the other endstop and the next home parks left. Gates always read Gate 1..N left-to-right.
+6. Place the gates automatically: tell the user you'll measure the spacing, then call calibrate_gates with the manifold model from step 2 (2.5" → 'rockler-2.5', 4" → 'rockler-4') and the gate count from step 3. This one sweep homes, drives to the far end, measures the travel, and places ALL gates at once. If it fails, the far endstop wiring is the thing to check — help them verify it, then try calibrate_gates again. Once it succeeds, go straight to naming/outlets for each gate (step 11).
 11. Before moving on to the next gate, finish configuring THIS gate. Resolve the outlet question first so that, when you ask the user to name the gate, you can point to the specific outlet (by hostname/IP) they're naming:
     a. Ask whether this gate's tool has a Shelly smart plug. If not, skip to (e) and just ask for the gate/tool name directly.
     b. If yes, call discover_outlets first (don't ask for an IP yet) and check the results against what the user describes (e.g. "the one near the bandsaw"). Present any matches by their hostname and IP (mention the Shelly-app name too only if one happens to be set, as extra context) and confirm with the user which one is theirs, rather than assuming. Never suggest or accept an IP already configured for a different gate earlier in this session (track which IPs you've already called configure_outlet with) — if the user picks one anyway, point out it's already assigned to that other gate and ask them to choose a different outlet or confirm they want to move it off the other gate first.
     c. If discover_outlets finds nothing, or none of the results match, ask the user for the outlet's IP address directly and call ping_outlet to confirm it's reachable. You may need to direct them to Shelly's website for help finding the IP. Either way (scan or manual ping), the response tells you the generation and, if the outlet was named in the Shelly app, that name too — don't ask the user which generation they have.
     d. Once the outlet is confirmed reachable, ask the user what they want to call this tool/gate, referring to the outlet by its hostname/IP so they know which one they're naming. Always let them choose the name themselves — do NOT propose the Shelly-app device name as the name (it's often unset or stale). Accept whatever name they give without offering a list. Then help them pick a detection threshold: ask them to turn the tool on at its lowest setting with no load (e.g. no material feeding, blade/bit spinning free), then ping again to capture that running wattage. Suggest a threshold about 10% below that reading, rounded to a clean number (nearest 10W normally, nearest 50W for readings above a couple hundred watts) — this gives margin below the running draw while safely clearing standby power. Confirm the suggestion with the user (they can override it) before calling configure_outlet with the generation and host (if the outlet came from discover_outlets) it returned.
     e. If the tool has no smart plug, just ask for and note the gate's name — configure_outlet is only needed when there's a plug to assign.
-12. Only once this gate is fully positioned AND named/configured (outlet or not) should you move on: repeat steps 8–11 for the next gate, one gate at a time, until every gate is done. Typically, once a distance is known between two gates, the rest will be the same — but still confirm alignment and finish naming/outlet setup for each gate before starting the next one.
-13. If the user states that the distance moved is more/less than anticipated, try to recalculate the movement distance per step based on their feedback.
+12. Configure every gate, one at a time: the positions are already set by the sweep, so just repeat step 11 (naming + outlet) for each gate until every gate is done.
 16. Once all gates are configured, ask if their dust collector is also on a Shelly smart plug, separate from any tool's gate — DustGate can switch it on and off automatically alongside the gates. This step is optional; skip it if they say no or don't have one. There's no wattage threshold to pick here since it's just a remote switch. If they want it:
     a. Call discover_outlets first and check the results against what the user describes, rather than asking for an IP up front. If nothing matches (or nothing is found), ask for the IP address directly and call ping_outlet to confirm it's reachable — either way, the result tells you the generation, so don't ask the user which one they have.
     b. Once reachable, call configure_dust_collector with the generation (and host, if it came from discover_outlets) that was returned.
@@ -661,15 +657,19 @@ export class ClaudeService {
         return this.api.saveStop(this.assertIntInRange(input['index'], 1, 16, 'index'));
 
       case 'set_home_side':
-        if (typeof input['home_on_right'] !== 'boolean') throw new Error('home_on_right must be a boolean');
-        return this.api.setOrientation(input['home_on_right']);
-
-      case 'set_motor_direction':
-        if (typeof input['invert'] !== 'boolean') throw new Error('invert must be a boolean');
-        return this.api.setMotorDirection(input['invert']);
+        if (typeof input['homed_left'] !== 'boolean') throw new Error('homed_left must be a boolean');
+        return this.api.setHomedLeft(input['homed_left']);
 
       case 'set_num_gates':
         return this.api.setNumGates(this.assertIntInRange(input['num_gates'], 1, 16, 'num_gates'));
+
+      case 'calibrate_gates': {
+        const model = input['model'];
+        if (model !== 'rockler-2.5' && model !== 'rockler-4') {
+          throw new Error("model must be 'rockler-2.5' or 'rockler-4'");
+        }
+        return this.api.calibrate(model, this.assertIntInRange(input['gate_count'], 1, 16, 'gate_count'));
+      }
 
       case 'configure_dust_collector':
         return this.api.configureDustCollector(

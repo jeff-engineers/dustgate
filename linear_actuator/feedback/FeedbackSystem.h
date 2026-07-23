@@ -25,15 +25,5 @@ public:
     virtual bool updateMoving(int targetStop) = 0;
 
     // Compute the step target for a given stop index.
-    // For detent/servo/DC modes this may return 0 (position is handled internally).
     virtual long stepsForStop(int stopIndex) = 0;
-
-    // True if the home endstop is currently triggered.
-    virtual bool isHomeTriggered() = 0;
-
-    // True if the max endstop is currently triggered.
-    virtual bool isMaxTriggered() = 0;
-
-    // True if homing sequence is complete.
-    virtual bool isHomed() = 0;
 };

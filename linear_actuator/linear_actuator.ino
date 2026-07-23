@@ -24,7 +24,7 @@
 
 // WiFi provisioning — included for any mode that needs network access.
 // Handles first-boot captive portal and subsequent NVS credential lookup.
-#if defined(CONTROL_WIFI) || defined(CONTROL_SMART_OUTLET) || defined(ENABLE_HTTP_API)
+#if defined(CONTROL_SMART_OUTLET) || defined(ENABLE_HTTP_API)
   #include "utils/WiFiProvisioner.h"
 #endif
 
@@ -52,6 +52,12 @@ int g_numActiveStops = 0;   // 0 = unconfigured
 // recompiling.  All existing code references HOME_DIRECTION which now expands to this.
 int g_homeDirection = HOME_DIRECTION_DEFAULT;
 
+// Auto motor-direction detect: set true once per homing sequence after we've
+// already flipped direction in response to the FAR endstop tripping, so a second
+// far-hit is treated as a real fault instead of an infinite flip loop. Reset when
+// a fresh homing sequence begins (see loop() entry detection).
+bool g_homeDirCorrected = false;
+
 bool g_notHomedWarnShown = false; // suppress repeated "not homed" warnings
 
 // Dual-endstop calibration + port roles (declared extern in MotionMath.h).
@@ -59,11 +65,17 @@ uint8_t g_stopRoles[NUM_STOPS + 1];
 float   g_measuredStepsPerMM = 0.0f;   // 0 = not calibrated → status reports nominal
 long    g_measuredSpanSteps  = 0;      // 0 = not calibrated
 char    g_manifoldModel[16]  = "custom";
+bool    g_homeIsMaxEndstop   = false;  // which endstop is the HOME datum = the user's
+                                       // LEFT. false = D10/PIN_ENDSTOP_HOME, true = D11/
+                                       // PIN_ENDSTOP_MAX. Chosen during first-home setup
+                                       // so the carriage ALWAYS homes to the user's left;
+                                       // gates are then numbered 1..N left→right from it.
 
 // Default all roles: home at 0, unassigned elsewhere.
 static void resetStopRoles() {
     for (int i = 0; i <= NUM_STOPS; i++) g_stopRoles[i] = (i == 0) ? ROLE_HOME : ROLE_UNASSIGNED;
 }
+
 
 void loadCalibration() {
     CalibrationData cal;
@@ -81,6 +93,7 @@ void loadCalibration() {
         strlcpy(g_manifoldModel, cal.manifoldModel, sizeof(g_manifoldModel));
         g_measuredStepsPerMM = cal.measuredStepsPerMM;
         g_measuredSpanSteps  = (long)(cal.maxTravelMM * cal.measuredStepsPerMM);
+        g_homeIsMaxEndstop   = (cal.homeIsMaxEndstop != 0);
         DEBUG_PRINTLN(F("Loaded calibration from EEPROM."));
         CalibrationStore::print(cal);
     } else {
@@ -92,6 +105,8 @@ void loadCalibration() {
         strlcpy(g_manifoldModel, "custom", sizeof(g_manifoldModel));
         g_measuredStepsPerMM = 0.0f;
         g_measuredSpanSteps  = 0;
+        // Keep g_homeIsMaxEndstop as-is: the datum side is chosen during first-home
+        // setup and persisted independently below.
         DEBUG_PRINTLN(F("No calibration data — awaiting setup wizard."));
     }
 }
@@ -162,6 +177,8 @@ static void finishCalibrationSweep(long farTriggerSteps) {
             g_stopPositionsMM[i] = gate1Mm + (float)(i - 1) * pitchMm;
         }
         g_numTrainedStops = g_calGateCount;
+        // Gates are numbered from the home datum outward. Because home is always the
+        // user's LEFT endstop, Gate 1 is always the leftmost gate — no reversal.
         DEBUG_PRINT(F("[CAL] placed gates: gate1=")); Serial.print(gate1Mm, 2);
         DEBUG_PRINT(F("mm pitch=")); Serial.print(pitchMm, 1);
         DEBUG_PRINT(F("mm span=")); Serial.print((float)triggerSpanSteps / spm, 1);
@@ -181,8 +198,50 @@ static void finishCalibrationSweep(long farTriggerSteps) {
     for (int i = 0; i <= NUM_STOPS; i++) cal.stopMM[i]   = g_stopPositionsMM[i];
     for (int i = 0; i <= NUM_STOPS; i++) cal.stopRole[i] = g_stopRoles[i];
     cal.stopMM[0] = 0.0f;
+    cal.homeIsMaxEndstop = g_homeIsMaxEndstop ? 1 : 0;
     strlcpy(cal.manifoldModel, g_calModel, sizeof(cal.manifoldModel));
     CalibrationStore::save(cal);
+}
+
+// Persist the runtime home direction to NVS. Uses the same "api_cfg" namespace/key
+// that setup() and HttpApiServer read, so an auto-flip survives reboot.
+static void persistHomeDirection() {
+    Preferences prefs;
+    prefs.begin("api_cfg", false);
+    prefs.putInt("home_dir", g_homeDirection);
+    prefs.end();
+}
+
+// Persist g_homeIsMaxEndstop (which endstop is the home datum) into CalibrationData,
+// creating a minimal record if none exists yet so the choice survives a reboot even
+// before calibration has run.
+static void persistHomeDatum() {
+    CalibrationData cal;
+    if (!CalibrationStore::load(cal)) {
+        cal.magic              = CALIB_MAGIC;
+        cal.version            = CALIB_VERSION;
+        cal.numStops           = (uint8_t)g_numActiveStops;
+        cal.maxTravelMM        = 0.0f;
+        cal.measuredStepsPerMM = stepsPerMM();
+        memset(cal.stopMM, 0, sizeof(cal.stopMM));
+        for (int i = 0; i <= NUM_STOPS; i++) cal.stopRole[i] = (i == 0) ? ROLE_HOME : ROLE_UNASSIGNED;
+        strlcpy(cal.manifoldModel, g_manifoldModel, sizeof(cal.manifoldModel));
+        for (int i = 0; i <= NUM_STOPS; i++) cal.stopMM[i] = g_stopPositionsMM[i];
+        cal.stopMM[0] = 0.0f;
+    }
+    cal.homeIsMaxEndstop = g_homeIsMaxEndstop ? 1 : 0;
+    CalibrationStore::save(cal);
+}
+
+// Physical read of the endstop currently serving as the HOME datum (the user's left).
+static inline bool datumSwitchTriggered() {
+    return g_homeIsMaxEndstop ? (digitalRead(PIN_ENDSTOP_MAX)  == HIGH)
+                              : (digitalRead(PIN_ENDSTOP_HOME) == HIGH);
+}
+// Physical read of the far endstop (opposite the datum).
+static inline bool farSwitchTriggered() {
+    return g_homeIsMaxEndstop ? (digitalRead(PIN_ENDSTOP_HOME) == HIGH)
+                              : (digitalRead(PIN_ENDSTOP_MAX)  == HIGH);
 }
 
 // -- Motor driver (TMC2209) --
@@ -264,6 +323,7 @@ bool          g_driverAsleep   = false;
 // Forward declarations
 void issueMove(int stop);
 void startHoming();
+void setHomedLeft(bool homedLeft);
 
 // =============================================================================
 // setup()
@@ -286,7 +346,7 @@ void setup() {
     // Otherwise stored NVS credentials are tried; if none exist or connection
     // fails, a captive portal AP ("DustGate-Setup") is started and this call
     // blocks until the user provides credentials (then reboots).
-#if defined(CONTROL_WIFI) || defined(CONTROL_SMART_OUTLET) || defined(ENABLE_HTTP_API)
+#if defined(CONTROL_SMART_OUTLET) || defined(ENABLE_HTTP_API)
     WiFiProvisioner::begin();
 #endif
 
@@ -360,12 +420,16 @@ void loop() {
     // home switch on purpose; the calibration sweep manages the far switch itself.
     if (motor.isMoving() && currentState != STATE_HOMING && currentState != STATE_CALIBRATING) {
         long dtg = motor.distanceToGo();               // signed steps to target
-        bool towardFar  = (dtg * (long)(-HOME_DIRECTION)) > 0; // away from home
+        // HOME_DIRECTION points toward the datum, so +HOME_DIRECTION*dtg > 0 = toward
+        // the datum, -HOME_DIRECTION*dtg > 0 = toward the far end. The switch on each
+        // side is datum/far-relative (not fixed D10/D11), so this stays correct
+        // whichever endstop is the home datum.
+        bool towardFar  = (dtg * (long)(-HOME_DIRECTION)) > 0; // away from datum
         bool towardHome = (dtg * (long)( HOME_DIRECTION)) > 0;
-        if ((digitalRead(PIN_ENDSTOP_MAX) == HIGH) && towardFar) {
+        if (farSwitchTriggered() && towardFar) {
             motor.stop();
             DEBUG_PRINTLN(F("[SAFETY] Far endstop triggered — halted travel toward far end."));
-        } else if ((digitalRead(PIN_ENDSTOP_HOME) == HIGH) && towardHome) {
+        } else if (datumSwitchTriggered() && towardHome) {
             motor.stop();
             DEBUG_PRINTLN(F("[SAFETY] Home endstop triggered — halted travel toward home."));
         }
@@ -484,6 +548,17 @@ void loop() {
                 DEBUG_PRINTLN(F("[CAL] Homing, then sweeping to far endstop..."));
                 startHoming();
                 currentState = STATE_HOMING;
+            }
+        }
+    }
+
+    {
+        bool homedLeft = false;
+        if (_SC.consumeHomeSideRequest(homedLeft)) {
+            if (g_hardwareFault) {
+                DEBUG_PRINTLN(F("[CFG] Hardware fault — fix wiring and reset first."));
+            } else {
+                setHomedLeft(homedLeft);
             }
         }
     }
@@ -679,6 +754,7 @@ void loop() {
                     // v2 fields: default roles (home at 0, unassigned elsewhere),
                     // custom manifold — so a save path never persists garbage.
                     for (int i = 0; i <= NUM_STOPS; i++) cal.stopRole[i] = (i == 0) ? ROLE_HOME : ROLE_UNASSIGNED;
+                    cal.homeIsMaxEndstop = g_homeIsMaxEndstop ? 1 : 0;
                     strlcpy(cal.manifoldModel, "custom", sizeof(cal.manifoldModel));
                 }
                 cal.stopMM[stopIdx] = currentMM;
@@ -784,6 +860,15 @@ void loop() {
                 DEBUG_PRINT(F("[API] Port role: gate ")); DEBUG_PRINT(roleIdx);
                 DEBUG_PRINT(F(" = ")); DEBUG_PRINTLN(roleVal);
             }
+        }
+    }
+
+    // Home-side answer (POST /api/config/orientation {homedLeft}). Ensures the home
+    // datum is the user's LEFT endstop, re-homing if the carriage came up on the right.
+    {
+        bool homedLeft = true;
+        if (apiServer.consumeOrientationRequest(homedLeft)) {
+            setHomedLeft(homedLeft);
         }
     }
 
@@ -983,6 +1068,15 @@ void loop() {
     }
 #endif // ENABLE_HTTP_API
 
+    // Detect the start of a fresh homing sequence so auto motor-direction detect
+    // gets one flip per sequence (a re-home triggered by the flip itself stays in
+    // STATE_HOMING and must not reset the guard).
+    {
+        static State prevState = STATE_STARTUP;
+        if (currentState == STATE_HOMING && prevState != STATE_HOMING) g_homeDirCorrected = false;
+        prevState = currentState;
+    }
+
     switch (currentState) {
 
         case STATE_STARTUP:
@@ -991,6 +1085,26 @@ void loop() {
         // ------------------------------------------------------------------
         case STATE_HOMING:
             digitalWrite(PIN_LED, (millis() / 250) % 2);
+
+            // Auto motor-direction detect: homing must drive toward the HOME DATUM.
+            // If the FAR endstop trips instead, the motor is wired backwards — flip
+            // the direction, persist, and re-home once. A second far-hit is a real
+            // fault (wiring), so error out rather than loop.
+            if (farSwitchTriggered() && !datumSwitchTriggered()) {
+                motor.stop();
+                if (!g_homeDirCorrected) {
+                    g_homeDirCorrected = true;
+                    g_homeDirection = -g_homeDirection;
+                    persistHomeDirection();
+                    DEBUG_PRINTLN(F("[HOME] Far endstop hit while homing — motor was backwards. Flipped direction, re-homing."));
+                    startHoming();
+                } else {
+                    DEBUG_PRINTLN(F("[HOME] Far endstop hit again after flip — check endstop/motor wiring."));
+                    currentState = STATE_ERROR;
+                }
+                break;
+            }
+
             if (feedback.updateHoming()) {
                 currentStop = 0;
                 digitalWrite(PIN_LED, LOW);
@@ -1033,7 +1147,7 @@ void loop() {
             // farPos and mis-place every gate. Loop runs fast, so the confirmation
             // delay is negligible against the sweep travel.
             static const uint8_t CAL_FAR_CONFIRM_LOOPS = 3;
-            if (digitalRead(PIN_ENDSTOP_MAX) == HIGH) {
+            if (farSwitchTriggered()) {   // far end = opposite the home datum
                 if (farHighStreak < 255) farHighStreak++;
             } else {
                 farHighStreak = 0;
@@ -1231,4 +1345,24 @@ void issueMove(int stop) {
     DEBUG_PRINTLN(stop);
     motor.moveTo(feedback.stepsForStop(stop));
     currentState = STATE_MOVING;
+}
+
+// Record which side the carriage homed to (the wizard's single "did it home to the
+// left?" question). We ALWAYS want the home datum on the user's left:
+//   homedLeft = true  → the current datum endstop is already the left one. Keep it.
+//   homedLeft = false → it homed to the RIGHT, so make the OTHER endstop the datum
+//                       (it's the left one) and flip the motor direction to reach it.
+// The next home (the calibration sweep, or a plain home) then parks on the left, and
+// gates (1..N from the datum) always read left→right. No re-home is issued here so it
+// can't race the calibrate request the wizard sends right after.
+void setHomedLeft(bool homedLeft) {
+    if (!homedLeft) {
+        g_homeIsMaxEndstop = !g_homeIsMaxEndstop;
+        g_homeDirection    = -g_homeDirection;
+        persistHomeDirection();
+        DEBUG_PRINTLN(F("[CFG] Homed on the right — datum switched to the other (left) endstop; next home parks left."));
+    } else {
+        DEBUG_PRINTLN(F("[CFG] Home confirmed on the left."));
+    }
+    persistHomeDatum();
 }

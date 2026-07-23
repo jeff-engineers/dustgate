@@ -103,9 +103,10 @@ public:
     // Port-role change (POST /api/config/port-role). outRole is a PortRole value.
     bool consumePortRoleRequest(int& outIndex, int& outRole);
 
-    // Visual orientation preference — home on right side vs left (default).
-    // Loaded from NVS; returned in /api/info so Angular can render correctly.
-    bool homeOnRight() const { return _homeOnRight; }
+    // Home-side answer (POST /api/config/orientation {homedLeft}). Consumed by the
+    // main loop, which ensures the home datum is the user's left endstop (re-homing
+    // if it came up on the right). outHomedLeft is the reported side.
+    bool consumeOrientationRequest(bool& outHomedLeft);
 
     // Seconds of no move/home activity before the driver is powered off
     // (0 = never). Loaded from NVS; the main loop polls this directly each
@@ -194,7 +195,7 @@ private:
     bool  _setNumGatesPending;     int  _newNumGates;
     bool  _calibratePending;       char _calModel[16];  int _calGateCount;
     bool  _portRolePending;        int  _portRoleIndex; int _portRoleValue;
-    bool  _homeOnRight;            // persisted orientation preference
+    bool  _orientationPending;     bool _orientationValue;    // POST /api/config/orientation {homedLeft}
     int   _homeDirection;          // runtime direction; loaded from NVS, updated via API
     int   _cachedNumActiveStops;   // from ApiStatus.numActiveStops; returned in /api/info
     int   _idleTimeoutSec;         // persisted idle power-off timeout; see idleTimeoutSec()

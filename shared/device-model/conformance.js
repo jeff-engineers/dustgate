@@ -110,7 +110,7 @@ async function run() {
   {
     const i = (await req('GET', '/api/info')).json;
     check('info shape', i && isStr(i.apiKey) && isNum(i.numStops) && isStr(i.version)
-      && isBool(i.homeOnRight) && isBool(i.motorInverted) && isNum(i.idleTimeoutSec)
+      && isBool(i.motorInverted) && isNum(i.idleTimeoutSec)
       && isStr(i.manifoldModel) && isNum(i.stepsPerMm),
       JSON.stringify(i));
   }
@@ -127,12 +127,12 @@ async function run() {
   // 5. Config writes are reflected in /api/info.
   {
     await req('POST', '/api/config/gates', { numGates: 4 });
-    await req('POST', '/api/config/orientation', { homeOnRight: true });
+    await req('POST', '/api/config/orientation', { homedLeft: true });   // home-side answer → ok
     await req('POST', '/api/config/motor', { invertDirection: true });
     await req('POST', '/api/config/idle-timeout', { seconds: 1800 });
     const i = (await req('GET', '/api/info')).json;
     check('config: numGates=4 → info.numStops', i && i.numStops === 4, `numStops=${i?.numStops}`);
-    check('config: orientation → info.homeOnRight', i && i.homeOnRight === true);
+    check('config: orientation accepted', (await req('POST', '/api/config/orientation', { homedLeft: false })).status === 200);
     check('config: motor → info.motorInverted', i && i.motorInverted === true);
     check('config: idle-timeout → info.idleTimeoutSec', i && i.idleTimeoutSec === 1800, `got ${i?.idleTimeoutSec}`);
     // Reset motor direction so a real device isn't left inverted by the run.
@@ -250,6 +250,16 @@ async function run() {
       `stop1=${s?.stops?.[1]?.mm}`);
     check('calibrate: gate role present', s && s.stops[1] && isStr(s.stops[1].role), JSON.stringify(s?.stops?.[1]));
     check('calibrate: bad gateCount → 400', (await req('POST', '/api/calibrate', { model: 'rockler-2.5', gateCount: 0 })).status === 400);
+
+    // Home is always the user's LEFT endstop, so gates always read Gate 1..N with
+    // ascending position from home — the home-side answer never reorders them.
+    const stopsL = (await req('GET', '/api/stops')).json.stops;
+    check('gates ascend from home (Gate1 nearest, GateN farthest)',
+      stopsL[1].mm != null && stopsL[4].mm != null && parseFloat(stopsL[1].mm) < parseFloat(stopsL[4].mm),
+      `g1=${stopsL[1].mm} g4=${stopsL[4].mm}`);
+    await req('POST', '/api/config/orientation', { homedLeft: false });
+    const stopsR = (await req('GET', '/api/stops')).json.stops;
+    check('home-side answer does not reorder gates', stopsR[1].mm === stopsL[1].mm && stopsR[4].mm === stopsL[4].mm);
   }
 
   // 15. Port roles.

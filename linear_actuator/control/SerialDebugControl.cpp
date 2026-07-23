@@ -5,10 +5,8 @@
 #include "SerialDebugControl.h"
 #include "../utils/MotionMath.h"
 #include "../utils/AgentConfig.h"   // NVS constants + applyProvisionJson() — safe to include always
-#if defined(CONTROL_WIFI) || defined(CONTROL_SMART_OUTLET)
-  #include "../utils/WiFiProvisioner.h"
-#endif
 #ifdef CONTROL_SMART_OUTLET
+  #include "../utils/WiFiProvisioner.h"
   #include "../utils/MdnsQuery.h"
   #include "../outlets/ShellyGen1Outlet.h"
   #include "../outlets/ShellyGen2Outlet.h"
@@ -28,7 +26,9 @@ SerialDebugControl::SerialDebugControl()
       _jogPending(false),
       _jogMM(0.0f),
       _calPending(false),
-      _calGates(0)
+      _calGates(0),
+      _homeSidePending(false),
+      _homedLeftValue(false)
 { _calModel[0] = '\0'; }
 
 bool SerialDebugControl::begin() {
@@ -88,6 +88,15 @@ bool SerialDebugControl::consumeCalibrateRequest(char* outModel, size_t modelLen
         _calPending = false;
         strlcpy(outModel, _calModel, modelLen);
         outGates = _calGates;
+        return true;
+    }
+    return false;
+}
+
+bool SerialDebugControl::consumeHomeSideRequest(bool& outHomedLeft) {
+    if (_homeSidePending) {
+        _homeSidePending = false;
+        outHomedLeft = _homedLeftValue;
         return true;
     }
     return false;
@@ -187,6 +196,20 @@ void SerialDebugControl::processLine(const String& line) {
             }
         }
 
+    } else if (cmd == "homeside" || cmd.startsWith("homeside ")) {
+        // homeside left|right → report which side the carriage homed to. 'right'
+        // makes the firmware switch the datum to the other endstop and re-home left.
+        String arg = cmd.length() > 8 ? cmd.substring(9) : String();
+        arg.trim();
+        if (arg != "left" && arg != "right") {
+            Serial.println(F("[CFG] Usage: homeside left|right   (report which side it just homed to; 'right' re-homes to the left endstop)"));
+        } else {
+            _homedLeftValue  = (arg == "left");
+            _homeSidePending = true;
+            Serial.print(F("[CFG] Reported home side: "));
+            Serial.println(arg);
+        }
+
     } else if (cmd.startsWith("provision ")) {
         // provision {"ssid":"...","pass":"...","key":"...","host":"..."}
         // Writes WiFi/key/hostname directly to NVS via the shared helper in
@@ -210,7 +233,7 @@ void SerialDebugControl::processLine(const String& line) {
         Serial.println(F("OK provision"));
 
     } else if (cmd == "wifireset") {
-#if defined(CONTROL_WIFI) || defined(CONTROL_SMART_OUTLET)
+#if defined(CONTROL_SMART_OUTLET)
         Serial.println(F("[WiFi] Erasing stored credentials and rebooting into setup portal..."));
         delay(200);
         WiFiProvisioner::reset(); // does not return
@@ -361,7 +384,9 @@ void SerialDebugControl::printStatus() {
     Serial.print(F("  Far endstop (D11): "));
     Serial.println(digitalRead(PIN_ENDSTOP_MAX)  == HIGH ? F("TRIGGERED") : F("open"));
 #endif
-    Serial.println(F("  Stop positions (from g_stopPositionsMM[]):"));
+    Serial.print(F("  Home datum endstop:")); Serial.print(F(" "));
+    Serial.println(g_homeIsMaxEndstop ? F("D11/MAX (left)") : F("D10/HOME (left)"));
+    Serial.println(F("  Stop positions (from g_stopPositionsMM[], Gate 1..N left→right):"));
     for (int i = 0; i <= NUM_STOPS; i++) {
         Serial.print(F("    [")); Serial.print(i); Serial.print(F("]  "));
         Serial.print(g_stopPositionsMM[i], 2); Serial.print(F(" mm  = "));
@@ -379,6 +404,7 @@ void SerialDebugControl::printHelp() {
     Serial.println(F("  home              Re-trigger homing sequence"));
     Serial.println(F("  jog <mm>          Move relative: + = away from home, - = toward home"));
     Serial.println(F("  calibrate <m> <n> Dual-endstop reference sweep: model (rockler-2.5|rockler-4|custom) + gate count"));
+    Serial.println(F("  homeside l|r      Report which side it homed to; 'right' re-homes to the left endstop"));
     Serial.println(F("  clearcal          Erase EEPROM calibration (reload from config.h)"));
     Serial.println(F("  wifireset         Erase WiFi credentials, reboot into setup portal"));
     Serial.println(F("  gconf             Read GCONF + CHOPCONF from driver"));

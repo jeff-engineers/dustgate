@@ -182,18 +182,19 @@ enclosure closed.
 | TMC2209 STEP              | D5           | All                                  |
 | TMC2209 DIR               | D6           | All                                  |
 | TMC2209 EN                | D9           | All (active LOW)                     |
-| Home limit switch         | D10          | FEEDBACK_LIMIT_DISTANCE / _DETENT    |
-| Max limit switch          | D11          | FEEDBACK_LIMIT_DISTANCE / _DETENT    |
-| Toggle switch             | D12          | CONTROL_ROTARY                       |
-| Status LED                | D13          | All (onboard LED)                    |     |
+| Home-side limit switch    | D10          | FEEDBACK_LIMIT_DISTANCE (required)   |
+| Far-side limit switch     | D11          | FEEDBACK_LIMIT_DISTANCE (required)   |
+| Status LED                | D13          | All (onboard LED)                    |
 | TMC2209 UART TX           | TX (Serial1) | All (hardware UART)                  |
 | TMC2209 UART RX           | RX (Serial1) | All (hardware UART)                  |
 | Remote reset button       | RST          | All (optional, not code-visible)     |
 | Remote boot button        | IO0          | All (optional, not code-visible)     |
 
+Both limit switches are required. Which one acts as the home datum is decided at
+setup time (always the user's LEFT end) — see `g_homeIsMaxEndstop`.
+
 **Active config pins: 8** (D5, D6, D9, D10, D11, D13, TX, RX)  
-Unused in current build: D12 (toggle), A0 (rotary), A1 (detent)  
-Free for expansion: SCL, SDA, A2, A3, A4, A5
+Free for expansion: D12, A0, A1, SCL, SDA, A2, A3, A4, A5
 
 RST/IO0 aren't GPIOs the firmware reads — they're hardware reset/bootloader
 lines, listed here only so the pin budget stays accurate if you wire the

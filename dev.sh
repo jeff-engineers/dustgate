@@ -123,12 +123,16 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 run_demo() {
+  local demo_url="http://localhost:4200/?demo=true"
   echo "▶ Demo mode — fully simulated in the browser, no backend needed."
-  echo "  Opens at http://localhost:4200 — DemoApiService kicks in automatically"
-  echo "  in dev (or append ?demo=true explicitly)."
+  echo "  Opening ${demo_url}"
+  echo "  (On localhost the app only enters demo mode with ?demo=true — plain"
+  echo "   localhost:4200 talks to a real backend and will fail with no server up.)"
   echo ""
   cd "$UI_DIR"
   [[ -d node_modules ]] || npm install
+  # ng serve blocks, so open the browser (with the required flag) once it's up.
+  ( sleep 4; open "$demo_url" 2>/dev/null || xdg-open "$demo_url" 2>/dev/null || true ) &
   npm start
 }
 

@@ -8,8 +8,7 @@
 #ifdef FEEDBACK_LIMIT_DISTANCE
 
 LimitSwitchDistance::LimitSwitchDistance()
-    : _motor(nullptr), _homed(false), _backingOff(false),
-      _lastHomeState(false), _lastMaxState(false)
+    : _motor(nullptr), _homed(false), _backingOff(false)
 {}
 
 void LimitSwitchDistance::resetHoming() {
@@ -25,24 +24,14 @@ bool LimitSwitchDistance::begin(MotorDriver* motor) {
     pinMode(PIN_ENDSTOP_HOME, INPUT_PULLUP);
     pinMode(PIN_ENDSTOP_MAX, INPUT_PULLUP);
 
-    _lastHomeState = readHomeSwitch();
-    _lastMaxState  = readMaxSwitch();
-    DEBUG_PRINT(F("LimitSwitchDistance initialized. Home: "));
-    DEBUG_PRINT(_lastHomeState ? F("TRIGGERED") : F("open"));
-    DEBUG_PRINT(F("  Far: "));
-    DEBUG_PRINTLN(_lastMaxState ? F("TRIGGERED") : F("open"));
+    DEBUG_PRINT(F("LimitSwitchDistance initialized. D10: "));
+    DEBUG_PRINT(readHomeSwitch() ? F("TRIGGERED") : F("open"));
+    DEBUG_PRINT(F("  D11: "));
+    DEBUG_PRINTLN(readMaxSwitch() ? F("TRIGGERED") : F("open"));
     return true;
 }
 
-void LimitSwitchDistance::pollEndstopLog() {
-    // Endstop transition logging now lives in the main loop's always-on endstop
-    // supervisor (linear_actuator.ino) so it also covers jogs, which never enter
-    // STATE_MOVING. Kept as a no-op to preserve the call sites in
-    // updateHoming()/updateMoving() without double-printing.
-}
-
 bool LimitSwitchDistance::updateHoming() {
-    pollEndstopLog();
     if (_homed) return true;
 
     if (_backingOff) {
@@ -57,8 +46,12 @@ bool LimitSwitchDistance::updateHoming() {
         return false;
     }
 
-    // Driving toward home — stop when endstop triggered
-    if (readHomeSwitch()) {
+    // Driving toward the HOME DATUM (the user's-left endstop — D10 or D11 depending
+    // on g_homeIsMaxEndstop). Stop when that switch triggers. The far switch firing
+    // instead means the motor is wired backwards; that's detected in the main loop's
+    // homing state, not here.
+    bool datumTriggered = g_homeIsMaxEndstop ? readMaxSwitch() : readHomeSwitch();
+    if (datumTriggered) {
         _motor->stop();
         delay(20);
 
@@ -68,7 +61,7 @@ bool LimitSwitchDistance::updateHoming() {
         _motor->moveTo(backoffTarget);
         _backingOff = true;
 
-        DEBUG_PRINTLN(F("Home endstop hit, backing off..."));
+        DEBUG_PRINTLN(F("Home datum endstop hit, backing off..."));
     }
 
     return false;
@@ -87,18 +80,6 @@ long LimitSwitchDistance::stepsForStop(int stopIndex) {
     // Negate by HOME_DIRECTION: with HOME_DIRECTION=1, gates are in the negative
     // step direction from home (motor backs away from endstop toward gates).
     return ::mmToSteps(g_stopPositionsMM[stopIndex]) * (-HOME_DIRECTION);
-}
-
-bool LimitSwitchDistance::isHomeTriggered() {
-    return readHomeSwitch();
-}
-
-bool LimitSwitchDistance::isMaxTriggered() {
-    return readMaxSwitch();
-}
-
-bool LimitSwitchDistance::isHomed() {
-    return _homed;
 }
 
 bool LimitSwitchDistance::readHomeSwitch() {

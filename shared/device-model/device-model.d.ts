@@ -48,7 +48,6 @@ export interface Device {
   homed: boolean;
   enabled: boolean;
   manualOverride: boolean;
-  homeOnRight: boolean;
   motorInverted: boolean;
   numActiveStops: number;
   idleTimeoutSec: number;
@@ -94,7 +93,6 @@ export interface InfoView {
   apiKey: string;
   numStops: number;
   version: string;
-  homeOnRight: boolean;
   motorInverted: boolean;
   idleTimeoutSec: number;
   manifoldModel: string;
@@ -152,7 +150,7 @@ export function estop(d: Device): { ok: boolean };
 export function setEnabled(d: Device, on: boolean): { ok: boolean };
 
 export function saveStop(d: Device, index: number): SaveStopResult;
-export function setOrientation(d: Device, homeOnRight: boolean): { ok: boolean };
+export function setHomedLeft(d: Device, homedLeft: boolean): { ok: boolean };
 export function setMotorInverted(d: Device, invert: boolean): { ok: boolean };
 export function setNumGates(d: Device, n: number): { ok: boolean };
 export function setIdleTimeout(d: Device, seconds: number): { ok: boolean };

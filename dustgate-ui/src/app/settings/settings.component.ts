@@ -224,14 +224,6 @@ import { HardwareProfileService, PortSize } from '../services/hardware-profile.s
         <span class="section-title">Hardware</span>
 
         <div class="row">
-          <span class="row-label">Home endstop side</span>
-          <div class="toggle-group" style="flex: 0 0 auto; width: 160px;">
-            <button class="toggle-btn" [class.selected]="!(api.deviceInfo?.homeOnRight ?? false)" [disabled]="savingOrientation" (click)="setOrientation(false)">Left</button>
-            <button class="toggle-btn" [class.selected]="api.deviceInfo?.homeOnRight ?? false" [disabled]="savingOrientation" (click)="setOrientation(true)">Right</button>
-          </div>
-        </div>
-
-        <div class="row">
           <span class="row-label">Motor direction</span>
           <div class="toggle-group" style="flex: 0 0 auto; width: 160px;">
             <button class="toggle-btn" [class.selected]="!(api.deviceInfo?.motorInverted ?? false)" [disabled]="savingDirection" (click)="setMotorDirection(false)">Normal</button>
@@ -301,7 +293,6 @@ export class SettingsComponent implements OnInit {
   portSize: PortSize = '2.5in';
 
   savingIdleTimeout = false;
-  savingOrientation = false;
   savingDirection   = false;
   savingNumGates    = false;
 
@@ -335,7 +326,7 @@ export class SettingsComponent implements OnInit {
 
   clearStatus() { this.statusMsg = ''; this.errorMsg = ''; }
 
-  private async run(action: () => Promise<unknown>, busyFlag: 'savingIdleTimeout' | 'savingOrientation' | 'savingDirection' | 'savingNumGates', successMsg: string) {
+  private async run(action: () => Promise<unknown>, busyFlag: 'savingIdleTimeout' | 'savingDirection' | 'savingNumGates', successMsg: string) {
     this[busyFlag] = true;
     this.statusMsg = '';
     this.errorMsg  = '';
@@ -354,10 +345,6 @@ export class SettingsComponent implements OnInit {
   saveIdleTimeout() {
     const sec = Math.max(0, Math.min(1440, Math.round(this.idleTimeoutMin))) * 60;
     this.run(() => this.api.setIdleTimeout(sec), 'savingIdleTimeout', 'Idle timeout saved.');
-  }
-
-  setOrientation(homeOnRight: boolean) {
-    this.run(() => this.api.setOrientation(homeOnRight), 'savingOrientation', 'Orientation saved.');
   }
 
   setMotorDirection(invert: boolean) {
