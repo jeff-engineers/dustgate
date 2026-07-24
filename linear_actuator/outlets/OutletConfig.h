@@ -107,7 +107,9 @@ namespace OutletConfig {
         prefs.getString("dc_ip", e.ip, sizeof(e.ip));
         prefs.getString("dc_host", e.host, sizeof(e.host));
         prefs.end();
-        e.valid = (strlen(e.ip) > 0);
+        // A hostname alone is enough: the outlet resolves its own address on
+        // first poll, so a DHCP plug paired by mDNS name needs no static IP.
+        e.valid = (strlen(e.ip) > 0 || strlen(e.host) > 0);
         return e.valid;
     }
 

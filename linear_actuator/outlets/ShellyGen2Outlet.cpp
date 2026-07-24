@@ -24,7 +24,18 @@ bool ShellyGen2Outlet::reresolve() {
 }
 
 bool ShellyGen2Outlet::poll() {
+    // Paired by hostname with no address yet (DHCP outlet, no static IP) —
+    // resolve before polling rather than burning a guaranteed-failed request.
+    if (_ip[0] == '\0') {
+        if (!reresolve()) {
+            _reachable  = false;
+            _lastPowerW = 0.0f;
+            return false;
+        }
+    }
     if (doPoll()) return true;
+    // Poll failed — the IP may be stale after a DHCP lease change. If we know
+    // this outlet's mDNS hostname, re-resolve and retry once before giving up.
     if (reresolve()) return doPoll();
     return false;
 }

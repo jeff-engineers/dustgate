@@ -1,8 +1,11 @@
 # Outlet discovery & provisioning — design doc
 
-**Status:** draft (2026-07) — **not implemented.** No code changed. This is a
-proposal for replacing the current four-step manual outlet setup with a flow
-driven entirely by Shelly's documented local APIs.
+**Status:** draft (2026-07) — **Phase 1 implemented** (§4.1 discovery via
+`_shelly._tcp` + TXT generation detection, §4.2 static-IP demotion). Compiles
+clean; **not yet validated against real Shelly hardware** — see §6. Phases 2–3
+(§4.5 auto-map, §4.3 provisioning, §4.4 Outbound WebSocket) are still proposals.
+The goal is replacing the four-step manual outlet setup with a flow driven
+entirely by Shelly's documented local APIs.
 **Scope:** the smart-outlet control path (`CONTROL_SMART_OUTLET`) on v1. The
 transport/discovery decisions here should carry forward to v2 nodes.
 **Companion docs:** [`v2-architecture-rfc.md`](v2-architecture-rfc.md),
@@ -189,13 +192,32 @@ appears.
 
 ## 6. Suggested sequencing
 
-| Phase | Contents | Rationale |
-|---|---|---|
-| 1 | §4.1 discovery + §4.2 static-IP demotion | Contained, removes a real bug and a setup step |
-| 2 | §4.5 auto-map by power spike | Pure UX, no protocol work, large clarity win |
-| 3 | §4.3 ESP32 provisioning + §4.4 Outbound WebSocket | Headline UX win; both configure the device at provisioning time |
+| Phase | Contents | Status | Rationale |
+|---|---|---|---|
+| 1 | §4.1 discovery + §4.2 static-IP demotion | **done (unvalidated)** | Contained, removes a real bug and a setup step |
+| 2 | §4.5 auto-map by power spike | proposed | Pure UX, no protocol work, large clarity win |
+| 3 | §4.3 ESP32 provisioning + §4.4 Outbound WebSocket | proposed | Headline UX win; both configure the device at provisioning time |
 
 Phases 1 and 2 are independently shippable and do not block each other.
+
+### Phase 1 hardware validation checklist
+
+Phase 1 changes discovery behaviour and **cannot be exercised without real
+Shelly devices on the LAN** — it compiles, but nothing more is proven. Before
+trusting it:
+
+- [ ] A Gen2/Gen3 plug appears via `_shelly._tcp` (serial log shows
+      `[shelly gen=N]`) and is probed exactly once.
+- [ ] **Rename a plug in the Shelly app** to something without "shelly" in it —
+      it must still be discovered. This is the bug Phase 1 exists to fix.
+- [ ] A Gen1 device (if any is on hand) is still found through the `_http._tcp`
+      pass and probed as Gen1.
+- [ ] Non-Shelly HTTP responders (printer, NAS) are logged as
+      `[skipped — not a Shelly]` and never probed.
+- [ ] An outlet paired by hostname with **no static IP** polls successfully
+      from a cold boot (exercises the resolve-first path).
+- [ ] Re-check whether `DISCOVER_MDNS_ATTEMPTS` can drop now that the query is
+      Shelly-specific — see §7.
 
 ## 7. Open questions
 

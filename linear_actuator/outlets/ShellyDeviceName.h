@@ -64,7 +64,7 @@ inline String fetchShellyName(const char* url, const char* jsonPath) {
 
 // Returns "" if unset, unreachable, or the response didn't parse.
 inline String fetchShellyDeviceName(const char* ip, int gen) {
-    if (gen != 2) {
+    if (gen < 2) {   // < 2, not != 2: Gen3+ uses the Gen2 RPC endpoints
         char url[96];
         snprintf(url, sizeof(url), "http://%s/settings", ip);
         return fetchShellyName(url, "name");

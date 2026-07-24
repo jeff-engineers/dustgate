@@ -917,8 +917,64 @@ void loop() {
             // attempts to show up in the final list.
             String hitIp[DISCOVER_MAX_RESULTS];
             String hitHost[DISCOVER_MAX_RESULTS];
-            int hitCount = 0;
+            int    hitGen[DISCOVER_MAX_RESULTS];  // advertised "gen" (2, 3, ...); 1 = Gen1 candidate
+            int    hitCount = 0;
 
+            // Merge by IP. A device can answer on both services and across
+            // several attempts; first sighting wins, but a later one may fill
+            // in a hostname or upgrade an assumed Gen1 to its advertised gen.
+            auto addHit = [&](const String& host, const String& ip, int gen) {
+                if (ip.length() == 0 || ip == "0.0.0.0") return;  // SRV/A never resolved
+                for (int j = 0; j < hitCount; j++) {
+                    if (hitIp[j] != ip) continue;
+                    if (gen > hitGen[j])          hitGen[j]  = gen;
+                    if (hitHost[j].length() == 0) hitHost[j] = host;
+                    return;
+                }
+                if (hitCount >= DISCOVER_MAX_RESULTS) return;
+                hitIp[hitCount]   = ip;
+                hitHost[hitCount] = host;
+                hitGen[hitCount]  = gen;
+                hitCount++;
+            };
+
+            // ── Pass 1: _shelly._tcp — Gen2+ only, and unambiguous ──────────
+            // Only Shelly devices advertise this service, so every hit counts
+            // with no hostname guessing (which used to break the moment a user
+            // renamed a device in the Shelly app).
+            for (int attempt = 0; attempt < DISCOVER_MDNS_ATTEMPTS; attempt++) {
+                MdnsHit mdnsHits[DISCOVER_MAX_RESULTS];
+                int n = mdnsQueryShellyTcp(DISCOVER_MDNS_TIMEOUT_MS, mdnsHits, DISCOVER_MAX_RESULTS);
+                DEBUG_PRINT(F("[DISCOVER] attempt "));
+                DEBUG_PRINT(attempt + 1);
+                DEBUG_PRINT(F("/"));
+                DEBUG_PRINT(DISCOVER_MDNS_ATTEMPTS);
+                DEBUG_PRINT(F(": mDNS _shelly._tcp query returned "));
+                DEBUG_PRINT(n);
+                DEBUG_PRINTLN(F(" host(s):"));
+
+                for (int i = 0; i < n; i++) {
+                    // Service is Shelly-exclusive; missing TXT just means an
+                    // older Gen2 firmware, so assume the Gen2 RPC dialect.
+                    int gen = mdnsHits[i].gen > 0 ? mdnsHits[i].gen : 2;
+                    DEBUG_PRINT(F("  - "));
+                    DEBUG_PRINT(mdnsHits[i].hostname.length() ? mdnsHits[i].hostname : String("(no hostname)"));
+                    DEBUG_PRINT(F("  "));
+                    DEBUG_PRINT(mdnsHits[i].ip);
+                    DEBUG_PRINT(F("  [shelly gen="));
+                    DEBUG_PRINT(gen);
+                    DEBUG_PRINTLN(F("]"));
+                    addHit(mdnsHits[i].hostname, mdnsHits[i].ip, gen);
+                }
+
+                if (attempt < DISCOVER_MDNS_ATTEMPTS - 1) delay(DISCOVER_MDNS_RETRY_DELAY_MS);
+            }
+
+            // ── Pass 2: _http._tcp — reaches Gen1, which has no _shelly._tcp ─
+            // Every HTTP responder on the LAN shows up here, so this pass still
+            // needs a filter: a "gen" TXT means Gen2+ (one pass 1 missed to
+            // lossy UDP), otherwise fall back to the hostname heuristic, which
+            // is all a Gen1 device gives us to go on.
             for (int attempt = 0; attempt < DISCOVER_MDNS_ATTEMPTS; attempt++) {
                 MdnsHit mdnsHits[DISCOVER_MAX_RESULTS];
                 int n = mdnsQueryHttpTcp(DISCOVER_MDNS_TIMEOUT_MS, mdnsHits, DISCOVER_MAX_RESULTS);
@@ -931,28 +987,25 @@ void loop() {
                 DEBUG_PRINTLN(F(" host(s):"));
 
                 for (int i = 0; i < n; i++) {
-                    String host = mdnsHits[i].hostname;
-                    String ip   = mdnsHits[i].ip;
+                    const String& host = mdnsHits[i].hostname;
                     String hostLower = host;
                     hostLower.toLowerCase();
-                    bool matched = hostLower.indexOf("shelly") >= 0;
+                    bool named = hostLower.indexOf("shelly") >= 0;
+                    int  gen   = mdnsHits[i].gen;
 
                     DEBUG_PRINT(F("  - "));
                     DEBUG_PRINT(host.length() ? host : String("(no hostname)"));
                     DEBUG_PRINT(F("  "));
-                    DEBUG_PRINT(ip);
-                    DEBUG_PRINTLN(matched ? F("  [matched \"shelly\"]") : F("  [skipped — no \"shelly\" in hostname]"));
-
-                    if (!matched) continue;
-
-                    bool dup = false;
-                    for (int j = 0; j < hitCount; j++) {
-                        if (hitIp[j] == ip) { dup = true; break; }
+                    DEBUG_PRINT(mdnsHits[i].ip);
+                    if (gen >= 2) {
+                        DEBUG_PRINT(F("  [gen=")); DEBUG_PRINT(gen); DEBUG_PRINTLN(F(" TXT]"));
+                        addHit(host, mdnsHits[i].ip, gen);
+                    } else if (named) {
+                        DEBUG_PRINTLN(F("  [no gen TXT + \"shelly\" hostname -> Gen1 candidate]"));
+                        addHit(host, mdnsHits[i].ip, 1);
+                    } else {
+                        DEBUG_PRINTLN(F("  [skipped — not a Shelly]"));
                     }
-                    if (dup || hitCount >= DISCOVER_MAX_RESULTS) continue;
-                    hitIp[hitCount]   = ip;
-                    hitHost[hitCount] = host;
-                    hitCount++;
                 }
 
                 if (attempt < DISCOVER_MDNS_ATTEMPTS - 1) delay(DISCOVER_MDNS_RETRY_DELAY_MS);
@@ -966,28 +1019,31 @@ void loop() {
                 const String& ip   = hitIp[i];
                 const String& host = hitHost[i];
 
-                // Gen 2 first — the vast majority of discoverable Shelly
-                // hardware today (including this project's reference "Plug US
-                // G4") speaks Gen2/RPC, so trying it first keeps discovery
-                // fast instead of eating a timeout on every device before
-                // falling back to Gen 1.
-                ShellyGen2Outlet gen2(ip.c_str(), "discover");
-                bool ok  = gen2.poll();
-                float pw = gen2.getPowerW();
-                int  gen = 2;
-                if (!ok) {
-                    ShellyGen1Outlet gen1(ip.c_str(), "discover");
-                    ok  = gen1.poll();
-                    pw  = gen1.getPowerW();
-                    gen = 1;
+                // The generation is known from mDNS, so probe in that dialect
+                // only — no more Gen2-then-Gen1 fallback eating a full timeout
+                // on every Gen1 (and every unreachable) device. Gen3+ speaks
+                // the same RPC dialect as Gen2, so it collapses to "gen 2" for
+                // both the outlet class and the API's {0,1,2} `gen` field.
+                int apiGen = (hitGen[i] >= 2) ? 2 : 1;
+                bool  ok;
+                float pw;
+                if (apiGen == 2) {
+                    ShellyGen2Outlet probe(ip.c_str(), "discover");
+                    ok = probe.poll();
+                    pw = probe.getPowerW();
+                } else {
+                    ShellyGen1Outlet probe(ip.c_str(), "discover");
+                    ok = probe.poll();
+                    pw = probe.getPowerW();
                 }
-                String devName = ok ? fetchShellyDeviceName(ip.c_str(), gen) : String();
+
+                String devName = ok ? fetchShellyDeviceName(ip.c_str(), apiGen) : String();
                 DEBUG_PRINT(F("  - ")); DEBUG_PRINT(host); DEBUG_PRINT(F("  "));
                 DEBUG_PRINT(ip);
                 DEBUG_PRINT(F("  probe -> reachable="));
                 DEBUG_PRINT(ok ? F("yes") : F("no"));
                 DEBUG_PRINT(F(" gen="));
-                DEBUG_PRINT(ok ? gen : 0);
+                DEBUG_PRINT(ok ? apiGen : 0);
                 DEBUG_PRINT(F(" name="));
                 DEBUG_PRINTLN(devName.length() ? devName : String("(none set)"));
 
@@ -997,11 +1053,12 @@ void loop() {
                 o["name"]      = devName;   // app-assigned Shelly device name, "" if unset
                 o["reachable"] = ok;
                 o["powerW"]    = pw;
-                o["gen"]       = ok ? gen : 0;
+                o["gen"]       = ok ? apiGen : 0;
             }
             if (hitCount == 0) {
-                DEBUG_PRINTLN(F("  (no _http._tcp responders at all — check the outlets are powered, "
-                                 "joined to WiFi, and that mDNS is enabled in the Shelly app's device settings)"));
+                DEBUG_PRINTLN(F("  (no Shelly devices on either _shelly._tcp or _http._tcp — check the "
+                                 "outlets are powered, joined to WiFi, and that mDNS is enabled in the "
+                                 "Shelly app's device settings)"));
             }
 
             String out; serializeJson(doc, out);

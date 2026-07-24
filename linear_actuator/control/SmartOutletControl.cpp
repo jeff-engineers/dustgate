@@ -66,7 +66,9 @@ bool SmartOutletControl::begin() {
     for (int i = 0; i < n; i++) {
         if (!entries[i].valid) continue;
         SmartOutlet* o = nullptr;
-        if (entries[i].generation == 2) {
+        // >= 2, not == 2: Gen3+ speaks the same RPC dialect as Gen2, so any
+        // advertised generation above 1 maps to the Gen2 class.
+        if (entries[i].generation >= 2) {
             o = new ShellyGen2Outlet(entries[i].ip, entries[i].name);
         } else {
             o = new ShellyGen1Outlet(entries[i].ip, entries[i].name);
@@ -88,7 +90,7 @@ bool SmartOutletControl::begin() {
     // Load the dust collector plug (optional)
     DustCollectorEntry dc;
     if (OutletConfig::loadDustCollector(dc)) {
-        _dustCollector = (dc.generation == 2)
+        _dustCollector = (dc.generation >= 2)
                        ? (SmartOutlet*)new ShellyGen2Outlet(dc.ip, "Dust Collector")
                        : (SmartOutlet*)new ShellyGen1Outlet(dc.ip, "Dust Collector");
         _dustCollector->setHost(dc.host);
@@ -260,7 +262,8 @@ void SmartOutletControl::configureOutlet(int slot, int generation,
     delete _outlets[slot];
 
     SmartOutlet* o = nullptr;
-    if (generation == 2) {
+    // >= 2: see the equivalent note in begin() — Gen3+ uses the Gen2 dialect.
+    if (generation >= 2) {
         o = new ShellyGen2Outlet(ip, name);
     } else {
         o = new ShellyGen1Outlet(ip, name);
