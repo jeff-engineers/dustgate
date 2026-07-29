@@ -24,6 +24,8 @@ const https  = require('https');
 const url    = require('url');
 const { WebSocketServer } = require('ws');
 const M = require('../shared/device-model/device-model.js');
+const TOPO = require('../shared/device-model/topology.js');           // v2 validator
+const TD   = require('../shared/device-model/topology-device.js');    // v2 device sim
 
 const PORT    = 3000;
 const API_KEY = 'dev-mock-key-1234';
@@ -32,6 +34,9 @@ const VERSION = '1.0.0-mock';
 
 // ── Canonical device instance ───────────────────────────────────────────────
 const d = M.createDevice();
+
+// ── v2 topology-native device (additive; null until a topology is PUT) ───────
+let td = null;
 
 function statusJson() { return JSON.stringify(M.statusView(d)); }
 
@@ -251,6 +256,32 @@ function handler(req, res) {
       fwd.on('error', e => json(res, { error: e.message }, 502));
       fwd.write(JSON.stringify(rawBody));
       fwd.end();
+    });
+  }
+
+  // ── v2 topology API (additive — flat /api/* above still serves phase 1) ────
+  // PUT the whole topology (validated); GET it back; GET live status; and a
+  // sim-only tool-power inject (real firmware gets power from Shelly plugs, so
+  // it wouldn't implement /sim/tool — the demo/mock use it to drive routing).
+  if (pathname === '/api/v2/topology' && req.method === 'PUT') {
+    return body(req, data => {
+      const v = TOPO.validateTopology(data);
+      if (!v.ok) return json(res, { error: 'invalid topology', errors: v.errors }, 400);
+      td = TD.createTopologyDevice(data);
+      json(res, { ok: true });
+    });
+  }
+  if (pathname === '/api/v2/topology' && req.method === 'GET') {
+    return td ? json(res, td.topology) : json(res, { error: 'no topology configured' }, 404);
+  }
+  if (pathname === '/api/v2/status' && req.method === 'GET') {
+    return td ? json(res, TD.statusView(td)) : json(res, { error: 'no topology configured' }, 404);
+  }
+  if (pathname === '/api/v2/sim/tool' && req.method === 'POST') {
+    return body(req, data => {
+      if (!td) return json(res, { error: 'no topology configured' }, 404);
+      TD.setToolPower(td, data.toolId, Number(data.watts) || 0);
+      json(res, TD.statusView(td));
     });
   }
 
