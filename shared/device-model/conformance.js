@@ -250,6 +250,25 @@ async function run() {
       `stop1=${s?.stops?.[1]?.mm}`);
     check('calibrate: gate role present', s && s.stops[1] && isStr(s.stops[1].role), JSON.stringify(s?.stops?.[1]));
     check('calibrate: bad gateCount → 400', (await req('POST', '/api/calibrate', { model: 'rockler-2.5', gateCount: 0 })).status === 400);
+  }
+
+  // 14b. Rockler manifolds ship in pairs → an ODD gate count rounds UP to even
+  //      (the extra port is a spare); 'custom' is left as entered.
+  {
+    await req('POST', '/api/calibrate', { model: 'rockler-2.5', gateCount: 3 });
+    let s = await pollStatus(x => x.state !== 'HOMING' && x.homed === true, { timeoutMs: 40000 });
+    let i = (await req('GET', '/api/info')).json;
+    check('calibrate: odd Rockler count 3 → rounded up to 4', i && i.numStops === 4, `numStops=${i?.numStops}`);
+    check('calibrate: spare gate 4 placed', s && s.stops[4] && s.stops[4].mm !== null, `stop4=${s?.stops?.[4]?.mm}`);
+
+    await req('POST', '/api/calibrate', { model: 'custom', gateCount: 3 });
+    await pollStatus(x => x.state !== 'HOMING' && x.homed === true, { timeoutMs: 40000 });
+    i = (await req('GET', '/api/info')).json;
+    check('calibrate: custom count 3 left as-is (no even rounding)', i && i.numStops === 3, `numStops=${i?.numStops}`);
+
+    // Restore the rockler-2.5 × 4 auto-placed state the later scenarios build on.
+    await req('POST', '/api/calibrate', { model: 'rockler-2.5', gateCount: 4 });
+    await pollStatus(x => x.state !== 'HOMING' && x.homed === true, { timeoutMs: 40000 });
 
     // Home is always the user's LEFT endstop, so gates always read Gate 1..N with
     // ascending position from home — the home-side answer never reorders them.

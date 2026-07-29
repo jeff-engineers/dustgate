@@ -163,6 +163,9 @@ export function deleteDustCollector(d: Device): { ok: boolean };
 export function switchDustCollector(d: Device, on: boolean): { ok: boolean };
 
 export function manifoldProfile(model: string, gateCount: number): ManifoldGeometry | null;
+export function isRocklerModel(model: string): boolean;
+export function roundUpEven(n: number): number;
+export function physicalGateCount(model: string, n: number): number;
 export function beginCalibrate(d: Device, model: string, gateCount: number): number;
 export function completeCalibrate(d: Device): void;
 export function setPortRole(d: Device, index: number, role: PortRole): { ok: boolean };

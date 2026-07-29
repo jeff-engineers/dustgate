@@ -57,6 +57,21 @@ const MANIFOLD_PROFILES = {
   'rockler-4':   { firstGateOffsetMm: 1,  gatePitchMm: 127,  endMarginMm: 1 },
 };
 
+/** True for a known Rockler manifold profile (ships in 2-gate units → even count). */
+function isRocklerModel(model) { return model in MANIFOLD_PROFILES; }
+
+/** Round a gate count up to the next even number (Rockler manifolds pair gates). */
+function roundUpEven(n) { return n % 2 === 0 ? n : n + 1; }
+
+/**
+ * Physical gate count for a model: Rockler profiles are even (round odd up — the
+ * extra port is a spare, capped/unused); 'custom' is left as-is. Clamped to NUM_STOPS.
+ */
+function physicalGateCount(model, n) {
+  const g = isRocklerModel(model) ? roundUpEven(n) : n;
+  return Math.min(g, NUM_STOPS);
+}
+
 /** (model, gateCount) → { spanMm, gatesMm[] }, or null for custom/unknown. */
 function manifoldProfile(model, gateCount) {
   const p = MANIFOLD_PROFILES[model];
@@ -337,8 +352,11 @@ function beginCalibrate(d, model, gateCount) {
   if (!Number.isInteger(gateCount) || gateCount < 1 || gateCount > NUM_STOPS) {
     throw badRequest('gateCount out of range');
   }
-  d.manifoldModel = (model in MANIFOLD_PROFILES) ? model : 'custom';
-  d._calGateCount = gateCount;
+  d.manifoldModel = isRocklerModel(model) ? model : 'custom';
+  // Rockler manifolds ship in pairs → physical gate count is EVEN. Round an odd
+  // request up; the extra port is a spare the user caps/leaves unused. 'custom'
+  // has no fixed geometry, so it's left as entered.
+  d._calGateCount = physicalGateCount(d.manifoldModel, gateCount);
   d.state = 'HOMING'; // the sweep starts by homing to the near endstop
   d.manualOverride = false;
   return CALIBRATE_MS;
@@ -503,6 +521,7 @@ module.exports = {
   saveStop, setHomedLeft, setMotorInverted, setNumGates, setIdleTimeout, clearCal,
   // dual-endstop calibration + port roles
   manifoldProfile, beginCalibrate, completeCalibrate, setPortRole,
+  isRocklerModel, roundUpEven, physicalGateCount,
   // outlets
   configureOutlet, deleteOutlet, configureDustCollector, deleteDustCollector, switchDustCollector,
   ensureDiscovered, discoverOutlets, pingOutlet, nameForIp,

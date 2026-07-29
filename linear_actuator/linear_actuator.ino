@@ -150,6 +150,16 @@ static bool isKnownManifoldModel(const char* model) {
     return manifoldPitchMm(model) > 0.0f || strcmp(model, "custom") == 0;
 }
 
+// Rockler manifolds ship in 2-gate units → physical gate count is EVEN. Round an
+// odd request up (the extra port is a spare the user caps/leaves unused). Gated on
+// having a real pitch profile, so 'custom' (no fixed geometry) is left as entered.
+// Mirrors shared/device-model physicalGateCount().
+static int physicalGateCount(const char* model, int n) {
+    if (manifoldPitchMm(model) > 0.0f && (n % 2) != 0) n += 1;
+    if (n > NUM_STOPS) n = NUM_STOPS;
+    return n;
+}
+
 // Finish the reference sweep: given the measured far-endstop trigger position (in
 // steps, from home datum 0), place all gates and persist. See the placement
 // derivation in docs/dual-endstop-calibration.md. Span-based: absorbs per-build
@@ -558,7 +568,11 @@ void loop() {
                     DEBUG_PRINTLN(F("' — treating as custom (span only, no auto-placement)."));
                 }
                 strlcpy(g_calModel, calModel, sizeof(g_calModel));
-                g_calGateCount     = calGates;
+                g_calGateCount     = physicalGateCount(calModel, calGates);
+                if (g_calGateCount != calGates) {
+                    DEBUG_PRINT(F("[CAL] Rounded to ")); DEBUG_PRINT(g_calGateCount);
+                    DEBUG_PRINTLN(F(" gates (manifold ships in pairs; extra is a spare)."));
+                }
                 g_calibratePending = true;
                 g_eStopTriggered   = false;
                 motor.enable(true);
@@ -848,7 +862,11 @@ void loop() {
                     DEBUG_PRINTLN(F("' — treating as custom (span only, no auto-placement)."));
                 }
                 strlcpy(g_calModel, model, sizeof(g_calModel));
-                g_calGateCount     = gateCount;
+                g_calGateCount     = physicalGateCount(model, gateCount);
+                if (g_calGateCount != gateCount) {
+                    DEBUG_PRINT(F("[CAL] Rounded to ")); DEBUG_PRINT(g_calGateCount);
+                    DEBUG_PRINTLN(F(" gates (manifold ships in pairs; extra is a spare)."));
+                }
                 g_calibratePending = true;
                 // Match the serial path: clear a latched e-stop and ensure the
                 // driver is powered so calibrate works even from ERROR/idle-sleep.

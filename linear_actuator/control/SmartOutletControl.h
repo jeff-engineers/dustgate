@@ -105,6 +105,12 @@ private:
 
     // Shared state between poll task and main loop — protected by _mutex
     int               _requestedStop;
+    // Which tool is currently active (its stop), or 0 = none. Distinct from
+    // _requestedStop: at idle we HOLD the gate at its last position (don't return
+    // home — keeps a path open so a manual collector start can't dead-head, and
+    // avoids wear on a brief tool-off), but the dust collector still follows
+    // _activeStop (off when no tool runs).
+    int               _activeStop;
     bool              _manualOverride;   // true = ignore outlet selection until next tool-on
     SemaphoreHandle_t _mutex;
 

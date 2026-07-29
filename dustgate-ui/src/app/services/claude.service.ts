@@ -131,7 +131,7 @@ const TOOLS = [
   },
   {
     name: 'calibrate_gates',
-    description: 'Detect gate spacing with a reference sweep: the actuator homes, drives to the far endstop, measures the total travel, and auto-places all gates by the manifold profile. This is how gates are placed — call it once, after homing works and the mounting orientation is set. Takes a few seconds; the gate positions and count are updated when it finishes.',
+    description: 'Detect gate spacing with a reference sweep: the actuator homes, drives to the far endstop, measures the total travel, and auto-places all gates by the manifold profile. This is how gates are placed — call it once, after homing works and the mounting orientation is set. Takes a few seconds; the gate positions and count are updated when it finishes. NOTE: for a Rockler manifold (rockler-2.5/rockler-4) an ODD gate_count is rounded UP to the next even (manifolds ship in pairs); the extra gate is a spare. After it finishes, check get_status — if there are more gates than the user asked for, have them pick one to cap (see the setup steps).',
     input_schema: {
       type: 'object',
       properties: {
@@ -154,13 +154,25 @@ const TOOLS = [
   },
   {
     name: 'set_num_gates',
-    description: 'Tell the device how many blast gates are installed. Call this early in setup so the visualizer and move validation use the correct count.',
+    description: 'Tell the device how many blast gates are installed. Call this early in setup so the visualizer and move validation use the correct count. NOTE: Rockler manifolds ship in 2-gate units, so a Rockler system has an EVEN number of gate positions — calibrate_gates rounds an odd count up to the next even and the extra port becomes a spare to cap. Pass the user\'s number as-is here; the rounding happens at calibrate.',
     input_schema: {
       type: 'object',
       properties: {
         num_gates: { type: 'integer', description: 'Number of blast gates (1–16), not counting the home/parked position.' }
       },
       required: ['num_gates']
+    }
+  },
+  {
+    name: 'set_port_role',
+    description: 'Set a gate/port\'s role. Used mainly to CAP the spare gate that appears when an odd gate count is rounded up to even for a Rockler manifold: call with role "blocked" on the gate the user picks as the spare. Roles: "tool" (a tool is wired here), "unassigned" (open, no tool yet), "blocked" (capped — never a destination), "feed" (routes to a downstream selector, v2). Stop 0 (home) cannot be set.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        index: { type: 'integer', description: 'Gate/stop index (1–16).' },
+        role:  { type: 'string', enum: ['tool', 'unassigned', 'blocked', 'feed'], description: 'The role to assign.' }
+      },
+      required: ['index', 'role']
     }
   },
   {
@@ -213,17 +225,19 @@ The system has a rack-and-pinion linear actuator that moves between numbered sto
 Your job is to walk the user through setup conversationally:
 1. Always ask the user before moving the actuator.
 2. Ask which DustGate hardware size they have — 2.5" (standard) or 4" — and call set_port_size. This picks the manifold profile the reference sweep uses to place gates (adjacent gates are about 82.9mm / 3.26" apart on the reference hardware); the sweep measures the real travel, so you don't need to enforce any exact number with the user.
-3. Ask the user how many blast gates they have and call set_num_gates.
+3. Ask the user how many blast gates (tools) they have and call set_num_gates. Note that Rockler manifolds ship in pairs, so the physical gate count is even; if they give an odd number, calibrate_gates will round it up and add one spare gate you'll cap later (step 6a) — mention this so it isn't a surprise.
 4. Home the actuator so you have a known position. If an endstop is already triggered, ask if it's alright to move away from it a bit first to confirm homing works. The firmware auto-detects a backwards motor on its own (from which endstop it reaches), so you don't need to ask about or set motor direction — just let it home.
 5. Once it's homed, ask whether the actuator ended up on the user's LEFT or RIGHT, and call set_home_side with homed_left=true (left) or homed_left=false (right). The home datum is always kept on the left, so if it homed right the firmware moves the datum to the other endstop and the next home parks left. Gates always read Gate 1..N left-to-right.
-6. Place the gates automatically: tell the user you'll measure the spacing, then call calibrate_gates with the manifold model from step 2 (2.5" → 'rockler-2.5', 4" → 'rockler-4') and the gate count from step 3. This one sweep homes, drives to the far end, measures the travel, and places ALL gates at once. If it fails, the far endstop wiring is the thing to check — help them verify it, then try calibrate_gates again. Once it succeeds, go straight to naming/outlets for each gate (step 11).
+6. Place the gates automatically: tell the user you'll measure the spacing, then call calibrate_gates with the manifold model from step 2 (2.5" → 'rockler-2.5', 4" → 'rockler-4') and the gate count from step 3. This one sweep homes, drives to the far end, measures the travel, and places ALL gates at once. If it fails, the far endstop wiring is the thing to check — help them verify it, then try calibrate_gates again.
+6a. When calibrate_gates succeeds, call get_status and compare the number of placed gates to what the user asked for. If there are MORE (an odd Rockler count was rounded up to even), tell the user they have one spare gate and ask WHICH gate they want to cap off (leave with no tool). Call set_port_role with that gate's index and role "blocked". Then skip that capped gate entirely when configuring tools below. If the counts match, there's no spare — go straight on.
+6b. Go to naming/outlets for each non-capped gate (step 11).
 11. Before moving on to the next gate, finish configuring THIS gate. Resolve the outlet question first so that, when you ask the user to name the gate, you can point to the specific outlet (by hostname/IP) they're naming:
     a. Ask whether this gate's tool has a Shelly smart plug. If not, skip to (e) and just ask for the gate/tool name directly.
     b. If yes, call discover_outlets first (don't ask for an IP yet). The most reliable way to tell which outlet belongs to this gate is by power draw: ask the user to switch this gate's tool ON at a low setting (blade/bit spinning free, nothing feeding), then call discover_outlets — the outlet reporting a clear power draw (roughly 5W or more; standby plugs read ~0W) is this tool's. Confirm it with them by hostname and IP, then have them switch the tool back off. If several tools are on at once, ask them to leave only this one running. Fall back to matching what the user describes (e.g. "the one near the bandsaw") by hostname/IP only if the power trick isn't practical. Mention the Shelly-app name too only if one happens to be set, as extra context. Never suggest or accept an IP already configured for a different gate earlier in this session (track which IPs you've already called configure_outlet with) — if the user picks one anyway, point out it's already assigned to that other gate and ask them to choose a different outlet or confirm they want to move it off the other gate first.
     c. If discover_outlets finds nothing, or none of the results match, ask the user for the outlet's IP address directly and call ping_outlet to confirm it's reachable. You may need to direct them to Shelly's website for help finding the IP. Either way (scan or manual ping), the response tells you the generation and, if the outlet was named in the Shelly app, that name too — don't ask the user which generation they have.
     d. Once the outlet is confirmed reachable, ask the user what they want to call this tool/gate, referring to the outlet by its hostname/IP so they know which one they're naming. If the outlet's Shelly-app name (returned by discover_outlets/ping_outlet) looks like a real name the user chose, you MAY offer it as a suggested default they can accept or change — but ONLY if it's clearly custom: non-empty, NOT the mDNS hostname, NOT a factory identifier starting with "shelly" (e.g. "shellyplusplugs-a8032ab12345"), and NOT something ending in a MAC/hex fragment. If it's blank or any of those default identifiers, do NOT propose it — just ask the user for the name. Either way their choice is final (accept whatever they give without offering a list); it's saved back onto the plug automatically, so the plug is self-identifying next time. Then help them pick a detection threshold: ask them to turn the tool on at its lowest setting with no load (e.g. no material feeding, blade/bit spinning free), then ping again to capture that running wattage. Suggest a threshold about 10% below that reading, rounded to a clean number (nearest 10W normally, nearest 50W for readings above a couple hundred watts) — this gives margin below the running draw while safely clearing standby power. Confirm the suggestion with the user (they can override it) before calling configure_outlet with the generation and host (if the outlet came from discover_outlets) it returned.
     e. If the tool has no smart plug, ask for the gate's name and STILL call configure_outlet to save it — pass slot and stop and name, and OMIT ip (and generation/threshold_w). This saves a name-only gate (a label with no power polling). Do NOT skip this call: it is the only way the name reaches the device, so a plug-less gate whose name you merely acknowledge in chat will be lost.
-12. Configure every gate, one at a time: the positions are already set by the sweep, so just repeat step 11 (naming + outlet) for each gate until every gate is done.
+12. Configure every NON-CAPPED gate, one at a time: the positions are already set by the sweep, so just repeat step 11 (naming + outlet) for each gate until every gate is done. Skip any gate you capped as a spare in step 6a.
 16. Once all gates are configured, ask if their dust collector is also on a Shelly smart plug, separate from any tool's gate — DustGate can switch it on and off automatically alongside the gates. This step is optional; skip it if they say no or don't have one. There's no wattage threshold to pick here since it's just a remote switch. If they want it:
     a. Call discover_outlets first and check the results against what the user describes, rather than asking for an IP up front. If nothing matches (or nothing is found), ask for the IP address directly and call ping_outlet to confirm it's reachable — either way, the result tells you the generation, so don't ask the user which one they have.
     b. Once reachable, call configure_dust_collector with the generation (and host, if it came from discover_outlets) that was returned.
@@ -668,6 +682,14 @@ export class ClaudeService {
 
       case 'set_num_gates':
         return this.api.setNumGates(this.assertIntInRange(input['num_gates'], 1, 16, 'num_gates'));
+
+      case 'set_port_role': {
+        const role = input['role'];
+        if (role !== 'tool' && role !== 'unassigned' && role !== 'blocked' && role !== 'feed') {
+          throw new Error('role must be tool | unassigned | blocked | feed');
+        }
+        return this.api.setPortRole(this.assertIntInRange(input['index'], 1, 16, 'index'), role);
+      }
 
       case 'calibrate_gates': {
         const model = input['model'];

@@ -13,6 +13,7 @@ import { ManifoldVisualizerComponent } from '../visualizer/manifold-visualizer.c
 import { GatePositionerComponent } from '../gate-positioner/gate-positioner.component';
 import { OutletConfiguratorComponent } from '../outlet-configurator/outlet-configurator.component';
 import { DustCollectorConfiguratorComponent, DustCollectorCmd } from '../dust-collector-configurator/dust-collector-configurator.component';
+import * as model from '@device-model';
 
 // ── Step machine ──────────────────────────────────────────────────────────────
 
@@ -23,6 +24,7 @@ type Step =
   | { id: 'homing' }
   | { id: 'spacing-method' }
   | { id: 'calibrating' }
+  | { id: 'spare-pick' }
   | { id: 'position'; gate: number }
   | { id: 'equal-spacing-offer'; gate: number; spacing: number }
   | { id: 'outlet'; gate: number }
@@ -34,6 +36,7 @@ interface GateRecord {
   index: number;       // 1-based stop index
   mm: number;          // saved position in mm
   outletCmd: OutletConfigCmd | null;  // null = skip
+  capped?: boolean;    // true = spare gate, capped/blocked (no tool)
 }
 
 @Component({
@@ -272,6 +275,18 @@ interface GateRecord {
       font-variant-numeric: tabular-nums;
     }
 
+    /* ── Spare-gate pick ── */
+    .spare-list { display: flex; flex-direction: column; gap: 8px; }
+    .spare-item {
+      display: flex; align-items: center; justify-content: space-between; gap: 12px;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 12px; padding: 12px 16px; font-size: 15px; color: var(--text);
+    }
+    .spare-item.selected { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--surface)); }
+    .spare-item:active { opacity: 0.7; }
+    .spare-item .spare-name { font-weight: 600; }
+    .spare-item .spare-pos { color: var(--muted); font-variant-numeric: tabular-nums; }
+
     /* ── Review table ── */
     .review-table {
       border: 1px solid var(--border);
@@ -428,7 +443,11 @@ interface GateRecord {
       <!-- ── Phase 1.1: Gate Count ── -->
       <ng-container *ngIf="step.id === 'gate-count'">
         <div class="step-title">How many blast gates?</div>
-        <div class="step-hint">Count the gates on your manifold (1–16).</div>
+        <div class="step-hint">
+          How many tools you'll connect. Rockler manifolds come in pairs, so gates
+          are added two at a time — pick an odd number and we'll add one spare gate
+          you'll cap off.
+        </div>
 
         <div class="stepper">
           <button class="step-dec" [disabled]="numGates <= 1" (click)="numGates = numGates - 1">−</button>
@@ -518,6 +537,31 @@ interface GateRecord {
         </div>
       </ng-container>
 
+      <!-- ── Phase 2.6: Spare-gate pick (only when even-rounding added a gate) ── -->
+      <ng-container *ngIf="step.id === 'spare-pick'">
+        <div class="step-title">Which gate is the spare?</div>
+        <div class="step-hint">
+          Your manifold has {{ numGates }} gate positions but you're using {{ usedGates }}.
+          Pick the spare — it'll be capped off (no tool, no airflow).
+        </div>
+
+        <div class="spare-list">
+          <button type="button" class="spare-item"
+                  *ngFor="let g of gates"
+                  [class.selected]="spareGate === g.index"
+                  (click)="selectSpare(g.index)">
+            <span class="spare-name">Gate {{ g.index }}</span>
+            <span class="spare-pos">{{ units.format(g.mm) }}</span>
+          </button>
+        </div>
+
+        <div class="error-banner" *ngIf="errorMsg">⚠ {{ errorMsg }}</div>
+
+        <button class="primary-btn" [disabled]="spareGate === null || busy" (click)="confirmSpare()">
+          {{ busy ? 'Saving…' : 'Cap this gate' }}
+        </button>
+      </ng-container>
+
       <!-- ── Phase 3: Gate Positioning ── -->
       <ng-container *ngIf="step.id === 'position'">
         <div class="step-title">Position Gate {{ step.gate }}</div>
@@ -586,10 +630,11 @@ interface GateRecord {
           <div class="review-row" *ngFor="let g of gates">
             <span class="gate-num">Gate {{ g.index }}</span>
             <span class="pos">{{ units.format(g.mm) }}</span>
-            <span class="tool">
+            <span class="tool" *ngIf="!g.capped">
               {{ g.outletCmd?.name || 'Gate ' + g.index }}{{ g.outletCmd?.ip ? '' : ' · no plug' }}
             </span>
-            <button class="edit-btn" (click)="editGate(g.index)">Edit</button>
+            <span class="tool" *ngIf="g.capped">capped — spare</span>
+            <button class="edit-btn" *ngIf="!g.capped" (click)="editGate(g.index)">Edit</button>
           </div>
         </div>
 
@@ -628,6 +673,12 @@ export class ManualSetupComponent implements OnInit, OnDestroy {
   // ── Phase 1 state ─────────────────────────────────────────────────────────
   numGates = 4;
   homeSideSelected: 'left' | 'right' | null = null;
+  /** Gates the user intends to use (before even-rounding). numGates >= usedGates. */
+  usedGates = 4;
+  /** How many spare gates the even-rounding added (0 or 1). */
+  spareCount = 0;
+  /** The gate index the user chose to cap as the spare (spare-pick step). */
+  spareGate: number | null = null;
 
   // ── Phase 3 state ─────────────────────────────────────────────────────────
   gates: GateRecord[] = [];
@@ -752,6 +803,9 @@ export class ManualSetupComponent implements OnInit, OnDestroy {
     this.gateStartMm     = 0;
     this.equalSpacingMm  = null;
     this.equalSpacingOffered = false;
+    this.usedGates       = this.numGates;
+    this.spareCount      = 0;
+    this.spareGate       = null;
     this.editing         = false;
     this.homeSideSelected = null;
     this.errorMsg        = '';
@@ -765,6 +819,13 @@ export class ManualSetupComponent implements OnInit, OnDestroy {
   async confirmGateCount() {
     this.errorMsg = '';
     this.busy     = true;
+    // Rockler manifolds ship in pairs → physical gate count is even. Round an odd
+    // request up; the extra port becomes a spare the user caps (spare-pick step).
+    const physical = model.physicalGateCount(this.modelId(), this.numGates);
+    this.usedGates  = this.numGates;
+    this.spareCount = physical - this.numGates;
+    this.numGates   = physical;
+    this.spareGate  = null;
     this.cd.markForCheck();
     try {
       await this.api.setNumGates(this.numGates);
@@ -834,10 +895,46 @@ export class ManualSetupComponent implements OnInit, OnDestroy {
     this.gates = [];
     for (let i = 1; i <= this.numGates; i++) {
       const mm = parseFloat((s.stops?.[i]?.mm as string | undefined) ?? '0');
-      this.gates.push({ index: i, mm: isNaN(mm) ? 0 : mm, outletCmd: null });
+      this.gates.push({ index: i, mm: isNaN(mm) ? 0 : mm, outletCmd: null, capped: false });
     }
     this.editing = false;
-    this.goToStep({ id: 'outlet', gate: 1 });
+    // If even-rounding added a spare gate, have the user pick which one to cap
+    // before configuring tools; otherwise go straight into the outlet loop.
+    if (this.spareCount > 0) this.goToStep({ id: 'spare-pick' });
+    else this.goToStep({ id: 'outlet', gate: 1 });
+  }
+
+  // ── Spare-gate pick (only when even-rounding added a gate) ──────────────────
+  selectSpare(index: number) { this.spareGate = index; this.cd.markForCheck(); }
+
+  async confirmSpare() {
+    if (this.spareGate == null || this.busy) return;
+    this.errorMsg = '';
+    this.busy = true;
+    this.cd.markForCheck();
+    try {
+      await this.api.setPortRole(this.spareGate, 'blocked');
+      const g = this.gates.find((x) => x.index === this.spareGate);
+      if (g) g.capped = true;
+      this.goToStep({ id: 'outlet', gate: this.firstConfigurableGate() });
+    } catch {
+      this.errorMsg = 'Could not cap the spare gate. Check connection.';
+    } finally {
+      this.busy = false;
+      this.cd.markForCheck();
+    }
+  }
+
+  /** First gate index that isn't the capped spare. */
+  private firstConfigurableGate(): number {
+    for (let i = 1; i <= this.numGates; i++) if (i !== this.spareGate) return i;
+    return 1;
+  }
+
+  /** Next gate index after `after` that isn't the capped spare, or numGates+1 when done. */
+  private nextConfigurableGate(after: number): number {
+    for (let i = after + 1; i <= this.numGates; i++) if (i !== this.spareGate) return i;
+    return this.numGates + 1;
   }
 
   // ── Phase 2 ───────────────────────────────────────────────────────────────
@@ -894,7 +991,8 @@ export class ManualSetupComponent implements OnInit, OnDestroy {
       return;
     }
 
-    const nextGate = outletStep.gate + 1;
+    // Skip the capped spare gate (auto path only; spareGate is null otherwise).
+    const nextGate = this.nextConfigurableGate(outletStep.gate);
     if (nextGate > this.numGates) {
       this.goToStep({ id: 'dust-collector' });
       return;

@@ -22,6 +22,7 @@ SmartOutletControl::SmartOutletControl()
       _dcManualOverride(false),
       _dcManualState(false),
       _requestedStop(0),
+      _activeStop(0),
       _manualOverride(false),
       _mutex(nullptr),
       _pollTaskHandle(nullptr),
@@ -192,7 +193,7 @@ void SmartOutletControl::doPoll() {
 
     if (_count == 0) {
         // No sensor outlets — but a dust collector plug may still be configured,
-        // so keep it reconciled (it will stay off since _requestedStop is 0).
+        // so keep it reconciled (it will stay off since _activeStop is 0).
         reconcileDustCollector();
         return;
     }
@@ -255,12 +256,19 @@ void SmartOutletControl::doPoll() {
                                                : OUTLET_ON_DEBOUNCE_MS;
         if (now - _pendingStartMs >= window) {
             xSemaphoreTake(_mutex, portMAX_DELAY);
-            if (!_manualOverride && _requestedStop != bestStop) {
+            // Track the active tool (0 = idle) for dust-collector control, and
+            // release any manual DC override on a real tool on/off event.
+            if (bestStop != _activeStop) {
+                _activeStop = bestStop;
+                _dcManualOverride = false;
+            }
+            // Move the gate only to an ACTIVE tool. At idle (bestStop==0) HOLD the
+            // last position — never auto-return home. Keeps a duct path open (a
+            // manual collector start can't dead-head) and avoids needless wear on a
+            // brief tool-off; the dust collector still switches off via _activeStop.
+            if (!_manualOverride && bestStop > 0 && _requestedStop != bestStop) {
                 DEBUG_PRINT(F("[Outlets] → stop ")); Serial.println(bestStop);
                 _requestedStop = bestStop;
-                // An automatic tool on/off event resumes automatic DC control,
-                // releasing any manual dashboard override.
-                _dcManualOverride = false;
             }
             xSemaphoreGive(_mutex);
         }
@@ -278,11 +286,12 @@ void SmartOutletControl::reconcileDustCollector() {
     if (!_dustCollector) return;
 
     // Desired: while a manual override is active, follow the forced state;
-    // otherwise ON whenever a real gate is selected (a tool is running or a
-    // manual move targeted a gate) and OFF at home. _requestedStop is already
-    // debounced by the poll logic above.
+    // otherwise ON whenever a TOOL is actively running and OFF when idle. Keyed
+    // to _activeStop (debounced tool activity), NOT _requestedStop — at idle the
+    // gate holds at its last position (_requestedStop stays > 0) but no tool is
+    // running, so the collector must switch off.
     xSemaphoreTake(_mutex, portMAX_DELAY);
-    bool desired = _dcManualOverride ? _dcManualState : (_requestedStop > 0);
+    bool desired = _dcManualOverride ? _dcManualState : (_activeStop > 0);
     bool needsSwitch = !_dcSynced || (desired != _dcOn);
     xSemaphoreGive(_mutex);
 

@@ -6,7 +6,8 @@
     "mock": "node mock-api.js",
     "mock:claude": "node mock-api.js",
     "conformance": "node ../shared/device-model/conformance.js",
-    "conformance:ci": "node mock-api.js & MOCK_PID=$!; sleep 2; node ../shared/device-model/conformance.js; RC=$?; kill $MOCK_PID; exit $RC"
+    "conformance:ci": "node mock-api.js & MOCK_PID=$!; sleep 2; node ../shared/device-model/conformance.js; RC=$?; kill $MOCK_PID; exit $RC",
+    "model:test": "node ../shared/device-model/topology.test.js"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
