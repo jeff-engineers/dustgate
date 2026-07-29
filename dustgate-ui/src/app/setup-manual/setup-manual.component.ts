@@ -52,8 +52,8 @@ interface GateRecord {
     :host {
       display: flex;
       flex-direction: column;
-      height: 100dvh;
-      height: 100vh;
+      height: 100vh;   /* fallback for browsers without dvh */
+      height: 100dvh;  /* wins where supported — tracks the dynamic viewport (mobile address bar) */
       overflow: hidden;
       background: var(--bg);
     }
@@ -78,6 +78,16 @@ interface GateRecord {
       flex-shrink: 0;
     }
     .back-btn:active { opacity: 0.6; }
+    /* Text variant for the primary "previous step" control — auto-width pill
+       instead of the round icon button (forward stays a round arrow). */
+    .back-btn.labeled {
+      width: auto;
+      border-radius: 20px;
+      padding: 0 16px;
+      gap: 6px;
+      font-size: 14px;
+      font-weight: 600;
+    }
 
     .header h1 { font-size: 18px; font-weight: 700; flex: 1; }
 
@@ -116,6 +126,7 @@ interface GateRecord {
     /* ── Scroll content ── */
     .content {
       flex: 1;
+      min-height: 0;   /* let this flex child shrink below its content height so overflow-y actually scrolls (default min-height:auto would grow it and get clipped by :host) */
       overflow-y: auto;
       padding: 24px 16px;
       display: flex;
@@ -367,7 +378,7 @@ interface GateRecord {
   template: `
     <!-- Header -->
     <div class="header">
-      <button class="back-btn" (click)="goBack()" aria-label="Back">←</button>
+      <button class="back-btn labeled" *ngIf="canGoBack" (click)="goBack()" aria-label="Previous step">← Previous step</button>
       <button class="back-btn" *ngIf="future.length" (click)="stepForward()" aria-label="Forward">→</button>
       <h1>Manual Setup</h1>
 
@@ -553,6 +564,7 @@ interface GateRecord {
           [slotIndex]="step.gate - 1"
           [existing]="editing ? outletCmdFor(step.gate) : undefined"
           [excludeIps]="assignedOutletIps(step.gate)"
+          [dustCollectorIp]="dcReservedIp"
           (saved)="onOutletSaved($event)">
         </app-outlet-configurator>
       </ng-container>
@@ -619,6 +631,9 @@ export class ManualSetupComponent implements OnInit, OnDestroy {
 
   // ── Phase 3 state ─────────────────────────────────────────────────────────
   gates: GateRecord[] = [];
+  /** The plug configured for the dust collector, if any — used to mark it
+   *  reserved (not pickable as a tool sensor) when revisiting a gate. */
+  dcCmd: DustCollectorCmd | null = null;
   /** Starting mm for the currently active GatePositioner. */
   gateStartMm = 0;
   /** True when the user chose equal spacing and we pre-calculated targets. */
@@ -698,11 +713,16 @@ export class ManualSetupComponent implements OnInit, OnDestroy {
     this.cd.markForCheck();
   }
 
-  /** Header back button: previous wizard step if there is one, else leave the wizard. */
-  goBack() {
-    if (this.history.length > 0) { this.stepBack(); return; }
-    this.router.navigate(['/']);
-  }
+  /** True when there's a prior wizard step to return to. Drives the visibility
+   *  of the header "Previous step" button so it never doubles as a wizard-exit. */
+  get canGoBack(): boolean { return this.history.length > 0; }
+
+  /** Header "Previous step" button — returns to the prior wizard step only. It
+   *  used to fall through to router.navigate(['/']) when history was empty, which
+   *  is why it "bailed out of the whole wizard"; now it's purely step-back and the
+   *  button is hidden (canGoBack) when there's nothing to go back to. Leaving the
+   *  wizard is "Start over" or normal app navigation, not this control. */
+  goBack() { this.stepBack(); }
 
   stepBack() {
     if (!this.history.length) return;
@@ -728,6 +748,7 @@ export class ManualSetupComponent implements OnInit, OnDestroy {
     this.history          = [];
     this.future           = [];
     this.gates           = [];
+    this.dcCmd           = null;
     this.gateStartMm     = 0;
     this.equalSpacingMm  = null;
     this.equalSpacingOffered = false;
@@ -901,10 +922,18 @@ export class ManualSetupComponent implements OnInit, OnDestroy {
     this.goToPosition(nextGate);
   }
 
-  onDustCollectorSaved(_cmd: DustCollectorCmd | null) {
-    // Config (and any on/off test) already happened inside the child
-    // component — nothing more to record here, just move on.
+  onDustCollectorSaved(cmd: DustCollectorCmd | null) {
+    // Config (and any on/off test) already happened inside the child component;
+    // remember the plug it claimed so that going back to a gate's outlet step
+    // shows this plug as reserved for the dust collector (not pickable as a
+    // tool sensor). See dcReservedIp / the gate outlet-configurator binding.
+    this.dcCmd = cmd;
     this.goToStep({ id: 'review' });
+  }
+
+  /** IP of the plug reserved for the dust collector, if one is configured. */
+  get dcReservedIp(): string | undefined {
+    return this.dcCmd?.ip || undefined;
   }
 
   applyEqualSpacing() {

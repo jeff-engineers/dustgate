@@ -1,7 +1,7 @@
 // =============================================================================
 // SmartOutlet.h — Abstract base for any power-monitoring smart outlet
 //
-// Concrete implementations: ShellyGen1Outlet, ShellyGen2Outlet
+// Concrete implementation: ShellyGen2Outlet (Gen2+ / Plus / Pro; Gen1 dropped)
 // Future:  KasaOutlet, HomeAssistantOutlet, CTSensorOutlet, ...
 //
 // Thread safety: poll() is called from the background FreeRTOS task.
@@ -22,6 +22,12 @@ public:
     // Blocking — call only from the poll task, not from loop().
     // Returns true on success; false if unreachable or parse error.
     virtual bool poll() = 0;
+
+    // Reachability check with a caller-chosen timeout, used by the provisioning
+    // path where we can afford to wait for a marginal plug (unlike the tight
+    // 400ms poll timeout). Default falls back to poll(); ShellyGen2Outlet honors
+    // the timeout. Returns true if the outlet answered.
+    virtual bool probe(uint32_t /*timeoutMs*/) { return poll(); }
 
     // Switch the outlet's load on or off. Used for actuator-style outlets
     // (e.g. the dust collector plug) rather than power sensing. Blocking —
@@ -70,10 +76,39 @@ public:
     void setHost(const char* h) { strlcpy(_host, h, sizeof(_host)); }
     const char* host() const { return _host; }
 
+    // -------------------------------------------------------------------------
+    // Push support (Gen2 Outbound WebSocket). When a plug maintains an outbound
+    // WebSocket to us, its power arrives via setPushedPower() instead of poll().
+    // While a push connection is up, the poll task skips the HTTP poll for this
+    // outlet entirely (no polling storm); if the connection drops, it falls back
+    // to polling. See SmartOutletControl's push handlers + reconcile loop.
+    // -------------------------------------------------------------------------
+    void setPushedPower(float w) { _lastPowerW = w; _reachable = true; }
+    void setPushConnected(bool c) {
+        _pushConnected = c;
+        if (!c) { _reachable = false; _lastPowerW = 0.0f; } // dropped → treat as offline until re-polled/re-pushed
+    }
+    bool isPushConnected() const { return _pushConnected; }
+
+    // True once we've successfully pushed Ws/name config to this plug. Lets the
+    // poll task provision each plug ONCE rather than re-POSTing every retry tick
+    // (a plug that won't connect is a separate problem — re-sending the same
+    // config won't fix it). Reset naturally when the outlet object is recreated.
+    void setProvisioned(bool p) { _wsProvisioned = p; }
+    bool isProvisioned() const  { return _wsProvisioned; }
+
+    // Configure the plug to push to us (Ws.SetConfig) and, optionally, set its
+    // friendly name (Switch.SetConfig). Blocking HTTP — poll task only. Base
+    // no-ops; ShellyGen2Outlet implements them.
+    virtual bool configureOutboundWs(const char* /*wsUrl*/) { return false; }
+    virtual bool setName(const char* /*name*/)              { return false; }
+
 protected:
-    float _lastPowerW = 0.0f;
-    float _thresholdW = 5.0f;
-    int   _stopIndex  = 0;
-    bool  _reachable  = false;
-    char  _host[40]   = "";
+    float _lastPowerW   = 0.0f;
+    float _thresholdW   = 5.0f;
+    int   _stopIndex    = 0;
+    bool  _reachable    = false;
+    bool  _pushConnected = false;
+    bool  _wsProvisioned = false;
+    char  _host[40]     = "";
 };

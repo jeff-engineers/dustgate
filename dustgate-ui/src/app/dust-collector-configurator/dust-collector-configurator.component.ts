@@ -248,9 +248,9 @@ type Phase = 'ask' | 'form' | 'confirm-on' | 'testing' | 'result' | 'confirm-off
         </div>
       </ng-container>
 
-      <!-- Phase: locate the outlet — scan-first, the device tries Gen 1 then
-           Gen 2 automatically so there's nothing to pick, just a device or
-           IP to confirm. -->
+      <!-- Phase: locate the outlet — scan-first, Gen2+ plugs only (Gen1 not
+           supported) so there's nothing to pick, just a device or IP to
+           confirm. -->
       <ng-container *ngIf="phase === 'form'">
         <ng-container *ngIf="!manualEntry">
           <button class="scan-btn" [disabled]="scanning" (click)="scan()">

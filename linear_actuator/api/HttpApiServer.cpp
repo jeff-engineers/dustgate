@@ -15,11 +15,11 @@
 // AgentConfig.h provides getAnthropicKey/setAnthropicKey/reset without pulling
 // in <WebServer.h>, which would conflict with ESPAsyncWebServer's HTTP enums.
 #include "../utils/AgentConfig.h"
+#include "../utils/AnthropicRootCA.h"
 #include "../training/CalibrationStore.h"
 
 #ifdef CONTROL_SMART_OUTLET
   #include "../control/SmartOutletControl.h"
-  #include "../outlets/ShellyGen1Outlet.h"
   #include "../outlets/ShellyGen2Outlet.h"
   #include "../outlets/ShellyDeviceName.h"
   #include <HTTPClient.h>
@@ -81,6 +81,9 @@ static uint32_t statusFingerprint(const ApiStatus& s
 HttpApiServer::HttpApiServer()
     : _server(API_PORT),
       _ws("/ws"),
+#ifdef CONTROL_SMART_OUTLET
+      _shellyWs("/shelly-rpc"),
+#endif
       _mutex(nullptr),
       _lastStatusHash(0),
       _statusHashValid(false),
@@ -169,6 +172,55 @@ bool HttpApiServer::begin() {
     });
     _server.addHandler(&_ws);
 
+#ifdef CONTROL_SMART_OUTLET
+    // Inbound WebSocket for Gen2 plugs (Outbound WebSocket). Each plug dials in
+    // and streams JSON-RPC NotifyStatus/NotifyFullStatus frames carrying its
+    // switch:0.apower; route them to SmartOutletControl by the plug's source IP.
+    // Runs in the AsyncTCP task; the control object's handlers are thread-safe.
+    //
+    // TRUST MODEL — this endpoint is deliberately UNAUTHENTICATED, unlike the
+    // REST API (which requires X-Api-Key via checkAuth). Shelly plugs have no way
+    // to present our API key on their Outbound WebSocket, so we can't gate it.
+    // Instead we trust the LAN: a connecting client is matched to a configured
+    // outlet ONLY by its TCP source IP (client->remoteIP()), which can't be
+    // forged on an established TCP connection. A pushed reading can at most drive
+    // a gate for an IP that's already configured as an outlet, and only a device
+    // actually holding that IP can send it. This is a LAN-local trust assumption:
+    // it does NOT defend against a hostile device sitting at a configured plug's
+    // address. Acceptable for a workshop LAN; revisit if this ever faces a less
+    // trusted network (e.g. add a shared secret in the Ws path/query at
+    // provisioning time and check it here).
+    _shellyWs.onEvent([this](AsyncWebSocket*, AsyncWebSocketClient* client,
+                             AwsEventType type, void* arg, uint8_t* data, size_t len) {
+        if (!_outletControl) return;
+        String ip = client->remoteIP().toString();
+        if (type == WS_EVT_CONNECT) {
+            _outletControl->onPushConnect(ip.c_str());
+        } else if (type == WS_EVT_DISCONNECT || type == WS_EVT_ERROR) {
+            _outletControl->onPushDisconnect(ip.c_str());
+        } else if (type == WS_EVT_DATA) {
+            AwsFrameInfo* info = (AwsFrameInfo*)arg;
+            // Only handle complete, single-frame text messages — Shelly status
+            // notifications are small and comfortably fit one frame.
+            if (!(info->final && info->index == 0 && info->len == len)) return;
+            if (info->opcode != WS_TEXT) return;
+
+            // Filter to just the field we need before parsing — keeps the doc
+            // tiny regardless of how much the plug crams into params.
+            StaticJsonDocument<128> filter;
+            filter["params"]["switch:0"]["apower"] = true;
+            StaticJsonDocument<256> doc;
+            if (deserializeJson(doc, data, len, DeserializationOption::Filter(filter))) return;
+
+            JsonVariant ap = doc["params"]["switch:0"]["apower"];
+            if (!ap.isNull()) {
+                _outletControl->onPushedPower(ip.c_str(), ap.as<float>());
+            }
+        }
+    });
+    _server.addHandler(&_shellyWs);
+#endif
+
     registerRoutes();
 
     // CORS headers for Angular dev server (localhost:4200)
@@ -196,6 +248,8 @@ void HttpApiServer::update(const ApiStatus& status
     if (status.numActiveStops > 0) _cachedNumActiveStops = status.numActiveStops;
 
 #ifdef CONTROL_SMART_OUTLET
+    _shellyWs.cleanupClients();
+    _outletControl = outlets;  // so the /shelly-rpc WS callback can reach it
     uint32_t fp = statusFingerprint(status, outlets);
 #else
     uint32_t fp = statusFingerprint(status);
@@ -985,9 +1039,10 @@ void HttpApiServer::registerRoutes() {
     // The ESP32 adds auth headers and forwards to Anthropic; the response
     // is returned verbatim.  Angular runs the tool-use loop (see REQUIREMENTS.md §7).
     //
-    // SECURITY NOTE: WiFiClientSecure is configured with setInsecure() below.
-    // TODO: before any cloud/public deployment, validate the Anthropic root CA
-    //       cert instead of skipping verification.
+    // SECURITY: the TLS connection to Anthropic is validated against pinned root
+    // CAs (see AnthropicRootCA.h) before the API key is sent, so a MITM can't
+    // impersonate api.anthropic.com and capture the key. A cert mismatch fails
+    // the handshake closed — the request is never sent.
     // ------------------------------------------------------------------
     _server.on("/api/agent/chat", HTTP_POST,
         [](AsyncWebServerRequest* req) {},
@@ -1020,7 +1075,7 @@ void HttpApiServer::registerRoutes() {
                 auto* a = static_cast<ChatArgs*>(arg);
 
                 WiFiClientSecure client;
-                client.setInsecure(); // TODO: validate cert before cloud deployment
+                client.setCACert(ANTHROPIC_ROOT_CA); // validate the server before sending the key
 
                 const char* HOST = "api.anthropic.com";
                 if (!client.connect(HOST, 443)) {

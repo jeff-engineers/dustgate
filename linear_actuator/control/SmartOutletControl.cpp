@@ -7,7 +7,6 @@
 #ifdef CONTROL_SMART_OUTLET
 
 #include <WiFi.h>  // for WiFi.status() check in begin()
-#include "../outlets/ShellyGen1Outlet.h"
 #include "../outlets/ShellyGen2Outlet.h"
 #include "../outlets/OutletConfig.h"
 
@@ -25,11 +24,17 @@ SmartOutletControl::SmartOutletControl()
       _requestedStop(0),
       _manualOverride(false),
       _mutex(nullptr),
+      _pollTaskHandle(nullptr),
+      _needsProvision(true),
+      _provisionPending(false),
+      _lastProvisionMs(0),
+      _lastLocalIp(0),
       _pendingStop(-1),
       _pendingStartMs(0)
 {
     memset(_outlets, 0, sizeof(_outlets));
     memset(_prevActive, 0, sizeof(_prevActive));
+    _wsUrl[0] = '\0';
 }
 
 SmartOutletControl::~SmartOutletControl() {
@@ -59,20 +64,22 @@ bool SmartOutletControl::begin() {
         return false;
     }
 
+    // Build the Outbound-WebSocket URL plugs dial back to. Uses our current IP,
+    // so it's refreshed every boot — self-healing across DHCP lease changes.
+    snprintf(_wsUrl, sizeof(_wsUrl), "ws://%s:%d/shelly-rpc",
+             WiFi.localIP().toString().c_str(), API_PORT);
+    _lastLocalIp = (uint32_t)WiFi.localIP();
+    DEBUG_PRINT(F("[Outlets] Push endpoint for plugs: ")); DEBUG_PRINTLN(_wsUrl);
+
     // Load outlet mappings from NVS
     OutletEntry entries[SMART_OUTLET_COUNT];
     int n = OutletConfig::load(entries, SMART_OUTLET_COUNT);
 
     for (int i = 0; i < n; i++) {
         if (!entries[i].valid) continue;
-        SmartOutlet* o = nullptr;
-        // >= 2, not == 2: Gen3+ speaks the same RPC dialect as Gen2, so any
-        // advertised generation above 1 maps to the Gen2 class.
-        if (entries[i].generation >= 2) {
-            o = new ShellyGen2Outlet(entries[i].ip, entries[i].name);
-        } else {
-            o = new ShellyGen1Outlet(entries[i].ip, entries[i].name);
-        }
+        // Only Gen2+ plugs are supported (Gen1 dropped); stored generation is
+        // always >= 2, and Gen3+ speaks the same RPC dialect as Gen2.
+        SmartOutlet* o = new ShellyGen2Outlet(entries[i].ip, entries[i].name);
         o->setStopIndex(entries[i].stopIndex);
         o->setThresholdW(entries[i].thresholdW);
         o->setHost(entries[i].host);
@@ -90,9 +97,7 @@ bool SmartOutletControl::begin() {
     // Load the dust collector plug (optional)
     DustCollectorEntry dc;
     if (OutletConfig::loadDustCollector(dc)) {
-        _dustCollector = (dc.generation >= 2)
-                       ? (SmartOutlet*)new ShellyGen2Outlet(dc.ip, "Dust Collector")
-                       : (SmartOutlet*)new ShellyGen1Outlet(dc.ip, "Dust Collector");
+        _dustCollector = new ShellyGen2Outlet(dc.ip, "Dust Collector");
         _dustCollector->setHost(dc.host);
         _dcSynced = false; // force initial off/on sync on first poll
         DEBUG_PRINT(F("[Outlets] Dust collector plug: gen"));
@@ -105,9 +110,9 @@ bool SmartOutletControl::begin() {
         "outletPoll", // name (for debugging)
         8192,         // stack bytes — HTTPClient + JSON needs headroom
         this,         // parameter
-        1,            // priority (same as loop; yields to Core 1 motor updates)
-        nullptr,      // task handle (not needed)
-        0             // Core 0
+        1,               // priority (same as loop; yields to Core 1 motor updates)
+        &_pollTaskHandle, // task handle — used by setDcManual() to wake the task
+        0                // Core 0
     );
 
     DEBUG_PRINTLN(F("[Outlets] Poll task started."));
@@ -137,11 +142,54 @@ void SmartOutletControl::pollTaskFn(void* param) {
     SmartOutletControl* self = static_cast<SmartOutletControl*>(param);
     while (true) {
         self->doPoll();
-        vTaskDelay(pdMS_TO_TICKS(OUTLET_POLL_INTERVAL_MS));
+        // Sleep until the next poll interval OR until woken early by a manual
+        // dust-collector toggle (setDcManual → xTaskNotifyGive). ulTaskNotifyTake
+        // returns immediately when a notification is pending, so a manual switch
+        // is applied on the very next reconcile instead of after up to a full
+        // OUTLET_POLL_INTERVAL_MS. clearCountOnExit=pdTRUE resets the count so
+        // each wake consumes exactly one notification.
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(OUTLET_POLL_INTERVAL_MS));
     }
 }
 
+// Poll task: detect our own DHCP address changing at runtime. The push URL we
+// hand plugs is built from our IP; if a lease renewal moves us to a new address,
+// plugs keep dialing the old (now-dead) URL forever — push silently falls back to
+// polling and never recovers until reboot. On a change, rebuild the URL and force
+// every plug to be re-provisioned so it dials the new address. Ignores 0.0.0.0
+// (transient during a WiFi drop) so a brief disconnect doesn't churn provisioning.
+void SmartOutletControl::checkLocalIpChange() {
+    uint32_t ip = (uint32_t)WiFi.localIP();
+    if (ip == 0 || ip == _lastLocalIp) return;
+    _lastLocalIp = ip;
+    snprintf(_wsUrl, sizeof(_wsUrl), "ws://%s:%d/shelly-rpc",
+             WiFi.localIP().toString().c_str(), API_PORT);
+    DEBUG_PRINT(F("[Outlets] Local IP changed — new push endpoint: ")); DEBUG_PRINTLN(_wsUrl);
+    for (int i = 0; i < _count; i++) {
+        if (!_outlets[i]) continue;
+        _outlets[i]->setProvisioned(false);    // re-send Ws config with the new URL
+        _outlets[i]->setPushConnected(false);  // old connection is to the stale address
+    }
+    _needsProvision = true;
+}
+
 void SmartOutletControl::doPoll() {
+    checkLocalIpChange();   // re-point plugs if our DHCP IP moved out from under us
+
+    // Push-provision plugs (Ws + name) when flagged (first run after boot, and
+    // after any outlet (re)configuration), and periodically retry as long as
+    // some plug still needs it — e.g. one that was briefly unreachable at boot.
+    // Steady state (all plugs pushing) does no HTTP here.
+    {
+        unsigned long now = millis();
+        if (_needsProvision ||
+            (_provisionPending && (now - _lastProvisionMs) >= OUTLET_PROVISION_RETRY_MS)) {
+            _needsProvision   = false;
+            _lastProvisionMs  = now;
+            _provisionPending = provisionPushOutlets();
+        }
+    }
+
     if (_count == 0) {
         // No sensor outlets — but a dust collector plug may still be configured,
         // so keep it reconciled (it will stay off since _requestedStop is 0).
@@ -165,7 +213,10 @@ void SmartOutletControl::doPoll() {
         if (!o) continue;
         if (strlen(o->ip()) == 0) continue;  // name-only gate — no plug to poll
 
-        o->poll();
+        // Push-connected plugs stream their power over the WebSocket, so skip
+        // the HTTP poll entirely (this is what removes the polling storm).
+        // Only fall back to an HTTP poll for a plug whose push isn't up.
+        if (!o->isPushConnected()) o->poll();
 
         bool active = o->isActive();
         if (active && !_prevActive[i]) risingEdge = true;
@@ -249,6 +300,91 @@ void SmartOutletControl::reconcileDustCollector() {
 }
 
 // =============================================================================
+// Push (Gen2 Outbound WebSocket) — provisioning + inbound handlers
+// =============================================================================
+
+// Match a push event's source IP to a configured outlet. Poll task and the
+// HTTP server's WS callback both call this; the outlet array only grows/shrinks
+// during (rare) reconfiguration, so a lock-free scan is acceptable here.
+SmartOutlet* SmartOutletControl::outletByIp(const char* ip) {
+    if (!ip || !ip[0]) return nullptr;
+    for (int i = 0; i < _count; i++) {
+        SmartOutlet* o = _outlets[i];
+        if (o && strcmp(o->ip(), ip) == 0) return o;
+    }
+    return nullptr;
+}
+
+// Poll task: tell every configured Gen2 plug to open an Outbound WebSocket back
+// to us, and set its friendly name to the gate's name. Blocking HTTP — safe on
+// the poll task. Best-effort: a plug that's briefly unreachable is retried on
+// the next provisioning pass (e.g. after the next reconfigure or reboot).
+bool SmartOutletControl::provisionPushOutlets() {
+    if (_wsUrl[0] == '\0') return false;
+    DEBUG_PRINT(F("[Outlets] Provisioning plugs (free heap "));
+    DEBUG_PRINT(ESP.getFreeHeap()); DEBUG_PRINTLN(F(" bytes)..."));
+
+    bool pending = false;
+    for (int i = 0; i < _count; i++) {
+        SmartOutlet* o = _outlets[i];
+        if (!o || strlen(o->ip()) == 0) continue;  // name-only gate — no plug
+
+        // Skip plugs we've already configured (or that are already pushing) —
+        // re-POSTing the same config every retry is pointless and just churns
+        // the network. A plug that's provisioned but not connecting is a
+        // separate problem that re-sending config won't fix.
+        if (o->isPushConnected() || o->isProvisioned()) continue;
+
+        // Reachability probe before the slow flash-writing SetConfig POSTs. Uses
+        // a generous timeout (not the 400ms poll timeout) so a marginal plug gets
+        // a fair chance to answer here; if it still can't, don't hammer it with
+        // 3s-timeout writes — mark it pending and retry later.
+        bool reachable = o->probe(OUTLET_PROVISION_PROBE_TIMEOUT_MS);
+        DEBUG_PRINT(F("[Outlets] provision ")); DEBUG_PRINT(o->ip());
+        DEBUG_PRINT(F(" reachable(GetStatus)=")); DEBUG_PRINTLN(reachable ? F("yes") : F("no"));
+        if (!reachable) { pending = true; continue; }
+
+        // Name FIRST, while the plug is idle. Doing Ws.SetConfig first makes the
+        // plug (re)open its outbound WebSocket, and the immediately-following
+        // name write was landing while it was busy — so set the name, let it
+        // settle, then point its push connection at us.
+        if (strlen(o->name()) > 0) { o->setName(o->name()); delay(150); }
+        if (o->configureOutboundWs(_wsUrl)) o->setProvisioned(true);
+        else                                pending = true;
+        delay(50);
+    }
+
+    if (pending) DEBUG_PRINTLN(F("[Outlets] Some plugs unprovisioned — will retry."));
+    return pending;
+}
+
+void SmartOutletControl::onPushConnect(const char* ip) {
+    SmartOutlet* o = outletByIp(ip);
+    if (!o) return;   // not one of ours — ignore
+    o->setPushConnected(true);
+    DEBUG_PRINT(F("[Outlets] Push connected: ")); DEBUG_PRINTLN(ip);
+    if (_pollTaskHandle) xTaskNotifyGive(_pollTaskHandle);
+}
+
+void SmartOutletControl::onPushedPower(const char* ip, float apower) {
+    SmartOutlet* o = outletByIp(ip);
+    if (!o) return;
+    o->setPushConnected(true);   // a push implies the connection is live
+    o->setPushedPower(apower);
+    // Wake the poll task so a tool turning on/off is acted on immediately
+    // (subject to the usual on/off debounce), not at the next 500ms tick.
+    if (_pollTaskHandle) xTaskNotifyGive(_pollTaskHandle);
+}
+
+void SmartOutletControl::onPushDisconnect(const char* ip) {
+    SmartOutlet* o = outletByIp(ip);
+    if (!o) return;
+    o->setPushConnected(false);  // clears reachable/power → doPoll falls back to HTTP
+    DEBUG_PRINT(F("[Outlets] Push disconnected: ")); DEBUG_PRINTLN(ip);
+    if (_pollTaskHandle) xTaskNotifyGive(_pollTaskHandle);
+}
+
+// =============================================================================
 // Setup agent API
 // =============================================================================
 
@@ -261,13 +397,10 @@ void SmartOutletControl::configureOutlet(int slot, int generation,
     // Replace existing outlet object
     delete _outlets[slot];
 
-    SmartOutlet* o = nullptr;
-    // >= 2: see the equivalent note in begin() — Gen3+ uses the Gen2 dialect.
-    if (generation >= 2) {
-        o = new ShellyGen2Outlet(ip, name);
-    } else {
-        o = new ShellyGen1Outlet(ip, name);
-    }
+    // Gen2+ only (Gen1 dropped); `generation` is retained in the config/API
+    // for compatibility but is always >= 2.
+    (void)generation;
+    SmartOutlet* o = new ShellyGen2Outlet(ip, name);
     o->setStopIndex(stopIndex);
     o->setThresholdW(thresholdW);
     o->setHost(host);
@@ -279,6 +412,11 @@ void SmartOutletControl::configureOutlet(int slot, int generation,
     DEBUG_PRINT(F(" configured: ")); Serial.print(name);
     DEBUG_PRINT(F(" @ ")); Serial.print(ip);
     DEBUG_PRINT(F(" → stop ")); Serial.println(stopIndex);
+
+    // Flag the new plug for push provisioning (Ws.SetConfig + name write) and
+    // wake the poll task so it happens now rather than at the next tick.
+    _needsProvision = true;
+    if (_pollTaskHandle) xTaskNotifyGive(_pollTaskHandle);
 }
 
 void SmartOutletControl::removeOutlet(int slot) {
@@ -333,9 +471,7 @@ void SmartOutletControl::configureDustCollector(int generation, const char* ip, 
     // changes are rare and the poll task tolerates a brief window here.
     xSemaphoreTake(_mutex, portMAX_DELAY);
     delete _dustCollector;
-    _dustCollector = (generation == 2)
-                   ? (SmartOutlet*)new ShellyGen2Outlet(ip, "Dust Collector")
-                   : (SmartOutlet*)new ShellyGen1Outlet(ip, "Dust Collector");
+    _dustCollector = new ShellyGen2Outlet(ip, "Dust Collector");  // Gen2+ only
     _dustCollector->setHost(host);
     _dcOn     = false;
     _dcSynced = false;   // force a switch command on the next reconcile
@@ -376,7 +512,9 @@ void SmartOutletControl::setDcManual(bool on) {
     _dcManualState    = on;
     xSemaphoreGive(_mutex);
     DEBUG_PRINT(F("[Outlets] Dust collector manual → ")); DEBUG_PRINTLN(on ? F("ON") : F("OFF"));
-    // The poll task's next reconcile (≤ OUTLET_POLL_INTERVAL_MS) applies it.
+    // Wake the poll task now so the switch is applied immediately rather than
+    // waiting up to OUTLET_POLL_INTERVAL_MS for its next scheduled reconcile.
+    if (_pollTaskHandle) xTaskNotifyGive(_pollTaskHandle);
 }
 
 void SmartOutletControl::setManualOverride(int stop) {

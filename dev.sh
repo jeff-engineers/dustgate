@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+git#!/usr/bin/env bash
 # dev.sh — one entry point for every way to run DustGate.
 #
 # Interactive:
@@ -36,15 +36,21 @@ if ! command -v pio >/dev/null 2>&1; then
   fi
 fi
 
-# Finds the ESP32's serial port, ignoring unrelated devices (e.g. macOS's
-# built-in /dev/cu.Bluetooth-Incoming-Port, which PlatformIO's own auto-detect
-# has been observed to grab instead of the board).
+# Finds the ESP32's serial port across the USB enumerations we support:
+#   /dev/cu.usbserial* · .SLAB_USBtoUART* · .wchusbserial*  → DevKitC's CP2102 /
+#     CH340 USB-serial bridge (the primary board)
+#   /dev/cu.usbmodem*                                        → Feather's native USB
+# usbserial patterns are listed first so the primary board wins if somehow both
+# are present. Ignores unrelated devices (e.g. macOS's built-in
+# /dev/cu.Bluetooth-Incoming-Port, which PlatformIO's own auto-detect has been
+# observed to grab instead of the board).
 detect_port() {
-  # The trailing `|| true` matters: when the glob matches nothing, `ls` exits
+  # The trailing `|| true` matters: when the globs match nothing, `ls` exits
   # nonzero, and under `set -e -o pipefail` a bare assignment like
   # `port="$(detect_port)"` would otherwise silently kill the whole script
   # right here — with no error message, since stderr is discarded above.
-  ls /dev/cu.usbmodem* 2>/dev/null | head -1 || true
+  ls /dev/cu.usbserial* /dev/cu.SLAB_USBtoUART* /dev/cu.wchusbserial* \
+     /dev/cu.usbmodem* 2>/dev/null | head -1 || true
 }
 
 # Waits (with retries) for the ESP32 to show up on USB, prompting for a manual
@@ -58,8 +64,12 @@ require_port() {
     return 0
   fi
 
-  echo "  No ESP32 detected on /dev/cu.usbmodem*." >&2
-  echo "  Try: hold BOOT, tap RESET, release BOOT after ~1s — then this will retry." >&2
+  echo "  No ESP32 serial port detected (looked for usbserial / SLAB_USBtoUART /" >&2
+  echo "  wchusbserial / usbmodem under /dev/cu.*)." >&2
+  echo "  Checks: use a DATA USB cable (not charge-only); confirm the board shows up" >&2
+  echo "  with 'ls /dev/cu.*'; a CP2102/CH340 DevKitC needs the matching macOS driver." >&2
+  echo "  If it's a flashing-handshake issue: hold BOOT, tap RESET, release BOOT after" >&2
+  echo "  ~1s — then this will retry." >&2
   for _ in $(seq 1 60); do
     sleep 1
     port="$(detect_port)"

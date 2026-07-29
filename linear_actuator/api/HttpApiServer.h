@@ -165,6 +165,15 @@ public:
 private:
     AsyncWebServer    _server;
     AsyncWebSocket    _ws;
+#ifdef CONTROL_SMART_OUTLET
+    // Inbound WebSocket for Gen2 plugs' Outbound-WebSocket connections. Plugs
+    // are told (via Ws.SetConfig) to dial ws://<us>/shelly-rpc and stream their
+    // status here; the handler routes each frame to SmartOutletControl by the
+    // plug's source IP. Set _outletControl (from update()) so the async callback
+    // can reach the control object.
+    AsyncWebSocket        _shellyWs;
+    SmartOutletControl*   _outletControl = nullptr;
+#endif
     SemaphoreHandle_t _mutex;
     String            _apiKey;
     // Last serialised status — cached for GET /api/status

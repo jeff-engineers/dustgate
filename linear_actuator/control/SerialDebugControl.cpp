@@ -8,7 +8,6 @@
 #ifdef CONTROL_SMART_OUTLET
   #include "../utils/WiFiProvisioner.h"
   #include "../utils/MdnsQuery.h"
-  #include "../outlets/ShellyGen1Outlet.h"
   #include "../outlets/ShellyGen2Outlet.h"
   #include "../outlets/ShellyDeviceName.h"
 #endif
@@ -289,29 +288,27 @@ void SerialDebugControl::runDiscover() {
 
     for (int attempt = 0; attempt < DISCOVER_MDNS_ATTEMPTS; attempt++) {
         MdnsHit mdnsHits[DISCOVER_MAX_RESULTS];
-        int n = mdnsQueryHttpTcp(DISCOVER_MDNS_TIMEOUT_MS, mdnsHits, DISCOVER_MAX_RESULTS);
+        // _shelly._tcp is advertised only by Gen2+ Shelly devices (Gen1 dropped),
+        // so every responder is a supported plug — no hostname filtering needed.
+        int n = mdnsQueryShellyTcp(DISCOVER_MDNS_TIMEOUT_MS, mdnsHits, DISCOVER_MAX_RESULTS);
         Serial.print(F("[DISCOVER] attempt "));
         Serial.print(attempt + 1);
         Serial.print(F("/"));
         Serial.print(DISCOVER_MDNS_ATTEMPTS);
         Serial.print(F(": "));
         Serial.print(n);
-        Serial.println(F(" host(s) responded:"));
+        Serial.println(F(" Shelly host(s) responded:"));
 
         for (int i = 0; i < n; i++) {
             String host = mdnsHits[i].hostname;
             String ip   = mdnsHits[i].ip;
-            String hostLower = host;
-            hostLower.toLowerCase();
-            bool matched = hostLower.indexOf("shelly") >= 0;
 
             Serial.print(F("  - "));
             Serial.print(host.length() ? host : String("(no hostname)"));
             Serial.print(F("  "));
-            Serial.print(ip);
-            Serial.println(matched ? F("  [matches \"shelly\" filter]") : F("  [does NOT match \"shelly\" filter — won't show in wizard]"));
+            Serial.println(ip);
 
-            if (!matched) continue;
+            if (ip.length() == 0 || ip == "0.0.0.0") continue;
 
             bool dup = false;
             for (int j = 0; j < hitCount; j++) {
@@ -340,17 +337,11 @@ void SerialDebugControl::runDiscover() {
         const String& ip   = hitIp[i];
         const String& host = hitHost[i];
 
-        // Gen 2 first — see linear_actuator.ino's discover handling for why.
+        // Gen2+ only (Gen1 dropped) — see linear_actuator.ino's discover handling.
         ShellyGen2Outlet gen2(ip.c_str(), "discover");
-        bool ok  = gen2.poll();
-        float pw = gen2.getPowerW();
-        int  gen = 2;
-        if (!ok) {
-            ShellyGen1Outlet gen1(ip.c_str(), "discover");
-            ok  = gen1.poll();
-            pw  = gen1.getPowerW();
-            gen = 1;
-        }
+        bool  ok  = gen2.poll();
+        float pw  = gen2.getPowerW();
+        int   gen = 2;
         String devName = ok ? fetchShellyDeviceName(ip.c_str(), gen) : String();
         Serial.print(F("  - ")); Serial.print(host); Serial.print(F("  ")); Serial.print(ip);
         Serial.print(F("  probe -> reachable="));

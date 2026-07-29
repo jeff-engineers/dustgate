@@ -35,22 +35,39 @@ simulates the whole device in-memory — homing, jogging, outlets, everything. N
 proxy, no mock server, no device required. This is also what runs automatically
 on the Vercel deployment (demo mode activates on any non-localhost hostname).
 
-### 2. Mock firmware server — closer to the real device
+### 2. Mock firmware server — real transport + CI conformance target
 
 `tools/mock-api.js` is a small Node server that mimics the ESP32's HTTP + WebSocket
-API (a thin wrapper over the canonical device model in `../shared/device-model`,
-the same model the in-browser demo uses). Use this when you want to exercise the
-real `ApiService` / proxy path instead of the in-browser demo:
+API. It's a thin wrapper over the canonical device model in `../shared/device-model`
+— **the exact same simulated model the in-browser demo uses** — so its "outlets" are
+fabricated, not real plugs on your network (discovery invents random `192.168.87.x`
+Shelly devices; nothing is actually scanned). Its data is no more real than demo mode.
+
+What it adds over demo mode is **transport**: demo mode swaps `ApiService` out for an
+in-browser stub, whereas the mock keeps the real `ApiService` and serves genuine
+HTTP/WebSocket through `proxy.conf.json`. Two things need that, and neither is served
+by demo mode:
+
+- **Developing the networking layer** — `ApiService`, WebSocket reconnect, HTTP
+  status/error handling, streaming — without flashing a device.
+- **CI conformance** — `.github/workflows/ci.yml` runs `shared/device-model/conformance.js`
+  against this mock on every commit (`npm run conformance:ci`). That's the load-bearing
+  job keeping the mock, demo, and firmware honoring one API contract; the same suite can
+  be pointed at a real board (`node conformance.js http://<device-ip> <key> --force`) to
+  certify actual firmware, which can't import the JS model.
+
+If you're only building UI/wizard features, **demo mode is enough** — clicking through the
+mock is redundant with it since the data is identically fake. Reach for the mock when
+you're touching the transport layer or the API contract:
 
 ```bash
-# one-time setup
+# one-time setup (run from dustgate-ui/)
 cd ../tools && npm install
 
-# terminal 1
-x
+# terminal 1 — start the mock firmware server (serves localhost:3000)
+cd ../tools && node mock-api.js
 
-# terminal 2
-cd dustgate-ui
+# terminal 2 — start Angular with the proxy pointed at the mock (from dustgate-ui/)
 npm run start:mock
 ```
 

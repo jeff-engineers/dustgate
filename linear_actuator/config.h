@@ -158,7 +158,18 @@ extern int g_homeDirection;        // defined in linear_actuator.ino
 // -----------------------------------------------------------------------------
 #define TMC2209_R_SENSE         0.11f   // Sense resistor (Ω) — verify on your board
 #define TMC2209_CURRENT_MA       800    // Run current in mA — raise if stalls mid-travel
-#define TMC2209_HOLD_CURRENT_MA   75    // Hold current — motor held between moves (low = cool)
+#define TMC2209_HOLD_CURRENT_MA   30    // Hold current — motor held between moves (low = cool).
+                                        // Heat ~ I²: 30mA dissipates ~16% of what 75mA did. The
+                                        // gate's rack-and-pinion friction holds position at idle;
+                                        // set to 0 for a fully-freewheeling (coolest) standstill if
+                                        // a little drift between moves is acceptable.
+
+// Standstill power-down delay: clocks after the last step before the driver
+// drops from run current (IRUN) to hold current (IHOLD). Set explicitly so the
+// transition is guaranteed to engage promptly — otherwise a motor can linger at
+// run current between moves and run hot even though the hold current is low.
+// Range 0–255 (~0–5.6s); ~0.2s here.
+#define TMC2209_TPOWERDOWN        10
 
 // StallGuard threshold — not used for homing (physical limit switch) but left
 // as a safety floor; TMC2209 still raises DIAG on severe overload/stall.
@@ -171,31 +182,40 @@ extern int g_homeDirection;        // defined in linear_actuator.ino
 // sleep); this is only the default for a fresh device / after a NVS erase.
 #define IDLE_TIMEOUT_SEC_DEFAULT 3600
 
+// -----------------------------------------------------------------------------
+// SYSTEM RESILIENCE — unattended-operation recovery
+// -----------------------------------------------------------------------------
+// How long WiFi may stay disconnected before we actively nudge a reconnect. The
+// ESP32 core auto-reconnects on most drops, but a full AP outage can leave the
+// radio idle indefinitely; WiFiProvisioner::maintain() retries at this cadence
+// so the device rejoins on its own instead of needing a power cycle.
+#define WIFI_RECONNECT_INTERVAL_MS  10000
+
+// Task-watchdog timeout (seconds) for the main loop. If a loop iteration ever
+// stalls this long, the device reboots itself rather than hanging silently.
+// Generous on purpose: normal iterations are sub-millisecond (incremental motor
+// steps + async I/O), and blocking network work runs on the poll task, not here.
+#define WDT_TIMEOUT_SEC             10
+
 // UART address (0–3, set by MS1/MS2 pins — Adafruit board default is 0)
 #define TMC2209_ADDRESS            0
 
 // -----------------------------------------------------------------------------
-// PIN ASSIGNMENTS — Adafruit ESP32-S2 Feather
-// All GPIO are 3.3V logic. Any pin can trigger interrupts.
-// Serial1 (RX/TX header pins) used for TMC2209 UART — no SoftwareSerial needed.
+// PIN ASSIGNMENTS — selected per board
+// The concrete pin map lives in a boards/*.h header chosen by a -DBOARD_* build
+// flag (set per PlatformIO env). Everything downstream uses the PIN_* / SERIAL1_*
+// macros unchanged. Primary target is the ESP32-DevKitC; the Feather is kept as
+// an unadvertised variant. All GPIO are 3.3V logic.
 // -----------------------------------------------------------------------------
-
-// -- TMC2209 control pins --
-#define PIN_TMC_STEP        5   // D5
-#define PIN_TMC_DIR         6   // D6
-#define PIN_TMC_EN          9   // D9  (active LOW)
-#define PIN_TMC_DIAG        A2  // DIAG — TMC2209 drives HIGH when SG_RESULT < SGTHRS*2
-// TMC2209 UART: wire Feather TX → 1kΩ → board UART pin; Feather RX → same node
-// Serial1 is automatically on the RX/TX header pins — no pin defines needed
-
-// -- Endstop pins (FEEDBACK_LIMIT_DISTANCE) --
-// Both are required. Which one is "home" is chosen at setup (the user's LEFT);
-// see g_homeIsMaxEndstop in linear_actuator.ino.
-#define PIN_ENDSTOP_HOME   10   // D10 — NC switch, pulls LOW when triggered
-#define PIN_ENDSTOP_MAX    11   // D11 — NC switch, pulls LOW when triggered
-
-// -- Status LED --
-#define PIN_LED            13   // D13 — onboard LED on ESP32-S2 Feather
+#if defined(BOARD_DEVKITC)
+  #include "boards/devkitc_wroom32.h"
+#elif defined(BOARD_FEATHER_S2)
+  #include "boards/feather_s2.h"
+#else
+  // No board flag set (e.g. a bare Arduino IDE build) — default to the Feather,
+  // which is the original hardware and has native-USB defaults.
+  #include "boards/feather_s2.h"
+#endif
 
 // -----------------------------------------------------------------------------
 // SMART OUTLET CONTROL (CONTROL_SMART_OUTLET)
@@ -212,6 +232,23 @@ extern int g_homeDirection;        // defined in linear_actuator.ino
 // HTTP request timeout per outlet — must be shorter than OUTLET_POLL_INTERVAL_MS
 // to avoid stalling the poll loop when a device is offline
 #define OUTLET_HTTP_TIMEOUT_MS      400
+
+// Timeout for RPC config writes (Ws.SetConfig / Switch.SetConfig / Sys.SetConfig).
+// These persist to the plug's flash and can take far longer than a status read,
+// so they get a generous window. Only runs at provisioning time (device add /
+// boot), never on the fast poll path, so a long value is safe here.
+#define OUTLET_RPC_WRITE_TIMEOUT_MS 3000
+
+// Reachability probe timeout for the provisioning path. Unlike the 400ms poll
+// probe (which must fit inside the poll interval), provisioning runs rarely and
+// off the motor loop, so it can afford to wait for a marginal plug to answer its
+// first request instead of failing it and deferring for a whole retry cycle.
+#define OUTLET_PROVISION_PROBE_TIMEOUT_MS 2000
+
+// How often to retry push-provisioning plugs that aren't yet configured (e.g. a
+// plug that was briefly unreachable at boot). Each retry only fast-probes the
+// unprovisioned plugs; already-pushing plugs are skipped, so this is cheap.
+#define OUTLET_PROVISION_RETRY_MS   15000
 
 // mDNS discovery (setup wizard's "Scan for outlets" / serial 'discover') is
 // UDP-based and lossy — a single query commonly misses devices that answer

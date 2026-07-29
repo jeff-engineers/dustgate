@@ -81,6 +81,17 @@ public:
     void setManualOverride(int stop);
     bool isManualOverride();        // thread-safe read for status JSON
 
+    // -------------------------------------------------------------------------
+    // Push handlers — called from the HTTP server's Shelly WebSocket callback
+    // (AsyncTCP task) when a Gen2 plug's Outbound WebSocket connects, pushes a
+    // power reading, or disconnects. `ip` is the plug's dotted-quad source IP.
+    // These update the matching outlet and wake the poll task so tool on/off is
+    // reacted to immediately instead of at the next poll tick.
+    // -------------------------------------------------------------------------
+    void onPushConnect(const char* ip);
+    void onPushedPower(const char* ip, float apower);
+    void onPushDisconnect(const char* ip);
+
 private:
     SmartOutlet*      _outlets[SMART_OUTLET_COUNT];
     int               _count;
@@ -97,6 +108,28 @@ private:
     bool              _manualOverride;   // true = ignore outlet selection until next tool-on
     SemaphoreHandle_t _mutex;
 
+    // Poll task handle — lets setDcManual() wake the task immediately (via
+    // xTaskNotifyGive) so a manual dust-collector toggle switches at once
+    // instead of waiting up to OUTLET_POLL_INTERVAL_MS for the next tick.
+    // Automatic on/off is unaffected: it still follows the debounced gate
+    // selection, so tool-driven switching keeps its coast-down delay.
+    TaskHandle_t      _pollTaskHandle;
+
+    // Push provisioning: when true, the poll task (re)configures every Gen2
+    // plug's Outbound WebSocket + name on its next run. Set at begin() and
+    // whenever an outlet is (re)configured. The WS URL points plugs back at
+    // this device's current IP, so it's rebuilt on every boot — self-healing
+    // across DHCP address changes without needing a static IP.
+    volatile bool     _needsProvision;
+    bool              _provisionPending;   // true = some plug still needs provisioning; retry periodically
+    unsigned long     _lastProvisionMs;    // last provisioning attempt (for retry backoff)
+    char              _wsUrl[64];   // ws://<our-ip>:80/shelly-rpc
+    // Our own IP the last time we built _wsUrl. If DHCP moves us to a new address
+    // at runtime, the URL plugs dial back to goes stale — checkLocalIpChange()
+    // detects the change, rebuilds the URL, and forces re-provisioning so push
+    // recovers instead of silently degrading to polling until reboot.
+    uint32_t          _lastLocalIp;
+
     // Debounce tracking (poll task only — no mutex needed)
     int               _pendingStop;
     unsigned long     _pendingStartMs;
@@ -109,6 +142,9 @@ private:
     static void pollTaskFn(void* param);
     void        doPoll();
     void        reconcileDustCollector();  // poll task: drive DC plug to desired state
+    bool        provisionPushOutlets();    // poll task: push Ws/name config; returns true if any still pending
+    void        checkLocalIpChange();      // poll task: rebuild _wsUrl + re-provision if our DHCP IP changed
+    SmartOutlet* outletByIp(const char* ip); // match a push event to a configured outlet
 };
 
 #endif // CONTROL_SMART_OUTLET

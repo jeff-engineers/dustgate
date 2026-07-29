@@ -225,7 +225,7 @@ export class ApiService {
     });
   }
 
-  /** Pings a Shelly outlet — the device auto-detects the API generation, trying Gen 1 then Gen 2. */
+  /** Pings a Shelly outlet — the device speaks the Shelly Gen2+ local API (Gen1 is not supported). */
   async pingOutlet(ip: string): Promise<PingResult> {
     const raw = await this.post<{ reachable: boolean; powerW: number; gen: number; name?: string }>(
       '/api/outlets/ping', { ip }

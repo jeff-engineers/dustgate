@@ -54,6 +54,15 @@ UI_DIR="$SCRIPT_DIR/dustgate-ui"
 DATA_DIR="$SCRIPT_DIR/linear_actuator/data"
 ENV_FILE="$SCRIPT_DIR/tools/.env"
 
+# Python with pyserial, used by the provision step to drive the serial port
+# while holding DTR/RTS deasserted (so the DevKitC's CP2102 auto-reset never
+# reboots the board mid-command). Prefer PlatformIO's bundled interpreter —
+# pyserial is always present there — and fall back to system python3.
+PROV_PY="$HOME/.platformio/penv/bin/python"
+if [[ ! -x "$PROV_PY" ]] || ! "$PROV_PY" -c "import serial" 2>/dev/null; then
+  PROV_PY="python3"
+fi
+
 DO_UI=true
 DO_FW=true
 DO_FS=true
@@ -155,16 +164,19 @@ print(json.dumps(d))
 " "$WIFI_SSID" "$WIFI_PASS" "$ANTHROPIC_KEY" "$HOSTNAME_CFG")
 
     # Wait for the board to finish resetting and boot the app, then re-detect
-    # the port fresh — the flash/reset cycle can change which /dev/cu.usbmodem*
-    # node the board enumerates as, so a port captured before the flash may no
-    # longer be valid by the time we get here.
+    # the port fresh — the flash/reset cycle can change which /dev/cu.* node the
+    # board enumerates as, so a port captured before the flash may no longer be
+    # valid by the time we get here. Match the DevKitC's USB-serial bridge
+    # (usbserial / SLAB_USBtoUART / wchusbserial) and the Feather's native USB
+    # (usbmodem) — keep this in sync with detect_port() in dev.sh.
     echo "  Waiting for device to boot…"
     PORT=""
     for _ in $(seq 1 15); do
       sleep 1
-      # `|| true`: when the glob matches nothing, `ls` exits nonzero and this
+      # `|| true`: when the globs match nothing, `ls` exits nonzero and this
       # bare assignment would otherwise silently kill the script under `set -e`.
-      PORT="$(ls /dev/cu.usbmodem* 2>/dev/null | head -1 || true)"
+      PORT="$(ls /dev/cu.usbserial* /dev/cu.SLAB_USBtoUART* /dev/cu.wchusbserial* \
+                 /dev/cu.usbmodem* 2>/dev/null | head -1 || true)"
       if [[ -n "$PORT" ]]; then
         break
       fi
@@ -172,22 +184,55 @@ print(json.dumps(d))
     if [[ -z "$PORT" ]]; then
       echo "  ⚠  No USB serial port found — skipping provision."
       echo "     Troubleshooting:"
-      echo "       - Check the board is still plugged in: ls /dev/cu.usbmodem*"
+      echo "       - Check the board is still plugged in: ls /dev/cu.*"
       echo "       - Send it manually once connected: bash dev.sh provision"
       echo "       - Or open the setup portal WiFi hotspot on the device and configure via the web form."
     else
       echo "  Serial port: $PORT"
-      stty -f "$PORT" 115200 2>/dev/null || true
-      printf "provision %s\r\n" "$PAYLOAD" > "$PORT"
-
-      # Confirm it actually landed rather than assuming — read back whatever
-      # the firmware echoes for a few seconds and look for its own ack line.
-      # (macOS ships no `timeout` binary, so use bash's own `read -t` instead.)
       echo "  Waiting for device to confirm…"
-      RESPONSE=""
-      while IFS= read -r -t 4 _line; do
-        RESPONSE+="$_line"$'\n'
-      done < "$PORT"
+      # Send the "provision" command over serial WITHOUT resetting the board.
+      # Raw shell redirection (printf > "$PORT") drops DTR when the fd closes
+      # (macOS HUPCL), and the DevKitC's CP2102 auto-reset turns that into a
+      # reboot — which reset the board between the write and the read and lost
+      # the command entirely (the reason .env auto-provision "did nothing" on
+      # the DevKitC). pyserial holds DTR/RTS deasserted so opening the port
+      # never resets the board, and resends until the firmware acks — covering
+      # the case where the board is still booting after a fresh flash.
+      RESPONSE="$(PROVISION_PAYLOAD="$PAYLOAD" "$PROV_PY" - "$PORT" <<'PY'
+import os, sys, time, serial
+port    = sys.argv[1]
+payload = os.environ["PROVISION_PAYLOAD"]
+cmd     = ("provision %s\r\n" % payload).encode()
+s = serial.Serial()
+s.port = port
+s.baudrate = 115200
+s.dtr = False   # deassert BEFORE open so the CP2102 auto-reset never fires
+s.rts = False
+s.timeout = 0.2
+try:
+    s.open()
+except Exception as e:
+    sys.stderr.write("  (serial open failed: %s)\n" % e)
+    sys.exit(0)
+time.sleep(0.3)
+s.reset_input_buffer()
+buf = b""
+last_send = 0.0
+deadline = time.time() + 8
+while time.time() < deadline:
+    now = time.time()
+    if now - last_send > 1.5:          # (re)send; board may still be booting
+        s.write(cmd); s.flush()
+        last_send = now
+    chunk = s.read(256)
+    if chunk:
+        buf += chunk
+        if b"OK provision" in buf:
+            break
+s.close()
+sys.stdout.write(buf.decode("utf-8", "replace"))
+PY
+)"
       if echo "$RESPONSE" | grep -q "OK provision"; then
         echo "  ✓ Device confirmed: credentials saved."
         echo "  Web UI should be reachable shortly at: http://${HOSTNAME_CFG}.local"
@@ -196,7 +241,9 @@ print(json.dumps(d))
         echo "     or the port changed again mid-command. Troubleshooting:"
         echo "       - Open a serial monitor and watch the boot log: bash dev.sh monitor"
         echo "       - Retry provisioning on its own once you see it fully booted: bash dev.sh provision"
-        echo "       - Or send the command by hand: provision $PAYLOAD"
+        # NB: do NOT echo $PAYLOAD here — it contains the WiFi password and the
+        # Anthropic API key in cleartext. Point at the re-run instead, which
+        # rebuilds the payload from tools/.env without printing any secret.
       fi
     fi
   fi

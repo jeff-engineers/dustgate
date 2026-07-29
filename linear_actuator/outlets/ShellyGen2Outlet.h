@@ -19,15 +19,23 @@ public:
     ShellyGen2Outlet(const char* ip, const char* name);
 
     bool        poll()       override;
+    bool        probe(uint32_t timeoutMs) override;
     bool        setSwitch(bool on) override;
     const char* name()       const override { return _name; }
     const char* ip()         const override { return _ip; }
     int         generation() const override { return 2; }
 
+    // Point the plug's Outbound WebSocket at us (Ws.SetConfig), and set its
+    // app-visible name (Switch.SetConfig). Blocking HTTP — poll task only.
+    bool        configureOutboundWs(const char* wsUrl) override;
+    bool        setName(const char* name) override;
+
 private:
     char _ip[16];
     char _name[32];
 
-    bool doPoll();
+    bool doPoll(uint32_t timeoutMs = OUTLET_HTTP_TIMEOUT_MS);
     bool reresolve();
+    // POST a JSON-RPC method to the plug's /rpc endpoint. Returns true on HTTP 200.
+    bool rpcPost(const char* jsonBody);
 };

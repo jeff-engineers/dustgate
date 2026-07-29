@@ -71,19 +71,19 @@ const TOOLS = [
   },
   {
     name: 'configure_outlet',
-    description: 'Assign a Shelly smart outlet to a blast gate stop. Call after ping_outlet or discover_outlets confirms the device is reachable, using the generation it returned — there is no need to ask the user which generation their outlet is.',
+    description: 'Save a blast gate: its name, the stop it maps to, and — if the gate\'s tool has a Shelly smart plug — the outlet assigned to it. WITH a plug: call after ping_outlet or discover_outlets confirms it is reachable, and pass ip (plus host if it came from a scan); no need to ask the user which generation. NAME-ONLY (no plug): pass just slot, stop, and name, and OMIT ip/generation/threshold_w — this call is still REQUIRED, it is the only way a gate\'s name is written to the device. Call it once per gate either way.',
     input_schema: {
       type: 'object',
       properties: {
-        slot:        { type: 'integer', description: 'Outlet slot number (0–15)' },
-        generation:  { type: 'integer', enum: [1, 2], description: 'Shelly generation, as returned by ping_outlet/discover_outlets for this IP — do not guess or ask the user.' },
-        ip:          { type: 'string',  description: 'IP address of the Shelly outlet (e.g. 192.168.1.101)' },
-        host:        { type: 'string',  description: 'mDNS hostname of the outlet, from discover_outlets, if it was found via a scan. Omit for a manually-provided IP — this lets the device re-resolve the outlet after a DHCP IP change instead of losing it.' },
+        slot:        { type: 'integer', description: 'Outlet slot number (0–15). Use stop − 1.' },
+        generation:  { type: 'integer', enum: [2], description: 'Shelly generation — always 2. Only Gen2+ plugs are supported (Gen1 is not), and ping_outlet/discover_outlets only ever return 2. Do not ask the user. OMIT for a name-only gate.' },
+        ip:          { type: 'string',  description: 'IP address of the Shelly outlet (e.g. 192.168.1.101). OMIT for a name-only gate (no smart plug) — the gate is then saved as a label with no power polling.' },
+        host:        { type: 'string',  description: 'mDNS hostname of the outlet, from discover_outlets, if it was found via a scan. Omit for a manually-provided IP or a name-only gate — this lets the device re-resolve the outlet after a DHCP IP change instead of losing it.' },
         name:        { type: 'string',  description: 'Human-readable tool name, e.g. "Bandsaw". Always ask the user what to call this gate/tool and use their answer — do NOT default to the outlet\'s Shelly-app device name (it is often unset or a stale cloud label). Identify the outlet to them by its hostname and IP instead.' },
         stop:        { type: 'integer', description: 'Stop index this tool maps to (1–7)' },
-        threshold_w: { type: 'number',  description: 'Watt threshold to detect tool-on. Default 5W; increase for tools with a high standby draw.' }
+        threshold_w: { type: 'number',  description: 'Watt threshold to detect tool-on. Default 5W; increase for tools with a high standby draw. OMIT for a name-only gate.' }
       },
-      required: ['slot', 'generation', 'ip', 'name', 'stop']
+      required: ['slot', 'name', 'stop']
     }
   },
   {
@@ -93,7 +93,7 @@ const TOOLS = [
   },
   {
     name: 'ping_outlet',
-    description: 'Check whether a Shelly outlet at a specific IP is reachable on the network and read its current power draw and Shelly-app device name. The device auto-detects the Shelly API generation (tries Gen 1, falls back to Gen 2) — the response includes which one it found, so there is no need to ask the user their outlet\'s generation. Prefer discover_outlets first; use this when the user gives you a specific IP instead (e.g. discover_outlets didn\'t find it).',
+    description: 'Check whether a Shelly outlet at a specific IP is reachable on the network and read its current power draw and Shelly-app device name. Only Gen2+ Shelly plugs are supported (Gen1 is not); the response includes the detected generation. Prefer discover_outlets first; use this when the user gives you a specific IP instead (e.g. discover_outlets didn\'t find it).',
     input_schema: {
       type: 'object',
       properties: {
@@ -113,7 +113,7 @@ const TOOLS = [
     input_schema: {
       type: 'object',
       properties: {
-        slot: { type: 'integer', description: 'Slot index to clear (0–6)' }
+        slot: { type: 'integer', description: 'Slot index to clear (0–15)' }
       },
       required: ['slot']
     }
@@ -169,7 +169,7 @@ const TOOLS = [
     input_schema: {
       type: 'object',
       properties: {
-        generation: { type: 'integer', enum: [1, 2], description: 'Shelly generation, as returned by ping_outlet/discover_outlets for this IP — do not guess or ask the user.' },
+        generation: { type: 'integer', enum: [2], description: 'Shelly generation — always 2. Only Gen2+ plugs are supported (Gen1 is not), and ping_outlet/discover_outlets only ever return 2. Do not ask the user.' },
         ip:         { type: 'string',  description: 'IP address of the Shelly outlet controlling the dust collector' },
         host:       { type: 'string',  description: 'mDNS hostname of the outlet, from discover_outlets, if it was found via a scan. Omit for a manually-provided IP.' }
       },
@@ -219,10 +219,10 @@ Your job is to walk the user through setup conversationally:
 6. Place the gates automatically: tell the user you'll measure the spacing, then call calibrate_gates with the manifold model from step 2 (2.5" → 'rockler-2.5', 4" → 'rockler-4') and the gate count from step 3. This one sweep homes, drives to the far end, measures the travel, and places ALL gates at once. If it fails, the far endstop wiring is the thing to check — help them verify it, then try calibrate_gates again. Once it succeeds, go straight to naming/outlets for each gate (step 11).
 11. Before moving on to the next gate, finish configuring THIS gate. Resolve the outlet question first so that, when you ask the user to name the gate, you can point to the specific outlet (by hostname/IP) they're naming:
     a. Ask whether this gate's tool has a Shelly smart plug. If not, skip to (e) and just ask for the gate/tool name directly.
-    b. If yes, call discover_outlets first (don't ask for an IP yet) and check the results against what the user describes (e.g. "the one near the bandsaw"). Present any matches by their hostname and IP (mention the Shelly-app name too only if one happens to be set, as extra context) and confirm with the user which one is theirs, rather than assuming. Never suggest or accept an IP already configured for a different gate earlier in this session (track which IPs you've already called configure_outlet with) — if the user picks one anyway, point out it's already assigned to that other gate and ask them to choose a different outlet or confirm they want to move it off the other gate first.
+    b. If yes, call discover_outlets first (don't ask for an IP yet). The most reliable way to tell which outlet belongs to this gate is by power draw: ask the user to switch this gate's tool ON at a low setting (blade/bit spinning free, nothing feeding), then call discover_outlets — the outlet reporting a clear power draw (roughly 5W or more; standby plugs read ~0W) is this tool's. Confirm it with them by hostname and IP, then have them switch the tool back off. If several tools are on at once, ask them to leave only this one running. Fall back to matching what the user describes (e.g. "the one near the bandsaw") by hostname/IP only if the power trick isn't practical. Mention the Shelly-app name too only if one happens to be set, as extra context. Never suggest or accept an IP already configured for a different gate earlier in this session (track which IPs you've already called configure_outlet with) — if the user picks one anyway, point out it's already assigned to that other gate and ask them to choose a different outlet or confirm they want to move it off the other gate first.
     c. If discover_outlets finds nothing, or none of the results match, ask the user for the outlet's IP address directly and call ping_outlet to confirm it's reachable. You may need to direct them to Shelly's website for help finding the IP. Either way (scan or manual ping), the response tells you the generation and, if the outlet was named in the Shelly app, that name too — don't ask the user which generation they have.
-    d. Once the outlet is confirmed reachable, ask the user what they want to call this tool/gate, referring to the outlet by its hostname/IP so they know which one they're naming. Always let them choose the name themselves — do NOT propose the Shelly-app device name as the name (it's often unset or stale). Accept whatever name they give without offering a list. Then help them pick a detection threshold: ask them to turn the tool on at its lowest setting with no load (e.g. no material feeding, blade/bit spinning free), then ping again to capture that running wattage. Suggest a threshold about 10% below that reading, rounded to a clean number (nearest 10W normally, nearest 50W for readings above a couple hundred watts) — this gives margin below the running draw while safely clearing standby power. Confirm the suggestion with the user (they can override it) before calling configure_outlet with the generation and host (if the outlet came from discover_outlets) it returned.
-    e. If the tool has no smart plug, just ask for and note the gate's name — configure_outlet is only needed when there's a plug to assign.
+    d. Once the outlet is confirmed reachable, ask the user what they want to call this tool/gate, referring to the outlet by its hostname/IP so they know which one they're naming. If the outlet's Shelly-app name (returned by discover_outlets/ping_outlet) looks like a real name the user chose, you MAY offer it as a suggested default they can accept or change — but ONLY if it's clearly custom: non-empty, NOT the mDNS hostname, NOT a factory identifier starting with "shelly" (e.g. "shellyplusplugs-a8032ab12345"), and NOT something ending in a MAC/hex fragment. If it's blank or any of those default identifiers, do NOT propose it — just ask the user for the name. Either way their choice is final (accept whatever they give without offering a list); it's saved back onto the plug automatically, so the plug is self-identifying next time. Then help them pick a detection threshold: ask them to turn the tool on at its lowest setting with no load (e.g. no material feeding, blade/bit spinning free), then ping again to capture that running wattage. Suggest a threshold about 10% below that reading, rounded to a clean number (nearest 10W normally, nearest 50W for readings above a couple hundred watts) — this gives margin below the running draw while safely clearing standby power. Confirm the suggestion with the user (they can override it) before calling configure_outlet with the generation and host (if the outlet came from discover_outlets) it returned.
+    e. If the tool has no smart plug, ask for the gate's name and STILL call configure_outlet to save it — pass slot and stop and name, and OMIT ip (and generation/threshold_w). This saves a name-only gate (a label with no power polling). Do NOT skip this call: it is the only way the name reaches the device, so a plug-less gate whose name you merely acknowledge in chat will be lost.
 12. Configure every gate, one at a time: the positions are already set by the sweep, so just repeat step 11 (naming + outlet) for each gate until every gate is done.
 16. Once all gates are configured, ask if their dust collector is also on a Shelly smart plug, separate from any tool's gate — DustGate can switch it on and off automatically alongside the gates. This step is optional; skip it if they say no or don't have one. There's no wattage threshold to pick here since it's just a remote switch. If they want it:
     a. Call discover_outlets first and check the results against what the user describes, rather than asking for an IP up front. If nothing matches (or nothing is found), ask for the IP address directly and call ping_outlet to confirm it's reachable — either way, the result tells you the generation, so don't ask the user which one they have.
@@ -628,18 +628,24 @@ export class ClaudeService {
         // actuator the length of a room from one tool call.
         return this.api.jog(this.assertNumberInRange(input['mm'], -300, 300, 'mm'));
 
-      case 'configure_outlet':
+      case 'configure_outlet': {
+        // A gate can be name-only (no smart plug): with no ip we store it as a
+        // label with an empty ip and no power polling, mirroring the manual
+        // wizard's name-only gates. Without this path a plug-less gate's name is
+        // never written to the device.
+        const hasPlug = typeof input['ip'] === 'string' && (input['ip'] as string).trim().length > 0;
         return this.api.configureOutlet({
           slot:        this.assertIntInRange(input['slot'], 0, 15, 'slot'),
-          generation:  this.assertIntInRange(input['generation'], 1, 2, 'generation'),
-          ip:          this.assertPrivateIp(input['ip']),
-          host:        typeof input['host'] === 'string' ? input['host'] : undefined,
+          generation:  hasPlug ? this.assertIntInRange(input['generation'], 2, 2, 'generation') : 2, // Gen2-only (Gen1 dropped)
+          ip:          hasPlug ? this.assertPrivateIp(input['ip']) : '',
+          host:        hasPlug && typeof input['host'] === 'string' ? input['host'] : '',
           name:        this.assertNonEmptyString(input['name'], 'name'),
           stop:        this.assertIntInRange(input['stop'], 0, 16, 'stop'),
-          threshold_w: input['threshold_w'] === undefined
+          threshold_w: !hasPlug || input['threshold_w'] === undefined
             ? undefined
             : this.assertNumberInRange(input['threshold_w'], 0, 5000, 'threshold_w')
         });
+      }
 
       case 'discover_outlets':
         return this.api.discoverOutlets();
@@ -673,7 +679,7 @@ export class ClaudeService {
 
       case 'configure_dust_collector':
         return this.api.configureDustCollector(
-          this.assertIntInRange(input['generation'], 1, 2, 'generation'),
+          this.assertIntInRange(input['generation'], 2, 2, 'generation'), // Gen2-only (Gen1 dropped)
           this.assertPrivateIp(input['ip']),
           typeof input['host'] === 'string' ? input['host'] : ''
         );

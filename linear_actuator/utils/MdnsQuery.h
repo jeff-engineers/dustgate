@@ -12,16 +12,11 @@
 // the device. This calls the ESP-IDF mDNS API directly with a much shorter
 // timeout instead.
 //
-// Two service types matter for Shelly discovery:
-//   _shelly._tcp  Advertised by Gen2+ devices, and ONLY by Shelly devices — a
-//                 hit here is a Shelly, with no hostname guessing needed.
-//   _http._tcp    Advertised by every HTTP responder on the LAN (printers,
-//                 NAS, TVs...). Used only as a second pass to catch Gen1
-//                 devices, which do not advertise _shelly._tcp.
-//
-// Gen2+ devices include a "gen" TXT key (gen=2, gen=3, ...) on BOTH services.
-// Its absence on an _http._tcp hit is what identifies a device as Gen1 —
-// which is why the generation no longer has to be discovered by probing.
+// Shelly discovery uses _shelly._tcp, advertised ONLY by Gen2+ Shelly devices —
+// so a hit is unambiguously a supported plug, with no hostname guessing. (Gen1
+// is not supported; the generic _http._tcp helper below is retained only for
+// possible future use.) Gen2+ devices include a "gen" TXT key (gen=2, gen=3,
+// ...) giving the generation without probing.
 // See https://shelly-api-docs.shelly.cloud/gen2/General/mDNS/
 // =============================================================================
 

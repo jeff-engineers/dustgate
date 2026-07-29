@@ -159,6 +159,20 @@ import { ApiService, OutletConfigCmd, DiscoveredOutlet } from '../services/api.s
     }
     .suggest-btn:active { opacity: 0.6; }
 
+    .scan-hint {
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.55;
+      margin: 0;
+    }
+    .scan-hint strong { color: var(--text); }
+    .scan-hint .chip {
+      font-weight: 700;
+      font-style: normal;
+    }
+    .scan-hint .chip-on  { color: var(--success, #22c55e); }
+    .scan-hint .chip-low { color: var(--warning, #f59e0b); }
+
     .scan-btn {
       background: var(--bg);
       border: 1px solid var(--border);
@@ -188,7 +202,36 @@ import { ApiService, OutletConfigCmd, DiscoveredOutlet } from '../services/api.s
     }
     .scan-item:active { opacity: 0.6; }
     .scan-item:disabled { opacity: 0.4; }
-    .scan-item .host { font-size: 14px; font-weight: 600; }
+    /* An outlet drawing current — tinted so a tool's plug stands out at a glance
+       (switch the tool on, scan, spot the highlighted one). Green = running tool
+       (≥5W); amber = low/standby draw (1–5W). */
+    .scan-item.drawing-on {
+      border-color: var(--success, #22c55e);
+      background: color-mix(in srgb, var(--success, #22c55e) 14%, var(--bg));
+    }
+    .scan-item.drawing-low {
+      border-color: var(--warning, #f59e0b);
+      background: color-mix(in srgb, var(--warning, #f59e0b) 12%, var(--bg));
+    }
+    .scan-item .host {
+      font-size: 14px; font-weight: 600; color: var(--text);
+      display: flex; align-items: center; gap: 8px;
+    }
+    .draw-badge {
+      font-size: 11px;
+      font-weight: 700;
+      border-radius: 999px;
+      padding: 1px 7px;
+      white-space: nowrap;
+    }
+    .drawing-on .draw-badge {
+      color: var(--success, #22c55e);
+      border: 1px solid color-mix(in srgb, var(--success, #22c55e) 45%, transparent);
+    }
+    .drawing-low .draw-badge {
+      color: var(--warning, #f59e0b);
+      border: 1px solid color-mix(in srgb, var(--warning, #f59e0b) 45%, transparent);
+    }
     .scan-item .meta { font-size: 12px; color: var(--muted); }
     .scan-empty {
       font-size: 13px;
@@ -261,6 +304,15 @@ import { ApiService, OutletConfigCmd, DiscoveredOutlet } from '../services/api.s
       <ng-container *ngIf="hasPlug">
         <!-- Scan-first flow: find the outlet on the network instead of typing an IP -->
         <ng-container *ngIf="!manualEntry">
+          <p class="scan-hint">
+            <strong>Which plug is this gate's?</strong> Turn this gate's tool on at
+            its lowest setting (blade/bit spinning free, nothing feeding), then tap
+            <em>Scan</em>. The outlet drawing power lights up —
+            <span class="chip chip-on">green</span> for a running tool,
+            <span class="chip chip-low">amber</span> for a low/standby draw. Pick the
+            green one, then switch the tool off.
+          </p>
+
           <button class="scan-btn" [disabled]="scanning" (click)="scan()">
             {{ scanning ? 'Scanning…' : (scanResults === null ? 'Scan for outlets' : 'Scan again') }}
           </button>
@@ -268,12 +320,20 @@ import { ApiService, OutletConfigCmd, DiscoveredOutlet } from '../services/api.s
           <div class="scan-list" *ngIf="scanResults !== null && scanResults.length > 0">
             <button type="button" class="scan-item"
                     *ngFor="let d of scanResults"
+                    [class.drawing-on]="drawLevel(d) === 'on'"
+                    [class.drawing-low]="drawLevel(d) === 'low'"
                     [disabled]="isExcluded(d.ip)"
                     (click)="selectDiscovered(d)">
-              <span class="host">{{ d.name || d.hostname }}</span>
+              <span class="host">
+                {{ d.name || d.hostname }}
+                <!-- Live power cue: an outlet drawing current lights up — green for
+                     a running tool, amber for a low/standby draw — so you can spot a
+                     tool's plug by switching it on and re-scanning. -->
+                <span class="draw-badge" *ngIf="drawLevel(d) !== 'off'">⚡ {{ d.powerW | number:'1.0-0' }} W</span>
+              </span>
               <span class="meta">
                 {{ d.hostname }} · {{ d.ip }} —
-                {{ isExcluded(d.ip) ? 'already assigned to another gate' : (d.reachable ? ('Gen ' + d.generation + ' · ' + (d.powerW | number:'1.0-0') + ' W') : 'not responding') }}
+                {{ isDustCollector(d.ip) ? 'reserved — dust collector' : (isExcluded(d.ip) ? 'already assigned to another gate' : (d.reachable ? ('Gen ' + d.generation + ' · ' + (d.powerW | number:'1.0-0') + ' W') : 'not responding')) }}
               </span>
             </button>
           </div>
@@ -298,8 +358,8 @@ import { ApiService, OutletConfigCmd, DiscoveredOutlet } from '../services/api.s
                    (ngModelChange)="pingResult = null; host = ''; clearError()" />
           </div>
 
-          <!-- Ping — the device tries Gen 1 then Gen 2 automatically, so there's
-               nothing to pick here, just an IP to confirm. -->
+          <!-- Ping — Gen2+ plugs only (Gen1 not supported), so there's nothing
+               to pick here, just an IP to confirm. -->
           <div class="ping-row">
             <button class="ping-btn"
                     [disabled]="!isValidIp(ip) || pinging"
@@ -390,6 +450,13 @@ export class OutletConfiguratorComponent implements OnInit, OnChanges {
   @Input() excludeIps: string[] = [];
 
   /**
+   * IP of the plug reserved for the dust collector, if one is configured.
+   * Treated as excluded (can't be picked as a tool sensor) but labelled
+   * distinctly so the user understands *why* it's unavailable.
+   */
+  @Input() dustCollectorIp?: string;
+
+  /**
    * Emits the completed config when saved, or null when the user skips.
    * The wizard shell decides whether to call saveOutletConfig() after all gates.
    */
@@ -397,7 +464,7 @@ export class OutletConfiguratorComponent implements OnInit, OnChanges {
 
   // Form state
   toolName   = '';
-  hasPlug    = false;
+  hasPlug    = true;   // most gates have a plug — default Yes, and auto-scan for it
   ip         = '';
   /** mDNS hostname of the selected outlet, if it came from a scan rather than manual entry. */
   host       = '';
@@ -422,6 +489,21 @@ export class OutletConfiguratorComponent implements OnInit, OnChanges {
 
   ngOnInit() {
     this.applyExisting();
+    this.autoScan();
+  }
+
+  /**
+   * Kick off a network scan automatically when a gate step opens, so the list of
+   * discovered plugs is ready without the user hunting for a "Scan" button. No-op
+   * when there's nothing to scan for: no plug on this gate, manual IP entry, an
+   * already-configured gate (existing IP), or results already cached from an
+   * earlier gate in this run. The user can still hit "Scan again" to refresh.
+   */
+  private autoScan() {
+    if (!this.hasPlug || this.manualEntry) return;
+    if (this.ip.trim().length > 0) return;              // already has a plug
+    if (this.scanResults !== null || this.scanning) return;
+    this.scan();
   }
 
   ngOnChanges(changes: SimpleChanges) {
@@ -430,7 +512,7 @@ export class OutletConfiguratorComponent implements OnInit, OnChanges {
     // the gate changes so the previous gate's values don't bleed through.
     if (changes['gateIndex'] && !changes['gateIndex'].firstChange) {
       this.toolName   = '';
-      this.hasPlug    = false;
+      this.hasPlug    = true;
       this.ip         = '';
       this.host       = '';
       this.thresholdW = null;
@@ -442,8 +524,12 @@ export class OutletConfiguratorComponent implements OnInit, OnChanges {
       this.nameEdited = false;
       this.manualEntry = false;
       this.scanning = false;
-      this.scanResults = null;
+      // NB: scanResults is intentionally NOT cleared here — the discovered-outlet
+      // list is network-wide, so we reuse it across gates (already-assigned plugs
+      // show as excluded) instead of re-scanning per gate. autoScan() only fires
+      // a fresh scan when we have none yet.
       this.applyExisting();
+      this.autoScan();
       this.cd.markForCheck();
     }
   }
@@ -464,10 +550,10 @@ export class OutletConfiguratorComponent implements OnInit, OnChanges {
   setHasPlug(v: boolean) {
     this.hasPlug = v;
     this.pingResult = null;
-    this.scanResults = null;
     this.manualEntry = false;
-    if (!v) this.host = '';
+    if (!v) { this.host = ''; this.scanResults = null; }
     this.clearError();
+    this.autoScan();   // switching to Yes with no results yet → scan right away
   }
 
   /** Generation to save: a fresh successful ping wins, else whatever was already configured. */
@@ -493,9 +579,29 @@ export class OutletConfiguratorComponent implements OnInit, OnChanges {
     return /^(\d{1,3}\.){3}\d{1,3}$/.test(ip.trim());
   }
 
-  /** True if this IP is already assigned to a different gate in this wizard session. */
+  /** True if this IP can't be picked here — assigned to another gate, or
+   *  reserved for the dust collector. */
   isExcluded(ip: string): boolean {
-    return this.excludeIps.includes(ip);
+    return this.excludeIps.includes(ip) || this.isDustCollector(ip);
+  }
+
+  /** True if this IP is the one reserved for the dust collector. */
+  isDustCollector(ip: string): boolean {
+    return !!this.dustCollectorIp && ip === this.dustCollectorIp;
+  }
+
+  /**
+   * Current-draw tier for highlighting a discovered outlet:
+   *   'off'  — unreachable or < 1W (Shelly standby ~0W): no highlight.
+   *   'low'  — 1–5W: something's plugged in but idling (charger, electronics,
+   *            a tool at standby). Amber, so it's noticeable but not mistaken
+   *            for a running tool.
+   *   'on'   — ≥ 5W (the default detection threshold): a running tool. Green.
+   * Lets the user identify a tool's plug by switching it on and re-scanning.
+   */
+  drawLevel(d: DiscoveredOutlet): 'off' | 'low' | 'on' {
+    if (!d.reachable || d.powerW < 1) return 'off';
+    return d.powerW >= 5 ? 'on' : 'low';
   }
 
   clearError() { this.errorMsg = ''; }
@@ -539,7 +645,10 @@ export class OutletConfiguratorComponent implements OnInit, OnChanges {
     this.host = d.hostname;
     this.pingResult = { reachable: true, powerW: d.powerW, generation: d.generation, name: d.name };
     this.existingGeneration = d.generation;
-    this.applyDetectedName(d.name || d.hostname);
+    // Prefill the gate name from the plug's Shelly-app name only if it looks like
+    // a real name the user chose — not blank and not a factory identifier or the
+    // mDNS hostname (which would make a confusing gate label).
+    if (this.isCustomName(d.name, d.hostname)) this.applyDetectedName(d.name);
     this.clearError();
     this.cd.markForCheck();
   }
@@ -552,8 +661,10 @@ export class OutletConfiguratorComponent implements OnInit, OnChanges {
     this.cd.markForCheck();
     try {
       this.pingResult = await this.api.pingOutlet(this.ip.trim());
-      if (this.pingResult.reachable && this.pingResult.name) {
-        this.applyDetectedName(this.pingResult.name);
+      // Manual IP entry has no mDNS hostname to compare against, but the name
+      // filter still rejects blanks and factory identifiers.
+      if (this.pingResult.reachable && this.isCustomName(this.pingResult.name, '')) {
+        this.applyDetectedName(this.pingResult.name!);
       }
     } catch {
       this.pingResult = { reachable: false, powerW: 0, generation: 0 };
@@ -567,6 +678,29 @@ export class OutletConfiguratorComponent implements OnInit, OnChanges {
   private applyDetectedName(name: string) {
     if (this.nameEdited || !name) return;
     this.toolName = name;
+  }
+
+  /**
+   * True when a plug's Shelly-app name looks like a real name the user chose, so
+   * it's worth pre-filling as the gate name — as opposed to blank or a factory /
+   * auto-generated identifier, which would make a confusing gate label.
+   *
+   * The friendly name is only ever a display label here (we key/match plugs on
+   * ip + mDNS host, never the name), so this filter is purely cosmetic — a bad
+   * guess costs nothing but a name the user retypes. Rejects:
+   *   - blank / whitespace
+   *   - the mDNS hostname itself (the device id, e.g. "shellyplugsg3-a8032ab…")
+   *   - factory device-id labels starting with "shelly…"
+   *   - anything ending in a MAC/hex fragment like "-A8032AB"
+   */
+  private isCustomName(name: string | undefined, hostname: string | undefined): boolean {
+    const n = (name ?? '').trim();
+    if (!n) return false;
+    const lower = n.toLowerCase();
+    if (hostname && lower === hostname.trim().toLowerCase()) return false;
+    if (/^shelly[a-z0-9]/i.test(n)) return false;
+    if (/[-_ ][0-9a-f]{4,}$/i.test(n)) return false;
+    return true;
   }
 
   async saveOutlet() {

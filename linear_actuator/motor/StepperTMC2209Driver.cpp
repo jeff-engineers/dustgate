@@ -21,8 +21,10 @@ bool StepperTMC2209Driver::begin() {
     pinMode(PIN_TMC_EN, OUTPUT);
     digitalWrite(PIN_TMC_EN, HIGH); // disabled until configured
 
-    // Init UART — Serial1 is the hardware UART on Feather RX/TX header pins
-    Serial1.begin(115200);
+    // Init UART — Serial1 pins come from the board header. On the S2 Feather
+    // these are the fixed default RX/TX header pins (passing them is a no-op);
+    // on the DevKitC's classic ESP32 they must be given explicitly.
+    Serial1.begin(115200, SERIAL_8N1, SERIAL1_RX_PIN, SERIAL1_TX_PIN);
 
     // Configure driver
     _driver.begin();
@@ -36,6 +38,11 @@ bool StepperTMC2209Driver::begin() {
     // Without the second arg the library defaults to 0.5 — ignores TMC2209_HOLD_CURRENT_MA.
     float holdMult = (float)TMC2209_HOLD_CURRENT_MA / (float)TMC2209_CURRENT_MA;
     _driver.rms_current(TMC2209_CURRENT_MA, holdMult);
+    // Drop from run current to the (low) hold current promptly after each move,
+    // so the motor doesn't linger at run current between moves and run hot. This
+    // is the standstill power-down delay; without setting it the transition can
+    // be sluggish or ineffective, defeating a low hold-current setting.
+    _driver.TPOWERDOWN(TMC2209_TPOWERDOWN);
     _driver.microsteps(MICROSTEPS);
     _driver.en_spreadCycle(false);              // StealthChop (quiet)
     _driver.pwm_autoscale(true);
@@ -93,8 +100,11 @@ bool StepperTMC2209Driver::begin() {
     DEBUG_PRINTLN(F("TMC2209 UART OK (read + write verified)."));
 
     // DIAG pin: open-drain active LOW — pulls to GND on stall, floats otherwise.
-    // INPUT_PULLUP required; without it the pin sits at 0V always.
+    // INPUT_PULLUP required; without it the pin sits at 0V always. Optional —
+    // boards that don't route DIAG (StallGuard is abandoned) leave it undefined.
+#ifdef PIN_TMC_DIAG
     pinMode(PIN_TMC_DIAG, INPUT_PULLUP);
+#endif
 
     // Configure AccelStepper
     _stepper.setMaxSpeed(MAX_SPEED_STEPS_PER_SEC);
@@ -213,7 +223,6 @@ void StepperTMC2209Driver::printDriverRegs() {
     uint8_t  cs_actual  = (drv >> 16) & 0x1F;   // bits [20:16] = CS_ACTUAL
     bool     stst        = (drv >> 31) & 0x01;
     bool     stealth_bit = (drv >> 30) & 0x01;
-    bool diag_state = digitalRead(PIN_TMC_DIAG);
     Serial.print(F("    SG_RESULT  = ")); Serial.print(sg_result);
     Serial.println(F("  (0=max stall load, 511=no load; DIAG fires when < SGTHRS*2)"));
     Serial.print(F("    CS_ACTUAL  = ")); Serial.print(cs_actual);
@@ -221,7 +230,11 @@ void StepperTMC2209Driver::printDriverRegs() {
     Serial.print((uint32_t)cs_actual * 100 / 31); Serial.println(F("% of run current)"));
     Serial.print(F("    standstill = ")); Serial.println(stst);
     Serial.print(F("    stealth    = ")); Serial.println(stealth_bit ? F("1 (StealthChop — StallGuard INACTIVE)") : F("0 (SpreadCycle — StallGuard ok)"));
-    Serial.print(F("  DIAG pin:   ")); Serial.println(diag_state ? F("HIGH (stall asserted)") : F("LOW (normal)"));
+#ifdef PIN_TMC_DIAG
+    Serial.print(F("  DIAG pin:   ")); Serial.println(digitalRead(PIN_TMC_DIAG) ? F("HIGH (stall asserted)") : F("LOW (normal)"));
+#else
+    Serial.println(F("  DIAG pin:   not wired (StallGuard abandoned)"));
+#endif
 
     Serial.println(F("============================="));
     Serial.println(F(""));

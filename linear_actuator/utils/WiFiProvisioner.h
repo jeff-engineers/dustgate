@@ -217,6 +217,12 @@ inline void _runPortal() {
 // (portal reboots the device after saving credentials).
 // ---------------------------------------------------------------------------
 inline bool begin() {
+    // Recover the link unattended: keep credentials in the driver's NVS and let
+    // the core auto-reconnect on a dropped connection (maintain() below is the
+    // backstop for a full AP outage). Set before WiFi.begin() so persistence
+    // takes effect for this session's connection.
+    WiFi.persistent(true);
+    WiFi.setAutoReconnect(true);
 #ifdef WIFI_STA_SSID
     // Developer mode: hardcoded credentials take priority over NVS
     DEBUG_PRINT(F("[WiFi] Connecting to ")); DEBUG_PRINTLN(F(WIFI_STA_SSID));
@@ -272,6 +278,26 @@ inline bool begin() {
     Serial.println(F(")"));
     DEBUG_PRINTLN(F("[WiFi] Setup assistant available at  http://<host-or-ip>/#/setup"));
     return true;
+}
+
+// ---------------------------------------------------------------------------
+// maintain() — call periodically from loop() to keep WiFi alive unattended.
+//
+// setAutoReconnect() (set in begin()) handles most transient drops, but a full
+// AP outage can leave the radio disconnected indefinitely with no further
+// retries. This nudges an explicit WiFi.reconnect() every
+// WIFI_RECONNECT_INTERVAL_MS while down, using the persisted credentials, so a
+// shop device rejoins on its own after the router comes back instead of needing
+// a power cycle. Cheap and non-blocking: it only acts while disconnected.
+// ---------------------------------------------------------------------------
+inline void maintain() {
+    static unsigned long lastAttempt = 0;
+    if (WiFi.status() == WL_CONNECTED) return;
+    unsigned long now = millis();
+    if (now - lastAttempt < WIFI_RECONNECT_INTERVAL_MS) return;
+    lastAttempt = now;
+    DEBUG_PRINTLN(F("[WiFi] Disconnected — attempting reconnect..."));
+    WiFi.reconnect();
 }
 
 // reset(), getAnthropicKey(), setAnthropicKey() are defined in AgentConfig.h

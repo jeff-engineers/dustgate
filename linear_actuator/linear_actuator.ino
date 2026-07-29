@@ -15,6 +15,7 @@
 // =============================================================================
 
 #include <EEPROM.h>
+#include "esp_task_wdt.h"   // main-loop task watchdog (unattended-hang recovery)
 #include "config.h"
 #include "utils/MotionMath.h"
 #include "motor/MotorDriver.h"
@@ -265,7 +266,6 @@ StepperTMC2209Driver motor;
   // below. Must run on this (the main loop) task; see HttpApiServer.cpp's
   // /api/outlets/discover route comment for why.
   #include "utils/MdnsQuery.h"
-  #include "outlets/ShellyGen1Outlet.h"
   #include "outlets/ShellyGen2Outlet.h"
   #include "outlets/ShellyDeviceName.h"
 #elif defined(CONTROL_SERIAL_DEBUG)
@@ -330,15 +330,18 @@ void setHomedLeft(bool homedLeft);
 // =============================================================================
 void setup() {
     Serial.begin(SERIAL_BAUD);
-    // ESP32-S2 native USB: wait until serial monitor connects, up to 5s.
-    // Open Serial Monitor before or immediately after flashing to catch boot logs.
+#if BOARD_HAS_NATIVE_USB
+    // Native USB-CDC (S2/S3): Serial isn't ready until the host enumerates it —
+    // wait for the monitor to connect, up to 5s, so boot logs aren't lost.
+    // Open Serial Monitor before or immediately after flashing to catch them.
     unsigned long t0 = millis();
     while (!Serial && (millis() - t0) < 5000) { delay(10); }
+#endif
     delay(100); // brief settle after connection
     DEBUG_PRINTLN(F("=== DustGate ==="));
-    DEBUG_PRINTLN(F("Target: ESP32-S2 Feather + TMC2209"));
+    DEBUG_PRINTLN(F("Target: ESP32 + TMC2209"));
 
-    // ESP32-S2 ADC: 12-bit (0-4095), 3.3V reference
+    // ADC: 12-bit (0-4095), 3.3V reference
     analogReadResolution(12);
 
     // WiFi provisioning — must run before any WiFi-dependent control mode.
@@ -398,12 +401,26 @@ void setup() {
         Serial.println(apiServer.apiKey());
     }
 #endif
+
+    // Arm the task watchdog on the main loop LAST — after all the blocking init
+    // above (WiFi connect can block up to ~12s, calibration load, etc.), so none
+    // of it trips a spurious reset. From here loop() must pet it each pass.
+    esp_task_wdt_init(WDT_TIMEOUT_SEC, /*panic=*/true);
+    esp_task_wdt_add(NULL);   // watch this task (the Arduino loopTask)
 }
 
 // =============================================================================
 // loop()
 // =============================================================================
 void loop() {
+    esp_task_wdt_reset();   // pet the watchdog: we're alive this iteration
+
+    // Keep WiFi alive unattended — nudges a reconnect if the link has dropped
+    // and the core's auto-reconnect hasn't brought it back (e.g. AP rebooted).
+#if defined(CONTROL_SMART_OUTLET) || defined(ENABLE_HTTP_API)
+    WiFiProvisioner::maintain();
+#endif
+
     // Run background processing for control input (HTTP server, etc.)
     control.update();
 
@@ -970,46 +987,8 @@ void loop() {
                 if (attempt < DISCOVER_MDNS_ATTEMPTS - 1) delay(DISCOVER_MDNS_RETRY_DELAY_MS);
             }
 
-            // ── Pass 2: _http._tcp — reaches Gen1, which has no _shelly._tcp ─
-            // Every HTTP responder on the LAN shows up here, so this pass still
-            // needs a filter: a "gen" TXT means Gen2+ (one pass 1 missed to
-            // lossy UDP), otherwise fall back to the hostname heuristic, which
-            // is all a Gen1 device gives us to go on.
-            for (int attempt = 0; attempt < DISCOVER_MDNS_ATTEMPTS; attempt++) {
-                MdnsHit mdnsHits[DISCOVER_MAX_RESULTS];
-                int n = mdnsQueryHttpTcp(DISCOVER_MDNS_TIMEOUT_MS, mdnsHits, DISCOVER_MAX_RESULTS);
-                DEBUG_PRINT(F("[DISCOVER] attempt "));
-                DEBUG_PRINT(attempt + 1);
-                DEBUG_PRINT(F("/"));
-                DEBUG_PRINT(DISCOVER_MDNS_ATTEMPTS);
-                DEBUG_PRINT(F(": mDNS _http._tcp query returned "));
-                DEBUG_PRINT(n);
-                DEBUG_PRINTLN(F(" host(s):"));
-
-                for (int i = 0; i < n; i++) {
-                    const String& host = mdnsHits[i].hostname;
-                    String hostLower = host;
-                    hostLower.toLowerCase();
-                    bool named = hostLower.indexOf("shelly") >= 0;
-                    int  gen   = mdnsHits[i].gen;
-
-                    DEBUG_PRINT(F("  - "));
-                    DEBUG_PRINT(host.length() ? host : String("(no hostname)"));
-                    DEBUG_PRINT(F("  "));
-                    DEBUG_PRINT(mdnsHits[i].ip);
-                    if (gen >= 2) {
-                        DEBUG_PRINT(F("  [gen=")); DEBUG_PRINT(gen); DEBUG_PRINTLN(F(" TXT]"));
-                        addHit(host, mdnsHits[i].ip, gen);
-                    } else if (named) {
-                        DEBUG_PRINTLN(F("  [no gen TXT + \"shelly\" hostname -> Gen1 candidate]"));
-                        addHit(host, mdnsHits[i].ip, 1);
-                    } else {
-                        DEBUG_PRINTLN(F("  [skipped — not a Shelly]"));
-                    }
-                }
-
-                if (attempt < DISCOVER_MDNS_ATTEMPTS - 1) delay(DISCOVER_MDNS_RETRY_DELAY_MS);
-            }
+            // (Gen1 is not supported, so there's no _http._tcp fallback pass —
+            // _shelly._tcp above is the sole, unambiguous source.)
 
             DEBUG_PRINT(F("[DISCOVER] "));
             DEBUG_PRINT(hitCount);
@@ -1019,23 +998,12 @@ void loop() {
                 const String& ip   = hitIp[i];
                 const String& host = hitHost[i];
 
-                // The generation is known from mDNS, so probe in that dialect
-                // only — no more Gen2-then-Gen1 fallback eating a full timeout
-                // on every Gen1 (and every unreachable) device. Gen3+ speaks
-                // the same RPC dialect as Gen2, so it collapses to "gen 2" for
-                // both the outlet class and the API's {0,1,2} `gen` field.
-                int apiGen = (hitGen[i] >= 2) ? 2 : 1;
-                bool  ok;
-                float pw;
-                if (apiGen == 2) {
-                    ShellyGen2Outlet probe(ip.c_str(), "discover");
-                    ok = probe.poll();
-                    pw = probe.getPowerW();
-                } else {
-                    ShellyGen1Outlet probe(ip.c_str(), "discover");
-                    ok = probe.poll();
-                    pw = probe.getPowerW();
-                }
+                // Gen2+ only (Gen1 dropped); Gen3 shares the Gen2 RPC dialect,
+                // so a single Gen2 probe covers every supported device.
+                int apiGen = (hitGen[i] >= 3) ? 3 : 2;
+                ShellyGen2Outlet probe(ip.c_str(), "discover");
+                bool  ok = probe.poll();
+                float pw = probe.getPowerW();
 
                 String devName = ok ? fetchShellyDeviceName(ip.c_str(), apiGen) : String();
                 DEBUG_PRINT(F("  - ")); DEBUG_PRINT(host); DEBUG_PRINT(F("  "));
@@ -1071,20 +1039,12 @@ void loop() {
     {
         char pingIp[40];
         if (apiServer.consumePingRequest(pingIp, sizeof(pingIp))) {
-            // Gen 2 first — same reasoning as discover above: today's Shelly
-            // hardware (incl. this project's reference Plug US G4) speaks
-            // Gen2/RPC, so probing it first avoids eating a Gen 1 timeout on
-            // every reachable device before falling back.
+            // Gen2+ only (Gen1 dropped): this project's supported hardware
+            // (e.g. the reference Plug US G4) speaks the Gen2/RPC dialect.
             ShellyGen2Outlet gen2(pingIp, "ping");
-            bool ok  = gen2.poll();
-            float pw = gen2.getPowerW();
-            int  gen = 2;
-            if (!ok) {
-                ShellyGen1Outlet gen1(pingIp, "ping");
-                ok  = gen1.poll();
-                pw  = gen1.getPowerW();
-                gen = 1;
-            }
+            bool  ok  = gen2.poll();
+            float pw  = gen2.getPowerW();
+            int   gen = 2;
             String devName = ok ? fetchShellyDeviceName(pingIp, gen) : String();
 
             DEBUG_PRINT(F("[PING] ")); DEBUG_PRINT(pingIp);
