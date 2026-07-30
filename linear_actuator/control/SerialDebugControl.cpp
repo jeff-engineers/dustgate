@@ -27,7 +27,11 @@ SerialDebugControl::SerialDebugControl()
       _calPending(false),
       _calGates(0),
       _homeSidePending(false),
-      _homedLeftValue(false)
+      _homedLeftValue(false),
+      _servoPending(false),
+      _servoIndex(0),
+      _servoAngle(0),
+      _servoDetach(false)
 { _calModel[0] = '\0'; }
 
 bool SerialDebugControl::begin() {
@@ -96,6 +100,17 @@ bool SerialDebugControl::consumeHomeSideRequest(bool& outHomedLeft) {
     if (_homeSidePending) {
         _homeSidePending = false;
         outHomedLeft = _homedLeftValue;
+        return true;
+    }
+    return false;
+}
+
+bool SerialDebugControl::consumeServoRequest(int& outIndex, int& outAngle, bool& outDetach) {
+    if (_servoPending) {
+        _servoPending = false;
+        outIndex  = _servoIndex;
+        outAngle  = _servoAngle;
+        outDetach = _servoDetach;
         return true;
     }
     return false;
@@ -192,6 +207,33 @@ void SerialDebugControl::processLine(const String& line) {
                 _calPending = true;
                 Serial.print(F("[CAL] Requested reference sweep: "));
                 Serial.print(model); Serial.print(F(" x")); Serial.println(gates);
+            }
+        }
+
+    } else if (cmd.startsWith("servo ")) {
+        // servo <1-4> <angle>   → move servo N to angle°  (Phase-2 bring-up)
+        // servo <1-4> detach    → de-energize servo N (ball holds by friction/detent)
+        String rest = cmd.substring(6); rest.trim();
+        int sp = rest.indexOf(' ');
+        if (sp < 0) {
+            Serial.println(F("[SERVO] Usage: servo <1-4> <0-180>  |  servo <1-4> detach"));
+        } else {
+            int idx = rest.substring(0, sp).toInt();
+            String arg = rest.substring(sp + 1); arg.trim();
+            if (idx < 1 || idx > 4) {
+                Serial.println(F("[SERVO] index must be 1..4 (pins 25/26/27/14)"));
+            } else if (arg == "detach") {
+                _servoIndex = idx; _servoDetach = true; _servoPending = true;
+                Serial.print(F("[SERVO] Detach servo ")); Serial.println(idx);
+            } else {
+                int angle = arg.toInt();
+                if (angle < 0 || angle > 180) {
+                    Serial.println(F("[SERVO] angle must be 0..180"));
+                } else {
+                    _servoIndex = idx; _servoAngle = angle; _servoDetach = false; _servoPending = true;
+                    Serial.print(F("[SERVO] Servo ")); Serial.print(idx);
+                    Serial.print(F(" → ")); Serial.print(angle); Serial.println(F("°"));
+                }
             }
         }
 
@@ -396,6 +438,9 @@ void SerialDebugControl::printHelp() {
     Serial.println(F("  jog <mm>          Move relative: + = away from home, - = toward home"));
     Serial.println(F("  calibrate <m> <n> Dual-endstop reference sweep: model (rockler-2.5|rockler-4|custom) + gate count"));
     Serial.println(F("  homeside l|r      Report which side it homed to; 'right' re-homes to the left endstop"));
+#if defined(ENABLE_SERVO) && defined(SERVO_PWM_PIN_1)
+    Serial.println(F("  servo <1-4> <deg> Phase-2 bring-up: move servo N to angle (or 'servo N detach')"));
+#endif
     Serial.println(F("  clearcal          Erase EEPROM calibration (reload from config.h)"));
     Serial.println(F("  wifireset         Erase WiFi credentials, reboot into setup portal"));
     Serial.println(F("  gconf             Read GCONF + CHOPCONF from driver"));

@@ -116,25 +116,27 @@ pulling to one collector.
       "name": "Manifold A",
       "controllerId": "primary",
       "kind": "servoManifold",
-      // Per-state realization is JUST the angle — the alignment-compensation knob
-      // (e.g. 85 not 90 for closed). Reference designs tune these per gate.
+      // Per-state realization is an OFFSET from the calibrated referenceAngle — a
+      // valve-DESIGN constant, not a per-build tune. LEFT is the reference (offset
+      // 0); closed/right are the ball's known port offsets from it.
       "states": [
-        { "id": "closed", "isClosed": true,  "angleDeg": 85  },
-        { "id": "left",   "isClosed": false, "angleDeg": 5   },
-        { "id": "right",  "isClosed": false, "angleDeg": 166 }
+        { "id": "left",   "isClosed": false, "offsetDeg": 0   },
+        { "id": "closed", "isClosed": true,  "offsetDeg": 80  },
+        { "id": "right",  "isClosed": false, "offsetDeg": 161 }
       ],
       "branches": [
         { "id": "mL", "opensState": "left",  "role": "tool" },
         { "id": "mR", "opensState": "right", "role": "tool" }
       ],
-      // Timing/hold/clamp live on the actuator, not per-state.
+      // referenceAngle is captured in setup (jog until LEFT is exact); everything
+      // else derives from it. Timing/hold/clamp live on the actuator, not per-state.
       "servo": {
         "channel": 0,                    // LEDC channel (or PCA9685 index)
+        "referenceAngle": 5,             // CALIBRATED: servo angle where LEFT is exact
         "moveMs": 600,                   // one sweep time for the whole actuator
-        "holdAtRest": true,              // keep energized holding position (SAFE default).
-                                         // set false to detach after moving IF this build
-                                         // holds by hard-stop friction / detent magnets —
-                                         // saves power + stops buzz, but risks airflow back-drive
+        "holdAtRest": false,             // move then detach — valve holds by friction/detent;
+                                         // analog servos groan while holding. Set true only for
+                                         // a build that would back-drive de-energized.
         "minAngle": 0, "maxAngle": 180   // optional safety clamp on any commanded angle
       }
     },
@@ -182,10 +184,10 @@ pulling to one collector.
 |---|---|
 | `controllerId` | which board drives it |
 | `kind` | `linear` \| `servoGate` \| `servoManifold` |
-| `states[]` | HAL states: `{ id, isClosed, …realization }`. Exactly one `isClosed:true`. Realization is kind-specific: `positionMm` (linear) or `angleDeg` (servo — also the alignment-tuning knob). |
+| `states[]` | HAL states: `{ id, isClosed, …realization }`. Exactly one `isClosed:true`. Realization is kind-specific: `positionMm` (linear) or `offsetDeg` (servo — angular offset from the calibrated `referenceAngle`; a valve-DESIGN constant, e.g. a gate's closed = open ±90°). |
 | `branches[]` | `{ id, opensState, role }`. `opensState` references a non-closed state id. `role` ∈ `tool` \| `unassigned` \| `blocked` \| `feed`. |
 | `linear` | `{ calibration: { stepsPerMm, measuredSpanSteps, homeIsMaxEndstop, manifoldModel } }` |
-| `servo` | `{ channel, moveMs, holdAtRest, minAngle?, maxAngle? }`. `holdAtRest` **defaults true** (keep holding — safe); set false to detach after moving only if the build holds by hard-stop friction / optional detent. |
+| `servo` | `{ channel, referenceAngle, moveMs, holdAtRest, minAngle?, maxAngle? }`. `referenceAngle` = per-build calibrated angle of the reference state (a gate's OPEN / a manifold's LEFT, viewed from the servo side), captured in setup; commanded angle = `referenceAngle + offsetDeg`. `holdAtRest` **defaults false** (move then detach — analog servos groan while holding and the valve holds by friction/detent); set true only for a build that would back-drive de-energized. |
 
 ### element: tool
 | field | notes |
@@ -206,26 +208,59 @@ pulling to one collector.
 
 ## Servo actuator — mechanical build notes
 
-From the DIY Blast Gate reference (parts + sketch angles; the assembly video isn't
-transcribed, so the *hold* mechanism is inferred from "magnets are optional"):
+**DustGate departs from the DIY Blast Gate reference here.** The reference positions
+the ball by driving the servo *into* physical hard stops (`Open/Closed/Left/Right.stl`)
+and hand-tuning each angle to overshoot into a stop. We DON'T — that only works well
+with a clutch servo, and it stalls/groans/wears a clutchless analog servo (e.g. the
+Power HD 3001HB). Instead:
 
-- **Positions are set by physical hard stops** — printed parts named by position
-  (`Open/Closed/Left/Right.stl`). The servo drives the ball *into* a hard stop; it
-  doesn't define the position itself.
-- **What holds a gate at rest is hard-stop + seal/gear friction.** Detent magnets
-  (`N52`, 4mm×2mm) are **optional** and gate-level — so friction must be the baseline
-  hold. Magnets add back-drive resistance and a tactile snap; they matter most on the
-  **manual** handle version, not the servo build. (Earlier I wrongly implied the servo
-  version depends on them — it doesn't.)
-- **Indexing the servo to the ball:** command the servo to its *closed* reference angle
-  first (standard gate ≈ `0°`, manifold ≈ `85°` center), rotate the ball to its physical
-  closed hard stop, then attach the coupler/arm so the two are clocked together. Trim the
-  open/side `angleDeg` in software to drive firmly into each stop (hence 91/92/94°). A
-  **clutch servo** forgives overshoot into the stop.
-- **`holdAtRest` is per-build for exactly this reason:** whether a detached servo holds
-  depends on that gate's friction fit and whether detent magnets were added — which
-  varies gate to gate. Default `true` (hold); opt into detach only once a build is
-  confirmed to stay put.
+- **Calibrate to ONE reference position, derive the rest.** During setup, jog the
+  servo until the valve sits *exactly* at its reference — a gate's OPEN, a manifold's
+  LEFT (viewed from the servo side) — and store that as the servo's `referenceAngle`.
+  Every other state is `referenceAngle + offsetDeg`, where `offsetDeg` is a fixed
+  valve-DESIGN constant (a quarter-turn gate: closed = ±90°; a manifold: the ball's
+  known port offsets). One calibration point defines everything, and re-clocking the
+  horn just means re-capturing the one reference.
+- **No stalling into stops.** The servo goes to a computed angle and — with
+  `holdAtRest:false` (the default) — detaches once seated (`SERVO_MOVE_MS`), so it
+  never fights a hard stop or hunts. The valve holds by friction/detent. Hard stops,
+  if present, are a mechanical backstop, not the positioning mechanism.
+- **`holdAtRest` stays per-build:** default false (move-then-detach — right for the
+  analog servos here and confirmed on the bench); set true only for a build that would
+  back-drive when de-energized.
+- **Orientation & sign convention (jeff's build, 2026-07-28):** viewed from the SERVO
+  side, servo `0°` = fully clockwise (right); increasing angle = counterclockwise. Mount
+  the horn HORIZONTAL at assembly, and calibrate the reference (gate OPEN / manifold
+  LEFT) as a small POSITIVE angle — set at, or slightly clockwise of, true open — so
+  every `offsetDeg` is POSITIVE (CCW) and stays inside 0–180°. Thus a gate's
+  `closed.offsetDeg ≈ +90`; a manifold's closed/right are positive offsets from left.
+- **Coupling slop / backlash → use magnetic DETENTS (preferred fix).** The horn↔stem
+  joint has play, and a beefier servo doesn't fix it. The clean solution is a magnetic
+  detent at each valve position (the reference's optional N52 magnets): drive the servo
+  *near* the target — a hair *into* the detent — then **detach**, and the magnet snaps
+  the ball to the exact detent and holds it. This defeats slop (the magnet seats the
+  ball regardless of backlash, as long as the servo lands within capture range — a few
+  degrees of slop is well inside it), provides the de-energized hold (no drift under
+  suction), AND takes up backlash from a consistent side for free. This is a DETENT
+  (servo detaches into it), NOT a hard stop the servo stalls against — so it keeps the
+  clutchless-servo-friendly, no-groan behavior. **The detent magnet placement now
+  defines the true positions**, so that's the thing to get right mechanically.
+  - Servo-angle precision therefore RELAXES: `referenceAngle + offsetDeg` just needs to
+    land within capture range and bias slightly into the detent. Firmware
+    backlash-compensation (same-direction approach) becomes optional — keep only a small
+    deliberate overshoot-toward-detent.
+  - Also tighten the coupler where cheap (set screw / D-profile), but the detent is what
+    makes precision robust.
+  - Possible schema flag: `servo.detented: true` — documents that landing near + a hair
+    over is fine (magnet seats it) and that `holdAtRest:false` is safe (magnet holds).
+- **Digital servo (jeff leaning this way):** more torque, tighter deadband, faster, less
+  hunting — all good, and **no firmware change** (ESP32Servo drives digital positional
+  servos identically; move-then-detach still applies and matters *more*, since digitals
+  hold hard). Watch current: a beefy digital pulls a bigger stall — size the 5V rail +
+  bulk cap, though one-move-at-a-time keeps the average low. May want per-servo pulse
+  (min/max µs) tuning.
+- **Still open:** the manifold's real port offsets (measure the ball; the reference's
+  5/85/166° implies ~±80° from center).
 
 ## How routing consumes it (sketch)
 
@@ -267,15 +302,18 @@ star of ducts. A lone linear actuator is the depth-1 special case — no separat
    but leave it unused until a real need? (lean: define, don't build UI yet)
 2. **Two tools sharing one branch** (a passive Y before a selector branch) — the
    junction case. Disallow for v1 (one tool per `tool` branch)?
-3. **Servo realization detail** — RESOLVED (2026-07-28, from the DIY Blast Gate
-   reference). Per-state `angleDeg` is the only realization needed AND is itself the
-   alignment-compensation knob (reference tunes 91/92/94° per gate by hand — no
-   pulse-width calibration). `moveMs`, `holdAtRest`, and an optional `minAngle`/
-   `maxAngle` clamp live on the `servo` block, not per state. `holdAtRest` **defaults
-   true** (keep the servo holding — safe against airflow back-drive); detach-after-move
-   (`false`) is a per-build opt-in for gates that hold position by hard-stop friction
-   (or optional detent magnets). Dropped the earlier `minUs/maxUs` idea. See the
-   mechanical notes below for what actually holds a gate at rest.
+3. **Servo realization** — RESOLVED (2026-07-28, updated after bench-testing Power HD
+   3001HB analog servos). Positions are **calibrated, not hard-stop-driven**: each
+   servo stores a per-build `referenceAngle` (jog to a gate's OPEN / manifold's LEFT in
+   setup), and each state is `referenceAngle + offsetDeg` where `offsetDeg` is a fixed
+   valve-design constant. `moveMs`, `holdAtRest`, `referenceAngle`, and an optional
+   `minAngle`/`maxAngle` clamp live on the `servo` block. `holdAtRest` **defaults false**
+   (move-then-detach — analog servos groan holding and the valve holds by
+   friction/detent). Dropped the earlier `angleDeg`-absolute + `minUs/maxUs` ideas.
+   Sign convention RESOLVED: servo 0° = clockwise (servo side), `offsetDeg` positive
+   (CCW), reference set as a small positive angle. STILL OPEN: the manifold's real port
+   offsets (measure the ball), and backlash compensation in the servo HAL (approach
+   each target from one direction — coupling has slop). See the mechanical notes.
 4. **Where the current-mutex scope lives** — per controller (each board sequences
    its own servos) vs global. Per-controller is simpler and matches the power
    rail being per-node. Confirm.

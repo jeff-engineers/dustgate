@@ -7,7 +7,7 @@
 
 'use strict';
 
-const { validateTopology } = require('./topology');
+const { validateTopology, servoCommandAngle } = require('./topology');
 const { computeRouting } = require('./routing');
 const { planTransition } = require('./sequencer');
 const { createTopologyDevice, setToolPower, statusView } = require('./topology-device');
@@ -215,6 +215,25 @@ const idxOf = (plan, sel) => plan.moves.findIndex((m) => m.selectorId === sel);
 
   setToolPower(d, 'toolB', 0);    // B off → only A active → selector back to A
   check('dev star B off: selector → s1 (A alone)', statusView(d).actuators.sel === 's1');
+}
+
+// ── servo resolver: state → angle (referenceAngle + offsetDeg, clamped) ─────
+{
+  const gate = twoGates.elements.find((e) => e.id === 'gate1');   // ref 10, open+0 / closed+90
+  eq('servo gate open → 10', servoCommandAngle(gate, 'open'), 10);
+  eq('servo gate closed → 100', servoCommandAngle(gate, 'closed'), 100);
+
+  const man = feedChain.elements.find((e) => e.id === 'man');      // ref 5, left+0/closed+80/right+161
+  eq('servo manifold left → 5', servoCommandAngle(man, 'left'), 5);
+  eq('servo manifold closed → 85', servoCommandAngle(man, 'closed'), 85);
+  eq('servo manifold right → 166', servoCommandAngle(man, 'right'), 166);
+
+  const lin = star.elements.find((e) => e.id === 'sel');           // not a servo
+  eq('servo resolver: null for linear selector', servoCommandAngle(lin, 's1'), null);
+
+  // Clamp: referenceAngle + offset beyond maxAngle is clamped.
+  const clamped = { kind: 'servoGate', states: [{ id: 'x', offsetDeg: 200 }], servo: { referenceAngle: 0, maxAngle: 180 } };
+  eq('servo resolver: clamps to maxAngle', servoCommandAngle(clamped, 'x'), 180);
 }
 
 // ── report ──────────────────────────────────────────────────────────────────

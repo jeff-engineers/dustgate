@@ -65,16 +65,17 @@ const feedChain = {
     },
     {
       id: 'man', type: 'selector', name: 'Manifold A', controllerId: 'primary', kind: 'servoManifold',
+      // LEFT is the reference (offset 0); closed/right are the ball's port offsets.
       states: [
-        { id: 'closed', isClosed: true, angleDeg: 85 },
-        { id: 'left', isClosed: false, angleDeg: 5 },
-        { id: 'right', isClosed: false, angleDeg: 166 },
+        { id: 'left', isClosed: false, offsetDeg: 0 },
+        { id: 'closed', isClosed: true, offsetDeg: 80 },
+        { id: 'right', isClosed: false, offsetDeg: 161 },
       ],
       branches: [
         { id: 'mL', opensState: 'left', role: 'tool' },
         { id: 'mR', opensState: 'right', role: 'tool' },
       ],
-      servo: { channel: 0, moveMs: 600, holdAtRest: true },
+      servo: { channel: 0, referenceAngle: 5, moveMs: 600, holdAtRest: false, detented: true },
     },
     { id: 'toolA', type: 'tool', name: 'Bandsaw',      sensor: { outlet: { gen: 2, ip: '192.168.87.27', thresholdW: 6 } } },
     { id: 'toolL', type: 'tool', name: 'Router Table', sensor: { outlet: { gen: 2, ip: '192.168.87.31', thresholdW: 8 } } },
@@ -99,15 +100,16 @@ const twoGates = {
     { id: 'dc', type: 'collector', name: 'Dust Collector' },
     {
       id: 'gate1', type: 'selector', name: 'Gate 1', controllerId: 'primary', kind: 'servoGate',
-      states: [{ id: 'closed', isClosed: true, angleDeg: 0 }, { id: 'open', isClosed: false, angleDeg: 90 }],
+      // OPEN is the reference (offset 0); closed is the quarter-turn +90.
+      states: [{ id: 'open', isClosed: false, offsetDeg: 0 }, { id: 'closed', isClosed: true, offsetDeg: 90 }],
       branches: [{ id: 'g1', opensState: 'open', role: 'tool' }],
-      servo: { channel: 0, moveMs: 600, holdAtRest: true },
+      servo: { channel: 0, referenceAngle: 10, moveMs: 600, holdAtRest: false, detented: true },
     },
     {
       id: 'gate2', type: 'selector', name: 'Gate 2', controllerId: 'primary', kind: 'servoGate',
-      states: [{ id: 'closed', isClosed: true, angleDeg: 0 }, { id: 'open', isClosed: false, angleDeg: 90 }],
+      states: [{ id: 'open', isClosed: false, offsetDeg: 0 }, { id: 'closed', isClosed: true, offsetDeg: 90 }],
       branches: [{ id: 'g2', opensState: 'open', role: 'tool' }],
-      servo: { channel: 1, moveMs: 600, holdAtRest: true },
+      servo: { channel: 1, referenceAngle: 10, moveMs: 600, holdAtRest: false, detented: true },
     },
     { id: 'toolX', type: 'tool', name: 'Jointer', sensor: { outlet: { gen: 2, ip: '192.168.87.40', thresholdW: 5 } } },
     { id: 'toolY', type: 'tool', name: 'Planer',  sensor: { outlet: { gen: 2, ip: '192.168.87.41', thresholdW: 9 } } },

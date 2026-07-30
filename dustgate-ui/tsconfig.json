@@ -4,7 +4,9 @@
     "outDir": "./dist/out-tsc",
     "baseUrl": ".",
     "paths": {
-      "@device-model": ["../shared/device-model/device-model"]
+      "@device-model": ["../shared/device-model/device-model"],
+      "@topology": ["../shared/device-model/topology"],
+      "@topology-device": ["../shared/device-model/topology-device"]
     },
     "strict": true,
     "noImplicitOverride": true,

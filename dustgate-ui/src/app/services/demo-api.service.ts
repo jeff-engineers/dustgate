@@ -11,6 +11,8 @@ import {
 import { HardwareProfileService } from './hardware-profile.service';
 import { getAccessCode } from './access-code';
 import * as model from '@device-model';
+import { validateTopology, type Topology } from '@topology';
+import { createTopologyDevice, setToolPower, statusView as topoStatus, type TopologyDevice, type TopologyStatus } from '@topology-device';
 
 // ── Service ────────────────────────────────────────────────────────────────────
 
@@ -31,6 +33,9 @@ export class DemoApiService extends ApiService {
 
   /** The canonical device instance (in-memory, resets on page load). */
   private d: model.Device = model.createDevice();
+
+  /** v2 topology-native device (in-memory; null until a topology is PUT). */
+  private td: TopologyDevice | null = null;
 
   constructor(http: HttpClient, hardwareProfile: HardwareProfileService) {
     super(http, hardwareProfile);
@@ -71,6 +76,30 @@ export class DemoApiService extends ApiService {
 
   private pushStatus(): void {
     this.status$.next(this.buildStatus());
+  }
+
+  // ── v2 topology API (in-process, mirrors the mock's /api/v2/* + real firmware) ──
+  override async getTopology(): Promise<Topology> {
+    if (!this.td) throw new Error('no topology configured');
+    return this.td.topology;
+  }
+
+  override async putTopology(topology: Topology): Promise<{ ok: boolean }> {
+    const v = validateTopology(topology);
+    if (!v.ok) throw new Error('invalid topology: ' + JSON.stringify(v.errors));
+    this.td = createTopologyDevice(topology);
+    return { ok: true };
+  }
+
+  override async getV2Status(): Promise<TopologyStatus> {
+    if (!this.td) throw new Error('no topology configured');
+    return topoStatus(this.td);
+  }
+
+  override async simTool(toolId: string, watts: number): Promise<TopologyStatus> {
+    if (!this.td) throw new Error('no topology configured');
+    setToolPower(this.td, toolId, watts);
+    return topoStatus(this.td);
   }
 
   private delay(ms: number): Promise<void> {

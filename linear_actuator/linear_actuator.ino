@@ -259,6 +259,15 @@ static inline bool farSwitchTriggered() {
 #include "motor/StepperTMC2209Driver.h"
 StepperTMC2209Driver motor;
 
+// -- Phase-2 servo bring-up (ball-valve gates) --
+// Four positional servos on the reserved PWM pins (25/26/27/14 on DevKitC).
+// Signal only — servos powered from an EXTERNAL 5–6V rail, grounds common.
+#include "motor/ServoActuator.h"
+#if defined(ENABLE_SERVO) && defined(SERVO_PWM_PIN_1)
+ServoActuator g_servos[4];
+static const int SERVO_PINS[4] = { SERVO_PWM_PIN_1, SERVO_PWM_PIN_2, SERVO_PWM_PIN_3, SERVO_PWM_PIN_4 };
+#endif
+
 // -- Feedback system --
 #ifdef FEEDBACK_LIMIT_DISTANCE
   #include "feedback/LimitSwitchDistance.h"
@@ -391,6 +400,10 @@ void setup() {
 #if defined(ENABLE_SERIAL_COMMANDS) && !defined(CONTROL_SERIAL_DEBUG)
     _serialCmds.begin();   // supplemental serial processor (non-fatal if begin() returns false)
 #endif
+#if defined(ENABLE_SERVO) && defined(SERVO_PWM_PIN_1)
+    for (int i = 0; i < 4; i++) g_servos[i].begin(SERVO_PINS[i]);  // bind pins; attach on first move
+    DEBUG_PRINTLN(F("[SERVO] Bring-up ready — 'servo <1-4> <angle>' (external 5-6V rail, common GND)."));
+#endif
 
     if (!ok) {
         DEBUG_PRINTLN(F("INIT FAILED — check wiring and config.h"));
@@ -433,6 +446,11 @@ void loop() {
 
     // Run background processing for control input (HTTP server, etc.)
     control.update();
+
+#if defined(ENABLE_SERVO) && defined(SERVO_PWM_PIN_1)
+    // Effect any deferred servo auto-detach (move-then-detach; see ServoActuator).
+    for (int i = 0; i < 4; i++) g_servos[i].update();
+#endif
 
     // -- Endstop over-travel safety — runs BEFORE motor.update() -----------------
     // Must run before the step, not after: motor.update() steps the carriage
@@ -593,6 +611,17 @@ void loop() {
             }
         }
     }
+
+#if defined(ENABLE_SERVO) && defined(SERVO_PWM_PIN_1)
+    {
+        int sIdx = 0, sAngle = 0; bool sDetach = false;
+        if (_SC.consumeServoRequest(sIdx, sAngle, sDetach)) {
+            ServoActuator& s = g_servos[sIdx - 1];   // sIdx validated 1..4 by the parser
+            if (sDetach) s.detach();
+            else         s.moveTo(sAngle);
+        }
+    }
+#endif
 
     {
         float jogMM = 0.0f;

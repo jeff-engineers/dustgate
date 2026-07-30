@@ -102,6 +102,25 @@ const toolsOf      = (t) => (t.elements || []).filter((e) => e.type === 'tool');
 /** the all-closed rest state of a selector (or null) */
 const closedState  = (sel) => (sel.states || []).find((s) => s.isClosed) || null;
 
+/**
+ * Commanded servo angle for a state on a servo selector:
+ *   angle = referenceAngle + state.offsetDeg, clamped to [minAngle, maxAngle].
+ * referenceAngle is the per-build calibrated angle of the reference position
+ * (gate OPEN / manifold LEFT); offsetDeg is a fixed valve-design constant. The
+ * firmware servo state-driver mirrors this (like manifoldProfile is mirrored).
+ * Returns null for a non-servo selector or an unknown state.
+ */
+function servoCommandAngle(sel, stateId) {
+  if (!sel || (sel.kind !== 'servoGate' && sel.kind !== 'servoManifold')) return null;
+  const st = (sel.states || []).find((s) => s.id === stateId);
+  if (!st || typeof st.offsetDeg !== 'number') return null;
+  const sv = sel.servo || {};
+  const ref = typeof sv.referenceAngle === 'number' ? sv.referenceAngle : 0;
+  const lo  = typeof sv.minAngle === 'number' ? sv.minAngle : 0;
+  const hi  = typeof sv.maxAngle === 'number' ? sv.maxAngle : 180;
+  return Math.min(hi, Math.max(lo, ref + st.offsetDeg));
+}
+
 // ── Validation ──────────────────────────────────────────────────────────────
 
 /**
@@ -163,15 +182,28 @@ function validateTopology(t) {
       if (stateIds.has(s.id)) err('selector', `duplicate state id "${s.id}"`, ref);
       stateIds.add(s.id);
       if (s.isClosed) closed++;
-      // realization present for the kind
-      if (!s.isClosed || sel.kind === 'servoManifold') {
-        if (sel.kind === 'linear' && typeof s.positionMm !== 'number')
+      // Realization per kind. Linear: non-home states carry positionMm. Servo:
+      // every state carries offsetDeg (angular offset from the calibrated
+      // servo.referenceAngle; commanded angle = referenceAngle + offsetDeg).
+      if (sel.kind === 'linear') {
+        if (!s.isClosed && typeof s.positionMm !== 'number')
           err('selector', `linear state "${s.id}" needs positionMm`, ref);
-        if ((sel.kind === 'servoGate' || sel.kind === 'servoManifold') && typeof s.angleDeg !== 'number')
-          err('selector', `servo state "${s.id}" needs angleDeg`, ref);
+      } else { // servoGate | servoManifold
+        if (typeof s.offsetDeg !== 'number')
+          err('selector', `servo state "${s.id}" needs offsetDeg`, ref);
       }
     }
     if (closed !== 1) err('selector', `exactly one isClosed state required (found ${closed})`, ref);
+
+    // Servo block: light checks (referenceAngle is populated at calibration, so
+    // optional; validate the shape of what's present).
+    if (sel.kind === 'servoGate' || sel.kind === 'servoManifold') {
+      const sv = sel.servo || {};
+      if (sv.referenceAngle !== undefined && typeof sv.referenceAngle !== 'number')
+        err('selector', 'servo.referenceAngle must be a number', ref);
+      if (sv.detented !== undefined && typeof sv.detented !== 'boolean')
+        err('selector', 'servo.detented must be a boolean', ref);
+    }
 
     // branches ↔ non-closed states must be a bijection
     const branches = sel.branches || [];
@@ -268,6 +300,6 @@ function validateTopology(t) {
 module.exports = {
   CONTROLLER_ROLES, ELEMENT_TYPES, SELECTOR_KINDS, BRANCH_ROLES,
   elementIndex, controllerIndex, parentDuctIndex,
-  collectorOf, selectorsOf, toolsOf, closedState,
+  collectorOf, selectorsOf, toolsOf, closedState, servoCommandAngle,
   validateTopology,
 };

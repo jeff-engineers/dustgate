@@ -60,6 +60,11 @@ public:
     // reported side the carriage homed to (same path as POST /api/config/orientation).
     bool consumeHomeSideRequest(bool& outHomedLeft);
 
+    // Phase-2 servo bring-up: 'servo <1-4> <angle>' moves a servo to an angle;
+    // 'servo <1-4> detach' de-energizes it. Returns true once per request; caller
+    // (the .ino servo bank) drives the actual servo. outDetach true = detach.
+    bool consumeServoRequest(int& outIndex, int& outAngle, bool& outDetach);
+
     // Live-tuning values. Read these each homing cycle.
     // -1 means "use config.h default".
     int   stallThreshold() const { return _stallThreshold; }
@@ -80,6 +85,10 @@ private:
     bool  _homeSidePending;
     bool  _homedLeftValue;
     float _jogMM;
+    bool  _servoPending;
+    int   _servoIndex;   // 1-based (1..4)
+    int   _servoAngle;   // degrees, or ignored when _servoDetach
+    bool  _servoDetach;
 
     String _inputBuffer;
 

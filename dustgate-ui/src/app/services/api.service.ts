@@ -2,6 +2,12 @@ import { Injectable } from '@angular/core';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
 import { BehaviorSubject, Observable, Subject, firstValueFrom } from 'rxjs';
 import { HardwareProfileService } from './hardware-profile.service';
+import type { Topology } from '@topology';
+import type { TopologyStatus } from '@topology-device';
+
+// Re-export so components/services can import v2 types from one place.
+export type { Topology } from '@topology';
+export type { TopologyStatus } from '@topology-device';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -342,6 +348,18 @@ export class ApiService {
   /** Set a port's role: 'tool' | 'unassigned' | 'blocked' | 'feed'. */
   setPortRole(index: number, role: string) {
     return this.post('/api/config/port-role', { index, role });
+  }
+
+  // ── v2 topology API (additive; DemoApiService overrides these in-process) ──
+  /** Fetch the configured topology, or throws/404 if none is set. */
+  getTopology(): Promise<Topology> { return this.get<Topology>('/api/v2/topology'); }
+  /** Replace the topology (validated device-side; 400 on invalid). */
+  putTopology(topology: Topology): Promise<{ ok: boolean }> { return this.put('/api/v2/topology', topology); }
+  /** Live v2 status: actuator states, tool activity, collector, conflicts, reachability. */
+  getV2Status(): Promise<TopologyStatus> { return this.get<TopologyStatus>('/api/v2/status'); }
+  /** Sim/demo only: inject a tool's power reading to drive routing (real firmware senses plugs). */
+  simTool(toolId: string, watts: number): Promise<TopologyStatus> {
+    return this.post<TopologyStatus>('/api/v2/sim/tool', { toolId, watts });
   }
 
   /**
