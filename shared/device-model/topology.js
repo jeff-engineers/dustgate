@@ -22,6 +22,7 @@ const CONTROLLER_ROLES = ['primary', 'secondary'];
 const ELEMENT_TYPES    = ['collector', 'selector', 'tool', 'junction'];
 const SELECTOR_KINDS   = ['linear', 'servoGate', 'servoManifold'];
 const BRANCH_ROLES     = ['tool', 'unassigned', 'blocked', 'feed'];
+const LINK_TRANSPORTS  = ['wifi-ws', 'esp-now'];
 
 // ── Typedefs (JSDoc — gives TS consumers types without a build step) ─────────
 /**
@@ -43,12 +44,21 @@ const BRANCH_ROLES     = ['tool', 'unassigned', 'blocked', 'feed'];
  * @property {string} opensState     id of the (non-closed) state that opens this branch
  * @property {'tool'|'unassigned'|'blocked'|'feed'} role
  *
+ * @typedef {Object} Link            optional — how the primary reaches a controller
+ *                                   board over the network. Absent for a purely
+ *                                   local board; present for a secondary "dumb"
+ *                                   ESP32 that hosts remote gates.
+ * @property {'wifi-ws'|'esp-now'} transport
+ * @property {string} [host]         mDNS hostname (device id) — the STABLE key
+ * @property {string} [ip]           last-known IP cache (re-resolved via host)
+ * @property {string} [name]
+ *
  * @typedef {Object} Controller
  * @property {string} id
  * @property {'primary'|'secondary'} role
  * @property {string} [name]
  * @property {string} [board]
- * @property {Object} [link]
+ * @property {Link} [link]
  *
  * @typedef {Object} Duct
  * @property {string} child
@@ -150,6 +160,17 @@ function validateTopology(t) {
     ctrlIds.add(c.id);
     if (!CONTROLLER_ROLES.includes(c.role)) err('controller', `bad role "${c.role}"`, c.id);
     if (c.role === 'primary') primaries++;
+    if (c.link !== undefined) {
+      if (typeof c.link !== 'object' || c.link === null) err('controller', 'link must be an object', c.id);
+      else {
+        if (!LINK_TRANSPORTS.includes(c.link.transport))
+          err('controller', `link bad transport "${c.link.transport}"`, c.id);
+        if (c.link.host !== undefined && typeof c.link.host !== 'string')
+          err('controller', 'link.host must be a string', c.id);
+        if (c.link.ip !== undefined && typeof c.link.ip !== 'string')
+          err('controller', 'link.ip must be a string', c.id);
+      }
+    }
   }
   if (primaries !== 1) err('controller', `exactly one primary controller required (found ${primaries})`);
 
@@ -262,8 +283,11 @@ function validateTopology(t) {
         if (!child) err('role', `branch "${b.id}" role tool but nothing wired to it`, sel.id);
         else if (child.type !== 'tool') err('role', `branch "${b.id}" role tool but child is ${child.type}`, sel.id);
       } else if (b.role === 'feed') {
+        // A feed branch feeds a downstream sub-network: another selector, or a
+        // junction (a passive tee where the pipe branches). Routing passes through
+        // junctions transparently, so the gate above still governs the whole group.
         if (!child) err('role', `branch "${b.id}" role feed but nothing wired to it`, sel.id);
-        else if (child.type !== 'selector') err('role', `branch "${b.id}" role feed but child is ${child.type}`, sel.id);
+        else if (child.type !== 'selector' && child.type !== 'junction') err('role', `branch "${b.id}" role feed but child is ${child.type}`, sel.id);
       } else { // unassigned | blocked
         if (child) err('role', `branch "${b.id}" role ${b.role} must have no child (has "${child.id}")`, sel.id);
       }
@@ -297,9 +321,37 @@ function validateTopology(t) {
   return { ok: errors.length === 0, errors };
 }
 
+// ── Airflow integrity ─────────────────────────────────────────────────────────
+// A structurally valid topology can still be a BAD airflow design: any tool whose
+// path to the collector crosses NO actuated selector is "always open" — the
+// collector bleeds suction through it no matter which tool is running, so the
+// whole system runs weak. This is advisory (a valid document, a bad config), and
+// is a HARD BLOCK on save in the configurator: an always-open gate is never a
+// valid saved state, though it's fine transiently while editing. Reused by the
+// configurator, firmware, and conformance so they all agree on "leaky".
+function airflowIssues(topology) {
+  const byId = new Map((topology.elements || []).map((e) => [e.id, e]));
+  const parentDuct = parentDuctIndex(topology);
+  const issues = [];
+  for (const tool of toolsOf(topology)) {
+    let cur = tool.id, gated = false;
+    // walk up toward the collector; a selector anywhere on the path gates it
+    for (;;) {
+      const d = parentDuct.get(cur);
+      if (!d) break;
+      const parent = byId.get(d.parent);
+      if (!parent) break;
+      if (parent.type === 'selector') { gated = true; break; }
+      cur = parent.id;
+    }
+    if (!gated) issues.push({ id: tool.id, name: tool.name || tool.id, kind: 'always-open' });
+  }
+  return issues;
+}
+
 module.exports = {
   CONTROLLER_ROLES, ELEMENT_TYPES, SELECTOR_KINDS, BRANCH_ROLES,
   elementIndex, controllerIndex, parentDuctIndex,
   collectorOf, selectorsOf, toolsOf, closedState, servoCommandAngle,
-  validateTopology,
+  validateTopology, airflowIssues,
 };

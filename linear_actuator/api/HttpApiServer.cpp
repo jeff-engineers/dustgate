@@ -17,6 +17,7 @@
 #include "../utils/AgentConfig.h"
 #include "../utils/AnthropicRootCA.h"
 #include "../training/CalibrationStore.h"
+#include "../control/TopologyStore.h"
 
 #ifdef CONTROL_SMART_OUTLET
   #include "../control/SmartOutletControl.h"
@@ -27,6 +28,10 @@
 
 static const char* NVS_NS  = "api_cfg";
 static const char* NVS_KEY = "api_key";
+
+// Phase-2 topology persistence (LittleFS). One instance for the device; the v2
+// routes below are its only users. Stage 3's controller will read it back.
+static topo::TopologyStore g_topoStore;
 
 // Minimum interval between position-drift-triggered pushes (see update()).
 static const unsigned long POSITION_PUSH_MIN_MS = 150;
@@ -161,6 +166,9 @@ bool HttpApiServer::begin() {
         DEBUG_PRINTLN(F("[API] LittleFS mount failed — front-end will not be served."));
     } else {
         DEBUG_PRINTLN(F("[API] LittleFS mounted."));
+        g_topoStore.begin();
+        DEBUG_PRINT(F("[API] v2 topology stored: "));
+        DEBUG_PRINTLN(g_topoStore.exists() ? F("yes") : F("no"));
     }
 
     // WebSocket cleanup handler — free client resources on disconnect
@@ -678,6 +686,87 @@ void HttpApiServer::registerRoutes() {
         sendOk(req);
         delay(300);
         WiFiProvisioner::reset(); // does not return
+    });
+
+    // ==================================================================
+    // Phase-2 topology (v2) — persisted shop graph.
+    //
+    //   GET /api/v2/topology     → stored JSON verbatim (404 if none yet)
+    //   PUT /api/v2/topology     → validate + persist (body accumulated)
+    //   GET /api/v2/status       → stored-topology metadata (routing snapshot
+    //                              lands in Stage 3, once the controller tracks
+    //                              active tools)
+    // The UI's validateTopology() is authoritative; the device only does a
+    // minimal structural check (see TopologyStore::validateMinimal).
+    // ------------------------------------------------------------------
+    _server.on("/api/v2/topology", HTTP_GET, [this](AsyncWebServerRequest* req) {
+        if (!checkAuth(req)) return;
+        if (!g_topoStore.exists()) { sendError(req, 404, "no topology stored"); return; }
+        req->send(LittleFS, topo::kTopologyPath, "application/json");
+    });
+
+    // PUT body arrives in one or more chunks; accumulate then process on the
+    // final chunk. The empty onRequest lambda is required so the body handler
+    // (5th arg) is reached at all.
+    _server.on("/api/v2/topology", HTTP_PUT,
+        [](AsyncWebServerRequest* req) {},
+        nullptr,
+        [this](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t index, size_t total) {
+            if (!checkAuth(req)) return;
+            if (total > topo::kMaxTopologyBytes) { sendError(req, 413, "topology too large"); return; }
+            if (index == 0) { _topoUploadBuf = ""; _topoUploadBuf.reserve(total ? total : len); }
+            _topoUploadBuf.concat(reinterpret_cast<const char*>(data), len);
+            if (index + len < total) return;   // more chunks coming
+
+            String err;
+            bool ok = g_topoStore.save(
+                reinterpret_cast<const uint8_t*>(_topoUploadBuf.c_str()),
+                _topoUploadBuf.length(), err);
+            _topoUploadBuf = "";               // free the buffer either way
+            if (ok) { DEBUG_PRINTLN(F("[API] v2 topology saved")); sendOk(req); }
+            else    { DEBUG_PRINT(F("[API] v2 topology rejected: ")); DEBUG_PRINTLN(err);
+                      sendError(req, 400, err.c_str()); }
+        }
+    );
+
+    // Mirrors statusView() in shared/device-model/topology-device.js so the Live
+    // view's getV2Status() gets the shape it already consumes:
+    //   { actuators, tools, collectorOn, conflicts, reachable }
+    // Stage 2 has no controller yet, so this is the IDLE snapshot: every selector
+    // sits at its closed state, no tool is drawing, nothing is reachable. Stage 3
+    // replaces the idle stub with the live routing result.
+    _server.on("/api/v2/status", HTTP_GET, [this](AsyncWebServerRequest* req) {
+        if (!checkAuth(req)) return;
+        // Match the mock's contract: 404 until a topology is configured.
+        if (!g_topoStore.exists()) { sendError(req, 404, "no topology configured"); return; }
+
+        String raw = g_topoStore.load();
+        DynamicJsonDocument doc(topo::kMaxTopologyBytes);
+        if (deserializeJson(doc, raw)) { sendError(req, 500, "stored topology unparseable"); return; }
+
+        DynamicJsonDocument out(8192);
+        JsonObject actuators = out.createNestedObject("actuators");
+        JsonObject tools     = out.createNestedObject("tools");
+        for (JsonObjectConst e : doc["elements"].as<JsonArrayConst>()) {
+            const char* type = e["type"];
+            const char* id   = e["id"];
+            if (!id) continue;
+            if (type && strcmp(type, "selector") == 0) {
+                const char* closed = nullptr;   // idle = the all-closed state
+                for (JsonObjectConst s : e["states"].as<JsonArrayConst>())
+                    if (s["isClosed"].as<bool>()) { closed = s["id"]; break; }
+                if (closed) actuators[id] = closed; else actuators[id] = (const char*)nullptr;
+            } else if (type && strcmp(type, "tool") == 0) {
+                JsonObject t = tools.createNestedObject(id);
+                t["watts"]  = 0;
+                t["active"] = false;
+            }
+        }
+        out["collectorOn"] = false;
+        out.createNestedArray("conflicts");
+        out.createNestedObject("reachable");
+        String body; serializeJson(out, body);
+        req->send(200, "application/json", body);
     });
 
     // ------------------------------------------------------------------

@@ -291,7 +291,9 @@ star of ducts. A lone linear actuator is the depth-1 special case — no separat
 - Each selector: exactly one `isClosed:true` state; every non-closed state is the
   `opensState` of exactly one branch; every branch's `opensState` exists.
 - `parentBranch` present ⟺ parent is a selector; the branch exists on that parent.
-- A branch with role `feed` must have a `selector` child; `blocked` must have no
+- A branch with role `feed` must have a `selector` **or `junction`** child (a
+  junction is the passive tee you get when branching a gated tube — routing passes
+  through it, so the gate above governs the whole group); `blocked` must have no
   child; `tool` a `tool` child; `unassigned` no child.
 - Every `controllerId` / `actuator` reference resolves.
 

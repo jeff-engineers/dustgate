@@ -24,9 +24,26 @@ function isLocalNetworkHost(hostname: string): boolean {
   return false;
 }
 
-const isDemo =
-  !isLocalNetworkHost(window.location.hostname) ||
-  new URLSearchParams(window.location.search).has('demo');
+// Demo can be forced with ?demo=true (and cleared with ?demo=false). Hash routing
+// rewrites the address bar to "/#/route" on navigation, dropping the pre-hash
+// query string — so a one-shot ?demo=true would be lost on the next navigate or
+// reload. Persist it in sessionStorage (per-tab) so it sticks once set.
+const DEMO_KEY = 'dustgate_demo';
+function readForcedDemo(): boolean {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    if (params.has('demo')) {
+      if (params.get('demo') === 'false') sessionStorage.removeItem(DEMO_KEY);
+      else sessionStorage.setItem(DEMO_KEY, '1');
+    }
+    return sessionStorage.getItem(DEMO_KEY) === '1';
+  } catch {
+    // Private mode / storage disabled — fall back to the raw query param.
+    return new URLSearchParams(window.location.search).has('demo');
+  }
+}
+
+const isDemo = !isLocalNetworkHost(window.location.hostname) || readForcedDemo();
 
 // Pick up ?code=... once (e.g. a link shared with an interviewer) and persist
 // it so future demo requests carry it without needing it in the URL again.

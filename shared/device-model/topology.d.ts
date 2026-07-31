@@ -9,3 +9,7 @@ export interface ValidationResult { ok: boolean; errors: ValidationError[]; }
 
 export function validateTopology(t: unknown): ValidationResult;
 export function servoCommandAngle(sel: unknown, stateId: string): number | null;
+
+export interface AirflowIssue { id: string; name: string; kind: 'always-open'; }
+/** Tools with no actuated selector between them and the collector — permanent leaks. */
+export function airflowIssues(t: Topology): AirflowIssue[];

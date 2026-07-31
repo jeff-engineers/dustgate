@@ -200,11 +200,16 @@ extern int g_homeDirection;        // defined in linear_actuator.ino
 // -----------------------------------------------------------------------------
 // PHASE 2 — SERVO (ball-valve gates)
 // -----------------------------------------------------------------------------
-// Settle time after a servo move before it auto-detaches (de-energizes). Covers
-// a full sweep with margin (a Power HD 3001HB does ~180° in ~0.4s at 5V). Detach
-// is the DEFAULT: analog servos groan/hunt while holding, and the ball valve
-// holds position by friction/detent — so we stop pulses once seated.
-#define SERVO_MOVE_MS              600
+// Servo sweep duration: the driver eases from the current angle to the target
+// over this long, rather than slamming the ~90° move in one command — gentler on
+// the gate, the coupling, and the ball. ~2s feels deliberate without being slow.
+#define SERVO_SWEEP_MS             2000
+
+// Post-move hold: keep the servo energized this long AFTER the sweep completes so
+// an analog servo can actually catch up to the final commanded angle before we
+// de-energize. Then auto-detach (the DEFAULT): analog servos groan/hunt while
+// holding, and the ball valve holds position by friction/detent once seated.
+#define SERVO_HOLD_MS              1000
 
 // UART address (0–3, set by MS1/MS2 pins — Adafruit board default is 0)
 #define TMC2209_ADDRESS            0

@@ -13,6 +13,7 @@ import { getAccessCode } from './access-code';
 import * as model from '@device-model';
 import { validateTopology, type Topology } from '@topology';
 import { createTopologyDevice, setToolPower, statusView as topoStatus, type TopologyDevice, type TopologyStatus } from '@topology-device';
+import { DEMO_TOPOLOGY } from './demo-topology';
 
 // ── Service ────────────────────────────────────────────────────────────────────
 
@@ -34,8 +35,8 @@ export class DemoApiService extends ApiService {
   /** The canonical device instance (in-memory, resets on page load). */
   private d: model.Device = model.createDevice();
 
-  /** v2 topology-native device (in-memory; null until a topology is PUT). */
-  private td: TopologyDevice | null = null;
+  /** v2 topology-native device (in-memory; seeded with DEMO_TOPOLOGY in init). */
+  private td: TopologyDevice | null = createTopologyDevice(DEMO_TOPOLOGY);
 
   constructor(http: HttpClient, hardwareProfile: HardwareProfileService) {
     super(http, hardwareProfile);

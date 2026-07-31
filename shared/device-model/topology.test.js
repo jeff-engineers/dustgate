@@ -7,7 +7,7 @@
 
 'use strict';
 
-const { validateTopology, servoCommandAngle } = require('./topology');
+const { validateTopology, servoCommandAngle, airflowIssues } = require('./topology');
 const { computeRouting } = require('./routing');
 const { planTransition } = require('./sequencer');
 const { createTopologyDevice, setToolPower, statusView } = require('./topology-device');
@@ -63,6 +63,16 @@ check('validate twoGates ok', validateTopology(twoGates).ok, JSON.stringify(vali
   const t = mut((t) => { t.controllers[0].role = 'secondary'; });
   const r = validateTopology(t);
   check('no primary controller → invalid (controller)', !r.ok && hasCode(r, 'controller'));
+}
+{
+  const t = mut((t) => { t.controllers[0].link = { transport: 'wifi-ws', host: 'shed.local', ip: '192.168.87.9' }; });
+  const r = validateTopology(t);
+  check('controller with valid link → valid', r.ok);
+}
+{
+  const t = mut((t) => { t.controllers[0].link = { transport: 'carrier-pigeon' }; });
+  const r = validateTopology(t);
+  check('controller link bad transport → invalid (controller)', !r.ok && hasCode(r, 'controller'));
 }
 {
   const t = mut((t) => { t.ducts = t.ducts.filter((d) => d.child !== 'toolA'); }); // orphan toolA
@@ -234,6 +244,39 @@ const idxOf = (plan, sel) => plan.moves.findIndex((m) => m.selectorId === sel);
   // Clamp: referenceAngle + offset beyond maxAngle is clamped.
   const clamped = { kind: 'servoGate', states: [{ id: 'x', offsetDeg: 200 }], servo: { referenceAngle: 0, maxAngle: 180 } };
   eq('servo resolver: clamps to maxAngle', servoCommandAngle(clamped, 'x'), 180);
+}
+
+// ── airflow integrity: always-open (ungated) tools are leaks ────────────────
+{
+  // Fully-gated fixtures are clean.
+  eq('airflow: star clean', airflowIssues(star), []);
+  eq('airflow: feedChain clean (feed chain still gated)', airflowIssues(feedChain), []);
+  eq('airflow: twoGates clean', airflowIssues(twoGates), []);
+
+  // A tool wired straight to the collector = permanent leak.
+  const leaky = mut((t) => { t.elements.push({ id: 'leak', type: 'tool', name: 'Leaky' }); t.ducts.push({ child: 'leak', parent: 'dc' }); });
+  const li = airflowIssues(leaky);
+  check('airflow: tool on collector flagged', li.length === 1 && li[0].id === 'leak' && li[0].kind === 'always-open');
+
+  // A tool on a passive wye (junction) with no gate above = leak too.
+  const wye = mut((t) => {
+    t.elements.push({ id: 'wye', type: 'junction', name: 'Wye' });
+    t.elements.push({ id: 'wt', type: 'tool', name: 'Wye Tool' });
+    t.ducts.push({ child: 'wye', parent: 'dc' }, { child: 'wt', parent: 'wye' });
+  });
+  const wi = airflowIssues(wye);
+  check('airflow: tool on ungated wye flagged', wi.length === 1 && wi[0].id === 'wt');
+
+  // Same wye but fed THROUGH a gate → not a leak (gate above the wye covers it).
+  const gatedWye = mut((t) => {
+    t.elements.push({ id: 'wye', type: 'junction', name: 'Wye' });
+    t.elements.push({ id: 'wt', type: 'tool', name: 'Wye Tool' });
+    // hang the wye off an existing linear branch (feed), so a selector sits above it
+    const b = elem(t, 'lin').branches.find((x) => x.role === 'blocked');
+    b.role = 'feed';
+    t.ducts.push({ child: 'wye', parent: 'lin', parentBranch: b.id }, { child: 'wt', parent: 'wye' });
+  });
+  eq('airflow: wye behind a gate is clean', airflowIssues(gatedWye), []);
 }
 
 // ── report ──────────────────────────────────────────────────────────────────

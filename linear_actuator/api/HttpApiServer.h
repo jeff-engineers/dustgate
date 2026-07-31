@@ -209,6 +209,12 @@ private:
     int   _cachedNumActiveStops;   // from ApiStatus.numActiveStops; returned in /api/info
     int   _idleTimeoutSec;         // persisted idle power-off timeout; see idleTimeoutSec()
 
+    // Accumulator for the PUT /api/v2/topology body, which (unlike every other
+    // endpoint's tiny single-frame payload) can span multiple onBody chunks.
+    // Single-client device, so one shared buffer is sufficient; reset on the
+    // first chunk (index == 0).
+    String _topoUploadBuf;
+
 #ifdef CONTROL_SMART_OUTLET
     bool            _outletConfigPending;
     OutletConfigCmd _outletConfigCmd;

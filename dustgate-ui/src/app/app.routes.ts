@@ -9,5 +9,9 @@ export const routes: Routes = [
   { path: 'setup',        component: SetupComponent },
   { path: 'setup/manual', component: ManualSetupComponent },
   { path: 'settings',     component: SettingsComponent },
+  // v2 Live view — silent lazy route, nothing links to it yet (see docs/v2-ui-design.md).
+  { path: 'shop',         loadComponent: () => import('./live/live.component').then(m => m.LiveViewComponent) },
+  { path: 'build',        loadComponent: () => import('./build/build.component').then(m => m.BuildComponent) },
+  { path: 'tools',        loadComponent: () => import('./tools/tool-setup.component').then(m => m.ToolSetupComponent) },
   { path: '**',           redirectTo: '' }
 ];

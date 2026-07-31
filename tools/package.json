@@ -9,7 +9,8 @@
     "conformance:ci": "node mock-api.js & MOCK_PID=$!; sleep 2; node ../shared/device-model/conformance.js; RC=$?; kill $MOCK_PID; exit $RC",
     "model:test": "node ../shared/device-model/topology.test.js",
     "topology:conformance": "node ../shared/device-model/topology-conformance.js",
-    "topology:conformance:ci": "node mock-api.js & MOCK_PID=$!; sleep 2; node ../shared/device-model/topology-conformance.js; RC=$?; kill $MOCK_PID; exit $RC"
+    "topology:conformance:ci": "node mock-api.js & MOCK_PID=$!; sleep 2; node ../shared/device-model/topology-conformance.js; RC=$?; kill $MOCK_PID; exit $RC",
+    "firmware:router:test": "cd .. && c++ -std=c++17 -I \"$(dirname \"$(find .pio.nosync/libdeps -path '*/ArduinoJson/src/ArduinoJson.h' | head -1)\")\" linear_actuator/test/test_topology_router.cpp -o /tmp/dustgate-trtest && /tmp/dustgate-trtest linear_actuator/test/fixtures/"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
