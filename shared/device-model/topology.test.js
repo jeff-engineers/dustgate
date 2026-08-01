@@ -74,6 +74,43 @@ check('validate twoGates ok', validateTopology(twoGates).ok, JSON.stringify(vali
   const r = validateTopology(t);
   check('controller link bad transport → invalid (controller)', !r.ok && hasCode(r, 'controller'));
 }
+// ── per-host actuator budget: ≤4 servos + ≤1 stepper on one controller ──
+{
+  const hasMsg = (r, sub) => r.errors.some((e) => e.message.includes(sub));
+  // A shop-in-a-box: one host, `servos` servo gates + `linears` linear selectors,
+  // each feeding one tool. Valid apart from whatever count we're stressing.
+  const buildHost = (servos, linears) => {
+    const t = { schemaVersion: 1, name: 'budget', controllers: [{ id: 'h', role: 'primary' }],
+      elements: [{ id: 'dc', type: 'collector' }], ducts: [] };
+    let n = 0;
+    for (let i = 0; i < servos; i++, n++) {
+      const g = `g${n}`, tool = `t${n}`;
+      t.elements.push({ id: g, type: 'selector', controllerId: 'h', kind: 'servoGate',
+        states: [{ id: 'open', isClosed: false, offsetDeg: 0 }, { id: 'closed', isClosed: true, offsetDeg: 90 }],
+        branches: [{ id: 'b', opensState: 'open', role: 'tool' }] });
+      t.elements.push({ id: tool, type: 'tool' });
+      t.ducts.push({ child: g, parent: 'dc' }, { child: tool, parent: g, parentBranch: 'b' });
+    }
+    for (let i = 0; i < linears; i++, n++) {
+      const g = `g${n}`, tool = `t${n}`;
+      t.elements.push({ id: g, type: 'selector', controllerId: 'h', kind: 'linear',
+        states: [{ id: 'home', isClosed: true, positionMm: 0 }, { id: 's1', isClosed: false, positionMm: 10 }],
+        branches: [{ id: 'b', opensState: 's1', role: 'tool' }] });
+      t.elements.push({ id: tool, type: 'tool' });
+      t.ducts.push({ child: g, parent: 'dc' }, { child: tool, parent: g, parentBranch: 'b' });
+    }
+    return t;
+  };
+  check('4 servos on one host → valid (at budget)', validateTopology(buildHost(4, 0)).ok,
+        JSON.stringify(validateTopology(buildHost(4, 0)).errors));
+  const r5 = validateTopology(buildHost(5, 0));
+  check('5 servos on one host → invalid (controller)', !r5.ok && hasCode(r5, 'controller') && hasMsg(r5, 'max 4'));
+  check('1 linear on one host → valid (at budget)', validateTopology(buildHost(0, 1)).ok);
+  const r2 = validateTopology(buildHost(0, 2));
+  check('2 linears on one host → invalid (controller)', !r2.ok && hasCode(r2, 'controller') && hasMsg(r2, 'max 1'));
+  // Mixed at budget: 4 servos + 1 linear on one host is fine.
+  check('4 servos + 1 linear on one host → valid', validateTopology(buildHost(4, 1)).ok);
+}
 {
   const t = mut((t) => { t.ducts = t.ducts.filter((d) => d.child !== 'toolA'); }); // orphan toolA
   const r = validateTopology(t);

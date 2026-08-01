@@ -167,8 +167,12 @@ the bundle is stored **uncompressed** — gzipping drops 436 KB → ~120 KB.
 
 ## Build order (when we start)
 
-Deployed to Vercel live but **silently** — an unpublished lazy route. Nothing on
-the existing site links to it until it's ready.
+Deployed to Vercel live but **silently there** — lazy routes `/shop`, `/build`,
+`/tools`. As of 2026-07-31 the home page (dashboard) shows Live/Build/Tools nav
+buttons that link to them, but **only on localhost or a real device** — gated by
+`isLocalOrDevice` (exported from `app.config.ts`, host-based: LAN/mDNS/localhost →
+show, `*.vercel.app` → hide). So the public demo still doesn't surface the WIP
+pages; dev + on-device do. Build/Tools carry a `BETA` tag.
 
 1. **Persistence** — the parallel `layout` map (node `x/y` + orientation)
    alongside the topology tree; PUT/GET through the existing `/api/v2/*`.
@@ -190,7 +194,45 @@ the existing site links to it until it's ready.
    drag-to-reposition with grid-snap + collision + duct reroute, auto-arrange,
    and Save (persists node cells in `topology.ui.layout` — a key the model and
    validator ignore, so it round-trips through PUT/GET). Auto-layout (tree from
-   the collector) seeds positions when no saved layout exists.
+   the collector) seeds positions when no saved layout exists. On a FRESH system
+   (getTopology 404s or has no collector), the canvas seeds a blank topology with a
+   lone collector (+ primary controller) so the page is usable immediately — you
+   select the collector and build outward; left un-dirty so Save stays disabled
+   until the first real edit (added 2026-07-31). The left fitting legend was removed
+   (mobile screen-space) and replaced by a **contextual guide bar** pinned under the
+   toolbar: one line that follows state — onboarding (empty) → progress nudge → live
+   airflow problems ("<tool> can't be selected … Add a gate, delete it, or [Cap them]",
+   warn-styled). Toolbar status spans (err/leak/note/hint) folded into it.
+   **Duct-first flow (2026-07-31)**: the fitting menu gained a **Duct** option that
+   lays bare pipe — a childless `junction` = an OPEN END — instead of forcing a tool.
+   Open ends are selectable and take their own +handles (`canAddChild` now true for
+   junctions), so you populate them later (tap the end → +→ Tool/gate), matching the
+   "plumb first, drop tools onto ends" model. Open runs are highlighted (dashed accent
+   duct + accent end-dot); the guide bar nudges "N open duct end(s) — tap it, then a +".
+   Same primitive works off the collector, a gate outlet, or another duct end (unifies
+   add + branch). KNOWN WRINKLE: dropping a tool on an open end leaves a redundant
+   pass-through junction (harmless — routing ignores junctions); collapsing 1-in/1-out
+   junctions is a follow-up.
+   **Batch polish (2026-07-31)**:
+   • **Pass-through collapse** — a junction with exactly one child is now removed
+     (reconnecting the child to the grandparent), so populating an open end / chaining
+     ducts stays clean. A junction only survives as a tee (≥2 legs) or an open end (0).
+   • **Cap** — an open end can be sealed via a "Cap" button (a `capped:true` junction,
+     validator-tolerated); renders a bar glyph, drops the dashed highlight + nudge.
+   • **Inline controls** — the rename/outlets/Cap/Delete panel now floats anchored
+     above the selected element (via getScreenCTM) instead of a bottom bar; the
+     collector is now selectable (rename). **Delete/Backspace** deletes the selection
+     (guarded against text fields).
+   • **Manifold glyph** — rounded pill + input hub fanning lines to each outlet, so it
+     reads as a rotary valve distinct from the rectangular sliding gate.
+   • **Duct routing** — rewrote the elbow to **drop-jog-drop** (leave the parent's
+     bottom, jog, enter the child's top) so ducts stop entering from the sides and
+     looking like phantom branches. Refactored to a segment model and added
+     **crossover hops**: where a duct's horizontal crosses another's vertical it arcs
+     over (electrical-diagram convention) so overlapping lines never read as merged;
+     the fat hit-target keeps the plain path. REMAINING: collinear-overlap avoidance
+     (siblings sharing a stub/row) still needs sibling-fan rerouting — hops only solve
+     perpendicular crossings.
    **Pass 2 BUILT (2026-07-30)**: snap-a-fitting mutation. Select a node → "+"
    handles appear on its free sides → a menu adds a fitting into the adjacent
    cell. **Valid by construction**: new selectors (sliding gate / ball valve /
@@ -333,10 +375,27 @@ Staged plan:
    stage 3). Both boards build; flash 69.4% (router still unwired). NOTE: the
    status stub is the ONLY place the idle shape is hand-rolled without the router —
    stage 3 replaces it.
-3. **`TopologyController`** — track active tools (reuse the Shelly poll infra,
-   map plug ip → tool + threshold from the topology), run router + make-before-break
-   sequencer, drive actuators: linear selectors → the existing stepper (positionMm),
-   servo selectors → `g_servos[channel]` via `servoCommandAngle`.
+3. **`TopologyController`** — split into a desk-verifiable brain (3a) and a
+   hardware cutover (3b):
+   - **3a — decision core.** ✅ BUILT (2026-07-31). `control/TopologySequencer.h`
+     (pure C++ port of `sequencer.js` — make-before-break `planTransition`, linear
+     never breaks, dead-head detection) + `control/TopologyController.h` (pure port
+     of `topology-device.js` — tracks tool watts → active set most-recent-wins,
+     `reconcile()` → `{routing, plan}`, idle-HOLD, `toolForOutlet(host,ip)` maps a
+     Shelly plug back to its tool). Both host-compile (no Arduino.h). This is where
+     `TopologyRouter.h` finally gets wired into a consumer.
+     `test/test_topology_controller.cpp` replays the JS device sim's stateful power
+     sequences value-for-value — 23/23, run via `npm run firmware:controller:test`
+     (or `npm run firmware:test` for router+controller). NOT yet in the device build.
+   - **3b — hardware cutover (needs the rig).** Feed live power in by toolId (map
+     each Shelly plug via `toolForOutlet`, reusing `SmartOutletControl`'s poll/push),
+     then drive the plan's moves: linear selectors → the existing stepper
+     (`positionMm` from the target state), servo selectors → `g_servos[servo.channel]`
+     via `servoCommandAngle`. `deadHeadRisk` → switch the collector off instead of
+     sealing. Replace the flat `stopIndex` path in `loop()`. Address linear selectors
+     by `linear.channel` (parallel to `servo.channel`) — the controller must NOT assume
+     a single stepper. Today only one stepper driver is wired (channel 0), so a shop
+     with >1 linear selector is a provisioning/wiring task, not a code or model cap.
 4. Retire the flat path once v2 drives hardware.
 
 ## Open questions (for feedback)

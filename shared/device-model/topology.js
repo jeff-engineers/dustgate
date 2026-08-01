@@ -24,6 +24,12 @@ const SELECTOR_KINDS   = ['linear', 'servoGate', 'servoManifold'];
 const BRANCH_ROLES     = ['tool', 'unassigned', 'blocked', 'feed'];
 const LINK_TRANSPORTS  = ['wifi-ws', 'esp-now'];
 
+// Per-host (per-controller) actuator budget — one ESP32 drives at most the servo
+// PWM bank (g_servos[4]) plus a single stepper driver. More than this on one host
+// is a hardware impossibility; spread selectors across secondary controllers.
+const MAX_SERVOS_PER_HOST = 4;
+const MAX_LINEAR_PER_HOST = 1;
+
 // ── Typedefs (JSDoc — gives TS consumers types without a build step) ─────────
 /**
  * @typedef {Object} Outlet
@@ -73,7 +79,10 @@ const LINK_TRANSPORTS  = ['wifi-ws', 'esp-now'];
  * @property {'linear'|'servoGate'|'servoManifold'} [kind]  (selector)
  * @property {SelectorState[]} [states]   (selector)
  * @property {Branch[]} [branches]        (selector)
- * @property {Object} [linear]            (selector kind:linear) { calibration }
+ * @property {Object} [linear]            (selector kind:linear) { channel?, calibration }
+ *                                        channel = which stepper driver (default 0);
+ *                                        parallels servo.channel so >1 linear selector
+ *                                        is a wiring question, not a model limit
  * @property {Object} [servo]             (selector servo kinds) { channel, moveMs, holdAtRest, ... }
  * @property {Object} [sensor]            (tool) { outlet }
  * @property {Object} [control]           (collector) { outlet, offDelayMs }
@@ -188,12 +197,21 @@ function validateTopology(t) {
   if (collectors !== 1) err('element', `exactly one collector required (found ${collectors})`);
 
   // ── selectors: kind, states, branches, refs ──
+  // Per-host actuator tally — enforced against the hardware budget after the loop.
+  const hostServos = new Map();   // controllerId → servo-selector count
+  const hostLinear = new Map();   // controllerId → linear-selector count
   for (const sel of selectorsOf(t)) {
     const ref = sel.id;
     if (!SELECTOR_KINDS.includes(sel.kind)) err('selector', `bad kind "${sel.kind}"`, ref);
     if (sel.controllerId && !ctrlIds.has(sel.controllerId))
       err('selector', `controllerId "${sel.controllerId}" does not resolve`, ref);
     else if (!sel.controllerId) err('selector', 'selector missing controllerId', ref);
+
+    if (sel.controllerId) {
+      if (sel.kind === 'linear') hostLinear.set(sel.controllerId, (hostLinear.get(sel.controllerId) || 0) + 1);
+      else if (sel.kind === 'servoGate' || sel.kind === 'servoManifold')
+        hostServos.set(sel.controllerId, (hostServos.get(sel.controllerId) || 0) + 1);
+    }
 
     const states = sel.states || [];
     const stateIds = new Set();
@@ -243,6 +261,14 @@ function validateTopology(t) {
     if (branches.length !== nonClosed)
       err('selector', `branches (${branches.length}) must equal non-closed states (${nonClosed})`, ref);
   }
+
+  // ── per-host actuator budget: ≤4 servos + ≤1 stepper on any one controller ──
+  for (const [cid, n] of hostServos)
+    if (n > MAX_SERVOS_PER_HOST)
+      err('controller', `host "${cid}" has ${n} servo selectors (max ${MAX_SERVOS_PER_HOST} per host)`, cid);
+  for (const [cid, n] of hostLinear)
+    if (n > MAX_LINEAR_PER_HOST)
+      err('controller', `host "${cid}" has ${n} linear selectors (max ${MAX_LINEAR_PER_HOST} per host)`, cid);
 
   // ── ducts: refs, collector-is-root, parentBranch rules ──
   const parentCount = new Map(); // childId → number of parent ducts

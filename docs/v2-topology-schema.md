@@ -100,6 +100,9 @@ pulling to one collector.
 
       // kind-specific hardware + calibration
       "linear": {
+        "channel": 0,                    // which stepper driver (default 0);
+                                         // parallels servo.channel — >1 linear
+                                         // selector is a wiring question, not a cap
         "calibration": {
           "stepsPerMm": 51.47,
           "measuredSpanSteps": 4387,
@@ -174,6 +177,11 @@ pulling to one collector.
 | `board` | build-flag target (`devkitc`, `feather_s2`, …) |
 | `link` | transport config — `{ transport: "wifi-ws", host }` for now; `NodeLink`/ESP-NOW later |
 
+**Per-host actuator budget** (validated): one controller drives at most **4 servo
+selectors** (the `g_servos[4]` PWM bank) **+ 1 linear selector** (its single stepper
+driver). No global cap — a bigger shop spreads selectors across `secondary` boards,
+each `controllerId` staying within budget.
+
 ### element (common)
 | field | notes |
 |---|---|
@@ -186,7 +194,7 @@ pulling to one collector.
 | `kind` | `linear` \| `servoGate` \| `servoManifold` |
 | `states[]` | HAL states: `{ id, isClosed, …realization }`. Exactly one `isClosed:true`. Realization is kind-specific: `positionMm` (linear) or `offsetDeg` (servo — angular offset from the calibrated `referenceAngle`; a valve-DESIGN constant, e.g. a gate's closed = open ±90°). |
 | `branches[]` | `{ id, opensState, role }`. `opensState` references a non-closed state id. `role` ∈ `tool` \| `unassigned` \| `blocked` \| `feed`. |
-| `linear` | `{ calibration: { stepsPerMm, measuredSpanSteps, homeIsMaxEndstop, manifoldModel } }` |
+| `linear` | `{ channel?, calibration: { stepsPerMm, measuredSpanSteps, homeIsMaxEndstop, manifoldModel } }`. `channel` = which stepper driver (default 0), parallel to `servo.channel`, so more than one linear selector is a wiring question rather than a model cap. |
 | `servo` | `{ channel, referenceAngle, moveMs, holdAtRest, minAngle?, maxAngle? }`. `referenceAngle` = per-build calibrated angle of the reference state (a gate's OPEN / a manifold's LEFT, viewed from the servo side), captured in setup; commanded angle = `referenceAngle + offsetDeg`. `holdAtRest` **defaults false** (move then detach — analog servos groan while holding and the valve holds by friction/detent); set true only for a build that would back-drive de-energized. |
 
 ### element: tool

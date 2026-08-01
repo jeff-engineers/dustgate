@@ -4,6 +4,7 @@ import { CommonModule } from '@angular/common';
 import { Subscription } from 'rxjs';
 import { ApiService, SystemStatus, OutletStatus } from '../services/api.service';
 import { ManifoldVisualizerComponent } from '../visualizer/manifold-visualizer.component';
+import { isLocalOrDevice } from '../app.config';
 
 interface ToolButton {
   stop: number;
@@ -76,6 +77,38 @@ interface ToolButton {
       font-size: 18px;
     }
     .gear-btn:active { opacity: 0.6; }
+
+    /* ── v2 nav (dev/device only — hidden on the public demo) ──── */
+    .v2-nav {
+      display: flex;
+      gap: 8px;
+      padding: 0 16px 10px;
+      flex-shrink: 0;
+    }
+    .v2-nav button {
+      flex: 1;
+      padding: 10px 8px;
+      border-radius: var(--radius);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-size: 14px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+    }
+    .v2-nav button:active { opacity: 0.6; }
+    .v2-nav .tag {
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      color: var(--accent);
+      border: 1px solid color-mix(in srgb, var(--accent) 50%, transparent);
+      border-radius: 4px;
+      padding: 1px 4px;
+    }
 
     /* ── Scroll area ─────────────────────────────────────────── */
     .scroll {
@@ -175,6 +208,13 @@ interface ToolButton {
       </div>
     </div>
 
+    <!-- v2 pages — shown only on localhost / a real device, never the public demo -->
+    <div class="v2-nav" *ngIf="showV2Nav">
+      <button (click)="goShop()"  aria-label="Live view">Live</button>
+      <button (click)="goBuild()" aria-label="Build shop layout">Build <span class="tag">BETA</span></button>
+      <button (click)="goTools()" aria-label="Tag tools">Tools <span class="tag">BETA</span></button>
+    </div>
+
     <!-- Loading -->
     <div class="loading" *ngIf="!ready">
       Connecting to DustGate…
@@ -223,6 +263,9 @@ export class DashboardComponent implements OnInit, OnDestroy {
   status: SystemStatus | null = null;
   connected = false;
   ready = false;
+
+  /** Show the v2 page links only on dev/device, never on the public Vercel demo. */
+  readonly showV2Nav = isLocalOrDevice;
 
   toolButtons: ToolButton[] = [];
 
@@ -320,4 +363,7 @@ export class DashboardComponent implements OnInit, OnDestroy {
   goSetup()           { this.router.navigate(['/setup']); }
   goManualSetup()     { this.router.navigate(['/setup/manual']); }
   goSettings()        { this.router.navigate(['/settings']); }
+  goShop()            { this.router.navigate(['/shop']); }
+  goBuild()           { this.router.navigate(['/build']); }
+  goTools()           { this.router.navigate(['/tools']); }
 }

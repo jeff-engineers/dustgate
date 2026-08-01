@@ -45,6 +45,12 @@ function readForcedDemo(): boolean {
 
 const isDemo = !isLocalNetworkHost(window.location.hostname) || readForcedDemo();
 
+// True on localhost / mDNS / a LAN IP — i.e. dev or a real device — and false on
+// the public Vercel demo. Gates dev/device-only UI (the v2 pages) off the home
+// page so the public demo doesn't surface work-in-progress surfaces. Host-based
+// on purpose: a dev forcing ?demo=true on localhost still sees them.
+export const isLocalOrDevice = isLocalNetworkHost(window.location.hostname);
+
 // Pick up ?code=... once (e.g. a link shared with an interviewer) and persist
 // it so future demo requests carry it without needing it in the URL again.
 const codeParam = new URLSearchParams(window.location.search).get('code');
