@@ -230,9 +230,118 @@ pages; dev + on-device do. Build/Tools carry a `BETA` tag.
      looking like phantom branches. Refactored to a segment model and added
      **crossover hops**: where a duct's horizontal crosses another's vertical it arcs
      over (electrical-diagram convention) so overlapping lines never read as merged;
-     the fat hit-target keeps the plain path. REMAINING: collinear-overlap avoidance
-     (siblings sharing a stub/row) still needs sibling-fan rerouting — hops only solve
-     perpendicular crossings.
+     the fat hit-target keeps the plain path.
+   • **Sibling fanning** — ducts off one parent (collector or tee) now leave at
+     staggered x and jog at staggered rows (ordered by target x), so two runs never
+     share a stub/row (collinear overlap). Verified: 3 tools off a collector fan to
+     distinct exits (154/172/190) and rows; hops still fire on crossings.
+   • **Grid-snapped branch dots (2026-07-31, mocked-first w/ jeff)** — replaced the
+     imprecise fat invisible duct-hit-path with subtle always-on dots at each grid
+     step along every duct segment (`branchDots()`; deduped per cell; hidden while
+     dragging). Hovering brightens the dot to accent; clicking opens the fitting menu
+     and `branchDuct` now drops the junction AT the clicked cell (not the child's
+     cell + subtree-shift — `shiftSubtree` removed). Verified: click dot at (1,2) →
+     tee lands at (1,2), new leg sprouts. This fixes "branching mid-run misbehaves".
+   • **Two-section branch menu + insert-inline (2026-07-31)** — clicking a branch dot
+     now offers **Insert a gate here** (ball valve / sliding gate / manifold → splice
+     INTO the run via `insertInline`: the downstream reconnects to the gate's first
+     outlet, so a manifold becomes a real 2-way with one leg used + one free, a ball
+     valve is a plain inline on/off; other outlets stay capped-but-available) vs
+     **Branch a new leg** (tool / duct → tap a parallel run). Branch legs now come off
+     **perpendicular**: a junction routes the continuation straight down and taps
+     branches off horizontally (`ductPoints` junction case + leg placed to the side),
+     so a tee reads as a real tee, not two parallel verticals. Verified: insert ball
+     valve → collector→gate→saw (leak cleared); branch tool → horizontal tap off the tee.
+   • **DUCT-FIRST rewrite — the + handles are RETIRED (2026-08-02, jeff-steered).**
+     The canvas is now "plumb first, populate later" as the ONLY model — no more
+     selecting a node and clicking a `+` on its side. Two decisions from jeff: (1)
+     *replace* the + handles outright, (2) *draw from ends only* — a node BODY drag
+     still repositions; drawing pipe starts only from an open end. Concretely:
+       – A fresh shop seeds the collector **plus one bare open run** (`blankTopology`),
+         so there's always an anchor. Guide copy rewritten around drag/tap.
+       – **Drag an open end** = draw/extend pipe: it's just node-drag on the terminus,
+         the duct auto-routes (verified: dragging end0 (0,1)→(2,2) draws an L-run, menu
+         stays shut).
+       – **Tap an open end** (pointer-up with no move, detected in `onUp`) opens an
+         **"At the end of this run"** menu: Tool / Sliding gate / Ball valve / Manifold /
+         Cap. `populateOpenEnd` splices the fitting where the end was (the 1-child open
+         end then collapses onto its parent) and **re-seeds a fresh open end on EVERY
+         outlet** — ball valve 1, manifold 2, sliding gate N — so each outlet is itself a
+         drawable open run (no + handles to reach them). Verified valid-by-construction,
+         no leaks: collector→manifold with one leg→Tool (terminates) and one leg→Ball
+         valve→fresh open end.
+       – **Branch dot gesture** (`onBranchDotDown` + threshold): a plain **click** still
+         opens the two-section menu (insert gate / branch leg); a **click-drag** (>8px)
+         calls `insertManifoldLeg` — splices a manifold at that point (existing run
+         carries on via outlet 1, a fresh open-end leg sprouts on outlet 2). "Dragging =
+         splitting flow = needs a manifold." Verified both paths.
+     Removed: `onHandle`, `addFitting`, `addToOutlet`, the `handles` array + `.handle`
+     glyphs, `Dir`/`DIRS`/`Handle`. `refreshHandles` kept as an empty hook so call sites
+     didn't churn. Prod build type-checks clean; NOT committed (jeff commits).
+   • **Duct-first round 3 — rounded corners, lanes, device/duct block, delete-heal (2026-08-02, jeff).**
+       - **Rounded duct corners** (`ductD`, Q-arcs radius 12, clamped to half-segment) so two
+         ducts whose corners land near the same point curve apart instead of forming an X.
+         Crossover hops kept (radius 5). Verified arcs render.
+       - **Injective lanes + no-cross-device (2026-08-02, jeff round 4).** The first lane
+         pass keyed on `|colDist|`, so two runs off one source heading OPPOSITE ways shared
+         a lane and still overlapped. `laneOffset` is now monotonic/injective in SIGNED
+         colDist (`14 + (colDist+5)*7`) → every distinct target column gets its own lane;
+         leftward runs jog shallow, rightward deep, crossings interlock (hops handle the X).
+         Verified two swapped gate-outlet runs now sit at y=249 vs 263 (was identical).
+         **No duct crosses a device**: `canPlace` now tests the CANDIDATE position (so the
+         moved node's own ducts reroute) and rejects if any device ends up on any foreign
+         duct — catches both "device dropped on a run" and "moved run now passes through
+         another device"; verified both blocked, empty cells allowed. **Branch placement**
+         (`clearCellNear`, used by branchDuct + output-dot add/drag) now prefers a cell whose
+         leg won't land on a device/duct, falling back to merely-unoccupied; verified it
+         skips an occupied side cell.
+       - **Stable lane offsets** for collinear runs (jeff picked this over bands/router).
+         `ductPoints` regular + gate-outlet cases now jog NEAR THE SOURCE at a lane height
+         staggered by column distance (`laneOffset`), so the LONG vertical lands on the
+         child's own (distinct) column instead of the shared parent column — and the short
+         horizontals get distinct lanes too. Pure fn of the duct's own endpoints → adding a
+         sibling never reroutes it (the trap the old fanning fell into). Verified: 3 runs off
+         one collector land on cols 64/280/388 (was all 64); only a tiny shared stub remains
+         at the source. Pathological same-column siblings can still overlap (accepted).
+       - **Block device-on-duct drops**: `canPlace` now also rejects a target cell whose
+         centre lies within ~0.4·CELL of another run's duct (`cellOnDuct`/`ptSegDist`), ducts
+         touching the moved node exempted. A blocked drop just snaps back. Verified on/off run.
+       - **Delete-heal**: `deleteSelected` now runs `collapsePassThroughJunctions`, so deleting
+         a branched leg collapses the leftover tee and the run heals — fixes jeff's bug where
+         the branch point became un-addable after add-then-delete. Verified back to `dc→g→saw`.
+     Prod build clean; NOT committed.
+   • **Duct-first round 2 — passive-branch drag + output add-dots + alignment (2026-08-02, jeff).**
+     Three corrections after jeff tried the flow:
+       1. **Branch-dot drag = PASSIVE branch, not a manifold.** Dragging off a mid-run
+          branch dot now tees in a plain junction + open-end leg (`branchDuct(_, 'duct')`)
+          you can extend/populate — the forced manifold was too opinionated. `insertManifoldLeg`
+          removed. Click still opens the two-section menu. Verified: `g→wye→saw` + open-end leg.
+       2. **Output add-dots restore "add off a node".** Retiring the + handles lost the
+          ability to add runs off the collector or off a gate/manifold/slider's spare
+          outlets. Fixed with `outputDots()` — a hollow ⊕ ring at every FREE output
+          (collector always; each `blocked` selector outlet). CLICK → "Add here" menu
+          (Duct/Tool/Sliding gate/Ball valve/Manifold/Cap); DRAG → passive open-end leg.
+          `addAtOutput` reuses the open-end path (`addOpenEndOn(parentId, branchId?)` →
+          `fillEnd`/`capEnd`). Consequently `fillEnd` (ex-`populateOpenEnd` core) now seeds
+          just ONE continuation open end; a gate's other outlets stay blocked and surface as
+          add-dots (a fresh sliding gate = 1 open run + 3 ⊕, not 4 dashed stubs). Verified:
+          2 runs off the collector, tool onto a spare gate outlet, all valid + no leaks.
+       3. **Alignment pass.** A gate/manifold now takes its trunk on the TOP, in line with
+          its FIRST outlet (`ductPoints` unit case), so a parent above drops STRAIGHT in
+          (was left-edge entry → left-then-down jog). Manifold glyph hub moved to the top
+          (over outlet 0), fanning to the bottom outlets. Auto-layout places a lone unit
+          child directly above its outlet 0 (not the span midpoint). Verified: cyclone→gate→
+          wye→manifold→saw is one straight vertical. (Multi-run-off-collector auto-layout is
+          valid but still spreads awkwardly — deeper layout work, drag to tidy.)
+     All UI-verified + prod build clean; NOT committed (jeff commits).
+   • **Open-run highlight relaxed to the END only (2026-08-02).** An open run used to
+     render the whole duct as a dashed accent line, drowning the branch dots. Now the
+     run is a plain pipe and only the LAST ~30px is a dashed-accent stub (`openStubD`) +
+     an accent end-ring on the junction. Also **duct routing is now sibling-independent**
+     (`ductPoints` drops the fanning that keyed off sibling count) — adding an element no
+     longer reroutes existing ducts (verified: a duct's `ductD` is byte-identical before/
+     after adding a third leg to its parent). Crossover hops still separate lines that
+     actually cross.
    **Pass 2 BUILT (2026-07-30)**: snap-a-fitting mutation. Select a node → "+"
    handles appear on its free sides → a menu adds a fitting into the adjacent
    cell. **Valid by construction**: new selectors (sliding gate / ball valve /
