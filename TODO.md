@@ -47,3 +47,45 @@ Follow-ups worth doing eventually (not blocking):
   position math — it doesn't need to match real hardware, just needs to stay
   in sync between the two mocks (already aligned as of the 2026-07 parity
   port).
+
+
+
+'SHOP' GUI
+High priority
+
+Adding a linear slider is not respecting the 'dont overlap devices rule'
+the grid/build area needs to occupy the entire visible screen, and possibly extend automatically
+creating branches should always happen at the node the user clicked on
+the cap/delete dialog can be removed, we can replace it with a red (-) icon, and just use the 'add' dialog
+deleting a element with only 1 downstream resource should be allowed and convert it back to a duct
+It should be possible to convert a ball valve to a manifold or slider
+
+Medium
+we should consider blocking ducts that would try to grow from the top of a manifold/slider - the interface is confusing if that happens
+the 'at the end of this run' dialog should just be 'add'
+the cap/delete dialog can be removed, we can replace it with a red (-) icon, and just use the 'add' dialog
+There's still some weirdness with lines being routed oddly - mainly off the dust collector
+Don't block saving - just flag as 'work in progress' or something?
+Do we really need editable names for manifolds/gates? -
+Don't allow duplicate named tools
+improve 'dont overlap ducts' rules
+
+Low
+word wrap/fit names into the tool icons (maybe enlarge icons a bit)
+control Z -> undo (maybe add undo button with history?)
+right click actions?
+Get rid of auto-arrange or make it work better?
+Edit name by double clicking on text? or just clicking? unsure.
+click and drag ducts?
+
+
+We should have a way to warn users that devices are unecessary (two ballvalves inline, a ballvalve proceeding a manifold with a capped line)
+
+Next steps
+
+Need a way to configure an element
+need to be able to tie elements to esp32's
+A cheaper variant - qtpy based?
+Consider renaming linear actuator to something...more accurate?
+Add manual override buttons to ballvalves/manifolds/wire in to esp32
+ESD safety and power safety

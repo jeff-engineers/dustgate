@@ -295,6 +295,20 @@ pages; dev + on-device do. Build/Tools carry a `BETA` tag.
          (`clearCellNear`, used by branchDuct + output-dot add/drag) now prefers a cell whose
          leg won't land on a device/duct, falling back to merely-unoccupied; verified it
          skips an occupied side cell.
+       - **Obstacle avoidance (2026-08-02, jeff round 5).** Ducts now route AROUND
+         devices instead of over them. `ductPoints` = `baseDuctPoints` (the lane/jog
+         geometry) wrapped by `avoidDevices`: for each polyline segment that runs through a
+         device box (`deviceBoxes`, inflated ~15px, endpoints + junctions exempt) it jogs
+         out past an edge and back (`detourSeg`), picking the side with the most canvas room
+         whose detour lane is clear of other devices; iterates so a detour meeting a second
+         device routes too (bails after 5). Clear routes pass through untouched (verified 2-pt
+         straight runs stay 2-pt). Everything reads `ductPoints`, so the drawn path, branch
+         dots, hit target, and the block all stay consistent. Consequence: the device-drop
+         block was retuned — `canPlace` now uses `deviceCrossed` (foreign duct vs the TIGHT
+         glyph box) instead of the old 0.4-cell test, so a device you drop where the run can
+         bow around it is now ALLOWED (the duct reroutes); the block fires only when a run is
+         genuinely boxed in. Verified: drop-on-run-with-room allowed + duct detours; jointer
+         on a run gets skirted on the open side.
        - **Stable lane offsets** for collinear runs (jeff picked this over bands/router).
          `ductPoints` regular + gate-outlet cases now jog NEAR THE SOURCE at a lane height
          staggered by column distance (`laneOffset`), so the LONG vertical lands on the

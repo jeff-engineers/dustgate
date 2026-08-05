@@ -142,8 +142,22 @@ run_demo() {
   cd "$UI_DIR"
   [[ -d node_modules ]] || npm install
   # ng serve blocks, so open the browser (with the required flag) once it's up.
-  ( sleep 4; open "$demo_url" 2>/dev/null || xdg-open "$demo_url" 2>/dev/null || true ) &
-  npm start
+  # Poll for readiness rather than a blind sleep, so we don't hit the browser
+  # before the dev server is listening (a not-yet-ready open lands on an error
+  # page or a stale tab). macOS `open`/`xdg-open` may just focus an existing
+  # localhost:4200 tab instead of navigating to ?demo=true — so demo runs WITHOUT
+  # the backend proxy (see --proxy-config below): even a bare, non-demo tab then
+  # can't spam ECONNREFUSED against a backend demo never starts.
+  (
+    for _ in $(seq 1 60); do
+      curl -sf -o /dev/null "http://localhost:4200/" && break
+      sleep 0.5
+    done
+    open "$demo_url" 2>/dev/null || xdg-open "$demo_url" 2>/dev/null || true
+  ) &
+  # Demo is fully in-browser (DemoApiService) — it makes no /api or /ws calls, so
+  # override the development proxy (which points at a backend demo never runs).
+  npm start -- --proxy-config proxy.demo.json
 }
 
 run_mock() {
