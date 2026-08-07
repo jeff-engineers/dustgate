@@ -200,10 +200,24 @@ extern int g_homeDirection;        // defined in linear_actuator.ino
 // -----------------------------------------------------------------------------
 // PHASE 2 — SERVO (ball-valve gates)
 // -----------------------------------------------------------------------------
+// Size of the PWM servo bank on one board. Mirrors MAX_SERVOS_PER_HOST in
+// shared/device-model/topology.js — the schema refuses to place more servo gates on
+// a controller than it has channels.
+#define SERVO_COUNT                4
+
 // Servo sweep duration: the driver eases from the current angle to the target
 // over this long, rather than slamming the ~90° move in one command — gentler on
 // the gate, the coupling, and the ball. ~2s feels deliberate without being slow.
+// This is the CEILING, reached by a full-throw move; see SERVO_MS_PER_DEG.
 #define SERVO_SWEEP_MS             2000
+
+// Sweep pacing. The sweep duration is proportional to how far the servo actually has
+// to travel, clamped to [SERVO_SWEEP_MIN_MS, SERVO_SWEEP_MS]. A fixed duration made a
+// 90° throw and a 3° nudge take the same 2s, which is right for the throw and useless
+// for the setup jog control — a nudge you can't see land is a nudge you press twice.
+// 22ms/° puts a 90° quarter-turn at the full ~2s and a 3° nudge at the 80ms floor.
+#define SERVO_MS_PER_DEG             22
+#define SERVO_SWEEP_MIN_MS           80
 
 // Post-move hold: keep the servo energized this long AFTER the sweep completes so
 // an analog servo can actually catch up to the final commanded angle before we

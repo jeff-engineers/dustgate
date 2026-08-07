@@ -107,6 +107,7 @@ HttpApiServer::HttpApiServer()
       _calibratePending(false),    _calGateCount(0),
       _portRolePending(false),     _portRoleIndex(0), _portRoleValue(0),
       _orientationPending(false),  _orientationValue(false),
+      _servoJogPending(false),     _servoJogChannel(0), _servoJogAngle(0), _servoJogDetach(false),
       _homeDirection(HOME_DIRECTION_DEFAULT),
       _cachedNumActiveStops(0),
       _idleTimeoutSec(IDLE_TIMEOUT_SEC_DEFAULT)
@@ -364,6 +365,17 @@ bool HttpApiServer::consumeOrientationRequest(bool& outHomedLeft) {
     xSemaphoreTake(_mutex, portMAX_DELAY);
     bool v = _orientationPending;
     if (v) { outHomedLeft = _orientationValue; _orientationPending = false; }
+    xSemaphoreGive(_mutex);
+    return v;
+}
+
+bool HttpApiServer::consumeServoJogRequest(int& outChannel, int& outAngle, bool& outDetach) {
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    bool v = _servoJogPending;
+    if (v) {
+        outChannel = _servoJogChannel; outAngle = _servoJogAngle; outDetach = _servoJogDetach;
+        _servoJogPending = false;
+    }
     xSemaphoreGive(_mutex);
     return v;
 }
@@ -768,6 +780,56 @@ void HttpApiServer::registerRoutes() {
         String body; serializeJson(out, body);
         req->send(200, "application/json", body);
     });
+
+    // ------------------------------------------------------------------
+    // POST /api/v2/servo/jog  { channel: 0-3, angle: 0-180 }
+    //                         { channel: 0-3, detach: true }
+    //
+    // SETUP ONLY — the gate configurator's jog control. A ball valve is calibrated
+    // empirically: the user nudges the servo while watching the handle, then captures
+    // the angle where the ball actually lines up (see docs/v2-topology-schema.md). That
+    // needs a way to drive one servo directly, outside any routing decision.
+    //
+    // Deliberately NOT guarded by "is the collector off" — the whole point is to move a
+    // gate while nothing is running. Whoever is calling this is standing at the valve.
+    // ------------------------------------------------------------------
+    _server.on("/api/v2/servo/jog", HTTP_POST,
+        [](AsyncWebServerRequest* req) {},
+        nullptr,
+        [this](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t, size_t) {
+            if (!checkAuth(req)) return;
+#if !(defined(ENABLE_SERVO) && defined(SERVO_PWM_PIN_1))
+            // Built without the servo bank — say so plainly rather than accepting a
+            // command that will never move anything. The UI greys its jog control on 501.
+            (void)data; (void)len;
+            sendError(req, 501, "servo support not compiled into this build");
+#else
+            StaticJsonDocument<96> doc;
+            if (deserializeJson(doc, data, len)) { sendError(req, 400, "invalid JSON"); return; }
+            if (!doc.containsKey("channel")) { sendError(req, 400, "missing 'channel'"); return; }
+            int ch = doc["channel"].as<int>();
+            if (ch < 0 || ch >= SERVO_COUNT) { sendError(req, 400, "channel out of range"); return; }
+
+            bool detach = doc["detach"] | false;
+            int angle = 0;
+            if (!detach) {
+                if (!doc.containsKey("angle")) { sendError(req, 400, "missing 'angle'"); return; }
+                angle = doc["angle"].as<int>();
+                if (angle < 0 || angle > 180) { sendError(req, 400, "angle out of range (0-180)"); return; }
+            }
+
+            DEBUG_PRINT(F("[UI] Servo jog: ch=")); DEBUG_PRINT(ch);
+            DEBUG_PRINT(detach ? F(" detach") : F(" angle=")); if (!detach) DEBUG_PRINT(angle);
+            DEBUG_PRINTLN();
+
+            xSemaphoreTake(_mutex, portMAX_DELAY);
+            _servoJogPending = true;
+            _servoJogChannel = ch; _servoJogAngle = angle; _servoJogDetach = detach;
+            xSemaphoreGive(_mutex);
+            sendOk(req);
+#endif
+        }
+    );
 
     // ------------------------------------------------------------------
     // Static file serving — Angular front-end bundle from LittleFS.

@@ -103,6 +103,12 @@ public:
     // Port-role change (POST /api/config/port-role). outRole is a PortRole value.
     bool consumePortRoleRequest(int& outIndex, int& outRole);
 
+    // Servo jog (POST /api/v2/servo/jog). Setup-only: the gate configurator drives a
+    // servo directly so the user can watch the valve and capture where it lands. One
+    // pending slot — a jog is a single discrete nudge, and a newer one supersedes an
+    // unread older one rather than queueing. outDetach = de-energize instead of move.
+    bool consumeServoJogRequest(int& outChannel, int& outAngle, bool& outDetach);
+
     // Home-side answer (POST /api/config/orientation {homedLeft}). Consumed by the
     // main loop, which ensures the home datum is the user's left endstop (re-homing
     // if it came up on the right). outHomedLeft is the reported side.
@@ -205,6 +211,7 @@ private:
     bool  _calibratePending;       char _calModel[16];  int _calGateCount;
     bool  _portRolePending;        int  _portRoleIndex; int _portRoleValue;
     bool  _orientationPending;     bool _orientationValue;    // POST /api/config/orientation {homedLeft}
+    bool  _servoJogPending;        int  _servoJogChannel; int _servoJogAngle; bool _servoJogDetach;
     int   _homeDirection;          // runtime direction; loaded from NVS, updated via API
     int   _cachedNumActiveStops;   // from ApiStatus.numActiveStops; returned in /api/info
     int   _idleTimeoutSec;         // persisted idle power-off timeout; see idleTimeoutSec()

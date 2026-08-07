@@ -160,6 +160,7 @@ export class ToolSetupComponent implements OnInit {
 
   async ngOnInit(): Promise<void> {
     try {
+      await this.api.whenReady();          // else the first fetch 401s and reads as "no tools"
       this.topo = JSON.parse(JSON.stringify(await this.api.getTopology())) as Topology;
     } catch { return; }
     const els = this.elems();

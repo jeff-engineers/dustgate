@@ -103,6 +103,17 @@ export class DemoApiService extends ApiService {
     return topoStatus(this.td);
   }
 
+  /** No servo to move in the demo — accept the nudge so the gate configurator is
+   *  fully walkable, and remember the angle so a re-read reflects the last command. */
+  override async jogServo(channel: number, angle: number): Promise<unknown> {
+    this.servoAngles.set(channel, angle);
+    return { ok: true };
+  }
+  override async detachServo(_channel: number): Promise<unknown> {
+    return { ok: true };
+  }
+  private servoAngles = new Map<number, number>();
+
   private delay(ms: number): Promise<void> {
     return new Promise(r => setTimeout(r, ms));
   }

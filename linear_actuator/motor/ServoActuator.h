@@ -2,7 +2,10 @@
 // ServoActuator.h — Phase-2 positional-servo driver (ball-valve gates).
 //
 // A thin wrapper over ESP32Servo. Instead of snapping to the target, it SWEEPS
-// there smoothly over SERVO_SWEEP_MS (a gentle eased motion, not a slam), then
+// there smoothly (a gentle eased motion, not a slam) over a duration proportional to
+// how far it actually has to travel — a full quarter-turn takes the deliberate
+// SERVO_SWEEP_MS, a few degrees land almost at once, which is what makes the setup
+// jog control usable. It then
 // HOLDS the servo energized for SERVO_HOLD_MS so an analog servo has time to
 // catch up to the commanded angle, and finally auto-DETACHES so the coil
 // de-energizes — the ball valve holds position by hard-stop friction / optional
@@ -54,6 +57,7 @@ public:
         }
         _fromAngle    = _curAngle;
         _toAngle      = angleDeg;
+        _sweepMs      = sweepMsFor(_toAngle - _fromAngle);
         _sweepStartMs = millis();
         _sweeping     = (_fromAngle != _toAngle);
         _detachArmed  = false;                   // re-armed when the sweep finishes
@@ -69,14 +73,14 @@ public:
         const unsigned long now = millis();
         if (_sweeping) {
             const unsigned long el = now - _sweepStartMs;
-            if (el >= SERVO_SWEEP_MS) {
+            if (el >= _sweepMs) {
                 _curAngle    = _toAngle;
                 _servo.write(_toAngle);
                 _sweeping    = false;
                 _detachAtMs  = now + SERVO_HOLD_MS;   // hold powered so it can catch up
                 _detachArmed = !_holdAtRest;
             } else {
-                float t = (float)el / (float)SERVO_SWEEP_MS;  // 0..1
+                float t = (float)el / (float)_sweepMs;        // 0..1
                 t = t * t * (3.0f - 2.0f * t);                // smoothstep ease-in-out
                 _curAngle = _fromAngle + (int)lroundf((_toAngle - _fromAngle) * t);
                 _servo.write(_curAngle);
@@ -96,6 +100,16 @@ public:
     int  pin() const { return _pin; }
 
 private:
+    // Sweep duration for a move of this many degrees. Proportional to travel so a
+    // full quarter-turn still eases over the deliberate SERVO_SWEEP_MS while a small
+    // setup nudge lands immediately — see the SERVO_MS_PER_DEG note in config.h.
+    static unsigned long sweepMsFor(int deltaDeg) {
+        const unsigned long want = (unsigned long)abs(deltaDeg) * SERVO_MS_PER_DEG;
+        if (want < SERVO_SWEEP_MIN_MS) return SERVO_SWEEP_MIN_MS;
+        if (want > SERVO_SWEEP_MS)     return SERVO_SWEEP_MS;
+        return want;
+    }
+
     Servo         _servo;
     int           _pin         = -1;
     bool          _holdAtRest  = false;   // default: move then detach (analog-friendly)
@@ -104,6 +118,7 @@ private:
     int           _toAngle     = 0;
     bool          _sweeping    = false;
     unsigned long _sweepStartMs = 0;
+    unsigned long _sweepMs     = SERVO_SWEEP_MS;   // this move's duration (travel-scaled)
     bool          _detachArmed = false;
     unsigned long _detachAtMs  = 0;
 };

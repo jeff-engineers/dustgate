@@ -2,6 +2,8 @@ import { Component, OnInit, OnDestroy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { RouterLink } from '@angular/router';
 import { ApiService, Topology, TopologyStatus } from '../services/api.service';
+import { validateTopology, airflowIssues } from '@topology';
+import { configurableSelectorsOf, isCalibrated } from '../gates/selector-types';
 
 // One tool row's static identity (from the topology) merged with its live state
 // (from /api/v2/status). `collecting` is the routing winner — the single tool
@@ -126,6 +128,21 @@ const POLL_MS = 2000;
       text-align: center; color: var(--muted); padding: 48px 20px;
     }
     .empty a { color: var(--accent); }
+
+    /* Layout isn't finished — nothing here may drive a gate or the collector. */
+    .incomplete {
+      display: flex; flex-direction: column; gap: 10px;
+      background: color-mix(in srgb, var(--danger) 12%, var(--surface));
+      border: 1px solid var(--danger); color: var(--danger);
+      border-radius: var(--radius); padding: 14px 16px; margin-bottom: 18px;
+      font-size: 13.5px; line-height: 1.45;
+    }
+    .incomplete a {
+      align-self: flex-start; color: #fff; background: var(--danger);
+      border-radius: 8px; padding: 6px 12px; font-size: 13px;
+      text-decoration: none; font-weight: 600;
+    }
+    .locked { opacity: 0.45; pointer-events: none; filter: grayscale(1); }
   `],
   template: `
     <div class="top">
@@ -134,7 +151,14 @@ const POLL_MS = 2000;
     </div>
 
     <ng-container *ngIf="tools.length; else noShop">
-      <div class="collector" [class.running]="collectorOn">
+      <!-- An unfinished shop must not drive hardware: everything below is inert
+           until the layout is whole (see the ready check). -->
+      <div class="incomplete" *ngIf="!ready">
+        <span>Shop layout incomplete — {{ notReadyReason }} Nothing can be switched on until it’s sorted out.</span>
+        <a [routerLink]="fixLink">Finish setup →</a>
+      </div>
+
+      <div class="collector" [class.running]="collectorOn" [class.locked]="!ready">
         <span class="cyc">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
                stroke-linecap="round" stroke-linejoin="round">
@@ -152,7 +176,7 @@ const POLL_MS = 2000;
       </div>
 
       <div class="label">Tools</div>
-      <div class="rows">
+      <div class="rows" [class.locked]="!ready">
         <button class="row" *ngFor="let t of tools" [class.collecting]="t.collecting"
                 (click)="toggle(t)"
                 [attr.aria-pressed]="t.on">
@@ -189,6 +213,14 @@ export class LiveViewComponent implements OnInit, OnDestroy {
   tools: ToolRow[] = [];
   collectorOn = false;
   activeName = '';
+  /** False while the saved layout is unfinished — the build canvas lets you save a
+   *  work-in-progress shop, so this view is where that gets enforced: no gate and
+   *  no collector moves until it's whole. */
+  ready = true;
+  notReadyReason = '';
+  /** Where "Finish setup" goes — the gate pass when that's what's missing, the canvas
+   *  otherwise. Sending someone to the layout to fix a calibration would just confuse. */
+  fixLink = '/build';
 
   private poll: ReturnType<typeof setInterval> | null = null;
   private busy = false;
@@ -197,6 +229,7 @@ export class LiveViewComponent implements OnInit, OnDestroy {
 
   async ngOnInit(): Promise<void> {
     try {
+      await this.api.whenReady();          // else the first fetch 401s and reads as "no shop"
       const topo = await this.api.getTopology();
       this.parseTopology(topo);
     } catch {
@@ -218,7 +251,7 @@ export class LiveViewComponent implements OnInit, OnDestroy {
   }
 
   async toggle(t: ToolRow): Promise<void> {
-    if (this.busy) return;
+    if (this.busy || !this.ready) return;
     this.busy = true;
     try {
       const status = await this.api.simTool(t.id, t.on ? 0 : SIM_ON_WATTS);
@@ -229,7 +262,7 @@ export class LiveViewComponent implements OnInit, OnDestroy {
   }
 
   async stopAll(): Promise<void> {
-    if (this.busy || !this.collectorOn) return;
+    if (this.busy || !this.collectorOn || !this.ready) return;
     this.busy = true;
     try {
       let last: TopologyStatus | null = null;
@@ -260,7 +293,42 @@ export class LiveViewComponent implements OnInit, OnDestroy {
     this.activeName = this.tools.find(t => t.collecting)?.name ?? '';
   }
 
+  /** The shop has to be structurally whole, free of always-open leaks, AND have every
+   *  servo gate calibrated before it may run. The first two are what the build canvas
+   *  reports as work-in-progress; the third is the /gates pass. An uncalibrated gate is
+   *  as unsafe as a leak — we'd be driving to positions nobody has checked. */
+  private checkReady(topo: Topology): void {
+    let reason = '';
+    this.fixLink = '/build';
+    try {
+      const v = validateTopology(topo);
+      if (!v.ok) reason = v.errors[0]?.message ?? 'the layout is incomplete.';
+      else {
+        const leaks = airflowIssues(topo);
+        const unset = configurableSelectorsOf(topo).filter(s => !isCalibrated(s));
+        const open = leaks.filter(l => l.kind === 'always-open');
+        const shared = leaks.filter(l => l.kind === 'co-open');
+        if (open.length) {
+          const names = open.map(l => l.name).join(', ');
+          reason = `${names} ${open.length === 1 ? 'has' : 'have'} no gate between ${open.length === 1 ? 'it' : 'them'} and the collector, so suction would leak there.`;
+        } else if (shared.length) {
+          const names = shared.map(l => l.name).join(', ');
+          reason = shared.length === 1
+            ? `${names} shares an outlet with ${(shared[0].with ?? []).map(w => w.name).join(', ')} with no gate in between, so running it would pull air through them too.`
+            : `${names} share an outlet with no gate between them, so running one would pull air through the others.`;
+        } else if (unset.length) {
+          const names = unset.map(s => s.name || s.id).join(', ');
+          reason = `${names} ${unset.length === 1 ? "hasn't" : "haven't"} been set up yet — no one has shown ${unset.length === 1 ? 'it' : 'them'} where the valve positions are.`;
+          this.fixLink = '/gates';
+        }
+      }
+    } catch { reason = 'the layout could not be read.'; }
+    this.ready = !reason;
+    this.notReadyReason = reason;
+  }
+
   private parseTopology(topo: Topology): void {
+    this.checkReady(topo);
     const doc = topo as { name?: string; elements?: Array<Record<string, unknown>> };
     this.shopName = doc.name ?? 'The Shop';
     const els = doc.elements ?? [];

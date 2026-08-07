@@ -8,7 +8,10 @@
 # Keep platformio.ini, extra_script.py, and source; ignore generated artifacts
 
 # ── Arduino IDE temp / build ──────────────────────────────────────────────────
-build/
+# Anchored to the repo root ON PURPOSE: a bare `build/` also matched
+# dustgate-ui/src/app/build/ (the shop-layout canvas), silently keeping that whole
+# component out of version control.
+/build/
 *.elf
 *.bin
 *.hex

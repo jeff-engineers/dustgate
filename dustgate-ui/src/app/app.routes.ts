@@ -13,5 +13,6 @@ export const routes: Routes = [
   { path: 'shop',         loadComponent: () => import('./live/live.component').then(m => m.LiveViewComponent) },
   { path: 'build',        loadComponent: () => import('./build/build.component').then(m => m.BuildComponent) },
   { path: 'tools',        loadComponent: () => import('./tools/tool-setup.component').then(m => m.ToolSetupComponent) },
+  { path: 'gates',        loadComponent: () => import('./gates/gate-setup.component').then(m => m.GateSetupComponent) },
   { path: '**',           redirectTo: '' }
 ];

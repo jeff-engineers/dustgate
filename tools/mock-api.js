@@ -38,6 +38,10 @@ const d = M.createDevice();
 // ── v2 topology-native device (additive; null until a topology is PUT) ───────
 let td = null;
 
+// Last angle commanded to each servo channel by the setup jog. No motion to model —
+// this exists so the mock behaves like a device that accepted the command.
+const servoAngles = {};
+
 function statusJson() { return JSON.stringify(M.statusView(d)); }
 
 // ── WebSocket server ──────────────────────────────────────────────────────
@@ -276,6 +280,21 @@ function handler(req, res) {
   }
   if (pathname === '/api/v2/status' && req.method === 'GET') {
     return td ? json(res, TD.statusView(td)) : json(res, { error: 'no topology configured' }, 404);
+  }
+  // Setup-only servo jog. Nothing to move here, so just range-check like the firmware
+  // does and remember the angle — enough for the gate configurator to be walked end to
+  // end against the mock.
+  if (pathname === '/api/v2/servo/jog' && req.method === 'POST') {
+    return body(req, data => {
+      const ch = Number(data.channel);
+      if (!Number.isInteger(ch) || ch < 0 || ch >= 4) return json(res, { error: 'channel out of range' }, 400);
+      if (data.detach === true) { return json(res, { ok: true }); }
+      const angle = Number(data.angle);
+      if (!Number.isFinite(angle) || angle < 0 || angle > 180)
+        return json(res, { error: 'angle out of range (0-180)' }, 400);
+      servoAngles[ch] = angle;
+      json(res, { ok: true });
+    });
   }
   if (pathname === '/api/v2/sim/tool' && req.method === 'POST') {
     return body(req, data => {

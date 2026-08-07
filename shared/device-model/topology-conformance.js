@@ -47,6 +47,15 @@ async function run() {
     check('v2: invalid topology → 400 + errors', r.status === 400 && Array.isArray(r.json?.errors));
   }
 
+  // 1b. Two servo gates on one board can't share a PWM channel — they'd move together.
+  {
+    const dup = fixtures.clone(fixtures.twoGates);
+    dup.elements.find((e) => e.id === 'gate2').servo.channel = 0;   // gate1 already holds 0
+    const r = await req('PUT', '/api/v2/topology', dup);
+    check('v2: duplicate servo channel on one host → 400', r.status === 400,
+      `status=${r.status}`);
+  }
+
   // 2. PUT/GET roundtrip + initial status.
   {
     const r = await req('PUT', '/api/v2/topology', fixtures.twoGates);
@@ -56,6 +65,27 @@ async function run() {
     const s = await req('GET', '/api/v2/status');
     check('v2: initial status all closed, collector off',
       s.json?.actuators?.gate1 === 'closed' && s.json?.actuators?.gate2 === 'closed' && s.json?.collectorOn === false);
+  }
+
+  // 2b. Setup-only servo jog. A build without servo support answers 501 to all of
+  // these, which is a valid target too — assert the contract, not the hardware.
+  {
+    const ok = await req('POST', '/api/v2/servo/jog', { channel: 0, angle: 45 });
+    const noServos = ok.status === 501;
+    check('v2: servo jog accepted (or 501 without servo support)',
+      ok.status === 200 || noServos, `status=${ok.status}`);
+
+    const badCh = await req('POST', '/api/v2/servo/jog', { channel: 9, angle: 45 });
+    check('v2: servo jog bad channel → 400', noServos ? badCh.status === 501 : badCh.status === 400,
+      `status=${badCh.status}`);
+
+    const badAngle = await req('POST', '/api/v2/servo/jog', { channel: 0, angle: 400 });
+    check('v2: servo jog bad angle → 400', noServos ? badAngle.status === 501 : badAngle.status === 400,
+      `status=${badAngle.status}`);
+
+    const det = await req('POST', '/api/v2/servo/jog', { channel: 0, detach: true });
+    check('v2: servo detach accepted (or 501)', det.status === 200 || det.status === 501,
+      `status=${det.status}`);
   }
 
   // 3. Tool power drives routing (independent gates run concurrently).

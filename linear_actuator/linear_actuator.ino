@@ -264,8 +264,8 @@ StepperTMC2209Driver motor;
 // Signal only — servos powered from an EXTERNAL 5–6V rail, grounds common.
 #include "motor/ServoActuator.h"
 #if defined(ENABLE_SERVO) && defined(SERVO_PWM_PIN_1)
-ServoActuator g_servos[4];
-static const int SERVO_PINS[4] = { SERVO_PWM_PIN_1, SERVO_PWM_PIN_2, SERVO_PWM_PIN_3, SERVO_PWM_PIN_4 };
+ServoActuator g_servos[SERVO_COUNT];
+static const int SERVO_PINS[SERVO_COUNT] = { SERVO_PWM_PIN_1, SERVO_PWM_PIN_2, SERVO_PWM_PIN_3, SERVO_PWM_PIN_4 };
 #endif
 
 // -- Feedback system --
@@ -401,7 +401,7 @@ void setup() {
     _serialCmds.begin();   // supplemental serial processor (non-fatal if begin() returns false)
 #endif
 #if defined(ENABLE_SERVO) && defined(SERVO_PWM_PIN_1)
-    for (int i = 0; i < 4; i++) g_servos[i].begin(SERVO_PINS[i]);  // bind pins; attach on first move
+    for (int i = 0; i < SERVO_COUNT; i++) g_servos[i].begin(SERVO_PINS[i]);  // bind pins; attach on first move
     DEBUG_PRINTLN(F("[SERVO] Bring-up ready — 'servo <1-4> <angle>' (external 5-6V rail, common GND)."));
 #endif
 
@@ -449,7 +449,7 @@ void loop() {
 
 #if defined(ENABLE_SERVO) && defined(SERVO_PWM_PIN_1)
     // Effect any deferred servo auto-detach (move-then-detach; see ServoActuator).
-    for (int i = 0; i < 4; i++) g_servos[i].update();
+    for (int i = 0; i < SERVO_COUNT; i++) g_servos[i].update();
 #endif
 
     // -- Endstop over-travel safety — runs BEFORE motor.update() -----------------
@@ -935,6 +935,19 @@ void loop() {
             setHomedLeft(homedLeft);
         }
     }
+
+#if defined(ENABLE_SERVO) && defined(SERVO_PWM_PIN_1)
+    // Servo jog (POST /api/v2/servo/jog) — the gate configurator driving one servo so
+    // the user can watch the valve and capture where it lands. Channel is range-checked
+    // in the handler; ServoActuator does the easing and the deferred detach.
+    {
+        int jogCh = 0, jogAngle = 0; bool jogDetach = false;
+        if (apiServer.consumeServoJogRequest(jogCh, jogAngle, jogDetach)) {
+            if (jogDetach) g_servos[jogCh].detach();
+            else           g_servos[jogCh].moveTo(jogAngle);
+        }
+    }
+#endif
 
     // Enable / disable — TODO: add ControlInput::setEnabled() to the base class
     // so this works for all modes, not just serial debug.

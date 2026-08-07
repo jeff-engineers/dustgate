@@ -21,7 +21,8 @@
             ],
             "tsConfig": "tsconfig.app.json",
             "allowedCommonJsDependencies": [
-              "@device-model"
+              "@device-model",
+              "@topology"
             ],
             "assets": [],
             "styles": [

@@ -195,7 +195,8 @@ each `controllerId` staying within budget.
 | `states[]` | HAL states: `{ id, isClosed, …realization }`. Exactly one `isClosed:true`. Realization is kind-specific: `positionMm` (linear) or `offsetDeg` (servo — angular offset from the calibrated `referenceAngle`; a valve-DESIGN constant, e.g. a gate's closed = open ±90°). |
 | `branches[]` | `{ id, opensState, role }`. `opensState` references a non-closed state id. `role` ∈ `tool` \| `unassigned` \| `blocked` \| `feed`. |
 | `linear` | `{ channel?, calibration: { stepsPerMm, measuredSpanSteps, homeIsMaxEndstop, manifoldModel } }`. `channel` = which stepper driver (default 0), parallel to `servo.channel`, so more than one linear selector is a wiring question rather than a model cap. |
-| `servo` | `{ channel, referenceAngle, moveMs, holdAtRest, minAngle?, maxAngle? }`. `referenceAngle` = per-build calibrated angle of the reference state (a gate's OPEN / a manifold's LEFT, viewed from the servo side), captured in setup; commanded angle = `referenceAngle + offsetDeg`. `holdAtRest` **defaults false** (move then detach — analog servos groan while holding and the valve holds by friction/detent); set true only for a build that would back-drive de-energized. |
+| `servo` | `{ channel, referenceAngle, reversed?, moveMs, holdAtRest, minAngle?, maxAngle? }`. `referenceAngle` = per-build calibrated angle of the reference state (a gate's OPEN / a manifold's LEFT, viewed from the servo side), captured in setup; commanded angle = `referenceAngle + offsetDeg`. **Absent = uncalibrated**: the build canvas mints servo gates without it, `/gates` fills it in, and the Live view refuses to run a shop that still has one missing. `reversed` is a **UI-only** hint (firmware ignores it): the servo often sits behind the gate, so a "turn right" tap has to command a *decreasing* angle for the handle to move right. Captured by the direction check at the top of calibration. `holdAtRest` **defaults false** (move then detach — analog servos groan while holding and the valve holds by friction/detent); set true only for a build that would back-drive de-energized. |
+| — | Two servo selectors on the **same `controllerId`** may not share a `servo.channel` — they'd move together. Enforced by `validateTopology`. |
 
 ### element: tool
 | field | notes |
@@ -242,6 +243,14 @@ Power HD 3001HB). Instead:
   LEFT) as a small POSITIVE angle — set at, or slightly clockwise of, true open — so
   every `offsetDeg` is POSITIVE (CCW) and stays inside 0–180°. Thus a gate's
   `closed.offsetDeg ≈ +90`; a manifold's closed/right are positive offsets from left.
+  - **The convention does NOT have to hold per-gate, and the UI never asks the user to
+    reason about it** (jeff, 2026-08-06). Calibration is empirical — you jog until the
+    ball is physically right and capture where it landed, so the stored angle is correct
+    whichever way the axis runs. Mount direction only decides which way the *arrows*
+    should point, and gates wall-mount with the servo on either side. Hence `servo.reversed`,
+    answered once per gate by nudging and watching the handle. An earlier plan to invert
+    the PWM globally at the driver was dropped for exactly this reason: it's a per-gate
+    fact, not a build-wide one, and it isn't a firmware concern at all.
 - **Coupling slop / backlash → use magnetic DETENTS (preferred fix).** The horn↔stem
   joint has play, and a beefier servo doesn't fix it. The clean solution is a magnetic
   detent at each valve position (the reference's optional N52 magnets): drive the servo

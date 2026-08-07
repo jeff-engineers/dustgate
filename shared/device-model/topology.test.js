@@ -7,7 +7,8 @@
 
 'use strict';
 
-const { validateTopology, servoCommandAngle, airflowIssues } = require('./topology');
+const { validateTopology, servoCommandAngle, airflowIssues,
+        absoluteAngles, applyAbsoluteAngles } = require('./topology');
 const { computeRouting } = require('./routing');
 const { planTransition } = require('./sequencer');
 const { createTopologyDevice, setToolPower, statusView } = require('./topology-device');
@@ -314,6 +315,126 @@ const idxOf = (plan, sel) => plan.moves.findIndex((m) => m.selectorId === sel);
     t.ducts.push({ child: 'wye', parent: 'lin', parentBranch: b.id }, { child: 'wt', parent: 'wye' });
   });
   eq('airflow: wye behind a gate is clean', airflowIssues(gatedWye), []);
+
+  // Two tools teed off ONE outlet: gated, but neither can run without the other
+  // being wide open. This is the shape the "is there a gate above me" test missed.
+  const sharedOutlet = mut((t) => {
+    t.elements.push({ id: 'tee', type: 'junction', name: 'Tee' });
+    t.elements.push({ id: 'shA', type: 'tool', name: 'Drum Sander' });
+    t.elements.push({ id: 'shB', type: 'tool', name: 'Router Table' });
+    const b = elem(t, 'lin').branches.find((x) => x.role === 'blocked');
+    b.role = 'feed';
+    t.ducts.push({ child: 'tee', parent: 'lin', parentBranch: b.id },
+                 { child: 'shA', parent: 'tee' }, { child: 'shB', parent: 'tee' });
+  });
+  const si = airflowIssues(sharedOutlet);
+  check('airflow: two tools on one outlet both flagged',
+    si.length === 2 && si.every((i) => i.kind === 'co-open') &&
+    si.map((i) => i.id).sort().join() === 'shA,shB');
+  check('airflow: co-open names the tool it cannot be isolated from',
+    si[0].with.length === 1 && si[0].with[0].id === 'shB' && si[0].with[0].name === 'Router Table');
+
+  // Gating ONE of the two legs is not enough — the bare leg is still wide open
+  // when the gated tool runs. (This is why the Cap fix-up gates every partner.)
+  const gateLeg = (t, toolId, gateId, channel) => {
+    t.elements.push({
+      id: gateId, type: 'selector', name: gateId, controllerId: 'primary', kind: 'servoGate',
+      states: [{ id: 'open', isClosed: false, offsetDeg: 0 }, { id: 'closed', isClosed: true, offsetDeg: 90 }],
+      branches: [{ id: 'gb', opensState: 'open', role: 'tool' }],
+      servo: { channel },
+    });
+    const d = t.ducts.find((x) => x.child === toolId);
+    d.parent = gateId; d.parentBranch = 'gb';
+    t.ducts.push({ child: gateId, parent: 'tee' });
+    return t;
+  };
+  const halfSplit = gateLeg(clone(sharedOutlet), 'shA', 'g9', 3);
+  const hi = airflowIssues(halfSplit);
+  check('airflow: gating only one leg still leaks through the other',
+    hi.length === 1 && hi[0].id === 'shA' && hi[0].with[0].id === 'shB');
+
+  // Both legs gated → the same shop is clean.
+  eq('airflow: a gate on each shared leg clears it',
+    airflowIssues(gateLeg(halfSplit, 'shB', 'g10', 4)), []);
+
+  // An ungated tool is reported once, as itself — not again next to every tool it leaks past.
+  const li2 = airflowIssues(leaky);
+  check('airflow: ungated tool is not double-reported as co-open',
+    li2.length === 1 && li2[0].kind === 'always-open');
+}
+
+// ── servo channels: two gates on one board can't share a PWM channel ─────────
+{
+  const t = clone(twoGates);
+  elem(t, 'gate2').servo.channel = 0;      // gate1 already holds channel 0
+  const r = validateTopology(t);
+  check('duplicate servo channel on one host → invalid (selector)', !r.ok && hasCode(r, 'selector'));
+}
+{
+  const t = clone(twoGates);
+  elem(t, 'gate2').controllerId = 'primary';
+  elem(t, 'gate2').servo.reversed = 'yes';  // must be a boolean
+  const r = validateTopology(t);
+  check('servo.reversed non-boolean → invalid (selector)', !r.ok && hasCode(r, 'selector'));
+}
+{
+  const t = clone(twoGates);
+  elem(t, 'gate1').servo.reversed = true;   // a legitimately rear-mounted servo
+  check('servo.reversed boolean is accepted', validateTopology(t).ok);
+}
+
+// ── calibration: absolute angles ⇄ referenceAngle + offsetDeg ────────────────
+{
+  // A gate: OPEN is the reference at 10°, closed a quarter turn past it.
+  const gate = elem(clone(twoGates), 'gate1');
+  eq('absoluteAngles: gate open/closed', absoluteAngles(gate), { open: 10, closed: 100 });
+
+  const back = applyAbsoluteAngles(gate, { open: 10, closed: 100 });
+  check('applyAbsoluteAngles: gate round-trips', back.ok
+    && back.selector.servo.referenceAngle === 10
+    && JSON.stringify(back.selector.states.map((s) => s.offsetDeg)) === '[0,90]');
+}
+{
+  // A manifold: LEFT is the reference at 5°, with closed and right past it.
+  const man = elem(clone(feedChain), 'man');
+  eq('absoluteAngles: manifold left/closed/right', absoluteAngles(man), { left: 5, closed: 85, right: 166 });
+
+  const back = applyAbsoluteAngles(man, { left: 5, closed: 85, right: 166 });
+  check('applyAbsoluteAngles: manifold round-trips', back.ok
+    && back.selector.servo.referenceAngle === 5
+    && JSON.stringify(back.selector.states.map((s) => s.offsetDeg)) === '[0,80,161]');
+}
+{
+  // Re-calibrating after re-clocking the horn: the reference moves, offsets hold.
+  const man = elem(clone(feedChain), 'man');
+  const back = applyAbsoluteAngles(man, { left: 12, closed: 92, right: 173 });
+  check('applyAbsoluteAngles: shifted reference keeps the offsets', back.ok
+    && back.selector.servo.referenceAngle === 12
+    && JSON.stringify(back.selector.states.map((s) => s.offsetDeg)) === '[0,80,161]');
+  check('applyAbsoluteAngles: does not mutate the input',
+    man.servo.referenceAngle === 5 && man.states[0].offsetDeg === 0);
+}
+{
+  const man = elem(clone(feedChain), 'man');
+  const missing = applyAbsoluteAngles(man, { left: 5, closed: 85 });
+  check('applyAbsoluteAngles: an uncaptured position is rejected', !missing.ok && /right/.test(missing.error));
+
+  const noRef = applyAbsoluteAngles(man, { closed: 85, right: 166 });
+  check('applyAbsoluteAngles: missing reference is rejected', !noRef.ok && /left/.test(noRef.error));
+
+  const past = applyAbsoluteAngles(man, { left: 30, closed: 110, right: 191 });
+  check('applyAbsoluteAngles: past the servo travel is rejected', !past.ok && /re-seat the horn/.test(past.error));
+}
+{
+  // The captured angles are what they are — a rear-mounted servo only flips which
+  // way the UI's arrows point, never the stored result.
+  const gate = elem(clone(twoGates), 'gate1');
+  gate.servo.reversed = true;
+  const back = applyAbsoluteAngles(gate, { open: 10, closed: 100 });
+  check('applyAbsoluteAngles: reversed does not change the captured angles',
+    back.ok && back.selector.servo.referenceAngle === 10
+    && back.selector.servo.reversed === true
+    && servoCommandAngle(back.selector, 'closed') === 100);
 }
 
 // ── report ──────────────────────────────────────────────────────────────────

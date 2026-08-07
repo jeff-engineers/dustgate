@@ -43,7 +43,8 @@ const MAX_LINEAR_PER_HOST = 1;
  * @property {string} id
  * @property {boolean} isClosed      exactly one state per selector is the all-closed rest
  * @property {number} [positionMm]   realization for kind:"linear"
- * @property {number} [angleDeg]     realization for servo kinds (also the alignment knob)
+ * @property {number} [offsetDeg]    realization for servo kinds — degrees from the
+ *                                   calibrated servo.referenceAngle (see servoCommandAngle)
  *
  * @typedef {Object} Branch
  * @property {string} id
@@ -140,6 +141,72 @@ function servoCommandAngle(sel, stateId) {
   return Math.min(hi, Math.max(lo, ref + st.offsetDeg));
 }
 
+/**
+ * stateId → commanded angle, for every state on a servo selector.
+ * The inverse direction of applyAbsoluteAngles: what the configurator seeds its
+ * jog control with when re-opening an already-calibrated gate.
+ * @returns {Object<string, number>|null}
+ */
+function absoluteAngles(sel) {
+  if (!sel || (sel.kind !== 'servoGate' && sel.kind !== 'servoManifold')) return null;
+  const out = {};
+  for (const s of sel.states || []) {
+    const a = servoCommandAngle(sel, s.id);
+    if (a !== null) out[s.id] = a;
+  }
+  return out;
+}
+
+/**
+ * Fold captured ABSOLUTE angles back into the schema's reference+offset form.
+ *
+ * Calibration is empirical — you jog the valve until it's physically right and
+ * capture where it landed — so the configurator thinks in absolute angles. The
+ * schema stores one calibrated referenceAngle plus fixed offsets, so the reference
+ * state (a gate's OPEN, a manifold's LEFT) anchors the set and everything else
+ * becomes a signed offset from it.
+ *
+ * Rejects a set that lands outside the servo's travel: that means the horn is
+ * clocked wrong on its spline, and no amount of arithmetic fixes it (see the
+ * mechanical notes in docs/v2-topology-schema.md).
+ *
+ * @param {Object} sel                       servo selector
+ * @param {Object<string, number>} captured  stateId → absolute angle
+ * @returns {{ ok: boolean, selector?: Object, error?: string }}
+ */
+function applyAbsoluteAngles(sel, captured) {
+  if (!sel || (sel.kind !== 'servoGate' && sel.kind !== 'servoManifold'))
+    return { ok: false, error: 'not a servo selector' };
+
+  const ref = (sel.states || []).find((s) => !s.isClosed);
+  if (!ref) return { ok: false, error: 'selector has no open position to calibrate against' };
+
+  const refAngle = captured[ref.id];
+  if (typeof refAngle !== 'number')
+    return { ok: false, error: `capture "${ref.id}" first — the other positions are measured from it` };
+
+  const sv = sel.servo || {};
+  const lo = typeof sv.minAngle === 'number' ? sv.minAngle : 0;
+  const hi = typeof sv.maxAngle === 'number' ? sv.maxAngle : 180;
+
+  const states = [];
+  for (const s of sel.states) {
+    const abs = captured[s.id];
+    if (typeof abs !== 'number') return { ok: false, error: `position "${s.id}" hasn't been captured yet` };
+    if (abs < lo || abs > hi)
+      return { ok: false, error: `"${s.id}" lands outside the servo's travel — re-seat the horn and start over` };
+    states.push(Object.assign({}, s, { offsetDeg: Math.round(abs - refAngle) }));
+  }
+
+  return {
+    ok: true,
+    selector: Object.assign({}, sel, {
+      states,
+      servo: Object.assign({}, sv, { referenceAngle: Math.round(refAngle) }),
+    }),
+  };
+}
+
 // ── Validation ──────────────────────────────────────────────────────────────
 
 /**
@@ -200,6 +267,7 @@ function validateTopology(t) {
   // Per-host actuator tally — enforced against the hardware budget after the loop.
   const hostServos = new Map();   // controllerId → servo-selector count
   const hostLinear = new Map();   // controllerId → linear-selector count
+  const servoChannelOwner = new Map(); // "controllerId channel" → selector id holding it
   for (const sel of selectorsOf(t)) {
     const ref = sel.id;
     if (!SELECTOR_KINDS.includes(sel.kind)) err('selector', `bad kind "${sel.kind}"`, ref);
@@ -242,6 +310,19 @@ function validateTopology(t) {
         err('selector', 'servo.referenceAngle must be a number', ref);
       if (sv.detented !== undefined && typeof sv.detented !== 'boolean')
         err('selector', 'servo.detented must be a boolean', ref);
+      // reversed: a UI-only hint captured during calibration — the servo sits behind
+      // some gates, so the jog arrows have to point the way the HANDLE moves. Firmware
+      // never reads it; the captured angles are already correct either way.
+      if (sv.reversed !== undefined && typeof sv.reversed !== 'boolean')
+        err('selector', 'servo.reversed must be a boolean', ref);
+      // Two servo selectors on one board sharing a PWM channel would move together.
+      if (sel.controllerId && typeof sv.channel === 'number') {
+        const key = `${sel.controllerId} ${sv.channel}`;
+        if (servoChannelOwner.has(key))
+          err('selector', `servo channel ${sv.channel} on host "${sel.controllerId}" `
+            + `is already used by "${servoChannelOwner.get(key)}"`, ref);
+        else servoChannelOwner.set(key, sel.id);
+      }
     }
 
     // branches ↔ non-closed states must be a bijection
@@ -348,20 +429,46 @@ function validateTopology(t) {
 }
 
 // ── Airflow integrity ─────────────────────────────────────────────────────────
-// A structurally valid topology can still be a BAD airflow design: any tool whose
-// path to the collector crosses NO actuated selector is "always open" — the
-// collector bleeds suction through it no matter which tool is running, so the
-// whole system runs weak. This is advisory (a valid document, a bad config), and
-// is a HARD BLOCK on save in the configurator: an always-open gate is never a
-// valid saved state, though it's fine transiently while editing. Reused by the
-// configurator, firmware, and conformance so they all agree on "leaky".
+// A structurally valid topology can still be a BAD airflow design. Two ways a
+// tool ends up leaking, both of which mean "you can't actually select this tool":
+//
+//   always-open — its path to the collector crosses NO actuated selector, so the
+//                 collector bleeds through it no matter what is running.
+//   co-open     — routing TO this tool unavoidably leaves another tool open too.
+//                 The common shape: two tools teed off ONE outlet of a sliding
+//                 gate or manifold (or one hung on the run that feeds another).
+//                 Every gate on the path is open for both, so running either one
+//                 sucks air through the other.
+//
+// The old check only asked "is there a selector somewhere above me", which the
+// co-open case passes — the shared gate is above both tools. So the real test is
+// the routed one: set the selectors the way this tool needs them (everything else
+// at its closed state, exactly what routing.js commands) and see what else is
+// still reachable from the collector.
+//
+// Advisory (a valid document, a bad config), and a HARD BLOCK on running in the
+// Live view: leaky is never a valid state to drive, though it's fine transiently
+// while editing. Reused by the configurator, firmware, and conformance so they
+// all agree on "leaky".
 function airflowIssues(topology) {
   const byId = new Map((topology.elements || []).map((e) => [e.id, e]));
   const parentDuct = parentDuctIndex(topology);
+  const collector = collectorOf(topology);
+  const tools = toolsOf(topology);
+
+  // parent → its ducts, for walking back DOWN from the collector
+  const kids = new Map();
+  for (const d of topology.ducts || []) {
+    if (!kids.has(d.parent)) kids.set(d.parent, []);
+    kids.get(d.parent).push(d);
+  }
+
   const issues = [];
-  for (const tool of toolsOf(topology)) {
+  const alwaysOpen = new Set();
+
+  // ── 1. always-open: nothing actuated between the tool and the collector ──
+  for (const tool of tools) {
     let cur = tool.id, gated = false;
-    // walk up toward the collector; a selector anywhere on the path gates it
     for (;;) {
       const d = parentDuct.get(cur);
       if (!d) break;
@@ -370,8 +477,77 @@ function airflowIssues(topology) {
       if (parent.type === 'selector') { gated = true; break; }
       cur = parent.id;
     }
-    if (!gated) issues.push({ id: tool.id, name: tool.name || tool.id, kind: 'always-open' });
+    if (!gated) {
+      alwaysOpen.add(tool.id);
+      issues.push({ id: tool.id, name: tool.name || tool.id, kind: 'always-open' });
+    }
   }
+
+  /** selectorId → stateId this tool needs, or null if its path is broken/blocked. */
+  function requiredStates(toolId) {
+    const need = {};
+    const seen = new Set();
+    let cur = toolId;
+    for (;;) {
+      if (seen.has(cur)) return null;                 // cycle
+      seen.add(cur);
+      if (cur === (collector && collector.id)) return need;
+      const d = parentDuct.get(cur);
+      if (!d) return null;
+      const parent = byId.get(d.parent);
+      if (!parent) return null;
+      if (parent.type === 'selector') {
+        const b = (parent.branches || []).find((x) => x.id === d.parentBranch);
+        if (!b || b.role === 'blocked') return null;  // can't be opened at all
+        need[parent.id] = b.opensState;
+      }
+      cur = parent.id;
+    }
+  }
+
+  /** Tools the collector can still see with the selectors set that way. */
+  function toolsReachable(need) {
+    const found = [];
+    const stack = collector ? [collector.id] : [];
+    const seen = new Set(stack);
+    while (stack.length) {
+      const id = stack.pop();
+      const el = byId.get(id);
+      if (el && el.type === 'tool') found.push(id);
+      for (const d of kids.get(id) || []) {
+        if (el && el.type === 'selector') {
+          // only the branch the commanded state opens lets air through
+          const b = (el.branches || []).find((x) => x.id === d.parentBranch);
+          if (!b || b.role === 'blocked' || b.opensState !== need[el.id]) continue;
+        }
+        if (!seen.has(d.child)) { seen.add(d.child); stack.push(d.child); }
+      }
+    }
+    return found;
+  }
+
+  // ── 2. co-open: routing to this tool leaves some OTHER tool open as well ──
+  // Tools already flagged always-open are skipped on both sides: they're reported
+  // once as the root cause instead of again beside every tool they leak past.
+  if (collector) {
+    for (const tool of tools) {
+      if (alwaysOpen.has(tool.id)) continue;
+      const need = requiredStates(tool.id);
+      if (!need) continue;                             // unreachable — a validation error, not a leak
+      const others = toolsReachable(need)
+        .filter((id) => id !== tool.id && !alwaysOpen.has(id))
+        .map((id) => byId.get(id));
+      if (others.length) {
+        issues.push({
+          id: tool.id,
+          name: tool.name || tool.id,
+          kind: 'co-open',
+          with: others.map((e) => ({ id: e.id, name: e.name || e.id })),
+        });
+      }
+    }
+  }
+
   return issues;
 }
 
@@ -379,5 +555,6 @@ module.exports = {
   CONTROLLER_ROLES, ELEMENT_TYPES, SELECTOR_KINDS, BRANCH_ROLES,
   elementIndex, controllerIndex, parentDuctIndex,
   collectorOf, selectorsOf, toolsOf, closedState, servoCommandAngle,
+  absoluteAngles, applyAbsoluteAngles,
   validateTopology, airflowIssues,
 };

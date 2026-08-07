@@ -1,6 +1,6 @@
 import { Injectable } from '@angular/core';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
-import { BehaviorSubject, Observable, Subject, firstValueFrom } from 'rxjs';
+import { BehaviorSubject, Observable, Subject, filter, firstValueFrom, take } from 'rxjs';
 import { HardwareProfileService } from './hardware-profile.service';
 import type { Topology } from '@topology';
 import type { TopologyStatus } from '@topology-device';
@@ -138,6 +138,16 @@ export class ApiService {
       // Retry after 3s (device might still be booting)
       setTimeout(() => this.init(), 3000);
     }
+  }
+
+  /**
+   * Resolves once the API key is in hand. init() runs on a microtask, so a component
+   * that fetches straight out of ngOnInit would otherwise race it and get a 401 —
+   * which reads as "no shop configured" rather than "not ready yet". Await this first.
+   */
+  whenReady(): Promise<void> {
+    if (this.ready$.value) return Promise.resolve();
+    return firstValueFrom(this.ready$.pipe(filter(Boolean), take(1))).then(() => undefined);
   }
 
   // ── WebSocket ─────────────────────────────────────────────────────────────────
@@ -360,6 +370,19 @@ export class ApiService {
   /** Sim/demo only: inject a tool's power reading to drive routing (real firmware senses plugs). */
   simTool(toolId: string, watts: number): Promise<TopologyStatus> {
     return this.post<TopologyStatus>('/api/v2/sim/tool', { toolId, watts });
+  }
+
+  /**
+   * Setup only: drive one servo directly so the user can watch the valve and capture
+   * where it lands. Rejects with 501 on a build without servo support, which the gate
+   * configurator surfaces rather than pretending the nudge worked.
+   */
+  jogServo(channel: number, angle: number): Promise<unknown> {
+    return this.post('/api/v2/servo/jog', { channel, angle });
+  }
+  /** De-energize a servo — the valve holds by friction/detent. */
+  detachServo(channel: number): Promise<unknown> {
+    return this.post('/api/v2/servo/jog', { channel, detach: true });
   }
 
   /**

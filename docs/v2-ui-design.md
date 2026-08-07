@@ -415,11 +415,18 @@ Retire the flat `device-model.js` once the v2 surfaces cover everything v1 did.
    collector) is a **permanent suction leak = an invalid saved config**, not a
    feature. It's fine transiently while editing, but a HARD BLOCK on save. Built:
    - `airflowIssues(topology)` in the shared model (`topology.js`) — returns the
-     ungated tools; reused by configurator/firmware/conformance. 6 model tests.
+     leaking tools; reused by configurator/firmware/conformance. 10 model tests.
+     Two kinds, because "is there a gate above me" is not the whole test:
+     `always-open` (no selector at all on the path) and `co-open` (routing TO this
+     tool leaves another one open too — two tools teed off ONE outlet of a sliding
+     gate or manifold, or one hung on the run that feeds another). `co-open` is
+     found by routing: set the selectors this tool needs, everything else closed,
+     and see what the collector can still reach.
    - Canvas Save runs it after `validateTopology`; if any leak, blocks with a
      red banner naming the outlets and offers **Cap them** — a bypass that inserts
      a closed ball valve above each leak, saves, and tells the user to wire a servo
-     or delete the tool.
+     or delete the tool. For a `co-open` group it caps every tool on the shared
+     outlet: gating one leg still leaves the other wide open when the gated tool runs.
    - Tool-tagging needs no always-open handling: it only ever loads a *saved*
      topology, which by definition can't leak.
    Also fixed here: a gate/manifold outlet's "+" now opens the full fitting menu —
@@ -520,6 +527,85 @@ Staged plan:
      a single stepper. Today only one stepper driver is wired (channel 0), so a shop
      with >1 linear selector is a provisioning/wiring task, not a code or model cap.
 4. Retire the flat path once v2 drives hardware.
+
+## Setup, part 3 — set up the gates (BUILT 2026-08-06)
+
+Ball valves and manifolds could be *placed* but never *configured*: `makeSelector` minted
+them with a hardcoded `referenceAngle`, and no screen could change it. This closes the
+`TODO.md` items "Need a way to configure an element" and "need to be able to tie elements
+to esp32's" for servo gates.
+
+**Route `/gates`** — the companion to `/tools`, same shape (fetch topology → walk a list →
+`putTopology`). Lists every ball valve and manifold with Configured / Needs setup, plus
+**Next unconfigured** so a fresh shop can be walked start to finish. The build canvas
+inspector opens the same sheet for one gate; both use `SelectorConfigComponent`, so the
+fields live in one place. Unconfigured gates carry an amber dot on the canvas glyph, and
+the Live view now refuses to run until every servo gate is calibrated (a third check
+beside `validateTopology` and `airflowIssues`), linking to `/gates` rather than `/build`.
+
+**The calibration widget** (`servo-calibration.component.ts`) is the substance. Three
+decisions shaped it:
+
+1. **No degrees, anywhere.** The angles are a schema implementation detail; the user has a
+   handle and their eyes. Steps are `≪ ‹ › ≫` — ±15° coarse, ±3° fine — each one discrete
+   `jogServo` call. No hold-to-repeat: nothing to get wrong over WiFi.
+2. **Ask which way it turns, once.** The servo is often mounted *behind* a wall-mounted
+   gate, so "right" turns the handle left. Rather than reason about mount orientation
+   (which varies gate to gate), phase 1 nudges once and asks "did the handle move right?".
+   A no stores `servo.reversed` and negates every arrow from then on. **An earlier plan to
+   invert the PWM at the driver was dropped**: calibration is empirical, so direction only
+   affects how the buttons *feel* — it was never a firmware concern.
+3. **Approach the hard stops, never touch them.** Copy says so explicitly, and a caption
+   warns within 10° of either rail. A clutchless servo stalls against a hard stop; the
+   dual-endstop sweep the slider gets has no servo analogue on purpose.
+
+Captured angles are absolute; `applyAbsoluteAngles` (in `topology.js`, unit-tested)
+folds them back into `referenceAngle` + per-state `offsetDeg` on save, and rejects a set
+that lands outside the servo's travel — that means the horn is clocked wrong. Phase 3
+lists each position with a **Test** button that drives back to it before you commit.
+
+**Firmware:** new `POST /api/v2/servo/jog` (`{channel, angle}` or `{channel, detach}`),
+following the existing pending-command pattern — handlers run on the AsyncTCP task and
+never touch hardware. Returns **501** on a build without `-DENABLE_SERVO`, which the UI
+surfaces instead of pretending the nudge worked. `ServoActuator`'s sweep is now
+proportional to travel (`SERVO_MS_PER_DEG`, clamped to `SERVO_SWEEP_MS`): the old fixed
+2s made a full throw and a 3° nudge take the same time, which is right for the throw and
+useless for jogging.
+
+### The sliding gate, ported (2026-08-07)
+
+`/gates` covers all three kinds now. `LinearCalibrationComponent` is the v2 port of the
+`/setup/manual` wizard's motion half — manifold profile → home → which end was that →
+reference sweep → place each outlet → review — writing `linear.calibration` and
+`states[].positionMm` into the topology instead of the flat v1 config. `makeSelector` no
+longer fabricates a calibration for new sliders, same reasoning as `referenceAngle`.
+
+Two deliberate differences from the servo widget:
+- **Millimetres are shown.** A distance along a rail is something a woodworker can measure
+  and sanity-check; a servo angle is an implementation detail of the linkage.
+- **The sweep does most of the work.** Outlets arrive pre-placed at the manifold pitch, so
+  the per-outlet step is a nudge-and-confirm rather than a from-scratch hunt.
+
+It drives the hardware over the **v1** motion endpoints (`/api/home`, `/api/calibrate`,
+`/api/jog`, `/api/setstop`) because there is no v2 equivalent and it doesn't need one: the
+schema allows ≤1 linear selector per controller and only the primary board has a stepper
+wired, so "the stepper" is unambiguous. A slider on a SECONDARY board would need real v2
+endpoints first. Capture writes the device's stop table too, which is what makes Test work
+and keeps the v1 status view in step with the topology.
+
+The odd-outlet Rockler case finally surfaces: the manifold step says plainly that N outlets
+won't line up and sends you back to the layout, rather than silently rounding.
+
+Canvas: gates now carry a **green check** when set up and an amber dot when not, and "Set up
+this gate" heads the tap menu. That last part matters — tapping a placed gate opens the
+convert menu, so the floating inspector's button was only ever reachable in the moment right
+after placing one.
+
+Also fixed along the way: `validateTopology` now rejects two servo gates sharing a PWM
+channel on one board (they'd move together — nothing caught it before), the canvas hands
+out the lowest *free* channel instead of a count (which collided after a delete), and
+every v2 view now awaits `api.whenReady()` before its first fetch — a 401 race made the
+build canvas silently replace a saved shop with a blank one.
 
 ## Open questions (for feedback)
 
