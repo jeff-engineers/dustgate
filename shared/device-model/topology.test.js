@@ -7,7 +7,7 @@
 
 'use strict';
 
-const { validateTopology, servoCommandAngle, airflowIssues,
+const { validateTopology, servoCommandAngle, airflowIssues, redundantSelectors,
         absoluteAngles, applyAbsoluteAngles } = require('./topology');
 const { computeRouting } = require('./routing');
 const { planTransition } = require('./sequencer');
@@ -488,6 +488,51 @@ const idxOf = (plan, sel) => plan.moves.findIndex((m) => m.selectorId === sel);
     back.ok && back.selector.servo.referenceAngle === 10
     && back.selector.servo.reversed === true
     && servoCommandAngle(back.selector, 'closed') === 100);
+}
+
+// ── redundant gates ─────────────────────────────────────────────────────────
+// A gate is redundant when the shop's airflow behaves identically without it.
+{
+  const brain = { id: 'c', role: 'primary', name: 'Brain', board: 'devkitc',
+                  link: { transport: 'wifi-ws', host: 'x.local' } };
+  const valve = (id, name, role) => ({
+    id, type: 'selector', name, controllerId: 'c', kind: 'servoGate',
+    states: [{ id: id + '_shut', isClosed: true, offsetDeg: 0 },
+             { id: id + '_open', isClosed: false, offsetDeg: 90 }],
+    branches: [{ id: id + '_b', opensState: id + '_open', role }],
+  });
+
+  // cyclone → bv1 → bv2 → drill. Either valve alone would isolate the drill, so
+  // exactly one is redundant — and it must be the one added last.
+  const series = {
+    schemaVersion: 1, name: 'Series', controllers: [brain],
+    elements: [{ id: 'dc', type: 'collector', name: 'Cyclone' },
+               valve('bv1', 'Ball valve', 'feed'), valve('bv2', 'Ball valve', 'tool'),
+               { id: 'drill', type: 'tool', name: 'Drill press' }],
+    ducts: [{ child: 'bv1', parent: 'dc' },
+            { child: 'bv2', parent: 'bv1', parentBranch: 'bv1_b' },
+            { child: 'drill', parent: 'bv2', parentBranch: 'bv2_b' }],
+  };
+  check('redundant: series fixture is a valid doc', validateTopology(series).ok);
+  const red = redundantSelectors(series).map((r) => r.id);
+  eq('redundant: exactly one of a series pair', red.length, 1);
+  eq('redundant: the one added last is flagged', red[0], 'bv2');
+
+  // The survivor is load bearing: with one gate left, nothing is redundant.
+  const lone = clone(series);
+  lone.elements = lone.elements.filter((e) => e.id !== 'bv2');
+  lone.ducts = lone.ducts.filter((d) => d.child !== 'bv2');
+  lone.ducts.find((d) => d.child === 'drill').parent = 'bv1';
+  lone.ducts.find((d) => d.child === 'drill').parentBranch = 'bv1_b';
+  lone.elements.find((e) => e.id === 'bv1').branches[0].role = 'tool';
+  check('redundant: lone fixture is valid', validateTopology(lone).ok);
+  eq('redundant: a lone gate before one tool is kept', redundantSelectors(lone).length, 0);
+
+  // A real selector choosing between tools is never redundant.
+  eq('redundant: independent gates are kept', redundantSelectors(clone(twoGates)).length, 0);
+
+  // It is advisory only — it must not leak into airflowIssues.
+  eq('redundant: series has no airflow issues', airflowIssues(series).length, 0);
 }
 
 // ── report ──────────────────────────────────────────────────────────────────

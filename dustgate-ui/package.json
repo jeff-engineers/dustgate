@@ -5,6 +5,7 @@
     "start": "ng serve --configuration development",
     "start:mock": "ng serve --configuration development --proxy-config proxy.conf.json",
     "build": "ng build --configuration production",
+    "test:routing": "tsc src/app/build/routing/*.ts --outDir .routing-test --module commonjs --target es2022 --moduleResolution node --strict --skipLibCheck && node .routing-test/router.spec.js",
     "deploy": "bash deploy.sh"
   },
   "dependencies": {

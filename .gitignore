@@ -67,3 +67,6 @@ tools/.env
 # Per-machine USB serial→role pins for dev.sh (see "dev.sh ports --pin").
 # Board serials are specific to one bench; never shared.
 .dustgate-ports
+
+# routing conformance spec build output
+dustgate-ui/.routing-test/

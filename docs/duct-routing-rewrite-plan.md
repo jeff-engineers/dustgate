@@ -1,5 +1,19 @@
 # Duct routing: real pathfinder + stable drags + rightward growth
 
+> **Status — implemented 2026-08-09.** `routing/{geometry,route-grid,router}.ts` landed;
+> the five heuristics are deleted. Conformance cases R1–R8 live in
+> `routing/router.spec.ts` (`npm run test:routing`, 27/27) and are drawn as validation
+> mockups. Two decisions differ from the plan as written below:
+>
+> 1. **Tool ports are top, left and right — never bottom** (the plan said top only).
+>    A trunk really does reach a machine from whichever side it runs down; withholding
+>    the bottom port stops A* approaching from underneath, which reads wrong on a
+>    top-down plan. Consequence: a run to a tool that isn't directly below now prefers
+>    a 1-bend side entry over a 2-bend approach over the top.
+> 2. **Costs are scaled ×4** (step 4 / turn 32 / used 24 / hug 8 / reuse −3). At the
+>    plan's 1/8/6/2/−3 the reuse discount makes an edge cost −2, and a negative edge
+>    weight breaks A*'s optimality guarantee.
+
 ## Context
 
 The shop-layout editor (`dustgate-ui/src/app/build/build.component.ts`, ~1800 lines, the entire

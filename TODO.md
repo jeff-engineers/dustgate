@@ -153,6 +153,24 @@ The whole star topology landed this session. Read
 
 ## What's actually left
 
+### 0. Optional / someday — suggest better plumbing, don't impose it
+Redundant-gate flagging shipped 2026-08-09 (`redundantSelectors()` in
+`shared/device-model/topology.js`, surfaced as an amber "redundant" sublabel plus a
+guide-bar offer to delete). The natural follow-on is the *positive* version: suggest a
+cheaper arrangement rather than only naming dead weight.
+
+The motivating case: a branched system running an individual ball valve to every tool,
+where one manifold alternating between two legs would do the same job with fewer
+actuators, less wiring and one less thing to calibrate.
+
+Constraints if this gets picked up:
+- **Suggestion only, never automatic.** Real shops have ceiling joists, benches and
+  existing pipe runs the model knows nothing about. A layout that's worse on paper may
+  be the only one that physically fits.
+- Reuse the redundancy machinery's shape: derive it from the doc, never store it, and
+  keep it out of `airflowIssues` so nothing refuses to run over a style note.
+- Wants a way to dismiss a suggestion per-gate, or it becomes nagging.
+
 ### 1. Bench validation — do this before anything else
 Networking is now real: primary↔node link is up and green (2026-08-08). The rest
 below is still compile/host-test only. Expect bench work to generate its own

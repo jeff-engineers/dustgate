@@ -4,13 +4,19 @@ import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
 import { ApiService, Topology, TopologyStatus } from '../services/api.service';
-import { validateTopology, airflowIssues, type AirflowIssue } from '@topology';
+import { validateTopology, airflowIssues, redundantSelectors, type AirflowIssue } from '@topology';
 import { SelectorConfigComponent } from '../gates/selector-config.component';
 import { ElementOutletConfigComponent } from '../tools/element-outlet-config.component';
 import {
   AnyElement, ConfigurableSelector,
   isCalibrated, isLinearSelector, isServoSelector,
 } from '../gates/selector-types';
+import {
+  type Glyph, type Pt, type SceneNode,
+  CELL, GATE_PAD, PAD, TOOL_HALF, UNIT_H,
+  halfH as glyphHalfH, halfW as glyphHalfW, ptSegDist, segBoxHit,
+} from './routing/geometry';
+import { type RoutedDuct, type Scene, Router, sceneBounds } from './routing/router';
 
 // ── Layout model ──────────────────────────────────────────────────────────────
 // The canvas is pure presentation: each element gets a grid cell (col,row). The
@@ -25,13 +31,7 @@ import {
 // cell. Its tools LOCK into the cell directly below their outlet (drag the whole
 // unit; tools are select-only); the trunk to the collector enters from the LEFT.
 
-type Glyph = 'collector' | 'slidingGate' | 'ballvalve' | 'manifold' | 'junction' | 'tool';
 type SelKind = 'linear' | 'servoGate' | 'servoManifold';
-const CELL = 108;
-const PAD = 64;
-const UNIT_H = 46;
-const GATE_PAD = 0.42 * CELL;
-const TOOL_HALF = 24;
 
 interface Cell { col: number; row: number; }
 interface RawEl { [k: string]: unknown; }
@@ -44,6 +44,10 @@ interface NodeVM {
   /** Setup state of a gate: '' for anything that needs none (tools, the collector),
    *  'todo' until someone has measured it on the hardware, 'done' after. */
   setup: '' | 'todo' | 'done';
+  /** This gate isolates nothing the shop wouldn't isolate without it — advisory,
+   *  derived fresh on every mutation, so it clears itself the moment it stops
+   *  being true. See redundantSelectors() in shared/device-model/topology.js. */
+  redundant: boolean;
   dragX?: number; dragY?: number;
 }
 interface DuctVM { childId: string; live: boolean; open: boolean; }
@@ -102,6 +106,10 @@ const spanFor = (kind: MenuKind): number => kind === 'linear' ? 4 : kind === 'se
 
     .duct { stroke: var(--border-strong, #3a3a3a); stroke-width: 6; fill: none; stroke-linecap: round; stroke-linejoin: round; }
     .duct.live { stroke: var(--success); }
+    /* The knockout that makes a crossing legible: 5px of canvas either side of the
+       duct on top. It runs the whole length, so every duct sits in a thin clear
+       corridor through the dot grid — deliberate, and it costs nothing to draw. */
+    .duct-casing { stroke: var(--bg); stroke-width: 16; fill: none; stroke-linecap: round; stroke-linejoin: round; }
     /* Branch points: a subtle dot at each grid step on a duct; click to branch there. */
     .bdot { cursor: cell; }
     .bdot-dot { fill: var(--muted); opacity: 0.5; transition: r .1s, opacity .1s, fill .1s; }
@@ -120,21 +128,34 @@ const spanFor = (kind: MenuKind): number => kind === 'linear' ? 4 : kind === 'se
     .open-end .end-ring { fill: none; stroke: var(--accent); stroke-width: 1.5; opacity: 0.6; }
     .node { cursor: grab; }
     .node.dragging { cursor: grabbing; }
+    /* Live drop feedback: the target cell, and the ghost itself when it's refused. */
+    .target { fill: color-mix(in srgb, var(--accent) 10%, transparent); stroke: var(--accent);
+              stroke-width: 1.5; stroke-dasharray: 5 4; pointer-events: none; }
+    .target.bad { fill: color-mix(in srgb, var(--danger) 12%, transparent); stroke: var(--danger); }
+    .node.dragging.bad .body, .node.dragging.bad .unit { stroke: var(--danger); stroke-width: 2.5; }
+    .node.dragging.bad { opacity: 0.75; }
     .node .body, .node .unit { fill: var(--surface); stroke: var(--border-strong, #444); stroke-width: 1.5; }
     .node.sel .body, .node.sel .unit { stroke: var(--accent); stroke-width: 2.5; }
     .node.live .body, .node.live .unit { stroke: var(--success); }
     .glabel { fill: var(--text); font-size: 12.5px; text-anchor: middle; font-weight: 500; }
     .gsub   { fill: var(--muted); font-size: 10.5px; text-anchor: middle; }
+    .gsub.redundant { fill: var(--accent); opacity: 0.85; }
     /* The selected piece's name is edited WHERE IT IS DRAWN — a foreignObject input
        sitting exactly on top of its label, matching it in size and weight, so the
        text doesn't jump when it becomes editable. It replaced a text field in the
        floating inspector, which showed the same name twice: once on the node and
        again in a box above it, with no cue which one you were changing. */
-    .nameedit { position: fixed; z-index: 20; transform: translate(-50%, -50%);
-                box-sizing: border-box; background: var(--bg);
-                border: 1px solid var(--accent); border-radius: 7px; color: var(--text);
+    /* Absolutely positioned INSIDE the scrolling canvas, in board coordinates, so it
+       travels with the board. It used to be position:fixed at a screen point computed
+       from getScreenCTM() — which nothing recomputes on scroll, so the field drifted
+       off its glyph as soon as you panned. */
+    .nameedit { position: absolute; z-index: 20; transform: translate(-50%, -50%);
+                box-sizing: border-box; background: transparent; border: none;
+                border-radius: 0; color: var(--text); caret-color: var(--accent);
                 font-size: 12.5px; font-weight: 500; font-family: inherit; text-align: center;
-                padding: 4px 5px; outline: none; }
+                padding: 1px 2px 2px; outline: none; cursor: text; }
+    /* A name is editable, so it gets the I-beam rather than the body's grab hand. */
+    .glabel { cursor: text; }
     .stroke { stroke: var(--muted); } .node.live .stroke { stroke: var(--success); }
     .fillmuted { fill: var(--muted); } .node.live .fillmuted { fill: var(--success); }
     .puck { fill: var(--border-strong, #555); } .node.live .puck { fill: var(--success); }
@@ -210,7 +231,19 @@ const spanFor = (kind: MenuKind): number => kind === 'linear' ? 4 : kind === 'se
           </defs>
           <rect x="0" y="0" [attr.width]="vbW" [attr.height]="vbH" fill="url(#bdots)" (pointerdown)="deselect()"/>
 
-          <path *ngFor="let d of ducts" class="duct" [class.live]="d.live" [attr.d]="ductD(d.childId)"/>
+          <!-- The cell a drag is over. Red while the drop would be refused, so the
+               reason in the guide bar has something to point at. -->
+          <rect *ngIf="hoverCell" class="target" [class.bad]="!!dropBlocked"
+                [attr.x]="PAD + hoverCell.col * CELL - CELL / 2" [attr.y]="PAD + hoverCell.row * CELL - CELL / 2"
+                [attr.width]="CELL" [attr.height]="CELL" rx="6"/>
+
+          <!-- Each run is stroked twice: a fat casing in the canvas colour, then the
+               duct. Later ducts therefore punch a clean gap through earlier ones where
+               they cross, which is the whole crossing treatment — no hop geometry. -->
+          <g *ngFor="let d of ducts">
+            <path class="duct-casing" [attr.d]="ductD(d.childId)"/>
+            <path class="duct" [class.live]="d.live" [attr.d]="ductD(d.childId)"/>
+          </g>
           <path *ngFor="let d of openDucts()" class="open-stub" [attr.d]="openStubD(d.childId)"/>
           <g *ngFor="let bd of branchDots()" class="bdot" (pointerdown)="onBranchDotDown($event, bd)">
             <circle [attr.cx]="bd.x" [attr.cy]="bd.y" r="14" fill="transparent"/>
@@ -226,6 +259,7 @@ const spanFor = (kind: MenuKind): number => kind === 'linear' ? 4 : kind === 'se
 
           <g *ngFor="let n of nodes" class="node"
              [class.sel]="n.id === selectedId" [class.live]="n.live" [class.dragging]="n.id === dragId"
+             [class.bad]="n.id === dragId && !!dropBlocked"
              [attr.transform]="'translate(' + nx(n) + ',' + ny(n) + ')'" (pointerdown)="startDrag($event, n)">
             <ng-container [ngSwitch]="n.glyph">
               <g *ngSwitchCase="'collector'"><circle class="body" r="30"/><path class="stroke" fill="none" stroke-width="3" stroke-linecap="round" d="M0 -19 a19 19 0 1 0 6 2 l-6 17"/><circle class="fillmuted" r="3.5"/></g>
@@ -252,9 +286,18 @@ const spanFor = (kind: MenuKind): number => kind === 'linear' ? 4 : kind === 'se
             </ng-container>
             <!-- Hidden while selected — the editable field (below, outside the SVG)
                  takes its place, in the same spot. -->
-            <text *ngIf="n.glyph !== 'junction' && n.id !== selectedId"
+            <!-- Hidden only while the editable field is actually on top of it. The
+                 old test was "is this selected", but selection and the field are not
+                 the same thing — a piece stays selected behind its menu, where the
+                 field is suppressed, so the name vanished entirely for that beat. -->
+            <text *ngIf="n.glyph !== 'junction' && !isEditingName(n)"
                   class="glabel" [attr.x]="labelX(n)" [attr.y]="labelY(n)">{{ n.name }}</text>
             <text *ngIf="n.glyph === 'tool'" class="gsub" y="42">{{ toolAuto(n.id) ? 'auto' : 'manual' }}</text>
+            <!-- A gate that isolates nothing. Stated on the piece, in the same place
+                 a tool says auto/manual, because it's a property of the piece — not
+                 an error, so it never turns the guide bar red. -->
+            <text *ngIf="n.redundant" class="gsub redundant"
+                  [attr.x]="labelX(n)" [attr.y]="redundantY(n)">redundant</text>
             <!-- Setup state of a gate, so an unfinished shop reads at a glance rather
                  than only when the Live view refuses to run. -->
             <!-- Tap target for configuring this gate. The dot already SAID a gate
@@ -280,6 +323,16 @@ const spanFor = (kind: MenuKind): number => kind === 'linear' ? 4 : kind === 'se
             </g>
           </g>
         </svg>
+
+        <!-- The selected piece's name, edited exactly where it's drawn. A real input
+             rather than an SVG <foreignObject>: one inside a foreignObject takes focus
+             but never receives keystrokes here, so the field looked live and swallowed
+             everything typed into it. It lives inside the scrolling canvas and is
+             placed in BOARD coordinates, so it stays on its glyph when you pan. -->
+        <input *ngIf="namedPiece() as np" class="nameedit" placeholder="Name"
+               [style.left.px]="namePos().left" [style.top.px]="namePos().top" [style.width.px]="nameW(np)"
+               [ngModel]="np.name" (ngModelChange)="rename(np.id, $event)"
+               (keydown.enter)="blurName($event)"/>
       </div>
     </div>
 
@@ -295,15 +348,6 @@ const spanFor = (kind: MenuKind): number => kind === 'linear' ? 4 : kind === 'se
         <span class="note" *ngIf="o.note">{{ o.note }}</span>
       </button>
     </div>
-
-    <!-- The selected piece's name, edited exactly where it's drawn. An overlay in
-         client space rather than an SVG <foreignObject>: an input inside one takes
-         focus but never receives keystrokes here, so the field looked live and
-         swallowed everything typed into it. Same positioning trick as the inspector. -->
-    <input *ngIf="namedPiece() as np" class="nameedit" placeholder="Name"
-           [style.left]="namePos().left" [style.top]="namePos().top" [style.width.px]="nameW(np)"
-           [ngModel]="np.name" (ngModelChange)="rename(np.id, $event)"
-           (keydown.enter)="blurName($event)"/>
 
     <!-- Outlet count, anchored right above the selected unit (not a bottom bar).
          This is ALL the inspector is now: how many outlets a sliding gate has, which
@@ -365,12 +409,19 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   private lastTag: string | null = null;
   airflowErrors: AirflowIssue[] = [];
   vbW = 400; vbH = 300;
+  /** Solves every duct on the board, memoized on the scene — see routing/router.ts. */
+  private readonly router = new Router();
+  /** Why the cell under a drag won't take the piece, or '' while it will. Shown live
+   *  in the guidance bar so a refused drop is never a silent one. */
+  dropBlocked = '';
+  /** Snapped cell under the pointer mid-drag; drives the target-cell highlight. */
+  hoverCell: Cell | null = null;
   menu: { x: number; y: number; branch?: BDot; end?: string; convert?: string;
           addOutput?: { parentId: string; branchId?: string; cell: Cell } } | null = null;
   /** The one option list, resolved once when the menu opens (see openMenu). */
   menuOptions: MenuOption[] = [];
   menuTitle = '';
-  readonly CELL = CELL; readonly UNIT_H = UNIT_H; readonly GATE_PAD = GATE_PAD;
+  readonly CELL = CELL; readonly UNIT_H = UNIT_H; readonly GATE_PAD = GATE_PAD; readonly PAD = PAD;
 
   private icons: Record<string, SafeHtml> = {};
 
@@ -453,198 +504,67 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   outletXs(n: NodeVM): number[] { return Array.from({ length: n.span }, (_, i) => i * CELL); }
   isUnitChild(id: string): boolean { return this.outletOf.has(id); }
 
-  /** Ortho corner points for a duct — the base geometry BEFORE obstacle avoidance.
-   *  Drop-jog-drop so ducts enter node TOPS and leave node BOTTOMS. */
-  private baseDuctPoints(childId: string): { x: number; y: number }[] {
-    const child = this.byId.get(childId); if (!child) return [];
-    const o = this.outletOf.get(childId);
-    if (o) {  // hangs off a specific unit outlet
-      const unit = this.byId.get(o.unitId); if (!unit) return [];
-      const ox = this.nx(unit) + o.index * CELL, oy = this.ny(unit) + UNIT_H / 2 + 12;
-      const cxp = this.nx(child), cyTop = this.ny(child) - this.halfH(child);
-      if (Math.abs(cxp - ox) < 1) return [{ x: ox, y: oy }, { x: ox, y: cyTop }];
-      const jy = this.clearLaneY(ox, cxp, oy, cyTop, childId);
-      return [{ x: ox, y: oy }, { x: ox, y: jy }, { x: cxp, y: jy }, { x: cxp, y: cyTop }];
-    }
-    const pid = this.parentOf.get(childId); const parent = pid ? this.byId.get(pid) : undefined;
-    if (!parent) return [];
-    if (child.isUnit) {  // a unit feeds from the TOP, in line with its FIRST outlet —
-      // so a parent placed above outlet 0 drops straight in (no left-then-down jog).
-      const ix = this.nx(child), iy = this.ny(child) - UNIT_H / 2;
-      const px = this.nx(parent), pBot = this.ny(parent) + this.halfH(parent);
-      if (Math.abs(px - ix) < 1) return [{ x: ix, y: pBot }, { x: ix, y: iy }];
-      let jy = iy - 22;
-      if (jy < pBot + 12) jy = (pBot + iy) / 2;
-      return [{ x: px, y: pBot }, { x: px, y: jy }, { x: ix, y: jy }, { x: ix, y: iy }];
-    }
-    // A junction is a TEE on a run: the continuation drops straight through it, and a
-    // branch taps off PERPENDICULAR — leaves the tee horizontally, then turns down to
-    // its leg (never a parallel second vertical).
-    if (parent.glyph === 'junction') {
-      const jx = this.nx(parent), jy = this.ny(parent);
-      const cxj = this.nx(child), cTopj = this.ny(child) - this.halfH(child);
-      if (Math.abs(cxj - jx) < 1) return [{ x: jx, y: jy }, { x: jx, y: cTopj }];
-      return [{ x: jx, y: jy }, { x: cxj, y: jy }, { x: cxj, y: cTopj }];
-    }
-    const cx = this.nx(child), px = this.nx(parent);
-    const pBot = this.ny(parent) + this.halfH(parent), cTop = this.ny(child) - this.halfH(child);
-    if (Math.abs(cx - px) < 1) return [{ x: px, y: pBot }, { x: px, y: cTop }];   // straight drop
-    const jogY = this.clearLaneY(px, cx, pBot, cTop, childId);
-    return [{ x: px, y: pBot }, { x: px, y: jogY }, { x: cx, y: jogY }, { x: cx, y: cTop }];
-  }
-  /** Lane height (px below the source) for a jog. A MONOTONIC, injective function of
-   *  SIGNED column distance: every distinct target column gets its own lane, so two
-   *  runs off the same source — even ones heading opposite ways — never share a
-   *  horizontal (leftward runs jog shallow, rightward deep). Deterministic per duct. */
-  private laneOffset(dx: number): number {
-    const colDist = Math.max(-5, Math.min(5, Math.round(dx / CELL)));
-    return 14 + (colDist + 5) * 7;   // -5→14 … +5→84, strictly increasing in colDist
+  /** The scene the router solves: every glyph at its resolved position, every duct
+   *  with the endpoint it hangs off. Built fresh each call — it's cheap, and the
+   *  Router memoizes on a hash of it, so nothing re-solves unless something moved. */
+  private scene(): Scene {
+    const nodes: SceneNode[] = this.nodes.map(n => ({
+      id: n.id, glyph: n.glyph, isUnit: n.isUnit, span: n.span,
+      x: this.routeX(n), y: this.routeY(n),
+    }));
+    const ducts = this.ducts.map(d => ({
+      childId: d.childId,
+      parentId: this.parentOf.get(d.childId),
+      outlet: this.outletOf.get(d.childId),
+    }));
+    return { nodes, ducts, bounds: sceneBounds(nodes) };
   }
 
-  /**
-   * Pick the height for a duct's horizontal traverse: the first lane between the
-   * source and the target that crosses NO device.
-   *
-   * The natural lane is just under the source (laneOffset), which staggers siblings
-   * nicely and is nearly always clear. But when the target sits two or more rows
-   * down, that lane runs straight through whatever occupies the row between — the
-   * tools hanging off a manifold, typically — and the old code left it there for
-   * avoidDevices to skirt, which produced a run that lassoed its way around a tool
-   * box. So: if the near lane is blocked, traverse just ABOVE the target instead
-   * (i.e. below the obstructions), then scan the gap. Still a pure function of this
-   * duct's endpoints plus device boxes, so adding a sibling never reroutes it.
-   */
-  private clearLaneY(x0: number, x1: number, yFrom: number, yTo: number, childId: string): number {
-    const near = yFrom + this.laneOffset(x1 - x0);
-    const mid = (yFrom + yTo) / 2;
-    const fallback = near > yTo - 10 ? mid : near;
-    if (yTo - yFrom < 44) return fallback;                       // no room to be clever
-    const boxes = this.deviceBoxes(childId);
-    // The whole dogleg has to be clear, not just the horizontal: drop, traverse,
-    // drop. Checking only the middle leg is what left the last drop cutting through
-    // whatever sat directly above the target (a tool in the same column), which
-    // avoidDevices then lassoed around.
-    const clear = (y: number) => !boxes.some(b =>
-      this.segBoxHit({ x: x0, y: yFrom }, { x: x0, y }, b) ||
-      this.segBoxHit({ x: x0, y }, { x: x1, y }, b) ||
-      this.segBoxHit({ x: x1, y }, { x: x1, y: yTo }, b));
-    // Just above the target — i.e. BELOW anything in between — nudged by the same
-    // signed-column stagger so two runs arriving in one corridor don't coincide.
-    const low = yTo - 14 - (this.laneOffset(x1 - x0) - 14) / 5;
-    const candidates = [fallback, low];
-    for (let y = yTo - 24; y > yFrom + 20; y -= 16) candidates.push(y);   // search upward from the target
-    return candidates.find(y => y > yFrom && y < yTo && clear(y)) ?? fallback;
+  /** Where the router thinks a node is. A dragged glyph tracks the pointer visually,
+   *  but routes off the SNAPPED cell — so a run re-solves when the pointer crosses a
+   *  cell boundary, not on every pixel of travel. That alone is most of why dragging
+   *  used to degrade the further you went. */
+  private routeX(n: NodeVM): number {
+    return n.dragX == null ? PAD + n.col * CELL : PAD + Math.max(0, Math.round((n.dragX - PAD) / CELL)) * CELL;
+  }
+  private routeY(n: NodeVM): number {
+    return n.dragY == null ? PAD + n.row * CELL : PAD + Math.max(0, Math.round((n.dragY - PAD) / CELL)) * CELL;
   }
 
-  /** The route the whole app uses: base geometry, then detoured AROUND any device it
-   *  would run over (its own endpoints exempt). Everything — the drawn path, branch
-   *  dots, the hit target, and the device-crossing block — reads this, so they stay
-   *  consistent. Clear routes (the common case) pass straight through untouched. */
-  private ductPoints(childId: string): { x: number; y: number }[] {
-    return this.avoidDevices(this.baseDuctPoints(childId), childId);
+  /** Solved routes for the whole board. During a drag every duct NOT attached to the
+   *  dragged node is frozen at its committed path, so the rest of the picture holds
+   *  still while the pointer moves. */
+  private routes(): ReadonlyMap<string, RoutedDuct> {
+    return this.router.routes(this.scene(), this.frozenDucts());
+  }
+  private frozenDucts(): ReadonlySet<string> | undefined {
+    if (!this.dragId) return undefined;
+    const moving = this.dragId;
+    const frozen = new Set<string>();
+    for (const d of this.ducts) {
+      if (d.childId === moving || this.parentOf.get(d.childId) === moving || this.outletOf.get(d.childId)?.unitId === moving) continue;
+      frozen.add(d.childId);
+    }
+    return frozen;
   }
 
-  /** Axis-aligned obstacle boxes for the devices a duct should avoid (inflated for
-   *  clearance). The duct's own parent + child are exempt (they're its endpoints);
-   *  junctions are tiny dots, not obstacles. */
-  private deviceBoxes(childId: string): { x0: number; y0: number; x1: number; y1: number }[] {
-    const parentId = this.parentOf.get(childId), M = 15;
-    const out: { x0: number; y0: number; x1: number; y1: number }[] = [];
-    for (const n of this.nodes) {
-      if (n.id === childId || n.id === parentId || n.glyph === 'junction') continue;
-      let x0: number, x1: number;
-      if (n.isUnit) { x0 = this.nx(n) - GATE_PAD; x1 = this.nx(n) + (n.span - 1) * CELL + GATE_PAD; }
-      else { const hw = this.halfW(n); x0 = this.nx(n) - hw; x1 = this.nx(n) + hw; }
-      const hh = this.halfH(n);
-      out.push({ x0: x0 - M, y0: this.ny(n) - hh - M, x1: x1 + M, y1: this.ny(n) + hh + M });
-    }
-    return out;
-  }
-  private halfW(n: NodeVM): number {
-    if (n.isUnit) return (n.span - 1) * CELL / 2 + GATE_PAD;
-    switch (n.glyph) { case 'collector': return 30; case 'ballvalve': return 22; case 'junction': return 8; default: return 38; }
+  /** The route the whole app reads: the drawn path, branch dots, the hit target and
+   *  the device-crossing check all come through here, so they can't disagree. */
+  private ductPoints(childId: string): Pt[] {
+    return this.routes().get(childId)?.pts ?? [];
   }
 
-  /** Reroute an ortho polyline around device boxes: for each segment that runs through
-   *  a box, jog out past the nearer edge and back. Iterates so a detour that meets a
-   *  second device gets routed too; bails after a few passes if boxed in. */
-  private avoidDevices(pts: { x: number; y: number }[], childId: string): { x: number; y: number }[] {
-    if (pts.length < 2) return pts;
-    const boxes = this.deviceBoxes(childId);
-    if (!boxes.length) return pts;
-    let cur = pts;
-    for (let iter = 0; iter < 5; iter++) {
-      let hit = false;
-      const next: { x: number; y: number }[] = [cur[0]];
-      for (let i = 0; i < cur.length - 1; i++) {
-        const a = cur[i], b = cur[i + 1];
-        const box = this.firstHitBox(a, b, boxes);
-        if (!box) { next.push(b); continue; }
-        for (const p of this.detourSeg(a, b, box, boxes).slice(1)) next.push(p);
-        hit = true;
-      }
-      cur = this.simplifyPts(next);
-      if (!hit) break;
-    }
-    return cur;
+  /** True when a duct is boxed in and only has the straight-dogleg fallback to show. */
+  private ductBoxedIn(childId: string): boolean {
+    const r = this.routes().get(childId);
+    return !!r && !r.ok;
   }
-  private segBoxHit(a: { x: number; y: number }, b: { x: number; y: number }, box: { x0: number; y0: number; x1: number; y1: number }): boolean {
-    if (Math.abs(a.x - b.x) < 0.5) {
-      const x = a.x, lo = Math.min(a.y, b.y), hi = Math.max(a.y, b.y);
-      return x > box.x0 && x < box.x1 && hi > box.y0 && lo < box.y1;
-    }
-    const y = a.y, lo = Math.min(a.x, b.x), hi = Math.max(a.x, b.x);
-    return y > box.y0 && y < box.y1 && hi > box.x0 && lo < box.x1;
-  }
-  private firstHitBox(a: { x: number; y: number }, b: { x: number; y: number }, boxes: { x0: number; y0: number; x1: number; y1: number }[]) {
-    let best: { x0: number; y0: number; x1: number; y1: number } | null = null, bestD = Infinity;
-    for (const box of boxes) {
-      if (!this.segBoxHit(a, b, box)) continue;
-      const cx = (box.x0 + box.x1) / 2, cy = (box.y0 + box.y1) / 2;
-      const d = Math.hypot(cx - a.x, cy - a.y);
-      if (d < bestD) { bestD = d; best = box; }
-    }
-    return best;
-  }
-  /** Waypoints [a, …, b] that skirt `box` on the side with the most room — preferring
-   *  a side whose detour lane is clear of other devices and inside the canvas. */
-  private detourSeg(a: { x: number; y: number }, b: { x: number; y: number }, box: { x0: number; y0: number; x1: number; y1: number }, boxes: { x0: number; y0: number; x1: number; y1: number }[]): { x: number; y: number }[] {
-    if (Math.abs(a.x - b.x) < 0.5) {                       // vertical → jog left or right
-      const x = a.x, down = b.y > a.y;
-      const enter = down ? box.y0 : box.y1, exit = down ? box.y1 : box.y0;
-      const yLo = Math.min(enter, exit), yHi = Math.max(enter, exit);
-      const laneClear = (lx: number) => lx >= 4 && lx <= this.vbW - 4 &&
-        !boxes.some(o => o !== box && lx > o.x0 && lx < o.x1 && yHi > o.y0 && yLo < o.y1);
-      const leftX = box.x0 - 2, rightX = box.x1 + 2;
-      const roomier = box.x0 >= this.vbW - box.x1 ? leftX : rightX;   // more canvas room
-      const sideX = laneClear(roomier) ? roomier : laneClear(rightX) ? rightX : laneClear(leftX) ? leftX : roomier;
-      return [a, { x, y: enter }, { x: sideX, y: enter }, { x: sideX, y: exit }, { x, y: exit }, b];
-    }
-    const y = a.y, right = b.x > a.x;                       // horizontal → jog up or down
-    const enter = right ? box.x0 : box.x1, exit = right ? box.x1 : box.x0;
-    const xLo = Math.min(enter, exit), xHi = Math.max(enter, exit);
-    const laneClear = (ly: number) => ly >= 4 && ly <= this.vbH - 4 &&
-      !boxes.some(o => o !== box && ly > o.y0 && ly < o.y1 && xHi > o.x0 && xLo < o.x1);
-    const upY = box.y0 - 2, downY = box.y1 + 2;
-    const roomier = box.y0 >= this.vbH - box.y1 ? upY : downY;
-    const sideY = laneClear(roomier) ? roomier : laneClear(downY) ? downY : laneClear(upY) ? upY : roomier;
-    return [a, { x: enter, y }, { x: enter, y: sideY }, { x: exit, y: sideY }, { x: exit, y }, b];
-  }
-  /** Drop duplicate + collinear points so detours don't bloat the polyline. */
-  private simplifyPts(pts: { x: number; y: number }[]): { x: number; y: number }[] {
-    const dedup: { x: number; y: number }[] = [];
-    for (const p of pts) {
-      const last = dedup[dedup.length - 1];
-      if (last && Math.abs(last.x - p.x) < 0.5 && Math.abs(last.y - p.y) < 0.5) continue;
-      dedup.push(p);
-    }
-    const res: { x: number; y: number }[] = [];
-    for (let i = 0; i < dedup.length; i++) {
-      const a = dedup[i - 1], b = dedup[i], c = dedup[i + 1];
-      if (a && c && ((Math.abs(a.x - b.x) < 0.5 && Math.abs(b.x - c.x) < 0.5) || (Math.abs(a.y - b.y) < 0.5 && Math.abs(b.y - c.y) < 0.5))) continue;
-      res.push(b);
-    }
-    return res;
+
+  private halfW(n: NodeVM): number { return glyphHalfW(this.sceneNode(n)); }
+  /** Approximate half-height of a glyph, for anchoring badges to its edges. */
+  private halfH(n: NodeVM): number { return glyphHalfH(this.sceneNode(n)); }
+  private sceneNode(n: NodeVM): SceneNode {
+    return { id: n.id, glyph: n.glyph, isUnit: n.isUnit, span: n.span, x: this.nx(n), y: this.ny(n) };
   }
 
   /** Plain ortho path (no hops) — used for the fat invisible hit target. */
@@ -653,46 +573,29 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     return 'M ' + p.map(pt => `${pt.x} ${pt.y}`).join(' L ');
   }
 
-  /** Visible path with ROUNDED corners + crossover hops. Corners are arced (radius
-   *  CORNER_R) so two ducts whose corners land near the same point curve apart with a
-   *  gap instead of overlapping into an X. Where a horizontal segment crosses another
-   *  duct's vertical it bumps over it (electrical-diagram convention). */
+  /** Visible path, with corners arced (radius CORNER_R) so two ducts whose corners
+   *  land near the same point curve apart with a gap instead of overlapping into an X.
+   *
+   *  Crossings are NOT drawn here any more. The old version bumped a horizontal over
+   *  every vertical it met, which meant walking every other duct's route from inside
+   *  this one — O(n²) per frame — for a 5px arc that read as a wobble on a 6px line.
+   *  A crossing is now a gap punched by the casing stroke (see .duct-casing), which
+   *  needs no geometry at all. */
   ductD(childId: string): string {
     const pts = this.ductPoints(childId); if (!pts.length) return '';
     if (pts.length === 1) return `M ${pts[0].x} ${pts[0].y}`;
-    const CORNER_R = 12, HOP_R = 5;
-    // vertical segments of OTHER ducts (for hops)
-    const verts: { x: number; y1: number; y2: number }[] = [];
-    for (const dd of this.ducts) {
-      if (dd.childId === childId) continue;
-      const op = this.ductPoints(dd.childId);
-      for (let i = 0; i < op.length - 1; i++)
-        if (Math.abs(op[i].x - op[i + 1].x) < 0.5)
-          verts.push({ x: op[i].x, y1: Math.min(op[i].y, op[i + 1].y), y2: Math.max(op[i].y, op[i + 1].y) });
-    }
-    const dist = (p: { x: number; y: number }, q: { x: number; y: number }) => Math.hypot(q.x - p.x, q.y - p.y);
-    const toward = (from: { x: number; y: number }, to: { x: number; y: number }, r: number) => {
+    const CORNER_R = 12;
+    const dist = (p: Pt, q: Pt) => Math.hypot(q.x - p.x, q.y - p.y);
+    const toward = (from: Pt, to: Pt, r: number) => {
       const L = dist(from, to) || 1; return { x: from.x + (to.x - from.x) / L * r, y: from.y + (to.y - from.y) / L * r };
-    };
-    // straight run a→b; a horizontal one bumps over any crossed verticals
-    const run = (a: { x: number; y: number }, b: { x: number; y: number }): string => {
-      if (Math.abs(a.y - b.y) >= 0.5) return ` L ${b.x} ${b.y}`;   // vertical → straight
-      const y = a.y, dir = b.x > a.x ? 1 : -1; let s = '';
-      const xs = verts
-        .filter(v => v.x > Math.min(a.x, b.x) + HOP_R && v.x < Math.max(a.x, b.x) - HOP_R && y > v.y1 + 1 && y < v.y2 - 1)
-        .map(v => v.x).sort((m, n) => dir * (m - n));
-      for (const xc of xs) s += ` L ${xc - dir * HOP_R} ${y} A ${HOP_R} ${HOP_R} 0 0 ${dir > 0 ? 0 : 1} ${xc + dir * HOP_R} ${y}`;
-      return s + ` L ${b.x} ${b.y}`;
     };
     const n = pts.length;
     let d = `M ${pts[0].x} ${pts[0].y}`;
-    let start = pts[0];
     for (let i = 1; i < n; i++) {
-      if (i === n - 1) { d += run(start, pts[i]); break; }
+      if (i === n - 1) { d += ` L ${pts[i].x} ${pts[i].y}`; break; }
       const r = Math.min(CORNER_R, dist(pts[i - 1], pts[i]) / 2, dist(pts[i], pts[i + 1]) / 2);
       const before = toward(pts[i], pts[i - 1], r), after = toward(pts[i], pts[i + 1], r);
-      d += run(start, before) + ` Q ${pts[i].x} ${pts[i].y} ${after.x} ${after.y}`;
-      start = after;
+      d += ` L ${before.x} ${before.y} Q ${pts[i].x} ${pts[i].y} ${after.x} ${after.y}`;
     }
     return d;
   }
@@ -708,18 +611,6 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     const len = Math.hypot(dx, dy) || 1;
     const stub = Math.min(30, len);
     return `M ${end.x - (dx / len) * stub} ${end.y - (dy / len) * stub} L ${end.x} ${end.y}`;
-  }
-
-  /** Approximate half-height of a glyph, for anchoring ducts to top/bottom edges. */
-  private halfH(n: NodeVM): number {
-    if (n.isUnit) return UNIT_H / 2;
-    switch (n.glyph) {
-      case 'collector': return 30;
-      case 'ballvalve': return 22;
-      case 'junction':  return 8;
-      case 'tool':      return TOOL_HALF;
-      default:          return TOOL_HALF;
-    }
   }
 
   /** Top-right corner of the glyph, in the node's own (translated) coordinates. */
@@ -739,6 +630,9 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   labelX(n: NodeVM): number { return n.isUnit ? (n.span - 1) * CELL / 2 : 0; }
+  /** Below the glyph AND below its add-dot, which sits at halfH + 18 — the two used
+   *  to land on top of each other on a ball valve. */
+  redundantY(n: NodeVM): number { return this.halfH(n) + 34; }
   labelY(n: NodeVM): number { return n.glyph === 'tool' ? 4 : (n.isUnit ? -UNIT_H / 2 - 9 : -34); }
   toolAuto(id: string): boolean { return !!(this.elem(id)?.['sensor'] as RawEl | undefined)?.['outlet']; }
   /** Does this piece have a plug paired — sensed for a tool, switched for the
@@ -792,6 +686,10 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     return n && n.glyph !== 'junction' && !this.menu ? n : null;
   }
 
+  /** Is the editable field currently sitting on this piece's label? The drawn label
+   *  hides exactly when this is true, so the two can never both be absent. */
+  isEditingName(n: NodeVM): boolean { return this.namedPiece()?.id === n.id; }
+
   /** Width of the in-place name field, sized to the piece it sits on. */
   nameW(n: NodeVM): number {
     if (n.glyph === 'tool') return 74;      // just inside the 76-wide body
@@ -801,15 +699,13 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   /** Client-space centre of the selected piece's LABEL, so the editable field lands
    *  on the text it replaces rather than near it. The glyph's own y is the text
    *  baseline; back off ~4px to get its visual middle. */
-  namePos(): { left: string; top: string } {
-    const n = this.namedPiece(); const svg = this.svgRef?.nativeElement;
-    const m = svg?.getScreenCTM();
-    if (!n || !svg || !m) return { left: '-9999px', top: '-9999px' };
-    const pt = svg.createSVGPoint();
-    pt.x = this.nx(n) + this.labelX(n);
-    pt.y = this.ny(n) + this.labelY(n) - 4;
-    const s = pt.matrixTransform(m);
-    return { left: `${s.x}px`, top: `${s.y}px` };
+  /** Where the name field sits, in BOARD pixels — the same coordinate space the SVG
+   *  is drawn in, since it renders 1:1 at vbW x vbH inside the scrolling wrapper.
+   *  Deliberately not screen coordinates: those go stale the moment the user pans. */
+  namePos(): { left: number; top: number } {
+    const n = this.namedPiece();
+    if (!n) return { left: -9999, top: -9999 };
+    return { left: this.nx(n) + this.labelX(n), top: this.ny(n) + this.labelY(n) - 4 };
   }
 
   /** Enter commits by leaving the field; the value is already saved per keystroke. */
@@ -825,11 +721,10 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   onSetupDot(evt: PointerEvent, n: NodeVM): void {
     evt.preventDefault(); evt.stopPropagation();
     this.selectedId = n.id;
-    this.closeMenu();
-    // The badge means "finish this piece", and what's unfinished depends on what
-    // it is: a gate needs calibrating, a tool or the collector needs its plug.
-    if (n.glyph === 'tool' || n.glyph === 'collector') this.configureOutlet(n.id);
-    else this.configure(n.id);
+    // The badge is now the handle for the whole piece, not just its setup: it opens
+    // the same menu the body used to, which already carried setup alongside the
+    // conversions. That leaves the body free to mean "rename me".
+    this.openMenu(evt.clientX, evt.clientY, { convert: n.id });
   }
 
   configure(id: string): void {
@@ -960,6 +855,13 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     const n = this.byId.get(this.dragId ?? ''); if (!n) return;
     const pt = this.toSvg(evt);
     n.dragX = pt.x - this.grab.dx; n.dragY = pt.y - this.grab.dy;
+    // Validity is re-checked only when the pointer crosses into a new cell — the
+    // check walks every duct, and the answer can't change inside one cell anyway.
+    const col = Math.max(0, Math.round((n.dragX - PAD) / CELL));
+    const row = Math.max(0, Math.round((n.dragY - PAD) / CELL));
+    if (col === this.hoverCell?.col && row === this.hoverCell?.row) return;
+    this.hoverCell = { col, row };
+    this.dropBlocked = (col === n.col && row === n.row) ? '' : this.placeBlockedBy(n, col, row);
   }
   private onUp(evt: PointerEvent): void {
     const n = this.byId.get(this.dragId ?? '');
@@ -976,14 +878,13 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       // A tap (no drag) on a run end — open or capped — opens its menu: what goes
       // here, plus cap/reopen/delete. Ends carry no inspector or (−) of their own.
       this.openMenu(evt.clientX, evt.clientY, { end: n.id });
-    } else if (n && (this.isGate(n) || n.glyph === 'tool' || n.glyph === 'collector')) {
-      // A tap on any placed piece opens the same small menu. For a gate that's the
-      // other gate kinds; for a tool or the collector there's nothing to convert
-      // to, so it's just their plug — but it's the same gesture in the same place,
-      // which is the point.
-      this.openMenu(evt.clientX, evt.clientY, { convert: n.id });
     }
-    this.dragId = null; this.detachDrag();
+    // A tap on the body of a piece now does one thing: select it, which puts the
+    // editable name on its label. What the piece IS — its kind, its setup, its plug —
+    // moved to the badge, because tapping the name to rename it and tapping it to
+    // open a menu were the same gesture, and the menu won.
+    this.dragId = null; this.hoverCell = null; this.dropBlocked = '';
+    this.detachDrag();
   }
   private detachDrag(): void {
     window.removeEventListener('pointermove', this.moveH);
@@ -997,22 +898,49 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   private canPlace(n: NodeVM, col: number, row: number): boolean {
-    const occ = this.occupiedExcept(new Set([n.id]));
+    return this.placeBlockedBy(n, col, row) === '';
+  }
+
+  /** Why `n` can't stand at (col,row) — '' when it can. The wording is what the user
+   *  sees in the guidance bar mid-drag, so it names the thing in the way, not the
+   *  predicate that failed. */
+  private placeBlockedBy(n: NodeVM, col: number, row: number): string {
+    const occ = new Map<string, NodeVM>();
+    for (const m of this.nodes) {
+      if (m.id === n.id) continue;
+      if (m.isUnit) for (let i = 0; i < m.span; i++) occ.set((m.col + i) + ',' + m.row, m);
+      else occ.set(m.col + ',' + m.row, m);
+    }
     const cells: Cell[] = n.isUnit ? Array.from({ length: n.span }, (_, i) => ({ col: col + i, row })) : [{ col, row }];
-    if (cells.some(c => occ.has(c.col + ',' + c.row))) return false;
+    const hit = cells.map(c => occ.get(c.col + ',' + c.row)).find(m => m);
+    if (hit) {
+      return n.isUnit
+        ? `${this.pieceLabel(n)} needs ${n.span} free cells in a row — ${hit.name} is in the way.`
+        : `${hit.name} is already in that cell.`;
+    }
     // No duct may cross a device. Test at the CANDIDATE position (so the moved node's
     // own ducts reroute), then require every device to be clear of every foreign duct —
     // this catches both "device lands on a duct" and "moved duct now runs through
     // another device". Restore position afterwards.
     const sc = n.col, sr = n.row, dx = n.dragX, dy = n.dragY;
     n.col = col; n.row = row; n.dragX = undefined; n.dragY = undefined;
-    let ok = true;
+    let blocker: NodeVM | null = null;
+    let boxedIn = false;
     for (const m of this.nodes) {
       if (m.glyph === 'junction' || m.glyph === 'collector') continue;   // devices only
-      if (this.deviceCrossed(m)) { ok = false; break; }
+      if (this.deviceCrossed(m)) { blocker = m; break; }
     }
+    if (!blocker) boxedIn = this.ducts.some(d => this.ductBoxedIn(d.childId));
     n.col = sc; n.row = sr; n.dragX = dx; n.dragY = dy;
-    return ok;
+    this.router.invalidate();
+    if (blocker) return `A duct would have to run through ${blocker.name} to get there.`;
+    if (boxedIn) return 'No room for the duct to reach it there.';
+    return '';
+  }
+
+  /** What to call a piece in a sentence. */
+  private pieceLabel(n: NodeVM): string {
+    return n.glyph === 'slidingGate' ? 'A sliding gate' : n.glyph === 'manifold' ? 'A manifold' : n.name;
   }
   /** True only if a foreign duct actually runs through m's glyph box (tight margin).
    *  Because routing already skirts devices with clearance, this fires only when a run
@@ -1025,7 +953,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     for (const d of this.ducts) {
       if (d.childId === m.id || this.parentOf.get(d.childId) === m.id) continue;
       const pts = this.ductPoints(d.childId);
-      for (let i = 0; i < pts.length - 1; i++) if (this.segBoxHit(pts[i], pts[i + 1], box)) return true;
+      for (let i = 0; i < pts.length - 1; i++) if (segBoxHit(pts[i], pts[i + 1], box)) return true;
     }
     return false;
   }
@@ -1037,17 +965,10 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       if (d.childId === selfId || this.parentOf.get(d.childId) === selfId) continue;
       const pts = this.ductPoints(d.childId);
       for (let i = 0; i < pts.length - 1; i++)
-        if (this.ptSegDist(cx, cy, pts[i], pts[i + 1]) < thresh) return true;
+        if (ptSegDist(cx, cy, pts[i], pts[i + 1]) < thresh) return true;
     }
     return false;
   }
-  private ptSegDist(px: number, py: number, a: { x: number; y: number }, b: { x: number; y: number }): number {
-    const dx = b.x - a.x, dy = b.y - a.y, L2 = dx * dx + dy * dy;
-    let t = L2 ? ((px - a.x) * dx + (py - a.y) * dy) / L2 : 0;
-    t = Math.max(0, Math.min(1, t));
-    return Math.hypot(px - (a.x + t * dx), py - (a.y + t * dy));
-  }
-
   // ── the one context menu ──────────────────────────────────────────────────────
   /** Open the context menu at a click point and resolve its options ONCE, so the
    *  room/validity checks (which walk every duct) don't re-run on every change
@@ -1107,7 +1028,10 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       else if (f.kind === 'tool' && mid) { enabled = false; note = 'ends a run'; }
       if (enabled) {
         const t = this.targetCells(f.kind, m);
-        if (!t || !t.cells.every(c => this.roomAt(c.col, c.row, t.span, t.selfId, t.occ))) { enabled = false; note = 'no room'; }
+        // An add-dot may point off the negative edge (growing left or up); that's
+        // legal — normalizeCells slides the board under it once the piece lands.
+        const neg = !!m.addOutput;
+        if (!t || !t.cells.every(c => this.roomAt(c.col, c.row, t.span, t.selfId, t.occ, neg))) { enabled = false; note = 'no room'; }
       }
       return { kind: f.kind, label: f.label, enabled, note };
     });
@@ -1254,7 +1178,20 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     for (const n of this.nodes) {
       const el = this.elem(n.id);
       if (n.glyph === 'collector') {
-        out.push({ x: this.nx(n) + this.halfH(n) + 16, y: this.ny(n), parentId: n.id, cell: { col: n.col + 1, row: n.row + 1 } });
+        // One ⊕ per free side, each aimed at a cell that is genuinely free. The old
+        // single dot was drawn to the right but committed to (col+1, row+1) — under
+        // the 4-wide main gate in the demo layout, so every menu item read "no room"
+        // while (1,0) sat empty beside it.
+        const hw = this.halfW(n), hh = this.halfH(n);
+        const sides: Array<{ dx: number; dy: number; x: number; y: number }> = [
+          { dx: 1, dy: 0, x: this.nx(n) + hw + 16, y: this.ny(n) },
+          { dx: -1, dy: 0, x: this.nx(n) - hw - 16, y: this.ny(n) },
+          { dx: 0, dy: 1, x: this.nx(n), y: this.ny(n) + hh + 16 },
+        ];
+        for (const s of sides) {
+          const cell = this.firstFreeCellToward(n, s.dx, s.dy, 1, n.id);
+          if (cell) out.push({ x: s.x, y: s.y, parentId: n.id, cell });
+        }
       } else if (el?.['type'] === 'selector') {
         const branches = (el['branches'] as Branch[]) ?? [];
         branches.forEach((b, i) => {
@@ -1307,8 +1244,37 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
 
   /** True if a `span`-wide fitting fits EXACTLY at (col,row): on the board, every
    *  cell of its footprint free, and no other run's duct passing through. */
-  private roomAt(col: number, row: number, span: number, selfId: string, occ = this.cellOccupied()): boolean {
-    if (col < 0 || row < 0) return false;
+  /** The first cell out from `n` in direction (dx,dy) with room for `span` — instead
+   *  of a fixed offset that might land on something. Scans a few cells so growth
+   *  past a wide neighbour still finds the gap beyond it. Cells off the negative
+   *  edge are allowed here; {@link normalizeCells} shifts the board afterwards. */
+  private firstFreeCellToward(n: NodeVM, dx: number, dy: number, span: number, selfId: string): Cell | null {
+    const occ = this.cellOccupied();
+    const start = dx > 0 ? n.span : 1;   // clear a unit's own width before scanning right
+    for (let i = start; i <= start + 5; i++) {
+      const cell = { col: n.col + dx * i, row: n.row + dy * i };
+      if (this.roomAt(cell.col, cell.row, span, selfId, occ, true)) return cell;
+    }
+    return null;
+  }
+
+  /** Shift every cell so the board starts at (0,0) again. Growth to the left or up
+   *  produces negative cells for one beat; rather than teach the whole editor about
+   *  a negative quadrant, the board slides back under them. Relative positions are
+   *  untouched, so nothing re-routes differently. */
+  private normalizeCells(): void {
+    if (!this.cells.size) return;
+    let minCol = Infinity, minRow = Infinity;
+    for (const c of this.cells.values()) { minCol = Math.min(minCol, c.col); minRow = Math.min(minRow, c.row); }
+    if (minCol === 0 && minRow === 0) return;
+    if (!isFinite(minCol) || !isFinite(minRow)) return;
+    for (const c of this.cells.values()) { c.col -= minCol; c.row -= minRow; }
+    for (const n of this.nodes) { n.col -= minCol; n.row -= minRow; }
+    this.router.invalidate();
+  }
+
+  private roomAt(col: number, row: number, span: number, selfId: string, occ = this.cellOccupied(), allowNegative = false): boolean {
+    if (!allowNegative && (col < 0 || row < 0)) return false;
     for (let i = 0; i < Math.max(1, span); i++) {
       if (occ.has((col + i) + ',' + row)) return false;
       if (this.cellOnDuct(col + i, row, selfId)) return false;
@@ -1362,8 +1328,15 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     const duct = this.ductsRaw().find(d => d['child'] === bd.childId); if (!duct) return;
     const parentId = duct['parent'] as string; const parentEl = this.elem(parentId);
     let junctionId: string;
-    if (parentEl && parentEl['type'] === 'junction') {
-      junctionId = parentId;                          // already a tee — just add a leg
+    // Reuse the upstream tee ONLY if it is standing on the cell you clicked. It used
+    // to be reused wherever it was, so branching off a long run that already had a
+    // wye anywhere upstream hung the new leg on that wye instead — the open end
+    // landed in the right cell, but fed from the wrong place, and the route drew
+    // itself from there. Harmless when a run had one dot; wrong now that every cell
+    // on a run is a branch point.
+    const parentCell = this.cells.get(parentId);
+    if (parentEl && parentEl['type'] === 'junction' && parentCell && parentCell.col === bd.col && parentCell.row === bd.row) {
+      junctionId = parentId;                          // already a tee right here — just add a leg
     } else {
       const j: RawEl = { id: this.newId('wye'), type: 'junction', name: 'Wye' };
       this.elems(this.topo).push(j);
@@ -1521,6 +1494,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   private afterMutation(selectId: string): void {
     if (!this.topo) return;
     this.dirty = true; this.saveError = ''; this.airflowErrors = []; this.saveNote = ''; this.wip = '';
+    this.normalizeCells();
     this.collapsePassThroughJunctions();
     this.buildGraph(this.topo); this.syncNodes();
     this.selectedId = selectId; this.refreshHandles();
@@ -1833,8 +1807,27 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
    * then onboarding (empty shop) → progress nudge.
    */
   get guide(): { text: string; kind: 'info' | 'warn' | 'ok'; cap?: boolean } {
+    // Mid-drag, the reason a drop won't work outranks everything: it's about the
+    // gesture in progress, and saying it before the finger lifts is the whole point.
+    if (this.dropBlocked) return { text: this.dropBlocked, kind: 'warn' };
     if (this.saveError) return { text: this.saveError, kind: 'warn' };
     if (this.wip) return { text: `Work in progress — saved here, but the controller won’t take it yet: ${this.wip}.`, kind: 'warn' };
+
+    // Below the real problems, above the general nudges: a redundant gate is a
+    // working shop with a part in it that isn't doing anything. Worth saying once,
+    // as an offer rather than a demand — select it and the (−) is right there.
+    const spare = this.nodes.filter(n => n.redundant);
+    if (spare.length && !this.liveLeaks().length) {
+      const names = spare.map(n => n.name).join(', ');
+      return {
+        // True whether it duplicates a gate downstream or simply has nothing under
+        // it yet — in both cases the shop shuts off exactly the same without it.
+        text: spare.length === 1
+          ? `${names} isn’t changing what the shop can shut off — you can delete it, or keep it as a manual shut-off.`
+          : `${spare.length} gates aren’t changing what the shop can shut off: ${names}. Any of them can go, or stay as manual shut-offs.`,
+        kind: 'info',
+      };
+    }
 
     const leaks = this.liveLeaks();
     if (leaks.length) {
@@ -2077,6 +2070,10 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   }
   private syncNodes(): void {
     if (!this.topo) return;
+    // Derived, never stored: a gate that stops being redundant stops being flagged
+    // on the very next mutation, with nothing to keep in sync.
+    let redundant = new Set<string>();
+    try { redundant = new Set(redundantSelectors(this.topo as Topology).map(r => r.id)); } catch { /* mid-edit doc */ }
     this.nodes = this.elems(this.topo).map(e => {
       const id = e['id'] as string, c = this.cells.get(id) ?? { col: 0, row: 0 };
       const branchCount = (e['branches'] as unknown[] | undefined)?.length ?? 0;
@@ -2093,7 +2090,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
         configurable ? (isCalibrated(el as unknown as ConfigurableSelector) ? 'done' : 'todo')
         : (glyph === 'tool' || glyph === 'collector') ? (this.hasPlugEl(e) ? 'done' : 'todo')
         : '';
-      return { id, glyph, name: (e['name'] as string) || id, col: c.col, row: c.row, branchCount, isUnit, span: isUnit ? Math.max(1, branchCount) : 1, live: false, openIndex: 0, setup };
+      return { id, glyph, name: (e['name'] as string) || id, col: c.col, row: c.row, branchCount, isUnit, span: isUnit ? Math.max(1, branchCount) : 1, live: false, openIndex: 0, setup, redundant: redundant.has(id) };
     });
     this.byId = new Map(this.nodes.map(n => [n.id, n]));
     this.recomputeExtent();

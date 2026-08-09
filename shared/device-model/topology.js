@@ -580,10 +580,104 @@ function airflowIssues(topology) {
   return issues;
 }
 
+// ── redundant gates ───────────────────────────────────────────────────────────
+//
+// A gate earns its place by isolating something. One that doesn't is just a part
+// to buy, wire, calibrate and eventually have fail — worth pointing out while the
+// shop is still on paper.
+//
+// The test is deliberately behavioural rather than structural: a gate is redundant
+// if the shop's airflow behaves IDENTICALLY without it. Pull it out, reconnect what
+// hung off it to whatever fed it, and ask airflowIssues the same question. Same
+// answer means the gate was never deciding anything.
+//
+// Structural shortcuts get this wrong. "Only one live branch" or "only one tool
+// below me" would flag the last gate before a single tool — but that gate is the
+// only thing stopping suction leaking to that tool while it sits idle. It is load
+// bearing, and the behavioural test keeps it. What the test does catch is a gate in
+// series with another that already isolates the same set: cyclone → A → B → tool
+// flags A and leaves B alone, which is the case worth telling someone about.
+//
+// Advisory only, and deliberately NOT part of airflowIssues: a redundant gate is a
+// valid, working shop, and nothing should refuse to run over it.
+
+/** The doc with `id` spliced out: its children reconnect to whatever fed it. */
+function withoutSelector(topology, id) {
+  const clone = JSON.parse(JSON.stringify(topology));
+  const feed = (clone.ducts || []).find((d) => d.child === id);
+  if (!feed) return null;                       // the collector's own feed; nothing to splice onto
+  clone.elements = (clone.elements || []).filter((e) => e.id !== id);
+  clone.ducts = (clone.ducts || []).filter((d) => d.child !== id);
+  const byId = new Map((clone.elements || []).map((e) => [e.id, e]));
+  const upstream = byId.get(feed.parent);
+  for (const d of clone.ducts) {
+    if (d.parent !== id) continue;
+    d.parent = feed.parent;                     // hang it where the gate hung
+    if (feed.parentBranch) d.parentBranch = feed.parentBranch;
+    else delete d.parentBranch;
+    // The branch we just reconnected to may have been marked 'feed' because it fed
+    // the gate we removed. What hangs there now decides the role, and getting this
+    // wrong makes the spliced doc invalid — which would silently exempt the gate
+    // from the test rather than judge it.
+    const branch = (upstream && upstream.branches || []).find((b) => b.id === d.parentBranch);
+    if (branch) branch.role = (byId.get(d.child) || {}).type === 'tool' ? 'tool' : 'feed';
+  }
+  return clone;
+}
+
+/** Stable, order-independent fingerprint of an airflowIssues result. */
+function issueSignature(issues) {
+  return issues
+    .map((i) => `${i.id}:${i.kind}:${(i.with || []).map((w) => w.id).sort().join('+')}`)
+    .sort()
+    .join('|');
+}
+
+/**
+ * Selectors whose removal would change nothing about which tools can be isolated.
+ * Recomputed from the doc every time — never stored — so a gate that stops being
+ * redundant (someone hangs a second branch off it) stops being flagged by itself.
+ */
+function redundantSelectors(topology) {
+  const out = [];
+  let work = topology;
+  // One at a time, re-asking after each. Two gates in series are individually
+  // removable — either one alone does the isolating — so testing them against the
+  // untouched doc flags BOTH, and following that advice would leave the tool
+  // ungated. Removing the one we flag before judging the next keeps the survivors
+  // honest.
+  //
+  // Of an interchangeable pair we flag the one added LAST. Element order is
+  // insertion order (the editor appends), so the newest gate is the one nearest the
+  // end of the array. That way the message lands on the piece someone just placed —
+  // "that didn't buy you anything" — rather than asking them to tear out a gate
+  // that's been in the shop since the beginning.
+  for (;;) {
+    const base = issueSignature(airflowIssues(work));
+    const candidates = (work.elements || [])
+      .map((el, i) => ({ el, i }))
+      .filter((c) => c.el.type === 'selector')
+      .sort((a, b) => b.i - a.i);
+
+    let found = null;
+    for (const { el } of candidates) {
+      const without = withoutSelector(work, el.id);
+      if (!without) continue;
+      // A splice that breaks the document tells us nothing about airflow — skip it
+      // rather than call the gate load-bearing on a technicality.
+      if (!validateTopology(without).ok) continue;
+      if (issueSignature(airflowIssues(without)) === base) { found = { el, without }; break; }
+    }
+    if (!found) return out;
+    out.push({ id: found.el.id, name: found.el.name || found.el.id });
+    work = found.without;
+  }
+}
+
 module.exports = {
   CONTROLLER_ROLES, ELEMENT_TYPES, SELECTOR_KINDS, BRANCH_ROLES,
   elementIndex, controllerIndex, parentDuctIndex,
   collectorOf, selectorsOf, toolsOf, closedState, servoCommandAngle,
   absoluteAngles, applyAbsoluteAngles,
-  validateTopology, airflowIssues,
+  validateTopology, airflowIssues, redundantSelectors,
 };

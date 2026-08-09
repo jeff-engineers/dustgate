@@ -27,3 +27,11 @@ export interface AirflowIssue {
 }
 /** Tools that can't be selected without leaking — ungated, or sharing an outlet. */
 export function airflowIssues(t: Topology): AirflowIssue[];
+
+export interface RedundantSelector { id: string; name: string; }
+/**
+ * Gates whose removal would change nothing about which tools can be isolated —
+ * typically one sitting in series behind another that already does the job.
+ * Advisory: a redundant gate is still a valid, working shop.
+ */
+export function redundantSelectors(t: Topology): RedundantSelector[];
