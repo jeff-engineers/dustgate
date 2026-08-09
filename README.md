@@ -122,6 +122,28 @@ cd ..
 pio run --target uploadfs
 ```
 
+### 5. (Optional) Flash a secondary node
+
+A shop with more gates than one board can drive spreads them across extra ESP32s.
+A **secondary node** is a dumb servo bank — up to four ball valves, no stepper, no
+web UI. The primary does all the routing and sends it already-resolved angles.
+
+```bash
+./dev.sh flash-node
+```
+
+This flashes the servo-only firmware and pushes WiFi credentials over the USB
+cable. The credentials have to go over serial: the primary reaches a node over
+WiFi, but a fresh node isn't on WiFi yet — so there's no network path until this
+step has happened.
+
+The **hostname it asks for must be unique per node**. It's what the node
+advertises over mDNS, what the Boards screen lists, and what gets written into
+the topology as `link.host`; two nodes sharing one collide on the network.
+
+Then, in the app: **Build → Boards → Scan for boards → Add**, and assign gates to
+it under **Gates**.
+
 ---
 
 ## First Boot
@@ -217,12 +239,19 @@ linear_actuator/         Firmware (Arduino / PlatformIO)
   config.h               All compile-time settings
   linear_actuator.ino    Main sketch + state machine
   api/                   HTTP REST + WebSocket server
-  control/               Control input modes (serial, outlet)
+  boards/                Per-board pin maps (devkitc, feather_s2, qtpy_c3)
+  control/               Control input modes + the v2 routing brain:
+                           TopologyRouter/Sequencer/Controller (pure, host-tested)
+                           ActuatorBus/NodeBus/TopologyRuntime (the dispatch seam)
+                           RemoteActuatorBus + NodeLink (multi-node transport)
   feedback/              Homing and position feedback
-  motor/                 TMC2209 stepper driver
+  motor/                 TMC2209 stepper driver + ServoActuator (ball valves)
+  node/                  SECONDARY node firmware — a separate ~200-line program
+                         (env: dustgate_node), not a flavour of the main sketch
   outlets/               Shelly outlet polling
+  test/                  Host (g++) conformance tests for the pure C++ control layer
   training/              Calibration storage
-  utils/                 WiFi provisioning, motion math
+  utils/                 WiFi provisioning, motion math, mDNS queries
   data/                  LittleFS filesystem image (generated — don't edit)
   WIRING.md              Wiring reference
 
@@ -234,6 +263,7 @@ shared/device-model/     Canonical device model + conformance suite — the sing
                          simulators (see shared/device-model/README.md)
 
 tools/                   Dev tools — mock-api.js (local firmware stand-in),
+                         mock-node.js (simulated secondary board),
                          provisioning utilities
 
 api/                     Vercel serverless function (proxies the AI setup
@@ -255,29 +285,44 @@ Device behaviour is defined once in a **canonical model**
 ([`shared/device-model/`](shared/device-model/README.md)) that drives both the
 local Node mock (`tools/mock-api.js`) and the in-browser demo
 (`dustgate-ui/.../demo-api.service.ts`), so the two can't drift. The C++ firmware
-can't share that JS, so it's kept in sync by an **executable contract**: 34
-scenarios in `conformance.js` that run over HTTP against any target.
+can't share that JS, so it's kept in sync by **executable contracts** that run
+over HTTP/WebSocket against any target, plus host (g++) tests for the pure C++
+control layer.
 
-[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs three jobs on every
-push / PR:
+Run everything locally from `tools/`:
 
-| Job | What it checks |
+| Command | What it checks |
 |---|---|
-| **conformance** | `tools/mock-api.js` against the contract (`npm run conformance:ci`) |
-| **ui-build** | Angular production build (also type-checks the `@device-model` wiring) |
-| **firmware** | `pio run` — ESP32 firmware compiles |
+| `npm run model:test` | pure JS model — topology, routing, sequencer, NodeLink frames |
+| `npm run firmware:test` | host C++ — router, controller, NodeBus/NodeLink |
+| `npm run conformance:ci` | v1 device API against the mock |
+| `npm run topology:conformance:ci` | v2 topology API against the mock |
+| `npm run nodelink:conformance:ci` | primary↔secondary protocol against `mock-node.js` |
 
-To certify **real hardware** against the same contract (DESTRUCTIVE — it homes,
-moves, and wipes calibration):
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs all of the above on
+every push / PR, across three jobs (**conformance**, **ui-build**, **firmware** —
+the last compiling all three targets including the servo-only node).
+
+To certify **real hardware** against the same contracts (the v1 suite is
+DESTRUCTIVE — it homes, moves, and wipes calibration):
 
 ```bash
 node shared/device-model/conformance.js http://<device-ip> <api-key> --force
+node shared/device-model/topology-conformance.js http://<device-ip>
+node shared/device-model/nodelink-conformance.js ws://<node>.local/nodelink
 ```
 
 ---
 
 ## Limitations & Known Issues
 
+- **Nothing in this project has been validated on hardware yet** — v1 included.
+  Everything is verified by compile, host test and simulation. See
+  [`TODO.md`](TODO.md) for the bench plan and the current backlog.
+- A **sliding gate on a secondary board** can't be calibrated: the calibration
+  flow drives the v1 motion endpoints, which only the primary exposes.
+- Routing **conflicts** are computed and reported by the firmware but not yet
+  surfaced in the Live view, so it can say a tool isn't pulling but not why.
 - HTTPS to the Anthropic API uses `setInsecure()` (no certificate validation). Acceptable for local network use; must be addressed before any cloud deployment.
 - The dust collector is controlled by a switchable Shelly plug (configured via `PUT /api/dustcollector` with `{"gen":2,"ip":"192.168.1.x"}`). It follows gate state automatically and can be toggled manually from the dashboard. A setup-wizard step to enter the plug's IP is not yet wired up (configure it via the API for now).
 - 240V tools cannot use Shelly plug-in outlets.

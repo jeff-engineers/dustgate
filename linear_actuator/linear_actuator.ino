@@ -311,6 +311,12 @@ static const int SERVO_PINS[SERVO_COUNT] = { SERVO_PWM_PIN_1, SERVO_PWM_PIN_2, S
 volatile bool g_eStopTriggered = false;
 bool          g_hardwareFault  = false; // set when begin() fails — not clearable without reset
 
+// Which begin() stage failed, latched for the life of the boot. The one-shot
+// [INIT] line at startup scrolls away long before anyone notices motion is
+// refused, so every refusal repeats it: "motor" is the TMC2209 UART handshake,
+// "endstops" the limit switches, "outlets" WiFi/Shelly.
+char          g_faultStages[40] = "";
+
 // =============================================================================
 // State machine
 // =============================================================================
@@ -343,6 +349,198 @@ bool          g_driverAsleep   = false;
 void issueMove(int stop);
 void startHoming();
 void setHomedLeft(bool homedLeft);
+
+// =============================================================================
+// Phase-2 topology runtime — the v2 brain wired to actual hardware.
+//
+// Until now the routing engine (TopologyRouter/Sequencer/Controller) existed
+// only for the host conformance tests: nothing in the sketch included it, and
+// GET /api/v2/status served an idle stub. This is the wiring that makes a
+// stored topology actually move valves.
+//
+//   SmartOutletControl (plug watts)
+//        → TopologyRuntime (brain + move queue)
+//            → NodeBus (which board drives this selector?)
+//                → LocalActuatorBus → g_servos[] / the rack
+//
+// NodeBus registers no remotes yet, so every selector resolves to the local bus.
+// Adding a secondary board later registers a RemoteActuatorBus and changes
+// nothing above this line — that's the whole point of the seam.
+// =============================================================================
+#include "control/LocalActuatorBus.h"
+#include "control/NodeBus.h"
+#include "control/RemoteActuatorBus.h"
+#include "control/TopologyRuntime.h"
+#include "control/NodeRegistry.h"
+#include "control/TopologyStore.h"
+
+// The rack, as LocalActuatorBus needs to see it. Deliberately does NOT reuse
+// issueMove()/STATE_MOVING: those are the v1 stop-index path, and a topology
+// linear state is an absolute mm position with no stop index behind it. The
+// always-on endstop over-travel supervisor at the top of loop() still protects
+// this move, and v1's stop-following is suppressed while a topology is loaded
+// (see STATE_IDLE / STATE_AT_STOP) so the two can never fight over the motor.
+class SketchLinearDrive : public topo::LinearDrive {
+public:
+    bool moveToMm(float mm) override {
+        if (g_hardwareFault || g_eStopTriggered) return false;
+        if (currentStop == -1) return false;      // not homed — mm has no datum yet
+        g_lastActivityMs = millis();
+        g_driverAsleep   = false;
+        motor.moveTo((long)(mm * stepsPerMM() * -HOME_DIRECTION));
+        return true;
+    }
+    bool isMoving() const override { return motor.isMoving(); }
+};
+
+static SketchLinearDrive      g_linearDrive;
+static topo::LocalActuatorBus g_localBus;
+static topo::NodeBus          g_nodeBus;
+static topo::TopologyRuntime  g_topoRuntime;
+static topo::TopologyStore    g_topoStoreSketch;   // read-only view; the API server owns writes
+
+// Secondary links. A fixed pool rather than dynamic allocation: each one owns a
+// FreeRTOS task and a socket, and the RFC caps the design at 2–4 nodes — so the
+// worst case is three secondaries plus this board.
+#define MAX_SECONDARY_NODES 3
+static topo::RemoteActuatorBus g_remoteBuses[MAX_SECONDARY_NODES];
+static int                     g_remoteCount = 0;
+
+// Which boards this primary is paired with. Persisted in NVS, independent of any
+// topology — see NodeRegistry.h.
+static topo::NodeRegistry      g_nodeRegistry;
+
+// Dial every PAIRED node. Driven by NodeRegistry (NVS), not by the topology —
+// see NodeRegistry.h for why the two were separated. Called once at boot and
+// again whenever the pairing set changes, NOT on topology adopt: a layout edit
+// must never tear down a healthy link.
+//
+// Keyed by host throughout. The link neither knows nor cares what a layout calls
+// this board; NodeBus maps controllerId → host when a topology is adopted.
+static void syncPairedNodes(const char* primaryId) {
+    g_nodeBus.clearRemotes();
+    for (int i = 0; i < g_remoteCount; i++) g_remoteBuses[i].end();
+    g_remoteCount = 0;
+
+    for (int i = 0; i < g_nodeRegistry.count() && g_remoteCount < MAX_SECONDARY_NODES; i++) {
+        const char* host = g_nodeRegistry.host(i);
+        if (!host || !*host) continue;
+        topo::RemoteActuatorBus* bus = &g_remoteBuses[g_remoteCount++];
+        bus->begin(host, primaryId, host, 80);
+        g_nodeBus.registerRemote(std::string(host), bus);
+    }
+    DEBUG_PRINT(F("[NODE] Paired nodes dialling: ")); DEBUG_PRINTLN(g_remoteCount);
+}
+
+// Map the topology's controllerIds onto paired hosts. This is ALL a layout now
+// contributes to off-board routing: which board drives which gate. A controller
+// naming a host nobody paired stays unresolved, and NodeBus reports its gates as
+// un-commandable rather than pretending a move landed.
+static void syncControllerAliases() {
+    g_nodeBus.clearAliases();
+    for (JsonObjectConst c : g_topoRuntime.topology()["controllers"].as<JsonArrayConst>()) {
+        if (!topo::_eq(c["role"], "secondary")) continue;
+        JsonObjectConst link = c["link"];
+        // Only wifi-ws is implemented. An esp-now node is valid in the schema but
+        // has no transport yet, so leave it unaliased.
+        if (!topo::_eq(link["transport"], "wifi-ws")) continue;
+        const char* id   = c["id"].as<const char*>();
+        const char* host = link["host"].as<const char*>();
+        if (!id || !host || !*host) continue;
+        g_nodeBus.setAlias(std::string(id), std::string(host));
+        if (!g_nodeRegistry.has(host)) {
+            // Worth saying out loud: the layout references a board that was never
+            // paired, so its gates won't move and the reason isn't visible on the
+            // canvas. Pair it from /boards.
+            DEBUG_PRINT(F("[NODE] Topology names an UNPAIRED board: ")); DEBUG_PRINTLN(host);
+        }
+    }
+}
+
+#ifdef CONTROL_SMART_OUTLET
+// Register the layout's plugs with the poller.
+//
+// The canvas writes plugs into the topology (`tool.sensor.outlet`,
+// `collector.control.outlet`), but SmartOutletControl only ever polls the slots
+// the v1 wizard configured — so a tool paired on the canvas was watched by
+// nothing, and the blower was still switched by whatever plug the old wizard
+// happened to have stored. Under a topology, the LAYOUT is the source of truth
+// for both; this is what makes that true on the device.
+//
+// Tool slots are RAM-only on purpose (configureOutlet doesn't touch NVS; only
+// saveSlot does). They're rebuilt from the layout on every adopt — including at
+// boot — so persisting them would just be a second copy to keep in sync. The
+// stopIndex is 0 throughout: it's v1's gate mapping, and v1's gate automation is
+// already inert while a topology is loaded.
+static void syncTopologyOutlets() {
+    int slot = 0;
+    for (JsonObjectConst e : g_topoRuntime.topology()["elements"].as<JsonArrayConst>()) {
+        if (!topo::_eq(e["type"], "tool")) continue;
+        JsonObjectConst o = e["sensor"]["outlet"];
+        const char* ip = o["ip"].as<const char*>();
+        if (!ip || !*ip) continue;                       // manual tool — nothing to poll
+        if (slot >= SMART_OUTLET_COUNT) {
+            DEBUG_PRINTLN(F("[Outlets] More paired tools than outlet slots — extras ignored."));
+            break;
+        }
+        control.configureOutlet(slot++, o["gen"] | 2, ip,
+                                e["name"] | e["id"] | "Tool",
+                                /*stopIndex=*/0,
+                                o["thresholdW"] | (float)OUTLET_DEFAULT_THRESHOLD_W,
+                                o["host"] | "");
+    }
+    // Drop any slot the layout no longer names, so an unpaired tool stops being
+    // polled without waiting for a reboot.
+    for (int i = slot; i < SMART_OUTLET_COUNT; i++) control.removeOutlet(i);
+    DEBUG_PRINT(F("[Outlets] Layout plugs registered: ")); DEBUG_PRINTLN(slot);
+
+    // The blower's own switch. Absent means "I start my collector by hand" —
+    // a legitimate shop, so leave whatever the v1 wizard stored alone rather than
+    // silently un-configuring a working plug.
+    for (JsonObjectConst e : g_topoRuntime.topology()["elements"].as<JsonArrayConst>()) {
+        if (!topo::_eq(e["type"], "collector")) continue;
+        JsonObjectConst o = e["control"]["outlet"];
+        const char* ip = o["ip"].as<const char*>();
+        if (ip && *ip) {
+            if (!control.dcIs(ip)) control.configureDustCollector(o["gen"] | 2, ip, o["host"] | "");
+        }
+        else DEBUG_PRINTLN(F("[Outlets] Layout names no collector plug — keeping the stored one."));
+        break;
+    }
+}
+#endif
+
+static void adoptStoredTopology() {
+    // NOTE: no topology no longer means no links. Pairing is persisted separately
+    // (NodeRegistry.h) precisely so a wiped or absent layout can't silently
+    // un-pair the shop — only the controllerId→host aliases go away, which is all
+    // a layout ever owned.
+    if (!g_topoStoreSketch.exists()) { g_nodeBus.clearAliases(); g_topoRuntime.clear(); return; }
+    String raw = g_topoStoreSketch.load();
+    std::string err;
+    if (g_topoRuntime.adopt(raw.c_str(), raw.length(), err)) {
+        // Learn which controller id this board answers to. Stage 1 is
+        // single-board, so that's the topology's primary by definition
+        // (validateMinimal guarantees exactly one). When secondary builds land,
+        // this becomes a build-flag/NVS decision rather than an assumption.
+        for (JsonObjectConst c : g_topoRuntime.topology()["controllers"].as<JsonArrayConst>()) {
+            if (topo::_eq(c["role"], "primary")) {
+                g_nodeBus.setLocal(&g_localBus, c["id"] | "primary");
+                break;
+            }
+        }
+        DEBUG_PRINT(F("[V2] Topology adopted — routing is live. This board = "));
+        DEBUG_PRINTLN(g_nodeBus.ownControllerId().c_str());
+        syncControllerAliases();
+#ifdef CONTROL_SMART_OUTLET
+        syncTopologyOutlets();
+#endif
+    } else {
+        DEBUG_PRINT(F("[V2] Topology REJECTED: ")); DEBUG_PRINTLN(err.c_str());
+        g_nodeBus.clearAliases();
+        g_topoRuntime.clear();
+    }
+}
 
 // =============================================================================
 // setup()
@@ -393,10 +591,23 @@ void setup() {
     pinMode(PIN_LED, OUTPUT);
     digitalWrite(PIN_LED, LOW);
 
+    // Report each stage separately: a bare "INIT FAILED" can't tell a TMC2209
+    // UART problem from an endstop or a WiFi/outlet one, which are three very
+    // different pieces of wiring to go stare at.
     bool ok = true;
-    ok &= motor.begin();
-    ok &= feedback.begin(&motor);
-    ok &= control.begin();
+    const bool okMotor    = motor.begin();
+    const bool okFeedback = feedback.begin(&motor);
+    const bool okControl  = control.begin();
+    ok = okMotor && okFeedback && okControl;
+    if (!ok) {
+        DEBUG_PRINT(F("[INIT] motor="));      Serial.print(okMotor    ? "ok" : "FAIL");
+        DEBUG_PRINT(F("  feedback="));        Serial.print(okFeedback ? "ok" : "FAIL");
+        DEBUG_PRINT(F("  control="));         Serial.println(okControl ? "ok" : "FAIL");
+        snprintf(g_faultStages, sizeof(g_faultStages), "%s%s%s",
+                 okMotor    ? "" : "motor(TMC2209 UART) ",
+                 okFeedback ? "" : "endstops ",
+                 okControl  ? "" : "outlets(WiFi/Shelly) ");
+    }
 #if defined(ENABLE_SERIAL_COMMANDS) && !defined(CONTROL_SERIAL_DEBUG)
     _serialCmds.begin();   // supplemental serial processor (non-fatal if begin() returns false)
 #endif
@@ -405,16 +616,26 @@ void setup() {
     DEBUG_PRINTLN(F("[SERVO] Bring-up ready — 'servo <1-4> <angle>' (external 5-6V rail, common GND)."));
 #endif
 
+    // A hardware fault disables MOTION, not the whole device. Do NOT return here:
+    // loop() unconditionally pumps the API server and the routing runtime, and
+    // returning early left HttpApiServer::_mutex uncreated — the first
+    // consumeXxx() then asserted inside xQueueSemaphoreTake and the board sat in
+    // a reboot loop, which is also what made the serial prompt unreachable for
+    // debugging the very wiring that faulted.
+    //
+    // Continuing is safe because every motion entry point already checks
+    // g_hardwareFault (issueMove(), SketchLinearDrive::moveToMm()). Servos are on
+    // an independent rail, so a servo-only topology still runs on a board whose
+    // stepper or endstops are broken.
     if (!ok) {
         DEBUG_PRINTLN(F("INIT FAILED — check wiring and config.h"));
         DEBUG_PRINTLN(F("Motion commands are disabled. Fix wiring and reset."));
         g_hardwareFault = true;
         currentState = STATE_ERROR;
-        return;
+    } else {
+        DEBUG_PRINTLN(F("Init OK. Type 'enable' to home and start."));
+        currentState = STATE_IDLE;
     }
-
-    DEBUG_PRINTLN(F("Init OK. Type 'enable' to home and start."));
-    currentState = STATE_IDLE;
 
 #ifdef ENABLE_HTTP_API
     if (!apiServer.begin()) {
@@ -424,6 +645,27 @@ void setup() {
         Serial.println(apiServer.apiKey());
     }
 #endif
+
+    // -- Phase-2 routing runtime -------------------------------------------
+    // After the API server, which mounts LittleFS (where the topology lives).
+#if defined(ENABLE_SERVO) && defined(SERVO_PWM_PIN_1)
+    for (int i = 0; i < SERVO_COUNT; i++) g_localBus.bindServo(i, &g_servos[i]);
+#endif
+    g_localBus.bindLinear(&g_linearDrive);
+    // This board answers to the topology's primary controller. Selectors with no
+    // controllerId (every single-board topology) also land here.
+    g_nodeBus.setLocal(&g_localBus, "primary");
+    g_topoRuntime.begin(&g_nodeBus);
+    g_topoStoreSketch.begin();
+
+    // Pairing FIRST, and independent of whether a layout exists: a paired board
+    // should come up linked (green at the node) on a primary that has never been
+    // told what the shop looks like. That ordering is the whole point of the
+    // split — see NodeRegistry.h.
+    g_nodeRegistry.begin();
+    syncPairedNodes(WiFiProvisioner::getHostname().c_str());
+
+    adoptStoredTopology();
 
     // Arm the task watchdog on the main loop LAST — after all the blocking init
     // above (WiFi connect can block up to ~12s, calibration load, etc.), so none
@@ -451,6 +693,44 @@ void loop() {
     // Effect any deferred servo auto-detach (move-then-detach; see ServoActuator).
     for (int i = 0; i < SERVO_COUNT; i++) g_servos[i].update();
 #endif
+
+    // -- Phase-2 routing runtime ------------------------------------------------
+    // Feed live tool power in, pump the move queue out. Issues at most one move
+    // per pass and never while one is in flight — that serialization IS the
+    // one-servo-at-a-time current budget (docs/v2-architecture-rfc.md §7).
+#ifdef ENABLE_HTTP_API
+    if (apiServer.consumeTopologyChanged()) adoptStoredTopology();
+#endif
+    if (g_topoRuntime.loaded()) {
+#ifdef CONTROL_SMART_OUTLET
+        // Map each configured plug to its tool and hand over its wattage. Reading
+        // getPowerW()/host()/ip() from this task is safe (see SmartOutlet.h);
+        // the routing decision itself stays entirely on the main loop.
+        for (int i = 0; i < control.outletCount(); i++) {
+            SmartOutlet* o = control.outlet(i);
+            if (!o) continue;
+            std::string toolId = g_topoRuntime.toolForOutlet(o->host(), o->ip());
+            if (!toolId.empty()) g_topoRuntime.setToolPower(toolId, o->getPowerW());
+        }
+#endif
+        // millis() is passed in rather than read inside: the runtime is pure
+        // (host-testable, no Arduino.h). It drives the collector coast-down.
+        g_topoRuntime.update(millis());
+
+#ifdef CONTROL_SMART_OUTLET
+        // Assert the collector through the manual-override path: while a topology
+        // is loaded, v2 owns the decision and v1's stop-based automation must not
+        // countermand it. Only pushed on change so it doesn't spam the plug.
+        {
+            static bool dcAsserted = false, dcHave = false;
+            bool want = g_topoRuntime.collectorOn();
+            if (!dcHave || want != dcAsserted) {
+                control.setDcManual(want);
+                dcAsserted = want; dcHave = true;
+            }
+        }
+#endif
+    }
 
     // -- Endstop over-travel safety — runs BEFORE motor.update() -----------------
     // Must run before the step, not after: motor.update() steps the carriage
@@ -557,7 +837,9 @@ void loop() {
 
     if (_SC.consumeHomeRequest() && currentState != STATE_HOMING) {
         if (g_hardwareFault) {
-            DEBUG_PRINTLN(F("[ERROR] Hardware fault — fix wiring and reset before homing."));
+            DEBUG_PRINT(F("[ERROR] Hardware fault at boot — failed: "));
+            Serial.print(g_faultStages);
+            DEBUG_PRINTLN(F(" — fix wiring and reset before homing."));
         } else {
             g_eStopTriggered = false;
             g_notHomedWarnShown = false;
@@ -698,7 +980,9 @@ void loop() {
 
     if (apiServer.consumeHomeRequest() && currentState != STATE_HOMING) {
         if (g_hardwareFault) {
-            DEBUG_PRINTLN(F("[API] Hardware fault — reset before homing."));
+            DEBUG_PRINT(F("[API] Hardware fault at boot — failed: "));
+            Serial.print(g_faultStages);
+            DEBUG_PRINTLN(F(" — fix wiring and reset before homing."));
         } else {
             g_eStopTriggered   = false;
             g_notHomedWarnShown = false;
@@ -936,18 +1220,180 @@ void loop() {
         }
     }
 
-#if defined(ENABLE_SERVO) && defined(SERVO_PWM_PIN_1)
+#ifdef ENABLE_HTTP_API
     // Servo jog (POST /api/v2/servo/jog) — the gate configurator driving one servo so
     // the user can watch the valve and capture where it lands. Channel is range-checked
     // in the handler; ServoActuator does the easing and the deferred detach.
+    //
+    // A jog carrying a controllerId belongs to a SECONDARY and is relayed over
+    // NodeLink. It must be dispatched by id, not by channel: the primary and every
+    // node number their channels 0-3, so a gate moved to a node kept jogging the
+    // primary's servo on the same channel — the configurator looked functional
+    // while the valve being calibrated never twitched.
     {
-        int jogCh = 0, jogAngle = 0; bool jogDetach = false;
-        if (apiServer.consumeServoJogRequest(jogCh, jogAngle, jogDetach)) {
-            if (jogDetach) g_servos[jogCh].detach();
-            else           g_servos[jogCh].moveTo(jogAngle);
+        int jogCh = 0, jogAngle = 0; bool jogDetach = false; String jogCtrl;
+        if (apiServer.consumeServoJogRequest(jogCh, jogAngle, jogDetach, jogCtrl)) {
+            bool remote = jogCtrl.length() > 0 &&
+                          jogCtrl != g_nodeBus.ownControllerId().c_str();
+            if (remote) {
+                topo::RemoteActuatorBus* bus = nullptr;
+                for (int i = 0; i < g_remoteCount; i++) {
+                    if (jogCtrl == g_remoteBuses[i].nodeId()) { bus = &g_remoteBuses[i]; break; }
+                }
+                if (!bus) {
+                    DEBUG_PRINT(F("[UI] Jog for unknown controller: ")); DEBUG_PRINTLN(jogCtrl);
+                } else if (jogDetach) {
+                    // No detach over the wire — the node de-energizes on its own once
+                    // the sweep settles (holdAtRest is false on a jog). Nothing to do.
+                } else if (!bus->jog(jogCh, jogAngle)) {
+                    DEBUG_PRINT(F("[UI] Jog refused by ")); DEBUG_PRINTLN(jogCtrl);
+                }
+            }
+#if defined(ENABLE_SERVO) && defined(SERVO_PWM_PIN_1)
+            else if (jogDetach) g_servos[jogCh].detach();
+            else                g_servos[jogCh].moveTo(jogAngle);
+#endif
         }
     }
 #endif
+
+    // -- Manual tool switch (POST /api/v2/tool) ----------------------------------
+    // The Live view's tool rows. Runs before the runtime is pumped below, so a tap
+    // is acted on in the same pass rather than the next one.
+#ifdef ENABLE_HTTP_API
+    {
+        String toolId; bool toolOn = false;
+        if (apiServer.consumeToolManualRequest(toolId, toolOn)) {
+            bool known = g_topoRuntime.setToolManual(std::string(toolId.c_str()), toolOn);
+            DEBUG_PRINT(F("[UI] Manual tool ")); DEBUG_PRINT(toolId);
+            if (!known) DEBUG_PRINTLN(F(" — NO SUCH TOOL in the layout (ignored)"));
+            else        DEBUG_PRINTLN(toolOn ? F(" ON") : F(" off"));
+        }
+    }
+#endif
+
+    // -- Pair / un-pair a secondary (POST /api/v2/nodes/pair) --------------------
+    // Registry write + redial, on the main loop because dialling spawns a task and
+    // tears sockets down. Independent of the topology by design (NodeRegistry.h).
+#ifdef ENABLE_HTTP_API
+    {
+        String pairHost, pairName; bool pairRemove = false;
+        if (apiServer.consumeNodePairRequest(pairHost, pairName, pairRemove)) {
+            bool changed = pairRemove ? g_nodeRegistry.remove(pairHost.c_str())
+                                      : g_nodeRegistry.add(pairHost.c_str(), pairName.c_str());
+            DEBUG_PRINT(pairRemove ? F("[NODE] Un-pair ") : F("[NODE] Pair "));
+            DEBUG_PRINT(pairHost);
+            DEBUG_PRINTLN(changed ? F(" — ok") : F(" — refused (full, or not paired)"));
+            if (changed) {
+                syncPairedNodes(WiFiProvisioner::getHostname().c_str());
+                // Re-resolve controllerId→host: a topology naming this board was
+                // unresolvable while it was unpaired, and should start working now.
+                if (g_topoRuntime.loaded()) syncControllerAliases();
+            }
+        }
+    }
+#endif
+
+    // -- Node discovery (GET /api/v2/nodes/discover) -----------------------------
+    // Runs here, on the main loop task, for the same reason outlet discovery does
+    // (see that block below): mDNS blocks, and holding an async request object
+    // across a blocking scan on a detached task risks a use-after-free.
+#ifdef ENABLE_HTTP_API
+    if (apiServer.consumeNodeDiscoverRequest()) {
+        DynamicJsonDocument doc(2048);
+        JsonArray out = doc.to<JsonArray>();
+
+        static const int kMaxNodeHits = 8;
+        MdnsHit hits[kMaxNodeHits];
+        // Two short attempts rather than one long one: mDNS is UDP and lossy, so
+        // a board only needs to answer once across the attempts to show up.
+        // Same shape as outlet discovery, which works reliably: more attempts,
+        // each a little longer, with a gap between them. Two 600ms shots was
+        // marginal against a node in WiFi power-save — it answers, but not always
+        // inside the window, which reads as "no boards found" with no way to tell
+        // that from "nothing out there".
+        for (int attempt = 0; attempt < 3; attempt++) {
+            int n = mdnsQueryDustgateTcp(800, hits, kMaxNodeHits);
+            DEBUG_PRINT(F("[NODES] attempt ")); DEBUG_PRINT(attempt + 1);
+            DEBUG_PRINT(F(": ")); DEBUG_PRINT(n); DEBUG_PRINTLN(F(" hit(s)"));
+            for (int i = 0; i < n; i++) {
+                // Logged individually: a hit REJECTED for its role looks exactly
+                // like no hit at all in the response, and that distinction is the
+                // whole difference between "node is silent" and "node answered but
+                // its TXT records didn't survive the query".
+                DEBUG_PRINT(F("  host=")); DEBUG_PRINT(hits[i].hostname);
+                DEBUG_PRINT(F(" ip=")); DEBUG_PRINT(hits[i].ip);
+                DEBUG_PRINT(F(" role=")); DEBUG_PRINT(hits[i].role);
+                DEBUG_PRINT(F(" board=")); DEBUG_PRINTLN(hits[i].board);
+                // Only offer actual secondaries. A primary advertising itself (or
+                // another shop's brain) must never appear as an actuator target.
+                if (hits[i].role != "secondary") continue;
+                bool seen = false;
+                for (JsonObject e : out) if (e["host"] == hits[i].hostname) seen = true;
+                if (seen) continue;
+                JsonObject e = out.createNestedObject();
+                e["host"]   = hits[i].hostname;
+                e["ip"]     = hits[i].ip;
+                e["board"]  = hits[i].board;
+                e["servos"] = hits[i].servos;
+            }
+            if (attempt < 2) delay(150);
+        }
+        String body; serializeJson(doc, body);
+        apiServer.respondNodeDiscover(body);
+    }
+#endif
+
+    // -- NodeLink SECONDARY execution -------------------------------------------
+    // This board acting as a dumb actuator bank for someone else's primary. The
+    // frame already carries a channel and an absolute angle/mm — there is no
+    // routing, no topology and no state lookup to do here, which is exactly the
+    // asymmetry that lets a cheap servo-only board be a node.
+    //
+    // A board configured as a primary (topology loaded) shouldn't also be
+    // receiving SETs; if it somehow is, both would command the same servos, so
+    // the primary's own routing wins and remote SETs are refused.
+    {
+        static char pendingSel[48]   = "";
+        static char pendingState[32] = "";
+        static bool awaitingSettle   = false;
+
+        topo::nodelink::SetCommand cmd;
+        if (apiServer.consumeNodeSet(cmd)) {
+            bool driven = false;
+            if (g_topoRuntime.loaded()) {
+                DEBUG_PRINTLN(F("[NODE] Refusing SET — this board is a primary."));
+            } else if (cmd.isServo) {
+#if defined(ENABLE_SERVO) && defined(SERVO_PWM_PIN_1)
+                if (cmd.channel >= 0 && cmd.channel < SERVO_COUNT) {
+                    g_servos[cmd.channel].setHoldAtRest(cmd.holdAtRest);
+                    g_servos[cmd.channel].moveTo(cmd.angle);
+                    driven = true;
+                }
+#endif
+            } else {
+                driven = g_linearDrive.moveToMm(cmd.positionMm);
+            }
+
+            if (driven) {
+                strlcpy(pendingSel,   cmd.selectorId, sizeof(pendingSel));
+                strlcpy(pendingState, cmd.stateId,    sizeof(pendingState));
+                awaitingSettle = true;
+                apiServer.reportNodeState(pendingSel, pendingState, true);
+            } else {
+                // Nothing moved, so report arrival immediately — otherwise the
+                // primary would sit on a busy() bus until its move timeout.
+                apiServer.reportNodeState(cmd.selectorId, cmd.stateId, false);
+            }
+        }
+
+        // Report arrival once the actuator settles, so the primary's move queue
+        // advances on real completion rather than on a fixed guess.
+        if (awaitingSettle && !g_localBus.busy()) {
+            awaitingSettle = false;
+            apiServer.reportNodeState(pendingSel, pendingState, false);
+        }
+    }
 
     // Enable / disable — TODO: add ControlInput::setEnabled() to the base class
     // so this works for all modes, not just serial debug.
@@ -1278,7 +1724,10 @@ void loop() {
                 break;
             }
 
-            if (requested != currentStop && requested >= 0) {
+            // v1 outlet→stop automation is suppressed once a topology is loaded:
+            // the runtime drives the rack from routed mm positions, and letting
+            // both command the motor would have them fight over it.
+            if (!g_topoRuntime.loaded() && requested != currentStop && requested >= 0) {
                 targetStop = requested;
                 issueMove(targetStop);
             }
@@ -1318,7 +1767,8 @@ void loop() {
                 break;
             }
 
-            if (requested != currentStop && requested >= 0) {
+            // See STATE_IDLE: v2 owns the rack while a topology is loaded.
+            if (!g_topoRuntime.loaded() && requested != currentStop && requested >= 0) {
                 targetStop = requested;
                 issueMove(targetStop);
             }
@@ -1335,9 +1785,17 @@ void loop() {
             motor.enable(false);
             digitalWrite(PIN_LED, (millis() / 100) % 2); // rapid blink
 
-            // Physical recovery: toggle switch cycled (no hardware e-stop to release)
+            // Physical recovery: toggle switch cycled (no hardware e-stop to release).
+            //
+            // STATE_ERROR means two different things — an e-stop (recoverable
+            // here) and a boot-time hardware fault (NOT recoverable; g_hardwareFault
+            // is latched until reset). Without the fault check a board that failed
+            // begin() silently re-enabled the motor and homed itself on the first
+            // tick, then refused every later API move — motion that visibly works
+            // paired with "Hardware fault — reset before homing".
 #ifndef CONTROL_SERIAL_DEBUG
-            if (!g_eStopTriggered &&
+            if (!g_hardwareFault &&
+                !g_eStopTriggered &&
                 control.isEnabled()) {
                 motor.enable(true);
                 currentState = STATE_HOMING;
@@ -1383,6 +1841,55 @@ void loop() {
 #else
         apiServer.update(s);
 #endif
+
+        // Publish the live v2 routing view for GET /api/v2/status. Serialized
+        // here, on the task that owns the routing state, so the async handler
+        // only ever reads a finished string. Throttled — the routing view only
+        // changes on a tool/plan event, not every loop pass.
+        if (g_topoRuntime.loaded()) {
+            static unsigned long lastPublishMs = 0;
+            if (millis() - lastPublishMs >= V2_STATUS_PUBLISH_MS) {
+                lastPublishMs = millis();
+                DynamicJsonDocument out(4096);
+                g_topoRuntime.writeStatus(out.to<JsonObject>());
+                String body; serializeJson(out, body);
+                apiServer.publishTopologyStatus(body);
+
+            }
+        }
+
+        // Per-node link state for GET /api/v2/nodes. Published OUTSIDE the
+        // topology gate above, deliberately: pairing no longer depends on a
+        // layout, so a paired board must be visible in the boards UI on a primary
+        // that has never had a topology. Previously this lived inside
+        // `if (g_topoRuntime.loaded())`, which made a freshly-flashed primary
+        // report an empty node list — indistinguishable from nothing paired.
+        {
+            static unsigned long lastNodePublishMs = 0;
+            if (millis() - lastNodePublishMs >= V2_STATUS_PUBLISH_MS) {
+                lastNodePublishMs = millis();
+                DynamicJsonDocument nodes(1024);
+                JsonArray arr = nodes.createNestedArray("nodes");
+                for (int i = 0; i < g_remoteCount; i++) {
+                    topo::RemoteActuatorBus::NodeInfo n = g_remoteBuses[i].info();
+                    JsonObject o = arr.createNestedObject();
+                    o["id"]        = g_remoteBuses[i].nodeId();
+                    o["host"]      = g_remoteBuses[i].host();
+                    // From the registry, not the topology: the boards screen has to
+                    // render names with no layout loaded at all.
+                    o["name"]      = g_nodeRegistry.name(i);
+                    o["online"]    = n.connected;
+                    o["lastSeen"]  = n.lastSeenMs;
+                    o["board"]     = n.board;
+                    o["fw"]        = n.fw;
+                    JsonObject caps = o.createNestedObject("caps");
+                    caps["servos"] = n.capServos;
+                    caps["linear"] = n.capLinear;
+                }
+                String nodeBody; serializeJson(nodes, nodeBody);
+                apiServer.publishNodeStatus(nodeBody);
+            }
+        }
     }
 #endif // ENABLE_HTTP_API
 }

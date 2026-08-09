@@ -6,6 +6,7 @@ import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
 import { ApiService, Topology, TopologyStatus } from '../services/api.service';
 import { validateTopology, airflowIssues, type AirflowIssue } from '@topology';
 import { SelectorConfigComponent } from '../gates/selector-config.component';
+import { ElementOutletConfigComponent } from '../tools/element-outlet-config.component';
 import {
   AnyElement, ConfigurableSelector,
   isCalibrated, isLinearSelector, isServoSelector,
@@ -52,7 +53,7 @@ interface BDot { x: number; y: number; childId: string; col: number; row: number
 interface ODot { x: number; y: number; parentId: string; branchId?: string; cell: Cell; }
 
 type Fitting = SelKind | 'tool' | 'duct';
-type MenuKind = Fitting | 'cap' | 'uncap' | 'delete' | 'configure';
+type MenuKind = Fitting | 'cap' | 'uncap' | 'delete' | 'configure' | 'outlet';
 
 const FITTINGS: Array<{ kind: Fitting; label: string }> = [
   { kind: 'duct',          label: 'Duct' },          // lay bare pipe; populate the open end later
@@ -75,11 +76,14 @@ const spanFor = (kind: MenuKind): number => kind === 'linear' ? 4 : kind === 'se
 @Component({
   selector: 'app-build',
   standalone: true,
-  imports: [CommonModule, FormsModule, RouterLink, SelectorConfigComponent],
+  imports: [CommonModule, FormsModule, RouterLink, SelectorConfigComponent, ElementOutletConfigComponent],
   styles: [`
     :host { display: flex; flex-direction: column; height: 100dvh; height: 100vh; overflow: hidden; }
-    .bar { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
-    .bar .title { font-size: 15px; font-weight: 600; flex: 1; }
+    /* Wraps rather than clips: the row already overflowed a phone-width viewport
+       before Boards was added, silently pushing Save off the edge. */
+    .bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; padding: 12px 16px;
+           border-bottom: 1px solid var(--border); flex-shrink: 0; }
+    .bar .title { font-size: 15px; font-weight: 600; flex: 1 0 auto; }
     .bar button { background: var(--surface); border: 1px solid var(--border); color: var(--text); border-radius: var(--radius); padding: 9px 14px; font-size: 14px; }
 
     /* Contextual guidance bar — pinned under the toolbar. */
@@ -121,6 +125,16 @@ const spanFor = (kind: MenuKind): number => kind === 'linear' ? 4 : kind === 'se
     .node.live .body, .node.live .unit { stroke: var(--success); }
     .glabel { fill: var(--text); font-size: 12.5px; text-anchor: middle; font-weight: 500; }
     .gsub   { fill: var(--muted); font-size: 10.5px; text-anchor: middle; }
+    /* The selected piece's name is edited WHERE IT IS DRAWN — a foreignObject input
+       sitting exactly on top of its label, matching it in size and weight, so the
+       text doesn't jump when it becomes editable. It replaced a text field in the
+       floating inspector, which showed the same name twice: once on the node and
+       again in a box above it, with no cue which one you were changing. */
+    .nameedit { position: fixed; z-index: 20; transform: translate(-50%, -50%);
+                box-sizing: border-box; background: var(--bg);
+                border: 1px solid var(--accent); border-radius: 7px; color: var(--text);
+                font-size: 12.5px; font-weight: 500; font-family: inherit; text-align: center;
+                padding: 4px 5px; outline: none; }
     .stroke { stroke: var(--muted); } .node.live .stroke { stroke: var(--success); }
     .fillmuted { fill: var(--muted); } .node.live .fillmuted { fill: var(--success); }
     .puck { fill: var(--border-strong, #555); } .node.live .puck { fill: var(--success); }
@@ -143,8 +157,6 @@ const spanFor = (kind: MenuKind): number => kind === 'linear' ? 4 : kind === 'se
     .inspector .meta { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 7px; }
     .inspector .step { width: 26px; height: 26px; border-radius: 7px; background: var(--bg); border: 1px solid var(--border); color: var(--text); font-size: 15px; padding: 0; }
     .inspector .step:disabled { opacity: 0.35; }
-    .inspector .cfg { background: var(--bg); border: 1px solid var(--border); color: var(--text);
-                      border-radius: 8px; padding: 7px 12px; font-size: 13px; }
     /* The config sheet floats over the canvas rather than replacing it — you keep your
        bearings on which gate you're setting up. */
     .sheet-bg { position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 25; }
@@ -159,6 +171,7 @@ const spanFor = (kind: MenuKind): number => kind === 'linear' ? 4 : kind === 'se
     .todo { fill: var(--accent); stroke: var(--surface); stroke-width: 2; }
     .done { fill: var(--success); stroke: var(--surface); stroke-width: 2; }
     .tick { fill: none; stroke: var(--bg); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .todo-hit { cursor: pointer; }
     .rm { cursor: pointer; }
     .rm-bg { fill: var(--danger); stroke: var(--surface); stroke-width: 2; }
     .rm-line { stroke: #fff; stroke-width: 2.2; stroke-linecap: round; }
@@ -174,6 +187,10 @@ const spanFor = (kind: MenuKind): number => kind === 'linear' ? 4 : kind === 'se
       <button (click)="undo()" [disabled]="!canUndo" title="Undo (Ctrl/Cmd-Z)">Undo</button>
       <button (click)="redo()" [disabled]="!canRedo" title="Redo (Ctrl/Cmd-Shift-Z)">Redo</button>
       <button (click)="autoArrange()">Auto-arrange</button>
+      <!-- Where a second ESP32 gets added. Sits next to Gates because that's the
+           order the work happens in: a gate can't be told which board drives it
+           until the board exists. -->
+      <button routerLink="/boards">Boards</button>
       <button class="primary" (click)="save()" [disabled]="!dirty || saving">{{ saving ? 'Saving…' : 'Save' }}</button>
     </div>
 
@@ -233,12 +250,22 @@ const spanFor = (kind: MenuKind): number => kind === 'linear' ? 4 : kind === 'se
               </g>
               <g *ngSwitchCase="'tool'"><rect class="body" x="-38" y="-24" width="76" height="48" rx="11"/></g>
             </ng-container>
-            <text *ngIf="n.glyph !== 'junction'" class="glabel" [attr.x]="labelX(n)" [attr.y]="labelY(n)">{{ n.name }}</text>
+            <!-- Hidden while selected — the editable field (below, outside the SVG)
+                 takes its place, in the same spot. -->
+            <text *ngIf="n.glyph !== 'junction' && n.id !== selectedId"
+                  class="glabel" [attr.x]="labelX(n)" [attr.y]="labelY(n)">{{ n.name }}</text>
             <text *ngIf="n.glyph === 'tool'" class="gsub" y="42">{{ toolAuto(n.id) ? 'auto' : 'manual' }}</text>
             <!-- Setup state of a gate, so an unfinished shop reads at a glance rather
                  than only when the Live view refuses to run. -->
-            <g *ngIf="n.setup" [attr.transform]="'translate(' + todoX(n) + ',' + todoY(n) + ')'">
-              <title>{{ n.setup === 'done' ? 'Set up' : 'Needs setting up' }}</title>
+            <!-- Tap target for configuring this gate. The dot already SAID a gate
+                 needed setting up; making it the button is what let the separate
+                 /gates screen go away. Radius 14 hit area over a 7px dot — a
+                 fingertip on a phone is nowhere near 7px. -->
+            <g *ngIf="n.setup" class="todo-hit"
+               [attr.transform]="'translate(' + todoX(n) + ',' + todoY(n) + ')'"
+               (pointerdown)="onSetupDot($event, n)">
+              <title>{{ n.setup === 'done' ? 'Set up — tap to adjust' : 'Tap to set up' }}</title>
+              <circle r="14" fill="transparent"/>
               <circle [class.todo]="n.setup === 'todo'" [class.done]="n.setup === 'done'" r="7"/>
               <path *ngIf="n.setup === 'done'" class="tick" d="M-3.2 0 L-1 2.4 L3.2 -2.4"/>
             </g>
@@ -269,22 +296,28 @@ const spanFor = (kind: MenuKind): number => kind === 'linear' ? 4 : kind === 'se
       </button>
     </div>
 
-    <!-- Element controls, anchored right above the selected piece (not a bottom bar).
-         Never for run ends (they'd render an empty box — they use the menu), and
-         hidden while a menu is open so the two don't stack on each other. -->
+    <!-- The selected piece's name, edited exactly where it's drawn. An overlay in
+         client space rather than an SVG <foreignObject>: an input inside one takes
+         focus but never receives keystrokes here, so the field looked live and
+         swallowed everything typed into it. Same positioning trick as the inspector. -->
+    <input *ngIf="namedPiece() as np" class="nameedit" placeholder="Name"
+           [style.left]="namePos().left" [style.top]="namePos().top" [style.width.px]="nameW(np)"
+           [ngModel]="np.name" (ngModelChange)="rename(np.id, $event)"
+           (keydown.enter)="blurName($event)"/>
+
+    <!-- Outlet count, anchored right above the selected unit (not a bottom bar).
+         This is ALL the inspector is now: how many outlets a sliding gate has, which
+         is the one property with nowhere else to live. Setting a piece up — a gate's
+         calibration, a tool's or the collector's plug — is the badge and the tap
+         menu, so it doesn't also need a button floating over the thing you're
+         looking at. Hidden while a menu is open so the two never stack. -->
     <div class="inspector" *ngIf="inspectedPiece() as ins" [style.left]="inspectorPos().left" [style.top]="inspectorPos().top">
-      <input [ngModel]="ins.name" (ngModelChange)="rename(ins.id, $event)" placeholder="Name"/>
       <span class="meta" *ngIf="ins.glyph === 'slidingGate'">
         <button class="step" (click)="changeOutlets(ins.id, -2)" [disabled]="!canRemoveOutlets(ins)">−</button>
         {{ ins.branchCount }} outlets
         <button class="step" (click)="changeOutlets(ins.id, 2)">+</button>
       </span>
       <span class="meta" *ngIf="ins.glyph === 'manifold'">2 outlets</span>
-      <!-- Gates carry measurements the graph can't infer — servo angles, or a slider's
-           swept rail. Everything else is fully described by where it sits. -->
-      <button class="cfg" *ngIf="ins.setup" (click)="configure(ins.id)">
-        {{ ins.setup === 'todo' ? 'Set up' : 'Configure' }}
-      </button>
     </div>
 
     <!-- Configuring one gate — a sheet over the canvas, so the layout stays put. -->
@@ -293,6 +326,16 @@ const spanFor = (kind: MenuKind): number => kind === 'linear' ? 4 : kind === 'se
       <app-selector-config [sel]="cfg" [topo]="topoDoc"
                            (saved)="onConfigured($event)" (cancelled)="configuring = null">
       </app-selector-config>
+    </div>
+
+    <!-- Pairing a tool (or the collector) with its plug — same sheet as a gate. -->
+    <div class="sheet-bg" *ngIf="outletTool" (pointerdown)="outletTool = null"></div>
+    <div class="sheet" *ngIf="outletTool as ot">
+      <app-element-outlet-config [element]="ot" [mode]="outletMode"
+                                 [excludeIps]="outletExcludeIps"
+                                 [excludeReason]="outletExcludeReason"
+                                 (saved)="onOutletConfigured($event)" (cancelled)="outletTool = null">
+      </app-element-outlet-config>
     </div>
   `,
 })
@@ -312,6 +355,11 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   wip = '';
   /** The gate whose config sheet is open, or null. */
   configuring: ConfigurableSelector | null = null;
+  /** The tool whose smart plug is being paired, as an editable copy. */
+  outletTool: RawEl | null = null;
+  outletMode: 'sensor' | 'switch' = 'sensor';
+  outletExcludeIps: string[] = [];
+  outletExcludeReason: Record<string, string> = {};
   private past: string[] = [];
   private future: string[] = [];
   private lastTag: string | null = null;
@@ -355,6 +403,8 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       uncap:         svg('<path d="M5 12h9"/><circle cx="18" cy="12" r="2.5"/>'),
       delete:        svg('<path d="M6 7h12M10 7V5h4v2M9 7l1 12h4l1-12"/>'),
       configure:     svg('<path d="M4 8h10M18 8h2M4 16h4M12 16h8"/><circle cx="16" cy="8" r="2"/><circle cx="10" cy="16" r="2"/>'),
+      // A wall socket, for the smart-plug row.
+      outlet:        svg('<rect x="4" y="4" width="16" height="16" rx="3"/><circle cx="9.5" cy="11" r="1.1" fill="currentColor" stroke="none"/><circle cx="14.5" cy="11" r="1.1" fill="currentColor" stroke="none"/><path d="M9 16h6"/>'),
     };
   }
 
@@ -691,6 +741,14 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   labelX(n: NodeVM): number { return n.isUnit ? (n.span - 1) * CELL / 2 : 0; }
   labelY(n: NodeVM): number { return n.glyph === 'tool' ? 4 : (n.isUnit ? -UNIT_H / 2 - 9 : -34); }
   toolAuto(id: string): boolean { return !!(this.elem(id)?.['sensor'] as RawEl | undefined)?.['outlet']; }
+  /** Does this piece have a plug paired — sensed for a tool, switched for the
+   *  collector? Drives the one button's label for both. */
+  /** Plug paired? Sensed for a tool, switched for the collector — one question,
+   *  which is why the badge can be one badge. */
+  private hasPlugEl(el: RawEl): boolean {
+    const branch = (el['type'] === 'collector' ? el['control'] : el['sensor']) as RawEl | undefined;
+    return !!branch?.['outlet'];
+  }
   /** A junction with no children and not capped = an unpopulated open duct end. */
   isOpenEnd(id: string): boolean { const e = this.elem(id); return e?.['type'] === 'junction' && !e['capped'] && this.childrenOf(id).length === 0; }
   /** A junction the user has explicitly sealed. */
@@ -717,18 +775,121 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   // ── selection / handles ───────────────────────────────────────────────────────
   inspected(): NodeVM | null { return this.nodes.find(n => n.id === this.selectedId) ?? null; }
   /** What the inspector shows: a named piece, never a run end, never behind a menu. */
+  /** The inspector only appears when it has something in it — and that is now only
+   *  an outlet count, so only the units have one. Everything else moved out: the
+   *  name onto the node, setup onto the badge and the tap menu. Anything else
+   *  selected would float an empty box over itself. */
   inspectedPiece(): NodeVM | null {
+    const n = this.inspected();
+    if (!n || this.menu) return null;
+    return (n.glyph === 'slidingGate' || n.glyph === 'manifold') ? n : null;
+  }
+
+  /** The piece whose name is editable right now. Junctions have no name, and the
+   *  field hides behind a menu the same way the inspector does. */
+  namedPiece(): NodeVM | null {
     const n = this.inspected();
     return n && n.glyph !== 'junction' && !this.menu ? n : null;
   }
+
+  /** Width of the in-place name field, sized to the piece it sits on. */
+  nameW(n: NodeVM): number {
+    if (n.glyph === 'tool') return 74;      // just inside the 76-wide body
+    return n.isUnit ? 150 : 118;
+  }
+
+  /** Client-space centre of the selected piece's LABEL, so the editable field lands
+   *  on the text it replaces rather than near it. The glyph's own y is the text
+   *  baseline; back off ~4px to get its visual middle. */
+  namePos(): { left: string; top: string } {
+    const n = this.namedPiece(); const svg = this.svgRef?.nativeElement;
+    const m = svg?.getScreenCTM();
+    if (!n || !svg || !m) return { left: '-9999px', top: '-9999px' };
+    const pt = svg.createSVGPoint();
+    pt.x = this.nx(n) + this.labelX(n);
+    pt.y = this.ny(n) + this.labelY(n) - 4;
+    const s = pt.matrixTransform(m);
+    return { left: `${s.x}px`, top: `${s.y}px` };
+  }
+
+  /** Enter commits by leaving the field; the value is already saved per keystroke. */
+  blurName(e: Event): void { (e.target as HTMLElement | null)?.blur(); }
 
   /** The doc, for the config sheet's bindings only — `configuring` is never set unless
    *  a topology is loaded, so the non-null assertion holds. */
   get topoDoc(): Topology { return this.topo!; }
 
+  /** Open the gate config straight from its dot, without selecting-then-tapping.
+   *  Must swallow the event: the node group under it starts a drag on pointerdown,
+   *  so without this a tap on the dot moves the gate instead of configuring it. */
+  onSetupDot(evt: PointerEvent, n: NodeVM): void {
+    evt.preventDefault(); evt.stopPropagation();
+    this.selectedId = n.id;
+    this.closeMenu();
+    // The badge means "finish this piece", and what's unfinished depends on what
+    // it is: a gate needs calibrating, a tool or the collector needs its plug.
+    if (n.glyph === 'tool' || n.glyph === 'collector') this.configureOutlet(n.id);
+    else this.configure(n.id);
+  }
+
   configure(id: string): void {
     const el = this.elems(this.topo!).find(e => e['id'] === id) as AnyElement | undefined;
     if (isServoSelector(el) || isLinearSelector(el)) this.configuring = el as unknown as ConfigurableSelector;
+  }
+
+  /** Open the smart-plug sheet for one tool. Edits a COPY, so cancelling leaves the
+   *  doc untouched — same contract as the gate sheet. */
+  configureOutlet(id: string): void {
+    const el = this.elems(this.topo!).find(e => e['id'] === id) as RawEl | undefined;
+    if (!el || (el['type'] !== 'tool' && el['type'] !== 'collector')) return;
+    // A tool's plug is a sensor (we watch its draw); the collector's is a switch
+    // (we command it). Same picker, different field — see the sheet's header.
+    this.outletMode = el['type'] === 'collector' ? 'switch' : 'sensor';
+    this.outletTool = JSON.parse(JSON.stringify(el)) as RawEl;
+    // Computed once, on open, rather than from the template: a getter would hand
+    // the child freshly-allocated arrays on every change-detection pass.
+    const ex = this.outletExcludes(id);
+    this.outletExcludeIps = ex.ips;
+    this.outletExcludeReason = ex.reason;
+  }
+
+  /** Plugs that can't be picked for `toolId`, and why. One physical outlet driving
+   *  two tools would make the routing brain believe two machines started at once;
+   *  the collector's own switch is off-limits for the obvious reason. */
+  private outletExcludes(me: string): { ips: string[]; reason: Record<string, string> } {
+    const ips: string[] = [];
+    const reason: Record<string, string> = {};
+    for (const e of this.elems(this.topo!)) {
+      const el = e as RawEl;
+      if (el['type'] === 'collector') {
+        // …unless the collector IS what's being configured: its own plug has to
+        // stay pickable, or re-opening the sheet greys out the current choice.
+        if (el['id'] === me) continue;
+        const dc = ((el['control'] as RawEl | undefined)?.['outlet'] as RawEl | undefined)?.['ip'] as string | undefined;
+        if (dc) { ips.push(dc); reason[dc] = 'reserved — dust collector'; }
+        continue;
+      }
+      if (el['type'] !== 'tool' || el['id'] === me) continue;
+      const ip = ((el['sensor'] as RawEl | undefined)?.['outlet'] as RawEl | undefined)?.['ip'] as string | undefined;
+      if (ip) { ips.push(ip); reason[ip] = `already paired with ${(el['name'] as string) || 'another tool'}`; }
+    }
+    return { ips, reason };
+  }
+
+  /** Splice the paired tool back in. Shares onConfigured's path deliberately: a
+   *  sensor change is a topology edit like any other and gets the same validation,
+   *  history entry and save. */
+  onOutletConfigured(updated: RawEl): void {
+    if (!this.topo) return;
+    const els = this.elems(this.topo);
+    const i = els.findIndex(e => e['id'] === updated['id']);
+    if (i < 0) return;
+    this.pushHistory(updated['id'] as string);
+    els[i] = updated as unknown as (typeof els)[number];
+    this.outletTool = null;
+    this.dirty = true;
+    this.buildGraph(this.topo); this.syncNodes(); this.refreshHandles();
+    void this.save();
   }
 
   /** Fold the configured gate back into the doc and persist through the normal save,
@@ -753,7 +914,11 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     if (!n || !svg || !m) return { left: '-9999px', top: '-9999px' };
     const pt = svg.createSVGPoint();
     pt.x = this.nx(n) + this.labelX(n);
-    pt.y = this.ny(n) - (n.isUnit ? UNIT_H / 2 : (n.glyph === 'tool' ? TOOL_HALF : 22));
+    // Clear the name field as well as the glyph. Every piece except a tool draws its
+    // label ABOVE the body, which is now an input box sitting in that gap — without
+    // this the inspector landed on top of it and clipped the name being typed.
+    const nameGap = n.glyph === 'tool' ? 0 : 24;
+    pt.y = this.ny(n) - (n.isUnit ? UNIT_H / 2 : (n.glyph === 'tool' ? TOOL_HALF : 22)) - nameGap;
     const s = pt.matrixTransform(m);
     return { left: `${s.x}px`, top: `${s.y}px` };
   }
@@ -811,8 +976,11 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       // A tap (no drag) on a run end — open or capped — opens its menu: what goes
       // here, plus cap/reopen/delete. Ends carry no inspector or (−) of their own.
       this.openMenu(evt.clientX, evt.clientY, { end: n.id });
-    } else if (n && this.isGate(n)) {
-      // A tap on a placed gate offers the other kinds, in the same menu style.
+    } else if (n && (this.isGate(n) || n.glyph === 'tool' || n.glyph === 'collector')) {
+      // A tap on any placed piece opens the same small menu. For a gate that's the
+      // other gate kinds; for a tool or the collector there's nothing to convert
+      // to, so it's just their plug — but it's the same gesture in the same place,
+      // which is the point.
       this.openMenu(evt.clientX, evt.clientY, { convert: n.id });
     }
     this.dragId = null; this.detachDrag();
@@ -889,7 +1057,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     // the menu is dismissed; every other context shows the menu alone.
     if (!ctx.convert) this.selectedId = null;
     this.menu = { x, y, ...ctx };
-    this.menuTitle = ctx.convert ? 'Change this gate'
+    this.menuTitle = ctx.convert ? this.convertTitle(ctx.convert)
                    : ctx.end ? (this.isCap(ctx.end) ? 'This capped end' : 'At the end of this run')
                    : ctx.branch ? 'Add on this run'
                    : 'Add here';
@@ -959,9 +1127,28 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     return opts;
   }
 
-  /** The three gate kinds, for a tap on a placed gate. */
+  /** Menu heading for a tap on a placed piece — named after what you tapped. */
+  private convertTitle(id: string): string {
+    const n = this.byId.get(id);
+    if (n?.glyph === 'collector') return 'Change this collector';
+    if (n?.glyph === 'tool')      return 'Change this tool';
+    return 'Change this gate';
+  }
+
+  /** What a tap on a placed piece offers. Gates: setup + the other kinds. Tools and
+   *  the collector: their smart outlet, which is the only thing about them that
+   *  isn't already said by where they sit. */
   private convertOptions(id: string): MenuOption[] {
     const n = this.byId.get(id); if (!n) return [];
+    if (n.glyph === 'tool' || n.glyph === 'collector') {
+      const paired = n.setup === 'done';
+      return [{
+        kind: 'outlet',
+        label: paired ? 'Smart outlet' : 'Set up smart outlet',
+        enabled: true,
+        note: paired ? undefined : (n.glyph === 'collector' ? 'started by hand' : 'switched by hand'),
+      }];
+    }
     // Tapping a gate is how you get at it, so its setup lives here alongside the
     // conversions — the floating inspector is only reachable right after placing one.
     const opts: MenuOption[] = n.setup
@@ -982,6 +1169,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     if (m.convert) {
       const id = m.convert; this.closeMenu();
       if (kind === 'configure') this.configure(id);
+      else if (kind === 'outlet') this.configureOutlet(id);
       else this.convertKind(id, kind as SelKind);
       return;
     }
@@ -1203,7 +1391,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     if (!this.topo) return null;
     const duct = this.ductsRaw().find(d => d['child'] === childId); if (!duct) return null;
     const parentId = duct['parent'] as string;
-    const channel = this.elems(this.topo).filter(e => e['type'] === 'selector' && e['kind'] !== 'linear').length;
+    const channel = this.freeServoChannel();
     const sel = this.makeSelector(kind, channel);
     this.elems(this.topo).push(sel);
     // The gate inherits the child's upstream link (incl. a parent selector's outlet).
@@ -1275,7 +1463,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       this.ductsRaw().push({ child: j['id'], parent: junctionId });
       return j['id'] as string;
     }
-    const channel = this.elems(this.topo).filter(e => e['type'] === 'selector' && e['kind'] !== 'linear').length;
+    const channel = this.freeServoChannel();
     const sel = this.makeSelector(kind, channel);
     this.elems(this.topo).push(sel);
     this.ductsRaw().push({ child: sel['id'], parent: junctionId });
@@ -1376,10 +1564,25 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
 
   /** Lowest PWM channel not already spoken for. Counting existing gates would reuse a
    *  channel after a delete, and the schema rejects two gates sharing one. */
-  private freeServoChannel(): number {
+  /** The board a newly-drawn gate is assigned to: the primary, by id rather than
+   *  by the literal 'primary' — /boards mints controller ids from hostnames. */
+  private defaultControllerId(): string {
+    const cs = (this.topo?.['controllers'] as RawEl[] | undefined) ?? [];
+    const primary = cs.find(c => c['role'] === 'primary');
+    return (primary?.['id'] as string) ?? 'primary';
+  }
+
+  /** First unused servo channel ON A GIVEN BOARD.
+   *
+   *  Channels are per-board: two gates on different boards can both sit on
+   *  channel 0. Searching the whole shop (as this used to) starts handing out
+   *  channel 4 as soon as a second board exists, which validateTopology rejects
+   *  — so drawing a fifth gate silently produced an unsaveable layout. */
+  private freeServoChannel(controllerId = this.defaultControllerId()): number {
     const taken = new Set(
       this.elems(this.topo!)
-        .filter(e => e['type'] === 'selector' && e['kind'] !== 'linear')
+        .filter(e => e['type'] === 'selector' && e['kind'] !== 'linear'
+                  && (e['controllerId'] ?? this.defaultControllerId()) === controllerId)
         .map(e => (e['servo'] as RawEl | undefined)?.['channel'] as number),
     );
     for (let ch = 0; ch < 4; ch++) if (!taken.has(ch)) return ch;
@@ -1415,7 +1618,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     return tool['id'] as string;
   }
   private makeSelector(kind: SelKind, channel: number): RawEl {
-    const base: RawEl = { id: this.newId('sel'), type: 'selector', name: this.defaultName(kind), controllerId: 'primary', kind };
+    const base: RawEl = { id: this.newId('sel'), type: 'selector', name: this.defaultName(kind), controllerId: this.defaultControllerId(), kind };
     if (kind === 'linear') {
       // Outlet positions are seeded at the nominal Rockler pitch so the canvas has
       // something to draw, but `linear.calibration` is left out on purpose — only the
@@ -1517,7 +1720,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     const was = this.kindOf(id);
     const legs = this.childDucts(id);
     const channel = ((el['servo'] as RawEl | undefined)?.['channel'] as number | undefined)
-      ?? this.elems(this.topo).filter(e => e['type'] === 'selector' && e['kind'] !== 'linear').length;
+      ?? this.freeServoChannel();
     const fresh = this.makeSelector(kind, channel);
     fresh['id'] = id;
     // A name the user chose survives; an untouched default follows the new kind.
@@ -1615,6 +1818,15 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     try { return airflowIssues(this.topo as Topology); } catch { return []; }
   }
 
+  /** Names of gates still missing their calibration, in canvas order. Gates only:
+   *  tools and the collector share the badge but an unpaired one is a MANUAL
+   *  piece, not an unfinished one — nagging about it would be wrong. */
+  unconfiguredGates(): string[] {
+    return this.nodes
+      .filter(n => n.setup === 'todo' && n.glyph !== 'tool' && n.glyph !== 'collector')
+      .map(n => n.name || n.id);
+  }
+
   /**
    * The one contextual line in the guide bar. Priority: a failed save first, then
    * live airflow problems (with a fix + Cap action), then a save confirmation,
@@ -1647,6 +1859,20 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
         text: one
           ? `${names} can’t be selected on its own — ${partners} share${(shared[0].with ?? []).length === 1 ? 's' : ''} its outlet with no gate in between, so running it pulls air through ${partners} too. The shop stays off until that’s fixed: put a gate on that leg, move it to a free outlet, or`
           : `${names} can’t be selected on their own — they share an outlet, so opening one opens the others and suction leaks. The shop stays off until that’s fixed: put a gate on each leg, move them to free outlets, or`,
+      };
+    }
+
+    // Gates nobody has shown the positions to. Sits below the leaks (a leak is a
+    // structural mistake; this is just unfinished work) but above the open-end
+    // nudge, because the shop can't run until it's done. This is the whole reason
+    // the separate /gates pass could go away: the canvas already knows, and the
+    // orange dot on each gate is the thing you tap to fix it.
+    const unset = this.unconfiguredGates();
+    if (unset.length) {
+      const one = unset.length === 1;
+      return {
+        kind: 'warn',
+        text: `${unset.join(', ')} ${one ? 'still needs' : 'still need'} setting up — tap the orange dot on ${one ? 'it' : 'each'} to show ${one ? 'it' : 'them'} where the valve positions are.`,
       };
     }
 
@@ -1727,7 +1953,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       const duct = this.ductsRaw().find(d => d['child'] === id); if (!duct) continue;
       const parentId = duct['parent'] as string;
       const parentBranch = duct['parentBranch'] as string | undefined;
-      const channel = this.elems(this.topo).filter(e => e['type'] === 'selector' && e['kind'] !== 'linear').length;
+      const channel = this.freeServoChannel();
       const gate = this.makeSelector('servoGate', channel);
       (gate['branches'] as Branch[])[0].role = 'tool';
       this.elems(this.topo).push(gate);
@@ -1858,8 +2084,15 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       const isUnit = glyph === 'slidingGate' || glyph === 'manifold';
       const el = e as AnyElement;
       const configurable = isServoSelector(el) || isLinearSelector(el);
-      const setup: NodeVM['setup'] = !configurable ? ''
-        : isCalibrated(el as unknown as ConfigurableSelector) ? 'done' : 'todo';
+      // One badge, two meanings — because to the person building the shop it's
+      // the same question either way: is this piece finished? A gate's answer is
+      // its calibration; a tool's and the collector's is whether a plug is paired.
+      // Orange on an unpaired tool is not a scold: it's the "I'm switched on by
+      // hand" state, which is a legitimate place to stop.
+      const setup: NodeVM['setup'] =
+        configurable ? (isCalibrated(el as unknown as ConfigurableSelector) ? 'done' : 'todo')
+        : (glyph === 'tool' || glyph === 'collector') ? (this.hasPlugEl(e) ? 'done' : 'todo')
+        : '';
       return { id, glyph, name: (e['name'] as string) || id, col: c.col, row: c.row, branchCount, isUnit, span: isUnit ? Math.max(1, branchCount) : 1, live: false, openIndex: 0, setup };
     });
     this.byId = new Map(this.nodes.map(n => [n.id, n]));

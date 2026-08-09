@@ -245,10 +245,39 @@ const idxOf = (plan, sel) => plan.moves.findIndex((m) => m.selectorId === sel);
   check('dev X off (Y on): gate1 closes, gate2 open, collector on',
     s.actuators.gate1 === 'closed' && s.actuators.gate2 === 'open' && s.collectorOn === true);
 
-  setToolPower(d, 'toolY', 0);    // idle → HOLD positions, collector off
-  s = statusView(d);
-  check('dev idle: gates HELD (gate2 still open), collector off',
-    s.actuators.gate1 === 'closed' && s.actuators.gate2 === 'open' && s.collectorOn === false);
+  // Idle → HOLD positions, and the blower COASTS rather than cutting. Driving the
+  // clock explicitly (rather than sleeping) is the whole reason nowMs is a param.
+  const t0 = 1000000;
+  setToolPower(d, 'toolY', 0, t0);
+  s = statusView(d, t0);
+  check('dev idle: gates HELD (gate2 still open), collector coasting (still on)',
+    s.actuators.gate1 === 'closed' && s.actuators.gate2 === 'open' &&
+    s.collectorOn === true && s.collectorCoasting === true);
+
+  s = statusView(d, t0 + 3999);
+  check('dev idle: still coasting just before the delay expires', s.collectorOn === true);
+
+  s = statusView(d, t0 + 4000);
+  check('dev idle: collector off once the coast-down expires',
+    s.collectorOn === false && s.collectorCoasting === undefined);
+
+  // A tool starting mid-coast keeps the blower on and cancels the countdown —
+  // the case that would otherwise switch it off two seconds into the next cut.
+  const d2 = createTopologyDevice(clone(twoGates));
+  setToolPower(d2, 'toolX', 10, t0);
+  setToolPower(d2, 'toolX', 0,  t0);
+  setToolPower(d2, 'toolX', 10, t0 + 1000);
+  s = statusView(d2, t0 + 9000);
+  check('dev coast cancelled by a tool restarting',
+    s.collectorOn === true && s.collectorCoasting === undefined);
+
+  // An explicit 0 disables it — the escape hatch for anyone who wants the old cut.
+  const noCoast = clone(twoGates);
+  noCoast.elements.find((e) => e.type === 'collector').control = { offDelayMs: 0 };
+  const d3 = createTopologyDevice(noCoast);
+  setToolPower(d3, 'toolX', 10, t0);
+  setToolPower(d3, 'toolX', 0,  t0);
+  check('dev offDelayMs:0 cuts immediately', statusView(d3, t0).collectorOn === false);
 }
 {
   // Single linear actuator: most-recently-powered-on tool wins the shared selector.
@@ -263,6 +292,30 @@ const idxOf = (plan, sel) => plan.moves.findIndex((m) => m.selectorId === sel);
 
   setToolPower(d, 'toolB', 0);    // B off → only A active → selector back to A
   check('dev star B off: selector → s1 (A alone)', statusView(d).actuators.sel === 's1');
+}
+
+// ── secondary boards must carry a reachable link ────────────────────────────
+{
+  const withNode = (link) => {
+    const t = clone(twoGates);
+    t.controllers.push({ id: 'node2', role: 'secondary', name: 'Back wall', board: 'qtpy_c3', ...(link ? { link } : {}) });
+    return t;
+  };
+
+  // A secondary with no address is a board the primary can never dial. The
+  // firmware would leave it unregistered and fail every move on it, so the
+  // schema refuses the document rather than letting it fail silently at run time.
+  check('secondary with no link is rejected', !validateTopology(withNode(null)).ok);
+  check('secondary with an empty host is rejected',
+    !validateTopology(withNode({ transport: 'wifi-ws', host: '  ' })).ok);
+  check('secondary with a host is accepted',
+    validateTopology(withNode({ transport: 'wifi-ws', host: 'dustgate-node-1' })).ok,
+    JSON.stringify(validateTopology(withNode({ transport: 'wifi-ws', host: 'dustgate-node-1' })).errors));
+  check('secondary link error is coded to the controller',
+    hasCode(validateTopology(withNode(null)), 'controller'));
+
+  // The primary is the local board — it needs no link at all.
+  check('primary with no link is fine', validateTopology(clone(twoGates)).ok);
 }
 
 // ── servo resolver: state → angle (referenceAngle + offsetDeg, clamped) ─────

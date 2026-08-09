@@ -9,6 +9,10 @@
 // =============================================================================
 #pragma once
 
+// Build-target identity, reported in the NodeLink WELCOME frame and matching
+// the topology schema's controllers[].board values (docs/v2-topology-schema.md).
+#define BOARD_NAME "feather_s2"
+
 // -- TMC2209 control pins --
 #define PIN_TMC_STEP        5   // D5
 #define PIN_TMC_DIR         6   // D6

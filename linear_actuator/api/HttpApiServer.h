@@ -26,6 +26,7 @@
 
 #include <ESPAsyncWebServer.h>
 #include <ArduinoJson.h>
+#include "../control/NodeLink.h"
 
 // Forward declaration — outlets are optional (null if not in outlet mode)
 #ifdef CONTROL_SMART_OUTLET
@@ -107,7 +108,71 @@ public:
     // servo directly so the user can watch the valve and capture where it lands. One
     // pending slot — a jog is a single discrete nudge, and a newer one supersedes an
     // unread older one rather than queueing. outDetach = de-energize instead of move.
-    bool consumeServoJogRequest(int& outChannel, int& outAngle, bool& outDetach);
+    // outController is the topology controllerId the jog is addressed to, or ""
+    // for this board. A gate on a secondary must be jogged on the board that
+    // actually drives it — without this the configurator's arrows moved the
+    // PRIMARY's servo on the same channel number, so assigning a gate to a node
+    // looked like it did nothing (or worse, twitched an unrelated valve).
+    bool consumeServoJogRequest(int& outChannel, int& outAngle, bool& outDetach,
+                                String& outController);
+
+    // True once after PUT /api/v2/topology stores a new document. The main loop
+    // re-adopts it into the TopologyRuntime — the handler can't, since parsing
+    // and swapping the live topology must not happen under the AsyncTCP task
+    // while the loop is mid-transition.
+    bool consumeTopologyChanged();
+
+    // Live v2 status, published by the main loop each pass and served verbatim
+    // by GET /api/v2/status. Same reason as _lastStatusJson: the routing state
+    // lives in main-loop-owned std::maps, and an async handler must never walk
+    // them while they're being mutated. Empty string = no topology loaded (404).
+    void publishTopologyStatus(const String& json);
+
+    // ------------------------------------------------------------------
+    // NodeLink (ws://<us>/nodelink) — the SECONDARY side of the star. A primary
+    // dials in and sends already-resolved SET frames; this board just moves the
+    // channel to the number it was given. See control/NodeLink.h.
+    //
+    // Every board exposes this, not just servo-only builds: it's what lets a
+    // second DevKitC act as an actuator bank on the bench without a special
+    // firmware, and it costs one WS route when nobody connects.
+    // ------------------------------------------------------------------
+
+    // Pending SET from a linked primary — one slot, since the primary serializes
+    // moves anyway (a newer SET supersedes an unread one rather than queueing).
+    bool consumeNodeSet(topo::nodelink::SetCommand& out);
+
+    // Report progress back to the primary. Called from the main loop once the
+    // actuator has been commanded (moving=true) and again when it settles.
+    void reportNodeState(const char* selectorId, const char* stateId, bool moving);
+
+    // True while some primary holds a NodeLink connection to this board. The
+    // main loop uses it to know it's acting as a secondary right now.
+    bool nodeLinkConnected() const { return _nodeLinkClients > 0; }
+
+    // ------------------------------------------------------------------
+    // Node discovery + link state (the primary side of Stage 4)
+    // ------------------------------------------------------------------
+
+    // GET /api/v2/nodes/discover — true once per request. Like the outlet
+    // discover route, the mDNS sweep MUST run on the main loop task (see that
+    // route's comment), so the loop calls this, does the scan, then calls
+    // respondNodeDiscover() with the built JSON.
+    bool consumeNodeDiscoverRequest();
+    void respondNodeDiscover(const String& json);
+
+    // Live per-controller link state, published by the main loop and served
+    // verbatim by GET /api/v2/nodes. Cached for the same reason as the v2 status:
+    // the link objects are main-loop/WS-task owned, not async-handler owned.
+    void publishNodeStatus(const String& json);
+
+    // True once after POST /api/v2/nodes/pair. The main loop owns the registry
+    // write and the redial — see the route for why.
+    bool consumeNodePairRequest(String& outHost, String& outName, bool& outRemove);
+
+    // Manual tool switch from the Live view (POST /api/v2/tool). Consumed on the
+    // main loop, which owns the routing brain.
+    bool consumeToolManualRequest(String& outToolId, bool& outOn);
 
     // Home-side answer (POST /api/config/orientation {homedLeft}). Consumed by the
     // main loop, which ensures the home datum is the user's left endstop (re-homing
@@ -180,7 +245,10 @@ private:
     AsyncWebSocket        _shellyWs;
     SmartOutletControl*   _outletControl = nullptr;
 #endif
-    SemaphoreHandle_t _mutex;
+    // Created in begin(). Explicitly null so that calling a consumeXxx() before
+    // begin() fails deterministically rather than taking whatever a garbage
+    // handle points at.
+    SemaphoreHandle_t _mutex = nullptr;
     String            _apiKey;
     // Last serialised status — cached for GET /api/status
     String            _lastStatusJson;
@@ -212,6 +280,7 @@ private:
     bool  _portRolePending;        int  _portRoleIndex; int _portRoleValue;
     bool  _orientationPending;     bool _orientationValue;    // POST /api/config/orientation {homedLeft}
     bool  _servoJogPending;        int  _servoJogChannel; int _servoJogAngle; bool _servoJogDetach;
+    String _servoJogController;    // "" = this board; else a secondary's controllerId
     int   _homeDirection;          // runtime direction; loaded from NVS, updated via API
     int   _cachedNumActiveStops;   // from ApiStatus.numActiveStops; returned in /api/info
     int   _idleTimeoutSec;         // persisted idle power-off timeout; see idleTimeoutSec()
@@ -221,6 +290,28 @@ private:
     // Single-client device, so one shared buffer is sufficient; reset on the
     // first chunk (index == 0).
     String _topoUploadBuf;
+
+    // v2 topology runtime hand-off (see consumeTopologyChanged / publishTopologyStatus)
+    bool   _topoChangedPending = false;
+    String _topoStatusJson;
+
+    // NodeLink secondary endpoint (see consumeNodeSet / reportNodeState)
+    AsyncWebSocket            _nodeWs;
+    volatile int              _nodeLinkClients = 0;
+    bool                      _nodeSetPending  = false;
+    topo::nodelink::SetCommand _nodeSetCmd;
+
+    // Node discovery + link state (see consumeNodeDiscoverRequest / publishNodeStatus)
+    bool                   _nodeDiscoverPending = false;
+    AsyncWebServerRequest* _nodeDiscoverReq     = nullptr;
+    String                 _nodeStatusJson;
+    bool                   _nodePairPending = false;
+    String                 _nodePairHost;
+    String                 _nodePairName;
+    bool                   _toolManualPending = false;
+    String                 _toolManualId;
+    bool                   _toolManualOn = false;
+    bool                   _nodePairRemove = false;
 
 #ifdef CONTROL_SMART_OUTLET
     bool            _outletConfigPending;

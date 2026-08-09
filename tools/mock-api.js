@@ -38,9 +38,48 @@ const d = M.createDevice();
 // ── v2 topology-native device (additive; null until a topology is PUT) ───────
 let td = null;
 
-// Last angle commanded to each servo channel by the setup jog. No motion to model —
-// this exists so the mock behaves like a device that accepted the command.
+// Last angle commanded to each servo channel by the setup jog, keyed
+// "<controllerId>:<channel>". Keyed by board because every board numbers its
+// channels 0-3 — firmware had a bug here where a jog aimed at a node moved the
+// primary's servo on the same channel, and a mock that ignores controllerId
+// can't catch its return.
 const servoAngles = {};
+
+// ── Paired boards (mirrors control/NodeRegistry.h) ──────────────────────────
+// DELIBERATELY NOT part of the topology. On the device this lives in NVS and
+// survives a layout wipe; here it survives a PUT /api/v2/topology. Keeping that
+// independence in the mock is the point — the boards screen must work with no
+// topology at all, and that's only tested if the mock can be in that state.
+// A friendly `name` lives here too, for the same reason.
+const pairedNodes = [];   // [{ host, name }]
+
+// Boards "on the network" for discovery to find. dustgate-node-2 is deliberately
+// unreachable once paired: an offline board is the interesting case for the UI
+// and the hard one to stage on a bench where everything works.
+const NETWORK_BOARDS = [
+  { host: 'dustgate-node-1', ip: '192.168.87.61', board: 'qtpy_s3', servos: 4 },
+  { host: 'dustgate-node-2', ip: '192.168.87.62', board: 'devkitc', servos: 4 },
+];
+const OFFLINE_HOSTS = ['dustgate-node-2'];
+
+const bareHost = (h) => String(h || '').toLowerCase().replace(/\.local\.?$/, '');
+const findPaired = (h) => pairedNodes.find(n => bareHost(n.host) === bareHost(h));
+
+/** Link state for GET /api/v2/nodes — the shape RemoteActuatorBus::info() feeds. */
+function nodeLinkState(entry) {
+  const known  = NETWORK_BOARDS.find(b => bareHost(b.host) === bareHost(entry.host));
+  const online = !OFFLINE_HOSTS.includes(bareHost(entry.host));
+  return {
+    id:       bareHost(entry.host),   // the host IS the controllerId
+    host:     entry.host,
+    name:     entry.name || '',
+    online,
+    lastSeen: online ? Date.now() : 0,
+    board:    known ? known.board : '',
+    fw:       online ? '1.0.0-mock' : '',
+    caps:     { servos: known ? known.servos : 0, linear: 0 },
+  };
+}
 
 function statusJson() { return JSON.stringify(M.statusView(d)); }
 
@@ -288,14 +327,80 @@ function handler(req, res) {
     return body(req, data => {
       const ch = Number(data.channel);
       if (!Number.isInteger(ch) || ch < 0 || ch >= 4) return json(res, { error: 'channel out of range' }, 400);
+      // controllerId says WHICH board. Absent (or the primary) means this one; a
+      // named board must actually be paired, or the jog would silently land on
+      // the primary's servo of the same channel — the bug this field exists to
+      // prevent, so the mock refuses it rather than quietly accepting.
+      const ctrl = String(data.controllerId || '').trim();
+      const remote = ctrl && ctrl !== 'primary';
+      if (remote && !findPaired(ctrl))
+        return json(res, { error: `no paired board '${ctrl}'` }, 404);
+      const key = `${remote ? bareHost(ctrl) : 'primary'}:${ch}`;
       if (data.detach === true) { return json(res, { ok: true }); }
       const angle = Number(data.angle);
       if (!Number.isFinite(angle) || angle < 0 || angle > 180)
         return json(res, { error: 'angle out of range (0-180)' }, 400);
-      servoAngles[ch] = angle;
+      servoAngles[key] = angle;
       json(res, { ok: true });
     });
   }
+  // ── Paired boards ─────────────────────────────────────────────────────────
+  // NOTE for anyone porting a new /api/v2/nodes/<x> route to the firmware:
+  // ESPAsyncWebServer matches by PREFIX and tries handlers in registration
+  // order, so "/api/v2/nodes" will happily swallow "/api/v2/nodes/discover"
+  // unless the longer path is registered first. This mock compares exact
+  // strings and doesn't care — which is exactly why the trap went unnoticed
+  // here once already.
+  if (pathname === '/api/v2/nodes/discover' && req.method === 'GET') {
+    // Every board on the "network", paired or not. The UI filters out the ones
+    // it already has; firmware likewise reports what the mDNS sweep saw.
+    return json(res, NETWORK_BOARDS.map(b => ({ ...b })));
+  }
+  if (pathname === '/api/v2/nodes/pair' && req.method === 'POST') {
+    return body(req, data => {
+      const host = String(data.host || '').trim();
+      if (!host) return json(res, { error: "missing 'host'" }, 400);
+      if (data.remove === true) {
+        const i = pairedNodes.findIndex(n => bareHost(n.host) === bareHost(host));
+        if (i >= 0) pairedNodes.splice(i, 1);
+        return json(res, { ok: true });
+      }
+      // Idempotent, and re-pairing with a name is how a rename is applied —
+      // one code path for both, same as the device.
+      const existing = findPaired(host);
+      if (existing) {
+        if (data.name) existing.name = String(data.name);
+      } else {
+        if (pairedNodes.length >= 3) return json(res, { error: 'no free link slots' }, 409);
+        pairedNodes.push({ host, name: data.name ? String(data.name) : '' });
+      }
+      json(res, { ok: true });
+    });
+  }
+  if (pathname === '/api/v2/nodes' && req.method === 'GET') {
+    // Always 200, never 404: an empty list means "nothing paired", which is a
+    // legitimate state the boards screen renders. The device publishes this
+    // outside its topology gate for the same reason.
+    return json(res, { nodes: pairedNodes.map(nodeLinkState) });
+  }
+
+  // Manual tool switch — the Live view's rows. Same lever as /sim/tool, but it's
+  // a REAL control path that firmware implements, where /sim/tool is mock-only.
+  // Modelled as a synthetic wattage so there's one definition of "active".
+  if (pathname === '/api/v2/tool' && req.method === 'POST') {
+    return body(req, data => {
+      if (!td) return json(res, { error: 'no topology configured' }, 404);
+      if (!data.toolId) return json(res, { error: "missing 'toolId'" }, 400);
+      if (typeof data.on !== 'boolean') return json(res, { error: "missing 'on'" }, 400);
+      // An unknown id would set a wattage nothing reads and route nothing — a
+      // switch that reports success and does nothing. Refuse it instead.
+      const known = (td.topology.elements || []).some(e => e.type === 'tool' && e.id === data.toolId);
+      if (!known) return json(res, { error: `no tool '${data.toolId}'` }, 404);
+      TD.setToolPower(td, data.toolId, data.on ? 100000 : 0);
+      json(res, { ok: true });
+    });
+  }
+
   if (pathname === '/api/v2/sim/tool' && req.method === 'POST') {
     return body(req, data => {
       if (!td) return json(res, { error: 'no topology configured' }, 404);

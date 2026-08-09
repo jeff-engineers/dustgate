@@ -27,9 +27,21 @@
 
 namespace topo {
 
+// A selector that a lower-priority tool had to yield to an earlier one: both
+// wanted it, in different states, and only one can have it. Surfaced (never
+// resolved by last-writer-wins) so the UI can say WHY a tool isn't pulling —
+// see routing.js's identically-shaped conflicts[].
+struct Conflict {
+  std::string              selectorId;
+  std::string              winner;       // toolId that got the selector
+  std::string              winnerState;
+  std::vector<std::string> losers;       // toolIds blocked by it
+};
+
 struct Routing {
   std::map<std::string, std::string> states;    // selectorId -> stateId to command (closed if idle)
   std::map<std::string, bool>        reachable; // toolId -> won a clear open path right now
+  std::vector<Conflict>              conflicts; // contested selectors, in selector order
 };
 
 inline bool _eq(JsonVariantConst v, const char* s) {
@@ -97,19 +109,35 @@ inline Routing computeRouting(JsonObjectConst topology, const std::vector<std::s
   }
 
   std::map<std::string, std::string> committed;   // selectorId -> stateId (first commit wins)
+  std::map<std::string, std::string> winnerOf;    // selectorId -> toolId that claimed it
+  std::map<std::string, Conflict>    conflictBySel;
   for (const auto& toolId : active) {
     auto pit = paths.find(toolId);
     if (pit == paths.end()) continue;             // already unreachable
     auto& path = pit->second;
+    std::string blockedSel;
     bool blocked = false;
     for (auto& hop : path) {
       auto c = committed.find(hop.first);
-      if (c != committed.end() && c->second != hop.second) { blocked = true; break; }
+      if (c != committed.end() && c->second != hop.second) { blocked = true; blockedSel = hop.first; break; }
     }
-    if (blocked) { out.reachable[toolId] = false; continue; }
-    for (auto& hop : path) if (committed.find(hop.first) == committed.end()) committed[hop.first] = hop.second;
+    if (blocked) {
+      out.reachable[toolId] = false;
+      auto cit = conflictBySel.find(blockedSel);
+      if (cit == conflictBySel.end())
+        cit = conflictBySel.insert({blockedSel,
+                Conflict{blockedSel, winnerOf[blockedSel], committed[blockedSel], {}}}).first;
+      cit->second.losers.push_back(toolId);
+      continue;
+    }
+    for (auto& hop : path)
+      if (committed.find(hop.first) == committed.end()) {
+        committed[hop.first] = hop.second;
+        winnerOf[hop.first]  = toolId;
+      }
     out.reachable[toolId] = true;
   }
+  for (auto& kv : conflictBySel) out.conflicts.push_back(kv.second);
 
   // every selector defaults to its closed state; winners override
   for (JsonObjectConst e : topology["elements"].as<JsonArrayConst>()) {
@@ -120,6 +148,20 @@ inline Routing computeRouting(JsonObjectConst topology, const std::vector<std::s
   }
   for (auto& kv : committed) out.states[kv.first] = kv.second;
   return out;
+}
+
+// Has this servo selector actually been calibrated?
+//
+// servoCommandAngle() below mirrors the JS resolver exactly, and the JS resolver
+// DEFAULTS a missing referenceAngle to 0. That's fine for the UI, which greys
+// out uncalibrated gates before it ever asks for an angle — but firmware must
+// not act on that default: it would drive a real ball valve to a made-up
+// position. Anything that COMMANDS hardware checks this first and refuses;
+// anything that merely computes (tests, status) can call the resolver directly.
+// Kept separate from the resolver so the C++/JS parity contract stays exact.
+inline bool servoIsCalibrated(JsonObjectConst sel) {
+  JsonObjectConst sv = sel["servo"];
+  return !sv.isNull() && sv.containsKey("referenceAngle");
 }
 
 // Servo command angle for a selector state: referenceAngle + offsetDeg, clamped.

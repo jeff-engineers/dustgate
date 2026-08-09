@@ -8,10 +8,42 @@ the three drifted constantly.
 
 ```
 shared/device-model/
-  device-model.js     ← the canonical state machine (pure JS, no I/O, no timers)
-  device-model.d.ts   ← TypeScript contract for the model's API
-  conformance.js      ← executable HTTP contract that certifies any target
-  README.md           ← you are here
+  device-model.js         ← the canonical state machine (pure JS, no I/O, no timers)
+  device-model.d.ts       ← TypeScript contract for the model's API
+  conformance.js          ← executable HTTP contract that certifies any target
+  nodelink.js             ← primary↔secondary node protocol (frames + validator)
+  nodelink-conformance.js ← executable WS contract for a NodeLink secondary
+  README.md               ← you are here
+```
+
+## The node protocol (v2 star topology)
+
+`nodelink.js` is the contract between the **primary** (owns the GUI, topology,
+Shelly polling and routing) and each **secondary** (a dumb actuator bank). Its
+load-bearing rule: the primary RESOLVES every state into a concrete realization
+before it goes on the wire — a `SET` carries `angle` or `positionMm`, never "put
+gate3 in the open state". A secondary therefore needs no topology, no router and
+no schema version, which is what lets a $5 servo-only board be a node and keeps
+a schema change from having to be flashed to every board in the shop.
+
+Kept honest at three levels, because each catches something the others can't:
+
+| Level | What it pins | Run |
+|---|---|---|
+| `nodelink.test.js` | frame shapes + validation, JS side | `npm run nodelink:test` |
+| `linear_actuator/test/test_nodebus.cpp` | the same shapes + values, C++ side | `npm run firmware:nodebus:test` |
+| `nodelink-conformance.js` | the CONVERSATION — handshake, accept-vs-arrive, refusals, hold-on-link-loss | `npm run nodelink:conformance:ci` |
+
+The first two are a matched pair: where one asserts a specific number (a gate's
+open angle resolving to 10), so does the other. That pairing is the anti-drift
+mechanism, since the firmware can't import the JS.
+
+`tools/mock-node.js` is the simulated secondary the conformance suite drives; it
+mirrors `linear_actuator/node/dustgate_node.cpp` behaviour-for-behaviour. To
+certify REAL hardware instead, point the suite at the board:
+
+```
+node shared/device-model/nodelink-conformance.js ws://<node-ip>/nodelink
 ```
 
 ## Who consumes it

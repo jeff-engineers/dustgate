@@ -18,9 +18,6 @@ interface ToolRow {
   collecting: boolean;    // won a clear path (reachable) — the green one
 }
 
-// Watts to simulate when a row is switched on. Comfortably above any tool's
-// threshold; the exact value doesn't matter, only that it clears the bar.
-const SIM_ON_WATTS = 200;
 const POLL_MS = 2000;
 
 /**
@@ -124,6 +121,9 @@ const POLL_MS = 2000;
     }
     .setup svg { width: 15px; height: 15px; }
 
+    .ctlerr {
+      font-size: 13px; color: var(--danger); margin: 0 8px 10px; line-height: 1.5;
+    }
     .empty {
       text-align: center; color: var(--muted); padding: 48px 20px;
     }
@@ -175,6 +175,8 @@ const POLL_MS = 2000;
                 (click)="stopAll()"></button>
       </div>
 
+      <p class="ctlerr" *ngIf="error">{{ error }}</p>
+
       <div class="label">Tools</div>
       <div class="rows" [class.locked]="!ready">
         <button class="row" *ngFor="let t of tools" [class.collecting]="t.collecting"
@@ -218,6 +220,9 @@ export class LiveViewComponent implements OnInit, OnDestroy {
    *  no collector moves until it's whole. */
   ready = true;
   notReadyReason = '';
+  /** Last control failure, shown inline. A tap that silently does nothing is the
+   *  exact failure mode this view just had. */
+  error = '';
   /** Where "Finish setup" goes — the gate pass when that's what's missing, the canvas
    *  otherwise. Sending someone to the layout to fix a calibration would just confuse. */
   fixLink = '/build';
@@ -253,9 +258,15 @@ export class LiveViewComponent implements OnInit, OnDestroy {
   async toggle(t: ToolRow): Promise<void> {
     if (this.busy || !this.ready) return;
     this.busy = true;
+    this.error = '';
     try {
-      const status = await this.api.simTool(t.id, t.on ? 0 : SIM_ON_WATTS);
-      this.applyStatus(status);
+      await this.api.setToolManual(t.id, !t.on);
+      // Optimistic, then confirmed: the device answers the POST before its main
+      // loop has routed, so the authoritative state comes from the refresh.
+      t.on = !t.on;
+      await this.refresh(true);
+    } catch {
+      this.error = 'Couldn\'t reach the controller — nothing was switched.';
     } finally {
       this.busy = false;
     }
@@ -264,19 +275,19 @@ export class LiveViewComponent implements OnInit, OnDestroy {
   async stopAll(): Promise<void> {
     if (this.busy || !this.collectorOn || !this.ready) return;
     this.busy = true;
+    this.error = '';
     try {
-      let last: TopologyStatus | null = null;
-      for (const t of this.tools) {
-        if (t.on) last = await this.api.simTool(t.id, 0);
-      }
-      if (last) this.applyStatus(last);
+      for (const t of this.tools) if (t.on) await this.api.setToolManual(t.id, false);
+      await this.refresh(true);
+    } catch {
+      this.error = 'Couldn\'t reach the controller — nothing was switched.';
     } finally {
       this.busy = false;
     }
   }
 
-  private async refresh(): Promise<void> {
-    if (this.busy) return;
+  private async refresh(force = false): Promise<void> {
+    if (this.busy && !force) return;
     try {
       this.applyStatus(await this.api.getV2Status());
     } catch { /* transient — keep last known state */ }
@@ -319,7 +330,9 @@ export class LiveViewComponent implements OnInit, OnDestroy {
         } else if (unset.length) {
           const names = unset.map(s => s.name || s.id).join(', ');
           reason = `${names} ${unset.length === 1 ? "hasn't" : "haven't"} been set up yet — no one has shown ${unset.length === 1 ? 'it' : 'them'} where the valve positions are.`;
-          this.fixLink = '/gates';
+          // The canvas, not a separate pass: each unset gate wears an orange dot
+          // there, and tapping it opens the same configurator.
+          this.fixLink = '/build';
         }
       }
     } catch { reason = 'the layout could not be read.'; }

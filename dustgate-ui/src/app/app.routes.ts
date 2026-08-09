@@ -13,6 +13,11 @@ export const routes: Routes = [
   { path: 'shop',         loadComponent: () => import('./live/live.component').then(m => m.LiveViewComponent) },
   { path: 'build',        loadComponent: () => import('./build/build.component').then(m => m.BuildComponent) },
   { path: 'tools',        loadComponent: () => import('./tools/tool-setup.component').then(m => m.ToolSetupComponent) },
-  { path: 'gates',        loadComponent: () => import('./gates/gate-setup.component').then(m => m.GateSetupComponent) },
+  { path: 'boards',       loadComponent: () => import('./boards/board-setup.component').then(m => m.BoardSetupComponent) },
+  // /gates was a separate "set up every gate" pass. Retired: the canvas shows
+  // which gates are unset (orange dot) and configuring one is a tap on that dot,
+  // so the pass was a second place to do the same thing. Redirect kept for
+  // bookmarks and for anything still linking here.
+  { path: 'gates',        redirectTo: 'build' },
   { path: '**',           redirectTo: '' }
 ];

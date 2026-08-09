@@ -172,10 +172,10 @@ pulling to one collector.
 ### controller
 | field | notes |
 |---|---|
-| `id` | stable string, UI-assigned |
+| `id` | stable string, UI-assigned. `/boards` mints it from the mDNS hostname (slugified, collision-suffixed). |
 | `role` | `primary` \| `secondary` |
-| `board` | build-flag target (`devkitc`, `feather_s2`, …) |
-| `link` | transport config — `{ transport: "wifi-ws", host }` for now; `NodeLink`/ESP-NOW later |
+| `board` | build-flag target (`devkitc`, `feather_s2`, `qtpy_s3`, `qtpy_c3`, …) — matches `BOARD_NAME` in the board header, and what a node reports in its NodeLink `WELCOME`. |
+| `link` | `{ transport: "wifi-ws", host, ip? }`. **REQUIRED on every `secondary`, with a non-empty `host`** — `validateTopology` rejects one without, because a secondary with no address is a board the primary can never dial, and every gate on it would fail silently at run time. The PRIMARY needs no link: it is the local board. `host` is the mDNS hostname and is the stable key; `ip` is only a cache (the link re-resolves via `host`, so DHCP moving a board doesn't break the binding). |
 
 **Per-host actuator budget** (validated): one controller drives at most **4 servo
 selectors** (the `g_servos[4]` PWM bank) **+ 1 linear selector** (its single stepper
@@ -206,8 +206,16 @@ each `controllerId` staying within budget.
 ### element: collector
 | field | notes |
 |---|---|
-| `control.outlet` | the switchable DC plug (we command on/off) |
-| `control.offDelayMs` | coast-down before auto-off |
+| `control.outlet` | the switchable DC plug (we command on/off). Set on the build canvas, same sheet a tool's plug uses. Absent = the shop starts its collector by hand; gates still route normally. |
+| `control.offDelayMs` | coast-down before auto-off. **Absent = 4000 ms**, not zero: a blower that cuts the instant a bandsaw drops below threshold leaves the duct full and short-cycles between cuts. An explicit `0` disables it. Cancelled by a tool restarting; a dead-head stop ignores it. |
+| — | A plug belongs to exactly one element: no two tools may share a `sensor.outlet`, and neither may take the collector's. Enforced by `validateTopology`. |
+
+**These plugs are what the device is configured from.** On topology adopt, firmware
+registers every `tool.sensor.outlet` with the poller and points the blower switch at
+`collector.control.outlet` (`syncTopologyOutlets()` in `linear_actuator.ino`). Under a
+topology the layout is the source of truth for both, not the v1 setup wizard's stored
+slots — with one exception: a layout that names no collector plug leaves the stored one
+alone rather than un-configuring a working blower.
 
 ### duct
 | field | notes |
@@ -333,9 +341,19 @@ star of ducts. A lone linear actuator is the depth-1 special case — no separat
    (CCW), reference set as a small positive angle. STILL OPEN: the manifold's real port
    offsets (measure the ball), and backlash compensation in the servo HAL (approach
    each target from one direction — coupling has slop). See the mechanical notes.
-4. **Where the current-mutex scope lives** — per controller (each board sequences
-   its own servos) vs global. Per-controller is simpler and matches the power
-   rail being per-node. Confirm.
+4. **Where the current-mutex scope lives** — RESOLVED (2026-08-07): **GLOBAL**,
+   in `control/NodeBus.h`. `NodeBus::busy()` is true while ANY bus — local or
+   remote — has a move in flight, and `TopologyRuntime` never issues the next
+   move until it clears.
+
+   This is stricter than the per-controller lean noted here, deliberately. The
+   rail budget genuinely is per-node, so per-controller would be sufficient; but
+   serialising across boards too costs nothing (moves take ~2s, tool changes are
+   minutes apart) and it keeps the sequencer's make-before-break ORDER strictly
+   observable end-to-end, instead of interleaved by board. If a shop ever grows
+   enough that transition latency matters, relaxing this to per-controller is a
+   change to one method with a host test already covering the invariant
+   (`test_nodebus.cpp`: "busy local bus blocks a remote move").
 5. **Manifold pairing constraint** in the model — two tools on one manifold can't
    run together. Is that just a *routing conflict* at runtime, or also a *setup*
    warning (pair tools never used together)? (lean: both — detect at routing,

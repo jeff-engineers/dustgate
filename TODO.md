@@ -126,24 +126,151 @@ one source of truth for both the greying and the placement.
 
 We should have a way to warn users that devices are unecessary (two ballvalves inline, a ballvalve proceeding a manifold with a capped line)
 
-Next steps
+## v2 firmware + multi-node — DONE (2026-08-07), hardware-UNTESTED
 
-~~Need a way to configure an element~~ DONE — all three gate kinds.
-  Ball valves + manifolds (2026-08-06): `/gates` setup pass, plus the same sheet from the
-  build canvas. Jog the valve, watch the handle, capture each position; no degrees ever
-  shown. New firmware endpoint `POST /api/v2/servo/jog`, and the servo sweep is now
-  travel-proportional so a nudge lands at once.
-  Sliding gates (2026-08-07): manifold → home → home-side → reference sweep → per-outlet
-  nudge-and-capture, writing `linear.calibration` + `states[].positionMm`. Drives the v1
-  motion endpoints, which is sound while only the primary board has a stepper; a slider on
-  a SECONDARY board would need v2 endpoints first. The odd-outlet Rockler case now warns
-  instead of silently rounding.
-  Live view refuses to run until every gate is calibrated; the canvas shows a green check
-  when set up, amber when not.
-~~need to be able to tie elements to esp32's~~ DONE (2026-08-06) for servo gates — board +
-  channel pickers in the config sheet, with taken channels greyed out. `validateTopology`
-  now also rejects two gates sharing a channel on one board.
-A cheaper variant - qtpy based?
-Consider renaming linear actuator to something...more accurate?
-Add manual override buttons to ballvalves/manifolds/wire in to esp32
-ESD safety and power safety
+The whole star topology landed this session. Read
+[`docs/v2-architecture-rfc.md`](docs/v2-architecture-rfc.md) §6 for the design.
+
+- ~~Need a way to configure an element~~ DONE — all three gate kinds
+  (ball valves + manifolds 2026-08-06, sliding gates 2026-08-07).
+- ~~need to be able to tie elements to esp32's~~ DONE — board + channel pickers.
+- ~~A cheaper variant - qtpy based?~~ DONE — `pio run -e dustgate_node`, a
+  servo-only build at 27.7% of a 4MB board. Default node is the **QT Py
+  ESP32-S3 (N4R2)**, pin map in `boards/qtpy_s3.h`; the ESP32-C3 stays building
+  as `dustgate_node_c3` (`boards/qtpy_c3.h`). **Both pinouts reviewed, neither
+  bench-tested with servos attached** — the S3's chip/flash identity is
+  confirmed, its A0–A3 assignments are not.
+- **The dispatch seam** — `ActuatorBus` / `NodeBus` / `TopologyRuntime`. Before
+  this, the routing brain existed only for host tests: nothing in the sketch
+  included it and `/api/v2/status` was an idle stub. Now tool watts drive real
+  valves, one move at a time (which IS the servo current mutex).
+- **NodeLink** — versioned WS protocol, `RemoteActuatorBus` client, `/nodelink`
+  secondary endpoint, hold-on-link-loss.
+- **`/boards`** — scan, add, rename, remove secondary boards; live online state.
+- **`dev.sh flash-node`** — flashes a node and pushes WiFi creds over serial.
+  (The primary *can't* provision a node over the network — the node isn't on the
+  network yet. Serial at flash time is the answer.)
+
+## What's actually left
+
+### 1. Bench validation — do this before anything else
+Networking is now real: primary↔node link is up and green (2026-08-08). The rest
+below is still compile/host-test only. Expect bench work to generate its own
+backlog and reorder this list.
+
+**Bench note (2026-08-09): the layout now configures the plugs.** `syncTopologyOutlets()`
+rebuilds the poller's outlet slots from `tool.sensor.outlet` on every topology adopt, so
+a tool that isn't paired on the canvas is no longer watched — even if the old setup
+wizard had a slot for it. Re-pair anything that goes quiet. The collector is the one
+exception: a layout with no `collector.control.outlet` keeps the stored plug rather than
+un-configuring the blower. Watch for `[Outlets] Layout plugs registered: N` at boot.
+
+#### PICK UP HERE — BTT TMC2209 V1.3 driver swap (paused 2026-08-09)
+Swapping the Adafruit #6121 breakout for a BigTreeTech TMC2209 StepStick V1.3.
+Wiring is documented in `linear_actuator/WIRING.md` §1.
+
+Verified on the actual module, so these are settled:
+- sense resistors read **R110 → 0.11 Ω**, which already matches `TMC2209_R_SENSE`
+- no pull-down on EN, and no pull-up either — EN floats undriven, so the external
+  **10 kΩ EN→3V3 is required**, and nothing on the module fights it
+- **no firmware changes needed.** Address 0 (MS1/MS2 floating), external Rsense,
+  UART current control and unused DIAG all match config.h as it stands
+
+Left to do, in order:
+1. fit the 10 kΩ EN→3V3; with the ESP32 unplugged, EN→3V3 should read ~10 kΩ
+2. set the VREF pot to ~1.2–1.4 V (wiper→GND, VMOT powered, motor disconnected) —
+   the ceiling; UART sets 800 mA underneath it
+3. power up with **no motor connected** and confirm a clean TMC2209 UART handshake
+   in the boot log. A failure prints `[INIT] … motor(TMC2209 UART)` and every later
+   refusal repeats it. Usual causes: the 1 kΩ UART series resistor missing or
+   doubled (some BTT revisions fit their own), or MS1/MS2 jumpered
+4. only then connect coils — **1A/1B and 2A/2B are adjacent pairs**, not the
+   breakout's A+/A-/B+/B- order. Ring out each pair first
+5. re-run the steps/mm check; nothing about the driver swap should move it, which
+   is the point of checking
+
+```
+node shared/device-model/conformance.js http://<primary-ip> <key> --force
+node shared/device-model/topology-conformance.js http://<primary-ip>
+node shared/device-model/nodelink-conformance.js ws://<node>.local/nodelink
+```
+
+### 2. Known correctness gaps
+- **Sliding gate on a SECONDARY board** — calibration drives the v1 motion
+  endpoints. Sound while only the primary had a stepper; `/boards` makes it
+  user-reachable. Add v2 motion endpoints, or block the combination in the picker.
+- **Rockler even-gate-count** — odd counts misplace gates. Now *warns* instead of
+  silently rounding, but the wizard/spacing fix isn't finished.
+- **Conflicts aren't surfaced** — firmware reports
+  `{selectorId, winner, winnerState, losers[]}`; `live.component.ts` reads only
+  `reachable`. So the UI says a tool isn't pulling but not why. Data done, UI not.
+- **Servo backlash** — approach each target from one direction; the coupling has
+  slop. Affects valve repeatability. Size it on the bench.
+- **A stepper fault shouldn't disable the servos** — `g_hardwareFault` is one
+  latched boolean covering all three `begin()` stages, and every motion path
+  checks it, so a failed TMC2209 UART handshake refuses servo gate moves too.
+  Those gates don't touch the stepper. Make the fault *per-capability*
+  (`g_faultStages` already records which stage failed): refuse linear motion on a
+  motor fault, refuse servo motion only on a servo fault, and leave the rest of
+  the shop working. This bites on the bench constantly — a board wired up on the
+  desk loses stepper power far more often than the whole system is actually
+  broken, and right now that takes every gate down with it.
+
+- **The tool status light can't go red** — a tool paired to a plug that stopped
+  answering is indistinguishable from an idle one. `/api/v2/status` reports
+  `tools[id] = {watts, active}` and nothing about the sensor; the firmware knows
+  (`SmartOutlet::isReachable()`) but `linear_actuator.ino:638` only forwards
+  `getPowerW()`. Plumb reachability through `setToolPower`, emit
+  `tools[id].sensor = {paired, reachable}` from `TopologyRuntime::writeStatus`,
+  mirror it in `topology-device.js` `statusView()` so mock and firmware still
+  agree, and add a conformance scenario. Until then the shop list shows green and
+  orange only, and a dead plug reads as a tool nobody switched on.
+
+- **No inrush filter on tool-on** — v1 debounced a rising tool for
+  `OUTLET_ON_DEBOUNCE_MS` (1 s) so startup inrush couldn't false-trigger a gate
+  move. That debounce lives in the v1 stop-selection path, which a loaded topology
+  bypasses, so v2 acts on the first over-threshold reading. The coast-down now
+  covers the falling edge; this is the rising one. Same shape of fix (a delay in
+  `TopologyRuntime`), but it needs a schema field or a constant first.
+
+- **A UI deploy erases the saved shop** — `topology.json` lives in the same
+  LittleFS partition as the Angular bundle, and `deploy.sh`'s `--target uploadfs`
+  writes a fresh image built from `linear_actuator/data/`. So every full
+  `dev.sh flash` silently wipes the user's layout, calibration and node links.
+  Bit us during bring-up and read as a node-pairing failure. Either move the
+  topology to NVS/its own partition, or have deploy.sh GET it before uploadfs and
+  PUT it back after.
+
+### 3. Completion
+- **Clean up `/tools`** — its whole job was the outlet-pairing pass, which now
+  lives in the build canvas inspector (`Set up smart outlet` → the tool sheet).
+  The route is a wizard with nothing left to ask. Either point it at `/build` or
+  rebuild it as a genuine review pass ("check every tool at once"), which is a
+  different thing from configuring one. Also fold the v1 `OutletConfiguratorComponent`
+  onto the shared `<app-outlet-picker>` while in there — it kept its own copy of
+  the identify-by-power flow because it's welded to the slot/stop model.
+- **Retire the v1 flat path** — 36 `/api/*` routes still live beside v2, and both
+  control paths coexist (v1 stop-following is *suppressed* when a topology loads,
+  which is a guard, not a resolution).
+- **Navigation** — `/boards`, `/gates`, `/tools`, `/shop` exist but there's no
+  coherent path through them beyond the Build toolbar.
+- Add manual override buttons to ballvalves/manifolds, wire in to esp32
+- ESD safety and power safety
+- Consider renaming linear actuator to something...more accurate?
+
+### 4. Canvas polish
+- **Duct line routing / A\*** — deferred deliberately. It's cosmetic (odd
+  doglegs, nothing malfunctions) and `clearLaneY` got it mostly right; only the
+  collector case is suspect. If it's worth doing, the cheap version first: keep
+  the dogleg router and only fall back to a search when the simple route
+  collides, so the expensive code only runs on the cases that look wrong.
+- We should have a way to warn users that devices are unnecessary (two ballvalves
+  inline, a ballvalve preceding a manifold with a capped line)
+- Don't allow duplicate named tools
+- improve 'dont overlap ducts' rules
+- Do we really need editable names for manifolds/gates?
+- word wrap/fit names into the tool icons (maybe enlarge icons a bit)
+- right click actions?
+- Get rid of auto-arrange or make it work better?
+- Edit name by double clicking on text? or just clicking? unsure.
+- click and drag ducts?

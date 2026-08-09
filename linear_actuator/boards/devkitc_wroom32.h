@@ -23,11 +23,18 @@
 //     to a servo header on the carrier for Phase 2.
 //   - No DIAG pin: StallGuard is abandoned; PIN_TMC_DIAG is intentionally left
 //     undefined here and its uses are #ifdef-guarded.
-//   - Status LED on GPIO2: the onboard LED on most WROOM-32 dev boards, so the
-//     blink codes work without consuming a header pin. (GPIO2 is a strapping
-//     pin only for entry-to-flash at boot; fine as a post-boot output.)
+//   - Status LED on GPIO17, a labeled spare: the official DevKitC V4 has NO
+//     user LED (its one LED is the always-on power LED), so blink codes need an
+//     external one. GPIO2 — the usual choice, and where this started — is the
+//     onboard LED on NodeMCU-style CLONES only, and is a strapping pin, so an
+//     LED miswired to 3V3 there would keep the board out of download mode.
+//     GPIO17 is non-strapping and has no such failure mode.
 // =============================================================================
 #pragma once
+
+// Build-target identity, reported in the NodeLink WELCOME frame and matching
+// the topology schema's controllers[].board values (docs/v2-topology-schema.md).
+#define BOARD_NAME "devkitc"
 
 // -- TMC2209 control pins --
 #define PIN_TMC_STEP       23
@@ -43,8 +50,12 @@
 #define PIN_ENDSTOP_HOME   32   // NC switch, INPUT_PULLUP
 #define PIN_ENDSTOP_MAX    33   // NC switch, INPUT_PULLUP
 
-// -- Status LED (onboard, no header pin) --
-#define PIN_LED             2
+// -- Status LED (external; the official DevKitC V4's only onboard LED is the
+//    always-on power LED, so blink codes need a real LED on a header pin).
+//    GPIO17 is a labeled spare: non-strapping, so unlike GPIO2 an LED here can
+//    never hold the board out of download mode at boot.
+//    Wire: GPIO17 -> 330R -> LED anode, cathode -> GND. Active HIGH.
+#define PIN_LED            17
 
 // -- Reserved: Phase-2 servo PWM outputs (4 in a row; unused in v1) --
 #define SERVO_PWM_PIN_1    25

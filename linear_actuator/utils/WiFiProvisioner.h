@@ -102,6 +102,15 @@ static const char SAVED_HTML[] PROGMEM = R"html(
 </html>
 )html";
 
+// Optional heartbeat for the portal's blocking loop. _runPortal() never returns,
+// so a caller's own loop() is unreachable the entire time the portal is up —
+// which on a headless board means its status indicator would freeze on whatever
+// colour it had at boot, exactly when it most needs to say "come configure me".
+// Set this before begin() to get a tick; leave it null (the primary does) and
+// nothing changes. Called frequently, so keep the callback cheap and non-blocking.
+inline void (*&onPortalTick())() { static void (*cb)() = nullptr; return cb; }
+inline void setPortalTick(void (*cb)()) { onPortalTick() = cb; }
+
 // ---------------------------------------------------------------------------
 // Internal: start setup AP and block until the user submits credentials.
 // Saves to NVS and reboots — never returns.
@@ -170,6 +179,7 @@ inline void _runPortal() {
     String serialLine;
     while (true) {
         server.handleClient();
+        if (onPortalTick()) onPortalTick();
 
         while (Serial.available()) {
             char c = Serial.read();
@@ -223,6 +233,23 @@ inline bool begin() {
     // takes effect for this session's connection.
     WiFi.persistent(true);
     WiFi.setAutoReconnect(true);
+
+    // Modem sleep OFF. This is a correctness fix, not a tuning knob.
+    //
+    // The ESP32 defaults to WIFI_PS_MIN_MODEM: the radio dozes between DTIM
+    // beacons and wakes for unicast addressed to it. MULTICAST is what gets
+    // dropped — and mDNS is entirely multicast. Symptoms this caused on the
+    // bench, all of which looked like different bugs:
+    //
+    //   • the primary's mDNS query for a node failing at boot, succeeding a
+    //     minute later, with the node advertising perfectly the whole time
+    //   • GET /api/v2/nodes/discover returning [] while a laptop on the same
+    //     LAN saw both boards instantly
+    //   • ~220ms ping times to a board two metres away
+    //
+    // Both boards are mains-powered and one of them is holding a WebSocket open
+    // for the whole session, so there is nothing to save here anyway.
+    WiFi.setSleep(false);
 #ifdef WIFI_STA_SSID
     // Developer mode: hardcoded credentials take priority over NVS
     DEBUG_PRINT(F("[WiFi] Connecting to ")); DEBUG_PRINTLN(F(WIFI_STA_SSID));
@@ -264,6 +291,14 @@ inline bool begin() {
     String hostname = getHostname();
     if (MDNS.begin(hostname.c_str())) {
         MDNS.addService("http", "tcp", 80);
+        // Also advertise on the DustGate service so a primary's node picker can
+        // enumerate the shop. role=primary is what keeps this board OUT of its
+        // own (and a neighbouring system's) list of actuator targets — the
+        // picker only offers role=secondary. Secondary nodes advertise the same
+        // service with role=secondary; see node/dustgate_node.cpp.
+        MDNS.addService("dustgate", "tcp", 80);
+        MDNS.addServiceTxt("dustgate", "tcp", "role",  "primary");
+        MDNS.addServiceTxt("dustgate", "tcp", "board", BOARD_NAME);
         DEBUG_PRINT(F("[WiFi] mDNS hostname: "));
         Serial.print(hostname);
         Serial.println(F(".local"));

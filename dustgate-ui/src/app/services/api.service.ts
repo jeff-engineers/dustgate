@@ -82,6 +82,34 @@ export interface DiscoveredOutlet {
   generation: number;
 }
 
+/** A secondary board found on the network by GET /api/v2/nodes/discover. */
+export interface DiscoveredNode {
+  /** mDNS hostname — the STABLE key a topology binds link.host to. */
+  host: string;
+  /** Last-known address. Informational: the link re-resolves via host. */
+  ip: string;
+  /** Build target it reports, e.g. "qtpy_c3". */
+  board: string;
+  /** Servo channels it offers. */
+  servos: number;
+}
+
+/** Live link state for one controller in the topology (GET /api/v2/nodes). */
+export interface NodeLinkState {
+  id: string;
+  host: string;
+  /** Friendly name, stored on the device beside the pairing — so a board keeps it
+   *  through a layout wipe and can be named before any layout exists. Empty until
+   *  someone renames it. */
+  name?: string;
+  online: boolean;
+  /** millis() on the device when we last heard from it. Informational. */
+  lastSeen: number;
+  board: string;
+  fw: string;
+  caps: { servos: number; linear: number };
+}
+
 export interface DeviceInfo {
   apiKey: string;
   numStops: number;
@@ -373,16 +401,66 @@ export class ApiService {
   }
 
   /**
+   * Switch a tool on or off BY HAND — what the Live view's rows do.
+   *
+   * Distinct from simTool(), which injects a fake wattage and exists only in the
+   * mock and the browser demo. The Live view used to call that, so on real
+   * hardware every tap 404'd and the daily-driver screen drove nothing. Sensed
+   * tools still routed themselves off their Shelly plugs, which is what hid it.
+   */
+  setToolManual(toolId: string, on: boolean): Promise<unknown> {
+    return this.post('/api/v2/tool', { toolId, on });
+  }
+
+  /**
    * Setup only: drive one servo directly so the user can watch the valve and capture
    * where it lands. Rejects with 501 on a build without servo support, which the gate
    * configurator surfaces rather than pretending the nudge worked.
    */
-  jogServo(channel: number, angle: number): Promise<unknown> {
-    return this.post('/api/v2/servo/jog', { channel, angle });
+  // ── v2 secondary boards ───────────────────────────────────────────────────
+  /**
+   * Sweep the network for secondary boards (mDNS _dustgate._tcp, role=secondary).
+   * Discovery only POPULATES the picker — the saved topology still binds each
+   * board by an explicit link.host, so a spare board on the bench or a second
+   * system in the shop can never silently adopt itself into a live layout.
+   */
+  discoverNodes(): Promise<DiscoveredNode[]> {
+    return this.get<DiscoveredNode[]>('/api/v2/nodes/discover');
+  }
+
+  /**
+   * Pair a secondary board, by mDNS host. The device persists this in NVS and
+   * dials it immediately — INDEPENDENT of the topology, so a paired board stays
+   * paired across a layout wipe (a full firmware+filesystem flash rewrites the
+   * partition the topology lives in) and links before any shop is drawn.
+   */
+  pairNode(host: string, name?: string): Promise<unknown> {
+    return this.post('/api/v2/nodes/pair', { host, ...(name ? { name } : {}) });
+  }
+  unpairNode(host: string): Promise<unknown> {
+    return this.post('/api/v2/nodes/pair', { host, remove: true });
+  }
+
+  /** Live link state per controller — which boards are actually answering. */
+  async getNodes(): Promise<NodeLinkState[]> {
+    const r = await this.get<{ nodes: NodeLinkState[] }>('/api/v2/nodes');
+    return r?.nodes ?? [];
+  }
+
+  /**
+   * Nudge one servo to an absolute angle for calibration.
+   *
+   * `controllerId` says WHICH board — the primary relays it to that node. Pass the
+   * selector's own controllerId always, not just for secondaries: every board
+   * numbers its channels 0-3, so omitting it silently jogs the primary's servo on
+   * the same channel, which is a different valve entirely.
+   */
+  jogServo(channel: number, angle: number, controllerId?: string): Promise<unknown> {
+    return this.post('/api/v2/servo/jog', { channel, angle, ...(controllerId ? { controllerId } : {}) });
   }
   /** De-energize a servo — the valve holds by friction/detent. */
-  detachServo(channel: number): Promise<unknown> {
-    return this.post('/api/v2/servo/jog', { channel, detach: true });
+  detachServo(channel: number, controllerId?: string): Promise<unknown> {
+    return this.post('/api/v2/servo/jog', { channel, detach: true, ...(controllerId ? { controllerId } : {}) });
   }
 
   /**

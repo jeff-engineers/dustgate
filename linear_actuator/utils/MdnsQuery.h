@@ -28,6 +28,9 @@ struct MdnsHit {
     String hostname;
     String ip;
     int    gen;   // "gen" TXT value (2, 3, ...); 0 = key absent (Gen1 or not a Shelly)
+    String role;  // "role" TXT — DustGate nodes advertise role=secondary
+    String board; // "board" TXT — build target of a DustGate node
+    int    servos; // "servos" TXT — servo channel count on a DustGate node
 };
 
 // Queries <service>.<proto>, waiting up to timeoutMs for responses. Returns the
@@ -48,18 +51,27 @@ inline int mdnsQueryService(const char* service, const char* proto,
             }
         }
 
-        // TXT records are optional and order isn't guaranteed — scan for "gen".
-        int gen = 0;
+        // TXT records are optional and order isn't guaranteed — scan for the
+        // keys we care about. Shelly plugs carry "gen"; DustGate secondary nodes
+        // carry "role"/"board"/"servos" (see node/dustgate_node.cpp).
+        int gen = 0, servos = 0;
+        String role, board;
         for (size_t t = 0; t < r->txt_count; t++) {
-            if (r->txt[t].key && r->txt[t].value && strcmp(r->txt[t].key, "gen") == 0) {
-                gen = atoi(r->txt[t].value);
-                break;
-            }
+            const char* k = r->txt[t].key;
+            const char* v = r->txt[t].value;
+            if (!k || !v) continue;
+            if      (strcmp(k, "gen")    == 0) gen    = atoi(v);
+            else if (strcmp(k, "servos") == 0) servos = atoi(v);
+            else if (strcmp(k, "role")   == 0) role   = v;
+            else if (strcmp(k, "board")  == 0) board  = v;
         }
 
         hits[count].hostname = r->hostname ? String(r->hostname) : String();
         hits[count].ip       = ip.toString();
         hits[count].gen      = gen;
+        hits[count].role     = role;
+        hits[count].board    = board;
+        hits[count].servos   = servos;
         count++;
     }
     mdns_query_results_free(results);
@@ -69,6 +81,13 @@ inline int mdnsQueryService(const char* service, const char* proto,
 // Shelly-only service (Gen2+). Every hit is a Shelly device.
 inline int mdnsQueryShellyTcp(uint32_t timeoutMs, MdnsHit hits[], int maxHits) {
     return mdnsQueryService("_shelly", "_tcp", timeoutMs, hits, maxHits);
+}
+
+// DustGate secondary nodes (_dustgate._tcp). Every hit is a board offering a
+// /nodelink WebSocket; check hit.role == "secondary" before offering it as a
+// target, so a primary never lists itself or another shop's brain.
+inline int mdnsQueryDustgateTcp(uint32_t timeoutMs, MdnsHit hits[], int maxHits) {
+    return mdnsQueryService("_dustgate", "_tcp", timeoutMs, hits, maxHits);
 }
 
 // Generic HTTP service — callers must filter; used to reach Gen1 Shellies.

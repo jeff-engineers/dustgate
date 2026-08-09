@@ -10,8 +10,11 @@
 //   - most-recent-tool-wins  → active tools are ordered most-recently-activated
 //     first, and routing.js resolves contests in that order.
 //   - idle-hold              → with NO active tool, HOLD every selector where it
-//     is (never auto-close) and switch the collector off. Keeps a path open so a
+//     is (never auto-close) and coast the collector down. Keeps a path open so a
 //     manual collector start can't dead-head, and avoids wear on a brief tool-off.
+//   - collector coast-down   → the blower stays on for control.offDelayMs after
+//     the last tool stops. Expired lazily on read (tickCollector), since this
+//     model owns no clock.
 //
 // PURE + synchronous: reconcile() jumps selectors to their target state. The
 // ORDERED make-before-break moves (for a real actuator's timing) are returned via
@@ -25,6 +28,7 @@ const { computeRouting } = require('./routing');
 const { planTransition } = require('./sequencer');
 
 const DEFAULT_THRESHOLD_W = 5;
+const DEFAULT_COLLECTOR_OFF_DELAY_MS = 4000;
 
 /** Watts above which a tool counts as "on" (from its sensor outlet, or default). */
 function toolThreshold(topology, toolId) {
@@ -47,8 +51,35 @@ function createTopologyDevice(topology) {
     activationSeq: {},        // toolId → recency seq (absent = inactive)
     seqCounter: 0,
     collectorOn: false,
+    // Coast-down: still energized, but only to finish clearing the ducts.
+    collectorCoasting: false,
+    coastUntilMs: 0,
     lastRouting: { states: {}, conflicts: [], reachable: {} },
   };
+}
+
+/**
+ * Coast-down for this layout, in ms. Absent means "the shop didn't say" and gets
+ * the default, not zero — a blower that cuts the instant a bandsaw drops below
+ * threshold leaves the duct full and short-cycles between cuts. An explicit 0
+ * does disable it. Mirrors kDefaultCollectorOffDelayMs in TopologyRuntime.h.
+ */
+function collectorOffDelayMs(topology) {
+  const c = (topology.elements || []).find((e) => e.type === 'collector');
+  const v = c && c.control && c.control.offDelayMs;
+  return typeof v === 'number' ? v : DEFAULT_COLLECTOR_OFF_DELAY_MS;
+}
+
+/**
+ * Expire a finished coast. Called on every read rather than from a timer: the
+ * model owns no clock (mock-api owns setTimeout, the UI owns await delay), and
+ * lazy expiry gives the same answer to anyone who asks with a real `nowMs`.
+ */
+function tickCollector(d, nowMs) {
+  if (d.collectorCoasting && nowMs >= d.coastUntilMs) {
+    d.collectorCoasting = false;
+    d.collectorOn = false;
+  }
 }
 
 /** Tools currently active (watts ≥ threshold), most-recently-activated FIRST. */
@@ -69,7 +100,7 @@ function activeTools(d) {
  * winners and close the rest (focus suction), collector on.
  * @returns {{routing: object, plan: object}}
  */
-function reconcile(d) {
+function reconcile(d, nowMs) {
   const active = activeTools(d);
   const routing = computeRouting(d.topology, active);
   const plan = planTransition(d.topology, d.actuatorStates, routing.states, { collectorRunning: d.collectorOn });
@@ -77,26 +108,37 @@ function reconcile(d) {
   if (active.length > 0) {
     d.actuatorStates = { ...d.actuatorStates, ...routing.states };
     d.collectorOn = true;
+    d.collectorCoasting = false;   // a tool is running again — coast is moot
   } else {
-    d.collectorOn = false;   // idle: hold positions (actuatorStates unchanged)
+    // Idle: hold positions (actuatorStates unchanged) and COAST the blower down.
+    // Safe because idle moves nothing: no path can close under a running blower.
+    const delay = collectorOffDelayMs(d.topology);
+    if (d.collectorOn && !d.collectorCoasting && delay > 0) {
+      d.collectorCoasting = true;
+      d.coastUntilMs = nowMs + delay;
+    } else if (!d.collectorCoasting) {
+      d.collectorOn = false;
+    }
   }
   d.lastRouting = routing;
   return { routing, plan };
 }
 
 /** Set a tool's live power reading; tracks the OFF→ON edge (recency) and reconciles. */
-function setToolPower(d, toolId, watts) {
+function setToolPower(d, toolId, watts, nowMs = Date.now()) {
+  tickCollector(d, nowMs);
   const th = toolThreshold(d.topology, toolId);
   const wasActive = (d.toolWatts[toolId] || 0) >= th;
   d.toolWatts[toolId] = watts;
   const nowActive = watts >= th;
   if (nowActive && !wasActive) d.activationSeq[toolId] = ++d.seqCounter; // rising edge → newest
   if (!nowActive) delete d.activationSeq[toolId];
-  return reconcile(d);
+  return reconcile(d, nowMs);
 }
 
 /** Projected status for consumers (mock / demo / UI). */
-function statusView(d) {
+function statusView(d, nowMs = Date.now()) {
+  tickCollector(d, nowMs);
   const tools = {};
   for (const tool of T.toolsOf(d.topology)) {
     const w = d.toolWatts[tool.id] || 0;
@@ -106,12 +148,17 @@ function statusView(d) {
     actuators: { ...d.actuatorStates },
     tools,
     collectorOn: d.collectorOn,
+    // Only present while true, matching TopologyRuntime::writeStatus — additive,
+    // so a consumer that predates coasting still sees the contract it expects.
+    ...(d.collectorCoasting ? { collectorCoasting: true } : {}),
     conflicts: d.lastRouting.conflicts,
     reachable: d.lastRouting.reachable,
   };
 }
 
 module.exports = {
-  DEFAULT_THRESHOLD_W, toolThreshold,
+  DEFAULT_THRESHOLD_W, DEFAULT_COLLECTOR_OFF_DELAY_MS,
+  toolThreshold, collectorOffDelayMs,
   createTopologyDevice, activeTools, reconcile, setToolPower, statusView,
+  tickCollector,
 };

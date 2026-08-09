@@ -32,6 +32,18 @@ jobs:
       - name: Run conformance suite against the mock
         run: npm run conformance:ci
         working-directory: tools
+      - name: Pure model tests (topology, routing, NodeLink frames)
+        run: npm run model:test
+        working-directory: tools
+      - name: Topology conformance against the mock
+        run: npm run topology:conformance:ci
+        working-directory: tools
+      # End-to-end NodeLink: a simulated primary drives a simulated secondary
+      # over a real WebSocket. Covers the conversation (accept-vs-arrive,
+      # refusals, hold-on-link-loss) that per-frame unit tests can't reach.
+      - name: NodeLink conformance against the mock node
+        run: npm run nodelink:conformance:ci
+        working-directory: tools
 
   ui-build:
     name: UI build
@@ -58,6 +70,16 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      # The host tests are driven by the tools/ npm scripts (they locate the
+      # ArduinoJson headers PlatformIO fetched), so this job needs Node too.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: tools/package-lock.json
+      - name: Install tools deps
+        run: npm ci
+        working-directory: tools
       - name: Cache PlatformIO
         uses: actions/cache@v4
         with:
@@ -67,5 +89,10 @@ jobs:
           key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
       - name: Install PlatformIO
         run: pip install --upgrade platformio
-      - name: Compile firmware
-        run: pio run
+      - name: Compile firmware (all targets, incl. the servo-only node)
+        run: pio run -e esp32dev_wroom32 -e adafruit_feather_esp32s2 -e dustgate_node -e dustgate_node_c3
+      # Host tests for the pure C++ control layer. They need ArduinoJson, which
+      # the `pio run` above has already fetched into .pio.nosync/libdeps.
+      - name: Host tests (router, controller, nodebus/nodelink)
+        run: npm run firmware:test
+        working-directory: tools

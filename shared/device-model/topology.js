@@ -247,6 +247,18 @@ function validateTopology(t) {
           err('controller', 'link.ip must be a string', c.id);
       }
     }
+    // A SECONDARY is only reachable through its link. Without a host the primary
+    // has no address to dial, so every gate on that board would be silently
+    // un-driveable at run time — the firmware leaves it unregistered and reports
+    // its moves as failed (see NodeBus). Catch it here, at config time, where the
+    // user can still fix it. The primary needs no link: it IS the local board.
+    if (c.role === 'secondary') {
+      if (!c.link || typeof c.link !== 'object') {
+        err('controller', `secondary board "${c.name || c.id}" has no link — the primary can't reach it`, c.id);
+      } else if (typeof c.link.host !== 'string' || !c.link.host.trim()) {
+        err('controller', `secondary board "${c.name || c.id}" has no link.host — the primary can't reach it`, c.id);
+      }
+    }
   }
   if (primaries !== 1) err('controller', `exactly one primary controller required (found ${primaries})`);
 
@@ -262,6 +274,23 @@ function validateTopology(t) {
     if (e.type === 'collector') collectors++;
   }
   if (collectors !== 1) err('element', `exactly one collector required (found ${collectors})`);
+
+  // ── plugs: one physical outlet, one machine ──
+  // A tool's plug is a SENSOR (sensor.outlet — we watch its draw) and the
+  // collector's is a SWITCH (control.outlet — we command it), but both name the
+  // same scarce thing: a Shelly on the network. Sharing one makes the router
+  // believe two machines started at once, and sharing the collector's would have
+  // the blower's own draw hold itself on. Firmware's toolForOutlet() maps by
+  // ip/host and can only answer with one id, so this has to be unique here.
+  const plugOwner = new Map();     // ip → element id
+  for (const e of t.elements) {
+    const outlet = e.type === 'collector' ? (e.control || {}).outlet : (e.sensor || {}).outlet;
+    const ip = outlet && outlet.ip;
+    if (!ip) continue;
+    if (plugOwner.has(ip))
+      err('element', `smart outlet ${ip} is on two elements ("${plugOwner.get(ip)}" and "${e.id}")`, e.id);
+    else plugOwner.set(ip, e.id);
+  }
 
   // ── selectors: kind, states, branches, refs ──
   // Per-host actuator tally — enforced against the hardware budget after the loop.
@@ -317,7 +346,7 @@ function validateTopology(t) {
         err('selector', 'servo.reversed must be a boolean', ref);
       // Two servo selectors on one board sharing a PWM channel would move together.
       if (sel.controllerId && typeof sv.channel === 'number') {
-        const key = `${sel.controllerId} ${sv.channel}`;
+        const key = `${sel.controllerId}\u0000${sv.channel}`;
         if (servoChannelOwner.has(key))
           err('selector', `servo channel ${sv.channel} on host "${sel.controllerId}" `
             + `is already used by "${servoChannelOwner.get(key)}"`, ref);

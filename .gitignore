@@ -63,3 +63,7 @@ tools/.env
 .idea/
 .claude/
 .vercel
+
+# Per-machine USB serial→role pins for dev.sh (see "dev.sh ports --pin").
+# Board serials are specific to one bench; never shared.
+.dustgate-ports

@@ -1,7 +1,8 @@
-import { Component, EventEmitter, Input, OnInit, Output } from '@angular/core';
+import { Component, EventEmitter, Input, OnInit, Output, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import type { Topology } from '@topology';
+import { ApiService, NodeLinkState } from '../services/api.service';
 import { ServoCalibrationComponent } from './servo-calibration.component';
 import { LinearCalibrationComponent } from './linear-calibration.component';
 import {
@@ -41,6 +42,7 @@ const SERVO_CHANNELS = [0, 1, 2, 3];
     .field:last-child { margin-bottom: 0; }
     .two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
     .why { font-size: 11.5px; color: var(--muted); margin-top: 6px; line-height: 1.5; }
+    .why.offline { color: var(--danger); }
   `],
   template: `
     <div class="card">
@@ -68,10 +70,18 @@ const SERVO_CHANNELS = [0, 1, 2, 3];
             </option>
           </select>
         </div>
-        <p class="why">
+        <p class="why" *ngIf="!boardOffline">
           {{ isServo
              ? 'Each board drives up to four servo gates, one per channel.'
              : 'A sliding gate uses the board\\'s stepper driver — one per board.' }}
+        </p>
+        <p class="why offline" *ngIf="boardOffline">
+          {{ boardName }} isn't answering right now. You can still set this gate up,
+          but the jog control below won't move anything until the board is back.
+        </p>
+        <p class="why" *ngIf="noFreeChannel">
+          All four servo channels on {{ boardName }} are taken — pick another board,
+          or free a channel by moving one of its gates.
         </p>
       </div>
     </div>
@@ -91,11 +101,17 @@ export class SelectorConfigComponent implements OnInit {
   @Output() saved = new EventEmitter<ConfigurableSelector>();
   @Output() cancelled = new EventEmitter<void>();
 
+  private readonly api = inject(ApiService);
+
   name = '';
   controllerId = '';
   channel = 0;
   controllers: Controller[] = [];
   readonly channels = SERVO_CHANNELS;
+
+  /** Live link state, so the picker can say a board isn't answering rather than
+   *  letting the user calibrate against a jog control that silently does nothing. */
+  private links: NodeLinkState[] = [];
 
   /** The selector the calibration widget edits. ONE stable object, mutated in place by
    *  the fields above — handing the child a fresh copy each change-detection pass would
@@ -110,6 +126,18 @@ export class SelectorConfigComponent implements OnInit {
     this.working = isServoKind(this.sel)
       ? { ...this.sel, servo: { ...this.sel.servo } }
       : { ...this.sel, linear: { ...(this.sel as LinearSelector).linear } };
+
+    // Paired boards are the SOURCE OF TRUTH for what this picker offers, not the
+    // layout's controllers[]. Pairing lives on the device and can happen before a
+    // layout exists at all, so a board paired from /boards would otherwise be
+    // invisible here until something happened to write it into the document —
+    // which was exactly the symptom: visible under Boards, missing from "Driven by".
+    //
+    // Best-effort: an older firmware without /api/v2/nodes falls back to whatever
+    // the layout already names, and simply can't warn about reachability.
+    void this.api.getNodes()
+      .then((n) => { this.links = n; this.mergePairedBoards(); })
+      .catch(() => { /* no link info */ });
   }
 
   get calibrated(): boolean { return isCalibrated(this.sel); }
@@ -120,6 +148,31 @@ export class SelectorConfigComponent implements OnInit {
   // decided which one renders.
   asServo(s: ConfigurableSelector): ServoSelector { return s as ServoSelector; }
   asLinear(s: ConfigurableSelector): LinearSelector { return s as LinearSelector; }
+
+  /**
+   * Fold every paired board into the options, adding a controllers[] entry for any
+   * the layout doesn't know about yet.
+   *
+   * Written into the topology rather than held as a display-only extra: the schema
+   * requires a controllers entry behind each gate's controllerId, so a selection
+   * offered but not backed would fail validation at save time — a mysterious
+   * rejection in place of a missing option. The parent persists this same document,
+   * so the entry lands with the gate that needed it.
+   */
+  private mergePairedBoards(): void {
+    const controllers = controllersOf(this.topo);
+    for (const l of this.links) {
+      if (controllers.some((c) => c.id === l.id)) continue;
+      controllers.push({
+        id: l.id,                       // the node's mDNS host IS its controllerId
+        role: 'secondary',
+        name: l.name || l.host || l.id,
+        board: l.board,
+        link: { transport: 'wifi-ws', host: l.host },
+      });
+    }
+    this.controllers = controllersOf(this.topo);
+  }
 
   boardLabel(c: Controller): string {
     return `${c.name || c.id}${c.role === 'primary' ? ' (primary)' : ''}`;
@@ -139,9 +192,34 @@ export class SelectorConfigComponent implements OnInit {
     return `Servo ${ch + 1} — ${taken || 'free'}`;
   }
 
+  get boardName(): string {
+    const c = this.controllers.find((x) => x.id === this.controllerId);
+    return c?.name || this.controllerId || 'that board';
+  }
+
+  /** Is the selected board a secondary that isn't currently answering? The
+   *  primary is always "reachable" — it's the board serving this page. */
+  get boardOffline(): boolean {
+    const link = this.links.find((l) => l.id === this.controllerId);
+    return !!link && !link.online;
+  }
+
+  /** Every channel on the selected board is spoken for by another gate. */
+  get noFreeChannel(): boolean {
+    return this.isServo && this.channels.every((ch) => !!this.takenBy(ch));
+  }
+
   /** Name/wiring edits ride along with the calibration result, so push them into the
    *  object the widget is holding — a channel change has to reach the jog calls. */
   touch(): void {
+    // Moving a gate to a different board can land it on a channel that board has
+    // already given away. Slide to a free one rather than leaving a selection the
+    // schema will reject at save time (and that the greyed-out <option> only
+    // documents for channels the user hasn't picked yet).
+    if (this.isServo && this.takenBy(this.channel)) {
+      const free = this.channels.find((ch) => !this.takenBy(ch));
+      if (free !== undefined) this.channel = free;
+    }
     this.working.name = this.name;
     this.working.controllerId = this.controllerId;
     if (isServoKind(this.working)) this.working.servo.channel = this.channel;

@@ -3,7 +3,9 @@ import { HttpClient } from '@angular/common/http';
 import {
   ApiService,
   DeviceInfo,
+  DiscoveredNode,
   DiscoveredOutlet,
+  NodeLinkState,
   OutletConfigCmd,
   PingResult,
   SystemStatus,
@@ -103,16 +105,26 @@ export class DemoApiService extends ApiService {
     return topoStatus(this.td);
   }
 
+  /** Manual switch. The model has one notion of "active" — a wattage — so this is
+   *  the same lever with a synthetic reading, exactly as firmware does it. */
+  override async setToolManual(toolId: string, on: boolean): Promise<unknown> {
+    if (!this.td) throw new Error('no topology configured');
+    setToolPower(this.td, toolId, on ? 100000 : 0);
+    return { ok: true };
+  }
+
   /** No servo to move in the demo — accept the nudge so the gate configurator is
    *  fully walkable, and remember the angle so a re-read reflects the last command. */
-  override async jogServo(channel: number, angle: number): Promise<unknown> {
-    this.servoAngles.set(channel, angle);
+  override async jogServo(channel: number, angle: number, controllerId?: string): Promise<unknown> {
+    // Keyed by board too — every controller numbers its channels 0-3, so channel
+    // alone would have two boards' gate 1 overwriting each other.
+    this.servoAngles.set(`${controllerId ?? ''}:${channel}`, angle);
     return { ok: true };
   }
-  override async detachServo(_channel: number): Promise<unknown> {
+  override async detachServo(_channel: number, _controllerId?: string): Promise<unknown> {
     return { ok: true };
   }
-  private servoAngles = new Map<number, number>();
+  private servoAngles = new Map<string, number>();
 
   private delay(ms: number): Promise<void> {
     return new Promise(r => setTimeout(r, ms));
@@ -242,6 +254,50 @@ export class DemoApiService extends ApiService {
       powerW:     x.powerW,
       generation: x.gen,
     }));
+  }
+
+  // ── v2 secondary boards ───────────────────────────────────────────────────
+  // Two fake nodes so the boards surface is explorable in the demo. One is
+  // deliberately already in DEMO_TOPOLOGY's controllers[] and one isn't, so both
+  // the "add" and the "already added" paths are visible without any hardware.
+  private readonly demoNodes: DiscoveredNode[] = [
+    { host: 'dustgate-node-1', ip: '192.168.87.61', board: 'qtpy_c3', servos: 4 },
+    { host: 'dustgate-node-2', ip: '192.168.87.62', board: 'devkitc', servos: 4 },
+  ];
+
+  override async discoverNodes(): Promise<DiscoveredNode[]> {
+    await this.delay(600);   // an mDNS sweep is not instant; don't pretend it is
+    return this.demoNodes.map(n => ({ ...n }));
+  }
+
+  /** No NVS to write to in the browser — accept it so the boards flow is walkable.
+   *  getNodes() below still derives link state from the topology, which is close
+   *  enough for the demo even though the device now keeps the two separate. */
+  override async pairNode(_host: string, _name?: string): Promise<unknown> { return { ok: true }; }
+  override async unpairNode(_host: string): Promise<unknown> { return { ok: true }; }
+
+  override async getNodes(): Promise<NodeLinkState[]> {
+    // Report link state for whatever secondaries the current topology names, so
+    // the UI's online/offline treatment is exercised. node-2 is simulated as
+    // UNREACHABLE — the interesting case, and the one that's hard to stage on a
+    // bench with two working boards.
+    const controllers = (this.td?.topology as { controllers?: Array<{ id: string; role: string; link?: { host?: string } }> })?.controllers ?? [];
+    return controllers
+      .filter(c => c.role === 'secondary')
+      .map(c => {
+        const host = c.link?.host ?? '';
+        const known = this.demoNodes.find(n => n.host === host);
+        const online = host !== 'dustgate-node-2';
+        return {
+          id: c.id,
+          host,
+          online,
+          lastSeen: online ? Date.now() : 0,
+          board: known?.board ?? 'unknown',
+          fw: online ? '1.0.0-demo' : '',
+          caps: { servos: known?.servos ?? 0, linear: 0 },
+        };
+      });
   }
 
   override saveOutletConfig(): Promise<{ ok: boolean }> {

@@ -239,10 +239,68 @@ extern int g_homeDirection;        // defined in linear_actuator.ino
   #include "boards/devkitc_wroom32.h"
 #elif defined(BOARD_FEATHER_S2)
   #include "boards/feather_s2.h"
+#elif defined(BOARD_QTPY_S3)
+  #include "boards/qtpy_s3.h"
+#elif defined(BOARD_QTPY_C3)
+  #include "boards/qtpy_c3.h"
 #else
   // No board flag set (e.g. a bare Arduino IDE build) — default to the Feather,
   // which is the original hardware and has native-USB defaults.
   #include "boards/feather_s2.h"
+#endif
+
+// -----------------------------------------------------------------------------
+// BOARD CAPABILITIES — derived, never hand-set.
+//
+// A DustGate board is defined by what it can physically drive, and that is
+// already implied by its pin map. Deriving the capabilities from the pins means
+// a board header can't claim hardware it doesn't wire up, and adding a new
+// target is one file rather than a pin map plus a matching set of feature flags.
+//
+//   HAS_LINEAR  — a stepper + endstops (the rack). Absent on servo-only nodes.
+//   HAS_SERVO   — the PWM servo bank.
+//
+// These replaced the old `#error "No feedback type defined"` / `"No control type
+// defined"` walls in the sketch, which made a stepper-less build impossible to
+// express at all.
+// -----------------------------------------------------------------------------
+#if defined(PIN_TMC_STEP)
+  #define HAS_LINEAR 1
+#else
+  #define HAS_LINEAR 0
+#endif
+
+#if defined(ENABLE_SERVO) && defined(SERVO_PWM_PIN_1)
+  #define HAS_SERVO 1
+#else
+  #define HAS_SERVO 0
+#endif
+
+// -----------------------------------------------------------------------------
+// SECONDARY ROLE (-DDUSTGATE_SECONDARY)
+//
+// A "dumb" actuator bank in the star: it accepts already-resolved NodeLink SET
+// frames and moves a channel to an angle. It owns no topology, computes no
+// routing, polls no Shelly plugs and serves no web UI — the primary does all of
+// that. Building one is mostly SUBTRACTION from the normal firmware, which is
+// what keeps the cheap variant from being a second codebase.
+//
+// Kept as one flag rather than a pile of per-feature switches so "is this board
+// a secondary?" has exactly one answer.
+// -----------------------------------------------------------------------------
+// The secondary is built from its own tiny source root (linear_actuator/node/),
+// NOT by #ifdef-ing the primary sketch: the stepper, endstops, homing, the
+// reference sweep, Shelly polling and the routing brain are woven through the
+// main .ino in ~100 separate places, and splitting that with the preprocessor
+// would leave a sketch nobody can read. See node/dustgate_node.cpp.
+//
+// This flag therefore only switches off the primary-only subsystems that the
+// SHARED headers would otherwise pull in.
+#ifdef DUSTGATE_SECONDARY
+  // No plug polling: the primary owns tool sensing and tells us what to do.
+  #undef CONTROL_SMART_OUTLET
+  // No REST API / Angular bundle — a node's entire interface is /nodelink.
+  #undef ENABLE_HTTP_API
 #endif
 
 // -----------------------------------------------------------------------------
@@ -325,6 +383,12 @@ extern int g_homeDirection;        // defined in linear_actuator.ino
 
 // Port for the HTTP API server (also serves WebSocket at /ws)
 #define API_PORT        80
+
+// How often the main loop re-serializes the v2 routing view for
+// GET /api/v2/status. The view only changes on a tool on/off or a plan step, so
+// rebuilding it every loop pass would burn heap churn for nothing; 250ms is
+// well inside what the Live view needs to feel immediate.
+#define V2_STATUS_PUBLISH_MS   250
 
 // -----------------------------------------------------------------------------
 // SERIAL COMMANDS

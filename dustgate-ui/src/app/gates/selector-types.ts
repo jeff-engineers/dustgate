@@ -82,10 +82,52 @@ export interface LinearSelector {
 /** Either kind of selector the configurator can set up. */
 export type ConfigurableSelector = ServoSelector | LinearSelector;
 
+/** How the primary reaches a controller board. Absent on the primary — it IS
+ *  the local board. Required (with a host) on every secondary; validateTopology
+ *  rejects one without, since the primary would have no address to dial. */
+export interface ControllerLink {
+  transport: 'wifi-ws' | 'esp-now';
+  /** mDNS hostname — the STABLE key. Survives DHCP; `ip` is only a cache. */
+  host?: string;
+  ip?: string;
+  name?: string;
+}
+
 export interface Controller {
   id: string;
   role: 'primary' | 'secondary';
   name?: string;
+  /** Build target, e.g. "devkitc" | "qtpy_c3". */
+  board?: string;
+  link?: ControllerLink;
+}
+
+/** Servo channels one board can drive — SERVO_COUNT in config.h,
+ *  MAX_SERVOS_PER_HOST in topology.js. */
+export const SERVO_CHANNELS_PER_BOARD = 4;
+
+/** Selectors driven by a given board. */
+export function selectorsOnController(t: Topology, controllerId: string): ConfigurableSelector[] {
+  return configurableSelectorsOf(t).filter((s) => s.controllerId === controllerId);
+}
+
+/**
+ * The first free servo channel on a board, or null if all four are taken.
+ *
+ * Channels are per-BOARD, not global: two gates on different boards can both sit
+ * on channel 0. Counting servo gates across the whole shop (as the canvas used
+ * to) hands out channel 4+ as soon as a second board exists, which the schema
+ * rejects.
+ */
+export function firstFreeChannel(t: Topology, controllerId: string, ignoreId?: string): number | null {
+  const taken = new Set(
+    servoSelectorsOf(t)
+      .filter((s) => s.controllerId === controllerId && s.id !== ignoreId)
+      .map((s) => s.servo?.channel)
+      .filter((c): c is number => typeof c === 'number'),
+  );
+  for (let ch = 0; ch < SERVO_CHANNELS_PER_BOARD; ch++) if (!taken.has(ch)) return ch;
+  return null;
 }
 
 export interface Duct {

@@ -20,19 +20,31 @@ import {
 //
 //   1. No degrees anywhere. The angles are an implementation detail of the schema;
 //      what the user has is a handle and their eyes. Steps are coarse/fine arrows.
-//   2. A direction check first. The servo is often mounted BEHIND the gate, so a
-//      "right" nudge turns the handle left. Rather than reason about mount
-//      orientation, ask once and remember the answer in servo.reversed.
+//   2. A fixed handedness. The servo can be mounted behind the gate, which
+//      mirrors every arrow — but that is a property of how the BUILD mounts its
+//      servos, not of each individual gate, and in this build it is not mirrored.
+//      So it's SERVO_HANDED_REVERSED below rather than a question at the top of
+//      every calibration: the nudge-and-confirm step cost two taps per gate to
+//      re-derive an answer that never varies.
 //
 // Captured angles are absolute; applyAbsoluteAngles folds them back into the
 // schema's referenceAngle + per-state offsetDeg on save.
+
+/**
+ * Is the servo mounted BEHIND the valve on this build, mirroring the arrows?
+ *
+ * Compile-time, deliberately. `servo.reversed` still exists in the schema and a
+ * value already saved there still wins, so a mixed shop stays possible — but
+ * nothing writes it any more, and new gates take this default.
+ */
+const SERVO_HANDED_REVERSED = false;
 
 const COARSE_DEG = 15;
 const FINE_DEG = 3;
 /** How close to 0°/180° counts as "running out of travel" — worth warning about. */
 const RAIL_WARN_DEG = 10;
 
-type Phase = 'direction' | 'capture' | 'review';
+type Phase = 'capture' | 'review';
 
 @Component({
   selector: 'app-servo-calibration',
@@ -62,16 +74,6 @@ type Phase = 'direction' | 'capture' | 'review';
     .warn { font-size: 12px; color: var(--accent); text-align: center; margin: 9px 0 0; }
     .err  { font-size: 12.5px; color: var(--danger); margin: 10px 0 0; line-height: 1.5; }
 
-    .ask { display: flex; align-items: center; gap: 9px; border-top: 1px solid var(--border);
-           padding-top: 14px; margin-top: 16px; }
-    .ask span { flex: 1; font-size: 14px; }
-    .ask button { background: var(--surface); border: 1px solid var(--border); color: var(--text);
-                  border-radius: 8px; padding: 8px 14px; font-size: 13px; }
-    .ask button.yes { border-color: var(--success); color: var(--success); }
-
-    .probe { display: block; margin: 0 auto 4px; background: var(--bg); border: 1px solid var(--border);
-             color: var(--text); border-radius: 12px; padding: 12px 26px; font-size: 15px; }
-
     .row { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--border); }
     .row:last-of-type { border-bottom: none; }
     .row .tick { color: var(--success); font-size: 15px; width: 16px; }
@@ -88,24 +90,6 @@ type Phase = 'direction' | 'capture' | 'review';
   `],
   template: `
     <div class="card">
-      <!-- ── Phase 1: which way does it turn ─────────────────────────────── -->
-      <ng-container *ngIf="phase === 'direction'">
-        <h3>Stand where you can see the handle</h3>
-        <p class="sub">
-          Tap the arrow and watch which way the handle actually goes — the servo
-          might be mounted behind the gate.
-        </p>
-        <button class="probe" (click)="probe()" [disabled]="busy || !!jogError">
-          {{ probeAsksRight ? 'Nudge right →' : '← Nudge left' }}
-        </button>
-        <p class="err" *ngIf="jogError">{{ jogError }}</p>
-        <div class="ask" *ngIf="probed && !jogError">
-          <span>Did the handle move {{ probeAsksRight ? 'right' : 'left' }}?</span>
-          <button (click)="answerDirection(false)">No, the other way</button>
-          <button class="yes" (click)="answerDirection(true)">Yes</button>
-        </div>
-      </ng-container>
-
       <!-- ── Phase 2: capture each position ──────────────────────────────── -->
       <ng-container *ngIf="phase === 'capture' && current() as st">
         <div class="dots">
@@ -175,12 +159,9 @@ export class ServoCalibrationComponent implements OnInit {
   @Output() saved = new EventEmitter<ServoSelector>();
   @Output() cancelled = new EventEmitter<void>();
 
-  phase: Phase = 'direction';
+  phase: Phase = 'capture';
   index = 0;
   busy = false;
-  probed = false;
-  /** Which way the probe nudge went — flips only when there's no room to go right. */
-  probeAsksRight = true;
   jogError = '';
   saveError = '';
 
@@ -195,34 +176,11 @@ export class ServoCalibrationComponent implements OnInit {
   ngOnInit(): void {
     this.labels = positionLabels(this.topo, this.sel);
     this.angles = absoluteAngles(this.sel);
-    this.reversed = this.sel.servo?.reversed ?? false;
-    // The direction question only needs asking once per gate — a re-calibration of an
-    // already-set-up valve goes straight to capturing, and moves the valve to where the
-    // dial claims it is so the two agree from the first tap.
-    if (typeof this.sel.servo?.reversed === 'boolean') {
-      this.phase = 'capture';
-      if (isCalibrated(this.sel)) void this.drive(this.angle());
-    }
-  }
-
-  // ── phase 1: direction ────────────────────────────────────────────────────
-  /** Nudge one coarse step so the user can see which way the handle goes. Prefers
-   *  rightward, but a valve already parked near 180° has nowhere to go, so it asks
-   *  the mirrored question instead of silently doing nothing. */
-  async probe(): Promise<void> {
-    const at = this.angle();
-    this.probeAsksRight = at + COARSE_DEG <= 180;
-    const to = this.probeAsksRight ? at + COARSE_DEG : at - COARSE_DEG;
-    if (await this.drive(to)) { this.setAngle(to); this.probed = true; }
-  }
-
-  /** `moved` = the handle went the way the button said. If not, the servo is mounted
-   *  behind this gate and every arrow from here on is negated. */
-  async answerDirection(moved: boolean): Promise<void> {
-    this.reversed = !moved;
-    this.phase = 'capture';
-    this.index = 0;
-    await this.drive(this.angle());
+    // A value saved by an older build still wins; otherwise the build-wide default.
+    this.reversed = this.sel.servo?.reversed ?? SERVO_HANDED_REVERSED;
+    // Move the valve to where the dial claims it is, so the two agree from the
+    // first tap rather than after the first nudge.
+    if (isCalibrated(this.sel)) void this.drive(this.angle());
   }
 
   // ── phase 2: capture ──────────────────────────────────────────────────────
@@ -281,10 +239,7 @@ export class ServoCalibrationComponent implements OnInit {
 
   async stepBack(): Promise<void> {
     if (this.index > 0) { this.index--; await this.drive(this.angle()); return; }
-    // Backing out of the first position returns to the direction question if it was
-    // asked here, otherwise it leaves the widget entirely.
-    if (typeof this.sel.servo?.reversed === 'boolean') this.cancelled.emit();
-    else { this.phase = 'direction'; this.probed = false; }
+    this.cancelled.emit();   // backing out of the first position leaves the widget
   }
 
   nearRail(): boolean {
@@ -318,7 +273,6 @@ export class ServoCalibrationComponent implements OnInit {
   finish(): void {
     const res = applyAbsoluteAngles(this.sel, this.angles);
     if (!res.ok || !res.selector) { this.saveError = res.error ?? 'could not save these positions'; return; }
-    res.selector.servo = { ...res.selector.servo, reversed: this.reversed };
     this.saved.emit(res.selector);
   }
 
@@ -339,7 +293,10 @@ export class ServoCalibrationComponent implements OnInit {
     if (this.busy) return false;
     this.busy = true;
     try {
-      await this.api.jogServo(this.sel.servo?.channel ?? 0, Math.round(angle));
+      // controllerId comes from the selector being edited, which the board picker
+      // above mutates live — so re-assigning a gate to a node re-points the jog
+      // arrows at that node immediately, without a save/reload in between.
+      await this.api.jogServo(this.sel.servo?.channel ?? 0, Math.round(angle), this.sel.controllerId);
       this.jogError = '';
       return true;
     } catch (e: unknown) {

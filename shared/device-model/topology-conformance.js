@@ -37,6 +37,17 @@ async function waitForServer({ timeoutMs = 15000, intervalMs = 300 } = {}) {
   return false;
 }
 
+/** Poll until `fn()` is true, or give up. For behaviour that is real elapsed
+ *  time on hardware and can't be faked over HTTP. */
+async function waitFor(fn, { timeoutMs = 10000, intervalMs = 250 } = {}) {
+  const t = Date.now();
+  while (Date.now() - t < timeoutMs) {
+    if (await fn()) return true;
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+  return false;
+}
+
 async function run() {
   API_KEY = (await (await fetch(baseUrl + '/api/info')).json()).apiKey || '';
 
@@ -98,8 +109,18 @@ async function run() {
     check('v2: X off (Y on) → gate1 closes, gate2 open',
       r.json?.actuators?.gate1 === 'closed' && r.json?.actuators?.gate2 === 'open' && r.json?.collectorOn === true);
     r = await req('POST', '/api/v2/sim/tool', { toolId: 'toolY', watts: 0 });
-    check('v2: idle → gate2 HELD open (idle-hold), collector off',
-      r.json?.actuators?.gate2 === 'open' && r.json?.collectorOn === false);
+    // Idle HOLDS the gates, and the blower COASTS rather than cutting — a bandsaw
+    // spinning down still throws dust. Polled rather than clock-injected because
+    // this suite also certifies real firmware, where the only clock is the wall.
+    check('v2: idle → gate2 HELD open (idle-hold), collector still coasting',
+      r.json?.actuators?.gate2 === 'open' &&
+      r.json?.collectorOn === true && r.json?.collectorCoasting === true);
+
+    const off = await waitFor(async () => {
+      const s = await req('GET', '/api/v2/status');
+      return s.json?.collectorOn === false;
+    }, { timeoutMs: 12000 });
+    check('v2: collector switches off once the coast-down expires', off);
   }
 
   // 4. Most-recent-wins on a single shared selector.

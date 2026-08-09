@@ -68,6 +68,12 @@ public:
     return kDefaultThresholdW;
   }
 
+  // Last power reading for a tool (0 if never reported) — for the status view.
+  float toolWatts(const std::string& toolId) const {
+    auto it = _toolWatts.find(toolId);
+    return it == _toolWatts.end() ? 0.0f : it->second;
+  }
+
   // Set a tool's live power reading; tracks the OFF→ON edge (recency) and reconciles.
   ReconcileResult setToolPower(const std::string& toolId, float watts) {
     float th = toolThreshold(toolId);

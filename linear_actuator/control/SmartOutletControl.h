@@ -67,6 +67,12 @@ public:
     void configureDustCollector(int generation, const char* ip, const char* host = ""); // replaces + persists
     void removeDustCollector();
     bool dcConfigured() const { return _dustCollector != nullptr; }
+    // Is the collector already this plug? Lets a caller that re-asserts config
+    // (the topology sync runs on every layout save) skip the swap — reconfiguring
+    // clears _dcSynced, which re-commands the blower for no reason.
+    bool dcIs(const char* ip) const {
+        return _dustCollector && ip && strcmp(_dustCollector->ip(), ip) == 0;
+    }
     bool dcOn();                    // thread-safe read for status JSON
 
     // Manually force the dust collector on/off from the dashboard. Holds until

@@ -89,6 +89,7 @@ HttpApiServer::HttpApiServer()
 #ifdef CONTROL_SMART_OUTLET
       _shellyWs("/shelly-rpc"),
 #endif
+      _nodeWs("/nodelink"),
       _mutex(nullptr),
       _lastStatusHash(0),
       _statusHashValid(false),
@@ -230,6 +231,94 @@ bool HttpApiServer::begin() {
     _server.addHandler(&_shellyWs);
 #endif
 
+    // ---------------------------------------------------------------------
+    // NodeLink — the SECONDARY side of the star (control/NodeLink.h).
+    //
+    // A primary dials in here and sends SET frames that are already resolved to
+    // a channel + an angle/mm. This board doesn't parse a topology, doesn't
+    // route, and doesn't know what a "gate" is — it moves the channel to the
+    // number it was given. That asymmetry is the whole design: it's what lets a
+    // $5 servo-only board be a node, and what keeps a schema change from having
+    // to be flashed to every board in the shop.
+    //
+    // FAIL-SAFE: on disconnect we do NOTHING. Every servo holds exactly where it
+    // is. A secondary never moves on its own initiative — losing the link
+    // mid-cut must not slam a gate shut on a running tool (RFC §6).
+    //
+    // TRUST MODEL: same LAN assumption as /shelly-rpc above — unauthenticated,
+    // because the link is machine-to-machine on a workshop network. The blast
+    // radius is bounded by what a SET can do: move a gate. Revisit alongside the
+    // Shelly endpoint if this ever faces a less trusted network.
+    // ---------------------------------------------------------------------
+    _nodeWs.onEvent([this](AsyncWebSocket*, AsyncWebSocketClient* client,
+                           AwsEventType type, void* arg, uint8_t* data, size_t len) {
+        if (type == WS_EVT_CONNECT) {
+            _nodeLinkClients++;
+            DEBUG_PRINTLN(F("[NODE] Primary connected."));
+            return;
+        }
+        if (type == WS_EVT_DISCONNECT || type == WS_EVT_ERROR) {
+            if (_nodeLinkClients > 0) _nodeLinkClients--;
+            // HOLD. Deliberately no servo movement here — see the fail-safe note.
+            DEBUG_PRINTLN(F("[NODE] Primary disconnected — holding all gates."));
+            return;
+        }
+        if (type != WS_EVT_DATA) return;
+
+        AwsFrameInfo* info = (AwsFrameInfo*)arg;
+        if (!(info->final && info->index == 0 && info->len == len)) return;
+        if (info->opcode != WS_TEXT) return;
+
+        StaticJsonDocument<384> doc;
+        if (deserializeJson(doc, data, len)) return;
+        JsonObjectConst f = doc.as<JsonObjectConst>();
+        const char* t = f["t"].as<const char*>();
+        if (!t) return;
+
+        StaticJsonDocument<256> reply;
+        if (strcmp(t, "HELLO") == 0) {
+            if ((f["v"] | 0) != topo::nodelink::kVersion) {
+                // Refuse rather than half-speak an unknown protocol.
+                DEBUG_PRINTLN(F("[NODE] HELLO version mismatch — refusing."));
+                client->close();
+                return;
+            }
+            // Identify by mDNS hostname: stable across reboots and DHCP, and the
+            // same string the UI's board picker binds link.host to.
+            String host = WiFiProvisioner::getHostname();
+#if defined(ENABLE_SERVO) && defined(SERVO_PWM_PIN_1)
+            const int servoCaps = SERVO_COUNT;
+#else
+            const int servoCaps = 0;
+#endif
+            topo::nodelink::buildWelcome(reply.to<JsonObject>(), host.c_str(),
+                                         BOARD_NAME, "1.0.0", servoCaps, 1);
+        } else if (strcmp(t, "PING") == 0) {
+            topo::nodelink::buildPong(reply.to<JsonObject>());
+        } else if (strcmp(t, "SET") == 0) {
+            topo::nodelink::SetCommand cmd;
+            const char* err = nullptr;
+            if (!topo::nodelink::parseSetFrame(f, cmd, err)) {
+                topo::nodelink::buildAck(reply.to<JsonObject>(), f["seq"] | 0, false, err);
+            } else {
+                // Hand to the main loop; actuators are never touched from the
+                // AsyncTCP task. ACK means "accepted", not "arrived" — arrival
+                // is reported separately by reportNodeState().
+                xSemaphoreTake(_mutex, portMAX_DELAY);
+                _nodeSetCmd     = cmd;
+                _nodeSetPending = true;
+                xSemaphoreGive(_mutex);
+                topo::nodelink::buildAck(reply.to<JsonObject>(), cmd.seq, true);
+            }
+        } else {
+            return;   // unknown frame type — ignore, don't guess
+        }
+
+        String s; serializeJson(reply, s);
+        client->text(s);
+    });
+    _server.addHandler(&_nodeWs);
+
     registerRoutes();
 
     // CORS headers for Angular dev server (localhost:4200)
@@ -369,15 +458,92 @@ bool HttpApiServer::consumeOrientationRequest(bool& outHomedLeft) {
     return v;
 }
 
-bool HttpApiServer::consumeServoJogRequest(int& outChannel, int& outAngle, bool& outDetach) {
+bool HttpApiServer::consumeServoJogRequest(int& outChannel, int& outAngle, bool& outDetach,
+                                           String& outController) {
     xSemaphoreTake(_mutex, portMAX_DELAY);
     bool v = _servoJogPending;
     if (v) {
         outChannel = _servoJogChannel; outAngle = _servoJogAngle; outDetach = _servoJogDetach;
+        outController = _servoJogController;
         _servoJogPending = false;
     }
     xSemaphoreGive(_mutex);
     return v;
+}
+
+bool HttpApiServer::consumeTopologyChanged() {
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    bool v = _topoChangedPending;
+    _topoChangedPending = false;
+    xSemaphoreGive(_mutex);
+    return v;
+}
+
+bool HttpApiServer::consumeNodeSet(topo::nodelink::SetCommand& out) {
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    bool v = _nodeSetPending;
+    if (v) { out = _nodeSetCmd; _nodeSetPending = false; }
+    xSemaphoreGive(_mutex);
+    return v;
+}
+
+void HttpApiServer::reportNodeState(const char* selectorId, const char* stateId, bool moving) {
+    if (_nodeLinkClients <= 0) return;
+    StaticJsonDocument<192> doc;
+    topo::nodelink::buildState(doc.to<JsonObject>(), selectorId, stateId, moving);
+    String s; serializeJson(doc, s);
+    _nodeWs.textAll(s);      // same main-loop→textAll pattern as the status push
+}
+
+bool HttpApiServer::consumeNodeDiscoverRequest() {
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    bool v = _nodeDiscoverPending;
+    _nodeDiscoverPending = false;
+    xSemaphoreGive(_mutex);
+    return v;
+}
+
+void HttpApiServer::respondNodeDiscover(const String& json) {
+    AsyncWebServerRequest* req = _nodeDiscoverReq;
+    _nodeDiscoverReq = nullptr;
+    if (req) req->send(200, "application/json", json);
+}
+
+bool HttpApiServer::consumeToolManualRequest(String& outToolId, bool& outOn) {
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    bool v = _toolManualPending;
+    if (v) {
+        outToolId = _toolManualId;
+        outOn     = _toolManualOn;
+        _toolManualPending = false;
+    }
+    xSemaphoreGive(_mutex);
+    return v;
+}
+
+bool HttpApiServer::consumeNodePairRequest(String& outHost, String& outName, bool& outRemove) {
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    bool v = _nodePairPending;
+    if (v) {
+        outHost   = _nodePairHost;
+        outName   = _nodePairName;
+        outRemove = _nodePairRemove;
+        _nodePairPending = false;
+    }
+    xSemaphoreGive(_mutex);
+    return v;
+}
+
+void HttpApiServer::publishNodeStatus(const String& json) {
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    _nodeStatusJson = json;
+    xSemaphoreGive(_mutex);
+}
+
+void HttpApiServer::publishTopologyStatus(const String& json) {
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    _topoStatusJson = json;
+    xSemaphoreGive(_mutex);
 }
 
 bool HttpApiServer::consumeJogRequest(float& outMM) {
@@ -472,10 +638,16 @@ void HttpApiServer::registerRoutes() {
     // Security: only reachable on the local network (same as the device).
     // ------------------------------------------------------------------
     _server.on("/api/info", HTTP_GET, [this](AsyncWebServerRequest* req) {
-        StaticJsonDocument<256> doc;
+        StaticJsonDocument<320> doc;
         doc["apiKey"]        = _apiKey;
         doc["numStops"]      = _cachedNumActiveStops;   // runtime; not compile-time NUM_STOPS
         doc["version"]       = "1.0.0";
+        // Compile stamp, so "is this board running the fix I just built?" is one
+        // request instead of guesswork. "version" is hand-maintained and stayed
+        // 1.0.0 across every change this bring-up, which made it useless for
+        // exactly the question that kept coming up during hardware debugging.
+        doc["built"]         = __DATE__ " " __TIME__;
+        doc["uptimeSec"]     = (uint32_t)(millis() / 1000);
         doc["motorInverted"]  = (_homeDirection < 0);    // true when direction was flipped
         doc["idleTimeoutSec"] = _idleTimeoutSec;
         doc["manifoldModel"]  = g_manifoldModel;
@@ -735,7 +907,14 @@ void HttpApiServer::registerRoutes() {
                 reinterpret_cast<const uint8_t*>(_topoUploadBuf.c_str()),
                 _topoUploadBuf.length(), err);
             _topoUploadBuf = "";               // free the buffer either way
-            if (ok) { DEBUG_PRINTLN(F("[API] v2 topology saved")); sendOk(req); }
+            if (ok) {
+                DEBUG_PRINTLN(F("[API] v2 topology saved"));
+                // Signal the main loop to re-adopt it into the live runtime.
+                xSemaphoreTake(_mutex, portMAX_DELAY);
+                _topoChangedPending = true;
+                xSemaphoreGive(_mutex);
+                sendOk(req);
+            }
             else    { DEBUG_PRINT(F("[API] v2 topology rejected: ")); DEBUG_PRINTLN(err);
                       sendError(req, 400, err.c_str()); }
         }
@@ -744,51 +923,166 @@ void HttpApiServer::registerRoutes() {
     // Mirrors statusView() in shared/device-model/topology-device.js so the Live
     // view's getV2Status() gets the shape it already consumes:
     //   { actuators, tools, collectorOn, conflicts, reachable }
-    // Stage 2 has no controller yet, so this is the IDLE snapshot: every selector
-    // sits at its closed state, no tool is drawing, nothing is reachable. Stage 3
-    // replaces the idle stub with the live routing result.
+    // This is the LIVE routing result, republished by the main loop every pass
+    // (TopologyRuntime::writeStatus → publishTopologyStatus). Serving the cached
+    // string rather than reading the runtime here is deliberate: the routing
+    // state is main-loop-owned std::maps, and this handler runs on the AsyncTCP
+    // task. Same discipline as _lastStatusJson for GET /api/status.
     _server.on("/api/v2/status", HTTP_GET, [this](AsyncWebServerRequest* req) {
         if (!checkAuth(req)) return;
         // Match the mock's contract: 404 until a topology is configured.
         if (!g_topoStore.exists()) { sendError(req, 404, "no topology configured"); return; }
 
-        String raw = g_topoStore.load();
-        DynamicJsonDocument doc(topo::kMaxTopologyBytes);
-        if (deserializeJson(doc, raw)) { sendError(req, 500, "stored topology unparseable"); return; }
+        xSemaphoreTake(_mutex, portMAX_DELAY);
+        String body = _topoStatusJson;
+        xSemaphoreGive(_mutex);
 
-        DynamicJsonDocument out(8192);
-        JsonObject actuators = out.createNestedObject("actuators");
-        JsonObject tools     = out.createNestedObject("tools");
-        for (JsonObjectConst e : doc["elements"].as<JsonArrayConst>()) {
-            const char* type = e["type"];
-            const char* id   = e["id"];
-            if (!id) continue;
-            if (type && strcmp(type, "selector") == 0) {
-                const char* closed = nullptr;   // idle = the all-closed state
-                for (JsonObjectConst s : e["states"].as<JsonArrayConst>())
-                    if (s["isClosed"].as<bool>()) { closed = s["id"]; break; }
-                if (closed) actuators[id] = closed; else actuators[id] = (const char*)nullptr;
-            } else if (type && strcmp(type, "tool") == 0) {
-                JsonObject t = tools.createNestedObject(id);
-                t["watts"]  = 0;
-                t["active"] = false;
-            }
-        }
-        out["collectorOn"] = false;
-        out.createNestedArray("conflicts");
-        out.createNestedObject("reachable");
-        String body; serializeJson(out, body);
+        // Stored but not yet adopted (the loop hasn't published a pass since the
+        // PUT, or it failed to parse). Say so rather than serving a stale view.
+        if (body.length() == 0) { sendError(req, 503, "topology not yet adopted"); return; }
         req->send(200, "application/json", body);
     });
 
     // ------------------------------------------------------------------
-    // POST /api/v2/servo/jog  { channel: 0-3, angle: 0-180 }
+    // GET /api/v2/nodes/discover — sweep the LAN for secondary boards.
+    //
+    // ⚠️ MUST BE REGISTERED BEFORE "/api/v2/nodes". ESPAsyncWebServer matches by
+    // PREFIX, not exact path:
+    //
+    //     _uri != request->url() && !request->url().startsWith(_uri + "/")
+    //         → WebHandlerImpl.h, AsyncCallbackWebHandler::canHandle()
+    //
+    // so "/api/v2/nodes" happily claims "/api/v2/nodes/discover", and handlers
+    // are tried in registration order. With the short route first, discovery
+    // silently returned the (empty) live-link-state payload instead — a scan
+    // that always found nothing, with no error anywhere to explain it, while the
+    // node was advertising itself perfectly. Registering longest-path-first is
+    // the whole fix. Same trap applies to any future /api/v2/nodes/<x> route.
+    //
+    // Feeds the configurator's board picker. Discovery only POPULATES the
+    // picker; the saved topology still binds each controller by an explicit
+    // link.host, so a spare board on the bench or a second system in the shop
+    // can never silently adopt itself into a live layout.
+    //
+    // Like /api/outlets/discover, the mDNS query runs on the MAIN LOOP (see that
+    // route's comment for why holding a request across a blocking scan on a
+    // detached task risked a use-after-free).
+    // ------------------------------------------------------------------
+    _server.on("/api/v2/nodes/discover", HTTP_GET, [this](AsyncWebServerRequest* req) {
+        if (!checkAuth(req)) return;
+        if (_nodeDiscoverPending) { sendError(req, 429, "discovery already running"); return; }
+        xSemaphoreTake(_mutex, portMAX_DELAY);
+        _nodeDiscoverPending = true;
+        _nodeDiscoverReq     = req;
+        xSemaphoreGive(_mutex);
+        // No response here — the main loop answers via respondNodeDiscover().
+    });
+
+    // ------------------------------------------------------------------
+    // POST /api/v2/tool  { toolId: "ts", on: true }
+    //
+    // Switch a tool on/off BY HAND — what the Live view's rows actually do. Until
+    // now that view called /api/v2/sim/tool, which only ever existed in the mock
+    // and the browser demo: on real hardware every tap 404'd, so the daily-driver
+    // screen couldn't drive a single gate. Sensed tools worked (a Shelly plug
+    // crossing its threshold routes without any help from the UI) which is what
+    // made the gap easy to miss.
+    //
+    // Manual is modelled as a synthetic power reading, so there is one definition
+    // of "active" and a hand-thrown tool competes in most-recent-wins exactly like
+    // a sensed one. See TopologyRuntime::setToolManual.
+    // ------------------------------------------------------------------
+    _server.on("/api/v2/tool", HTTP_POST,
+        [](AsyncWebServerRequest* req) {},
+        nullptr,
+        [this](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t, size_t) {
+            if (!checkAuth(req)) return;
+            StaticJsonDocument<160> doc;
+            if (deserializeJson(doc, data, len)) { sendError(req, 400, "invalid JSON"); return; }
+            const char* id = doc["toolId"].as<const char*>();
+            if (!id || !*id) { sendError(req, 400, "missing 'toolId'"); return; }
+            if (!doc.containsKey("on")) { sendError(req, 400, "missing 'on'"); return; }
+
+            xSemaphoreTake(_mutex, portMAX_DELAY);
+            _toolManualId      = id;
+            _toolManualOn      = doc["on"].as<bool>();
+            _toolManualPending = true;
+            xSemaphoreGive(_mutex);
+            // Routing belongs to the main loop, so the reply can't carry the new
+            // status. The Live view polls /api/v2/status anyway.
+            sendOk(req);
+        }
+    );
+
+    // ------------------------------------------------------------------
+    // POST /api/v2/nodes/pair  { host: "dustgate-node-1", name?: "Back wall" }
+    //                          { host: "…", remove: true }
+    //
+    // Pair (or un-pair) a secondary board. Persisted in NVS and dialled
+    // immediately — deliberately INDEPENDENT of the topology, so pairing survives
+    // a layout wipe and a board can be linked before any shop is drawn. See
+    // control/NodeRegistry.h for the failure this separation fixes.
+    //
+    // ⚠️ Registered before "/api/v2/nodes" — prefix matching, see the warning on
+    // the discover route above.
+    // ------------------------------------------------------------------
+    _server.on("/api/v2/nodes/pair", HTTP_POST,
+        [](AsyncWebServerRequest* req) {},
+        nullptr,
+        [this](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t, size_t) {
+            if (!checkAuth(req)) return;
+            StaticJsonDocument<160> doc;
+            if (deserializeJson(doc, data, len)) { sendError(req, 400, "invalid JSON"); return; }
+            const char* host = doc["host"].as<const char*>();
+            if (!host || !*host) { sendError(req, 400, "missing 'host'"); return; }
+
+            xSemaphoreTake(_mutex, portMAX_DELAY);
+            _nodePairHost   = host;
+            _nodePairName   = doc["name"] | "";   // optional; re-pairing renames
+            _nodePairRemove = doc["remove"] | false;
+            _nodePairPending = true;
+            xSemaphoreGive(_mutex);
+            // The registry write and the redial happen on the main loop: dialling
+            // spawns a FreeRTOS task and tears sockets down, neither of which
+            // belongs on the AsyncTCP task.
+            sendOk(req);
+        }
+    );
+
+    // ------------------------------------------------------------------
+    // GET /api/v2/nodes — live link state per controller in the topology.
+    //
+    // Registered AFTER /api/v2/nodes/discover on purpose — see the prefix-match
+    // warning there before moving either one.
+    //
+    // This is what lets the Live view grey out gates on a board that's gone
+    // dark, instead of leaving the user to wonder why a tool won't pull. Served
+    // from the cache the main loop publishes, for the same threading reason as
+    // /api/v2/status: the link objects belong to the loop and the NodeLink task.
+    // ------------------------------------------------------------------
+    _server.on("/api/v2/nodes", HTTP_GET, [this](AsyncWebServerRequest* req) {
+        if (!checkAuth(req)) return;
+        xSemaphoreTake(_mutex, portMAX_DELAY);
+        String body = _nodeStatusJson;
+        xSemaphoreGive(_mutex);
+        if (body.length() == 0) body = "{\"nodes\":[]}";   // no topology adopted yet
+        req->send(200, "application/json", body);
+    });
+
+    // ------------------------------------------------------------------
+    // POST /api/v2/servo/jog  { channel: 0-3, angle: 0-180, controllerId?: "..." }
     //                         { channel: 0-3, detach: true }
     //
     // SETUP ONLY — the gate configurator's jog control. A ball valve is calibrated
     // empirically: the user nudges the servo while watching the handle, then captures
     // the angle where the ball actually lines up (see docs/v2-topology-schema.md). That
     // needs a way to drive one servo directly, outside any routing decision.
+    //
+    // `controllerId` addresses the board that actually drives the gate. Omitted (or
+    // this board's own id) means the local bank. It is NOT optional in practice once
+    // a shop has a secondary: without it every jog landed on the primary's PWM
+    // channel of the same number, so re-assigning a gate to a node appeared to
+    // change nothing — the arrows still moved a servo, just the wrong one.
     //
     // Deliberately NOT guarded by "is the collector off" — the whole point is to move a
     // gate while nothing is running. Whoever is calling this is standing at the valve.
@@ -798,17 +1092,20 @@ void HttpApiServer::registerRoutes() {
         nullptr,
         [this](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t, size_t) {
             if (!checkAuth(req)) return;
-#if !(defined(ENABLE_SERVO) && defined(SERVO_PWM_PIN_1))
-            // Built without the servo bank — say so plainly rather than accepting a
-            // command that will never move anything. The UI greys its jog control on 501.
-            (void)data; (void)len;
-            sendError(req, 501, "servo support not compiled into this build");
-#else
-            StaticJsonDocument<96> doc;
+            StaticJsonDocument<160> doc;
             if (deserializeJson(doc, data, len)) { sendError(req, 400, "invalid JSON"); return; }
             if (!doc.containsKey("channel")) { sendError(req, 400, "missing 'channel'"); return; }
             int ch = doc["channel"].as<int>();
-            if (ch < 0 || ch >= SERVO_COUNT) { sendError(req, 400, "channel out of range"); return; }
+
+            const char* cid = doc["controllerId"].as<const char*>();
+            String controller = cid ? cid : "";
+            // Whether this names another board is a question only the main loop can
+            // answer (NodeBus is main-loop-owned). Range-check against the widest
+            // channel any node offers and let the loop reject an unknown controller.
+            bool remote = controller.length() > 0;
+            if (ch < 0 || ch >= (remote ? 16 : SERVO_COUNT)) {
+                sendError(req, 400, "channel out of range"); return;
+            }
 
             bool detach = doc["detach"] | false;
             int angle = 0;
@@ -818,16 +1115,25 @@ void HttpApiServer::registerRoutes() {
                 if (angle < 0 || angle > 180) { sendError(req, 400, "angle out of range (0-180)"); return; }
             }
 
+#if !(defined(ENABLE_SERVO) && defined(SERVO_PWM_PIN_1))
+            // Built without the servo bank — say so plainly rather than accepting a
+            // command that will never move anything. The UI greys its jog control on
+            // 501. A jog addressed at a SECONDARY still goes through: nothing about
+            // relaying a frame needs local PWM hardware.
+            if (!remote) { sendError(req, 501, "servo support not compiled into this build"); return; }
+#endif
+
             DEBUG_PRINT(F("[UI] Servo jog: ch=")); DEBUG_PRINT(ch);
+            if (remote) { DEBUG_PRINT(F(" on ")); DEBUG_PRINT(controller); }
             DEBUG_PRINT(detach ? F(" detach") : F(" angle=")); if (!detach) DEBUG_PRINT(angle);
             DEBUG_PRINTLN();
 
             xSemaphoreTake(_mutex, portMAX_DELAY);
             _servoJogPending = true;
             _servoJogChannel = ch; _servoJogAngle = angle; _servoJogDetach = detach;
+            _servoJogController = controller;
             xSemaphoreGive(_mutex);
             sendOk(req);
-#endif
         }
     );
 

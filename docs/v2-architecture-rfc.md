@@ -1,6 +1,7 @@
 # DustGate v2 architecture RFC
 
-**Status:** draft (2026-07)
+**Status:** Phases 2–4 IMPLEMENTED (2026-08), hardware-unvalidated
+**Last reconciled with the code:** 2026-08-07
 **Covers:** the evolution from the single linear-actuator product (v1) to a
 multi-actuator, multi-node, graph-routed dust-collection system.
 **Companion docs:** [`dual-endstop-calibration.md`](dual-endstop-calibration.md)
@@ -134,19 +135,32 @@ At ~15 gates, naive graph search is instant; model it correctly, don't optimize.
 Multi-gate paths (a tool behind a `feed` port + a manifold) are the general case;
 the flat star is the depth-1 special case.
 
-## 6. Networking (centralized brain)
+## 6. Networking (centralized brain) — BUILT
 
 - **Primary** node: WiFi, GUI, Shelly polling, owns the topology + routing.
-- **Secondary** nodes: dumb actuator banks exposing `enumerate / set / report`.
-  A secondary is essentially a stripped-down DustGate node reusing the existing
-  API style — P3 is mostly *subtracting* from the current firmware.
-- **Link-loss safe state:** if a secondary loses the primary mid-cut, it **holds**
-  (never slams gates); make the fail-safe configurable per node.
-- **Transport:** start on WiFi + WebSocket (debuggable, reuses the stack). Abstract
-  it behind a `NodeLink` interface so ESP-NOW can drop in later for a
-  routerless/low-latency control plane without touching routing.
-- **Protocol:** small and versioned — `HELLO/enumerate`, `SET node.actuator=state`,
-  `STATE report`.
+- **Secondary** nodes: dumb actuator banks. Built as a SEPARATE, ~200-line program
+  (`linear_actuator/node/dustgate_node.cpp`), not as `#ifdef`s in the main sketch —
+  the stepper, endstops, homing, sweep and Shelly polling are woven through the
+  primary `.ino` in ~100 disjoint places, and a preprocessor split would have left
+  a sketch nobody could read. That IS the "mostly subtracting" this section
+  predicted; it just lives in its own file.
+- **Link-loss safe state:** a secondary that loses the primary **holds** every
+  servo where it is. No timeout closes gates, no homing on reconnect, no
+  autonomous behaviour at all. Asserted end-to-end by the conformance suite.
+  (Per-node configurability was never needed — hold is the only sane policy.)
+- **Transport:** WiFi + WebSocket, behind the `ActuatorBus` interface
+  (`control/ActuatorBus.h`). ESP-NOW can drop in as another implementation
+  without touching routing.
+- **Protocol:** `shared/device-model/nodelink.js` — versioned JSON frames
+  `HELLO / WELCOME / SET / ACK / STATE / PING / PONG`.
+
+**The load-bearing decision, discovered while building:** the primary RESOLVES
+every state into a concrete realization before it goes on the wire. A `SET`
+carries `angle` (already `referenceAngle + offsetDeg`, clamped) or `positionMm` —
+never "put gate3 in the open state". A secondary therefore needs no topology, no
+router, no schema version and no calibration data. That asymmetry is what makes
+the cheap servo-only node possible at all, and it means a schema change never has
+to be flashed to every board in the shop.
 
 Distributed autonomy (secondaries running local logic offline) is explicitly out
 of scope until a real need appears.
@@ -196,10 +210,20 @@ which most people do.
 
 | Phase | Scope | State |
 |---|---|---|
-| **1** | Linear actuator (v1) + dual-endstop self-calibration + port roles | shipped v1; enhancements specced (see companion doc), implementing now |
-| **2** | Servo hardware on a node (HAL, one node drives 0+ servos, USB-PD power) | this RFC |
-| **3** | Multi-node (NodeLink, WiFi, primary/secondary enumerate/set/report; ESP-NOW later) | this RFC |
-| **4** | Graph configurator + multi-gate routing UX + conflict detection | this RFC |
+| **1** | Linear actuator (v1) + dual-endstop self-calibration + port roles | code complete; **hardware-UNTESTED** |
+| **2** | Servo hardware on a node (HAL, one node drives 0+ servos, USB-PD power) | code complete; **hardware-UNTESTED** |
+| **3** | Multi-node (NodeLink, WiFi, primary/secondary; ESP-NOW later) | code complete; **hardware-UNTESTED** |
+| **4** | Graph configurator + multi-gate routing UX + conflict detection | canvas + `/boards` + `/gates` done; **conflict UX still to surface** (see §11) |
+
+**Nothing below Phase 1 has run on real hardware.** Everything is verified by
+compile, host tests and simulation only. The conformance suites are built to be
+pointed at a real device, which is the intended first bench step:
+
+```
+node shared/device-model/conformance.js http://<primary-ip> <key> --force
+node shared/device-model/topology-conformance.js http://<primary-ip>
+node shared/device-model/nodelink-conformance.js ws://<node>.local/nodelink
+```
 
 Sequence within v2: **model & contract first** (the branch-selector HAL + topology
 schema), then single-node multi-servo, then routing, then multi-node, then the
@@ -216,9 +240,29 @@ the shared model; the node protocol gets its own conformance scenarios.
 
 ## 11. Open questions
 
-- Topology JSON schema specifics (node/edge/role encoding) — define before P2 code.
-- `NodeLink` protocol versioning + discovery (how a primary finds secondaries).
-- Conflict UX: how the configurator surfaces an unsatisfiable set of active tools.
-- Real Rockler manifold profile numbers (shared with the Phase 1 dual-endstop work).
-- Whether to model duct *geometry* (lengths/diameters for airflow hints) or keep
-  the graph purely topological at first (lean: topological first).
+### Resolved since this RFC was written
+
+- ~~Topology JSON schema specifics~~ — see [`v2-topology-schema.md`](v2-topology-schema.md).
+- ~~`NodeLink` protocol versioning + discovery~~ — versioned frames in
+  `shared/device-model/nodelink.js` (`NODELINK_VERSION`; a mismatched `HELLO` is
+  refused outright rather than half-spoken). Discovery is mDNS `_dustgate._tcp`
+  with a `role` TXT record, surfaced by `GET /api/v2/nodes/discover` and the
+  `/boards` screen. **Discovery only populates the picker** — the topology binds
+  each board by an explicit `link.host`, so a spare board on the bench or a
+  neighbouring system never adopts itself into a live layout.
+- ~~Current-mutex scope~~ — see schema doc item 4; resolved as **global**.
+
+### Still open
+
+- **Conflict UX** — the firmware now computes and reports `conflicts`
+  (`{selectorId, winner, winnerState, losers[]}`, matching `routing.js`), but the
+  Live view still only reads `reachable`. So the UI can say a tool isn't pulling
+  and not why. Data side done; presentation not.
+- **Real Rockler manifold profile numbers** (shared with the Phase 1 dual-endstop
+  work) — still needs a physical measurement.
+- **Duct geometry** (lengths/diameters for airflow hints) — deferred; the graph
+  stays purely topological.
+- **A sliding gate on a SECONDARY board** — calibration drives the v1 motion
+  endpoints, which was sound while only the primary had a stepper. `/boards` makes
+  multi-board layouts real, so this is now user-reachable: either add v2 motion
+  endpoints or block the combination in the picker.

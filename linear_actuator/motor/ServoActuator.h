@@ -99,6 +99,18 @@ public:
     bool attached() { return _servo.attached(); }
     int  pin() const { return _pin; }
 
+    // True while this servo is drawing move current: the eased sweep is running,
+    // OR the post-move hold is still energizing the coil so an analog servo can
+    // catch up. LocalActuatorBus gates on this to guarantee only one servo is
+    // ever driven at a time — the Phase-2 5V rail can't take two (see
+    // docs/v2-architecture-rfc.md §7). A holdAtRest servo reports false once the
+    // sweep ends: it draws holding current indefinitely, so blocking on it would
+    // deadlock the move queue.
+    bool isMoving() const {
+        if (_sweeping) return true;
+        return _detachArmed && (long)(millis() - _detachAtMs) < 0;
+    }
+
 private:
     // Sweep duration for a move of this many degrees. Proportional to travel so a
     // full quarter-turn still eases over the deliberate SERVO_SWEEP_MS while a small
