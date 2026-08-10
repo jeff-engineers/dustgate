@@ -1,7 +1,7 @@
 import { AfterViewInit, Component, ElementRef, HostListener, OnDestroy, OnInit, ViewChild } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { RouterLink } from '@angular/router';
+import { ActivatedRoute, Router as NgRouter, RouterLink } from '@angular/router';
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
 import { ApiService, Topology, TopologyStatus } from '../services/api.service';
 import { validateTopology, airflowIssues, redundantSelectors, type AirflowIssue } from '@topology';
@@ -17,6 +17,11 @@ import {
   halfH as glyphHalfH, halfW as glyphHalfW, ptSegDist, segBoxHit,
 } from './routing/geometry';
 import { type RoutedDuct, type Scene, Router, sceneBounds } from './routing/router';
+import {
+  BOARD_H, BOARD_SLOT, BOARD_W, PORT_H, RAIL_H, SERVO_PORTS, TAB_H, TAB_W,
+  cablePath, cableRun,
+  portPos, portWidth, portExit, railSlot, rankByTravel, segmentsOf, slotAt,
+} from './wiring/wire-geometry';
 
 // ── Layout model ──────────────────────────────────────────────────────────────
 // The canvas is pure presentation: each element gets a grid cell (col,row). The
@@ -59,6 +64,28 @@ interface DuctVM { childId: string; live: boolean; open: boolean; }
 interface BDot { x: number; y: number; childId: string; col: number; row: number; axis: 'h' | 'v'; elbow?: boolean; legs?: Cell[]; }
 interface ODot { x: number; y: number; parentId: string; branchId?: string; cell: Cell; }
 
+// ── Wiring layer ──────────────────────────────────────────────────────────────
+// A second view of the same canvas: where the boards are and what cable runs to
+// what. Nothing here is new information — a gate has carried `controllerId` and
+// `servo.channel` since the schema existed, which is exactly "which board, which
+// port". It has just never had a picture, and a board has never had a place.
+//
+// Board placements ride in the doc under `ui.wiring.boards`, deliberately NOT in
+// `ui.layout`: board ids are minted from mDNS hostnames (see /boards) and could
+// collide with an element id in one flat map.
+
+/** A placed board, ready to draw. `used` maps servo channel → the gate on it. */
+interface BoardVM {
+  id: string; name: string; primary: boolean;
+  col: number; row: number; x: number; y: number;
+  used: Map<number, string>;
+  servoCount: number;
+  dragX?: number; dragY?: number;
+}
+/** One cable run, port → the gate's servo tab. */
+interface CableVM { id: string; gateId: string; boardId: string; channel: number; d: string; }
+
+
 type Fitting = SelKind | 'tool' | 'duct';
 type MenuKind = Fitting | 'cap' | 'uncap' | 'delete' | 'configure' | 'outlet';
 
@@ -79,6 +106,9 @@ const isUnitKind = (kind: unknown): boolean => kind === 'linear' || kind === 'se
 const HISTORY_MAX = 60;
 /** Grid cells a fitting takes up: a unit is one horizontal bar N cells wide. */
 const spanFor = (kind: MenuKind): number => kind === 'linear' ? 4 : kind === 'servoManifold' ? 2 : 1;
+/** How many legs a fitting can feed. A ball valve is a two-port device: one in, one
+ *  out. Only the units fan out. */
+const outletsFor = (kind: MenuKind): number => kind === 'linear' ? 4 : kind === 'servoManifold' ? 2 : 1;
 
 @Component({
   selector: 'app-build',
@@ -103,7 +133,9 @@ const spanFor = (kind: MenuKind): number => kind === 'linear' ? 4 : kind === 'se
     .bar button.primary { background: var(--accent); border-color: var(--accent); color: #1a1200; font-weight: 600; }
     .bar button:disabled { opacity: 0.45; }
 
-    .stage { flex: 1; display: flex; min-height: 0; }
+    /* Column, not row: the board tray sits UNDER the canvas. As a row it became a
+       second column and squeezed the canvas to a slot. */
+    .stage { flex: 1; display: flex; flex-direction: column; min-height: 0; }
     .canvas-wrap { flex: 1; overflow: auto; background: var(--bg); position: relative; }
     svg.canvas { display: block; touch-action: none; }
 
@@ -202,39 +234,165 @@ const spanFor = (kind: MenuKind): number => kind === 'linear' ? 4 : kind === 'se
     .rm-bg { fill: var(--danger); stroke: var(--surface); stroke-width: 2; }
     .rm-line { stroke: #fff; stroke-width: 2.2; stroke-linecap: round; }
     .rm.off { cursor: default; opacity: 0.35; }
+
+    /* ── wiring layer ──────────────────────────────────────────────────────
+       Cable is azure, never the app's --danger red: that red already means
+       "something is wrong with this gate" everywhere else in the UI, and a
+       cable wearing it reads as a fault. Azure is the one hue the palette
+       hadn't spent, and it's the node-editor convention for a connection. */
+    .seg { display: inline-flex; background: var(--bg); border: 1px solid var(--border);
+           border-radius: 10px; padding: 3px; gap: 3px; margin-right: 4px; }
+    .seg button { background: transparent; border: none; color: var(--muted);
+                  border-radius: 7px; padding: 6px 12px; font-size: 13px;
+                  display: inline-flex; align-items: center; gap: 6px; }
+    .seg button.on { background: rgba(240,165,0,0.2); color: var(--accent); font-weight: 600; }
+    .seg svg { width: 15px; height: 15px; }
+    .bar .ico { display: inline-flex; align-items: center; justify-content: center;
+                width: 38px; padding: 0; }
+    .bar .ico svg { width: 18px; height: 18px; }
+    .bar .ico.on { border-color: var(--accent); color: var(--accent); }
+    .more-bg { position: fixed; inset: 0; z-index: 40; }
+    .more { position: absolute; right: 8px; top: 100%; z-index: 41; margin-top: 6px;
+            background: var(--surface); border: 1px solid var(--border);
+            border-radius: var(--radius); padding: 6px; display: flex; flex-direction: column;
+            min-width: 168px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+    .more button { background: transparent; border: none; color: var(--text);
+                   text-align: left; padding: 10px 12px; border-radius: 8px; font-size: 14px; }
+    .more button:disabled { color: var(--muted); }
+    .bar { position: relative; }
+
+    /* Ducts and everything not being wired step back — but only step back. The
+       gates stay at full contrast because they're what the cable goes to. */
+    .ghost { opacity: 0.34; }
+    /* The wiring in Ducts view: still legible, but grey and out of the way, and it
+       stops taking the pointer so it can't be grabbed while you're plumbing. */
+    .wiring.dim { opacity: 0.22; filter: grayscale(1); pointer-events: none; }
+    .node.recede { opacity: 0.34; pointer-events: none; }
+
+    .cable { fill: none; stroke: var(--cable, #38b6f0); stroke-width: 2;
+             stroke-linecap: round; stroke-linejoin: round; }
+    .cable.drag { stroke-dasharray: 6 5; pointer-events: none; }
+    .cable.drag.bad { stroke: var(--danger); }
+
+    .tab { cursor: grab; }
+    .tab-body { fill: #0e2530; stroke: var(--cable, #38b6f0); stroke-width: 1.3; }
+    .tab-ch { fill: var(--cable, #38b6f0); font-size: 9px; font-weight: 600;
+              text-anchor: middle; font-family: ui-monospace, Menlo, monospace; }
+    .tab.unwired .tab-body { stroke: var(--muted); stroke-dasharray: 3 2; fill: none; }
+    .tab.unwired .tab-ch { fill: var(--muted); }
+    .tab:hover .tab-body, .tab.lit .tab-body { stroke-width: 2.4; stroke: var(--accent); }
+    .tab.lit .tab-ch { fill: var(--accent); }
+    .port-hit { cursor: grab; }
+
+    .rail { fill: #161616; }
+    .rail-edge { stroke: var(--border); stroke-width: 1; }
+    .rail-lbl { fill: #6f6f6f; font-size: 8.5px; letter-spacing: 0.16em;
+                font-family: ui-monospace, Menlo, monospace; }
+    .findboards { cursor: pointer; }
+    .findboards rect { fill: none; stroke: var(--border); stroke-width: 1.2; stroke-dasharray: 4 3; }
+    .findboards text { fill: var(--muted); font-size: 12px; text-anchor: middle; }
+    .findboards:hover rect { stroke: var(--accent); }
+    .findboards:hover text { fill: var(--accent); }
+    /* Boards slide along the rail only — a drag is a reorder, not a placement. */
+    .board { cursor: ew-resize; }
+    .board.dragging { cursor: grabbing; }
+    .board-body { fill: var(--surface); stroke: #4a4a4a; stroke-width: 1.6; }
+    .board.primary .board-body { stroke: var(--accent); }
+    .board-name { fill: var(--text); font-size: 12px; font-weight: 600; }
+    .board-role { fill: var(--muted); font-size: 7.5px; letter-spacing: 0.12em;
+                  font-family: ui-monospace, Menlo, monospace; }
+    .board.primary .board-role { fill: var(--accent); }
+    .board-count { fill: var(--muted); font-size: 8.5px; text-anchor: end;
+                   font-family: ui-monospace, Menlo, monospace; }
+    .board-count.full { fill: var(--accent); }
+    .port { fill: none; stroke: #5a5a5a; stroke-width: 1.2; }
+    .port.stepper { stroke-dasharray: 2 2; }
+    .port.taken { fill: var(--cable, #38b6f0); stroke: none; }
+    .port.lit { stroke: var(--accent); stroke-width: 1.8; stroke-dasharray: none; }
+    .port-label { fill: #777; font-size: 7px; text-anchor: middle;
+                  font-family: ui-monospace, Menlo, monospace; }
+
+    /* The network every board is on, named once in the rail. It replaced a dotted
+       curve between boards with a transport badge on it — which drew a fact that is
+       always true, and drew it right across the shop. */
+    .rail-net { fill: #77a3b8; font-size: 9px; font-family: ui-monospace, Menlo, monospace; }
+    .rail-wifi { fill: none; stroke: #4d7f99; stroke-width: 1.3; stroke-linecap: round; }
+
   `],
   template: `
+    <!-- Trimmed to what you reach for while drawing: the layer switch, undo/redo,
+         and Save. Everything else is one tap behind the overflow, which is the
+         difference between a usable and an unusable toolbar on a phone.
+         Auto-arrange is gone (it rearranged work you'd just done by hand) and so is
+         Boards — the rail's own "+ Find boards" goes to the same place. -->
     <div class="bar">
       <span class="title">Shop layout</span>
-      <button routerLink="/shop">Done</button>
+      <div class="seg" role="group" aria-label="Canvas layer">
+        <button [class.on]="layer === 'ducts'" (click)="setLayer('ducts')" [attr.aria-pressed]="layer === 'ducts'">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 8h9M17 8h3"/><circle cx="15" cy="8" r="2"/><path d="M4 16h4M12 16h8"/><circle cx="10" cy="16" r="2"/></svg>
+          Ducts
+        </button>
+        <button [class.on]="layer === 'wiring'" (click)="setLayer('wiring')" [attr.aria-pressed]="layer === 'wiring'">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5 4v6a4 4 0 0 0 4 4h6a4 4 0 0 1 4 4v2"/><rect x="2.5" y="2" width="5" height="4" rx="1"/><rect x="16.5" y="18" width="5" height="4" rx="1"/></svg>
+          Wiring
+        </button>
+      </div>
       <input #fileInput type="file" accept="application/json,.json" hidden (change)="onImportFile($event)"/>
-      <button (click)="importClick(fileInput)">Import</button>
-      <button (click)="exportShop()" [disabled]="!hasShop">Export</button>
-      <button (click)="undo()" [disabled]="!canUndo" title="Undo (Ctrl/Cmd-Z)">Undo</button>
-      <button (click)="redo()" [disabled]="!canRedo" title="Redo (Ctrl/Cmd-Shift-Z)">Redo</button>
-      <button (click)="autoArrange()">Auto-arrange</button>
-      <!-- Where a second ESP32 gets added. Sits next to Gates because that's the
-           order the work happens in: a gate can't be told which board drives it
-           until the board exists. -->
-      <button routerLink="/boards">Boards</button>
+      <button class="ico" (click)="undo()" [disabled]="!canUndo" title="Undo (Ctrl/Cmd-Z)" aria-label="Undo">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h10a5 5 0 0 1 0 10h-6"/><path d="M8 4 4 8l4 4"/></svg>
+      </button>
+      <button class="ico" (click)="redo()" [disabled]="!canRedo" title="Redo (Ctrl/Cmd-Shift-Z)" aria-label="Redo">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M20 8H10a5 5 0 0 0 0 10h6"/><path d="M16 4l4 4-4 4"/></svg>
+      </button>
       <button class="primary" (click)="save()" [disabled]="!dirty || saving">{{ saving ? 'Saving…' : 'Save' }}</button>
+      <button class="ico" (click)="moreOpen = !moreOpen" [class.on]="moreOpen" title="More" aria-label="More actions">
+        <svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><circle cx="5" cy="12" r="1.9"/><circle cx="12" cy="12" r="1.9"/><circle cx="19" cy="12" r="1.9"/></svg>
+      </button>
+      <div class="more-bg" *ngIf="moreOpen" (pointerdown)="moreOpen = false"></div>
+      <div class="more" *ngIf="moreOpen">
+        <button routerLink="/shop">Done</button>
+        <button (click)="moreOpen = false; importClick(fileInput)">Import</button>
+        <button (click)="moreOpen = false; exportShop()" [disabled]="!hasShop">Export</button>
+      </div>
     </div>
 
     <!-- Contextual guidance / status — fixed under the toolbar. Always present; its
          message follows what you're doing: onboarding → progress → problems + fixes. -->
-    <div class="guide" [class.warn]="guide.kind === 'warn'" [class.ok]="guide.kind === 'ok'">
-      <span>{{ guide.text }}</span>
+    <div class="guide" [class.warn]="guide.kind === 'warn' || !!wireBlocked" [class.ok]="guide.kind === 'ok'">
+      <span>{{ wireBlocked || wireNote || guide.text }}</span>
       <button class="cap" *ngIf="guide.cap" (click)="capAndSave()">Cap them</button>
     </div>
 
     <div class="stage">
       <div class="canvas-wrap" #wrap>
         <svg #svg class="canvas" *ngIf="nodes.length"
-             [attr.viewBox]="'0 0 ' + vbW + ' ' + vbH" [attr.width]="vbW" [attr.height]="vbH">
+             [attr.viewBox]="'0 ' + (-RAIL_H) + ' ' + vbW + ' ' + (vbH + RAIL_H)"
+             [attr.width]="vbW" [attr.height]="vbH + RAIL_H">
           <defs>
             <pattern id="bdots" width="27" height="27" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r="1" fill="var(--border)"/></pattern>
           </defs>
           <rect x="0" y="0" [attr.width]="vbW" [attr.height]="vbH" fill="url(#bdots)" (pointerdown)="deselect()"/>
+
+          <!-- The board rail. Above the whole grid, in negative y, so every cell
+               keeps the coordinates it has always had and no saved layout moves. -->
+          <g class="wiring" [class.dim]="layer === 'ducts'">
+            <rect class="rail" x="0" [attr.y]="-RAIL_H" [attr.width]="vbW" [attr.height]="RAIL_H"/>
+            <line class="rail-edge" x1="0" y1="0" [attr.x2]="vbW" y2="0"/>
+            <text class="rail-lbl" x="14" [attr.y]="-RAIL_H + 20">BOARDS</text>
+            <!-- Which network they're all on. Only drawn once we actually know it —
+                 a placeholder here would be a claim about the shop. -->
+            <g *ngIf="netName">
+              <g class="rail-wifi" [attr.transform]="'translate(19,' + (-RAIL_H + 33) + ')'">
+                <path d="M-5 2 a7 7 0 0 1 10 0"/><path d="M-2.2 5 a3 3 0 0 1 4.4 0"/>
+              </g>
+              <text class="rail-net" x="29" [attr.y]="-RAIL_H + 37">{{ netName }}</text>
+            </g>
+            <g class="findboards" [attr.transform]="'translate(' + findX() + ',' + (-RAIL_H/2) + ')'"
+               (pointerdown)="goBoards()">
+              <rect x="0" y="-18" width="128" height="36" rx="9"/>
+              <text x="64" y="4">+ Find boards</text>
+            </g>
+          </g>
 
           <!-- The cell a drag is over. Red while the drop would be refused, so the
                reason in the guide bar has something to point at. -->
@@ -245,9 +403,15 @@ const spanFor = (kind: MenuKind): number => kind === 'linear' ? 4 : kind === 'se
           <!-- Each run is stroked twice: a fat casing in the canvas colour, then the
                duct. Later ducts therefore punch a clean gap through earlier ones where
                they cross, which is the whole crossing treatment — no hop geometry. -->
-          <g *ngFor="let d of ducts">
+          <g *ngFor="let d of ducts" [class.ghost]="layer === 'wiring'">
             <path class="duct-casing" [attr.d]="ductD(d.childId)"/>
             <path class="duct" [class.live]="d.live" [attr.d]="ductD(d.childId)"/>
+          </g>
+
+          <!-- Cable runs. Under the pieces on purpose, so each end tucks beneath the
+               tab it lands on rather than stopping short of it. -->
+          <g class="wiring" [class.dim]="layer === 'ducts'">
+            <path *ngFor="let c of cables()" class="cable" [attr.d]="c.d"/>
           </g>
           <path *ngFor="let d of openDucts()" class="open-stub" [attr.d]="openStubD(d.childId)"/>
           <g *ngFor="let bd of branchDots()" class="bdot" (pointerdown)="onBranchDotDown($event, bd)">
@@ -264,7 +428,7 @@ const spanFor = (kind: MenuKind): number => kind === 'linear' ? 4 : kind === 'se
 
           <g *ngFor="let n of nodes" class="node"
              [class.sel]="n.id === selectedId" [class.live]="n.live" [class.dragging]="n.id === dragId"
-             [class.bad]="n.id === dragId && !!dropBlocked"
+             [class.bad]="n.id === dragId && !!dropBlocked" [class.recede]="recedes(n)"
              [attr.transform]="'translate(' + nx(n) + ',' + ny(n) + ')'" (pointerdown)="startDrag($event, n)">
             <ng-container [ngSwitch]="n.glyph">
               <g *ngSwitchCase="'collector'"><circle class="body" r="30"/><path class="stroke" fill="none" stroke-width="3" stroke-linecap="round" d="M0 -19 a19 19 0 1 0 6 2 l-6 17"/><circle class="fillmuted" r="3.5"/></g>
@@ -278,6 +442,7 @@ const spanFor = (kind: MenuKind): number => kind === 'linear' ? 4 : kind === 'se
               <g *ngSwitchCase="'slidingGate'">
                 <rect class="unit" [attr.x]="-GATE_PAD" [attr.y]="-UNIT_H/2" [attr.width]="unitW(n)" [attr.height]="UNIT_H" rx="9"/>
                 <rect class="puck" [attr.x]="n.openIndex * CELL - 15" [attr.y]="-UNIT_H/2 + 6" width="30" height="14" rx="4"/>
+                <line class="stroke" x1="0" [attr.y1]="-UNIT_H/2" x2="0" [attr.y2]="-UNIT_H/2 - 12" stroke-width="4"/>
                 <line *ngFor="let x of outletXs(n)" class="stroke" [attr.x1]="x" [attr.y1]="UNIT_H/2" [attr.x2]="x" [attr.y2]="UNIT_H/2 + 12" stroke-width="4"/>
               </g>
               <!-- Manifold = a rounded rotary body: one input (hub, top, over outlet 0) fanning to each output. -->
@@ -285,6 +450,7 @@ const spanFor = (kind: MenuKind): number => kind === 'linear' ? 4 : kind === 'se
                 <rect class="unit" [attr.x]="-GATE_PAD" [attr.y]="-UNIT_H/2" [attr.width]="unitW(n)" [attr.height]="UNIT_H" [attr.rx]="UNIT_H/2"/>
                 <line *ngFor="let x of outletXs(n)" class="stroke fan" x1="0" [attr.y1]="-UNIT_H/2 + 3" [attr.x2]="x" [attr.y2]="UNIT_H/2 - 3" stroke-width="2.5"/>
                 <circle class="puck" cx="0" [attr.cy]="-UNIT_H/2 + 3" r="6"/>
+                <line class="stroke" x1="0" [attr.y1]="-UNIT_H/2" x2="0" [attr.y2]="-UNIT_H/2 - 12" stroke-width="4"/>
                 <line *ngFor="let x of outletXs(n)" class="stroke" [attr.x1]="x" [attr.y1]="UNIT_H/2" [attr.x2]="x" [attr.y2]="UNIT_H/2 + 12" stroke-width="4"/>
               </g>
               <g *ngSwitchCase="'tool'"><rect class="body" x="-38" y="-24" width="76" height="48" rx="11"/></g>
@@ -327,6 +493,55 @@ const spanFor = (kind: MenuKind): number => kind === 'linear' ? 4 : kind === 'se
               <line class="rm-line" x1="-5" y1="0" x2="5" y2="0"/>
             </g>
           </g>
+
+          <!-- ── wiring layer ────────────────────────────────────────────────
+               Present in BOTH views. In Ducts it greys out and stops taking the
+               pointer, so you can still see where the cable goes while you plumb —
+               hiding it made the two views feel like different drawings. -->
+          <g class="wiring" [class.dim]="layer === 'ducts'">
+          <!-- A gate's servo tab: the electrical end of a blast gate, and one of
+               the two ends you can pick a cable up by. -->
+          <g *ngFor="let t of gateTabs()" class="tab" [class.unwired]="!t.wired"
+             [class.lit]="tabLit(t.id)"
+             [attr.transform]="'translate(' + t.x + ',' + t.y + ')'"
+             (pointerdown)="onTabDown($event, t)">
+            <title>Drag to a board port to move this end of the cable</title>
+            <rect [attr.x]="-TAB_W/2 - 5" [attr.y]="-TAB_H/2 - 5"
+                  [attr.width]="TAB_W + 10" [attr.height]="TAB_H + 10" fill="transparent"/>
+            <rect class="tab-body" [attr.x]="-TAB_W/2" [attr.y]="-TAB_H/2"
+                  [attr.width]="TAB_W" [attr.height]="TAB_H" rx="3"/>
+            <text class="tab-ch" y="3.3">{{ t.channel }}</text>
+          </g>
+
+          <g *ngFor="let b of boards()" class="board" [class.primary]="b.primary"
+             [class.dragging]="!!b.dragX"
+             [attr.transform]="'translate(' + bx(b) + ',' + by(b) + ')'"
+             (pointerdown)="onBoardDown($event, b)">
+            <rect class="board-body" [attr.x]="-BOARD_W/2" [attr.y]="-BOARD_H/2"
+                  [attr.width]="BOARD_W" [attr.height]="BOARD_H" rx="8"/>
+            <text class="board-name" [attr.x]="-BOARD_W/2 + 8" [attr.y]="-BOARD_H/2 + 19">{{ b.name }}</text>
+            <text class="board-role" [attr.x]="-BOARD_W/2 + 8" [attr.y]="-BOARD_H/2 + 33">{{ b.primary ? 'PRIMARY' : 'SECONDARY' }}</text>
+            <!-- The port count IS the hardware budget (4 servo + 1 stepper). Amber
+                 when it's full: the board isn't broken, it's out of room. -->
+            <text class="board-count" [class.full]="boardFull(b)"
+                  [attr.x]="BOARD_W/2 - 8" [attr.y]="-BOARD_H/2 + 33">{{ b.servoCount }}/{{ SERVO_PORTS }}</text>
+            <!-- The other end of the cable. Grab a port and the GATE end comes
+                 loose; a bigger invisible target than the 7px port it draws. -->
+            <g *ngFor="let ch of portsOf(b)" class="port-hit" (pointerdown)="onPortDown($event, b, ch)">
+              <rect [attr.x]="portX(b, ch) - bx(b) - 5" [attr.y]="portY(b, ch) - by(b) - 6"
+                    [attr.width]="portW(ch) + 10" [attr.height]="PORT_H + 12" fill="transparent"/>
+              <rect class="port" [class.taken]="portTaken(b, ch)" [class.lit]="portLit(b, ch)"
+                    [class.stepper]="ch >= SERVO_PORTS"
+                    [attr.x]="portX(b, ch) - bx(b)" [attr.y]="portY(b, ch) - by(b)"
+                    [attr.width]="portW(ch)" [attr.height]="PORT_H" rx="2"/>
+              <text class="port-label" [attr.x]="portX(b, ch) - bx(b) + portW(ch)/2"
+                    [attr.y]="portY(b, ch) - by(b) + 16">{{ portLabel(ch) }}</text>
+            </g>
+          </g>
+
+          </g>
+
+          <path *ngIf="wireDrag" class="cable drag" [class.bad]="!!wireBlocked" [attr.d]="dragCableD()"/>
         </svg>
 
         <!-- The selected piece's name, edited exactly where it's drawn. A real input
@@ -340,6 +555,7 @@ const spanFor = (kind: MenuKind): number => kind === 'linear' ? 4 : kind === 'se
                (focus)="onNameFocus($event, np)" (blur)="onNameBlur($event, np)"
                (keydown.enter)="blurName($event)"/>
       </div>
+
     </div>
 
     <div class="backdrop" *ngIf="menu" (pointerdown)="closeMenu()"></div>
@@ -429,6 +645,44 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   menuOptions: MenuOption[] = [];
   menuTitle = '';
   readonly CELL = CELL; readonly UNIT_H = UNIT_H; readonly GATE_PAD = GATE_PAD; readonly PAD = PAD;
+  readonly BOARD_W = BOARD_W; readonly BOARD_H = BOARD_H; readonly RAIL_H = RAIL_H;
+  readonly PORT_H = PORT_H; readonly TAB_W = TAB_W; readonly TAB_H = TAB_H;
+  readonly SERVO_PORTS = SERVO_PORTS;
+
+  // ── wiring layer ────────────────────────────────────────────────────────────
+  /** Which view of the canvas is on. The pieces and their cells are identical in
+   *  both — only what's drawn over them changes. */
+  layer: 'ducts' | 'wiring' = 'ducts';
+  /** controllerId → slot index along the rail. Boards are one-dimensional: the rail
+   *  sits above the whole grid, which is what makes "a cable always leaves the
+   *  underside of its port and goes down" an invariant instead of a hope. */
+  private boardSlots = new Map<string, number>();
+  /** Overflow menu in the toolbar — everything that isn't Save or the layer switch. */
+  moreOpen = false;
+  /** The WiFi network the boards are on, once the device tells us. Empty until then,
+   *  and empty forever on a device too old to report it — the rail just shows
+   *  BOARDS, which is honest, rather than a guess at the shop's network. */
+  netName = '';
+  /** Mid-drag rubber cable. `mode` says which END came loose: from a tab you're
+   *  hunting a port, from a port you're hunting a tab. */
+  wireDrag: {
+    mode: 'toPort' | 'toGate';
+    gateId?: string;                                   // anchored end, mode toPort
+    port?: { boardId: string; channel: number };       // anchored end, mode toGate
+    from: Pt; to: Pt;
+    over: { boardId: string; channel: number } | null; // hovered port
+    overGate: string | null;                           // hovered tab
+  } | null = null;
+  /** A tray chip being dragged onto the canvas, or a placed board being moved. */
+  private bodrag: { id: string; dx: number; dy: number; fromTray: boolean; moved: boolean } | null = null;
+  /** Why the cable being dragged can't land where the pointer is, or ''. */
+  wireBlocked = '';
+  /** What a legal drop will DO, when that isn't just "connect" — currently a swap. */
+  wireNote = '';
+  private wMove = (e: PointerEvent) => this.onWireMove(e);
+  private wUp = () => this.onWireUp();
+  private boMove = (e: PointerEvent) => this.onBoardMove(e);
+  private boUp = () => this.onBoardUp();
 
   private icons: Record<string, SafeHtml> = {};
 
@@ -448,7 +702,8 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   private oMove = (e: PointerEvent) => this.onODotMove(e);
   private oUp = (e: PointerEvent) => this.onODotUp(e);
 
-  constructor(private api: ApiService, sanitizer: DomSanitizer) {
+  constructor(private api: ApiService, private route: ActivatedRoute,
+              private nav: NgRouter, sanitizer: DomSanitizer) {
     const svg = (inner: string): SafeHtml =>
       sanitizer.bypassSecurityTrustHtml(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">${inner}</svg>`);
     this.icons = {
@@ -484,7 +739,11 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     const saved = this.savedLayout(this.topo);
     if (saved) for (const [id, c] of Object.entries(saved)) this.cells.set(id, c);
     else this.autoLayoutInto(this.cells);
+    this.loadBoardCells(this.topo);
     this.syncNodes();
+    // ?layer=wiring — how /boards hands you back, so you return to the view the
+    // boards actually belong to instead of the duct drawing.
+    if (this.route.snapshot.queryParamMap.get('layer') === 'wiring') this.setLayer('wiring');
     try { this.applyLive(await this.api.getV2Status()); } catch { /* not running */ }
   }
   /** The wrap's size isn't known until the view exists — size the board to it then
@@ -500,6 +759,10 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     window.removeEventListener('pointerup', this.bUp);
     window.removeEventListener('pointermove', this.oMove);
     window.removeEventListener('pointerup', this.oUp);
+    window.removeEventListener('pointermove', this.wMove);
+    window.removeEventListener('pointerup', this.wUp);
+    window.removeEventListener('pointermove', this.boMove);
+    window.removeEventListener('pointerup', this.boUp);
   }
 
   iconFor(kind: string): SafeHtml { return this.icons[kind]; }
@@ -878,6 +1141,9 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
 
   // ── drag (reposition) / tap ───────────────────────────────────────────────────
   startDrag(evt: PointerEvent, n: NodeVM): void {
+    // In the wiring view the plumbing is a backdrop, not something you edit — the
+    // only handle on a piece there is its servo tab.
+    if (this.layer === 'wiring') return;
     evt.preventDefault(); evt.stopPropagation();
     this.selectedId = n.id; this.menu = null;
     this.dragId = n.id;
@@ -1078,10 +1344,18 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     const m = this.menu; if (!m) return [];
     if (m.convert) return this.convertOptions(m.convert);
     const mid = !!m.branch;
+    const legsHere = m.branch ? this.legsAtCell(m.branch.col, m.branch.row) : 0;
     const opts: MenuOption[] = FITTINGS.map(f => {
       let enabled = true, note: string | undefined;
       if (f.kind === 'duct' && m.end)    { enabled = false; note = 'drag the end'; }
       else if (f.kind === 'tool' && mid) { enabled = false; note = 'ends a run'; }
+      // A fitting spliced in where the run SPLITS has to carry every leg out of it.
+      // A ball valve has one outlet, so putting one on a tee leaves a leg with
+      // nowhere to come from — only a manifold or a sliding gate can stand there.
+      // A duct is exempt: it hangs another leg off the tee rather than replacing it.
+      else if (mid && legsHere > 1 && f.kind !== 'duct' && outletsFor(f.kind) < legsHere) {
+        enabled = false; note = `a tee needs ${legsHere} outlets`;
+      }
       if (enabled) {
         const t = this.targetCells(f.kind, m);
         // An add-dot may point off the negative edge (growing left or up); that's
@@ -1105,6 +1379,17 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       opts.push({ kind: 'cap', label: 'Cap this outlet', enabled: true });
     }
     return opts;
+  }
+
+  /** How many ways the run divides at this cell. A junction standing here with more
+   *  than one child is a TEE, and whatever replaces it has to feed all of them. */
+  private legsAtCell(col: number, row: number): number {
+    for (const [id, c] of this.cells) {
+      if (c.col !== col || c.row !== row) continue;
+      if (this.elem(id)?.['type'] !== 'junction') continue;
+      return this.childrenOf(id).length;
+    }
+    return 0;
   }
 
   /** Menu heading for a tap on a placed piece — named after what you tapped. */
@@ -1230,6 +1515,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   // collector or off a gate/manifold/slider now that the + handles are gone.
   outputDots(): ODot[] {
     const out: ODot[] = [];
+    if (this.layer !== 'ducts') return out;                    // plumbing affordance
     if (this.dragId || this.bdrag || this.odrag) return out;
     for (const n of this.nodes) {
       const el = this.elem(n.id);
@@ -1449,6 +1735,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
    *  one branches the run right there. */
   branchDots(): BDot[] {
     const out: BDot[] = [];
+    if (this.layer !== 'ducts') return out;                    // plumbing affordance
     if (this.dragId || this.bdrag || this.odrag) return out;   // hide while dragging
     const seen = new Set<string>();
     const push = (x: number, y: number, childId: string, axis: 'h' | 'v', elbow?: boolean, legs?: Cell[]) => {
@@ -1549,6 +1836,357 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     }
     return occ;
   }
+  // ── wiring layer ──────────────────────────────────────────────────────────────
+  // Everything below draws or edits the SAME two fields a gate has always had —
+  // controllerId and servo.channel — and adds one genuinely new thing: where each
+  // board physically sits.
+
+  setLayer(l: 'ducts' | 'wiring'): void {
+    if (this.layer === l) return;
+    this.layer = l;
+    this.selectedId = null; this.closeMenu();
+    // Nothing to place any more: every paired board has a slot in the rail from the
+    // moment it exists. Placement was a decision the rail makes unnecessary.
+    this.ensureSlots();
+  }
+
+  private controllersRaw(): RawEl[] { return ((this.topo as { controllers?: RawEl[] } | null)?.controllers) ?? []; }
+
+
+
+  /** Boards that have been placed on the canvas, with their port rosters. */
+  /** Every paired board gets a slot, in controller order, keeping whatever order was
+   *  saved. Stale entries (a board that has since been unpaired) drop out. */
+  private ensureSlots(): void {
+    const ids = this.controllersRaw().map(c => c['id'] as string);
+    for (const id of [...this.boardSlots.keys()]) if (!ids.includes(id)) this.boardSlots.delete(id);
+    const used = new Set(this.boardSlots.values());
+    let next = 0;
+    for (const id of ids) {
+      if (this.boardSlots.has(id)) continue;
+      while (used.has(next)) next++;
+      this.boardSlots.set(id, next); used.add(next);
+    }
+  }
+  boards(): BoardVM[] {
+    if (!this.topo) return [];
+    this.ensureSlots();
+    const out: BoardVM[] = [];
+    const fallback = this.defaultControllerId();
+    for (const c of this.controllersRaw()) {
+      const id = c['id'] as string;
+      const slot = this.boardSlots.get(id); if (slot === undefined) continue;
+      const used = new Map<number, string>();
+      let servoCount = 0;
+      for (const e of this.elems(this.topo)) {
+        if (e['type'] !== 'selector') continue;
+        if (((e['controllerId'] as string) ?? fallback) !== id) continue;
+        if (e['kind'] === 'linear') { used.set(SERVO_PORTS, e['id'] as string); continue; }
+        const ch = ((e['servo'] as RawEl | undefined)?.['channel'] as number) ?? 0;
+        used.set(ch, e['id'] as string); servoCount++;
+      }
+      const p = railSlot(slot);
+      const drag = this.bodrag?.id === id ? this.bodrag : null;
+      out.push({
+        id, name: (c['name'] as string) || id, primary: c['role'] === 'primary',
+        col: slot, row: 0, x: p.x, y: p.y, used, servoCount,
+        dragX: drag ? this.boardDragPt?.x : undefined,
+        dragY: drag ? this.boardDragPt?.y : undefined,
+      });
+    }
+    return out.sort((a, b) => a.col - b.col);
+  }
+  private boardDragPt: Pt | null = null;
+  /** x of the "+ Find boards" chip: just past the last slot. */
+  findX(): number { return railSlot(this.boardSlots.size).x + 6; }
+  goBoards(): void { void this.nav.navigate(['/boards']); }
+  bx(b: BoardVM): number { return b.dragX ?? b.x; }
+  by(b: BoardVM): number { return b.dragY ?? b.y; }
+
+  private rosterFor(boardId: string): Map<number, string> {
+    const used = new Map<number, string>();
+    if (!this.topo) return used;
+    const fallback = this.defaultControllerId();
+    for (const e of this.elems(this.topo)) {
+      if (e['type'] !== 'selector') continue;
+      if (((e['controllerId'] as string) ?? fallback) !== boardId) continue;
+      if (e['kind'] === 'linear') { used.set(SERVO_PORTS, e['id'] as string); continue; }
+      used.set(((e['servo'] as RawEl | undefined)?.['channel'] as number) ?? 0, e['id'] as string);
+    }
+    return used;
+  }
+
+  // ── ports and tabs ──────────────────────────────────────────────────────────
+  portsOf(b: BoardVM): number[] { return Array.from({ length: SERVO_PORTS + 1 }, (_, i) => i); }
+  portX(b: BoardVM, ch: number): number { return portPos({ x: this.bx(b), y: this.by(b) }, ch).x - portWidth(ch) / 2; }
+  portY(b: BoardVM, ch: number): number { return portPos({ x: this.bx(b), y: this.by(b) }, ch).y - PORT_H / 2; }
+  portW(ch: number): number { return portWidth(ch); }
+  portTaken(b: BoardVM, ch: number): boolean { return b.used.has(ch); }
+  portLabel(ch: number): string { return ch >= SERVO_PORTS ? 'ST' : String(ch); }
+  /** Amber, not red: a full board isn't broken, it's out of room. */
+  boardFull(b: BoardVM): boolean { return b.servoCount >= SERVO_PORTS; }
+  portLit(b: BoardVM, ch: number): boolean {
+    const d = this.wireDrag; if (!d) return false;
+    if (!!d.over && d.over.boardId === b.id && d.over.channel === ch) return true;
+    return d.mode === 'toGate' && d.port!.boardId === b.id && d.port!.channel === ch;
+  }
+  tabLit(gateId: string): boolean {
+    const d = this.wireDrag; if (!d) return false;
+    return d.mode === 'toGate' ? d.overGate === gateId : d.gateId === gateId;
+  }
+
+  /** Gates get a tab on their right-hand side: the servo, which is the actual
+   *  electrical end of a blast gate. */
+  gateTabs(): Array<{ id: string; x: number; y: number; channel: string; wired: boolean }> {
+    return this.nodes.filter(n => this.isGate(n)).map(n => {
+      const el = this.elem(n.id);
+      const linear = el?.['kind'] === 'linear';
+      const ch = linear ? SERVO_PORTS : (((el?.['servo'] as RawEl | undefined)?.['channel'] as number) ?? 0);
+      return {
+        id: n.id, x: this.tabX(n), y: this.ny(n),
+        channel: linear ? 'ST' : String(ch),
+        wired: this.boardSlots.has(this.boardOf(n.id)),
+      };
+    });
+  }
+  private tabX(n: NodeVM): number {
+    return this.nx(n) + (n.isUnit ? (n.span - 1) * CELL + GATE_PAD : this.halfW(n)) + 12;
+  }
+  private boardOf(gateId: string): string {
+    return ((this.elem(gateId)?.['controllerId'] as string) ?? this.defaultControllerId());
+  }
+  private channelOf(gateId: string): number {
+    const el = this.elem(gateId);
+    if (el?.['kind'] === 'linear') return SERVO_PORTS;
+    return ((el?.['servo'] as RawEl | undefined)?.['channel'] as number) ?? 0;
+  }
+
+  // ── cable runs ──────────────────────────────────────────────────────────────
+  /**
+   * One path per wired gate whose board is on the canvas.
+   *
+   * Ranked PER BOARD by how far the cable travels, LONGEST first, so the long runs
+   * take the high lanes and shorter ones nest beneath them instead of weaving
+   * through each other (see cableRun). Hops go on
+   * whichever cable is drawn later, and only ever where cable crosses CABLE — a
+   * cable crossing a duct implies nothing electrical, and bumping every one of
+   * those turns an ordinary run into a washboard.
+   */
+  cables(): CableVM[] {
+    if (!this.topo) return [];
+    const out: CableVM[] = [];
+    const drawn: ReturnType<typeof segmentsOf> = [];
+    const all = this.boards();
+    all.forEach((b, bi) => {
+      const legs: Array<{ gateId: string; channel: number; from: Pt; to: Pt }> = [];
+      for (const [ch, gateId] of b.used) {
+        const n = this.byId.get(gateId); if (!n) continue;
+        const to = { x: this.tabX(n), y: this.ny(n) };
+        legs.push({
+          gateId, channel: ch,
+          from: portExit({ x: this.bx(b), y: this.by(b) }, ch),
+          to,
+        });
+      }
+      const rank = rankByTravel(legs, l => Math.abs(l.to.x - l.from.x));
+      // Half a lane step per board, so two boards never hand out the same lane row.
+      const bias = bi * (7);
+      for (const l of legs) {
+        const n = this.byId.get(l.gateId);
+        const pts = cableRun(l.from, l.to, rank.get(l) ?? 0, bias, n ? this.halfH(n) : 0);
+        out.push({ id: b.id + ':' + l.channel, gateId: l.gateId, boardId: b.id, channel: l.channel,
+                   d: cablePath(pts, drawn) });
+        drawn.push(...segmentsOf(pts));
+      }
+    });
+    return out;
+  }
+
+  // ── dragging a board ────────────────────────────────────────────────────────
+  onBoardDown(evt: PointerEvent, b: BoardVM): void {
+    if (this.layer !== 'wiring') return;
+    evt.preventDefault(); evt.stopPropagation();
+    const p = this.toSvg(evt);
+    this.bodrag = { id: b.id, dx: p.x - b.x, dy: 0, fromTray: false, moved: false };
+    this.boardDragPt = { x: b.x, y: b.y };
+    window.addEventListener('pointermove', this.boMove);
+    window.addEventListener('pointerup', this.boUp);
+  }
+  // Boards slide ALONG the rail and nowhere else, so a drag is a reorder rather than
+  // a placement — there is no invalid drop and nothing to refuse.
+  private onBoardMove(evt: PointerEvent): void {
+    if (!this.bodrag) return;
+    this.bodrag.moved = true;
+    const p = this.toSvg(evt);
+    this.boardDragPt = { x: p.x - this.bodrag.dx, y: -RAIL_H / 2 };
+  }
+  private onBoardUp(): void {
+    window.removeEventListener('pointermove', this.boMove);
+    window.removeEventListener('pointerup', this.boUp);
+    const d = this.bodrag; const pt = this.boardDragPt;
+    this.bodrag = null; this.boardDragPt = null;
+    if (!d || !pt || !d.moved) return;
+    const order = [...this.boardSlots.entries()].sort((a, b) => a[1] - b[1]).map(e => e[0]);
+    const from = order.indexOf(d.id);
+    const to = Math.max(0, Math.min(order.length - 1, slotAt(pt.x)));
+    if (from < 0 || from === to) return;
+    this.pushHistory(null);
+    order.splice(to, 0, ...order.splice(from, 1));
+    this.boardSlots = new Map(order.map((id, i) => [id, i]));
+    this.dirty = true; this.saveError = ''; this.saveNote = '';
+    this.recomputeExtent();
+  }
+
+  // ── dragging a cable ────────────────────────────────────────────────────────
+  // Either end. Grab the servo tab and the BOARD end comes loose — drop it on a
+  // port. Grab a port and the GATE end comes loose — drop it on a tab. Symmetric,
+  // and it means you can re-home a gate from whichever end you happen to be
+  // looking at.
+
+  /** From a gate's tab: the loose end is the board end, so we're hunting a port. */
+  onTabDown(evt: PointerEvent, t: { id: string; x: number; y: number }): void {
+    if (this.layer !== 'wiring') return;
+    evt.preventDefault(); evt.stopPropagation();
+    const p = { x: t.x, y: t.y };
+    this.wireDrag = { mode: 'toPort', gateId: t.id, from: p, to: p, over: null, overGate: null };
+    this.wireBlocked = ''; this.wireNote = '';
+    window.addEventListener('pointermove', this.wMove);
+    window.addEventListener('pointerup', this.wUp);
+  }
+  /** From a board port: the loose end is the gate end, so we're hunting a tab. An
+   *  occupied port picks up the cable that's already there. */
+  onPortDown(evt: PointerEvent, b: BoardVM, ch: number): void {
+    if (this.layer !== 'wiring') return;
+    evt.preventDefault(); evt.stopPropagation();
+    const p = portExit({ x: this.bx(b), y: this.by(b) }, ch);
+    this.wireDrag = { mode: 'toGate', port: { boardId: b.id, channel: ch }, from: p, to: p, over: null, overGate: null };
+    this.wireBlocked = ''; this.wireNote = '';
+    window.addEventListener('pointermove', this.wMove);
+    window.addEventListener('pointerup', this.wUp);
+  }
+  private onWireMove(evt: PointerEvent): void {
+    const d = this.wireDrag; if (!d) return;
+    const p = this.toSvg(evt);
+    d.to = p;
+    if (d.mode === 'toPort') {
+      d.over = this.portUnder(p); d.overGate = null;
+      const v = d.over ? this.bindCheck(d.gateId!, d.over.boardId, d.over.channel) : null;
+      this.wireBlocked = v?.blocked ?? ''; this.wireNote = v?.note ?? '';
+    } else {
+      // From a port you can land on a gate (wire this channel to that gate) OR on
+      // another port (move the cable's board end — the other board, or a different
+      // channel on this one). Ports win the hit test: they're the smaller target.
+      const port = this.portUnder(p);
+      d.over = port && !this.samePort(port, d.port!) ? port : null;
+      d.overGate = d.over ? null : this.tabUnder(p);
+      if (d.over) {
+        const moving = this.rosterFor(d.port!.boardId).get(d.port!.channel);
+        const v = moving ? this.bindCheck(moving, d.over.boardId, d.over.channel)
+                         : { blocked: 'Nothing is wired to that port yet.', note: '' };
+        this.wireBlocked = v.blocked; this.wireNote = v.note;
+      } else if (d.overGate) {
+        const v = this.bindCheck(d.overGate, d.port!.boardId, d.port!.channel);
+        this.wireBlocked = v.blocked; this.wireNote = v.note;
+      } else { this.wireBlocked = ''; this.wireNote = ''; }
+    }
+  }
+  private onWireUp(): void {
+    window.removeEventListener('pointermove', this.wMove);
+    window.removeEventListener('pointerup', this.wUp);
+    const d = this.wireDrag; this.wireDrag = null;
+    const blocked = this.wireBlocked; this.wireBlocked = ''; this.wireNote = '';
+    if (!d || blocked) return;
+    // Port → port: the cable's BOARD end moves, and the gate on the far end comes
+    // along unchanged. That's how a gate gets re-homed to another board.
+    if (d.mode === 'toGate' && d.over) {
+      const moving = this.rosterFor(d.port!.boardId).get(d.port!.channel);
+      if (!moving) return;
+      this.pushHistory(null);
+      this.bindGate(moving, d.over.boardId, d.over.channel);
+      return;
+    }
+    const gateId = d.mode === 'toPort' ? d.gateId! : d.overGate;
+    const target = d.mode === 'toPort' ? d.over : d.port!;
+    if (!gateId || !target) return;
+    this.pushHistory(null);
+    this.bindGate(gateId, target.boardId, target.channel);
+  }
+  private portUnder(p: Pt): { boardId: string; channel: number } | null {
+    for (const b of this.boards()) {
+      for (const ch of this.portsOf(b)) {
+        const c = portPos({ x: this.bx(b), y: this.by(b) }, ch);
+        if (Math.abs(p.x - c.x) <= 11 && Math.abs(p.y - c.y) <= 12) return { boardId: b.id, channel: ch };
+      }
+    }
+    return null;
+  }
+  private samePort(a: { boardId: string; channel: number }, b: { boardId: string; channel: number }): boolean {
+    return a.boardId === b.boardId && a.channel === b.channel;
+  }
+  private tabUnder(p: Pt): string | null {
+    for (const t of this.gateTabs())
+      if (Math.abs(p.x - t.x) <= 14 && Math.abs(p.y - t.y) <= 14) return t.id;
+    return null;
+  }
+
+  /**
+   * Whether this gate may take that port, and what will happen if it does.
+   *
+   * An occupied port is a SWAP, not a refusal. Every gate is bound to some board
+   * and channel already (the schema requires a controllerId), so trading two
+   * bindings always lands both somewhere valid and leaves every board's channel
+   * count exactly as it was. Refusing instead would mean shuffling gates by hand
+   * to make room for a move the app could have made itself.
+   */
+  private bindCheck(gateId: string, boardId: string, ch: number): { blocked: string; note: string } {
+    const el = this.elem(gateId);
+    if (!el) return { blocked: 'That gate is gone.', note: '' };
+    const linear = el['kind'] === 'linear';
+    // The one thing that can't be traded: a stepper port and a servo channel are
+    // different hardware.
+    if (linear && ch < SERVO_PORTS) return { blocked: 'A sliding gate needs the stepper port, not a servo channel.', note: '' };
+    if (!linear && ch >= SERVO_PORTS) return { blocked: 'The stepper port drives a sliding gate, not a valve.', note: '' };
+    const holder = this.rosterFor(boardId).get(ch);
+    if (!holder || holder === gateId) return { blocked: '', note: '' };
+    const other = this.elem(holder);
+    if ((other?.['kind'] === 'linear') !== linear)
+      return { blocked: 'Those two gates need different kinds of port.', note: '' };
+    return { blocked: '', note: `Swap with “${(other?.['name'] as string) ?? holder}”` };
+  }
+
+  /** Put a gate on a board+channel, trading with whatever held it. */
+  private bindGate(gateId: string, boardId: string, ch: number): void {
+    const el = this.elem(gateId); if (!el) return;
+    const holder = this.rosterFor(boardId).get(ch);
+    if (holder && holder !== gateId) {
+      const was = { board: this.boardOf(gateId), ch: this.channelOf(gateId) };
+      this.writeBinding(holder, was.board, was.ch);
+    }
+    this.writeBinding(gateId, boardId, ch);
+    this.dirty = true; this.saveError = ''; this.saveNote = ''; this.wip = '';
+    this.syncNodes();
+  }
+  private writeBinding(gateId: string, boardId: string, ch: number): void {
+    const el = this.elem(gateId); if (!el) return;
+    el['controllerId'] = boardId;
+    // One stepper driver per board, so a sliding gate's channel is always 0 — the
+    // port index it was dropped on is the strip position, not the driver number.
+    if (el['kind'] === 'linear') el['linear'] = { ...(el['linear'] as RawEl ?? {}), channel: 0 };
+    else el['servo'] = { ...(el['servo'] as RawEl ?? {}), channel: ch };
+  }
+
+  /** The rubber cable while a drag is in flight. Dashed, and it follows the pointer
+   *  rather than snapping — the routed run only appears once it lands. */
+  dragCableD(): string {
+    const d = this.wireDrag; if (!d) return '';
+    const mx = (d.from.x + d.to.x) / 2;
+    return `M ${d.from.x} ${d.from.y} C ${mx} ${d.from.y}, ${mx} ${d.to.y}, ${d.to.x} ${d.to.y}`;
+  }
+
+  /** In the wiring view, everything that isn't being wired steps back. Uniform
+   *  dimming would have been easier and would have said less. */
+  recedes(n: NodeVM): boolean { return this.layer === 'wiring' && !this.isGate(n); }
+
   // ── undo / redo ───────────────────────────────────────────────────────────────
   // Whole-state snapshots (topology + cell positions). The doc is small and every
   // mutation already rebuilds the graph, so restoring a snapshot is the same work
@@ -1557,7 +2195,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   /** Snapshot now, and remember what produced it so keystroke-by-keystroke edits
    *  (renaming) collapse into one undo step instead of dozens. */
   private snapshot(): string {
-    return JSON.stringify({ topo: this.topo, cells: [...this.cells] });
+    return JSON.stringify({ topo: this.topo, cells: [...this.cells], boards: [...this.boardSlots] });
   }
   private pushHistory(tag: string | null): void {
     if (!this.topo) return;
@@ -1579,9 +2217,10 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   private step(from: string[], to: string[]): void {
     const snap = from.pop(); if (!snap || !this.topo) return;
     to.push(this.snapshot());
-    const state = JSON.parse(snap) as { topo: Topology; cells: [string, Cell][] };
+    const state = JSON.parse(snap) as { topo: Topology; cells: [string, Cell][]; boards?: [string, number][] };
     this.topo = state.topo;
     this.cells = new Map(state.cells);
+    this.boardSlots = new Map(state.boards ?? []);
     this.lastTag = null;                       // never coalesce across an undo
     this.selectedId = null; this.closeMenu();
     this.dirty = true; this.saveError = ''; this.wip = ''; this.saveNote = '';
@@ -1881,7 +2520,14 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   private docWithLayout(): Record<string, unknown> {
     const layout: Record<string, Cell> = {};
     for (const [id, c] of this.cells) layout[id] = { col: c.col, row: c.row };
-    return { ...(this.topo as Record<string, unknown>), ui: { layout } };
+    // Board ORDER along the rail, under its own key — board ids come from mDNS
+    // hostnames while element ids are minted here, and one flat map would let a
+    // board called "sel1" quietly take a gate's square.
+    const boards: Record<string, number> = {};
+    for (const [id, slot] of this.boardSlots) boards[id] = slot;
+    const ui: Record<string, unknown> = { layout };
+    if (Object.keys(boards).length) ui['wiring'] = { boards };
+    return { ...(this.topo as Record<string, unknown>), ui };
   }
 
   /** Live always-open leaks (tools with no gate on their path to the collector). */
@@ -2020,6 +2666,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   /** Bypass: put a closed gate above each always-open tool, then save. */
   async capAndSave(): Promise<void> {
     if (!this.topo) return;
+    this.pushHistory(null);
     const n = this.capAlwaysOn();
     this.buildGraph(this.topo); this.syncNodes(); this.refreshHandles();
     this.airflowErrors = [];
@@ -2028,20 +2675,43 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       this.saveNote = `Put a closed gate on ${n} leaking outlet${n === 1 ? '' : 's'} — wire a servo to each, or delete the tool.`;
     }
   }
+  /**
+   * Put a gate on every leaking outlet — asking again after each one.
+   *
+   * It used to plan the whole set against the UNTOUCHED document: collect every
+   * issue, expand each co-open pair to all its partners, then fit a gate to each.
+   * But gating one tool can resolve another's issue on its own, and the plan never
+   * noticed — so it fitted gates for leaks that no longer existed, and those gates
+   * isolate nothing. They came out flagged (redundant), which is the shop telling
+   * you the fix was wrong. Re-asking after every insertion stops as soon as the
+   * shop is tight, which makes the result minimal by construction.
+   */
   private capAlwaysOn(): number {
     if (!this.topo) return 0;
-    const leaks = airflowIssues(this.topo);
-    // A co-open pair is only fixed once EVERY tool sharing the outlet is behind its
-    // own gate — gating one still leaves the other open when the first one runs — so
-    // the partners named in the issue get capped too.
-    const targets = new Set<string>();
-    for (const iss of leaks) {
-      targets.add(iss.id);
-      for (const w of iss.with ?? []) targets.add(w.id);
+    const done = new Set<string>();
+    const targets: string[] = [];
+    for (let guard = 0; guard < 64; guard++) {
+      const leaks = airflowIssues(this.topo);
+      if (!leaks.length) break;
+      // Take the first issue and gate something that isn't gated yet — the tool it
+      // names, or failing that one of the partners it shares an outlet with. Two
+      // tools on one outlet still report a leak after the first gate goes on (run
+      // that one and its neighbour is still open), and the named tool is the one
+      // already fixed, so the partner is what's left to do.
+      const iss = leaks[0];
+      const next = [iss.id, ...(iss.with ?? []).map(w => w.id)].find(id => !done.has(id));
+      if (!next) break;                        // nothing left we haven't tried
+      done.add(next);
+      if (this.capOne(next)) targets.push(next);
     }
-    if (targets.size) this.pushHistory(null);
-    for (const id of targets) {
-      const duct = this.ductsRaw().find(d => d['child'] === id); if (!duct) continue;
+    this.dirty = true;
+    return targets.length;
+  }
+  /** One gate, spliced above one tool. False when the tool has no feed to splice. */
+  private capOne(id: string): boolean {
+    if (!this.topo) return false;
+    {
+      const duct = this.ductsRaw().find(d => d['child'] === id); if (!duct) return false;
       const parentId = duct['parent'] as string;
       const parentBranch = duct['parentBranch'] as string | undefined;
       const channel = this.freeServoChannel();
@@ -2068,8 +2738,8 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       while (taken.has(tcell.col + ',' + row)) row++;
       this.cells.set(id, { col: tcell.col, row });
     }
-    this.dirty = true;
-    return targets.size;
+    this.buildGraph(this.topo);
+    return true;
   }
 
   /** Download the whole shop (topology + layout) as a JSON file the user can keep. */
@@ -2117,6 +2787,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       const saved = this.savedLayout(this.topo);
       if (saved) for (const [id, c] of Object.entries(saved)) this.cells.set(id, c);
       else this.autoLayoutInto(this.cells);
+      this.loadBoardCells(this.topo);
       this.selectedId = null;
       this.syncNodes();
 
@@ -2262,10 +2933,14 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
    *  does — so there's always empty grid to build onto, and it scrolls only once
    *  the shop genuinely outgrows the screen. */
   private recomputeExtent(): void {
+    // Boards count toward the extent too, or one parked past the last tool would
+    // sit outside the scrollable area with no way to reach it.
     const maxCol = Math.max(1, ...this.nodes.map(n => n.col + n.span - 1));
     const maxRow = Math.max(1, ...this.nodes.map(n => n.row));
     const wrap = this.wrapRef?.nativeElement;
-    this.vbW = Math.max(PAD * 2 + maxCol * CELL + CELL, wrap?.clientWidth ?? 0);
+    // The rail has to fit too: every slot plus the Find boards chip on the end.
+    const railW = PAD + this.boardSlots.size * BOARD_SLOT + 190;
+    this.vbW = Math.max(PAD * 2 + maxCol * CELL + CELL, railW, wrap?.clientWidth ?? 0);
     this.vbH = Math.max(PAD * 2 + maxRow * CELL + CELL, wrap?.clientHeight ?? 0);
   }
   private childrenOf(id: string): string[] { const out: string[] = []; for (const [c, p] of this.parentOf) if (p === id) out.push(c); return out; }
@@ -2308,6 +2983,27 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     for (const [toolId, o] of this.outletOf) { const uc = target.get(o.unitId); if (uc) target.set(toolId, { col: uc.col + o.index, row: uc.row + 1 }); }
   }
   private savedLayout(t: Topology): Record<string, Cell> | null { return (t as { ui?: { layout?: Record<string, Cell> } }).ui?.layout ?? null; }
+  private savedBoards(t: Topology): Record<string, number | Cell> | null {
+    return (t as { ui?: { wiring?: { boards?: Record<string, number | Cell> } } }).ui?.wiring?.boards ?? null;
+  }
+  /** Restore board placements, dropping any whose board is no longer paired — an
+   *  unpaired board's square would otherwise sit there blocking cells for a device
+   *  that isn't in the shop any more. */
+  private loadBoardCells(t: Topology): void {
+    this.boardSlots.clear();
+    const saved = this.savedBoards(t);
+    // Docs written before the rail stored a {col,row} cell. Their LEFT-TO-RIGHT
+    // order is the part that still means something, so read it as the slot order
+    // rather than discarding the layout someone arranged.
+    if (saved) {
+      const known = new Set(this.controllersRaw().map(c => c['id'] as string));
+      const rows = Object.entries(saved).filter(([id]) => known.has(id))
+        .map(([id, v]) => [id, typeof v === 'number' ? v : v.col] as const)
+        .sort((a, b) => a[1] - b[1]);
+      rows.forEach(([id], i) => this.boardSlots.set(id, i));
+    }
+    this.ensureSlots();
+  }
   private applyLive(status: TopologyStatus): void {
     const reach = status.reachable ?? {}, actuators = status.actuators ?? {}, liveSet = new Set<string>();
     for (const [toolId, ok] of Object.entries(reach)) {

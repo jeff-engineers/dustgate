@@ -8,7 +8,7 @@
 
 import {
   type Box, type Pt, type SceneNode,
-  CELL, CLEARANCE, GATE_PAD, LATTICE, OUTLET_STUB, PAD, UNIT_H,
+  CELL, CLEARANCE, GATE_PAD, INLET_GAP, LATTICE, OUTLET_STUB, PAD, UNIT_H,
   deviceBox, halfH, halfW, ptInBox, segBoxHit, simplifyPts,
 } from './geometry';
 
@@ -100,7 +100,10 @@ export function outPorts(n: SceneNode, outlet?: number): Port[] {
 
 /** Where a duct may ENTER this device. */
 export function inPorts(n: SceneNode): Port[] {
-  if (n.isUnit) return [{ pt: { x: n.x, y: n.y - UNIT_H / 2 }, dir: 3 }];
+  // Stop the trunk just SHORT of a unit's top edge. Landing exactly on it put the
+  // duct's 6px stroke half on top of the gate's own outline, so the run and the box
+  // read as one shape and you couldn't see where the pipe ended.
+  if (n.isUnit) return [{ pt: { x: n.x, y: n.y - UNIT_H / 2 - INLET_GAP }, dir: 3 }];
   if (n.glyph === 'tool' || n.glyph === 'ballvalve') return sidePorts(n, 3);
   return allSidePorts(n);
 }

@@ -70,3 +70,4 @@ tools/.env
 
 # routing conformance spec build output
 dustgate-ui/.routing-test/
+dustgate-ui/.wiring-test/

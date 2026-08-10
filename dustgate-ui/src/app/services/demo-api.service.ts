@@ -270,34 +270,53 @@ export class DemoApiService extends ApiService {
     return this.demoNodes.map(n => ({ ...n }));
   }
 
-  /** No NVS to write to in the browser — accept it so the boards flow is walkable.
-   *  getNodes() below still derives link state from the topology, which is close
-   *  enough for the demo even though the device now keeps the two separate. */
-  override async pairNode(_host: string, _name?: string): Promise<unknown> { return { ok: true }; }
-  override async unpairNode(_host: string): Promise<unknown> { return { ok: true }; }
+  /** Which boards this fake device has PAIRED. Its own state, exactly as on the
+   *  hardware (control/NodeRegistry.h, NVS) — and the reason Add works at all.
+   *
+   *  getNodes() used to derive the pairing list from the topology's controllers[],
+   *  which made Add a no-op: pairNode wrote nothing, getNodes therefore didn't
+   *  report the new board, and syncLayoutControllers only ever adds controllers
+   *  for boards getNodes reported. The layout could only gain a board it already
+   *  had. Nothing surfaced — the button just did nothing.
+   *
+   *  Seeded lazily from the topology so a demo shop that already names secondaries
+   *  still shows them as paired. */
+  private paired: Set<string> | null = null;
+  private pairedHosts(): Set<string> {
+    if (!this.paired) {
+      const controllers = (this.td?.topology as { controllers?: Array<{ role: string; link?: { host?: string } }> })?.controllers ?? [];
+      this.paired = new Set(
+        controllers.filter(c => c.role === 'secondary').map(c => c.link?.host ?? '').filter(Boolean),
+      );
+    }
+    return this.paired;
+  }
+
+  override async pairNode(host: string, _name?: string): Promise<unknown> {
+    this.pairedHosts().add(host);
+    return { ok: true };
+  }
+  override async unpairNode(host: string): Promise<unknown> {
+    this.pairedHosts().delete(host);
+    return { ok: true };
+  }
 
   override async getNodes(): Promise<NodeLinkState[]> {
-    // Report link state for whatever secondaries the current topology names, so
-    // the UI's online/offline treatment is exercised. node-2 is simulated as
-    // UNREACHABLE — the interesting case, and the one that's hard to stage on a
-    // bench with two working boards.
-    const controllers = (this.td?.topology as { controllers?: Array<{ id: string; role: string; link?: { host?: string } }> })?.controllers ?? [];
-    return controllers
-      .filter(c => c.role === 'secondary')
-      .map(c => {
-        const host = c.link?.host ?? '';
-        const known = this.demoNodes.find(n => n.host === host);
-        const online = host !== 'dustgate-node-2';
-        return {
-          id: c.id,
-          host,
-          online,
-          lastSeen: online ? Date.now() : 0,
-          board: known?.board ?? 'unknown',
-          fw: online ? '1.0.0-demo' : '',
-          caps: { servos: known?.servos ?? 0, linear: 0 },
-        };
-      });
+    // node-2 is simulated as UNREACHABLE — the interesting case, and the one that's
+    // hard to stage on a bench with two working boards.
+    return [...this.pairedHosts()].map(host => {
+      const known = this.demoNodes.find(n => n.host === host);
+      const online = host !== 'dustgate-node-2';
+      return {
+        id: host,                          // the node's host IS its controllerId
+        host,
+        online,
+        lastSeen: online ? Date.now() : 0,
+        board: known?.board ?? 'unknown',
+        fw: online ? '1.0.0-demo' : '',
+        caps: { servos: known?.servos ?? 0, linear: 0 },
+      };
+    });
   }
 
   override saveOutletConfig(): Promise<{ ok: boolean }> {

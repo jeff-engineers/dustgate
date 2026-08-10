@@ -26,6 +26,14 @@ export const GATE_PAD = 0.42 * CELL;
 export const TOOL_HALF = 24;
 /** How far below a unit's body an outlet stub starts. */
 export const OUTLET_STUB = UNIT_H / 2 + 12;
+/** Where a unit's feed run stops, measured from its top edge. Matches the 12px the
+ *  OUTLETS stub out of the bottom, because the unit now draws an inlet stub to meet
+ *  it — so the trunk lands on a spigot rather than butting into the body.
+ *
+ *  5px was not enough: the duct is stroked 6 with a ROUND cap, so its ink runs 3px
+ *  past the endpoint, leaving barely a pixel against the box outline. It still read
+ *  as touching. */
+export const INLET_GAP = 12;
 
 export type Glyph = 'collector' | 'slidingGate' | 'ballvalve' | 'manifold' | 'junction' | 'tool';
 

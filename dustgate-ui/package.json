@@ -6,6 +6,7 @@
     "start:mock": "ng serve --configuration development --proxy-config proxy.conf.json",
     "build": "ng build --configuration production",
     "test:routing": "tsc src/app/build/routing/*.ts --outDir .routing-test --module commonjs --target es2022 --moduleResolution node --strict --skipLibCheck && node .routing-test/router.spec.js",
+    "test:wiring": "tsc src/app/build/wiring/*.ts src/app/build/routing/*.ts --outDir .wiring-test --module commonjs --target es2022 --moduleResolution node --strict --skipLibCheck && node .wiring-test/wiring/wire-geometry.spec.js",
     "deploy": "bash deploy.sh"
   },
   "dependencies": {

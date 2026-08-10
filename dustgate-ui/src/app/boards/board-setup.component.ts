@@ -167,7 +167,7 @@ interface BoardRow {
     <p class="err" *ngIf="error">{{ error }}</p>
 
     <div class="nav">
-      <button class="next" (click)="go('/build')">Shop layout →</button>
+      <button class="next" (click)="backToWiring()">Shop layout →</button>
     </div>
   `,
 })
@@ -339,6 +339,10 @@ export class BoardSetupComponent implements OnInit, OnDestroy {
   }
 
   go(path: string): void { void this.router.navigate([path]); }
+  /** Back to the canvas in its WIRING view. Boards only matter there, so landing in
+   *  the duct view would put you one tap from where you just were, looking at a
+   *  drawing that doesn't show the thing you came here to change. */
+  backToWiring(): void { void this.router.navigate(['/build'], { queryParams: { layer: 'wiring' } }); }
 
   // ── internals ─────────────────────────────────────────────────────────────
   private async refreshLinks(): Promise<void> {

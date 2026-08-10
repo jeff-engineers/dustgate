@@ -79,7 +79,7 @@ group('R1  demo layout stays a straight drop');
   );
   const r = routeAll(s);
   ok('routes all 5 ducts', r.size === 5);
-  eqPath('dc→sel is the straight drop', path(r, 'sel'), [[64, 94], [64, 149]]);
+  eqPath('dc→sel is the straight drop', path(r, 'sel'), [[64, 94], [64, 137]]);
   eqPath('sel.b1→saw', path(r, 'saw'), [[64, 207], [64, 256]]);
   eqPath('sel.b2→band', path(r, 'band'), [[172, 207], [172, 256]]);
   eqPath('sel.b3→router', path(r, 'router'), [[280, 207], [280, 256]]);
