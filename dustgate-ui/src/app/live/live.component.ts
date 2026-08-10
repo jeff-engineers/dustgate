@@ -124,6 +124,11 @@ const POLL_MS = 2000;
     .ctlerr {
       font-size: 13px; color: var(--danger); margin: 0 8px 10px; line-height: 1.5;
     }
+    .nav { display: flex; gap: 10px; margin-top: 18px; }
+    .nav a { flex: 1; display: flex; align-items: center; justify-content: center; gap: 8px;
+             padding: 12px; border: 1px solid var(--border); border-radius: var(--radius);
+             color: var(--muted); text-decoration: none; font-size: 14px; }
+    .nav a svg { width: 18px; height: 18px; flex: none; }
     .empty {
       text-align: center; color: var(--muted); padding: 48px 20px;
     }
@@ -168,7 +173,7 @@ const POLL_MS = 2000;
         </span>
         <div class="c-body">
           <div class="c-name">{{ collectorName }}</div>
-          <div class="c-sub">{{ collectorOn ? 'Collecting · ' + activeName : 'Idle' }}</div>
+          <div class="c-sub">{{ collectorSub() }}</div>
         </div>
         <button class="sw" [class.on]="collectorOn"
                 [attr.aria-label]="collectorOn ? 'Stop collection' : 'System idle'"
@@ -191,20 +196,34 @@ const POLL_MS = 2000;
         </button>
       </div>
 
-      <a class="setup" routerLink="/setup">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
-             stroke-linecap="round" stroke-linejoin="round">
-          <path d="M4 8h9M17 8h3"/><circle cx="15" cy="8" r="2"/>
-          <path d="M4 16h4M12 16h8"/><circle cx="10" cy="16" r="2"/>
-        </svg>
-        Shop setup
-      </a>
+      <!-- The way out of the Live view. The dashboard used to carry this switcher;
+           now that / forwards straight here, it has to live on the page it leaves. -->
+      <div class="nav">
+        <a routerLink="/build">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+               stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 8h9M17 8h3"/><circle cx="15" cy="8" r="2"/>
+            <path d="M4 16h4M12 16h8"/><circle cx="10" cy="16" r="2"/>
+          </svg>
+          Shop layout
+        </a>
+        <a routerLink="/tools">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+               stroke-linecap="round" stroke-linejoin="round">
+            <rect x="4" y="4" width="16" height="16" rx="3"/>
+            <circle cx="9.5" cy="11" r="1.1" fill="currentColor" stroke="none"/>
+            <circle cx="14.5" cy="11" r="1.1" fill="currentColor" stroke="none"/>
+            <path d="M9 16h6"/>
+          </svg>
+          Tools
+        </a>
+      </div>
     </ng-container>
 
     <ng-template #noShop>
       <div class="empty">
         <p>No shop configured yet.</p>
-        <p><a routerLink="/setup">Set up your shop →</a></p>
+        <p><a routerLink="/build">Set up your shop →</a></p>
       </div>
     </ng-template>
   `,
@@ -214,6 +233,11 @@ export class LiveViewComponent implements OnInit, OnDestroy {
   collectorName = 'Dust collector';
   tools: ToolRow[] = [];
   collectorOn = false;
+  /** The blower is still on, but only to finish clearing the ducts — every tool is
+   *  already off. Firmware has always published this (TopologyRuntime::writeStatus);
+   *  until now the view ignored it and showed "Collecting · " with nothing after the
+   *  separator, since there's no active tool left to name. */
+  collectorCoasting = false;
   activeName = '';
   /** False while the saved layout is unfinished — the build canvas lets you save a
    *  work-in-progress shop, so this view is where that gets enforced: no gate and
@@ -247,6 +271,16 @@ export class LiveViewComponent implements OnInit, OnDestroy {
 
   ngOnDestroy(): void {
     if (this.poll) clearInterval(this.poll);
+  }
+
+  /** What the collector is doing, in the same `thing · detail` shape as the tool
+   *  rows. The coast-down gets said out loud: a blower running with every tool off
+   *  otherwise reads as a stuck relay, and someone would go looking for the fault
+   *  instead of waiting the few seconds out. */
+  collectorSub(): string {
+    if (!this.collectorOn) return 'Idle';
+    if (this.collectorCoasting) return 'Collecting · coasting down';
+    return this.activeName ? 'Collecting · ' + this.activeName : 'Collecting';
   }
 
   sourceLine(t: ToolRow): string {
@@ -301,6 +335,7 @@ export class LiveViewComponent implements OnInit, OnDestroy {
       t.collecting = reach[t.id] === true;
     }
     this.collectorOn = !!status.collectorOn;
+    this.collectorCoasting = !!status.collectorCoasting;
     this.activeName = this.tools.find(t => t.collecting)?.name ?? '';
   }
 

@@ -4,7 +4,6 @@ import { CommonModule } from '@angular/common';
 import { Subscription } from 'rxjs';
 import { ApiService, SystemStatus, OutletStatus } from '../services/api.service';
 import { ManifoldVisualizerComponent } from '../visualizer/manifold-visualizer.component';
-import { isLocalOrDevice } from '../app.config';
 
 interface ToolButton {
   stop: number;
@@ -208,8 +207,8 @@ interface ToolButton {
       </div>
     </div>
 
-    <!-- v2 pages — shown only on localhost / a real device, never the public demo -->
-    <div class="v2-nav" *ngIf="showV2Nav">
+    <!-- Way back out to the current UI: this screen is only reachable at /legacy/*. -->
+    <div class="v2-nav">
       <button (click)="goShop()"  aria-label="Live view">Live</button>
       <button (click)="goBuild()" aria-label="Build shop layout">Build <span class="tag">BETA</span></button>
       <button (click)="goTools()" aria-label="Tag tools">Tools <span class="tag">BETA</span></button>
@@ -263,9 +262,6 @@ export class DashboardComponent implements OnInit, OnDestroy {
   status: SystemStatus | null = null;
   connected = false;
   ready = false;
-
-  /** Show the v2 page links only on dev/device, never on the public Vercel demo. */
-  readonly showV2Nav = isLocalOrDevice;
 
   toolButtons: ToolButton[] = [];
 
@@ -360,8 +356,10 @@ export class DashboardComponent implements OnInit, OnDestroy {
   // itself (ManifoldVisualizerComponent.onGateClick / onDcClick) since it's
   // the control surface. Only navigation stays here.
 
-  goSetup()           { this.router.navigate(['/setup']); }
-  goManualSetup()     { this.router.navigate(['/setup/manual']); }
+  // Deprecated screen: its own wizards live under /legacy/* so this flow still
+  // works end to end. The bare /setup paths now redirect into the layout tool.
+  goSetup()           { this.router.navigate(['/legacy/setup']); }
+  goManualSetup()     { this.router.navigate(['/legacy/setup/manual']); }
   goSettings()        { this.router.navigate(['/settings']); }
   goShop()            { this.router.navigate(['/shop']); }
   goBuild()           { this.router.navigate(['/build']); }

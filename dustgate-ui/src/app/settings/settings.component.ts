@@ -321,8 +321,8 @@ export class SettingsComponent implements OnInit {
   }
 
   back()            { this.router.navigate(['/']); }
-  goSetup()         { this.router.navigate(['/setup']); }
-  goManualSetup()   { this.router.navigate(['/setup/manual']); }
+  goSetup()         { this.router.navigate(['/build']); }
+  goManualSetup()   { this.router.navigate(['/build']); }
 
   clearStatus() { this.statusMsg = ''; this.errorMsg = ''; }
 

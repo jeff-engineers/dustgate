@@ -491,7 +491,7 @@ const idxOf = (plan, sel) => plan.moves.findIndex((m) => m.selectorId === sel);
 }
 
 // ── redundant gates ─────────────────────────────────────────────────────────
-// A gate is redundant when the shop's airflow behaves identically without it.
+// Only an INLINE pair counts: two gates on the same run with no branch between.
 {
   const brain = { id: 'c', role: 'primary', name: 'Brain', board: 'devkitc',
                   link: { transport: 'wifi-ws', host: 'x.local' } };
@@ -502,8 +502,7 @@ const idxOf = (plan, sel) => plan.moves.findIndex((m) => m.selectorId === sel);
     branches: [{ id: id + '_b', opensState: id + '_open', role }],
   });
 
-  // cyclone → bv1 → bv2 → drill. Either valve alone would isolate the drill, so
-  // exactly one is redundant — and it must be the one added last.
+  // cyclone → bv1 → bv2 → drill: inline, nothing branches between them.
   const series = {
     schemaVersion: 1, name: 'Series', controllers: [brain],
     elements: [{ id: 'dc', type: 'collector', name: 'Cyclone' },
@@ -515,10 +514,10 @@ const idxOf = (plan, sel) => plan.moves.findIndex((m) => m.selectorId === sel);
   };
   check('redundant: series fixture is a valid doc', validateTopology(series).ok);
   const red = redundantSelectors(series).map((r) => r.id);
-  eq('redundant: exactly one of a series pair', red.length, 1);
+  eq('redundant: exactly one of an inline pair', red.length, 1);
   eq('redundant: the one added last is flagged', red[0], 'bv2');
 
-  // The survivor is load bearing: with one gate left, nothing is redundant.
+  // One gate on its own run is never redundant, however little hangs off it.
   const lone = clone(series);
   lone.elements = lone.elements.filter((e) => e.id !== 'bv2');
   lone.ducts = lone.ducts.filter((d) => d.child !== 'bv2');
@@ -528,10 +527,44 @@ const idxOf = (plan, sel) => plan.moves.findIndex((m) => m.selectorId === sel);
   check('redundant: lone fixture is valid', validateTopology(lone).ok);
   eq('redundant: a lone gate before one tool is kept', redundantSelectors(lone).length, 0);
 
-  // A real selector choosing between tools is never redundant.
+  // A gate with nothing but an unfinished run below it is NOT redundant — it just
+  // isn't doing anything YET, and saying otherwise is noise while you're building.
+  const unfinished = {
+    schemaVersion: 1, name: 'Unfinished', controllers: [brain],
+    elements: [{ id: 'dc', type: 'collector', name: 'Cyclone' },
+               valve('bv', 'Ball valve', 'tool'),
+               { id: 'end', type: 'junction', name: 'Open end' }],
+    ducts: [{ child: 'bv', parent: 'dc' }, { child: 'end', parent: 'bv', parentBranch: 'bv_b' }],
+  };
+  eq('redundant: a half-built run is not flagged', redundantSelectors(unfinished).length, 0);
+
+  // Gates on separate legs of a fork are each doing their own job.
+  const parallel = {
+    schemaVersion: 1, name: 'Parallel', controllers: [brain],
+    elements: [{ id: 'dc', type: 'collector', name: 'Cyclone' },
+               { id: 'wye', type: 'junction', name: 'Wye' },
+               valve('bvA', 'Ball valve A', 'tool'), valve('bvB', 'Ball valve B', 'tool'),
+               { id: 'ta', type: 'tool', name: 'Planer' }, { id: 'tb', type: 'tool', name: 'Saw' }],
+    ducts: [{ child: 'wye', parent: 'dc' },
+            { child: 'bvA', parent: 'wye' }, { child: 'bvB', parent: 'wye' },
+            { child: 'ta', parent: 'bvA', parentBranch: 'bvA_b' },
+            { child: 'tb', parent: 'bvB', parentBranch: 'bvB_b' }],
+  };
+  eq('redundant: gates on separate legs are kept', redundantSelectors(parallel).length, 0);
+
+  // A pass-through junction between two gates doesn't save the lower one.
+  const throughWye = clone(series);
+  throughWye.elements.push({ id: 'j', type: 'junction', name: 'Wye' });
+  throughWye.ducts.find((d) => d.child === 'bv2').parent = 'j';
+  delete throughWye.ducts.find((d) => d.child === 'bv2').parentBranch;
+  throughWye.ducts.push({ child: 'j', parent: 'bv1', parentBranch: 'bv1_b' });
+  eq('redundant: a plain pass-through still counts as inline',
+     redundantSelectors(throughWye).map((r) => r.id).join(','), 'bv2');
+
+  // A branching gate is never pulled — its other legs would go with it.
   eq('redundant: independent gates are kept', redundantSelectors(clone(twoGates)).length, 0);
 
-  // It is advisory only — it must not leak into airflowIssues.
+  // Advisory only — it must not leak into airflowIssues.
   eq('redundant: series has no airflow issues', airflowIssues(series).length, 0);
 }
 

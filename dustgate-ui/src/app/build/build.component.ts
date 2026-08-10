@@ -52,8 +52,11 @@ interface NodeVM {
 }
 interface DuctVM { childId: string; live: boolean; open: boolean; }
 /** A tee point on a run. `axis` is the direction the run travels here, so a new
- *  leg can be sent off perpendicular to it. */
-interface BDot { x: number; y: number; childId: string; col: number; row: number; axis: 'h' | 'v'; }
+ *  leg can be sent off perpendicular to it. `elbow` marks a corner rather than a
+ *  point on a straight; corners carry `legs` — the cells a new leg could take,
+ *  already in preference order, because a corner's free directions depend on which
+ *  way it turns and can't be derived from `axis` alone. */
+interface BDot { x: number; y: number; childId: string; col: number; row: number; axis: 'h' | 'v'; elbow?: boolean; legs?: Cell[]; }
 interface ODot { x: number; y: number; parentId: string; branchId?: string; cell: Cell; }
 
 type Fitting = SelKind | 'tool' | 'duct';
@@ -161,7 +164,9 @@ const spanFor = (kind: MenuKind): number => kind === 'linear' ? 4 : kind === 'se
     .puck { fill: var(--border-strong, #555); } .node.live .puck { fill: var(--success); }
 
     .menu, .inspector { position: fixed; z-index: 20; background: var(--surface); border: 1px solid var(--border-strong, #444); border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.5); }
-    .menu { padding: 6px; min-width: 150px; }
+    /* A menu opened near an edge would otherwise hang off it — openMenu measures and
+       pulls it back on screen, and this caps a long list to the viewport. */
+    .menu { padding: 6px; min-width: 150px; max-height: calc(100dvh - 16px); overflow-y: auto; }
     .menu button { display: flex; align-items: center; gap: 10px; width: 100%; background: none; border: none; color: var(--text); padding: 9px 12px; border-radius: 8px; font-size: 14px; text-align: left; }
     .menu button:hover:not(:disabled) { background: var(--bg); }
     /* Invalid here — kept in place (greyed) so the list is the same everywhere. */
@@ -293,11 +298,11 @@ const spanFor = (kind: MenuKind): number => kind === 'linear' ? 4 : kind === 'se
             <text *ngIf="n.glyph !== 'junction' && !isEditingName(n)"
                   class="glabel" [attr.x]="labelX(n)" [attr.y]="labelY(n)">{{ n.name }}</text>
             <text *ngIf="n.glyph === 'tool'" class="gsub" y="42">{{ toolAuto(n.id) ? 'auto' : 'manual' }}</text>
-            <!-- A gate that isolates nothing. Stated on the piece, in the same place
-                 a tool says auto/manual, because it's a property of the piece — not
-                 an error, so it never turns the guide bar red. -->
+            <!-- A gate duplicating the one above it. Sits directly under the name as a
+                 second caption line — it's a property of the piece, not an error, so
+                 it never turns the guide bar red. -->
             <text *ngIf="n.redundant" class="gsub redundant"
-                  [attr.x]="labelX(n)" [attr.y]="redundantY(n)">redundant</text>
+                  [attr.x]="labelX(n)" [attr.y]="redundantY(n)">(redundant)</text>
             <!-- Setup state of a gate, so an unfinished shop reads at a glance rather
                  than only when the Live view refuses to run. -->
             <!-- Tap target for configuring this gate. The dot already SAID a gate
@@ -332,6 +337,7 @@ const spanFor = (kind: MenuKind): number => kind === 'linear' ? 4 : kind === 'se
         <input *ngIf="namedPiece() as np" class="nameedit" placeholder="Name"
                [style.left.px]="namePos().left" [style.top.px]="namePos().top" [style.width.px]="nameW(np)"
                [ngModel]="np.name" (ngModelChange)="rename(np.id, $event)"
+               (focus)="onNameFocus($event, np)" (blur)="onNameBlur($event, np)"
                (keydown.enter)="blurName($event)"/>
       </div>
     </div>
@@ -340,7 +346,7 @@ const spanFor = (kind: MenuKind): number => kind === 'linear' ? 4 : kind === 'se
     <!-- ONE context menu for every add point (open end, free outlet, mid-run branch).
          Always the same five fittings + Cap; whatever doesn't apply here is greyed
          with the reason, so the list never shifts under you. -->
-    <div class="menu" *ngIf="menu" [style.left.px]="menu.x" [style.top.px]="menu.y">
+    <div class="menu" #menuEl *ngIf="menu" [style.left.px]="menu.x" [style.top.px]="menu.y">
       <div class="menu-sect">{{ menuTitle }}</div>
       <button *ngFor="let o of menuOptions" [disabled]="!o.enabled" (click)="choose(o.kind)"
               [class.danger]="o.kind === 'delete'" [title]="o.note || ''">
@@ -386,6 +392,7 @@ const spanFor = (kind: MenuKind): number => kind === 'linear' ? 4 : kind === 'se
 export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   @ViewChild('svg') svgRef?: ElementRef<SVGSVGElement>;
   @ViewChild('wrap') wrapRef?: ElementRef<HTMLDivElement>;
+  @ViewChild('menuEl') menuRef?: ElementRef<HTMLDivElement>;
 
   nodes: NodeVM[] = [];
   ducts: DuctVM[] = [];
@@ -632,8 +639,15 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   labelX(n: NodeVM): number { return n.isUnit ? (n.span - 1) * CELL / 2 : 0; }
   /** Below the glyph AND below its add-dot, which sits at halfH + 18 — the two used
    *  to land on top of each other on a ball valve. */
-  redundantY(n: NodeVM): number { return this.halfH(n) + 34; }
-  labelY(n: NodeVM): number { return n.glyph === 'tool' ? 4 : (n.isUnit ? -UNIT_H / 2 - 9 : -34); }
+  /** Directly under the name, in the slot the name itself normally occupies. */
+  redundantY(n: NodeVM): number { return this.nameBaseY(n); }
+  labelY(n: NodeVM): number {
+    // A redundant gate carries a second line, so its name moves up to make room and
+    // the two read as one stacked caption instead of something adrift under the
+    // glyph. namePos() follows this, so the edit field stays on the name.
+    return this.nameBaseY(n) - (n.redundant ? 13 : 0);
+  }
+  private nameBaseY(n: NodeVM): number { return n.glyph === 'tool' ? 4 : (n.isUnit ? -UNIT_H / 2 - 9 : -34); }
   toolAuto(id: string): boolean { return !!(this.elem(id)?.['sensor'] as RawEl | undefined)?.['outlet']; }
   /** Does this piece have a plug paired — sensed for a tool, switched for the
    *  collector? Drives the one button's label for both. */
@@ -689,6 +703,27 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   /** Is the editable field currently sitting on this piece's label? The drawn label
    *  hides exactly when this is true, so the two can never both be absent. */
   isEditingName(n: NodeVM): boolean { return this.namedPiece()?.id === n.id; }
+
+  /** Names we hand out to a piece that has just been placed. Nobody wants to keep
+   *  one, so they get out of the way as soon as you click in. */
+  private static readonly PLACEHOLDER_NAMES = new Set(['New tool', 'New gate', 'Open end', 'Wye', 'Cap']);
+
+  /** Clear a just-placed piece's default name on focus, so typing starts on an empty
+   *  field instead of after "New tool".
+   *
+   *  Done to the DOM value only — the model keeps the default until something is
+   *  actually typed, so clicking in and straight back out changes nothing and the
+   *  undo history stays clean. */
+  onNameFocus(evt: Event, n: NodeVM): void {
+    if (!BuildComponent.PLACEHOLDER_NAMES.has(n.name)) return;
+    (evt.target as HTMLInputElement).value = '';
+  }
+
+  /** Put the default back if they left without typing anything. */
+  onNameBlur(evt: Event, n: NodeVM): void {
+    const el = evt.target as HTMLInputElement;
+    if (!el.value.trim()) el.value = n.name;
+  }
 
   /** Width of the in-place name field, sized to the piece it sits on. */
   nameW(n: NodeVM): number {
@@ -980,9 +1015,30 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     this.menu = { x, y, ...ctx };
     this.menuTitle = ctx.convert ? this.convertTitle(ctx.convert)
                    : ctx.end ? (this.isCap(ctx.end) ? 'This capped end' : 'At the end of this run')
-                   : ctx.branch ? 'Add on this run'
+                   : ctx.branch ? (ctx.branch.elbow ? 'Add at this corner' : 'Add on this run')
                    : 'Add here';
     this.menuOptions = this.resolveOptions();
+    this.clampMenu();
+  }
+
+  /** Pull the menu back inside the window once it has a size.
+   *
+   *  It opens at the point you tapped, which near the bottom or right edge puts most
+   *  of it off screen — and on a phone that's most of the canvas. Measured after
+   *  render rather than guessed from the option count, because the options differ
+   *  per context and one of them wraps. */
+  private clampMenu(): void {
+    setTimeout(() => {
+      const el = this.menuRef?.nativeElement, m = this.menu;
+      if (!el || !m) return;
+      const r = el.getBoundingClientRect();
+      const gap = 8;
+      const maxX = window.innerWidth - r.width - gap;
+      const maxY = window.innerHeight - r.height - gap;
+      const x = Math.max(gap, Math.min(m.x, maxX));
+      const y = Math.max(gap, Math.min(m.y, maxY));
+      if (x !== m.x || y !== m.y) { m.x = x; m.y = y; }
+    });
   }
   closeMenu(): void { this.menu = null; this.menuOptions = []; }
 
@@ -1282,14 +1338,16 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     return true;
   }
 
-  /** Where a tee's new leg goes: PERPENDICULAR to the run it taps off — a
-   *  horizontal run drops down (or up), a vertical one goes right (or left).
+  /** Where a tee's new leg goes. On a straight: PERPENDICULAR to the run it taps
+   *  off — a horizontal run drops down (or up), a vertical one goes right (or left).
+   *  On a corner: whichever of the two directions the run doesn't already use, in
+   *  the order branchDots worked out (down first, then the open side, then up).
    *  Never onto another duct. Null → no room, and the option greys out. */
   private legCellFor(bd: BDot, selfId: string): Cell | null {
     const occ = this.cellOccupied();
-    const tries: Cell[] = bd.axis === 'h'
+    const tries: Cell[] = bd.legs ?? (bd.axis === 'h'
       ? [{ col: bd.col, row: bd.row + 1 }, { col: bd.col, row: bd.row - 1 }]
-      : [{ col: bd.col + 1, row: bd.row }, { col: bd.col - 1, row: bd.row }];
+      : [{ col: bd.col + 1, row: bd.row }, { col: bd.col - 1, row: bd.row }]);
     return tries.find(c => this.roomAt(c.col, c.row, 1, selfId, occ)) ?? null;
   }
 
@@ -1387,16 +1445,17 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   /** Grid-snapped branch points along every duct: a dot at each cell step on both
-   *  vertical and horizontal segments. Clicking one branches the run right there. */
+   *  vertical and horizontal segments, plus one at each unambiguous CORNER. Clicking
+   *  one branches the run right there. */
   branchDots(): BDot[] {
     const out: BDot[] = [];
     if (this.dragId || this.bdrag || this.odrag) return out;   // hide while dragging
     const seen = new Set<string>();
-    const push = (x: number, y: number, childId: string, axis: 'h' | 'v') => {
+    const push = (x: number, y: number, childId: string, axis: 'h' | 'v', elbow?: boolean, legs?: Cell[]) => {
       const col = Math.round((x - PAD) / CELL), row = Math.round((y - PAD) / CELL);
       const key = col + ',' + row;
       if (seen.has(key)) return;                      // one dot per cell even where ducts overlap
-      seen.add(key); out.push({ x, y, childId, col, row, axis });
+      seen.add(key); out.push({ x, y, childId, col, row, axis, elbow, legs });
     };
     for (const d of this.ducts) {
       const pts = this.ductPoints(d.childId);
@@ -1419,6 +1478,45 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
           }
         }
       }
+    }
+    // Corners. A gate at an elbow is a perfectly ordinary thing to want — it's often
+    // the only place on a short run that ISN'T a straight. The catch is that a corner
+    // doesn't sit on the grid: it lands wherever the router put it, up to half a cell
+    // off. So the dot is drawn ON the corner (that's the thing you're pointing at) but
+    // the fitting lands in the cell that corner rounds into, and the run re-solves
+    // through it. Only offered where exactly ONE corner rounds into a given cell:
+    // two corners half a cell apart round to the same square, and then there's no
+    // saying which one a click meant.
+    type Corner = { x: number; y: number; childId: string; axis: 'h' | 'v'; legs: Cell[] };
+    const perCell = new Map<string, Corner | null>();
+    for (const d of this.ducts) {
+      const pts = this.ductPoints(d.childId);
+      for (let i = 1; i < pts.length - 1; i++) {      // interior vertices only — the ends are ports
+        const p = pts[i], prev = pts[i - 1], next = pts[i + 1];
+        const col = Math.round((p.x - PAD) / CELL), row = Math.round((p.y - PAD) / CELL);
+        const key = col + ',' + row;
+        // Second corner in this cell → ambiguous, and neither gets a dot.
+        if (perCell.has(key)) { perCell.set(key, null); continue; }
+        // The run already occupies two of the four directions here — the one it
+        // arrives from and the one it leaves by. A leg takes one of the OTHER two.
+        // Because a corner turns, those two are always one vertical and one
+        // horizontal, so the order below ("down, then the open side, then up") is a
+        // real preference and not a coin toss.
+        const step = (a: Pt, b: Pt) => ({ dx: Math.sign(Math.round(a.x - b.x)), dy: Math.sign(Math.round(a.y - b.y)) });
+        const used = [step(prev, p), step(next, p)];
+        const legs = [{ dx: 0, dy: 1 }, { dx: 1, dy: 0 }, { dx: -1, dy: 0 }, { dx: 0, dy: -1 }]
+          .filter(v => !used.some(u => u.dx === v.dx && u.dy === v.dy))
+          .map(v => ({ col: col + v.dx, row: row + v.dy }));
+        perCell.set(key, { x: p.x, y: p.y, childId: d.childId, legs,
+                           axis: Math.abs(prev.x - p.x) < 0.5 ? 'v' : 'h' });
+      }
+    }
+    const occ = this.cellOccupied();
+    for (const [key, e] of perCell) {
+      // A corner that rounds onto a piece has nowhere to put the fitting; the dot
+      // would just sit on top of the glyph.
+      if (!e || occ.has(key)) continue;
+      push(e.x, e.y, e.childId, e.axis, true, e.legs);
     }
     return out;
   }
@@ -2002,22 +2100,78 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     let doc: unknown;
     try { doc = JSON.parse(await file.text()); }
     catch { this.saveError = 'That file isn’t valid JSON.'; return; }
-    const v = validateTopology(doc);
-    if (!v.ok) { this.saveError = 'Not a valid shop file: ' + (v.errors[0]?.message ?? 'invalid topology'); return; }
-    this.saving = true; this.saveError = '';
+
+    // Import opens WORK IN PROGRESS, so the bar here is "can the editor open it",
+    // not "is it a finished shop". A half-built layout — two gates sharing a servo
+    // channel, an outlet with nothing on it — is exactly the sort of thing you save
+    // to a file and come back to, and refusing it meant you couldn't.
+    const broken = this.importBlocker(doc);
+    if (broken) { this.saveError = 'That file doesn’t look like a shop layout: ' + broken; return; }
+
+    this.saving = true; this.saveError = ''; this.saveNote = ''; this.wip = '';
     try {
       this.pushHistory(null);                 // an import is undoable like any other edit
-      await this.api.putTopology(doc as Topology);
       this.topo = JSON.parse(JSON.stringify(doc)) as Topology;
       this.cells.clear();
       this.buildGraph(this.topo);
       const saved = this.savedLayout(this.topo);
       if (saved) for (const [id, c] of Object.entries(saved)) this.cells.set(id, c);
       else this.autoLayoutInto(this.cells);
-      this.selectedId = null; this.dirty = false;
+      this.selectedId = null;
       this.syncNodes();
+
+      // Only a whole layout goes to the controller — it validates server-side and
+      // would reject a draft anyway. An unfinished one stays here, dirty, with the
+      // reason on the guide bar, and Save picks it up once you've sorted it out.
+      const v = validateTopology(this.docWithLayout());
+      if (!v.ok) {
+        this.dirty = true;
+        this.wip = v.errors[0]?.message ?? 'incomplete layout';
+        return;
+      }
+      await this.api.putTopology(this.docWithLayout() as Topology);
+      this.dirty = false;
+      this.airflowErrors = this.liveLeaks();
       try { this.applyLive(await this.api.getV2Status()); } catch { /* not running */ }
+    } catch {
+      this.dirty = true;
+      this.saveError = 'Imported here, but couldn’t reach the controller to store it.';
     } finally { this.saving = false; }
+  }
+
+  /** Why this file can't be opened at all, or '' if it can.
+   *
+   *  Deliberately narrow: it checks the shape the editor indexes on — ids it can key
+   *  by, ducts that point at elements that exist — and nothing about whether the
+   *  shop makes sense. Anything past this loads as a draft. */
+  private importBlocker(doc: unknown): string {
+    if (!doc || typeof doc !== 'object' || Array.isArray(doc)) return 'it isn’t a layout object.';
+    const d = doc as { elements?: unknown; ducts?: unknown; controllers?: unknown };
+    if (d.elements !== undefined && !Array.isArray(d.elements)) return 'its element list is malformed.';
+    if (d.ducts !== undefined && !Array.isArray(d.ducts)) return 'its duct list is malformed.';
+    if (d.controllers !== undefined && !Array.isArray(d.controllers)) return 'its controller list is malformed.';
+
+    const elements = (d.elements ?? []) as unknown[];
+    const ids = new Set<string>();
+    for (const raw of elements) {
+      if (!raw || typeof raw !== 'object') return 'one of its pieces isn’t readable.';
+      const el = raw as { id?: unknown; type?: unknown };
+      if (typeof el.id !== 'string' || !el.id) return 'a piece is missing its id.';
+      if (ids.has(el.id)) return `two pieces share the id “${el.id}”.`;
+      if (typeof el.type !== 'string' || !el.type) return `piece “${el.id}” is missing its type.`;
+      ids.add(el.id);
+    }
+
+    // A duct pointing at something that isn't there would draw from nowhere — that's
+    // a damaged file rather than an unfinished one.
+    for (const raw of ((d.ducts ?? []) as unknown[])) {
+      if (!raw || typeof raw !== 'object') return 'one of its ducts isn’t readable.';
+      const duct = raw as { child?: unknown; parent?: unknown };
+      if (typeof duct.child !== 'string' || typeof duct.parent !== 'string') return 'a duct is missing an end.';
+      if (!ids.has(duct.child)) return `a duct points at a missing piece “${duct.child}”.`;
+      if (!ids.has(duct.parent)) return `a duct points at a missing piece “${duct.parent}”.`;
+    }
+    return '';
   }
 
   // ── graph helpers ─────────────────────────────────────────────────────────────

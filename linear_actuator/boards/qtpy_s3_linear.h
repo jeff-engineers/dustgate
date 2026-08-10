@@ -17,6 +17,13 @@
 // a 5V/servo carrier and a USB-PD 15V→5V linear carrier — where flashing, not
 // part number, decides primary vs node. Hypothetical; nothing depends on it.
 //
+// ⚠️ MAY BE OBSOLETE BEFORE IT IS USED. Also on 2026-08-09, closed-loop SERIAL
+// BUS servos (Feetech ST3215) were evaluated as a replacement for both the
+// stepper slide AND the PWM servo bank — one actuator type over a 2-pin
+// half-duplex UART, no TMC2209 and no 7-pin rack map at all. That option was
+// liked but explicitly PARKED, not adopted. If it is ever revived, delete this
+// file rather than maintaining it.
+//
 // Selected by -DBOARD_QTPY_S3_LINEAR (no PlatformIO env ships with it yet, and
 // config.h's board #if chain does not reference it — both are deliberate, so
 // this file cannot be pulled into a build by accident).
