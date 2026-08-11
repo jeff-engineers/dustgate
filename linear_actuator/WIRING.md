@@ -452,3 +452,102 @@ Always common the grounds.
 > **Note (vs. the Feather):** the DevKitC has **no onboard LiPo charger** — power it
 > from USB or a regulated 5V source on the 5V/VIN pin. The Feather's battery/charging
 > features do not apply to the primary build.
+
+---
+
+## 9. Decoupling — keeping the ESP32 out of brownout
+
+> **Untested on hardware.** This is standard practice written down so the bench
+> session starts from a known-good arrangement, not a measured result. The only
+> value here that predates it is the 100µF at VMOT in [§1](#1-motor--tmc2209).
+
+The WROOM-32's brownout detector resets the chip when 3V3 sags past **~2.8V**.
+Nothing on the ESP32 side causes that. The loads sharing the rail do:
+
+- **Servo inrush and stall** — a hobby servo pulls 0.5–1A+ for tens of milliseconds
+  when it starts moving and when the gate hits its stop. On the v2 servo nodes this
+  is the main offender, and the make-before-break sequencer means **two servos can
+  be moving at once** — budget for that, not for one.
+- **Stepper coil energizing** — the TMC2209 slams current into the coils on enable
+  and on the first steps after idle.
+- **Long thin wire** — ~0.3Ω in 10ft of 22AWG turns a 1A transient into a 0.3V drop
+  before any capacitor gets to see it.
+
+Capacitors absorb the fast transient. They do **not** fix an undersized supply or a
+wire run that's too thin, and reaching for more capacitance is the wrong move when
+the rail is sagging steadily rather than dipping.
+
+### What to fit
+
+| Location                       | Value          | Type                    |
+|--------------------------------|----------------|-------------------------|
+| TMC2209 VMOT ↔ GND             | 100–220µF      | electrolytic            |
+| Servo power rail, per node     | 470–1000µF     | low-ESR electrolytic    |
+| ESP32 VIN/5V ↔ GND             | 100–220µF      | electrolytic            |
+| ESP32 3V3 ↔ GND                | 10µF + 0.1µF   | ceramic (X5R/X7R)       |
+
+Rate every electrolytic at **≥2× its rail** (so ≥50V on a 24V motor supply), and put
+a 0.1µF ceramic in parallel with each one: the electrolytic carries the bulk energy,
+the ceramic handles the fast edge its ESR can't.
+
+### Where they go
+
+Directly across + and − **at the load**, on the shortest leads you can manage. A bulk
+cap back at the power supply does almost nothing — the wire inductance between it and
+the servo is the thing you're compensating for.
+
+```
+Servo node — the one that matters:
+
+  5V/6V supply ──┬────────────┬───── servo V+   (red)
+                 │            │
+            [470-1000µF]   [0.1µF]      <-- AT the servo terminals,
+                 │            │              not back at the supply
+  GND ───────────┴────────────┴───── servo GND (brown/black)
+
+  GPIO25/26/27/14 ─────────────────── servo signal (orange/yellow)
+  ESP32 GND ───────────────────────── common with servo GND   (REQUIRED)
+```
+
+```
+ESP32 DevKitC input:
+
+  5V buck out ──┬──────────┬───── VIN (5V pin)
+                │          │
+            [100µF]     [0.1µF]
+                │          │
+  GND ──────────┴──────────┴───── GND
+
+  and close to the 3V3 pin:
+
+  3V3 ──┬──────────┬── GND
+     [10µF]     [0.1µF]
+```
+
+Electrolytics are polarized — stripe/short leg to GND. Backwards on a 12V rail they
+vent.
+
+### The four rules that matter more than the caps
+
+1. **Don't power servos from the DevKitC 5V pin.** That routes servo current through
+   the board's traces and its USB/regulator path, which is the fastest way to brown
+   out. Feed servos from the buck converter directly; the ESP32 gets its own leg off
+   the same buck.
+2. **Star ground.** Servo GND, TMC2209 GND and ESP32 GND each return to one point at
+   the supply. Daisy-chaining them puts the stepper's return current across the
+   ESP32's ground reference.
+3. **Fat wire on the power legs** — 18–20AWG for servo and motor power, short runs to
+   the node. 22AWG and up is fine for signal.
+4. **Common ground is mandatory.** [§1](#1-motor--tmc2209) already says this for the
+   motor; it is equally true for every servo. Without it the PWM and STEP/DIR signals
+   have no reference.
+
+### If it still browns out
+
+Put a scope (or a fast multimeter) on the 3V3 pin during a gate move before adding
+capacitance:
+
+- **Dips for ~10ms, then recovers** — transient. More/closer bulk capacitance helps.
+- **Sags and stays down** — the supply is undersized or the run is too long. Size the
+  buck for *stall* current × the number of servos that can move together, not rated
+  current, and shorten or thicken the run.

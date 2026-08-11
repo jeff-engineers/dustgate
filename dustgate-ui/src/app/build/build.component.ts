@@ -106,6 +106,10 @@ const isUnitKind = (kind: unknown): boolean => kind === 'linear' || kind === 'se
 const HISTORY_MAX = 60;
 /** Grid cells a fitting takes up: a unit is one horizontal bar N cells wide. */
 const spanFor = (kind: MenuKind): number => kind === 'linear' ? 4 : kind === 'servoManifold' ? 2 : 1;
+
+/** Spread between the first two touches — the scalar a pinch is measured in. */
+const touchDist = (e: TouchEvent): number =>
+  Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
 /** How many legs a fitting can feed. A ball valve is a two-port device: one in, one
  *  out. Only the units fan out. */
 const outletsFor = (kind: MenuKind): number => kind === 'linear' ? 4 : kind === 'servoManifold' ? 2 : 1;
@@ -135,9 +139,32 @@ const outletsFor = (kind: MenuKind): number => kind === 'linear' ? 4 : kind === 
 
     /* Column, not row: the board tray sits UNDER the canvas. As a row it became a
        second column and squeezed the canvas to a slot. */
-    .stage { flex: 1; display: flex; flex-direction: column; min-height: 0; }
-    .canvas-wrap { flex: 1; overflow: auto; background: var(--bg); position: relative; }
+    /* position: relative so the zoom control can anchor to the stage rather than to
+       the canvas's scrolled content — see the note on .zoomer in the template. */
+    .stage { flex: 1; display: flex; flex-direction: column; min-height: 0; position: relative; }
+    .canvas-wrap { flex: 1; overflow: auto; background: var(--bg); position: relative;
+                   overscroll-behavior: contain; }
+    /* The canvas owns every touch, and the component decides what each one means:
+       background → pan, handle → drag. That arbitration CANNOT be done in CSS.
+       touch-action is honored on the <svg> root but not dependably on its <g>
+       children (WebKit ignores it there), so "none on .node, pan on the canvas" works
+       in Chrome and silently fails on iOS — a finger on a glyph pans the board
+       instead of moving the piece. Since the split has to live in code anyway, the
+       root takes "none" and onCanvasDown/pinch below implement pan and zoom. */
     svg.canvas { display: block; touch-action: none; }
+
+    /* Zoom control. Floating over the canvas rather than in the toolbar, which
+       already wraps to two rows on a phone. Bottom-right, thumb-reachable, and out
+       of the way of the rail (top) and the guide bar. */
+    .zoomer { position: absolute; right: 12px; bottom: 12px; z-index: 15;
+              display: flex; flex-direction: column; align-items: stretch;
+              background: var(--surface); border: 1px solid var(--border-strong, #444);
+              border-radius: 10px; box-shadow: 0 4px 14px rgba(0,0,0,0.4); overflow: hidden; }
+    .zoomer button { background: none; border: none; color: var(--text); font-size: 17px;
+                     line-height: 1; padding: 0; width: 40px; height: 38px; touch-action: manipulation; }
+    .zoomer button.pct { font-size: 11px; height: 30px; color: var(--muted);
+                         border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+    .zoomer button:disabled { opacity: 0.35; }
 
     .duct { stroke: var(--border-strong, #3a3a3a); stroke-width: 6; fill: none; stroke-linecap: round; stroke-linejoin: round; }
     .duct.live { stroke: var(--success); }
@@ -364,10 +391,13 @@ const outletsFor = (kind: MenuKind): number => kind === 'linear' ? 4 : kind === 
     </div>
 
     <div class="stage">
-      <div class="canvas-wrap" #wrap>
+      <!-- Every interactive handle stops propagation in its own pointerdown, so a
+           pointerdown that reaches this element is BY DEFINITION on empty board —
+           which makes it the pan gesture, with no hit-testing of our own. -->
+      <div class="canvas-wrap" #wrap (pointerdown)="onCanvasDown($event)">
         <svg #svg class="canvas" *ngIf="nodes.length"
              [attr.viewBox]="'0 ' + (-RAIL_H) + ' ' + vbW + ' ' + (vbH + RAIL_H)"
-             [attr.width]="vbW" [attr.height]="vbH + RAIL_H">
+             [attr.width]="vbW * zoom" [attr.height]="(vbH + RAIL_H) * zoom">
           <defs>
             <pattern id="bdots" width="27" height="27" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r="1" fill="var(--border)"/></pattern>
           </defs>
@@ -549,11 +579,25 @@ const outletsFor = (kind: MenuKind): number => kind === 'linear' ? 4 : kind === 
              but never receives keystrokes here, so the field looked live and swallowed
              everything typed into it. It lives inside the scrolling canvas and is
              placed in BOARD coordinates, so it stays on its glyph when you pan. -->
+        <!-- Scaled by the same factor as the board rather than re-measured: the width
+             and font stay in BOARD px, and one transform puts them on the glyph at any
+             zoom. namePos() already multiplies through, since left/top are wrap px. -->
         <input *ngIf="namedPiece() as np" class="nameedit" placeholder="Name"
+               [style.transform]="'translate(-50%, -50%) scale(' + zoom + ')'"
                [style.left.px]="namePos().left" [style.top.px]="namePos().top" [style.width.px]="nameW(np)"
                [ngModel]="np.name" (ngModelChange)="rename(np.id, $event)"
                (focus)="onNameFocus($event, np)" (blur)="onNameBlur($event, np)"
                (keydown.enter)="blurName($event)"/>
+      </div>
+
+      <!-- Outside .canvas-wrap on purpose. It's the scroll container, so an
+           absolutely-positioned child of it is placed against the scrolled CONTENT
+           and slides off the screen as soon as you pan — which is exactly what it
+           did. Anchored to .stage instead, it stays put. -->
+      <div class="zoomer" *ngIf="nodes.length">
+        <button (click)="zoomBy(1.25)" [disabled]="zoom >= ZOOM_MAX" title="Zoom in" aria-label="Zoom in">+</button>
+        <button class="pct" (click)="resetZoom()" title="Reset to 100%" aria-label="Reset zoom">{{ zoomPct() }}%</button>
+        <button (click)="zoomBy(0.8)" [disabled]="zoom <= ZOOM_MIN" title="Zoom out" aria-label="Zoom out">&minus;</button>
       </div>
 
     </div>
@@ -751,13 +795,206 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   }
   /** The wrap's size isn't known until the view exists — size the board to it then
    *  (deferred a tick so we're not writing bindings mid-check). */
-  ngAfterViewInit(): void { setTimeout(() => this.recomputeExtent()); }
+  ngAfterViewInit(): void {
+    setTimeout(() => this.recomputeExtent());
+    // Bound by hand, not in the template: both must be non-passive to preventDefault,
+    // and the wrap only exists now. Pinch is claimed here because `touch-action:
+    // pan-x pan-y` hands us two-finger gestures but would otherwise pan with them.
+    setTimeout(() => {
+      const wrap = this.wrapRef?.nativeElement; if (!wrap) return;
+      wrap.addEventListener('touchstart', this.pinchStart, { passive: false });
+      wrap.addEventListener('touchmove', this.pinchMove, { passive: false });
+      wrap.addEventListener('touchend', this.pinchEnd);
+      wrap.addEventListener('touchcancel', this.pinchEnd);
+      wrap.addEventListener('wheel', this.wheelH, { passive: false });
+    });
+  }
 
   @HostListener('window:resize')
   onResize(): void { this.recomputeExtent(); }
 
+  // ── zoom ──────────────────────────────────────────────────────────────────────
+  // The board is drawn at a fixed viewBox and SCALED by the width/height attributes,
+  // so every existing coordinate stays in board units and getScreenCTM() — which all
+  // the drag math already goes through — absorbs the zoom for free.
+  zoom = 1;
+  readonly ZOOM_MIN = 0.4;
+  readonly ZOOM_MAX = 2.5;
+  /** Finger spread and zoom at the start of the current pinch, or null. */
+  private pinch: { dist: number; zoom: number } | null = null;
+
+  zoomPct(): number { return Math.round(this.zoom * 100); }
+  zoomBy(factor: number): void { this.setZoom(this.zoom * factor); }
+  resetZoom(): void { this.setZoom(1); }
+
+  /** Set the zoom, holding the board point under (cx,cy) still. Defaults to the
+   *  centre of the viewport, which is what the +/− buttons want. */
+  private setZoom(next: number, cx?: number, cy?: number): void {
+    const wrap = this.wrapRef?.nativeElement; if (!wrap) return;
+    const z = Math.min(this.ZOOM_MAX, Math.max(this.ZOOM_MIN, next));
+    if (Math.abs(z - this.zoom) < 0.0005) return;
+    const r = wrap.getBoundingClientRect();
+    const ax = (cx ?? r.left + r.width / 2) - r.left;
+    const ay = (cy ?? r.top + r.height / 2) - r.top;
+    // The board point currently under the anchor. Scroll offsets are in scaled px,
+    // so dividing by the OLD zoom is what puts this back in board units.
+    const bx = (wrap.scrollLeft + ax) / this.zoom;
+    const by = (wrap.scrollTop + ay) / this.zoom;
+    this.zoom = z;
+    this.recomputeExtent();
+    // Scroll only after the new width/height have been laid out: assigning scrollLeft
+    // against the OLD scrollWidth clamps to the old maximum and eats the correction,
+    // so zooming out would creep toward the top-left instead of staying put.
+    requestAnimationFrame(() => {
+      wrap.scrollLeft = bx * z - ax;
+      wrap.scrollTop = by * z - ay;
+    });
+  }
+
+  // ── background pan ────────────────────────────────────────────────────────────
+  // Replaces native scrolling, which we gave up when the canvas took touch-action:
+  // none. Native scrolling could not coexist with dragging: the only way to stop a
+  // touch from scrolling is touch-action, and that isn't honored on the SVG glyphs
+  // that need to opt out. Doing it here costs us momentum (re-added below as glide)
+  // and buys an unambiguous split on every browser.
+  private panning: { x: number; y: number; sl: number; st: number; moved: boolean } | null = null;
+  private vx = 0; private vy = 0; private glideRaf = 0;
+  /** Pointer travel, in px, before a press becomes a pan rather than a tap. Below it
+   *  the gesture stays a tap so tapping empty board still deselects. */
+  private readonly PAN_SLOP = 4;
+
+  onCanvasDown(e: PointerEvent): void {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    this.stopGlide();
+    const wrap = this.wrapRef?.nativeElement; if (!wrap) return;
+    this.panning = { x: e.clientX, y: e.clientY, sl: wrap.scrollLeft, st: wrap.scrollTop, moved: false };
+    this.vx = 0; this.vy = 0;
+    window.addEventListener('pointermove', this.panMove);
+    window.addEventListener('pointerup', this.panUp);
+    window.addEventListener('pointercancel', this.panUp);
+  }
+  private readonly panMove = (e: PointerEvent): void => {
+    const p = this.panning, wrap = this.wrapRef?.nativeElement;
+    if (!p || !wrap || this.pinch) return;      // a second finger means pinch, not pan
+    const dx = e.clientX - p.x, dy = e.clientY - p.y;
+    if (!p.moved && Math.hypot(dx, dy) < this.PAN_SLOP) return;
+    p.moved = true;
+    const sl = p.sl - dx, st = p.st - dy;
+    // Velocity from the FRAME delta, not from the gesture total: the glide should
+    // continue at the speed the finger was moving when it lifted, which a running
+    // average of the whole drag would badly underestimate on a flick.
+    this.vx = sl - wrap.scrollLeft; this.vy = st - wrap.scrollTop;
+    wrap.scrollLeft = sl; wrap.scrollTop = st;
+  };
+  private readonly panUp = (): void => {
+    const moved = this.panning?.moved ?? false;
+    this.panning = null;
+    window.removeEventListener('pointermove', this.panMove);
+    window.removeEventListener('pointerup', this.panUp);
+    window.removeEventListener('pointercancel', this.panUp);
+    if (moved && Math.hypot(this.vx, this.vy) > 2) this.startGlide();
+  };
+  /** Inertia. Native overflow scrolling gave this away for free; a pan that stops
+   *  dead the instant you lift feels broken on a phone, so it's worth the 10 lines. */
+  private startGlide(): void {
+    const wrap = this.wrapRef?.nativeElement; if (!wrap) return;
+    const step = (): void => {
+      if (Math.abs(this.vx) < 0.4 && Math.abs(this.vy) < 0.4) { this.glideRaf = 0; return; }
+      wrap.scrollLeft += this.vx; wrap.scrollTop += this.vy;
+      this.vx *= 0.93; this.vy *= 0.93;
+      this.glideRaf = requestAnimationFrame(step);
+    };
+    this.glideRaf = requestAnimationFrame(step);
+  }
+  private stopGlide(): void {
+    if (this.glideRaf) cancelAnimationFrame(this.glideRaf);
+    this.glideRaf = 0; this.vx = 0; this.vy = 0;
+  }
+
+  // ── edge auto-scroll while dragging ───────────────────────────────────────────
+  // The other half of why dragging felt broken: a phone shows about three cells, so
+  // the destination is usually off-screen and there was no way to reach it without
+  // dropping the piece, scrolling, and picking it up again. Holding the drag against
+  // an edge now scrolls the board under it.
+  //
+  // The stored event is REPLAYED into the drag's own move handler each frame. Every
+  // one of them resolves position through getScreenCTM(), so the same clientX/Y maps
+  // to a new board point once the board has scrolled — the piece keeps travelling
+  // while the finger sits still, with no special-casing per drag type.
+  private edge: { move: (e: PointerEvent) => void; ev: PointerEvent; raf: number } | null = null;
+  private readonly EDGE_BAND = 52;   // px from the edge where auto-scroll kicks in
+  private readonly EDGE_MAX = 16;    // px per frame at the very edge
+
+  private beginEdgeScroll(move: (e: PointerEvent) => void, ev: PointerEvent): void {
+    this.endEdgeScroll();
+    this.edge = { move, ev, raf: 0 };
+    const step = (): void => {
+      const ed = this.edge, wrap = this.wrapRef?.nativeElement;
+      if (!ed || !wrap) return;
+      const r = wrap.getBoundingClientRect();
+      const e = ed.ev;
+      // Ramps from 0 at the band's inner edge to EDGE_MAX at the boundary, so a drag
+      // that drifts near an edge creeps and one held hard against it moves properly.
+      const ramp = (over: number): number => Math.min(1, over / this.EDGE_BAND) * this.EDGE_MAX;
+      let dx = 0, dy = 0;
+      if (e.clientX - r.left < this.EDGE_BAND) dx = -ramp(this.EDGE_BAND - (e.clientX - r.left));
+      else if (r.right - e.clientX < this.EDGE_BAND) dx = ramp(this.EDGE_BAND - (r.right - e.clientX));
+      if (e.clientY - r.top < this.EDGE_BAND) dy = -ramp(this.EDGE_BAND - (e.clientY - r.top));
+      else if (r.bottom - e.clientY < this.EDGE_BAND) dy = ramp(this.EDGE_BAND - (r.bottom - e.clientY));
+      if (dx || dy) {
+        const sl = wrap.scrollLeft, st = wrap.scrollTop;
+        wrap.scrollLeft += dx; wrap.scrollTop += dy;
+        // Only replay when the board actually moved — at the extent's end it can't,
+        // and replaying there would rerun the drag's placement checks for nothing.
+        if (wrap.scrollLeft !== sl || wrap.scrollTop !== st) ed.move(e);
+      }
+      ed.raf = requestAnimationFrame(step);
+    };
+    this.edge.raf = requestAnimationFrame(step);
+  }
+  /** Keep the replayed pointer current. Called from every drag's move handler. */
+  private trackEdge(ev: PointerEvent): void { if (this.edge) this.edge.ev = ev; }
+  private endEdgeScroll(): void {
+    if (this.edge?.raf) cancelAnimationFrame(this.edge.raf);
+    this.edge = null;
+  }
+
+  private readonly pinchStart = (e: TouchEvent): void => {
+    if (e.touches.length !== 2) return;
+    e.preventDefault();
+    // A pinch always starts as a one-finger press, so a pan is already under way by
+    // the time the second finger lands. Drop it, or the board pans off under the
+    // pinch as the midpoint drifts.
+    this.panning = null; this.stopGlide();
+    this.pinch = { dist: touchDist(e), zoom: this.zoom };
+  };
+  private readonly pinchMove = (e: TouchEvent): void => {
+    if (!this.pinch || e.touches.length !== 2) return;
+    e.preventDefault();
+    const d = touchDist(e);
+    if (d < 1 || this.pinch.dist < 1) return;
+    const [a, b] = [e.touches[0], e.touches[1]];
+    this.setZoom(this.pinch.zoom * (d / this.pinch.dist),
+                 (a.clientX + b.clientX) / 2, (a.clientY + b.clientY) / 2);
+  };
+  private readonly pinchEnd = (e: TouchEvent): void => {
+    if (e.touches.length < 2) this.pinch = null;
+  };
+  /** Trackpad pinch and Ctrl-wheel arrive as a wheel with ctrlKey — that's the only
+   *  signal a pinch gesture gives on desktop. A plain wheel is left alone so the
+   *  canvas still scrolls normally. */
+  private readonly wheelH = (e: WheelEvent): void => {
+    if (!e.ctrlKey) return;
+    e.preventDefault();
+    this.setZoom(this.zoom * Math.exp(-e.deltaY / 240), e.clientX, e.clientY);
+  };
+
   ngOnDestroy(): void {
     this.detachDrag();
+    this.stopGlide(); this.endEdgeScroll();
+    window.removeEventListener('pointermove', this.panMove);
+    window.removeEventListener('pointerup', this.panUp);
+    window.removeEventListener('pointercancel', this.panUp);
     window.removeEventListener('pointermove', this.bMove);
     window.removeEventListener('pointerup', this.bUp);
     window.removeEventListener('pointermove', this.oMove);
@@ -766,6 +1003,12 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     window.removeEventListener('pointerup', this.wUp);
     window.removeEventListener('pointermove', this.boMove);
     window.removeEventListener('pointerup', this.boUp);
+    const wrap = this.wrapRef?.nativeElement;
+    wrap?.removeEventListener('touchstart', this.pinchStart);
+    wrap?.removeEventListener('touchmove', this.pinchMove);
+    wrap?.removeEventListener('touchend', this.pinchEnd);
+    wrap?.removeEventListener('touchcancel', this.pinchEnd);
+    wrap?.removeEventListener('wheel', this.wheelH);
   }
 
   iconFor(kind: string): SafeHtml { return this.icons[kind]; }
@@ -1010,7 +1253,11 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     // and the SVG's viewBox starts at -RAIL_H (the board rail). Without it the field
     // lands a rail's height above the label it replaces — the name appeared to jump
     // upward the moment you clicked a piece.
-    return { left: this.nx(n) + this.labelX(n), top: this.ny(n) + this.labelY(n) - 4 + RAIL_H };
+    // × zoom: left/top are wrap pixels, and the SVG next to it is drawn scaled.
+    return {
+      left: (this.nx(n) + this.labelX(n)) * this.zoom,
+      top: (this.ny(n) + this.labelY(n) - 4 + RAIL_H) * this.zoom,
+    };
   }
 
   /** Enter commits by leaving the field; the value is already saved per keystroke. */
@@ -1158,8 +1405,10 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     this.grab = { dx: pt.x - this.nx(n), dy: pt.y - this.ny(n) };
     window.addEventListener('pointermove', this.moveH);
     window.addEventListener('pointerup', this.upH);
+    this.beginEdgeScroll(this.moveH, evt);
   }
   private onMove(evt: PointerEvent): void {
+    this.trackEdge(evt);
     const n = this.byId.get(this.dragId ?? ''); if (!n) return;
     const pt = this.toSvg(evt);
     n.dragX = pt.x - this.grab.dx; n.dragY = pt.y - this.grab.dy;
@@ -1195,6 +1444,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     this.detachDrag();
   }
   private detachDrag(): void {
+    this.endEdgeScroll();
     window.removeEventListener('pointermove', this.moveH);
     window.removeEventListener('pointerup', this.upH);
   }
@@ -2132,16 +2382,19 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     this.boardDragPt = { x: b.x, y: b.y };
     window.addEventListener('pointermove', this.boMove);
     window.addEventListener('pointerup', this.boUp);
+    this.beginEdgeScroll(this.boMove, evt);
   }
   // Boards slide ALONG the rail and nowhere else, so a drag is a reorder rather than
   // a placement — there is no invalid drop and nothing to refuse.
   private onBoardMove(evt: PointerEvent): void {
+    this.trackEdge(evt);
     if (!this.bodrag) return;
     this.bodrag.moved = true;
     const p = this.toSvg(evt);
     this.boardDragPt = { x: p.x - this.bodrag.dx, y: -RAIL_H / 2 };
   }
   private onBoardUp(): void {
+    this.endEdgeScroll();
     window.removeEventListener('pointermove', this.boMove);
     window.removeEventListener('pointerup', this.boUp);
     const d = this.bodrag; const pt = this.boardDragPt;
@@ -2177,6 +2430,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     this.wireBlocked = ''; this.wireNote = '';
     window.addEventListener('pointermove', this.wMove);
     window.addEventListener('pointerup', this.wUp);
+    this.beginEdgeScroll(this.wMove, evt);
   }
   /** From a board port: the loose end is the gate end, so we're hunting a tab. An
    *  occupied port picks up the cable that's already there. */
@@ -2188,8 +2442,10 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     this.wireBlocked = ''; this.wireNote = '';
     window.addEventListener('pointermove', this.wMove);
     window.addEventListener('pointerup', this.wUp);
+    this.beginEdgeScroll(this.wMove, evt);
   }
   private onWireMove(evt: PointerEvent): void {
+    this.trackEdge(evt);
     const d = this.wireDrag; if (!d) return;
     const p = this.toSvg(evt);
     d.to = p;
@@ -2216,6 +2472,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     }
   }
   private onWireUp(): void {
+    this.endEdgeScroll();
     window.removeEventListener('pointermove', this.wMove);
     window.removeEventListener('pointerup', this.wUp);
     const d = this.wireDrag; this.wireDrag = null;
@@ -3067,8 +3324,11 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     // anywhere along it now, so a count isn't the width) plus the chip on the end.
     const last = Math.max(0, ...this.boardSlots.values());
     const railW = railSlot(last).x + BOARD_W / 2 + 14 + FIND_W + 14;
-    this.vbW = Math.max(PAD * 2 + maxCol * CELL + CELL, railW, wrap?.clientWidth ?? 0);
-    this.vbH = Math.max(PAD * 2 + maxRow * CELL + CELL, wrap?.clientHeight ?? 0);
+    // The wrap's size is in SCREEN px and the extent is in BOARD units, so the
+    // viewport floor has to be divided back through the zoom — otherwise zooming out
+    // grows the board to fill the screen again and there is nothing left to zoom out to.
+    this.vbW = Math.max(PAD * 2 + maxCol * CELL + CELL, railW, (wrap?.clientWidth ?? 0) / this.zoom);
+    this.vbH = Math.max(PAD * 2 + maxRow * CELL + CELL, (wrap?.clientHeight ?? 0) / this.zoom);
   }
   private childrenOf(id: string): string[] { const out: string[] = []; for (const [c, p] of this.parentOf) if (p === id) out.push(c); return out; }
   private canAddChild(id: string): boolean {

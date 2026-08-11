@@ -1,5 +1,5 @@
 import { Injectable } from '@angular/core';
-import { HttpClient, HttpHeaders } from '@angular/common/http';
+import { HttpClient, HttpErrorResponse, HttpHeaders } from '@angular/common/http';
 import { BehaviorSubject, Observable, Subject, filter, firstValueFrom, take } from 'rxjs';
 import { HardwareProfileService } from './hardware-profile.service';
 import type { Topology } from '@topology';
@@ -142,6 +142,9 @@ export class ApiService {
 
   deviceInfo: DeviceInfo | null = null;
 
+  /** Current /api/info retry delay, doubled on each failure up to a minute. */
+  private infoRetryMs = 3000;
+
   constructor(protected http: HttpClient, protected hardwareProfile: HardwareProfileService) {
     // Deferred to a microtask so subclass field initializers (which run after
     // super() returns) are set before an overridden init() can read them.
@@ -160,12 +163,28 @@ export class ApiService {
       );
       this.apiKey    = info.apiKey;
       this.deviceInfo = info;
+      this.infoRetryMs = 3000;   // so a later reconnect isn't stuck at the backed-off delay
       this.ready$.next(true);
       this.connectWebSocket();
     } catch (e) {
-      console.error('[API] Failed to fetch /api/info:', e);
-      // Retry after 3s (device might still be booting)
-      setTimeout(() => this.init(), 3000);
+      // A 200 that still lands here is the dev-server SPA fallback answering /api/info
+      // with index.html, which fails JSON parsing — i.e. `ng serve` is running with no
+      // /api proxy and there is no backend at all. That surfaces as
+      // "HttpErrorResponse {status: 200, ok: false}", which reads like a device fault
+      // and isn't one, so name it instead of logging the raw error.
+      if (e instanceof HttpErrorResponse && e.status === 200) {
+        console.error(
+          '[API] /api/info returned HTML, not JSON — the dev server has no /api proxy ' +
+          'and no backend is running. Use `bash dev.sh mock` (mock ESP32) or ' +
+          '`bash dev.sh demo` (no backend; needs ?demo=true in the URL).');
+      } else {
+        console.error('[API] Failed to fetch /api/info:', e);
+      }
+      // Back off rather than retrying at a fixed 3s forever: a missing backend never
+      // recovers on its own, and hammering it buried the console in repeats of the
+      // same stack. A booting device still gets caught by the early retries.
+      this.infoRetryMs = Math.min(this.infoRetryMs * 2, 60_000);
+      setTimeout(() => this.init(), this.infoRetryMs);
     }
   }
 
