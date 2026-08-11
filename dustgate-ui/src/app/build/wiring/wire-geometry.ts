@@ -57,15 +57,21 @@ export const RAIL_H = 76;
 /** Pitch of a board slot along the rail: BOARD_W plus air, so two boards can't
  *  share an edge however you order them. */
 export const BOARD_SLOT = 124;
+/** Width of the "+ Find boards" chip, which is pinned to the rail's right end. */
+export const FIND_W = 128;
+
+/** Left edge of slot 0, leaving the rail a caption column: the boards used to start
+ *  at PAD and paint straight over the BOARDS label, which is drawn before them. */
+export const RAIL_X0 = PAD + 98;
 
 /** Centre of the nth slot in the rail. Boards are one-dimensional now — the rail
  *  is above every gate, so a cable can only ever leave a port downward. */
 export function railSlot(slot: number): Pt {
-  return { x: PAD + slot * BOARD_SLOT, y: -RAIL_H / 2 };
+  return { x: RAIL_X0 + slot * BOARD_SLOT, y: -RAIL_H / 2 };
 }
-/** Which slot a point falls in, for a reorder drag. */
+/** Which slot a point falls in, for a drag. */
 export function slotAt(x: number): number {
-  return Math.max(0, Math.round((x - PAD) / BOARD_SLOT));
+  return Math.max(0, Math.round((x - RAIL_X0) / BOARD_SLOT));
 }
 
 /** Where port `ch` sits on a board centred at `c`. Channel 0..3 are servo; passing

@@ -106,6 +106,9 @@ function createDevice() {
     stepsPerMm:        STEPS_PER_MM, // calibrated by the sweep; nominal until then
     dcConfigured:   false,
     dcOn:           false,
+    // The network the board joined. The simulated device is always "on" one; the
+    // firmware reports WiFi.SSID(), and an unprovisioned board reports ''.
+    ssid:           'Shop-WiFi',
     dcIp:           null,
     dcHost:         '',
     // mm: null = position not yet saved (distinct from a stop saved at 0.00).
@@ -143,6 +146,7 @@ function statusView(d) {
     stepsPerMm:     d.stepsPerMm,
     dcConfigured:   d.dcConfigured,
     dcOn:           d.dcOn,
+    ssid:           d.ssid,
     stops:          d.stops,
     outlets:        d.outlets,
   };

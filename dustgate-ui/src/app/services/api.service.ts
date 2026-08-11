@@ -47,6 +47,7 @@ export interface SystemStatus {
   stepsPerMm?: number;        // calibrated steps/mm (nominal until a sweep runs)
   dcConfigured?: boolean;     // true once a dust collector plug has been assigned
   dcOn?: boolean;             // current dust collector switch state
+  ssid?: string;              // WiFi network the board is joined to; absent on older firmware
   stops?: StopInfo[];         // per-stop mm positions; embedded in every status push
   outlets: OutletStatus[];
 }

@@ -7,7 +7,7 @@
 import {
   type Pt, BOARD_H, CORNER_R, HOP_R, LANE_GAP, LANE_STEP, PORT_H, SERVO_PORTS,
   cablePath, cableRun, crossing, portExit, portPos, PORT_STUB,
-  railSlot, rankByTravel, segmentsOf, slotAt, BOARD_SLOT, RAIL_H,
+  railSlot, rankByTravel, segmentsOf, slotAt, BOARD_SLOT, RAIL_H, RAIL_X0,
 } from './wire-geometry';
 
 let failures = 0, checks = 0;
@@ -25,11 +25,12 @@ const near = (a: number, b: number, eps = 0.01) => Math.abs(a - b) < eps;
 group('W1 the port strip is the hardware budget');
 {
   const c = railSlot(1);
-  ok('board sits in its rail slot', c.x === 64 + BOARD_SLOT && c.y === -RAIL_H / 2);
+  ok('board sits in its rail slot', c.x === RAIL_X0 + BOARD_SLOT && c.y === -RAIL_H / 2);
   ok('the rail is above the whole grid', c.y < 0);
   ok('a slot round-trips', slotAt(c.x) === 1 && slotAt(railSlot(3).x) === 3);
   const xs = [0, 1, 2, 3, 4].map(ch => portPos(c, ch).x);
-  ok('five ports, evenly pitched', xs.join() === '152,170,188,206,224', xs.join());
+  ok('five ports, evenly pitched', xs.every((x, i) => i === 0 || x - xs[i - 1] === 18), xs.join());
+  ok('the rail leaves a caption column before slot 0', RAIL_X0 > 64, String(RAIL_X0));
   ok('strip is centred on the board', near((xs[0] + xs[4]) / 2, c.x));
   ok('ports straddle the underside', portPos(c, 0).y > c.y && portPos(c, 0).y < c.y + BOARD_H / 2);
   ok('cable leaves the port underside', near(portExit(c, 0).y, portPos(c, 0).y + PORT_H / 2));

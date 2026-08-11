@@ -18,7 +18,7 @@ import {
 } from './routing/geometry';
 import { type RoutedDuct, type Scene, Router, sceneBounds } from './routing/router';
 import {
-  BOARD_H, BOARD_SLOT, BOARD_W, PORT_H, RAIL_H, SERVO_PORTS, TAB_H, TAB_W,
+  BOARD_H, BOARD_SLOT, BOARD_W, FIND_W, PORT_H, RAIL_H, SERVO_PORTS, TAB_H, TAB_W,
   cablePath, cableRun,
   portPos, portWidth, portExit, railSlot, rankByTravel, segmentsOf, slotAt,
 } from './wiring/wire-geometry';
@@ -389,8 +389,8 @@ const outletsFor = (kind: MenuKind): number => kind === 'linear' ? 4 : kind === 
             </g>
             <g class="findboards" [attr.transform]="'translate(' + findX() + ',' + (-RAIL_H/2) + ')'"
                (pointerdown)="goBoards()">
-              <rect x="0" y="-18" width="128" height="36" rx="9"/>
-              <text x="64" y="4">+ Find boards</text>
+              <rect x="0" y="-18" [attr.width]="FIND_W" height="36" rx="9"/>
+              <text [attr.x]="FIND_W / 2" y="4">+ Find boards</text>
             </g>
           </g>
 
@@ -647,7 +647,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   readonly CELL = CELL; readonly UNIT_H = UNIT_H; readonly GATE_PAD = GATE_PAD; readonly PAD = PAD;
   readonly BOARD_W = BOARD_W; readonly BOARD_H = BOARD_H; readonly RAIL_H = RAIL_H;
   readonly PORT_H = PORT_H; readonly TAB_W = TAB_W; readonly TAB_H = TAB_H;
-  readonly SERVO_PORTS = SERVO_PORTS;
+  readonly SERVO_PORTS = SERVO_PORTS; readonly FIND_W = FIND_W;
 
   // ── wiring layer ────────────────────────────────────────────────────────────
   /** Which view of the canvas is on. The pieces and their cells are identical in
@@ -745,6 +745,9 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     // boards actually belong to instead of the duct drawing.
     if (this.route.snapshot.queryParamMap.get('layer') === 'wiring') this.setLayer('wiring');
     try { this.applyLive(await this.api.getV2Status()); } catch { /* not running */ }
+    // The rail names the network the boards share. Best-effort: an unreachable or
+    // older device just leaves the label off.
+    try { this.netName = (await this.api.getStatus()).ssid ?? ''; } catch { /* no device */ }
   }
   /** The wrap's size isn't known until the view exists — size the board to it then
    *  (deferred a tick so we're not writing bindings mid-check). */
@@ -1003,7 +1006,11 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   namePos(): { left: number; top: number } {
     const n = this.namedPiece();
     if (!n) return { left: -9999, top: -9999 };
-    return { left: this.nx(n) + this.labelX(n), top: this.ny(n) + this.labelY(n) - 4 };
+    // + RAIL_H because the field is a DOM element measured from the top of the SVG,
+    // and the SVG's viewBox starts at -RAIL_H (the board rail). Without it the field
+    // lands a rail's height above the label it replaces — the name appeared to jump
+    // upward the moment you clicked a piece.
+    return { left: this.nx(n) + this.labelX(n), top: this.ny(n) + this.labelY(n) - 4 + RAIL_H };
   }
 
   /** Enter commits by leaving the field; the value is already saved per keystroke. */
@@ -1280,7 +1287,11 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     if (!ctx.convert) this.selectedId = null;
     this.menu = { x, y, ...ctx };
     this.menuTitle = ctx.convert ? this.convertTitle(ctx.convert)
-                   : ctx.end ? (this.isCap(ctx.end) ? 'This capped end' : 'At the end of this run')
+                   // A tee reaches this menu by being a junction, but it is a fork,
+                   // not an end — and saying "the end of this run" over a list that
+                   // refuses to cap or delete it explains nothing.
+                   : ctx.end ? (this.childrenOf(ctx.end).length > 1 ? 'Where this run splits'
+                              : this.isCap(ctx.end) ? 'This capped end' : 'At the end of this run')
                    : ctx.branch ? (ctx.branch.elbow ? 'Add at this corner' : 'Add on this run')
                    : 'Add here';
     this.menuOptions = this.resolveOptions();
@@ -1329,7 +1340,14 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
         const leg = this.legCellFor(m.branch, m.branch.childId);
         return leg ? { cells: [leg], span: 1, selfId: m.branch.childId, occ } : null;
       }
-      return { cells: [{ col: m.branch.col, row: m.branch.row }], span: spanFor(kind), selfId: m.branch.childId, occ };
+      // A tee directly below is going to BE this gate (see absorbTee), so the cell
+      // it stands on is room, not an obstacle — otherwise a 2-cell manifold could
+      // never be dropped onto the branch it is replacing.
+      const below = this.elem(m.branch.childId);
+      const free = below?.['type'] === 'junction' && this.childrenOf(m.branch.childId).length > 1
+        && outletsFor(kind) >= this.childrenOf(m.branch.childId).length
+        ? this.cellOccupied(m.branch.childId) : occ;
+      return { cells: [{ col: m.branch.col, row: m.branch.row }], span: spanFor(kind), selfId: m.branch.childId, occ: free };
     }
     return null;
   }
@@ -1344,16 +1362,24 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     const m = this.menu; if (!m) return [];
     if (m.convert) return this.convertOptions(m.convert);
     const mid = !!m.branch;
-    const legsHere = m.branch ? this.legsAtCell(m.branch.col, m.branch.row) : 0;
+    // A junction with legs is a TEE, not an end, however you arrived at its menu:
+    // from a dot on the run above it, or by tapping the fork itself. Both have to
+    // answer the same question — can this fitting carry every leg out of here.
+    const legsHere = m.branch ? this.legsAtCell(m.branch.col, m.branch.row)
+                   : m.end   ? this.childrenOf(m.end).length
+                   : 0;
+    const tee = legsHere > 1;
     const opts: MenuOption[] = FITTINGS.map(f => {
       let enabled = true, note: string | undefined;
       if (f.kind === 'duct' && m.end)    { enabled = false; note = 'drag the end'; }
       else if (f.kind === 'tool' && mid) { enabled = false; note = 'ends a run'; }
-      // A fitting spliced in where the run SPLITS has to carry every leg out of it.
+      // A tool terminates a run, so it can't stand on a fork either.
+      else if (f.kind === 'tool' && tee) { enabled = false; note = 'ends a run'; }
+      // A fitting that stands where the run SPLITS has to carry every leg out of it.
       // A ball valve has one outlet, so putting one on a tee leaves a leg with
       // nowhere to come from — only a manifold or a sliding gate can stand there.
       // A duct is exempt: it hangs another leg off the tee rather than replacing it.
-      else if (mid && legsHere > 1 && f.kind !== 'duct' && outletsFor(f.kind) < legsHere) {
+      else if (tee && f.kind !== 'duct' && outletsFor(f.kind) < legsHere) {
         enabled = false; note = `a tee needs ${legsHere} outlets`;
       }
       if (enabled) {
@@ -1371,10 +1397,14 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     }
     if (m.end) {
       // A run end also carries its own housekeeping: seal it, reopen it, or bin it.
+      // None of it applies to a TEE, which reaches this menu by being a junction but
+      // is a fork, not an end: you can't cap a fork, and binning it would leave its
+      // legs fed by nothing. Thin it back to one leg first.
       opts.push(this.isCap(m.end)
-        ? { kind: 'uncap', label: 'Reopen this end', enabled: true }
-        : { kind: 'cap', label: 'Cap this end', enabled: true });
-      opts.push({ kind: 'delete', label: 'Delete', enabled: true });
+        ? { kind: 'uncap', label: 'Reopen this end', enabled: !tee }
+        : { kind: 'cap', label: 'Cap this end', enabled: !tee, note: tee ? 'not an end' : undefined });
+      opts.push({ kind: 'delete', label: 'Delete', enabled: !tee,
+                  note: tee ? 'remove its legs first' : undefined });
     } else {
       opts.push({ kind: 'cap', label: 'Cap this outlet', enabled: true });
     }
@@ -1450,7 +1480,8 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     if (m.branch) {
       const bd = m.branch; this.closeMenu();
       if (kind === 'duct') this.branchDuct(bd, 'duct');
-      else this.insertInline(bd.childId, kind as SelKind, { col: bd.col, row: bd.row });
+      else if (!this.absorbTee(bd, kind as SelKind))
+        this.insertInline(bd.childId, kind as SelKind, { col: bd.col, row: bd.row });
     }
   }
 
@@ -1462,6 +1493,16 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   private fillEnd(endId: string, kind: SelKind | 'tool'): void {
     if (!this.topo) return;
     const at = this.cells.get(endId) ?? { col: 0, row: 0 };
+    // A TEE is not an end. Tapping one opens this same menu (it's a junction), but
+    // "put a gate here" means the gate REPLACES the fork and carries its legs — the
+    // old path hung the gate off the tee as one more leg, in the tee's own cell, so
+    // a ball valve ended up drawn on top of a three-way wye with the run carrying on
+    // past it. What can't carry the legs is refused by resolveOptions before we get
+    // here; this is the conversion itself.
+    if (kind !== 'tool' && this.childrenOf(endId).length > 1) {
+      this.absorbJunction(endId, kind, at);
+      return;
+    }
     if (kind === 'tool') {
       const t = this.addTool(endId); if (!t) return;    // child of the end; the end then collapses away
       this.cells.set(t, { col: at.col, row: at.row });
@@ -1700,6 +1741,75 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     this.afterMutation(newId);
   }
 
+  /**
+   * Put a gate on the run that FEEDS a tee: the tee becomes the gate. Its legs move
+   * onto the gate's outlets and the wye itself goes away — which is what "make this
+   * branch a manifold" means. The plain inline insert would have left a two-way wye
+   * hanging under a two-way manifold, one outlet doing all the work.
+   *
+   * The ordering is the other half. Legs live in the doc in the order they were
+   * drawn, which has nothing to do with where they ended up on the canvas, so binding
+   * them to outlets by index sent the left-hand duct out of the right-hand port and
+   * drew the manifold crossed over itself. They bind left-to-right instead, so the
+   * picture matches the plumbing you'd actually build.
+   *
+   * Returns false when the piece below isn't a tee, leaving the plain inline insert.
+   */
+  private absorbTee(bd: BDot, kind: SelKind): boolean {
+    const j = this.elem(bd.childId);
+    if (!j || j['type'] !== 'junction') return false;
+    return !!this.absorbJunction(bd.childId, kind, { col: bd.col, row: bd.row });
+  }
+
+  /**
+   * Replace a tee with a gate: the junction goes away, its legs move onto the gate's
+   * outlets left-to-right, and the gate takes over the tee's feed. Returns the new
+   * gate's id, or null when this junction can't be replaced by this kind.
+   */
+  private absorbJunction(jid: string, kind: SelKind, cell: Cell): string | null {
+    if (!this.topo) return null;
+    const j = this.elem(jid); if (!j || j['type'] !== 'junction') return null;
+    const inDuct = this.ductsRaw().find(d => d['child'] === jid); if (!inDuct) return null;
+    const legs = this.legsLeftToRight(jid);
+    if (legs.length < 2) return null;                   // not a fork
+    const sel = this.makeSelector(kind, this.freeServoChannel());
+    const have = (sel['branches'] as Branch[]).length;
+    if (kind === 'linear' && have < legs.length) this.appendLinearOutlets(sel, legs.length - have);
+    const branches = sel['branches'] as Branch[];
+    if (branches.length < legs.length) return null;     // menu should have refused it
+    this.elems(this.topo).push(sel);
+    // The gate inherits the tee's feed, including a parent selector's outlet.
+    const up: RawEl = { child: sel['id'], parent: inDuct['parent'] };
+    if (inDuct['parentBranch']) {
+      up['parentBranch'] = inDuct['parentBranch'];
+      const pb = (this.elem(inDuct['parent'] as string)?.['branches'] as Branch[] | undefined)
+        ?.find(x => x.id === inDuct['parentBranch']);
+      if (pb) pb.role = 'feed';
+    }
+    this.ductsRaw().push(up);
+    legs.forEach((d, i) => {
+      d['parent'] = sel['id']; d['parentBranch'] = branches[i].id;
+      branches[i].role = this.elem(d['child'] as string)?.['type'] === 'tool' ? 'tool' : 'feed';
+    });
+    (this.topo as { elements: RawEl[] }).elements = this.elems(this.topo).filter(e => e !== j);
+    (this.topo as { ducts: RawEl[] }).ducts = this.ductsRaw().filter(d => d !== inDuct);
+    this.cells.delete(jid);
+    this.placeAt(sel['id'] as string, cell);
+    this.afterMutation(sel['id'] as string);
+    return sel['id'] as string;
+  }
+
+  /** The legs under a fitting, in the order they are DRAWN — leftmost first. Doc
+   *  order is insertion order, so anything binding legs to outlets by index has to
+   *  come through here or the run crosses over itself. */
+  private legsLeftToRight(id: string): RawEl[] {
+    return [...this.childDucts(id)].sort((a, b) => {
+      const ca = this.cells.get(a['child'] as string) ?? { col: 0, row: 0 };
+      const cb = this.cells.get(b['child'] as string) ?? { col: 0, row: 0 };
+      return ca.col - cb.col || ca.row - cb.row;
+    });
+  }
+
   /** Splice a gate INTO the run at the clicked point: the downstream reconnects to
    *  the new gate's FIRST outlet (so a manifold becomes a real 2-way — one leg used,
    *  one free; a ball valve is a plain inline on/off). Remaining outlets stay
@@ -1827,9 +1937,10 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     this.ductsRaw().push({ child: sel['id'], parent: junctionId });
     return sel['id'] as string;
   }
-  private cellOccupied(): Set<string> {
+  private cellOccupied(except?: string): Set<string> {
     const occ = new Set<string>();
     for (const [id, c] of this.cells) {
+      if (id === except) continue;
       const el = this.elem(id);
       const span = el && isUnitKind(el['kind']) ? Math.max(1, (el['branches'] as unknown[] | undefined)?.length ?? 1) : 1;
       for (let i = 0; i < span; i++) occ.add((c.col + i) + ',' + c.row);
@@ -1897,8 +2008,18 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     return out.sort((a, b) => a.col - b.col);
   }
   private boardDragPt: Pt | null = null;
-  /** x of the "+ Find boards" chip: just past the last slot. */
-  findX(): number { return railSlot(this.boardSlots.size).x + 6; }
+  /** x of the "+ Find boards" chip. Pinned to the FAR RIGHT of the rail rather than
+   *  trailing the last board: it's the one control up here, it shouldn't wander every
+   *  time a board is paired, and the space between it and the boards is what makes
+   *  the free slots visible. */
+  findX(): number { return this.vbW - FIND_W - 14; }
+  /** Last slot a board can occupy without sliding under the Find boards chip. */
+  private maxSlot(): number {
+    const limit = this.findX() - 14 - BOARD_W / 2;
+    let s = 0;
+    while (railSlot(s + 1).x <= limit) s++;
+    return s;
+  }
   goBoards(): void { void this.nav.navigate(['/boards']); }
   bx(b: BoardVM): number { return b.dragX ?? b.x; }
   by(b: BoardVM): number { return b.dragY ?? b.y; }
@@ -2026,13 +2147,17 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     const d = this.bodrag; const pt = this.boardDragPt;
     this.bodrag = null; this.boardDragPt = null;
     if (!d || !pt || !d.moved) return;
-    const order = [...this.boardSlots.entries()].sort((a, b) => a[1] - b[1]).map(e => e[0]);
-    const from = order.indexOf(d.id);
-    const to = Math.max(0, Math.min(order.length - 1, slotAt(pt.x)));
-    if (from < 0 || from === to) return;
+    // A board goes wherever there's room, not into a packed left-justified queue —
+    // the rail is a shelf, and where you put a board on it is information (the one
+    // by the far wall belongs over there). So: drop into the slot under the pointer,
+    // and if something is already in it, the two trade places.
+    const from = this.boardSlots.get(d.id);
+    const to = Math.max(0, Math.min(this.maxSlot(), slotAt(pt.x)));
+    if (from === undefined || from === to) return;
+    const occupant = [...this.boardSlots.entries()].find(([id, s]) => s === to && id !== d.id);
     this.pushHistory(null);
-    order.splice(to, 0, ...order.splice(from, 1));
-    this.boardSlots = new Map(order.map((id, i) => [id, i]));
+    this.boardSlots.set(d.id, to);
+    if (occupant) this.boardSlots.set(occupant[0], from);
     this.dirty = true; this.saveError = ''; this.saveNote = '';
     this.recomputeExtent();
   }
@@ -2429,7 +2554,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     if (!el || !n || !this.topo) return;
     if (!this.gateTypes(n).find(t => t.kind === kind)?.enabled) return;
     const was = this.kindOf(id);
-    const legs = this.childDucts(id);
+    const legs = this.legsLeftToRight(id);   // left leg → left outlet, not doc order
     const channel = ((el['servo'] as RawEl | undefined)?.['channel'] as number | undefined)
       ?? this.freeServoChannel();
     const fresh = this.makeSelector(kind, channel);
@@ -2938,8 +3063,10 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     const maxCol = Math.max(1, ...this.nodes.map(n => n.col + n.span - 1));
     const maxRow = Math.max(1, ...this.nodes.map(n => n.row));
     const wrap = this.wrapRef?.nativeElement;
-    // The rail has to fit too: every slot plus the Find boards chip on the end.
-    const railW = PAD + this.boardSlots.size * BOARD_SLOT + 190;
+    // The rail has to fit too: out to the FURTHEST OCCUPIED slot (boards can sit
+    // anywhere along it now, so a count isn't the width) plus the chip on the end.
+    const last = Math.max(0, ...this.boardSlots.values());
+    const railW = railSlot(last).x + BOARD_W / 2 + 14 + FIND_W + 14;
     this.vbW = Math.max(PAD * 2 + maxCol * CELL + CELL, railW, wrap?.clientWidth ?? 0);
     this.vbH = Math.max(PAD * 2 + maxRow * CELL + CELL, wrap?.clientHeight ?? 0);
   }

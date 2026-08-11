@@ -7,6 +7,7 @@
 #ifdef ENABLE_HTTP_API
 
 #include <Preferences.h>
+#include <WiFi.h>            // WiFi.SSID() — reported in the status blob
 #include <WiFiClientSecure.h>
 #include <LittleFS.h>
 #include <esp_random.h>      // hardware RNG for key generation
@@ -1648,6 +1649,9 @@ String HttpApiServer::buildStatusJson(const ApiStatus& s
     doc["manifoldModel"] = s.manifoldModel;
     doc["measuredSpanSteps"] = s.measuredSpanSteps > 0 ? s.measuredSpanSteps : (long)0;
     doc["stepsPerMm"]    = serialized(String(s.measuredStepsPerMM > 0 ? s.measuredStepsPerMM : stepsPerMM(), 3));
+    // The network we're joined to, so the UI can name it instead of drawing a link
+    // between every pair of boards. Empty while running the setup AP.
+    doc["ssid"]          = WiFi.status() == WL_CONNECTED ? WiFi.SSID() : String("");
 
     JsonArray stops = doc.createNestedArray("stops");
     for (int i = 0; i <= _cachedNumActiveStops; i++) {
