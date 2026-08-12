@@ -467,7 +467,7 @@ Nothing on the ESP32 side causes that. The loads sharing the rail do:
 - **Servo inrush and stall** — a hobby servo pulls 0.5–1A+ for tens of milliseconds
   when it starts moving and when the gate hits its stop. On the v2 servo nodes this
   is the main offender, and the make-before-break sequencer means **two servos can
-  be moving at once** — budget for that, not for one.
+  be moving at once** — budget for that, not for one. (Confirm this - it shouldn't be allowed)
 - **Stepper coil energizing** — the TMC2209 slams current into the coils on enable
   and on the first steps after idle.
 - **Long thin wire** — ~0.3Ω in 10ft of 22AWG turns a 1A transient into a 0.3V drop

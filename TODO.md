@@ -292,3 +292,87 @@ node shared/device-model/nodelink-conformance.js ws://<node>.local/nodelink
 - Get rid of auto-arrange or make it work better?
 - Edit name by double clicking on text? or just clicking? unsure.
 - click and drag ducts?
+
+### 5. Shop schema v2 (`schemaVersion: 2`) — RFC drafted 2026-08-12
+Design settled in [`docs/v2-shop-schema-rfc.md`](docs/v2-shop-schema-rfc.md).
+Nothing below is implemented. Ordering matters: the shared model first, then
+firmware, then canvas — the contract discipline means a half-migrated model
+breaks all three at once.
+
+- **`systems[]` container** — move `elements`/`ducts` per-system, move the
+  "exactly one collector" rule ([`topology.js:276`](shared/device-model/topology.js))
+  inside it, add `validateShop` / `routeShop` / `planShopTransition` above the
+  existing per-system functions (RFC §4).
+- **`machines[]`** — a `tool` element becomes a *port*; the smart outlet, trip
+  point and display name move off the element onto the machine (RFC §6.3–6.4).
+- **Multi-port UI** — "add another port to this machine" on the canvas, with
+  size/use suggested in the port-name field (`Cabinet · 4"`). No `diameter`
+  field; sizing stays the user's business (RFC §6.5).
+- **`enabled` per port, sticky** — device-owned, persisted locally, merged over
+  any adopted topology so a configurator push can never re-arm a port whose hood
+  is on the bench. All-ports-disabled is a guide-bar error (RFC §6.6).
+- **Start stagger** — `onDelayMs` (tool sensed → its collector on) and
+  `collectorStaggerMs` (collector → next collector), 2 s defaults, both
+  configurable. Measure the real gap on the bench: the delay runs from *sensing*,
+  so a poll cycle is already spent (RFC §10.1).
+- **Plug claims** — parse/write owner into the plug's friendly name via the
+  existing `Switch.SetConfig` path, read `Ws.GetConfig` as the authority, and
+  **never rewrite another controller's push target** — a shared plug is paired
+  read-only by polling (RFC §8, §13).
+- **"WiFi devices" tray** — rename/extend the boards tray to hold secondary
+  controllers *and* unclaimed outlets; foreign-owned plugs shown locked with
+  their owner named (RFC §9). Mockup: [`docs/mockups/outlet-dock.html`](docs/mockups/outlet-dock.html).
+- **Supplemental ports + partial routing** — a port declares `supplemental: true`
+  (the overarm); routing gains three answers instead of two: *routed*, *partial*
+  (a supplemental port lost), *stripped* (a **primary** port lost to another
+  machine). Stripped is the alarm case — a saw drawing 1.8 kW with its cabinet
+  gate shut. Arbitration itself does not change (RFC §10.3).
+- **Shop-wide move queue** — plans are per-system, execution is not. One serial
+  queue on the primary, or two systems transitioning at once break the
+  one-servo-at-a-time current mutex (RFC §10.2).
+- **Boards are not pinned to a system** — a controller drives selectors in any
+  number of systems, and the **wiring layer ignores system focus** so the cable
+  that proves it stays visible (RFC §13).
+- **Reserved, not built** — `collector.bin` (level sensor) and shop `indicators`
+  / `alerts` with `own` vs `shop` scope (RFC §7).
+
+#### Firmware testing debt this creates
+Accepted deliberately (2026-08-12) — the design is worth the extra bring-up.
+Phase 1 is still hardware-untested, so these land on top of an unvalidated base.
+
+- [ ] `syncTopologyOutlets()` walks `machines[]` instead of elements. **Highest
+      risk item in the migration** — it is the code that decides which plugs get
+      watched, and getting it wrong makes tools silently stop being sensed.
+      Re-run the bench note in §1 after the change.
+- [ ] Per-system iteration in `TopologyStore.h` / `TopologyRouter.h`, and
+      `/api/v2/topology|status` reporting per system.
+- [ ] Sticky `enabled` persistence — survives reboot, WiFi drop, node reconnect
+      **and** topology re-adopt. Verify the re-adopt case explicitly; it is the
+      one a naive implementation gets wrong.
+- [ ] Two collectors on one bench setup: confirm both can run, and that
+      `collectorStaggerMs` actually separates the switch-ons.
+- [ ] `onDelayMs` end-to-end: measure sensed→blower-on against the configured
+      value and record the poll-cycle overhead.
+- [ ] Multi-port machine: both gates open together, arbitration never lets one
+      machine's ports fight, disabling one port closes only that gate.
+
+#### Canvas chrome (small, independent of the schema work)
+- [x] Promote **Done** out of the overflow menu into its own toolbar button;
+      Import/Export stay in the overflow (2026-08-12).
+- [ ] **Settings** entry point for shop-wide globals — `collectorStaggerMs`,
+      default trip point, units. Lives in the overflow menu next to
+      Import/Export and links out to its own screen; the canvas toolbar should
+      not grow a fourth button.
+- [ ] **WiFi devices tray above the canvas**, replacing the boards rail:
+      controllers and unclaimed outlets in one compact strip, wrapping rather
+      than scrolling. Mockup: [`docs/mockups/two-system-shop.html`](docs/mockups/two-system-shop.html).
+- [ ] **System scope dropdown** — one control that stays the same size at four
+      systems; focus dims other systems rather than hiding them, so a machine
+      with ports in two systems is never cut in half.
+- [ ] **Add a system** — draws a collector, switches focus to the new system,
+      leaves an open end to plumb from. A system *is* its collector (RFC §13).
+
+#### Deferred — do not start
+- **Clog detection from collector wattage** (RFC §7.1). Unverified whether a
+  sustained spike separates a blocked duct from a full bin from a bag that needs
+  shaking. `health` stays reserved with null thresholds; nothing reads it.

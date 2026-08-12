@@ -1,4 +1,4 @@
-import { AfterViewInit, Component, ElementRef, HostListener, OnDestroy, OnInit, ViewChild } from '@angular/core';
+import { AfterViewInit, Component, ElementRef, HostListener, NgZone, OnDestroy, OnInit, ViewChild } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router as NgRouter, RouterLink } from '@angular/router';
@@ -142,8 +142,15 @@ const outletsFor = (kind: MenuKind): number => kind === 'linear' ? 4 : kind === 
     /* position: relative so the zoom control can anchor to the stage rather than to
        the canvas's scrolled content — see the note on .zoomer in the template. */
     .stage { flex: 1; display: flex; flex-direction: column; min-height: 0; position: relative; }
+    /* overflow stays auto — it is what makes the element scrollable at all, which the
+       pan gesture, the zoom anchoring and the wheel all drive through scrollLeft/Top.
+       Only the BARS are hidden: they framed the drawing in permanent grey furniture,
+       and with fit-on-open, pan, and the zoom readout there is nothing left for them
+       to tell you. Both axes go, not just the vertical — a lone horizontal bar under a
+       bare right edge reads as a rendering fault rather than a decision. */
     .canvas-wrap { flex: 1; overflow: auto; background: var(--bg); position: relative;
-                   overscroll-behavior: contain; }
+                   overscroll-behavior: contain; scrollbar-width: none; }
+    .canvas-wrap::-webkit-scrollbar { display: none; }
     /* The canvas owns every touch, and the component decides what each one means:
        background → pan, handle → drag. That arbitration CANNOT be done in CSS.
        touch-action is honored on the <svg> root but not dependably on its <g>
@@ -372,12 +379,15 @@ const outletsFor = (kind: MenuKind): number => kind === 'linear' ? 4 : kind === 
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M20 8H10a5 5 0 0 0 0 10h6"/><path d="M16 4l4 4-4 4"/></svg>
       </button>
       <button class="primary" (click)="save()" [disabled]="!dirty || saving">{{ saving ? 'Saving…' : 'Save' }}</button>
+      <!-- Leaving the canvas is a top-level intent, not an "other action" — burying
+           it in the overflow made the way out the hardest thing on the bar. Import
+           and Export stay there: both are rare, and neither is how you finish. -->
+      <button routerLink="/shop">Done</button>
       <button class="ico" (click)="moreOpen = !moreOpen" [class.on]="moreOpen" title="More" aria-label="More actions">
         <svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><circle cx="5" cy="12" r="1.9"/><circle cx="12" cy="12" r="1.9"/><circle cx="19" cy="12" r="1.9"/></svg>
       </button>
       <div class="more-bg" *ngIf="moreOpen" (pointerdown)="moreOpen = false"></div>
       <div class="more" *ngIf="moreOpen">
-        <button routerLink="/shop">Done</button>
         <button (click)="moreOpen = false; importClick(fileInput)">Import</button>
         <button (click)="moreOpen = false; exportShop()" [disabled]="!hasShop">Export</button>
       </div>
@@ -747,7 +757,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   private oUp = (e: PointerEvent) => this.onODotUp(e);
 
   constructor(private api: ApiService, private route: ActivatedRoute,
-              private nav: NgRouter, sanitizer: DomSanitizer) {
+              private nav: NgRouter, private zone: NgZone, sanitizer: DomSanitizer) {
     const svg = (inner: string): SafeHtml =>
       sanitizer.bypassSecurityTrustHtml(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">${inner}</svg>`);
     this.icons = {
@@ -792,14 +802,30 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     // The rail names the network the boards share. Best-effort: an unreachable or
     // older device just leaves the label off.
     try { this.netName = (await this.api.getStatus()).ssid ?? ''; } catch { /* no device */ }
+    // The load is async, so it can settle either side of ngAfterViewInit. Both paths
+    // ask to fit and maybeFit() runs whichever gets there second, once with a real
+    // layout and a measurable wrap.
+    setTimeout(() => { this.recomputeExtent(); this.maybeFit(); });
   }
   /** The wrap's size isn't known until the view exists — size the board to it then
    *  (deferred a tick so we're not writing bindings mid-check). */
   ngAfterViewInit(): void {
-    setTimeout(() => this.recomputeExtent());
+    setTimeout(() => { this.recomputeExtent(); this.maybeFit(); });
+    // The authority on the viewport size. A setTimeout(0) after view init fires
+    // BEFORE the pane has settled at its real width, so the first fit was computed
+    // against a stale measurement and then frozen by didFit — a desktop-width board
+    // opened at a phone's scale. ResizeObserver delivers the true size when there is
+    // one, and again whenever it changes.
+    const wrapEl = this.wrapRef?.nativeElement;
+    if (wrapEl) {
+      // zone.run: ResizeObserver callbacks are not patched by zone.js, so a re-fit
+      // done straight from here updates `zoom` and never repaints — the board kept
+      // its old scale on screen while the model said otherwise.
+      this.ro = new ResizeObserver(() => this.zone.run(() => this.onWrapResize()));
+      this.ro.observe(wrapEl);
+    }
     // Bound by hand, not in the template: both must be non-passive to preventDefault,
-    // and the wrap only exists now. Pinch is claimed here because `touch-action:
-    // pan-x pan-y` hands us two-finger gestures but would otherwise pan with them.
+    // and the wrap only exists now.
     setTimeout(() => {
       const wrap = this.wrapRef?.nativeElement; if (!wrap) return;
       wrap.addEventListener('touchstart', this.pinchStart, { passive: false });
@@ -810,22 +836,91 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     });
   }
 
-  @HostListener('window:resize')
-  onResize(): void { this.recomputeExtent(); }
+  /** Sole resize path — the wrap resizes whenever the window does, so observing it
+   *  covers both, and covers panel/layout changes the window never sees. */
+  private onWrapResize(): void {
+    this.recomputeExtent();
+    if (!this.didFit) { this.maybeFit(); return; }
+    // Still framed as we left it: keep it framed. Touched by hand: leave it alone.
+    if (this.userZoomed) return;
+    const z = this.fitZoom();
+    if (Math.abs(z - this.zoom) > 0.005) { this.setZoom(z); this.scrollToOrigin(); }
+  }
 
   // ── zoom ──────────────────────────────────────────────────────────────────────
   // The board is drawn at a fixed viewBox and SCALED by the width/height attributes,
   // so every existing coordinate stays in board units and getScreenCTM() — which all
   // the drag math already goes through — absorbs the zoom for free.
   zoom = 1;
-  readonly ZOOM_MIN = 0.4;
+  // 0.3, not 0.4: a full shop on a phone fits at about 0.36, and a floor above that
+  // meant fit-on-open silently clamped and left the rail's far end off-screen — the
+  // one thing it exists to prevent. It also has to stay below any reachable fit, or
+  // pressing (−) at the fitted scale would clamp upward and zoom IN.
+  readonly ZOOM_MIN = 0.3;
   readonly ZOOM_MAX = 2.5;
+  /** Natural size of the drawing in board units, set by recomputeExtent(). */
+  private contentW = 0; private contentH = 0;
+  /** Whether the one-time fit-on-open has run yet. */
+  private didFit = false;
+  /** Set once the user picks a scale themselves. It stops a later resize from
+   *  overriding that choice, while a board still sitting at its fitted scale keeps
+   *  re-fitting — so rotating a phone reframes the shop instead of cropping it. */
+  private userZoomed = false;
+  private ro?: ResizeObserver;
   /** Finger spread and zoom at the start of the current pinch, or null. */
   private pinch: { dist: number; zoom: number } | null = null;
 
   zoomPct(): number { return Math.round(this.zoom * 100); }
-  zoomBy(factor: number): void { this.setZoom(this.zoom * factor); }
-  resetZoom(): void { this.setZoom(1); }
+  zoomBy(factor: number): void { this.userZoomed = true; this.setZoom(this.zoom * factor); }
+
+  /** The scale at which the whole shop is on screen at once. Capped at 1: on a
+   *  desktop the drawing usually fits already, and blowing a three-piece layout up to
+   *  250% to "fit" it would be absurd. So this only ever scales DOWN. */
+  private fitZoom(): number {
+    const wrap = this.wrapRef?.nativeElement;
+    if (!wrap || !this.contentW || !this.contentH) return 1;
+    // A few px of air, so the outermost glyph isn't welded to the bezel.
+    const M = 10;
+    const z = Math.min((wrap.clientWidth - M) / this.contentW, (wrap.clientHeight - M) / this.contentH);
+    return Math.max(this.ZOOM_MIN, Math.min(1, z));
+  }
+  /** True when we're already showing the whole board, within rounding. */
+  atFit(): boolean { return Math.abs(this.zoom - this.fitZoom()) < 0.01; }
+
+  /** Toggle rather than a plain "reset to 100%": once the board opens fitted, a
+   *  one-way reset would strand you at 100% with no way back to the overview short of
+   *  pinching it out by hand. */
+  resetZoom(): void {
+    const fit = this.fitZoom();
+    const toFit = !this.atFit();
+    this.userZoomed = !toFit;          // going back to fit re-arms auto-reframing
+    this.setZoom(toFit ? fit : 1);
+    if (toFit) this.scrollToOrigin();
+  }
+
+  /** Fit the whole shop on screen. Runs once when the board first opens — on a phone
+   *  the layout is otherwise several screens wide and you land in a corner of it with
+   *  no idea what you're looking at. A no-op on a desktop wide enough to hold it. */
+  /** Fit once, as soon as there is both a layout and a measured viewport to fit it
+   *  to — whichever of the two load paths supplies the missing half. */
+  private maybeFit(): void {
+    if (this.didFit || !this.nodes.length) return;
+    const wrap = this.wrapRef?.nativeElement;
+    if (!wrap || !wrap.clientWidth || !wrap.clientHeight) return;
+    this.fitToViewport();
+  }
+  private fitToViewport(): void {
+    const z = this.fitZoom();
+    if (z >= 1) { this.didFit = true; return; }
+    this.setZoom(z);
+    this.scrollToOrigin();
+    this.didFit = true;
+    this.userZoomed = false;
+  }
+  private scrollToOrigin(): void {
+    const wrap = this.wrapRef?.nativeElement; if (!wrap) return;
+    requestAnimationFrame(() => { wrap.scrollLeft = 0; wrap.scrollTop = 0; });
+  }
 
   /** Set the zoom, holding the board point under (cx,cy) still. Defaults to the
    *  centre of the viewport, which is what the +/− buttons want. */
@@ -966,6 +1061,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     // the time the second finger lands. Drop it, or the board pans off under the
     // pinch as the midpoint drifts.
     this.panning = null; this.stopGlide();
+    this.userZoomed = true;
     this.pinch = { dist: touchDist(e), zoom: this.zoom };
   };
   private readonly pinchMove = (e: TouchEvent): void => {
@@ -986,12 +1082,14 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   private readonly wheelH = (e: WheelEvent): void => {
     if (!e.ctrlKey) return;
     e.preventDefault();
+    this.userZoomed = true;
     this.setZoom(this.zoom * Math.exp(-e.deltaY / 240), e.clientX, e.clientY);
   };
 
   ngOnDestroy(): void {
     this.detachDrag();
     this.stopGlide(); this.endEdgeScroll();
+    this.ro?.disconnect();
     window.removeEventListener('pointermove', this.panMove);
     window.removeEventListener('pointerup', this.panUp);
     window.removeEventListener('pointercancel', this.panUp);
@@ -3324,11 +3422,20 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     // anywhere along it now, so a count isn't the width) plus the chip on the end.
     const last = Math.max(0, ...this.boardSlots.values());
     const railW = railSlot(last).x + BOARD_W / 2 + 14 + FIND_W + 14;
+    // What the drawing actually occupies, BEFORE the viewport floor below. fitZoom()
+    // needs this: vbW/vbH are grown to fill the screen, so they always "fit" by
+    // construction and are useless for deciding a scale.
+    this.contentW = Math.max(PAD * 2 + maxCol * CELL + CELL, railW);
+    this.contentH = PAD * 2 + maxRow * CELL + CELL + RAIL_H;
     // The wrap's size is in SCREEN px and the extent is in BOARD units, so the
     // viewport floor has to be divided back through the zoom — otherwise zooming out
     // grows the board to fill the screen again and there is nothing left to zoom out to.
-    this.vbW = Math.max(PAD * 2 + maxCol * CELL + CELL, railW, (wrap?.clientWidth ?? 0) / this.zoom);
-    this.vbH = Math.max(PAD * 2 + maxRow * CELL + CELL, (wrap?.clientHeight ?? 0) / this.zoom);
+    this.vbW = Math.max(this.contentW, (wrap?.clientWidth ?? 0) / this.zoom);
+    // − RAIL_H because the SVG renders vbH PLUS the rail above it. Flooring vbH at the
+    // full viewport height made the drawing exactly one rail taller than the screen at
+    // every zoom, so the board never quite fit vertically and always kept a sliver of
+    // scroll.
+    this.vbH = Math.max(PAD * 2 + maxRow * CELL + CELL, (wrap?.clientHeight ?? 0) / this.zoom - RAIL_H);
   }
   private childrenOf(id: string): string[] { const out: string[] = []; for (const [c, p] of this.parentOf) if (p === id) out.push(c); return out; }
   private canAddChild(id: string): boolean {

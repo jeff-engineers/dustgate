@@ -1,0 +1,713 @@
+<title>DustGate — a multi-system shop</title>
+
+<style>
+  :root {
+    --bg:      #111;
+    --surface: #1e1e1e;
+    --border:  #2e2e2e;
+    --text:    #e8e8e8;
+    --muted:   #888;
+    --accent:  #f0a500;
+    --danger:  #d94444;
+    --success: #3cbe6e;
+    --radius:  14px;
+
+    --duct:    #3a3a3a;
+    --live:    rgba(60,190,110,0.14);
+    --amberbg: rgba(240,165,0,0.12);
+  }
+  * , *::before, *::after { box-sizing: border-box; }
+
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: system-ui, -apple-system, sans-serif;
+    font-size: 15px; line-height: 1.5; margin: 0; padding: 22px 18px 60px;
+    -webkit-text-size-adjust: 100%;
+  }
+  .wrap { max-width: 1060px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px; }
+  h1 { font-size: 20px; font-weight: 600; margin: 6px 0 0; letter-spacing: -0.01em; }
+  h2 { font-size: 14px; font-weight: 600; margin: 0 0 10px; }
+  .lede { color: var(--muted); font-size: 13.5px; max-width: 66ch; margin: 6px 0 0; }
+  .eyebrow { font-size: 11px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--muted); }
+
+  /* ── controls ────────────────────────────────────────────────────────────── */
+  .switcher { position: relative; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .switcher .hint { font-size: 12px; color: var(--muted); }
+
+  .seg { display: inline-flex; background: var(--surface); border: 1px solid var(--border);
+         border-radius: 10px; padding: 3px; gap: 3px; }
+  .seg button { background: none; border: none; color: var(--muted); font: inherit; font-size: 12.5px;
+                padding: 5px 11px; border-radius: 7px; cursor: pointer; }
+  .seg button.on { background: var(--bg); color: var(--text); box-shadow: inset 0 0 0 1px var(--border); }
+  .seg button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .scope { display: inline-flex; align-items: center; gap: 8px; background: var(--surface);
+           border: 1px solid var(--border); color: var(--text); border-radius: 10px;
+           padding: 7px 11px; font: inherit; font-size: 13px; cursor: pointer; }
+  .scope:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .scope .chev { width: 13px; height: 13px; color: var(--muted); }
+  .scope .cur { font-weight: 500; }
+
+  .scope-bg { position: fixed; inset: 0; z-index: 18; }
+  .scopemenu { position: absolute; z-index: 19; top: calc(100% + 6px); left: 0; min-width: 214px;
+               background: var(--surface); border: 1px solid #444; border-radius: 12px;
+               box-shadow: 0 8px 24px rgba(0,0,0,.5); padding: 5px; }
+  .scopemenu button { display: flex; align-items: center; gap: 9px; width: 100%; background: none;
+                      border: none; color: var(--text); font: inherit; font-size: 13.5px;
+                      padding: 8px 10px; border-radius: 8px; text-align: left; cursor: pointer; }
+  .scopemenu button:hover { background: var(--bg); }
+  .scopemenu button .tick { width: 14px; height: 14px; flex: none; color: var(--accent); opacity: 0; }
+  .scopemenu button.on .tick { opacity: 1; }
+  .scopemenu button .note { margin-left: auto; padding-left: 12px; font-size: 11.5px; color: var(--muted); }
+  .scopemenu .sep2 { height: 1px; background: var(--border); margin: 5px 7px; }
+  .scopemenu button.ghost { color: var(--muted); }
+
+  /* ── canvas ──────────────────────────────────────────────────────────────── */
+  .stage { position: relative; width: 100%; max-width: 1040px; margin: 0 auto;
+           aspect-ratio: 1040 / 560; container-type: size;
+           background: var(--bg); border: 1px solid var(--border);
+           border-radius: var(--radius); overflow: hidden; }
+  .stage > svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+
+  /* Plumbing dims with its system. MACHINES do not — they carry their own
+     opacity, because a machine can belong to more than one system at once. */
+  .plumbing, .duct, .machine { transition: opacity .22s ease, stroke .2s ease; }
+  .plumbing.dim, .duct.dim, .machine.dim { opacity: .2; }
+
+  .sysbox { fill: none; stroke: var(--border); stroke-width: 1.5; stroke-dasharray: 4 5; }
+  .syslabel { fill: var(--muted); font-size: 11.5px; letter-spacing: .08em; text-transform: uppercase;
+              font-family: system-ui, sans-serif; }
+
+  .duct { fill: none; stroke: var(--duct); stroke-width: 9; stroke-linecap: round; stroke-linejoin: round; }
+  .duct.aux  { stroke-width: 6; }         /* an auxiliary pickup is the smaller hose */
+  .duct.live { stroke: var(--success); }
+  .duct.off  { stroke: #2a2a2a; stroke-dasharray: 3 9; }
+  .duct.yield{ stroke: #333; stroke-dasharray: 7 6; }
+
+  .body { fill: var(--surface); stroke: var(--border); stroke-width: 2; }
+  .unit { fill: var(--surface); stroke: var(--border); stroke-width: 2; }
+  .puck { fill: var(--muted); transition: fill .2s; }
+  .puck.live { fill: var(--success); }
+  .stroke { stroke: var(--muted); fill: none; }
+  .glabel { fill: var(--text); font-size: 13px; text-anchor: middle; font-family: system-ui, sans-serif; }
+  .gsub { fill: var(--muted); font-size: 10px; text-anchor: middle; font-family: system-ui, sans-serif; }
+
+  /* A port tab: where one duct lands on the machine. Click to take it out of
+     service. This is the port, made touchable. */
+  .tab { cursor: pointer; }
+  .tab rect { fill: var(--surface); stroke: var(--border); stroke-width: 1.6; }
+  .tab.live rect { stroke: var(--success); fill: rgba(60,190,110,0.18); }
+  .tab.off  rect { stroke: #3a3a3a; stroke-dasharray: 3 3; }
+  .tab.yield rect { stroke: var(--muted); stroke-dasharray: 3 3; }
+  .tab.unassigned rect { stroke: var(--accent); stroke-dasharray: 3 3; }
+  .tab text { font-size: 8.5px; text-anchor: middle; font-family: system-ui, sans-serif; fill: var(--muted); }
+  .tab.live text { fill: var(--success); }
+  .tab.unassigned text { fill: var(--accent); }
+
+  /* ── the outlet, inside the machine — ONE per machine now ────────────────── */
+  .dock { position: absolute; transform: translate(-50%, -50%);
+          display: flex; align-items: center; justify-content: center; max-width: 11cqw;
+          padding: 0.22em 0.34em; border-radius: 0.6em;
+          border: 1px solid transparent; background: transparent;
+          color: var(--muted); font: inherit; font-size: 1.05cqw;
+          line-height: 1.25; cursor: pointer; white-space: nowrap;
+          transition: border-color .18s, background .18s, color .18s, opacity .22s; }
+  .dock:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .dock.dim { opacity: .2; }
+  .dock .detail { display: flex; align-items: center; gap: .45em; max-width: 0; opacity: 0;
+                  overflow: hidden; transition: max-width .2s ease, opacity .16s ease, margin .2s ease; }
+  .dock.reveal .detail { max-width: 8em; opacity: 1; margin-left: .35em; }
+  .dock .nm { max-width: 12ch; overflow: hidden; text-overflow: ellipsis; }
+  .dock .w { font-variant-numeric: tabular-nums; opacity: .9; }
+  .dock[data-state="idle"] { color: var(--text); }
+  .dock[data-state="idle"].reveal { border-color: var(--border); background: var(--bg); }
+  .dock[data-state="standby"] { border-color: var(--accent); background: var(--amberbg); color: var(--accent); }
+  .dock[data-state="live"] { border-color: var(--success); background: var(--live); color: var(--success); }
+
+  .face { flex: none; width: 1.7em; height: 1.7em; }
+
+  /* ── wiring ──────────────────────────────────────────────────────────────── */
+  .wiring { transition: opacity .22s ease; }
+  .wiring.faded { opacity: .13; pointer-events: none; }
+  .cable { fill: none; stroke: #6f6f6f; stroke-width: 2; stroke-linecap: round; }
+  .cable.cross { stroke: var(--accent); stroke-dasharray: 6 4; }
+  .node-body { fill: var(--surface); stroke: var(--border); stroke-width: 2; }
+  .node-name { fill: var(--text); font-size: 12px; text-anchor: middle; font-family: system-ui, sans-serif; }
+  .node-sub  { fill: var(--muted); font-size: 10px; text-anchor: middle; font-family: system-ui, sans-serif; }
+
+  /* ── WiFi devices ────────────────────────────────────────────────────────── */
+  .wifi { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); overflow: hidden; }
+  .wifi-head { display: flex; align-items: baseline; gap: 10px; padding: 9px 13px; border-bottom: 1px solid var(--border); }
+  .wifi-head .t { font-size: 13px; font-weight: 600; }
+  .wifi-head .n { font-size: 11.5px; color: var(--muted); }
+  .strip { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 7px; padding: 9px 13px; }
+  .grp { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
+  .grp .cap { font-size: 10.5px; letter-spacing: .07em; text-transform: uppercase; color: var(--muted); flex: none; }
+  .sep { flex: none; width: 1px; height: 22px; background: var(--border); margin: 0 5px; }
+  .dev { position: relative; display: flex; align-items: center; gap: 6px; flex: none;
+         padding: 5px 9px 5px 7px; border-radius: 9px; border: 1px solid var(--border);
+         background: var(--bg); color: var(--text); font: inherit; font-size: 12px;
+         cursor: pointer; white-space: nowrap; }
+  .dev:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .dev .ico { flex: none; width: 15px; height: 15px; }
+  .dev .sub { color: var(--muted); font-size: 11px; max-width: 0; opacity: 0; overflow: hidden;
+              transition: max-width .2s ease, opacity .16s ease, margin .2s ease; }
+  .dev:hover .sub { max-width: 22em; opacity: 1; margin-left: 3px; }
+  .dev[data-kind="brain"] { border-color: var(--accent); color: var(--accent); }
+  .dev[data-kind="shared"] { color: var(--muted); }
+  .dev[data-kind="shared"] .ico { opacity: .6; }
+  .dev .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); flex: none; }
+
+  /* ── notes ───────────────────────────────────────────────────────────────── */
+  .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 15px; }
+  .card { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); padding: 14px 15px; }
+  .card p { margin: 0 0 8px; font-size: 12.5px; color: var(--muted); line-height: 1.55; }
+  .card p:last-child { margin-bottom: 0; }
+  .card strong { color: var(--text); font-weight: 500; }
+  .card em { color: var(--accent); font-style: normal; }
+  .k { display: inline-block; border: 1px solid var(--border); border-radius: 5px; padding: 0 5px;
+       font-size: 11px; color: var(--text); background: var(--bg); }
+</style>
+
+<div class="wrap">
+
+  <header>
+    <span class="eyebrow">DustGate · build canvas</span>
+    <h1>Jeff's Shop — two collection systems</h1>
+    <p class="lede">
+      Each machine is drawn <em>once</em>, wherever it lives, with a tab for every port
+      it has. The table saw's overarm hose really does run across the room to the 2.5"
+      manifold — so the canvas draws that, instead of pretending there are two saws.
+    </p>
+  </header>
+
+  <section class="wifi">
+    <div class="wifi-head">
+      <span class="t">WiFi devices</span>
+      <span class="n" id="wifiCount"></span>
+    </div>
+    <div class="strip" id="strip"></div>
+  </section>
+
+  <div class="switcher">
+    <button class="scope" id="scopeBtn" aria-haspopup="true" aria-expanded="false">
+      <span class="cur" id="scopeCur">Whole shop</span>
+      <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"
+           stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+    </button>
+    <div class="seg" id="layerSeg" role="group" aria-label="Canvas layer">
+      <button data-layer="ducts" class="on">Ducts</button>
+      <button data-layer="wiring">Wiring</button>
+    </div>
+    <span class="hint" id="switchHint">Every system drawn. Pick one to work on it.</span>
+  </div>
+
+  <div class="stage" id="stage">
+    <svg viewBox="0 0 1040 560" aria-hidden="true">
+      <!-- plumbing: dims with its own system -->
+      <g class="plumbing" id="plumb-big">
+        <rect class="sysbox" x="26" y="26" width="470" height="360" rx="16"/>
+        <text class="syslabel" x="44" y="50">4" system · ball valves</text>
+        <path class="duct" d="M100 128 V168 H430"/>
+        <g transform="translate(100,98)">
+          <circle class="body" r="30"/>
+          <path class="stroke" stroke-width="3" stroke-linecap="round" d="M0 -19 a19 19 0 1 0 6 2 l-6 17"/>
+          <circle class="puck" id="big-puck" r="3.5"/>
+          <text class="glabel" y="50">1.5 HP</text>
+        </g>
+        <g transform="translate(170,224)"><circle class="body" r="20"/><line class="stroke" x1="0" y1="-20" x2="0" y2="20" stroke-width="4"/></g>
+        <g transform="translate(300,224)"><circle class="body" r="20"/><line class="stroke" x1="0" y1="-20" x2="0" y2="20" stroke-width="4"/></g>
+        <g transform="translate(430,224)"><circle class="body" r="20"/><line class="stroke" x1="0" y1="-20" x2="0" y2="20" stroke-width="4"/></g>
+      </g>
+
+      <g class="plumbing" id="plumb-small">
+        <rect class="sysbox" x="544" y="26" width="470" height="360" rx="16"/>
+        <text class="syslabel" x="562" y="50">2.5" system · Rockler manifold</text>
+        <path class="duct" d="M618 128 V168 H645"/>
+        <g transform="translate(618,98)">
+          <circle class="body" r="30"/>
+          <path class="stroke" stroke-width="3" stroke-linecap="round" d="M0 -19 a19 19 0 1 0 6 2 l-6 17"/>
+          <circle class="puck" id="small-puck" r="3.5"/>
+          <text class="glabel" y="50">1 HP</text>
+        </g>
+        <rect class="unit" x="615" y="202" width="320" height="44" rx="9"/>
+        <rect class="puck" id="small-gate-puck" x="630" y="208" width="30" height="14" rx="4"/>
+        <text class="glabel" x="775" y="192">Manifold</text>
+      </g>
+
+      <g id="ducts"></g>
+      <g id="machines"></g>
+
+      <!-- Wiring: which board drives which gate. Node B lands in BOTH systems. -->
+      <g class="wiring faded" id="wiring">
+        <path class="cable" d="M250 486 C 250 380, 170 340, 170 246"/>
+        <path class="cable" d="M250 486 C 250 380, 300 340, 300 246"/>
+        <path class="cable cross" d="M700 486 C 700 400, 430 380, 430 246"/>
+        <path class="cable" d="M700 486 C 700 400, 775 340, 775 250"/>
+        <g transform="translate(250,506)">
+          <rect class="node-body" x="-62" y="-20" width="124" height="40" rx="9"/>
+          <text class="node-name" y="-2">Node A</text>
+          <text class="node-sub"  y="12">2 gates · 4" system</text>
+        </g>
+        <g transform="translate(700,506)">
+          <rect class="node-body" x="-70" y="-20" width="140" height="40" rx="9"/>
+          <text class="node-name" y="-2">Node B</text>
+          <text class="node-sub"  y="12">2 gates · both systems</text>
+        </g>
+      </g>
+    </svg>
+
+    <div id="docks"></div>
+  </div>
+
+  <div class="cols">
+    <div class="card">
+      <h2>One machine, one glyph</h2>
+      <p>A machine belongs to the shop, not to a system — so it's drawn once, with a
+         <strong>port tab</strong> where each duct lands. The saw has a 4" tab on top and
+         a 2.5" tab on its right, and the auxiliary hose is drawn crossing the room
+         because <strong>that hose exists</strong>.</p>
+      <p>The ducts still never cross systems: the overarm's duct runs from the manifold
+         to the saw and both ends live in the 2.5" system. Only the <em>machine</em>
+         spans them.</p>
+    </div>
+    <div class="card">
+      <h2>What focus lights up</h2>
+      <p>Plumbing dims with its system. A machine stays lit if <strong>any of its ports
+         is in the focused system</strong> — so the saw is bright in both, never cut in
+         half.</p>
+      <p>A machine with an <strong>unassigned port</strong> stays lit in every focus. The
+         bandsaw's upper-guide pickup isn't plumbed yet, so it never hides — unfinished
+         work is the last thing that should disappear when you narrow the view.</p>
+    </div>
+    <div class="card">
+      <h2>Try it</h2>
+      <p><strong>Click a machine</strong> to run it. <strong>Click a port tab</strong> to
+         take that port out of service — the overarm starts that way, hood off for a
+         non-through cut.</p>
+      <p><strong>The contention case:</strong> put the overarm back, run the table saw,
+         then start the bandsaw. The overarm gives way and says who took it; the 4"
+         cabinet port is untouched. Start them in the other order — same result.
+         Primary beats supplemental, recency never overrules need.</p>
+      <p><span class="k">1</span>–<span class="k">5</span> toggle machines.</p>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var SVGNS = 'http://www.w3.org/2000/svg';
+  var TRIP = 100;
+
+  var SYSTEMS = [
+    { id: 'big',   name: '4" system',   note: 'ball valves' },
+    { id: 'small', name: '2.5" system', note: 'manifold' }
+  ];
+
+  // A machine is drawn once. Its PORTS say where its ducts land and which system
+  // each one belongs to. `sys: null` = drawn, not yet plumbed.
+  var MACHINES = [
+    { id: 'planer', name: 'Planer', outlet: 'Planer', x: 170, run: 1450, standby: 0,
+      ports: [ { id: 'p-planer', sys: 'big', tag: '4"', at: 'top', enabled: true } ] },
+    { id: 'jointer', name: 'Jointer', outlet: 'Jointer', x: 300, run: 1200, standby: 0,
+      ports: [ { id: 'p-jointer', sys: 'big', tag: '4"', at: 'top', enabled: true } ] },
+    { id: 'saw', name: 'Table Saw', outlet: 'Table Saw', x: 430, run: 1840, standby: 8,
+      ports: [ { id: 'p-cabinet', sys: 'big',   tag: '4"',   at: 'top',   enabled: true },
+               // Leaves the home system, so it MUST be supplemental. Starts out of
+               // service: the hood is off for a non-through cut.
+               { id: 'p-overarm', sys: 'small', tag: '2.5"', at: 'right', enabled: false,
+                 supplemental: true } ] },
+    { id: 'drill', name: 'Drill Press', outlet: 'Drill Press', x: 775, run: 620, standby: 15,
+      ports: [ { id: 'p-drill', sys: 'small', tag: '2.5"', at: 'top', enabled: true } ] },
+    { id: 'band', name: 'Bandsaw', outlet: 'Bandsaw', x: 905, run: 540, standby: 0,
+      ports: [ { id: 'p-band', sys: 'small', tag: '2.5"', at: 'top', enabled: true },
+               // Drawn, not plumbed. Keeps the bandsaw lit in every focus.
+               { id: 'p-band-up', sys: null, tag: 'upper', at: 'right', enabled: true } ] }
+  ];
+
+  var TOOL_Y = 336, BODY_W = 116, BODY_H = 72;
+  var running = {}, startedAt = {};
+  var focusSys = 'all', layer = 'ducts', revealMachine = null;
+
+  var allPorts = function () {
+    return MACHINES.reduce(function (a, m) {
+      return a.concat(m.ports.map(function (p) { return { m: m, p: p }; })); }, []);
+  };
+  var portById = function (id) { return allPorts().filter(function (x) { return x.p.id === id; })[0]; };
+  var machineById = function (id) { for (var i=0;i<MACHINES.length;i++) if (MACHINES[i].id===id) return MACHINES[i]; return null; };
+
+  function watts(m) {
+    var j = Math.sin(Date.now()/700 + m.id.charCodeAt(0));
+    if (!running[m.id]) return m.standby ? Math.max(0, Math.round(m.standby + j * 1.4)) : 0;
+    return Math.round(m.run + j * m.run * 0.035);
+  }
+  function level(m) { var w = watts(m); return w >= TRIP ? 'live' : (w >= 1 ? 'standby' : 'idle'); }
+  var fmtW = function (w) { return w >= 1000 ? (w/1000).toFixed(1) + ' kW' : Math.round(w) + ' W'; };
+  function esc(s) { return String(s).replace(/[&<>"]/g, function (c) {
+    return ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' })[c]; }); }
+  function setRunning(id, on) { running[id] = on; if (on) startedAt[id] = Date.now(); }
+
+  /** The manifold opens one outlet at a time. PRIMARY beats supplemental whatever
+   *  started more recently — never trade someone's only collection for a bonus. */
+  function manifoldHolder() {
+    var want = allPorts().filter(function (x) {
+      return x.p.sys === 'small' && x.p.enabled && running[x.m.id];
+    });
+    if (!want.length) return null;
+    want.sort(function (a, b) {
+      if (!!a.p.supplemental !== !!b.p.supplemental) return a.p.supplemental ? 1 : -1;
+      return (startedAt[b.m.id] || 0) - (startedAt[a.m.id] || 0);
+    });
+    return want[0];
+  }
+  function portLive(m, p) {
+    if (!p.sys || !p.enabled || !running[m.id] || level(m) !== 'live') return false;
+    if (p.sys === 'small') { var h = manifoldHolder(); return !!h && h.p.id === p.id; }
+    return true;
+  }
+  function portYielded(m, p) {
+    return !!(p.sys === 'small' && p.enabled && running[m.id] && !portLive(m, p));
+  }
+  function yieldedTo(p) {
+    var h = manifoldHolder();
+    return h && h.p.id !== p.id ? h.m.name : '';
+  }
+
+  /** Focus lights a machine if ANY of its ports is in the focused system — a
+   *  machine is never cut in half. An unassigned port keeps it lit everywhere:
+   *  unfinished work is the last thing that should vanish when you narrow down. */
+  function machineLit(m) {
+    if (layer === 'wiring' || focusSys === 'all') return true;
+    if (m.ports.some(function (p) { return !p.sys; })) return true;
+    return m.ports.some(function (p) { return p.sys === focusSys; });
+  }
+  var sysLit = function (sys) { return layer === 'wiring' || focusSys === 'all' || focusSys === sys; };
+  var sysLive = function (sys) {
+    return allPorts().some(function (x) { return x.p.sys === sys && portLive(x.m, x.p); });
+  };
+
+  // ── geometry ─────────────────────────────────────────────────────────────
+  /** Where a port's duct lands on its machine. */
+  function landing(m, p) {
+    // The side landing rides high on the body so its tab clears the name and the
+    // outlet chip below it.
+    return p.at === 'right' ? { x: m.x + BODY_W/2, y: TOOL_Y - 18 }
+                            : { x: m.x, y: TOOL_Y - BODY_H/2 };
+  }
+  /** The duct from a selector down to the port it feeds. Auxiliary runs come in
+   *  from the side and cross whatever is between — like the real hose. */
+  var SOURCE = { 'p-planer': [170, 246], 'p-jointer': [300, 246], 'p-cabinet': [430, 246],
+                 'p-drill': [775, 246], 'p-band': [905, 246], 'p-overarm': [645, 246] };
+  function ductD(m, p) {
+    var s = SOURCE[p.id];
+    if (!s) return '';
+    var l = landing(m, p);
+    return p.at === 'right'
+      ? 'M' + s[0] + ' ' + s[1] + ' V' + l.y + ' H' + l.x
+      : 'M' + s[0] + ' ' + s[1] + ' V' + l.y;
+  }
+
+  // ── build the canvas ─────────────────────────────────────────────────────
+  var ductsG = document.getElementById('ducts');
+  var machG  = document.getElementById('machines');
+  var docksEl = document.getElementById('docks');
+
+  function faceSVG(cls) {
+    return '<svg class="' + (cls || 'face') + '" viewBox="0 0 24 24" aria-hidden="true">' +
+      '<rect x="3.5" y="3.5" width="17" height="17" rx="5" fill="none" stroke="currentColor" stroke-width="1.6"/>' +
+      '<rect x="8.4" y="7.6" width="2.1" height="5.6" rx="1" fill="currentColor"/>' +
+      '<rect x="13.5" y="7.6" width="2.1" height="5.6" rx="1" fill="currentColor"/>' +
+      '<circle cx="12" cy="16.4" r="1.5" fill="currentColor"/></svg>';
+  }
+  var BOARD_ICO = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">' +
+    '<rect x="4" y="6" width="16" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.7"/>' +
+    '<path d="M8 18v2M12 18v2M16 18v2" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>' +
+    '<circle cx="12" cy="12" r="2.2" fill="currentColor"/></svg>';
+
+  MACHINES.forEach(function (m) {
+    // ducts, one per plumbed port
+    m.ports.forEach(function (p) {
+      if (!p.sys) return;
+      var d = document.createElementNS(SVGNS, 'path');
+      d.setAttribute('class', 'duct' + (p.supplemental ? ' aux' : ''));
+      d.setAttribute('d', ductD(m, p));
+      d.dataset.port = p.id;
+      ductsG.appendChild(d);
+    });
+
+    // the machine itself
+    var g = document.createElementNS(SVGNS, 'g');
+    g.setAttribute('class', 'machine');
+    g.dataset.machine = m.id;
+    var html = '<rect class="body" x="' + (m.x - BODY_W/2) + '" y="' + (TOOL_Y - BODY_H/2) + '" ' +
+               'width="' + BODY_W + '" height="' + BODY_H + '" rx="13" style="cursor:pointer"/>' +
+               '<text class="glabel" x="' + m.x + '" y="' + (TOOL_Y - 14) + '" style="pointer-events:none">' +
+               esc(m.name) + '</text>';
+    m.ports.forEach(function (p) {
+      var l = landing(m, p);
+      // Each tab straddles the edge its duct arrives at, so it reads as the join
+      // rather than as a label parked nearby.
+      var tx = p.at === 'right' ? l.x - 15 : l.x - 15;
+      var ty = l.y - 9;
+      html += '<g class="tab" data-port="' + p.id + '">' +
+                '<rect x="' + (tx - 4) + '" y="' + (ty - 4) + '" width="38" height="26" rx="5" fill="transparent" stroke="none"/>' +
+                '<rect x="' + tx + '" y="' + ty + '" width="30" height="18" rx="4"/>' +
+                '<text x="' + (tx + 15) + '" y="' + (ty + 12.5) + '">' + esc(p.tag) + '</text>' +
+              '</g>';
+    });
+    g.innerHTML = html;
+    machG.appendChild(g);
+
+    g.querySelector('.body').addEventListener('click', function () {
+      setRunning(m.id, !running[m.id]); paint();
+    });
+    g.addEventListener('pointerenter', function (e) {
+      if (e.pointerType === 'mouse') { revealMachine = m.id; paintDocks(); } });
+    g.addEventListener('pointerleave', function (e) {
+      if (e.pointerType === 'mouse' && revealMachine === m.id) { revealMachine = null; paintDocks(); } });
+
+    Array.prototype.forEach.call(g.querySelectorAll('.tab'), function (t) {
+      t.addEventListener('click', function (ev) {
+        ev.stopPropagation();
+        var p = m.ports.filter(function (q) { return q.id === t.dataset.port; })[0];
+        if (!p.sys) { note('That port is drawn but not plumbed yet — run a duct to it first.'); return; }
+        var others = m.ports.filter(function (q) { return q !== p && q.enabled && q.sys; });
+        if (p.enabled && !others.length) {
+          note('A machine needs at least one port in service — otherwise it runs the collector into a sealed system.', true);
+          return;
+        }
+        p.enabled = !p.enabled;
+        paint();
+      });
+    });
+
+    // one dock per MACHINE — the plug belongs to the machine, so there is
+    // nothing left to mirror
+    var b = document.createElement('button');
+    b.className = 'dock';
+    b.dataset.machine = m.id;
+    b.style.left = (m.x / 1040 * 100) + '%';
+    b.style.top  = ((TOOL_Y + 18) / 560 * 100) + '%';
+    docksEl.appendChild(b);
+  });
+
+  function note(msg, bad) {
+    var h = document.getElementById('switchHint');
+    h.textContent = msg;
+    h.style.color = bad ? 'var(--danger)' : '';
+    setTimeout(function () { h.style.color = ''; paintHint(); }, 2800);
+  }
+
+  // ── paint ────────────────────────────────────────────────────────────────
+  function paintDocks() {
+    Array.prototype.forEach.call(docksEl.children, function (el) {
+      var m = machineById(el.dataset.machine);
+      var lit = machineLit(m), lv = level(m);
+      var open = (revealMachine === m.id || lv === 'live') && lit && layer === 'ducts';
+      el.dataset.state = lv;
+      el.classList.toggle('dim', !lit);
+      el.style.display = layer === 'wiring' ? 'none' : '';
+      el.innerHTML = faceSVG() + '<span class="detail">' +
+        (lv === 'idle' ? '<span class="nm">' + esc(m.outlet) + '</span>'
+                       : '<span class="w">' + fmtW(watts(m)) + '</span>') + '</span>';
+      el.title = m.outlet + ' — ' + fmtW(watts(m));
+    });
+  }
+
+  function paint() {
+    SYSTEMS.forEach(function (s) {
+      var el = document.getElementById('plumb-' + s.id);
+      if (el) el.classList.toggle('dim', !sysLit(s.id));
+      var lv = sysLive(s.id);
+      var puck = document.getElementById(s.id + '-puck');
+      if (puck) puck.classList.toggle('live', lv);
+    });
+
+    var holder = manifoldHolder();
+    if (holder) document.getElementById('small-gate-puck').setAttribute('x', SOURCE[holder.p.id][0] - 15);
+    document.getElementById('small-gate-puck').classList.toggle('live', sysLive('small'));
+
+    Array.prototype.forEach.call(ductsG.children, function (d) {
+      var x = portById(d.dataset.port);
+      d.classList.toggle('live', portLive(x.m, x.p));
+      d.classList.toggle('off', !x.p.enabled);
+      d.classList.toggle('yield', portYielded(x.m, x.p));
+      d.classList.toggle('dim', !sysLit(x.p.sys));
+    });
+
+    Array.prototype.forEach.call(machG.children, function (g) {
+      var m = machineById(g.dataset.machine);
+      g.classList.toggle('dim', !machineLit(m));
+      Array.prototype.forEach.call(g.querySelectorAll('.tab'), function (t) {
+        var p = m.ports.filter(function (q) { return q.id === t.dataset.port; })[0];
+        t.classList.toggle('unassigned', !p.sys);
+        t.classList.toggle('off', !!p.sys && !p.enabled);
+        t.classList.toggle('yield', portYielded(m, p));
+        t.classList.toggle('live', portLive(m, p));
+      });
+    });
+
+    document.getElementById('wiring').classList.toggle('faded', layer === 'ducts');
+    paintDocks();
+    paintWifi();
+    paintHint();
+  }
+
+  function paintHint() {
+    var h = document.getElementById('switchHint');
+    if (h.style.color) return;
+    if (layer === 'wiring') {
+      h.textContent = 'Wiring shows every system — Node B drives a gate in each, so focus would hide the point.';
+      return;
+    }
+    var gave = allPorts().filter(function (x) { return portYielded(x.m, x.p); })[0];
+    if (gave) {
+      h.textContent = gave.m.name + ' gave up its ' + gave.p.tag + ' port to ' + yieldedTo(gave.p) +
+        ' — supplemental, so it yields. Its primary port is untouched.';
+      return;
+    }
+    if (sysLive('big') && sysLive('small')) {
+      h.textContent = 'Both collectors running — the second started 2 s behind the first.';
+      return;
+    }
+    h.textContent = focusSys === 'all'
+      ? 'Every system drawn. Pick one to work on it.'
+      : 'Focused. Machines with a port here stay lit — the saw is in both.';
+  }
+
+  // ── scope dropdown ───────────────────────────────────────────────────────
+  var sysName = function (id) {
+    if (id === 'all') return 'Whole shop';
+    var s = SYSTEMS.filter(function (x) { return x.id === id; })[0];
+    return s ? s.name : id;
+  };
+  var scopeBtn = document.getElementById('scopeBtn'), scopeMenu = null;
+  function closeScope() {
+    if (!scopeMenu) return;
+    scopeMenu.remove();
+    var bg = document.querySelector('.scope-bg'); if (bg) bg.remove();
+    scopeMenu = null; scopeBtn.setAttribute('aria-expanded', 'false');
+  }
+  var TICK = '<svg class="tick" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2"' +
+             ' stroke-linecap="round" stroke-linejoin="round"><path d="M3.4 8.4 L6.4 11.4 L12.6 5"/></svg>';
+
+  scopeBtn.addEventListener('click', function () {
+    if (scopeMenu) { closeScope(); return; }
+    var bg = document.createElement('div');
+    bg.className = 'scope-bg';
+    bg.addEventListener('pointerdown', closeScope);
+    var m = document.createElement('div');
+    m.className = 'scopemenu';
+    var html = '<button data-sys="all" class="' + (focusSys === 'all' ? 'on' : '') + '">' + TICK +
+               'Whole shop<span class="note">' + SYSTEMS.length + ' systems</span></button><div class="sep2"></div>';
+    SYSTEMS.forEach(function (s) {
+      html += '<button data-sys="' + s.id + '" class="' + (focusSys === s.id ? 'on' : '') + '">' +
+              TICK + esc(s.name) + '<span class="note">' + esc(s.note) + '</span></button>';
+    });
+    html += '<div class="sep2"></div><button class="ghost" data-add="1">＋ Add a system' +
+            '<span class="note">new collector</span></button>';
+    m.innerHTML = html;
+    m.addEventListener('click', function (e) {
+      var b = e.target.closest('button');
+      if (!b) return;
+      if (b.dataset.add) { closeScope(); addSystem(); return; }
+      focusSys = b.dataset.sys;
+      document.getElementById('scopeCur').textContent = sysName(focusSys);
+      closeScope(); paint();
+    });
+    document.querySelector('.switcher').appendChild(bg);
+    document.querySelector('.switcher').appendChild(m);
+    scopeMenu = m; scopeBtn.setAttribute('aria-expanded', 'true');
+  });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeScope(); });
+
+  // ── adding a system ──────────────────────────────────────────────────────
+  // A system IS its collector — that's what every graph invariant is rooted at.
+  var STAGE_W = 1040, STAGE_H = 560, addedRow = 0;
+  function addSystem() {
+    var n = SYSTEMS.length + 1, id = 'sys' + n;
+    SYSTEMS.push({ id: id, name: 'System ' + n, note: 'no plumbing yet' });
+    var x = 26 + addedRow * 518, y = STAGE_H + 24;
+    STAGE_H = y + 232; addedRow++;
+
+    var g = document.createElementNS(SVGNS, 'g');
+    g.setAttribute('class', 'plumbing');
+    g.id = 'plumb-' + id;
+    g.innerHTML =
+      '<rect class="sysbox" x="' + x + '" y="' + y + '" width="470" height="200" rx="16"/>' +
+      '<text class="syslabel" x="' + (x + 18) + '" y="' + (y + 24) + '">System ' + n + ' · new</text>' +
+      '<g transform="translate(' + (x + 74) + ',' + (y + 92) + ')">' +
+        '<circle class="body" r="30"/>' +
+        '<path class="stroke" stroke-width="3" stroke-linecap="round" d="M0 -19 a19 19 0 1 0 6 2 l-6 17"/>' +
+        '<circle class="puck" id="' + id + '-puck" r="3.5"/>' +
+        '<text class="glabel" y="50">Collector</text></g>' +
+      '<circle cx="' + (x + 74) + '" cy="' + (y + 148) + '" r="7" fill="none" stroke="var(--accent)"' +
+        ' stroke-width="1.6" stroke-dasharray="3 3"/>' +
+      '<text class="gsub" x="' + (x + 74) + '" y="' + (y + 176) + '">draw a run from here</text>';
+    document.querySelector('.stage > svg').insertBefore(g, ductsG);
+
+    document.querySelector('.stage > svg').setAttribute('viewBox', '0 0 ' + STAGE_W + ' ' + STAGE_H);
+    document.getElementById('stage').style.aspectRatio = STAGE_W + ' / ' + STAGE_H;
+    Array.prototype.forEach.call(docksEl.children, function (el) {
+      var m = machineById(el.dataset.machine);
+      el.style.left = (m.x / STAGE_W * 100) + '%';
+      el.style.top  = ((TOOL_Y + 18) / STAGE_H * 100) + '%';
+    });
+
+    focusSys = id;
+    document.getElementById('scopeCur').textContent = sysName(id);
+    paint();
+    note('System ' + n + ' starts with its collector. Draw a run from it — everything else follows.');
+  }
+
+  document.getElementById('layerSeg').addEventListener('click', function (e) {
+    var b = e.target.closest('button');
+    if (!b) return;
+    layer = b.dataset.layer;
+    Array.prototype.forEach.call(this.children, function (x) { x.classList.toggle('on', x === b); });
+    paint();
+  });
+
+  // ── WiFi devices ─────────────────────────────────────────────────────────
+  var DEVICES = [
+    { kind: 'brain', name: 'Shop Brain', sub: 'dustgate.local · primary' },
+    { kind: 'node',  name: 'Node A',     sub: 'secondary · 4 servo ports, 3 used' },
+    { kind: 'node',  name: 'Node B',     sub: 'secondary · manifold + collector' }
+  ];
+  var FREE_OUTLETS = [
+    { name: 'unknown outlet', sub: 'shellyplug-s-a4cf12 · 192.168.1.70' },
+    { name: 'Bench light',    sub: '192.168.1.73 · no machine matches this name' },
+    { name: 'Sander',         sub: 'looks like a machine you have not drawn yet', match: true },
+    { name: 'Air filter',     sub: 'shared with home-assistant.local — polled, not pushed', shared: true }
+  ];
+  function paintWifi() {
+    document.getElementById('wifiCount').textContent =
+      DEVICES.length + ' controllers · ' + (MACHINES.length + 2) + ' outlets in use · ' +
+      FREE_OUTLETS.length + ' free';
+    var html = '<span class="grp"><span class="cap">Controllers</span>';
+    DEVICES.forEach(function (d) {
+      html += '<button class="dev" data-kind="' + d.kind + '">' + BOARD_ICO + '<span>' + esc(d.name) +
+              '</span><span class="sub">' + esc(d.sub) + '</span></button>';
+    });
+    html += '</span><span class="sep"></span><span class="grp"><span class="cap">Outlets</span>';
+    FREE_OUTLETS.forEach(function (o) {
+      html += '<button class="dev" data-kind="' + (o.shared ? 'shared' : 'outlet') + '">' + faceSVG('ico') +
+              '<span>' + esc(o.name) + '</span><span class="sub">' + esc(o.sub) + '</span>' +
+              (o.match ? '<span class="dot"></span>' : '') + '</button>';
+    });
+    document.getElementById('strip').innerHTML = html + '</span>';
+  }
+
+  document.addEventListener('keydown', function (e) {
+    var n = '12345'.indexOf(e.key);
+    if (n < 0) return;
+    setRunning(MACHINES[n].id, !running[MACHINES[n].id]);
+    paint();
+  });
+
+  paint();
+  setInterval(paintDocks, 800);
+})();
+</script>
