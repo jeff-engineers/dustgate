@@ -15,7 +15,7 @@ import type { Topology } from '@topology';
 // Verified against validateTopology (shared/device-model/topology.js). Keep it
 // valid if you edit — an invalid seed would leave demo mode with no topology.
 export const DEMO_TOPOLOGY: Topology = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   name: "Jeff's Shop",
   // Two boards, both carrying gates — the primary drives the sliding gate's stepper
   // and the back-wall node drives both servos. A one-board example taught nothing
@@ -25,7 +25,13 @@ export const DEMO_TOPOLOGY: Topology = {
     // Host matches a node discoverNodes() reports, so /boards shows it already paired.
     { id: 'dustgate-node-1', role: 'secondary', name: 'Back wall', board: 'qtpy_c3', link: { transport: 'wifi-ws', host: 'dustgate-node-1' } },
   ],
-  elements: [
+  // ONE system. The demo shop has one blower, which is what nearly every shop
+  // has — a second system in the seed would teach the container at the cost of
+  // making the first thing anyone sees more complicated than their own shop.
+  systems: [{
+    id: 'system-1',
+    name: 'Dust collection',
+    elements: [
     { id: 'dc', type: 'collector', name: 'Cyclone' },
     {
       id: 'sel', type: 'selector', name: 'Main gate', controllerId: 'primary', kind: 'linear',
@@ -44,9 +50,9 @@ export const DEMO_TOPOLOGY: Topology = {
       ],
       linear: { calibration: { stepsPerMm: 51.47, measuredSpanSteps: 4387, homeIsMaxEndstop: false, manifoldModel: 'rockler-2.5' } },
     },
-    { id: 'saw',    type: 'tool', name: 'Table saw',    sensor: { outlet: { gen: 2, host: 'shellyplugus-tablesaw', ip: '192.168.87.30', thresholdW: 50 } } },
-    { id: 'band',   type: 'tool', name: 'Bandsaw',      sensor: { outlet: { gen: 2, host: 'shellyplugus-bandsaw', ip: '192.168.87.27', thresholdW: 40 } } },
-    { id: 'router', type: 'tool', name: 'Router table' },
+    { id: 'saw',    type: 'tool', name: 'Table saw',    machineId: 'saw' },
+    { id: 'band',   type: 'tool', name: 'Bandsaw',      machineId: 'band' },
+    { id: 'router', type: 'tool', name: 'Router table', machineId: 'router' },
     // Two-way manifold on the sliding gate's last outlet, isolating two tools on
     // the back wall with one servo.
     {
@@ -62,7 +68,7 @@ export const DEMO_TOPOLOGY: Topology = {
       ],
       servo: { channel: 0, detented: true, referenceAngle: 90 },
     },
-    { id: 'sander', type: 'tool', name: 'Drum sander' },
+    { id: 'sander', type: 'tool', name: 'Drum sander', machineId: 'sander' },
     // Ball valve on its OWN trunk straight off the cyclone — one in, one out.
     // Deliberately not in series behind another gate: a valve that only repeats
     // what an upstream gate already does gets flagged (redundant), and the example
@@ -76,10 +82,10 @@ export const DEMO_TOPOLOGY: Topology = {
       branches: [{ id: 'v1', opensState: 'open', role: 'tool' }],
       servo: { channel: 1, detented: true, referenceAngle: 90 },
     },
-    { id: 'planer', type: 'tool', name: 'Planer' },
-    { id: 'jointer', type: 'tool', name: 'Jointer' },
+    { id: 'planer', type: 'tool', name: 'Planer', machineId: 'planer' },
+    { id: 'jointer', type: 'tool', name: 'Jointer', machineId: 'jointer' },
   ],
-  ducts: [
+    ducts: [
     { child: 'sel',    parent: 'dc' },
     { child: 'saw',    parent: 'sel', parentBranch: 'b1' },
     { child: 'band',   parent: 'sel', parentBranch: 'b2' },
@@ -89,7 +95,21 @@ export const DEMO_TOPOLOGY: Topology = {
     { child: 'planer', parent: 'man', parentBranch: 'mR' },
     { child: 'bv',     parent: 'dc' },
     { child: 'jointer', parent: 'bv', parentBranch: 'v1' },
+    ],
+  }],
+  // The things you switch on. Each owns its display name and its plug: the table
+  // saw and bandsaw sense their own draw, the rest are switched by hand. One port
+  // apiece here — a multi-port machine is a thing the canvas can build, not
+  // something to bury in the first shop anyone sees.
+  machines: [
+    { id: 'saw',     name: 'Table saw', sensor: { outlet: { gen: 2, host: 'shellyplugus-tablesaw', ip: '192.168.87.30', thresholdW: 50 } } },
+    { id: 'band',    name: 'Bandsaw',   sensor: { outlet: { gen: 2, host: 'shellyplugus-bandsaw',  ip: '192.168.87.27', thresholdW: 40 } } },
+    { id: 'router',  name: 'Router table' },
+    { id: 'sander',  name: 'Drum sander' },
+    { id: 'planer',  name: 'Planer' },
+    { id: 'jointer', name: 'Jointer' },
   ],
+  devices: [],
   ui: {
     layout: {
       dc: { col: 0, row: 0 }, sel: { col: 0, row: 1 },

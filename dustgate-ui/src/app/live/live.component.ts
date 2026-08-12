@@ -2,8 +2,10 @@ import { Component, OnInit, OnDestroy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { RouterLink } from '@angular/router';
 import { ApiService, Topology, TopologyStatus } from '../services/api.service';
-import { validateTopology, airflowIssues } from '@topology';
+import { airflowIssues } from '@topology';
+import { validateShop } from '@shop';
 import { configurableSelectorsOf, isCalibrated } from '../gates/selector-types';
+import { type ShopDoc, machinesOf, portsOf, systemViews, toShop } from '../services/shop-doc';
 
 // One tool row's static identity (from the topology) merged with its live state
 // (from /api/status). `collecting` is the routing winner — the single tool
@@ -258,8 +260,8 @@ export class LiveViewComponent implements OnInit, OnDestroy {
   async ngOnInit(): Promise<void> {
     try {
       await this.api.whenReady();          // else the first fetch 401s and reads as "no shop"
-      const topo = await this.api.getTopology();
-      this.parseTopology(topo);
+      const topo = toShop(await this.api.getTopology());
+      if (topo) this.parseTopology(topo as unknown as Topology);
     } catch {
       this.tools = []; // no topology → empty state
       return;
@@ -346,10 +348,13 @@ export class LiveViewComponent implements OnInit, OnDestroy {
     let reason = '';
     this.fixLink = '/build';
     try {
-      const v = validateTopology(topo);
+      const v = validateShop(topo);
       if (!v.ok) reason = v.errors[0]?.message ?? 'the layout is incomplete.';
       else {
-        const leaks = airflowIssues(topo);
+        // Per system — a leak is a statement about one blower's ducts, and
+        // airflowIssues handed a whole shop would find no elements at the root
+        // and report all-clear. See systemViews().
+        const leaks = systemViews(topo as unknown as ShopDoc).flatMap(view => airflowIssues(view));
         const unset = configurableSelectorsOf(topo).filter(s => !isCalibrated(s));
         const open = leaks.filter(l => l.kind === 'always-open');
         const shared = leaks.filter(l => l.kind === 'co-open');
@@ -376,19 +381,29 @@ export class LiveViewComponent implements OnInit, OnDestroy {
 
   private parseTopology(topo: Topology): void {
     this.checkReady(topo);
-    const doc = topo as { name?: string; elements?: Array<Record<string, unknown>> };
+    const doc = topo as unknown as ShopDoc;
     this.shopName = doc.name ?? 'The Shop';
-    const els = doc.elements ?? [];
-    this.tools = els
-      .filter(e => e['type'] === 'tool')
-      .map(e => ({
-        id: e['id'] as string,
-        name: (e['name'] as string) || (e['id'] as string),
-        auto: !!(e['sensor'] as Record<string, unknown> | undefined)?.['outlet'],
-        on: false,
-        collecting: false,
-      }));
-    const collector = els.find(e => e['type'] === 'collector');
-    this.collectorName = (collector?.['name'] as string) || 'Dust collector';
+
+    // The list is of MACHINES, not ports. This view answers "what is running",
+    // and what runs is a machine — a table saw with a cabinet port and an overarm
+    // pickup is one row with one switch, not two. The status blob keys its `tools`
+    // map by machine id for the same reason, so these ids line up with it.
+    this.tools = machinesOf(doc).map(m => ({
+      id: m.id,
+      name: m.name || m.id,
+      auto: !!m.sensor?.outlet,
+      on: false,
+      collecting: false,
+    }));
+
+    // With one system this is the blower's name, as it always was. With several
+    // there is no single answer, so say so rather than picking one arbitrarily and
+    // showing the wrong name half the time.
+    const collectors = systemViews(doc)
+      .flatMap(view => ((view as { elements?: Array<Record<string, unknown>> }).elements ?? []))
+      .filter(e => e['type'] === 'collector');
+    this.collectorName = collectors.length === 1
+      ? ((collectors[0]['name'] as string) || 'Dust collector')
+      : `${collectors.length} dust collectors`;
   }
 }

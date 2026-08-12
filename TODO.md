@@ -350,10 +350,22 @@ breaks all three at once.
   per-system blower behaviour is covered in `test_nodebus.cpp` (63). All four
   boards build. **No hardware has run any of it.**
 
-  **The UI still speaks schemaVersion 1**, as do the mock and the demo service.
-  A v1 document is read as a shop with one implicit system whose machines are its
-  tool elements, so nothing regresses — the 23 v1 controller conformance vectors
-  pass unchanged through the new brain. Next in the stated order: the canvas.
+- ~~**The UI speaks shop**~~ **DONE 2026-08-12** — new
+  `dustgate-ui/src/app/services/shop-doc.ts` is the typed editing seam; documents
+  are migrated on read at every entry point (canvas, `/tools`, Live, the entry
+  redirect) and never on the device. Two seams, deliberately: `elementsOf()` /
+  `ductsOf()` FLATTEN across systems for shop-wide questions, while the canvas
+  works through the active system because it draws one duct tree at a time.
+  A tool's plug moved to its machine, so the plug sheet is now handed the machine
+  itself and needed no changes. `topology-device.js` is per-system like its C++
+  twin; the mock validates both shapes and serves back the RAW document it was
+  PUT (the firmware's store/runtime split, for the same reason). The demo seed is
+  a real v2 shop.
+
+  Verified in the browser on the demo shop: Live lists machines and routes a tool
+  end-to-end, the canvas draws and saves through `validateShop`, adding a tool
+  creates its machine, deleting the last port takes the machine with it, and the
+  per-system leak check still fires on an ungated tool.
 - **Multi-port UI** — "add another port to this machine" on the canvas, with
   size/use suggested in the port-name field (`Cabinet · 4"`). No `diameter`
   field; sizing stays the user's business (RFC §6.5).

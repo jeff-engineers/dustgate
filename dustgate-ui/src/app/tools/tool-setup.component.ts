@@ -3,6 +3,8 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
 import { ApiService, DiscoveredOutlet, Topology } from '../services/api.service';
+import { elementsOf, ductsOf } from '../gates/selector-types';
+import { type ShopDoc, machineOfPort, outletOf, toShop } from '../services/shop-doc';
 
 // ── Tool-tagging pass ────────────────────────────────────────────────────────
 // After the plumbing is drawn (build canvas), walk the tool list once and tag
@@ -161,7 +163,8 @@ export class ToolSetupComponent implements OnInit {
   async ngOnInit(): Promise<void> {
     try {
       await this.api.whenReady();          // else the first fetch 401s and reads as "no tools"
-      this.topo = JSON.parse(JSON.stringify(await this.api.getTopology())) as Topology;
+      // Migrated on read, like every other entry point — see shop-doc.ts.
+      this.topo = toShop(JSON.parse(JSON.stringify(await this.api.getTopology())) as Topology) as unknown as Topology;
     } catch { return; }
     const els = this.elems();
     this.tools = els.filter(e => e['type'] === 'tool').map(e => this.toCfg(e));
@@ -216,13 +219,19 @@ export class ToolSetupComponent implements OnInit {
       for (const c of this.tools) {
         const el = this.elems().find(e => e['id'] === c.id);
         if (!el) continue;
-        el['name'] = c.name;
+        // The name and the plug both belong to the MACHINE now: this screen is
+        // "which plug is this tool on", and a tool is a machine even when it has
+        // one port. Writing them to the port would leave the routing brain — which
+        // only ever reads machines — sensing nothing.
+        const m = machineOfPort(this.topo as unknown as ShopDoc, el);
+        if (!m) continue;
+        m.name = c.name;
         if (c.hasPlug && c.ip) {
           const outlet: RawEl = { gen: c.gen || 2, ip: c.ip, thresholdW: c.thresholdW || DEFAULT_THRESHOLD };
           if (c.hostname) outlet['host'] = c.hostname;
-          el['sensor'] = { outlet };
+          m.sensor = { outlet };
         } else {
-          delete el['sensor'];
+          delete m.sensor;
         }
       }
       await this.api.putTopology(this.topo);
@@ -233,14 +242,17 @@ export class ToolSetupComponent implements OnInit {
   }
 
   // ── helpers ─────────────────────────────────────────────────────────────────
-  private elems(): RawEl[] { return ((this.topo as { elements?: RawEl[] } | null)?.elements) ?? []; }
-  private ducts(): RawEl[] { return ((this.topo as { ducts?: RawEl[] } | null)?.ducts) ?? []; }
+  // Flattened across systems: this screen lists every tool in the shop, which is
+  // a shop-wide question — it has no canvas and never draws one duct tree.
+  private elems(): RawEl[] { return this.topo ? elementsOf(this.topo) as unknown as RawEl[] : []; }
+  private ducts(): RawEl[] { return this.topo ? ductsOf(this.topo) as unknown as RawEl[] : []; }
 
   private toCfg(e: RawEl): ToolCfg {
-    const outlet = (e['sensor'] as RawEl | undefined)?.['outlet'] as RawEl | undefined;
+    const outlet = outletOf(this.topo as unknown as ShopDoc, e) ?? undefined;
+    const machine = machineOfPort(this.topo as unknown as ShopDoc, e);
     return {
       id: e['id'] as string,
-      name: (e['name'] as string) || (e['id'] as string),
+      name: (machine?.name as string) || (e['name'] as string) || (e['id'] as string),
       gateLabel: this.gateLabel(e['id'] as string),
       hasPlug: true,                     // default Yes; prefilled if already set
       ip: (outlet?.['ip'] as string) ?? '',

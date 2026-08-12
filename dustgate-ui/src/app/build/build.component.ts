@@ -4,13 +4,19 @@ import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router as NgRouter, RouterLink } from '@angular/router';
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
 import { ApiService, Topology, TopologyStatus } from '../services/api.service';
-import { validateTopology, airflowIssues, redundantSelectors, type AirflowIssue } from '@topology';
+import { airflowIssues, redundantSelectors, type AirflowIssue } from '@topology';
+import { validateShop, SHOP_SCHEMA_VERSION } from '@shop';
 import { SelectorConfigComponent } from '../gates/selector-config.component';
 import { ElementOutletConfigComponent } from '../tools/element-outlet-config.component';
 import {
-  AnyElement, ConfigurableSelector,
+  AnyElement, ConfigurableSelector, elementsOf,
   isCalibrated, isLinearSelector, isServoSelector,
 } from '../gates/selector-types';
+import {
+  type ShopDoc, type ShopSystem,
+  addMachineWithPort, machineOfPort, machinesOf, outletOf,
+  removePort, systemById, systemViews, toShop,
+} from '../services/shop-doc';
 import {
   type Glyph, type Pt, type SceneNode,
   CELL, GATE_PAD, PAD, TOOL_HALF, UNIT_H,
@@ -786,9 +792,15 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     // off it. A shop with none is unusable (empty canvas), so seed a blank one on
     // a fresh system. Left un-dirty: it's the default starting point, not an edit,
     // so Save stays disabled until the user actually adds a gate.
-    this.topo = loaded && this.elems(loaded).some(e => e['type'] === 'collector')
-      ? loaded
+    // Migrate on read, once, at the boundary. The device still serves whichever
+    // shape it was last given (its own reader handles both), so this is the only
+    // place a v1 layout becomes a shop — a lazier conversion would write back a
+    // half-migrated document the first time someone hit Save.
+    const shop = toShop(loaded);
+    this.topo = shop && elementsOf(shop as unknown as Topology).some(e => e.type === 'collector')
+      ? (shop as unknown as Topology)
       : this.blankTopology();
+    this.activeSystemId = (this.topo as unknown as ShopDoc).systems?.[0]?.id ?? null;
     this.buildGraph(this.topo);
     const saved = this.savedLayout(this.topo);
     if (saved) for (const [id, c] of Object.entries(saved)) this.cells.set(id, c);
@@ -1255,14 +1267,13 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     return this.nameBaseY(n) - (n.redundant ? 13 : 0);
   }
   private nameBaseY(n: NodeVM): number { return n.glyph === 'tool' ? 4 : (n.isUnit ? -UNIT_H / 2 - 9 : -34); }
-  toolAuto(id: string): boolean { return !!(this.elem(id)?.['sensor'] as RawEl | undefined)?.['outlet']; }
+  toolAuto(id: string): boolean { return !!outletOf(this.topo as unknown as ShopDoc, this.elem(id)); }
   /** Does this piece have a plug paired — sensed for a tool, switched for the
    *  collector? Drives the one button's label for both. */
   /** Plug paired? Sensed for a tool, switched for the collector — one question,
    *  which is why the badge can be one badge. */
   private hasPlugEl(el: RawEl): boolean {
-    const branch = (el['type'] === 'collector' ? el['control'] : el['sensor']) as RawEl | undefined;
-    return !!branch?.['outlet'];
+    return !!outletOf(this.topo as unknown as ShopDoc, el);
   }
   /** A junction with no children and not capped = an unpopulated open duct end. */
   isOpenEnd(id: string): boolean { const e = this.elem(id); return e?.['type'] === 'junction' && !e['capped'] && this.childrenOf(id).length === 0; }
@@ -1390,7 +1401,17 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     // A tool's plug is a sensor (we watch its draw); the collector's is a switch
     // (we command it). Same picker, different field — see the sheet's header.
     this.outletMode = el['type'] === 'collector' ? 'switch' : 'sensor';
-    this.outletTool = JSON.parse(JSON.stringify(el)) as RawEl;
+    // The sheet edits "the thing that owns the plug", and under a shop that is the
+    // MACHINE for a tool — one plug behind however many ports (RFC §6.3) — and
+    // still the element for a collector, which belongs to one system and has no
+    // machine to lift it onto. Handing it the machine directly means the sheet
+    // itself needed no changes: a machine already has the `name` and `sensor` it
+    // reads.
+    const target = el['type'] === 'collector'
+      ? el
+      : (machineOfPort(this.topo as unknown as ShopDoc, el) as unknown as RawEl | null);
+    if (!target) return;
+    this.outletTool = JSON.parse(JSON.stringify(target)) as RawEl;
     // Computed once, on open, rather than from the template: a getter would hand
     // the child freshly-allocated arrays on every change-detection pass.
     const ex = this.outletExcludes(id);
@@ -1414,9 +1435,16 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
         if (dc) { ips.push(dc); reason[dc] = 'reserved — dust collector'; }
         continue;
       }
-      if (el['type'] !== 'tool' || el['id'] === me) continue;
-      const ip = ((el['sensor'] as RawEl | undefined)?.['outlet'] as RawEl | undefined)?.['ip'] as string | undefined;
-      if (ip) { ips.push(ip); reason[ip] = `already paired with ${(el['name'] as string) || 'another tool'}`; }
+    }
+    // Tool plugs live on MACHINES now, and the exclusion is per machine too: a
+    // machine's ports share one plug by design, so two ports of the same saw are
+    // not a clash — two different machines are.
+    const doc = this.topo as unknown as ShopDoc;
+    const myMachine = machineOfPort(doc, this.elem(me))?.id ?? me;
+    for (const m of machinesOf(doc)) {
+      if (m.id === myMachine) continue;
+      const ip = (m.sensor?.outlet as RawEl | undefined)?.['ip'] as string | undefined;
+      if (ip) { ips.push(ip); reason[ip] = `already paired with ${m.name || 'another tool'}`; }
     }
     return { ips, reason };
   }
@@ -1426,11 +1454,21 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
    *  history entry and save. */
   onOutletConfigured(updated: RawEl): void {
     if (!this.topo) return;
-    const els = this.elems(this.topo);
-    const i = els.findIndex(e => e['id'] === updated['id']);
-    if (i < 0) return;
-    this.pushHistory(updated['id'] as string);
-    els[i] = updated as unknown as (typeof els)[number];
+    const doc = this.topo as unknown as ShopDoc;
+    const id = updated['id'] as string;
+    // Splices back wherever it came from — machines[] for a tool's sensor,
+    // elements[] for the collector's switch. See configureOutlet.
+    const mi = doc.machines.findIndex(m => m.id === id);
+    if (mi >= 0) {
+      this.pushHistory(id);
+      doc.machines[mi] = updated as unknown as (typeof doc.machines)[number];
+    } else {
+      const els = this.elems(this.topo);
+      const i = els.findIndex(e => e['id'] === id);
+      if (i < 0) return;
+      this.pushHistory(id);
+      els[i] = updated as unknown as (typeof els)[number];
+    }
     this.outletTool = null;
     this.dirty = true;
     this.buildGraph(this.topo); this.syncNodes(); this.refreshHandles();
@@ -2139,8 +2177,8 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       d['parent'] = sel['id']; d['parentBranch'] = branches[i].id;
       branches[i].role = this.elem(d['child'] as string)?.['type'] === 'tool' ? 'tool' : 'feed';
     });
-    (this.topo as { elements: RawEl[] }).elements = this.elems(this.topo).filter(e => e !== j);
-    (this.topo as { ducts: RawEl[] }).ducts = this.ductsRaw().filter(d => d !== inDuct);
+    this.setElems(this.elems(this.topo).filter(e => e !== j));
+    this.setDucts(this.ductsRaw().filter(d => d !== inDuct));
     this.cells.delete(jid);
     this.placeAt(sel['id'] as string, cell);
     this.afterMutation(sel['id'] as string);
@@ -2268,8 +2306,8 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   private addJunctionChild(junctionId: string, kind: SelKind | 'tool' | 'duct'): string | null {
     if (!this.topo) return null;
     if (kind === 'tool') {
-      const tool: RawEl = { id: this.newId('tool'), type: 'tool', name: 'New tool' };
-      this.elems(this.topo).push(tool);
+      const tool = this.newPort('New tool');
+      if (!tool) return null;
       this.ductsRaw().push({ child: tool['id'], parent: junctionId });
       return tool['id'] as string;
     }
@@ -2747,8 +2785,8 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       } else {
         delete outDuct['parentBranch'];
       }
-      (this.topo as { elements: RawEl[] }).elements = this.elems(this.topo).filter(e => e['id'] !== jid);
-      (this.topo as { ducts: RawEl[] }).ducts = this.ductsRaw().filter(d => d !== inDuct);
+      this.setElems(this.elems(this.topo).filter(e => e['id'] !== jid));
+      this.setDucts(this.ductsRaw().filter(d => d !== inDuct));
       this.cells.delete(jid);
     }
   }
@@ -2794,17 +2832,35 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     this.ductsRaw().push(duct);
     return sel['id'] as string;
   }
+  /** A new port, and the machine that owns it.
+   *
+   *  "Add a tool" has always meant one machine with one pickup, so that is what
+   *  this makes: a port and a machine sharing an id. Sharing it is deliberate —
+   *  anything already holding that id (`ui.layout`, a status blob, a bug report)
+   *  still resolves, which is the same choice migrateToShop makes (RFC §12).
+   *  A SECOND port on an existing machine is a different action and doesn't come
+   *  through here. */
+  private newPort(name: string): RawEl | null {
+    const s = this.sys();
+    if (!this.topo || !s) return null;
+    return addMachineWithPort(this.topo as unknown as ShopDoc, s, this.newId('tool'), name);
+  }
+
   private addTool(parentId: string): string | null {
     if (!this.topo) return null;
-    const tool: RawEl = { id: this.newId('tool'), type: 'tool', name: 'New tool' };
-    this.elems(this.topo).push(tool);
-    const duct: RawEl = { child: tool['id'], parent: parentId };
     const p = this.elem(parentId);
+    let branch: Branch | undefined;
     if (p && p['type'] === 'selector') {
-      const b = (p['branches'] as Branch[]).find(x => x.role === 'blocked');
-      if (!b) { this.elems(this.topo).pop(); return null; }
-      b.role = 'tool'; duct['parentBranch'] = b.id;
+      // Checked BEFORE the port is created: the old code pushed the element and
+      // then popped it on failure, which under a shop would also have to unwind
+      // the machine. Not creating it is simpler and can't leave a stray behind.
+      branch = (p['branches'] as Branch[]).find(x => x.role === 'blocked');
+      if (!branch) return null;
     }
+    const tool = this.newPort('New tool');
+    if (!tool) return null;
+    const duct: RawEl = { child: tool['id'], parent: parentId };
+    if (branch) { branch.role = 'tool'; duct['parentBranch'] = branch.id; }
     this.ductsRaw().push(duct);
     return tool['id'] as string;
   }
@@ -2977,12 +3033,17 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
         out['parentBranch'] = pBranch.id;
         pBranch.role = this.elem(out['child'] as string)?.['type'] === 'tool' ? 'tool' : 'feed';
       }
-      (this.topo as { ducts: RawEl[] }).ducts = this.ductsRaw().filter(d => d !== inDuct);
+      this.setDucts(this.ductsRaw().filter(d => d !== inDuct));
     } else {
       if (pBranch) pBranch.role = 'blocked';          // nothing below → the outlet frees up
-      (this.topo as { ducts: RawEl[] }).ducts = this.ductsRaw().filter(d => d['child'] !== id && d['parent'] !== id);
+      this.setDucts(this.ductsRaw().filter(d => d['child'] !== id && d['parent'] !== id));
     }
-    (this.topo as { elements: RawEl[] }).elements = this.elems(this.topo).filter(e => e['id'] !== id);
+    // A port goes through removePort so its machine goes with it when that was
+    // its last one — deleting the last port IS "remove this machine" (RFC §6.4),
+    // and a machine with no ports is one validateShop rejects: switched on,
+    // routing nowhere.
+    if (this.elem(id)?.['type'] === 'tool') removePort(this.topo as unknown as ShopDoc, id);
+    else this.setElems(this.elems(this.topo).filter(e => e['id'] !== id));
     this.cells.delete(id);
     // Removing a leg can leave the tee it hung off as a 1-child pass-through —
     // collapse it so the run heals and the branch point becomes addable again.
@@ -3013,7 +3074,12 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   /** Live always-open leaks (tools with no gate on their path to the collector). */
   private liveLeaks(): AirflowIssue[] {
     if (!this.topo) return [];
-    try { return airflowIssues(this.topo as Topology); } catch { return []; }
+    // Per system: a leak is "this tool can be selected without pulling air
+    // somewhere else too", which is a question about one blower's ducts. Handed
+    // the whole shop, airflowIssues would read no `elements` at the root and
+    // cheerfully report nothing wrong.
+    try { return systemViews(this.topo as unknown as ShopDoc).flatMap(v => airflowIssues(v)); }
+    catch { return []; }
   }
 
   /** Names of gates still missing their calibration, in canvas order. Gates only:
@@ -3126,7 +3192,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   async save(): Promise<void> {
     if (!this.topo || this.saving) return;
     const doc = this.docWithLayout();
-    const v = validateTopology(doc);
+    const v = validateShop(doc);
     this.saving = true; this.saveError = ''; this.saveNote = ''; this.wip = '';
     try {
       this.topo = doc as Topology;                     // keep the draft either way
@@ -3274,7 +3340,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       // Only a whole layout goes to the controller — it validates server-side and
       // would reject a draft anyway. An unfinished one stays here, dirty, with the
       // reason on the guide bar, and Save picks it up once you've sorted it out.
-      const v = validateTopology(this.docWithLayout());
+      const v = validateShop(this.docWithLayout());
       if (!v.ok) {
         this.dirty = true;
         this.wip = v.errors[0]?.message ?? 'incomplete layout';
@@ -3297,12 +3363,33 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
    *  shop makes sense. Anything past this loads as a draft. */
   private importBlocker(doc: unknown): string {
     if (!doc || typeof doc !== 'object' || Array.isArray(doc)) return 'it isn’t a layout object.';
-    const d = doc as { elements?: unknown; ducts?: unknown; controllers?: unknown };
-    if (d.elements !== undefined && !Array.isArray(d.elements)) return 'its element list is malformed.';
-    if (d.ducts !== undefined && !Array.isArray(d.ducts)) return 'its duct list is malformed.';
+    const d = doc as { elements?: unknown; ducts?: unknown; controllers?: unknown; systems?: unknown };
     if (d.controllers !== undefined && !Array.isArray(d.controllers)) return 'its controller list is malformed.';
 
-    const elements = (d.elements ?? []) as unknown[];
+    // Both shapes land here: a schemaVersion-2 shop keeps its elements and ducts
+    // inside `systems[]`, a v1 file at the root. Checked FLATTENED, because the
+    // questions this asks — are ids unique, do ducts point at something real —
+    // are shop-wide either way, and element ids are unique shop-wide by contract.
+    // (Which system a duct is in is validateShop's business, not this gate's.)
+    let elements: unknown[] = [];
+    let ductList: unknown[] = [];
+    if (d.systems !== undefined) {
+      if (!Array.isArray(d.systems)) return 'its system list is malformed.';
+      for (const raw of d.systems) {
+        if (!raw || typeof raw !== 'object') return 'one of its systems isn’t readable.';
+        const s = raw as { elements?: unknown; ducts?: unknown };
+        if (s.elements !== undefined && !Array.isArray(s.elements)) return 'its element list is malformed.';
+        if (s.ducts !== undefined && !Array.isArray(s.ducts)) return 'its duct list is malformed.';
+        elements = elements.concat((s.elements ?? []) as unknown[]);
+        ductList = ductList.concat((s.ducts ?? []) as unknown[]);
+      }
+    } else {
+      if (d.elements !== undefined && !Array.isArray(d.elements)) return 'its element list is malformed.';
+      if (d.ducts !== undefined && !Array.isArray(d.ducts)) return 'its duct list is malformed.';
+      elements = (d.elements ?? []) as unknown[];
+      ductList = (d.ducts ?? []) as unknown[];
+    }
+
     const ids = new Set<string>();
     for (const raw of elements) {
       if (!raw || typeof raw !== 'object') return 'one of its pieces isn’t readable.';
@@ -3315,7 +3402,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
 
     // A duct pointing at something that isn't there would draw from nowhere — that's
     // a damaged file rather than an unfinished one.
-    for (const raw of ((d.ducts ?? []) as unknown[])) {
+    for (const raw of ductList) {
       if (!raw || typeof raw !== 'object') return 'one of its ducts isn’t readable.';
       const duct = raw as { child?: unknown; parent?: unknown };
       if (typeof duct.child !== 'string' || typeof duct.parent !== 'string') return 'a duct is missing an end.';
@@ -3326,30 +3413,72 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   // ── graph helpers ─────────────────────────────────────────────────────────────
-  private elems(t: Topology): RawEl[] { return ((t as { elements?: RawEl[] }).elements) ?? []; }
+  //
+  // THE CANVAS EDITS ONE SYSTEM AT A TIME. Everything below resolves against
+  // `activeSystemId`, not the document root, because a system is exactly one duct
+  // tree and this tool draws a duct tree. Readers that want the whole shop —
+  // "every gate needing calibration", "is this id taken" — use elementsOf() /
+  // ductsOf() from gates/selector-types.ts, which flatten across systems.
+  //
+  // Keeping both seams honest is what makes the container cheap: the drawing code
+  // below never learned that a second system exists, because from in here there
+  // still is only one.
+  private activeSystemId: string | null = null;
 
-  /** A fresh shop: a primary controller, a collector, and one bare open run off it —
-   *  an immediate anchor to draw/tap from (duct-first: there's always a run end to
-   *  pull pipe from or drop the first fitting onto). */
+  /** The system being drawn. Never null once a document is loaded — a shop always
+   *  has at least one system, and systemById falls back to the first. */
+  private sys(t: Topology | null = this.topo): ShopSystem | null {
+    return systemById(t as unknown as ShopDoc | null, this.activeSystemId);
+  }
+  private elems(t: Topology): RawEl[] { return this.sys(t)?.elements ?? []; }
+  private ductsRaw(): RawEl[] { return this.sys()?.ducts ?? []; }
+  /** Replace the active system's arrays. The old code assigned `topo.elements`
+   *  directly; a shop keeps them one level down, so the write needs the same
+   *  indirection the reads have. */
+  private setElems(next: RawEl[]): void { const s = this.sys(); if (s) s.elements = next; }
+  private setDucts(next: RawEl[]): void { const s = this.sys(); if (s) s.ducts = next; }
+
+  /** A fresh shop: a primary controller, one system holding a collector, and one
+   *  bare open run off it — an immediate anchor to draw/tap from (duct-first:
+   *  there's always a run end to pull pipe from or drop the first fitting onto). */
   private blankTopology(): Topology {
     return {
-      schemaVersion: 1,
+      schemaVersion: SHOP_SCHEMA_VERSION,
       name: 'My Shop',
       controllers: [{ id: 'primary', role: 'primary', name: 'Shop Brain', board: 'devkitc' }],
-      elements: [
-        { id: 'dc', type: 'collector', name: 'Dust collector' },
-        { id: 'end0', type: 'junction', name: 'Open end' },
-      ],
-      ducts: [{ child: 'end0', parent: 'dc' }],
+      systems: [{
+        id: 'system-1',
+        name: 'Dust collection',
+        elements: [
+          { id: 'dc', type: 'collector', name: 'Dust collector' },
+          { id: 'end0', type: 'junction', name: 'Open end' },
+        ],
+        ducts: [{ child: 'end0', parent: 'dc' }],
+      }],
+      machines: [],
+      devices: [],
     } as unknown as Topology;
   }
-  private ductsRaw(): RawEl[] { return ((this.topo as { ducts?: RawEl[] } | null)?.ducts) ?? []; }
   private elem(id: string): RawEl | undefined { return this.topo ? this.elems(this.topo).find(e => e['id'] === id) : undefined; }
-  private newId(prefix: string): string { let id: string; do { id = `${prefix}${++this.counter}`; } while (this.elem(id)); return id; }
+  /** A fresh id, unique across the WHOLE shop — not just the system being drawn.
+   *  Element ids address hardware and appear in logs and in `ui.layout`, so
+   *  validateShop requires shop-wide uniqueness; checking only the active system
+   *  would mint a collision the moment a second system exists. Machine ids share
+   *  the namespace for the same reason. */
+  private newId(prefix: string): string {
+    const taken = new Set<string>();
+    if (this.topo) {
+      for (const e of elementsOf(this.topo)) taken.add(e.id);
+      for (const m of machinesOf(this.topo as unknown as ShopDoc)) taken.add(m.id);
+    }
+    let id: string;
+    do { id = `${prefix}${++this.counter}`; } while (taken.has(id));
+    return id;
+  }
 
   private buildGraph(t: Topology): void {
     this.parentOf.clear(); this.outletOf.clear();
-    const ducts = ((t as { ducts?: RawEl[] }).ducts) ?? [];
+    const ducts = this.sys(t)?.ducts ?? [];
     this.ducts = ducts.map(d => {
       const child = d['child'] as string, parent = d['parent'] as string;
       this.parentOf.set(child, parent);
@@ -3378,7 +3507,12 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     // Derived, never stored: a gate that stops being redundant stops being flagged
     // on the very next mutation, with nothing to keep in sync.
     let redundant = new Set<string>();
-    try { redundant = new Set(redundantSelectors(this.topo as Topology).map(r => r.id)); } catch { /* mid-edit doc */ }
+    // Per system, for the same reason as liveLeaks() — a selector is redundant
+    // relative to the run it sits on, and runs don't cross systems.
+    try {
+      redundant = new Set(systemViews(this.topo as unknown as ShopDoc)
+        .flatMap(v => redundantSelectors(v)).map(r => r.id));
+    } catch { /* mid-edit doc */ }
     this.nodes = this.elems(this.topo).map(e => {
       const id = e['id'] as string, c = this.cells.get(id) ?? { col: 0, row: 0 };
       const branchCount = (e['branches'] as unknown[] | undefined)?.length ?? 0;

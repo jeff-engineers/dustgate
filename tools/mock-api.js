@@ -21,6 +21,7 @@ const url    = require('url');
 const { WebSocketServer } = require('ws');
 const M = require('../shared/device-model/device-model.js');
 const TOPO = require('../shared/device-model/topology.js');           // topology validator
+const SHOP = require('../shared/device-model/shop.js');               // shop container + validator
 const TD   = require('../shared/device-model/topology-device.js');    // topology device sim
 
 const PORT    = 3000;
@@ -32,6 +33,15 @@ const d = M.createDevice();
 
 // ── topology-native device (additive; null until a topology is PUT) ───────
 let td = null;
+// The document EXACTLY as it was PUT, served back verbatim by GET.
+//
+// The device sim normalises a v1 topology into a shop on the way in (asShop), so
+// td.topology is no longer necessarily what the caller sent. The firmware has the
+// same split — TopologyStore keeps the raw bytes it was handed, TopologyRuntime
+// parses them — and it matters for the same reason: a GET that silently returned
+// a migrated document would make an older board look like it had rewritten a
+// layout nobody asked it to touch.
+let rawTopology = null;
 
 // Last angle commanded to each servo channel by the setup jog, keyed
 // "<controllerId>:<channel>". Keyed by board because every board numbers its
@@ -255,14 +265,17 @@ function handler(req, res) {
   // it wouldn't implement /sim/tool — the demo/mock use it to drive routing).
   if (pathname === '/api/topology' && req.method === 'PUT') {
     return body(req, data => {
-      const v = TOPO.validateTopology(data);
+      // Accepts both shapes, like the firmware: a shop is validated as a shop, a
+      // schemaVersion-1 topology as a topology.
+      const v = SHOP.isShop(data) ? SHOP.validateShop(data) : TOPO.validateTopology(data);
       if (!v.ok) return json(res, { error: 'invalid topology', errors: v.errors }, 400);
       td = TD.createTopologyDevice(data);
+      rawTopology = data;
       json(res, { ok: true });
     });
   }
   if (pathname === '/api/topology' && req.method === 'GET') {
-    return td ? json(res, td.topology) : json(res, { error: 'no topology configured' }, 404);
+    return td ? json(res, rawTopology) : json(res, { error: 'no topology configured' }, 404);
   }
   if (pathname === '/api/status' && req.method === 'GET') {
     return td ? json(res, TD.statusView(td)) : json(res, { error: 'no topology configured' }, 404);
@@ -341,7 +354,9 @@ function handler(req, res) {
       if (typeof data.on !== 'boolean') return json(res, { error: "missing 'on'" }, 400);
       // An unknown id would set a wattage nothing reads and route nothing — a
       // switch that reports success and does nothing. Refuse it instead.
-      const known = (td.topology.elements || []).some(e => e.type === 'tool' && e.id === data.toolId);
+      // Checked against MACHINES: `toolId` names the thing you switch on, which
+      // is a machine even when it has one port.
+      const known = SHOP.machinesOf(td.topology).some(m => m.id === data.toolId);
       if (!known) return json(res, { error: `no tool '${data.toolId}'` }, 404);
       TD.setToolPower(td, data.toolId, data.on ? 100000 : 0);
       json(res, { ok: true });

@@ -146,16 +146,35 @@ export interface AnyElement {
 
 // ── Reading a topology without asserting the whole graph ─────────────────────
 
-export function elementsOf(t: Topology): AnyElement[] {
-  return ((t as { elements?: unknown }).elements as AnyElement[]) ?? [];
+// A schemaVersion-2 shop keeps elements and ducts inside `systems[]`; a v1
+// topology keeps them at the root. These readers FLATTEN across systems, because
+// every one of their callers is asking a shop-wide question — "every gate that
+// needs calibrating", "every tool to list", "is this id taken". Element ids are
+// unique shop-wide (validateShop enforces it) precisely so that flattening is
+// unambiguous.
+//
+// Code that needs to know WHICH system something is in — the canvas, which can
+// only draw one duct tree at a time — goes through the shop helpers instead.
+// Nothing here should grow a systemId parameter; that is the signal to use the
+// other seam.
+function systemsOfDoc(t: Topology): { elements?: unknown; ducts?: unknown }[] {
+  const systems = (t as { systems?: unknown }).systems;
+  return Array.isArray(systems) ? systems as { elements?: unknown; ducts?: unknown }[] : [t];
 }
 
+export function elementsOf(t: Topology): AnyElement[] {
+  if (!t) return [];
+  return systemsOfDoc(t).flatMap(s => (s.elements as AnyElement[]) ?? []);
+}
+
+/** Controllers are shop-level in both shapes — a board isn't owned by a system. */
 export function controllersOf(t: Topology): Controller[] {
   return ((t as { controllers?: unknown }).controllers as Controller[]) ?? [];
 }
 
 export function ductsOf(t: Topology): Duct[] {
-  return ((t as { ducts?: unknown }).ducts as Duct[]) ?? [];
+  if (!t) return [];
+  return systemsOfDoc(t).flatMap(s => (s.ducts as Duct[]) ?? []);
 }
 
 export function isServoSelector(e: AnyElement | null | undefined): e is AnyElement & ServoSelector {

@@ -13,6 +13,7 @@ import {
 import { HardwareProfileService } from './hardware-profile.service';
 import * as model from '@device-model';
 import { validateTopology, type Topology } from '@topology';
+import { isShop, validateShop } from '@shop';
 import { createTopologyDevice, setToolPower, statusView as topoStatus, type TopologyDevice, type TopologyStatus } from '@topology-device';
 import { DEMO_TOPOLOGY } from './demo-topology';
 
@@ -86,7 +87,8 @@ export class DemoApiService extends ApiService {
   }
 
   override async putTopology(topology: Topology): Promise<{ ok: boolean }> {
-    const v = validateTopology(topology);
+    // Both shapes, like the mock and the firmware: a shop validates as a shop.
+    const v = isShop(topology) ? validateShop(topology) : validateTopology(topology);
     if (!v.ok) throw new Error('invalid topology: ' + JSON.stringify(v.errors));
     this.td = createTopologyDevice(topology);
     return { ok: true };
