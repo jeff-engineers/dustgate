@@ -323,12 +323,23 @@ Nothing below is implemented. Ordering matters: the shared model first, then
 firmware, then canvas — the contract discipline means a half-migrated model
 breaks all three at once.
 
-- **`systems[]` container** — move `elements`/`ducts` per-system, move the
-  "exactly one collector" rule ([`topology.js:276`](shared/device-model/topology.js))
-  inside it, add `validateShop` / `routeShop` / `planShopTransition` above the
-  existing per-system functions (RFC §4).
-- **`machines[]`** — a `tool` element becomes a *port*; the smart outlet, trip
-  point and display name move off the element onto the machine (RFC §6.3–6.4).
+- ~~**`systems[]` container**~~ **DONE 2026-08-12, model layer only** —
+  `shared/device-model/shop.js` + `shop.d.ts` + `shop.test.js` (71 tests).
+  `validateShop` / `routeShop` / `planShopTransition` sit above the per-system
+  functions, which are untouched: `systemView()` reshapes a system into a plain
+  topology (controllers spliced back in) so `validateTopology` and the whole of
+  `routing.js` / `sequencer.js` run per system exactly as written — the RFC §4.2
+  claim, now under test. Also `migrateToShop` / `isShop` / `asShop`, with a test
+  asserting a migrated v1 doc routes identically.
+- ~~**`machines[]`**~~ **DONE 2026-08-12, model layer only** — ports carry
+  `machineId`; the plug, trip point and name live on the machine. `supplemental`
+  and `enabled` are implemented, including the routed/partial/stripped verdict
+  (RFC §10.3) and the all-ports-disabled error (RFC §6.6).
+
+  **NOT wired up anywhere yet.** Firmware, mock, demo service and the canvas all
+  still speak schemaVersion 1, and `/api/topology` neither accepts nor emits a
+  shop. Next in the stated order: firmware (`TopologyStore` / `TopologyRouter`
+  per system, `syncTopologyOutlets` walking `machines[]`), then the canvas.
 - **Multi-port UI** — "add another port to this machine" on the canvas, with
   size/use suggested in the port-name field (`Cabinet · 4"`). No `diameter`
   field; sizing stays the user's business (RFC §6.5).
