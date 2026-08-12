@@ -41,11 +41,11 @@
 #include <ESPAsyncWebServer.h>
 #include <ArduinoJson.h>
 #include <ESPmDNS.h>
-#include <esp_task_wdt.h>
+#include "../utils/Watchdog.h"
 
 #include "../motor/ServoActuator.h"
 #include "../control/NodeLink.h"
-#include "NodeStatusLed.h"
+#include "../utils/StatusLed.h"
 
 #if !HAS_SERVO
   #error "dustgate_node needs a servo bank — build with -DENABLE_SERVO and a board that defines SERVO_PWM_PIN_1"
@@ -205,9 +205,9 @@ void setup() {
     // Before WiFi, so the pixel is already saying something during the blocking
     // connect below — on a board with no serial attached that is the only sign
     // it got past reset at all.
-    nodeled::begin();
-    nodeled::set(nodeled::BOOTING);
-    nodeled::update();
+    statusled::begin();
+    statusled::set(statusled::BOOTING);
+    statusled::update();
 
     Serial.println(F("=== DustGate node (secondary) ==="));
     Serial.print(F("Board: ")); Serial.println(BOARD_NAME);
@@ -218,8 +218,8 @@ void setup() {
     // would sit frozen on BOOTING for as long as the node waits to be told which
     // WiFi to join. That is the one state where a human definitely needs to act.
     WiFiProvisioner::setPortalTick([]() {
-        nodeled::set(nodeled::PORTAL);
-        nodeled::update();
+        statusled::set(statusled::PORTAL);
+        statusled::update();
     });
     WiFiProvisioner::begin();
     WiFiProvisioner::setPortalTick(nullptr);
@@ -245,12 +245,11 @@ void setup() {
 
     // Watchdog armed last, after the blocking WiFi connect — same discipline as
     // the primary sketch.
-    esp_task_wdt_init(WDT_TIMEOUT_SEC, /*panic=*/true);
-    esp_task_wdt_add(NULL);
+    watchdog::begin();
 }
 
 void loop() {
-    esp_task_wdt_reset();
+    watchdog::pet();
     WiFiProvisioner::maintain();
 
     // REQUIRED, not housekeeping. ESPAsyncWebServer never reaps disconnected
@@ -265,13 +264,13 @@ void loop() {
     // set at transitions, so it can never latch a stale colour after a silent
     // WiFi drop (the failure this is most likely to be diagnosing).
     if (WiFi.status() != WL_CONNECTED) {
-        nodeled::set(nodeled::NO_WIFI);
+        statusled::set(statusled::NO_WIFI);
     } else {
-        nodeled::set(g_primaryLinked ? nodeled::LINKED : nodeled::ONLINE);
+        statusled::set(g_primaryLinked ? statusled::READY : statusled::ONLINE);
     }
     // Orange for the whole sweep, not just the instant the frame landed.
-    nodeled::setMoving(anyServoMoving());
-    nodeled::update();
+    statusled::setMoving(anyServoMoving());
+    statusled::update();
 
     // Advance sweeps and effect the deferred detach.
     for (int i = 0; i < SERVO_COUNT; i++) servos[i].update();
@@ -294,7 +293,7 @@ void loop() {
         topo::nodelink::strlcpy_(pendingSel,   cmd.selectorId, sizeof(pendingSel));
         topo::nodelink::strlcpy_(pendingState, cmd.stateId,    sizeof(pendingState));
         awaitingSettle = true;
-        nodeled::flashActivity();   // visible confirmation at the gate itself
+        statusled::flashActivity();   // visible confirmation at the gate itself
         reportState(pendingSel, pendingState, true);
     }
 

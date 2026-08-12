@@ -39,19 +39,18 @@
 
 // -- Status LED --
 // No plain user LED on this board, only a NeoPixel on GPIO2 — so the status
-// indicator is a COLOUR, not a blink pattern. See node/NodeStatusLed.h.
+// indicator is a COLOUR, not a blink pattern. See utils/StatusLed.h.
 //
 // Unlike the S3, the C3's pixel has no separate power-enable pin: it is always
-// powered, so NODE_PIXEL_POWER_PIN is deliberately left undefined.
+// powered, so PIN_PIXEL_POWER is deliberately left undefined.
 //
 // GPIO2 is a C3 strapping pin, but it is sampled only at reset — driving it as
 // the pixel's data line after boot is what the board is designed to do.
-#define NODE_PIXEL_PIN       2
+#define PIN_PIXEL            2
 
-// PIN_LED still points at a harmless pin so shared code that does a plain
-// digitalWrite(PIN_LED, …) can't land on a servo signal line. Nothing in the
-// node firmware uses it — blink codes are a primary-side feature.
-#define PIN_LED             8   // (not a plain LED — see NODE_PIXEL_* above)
+// PIN_LED deliberately NOT defined: StatusLed.h prefers PIN_PIXEL and only
+// falls back to a plain LED when no pixel exists, so defining one here would be
+// dead weight at best and a servo signal line driven as an LED at worst.
 
 // -- Native USB --
 // The C3 has USB Serial/JTAG rather than a USB-serial bridge chip.

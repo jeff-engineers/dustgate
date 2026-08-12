@@ -243,6 +243,8 @@ extern int g_homeDirection;        // defined in firmware.ino
   #include "boards/qtpy_s3.h"
 #elif defined(BOARD_QTPY_C3)
   #include "boards/qtpy_c3.h"
+#elif defined(BOARD_XIAO_C5)
+  #include "boards/xiao_c5.h"
 #else
   // No board flag set (e.g. a bare Arduino IDE build) — default to the Feather,
   // which is the original hardware and has native-USB defaults.

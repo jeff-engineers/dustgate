@@ -67,19 +67,17 @@
 #define PIN_ENDSTOP_MAX     5   // TX pad
 
 // -- Status LED --
-// No plain user LED, only a NeoPixel — status is a COLOUR (node/NodeStatusLed.h).
+// No plain user LED, only a NeoPixel — status is a COLOUR (utils/StatusLed.h).
 // Both pixel pins are on-board and consume no header pad. The S3's pixel needs
 // its power rail driven HIGH before it lights.
-#define NODE_PIXEL_PIN       39
-#define NODE_PIXEL_POWER_PIN 38
+#define PIN_PIXEL            39
+#define PIN_PIXEL_POWER      38
 
-// PIN_LED points at a harmless pin so shared code doing a plain
-// digitalWrite(PIN_LED, …) can't land on a STEP or endstop line. NOTE: the
-// primary sketch DOES drive PIN_LED for blink codes (firmware.ino:1610,
-// 1665, 1786) — on this board those blinks are invisible. If this variant ever
-// becomes a primary, that is a real gap: the blink codes need to become pixel
-// colours, or an external LED needs one of the spare pads below.
-#define PIN_LED            38
+// PIN_LED deliberately NOT defined. This board is a plausible PRIMARY (it has
+// the stepper pins), and the primary's status used to be single-LED blink codes
+// that were simply invisible here. That gap is closed: StatusLed.h drives the
+// pixel above for every state, primary and secondary alike, so there is nothing
+// left that needs a plain LED.
 
 // -- Native USB --
 // USB Serial/JTAG built into the chip, no bridge. Requires

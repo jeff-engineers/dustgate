@@ -277,6 +277,29 @@ node shared/device-model/nodelink-conformance.js ws://<node>.local/nodelink
 - Add manual override buttons to ballvalves/manifolds, wire in to esp32
 - ESD safety and power safety
 
+#### XIAO ESP32C5 spike (2026-08-12) — compiles, but the platform is the cost
+`boards/xiao_c5.h` + the `xiao_c5` env build clean (1.22 MB of a 3 MB app
+partition, 53 KB RAM), servo-only. Nothing has been flashed. What the spike
+actually established:
+
+- **The two platforms cannot coexist.** The C5 needs the pioarduino fork
+  (official `espressif32` has no C5); both publish a package named
+  `framework-arduinoespressif32` into one shared directory, so whichever env
+  builds last owns the core and the other dies with an opaque SCons
+  `TypeError: ... not NoneType`. Build `xiao_c5` alone. `[env] platform` is now
+  version-pinned so this can't happen by accident again.
+- **So adopting the C5 = migrating every target to pioarduino / core 3.x**,
+  which means ESP32Servo 1.x → 3.x and me-no-dev AsyncTCP + ESPAsyncWebServer →
+  the ESP32Async 3.x forks (the migration platformio.ini's comment declined on
+  regression-risk grounds). That re-validates all four supported targets. It is
+  the real price of the board, not the 8 MB of flash.
+- Two portability fixes fell out and are already in: `utils/Watchdog.h` (IDF 5
+  changed `esp_task_wdt_init()` to a config struct) and the
+  `rgbLedWrite`/`neopixelWrite` guard in `utils/StatusLed.h`.
+- Before flashing one: confirm which C5 GPIO are **strapping pins** and whether
+  four ADC pads are actually free — the pin map is from Seeed's published pinout,
+  not from hardware.
+
 ### 4. Canvas polish
 - **Duct line routing / A\*** — deferred deliberately. It's cosmetic (odd
   doglegs, nothing malfunctions) and `clearLaneY` got it mostly right; only the

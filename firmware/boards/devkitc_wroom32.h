@@ -23,12 +23,12 @@
 //     to a servo header on the carrier for ball-valve gates.
 //   - No DIAG pin: StallGuard is abandoned; PIN_TMC_DIAG is intentionally left
 //     undefined here and its uses are #ifdef-guarded.
-//   - Status LED on GPIO17, a labeled spare: the official DevKitC V4 has NO
-//     user LED (its one LED is the always-on power LED), so blink codes need an
-//     external one. GPIO2 — the usual choice, and where this started — is the
-//     onboard LED on NodeMCU-style CLONES only, and is a strapping pin, so an
-//     LED miswired to 3V3 there would keep the board out of download mode.
-//     GPIO17 is non-strapping and has no such failure mode.
+//   - Status pixel on GPIO17, a labeled spare: the official DevKitC V4 has NO
+//     user LED (its one LED is the always-on power LED), so the indicator is
+//     external either way. GPIO2 — the usual choice, and where this started —
+//     is the onboard LED on NodeMCU-style CLONES only, and is a strapping pin,
+//     so anything miswired to 3V3 there would keep the board out of download
+//     mode. GPIO17 is non-strapping and has no such failure mode.
 // =============================================================================
 #pragma once
 
@@ -50,12 +50,23 @@
 #define PIN_ENDSTOP_HOME   32   // NC switch, INPUT_PULLUP
 #define PIN_ENDSTOP_MAX    33   // NC switch, INPUT_PULLUP
 
-// -- Status LED (external; the official DevKitC V4's only onboard LED is the
-//    always-on power LED, so blink codes need a real LED on a header pin).
-//    GPIO17 is a labeled spare: non-strapping, so unlike GPIO2 an LED here can
-//    never hold the board out of download mode at boot.
-//    Wire: GPIO17 -> 330R -> LED anode, cathode -> GND. Active HIGH.
-#define PIN_LED            17
+// -- Status pixel (external) --
+// The official DevKitC V4's only onboard LED is the always-on power LED, so the
+// indicator has to be a part you add. It is a single WS2812/NeoPixel rather than
+// the plain LED this used to be: one data line either way, but colour says more
+// in one glance than any blink rate can (see utils/StatusLed.h).
+//
+// GPIO17 is a labeled spare and non-strapping, so unlike GPIO2 nothing wired
+// here can hold the board out of download mode at boot.
+//
+// Wire: 5V (or 3V3 — see WIRING.md §5) -> pixel VDD, GND -> GND,
+//       GPIO17 -> 330R -> pixel DIN, 1000µF across the pixel's supply.
+// The DevKitC is 3V3 logic; on a 5V-powered pixel read the level-shift note in
+// WIRING.md §5 before assuming DIN is happy.
+#define PIN_PIXEL          17
+
+// No PIN_LED: the pixel covers every state. StatusLed.h's plain-LED fallback is
+// for boards that have an LED and no pixel, which this one does not.
 
 // -- Reserved: servo PWM outputs (4 in a row) --
 #define SERVO_PWM_PIN_1    25

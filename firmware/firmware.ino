@@ -15,9 +15,10 @@
 // =============================================================================
 
 #include <EEPROM.h>
-#include "esp_task_wdt.h"   // main-loop task watchdog (unattended-hang recovery)
+#include "utils/Watchdog.h"  // main-loop task watchdog (unattended-hang recovery)
 #include "config.h"
 #include "utils/MotionMath.h"
+#include "utils/StatusLed.h"
 #include "motor/MotorDriver.h"
 #include "feedback/FeedbackSystem.h"
 #include "control/ControlInput.h"
@@ -561,13 +562,28 @@ void setup() {
     // ADC: 12-bit (0-4095), 3.3V reference
     analogReadResolution(12);
 
+    // Before WiFi, so the pixel is already saying something during the blocking
+    // connect below — the DevKitC has no other sign it got past reset unless a
+    // serial monitor happens to be attached.
+    statusled::begin();
+    statusled::set(statusled::BOOTING);
+    statusled::update();
+
     // WiFi provisioning — must run before any WiFi-dependent control mode.
     // If WIFI_STA_SSID is hardcoded in config.h it is used directly.
     // Otherwise stored NVS credentials are tried; if none exist or connection
     // fails, a captive portal AP ("DustGate-Setup") is started and this call
     // blocks until the user provides credentials (then reboots).
 #if defined(CONTROL_SMART_OUTLET) || defined(ENABLE_HTTP_API)
+    // The portal's loop never returns, so without this tick the pixel would sit
+    // frozen on BOOTING for as long as the board waits to be told which WiFi to
+    // join — the one state that definitely needs a human to walk over.
+    WiFiProvisioner::setPortalTick([]() {
+        statusled::set(statusled::PORTAL);
+        statusled::update();
+    });
     WiFiProvisioner::begin();
+    WiFiProvisioner::setPortalTick(nullptr);
 #endif
 
     // Load calibration before feedback system initialises
@@ -587,9 +603,6 @@ void setup() {
     }
     DEBUG_PRINT(F("[CFG] homeDirection=")); Serial.print(g_homeDirection);
     DEBUG_PRINT(F("  numActiveStops="));   Serial.println(g_numActiveStops);
-
-    pinMode(PIN_LED, OUTPUT);
-    digitalWrite(PIN_LED, LOW);
 
     // Report each stage separately: a bare "INIT FAILED" can't tell a TMC2209
     // UART problem from an endstop or a WiFi/outlet one, which are three very
@@ -670,15 +683,65 @@ void setup() {
     // Arm the task watchdog on the main loop LAST — after all the blocking init
     // above (WiFi connect can block up to ~12s, calibration load, etc.), so none
     // of it trips a spurious reset. From here loop() must pet it each pass.
-    esp_task_wdt_init(WDT_TIMEOUT_SEC, /*panic=*/true);
-    esp_task_wdt_add(NULL);   // watch this task (the Arduino loopTask)
+    watchdog::begin();   // watches this task (the Arduino loopTask)
 }
 
 // =============================================================================
 // loop()
 // =============================================================================
+// =============================================================================
+// updateStatusLed() — translate the state machine into the shared colour
+// vocabulary (utils/StatusLed.h). Called once per loop() pass.
+//
+// Motion outranks status, matching the node: while something is physically
+// moving, THAT is what the person standing at the gate needs to see. Underneath
+// it the ranking is worst-first — a fault hides a WiFi problem hides "no layout
+// yet" — because the top item is always the one to go deal with.
+//
+// "Ready" here means routing is live, not merely that the board booted. A
+// primary with no topology stored has nothing to route, so it sits on blue: it
+// is working, it just has no shop yet. That distinction is exactly what the old
+// single LED could not express — it was dark for both.
+// =============================================================================
+static void updateStatusLed() {
+    switch (currentState) {
+        case STATE_HOMING:      statusled::setMotion(statusled::HOMING);      break;
+        case STATE_CALIBRATING: statusled::setMotion(statusled::CALIBRATING); break;
+        case STATE_MOVING:      statusled::setMotion(statusled::MOVING);      break;
+        default:
+            // Servo sweeps don't touch currentState (they're not rack moves), so
+            // ask the bank directly or a ball-valve-only shop would never show
+            // motion at all.
+            {
+                bool servoMoving = false;
+#if defined(ENABLE_SERVO) && defined(SERVO_PWM_PIN_1)
+                for (int i = 0; i < SERVO_COUNT; i++)
+                    if (g_servos[i].isMoving()) { servoMoving = true; break; }
+#endif
+                statusled::setMotion(servoMoving ? statusled::MOVING : statusled::STILL);
+            }
+            break;
+    }
+
+    if (g_hardwareFault || currentState == STATE_ERROR) {
+        statusled::set(statusled::FAULT);
+    }
+#if defined(CONTROL_SMART_OUTLET) || defined(ENABLE_HTTP_API)
+    else if (WiFi.status() != WL_CONNECTED) {
+        statusled::set(statusled::NO_WIFI);
+    }
+#endif
+    else if (!g_topoRuntime.loaded()) {
+        statusled::set(statusled::ONLINE);
+    } else {
+        statusled::set(statusled::READY);
+    }
+
+    statusled::update();
+}
+
 void loop() {
-    esp_task_wdt_reset();   // pet the watchdog: we're alive this iteration
+    watchdog::pet();   // we're alive this iteration
 
     // Keep WiFi alive unattended — nudges a reconnect if the link has dropped
     // and the core's auto-reconnect hasn't brought it back (e.g. AP rebooted).
@@ -1607,7 +1670,6 @@ void loop() {
 
         // ------------------------------------------------------------------
         case STATE_HOMING:
-            digitalWrite(PIN_LED, (millis() / 250) % 2);
 
             // Auto motor-direction detect: homing must drive toward the HOME DATUM.
             // If the FAR endstop trips instead, the motor is wired backwards — flip
@@ -1630,7 +1692,6 @@ void loop() {
 
             if (feedback.updateHoming()) {
                 currentStop = 0;
-                digitalWrite(PIN_LED, LOW);
                 if (g_calibratePending) {
                     // Homed → begin the reference sweep. Drive well past the
                     // largest plausible span toward the far end; the far endstop
@@ -1662,7 +1723,6 @@ void loop() {
             static unsigned long calStart = 0;
             static uint8_t farHighStreak = 0;
             if (calStart == 0) { calStart = millis(); farHighStreak = 0; }
-            digitalWrite(PIN_LED, (millis() / 120) % 2); // fast blink during sweep
 
             // Debounce the far switch: only accept the trigger after it reads HIGH
             // for CAL_FAR_CONFIRM_LOOPS consecutive loops. A single spurious NC-open
@@ -1684,7 +1744,6 @@ void loop() {
                 finishCalibrationSweep(farPos);
                 g_calibratePending = false;
                 calStart = 0;
-                digitalWrite(PIN_LED, LOW);
                 // Restore normal move speed for the return-home and all later moves.
                 motor.setMaxSpeed(MAX_SPEED_STEPS_PER_SEC);
                 // Return to the home datum (releases the far switch on the way).
@@ -1783,7 +1842,6 @@ void loop() {
         case STATE_ERROR:
             motor.stop();
             motor.enable(false);
-            digitalWrite(PIN_LED, (millis() / 100) % 2); // rapid blink
 
             // Physical recovery: toggle switch cycled (no hardware e-stop to release).
             //
@@ -1892,6 +1950,10 @@ void loop() {
         }
     }
 #endif // ENABLE_HTTP_API
+
+    // Last thing each pass: the indicator reflects the state the loop just
+    // finished settling, not the one it started with.
+    updateStatusLed();
 }
 
 // =============================================================================

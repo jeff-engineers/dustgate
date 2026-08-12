@@ -49,17 +49,14 @@
 
 // -- Status LED --
 // No plain user LED on this board, only a NeoPixel — so the status indicator is
-// a COLOUR, not a blink pattern. See node/NodeStatusLed.h.
+// a COLOUR, not a blink pattern. See utils/StatusLed.h.
 //
 // The S3's pixel needs its power rail driven HIGH before it will light; the C3's
-// is always powered, which is why NODE_PIXEL_POWER_PIN is board-specific.
-#define NODE_PIXEL_PIN       39
-#define NODE_PIXEL_POWER_PIN 38
+// is always powered, which is why PIN_PIXEL_POWER is board-specific.
+#define PIN_PIXEL            39
+#define PIN_PIXEL_POWER      38
 
-// PIN_LED still points at a harmless pin so shared code that does a plain
-// digitalWrite(PIN_LED, …) can't land on a servo signal line. Nothing in the
-// node firmware uses it — blink codes are a primary-side feature.
-#define PIN_LED            38   // (not a plain LED — see NODE_PIXEL_* above)
+// PIN_LED deliberately NOT defined — see the note in boards/qtpy_c3.h.
 
 // -- Native USB --
 // The S3 has USB Serial/JTAG built in, no USB-serial bridge chip. This is why

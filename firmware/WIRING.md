@@ -28,28 +28,24 @@ is the equivalent pin on that legacy board.
 | TMC2209 UART RX        | GPIO18               | RX (Serial1) |
 | Home endstop           | GPIO32               | D10          |
 | Far endstop            | GPIO33               | D11          |
-| Status LED             | GPIO17 (external)    | D13 (onboard)|
+| Status pixel           | GPIO17 (external)    | GPIO33 (onboard) |
 
-**Reserved for Phase 2 (servo nodes):** GPIO25, GPIO26, GPIO27, GPIO14 — a contiguous
-4-pin block for servo PWM outputs. Unused by the v1 actuator; do not repurpose them on the
-carrier. **Spare:** GPIO16, GPIO4.
+**Reserved for servo gates:** GPIO25, GPIO26, GPIO27, GPIO14 — a contiguous 4-pin block
+for servo PWM outputs. Unused by the sliding gate; do not repurpose them on the carrier.
+**Spare:** GPIO16, GPIO4.
 
-### Status LED (DevKitC needs an external one)
+### Status pixel (DevKitC needs an external one)
 
 The official Espressif DevKitC V4 has **no user LED** — its only onboard LED is the
-always-on red power LED, so the blink codes are invisible without adding one. (NodeMCU-style
+always-on red power LED, so the indicator is a part you add either way. (NodeMCU-style
 clones do have a user LED on GPIO2; that is where the old `PIN_LED 2` default came from.)
 
-```
-  GPIO17 ──[330Ω]──▶|── GND
-                  anode cathode
-```
+It is a WS2812 pixel rather than the single-colour LED this used to be — see
+[§5](#5-status-pixel-ws2812--neopixel) for the colour vocabulary and the wiring, including
+why running the pixel from 3V3 rather than 5V is the recommended option here.
 
-Active HIGH. Anode = the **longer leg**; the cathode side of the plastic body has a **flat
-spot** on its rim. GPIO17 is deliberately not GPIO2: GPIO2 is a strapping pin, so an LED
-wired there to 3V3 instead of GND holds the pin high and blocks download mode at boot.
-
-Blink codes: rapid ~5 Hz = `STATE_ERROR` (latched hardware fault or e-stop).
+GPIO17 is deliberately not GPIO2: GPIO2 is a strapping pin, so anything wired there that
+holds the pin high blocks download mode at boot.
 
 > **DevKitC pin cautions:** avoid the strapping pins (GPIO0, 2, 5, 12, 15) for driven
 > outputs. GPIO6–11
@@ -354,11 +350,86 @@ over your home WiFi network using their local HTTP API. Requires:
 - One Shelly outlet per blast gate position, on the same local network
 - "Local control" enabled on each Shelly (on by default — no cloud required)
 
-Outlet-to-gate mappings are configured by the setup agent and stored in NVS.
+Outlet-to-gate mappings are configured during setup and stored in NVS.
 
 ---
 
-## 5. Remote Boot & Reset Buttons (enclosure-mounted, optional)
+## 5. Status Pixel (WS2812 / NeoPixel)
+
+Every board runs the same indicator now, primary and secondary alike
+(`firmware/utils/StatusLed.h`). It is a **single WS2812-family pixel**, not a
+plain LED: one data line either way, but a colour is readable across a dusty shop
+in one glance where a blink rate is not.
+
+| Colour | Meaning |
+|--------|---------|
+| **Green** | Ready. Node: primary linked. Primary: routing live. |
+| **Blue** | On WiFi but not ready. Node: no primary linked. Primary: no layout stored yet. |
+| **Orange** | Something is moving. Solid = a move or servo sweep, slow blink = homing, fast blink = calibration sweep. Also a 400 ms flash when a command lands. |
+| **White, blinking** | Captive portal is up, waiting for WiFi credentials. The only state that needs a human to walk over — hence the only white. |
+| **Red, pulsing** | Fault. Hardware init failed or the system is in e-stop. |
+
+Orange outranks everything except nothing-happening, deliberately: "is anything
+actually moving?" is the first question every time a gate misbehaves.
+
+### Which boards have one
+
+| Board | Pixel | Notes |
+|-------|-------|-------|
+| ESP32-DevKitC | **GPIO17, external** | No onboard user LED at all — you add this part |
+| Adafruit ESP32-S2 Feather | GPIO33 onboard | Power gated by GPIO21 (`PIN_PIXEL_POWER`) |
+| Adafruit QT Py ESP32-S3 | GPIO39 onboard | Power gated by GPIO38 |
+| Adafruit QT Py ESP32-C3 | GPIO2 onboard | Rail always powered, no power pin |
+| Seeed XIAO ESP32C5 | GPIO25, external | Spike target; onboard LED is plain yellow, not RGB |
+
+Boards with an onboard pixel need no wiring. Only the DevKitC and the XIAO need
+a part added.
+
+### Wiring an external pixel (DevKitC)
+
+```
+5V  ──────────────┬──── Pixel VDD
+                  │
+               [1000µF]        (across VDD/GND, close to the pixel)
+                  │
+GND ──────────────┴──── Pixel GND ──── ESP32 GND   (common ground, mandatory)
+
+GPIO17 ──── [330R] ──── Pixel DIN
+```
+
+The 330Ω series resistor and the bulk capacitor are the two things people skip
+and then chase: the resistor protects DIN against the inrush on a hot-plug, and
+the cap keeps the pixel's own switching off a rail shared with servos.
+
+**On 3V3 vs 5V logic.** The ESP32 drives 3.3V, and a WS2812 running off 5V wants
+a DIN above ~0.7×VDD = 3.5V. In practice a single pixel usually latches fine at
+3.3V, and this is the common hobby shortcut — but it is out of spec and shows up
+as an intermittent wrong colour, not a clean failure. Two reliable fixes:
+
+- **Run the pixel from 3V3 instead of 5V.** One status pixel draws little enough
+  that the regulator won't notice, and 3.3V logic into a 3.3V pixel is in spec.
+  This is the recommended option here.
+- Or keep 5V and add a level shifter on DIN.
+
+Use a **WS2812B-family** pixel (Adafruit NeoPixel breakouts, or a single pixel cut
+from a strip). The firmware drives it with the Arduino core's own RMT-based
+routine, so there is no library to add.
+
+**On a servo build, mind the shared 5V rail.** If you power the pixel from the
+same supply as the servos, a servo's inrush can brown the pixel into a garbage
+colour — which then reads as a fault that isn't one. The bulk cap above helps;
+powering the pixel from 3V3 sidesteps it entirely.
+
+### Boards with no pixel
+
+`StatusLed.h` falls back to blink patterns on `PIN_LED` for any board that
+defines one and no pixel (fast = fault, slow = working, solid = ready). That path
+exists for compatibility, not as a design goal — the ambiguity it reintroduces is
+the whole reason the pixel replaced it.
+
+---
+
+## 6. Remote Boot & Reset Buttons (enclosure-mounted, optional)
 
 The ESP32's onboard EN (reset) and BOOT buttons become unreachable once the
 electronics are enclosed. Both lines are broken out to the header, so a pair of
@@ -390,7 +461,7 @@ flashes through the onboard CP2102/CH340 USB-serial chip.
 
 ---
 
-## 6. Pin Budget
+## 7. Pin Budget
 
 | Signal                    | DevKitC pin   | Notes                                |
 |---------------------------|---------------|--------------------------------------|
@@ -401,27 +472,27 @@ flashes through the onboard CP2102/CH340 USB-serial chip.
 | TMC2209 UART RX           | GPIO18        | All (hardware UART, remappable)      |
 | Home-side limit switch    | GPIO32        | FEEDBACK_LIMIT_DISTANCE (required)   |
 | Far-side limit switch     | GPIO33        | FEEDBACK_LIMIT_DISTANCE (required)   |
-| Status LED                | GPIO17        | External LED + 330R to GND (see above)|
+| Status pixel (WS2812)     | GPIO17        | External; 330R in series on DIN — see §5 |
 | Remote reset button       | EN            | Optional, not code-visible           |
 | Remote boot button        | GPIO0         | Optional, not code-visible           |
 
 Both limit switches are required. Which one acts as the home datum is decided at
 setup time (always the user's LEFT end) — see `g_homeIsMaxEndstop`.
 
-**Active header pins: 7** (GPIO23, 22, 21, 19, 18, 32, 33) — the status LED rides
-the onboard GPIO2, so it costs no header pin.
+**Active header pins: 8** (GPIO23, 22, 21, 19, 18, 32, 33, 17). The status pixel
+costs a header pin on this board — the DevKitC has no onboard user LED to ride.
 
-**Reserved for Phase 2 (servo PWM):** GPIO25, 26, 27, 14 (contiguous 4-pin block).
-**Free for other expansion:** GPIO17, 16, 4, plus the input-only GPIO34/35/36/39
+**Reserved for servo PWM:** GPIO25, 26, 27, 14 (contiguous 4-pin block).
+**Free for other expansion:** GPIO16, 4, plus the input-only GPIO34/35/36/39
 (input/ADC only — no output, no internal pull-up).
 
 EN/GPIO0 aren't GPIOs the firmware reads — they're the hardware reset/bootloader
 lines, listed here only so the pin budget stays accurate if you wire the
-enclosure buttons from section 6.
+enclosure buttons from §6.
 
 ---
 
-## 7. Power Supply
+## 8. Power Supply
 
 | Rail            | Source                    | Notes                                     |
 |-----------------|---------------------------|-------------------------------------------|
@@ -439,7 +510,7 @@ Always common the grounds.
 
 ---
 
-## 8. Decoupling — keeping the ESP32 out of brownout
+## 9. Decoupling — keeping the ESP32 out of brownout
 
 > **Untested on hardware.** This is standard practice written down so the bench
 > session starts from a known-good arrangement, not a measured result. The only

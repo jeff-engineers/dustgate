@@ -32,7 +32,15 @@
 #define PIN_ENDSTOP_MAX    11   // D11 — NC switch, pulls LOW when triggered
 
 // -- Status LED --
-#define PIN_LED            13   // D13 — onboard LED on ESP32-S2 Feather
+// -- Status indicator --
+// This board has BOTH: a plain red LED on D13 and an onboard NeoPixel. Use the
+// pixel — colour beats blink rate (see utils/StatusLed.h) — and leave D13 for
+// whatever a bench session wants to scope. Pin numbers match the Arduino core's
+// own variant (PIN_NEOPIXEL 33 / NEOPIXEL_POWER 21 in
+// variants/adafruit_feather_esp32s2/pins_arduino.h); the pixel's rail is behind
+// a GPIO switch, hence PIN_PIXEL_POWER.
+#define PIN_PIXEL          33
+#define PIN_PIXEL_POWER    21
 
 // -- Board capabilities --
 #define BOARD_HAS_NATIVE_USB 1  // native USB-CDC Serial; wait for the monitor at boot
