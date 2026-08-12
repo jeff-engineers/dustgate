@@ -95,7 +95,7 @@ jobs:
       - name: Install PlatformIO
         run: pip install --upgrade platformio
       - name: Compile firmware (all targets, incl. the servo-only node)
-        run: pio run -e esp32dev_wroom32 -e adafruit_feather_esp32s2 -e dustgate_node -e dustgate_node_c3
+        run: pio run -e esp32dev_servo -e esp32dev_wroom32 -e adafruit_feather_esp32s2 -e dustgate_node -e dustgate_node_c3
       # Host tests for the pure C++ control layer. They need ArduinoJson, which
       # the `pio run` above has already fetched into .pio.nosync/libdeps.
       - name: Host tests (router, controller, nodebus/nodelink)

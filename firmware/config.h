@@ -279,6 +279,40 @@ extern int g_homeDirection;        // defined in firmware.ino
 #endif
 
 // -----------------------------------------------------------------------------
+// NO_LINEAR_FITTED (-DNO_LINEAR_FITTED) — "this board's pin map has a rack, but
+// no rack is physically attached."
+//
+// A master's job is the routing brain: hold the topology, poll the plugs,
+// compute the transition, drive gates. None of that needs a stepper, and the
+// direction of travel is servo ball valves, so requiring a TMC2209 on every
+// brain taxes builds for hardware most of them will never carry.
+//
+// WHAT IT DOES, AND THE ONE THING IT DOESN'T
+//   The TMC2209 UART health check still RUNS and still prints its full
+//   diagnosis — that check is the only thing that separates a wiring fault from
+//   a working driver, and deleting it would trade a loud failure at boot for a
+//   silent one during the first move. What changes is only how the sketch REACTS
+//   to it: a missing driver becomes the expected state rather than a fault, so
+//   the board doesn't sit in STATE_ERROR with the status pixel pulsing red about
+//   a stepper you chose not to fit. Motion stays disabled either way, via the
+//   same g_hardwareFault latch — there is genuinely no motor to move.
+//
+// WHY THIS IS A REACTION FLAG AND NOT HAS_LINEAR
+//   HAS_LINEAR above is the RIGHT seam and is currently read by nothing. Making
+//   it load-bearing means guarding StepperTMC2209Driver.cpp and
+//   LimitSwitchDistance.cpp, adding a null MotorDriver, and gating the endstop
+//   reads in firmware.ino and SerialDebugControl.cpp — a change to motion code
+//   that has never run on hardware. Every servo-only board so far has been a
+//   NODE, which sidesteps all of it by compiling from firmware/node/ instead, so
+//   HAS_LINEAR == 0 has never actually been built for the primary sketch.
+//
+//   This flag is the deliberately small stand-in: it costs the servo build the
+//   flash the stepper occupies and still prints "D10: TRIGGERED" for unwired
+//   endstop pins (open reads as triggered on an NC switch), but it touches no
+//   motion logic. The real HAS_LINEAR work is logged in TODO.md.
+// -----------------------------------------------------------------------------
+
+// -----------------------------------------------------------------------------
 // SECONDARY ROLE (-DDUSTGATE_SECONDARY)
 //
 // A "dumb" actuator bank in the star: it accepts already-resolved NodeLink SET

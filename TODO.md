@@ -442,6 +442,41 @@ Nothing is hardware-tested yet, so these land on top of an unvalidated base.
 - [ ] Multi-port machine: both gates open together, arbitration never lets one
       machine's ports fight, disabling one port closes only that gate.
 
+#### Make `HAS_LINEAR` load-bearing (deferred stopgap, 2026-08-12)
+A master's job is the routing brain; the linear rack is one KIND of gate, and the
+direction of travel is servo ball valves. So a primary must not require a TMC2209
+— but on 2026-08-12 it turned out a stepper-less PRIMARY has never been built at
+all. `HAS_LINEAR` is derived in `config.h` and **read by nothing**; every
+servo-only board so far has been a NODE, which sidesteps the question by
+compiling from `firmware/node/` instead.
+
+Shipped instead: `-DNO_LINEAR_FITTED` (env `esp32dev_servo`, now the default),
+which changes only how the sketch REACTS to a missing driver — the TMC2209 UART
+health check still runs and still prints. Motion stays locked via the existing
+`g_hardwareFault` latch; what goes away is `STATE_ERROR` and the permanently red
+status pixel. That was chosen over the real fix to avoid touching motion code
+mid-bench-bringup.
+
+What the stopgap does NOT do, and what the real fix should:
+- [ ] Guard `motor/StepperTMC2209Driver.cpp` and `feedback/LimitSwitchDistance.cpp`
+      with `#if HAS_LINEAR`, and gate the endstop pin reads in `firmware.ino`
+      (~8 sites) and `control/SerialDebugControl.cpp` (4 sites). Today these
+      reference `PIN_TMC_*` / `PIN_ENDSTOP_*` unguarded, which is exactly why a
+      board header that simply omits the motor pins does not compile.
+- [ ] Add a null `MotorDriver` behind the existing interface so the sketch's
+      motion paths still link on a servo-only build without `#ifdef`s woven
+      through them — the same objection `config.h` already records against
+      `#ifdef`-ing the secondary out of the primary sketch.
+- [ ] Then reclaim the flash: the stepper, feedback system and endstop supervisor
+      are still compiled into the servo build today (71.4% either way).
+- [ ] And drop the remaining cosmetic lies: unwired endstop pins still print
+      `D10: TRIGGERED` at boot (open reads as triggered on an NC switch), and the
+      motion-refusal messages still say "fix wiring and reset" when there is
+      nothing to fix. `g_faultStages` is set to "no rack fitted (by build)" so the
+      two messages that print it read correctly; the other ~5 sites don't.
+
+Do this before the serial-servo migration, not during a bench session.
+
 #### Canvas chrome (small, independent of the schema work)
 - [x] Promote **Done** out of the overflow menu into its own toolbar button;
       Import/Export stay in the overflow (2026-08-12).

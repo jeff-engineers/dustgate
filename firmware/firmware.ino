@@ -638,7 +638,14 @@ void setup() {
     const bool okMotor    = motor.begin();
     const bool okFeedback = feedback.begin(&motor);
     const bool okControl  = control.begin();
+#if defined(NO_LINEAR_FITTED)
+    // No rack on this board. The check above still ran and still printed its
+    // diagnosis; a missing driver is simply not news here. See config.h's
+    // NO_LINEAR_FITTED block for why the check stays and only the reaction moves.
+    ok = okFeedback && okControl;
+#else
     ok = okMotor && okFeedback && okControl;
+#endif
     if (!ok) {
         DEBUG_PRINT(F("[INIT] motor="));      Serial.print(okMotor    ? "ok" : "FAIL");
         DEBUG_PRINT(F("  feedback="));        Serial.print(okFeedback ? "ok" : "FAIL");
@@ -676,6 +683,38 @@ void setup() {
         DEBUG_PRINTLN(F("Init OK. Type 'enable' to home and start."));
         currentState = STATE_IDLE;
     }
+
+#if defined(NO_LINEAR_FITTED)
+    // Latch the motion lock WITHOUT the error state. These two are separate
+    // facts that the fault path happens to set together:
+    //
+    //   g_hardwareFault  — "do not command the stepper". Still true, and it has
+    //                      to be: there is no driver on the UART, so every
+    //                      motion entry point must keep refusing. Reusing the
+    //                      existing latch is what makes this change small —
+    //                      issueMove() and SketchLinearDrive::moveToMm() already
+    //                      check it, and no new gate has to be threaded through
+    //                      the homing, jog, calibration and sweep paths.
+    //
+    //   STATE_ERROR      — "something is WRONG". Not true here, and asserting it
+    //                      costs the one at-a-glance diagnostic the board has:
+    //                      the status pixel would pulse red forever over absent
+    //                      hardware, so red would stop meaning anything for the
+    //                      faults that are real.
+    //
+    // Set after the branch above rather than inside it so this holds however the
+    // rest of init went — if WiFi or the outlets genuinely fail, that path has
+    // already set STATE_ERROR and this does not clear it.
+    g_hardwareFault = true;
+    // Several serial/API handlers report the latch as "Hardware fault at boot —
+    // failed: <stages>". With nothing genuinely broken that string is empty and
+    // the message reads like a bug, so name the real reason. Only when empty:
+    // a true failure above owns this field and must not be overwritten.
+    if (g_faultStages[0] == '\0')
+        snprintf(g_faultStages, sizeof(g_faultStages), "no rack fitted (by build)");
+    DEBUG_PRINTLN(F("[INIT] No linear rack fitted (-DNO_LINEAR_FITTED) — "
+                    "motion disabled by design; servos and routing are live."));
+#endif
 
 #ifdef ENABLE_HTTP_API
     if (!apiServer.begin()) {
@@ -750,7 +789,15 @@ static void updateStatusLed() {
             break;
     }
 
+#if defined(NO_LINEAR_FITTED)
+    // g_hardwareFault is set unconditionally on this build to keep motion
+    // refused (see setup()), so it can no longer speak for the indicator —
+    // STATE_ERROR does. A real failure of the endstops or the outlets still
+    // reaches this branch, because that path sets STATE_ERROR too.
+    if (currentState == STATE_ERROR) {
+#else
     if (g_hardwareFault || currentState == STATE_ERROR) {
+#endif
         statusled::set(statusled::FAULT);
     }
 #if defined(CONTROL_SMART_OUTLET) || defined(ENABLE_HTTP_API)
