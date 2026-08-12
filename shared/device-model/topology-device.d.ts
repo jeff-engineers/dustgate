@@ -1,4 +1,4 @@
-// Minimal TypeScript types for the v2 topology device simulator (topology-device.js).
+// Minimal TypeScript types for the topology device simulator (topology-device.js).
 
 import { Topology } from './topology';
 

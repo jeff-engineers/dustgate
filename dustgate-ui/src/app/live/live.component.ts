@@ -6,7 +6,7 @@ import { validateTopology, airflowIssues } from '@topology';
 import { configurableSelectorsOf, isCalibrated } from '../gates/selector-types';
 
 // One tool row's static identity (from the topology) merged with its live state
-// (from /api/v2/status). `collecting` is the routing winner — the single tool
+// (from /api/status). `collecting` is the routing winner — the single tool
 // with a clear open path to the collector right now — as opposed to `on`, which
 // only means it's drawing / requesting power (it may have been out-voted by a
 // more-recently-started tool sharing the same gate).
@@ -21,15 +21,14 @@ interface ToolRow {
 const POLL_MS = 2000;
 
 /**
- * The v2 "Live view" — the daily driver. A plain list of tools: what's
+ * The "Live view" — the daily driver. A plain list of tools: what's
  * collecting reads at a glance, everything else is one tap away. Auto tools
  * sense their own power; every tool (auto included) is manually overridable,
  * because sometimes you just need to run the collector to clear a clog.
  *
- * Silent lazy route (`/shop`) — nothing links to it yet. Consumes the existing
- * v2 API; in demo mode DemoApiService seeds a topology so it has something to
- * show. Drives tools through `simTool` (simulated power draw), which is the same
- * lever the real firmware's /api/v2/sim/tool exposes.
+ * In demo mode DemoApiService seeds a topology so it has something to show.
+ * Drives tools through `simTool` (simulated power draw), which is the same
+ * lever the real firmware's /api/sim/tool exposes.
  */
 @Component({
   selector: 'app-live',
@@ -196,8 +195,8 @@ const POLL_MS = 2000;
         </button>
       </div>
 
-      <!-- The way out of the Live view. The dashboard used to carry this switcher;
-           now that / forwards straight here, it has to live on the page it leaves. -->
+      <!-- The way out of the Live view. Since / forwards straight here, the
+           switcher has to live on the page it leaves. -->
       <div class="nav">
         <a routerLink="/build">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
@@ -323,7 +322,7 @@ export class LiveViewComponent implements OnInit, OnDestroy {
   private async refresh(force = false): Promise<void> {
     if (this.busy && !force) return;
     try {
-      this.applyStatus(await this.api.getV2Status());
+      this.applyStatus(await this.api.getStatus());
     } catch { /* transient — keep last known state */ }
   }
 

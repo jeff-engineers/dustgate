@@ -3,10 +3,10 @@
 // Wraps the pure core (topology.js + routing.js + sequencer.js) into a device
 // that behaves like the real thing: tools draw power → the active set (most-recent
 // first) drives routing → selectors move → the collector follows. This is the
-// model the topology-native API / mock / demo will all expose (the v2 successor to
+// model the topology-native API / mock / demo will all expose (the successor to
 // device-model.js's flat stops/outlets state).
 //
-// Policy baked in here (see v2 memory):
+// Policy baked in here (see the design notes):
 //   - most-recent-tool-wins  → active tools are ordered most-recently-activated
 //     first, and routing.js resolves contests in that order.
 //   - idle-hold              → with NO active tool, HOLD every selector where it

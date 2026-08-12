@@ -13,7 +13,7 @@ import {
 //
 // The sliding gate gets this from a reference sweep between two endstops. A servo
 // valve has no endstops to sweep — just hard stops we must NOT drive into (a
-// clutchless servo stalls; see the mechanical notes in docs/v2-topology-schema.md).
+// clutchless servo stalls; see the mechanical notes in docs/topology-schema.md).
 // So it's done by eye: nudge the valve, watch the handle, capture where it lands.
 //
 // Two things make that work for someone standing at the gate with a phone:
@@ -90,7 +90,7 @@ type Phase = 'capture' | 'review';
   `],
   template: `
     <div class="card">
-      <!-- ── Phase 2: capture each position ──────────────────────────────── -->
+      <!-- ── Step 2: capture each position ───────────────────────────────── -->
       <ng-container *ngIf="phase === 'capture' && current() as st">
         <div class="dots">
           <i *ngFor="let s of sel.states; let i = index" [class.done]="i < index" [class.cur]="i === index"></i>
@@ -183,7 +183,7 @@ export class ServoCalibrationComponent implements OnInit {
     if (isCalibrated(this.sel)) void this.drive(this.angle());
   }
 
-  // ── phase 2: capture ──────────────────────────────────────────────────────
+  // ── step 2: capture ───────────────────────────────────────────────────────
   current(): ServoState | null { return this.sel.states[this.index] ?? null; }
 
   label(s: ServoState): string { return positionName(s.id); }

@@ -4,7 +4,7 @@ This project is a work in progress and is not considered complete or ready for u
 
 Automated dust collection manifold for a woodworking shop. A motorized rack-and-pinion linear actuator selects which blast gate is open based on which tool is running — no switches, no manual intervention.
 
-Each tool plugs into a [Shelly smart outlet](https://us.shelly.com). When a tool draws power above a configurable wattage threshold, the actuator moves to that tool's blast gate automatically. When all tools are off, it returns to the home (closed) position. A setup wizard (AI chat-based or manual step-by-step) walks you through configuration from a phone browser.
+Each tool plugs into a [Shelly smart outlet](https://us.shelly.com). When a tool draws power above a configurable wattage threshold, the actuator moves to that tool's blast gate automatically. When all tools are off, it returns to the home (closed) position. You lay the shop out once on a canvas in a phone browser — collector, ducts, gates, tools — and the controller routes from that.
 
 ---
 
@@ -26,7 +26,7 @@ Each tool plugs into a [Shelly smart outlet](https://us.shelly.com). When a tool
 
 The reference build is a 2.5" dust port system, with adjacent gates spaced about 82.9mm apart (these measured numbers feed the dual-endstop self-calibration — see [`docs/dual-endstop-calibration.md`](docs/dual-endstop-calibration.md)). A 4" variant is planned but not yet built or measured, so it's **disabled in the UI** until real hardware exists to measure its manifold profile (the logic is kept in place for when it does).
 
-For wiring details see [`linear_actuator/WIRING.md`](linear_actuator/WIRING.md).
+For wiring details see [`firmware/WIRING.md`](firmware/WIRING.md).
 
 ---
 
@@ -64,7 +64,7 @@ http://<plug-ip>/rpc/Switch.GetStatus?id=0
 
 You should get a JSON response containing `"apower": 0.0` (watts currently drawn). If you see that, the plug is ready.
 
-> **Generation note:** Shelly Plug US Gen 4 is a Gen 2 device (uses the `/rpc/` API). When the DustGate setup assistant asks for the generation, answer **2**.
+> **Generation note:** Shelly Plug US Gen 4 is a Gen 2 device (uses the `/rpc/` API). When asked for the generation, answer **2**.
 
 > **240V tools:** Plug-in Shelly outlets are 120V/15A only. Large table saws, planers, etc. cannot use this method — assign them a fixed gate or detect them separately.
 
@@ -74,7 +74,6 @@ You should get a JSON response containing `"apower": 0.0` (watts currently drawn
 
 - [PlatformIO](https://platformio.org/) (VS Code extension or CLI)
 - [Node.js](https://nodejs.org/) 18+ and npm (for the web UI)
-- An Anthropic API key (`sk-ant-...`) if you want the AI setup assistant
 
 ---
 
@@ -86,7 +85,7 @@ Open the project folder in VS Code with the PlatformIO extension installed.
 
 ### 2. Configure `config.h`
 
-Open `linear_actuator/config.h`. At minimum:
+Open `firmware/config.h`. At minimum:
 
 ```cpp
 // Set the number of blast gates in your shop (1–7)
@@ -117,7 +116,7 @@ pio run --target upload
 ```bash
 cd dustgate-ui
 npm install          # first time only
-bash deploy.sh       # builds Angular app, gzips assets, copies to linear_actuator/data/
+bash deploy.sh       # builds Angular app, gzips assets, copies to firmware/data/
 cd ..
 pio run --target uploadfs
 ```
@@ -159,62 +158,55 @@ it under **Gates**.
 
    Connect your phone or laptop to this network, then open **http://192.168.4.1** in a browser.
 
-3. **Fill in the setup form:**
-   - Your home WiFi SSID and password
-   - Your Anthropic API key (optional — enables the AI setup assistant)
+3. **Fill in the setup form** with your home WiFi SSID and password.
 
 4. **Save & Connect.** The device reboots and joins your home network. The IP address is printed to serial:
 
    ```
    [WiFi] Connected. IP: 192.168.1.42
    [WiFi] Web UI:       http://192.168.1.42
-   [WiFi] Setup assistant available at  http://192.168.1.42/#/setup
    ```
 
-5. **Open the web UI** at the IP shown. You'll land on the dashboard.
+5. **Open the web UI** at the IP shown. `/` looks at what the controller has stored and sends you to the right place — the layout tool if the shop isn't finished, the Live tool list if it is.
 
 ---
 
-## Setup Assistant
+## Setting Up Your Shop
 
-On first run, the dashboard will say "Not configured" — no tools have been mapped yet. You'll be offered two ways to set up:
+Setup is one thing: **draw your plumbing**. On the Build canvas you place the dust collector, run duct from it, and attach gates and tools — the same shape as the pipe overhead. The controller reads that layout and works out which gates to open for any tool.
 
-- **AI Setup** — a chat interface powered by Claude that walks you through everything conversationally, including adjusting on the fly if a jog moved more or less than expected.
-- **Manual Setup** — a step-by-step wizard with no AI involved, for the same result via explicit forms and jog buttons.
+1. **Place the collector**, then attach components to it in any of four directions. Runs stay orthogonal, like real duct.
+2. **Add gates** — a sliding gate over a manifold, or individual ball valves. Each gate carries a badge showing whether it's been calibrated.
+3. **Calibrate each gate** by tapping its badge. A sliding gate homes, sweeps the rail between its two endstops, and lets you place each outlet; a ball valve is nudged to its open and closed angles and captured.
+4. **Attach tools** to gate outlets and name them ("Bandsaw", "Router Table" — whatever you call them).
+5. **Tag tools with outlets** under **Tools**: switch a tool on and watch which Shelly jumps to green. The scan finds plugs over mDNS and shows each one's Shelly-app name; a tool with no plug simply becomes manual-only.
+6. **Add extra boards** under **Boards** if you have more gates than one controller can drive (see step 5 of Build & Flash).
 
-Both wizards cover the same ground:
-
-1. Confirm your port size (2.5" or 4") — just seeds a starting estimate for gate spacing.
-2. Home the actuator to establish a reference position.
-3. Walk through each blast gate position — jogging the actuator to align it, then asking what tool is connected there ("Bandsaw", "Router Table", etc. — whatever you call it).
-4. Locate the Shelly outlet for each tool — both wizards scan the network via mDNS and let you pick it from a list (showing its Shelly-app name when one's set), falling back to manual IP entry if the scan doesn't find it.
-5. Save the configuration.
-
-When setup is complete, tap the back arrow to return to the dashboard. Your tool buttons will appear.
+The layout is saved to the controller as you go, so you can stop and come back.
 
 ---
 
 ## Daily Use
 
-- **Automatic mode:** just turn on a tool. DustGate detects power draw within ~1 second and moves the gate. Turn the tool off and the gate returns home after a 3-second coast-down delay.
-- **Manual override:** tap any tool button on the dashboard to move the gate manually. This holds until a tool is genuinely switched on (an edge, not just "still running") — moving manually while another gate's tool keeps running won't get immediately overridden.
-- **HOME button:** closes all gates (moves to home position).
-- **Dust collector:** driven by a dedicated switchable Shelly smart plug. It turns on automatically whenever a gate is open (a tool is running) and off when the system returns home, and can also be toggled on/off manually from the dashboard.
+- **Live view** (`/shop`) is the daily driver: a list of your tools, with the one that's actually collecting highlighted. It's the screen `/` lands on once the shop is set up.
+- **Automatic mode:** just turn on a tool. DustGate detects power draw within ~1 second and moves the gates. Turn the tool off and the system returns home after a 3-second coast-down delay.
+- **Manual override:** tap any tool in the Live view to route to it by hand — including tools with no smart plug. Most-recent-tool-wins: this holds until another tool is genuinely switched on (an edge, not just "still running").
+- **Dust collector:** driven by a dedicated switchable Shelly smart plug. It turns on automatically whenever a tool is collecting and off when the system returns home, and can also be toggled manually.
 - **Idle power-off:** if nothing moves for an hour (configurable in Settings, 0 = never), the motor driver powers off automatically. The next move re-homes first — this is invisible in normal use, just a brief extra step if the system has been sitting idle.
 
 ---
 
 ## Settings
 
-Tap the **⚙ gear icon** on the dashboard to reach Settings, which covers:
+Tap the **⚙ gear icon** to reach Settings, which covers:
 
-- Links to re-run **Guided (AI) Setup** or **Manual Setup** any time, not just on first run
+- A link back to the **Shop Layout** canvas any time, not just on first run
 - Idle power-off timeout
 - Home endstop side, motor direction, number of gates, port size
 - **Forget WiFi** — erases stored credentials and reboots into the setup portal (same effect as the serial `wifireset` command, no serial access needed)
 - **Reset gate calibration** ("Start Over") — clears trained positions and outlet mappings
 
-Changes take effect immediately and are saved to flash. The Anthropic API key has no UI entry point by design (a LAN-served settings page isn't the right place for it) — set it via the serial `provision` command or the WiFi captive portal's first-run flow; it's preserved across WiFi resets either way.
+Changes take effect immediately and are saved to flash.
 
 ---
 
@@ -235,9 +227,9 @@ To work on the web UI against a live device:
 ## Project Structure
 
 ```
-linear_actuator/         Firmware (Arduino / PlatformIO)
+firmware/         Firmware (Arduino / PlatformIO)
   config.h               All compile-time settings
-  linear_actuator.ino    Main sketch + state machine
+  firmware.ino    Main sketch + state machine
   api/                   HTTP REST + WebSocket server
   boards/                Per-board pin maps (devkitc, feather_s2, qtpy_c3)
   control/               Control input modes + the v2 routing brain:
@@ -265,9 +257,6 @@ shared/device-model/     Canonical device model + conformance suite — the sing
 tools/                   Dev tools — mock-api.js (local firmware stand-in),
                          mock-node.js (simulated secondary board),
                          provisioning utilities
-
-api/                     Vercel serverless function (proxies the AI setup
-                         assistant's Claude calls for the hosted demo)
 
 .github/workflows/       CI (conformance suite, UI build, firmware compile)
 docs/                    Design notes and reference images
@@ -316,13 +305,12 @@ node shared/device-model/nodelink-conformance.js ws://<node>.local/nodelink
 
 ## Limitations & Known Issues
 
-- **Nothing in this project has been validated on hardware yet** — v1 included.
+- **Nothing in this project has been validated on hardware yet.**
   Everything is verified by compile, host test and simulation. See
   [`TODO.md`](TODO.md) for the bench plan and the current backlog.
 - A **sliding gate on a secondary board** can't be calibrated: the calibration
-  flow drives the v1 motion endpoints, which only the primary exposes.
+  flow drives the motion endpoints, which only the primary exposes.
 - Routing **conflicts** are computed and reported by the firmware but not yet
   surfaced in the Live view, so it can say a tool isn't pulling but not why.
-- HTTPS to the Anthropic API uses `setInsecure()` (no certificate validation). Acceptable for local network use; must be addressed before any cloud deployment.
-- The dust collector is controlled by a switchable Shelly plug (configured via `PUT /api/dustcollector` with `{"gen":2,"ip":"192.168.1.x"}`). It follows gate state automatically and can be toggled manually from the dashboard. A setup-wizard step to enter the plug's IP is not yet wired up (configure it via the API for now).
+- The dust collector is controlled by a switchable Shelly plug (configured via `PUT /api/dustcollector` with `{"gen":2,"ip":"192.168.1.x"}`). It follows gate state automatically and can be toggled manually. A setup step to enter the plug's IP is not yet wired up (configure it via the API for now).
 - 240V tools cannot use Shelly plug-in outlets.

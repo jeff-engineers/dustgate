@@ -1,4 +1,4 @@
-// routing.js — DustGate v2 routing engine.
+// routing.js — DustGate routing engine.
 //
 // The pure core of P0: given a topology and which tools are running (in PRIORITY
 // order), compute the state every selector should be in to route airflow from

@@ -1,6 +1,6 @@
 // nodelink.test.js — pure unit tests for the primary↔secondary frame contract.
 //
-// The C++ side (linear_actuator/control/NodeLink.h, exercised by
+// The C++ side (firmware/control/NodeLink.h, exercised by
 // test_nodebus.cpp) must agree with this file value-for-value. Where a test here
 // asserts a specific number, the same assertion exists on the firmware side —
 // that pairing is the whole anti-drift mechanism, since the firmware can't

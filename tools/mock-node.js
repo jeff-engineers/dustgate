@@ -4,7 +4,7 @@
 // Usage:
 //   cd tools && node mock-node.js [port]
 //
-// This is the JS twin of linear_actuator/node/dustgate_node.cpp. It speaks the
+// This is the JS twin of firmware/node/dustgate_node.cpp. It speaks the
 // NodeLink protocol over a WebSocket at /nodelink and does exactly what the real
 // servo-only board does: accept already-resolved SET frames and "move" a channel
 // to an angle. It owns no topology, computes no routing, and never decides

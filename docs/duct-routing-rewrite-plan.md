@@ -134,7 +134,7 @@ In `onMove` (721) / `onUp` (726):
 - `dustgate-ui/src/app/build/routing/{geometry,route-grid,router}.ts` — new.
 - `dustgate-ui/src/app/services/demo-topology.ts` — read-only reference for the default layout
   (it has no `ui.layout`, so it exercises `autoLayoutInto`).
-- `docs/v2-ui-design.md` — append a dev-log entry for the router replacement, matching the
+- `docs/ui-design.md` — append a dev-log entry for the router replacement, matching the
   existing log style (~lines 190–410).
 
 Untouched: `shared/device-model/routing.js` is the **airflow** solver, unrelated to pixels.

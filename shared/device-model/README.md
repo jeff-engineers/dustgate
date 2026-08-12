@@ -31,7 +31,7 @@ Kept honest at three levels, because each catches something the others can't:
 | Level | What it pins | Run |
 |---|---|---|
 | `nodelink.test.js` | frame shapes + validation, JS side | `npm run nodelink:test` |
-| `linear_actuator/test/test_nodebus.cpp` | the same shapes + values, C++ side | `npm run firmware:nodebus:test` |
+| `firmware/test/test_nodebus.cpp` | the same shapes + values, C++ side | `npm run firmware:nodebus:test` |
 | `nodelink-conformance.js` | the CONVERSATION — handshake, accept-vs-arrive, refusals, hold-on-link-loss | `npm run nodelink:conformance:ci` |
 
 The first two are a matched pair: where one asserts a specific number (a gate's
@@ -39,7 +39,7 @@ open angle resolving to 10), so does the other. That pairing is the anti-drift
 mechanism, since the firmware can't import the JS.
 
 `tools/mock-node.js` is the simulated secondary the conformance suite drives; it
-mirrors `linear_actuator/node/dustgate_node.cpp` behaviour-for-behaviour. To
+mirrors `firmware/node/dustgate_node.cpp` behaviour-for-behaviour. To
 certify REAL hardware instead, point the suite at the board:
 
 ```
@@ -52,7 +52,7 @@ node shared/device-model/nodelink-conformance.js ws://<node-ip>/nodelink
 |---|---|---|
 | `tools/mock-api.js` | an HTTP + WebSocket server | Node `require`; owns `setTimeout` timing |
 | `dustgate-ui/src/app/services/demo-api.service.ts` | an Angular service | imports via the `@device-model` tsconfig path alias; owns `await delay` timing |
-| `linear_actuator/` firmware (C++) | — | **can't** import the JS; conforms to the same contract, verified by `conformance.js` |
+| `firmware/` firmware (C++) | — | **can't** import the JS; conforms to the same contract, verified by `conformance.js` |
 
 Because both JS simulators call the *same* model, they can't drift from each
 other. The firmware is kept honest by the conformance suite instead of by shared

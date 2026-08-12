@@ -4,7 +4,6 @@
   "description": "Dev tools for DustGate — mock API server and provisioning utilities",
   "scripts": {
     "mock": "node mock-api.js",
-    "mock:claude": "node mock-api.js",
     "conformance": "node ../shared/device-model/conformance.js",
     "conformance:ci": "node mock-api.js & MOCK_PID=$!; sleep 2; node ../shared/device-model/conformance.js; RC=$?; kill $MOCK_PID; exit $RC",
     "model:test": "node ../shared/device-model/topology.test.js && node ../shared/device-model/nodelink.test.js",
@@ -14,9 +13,9 @@
     "nodelink:conformance:ci": "node mock-node.js & NODE_PID=$!; sleep 1; node ../shared/device-model/nodelink-conformance.js; RC=$?; kill $NODE_PID 2>/dev/null; exit $RC",
     "topology:conformance": "node ../shared/device-model/topology-conformance.js",
     "topology:conformance:ci": "node mock-api.js & MOCK_PID=$!; sleep 2; node ../shared/device-model/topology-conformance.js; RC=$?; kill $MOCK_PID; exit $RC",
-    "firmware:router:test": "cd .. && c++ -std=c++17 -I \"$(dirname \"$(find .pio.nosync/libdeps -path '*/ArduinoJson/src/ArduinoJson.h' | head -1)\")\" linear_actuator/test/test_topology_router.cpp -o /tmp/dustgate-trtest && /tmp/dustgate-trtest linear_actuator/test/fixtures/",
-    "firmware:controller:test": "cd .. && c++ -std=c++17 -I \"$(dirname \"$(find .pio.nosync/libdeps -path '*/ArduinoJson/src/ArduinoJson.h' | head -1)\")\" linear_actuator/test/test_topology_controller.cpp -o /tmp/dustgate-tctest && /tmp/dustgate-tctest linear_actuator/test/fixtures/",
-    "firmware:nodebus:test": "cd .. && c++ -std=c++17 -I \"$(dirname \"$(find .pio.nosync/libdeps -path '*/ArduinoJson/src/ArduinoJson.h' | head -1)\")\" linear_actuator/test/test_nodebus.cpp -o /tmp/dustgate-nbtest && /tmp/dustgate-nbtest linear_actuator/test/fixtures/",
+    "firmware:router:test": "cd .. && c++ -std=c++17 -I \"$(dirname \"$(find .pio.nosync/libdeps -path '*/ArduinoJson/src/ArduinoJson.h' | head -1)\")\" firmware/test/test_topology_router.cpp -o /tmp/dustgate-trtest && /tmp/dustgate-trtest firmware/test/fixtures/",
+    "firmware:controller:test": "cd .. && c++ -std=c++17 -I \"$(dirname \"$(find .pio.nosync/libdeps -path '*/ArduinoJson/src/ArduinoJson.h' | head -1)\")\" firmware/test/test_topology_controller.cpp -o /tmp/dustgate-tctest && /tmp/dustgate-tctest firmware/test/fixtures/",
+    "firmware:nodebus:test": "cd .. && c++ -std=c++17 -I \"$(dirname \"$(find .pio.nosync/libdeps -path '*/ArduinoJson/src/ArduinoJson.h' | head -1)\")\" firmware/test/test_nodebus.cpp -o /tmp/dustgate-nbtest && /tmp/dustgate-nbtest firmware/test/fixtures/",
     "firmware:test": "npm run firmware:router:test && npm run firmware:controller:test && npm run firmware:nodebus:test"
   },
   "dependencies": {

@@ -1,6 +1,6 @@
 import type { Topology } from '@topology';
 
-// A pre-built v2 topology used to seed demo / Vercel mode so the Live view (and
+// A pre-built topology used to seed demo / Vercel mode so the Live view (and
 // later the configurator) has a shop to show on a fresh page load. Mirrors the
 // mockup shop: a sliding gate feeding three tools directly, and its fourth outlet
 // feeding a MANIFOLD that splits to the Drum sander and — through an inline BALL

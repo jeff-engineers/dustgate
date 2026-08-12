@@ -25,7 +25,7 @@
 
 'use strict';
 
-// ── Constants (mirror linear_actuator/config.h where noted) ─────────────────
+// ── Constants (mirror firmware/config.h where noted) ─────────────────
 const NUM_STOPS = 16;              // compile-time max stops (config.h NUM_STOPS)
 const STEPS_PER_MM = 40;           // mock-only resolution; not real hardware (see TODO.md)
 const MIN_STOP_SEPARATION_MM = 10; // config.h MIN_STOP_SEPARATION_MM — overlap backstop
@@ -35,7 +35,7 @@ const CALIBRATE_MS = 4000;         // simulated reference-sweep duration
 const TOOL_NAMES = ['Table Saw', 'Drill Press', 'Router Table'];
 
 // Per-port role — what a linear-actuator port/gate is used for. Lets the
-// actuator act as a node in the larger v2 topology graph (see v2 RFC §5.2).
+// actuator act as a node in the larger topology graph (see architecture-rfc.md §5.2).
 const PORT_ROLES = ['tool', 'unassigned', 'blocked', 'feed'];
 
 // Manifold geometry profiles: (model, gateCount) → mm positions referenced to the
@@ -126,7 +126,7 @@ function createDevice() {
 
 // ── Wire projections ────────────────────────────────────────────────────────
 
-/** The status object pushed over WebSocket and returned by GET /api/status. */
+/** The status object pushed over WebSocket and returned by GET /api/motion. */
 function statusView(d) {
   return {
     state:          d.state,

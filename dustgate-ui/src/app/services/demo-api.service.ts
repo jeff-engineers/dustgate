@@ -11,7 +11,6 @@ import {
   SystemStatus,
 } from './api.service';
 import { HardwareProfileService } from './hardware-profile.service';
-import { getAccessCode } from './access-code';
 import * as model from '@device-model';
 import { validateTopology, type Topology } from '@topology';
 import { createTopologyDevice, setToolPower, statusView as topoStatus, type TopologyDevice, type TopologyStatus } from '@topology-device';
@@ -25,9 +24,8 @@ import { DEMO_TOPOLOGY } from './demo-topology';
  * This is a THIN async wrapper over the canonical device model
  * (shared/device-model/device-model.js) — the SAME model that drives the Node
  * dev mock (tools/mock-api.js). All device behaviour lives in the model; this
- * class only owns timing (await delay between the begin/complete motion steps),
- * maps the model's wire shape to the Angular API types, and routes agent chat
- * through the Vercel serverless function instead of the ESP32.
+ * class only owns timing (await delay between the begin/complete motion steps)
+ * and maps the model's wire shape to the Angular API types.
  *
  * Provided via DI override in app.config.ts when running outside localhost.
  */
@@ -37,7 +35,7 @@ export class DemoApiService extends ApiService {
   /** The canonical device instance (in-memory, resets on page load). */
   private d: model.Device = model.createDevice();
 
-  /** v2 topology-native device (in-memory; seeded with DEMO_TOPOLOGY in init). */
+  /** topology-native device (in-memory; seeded with DEMO_TOPOLOGY in init). */
   private td: TopologyDevice | null = createTopologyDevice(DEMO_TOPOLOGY);
 
   constructor(http: HttpClient, hardwareProfile: HardwareProfileService) {
@@ -48,8 +46,8 @@ export class DemoApiService extends ApiService {
   // ── Bootstrap (no HTTP, no WebSocket) ────────────────────────────────────────
 
   protected override async init(): Promise<void> {
-    // Seed the showcase with a pre-configured dust collector so the dashboard
-    // toggle works on a fresh page load without running the wizard. A start-over
+    // Seed the showcase with a pre-configured dust collector so the collector
+    // toggle works on a fresh page load without running setup. A start-over
     // (clearCal) still clears it, matching firmware — this is just initial demo
     // state, not a hardcoded-always-true override.
     this.d.dcConfigured = true;
@@ -81,7 +79,7 @@ export class DemoApiService extends ApiService {
     this.status$.next(this.buildStatus());
   }
 
-  // ── v2 topology API (in-process, mirrors the mock's /api/v2/* + real firmware) ──
+  // ── topology API (in-process, mirrors the mock's /api/* + real firmware) ──
   override async getTopology(): Promise<Topology> {
     if (!this.td) throw new Error('no topology configured');
     return this.td.topology;
@@ -94,7 +92,7 @@ export class DemoApiService extends ApiService {
     return { ok: true };
   }
 
-  override async getV2Status(): Promise<TopologyStatus> {
+  override async getStatus(): Promise<TopologyStatus> {
     if (!this.td) throw new Error('no topology configured');
     return topoStatus(this.td);
   }
@@ -140,7 +138,7 @@ export class DemoApiService extends ApiService {
 
   // ── Read ──────────────────────────────────────────────────────────────────────
 
-  override getStatus(): Promise<SystemStatus> {
+  override getMotionStatus(): Promise<SystemStatus> {
     return Promise.resolve(this.buildStatus());
   }
 
@@ -256,7 +254,7 @@ export class DemoApiService extends ApiService {
     }));
   }
 
-  // ── v2 secondary boards ───────────────────────────────────────────────────
+  // ── Secondary boards ───────────────────────────────────────────────────
   // Two fake nodes so the boards surface is explorable in the demo. One is
   // deliberately already in DEMO_TOPOLOGY's controllers[] and one isn't, so both
   // the "add" and the "already added" paths are visible without any hardware.
@@ -383,27 +381,5 @@ export class DemoApiService extends ApiService {
 
   override async refreshInfo(): Promise<void> {
     // Already in sync — nothing to fetch
-  }
-
-  // ── Claude proxy ──────────────────────────────────────────────────────────────
-
-  /**
-   * In demo mode, send agent chat requests to the Vercel serverless function
-   * (/api/claude) which proxies to Anthropic with a rate-limited server-side key.
-   * In local dev (?demo=true), the Angular proxy forwards /api/* to mock-api.js
-   * which has an equivalent /api/claude route.
-   */
-  override agentChat(body: unknown): Promise<Response> {
-    const accessCode = getAccessCode();
-    const payload = accessCode ? { ...(body as Record<string, unknown>), accessCode } : body;
-    return fetch('/api/claude', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify(payload),
-    });
-  }
-
-  override setAnthropicKey(_key: string): Promise<{ ok: boolean }> {
-    return Promise.resolve({ ok: true }); // key lives server-side in Vercel env vars
   }
 }

@@ -3,7 +3,7 @@
 # After running this, upload to the device with:  pio run --target uploadfs
 set -e
 
-DATA_DIR="../linear_actuator/data"
+DATA_DIR="../firmware/data"
 
 echo "Building Angular app..."
 npm run build

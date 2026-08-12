@@ -19,8 +19,8 @@ import { OutletPickerComponent } from './outlet-picker.component';
 //   switch — the COLLECTOR's plug. We COMMAND it, and never read it, so there's
 //            no threshold to set. Written to `control.outlet`.
 //
-// See docs/v2-topology-schema.md. Firmware picks both up on topology adopt
-// (syncTopologyOutlets in linear_actuator.ino) — the layout is what the poller
+// See docs/topology-schema.md. Firmware picks both up on topology adopt
+// (syncTopologyOutlets in firmware.ino) — the layout is what the poller
 // and the blower switch are configured from.
 
 interface RawEl { [k: string]: unknown; }

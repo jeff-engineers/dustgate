@@ -1,7 +1,7 @@
-// topology.js — DustGate v2 topology contract: types, helpers, and validation.
+// topology.js — DustGate topology contract: types, helpers, and validation.
 //
-// This is the single source of truth for the SHAPE of a v2 install (the schema
-// in docs/v2-topology-schema.md, as code). Firmware, mock, demo, and the
+// This is the single source of truth for the SHAPE of an install (the schema
+// in docs/topology-schema.md, as code). Firmware, mock, demo, and the
 // configurator all consume it. PURE — no HTTP/timers/state; just data + checks.
 //
 // Vocabulary (resolve the "node" overload):
@@ -168,7 +168,7 @@ function absoluteAngles(sel) {
  *
  * Rejects a set that lands outside the servo's travel: that means the horn is
  * clocked wrong on its spline, and no amount of arithmetic fixes it (see the
- * mechanical notes in docs/v2-topology-schema.md).
+ * mechanical notes in docs/topology-schema.md).
  *
  * @param {Object} sel                       servo selector
  * @param {Object<string, number>} captured  stateId → absolute angle

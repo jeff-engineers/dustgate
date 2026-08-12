@@ -3,16 +3,13 @@ import { CommonModule } from '@angular/common';
 import { ApiService, DiscoveredOutlet } from '../services/api.service';
 
 // ── Finding a tool's smart plug ──────────────────────────────────────────────
-// The identify-by-power trick, from Phase 1: you can't tell which Shelly on the
-// network is bolted behind which machine by reading hostnames, so you switch the
-// tool on and look for the plug that jumped. That's the whole interaction, and it
-// works because the scan already probes every hit for live wattage.
+// Identify-by-power: you can't tell which Shelly on the network is bolted behind
+// which machine by reading hostnames, so you switch the tool on and look for the
+// plug that jumped. That's the whole interaction, and it works because the scan
+// already probes every hit for live wattage.
 //
-// Split out of OutletConfiguratorComponent so the canvas tool sheet and the v1
-// gate wizard can't drift apart on it. This half knows nothing about where the
-// choice gets stored — it emits a DiscoveredOutlet and stops. (The v1
-// configurator still has its own copy; it's welded to the slot/stop model and
-// wasn't worth rewiring mid-bring-up. Fold it in when v1 retires.)
+// This component knows nothing about where the choice gets stored — it emits a
+// DiscoveredOutlet and stops.
 
 @Component({
   selector: 'app-outlet-picker',

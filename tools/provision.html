@@ -42,7 +42,7 @@
 <body>
 <div class="card">
   <h1>DustGate Provision <span id="statusBadge" class="badge off">disconnected</span></h1>
-  <p class="sub">Write WiFi credentials and Anthropic key to NVS after a firmware flash.<br>
+  <p class="sub">Write WiFi credentials to NVS after a firmware flash.<br>
      Requires Chrome/Edge (Web Serial API). Open DevTools console for verbose output.</p>
 
   <button id="btnConnect">Connect to Board via USB Serial</button>
@@ -54,9 +54,6 @@
 
   <label>WiFi Password</label>
   <input id="pass" type="password" placeholder="Leave blank for open networks" autocomplete="off">
-
-  <label>Anthropic API Key <span style="font-weight:400;color:#aaa">(optional)</span></label>
-  <input id="key" type="password" placeholder="sk-ant-..." autocomplete="off">
 
   <button id="btnSend" disabled>Write Config to Board</button>
 
@@ -141,12 +138,10 @@ function enableMock() {
 $('btnSend').addEventListener('click', async () => {
   const ssid = $('ssid').value.trim();
   const pass = $('pass').value;
-  const key  = $('key').value.trim();
 
   if (!ssid) { log('✗ SSID is required.'); return; }
 
   const payload = { ssid, pass };
-  if (key) payload.key = key;
 
   const cmd = 'provision ' + JSON.stringify(payload) + '\n';
 
@@ -154,7 +149,6 @@ $('btnSend').addEventListener('click', async () => {
     log('');
     log('[MOCK] Would send: ' + cmd.trim());
     log('[MOCK] WiFi saved: ' + ssid);
-    if (key) log('[MOCK] Anthropic key saved.');
     log('[MOCK] OK provision');
     return;
   }

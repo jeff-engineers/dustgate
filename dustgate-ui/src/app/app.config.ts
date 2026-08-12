@@ -4,7 +4,6 @@ import { provideHttpClient } from '@angular/common/http';
 import { routes } from './app.routes';
 import { ApiService } from './services/api.service';
 import { DemoApiService } from './services/demo-api.service';
-import { setAccessCode } from './services/access-code';
 
 // Demo mode: active on the public Vercel deployment, or when ?demo=true is
 // present (for local dev testing). NOT active for any way of reaching a real
@@ -43,24 +42,15 @@ function readForcedDemo(): boolean {
   }
 }
 
-// The ONLY thing the host decides is whether the API is real or simulated. It used
-// to also decide which UI you got — the public demo was pinned to the phase-1
-// dashboard — but phase 2 is the product now and every deploy routes through it.
+// The ONLY thing the host decides is whether the API is real or simulated.
 const isDemo = !isLocalNetworkHost(window.location.hostname) || readForcedDemo();
-
-// Pick up ?code=... once (e.g. a link shared with an interviewer) and persist
-// it so future demo requests carry it without needing it in the URL again.
-const codeParam = new URLSearchParams(window.location.search).get('code');
-if (codeParam) {
-  setAccessCode(codeParam);
-}
 
 export const appConfig: ApplicationConfig = {
   providers: [
     provideRouter(routes, withHashLocation()),
     provideHttpClient(),
     // In demo mode, substitute DemoApiService everywhere ApiService is injected.
-    // All components and ClaudeService use ApiService — the override is transparent.
+    // Every component injects ApiService — the override is transparent.
     ...(isDemo ? [{ provide: ApiService, useClass: DemoApiService }] : []),
   ]
 };

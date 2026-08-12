@@ -6,10 +6,9 @@ import { ApiService } from '../services/api.service';
 import { HardwareProfileService, PortSize } from '../services/hardware-profile.service';
 
 /**
- * SettingsComponent — device configuration hub, reached via the gear icon on
- * the dashboard. Consolidates settings that were previously only reachable
- * (or not reachable at all) from inside the setup wizards, plus entry points
- * to re-run either wizard.
+ * SettingsComponent — device configuration hub, reached via the gear icon.
+ * Consolidates everything that isn't part of laying out the shop: port sizes,
+ * motor direction, idle timeout, WiFi, and the destructive resets.
  */
 @Component({
   selector: 'app-settings',
@@ -193,12 +192,8 @@ import { HardwareProfileService, PortSize } from '../services/hardware-profile.s
       <div class="section">
         <span class="section-title">Setup</span>
         <button type="button" class="setup-link" (click)="goSetup()">
-          <span class="name">Guided (AI) Setup →</span>
-          <span class="desc">Conversational assistant walks through gates and outlets</span>
-        </button>
-        <button type="button" class="setup-link" (click)="goManualSetup()">
-          <span class="name">Manual Setup →</span>
-          <span class="desc">Step through gate positions and outlets yourself</span>
+          <span class="name">Shop Layout →</span>
+          <span class="desc">Lay out the collector, ducts, gates and tools</span>
         </button>
       </div>
 
@@ -322,7 +317,6 @@ export class SettingsComponent implements OnInit {
 
   back()            { this.router.navigate(['/']); }
   goSetup()         { this.router.navigate(['/build']); }
-  goManualSetup()   { this.router.navigate(['/build']); }
 
   clearStatus() { this.statusMsg = ''; this.errorMsg = ''; }
 

@@ -51,7 +51,7 @@ run_pio() {
   return 1
 }
 UI_DIR="$SCRIPT_DIR/dustgate-ui"
-DATA_DIR="$SCRIPT_DIR/linear_actuator/data"
+DATA_DIR="$SCRIPT_DIR/firmware/data"
 ENV_FILE="$SCRIPT_DIR/tools/.env"
 
 # Python with pyserial, used by the provision step to drive the serial port
@@ -98,7 +98,6 @@ PIO_ENV_ARGS=()
 # exported — only fall back to the file for whichever ones aren't set.
 WIFI_SSID="${WIFI_SSID:-}"
 WIFI_PASS="${WIFI_PASS:-}"
-ANTHROPIC_KEY="${ANTHROPIC_KEY:-}"
 HOSTNAME_CFG="${HOSTNAME_CFG:-}"
 
 if [[ -f "$ENV_FILE" ]]; then
@@ -109,7 +108,6 @@ if [[ -f "$ENV_FILE" ]]; then
     case "$key" in
       WIFI_SSID)     [[ -z "$WIFI_SSID" ]]     && WIFI_SSID="$val" ;;
       WIFI_PASS)     [[ -z "$WIFI_PASS" ]]     && WIFI_PASS="$val" ;;
-      ANTHROPIC_KEY) [[ -z "$ANTHROPIC_KEY" ]] && ANTHROPIC_KEY="$val" ;;
       HOSTNAME)      [[ -z "$HOSTNAME_CFG" ]]  && HOSTNAME_CFG="$val" ;;
     esac
   done < "$ENV_FILE"
@@ -127,7 +125,7 @@ if $DO_UI; then
   echo "▶ Building Angular UI…"
   cd "$UI_DIR"
   ng build --configuration production
-  echo "▶ Copying bundle → linear_actuator/data/"
+  echo "▶ Copying bundle → firmware/data/"
   BROWSER_DIR="dist/dustgate-ui/browser"
   if [ ! -d "$BROWSER_DIR" ]; then
     BROWSER_DIR="dist/dustgate-ui"
@@ -161,13 +159,6 @@ fi
 
 # ── 4. Auto-provision credentials ─────────────────────────────────────────
 if $DO_PROVISION && ($DO_FW || $DO_FS || $FORCE_PROVISION); then
-  # A node has no agent chat and no web UI, so an Anthropic key is meaningless
-  # there — don't push one, and don't let its presence stand in for having WiFi
-  # credentials (which are the ONLY thing a node actually needs).
-  if [[ "$PIO_ENV" == dustgate_node* ]]; then
-    ANTHROPIC_KEY=""
-  fi
-
   # Does this target speak USB straight from the MCU, or through a bridge chip?
   # It decides how we drive the modem control lines below, and the two cases want
   # OPPOSITE settings — see the long note at the pyserial block.
@@ -176,7 +167,7 @@ if $DO_PROVISION && ($DO_FW || $DO_FS || $FORCE_PROVISION); then
     dustgate_node*|adafruit_feather_esp32s2) NATIVE_USB=1 ;;
   esac
 
-  if [[ -z "$WIFI_SSID" && -z "$ANTHROPIC_KEY" ]]; then
+  if [[ -z "$WIFI_SSID" ]]; then
     echo "ℹ  No credentials in tools/.env — skipping auto-provision."
     echo "   (Copy tools/.env.example → tools/.env to enable this step.)"
   else
@@ -186,12 +177,11 @@ if $DO_PROVISION && ($DO_FW || $DO_FS || $FORCE_PROVISION); then
     PAYLOAD=$(python3 -c "
 import json, sys
 d = {}
-ssid = sys.argv[1]; pw = sys.argv[2]; key = sys.argv[3]; host = sys.argv[4]
+ssid = sys.argv[1]; pw = sys.argv[2]; host = sys.argv[3]
 if ssid: d['ssid'] = ssid; d['pass'] = pw
-if key:  d['key'] = key
 if host: d['host'] = host
 print(json.dumps(d))
-" "$WIFI_SSID" "$WIFI_PASS" "$ANTHROPIC_KEY" "$HOSTNAME_CFG")
+" "$WIFI_SSID" "$WIFI_PASS" "$HOSTNAME_CFG")
 
     # Wait for the board to finish resetting and boot the app, then re-detect
     # the port fresh — the flash/reset cycle can change which /dev/cu.* node the
@@ -327,9 +317,9 @@ PY
         echo "     or the port changed again mid-command. Troubleshooting:"
         echo "       - Open a serial monitor and watch the boot log: bash dev.sh monitor"
         echo "       - Retry provisioning on its own once you see it fully booted: bash dev.sh provision"
-        # NB: do NOT echo $PAYLOAD here — it contains the WiFi password and the
-        # Anthropic API key in cleartext. Point at the re-run instead, which
-        # rebuilds the payload from tools/.env without printing any secret.
+        # NB: do NOT echo $PAYLOAD here — it contains the WiFi password in
+        # cleartext. Point at the re-run instead, which rebuilds the payload
+        # from tools/.env without printing any secret.
       fi
     fi
   fi

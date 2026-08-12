@@ -4,9 +4,9 @@
 mocks + conformance and the firmware *foundation* (far-endstop polarity fix,
 config profiles, `CalibrationData` v2) are done; the reference-sweep motion,
 `/api/calibrate` + `/api/config/port-role` endpoints, and status/info fields are
-pending and should be built with hardware to validate the motion. New manifold-cal
-wizard UI is not built (4" is disabled in the existing UI).
-**Scope:** the existing linear-actuator DustGate (v1). Independent of the v2
+pending and should be built with hardware to validate the motion. The 4" manifold
+profile is disabled in the UI until real hardware exists to measure it.
+**Scope:** the sliding-gate (rack-and-pinion) actuator. Independent of the
 servo/multi-node work — but the API/model changes here go through the same
 canonical-model + conformance discipline (see `shared/device-model/`).
 
@@ -71,7 +71,7 @@ grows with gate count). Ship profiles for `rockler-2.5` and `rockler-4`; keep a
 > Gate count is even for these manifolds (gates added in pairs), but the user may
 > wire an **odd number of tools** — extra gates are placed but simply left
 > unassigned (no outlet). Nothing special needed; auto-placement creates all
-> `gateCount` positions and the wizard assigns outlets only to the ones in use.
+> `gateCount` positions and outlets are assigned only to the ones in use.
 
 ### Calibration storage (extends `CalibrationStore`)
 
@@ -127,9 +127,9 @@ Run once at setup; steps 2 and 6's checks re-run on every subsequent home.
 - **Backlash.** Approach gates from a consistent direction (as today) so the
   measured span and gate positions share the same backlash null.
 
-## Wizard / UX
+## Calibration UX
 
-New happy path replaces the gate-by-gate jog walk:
+The happy path replaces the gate-by-gate jog walk:
 
 1. Pick manifold model (Rockler 2.5" / 4" / custom).
 2. Pick gate count (even; stepper).
@@ -153,7 +153,7 @@ sweep's `steps/mm` calibration, over-travel safety, and span check for free.
 - API/status: expose far-endstop state, `measuredSpanSteps`, calibrated
   `stepsPerMm`; add a "run calibration sweep" command and a
   "set manifold profile + gate count" command.
-- UI: new calibrate step in both wizards; show calibrated `steps/mm` and span in
+- UI: a calibrate step in the gate configurator; show calibrated `steps/mm` and span in
   Settings; a "recalibrate" affordance when the span check trips.
 
 ## Canonical-model + conformance impact

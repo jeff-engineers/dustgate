@@ -1,0 +1,305 @@
+// =============================================================================
+// dustgate_node.cpp — the SECONDARY firmware. A dumb servo bank in the star.
+//
+// WHY THIS IS A SEPARATE PROGRAM, not #ifdefs in firmware.ino:
+// the main sketch is ~1700 lines with the stepper, endstops, homing, the
+// reference sweep, Shelly polling and the routing brain woven through 97
+// separate places. Splitting that with the preprocessor would leave a sketch
+// nobody can read and a servo-only path nobody actually exercises. The RFC says
+// a secondary "is essentially a stripped-down DustGate node… P3 is mostly
+// SUBTRACTING from the current firmware" — so here is the subtraction, done
+// once, as a program small enough to hold in your head.
+//
+// What it does, in full:
+//   1. join WiFi (shared WiFiProvisioner — same captive portal as the primary)
+//   2. advertise itself over mDNS so the primary's picker can find it
+//   3. accept ONE WebSocket at /nodelink and answer HELLO / PING / SET
+//   4. move a servo channel to an angle
+//
+// What it deliberately does NOT have: a topology, a router, a sequencer, tool
+// power sensing, a web UI, calibration, a stepper. It never decides anything.
+// SET frames arrive already resolved to a channel + an absolute angle (see
+// control/NodeLink.h), which is exactly why this file can be this short — and
+// why a $5 board can be a node.
+//
+// FAIL-SAFE: if the primary disappears, every servo HOLDS. There is no timeout
+// that closes gates, no homing on reconnect, no autonomous behaviour of any
+// kind. Losing the link mid-cut must never slam a gate on a running tool.
+//
+// Build:  pio run -e dustgate_node
+// =============================================================================
+
+#include <Arduino.h>
+#include "../config.h"
+
+// WiFiProvisioner.h FIRST, before ESPAsyncWebServer: it pulls in the core's
+// <WebServer.h> (for the captive portal), whose HTTP_GET/HTTP_POST enums collide
+// with ESPAsyncWebServer's unless the core header is seen first. Same ordering
+// the main sketch relies on — see the note in api/HttpApiServer.cpp.
+#include "../utils/WiFiProvisioner.h"
+
+#include <ESPAsyncWebServer.h>
+#include <ArduinoJson.h>
+#include <ESPmDNS.h>
+#include <esp_task_wdt.h>
+
+#include "../motor/ServoActuator.h"
+#include "../control/NodeLink.h"
+#include "NodeStatusLed.h"
+
+#if !HAS_SERVO
+  #error "dustgate_node needs a servo bank — build with -DENABLE_SERVO and a board that defines SERVO_PWM_PIN_1"
+#endif
+
+static AsyncWebServer server(API_PORT);
+static AsyncWebSocket nodeWs("/nodelink");
+
+static ServoActuator servos[SERVO_COUNT];
+static const int SERVO_PINS[SERVO_COUNT] = {
+    SERVO_PWM_PIN_1, SERVO_PWM_PIN_2, SERVO_PWM_PIN_3, SERVO_PWM_PIN_4
+};
+
+// Pending SET, handed from the AsyncTCP task to loop(). One slot: the primary
+// serializes moves (one servo at a time is its current budget), so a second
+// command can only mean the first is stale.
+static portMUX_TYPE      cmdMux = portMUX_INITIALIZER_UNLOCKED;
+static volatile bool     cmdPending = false;
+static topo::nodelink::SetCommand cmdSlot;
+
+// The move currently being reported on, so arrival can be announced when the
+// servo settles rather than at a guessed interval.
+static char pendingSel[48]   = "";
+static char pendingState[32] = "";
+static bool awaitingSettle   = false;
+
+// Written from the AsyncTCP task, read by loop() for the status pixel. A plain
+// bool is enough: it is advisory display state, not a control input.
+static volatile bool g_primaryLinked = false;
+static volatile uint32_t g_linkedClientId = 0;
+
+static bool anyServoMoving() {
+    for (int i = 0; i < SERVO_COUNT; i++) if (servos[i].isMoving()) return true;
+    return false;
+}
+
+// -----------------------------------------------------------------------------
+// NodeLink frame handling (AsyncTCP task — never touches a servo directly)
+// -----------------------------------------------------------------------------
+static void onNodeWsEvent(AsyncWebSocket*, AsyncWebSocketClient* client,
+                          AwsEventType type, void* arg, uint8_t* data, size_t len) {
+    if (type == WS_EVT_CONNECT) {
+        Serial.print(F("[NODE] Primary connected — client #"));
+        Serial.print(client->id());
+        Serial.print(F(" from ")); Serial.print(client->remoteIP());
+        Serial.print(F(", ")); Serial.print(nodeWs.count()); Serial.println(F(" open"));
+        g_linkedClientId = client->id();
+        g_primaryLinked  = true;
+        return;
+    }
+    if (type == WS_EVT_DISCONNECT || type == WS_EVT_ERROR) {
+        // HOLD. No servo command here, by design — see the fail-safe note above.
+        Serial.print(F("[NODE] Primary disconnected — client #"));
+        Serial.print(client->id());
+        Serial.println(F(" — holding all gates."));
+        // Track the ONE linked client by id rather than inferring from count().
+        // count() includes the client currently being torn down, which is why this
+        // used to read `> 1`; that guess also went wrong the other way, reporting
+        // linked when all that remained was a zombie the server hadn't reaped.
+        if (client->id() == g_linkedClientId) g_primaryLinked = false;
+        return;
+    }
+    if (type != WS_EVT_DATA) return;
+
+    AwsFrameInfo* info = (AwsFrameInfo*)arg;
+    if (!(info->final && info->index == 0 && info->len == len)) return;
+    if (info->opcode != WS_TEXT) return;
+
+    StaticJsonDocument<384> doc;
+    if (deserializeJson(doc, data, len)) return;
+    JsonObjectConst f = doc.as<JsonObjectConst>();
+    const char* t = f["t"].as<const char*>();
+    if (!t) return;
+
+    StaticJsonDocument<256> reply;
+
+    // Declared HERE, not inside the HELLO branch, and it matters: ArduinoJson
+    // stores a `const char*` value BY POINTER without copying, and the document
+    // is serialized after the if/else below. A String scoped to the branch is
+    // destroyed at its closing brace, so serializeJson() then read freed heap —
+    // which by that point held the reply being assembled, producing a WELCOME
+    // whose nodeId was a fragment of its own JSON:
+    //     {"t":"WELCOME","v":1,"nodeId":"d\"t\":\"WELCOME\",",...}
+    // board/fw escaped only because they are string literals. Any const char*
+    // handed to a build*() helper must outlive the serialize call.
+    String host;
+
+    if (strcmp(t, "HELLO") == 0) {
+        if ((f["v"] | 0) != topo::nodelink::kVersion) {
+            Serial.println(F("[NODE] HELLO version mismatch — refusing."));
+            client->close();
+            return;
+        }
+        // Identify by mDNS hostname: stable across reboots and DHCP, and the
+        // same string the primary's topology binds link.host to.
+        host = WiFiProvisioner::getHostname();
+        topo::nodelink::buildWelcome(reply.to<JsonObject>(), host.c_str(),
+                                     BOARD_NAME, "1.0.0", SERVO_COUNT, /*linear=*/0);
+    } else if (strcmp(t, "PING") == 0) {
+        topo::nodelink::buildPong(reply.to<JsonObject>());
+    } else if (strcmp(t, "SET") == 0) {
+        topo::nodelink::SetCommand cmd;
+        const char* err = nullptr;
+        if (!topo::nodelink::parseSetFrame(f, cmd, err)) {
+            Serial.print(F("[SET] MALFORMED — ")); Serial.println(err ? err : "?");
+            topo::nodelink::buildAck(reply.to<JsonObject>(), f["seq"] | 0, false, err);
+        } else if (!cmd.isServo) {
+            Serial.println(F("[SET] REFUSED — linear move, no stepper on this node."));
+            // No stepper on this board. Refusing is the honest answer — the
+            // primary marks the gate un-driveable rather than believing it moved.
+            topo::nodelink::buildAck(reply.to<JsonObject>(), cmd.seq, false,
+                                     "no linear actuator on this node");
+        } else if (cmd.channel < 0 || cmd.channel >= SERVO_COUNT) {
+            Serial.print(F("[SET] REFUSED — channel ")); Serial.print(cmd.channel);
+            Serial.print(F(" out of range (this board has ")); Serial.print(SERVO_COUNT);
+            Serial.println(F(")"));
+            topo::nodelink::buildAck(reply.to<JsonObject>(), cmd.seq, false, "no such channel");
+        } else {
+            portENTER_CRITICAL(&cmdMux);
+            cmdSlot    = cmd;
+            cmdPending = true;
+            portEXIT_CRITICAL(&cmdMux);
+            // The line the bring-up actually needs: what arrived, on which pin.
+            Serial.print(F("[SET] Servo")); Serial.print(cmd.channel + 1);
+            Serial.print(F(": ")); Serial.print(cmd.angle); Serial.print(F("deg"));
+            Serial.print(F("  (pin ")); Serial.print(SERVO_PINS[cmd.channel]);
+            Serial.print(F(", ")); Serial.print(cmd.selectorId);
+            Serial.print(F(" -> ")); Serial.print(cmd.stateId);
+            Serial.print(F(", seq ")); Serial.print(cmd.seq); Serial.println(F(")"));
+            // ACK means accepted, not arrived; arrival is a separate STATE frame.
+            topo::nodelink::buildAck(reply.to<JsonObject>(), cmd.seq, true);
+        }
+    } else {
+        return;   // unknown frame — ignore rather than guess
+    }
+
+    String s; serializeJson(reply, s);
+    client->text(s);
+}
+
+static void reportState(const char* selectorId, const char* stateId, bool moving) {
+    StaticJsonDocument<192> doc;
+    topo::nodelink::buildState(doc.to<JsonObject>(), selectorId, stateId, moving);
+    String s; serializeJson(doc, s);
+    nodeWs.textAll(s);
+}
+
+// -----------------------------------------------------------------------------
+void setup() {
+    Serial.begin(SERIAL_BAUD);
+#if BOARD_HAS_NATIVE_USB
+    unsigned long t0 = millis();
+    while (!Serial && (millis() - t0) < 5000) { delay(10); }
+#endif
+    delay(100);
+
+    // Before WiFi, so the pixel is already saying something during the blocking
+    // connect below — on a board with no serial attached that is the only sign
+    // it got past reset at all.
+    nodeled::begin();
+    nodeled::set(nodeled::BOOTING);
+    nodeled::update();
+
+    Serial.println(F("=== DustGate node (secondary) ==="));
+    Serial.print(F("Board: ")); Serial.println(BOARD_NAME);
+
+    // Same provisioning path as the primary: hardcoded creds, then NVS, then a
+    // captive portal. A secondary is headless, so the portal is the only way in
+    // — and the portal's loop never returns, so without this tick the pixel
+    // would sit frozen on BOOTING for as long as the node waits to be told which
+    // WiFi to join. That is the one state where a human definitely needs to act.
+    WiFiProvisioner::setPortalTick([]() {
+        nodeled::set(nodeled::PORTAL);
+        nodeled::update();
+    });
+    WiFiProvisioner::begin();
+    WiFiProvisioner::setPortalTick(nullptr);
+
+    for (int i = 0; i < SERVO_COUNT; i++) servos[i].begin(SERVO_PINS[i]);
+
+    // Advertise for the primary's node picker (GET /api/nodes/discover).
+    // The TXT record is what distinguishes a node from the primary's own
+    // _http._tcp advert.
+    if (MDNS.begin(WiFiProvisioner::getHostname().c_str())) {
+        MDNS.addService("dustgate", "tcp", API_PORT);
+        MDNS.addServiceTxt("dustgate", "tcp", "role",   "secondary");
+        MDNS.addServiceTxt("dustgate", "tcp", "board",  BOARD_NAME);
+        MDNS.addServiceTxt("dustgate", "tcp", "servos", String(SERVO_COUNT).c_str());
+    }
+
+    nodeWs.onEvent(onNodeWsEvent);
+    server.addHandler(&nodeWs);
+    server.begin();
+    Serial.print(F("[NODE] Listening on ws://"));
+    Serial.print(WiFiProvisioner::getHostname());
+    Serial.println(F(".local/nodelink"));
+
+    // Watchdog armed last, after the blocking WiFi connect — same discipline as
+    // the primary sketch.
+    esp_task_wdt_init(WDT_TIMEOUT_SEC, /*panic=*/true);
+    esp_task_wdt_add(NULL);
+}
+
+void loop() {
+    esp_task_wdt_reset();
+    WiFiProvisioner::maintain();
+
+    // REQUIRED, not housekeeping. ESPAsyncWebServer never reaps disconnected
+    // WebSocket clients on its own — without this call they accumulate until the
+    // server stops accepting new ones. A primary that can't connect retries every
+    // second forever (kReconnectMinMs), so a node left running beside a failing
+    // link burns through client slots fast, and the symptom is the confusing one:
+    // a node that answers a laptop fine while refusing the primary indefinitely.
+    nodeWs.cleanupClients();
+
+    // Status pixel — the node's only UI. Derived fresh each loop rather than
+    // set at transitions, so it can never latch a stale colour after a silent
+    // WiFi drop (the failure this is most likely to be diagnosing).
+    if (WiFi.status() != WL_CONNECTED) {
+        nodeled::set(nodeled::NO_WIFI);
+    } else {
+        nodeled::set(g_primaryLinked ? nodeled::LINKED : nodeled::ONLINE);
+    }
+    // Orange for the whole sweep, not just the instant the frame landed.
+    nodeled::setMoving(anyServoMoving());
+    nodeled::update();
+
+    // Advance sweeps and effect the deferred detach.
+    for (int i = 0; i < SERVO_COUNT; i++) servos[i].update();
+
+    // Drain a pending SET. Servos are only ever touched from here.
+    bool have = false;
+    topo::nodelink::SetCommand cmd;
+    portENTER_CRITICAL(&cmdMux);
+    if (cmdPending) { cmd = cmdSlot; cmdPending = false; have = true; }
+    portEXIT_CRITICAL(&cmdMux);
+
+    if (have) {
+        servos[cmd.channel].setHoldAtRest(cmd.holdAtRest);
+        servos[cmd.channel].moveTo(cmd.angle);
+        // Distinct from the [SET] line above: that one says a frame ARRIVED, this
+        // says the PWM was actually commanded. If you see [SET] and never [MOVE],
+        // the frame is being dropped between the socket task and the loop.
+        Serial.print(F("[MOVE] Servo")); Serial.print(cmd.channel + 1);
+        Serial.print(F(" -> ")); Serial.print(cmd.angle); Serial.println(F("deg"));
+        topo::nodelink::strlcpy_(pendingSel,   cmd.selectorId, sizeof(pendingSel));
+        topo::nodelink::strlcpy_(pendingState, cmd.stateId,    sizeof(pendingState));
+        awaitingSettle = true;
+        nodeled::flashActivity();   // visible confirmation at the gate itself
+        reportState(pendingSel, pendingState, true);
+    }
+
+    if (awaitingSettle && !anyServoMoving()) {
+        awaitingSettle = false;
+        reportState(pendingSel, pendingState, false);
+    }
+}

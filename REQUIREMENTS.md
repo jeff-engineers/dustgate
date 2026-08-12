@@ -1,8 +1,8 @@
 # DustGate — Requirements & Architecture
 
 Motorized blast gate manifold controller. A rack-and-pinion linear actuator selects which dust
-collection port is open based on which shop tool is in use. The system is largely self-configuring
-via an AI-powered setup agent accessible from a browser on the local network.
+collection port is open based on which shop tool is in use. The shop is laid out once from a
+browser on the local network, and the controller routes from that layout.
 
 ---
 
@@ -11,7 +11,7 @@ via an AI-powered setup agent accessible from a browser on the local network.
 | Component | Selection | Notes |
 |-----------|-----------|-------|
 | MCU | Adafruit ESP32-S2 Feather (#5000) | Replaced STM32 — better WiFi, larger ecosystem |
-| Stepper driver | Adafruit TMC2209 Breakout (#6121) | UART current control + optional StallGuard |
+| Stepper driver | Adafruit TMC2209 Breakout (#6121) | UART current control |
 | Motor | LDO-42STH48-2004MAH (NEMA 17) | 1.8° step, 2A, matched to TMC2209 |
 | Drive | 15-tooth pinion + 20T/4.145mm pitch rack | ~51.47 steps/mm at 16× microstep |
 | Smart outlets | Shelly Plug US Gen 4 (~$21 ea., us.shelly.com) | Fully local REST API, 1800W/15A, no cloud required |
@@ -33,8 +33,8 @@ via an AI-powered setup agent accessible from a browser on the local network.
 - **Stop 0** = home/disabled position
 - **Homing:** drive toward the near NC limit switch at `HOMING_SPEED_STEPS_PER_SEC`, back off `HOME_BACKOFF_STEPS` after trigger, zero position
 - **Dual-endstop self-calibration:** a **reference sweep** (near endstop → far endstop) measures the step span, derives `steps/mm` empirically per unit, and places gates by **proportion of the measured span** — immune to per-unit mechanical variance. For a known manifold (Rockler 2.5") gate positions are computed from a stored profile; `custom` falls back to manual jog. Also provides over-travel safety, lost-step detection, and auto motor-direction detection. See [`docs/dual-endstop-calibration.md`](docs/dual-endstop-calibration.md). *(Model + mock + conformance implemented; firmware foundation done, sweep motion pending hardware.)*
-- **Positioning:** step-counted moves from home; stop distances from the sweep, the setup agent, or geometry constants
-- **Port roles:** each gate has a role — `tool | unassigned | blocked` (`feed` reserved for v2). Blocked ports are never move targets; this lets the actuator become a node in the v2 topology graph (see [`docs/v2-architecture-rfc.md`](docs/v2-architecture-rfc.md))
+- **Positioning:** step-counted moves from home; stop distances from the sweep, manual calibration, or geometry constants
+- **Port roles:** each gate has a role — `tool | unassigned | blocked` (`feed` reserved for v2). Blocked ports are never move targets; this lets the actuator become a node in the v2 topology graph (see [`docs/architecture-rfc.md`](docs/architecture-rfc.md))
 - **Stop distance storage:** EEPROM/NVS via `Preferences`; `CalibrationData` v2 also stores per-port roles, manifold model, and measured span; `clearcal` erases stale calibration
 - **Measured geometry (2.5"):** symmetric — trigger-to-trigger span = 84.9mm at 2 gates, gate-to-gate pitch = 82.9mm → trigger→gate offset = 1mm/side. Backoff (`HOME_BACKOFF_STEPS` ≈ 1mm) cancels out of the pitch but must be added back to the home→far sweep count when deriving steps/mm (these feed the manifold profile / proportional placement)
 - **No enable/disable concept:** the system always runs; only e-stop (software-only — no physical e-stop button) halts motion. `home` re-homes and clears any latched e-stop; the system warns once if position commands arrive before homing.
@@ -48,7 +48,6 @@ Exactly one control mode is active at compile time (`config.h`). The HTTP API ru
 
 ### 3a. Serial Debug (`CONTROL_SERIAL_DEBUG`)
 - Human-readable serial commands: `home`, `1`–`7`, `jog <mm>`, `estop`, `status`, `clearcal`, `wifireset`, `help`
-- Commands reserved for setup agent (code present, disabled at runtime): `train`, `autotune`, `sgthrs`, `homespeed`
 
 ### 3b. Smart Outlet (`CONTROL_SMART_OUTLET`)
 - See Section 5 below
@@ -61,10 +60,9 @@ Exactly one control mode is active at compile time (`config.h`). The HTTP API ru
 ## 4. WiFi Provisioning
 
 - On first boot (no stored credentials): ESP32 starts AP `DustGate-Setup`, serves captive portal at `http://192.168.4.1`
-- Portal collects: WiFi SSID, WiFi password, Anthropic API key (optional, enables setup agent)
-- Credentials stored in NVS namespace `wifi_creds` (keys: `ssid`, `pass`)
-- Anthropic key stored in separate NVS namespace `agent_cfg` (key: `claude_key`) — survives `wifireset`
-- `wifireset` serial command: erases WiFi credentials, reboots into portal (Anthropic key preserved)
+- Portal collects: WiFi SSID, WiFi password
+- Credentials stored in NVS namespace `wifi_creds` (keys: `ssid`, `pass`, `host`)
+- `wifireset` serial command: erases WiFi credentials, reboots into portal
 - Developer override: hardcode `WIFI_STA_SSID` / `WIFI_STA_PASS` in `config.h` to bypass portal entirely
 - On connection failure after stored credentials: falls back to portal
 - Implementation: header-only `WiFiProvisioner` namespace, no external libraries (ESP32-core `WebServer` + `Preferences`)
@@ -93,16 +91,16 @@ Exactly one control mode is active at compile time (`config.h`). The HTTP API ru
 - Accessible via HTTP API (`POST /api/move` while in outlet mode)
 
 ### Outlet discovery (mDNS)
-- `GET /api/outlets/discover` scans mDNS for `_http._tcp` services, filters to hostnames containing "shelly", and probes each match (Gen2 first, then Gen1) for reachability/power/generation — see `linear_actuator/utils/MdnsQuery.h`
+- `GET /api/outlets/discover` scans mDNS for `_http._tcp` services, filters to hostnames containing "shelly", and probes each match (Gen2 first, then Gen1) for reachability/power/generation — see `firmware/utils/MdnsQuery.h`
 - Retries the mDNS query a few times (`DISCOVER_MDNS_ATTEMPTS`) and merges by IP, since UDP responses are lossy
-- Also fetches the outlet's own app-assigned name when available — Gen1 via `/settings`, Gen2 via `Switch.GetConfig?id=0` (falling back to `Sys.GetConfig`) — see `linear_actuator/outlets/ShellyDeviceName.h`
-- Lets the setup wizard's "Scan for outlets" list replace manual IP entry in most cases; manual entry remains as a fallback
+- Also fetches the outlet's own app-assigned name when available — Gen1 via `/settings`, Gen2 via `Switch.GetConfig?id=0` (falling back to `Sys.GetConfig`) — see `firmware/outlets/ShellyDeviceName.h`
+- Lets the Tools screen's "Scan for outlets" list replace manual IP entry in most cases; manual entry remains as a fallback
 - **Must run on the main loop task**, not a spawned FreeRTOS task — ESP32's mDNS responder isn't safe to call concurrently with its own hostname-advertising; doing so from a separate task previously corrupted the heap and crashed the device
 - The mDNS hostname is persisted alongside the IP (`o<N>_host` in NVS) so an outlet can re-resolve its IP after a DHCP lease change instead of going silently unreachable
 
 ### Per-outlet configuration (NVS)
 - Stored in namespace `outlets`: generation, IP, mDNS hostname, name, stop index, threshold watts
-- Managed by setup agent (or the manual wizard) via `OutletConfig` namespace + `SmartOutletControl::configureOutlet()` / `saveAll()`
+- Managed during setup via `OutletConfig` namespace + `SmartOutletControl::configureOutlet()` / `saveAll()`
 
 ### 240V tools
 - Plug-in smart outlets are 120V only
@@ -129,7 +127,7 @@ Runs alongside any control mode. Built on ESPAsyncWebServer + ArduinoJson v6.
 | Method | Path | Body / Params | Action |
 |--------|------|---------------|--------|
 | GET | `/api/info` | — | Unauthenticated bootstrap: API key, gate count, version, orientation, idle timeout |
-| GET | `/api/status` | — | Full system status JSON |
+| GET | `/api/motion` | — | Full system status JSON |
 | POST | `/api/home` | — | Home the actuator |
 | POST | `/api/move` | `{"stop": N}` | Move to stop N (0 = home) |
 | POST | `/api/jog` | `{"mm": ±F}` | Relative jog in mm |
@@ -143,14 +141,12 @@ Runs alongside any control mode. Built on ESPAsyncWebServer + ArduinoJson v6.
 | POST | `/api/outlets/save` | — | Persist outlet config to NVS |
 | PUT | `/api/dustcollector` | `{"gen","ip","host"}` | Assign the dust collector's switchable plug |
 | DELETE | `/api/dustcollector` | — | Unassign the dust collector plug |
-| POST | `/api/dustcollector/switch` | `{"on": bool}` | Manual dashboard on/off |
+| POST | `/api/dustcollector/switch` | `{"on": bool}` | Manual on/off |
 | POST | `/api/config/orientation` | `{"homeOnRight": bool}` | Persist visual orientation |
 | POST | `/api/config/motor` | `{"invertDirection": bool}` | Flip homing direction |
 | POST | `/api/config/gates` | `{"numGates": N}` | Set active gate count |
 | POST | `/api/config/idle-timeout` | `{"seconds": N}` | Set idle power-off timeout (0 = never) |
 | POST | `/api/wifi/reset` | — | Erase WiFi credentials, reboot into setup portal |
-| POST | `/api/agent/chat` | `{"messages": [...]}` | Stateless Claude API proxy (see Section 7) |
-| PUT | `/api/agent/key` | `{"key": "sk-ant-..."}` | Update Anthropic key in NVS — no UI entry point (removed deliberately; LAN-served page shouldn't expose it), only serial `provision` or the captive portal |
 
 ### WebSocket (`ws://<ip>/ws`)
 - Push-only: server sends status JSON when system state changes
@@ -178,56 +174,7 @@ Runs alongside any control mode. Built on ESPAsyncWebServer + ArduinoJson v6.
 
 ---
 
-## 7. Setup Agent
-
-### Architecture: ESP32 as stateless Claude API proxy
-
-The ESP32 does **not** run or maintain the AI agent. It acts as a thin HTTPS forwarder.
-
-```
-Angular (browser)                  ESP32                        Anthropic API
-─────────────────    POST /api/agent/chat    ──────────────    POST /v1/messages
-  conversation    ──────────────────────────►  forward body  ──────────────────►
-  history (full)  ◄──────────────────────────  forward resp  ◄──────────────────
-                        (stateless)
-```
-
-- Angular holds the full conversation history and accumulates tool results
-- ESP32 receives `{"messages": [...], "tools": [...]}` in the request body, adds auth headers (`x-api-key`, `anthropic-version`), POSTs to `https://api.anthropic.com/v1/messages`, and streams the response back
-- HTTPS: `WiFiClientSecure` with `setInsecure()` for now  
-  **TODO before any cloud/public deployment: validate Anthropic root CA cert instead of skipping verification**
-- Anthropic API key read from NVS (`WiFiProvisioner::getAnthropicKey()`) — never sent to the browser
-
-### Claude tool use loop (Angular side)
-1. Angular sends current messages array to `/api/agent/chat`
-2. Claude returns `tool_use` blocks → Angular executes each against the ESP32 REST API
-3. Angular appends `tool_result` blocks to conversation, sends again
-4. Repeat until Claude returns `stop_reason: "end_turn"`
-5. Final assistant message displayed to user
-
-### Setup agent capabilities (tools exposed to Claude)
-- `home` — home the actuator
-- `move_to_stop` — move to stop N
-- `jog` — jog ±mm
-- `get_status` — read current state
-- `configure_outlet` — assign outlet slot: IP, name, stop index, watt threshold
-- `delete_outlet` — remove outlet slot
-- `save_outlet_config` — persist to NVS
-- `ping_outlet` — check reachability
-- `set_stop_count` — update NUM_STOPS equivalent (requires recompile note — or dynamic config via NVS)
-- `set_homespeed` — tune homing speed
-- `set_sgthrs` — tune StallGuard threshold (if sensorless mode ever re-enabled)
-
-### Setup agent tasks (conversational flow)
-1. Confirm number of stops / gates
-2. For each stop: jog to position, confirm distance, assign stop index
-3. For each outlet: enter IP, confirm reachability (ping), assign to stop, set watt threshold
-4. Save configuration, verify by cycling through all stops
-5. Optionally tune debounce timers
-
----
-
-## 8. Angular Front-End
+## 7. Angular Front-End
 
 Source lives in `dustgate-ui/`. Served from ESP32 LittleFS flash.
 
@@ -235,14 +182,15 @@ Source lives in `dustgate-ui/`. Served from ESP32 LittleFS flash.
 
 | Route | Description |
 |-------|-------------|
-| `/#/` | **Dashboard** — interactive manifold visualizer (tap a gate to move, tap home, tap dust collector to toggle), gear icon → Settings |
-| `/#/setup` | **Guided (AI) setup** — Claude agentic loop, tool-call progress pills, back arrow → dashboard. Kept polished as a demo feature but expected to be excluded from the final release build. |
-| `/#/setup/manual` | **Manual setup wizard** — step through gate positions and outlet assignment without the AI; the primary supported setup path |
-| `/#/settings` | **Settings** — idle power-off timeout, home orientation, motor direction, gate count, port size (client-side only), forget-WiFi, reset-calibration, and links to both setup wizards. Consolidates settings that used to be wizard-only or not reachable post-setup at all. |
+| `/#/` | **Landing** — reads the stored layout and forwards: finished shop → `/shop`, unfinished → `/build` |
+| `/#/shop` | **Live view** — the daily driver. A list of tools showing which one is collecting; every tool is manually overridable |
+| `/#/build` | **Build canvas** — the setup. Place the collector, run duct, attach gates and tools. Gate badges open calibration in place |
+| `/#/tools` | **Tools** — tag each tool with its smart outlet (identify-by-power) and threshold, or mark it manual |
+| `/#/boards` | **Boards** — discover and pair secondary nodes, assign gates to them |
+| `/#/settings` | **Settings** — idle power-off timeout, home orientation, motor direction, gate count, port size (client-side only), forget-WiFi, reset-calibration |
 
-- Gate/tool names pull from `status.outlets[].name` via WebSocket — no hardcoding
+- Tool names come from the topology; live state comes from the status endpoint
 - Dust collector toggle drives a Shelly smart plug via `/api/dustcollector/switch`
-- The Anthropic API key has no UI entry point (deliberately removed from Settings — see Section 6) — only settable via serial `provision` or the WiFi captive portal
 
 ### API key bootstrap
 
@@ -258,7 +206,7 @@ npm install
 # 2. Build and copy to ESP32 data directory
 bash deploy.sh
 # This runs `ng build`, gzips JS/CSS (ESPAsyncWebServer serves .gz automatically),
-# and copies everything to ../linear_actuator/data/
+# and copies everything to ../firmware/data/
 
 # 3. Upload filesystem image to ESP32
 cd ..
@@ -285,34 +233,33 @@ npm start
 | `dustgate-ui/` | Angular source |
 | `dustgate-ui/proxy.conf.json` | Dev proxy — set ESP32 IP here |
 | `dustgate-ui/deploy.sh` | Build + gzip + copy script |
-| `linear_actuator/data/` | LittleFS image content (generated by deploy.sh) |
+| `firmware/data/` | LittleFS image content (generated by deploy.sh) |
 
 ---
 
-## 9. Output — Dust Collector
+## 8. Output — Dust Collector
 
 - Controlled by a dedicated switchable Shelly smart plug over WiFi (no local wiring)
 - Turns on automatically when the actuator is at a non-home stop (a tool is running) and off at home
-- Can also be toggled manually from the dashboard
+- Can also be toggled manually from the Live view
 - Configured via `PUT /api/dustcollector` with `{"gen":2,"ip":"192.168.1.x"}`
 
 ---
 
-## 10. Implementation Status
+## 9. Implementation Status
 
 | Task | Status | Notes |
 |------|--------|-------|
 | Motion system (homing, multi-stop, jog) | ✅ Done | Tested with clearcal fix |
 | Serial debug control | ✅ Done | `help`, `home`, `1–7`, `jog`, `estop`, `status`, `wifireset` |
 | Shelly outlet polling | ✅ Done | Gen1 + Gen2, debounce, FreeRTOS task |
-| WiFi provisioning (captive portal) | ✅ Done | Collects WiFi creds + Anthropic API key |
-| HTTP REST + WebSocket API | ✅ Done | Auth, WS fingerprint push, non-blocking ping, `/api/agent/chat` proxy |
+| WiFi provisioning (captive portal) | ✅ Done | Collects WiFi creds + hostname |
+| HTTP REST + WebSocket API | ✅ Done | Auth, WS fingerprint push, non-blocking ping |
 | `setManualOverride()` on SmartOutletControl | ✅ Done | Edge-triggered — clears only on a fresh OFF→ON transition, not just "still on" |
-| Wire `HttpApiServer` into `linear_actuator.ino` | ✅ Done | estop/home/move/jog/clearcal/outlets all wired |
-| Angular front-end | ✅ Done | Dashboard, manual wizard, AI setup chat, Settings screen — served from LittleFS |
+| Wire `HttpApiServer` into `firmware.ino` | ✅ Done | estop/home/move/jog/clearcal/outlets all wired |
+| Angular front-end | ✅ Done | Live view, Build canvas, Tools, Boards, Settings — served from LittleFS |
 | LittleFS static serving + `/api/info` | ✅ Done | Auto-serves .gz, bootstrap key endpoint |
-| Dust collector (Shelly plug) | ✅ Done | Auto + manual dashboard toggle via `/api/dustcollector`; scan-first discovery |
-| Manual setup wizard | ✅ Done | `/#/setup/manual` — primary supported setup path, no AI dependency |
+| Dust collector (Shelly plug) | ✅ Done | Auto + manual toggle via `/api/dustcollector`; scan-first discovery |
 | Settings screen | ✅ Done | `/#/settings` — idle timeout, orientation, motor direction, gate count, port size, forget-WiFi, reset-calibration |
 | Outlet mDNS discovery | ✅ Done | "Scan for outlets" — replaces manual IP entry as the primary path |
 | Idle power-off | ✅ Done | Driver disables after inactivity; forces rehome on next use |
@@ -321,7 +268,7 @@ npm start
 
 ---
 
-## 11. Key Config Parameters (`config.h`)
+## 10. Key Config Parameters (`config.h`)
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
@@ -347,7 +294,7 @@ npm start
 
 ---
 
-## 12. Build Environment
+## 11. Build Environment
 
 - **PlatformIO** (preferred) — `platformio.ini` at project root
 - **Arduino IDE** — also supported; install libraries manually
@@ -358,5 +305,5 @@ npm start
 
 ---
 
-*For wiring diagrams see `linear_actuator/WIRING.md`.*  
+*For wiring diagrams see `firmware/WIRING.md`.*  
 *Original seed requirements preserved in `requirements.txt`.*

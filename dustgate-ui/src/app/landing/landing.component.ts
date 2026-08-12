@@ -68,7 +68,7 @@ export class LandingComponent implements OnInit {
     try {
       // The API service acquires its key asynchronously, and a fetch that races it
       // comes back 401 — which reads exactly like "fresh device" and would send
-      // someone to the layout tool with a shop they already have. Every other v2
+      // someone to the layout tool with a shop they already have. Every other
       // page waits for this; the front door has to as well.
       await this.api.whenReady();
       const topo = await this.api.getTopology();

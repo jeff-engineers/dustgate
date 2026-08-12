@@ -6,17 +6,16 @@ import type { Topology } from '@topology';
 import { LinearSelector, positionLabels } from './selector-types';
 
 // ── Sliding gate calibration ─────────────────────────────────────────────────
-// The v2 port of the /setup/manual wizard's motion half. Same physical procedure a
-// slider has always needed — home, confirm which end that was, sweep the rail, then
-// place each outlet — but it writes into the TOPOLOGY element (linear.calibration +
-// states[].positionMm) instead of the flat v1 config.
+// Same physical procedure a slider has always needed — home, confirm which end that
+// was, sweep the rail, then place each outlet — writing into the TOPOLOGY element
+// (linear.calibration + states[].positionMm).
 //
-// It drives the hardware over the v1 motion endpoints (/api/home, /api/calibrate,
-// /api/jog, /api/setstop) because there is no v2 equivalent yet, and it doesn't need
-// one: the schema allows at most ONE linear selector per controller
-// (MAX_LINEAR_PER_HOST), and only the primary board has a stepper wired, so "the
-// stepper" is unambiguous. A slider hosted on a SECONDARY board would need real v2
-// endpoints first — see the firmware staging notes in docs/v2-ui-design.md.
+// It drives the hardware over the motion endpoints (/api/home, /api/calibrate,
+// /api/jog, /api/setstop), which address the stepper directly rather than by
+// selector id. That's unambiguous today: the schema allows at most ONE linear
+// selector per controller (MAX_LINEAR_PER_HOST), and only the primary board has a
+// stepper wired. A slider hosted on a SECONDARY board would need selector-addressed
+// endpoints first — see the firmware staging notes in docs/ui-design.md.
 //
 // Unlike the servo widget, millimetres ARE shown: a distance along a rail is
 // something a woodworker can measure and sanity-check, where a servo angle is an
@@ -28,7 +27,7 @@ import { LinearSelector, positionLabels } from './selector-types';
 const COARSE_MM = 10;
 const FINE_MM = 1;
 
-/** Manifold profiles the wizard offers. Mirrors MANIFOLD_PROFILES in device-model.js;
+/** Manifold profiles offered during calibration. Mirrors MANIFOLD_PROFILES in device-model.js;
  *  a Rockler ships in 2-gate units, so its outlet count must be even. */
 const MANIFOLDS: Array<{ id: string; label: string; pitchMm: number | null; evenOnly: boolean }> = [
   { id: 'rockler-2.5', label: 'Rockler 2½" manifold', pitchMm: 82.9, evenOnly: true },
@@ -342,7 +341,7 @@ export class LinearCalibrationComponent implements OnInit, OnDestroy {
   }
 
   /** Save where the gate physically IS as this outlet — on the device's stop table as
-   *  well as ours, so Test and the v1 status view agree with the topology. */
+   *  well as ours, so Test and the motion status view agree with the topology. */
   async capture(): Promise<void> {
     const st = this.current();
     if (!st || this.busy) return;

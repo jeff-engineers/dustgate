@@ -133,7 +133,7 @@ export class SelectorConfigComponent implements OnInit {
     // invisible here until something happened to write it into the document —
     // which was exactly the symptom: visible under Boards, missing from "Driven by".
     //
-    // Best-effort: an older firmware without /api/v2/nodes falls back to whatever
+    // Best-effort: an older firmware without /api/nodes falls back to whatever
     // the layout already names, and simply can't warn about reachability.
     void this.api.getNodes()
       .then((n) => { this.links = n; this.mergePairedBoards(); })

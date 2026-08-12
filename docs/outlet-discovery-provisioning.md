@@ -12,8 +12,8 @@ clean; NOT yet validated against real Shelly hardware** — see §6/§7. Still a
 proposal: §4.3 app-free plug WiFi provisioning, §4.5 power-spike auto-map.
 **Scope:** the smart-outlet control path (`CONTROL_SMART_OUTLET`) on v1. The
 transport/discovery decisions here should carry forward to v2 nodes.
-**Companion docs:** [`v2-architecture-rfc.md`](v2-architecture-rfc.md),
-[`manual-setup-wizard-requirements.md`](manual-setup-wizard-requirements.md).
+**Companion docs:** [`architecture-rfc.md`](architecture-rfc.md),
+[`ui-design.md`](ui-design.md).
 Any API/model surface added here goes through the canonical-model + conformance
 discipline in [`../shared/device-model/README.md`](../shared/device-model/README.md).
 
@@ -26,7 +26,7 @@ interfaces:
 
 1. Provision the plug onto WiFi **using the Shelly mobile app**.
 2. Assign it a **static IP** (via the app or the router).
-3. **Discover** it from the Angular setup wizard hosted on the ESP32.
+3. **Discover** it from the Angular UI hosted on the ESP32.
 4. **Tie it to a specific tool/gate** by hand.
 
 Every step is a place users get stuck, and steps 1–2 require software we don't
@@ -39,10 +39,10 @@ implementable in our existing C++ firmware.
 
 | Concern | Current implementation |
 |---|---|
-| Discovery | mDNS `PTR` query for **`_http._tcp`** ([`utils/MdnsQuery.h:29`](../linear_actuator/utils/MdnsQuery.h)) |
-| Shelly identification | Substring match `hostname.indexOf("shelly")` ([`linear_actuator.ino:921`](../linear_actuator/linear_actuator.ino)) |
-| Generation detection | Probe Gen2 RPC, fall back to Gen1 on failure ([`linear_actuator.ino:957-966`](../linear_actuator/linear_actuator.ino)) |
-| Addressing | Static IP, with mDNS hostname re-resolve on failure (`ShellyGen2Outlet::reresolve()`, [`outlets/ShellyGen2Outlet.cpp:18`](../linear_actuator/outlets/ShellyGen2Outlet.cpp)) |
+| Discovery | mDNS `PTR` query for **`_http._tcp`** ([`utils/MdnsQuery.h:29`](../firmware/utils/MdnsQuery.h)) |
+| Shelly identification | Substring match `hostname.indexOf("shelly")` ([`firmware.ino:921`](../firmware/firmware.ino)) |
+| Generation detection | Probe Gen2 RPC, fall back to Gen1 on failure ([`firmware.ino:957-966`](../firmware/firmware.ino)) |
+| Addressing | Static IP, with mDNS hostname re-resolve on failure (`ShellyGen2Outlet::reresolve()`, [`outlets/ShellyGen2Outlet.cpp:18`](../firmware/outlets/ShellyGen2Outlet.cpp)) |
 | Status | HTTP **poll** every `OUTLET_POLL_INTERVAL_MS` (500 ms) with `OUTLET_HTTP_TIMEOUT_MS` (400 ms) per outlet |
 | Discovery robustness | 3 mDNS attempts × 400 ms, merged by IP (`DISCOVER_MDNS_*` in `config.h`) |
 
@@ -98,7 +98,7 @@ today.
 
 The ESP-IDF `mdns_query_ptr()` already used in `MdnsQuery.h` returns TXT data via
 `r->txt` / `r->txt_count`, so this is contained to that helper plus the
-discovery block in `linear_actuator.ino`.
+discovery block in `firmware.ino`.
 
 **Note:** with generation known up front, the retry/merge logic can likely
 relax — but keep the multi-attempt merge until measured on real hardware. mDNS
@@ -123,7 +123,7 @@ Shelly AP-mode provisioning is a single RPC call:
 http://192.168.33.1/rpc/WiFi.SetConfig?config={"sta":{"ssid":"...","pass":"...","enable":true}}
 ```
 
-Proposed flow, driven from the setup wizard:
+Proposed flow, driven from the Tools screen:
 
 1. `WiFi.scanNetworks()` → offer SSIDs matching `Shelly*`.
 2. ESP32 connects to the selected (open) Shelly AP.
@@ -140,7 +140,7 @@ ESP32 already has it.
 **Design constraints:**
 
 - **The ESP32 leaves the network for ~20–40 s** while associated with the Shelly
-  AP — and it is the host of the Angular UI. The wizard needs a
+  AP — and it is the host of the Angular UI. The UI needs a
   "provisioning… reconnecting" state that polls until the device returns. The
   captive-portal flow already establishes this UX shape; reuse it.
 - **We forward the user's WiFi password to the plug.** It is already in NVS, so
@@ -177,7 +177,7 @@ concern independent of transport.
 
 ### 4.5 Auto-map the tool by watching for the power spike
 
-Not a protocol change — a wizard inversion. Instead of asking the user to
+Not a protocol change — a flow inversion. Instead of asking the user to
 associate an IP with a tool, prompt: *"Turn on your table saw now."* Whichever
 outlet crosses its threshold gets bound to that gate.
 
@@ -229,7 +229,7 @@ trusting it:
 None of this can be exercised without a real Gen2 plug; it only compiles so far.
 Boot log shows `[Outlets] Push endpoint for plugs: ws://<ip>:80/shelly-rpc`.
 
-- [ ] After adding a plug in the wizard, the serial log shows `Ws.SetConfig … -> ok`
+- [ ] After adding a plug in the UI, the serial log shows `Ws.SetConfig … -> ok`
       and `Switch.SetConfig name=<gate> … -> ok`, then the plug appears as
       `[Outlets] Push connected: <ip>`.
 - [ ] Turning the tool on/off moves the gate **within ~1s** (push), not at the

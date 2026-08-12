@@ -7,7 +7,7 @@ import { ApiService, DiscoveredOutlet, Topology } from '../services/api.service'
 // ── Tool-tagging pass ────────────────────────────────────────────────────────
 // After the plumbing is drawn (build canvas), walk the tool list once and tag
 // each: smart outlet or manual, and if smart, which plug + at what threshold.
-// The trick (from Phase 1) is identify-by-power: switch the tool on and watch
+// The trick is identify-by-power: switch the tool on and watch
 // which plug jumps to green. Writes `sensor.outlet` onto each tool element.
 
 interface RawEl { [k: string]: unknown; }

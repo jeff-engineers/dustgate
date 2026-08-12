@@ -1,6 +1,6 @@
-// nodelink.js — the primary↔secondary node protocol (v2 Phase 3).
+// nodelink.js — the primary↔secondary node protocol.
 //
-// DustGate v2 is a STAR: one primary owns the GUI, the topology, the Shelly
+// DustGate is a STAR: one primary owns the GUI, the topology, the Shelly
 // polling and the routing brain; secondaries are dumb actuator banks. This file
 // is the contract between them — the frames, their shapes, and the invariants
 // that make a secondary genuinely dumb.

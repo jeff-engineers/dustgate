@@ -1,4 +1,4 @@
-// selector-types.ts — a typed slice of the v2 topology, for the gate configurator.
+// selector-types.ts — a typed slice of the topology, for the gate configurator.
 //
 // shared/device-model/topology.d.ts declares a Topology as Record<string, unknown>,
 // so every consumer hand-rolls string-keyed casts. Rather than type the whole graph

@@ -5,7 +5,7 @@ import { HardwareProfileService } from './hardware-profile.service';
 import type { Topology } from '@topology';
 import type { TopologyStatus } from '@topology-device';
 
-// Re-export so components/services can import v2 types from one place.
+// Re-export so components/services can import topology types from one place.
 export type { Topology } from '@topology';
 export type { TopologyStatus } from '@topology-device';
 
@@ -83,7 +83,7 @@ export interface DiscoveredOutlet {
   generation: number;
 }
 
-/** A secondary board found on the network by GET /api/v2/nodes/discover. */
+/** A secondary board found on the network by GET /api/nodes/discover. */
 export interface DiscoveredNode {
   /** mDNS hostname — the STABLE key a topology binds link.host to. */
   host: string;
@@ -95,7 +95,7 @@ export interface DiscoveredNode {
   servos: number;
 }
 
-/** Live link state for one controller in the topology (GET /api/v2/nodes). */
+/** Live link state for one controller in the topology (GET /api/nodes). */
 export interface NodeLinkState {
   id: string;
   host: string;
@@ -260,9 +260,10 @@ export class ApiService {
     );
   }
 
-  getStatus(): Promise<SystemStatus> {
+  /** Motion-hardware view: stepper state, position, endstops, outlet readings. */
+  getMotionStatus(): Promise<SystemStatus> {
     return firstValueFrom(
-      this.http.get<SystemStatus>(`${this.baseUrl}/api/status`, { headers: this.headers() })
+      this.http.get<SystemStatus>(`${this.baseUrl}/api/motion`, { headers: this.headers() })
     );
   }
 
@@ -408,16 +409,16 @@ export class ApiService {
     return this.post('/api/config/port-role', { index, role });
   }
 
-  // ── v2 topology API (additive; DemoApiService overrides these in-process) ──
+  // ── topology API (additive; DemoApiService overrides these in-process) ──
   /** Fetch the configured topology, or throws/404 if none is set. */
-  getTopology(): Promise<Topology> { return this.get<Topology>('/api/v2/topology'); }
+  getTopology(): Promise<Topology> { return this.get<Topology>('/api/topology'); }
   /** Replace the topology (validated device-side; 400 on invalid). */
-  putTopology(topology: Topology): Promise<{ ok: boolean }> { return this.put('/api/v2/topology', topology); }
-  /** Live v2 status: actuator states, tool activity, collector, conflicts, reachability. */
-  getV2Status(): Promise<TopologyStatus> { return this.get<TopologyStatus>('/api/v2/status'); }
+  putTopology(topology: Topology): Promise<{ ok: boolean }> { return this.put('/api/topology', topology); }
+  /** Live status: actuator states, tool activity, collector, conflicts, reachability. */
+  getStatus(): Promise<TopologyStatus> { return this.get<TopologyStatus>('/api/status'); }
   /** Sim/demo only: inject a tool's power reading to drive routing (real firmware senses plugs). */
   simTool(toolId: string, watts: number): Promise<TopologyStatus> {
-    return this.post<TopologyStatus>('/api/v2/sim/tool', { toolId, watts });
+    return this.post<TopologyStatus>('/api/sim/tool', { toolId, watts });
   }
 
   /**
@@ -429,7 +430,7 @@ export class ApiService {
    * tools still routed themselves off their Shelly plugs, which is what hid it.
    */
   setToolManual(toolId: string, on: boolean): Promise<unknown> {
-    return this.post('/api/v2/tool', { toolId, on });
+    return this.post('/api/tool', { toolId, on });
   }
 
   /**
@@ -437,7 +438,7 @@ export class ApiService {
    * where it lands. Rejects with 501 on a build without servo support, which the gate
    * configurator surfaces rather than pretending the nudge worked.
    */
-  // ── v2 secondary boards ───────────────────────────────────────────────────
+  // ── Secondary boards ───────────────────────────────────────────────────
   /**
    * Sweep the network for secondary boards (mDNS _dustgate._tcp, role=secondary).
    * Discovery only POPULATES the picker — the saved topology still binds each
@@ -445,7 +446,7 @@ export class ApiService {
    * system in the shop can never silently adopt itself into a live layout.
    */
   discoverNodes(): Promise<DiscoveredNode[]> {
-    return this.get<DiscoveredNode[]>('/api/v2/nodes/discover');
+    return this.get<DiscoveredNode[]>('/api/nodes/discover');
   }
 
   /**
@@ -455,15 +456,15 @@ export class ApiService {
    * partition the topology lives in) and links before any shop is drawn.
    */
   pairNode(host: string, name?: string): Promise<unknown> {
-    return this.post('/api/v2/nodes/pair', { host, ...(name ? { name } : {}) });
+    return this.post('/api/nodes/pair', { host, ...(name ? { name } : {}) });
   }
   unpairNode(host: string): Promise<unknown> {
-    return this.post('/api/v2/nodes/pair', { host, remove: true });
+    return this.post('/api/nodes/pair', { host, remove: true });
   }
 
   /** Live link state per controller — which boards are actually answering. */
   async getNodes(): Promise<NodeLinkState[]> {
-    const r = await this.get<{ nodes: NodeLinkState[] }>('/api/v2/nodes');
+    const r = await this.get<{ nodes: NodeLinkState[] }>('/api/nodes');
     return r?.nodes ?? [];
   }
 
@@ -476,16 +477,16 @@ export class ApiService {
    * the same channel, which is a different valve entirely.
    */
   jogServo(channel: number, angle: number, controllerId?: string): Promise<unknown> {
-    return this.post('/api/v2/servo/jog', { channel, angle, ...(controllerId ? { controllerId } : {}) });
+    return this.post('/api/servo/jog', { channel, angle, ...(controllerId ? { controllerId } : {}) });
   }
   /** De-energize a servo — the valve holds by friction/detent. */
   detachServo(channel: number, controllerId?: string): Promise<unknown> {
-    return this.post('/api/v2/servo/jog', { channel, detach: true, ...(controllerId ? { controllerId } : {}) });
+    return this.post('/api/servo/jog', { channel, detach: true, ...(controllerId ? { controllerId } : {}) });
   }
 
   /**
    * Reset calibration and gate count — returns the device to unconfigured state
-   * so the setup wizard can run again from scratch.
+   * so setup can run again from scratch.
    */
   resetSetup() {
     if (this.deviceInfo) this.deviceInfo.numStops = 0;
@@ -525,31 +526,5 @@ export class ApiService {
     } catch {
       // Non-fatal — optimistic update from resetSetup() already set numStops = 0
     }
-  }
-
-  // ── Agent ─────────────────────────────────────────────────────────────────────
-
-  /**
-   * Forward a full Anthropic /v1/messages request through the ESP32 proxy.
-   * body should be the complete request object (model, messages, tools, etc.)
-   *
-   * Returns the raw fetch Response rather than a parsed body: the demo
-   * deployment (DemoApiService, /api/claude) streams Server-Sent Events back
-   * so the UI can render text as it's generated, while the real ESP32 proxy
-   * (/api/agent/chat) still returns one buffered JSON object. ClaudeService
-   * tells the two apart by response Content-Type, so both work through the
-   * same call site — we use fetch here instead of HttpClient because
-   * HttpClient doesn't expose a readable byte stream for the SSE case.
-   */
-  agentChat(body: unknown): Promise<Response> {
-    return fetch(`${this.baseUrl}/api/agent/chat`, {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Api-Key': this.apiKey },
-      body:    JSON.stringify(body),
-    });
-  }
-
-  setAnthropicKey(key: string) {
-    return this.put('/api/agent/key', { key });
   }
 }

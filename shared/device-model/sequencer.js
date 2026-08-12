@@ -1,4 +1,4 @@
-// sequencer.js — DustGate v2 transition sequencer (make-before-break).
+// sequencer.js — DustGate transition sequencer (make-before-break).
 //
 // Routing (routing.js) says WHERE to end up. This says in WHAT ORDER to get
 // there without ever sealing the system while the blower runs — never dead-head.

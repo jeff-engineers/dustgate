@@ -129,7 +129,7 @@ We should have a way to warn users that devices are unecessary (two ballvalves i
 ## v2 firmware + multi-node — DONE (2026-08-07), hardware-UNTESTED
 
 The whole star topology landed this session. Read
-[`docs/v2-architecture-rfc.md`](docs/v2-architecture-rfc.md) §6 for the design.
+[`docs/architecture-rfc.md`](docs/architecture-rfc.md) §6 for the design.
 
 - ~~Need a way to configure an element~~ DONE — all three gate kinds
   (ball valves + manifolds 2026-08-06, sliding gates 2026-08-07).
@@ -142,7 +142,7 @@ The whole star topology landed this session. Read
   confirmed, its A0–A3 assignments are not.
 - **The dispatch seam** — `ActuatorBus` / `NodeBus` / `TopologyRuntime`. Before
   this, the routing brain existed only for host tests: nothing in the sketch
-  included it and `/api/v2/status` was an idle stub. Now tool watts drive real
+  included it and `/api/status` was an idle stub. Now tool watts drive real
   valves, one move at a time (which IS the servo current mutex).
 - **NodeLink** — versioned WS protocol, `RemoteActuatorBus` client, `/nodelink`
   secondary endpoint, hold-on-link-loss.
@@ -178,14 +178,14 @@ backlog and reorder this list.
 
 **Bench note (2026-08-09): the layout now configures the plugs.** `syncTopologyOutlets()`
 rebuilds the poller's outlet slots from `tool.sensor.outlet` on every topology adopt, so
-a tool that isn't paired on the canvas is no longer watched — even if the old setup
-wizard had a slot for it. Re-pair anything that goes quiet. The collector is the one
+a tool that isn't paired on the canvas is no longer watched — even if an older config
+had a slot for it. Re-pair anything that goes quiet. The collector is the one
 exception: a layout with no `collector.control.outlet` keeps the stored plug rather than
 un-configuring the blower. Watch for `[Outlets] Layout plugs registered: N` at boot.
 
 #### PICK UP HERE — BTT TMC2209 V1.3 driver swap (paused 2026-08-09)
 Swapping the Adafruit #6121 breakout for a BigTreeTech TMC2209 StepStick V1.3.
-Wiring is documented in `linear_actuator/WIRING.md` §1.
+Wiring is documented in `firmware/WIRING.md` §1.
 
 Verified on the actual module, so these are settled:
 - sense resistors read **R110 → 0.11 Ω**, which already matches `TMC2209_R_SENSE`
@@ -214,11 +214,12 @@ node shared/device-model/nodelink-conformance.js ws://<node>.local/nodelink
 ```
 
 ### 2. Known correctness gaps
-- **Sliding gate on a SECONDARY board** — calibration drives the v1 motion
-  endpoints. Sound while only the primary had a stepper; `/boards` makes it
-  user-reachable. Add v2 motion endpoints, or block the combination in the picker.
+- **Sliding gate on a SECONDARY board** — calibration drives the motion endpoints,
+  which address the stepper directly rather than by selector id. Sound while only the
+  primary had a stepper; `/boards` makes it user-reachable. Add selector-addressed
+  motion endpoints, or block the combination in the picker.
 - **Rockler even-gate-count** — odd counts misplace gates. Now *warns* instead of
-  silently rounding, but the wizard/spacing fix isn't finished.
+  silently rounding, but the spacing fix isn't finished.
 - **Conflicts aren't surfaced** — firmware reports
   `{selectorId, winner, winnerState, losers[]}`; `live.component.ts` reads only
   `reachable`. So the UI says a tool isn't pulling but not why. Data done, UI not.
@@ -235,9 +236,9 @@ node shared/device-model/nodelink-conformance.js ws://<node>.local/nodelink
   broken, and right now that takes every gate down with it.
 
 - **The tool status light can't go red** — a tool paired to a plug that stopped
-  answering is indistinguishable from an idle one. `/api/v2/status` reports
+  answering is indistinguishable from an idle one. `/api/status` reports
   `tools[id] = {watts, active}` and nothing about the sensor; the firmware knows
-  (`SmartOutlet::isReachable()`) but `linear_actuator.ino:638` only forwards
+  (`SmartOutlet::isReachable()`) but `firmware.ino:638` only forwards
   `getPowerW()`. Plumb reachability through `setToolPower`, emit
   `tools[id].sensor = {paired, reachable}` from `TopologyRuntime::writeStatus`,
   mirror it in `topology-device.js` `statusView()` so mock and firmware still
@@ -253,7 +254,7 @@ node shared/device-model/nodelink-conformance.js ws://<node>.local/nodelink
 
 - **A UI deploy erases the saved shop** — `topology.json` lives in the same
   LittleFS partition as the Angular bundle, and `deploy.sh`'s `--target uploadfs`
-  writes a fresh image built from `linear_actuator/data/`. So every full
+  writes a fresh image built from `firmware/data/`. So every full
   `dev.sh flash` silently wipes the user's layout, calibration and node links.
   Bit us during bring-up and read as a node-pairing failure. Either move the
   topology to NVS/its own partition, or have deploy.sh GET it before uploadfs and
@@ -262,19 +263,19 @@ node shared/device-model/nodelink-conformance.js ws://<node>.local/nodelink
 ### 3. Completion
 - **Clean up `/tools`** — its whole job was the outlet-pairing pass, which now
   lives in the build canvas inspector (`Set up smart outlet` → the tool sheet).
-  The route is a wizard with nothing left to ask. Either point it at `/build` or
-  rebuild it as a genuine review pass ("check every tool at once"), which is a
-  different thing from configuring one. Also fold the v1 `OutletConfiguratorComponent`
-  onto the shared `<app-outlet-picker>` while in there — it kept its own copy of
-  the identify-by-power flow because it's welded to the slot/stop model.
-- **Retire the v1 flat path** — 36 `/api/*` routes still live beside v2, and both
-  control paths coexist (v1 stop-following is *suppressed* when a topology loads,
-  which is a guard, not a resolution).
+  The route has nothing left to ask. Either point it at `/build` or rebuild it as
+  a genuine review pass ("check every tool at once"), which is a different thing
+  from configuring one. **Its back button doesn't work** (noted 2026-08-12) — fix
+  that whichever way the route ends up going.
+- **One control path, not two** — the endpoints are merged (2026-08-12: no more
+  `/api/v2/*`; routing status is `/api/status`, the motion blob moved to
+  `/api/motion`), but the *behaviour* still forks: stop-index following is
+  *suppressed* when a topology loads, which is a guard, not a resolution. Delete
+  the stop-index automation once topology routing has driven real hardware.
 - **Navigation** — `/boards`, `/gates`, `/tools`, `/shop` exist but there's no
   coherent path through them beyond the Build toolbar.
 - Add manual override buttons to ballvalves/manifolds, wire in to esp32
 - ESD safety and power safety
-- Consider renaming linear actuator to something...more accurate?
 
 ### 4. Canvas polish
 - **Duct line routing / A\*** — deferred deliberately. It's cosmetic (odd
@@ -294,7 +295,7 @@ node shared/device-model/nodelink-conformance.js ws://<node>.local/nodelink
 - click and drag ducts?
 
 ### 5. Shop schema v2 (`schemaVersion: 2`) — RFC drafted 2026-08-12
-Design settled in [`docs/v2-shop-schema-rfc.md`](docs/v2-shop-schema-rfc.md).
+Design settled in [`docs/shop-schema-rfc.md`](docs/shop-schema-rfc.md).
 Nothing below is implemented. Ordering matters: the shared model first, then
 firmware, then canvas — the contract discipline means a half-migrated model
 breaks all three at once.
@@ -338,14 +339,14 @@ breaks all three at once.
 
 #### Firmware testing debt this creates
 Accepted deliberately (2026-08-12) — the design is worth the extra bring-up.
-Phase 1 is still hardware-untested, so these land on top of an unvalidated base.
+Nothing is hardware-tested yet, so these land on top of an unvalidated base.
 
 - [ ] `syncTopologyOutlets()` walks `machines[]` instead of elements. **Highest
       risk item in the migration** — it is the code that decides which plugs get
       watched, and getting it wrong makes tools silently stop being sensed.
       Re-run the bench note in §1 after the change.
 - [ ] Per-system iteration in `TopologyStore.h` / `TopologyRouter.h`, and
-      `/api/v2/topology|status` reporting per system.
+      `/api/topology|status` reporting per system.
 - [ ] Sticky `enabled` persistence — survives reboot, WiFi drop, node reconnect
       **and** topology re-adopt. Verify the re-adopt case explicitly; it is the
       one a naive implementation gets wrong.

@@ -1,4 +1,4 @@
-// topology.test.js — pure unit tests for the v2 topology contract + routing.
+// topology.test.js — pure unit tests for the topology contract + routing.
 //
 // No HTTP, no server — just the pure model (topology.js + routing.js) over
 // hand-built fixtures. Run: `node topology.test.js` (exit 0 = all pass).

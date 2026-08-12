@@ -1,4 +1,4 @@
-// topology.fixtures.js — hand-built topologies for testing the v2 model.
+// topology.fixtures.js — hand-built topologies for testing the topology model.
 //
 // Reused by topology.test.js now and (later) by the device-model migrate +
 // conformance. Kept minimal but exercising every shape: linear N-branch,

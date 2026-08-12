@@ -798,10 +798,10 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     // ?layer=wiring — how /boards hands you back, so you return to the view the
     // boards actually belong to instead of the duct drawing.
     if (this.route.snapshot.queryParamMap.get('layer') === 'wiring') this.setLayer('wiring');
-    try { this.applyLive(await this.api.getV2Status()); } catch { /* not running */ }
+    try { this.applyLive(await this.api.getStatus()); } catch { /* not running */ }
     // The rail names the network the boards share. Best-effort: an unreachable or
     // older device just leaves the label off.
-    try { this.netName = (await this.api.getStatus()).ssid ?? ''; } catch { /* no device */ }
+    try { this.netName = (await this.api.getMotionStatus()).ssid ?? ''; } catch { /* no device */ }
     // The load is async, so it can settle either side of ngAfterViewInit. Both paths
     // ask to fit and maybeFit() runs whichever gets there second, once with a real
     // layout and a measurable wrap.
@@ -3283,7 +3283,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       await this.api.putTopology(this.docWithLayout() as Topology);
       this.dirty = false;
       this.airflowErrors = this.liveLeaks();
-      try { this.applyLive(await this.api.getV2Status()); } catch { /* not running */ }
+      try { this.applyLive(await this.api.getStatus()); } catch { /* not running */ }
     } catch {
       this.dirty = true;
       this.saveError = 'Imported here, but couldn’t reach the controller to store it.';

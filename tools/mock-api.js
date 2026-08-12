@@ -6,9 +6,6 @@
 //   # Then in dustgate-ui:
 //   ng serve --proxy-config proxy.conf.json
 //
-// Set ANTHROPIC_KEY env var to proxy real Claude responses through the
-// /api/agent/chat endpoint; omit it for canned mock responses.
-//
 // This is a THIN HTTP/WebSocket wrapper: all device behaviour lives in the
 // canonical model at shared/device-model/device-model.js, which also drives
 // the in-browser demo (dustgate-ui/.../demo-api.service.ts). Keep logic in the
@@ -20,22 +17,20 @@ try { require('dotenv').config({ path: require('path').join(__dirname, '.env') }
 catch { /* dotenv not installed yet — run: cd tools && npm install */ }
 
 const http   = require('http');
-const https  = require('https');
 const url    = require('url');
 const { WebSocketServer } = require('ws');
 const M = require('../shared/device-model/device-model.js');
-const TOPO = require('../shared/device-model/topology.js');           // v2 validator
-const TD   = require('../shared/device-model/topology-device.js');    // v2 device sim
+const TOPO = require('../shared/device-model/topology.js');           // topology validator
+const TD   = require('../shared/device-model/topology-device.js');    // topology device sim
 
 const PORT    = 3000;
 const API_KEY = 'dev-mock-key-1234';
-const ANT_KEY = process.env.ANTHROPIC_KEY || '';
 const VERSION = '1.0.0-mock';
 
 // ── Canonical device instance ───────────────────────────────────────────────
 const d = M.createDevice();
 
-// ── v2 topology-native device (additive; null until a topology is PUT) ───────
+// ── topology-native device (additive; null until a topology is PUT) ───────
 let td = null;
 
 // Last angle commanded to each servo channel by the setup jog, keyed
@@ -47,7 +42,7 @@ const servoAngles = {};
 
 // ── Paired boards (mirrors control/NodeRegistry.h) ──────────────────────────
 // DELIBERATELY NOT part of the topology. On the device this lives in NVS and
-// survives a layout wipe; here it survives a PUT /api/v2/topology. Keeping that
+// survives a layout wipe; here it survives a PUT /api/topology. Keeping that
 // independence in the mock is the point — the boards screen must work with no
 // topology at all, and that's only tested if the mock can be in that state.
 // A friendly `name` lives here too, for the same reason.
@@ -65,7 +60,7 @@ const OFFLINE_HOSTS = ['dustgate-node-2'];
 const bareHost = (h) => String(h || '').toLowerCase().replace(/\.local\.?$/, '');
 const findPaired = (h) => pairedNodes.find(n => bareHost(n.host) === bareHost(h));
 
-/** Link state for GET /api/v2/nodes — the shape RemoteActuatorBus::info() feeds. */
+/** Link state for GET /api/nodes — the shape RemoteActuatorBus::info() feeds. */
 function nodeLinkState(entry) {
   const known  = NETWORK_BOARDS.find(b => bareHost(b.host) === bareHost(entry.host));
   const online = !OFFLINE_HOSTS.includes(bareHost(entry.host));
@@ -118,17 +113,12 @@ function handler(req, res) {
   }
 
   // ── Auth check ──
-  // /api/claude is exempt: it mirrors the real Vercel serverless function,
-  // which never requires X-Api-Key (the demo deployment gates via the
-  // optional accessCode field instead — see api/claude.ts).
-  if (pathname !== '/api/claude') {
-    const key = req.headers['x-api-key'];
-    if (key !== API_KEY) return json(res, { error: 'unauthorized' }, 401);
-  }
+  const key = req.headers['x-api-key'];
+  if (key !== API_KEY) return json(res, { error: 'unauthorized' }, 401);
 
   // ── Routes (thin: parse → model call → respond) ────────────────────────────
 
-  if (pathname === '/api/status' && req.method === 'GET') return json(res, M.statusView(d));
+  if (pathname === '/api/motion' && req.method === 'GET') return json(res, M.statusView(d));
   if (pathname === '/api/stops'  && req.method === 'GET') return json(res, { stops: d.stops });
   // /api/outlets returns the live status blob (outlet list embedded), same as firmware.
   if (pathname === '/api/outlets' && req.method === 'GET') return json(res, M.statusView(d));
@@ -250,10 +240,6 @@ function handler(req, res) {
     console.log('[MOCK] WiFi reset requested — ignoring (no real WiFi to forget)');
     return json(res, { ok: true });
   }
-  if (pathname === '/api/agent/key' && req.method === 'PUT') {
-    console.log('[MOCK] Anthropic key update requested — ignoring (mock uses ANTHROPIC_KEY env var)');
-    return json(res, { ok: true });
-  }
 
   if (pathname === '/api/clearcal' && req.method === 'POST') {
     M.clearCal(d); broadcast(); return json(res, { ok: true });
@@ -263,50 +249,11 @@ function handler(req, res) {
     return json(res, { ok: true });
   }
 
-  // ── Claude proxy ─────────────────────────────────────────────────────────
-  // /api/claude   — used by DemoApiService (mirrors the Vercel serverless function)
-  // /api/agent/chat — used by ApiService (real ESP32 path, kept for compatibility)
-  if ((pathname === '/api/claude' || pathname === '/api/agent/chat') && req.method === 'POST') {
-    if (!ANT_KEY) {
-      // Canned mock response when no key is provided
-      return json(res, {
-        id: 'mock-msg-001', type: 'message', role: 'assistant',
-        content: [{
-          type: 'text',
-          text: 'Hi! I\'m the DustGate setup assistant (running in mock mode — set ANTHROPIC_KEY env var for real responses). How can I help you configure your dust collection system?',
-        }],
-        model: 'claude-mock', stop_reason: 'end_turn',
-        usage: { input_tokens: 0, output_tokens: 0 },
-      });
-    }
-
-    // Forward to Anthropic with real key
-    return body(req, rawBody => {
-      const options = {
-        hostname: 'api.anthropic.com', path: '/v1/messages', method: 'POST',
-        headers: {
-          'Content-Type':      'application/json',
-          'x-api-key':         ANT_KEY,
-          'anthropic-version': '2023-06-01',
-          'Content-Length':    Buffer.byteLength(JSON.stringify(rawBody)),
-        },
-      };
-      const fwd = https.request(options, fwdRes => {
-        let data = '';
-        fwdRes.on('data', c => data += c);
-        fwdRes.on('end', () => { res.writeHead(fwdRes.statusCode, { 'Content-Type': 'application/json' }); res.end(data); });
-      });
-      fwd.on('error', e => json(res, { error: e.message }, 502));
-      fwd.write(JSON.stringify(rawBody));
-      fwd.end();
-    });
-  }
-
-  // ── v2 topology API (additive — flat /api/* above still serves phase 1) ────
+  // ── Topology API ─────────────────────────────────────────────────────────
   // PUT the whole topology (validated); GET it back; GET live status; and a
   // sim-only tool-power inject (real firmware gets power from Shelly plugs, so
   // it wouldn't implement /sim/tool — the demo/mock use it to drive routing).
-  if (pathname === '/api/v2/topology' && req.method === 'PUT') {
+  if (pathname === '/api/topology' && req.method === 'PUT') {
     return body(req, data => {
       const v = TOPO.validateTopology(data);
       if (!v.ok) return json(res, { error: 'invalid topology', errors: v.errors }, 400);
@@ -314,16 +261,16 @@ function handler(req, res) {
       json(res, { ok: true });
     });
   }
-  if (pathname === '/api/v2/topology' && req.method === 'GET') {
+  if (pathname === '/api/topology' && req.method === 'GET') {
     return td ? json(res, td.topology) : json(res, { error: 'no topology configured' }, 404);
   }
-  if (pathname === '/api/v2/status' && req.method === 'GET') {
+  if (pathname === '/api/status' && req.method === 'GET') {
     return td ? json(res, TD.statusView(td)) : json(res, { error: 'no topology configured' }, 404);
   }
   // Setup-only servo jog. Nothing to move here, so just range-check like the firmware
   // does and remember the angle — enough for the gate configurator to be walked end to
   // end against the mock.
-  if (pathname === '/api/v2/servo/jog' && req.method === 'POST') {
+  if (pathname === '/api/servo/jog' && req.method === 'POST') {
     return body(req, data => {
       const ch = Number(data.channel);
       if (!Number.isInteger(ch) || ch < 0 || ch >= 4) return json(res, { error: 'channel out of range' }, 400);
@@ -345,18 +292,18 @@ function handler(req, res) {
     });
   }
   // ── Paired boards ─────────────────────────────────────────────────────────
-  // NOTE for anyone porting a new /api/v2/nodes/<x> route to the firmware:
+  // NOTE for anyone porting a new /api/nodes/<x> route to the firmware:
   // ESPAsyncWebServer matches by PREFIX and tries handlers in registration
-  // order, so "/api/v2/nodes" will happily swallow "/api/v2/nodes/discover"
+  // order, so "/api/nodes" will happily swallow "/api/nodes/discover"
   // unless the longer path is registered first. This mock compares exact
   // strings and doesn't care — which is exactly why the trap went unnoticed
   // here once already.
-  if (pathname === '/api/v2/nodes/discover' && req.method === 'GET') {
+  if (pathname === '/api/nodes/discover' && req.method === 'GET') {
     // Every board on the "network", paired or not. The UI filters out the ones
     // it already has; firmware likewise reports what the mDNS sweep saw.
     return json(res, NETWORK_BOARDS.map(b => ({ ...b })));
   }
-  if (pathname === '/api/v2/nodes/pair' && req.method === 'POST') {
+  if (pathname === '/api/nodes/pair' && req.method === 'POST') {
     return body(req, data => {
       const host = String(data.host || '').trim();
       if (!host) return json(res, { error: "missing 'host'" }, 400);
@@ -377,7 +324,7 @@ function handler(req, res) {
       json(res, { ok: true });
     });
   }
-  if (pathname === '/api/v2/nodes' && req.method === 'GET') {
+  if (pathname === '/api/nodes' && req.method === 'GET') {
     // Always 200, never 404: an empty list means "nothing paired", which is a
     // legitimate state the boards screen renders. The device publishes this
     // outside its topology gate for the same reason.
@@ -387,7 +334,7 @@ function handler(req, res) {
   // Manual tool switch — the Live view's rows. Same lever as /sim/tool, but it's
   // a REAL control path that firmware implements, where /sim/tool is mock-only.
   // Modelled as a synthetic wattage so there's one definition of "active".
-  if (pathname === '/api/v2/tool' && req.method === 'POST') {
+  if (pathname === '/api/tool' && req.method === 'POST') {
     return body(req, data => {
       if (!td) return json(res, { error: 'no topology configured' }, 404);
       if (!data.toolId) return json(res, { error: "missing 'toolId'" }, 400);
@@ -401,7 +348,7 @@ function handler(req, res) {
     });
   }
 
-  if (pathname === '/api/v2/sim/tool' && req.method === 'POST') {
+  if (pathname === '/api/sim/tool' && req.method === 'POST') {
     return body(req, data => {
       if (!td) return json(res, { error: 'no topology configured' }, 404);
       TD.setToolPower(td, data.toolId, Number(data.watts) || 0);
@@ -440,7 +387,5 @@ server.listen(PORT, () => {
   console.log(`\nDustGate mock API running on http://localhost:${PORT}`);
   console.log(`  API key: ${API_KEY}`);
   console.log(`  Model:   shared/device-model (canonical)`);
-  console.log(`  Claude:  ${ANT_KEY ? 'PROXYING to Anthropic' : 'canned mock responses'}`);
-  console.log(`\n  In dustgate-ui:  ng serve --proxy-config proxy.conf.json`);
-  console.log(`  Or add ANTHROPIC_KEY=sk-ant-... to tools/.env\n`);
+  console.log(`\n  In dustgate-ui:  ng serve --proxy-config proxy.conf.json\n`);
 });

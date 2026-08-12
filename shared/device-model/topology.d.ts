@@ -1,4 +1,4 @@
-// Minimal TypeScript types for the v2 topology contract (topology.js).
+// Minimal TypeScript types for the topology contract (topology.js).
 // The graph configurator UI will refine these; for now the app treats a
 // topology as an opaque validated document.
 

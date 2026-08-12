@@ -248,7 +248,7 @@ require_port() {
 # Reads tools/.env (if present) into ENV_* vars, without mutating the file.
 # Used purely to prefill prompt defaults.
 load_env_defaults() {
-  ENV_SSID=""; ENV_PASS=""; ENV_KEY=""; ENV_HOST="dustgate"
+  ENV_SSID=""; ENV_PASS=""; ENV_HOST="dustgate"
   if [[ -f "$ENV_FILE" ]]; then
     while IFS='=' read -r k v; do
       [[ "$k" =~ ^#.*$ || -z "$k" ]] && continue
@@ -256,7 +256,6 @@ load_env_defaults() {
       case "$k" in
         WIFI_SSID)     ENV_SSID="$v" ;;
         WIFI_PASS)     ENV_PASS="$v" ;;
-        ANTHROPIC_KEY) ENV_KEY="$v" ;;
         HOSTNAME)      ENV_HOST="$v" ;;
       esac
     done < "$ENV_FILE"
@@ -264,9 +263,9 @@ load_env_defaults() {
   ENV_HOST="${ENV_HOST:-dustgate}"
 }
 
-# Interactively prompts for WiFi SSID/password, optional Anthropic key, and
-# mDNS hostname — prefilled from tools/.env where available, Enter keeps the
-# default. Exports WIFI_SSID/WIFI_PASS/ANTHROPIC_KEY/HOSTNAME_CFG for
+# Interactively prompts for WiFi SSID/password and mDNS hostname — prefilled
+# from tools/.env where available, Enter keeps the default. Exports
+# WIFI_SSID/WIFI_PASS/HOSTNAME_CFG for
 # deploy.sh to pick up directly (it prefers already-exported vars over
 # re-reading the file).
 prompt_credentials() {
@@ -277,11 +276,9 @@ prompt_credentials() {
   WIFI_SSID="${WIFI_SSID:-$ENV_SSID}"
   read -rsp "  WiFi Password${ENV_PASS:+ [unchanged, hidden]}: " WIFI_PASS; echo
   WIFI_PASS="${WIFI_PASS:-$ENV_PASS}"
-  read -rp "  Anthropic API key (optional, enables AI setup assistant)${ENV_KEY:+ [unchanged]}: " ANTHROPIC_KEY
-  ANTHROPIC_KEY="${ANTHROPIC_KEY:-$ENV_KEY}"
   read -rp "  Hostname — device will be at http://<host>.local [$ENV_HOST]: " HOSTNAME_CFG
   HOSTNAME_CFG="${HOSTNAME_CFG:-$ENV_HOST}"
-  export WIFI_SSID WIFI_PASS ANTHROPIC_KEY HOSTNAME_CFG
+  export WIFI_SSID WIFI_PASS HOSTNAME_CFG
 }
 
 pids=()
@@ -418,9 +415,7 @@ run_flash_node() {
     exit 1
   fi
 
-  # No Anthropic key: a node has no setup agent to run it.
-  ANTHROPIC_KEY=""
-  export WIFI_SSID WIFI_PASS ANTHROPIC_KEY HOSTNAME_CFG
+  export WIFI_SSID WIFI_PASS HOSTNAME_CFG
 
   echo ""
   echo "  Flashing as: $HOSTNAME_CFG  (will appear at $HOSTNAME_CFG.local)"
