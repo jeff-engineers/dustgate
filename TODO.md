@@ -371,11 +371,20 @@ breaks all three at once.
 - **"WiFi devices" tray** — rename/extend the boards tray to hold secondary
   controllers *and* unclaimed outlets; foreign-owned plugs shown locked with
   their owner named (RFC §9). Mockup: [`docs/mockups/outlet-dock.html`](docs/mockups/outlet-dock.html).
-- **Supplemental ports + partial routing** — a port declares `supplemental: true`
-  (the overarm); routing gains three answers instead of two: *routed*, *partial*
-  (a supplemental port lost), *stripped* (a **primary** port lost to another
-  machine). Stripped is the alarm case — a saw drawing 1.8 kW with its cabinet
-  gate shut. Arbitration itself does not change (RFC §10.3).
+- ~~**Supplemental ports + partial routing**~~ **DONE 2026-08-12 (model +
+  firmware)** — a port declares `supplemental: true` (the overarm); routing has
+  three answers instead of two: *routed*, *partial* (a supplemental port lost),
+  *stripped* (a **primary** port lost). Stripped is the alarm case — a saw
+  drawing 1.8 kW with its cabinet gate shut.
+
+  **Correction:** an earlier version of this line said "arbitration itself does
+  not change". That was wrong — RFC §11.3 rule 1 is *primary beats supplemental,
+  whatever started more recently*, and both engines shipped without it before
+  2026-08-12. Now implemented in `shop.js` and `Shop.h`: ports are ordered
+  primaries-then-supplementals into the greedy router, recency preserved within
+  each class. Also added the validation the RFC lists and the first cut missed —
+  home-system rule, ≥1 primary port, two-primaries-on-one-selector, ducts within
+  one system, machine/element id collisions.
 - **Shop-wide move queue** — plans are per-system, execution is not. One serial
   queue on the primary, or two systems transitioning at once break the
   one-servo-at-a-time current mutex (RFC §10.2).

@@ -202,6 +202,110 @@ function validateShop(shop) {
     }
   }
 
+  // A duct's child and parent must be in the SAME system. This is the rule that
+  // makes "systems share no duct" structural rather than conventional — without
+  // it a layout could plumb a 4" tool into the 2.5" manifold and every
+  // per-system invariant below would still pass.
+  for (const sys of shop.systems) {
+    const here = new Set(sys.elements.map((e) => e && e.id).filter(Boolean));
+    for (const d of sys.ducts) {
+      if (!d) continue;
+      for (const end of ['child', 'parent']) {
+        const id = d[end];
+        if (id && !here.has(id) && elemOwner.has(id)) {
+          err('duct', `duct ${end} "${id}" is in system "${elemOwner.get(id)}", not "${sys.id}"`, id);
+        }
+      }
+    }
+  }
+
+  // Machine ids share a namespace with element ids: both address things by bare
+  // id in logs, in ui.layout and over the wire, and migrateToShop deliberately
+  // reuses a v1 tool's id for its machine — so a COLLISION with a different
+  // element is what has to be caught, not the reuse itself.
+  for (const m of shop.machines) {
+    if (!m || !m.id) continue;
+    const owner = elemOwner.get(m.id);
+    if (!owner) continue;
+    const port = ports.get(m.id) || [];
+    const isOwnPort = port.some(({ port: p }) => p.id === m.id);
+    if (!isOwnPort) {
+      err('machine', `machine id "${m.id}" collides with an element in system "${owner}"`, m.id);
+    }
+  }
+
+  // elementId → the selector immediately above it and the state that opens the
+  // branch it hangs on. Only the first hop: that is the one a machine's own two
+  // ports can contend for, which is what the check below is about.
+  const feedOf = new Map();
+  for (const sys of shop.systems) {
+    const byId = new Map(sys.elements.map((e) => [e && e.id, e]));
+    for (const d of sys.ducts) {
+      if (!d || !d.child) continue;
+      const parent = byId.get(d.parent);
+      if (!parent || parent.type !== 'selector') continue;
+      const branch = (parent.branches || []).find((b) => b.id === d.parentBranch);
+      if (branch) feedOf.set(d.child, { selectorId: parent.id, stateId: branch.opensState });
+    }
+  }
+
+  // ── primary vs supplemental (RFC §11.3) ──
+  //
+  // `supplemental: true` marks a port whose loss degrades capture but is not a
+  // problem in itself. ABSENT MEANS PRIMARY, because a port nobody has thought
+  // about is a port whose air you actually need.
+  const isSupplemental = (port) => port.supplemental === true;
+  for (const m of shop.machines) {
+    if (!m || !m.id) continue;
+    const p = ports.get(m.id) || [];
+    if (p.length === 0) continue;   // already reported below
+
+    const primary = p.filter(({ port }) => !isSupplemental(port));
+    // All-supplemental is a machine nothing is obliged to collect from, which
+    // makes every verdict about it meaningless — it can never be `stripped`.
+    if (primary.length === 0) {
+      err('machine', `machine "${m.name || m.id}" has no primary port — mark at least one as required`, m.id);
+      continue;
+    }
+
+    // THE LOAD-BEARING RULE. A machine's home system is the one holding its
+    // primary ports; every port outside it must be supplemental. That is what
+    // guarantees cross-system contention can never cost anyone a primary port:
+    // someone else's tool, in a system you did not choose to share, can only
+    // ever take your bonus pickup.
+    //
+    // The RFC states it per port ("every port outside the home system is
+    // supplemental"); stated that way it is exactly equivalent to "all primary
+    // ports share one system", since a primary elsewhere IS a second home. One
+    // check, because two would mean one of them could never fire — and the
+    // message has to name both systems anyway for the error to be actionable.
+    const homes = [...new Set(primary.map(({ systemId }) => systemId))];
+    if (homes.length > 1) {
+      err('machine',
+        `machine "${m.name || m.id}" has primary ports in systems ${homes.map((h) => `"${h}"`).join(' and ')} — only one can be its home; ports outside it must be supplemental`,
+        m.id);
+    }
+
+    // Two PRIMARY ports of one machine that need the same selector in DIFFERENT
+    // states can never both be open, so the machine can never be fully routed —
+    // a build error, not a runtime surprise. Judged on the states themselves
+    // rather than on the selector's kind: two ports hanging off branches that
+    // share an `opensState` do both flow, and that is a legitimate build.
+    // The same shape with one port supplemental is merely permanently degraded,
+    // and the user may have meant it, so only primaries are checked.
+    const held = new Map();   // selectorId → { stateId, portId }
+    for (const { port } of primary) {
+      const hop = feedOf.get(port.id);
+      if (!hop) continue;
+      const prev = held.get(hop.selectorId);
+      if (prev && prev.stateId !== hop.stateId) {
+        err('port', `ports "${prev.portId}" and "${port.id}" are both primary on selector "${hop.selectorId}", which cannot open both at once`, port.id);
+      } else if (!prev) {
+        held.set(hop.selectorId, { stateId: hop.stateId, portId: port.id });
+      }
+    }
+  }
+
   // A machine with no port is switched on and routes nowhere. That is not a
   // draft state the UI can leave behind either: deleting the last port IS the
   // "remove this machine" action (RFC §6.4), so reaching here means something
@@ -280,20 +384,37 @@ function routeShop(shop, activeMachineIds) {
   for (const sys of systemsOf(shop)) {
     const view = systemView(shop, sys);
 
-    // Machine ids → this system's enabled port ids, priority order preserved.
+    // Machine ids → this system's enabled ports, priority order preserved.
     // One machine can hold several ports in ONE system (floor gate + overarm on
     // the same collector), so this is a flatMap, not a lookup.
-    /** @type {string[]} */
-    const activePorts = [];
+    /** @type {{id:string, supplemental:boolean}[]} */
+    const wanted = [];
     /** @type {Map<string,string[]>} */
     const portsOfMachineHere = new Map();
     for (const mid of active) {
       const here = (ports.get(mid) || [])
         .filter(({ systemId, port }) => systemId === sys.id && portEnabled(port))
-        .map(({ port }) => port.id);
-      if (here.length) portsOfMachineHere.set(mid, here);
-      activePorts.push(...here);
+        .map(({ port }) => port);
+      if (here.length) portsOfMachineHere.set(mid, here.map((p) => p.id));
+      for (const p of here) wanted.push({ id: p.id, supplemental: p.supplemental === true });
     }
+
+    // ARBITRATION ORDER (RFC §11.3). computeRouting is greedy in list order, so
+    // the order of this list IS the policy:
+    //
+    //   1. primary beats supplemental, whatever started more recently
+    //   2. among primaries    — most-recent-wins, unchanged
+    //   3. among supplementals — most-recent-wins
+    //
+    // Step 1 matters more than it looks. Without it, starting the table saw
+    // AFTER someone's bandsaw hands the manifold to the saw's overarm and leaves
+    // the bandsaw cutting into a closed gate: recency beating need. `active` is
+    // already in recency order and Array.sort is stable, so partitioning on
+    // `supplemental` alone preserves rules 2 and 3 for free.
+    const activePorts = wanted
+      .slice()
+      .sort((a, b) => (a.supplemental === b.supplemental ? 0 : (a.supplemental ? 1 : -1)))
+      .map((p) => p.id);
 
     const r = RTG.computeRouting(view, activePorts);
 

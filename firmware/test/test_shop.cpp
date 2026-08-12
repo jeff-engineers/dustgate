@@ -156,6 +156,21 @@ int main(int argc, char** argv) {
     ok("conflict names the loser",             r.conflicts.size() == 1 && join(r.conflicts[0].losers) == "ts-overarm");
   }
 
+  // ── arbitration: primary beats supplemental (RFC §11.3) ───────────────────
+  // The saw is listed FIRST — it started more recently — so plain
+  // most-recent-wins would hand the manifold to its overarm and leave the drill
+  // press, whose ONLY port that manifold feeds, running into a closed gate.
+  // Rule 1: never trade someone's only collection for someone else's bonus.
+  {
+    auto r = topo::routeShop(shop, {"table-saw", "drill-press"});
+    ok("primary holds the manifold despite starting earlier", state(r, "man") == "m2", state(r, "man"));
+    ok("the drill press keeps its air",        reach(r, "drill-port"));
+    ok("the newer machine yields its bonus",   !reach(r, "ts-overarm"));
+    ok("the yielding machine is only partial", status(r, "table-saw") == "partial", status(r, "table-saw"));
+    ok("nobody is stripped",                   status(r, "drill-press") == "routed");
+    ok("conflict names the primary as winner", r.conflicts.size() == 1 && r.conflicts[0].winner == "drill-port");
+  }
+
   // ── the other system is untouched by the first ────────────────────────────
   {
     auto r = topo::routeShop(shop, {"jointer"});
@@ -246,6 +261,15 @@ int main(int argc, char** argv) {
     auto r3 = topo::routeShop(shop, {"drill-press", "table-saw"});
     ok("without `supplemental`: the same loss is STRIPPED",
        status(r3, "table-saw") == "stripped", status(r3, "table-saw"));
+
+    // And rule 2 is untouched: among PRIMARIES, recency still decides. Same
+    // order as the arbitration case above, but with both ports primary the saw's
+    // later start does win — which is exactly what makes the drill press
+    // stripped rather than merely degraded.
+    auto r4 = topo::routeShop(shop, {"table-saw", "drill-press"});
+    ok("among primaries, most-recent still wins", state(r4, "man") == "m1", state(r4, "man"));
+    ok("so the older machine is stripped", status(r4, "drill-press") == "stripped",
+       status(r4, "drill-press"));
   }
 
   printf("\n%d/%d passed\n", passed, passed + failed);

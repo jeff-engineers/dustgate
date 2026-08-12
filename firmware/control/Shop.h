@@ -238,7 +238,7 @@ inline ShopRouting routeShop(JsonObjectConst doc,
     // Machine ids → this system's enabled port ids, priority order preserved.
     // One machine can hold SEVERAL ports in one system (floor gate + overarm on
     // the same collector), so this is a flatten, not a lookup.
-    std::vector<std::string> activePorts;
+    std::vector<std::string> primaries, supplementals;
     std::vector<std::pair<std::string, std::vector<std::string>>> portsOfMachineHere;
     for (const std::string& mid : activeMachineIds) {
       auto pit = ports.find(mid);
@@ -249,10 +249,25 @@ inline ShopRouting routeShop(JsonObjectConst doc,
         const char* pid = pr.port["id"].as<const char*>();
         if (!pid) continue;
         here.push_back(pid);
-        activePorts.push_back(pid);
+        (pr.port["supplemental"].as<bool>() == true ? supplementals : primaries).push_back(pid);
       }
       if (!here.empty()) portsOfMachineHere.push_back({mid, here});
     }
+
+    // ARBITRATION ORDER (RFC §11.3). computeRouting is greedy in list order, so
+    // the order of this list IS the policy:
+    //
+    //   1. primary beats supplemental, whatever started more recently
+    //   2. among primaries    — most-recent-wins, unchanged
+    //   3. among supplementals — most-recent-wins
+    //
+    // Step 1 matters more than it looks. Without it, starting the table saw
+    // AFTER someone's bandsaw hands the manifold to the saw's overarm and leaves
+    // the bandsaw cutting into a closed gate: recency beating need.
+    // activeMachineIds is already in recency order and both buckets are filled
+    // by walking it once, so rules 2 and 3 hold without a second sort.
+    std::vector<std::string> activePorts = primaries;
+    activePorts.insert(activePorts.end(), supplementals.begin(), supplementals.end());
 
     for (JsonObjectConst el : sys.elements)
       if (_eq(el["type"], "tool")) {

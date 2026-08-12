@@ -97,6 +97,63 @@ check('all ports disabled is an error',
 check('SOME ports disabled is fine',
   validateShop(mut((s) => { el(s, 'small', 'ts-overarm').enabled = false; })).ok);
 
+// ── validation: the home-system rule (RFC §11.3, §13) ───────────────────────
+//
+// THE load-bearing rule. A machine's home system is the one holding its primary
+// ports; everything outside it must be supplemental. That is what buys the
+// guarantee that cross-system contention can never cost anyone a primary port —
+// someone else's tool, in a system you did not choose to share, can only ever
+// take your bonus pickup.
+// Dropping `supplemental` from the overarm makes it a primary port in a system
+// that isn't the saw's home — which is the same thing as the saw having two
+// homes, and is why this is one check rather than two.
+check('a primary port outside the home system is rejected',
+  hasCode(validateShop(mut((s) => { delete el(s, 'small', 'ts-overarm').supplemental; })), 'machine'));
+check('...and the message names both systems',
+  validateShop(mut((s) => { delete el(s, 'small', 'ts-overarm').supplemental; }))
+    .errors.some((e) => e.message.includes('"big"') && e.message.includes('"small"')));
+// All-supplemental is a machine nothing is obliged to collect from, which makes
+// every verdict about it meaningless — it can never be `stripped`.
+check('a machine with no primary port is rejected',
+  hasCode(validateShop(mut((s) => { el(s, 'big', 'ts-cabinet').supplemental = true; })), 'machine'));
+
+// Two PRIMARY ports needing one selector in different states can never both be
+// open, so the machine can never be fully routed. A build error, not a runtime
+// surprise.
+check('two primary ports contending for one selector is a build error',
+  hasCode(validateShop(mut((s) => {
+    const small = sys(s, 'small');
+    small.elements.push({ id: 'drill-aux', type: 'tool', machineId: 'drill-press', name: 'Aux' });
+    small.ducts.push({ child: 'drill-aux', parent: 'man', parentBranch: 'p1' });
+  })), 'port'));
+// The same shape with one port supplemental is permanently degraded, not wrong —
+// the user may well have meant it.
+check('...but the same shape with one supplemental is allowed',
+  validateShop(mut((s) => {
+    const small = sys(s, 'small');
+    small.elements.push({ id: 'drill-aux', type: 'tool', machineId: 'drill-press',
+                          name: 'Aux', supplemental: true });
+    small.ducts.push({ child: 'drill-aux', parent: 'man', parentBranch: 'p1' });
+  })).ok);
+
+// Systems share no duct. This is what makes that structural rather than
+// conventional — without it a layout could plumb a 4" tool into the 2.5"
+// manifold and every per-system invariant would still pass.
+check('a duct spanning two systems is rejected',
+  hasCode(validateShop(mut((s) => {
+    sys(s, 'small').ducts.push({ child: 'ts-cabinet', parent: 'man', parentBranch: 'p1' });
+  })), 'duct'));
+
+// migrateToShop reuses a v1 tool's id for its machine ON PURPOSE, so the reuse
+// itself must stay legal — only a collision with a DIFFERENT element is wrong.
+check('a machine id colliding with an unrelated element is rejected',
+  hasCode(validateShop(mut((s) => { s.machines[0].id = 'bv-cab';
+    for (const x of sys(s, 'big').elements) if (x.machineId === 'table-saw') x.machineId = 'bv-cab';
+    for (const x of sys(s, 'small').elements) if (x.machineId === 'table-saw') x.machineId = 'bv-cab';
+  })), 'machine'));
+check('a migrated shop, where machine ids ARE their port ids, stays valid',
+  validateShop(migrateToShop(twoGates)).ok);
+
 // ── port helpers ────────────────────────────────────────────────────────────
 {
   const ports = portsByMachine(twoSystemShop);
@@ -175,6 +232,30 @@ check('SOME ports disabled is fine',
   const s = mut((x) => { delete el(x, 'small', 'ts-overarm').supplemental; });
   const r = routeShop(s, ['drill-press', 'table-saw']);
   eq('losing a primary port is stripped', r.machines['table-saw'].status, 'stripped');
+}
+// ── arbitration: primary beats supplemental (RFC §11.3) ────────────────────
+{
+  // The saw is listed FIRST, so plain most-recent-wins would hand the manifold
+  // to its overarm — and leave the drill press, whose only port that manifold
+  // feeds, running into a closed gate. Rule 1 exists to stop exactly that:
+  // never trade someone's only collection for someone else's bonus.
+  const r = routeShop(twoSystemShop, ['table-saw', 'drill-press']);
+  eq('the primary port holds the manifold despite starting earlier', r.states['man'], 'm2');
+  check('the drill press keeps its air', r.reachable['drill-port'] === true);
+  check('the newer machine yields its bonus pickup', r.reachable['ts-overarm'] === false);
+  eq('the yielding machine is only partial', r.machines['table-saw'].status, 'partial');
+  eq('nobody is stripped', r.machines['drill-press'].status, 'routed');
+  eq('and the conflict names the primary as winner', r.conflicts[0].winner, 'drill-port');
+}
+{
+  // Rule 2 is untouched: among PRIMARIES, recency still decides. Dropping the
+  // supplemental flag makes both ports primary, and then the saw's later start
+  // does win — which is also what makes the drill press `stripped` rather than
+  // merely degraded.
+  const s = mut((x) => { delete el(x, 'small', 'ts-overarm').supplemental; });
+  const r = routeShop(s, ['table-saw', 'drill-press']);
+  eq('among primaries, most-recent still wins', r.states['man'], 'm1');
+  eq('so the older machine is stripped', r.machines['drill-press'].status, 'stripped');
 }
 {
   // A machine with every port disabled is invalid, but routing still has to
