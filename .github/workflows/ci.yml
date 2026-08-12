@@ -2,7 +2,7 @@ name: CI
 
 # Three independent checks, run in parallel on every push / PR:
 #   conformance — certifies the device API contract against the Node mock
-#   ui-build    — builds the Angular app (also validates the @device-model wiring)
+#   ui-build    — builds the Angular app and runs its unit suites
 #   firmware    — compiles the ESP32 firmware with PlatformIO
 #
 # The conformance job is the load-bearing one for the mock/demo/firmware sync
@@ -46,7 +46,7 @@ jobs:
         working-directory: tools
 
   ui-build:
-    name: UI build
+    name: UI build + tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -60,6 +60,11 @@ jobs:
         working-directory: dustgate-ui
       - name: Build (also type-checks the shared @device-model import)
         run: npm run build
+        working-directory: dustgate-ui
+      # Plain-node suites: no browser, no headless Chrome to install. See
+      # dustgate-ui/tsconfig.spec.json for why it's built this way.
+      - name: UI unit tests (shop seam, readiness, geometry)
+        run: npm test
         working-directory: dustgate-ui
 
   firmware:

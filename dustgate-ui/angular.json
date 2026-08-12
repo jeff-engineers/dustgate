@@ -22,7 +22,9 @@
             "tsConfig": "tsconfig.app.json",
             "allowedCommonJsDependencies": [
               "@device-model",
-              "@topology"
+              "@topology",
+              "@topology-device",
+              "@shop"
             ],
             "assets": [],
             "styles": [

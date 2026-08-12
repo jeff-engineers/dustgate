@@ -1,0 +1,41 @@
+// Build config for the UI's plain-node test suites.
+//
+// Deliberately NOT Karma or Vitest. The repo already tests this way — the shared
+// model's suites are hand-rolled harnesses run with `node file.js`, and the two
+// existing UI suites (test:routing, test:wiring) compile with plain tsc and run
+// the same way. A browser-based runner would add a headless-Chrome dependency to
+// CI to test code that never touches the DOM.
+//
+// The limit that follows from that: everything reachable from a spec listed here
+// must be Angular-free. That is not a workaround, it is the useful pressure —
+// logic worth testing shouldn't need a TestBed to reach. Component behaviour
+// stays covered by the browser pass.
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    // CommonJS so `node` can run the output directly. The `paths` below are
+    // type-resolution only — tsc does not rewrite import specifiers on emit, so
+    // spec-runner.js maps @topology/@shop at require time.
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "target": "es2022",
+    "outDir": "./.spec-test",
+    // Pinned so the output tree is ./.spec-test/app/... whatever the `files` list
+    // happens to be. Without it tsc infers the common root from the inputs, and
+    // adding a spec outside src/app would silently move every existing path.
+    "rootDir": "./src",
+    "sourceMap": false,
+    "declaration": false,
+    "noEmit": false,
+    // The Angular-specific lib config in the base tsconfig isn't wanted here.
+    "lib": ["es2022"],
+    "types": ["node"]
+  },
+  // Only the specs. tsc pulls in whatever they import, which is how the
+  // Angular-free rule stays enforced: import a component and the build breaks.
+  "files": [
+    "src/app/services/shop-doc.spec.ts",
+    "src/app/services/shop-ready.spec.ts",
+    "src/app/gates/selector-types.spec.ts"
+  ]
+}

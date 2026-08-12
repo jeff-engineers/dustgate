@@ -366,6 +366,12 @@ breaks all three at once.
   end-to-end, the canvas draws and saves through `validateShop`, adding a tool
   creates its machine, deleting the last port takes the machine with it, and the
   per-system leak check still fires on an ungated tool.
+- ~~**UI test runner**~~ **DONE 2026-08-12** — `cd dustgate-ui && npm test`.
+  Plain tsc → node, matching how `test:routing` / `test:wiring` and the shared
+  model suites already work; no Karma, no Vitest, no headless Chrome in CI.
+  73 new checks over `shop-doc`, `shop-ready` and the flattening readers, wired
+  into the ui-build job. Constraint that comes with it: anything a spec reaches
+  must be Angular-free, so component behaviour still relies on a browser pass.
 - **Multi-port UI** — "add another port to this machine" on the canvas, with
   size/use suggested in the port-name field (`Cabinet · 4"`). No `diameter`
   field; sizing stays the user's business (RFC §6.5).

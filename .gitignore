@@ -75,3 +75,4 @@ firmware/idf_component.yml.orig
 # routing conformance spec build output
 dustgate-ui/.routing-test/
 dustgate-ui/.wiring-test/
+dustgate-ui/.spec-test/

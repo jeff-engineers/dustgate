@@ -288,6 +288,21 @@ Run everything locally from `tools/`:
 | `npm run topology:conformance:ci` | v2 topology API against the mock |
 | `npm run nodelink:conformance:ci` | primary↔secondary protocol against `mock-node.js` |
 
+And from `dustgate-ui/`:
+
+| Command | What it checks |
+|---|---|
+| `npm test` | every UI suite below, in one run |
+| `npm run test:spec` | the shop seam (`shop-doc`), readiness, the flattening readers |
+| `npm run test:routing` / `test:wiring` | duct and cable geometry |
+
+The UI suites are **plain TypeScript compiled with `tsc` and run under `node`** —
+no Karma, no Vitest, no headless Chrome in CI. Everything they reach has to be
+Angular-free, which is deliberate pressure rather than a limitation: logic worth
+testing shouldn't need a TestBed to reach it. Component behaviour is covered by
+driving the app in a browser. See
+[`dustgate-ui/tsconfig.spec.json`](dustgate-ui/tsconfig.spec.json).
+
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs all of the above on
 every push / PR, across three jobs (**conformance**, **ui-build**, **firmware** —
 the last compiling all three targets including the servo-only node).
