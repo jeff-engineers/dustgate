@@ -16,11 +16,6 @@
 
 SmartOutletControl::SmartOutletControl()
     : _count(0),
-      _dustCollector(nullptr),
-      _dcOn(false),
-      _dcSynced(false),
-      _dcManualOverride(false),
-      _dcManualState(false),
       _requestedStop(0),
       _activeStop(0),
       _manualOverride(false),
@@ -35,6 +30,11 @@ SmartOutletControl::SmartOutletControl()
 {
     memset(_outlets, 0, sizeof(_outlets));
     memset(_prevActive, 0, sizeof(_prevActive));
+    memset(_collectors, 0, sizeof(_collectors));
+    memset(_dcOn, 0, sizeof(_dcOn));
+    memset(_dcSynced, 0, sizeof(_dcSynced));
+    memset(_dcManualOverride, 0, sizeof(_dcManualOverride));
+    memset(_dcManualState, 0, sizeof(_dcManualState));
     _wsUrl[0] = '\0';
 }
 
@@ -43,8 +43,10 @@ SmartOutletControl::~SmartOutletControl() {
         delete _outlets[i];
         _outlets[i] = nullptr;
     }
-    delete _dustCollector;
-    _dustCollector = nullptr;
+    for (int i = 0; i < COLLECTOR_COUNT; i++) {
+        delete _collectors[i];
+        _collectors[i] = nullptr;
+    }
 }
 
 // =============================================================================
@@ -95,12 +97,13 @@ bool SmartOutletControl::begin() {
         OutletConfig::print(entries, _count);
     }
 
-    // Load the dust collector plug (optional)
+    // Load the persisted collector plug (optional). Slot 0 only — the other
+    // slots are rebuilt from the layout on adopt, so there is nothing to load.
     DustCollectorEntry dc;
     if (OutletConfig::loadDustCollector(dc)) {
-        _dustCollector = new ShellyGen2Outlet(dc.ip, "Dust Collector");
-        _dustCollector->setHost(dc.host);
-        _dcSynced = false; // force initial off/on sync on first poll
+        _collectors[0] = new ShellyGen2Outlet(dc.ip, "Dust Collector");
+        _collectors[0]->setHost(dc.host);
+        _dcSynced[0] = false; // force initial off/on sync on first poll
         DEBUG_PRINT(F("[Outlets] Dust collector plug: gen"));
         Serial.print(dc.generation); DEBUG_PRINT(F(" @ ")); Serial.println(dc.ip);
     }
@@ -194,7 +197,7 @@ void SmartOutletControl::doPoll() {
     if (_count == 0) {
         // No sensor outlets — but a dust collector plug may still be configured,
         // so keep it reconciled (it will stay off since _activeStop is 0).
-        reconcileDustCollector();
+        reconcileCollectors();
         return;
     }
 
@@ -260,7 +263,10 @@ void SmartOutletControl::doPoll() {
             // release any manual DC override on a real tool on/off event.
             if (bestStop != _activeStop) {
                 _activeStop = bestStop;
-                _dcManualOverride = false;
+                // Slot 0 only: it is the one this legacy path has an opinion
+                // about. Releasing the others would hand a system's blower to an
+                // automation that has never heard of it, and switch it off.
+                _dcManualOverride[0] = false;
             }
             // Move the gate only to an ACTIVE tool. At idle (bestStop==0) HOLD the
             // last position — never auto-return home. Keeps a duct path open (a
@@ -275,37 +281,46 @@ void SmartOutletControl::doPoll() {
     }
 
     // Keep the dust collector plug in sync with the committed gate selection.
-    reconcileDustCollector();
+    reconcileCollectors();
 }
 
 // =============================================================================
-// Dust collector reconciliation — poll task (Core 0)
+// Collector reconciliation — poll task (Core 0)
 // =============================================================================
 
-void SmartOutletControl::reconcileDustCollector() {
-    if (!_dustCollector) return;
+void SmartOutletControl::reconcileCollectors() {
+    for (int i = 0; i < COLLECTOR_COUNT; i++) {
+        if (!_collectors[i]) continue;
 
-    // Desired: while a manual override is active, follow the forced state;
-    // otherwise ON whenever a TOOL is actively running and OFF when idle. Keyed
-    // to _activeStop (debounced tool activity), NOT _requestedStop — at idle the
-    // gate holds at its last position (_requestedStop stays > 0) but no tool is
-    // running, so the collector must switch off.
-    xSemaphoreTake(_mutex, portMAX_DELAY);
-    bool desired = _dcManualOverride ? _dcManualState : (_activeStop > 0);
-    bool needsSwitch = !_dcSynced || (desired != _dcOn);
-    xSemaphoreGive(_mutex);
-
-    if (!needsSwitch) return;
-
-    // Blocking HTTP — safe here (poll task, Core 0), never on the motor loop.
-    if (_dustCollector->setSwitch(desired)) {
+        // Desired: while an override is active, follow the forced state.
+        // Otherwise fall back to the legacy stop-index automation — ON whenever a
+        // TOOL is actively running, OFF at idle — which only slot 0 has. The
+        // others have no automation to fall back to and simply stay off until
+        // routing says otherwise, which is correct: nothing else in the firmware
+        // knows what a second system's blower is for.
+        //
+        // The legacy rule is keyed to _activeStop (debounced tool activity), NOT
+        // _requestedStop: at idle the gate holds at its last position
+        // (_requestedStop stays > 0) but no tool is running, so it must switch off.
         xSemaphoreTake(_mutex, portMAX_DELAY);
-        _dcOn     = desired;
-        _dcSynced = true;
+        bool desired = _dcManualOverride[i] ? _dcManualState[i]
+                                            : (i == 0 && _activeStop > 0);
+        bool needsSwitch = !_dcSynced[i] || (desired != _dcOn[i]);
         xSemaphoreGive(_mutex);
-        DEBUG_PRINT(F("[Outlets] Dust collector ")); DEBUG_PRINTLN(desired ? F("ON") : F("OFF"));
+
+        if (!needsSwitch) continue;
+
+        // Blocking HTTP — safe here (poll task, Core 0), never on the motor loop.
+        if (_collectors[i]->setSwitch(desired)) {
+            xSemaphoreTake(_mutex, portMAX_DELAY);
+            _dcOn[i]     = desired;
+            _dcSynced[i] = true;
+            xSemaphoreGive(_mutex);
+            DEBUG_PRINT(F("[Outlets] Collector ")); Serial.print(i);
+            DEBUG_PRINT(F(" ")); DEBUG_PRINTLN(desired ? F("ON") : F("OFF"));
+        }
+        // On failure, leave _dcSynced so we retry on the next poll tick.
     }
-    // On failure, leave _dcSynced so we retry on the next poll tick.
 }
 
 // =============================================================================
@@ -441,10 +456,12 @@ void SmartOutletControl::clearAllOutlets() {
         _outlets[i] = nullptr;
     }
     _count = 0;
-    delete _dustCollector;
-    _dustCollector = nullptr;
-    _dcOn     = false;
-    _dcSynced = false;
+    for (int i = 0; i < COLLECTOR_COUNT; i++) {
+        delete _collectors[i];
+        _collectors[i] = nullptr;
+        _dcOn[i]     = false;
+        _dcSynced[i] = false;
+    }
     xSemaphoreGive(_mutex);
 
     OutletConfig::erase();
@@ -472,55 +489,70 @@ void SmartOutletControl::saveAll() {
 }
 
 // -----------------------------------------------------------------------------
-// Dust collector plug config (setup API)
+// Collector plug config (setup API + topology sync)
 // -----------------------------------------------------------------------------
 
-void SmartOutletControl::configureDustCollector(int generation, const char* ip, const char* host) {
+void SmartOutletControl::configureCollector(int idx, int generation, const char* ip, const char* host) {
+    if (idx < 0 || idx >= COLLECTOR_COUNT) return;
     // Swap the plug object. Same lifetime assumption as configureOutlet: config
     // changes are rare and the poll task tolerates a brief window here.
     xSemaphoreTake(_mutex, portMAX_DELAY);
-    delete _dustCollector;
-    _dustCollector = new ShellyGen2Outlet(ip, "Dust Collector");  // Gen2+ only
-    _dustCollector->setHost(host);
-    _dcOn     = false;
-    _dcSynced = false;   // force a switch command on the next reconcile
+    delete _collectors[idx];
+    _collectors[idx] = new ShellyGen2Outlet(ip, "Dust Collector");  // Gen2+ only
+    _collectors[idx]->setHost(host);
+    _dcOn[idx]     = false;
+    _dcSynced[idx] = false;   // force a switch command on the next reconcile
     xSemaphoreGive(_mutex);
 
-    DustCollectorEntry e;
-    e.generation = generation;
-    strlcpy(e.ip, ip, sizeof(e.ip));
-    strlcpy(e.host, host, sizeof(e.host));
-    e.valid = true;
-    OutletConfig::saveDustCollector(e);
+    // Only slot 0 persists: it is the one the pre-topology path uses at boot,
+    // before any layout has been adopted. The rest are rebuilt from the layout
+    // on every adopt, so persisting them would just be a second copy to keep in
+    // sync — the same reasoning as the tool slots.
+    if (idx == 0) {
+        DustCollectorEntry e;
+        e.generation = generation;
+        strlcpy(e.ip, ip, sizeof(e.ip));
+        strlcpy(e.host, host, sizeof(e.host));
+        e.valid = true;
+        OutletConfig::saveDustCollector(e);
+    }
 
-    DEBUG_PRINT(F("[Outlets] Dust collector configured: gen"));
-    Serial.print(generation); DEBUG_PRINT(F(" @ ")); Serial.println(ip);
+    DEBUG_PRINT(F("[Outlets] Collector ")); Serial.print(idx);
+    DEBUG_PRINT(F(" configured: gen")); Serial.print(generation);
+    DEBUG_PRINT(F(" @ ")); Serial.println(ip);
 }
 
-void SmartOutletControl::removeDustCollector() {
+void SmartOutletControl::removeCollector(int idx) {
+    if (idx < 0 || idx >= COLLECTOR_COUNT) return;
     xSemaphoreTake(_mutex, portMAX_DELAY);
-    delete _dustCollector;
-    _dustCollector = nullptr;
-    _dcOn     = false;
-    _dcSynced = false;
+    delete _collectors[idx];
+    _collectors[idx] = nullptr;
+    _dcOn[idx]             = false;
+    _dcSynced[idx]         = false;
+    _dcManualOverride[idx] = false;
+    _dcManualState[idx]    = false;
     xSemaphoreGive(_mutex);
-    OutletConfig::eraseDustCollector();
-    DEBUG_PRINTLN(F("[Outlets] Dust collector plug removed."));
+    if (idx == 0) OutletConfig::eraseDustCollector();
+    DEBUG_PRINT(F("[Outlets] Collector ")); Serial.print(idx);
+    DEBUG_PRINTLN(F(" removed."));
 }
 
-bool SmartOutletControl::dcOn() {
+bool SmartOutletControl::collectorOn(int idx) {
+    if (idx < 0 || idx >= COLLECTOR_COUNT) return false;
     xSemaphoreTake(_mutex, portMAX_DELAY);
-    bool v = _dcOn;
+    bool v = _dcOn[idx];
     xSemaphoreGive(_mutex);
     return v;
 }
 
-void SmartOutletControl::setDcManual(bool on) {
+void SmartOutletControl::setCollectorManual(int idx, bool on) {
+    if (idx < 0 || idx >= COLLECTOR_COUNT) return;
     xSemaphoreTake(_mutex, portMAX_DELAY);
-    _dcManualOverride = true;
-    _dcManualState    = on;
+    _dcManualOverride[idx] = true;
+    _dcManualState[idx]    = on;
     xSemaphoreGive(_mutex);
-    DEBUG_PRINT(F("[Outlets] Dust collector manual → ")); DEBUG_PRINTLN(on ? F("ON") : F("OFF"));
+    DEBUG_PRINT(F("[Outlets] Collector ")); Serial.print(idx);
+    DEBUG_PRINT(F(" manual → ")); DEBUG_PRINTLN(on ? F("ON") : F("OFF"));
     // Wake the poll task now so the switch is applied immediately rather than
     // waiting up to OUTLET_POLL_INTERVAL_MS for its next scheduled reconcile.
     if (_pollTaskHandle) xTaskNotifyGive(_pollTaskHandle);

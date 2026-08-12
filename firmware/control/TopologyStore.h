@@ -95,19 +95,17 @@ public:
 
     // Cheap structural gate — NOT the full schema. Rejects obvious garbage and
     // truncation so the device never persists something the controller can't
-    // parse. The UI's validateTopology() remains authoritative.
+    // parse. The UI's validateShop()/validateTopology() remains authoritative.
+    //
+    // Accepts BOTH shapes: a schemaVersion-1 topology (elements/ducts at the top
+    // level) and a v2 shop (systems[], each with its own). The device never
+    // rewrites what it is given — Shop.h reads either — so this has to say yes to
+    // both or a v1 board would reject the first shop the UI sends it.
     static bool validateMinimal(JsonVariantConst t, String& err) {
-        if (!t.is<JsonObjectConst>())          { err = "not an object"; return false; }
-        if (!t["elements"].is<JsonArrayConst>())    { err = "elements not an array"; return false; }
+        if (!t.is<JsonObjectConst>())               { err = "not an object"; return false; }
         if (!t["controllers"].is<JsonArrayConst>()) { err = "controllers not an array"; return false; }
 
-        int collectors = 0;
-        for (JsonObjectConst e : t["elements"].as<JsonArrayConst>()) {
-            const char* type = e["type"];
-            if (type && strcmp(type, "collector") == 0) collectors++;
-        }
-        if (collectors != 1) { err = "exactly one collector required"; return false; }
-
+        // Exactly one primary is a SHOP-level rule in both shapes: one brain.
         int primaries = 0;
         for (JsonObjectConst c : t["controllers"].as<JsonArrayConst>()) {
             const char* role = c["role"];
@@ -115,8 +113,44 @@ public:
         }
         if (primaries != 1) { err = "exactly one primary controller required"; return false; }
 
+        if (t["systems"].is<JsonArrayConst>()) {
+            JsonArrayConst systems = t["systems"].as<JsonArrayConst>();
+            if (systems.size() == 0) { err = "a shop needs at least one system"; return false; }
+            if (!t["machines"].is<JsonArrayConst>()) { err = "machines not an array"; return false; }
+            for (JsonObjectConst sys : systems) {
+                const char* sid = sys["id"];
+                if (!sid || !*sid) { err = "system missing id"; return false; }
+                if (!sys["elements"].is<JsonArrayConst>()) {
+                    err = String("system \"") + sid + "\": elements not an array"; return false;
+                }
+                // One collector PER SYSTEM — the invariant the container exists to
+                // preserve, not relax.
+                if (!oneCollector(sys["elements"].as<JsonArrayConst>())) {
+                    err = String("system \"") + sid + "\": exactly one collector required";
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        if (!t["elements"].is<JsonArrayConst>()) { err = "elements not an array"; return false; }
+        if (!oneCollector(t["elements"].as<JsonArrayConst>())) {
+            err = "exactly one collector required"; return false;
+        }
         return true;
     }
+
+private:
+    static bool oneCollector(JsonArrayConst elements) {
+        int n = 0;
+        for (JsonObjectConst e : elements) {
+            const char* type = e["type"];
+            if (type && strcmp(type, "collector") == 0) n++;
+        }
+        return n == 1;
+    }
+
+public:
 
 private:
     bool _present = false;

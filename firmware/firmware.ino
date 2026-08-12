@@ -473,41 +473,68 @@ static void syncControllerAliases() {
 // boot — so persisting them would just be a second copy to keep in sync. The
 // stopIndex is 0 throughout: it belongs to the stop-index gate mapping, whose
 // automation is already inert while a topology is loaded.
+// Last state pushed to each collector plug, so loop() only commands one on
+// change instead of every pass. Cleared whenever a layout is adopted — slot i
+// may then be a different system's blower, and a stale "already asserted" would
+// be an answer about the wrong one.
+static bool g_dcAsserted[COLLECTOR_COUNT] = {false};
+static bool g_dcHave[COLLECTOR_COUNT]     = {false};
+
 static void syncTopologyOutlets() {
+    JsonObjectConst doc = g_topoRuntime.topology();
+    for (int i = 0; i < COLLECTOR_COUNT; i++) g_dcHave[i] = false;
+
+    // Walk MACHINES, not tool elements. A machine owns the plug, and a machine
+    // with two ports (cabinet + overarm on a table saw) is still one plug — so
+    // iterating ports here would try to register the same outlet twice and burn
+    // a slot doing it. For a schemaVersion-1 document machineIds() yields the
+    // tool elements, so this is exactly what it always was.
     int slot = 0;
-    for (JsonObjectConst e : g_topoRuntime.topology()["elements"].as<JsonArrayConst>()) {
-        if (!topo::_eq(e["type"], "tool")) continue;
-        JsonObjectConst o = e["sensor"]["outlet"];
+    for (const std::string& mid : topo::machineIds(doc)) {
+        JsonObjectConst m = topo::machineDoc(doc, mid);
+        JsonObjectConst o = m["sensor"]["outlet"];
         const char* ip = o["ip"].as<const char*>();
-        if (!ip || !*ip) continue;                       // manual tool — nothing to poll
+        if (!ip || !*ip) continue;                       // manual machine — nothing to poll
         if (slot >= SMART_OUTLET_COUNT) {
-            DEBUG_PRINTLN(F("[Outlets] More paired tools than outlet slots — extras ignored."));
+            DEBUG_PRINTLN(F("[Outlets] More paired machines than outlet slots — extras ignored."));
             break;
         }
         control.configureOutlet(slot++, o["gen"] | 2, ip,
-                                e["name"] | e["id"] | "Tool",
+                                m["name"] | mid.c_str(),
                                 /*stopIndex=*/0,
                                 o["thresholdW"] | (float)OUTLET_DEFAULT_THRESHOLD_W,
                                 o["host"] | "");
     }
-    // Drop any slot the layout no longer names, so an unpaired tool stops being
-    // polled without waiting for a reboot.
+    // Drop any slot the layout no longer names, so an unpaired machine stops
+    // being polled without waiting for a reboot.
     for (int i = slot; i < SMART_OUTLET_COUNT; i++) control.removeOutlet(i);
     DEBUG_PRINT(F("[Outlets] Layout plugs registered: ")); DEBUG_PRINTLN(slot);
 
-    // The blower's own switch. Absent means "I start my collector by hand" —
-    // a legitimate shop, so leave whatever plug is already stored alone rather
-    // than silently un-configuring a working blower.
-    for (JsonObjectConst e : g_topoRuntime.topology()["elements"].as<JsonArrayConst>()) {
-        if (!topo::_eq(e["type"], "collector")) continue;
-        JsonObjectConst o = e["control"]["outlet"];
+    // One blower switch per system, in the same order systemIds() reports, so
+    // slot i belongs to system i throughout (see the collector assert in loop()).
+    //
+    // A system with no plug means "I start that collector by hand" — a legitimate
+    // shop. For slot 0 that means leaving whatever plug is already stored alone
+    // rather than silently un-configuring a working blower; the other slots hold
+    // nothing persistent, so there is nothing to preserve.
+    std::vector<std::string> sysIds = g_topoRuntime.systemIds();
+    for (size_t i = 0; i < sysIds.size(); i++) {
+        if (i >= COLLECTOR_COUNT) {
+            DEBUG_PRINTLN(F("[Outlets] More systems than collector slots — extras ignored."));
+            break;
+        }
+        JsonObjectConst o = g_topoRuntime.collectorOutlet(sysIds[i]);
         const char* ip = o["ip"].as<const char*>();
         if (ip && *ip) {
-            if (!control.dcIs(ip)) control.configureDustCollector(o["gen"] | 2, ip, o["host"] | "");
+            if (!control.collectorIs((int)i, ip))
+                control.configureCollector((int)i, o["gen"] | 2, ip, o["host"] | "");
+        } else if (i == 0) {
+            DEBUG_PRINTLN(F("[Outlets] Layout names no collector plug — keeping the stored one."));
+        } else {
+            control.removeCollector((int)i);
         }
-        else DEBUG_PRINTLN(F("[Outlets] Layout names no collector plug — keeping the stored one."));
-        break;
     }
+    for (size_t i = sysIds.size(); i < COLLECTOR_COUNT; i++) control.removeCollector((int)i);
 }
 #endif
 
@@ -772,8 +799,8 @@ void loop() {
         for (int i = 0; i < control.outletCount(); i++) {
             SmartOutlet* o = control.outlet(i);
             if (!o) continue;
-            std::string toolId = g_topoRuntime.toolForOutlet(o->host(), o->ip());
-            if (!toolId.empty()) g_topoRuntime.setToolPower(toolId, o->getPowerW());
+            std::string machineId = g_topoRuntime.machineForOutlet(o->host(), o->ip());
+            if (!machineId.empty()) g_topoRuntime.setMachinePower(machineId, o->getPowerW());
         }
 #endif
         // millis() is passed in rather than read inside: the runtime is pure
@@ -781,15 +808,24 @@ void loop() {
         g_topoRuntime.update(millis());
 
 #ifdef CONTROL_SMART_OUTLET
-        // Assert the collector through the manual-override path: while a topology
-        // is loaded, routing owns the decision and the stop-based automation must
-        // not countermand it. Only pushed on change so it doesn't spam the plug.
+        // Assert each system's collector through the manual-override path: while
+        // a topology is loaded, routing owns the decision and the stop-based
+        // automation must not countermand it. Only pushed on change so it doesn't
+        // spam the plug.
+        //
+        // Slot i ↔ systemIds()[i], the same pairing syncTopologyOutlets() used to
+        // register them. systemIds() comes straight from document order, so the
+        // two agree by construction for a given layout — and adopting a new one
+        // clears g_dcHave, because slot i may now be a different blower entirely
+        // and "same as last time" would then be a claim about the wrong system.
         {
-            static bool dcAsserted = false, dcHave = false;
-            bool want = g_topoRuntime.collectorOn();
-            if (!dcHave || want != dcAsserted) {
-                control.setDcManual(want);
-                dcAsserted = want; dcHave = true;
+            std::vector<std::string> sysIds = g_topoRuntime.systemIds();
+            for (size_t i = 0; i < sysIds.size() && i < COLLECTOR_COUNT; i++) {
+                bool want = g_topoRuntime.collectorOn(sysIds[i]);
+                if (!g_dcHave[i] || want != g_dcAsserted[i]) {
+                    control.setCollectorManual((int)i, want);
+                    g_dcAsserted[i] = want; g_dcHave[i] = true;
+                }
             }
         }
 #endif

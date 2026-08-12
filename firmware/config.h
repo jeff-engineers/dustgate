@@ -314,6 +314,16 @@ extern int g_homeDirection;        // defined in firmware.ino
 // Maximum number of outlet slots (one per blast gate)
 #define SMART_OUTLET_COUNT            7
 
+// Maximum number of switchable COLLECTOR plugs — one per airflow system.
+// A shop owns N systems (docs/shop-schema-rfc.md), each with its own blower:
+// a 4" cyclone for the big machines and a 2.5" wall unit for the bench is the
+// case that motivated this. Slot 0 is the one persisted in NVS and the one the
+// pre-topology stop-index automation drives; the rest are RAM-only and rebuilt
+// from the layout on every adopt, exactly like the tool slots.
+// Three, not two: two is the realistic ceiling for a home shop and the third
+// costs one pointer, so a third system doesn't silently lose its blower.
+#define COLLECTOR_COUNT               3
+
 // How often the poll task queries each outlet (ms)
 #define OUTLET_POLL_INTERVAL_MS     500
 

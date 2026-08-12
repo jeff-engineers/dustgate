@@ -59,25 +59,53 @@ public:
     SmartOutlet* outlet(int i)       { return (i >= 0 && i < _count) ? _outlets[i] : nullptr; }
 
     // -------------------------------------------------------------------------
-    // Dust collector plug — a switchable Shelly outlet (we turn it on/off)
-    // rather than a power sensor. The poll task drives it on whenever a tool is
-    // active (a real gate is selected) and off when idle, so its blocking HTTP
-    // switch calls stay off the motor loop. Persisted separately in NVS.
+    // Collector plugs — switchable Shelly outlets (we turn them on/off) rather
+    // than power sensors. Their blocking HTTP switch calls stay off the motor
+    // loop by living on the poll task.
+    //
+    // ONE PER AIRFLOW SYSTEM (COLLECTOR_COUNT). The two slot kinds differ in who
+    // decides, not in how they switch:
+    //
+    //   slot 0    persisted in NVS, and the only one the pre-topology stop-index
+    //             automation drives (on whenever a tool is active, off at idle).
+    //             That path predates systems and has exactly one blower, so
+    //             giving it any other slot would be inventing a policy for it.
+    //   slots 1+  RAM-only, rebuilt from the layout on every adopt (same posture
+    //             as the tool slots — persisting them would just be a second copy
+    //             to keep in sync). Driven ONLY by an explicit setCollectorManual()
+    //             from the routing runtime, which is the only thing that knows a
+    //             second system exists.
+    //
+    // With a topology loaded, routing owns every slot including 0 — see the
+    // collector assert in the sketch's loop.
     // -------------------------------------------------------------------------
-    void configureDustCollector(int generation, const char* ip, const char* host = ""); // replaces + persists
-    void removeDustCollector();
-    bool dcConfigured() const { return _dustCollector != nullptr; }
-    // Is the collector already this plug? Lets a caller that re-asserts config
-    // (the topology sync runs on every layout save) skip the swap — reconfiguring
-    // clears _dcSynced, which re-commands the blower for no reason.
-    bool dcIs(const char* ip) const {
-        return _dustCollector && ip && strcmp(_dustCollector->ip(), ip) == 0;
+    void configureCollector(int idx, int generation, const char* ip, const char* host = "");
+    void removeCollector(int idx);
+    bool collectorConfigured(int idx) const {
+        return idx >= 0 && idx < COLLECTOR_COUNT && _collectors[idx] != nullptr;
     }
-    bool dcOn();                    // thread-safe read for status JSON
+    // Is this slot already this plug? Lets a caller that re-asserts config (the
+    // topology sync runs on every layout save) skip the swap — reconfiguring
+    // clears _dcSynced, which re-commands the blower for no reason.
+    bool collectorIs(int idx, const char* ip) const {
+        return collectorConfigured(idx) && ip && strcmp(_collectors[idx]->ip(), ip) == 0;
+    }
+    bool collectorOn(int idx);       // thread-safe read for status JSON
 
-    // Manually force the dust collector on/off from the dashboard. Holds until
-    // the next automatic gate change (tool on/off), then automation resumes.
-    void setDcManual(bool on);
+    // Force one collector on/off. On slot 0 this holds until the next automatic
+    // gate change (tool on/off), then the legacy automation resumes; on the other
+    // slots there is no automation to resume to, so it simply holds.
+    void setCollectorManual(int idx, bool on);
+
+    // ---- slot-0 spellings, for the pre-systems call sites ----
+    void configureDustCollector(int generation, const char* ip, const char* host = "") {
+        configureCollector(0, generation, ip, host);
+    }
+    void removeDustCollector()        { removeCollector(0); }
+    bool dcConfigured() const         { return collectorConfigured(0); }
+    bool dcIs(const char* ip) const   { return collectorIs(0, ip); }
+    bool dcOn()                       { return collectorOn(0); }
+    void setDcManual(bool on)         { setCollectorManual(0, on); }
 
     // -------------------------------------------------------------------------
     // Manual override — bypasses outlet-driven gate selection until the next
@@ -102,12 +130,13 @@ private:
     SmartOutlet*      _outlets[SMART_OUTLET_COUNT];
     int               _count;
 
-    // Dust collector plug (switchable). nullptr = not configured.
-    SmartOutlet*      _dustCollector;
-    bool              _dcOn;              // last commanded state (protected by _mutex)
-    bool              _dcSynced;          // false = force a switch command on next reconcile
-    bool              _dcManualOverride;  // true = follow _dcManualState, not gate state
-    bool              _dcManualState;     // forced on/off while override active
+    // Collector plugs (switchable), one per airflow system. nullptr = not
+    // configured. Index 0 is the NVS-persisted one — see the header note above.
+    SmartOutlet*      _collectors[COLLECTOR_COUNT];
+    bool              _dcOn[COLLECTOR_COUNT];              // last commanded state (protected by _mutex)
+    bool              _dcSynced[COLLECTOR_COUNT];          // false = force a switch command on next reconcile
+    bool              _dcManualOverride[COLLECTOR_COUNT];  // true = follow _dcManualState, not gate state
+    bool              _dcManualState[COLLECTOR_COUNT];     // forced on/off while override active
 
     // Shared state between poll task and main loop — protected by _mutex
     int               _requestedStop;
@@ -153,7 +182,7 @@ private:
 
     static void pollTaskFn(void* param);
     void        doPoll();
-    void        reconcileDustCollector();  // poll task: drive DC plug to desired state
+    void        reconcileCollectors();     // poll task: drive every collector plug to its desired state
     bool        provisionPushOutlets();    // poll task: push Ws/name config; returns true if any still pending
     void        checkLocalIpChange();      // poll task: rebuild _wsUrl + re-provision if our DHCP IP changed
     SmartOutlet* outletByIp(const char* ip); // match a push event to a configured outlet

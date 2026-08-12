@@ -41,7 +41,13 @@ struct TransitionPlan {
 
 // currentStates: selectorId → current stateId (missing = unknown).
 // desiredStates: selectorId → target stateId (from computeRouting().states).
-inline TransitionPlan planTransition(JsonObjectConst topology,
+//
+// Selectors NOT named in `desiredStates` are left alone, which is what makes
+// this safe to call per system with a shop-wide state map: the shop layer still
+// narrows the maps (see planShopTransition in Shop.h) so `anyOpen` — and
+// therefore deadHeadRisk — is judged against this blower's ducts only, but a
+// stray foreign selector can't manufacture a move either way.
+inline TransitionPlan planTransition(const SystemView& topology,
                                      const std::map<std::string, std::string>& currentStates,
                                      const std::map<std::string, std::string>& desiredStates,
                                      bool collectorRunning) {
@@ -49,7 +55,7 @@ inline TransitionPlan planTransition(JsonObjectConst topology,
   std::vector<Move> makes, breaks;
   bool anyOpen = false;
 
-  for (JsonObjectConst sel : topology["elements"].as<JsonArrayConst>()) {
+  for (JsonObjectConst sel : topology.elements) {
     if (!_eq(sel["type"], "selector")) continue;
     std::string id = sel["id"].as<const char*>();
 
@@ -79,6 +85,14 @@ inline TransitionPlan planTransition(JsonObjectConst topology,
   for (auto& m : makes)  out.moves.push_back(m);
   for (auto& m : breaks) out.moves.push_back(m);
   return out;
+}
+
+// Convenience for a plain (schemaVersion 1) topology document.
+inline TransitionPlan planTransition(JsonObjectConst topology,
+                                     const std::map<std::string, std::string>& currentStates,
+                                     const std::map<std::string, std::string>& desiredStates,
+                                     bool collectorRunning) {
+  return planTransition(viewOf(topology), currentStates, desiredStates, collectorRunning);
 }
 
 } // namespace topo

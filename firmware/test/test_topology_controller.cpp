@@ -44,6 +44,11 @@ static std::string stateOf(const topo::Controller& c, const std::string& sel) {
 }
 
 int main(int argc, char** argv) {
+  // These fixtures are schemaVersion-1 documents, so the shop layer sees one
+  // implicit system under this id (Shop.h::kImplicitSystemId). The vectors below
+  // are unchanged from the single-system era on purpose: v1 behaviour is the
+  // contract the container must not have altered.
+  const std::string kSys = topo::kImplicitSystemId;
   std::string dir = argc > 1 ? argv[1] : "firmware/test/fixtures/";
   DynamicJsonDocument twoGates(16384), star(16384);
   if (deserializeJson(twoGates, slurp(dir + "twoGates.json"))) { printf("bad twoGates.json\n"); return 2; }
@@ -55,24 +60,24 @@ int main(int argc, char** argv) {
     c.setTopology(twoGates.as<JsonObjectConst>());
 
     auto r1 = c.setToolPower("toolX", 200);
-    ok("twoGates x=200: move gate1 open (make)", movesStr(r1.plan) == "gate1->open(make)", movesStr(r1.plan));
+    ok("twoGates x=200: move gate1 open (make)", movesStr(r1.planFor(kSys)) == "gate1->open(make)", movesStr(r1.planFor(kSys)));
     ok("twoGates x=200: gate1 state open", stateOf(c, "gate1") == "open");
     ok("twoGates x=200: gate2 state closed", stateOf(c, "gate2") == "closed");
-    ok("twoGates x=200: collector on", c.collectorOn());
-    ok("twoGates x=200: no dead-head", !r1.plan.deadHeadRisk);
+    ok("twoGates x=200: collector on", c.collectorOn(kSys));
+    ok("twoGates x=200: no dead-head", !r1.planFor(kSys).deadHeadRisk);
 
     auto r2 = c.setToolPower("toolY", 200);   // toolY newest
-    ok("twoGates y=200: move gate2 open (make)", movesStr(r2.plan) == "gate2->open(make)", movesStr(r2.plan));
+    ok("twoGates y=200: move gate2 open (make)", movesStr(r2.planFor(kSys)) == "gate2->open(make)", movesStr(r2.planFor(kSys)));
     ok("twoGates y=200: both open", stateOf(c, "gate1") == "open" && stateOf(c, "gate2") == "open");
 
     auto r3 = c.setToolPower("toolX", 0);     // toolX off, toolY still on
-    ok("twoGates x=0: move gate1 closed (break)", movesStr(r3.plan) == "gate1->closed(break)", movesStr(r3.plan));
+    ok("twoGates x=0: move gate1 closed (break)", movesStr(r3.planFor(kSys)) == "gate1->closed(break)", movesStr(r3.planFor(kSys)));
     ok("twoGates x=0: gate1 closed, gate2 open", stateOf(c, "gate1") == "closed" && stateOf(c, "gate2") == "open");
-    ok("twoGates x=0: collector still on", c.collectorOn());
+    ok("twoGates x=0: collector still on", c.collectorOn(kSys));
 
     auto r4 = c.setToolPower("toolY", 0);     // all off
-    ok("twoGates all-off: dead-head risk flagged", r4.plan.deadHeadRisk);
-    ok("twoGates all-off: collector off", !c.collectorOn());
+    ok("twoGates all-off: dead-head risk flagged", r4.planFor(kSys).deadHeadRisk);
+    ok("twoGates all-off: collector off", !c.collectorOn(kSys));
     // Idle-HOLD: states are NOT driven closed — gate2 stays where it was.
     ok("twoGates all-off: gate2 HELD open (idle-hold)", stateOf(c, "gate2") == "open", stateOf(c, "gate2"));
   }
@@ -83,17 +88,17 @@ int main(int argc, char** argv) {
     c.setTopology(star.as<JsonObjectConst>());
 
     auto rA = c.setToolPower("toolA", 200);
-    ok("star A=200: move sel->s1 (make)", movesStr(rA.plan) == "sel->s1(make)", movesStr(rA.plan));
+    ok("star A=200: move sel->s1 (make)", movesStr(rA.planFor(kSys)) == "sel->s1(make)", movesStr(rA.planFor(kSys)));
     ok("star A=200: toolA reachable", rA.routing.reachable.count("toolA") && rA.routing.reachable.at("toolA"));
 
     auto rB = c.setToolPower("toolB", 200);   // toolB newest → wins the shared linear
-    ok("star B=200: move sel->s2 (make, linear never breaks)", movesStr(rB.plan) == "sel->s2(make)", movesStr(rB.plan));
+    ok("star B=200: move sel->s2 (make, linear never breaks)", movesStr(rB.planFor(kSys)) == "sel->s2(make)", movesStr(rB.planFor(kSys)));
     ok("star B=200: sel now s2", stateOf(c, "sel") == "s2");
     ok("star B=200: toolB reaches, toolA blocked",
        rB.routing.reachable.at("toolB") && !rB.routing.reachable.at("toolA"));
 
     auto rB0 = c.setToolPower("toolB", 0);    // toolB off → toolA regains the selector
-    ok("star B=0: move sel->s1 (make)", movesStr(rB0.plan) == "sel->s1(make)", movesStr(rB0.plan));
+    ok("star B=0: move sel->s1 (make)", movesStr(rB0.planFor(kSys)) == "sel->s1(make)", movesStr(rB0.planFor(kSys)));
     ok("star B=0: sel back to s1", stateOf(c, "sel") == "s1");
   }
 

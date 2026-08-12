@@ -412,6 +412,80 @@ int main(int argc, char** argv) {
     }
   }
 
+  // ── two systems, two blowers ─────────────────────────────────────────────
+  // Everything the runtime used to answer once it now answers per system. The
+  // failure this guards against is the obvious one: a busy 4" system dragging
+  // the idle 2.5" blower on with it, or an idle one cutting a running blower.
+  {
+    std::string shopJson = slurp(dir + "twoSystemShop.json");
+    if (shopJson.empty()) { printf("bad twoSystemShop.json\n"); return 2; }
+
+    StubBus local; topo::NodeBus nb; topo::TopologyRuntime rt;
+    nb.setLocal(&local, "primary");
+    rt.begin(&nb);
+    std::string err;
+    ok("adopt a two-system shop", rt.adopt(shopJson.c_str(), shopJson.size(), err), err);
+    ok("both systems known", joined(rt.systemIds()) == "big|small", joined(rt.systemIds()));
+
+    const uint32_t t0 = 2000000;
+
+    // The jointer lives only on the 4" system.
+    rt.setMachinePower("jointer", 200);
+    for (int i = 0; i < 10; i++) { rt.update(t0); local.settle(); }
+    ok("jointer runs the 4\" blower",       rt.collectorOn("big"));
+    ok("and leaves the 2.5\" one alone",    !rt.collectorOn("small"));
+    ok("its own valve was opened",          joined(local.log) == "bv-jnt->open", joined(local.log));
+    local.log.clear();
+
+    // The drill press lives only on the 2.5" system. Both blowers now run, which
+    // a single collectorOn() could not have represented.
+    rt.setMachinePower("drill-press", 200);
+    for (int i = 0; i < 10; i++) { rt.update(t0); local.settle(); }
+    ok("drill press runs the 2.5\" blower", rt.collectorOn("small"));
+    ok("4\" blower still running",          rt.collectorOn("big"));
+    ok("only the manifold moved",           joined(local.log) == "man->m2", joined(local.log));
+
+    // Stopping one machine coasts ONLY its own blower.
+    rt.setMachinePower("jointer", 0);
+    rt.update(t0);
+    ok("4\" coasting after its machine stops", rt.collectorOn("big") && rt.collectorCoasting("big"));
+    ok("2.5\" not coasting — still working",   rt.collectorOn("small") && !rt.collectorCoasting("small"));
+
+    rt.update(t0 + topo::kDefaultCollectorOffDelayMs);
+    ok("4\" off once its coast expires",       !rt.collectorOn("big"));
+    // The whole point: an unrelated system finishing must not stop this blower.
+    ok("2.5\" unaffected by the other's coast", rt.collectorOn("small"));
+
+    // A machine spanning both systems drives both at once, from one power event.
+    rt.setMachinePower("drill-press", 0);
+    rt.update(t0 + topo::kDefaultCollectorOffDelayMs * 2);
+    local.log.clear();
+    rt.setMachinePower("table-saw", 200);
+    for (int i = 0; i < 10; i++) { rt.update(t0 + topo::kDefaultCollectorOffDelayMs * 2); local.settle(); }
+    ok("one machine starts both blowers", rt.collectorOn("big") && rt.collectorOn("small"));
+    // Concatenated per system in document order, never interleaved. The jointer
+    // valve is still open here (idle-HOLD left it where it was), so the big
+    // system contributes a make AND a break — and the small system's move lands
+    // after BOTH of them, not between them. Interleaving would put man->m1
+    // between bv-cab->open and bv-jnt->closed, which is the dead-head window the
+    // sequencer exists to close.
+    ok("moves grouped by system, big first",
+       joined(local.log) == "bv-cab->open|bv-jnt->closed|man->m1", joined(local.log));
+
+    // The status blob has to carry the per-system truth, or the UI can only ever
+    // show one blower and will show the wrong one half the time.
+    DynamicJsonDocument st(8192);
+    rt.writeStatus(st.to<JsonObject>());
+    ok("status reports both systems",
+       st["systems"]["big"]["collectorOn"] == true && st["systems"]["small"]["collectorOn"] == true);
+    ok("status keys tools by machine", st["tools"]["table-saw"]["active"] == true);
+    ok("status rolls up the machine verdict",
+       std::string(st["machines"]["table-saw"]["status"] | "") == "routed",
+       std::string(st["machines"]["table-saw"]["status"] | ""));
+    ok("status keys reachability by port", st["reachable"]["ts-cabinet"] == true &&
+                                           st["reachable"]["ts-overarm"] == true);
+  }
+
   printf("\n%d/%d passed%s\n", passed, passed + failed,
          failed ? (", " + std::to_string(failed) + " FAILED").c_str() : "");
   return failed ? 1 : 0;

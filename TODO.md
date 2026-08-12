@@ -336,10 +336,24 @@ breaks all three at once.
   and `enabled` are implemented, including the routed/partial/stripped verdict
   (RFC §10.3) and the all-ports-disabled error (RFC §6.6).
 
-  **NOT wired up anywhere yet.** Firmware, mock, demo service and the canvas all
-  still speak schemaVersion 1, and `/api/topology` neither accepts nor emits a
-  shop. Next in the stated order: firmware (`TopologyStore` / `TopologyRouter`
-  per system, `syncTopologyOutlets` walking `machines[]`), then the canvas.
+- ~~**Firmware speaks shop**~~ **DONE 2026-08-12, compile + host tests only** —
+  new `firmware/control/Shop.h` mirrors `shop.js`; `TopologyRouter`/`Sequencer`
+  take a `SystemView` (three `JsonArrayConst` handles into the one parsed doc —
+  a view, not a copy, because materialising N systems on an ESP32 would double
+  the largest allocation for nothing). `TopologyController` is machine-based with
+  a per-system collector; `TopologyRuntime` has a per-system blower, coast timer
+  and dead-head verdict over a still-shop-wide serial move queue.
+  `SmartOutletControl` grew `COLLECTOR_COUNT` plug slots (slot 0 keeps NVS + the
+  legacy stop-index automation; the rest are RAM-only and layout-driven).
+  `validateMinimal` accepts both shapes. New `firmware/test/test_shop.cpp` (56)
+  cross-checks routing/planning against the JS on the same fixture; the runtime's
+  per-system blower behaviour is covered in `test_nodebus.cpp` (63). All four
+  boards build. **No hardware has run any of it.**
+
+  **The UI still speaks schemaVersion 1**, as do the mock and the demo service.
+  A v1 document is read as a shop with one implicit system whose machines are its
+  tool elements, so nothing regresses — the 23 v1 controller conformance vectors
+  pass unchanged through the new brain. Next in the stated order: the canvas.
 - **Multi-port UI** — "add another port to this machine" on the canvas, with
   size/use suggested in the port-name field (`Cabinet · 4"`). No `diameter`
   field; sizing stays the user's business (RFC §6.5).
@@ -375,12 +389,22 @@ breaks all three at once.
 Accepted deliberately (2026-08-12) — the design is worth the extra bring-up.
 Nothing is hardware-tested yet, so these land on top of an unvalidated base.
 
-- [ ] `syncTopologyOutlets()` walks `machines[]` instead of elements. **Highest
+- [x] ~~`syncTopologyOutlets()` walks `machines[]` instead of elements.~~ Written
+      2026-08-12; it now iterates `machineIds()` so a two-port machine registers
+      ONE plug instead of burning two slots on the same IP. **Still the highest
       risk item in the migration** — it is the code that decides which plugs get
-      watched, and getting it wrong makes tools silently stop being sensed.
-      Re-run the bench note in §1 after the change.
-- [ ] Per-system iteration in `TopologyStore.h` / `TopologyRouter.h`, and
-      `/api/topology|status` reporting per system.
+      watched, and getting it wrong makes tools silently stop being sensed. It has
+      no host test (it needs `control`, WiFi and NVS). **Re-run the bench note in
+      §1 against it before trusting it.**
+- [x] ~~Per-system iteration in `TopologyStore.h` / `TopologyRouter.h`~~, and
+      `/api/status` now reports `systems` (per-blower on/coasting/dead-head),
+      `machines` (routed/partial/stripped) and port-keyed `reachable`. All
+      additive: `collectorOn` at the top level still means "is any blower
+      running", which is what a one-system shop has always read.
+- [ ] `COLLECTOR_COUNT` slot↔system pairing is by DOCUMENT ORDER
+      (`systemIds()[i]` ↔ slot `i`), asserted nowhere. Reordering `systems[]` in a
+      saved layout re-points a physical plug; adopt clears the assert cache so it
+      re-commands, but confirm on the bench that the right blower moves.
 - [ ] Sticky `enabled` persistence — survives reboot, WiFi drop, node reconnect
       **and** topology re-adopt. Verify the re-adopt case explicitly; it is the
       one a naive implementation gets wrong.

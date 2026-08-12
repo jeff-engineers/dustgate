@@ -49,14 +49,46 @@ inline bool _eq(JsonVariantConst v, const char* s) {
   return p && s && strcmp(p, s) == 0;
 }
 
-inline std::map<std::string, JsonObjectConst> _byId(JsonObjectConst t) {
+// One airflow graph, as three arrays rather than a document.
+//
+// This is the C++ half of systemView() in shared/device-model/shop.js, and it
+// exists for the same reason: a shop holds N systems, each of which is a
+// topology in its own right, and every function below this line is a statement
+// about ONE blower. The JS version can afford to build a fresh object per system
+// because it runs on a laptop. Here it has to be a VIEW — three JsonArrayConst
+// handles pointing back into the one parsed document — because materialising a
+// copy of every system's elements on an ESP32 would double the largest
+// allocation in the firmware for no benefit.
+//
+// `controllers` is shop-level, not system-level: a board is mounted where the
+// cable reaches and may drive selectors in any number of systems, so each view
+// carries the same array (RFC §14). `id` is "" for a schemaVersion-1 document,
+// which has exactly one implicit system.
+struct SystemView {
+  JsonArrayConst controllers;
+  JsonArrayConst elements;
+  JsonArrayConst ducts;
+  const char*    id;
+};
+
+// A v1 topology, viewed as the single system it always was. The shop layer
+// (Shop.h) produces these for a v2 document; this overload is what keeps every
+// existing call site, fixture and conformance test working untouched.
+inline SystemView viewOf(JsonObjectConst t) {
+  return SystemView{ t["controllers"].as<JsonArrayConst>(),
+                     t["elements"].as<JsonArrayConst>(),
+                     t["ducts"].as<JsonArrayConst>(),
+                     t["id"] | "" };
+}
+
+inline std::map<std::string, JsonObjectConst> _byId(const SystemView& t) {
   std::map<std::string, JsonObjectConst> m;
-  for (JsonObjectConst e : t["elements"].as<JsonArrayConst>()) m[std::string(e["id"].as<const char*>())] = e;
+  for (JsonObjectConst e : t.elements) m[std::string(e["id"].as<const char*>())] = e;
   return m;
 }
-inline std::map<std::string, JsonObjectConst> _parentDuct(JsonObjectConst t) {
+inline std::map<std::string, JsonObjectConst> _parentDuct(const SystemView& t) {
   std::map<std::string, JsonObjectConst> m;
-  for (JsonObjectConst d : t["ducts"].as<JsonArrayConst>()) {
+  for (JsonObjectConst d : t.ducts) {
     std::string child = d["child"].as<const char*>();
     if (m.find(child) == m.end()) m[child] = d;   // first duct wins (one parent per element)
   }
@@ -96,7 +128,11 @@ inline bool _pathToCollector(const std::string& toolId,
 }
 
 // `active` is the caller's priority order (most-recent-first for most-recent-wins).
-inline Routing computeRouting(JsonObjectConst topology, const std::vector<std::string>& active) {
+//
+// Under a shop the ids in `active` are PORT ids, not machine ids — one machine
+// can hold several ports, and each is a separate leaf of the graph. Shop.h owns
+// that expansion; from here down a port is simply what a tool has always been.
+inline Routing computeRouting(const SystemView& topology, const std::vector<std::string>& active) {
   Routing out;
   auto byId = _byId(topology);
   auto parentDuct = _parentDuct(topology);
@@ -140,7 +176,7 @@ inline Routing computeRouting(JsonObjectConst topology, const std::vector<std::s
   for (auto& kv : conflictBySel) out.conflicts.push_back(kv.second);
 
   // every selector defaults to its closed state; winners override
-  for (JsonObjectConst e : topology["elements"].as<JsonArrayConst>()) {
+  for (JsonObjectConst e : topology.elements) {
     if (_eq(e["type"], "selector")) {
       const char* cs = _closedState(e);
       out.states[std::string(e["id"].as<const char*>())] = cs ? std::string(cs) : std::string();
@@ -148,6 +184,11 @@ inline Routing computeRouting(JsonObjectConst topology, const std::vector<std::s
   }
   for (auto& kv : committed) out.states[kv.first] = kv.second;
   return out;
+}
+
+// Convenience for a plain (schemaVersion 1) topology document.
+inline Routing computeRouting(JsonObjectConst topology, const std::vector<std::string>& active) {
+  return computeRouting(viewOf(topology), active);
 }
 
 // Has this servo selector actually been calibrated?
