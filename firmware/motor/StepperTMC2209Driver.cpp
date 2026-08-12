@@ -77,7 +77,11 @@ bool StepperTMC2209Driver::begin() {
         Serial.println(F("!!! TMC2209 UART FAIL (Stage 1 — no read response)"));
         Serial.print  (F("!!! version() returned 0x")); Serial.println(version, HEX);
         Serial.println(F("!!! Check: TX→1kΩ→UART pin, RX to same node, VDD=3.3V, address."));
-        Serial.println(F("!!! System halted — fix wiring and reset."));
+        // NOT halted — the sketch deliberately continues so the API, the
+        // routing runtime and the servo bank still come up on a board whose
+        // stepper is broken or absent (firmware.ino:659). Saying "halted" sent
+        // the reader looking for a crash that never happened.
+        Serial.println(F("!!! Motion disabled — the rest of the board still runs."));
         Serial.println(F(""));
         return false;
     }
@@ -92,7 +96,11 @@ bool StepperTMC2209Driver::begin() {
         Serial.println(F("!!! TMC2209 UART FAIL (Stage 2 — write→read mismatch)"));
         Serial.print  (F("!!! Wrote 0xA5, read back 0x")); Serial.println(readback, HEX);
         Serial.println(F("!!! TX path likely broken: check 1kΩ resistor (not pot) and TX pin."));
-        Serial.println(F("!!! System halted — fix wiring and reset."));
+        // NOT halted — the sketch deliberately continues so the API, the
+        // routing runtime and the servo bank still come up on a board whose
+        // stepper is broken or absent (firmware.ino:659). Saying "halted" sent
+        // the reader looking for a crash that never happened.
+        Serial.println(F("!!! Motion disabled — the rest of the board still runs."));
         Serial.println(F(""));
         return false;
     }

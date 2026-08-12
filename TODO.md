@@ -442,6 +442,34 @@ Nothing is hardware-tested yet, so these land on top of an unvalidated base.
 - [ ] Multi-port machine: both gates open together, arbitration never lets one
       machine's ports fight, disabling one port closes only that gate.
 
+#### Found on the FIRST hardware boot (2026-08-12)
+The board came up: WiFi, mDNS, HTTP API, LittleFS, outlet poll task, servo bank,
+NodeLink all started on a bare DevKitC. These are what the boot log exposed.
+
+- [ ] **Serial output from two tasks interleaves mid-line.** Observed:
+      `[Outlets] Provisioning plugs (free heap ` … the whole debug menu …
+      `216848  0-7  Select position` … ` bytes)...`. The outlet poll task is
+      pinned to core 0 and prints while the main task prints; nothing serialises
+      `Serial`. Harmless to operation, but it corrupts the one record we have of
+      a boot, which matters a lot during bring-up. Wants a print mutex or a
+      single logging task — not per-call-site fixes.
+- [ ] **`/littlefs/topology.json does not exist` logs an ESP error 4× per boot**,
+      and `[API] topology stored:` prints `no` on a separate line because of the
+      interleaving above. First boot with no layout is the EXPECTED state, so it
+      should read as a fact, not as four errors. Check why it is opened 4 times.
+- [ ] **`nvs_open failed: NOT_FOUND` ×2** on first boot — same story: an empty
+      NVS namespace is normal before setup has run.
+- [x] ~~"System halted — fix wiring and reset" on TMC2209 UART failure.~~ It does
+      not halt (firmware.ino:659 deliberately continues), so this sent the reader
+      hunting a crash that never happened. Now "Motion disabled — the rest of the
+      board still runs." (2026-08-12)
+- [x] ~~Boot banner said `Target: ESP32 + TMC2209` on every board~~, including
+      ones with no stepper. Now reports BOARD_NAME + what is actually fitted.
+- [x] ~~Status-pixel legend only existed in WIRING.md §5~~ — added to the serial
+      `help` menu, where you are when you're squinting at a blinking light. Also
+      split the WIRING.md table's single "Orange" row: solid = moving, blinking =
+      WiFi lost. Same colour, and only the rate tells them apart.
+
 #### Make `HAS_LINEAR` load-bearing (deferred stopgap, 2026-08-12)
 A master's job is the routing brain; the linear rack is one KIND of gate, and the
 direction of travel is servo ball valves. So a primary must not require a TMC2209

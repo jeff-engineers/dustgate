@@ -584,7 +584,17 @@ void setup() {
 #endif
     delay(100); // brief settle after connection
     DEBUG_PRINTLN(F("=== DustGate ==="));
-    DEBUG_PRINTLN(F("Target: ESP32 + TMC2209"));
+    // Name the build, not the wiring diagram. This said "ESP32 + TMC2209" on
+    // every target — including boards with no stepper — so the first line of
+    // every boot log was wrong about what you were looking at.
+    DEBUG_PRINT(F("Target: ")); DEBUG_PRINT(F(BOARD_NAME));
+#if defined(NO_LINEAR_FITTED)
+    DEBUG_PRINTLN(F(" + servos (no rack fitted)"));
+#elif HAS_LINEAR
+    DEBUG_PRINTLN(F(" + TMC2209"));
+#else
+    DEBUG_PRINTLN(F(" (servo only)"));
+#endif
 
     // ADC: 12-bit (0-4095), 3.3V reference
     analogReadResolution(12);

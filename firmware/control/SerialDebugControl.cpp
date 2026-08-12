@@ -444,6 +444,23 @@ void SerialDebugControl::printHelp() {
 #endif
     Serial.println(F("  provision <json>  Write WiFi+host to NVS: {\"ssid\":\"x\",\"pass\":\"y\",\"host\":\"dustgate\"}"));
     Serial.println(F("  help              Show this list"));
+#if defined(PIN_PIXEL) || defined(PIN_LED)
+    // The pixel is the only diagnostic you get once the board is in a box and
+    // the USB cable is gone, and its legend otherwise lives only in WIRING.md §5
+    // — which is not where you are when you're squinting at a blinking light.
+    //
+    // Kept in step with utils/StatusLed.h, which is the source of truth for both
+    // colour and rate. Note the two oranges: solid means something is moving,
+    // blinking means the WiFi dropped. That pair is the one real ambiguity here,
+    // so it is spelled out rather than left to the reader to notice.
+    Serial.println(F("--- Status pixel ---"));
+    Serial.println(F("  green             Ready — routing live (node: primary linked)"));
+    Serial.println(F("  blue, slow pulse  On WiFi, nothing to do yet — no layout stored"));
+    Serial.println(F("  orange, SOLID     Moving. Slow blink = homing, fast = calibration sweep"));
+    Serial.println(F("  orange, blinking  WiFi lost (or never joined). Blinks ~1.5x/sec"));
+    Serial.println(F("  white, blinking   Setup portal is up, waiting for WiFi credentials"));
+    Serial.println(F("  red, fast pulse   Fault — init failed or e-stop latched"));
+#endif
 #if defined(CONTROL_SMART_OUTLET) || defined(ENABLE_HTTP_API)
     Serial.println(F("--- Network ---"));
     if (WiFi.status() == WL_CONNECTED) {
