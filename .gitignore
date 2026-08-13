@@ -72,6 +72,10 @@ firmware/idf_component.yml.orig
 # Board serials are specific to one bench; never shared.
 .dustgate-ports
 
+# Shop layouts pulled off a device before a filesystem flash (deploy.sh §0/§5).
+# One person's shop, with their plug IPs in it — never shared.
+.dustgate-backups/
+
 # routing conformance spec build output
 dustgate-ui/.routing-test/
 dustgate-ui/.wiring-test/

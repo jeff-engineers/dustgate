@@ -6,6 +6,11 @@
 #   bash deploy.sh --fw     # firmware only (skip UI build + filesystem)
 #   bash deploy.sh --no-provision  # skip auto-provision step
 #   bash deploy.sh --provision-only  # skip build/flash, just (re)send credentials
+#   bash deploy.sh --no-topology-backup  # don't save/restore the shop layout
+#
+# Anything that flashes the filesystem WIPES the saved shop, so the deploy pulls
+# topology.json off the device first (§0) and puts it back at the end (§5).
+# DUSTGATE_HOST overrides where it looks (default: the configured hostname).
 #
 # Credentials are read from tools/.env (copy tools/.env.example to get started).
 # Never commit tools/.env — it's gitignored.
@@ -53,6 +58,124 @@ run_pio() {
 UI_DIR="$SCRIPT_DIR/dustgate-ui"
 DATA_DIR="$SCRIPT_DIR/firmware/data"
 ENV_FILE="$SCRIPT_DIR/tools/.env"
+BACKUP_DIR="$SCRIPT_DIR/.dustgate-backups"
+
+# ── Shop layout backup/restore ─────────────────────────────────────────────
+#
+# WHY THIS EXISTS: topology.json lives in the same LittleFS partition as the
+# Angular bundle, and `pio run --target uploadfs` writes a fresh image built
+# from firmware/data/. So every filesystem flash silently erases the user's
+# shop — layout, gate calibration, node links, plug pairings. It bit us during
+# bring-up and read as a node-pairing failure, which is exactly the kind of
+# wrong trail this costs a day on.
+#
+# The device is the only copy: the configurator holds a document in the
+# browser, but a fresh `dev.sh flash` on a machine that has never opened the UI
+# has nothing to re-PUT. So the deploy takes its own copy first.
+#
+# Ordering matters and is not obvious:
+#   BACKUP before any flashing, while the OLD firmware is still up and on WiFi.
+#   RESTORE after provisioning, because a freshly-flashed board may not have
+#   rejoined the network until credentials land.
+TOPO_BACKUP=""          # path to this run's backup, empty if we didn't take one
+TOPO_BACKUP_HAD_DOC=false
+
+# Where the device lives. mDNS, same name the provision step configures.
+topo_host() { echo "${DUSTGATE_HOST:-${HOSTNAME_CFG}.local}"; }
+
+# The API key is handed out unauthenticated by /api/info, the same bootstrap the
+# Angular app uses (HttpApiServer.cpp: "only reachable on the local network").
+# Fetched fresh on each side of the flash rather than cached: the key lives in
+# NVS and normally survives, but an NVS erase regenerates it, and a stale key
+# would fail the restore at the very end when it is most expensive to notice.
+topo_api_key() {
+  curl -fsS --max-time 5 "http://$(topo_host)/api/info" 2>/dev/null \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin).get("apiKey",""))' 2>/dev/null || true
+}
+
+backup_topology() {
+  local host key http out
+  host="$(topo_host)"
+  echo "▶ Saving the shop layout off the device first…"
+  echo "  (a filesystem flash erases it — $host)"
+
+  key="$(topo_api_key)"
+  if [[ -z "$key" ]]; then
+    echo "  ⚠  Couldn't reach $host to read its API key."
+    echo "     If this board has a shop saved on it, THIS DEPLOY WILL ERASE IT."
+    echo "     Options: fix the connection and re-run, point DUSTGATE_HOST at its"
+    echo "     IP, or pass --no-topology-backup to say you don't need it."
+    # Interactive: let the operator decide. Non-interactive (CI, a script): stop,
+    # because destroying the only copy of someone's layout is not a default.
+    if [[ -t 0 ]]; then
+      read -rp "    Continue anyway and lose any saved layout? [y/N] " reply
+      [[ "$reply" =~ ^[Yy]$ ]] || { echo "  Aborted."; exit 1; }
+    else
+      echo "  Aborted (not a terminal, so nothing to ask). Pass --no-topology-backup to override."
+      exit 1
+    fi
+    return 0
+  fi
+
+  mkdir -p "$BACKUP_DIR"
+  out="$BACKUP_DIR/topology-$(date +%Y%m%d-%H%M%S).json"
+  # Ask for the status code separately from the body: 404 is the ORDINARY case
+  # (a board that has never been set up) and must not read as a failure.
+  http="$(curl -sS --max-time 10 -o "$out" -w '%{http_code}' \
+            -H "X-Api-Key: $key" "http://$host/api/topology" 2>/dev/null || echo 000)"
+  case "$http" in
+    200)
+      # Guard against a truncated or error body being restored later as if it
+      # were a shop: it has to parse, and it has to be an object.
+      if python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if isinstance(d,dict) else 1)' "$out" 2>/dev/null; then
+        TOPO_BACKUP="$out"; TOPO_BACKUP_HAD_DOC=true
+        echo "  ✓ Saved $(wc -c < "$out" | tr -d ' ') bytes → ${out#$SCRIPT_DIR/}"
+      else
+        rm -f "$out"
+        echo "  ⚠  The device returned something that isn't a topology document — not restoring it."
+      fi
+      ;;
+    404) rm -f "$out"; echo "  ℹ  No shop saved on the device yet — nothing to preserve." ;;
+    401) rm -f "$out"; echo "  ⚠  API key rejected. Not backing up; a saved layout would be lost." ;;
+    *)   rm -f "$out"; echo "  ⚠  Couldn't read the topology (HTTP $http). A saved layout would be lost." ;;
+  esac
+}
+
+restore_topology() {
+  $TOPO_BACKUP_HAD_DOC || return 0
+  local host key http resp
+  host="$(topo_host)"
+  echo "▶ Putting the shop layout back…"
+
+  # The board has just rebooted and may still be joining WiFi; mDNS can take
+  # longer than the boot itself. Poll /api/info rather than sleeping a guess.
+  key=""
+  for _ in $(seq 1 30); do
+    key="$(topo_api_key)"
+    [[ -n "$key" ]] && break
+    sleep 2
+  done
+  if [[ -z "$key" ]]; then
+    echo "  ⚠  $host never came back within ~60s, so the layout is still only in:"
+    echo "       ${TOPO_BACKUP#$SCRIPT_DIR/}"
+    echo "     Restore it once the device is up:"
+    echo "       bash tools/restore-topology.sh"
+    return 0
+  fi
+
+  resp="$(curl -sS --max-time 15 -X PUT -H "X-Api-Key: $key" \
+            -H 'Content-Type: application/json' \
+            --data-binary "@$TOPO_BACKUP" "http://$host/api/topology" 2>&1 || true)"
+  http="$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' \
+            -H "X-Api-Key: $key" "http://$host/api/topology" 2>/dev/null || echo 000)"
+  if [[ "$resp" == *'"ok":true'* && "$http" == "200" ]]; then
+    echo "  ✓ Shop layout restored (and the device can read it back)."
+  else
+    echo "  ⚠  Restore didn't confirm: $resp"
+    echo "     Your layout is safe here: ${TOPO_BACKUP#$SCRIPT_DIR/}"
+    echo "     Retry with: bash tools/restore-topology.sh"
+  fi
+}
 
 # Python with pyserial, used by the provision step to drive the serial port
 # while holding DTR/RTS deasserted (so the DevKitC's CP2102 auto-reset never
@@ -68,6 +191,7 @@ DO_FW=true
 DO_FS=true
 DO_PROVISION=true
 FORCE_PROVISION=false
+DO_TOPO_BACKUP=true
 # Which PlatformIO env to build. Empty = platformio.ini's default_envs (the
 # primary DevKitC). --node switches to the servo-only secondary.
 PIO_ENV=""
@@ -78,6 +202,7 @@ for arg in "$@"; do
     --fw) DO_UI=false; DO_FS=false ;;
     --no-provision) DO_PROVISION=false ;;
     --provision-only) DO_UI=false; DO_FW=false; DO_FS=false; FORCE_PROVISION=true ;;
+    --no-topology-backup) DO_TOPO_BACKUP=false ;;
     # A SECONDARY node: servo-only firmware, and no Angular bundle or LittleFS
     # image at all — a node's entire interface is the /nodelink WebSocket, which
     # is exactly why it fits on a 4MB board. Credentials still go over serial.
@@ -119,6 +244,15 @@ echo "╔═══════════════════════�
 echo "║        DustGate Deploy           ║"
 echo "╚══════════════════════════════════╝"
 echo ""
+
+# ── 0. Save the shop layout ────────────────────────────────────────────────
+# Before anything is built or flashed, so a board we can't reach stops the
+# deploy while it is still cheap to stop. Only when the filesystem is going to
+# be rewritten — that is the step that erases it.
+if $DO_FS && $DO_TOPO_BACKUP; then
+  backup_topology
+  echo ""
+fi
 
 # ── 1. Build Angular UI ────────────────────────────────────────────────────
 if $DO_UI; then
@@ -323,6 +457,14 @@ PY
       fi
     fi
   fi
+  echo ""
+fi
+
+# ── 5. Put the shop layout back ────────────────────────────────────────────
+# After provisioning, not before: a freshly-flashed board may not rejoin WiFi
+# until its credentials land, and this restore travels over the network.
+if $DO_FS && $DO_TOPO_BACKUP; then
+  restore_topology
   echo ""
 fi
 

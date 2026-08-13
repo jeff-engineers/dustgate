@@ -252,13 +252,19 @@ node shared/device-model/nodelink-conformance.js ws://<node>.local/nodelink
   covers the falling edge; this is the rising one. Same shape of fix (a delay in
   `TopologyRuntime`), but it needs a schema field or a constant first.
 
-- **A UI deploy erases the saved shop** — `topology.json` lives in the same
-  LittleFS partition as the Angular bundle, and `deploy.sh`'s `--target uploadfs`
-  writes a fresh image built from `firmware/data/`. So every full
-  `dev.sh flash` silently wipes the user's layout, calibration and node links.
-  Bit us during bring-up and read as a node-pairing failure. Either move the
-  topology to NVS/its own partition, or have deploy.sh GET it before uploadfs and
-  PUT it back after.
+- ~~**A UI deploy erases the saved shop**~~ **MITIGATED 2026-08-13** —
+  `topology.json` still shares the LittleFS partition with the Angular bundle, so
+  `--target uploadfs` still erases it; `deploy.sh` now GETs the document before
+  anything is built (§0) and PUTs it back after provisioning (§5), with
+  timestamped copies in `.dustgate-backups/` and `tools/restore-topology.sh` for
+  the manual retry. An unreachable board **aborts the deploy** rather than
+  wiping a layout it couldn't save (`--no-topology-backup` overrides); a board
+  with no shop yet is a no-op. Exercised end-to-end against the mock, including
+  the 404 and unreachable paths — **not yet run against hardware**.
+
+  The real fix is still open: move the topology to NVS or its own partition so
+  the copy isn't needed. Until then the restore travels over WiFi, which means a
+  board that doesn't rejoin the network keeps its layout only in the backup dir.
 
 ### 3. Completion
 - **Clean up `/tools`** — its whole job was the outlet-pairing pass, which now

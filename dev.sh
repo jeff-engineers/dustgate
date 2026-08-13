@@ -11,6 +11,10 @@
 #   bash dev.sh flash --fw          # firmware only
 #   bash dev.sh flash --ui          # UI + filesystem only (skip firmware)
 #   bash dev.sh flash --no-provision
+#     Flashing the filesystem ERASES the saved shop (topology.json shares that
+#     partition with the Angular bundle), so deploy.sh copies it off the device
+#     first and puts it back at the end. Backups: .dustgate-backups/, restore by
+#     hand with `bash tools/restore-topology.sh`. Skip with --no-topology-backup.
 #   bash dev.sh flash-node [host]   # flash a SECONDARY servo-only node (+ WiFi creds)
 #   bash dev.sh monitor             # serial monitor (primary)
 #   bash dev.sh monitor node        # serial monitor for a secondary node
