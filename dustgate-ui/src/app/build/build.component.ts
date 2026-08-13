@@ -15,7 +15,7 @@ import {
 import {
   type ShopDoc, type ShopSystem,
   addMachineWithPort, machineOfPort, machinesOf, outletOf,
-  removePort, systemById, systemViews, toShop,
+  removeMachine, removePort, systemById, systemViews, toShop,
 } from '../services/shop-doc';
 import {
   type Glyph, type Pt, type SceneNode,
@@ -3038,12 +3038,18 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       if (pBranch) pBranch.role = 'blocked';          // nothing below → the outlet frees up
       this.setDucts(this.ductsRaw().filter(d => d['child'] !== id && d['parent'] !== id));
     }
-    // A port goes through removePort so its machine goes with it when that was
-    // its last one — deleting the last port IS "remove this machine" (RFC §6.4),
-    // and a machine with no ports is one validateShop rejects: switched on,
-    // routing nowhere.
-    if (this.elem(id)?.['type'] === 'tool') removePort(this.topo as unknown as ShopDoc, id);
-    else this.setElems(this.elems(this.topo).filter(e => e['id'] !== id));
+    // Deleting a tool node deletes the MACHINE. A primary port is not deletable
+    // on its own (RFC §6.3) — it is the machine's one required connection — so
+    // the machine and its ports go together. Dropping a single supplemental
+    // pickup is `removePort`, which the multi-port UI will call instead.
+    const doomed = this.elem(id);
+    const machineId = doomed?.['machineId'] as string | undefined;
+    if (doomed?.['type'] === 'tool' && machineId) {
+      const doc = this.topo as unknown as ShopDoc;
+      if (!removePort(doc, id)) removeMachine(doc, machineId);
+    } else {
+      this.setElems(this.elems(this.topo).filter(e => e['id'] !== id));
+    }
     this.cells.delete(id);
     // Removing a leg can leave the tee it hung off as a 1-child pass-through —
     // collapse it so the run heals and the branch point becomes addable again.

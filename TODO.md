@@ -374,10 +374,18 @@ breaks all three at once.
   must be Angular-free, so component behaviour still relies on a browser pass.
 - **Multi-port UI** — "add another port to this machine" on the canvas, with
   size/use suggested in the port-name field (`Cabinet · 4"`). No `diameter`
-  field; sizing stays the user's business (RFC §6.5).
+  field; sizing stays the user's business (RFC §6.5). Bounded by the cardinality
+  rule below: the add-port affordance disappears at three ports, and the primary
+  has no delete on it.
+  - **Primary reads heavier, supplementals are ghosted** (RFC §9.1) — lighter
+    stroke and a thinner duct, visible at rest, never hover-only, and distinct
+    from the *dimming* that already means `enabled: false`.
 - **`enabled` per port, sticky** — device-owned, persisted locally, merged over
   any adopted topology so a configurator push can never re-arm a port whose hood
-  is on the bench. All-ports-disabled is a guide-bar error (RFC §6.6).
+  is on the bench. **Supplemental ports only**: the primary is always enabled and
+  gets no disable control (RFC §6.6, validated in `shop.js`). Watch the merge for
+  that — a stored `false` must never land on a port that has since become a
+  primary. All-ports-disabled stays a guide-bar error.
 - **Start stagger** — `onDelayMs` (tool sensed → its collector on) and
   `collectorStaggerMs` (collector → next collector), 2 s defaults, both
   configurable. Measure the real gap on the bench: the delay runs from *sensing*,
@@ -403,6 +411,17 @@ breaks all three at once.
   each class. Also added the validation the RFC lists and the first cut missed —
   home-system rule, ≥1 primary port, two-primaries-on-one-selector, ducts within
   one system, machine/element id collisions.
+
+  **Tightened 2026-08-13 to exactly one primary + 0–2 supplementals** (RFC §6.3).
+  The old "≥1 primary" allowed shapes that only existed to be validated against:
+  primaries straddling systems (the home-system check) and two required ports on
+  one single-open selector. Both are now unrepresentable, so those two checks are
+  gone and `MAX_SUPPLEMENTAL_PORTS` is in. The delete rule moved with it: a
+  primary port is **not deletable** — `removePort` takes supplementals only and
+  refuses the primary, and the new `removeMachine` is what "delete this tool"
+  calls. The primary is also **never disabled** (`canDisablePort` is
+  supplemental-only). Model + UI seam + tests; firmware routing was unaffected
+  (it reads the flags, never counts them).
 - **Shop-wide move queue** — plans are per-system, execution is not. One serial
   queue on the primary, or two systems transitioning at once break the
   one-servo-at-a-time current mutex (RFC §10.2).

@@ -244,6 +244,11 @@ int main(int argc, char** argv) {
     // Every port off: the machine reaches nothing. It is ANSWERED FOR rather
     // than omitted — omission reads as "never asked", which is the one reading
     // that hides a running tool with no air.
+    //
+    // validateShop rejects this document — a primary port cannot be disabled
+    // (RFC §6.6) — which is exactly why the runtime is tested on it. The device
+    // adopts what it is handed; refusing to answer for a machine because its
+    // document was wrong is how a running tool goes quiet.
     JsonObject cabinet;
     for (JsonObject sys : shopDoc["systems"].as<JsonArray>())
       for (JsonObject el : sys["elements"].as<JsonArray>())
@@ -253,19 +258,23 @@ int main(int argc, char** argv) {
     ok("all ports off: machine present in the result", r2.machines.count("table-saw") == 1);
     ok("all ports off: STRIPPED", status(r2, "table-saw") == "stripped", status(r2, "table-saw"));
 
-    // Restore, then drop `supplemental` to prove it is what separates partial
-    // from the alarm: identical contention, different verdict.
+    // Restore, then SWAP which port is primary — overarm required, cabinet the
+    // bonus — to prove `supplemental` is what separates partial from the alarm:
+    // identical contention, different verdict. Swapping rather than just
+    // dropping the flag keeps the fixture legal: a machine has exactly one
+    // primary port (RFC §6.3), and this is the JS test's mutation too.
     overarm.remove("enabled");
     cabinet.remove("enabled");
     overarm.remove("supplemental");
+    cabinet["supplemental"] = true;
     auto r3 = topo::routeShop(shop, {"drill-press", "table-saw"});
     ok("without `supplemental`: the same loss is STRIPPED",
        status(r3, "table-saw") == "stripped", status(r3, "table-saw"));
 
     // And rule 2 is untouched: among PRIMARIES, recency still decides. Same
-    // order as the arbitration case above, but with both ports primary the saw's
-    // later start does win — which is exactly what makes the drill press
-    // stripped rather than merely degraded.
+    // order as the arbitration case above, but now the manifold is contended by
+    // two primaries — one per machine — so the saw's later start does win, which
+    // is exactly what makes the drill press stripped rather than merely degraded.
     auto r4 = topo::routeShop(shop, {"table-saw", "drill-press"});
     ok("among primaries, most-recent still wins", state(r4, "man") == "m1", state(r4, "man"));
     ok("so the older machine is stripped", status(r4, "drill-press") == "stripped",

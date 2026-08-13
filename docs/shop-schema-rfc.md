@@ -222,6 +222,20 @@ Keep every `tool` element a proper leaf with exactly one parent duct — those a
 ]}]
 ```
 
+**Exactly one primary port, and 0–2 supplemental ones** (decided 2026-08-13).
+Three connections is the ceiling, and both halves of that are physical rather
+than arithmetic:
+
+- **One primary.** "Which connection is this machine's real one" has exactly one
+  honest answer — the cabinet port, the under-table port — and everything else
+  is a pickup. Making it one rather than "at least one" collapses two other
+  rules into structure: the home system *is* the primary port's system (§11.3
+  rule 2 becomes unrepresentable rather than validated), and one machine's two
+  required ports can no longer contend for one single-open selector.
+- **Two supplementals.** A machine has room for a main port and a pickup or two
+  before you run out of tool to bolt them to. A port list long enough to need
+  scrolling is a second machine being modelled as one.
+
 Routing reads *machine active* → open the path to **every enabled port**
 carrying that `machineId`. Two simultaneous opens are two `make` moves, which
 [`sequencer.js`](../shared/device-model/sequencer.js) already orders correctly
@@ -238,6 +252,13 @@ An earlier draft hung `sensor.outlet` on one port flagged primary. That flag
 bought nothing but problems: state to keep valid, an ambiguous delete, and a UI
 obliged to explain which of two identical ports is special.
 
+To be precise about what this rejects, since §6.3 and §11.3 do have a primary
+port: the thing rejected is **a port owning the machine's identity** — the plug,
+the trip point, the name. `primary` survives as a statement about *airflow
+priority* ("this is the connection the machine cannot do without"), which is a
+fact about a duct connection and belongs on a port. The plug is not, and does
+not.
+
 Look instead at what accumulates on a tool element — the smart outlet, the trip
 point, the display name, the identity arbitration matches on. **None of those
 are facts about a duct connection.** What a port genuinely owns is its parent
@@ -246,9 +267,12 @@ duct and its gate. One list per meaning is the same move §4 made for systems an
 
 Consequences:
 
-- **Deleting a port is a non-event.** The machine survives with N−1 ports and
-  the plug claim never moves. Deleting the *last* port is the "remove this
-  machine" action — drop the machine, release the claim, confirm once.
+- **Deleting a supplemental port is a non-event.** The machine survives with one
+  fewer pickup and the plug claim never moves. **The primary port is not
+  deletable** — a machine cannot exist without its one required connection, so
+  the only thing that removes it is *remove this machine*: drop the machine and
+  all its ports, release the claim, confirm once. The canvas therefore offers no
+  delete on a primary port at all; deleting the tool is that action.
 - **Every port draws the same outlet**, identically live, and every one opens
   the same sheet. No mirroring, no read-only follower
   ([`mockups/outlet-dock.html`](mockups/outlet-dock.html)).
@@ -292,6 +316,12 @@ the bench.
 capping, which says *no duct was ever run here* and is a build fact; this says
 *the duct is there, the hood is off, ignore it for now*. Rules:
 
+- **supplemental ports only. The primary is always enabled** (decided
+  2026-08-13). Switching off the connection a machine cannot run without means
+  "collect nothing from this tool", which is what deleting the machine — or
+  unpairing its plug — is for. The canvas shows **no disable control on a
+  primary port at all**; validation is the backstop for a document that arrived
+  some other way
 - a disabled port is skipped by routing, exactly as if the machine had one fewer
   port — and its gate settles closed like any unrouted branch, which the
   sequencer already treats as a `break`
@@ -299,9 +329,12 @@ capping, which says *no duct was ever run here* and is a build fact; this says
   discoverable and reversible in one tap — never hidden
 - **all ports disabled is a guide-bar error, not a silent no-op.** A machine
   that can be sensed but never routed would run the collector and open nothing,
-  which is the dead-head case
-- it is per-port, never per-machine — disabling a single-port machine is what
-  unpairing or deleting is for
+  which is the dead-head case. With the primary always enabled this is now
+  unreachable except on a machine that has no primary either — which is its own
+  error, and worth reporting twice rather than letting through
+- it is per-port, never per-machine — and since a single-port machine's one port
+  is its primary, that machine has nothing to disable; unpairing or deleting is
+  what you want
 
 **`enabled` is sticky (decided).** It survives reboots, WiFi drops, node
 reconnects, and — the case that actually constrains the implementation — a
@@ -469,7 +502,28 @@ systems, and it was never an airflow vertex to begin with. It also retires the
 mirroring problem in §6.4 outright: one machine, one glyph, one outlet chip,
 nothing to mirror.
 
-### 9.1 What focus lights
+### 9.1 Primary reads heavier than supplemental
+
+The port strip carries a rank now (§6.3), so it has to *look* like one. The
+primary is drawn at full weight — solid duct, solid glyph, the machine's name.
+Supplemental ports are **ghosted**: lighter stroke, the duct drawn thinner, the
+port label at reduced emphasis. One glance should answer "which of these is the
+one that matters," because that is exactly what the arbitration will decide when
+two people are in the shop.
+
+Two constraints on the ghosting, both learned the hard way:
+
+- **Ghosted is not disabled.** `enabled: false` already means dimmed (§6.6), so
+  supplemental cannot borrow the same treatment. Rank is *weight* (stroke,
+  label emphasis); disabled is *dimming* the whole element. A ghosted-and-dimmed
+  supplemental has to still read as two separate facts.
+- **Never hover-only.** Rank is visible at rest, on the canvas, without pointing
+  at anything — the same rule the rest of the canvas follows.
+
+The primary also has no delete affordance (§6.4). Removing it is *delete this
+tool*, which lives on the machine, not on the port.
+
+### 9.2 What focus lights
 
 Focus is a *ducts-layer* idea, and dimming whole boxes stops working once a
 machine can belong to two of them.
@@ -597,14 +651,16 @@ makes the first safe:
   "name": "Overarm · 2.5\"", "supplemental": true }
 ```
 
-- **primary** (default) — losing it means the machine runs with no collection.
-- **supplemental** — a bonus. May be preempted without argument.
+- **primary** (default, and there is exactly one — §6.3) — losing it means the
+  machine runs with no collection.
+- **supplemental** (0–2 of them) — a bonus. May be preempted without argument.
 
 #### Rule 2 — only supplemental ports may leave the home system
 
-Every machine has a **home system**: the one holding its primary port(s). Any
-port in a *different* system must be `supplemental: true`, enforced at
-validation (§13).
+Every machine has a **home system**: the one holding its primary port. With one
+primary that is a definition rather than a constraint — any port in a *different*
+system is by construction not the primary, so it is supplemental, and the rule
+holds without a check.
 
 This is the load-bearing rule, and it buys a guarantee:
 
@@ -713,15 +769,18 @@ duct; every element reaches its collector; no cycles.
 - `machineId` may only group elements of `type: 'tool'`, must resolve to a
   `machines[]` entry, and a machine with ports in more than one system is legal
   (§6.3)
-- **every port outside a machine's home system is `supplemental`** — the home
-  system is the one holding its primary port(s). This is what guarantees
-  cross-system contention can never cost a primary port (§11.3)
-- a machine has **at least one primary port**; all-supplemental is a machine
-  nothing is obliged to collect from
-- **two primary ports of one machine served by the same single-open selector is
-  a build error** — they can never both be open, so the machine can never be
-  fully routed. The same shape with one port supplemental is a warning, not an
-  error: permanently degraded, but the user may have meant it
+- a machine has **exactly one primary port** — no primary is a machine nothing
+  is obliged to collect from; two makes "the home system" ambiguous and lets one
+  machine's two required ports fight over one single-open selector (§6.3). With
+  one, *every port outside the home system is supplemental* holds structurally
+  and needs no check of its own — which is what guarantees cross-system
+  contention can never cost a primary port (§11.3)
+- a machine has **at most two supplemental ports** — three connections total
+- a primary port sharing a single-open selector with one of its own machine's
+  supplementals is permanently degraded, not wrong: a warning, since the user
+  may have meant it
+- **the primary port is never `enabled: false`** — only supplementals can be
+  switched off (§6.6)
 - every machine has **≥1 port**, and **≥1 enabled port** — all-disabled is a
   guide-bar error, since a machine that can be sensed but never routed runs the
   collector into a sealed system (§6.6)

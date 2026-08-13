@@ -32,6 +32,12 @@ export interface Shop {
 
 export const SHOP_SCHEMA_VERSION: number;
 
+/**
+ * Supplemental ports allowed per machine. A machine has exactly one primary
+ * port and 0–2 supplementals — three connections in total (RFC §6.3).
+ */
+export const MAX_SUPPLEMENTAL_PORTS: number;
+
 /** Present one system as a plain topology — controllers spliced in from the shop. */
 export function systemView(shop: Shop, system: System): Topology;
 export function systemsOf(shop: Shop): System[];

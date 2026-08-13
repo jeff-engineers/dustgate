@@ -13,7 +13,8 @@ import { validateShop } from '@shop';
 import {
   type ShopDoc, type RawEl,
   addMachineWithPort, displayName, isPortEnabled, isShopDoc, machineById,
-  machineOfPort, machinesOf, outletOf, portsOf, removePort, setOutlet,
+  machineOfPort, machinesOf, outletOf, portsOf, primaryPortOf, removeMachine, removePort,
+  setOutlet,
   systemById, systemViews, systemsOf, toShop,
 } from './shop-doc';
 
@@ -103,18 +104,20 @@ const v1 = () => JSON.parse(JSON.stringify({
   eq('which knows its system', portsOf(shop, 'lathe')[0].systemId, sys.id);
 }
 
-// ── delete: the last port takes the machine with it ─────────────────────────
+// ── delete: the machine goes, or a supplemental port goes ───────────────────
 //
-// The case that silently breaks a shop. A machine with no ports is switched on
-// and routes nowhere, and validateShop rejects it — so leaving one behind doesn't
-// leave a draft, it leaves a document that can't be saved.
+// A machine and its primary port are one thing (RFC §6.3): the primary is the
+// machine's one required connection, so it is not deletable on its own and
+// "delete this tool" removes the machine with every port it owns. A machine with
+// no ports — or a port with no machine — is a document validateShop rejects, not
+// a draft the canvas can leave behind.
 {
   const shop = toShop(v1())!;
   const sys = systemsOf(shop)[0];
   addMachineWithPort(shop, sys, 'lathe', 'Lathe');
   sys.ducts.push({ child: 'lathe', parent: 'gate', parentBranch: 'b1' });
 
-  removePort(shop, 'lathe');
+  removeMachine(shop, 'lathe');
   check('the port is gone', !sys.elements.some(e => e['id'] === 'lathe'));
   check('its duct went with it', !sys.ducts.some(d => d['child'] === 'lathe'));
   check('and so did its machine', !machineById(shop, 'lathe'));
@@ -122,17 +125,39 @@ const v1 = () => JSON.parse(JSON.stringify({
     JSON.stringify(validateShop(shop).errors));
 }
 {
-  // ...but a machine with a SECOND port survives losing the first. This is the
-  // multi-port case the whole machine indirection exists for.
+  // A machine survives losing a SUPPLEMENTAL port. That is the bonus pickup
+  // coming off, and it is a non-event: the machine keeps its plug, its name and
+  // its primary connection.
   const shop = toShop(v1())!;
   const sys = systemsOf(shop)[0];
   sys.elements.push({ id: 'saw-overarm', type: 'tool', name: 'Overarm', machineId: 'saw', supplemental: true });
   sys.ducts.push({ child: 'saw-overarm', parent: 'gate', parentBranch: 'b1' });
   eq('the saw now has two ports', portsOf(shop, 'saw').length, 2);
 
-  removePort(shop, 'saw-overarm');
-  check('removing one port keeps the machine', !!machineById(shop, 'saw'));
-  eq('and leaves the other port', portsOf(shop, 'saw').length, 1);
+  check('a supplemental port can be removed', removePort(shop, 'saw-overarm'));
+  check('removing it keeps the machine', !!machineById(shop, 'saw'));
+  eq('and leaves the primary port', portsOf(shop, 'saw').length, 1);
+}
+{
+  // The other half of the rule, and the one worth a backstop in the model: a
+  // PRIMARY port cannot be deleted. removePort refuses and changes nothing —
+  // the way to get rid of it is to get rid of the machine.
+  const shop = toShop(v1())!;
+  const sys = systemsOf(shop)[0];
+  sys.elements.push({ id: 'saw-overarm', type: 'tool', name: 'Overarm', machineId: 'saw', supplemental: true });
+  sys.ducts.push({ child: 'saw-overarm', parent: 'gate', parentBranch: 'b1' });
+
+  eq('the primary is the un-flagged port', primaryPortOf(shop, 'saw')!['id'], 'saw');
+  check('removePort refuses the primary', !removePort(shop, 'saw'));
+  check('the port is untouched', sys.elements.some(e => e['id'] === 'saw'));
+  check('the machine is untouched', !!machineById(shop, 'saw'));
+  eq('and both ports are still there', portsOf(shop, 'saw').length, 2);
+
+  removeMachine(shop, 'saw');
+  check('deleting the machine is what removes them', !machineById(shop, 'saw'));
+  check('the primary went', !sys.elements.some(e => e['id'] === 'saw'));
+  check('the supplemental went too', !sys.elements.some(e => e['id'] === 'saw-overarm'));
+  check('and its duct with it', !sys.ducts.some(d => d['child'] === 'saw-overarm'));
 }
 
 // ── naming ──────────────────────────────────────────────────────────────────

@@ -119,8 +119,32 @@ export function portsOf(doc: ShopDoc | null, machineId: string): { systemId: str
     { systemId: string; port: RawEl }[];
 }
 
-/** A port counts unless explicitly switched off. Absent means enabled. */
+/**
+ * A port counts unless explicitly switched off. Absent means enabled.
+ *
+ * Only SUPPLEMENTAL ports can be switched off (RFC §6.6) — that is the hood
+ * coming off the saw for an afternoon. A primary is always enabled, so the UI
+ * must not draw a disable control on one at all.
+ */
 export const isPortEnabled = (port: RawEl): boolean => portEnabled(port);
+
+/**
+ * A port is primary unless it says otherwise (RFC §6.3).
+ *
+ * Absent means primary because a port nobody has thought about is a port whose
+ * air you actually need — and because a migrated v1 doc carries the flag
+ * nowhere. Exactly one port of a machine is primary; the other 0–2 are
+ * supplemental, and the GUI draws them lighter than the primary.
+ */
+export const isPortSupplemental = (port: RawEl): boolean => port['supplemental'] === true;
+
+/** Whether the UI may offer a disable toggle for this port. Primaries: never. */
+export const canDisablePort = (port: RawEl): boolean => isPortSupplemental(port);
+
+/** The one port a machine cannot do without, or null for a malformed machine. */
+export function primaryPortOf(doc: ShopDoc | null, machineId: string): RawEl | null {
+  return portsOf(doc, machineId).find(({ port }) => !isPortSupplemental(port))?.port ?? null;
+}
 
 // ── the plug ────────────────────────────────────────────────────────────────
 //
@@ -187,22 +211,41 @@ export function addMachineWithPort(doc: ShopDoc, system: ShopSystem, id: string,
   return port;
 }
 
-/**
- * Remove a port, and the machine with it if that was its last one.
- *
- * Deleting the last port IS the "remove this machine" action (RFC §6.4) — a
- * machine with no ports is switched on and routes nowhere, which validateShop
- * rejects, so leaving one behind would break the document rather than leave a
- * draft.
- */
-export function removePort(doc: ShopDoc, portId: string): void {
-  const el = systemsOf(doc).flatMap(s => s.elements).find(e => e['id'] === portId);
-  const machineId = el?.['machineId'] as string | undefined;
+/** Drop these element ids and any duct touching them, across every system. */
+function dropElements(doc: ShopDoc, ids: Set<string>): void {
   for (const s of systemsOf(doc)) {
-    s.elements = s.elements.filter(e => e['id'] !== portId);
-    s.ducts = s.ducts.filter(d => d['child'] !== portId && d['parent'] !== portId);
+    s.elements = s.elements.filter(e => !ids.has(e['id'] as string));
+    s.ducts = s.ducts.filter(d => !ids.has(d['child'] as string) && !ids.has(d['parent'] as string));
   }
-  if (machineId && portsOf(doc, machineId).length === 0) {
-    doc.machines = doc.machines.filter(m => m.id !== machineId);
-  }
+}
+
+/**
+ * Remove a SUPPLEMENTAL port. Refuses anything else, and says so by returning
+ * false.
+ *
+ * Dropping a bonus pickup is a non-event: the machine survives with one fewer
+ * port, keeps its plug and its name, and stays valid. **A primary port is not
+ * deletable** (RFC §6.3) — it is the machine's one required connection, so the
+ * only way it goes away is with the machine, through `removeMachine`. Callers
+ * should not offer a delete on a primary port at all; the false return is the
+ * backstop, not the UI.
+ */
+export function removePort(doc: ShopDoc, portId: string): boolean {
+  const el = systemsOf(doc).flatMap(s => s.elements).find(e => e['id'] === portId);
+  if (!el || !isPortSupplemental(el)) return false;
+  dropElements(doc, new Set([portId]));
+  return true;
+}
+
+/**
+ * Remove a machine and every port it owns.
+ *
+ * This is the "delete this tool" action, and the ONLY thing that removes a
+ * primary port. A machine cannot exist without its primary and a port cannot
+ * exist without its machine, so the two go together or not at all — leaving
+ * either half behind is a document validateShop rejects rather than a draft.
+ */
+export function removeMachine(doc: ShopDoc, machineId: string): void {
+  dropElements(doc, new Set(portsOf(doc, machineId).map(({ port }) => port['id'] as string)));
+  doc.machines = doc.machines.filter(m => m.id !== machineId);
 }

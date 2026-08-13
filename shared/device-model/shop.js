@@ -43,6 +43,16 @@ const SEQ = require('./sequencer');
 
 const SHOP_SCHEMA_VERSION = 2;
 
+/**
+ * A machine has exactly one primary port and at most this many supplemental
+ * ones — three connections in total (RFC §6.3).
+ *
+ * The limit is physical, not arithmetic: a machine has room for its main port
+ * and a pickup or two, and past that the thing being modelled is a second
+ * machine. It also keeps the port strip on the canvas a fixed, glanceable size.
+ */
+const MAX_SUPPLEMENTAL_PORTS = 2;
+
 // ---------------------------------------------------------------------------
 // System views
 // ---------------------------------------------------------------------------
@@ -234,26 +244,17 @@ function validateShop(shop) {
     }
   }
 
-  // elementId → the selector immediately above it and the state that opens the
-  // branch it hangs on. Only the first hop: that is the one a machine's own two
-  // ports can contend for, which is what the check below is about.
-  const feedOf = new Map();
-  for (const sys of shop.systems) {
-    const byId = new Map(sys.elements.map((e) => [e && e.id, e]));
-    for (const d of sys.ducts) {
-      if (!d || !d.child) continue;
-      const parent = byId.get(d.parent);
-      if (!parent || parent.type !== 'selector') continue;
-      const branch = (parent.branches || []).find((b) => b.id === d.parentBranch);
-      if (branch) feedOf.set(d.child, { selectorId: parent.id, stateId: branch.opensState });
-    }
-  }
-
   // ── primary vs supplemental (RFC §11.3) ──
   //
   // `supplemental: true` marks a port whose loss degrades capture but is not a
   // problem in itself. ABSENT MEANS PRIMARY, because a port nobody has thought
   // about is a port whose air you actually need.
+  //
+  // EXACTLY ONE primary, and AT MOST TWO supplementals. Both halves are decided
+  // (RFC §6.3): one primary because "which connection is this machine's real
+  // one" has exactly one honest answer, and the cap because the limit is
+  // physical — a machine has room for a main port and a pickup or two, and a
+  // list long enough to need scrolling is a modelling mistake, not a shop.
   const isSupplemental = (port) => port.supplemental === true;
   for (const m of shop.machines) {
     if (!m || !m.id) continue;
@@ -261,48 +262,40 @@ function validateShop(shop) {
     if (p.length === 0) continue;   // already reported below
 
     const primary = p.filter(({ port }) => !isSupplemental(port));
-    // All-supplemental is a machine nothing is obliged to collect from, which
-    // makes every verdict about it meaningless — it can never be `stripped`.
+    // No primary is a machine nothing is obliged to collect from, which makes
+    // every verdict about it meaningless — it can never be `stripped`.
     if (primary.length === 0) {
-      err('machine', `machine "${m.name || m.id}" has no primary port — mark at least one as required`, m.id);
-      continue;
-    }
-
-    // THE LOAD-BEARING RULE. A machine's home system is the one holding its
-    // primary ports; every port outside it must be supplemental. That is what
-    // guarantees cross-system contention can never cost anyone a primary port:
-    // someone else's tool, in a system you did not choose to share, can only
-    // ever take your bonus pickup.
-    //
-    // The RFC states it per port ("every port outside the home system is
-    // supplemental"); stated that way it is exactly equivalent to "all primary
-    // ports share one system", since a primary elsewhere IS a second home. One
-    // check, because two would mean one of them could never fire — and the
-    // message has to name both systems anyway for the error to be actionable.
-    const homes = [...new Set(primary.map(({ systemId }) => systemId))];
-    if (homes.length > 1) {
+      err('machine', `machine "${m.name || m.id}" has no primary port — exactly one of its ports must be the primary`, m.id);
+    } else if (primary.length > 1) {
+      // Two primaries is the shape that used to be legal and is now not. It made
+      // the home-system rule a real check (primaries could straddle systems) and
+      // let one machine's two required ports contend for one single-open
+      // selector. With one primary, the home system IS that port's system and
+      // both of those failure modes are unrepresentable rather than validated.
       err('machine',
-        `machine "${m.name || m.id}" has primary ports in systems ${homes.map((h) => `"${h}"`).join(' and ')} — only one can be its home; ports outside it must be supplemental`,
+        `machine "${m.name || m.id}" has ${primary.length} primary ports (${primary.map(({ port }) => `"${port.id}"`).join(', ')}) — exactly one, the rest supplemental`,
         m.id);
     }
 
-    // Two PRIMARY ports of one machine that need the same selector in DIFFERENT
-    // states can never both be open, so the machine can never be fully routed —
-    // a build error, not a runtime surprise. Judged on the states themselves
-    // rather than on the selector's kind: two ports hanging off branches that
-    // share an `opensState` do both flow, and that is a legitimate build.
-    // The same shape with one port supplemental is merely permanently degraded,
-    // and the user may have meant it, so only primaries are checked.
-    const held = new Map();   // selectorId → { stateId, portId }
+    // THE PRIMARY IS ALWAYS ENABLED (RFC §6.6). `enabled: false` is the
+    // hood-is-off-the-saw state, and that is a story about a bonus pickup: the
+    // primary is the connection the machine cannot run without, so switching it
+    // off means "collect nothing from this tool", which is what deleting the
+    // machine — or unplugging its sensor — is for. The UI offers no way to do
+    // it; this is the backstop for a document that arrived some other way.
     for (const { port } of primary) {
-      const hop = feedOf.get(port.id);
-      if (!hop) continue;
-      const prev = held.get(hop.selectorId);
-      if (prev && prev.stateId !== hop.stateId) {
-        err('port', `ports "${prev.portId}" and "${port.id}" are both primary on selector "${hop.selectorId}", which cannot open both at once`, port.id);
-      } else if (!prev) {
-        held.set(hop.selectorId, { stateId: hop.stateId, portId: port.id });
+      if (!portEnabled(port)) {
+        err('port', `port "${port.id}" is the primary of machine "${m.name || m.id}" and cannot be disabled`, port.id);
       }
+    }
+
+    // The cap is on the SUPPLEMENTALS, not on the total, so the message stays
+    // true whatever went wrong with the primary above.
+    const supplemental = p.length - primary.length;
+    if (supplemental > MAX_SUPPLEMENTAL_PORTS) {
+      err('machine',
+        `machine "${m.name || m.id}" has ${supplemental} supplemental ports — at most ${MAX_SUPPLEMENTAL_PORTS}`,
+        m.id);
     }
   }
 
@@ -316,8 +309,10 @@ function validateShop(shop) {
     if (p.length === 0) {
       err('machine', `machine "${m.name || m.id}" has no ports — delete the machine or give it one`, m.id);
     } else if (p.every(({ port }) => !portEnabled(port))) {
-      // RFC §6.6: all-ports-disabled is an ERROR, not a silent no-op. A machine
-      // that can't route anywhere would otherwise run with every gate shut.
+      // RFC §6.6: a machine that can't route anywhere would run with every gate
+      // shut. Since the primary can never be disabled, reaching this means the
+      // machine also has no primary — reported just above, and worth saying
+      // twice rather than letting a document through that routes nothing.
       err('machine', `machine "${m.name || m.id}" has every port disabled — it would run with no gate open`, m.id);
     }
   }
@@ -595,7 +590,7 @@ const isShop = (doc) =>
 const asShop = (doc, opts) => (isShop(doc) ? doc : migrateToShop(doc, opts));
 
 module.exports = {
-  SHOP_SCHEMA_VERSION,
+  SHOP_SCHEMA_VERSION, MAX_SUPPLEMENTAL_PORTS,
   systemView, systemsOf, machinesOf, machineIndex, portsByMachine, portEnabled,
   validateShop, routeShop, planShopTransition,
   migrateToShop, isShop, asShop,
