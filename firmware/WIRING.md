@@ -505,6 +505,77 @@ enclosure buttons from §6.
 Do **not** power the motor from the ESP32 3.3V or USB 5V rail.
 Always common the grounds.
 
+### USB-PD instead of a DC brick — the intended supply
+
+The barrel-jack brick above is the legacy arrangement. The direction is **USB-PD
+for everything**: one USB-C charger, a PD trigger to negotiate the voltage, and a
+buck to whatever the actuators want. A charger is a part people already own and can
+replace anywhere, which a 15V 3A barrel brick is not.
+
+**Pick the PD voltage from the spec's fixed list, not from what your charger
+happens to offer.** USB-PD's normative fixed voltages are **5V, 9V, 15V and 20V**.
+**12V is optional** — common, but not guaranteed, so a design that needs 12V is a
+design that fails on some perfectly good chargers. This is the reason to prefer a
+9V or 15V part over a 12V one when the choice is open.
+
+#### Bench-validated chain (2026-08-12)
+
+Measured on the bench, not derived: a DevKitC primary with the status pixel and one
+6kg digital servo, through a deliberate stall, showed **no brownout and no reset —
+with no capacitors fitted at all.**
+
+```
+USB-C charger ──> HUSB238 (PD trigger, 15V) ──> MPM3610 buck ──> 5V ──┬── DevKitC 5V/VIN
+                                                                      └── servo V+
+```
+
+Read that result carefully before copying it:
+
+- The **MPM3610 breakout is rated 1.2A**, where [architecture-rfc.md](../docs/architecture-rfc.md)
+  specs an **XL4015 at 5A** for this job. A stalling 6kg digital servo can ask for
+  1.5–2.5A — above the buck's limit. So "no brownout at stall" may be the buck
+  **current-limiting** rather than the servo being satisfied. Both look identical
+  from outside. It is a real data point about the ESP32 surviving, not proof the
+  supply has headroom.
+- It held with **one** servo. The design is **four per node**. What makes that
+  plausible on a small buck is that `holdAtRest` defaults **false** (servos move
+  then detach, so idle channels draw nothing) and only one servo is ever commanded
+  at a time — see the mutex note in §9. Both have to stay true for the budget to.
+- **Fit the capacitors anyway** (§9). A stall transient is microseconds to
+  milliseconds; you will not see it without a scope, and the first symptom is a
+  reboot mid-move rather than anything legible in a log. Not having hit it is not
+  evidence against it.
+
+#### Two 5V sources at once
+
+Bench work usually means the buck's 5V **and** the host's USB VBUS are on the board
+together. Unless something isolates them, the buck feeds the host's USB port.
+
+Check it with one measurement: **unplug the host, leave the buck running, measure
+VBUS on the USB connector. It should read 0V.** Anything near 5V is backfeed into
+your computer. A Schottky between the buck and the board's 5V pin is the usual fix —
+put anything else on the board side of it so the diode isolates the supply, not the
+peripheral.
+
+The same failure mode is worth remembering from a different angle: a peripheral on
+5V with its signal line tied to a 3.3V GPIO pushes current through the ESP32's ESD
+clamp diodes into the chip's own 3V3 rail. A partially-powered ESP32 cannot latch
+its strapping pins cleanly on reset, and the symptom is not "the board misbehaves" —
+it is **flashing failing with `Wrong boot mode detected (0x13)`**, which sends you
+debugging esptool instead of the carrier. The series resistors in §5 are the current
+limit on that path, not decoration.
+
+#### Planned: 9V for serial-bus servos
+
+The serial bus servo (ST3215-class) replaces both the stepper and the PWM servo
+bank. It is a 12V-class part, but the plan is to run it from **9V PD** rather than
+12V, precisely because 9V is a spec-normative fixed voltage and 12V is not — a 9V
+design works off any compliant charger.
+
+The trade is torque: the headline rating is at 12V, so expect meaningfully less at
+9V. Size the gate mechanism for the 9V figure, not the datasheet's. Not yet built —
+see the serial-bus notes in the board headers.
+
 > **Note (vs. the Feather):** the DevKitC has **no onboard LiPo charger** — power it
 > from USB or a regulated 5V source on the 5V/VIN pin. The Feather's battery/charging
 > features do not apply to the primary build.
@@ -522,8 +593,16 @@ Nothing on the ESP32 side causes that. The loads sharing the rail do:
 
 - **Servo inrush and stall** — a hobby servo pulls 0.5–1A+ for tens of milliseconds
   when it starts moving and when the gate hits its stop. On the v2 servo nodes this
-  is the main offender, and the make-before-break sequencer means **two servos can
-  be moving at once** — budget for that, not for one. (Confirm this - it shouldn't be allowed)
+  is the main offender. **Budget for ONE moving servo, not two:** the firmware holds
+  a hard mutex — only one servo is ever commanded at a time — and the move queue is
+  shop-wide and serial, so even a make-before-break transition across two systems
+  concatenates its moves rather than overlapping them. (Corrected 2026-08-12; this
+  previously said two could move at once, which doubled the budget for no reason.
+  The invariant is in [architecture-rfc.md](../docs/architecture-rfc.md).)
+- **Idle servos draw nothing.** `holdAtRest` defaults false — a servo moves, then
+  detaches, and the valve holds by friction. So a four-gate node's steady draw is
+  the ESP32 alone. Set `holdAtRest` true on a build that back-drives when
+  de-energized and that stops being true, which changes the supply sizing.
 - **Stepper coil energizing** — the TMC2209 slams current into the coils on enable
   and on the first steps after idle.
 - **Long thin wire** — ~0.3Ω in 10ft of 22AWG turns a 1A transient into a 0.3V drop
