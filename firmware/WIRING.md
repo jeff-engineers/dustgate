@@ -557,13 +557,20 @@ your computer. A Schottky between the buck and the board's 5V pin is the usual f
 put anything else on the board side of it so the diode isolates the supply, not the
 peripheral.
 
-The same failure mode is worth remembering from a different angle: a peripheral on
-5V with its signal line tied to a 3.3V GPIO pushes current through the ESP32's ESD
-clamp diodes into the chip's own 3V3 rail. A partially-powered ESP32 cannot latch
-its strapping pins cleanly on reset, and the symptom is not "the board misbehaves" —
-it is **flashing failing with `Wrong boot mode detected (0x13)`**, which sends you
-debugging esptool instead of the carrier. The series resistors in §5 are the current
-limit on that path, not decoration.
+> **Hypothesis, not a diagnosis.** A peripheral on 5V with its signal line tied to a
+> 3.3V GPIO *can* push current through the ESP32's ESD clamp diodes into the chip's
+> own 3V3 rail, and a partially-powered ESP32 cannot latch its strapping pins
+> cleanly on reset. That is a real and well-known mechanism, and it is the reason
+> the series resistors in §5 are a current limit rather than decoration.
+>
+> It has **not** been shown to be what happened here. What was actually observed on
+> 2026-08-12: flashing failed with `Wrong boot mode detected (0x13)` while the
+> DevKitC was seated on its carrier and succeeded with the board off it; the
+> carrier's NeoPixel was later found installed **backwards**; the carrier was then
+> dismantled before anything was isolated. A reversed WS2812 is its own fault with
+> its own conduction path, and no measurement tied either one to the strapping
+> failure. Treat this section as a thing to check, not a thing to conclude — see
+> the open item in TODO.md.
 
 #### Planned: 9V for serial-bus servos
 

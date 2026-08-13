@@ -442,6 +442,36 @@ Nothing is hardware-tested yet, so these land on top of an unvalidated base.
 - [ ] Multi-port machine: both gates open together, arbitration never lets one
       machine's ports fight, disabling one port closes only that gate.
 
+#### UNRESOLVED: `Wrong boot mode (0x13)` when seated on a carrier (2026-08-12)
+Cost most of a bench session and was never actually root-caused. Worth resolving
+before a carrier gets designed around a guess.
+
+What was **observed**:
+- Flashing failed with `Wrong boot mode detected (0x13)` — GPIO0 high at reset.
+- A direct probe showed **RTS→EN works** (the chip resets on command) but
+  **DTR→GPIO0 does not** pull the strap low. The onboard BOOT button also failed
+  to force download mode.
+- It flashed fine with the DevKitC lifted **off** the carrier.
+- The carrier's NeoPixel was found installed **backwards**.
+- Separately and probably unrelated: the macOS port node wedged
+  (`termios.error: (22, 'Invalid argument')` at every baud, nothing holding it),
+  cleared by an unplug/replug. That masked the boot-mode issue for several
+  attempts and made the timeline hard to read.
+
+What was **not** shown: that any of the above caused the others. The carrier was
+dismantled before a measurement isolated anything, so the 5V-peripheral-backfeed
+story in WIRING.md §8 is a hypothesis with a plausible mechanism and no evidence.
+A reversed WS2812 is an equally good suspect by itself.
+
+- [ ] Rebuild a minimal carrier and reproduce deliberately: seat the board, confirm
+      `boot:0x13`, then pull one cross-rail signal at a time and re-probe. The probe
+      is: strap GPIO0 low over a reset and check for `boot:0x03 (DOWNLOAD_BOOT)`.
+- [ ] Measure the 3V3 rail with USB unplugged and the external supply on. Anything
+      above ~0.3V is backfeed, and the voltage says how hard.
+- [ ] Then either confirm WIRING.md §8's hypothesis or replace it with what actually
+      happened. Do not leave it as a maybe — it is currently the first thing the
+      next person will read when their board won't flash.
+
 #### Found on the FIRST hardware boot (2026-08-12)
 The board came up: WiFi, mDNS, HTTP API, LittleFS, outlet poll task, servo bank,
 NodeLink all started on a bare DevKitC. These are what the boot log exposed.
