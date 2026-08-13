@@ -37,6 +37,17 @@ public:
     // Configure a single outlet slot at runtime. Persists to NVS via saveSlot().
     // Call after begin() — the poll task will pick up the new outlet immediately.
     // -------------------------------------------------------------------------
+    // Ask the poll task to run a provisioning pass on its next tick. Used by the
+    // takeover path so an approved takeover lands now rather than whenever the
+    // next reconfigure happens to come round.
+    void requestProvision() { _needsProvision = true; }
+
+    // Our identity, for plug ownership (RFC §8). ourHost() is what a plug's
+    // configured push target is compared against; ourName() is what we write
+    // into its friendly name for humans reading the Shelly app.
+    const char* ourHost() const { return _ourHost; }
+    const char* ourName() const { return _ourName; }
+
     void configureOutlet(int slot,
                          int generation,      // 1 = Gen 1, 2 = Gen 2/Plus
                          const char* ip,
@@ -57,6 +68,9 @@ public:
 
     int          outletCount() const { return _count; }
     SmartOutlet* outlet(int i)       { return (i >= 0 && i < _count) ? _outlets[i] : nullptr; }
+    // Find a configured plug by address. Public because the takeover path in the
+    // sketch has an IP from the UI and nothing else to look it up by.
+    SmartOutlet* outletByIp(const char* ip);
 
     // -------------------------------------------------------------------------
     // Collector plugs — switchable Shelly outlets (we turn them on/off) rather
@@ -171,6 +185,22 @@ private:
     // recovers instead of silently degrading to polling until reboot.
     uint32_t          _lastLocalIp;
 
+    // OUR IDENTITY, for plug ownership (RFC §8). Two different strings on
+    // purpose, because they answer two different questions:
+    //
+    //   _ourHost  our IP, as it appears in _wsUrl. What a plug's configured push
+    //             target is COMPARED against — the machine-readable authority.
+    //   _ourName  our mDNS hostname. What gets written into a plug's friendly
+    //             name, so the Shelly app shows "Table Saw · dustgate-shop" and a
+    //             human can see which brain spoke for it. A hint, never the
+    //             decision: names are user-editable.
+    //
+    // Using the IP for the name would be worse than useless — it changes with a
+    // DHCP lease, and the label would then claim the plug for an address nobody
+    // is at any more.
+    char              _ourHost[40];
+    char              _ourName[40];
+
     // Debounce tracking (poll task only — no mutex needed)
     int               _pendingStop;
     unsigned long     _pendingStartMs;
@@ -185,7 +215,6 @@ private:
     void        reconcileCollectors();     // poll task: drive every collector plug to its desired state
     bool        provisionPushOutlets();    // poll task: push Ws/name config; returns true if any still pending
     void        checkLocalIpChange();      // poll task: rebuild _wsUrl + re-provision if our DHCP IP changed
-    SmartOutlet* outletByIp(const char* ip); // match a push event to a configured outlet
 };
 
 #endif // CONTROL_SMART_OUTLET

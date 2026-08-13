@@ -30,6 +30,16 @@ public:
     bool        configureOutboundWs(const char* wsUrl) override;
     bool        setName(const char* name) override;
 
+    // Ws.GetConfig — read who this plug currently pushes to. THE AUTHORITY on
+    // ownership (docs/shop-schema-rfc.md §8): names are user-editable, this is
+    // not. Blocking HTTP, so discovery/provisioning paths only.
+    //
+    // Returns false if the plug didn't answer or the response didn't parse —
+    // which is NOT "unclaimed". A read failure means we don't know, and the
+    // caller must not turn that into permission to steal.
+    bool        readPushConfig(String& outServer, bool& outEnabled,
+                               uint32_t timeoutMs = OUTLET_RPC_WRITE_TIMEOUT_MS);
+
 private:
     char _ip[16];
     char _name[32];

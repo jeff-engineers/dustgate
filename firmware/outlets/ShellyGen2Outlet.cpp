@@ -130,8 +130,51 @@ bool ShellyGen2Outlet::rpcPost(const char* jsonBody) {
     return false;
 }
 
+// Ws.GetConfig — who does this plug currently push to?
+//
+// The ownership authority (RFC §8). Read before any Ws.SetConfig: repointing a
+// plug that belongs to another controller is silent theft, and the previous
+// owner just stops hearing that its tool started.
+bool ShellyGen2Outlet::readPushConfig(String& outServer, bool& outEnabled, uint32_t timeoutMs) {
+    outServer = "";
+    outEnabled = false;
+    if (_ip[0] == '\0' && !reresolve()) return false;
+
+    char url[80];
+    snprintf(url, sizeof(url), "http://%s/rpc/Ws.GetConfig", _ip);
+
+    HTTPClient http;
+    http.begin(url);
+    http.setTimeout(timeoutMs);
+    const int code = http.GET();
+    const String body = (code > 0) ? http.getString() : String();
+    http.end();
+
+    if (code != 200) {
+        DEBUG_PRINT(F("[Outlets] Ws.GetConfig ")); DEBUG_PRINT(_ip);
+        DEBUG_PRINT(F(" -> HTTP ")); DEBUG_PRINTLN(code);
+        return false;
+    }
+
+    StaticJsonDocument<64> filter;
+    filter["server"] = true;
+    filter["enable"] = true;
+    StaticJsonDocument<192> doc;
+    if (deserializeJson(doc, body, DeserializationOption::Filter(filter))) {
+        DEBUG_PRINT(F("[Outlets] Ws.GetConfig ")); DEBUG_PRINT(_ip);
+        DEBUG_PRINT(F(" -> unparseable: ")); DEBUG_PRINTLN(body);
+        return false;
+    }
+    outServer  = doc["server"] | "";
+    outEnabled = doc["enable"] | false;
+    return true;
+}
+
 // Ws.SetConfig — tell the plug to open (and keep) an outbound WebSocket to us,
 // so it pushes status changes instead of us polling it.
+//
+// CALLERS: check plugclaim::decide(...).mayRepoint FIRST. This function is the
+// theft; the policy that stops it lives in outlets/PlugClaim.h.
 bool ShellyGen2Outlet::configureOutboundWs(const char* wsUrl) {
     char body[192];
     snprintf(body, sizeof(body),

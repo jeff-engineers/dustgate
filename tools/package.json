@@ -1,12 +1,12 @@
 {
   "name": "dustgate-tools",
   "version": "1.0.0",
-  "description": "Dev tools for DustGate — mock API server and provisioning utilities",
+  "description": "Dev tools for DustGate \u2014 mock API server and provisioning utilities",
   "scripts": {
     "mock": "node mock-api.js",
     "conformance": "node ../shared/device-model/conformance.js",
     "conformance:ci": "node mock-api.js & MOCK_PID=$!; sleep 2; node ../shared/device-model/conformance.js; RC=$?; kill $MOCK_PID; exit $RC",
-    "model:test": "node ../shared/device-model/topology.test.js && node ../shared/device-model/shop.test.js && node ../shared/device-model/nodelink.test.js",
+    "model:test": "node ../shared/device-model/topology.test.js && node ../shared/device-model/shop.test.js && node ../shared/device-model/nodelink.test.js && node ../shared/device-model/plug-claim.test.js",
     "shop:test": "node ../shared/device-model/shop.test.js",
     "nodelink:test": "node ../shared/device-model/nodelink.test.js",
     "node:mock": "node mock-node.js",
@@ -19,7 +19,9 @@
     "firmware:nodebus:test": "cd .. && c++ -std=c++17 -I \"$(dirname \"$(find .pio.nosync/libdeps -path '*/ArduinoJson/src/ArduinoJson.h' | head -1)\")\" firmware/test/test_nodebus.cpp -o /tmp/dustgate-nbtest && /tmp/dustgate-nbtest firmware/test/fixtures/",
     "firmware:shop:test": "cd .. && c++ -std=c++17 -I \"$(dirname \"$(find .pio.nosync/libdeps -path '*/ArduinoJson/src/ArduinoJson.h' | head -1)\")\" firmware/test/test_shop.cpp -o /tmp/dustgate-shoptest && /tmp/dustgate-shoptest firmware/test/fixtures/",
     "firmware:faults:test": "cd .. && c++ -std=c++17 firmware/test/test_faults.cpp -o /tmp/dustgate-faulttest && /tmp/dustgate-faulttest",
-    "firmware:test": "npm run firmware:router:test && npm run firmware:controller:test && npm run firmware:nodebus:test && npm run firmware:shop:test && npm run firmware:faults:test"
+    "firmware:test": "npm run firmware:router:test && npm run firmware:controller:test && npm run firmware:nodebus:test && npm run firmware:shop:test && npm run firmware:faults:test && npm run firmware:plugclaim:test",
+    "plugclaim:test": "node ../shared/device-model/plug-claim.test.js",
+    "firmware:plugclaim:test": "cd .. && c++ -std=c++17 firmware/test/test_plugclaim.cpp -o /tmp/dustgate-pctest && /tmp/dustgate-pctest"
   },
   "dependencies": {
     "dotenv": "^16.4.5",

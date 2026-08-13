@@ -289,6 +289,7 @@ static const int SERVO_PINS[SERVO_COUNT] = { SERVO_PWM_PIN_1, SERVO_PWM_PIN_2, S
   #include "utils/MdnsQuery.h"
   #include "outlets/ShellyGen2Outlet.h"
   #include "outlets/ShellyDeviceName.h"
+  #include "outlets/PlugClaim.h"        // RFC §8 — who owns a plug (discovery reports it)
 #elif defined(CONTROL_SERIAL_DEBUG)
   #include "control/SerialDebugControl.h"
   SerialDebugControl control;
@@ -1736,13 +1737,44 @@ void loop() {
                 DEBUG_PRINT(F(" name="));
                 DEBUG_PRINTLN(devName.length() ? devName : String("(none set)"));
 
+                // WHO OWNS IT (RFC §8). Asked here, at discovery, because this
+                // is the list someone picks from — a plug that belongs to
+                // another brain has to arrive already labelled, not fail
+                // mysteriously after being chosen.
+                String wsServer; bool wsEnabled = false;
+                const bool claimKnown = ok && probe.readPushConfig(wsServer, wsEnabled);
+                plugclaim::Claim claim;
+                if (claimKnown) {
+                    claim = plugclaim::decide(wsServer.c_str(), wsEnabled,
+                                              control.ourHost(), devName.c_str(),
+                                              control.ourName());
+                }
+
                 JsonObject o = results.createNestedObject();
                 o["ip"]        = ip;
                 o["hostname"]  = host;
-                o["name"]      = devName;   // app-assigned Shelly device name, "" if unset
+                // The name with any "· owner" suffix stripped: the suffix is our
+                // bookkeeping and would otherwise show up in the picker as part
+                // of the tool's name, then get saved back and doubled.
+                o["name"]      = claimKnown ? String(claim.label.c_str()) : devName;
                 o["reachable"] = ok;
                 o["powerW"]    = pw;
                 o["gen"]       = ok ? apiGen : 0;
+                if (claimKnown) {
+                    o["claim"]    = plugclaim::stateName(claim.state);
+                    o["owner"]    = claim.owner;
+                    o["holder"]   = claim.holder;
+                    o["pickable"] = claim.pickable;
+                    o["takeable"] = claim.takeable;
+                    if (!claim.reason.empty()) o["claimReason"] = claim.reason;
+                } else {
+                    // "We couldn't ask" is its own answer, and must not read as
+                    // "nobody owns it" — that reading is how a plug gets taken.
+                    o["claim"]    = "unknown";
+                    o["pickable"] = false;
+                    o["takeable"] = false;
+                    o["claimReason"] = "couldn't read its push config";
+                }
             }
             if (hitCount == 0) {
                 DEBUG_PRINTLN(F("  (no Shelly devices on either _shelly._tcp or _http._tcp — check the "
@@ -1780,6 +1812,30 @@ void loop() {
             resp["name"]      = devName;  // app-assigned Shelly device name, "" if unset
             String out; serializeJson(resp, out);
             apiServer.respondPing(out);
+        }
+    }
+
+    // Plug TAKEOVER (RFC §8) — the user was shown what breaks and said yes.
+    //
+    // All this does is set a one-shot approval on the outlet; the actual
+    // Ws.SetConfig happens on the next provisioning pass, through exactly the
+    // same code path as an ordinary plug. There is no second way to repoint a
+    // plug, which is what keeps "never steal" true everywhere else.
+    {
+        char takeIp[40];
+        if (apiServer.consumeTakeoverRequest(takeIp, sizeof(takeIp))) {
+            SmartOutlet* o = control.outletByIp(takeIp);
+            if (!o) {
+                // Pair it first, then take it. Approving a takeover for a plug we
+                // don't have would be an approval with nothing to apply it to.
+                DEBUG_PRINT(F("[TAKEOVER] No configured outlet at ")); DEBUG_PRINT(takeIp);
+                DEBUG_PRINTLN(F(" — pair the plug first."));
+            } else {
+                o->approveTakeover();
+                control.requestProvision();   // don't wait for the next reconcile
+                DEBUG_PRINT(F("[TAKEOVER] Approved for ")); DEBUG_PRINT(takeIp);
+                DEBUG_PRINTLN(F(" — will repoint its push target on the next pass."));
+            }
         }
     }
 #endif // CONTROL_SMART_OUTLET

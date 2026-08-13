@@ -228,6 +228,15 @@ public:
     // main loop; respondPing() replies once the probe is done.
     bool consumePingRequest(char* outIp, size_t ipLen);
     void respondPing(const String& json);
+
+    // Plug TAKEOVER (RFC §8) — POST /api/outlets/takeover {"ip":"..."}.
+    //
+    // Its own endpoint, not a flag on save, and that is the point: taking a plug
+    // away from another controller is a different act from pairing one, breaks
+    // something on a machine the user isn't looking at, and must be impossible
+    // to do by accident. Nothing else in the firmware can set the approval this
+    // records — see SmartOutlet::approveTakeover().
+    bool consumeTakeoverRequest(char* outIp, size_t ipLen);
 #endif
 
     // Expose the API key for the front-end / serial display
@@ -327,6 +336,8 @@ private:
     bool            _pingPending;
     AsyncWebServerRequest* _pingReq;
     char            _pingIp[40];
+    bool            _takeoverPending;
+    char            _takeoverIp[40];
 #endif
 
     // Helpers

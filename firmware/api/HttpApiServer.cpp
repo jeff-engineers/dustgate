@@ -119,12 +119,14 @@ HttpApiServer::HttpApiServer()
       _dcDeletePending(false),
       _dcSwitchPending(false), _dcSwitchOn(false),
       _discoverPending(false), _discoverReq(nullptr),
-      _pingPending(false), _pingReq(nullptr)
+      _pingPending(false), _pingReq(nullptr),
+      _takeoverPending(false)
 #endif
 {
     _calModel[0] = '\0';
 #ifdef CONTROL_SMART_OUTLET
     _pingIp[0] = '\0';
+    _takeoverIp[0] = '\0';
 #endif
 }
 
@@ -466,6 +468,14 @@ bool HttpApiServer::consumeServoJogRequest(int& outChannel, int& outAngle, bool&
         outController = _servoJogController;
         _servoJogPending = false;
     }
+    xSemaphoreGive(_mutex);
+    return v;
+}
+
+bool HttpApiServer::consumeTakeoverRequest(char* outIp, size_t ipLen) {
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    bool v = _takeoverPending;
+    if (v) { strlcpy(outIp, _takeoverIp, ipLen); _takeoverPending = false; }
     xSemaphoreGive(_mutex);
     return v;
 }
@@ -1367,6 +1377,38 @@ void HttpApiServer::registerRoutes() {
             strlcpy(_pingIp, ip, sizeof(_pingIp));
             xSemaphoreGive(_mutex);
             // response sent later by the main loop via respondPing()
+        }
+    );
+
+    // ------------------------------------------------------------------
+    // POST /api/outlets/takeover   body: {"ip":"10.0.0.7"}
+    //
+    // Take a plug that currently pushes to ANOTHER controller (RFC §8). The
+    // deliberate, rare act — never a side effect of pairing, which is why it is
+    // its own endpoint rather than a flag on /api/outlets/save: a background
+    // provisioning pass has no way to reach this code, so silent theft is
+    // structurally impossible rather than merely avoided.
+    //
+    // The UI must have shown the user what stops working (plug-claim.js
+    // takeoverWarning) before calling this. The device can't verify that, but it
+    // can guarantee nothing takes a plug WITHOUT a deliberate call.
+    // ------------------------------------------------------------------
+    _server.on("/api/outlets/takeover", HTTP_POST,
+        [](AsyncWebServerRequest* req) {},
+        nullptr,
+        [this](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t, size_t) {
+            if (!checkAuth(req)) return;
+            StaticJsonDocument<128> doc;
+            if (deserializeJson(doc, data, len)) { sendError(req, 400, "invalid JSON"); return; }
+            const char* ip = doc["ip"] | "";
+            if (strlen(ip) == 0) { sendError(req, 400, "missing 'ip'"); return; }
+
+            xSemaphoreTake(_mutex, portMAX_DELAY);
+            _takeoverPending = true;
+            strlcpy(_takeoverIp, ip, sizeof(_takeoverIp));
+            xSemaphoreGive(_mutex);
+            DEBUG_PRINT(F("[UI] Takeover approved for plug ")); DEBUG_PRINTLN(ip);
+            sendOk(req);
         }
     );
 

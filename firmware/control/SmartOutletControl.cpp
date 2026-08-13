@@ -9,6 +9,8 @@
 #include <WiFi.h>  // for WiFi.status() check in begin()
 #include "../outlets/ShellyGen2Outlet.h"
 #include "../outlets/OutletConfig.h"
+#include "../outlets/PlugClaim.h"        // who owns a plug, and what we may do to it
+#include "../utils/WiFiConfig.h"         // getHostname() — the owner we write into names
 
 // =============================================================================
 // Construction / destruction
@@ -35,7 +37,9 @@ SmartOutletControl::SmartOutletControl()
     memset(_dcSynced, 0, sizeof(_dcSynced));
     memset(_dcManualOverride, 0, sizeof(_dcManualOverride));
     memset(_dcManualState, 0, sizeof(_dcManualState));
-    _wsUrl[0] = '\0';
+    _wsUrl[0]   = '\0';
+    _ourHost[0] = '\0';
+    _ourName[0] = '\0';
 }
 
 SmartOutletControl::~SmartOutletControl() {
@@ -72,7 +76,10 @@ bool SmartOutletControl::begin() {
     snprintf(_wsUrl, sizeof(_wsUrl), "ws://%s:%d/shelly-rpc",
              WiFi.localIP().toString().c_str(), API_PORT);
     _lastLocalIp = (uint32_t)WiFi.localIP();
+    strlcpy(_ourHost, WiFi.localIP().toString().c_str(), sizeof(_ourHost));
+    strlcpy(_ourName, WiFiProvisioner::getHostname().c_str(), sizeof(_ourName));
     DEBUG_PRINT(F("[Outlets] Push endpoint for plugs: ")); DEBUG_PRINTLN(_wsUrl);
+    DEBUG_PRINT(F("[Outlets] Plug owner name: ")); DEBUG_PRINTLN(_ourName);
 
     // Load outlet mappings from NVS
     OutletEntry entries[SMART_OUTLET_COUNT];
@@ -168,6 +175,10 @@ void SmartOutletControl::checkLocalIpChange() {
     _lastLocalIp = ip;
     snprintf(_wsUrl, sizeof(_wsUrl), "ws://%s:%d/shelly-rpc",
              WiFi.localIP().toString().c_str(), API_PORT);
+    // Ownership is compared against this, so it moves with the URL. Without it a
+    // plug we own would read as "pointed at a stranger" after a lease change and
+    // we would refuse to re-provision our own plug.
+    strlcpy(_ourHost, WiFi.localIP().toString().c_str(), sizeof(_ourHost));
     DEBUG_PRINT(F("[Outlets] Local IP changed — new push endpoint: ")); DEBUG_PRINTLN(_wsUrl);
     for (int i = 0; i < _count; i++) {
         if (!_outlets[i]) continue;
@@ -359,6 +370,11 @@ bool SmartOutletControl::provisionPushOutlets() {
         // separate problem that re-sending config won't fix.
         if (o->isPushConnected() || o->isProvisioned()) continue;
 
+        // ...and skip, permanently, anything that belongs to someone else. A
+        // poll-only plug is paired and working; it just never gets its Ws config
+        // rewritten. Checked before the probe so a shared plug costs nothing.
+        if (o->isPollOnly()) continue;
+
         // Reachability probe before the slow flash-writing SetConfig POSTs. Uses
         // a generous timeout (not the 400ms poll timeout) so a marginal plug gets
         // a fair chance to answer here; if it still can't, don't hammer it with
@@ -368,11 +384,63 @@ bool SmartOutletControl::provisionPushOutlets() {
         DEBUG_PRINT(F(" reachable(GetStatus)=")); DEBUG_PRINTLN(reachable ? F("yes") : F("no"));
         if (!reachable) { pending = true; continue; }
 
+        // ── WHO OWNS THIS PLUG? (RFC §8) ────────────────────────────────────
+        // Ask before writing. Ws.SetConfig is silent theft when the answer is
+        // "someone else": the previous owner stops hearing that its tool
+        // started, with no error on either side.
+        //
+        // A FAILED READ IS NOT PERMISSION. If the plug won't answer Ws.GetConfig
+        // we leave it alone and retry next pass — "I couldn't tell" must never
+        // collapse into "so I took it".
+        String server; bool wsEnabled = false;
+        if (!o->readPushConfig(server, wsEnabled)) {
+            DEBUG_PRINT(F("[Outlets] ")); DEBUG_PRINT(o->ip());
+            DEBUG_PRINTLN(F(" — couldn't read Ws config; leaving it alone, will retry."));
+            pending = true;
+            continue;
+        }
+
+        const plugclaim::Claim claim = plugclaim::decide(
+            server.c_str(), wsEnabled, _ourHost, o->name() ? o->name() : "", _ourName);
+
+        // The `confirmed` argument is the user's explicit takeover approval and
+        // comes from exactly one place: POST /api/outlets/takeover. This is a
+        // background pass, so it can only ever pass what the user already said.
+        if (!plugclaim::mayRepoint(claim, o->takeoverApproved())) {
+            // Paired READ-ONLY. Polling gets us the wattage, which is the whole
+            // job of a sensor plug, so this is a working pairing and not a
+            // failure — hence no `pending`, and no retry.
+            o->setPollOnly(true);
+            DEBUG_PRINT(F("[Outlets] ")); DEBUG_PRINT(o->ip());
+            DEBUG_PRINT(F(" is ")); DEBUG_PRINT(plugclaim::stateName(claim.state));
+            DEBUG_PRINT(F(" (")); DEBUG_PRINT(claim.reason.c_str());
+            DEBUG_PRINTLN(F(") — polling it, NOT repointing its push target."));
+            continue;
+        }
+        if (o->takeoverApproved() && claim.takeable) {
+            // Say it in the log, loudly and once. A takeover is the one thing
+            // here that breaks something on another machine, and the serial log
+            // is where anyone debugging THAT machine will end up looking.
+            DEBUG_PRINT(F("[Outlets] TAKEOVER (user-confirmed) of ")); DEBUG_PRINT(o->ip());
+            DEBUG_PRINT(F(" from ")); DEBUG_PRINT(claim.holder.c_str());
+            DEBUG_PRINT(F(" — previous push target: ")); DEBUG_PRINTLN(server);
+            o->setPreviousPushUrl(server.c_str());   // so unpairing can hand it back
+        }
+        o->setPollOnly(false);
+
         // Name FIRST, while the plug is idle. Doing Ws.SetConfig first makes the
         // plug (re)open its outbound WebSocket, and the immediately-following
         // name write was landing while it was busy — so set the name, let it
         // settle, then point its push connection at us.
-        if (strlen(o->name()) > 0) { o->setName(o->name()); delay(150); }
+        //
+        // The name carries the owner for HUMANS: in the Shelly app there is no
+        // DustGate UI to explain why a plug is spoken for, so it says so itself.
+        if (strlen(o->name()) > 0) {
+            std::string label, owner;
+            plugclaim::parseName(o->name(), label, owner);   // never double-suffix
+            o->setName(plugclaim::formatName(label, _ourHost).c_str());
+            delay(150);
+        }
         if (o->configureOutboundWs(_wsUrl)) o->setProvisioned(true);
         else                                pending = true;
         delay(50);

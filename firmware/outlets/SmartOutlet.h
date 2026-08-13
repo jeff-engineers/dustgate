@@ -103,6 +103,36 @@ public:
     virtual bool configureOutboundWs(const char* /*wsUrl*/) { return false; }
     virtual bool setName(const char* /*name*/)              { return false; }
 
+    // Read the plug's current push target (Ws.GetConfig) — the ownership
+    // authority of RFC §8. Base returns false, meaning "don't know", which
+    // callers must treat as "don't touch it".
+    virtual bool readPushConfig(String& /*outServer*/, bool& /*outEnabled*/,
+                                uint32_t /*timeoutMs*/ = 0) { return false; }
+
+    // POLL-ONLY: this plug belongs to someone else (Home Assistant, another
+    // brain), so we read its wattage and never rewrite its Ws config. Set from
+    // the claim at provisioning time; keeps the poll task from "helpfully"
+    // re-provisioning it on the next pass.
+    void setPollOnly(bool p) { _pollOnly = p; }
+    bool isPollOnly() const  { return _pollOnly; }
+
+    // TAKEOVER: the user was shown what breaks and said yes (RFC §8). Set only
+    // by POST /api/outlets/takeover — never by any automatic path, which is what
+    // keeps a background pass from ever stealing a plug.
+    //
+    // Deliberately NOT persisted: a successful takeover rewrites the plug's own
+    // Ws config, so after it lands the plug reads as ours and the approval has
+    // nothing left to authorize. If it fails and the board reboots first, the
+    // user is asked again — which is the right way for a destructive
+    // confirmation to expire.
+    void approveTakeover()        { _takeoverApproved = true; _pollOnly = false; }
+    bool takeoverApproved() const { return _takeoverApproved; }
+
+    // Who this plug pushed to before we took it, so unpairing can hand it back
+    // rather than leaving the other controller permanently deaf.
+    void setPreviousPushUrl(const char* url) { strlcpy(_prevPushUrl, url ? url : "", sizeof(_prevPushUrl)); }
+    const char* previousPushUrl() const      { return _prevPushUrl; }
+
 protected:
     float _lastPowerW   = 0.0f;
     float _thresholdW   = 5.0f;
@@ -110,5 +140,8 @@ protected:
     bool  _reachable    = false;
     bool  _pushConnected = false;
     bool  _wsProvisioned = false;
+    bool  _pollOnly      = false;
+    bool  _takeoverApproved = false;
+    char  _prevPushUrl[64]  = "";
     char  _host[40]     = "";
 };
