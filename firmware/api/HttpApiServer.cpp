@@ -530,14 +530,17 @@ bool HttpApiServer::consumeToolManualRequest(String& outToolId, bool& outOn) {
     return v;
 }
 
-bool HttpApiServer::consumeNodePairRequest(String& outHost, String& outName, bool& outRemove) {
+bool HttpApiServer::consumeNodePairRequest(String& outHost, String& outName, bool& outRemove,
+                                           bool& outTakeover) {
     xSemaphoreTake(_mutex, portMAX_DELAY);
     bool v = _nodePairPending;
     if (v) {
         outHost   = _nodePairHost;
         outName   = _nodePairName;
         outRemove = _nodePairRemove;
-        _nodePairPending = false;
+        outTakeover = _nodePairTakeover;
+        _nodePairPending  = false;
+        _nodePairTakeover = false;
     }
     xSemaphoreGive(_mutex);
     return v;
@@ -1049,6 +1052,11 @@ void HttpApiServer::registerRoutes() {
             _nodePairHost   = host;
             _nodePairName   = doc["name"] | "";   // optional; re-pairing renames
             _nodePairRemove = doc["remove"] | false;
+            // TAKEOVER: adopt a node that another primary owns. The UI must have
+            // named that primary and said what stops working first — same
+            // contract as POST /api/outlets/takeover, and the same reason it is
+            // an explicit flag rather than an automatic retry.
+            _nodePairTakeover = doc["takeover"] | false;
             _nodePairPending = true;
             xSemaphoreGive(_mutex);
             // The registry write and the redial happen on the main loop: dialling

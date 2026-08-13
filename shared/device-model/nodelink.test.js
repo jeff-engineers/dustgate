@@ -108,6 +108,50 @@ const eq = (name, got, want) =>
         NL.validateFrame({ t: 'WELCOME', v: NL.NODELINK_VERSION, nodeId: 'n', board: 'b' }, 's2p').length > 0);
 }
 
+// ── the claim: a node belongs to ONE primary ────────────────────────────────
+//
+// Before this, a node drove whatever primary connected most recently, so a
+// bench brain and a shop brain could both command the same servos with neither
+// told. Same silent-theft shape as an unclaimed smart plug (RFC §8), worse
+// consequences: a gate that contradicts the routing of both shops.
+{
+  const h = NL.hello('dustgate-shop', 'node-1');
+  eq('HELLO carries the claim', h.primaryId, 'dustgate-shop');
+  check('and no takeover by default', h.takeover === undefined);
+  eq('a plain HELLO validates', NL.validateFrame(h, 'p2s'), []);
+
+  const t = NL.hello('dustgate-bench', 'node-1', true);
+  check('takeover is explicit when asked for', t.takeover === true);
+  eq('and still validates', NL.validateFrame(t, 'p2s'), []);
+  eq('a non-boolean takeover is refused',
+     NL.validateFrame({ ...h, takeover: 'yes' }, 'p2s').length, 1);
+}
+{
+  const caps = { servos: 4, linear: 0 };
+  const accepted = NL.welcome('node-1', 'qtpy_s3', '1.0.0', caps, 'dustgate-shop');
+  check('an accepted WELCOME says who owns the node', accepted.claimedBy === 'dustgate-shop');
+  check('and carries no refusal', accepted.accepted === undefined);
+  check('welcomeAccepted reads it as yes', NL.welcomeAccepted(accepted));
+  eq('valid', NL.validateFrame(accepted, 's2p'), []);
+
+  const refused = NL.welcome('node-1', 'qtpy_s3', '1.0.0', caps, 'dustgate-shop', false);
+  check('a refusal is explicit', refused.accepted === false);
+  check('welcomeAccepted reads it as no', !NL.welcomeAccepted(refused));
+  eq('valid', NL.validateFrame(refused, 's2p'), []);
+
+  // A refusal that doesn't name the owner is unactionable: the UI can only
+  // offer a takeover if it can say what that takeover would break.
+  const anon = { ...refused }; delete anon.claimedBy;
+  check('a refusal MUST name the owner', NL.validateFrame(anon, 's2p').length === 1,
+        JSON.stringify(NL.validateFrame(anon, 's2p')));
+
+  // The safe reading is the default: a node built before claims answers with
+  // neither field, and its silence must mean "yes", not "maybe".
+  const legacy = { t: 'WELCOME', v: NL.NODELINK_VERSION, nodeId: 'n', board: 'b', fw: '1', caps };
+  check('a legacy WELCOME is accepted', NL.welcomeAccepted(legacy));
+  eq('and still validates', NL.validateFrame(legacy, 's2p'), []);
+}
+
 // ── timing constants match the firmware (control/NodeLink.h) ────────────────
 {
   eq('PING_INTERVAL_MS', NL.PING_INTERVAL_MS, 2000);

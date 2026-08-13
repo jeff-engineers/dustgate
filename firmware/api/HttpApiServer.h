@@ -168,7 +168,9 @@ public:
 
     // True once after POST /api/nodes/pair. The main loop owns the registry
     // write and the redial — see the route for why.
-    bool consumeNodePairRequest(String& outHost, String& outName, bool& outRemove);
+    // outTakeover = the user confirmed taking this node from another primary.
+    bool consumeNodePairRequest(String& outHost, String& outName, bool& outRemove,
+                                bool& outTakeover);
 
     // Manual tool switch from the Live view (POST /api/tool). Consumed on the
     // main loop, which owns the routing brain.
@@ -321,6 +323,8 @@ private:
     String                 _toolManualId;
     bool                   _toolManualOn = false;
     bool                   _nodePairRemove = false;
+    // User-confirmed: adopt a node that another primary owns (RFC §8 for boards).
+    bool                   _nodePairTakeover = false;
 
 #ifdef CONTROL_SMART_OUTLET
     bool            _outletConfigPending;

@@ -188,7 +188,12 @@ void RemoteActuatorBus::onEvent(WStype_t type, uint8_t* payload, size_t len) {
             // Socket is up but the node hasn't identified itself yet — stay
             // offline until WELCOME lands so we never command an unknown board.
             StaticJsonDocument<192> doc;
-            nodelink::buildHello(doc.to<JsonObject>(), _primaryId, _nodeId);
+            // The HELLO carries our claim. `_takeover` is one-shot and only ever
+            // set by an explicit user action (see requestTakeover), so a
+            // reconnect loop can never escalate itself into a theft.
+            bool takeover = _takeover;
+            _takeover = false;
+            nodelink::buildHello(doc.to<JsonObject>(), _primaryId, _nodeId, takeover);
             String s; serializeJson(doc, s);
             _ws.sendTXT(s);
             break;
@@ -256,6 +261,21 @@ void RemoteActuatorBus::handleFrame(const char* json, size_t len) {
         nodelink::strlcpy_(_fw,    f["fw"]    | "", sizeof(_fw));
         _capServos = f["caps"]["servos"] | 0;
         _capLinear = f["caps"]["linear"] | 0;
+
+        // Did it accept our claim? A refusal leaves us OFFLINE rather than
+        // half-connected: every caller already treats offline as "don't command
+        // this board", which is exactly the required behaviour, and the socket
+        // stays open so the user can be told who owns it.
+        if (!nodelink::welcomeAccepted(f)) {
+            nodelink::strlcpy_(_refusedBy, f["claimedBy"] | "another primary", sizeof(_refusedBy));
+            _connected = false;
+            xSemaphoreGive(_mutex);
+            DEBUG_PRINT(F("[NODE] ")); DEBUG_PRINT(_nodeId);
+            DEBUG_PRINT(F(" REFUSED us — it belongs to ")); DEBUG_PRINTLN(_refusedBy);
+            DEBUG_PRINTLN(F("       Take it over from the boards screen if that is what you want."));
+            return;
+        }
+        _refusedBy[0] = '\0';
         _connected = true;
     } else if (strcmp(t, "ACK") == 0) {
         bool ok = f["ok"] | false;

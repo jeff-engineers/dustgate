@@ -64,6 +64,19 @@ const server = http.createServer((req, res) => {
 
 const wss = new WebSocketServer({ server, path: '/nodelink' });
 
+// THE CLAIM (nodelink.js hello / welcome). A node belongs to one primary; the
+// first to complete a handshake owns it, and only a user-confirmed takeover
+// moves ownership. The real node persists this in NVS; the mock keeps it in
+// memory, which is the one difference and is stated in the log at startup.
+//
+// DUSTGATE_NODE_OWNER pre-claims the node, so the conformance suite (and anyone
+// on the bench) can reproduce "this board already belongs to someone else"
+// without needing a second primary running.
+let owner = process.env.DUSTGATE_NODE_OWNER || '';
+// Which socket passed the handshake as the owner. Holding a connection is not
+// permission — an accepted WELCOME is.
+let ownerSocket = null;
+
 wss.on('connection', (ws) => {
   console.log('[NODE] Primary connected.');
 
@@ -80,13 +93,40 @@ wss.on('connection', (ws) => {
         ws.close();
         return;
       }
-      send(ws, NL.welcome(NODE_ID, BOARD, FW, { servos: SERVO_COUNT, linear: 0 }));
+      const asker = f.primaryId || '';
+      let accepted = true;
+      if (!owner) {
+        owner = asker;
+        console.log(`[NODE] Adopted by ${asker}.`);
+      } else if (owner === asker) {
+        // ordinary reconnect
+      } else if (f.takeover) {
+        console.log(`[NODE] TAKEOVER (user-confirmed): ${owner} -> ${asker}`);
+        owner = asker;
+      } else {
+        accepted = false;
+        console.log(`[NODE] REFUSED ${asker} — this node belongs to ${owner}.`);
+      }
+      if (accepted) ownerSocket = ws;
+      // The socket stays OPEN on a refusal: the refused primary has to read
+      // claimedBy to tell its user who holds the board, and a closed socket is
+      // indistinguishable from a node that is simply offline.
+      send(ws, NL.welcome(NODE_ID, BOARD, FW, { servos: SERVO_COUNT, linear: 0 },
+                          owner, accepted));
       return;
     }
 
     if (f.t === 'PING') { send(ws, NL.pong()); return; }
 
     if (f.t === 'SET') {
+      // An accepted WELCOME is what earns the right to command — not merely
+      // having a socket open. Checked per SET, since that is the frame that
+      // moves a real valve.
+      if (ws !== ownerSocket) {
+        console.log(`[NODE] SET REFUSED — not the owner (${owner}).`);
+        send(ws, NL.ack(f.seq ?? 0, false, 'not the owner of this node'));
+        return;
+      }
       // Validate through the SHARED validator — the same rules the firmware's
       // parseSetFrame() enforces. A node moves only when told exactly where.
       const errs = NL.validateFrame(f, 'p2s');

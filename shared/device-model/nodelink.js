@@ -48,8 +48,10 @@ const RECONNECT_MAX_MS = 15000;
  * @typedef {Object} HelloFrame     P→S, first frame after the socket opens.
  * @property {'HELLO'} t
  * @property {number}  v            NODELINK_VERSION
- * @property {string}  primaryId    controllerId of the primary
+ * @property {string}  primaryId    controllerId of the primary — ALSO THE CLAIM
  * @property {string}  nodeId       controllerId the primary believes this node is
+ * @property {boolean}[takeover]    take this node from its current owner. User-
+ *                                  confirmed only; see the claim note below.
  *
  * @typedef {Object} WelcomeFrame   S→P, the answer to HELLO.
  * @property {'WELCOME'} t
@@ -58,6 +60,9 @@ const RECONNECT_MAX_MS = 15000;
  * @property {string}  board        build target ("devkitc", "qtpy_c3", …)
  * @property {string}  fw           firmware version string
  * @property {{servos:number, linear:number}} caps   actuator budget on this board
+ * @property {string} [claimedBy]   the primary this node belongs to
+ * @property {boolean}[accepted]    false = you are NOT my owner; SETs will be
+ *                                  refused. Absent means accepted (legacy).
  *
  * @typedef {Object} SetFrame       P→S, move one actuator. Already resolved.
  * @property {'SET'}   t
@@ -84,8 +89,27 @@ const RECONNECT_MAX_MS = 15000;
  */
 
 /** Frames the primary sends. */
-function hello(primaryId, nodeId) {
-  return { t: 'HELLO', v: NODELINK_VERSION, primaryId, nodeId };
+/**
+ * HELLO — and, with it, a CLAIM.
+ *
+ * A node belongs to ONE primary (RFC §8's rule, applied to boards instead of
+ * plugs). Before this, a node pointed its "linked client" at whichever primary
+ * connected most recently, so a bench brain and a shop brain could both hold
+ * sockets and both drive the same servos, with neither told. Same silent-theft
+ * shape as an unclaimed smart plug, and worse consequences: two brains fighting
+ * over one valve is a gate that contradicts the routing of both shops.
+ *
+ * FIRST COMPLETED HANDSHAKE WINS, and the node persists that owner, so the
+ * claim survives a reboot rather than being re-raced on every power cut.
+ *
+ * @param {boolean} [takeover]  user-confirmed takeover. NEVER set this
+ *   automatically: a primary that retries with `takeover` on refusal would
+ *   reduce the whole claim to "whoever asks twice", which is no claim at all.
+ */
+function hello(primaryId, nodeId, takeover = false) {
+  const f = { t: 'HELLO', v: NODELINK_VERSION, primaryId, nodeId };
+  if (takeover) f.takeover = true;
+  return f;
 }
 function ping() {
   return { t: 'PING' };
@@ -122,10 +146,31 @@ function set(seq, sel, stateId, realization) {
   return f;
 }
 
-/** Frames the secondary sends. */
-function welcome(nodeId, board, fw, caps) {
-  return { t: 'WELCOME', v: NODELINK_VERSION, nodeId, board, fw, caps };
+/**
+ * Frames the secondary sends.
+ *
+ * @param {string} [claimedBy]  the primary that owns this node
+ * @param {boolean} [accepted]  false when the asker is NOT the owner. The
+ *   socket is deliberately left OPEN on a refusal: the primary needs to read
+ *   `claimedBy` to tell its user who has the board, and a closed socket would
+ *   look identical to a node that is simply offline.
+ */
+function welcome(nodeId, board, fw, caps, claimedBy, accepted = true) {
+  const f = { t: 'WELCOME', v: NODELINK_VERSION, nodeId, board, fw, caps };
+  if (claimedBy) f.claimedBy = claimedBy;
+  if (!accepted) f.accepted = false;
+  return f;
 }
+
+/**
+ * Does this WELCOME say we may drive the node?
+ *
+ * Absent `accepted` means yes — a node built before claims answers exactly as
+ * it always did, and an old primary talking to a new node reads the refusal it
+ * cannot understand as... a refusal, because `accepted:false` is present. The
+ * asymmetry is deliberate: the safe reading is the default one.
+ */
+const welcomeAccepted = (f) => !!f && f.accepted !== false;
 function ack(seq, ok, err) {
   const f = { t: 'ACK', seq, ok: !!ok };
   if (err) f.err = err;
@@ -166,12 +211,26 @@ function validateFrame(f, direction) {
     case 'HELLO':
       if (f.v !== NODELINK_VERSION) errs.push(`HELLO.v ${f.v} != ${NODELINK_VERSION}`);
       str('primaryId'); str('nodeId');
+      if (f.takeover !== undefined && typeof f.takeover !== 'boolean') {
+        errs.push('HELLO.takeover must be a boolean');
+      }
       break;
     case 'WELCOME':
       if (f.v !== NODELINK_VERSION) errs.push(`WELCOME.v ${f.v} != ${NODELINK_VERSION}`);
       str('nodeId'); str('board');
       if (!f.caps || typeof f.caps.servos !== 'number' || typeof f.caps.linear !== 'number') {
         errs.push('WELCOME.caps must be {servos:number, linear:number}');
+      }
+      if (f.claimedBy !== undefined && typeof f.claimedBy !== 'string') {
+        errs.push('WELCOME.claimedBy must be a string');
+      }
+      if (f.accepted !== undefined && typeof f.accepted !== 'boolean') {
+        errs.push('WELCOME.accepted must be a boolean');
+      }
+      // A refusal that doesn't say who has the board is unactionable: the UI
+      // can only offer a takeover if it can name what it would break.
+      if (f.accepted === false && !f.claimedBy) {
+        errs.push('WELCOME.accepted=false requires claimedBy');
       }
       break;
     case 'SET':
@@ -202,6 +261,6 @@ function validateFrame(f, direction) {
 module.exports = {
   NODELINK_VERSION, P2S, S2P,
   PING_INTERVAL_MS, PONG_TIMEOUT_MS, RECONNECT_MIN_MS, RECONNECT_MAX_MS,
-  hello, welcome, set, ack, state, ping, pong,
+  hello, welcome, set, ack, state, ping, pong, welcomeAccepted,
   validateFrame,
 };

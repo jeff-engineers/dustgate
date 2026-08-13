@@ -222,6 +222,67 @@ async function run() {
     check('fail-safe: gates are commandable again after reconnect', !!settled);
   }
 
+  // ── 6b. THE CLAIM: a node belongs to one primary ────────────────────────
+  //
+  // The conversation this pins is the two-shop one: a bench brain and a shop
+  // brain on the same LAN. Before claims, the second one to connect simply took
+  // the board's servos, with neither told — the frame shapes alone can't catch
+  // that, because every individual frame is perfectly valid.
+  {
+    // 'primary' owns the node by now: it completed the handshake in step 1.
+    const intruder = await connect();
+    intruder.send(NL.hello('dustgate-bench', 'node-under-test'));
+    const w = await intruder.await((f) => f.t === 'WELCOME');
+
+    check('claim: a second primary gets a WELCOME, not silence', !!w);
+    check('claim: ...that refuses it', w?.accepted === false, JSON.stringify(w));
+    check('claim: ...and names the owner so the UI can explain', !!w?.claimedBy,
+      JSON.stringify(w));
+    check('claim: the socket stays OPEN so the refusal is readable',
+      !intruder.isClosed());
+
+    // The load-bearing one: a refused primary cannot move a valve.
+    intruder.send(NL.set(90, gate, 'closed', CLOSED_ANGLE));
+    const ack = await intruder.await((f) => f.t === 'ACK' && f.seq === 90);
+    check('claim: a refused primary\'s SET is REFUSED', ack && ack.ok === false,
+      JSON.stringify(ack));
+    check('claim: ...with a reason worth reading', !!ack?.err, JSON.stringify(ack));
+    const moved = await intruder.await((f) => f.t === 'STATE', 600);
+    check('claim: ...and nothing moved', !moved, JSON.stringify(moved));
+
+    // The owner is unaffected by the intrusion — no lockout, no confusion.
+    c.send(NL.set(91, gate, 'open', OPEN_ANGLE));
+    const ownerAck = await c.await((f) => f.t === 'ACK' && f.seq === 91);
+    check('claim: the OWNER still commands the node', ownerAck?.ok === true,
+      JSON.stringify(ownerAck));
+    await c.await((f) => f.t === 'STATE' && f.moving === false, 2000);
+
+    // Takeover: explicit, user-confirmed, and it actually works — otherwise the
+    // only way to move a board between shops would be a factory reset.
+    intruder.send(NL.hello('dustgate-bench', 'node-under-test', true));
+    const w2 = await intruder.await((f) => f.t === 'WELCOME' && f.accepted !== false);
+    check('takeover: a confirmed HELLO is accepted', !!w2, JSON.stringify(w2));
+    check('takeover: the node now names the new owner', w2?.claimedBy === 'dustgate-bench',
+      JSON.stringify(w2));
+
+    intruder.send(NL.set(92, gate, 'closed', CLOSED_ANGLE));
+    const ack2 = await intruder.await((f) => f.t === 'ACK' && f.seq === 92);
+    check('takeover: the new owner can drive it', ack2?.ok === true, JSON.stringify(ack2));
+    await intruder.await((f) => f.t === 'STATE' && f.moving === false, 2000);
+
+    // ...and the displaced primary is now the one refused. Ownership MOVED
+    // rather than being shared, which is the whole point.
+    c.send(NL.set(93, gate, 'open', OPEN_ANGLE));
+    const ack3 = await c.await((f) => f.t === 'ACK' && f.seq === 93);
+    check('takeover: the displaced primary is refused', ack3?.ok === false,
+      JSON.stringify(ack3));
+
+    // Hand it back so the rest of the suite (and a re-run) starts where it began.
+    c.send(NL.hello('primary', 'node-under-test', true));
+    await c.await((f) => f.t === 'WELCOME' && f.accepted !== false);
+    intruder.ws.close();
+  }
+
   // ── 7. A version mismatch is refused outright ───────────────────────────
   {
     const c2 = await connect();

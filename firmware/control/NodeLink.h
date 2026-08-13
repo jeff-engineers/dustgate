@@ -44,11 +44,19 @@ static const unsigned long kMoveTimeoutMs   = 12000;
 // Primary → secondary
 // -----------------------------------------------------------------------------
 
-inline void buildHello(JsonObject out, const char* primaryId, const char* nodeId) {
+// HELLO — and, with it, a CLAIM. A node belongs to ONE primary; `primaryId` is
+// both our identity and our claim on the board (nodelink.js hello()).
+//
+// `takeover` is a USER-CONFIRMED demand to take the node from its current
+// owner, and must never be set automatically: a primary that retried with
+// takeover after a refusal would reduce the claim to "whoever asks twice".
+inline void buildHello(JsonObject out, const char* primaryId, const char* nodeId,
+                       bool takeover = false) {
     out["t"] = "HELLO";
     out["v"] = kVersion;
     out["primaryId"] = primaryId;
     out["nodeId"]    = nodeId;
+    if (takeover) out["takeover"] = true;
 }
 
 inline void buildPing(JsonObject out) { out["t"] = "PING"; }
@@ -104,8 +112,16 @@ inline bool buildSetFrame(JsonObject out, uint32_t seq, const char* selectorId,
 // where `someString` is scoped tighter than the serialize call yields a frame
 // containing freed heap, not an empty field, so it fails as garbage rather than
 // as an obvious blank. Same applies to buildAck/buildState below.
+// `claimedBy` names the primary that owns this board; `accepted=false` says the
+// asker is not it, and its SETs will be refused.
+//
+// A REFUSAL DOES NOT CLOSE THE SOCKET. The refused primary has to be able to
+// read `claimedBy` to tell its user who holds the board — and a closed socket
+// is indistinguishable from a node that is simply offline, which is the one
+// reading that sends someone hunting for a wiring fault.
 inline void buildWelcome(JsonObject out, const char* nodeId, const char* board,
-                         const char* fw, int servos, int linear) {
+                         const char* fw, int servos, int linear,
+                         const char* claimedBy = nullptr, bool accepted = true) {
     out["t"]      = "WELCOME";
     out["v"]      = kVersion;
     out["nodeId"] = nodeId;
@@ -114,6 +130,15 @@ inline void buildWelcome(JsonObject out, const char* nodeId, const char* board,
     JsonObject caps = out.createNestedObject("caps");
     caps["servos"] = servos;
     caps["linear"] = linear;
+    if (claimedBy && *claimedBy) out["claimedBy"] = claimedBy;
+    if (!accepted) out["accepted"] = false;
+}
+
+// Does this WELCOME say we may drive the node? Absent means yes, so a node
+// built before claims answers exactly as it always did. The safe reading is the
+// default one: only an explicit `accepted:false` refuses.
+inline bool welcomeAccepted(JsonObjectConst w) {
+    return !w.containsKey("accepted") || w["accepted"].as<bool>();
 }
 
 inline void buildAck(JsonObject out, uint32_t seq, bool ok, const char* err = nullptr) {

@@ -46,6 +46,21 @@ public:
     const char* nodeId() const { return _nodeId; }
     const char* host()   const { return _host; }
 
+    // --- claim (RFC §8 applied to boards) ---------------------------------
+    // A node belongs to ONE primary. If it refused us, it stays OFFLINE and
+    // names its owner: refusing to command a board someone else owns is the
+    // whole point, and "offline" is already the state every caller handles.
+    //
+    // refusedBy() is "" until a WELCOME actually refuses us, so a node that is
+    // merely unreachable never reads as someone else's property.
+    const char* refusedBy() const { return _refusedBy; }
+    bool wasRefused() const       { return _refusedBy[0] != '\0'; }
+
+    // Ask for the node even though another primary owns it. USER-CONFIRMED
+    // ONLY — never call this on a refusal, or the claim degrades into "whoever
+    // asks twice". Takes effect on the next connect and is cleared once used.
+    void requestTakeover() { _takeover = true; }
+
     // --- ActuatorBus ------------------------------------------------------
     bool online() const override;
     bool busy()   const override;
@@ -112,6 +127,10 @@ private:
     uint32_t _moveStartedMs   = 0;
     char     _txFrame[320]    = "";   // one pending SET, main loop → WS task
     bool     _txPending       = false;
+    // Set from a WELCOME carrying accepted:false. Read by the API/UI so the user
+    // can be told WHO has the board before being offered a takeover.
+    char     _refusedBy[40] = "";
+    bool     _takeover      = false;   // one-shot, user-confirmed
     char     _board[24]    = "";
     char     _fw[24]       = "";
     int      _capServos    = 0;

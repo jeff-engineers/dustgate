@@ -455,6 +455,13 @@ static topo::NodeRegistry      g_nodeRegistry;
 //
 // Keyed by host throughout. The link neither knows nor cares what a layout calls
 // this board; NodeBus maps controllerId → host when a topology is adopted.
+// Host with a user-confirmed takeover waiting to be sent, or "" for none.
+// Consumed by syncPairedNodes BEFORE the bus dials, because the HELLO that
+// carries the claim goes out on connect — arming after begin() would be a race
+// against the socket, and losing it would silently drop the one thing the user
+// explicitly asked for.
+static String g_pendingTakeoverHost;
+
 static void syncPairedNodes(const char* primaryId) {
     g_nodeBus.clearRemotes();
     for (int i = 0; i < g_remoteCount; i++) g_remoteBuses[i].end();
@@ -464,6 +471,11 @@ static void syncPairedNodes(const char* primaryId) {
         const char* host = g_nodeRegistry.host(i);
         if (!host || !*host) continue;
         topo::RemoteActuatorBus* bus = &g_remoteBuses[g_remoteCount++];
+        if (g_pendingTakeoverHost.length() && g_pendingTakeoverHost == host) {
+            bus->requestTakeover();          // one-shot; cleared as the HELLO is built
+            g_pendingTakeoverHost = "";
+            DEBUG_PRINT(F("[NODE] TAKEOVER armed for ")); DEBUG_PRINTLN(host);
+        }
         bus->begin(host, primaryId, host, 80);
         g_nodeBus.registerRemote(std::string(host), bus);
     }
@@ -1493,13 +1505,20 @@ void loop() {
     // tears sockets down. Independent of the topology by design (NodeRegistry.h).
 #ifdef ENABLE_HTTP_API
     {
-        String pairHost, pairName; bool pairRemove = false;
-        if (apiServer.consumeNodePairRequest(pairHost, pairName, pairRemove)) {
+        String pairHost, pairName; bool pairRemove = false, pairTakeover = false;
+        if (apiServer.consumeNodePairRequest(pairHost, pairName, pairRemove, pairTakeover)) {
             bool changed = pairRemove ? g_nodeRegistry.remove(pairHost.c_str())
                                       : g_nodeRegistry.add(pairHost.c_str(), pairName.c_str());
             DEBUG_PRINT(pairRemove ? F("[NODE] Un-pair ") : F("[NODE] Pair "));
             DEBUG_PRINT(pairHost);
             DEBUG_PRINTLN(changed ? F(" — ok") : F(" — refused (full, or not paired)"));
+
+            // A TAKEOVER rides the NEXT HELLO, so it is recorded here and armed
+            // inside syncPairedNodes() just before that bus dials. One-shot by
+            // construction (RemoteActuatorBus clears it as it sends), so a
+            // reconnect loop can never repeat the claim — the user's
+            // confirmation buys exactly one attempt.
+            if (changed && pairTakeover && !pairRemove) g_pendingTakeoverHost = pairHost;
             if (changed) {
                 syncPairedNodes(WiFiProvisioner::getHostname().c_str());
                 // Re-resolve controllerId→host: a topology naming this board was
@@ -2151,6 +2170,15 @@ void loop() {
                     JsonObject caps = o.createNestedObject("caps");
                     caps["servos"] = n.capServos;
                     caps["linear"] = n.capLinear;
+                    // A node that belongs to ANOTHER primary is offline to us on
+                    // purpose. Without naming its owner here, that is
+                    // indistinguishable from a dead board — and the difference
+                    // decides whether you go looking for a wiring fault or press
+                    // "take it over".
+                    if (g_remoteBuses[i].wasRefused()) {
+                        o["claimedBy"] = g_remoteBuses[i].refusedBy();
+                        o["takeable"]  = true;
+                    }
                 }
                 String nodeBody; serializeJson(nodes, nodeBody);
                 apiServer.publishNodeStatus(nodeBody);

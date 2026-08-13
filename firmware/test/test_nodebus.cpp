@@ -324,6 +324,54 @@ int main(int argc, char** argv) {
     ok("no topology → no moves", local.log.empty());
   }
 
+  // ── the CLAIM frames (nodelink.js hello/welcome) ─────────────────────────
+  //
+  // A node belongs to ONE primary. These pin the frame halves the sketch relies
+  // on; the conversation itself (refusal, takeover, "nothing moved") is pinned
+  // end-to-end by nodelink-conformance.js against the mock node, because the
+  // node firmware is a sketch and can't be host-tested.
+  {
+    {
+      DynamicJsonDocument f(256);
+      topo::nodelink::buildHello(f.to<JsonObject>(), "dustgate-shop", "node-1");
+      ok("HELLO carries the claim", std::string(f["primaryId"] | "") == "dustgate-shop");
+      ok("...and no takeover by default", !f.containsKey("takeover"));
+    }
+    {
+      DynamicJsonDocument f(256);
+      topo::nodelink::buildHello(f.to<JsonObject>(), "dustgate-bench", "node-1", true);
+      ok("HELLO takeover is explicit when asked for", (f["takeover"] | false) == true);
+    }
+    {
+      DynamicJsonDocument f(512);
+      topo::nodelink::buildWelcome(f.to<JsonObject>(), "node-1", "qtpy_s3", "1.0.0", 4, 0,
+                                   "dustgate-shop", /*accepted=*/true);
+      ok("WELCOME names the owner", std::string(f["claimedBy"] | "") == "dustgate-shop");
+      ok("an accepted WELCOME carries no refusal", !f.containsKey("accepted"));
+      ok("welcomeAccepted reads it as yes",
+         topo::nodelink::welcomeAccepted(f.as<JsonObjectConst>()));
+    }
+    {
+      DynamicJsonDocument f(512);
+      topo::nodelink::buildWelcome(f.to<JsonObject>(), "node-1", "qtpy_s3", "1.0.0", 4, 0,
+                                   "dustgate-shop", /*accepted=*/false);
+      ok("a refusal is explicit", (f["accepted"] | true) == false);
+      ok("...and still names who has the board",
+         std::string(f["claimedBy"] | "") == "dustgate-shop");
+      ok("welcomeAccepted reads it as no",
+         !topo::nodelink::welcomeAccepted(f.as<JsonObjectConst>()));
+    }
+    {
+      // The safe reading is the DEFAULT one: a node built before claims answers
+      // with neither field, and its silence must mean "yes", not "maybe".
+      DynamicJsonDocument f(512);
+      deserializeJson(f, R"({"t":"WELCOME","v":1,"nodeId":"n","board":"b","fw":"1",
+                             "caps":{"servos":4,"linear":0}})");
+      ok("a legacy WELCOME is accepted",
+         topo::nodelink::welcomeAccepted(f.as<JsonObjectConst>()));
+    }
+  }
+
   // ── NodeLink frames: the primary resolves, the secondary obeys ───────────
   {
     DynamicJsonDocument tg(16384);

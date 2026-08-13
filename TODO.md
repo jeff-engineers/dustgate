@@ -408,10 +408,30 @@ breaks all three at once.
   `collectorStaggerMs` (collector → next collector), 2 s defaults, both
   configurable. Measure the real gap on the bench: the delay runs from *sensing*,
   so a poll cycle is already spent (RFC §10.1).
-- **Plug claims** — parse/write owner into the plug's friendly name via the
-  existing `Switch.SetConfig` path, read `Ws.GetConfig` as the authority, and
-  **never rewrite another controller's push target** — a shared plug is paired
-  read-only by polling (RFC §8, §13).
+- ~~**Plug claims**~~ **DONE 2026-08-13 (model + firmware), UI PENDING** —
+  `shared/device-model/plug-claim.js` + `firmware/outlets/PlugClaim.h`, four
+  states (ours/unclaimed/dustgate/foreign), 54/54 paired tests each side.
+  `Ws.GetConfig` is read before any write; a plug owned by another controller is
+  paired read-only by polling. Takeover is `POST /api/outlets/takeover` — a
+  separate endpoint precisely so no background pass can reach it.
+  **Still to do: the UI half** — claim state in the picker, and the consequence
+  sentence (`takeoverWarning`) in front of the user before offering takeover.
+
+- ~~**Node claims (multi-primary safety)**~~ **DONE 2026-08-13, UI PENDING** —
+  a node belonged to whichever primary connected LAST, so a bench brain and a
+  shop brain could both drive one servo bank with neither told. Now: HELLO
+  carries `primaryId` as a claim, first completed handshake wins, the owner is
+  persisted in NVS (a claim that evaporated on a power cut would be re-raced at
+  every brownout), and a non-owner's SET is refused per frame. A refusal keeps
+  the socket OPEN and names `claimedBy` — a closed socket is indistinguishable
+  from a dead board. NOT released on disconnect: gates hold on link loss, so
+  releasing would let a neighbour adopt shop hardware during a reboot.
+  Takeover rides one HELLO (`takeover:true`, armed by `POST /api/nodes/pair`
+  with `takeover`), one-shot so a reconnect loop can never escalate itself.
+  `/api/nodes` reports `claimedBy` + `takeable`. The whole two-shop conversation
+  is pinned end-to-end in `nodelink-conformance.js` (33/33) against the mock
+  node. **UI: the boards screen still needs to show "owned by X" + offer the
+  confirmed takeover.**
 - **"WiFi devices" tray** — rename/extend the boards tray to hold secondary
   controllers *and* unclaimed outlets; foreign-owned plugs shown locked with
   their owner named (RFC §9). Mockup: [`docs/mockups/outlet-dock.html`](docs/mockups/outlet-dock.html).

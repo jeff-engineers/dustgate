@@ -40,6 +40,7 @@
 
 #include <ESPAsyncWebServer.h>
 #include <ArduinoJson.h>
+#include <Preferences.h>          // the persisted owner claim — see THE CLAIM below
 #include <ESPmDNS.h>
 #include "../utils/Watchdog.h"
 
@@ -77,6 +78,51 @@ static bool awaitingSettle   = false;
 static volatile bool g_primaryLinked = false;
 static volatile uint32_t g_linkedClientId = 0;
 
+// ── THE CLAIM ──────────────────────────────────────────────────────────────
+//
+// This node belongs to ONE primary. Before this existed, WS_EVT_CONNECT pointed
+// the "linked client" at whichever primary connected most recently, so a bench
+// brain and a shop brain could both hold sockets and both drive these servos —
+// with neither told, and a gate that contradicts the routing of both shops.
+// (Same shape as the smart-plug theft in RFC §8, worse consequences.)
+//
+// FIRST COMPLETED HANDSHAKE WINS, and the owner is persisted: a claim that
+// evaporated on a power cut would just be re-raced at every brownout, and on a
+// bench that is several times a day.
+//
+// NOT RELEASED ON DISCONNECT, deliberately. A node holds its gates when the
+// link drops (the fail-safe at the top of this file), so a primary rebooting is
+// an ordinary event — releasing the claim then would let a neighbouring brain
+// quietly adopt shop hardware during a reboot. Only an explicit, user-confirmed
+// takeover moves ownership.
+static Preferences claimPrefs;
+static const char* kClaimNs  = "nodeclaim";
+static const char* kClaimKey = "owner";
+static String g_owner;              // "" = unclaimed
+// Which client id passed the handshake as the owner. A SET from any other
+// socket is refused: an accepted WELCOME is what earns the right to command,
+// not merely having a connection open.
+static volatile uint32_t g_ownerClientId = 0;
+static volatile bool     g_ownerLinked   = false;
+
+static void loadClaim() {
+    claimPrefs.begin(kClaimNs, /*readOnly=*/true);
+    g_owner = claimPrefs.getString(kClaimKey, "");
+    claimPrefs.end();
+    if (g_owner.length()) {
+        Serial.print(F("[CLAIM] This node belongs to ")); Serial.println(g_owner);
+    } else {
+        Serial.println(F("[CLAIM] Unclaimed — the first primary to say HELLO owns it."));
+    }
+}
+
+static void saveClaim(const String& owner) {
+    g_owner = owner;
+    claimPrefs.begin(kClaimNs, /*readOnly=*/false);
+    claimPrefs.putString(kClaimKey, owner);
+    claimPrefs.end();
+}
+
 static bool anyServoMoving() {
     for (int i = 0; i < SERVO_COUNT; i++) if (servos[i].isMoving()) return true;
     return false;
@@ -106,6 +152,10 @@ static void onNodeWsEvent(AsyncWebSocket*, AsyncWebSocketClient* client,
         // used to read `> 1`; that guess also went wrong the other way, reporting
         // linked when all that remained was a zombie the server hadn't reaped.
         if (client->id() == g_linkedClientId) g_primaryLinked = false;
+        // The OWNER's socket closing means "no owner is connected", not "the
+        // node is unowned" — the claim itself survives, so a rebooting primary
+        // gets its node back rather than losing it to whoever dials in first.
+        if (client->id() == g_ownerClientId) g_ownerLinked = false;
         return;
     }
     if (type != WS_EVT_DATA) return;
@@ -142,14 +192,53 @@ static void onNodeWsEvent(AsyncWebSocket*, AsyncWebSocketClient* client,
         // Identify by mDNS hostname: stable across reboots and DHCP, and the
         // same string the primary's topology binds link.host to.
         host = WiFiProvisioner::getHostname();
+
+        // ── the claim decision ──────────────────────────────────────────────
+        const char* asker = f["primaryId"] | "";
+        const bool  wantsTakeover = f["takeover"] | false;
+        bool accepted = true;
+
+        if (g_owner.length() == 0) {
+            saveClaim(asker);                       // unclaimed → first asker wins
+            Serial.print(F("[CLAIM] Adopted by ")); Serial.println(asker);
+        } else if (g_owner == asker) {
+            // Ordinary reconnect.
+        } else if (wantsTakeover) {
+            // A human was shown what breaks and said yes. Logged loudly and
+            // permanently: this is the frame that makes another shop's gates
+            // stop moving, and whoever debugs THAT will end up reading this log.
+            Serial.print(F("[CLAIM] TAKEOVER (user-confirmed): ")); Serial.print(g_owner);
+            Serial.print(F(" -> ")); Serial.println(asker);
+            saveClaim(asker);
+        } else {
+            accepted = false;
+            Serial.print(F("[CLAIM] REFUSED ")); Serial.print(asker);
+            Serial.print(F(" — this node belongs to ")); Serial.println(g_owner);
+        }
+
+        if (accepted) {
+            g_ownerClientId = client->id();
+            g_ownerLinked   = true;
+        }
         topo::nodelink::buildWelcome(reply.to<JsonObject>(), host.c_str(),
-                                     BOARD_NAME, "1.0.0", SERVO_COUNT, /*linear=*/0);
+                                     BOARD_NAME, "1.0.0", SERVO_COUNT, /*linear=*/0,
+                                     g_owner.c_str(), accepted);
     } else if (strcmp(t, "PING") == 0) {
         topo::nodelink::buildPong(reply.to<JsonObject>());
     } else if (strcmp(t, "SET") == 0) {
         topo::nodelink::SetCommand cmd;
         const char* err = nullptr;
-        if (!topo::nodelink::parseSetFrame(f, cmd, err)) {
+        // THE ENFORCEMENT. A WELCOME that was accepted is what earns the right
+        // to command; merely holding a socket does not. Checked on every SET
+        // rather than once at connect, because that is the frame that moves a
+        // real valve — and because a client id can be reused after a reconnect.
+        if (!g_ownerLinked || client->id() != g_ownerClientId) {
+            Serial.print(F("[SET] REFUSED — client #")); Serial.print(client->id());
+            Serial.print(F(" is not the owner (")); Serial.print(g_owner);
+            Serial.println(F(")"));
+            topo::nodelink::buildAck(reply.to<JsonObject>(), f["seq"] | 0, false,
+                                     "not the owner of this node");
+        } else if (!topo::nodelink::parseSetFrame(f, cmd, err)) {
             Serial.print(F("[SET] MALFORMED — ")); Serial.println(err ? err : "?");
             topo::nodelink::buildAck(reply.to<JsonObject>(), f["seq"] | 0, false, err);
         } else if (!cmd.isServo) {
@@ -221,6 +310,10 @@ void setup() {
         statusled::set(statusled::PORTAL);
         statusled::update();
     });
+    // Load the claim BEFORE the WebSocket can accept anyone: a HELLO that
+    // arrived first would otherwise adopt a node that already has an owner.
+    loadClaim();
+
     WiFiProvisioner::begin();
     WiFiProvisioner::setPortalTick(nullptr);
 
