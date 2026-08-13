@@ -18,7 +18,8 @@
     "firmware:controller:test": "cd .. && c++ -std=c++17 -I \"$(dirname \"$(find .pio.nosync/libdeps -path '*/ArduinoJson/src/ArduinoJson.h' | head -1)\")\" firmware/test/test_topology_controller.cpp -o /tmp/dustgate-tctest && /tmp/dustgate-tctest firmware/test/fixtures/",
     "firmware:nodebus:test": "cd .. && c++ -std=c++17 -I \"$(dirname \"$(find .pio.nosync/libdeps -path '*/ArduinoJson/src/ArduinoJson.h' | head -1)\")\" firmware/test/test_nodebus.cpp -o /tmp/dustgate-nbtest && /tmp/dustgate-nbtest firmware/test/fixtures/",
     "firmware:shop:test": "cd .. && c++ -std=c++17 -I \"$(dirname \"$(find .pio.nosync/libdeps -path '*/ArduinoJson/src/ArduinoJson.h' | head -1)\")\" firmware/test/test_shop.cpp -o /tmp/dustgate-shoptest && /tmp/dustgate-shoptest firmware/test/fixtures/",
-    "firmware:test": "npm run firmware:router:test && npm run firmware:controller:test && npm run firmware:nodebus:test && npm run firmware:shop:test"
+    "firmware:faults:test": "cd .. && c++ -std=c++17 firmware/test/test_faults.cpp -o /tmp/dustgate-faulttest && /tmp/dustgate-faulttest",
+    "firmware:test": "npm run firmware:router:test && npm run firmware:controller:test && npm run firmware:nodebus:test && npm run firmware:shop:test && npm run firmware:faults:test"
   },
   "dependencies": {
     "dotenv": "^16.4.5",

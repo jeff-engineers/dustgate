@@ -225,15 +225,27 @@ node shared/device-model/nodelink-conformance.js ws://<node>.local/nodelink
   `reachable`. So the UI says a tool isn't pulling but not why. Data done, UI not.
 - **Servo backlash** — approach each target from one direction; the coupling has
   slop. Affects valve repeatability. Size it on the bench.
-- **A stepper fault shouldn't disable the servos** — `g_hardwareFault` is one
-  latched boolean covering all three `begin()` stages, and every motion path
-  checks it, so a failed TMC2209 UART handshake refuses servo gate moves too.
-  Those gates don't touch the stepper. Make the fault *per-capability*
-  (`g_faultStages` already records which stage failed): refuse linear motion on a
-  motor fault, refuse servo motion only on a servo fault, and leave the rest of
-  the shop working. This bites on the bench constantly — a board wired up on the
-  desk loses stepper power far more often than the whole system is actually
-  broken, and right now that takes every gate down with it.
+- ~~**A stepper fault shouldn't disable the servos**~~ **DONE 2026-08-13,
+  compile + host tests only** — new `firmware/control/FaultPolicy.h` owns the
+  mapping from "which `begin()` stage failed" to "what is refused", with
+  `firmware/test/test_faults.cpp` (17) over the truth table.
+
+  **Correction to what this entry claimed:** servo gate moves were never gated
+  by `g_hardwareFault`. Checked every consumer — the latch has no readers outside
+  `firmware.ino`, and nothing in `LocalActuatorBus` / `TopologyRuntime` /
+  `NodeBus` consults it, so a dead TMC2209 already left routing and ball valves
+  working. What the single latch *did* couple was real, just different:
+  - an **outlets (WiFi/Shelly) failure refused to home the rack** — `ok = okMotor
+    && okFeedback && okControl` gated motion on a subsystem that shares no wire
+    with the motor. Now it gates nothing: the link recovers unattended via
+    `WiFiProvisioner::maintain()`, so a boot-time latch outlived its own fault.
+  - **`STATE_ERROR` and the red pixel** were set for any stage, so a rackless
+    servo node pulsed red forever over a TMC2209 it was never built with. Error
+    state is now motor-or-endstops only, and the `NO_LINEAR_FITTED` special case
+    that used to patch this up afterwards is subsumed by the policy.
+
+  Follow-up worth doing: expose the three flags over `/api/motion` so the UI can
+  say *which* capability is down instead of showing state `ERROR`.
 
 - **The tool status light can't go red** — a tool paired to a plug that stopped
   answering is indistinguishable from an idle one. `/api/status` reports

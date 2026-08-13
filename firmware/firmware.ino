@@ -22,6 +22,7 @@
 #include "motor/MotorDriver.h"
 #include "feedback/FeedbackSystem.h"
 #include "control/ControlInput.h"
+#include "control/FaultPolicy.h"   // which begin() failure costs which capability
 #include "training/CalibrationStore.h"
 
 // WiFi provisioning — included for any mode that needs network access.
@@ -310,7 +311,42 @@ static const int SERVO_PINS[SERVO_COUNT] = { SERVO_PWM_PIN_1, SERVO_PWM_PIN_2, S
 // e-stop button — this hardware isn't powerful enough to need one.
 // =============================================================================
 volatile bool g_eStopTriggered = false;
-bool          g_hardwareFault  = false; // set when begin() fails — not clearable without reset
+
+// ── Faults are PER CAPABILITY ──────────────────────────────────────────────
+//
+// Three independent things can fail in begin(), and they disable different
+// amounts of the shop. Collapsing them into one latch meant a board whose WiFi
+// mutex failed to allocate also refused to home the rack — two subsystems that
+// share no wire.
+//
+//   g_faultMotor     TMC2209 UART handshake. No stepper.
+//   g_faultEndstops  limit switches. There IS a motor, but homing it without a
+//                    reference is how you drive a carriage into its own end.
+//   g_faultOutlets   WiFi / Shelly plugs. Nothing mechanical about it, and
+//                    unlike the other two it can come back on its own —
+//                    WiFiProvisioner::maintain() reconnects unattended.
+//
+// What each blocks:
+//
+//   linear motion (home, jog, move, calibrate)  motor OR endstops
+//   servo gates + routing                        NEITHER — see below
+//   the FAULT indicator                          motor OR endstops
+//
+// SERVO GATES ARE DELIBERATELY UNGATED BY ALL OF THIS. They are on their own
+// rail with their own driver, and a shop whose stepper died still opens and
+// closes every ball valve it has. Nothing in LocalActuatorBus / TopologyRuntime
+// / NodeBus consults these flags, and nothing should start: on a bench board,
+// stepper power comes and goes far more often than the shop is actually broken,
+// and taking the gates down with it is the failure that costs an afternoon.
+bool g_faultMotor    = false;
+bool g_faultEndstops = false;
+bool g_faultOutlets  = false;
+
+// Derived: "do not command the stepper". Latched for the boot like the facts it
+// is built from. Kept as its own variable rather than a function because every
+// linear-motion entry point already reads it by this name, and the point of the
+// split is to change WHICH failures set it — not to churn twenty call sites.
+bool          g_hardwareFault  = false;
 
 // Which begin() stage failed, latched for the life of the boot. The one-shot
 // [INIT] line at startup scrolls away long before anyone notices motion is
@@ -644,18 +680,35 @@ void setup() {
     // Report each stage separately: a bare "INIT FAILED" can't tell a TMC2209
     // UART problem from an endstop or a WiFi/outlet one, which are three very
     // different pieces of wiring to go stare at.
-    bool ok = true;
     const bool okMotor    = motor.begin();
     const bool okFeedback = feedback.begin(&motor);
     const bool okControl  = control.begin();
+
+    // What each failure COSTS is FaultPolicy.h's decision, not this function's —
+    // it is a table with a truth table's worth of cases, and the sketch is the
+    // one file that can't be host-tested. Here we only record what happened.
+    faults::Stages stages;
+    stages.motor    = !okMotor;
+    stages.endstops = !okFeedback;
+    stages.outlets  = !okControl;
 #if defined(NO_LINEAR_FITTED)
     // No rack on this board. The check above still ran and still printed its
-    // diagnosis; a missing driver is simply not news here. See config.h's
-    // NO_LINEAR_FITTED block for why the check stays and only the reaction moves.
-    ok = okFeedback && okControl;
+    // diagnosis; a missing driver is simply not news here, so it is cleared
+    // before anything reports on it — otherwise every boot of a servo-only board
+    // would announce a TMC2209 failure that is the build working as designed.
+    // See config.h's NO_LINEAR_FITTED block.
+    const bool kRackFitted = false;
+    stages.motor = false;
 #else
-    ok = okMotor && okFeedback && okControl;
+    const bool kRackFitted = true;
 #endif
+    const faults::Policy policy = faults::decide(stages, kRackFitted);
+
+    g_faultMotor    = stages.motor;
+    g_faultEndstops = stages.endstops;
+    g_faultOutlets  = stages.outlets;
+
+    const bool ok = !stages.motor && !stages.endstops && !stages.outlets;
     if (!ok) {
         DEBUG_PRINT(F("[INIT] motor="));      Serial.print(okMotor    ? "ok" : "FAIL");
         DEBUG_PRINT(F("  feedback="));        Serial.print(okFeedback ? "ok" : "FAIL");
@@ -673,49 +726,55 @@ void setup() {
     DEBUG_PRINTLN(F("[SERVO] Bring-up ready — 'servo <1-4> <angle>' (external 5-6V rail, common GND)."));
 #endif
 
-    // A hardware fault disables MOTION, not the whole device. Do NOT return here:
-    // loop() unconditionally pumps the API server and the routing runtime, and
-    // returning early left HttpApiServer::_mutex uncreated — the first
-    // consumeXxx() then asserted inside xQueueSemaphoreTake and the board sat in
-    // a reboot loop, which is also what made the serial prompt unreachable for
-    // debugging the very wiring that faulted.
+    // A hardware fault disables ONE CAPABILITY, not the whole device. Do NOT
+    // return here: loop() unconditionally pumps the API server and the routing
+    // runtime, and returning early left HttpApiServer::_mutex uncreated — the
+    // first consumeXxx() then asserted inside xQueueSemaphoreTake and the board
+    // sat in a reboot loop, which is also what made the serial prompt
+    // unreachable for debugging the very wiring that faulted.
     //
-    // Continuing is safe because every motion entry point already checks
+    // Continuing is safe because every LINEAR motion entry point checks
     // g_hardwareFault (issueMove(), SketchLinearDrive::moveToMm()). Servos are on
-    // an independent rail, so a servo-only topology still runs on a board whose
-    // stepper or endstops are broken.
-    if (!ok) {
-        DEBUG_PRINTLN(F("INIT FAILED — check wiring and config.h"));
-        DEBUG_PRINTLN(F("Motion commands are disabled. Fix wiring and reset."));
-        g_hardwareFault = true;
-        currentState = STATE_ERROR;
+    // an independent rail and check nothing, so a servo topology still routes on
+    // a board whose stepper or endstops are broken.
+    //
+    // The two latches below are SEPARATE FACTS, which is the whole point of the
+    // policy: "do not command the stepper" and "something is wrong here" used to
+    // be set together, so a rackless board pulsed red forever over hardware it
+    // was never built with, and a WiFi failure refused to home a healthy rack.
+    g_hardwareFault = policy.linearMotion;
+    currentState    = policy.errorState ? STATE_ERROR : STATE_IDLE;
+
+    if (policy.errorState) {
+        DEBUG_PRINTLN(F("INIT: linear motion FAILED — check wiring and config.h"));
+        DEBUG_PRINTLN(F("Linear moves are disabled. Servo gates and routing still run."));
     } else {
         DEBUG_PRINTLN(F("Init OK. Type 'enable' to home and start."));
-        currentState = STATE_IDLE;
+    }
+    if (g_faultOutlets) {
+        // Neither latch. The plugs are a network problem: WiFiProvisioner::
+        // maintain() reconnects unattended, so a boot-time latch would outlive
+        // the fault it describes. The pixel's NO_WIFI state already says it.
+        DEBUG_PRINTLN(F("[INIT] Outlets (WiFi/Shelly) failed — plugs are offline."));
+        DEBUG_PRINTLN(F("       Motion and gates are unaffected; the link may recover on its own."));
     }
 
+    // Say what the board can still DO, not just what failed. A stage name tells
+    // you where to point a multimeter; this tells you whether the shop works —
+    // and it is the line that makes "the stepper is dead but my gates still
+    // move" visible at boot instead of something you have to infer.
+    DEBUG_PRINT(F("[INIT] capabilities: linear="));
+    Serial.print(g_hardwareFault ? "refused" : "ok");
+    DEBUG_PRINT(F("  gates=ok  plugs="));
+    Serial.println(g_faultOutlets ? "offline" : "ok");
+
 #if defined(NO_LINEAR_FITTED)
-    // Latch the motion lock WITHOUT the error state. These two are separate
-    // facts that the fault path happens to set together:
+    // policy.linearMotion is already true here — no rack means every motion
+    // entry point must keep refusing, and reusing the existing latch is what
+    // keeps that small: issueMove() and SketchLinearDrive::moveToMm() check it
+    // by name, so nothing new has to be threaded through the homing, jog,
+    // calibration and sweep paths.
     //
-    //   g_hardwareFault  — "do not command the stepper". Still true, and it has
-    //                      to be: there is no driver on the UART, so every
-    //                      motion entry point must keep refusing. Reusing the
-    //                      existing latch is what makes this change small —
-    //                      issueMove() and SketchLinearDrive::moveToMm() already
-    //                      check it, and no new gate has to be threaded through
-    //                      the homing, jog, calibration and sweep paths.
-    //
-    //   STATE_ERROR      — "something is WRONG". Not true here, and asserting it
-    //                      costs the one at-a-glance diagnostic the board has:
-    //                      the status pixel would pulse red forever over absent
-    //                      hardware, so red would stop meaning anything for the
-    //                      faults that are real.
-    //
-    // Set after the branch above rather than inside it so this holds however the
-    // rest of init went — if WiFi or the outlets genuinely fail, that path has
-    // already set STATE_ERROR and this does not clear it.
-    g_hardwareFault = true;
     // Several serial/API handlers report the latch as "Hardware fault at boot —
     // failed: <stages>". With nothing genuinely broken that string is empty and
     // the message reads like a bug, so name the real reason. Only when empty:

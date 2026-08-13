@@ -296,6 +296,9 @@ extern int g_homeDirection;        // defined in firmware.ino
 //   the board doesn't sit in STATE_ERROR with the status pixel pulsing red about
 //   a stepper you chose not to fit. Motion stays disabled either way, via the
 //   same g_hardwareFault latch — there is genuinely no motor to move.
+//   That reaction now lives in one place, control/FaultPolicy.h: this flag is
+//   the `rackFitted` argument, and "refuse motion but do not go red" is a row in
+//   its table rather than a patch applied after the fault branch.
 //
 // WHY THIS IS A REACTION FLAG AND NOT HAS_LINEAR
 //   HAS_LINEAR above is the RIGHT seam and is currently read by nothing. Making

@@ -98,6 +98,6 @@ jobs:
         run: pio run -e esp32dev_servo -e esp32dev_wroom32 -e adafruit_feather_esp32s2 -e dustgate_node -e dustgate_node_c3
       # Host tests for the pure C++ control layer. They need ArduinoJson, which
       # the `pio run` above has already fetched into .pio.nosync/libdeps.
-      - name: Host tests (router, controller, nodebus/nodelink)
+      - name: Host tests (router, controller, nodebus/nodelink, shop, faults)
         run: npm run firmware:test
         working-directory: tools
