@@ -133,6 +133,11 @@ web UI. The primary does all the routing and sends it already-resolved angles.
 ./dev.sh flash-node
 ```
 
+The default node board is the Adafruit QT Py ESP32-S3. Add a board word for a
+different one — `flash-node c3` (QT Py C3) or `flash-node c5`
+([XIAO ESP32C5](firmware/wiring/xiao-c5.md), unvalidated on hardware) — and an
+optional hostname after it: `./dev.sh flash-node c5 dustgate-node-c5`.
+
 This flashes the servo-only firmware and pushes WiFi credentials over the USB
 cable. The credentials have to go over serial: the primary reaches a node over
 WiFi, but a fresh node isn't on WiFi yet — so there's no network path until this

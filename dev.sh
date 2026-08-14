@@ -15,9 +15,12 @@
 #     partition with the Angular bundle), so deploy.sh copies it off the device
 #     first and puts it back at the end. Backups: .dustgate-backups/, restore by
 #     hand with `bash tools/restore-topology.sh`. Skip with --no-topology-backup.
-#   bash dev.sh flash-node [host]   # flash a SECONDARY servo-only node (+ WiFi creds)
+#   bash dev.sh flash-node [board] [host]  # flash a SECONDARY servo-only node (+ WiFi creds)
+#                                    #   board: s3 (default) | c3 | c5
+#                                    #   e.g. bash dev.sh flash-node c5 dustgate-node-c5
 #   bash dev.sh monitor             # serial monitor (primary)
 #   bash dev.sh monitor node        # serial monitor for a secondary node
+#   bash dev.sh monitor c5          # ...for a XIAO C5 node (or: monitor c3)
 #   bash dev.sh ports               # list attached boards + which role each is pinned to
 #   bash dev.sh ports --pin         # pin each board's USB SERIAL to a role (do this once)
 #     DUSTGATE_PORT=/dev/cu.xxx     # force a port for this one command
@@ -36,6 +39,24 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Board facts (native USB? which header?) derived from platformio.ini + config.h
+# + boards/*.h rather than hardcoded here — see the note at the top of the file.
+# shellcheck source=tools/boardinfo.sh
+source "$SCRIPT_DIR/tools/boardinfo.sh"
+
+# Node board shorthand → PlatformIO env. The shorthand exists because nobody at a
+# bench wants to type "dustgate_node_c3", and the env names can't be shortened
+# without breaking `pio run -e`.
+node_env_for() {
+  case "${1:-}" in
+    ""|s3|qtpy|qtpy_s3|dustgate_node) echo "dustgate_node" ;;
+    c3|qtpy_c3|dustgate_node_c3)      echo "dustgate_node_c3" ;;
+    c5|xiao|xiao_c5)                  echo "xiao_c5" ;;
+    *)                                echo "" ;;   # not a board word
+  esac
+}
+
 UI_DIR="$SCRIPT_DIR/dustgate-ui"
 TOOLS_DIR="$SCRIPT_DIR/tools"
 ENV_FILE="$SCRIPT_DIR/tools/.env"
@@ -376,17 +397,40 @@ run_flash() {
 }
 
 run_flash_node() {
+  # First argument MAY be a board word (s3/c3/c5). If it isn't, it's the hostname
+  # — which is how this command has always been called, and stays working.
+  local node_env="dustgate_node"
+  local maybe_env
+  maybe_env="$(node_env_for "${1:-}")"
+  if [[ -n "$maybe_env" && -n "${1:-}" ]]; then
+    node_env="$maybe_env"
+    shift
+  fi
+
   echo "▶ Secondary NODE — flashing the servo-only firmware."
+  echo "  Target: $(describe_env "$node_env")"
+  if [[ "$node_env" == "xiao_c5" ]]; then
+    echo ""
+    echo "  ⚠  The C5 rides the pioarduino platform, not the espressif32 one every"
+    echo "     other target uses. Both publish a package called"
+    echo "     framework-arduinoespressif32 into the same directory, so the next"
+    echo "     DevKitC build will re-install its core (slow, not broken). Never"
+    echo "     build this env alongside another in one pio command."
+    echo "     Pin map: firmware/wiring/xiao-c5.md — UNVERIFIED against hardware."
+  fi
   echo ""
   echo "  A node is a dumb actuator bank: it drives up to four servo valves and"
   echo "  nothing else. No web UI, no stepper, no plug polling — the primary does"
   echo "  all the thinking and sends it already-resolved angles."
   echo ""
 
-  # "native": a node is a QT Py (USB straight off the MCU), so when the primary
-  # DevKitC is plugged in at the same time we must NOT grab its bridge-chip port.
-  local port
-  port="$(require_port native)" || exit 1
+  # Prefer the port family this board actually uses, so a node and the primary
+  # can be plugged in together without grabbing the wrong one. Derived from the
+  # board header rather than assumed — every node so far is native-USB, but that
+  # is a property of the board, not of the word "node".
+  local port prefer=bridge
+  board_has_native_usb "$node_env" && prefer=native
+  port="$(require_port "$prefer")" || exit 1
   { what="$(describe_port "$port")"; echo "  Using port: $port${what:+  ($what)}"; }
 
   # WiFi creds first. The primary CANNOT provision a node over the network — the
@@ -425,7 +469,7 @@ run_flash_node() {
   echo "  Flashing as: $HOSTNAME_CFG  (will appear at $HOSTNAME_CFG.local)"
   echo ""
   cd "$SCRIPT_DIR"
-  PLATFORMIO_UPLOAD_PORT="$port" bash deploy.sh --node "${@:2}"
+  PLATFORMIO_UPLOAD_PORT="$port" bash deploy.sh "--node=$node_env" "${@:2}"
 
   echo ""
   echo "  ✓ Node flashed. Next:"
@@ -435,7 +479,7 @@ run_flash_node() {
   echo "      4. Then assign gates to it in Gates."
   echo ""
   echo "▶ Opening serial monitor (Ctrl+C to exit)…"
-  run_monitor --scan-boot dustgate_node
+  run_monitor --scan-boot "$node_env"
 }
 
 # Suggest the next free dustgate-node-N by asking mDNS what's already out there.
@@ -517,12 +561,12 @@ run_monitor() {
     esac
   done
 
-  # Same board family split as run_flash_node: pick the port that matches the
-  # env being monitored, so a node and the primary can share the bench.
+  # Same board-family split as run_flash_node, from the same source of truth:
+  # pick the port that matches the env being monitored, so a node and the primary
+  # can share the bench. Getting this wrong on a native-USB board is silent — the
+  # monitor opens the other board's port and shows nothing.
   local prefer=bridge
-  case "$env" in
-    dustgate_node*|adafruit_feather_esp32s2) prefer=native ;;
-  esac
+  board_has_native_usb "$env" && prefer=native
 
   local port
   port="$(require_port "$prefer")" || exit 1
@@ -646,7 +690,8 @@ show_menu() {
   echo "  3) Flash      — full deploy to real ESP32 (UI + firmware + filesystem)"
   echo "  4) Flash (firmware only)"
   echo "  5) Flash (UI/filesystem only)"
-  echo "  n) Flash a SECONDARY node — servo-only board, + WiFi creds"
+  echo "  n) Flash a SECONDARY node — servo-only board, + WiFi creds  (QT Py S3)"
+  echo "     nc3 / nc5 = the same, onto a QT Py C3 / XIAO ESP32C5 instead"
   echo "  6) Serial monitor            (6n = monitor a secondary NODE instead)"
   echo "  7) Full chip erase (fixes corrupted-partition weirdness)"
   echo "  8) (Re)send WiFi/key/hostname to an already-flashed board"
@@ -660,9 +705,13 @@ show_menu() {
     3) run_flash ;;
     4) run_flash --fw ;;
     5) run_flash --ui ;;
-    n|N) run_flash_node ;;
+    n|N)       run_flash_node ;;
+    nc3|NC3)   run_flash_node c3 ;;
+    nc5|NC5)   run_flash_node c5 ;;
     6) run_monitor ;;
     6n|6N) run_monitor dustgate_node ;;
+    6c3)   run_monitor dustgate_node_c3 ;;
+    6c5)   run_monitor xiao_c5 ;;
     7) run_erase ;;
     8) run_provision ;;
     9) read -rp "  Device host [dustgate.local]: " h; run_live "${h:-dustgate.local}" ;;
@@ -681,8 +730,9 @@ case "${1:-}" in
   monitor)
     shift || true
     case "${1:-}" in
-      node|n) run_monitor dustgate_node ;;
-      *)      run_monitor ;;
+      node|n)     run_monitor dustgate_node ;;
+      c3|c5|s3)   run_monitor "$(node_env_for "$1")" ;;
+      *)          run_monitor ;;
     esac
     ;;
   erase)     run_erase ;;
@@ -692,7 +742,7 @@ case "${1:-}" in
   "")        show_menu ;;
   *)
     echo "Unknown mode: $1"
-    echo "Usage: dev.sh [demo|mock|flash [--fw|--ui|--no-provision]|flash-node [hostname]|monitor [node]|ports [--pin]|erase|provision|live [host]]"
+    echo "Usage: dev.sh [demo|mock|flash [--fw|--ui|--no-provision]|flash-node [s3|c3|c5] [hostname]|monitor [node|c3|c5]|ports [--pin]|erase|provision|live [host]]"
     exit 1
     ;;
 esac

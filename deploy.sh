@@ -7,6 +7,8 @@
 #   bash deploy.sh --no-provision  # skip auto-provision step
 #   bash deploy.sh --provision-only  # skip build/flash, just (re)send credentials
 #   bash deploy.sh --no-topology-backup  # don't save/restore the shop layout
+#   bash deploy.sh --node                # SECONDARY servo-only node (QT Py S3)
+#   bash deploy.sh --node=xiao_c5        # ...a different node board (any pio env)
 #
 # Anything that flashes the filesystem WIPES the saved shop, so the deploy pulls
 # topology.json off the device first (§0) and puts it back at the end (§5).
@@ -17,6 +19,11 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Board facts derived from platformio.ini + config.h + boards/*.h, rather than
+# duplicated here as a list this file would forget to update.
+# shellcheck source=tools/boardinfo.sh
+source "$SCRIPT_DIR/tools/boardinfo.sh"
 
 # esptool's post-write "hard reset" occasionally fails on this board's native
 # USB-CDC port ("Could not configure port: Device not configured") — the
@@ -206,7 +213,11 @@ for arg in "$@"; do
     # A SECONDARY node: servo-only firmware, and no Angular bundle or LittleFS
     # image at all — a node's entire interface is the /nodelink WebSocket, which
     # is exactly why it fits on a 4MB board. Credentials still go over serial.
-    --node) PIO_ENV="dustgate_node"; DO_UI=false; DO_FS=false ;;
+    #
+    # --node=<env> names a different node board (xiao_c5, dustgate_node_c3, …).
+    # Bare --node keeps the default, which is the QT Py S3 that gets bench-tested.
+    --node)   PIO_ENV="dustgate_node"; DO_UI=false; DO_FS=false ;;
+    --node=*) PIO_ENV="${arg#--node=}"; DO_UI=false; DO_FS=false ;;
   esac
 done
 
@@ -296,10 +307,13 @@ if $DO_PROVISION && ($DO_FW || $DO_FS || $FORCE_PROVISION); then
   # Does this target speak USB straight from the MCU, or through a bridge chip?
   # It decides how we drive the modem control lines below, and the two cases want
   # OPPOSITE settings — see the long note at the pyserial block.
-  NATIVE_USB=0
-  case "$PIO_ENV" in
-    dustgate_node*|adafruit_feather_esp32s2) NATIVE_USB=1 ;;
-  esac
+  #
+  # DERIVED, not listed. This used to be a hardcoded env pattern, which is a copy
+  # of what the board header already declares — and the copy went stale the moment
+  # the XIAO C5 env was added, which would have driven a native-USB board the
+  # bridge way and produced a board that prints nothing at all.
+  if board_has_native_usb "$PIO_ENV"; then NATIVE_USB=1; else NATIVE_USB=0; fi
+  echo "  Target: $(describe_env "$PIO_ENV")"
 
   if [[ -z "$WIFI_SSID" ]]; then
     echo "ℹ  No credentials in tools/.env — skipping auto-provision."

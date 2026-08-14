@@ -141,14 +141,37 @@ called `framework-arduinoespressif32` into one shared directory, so whichever en
 builds last owns the core and the other dies with an opaque SCons
 `TypeError: ... not NoneType`.
 
-**Build this env alone:**
+**Flash it** (picks the env, the native-USB port and the right DTR/RTS
+convention, then prompts for WiFi credentials and a hostname):
+
+```bash
+bash dev.sh flash-node c5
+```
+
+Or with the hostname up front — it must be unique per node, since that string is
+the board's identity in the claim handshake and the name the primary's picker
+binds to:
+
+```bash
+bash dev.sh flash-node c5 dustgate-node-c5
+```
+
+Serial monitor for it afterwards:
+
+```bash
+bash dev.sh monitor c5
+```
+
+Build only, no flashing:
 
 ```bash
 pio run -e xiao_c5
 ```
 
-`[env] platform` is version-pinned so the collision can't happen by accident, but
-a build combining `xiao_c5` with any other env will still fail.
+**Never combine this env with another in one `pio` command.** `[env] platform` is
+version-pinned so the collision can't happen by accident, but
+`pio run -e xiao_c5 -e esp32dev_wroom32` will still fail. Building this one also
+means the next DevKitC build re-installs its core — slow, not broken.
 
 Adopting the C5 properly means migrating every target to pioarduino / core 3.x —
 ESP32Servo 1.x → 3.x, and me-no-dev AsyncTCP + ESPAsyncWebServer → the ESP32Async
