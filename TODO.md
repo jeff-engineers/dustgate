@@ -171,6 +171,28 @@ Constraints if this gets picked up:
   keep it out of `airflowIssues` so nothing refuses to run over a style note.
 - Wants a way to dismiss a suggestion per-gate, or it becomes nagging.
 
+### 0.5 Board decision (2026-08-14): QT Py **S3** is the node target, C5 is parked
+
+Both boards work. The XIAO C5 booted on hardware this session — full boot log,
+WiFi joined, `ready` at 1986 ms, 8 MB PSRAM and 8 MB flash measured — so this is
+a cost decision, not a capability one.
+
+**Develop on the S3** because it doesn't fork the toolchain, it has the onboard
+pixel, and it's the board that's been on the bench. Also the plain fleet
+argument: 2 DevKitCs, 1–2 Feathers and a couple of QT Pys against exactly 2 C5s
+— you can't bench a two-node topology on a fleet you can brick.
+
+**The C5 is better long-term** and the reasons don't expire: external U.FL
+antenna (worth more in a metal-ducted shop than the dual-band radio, since the
+plugs and the other nodes are 2.4 GHz-only anyway), double the flash and PSRAM,
+cheaper, faster to get.
+
+**Revisit as ONE decision, not two:** *do we migrate every target to pioarduino /
+Arduino core 3?* Adding a single C5 to a core-2 fleet is what's expensive — the
+two platforms share `~/.platformio/packages` and damage each other (see
+`firmware/wiring/xiao-c5.md` §5). Once everything is on core 3 that cost is zero
+and the C5 is the better node.
+
 ### 1. Bench validation — do this before anything else
 Networking is now real: primary↔node link is up and green (2026-08-08). The rest
 below is still compile/host-test only. Expect bench work to generate its own

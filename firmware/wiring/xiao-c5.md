@@ -213,7 +213,36 @@ dead, which reads as a bad flash rather than a pin choice.
 Also worth confirming while you have the datasheet open: whether four ADC pads are
 genuinely free, since the published pinout is the only source so far.
 
-### It rides a different platform
+### It rides a different platform — and the two platforms damage each other
+
+**This is the reason the board is parked** (decision 2026-08-14; the QT Py S3 is
+the node target). Not a capability problem — the C5 boots and runs fine.
+
+Building an official-platform env after this one has twice left the shared
+`~/.platformio/packages` broken, in ways PlatformIO does not detect or repair:
+
+1. **The Arduino core** — handled automatically now by `ensure_core_for_env()`
+   in `tools/boardinfo.sh`, as long as you go through `dev.sh` / `deploy.sh`.
+2. **The riscv toolchain** — NOT handled. The official platform half-removed it,
+   deleting the sysroot but leaving `.piopm` claiming version 14.2.0. `pio pkg
+   install` says "Already up-to-date" while every compile fails with
+   `fatal error: stdint.h: No such file or directory`, or
+   `riscv32-esp-elf-g++: command not found`.
+
+Recovery for (2) is to delete **both** copies and rebuild — the package manager
+will not repair a package it believes is installed:
+
+```bash
+rm -rf ~/.platformio/packages/toolchain-riscv32-esp ~/.platformio/tools/toolchain-riscv32-esp
+```
+
+Then `pio run -e xiao_c5`, which re-downloads ~2.3 GB. Budget ~40 minutes.
+
+The permanent fix, if the C5 ever stops being a spike, is a separate
+`PLATFORMIO_CORE_DIR` for this env so nothing is shared at all — about 4 GB for a
+second copy of the toolchains. Not worth it for a parked board.
+
+
 
 The C5 needs the **pioarduino** fork (official `espressif32` has no C5) and a
 newer Arduino core than every other target here. Both platforms publish a package
