@@ -318,7 +318,12 @@ if $DO_PROVISION && ($DO_FW || $DO_FS || $FORCE_PROVISION); then
   # of what the board header already declares — and the copy went stale the moment
   # the XIAO C5 env was added, which would have driven a native-USB board the
   # bridge way and produced a board that prints nothing at all.
-  if board_has_native_usb "$PIO_ENV"; then NATIVE_USB=1; else NATIVE_USB=0; fi
+  #
+  # THREE cases, not two: a USB Serial/JTAG board (XIAO C5, QT Py C3) is
+  # "native USB" and still needs the lines held LOW, because there DTR+RTS is
+  # the ROM's download-mode trigger rather than CDC line state. Asserting them
+  # takes the board out of the app entirely. Only TinyUSB CDC wants them high.
+  if [[ "$(board_usb_kind "$PIO_ENV")" == "tinyusb" ]]; then NATIVE_USB=1; else NATIVE_USB=0; fi
   echo "  Target: $(describe_env "$PIO_ENV")"
 
   if [[ -z "$WIFI_SSID" ]]; then
@@ -385,13 +390,19 @@ cmd        = ("provision %s\r\n" % payload).encode()
 #   Bridge chip (DevKitC CP2102/CH340): DTR->GPIO0, RTS->EN is an auto-RESET
 #   circuit. Asserting either reboots the board mid-command. Hold both LOW.
 #
-#   Native USB (QT Py S3/C3, Feather S2): there is no reset circuit — the lines
+#   TinyUSB CDC (QT Py S3, Feather S2): there is no reset circuit — the lines
 #   are just CDC line state. But TinyUSB reports the port "connected" only while
 #   DTR is asserted, and USBCDC::write() DROPS EVERY BYTE when not connected
 #   (cores/esp32/USBCDC.cpp: `!tud_cdc_n_connected(itf)` guards write/print).
 #   Hold DTR low here and the board never replies at all — the ack is
 #   unreachable, not merely slow. Assert BOTH (USBCDC marks itself connected on
 #   dtr && rts).
+#
+#   USB Serial/JTAG (XIAO C5, QT Py C3): also native, and the OPPOSITE again.
+#   Nothing here reads line state, but the ROM watches DTR/RTS as its
+#   download-mode trigger, so asserting them yanks the chip out of the running
+#   app and into the bootloader. Hold both LOW. This is why the caller passes a
+#   three-way kind and not "is it native USB".
 lines_on = native_usb
 
 

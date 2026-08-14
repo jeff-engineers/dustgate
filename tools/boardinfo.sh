@@ -163,12 +163,45 @@ ensure_core_for_env() {
   fi
 }
 
-# Human-readable, for logs: "xiao_c5 (BOARD_XIAO_C5, boards/xiao_c5.h, native USB)"
+# WHICH kind of USB — and therefore what DTR/RTS mean. Three cases, and the two
+# native ones want OPPOSITE handling, so "native or not" is not enough:
+#
+#   bridge   CP2102/CH340 (DevKitC): DTR->GPIO0, RTS->EN is an auto-reset
+#            circuit. Asserting either reboots the board. Hold LOW.
+#   tinyusb  TinyUSB CDC (QT Py S3, Feather S2): pure CDC line state, but
+#            USBCDC::write() DISCARDS output unless DTR is asserted. Hold HIGH.
+#   jtag     USB Serial/JTAG (XIAO C5, QT Py C3): DTR+RTS is the ROM's
+#            download-mode trigger. Assert both and the chip leaves the app and
+#            enumerates as the bootloader — port gone, monitor exits, no output,
+#            buttons dead. Hold LOW.
+#
+# Getting this wrong produces a board that looks broken rather than misconfigured
+# in all three cases, which is why it is derived from the header rather than
+# remembered.
+board_usb_kind() {
+  local env="${1:-}" macro header
+  macro="$(env_board_macro "$env")"
+  header="$(board_header_for_macro "$macro")"
+  if [[ -n "$header" ]] && grep -qE '^#define[[:space:]]+BOARD_USB_SERIAL_JTAG[[:space:]]+1' \
+       "$BOARDINFO_ROOT/firmware/$header"; then
+    echo jtag
+  elif board_has_native_usb "$env"; then
+    echo tinyusb
+  else
+    echo bridge
+  fi
+}
+
+# Human-readable, for logs: "xiao_c5 (BOARD_XIAO_C5, boards/xiao_c5.h, USB Serial/JTAG)"
 describe_env() {
   local env="${1:-}" macro header usb
   [[ -z "$env" ]] && env="$(pio_default_env)"
   macro="$(env_board_macro "$env")"
   header="$(board_header_for_macro "$macro")"
-  if board_has_native_usb "$env"; then usb="native USB"; else usb="USB-serial bridge"; fi
+  case "$(board_usb_kind "$env")" in
+    jtag)    usb="USB Serial/JTAG, hold DTR/RTS low" ;;
+    tinyusb) usb="native USB (TinyUSB CDC), DTR asserted" ;;
+    *)       usb="USB-serial bridge" ;;
+  esac
   echo "$env (${macro:-no -DBOARD_*}, ${header:-unknown header}, $usb)"
 }

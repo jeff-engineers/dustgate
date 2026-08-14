@@ -82,6 +82,22 @@
 // monitor handles the reconnect).
 #define BOARD_HAS_NATIVE_USB 1
 
+// ...but NOT the TinyUSB kind. This part's USB is the chip's USB Serial/JTAG
+// peripheral (Arduino builds it as HWCDC; the board file sets
+// ARDUINO_USB_MODE=1, and the device enumerates as 303a:1001 "USB JTAG/serial
+// debug unit"), and the two kinds want OPPOSITE host-side line handling:
+//
+//   TinyUSB CDC (QT Py S3, Feather S2): DTR must be ASSERTED or the firmware's
+//   output is discarded — see the note in the dustgate_node env.
+//
+//   USB Serial/JTAG (this board, QT Py C3): DTR/RTS are not line state at all,
+//   they are the ROM's download-mode trigger. Assert both and the chip drops
+//   into the bootloader — the port vanishes, the monitor exits instantly, no
+//   pixel, and the BOOT button does nothing. It looks exactly like a dead
+//   board, and it was the entire "C5 won't boot" bring-up scare on 2026-08-13.
+//   Hold both LOW: monitor_dtr = 0 / monitor_rts = 0.
+#define BOARD_USB_SERIAL_JTAG 1
+
 // -----------------------------------------------------------------------------
 // Motor / endstop pins are DELIBERATELY ABSENT.
 //

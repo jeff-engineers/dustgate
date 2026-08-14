@@ -56,6 +56,16 @@
 // The C3 has USB Serial/JTAG rather than a USB-serial bridge chip.
 #define BOARD_HAS_NATIVE_USB 1
 
+// Same peripheral as the XIAO C5, NOT the TinyUSB CDC the S3/S2 nodes use —
+// the board file sets ARDUINO_USB_MODE=1 and the part enumerates as 303a:1001,
+// while the QT Py S3 comes up under Adafruit's own 239a VID. It matters because
+// the host lines mean opposite things: TinyUSB needs DTR asserted or it discards
+// output, whereas here DTR+RTS is the ROM's download-mode trigger, so asserting
+// them drops the chip into the bootloader — port gone, monitor exits, board
+// looks dead. Hold both LOW. See boards/xiao_c5.h, where this cost a bring-up
+// session on 2026-08-13; this board has the same trap and has never been run.
+#define BOARD_USB_SERIAL_JTAG 1
+
 // -----------------------------------------------------------------------------
 // Motor / endstop pins are DELIBERATELY ABSENT.
 //

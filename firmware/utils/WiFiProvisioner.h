@@ -280,11 +280,23 @@ inline bool begin() {
         // Also advertise on the DustGate service so a primary's node picker can
         // enumerate the shop. role=primary is what keeps this board OUT of its
         // own (and a neighbouring system's) list of actuator targets — the
-        // picker only offers role=secondary. Secondary nodes advertise the same
-        // service with role=secondary; see node/dustgate_node.cpp.
+        // picker only offers role=secondary.
+        //
+        // NOT on a secondary. This provisioner is shared with the node program,
+        // which registers the SAME service with role=secondary right after this
+        // runs (node/dustgate_node.cpp) — and mDNS refuses the duplicate, so the
+        // first registration wins and a node advertises itself as a PRIMARY.
+        // Caught on the C5 bench boot:
+        //     mdns_service_add_for_host_base(808): Service already exists
+        //     [E][ESPmDNS.cpp:191] addService(): Failed adding service
+        // The node then answers on the network, looks healthy, and never appears
+        // in the picker it is supposed to appear in — an invisible node, not a
+        // broken one.
+#ifndef DUSTGATE_SECONDARY
         MDNS.addService("dustgate", "tcp", 80);
         MDNS.addServiceTxt("dustgate", "tcp", "role",  "primary");
         MDNS.addServiceTxt("dustgate", "tcp", "board", BOARD_NAME);
+#endif
         DEBUG_PRINT(F("[WiFi] mDNS hostname: "));
         Serial.print(hostname);
         Serial.println(F(".local"));

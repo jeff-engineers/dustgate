@@ -5,7 +5,12 @@
 > This board is a **spike**, not a supported target. It compiles; no board has
 > been flashed, and **the pin numbers below come from Seeed's published pinout,
 > not from a multimeter.** Two of them (GPIO8, GPIO9) are the ones most likely to
-> be wrong in a way that stops the board booting — see [§4](#4-before-you-trust-this).
+> be wrong in a way that stops the board booting — see [§5](#5-before-you-trust-this).
+>
+> A board HAS now been flashed and booted (2026-08-13): full boot log, WiFi
+> joined, `ready` at 1986 ms. Nothing has been wired to a servo yet, so the pin
+> numbers below are still unproven — see [§4](#4-if-it-looks-dead) first if it
+> appears not to boot, because the first time, it was.
 >
 > Authoritative source for every number here:
 > [`firmware/boards/xiao_c5.h`](../boards/xiao_c5.h). If this file and that header
@@ -161,7 +166,41 @@ but free.
 
 ---
 
-## 4. Before you trust this
+## 4. If it looks dead
+
+**It probably isn't.** On 2026-08-13 this board appeared completely dead — no
+serial output past the ROM banner, no pixel, BOOT button doing nothing — and was
+in fact booting correctly every single time. The monitor was asserting DTR and
+RTS, which on this part is the ROM's **download-mode trigger**, not CDC line
+state. The board left the app for the bootloader the instant the monitor opened.
+
+Fixed in `platformio.ini` (`monitor_dtr = 0` / `monitor_rts = 0` for this env),
+so `bash dev.sh monitor c5` is now correct. If you ever bypass the scripts, hold
+both lines low or you will re-run the same scare.
+
+Reading the port directly, with the lines low, is the tie-breaker when a board
+seems dead — it cannot reset anything:
+
+```bash
+python3 -c "import serial,sys,time; p=serial.Serial(); p.port='/dev/cu.usbmodem1401'; p.baudrate=115200; p.dtr=False; p.rts=False; p.timeout=0.2; p.open(); [sys.stdout.write(p.read(4096).decode('utf-8','replace')) for _ in range(60)]"
+```
+
+Known-good boot on real hardware looks like this — `ready` at ~2 s:
+
+```
+[BOOT] serial   t=  117ms heap=232632 internal=232632 largest=204788 psram=8388608
+[BOOT] claim    t=  125ms ...
+[BOOT] wifi     t= 1965ms heap=173784 ...
+[BOOT] ready    t= 1986ms heap=156272 ...
+```
+
+One line in that log is noise, not a fault: `E (1168) MSPI Timing: Failed to
+allocate dummy cacheline for PSRAM memory barrier!`. It comes from IDF's
+`esp_psram` before our code runs, and the board reports all 8 MB of PSRAM working
+afterwards. Unexplained, harmless so far, and **not** worth chasing when
+something else is wrong — it appears on every boot.
+
+## 5. Before you trust this
 
 ### Confirm the strapping pins first
 

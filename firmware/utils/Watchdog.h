@@ -36,7 +36,15 @@ inline void begin() {
         .idle_core_mask = 0,
         .trigger_panic  = true,
     };
-    esp_task_wdt_init(&cfg);
+    // On IDF 5 the TWDT is usually ALREADY running before app_main — the C5
+    // bring-up log said so out loud ("esp_task_wdt_init(517): TWDT already
+    // initialized"). Left there, init fails, our timeout is silently ignored and
+    // the task runs under whatever the sdkconfig default happens to be. That is
+    // the bad kind of failure: the watchdog still exists, so nothing looks
+    // broken, but it fires at a period nobody chose. Reconfigure instead.
+    if (esp_task_wdt_init(&cfg) == ESP_ERR_INVALID_STATE) {
+        esp_task_wdt_reconfigure(&cfg);
+    }
 #else
     esp_task_wdt_init(WDT_TIMEOUT_SEC, /*panic=*/true);
 #endif
