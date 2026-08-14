@@ -3,7 +3,7 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router as NgRouter, RouterLink } from '@angular/router';
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
-import { ApiService, Topology, TopologyStatus } from '../services/api.service';
+import { ApiService, NodeLinkState, Topology, TopologyStatus } from '../services/api.service';
 import { airflowIssues, redundantSelectors, type AirflowIssue } from '@topology';
 import { validateShop, SHOP_SCHEMA_VERSION } from '@shop';
 import { SelectorConfigComponent } from '../gates/selector-config.component';
@@ -807,6 +807,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     else this.autoLayoutInto(this.cells);
     this.loadBoardCells(this.topo);
     this.syncNodes();
+    await this.mergePairedBoards();
     // ?layer=wiring — how /boards hands you back, so you return to the view the
     // boards actually belong to instead of the duct drawing.
     if (this.route.snapshot.queryParamMap.get('layer') === 'wiring') this.setLayer('wiring');
@@ -2348,6 +2349,34 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   private controllersRaw(): RawEl[] { return ((this.topo as { controllers?: RawEl[] } | null)?.controllers) ?? []; }
+
+  /** Draw every board that is actually PAIRED, not just the ones the layout has
+   *  heard of.
+   *
+   *  Pairing lives on the device (NVS) and is deliberately independent of the
+   *  topology — a board can be paired before any shop is drawn. The Boards screen
+   *  is what writes a paired board into `controllers[]`, so until someone opens
+   *  it the canvas has no idea the board exists: it pairs, it shows up in the
+   *  scan, and the rail stays empty. That reads as "the board didn't work".
+   *
+   *  In memory only. Persisting from here would make merely LOOKING at the canvas
+   *  a write, and the Boards screen already saves this the moment it is opened. */
+  private async mergePairedBoards(): Promise<void> {
+    if (!this.topo) return;
+    let links: NodeLinkState[] = [];
+    try { links = await this.api.getNodes(); } catch { return; }   // older/offline device
+    const controllers = this.controllersRaw();
+    let added = false;
+    for (const l of links) {
+      if (!l.id || controllers.some(c => c['id'] === l.id)) continue;
+      controllers.push({
+        id: l.id, role: 'secondary', name: l.name || l.host || l.id, board: l.board,
+        link: { transport: 'wifi-ws', host: l.host },
+      } as unknown as RawEl);
+      added = true;
+    }
+    if (added) this.ensureSlots();
+  }
 
 
 

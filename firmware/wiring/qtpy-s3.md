@@ -1,0 +1,236 @@
+# Wiring — Adafruit QT Py ESP32-S3 (servo-only node)
+
+> **This is the node board.** Decision 2026-08-14: nodes are developed on the QT
+> Py S3; the [XIAO ESP32C5](xiao-c5.md) is a parked option. It is the board that
+> has actually been flashed, joined WiFi and answered a primary.
+>
+> **Still unproven: the servo pins with a servo attached.** The chip identity and
+> flash geometry below are measured (`esptool.py flash_id`); A0–A3 come from
+> Adafruit's pinout and have driven nothing yet. Unlike the C5, none of them are
+> strapping pins, so the failure mode here is a servo that doesn't move — not a
+> board that won't boot.
+>
+> Authoritative source for every number here:
+> [`firmware/boards/qtpy_s3.h`](../boards/qtpy_s3.h). If this file and that
+> header ever disagree, the header is right — the build reads it.
+
+**Role:** servo-only secondary node. Four PWM gates, no stepper, no endstops.
+
+Board-independent chapters — the status pixel's colour vocabulary and external
+wiring, smart plugs, power supply, decoupling — are in
+[`WIRING.md`](../WIRING.md).
+
+## Which QT Py S3 you have
+
+Two Adafruit parts share this pin map exactly:
+
+| Part | Flash | PSRAM | PlatformIO `board` |
+|------|-------|-------|--------------------|
+| **5700 (N4R2)** — the one on the bench | 4 MB | 2 MB | `adafruit_qtpy_esp32s3_n4r2` |
+| 5426 (no PSRAM) | 8 MB | — | `adafruit_qtpy_esp32s3_nopsram` |
+
+Only the `board` id in `platformio.ini` differs. Flashing the wrong one fails
+loudly at connect (a flash-size mismatch), so a mix-up can't silently brick a
+board. Confirm what's in your hand:
+
+```bash
+esptool.py --port /dev/cu.usbmodem* flash_id
+```
+
+A node needs neither the RAM nor the flash — the whole build is 27.8% of the
+4 MB part, and a node's entire interface is the `/nodelink` WebSocket, so there
+is no Angular bundle to store.
+
+## Why it is servo-only
+
+The S3 is **dual-core**, so unlike the C3 and the C5 that is not the reason. The
+reason is that a secondary receives already-resolved `SET` frames — a channel and
+an angle, never a topology — so the least hardware that can be a DustGate node is
+a WiFi MCU with four PWM pins. No stepper, no TMC2209, no endstops, no web UI.
+
+`config.h` derives `HAS_LINEAR` from whether `PIN_TMC_STEP` is defined, so the
+motor pins being **absent** from the header is what compiles the stepper driver,
+the feedback system and the endstop supervisor out. Adding them "to keep the
+interface uniform" would silently re-enable code with no hardware behind it.
+
+---
+
+## 1. Pin map
+
+### Top view — the labels you can't see once it's docked
+
+Pad labels are on the **underside**, so they vanish the moment the board is in a
+socket. This is that label, from above. **The USB-C connector is the orientation
+reference**; the STEMMA QT connector at the opposite end is the second one.
+
+```
+                          USB-C
+                        ┌───────┐
+              ┌─────┬───┴───────┴───┬─────┐
+   GPIO18  A0 │  o  │               │  o  │ 5V      do NOT power servos here
+   GPIO17  A1 │  o  │               │  o  │ GND     ← servo/pixel ground
+    GPIO9  A2 │  o  │   QT Py       │  o  │ 3V
+    GPIO8  A3 │  o  │   ESP32-S3    │  o  │ MO   GPIO35
+    GPIO7 SDA │  o  │               │  o  │ MI   GPIO37
+    GPIO6 SCL │  o  │  (top view)   │  o  │ SCK  GPIO36
+    GPIO5  TX │  o  │               │  o  │ RX   GPIO16
+              └─────┴───┬───────┬───┴─────┘
+                 ▲      └───────┘
+                 │      STEMMA QT (GPIO41 SDA1 / GPIO40 SCL1 — separate bus)
+                 │
+                 └── servo block: the FOUR pads NEAREST the USB-C end,
+                     channel 1 in the corner beside the connector
+
+   NeoPixel: GPIO39 data, GPIO38 power — onboard, no wiring needed
+   Buttons at the USB-C end: RESET, and BOOT on GPIO0
+```
+
+**Counting rule when it's docked:** hold the USB-C end *toward* you. The servo
+block is the near end of the left column, channel 1 closest to the connector.
+That is the **opposite** end from the [XIAO C5](xiao-c5.md), whose servo block is
+the far corner — worth knowing if both are on the bench, because the looms are
+interchangeable and the boards are not.
+
+Download mode is hold BOOT → tap RESET → release BOOT. Pressing BOOT alone does
+nothing, which is easy to mistake for a dead board.
+
+> Two different confidences in that drawing. Every **GPIO number** is read out of
+> Adafruit's own Arduino variant header
+> (`variants/adafruit_qtpy_esp32s3_n4r2/pins_arduino.h`), not transcribed from a
+> picture. The **physical order of the non-servo pads down each side** follows the
+> QT Py form factor and hasn't been checked against this board with a meter — it
+> doesn't matter for anything DustGate drives, but don't wire I²C off this drawing
+> without looking. [`boards/qtpy_s3.h`](../boards/qtpy_s3.h) is what the build
+> reads.
+
+### The numbers
+
+| Signal              | Pad | GPIO | Notes |
+|---------------------|-----|------|-------|
+| Servo PWM channel 1 | A0  | 18   | |
+| Servo PWM channel 2 | A1  | 17   | |
+| Servo PWM channel 3 | A2  | 9    | Ordinary GPIO on the S3 — not strapping |
+| Servo PWM channel 4 | A3  | 8    | Ordinary GPIO on the S3 — not strapping |
+| Status pixel (DIN)  | —   | 39   | Onboard NeoPixel |
+| Status pixel power  | —   | 38   | Must be driven HIGH before the pixel lights |
+| Onboard user LED    | —   | —    | There isn't one — the pixel is the only indicator |
+
+**Strapping pins on this part are GPIO0, 3, 45 and 46**, none of which are used
+here. That is why this map can spend GPIO8 and GPIO9 freely while the C3 and C5
+maps have to dodge them.
+
+**Deliberately absent: motor and endstop pins** — see above.
+
+---
+
+## 2. Servo block
+
+A0–A3 are four **adjacent pads on one edge**, chosen so a servo loom can be built
+once and moved between boards. Channel 1 is the first pad of the block on every
+node header here, so a topology's `servo.channel` means the same gate whichever
+board drives it.
+
+```
+  5V/6V supply ──┬────────────┬───── servo V+   (red)
+                 │            │
+            [470-1000µF]   [0.1µF]      <-- AT the servo terminals
+                 │            │
+  GND ───────────┴────────────┴───── servo GND (brown/black)
+
+  GPIO18/17/9/8 ─────────────────────  servo signal (orange/yellow)
+  QT Py GND ─────────────────────────  common with servo GND   (REQUIRED)
+```
+
+**Never power servos from the QT Py's 5V pad.** It is the USB rail through a
+tiny board: four servos stalling on it browns out the MCU, and the failure looks
+like a WiFi dropout rather than a power problem. Feed servos from the buck
+directly and give the board its own leg off the same buck. See
+[`WIRING.md` §5](../WIRING.md#5-decoupling--keeping-the-esp32-out-of-brownout).
+
+### Reserved: serial-servo bus
+
+TX/RX (GPIO5/GPIO16) are the hardware UART and are **not** shared with any servo
+channel — unlike the C5, where the bus and PWM channel 1 are the same pad. So a
+bus-servo build on this board gives up nothing. Left out of the header until
+there is a bus servo on the bench to talk to.
+
+---
+
+## 3. Status pixel
+
+Onboard, on GPIO39 — **nothing to wire.** The one board-specific catch is
+`PIN_PIXEL_POWER` (GPIO38): the pixel's rail is gated and must be driven HIGH
+before it will light at all. `StatusLed.h` does that; a hand-rolled sketch that
+skips it sees a pixel that appears dead.
+
+Colour vocabulary is in
+[`WIRING.md` §1](../WIRING.md#1-status-pixel-ws2812--neopixel), unchanged here.
+
+There is no plain user LED to fall back to, which is why `PIN_LED` is
+deliberately not defined in the header.
+
+---
+
+## 4. If it looks dead
+
+**Check the monitor's line handling before suspecting the board.** This board's
+convention is the **opposite** of the C5's, and getting it wrong produces silence
+either way:
+
+| USB kind | Boards | DTR/RTS | Symptom when wrong |
+|----------|--------|---------|--------------------|
+| TinyUSB CDC | **QT Py S3**, Feather S2 | hold **HIGH** | `USBCDC::write()` discards every byte — boots fine, prints nothing |
+| USB Serial/JTAG | XIAO C5 | hold **LOW** | DTR+RTS *is* the ROM download-mode trigger — board leaves the app |
+| Bridge chip | DevKitC | hold LOW | auto-reset loop |
+
+`platformio.ini` sets `monitor_dtr = 1` / `monitor_rts = 1` for this env, and
+`tools/boardinfo.sh` derives the kind from `BOARD_HAS_NATIVE_USB` /
+`BOARD_USB_SERIAL_JTAG` in the board header, so going through the scripts is
+always right:
+
+```bash
+bash dev.sh monitor s3
+```
+
+The port **disappears on every reset** — USB comes straight off the MCU, there is
+no bridge chip to hold it up. That is normal, and why `dev.sh` leaves pio's
+monitor reconnect enabled for this env instead of `--no-reconnect`.
+
+Reading the port directly is the tie-breaker when a board seems dead, since it
+can't reset anything (note `dtr=True` here — the inverse of the C5's recipe):
+
+```bash
+python3 -c "import serial,sys; p=serial.Serial(); p.port='/dev/cu.usbmodem1101'; p.baudrate=115200; p.dtr=True; p.rts=True; p.timeout=0.2; p.open(); [sys.stdout.write(p.read(4096).decode('utf-8','replace')) for _ in range(60)]"
+```
+
+A healthy boot prints a `[BOOT]` line per stage — `serial`, `claim`, `wifi`,
+`servos`, `mdns`, `server`, `ready` — with `ready` a couple of seconds in. A
+truncated trace names the stage it died in, which is the point of it.
+
+---
+
+## 5. Flashing it
+
+Picks the env, the native-USB port and the right DTR/RTS convention, then prompts
+for WiFi credentials and a hostname:
+
+```bash
+bash dev.sh flash-node s3
+```
+
+Or with the hostname up front — **it must be unique per node**, since that string
+is the board's identity in the claim handshake and the name the primary's board
+picker binds to:
+
+```bash
+bash dev.sh flash-node s3 dustgate-node-1
+```
+
+Build only, no flashing:
+
+```bash
+pio run -e dustgate_node
+```
+
+After it joins, it advertises itself over mDNS as `role=secondary` and shows up
+in the primary's **Boards** screen under "Scan for boards".

@@ -57,7 +57,7 @@ const RECONNECT_MAX_MS = 15000;
  * @property {'WELCOME'} t
  * @property {number}  v
  * @property {string}  nodeId       who this board actually is
- * @property {string}  board        build target ("devkitc", "qtpy_c3", …)
+ * @property {string}  board        build target ("devkitc", "qtpy_s3", …)
  * @property {string}  fw           firmware version string
  * @property {{servos:number, linear:number}} caps   actuator budget on this board
  * @property {string} [claimedBy]   the primary this node belongs to

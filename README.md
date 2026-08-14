@@ -28,6 +28,7 @@ The reference build is a 2.5" dust port system, with adjacent gates spaced about
 
 For wiring details see [`firmware/WIRING.md`](firmware/WIRING.md) (shop-wide) and
 the per-board files it links: [DevKitC](firmware/wiring/devkitc.md),
+[QT Py ESP32-S3](firmware/wiring/qtpy-s3.md),
 [XIAO ESP32C5](firmware/wiring/xiao-c5.md).
 
 ---
@@ -134,7 +135,7 @@ web UI. The primary does all the routing and sends it already-resolved angles.
 ```
 
 The default node board is the Adafruit QT Py ESP32-S3. Add a board word for a
-different one — `flash-node c3` (QT Py C3) or `flash-node c5`
+different one — `flash-node c5`
 ([XIAO ESP32C5](firmware/wiring/xiao-c5.md), unvalidated on hardware) — and an
 optional hostname after it: `./dev.sh flash-node c5 dustgate-node-c5`.
 
@@ -238,7 +239,7 @@ firmware/         Firmware (Arduino / PlatformIO)
   config.h               All compile-time settings
   firmware.ino    Main sketch + state machine
   api/                   HTTP REST + WebSocket server
-  boards/                Per-board pin maps (devkitc, feather_s2, qtpy_c3)
+  boards/                Per-board pin maps (devkitc, feather_s2, qtpy_s3)
   control/               Control input modes + the v2 routing brain:
                            TopologyRouter/Sequencer/Controller (pure, host-tested)
                            ActuatorBus/NodeBus/TopologyRuntime (the dispatch seam)
@@ -254,7 +255,8 @@ firmware/         Firmware (Arduino / PlatformIO)
   data/                  LittleFS filesystem image (generated — don't edit)
   WIRING.md              Wiring reference (shop-wide)
   wiring/devkitc.md      Pin map + stepper/endstops for the rack primary
-  wiring/xiao-c5.md      Pin map for the XIAO ESP32C5 servo node
+  wiring/qtpy-s3.md      Pin map for the QT Py ESP32-S3 servo node (the node)
+  wiring/xiao-c5.md      Pin map for the XIAO ESP32C5 servo node (parked)
 
 dustgate-ui/             Web UI (Angular 17) — see dustgate-ui/README.md for
                          local dev instructions and a full breakdown

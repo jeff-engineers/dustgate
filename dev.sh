@@ -46,12 +46,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/tools/boardinfo.sh"
 
 # Node board shorthand → PlatformIO env. The shorthand exists because nobody at a
-# bench wants to type "dustgate_node_c3", and the env names can't be shortened
-# without breaking `pio run -e`.
+# bench wants to type "dustgate_node" in full, and the env names can't be
+# shortened without breaking `pio run -e`.
 node_env_for() {
   case "${1:-}" in
     ""|s3|qtpy|qtpy_s3|dustgate_node) echo "dustgate_node" ;;
-    c3|qtpy_c3|dustgate_node_c3)      echo "dustgate_node_c3" ;;
     c5|xiao|xiao_c5)                  echo "xiao_c5" ;;
     *)                                echo "" ;;   # not a board word
   esac
@@ -627,7 +626,7 @@ run_monitor() {
   # you unplug. Right for the DevKitC, whose CP2102 keeps the port alive across
   # an EN reset — so the port only disappears when the CABLE does.
   #
-  # Native-USB boards (QT Py S3/C3, Feather S2) drop the port on EVERY reset, so
+  # Native-USB boards (QT Py S3, Feather S2) drop the port on EVERY reset, so
   # reconnect is what lets the monitor survive a reboot. Keep it for those.
   local reconnect_arg="--no-reconnect"
   case "$env" in
@@ -692,7 +691,7 @@ show_menu() {
   echo "  4) Flash (firmware only)"
   echo "  5) Flash (UI/filesystem only)"
   echo "  n) Flash a SECONDARY node — servo-only board, + WiFi creds  (QT Py S3)"
-  echo "     nc3 / nc5 = the same, onto a QT Py C3 / XIAO ESP32C5 instead"
+  echo "     nc5 = the same, onto a XIAO ESP32C5 instead"
   echo "  6) Serial monitor            (6n = monitor a secondary NODE instead)"
   echo "  7) Full chip erase (fixes corrupted-partition weirdness)"
   echo "  8) (Re)send WiFi/key/hostname to an already-flashed board"
@@ -707,7 +706,6 @@ show_menu() {
     4) run_flash --fw ;;
     5) run_flash --ui ;;
     n|N)       run_flash_node ;;
-    nc3|NC3)   run_flash_node c3 ;;
     nc5|NC5)   run_flash_node c5 ;;
     6) run_monitor ;;
     6n|6N) run_monitor dustgate_node ;;

@@ -36,7 +36,7 @@ const NL = require('../shared/device-model/nodelink.js');
 
 const PORT       = Number(process.argv[2] || 3001);
 const NODE_ID    = process.env.MOCK_NODE_ID || 'dustgate-node-1';
-const BOARD      = process.env.MOCK_NODE_BOARD || 'qtpy_c3';
+const BOARD      = process.env.MOCK_NODE_BOARD || 'qtpy_s3';
 const FW         = '1.0.0-mock';
 const SERVO_COUNT = 4;
 

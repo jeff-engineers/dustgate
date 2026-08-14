@@ -261,7 +261,7 @@ export class DemoApiService extends ApiService {
   // deliberately already in DEMO_TOPOLOGY's controllers[] and one isn't, so both
   // the "add" and the "already added" paths are visible without any hardware.
   private readonly demoNodes: DiscoveredNode[] = [
-    { host: 'dustgate-node-1', ip: '192.168.87.61', board: 'qtpy_c3', servos: 4 },
+    { host: 'dustgate-node-1', ip: '192.168.87.61', board: 'qtpy_s3', servos: 4 },
     { host: 'dustgate-node-2', ip: '192.168.87.62', board: 'devkitc', servos: 4 },
   ];
 

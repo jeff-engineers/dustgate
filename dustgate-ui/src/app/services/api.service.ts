@@ -89,7 +89,7 @@ export interface DiscoveredNode {
   host: string;
   /** Last-known address. Informational: the link re-resolves via host. */
   ip: string;
-  /** Build target it reports, e.g. "qtpy_c3". */
+  /** Build target it reports, e.g. "qtpy_s3". */
   board: string;
   /** Servo channels it offers. */
   servos: number;

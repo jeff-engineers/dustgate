@@ -136,10 +136,11 @@ The whole star topology landed this session. Read
 - ~~need to be able to tie elements to esp32's~~ DONE — board + channel pickers.
 - ~~A cheaper variant - qtpy based?~~ DONE — `pio run -e dustgate_node`, a
   servo-only build at 27.7% of a 4MB board. Default node is the **QT Py
-  ESP32-S3 (N4R2)**, pin map in `boards/qtpy_s3.h`; the ESP32-C3 stays building
-  as `dustgate_node_c3` (`boards/qtpy_c3.h`). **Both pinouts reviewed, neither
-  bench-tested with servos attached** — the S3's chip/flash identity is
-  confirmed, its A0–A3 assignments are not.
+  ESP32-S3 (N4R2)**, pin map in `boards/qtpy_s3.h`, wiring in
+  `firmware/wiring/qtpy-s3.md`. The QT Py C3 variant was dropped 2026-08-14 —
+  never bench-tested, and a second untested servo pin map is upkeep with no
+  hardware behind it. **The S3's chip/flash identity is confirmed; its A0–A3
+  assignments have not driven a real servo yet.**
 - **The dispatch seam** — `ActuatorBus` / `NodeBus` / `TopologyRuntime`. Before
   this, the routing brain existed only for host tests: nothing in the sketch
   included it and `/api/status` was an idle stub. Now tool watts drive real

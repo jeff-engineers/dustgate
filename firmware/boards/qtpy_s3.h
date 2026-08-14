@@ -34,9 +34,9 @@
 
 // -- Servo PWM block (the only actuators this board drives) --
 // QT Py silkscreen A0/A1/A2/A3 — four adjacent pins on one header edge.
-// Channel order is deliberately identical to boards/qtpy_c3.h (A0..A3), so a
-// topology's servo.channel means the same physical pin on either node board and
-// the two are swappable without re-pinning the gates.
+// Channel order (A0..A3, channel 1 = first pad of the block) is the same rule
+// every board header here follows, so a topology's servo.channel means the same
+// physical gate on any node board and they are swappable without re-pinning.
 //
 // None of these are ESP32-S3 strapping pins (those are GPIO0, 3, 45, 46), so a
 // servo signal idling here cannot hold the board out of boot — the constraint
@@ -56,7 +56,8 @@
 #define PIN_PIXEL            39
 #define PIN_PIXEL_POWER      38
 
-// PIN_LED deliberately NOT defined — see the note in boards/qtpy_c3.h.
+// PIN_LED deliberately NOT defined: there is no plain user LED to fall back to,
+// and defining one would make StatusLed.h blink a pin that lights nothing.
 
 // -- Native USB --
 // The S3 has USB Serial/JTAG built in, no USB-serial bridge chip. This is why

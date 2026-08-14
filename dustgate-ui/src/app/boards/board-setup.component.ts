@@ -205,7 +205,22 @@ export class BoardSetupComponent implements OnInit, OnDestroy {
     this.rebuild();
     // Link state is the point of this screen, so keep it live rather than
     // showing a snapshot that goes stale while someone walks to the shop.
-    this.poll = setInterval(() => void this.refreshLinks().then(() => this.rebuild()), 3000);
+    //
+    // syncLayoutControllers() runs on EVERY tick, not just on load and add():
+    // POST /api/nodes/pair returns before the device has done the pairing (the
+    // registry write and the dial happen on the main loop, and /api/nodes is
+    // served from a cache the loop republishes on its own schedule). So the
+    // refreshLinks() inside add() usually reads a list that does NOT yet contain
+    // the board just paired — nothing gets added to controllers[], and the board
+    // shows up in this list a few seconds later, on a tick that used to only
+    // rebuild rows. That is the bug where a board pairs fine, appears here, and
+    // never appears on the build canvas: the canvas draws controllers[]. The
+    // call is additive and only writes when something actually changed, so
+    // running it repeatedly costs nothing.
+    this.poll = setInterval(
+      () => void this.refreshLinks().then(() => { this.syncLayoutControllers(); this.rebuild(); }),
+      3000,
+    );
   }
 
   ngOnDestroy(): void { if (this.poll) clearInterval(this.poll); }

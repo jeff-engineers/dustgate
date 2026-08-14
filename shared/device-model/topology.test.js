@@ -298,7 +298,7 @@ const idxOf = (plan, sel) => plan.moves.findIndex((m) => m.selectorId === sel);
 {
   const withNode = (link) => {
     const t = clone(twoGates);
-    t.controllers.push({ id: 'node2', role: 'secondary', name: 'Back wall', board: 'qtpy_c3', ...(link ? { link } : {}) });
+    t.controllers.push({ id: 'node2', role: 'secondary', name: 'Back wall', board: 'qtpy_s3', ...(link ? { link } : {}) });
     return t;
   };
 

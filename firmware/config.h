@@ -241,8 +241,6 @@ extern int g_homeDirection;        // defined in firmware.ino
   #include "boards/feather_s2.h"
 #elif defined(BOARD_QTPY_S3)
   #include "boards/qtpy_s3.h"
-#elif defined(BOARD_QTPY_C3)
-  #include "boards/qtpy_c3.h"
 #elif defined(BOARD_XIAO_C5)
   #include "boards/xiao_c5.h"
 #else

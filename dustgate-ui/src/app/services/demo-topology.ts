@@ -23,7 +23,7 @@ export const DEMO_TOPOLOGY: Topology = {
   controllers: [
     { id: 'primary', role: 'primary', name: 'Shop Brain', board: 'devkitc', link: { transport: 'wifi-ws', host: 'dustgate.local' } },
     // Host matches a node discoverNodes() reports, so /boards shows it already paired.
-    { id: 'dustgate-node-1', role: 'secondary', name: 'Back wall', board: 'qtpy_c3', link: { transport: 'wifi-ws', host: 'dustgate-node-1' } },
+    { id: 'dustgate-node-1', role: 'secondary', name: 'Back wall', board: 'qtpy_s3', link: { transport: 'wifi-ws', host: 'dustgate-node-1' } },
   ],
   // ONE system. The demo shop has one blower, which is what nearly every shop
   // has — a second system in the seed would teach the container at the cost of

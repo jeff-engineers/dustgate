@@ -28,14 +28,13 @@
 //   non-issue for a servo-only board. That is the whole reason this header
 //   defines no motor pins.
 //
-//   The same reasoning already lives in boards/qtpy_c3.h for the single-core C3.
 //
 // PIN NUMBERS ARE FROM SEEED'S PUBLISHED PINOUT, NOT FROM A MULTIMETER.
 //   D0..D10 map to GPIO 1, 0, 25, 7, 23, 24, 11, 12, 8, 9, 10. Before trusting
 //   this on hardware, confirm against the ESP32-C5 datasheet which of those are
 //   STRAPPING pins — a servo signal idling on one can stop the board booting,
-//   which is exactly the trap boards/qtpy_c3.h had to dodge on the C3 (GPIO2/8/9
-//   there). GPIO8 and GPIO9 are used below and are the first two to check.
+//   which is the trap the QT Py C3's map had to dodge (GPIO2/8/9 there).
+//   GPIO8 and GPIO9 are used below and are the first two to check.
 // =============================================================================
 #pragma once
 
@@ -46,7 +45,7 @@
 // -- Servo PWM block (the only actuators this board drives) --
 // D7..D10 — four adjacent pads on one edge, same physical-grouping rule as every
 // other board here, so a servo loom can be built once and moved between them.
-// Channel order matches boards/qtpy_c3.h and qtpy_s3.h (channel 1 = first pad of
+// Channel order matches boards/qtpy_s3.h (channel 1 = first pad of
 // the block), so a topology's servo.channel means the same gate on any node.
 #define SERVO_PWM_PIN_1    12   // D7
 #define SERVO_PWM_PIN_2     8   // D8
@@ -90,7 +89,7 @@
 //   TinyUSB CDC (QT Py S3, Feather S2): DTR must be ASSERTED or the firmware's
 //   output is discarded — see the note in the dustgate_node env.
 //
-//   USB Serial/JTAG (this board, QT Py C3): DTR/RTS are not line state at all,
+//   USB Serial/JTAG (this board): DTR/RTS are not line state at all,
 //   they are the ROM's download-mode trigger. Assert both and the chip drops
 //   into the bootloader — the port vanishes, the monitor exits instantly, no
 //   pixel, and the BOOT button does nothing. It looks exactly like a dead

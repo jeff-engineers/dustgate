@@ -42,8 +42,7 @@ write; both are fire-and-forget, and neither cares that something else is using
 the CPU. So single-core is a bad trade for a stepper primary and a non-issue for
 a servo-only board — which is why this pin map defines no motor pins at all.
 
-The same reasoning already governs [`boards/qtpy_c3.h`](../boards/qtpy_c3.h) for
-the single-core C3.
+The same reasoning governs every servo-only node header here.
 
 ---
 
@@ -114,7 +113,7 @@ re-introduce the single-core step-timing problem above.
 
 D7–D10 are four **adjacent pads on one edge**, chosen so a servo loom can be
 built once and moved between boards. Channel order matches
-[`boards/qtpy_c3.h`](../boards/qtpy_c3.h) and [`qtpy_s3.h`](../boards/qtpy_s3.h)
+[`boards/qtpy_s3.h`](../boards/qtpy_s3.h)
 — channel 1 is the first pad of the block — so a topology's `servo.channel`
 means the same gate on any node.
 
@@ -206,8 +205,7 @@ something else is wrong — it appears on every boot.
 
 **GPIO8 and GPIO9 are the two to check**, against the ESP32-C5 datasheet, before
 a servo is wired to either. A servo signal idling on a strapping pin can stop the
-board booting — the trap [`boards/qtpy_c3.h`](../boards/qtpy_c3.h) had to dodge on
-the C3 (GPIO2/8/9 there). Symptom is a board that flashes fine and then appears
+board booting — the trap the QT Py C3's map had to dodge (GPIO2/8/9 there). Symptom is a board that flashes fine and then appears
 dead, which reads as a bad flash rather than a pin choice.
 
 Also worth confirming while you have the datasheet open: whether four ADC pads are

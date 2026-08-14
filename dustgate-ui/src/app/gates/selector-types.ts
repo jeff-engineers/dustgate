@@ -97,7 +97,7 @@ export interface Controller {
   id: string;
   role: 'primary' | 'secondary';
   name?: string;
-  /** Build target, e.g. "devkitc" | "qtpy_c3". */
+  /** Build target, e.g. "devkitc" | "qtpy_s3". */
   board?: string;
   link?: ControllerLink;
 }

@@ -174,7 +174,7 @@ pulling to one collector.
 |---|---|
 | `id` | stable string, UI-assigned. `/boards` mints it from the mDNS hostname (slugified, collision-suffixed). |
 | `role` | `primary` \| `secondary` |
-| `board` | build-flag target (`devkitc`, `feather_s2`, `qtpy_s3`, `qtpy_c3`, …) — matches `BOARD_NAME` in the board header, and what a node reports in its NodeLink `WELCOME`. |
+| `board` | build-flag target (`devkitc`, `feather_s2`, `qtpy_s3`, `xiao_c5`, …) — matches `BOARD_NAME` in the board header, and what a node reports in its NodeLink `WELCOME`. |
 | `link` | `{ transport: "wifi-ws", host, ip? }`. **REQUIRED on every `secondary`, with a non-empty `host`** — `validateTopology` rejects one without, because a secondary with no address is a board the primary can never dial, and every gate on it would fail silently at run time. The PRIMARY needs no link: it is the local board. `host` is the mDNS hostname and is the stable key; `ip` is only a cache (the link re-resolves via `host`, so DHCP moving a board doesn't break the binding). |
 
 **Per-host actuator budget** (validated): one controller drives at most **4 servo
