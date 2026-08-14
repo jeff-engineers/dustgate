@@ -9,7 +9,7 @@ failing to answer quickly was "which pin, on the board in my hand".
 | Board | Role | Wiring |
 |-------|------|--------|
 | **Espressif ESP32-DevKitC** (WROOM-32) | Primary, with the linear rack, stepper and endstops | [`wiring/devkitc.md`](wiring/devkitc.md) |
-| **Seeed XIAO ESP32C5** | Servo-only node (spike — nothing flashed yet) | [`wiring/xiao-c5.md`](wiring/xiao-c5.md) |
+| **Seeed XIAO ESP32C5** | Servo-only node | [`wiring/xiao-c5.md`](wiring/xiao-c5.md) |
 | Adafruit ESP32-S2 Feather | Legacy primary variant | in [`wiring/devkitc.md`](wiring/devkitc.md) — it shares that design |
 | Adafruit QT Py ESP32-S3 | Servo-only node — **the default node** | [`wiring/qtpy-s3.md`](wiring/qtpy-s3.md) |
 
@@ -48,7 +48,7 @@ actually moving?" is the first question every time a gate misbehaves.
 | ESP32-DevKitC | **GPIO17, external** | No onboard user LED at all — you add this part |
 | Adafruit ESP32-S2 Feather | GPIO33 onboard | Power gated by GPIO21 (`PIN_PIXEL_POWER`) |
 | Adafruit QT Py ESP32-S3 | GPIO39 onboard | Power gated by GPIO38 |
-| Seeed XIAO ESP32C5 | GPIO25, external | Spike target; onboard LED is plain yellow, not RGB |
+| Seeed XIAO ESP32C5 | GPIO25, external | Onboard LED is plain yellow, not RGB |
 
 Boards with an onboard pixel need no wiring. Only the DevKitC and the XIAO need
 a part added.

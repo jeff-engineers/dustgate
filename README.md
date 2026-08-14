@@ -155,9 +155,14 @@ web UI. The primary does all the routing and sends it already-resolved angles.
 ```
 
 The default node board is the Adafruit QT Py ESP32-S3. Add a board word for a
-different one — `flash-node c5`
-([XIAO ESP32C5](firmware/wiring/xiao-c5.md), unvalidated on hardware) — and an
-optional hostname after it: `./dev.sh flash-node c5 dustgate-node-c5`.
+different one — `flash-node c5` ([XIAO ESP32C5](firmware/wiring/xiao-c5.md)) —
+and an optional hostname after it: `./dev.sh flash-node c5 dustgate-node-c5`.
+Both are supported node boards; neither has driven a servo on the bench yet.
+
+The C5 builds against its own PlatformIO installation (it needs the pioarduino
+platform, which shares package names with the official one and would overwrite
+it). `dev.sh` handles that; building it by hand needs
+`PLATFORMIO_CORE_DIR=~/.platformio-pioarduino pio run -e xiao_c5`.
 
 This flashes the servo-only firmware and pushes WiFi credentials over the USB
 cable. The credentials have to go over serial: the primary reaches a node over
@@ -275,8 +280,8 @@ firmware/         Firmware (Arduino / PlatformIO)
   data/                  LittleFS filesystem image (generated — don't edit)
   WIRING.md              Wiring reference (shop-wide)
   wiring/devkitc.md      Pin map + stepper/endstops for the rack primary
-  wiring/qtpy-s3.md      Pin map for the QT Py ESP32-S3 servo node (the node)
-  wiring/xiao-c5.md      Pin map for the XIAO ESP32C5 servo node (parked)
+  wiring/qtpy-s3.md      Pin map for the QT Py ESP32-S3 servo node
+  wiring/xiao-c5.md      Pin map for the XIAO ESP32C5 servo node
 
 dustgate-ui/             Web UI (Angular 17) — see dustgate-ui/README.md for
                          local dev instructions and a full breakdown

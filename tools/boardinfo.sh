@@ -67,28 +67,44 @@ board_has_native_usb() {
 }
 
 # -----------------------------------------------------------------------------
-# Arduino-core swapping.
+# Platform isolation.
 #
 # The xiao_c5 env overrides `platform` with the pioarduino fork; every other env
-# uses official espressif32. BOTH publish a package named
-# `framework-arduinoespressif32` into ONE shared directory
-# (~/.platformio/packages), so only one core can be installed at a time.
+# uses official espressif32. BOTH publish packages under the SAME names —
+# `framework-arduinoespressif32` and `toolchain-riscv32-esp` — so sharing one
+# PlatformIO core directory means they overwrite each other. Two distinct
+# failures came out of that, neither of which PlatformIO detects or repairs:
 #
-# The comment in platformio.ini said the loser "reinstalls its own core in ~1
-# min". It does not. PlatformIO leaves the other platform's package sitting in
-# the directory, decides it doesn't satisfy the spec, and hands the builder a
-# None path — which surfaces four frames deep in SCons as:
+#   1. The Arduino core. The loser's package is left in place, judged not to
+#      satisfy the spec, and the builder is handed a None path — surfacing four
+#      frames deep in SCons as
+#        TypeError: expected str, bytes or os.PathLike object, not NoneType
+#      naming no package and reading like a PlatformIO bug.
 #
-#     TypeError: expected str, bytes or os.PathLike object, not NoneType
+#   2. The riscv toolchain, worse. The official platform half-removes it: the
+#      sysroot is deleted but .piopm still claims 14.2.0, so `pio pkg install`
+#      says "Already up-to-date" while every compile fails with
+#      `riscv32-esp-elf-g++: command not found` or
+#      `fatal error: stdint.h: No such file or directory`. Recovery is deleting
+#      the package by hand; the fix is ~2.3 GB and ~40 minutes.
 #
-# naming no package and reading like a PlatformIO bug. The build never recovers
-# on its own; you have to clear the directory by hand.
+# An earlier version of this file swapped the core package in and out around
+# each build. That fixed (1) and not (2), which is the shape of the whole
+# problem: the shared directory has an unknown number of collisions in it, and
+# each one is found the same expensive way.
 #
-# So do that automatically, and keep the evicted core instead of deleting it —
-# swapping back is a directory rename rather than another download.
+# So don't share it. A fork platform gets its OWN PLATFORMIO_CORE_DIR, and the
+# two installations never see each other. Costs a second copy of the toolchains
+# (7.6 GB measured, downloaded once); buys a build that cannot be broken by which env you
+# built last.
+# -----------------------------------------------------------------------------
 
-BOARDINFO_PKG_DIR="${PLATFORMIO_CORE_DIR:-$HOME/.platformio}/packages"
-BOARDINFO_CORE_PKG="framework-arduinoespressif32"
+# Whatever pio would have used if we said nothing — captured at source time so a
+# PLATFORMIO_CORE_DIR the user set for their own reasons still wins for every
+# non-fork env.
+BOARDINFO_DEFAULT_CORE_DIR="${PLATFORMIO_CORE_DIR:-$HOME/.platformio}"
+# Override if ~ is small; measured at 7.6 GB.
+BOARDINFO_FORK_CORE_DIR="${DUSTGATE_FORK_CORE_DIR:-$HOME/.platformio-pioarduino}"
 
 # The platform spec an env actually builds with: its own override if it has one,
 # otherwise the [env] default that every other env inherits.
@@ -123,44 +139,37 @@ platform_core_class() {
   esac
 }
 
-# Same question about the core currently sitting in the packages directory.
-# Empty = nothing installed, so nothing to evict.
-installed_core_class() {
-  local piopm="$BOARDINFO_PKG_DIR/$BOARDINFO_CORE_PKG/.piopm"
-  [[ -f "$piopm" ]] || return 0
-  python3 - "$piopm" <<'PY'
-import json, sys
-try:
-    spec = json.load(open(sys.argv[1])).get("spec") or {}
-except Exception:
-    sys.exit(0)
-# The registry copy is owned by "platformio" with no uri; the fork's is a
-# tarball URL owned by "espressif".
-print("official" if spec.get("owner") == "platformio" and not spec.get("uri") else "fork")
-PY
+# Which core directory an env belongs in.
+core_dir_for_env() {
+  if [[ "$(platform_core_class "$(env_platform "${1:-}")")" == "fork" ]]; then
+    echo "$BOARDINFO_FORK_CORE_DIR"
+  else
+    echo "$BOARDINFO_DEFAULT_CORE_DIR"
+  fi
 }
 
-# Make the installed core match what this env's platform wants. Call before any
-# build. No-op in the common case (one platform, nothing to do).
-ensure_core_for_env() {
-  local env="${1:-}" want have pkg stash_have stash_want
-  want="$(platform_core_class "$(env_platform "$env")")"
-  have="$(installed_core_class)"
-  [[ -z "$have" || "$have" == "$want" ]] && return 0
+# Point THIS SHELL's pio at the right core directory. Call before any build.
+#
+# Exported rather than passed per-command because a build shells out to pio more
+# than once (run, uploadfs, device monitor) and every one of them has to agree —
+# a single call landing in the wrong directory is how the collision came back.
+#
+# Running pio by hand needs the same thing:
+#   PLATFORMIO_CORE_DIR=~/.platformio-pioarduino pio run -e xiao_c5
+use_core_for_env() {
+  local env="${1:-}" dir
+  dir="$(core_dir_for_env "$env")"
+  export PLATFORMIO_CORE_DIR="$dir"
+  [[ "$dir" == "$BOARDINFO_DEFAULT_CORE_DIR" ]] && return 0
 
-  pkg="$BOARDINFO_PKG_DIR/$BOARDINFO_CORE_PKG"
-  stash_have="$BOARDINFO_PKG_DIR/.dustgate-core-$have"
-  stash_want="$BOARDINFO_PKG_DIR/.dustgate-core-$want"
-
-  echo "  Arduino core installed is '$have'; ${env:-this env} needs '$want' — swapping."
-  rm -rf "$stash_have"
-  mv "$pkg" "$stash_have"
-  if [[ -d "$stash_want" ]]; then
-    mv "$stash_want" "$pkg"
-    echo "  (restored a previously stashed '$want' core — no download)"
-  else
-    echo "  (no stashed '$want' core yet — PlatformIO will download it once)"
+  echo "  Platform: pioarduino fork — using its own core dir, $dir"
+  if [[ ! -d "$dir/packages" ]]; then
+    echo "  First build against it: PlatformIO downloads the platform and the"
+    echo "  riscv toolchain into that directory. 7.6 GB, and the download is most"
+    echo "  of the wall time — check you have the room before starting."
+    echo "  Nothing in $BOARDINFO_DEFAULT_CORE_DIR is touched."
   fi
+  return 0
 }
 
 # WHICH kind of USB — and therefore what DTR/RTS mean. Three cases, and the two

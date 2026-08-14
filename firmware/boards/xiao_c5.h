@@ -1,12 +1,14 @@
 // =============================================================================
 // boards/xiao_c5.h — Seeed Studio XIAO ESP32C5 pin map (SERVO-ONLY)
 //
-// ⚠️⚠️ THIS IS A SPIKE, NOT A SUPPORTED TARGET. ⚠️⚠️
-// Nothing here has been on hardware, and unlike the other unvalidated headers
-// this one also rides a DIFFERENT PlatformIO platform and a NEWER Arduino core
-// than every other env (see the xiao_c5 env in platformio.ini). Its purpose is
-// to answer one question — does this firmware's library stack compile for a
-// RISC-V dual-band part at all — not to be flashed and trusted.
+// A supported node target since 2026-08-14. A board has been flashed and booted
+// (WiFi joined, ready at ~2s), but ⚠️ NO SERVO HAS BEEN DRIVEN FROM THESE PINS.
+// The numbers below are Seeed's published pinout, not measured — see the
+// strapping-pin warning further down before wiring one.
+//
+// Unlike every other header here it rides a DIFFERENT PlatformIO platform (the
+// pioarduino fork) and a NEWER Arduino core, so its env builds against its own
+// PLATFORMIO_CORE_DIR — see the xiao_c5 env in platformio.ini.
 //
 // WHY THIS BOARD IS INTERESTING
 //   - Real Espressif module in a thumb-sized package, USB-C, native USB.

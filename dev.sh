@@ -744,6 +744,12 @@ run_monitor() {
   local env_args=()
   [[ -n "$env" ]] && env_args=(-e "$env")
 
+  # `pio device monitor -e` reads that env's platform, so it has to look in the
+  # same core dir the build used — otherwise monitoring the C5 asks the OFFICIAL
+  # installation for a platform only the fork's has, and pio starts trying to
+  # install it. Same call the build makes; see tools/boardinfo.sh.
+  use_core_for_env "$env" >/dev/null
+
   # --no-reconnect: pio's monitor otherwise retries forever when the port goes
   # away, and each retry reprints "--- forcing RTS inactive" etc. on a loop after
   # you unplug. Right for the DevKitC, whose CP2102 keeps the port alive across

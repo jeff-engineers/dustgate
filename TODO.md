@@ -172,27 +172,41 @@ Constraints if this gets picked up:
   keep it out of `airflowIssues` so nothing refuses to run over a style note.
 - Wants a way to dismiss a suggestion per-gate, or it becomes nagging.
 
-### 0.5 Board decision (2026-08-14): QT Py **S3** is the node target, C5 is parked
+### 0.5 Board decision (2026-08-14): S3 **and** C5 are both node targets
 
-Both boards work. The XIAO C5 booted on hardware this session — full boot log,
-WiFi joined, `ready` at 1986 ms, 8 MB PSRAM and 8 MB flash measured — so this is
-a cost decision, not a capability one.
+Superseded the same day it was written. The original decision was "develop on
+the S3, park the C5", on the grounds that a single C5 in a core-2 fleet costs
+more than it's worth. Then the S3 count turned out to be lower than the shelf
+suggested, so the C5 had to become a real target — and the cost got paid
+properly instead of worked around.
 
-**Develop on the S3** because it doesn't fork the toolchain, it has the onboard
-pixel, and it's the board that's been on the bench. Also the plain fleet
-argument: 2 DevKitCs, 1–2 Feathers and a couple of QT Pys against exactly 2 C5s
-— you can't bench a two-node topology on a fleet you can brick.
+**The platforms are isolated, not swapped.** The `xiao_c5` env builds against its
+own `PLATFORMIO_CORE_DIR` (`~/.platformio-pioarduino`); every other env uses the
+default. They no longer share a package directory, so neither can damage the
+other. `use_core_for_env()` in `tools/boardinfo.sh` sets it before every build
+and before the monitor; see `firmware/wiring/xiao-c5.md` §5. Costs 7.6 GB of
+disk, downloaded once — and leaves ~6.8 GB of now-dead fork packages in the old
+shared directory, which that file gives a command to reclaim.
 
-**The C5 is better long-term** and the reasons don't expire: external U.FL
-antenna (worth more in a metal-ducted shop than the dual-band radio, since the
-plugs and the other nodes are 2.4 GHz-only anyway), double the flash and PSRAM,
-cheaper, faster to get.
+That replaced a core-swapping scheme which fixed the Arduino-core collision and
+not the toolchain one. The lesson is worth keeping: **a shared directory has an
+unknown number of collisions in it**, and each is found by losing an afternoon to
+it. Isolation ends the category.
 
-**Revisit as ONE decision, not two:** *do we migrate every target to pioarduino /
-Arduino core 3?* Adding a single C5 to a core-2 fleet is what's expensive — the
-two platforms share `~/.platformio/packages` and damage each other (see
-`firmware/wiring/xiao-c5.md` §5). Once everything is on core 3 that cost is zero
-and the C5 is the better node.
+**Still open: one fleet or two platforms.** The C5 is the only board on Arduino
+core 3.x, with its own library set (ESP32Async forks, ESP32Servo 3.x) that is
+exercised only when that env is built. Collapsing that means moving every target
+to pioarduino / core 3.x — ESP32Servo 1.x → 3.x, me-no-dev AsyncTCP +
+ESPAsyncWebServer → the ESP32Async 3.x forks — which re-validates DevKitC,
+Feather S2 and QT Py S3 on hardware. Do it deliberately, all envs at once, not
+as a side effect of needing a node. Isolation is what buys the time to choose.
+
+**Board notes that don't expire:** the C5 has the external U.FL antenna (worth
+more in a metal-ducted shop than its dual-band radio, since the plugs and the
+other nodes are 2.4 GHz-only anyway), double the flash and PSRAM, and is cheaper
+and faster to get. The S3 has the onboard pixel and the bench history. Both are
+servo-only nodes; neither can be a primary (single core on the C5, and the
+primary's whole design leans on two).
 
 ### 1. Bench validation — do this before anything else
 Networking is now real: primary↔node link is up and green (2026-08-08). The rest
@@ -318,28 +332,23 @@ node shared/device-model/nodelink-conformance.js ws://<node>.local/nodelink
 - Add manual override buttons to ballvalves/manifolds, wire in to esp32
 - ESD safety and power safety
 
-#### XIAO ESP32C5 spike (2026-08-12) — compiles, but the platform is the cost
+#### XIAO ESP32C5 (2026-08-12 spike → 2026-08-14 supported node)
 `boards/xiao_c5.h` + the `xiao_c5` env build clean (1.22 MB of a 3 MB app
-partition, 53 KB RAM), servo-only. Nothing has been flashed. What the spike
-actually established:
+partition, 53 KB RAM), servo-only, and a board has been flashed and booted —
+full boot log, WiFi joined, `ready` at 1986 ms, 8 MB PSRAM and 8 MB flash
+measured. What it established:
 
-- **The two platforms cannot coexist.** The C5 needs the pioarduino fork
-  (official `espressif32` has no C5); both publish a package named
-  `framework-arduinoespressif32` into one shared directory, so whichever env
-  builds last owns the core and the other dies with an opaque SCons
-  `TypeError: ... not NoneType`. Build `xiao_c5` alone. `[env] platform` is now
-  version-pinned so this can't happen by accident again.
-- **So adopting the C5 = migrating every target to pioarduino / core 3.x**,
-  which means ESP32Servo 1.x → 3.x and me-no-dev AsyncTCP + ESPAsyncWebServer →
-  the ESP32Async 3.x forks (the migration platformio.ini's comment declined on
-  regression-risk grounds). That re-validates all four supported targets. It is
-  the real price of the board, not the 8 MB of flash.
+- **The two platforms cannot share a directory** — the C5 needs the pioarduino
+  fork (official `espressif32` has no C5), and both publish
+  `framework-arduinoespressif32` and `toolchain-riscv32-esp` under those exact
+  names. Resolved by isolation, §0.5.
 - Two portability fixes fell out and are already in: `utils/Watchdog.h` (IDF 5
   changed `esp_task_wdt_init()` to a config struct) and the
   `rgbLedWrite`/`neopixelWrite` guard in `utils/StatusLed.h`.
-- Before flashing one: confirm which C5 GPIO are **strapping pins** and whether
-  four ADC pads are actually free — the pin map is from Seeed's published pinout,
-  not from hardware.
+- **Still to confirm before a servo goes on one:** which C5 GPIO are *strapping*
+  pins (GPIO8 and GPIO9 are used by the servo map and are the two to check) and
+  whether four ADC pads are genuinely free. The pin map is from Seeed's published
+  pinout, not from hardware.
 
 ### 4. Canvas polish
 - **Duct line routing / A\*** — deferred deliberately. It's cosmetic (odd
