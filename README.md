@@ -124,6 +124,26 @@ cd ..
 pio run --target uploadfs
 ```
 
+Or do steps 3 and 4 in one command, which also pushes WiFi credentials and the
+mDNS hostname over the cable:
+
+```bash
+./dev.sh flash
+```
+
+Those come from `tools/.env`. To use different ones for a single flash — a second
+board, a different network, a rename — override them on the command line:
+
+```bash
+./dev.sh flash --host shop --ssid Shop-WiFi
+```
+
+A bare word is the hostname (`./dev.sh flash shop`), `--ask` prompts for all
+three prefilled from `.env`, and `--save` writes what you used back to `.env`
+instead of applying it just this once. Giving `--ssid` without `--pass` asks for
+the password hidden, which keeps it out of your shell history. The same flags
+work on `./dev.sh provision`, which resends them without reflashing.
+
 ### 5. (Optional) Flash a secondary node
 
 A shop with more gates than one board can drive spreads them across extra ESP32s.

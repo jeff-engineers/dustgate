@@ -11,16 +11,22 @@
 #   bash dev.sh flash --fw          # firmware only
 #   bash dev.sh flash --ui          # UI + filesystem only (skip firmware)
 #   bash dev.sh flash --no-provision
+#   bash dev.sh flash --host shop --ssid Shop-WiFi        # override what tools/.env says
+#   bash dev.sh flash --ask                               # prompt for all three, prefilled
+#     A bare word is the hostname, as with flash-node: `dev.sh flash shop`.
+#     Overrides apply to THAT flash only — add --save to write them to tools/.env.
+#     --pass SECRET works but lands in your shell history; prefer --ssid alone
+#     (it asks for the password hidden) or --ask.
 #     Flashing the filesystem ERASES the saved shop (topology.json shares that
 #     partition with the Angular bundle), so deploy.sh copies it off the device
 #     first and puts it back at the end. Backups: .dustgate-backups/, restore by
 #     hand with `bash tools/restore-topology.sh`. Skip with --no-topology-backup.
 #   bash dev.sh flash-node [board] [host]  # flash a SECONDARY servo-only node (+ WiFi creds)
-#                                    #   board: s3 (default) | c3 | c5
+#                                    #   board: s3 (default) | c5
 #                                    #   e.g. bash dev.sh flash-node c5 dustgate-node-c5
 #   bash dev.sh monitor             # serial monitor (primary)
 #   bash dev.sh monitor node        # serial monitor for a secondary node
-#   bash dev.sh monitor c5          # ...for a XIAO C5 node (or: monitor c3)
+#   bash dev.sh monitor c5          # ...for a XIAO C5 node
 #   bash dev.sh ports               # list attached boards + which role each is pinned to
 #   bash dev.sh ports --pin         # pin each board's USB SERIAL to a role (do this once)
 #     DUSTGATE_PORT=/dev/cu.xxx     # force a port for this one command
@@ -28,6 +34,7 @@
 #     DUSTGATE_PORT_NODE=…
 #   bash dev.sh erase                # full chip erase (fixes corrupted-partition weirdness)
 #   bash dev.sh provision            # (re)send WiFi/key/hostname without reflashing
+#   bash dev.sh provision --host shop --ssid Shop-WiFi   # ...without the prompts
 #   bash dev.sh live [host]          # ng serve with hot reload, proxied to REAL hardware
 #                                    #   (default host: dustgate.local)
 #
@@ -287,13 +294,112 @@ load_env_defaults() {
   ENV_HOST="${ENV_HOST:-dustgate}"
 }
 
+# Writes the three provisioning values back to tools/.env, preserving anything
+# else in the file (comments, API key, whatever else lands there later). Only
+# ever called for --save: an override is one-shot by default, because silently
+# rewriting the file from a one-off flash is how you end up provisioning the next
+# board with a hostname you typed once and forgot.
+save_env_defaults() {
+  local tmp; tmp="$(mktemp)"
+  [[ -f "$ENV_FILE" ]] && { grep -vE '^[[:space:]]*(WIFI_SSID|WIFI_PASS|HOSTNAME)=' "$ENV_FILE" || true; } > "$tmp"
+  {
+    printf 'WIFI_SSID=%s\n' "$WIFI_SSID"
+    printf 'WIFI_PASS=%s\n' "$WIFI_PASS"
+    printf 'HOSTNAME=%s\n'  "$HOSTNAME_CFG"
+  } >> "$tmp"
+  mkdir -p "$(dirname "$ENV_FILE")"
+  mv "$tmp" "$ENV_FILE"
+  chmod 600 "$ENV_FILE"
+  echo "  ✓ Saved SSID and hostname to tools/.env (password written, not echoed)."
+}
+
+# Pulls provisioning overrides out of an argument list, so a primary can be
+# flashed with a hostname/network other than the one in tools/.env — the same
+# control flash-node has always had, which was missing here purely because the
+# primary reads its values from a file instead of a prompt.
+#
+#   --host NAME | --host=NAME     mDNS name (device ends up at NAME.local)
+#   --ssid NAME | --ssid=NAME     WiFi network
+#   --pass SECRET                 WiFi password — see the history note below
+#   --ask                         prompt for all three even though .env has them
+#   --save                        write the result back to tools/.env
+#   NAME                          a bare word is the hostname (as in flash-node)
+#
+# Everything it doesn't recognise is left in PROVISION_REST for deploy.sh, so
+# --fw / --ui / --no-provision keep working and any future deploy.sh flag passes
+# through without this function needing to know about it.
+PROVISION_REST=()
+OV_HOST=""; OV_SSID=""; OV_PASS=""; OV_ASK=0; OV_SAVE=0
+parse_provision_overrides() {
+  PROVISION_REST=()
+  OV_HOST=""; OV_SSID=""; OV_PASS=""; OV_ASK=0; OV_SAVE=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --host)   OV_HOST="${2:-}"; shift 2 ;;
+      --host=*) OV_HOST="${1#*=}"; shift ;;
+      --ssid)   OV_SSID="${2:-}"; shift 2 ;;
+      --ssid=*) OV_SSID="${1#*=}"; shift ;;
+      --pass)   OV_PASS="${2:-}"; shift 2 ;;
+      --pass=*) OV_PASS="${1#*=}"; shift ;;
+      --ask)    OV_ASK=1; shift ;;
+      --save)   OV_SAVE=1; shift ;;
+      --*)      PROVISION_REST+=("$1"); shift ;;
+      *)        OV_HOST="$1"; shift ;;    # bare word = hostname, as in flash-node
+    esac
+  done
+}
+
+# Settle on the three values and export them for deploy.sh (which prefers an
+# exported var over re-reading tools/.env). Order of authority: an explicit flag
+# beats tools/.env, and --ask puts a prompt in front of whatever won — prefilled,
+# so Enter still takes the default.
+#
+# `interactive_when_empty` asks on a first-run device with no SSID stored, which
+# is the one case where proceeding silently would flash a board that can never
+# join a network.
+apply_provision_overrides() {
+  local interactive_when_empty="${1:-1}"
+  load_env_defaults
+  [[ -n "$OV_SSID" ]] && ENV_SSID="$OV_SSID"
+  [[ -n "$OV_PASS" ]] && ENV_PASS="$OV_PASS"
+  [[ -n "$OV_HOST" ]] && ENV_HOST="$OV_HOST"
+
+  if (( OV_ASK )) || [[ -z "$ENV_SSID" && "$interactive_when_empty" == "1" ]]; then
+    [[ -z "$ENV_SSID" ]] && echo "  No WiFi credentials found in tools/.env yet — let's set them up."
+    prompt_credentials --prefilled
+    return
+  fi
+
+  WIFI_SSID="$ENV_SSID"; WIFI_PASS="$ENV_PASS"; HOSTNAME_CFG="$ENV_HOST"
+  # A new network with no password given is worth one hidden prompt rather than
+  # a silent failure to associate — the old password is almost never right for it.
+  if [[ -n "$OV_SSID" && -z "$OV_PASS" ]]; then
+    local reply=""
+    # `|| true`: read returns non-zero on EOF, and under `set -e` a Ctrl-D at this
+    # prompt would abort the flash rather than fall through to the stored password.
+    read -rsp "  WiFi Password for '$WIFI_SSID' [Enter keeps the stored one]: " reply || true
+    echo
+    [[ -n "$reply" ]] && WIFI_PASS="$reply"
+  fi
+  export WIFI_SSID WIFI_PASS HOSTNAME_CFG
+  if [[ -n "$OV_HOST$OV_SSID$OV_PASS" ]]; then
+    echo "  Provisioning as: $HOSTNAME_CFG  on '$WIFI_SSID'"
+    (( OV_SAVE )) || echo "  (this flash only — add --save to keep it in tools/.env)"
+  fi
+  (( OV_SAVE )) && save_env_defaults
+  return 0
+}
+
 # Interactively prompts for WiFi SSID/password and mDNS hostname — prefilled
 # from tools/.env where available, Enter keeps the default. Exports
 # WIFI_SSID/WIFI_PASS/HOSTNAME_CFG for
 # deploy.sh to pick up directly (it prefers already-exported vars over
 # re-reading the file).
+#
+# --prefilled means the ENV_* defaults have already been set (and possibly
+# overridden by a flag) by the caller, so don't re-read the file over the top.
 prompt_credentials() {
-  load_env_defaults
+  [[ "${1:-}" == "--prefilled" ]] || load_env_defaults
   echo ""
   echo "  Provisioning details — press Enter to keep the default shown."
   read -rp "  WiFi SSID${ENV_SSID:+ [$ENV_SSID]}: " WIFI_SSID
@@ -303,6 +409,8 @@ prompt_credentials() {
   read -rp "  Hostname — device will be at http://<host>.local [$ENV_HOST]: " HOSTNAME_CFG
   HOSTNAME_CFG="${HOSTNAME_CFG:-$ENV_HOST}"
   export WIFI_SSID WIFI_PASS HOSTNAME_CFG
+  (( ${OV_SAVE:-0} )) && save_env_defaults
+  return 0
 }
 
 pids=()
@@ -365,20 +473,24 @@ run_mock() {
 }
 
 run_flash() {
+  # --host/--ssid/--pass/--ask/--save come out here; everything else (--fw, --ui,
+  # --no-provision, …) carries on to deploy.sh untouched.
+  parse_provision_overrides "$@"
+  set -- "${PROVISION_REST[@]+"${PROVISION_REST[@]}"}"
+
   echo "▶ Real hardware — flashing ESP32."
   local port
   port="$(require_port)" || exit 1
   echo "  Using port: $port"
   echo ""
 
-  # First-time setup: if provisioning wasn't disabled and tools/.env has no
-  # SSID at all yet, ask for it now instead of silently skipping the step.
+  # Settle the provisioning values: a flag beats tools/.env, --ask prompts over
+  # either, and an empty .env still prompts on its own so a first-run board can't
+  # be flashed with no way onto a network.
   if [[ "$*" != *"--no-provision"* && "$*" != *"--provision-only"* ]]; then
-    load_env_defaults
-    if [[ -z "$ENV_SSID" ]]; then
-      echo "  No WiFi credentials found in tools/.env yet — let's set them up."
-      prompt_credentials
-    fi
+    apply_provision_overrides 1
+  elif [[ -n "$OV_HOST$OV_SSID$OV_PASS" ]]; then
+    echo "  ⚠  Ignoring --host/--ssid/--pass: provisioning is disabled by --no-provision."
   fi
 
   cd "$SCRIPT_DIR"
@@ -396,7 +508,7 @@ run_flash() {
 }
 
 run_flash_node() {
-  # First argument MAY be a board word (s3/c3/c5). If it isn't, it's the hostname
+  # First argument MAY be a board word (s3/c5). If it isn't, it's the hostname
   # — which is how this command has always been called, and stays working.
   local node_env="dustgate_node"
   local maybe_env
@@ -497,11 +609,22 @@ next_node_hostname() {
 }
 
 run_provision() {
+  # Same overrides as flash. Here they're arguably more useful: this is the
+  # command for moving an already-flashed board onto a different network or
+  # renaming it, which is exactly what a flag spares you re-typing.
+  parse_provision_overrides "$@"
+
   echo "▶ (Re)send WiFi/key/hostname to an already-flashed board."
   local port
   port="$(require_port)" || exit 1
   echo "  Using port: $port"
-  prompt_credentials
+  # No flags given → prompt, which is what this command has always done. With
+  # flags, take them as said and don't ask.
+  if [[ -z "$OV_HOST$OV_SSID$OV_PASS" ]]; then
+    prompt_credentials
+  else
+    apply_provision_overrides 0
+  fi
   echo ""
   cd "$SCRIPT_DIR"
   PLATFORMIO_UPLOAD_PORT="$port" bash deploy.sh --provision-only
@@ -709,7 +832,6 @@ show_menu() {
     nc5|NC5)   run_flash_node c5 ;;
     6) run_monitor ;;
     6n|6N) run_monitor dustgate_node ;;
-    6c3)   run_monitor dustgate_node_c3 ;;
     6c5)   run_monitor xiao_c5 ;;
     7) run_erase ;;
     8) run_provision ;;
@@ -730,18 +852,18 @@ case "${1:-}" in
     shift || true
     case "${1:-}" in
       node|n)     run_monitor dustgate_node ;;
-      c3|c5|s3)   run_monitor "$(node_env_for "$1")" ;;
+      c5|s3)      run_monitor "$(node_env_for "$1")" ;;
       *)          run_monitor ;;
     esac
     ;;
   erase)     run_erase ;;
-  provision) run_provision ;;
+  provision) shift; run_provision "$@" ;;
   flash-node|node) shift; run_flash_node "$@" ;;
   live)      shift; run_live "$@" ;;
   "")        show_menu ;;
   *)
     echo "Unknown mode: $1"
-    echo "Usage: dev.sh [demo|mock|flash [--fw|--ui|--no-provision]|flash-node [s3|c3|c5] [hostname]|monitor [node|c3|c5]|ports [--pin]|erase|provision|live [host]]"
+    echo "Usage: dev.sh [demo|mock|flash [--fw|--ui|--no-provision] [--host N] [--ssid N] [--pass S] [--ask] [--save]|flash-node [s3|c5] [hostname]|monitor [node|c5]|ports [--pin]|erase|provision [--host N] [--ssid N]|live [host]]"
     exit 1
     ;;
 esac
