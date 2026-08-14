@@ -36,6 +36,7 @@
   "files": [
     "src/app/services/shop-doc.spec.ts",
     "src/app/services/shop-ready.spec.ts",
-    "src/app/gates/selector-types.spec.ts"
+    "src/app/gates/selector-types.spec.ts",
+    "src/app/tools/outlet-match.spec.ts"
   ]
 }

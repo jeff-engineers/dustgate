@@ -47,6 +47,7 @@ const SUITES = [
   ['services/shop-doc.spec.js', 'shop-doc'],
   ['services/shop-ready.spec.js', 'shop-ready'],
   ['gates/selector-types.spec.js', 'selector-types'],
+  ['tools/outlet-match.spec.js', 'outlet-match'],
 ];
 
 try {
