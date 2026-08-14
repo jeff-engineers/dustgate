@@ -413,8 +413,9 @@ run_flash_node() {
     echo ""
     echo "  ⚠  The C5 rides the pioarduino platform, not the espressif32 one every"
     echo "     other target uses. Both publish a package called"
-    echo "     framework-arduinoespressif32 into the same directory, so the next"
-    echo "     DevKitC build will re-install its core (slow, not broken). Never"
+    echo "     framework-arduinoespressif32 into the same directory, so only one"
+    echo "     core can be installed at a time. The scripts now swap it in and out"
+    echo "     for you (first swap downloads, later ones are instant) — but never"
     echo "     build this env alongside another in one pio command."
     echo "     Pin map: firmware/wiring/xiao-c5.md — UNVERIFIED against hardware."
   fi

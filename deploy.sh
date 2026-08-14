@@ -229,6 +229,12 @@ done
 PIO_ENV_ARGS=()
 [[ -n "$PIO_ENV" ]] && PIO_ENV_ARGS=(-e "$PIO_ENV")
 
+# The xiao_c5 env rides a different platform, and the two platforms fight over
+# one shared Arduino-core directory. Settle it before anything builds — left to
+# PlatformIO it does NOT resolve itself; it dies with an opaque SCons TypeError
+# naming no package at all. See tools/boardinfo.sh.
+ensure_core_for_env "$PIO_ENV"
+
 # ── Load credentials from tools/.env if present ────────────────────────────
 # Callers (e.g. dev.sh, after interactively prompting) may already have these
 # exported — only fall back to the file for whichever ones aren't set.

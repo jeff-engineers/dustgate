@@ -137,9 +137,14 @@ genuinely free, since the published pinout is the only source so far.
 
 The C5 needs the **pioarduino** fork (official `espressif32` has no C5) and a
 newer Arduino core than every other target here. Both platforms publish a package
-called `framework-arduinoespressif32` into one shared directory, so whichever env
-builds last owns the core and the other dies with an opaque SCons
-`TypeError: ... not NoneType`.
+called `framework-arduinoespressif32` into one shared directory, so only one core
+can be installed at a time — whichever env built last owns it, and the other dies
+with an opaque SCons `TypeError: ... not NoneType` that names no package.
+
+**It does not recover on its own.** PlatformIO leaves the wrong core in place and
+keeps failing identically until the directory is cleared. `dev.sh` and `deploy.sh`
+now clear it for you and stash the evicted core, so the first swap downloads and
+later ones are a rename — go through the scripts and you will never see this.
 
 **Flash it** (picks the env, the native-USB port and the right DTR/RTS
 convention, then prompts for WiFi credentials and a hostname):
