@@ -44,6 +44,47 @@ the single-core C3.
 
 ## 1. Pin map
 
+### Top view — the labels you can't see once it's docked
+
+The silkscreen is on the **bottom** of the board, so every pad label disappears
+the moment it's in a socket. This is that label, from above. **The USB-C
+connector is the only orientation reference** — the board is otherwise
+symmetrical, and it is easy to count a servo lead onto the wrong row.
+
+```
+                          USB-C
+                        ┌───────┐
+              ┌─────┬───┴───────┴───┬─────┐
+   GPIO1   D0 │  o  │               │  o  │ 5V      do NOT power servos here
+   GPIO0   D1 │  o  │               │  o  │ GND     ← servo/pixel ground
+  GPIO25   D2 │  o  │    XIAO       │  o  │ 3V3
+   GPIO7   D3 │  o  │    ESP32C5    │  o  │ D10  GPIO10   ── servo ch 4
+  GPIO23   D4 │  o  │               │  o  │ D9   GPIO9    ── servo ch 3  ⚠
+  GPIO24   D5 │  o  │  (top view)   │  o  │ D8   GPIO8    ── servo ch 2  ⚠
+  GPIO11   D6 │  o  │               │  o  │ D7   GPIO12   ── servo ch 1
+              └─────┴───────────────┴─────┘
+                 ▲                     ▲
+                 │                     └── servo block: the FOUR pads
+                 │                         furthest from the USB-C end,
+                 │                         channel 1 nearest the corner
+                 └── D2 = status pixel DIN
+```
+
+Counting rule when it's docked and you can see nothing: **hold the USB-C end
+away from you.** Left column is D0→D6 running away from the connector; right
+column is 5V, GND, 3V3, then D10→D7 running toward you. Servo channel 1 is the
+pad in the corner *diagonally opposite* the USB-C connector.
+
+The two buttons are at the USB-C end: **RESET** reboots, **BOOT** does nothing on
+its own. Download mode is hold BOOT → tap RESET → release BOOT. Pressing BOOT
+alone on a hung board gets you nothing, which is easy to mistake for a dead board.
+
+> Same caveat as the rest of this file: the drawing is Seeed's published pinout
+> redrawn, not a board traced with a multimeter. The header
+> [`boards/xiao_c5.h`](../boards/xiao_c5.h) is what the build reads.
+
+### The numbers
+
 XIAO silkscreen pads D0–D10 map to GPIO **1, 0, 25, 7, 23, 24, 11, 12, 8, 9, 10**.
 
 | Signal              | Pad | GPIO | Notes |
