@@ -31,8 +31,8 @@ in one glance where a blink rate is not.
 
 | Colour | Meaning |
 |--------|---------|
-| **Green** | Ready. Node: primary linked. Primary: routing live. |
-| **Blue** | On WiFi but not ready. Node: no primary linked. Primary: no layout stored yet. |
+| **Green** | Ready. Node: primary linked. Primary: routing live **and every paired board answering**. |
+| **Blue** | On WiFi but not ready. Node: no primary linked. Primary: no layout stored yet, or a board it's paired with is dark. |
 | **Orange, solid** | Something is moving. Solid = a move or servo sweep, slow blink = homing, fast blink = calibration sweep. Also a 400 ms flash when a command lands. |
 | **Orange, blinking (~1.5×/sec)** | WiFi lost, or never joined. Shares the colour with "moving" — the rate is what tells them apart, so check whether it is steady before assuming a gate is in flight. |
 | **White, blinking** | Captive portal is up, waiting for WiFi credentials. The only state that needs a human to walk over — hence the only white. |

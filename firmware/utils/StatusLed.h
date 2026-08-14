@@ -17,7 +17,10 @@
 //             Blinking, and the only white in the set, because it is the one
 //             state that cannot resolve without a human walking over.
 //   BLUE    — on WiFi, but not ready to work. On a node: no primary has linked.
-//             On a primary: no topology stored yet, so there is nothing to route.
+//             On a primary: no topology stored yet, so there is nothing to
+//             route — or a board it is paired with is dark, so part of the shop
+//             cannot be driven. Green means the WHOLE shop is answering, not
+//             just this board.
 //   GREEN   — ready. This is the "everything works" colour.
 //
 // Green is reserved for fully-working ON PURPOSE. An earlier cut used dim green
@@ -63,8 +66,9 @@ enum Status {
     PORTAL,       // white — blinking; captive portal waiting for credentials
     NO_WIFI,      // orange — was connected, isn't now (or never joined)
     ONLINE,       // blue — on WiFi, not ready to work (node: unlinked;
-                  //        primary: no topology stored)
-    READY         // green — node: primary linked. primary: routing live.
+                  //        primary: no topology stored, or a paired board is dark)
+    READY         // green — node: primary linked.
+                  //         primary: routing live AND every paired board answering.
 };
 
 // Motion overlays. These OUTRANK Status while active, because during a move the

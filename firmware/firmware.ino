@@ -850,7 +850,67 @@ void setup() {
 // primary with no topology stored has nothing to route, so it sits on blue: it
 // is working, it just has no shop yet. That distinction is exactly what the old
 // single LED could not express — it was dark for both.
+//
+// It also means every PAIRED board is answering — see allNodesLinked() below.
 // =============================================================================
+
+// True when every board this primary is paired with is currently linked.
+//
+// Green is reserved for "everything works" (StatusLed.h), and on a multi-board
+// shop this primary working is only half of that: if a node is dark, the gates
+// on it will not move, and the failure shows up as a tool that doesn't pull —
+// long after you walked away from the board that could have told you.
+//
+// Keyed on PAIRING, not on the topology. The registry is what this board "knows
+// about": a node paired but not yet given any gates is still a board that is
+// supposed to be there, and a node that has silently dropped off WiFi is the
+// case this exists to catch.
+//
+// A missing node is BLUE, not red — "on WiFi, not ready to work", the same as
+// having no layout yet. It is usually a node still booting or a router
+// hiccuping, both of which resolve themselves, and red is reserved for what the
+// board cannot fix. The link retries on its own, so the colour comes back.
+//
+// No nodes paired = trivially true, which keeps a single-board shop on exactly
+// the behaviour it had before.
+//
+// SAMPLED, not polled every pass. info() takes the bus mutex and copies strings,
+// and it contends with that node's own NodeLink task; loop() runs thousands of
+// times a second and an indicator does not need to. Same cadence as the node
+// status publish, which is already the fastest anything reads this.
+static bool allNodesLinked() {
+    static bool          cached     = true;
+    static unsigned long lastCheck  = 0;
+    static int           lastDarkId = -1;   // which node we last reported dark
+
+    if (lastCheck != 0 && millis() - lastCheck < V2_STATUS_PUBLISH_MS) return cached;
+    lastCheck = millis();
+
+    int dark = -1;
+    for (int i = 0; i < g_remoteCount; i++) {
+        if (!g_remoteBuses[i].info().connected) { dark = i; break; }
+    }
+
+    // Log the TRANSITION, both directions. A node dropping out is otherwise
+    // silent on the primary — the only evidence is a gate that stops moving,
+    // which sends you looking at the gate.
+    if (dark != lastDarkId) {
+        if (dark >= 0) {
+            DEBUG_PRINT(F("[NODE] dark: "));
+            DEBUG_PRINT(g_remoteBuses[dark].host());
+            DEBUG_PRINTLN(F(" — indicator holds blue until it answers"));
+        } else {
+            DEBUG_PRINT(F("[NODE] all paired boards linked ("));
+            DEBUG_PRINT(g_remoteCount);
+            DEBUG_PRINTLN(F(")"));
+        }
+        lastDarkId = dark;
+    }
+
+    cached = (dark < 0);
+    return cached;
+}
+
 static void updateStatusLed() {
     switch (currentState) {
         case STATE_HOMING:      statusled::setMotion(statusled::HOMING);      break;
@@ -887,7 +947,7 @@ static void updateStatusLed() {
         statusled::set(statusled::NO_WIFI);
     }
 #endif
-    else if (!g_topoRuntime.loaded()) {
+    else if (!g_topoRuntime.loaded() || !allNodesLinked()) {
         statusled::set(statusled::ONLINE);
     } else {
         statusled::set(statusled::READY);
