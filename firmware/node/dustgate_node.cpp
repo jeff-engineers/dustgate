@@ -42,6 +42,7 @@
 #include <ArduinoJson.h>
 #include <Preferences.h>          // the persisted owner claim — see THE CLAIM below
 #include <ESPmDNS.h>
+#include <esp_heap_caps.h>        // bootTrace() — internal-DRAM headroom at each stage
 #include "../utils/Watchdog.h"
 
 #include "../motor/ServoActuator.h"
@@ -283,6 +284,29 @@ static void reportState(const char* selectorId, const char* stateId, bool moving
 }
 
 // -----------------------------------------------------------------------------
+// Boot-stage memory trace.
+//
+// The XIAO C5 bring-up died at ~1.2 s with one IDF line — "Failed to allocate
+// dummy cacheline for PSRAM memory barrier!" — and nothing else on the wire: no
+// banner, no panic, no reboot loop. A stock sketch on the same board reports
+// 8 MB of working PSRAM, so the fault is in THIS program, and a boot that dies
+// before its own first print tells you nothing about where.
+//
+// Internal DRAM is the number that matters — PSRAM can't back a DMA descriptor,
+// an ISR stack or a WiFi buffer — so print it separately from the total. Print
+// the largest single block too: early allocation failures are usually
+// fragmentation rather than exhaustion, and the two look identical if you only
+// watch the free total. Flush each line, or a hang eats the one that mattered.
+static void bootTrace(const char* stage) {
+    Serial.printf("[BOOT] %-8s t=%5lums heap=%6u internal=%6u largest=%6u psram=%u\n",
+                  stage, (unsigned long)millis(),
+                  (unsigned)ESP.getFreeHeap(),
+                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+                  (unsigned)ESP.getPsramSize());
+    Serial.flush();
+}
+
 void setup() {
     Serial.begin(SERIAL_BAUD);
 #if BOARD_HAS_NATIVE_USB
@@ -290,6 +314,7 @@ void setup() {
     while (!Serial && (millis() - t0) < 5000) { delay(10); }
 #endif
     delay(100);
+    bootTrace("serial");
 
     // Before WiFi, so the pixel is already saying something during the blocking
     // connect below — on a board with no serial attached that is the only sign
@@ -313,11 +338,14 @@ void setup() {
     // Load the claim BEFORE the WebSocket can accept anyone: a HELLO that
     // arrived first would otherwise adopt a node that already has an owner.
     loadClaim();
+    bootTrace("claim");
 
     WiFiProvisioner::begin();
     WiFiProvisioner::setPortalTick(nullptr);
+    bootTrace("wifi");
 
     for (int i = 0; i < SERVO_COUNT; i++) servos[i].begin(SERVO_PINS[i]);
+    bootTrace("servos");
 
     // Advertise for the primary's node picker (GET /api/nodes/discover).
     // The TXT record is what distinguishes a node from the primary's own
@@ -329,9 +357,12 @@ void setup() {
         MDNS.addServiceTxt("dustgate", "tcp", "servos", String(SERVO_COUNT).c_str());
     }
 
+    bootTrace("mdns");
+
     nodeWs.onEvent(onNodeWsEvent);
     server.addHandler(&nodeWs);
     server.begin();
+    bootTrace("server");
     Serial.print(F("[NODE] Listening on ws://"));
     Serial.print(WiFiProvisioner::getHostname());
     Serial.println(F(".local/nodelink"));
@@ -339,6 +370,7 @@ void setup() {
     // Watchdog armed last, after the blocking WiFi connect — same discipline as
     // the primary sketch.
     watchdog::begin();
+    bootTrace("ready");
 }
 
 void loop() {
