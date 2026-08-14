@@ -305,5 +305,5 @@ npm start
 
 ---
 
-*For wiring diagrams see `firmware/WIRING.md`.*  
+*For wiring diagrams see `firmware/WIRING.md` and the per-board files in `firmware/wiring/`.*  
 *Original seed requirements preserved in `requirements.txt`.*

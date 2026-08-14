@@ -63,7 +63,8 @@
 // LED. Strictly worse (that ambiguity is why the pixel exists) but free.
 //
 // Wire: 5V -> pixel VDD, GND -> GND, GPIO25 -> 330R -> pixel DIN.
-// See WIRING.md §5 for the level-shift and decoupling notes.
+// See WIRING.md §1 for the level-shift and decoupling notes, and
+// firmware/wiring/xiao-c5.md for this board's full wiring.
 #define PIN_PIXEL          25   // D2
 
 // -- Reserved: serial-servo bus --

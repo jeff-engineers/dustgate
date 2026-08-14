@@ -26,7 +26,9 @@ Each tool plugs into a [Shelly smart outlet](https://us.shelly.com). When a tool
 
 The reference build is a 2.5" dust port system, with adjacent gates spaced about 82.9mm apart (these measured numbers feed the dual-endstop self-calibration — see [`docs/dual-endstop-calibration.md`](docs/dual-endstop-calibration.md)). A 4" variant is planned but not yet built or measured, so it's **disabled in the UI** until real hardware exists to measure its manifold profile (the logic is kept in place for when it does).
 
-For wiring details see [`firmware/WIRING.md`](firmware/WIRING.md).
+For wiring details see [`firmware/WIRING.md`](firmware/WIRING.md) (shop-wide) and
+the per-board files it links: [DevKitC](firmware/wiring/devkitc.md),
+[XIAO ESP32C5](firmware/wiring/xiao-c5.md).
 
 ---
 
@@ -245,7 +247,9 @@ firmware/         Firmware (Arduino / PlatformIO)
   training/              Calibration storage
   utils/                 WiFi provisioning, motion math, mDNS queries
   data/                  LittleFS filesystem image (generated — don't edit)
-  WIRING.md              Wiring reference
+  WIRING.md              Wiring reference (shop-wide)
+  wiring/devkitc.md      Pin map + stepper/endstops for the rack primary
+  wiring/xiao-c5.md      Pin map for the XIAO ESP32C5 servo node
 
 dustgate-ui/             Web UI (Angular 17) — see dustgate-ui/README.md for
                          local dev instructions and a full breakdown

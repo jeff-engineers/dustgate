@@ -48,7 +48,7 @@
 // Freely remappable through the S3's GPIO matrix, and StepperTMC2209Driver.cpp
 // already passes both pins to Serial1.begin(), so no pad is privileged here.
 // Single-wire half-duplex at the driver end: TX through the 1k series resistor
-// to the breakout's UART pad, RX tied to the same node (see WIRING.md).
+// to the breakout's UART pad, RX tied to the same node (see wiring/devkitc.md §2).
 #define SERIAL1_TX_PIN      8   // A3
 #define SERIAL1_RX_PIN      7   // SDA
 

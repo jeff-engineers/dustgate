@@ -185,7 +185,7 @@ un-configuring the blower. Watch for `[Outlets] Layout plugs registered: N` at b
 
 #### PICK UP HERE — BTT TMC2209 V1.3 driver swap (paused 2026-08-09)
 Swapping the Adafruit #6121 breakout for a BigTreeTech TMC2209 StepStick V1.3.
-Wiring is documented in `firmware/WIRING.md` §1.
+Wiring is documented in `firmware/wiring/devkitc.md` §2.
 
 Verified on the actual module, so these are settled:
 - sense resistors read **R110 → 0.11 Ω**, which already matches `TMC2209_R_SENSE`
@@ -517,7 +517,8 @@ What was **observed**:
 
 What was **not** shown: that any of the above caused the others. The carrier was
 dismantled before a measurement isolated anything, so the 5V-peripheral-backfeed
-story in WIRING.md §8 is a hypothesis with a plausible mechanism and no evidence.
+story in WIRING.md §4 (power supply) is a hypothesis with a plausible mechanism
+      and no evidence.
 A reversed WS2812 is an equally good suspect by itself.
 
 - [ ] Rebuild a minimal carrier and reproduce deliberately: seat the board, confirm
@@ -525,7 +526,7 @@ A reversed WS2812 is an equally good suspect by itself.
       is: strap GPIO0 low over a reset and check for `boot:0x03 (DOWNLOAD_BOOT)`.
 - [ ] Measure the 3V3 rail with USB unplugged and the external supply on. Anything
       above ~0.3V is backfeed, and the voltage says how hard.
-- [ ] Then either confirm WIRING.md §8's hypothesis or replace it with what actually
+- [ ] Then either confirm WIRING.md §4's hypothesis or replace it with what actually
       happened. Do not leave it as a maybe — it is currently the first thing the
       next person will read when their board won't flash.
 
@@ -552,9 +553,9 @@ NodeLink all started on a bare DevKitC. These are what the boot log exposed.
       board still runs." (2026-08-12)
 - [x] ~~Boot banner said `Target: ESP32 + TMC2209` on every board~~, including
       ones with no stepper. Now reports BOARD_NAME + what is actually fitted.
-- [x] ~~Status-pixel legend only existed in WIRING.md §5~~ — added to the serial
+- [x] ~~Status-pixel legend only existed in WIRING.md §5 (now §1)~~ — added to the serial
       `help` menu, where you are when you're squinting at a blinking light. Also
-      split the WIRING.md table's single "Orange" row: solid = moving, blinking =
+      split the WIRING.md status-pixel table's single "Orange" row: solid = moving, blinking =
       WiFi lost. Same colour, and only the rate tells them apart.
 
 #### Make `HAS_LINEAR` load-bearing (deferred stopgap, 2026-08-12)

@@ -446,7 +446,7 @@ void SerialDebugControl::printHelp() {
     Serial.println(F("  help              Show this list"));
 #if defined(PIN_PIXEL) || defined(PIN_LED)
     // The pixel is the only diagnostic you get once the board is in a box and
-    // the USB cable is gone, and its legend otherwise lives only in WIRING.md §5
+    // the USB cable is gone, and its legend otherwise lives only in WIRING.md §1
     // — which is not where you are when you're squinting at a blinking light.
     //
     // Kept in step with utils/StatusLed.h, which is the source of truth for both

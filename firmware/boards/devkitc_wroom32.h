@@ -59,10 +59,10 @@
 // GPIO17 is a labeled spare and non-strapping, so unlike GPIO2 nothing wired
 // here can hold the board out of download mode at boot.
 //
-// Wire: 5V (or 3V3 — see WIRING.md §5) -> pixel VDD, GND -> GND,
+// Wire: 5V (or 3V3 — see WIRING.md §1) -> pixel VDD, GND -> GND,
 //       GPIO17 -> 330R -> pixel DIN, 1000µF across the pixel's supply.
 // The DevKitC is 3V3 logic; on a 5V-powered pixel read the level-shift note in
-// WIRING.md §5 before assuming DIN is happy.
+// WIRING.md §1 (status pixel) before assuming DIN is happy.
 #define PIN_PIXEL          17
 
 // No PIN_LED: the pixel covers every state. StatusLed.h's plain-LED fallback is
