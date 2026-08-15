@@ -85,13 +85,37 @@ jobs:
       - name: Install tools deps
         run: npm ci
         working-directory: tools
-      - name: Cache PlatformIO
+      # Two caches, because they turn over for different reasons.
+      #
+      # The PlatformIO core (platform packages, Arduino framework, xtensa
+      # toolchain) is the expensive one — gigabytes. Its key hashes
+      # platformio.ini so that changing `platform` or `lib_deps` re-resolves,
+      # but ANY edit to that file changes the hash, and platformio.ini is edited
+      # often (build_flags, partitions, comments). Without restore-keys that
+      # meant a full cold re-download roughly one run in six.
+      #
+      # restore-keys fixes it: an exact miss falls back to the newest cache with
+      # the same prefix, and PlatformIO tops up only what actually changed — it
+      # resolves the version spec against what's installed rather than assuming
+      # it's current. The exact key still changes, so the topped-up core is saved
+      # as a fresh entry (cache entries are immutable; you add, never overwrite).
+      - name: Cache the PlatformIO core
         uses: actions/cache@v4
         with:
-          path: |
-            ~/.platformio
-            ~/.cache/pip
+          path: ~/.platformio
           key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+          restore-keys: |
+            pio-${{ runner.os }}-
+      # pip has nothing to do with platformio.ini — it was sharing that key and
+      # being thrown away for an unrelated reason. It only holds the platformio
+      # wheel and its deps, so it's keyed on the workflow that installs it.
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-${{ hashFiles('.github/workflows/ci.yml') }}
+          restore-keys: |
+            pip-${{ runner.os }}-
       - name: Install PlatformIO
         run: pip install --upgrade platformio
       # Every env on the espressif32 platform, which is all of them but xiao_c5.
