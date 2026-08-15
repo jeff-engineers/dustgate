@@ -54,10 +54,21 @@ Firmware compiles — `pio run -e <env>`:
 | `dustgate_node` | QT Py ESP32-S3 | secondary node |
 | `xiao_c5` | XIAO ESP32C5 | secondary node |
 
-`xiao_c5` rides the pioarduino platform, not espressif32. Both ship a package
-called `framework-arduinoespressif32` into the same directory, so only one core
-can be installed at a time — **never build `xiao_c5` in the same `pio run` as
-another env.** `dev.sh` swaps the core in and out for you.
+`xiao_c5` rides the pioarduino platform, not espressif32. The two collide over
+package names in a shared core directory, so the fork gets **its own**
+`PLATFORMIO_CORE_DIR` (`~/.platformio-pioarduino`, 7.6 GB, downloaded once) —
+see the essay at the top of `tools/boardinfo.sh` for why isolation beats fixing
+collisions one at a time. `dev.sh` and `deploy.sh` call `use_core_for_env` for
+you. By hand:
+
+```bash
+PLATFORMIO_CORE_DIR=~/.platformio-pioarduino pio run -e xiao_c5
+```
+
+Because the core dir is one env var per process, **`xiao_c5` can't share a
+`pio run` with any other env.** Nothing in `~/.platformio` is touched by a C5
+build. (The warning `dev.sh` prints about "swapping the core in and out" is
+stale — that was the earlier approach.)
 
 Bench work goes through `dev.sh` (`demo`, `mock`, `flash`, `flash-node`,
 `monitor`, `ports`, `live`) — its header comment is the reference. Prefer it

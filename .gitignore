@@ -65,7 +65,17 @@ firmware/idf_component.yml.orig
 *.swo
 *~
 .idea/
-.claude/
+# Claude Code config is per-machine (settings.local.json holds local permissions,
+# launch.json holds local ports) — but .claude/skills/ is project knowledge, the
+# same kind of thing as CLAUDE.md, so it ships. A parent directory that is
+# excluded can't have children re-included, hence the /* rather than a plain
+# .claude/.
+/.claude/*
+!/.claude/skills/
+# Those two are ROOT-anchored (a mid-pattern slash anchors to this file's
+# directory), so nested .claude dirs need saying separately or they'd fall
+# through and be committed.
+*/.claude/
 .vercel
 
 # Per-machine USB serial→role pins for dev.sh (see "dev.sh ports --pin").
