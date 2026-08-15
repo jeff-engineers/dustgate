@@ -7,13 +7,15 @@
 // because the alternative is the user pairing six plugs by hand, one at a time,
 // walking to each machine to switch it on.
 //
-// It is a SUGGESTION, never an action. Every match this file produces is shown
-// with the plug's name next to the machine's and has to be accepted — see the
-// dock's `suggest` state in build.component.ts. That is the whole reason a fuzzy
-// score is acceptable here: being wrong costs a glance, not a mis-wired shop.
+// IT ASSIGNS. "Match by name" writes the pairing straight onto the machine — it
+// no longer offers a per-row suggestion waiting for a tick. That inverts which
+// error is cheap: a wrong guess puts a wrong plug on a real machine and will be
+// found when a gate doesn't open, while a missed guess costs one drag. Every
+// tuning decision below follows from that, and none of it would be right for a
+// version that suggested.
 //
 // Extracted from the component so it can be tested without a DOM. The design is
-// docs/mockups/outlet-dock.html; this is that file's scorer, made typed.
+// docs/mockups/outlet-docks-multi-system.html.
 
 /** Case, spaces, dashes and underscores are noise here — nobody means them. */
 function norm(s: string): string {
@@ -59,24 +61,42 @@ export function nameScore(outletName: string, machineName: string): number {
 /**
  * Below this, don't offer it at all.
  *
- * Set from measurement, not taste. Scoring realistic shop pairs leaves a wide
- * empty band, and 0.45 sits in the middle of it:
+ * 0.62 — and the interesting fact is that no threshold is SAFE, because the two
+ * populations overlap. Measured over same-shop pairs:
  *
- *   TRUE PAIRS      Jointer/Jointer 1.00 · Router/Router Table 0.94 ·
- *                   Sander/Drum Sander 0.88 · Table Sw/Table Saw 0.77 ·
- *                   planr/Planer 0.67 · tabel saw/Table Saw 0.57  ← worst
- *   FALSE PAIRS     Bandsaw/Table Saw 0.31 · Miter Saw/Table Saw 0.29  ← best
- *                   Lathe/Planer 0.22 · Planer/Jointer 0.18 ·
- *                   Drill Press/Drum Sander 0.11 · a bare shellyplug id 0.00
+ *   TRUE   TableSaw/Table Saw 1.00 · Router/Router Table 0.94 ·
+ *          Table Sw/Table Saw 0.77 · Jointr/Jointer 0.73 · planr/Planer 0.67 ·
+ *          tabel saw/Table Saw 0.57                                    ← worst
+ *   FALSE  Drum Sander/Disc Sander 0.56 · Belt Sander/Drum Sander 0.56  ← best
+ *          Table Saw/Router table 0.47 · Bandsaw/Table Saw 0.31 ·
+ *          Table Saw/Miter Saw 0.29 · Drill Press/Drum Sander 0.11
  *
- * The mockup used 0.62, which is inside the true-pair range: it rejects a single
- * transposed letter ("tabel saw"), the most common way a name is mistyped, for
- * no gain — the nearest false pair is still 0.28 away below.
+ * 0.571 against 0.556 is not a gap. An earlier version of this file set the bar
+ * at 0.45 claiming a wide empty band — measured against a false set that was too
+ * easy (unrelated names, which are obviously far apart). Re-measured against
+ * pairs from ONE shop, the hazard is plain: "Table Saw" scores 0.471 against
+ * "Router table", so a 0.45 bar would hand the saw's plug to the router table
+ * whenever the saw's own machine was already paired. Two machines sharing a word
+ * is the normal case in a workshop, not the exotic one.
  *
- * "Miter Saw" vs "Table Saw" is the pair that matters, because both are real
- * machines that can sit in one shop. It scores 0.29 and stays well clear.
+ * So the bar sits ABOVE every false pair we can measure, and the cost is paid on
+ * the other side: "tabel saw" (0.571) no longer matches and gets dragged across
+ * by hand. That trade is only right because "Match by name" ASSIGNS rather than
+ * suggesting — a wrong guess is a wrong plug on a real machine, a missed guess is
+ * one drag. Back when it suggested and waited for a tick, the cheaper error was
+ * the other one.
  */
-export const MATCH_MIN = 0.45;
+export const MATCH_MIN = 0.62;
+
+/**
+ * How much better the best candidate has to be than the runner-up.
+ *
+ * A threshold alone cannot separate "Drum Sander" from "Disc Sander": a plug
+ * called "Sander" scores 0.88 against BOTH, by containment. Confidence about a
+ * name says nothing about which of two similar machines owns it, so an ambiguous
+ * best answer is not an answer — it stays in the tray to be dragged.
+ */
+export const MATCH_MARGIN = 0.08;
 
 export interface Nameable { id: string; name: string; }
 
@@ -105,19 +125,25 @@ export interface PairInput { id: string; name: string; }
  * rejected. Sorting first costs nothing at these sizes and makes the result
  * independent of how the two lists happen to be ordered.
  *
- * Returns only the pairs it is confident about; anything unmatched is left for
- * the user to drag.
+ * Then two filters, because this ASSIGNS rather than suggesting: the score has to
+ * clear MATCH_MIN, and it has to beat the plug's own runner-up by MATCH_MARGIN.
+ * Anything left over stays in the tray to be dragged.
  */
 export function matchAll(
   outlets: readonly PairInput[], machines: readonly PairInput[], takenMachines: ReadonlySet<string> = new Set(),
 ): { outletId: string; machineId: string; score: number }[] {
   const pairs: { outletId: string; machineId: string; score: number }[] = [];
   for (const o of outlets) {
-    for (const m of machines) {
-      if (takenMachines.has(m.id)) continue;
-      const score = nameScore(o.name, m.name);
-      if (score >= MATCH_MIN) pairs.push({ outletId: o.id, machineId: m.id, score });
-    }
+    // Every candidate for THIS plug, so the runner-up is knowable.
+    const scored = machines
+      .filter(m => !takenMachines.has(m.id))
+      .map(m => ({ machineId: m.id, score: nameScore(o.name, m.name) }))
+      .sort((a, b) => b.score - a.score);
+    const best = scored[0];
+    if (!best || best.score < MATCH_MIN) continue;
+    const runnerUp = scored[1]?.score ?? 0;
+    if (best.score - runnerUp < MATCH_MARGIN) continue;   // ambiguous — leave it
+    pairs.push({ outletId: o.id, machineId: best.machineId, score: best.score });
   }
   pairs.sort((a, b) => b.score - a.score);
 

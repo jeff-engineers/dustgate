@@ -3,7 +3,7 @@
 // Same contract as the other UI suites: throw nothing, print a tally, set
 // process.exitCode on failure. Run by spec-runner.js.
 
-import { nameScore, MATCH_MIN, bestMatch, matchAll } from './outlet-match';
+import { nameScore, MATCH_MIN, MATCH_MARGIN, bestMatch, matchAll } from './outlet-match';
 
 let pass = 0, fail = 0;
 function check(what: string, ok: boolean, extra = ''): void {
@@ -21,24 +21,44 @@ eq('dashes are noise',                   nameScore('Table-Saw', 'Table Saw'), 1)
 eq('underscores are noise',              nameScore('table_saw', 'Table Saw'), 1);
 check('a prefix scores high',            nameScore('Table Saw 240v', 'Table Saw') >= 0.9);
 check('containment scores high',         nameScore('Shop Table Saw Plug', 'Table Saw') >= 0.85);
-check('a typo still matches',            nameScore('tabel saw', 'Table Saw') >= MATCH_MIN);
+// A single transposed letter does NOT clear the bar, and that is deliberate: it
+// scores 0.571, below two false pairs we have to reject (0.556). Documented as a
+// known cost, not an oversight — see MATCH_MIN.
+check('a transposition falls below the bar', nameScore('tabel saw', 'Table Saw') < MATCH_MIN);
+check('...but is still clearly related',     nameScore('tabel saw', 'Table Saw') > 0.5);
+check('a dropped letter still matches',      nameScore('Jointr', 'Jointer') >= MATCH_MIN);
 check('unrelated names do not match',    nameScore('Bench light', 'Table Saw') < MATCH_MIN);
 check('a bare Shelly id does not match', nameScore('shellyplug-s-8f21c4', 'Table Saw') < MATCH_MIN);
 eq('an empty name scores 0',             nameScore('', 'Table Saw'), 0);
 
-// The adversarial pair, and the reason MATCH_MIN can't just be lowered until
-// every typo matches: two REAL machines that can sit in one shop, sharing a
-// word. Suggesting one for the other would be wrong every time.
+// ── the pairs that set the bar ──────────────────────────────────────────────
+// Two REAL machines that can sit in one shop, sharing a word. Every one of these
+// must stay below MATCH_MIN, because Match by name ASSIGNS: getting one wrong
+// puts a wrong plug on a real machine.
+//
+// "Table Saw" ~ "Router table" scores 0.471: harmless at today's bar, and a
+// misassignment waiting to happen at the 0.45 this file used to carry, any time
+// the saw's own machine was already paired.
+check('Table Saw does not match Router table',  nameScore('Table Saw', 'Router table') < MATCH_MIN);
+check('Drum Sander does not match Disc Sander', nameScore('Drum Sander', 'Disc Sander') < MATCH_MIN);
+check('Belt Sander does not match Drum Sander', nameScore('Belt Sander', 'Drum Sander') < MATCH_MIN);
 check('Miter Saw does not match Table Saw',     nameScore('Miter Saw', 'Table Saw') < MATCH_MIN);
 check('Bandsaw does not match Table Saw',       nameScore('Bandsaw', 'Table Saw') < MATCH_MIN);
 check('Drill Press does not match Drum Sander', nameScore('Drill Press', 'Drum Sander') < MATCH_MIN);
 
-// The band the threshold sits in. If a change ever narrows this, the scorer got
-// worse even if every case above still passes.
-check('true pairs stay clear of false ones',
-      nameScore('tabel saw', 'Table Saw') - nameScore('Bandsaw', 'Table Saw') > 0.2,
-      `worst true ${nameScore('tabel saw', 'Table Saw').toFixed(2)}, ` +
-      `best false ${nameScore('Bandsaw', 'Table Saw').toFixed(2)}`);
+// The uncomfortable fact this file exists to record: the two populations are
+// NOT separable. The worst true pair and the best false one are 0.015 apart —
+// far too close to put a bar between, so the bar is a choice about which error
+// to make rather than a line that divides them.
+{
+  const worstTrue = nameScore('tabel saw', 'Table Saw');       // 0.571
+  const bestFalse = nameScore('Drum Sander', 'Disc Sander');   // 0.556
+  check('worst true and best false are within a rounding error of each other',
+        Math.abs(worstTrue - bestFalse) < 0.05,
+        `worst true ${worstTrue.toFixed(3)}, best false ${bestFalse.toFixed(3)}`);
+  check('so the bar clears every false pair, and loses that true one',
+        MATCH_MIN > bestFalse && MATCH_MIN > worstTrue);
+}
 
 // ── bestMatch ───────────────────────────────────────────────────────────────
 const MACHINES = [
@@ -92,6 +112,31 @@ eq('picks the BEST, not the first that clears the bar',
 {
   eq('no outlets, no pairs', matchAll([], MACHINES).length, 0);
   eq('no machines, no pairs', matchAll([{ id: 'o1', name: 'Table Saw' }], []).length, 0);
+}
+
+// ── ambiguity ───────────────────────────────────────────────────────────────
+{
+  // "Sander" is 0.88 against both by containment. Confident about the name, and
+  // no idea which machine — so it must not be assigned to either.
+  const two = [{ id: 'drum', name: 'Drum Sander' }, { id: 'disc', name: 'Disc Sander' }];
+  eq('an ambiguous plug is left alone', matchAll([{ id: 'o', name: 'Sander' }], two).length, 0);
+
+  // Same plug, only one candidate: no ambiguity, so it pairs.
+  eq('...but pairs when only one machine could own it',
+     matchAll([{ id: 'o', name: 'Sander' }], [two[0]])[0]?.machineId, 'drum');
+
+  check('MATCH_MARGIN is what makes that the rule', MATCH_MARGIN > 0);
+}
+
+{
+  // The regression that started all this, end to end: the saw's own machine is
+  // already paired, so the only machine left with a word in common is the router
+  // table. It must come back empty rather than pairing them.
+  const got = matchAll(
+    [{ id: 'plug', name: 'Table Saw' }],
+    [{ id: 'router', name: 'Router table' }, { id: 'planer', name: 'Planer' }],
+  );
+  eq('a taken machine does not push its plug onto a lookalike', got.length, 0);
 }
 
 console.log(`\n${pass}/${pass + fail} passed`);

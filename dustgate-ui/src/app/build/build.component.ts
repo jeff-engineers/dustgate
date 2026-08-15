@@ -3,11 +3,12 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router as NgRouter, RouterLink } from '@angular/router';
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
-import { ApiService, NodeLinkState, Topology, TopologyStatus } from '../services/api.service';
+import { ApiService, DiscoveredOutlet, NodeLinkState, Topology, TopologyStatus } from '../services/api.service';
 import { airflowIssues, redundantSelectors, type AirflowIssue } from '@topology';
 import { validateShop, SHOP_SCHEMA_VERSION } from '@shop';
 import { SelectorConfigComponent } from '../gates/selector-config.component';
 import { ElementOutletConfigComponent } from '../tools/element-outlet-config.component';
+import { matchAll } from '../tools/outlet-match';
 import {
   AnyElement, ConfigurableSelector, elementsOf,
   isCalibrated, isLinearSelector, isServoSelector,
@@ -234,6 +235,33 @@ const outletsFor = (kind: MenuKind): number => kind === 'linear' ? 4 : kind === 
     .dock.live .dock-shell { stroke: var(--success); }
     /* Waiting for a plug to be picked out of the tray. */
     .dock.armed .dock-bg { stroke: var(--accent); stroke-dasharray: none; }
+
+    /* ── plug tray ─────────────────────────────────────────────────────────── */
+    .tray { flex: 0 0 auto; background: var(--surface); border-top: 1px solid var(--border);
+            padding: 10px 12px 11px; }
+    .tray.armed { border-top-color: var(--accent); }
+    .tray-head { display: flex; align-items: center; gap: 9px; margin-bottom: 8px; flex-wrap: wrap; }
+    .tray-head .t { font-size: 13px; font-weight: 600; }
+    .tray-head .n { font-size: 11.5px; color: var(--muted); }
+    .tray.armed .n { color: var(--accent); }
+    .tray-head .act { background: var(--bg); border: 1px solid var(--border); color: var(--text);
+                      border-radius: 8px; padding: 5px 11px; font-size: 12px; }
+    .tray-head .act:first-of-type { margin-left: auto; }
+    .tray-head .act.primary { border-color: var(--accent); color: var(--accent); }
+    .tray-head .act:disabled { opacity: 0.4; }
+    .chips { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+    .chip { display: flex; align-items: center; gap: 6px; background: var(--bg);
+            border: 1px solid var(--border); border-radius: 9px; padding: 4px 9px;
+            color: var(--text); font-size: 12.5px; cursor: grab; touch-action: none; }
+    .chip .face { width: 14px; height: 14px; color: var(--muted); flex: 0 0 auto; }
+    .chip .face .shell { fill: none; stroke: currentColor; stroke-width: 1.6; }
+    .chip .face .slot { fill: currentColor; opacity: 0.75; }
+    .chip .w { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+    .chip[data-level="standby"] .face, .chip[data-level="standby"] .w { color: var(--accent); }
+    .chip[data-level="live"] .face,    .chip[data-level="live"] .w    { color: var(--success); }
+    .chip.ghost { position: fixed; z-index: 60; pointer-events: none; opacity: 0.92;
+                  transform: translate(-50%, -50%); box-shadow: 0 8px 22px rgba(0,0,0,0.5); }
+    .tray-empty { font-size: 12px; color: var(--muted); }
     .gsub.redundant { fill: var(--accent); opacity: 0.85; }
     /* The selected piece's name is edited WHERE IT IS DRAWN — a foreignObject input
        sitting exactly on top of its label, matching it in size and weight, so the
@@ -530,7 +558,7 @@ const outletsFor = (kind: MenuKind): number => kind === 'linear' ? 4 : kind === 
             <!-- The plug row. Replaced an 'auto'/'manual' caption that said whether a
                  plug existed and nothing else — not which one, and not what it reads.
                  Its own tap target: the body drags the tool, this opens the plug. -->
-            <g *ngIf="n.glyph === 'tool'" class="dock" [attr.class]="'dock ' + plugOf(n).state"
+            <g *ngIf="n.glyph === 'tool'" class="dock" [attr.data-tool]="n.id" [attr.class]="'dock ' + plugOf(n).state"
                [class.armed]="armedTool === n.id" (pointerdown)="onDockDown($event, n)">
               <title>{{ plugOf(n).hint }}</title>
               <rect class="dock-bg" x="-31" y="4" width="62" height="22" rx="6"/>
@@ -676,6 +704,40 @@ const outletsFor = (kind: MenuKind): number => kind === 'linear' ? 4 : kind === 
         <button class="step" (click)="changeOutlets(ins.id, 2)">+</button>
       </span>
       <span class="meta" *ngIf="ins.glyph === 'manifold'">2 outlets</span>
+    </div>
+
+    <!-- ── the plug tray ──────────────────────────────────────────────────────
+         Every smart plug on the network that isn't on a machine yet. Drag one onto
+         a tool's plug row, or tap a row to arm it and then tap a chip — same
+         pairing, minus the drag, which is what a phone wants.
+
+         ONE LINE PER PLUG: its name, and its draw only when it's drawing. The IP
+         and any name-match hint are in the tooltip. They were on the chip at first
+         and turned a glanceable strip into three rows of prose. -->
+    <div class="tray" *ngIf="showTray" [class.armed]="armedTool">
+      <div class="tray-head">
+        <span class="t">Smart plugs</span>
+        <span class="n">{{ trayNote() }}</span>
+        <button class="act primary" [disabled]="!canMatch()" (click)="matchByName()">Match by name</button>
+        <button class="act" [disabled]="scanning" (click)="scanOutlets()">{{ scanning ? 'Scanning…' : '↻ Rescan' }}</button>
+      </div>
+      <div class="chips">
+        <button *ngFor="let o of freeOutlets()" class="chip" [attr.data-level]="chipLevel(o)"
+                [title]="o.hostname + ' · ' + o.ip"
+                (pointerdown)="onChipDown($event, o)">
+          <svg class="face" viewBox="0 0 24 24"><rect class="shell" x="3.5" y="3.5" width="17" height="17" rx="5"/><rect class="slot" x="8.4" y="7.6" width="2.1" height="5.6" rx="1"/><rect class="slot" x="13.5" y="7.6" width="2.1" height="5.6" rx="1"/><circle class="slot" cx="12" cy="16.4" r="1.5"/></svg>
+          <span>{{ o.name || o.hostname }}</span>
+          <span class="w" *ngIf="chipLevel(o) !== 'idle'">{{ chipWatts(o) }}</span>
+        </button>
+        <span class="tray-empty" *ngIf="!freeOutlets().length">
+          {{ scanned ? 'Every plug found is already on a machine.' : 'Tap Rescan to look for smart plugs.' }}
+        </span>
+      </div>
+    </div>
+    <!-- The chip under the pointer while dragging one onto a machine. -->
+    <div class="chip ghost" *ngIf="chipDrag as cd" [style.left.px]="cd.x" [style.top.px]="cd.y">
+      <svg class="face" viewBox="0 0 24 24"><rect class="shell" x="3.5" y="3.5" width="17" height="17" rx="5"/><rect class="slot" x="8.4" y="7.6" width="2.1" height="5.6" rx="1"/><rect class="slot" x="13.5" y="7.6" width="2.1" height="5.6" rx="1"/><circle class="slot" cx="12" cy="16.4" r="1.5"/></svg>
+      <span>{{ cd.outlet.name || cd.outlet.hostname }}</span>
     </div>
 
     <!-- Configuring one gate — a sheet over the canvas, so the layout stays put. -->
@@ -847,6 +909,10 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     // KEEP it live. This used to be a single fetch at load, so the duct highlighting
     // was a snapshot from whenever the page opened — and the plug row, which shows a
     // wattage, would have been worse: a number that looks live and isn't.
+    // Sweep for plugs ONCE, and only when there's a job for them: a machine on the
+    // canvas with nothing paired to it. A shop that's fully wired opens without an
+    // mDNS sweep and without a tray.
+    if (this.unpairedMachines().length) void this.scanOutlets();
     this.livePoll = setInterval(() => {
       void this.api.getStatus().then(st => this.applyLive(st)).catch(() => { /* offline */ });
     }, 2000);
@@ -1329,7 +1395,13 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       return { state: 'none', text: 'no plug',
                hint: `No smart plug on ${n.name} — you switch it on yourself. Tap to pair one.` };
     }
-    const name = (outlet['host'] as string) || (outlet['ip'] as string) || 'plug';
+    // The topology stores gen/ip/host/thresholdW — no friendly name, because the
+    // name lives on the Shelly itself. So prefer what the last scan saw it call
+    // itself ("Table Saw"), and fall back to the hostname only when we haven't
+    // scanned. Otherwise the row reads "G4-295BD19…", which identifies nothing.
+    const ip = outlet['ip'] as string | undefined;
+    const seen = ip ? this.outlets.find(o => o.ip === ip) : undefined;
+    const name = seen?.name || (outlet['host'] as string) || ip || 'plug';
     const machine = machineOfPort(doc, el);
     const watts = (machine && this.machineWatts.get(machine.id as string)) ?? 0;
     const trip = (outlet['thresholdW'] as number) ?? 0;
@@ -1346,6 +1418,145 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     const s = name.replace(/^shelly(plug(us)?|plus)?-?/i, '');
     return s.length > 11 ? s.slice(0, 10) + '…' : (s || name);
   }
+
+  // ── the plug tray ────────────────────────────────────────────────────────────
+  /** Every plug the last scan found. Not filtered here — freeOutlets() decides
+   *  what's still unclaimed, so a plug that gets unpaired reappears without a
+   *  rescan. */
+  outlets: DiscoveredOutlet[] = [];
+  scanning = false;
+  scanned = false;
+  chipDrag: { outlet: DiscoveredOutlet; x: number; y: number; moved: boolean; over: string | null } | null = null;
+
+  /** Hidden until there is something to say — an empty strip under a fresh canvas
+   *  is furniture. Appears while scanning, and afterwards for as long as there is
+   *  either a free plug to place or a machine still missing one. */
+  get showTray(): boolean {
+    if (this.scanning) return true;
+    if (!this.scanned) return false;
+    return this.freeOutlets().length > 0 || this.unpairedMachines().length > 0;
+  }
+
+  async scanOutlets(): Promise<void> {
+    if (this.scanning) return;
+    this.scanning = true;
+    try { this.outlets = await this.api.discoverOutlets(); }
+    catch { /* leave the last known list rather than blanking the tray */ }
+    finally { this.scanning = false; this.scanned = true; }
+  }
+
+  /** IPs already spoken for, anywhere in the shop — a machine's sensor or the
+   *  collector's switch. One physical plug driving two things would make the brain
+   *  believe two machines started at once. */
+  private claimedIps(): Set<string> {
+    const out = new Set<string>();
+    if (!this.topo) return out;
+    const doc = this.topo as unknown as ShopDoc;
+    for (const m of machinesOf(doc)) {
+      const ip = ((m.sensor as RawEl | undefined)?.['outlet'] as RawEl | undefined)?.['ip'] as string | undefined;
+      if (ip) out.add(ip);
+    }
+    for (const e of this.elems(this.topo)) {
+      if ((e as RawEl)['type'] !== 'collector') continue;
+      const ip = (((e as RawEl)['control'] as RawEl | undefined)?.['outlet'] as RawEl | undefined)?.['ip'] as string | undefined;
+      if (ip) out.add(ip);
+    }
+    return out;
+  }
+
+  freeOutlets(): DiscoveredOutlet[] {
+    const claimed = this.claimedIps();
+    return this.outlets.filter(o => !claimed.has(o.ip));
+  }
+
+  chipLevel(o: DiscoveredOutlet): 'idle' | 'standby' | 'live' {
+    if (!o.reachable || o.powerW < 1) return 'idle';
+    return o.powerW >= 100 ? 'live' : 'standby';
+  }
+  chipWatts(o: DiscoveredOutlet): string { return this.fmtW(o.powerW); }
+
+  /** Machines with no plug yet — what Match by name has to work with. */
+  private unpairedMachines(): { id: string; name: string }[] {
+    const doc = this.topo as unknown as ShopDoc;
+    return machinesOf(doc)
+      .filter(m => !((m.sensor as RawEl | undefined)?.['outlet']))
+      .map(m => ({ id: m.id as string, name: (m.name as string) || (m.id as string) }));
+  }
+
+  canMatch(): boolean { return this.freeOutlets().length > 0 && this.unpairedMachines().length > 0; }
+
+  trayNote(): string {
+    if (this.armedTool) {
+      const n = this.byId.get(this.armedTool);
+      return `tap the plug powering the ${n?.name ?? 'tool'}`;
+    }
+    if (this.matchNote) return this.matchNote;
+    const left = this.unpairedMachines().length;
+    return `${this.freeOutlets().length} free · ${left} machine${left === 1 ? '' : 's'} without one`;
+  }
+  private matchNote = '';
+
+  /** Assigns outright — there is no per-row suggestion to accept. Strongest pairs
+   *  first, globally: greedy in list order lets a weak match consume the machine a
+   *  perfect one wanted. See outlet-match.ts. */
+  matchByName(): void {
+    const free = this.freeOutlets().map(o => ({ id: o.ip, name: o.name || o.hostname }));
+    const pairs = matchAll(free, this.unpairedMachines());
+    for (const p of pairs) {
+      const o = this.outlets.find(x => x.ip === p.outletId);
+      if (o) this.pairPlug(o, p.machineId);
+    }
+    const left = this.unpairedMachines().length;
+    this.matchNote = pairs.length
+      ? `Assigned ${pairs.length}${left ? ` · ${left} still to do by hand` : ' · all done'}`
+      : 'No plug name looked like a machine — drag them across';
+    if (pairs.length) { this.afterMutation(null); }
+  }
+
+  /** Write a plug onto a MACHINE. Threshold seeded from what it's drawing right
+   *  now, ~10% under so it clears standby but still trips — the same guess the
+   *  pairing sheet makes. */
+  private pairPlug(o: DiscoveredOutlet, machineId: string): void {
+    const doc = this.topo as unknown as ShopDoc;
+    const m = machinesOf(doc).find(x => x.id === machineId);
+    if (!m) return;
+    const outlet: RawEl = { gen: o.generation || 2, ip: o.ip };
+    if (o.hostname) outlet['host'] = o.hostname;
+    outlet['thresholdW'] = o.powerW >= 5 ? Math.max(10, Math.round(o.powerW * 0.9 / 10) * 10) : 50;
+    (m as unknown as RawEl)['sensor'] = { outlet };
+  }
+
+  // ── dragging a chip onto a tool ──────────────────────────────────────────────
+  onChipDown(evt: PointerEvent, o: DiscoveredOutlet): void {
+    evt.preventDefault();
+    this.chipDrag = { outlet: o, x: evt.clientX, y: evt.clientY, moved: false, over: null };
+    window.addEventListener('pointermove', this.chipMove);
+    window.addEventListener('pointerup', this.chipUp);
+  }
+  private chipMove = (evt: PointerEvent): void => {
+    if (!this.chipDrag) return;
+    this.chipDrag.moved = true;
+    this.chipDrag.x = evt.clientX; this.chipDrag.y = evt.clientY;
+    // Hit-test against the real DOM rather than doing the inverse transform by
+    // hand: the canvas pans, zooms and scrolls, and elementFromPoint already knows.
+    const el = document.elementFromPoint(evt.clientX, evt.clientY);
+    const dock = el?.closest?.('.dock') as SVGGElement | null;
+    this.chipDrag.over = dock ? (dock.getAttribute('data-tool') ?? null) : null;
+    this.zone.run(() => { /* repaint the ghost */ });
+  };
+  private chipUp = (): void => {
+    window.removeEventListener('pointermove', this.chipMove);
+    window.removeEventListener('pointerup', this.chipUp);
+    const d = this.chipDrag; this.chipDrag = null;
+    if (!d) return;
+    const target = d.over ?? (d.moved ? null : this.armedTool);
+    if (!target) return;
+    const machine = machineOfPort(this.topo as unknown as ShopDoc, this.elem(target));
+    if (!machine) return;
+    this.pairPlug(d.outlet, machine.id as string);
+    this.armedTool = null; this.matchNote = '';
+    this.afterMutation(null);
+  };
 
   /** The plug row's own tap target. Stops the event so it doesn't start a drag of
    *  the tool underneath — the body drags, this pairs. */
@@ -2849,7 +3060,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     this.buildGraph(this.topo); this.syncNodes(); this.refreshHandles();
   }
 
-  private afterMutation(selectId: string): void {
+  private afterMutation(selectId: string | null): void {
     if (!this.topo) return;
     this.dirty = true; this.saveError = ''; this.airflowErrors = []; this.saveNote = ''; this.wip = '';
     this.normalizeCells();
