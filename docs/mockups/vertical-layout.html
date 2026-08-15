@@ -1,0 +1,226 @@
+<title>DustGate — a vertical shop layout for the phone</title>
+
+<style>
+  :root {
+    --bg: #111; --surface: #1e1e1e; --raised: #262626; --border: #2e2e2e;
+    --text: #e8e8e8; --muted: #8a8a86; --accent: #f0a500; --success: #3cbe6e;
+    --danger: #d94444; --duct: #3a3a3a; --radius: 14px;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); margin: 0; padding: 22px 18px 60px;
+         font-family: system-ui, -apple-system, sans-serif; font-size: 15px; line-height: 1.5; }
+  .wrap { max-width: 1080px; margin: 0 auto; display: flex; flex-direction: column; gap: 22px; }
+  h1 { font-size: 20px; font-weight: 600; margin: 6px 0 0; letter-spacing: -0.01em; text-wrap: balance; }
+  h2 { font-size: 13.5px; font-weight: 600; margin: 0; }
+  .lede { color: var(--muted); font-size: 13.5px; max-width: 66ch; margin: 6px 0 0; }
+  .eyebrow { font-size: 11px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--muted); }
+  p { margin: 0; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(215px, 1fr)); gap: 14px; align-items: start; }
+  .opt { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+         padding: 12px; display: flex; flex-direction: column; gap: 9px; }
+  .opt.today { border-style: dashed; }
+  .opt.pick  { border-color: var(--accent); }
+  .hd { display: flex; align-items: baseline; gap: 8px; }
+  .hd .w { margin-left: auto; font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .opt.pick .hd .w { color: var(--accent); }
+  /* Phone-shaped, because that is the case being solved. */
+  .screen { background: var(--bg); border: 1px solid var(--border); border-radius: 9px;
+            aspect-ratio: 375 / 600; overflow: hidden; }
+  .screen svg { display: block; width: 100%; height: 100%; }
+  .note { font-size: 12px; color: var(--muted); line-height: 1.5; }
+  .note b { color: var(--text); font-weight: 600; }
+  .verdict { font-size: 11.5px; padding: 4px 8px; border-radius: 6px; align-self: flex-start; }
+  .verdict.good { color: var(--success); background: rgba(60,190,110,0.12); }
+  .verdict.bad  { color: var(--danger);  background: rgba(217,68,68,0.12); }
+  .verdict.mid  { color: var(--accent);  background: rgba(240,165,0,0.12); }
+
+  .duct { fill: none; stroke: var(--duct); stroke-width: 7; stroke-linecap: round; stroke-linejoin: round; }
+  .duct.trunk { stroke: var(--accent); opacity: 0.85; }
+  .casing { fill: none; stroke: var(--bg); stroke-width: 13; stroke-linecap: round; stroke-linejoin: round; }
+  .body { fill: var(--surface); stroke: var(--border); stroke-width: 2; }
+  .unit { fill: var(--surface); stroke: var(--border); stroke-width: 2; }
+  .stroke { stroke: var(--muted); fill: none; }
+  .lbl { fill: var(--text); font-size: 13px; text-anchor: middle; font-family: system-ui, sans-serif; }
+  .sub { fill: var(--muted); font-size: 11px; text-anchor: middle; font-family: system-ui, sans-serif; }
+  .lane { fill: none; stroke: var(--accent); stroke-width: 1; stroke-dasharray: 4 4; opacity: 0.5; }
+
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 15px 16px; }
+  .card p + p { margin-top: 9px; }
+  .card em { color: var(--text); font-style: normal; }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; margin-top: 4px; }
+  th, td { text-align: left; padding: 5px 8px 5px 0; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em; }
+  td.n { font-variant-numeric: tabular-nums; text-align: right; }
+</style>
+
+<div class="wrap">
+
+  <header>
+    <span class="eyebrow">DustGate · build canvas</span>
+    <h1>Stacking the shop down the page</h1>
+    <p class="lede">
+      The auto-layout spreads sibling runs sideways, so a shop gets wider with every
+      branch. The fit is width-bound, so on a phone that scales the whole drawing down
+      and leaves the bottom half of the screen empty. Stacking the branches instead
+      trades width for height — which is the dimension a phone has spare.
+      <br><br>
+      <em style="color:var(--text)">A sliding gate stays horizontal in all of these.</em>
+      Its outlets run along its bottom edge and each tool locks to the cell beneath its
+      own outlet — that's the glyph, the outlet geometry and the router, not styling. So
+      "vertical" means the branches stack; it never means turning a gate on its side.
+      The only real question is how the trunk gets past a branch to reach the next one.
+    </p>
+  </header>
+
+  <div class="grid">
+
+    <!-- ── today ────────────────────────────────────────────────────────────── -->
+    <div class="opt today">
+      <div class="hd"><h2>Today</h2><span class="w">6 cols · 54%</span></div>
+      <div class="screen">
+        <svg viewBox="0 0 375 600" aria-label="Today's horizontal layout">
+          <path class="casing" d="M40 60 V96 H250 M40 96 V150"/>
+          <path class="duct trunk" d="M40 60 V96 H250"/>
+          <path class="duct" d="M40 96 V150"/>
+          <!-- main gate + 4 tools -->
+          <rect class="unit" x="18" y="150" width="200" height="26" rx="7"/>
+          <path class="duct" d="M40 176 V206 M100 176 V206 M160 176 V206 M200 176 V240"/>
+          <g><rect class="body" x="14" y="206" width="52" height="34" rx="8"/><text class="lbl" x="40" y="228" style="font-size:10">Saw</text></g>
+          <g><rect class="body" x="74" y="206" width="52" height="34" rx="8"/><text class="lbl" x="100" y="228" style="font-size:10">Band</text></g>
+          <g><rect class="body" x="134" y="206" width="52" height="34" rx="8"/><text class="lbl" x="160" y="228" style="font-size:10">Router</text></g>
+          <!-- manifold under outlet 4 -->
+          <rect class="unit" x="176" y="240" width="90" height="24" rx="12"/>
+          <path class="duct" d="M196 264 V292 M246 264 V292"/>
+          <g><rect class="body" x="170" y="292" width="52" height="34" rx="8"/><text class="lbl" x="196" y="314" style="font-size:10">Drum</text></g>
+          <g><rect class="body" x="220" y="292" width="52" height="34" rx="8"/><text class="lbl" x="246" y="314" style="font-size:10">Planer</text></g>
+          <!-- jointer valve off the trunk -->
+          <path class="duct" d="M250 96 V150"/>
+          <circle class="body" cx="250" cy="168" r="17"/><line class="stroke" x1="250" y1="151" x2="250" y2="185" stroke-width="3"/>
+          <path class="duct" d="M250 185 V206"/>
+          <g><rect class="body" x="290" y="206" width="52" height="34" rx="8"/><text class="lbl" x="316" y="228" style="font-size:10">Jointer</text></g>
+          <path class="duct" d="M250 185 V222 H290"/>
+          <circle cx="40" cy="42" r="17" class="body"/><text class="sub" x="40" y="26">Cyclone</text>
+        </svg>
+      </div>
+      <span class="verdict bad">Half the screen unused</span>
+      <p class="note">Every branch costs columns, so width grows with the shop and the fit
+        shrinks everything to suit. The tall half of the phone stays empty.</p>
+    </div>
+
+    <!-- ── A. straight spine ────────────────────────────────────────────────── -->
+    <div class="opt">
+      <div class="hd"><h2>A · Straight spine</h2><span class="w">4 cols</span></div>
+      <div class="screen">
+        <svg viewBox="0 0 375 600" aria-label="Option A, straight spine">
+          <path class="casing" d="M40 60 V430"/>
+          <path class="duct trunk" d="M40 60 V430"/>
+          <rect class="unit" x="18" y="120" width="230" height="26" rx="7"/>
+          <path class="duct" d="M62 146 V176 M122 146 V176 M182 146 V176 M232 146 V210"/>
+          <g><rect class="body" x="36" y="176" width="52" height="34" rx="8"/><text class="lbl" x="62" y="198" style="font-size:10">Saw</text></g>
+          <g><rect class="body" x="96" y="176" width="52" height="34" rx="8"/><text class="lbl" x="122" y="198" style="font-size:10">Band</text></g>
+          <g><rect class="body" x="156" y="176" width="52" height="34" rx="8"/><text class="lbl" x="182" y="198" style="font-size:10">Router</text></g>
+          <rect class="unit" x="208" y="210" width="90" height="24" rx="12"/>
+          <path class="duct" d="M228 234 V262 M278 234 V262"/>
+          <g><rect class="body" x="202" y="262" width="52" height="34" rx="8"/><text class="lbl" x="228" y="284" style="font-size:10">Drum</text></g>
+          <g><rect class="body" x="252" y="262" width="52" height="34" rx="8"/><text class="lbl" x="278" y="284" style="font-size:10">Planer</text></g>
+          <circle class="body" cx="40" cy="430" r="17"/><line class="stroke" x1="40" y1="413" x2="40" y2="447" stroke-width="3"/>
+          <path class="duct" d="M40 447 V470"/>
+          <g><rect class="body" x="14" y="470" width="52" height="34" rx="8"/><text class="lbl" x="40" y="492" style="font-size:10">Jointer</text></g>
+          <circle cx="40" cy="42" r="17" class="body"/><text class="sub" x="40" y="26">Cyclone</text>
+        </svg>
+      </div>
+      <span class="verdict mid">Trunk runs under the gate</span>
+      <p class="note">Everything hangs off one line down the left. Cheapest to implement —
+        but the trunk passes <b>beneath the sliding gate's own tools</b> on its way to the
+        valve, and at a glance it isn't obvious it doesn't feed them.</p>
+    </div>
+
+    <!-- ── B. left rail ─────────────────────────────────────────────────────── -->
+    <div class="opt pick">
+      <div class="hd"><h2>B · Left rail</h2><span class="w">5 cols</span></div>
+      <div class="screen">
+        <svg viewBox="0 0 375 600" aria-label="Option B, dedicated trunk rail">
+          <path class="lane" d="M40 20 V560"/>
+          <path class="casing" d="M40 60 V430"/>
+          <path class="duct trunk" d="M40 60 V430"/>
+          <path class="casing" d="M40 133 H70"/><path class="duct" d="M40 133 H70"/>
+          <rect class="unit" x="70" y="120" width="230" height="26" rx="7"/>
+          <path class="duct" d="M114 146 V176 M174 146 V176 M234 146 V176 M284 146 V210"/>
+          <g><rect class="body" x="88" y="176" width="52" height="34" rx="8"/><text class="lbl" x="114" y="198" style="font-size:10">Saw</text></g>
+          <g><rect class="body" x="148" y="176" width="52" height="34" rx="8"/><text class="lbl" x="174" y="198" style="font-size:10">Band</text></g>
+          <g><rect class="body" x="208" y="176" width="52" height="34" rx="8"/><text class="lbl" x="234" y="198" style="font-size:10">Router</text></g>
+          <rect class="unit" x="255" y="210" width="90" height="24" rx="12"/>
+          <path class="duct" d="M275 234 V262 M325 234 V262"/>
+          <g><rect class="body" x="249" y="262" width="52" height="34" rx="8"/><text class="lbl" x="275" y="284" style="font-size:10">Drum</text></g>
+          <g><rect class="body" x="299" y="262" width="52" height="34" rx="8"/><text class="lbl" x="325" y="284" style="font-size:10">Planer</text></g>
+          <path class="casing" d="M40 430 H70"/><path class="duct" d="M40 430 H70"/>
+          <circle class="body" cx="87" cy="430" r="17"/><line class="stroke" x1="87" y1="413" x2="87" y2="447" stroke-width="3"/>
+          <path class="duct" d="M87 447 V470"/>
+          <g><rect class="body" x="61" y="470" width="52" height="34" rx="8"/><text class="lbl" x="87" y="492" style="font-size:10">Jointer</text></g>
+          <circle cx="40" cy="42" r="17" class="body"/><text class="sub" x="40" y="26">Cyclone</text>
+        </svg>
+      </div>
+      <span class="verdict good">Trunk never touches a branch</span>
+      <p class="note">The trunk gets a lane of its own and every branch feeds off it
+        sideways. Costs <b>one column</b> against option A, and buys a drawing where the
+        main line is unmistakable and nothing crosses anything. This is the one that reads
+        like real ductwork.</p>
+    </div>
+
+    <!-- ── C. step-down ─────────────────────────────────────────────────────── -->
+    <div class="opt">
+      <div class="hd"><h2>C · Step down</h2><span class="w">5 cols</span></div>
+      <div class="screen">
+        <svg viewBox="0 0 375 600" aria-label="Option C, indent each branch">
+          <path class="casing" d="M40 60 V120 M40 120 H70 M70 120 V430"/>
+          <path class="duct trunk" d="M40 60 V120 H70 V430"/>
+          <rect class="unit" x="70" y="120" width="230" height="26" rx="7"/>
+          <path class="duct" d="M114 146 V176 M174 146 V176 M234 146 V176 M284 146 V210"/>
+          <g><rect class="body" x="88" y="176" width="52" height="34" rx="8"/><text class="lbl" x="114" y="198" style="font-size:10">Saw</text></g>
+          <g><rect class="body" x="148" y="176" width="52" height="34" rx="8"/><text class="lbl" x="174" y="198" style="font-size:10">Band</text></g>
+          <g><rect class="body" x="208" y="176" width="52" height="34" rx="8"/><text class="lbl" x="234" y="198" style="font-size:10">Router</text></g>
+          <rect class="unit" x="255" y="210" width="90" height="24" rx="12"/>
+          <path class="duct" d="M275 234 V262 M325 234 V262"/>
+          <g><rect class="body" x="249" y="262" width="52" height="34" rx="8"/><text class="lbl" x="275" y="284" style="font-size:10">Drum</text></g>
+          <g><rect class="body" x="299" y="262" width="52" height="34" rx="8"/><text class="lbl" x="325" y="284" style="font-size:10">Planer</text></g>
+          <circle class="body" cx="70" cy="430" r="17"/><line class="stroke" x1="70" y1="413" x2="70" y2="447" stroke-width="3"/>
+          <path class="duct" d="M70 447 V470"/>
+          <g><rect class="body" x="44" y="470" width="52" height="34" rx="8"/><text class="lbl" x="70" y="492" style="font-size:10">Jointer</text></g>
+          <circle cx="40" cy="42" r="17" class="body"/><text class="sub" x="40" y="26">Cyclone</text>
+        </svg>
+      </div>
+      <span class="verdict mid">Indents with depth</span>
+      <p class="note">The trunk steps right under the first branch and carries on down.
+        Same width as B here, but it indents again at every nesting level — a deep shop
+        walks off the right edge, which is the problem we're leaving.</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>What it costs, on the phone measured today</h2>
+    <table>
+      <thead><tr><th>Layout</th><th class="n">Columns</th><th class="n">Fit</th><th>Screen used</th></tr></thead>
+      <tbody>
+        <tr><td>Today, sideways</td><td class="n">6</td><td class="n">54%</td><td>top half; the rest is empty grid</td></tr>
+        <tr><td>A · straight spine</td><td class="n">4</td><td class="n">~78%</td><td>most of it, trunk under the tools</td></tr>
+        <tr><td>B · left rail</td><td class="n">5</td><td class="n">~66%</td><td>most of it, nothing crossing</td></tr>
+        <tr><td>C · step down</td><td class="n">5</td><td class="n">~66%</td><td>most of it, until the shop nests</td></tr>
+      </tbody>
+    </table>
+    <p style="margin-top:11px" class="note">Fit percentages are the width ratio at 375&nbsp;px;
+      the real number depends on how deep the shop runs, since a stacked layout can finally
+      become height-bound. That is the trade: <b>you scroll down instead of shrinking</b>.</p>
+  </div>
+
+  <div class="card">
+    <h2>What this does not change</h2>
+    <p class="note">Auto-layout only runs on a shop that has <em>no saved arrangement</em>.
+      Anything you have already positioned by hand stays exactly where you put it, on every
+      device — so this changes the starting point for new shops, not your bench setup.</p>
+    <p class="note">And it isn't per-device: the layout is saved into the document, so a shop
+      first opened on the phone keeps its stacked arrangement on the desktop. That seems
+      right — a vertical drawing reads fine on a wide screen, where the sideways one was
+      only ever readable <em>because</em> the screen was wide.</p>
+  </div>
+</div>
