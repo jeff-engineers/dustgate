@@ -72,8 +72,41 @@ export class CanvasViewport {
       wrap.addEventListener('touchend', this.pinchEnd);
       wrap.addEventListener('touchcancel', this.pinchEnd);
       wrap.addEventListener('wheel', this.wheelH, { passive: false });
+      wrap.addEventListener('scroll', this.scrollH, { passive: true });
     });
   }
+
+  // ── the pinned rail ───────────────────────────────────────────────────────────
+  /** How far the board rail has to move, in BOARD units, to stay against the top of
+   *  the viewport. Zero at rest, which is when the rail is already where it belongs.
+   *
+   *  Board units rather than screen px because the rail is drawn inside the same SVG
+   *  as everything else, in negative y above the grid. Pinning it is one translate in
+   *  that coordinate system — no overlay, no second space to keep in sync, and its
+   *  ports stay ordinary drop targets you can drag a cable onto. */
+  pinShift(): number {
+    const wrap = this.host.wrapEl(); if (!wrap) return 0;
+    return wrap.scrollTop / this.zoom;
+  }
+  /** True once the rail has left its home position, which is the only time anything
+   *  about it changes — it slims, and the band under it fades. */
+  pinned(): boolean { return this.pinShift() > 1; }
+
+  private lastShift = 0;
+  private scrollRaf = 0;
+  /** Scroll moves the rail, so the drawing has to re-render — but a scroll fires far
+   *  faster than a frame, so it is coalesced into one rAF and skipped entirely when
+   *  the shift hasn't meaningfully changed. */
+  private readonly scrollH = (): void => {
+    if (this.scrollRaf) return;
+    this.scrollRaf = requestAnimationFrame(() => {
+      this.scrollRaf = 0;
+      const s = this.pinShift();
+      if (Math.abs(s - this.lastShift) < 0.5) return;
+      this.lastShift = s;
+      this.host.runInZone(() => { /* the shift is read during render */ });
+    });
+  };
 
   destroy(): void {
     this.stopGlide();
@@ -88,6 +121,8 @@ export class CanvasViewport {
     wrap?.removeEventListener('touchend', this.pinchEnd);
     wrap?.removeEventListener('touchcancel', this.pinchEnd);
     wrap?.removeEventListener('wheel', this.wheelH);
+    wrap?.removeEventListener('scroll', this.scrollH);
+    if (this.scrollRaf) cancelAnimationFrame(this.scrollRaf);
   }
 
   /** Sole resize path — the wrap resizes whenever the window does, so observing it

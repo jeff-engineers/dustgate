@@ -77,6 +77,11 @@ svg.canvas { display: block; touch-action: none; }
 /* A system's ground. Barely there on purpose: it has to survive the zoom-out that
    a hairline wouldn't, without competing with the ductwork drawn on top of it. */
 .ground { fill: #191919; }
+/* The fade under a pinned rail. Never takes the pointer — it covers live board, and
+   a scrim that swallowed taps would make the top of the shop unusable. Backs almost
+   all the way off during a drag, so a piece being placed up there stays visible. */
+.scrim { pointer-events: none; transition: opacity 120ms ease; }
+.scrim.quiet { opacity: 0.15; }
 /* The seam between two systems, and the name of the one below it. Muted caps: it
    is a caption on the board, not a piece standing on it. */
 .sysdiv line { stroke: var(--border); stroke-width: 1.5; }

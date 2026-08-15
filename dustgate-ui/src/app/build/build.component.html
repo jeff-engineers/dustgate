@@ -51,6 +51,14 @@
          [attr.width]="vbW * vp.zoom" [attr.height]="(vbH + RAIL_H) * vp.zoom">
       <defs>
         <pattern id="bdots" width="27" height="27" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r="1" fill="var(--border)"/></pattern>
+        <!-- Strongest against the rail and gone by the bottom, so the board reads as
+             sliding under it. Not fully opaque even at the top: this is a fade, and a
+             piece you can't see at all is one you'll try to drag twice. -->
+        <linearGradient id="railscrim" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="var(--bg)" stop-opacity="0.88"/>
+          <stop offset="0.55" stop-color="var(--bg)" stop-opacity="0.62"/>
+          <stop offset="1" stop-color="var(--bg)" stop-opacity="0"/>
+        </linearGradient>
       </defs>
       <rect x="0" y="0" [attr.width]="vbW" [attr.height]="vbH" fill="url(#bdots)" (pointerdown)="deselect()"/>
 
@@ -71,27 +79,6 @@
         </g>
       </g>
 
-      <!-- The board rail. Above the whole grid, in negative y, so every cell
-           keeps the coordinates it has always had and no saved layout moves. -->
-      <g class="wiring">
-        <rect class="rail" x="0" [attr.y]="-RAIL_H" [attr.width]="vbW" [attr.height]="RAIL_H"/>
-        <line class="rail-edge" x1="0" y1="0" [attr.x2]="vbW" y2="0"/>
-        <text class="rail-lbl" x="14" [attr.y]="-RAIL_H + 20">BOARDS</text>
-        <!-- Which network they're all on. Only drawn once we actually know it —
-             a placeholder here would be a claim about the shop. -->
-        <g *ngIf="netName">
-          <g class="rail-wifi" [attr.transform]="'translate(19,' + (-RAIL_H + 33) + ')'">
-            <path d="M-5 2 a7 7 0 0 1 10 0"/><path d="M-2.2 5 a3 3 0 0 1 4.4 0"/>
-          </g>
-          <text class="rail-net" x="29" [attr.y]="-RAIL_H + 37">{{ netName }}</text>
-        </g>
-        <g class="findboards" [attr.transform]="'translate(' + findX() + ',' + (-RAIL_H/2) + ')'"
-           (pointerdown)="goBoards()">
-          <rect x="0" y="-18" [attr.width]="FIND_W" height="36" rx="9"/>
-          <text [attr.x]="FIND_W / 2" y="4">+ Find boards</text>
-        </g>
-      </g>
-
       <!-- The cell a drag is over. Red while the drop would be refused, so the
            reason in the guide bar has something to point at. -->
       <rect *ngIf="hoverCell" class="target" [class.bad]="!!dropBlocked"
@@ -106,12 +93,6 @@
         <path class="duct" [class.live]="d.live" [attr.d]="ductD(d.childId)"/>
       </g>
 
-      <!-- Cable runs. Under the pieces on purpose, so each end tucks beneath the
-           tab it lands on rather than stopping short of it. -->
-      <g class="wiring">
-        <path *ngFor="let c of cables()" class="cable" [attr.d]="c.d"/>
-      </g>
-      <path *ngFor="let d of openDucts()" class="open-stub" [attr.d]="openStubD(d.childId)"/>
       <g *ngFor="let bd of branchDots()" class="bdot" (pointerdown)="onBranchDotDown($event, bd)">
         <circle [attr.cx]="bd.x" [attr.cy]="bd.y" r="14" fill="transparent"/>
         <circle class="bdot-dot" [attr.cx]="bd.x" [attr.cy]="bd.y" r="3.5"/>
@@ -204,6 +185,57 @@
              door is enough. The servo tab has the corner to itself now. -->
       </g>
 
+      <!-- ── the pinned rail, and what it fades ──────────────────────────
+           Painted HERE, after the pieces, because it has to sit over them once
+           it pins — at rest it is in negative y and the order never mattered.
+           The cables follow it: they used to tuck under the pieces, which was
+           fine while they routed around everything, and stopped being fine when
+           the band under a pinned rail became a lane they cross on purpose. A
+           wire you cannot trace is the one thing this whole layer is for. -->
+      <!-- The board rail. Above the whole grid, in negative y, so every cell
+           keeps the coordinates it has always had and no saved layout moves.
+           It PINS: scroll down and it slides with you (railShift), because the
+           other end of every cable lives up here and a wire with one end
+           off-screen tells you nothing. The boards themselves are translated by
+           by(), which is the funnel their ports and cables go through too. -->
+      <g class="wiring" [attr.transform]="'translate(0,' + railShift() + ')'">
+        <rect class="rail" x="0" [attr.y]="-RAIL_H" [attr.width]="vbW" [attr.height]="RAIL_H"/>
+        <line class="rail-edge" x1="0" y1="0" [attr.x2]="vbW" y2="0"/>
+        <!-- The rail SLIMS once pinned: what sticks is the part you point at and drag
+             to. The network name and Find boards are errands you run once, at the top
+             of the shop, so they stay behind rather than becoming permanent chrome. -->
+        <ng-container *ngIf="!railPinned()">
+          <text class="rail-lbl" x="14" [attr.y]="-RAIL_H + 20">BOARDS</text>
+          <!-- Which network they're all on. Only drawn once we actually know it —
+               a placeholder here would be a claim about the shop. -->
+          <g *ngIf="netName">
+            <g class="rail-wifi" [attr.transform]="'translate(19,' + (-RAIL_H + 33) + ')'">
+              <path d="M-5 2 a7 7 0 0 1 10 0"/><path d="M-2.2 5 a3 3 0 0 1 4.4 0"/>
+            </g>
+            <text class="rail-net" x="29" [attr.y]="-RAIL_H + 37">{{ netName }}</text>
+          </g>
+          <g class="findboards" [attr.transform]="'translate(' + findX() + ',' + (-RAIL_H/2) + ')'"
+             (pointerdown)="goBoards()">
+            <rect x="0" y="-18" [attr.width]="FIND_W" height="36" rx="9"/>
+            <text [attr.x]="FIND_W / 2" y="4">+ Find boards</text>
+          </g>
+        </ng-container>
+      </g>
+
+      <!-- The fade below a pinned rail. The drawing passes UNDER the rail rather than
+           being cut off at it — a plain edge severs a gate bar mid-glyph and the board
+           reads as two panes. Dropped to almost nothing mid-drag: a piece you are
+           moving INTO this band has to stay visible while you place it. -->
+      <rect *ngIf="railPinned()" class="scrim" [class.quiet]="dragActive()"
+            x="0" [attr.y]="railShift()" [attr.width]="vbW" [attr.height]="SCRIM_H"
+            fill="url(#railscrim)"/>
+
+      <!-- Cable runs. Under the pieces on purpose, so each end tucks beneath the
+           tab it lands on rather than stopping short of it. -->
+      <g class="wiring">
+        <path *ngFor="let c of cables()" class="cable" [attr.d]="c.d"/>
+      </g>
+      <path *ngFor="let d of openDucts()" class="open-stub" [attr.d]="openStubD(d.childId)"/>
       <!-- ── wiring layer ────────────────────────────────────────────────
            Present in BOTH views. In Ducts it greys out and stops taking the
            pointer, so you can still see where the cable goes while you plumb —

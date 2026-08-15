@@ -54,6 +54,10 @@ const SYSTEM_GAP = 1;
 /** How far a system's grey ground stops short of its outermost row. Enough that two
  *  bands dragged flush against each other still read as two. */
 const GROUND_INSET = 10;
+/** Depth of the fade below a pinned rail. The board passes UNDER the rail rather than
+ *  being cut off by it: a plain edge slices a gate bar mid-glyph and the drawing reads
+ *  as two panes. Also the depth of the free lane — see cableCost(). */
+const SCRIM_H = 60;
 
 interface Cell { col: number; row: number; }
 interface RawEl { [k: string]: unknown; }
@@ -177,6 +181,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   readonly CELL = CELL; readonly UNIT_H = UNIT_H; readonly GATE_PAD = GATE_PAD; readonly PAD = PAD;
   readonly TOOL_HALF = TOOL_HALF;
   readonly BOARD_W = BOARD_W; readonly BOARD_H = BOARD_H; readonly RAIL_H = RAIL_H;
+  readonly SCRIM_H = SCRIM_H;
   readonly PORT_H = PORT_H; readonly TAB_W = TAB_W; readonly TAB_H = TAB_H;
   readonly SERVO_PORTS = SERVO_PORTS; readonly FIND_W = FIND_W;
 
@@ -1936,7 +1941,18 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   }
   goBoards(): void { void this.nav.navigate(['/boards']); }
   bx(b: BoardVM): number { return b.dragX ?? b.x; }
-  by(b: BoardVM): number { return b.dragY ?? b.y; }
+  /** The rail's pin shift rides HERE, in the one funnel every part of a board goes
+   *  through — its glyph, its ports, the cable that leaves them, and the hit-testing
+   *  for a drop. Add it once and the whole rail pins coherently; add it in the
+   *  template and the cable would stay behind while the board moved. */
+  by(b: BoardVM): number { return (b.dragY ?? b.y) + this.railShift(); }
+  /** How far down the rail has been pushed to stay on screen. 0 at rest. */
+  railShift(): number { return this.vp.pinShift(); }
+  railPinned(): boolean { return this.vp.pinned(); }
+  /** Board y of the scrim's lower edge — the band a cable may cross for free. */
+  scrimBottom(): number { return this.railShift() + SCRIM_H; }
+  /** Anything being dragged right now, which is when the scrim backs off. */
+  dragActive(): boolean { return !!this.dragId || !!this.bodrag; }
 
   private rosterFor(boardId: string): Map<number, string> {
     const used = new Map<number, string>();
@@ -2037,7 +2053,13 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       .filter(n => n.id !== gateId)
       .map(n => deviceBox(this.sceneNode(n), 6));
     const ducts = this.ducts.map(d => this.ductPoints(d.childId)).filter(p => p.length > 1);
+    // The band under a pinned rail is a FREE LANE. Everything down there is faded on
+    // purpose, so a wire crossing it says nothing misleading — and making cables detour
+    // around glyphs the user can barely see would produce contortions with no visible
+    // cause. Only while pinned: at rest that band is ordinary board.
+    const free = this.railPinned() ? this.scrimBottom() : -Infinity;
     return (a, b) => {
+      if (Math.max(a.y, b.y) <= free) return 0;
       let c = 0;
       for (const box of boxes) if (segBoxHit(a, b, box)) c += 100;
       for (const pts of ducts) {
