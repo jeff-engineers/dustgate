@@ -111,12 +111,10 @@ export const DEMO_TOPOLOGY: Topology = {
   ],
   devices: [],
   ui: {
-    layout: {
-      dc: { col: 0, row: 0 }, sel: { col: 0, row: 1 },
-      saw: { col: 0, row: 2 }, band: { col: 1, row: 2 }, router: { col: 2, row: 2 },
-      man: { col: 3, row: 2 }, sander: { col: 3, row: 3 }, planer: { col: 4, row: 3 },
-      bv: { col: 5, row: 1 }, jointer: { col: 5, row: 2 },
-    },
+    // No `layout` on purpose. This used to carry a hand-arranged one from the days
+    // when the canvas fanned out sideways, which meant demo mode showed an
+    // arrangement no new shop would ever get. Leaving it out hands the demo to
+    // autoLayoutInto(), so what you see here is exactly what your own shop starts as.
     // Order along the board rail, left to right. Placement is no longer a decision —
     // the rail sits above the whole grid, so a board can only be reordered.
     wiring: { boards: { primary: 0, 'dustgate-node-1': 1 } },

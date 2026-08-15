@@ -178,15 +178,9 @@
           <circle [class.todo]="n.setup === 'todo'" [class.done]="n.setup === 'done'" r="7"/>
           <path *ngIf="n.setup === 'done'" class="tick" d="M-3.2 0 L-1 2.4 L3.2 -2.4"/>
         </g>
-        <!-- Remove: a red (−) on the selected piece, in place of the old dialog.
-             Devices only — run ends delete from their own menu. -->
-        <g *ngIf="n.id === selectedId && n.glyph !== 'collector' && n.glyph !== 'junction'" class="rm" [class.off]="!canDelete(n)"
-           [attr.transform]="'translate(' + rmX(n) + ',' + rmY(n) + ')'"
-           (pointerdown)="onRemove($event, n)">
-          <title>{{ deleteHint(n) }}</title>
-          <circle class="rm-bg" r="11"/>
-          <line class="rm-line" x1="-5" y1="0" x2="5" y2="0"/>
-        </g>
+        <!-- A red (−) used to ride this corner while a piece was selected. It came
+             off on 2026-08-15: Delete is a row in the piece's own tap menu, and one
+             door is enough. The servo tab has the corner to itself now. -->
       </g>
 
       <!-- ── wiring layer ────────────────────────────────────────────────

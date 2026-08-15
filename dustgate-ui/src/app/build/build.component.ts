@@ -471,27 +471,11 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     return `M ${end.x - (dx / len) * stub} ${end.y - (dy / len) * stub} L ${end.x} ${end.y}`;
   }
 
-  /** Top-right corner of the glyph, in the node's own (translated) coordinates.
-   *  A gate's servo tab now straddles that same corner, so the (−) steps left by
-   *  its width — only on gates, and only while one is selected, which is the only
-   *  time the two are on screen together. */
-  rmX(n: NodeVM): number {
-    const edge = n.isUnit ? (n.span - 1) * CELL + GATE_PAD : this.halfW(n);
-    return this.isGate(n) ? edge - 26 : edge;
-  }
-  rmY(n: NodeVM): number { return -this.halfH(n); }
-  /** The setup badge sits on the opposite corner from the (−) so the two never overlap
-   *  on a selected gate. A unit's group origin is its FIRST outlet, not its centre —
-   *  hence the same asymmetry rmX has, mirrored. */
+  /** The setup badge takes the TOP-LEFT corner, opposite the servo tab. A unit's group
+   *  origin is its FIRST outlet, not its centre, so the left edge is a bare pad while
+   *  the right one has to count the span. */
   todoX(n: NodeVM): number { return n.isUnit ? -GATE_PAD : -this.halfW(n); }
   todoY(n: NodeVM): number { return -this.halfH(n); }
-  /** The red (−): remove this piece. Swallows the event so it doesn't start a drag. */
-  onRemove(evt: PointerEvent, n: NodeVM): void {
-    evt.preventDefault(); evt.stopPropagation();
-    if (!this.canDelete(n)) return;
-    this.selectedId = n.id;
-    this.deleteSelected();
-  }
 
   labelX(n: NodeVM): number { return n.isUnit ? (n.span - 1) * CELL / 2 : 0; }
   /** Below the glyph AND below its add-dot, which sits at halfH + 18 — the two used
@@ -719,7 +703,8 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     const el = this.elem(id); if (!el || el['type'] !== 'junction') return;
     delete el['capped']; el['name'] = 'Open end'; this.afterMutation(id);
   }
-  /** Delete a specific element (the menu's Delete, for ends that have no (−)). */
+  /** Delete a specific element — the run-end menu's Delete, which reaches a junction
+   *  that was never selected, so it can't go through deleteSelected(). */
   private removeAt(id: string): void {
     if (!this.topo) return;
     this.removeElement(id);
@@ -996,8 +981,15 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       this.recomputeExtent();
     } else if (n && n.glyph === 'junction') {
       // A tap (no drag) on a run end — open or capped — opens its menu: what goes
-      // here, plus cap/reopen/delete. Ends carry no inspector or (−) of their own.
+      // here, plus cap/reopen/delete. Ends carry no inspector of their own.
       this.openMenu(evt.clientX, evt.clientY, { end: n.id });
+    } else if (n && !n.setup) {
+      // A passive manifold has no setup state, so it gets no badge — and the badge is
+      // what opens a piece's menu. That left it with nothing to tap at all, which only
+      // stopped mattering because the red (−) was there to delete it. It isn't now, so
+      // a tap on a badge-less piece opens the menu itself. Selection already happened
+      // on pointerdown, so dismissing the menu still leaves the name editable.
+      this.openMenu(evt.clientX, evt.clientY, { convert: n.id });
     }
     // A tap on the body of a piece now does one thing: select it, which puts the
     // editable name on its label. What the piece IS — its kind, its setup, its plug —
@@ -1245,17 +1237,23 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
 
   /** What a tap on a placed piece offers. Gates: setup + the other kinds. Tools and
    *  the collector: their smart outlet, which is the only thing about them that
-   *  isn't already said by where they sit. */
+   *  isn't already said by where they sit. Everything but the collector also ends
+   *  with Delete — this menu became the ONLY way to bin a placed piece when the red
+   *  (−) badge came off on 2026-08-15, and a phone has no Delete key. */
   private convertOptions(id: string): MenuOption[] {
     const n = this.byId.get(id); if (!n) return [];
     if (n.glyph === 'tool' || n.glyph === 'collector') {
       const paired = n.setup === 'done';
-      return [{
+      const opts: MenuOption[] = [{
         kind: 'outlet',
         label: paired ? 'Smart outlet' : 'Set up smart outlet',
         enabled: true,
         note: paired ? undefined : (n.glyph === 'collector' ? 'started by hand' : 'switched by hand'),
       }];
+      // The collector is the one piece with nothing above it, so there's no run to
+      // heal — it stays, and offering a dead Delete would only invite the tap.
+      if (n.glyph !== 'collector') opts.push(this.deleteOption(n));
+      return opts;
     }
     // Tapping a gate is how you get at it, so its setup lives here alongside the
     // conversions — the floating inspector is only reachable right after placing one.
@@ -1266,7 +1264,15 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     return opts.concat(this.gateTypes(n).map(t => ({
       kind: t.kind, label: t.current ? `${t.label} (current)` : t.label,
       enabled: t.enabled, note: t.note,
-    })));
+    })), [this.deleteOption(n)]);
+  }
+
+  /** Delete, with the reason it's greyed out when a fork can't go yet. Last row of
+   *  the tap menu, so it's never the neighbour of the row you meant to press. */
+  private deleteOption(n: NodeVM): MenuOption {
+    const ok = this.canDelete(n);
+    return { kind: 'delete', label: 'Delete', enabled: ok,
+             note: ok ? undefined : 'remove its other legs first' };
   }
 
   /** Route a chosen option to the right primitive for the context it was opened in. */
@@ -1278,6 +1284,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       const id = m.convert; this.closeMenu();
       if (kind === 'configure') this.configure(id);
       else if (kind === 'outlet') this.configureOutlet(id);
+      else if (kind === 'delete') { this.selectedId = id; this.deleteSelected(); }
       else this.convertKind(id, kind as SelKind);
       return;
     }
@@ -1893,8 +1900,8 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
    *  where a horizontal duct leaves the same edge — tab and duct overlapping,
    *  reading as one object. Either corner clears the outgoing run; the top is the
    *  side the cables come down from, so the tab now meets its own cable instead of
-   *  the cable reaching around the gate to find it. The cost is that the (−) badge
-   *  shares this corner, so it is nudged left while a gate is selected.
+   *  the cable reaching around the gate to find it. It shared the corner with the
+   *  red (−) badge for a day; the badge went, so the tab has it outright.
    *
    *  It STRADDLES that corner rather than floating outside it. Held off the edge
    *  it read as a separate thing parked in the gap, and on a manifold — whose body
@@ -2454,11 +2461,6 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     if (n.glyph === 'tool') return true;
     return this.childrenOf(n.id).length <= 1;
   }
-  /** Why the (−) is greyed out, for its tooltip. */
-  deleteHint(n: NodeVM): string {
-    if (n.glyph === 'collector') return 'The collector stays';
-    return this.canDelete(n) ? 'Remove (or press Delete)' : 'Remove its other legs first';
-  }
   deleteSelected(): void {
     const n = this.inspected(); if (!n || !this.canDelete(n) || !this.topo) return;
     this.pushHistory(null);
@@ -2565,7 +2567,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
 
     // Below the real problems, above the general nudges: a redundant gate is a
     // working shop with a part in it that isn't doing anything. Worth saying once,
-    // as an offer rather than a demand — select it and the (−) is right there.
+    // as an offer rather than a demand — tap it and Delete is in its menu.
     const spare = this.nodes.filter(n => n.redundant);
     if (spare.length && !this.liveLeaks().length) {
       const names = spare.map(n => n.name).join(', ');
@@ -3039,12 +3041,32 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     if (el['type'] === 'selector') return (el['branches'] as Branch[]).some(b => b.role === 'blocked');
     return false;
   }
-  /** Top-down auto-layout: collector on top, flow downward; unit selectors span N cells with tools below. */
+  /** Auto-layout, "left rail": the trunk owns column 0 and every branch feeds off it
+   *  sideways, stacked down the page.
+   *
+   *  This used to fan out horizontally — the collector centred over its children, each
+   *  fork widening the drawing again. It read beautifully on a laptop and was unusable
+   *  on the phone the shop actually gets built on: a six-tool shop came out ten columns
+   *  wide, which is a 40% zoom, which is a drawing you cannot tap. Three vertical
+   *  arrangements were mocked up (`docs/mockups/vertical-layout.html`) and this is the
+   *  one that won: it costs a column against the tightest option and buys a drawing
+   *  where the main line is unmistakable and no duct crosses another.
+   *
+   *  So: the collector sits at the head of column 0, that column stays empty beneath it
+   *  for the trunk to run down, and each of its legs gets its own BAND of rows starting
+   *  at column 1. Bands share columns — that's what keeps the thing narrow — and are
+   *  separated by one blank row so two branches never look joined. Inside a band the
+   *  old left-to-right packer still runs, because a manifold and its tools genuinely are
+   *  a horizontal object.
+   *
+   *  Only ever runs on a shop with no saved `ui.layout`; anything arranged by hand is
+   *  left alone. */
   private autoLayoutInto(target: Map<string, Cell>): void {
     if (!this.topo) return;
     const root = this.elems(this.topo).find(e => e['type'] === 'collector'); if (!root) return;
     target.clear();
-    let cursor = 0;
+    const TRUNK_COL = 0, BRANCH_COL = 1;
+    let cursor = BRANCH_COL, deepest = 0;
     const widthOf = (id: string): number => {
       const el = this.elem(id);
       if (isUnitKind(el?.['kind'])) return Math.max(1, (el!['branches'] as unknown[]).length);
@@ -3052,23 +3074,55 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       if (!kids.length) return 1;
       return Math.max(1, kids.reduce((s, k) => s + widthOf(k), 0));
     };
-    const place = (id: string, row: number): void => {
+    /** Place a subtree. `forceCol` pins the piece to a column its parent chose for it —
+     *  what a unit does to whatever hangs on outlet N — instead of taking the next free
+     *  one. The cursor is borrowed and put back around a pinned descent so a deep leg
+     *  can reuse the columns above it without stealing them from its own siblings. */
+    const place = (id: string, row: number, forceCol?: number): void => {
+      deepest = Math.max(deepest, row);
       const el = this.elem(id);
-      if (isUnitKind(el?.['kind'])) { target.set(id, { col: cursor, row }); cursor += widthOf(id); return; }
-      const kids = this.childrenOf(id).filter(k => !this.isUnitChild(k));
-      if (!kids.length) { target.set(id, { col: cursor, row }); cursor += 1; return; }
+      const kids = this.childrenOf(id);
+      const onOutlet = kids.filter(k => this.isUnitChild(k));
+      const runKids = kids.filter(k => !this.isUnitChild(k));
+      if (isUnitKind(el?.['kind'])) {
+        // A unit's origin is its FIRST outlet, and everything it feeds hangs one row
+        // down at the column of the outlet it came off. Recursive, so a manifold on a
+        // manifold's last outlet lands under that outlet rather than being skipped.
+        const col = forceCol ?? cursor;
+        target.set(id, { col, row });
+        if (forceCol === undefined) cursor += widthOf(id);
+        for (const k of onOutlet) place(k, row + 1, col + (this.outletOf.get(k)?.index ?? 0));
+        return;
+      }
+      if (!runKids.length) {
+        target.set(id, { col: forceCol ?? cursor, row });
+        if (forceCol === undefined) cursor += 1;
+        return;
+      }
+      if (forceCol !== undefined) {
+        const keep = cursor; cursor = forceCol;
+        for (const k of runKids) place(k, row + 1);
+        cursor = keep;
+        target.set(id, { col: forceCol, row });
+        return;
+      }
       const start = cursor;
-      for (const k of kids) place(k, row + 1);
+      for (const k of runKids) place(k, row + 1);
       // A lone unit child: sit directly above its FIRST outlet (col of the unit) so the
-      // trunk drops straight in. Otherwise center over the children's span.
-      if (kids.length === 1 && isUnitKind(this.elem(kids[0])?.['kind'])) {
-        target.set(id, { col: target.get(kids[0])?.col ?? start, row });
+      // run drops straight in. Otherwise centre over the children's span.
+      if (runKids.length === 1 && isUnitKind(this.elem(runKids[0])?.['kind'])) {
+        target.set(id, { col: target.get(runKids[0])?.col ?? start, row });
       } else {
         target.set(id, { col: Math.floor((start + cursor - 1) / 2), row });
       }
     };
-    place(root['id'] as string, 0);
-    for (const [toolId, o] of this.outletOf) { const uc = target.get(o.unitId); if (uc) target.set(toolId, { col: uc.col + o.index, row: uc.row + 1 }); }
+    target.set(root['id'] as string, { col: TRUNK_COL, row: 0 });
+    let band = 1;
+    for (const leg of this.childrenOf(root['id'] as string)) {
+      cursor = BRANCH_COL; deepest = band;
+      place(leg, band);
+      band = deepest + 2;   // one blank row between bands
+    }
   }
   private savedLayout(t: Topology): Record<string, Cell> | null { return (t as { ui?: { layout?: Record<string, Cell> } }).ui?.layout ?? null; }
   private savedBoards(t: Topology): Record<string, number | Cell> | null {

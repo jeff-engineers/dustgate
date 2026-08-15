@@ -188,20 +188,16 @@ svg.canvas { display: block; touch-action: none; }
 .sheet-bg { position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 25; }
 .sheet { position: fixed; z-index: 26; left: 50%; top: 50%; transform: translate(-50%, -50%);
          width: min(440px, calc(100vw - 28px)); max-height: calc(100vh - 40px); overflow-y: auto; }
-/* Destructive menu row reads red, like the (−) badge. */
+/* Destructive menu row reads red — it's the only door to Delete now. */
 .menu button.danger { color: var(--danger); }
 .menu button.danger svg { color: var(--danger); }
 .node .cap { fill: var(--muted); }
 .node .fan { opacity: 0.55; }
-/* Remove badge — replaces the old cap/delete dialog. */
+/* Setup badge: needs doing / done. */
 .todo { fill: var(--accent); stroke: var(--surface); stroke-width: 2; }
 .done { fill: var(--success); stroke: var(--surface); stroke-width: 2; }
 .tick { fill: none; stroke: var(--bg); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .todo-hit { cursor: pointer; }
-.rm { cursor: pointer; }
-.rm-bg { fill: var(--danger); stroke: var(--surface); stroke-width: 2; }
-.rm-line { stroke: #fff; stroke-width: 2.2; stroke-linecap: round; }
-.rm.off { cursor: default; opacity: 0.35; }
 
 /* ── wiring layer ──────────────────────────────────────────────────────
    Cable is azure, never the app's --danger red: that red already means
