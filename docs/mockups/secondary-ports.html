@@ -1,0 +1,395 @@
+<title>DustGate — second pickups, and reading a wire off-screen</title>
+
+<style>
+  :root {
+    --bg: #111; --surface: #1e1e1e; --raised: #262626; --border: #2e2e2e;
+    --text: #e8e8e8; --muted: #8a8a86; --accent: #f0a500; --success: #3cbe6e;
+    --danger: #d94444; --duct: #3a3a3a; --cable: #38b6f0; --radius: 14px;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); margin: 0; padding: 22px 18px 60px;
+         font-family: system-ui, -apple-system, sans-serif; font-size: 15px; line-height: 1.5; }
+  .wrap { max-width: 1080px; margin: 0 auto; display: flex; flex-direction: column; gap: 22px; }
+  h1 { font-size: 20px; font-weight: 600; margin: 6px 0 0; letter-spacing: -0.01em; text-wrap: balance; }
+  h2 { font-size: 13.5px; font-weight: 600; margin: 0; }
+  h3 { font-size: 15px; font-weight: 600; margin: 0 0 2px; }
+  .lede { color: var(--muted); font-size: 13.5px; max-width: 68ch; margin: 6px 0 0; }
+  .eyebrow { font-size: 11px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--muted); }
+  p { margin: 0; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.92em; color: var(--text); }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; align-items: start; }
+  .opt { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+         padding: 12px; display: flex; flex-direction: column; gap: 9px; }
+  .opt.pick { border-color: var(--accent); }
+  .opt.today { border-style: dashed; }
+  .hd { display: flex; align-items: baseline; gap: 8px; }
+  .hd .w { margin-left: auto; font-size: 11.5px; color: var(--muted); }
+  .opt.pick .hd .w { color: var(--accent); }
+  .screen { background: var(--bg); border: 1px solid var(--border); border-radius: 9px;
+            aspect-ratio: 375 / 300; overflow: hidden; }
+  .screen svg { display: block; width: 100%; height: 100%; }
+  .note { font-size: 12px; color: var(--muted); line-height: 1.5; }
+  .note b { color: var(--text); font-weight: 600; }
+  .verdict { font-size: 11.5px; padding: 4px 8px; border-radius: 6px; align-self: flex-start; }
+  .verdict.good { color: var(--success); background: rgba(60,190,110,0.12); }
+  .verdict.bad  { color: var(--danger);  background: rgba(217,68,68,0.12); }
+  .verdict.mid  { color: var(--accent);  background: rgba(240,165,0,0.12); }
+
+  /* the canvas as it now stands */
+  .duct  { fill: none; stroke: var(--duct); stroke-width: 7; stroke-linecap: round; stroke-linejoin: round; }
+  .unit  { fill: var(--surface); stroke: #444; stroke-width: 1.6; }
+  .tool  { fill: #16262e; stroke: #2d6a86; stroke-width: 2; }
+  .plug  { fill: #0d1a20; stroke: #2d6a86; stroke-width: 1; }
+  .lbl   { fill: var(--text); font-size: 11.5px; text-anchor: middle; font-family: system-ui, sans-serif; font-weight: 500; }
+  .sub   { fill: var(--muted); font-size: 9.5px; text-anchor: middle; font-family: system-ui, sans-serif; }
+  .gatelbl { fill: var(--muted); font-size: 9px; text-anchor: middle; letter-spacing: 0.08em;
+             font-family: system-ui, sans-serif; }
+  .tiny  { fill: var(--muted); font-size: 9.5px; font-family: system-ui, sans-serif; }
+  .same  { fill: none; stroke: #2d6a86; stroke-width: 1.6; stroke-dasharray: 5 4; }
+  .cable { fill: none; stroke: var(--cable); stroke-width: 2; }
+  .tab   { fill: #0e2530; stroke: var(--cable); stroke-width: 1.3; }
+  .tabt  { fill: var(--cable); font-size: 8.5px; text-anchor: middle; font-weight: 600;
+           font-family: system-ui, sans-serif; }
+  .ground { fill: #191919; }
+  .seam   { stroke: var(--border); stroke-width: 1.5; }
+  .seamt  { fill: var(--muted); font-size: 9.5px; font-weight: 600; letter-spacing: 0.09em;
+            text-transform: uppercase; font-family: system-ui, sans-serif; }
+
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 15px 16px; }
+  .card p + p { margin-top: 9px; }
+  .card em { color: var(--text); font-style: normal; }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; margin-top: 4px; }
+  th, td { text-align: left; padding: 5px 8px 5px 0; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em; }
+</style>
+
+<div class="wrap">
+
+  <header>
+    <span class="eyebrow">DustGate · build canvas</span>
+    <h1>A second pickup on the same machine</h1>
+    <p class="lede">
+      A table saw collects from two places — the cabinet under the blade and the
+      overarm guard — and they are two ducts behind two gates. The model has carried
+      that since the shop container: a machine owns exactly one <b
+      style="color:var(--text)">primary</b> port and up to two <b
+      style="color:var(--text)">supplemental</b> ones, each a proper one-parent leaf
+      in whichever system it hangs off (<code>shop.js</code>). The canvas has never
+      offered a way to make one.
+      <br><br>
+      <em>The thing to get right:</em> a second port is not a second machine. One
+      plug, one trip point, one name, one thing you switch on. Whatever the canvas
+      draws has to say <em>the same saw, again</em> — because a drawing that reads as
+      two saws is a drawing that says this shop has more machines than it has.
+    </p>
+  </header>
+
+  <!-- ── 1. adding one ───────────────────────────────────────────────────────── -->
+  <h3>Adding one</h3>
+  <p class="note" style="max-width:68ch">On the tool's own tap menu, under its plug —
+    the menu that already answers "what is this piece". The new port arrives as an open
+    end you drag out and put a gate on, exactly like any other run, so nothing new has
+    to be learned to plumb it.</p>
+
+  <div class="grid">
+    <div class="opt">
+      <div class="hd"><h2>The tool menu</h2><span class="w">tap the badge</span></div>
+      <div class="screen">
+        <svg viewBox="0 0 375 300" aria-label="A tool's tap menu with Add second pickup">
+          <rect class="tool" x="40" y="40" width="76" height="68" rx="11"/>
+          <text class="lbl" x="78" y="72">Table saw</text>
+          <rect class="plug" x="48" y="80" width="60" height="20" rx="5"/>
+          <text class="sub" x="78" y="94">tablesaw · 1.4 kW</text>
+          <circle cx="40" cy="40" r="7" fill="var(--success)"/>
+          <rect x="140" y="34" width="196" height="120" rx="11" fill="var(--raised)" stroke="var(--border)"/>
+          <text x="156" y="58" class="lbl" style="text-anchor:start;font-size:11.5">Smart outlet</text>
+          <text x="156" y="86" class="lbl" style="text-anchor:start;font-size:11.5;fill:var(--accent)">Add second pickup</text>
+          <text x="156" y="100" class="tiny">overarm guard, hood, second port</text>
+          <line x1="150" y1="118" x2="326" y2="118" class="seam"/>
+          <text x="156" y="140" class="lbl" style="text-anchor:start;font-size:11.5;fill:var(--danger)">Delete</text>
+          <text x="24" y="196" class="tiny">Capped at two extra, because a machine has room for a</text>
+          <text x="24" y="212" class="tiny">main port and a pickup or two — a list long enough to</text>
+          <text x="24" y="228" class="tiny">scroll is a modelling mistake, not a shop.</text>
+          <text x="24" y="258" class="tiny" style="fill:var(--accent)">The row greys out at the cap, with the reason.</text>
+        </svg>
+      </div>
+      <p class="note">The primary port is never offered for deletion — it is the
+        connection the machine cannot run without, so the only way it goes away is with
+        the machine. A supplemental one deletes like anything else.</p>
+    </div>
+
+    <div class="opt">
+      <div class="hd"><h2>…and it lands as an open end</h2></div>
+      <div class="screen">
+        <svg viewBox="0 0 375 300" aria-label="The new port arrives as an open end to plumb">
+          <path class="duct" d="M60 30 V56"/>
+          <rect class="unit" x="60" y="56" width="150" height="24" rx="7"/>
+          <text class="gatelbl" x="135" y="50">MAIN GATE</text>
+          <path class="duct" d="M96 80 V106"/>
+          <rect class="tool" x="58" y="106" width="76" height="68" rx="11"/>
+          <text class="lbl" x="96" y="138">Table saw</text>
+          <rect class="plug" x="66" y="146" width="60" height="20" rx="5"/>
+          <text class="sub" x="96" y="160">tablesaw</text>
+          <!-- the new port, waiting to be plumbed -->
+          <rect class="tool" x="242" y="106" width="76" height="52" rx="11" stroke-dasharray="5 4"/>
+          <text class="lbl" x="280" y="130">Table saw</text>
+          <text class="sub" x="280" y="146">overarm</text>
+          <circle cx="280" cy="92" r="6" fill="none" stroke="var(--accent)" stroke-width="1.6"/>
+          <path class="duct" d="M280 98 V106" stroke-dasharray="4 4"/>
+          <text class="tiny" x="294" y="88">drag from here to run its pipe</text>
+          <path class="same" d="M96 174 V196 H280 V158"/>
+          <text class="tiny" x="188" y="212" style="text-anchor:middle">one machine, two ports</text>
+          <text x="24" y="252" class="tiny">Dashed body until it is on a run — the same "unfinished"</text>
+          <text x="24" y="268" class="tiny">language an open duct already uses.</text>
+        </svg>
+      </div>
+      <p class="note">Until it's plumbed it is an unfinished thing, and the guide bar
+        says so the way it does for any open end. Once it's behind a gate the body goes
+        solid.</p>
+    </div>
+  </div>
+
+  <!-- ── 2. what it looks like ───────────────────────────────────────────────── -->
+  <h3 style="margin-top:6px">What a second port looks like</h3>
+  <p class="note" style="max-width:68ch">Three ways to draw the finished thing. Each
+    shows the same shop: the saw's cabinet port on the main gate, its overarm pickup
+    behind a ball valve.</p>
+
+  <div class="grid">
+    <div class="opt pick">
+      <div class="hd"><h2>A · The same machine, again</h2><span class="w">the pick</span></div>
+      <div class="screen">
+        <svg viewBox="0 0 375 300" aria-label="Option A, a shorter body carrying the same name and its role">
+          <path class="duct" d="M60 26 V52"/>
+          <rect class="unit" x="60" y="52" width="150" height="24" rx="7"/>
+          <text class="gatelbl" x="135" y="46">MAIN GATE</text>
+          <path class="duct" d="M96 76 V102 M186 76 V126"/>
+          <rect class="tool" x="58" y="102" width="76" height="68" rx="11"/>
+          <text class="lbl" x="96" y="134">Table saw</text>
+          <rect class="plug" x="66" y="142" width="60" height="20" rx="5"/>
+          <text class="sub" x="96" y="156">tablesaw</text>
+          <circle cx="186" cy="126" r="17" class="unit"/>
+          <line x1="186" y1="109" x2="186" y2="143" stroke="var(--muted)" stroke-width="3"/>
+          <text class="gatelbl" x="186" y="102">GUARD VALVE</text>
+          <path class="duct" d="M186 143 V166"/>
+          <rect class="tool" x="148" y="166" width="76" height="46" rx="11"/>
+          <text class="lbl" x="186" y="188">Table saw</text>
+          <text class="sub" x="186" y="203">overarm</text>
+          <path class="same" d="M96 170 V226 H186 V212"/>
+          <text x="24" y="256" class="tiny">Full name, shorter body, and the ROLE where the plug row</text>
+          <text x="24" y="272" class="tiny">would be — a second port has no plug of its own to show.</text>
+        </svg>
+      </div>
+      <span class="verdict good">Reads as one saw</span>
+      <p class="note">Same azure ground, same name in full, but <b>shorter</b> and with
+        the role — <em>overarm</em>, <em>cabinet</em>, <em>hood</em> — standing where
+        the plug row lives on a primary. That gap is the honest part: a supplemental
+        port has no plug, because the machine's one plug is on the primary. The dashed
+        line in the machine's own colour says the two are one thing.</p>
+    </div>
+
+    <div class="opt">
+      <div class="hd"><h2>B · A chip on the run</h2></div>
+      <div class="screen">
+        <svg viewBox="0 0 375 300" aria-label="Option B, the port as a small chip with no body">
+          <path class="duct" d="M60 26 V52"/>
+          <rect class="unit" x="60" y="52" width="150" height="24" rx="7"/>
+          <text class="gatelbl" x="135" y="46">MAIN GATE</text>
+          <path class="duct" d="M96 76 V102 M186 76 V126"/>
+          <rect class="tool" x="58" y="102" width="76" height="68" rx="11"/>
+          <text class="lbl" x="96" y="134">Table saw</text>
+          <rect class="plug" x="66" y="142" width="60" height="20" rx="5"/>
+          <text class="sub" x="96" y="156">tablesaw</text>
+          <circle cx="186" cy="126" r="17" class="unit"/>
+          <line x1="186" y1="109" x2="186" y2="143" stroke="var(--muted)" stroke-width="3"/>
+          <text class="gatelbl" x="186" y="102">GUARD VALVE</text>
+          <path class="duct" d="M186 143 V172"/>
+          <rect class="plug" x="152" y="172" width="68" height="22" rx="11"/>
+          <text class="sub" x="186" y="187" style="font-size:9">saw · overarm</text>
+          <path class="same" d="M96 170 V216 H186 V194"/>
+          <text x="24" y="250" class="tiny">Smallest thing that could work, and the run now ends in</text>
+          <text x="24" y="266" class="tiny">something that doesn't look like a terminus.</text>
+        </svg>
+      </div>
+      <span class="verdict mid">Too quiet to end a run</span>
+      <p class="note">No body at all — a labelled chip where the duct stops. It is
+        honest about being a lesser thing, but every other run on the canvas ends in a
+        machine-sized box, so this one reads as unfinished. It also has nowhere to put
+        a name long enough to be a real machine's.</p>
+    </div>
+
+    <div class="opt">
+      <div class="hd"><h2>C · A full tool with a badge</h2></div>
+      <div class="screen">
+        <svg viewBox="0 0 375 300" aria-label="Option C, an identical tool body with a 2 badge">
+          <path class="duct" d="M60 26 V52"/>
+          <rect class="unit" x="60" y="52" width="150" height="24" rx="7"/>
+          <text class="gatelbl" x="135" y="46">MAIN GATE</text>
+          <path class="duct" d="M96 76 V102 M186 76 V126"/>
+          <rect class="tool" x="58" y="102" width="76" height="68" rx="11"/>
+          <text class="lbl" x="96" y="134">Table saw</text>
+          <rect class="plug" x="66" y="142" width="60" height="20" rx="5"/>
+          <text class="sub" x="96" y="156">tablesaw</text>
+          <circle cx="186" cy="126" r="17" class="unit"/>
+          <line x1="186" y1="109" x2="186" y2="143" stroke="var(--muted)" stroke-width="3"/>
+          <text class="gatelbl" x="186" y="102">GUARD VALVE</text>
+          <path class="duct" d="M186 143 V166"/>
+          <rect class="tool" x="148" y="166" width="76" height="68" rx="11"/>
+          <text class="lbl" x="186" y="198">Table saw</text>
+          <rect class="plug" x="156" y="206" width="60" height="20" rx="5"/>
+          <text class="sub" x="186" y="220">tablesaw</text>
+          <circle cx="224" cy="166" r="9" fill="var(--raised)" stroke="#2d6a86"/>
+          <text x="224" y="169" class="tabt" style="fill:var(--text)">2</text>
+          <text x="24" y="266" class="tiny" style="fill:var(--danger)">Two identical boxes, two plug rows: this shop has two saws.</text>
+        </svg>
+      </div>
+      <span class="verdict bad">Says the wrong thing</span>
+      <p class="note">Identical body, same plug row, a small "2" to tell them apart. At
+        full size you can read the badge; at the 55% a phone uses you cannot, and what's
+        left is a shop with two table saws in it — each apparently with its own plug.
+        Shown to be rejected on purpose.</p>
+    </div>
+  </div>
+
+  <!-- ── 3. cross-system ─────────────────────────────────────────────────────── -->
+  <div class="card">
+    <h3>When the pickup is on the other collector</h3>
+    <p class="note">This is the case the shop schema exists for: the cabinet port on the
+      cyclone, the overarm on the shop vac. The dashed link is then the only thing that
+      crosses the seam between two systems — air never does.</p>
+    <div class="screen" style="aspect-ratio:375/230;margin-top:11px;max-width:520px">
+      <svg viewBox="0 0 375 230" aria-label="A machine with a port in each system">
+        <rect class="ground" x="8" y="10" width="359" height="104" rx="10"/>
+        <rect class="ground" x="8" y="132" width="359" height="88" rx="10"/>
+        <line x1="8" y1="123" x2="367" y2="123" class="seam"/>
+        <text x="20" y="118" class="seamt">Shop vac</text>
+        <path class="duct" d="M40 26 V52 H70"/>
+        <circle cx="40" cy="26" r="13" class="unit"/>
+        <rect class="unit" x="70" y="40" width="120" height="22" rx="7"/>
+        <path class="duct" d="M104 62 V72"/>
+        <rect class="tool" x="72" y="72" width="64" height="34" rx="9"/>
+        <text class="lbl" x="104" y="86" style="font-size:10">Table saw</text>
+        <rect class="plug" x="80" y="90" width="48" height="12" rx="4"/>
+        <path class="duct" d="M40 148 V174 H70"/>
+        <circle cx="40" cy="148" r="13" class="unit"/>
+        <circle cx="86" cy="174" r="13" class="unit"/>
+        <line x1="86" y1="161" x2="86" y2="187" stroke="var(--muted)" stroke-width="2.5"/>
+        <path class="duct" d="M86 187 V196"/>
+        <rect class="tool" x="54" y="196" width="64" height="26" rx="9"/>
+        <text class="lbl" x="86" y="207" style="font-size:10">Table saw</text>
+        <text class="sub" x="86" y="217" style="font-size:8.5">overarm</text>
+        <path class="same" d="M136 89 H240 V209 H118"/>
+        <text x="360" y="118" class="tiny" style="fill:#2d6a86;text-anchor:end">one machine,</text>
+        <text x="360" y="132" class="tiny" style="fill:#2d6a86;text-anchor:end">both collectors</text>
+      </svg>
+    </div>
+    <p class="note" style="margin-top:11px">The plug stays on the primary, in the system
+      the machine calls home. Switch the saw on and both gates open, on both
+      collectors — which is the whole reason the shop schema lifts machines above the
+      airflow graphs instead of letting a tool have two parents.</p>
+  </div>
+
+  <!-- ── 4. reading a wire when the rail is off-screen ───────────────────────── -->
+  <h3 style="margin-top:6px">Reading a wire when the rail has scrolled away</h3>
+  <p class="note" style="max-width:68ch">The board rail sits above the whole grid, so on
+    a stacked layout it leaves the screen as soon as you scroll — and with it, which port
+    drives which gate. The cheap fix is to stop needing the rail: the gate's tab already
+    carries its channel, so it can carry the board too.</p>
+
+  <div class="grid">
+    <div class="opt today">
+      <div class="hd"><h2>Today</h2><span class="w">channel only</span></div>
+      <div class="screen">
+        <svg viewBox="0 0 375 300" aria-label="Today, the tab shows only a channel number">
+          <rect x="0" y="0" width="375" height="52" fill="#171717"/>
+          <text x="16" y="20" class="tiny" style="font-size:8.5;letter-spacing:0.09em">BOARDS</text>
+          <rect x="70" y="10" width="86" height="32" rx="7" fill="var(--raised)" stroke="var(--accent)"/>
+          <text class="lbl" x="113" y="30" style="font-size:10">Shop Brain</text>
+          <rect x="168" y="10" width="86" height="32" rx="7" fill="var(--raised)" stroke="var(--border)"/>
+          <text class="lbl" x="211" y="30" style="font-size:10">Back wall</text>
+          <line x1="0" y1="52" x2="375" y2="52" class="seam"/>
+          <path class="cable" d="M113 42 V70 H286 V104"/>
+          <path class="cable" d="M211 42 V80 H120 V104"/>
+          <rect class="unit" x="60" y="104" width="240" height="24" rx="7"/>
+          <text class="gatelbl" x="180" y="98">MAIN GATE</text>
+          <rect class="tab" x="112" y="97" width="16" height="14" rx="3"/>
+          <text class="tabt" x="120" y="107">1</text>
+          <rect class="tab" x="278" y="97" width="16" height="14" rx="3"/>
+          <text class="tabt" x="286" y="107">0</text>
+          <text x="24" y="180" class="tiny">Scroll the rail off the top and "1" is all that's left —</text>
+          <text x="24" y="196" class="tiny">the channel, with nothing saying whose channel.</text>
+          <text x="24" y="226" class="tiny" style="fill:var(--danger)">Two boards both have a channel 1.</text>
+        </svg>
+      </div>
+      <p class="note">Fine while the rail is on screen and the cable is traceable. The
+        stacked layout is what broke it: a second system is a scroll away, and the rail
+        isn't.</p>
+    </div>
+
+    <div class="opt pick">
+      <div class="hd"><h2>Board · channel on the tab</h2><span class="w">the pick</span></div>
+      <div class="screen">
+        <svg viewBox="0 0 375 300" aria-label="The tab carries the board name and the channel">
+          <text x="16" y="24" class="tiny" style="font-size:8.5">…rail is off the top of the screen…</text>
+          <rect class="unit" x="60" y="104" width="240" height="24" rx="7"/>
+          <text class="gatelbl" x="180" y="98">MAIN GATE</text>
+          <rect class="tab" x="96" y="97" width="52" height="14" rx="3"/>
+          <text class="tabt" x="122" y="107">BRAIN · 1</text>
+          <rect class="tab" x="246" y="97" width="52" height="14" rx="3"/>
+          <text class="tabt" x="272" y="107">WALL · 0</text>
+          <path class="cable" d="M122 97 V60"/>
+          <path class="cable" d="M272 97 V60"/>
+          <path class="duct" d="M100 128 V158 M180 128 V158 M260 128 V158"/>
+          <rect class="tool" x="72" y="158" width="56" height="40" rx="9"/>
+          <text class="lbl" x="100" y="176" style="font-size:10">Table saw</text>
+          <rect class="plug" x="80" y="180" width="40" height="13" rx="4"/>
+          <rect class="tool" x="152" y="158" width="56" height="40" rx="9"/>
+          <text class="lbl" x="180" y="176" style="font-size:10">Bandsaw</text>
+          <rect class="plug" x="160" y="180" width="40" height="13" rx="4"/>
+          <rect class="tool" x="232" y="158" width="56" height="40" rx="9"/>
+          <text class="lbl" x="260" y="176" style="font-size:10">Router</text>
+          <rect class="plug" x="240" y="180" width="40" height="13" rx="4"/>
+          <text x="24" y="240" class="tiny">The mapping is written on the gate, so it survives any</text>
+          <text x="24" y="256" class="tiny">scroll position. Only drawn once a shop has two boards —</text>
+          <text x="24" y="272" class="tiny">on a one-board shop the name says nothing new.</text>
+        </svg>
+      </div>
+      <span class="verdict good">No geometry moves</span>
+      <p class="note">The board's short name plus the channel, on the tab that already
+        exists. Nothing in the cable router changes, which is the point: the tab is at a
+        fixed place on the gate, so the lanes, the ranks and the drop columns are all
+        exactly as they were.</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Two things the rail has to keep doing</h3>
+    <p class="note"><b>Identify</b> — which board is this gate on — and <b>connect</b> —
+      drag a cable from a gate to a port on a different board. A label alone only covers
+      the first, so it isn't the whole answer.</p>
+    <p class="note"><em>Connect is already handled, just invisibly.</em> Every drag on
+      this canvas auto-scrolls when the pointer nears an edge, and a cable drag is no
+      exception (<code>beginEdgeScroll</code>, wired into <code>onTabDown</code>): pick
+      up a gate's tab, drag toward the top of the screen, and the board scrolls itself
+      into view under the pointer. It works today and nothing about it says so — which
+      makes this a discoverability problem, not a layout one. The cheap fix is to say it
+      in the guide bar the moment a cable drag starts.</p>
+    <p class="note"><em>Pinning the rail</em> is the other answer, and it is the
+      expensive one. Cables are built in board coordinates from port to tab and ranked
+      by how far they travel; with the rail floating at a fixed screen position, every
+      cable's start moves relative to its end on every scroll frame, so the lanes — and
+      the nesting that stops cables crossing each other — reshuffle as you scroll. That
+      part is fixable: freeze the rank order from the board-space layout and let only
+      the path stretch. What stays expensive is that the rail then overlaps the drawing
+      it is wired to, so a pinned rail needs somewhere for the top band to go.</p>
+    <table>
+      <thead><tr><th>Piece</th><th>Body</th><th>Second line</th><th>Says</th></tr></thead>
+      <tbody>
+        <tr><td>Machine (primary port)</td><td>azure, full height</td><td>its smart plug</td><td>this is the tool</td></tr>
+        <tr><td>Supplemental port</td><td>azure, short</td><td>its role</td><td>the same tool, again</td></tr>
+        <tr><td>Gate tab</td><td>azure outline</td><td>board · channel</td><td>which wire, from where</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
