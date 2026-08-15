@@ -14,7 +14,7 @@ import { HardwareProfileService } from './hardware-profile.service';
 import * as model from '@device-model';
 import { validateTopology, type Topology } from '@topology';
 import { isShop, validateShop } from '@shop';
-import { createTopologyDevice, setToolPower, statusView as topoStatus, type TopologyDevice, type TopologyStatus } from '@topology-device';
+import { createTopologyDevice, setToolPower, statusView as topoStatus, toolThreshold, type TopologyDevice, type TopologyStatus } from '@topology-device';
 import { DEMO_TOPOLOGY } from './demo-topology';
 
 // ── Service ────────────────────────────────────────────────────────────────────
@@ -106,10 +106,20 @@ export class DemoApiService extends ApiService {
   }
 
   /** Manual switch. The model has one notion of "active" — a wattage — so this is
-   *  the same lever with a synthetic reading, exactly as firmware does it. */
+   *  the same lever with a synthetic reading, exactly as firmware does it.
+   *
+   *  The reading has to be BELIEVABLE, not merely large. It used to be 100000,
+   *  a sentinel meaning "above any threshold anyone could set", which was
+   *  invisible while nothing displayed watts. The canvas's plug row does, and it
+   *  rendered a switched-on tool as "100.0 kW" — a number no shop tool draws.
+   *  Three times the trip point clears every threshold test the same way and
+   *  reads like a machine. */
   override async setToolManual(toolId: string, on: boolean): Promise<unknown> {
     if (!this.td) throw new Error('no topology configured');
-    setToolPower(this.td, toolId, on ? 100000 : 0);
+    // toolThreshold() is machineThreshold under its v1 name, and already falls
+    // back to the default for a machine that has no plug configured.
+    const trip = toolThreshold(this.td.topology, toolId);
+    setToolPower(this.td, toolId, on ? Math.round(trip * 3) : 0);
     return { ok: true };
   }
 

@@ -80,10 +80,10 @@ group('R1  demo layout stays a straight drop');
   const r = routeAll(s);
   ok('routes all 5 ducts', r.size === 5);
   eqPath('dc→sel is the straight drop', path(r, 'sel'), [[64, 94], [64, 137]]);
-  eqPath('sel.b1→saw', path(r, 'saw'), [[64, 207], [64, 256]]);
-  eqPath('sel.b2→band', path(r, 'band'), [[172, 207], [172, 256]]);
-  eqPath('sel.b3→router', path(r, 'router'), [[280, 207], [280, 256]]);
-  eqPath('sel.b4→sander', path(r, 'sander'), [[388, 207], [388, 256]]);
+  eqPath('sel.b1→saw', path(r, 'saw'), [[64, 207], [64, 246]]);
+  eqPath('sel.b2→band', path(r, 'band'), [[172, 207], [172, 246]]);
+  eqPath('sel.b3→router', path(r, 'router'), [[280, 207], [280, 246]]);
+  eqPath('sel.b4→sander', path(r, 'sander'), [[388, 207], [388, 246]]);
   ok('every path is 2 points, 0 bends', [...r.values()].every(v => v.pts.length === 2));
   ok('every path is vertical', [...r.values()].every(v => Math.abs(v.pts[0].x - v.pts[1].x) < 0.5));
   ok('nothing crosses a device', [...r.keys()].every(id => !crossesADevice(s, id, path(r, id))));
@@ -104,7 +104,7 @@ group('R3  sideways runs enter the tool from the side');
 
   // Directly below: top port still wins, because it costs no bends there.
   const s3 = scene([collector('dc', 0, 0), tool('saw', 0, 1)], [{ childId: 'saw', parentId: 'dc' }]);
-  eqPath('directly below → top port, straight drop', path(routeAll(s3), 'saw'), [[64, 94], [64, 148]]);
+  eqPath('directly below → top port, straight drop', path(routeAll(s3), 'saw'), [[64, 94], [64, 138]]);
 
   // No route may ever enter a tool from underneath.
   const s4 = scene([collector('dc', 0, 2), tool('saw', 0, 0)], [{ childId: 'saw', parentId: 'dc' }]);
@@ -116,6 +116,10 @@ group('R3  sideways runs enter the tool from the side');
 
 // ── R4 · obstacle in the span ────────────────────────────────────────────────
 
+// The y of every tool endpoint moved 256 → 246 (and 148 → 138) on 2026-08-15,
+// when TOOL_HALF went 24 → 34: a tool body now carries a second row for its smart
+// plug, so its top edge — where a duct lands — is 10 higher. Shapes, bends and
+// lanes are all unchanged; only where the drop stops.
 group('R4  obstacle in the span — one detour, no lasso');
 {
   const s = scene(
@@ -124,7 +128,7 @@ group('R4  obstacle in the span — one detour, no lasso');
   );
   const r = routeAll(s);
   const p = path(r, 'sander');
-  eqPath('lane above the obstacle, 2 bends', p, [[172, 207], [172, 226], [388, 226], [388, 256]]);
+  eqPath('lane above the obstacle, 2 bends', p, [[172, 207], [172, 226], [388, 226], [388, 246]]);
   ok('no reversal (no lasso)', !reverses(p));
   ok('clears the obstacle box', !crossesADevice(s, 'sander', p));
 

@@ -22,8 +22,13 @@ export const CLEARANCE = 15;
 export const UNIT_H = 46;
 /** How far a unit's body overhangs its first and last outlet. */
 export const GATE_PAD = 0.42 * CELL;
-/** Half-height of a tool body. */
-export const TOOL_HALF = 24;
+/** Half-height of a tool body.
+ *
+ *  34, not 24, since 2026-08-15: the body carries TWO rows now — the machine's
+ *  name and, under it, the smart plug (docs/mockups/outlet-docks-multi-system.html).
+ *  The router reads this as the obstacle's half-height, so growing the drawing
+ *  without growing this would route ducts straight through the plug row. */
+export const TOOL_HALF = 34;
 /** How far below a unit's body an outlet stub starts. */
 export const OUTLET_STUB = UNIT_H / 2 + 12;
 /** Where a unit's feed run stops, measured from its top edge. Matches the 12px the

@@ -214,6 +214,26 @@ const outletsFor = (kind: MenuKind): number => kind === 'linear' ? 4 : kind === 
     .node.live .body, .node.live .unit { stroke: var(--success); }
     .glabel { fill: var(--text); font-size: 12.5px; text-anchor: middle; font-weight: 500; }
     .gsub   { fill: var(--muted); font-size: 10.5px; text-anchor: middle; }
+
+    /* The plug row inside a tool body. One fact at a time: the plug's NAME when
+       it's idle, its WATTS when it's drawing. Showing both repeats the machine
+       name from the line directly above and truncates the number that's actually
+       changing. */
+    .dock { cursor: pointer; }
+    .dock-bg   { fill: var(--bg); stroke: var(--border); stroke-width: 1; stroke-dasharray: 3 2.5; }
+    .dock-shell{ fill: none; stroke: var(--muted); stroke-width: 1.7; opacity: 0.85; }
+    .dock-slot { fill: var(--muted); opacity: 0.8; }
+    .dock-t    { fill: var(--muted); font-size: 9.5px; text-anchor: middle; }
+    /* Paired: solid edge, and the colour carries the state. */
+    .dock.idle .dock-bg    { stroke-dasharray: none; fill: var(--surface); }
+    .dock.standby .dock-bg { stroke-dasharray: none; stroke: var(--accent); fill: rgba(240,165,0,0.12); }
+    .dock.standby .dock-t, .dock.standby .dock-slot { fill: var(--accent); }
+    .dock.standby .dock-shell { stroke: var(--accent); }
+    .dock.live .dock-bg    { stroke-dasharray: none; stroke: var(--success); fill: rgba(60,190,110,0.14); }
+    .dock.live .dock-t, .dock.live .dock-slot { fill: var(--success); }
+    .dock.live .dock-shell { stroke: var(--success); }
+    /* Waiting for a plug to be picked out of the tray. */
+    .dock.armed .dock-bg { stroke: var(--accent); stroke-dasharray: none; }
     .gsub.redundant { fill: var(--accent); opacity: 0.85; }
     /* The selected piece's name is edited WHERE IT IS DRAWN — a foreignObject input
        sitting exactly on top of its label, matching it in size and weight, so the
@@ -301,13 +321,14 @@ const outletsFor = (kind: MenuKind): number => kind === 'linear' ? 4 : kind === 
     .more button:disabled { color: var(--muted); }
     .bar { position: relative; }
 
-    /* Ducts and everything not being wired step back — but only step back. The
-       gates stay at full contrast because they're what the cable goes to. */
-    .ghost { opacity: 0.34; }
-    /* The wiring in Ducts view: still legible, but grey and out of the way, and it
-       stops taking the pointer so it can't be grabbed while you're plumbing. */
-    .wiring.dim { opacity: 0.22; filter: grayscale(1); pointer-events: none; }
-    .node.recede { opacity: 0.34; pointer-events: none; }
+    /* NOTHING ON THIS CANVAS DIMS. Removed 2026-08-15.
+       The ducts view used to grey the wiring out (and vice versa), killing
+       pointer-events on whichever layer you weren't in. It kept producing
+       one moment: you click something you can plainly see and nothing happens,
+       because it belongs to the other layer. The obvious repair — click a dimmed
+       thing to switch into its layer — keeps the mode you have to learn and only
+       adds an escape hatch, so the dimming went instead.
+       Both layers are drawn at full strength and both take the pointer. */
 
     .cable { fill: none; stroke: var(--cable, #38b6f0); stroke-width: 2;
              stroke-linecap: round; stroke-linejoin: round; }
@@ -421,7 +442,7 @@ const outletsFor = (kind: MenuKind): number => kind === 'linear' ? 4 : kind === 
 
           <!-- The board rail. Above the whole grid, in negative y, so every cell
                keeps the coordinates it has always had and no saved layout moves. -->
-          <g class="wiring" [class.dim]="layer === 'ducts'">
+          <g class="wiring">
             <rect class="rail" x="0" [attr.y]="-RAIL_H" [attr.width]="vbW" [attr.height]="RAIL_H"/>
             <line class="rail-edge" x1="0" y1="0" [attr.x2]="vbW" y2="0"/>
             <text class="rail-lbl" x="14" [attr.y]="-RAIL_H + 20">BOARDS</text>
@@ -449,14 +470,14 @@ const outletsFor = (kind: MenuKind): number => kind === 'linear' ? 4 : kind === 
           <!-- Each run is stroked twice: a fat casing in the canvas colour, then the
                duct. Later ducts therefore punch a clean gap through earlier ones where
                they cross, which is the whole crossing treatment — no hop geometry. -->
-          <g *ngFor="let d of ducts" [class.ghost]="layer === 'wiring'">
+          <g *ngFor="let d of ducts">
             <path class="duct-casing" [attr.d]="ductD(d.childId)"/>
             <path class="duct" [class.live]="d.live" [attr.d]="ductD(d.childId)"/>
           </g>
 
           <!-- Cable runs. Under the pieces on purpose, so each end tucks beneath the
                tab it lands on rather than stopping short of it. -->
-          <g class="wiring" [class.dim]="layer === 'ducts'">
+          <g class="wiring">
             <path *ngFor="let c of cables()" class="cable" [attr.d]="c.d"/>
           </g>
           <path *ngFor="let d of openDucts()" class="open-stub" [attr.d]="openStubD(d.childId)"/>
@@ -474,7 +495,7 @@ const outletsFor = (kind: MenuKind): number => kind === 'linear' ? 4 : kind === 
 
           <g *ngFor="let n of nodes" class="node"
              [class.sel]="n.id === selectedId" [class.live]="n.live" [class.dragging]="n.id === dragId"
-             [class.bad]="n.id === dragId && !!dropBlocked" [class.recede]="recedes(n)"
+             [class.bad]="n.id === dragId && !!dropBlocked"
              [attr.transform]="'translate(' + nx(n) + ',' + ny(n) + ')'" (pointerdown)="startDrag($event, n)">
             <ng-container [ngSwitch]="n.glyph">
               <g *ngSwitchCase="'collector'"><circle class="body" r="30"/><path class="stroke" fill="none" stroke-width="3" stroke-linecap="round" d="M0 -19 a19 19 0 1 0 6 2 l-6 17"/><circle class="fillmuted" r="3.5"/></g>
@@ -499,7 +520,10 @@ const outletsFor = (kind: MenuKind): number => kind === 'linear' ? 4 : kind === 
                 <line class="stroke" x1="0" [attr.y1]="-UNIT_H/2" x2="0" [attr.y2]="-UNIT_H/2 - 12" stroke-width="4"/>
                 <line *ngFor="let x of outletXs(n)" class="stroke" [attr.x1]="x" [attr.y1]="UNIT_H/2" [attr.x2]="x" [attr.y2]="UNIT_H/2 + 12" stroke-width="4"/>
               </g>
-              <g *ngSwitchCase="'tool'"><rect class="body" x="-38" y="-24" width="76" height="48" rx="11"/></g>
+              <!-- Two rows: the machine's name, then its smart plug. The plug is
+                   drawn INSIDE the body because it belongs to the machine — see
+                   plugOf(). Height follows TOOL_HALF, which the router also reads. -->
+              <g *ngSwitchCase="'tool'"><rect class="body" x="-38" [attr.y]="-TOOL_HALF" width="76" [attr.height]="TOOL_HALF * 2" rx="11"/></g>
             </ng-container>
             <!-- Hidden while selected — the editable field (below, outside the SVG)
                  takes its place, in the same spot. -->
@@ -509,7 +533,21 @@ const outletsFor = (kind: MenuKind): number => kind === 'linear' ? 4 : kind === 
                  field is suppressed, so the name vanished entirely for that beat. -->
             <text *ngIf="n.glyph !== 'junction' && !isEditingName(n)"
                   class="glabel" [attr.x]="labelX(n)" [attr.y]="labelY(n)">{{ n.name }}</text>
-            <text *ngIf="n.glyph === 'tool'" class="gsub" y="42">{{ toolAuto(n.id) ? 'auto' : 'manual' }}</text>
+            <!-- The plug row. Replaced an 'auto'/'manual' caption that said whether a
+                 plug existed and nothing else — not which one, and not what it reads.
+                 Its own tap target: the body drags the tool, this opens the plug. -->
+            <g *ngIf="n.glyph === 'tool'" class="dock" [attr.class]="'dock ' + plugOf(n).state"
+               [class.armed]="armedTool === n.id" (pointerdown)="onDockDown($event, n)">
+              <title>{{ plugOf(n).hint }}</title>
+              <rect class="dock-bg" x="-31" y="4" width="62" height="22" rx="6"/>
+              <g class="dock-face" transform="translate(-25,15) scale(0.62)">
+                <rect class="dock-shell" x="-9" y="-9" width="18" height="18" rx="5"/>
+                <rect class="dock-slot" x="-4.3" y="-5.6" width="2.2" height="5.8" rx="1"/>
+                <rect class="dock-slot" x="1.9" y="-5.6" width="2.2" height="5.8" rx="1"/>
+                <circle class="dock-slot" cx="0" cy="3.6" r="1.6"/>
+              </g>
+              <text class="dock-t" x="4" y="19">{{ plugOf(n).text }}</text>
+            </g>
             <!-- A gate duplicating the one above it. Sits directly under the name as a
                  second caption line — it's a property of the piece, not an error, so
                  it never turns the guide bar red. -->
@@ -544,7 +582,7 @@ const outletsFor = (kind: MenuKind): number => kind === 'linear' ? 4 : kind === 
                Present in BOTH views. In Ducts it greys out and stops taking the
                pointer, so you can still see where the cable goes while you plumb —
                hiding it made the two views feel like different drawings. -->
-          <g class="wiring" [class.dim]="layer === 'ducts'">
+          <g class="wiring">
           <!-- A gate's servo tab: the electrical end of a blast gate, and one of
                the two ends you can pick a cable up by. -->
           <g *ngFor="let t of gateTabs()" class="tab" [class.unwired]="!t.wired"
@@ -705,6 +743,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   menuOptions: MenuOption[] = [];
   menuTitle = '';
   readonly CELL = CELL; readonly UNIT_H = UNIT_H; readonly GATE_PAD = GATE_PAD; readonly PAD = PAD;
+  readonly TOOL_HALF = TOOL_HALF;
   readonly BOARD_W = BOARD_W; readonly BOARD_H = BOARD_H; readonly RAIL_H = RAIL_H;
   readonly PORT_H = PORT_H; readonly TAB_W = TAB_W; readonly TAB_H = TAB_H;
   readonly SERVO_PORTS = SERVO_PORTS; readonly FIND_W = FIND_W;
@@ -812,6 +851,12 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     // boards actually belong to instead of the duct drawing.
     if (this.route.snapshot.queryParamMap.get('layer') === 'wiring') this.setLayer('wiring');
     try { this.applyLive(await this.api.getStatus()); } catch { /* not running */ }
+    // KEEP it live. This used to be a single fetch at load, so the duct highlighting
+    // was a snapshot from whenever the page opened — and the plug row, which shows a
+    // wattage, would have been worse: a number that looks live and isn't.
+    this.livePoll = setInterval(() => {
+      void this.api.getStatus().then(st => this.applyLive(st)).catch(() => { /* offline */ });
+    }, 2000);
     // The rail names the network the boards share. Best-effort: an unreachable or
     // older device just leaves the label off.
     try { this.netName = (await this.api.getMotionStatus()).ssid ?? ''; } catch { /* no device */ }
@@ -1099,7 +1144,10 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     this.setZoom(this.zoom * Math.exp(-e.deltaY / 240), e.clientX, e.clientY);
   };
 
+  private livePoll: ReturnType<typeof setInterval> | null = null;
+
   ngOnDestroy(): void {
+    if (this.livePoll) clearInterval(this.livePoll);
     this.detachDrag();
     this.stopGlide(); this.endEdgeScroll();
     this.ro?.disconnect();
@@ -1267,8 +1315,55 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     // glyph. namePos() follows this, so the edit field stays on the name.
     return this.nameBaseY(n) - (n.redundant ? 13 : 0);
   }
-  private nameBaseY(n: NodeVM): number { return n.glyph === 'tool' ? 4 : (n.isUnit ? -UNIT_H / 2 - 9 : -34); }
+  private nameBaseY(n: NodeVM): number { return n.glyph === 'tool' ? -8 : (n.isUnit ? -UNIT_H / 2 - 9 : -34); }
   toolAuto(id: string): boolean { return !!outletOf(this.topo as unknown as ShopDoc, this.elem(id)); }
+
+  // ── the plug row ─────────────────────────────────────────────────────────────
+  // Live wattage per MACHINE, from /api/status. Keyed by machine because that is
+  // what draws power — a two-port saw is one reading, not two.
+  private machineWatts = new Map<string, number>();
+  /** A machine waiting for the next tap in the plug tray. */
+  armedTool: string | null = null;
+
+  /** What this tool's plug row is showing. Recomputed per change-detection pass,
+   *  like toolAuto() before it — the lookups are two map hits and a property walk,
+   *  and caching it would need invalidating on every mutation AND every poll. */
+  plugOf(n: NodeVM): { state: 'none' | 'idle' | 'standby' | 'live'; text: string; hint: string } {
+    const el = this.elem(n.id);
+    const doc = this.topo as unknown as ShopDoc;
+    const outlet = outletOf(doc, el);
+    if (!outlet) {
+      return { state: 'none', text: 'no plug',
+               hint: `No smart plug on ${n.name} — you switch it on yourself. Tap to pair one.` };
+    }
+    const name = (outlet['host'] as string) || (outlet['ip'] as string) || 'plug';
+    const machine = machineOfPort(doc, el);
+    const watts = (machine && this.machineWatts.get(machine.id as string)) ?? 0;
+    const trip = (outlet['thresholdW'] as number) ?? 0;
+    const detail = `${name} · ${(outlet['ip'] as string) ?? ''} · ${Math.round(watts)} W`;
+    if (watts >= trip && trip > 0) return { state: 'live', text: this.fmtW(watts), hint: detail };
+    if (watts >= 1) return { state: 'standby', text: this.fmtW(watts), hint: detail };
+    // Idle: show WHICH plug, since there's no number worth reading yet.
+    return { state: 'idle', text: this.shortPlug(name), hint: detail };
+  }
+
+  private fmtW(w: number): string { return w >= 1000 ? (w / 1000).toFixed(1) + ' kW' : Math.round(w) + ' W'; }
+  /** The row is 62 units wide; a Shelly's own hostname is longer than that. */
+  private shortPlug(name: string): string {
+    const s = name.replace(/^shelly(plug(us)?|plus)?-?/i, '');
+    return s.length > 11 ? s.slice(0, 10) + '…' : (s || name);
+  }
+
+  /** The plug row's own tap target. Stops the event so it doesn't start a drag of
+   *  the tool underneath — the body drags, this pairs. */
+  onDockDown(evt: PointerEvent, n: NodeVM): void {
+    evt.preventDefault(); evt.stopPropagation();
+    const el = this.elem(n.id);
+    if (outletOf(this.topo as unknown as ShopDoc, el)) { this.configureOutlet(n.id); return; }
+    // No plug yet: arm the row and let the tray be the picker. Same gesture as the
+    // drag, minus the drag, which is what a phone wants.
+    this.armedTool = this.armedTool === n.id ? null : n.id;
+  }
   /** Does this piece have a plug paired — sensed for a tool, switched for the
    *  collector? Drives the one button's label for both. */
   /** Plug paired? Sensed for a tool, switched for the collector — one question,
@@ -2730,10 +2825,6 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     return `M ${d.from.x} ${d.from.y} C ${mx} ${d.from.y}, ${mx} ${d.to.y}, ${d.to.x} ${d.to.y}`;
   }
 
-  /** In the wiring view, everything that isn't being wired steps back. Uniform
-   *  dimming would have been easier and would have said less. */
-  recedes(n: NodeVM): boolean { return this.layer === 'wiring' && !this.isGate(n); }
-
   // ── undo / redo ───────────────────────────────────────────────────────────────
   // Whole-state snapshots (topology + cell positions). The doc is small and every
   // mutation already rebuilds the graph, so restoring a snapshot is the same work
@@ -3668,6 +3759,12 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     this.ensureSlots();
   }
   private applyLive(status: TopologyStatus): void {
+    // Per-machine draw, for the plug row. Keyed by machine in the device's own
+    // status view too — what runs is a machine, not a port.
+    this.machineWatts.clear();
+    for (const [id, t] of Object.entries(status.tools ?? {})) {
+      this.machineWatts.set(id, (t as { watts?: number }).watts ?? 0);
+    }
     const reach = status.reachable ?? {}, actuators = status.actuators ?? {}, liveSet = new Set<string>();
     for (const [toolId, ok] of Object.entries(reach)) {
       if (!ok) continue; let cur: string | undefined = toolId;
