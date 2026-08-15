@@ -211,6 +211,32 @@ export function addMachineWithPort(doc: ShopDoc, system: ShopSystem, id: string,
   return port;
 }
 
+/**
+ * Add an airflow system: a collector with one open end below it, which is exactly
+ * what a blank shop starts as.
+ *
+ * The open end matters. A system with a bare collector has nothing to draw from,
+ * so the canvas would show a lone circle with no way in; the junction is the "drag
+ * out to run pipe" handle every other run starts from. The collector is deliberately
+ * unnamed — it takes the name of whatever smart outlet gets paired to it, so adding
+ * a system asks the user nothing.
+ *
+ * Ids come from the caller because uniqueness is shop-wide, not system-wide: two
+ * systems sharing an element id would collide in `ui.layout` and in firmware status,
+ * and validateShop rejects it.
+ */
+export function addSystem(doc: ShopDoc, ids: { system: string; collector: string; end: string }): ShopSystem {
+  const collector: RawEl = { id: ids.collector, type: 'collector', name: 'Dust collector' };
+  const end: RawEl = { id: ids.end, type: 'junction', name: 'Open end' };
+  const system: ShopSystem = {
+    id: ids.system,
+    elements: [collector, end],
+    ducts: [{ child: ids.end, parent: ids.collector }],
+  };
+  doc.systems.push(system);
+  return system;
+}
+
 /** Drop these element ids and any duct touching them, across every system. */
 function dropElements(doc: ShopDoc, ids: Set<string>): void {
   for (const s of systemsOf(doc)) {

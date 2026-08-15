@@ -15,8 +15,8 @@ import {
 } from '../gates/selector-types';
 import {
   type ShopDoc, type ShopSystem,
-  addMachineWithPort, machineOfPort, machinesOf, outletOf,
-  removeMachine, removePort, systemById, systemViews, toShop,
+  addMachineWithPort, addSystem, machineOfPort, machinesOf, outletOf,
+  removeMachine, removePort, systemById, systemsOf, systemViews, toShop,
 } from '../services/shop-doc';
 import {
   type Glyph, type Pt, type SceneNode,
@@ -45,6 +45,12 @@ import {
 // unit; tools are select-only); the trunk to the collector enters from the LEFT.
 
 type SelKind = 'linear' | 'servoGate' | 'servoManifold';
+
+/** Empty cell rows between one system's last band and the next system's first.
+ *  ONE — the grey ground under each system is what says where it stops, so the gap
+ *  only has to be big enough that the two grounds don't touch. Two rows read as a
+ *  missing band; a labelled gutter reads as two documents. */
+const SYSTEM_GAP = 1;
 
 interface Cell { col: number; row: number; }
 interface RawEl { [k: string]: unknown; }
@@ -573,7 +579,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       const ip = ((m.sensor as RawEl | undefined)?.['outlet'] as RawEl | undefined)?.['ip'] as string | undefined;
       if (ip) out.add(ip);
     }
-    for (const e of this.elems(this.topo)) {
+    for (const e of this.allElems()) {
       if ((e as RawEl)['type'] !== 'collector') continue;
       const ip = (((e as RawEl)['control'] as RawEl | undefined)?.['outlet'] as RawEl | undefined)?.['ip'] as string | undefined;
       if (ip) out.add(ip);
@@ -688,6 +694,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   }
   /** What a tap — not a drag — on the plug row does. */
   private dockAction(n: NodeVM): void {
+    this.focus(n.id);
     const el = this.elem(n.id);
     if (outletOf(this.topo as unknown as ShopDoc, el)) { this.configureOutlet(n.id); return; }
     // No plug yet: arm the row and let the tray be the picker. Same gesture as the
@@ -719,6 +726,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
    *  that was never selected, so it can't go through deleteSelected(). */
   private removeAt(id: string): void {
     if (!this.topo) return;
+    this.focus(id);
     this.removeElement(id);
     this.selectedId = null; this.dirty = true; this.saveError = '';
     this.buildGraph(this.topo); this.syncNodes(); this.refreshHandles();
@@ -808,6 +816,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
    *  so without this a tap on the dot moves the gate instead of configuring it. */
   onSetupDot(evt: PointerEvent, n: NodeVM): void {
     evt.preventDefault(); evt.stopPropagation();
+    this.focus(n.id);
     this.selectedId = n.id;
     // The badge is now the handle for the whole piece, not just its setup: it opens
     // the same menu the body used to, which already carried setup alongside the
@@ -852,7 +861,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   private outletExcludes(me: string): { ips: string[]; reason: Record<string, string> } {
     const ips: string[] = [];
     const reason: Record<string, string> = {};
-    for (const e of this.elems(this.topo!)) {
+    for (const e of this.allElems()) {
       const el = e as RawEl;
       if (el['type'] === 'collector') {
         // …unless the collector IS what's being configured: its own plug has to
@@ -890,7 +899,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       this.pushHistory(id);
       doc.machines[mi] = updated as unknown as (typeof doc.machines)[number];
     } else {
-      const els = this.elems(this.topo);
+      const els = this.ownerElems(id);
       const i = els.findIndex(e => e['id'] === id);
       if (i < 0) return;
       this.pushHistory(id);
@@ -906,7 +915,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
    *  so it goes through the same validation and work-in-progress handling. */
   onConfigured(updated: ConfigurableSelector): void {
     if (!this.topo) return;
-    const els = this.elems(this.topo);
+    const els = this.ownerElems(updated.id);
     const i = els.findIndex(e => e['id'] === updated.id);
     if (i < 0) return;
     this.pushHistory(updated.id);
@@ -959,6 +968,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   // ── drag (reposition) / tap ───────────────────────────────────────────────────
   startDrag(evt: PointerEvent, n: NodeVM): void {
     evt.preventDefault(); evt.stopPropagation();
+    this.focus(n.id);
     this.selectedId = n.id; this.menu = null;
     this.dragId = n.id;
     const pt = this.toSvg(evt);
@@ -1039,6 +1049,12 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
    *  sees in the guidance bar mid-drag, so it names the thing in the way, not the
    *  predicate that failed. */
   private placeBlockedBy(n: NodeVM, col: number, row: number): string {
+    // A system owns a contiguous stripe of rows, and that's what makes the grey
+    // ground drawable at all: the two never interleave, so the boundary is one row
+    // rather than a shape. Refusing the drop keeps that true without the drag having
+    // to reflow the other system out of the way mid-gesture.
+    const band = this.bandBlockedBy(n.id, row);
+    if (band) return `That row belongs to ${band}. A piece stays in its own system.`;
     const occ = new Map<string, NodeVM>();
     for (const m of this.nodes) {
       if (m.id === n.id) continue;
@@ -1070,6 +1086,36 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     if (blocker) return `A duct would have to run through ${blocker.name} to get there.`;
     if (boxedIn) return 'No room for the duct to reach it there.';
     return '';
+  }
+
+  /** Why `id` can't sit on `row`, in terms of the system next door — null when it can.
+   *
+   *  Systems keep their rows in order, and a piece stays between its neighbours: the
+   *  row below the system above it, the row above the system below it. Checking
+   *  "is this row inside someone else's band" is not enough, because a drag can jump
+   *  clean OVER a band and interleave the two just as thoroughly from the far side.
+   *
+   *  Growing downward into the empty row between two systems is allowed — that just
+   *  moves the boundary, which is the layout doing its job. */
+  private bandBlockedBy(id: string, row: number): string | null {
+    if (!this.topo) return null;
+    const mine = this.systemOf.get(id);
+    const bands = systemsOf(this.topo as unknown as ShopDoc).map(s => {
+      let lo = Infinity, hi = -Infinity;
+      for (const e of s.elements) {
+        const c = this.cells.get(e['id'] as string); if (!c) continue;
+        lo = Math.min(lo, c.row); hi = Math.max(hi, c.row);
+      }
+      const dc = s.elements.find(e => e['type'] === 'collector');
+      return { id: s.id, lo, hi, name: (dc?.['name'] as string) || 'another collector' };
+    }).filter(b => isFinite(b.lo)).sort((a, b) => a.lo - b.lo);
+    if (bands.length < 2) return null;
+    const i = bands.findIndex(b => b.id === mine);
+    if (i < 0) return null;
+    const above = bands[i - 1], below = bands[i + 1];
+    if (above && row <= above.hi) return above.name;
+    if (below && row >= below.lo) return below.name;
+    return null;
   }
 
   /** What to call a piece in a sentence. */
@@ -1108,6 +1154,10 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
    *  room/validity checks (which walk every duct) don't re-run on every change
    *  detection pass while the menu is up. */
   private openMenu(x: number, y: number, ctx: Partial<NonNullable<BuildComponent['menu']>>): void {
+    // Whatever the menu is about decides which system the choice will be written
+    // into. Every context names a piece, so this is the one place all four routes
+    // through — a menu opened over system 2 must not add to system 1.
+    this.focus(ctx.convert ?? ctx.end ?? ctx.branch?.childId ?? ctx.addOutput?.parentId);
     // A gate keeps its selection so the name/outlet controls are still there once
     // the menu is dismissed; every other context shows the menu alone.
     if (!ctx.convert) this.selectedId = null;
@@ -1847,7 +1897,10 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       const slot = this.boardSlots.get(id); if (slot === undefined) continue;
       const used = new Map<number, string>();
       let servoCount = 0;
-      for (const e of this.elems(this.topo)) {
+      // A board is shop-level and may drive selectors in any system, so its port
+      // budget is counted across all of them — scoping this to the drawn-on system
+      // would hand the same channel out twice.
+      for (const e of this.allElems()) {
         if (e['type'] !== 'selector') continue;
         if (((e['controllerId'] as string) ?? fallback) !== id) continue;
         if (e['kind'] === 'linear') { used.set(SERVO_PORTS, e['id'] as string); continue; }
@@ -1886,7 +1939,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     const used = new Map<number, string>();
     if (!this.topo) return used;
     const fallback = this.defaultControllerId();
-    for (const e of this.elems(this.topo)) {
+    for (const e of this.allElems()) {
       if (e['type'] !== 'selector') continue;
       if (((e['controllerId'] as string) ?? fallback) !== boardId) continue;
       if (e['kind'] === 'linear') { used.set(SERVO_PORTS, e['id'] as string); continue; }
@@ -2264,7 +2317,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     this.selectedId = selectId; this.refreshHandles();
   }
 
-  private childDucts(id: string): RawEl[] { return this.ductsRaw().filter(d => d['parent'] === id); }
+  private childDucts(id: string): RawEl[] { return this.allDucts().filter(d => d['parent'] === id); }
 
   /** A junction is only meaningful as a tee (≥2 legs) or an OPEN END (0 legs). One
    *  with exactly one child is a redundant pass-through — reconnect that child to
@@ -2318,7 +2371,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
    *  — so drawing a fifth gate silently produced an unsaveable layout. */
   private freeServoChannel(controllerId = this.defaultControllerId()): number {
     const taken = new Set(
-      this.elems(this.topo!)
+      this.allElems()
         .filter(e => e['type'] === 'selector' && e['kind'] !== 'linear'
                   && (e['controllerId'] ?? this.defaultControllerId()) === controllerId)
         .map(e => (e['servo'] as RawEl | undefined)?.['channel'] as number),
@@ -2491,13 +2544,14 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       d['parentBranch'] = b.id;
       b.role = this.elem(d['child'] as string)?.['type'] === 'tool' ? 'tool' : 'feed';
     });
-    const els = this.elems(this.topo);
+    const els = this.ownerElems(id);
     els[els.findIndex(e => e['id'] === id)] = fresh;
     this.afterMutation(id);
   }
 
   rename(id: string, name: string): void {
     const el = this.elem(id); if (!el) return;
+    this.focus(id);
     this.pushHistory('rename:' + id);   // a whole typed name undoes as one step
     el['name'] = name; const n = this.byId.get(id); if (n) n.name = name; this.dirty = true;
   }
@@ -2511,6 +2565,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   }
   deleteSelected(): void {
     const n = this.inspected(); if (!n || !this.canDelete(n) || !this.topo) return;
+    this.focus(n.id);
     this.pushHistory(null);
     this.removeElement(n.id);
     this.selectedId = null; this.dirty = true; this.saveError = '';
@@ -2798,6 +2853,51 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     return true;
   }
 
+  /** A second dust collector, with its own duct tree.
+   *
+   *  In the overflow rather than on the toolbar because a shop grows one roughly
+   *  once — and it is not a mode: the new system's collector simply appears below
+   *  everything already drawn, on the top-left cell of its own ground, with an open
+   *  end to drag pipe out of. Which system you are editing then follows whatever you
+   *  touch (see focus()), so there is no switch to remember.
+   *
+   *  The collector goes unnamed on purpose. Pairing its smart outlet names it, the
+   *  same way the first one got its name, so adding a system asks nothing. */
+  addSystem(): void {
+    if (!this.topo) return;
+    this.pushHistory(null);
+    const doc = this.topo as unknown as ShopDoc;
+    const sys = addSystem(doc, {
+      system: this.newSystemId(),
+      collector: this.newId('dc'),
+      end: this.newId('j'),
+    });
+    this.activeSystemId = sys.id;
+    this.buildGraph(this.topo);
+    // Place the new pair below everything drawn rather than re-running the whole
+    // auto-layout: anything already arranged by hand has to stay where it was put.
+    let bottom = -1;
+    for (const c of this.cells.values()) bottom = Math.max(bottom, c.row);
+    const top = bottom + SYSTEM_GAP + 1;
+    this.cells.set(sys.elements[0]['id'] as string, { col: 0, row: top });
+    this.cells.set(sys.elements[1]['id'] as string, { col: 0, row: top + 1 });
+    this.selectedId = null;
+    this.dirty = true; this.saveError = '';
+    this.syncNodes(); this.refreshHandles();
+    // The drawing just got a band taller, so the extent has to be recomputed before
+    // anything measures it. Framing is left alone deliberately — a zoom that changed
+    // under you while you were looking somewhere else is worse than a scroll.
+    this.recomputeExtent();
+  }
+  /** System ids only have to be unique among systems, but they share the counter so
+   *  a doc never grows two things called `s3`. */
+  private newSystemId(): string {
+    const taken = new Set(systemsOf(this.topo as unknown as ShopDoc).map(s => s.id));
+    let id: string, n = taken.size;
+    do { id = `s${++n}`; } while (taken.has(id));
+    return id;
+  }
+
   /** Download the whole shop (topology + layout) as a JSON file the user can keep. */
   exportShop(): void {
     if (!this.topo) return;
@@ -2942,6 +3042,42 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   }
   private elems(t: Topology): RawEl[] { return this.sys(t)?.elements ?? []; }
   private ductsRaw(): RawEl[] { return this.sys()?.ducts ?? []; }
+
+  /** Which system each element belongs to. Rebuilt with the graph, and the thing
+   *  that lets `activeSystemId` follow whatever you touched instead of being a mode
+   *  you have to remember to switch. */
+  private systemOf = new Map<string, string>();
+
+  /** Point the mutation seam at the system this piece lives in.
+   *
+   *  Everything under "graph helpers" writes to the ACTIVE system, which used to be
+   *  a safe assumption because there was only one. With several on screen at once
+   *  the assumption has to be re-established at every entry point — a tap, a drag, a
+   *  menu — rather than assumed. Cheap enough to call on the way past. */
+  private focus(id: string | null | undefined): void {
+    const s = id ? this.systemOf.get(id) : null;
+    if (s) this.activeSystemId = s;
+  }
+
+  /** Every element in the shop, not just the drawn-on system.
+   *
+   *  For facts that are shop-wide however many systems there are: which plug IPs are
+   *  spoken for, which servo channels a BOARD has handed out (a board is mounted
+   *  where the cable is convenient and may drive selectors in any system — shop.js
+   *  §controllers), and looking an element up by an id that is unique shop-wide. */
+  private allElems(t: Topology | null = this.topo): RawEl[] {
+    return systemsOf(t as unknown as ShopDoc | null).flatMap(s => s.elements);
+  }
+  private allDucts(t: Topology | null = this.topo): RawEl[] {
+    return systemsOf(t as unknown as ShopDoc | null).flatMap(s => s.ducts);
+  }
+  /** The elements array that actually holds this id — the one a write has to land
+   *  in. Falls back to the active system for an id that isn't placed yet. */
+  private ownerElems(id: string): RawEl[] {
+    const sid = this.systemOf.get(id);
+    const s = sid ? systemsOf(this.topo as unknown as ShopDoc).find(x => x.id === sid) : null;
+    return s ? s.elements : this.elems(this.topo!);
+  }
   /** Replace the active system's arrays. The old code assigned `topo.elements`
    *  directly; a shop keeps them one level down, so the write needs the same
    *  indirection the reads have. */
@@ -2969,7 +3105,10 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       devices: [],
     } as unknown as Topology;
   }
-  private elem(id: string): RawEl | undefined { return this.topo ? this.elems(this.topo).find(e => e['id'] === id) : undefined; }
+  /** Shop-wide: element ids are unique across systems (validateShop enforces it),
+   *  and half the callers here are asking about a piece on a system that isn't the
+   *  one being written to. */
+  private elem(id: string): RawEl | undefined { return this.topo ? this.allElems().find(e => e['id'] === id) : undefined; }
   /** A fresh id, unique across the WHOLE shop — not just the system being drawn.
    *  Element ids address hardware and appear in logs and in `ui.layout`, so
    *  validateShop requires shop-wide uniqueness; checking only the active system
@@ -2987,8 +3126,14 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   private buildGraph(t: Topology): void {
-    this.parentOf.clear(); this.outletOf.clear();
-    const ducts = this.sys(t)?.ducts ?? [];
+    this.parentOf.clear(); this.outletOf.clear(); this.systemOf.clear();
+    // Every system, not just the drawn-on one: the canvas shows the whole shop now,
+    // and the id → system index below is what keeps the writes pointed at the right
+    // one. Systems share no duct and no element id, so flattening them is lossless.
+    for (const s of systemsOf(t as unknown as ShopDoc)) {
+      for (const e of s.elements) this.systemOf.set(e['id'] as string, s.id);
+    }
+    const ducts = this.allDucts(t);
     this.ducts = ducts.map(d => {
       const child = d['child'] as string, parent = d['parent'] as string;
       this.parentOf.set(child, parent);
@@ -3023,7 +3168,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       redundant = new Set(systemViews(this.topo as unknown as ShopDoc)
         .flatMap(v => redundantSelectors(v)).map(r => r.id));
     } catch { /* mid-edit doc */ }
-    this.nodes = this.elems(this.topo).map(e => {
+    this.nodes = this.allElems().map(e => {
       const id = e['id'] as string, c = this.cells.get(id) ?? { col: 0, row: 0 };
       const branchCount = (e['branches'] as unknown[] | undefined)?.length ?? 0;
       const glyph = this.glyphFor(e);
@@ -3081,6 +3226,29 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     // scroll.
     this.vbH = Math.max(PAD * 2 + maxRow * CELL + CELL, (wrap?.clientHeight ?? 0) / this.vp.zoom - RAIL_H);
   }
+  /** The grey ground under each system: the rows its pieces occupy, full width.
+   *
+   *  Derived from where things actually ARE rather than from the layout pass, so it
+   *  still tells the truth after a piece has been dragged. Full width on purpose —
+   *  a ground that hugged its contents would change shape with every drag, and the
+   *  thing being said is "these rows are that collector's", which is about rows. */
+  systemGrounds(): Array<{ id: string; x: number; y: number; w: number; h: number }> {
+    if (!this.topo) return [];
+    const out: Array<{ id: string; x: number; y: number; w: number; h: number }> = [];
+    for (const s of systemsOf(this.topo as unknown as ShopDoc)) {
+      let lo = Infinity, hi = -Infinity;
+      for (const e of s.elements) {
+        const c = this.cells.get(e['id'] as string); if (!c) continue;
+        lo = Math.min(lo, c.row); hi = Math.max(hi, c.row);
+      }
+      if (!isFinite(lo)) continue;
+      // Half a cell of air past the outermost row, which lands the edge in the
+      // middle of the empty row between two systems whichever way you count it.
+      const y0 = PAD + lo * CELL - CELL / 2, y1 = PAD + hi * CELL + CELL / 2;
+      out.push({ id: s.id, x: 8, y: y0, w: Math.max(0, this.vbW - 16), h: y1 - y0 });
+    }
+    return out;
+  }
   private childrenOf(id: string): string[] { const out: string[] = []; for (const [c, p] of this.parentOf) if (p === id) out.push(c); return out; }
   private canAddChild(id: string): boolean {
     const el = this.elem(id); if (!el) return false;
@@ -3111,10 +3279,22 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
    *  left alone. */
   private autoLayoutInto(target: Map<string, Cell>): void {
     if (!this.topo) return;
-    const root = this.elems(this.topo).find(e => e['type'] === 'collector'); if (!root) return;
     target.clear();
+    let top = 0;
+    for (const s of systemsOf(this.topo as unknown as ShopDoc)) {
+      // Each system gets its own stack of bands, starting one empty cell row below
+      // the last one's deepest. That one row IS the boundary — the grounds are drawn
+      // to the rows either side of it, so nothing else has to mark it.
+      top = this.layoutSystem(s, target, top) + SYSTEM_GAP + 1;
+    }
+  }
+
+  /** One system's bands, from row `top` down. Returns its deepest row. */
+  private layoutSystem(s: ShopSystem, target: Map<string, Cell>, top: number): number {
+    const root = s.elements.find(e => e['type'] === 'collector');
+    if (!root) return top;
     const TRUNK_COL = 0, BRANCH_COL = 1;
-    let cursor = BRANCH_COL, deepest = 0;
+    let cursor = BRANCH_COL, deepest = top;
     const widthOf = (id: string): number => {
       const el = this.elem(id);
       if (isUnitKind(el?.['kind'])) return Math.max(1, (el!['branches'] as unknown[]).length);
@@ -3164,13 +3344,16 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
         target.set(id, { col: Math.floor((start + cursor - 1) / 2), row });
       }
     };
-    target.set(root['id'] as string, { col: TRUNK_COL, row: 0 });
-    let band = 1;
+    target.set(root['id'] as string, { col: TRUNK_COL, row: top });
+    let band = top + 1;
+    let bottom = top;
     for (const leg of this.childrenOf(root['id'] as string)) {
       cursor = BRANCH_COL; deepest = band;
       place(leg, band);
+      bottom = deepest;
       band = deepest + 2;   // one blank row between bands
     }
+    return bottom;
   }
   private savedLayout(t: Topology): Record<string, Cell> | null { return (t as { ui?: { layout?: Record<string, Cell> } }).ui?.layout ?? null; }
   private savedBoards(t: Topology): Record<string, number | Cell> | null {

@@ -28,6 +28,9 @@
   <div class="more" *ngIf="moreOpen">
     <button (click)="moreOpen = false; importClick(fileInput)">Import</button>
     <button (click)="moreOpen = false; exportShop()" [disabled]="!hasShop">Export</button>
+    <!-- A shop grows a second collector roughly once, which is what puts it here
+         rather than on the toolbar. -->
+    <button (click)="moreOpen = false; addSystem()" [disabled]="!hasShop">Add system</button>
   </div>
 </div>
 
@@ -50,6 +53,17 @@
         <pattern id="bdots" width="27" height="27" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r="1" fill="var(--border)"/></pattern>
       </defs>
       <rect x="0" y="0" [attr.width]="vbW" [attr.height]="vbH" fill="url(#bdots)" (pointerdown)="deselect()"/>
+
+      <!-- One grey ground per airflow system, drawn under everything. With a single
+           collector it is the whole board and says nothing, which is right — it only
+           starts meaning something the moment there are two. Drawn rather than
+           labelled: a system's identity is its collector, which is sitting on the
+           ground's top-left cell where you can read its name. -->
+      <g class="grounds" *ngIf="systemGrounds().length > 1">
+        <rect *ngFor="let g of systemGrounds()" class="ground"
+              [attr.x]="g.x" [attr.y]="g.y" [attr.width]="g.w" [attr.height]="g.h" rx="14"
+              (pointerdown)="deselect()"/>
+      </g>
 
       <!-- The board rail. Above the whole grid, in negative y, so every cell
            keeps the coordinates it has always had and no saved layout moves. -->

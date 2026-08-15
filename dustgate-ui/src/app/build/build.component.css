@@ -74,6 +74,9 @@ svg.canvas { display: block; touch-action: none; }
 .open-stub { stroke: var(--accent); stroke-width: 6; fill: none; stroke-linecap: round; stroke-dasharray: 6 5; }
 .open-end .dot { fill: var(--accent); }
 .open-end .end-ring { fill: none; stroke: var(--accent); stroke-width: 1.5; opacity: 0.6; }
+/* A system's ground. Barely there on purpose: it has to survive the zoom-out that
+   a hairline wouldn't, without competing with the ductwork drawn on top of it. */
+.ground { fill: #191919; }
 .node { cursor: grab; }
 .node.dragging { cursor: grabbing; }
 /* Live drop feedback: the target cell, and the ghost itself when it's refused. */
