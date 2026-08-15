@@ -1388,8 +1388,14 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     return `M ${end.x - (dx / len) * stub} ${end.y - (dy / len) * stub} L ${end.x} ${end.y}`;
   }
 
-  /** Top-right corner of the glyph, in the node's own (translated) coordinates. */
-  rmX(n: NodeVM): number { return n.isUnit ? (n.span - 1) * CELL + GATE_PAD : this.halfW(n); }
+  /** Top-right corner of the glyph, in the node's own (translated) coordinates.
+   *  A gate's servo tab now straddles that same corner, so the (−) steps left by
+   *  its width — only on gates, and only while one is selected, which is the only
+   *  time the two are on screen together. */
+  rmX(n: NodeVM): number {
+    const edge = n.isUnit ? (n.span - 1) * CELL + GATE_PAD : this.halfW(n);
+    return this.isGate(n) ? edge - 26 : edge;
+  }
   rmY(n: NodeVM): number { return -this.halfH(n); }
   /** The setup badge sits on the opposite corner from the (−) so the two never overlap
    *  on a selected gate. A unit's group origin is its FIRST outlet, not its centre —
@@ -2797,13 +2803,15 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     return d.mode === 'toGate' ? d.overGate === gateId : d.gateId === gateId;
   }
 
-  /** Gates get a tab on their BOTTOM-RIGHT corner: the servo, which is the actual
+  /** Gates get a tab on their TOP-RIGHT corner: the servo, which is the actual
    *  electrical end of a blast gate.
    *
    *  It sat level with the gate's centre until 2026-08-15, which put it exactly
    *  where a horizontal duct leaves the same edge — tab and duct overlapping,
-   *  reading as one object. The corner is clear of both the outgoing run and the
-   *  (−) badge on the opposite top corner.
+   *  reading as one object. Either corner clears the outgoing run; the top is the
+   *  side the cables come down from, so the tab now meets its own cable instead of
+   *  the cable reaching around the gate to find it. The cost is that the (−) badge
+   *  shares this corner, so it is nudged left while a gate is selected.
    *
    *  It STRADDLES that corner rather than floating outside it. Held off the edge
    *  it read as a separate thing parked in the gap, and on a manifold — whose body
@@ -2825,8 +2833,8 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   private tabX(n: NodeVM): number {
     return this.nx(n) + (n.isUnit ? (n.span - 1) * CELL + GATE_PAD : this.halfW(n));
   }
-  /** Level with the gate's bottom edge, not its centre — see gateTabs(). */
-  private tabY(n: NodeVM): number { return this.ny(n) + this.halfH(n); }
+  /** Level with the gate's top edge, not its centre — see gateTabs(). */
+  private tabY(n: NodeVM): number { return this.ny(n) - this.halfH(n); }
   private boardOf(gateId: string): string {
     return ((this.elem(gateId)?.['controllerId'] as string) ?? this.defaultControllerId());
   }
@@ -2867,8 +2875,10 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       // Half a lane step per board, so two boards never hand out the same lane row.
       const bias = bi * (7);
       for (const l of legs) {
-        const n = this.byId.get(l.gateId);
-        const pts = cableRun(l.from, l.to, rank.get(l) ?? 0, bias, n ? this.halfH(n) : 0);
+        // No body clearance to reserve any more: the tab is on the gate's TOP edge,
+        // so a lane one gap above it is already clear of the box. It was halfH back
+        // when the cable landed underneath and had to get past the gate to reach it.
+        const pts = cableRun(l.from, l.to, rank.get(l) ?? 0, bias, 0);
         out.push({ id: b.id + ':' + l.channel, gateId: l.gateId, boardId: b.id, channel: l.channel,
                    d: cablePath(pts, drawn) });
         drawn.push(...segmentsOf(pts));
