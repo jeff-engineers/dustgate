@@ -1,0 +1,775 @@
+<title>DustGate — plugs on the canvas, in a two-collector shop</title>
+
+<style>
+  /* The app's own palette, unchanged. This is a mockup OF the canvas, so it has to
+     read as the canvas rather than as a document about it. */
+  :root {
+    --bg:      #111;
+    --surface: #1e1e1e;
+    --raised:  #262626;
+    --border:  #2e2e2e;
+    --text:    #e8e8e8;
+    --muted:   #8a8a86;
+    --accent:  #f0a500;
+    --danger:  #d94444;
+    --success: #3cbe6e;
+    --radius:  14px;
+
+    --duct:    #3a3a3a;
+    --live:    rgba(60,190,110,0.14);
+    --amberbg: rgba(240,165,0,0.12);
+  }
+  /* Committed to one visual world on purpose: the shop UI is dark, and a light
+     version of this mockup would be a picture of an app that doesn't exist. */
+
+  *, *::before, *::after { box-sizing: border-box; }
+
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: system-ui, -apple-system, sans-serif;
+    font-size: 15px; line-height: 1.5; margin: 0;
+    padding: 22px 18px 60px; -webkit-text-size-adjust: 100%;
+  }
+  .wrap { max-width: 960px; margin: 0 auto; display: flex; flex-direction: column; gap: 22px; }
+
+  h1 { font-size: 20px; font-weight: 600; margin: 6px 0 0; letter-spacing: -0.01em; text-wrap: balance; }
+  h2 { font-size: 14px; font-weight: 600; margin: 0 0 10px; }
+  .lede { color: var(--muted); font-size: 13.5px; max-width: 64ch; margin: 6px 0 0; }
+  .eyebrow { font-size: 11px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--muted); }
+  b, strong { font-weight: 600; }
+
+  /* ── system rail ─────────────────────────────────────────────────────────── */
+  .rail { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .rail button {
+    background: var(--surface); border: 1px solid var(--border); color: var(--muted);
+    border-radius: 10px; padding: 7px 13px; font: inherit; font-size: 13px; cursor: pointer;
+    display: flex; align-items: baseline; gap: 7px;
+  }
+  .rail button:hover { border-color: #3d3d3d; color: var(--text); }
+  .rail button.on { background: var(--raised); border-color: var(--accent); color: var(--text); }
+  .rail button .note { font-size: 11px; color: var(--muted); }
+  .rail button.on .note { color: var(--accent); }
+  .rail .sep { width: 1px; height: 22px; background: var(--border); margin: 0 2px; }
+  .rail .hint { font-size: 12.5px; color: var(--muted); margin-left: auto; }
+  .rail button:focus-visible, .chip:focus-visible, .dock:focus-visible,
+  .act:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* ── canvas ──────────────────────────────────────────────────────────────── */
+  .stage {
+    position: relative; width: 100%; aspect-ratio: 900 / 460;
+    background: var(--bg); border: 1px solid var(--border);
+    border-radius: var(--radius); overflow: hidden;
+    /* Machine cards are HTML over a scaling SVG, so they have to scale WITH it —
+       sized in cqw against this box. At a fixed px width they overlap their
+       neighbours the moment the canvas is narrower than 900px, which is every
+       phone and most panes. 13cqw = 117 of the viewBox's 900 units, against 130
+       between machines. */
+    container-type: size;
+  }
+  .stage > svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+
+  .duct { fill: none; stroke: var(--duct); stroke-width: 9; stroke-linecap: round; stroke-linejoin: round;
+          transition: stroke .25s, opacity .25s; }
+  .duct.live { stroke: var(--success); }
+  .body { fill: var(--surface); stroke: var(--border); stroke-width: 2; }
+  .stroke { stroke: var(--muted); fill: none; }
+  .puck { fill: var(--muted); transition: fill .2s, x .35s; }
+  .puck.live { fill: var(--success); }
+  .glabel { fill: var(--text); font-size: 13px; text-anchor: middle; font-family: system-ui, sans-serif; }
+  .syslabel { fill: var(--muted); font-size: 11px; font-family: system-ui, sans-serif;
+              letter-spacing: 0.06em; text-transform: uppercase; }
+  /* Plumbing dims with its system. Machines never do — a machine can have ports in
+     two systems at once, so dimming it would be a lie in one of them. */
+  .sysgroup { transition: opacity .25s; }
+  .sysgroup.dim { opacity: 0.22; }
+
+  /* ── machine cards ───────────────────────────────────────────────────────── */
+  /* HTML, not SVG: the plug row under the name is real UI — it takes a drop, it
+     takes focus, and its text has to reflow. */
+  .machine {
+    position: absolute; transform: translate(-50%, -50%);
+    width: 13cqw; background: var(--surface);
+    border: 0.22cqw solid var(--border); border-radius: 1.4cqw;
+    padding: 0.9cqw 0.8cqw 0.75cqw; display: flex; flex-direction: column; gap: 0.6cqw;
+    transition: opacity .25s, border-color .2s;
+  }
+  .machine.dim { opacity: 0.3; }
+  .machine.running { border-color: var(--success); }
+  .machine .nm { font-size: 1.4cqw; text-align: center; line-height: 1.25; text-wrap: balance; }
+  .machine .ports { display: flex; justify-content: center; gap: 0.55cqw; }
+  .machine .ports i {
+    width: 0.55cqw; height: 0.55cqw; border-radius: 50%; background: var(--duct);
+    display: block; transition: background .2s;
+  }
+  .machine .ports i.lit { background: var(--success); }
+
+  /* the dock — the plug, under the tool's name */
+  .dock {
+    display: flex; align-items: center; gap: 0.6cqw; width: 100%;
+    background: var(--bg); border: 0.12cqw dashed var(--border); color: var(--muted);
+    border-radius: 1cqw; padding: 0.55cqw 0.7cqw; font: inherit; font-size: 1.25cqw;
+    cursor: pointer; text-align: left; min-height: 3.2cqw;
+  }
+  .dock .face { width: 1.7cqw; height: 1.7cqw; flex: 0 0 auto; }
+  .dock .face .shell { fill: none; stroke: currentColor; stroke-width: 1.6; opacity: 0.8; }
+  .dock .face .slot  { fill: currentColor; opacity: 0.75; }
+  .dock .detail { flex: 1; min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 0.5cqw; }
+  .dock .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dock .w { font-variant-numeric: tabular-nums; font-size: 1.3cqw; flex: 0 0 auto; }
+  .dock .tick { width: 1.6cqw; height: 1.6cqw; flex: 0 0 auto; color: var(--accent); }
+
+  .dock[data-state="suggest"] { border-style: solid; border-color: var(--accent); color: var(--accent); background: var(--amberbg); }
+  .dock[data-state="idle"]    { border-style: solid; border-color: var(--border); color: var(--muted); background: var(--raised); }
+  .dock[data-state="standby"] { border-style: solid; border-color: var(--accent); color: var(--accent); background: var(--amberbg); }
+  .dock[data-state="live"]    { border-style: solid; border-color: var(--success); color: var(--success); background: var(--live); }
+  .dock.drop { border-color: var(--accent); border-style: solid; background: var(--amberbg); color: var(--accent); }
+
+  /* ── plug tray ───────────────────────────────────────────────────────────── */
+  .tray { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; }
+  .tray.armed { border-color: var(--accent); }
+  .tray-head { display: flex; align-items: center; gap: 10px; margin-bottom: 11px; flex-wrap: wrap; }
+  .tray-head .t { font-size: 13.5px; font-weight: 600; }
+  .tray-head .n { font-size: 12px; color: var(--muted); }
+  .tray.armed .n { color: var(--accent); }
+  .act {
+    margin-left: auto; background: var(--bg); border: 1px solid var(--border); color: var(--text);
+    border-radius: 9px; padding: 6px 12px; font: inherit; font-size: 12.5px; cursor: pointer;
+  }
+  .act + .act { margin-left: 0; }
+  .act.primary { border-color: var(--accent); color: var(--accent); }
+  .act:disabled { opacity: 0.4; cursor: default; }
+  .chips { display: flex; gap: 9px; flex-wrap: wrap; }
+  .chip {
+    display: flex; align-items: center; gap: 8px; background: var(--bg);
+    border: 1px solid var(--border); border-radius: 11px; padding: 8px 11px;
+    color: var(--text); font: inherit; cursor: grab; touch-action: none; text-align: left;
+  }
+  .chip .face { width: 17px; height: 17px; color: var(--muted); }
+  .chip .face .shell { fill: none; stroke: currentColor; stroke-width: 1.6; }
+  .chip .face .slot { fill: currentColor; opacity: 0.75; }
+  .chip .nm { font-size: 12.5px; display: block; }
+  .chip .sub { font-size: 11px; color: var(--muted); display: block; }
+  .chip .w { font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; margin-left: 4px; }
+  .chip[data-level="standby"] .face, .chip[data-level="standby"] .w { color: var(--accent); }
+  .chip[data-level="live"] .face,    .chip[data-level="live"] .w    { color: var(--success); }
+  .chip .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex: 0 0 auto; }
+  .chip.ghost { position: fixed; z-index: 60; pointer-events: none; opacity: 0.92;
+                transform: translate(-50%, -50%); box-shadow: 0 8px 22px rgba(0,0,0,0.5); }
+  .tray-empty { font-size: 12.5px; color: var(--muted); }
+
+  /* ── notes ───────────────────────────────────────────────────────────────── */
+  .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(270px, 1fr)); gap: 14px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 15px 16px; }
+  .card p { font-size: 13px; color: var(--muted); margin: 0 0 9px; }
+  .card p:last-child { margin-bottom: 0; }
+  .card em { color: var(--text); font-style: normal; }
+  .legend { display: flex; flex-direction: column; gap: 7px; }
+  .li { display: flex; align-items: center; gap: 9px; font-size: 12.5px; color: var(--muted); }
+  .sw { width: 26px; height: 15px; border-radius: 5px; border: 1px dashed var(--border); flex: 0 0 auto; }
+  .sw.suggest { border-style: solid; border-color: var(--accent); background: var(--amberbg); }
+  .sw.idle    { border-style: solid; background: var(--raised); }
+  .sw.standby { border-style: solid; border-color: var(--accent); background: var(--amberbg); }
+  .sw.live    { border-style: solid; border-color: var(--success); background: var(--live); }
+
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th, td { text-align: left; padding: 5px 8px 5px 0; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em; }
+  td.n { font-variant-numeric: tabular-nums; text-align: right; }
+  .ok { color: var(--success); } .no { color: var(--danger); }
+
+  /* ── sheet ───────────────────────────────────────────────────────────────── */
+  .sheet-bg { position: fixed; inset: 0; background: rgba(0,0,0,0.55); z-index: 40; }
+  .sheet {
+    position: fixed; z-index: 50; left: 50%; bottom: 0; transform: translateX(-50%);
+    width: min(430px, 100%); background: var(--surface);
+    border: 1px solid var(--border); border-bottom: none;
+    border-radius: var(--radius) var(--radius) 0 0; padding: 18px 17px 22px;
+  }
+  .sheet .hd { display: flex; align-items: center; gap: 11px; margin-bottom: 15px; }
+  .sheet .hd .face { width: 26px; height: 26px; color: var(--muted); }
+  .sheet .hd .face .shell { fill: none; stroke: currentColor; stroke-width: 1.6; }
+  .sheet .hd .face .slot { fill: currentColor; opacity: .75; }
+  .sheet .ttl { font-size: 15px; font-weight: 600; flex: 1; }
+  .sheet .meta { font-size: 11.5px; color: var(--muted); font-weight: 400; }
+  .sheet .now { font-size: 13px; color: var(--accent); font-variant-numeric: tabular-nums; }
+  .sheet .sect { border-top: 1px solid var(--border); padding-top: 13px; margin-top: 13px; }
+  .sheet .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 13px; }
+  .sheet .why { font-size: 11.5px; color: var(--muted); margin: 7px 0 0; line-height: 1.55; }
+  .meter { position: relative; height: 8px; background: var(--bg); border-radius: 5px; margin: 11px 0 5px; overflow: hidden; }
+  .meter .fill { position: absolute; inset: 0 auto 0 0; background: var(--accent); opacity: .45; }
+  .meter .thr { position: absolute; top: -3px; width: 2px; height: 14px; background: var(--text); }
+  .scale { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--muted); }
+  input[type=range] { width: 100%; accent-color: var(--accent); margin-top: 8px; }
+  .nav { display: flex; gap: 9px; margin-top: 17px; }
+  .nav button { flex: 0 0 auto; background: var(--bg); border: 1px solid var(--border); color: var(--text);
+                border-radius: 10px; padding: 10px 15px; font: inherit; font-size: 13.5px; cursor: pointer; }
+  .nav .grow { flex: 1; }
+  .nav .save { background: var(--accent); border-color: var(--accent); color: #1a1200; font-weight: 600; }
+  .nav .rm { color: var(--danger); border-color: #3a2626; }
+
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="wrap">
+
+  <header>
+    <span class="eyebrow">DustGate · build canvas</span>
+    <h1>Plugs live on the tool, in a shop with more than one collector</h1>
+    <p class="lede">
+      Two things at once, because they meet on the same canvas. Every machine is drawn
+      <em>once</em> and carries its own smart plug in the row under its name — never on a
+      port, because a plug is one fact about a machine however many ducts reach it. And the
+      shop has <em>two collectors</em>: pick a system to work on it, or keep the whole shop
+      in view. Drag a plug out of the tray onto a machine, or let the names match themselves.
+    </p>
+  </header>
+
+  <div class="rail" id="rail"></div>
+
+  <div class="stage" id="stage">
+    <svg viewBox="0 0 900 460" aria-hidden="true">
+      <!-- ── system A ─────────────────────────────────────────────────────── -->
+      <g class="sysgroup" data-sys="a">
+        <text class="syslabel" x="34" y="34">Main system</text>
+        <path class="duct" data-sys="a" id="a-trunk" d="M110 108 V138 H430 V168"/>
+        <path class="duct" data-sys="a" data-run="p-planer"  d="M240 212 V282"/>
+        <path class="duct" data-sys="a" data-run="p-jointer" d="M370 212 V282"/>
+        <path class="duct" data-sys="a" data-run="p-lathe"   d="M500 212 V282"/>
+        <path class="duct" data-sys="a" data-run="p-saw"     d="M630 212 V282"/>
+        <g transform="translate(110,78)">
+          <circle class="body" r="30"/>
+          <path class="stroke" stroke-width="3" stroke-linecap="round" d="M0 -19 a19 19 0 1 0 6 2 l-6 17"/>
+          <circle class="puck" r="3.5"/>
+          <text class="glabel" y="50">Cyclone</text>
+        </g>
+        <rect class="body" x="190" y="168" width="490" height="44" rx="9"/>
+        <rect class="puck" id="a-gate" x="225" y="176" width="30" height="12" rx="4"/>
+        <text class="glabel" x="435" y="160">Sliding gate</text>
+      </g>
+
+      <!-- ── system B ─────────────────────────────────────────────────────── -->
+      <g class="sysgroup" data-sys="b">
+        <text class="syslabel" x="700" y="34">Back wall</text>
+        <path class="duct" data-sys="b" id="b-trunk" d="M800 108 V138 H770 V168"/>
+        <!-- the saw's overarm: leaves system B and reaches a machine sitting in A -->
+        <path class="duct" data-sys="b" data-run="p-overarm" d="M726 212 V246 H630 V282"/>
+        <path class="duct" data-sys="b" data-run="p-sander"  d="M814 212 V282"/>
+        <g transform="translate(800,78)">
+          <circle class="body" r="26"/>
+          <path class="stroke" stroke-width="3" stroke-linecap="round" d="M0 -16 a16 16 0 1 0 5 1.7 l-5 14"/>
+          <circle class="puck" r="3"/>
+          <text class="glabel" y="45">Blower</text>
+        </g>
+        <rect class="body" x="700" y="168" width="140" height="44" rx="9"/>
+        <path class="stroke" stroke-width="2.5" d="M770 174 L726 206 M770 174 L814 206"/>
+        <text class="glabel" x="770" y="160">Manifold</text>
+      </g>
+    </svg>
+
+    <div id="machines"></div>
+  </div>
+
+  <section class="tray" id="tray">
+    <div class="tray-head">
+      <span class="t">Smart plugs on your WiFi</span>
+      <span class="n" id="tray-count"></span>
+      <button class="act primary" id="matchall">Match by name</button>
+      <button class="act" id="reset">Reset</button>
+    </div>
+    <div class="chips" id="chips"></div>
+  </section>
+
+  <div class="cols">
+    <div class="card">
+      <h2>What the plug row is saying</h2>
+      <div class="legend">
+        <span class="li"><span class="sw"></span> no plug — you switch this one on yourself</span>
+        <span class="li"><span class="sw suggest"></span> a free plug whose name looks like this machine</span>
+        <span class="li"><span class="sw idle"></span> paired, drawing nothing</span>
+        <span class="li"><span class="sw standby"></span> drawing, but under the trip point</span>
+        <span class="li"><span class="sw live"></span> over the trip point — this machine is running</span>
+      </div>
+      <p style="margin-top:12px">Point at a row to read it, tap to act. A running machine
+        stays open on its own — nothing here blinks.</p>
+    </div>
+
+    <div class="card">
+      <h2>One machine, one plug, two systems</h2>
+      <p>The <em>Table Saw</em> has two ports: its main outlet on the Main system and an
+        overarm pickup on the Back wall. It is drawn once, with two dots under the name —
+        one per port, each lighting when that duct is carrying air.</p>
+      <p>Its plug doesn't belong to either port. Switch the saw on and both ports want air;
+        which of them actually gets it is a routing answer, not an electrical one.</p>
+      <p>Focus a system and the <em>plumbing</em> dims. Machines never do — the saw is fully
+        lit in both, because it is genuinely in both.</p>
+    </div>
+
+    <div class="card">
+      <h2>Matching by name</h2>
+      <p>A Shelly arrives called whatever someone typed into the Shelly app. Matching that
+        against the machine names on this canvas saves pairing every plug by hand, walking
+        to each machine to switch it on.</p>
+      <p>It is always a <em>suggestion</em>: the row shows the plug's name and waits for the
+        tick. Being wrong costs a glance.</p>
+      <table>
+        <thead><tr><th>Plug name</th><th>Machine</th><th class="n">Score</th><th></th></tr></thead>
+        <tbody id="scores"></tbody>
+      </table>
+      <p style="margin-top:10px">Anything under <b>0.45</b> is never offered. That bar sits in
+        the empty band between the worst real match and the best false one — see
+        <em>outlet-match.spec.ts</em>.</p>
+    </div>
+  </div>
+</div>
+
+<div id="sheet-root"></div>
+
+<script>
+(function () {
+  'use strict';
+
+  var DEFAULT_TRIP = 100;
+
+  // ── the shop ───────────────────────────────────────────────────────────────
+  var SYSTEMS = [
+    { id: 'a', name: 'Main system', note: 'sliding gate' },
+    { id: 'b', name: 'Back wall',   note: 'manifold' }
+  ];
+
+  // A machine is drawn ONCE. Its ports say where its ducts land and in which
+  // system — the plug is on the machine, above all of that.
+  function seedMachines() {
+    return [
+      { id: 'planer',  name: 'Planer',      x: 240, y: 320, run: 1450, standby: 0,
+        ports: [{ id: 'p-planer',  sys: 'a' }] },
+      { id: 'jointer', name: 'Jointer',     x: 370, y: 320, run: 1100, standby: 4,
+        ports: [{ id: 'p-jointer', sys: 'a' }] },
+      { id: 'lathe',   name: 'Lathe',       x: 500, y: 320, run: 900,  standby: 12,
+        ports: [{ id: 'p-lathe',   sys: 'a' }] },
+      { id: 'saw',     name: 'Table Saw',   x: 630, y: 320, run: 1840, standby: 8,
+        ports: [{ id: 'p-saw', sys: 'a' }, { id: 'p-overarm', sys: 'b' }] },
+      { id: 'sander',  name: 'Drum Sander', x: 814, y: 320, run: 620,  standby: 15,
+        ports: [{ id: 'p-sander',  sys: 'b' }] }
+    ];
+  }
+
+  // Deliberately mixed: two that match cleanly, one typo, one already paired, one
+  // anonymous, and one decoy that must never be offered to anything.
+  function seedOutlets() {
+    return [
+      { id: 'o1', name: 'TableSaw',            host: 'shellyplugus-8f21c4', ip: '192.168.87.44', dock: null,     trip: DEFAULT_TRIP, on: false },
+      { id: 'o2', name: 'planer',              host: 'shellyplugus-3ba901', ip: '192.168.87.51', dock: null,     trip: DEFAULT_TRIP, on: false },
+      { id: 'o3', name: 'Jointr',              host: 'shellyplugus-77de11', ip: '192.168.87.55', dock: null,     trip: DEFAULT_TRIP, on: false },
+      { id: 'o4', name: 'Drum sander',         host: 'shellyplugus-11de77', ip: '192.168.87.62', dock: 'sander', trip: DEFAULT_TRIP, on: false },
+      { id: 'o5', name: 'shellyplugus-a4cf12', host: 'shellyplugus-a4cf12', ip: '192.168.87.70', dock: null,     trip: DEFAULT_TRIP, on: false },
+      { id: 'o6', name: 'Bench light',         host: 'shellyplugus-2c0f80', ip: '192.168.87.73', dock: null,     trip: DEFAULT_TRIP, on: false }
+    ];
+  }
+
+  var machines = seedMachines();
+  var outlets  = seedOutlets();
+  var focusSys = null;              // null = whole shop
+  var revealed = null;              // machine id whose row is open
+  var armed    = null;              // machine waiting for the next tray tap
+
+  var machineById = function (id) { for (var i=0;i<machines.length;i++) if (machines[i].id===id) return machines[i]; return null; };
+  var outletById  = function (id) { for (var i=0;i<outlets.length;i++)  if (outlets[i].id===id)  return outlets[i];  return null; };
+  var outletFor   = function (id) { for (var i=0;i<outlets.length;i++)  if (outlets[i].dock===id) return outlets[i]; return null; };
+
+  // ── name matching (mirrors dustgate-ui/src/app/tools/outlet-match.ts) ───────
+  function norm(s) { return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ''); }
+  function bigrams(s) { var o = {}; for (var i=0;i<s.length-1;i++) { var g = s.slice(i,i+2); o[g]=(o[g]||0)+1; } return o; }
+  function dice(a, b) {
+    if (a.length < 2 || b.length < 2) return a === b ? 1 : 0;
+    var A = bigrams(a), B = bigrams(b), hits = 0, total = 0, k;
+    for (k in A) { total += A[k]; if (B[k]) hits += Math.min(A[k], B[k]); }
+    for (k in B) total += B[k];
+    return (2 * hits) / total;
+  }
+  function score(outletName, machineName) {
+    var a = norm(outletName), b = norm(machineName);
+    if (!a || !b) return 0;
+    if (a === b) return 1;
+    if (a.indexOf(b) === 0 || b.indexOf(a) === 0) return 0.94;
+    if (a.indexOf(b) >= 0 || b.indexOf(a) >= 0) return 0.88;
+    return dice(a, b);
+  }
+  // 0.45, not the 0.62 the first mockup guessed: 0.62 rejects a single transposed
+  // letter ("Jointr") while the best false pair is still 0.28 below it.
+  var MATCH_MIN = 0.45;
+
+  function suggestionFor(machineId) {
+    var m = machineById(machineId), best = null, bs = 0;
+    outlets.forEach(function (o) {
+      if (o.dock) return;
+      var s = score(o.name, m.name);
+      if (s > bs) { bs = s; best = o; }
+    });
+    return bs >= MATCH_MIN ? { outlet: best, score: bs } : null;
+  }
+  function bestMachine(o) {
+    var best = null, bs = 0;
+    machines.forEach(function (m) {
+      var taken = outletFor(m.id);
+      if (taken && taken.id !== o.id) return;
+      var s = score(o.name, m.name);
+      if (s > bs) { bs = s; best = m; }
+    });
+    return bs >= MATCH_MIN ? { machine: best, score: bs } : null;
+  }
+
+  // ── power ──────────────────────────────────────────────────────────────────
+  function watts(o) {
+    if (!o) return 0;
+    var m = o.dock ? machineById(o.dock) : null;
+    var jitter = function (amp) { return Math.sin(Date.now()/700 + o.id.charCodeAt(1)) * amp; };
+    if (!o.on) { var sb = m ? m.standby : 0; return sb ? Math.max(0, Math.round(sb + jitter(1.4))) : 0; }
+    var run = m ? m.run : 900;
+    return Math.round(run + jitter(run * 0.035));
+  }
+  function level(o) { var w = watts(o); return w >= o.trip ? 'live' : (w >= 1 ? 'standby' : 'idle'); }
+  function fmtW(w) { return w >= 1000 ? (w/1000).toFixed(1) + ' kW' : Math.round(w) + ' W'; }
+  function esc(s) { return String(s).replace(/[&<>"]/g, function (c) {
+    return ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' })[c]; }); }
+
+  var FACE = '<svg class="face" viewBox="0 0 24 24" aria-hidden="true">' +
+      '<rect class="shell" x="3.5" y="3.5" width="17" height="17" rx="5"/>' +
+      '<rect class="slot" x="8.4" y="7.6" width="2.1" height="5.6" rx="1"/>' +
+      '<rect class="slot" x="13.5" y="7.6" width="2.1" height="5.6" rx="1"/>' +
+      '<circle class="slot" cx="12" cy="16.4" r="1.5"/></svg>';
+  var TICK = '<svg class="tick" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.4 8.4 L6.4 11.4 L12.6 5"' +
+      ' fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+  // ── machines on the canvas ─────────────────────────────────────────────────
+  var machinesEl = document.getElementById('machines');
+  machines.forEach(function (m) {
+    var card = document.createElement('div');
+    card.className = 'machine';
+    card.dataset.machine = m.id;
+    card.style.left = (m.x / 900 * 100) + '%';
+    card.style.top  = (m.y / 460 * 100) + '%';
+    card.innerHTML =
+      '<div class="nm">' + esc(m.name) + '</div>' +
+      '<div class="ports">' + m.ports.map(function () { return '<i></i>'; }).join('') + '</div>' +
+      '<button class="dock" type="button"></button>';
+    var dock = card.querySelector('.dock');
+    dock.addEventListener('click', function () { onDockClick(m.id); });
+    dock.addEventListener('pointerenter', function (e) {
+      if (e.pointerType === 'mouse') { revealed = m.id; paint(); }
+    });
+    dock.addEventListener('pointerleave', function (e) {
+      if (e.pointerType === 'mouse' && revealed === m.id) { revealed = null; paint(); }
+    });
+    machinesEl.appendChild(card);
+  });
+
+  function paintMachines() {
+    Array.prototype.forEach.call(machinesEl.children, function (card) {
+      var m = machineById(card.dataset.machine), o = outletFor(m.id);
+      var lv = o ? level(o) : null, sg = o ? null : suggestionFor(m.id);
+      var dock = card.querySelector('.dock');
+
+      if (o) {
+        dock.dataset.state = lv;
+        // ONE fact at a time. A paired plug is nearly always named after its own
+        // machine, whose name is on the line directly above — so showing both
+        // spends the row's width saying it twice, and at canvas scale that means
+        // truncating the number that is actually changing. Idle: the name, so you
+        // can see which plug it is. Drawing: the watts, because that's the news.
+        dock.innerHTML = FACE + '<span class="detail">' +
+          (lv === 'idle' ? '<span class="t">' + esc(o.name) + '</span>'
+                         : '<span class="w">' + fmtW(watts(o)) + '</span>') +
+          '</span>';
+        dock.title = o.name + ' — ' + o.ip + ' — ' + fmtW(watts(o));
+      } else if (sg) {
+        dock.dataset.state = 'suggest';
+        dock.innerHTML = FACE + '<span class="detail"><span class="t">' + esc(sg.outlet.name) + '?</span>' + TICK + '</span>';
+        dock.title = 'Looks like this machine’s plug — ' + Math.round(sg.score * 100) + '% match';
+      } else {
+        dock.dataset.state = 'none';
+        dock.innerHTML = FACE + '<span class="detail"><span class="t">no plug</span></span>';
+        dock.title = 'No smart plug on ' + m.name + ' — you switch it on yourself';
+      }
+      dock.classList.toggle('drop', armed === m.id);
+
+      var running = !!o && lv === 'live';
+      card.classList.toggle('running', running);
+      // A machine dims only when NONE of its ports is in the focused system.
+      var inFocus = !focusSys || m.ports.some(function (p) { return p.sys === focusSys; });
+      card.classList.toggle('dim', !inFocus);
+
+      var dots = card.querySelectorAll('.ports i');
+      m.ports.forEach(function (p, i) {
+        // Only the ports in view can be carrying air; a focused system is the
+        // only thing being routed.
+        var lit = running && (!focusSys || p.sys === focusSys);
+        if (dots[i]) dots[i].classList.toggle('lit', lit);
+      });
+    });
+  }
+
+  function paintDucts() {
+    var liveRuns = {}, liveSys = {};
+    machines.forEach(function (m) {
+      var o = outletFor(m.id);
+      if (!o || level(o) !== 'live') return;
+      m.ports.forEach(function (p) { liveRuns[p.id] = 1; liveSys[p.sys] = 1; });
+    });
+    document.querySelectorAll('.duct[data-run]').forEach(function (d) {
+      d.classList.toggle('live', !!liveRuns[d.dataset.run]);
+    });
+    ['a', 'b'].forEach(function (s) {
+      var trunk = document.getElementById(s + '-trunk');
+      if (trunk) trunk.classList.toggle('live', !!liveSys[s]);
+    });
+    document.querySelectorAll('.sysgroup').forEach(function (g) {
+      g.classList.toggle('dim', !!focusSys && g.dataset.sys !== focusSys);
+    });
+    // The sliding gate's puck parks under whichever of its runs is open.
+    var open = machines.filter(function (m) {
+      var o = outletFor(m.id);
+      return o && level(o) === 'live' && m.ports.some(function (p) { return p.sys === 'a'; });
+    })[0];
+    var puck = document.getElementById('a-gate');
+    if (puck) {
+      puck.setAttribute('x', (open ? open.x : 240) - 15);
+      puck.classList.toggle('live', !!open);
+    }
+  }
+
+  /** Click only ACTS on an open row. Pointing opens it, so a mouse still acts on
+   *  the first click; a finger opens with one tap and acts with the next. */
+  function onDockClick(id) {
+    var o = outletFor(id);
+    var open = revealed === id || (o && level(o) === 'live');
+    if (!open) { revealed = id; paint(); return; }
+    if (o) { openSheet(o.id); return; }
+    var sg = suggestionFor(id);
+    if (sg) { dock(sg.outlet.id, id); revealed = null; paint(); return; }
+    // Nothing to accept: the row waits and the tray becomes the picker — the same
+    // gesture as the drag, minus the drag, which is what a phone wants.
+    armed = armed === id ? null : id;
+    paint();
+    if (armed) document.getElementById('tray').scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }
+
+  // ── tray ───────────────────────────────────────────────────────────────────
+  var chipsEl = document.getElementById('chips');
+  function paintTray() {
+    var free = outlets.filter(function (o) { return !o.dock; });
+    var matched = free.filter(function (o) { return !!bestMachine(o); }).length;
+    document.getElementById('tray-count').textContent = armed
+      ? 'tap the plug powering the ' + machineById(armed).name
+      : free.length + ' free' + (matched ? ' · ' + matched + ' look like a machine' : '');
+    document.getElementById('tray').classList.toggle('armed', !!armed);
+    document.getElementById('matchall').disabled = !matched;
+
+    chipsEl.innerHTML = '';
+    if (!free.length) {
+      var p = document.createElement('div');
+      p.className = 'tray-empty';
+      p.textContent = 'Every plug is paired. Point at one on the canvas to change it.';
+      chipsEl.appendChild(p);
+      return;
+    }
+    free.forEach(function (o) {
+      var m = bestMachine(o), lv = level(o);
+      var b = document.createElement('button');
+      b.className = 'chip';
+      b.type = 'button';
+      b.dataset.outlet = o.id;
+      b.dataset.level = lv;
+      b.title = o.host + ' · ' + o.ip;
+      b.innerHTML = FACE + '<span><span class="nm">' + esc(o.name) + '</span>' +
+        '<span class="sub">' + (m ? 'looks like ' + esc(m.machine.name) : esc(o.ip)) + '</span></span>' +
+        (lv === 'idle' ? '' : '<span class="w">' + fmtW(watts(o)) + '</span>') +
+        (m ? '<span class="dot"></span>' : '');
+      chipsEl.appendChild(b);
+    });
+  }
+
+  function paintScores() {
+    var rows = [
+      ['TableSaw', 'Table Saw'], ['planer', 'Planer'], ['Jointr', 'Jointer'],
+      // 0.57 — the case that made the threshold worth measuring. The first
+      // mockup's 0.62 bar dropped this one; the nearest FALSE pair is 0.29.
+      ['tabel saw', 'Table Saw'],
+      ['Miter Saw', 'Table Saw'], ['Bench light', 'Table Saw']
+    ];
+    document.getElementById('scores').innerHTML = rows.map(function (r) {
+      var s = score(r[0], r[1]), ok = s >= MATCH_MIN;
+      // Flag the band between the two bars: these are the matches the first
+      // mockup's 0.62 would have thrown away.
+      var lost = ok && s < 0.62;
+      return '<tr><td>' + esc(r[0]) + '</td><td>' + esc(r[1]) + '</td>' +
+             '<td class="n">' + s.toFixed(2) + '</td>' +
+             '<td class="' + (ok ? 'ok' : 'no') + '">' +
+             (ok ? (lost ? 'offered — 0.62 lost it' : 'offered') : '—') + '</td></tr>';
+    }).join('');
+  }
+
+  // ── drag a chip onto a machine ─────────────────────────────────────────────
+  var drag = null;
+  chipsEl.addEventListener('pointerdown', function (e) {
+    var chip = e.target.closest('.chip');
+    if (!chip) return;
+    e.preventDefault();
+    drag = { id: chip.dataset.outlet, moved: false, ghost: null, over: null, el: chip };
+    try { chip.setPointerCapture(e.pointerId); } catch (_) { /* fine without it */ }
+  });
+  document.addEventListener('pointermove', function (e) {
+    if (!drag) return;
+    if (!drag.moved) {
+      drag.moved = true;
+      drag.ghost = drag.el.cloneNode(true);
+      drag.ghost.classList.add('ghost');
+      document.body.appendChild(drag.ghost);
+      drag.el.style.opacity = '0.3';
+    }
+    drag.ghost.style.left = e.clientX + 'px';
+    drag.ghost.style.top  = e.clientY + 'px';
+    var under = document.elementFromPoint(e.clientX, e.clientY);
+    var d = under && under.closest ? under.closest('.dock') : null;
+    if (drag.over && drag.over !== d) drag.over.classList.remove('drop');
+    if (d) d.classList.add('drop');
+    drag.over = d;
+  });
+  document.addEventListener('pointerup', function () {
+    if (!drag) return;
+    if (drag.ghost) drag.ghost.remove();
+    drag.el.style.opacity = '';
+    if (drag.over) {
+      drag.over.classList.remove('drop');
+      dock(drag.id, drag.over.closest('.machine').dataset.machine);
+      armed = null;
+    } else if (!drag.moved) {
+      if (armed) { dock(drag.id, armed); armed = null; }
+      else openSheet(drag.id);
+    }
+    drag = null;
+    paint();
+  });
+
+  function dock(outletId, machineId) {
+    var prev = outletFor(machineId);
+    if (prev) prev.dock = null;               // one machine, one plug
+    outletById(outletId).dock = machineId;
+  }
+
+  document.getElementById('matchall').addEventListener('click', function () {
+    // Strongest pairs first, globally — greedy in list order lets a weak match
+    // consume the machine a perfect one wanted.
+    var pairs = [];
+    outlets.forEach(function (o) {
+      if (o.dock) return;
+      machines.forEach(function (m) {
+        if (outletFor(m.id)) return;
+        var s = score(o.name, m.name);
+        if (s >= MATCH_MIN) pairs.push({ o: o, m: m, s: s });
+      });
+    });
+    pairs.sort(function (x, y) { return y.s - x.s; });
+    var usedM = {}, usedO = {};
+    pairs.forEach(function (p) {
+      if (usedM[p.m.id] || usedO[p.o.id]) return;
+      usedM[p.m.id] = usedO[p.o.id] = 1;
+      p.o.dock = p.m.id;
+    });
+    paint();
+  });
+
+  document.getElementById('reset').addEventListener('click', function () {
+    outlets = seedOutlets();
+    machines.forEach(function (m) { m.forcedOn = false; });
+    armed = revealed = null; closeSheet(); paint();
+  });
+
+  // ── system rail ────────────────────────────────────────────────────────────
+  function paintRail() {
+    var html = '<button data-sys="" class="' + (focusSys ? '' : 'on') + '">Whole shop' +
+               '<span class="note">' + SYSTEMS.length + ' collectors</span></button><div class="sep"></div>';
+    SYSTEMS.forEach(function (s) {
+      html += '<button data-sys="' + s.id + '" class="' + (focusSys === s.id ? 'on' : '') + '">' +
+              esc(s.name) + '<span class="note">' + esc(s.note) + '</span></button>';
+    });
+    html += '<div class="sep"></div><button data-add="1">＋ Add a system<span class="note">new collector</span></button>';
+    html += '<span class="hint">' + (focusSys
+      ? 'Plumbing outside this system is dimmed. Machines stay lit — the saw is in both.'
+      : 'Every system drawn. Pick one to work on it.') + '</span>';
+    document.getElementById('rail').innerHTML = html;
+  }
+  document.getElementById('rail').addEventListener('click', function (e) {
+    var b = e.target.closest('button');
+    if (!b) return;
+    if (b.dataset.add !== undefined) {
+      // A system IS its collector — that's what every graph invariant is rooted at,
+      // so adding one starts there and everything else is drawn from it.
+      alert('A new system starts with its collector. Draw a run from it — everything else follows.\n\n(Out of scope for this mockup: it shows the two that exist.)');
+      return;
+    }
+    focusSys = b.dataset.sys || null;
+    paint();
+  });
+
+  // ── the sheet: trip point ──────────────────────────────────────────────────
+  var root = document.getElementById('sheet-root');
+  var open = null;
+  function openSheet(outletId) { open = outletId; paintSheet(); }
+  function closeSheet() { open = null; root.innerHTML = ''; }
+
+  var MAXW = 2400;
+  function pos(x) { return Math.min(100, Math.pow(Math.max(x, 0) / MAXW, 0.45) * 100); }
+
+  function paintSheet() {
+    if (!open) { root.innerHTML = ''; return; }
+    var o = outletById(open), m = o.dock ? machineById(o.dock) : null, w = watts(o);
+    root.innerHTML =
+      '<div class="sheet-bg" data-close="1"></div>' +
+      '<div class="sheet" role="dialog" aria-label="Plug settings">' +
+        '<div class="hd">' + FACE +
+          '<div class="ttl">' + esc(o.name) + '<div class="meta">' + esc(o.host) + ' · ' + esc(o.ip) + '</div></div>' +
+          '<span class="now">' + fmtW(w) + '</span></div>' +
+        (m
+          ? '<div class="row"><span>On <b>' + esc(m.name) + '</b></span>' +
+            '<button class="act" data-undock="1">Unpair</button></div>'
+          : '<div class="row"><span>Not on a machine yet</span></div>') +
+        '<div class="sect">' +
+          '<div class="row"><span>Call it running above</span><b id="thrv">' + o.trip + ' W</b></div>' +
+          '<div class="meter"><span class="fill" style="width:' + pos(w) + '%"></span>' +
+            '<span class="thr" id="thrm" style="left:' + pos(o.trip) + '%"></span></div>' +
+          '<div class="scale"><span>0</span><span>100 W</span><span>600 W</span><span>2.4 kW</span></div>' +
+          '<input type="range" id="thr" min="0" max="2000" step="5" value="' + o.trip + '">' +
+          '<p class="why">100 W suits most machines. Raise it if this one idles above the line ' +
+            'without cutting anything.</p>' +
+        '</div>' +
+        (m ? '<div class="sect"><div class="row"><span>Pretend it is running</span>' +
+             '<button class="act" data-run="1">' + (o.on ? 'Switch off' : 'Switch on') + '</button></div>' +
+             '<p class="why">Mockup only — real plugs report their own draw.</p></div>' : '') +
+        '<div class="nav"><button data-close="1" class="grow">Done</button></div>' +
+      '</div>';
+    root.querySelector('#thr').addEventListener('input', function (e) {
+      o.trip = +e.target.value;
+      root.querySelector('#thrv').textContent = o.trip + ' W';
+      root.querySelector('#thrm').style.left = pos(o.trip) + '%';
+      paintMachines(); paintDucts();
+    });
+  }
+  root.addEventListener('click', function (e) {
+    if (!open) return;
+    var o = outletById(open);
+    var el = e.target.closest('[data-close],[data-undock],[data-run]');
+    if (!el) return;
+    if (el.dataset.undock) { o.dock = null; closeSheet(); }
+    else if (el.dataset.run) { o.on = !o.on; paintSheet(); }
+    else closeSheet();
+    paint();
+  });
+
+  // ── paint ──────────────────────────────────────────────────────────────────
+  function paint() { paintRail(); paintMachines(); paintDucts(); paintTray(); }
+  paintScores();
+  paint();
+  // Watts drift, so the rows have to be repainted even when nothing was touched.
+  setInterval(function () { if (!drag) { paintMachines(); paintTray(); } }, 900);
+})();
+</script>
