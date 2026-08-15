@@ -237,23 +237,31 @@ const outletsFor = (kind: MenuKind): number => kind === 'linear' ? 4 : kind === 
     .dock.armed .dock-bg { stroke: var(--accent); stroke-dasharray: none; }
 
     /* ── plug tray ─────────────────────────────────────────────────────────── */
-    .tray { flex: 0 0 auto; background: var(--surface); border-top: 1px solid var(--border);
-            padding: 10px 12px 11px; }
+    /* ONE LINE, and it shares the band with the board rail rather than claiming a
+       shelf of its own. It was a head row plus two wrapped rows of chips — 165px
+       of a 812px phone, a fifth of the screen, to say "here are two plugs".
+       Everything is on the strip now and the chips scroll sideways. */
+    .tray { flex: 0 0 auto; display: flex; align-items: center; gap: 8px;
+            background: var(--surface); border-top: 1px solid var(--border);
+            padding: 5px 10px; min-height: 38px; }
     .tray.armed { border-top-color: var(--accent); }
-    .tray-head { display: flex; align-items: center; gap: 9px; margin-bottom: 8px; flex-wrap: wrap; }
-    .tray-head .t { font-size: 13px; font-weight: 600; }
-    .tray-head .n { font-size: 11.5px; color: var(--muted); }
+    .tray .t { font-size: 12px; font-weight: 600; flex: 0 0 auto; }
+    .tray .n { font-size: 11px; color: var(--muted); flex: 0 0 auto; }
     .tray.armed .n { color: var(--accent); }
-    .tray-head .act { background: var(--bg); border: 1px solid var(--border); color: var(--text);
-                      border-radius: 8px; padding: 5px 11px; font-size: 12px; }
-    .tray-head .act:first-of-type { margin-left: auto; }
-    .tray-head .act.primary { border-color: var(--accent); color: var(--accent); }
-    .tray-head .act:disabled { opacity: 0.4; }
-    .chips { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
-    .chip { display: flex; align-items: center; gap: 6px; background: var(--bg);
-            border: 1px solid var(--border); border-radius: 9px; padding: 4px 9px;
-            color: var(--text); font-size: 12.5px; cursor: grab; touch-action: none; }
-    .chip .face { width: 14px; height: 14px; color: var(--muted); flex: 0 0 auto; }
+    .tray .act { background: var(--bg); border: 1px solid var(--border); color: var(--text);
+                 border-radius: 7px; padding: 4px 9px; font-size: 11.5px; flex: 0 0 auto; }
+    .tray .act.primary { border-color: var(--accent); color: var(--accent); }
+    .tray .act:disabled { opacity: 0.4; }
+    /* The chips take the slack and scroll; the buttons never get pushed off. */
+    .chips { display: flex; gap: 5px; align-items: center; flex: 1; min-width: 0;
+             overflow-x: auto; scrollbar-width: none; padding: 1px 0; }
+    .chips::-webkit-scrollbar { display: none; }
+    .chip { flex: 0 0 auto; }
+    .chip { display: flex; align-items: center; gap: 5px; background: var(--bg);
+            border: 1px solid var(--border); border-radius: 8px; padding: 3px 8px;
+            color: var(--text); font-size: 12px; cursor: grab; touch-action: none;
+            white-space: nowrap; max-width: 40vw; overflow: hidden; text-overflow: ellipsis; }
+    .chip .face { width: 13px; height: 13px; color: var(--muted); flex: 0 0 auto; }
     .chip .face .shell { fill: none; stroke: currentColor; stroke-width: 1.6; }
     .chip .face .slot { fill: currentColor; opacity: 0.75; }
     .chip .w { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
@@ -715,12 +723,8 @@ const outletsFor = (kind: MenuKind): number => kind === 'linear' ? 4 : kind === 
          and any name-match hint are in the tooltip. They were on the chip at first
          and turned a glanceable strip into three rows of prose. -->
     <div class="tray" *ngIf="showTray" [class.armed]="armedTool">
-      <div class="tray-head">
-        <span class="t">Smart plugs</span>
-        <span class="n">{{ trayNote() }}</span>
-        <button class="act primary" [disabled]="!canMatch()" (click)="matchByName()">Match by name</button>
-        <button class="act" [disabled]="scanning" (click)="scanOutlets()">{{ scanning ? 'Scanning…' : '↻ Rescan' }}</button>
-      </div>
+      <span class="t">Plugs</span>
+      <span class="n">{{ trayNote() }}</span>
       <div class="chips">
         <button *ngFor="let o of freeOutlets()" class="chip" [attr.data-level]="chipLevel(o)"
                 [title]="o.hostname + ' · ' + o.ip"
@@ -730,9 +734,13 @@ const outletsFor = (kind: MenuKind): number => kind === 'linear' ? 4 : kind === 
           <span class="w" *ngIf="chipLevel(o) !== 'idle'">{{ chipWatts(o) }}</span>
         </button>
         <span class="tray-empty" *ngIf="!freeOutlets().length">
-          {{ scanned ? 'Every plug found is already on a machine.' : 'Tap Rescan to look for smart plugs.' }}
+          {{ scanned ? 'all paired' : 'none found yet' }}
         </span>
       </div>
+      <button class="act primary" [disabled]="!canMatch()" (click)="matchByName()">Match</button>
+      <button class="act" [disabled]="scanning" (click)="scanOutlets()" title="Scan again">
+        {{ scanning ? '…' : '↻' }}
+      </button>
     </div>
     <!-- The chip under the pointer while dragging one onto a machine. -->
     <div class="chip ghost" *ngIf="chipDrag as cd" [style.left.px]="cd.x" [style.top.px]="cd.y">
@@ -998,8 +1006,41 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     if (!wrap || !this.contentW || !this.contentH) return 1;
     // A few px of air, so the outermost glyph isn't welded to the bezel.
     const M = 10;
-    const z = Math.min((wrap.clientWidth - M) / this.contentW, (wrap.clientHeight - M) / this.contentH);
+    // Fit what is actually DRAWN, not the padded layout box. contentW/H carry PAD
+    // on every side — around 150 units of nothing on a 650-unit shop — and fitting
+    // to those shrank the drawing by a fifth for no reason. On a phone that was the
+    // difference between 47% and 56%, which is the difference between reading a
+    // tool's name and not. The padding still exists in the scroll extent, so there
+    // is room to drag past the edge; it just doesn't get a vote on the scale.
+    const ink = this.inkExtent();
+    const z = Math.min((wrap.clientWidth - M) / ink.w, (wrap.clientHeight - M) / ink.h);
     return Math.max(this.ZOOM_MIN, Math.min(1, z));
+  }
+
+  /** The bounding box of the drawing itself — glyphs and the board rail — with a
+   *  little air, in board units. */
+  private inkExtent(): { w: number; h: number } {
+    if (!this.nodes.length) return { w: this.contentW, h: this.contentH };
+    let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+    for (const n of this.nodes) {
+      // A UNIT's origin is its FIRST OUTLET, not its centre: the body runs right
+      // from there and overhangs by GATE_PAD at each end. Treating its half-width
+      // as symmetric invented ~300 units of empty canvas to the LEFT of a 4-outlet
+      // sliding gate, and the fit shrank the shop to 36% to make room for nothing.
+      const left  = n.isUnit ? GATE_PAD : this.halfW(n);
+      const right = n.isUnit ? (n.span - 1) * CELL + GATE_PAD : this.halfW(n);
+      const hh = this.halfH(n);
+      x0 = Math.min(x0, this.nx(n) - left); x1 = Math.max(x1, this.nx(n) + right);
+      // Tools carry a name above and the plug row inside, both already in halfH;
+      // gates carry their name ABOVE the body, which halfH doesn't know about.
+      y0 = Math.min(y0, this.ny(n) - hh - 16); y1 = Math.max(y1, this.ny(n) + hh);
+    }
+    const AIR = 24;
+    return {
+      w: Math.max(1, x1 - x0 + AIR * 2),
+      // The rail sits above the drawing and has to be on screen too.
+      h: Math.max(1, y1 - y0 + AIR * 2 + RAIL_H),
+    };
   }
   /** True when we're already showing the whole board, within rounding. */
   atFit(): boolean { return Math.abs(this.zoom - this.fitZoom()) < 0.01; }
@@ -1492,7 +1533,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     }
     if (this.matchNote) return this.matchNote;
     const left = this.unpairedMachines().length;
-    return `${this.freeOutlets().length} free · ${left} machine${left === 1 ? '' : 's'} without one`;
+    return `${this.freeOutlets().length} free · ${left} to place`;
   }
   private matchNote = '';
 
@@ -1508,8 +1549,8 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     }
     const left = this.unpairedMachines().length;
     this.matchNote = pairs.length
-      ? `Assigned ${pairs.length}${left ? ` · ${left} still to do by hand` : ' · all done'}`
-      : 'No plug name looked like a machine — drag them across';
+      ? `paired ${pairs.length}${left ? ` · ${left} to drag` : ' · all done'}`
+      : 'no clear name match — drag them across';
     if (pairs.length) { this.afterMutation(null); }
   }
 
@@ -2762,7 +2803,13 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
    *  It sat level with the gate's centre until 2026-08-15, which put it exactly
    *  where a horizontal duct leaves the same edge — tab and duct overlapping,
    *  reading as one object. The corner is clear of both the outgoing run and the
-   *  (−) badge on the opposite top corner. */
+   *  (−) badge on the opposite top corner.
+   *
+   *  It STRADDLES that corner rather than floating outside it. Held off the edge
+   *  it read as a separate thing parked in the gap, and on a manifold — whose body
+   *  ends well left of its own outlets — the tab landed nearer the next tool than
+   *  its own gate: the cable looked like it went to the jointer. Half-in, half-out
+   *  of the body, there is nothing to misread. */
   gateTabs(): Array<{ id: string; x: number; y: number; channel: string; wired: boolean }> {
     return this.nodes.filter(n => this.isGate(n)).map(n => {
       const el = this.elem(n.id);
@@ -2776,7 +2823,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     });
   }
   private tabX(n: NodeVM): number {
-    return this.nx(n) + (n.isUnit ? (n.span - 1) * CELL + GATE_PAD : this.halfW(n)) + 12;
+    return this.nx(n) + (n.isUnit ? (n.span - 1) * CELL + GATE_PAD : this.halfW(n));
   }
   /** Level with the gate's bottom edge, not its centre — see gateTabs(). */
   private tabY(n: NodeVM): number { return this.ny(n) + this.halfH(n); }
