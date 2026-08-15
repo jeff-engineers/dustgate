@@ -125,8 +125,47 @@ export function tabPos(gate: Pt, halfW: number): Pt {
  * measured only from the tab lands inside the body; it only bites now in the
  * cramped case, where the lane is pushed back down toward the gate.
  */
-export function cableRun(from: Pt, to: Pt, rank: number, bias = 0, clear = 0): Pt[] {
-  if (Math.abs(from.x - to.x) < 0.5) return [from, to];      // straight drop
+export type SegCost = (a: Pt, b: Pt) => number;
+
+/** Which vertical corridor a cable comes down in.
+ *
+ *  It used to be "the tab's own x, always", which is right until something stands
+ *  between the port and the tab. Stacking the shop down the page made that the
+ *  common case rather than the rare one: a gate three bands down is a long drop, and
+ *  every piece in the bands above it is in the way. The reference shop had a cable
+ *  descending straight through the main gate and the table saw.
+ *
+ *  So the drop is chosen instead of assumed. Candidates are the tab's own column
+ *  first, then the GUTTERS between grid columns working outward — a gutter is the
+ *  one vertical line a piece can't occupy, since a unit's body stops GATE_PAD past
+ *  its last outlet and a tool is narrower still. Each is scored by what the caller
+ *  says it costs to cross, plus a small penalty for straying from the tab, so a
+ *  cable only leaves its own column when something is actually in it and comes back
+ *  as soon as it can. */
+function pickDrop(to: Pt, lane: number, cost: SegCost): number {
+  const k = Math.floor((to.x - PAD) / CELL);
+  const gutter = PAD + k * CELL + CELL / 2;
+  const cands = [to.x];
+  for (let i = 0; i < 8; i++) {
+    cands.push(gutter + i * CELL);
+    const left = gutter - (i + 1) * CELL;
+    if (left > 0) cands.push(left);
+  }
+  let best = to.x, bestScore = Infinity;
+  for (const x of cands) {
+    const score = cost({ x, y: lane }, { x, y: to.y })      // the descent
+                + cost({ x, y: to.y }, { x: to.x, y: to.y }) // the jog back to the tab
+                + Math.abs(x - to.x) / CELL;                 // …and stay near it
+    if (score < bestScore) { bestScore = score; best = x; }
+  }
+  return best;
+}
+
+export function cableRun(from: Pt, to: Pt, rank: number, bias = 0, clear = 0, cost?: SegCost): Pt[] {
+  const price = cost ?? (() => 0);
+  // Straight drop — but only if the column is actually empty; otherwise fall through
+  // and let the lane logic route around whatever is standing in it.
+  if (Math.abs(from.x - to.x) < 0.5 && price(from, to) === 0) return [from, to];
 
   // Gate ABOVE the board. Unreachable while every board sits in the rail, which is
   // above the whole grid — kept because it is the correct answer if a board is ever
@@ -150,7 +189,10 @@ export function cableRun(from: Pt, to: Pt, rank: number, bias = 0, clear = 0): P
   // Unless there is no room at all, in which case take the plain dog-leg and let the
   // pieces sort themselves out.
   if (lane <= from.y) lane = (from.y + to.y) / 2;
-  return [from, { x: from.x, y: lane }, { x: to.x, y: lane }, to];
+  const drop = pickDrop(to, lane, price);
+  if (Math.abs(drop - to.x) < 0.5) return [from, { x: from.x, y: lane }, { x: to.x, y: lane }, to];
+  // Detoured: down a clear gutter, then in along the tab's own row.
+  return [from, { x: from.x, y: lane }, { x: drop, y: lane }, { x: drop, y: to.y }, to];
 }
 
 /** Lane order for the cables off one board: rank 0 is the LONGEST horizontal

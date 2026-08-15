@@ -9,6 +9,7 @@ import {
   cablePath, cableRun, crossing, portExit, portPos, PORT_STUB,
   railSlot, rankByTravel, segmentsOf, slotAt, BOARD_SLOT, RAIL_H, RAIL_X0,
 } from './wire-geometry';
+import { CELL } from '../routing/geometry';
 
 let failures = 0, checks = 0;
 function ok(name: string, cond: boolean, detail?: string): void {
@@ -222,6 +223,34 @@ group('W9 a board below its gate (off-rail) still leaves from the underside');
   // Two cables off one board must not share the detour lane.
   const other = cableRun(portExit(board, 1), P(300, 280), 1);
   ok('ranked detours get their own lane', run[1].y !== other[1].y, `${run[1].y} vs ${other[1].y}`);
+}
+
+// ── W10 · the drop goes round what's standing in it ─────────────────────────
+group('W10 a cable pays to cross a piece, so it comes down beside one instead');
+{
+  const from = P(136, 60), to = P(496, 604);      // a tab five bands down
+  // A tool sitting in the tab's own column, halfway down the drop.
+  const box = { x0: 496 - 38, y0: 246, x1: 496 + 38, y1: 314 };
+  const cost = (a: Pt, b: Pt): number => {
+    const vert = Math.abs(a.x - b.x) < 0.5;
+    if (!vert) return 0;
+    return a.x > box.x0 && a.x < box.x1
+        && Math.max(a.y, b.y) > box.y0 && Math.min(a.y, b.y) < box.y1 ? 100 : 0;
+  };
+  const plain = cableRun(from, to, 0);
+  ok('with no cost model it still drops straight down the tab column',
+     plain.length === 4 && near(plain[2].x, to.x), JSON.stringify(plain));
+  const run = cableRun(from, to, 0, 0, 0, cost);
+  ok('a blocked column adds a bend', run.length === 5, JSON.stringify(run));
+  const dropX = run[2].x;
+  ok('the descent leaves the tool alone', cost(P(dropX, 100), P(dropX, 604)) === 0, String(dropX));
+  ok('and comes down in the gutter, not halfway across the shop',
+     Math.abs(dropX - to.x) < CELL, String(dropX));
+  ok('it still lands on the tab', near(run[4].x, to.x) && near(run[4].y, to.y));
+  ok('the jog back in runs along the tab row', near(run[3].y, to.y));
+  // Nothing in the way: no detour, no extra bend.
+  const clean = cableRun(from, P(496, 200), 0, 0, 0, cost);
+  ok('an empty column is left alone', clean.length === 4, JSON.stringify(clean));
 }
 
 console.log(`\n${checks - failures}/${checks} checks passed`);
