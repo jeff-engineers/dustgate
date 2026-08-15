@@ -42,10 +42,10 @@
   <!-- Every interactive handle stops propagation in its own pointerdown, so a
        pointerdown that reaches this element is BY DEFINITION on empty board —
        which makes it the pan gesture, with no hit-testing of our own. -->
-  <div class="canvas-wrap" #wrap (pointerdown)="onCanvasDown($event)">
+  <div class="canvas-wrap" #wrap (pointerdown)="vp.onCanvasDown($event)">
     <svg #svg class="canvas" *ngIf="nodes.length"
          [attr.viewBox]="'0 ' + (-RAIL_H) + ' ' + vbW + ' ' + (vbH + RAIL_H)"
-         [attr.width]="vbW * zoom" [attr.height]="(vbH + RAIL_H) * zoom">
+         [attr.width]="vbW * vp.zoom" [attr.height]="(vbH + RAIL_H) * vp.zoom">
       <defs>
         <pattern id="bdots" width="27" height="27" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r="1" fill="var(--border)"/></pattern>
       </defs>
@@ -248,7 +248,7 @@
          and font stay in BOARD px, and one transform puts them on the glyph at any
          zoom. namePos() already multiplies through, since left/top are wrap px. -->
     <input *ngIf="namedPiece() as np" class="nameedit" placeholder="Name"
-           [style.transform]="'translate(-50%, -50%) scale(' + zoom + ')'"
+           [style.transform]="'translate(-50%, -50%) scale(' + vp.zoom + ')'"
            [style.left.px]="namePos().left" [style.top.px]="namePos().top" [style.width.px]="nameW(np)"
            [ngModel]="np.name" (ngModelChange)="rename(np.id, $event)"
            (focus)="onNameFocus($event, np)" (blur)="onNameBlur($event, np)"
@@ -260,9 +260,9 @@
        and slides off the screen as soon as you pan — which is exactly what it
        did. Anchored to .stage instead, it stays put. -->
   <div class="zoomer" *ngIf="nodes.length">
-    <button (click)="zoomBy(1.25)" [disabled]="zoom >= ZOOM_MAX" title="Zoom in" aria-label="Zoom in">+</button>
-    <button class="pct" (click)="resetZoom()" title="Reset to 100%" aria-label="Reset zoom">{{ zoomPct() }}%</button>
-    <button (click)="zoomBy(0.8)" [disabled]="zoom <= ZOOM_MIN" title="Zoom out" aria-label="Zoom out">&minus;</button>
+    <button (click)="vp.zoomBy(1.25)" [disabled]="vp.zoom >= vp.ZOOM_MAX" title="Zoom in" aria-label="Zoom in">+</button>
+    <button class="pct" (click)="vp.resetZoom()" title="Reset to 100%" aria-label="Reset zoom">{{ vp.zoomPct() }}%</button>
+    <button (click)="vp.zoomBy(0.8)" [disabled]="vp.zoom <= vp.ZOOM_MIN" title="Zoom out" aria-label="Zoom out">&minus;</button>
   </div>
 
 </div>
