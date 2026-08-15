@@ -94,8 +94,21 @@ jobs:
           key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
       - name: Install PlatformIO
         run: pip install --upgrade platformio
-      - name: Compile firmware (all targets, incl. the servo-only node)
-        run: pio run -e esp32dev_servo -e esp32dev_wroom32 -e adafruit_feather_esp32s2 -e dustgate_node -e dustgate_node_c3
+      # Every env on the espressif32 platform, which is all of them but xiao_c5.
+      #
+      # xiao_c5 is deliberately NOT built here. It rides the pioarduino platform
+      # fork, which collides with espressif32 over package names, so it needs its
+      # own PLATFORMIO_CORE_DIR — 7.6 GB measured. That can't share this `pio run`
+      # (a core dir is one env var per process), and caching a second core that
+      # size would evict everything else from the repo's 10 GB cache budget. So
+      # the C5 is a local-only compile for now:
+      #
+      #   PLATFORMIO_CORE_DIR=~/.platformio-pioarduino pio run -e xiao_c5
+      #
+      # Its pin map is unverified against hardware anyway. Revisit if the node
+      # firmware starts changing often enough that a local-only check gets missed.
+      - name: Compile firmware (all espressif32 targets, incl. the servo-only node)
+        run: pio run -e esp32dev_servo -e esp32dev_wroom32 -e adafruit_feather_esp32s2 -e dustgate_node
       # Host tests for the pure C++ control layer. They need ArduinoJson, which
       # the `pio run` above has already fetched into .pio.nosync/libdeps.
       - name: Host tests (router, controller, nodebus/nodelink, shop, faults)

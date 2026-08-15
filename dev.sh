@@ -523,11 +523,12 @@ run_flash_node() {
   if [[ "$node_env" == "xiao_c5" ]]; then
     echo ""
     echo "  ⚠  The C5 rides the pioarduino platform, not the espressif32 one every"
-    echo "     other target uses. Both publish a package called"
-    echo "     framework-arduinoespressif32 into the same directory, so only one"
-    echo "     core can be installed at a time. The scripts now swap it in and out"
-    echo "     for you (first swap downloads, later ones are instant) — but never"
-    echo "     build this env alongside another in one pio command."
+    echo "     other target uses. The two collide over package names, so the fork"
+    echo "     gets its OWN core directory (~/.platformio-pioarduino) rather than"
+    echo "     sharing one — use_core_for_env sets it for you, and nothing in"
+    echo "     ~/.platformio is touched. First build there downloads ~7.6 GB."
+    echo "     A core dir is one env var per process, so this env can never share"
+    echo "     a pio run with another."
     echo "     Pin map: firmware/wiring/xiao-c5.md — UNVERIFIED against hardware."
   fi
   echo ""

@@ -214,7 +214,7 @@ for arg in "$@"; do
     # image at all — a node's entire interface is the /nodelink WebSocket, which
     # is exactly why it fits on a 4MB board. Credentials still go over serial.
     #
-    # --node=<env> names a different node board (xiao_c5, dustgate_node_c3, …).
+    # --node=<env> names a different node board — xiao_c5 is the other one today.
     # Bare --node keeps the default, which is the QT Py S3 that gets bench-tested.
     --node)   PIO_ENV="dustgate_node"; DO_UI=false; DO_FS=false ;;
     --node=*) PIO_ENV="${arg#--node=}"; DO_UI=false; DO_FS=false ;;
