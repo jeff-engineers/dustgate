@@ -83,9 +83,25 @@ svg.canvas { display: block; touch-action: none; }
 .node.dragging.bad .body, .node.dragging.bad .unit { stroke: var(--danger); stroke-width: 2.5; }
 .node.dragging.bad { opacity: 0.75; }
 .node .body, .node .unit { fill: var(--surface); stroke: var(--border-strong, #444); stroke-width: 1.5; }
+/* A MACHINE gets a dark azure ground; the ductwork stays grey.
+   Tools and gates were both a grey rounded rectangle differing mainly in
+   proportion, and proportion is the first thing to go when the drawing scales to
+   fit a phone — at 55% the bar and the box are two grey rectangles. Value and hue
+   survive that; shape doesn't.
+   Deliberately well short of the cable's own #38b6f0. At full saturation azure
+   means "wire" everywhere else on this canvas (cables, servo tabs, taken ports),
+   and a tool wearing it next to a live cable reads as wired or selected rather
+   than as a machine. Desaturated and dark, it reads as its own class of thing. */
+.node .tool-body { fill: #16262e; stroke: #2d6a86; }
 .node.sel .body, .node.sel .unit { stroke: var(--accent); stroke-width: 2.5; }
 .node.live .body, .node.live .unit { stroke: var(--success); }
 .glabel { fill: var(--text); font-size: 12.5px; text-anchor: middle; font-weight: 500; }
+/* A gate is infrastructure — it shouldn't compete with the machine names, which
+   are the things the woodworker actually thinks in. The rename field carries the
+   same treatment so the label doesn't change size under the cursor. */
+.glabel.gatename, .nameedit.gatename { font-size: 10.5px; font-weight: 500; letter-spacing: 0.07em;
+                                       text-transform: uppercase; }
+.glabel.gatename { fill: var(--muted); }
 .gsub   { fill: var(--muted); font-size: 10.5px; text-anchor: middle; }
 
 /* The plug row inside a tool body. One fact at a time: the plug's NAME when
@@ -93,12 +109,15 @@ svg.canvas { display: block; touch-action: none; }
    name from the line directly above and truncates the number that's actually
    changing. */
 .dock { cursor: pointer; }
-.dock-bg   { fill: var(--bg); stroke: var(--border); stroke-width: 1; stroke-dasharray: 3 2.5; }
+/* Recessed into the machine's own ground, so it belongs to the tool rather than
+   sitting on it. Follows the body's azure family for the neutral states only —
+   standby and live below still own their colours, which is what they're for. */
+.dock-bg   { fill: #0d1a20; stroke: #2d6a86; stroke-width: 1; stroke-dasharray: 3 2.5; }
 .dock-shell{ fill: none; stroke: var(--muted); stroke-width: 1.7; opacity: 0.85; }
 .dock-slot { fill: var(--muted); opacity: 0.8; }
 .dock-t    { fill: var(--muted); font-size: 9.5px; text-anchor: middle; }
 /* Paired: solid edge, and the colour carries the state. */
-.dock.idle .dock-bg    { stroke-dasharray: none; fill: var(--surface); }
+.dock.idle .dock-bg    { stroke-dasharray: none; fill: #17303c; }
 .dock.standby .dock-bg { stroke-dasharray: none; stroke: var(--accent); fill: rgba(240,165,0,0.12); }
 .dock.standby .dock-t, .dock.standby .dock-slot { fill: var(--accent); }
 .dock.standby .dock-shell { stroke: var(--accent); }
