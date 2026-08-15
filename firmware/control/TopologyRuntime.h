@@ -69,9 +69,21 @@
 
 namespace topo {
 
-// Synthetic wattage for a manually-switched-on machine. Above any real threshold
-// anyone would set (the schema's own default is 5 W).
-static const float kManualWatts = 100000.0f;
+// Synthetic wattage for a manually-switched-on machine.
+//
+// It has to clear that machine's OWN threshold and nothing more, so it is derived
+// per machine rather than being one enormous constant. It used to be 100000.0f —
+// "above any threshold anyone could set" — which was harmless only while nothing
+// displayed the number. /api/status publishes it as `watts`, the build canvas now
+// draws that on the tool, and a hand-switched tool read as 100.0 kW: 833 A at
+// 120 V, on a plug rated for 15.
+//
+// Three times the trip point makes the same activation decision and reads like a
+// machine. The floor keeps it strictly positive when a threshold is set to 0, so
+// "manually on" can never be indistinguishable from "drawing nothing".
+static inline float manualWattsFor(float threshold) {
+    return threshold > 0.0f ? threshold * 3.0f : 15.0f;
+}
 
 // Coast-down used when the collector element doesn't name one. Not zero on
 // purpose: every shop wants some, nobody has a UI to set it yet, and the
@@ -184,7 +196,7 @@ public:
         else    _manual.erase(machineId);
         // Comfortably over any plausible thresholdW; off returns it to 0 W, which
         // is also what a plug reports for a machine at rest.
-        ingest(_ctrl.setMachinePower(machineId, on ? kManualWatts : 0.0f));
+        ingest(_ctrl.setMachinePower(machineId, on ? manualWattsFor(_ctrl.machineThreshold(machineId)) : 0.0f));
         return true;
     }
 

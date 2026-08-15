@@ -358,7 +358,11 @@ function handler(req, res) {
       // is a machine even when it has one port.
       const known = SHOP.machinesOf(td.topology).some(m => m.id === data.toolId);
       if (!known) return json(res, { error: `no tool '${data.toolId}'` }, 404);
-      TD.setToolPower(td, data.toolId, data.on ? 100000 : 0);
+      // 3x the trip point, not a 100000 sentinel — the canvas draws this number
+      // on the tool, and 100 kW is 833 A at 120 V. Matches the firmware's
+      // manualWattsFor() and the demo service.
+      const trip = TD.toolThreshold(td.topology, data.toolId) || 0;
+      TD.setToolPower(td, data.toolId, data.on ? Math.round((trip > 0 ? trip * 3 : 15)) : 0);
       json(res, { ok: true });
     });
   }
