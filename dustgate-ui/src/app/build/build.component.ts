@@ -388,16 +388,10 @@ const outletsFor = (kind: MenuKind): number => kind === 'linear' ? 4 : kind === 
          Boards — the rail's own "+ Find boards" goes to the same place. -->
     <div class="bar">
       <span class="title">Shop layout</span>
-      <div class="seg" role="group" aria-label="Canvas layer">
-        <button [class.on]="layer === 'ducts'" (click)="setLayer('ducts')" [attr.aria-pressed]="layer === 'ducts'">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 8h9M17 8h3"/><circle cx="15" cy="8" r="2"/><path d="M4 16h4M12 16h8"/><circle cx="10" cy="16" r="2"/></svg>
-          Ducts
-        </button>
-        <button [class.on]="layer === 'wiring'" (click)="setLayer('wiring')" [attr.aria-pressed]="layer === 'wiring'">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5 4v6a4 4 0 0 0 4 4h6a4 4 0 0 1 4 4v2"/><rect x="2.5" y="2" width="5" height="4" rx="1"/><rect x="16.5" y="18" width="5" height="4" rx="1"/></svg>
-          Wiring
-        </button>
-      </div>
+      <!-- The Ducts/Wiring toggle is gone (2026-08-15). Once neither layer dimmed
+           the other, the switch decided nothing: both were drawn, both took the
+           pointer, and its only remaining effect was to block dragging a piece
+           while "in wiring". One canvas, everything live. -->
       <input #fileInput type="file" accept="application/json,.json" hidden (change)="onImportFile($event)"/>
       <button class="ico" (click)="undo()" [disabled]="!canUndo" title="Undo (Ctrl/Cmd-Z)" aria-label="Undo">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h10a5 5 0 0 1 0 10h-6"/><path d="M8 4 4 8l4 4"/></svg>
@@ -751,7 +745,6 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   // ── wiring layer ────────────────────────────────────────────────────────────
   /** Which view of the canvas is on. The pieces and their cells are identical in
    *  both — only what's drawn over them changes. */
-  layer: 'ducts' | 'wiring' = 'ducts';
   /** controllerId → slot index along the rail. Boards are one-dimensional: the rail
    *  sits above the whole grid, which is what makes "a cable always leaves the
    *  underside of its port and goes down" an invariant instead of a hope. */
@@ -847,9 +840,9 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     this.loadBoardCells(this.topo);
     this.syncNodes();
     await this.mergePairedBoards();
-    // ?layer=wiring — how /boards hands you back, so you return to the view the
-    // boards actually belong to instead of the duct drawing.
-    if (this.route.snapshot.queryParamMap.get('layer') === 'wiring') this.setLayer('wiring');
+    // /boards used to hand you back with ?layer=wiring so you'd land on the view
+    // the boards belonged to. There is only one view now, so the parameter is
+    // ignored — harmlessly, for any link still carrying it.
     try { this.applyLive(await this.api.getStatus()); } catch { /* not running */ }
     // KEEP it live. This used to be a single fetch at load, so the duct highlighting
     // was a snapshot from whenever the page opened — and the plug row, which shows a
@@ -1627,9 +1620,6 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
 
   // ── drag (reposition) / tap ───────────────────────────────────────────────────
   startDrag(evt: PointerEvent, n: NodeVM): void {
-    // In the wiring view the plumbing is a backdrop, not something you edit — the
-    // only handle on a piece there is its servo tab.
-    if (this.layer === 'wiring') return;
     evt.preventDefault(); evt.stopPropagation();
     this.selectedId = n.id; this.menu = null;
     this.dragId = n.id;
@@ -2038,7 +2028,6 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   // collector or off a gate/manifold/slider now that the + handles are gone.
   outputDots(): ODot[] {
     const out: ODot[] = [];
-    if (this.layer !== 'ducts') return out;                    // plumbing affordance
     if (this.dragId || this.bdrag || this.odrag) return out;
     for (const n of this.nodes) {
       const el = this.elem(n.id);
@@ -2327,7 +2316,6 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
    *  one branches the run right there. */
   branchDots(): BDot[] {
     const out: BDot[] = [];
-    if (this.layer !== 'ducts') return out;                    // plumbing affordance
     if (this.dragId || this.bdrag || this.odrag) return out;   // hide while dragging
     const seen = new Set<string>();
     const push = (x: number, y: number, childId: string, axis: 'h' | 'v', elbow?: boolean, legs?: Cell[]) => {
@@ -2433,15 +2421,6 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   // Everything below draws or edits the SAME two fields a gate has always had —
   // controllerId and servo.channel — and adds one genuinely new thing: where each
   // board physically sits.
-
-  setLayer(l: 'ducts' | 'wiring'): void {
-    if (this.layer === l) return;
-    this.layer = l;
-    this.selectedId = null; this.closeMenu();
-    // Nothing to place any more: every paired board has a slot in the rail from the
-    // moment it exists. Placement was a decision the rail makes unnecessary.
-    this.ensureSlots();
-  }
 
   private controllersRaw(): RawEl[] { return ((this.topo as { controllers?: RawEl[] } | null)?.controllers) ?? []; }
 
@@ -2566,15 +2545,20 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     return d.mode === 'toGate' ? d.overGate === gateId : d.gateId === gateId;
   }
 
-  /** Gates get a tab on their right-hand side: the servo, which is the actual
-   *  electrical end of a blast gate. */
+  /** Gates get a tab on their BOTTOM-RIGHT corner: the servo, which is the actual
+   *  electrical end of a blast gate.
+   *
+   *  It sat level with the gate's centre until 2026-08-15, which put it exactly
+   *  where a horizontal duct leaves the same edge — tab and duct overlapping,
+   *  reading as one object. The corner is clear of both the outgoing run and the
+   *  (−) badge on the opposite top corner. */
   gateTabs(): Array<{ id: string; x: number; y: number; channel: string; wired: boolean }> {
     return this.nodes.filter(n => this.isGate(n)).map(n => {
       const el = this.elem(n.id);
       const linear = el?.['kind'] === 'linear';
       const ch = linear ? SERVO_PORTS : (((el?.['servo'] as RawEl | undefined)?.['channel'] as number) ?? 0);
       return {
-        id: n.id, x: this.tabX(n), y: this.ny(n),
+        id: n.id, x: this.tabX(n), y: this.tabY(n),
         channel: linear ? 'ST' : String(ch),
         wired: this.boardSlots.has(this.boardOf(n.id)),
       };
@@ -2583,6 +2567,8 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   private tabX(n: NodeVM): number {
     return this.nx(n) + (n.isUnit ? (n.span - 1) * CELL + GATE_PAD : this.halfW(n)) + 12;
   }
+  /** Level with the gate's bottom edge, not its centre — see gateTabs(). */
+  private tabY(n: NodeVM): number { return this.ny(n) + this.halfH(n); }
   private boardOf(gateId: string): string {
     return ((this.elem(gateId)?.['controllerId'] as string) ?? this.defaultControllerId());
   }
@@ -2612,7 +2598,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       const legs: Array<{ gateId: string; channel: number; from: Pt; to: Pt }> = [];
       for (const [ch, gateId] of b.used) {
         const n = this.byId.get(gateId); if (!n) continue;
-        const to = { x: this.tabX(n), y: this.ny(n) };
+        const to = { x: this.tabX(n), y: this.tabY(n) };
         legs.push({
           gateId, channel: ch,
           from: portExit({ x: this.bx(b), y: this.by(b) }, ch),
@@ -2635,7 +2621,6 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
 
   // ── dragging a board ────────────────────────────────────────────────────────
   onBoardDown(evt: PointerEvent, b: BoardVM): void {
-    if (this.layer !== 'wiring') return;
     evt.preventDefault(); evt.stopPropagation();
     const p = this.toSvg(evt);
     this.bodrag = { id: b.id, dx: p.x - b.x, dy: 0, fromTray: false, moved: false };
@@ -2683,7 +2668,6 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
 
   /** From a gate's tab: the loose end is the board end, so we're hunting a port. */
   onTabDown(evt: PointerEvent, t: { id: string; x: number; y: number }): void {
-    if (this.layer !== 'wiring') return;
     evt.preventDefault(); evt.stopPropagation();
     const p = { x: t.x, y: t.y };
     this.wireDrag = { mode: 'toPort', gateId: t.id, from: p, to: p, over: null, overGate: null };
@@ -2695,7 +2679,6 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   /** From a board port: the loose end is the gate end, so we're hunting a tab. An
    *  occupied port picks up the cable that's already there. */
   onPortDown(evt: PointerEvent, b: BoardVM, ch: number): void {
-    if (this.layer !== 'wiring') return;
     evt.preventDefault(); evt.stopPropagation();
     const p = portExit({ x: this.bx(b), y: this.by(b) }, ch);
     this.wireDrag = { mode: 'toGate', port: { boardId: b.id, channel: ch }, from: p, to: p, over: null, overGate: null };
