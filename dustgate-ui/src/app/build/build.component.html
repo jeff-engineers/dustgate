@@ -61,8 +61,14 @@
            ground's top-left cell where you can read its name. -->
       <g class="grounds" *ngIf="systemGrounds().length > 1">
         <rect *ngFor="let g of systemGrounds()" class="ground"
-              [attr.x]="g.x" [attr.y]="g.y" [attr.width]="g.w" [attr.height]="g.h" rx="14"
+              x="8" [attr.y]="g.y" [attr.width]="vbW - 16" [attr.height]="g.h" rx="14"
               (pointerdown)="deselect()"/>
+        <!-- The line between two systems, naming the one below it. The blank row was
+             doing this alone and stopped the moment something was dragged into it. -->
+        <g *ngFor="let s of systemSeparators()" class="sysdiv">
+          <line x1="8" [attr.y1]="s.y" [attr.x2]="vbW - 16" [attr.y2]="s.y"/>
+          <text x="20" [attr.y]="s.y - 7">{{ s.name }}</text>
+        </g>
       </g>
 
       <!-- The board rail. Above the whole grid, in negative y, so every cell

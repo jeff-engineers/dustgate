@@ -320,10 +320,57 @@ export class CanvasViewport {
   /** Trackpad pinch and Ctrl-wheel arrive as a wheel with ctrlKey — that's the only
    *  signal a pinch gesture gives on desktop. A plain wheel is left alone so the
    *  canvas still scrolls normally. */
+  /**
+   * The wheel, which on a desktop is the whole navigation story.
+   *
+   * ctrl (or ⌘) + wheel is the trackpad pinch — every browser reports that gesture
+   * as a wheel event with ctrlKey set — so it zooms.
+   *
+   * Anything else pans, and it has to be done by hand for the same reason the pan
+   * gesture is: the canvas took `touch-action: none` to arbitrate drags itself,
+   * which gave up native scrolling with it. That left the desktop with press-and-
+   * drag as the ONLY way to move around a shop taller than the screen, which is
+   * not what a mouse or a trackpad expects. A trackpad sends deltaX itself; a mouse
+   * has one wheel and the convention for its other axis is shift.
+   */
   private readonly wheelH = (e: WheelEvent): void => {
-    if (!e.ctrlKey) return;
+    if (e.ctrlKey || e.metaKey) {
+      e.preventDefault();
+      this.userZoomed = true;
+      this.setZoom(this.zoom * Math.exp(-e.deltaY / 240), e.clientX, e.clientY);
+      return;
+    }
+    const wrap = this.host.wrapEl(); if (!wrap) return;
+    // deltaMode 1 is lines and 2 is pages — Firefox uses lines for a real mouse.
+    const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? wrap.clientHeight : 1;
+    const sideways = e.shiftKey && !e.deltaX;
+    const dx = (sideways ? e.deltaY : e.deltaX) * unit;
+    const dy = (sideways ? 0 : e.deltaY) * unit;
+    const canX = wrap.scrollWidth - wrap.clientWidth > 1;
+    const canY = wrap.scrollHeight - wrap.clientHeight > 1;
+    if (!(dx && canX) && !(dy && canY)) return;    // nowhere to go: let the page have it
     e.preventDefault();
-    this.userZoomed = true;
-    this.setZoom(this.zoom * Math.exp(-e.deltaY / 240), e.clientX, e.clientY);
+    this.stopGlide();                              // a wheel overrides a pan still coasting
+    wrap.scrollLeft += dx;
+    wrap.scrollTop += dy;
   };
+
+  /** Bring a band of board rows into view — what adding a system needs, so the thing
+   *  you just made is on screen instead of somewhere below the fold. Scrolls the
+   *  minimum distance that gets there, and only downward-or-up as needed, so it never
+   *  yanks the view when the target is already visible. */
+  revealBoard(y0: number, y1: number): void {
+    const wrap = this.host.wrapEl(); if (!wrap) return;
+    // Deferred, because the caller has just made the drawing taller and this has to
+    // run after Angular has rendered that — a scroll set against the OLD scrollHeight
+    // clamps to the old maximum and silently does nothing, which is the exact bug
+    // this method exists to fix.
+    setTimeout(() => {
+      const top = y0 * this.zoom, bottom = y1 * this.zoom;
+      const view = wrap.clientHeight;
+      const margin = 24;
+      if (bottom > wrap.scrollTop + view) wrap.scrollTop = Math.max(0, bottom - view + margin);
+      if (top < wrap.scrollTop) wrap.scrollTop = Math.max(0, top - margin);
+    });
+  }
 }

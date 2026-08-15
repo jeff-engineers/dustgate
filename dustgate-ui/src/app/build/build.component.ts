@@ -51,6 +51,9 @@ type SelKind = 'linear' | 'servoGate' | 'servoManifold';
  *  only has to be big enough that the two grounds don't touch. Two rows read as a
  *  missing band; a labelled gutter reads as two documents. */
 const SYSTEM_GAP = 1;
+/** How far a system's grey ground stops short of its outermost row. Enough that two
+ *  bands dragged flush against each other still read as two. */
+const GROUND_INSET = 10;
 
 interface Cell { col: number; row: number; }
 interface RawEl { [k: string]: unknown; }
@@ -2885,9 +2888,10 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     this.dirty = true; this.saveError = '';
     this.syncNodes(); this.refreshHandles();
     // The drawing just got a band taller, so the extent has to be recomputed before
-    // anything measures it. Framing is left alone deliberately — a zoom that changed
-    // under you while you were looking somewhere else is worse than a scroll.
+    // anything measures it — then scroll to what was just made. A new collector that
+    // lands below the fold looks like the menu item did nothing.
     this.recomputeExtent();
+    this.vp.revealBoard(PAD + top * CELL - CELL, PAD + (top + 1) * CELL + CELL / 2);
   }
   /** System ids only have to be unique among systems, but they share the counter so
    *  a doc never grows two things called `s3`. */
@@ -3232,9 +3236,32 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
    *  still tells the truth after a piece has been dragged. Full width on purpose —
    *  a ground that hugged its contents would change shape with every drag, and the
    *  thing being said is "these rows are that collector's", which is about rows. */
-  systemGrounds(): Array<{ id: string; x: number; y: number; w: number; h: number }> {
+  systemGrounds(): Array<{ id: string; name: string; y: number; h: number }> {
+    return this.systemBands().map(b => ({ id: b.id, name: b.name, y: b.y0, h: b.y1 - b.y0 }));
+  }
+
+  /** The line between two systems, with the name of the one it introduces.
+   *
+   *  The empty row alone was doing this job, and it stopped the moment anything was
+   *  dragged into it: two grounds that meet are one ground, and the drawing quietly
+   *  claimed the shop had a single collector. A rule can't be dragged shut.
+   *
+   *  It carries the lower system's name because that is the question a boundary
+   *  raises — not "what did I just leave" but "what am I now looking at" — and the
+   *  name is the collector's own, so there is nothing extra to name or keep in sync. */
+  systemSeparators(): Array<{ y: number; name: string }> {
+    const bands = this.systemBands();
+    const out: Array<{ y: number; name: string }> = [];
+    for (let i = 1; i < bands.length; i++) {
+      out.push({ y: (bands[i - 1].y1 + bands[i].y0) / 2, name: bands[i].name });
+    }
+    return out;
+  }
+
+  /** Each system's rows, in board px, top to bottom. */
+  private systemBands(): Array<{ id: string; name: string; y0: number; y1: number }> {
     if (!this.topo) return [];
-    const out: Array<{ id: string; x: number; y: number; w: number; h: number }> = [];
+    const out: Array<{ id: string; name: string; y0: number; y1: number }> = [];
     for (const s of systemsOf(this.topo as unknown as ShopDoc)) {
       let lo = Infinity, hi = -Infinity;
       for (const e of s.elements) {
@@ -3242,12 +3269,17 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
         lo = Math.min(lo, c.row); hi = Math.max(hi, c.row);
       }
       if (!isFinite(lo)) continue;
-      // Half a cell of air past the outermost row, which lands the edge in the
-      // middle of the empty row between two systems whichever way you count it.
-      const y0 = PAD + lo * CELL - CELL / 2, y1 = PAD + hi * CELL + CELL / 2;
-      out.push({ id: s.id, x: 8, y: y0, w: Math.max(0, this.vbW - 16), h: y1 - y0 });
+      const dc = s.elements.find(e => e['type'] === 'collector');
+      out.push({
+        id: s.id,
+        name: (dc?.['name'] as string) || 'Dust collector',
+        // Half a cell of air past the outermost row, less GROUND_INSET so two bands
+        // that end up adjacent still show a seam rather than fusing into one.
+        y0: PAD + lo * CELL - CELL / 2 + GROUND_INSET,
+        y1: PAD + hi * CELL + CELL / 2 - GROUND_INSET,
+      });
     }
-    return out;
+    return out.sort((a, b) => a.y0 - b.y0);
   }
   private childrenOf(id: string): string[] { const out: string[] = []; for (const [c, p] of this.parentOf) if (p === id) out.push(c); return out; }
   private canAddChild(id: string): boolean {
