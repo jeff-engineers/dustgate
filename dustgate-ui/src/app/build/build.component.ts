@@ -497,6 +497,9 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   private machineWatts = new Map<string, number>();
   /** A machine waiting for the next tap in the plug tray. */
   armedTool: string | null = null;
+  /** The tool whose plug row the current press started on, or null. Set on
+   *  pointerdown, consumed by onUp — see {@link onDockDown}. */
+  private dockTap: string | null = null;
 
   /** What this tool's plug row is showing. Recomputed per change-detection pass,
    *  like toolAuto() before it — the lookups are two map hits and a property walk,
@@ -672,10 +675,19 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     this.afterMutation(null);
   };
 
-  /** The plug row's own tap target. Stops the event so it doesn't start a drag of
-   *  the tool underneath — the body drags, this pairs. */
-  onDockDown(evt: PointerEvent, n: NodeVM): void {
-    evt.preventDefault(); evt.stopPropagation();
+  /** The plug row's own tap target.
+   *
+   *  It used to swallow the event outright, which made the bottom half of every tool
+   *  a dead zone for dragging — a 62×22 no-go strip inside a 76×68 box, right where a
+   *  thumb lands. Grab a tool there and it simply didn't move, which reads as the
+   *  piece having locked up rather than as "you missed". So the event bubbles on to
+   *  startDrag now and the row only claims the gesture if it turns out to be a tap;
+   *  {@link onUp} decides which it was. */
+  onDockDown(_evt: PointerEvent, n: NodeVM): void {
+    this.dockTap = n.id;
+  }
+  /** What a tap — not a drag — on the plug row does. */
+  private dockAction(n: NodeVM): void {
     const el = this.elem(n.id);
     if (outletOf(this.topo as unknown as ShopDoc, el)) { this.configureOutlet(n.id); return; }
     // No plug yet: arm the row and let the tray be the picker. Same gesture as the
@@ -970,20 +982,29 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   }
   private onUp(evt: PointerEvent): void {
     const n = this.byId.get(this.dragId ?? '');
-    if (n && n.dragX != null && n.dragY != null) {
-      const col = Math.max(0, Math.round((n.dragX - PAD) / CELL)), row = Math.max(0, Math.round((n.dragY - PAD) / CELL));
-      if (this.canPlace(n, col, row) && (col !== n.col || row !== n.row)) {
+    // Claimed on pointerdown by the plug row, settled here: a press that turned into
+    // a drag was a drag, and only a press that went nowhere was a tap on the plug.
+    const dockTap = this.dockTap; this.dockTap = null;
+    const dragged = n?.dragX != null && n?.dragY != null;
+    let moved = false;
+    if (n && dragged) {
+      const col = Math.max(0, Math.round((n.dragX! - PAD) / CELL)), row = Math.max(0, Math.round((n.dragY! - PAD) / CELL));
+      moved = col !== n.col || row !== n.row;
+      if (this.canPlace(n, col, row) && moved) {
         this.pushHistory(null);
         n.col = col; n.row = row; this.cells.set(n.id, { col, row });
         this.dirty = true;
       }
       n.dragX = undefined; n.dragY = undefined;
       this.recomputeExtent();
-    } else if (n && n.glyph === 'junction') {
+    }
+    if (n && dockTap === n.id && !moved) {
+      this.dockAction(n);
+    } else if (n && !dragged && n.glyph === 'junction') {
       // A tap (no drag) on a run end — open or capped — opens its menu: what goes
       // here, plus cap/reopen/delete. Ends carry no inspector of their own.
       this.openMenu(evt.clientX, evt.clientY, { end: n.id });
-    } else if (n && !n.setup) {
+    } else if (n && !dragged && !n.setup) {
       // A passive manifold has no setup state, so it gets no badge — and the badge is
       // what opens a piece's menu. That left it with nothing to tap at all, which only
       // stopped mattering because the red (−) was there to delete it. It isn't now, so
