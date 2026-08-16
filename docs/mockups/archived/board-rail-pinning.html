@@ -1,0 +1,265 @@
+<meta charset="utf-8">
+<title>DustGate — ARCHIVED: pinning the board rail</title>
+
+<style>
+  :root {
+    --bg: #111; --surface: #1e1e1e; --raised: #262626; --border: #2e2e2e;
+    --text: #e8e8e8; --muted: #8a8a86; --accent: #f0a500; --success: #3cbe6e;
+    --danger: #d94444; --duct: #3a3a3a; --cable: #38b6f0; --radius: 14px;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); margin: 0; padding: 22px 18px 60px;
+         font-family: system-ui, -apple-system, sans-serif; font-size: 15px; line-height: 1.5; }
+  .wrap { max-width: 1080px; margin: 0 auto; display: flex; flex-direction: column; gap: 22px; }
+  h1 { font-size: 20px; font-weight: 600; margin: 6px 0 0; letter-spacing: -0.01em; text-wrap: balance; }
+  h2 { font-size: 13.5px; font-weight: 600; margin: 0; }
+  h3 { font-size: 15px; font-weight: 600; margin: 0 0 2px; }
+  .lede { color: var(--muted); font-size: 13.5px; max-width: 68ch; margin: 6px 0 0; }
+  .eyebrow { font-size: 11px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--muted); }
+  p { margin: 0; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.92em; color: var(--text); }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; align-items: start; }
+  .opt { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+         padding: 12px; display: flex; flex-direction: column; gap: 9px; }
+  .opt.pick { border-color: var(--accent); }
+  .opt.today { border-style: dashed; }
+  .hd { display: flex; align-items: baseline; gap: 8px; }
+  .hd .w { margin-left: auto; font-size: 11.5px; color: var(--muted); }
+  .opt.pick .hd .w { color: var(--accent); }
+  .screen { background: var(--bg); border: 1px solid var(--border); border-radius: 9px;
+            aspect-ratio: 375 / 300; overflow: hidden; }
+  .screen svg { display: block; width: 100%; height: 100%; }
+  .note { font-size: 12px; color: var(--muted); line-height: 1.5; }
+  .note b { color: var(--text); font-weight: 600; }
+  .verdict { font-size: 11.5px; padding: 4px 8px; border-radius: 6px; align-self: flex-start; }
+  .verdict.good { color: var(--success); background: rgba(60,190,110,0.12); }
+  .verdict.bad  { color: var(--danger);  background: rgba(217,68,68,0.12); }
+  .verdict.mid  { color: var(--accent);  background: rgba(240,165,0,0.12); }
+
+  /* the canvas as it now stands */
+  .duct  { fill: none; stroke: var(--duct); stroke-width: 7; stroke-linecap: round; stroke-linejoin: round; }
+  .unit  { fill: var(--surface); stroke: #444; stroke-width: 1.6; }
+  .tool  { fill: #16262e; stroke: #2d6a86; stroke-width: 2; }
+  .plug  { fill: #0d1a20; stroke: #2d6a86; stroke-width: 1; }
+  .lbl   { fill: var(--text); font-size: 11.5px; text-anchor: middle; font-family: system-ui, sans-serif; font-weight: 500; }
+  .sub   { fill: var(--muted); font-size: 9.5px; text-anchor: middle; font-family: system-ui, sans-serif; }
+  .gatelbl { fill: var(--muted); font-size: 9px; text-anchor: middle; letter-spacing: 0.08em;
+             font-family: system-ui, sans-serif; }
+  .tiny  { fill: var(--muted); font-size: 9.5px; font-family: system-ui, sans-serif; }
+  .same  { fill: none; stroke: #2d6a86; stroke-width: 1.6; stroke-dasharray: 5 4; }
+  .cable { fill: none; stroke: var(--cable); stroke-width: 2; }
+  .tab   { fill: #0e2530; stroke: var(--cable); stroke-width: 1.3; }
+  .tabt  { fill: var(--cable); font-size: 8.5px; text-anchor: middle; font-weight: 600;
+           font-family: system-ui, sans-serif; }
+  .ground { fill: #191919; }
+  .seam   { stroke: var(--border); stroke-width: 1.5; }
+  .seamt  { fill: var(--muted); font-size: 9.5px; font-weight: 600; letter-spacing: 0.09em;
+            text-transform: uppercase; font-family: system-ui, sans-serif; }
+
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 15px 16px; }
+  .card p + p { margin-top: 9px; }
+  .card em { color: var(--text); font-style: normal; }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; margin-top: 4px; }
+  th, td { text-align: left; padding: 5px 8px 5px 0; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em; }
+</style>
+<div class="wrap">
+  <header>
+    <p class="eyebrow" style="color:#c9772a">ARCHIVED · decided against</p>
+    <h1>Pinning the board rail</h1>
+    <p class="lede"><b>Do not build this.</b> The board rail was deleted on
+      2026-08-16 and boards became ordinary pieces on the grid, so there is nothing
+      to pin and no band to fade. This page is the record of what the rail was and
+      why it looked reasonable at the time — it is not a proposal.</p>
+    <p class="lede">The reasoning that replaced it, and the alternatives rejected on
+      the way, are in <code>docs/boards-on-canvas-plan.md</code>. It moved here out of
+      <code>secondary-ports.html</code>, whose remaining panels — the second-pickup
+      design, Option A — are still current.</p>
+  </header>
+  <!-- The banner above says this is archived; what follows is the original page,
+       unaltered, so the argument reads the way it was made. "The pick" below marks
+       the rail's own winning option, not a live recommendation. -->
+  <p class="note" style="max-width:68ch">The rail sits above the whole grid, so it leaves
+    the screen the moment you scroll — and with it, which port drives which gate, and any
+    hope of dragging a cable to a board you can't see. Stacking made that common, but it
+    is not a multi-system problem: any shop taller than one screen has it.
+    <br><br>
+    Writing the board's name on each gate tab was the cheap answer and there isn't room
+    for it. So: <b>pin the rail</b>, and give the band underneath it a soft fade — a
+    strip the drawing passes under and the wires pass through, de-emphasised so the two
+    don't fight.</p>
+
+  <div class="grid">
+    <div class="opt today">
+      <div class="hd"><h2>At rest</h2><span class="w">scrolled to top</span></div>
+      <div class="screen" style="aspect-ratio:375/330">
+        <svg viewBox="0 0 375 330" aria-label="The rail in its home position, as today">
+          <rect x="0" y="0" width="375" height="62" fill="#171717"/>
+          <text x="14" y="18" class="tiny" style="font-size:8;letter-spacing:0.09em">BOARDS</text>
+          <text x="14" y="32" class="tiny" style="font-size:8">Shop-WiFi</text>
+          <rect x="74" y="10" width="86" height="34" rx="7" fill="var(--raised)" stroke="var(--accent)"/>
+          <text class="lbl" x="117" y="27" style="font-size:10">Shop Brain</text>
+          <rect x="168" y="10" width="86" height="34" rx="7" fill="var(--raised)" stroke="var(--border)"/>
+          <text class="lbl" x="211" y="27" style="font-size:10">Back wall</text>
+          <rect x="272" y="14" width="86" height="26" rx="8" fill="none" stroke="var(--border)" stroke-dasharray="4 3"/>
+          <text class="sub" x="315" y="31" style="font-size:8.5">+ Find boards</text>
+          <line x1="0" y1="62" x2="375" y2="62" class="seam"/>
+          <path class="cable" d="M100 44 V86 H128 V132"/>
+          <path class="cable" d="M211 44 V96 H286 V132"/>
+          <rect class="unit" x="60" y="132" width="240" height="24" rx="7"/>
+          <text class="gatelbl" x="180" y="126">MAIN GATE</text>
+          <rect class="tab" x="120" y="125" width="16" height="14" rx="3"/>
+          <rect class="tab" x="278" y="125" width="16" height="14" rx="3"/>
+          <path class="duct" d="M100 156 V186 M180 156 V186 M260 156 V186"/>
+          <rect class="tool" x="72" y="186" width="56" height="40" rx="9"/>
+          <text class="lbl" x="100" y="204" style="font-size:10">Table saw</text>
+          <rect class="plug" x="80" y="208" width="40" height="13" rx="4"/>
+          <rect class="tool" x="152" y="186" width="56" height="40" rx="9"/>
+          <text class="lbl" x="180" y="204" style="font-size:10">Bandsaw</text>
+          <rect class="plug" x="160" y="208" width="40" height="13" rx="4"/>
+          <rect class="tool" x="232" y="186" width="56" height="40" rx="9"/>
+          <text class="lbl" x="260" y="204" style="font-size:10">Router</text>
+          <rect class="plug" x="240" y="208" width="40" height="13" rx="4"/>
+          <text x="16" y="284" class="tiny">Unchanged. Everything already fits, nothing is faded, and</text>
+          <text x="16" y="300" class="tiny">the whole cable is on screen — which is the state to preserve.</text>
+        </svg>
+      </div>
+      <p class="note">Nothing about the top of a shop should change. The fade only exists
+        because of scrolling, so at scroll zero there is no fade and no pinning to
+        notice.</p>
+    </div>
+
+    <div class="opt pick">
+      <div class="hd"><h2>Scrolled · pinned + fade</h2><span class="w">the pick</span></div>
+      <div class="screen" style="aspect-ratio:375/330">
+        <svg viewBox="0 0 375 330" aria-label="The rail pinned, slimmed, with a fade band under it">
+          <defs>
+            <linearGradient id="scrim" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="#111" stop-opacity="0.94"/>
+              <stop offset="0.55" stop-color="#111" stop-opacity="0.72"/>
+              <stop offset="1" stop-color="#111" stop-opacity="0"/>
+            </linearGradient>
+          </defs>
+          <!-- board content, sliding up under the rail -->
+          <g opacity="1">
+            <rect class="ground" x="8" y="96" width="359" height="120" rx="12"/>
+            <rect class="unit" x="60" y="60" width="200" height="22" rx="7"/>
+            <text class="gatelbl" x="160" y="54">JOINTER VALVE</text>
+            <rect class="ground" x="8" y="-10" width="359" height="84" rx="12"/>
+            <line x1="8" y1="86" x2="367" y2="86" class="seam"/>
+            <text x="20" y="82" class="seamt">Shop vac</text>
+            <path class="duct" d="M40 112 V138 H70"/>
+            <circle cx="40" cy="112" r="14" class="unit"/>
+            <rect class="unit" x="70" y="126" width="150" height="24" rx="7"/>
+            <text class="gatelbl" x="145" y="120">BENCH GATE</text>
+            <rect class="tab" x="212" y="119" width="16" height="14" rx="3"/>
+            <text class="tabt" x="220" y="129">2</text>
+            <path class="duct" d="M106 150 V180 M186 150 V180"/>
+            <rect class="tool" x="78" y="180" width="56" height="40" rx="9"/>
+            <text class="lbl" x="106" y="198" style="font-size:10">Sander</text>
+            <rect class="plug" x="86" y="202" width="40" height="13" rx="4"/>
+            <rect class="tool" x="158" y="180" width="56" height="40" rx="9"/>
+            <text class="lbl" x="186" y="198" style="font-size:10">Planer</text>
+            <rect class="plug" x="166" y="202" width="40" height="13" rx="4"/>
+          </g>
+          <!-- the fade: content passes under it, wires pass through it -->
+          <rect x="0" y="40" width="375" height="62" fill="url(#scrim)"/>
+          <!-- the cable, drawn ON TOP of the fade, whole -->
+          <path class="cable" d="M117 34 V70 H220 V119"/>
+          <!-- the pinned rail, slimmed -->
+          <rect x="0" y="0" width="375" height="40" fill="#171717"/>
+          <rect x="74" y="4" width="86" height="30" rx="7" fill="var(--raised)" stroke="var(--accent)"/>
+          <text class="lbl" x="117" y="19" style="font-size:10">Shop Brain</text>
+          <rect x="168" y="4" width="86" height="30" rx="7" fill="var(--raised)" stroke="var(--border)"/>
+          <text class="lbl" x="211" y="19" style="font-size:10">Back wall</text>
+          <text x="300" y="23" class="tiny" style="font-size:8">2 boards</text>
+          <line x1="0" y1="40" x2="375" y2="40" stroke="#333" stroke-width="1"/>
+          <text x="16" y="256" class="tiny">The rail keeps its ports, so a cable can still be dragged to</text>
+          <text x="16" y="272" class="tiny">one. It drops the WiFi line and Find boards — both are</text>
+          <text x="16" y="288" class="tiny">errands, not references, and they live at the top of the shop.</text>
+          <text x="16" y="310" class="tiny" style="fill:var(--cable)">The wire is unbroken from port to tab.</text>
+        </svg>
+      </div>
+      <span class="verdict good">Whole wire, always</span>
+      <p class="note">The rail sticks and <b>slims</b> — board bodies and their port
+        strips, nothing else. Under it, a 60px gradient scrim fades the board out rather
+        than cutting it off, so the drawing reads as passing beneath the rail instead of
+        being clipped by it. Cables draw <em>over</em> the scrim, whole, because the one
+        thing that must never be ambiguous is which port a gate is on.</p>
+    </div>
+
+    <div class="opt">
+      <div class="hd"><h2>Scrolled · hard edge</h2></div>
+      <div class="screen" style="aspect-ratio:375/330">
+        <svg viewBox="0 0 375 330" aria-label="The rail pinned with a solid edge and no fade">
+          <g>
+            <rect class="ground" x="8" y="96" width="359" height="120" rx="12"/>
+            <rect class="unit" x="60" y="60" width="200" height="22" rx="7"/>
+            <rect class="ground" x="8" y="-10" width="359" height="84" rx="12"/>
+            <line x1="8" y1="86" x2="367" y2="86" class="seam"/>
+            <text x="20" y="82" class="seamt">Shop vac</text>
+            <path class="duct" d="M40 112 V138 H70"/>
+            <circle cx="40" cy="112" r="14" class="unit"/>
+            <rect class="unit" x="70" y="126" width="150" height="24" rx="7"/>
+            <rect class="tab" x="212" y="119" width="16" height="14" rx="3"/>
+            <text class="tabt" x="220" y="129">2</text>
+            <path class="duct" d="M106 150 V180 M186 150 V180"/>
+            <rect class="tool" x="78" y="180" width="56" height="40" rx="9"/>
+            <text class="lbl" x="106" y="198" style="font-size:10">Sander</text>
+            <rect class="plug" x="86" y="202" width="40" height="13" rx="4"/>
+            <rect class="tool" x="158" y="180" width="56" height="40" rx="9"/>
+            <text class="lbl" x="186" y="198" style="font-size:10">Planer</text>
+            <rect class="plug" x="166" y="202" width="40" height="13" rx="4"/>
+          </g>
+          <path class="cable" d="M117 34 V70 H220 V119"/>
+          <rect x="0" y="0" width="375" height="40" fill="#171717"/>
+          <rect x="74" y="4" width="86" height="30" rx="7" fill="var(--raised)" stroke="var(--accent)"/>
+          <text class="lbl" x="117" y="19" style="font-size:10">Shop Brain</text>
+          <rect x="168" y="4" width="86" height="30" rx="7" fill="var(--raised)" stroke="var(--border)"/>
+          <text class="lbl" x="211" y="19" style="font-size:10">Back wall</text>
+          <line x1="0" y1="40" x2="375" y2="40" stroke="var(--accent)" stroke-width="1.5"/>
+          <text x="16" y="264" class="tiny">A gate's bar is sliced clean in half at the rail's edge, and</text>
+          <text x="16" y="280" class="tiny">the drawing reads as two panes rather than one board.</text>
+        </svg>
+      </div>
+      <span class="verdict mid">Reads as two panes</span>
+      <p class="note">Pin it with a plain edge and no fade. Cheapest, and the cut is
+        brutal: a gate bar sliding under the rail is severed mid-glyph. The fade costs one
+        gradient and buys the sense that there is one continuous board.</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>How it works, and what it costs</h3>
+    <p class="note"><em>Pinning is one translate.</em> The rail is already drawn in the
+      same SVG as the board, in negative y above the grid. Sticking it is translating
+      that group down by the scroll offset divided by the zoom — no second coordinate
+      system, no overlay, and the ports stay ordinary hit targets you can drop a cable
+      on. Which is the whole reason not to reach for an HTML overlay.</p>
+    <p class="note"><em>Cables re-path, but they don't reshuffle.</em> Every cable's
+      start moves as you scroll, so the paths have to be recomputed — cheap, there are
+      at most a handful. What must NOT be recomputed is the rank order, which is what
+      stops two cables crossing: it is derived from horizontal travel, and travel
+      changes with scroll. Freeze the ranks from the resting layout and let only the
+      geometry stretch, and the lanes keep their order at every scroll position.</p>
+    <p class="note"><em>The scrim band is a free lane.</em> Cables already pay a cost to
+      cross a device (100) or a duct (3), which is what picks their drop column. Inside
+      the faded band that cost goes to zero: the board under there is deliberately
+      de-emphasised, so a wire crossing it says nothing misleading, and the alternative —
+      cables detouring around glyphs that the user can barely see — would produce
+      contortions with no visible cause.</p>
+    <p class="note"><em>The honest cost is clutter,</em> which is why the pinned form is
+      slimmer than the resting one. The network name and Find boards are errands you do
+      once, at the top of the shop, so they stay behind at scroll zero; what sticks is
+      the part you point at and drag to.</p>
+    <table>
+      <thead><tr><th>State</th><th>Rail</th><th>Band under it</th><th>Cables</th></tr></thead>
+      <tbody>
+        <tr><td>At top</td><td>full, in place</td><td>—</td><td>as today</td></tr>
+        <tr><td>Scrolled</td><td>slim, pinned</td><td>gradient scrim</td><td>whole, over the scrim, free to cross it</td></tr>
+        <tr><td>Dragging a cable</td><td>slim, pinned</td><td>scrim</td><td>edge-scroll still reaches anything off-screen</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>

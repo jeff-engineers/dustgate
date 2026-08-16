@@ -126,6 +126,11 @@ settled that question, and the panels around it usually answer the follow-ups to
 Check for one before re-deriving a UI decision from scratch — `secondary-ports.html`
 got re-litigated three times because nobody looked.
 
+`docs/mockups/archived/` holds designs **decided against**, or built and later
+removed. Nothing in there is a proposal; each page opens with a banner saying what
+replaced it. Move a page there when its design dies, and add that banner — a stale
+mockup that still looks current is worse than no mockup at all.
+
 `dustgate-ui/src/app/build/build.component.ts` is ~4k lines — grep it, don't
 read it whole.
 
