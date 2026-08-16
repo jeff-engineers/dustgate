@@ -17,6 +17,14 @@ import {
 // implied by whatever the canvas connected downstream.
 //
 // Shared by both entry points: the build canvas inspector and the /gates setup pass.
+//
+// TWO PANES, one component. They were one screen, and the wiring fields had no way
+// out: `saved` was emitted only by the calibration widget, so changing a gate's board
+// and closing dropped the change on the floor — the edit reached `working`, and
+// nothing ever emitted it. Splitting them gives the wiring its own Save.
+//
+// Still one component because both panes need the same paired-board merge and the
+// same link state; two would either duplicate that or need a third to hold it.
 
 /** Mirrors SERVO_COUNT in config.h / MAX_SERVOS_PER_HOST in topology.js. */
 const SERVO_CHANNELS = [0, 1, 2, 3];
@@ -43,9 +51,15 @@ const SERVO_CHANNELS = [0, 1, 2, 3];
     .two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
     .why { font-size: 11.5px; color: var(--muted); margin-top: 6px; line-height: 1.5; }
     .why.offline { color: var(--danger); }
+
+    .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 18px; }
+    button { border-radius: 8px; padding: 10px 12px; font-size: 14px; border: 1px solid var(--border);
+             background: var(--bg); color: var(--text); }
+    button.primary { background: var(--accent); border-color: var(--accent); color: #241a00; font-weight: 600; }
+    button[disabled] { opacity: 0.45; }
   `],
   template: `
-    <div class="card">
+    <div class="card" *ngIf="pane === 'board'">
       <div class="head">
         <span class="kind">{{ kindName }}</span>
         <span class="badge" [class.ok]="calibrated" [class.todo]="!calibrated">
@@ -76,28 +90,40 @@ const SERVO_CHANNELS = [0, 1, 2, 3];
              : 'A sliding gate uses the board\\'s stepper driver — one per board.' }}
         </p>
         <p class="why offline" *ngIf="boardOffline">
-          {{ boardName }} isn't answering right now. You can still set this gate up,
-          but the jog control below won't move anything until the board is back.
+          {{ boardName }} isn't answering right now. You can still pick it — travel
+          limits are the part that needs the board awake.
         </p>
         <p class="why" *ngIf="noFreeChannel">
           All four servo channels on {{ boardName }} are taken — pick another board,
           or free a channel by moving one of its gates.
         </p>
       </div>
+
+      <!-- Its own Save. This pane used to have none: the only emitter was the
+           calibration widget, so a board change made here left with the sheet. -->
+      <div class="actions">
+        <button type="button" (click)="cancelled.emit()">Cancel</button>
+        <button type="button" class="primary" (click)="saveBoard()">Save</button>
+      </div>
     </div>
 
-    <app-servo-calibration *ngIf="isServo" [sel]="asServo(working)" [topo]="topo"
-                           (saved)="onCalibrated($event)" (cancelled)="cancelled.emit()">
-    </app-servo-calibration>
-    <app-linear-calibration *ngIf="!isServo" [sel]="asLinear(working)" [topo]="topo"
-                            (saved)="onCalibrated($event)" (cancelled)="cancelled.emit()">
-    </app-linear-calibration>
+    <ng-container *ngIf="pane === 'travel'">
+      <app-servo-calibration *ngIf="isServo" [sel]="asServo(working)" [topo]="topo"
+                             (saved)="onCalibrated($event)" (cancelled)="cancelled.emit()">
+      </app-servo-calibration>
+      <app-linear-calibration *ngIf="!isServo" [sel]="asLinear(working)" [topo]="topo"
+                              (saved)="onCalibrated($event)" (cancelled)="cancelled.emit()">
+      </app-linear-calibration>
+    </ng-container>
   `,
 })
 export class SelectorConfigComponent implements OnInit {
   @Input({ required: true }) sel!: ConfigurableSelector;
   @Input({ required: true }) topo!: Topology;
-  /** Emits the fully-edited selector — name, wiring and calibration together. */
+  /** Which half to show: the wiring, or the travel limits. */
+  @Input() pane: 'board' | 'travel' = 'board';
+  /** Emits the edited selector. From either pane — the one you didn't open is
+   *  carried through untouched, since `working` starts as a full copy. */
   @Output() saved = new EventEmitter<ConfigurableSelector>();
   @Output() cancelled = new EventEmitter<void>();
 
@@ -223,6 +249,17 @@ export class SelectorConfigComponent implements OnInit {
     this.working.name = this.name;
     this.working.controllerId = this.controllerId;
     if (isServoKind(this.working)) this.working.servo.channel = this.channel;
+  }
+
+  /** Save the wiring on its own.
+   *
+   *  Emits `working`, not a fresh object: it is a full copy of the gate, so whatever
+   *  calibration the gate already had rides through untouched. Building the payload
+   *  from the three fields on this pane would silently decalibrate a configured gate
+   *  every time someone moved it to another board. */
+  saveBoard(): void {
+    this.touch();
+    this.saved.emit({ ...this.working });
   }
 
   /** The calibration widget hands back its own copy, so re-apply the fields edited up

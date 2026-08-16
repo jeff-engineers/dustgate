@@ -136,7 +136,7 @@ const CABLE_SHADES = ['#38b6f0', '#45cfd8', '#6f9df2', '#2f9fd0'];
 
 
 type Fitting = SelKind | 'tool' | 'duct';
-type MenuKind = Fitting | 'cap' | 'uncap' | 'delete' | 'configure' | 'outlet' | 'pickup';
+type MenuKind = Fitting | 'cap' | 'uncap' | 'delete' | 'board' | 'travel' | 'outlet' | 'pickup';
 
 const FITTINGS: Array<{ kind: Fitting; label: string }> = [
   { kind: 'duct',          label: 'Duct' },          // lay bare pipe; populate the open end later
@@ -184,6 +184,8 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   wip = '';
   /** The gate whose config sheet is open, or null. */
   configuring: ConfigurableSelector | null = null;
+  /** Which half of that sheet the menu asked for. */
+  configPane: 'board' | 'travel' = 'board';
   /** The tool whose smart plug is being paired, as an editable copy. */
   outletTool: RawEl | null = null;
   outletMode: 'sensor' | 'switch' = 'sensor';
@@ -875,9 +877,11 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     this.openMenu(evt.clientX, evt.clientY, { convert: n.id });
   }
 
-  configure(id: string): void {
+  configure(id: string, pane: 'board' | 'travel' = 'board'): void {
     const el = this.elems(this.topo!).find(e => e['id'] === id) as AnyElement | undefined;
-    if (isServoSelector(el) || isLinearSelector(el)) this.configuring = el as unknown as ConfigurableSelector;
+    if (!isServoSelector(el) && !isLinearSelector(el)) return;
+    this.configPane = pane;
+    this.configuring = el as unknown as ConfigurableSelector;
   }
 
   /** Open the smart-plug sheet for one tool. Edits a COPY, so cancelling leaves the
@@ -1463,9 +1467,15 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     }
     // Tapping a gate is how you get at it, so its setup lives here alongside the
     // conversions — the floating inspector is only reachable right after placing one.
+    // Two entries, not one "Gate setup": picking the board and measuring the travel
+    // are different jobs on different days — the board is chosen once when the gate
+    // is wired, the limits are re-measured whenever the valve is disturbed. Only the
+    // second needs the board awake, and only the second is what "not done yet" is
+    // about, so the badge sits on that row rather than over both.
     const opts: MenuOption[] = n.setup
-      ? [{ kind: 'configure', label: n.setup === 'todo' ? 'Set up this gate' : 'Gate setup', enabled: true,
-           note: n.setup === 'todo' ? 'not done yet' : undefined }]
+      ? [{ kind: 'board', label: 'Select a board', enabled: true },
+          { kind: 'travel', label: 'Adjust travel limits', enabled: true,
+            note: n.setup === 'todo' ? 'not done yet' : undefined }]
       : [];
     return opts.concat(this.gateTypes(n).map(t => ({
       kind: t.kind, label: t.current ? `${t.label} (current)` : t.label,
@@ -1488,7 +1498,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     this.pushHistory(null);
     if (m.convert) {
       const id = m.convert; this.closeMenu();
-      if (kind === 'configure') this.configure(id);
+      if (kind === 'board' || kind === 'travel') this.configure(id, kind);
       else if (kind === 'outlet') this.configureOutlet(id);
       else if (kind === 'pickup') this.addPickup(id);
       else if (kind === 'delete') { this.selectedId = id; this.deleteSelected(); }

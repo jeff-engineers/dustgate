@@ -392,7 +392,7 @@
 <!-- Configuring one gate — a sheet over the canvas, so the layout stays put. -->
 <div class="sheet-bg" *ngIf="configuring" (pointerdown)="configuring = null"></div>
 <div class="sheet" *ngIf="configuring as cfg">
-  <app-selector-config [sel]="cfg" [topo]="topoDoc"
+  <app-selector-config [sel]="cfg" [topo]="topoDoc" [pane]="configPane"
                        (saved)="onConfigured($event)" (cancelled)="configuring = null">
   </app-selector-config>
 </div>
