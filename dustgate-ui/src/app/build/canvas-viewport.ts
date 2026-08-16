@@ -96,10 +96,33 @@ export class CanvasViewport {
     wrap?.removeEventListener('wheel', this.wheelH);
   }
 
+  /** Wide enough that the shop can be scrolled around comfortably rather than
+   *  needing to be shrunk to fit. Below this, auto-fit earns its keep; at or above
+   *  it, it only gets in the way. */
+  private readonly DESKTOP_MIN_W = 900;
+  /** On a desktop the canvas sits at 100% and stays there until the user says
+   *  otherwise. Auto-fit exists for the phone, where a shop is several screens wide
+   *  and you'd otherwise land in a corner of it with no idea what you're looking at.
+   *  A desktop has room to scroll, so the same machinery only ever surprises you.
+   *
+   *  Measured on the WINDOW, not the wrap. The app column is capped (app.component
+   *  `max-width`), so the wrap's width saturates a little under that cap however wide
+   *  the screen is — testing it would make this threshold a question about the column
+   *  rather than about the device, and it would need moving every time the cap does. */
+  private desktop(): boolean {
+    return window.innerWidth >= this.DESKTOP_MIN_W;
+  }
+
   /** Sole resize path — the wrap resizes whenever the window does, so observing it
    *  covers both, and covers panel/layout changes the window never sees. */
   private onWrapResize(): void {
     this.host.recomputeExtent();
+    // Never re-scale a desktop. The re-fit below keys off the DRAWING's size, not the
+    // window's, so anything that grew the shop and also nudged the wrap — the plug
+    // tray appearing, the guide bar wrapping to a second line — rescaled the whole
+    // canvas underneath you. Adding a system and then a tool did exactly that: 89% to
+    // 63% in two edits, with nothing about the window having changed.
+    if (this.desktop()) return;
     if (!this.didFit) { this.maybeFit(); return; }
     // Still framed as we left it: keep it framed. Touched by hand: leave it alone.
     if (this.userZoomed) return;
@@ -154,6 +177,9 @@ export class CanvasViewport {
     if (this.didFit || !this.host.hasDrawing()) return;
     const wrap = this.host.wrapEl();
     if (!wrap || !wrap.clientWidth || !wrap.clientHeight) return;
+    // A desktop opens at 100%, full stop. The zoomer's % button still fits the shop
+    // on demand — that is a thing you ask for, not a thing that happens to you.
+    if (this.desktop()) { this.didFit = true; return; }
     this.fitToViewport();
   }
   private fitToViewport(): void {
