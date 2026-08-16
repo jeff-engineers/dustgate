@@ -11,7 +11,8 @@ import { ElementOutletConfigComponent } from '../tools/element-outlet-config.com
 import { matchAll } from '../tools/outlet-match';
 import {
   AnyElement, ConfigurableSelector, elementsOf,
-  isCalibrated, isLinearSelector, isServoSelector,
+  controllersOf, firstFreeChannel, isCalibrated, isLinearSelector, isServoSelector,
+  selectorsOnController,
 } from '../gates/selector-types';
 import {
   type ShopDoc, type ShopSystem,
@@ -1802,7 +1803,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     const inDuct = this.ductsRaw().find(d => d['child'] === jid); if (!inDuct) return null;
     const legs = this.legsLeftToRight(jid);
     if (legs.length < 2) return null;                   // not a fork
-    const sel = this.makeSelector(kind, this.freeServoChannel());
+    const sel = this.makeSelector(kind);
     const have = (sel['branches'] as Branch[]).length;
     if (kind === 'linear' && have < legs.length) this.appendLinearOutlets(sel, legs.length - have);
     const branches = sel['branches'] as Branch[];
@@ -1848,8 +1849,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     if (!this.topo) return null;
     const duct = this.ductsRaw().find(d => d['child'] === childId); if (!duct) return null;
     const parentId = duct['parent'] as string;
-    const channel = this.freeServoChannel();
-    const sel = this.makeSelector(kind, channel);
+    const sel = this.makeSelector(kind);
     this.elems(this.topo).push(sel);
     // The gate inherits the child's upstream link (incl. a parent selector's outlet).
     const upDuct: RawEl = { child: sel['id'], parent: parentId };
@@ -1960,8 +1960,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       this.ductsRaw().push({ child: j['id'], parent: junctionId });
       return j['id'] as string;
     }
-    const channel = this.freeServoChannel();
-    const sel = this.makeSelector(kind, channel);
+    const sel = this.makeSelector(kind);
     this.elems(this.topo).push(sel);
     this.ductsRaw().push({ child: sel['id'], parent: junctionId });
     return sel['id'] as string;
@@ -2529,27 +2528,55 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     return (primary?.['id'] as string) ?? 'primary';
   }
 
-  /** First unused servo channel ON A GIVEN BOARD.
+  /** Which board a newly drawn gate is driven by, and on what channel.
    *
-   *  Channels are per-board: two gates on different boards can both sit on
-   *  channel 0. Searching the whole shop (as this used to) starts handing out
-   *  channel 4 as soon as a second board exists, which validateTopology rejects
-   *  — so drawing a fifth gate silently produced an unsaveable layout. */
-  private freeServoChannel(controllerId = this.defaultControllerId()): number {
-    const taken = new Set(
-      this.allElems()
-        .filter(e => e['type'] === 'selector' && e['kind'] !== 'linear'
-                  && (e['controllerId'] ?? this.defaultControllerId()) === controllerId)
-        .map(e => (e['servo'] as RawEl | undefined)?.['channel'] as number),
+   *  This used to be "the primary, always", with the channel search falling back to
+   *  0 when all four were taken. In a one-board shop that is right and invisible. In
+   *  a shop with a second board sitting idle it meant the FIFTH gate you drew
+   *  collided on channel 0 and the layout wouldn't save until you opened "Set up this
+   *  gate" and reassigned it by hand — the picker was there, the default never used
+   *  it.
+   *
+   *  Order of preference: a board with room, then one already driving something in
+   *  the system you're drawing (a board is mounted where the cable run is convenient,
+   *  so the one already reaching into this system is the one whose wire is short),
+   *  then the primary. Ties keep document order, which is the order /boards paired
+   *  them in.
+   *
+   *  Room means different things per kind: four servo channels per board, but only
+   *  ONE linear selector — a sliding gate uses the board's single stepper driver.
+   *
+   *  With nothing free anywhere it still answers the primary at channel 0, exactly as
+   *  before. That is a real over-budget layout and validation says so on save; the
+   *  alternative is refusing to draw the gate, which hides the problem behind a
+   *  no-op. */
+  private pickBoard(kind: SelKind): { controllerId: string; channel: number } {
+    const t = this.topo;
+    const primary = this.defaultControllerId();
+    if (!t) return { controllerId: primary, channel: 0 };
+    const ids = controllersOf(t).map(c => c.id);
+    if (!ids.length) return { controllerId: primary, channel: 0 };
+
+    // Boards already driving a gate in the system being drawn — elems() is the active
+    // system, which is what "the system you're working in" means everywhere else.
+    const here = new Set(
+      this.elems(t).filter(e => e['type'] === 'selector')
+        .map(e => (e['controllerId'] as string | undefined) ?? primary),
     );
-    for (let ch = 0; ch < 4; ch++) if (!taken.has(ch)) return ch;
-    return 0;                          // over budget; validation reports it on save
+    const hasRoom = (id: string) => kind === 'linear'
+      ? !selectorsOnController(t, id).some(s => s.kind === 'linear')
+      : firstFreeChannel(t, id) !== null;
+    const rank = (id: string) =>
+      (hasRoom(id) ? 0 : 4) + (here.has(id) ? 0 : 2) + (id === primary ? 0 : 1);
+
+    const best = [...ids].sort((a, b) => rank(a) - rank(b))[0];
+    return { controllerId: best, channel: kind === 'linear' ? 0 : firstFreeChannel(t, best) ?? 0 };
   }
 
   private addSelector(parentId: string, kind: SelKind): string | null {
     if (!this.topo) return null;
     const els = this.elems(this.topo);
-    const sel = this.makeSelector(kind, this.freeServoChannel()); els.push(sel);
+    const sel = this.makeSelector(kind); els.push(sel);
     const duct: RawEl = { child: sel['id'], parent: parentId };
     const p = this.elem(parentId);
     if (p && p['type'] === 'selector') {
@@ -2592,8 +2619,11 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     this.ductsRaw().push(duct);
     return tool['id'] as string;
   }
-  private makeSelector(kind: SelKind, channel: number): RawEl {
-    const base: RawEl = { id: this.newId('sel'), type: 'selector', name: this.defaultName(kind), controllerId: this.defaultControllerId(), kind };
+  /** `at` is only passed when a gate is being REBUILT and has to keep the board it
+   *  was already wired to (see convertKind). Every fresh gate picks its own. */
+  private makeSelector(kind: SelKind, at: { controllerId: string; channel: number } = this.pickBoard(kind)): RawEl {
+    const { controllerId, channel } = at;
+    const base: RawEl = { id: this.newId('sel'), type: 'selector', name: this.defaultName(kind), controllerId, kind };
     if (kind === 'linear') {
       // Outlet positions are seeded at the nominal Rockler pitch so the canvas has
       // something to draw, but `linear.calibration` is left out on purpose — only the
@@ -2694,9 +2724,14 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     if (!this.gateTypes(n).find(t => t.kind === kind)?.enabled) return;
     const was = this.kindOf(id);
     const legs = this.legsLeftToRight(id);   // left leg → left outlet, not doc order
+    // Swapping the mechanism must not re-home the gate: it keeps the board it was
+    // already wired to, and its channel where it had one. Rebuilding from scratch
+    // would hand a gate on a secondary back to the primary — silently unwiring it
+    // from the board someone chose in "Set up this gate".
+    const controllerId = (el['controllerId'] as string | undefined) ?? this.defaultControllerId();
     const channel = ((el['servo'] as RawEl | undefined)?.['channel'] as number | undefined)
-      ?? this.freeServoChannel();
-    const fresh = this.makeSelector(kind, channel);
+      ?? firstFreeChannel(this.topo, controllerId, id) ?? 0;
+    const fresh = this.makeSelector(kind, { controllerId, channel });
     fresh['id'] = id;
     // A name the user chose survives; an untouched default follows the new kind.
     fresh['name'] = was && el['name'] === this.defaultName(was) ? this.defaultName(kind) : el['name'];
@@ -2991,8 +3026,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       const duct = this.ductsRaw().find(d => d['child'] === id); if (!duct) return false;
       const parentId = duct['parent'] as string;
       const parentBranch = duct['parentBranch'] as string | undefined;
-      const channel = this.freeServoChannel();
-      const gate = this.makeSelector('servoGate', channel);
+      const gate = this.makeSelector('servoGate');
       (gate['branches'] as Branch[])[0].role = 'tool';
       this.elems(this.topo).push(gate);
       duct['parent'] = gate['id']; duct['parentBranch'] = (gate['branches'] as Branch[])[0].id;   // tool now behind the gate
