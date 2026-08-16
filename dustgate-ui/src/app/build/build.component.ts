@@ -135,7 +135,7 @@ const CABLE_SHADES = ['#38b6f0', '#45cfd8', '#6f9df2', '#2f9fd0'];
 
 type Fitting = SelKind | 'tool' | 'duct';
 type MenuKind = Fitting | 'cap' | 'uncap' | 'delete' | 'board' | 'travel' | 'outlet' | 'pickup'
-              | 'placeBoard' | 'findBoards';
+              | 'addSystem' | 'findBoards' | 'rename' | 'moveSystem' | 'system' | 'boardSetup';
 
 const FITTINGS: Array<{ kind: Fitting; label: string }> = [
   { kind: 'duct',          label: 'Duct' },          // lay bare pipe; populate the open end later
@@ -146,8 +146,12 @@ const FITTINGS: Array<{ kind: Fitting; label: string }> = [
 ];
 
 /** One row of the context menu: always present, greyed (with a reason) where it
- *  doesn't apply — the list never changes shape between add points. */
-interface MenuOption { kind: MenuKind; label: string; enabled: boolean; note?: string; }
+ *  doesn't apply — the list never changes shape between add points.
+ *
+ *  `value` carries the row's subject when the rows are generated rather than
+ *  fixed — the systems a board can be moved to, say. `kind` alone can't: it is a
+ *  closed union, and a shop has as many systems as it has collectors. */
+interface MenuOption { kind: MenuKind; label: string; enabled: boolean; note?: string; value?: string; }
 
 const isUnitKind = (kind: unknown): boolean => kind === 'linear' || kind === 'servoManifold';
 /** Undo depth. Snapshots are a few KB of JSON each — this is cheap. */
@@ -204,11 +208,14 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   hoverCell: Cell | null = null;
   menu: { x: number; y: number; branch?: BDot; end?: string; convert?: string;
           addOutput?: { parentId: string; branchId?: string; cell: Cell };
-          /** Right-click on empty canvas: the cell it landed on. */
-          empty?: Cell } | null = null;
-  /** Which board a `placeBoard` row would put down, resolved with the menu so the
-   *  options and the action can't disagree about which one it meant. */
-  private placeableBoard: string | null = null;
+          /** Right-click on empty canvas — shop-level actions, no subject. */
+          canvas?: true;
+          /** Right-click on a board. */
+          board?: string;
+          /** The board whose "Move to system" list is showing. A drill-down rather
+           *  than a fly-out submenu: the menu is a flat list of rows on purpose, and
+           *  a nested panel on a phone is a target you cannot hold open. */
+          moveBoard?: string } | null = null;
   /** The one option list, resolved once when the menu opens (see openMenu). */
   menuOptions: MenuOption[] = [];
   menuTitle = '';
@@ -283,9 +290,16 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       configure:     svg('<path d="M4 8h10M18 8h2M4 16h4M12 16h8"/><circle cx="16" cy="8" r="2"/><circle cx="10" cy="16" r="2"/>'),
       // A wall socket, for the smart-plug row.
       outlet:        svg('<rect x="4" y="4" width="16" height="16" rx="3"/><circle cx="9.5" cy="11" r="1.1" fill="currentColor" stroke="none"/><circle cx="14.5" cy="11" r="1.1" fill="currentColor" stroke="none"/><path d="M9 16h6"/>'),
-      // A controller: the module and its port strip, the same shape the canvas draws.
-      placeBoard:    svg('<rect x="4" y="6" width="16" height="10" rx="2"/><path d="M8 16v2M12 16v2M16 16v2"/>'),
       findBoards:    svg('<circle cx="11" cy="11" r="6"/><path d="M15.5 15.5 20 20"/>'),
+      // A controller: the module and its port strip, the same shape the canvas draws.
+      boardSetup:    svg('<rect x="4" y="6" width="16" height="10" rx="2"/><path d="M8 16v2M12 16v2M16 16v2"/>'),
+      // A pencil, for renaming in place.
+      rename:        svg('<path d="M4 20h4l10-10a2.1 2.1 0 0 0-3-3L5 17z"/><path d="M13.5 6.5 17.5 10.5"/>'),
+      // A second collector joining the first.
+      addSystem:     svg('<circle cx="8" cy="12" r="4.5"/><circle cx="17" cy="12" r="3"/><path d="M17 8.2v-2M17 17.8v2"/>'),
+      // Move: an arrow leaving one band for another.
+      moveSystem:    svg('<path d="M4 8h9M4 16h6"/><path d="M14 16h5"/><path d="M16.5 13.5 19 16l-2.5 2.5"/>'),
+      system:        svg('<circle cx="12" cy="12" r="6"/><path d="M12 3v3M12 18v3"/>'),
     };
   }
 
@@ -867,25 +881,41 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   onNodeContext(evt: MouseEvent, n: NodeVM): void {
     evt.preventDefault(); evt.stopPropagation();
     this.focus(n.id);
+    // A junction is a run END (or a tee), not a piece with a kind — its menu is the
+    // one a left-tap opens, carrying the fittings, Cap/Reopen and Delete. It used to
+    // come through here as a `convert`, which fell past every branch of
+    // convertOptions into the gate-conversion list: picking "Ball valve" then ran
+    // convertKind() instead of fillEnd(), replacing the end in place and skipping
+    // the continuation open end the tap path seeds. Same target, two results.
+    if (n.glyph === 'junction') {
+      this.openMenu(evt.clientX, evt.clientY, { end: n.id });
+      return;
+    }
     this.selectedId = n.id;
     this.openMenu(evt.clientX, evt.clientY, { convert: n.id });
   }
 
-  /** Right-click empty canvas: what goes in this cell.
+  /** Right-click empty canvas: the shop-level actions, which had no home on the
+   *  drawing itself — they were only ever in the toolbar overflow.
    *
-   *  The background only ever deselected before. It needs a menu now because a board
-   *  is placed rather than ordered, and a board with no cell — one paired while the
-   *  canvas was elsewhere, or one whose square was dropped on load — otherwise has no
-   *  way back onto the drawing. Ducts and fittings are NOT offered here: they hang
-   *  off a run, and a fitting standing alone in a cell is connected to nothing.
+   *  Nothing here needs the cell you clicked. Ducts and fittings are deliberately
+   *  absent: they hang off a run, and a fitting standing alone in a cell is
+   *  connected to nothing. Auto-arrange is absent too — it came off the toolbar
+   *  because it rearranged work you had just done by hand, and putting it one
+   *  right-click away would buy that back.
    *
-   *  A right-click on a PIECE opens that piece's own menu instead (onNodeContext),
-   *  which is why this one only has to answer for empty board. */
+   *  A right-click on a PIECE or a BOARD opens that thing's own menu instead, so
+   *  this one only has to answer for empty board. */
   onCanvasContext(evt: MouseEvent): void {
     evt.preventDefault(); evt.stopPropagation();
-    const p = this.toSvg(evt as unknown as PointerEvent);
-    const cell = this.dragCell(p);
-    this.openMenu(evt.clientX, evt.clientY, { empty: cell });
+    this.openMenu(evt.clientX, evt.clientY, { canvas: true });
+  }
+
+  /** Right-click a board. Boards had no menu at all until 2026-08-16 — they were
+   *  the one thing on the canvas you could move and nothing else. */
+  onBoardContext(evt: MouseEvent, b: BoardVM): void {
+    evt.preventDefault(); evt.stopPropagation();
+    this.openMenu(evt.clientX, evt.clientY, { board: b.id });
   }
 
   /** Open the gate config straight from its dot, without selecting-then-tapping.
@@ -1303,7 +1333,9 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     // the menu is dismissed; every other context shows the menu alone.
     if (!ctx.convert) this.selectedId = null;
     this.menu = { x, y, ...ctx };
-    this.menuTitle = ctx.empty ? 'This empty cell'
+    this.menuTitle = ctx.moveBoard ? 'Draw it beside'
+                   : ctx.board ? (this.boardName(ctx.board) || 'This board')
+                   : ctx.canvas ? 'This shop'
                    : ctx.convert ? this.convertTitle(ctx.convert)
                    // A tee reaches this menu by being a junction, but it is a fork,
                    // not an end — and saying "the end of this run" over a list that
@@ -1378,7 +1410,9 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
    *   • anything needing a cell — greyed "(no room)" when that exact cell is taken. */
   private resolveOptions(): MenuOption[] {
     const m = this.menu; if (!m) return [];
-    if (m.empty) return this.emptyCellOptions(m.empty);
+    if (m.moveBoard) return this.moveBoardOptions(m.moveBoard);
+    if (m.board) return this.boardOptions(m.board);
+    if (m.canvas) return this.canvasOptions();
     if (m.convert) return this.convertOptions(m.convert);
     const mid = !!m.branch;
     // A junction with legs is a TEE, not an end, however you arrived at its menu:
@@ -1441,29 +1475,54 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     return 0;
   }
 
-  /** What empty board offers: put a board here, or go and pair one.
-   *
-   *  Only boards. Everything else on this canvas is drawn OFF something — a fitting
-   *  hangs on a run, a tool terminates one — so a menu that offered a ball valve in
-   *  an empty cell would be offering a piece connected to nothing. A board is the one
-   *  object with no duct, which is exactly why it is the one thing you place directly.
-   *
-   *  Greyed rather than absent when there is no unplaced board, same as everywhere
-   *  else: a list that changes shape between right-clicks is a list you have to read
-   *  every time. */
-  private emptyCellOptions(cell: Cell): MenuOption[] {
-    const placed = new Set(this.boardCells.keys());
-    const spare = this.controllersRaw().find(c => !placed.has(c['id'] as string));
-    this.placeableBoard = (spare?.['id'] as string) ?? null;
-    const blocked = this.placeableBoard
-      ? this.boardBlockedBy(this.placeableBoard, cell.col, cell.row) : '';
+  /** What empty board offers: the two shop-level things, which until now lived only
+   *  behind the toolbar's overflow. */
+  private canvasOptions(): MenuOption[] {
     return [
-      { kind: 'placeBoard',
-        label: spare ? `Put ${(spare['name'] as string) || spare['id']} here` : 'Put a board here',
-        enabled: !!spare && !blocked,
-        note: !spare ? 'every paired board is placed' : (blocked ? 'no room' : undefined) },
+      { kind: 'addSystem', label: 'Add system', enabled: !!this.hasShop, note: 'a second collector' },
       { kind: 'findBoards', label: 'Find boards…', enabled: true, note: 'pair another brain' },
     ];
+  }
+
+  /** What a board offers.
+   *
+   *  No "remove" here, deliberately. For a board that word means UNPAIR — forgetting
+   *  hardware, which is a Boards-screen job — and a canvas row reading "Remove" next
+   *  to a Delete that only bins a drawn piece is how someone loses a pairing they
+   *  meant to keep. The row goes there instead of pretending to do it here.
+   *
+   *  Nor "take off the canvas". Every paired board is placed by construction
+   *  (`ensureBoardCells`), and that is what lets the empty-cell menu stay this short:
+   *  with no way to unplace a board there is never one to put back. */
+  private boardOptions(id: string): MenuOption[] {
+    const systems = systemsOf(this.topo as unknown as ShopDoc);
+    return [
+      { kind: 'rename', label: 'Rename', enabled: true },
+      { kind: 'moveSystem', label: 'Move to system…', enabled: systems.length > 1,
+        note: systems.length > 1 ? undefined : 'only one system' },
+      { kind: 'boardSetup', label: 'Board setup…', enabled: true, note: 'channels, unpair' },
+    ];
+  }
+
+  /** The systems a board can be drawn beside.
+   *
+   *  A board belongs to NO system — it may drive selectors in any of them
+   *  (shop.js §controllers), and moving it only decides where the square sits. The
+   *  note says so on every row rather than once in a heading, because the row is
+   *  what gets read. */
+  private moveBoardOptions(id: string): MenuOption[] {
+    const bands = this.systemRowBands();
+    return systemsOf(this.topo as unknown as ShopDoc).map(s => {
+      const here = bands.find(b => b.id === s.id);
+      const dc = s.elements.find(e => e['type'] === 'collector');
+      return {
+        kind: 'system' as MenuKind,
+        label: (dc?.['name'] as string) || s.name || s.id,
+        enabled: !!here,
+        note: here ? 'wires still cross freely' : 'nothing drawn there yet',
+        value: s.id,
+      };
+    });
   }
 
   /** Menu heading for a tap on a placed piece — named after what you tapped. */
@@ -1506,6 +1565,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
           note: used >= MAX_PICKUPS ? `${MAX_PICKUPS} is the limit` : 'overarm guard, hood',
         });
       }
+      opts.push({ kind: 'rename', label: 'Rename', enabled: true });
       // The collector is the one piece with nothing above it, so there's no run to
       // heal — it stays, and offering a dead Delete would only invite the tap.
       if (n.glyph !== 'collector') opts.push(this.deleteOption(n));
@@ -1526,7 +1586,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     return opts.concat(this.gateTypes(n).map(t => ({
       kind: t.kind, label: t.current ? `${t.label} (current)` : t.label,
       enabled: t.enabled, note: t.note,
-    })), [this.deleteOption(n)]);
+    })), [{ kind: 'rename', label: 'Rename', enabled: true }, this.deleteOption(n)]);
   }
 
   /** Delete, with the reason it's greyed out when a fork can't go yet. Last row of
@@ -1537,22 +1597,38 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
              note: ok ? undefined : 'remove its other legs first' };
   }
 
-  /** Route a chosen option to the right primitive for the context it was opened in. */
-  choose(kind: MenuKind): void {
+  /** Route a chosen option to the right primitive for the context it was opened in.
+   *
+   *  Takes the whole option, not just its kind: the generated rows — the systems a
+   *  board can move to — carry their subject in `value`, and there is no closed
+   *  union that could name them. */
+  choose(o: MenuOption): void {
+    const kind = o.kind;
     const m = this.menu; if (!m || !this.topo) return;
-    if (!this.menuOptions.find(o => o.kind === kind)?.enabled) return;
-    // Navigating away isn't an edit, so it must not leave an undo point behind — it
-    // goes before pushHistory rather than into the branch below.
+    if (!this.menuOptions.find(x => x === o)?.enabled) return;
+    // Neither of these is an edit, so neither may leave an undo point behind — both
+    // go before pushHistory rather than into a branch below. Opening the system list
+    // is still the same menu, one level down.
     if (kind === 'findBoards') { this.closeMenu(); this.goBoards(); return; }
+    if (kind === 'boardSetup') { this.closeMenu(); this.goBoards(); return; }
+    if (kind === 'moveSystem' && m.board) {
+      this.openMenu(m.x, m.y, { moveBoard: m.board });
+      return;
+    }
     this.pushHistory(null);
-    if (m.empty) {
-      const cell = m.empty, id = this.placeableBoard;
+    if (m.canvas) {
       this.closeMenu();
-      if (kind === 'placeBoard' && id) {
-        this.boardCells.set(id, cell);
-        this.dirty = true; this.saveError = ''; this.saveNote = '';
-        this.recomputeExtent();
-      }
+      if (kind === 'addSystem') this.addSystem();
+      return;
+    }
+    if (m.moveBoard) {
+      const id = m.moveBoard; this.closeMenu();
+      if (kind === 'system' && o.value) this.moveBoardToSystem(id, o.value);
+      return;
+    }
+    if (m.board) {
+      const id = m.board; this.closeMenu();
+      if (kind === 'rename') this.startBoardRename(id);
       return;
     }
     if (m.convert) {
@@ -1560,6 +1636,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       if (kind === 'board' || kind === 'travel') this.configure(id, kind);
       else if (kind === 'outlet') this.configureOutlet(id);
       else if (kind === 'pickup') this.addPickup(id);
+      else if (kind === 'rename') this.startRename(id);
       else if (kind === 'delete') { this.selectedId = id; this.deleteSelected(); }
       else this.convertKind(id, kind as SelKind);
       return;
@@ -2118,9 +2195,9 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
    *  rail was built to avoid. From up here wires run down-and-left into a shop that
    *  grows down-and-right, the one direction the lane router handles well, and the
    *  auto-layout leaves that corner empty by construction. */
-  private defaultBoardCell(selfId: string): Cell {
+  private defaultBoardCell(selfId: string, sys: ShopSystem | null = this.sys()): Cell {
     let top = Infinity, right = -1;
-    for (const e of this.sys()?.elements ?? []) {
+    for (const e of sys?.elements ?? []) {
       const id = e['id'] as string;
       const c = this.cells.get(id); if (!c) continue;
       const el = this.elem(id);
@@ -2221,6 +2298,70 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
    *  the pointer; at rest it sits on its cell. */
   bx(b: BoardVM): number { return b.dragX ?? b.x; }
   by(b: BoardVM): number { return b.dragY ?? b.y; }
+
+  /** A board's display name — its own, falling back to the mDNS id it was minted
+   *  from, which is at least something you can match against the Boards screen. */
+  boardName(id: string): string {
+    const c = this.controllersRaw().find(x => x['id'] === id);
+    return (c?.['name'] as string) || id;
+  }
+
+  /** Redraw a board beside a different system.
+   *
+   *  Placement only. A board belongs to no system and this changes nothing about
+   *  which gates its channels reach — the menu row says so, because the whole point
+   *  of moving it is that its wires DO cross and you want the run to be short.
+   *
+   *  It reuses the default-placement rule rather than dropping the board on the
+   *  first free cell: "top-right of that system" is the same answer a board paired
+   *  while working there would get, so moving one and pairing one land in the same
+   *  place. */
+  private moveBoardToSystem(boardId: string, systemId: string): void {
+    const sys = systemsOf(this.topo as unknown as ShopDoc).find(s => s.id === systemId);
+    if (!sys) return;
+    const cell = this.defaultBoardCell(boardId, sys);
+    this.boardCells.set(boardId, cell);
+    this.dirty = true; this.saveError = ''; this.saveNote = '';
+    this.recomputeExtent();
+    // The other system is usually a band or more away, so the board would otherwise
+    // move somewhere off-screen and read as having vanished.
+    this.vp.revealBoard(cellY(cell.row) - CELL, cellY(cell.row) + CELL / 2);
+  }
+
+  /** The board whose name is being edited in place, or null. Boards get their own
+   *  field rather than sharing the pieces' one: `namedPiece()` resolves a NodeVM and
+   *  a board is not a node — it lives in `controllers[]`, not in any system's
+   *  elements, which is the same reason its cells ride in their own map. */
+  renamingBoard: string | null = null;
+  private startBoardRename(id: string): void {
+    this.renamingBoard = id;
+    setTimeout(() => {
+      const el = document.querySelector('input.boardedit') as HTMLInputElement | null;
+      el?.focus(); el?.select();
+    });
+  }
+  /** Where the board's name field sits, in board px — same space the SVG is drawn
+   *  in, so it stays on the glyph when you pan. Mirrors namePos(). */
+  boardNamePos(): { left: number; top: number } {
+    const b = this.boards().find(x => x.id === this.renamingBoard);
+    if (!b) return { left: -9999, top: -9999 };
+    return {
+      left: this.bx(b) * this.vp.zoom,
+      top: (this.by(b) - BOARD_H / 2 + 14) * this.vp.zoom,
+    };
+  }
+  renameBoard(id: string, name: string): void {
+    const c = this.controllersRaw().find(x => x['id'] === id);
+    if (!c) return;
+    c['name'] = name;
+    this.dirty = true; this.saveError = ''; this.saveNote = '';
+  }
+  /** An empty name would leave a nameless square, so the id comes back. */
+  onBoardNameBlur(id: string): void {
+    const c = this.controllersRaw().find(x => x['id'] === id);
+    if (c && !String(c['name'] ?? '').trim()) c['name'] = id;
+    this.renamingBoard = null;
+  }
 
   private rosterFor(boardId: string): Map<number, string> {
     const used = new Map<number, string>();
@@ -3256,6 +3397,16 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     this.focusName();
     this.vp.revealBoard(PAD + top * CELL - CELL, PAD + (top + 1) * CELL + CELL / 2);
   }
+  /** Rename from the menu. Selecting a piece is ALREADY what puts the editable field
+   *  on its label, so this only has to do the selecting and move the caret there —
+   *  there is no second rename path to keep in step. It earns its row because that
+   *  connection is invisible: nothing about a drawn label says "tap me to select and
+   *  the name becomes typeable". */
+  private startRename(id: string): void {
+    this.selectedId = id;
+    this.focusName();
+  }
+
   /** Put the caret in the selected piece's name field, once Angular has drawn it.
    *  Two frames: the field only exists after the render that selection triggers. */
   private focusName(): void {

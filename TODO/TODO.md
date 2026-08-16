@@ -23,6 +23,26 @@ than restated. Delete an item when it lands; the git history is the record.
 
 ## UI
 
+- **No way to serve one machine from two collectors.** Reported as "I can't drag
+  a duct across a system boundary" — and that part is working as designed:
+  `validateShop` (shop.js §ducts) rejects a duct whose child and parent are in
+  different systems, deliberately, because that rule is what makes "systems share
+  no duct" structural instead of conventional. Without it you could plumb a 4"
+  tool into the 2.5" manifold and every per-system invariant would still pass.
+
+  What's actually missing is the thing the machines-with-ports model was built
+  for: a MACHINE may hold ports in several systems, joined by `machineId`, with
+  no duct ever crossing. `addSupplementalPort(doc, system, …)` already takes the
+  target system and `supplementalCount()` already counts across all of them — so
+  the model is ready and only the canvas has no path to it. Today filling an open
+  end with "Tool" always calls `newPort()` → `addMachineWithPort()`, which mints a
+  BRAND NEW machine every time.
+
+  The fix is a machine picker, not a cross-system duct: draw a run in the second
+  system, drop a Tool on its end, and be offered "a new machine" or any existing
+  one. Picking an existing machine adds a supplemental port to it, in this system.
+  That is also the cheap way to create a second pickup, which was the low-priority
+  half of the request. Nothing about the schema has to move.
 - **Show free ports in the board dropdown**, and sort boards by the one already
   driving this system. `boards/board-setup.component.ts` already computes
   `gatesOn()`; the picker in `gates/selector-config.component.ts` labels free
@@ -35,10 +55,11 @@ than restated. Delete an item when it lands; the git history is the record.
 
 ## Carried debt
 
-- **A board is placed but never unplaced.** `defaultBoardCell()` gives every paired
-  board a cell, so the empty-cell menu's "Put a board here" is nearly always greyed
-  with "every paired board is placed". Either give a board a way off the canvas, or
-  fold the row into "Find boards…".
+- **No right-click menu on a duct.** Every other thing on the canvas has one now.
+  A duct would want "add a fitting here" — which the branch dots already do, at the
+  same point, so it may be redundant — and "delete this run", which has no
+  primitive behind it: removing a duct means deciding what happens to everything
+  downstream of it. Left out deliberately until that question has an answer.
 
 ## Testing
 

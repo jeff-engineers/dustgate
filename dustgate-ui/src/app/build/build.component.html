@@ -225,10 +225,13 @@
          [class.dragging]="!!b.dragX"
          [class.bad]="!!b.dragX && !!dropBlocked"
          [attr.transform]="'translate(' + bx(b) + ',' + by(b) + ')'"
-         (pointerdown)="onBoardDown($event, b)">
+         (pointerdown)="onBoardDown($event, b)"
+         (contextmenu)="onBoardContext($event, b)">
         <rect class="board-body" [attr.x]="-BOARD_W/2" [attr.y]="-BOARD_H/2"
               [attr.width]="BOARD_W" [attr.height]="BOARD_H" rx="8"/>
-        <text class="board-name" [attr.x]="-BOARD_W/2 + 8" [attr.y]="-BOARD_H/2 + 19">{{ b.name }}</text>
+        <!-- Hidden while its field is on top of it, same as a piece's label. -->
+        <text class="board-name" *ngIf="renamingBoard !== b.id"
+              [attr.x]="-BOARD_W/2 + 8" [attr.y]="-BOARD_H/2 + 19">{{ b.name }}</text>
         <text class="board-role" [attr.x]="-BOARD_W/2 + 8" [attr.y]="-BOARD_H/2 + 33">{{ b.primary ? 'PRIMARY' : 'SECONDARY' }}</text>
         <!-- The port count IS the hardware budget (4 servo + 1 stepper). Amber
              when it's full: the board isn't broken, it's out of room. -->
@@ -267,6 +270,18 @@
            [ngModel]="np.name" (ngModelChange)="rename(np.id, $event)"
            (focus)="onNameFocus($event, np)" (blur)="onNameBlur($event, np)"
            (keydown.enter)="blurName($event)"/>
+
+    <!-- The same field for a BOARD's name. Its own element rather than a branch of
+         the one above: that one resolves a NodeVM through namedPiece(), and a board
+         is not a node — it lives in controllers[], which is why its cells ride in
+         their own map too. Opened only from the board's Rename row, since a board
+         has no selected state to hang it off. -->
+    <input *ngIf="renamingBoard as rb" class="nameedit boardedit" placeholder="Board name"
+           [style.transform]="'translate(-50%, -50%) scale(' + vp.zoom + ')'"
+           [style.left.px]="boardNamePos().left" [style.top.px]="boardNamePos().top"
+           [style.width.px]="BOARD_W - 16"
+           [ngModel]="boardName(rb)" (ngModelChange)="renameBoard(rb, $event)"
+           (blur)="onBoardNameBlur(rb)" (keydown.enter)="blurName($event)"/>
   </div>
 
   <!-- Outside .canvas-wrap on purpose. It's the scroll container, so an
@@ -287,7 +302,7 @@
      with the reason, so the list never shifts under you. -->
 <div class="menu" #menuEl *ngIf="menu" [style.left.px]="menu.x" [style.top.px]="menu.y">
   <div class="menu-sect">{{ menuTitle }}</div>
-  <button *ngFor="let o of menuOptions" [disabled]="!o.enabled" (click)="choose(o.kind)"
+  <button *ngFor="let o of menuOptions" [disabled]="!o.enabled" (click)="choose(o)"
           [class.danger]="o.kind === 'delete'" [title]="o.note || ''">
     <span [innerHTML]="iconFor(o.kind)"></span>{{ o.label }}
     <span class="note" *ngIf="o.note">{{ o.note }}</span>
