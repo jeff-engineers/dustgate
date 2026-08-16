@@ -108,7 +108,8 @@
       <g *ngFor="let n of nodes" class="node"
          [class.sel]="n.id === selectedId" [class.live]="n.live" [class.dragging]="n.id === dragId"
          [class.bad]="n.id === dragId && !!dropBlocked"
-         [attr.transform]="'translate(' + nx(n) + ',' + ny(n) + ')'" (pointerdown)="startDrag($event, n)">
+         [attr.transform]="'translate(' + nx(n) + ',' + ny(n) + ')'" (pointerdown)="startDrag($event, n)"
+         (contextmenu)="onNodeContext($event, n)">
         <ng-container [ngSwitch]="n.glyph">
           <g *ngSwitchCase="'collector'"><circle class="body" r="30"/><path class="stroke" fill="none" stroke-width="3" stroke-linecap="round" d="M0 -19 a19 19 0 1 0 6 2 l-6 17"/><circle class="fillmuted" r="3.5"/></g>
           <g *ngSwitchCase="'ballvalve'"><circle class="body" r="22"/><line class="stroke" x1="0" y1="-22" x2="0" y2="22" stroke-width="4"/></g>

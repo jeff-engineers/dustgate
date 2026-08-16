@@ -848,6 +848,19 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
    *  a topology is loaded, so the non-null assertion holds. */
   get topoDoc(): Topology { return this.topo!; }
 
+  /** Right-click a piece: the same menu its badge opens.
+   *
+   *  The badge is the only way in on a phone and stays the primary one, but on a
+   *  desktop a right-click is where everyone's hand already goes — and on a passive
+   *  manifold, which carries no badge at all, it saves hunting for the one gesture
+   *  that works. Same menu, same options, so there is nothing extra to learn. */
+  onNodeContext(evt: MouseEvent, n: NodeVM): void {
+    evt.preventDefault(); evt.stopPropagation();
+    this.focus(n.id);
+    this.selectedId = n.id;
+    this.openMenu(evt.clientX, evt.clientY, { convert: n.id });
+  }
+
   /** Open the gate config straight from its dot, without selecting-then-tapping.
    *  Must swallow the event: the node group under it starts a drag on pointerdown,
    *  so without this a tap on the dot moves the gate instead of configuring it. */
