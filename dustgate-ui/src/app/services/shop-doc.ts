@@ -237,6 +237,36 @@ export function addSystem(doc: ShopDoc, ids: { system: string; collector: string
   return system;
 }
 
+/**
+ * Add a SUPPLEMENTAL port to a machine that already has a primary — a second pickup
+ * on the same tool.
+ *
+ * It is a port, not a machine: no name of its own, no smart outlet, no trip point.
+ * Those all live on the machine, which already exists. What it carries is a `role`
+ * — "overarm", "hood" — because two ports on one saw are only distinguishable by
+ * where on the saw they are.
+ *
+ * The system is the caller's choice and may be a different one from the primary's:
+ * a cabinet port on the cyclone and an overarm on the shop vac is the case the shop
+ * container was lifted above the airflow graphs for (RFC §6.3).
+ */
+export function addSupplementalPort(
+  doc: ShopDoc, system: ShopSystem, machineId: string, id: string, role: string,
+): RawEl {
+  const machine = machineById(doc, machineId);
+  const port: RawEl = {
+    id, type: 'tool', machineId, supplemental: true, role,
+    name: `${machine?.name ?? 'Machine'} · ${role}`,
+  };
+  system.elements.push(port);
+  return port;
+}
+
+/** How many supplemental ports this machine already has, across every system. */
+export function supplementalCount(doc: ShopDoc | null, machineId: string): number {
+  return portsOf(doc, machineId).filter(({ port }) => isPortSupplemental(port)).length;
+}
+
 /** Drop these element ids and any duct touching them, across every system. */
 function dropElements(doc: ShopDoc, ids: Set<string>): void {
   for (const s of systemsOf(doc)) {

@@ -40,7 +40,12 @@ export const OUTLET_STUB = UNIT_H / 2 + 12;
  *  as touching. */
 export const INLET_GAP = 12;
 
-export type Glyph = 'collector' | 'slidingGate' | 'ballvalve' | 'manifold' | 'junction' | 'tool';
+/** `pickup` is a machine's SUPPLEMENTAL port — an overarm guard, a hood. It has no
+ *  cell of its own: it rides on the top edge of the machine's box as a second inlet,
+ *  which is what stops a shop with a two-port saw reading as a shop with two saws. */
+export type Glyph = 'collector' | 'slidingGate' | 'ballvalve' | 'manifold' | 'junction' | 'tool' | 'pickup';
+/** Half-width of the hood a pickup draws, and the box the router steers around. */
+export const PICKUP_HALF = 9;
 
 /** The router's view of a placed device. `x`/`y` are the resolved centre — for a
  *  unit that is its FIRST outlet, not the middle of the bar. */
@@ -64,6 +69,7 @@ export function halfW(n: SceneNode): number {
     case 'collector': return 30;
     case 'ballvalve': return 22;
     case 'junction': return 8;
+    case 'pickup': return PICKUP_HALF;
     default: return 38;
   }
 }
@@ -74,6 +80,7 @@ export function halfH(n: SceneNode): number {
     case 'collector': return 30;
     case 'ballvalve': return 22;
     case 'junction': return 8;
+    case 'pickup': return PICKUP_HALF;
     default: return TOOL_HALF;
   }
 }

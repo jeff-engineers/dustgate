@@ -136,6 +136,14 @@
                drawn INSIDE the body because it belongs to the machine — see
                plugOf(). Height follows TOOL_HALF, which the router also reads. -->
           <g *ngSwitchCase="'tool'"><rect class="body tool-body" x="-38" [attr.y]="-TOOL_HALF" width="76" [attr.height]="TOOL_HALF * 2" rx="11"/></g>
+          <!-- A supplemental port: a tapered HOOD on the machine's own top edge, not a
+               second body. One machine stays one box — which is the whole point, since
+               a shop drawn with two saws in it is a drawing that lies about the shop.
+               The duct lands on the hood; the role is captioned beside it. -->
+          <g *ngSwitchCase="'pickup'">
+            <path class="hood" d="M-9 0 L0 -13 L9 0 Z"/>
+            <text class="hood-role" x="0" y="-18">{{ pickupRole(n) }}</text>
+          </g>
         </ng-container>
         <!-- Hidden while selected — the editable field (below, outside the SVG)
              takes its place, in the same spot. -->
@@ -143,7 +151,11 @@
              old test was "is this selected", but selection and the field are not
              the same thing — a piece stays selected behind its menu, where the
              field is suppressed, so the name vanished entirely for that beat. -->
-        <text *ngIf="n.glyph !== 'junction' && !isEditingName(n)"
+        <!-- A pickup is captioned by its own role beside the hood, and nothing else:
+             its element name is "Table saw · overarm", and drawing THAT at machine
+             size puts the saw's name on the canvas twice — the one thing this whole
+             treatment exists to avoid. -->
+        <text *ngIf="n.glyph !== 'junction' && n.glyph !== 'pickup' && !isEditingName(n)"
               class="glabel" [class.gatename]="isGate(n)"
               [attr.x]="labelX(n)" [attr.y]="labelY(n)">{{ n.name }}</text>
         <!-- The plug row. Replaced an 'auto'/'manual' caption that said whether a

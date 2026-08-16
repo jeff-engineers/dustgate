@@ -15,8 +15,9 @@ import {
 } from '../gates/selector-types';
 import {
   type ShopDoc, type ShopSystem,
-  addMachineWithPort, addSystem, machineOfPort, machinesOf, outletOf,
-  removeMachine, removePort, systemById, systemsOf, systemViews, toShop,
+  addMachineWithPort, addSupplementalPort, addSystem, isPortSupplemental, machineOfPort,
+  machinesOf, outletOf, portsOf, primaryPortOf, removeMachine, removePort, supplementalCount,
+  systemById, systemsOf, systemViews, toShop,
 } from '../services/shop-doc';
 import {
   type Glyph, type Pt, type SceneNode,
@@ -58,6 +59,14 @@ const GROUND_INSET = 10;
  *  being cut off by it: a plain edge slices a gate bar mid-glyph and the drawing reads
  *  as two panes. Also the depth of the free lane — see cableCost(). */
 const SCRIM_H = 60;
+/** Where the first pickup hood sits on a machine's top edge, and the pitch between
+ *  them. Right of centre, because the trunk's own inlet lands at the middle and every
+ *  drawing that already exists has to keep landing there. */
+const PICKUP_DX = 20;
+const PICKUP_STEP = 20;
+/** Extra pickups one machine may have. Mirrors MAX_SUPPLEMENTAL_PORTS in shop.js —
+ *  change one, change both. */
+const MAX_PICKUPS = 2;
 
 interface Cell { col: number; row: number; }
 interface RawEl { [k: string]: unknown; }
@@ -74,6 +83,10 @@ interface NodeVM {
    *  derived fresh on every mutation, so it clears itself the moment it stops
    *  being true. See redundantSelectors() in shared/device-model/topology.js. */
   redundant: boolean;
+  /** Offset from the node's own cell, in board px. Only a `pickup` uses it: a
+   *  supplemental port has NO cell — it rides on the top edge of the machine's box,
+   *  which is what keeps one machine drawn as one machine. */
+  anchor?: { dx: number; dy: number };
   dragX?: number; dragY?: number;
 }
 interface DuctVM { childId: string; live: boolean; open: boolean; }
@@ -108,7 +121,7 @@ interface CableVM { id: string; gateId: string; boardId: string; channel: number
 
 
 type Fitting = SelKind | 'tool' | 'duct';
-type MenuKind = Fitting | 'cap' | 'uncap' | 'delete' | 'configure' | 'outlet';
+type MenuKind = Fitting | 'cap' | 'uncap' | 'delete' | 'configure' | 'outlet' | 'pickup';
 
 const FITTINGS: Array<{ kind: Fitting; label: string }> = [
   { kind: 'duct',          label: 'Duct' },          // lay bare pipe; populate the open end later
@@ -250,6 +263,8 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       cap:           svg('<path d="M6 12h9"/><rect x="15" y="8" width="3" height="8" rx="1" fill="currentColor" stroke="none"/>'),
       uncap:         svg('<path d="M5 12h9"/><circle cx="18" cy="12" r="2.5"/>'),
       delete:        svg('<path d="M6 7h12M10 7V5h4v2M9 7l1 12h4l1-12"/>'),
+      // A hood: the tapered inlet a second pickup draws on the machine's edge.
+      pickup:        svg('<path d="M6 17 L12 7 L18 17 Z"/><path d="M4 20h16"/>'),
       configure:     svg('<path d="M4 8h10M18 8h2M4 16h4M12 16h8"/><circle cx="16" cy="8" r="2"/><circle cx="10" cy="16" r="2"/>'),
       // A wall socket, for the smart-plug row.
       outlet:        svg('<rect x="4" y="4" width="16" height="16" rx="3"/><circle cx="9.5" cy="11" r="1.1" fill="currentColor" stroke="none"/><circle cx="14.5" cy="11" r="1.1" fill="currentColor" stroke="none"/><path d="M9 16h6"/>'),
@@ -370,8 +385,8 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   iconFor(kind: string): SafeHtml { return this.icons[kind]; }
 
   // ── geometry ────────────────────────────────────────────────────────────────
-  nx(n: NodeVM): number { return n.dragX ?? (PAD + n.col * CELL); }
-  ny(n: NodeVM): number { return n.dragY ?? (PAD + n.row * CELL); }
+  nx(n: NodeVM): number { return (n.dragX ?? (PAD + n.col * CELL)) + (n.anchor?.dx ?? 0); }
+  ny(n: NodeVM): number { return (n.dragY ?? (PAD + n.row * CELL)) + (n.anchor?.dy ?? 0); }
   unitW(n: NodeVM): number { return (n.span - 1) * CELL + 2 * GATE_PAD; }
   outletXs(n: NodeVM): number[] { return Array.from({ length: n.span }, (_, i) => i * CELL); }
   isUnitChild(id: string): boolean { return this.outletOf.has(id); }
@@ -976,6 +991,13 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   // ── drag (reposition) / tap ───────────────────────────────────────────────────
   startDrag(evt: PointerEvent, n: NodeVM): void {
     evt.preventDefault(); evt.stopPropagation();
+    // A pickup has no cell to drag it to — it is part of a machine, and the machine
+    // is the thing that moves. A press on one opens its menu instead.
+    if (n.glyph === 'pickup') {
+      this.focus(n.id); this.selectedId = n.id;
+      this.openMenu(evt.clientX, evt.clientY, { convert: n.id });
+      return;
+    }
     this.focus(n.id);
     this.selectedId = n.id; this.menu = null;
     this.dragId = n.id;
@@ -1065,7 +1087,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     if (band) return `That row belongs to ${band}. A piece stays in its own system.`;
     const occ = new Map<string, NodeVM>();
     for (const m of this.nodes) {
-      if (m.id === n.id) continue;
+      if (m.id === n.id || m.glyph === 'pickup') continue;   // rides its machine's cell
       if (m.isUnit) for (let i = 0; i < m.span; i++) occ.set((m.col + i) + ',' + m.row, m);
       else occ.set(m.col + ',' + m.row, m);
     }
@@ -1321,6 +1343,9 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
    *  (−) badge came off on 2026-08-15, and a phone has no Delete key. */
   private convertOptions(id: string): MenuOption[] {
     const n = this.byId.get(id); if (!n) return [];
+    // A pickup is a port, not a piece: it has no plug, no kind to convert to and no
+    // cell to move it to. All it can do is go.
+    if (n.glyph === 'pickup') return [this.deleteOption(n)];
     if (n.glyph === 'tool' || n.glyph === 'collector') {
       const paired = n.setup === 'done';
       const opts: MenuOption[] = [{
@@ -1329,6 +1354,20 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
         enabled: true,
         note: paired ? undefined : (n.glyph === 'collector' ? 'started by hand' : 'switched by hand'),
       }];
+      // A machine can grow a second place to collect from — an overarm guard, a hood.
+      // Offered on the tool itself because that is where the question comes up, and
+      // capped where the model caps it: a list long enough to scroll is a modelling
+      // mistake, not a shop.
+      if (n.glyph === 'tool') {
+        const doc = this.topo as unknown as ShopDoc;
+        const machine = machineOfPort(doc, this.elem(n.id));
+        const used = machine ? supplementalCount(doc, machine.id as string) : 0;
+        opts.push({
+          kind: 'pickup', label: 'Add second pickup',
+          enabled: !!machine && used < MAX_PICKUPS,
+          note: used >= MAX_PICKUPS ? `${MAX_PICKUPS} is the limit` : 'overarm guard, hood',
+        });
+      }
       // The collector is the one piece with nothing above it, so there's no run to
       // heal — it stays, and offering a dead Delete would only invite the tap.
       if (n.glyph !== 'collector') opts.push(this.deleteOption(n));
@@ -1363,6 +1402,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       const id = m.convert; this.closeMenu();
       if (kind === 'configure') this.configure(id);
       else if (kind === 'outlet') this.configureOutlet(id);
+      else if (kind === 'pickup') this.addPickup(id);
       else if (kind === 'delete') { this.selectedId = id; this.deleteSelected(); }
       else this.convertKind(id, kind as SelKind);
       return;
@@ -2924,6 +2964,43 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     return id;
   }
 
+  /** A second place this machine collects from — an overarm guard, a hood.
+   *
+   *  A PORT, not a machine: the name, the plug and the trip point already exist and
+   *  stay where they are. It lands in the system the machine already lives in and
+   *  arrives as an open end you drag out and gate like any other run — including,
+   *  if you drag it there, into the other collector's system, which is the case the
+   *  shop container exists for.
+   *
+   *  It never gets a cell. The hood rides on the machine's own box (pickupSeat), so
+   *  the drawing gains an inlet rather than a second saw. */
+  private addPickup(toolId: string): void {
+    if (!this.topo) return;
+    const doc = this.topo as unknown as ShopDoc;
+    const machine = machineOfPort(doc, this.elem(toolId)); if (!machine) return;
+    const used = supplementalCount(doc, machine.id as string);
+    if (used >= MAX_PICKUPS) return;
+    const sys = this.sys(); if (!sys) return;
+    this.pushHistory(null);
+    const port = addSupplementalPort(
+      doc, sys, machine.id as string, this.newId('p'),
+      used === 0 ? 'overarm' : 'hood',
+    );
+    // An open end above it, so there is something to drag pipe out of — the same
+    // shape every other run starts as.
+    const end: RawEl = { id: this.newId('j'), type: 'junction', name: 'Open end' };
+    sys.elements.push(end);
+    sys.ducts.push({ child: port['id'], parent: end['id'] });
+    this.buildGraph(this.topo);
+    // The open end DOES get a cell: it is a piece you place. One row above the
+    // machine and one column right, which is where its hood points.
+    const c = this.cells.get(toolId);
+    if (c) this.cells.set(end['id'] as string, { col: c.col + 1, row: Math.max(0, c.row - 1) });
+    this.selectedId = null;
+    this.dirty = true; this.saveError = '';
+    this.syncNodes(); this.refreshHandles(); this.recomputeExtent();
+  }
+
   /** Download the whole shop (topology + layout) as a JSON file the user can keep. */
   exportShop(): void {
     if (!this.topo) return;
@@ -3177,9 +3254,33 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       d.open = cel?.['type'] === 'junction' && !cel['capped'] && this.childrenOf(d.childId).length === 0;
     }
   }
+  /** Where a supplemental port sits: on the top edge of its machine's primary box,
+   *  right of the trunk's own inlet, one hood per pickup.
+   *
+   *  It borrows the primary's CELL rather than owning one. Everything about placement
+   *  on this canvas is written in cells — the layout, the drop checks, the band rule —
+   *  and a pickup is not a thing you place; it is part of a machine that has already
+   *  been placed. Giving it a cell would let you drag half a saw into another system. */
+  private pickupSeat(e: RawEl): { cell: Cell; anchor: { dx: number; dy: number } } | null {
+    const doc = this.topo as unknown as ShopDoc;
+    const machine = machineOfPort(doc, e); if (!machine) return null;
+    const primary = primaryPortOf(doc, machine.id as string); if (!primary) return null;
+    const cell = this.cells.get(primary['id'] as string); if (!cell) return null;
+    // Which pickup this is, in document order, so two hoods never land on each other.
+    const mine = portsOf(doc, machine.id as string)
+      .filter(({ port }) => isPortSupplemental(port))
+      .map(({ port }) => port['id'] as string);
+    const i = Math.max(0, mine.indexOf(e['id'] as string));
+    return { cell, anchor: { dx: PICKUP_DX + i * PICKUP_STEP, dy: -TOOL_HALF } };
+  }
+
+  /** What a pickup is FOR, in the woodworker's word for it — the only thing that
+   *  distinguishes two ports on one saw. */
+  pickupRole(n: NodeVM): string { return (this.elem(n.id)?.['role'] as string) || 'pickup'; }
+
   private glyphFor(e: RawEl): Glyph {
     if (e['type'] === 'collector') return 'collector';
-    if (e['type'] === 'tool') return 'tool';
+    if (e['type'] === 'tool') return isPortSupplemental(e) ? 'pickup' : 'tool';
     if (e['type'] === 'junction') return 'junction';
     switch (e['kind']) { case 'servoGate': return 'ballvalve'; case 'servoManifold': return 'manifold'; default: return 'slidingGate'; }
   }
@@ -3210,7 +3311,12 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
         configurable ? (isCalibrated(el as unknown as ConfigurableSelector) ? 'done' : 'todo')
         : (glyph === 'tool' || glyph === 'collector') ? (this.hasPlugEl(e) ? 'done' : 'todo')
         : '';
-      return { id, glyph, name: (e['name'] as string) || id, col: c.col, row: c.row, branchCount, isUnit, span: isUnit ? Math.max(1, branchCount) : 1, live: false, openIndex: 0, setup, redundant: redundant.has(id) };
+      const seat = glyph === 'pickup' ? this.pickupSeat(e) : null;
+      return { id, glyph, name: (e['name'] as string) || id,
+               col: seat?.cell.col ?? c.col, row: seat?.cell.row ?? c.row,
+               branchCount, isUnit, span: isUnit ? Math.max(1, branchCount) : 1,
+               live: false, openIndex: 0, setup, redundant: redundant.has(id),
+               anchor: seat?.anchor };
     });
     this.byId = new Map(this.nodes.map(n => [n.id, n]));
     this.recomputeExtent();
@@ -3218,7 +3324,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   private occupiedExcept(exclude: Set<string>): Set<string> {
     const occ = new Set<string>();
     for (const n of this.nodes) {
-      if (exclude.has(n.id)) continue;
+      if (exclude.has(n.id) || n.glyph === 'pickup') continue;   // rides its machine's cell
       if (n.isUnit) for (let i = 0; i < n.span; i++) occ.add((n.col + i) + ',' + n.row);
       else occ.add(n.col + ',' + n.row);
     }
@@ -3363,7 +3469,8 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     const place = (id: string, row: number, forceCol?: number): void => {
       deepest = Math.max(deepest, row);
       const el = this.elem(id);
-      const kids = this.childrenOf(id);
+      // A pickup is skipped entirely: it has no cell, it sits on its machine's box.
+      const kids = this.childrenOf(id).filter(k => this.glyphFor(this.elem(k) ?? {}) !== 'pickup');
       const onOutlet = kids.filter(k => this.isUnitChild(k));
       const runKids = kids.filter(k => !this.isUnitChild(k));
       if (isUnitKind(el?.['kind'])) {
