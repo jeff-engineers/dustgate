@@ -23,6 +23,13 @@ import { HardwareProfileService, PortSize } from '../services/hardware-profile.s
       height: 100vh;
       overflow: hidden;
       background: var(--bg);
+      /* The same cap /shop, /boards and /tools set for themselves. Settings had
+         been riding the app column's width, which was fine while that was 960 and
+         stopped being fine when it went to 1440: a settings form stretched that
+         wide is a row of labels at one edge and their controls at the other. */
+      max-width: 460px;
+      margin: 0 auto;
+      width: 100%;
     }
 
     .header {
