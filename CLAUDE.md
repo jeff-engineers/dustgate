@@ -100,6 +100,15 @@ These are decided; don't relitigate them in code review or suggestions.
   grid until 2026-08-16; `docs/boards-on-canvas-plan.md` records why that came out
   and which alternatives were rejected. Nothing stops you dragging a board low,
   where its cables route badly: the fix is the default, not a rule.
+- **A machine is ONE box, however many ports it has.** A second pickup — an
+  overarm guard, a hood — is a differently-shaped inlet on that same box (square
+  spigot = the primary port, tapered hood = a pickup), not a second body and not a
+  dashed relationship. It owns no cell; it rides its machine's box. Its run may be
+  fed by the *other* collector, in which case the duct crosses the seam **in the
+  drawing only** — both its ends stay in one system, so `validateShop`'s "no duct
+  is shared between two systems" holds. Switching the machine on opens gates on
+  both collectors, because it really is connected to both.
+  `docs/mockups/secondary-ports.html` → Option A is the pick and the record.
 - A secondary node gets already-resolved angles/positions on the wire, never
   state names. That's what lets a $5 board be a node and keeps a schema change
   from needing a flash to every board in the shop.
@@ -110,6 +119,12 @@ These are decided; don't relitigate them in code review or suggestions.
 Build an interactive HTML mockup in `docs/mockups/` and publish it for review
 **before** writing non-trivial UI code. Hover is never the only trigger for
 anything. Focus dims rather than hides.
+
+**`docs/mockups/` is also where design decisions already made are recorded**, not
+just a staging area for new ones. A mockup that marks an option as "the pick" has
+settled that question, and the panels around it usually answer the follow-ups too.
+Check for one before re-deriving a UI decision from scratch — `secondary-ports.html`
+got re-litigated three times because nobody looked.
 
 `dustgate-ui/src/app/build/build.component.ts` is ~4k lines — grep it, don't
 read it whole.

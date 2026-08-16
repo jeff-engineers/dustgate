@@ -23,6 +23,12 @@ than restated. Delete an item when it lands; the git history is the record.
 
 ## UI
 
+- **Error message in ui** "Work in progress — saved here, but the controller 
+  won’t take it yet: system "s2": element "p8" must have exactly one parent 
+  duct (has 0)." - the user has no idea what s2 and p8 mean here.  
+  In fact neither does Jeff.  Need to use friendier names, and/or a graphical
+  to highlight issues
+
 - **A duct that crosses the seam to a second pickup — mockup Option A.**
   [docs/mockups/secondary-ports.html](../docs/mockups/secondary-ports.html),
   "What a second port looks like" → **A · One machine, two spigots**, which the
