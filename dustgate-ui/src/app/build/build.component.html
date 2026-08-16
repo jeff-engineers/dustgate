@@ -1,8 +1,9 @@
 <!-- Trimmed to what you reach for while drawing: the layer switch, undo/redo,
      and Save. Everything else is one tap behind the overflow, which is the
      difference between a usable and an unusable toolbar on a phone.
-     Auto-arrange is gone (it rearranged work you'd just done by hand) and so is
-     Boards — the rail's own "+ Find boards" goes to the same place. -->
+     Auto-arrange is gone (it rearranged work you'd just done by hand). Find
+     boards came BACK here when the rail that held its chip was deleted: pairing
+     is an errand you run once, which is what the overflow is for. -->
 <div class="bar">
   <span class="title">Shop layout</span>
   <!-- The Ducts/Wiring toggle is gone (2026-08-15). Once neither layer dimmed
@@ -31,6 +32,7 @@
     <!-- A shop grows a second collector roughly once, which is what puts it here
          rather than on the toolbar. -->
     <button (click)="moreOpen = false; addSystem()" [disabled]="!hasShop">Add system</button>
+    <button (click)="moreOpen = false; goBoards()">Find boards</button>
   </div>
 </div>
 
@@ -47,20 +49,15 @@
        which makes it the pan gesture, with no hit-testing of our own. -->
   <div class="canvas-wrap" #wrap (pointerdown)="vp.onCanvasDown($event)">
     <svg #svg class="canvas" *ngIf="nodes.length"
-         [attr.viewBox]="'0 ' + (-RAIL_H) + ' ' + vbW + ' ' + (vbH + RAIL_H)"
-         [attr.width]="vbW * vp.zoom" [attr.height]="(vbH + RAIL_H) * vp.zoom">
+         [attr.viewBox]="'0 0 ' + vbW + ' ' + vbH"
+         [attr.width]="vbW * vp.zoom" [attr.height]="vbH * vp.zoom">
       <defs>
         <pattern id="bdots" width="27" height="27" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r="1" fill="var(--border)"/></pattern>
-        <!-- Strongest against the rail and gone by the bottom, so the board reads as
-             sliding under it. Not fully opaque even at the top: this is a fade, and a
-             piece you can't see at all is one you'll try to drag twice. -->
-        <linearGradient id="railscrim" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0" stop-color="var(--bg)" stop-opacity="0.88"/>
-          <stop offset="0.55" stop-color="var(--bg)" stop-opacity="0.62"/>
-          <stop offset="1" stop-color="var(--bg)" stop-opacity="0"/>
-        </linearGradient>
       </defs>
-      <rect x="0" y="0" [attr.width]="vbW" [attr.height]="vbH" fill="url(#bdots)" (pointerdown)="deselect()"/>
+      <!-- Empty board. A tap deselects; a right-click asks what goes in that cell,
+           which is the only way to place a board that has come unstuck. -->
+      <rect x="0" y="0" [attr.width]="vbW" [attr.height]="vbH" fill="url(#bdots)"
+            (pointerdown)="deselect()" (contextmenu)="onCanvasContext($event)"/>
 
       <!-- One grey ground per airflow system, drawn under everything. With a single
            collector it is the whole board and says nothing, which is right — it only
@@ -198,51 +195,6 @@
              door is enough. The servo tab has the corner to itself now. -->
       </g>
 
-      <!-- ── the pinned rail, and what it fades ──────────────────────────
-           Painted HERE, after the pieces, because it has to sit over them once
-           it pins — at rest it is in negative y and the order never mattered.
-           The cables follow it: they used to tuck under the pieces, which was
-           fine while they routed around everything, and stopped being fine when
-           the band under a pinned rail became a lane they cross on purpose. A
-           wire you cannot trace is the one thing this whole layer is for. -->
-      <!-- The board rail. Above the whole grid, in negative y, so every cell
-           keeps the coordinates it has always had and no saved layout moves.
-           It PINS: scroll down and it slides with you (railShift), because the
-           other end of every cable lives up here and a wire with one end
-           off-screen tells you nothing. The boards themselves are translated by
-           by(), which is the funnel their ports and cables go through too. -->
-      <g class="wiring" [attr.transform]="'translate(0,' + railShift() + ')'">
-        <rect class="rail" x="0" [attr.y]="-RAIL_H" [attr.width]="vbW" [attr.height]="RAIL_H"/>
-        <line class="rail-edge" x1="0" y1="0" [attr.x2]="vbW" y2="0"/>
-        <!-- The rail SLIMS once pinned: what sticks is the part you point at and drag
-             to. The network name and Find boards are errands you run once, at the top
-             of the shop, so they stay behind rather than becoming permanent chrome. -->
-        <ng-container *ngIf="!railPinned()">
-          <text class="rail-lbl" x="14" [attr.y]="-RAIL_H + 20">BOARDS</text>
-          <!-- Which network they're all on. Only drawn once we actually know it —
-               a placeholder here would be a claim about the shop. -->
-          <g *ngIf="netName">
-            <g class="rail-wifi" [attr.transform]="'translate(19,' + (-RAIL_H + 33) + ')'">
-              <path d="M-5 2 a7 7 0 0 1 10 0"/><path d="M-2.2 5 a3 3 0 0 1 4.4 0"/>
-            </g>
-            <text class="rail-net" x="29" [attr.y]="-RAIL_H + 37">{{ netName }}</text>
-          </g>
-          <g class="findboards" [attr.transform]="'translate(' + findX() + ',' + (-RAIL_H/2) + ')'"
-             (pointerdown)="goBoards()">
-            <rect x="0" y="-18" [attr.width]="FIND_W" height="36" rx="9"/>
-            <text [attr.x]="FIND_W / 2" y="4">+ Find boards</text>
-          </g>
-        </ng-container>
-      </g>
-
-      <!-- The fade below a pinned rail. The drawing passes UNDER the rail rather than
-           being cut off at it — a plain edge severs a gate bar mid-glyph and the board
-           reads as two panes. Dropped to almost nothing mid-drag: a piece you are
-           moving INTO this band has to stay visible while you place it. -->
-      <rect *ngIf="railPinned()" class="scrim" [class.quiet]="dragActive()"
-            x="0" [attr.y]="railShift()" [attr.width]="vbW" [attr.height]="SCRIM_H"
-            fill="url(#railscrim)"/>
-
       <!-- Cable runs. Under the pieces on purpose, so each end tucks beneath the
            tab it lands on rather than stopping short of it. -->
       <g class="wiring">
@@ -268,8 +220,10 @@
         <text class="tab-ch" y="3.3" [attr.fill]="t.wired ? t.shade : null">{{ t.channel }}</text>
       </g>
 
+      <!-- A board stands on a cell like any other piece, and drags like one. -->
       <g *ngFor="let b of boards()" class="board" [class.primary]="b.primary"
          [class.dragging]="!!b.dragX"
+         [class.bad]="!!b.dragX && !!dropBlocked"
          [attr.transform]="'translate(' + bx(b) + ',' + by(b) + ')'"
          (pointerdown)="onBoardDown($event, b)">
         <rect class="board-body" [attr.x]="-BOARD_W/2" [attr.y]="-BOARD_H/2"

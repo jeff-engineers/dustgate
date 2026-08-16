@@ -87,12 +87,19 @@ These are decided; don't relitigate them in code review or suggestions.
   scope.
 - **The plug belongs to the tool**, and draws under the tool's name — never on a
   port.
-- **New pieces default into the system you're working in.** Adding a gate or a
-  board places it inside the active system's row band (`activeSystemId`, which
-  follows whatever you last touched), not at some shop-wide origin. Systems own
-  contiguous, non-interleaving row bands — that is what makes the grey ground
-  drawable and what `bandBlockedBy()` enforces on a drag — so a default that
-  ignores the band can put a piece somewhere a drag would refuse to move it.
+- **New pieces default into the system you're working in.** Adding a gate places
+  it inside the active system's row band (`activeSystemId`, which follows whatever
+  you last touched), not at some shop-wide origin. Systems own contiguous,
+  non-interleaving row bands — that is what makes the grey ground drawable and what
+  `bandBlockedBy()` enforces on a drag — so a default that ignores the band can put
+  a piece somewhere a drag would refuse to move it. A **board** follows the same
+  rule by a different route: it belongs to no system, so it is placed at the top-
+  right of the active system's extent (`defaultBoardCell()`) but never band-checked.
+- **A board stands on the canvas and owns its cell**, exclusively — nothing else
+  may stand there and ducts route around it. It lived on a pinned rail above the
+  grid until 2026-08-16; `docs/boards-on-canvas-plan.md` records why that came out
+  and which alternatives were rejected. Nothing stops you dragging a board low,
+  where its cables route badly: the fix is the default, not a rule.
 - A secondary node gets already-resolved angles/positions on the wire, never
   state names. That's what lets a $5 board be a node and keeps a schema change
   from needing a flash to every board in the shop.

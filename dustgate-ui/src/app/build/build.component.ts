@@ -22,15 +22,15 @@ import {
 } from '../services/shop-doc';
 import {
   type Glyph, type Pt, type SceneNode,
-  CELL, GATE_PAD, PAD, TOOL_HALF, UNIT_H,
-  deviceBox, halfH as glyphHalfH, halfW as glyphHalfW, ptSegDist, segBoxHit,
+  BOARD_H, BOARD_W, CELL, GATE_PAD, PAD, TOOL_HALF, UNIT_H,
+  cellX, cellY, deviceBox, halfH as glyphHalfH, halfW as glyphHalfW, ptSegDist, segBoxHit,
 } from './routing/geometry';
 import { type RoutedDuct, type Scene, Router, sceneBounds } from './routing/router';
 import { CanvasViewport } from './canvas-viewport';
 import {
-  BOARD_H, BOARD_SLOT, BOARD_W, FIND_W, PORT_H, RAIL_H, SERVO_PORTS, TAB_H, TAB_W,
+  PORT_H, SERVO_PORTS, TAB_H, TAB_W,
   cablePath, cableRun, crossing,
-  portPos, portWidth, portExit, railSlot, rankByTravel, segmentsOf, slotAt,
+  portPos, portWidth, portExit, rankByTravel, segmentsOf,
 } from './wiring/wire-geometry';
 
 // ── Layout model ──────────────────────────────────────────────────────────────
@@ -56,10 +56,6 @@ const SYSTEM_GAP = 1;
 /** How far a system's grey ground stops short of its outermost row. Enough that two
  *  bands dragged flush against each other still read as two. */
 const GROUND_INSET = 10;
-/** Depth of the fade below a pinned rail. The board passes UNDER the rail rather than
- *  being cut off by it: a plain edge slices a gate bar mid-glyph and the drawing reads
- *  as two panes. Also the depth of the free lane — see cableCost(). */
-const SCRIM_H = 60;
 /** Where the first pickup hood sits on a machine's top edge, and the pitch between
  *  them. Right of centre, because the trunk's own inlet lands at the middle and every
  *  drawing that already exists has to keep landing there. */
@@ -107,7 +103,9 @@ interface ODot { x: number; y: number; parentId: string; branchId?: string; cell
 //
 // Board placements ride in the doc under `ui.wiring.boards`, deliberately NOT in
 // `ui.layout`: board ids are minted from mDNS hostnames (see /boards) and could
-// collide with an element id in one flat map.
+// collide with an element id in one flat map. They are CELLS in the same grid the
+// elements use — the two maps are separate for the id reason above, not because a
+// board sits in a different space.
 
 /** A placed board, ready to draw. `used` maps servo channel → the gate on it. */
 interface BoardVM {
@@ -130,13 +128,14 @@ interface CableVM { id: string; gateId: string; boardId: string; channel: number
  *  reads as the important one — and none of them is.
  *
  *  Both ends take it: the cable, and the gate's servo tab. The tab is the half you
- *  can see when the rail is scrolled away, which makes it the half that has to
+ *  can see when the board itself is off-screen, which makes it the half that has to
  *  answer "which brain is this on". */
 const CABLE_SHADES = ['#38b6f0', '#45cfd8', '#6f9df2', '#2f9fd0'];
 
 
 type Fitting = SelKind | 'tool' | 'duct';
-type MenuKind = Fitting | 'cap' | 'uncap' | 'delete' | 'board' | 'travel' | 'outlet' | 'pickup';
+type MenuKind = Fitting | 'cap' | 'uncap' | 'delete' | 'board' | 'travel' | 'outlet' | 'pickup'
+              | 'placeBoard' | 'findBoards';
 
 const FITTINGS: Array<{ kind: Fitting; label: string }> = [
   { kind: 'duct',          label: 'Duct' },          // lay bare pipe; populate the open end later
@@ -204,30 +203,29 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   /** Snapped cell under the pointer mid-drag; drives the target-cell highlight. */
   hoverCell: Cell | null = null;
   menu: { x: number; y: number; branch?: BDot; end?: string; convert?: string;
-          addOutput?: { parentId: string; branchId?: string; cell: Cell } } | null = null;
+          addOutput?: { parentId: string; branchId?: string; cell: Cell };
+          /** Right-click on empty canvas: the cell it landed on. */
+          empty?: Cell } | null = null;
+  /** Which board a `placeBoard` row would put down, resolved with the menu so the
+   *  options and the action can't disagree about which one it meant. */
+  private placeableBoard: string | null = null;
   /** The one option list, resolved once when the menu opens (see openMenu). */
   menuOptions: MenuOption[] = [];
   menuTitle = '';
   readonly CELL = CELL; readonly UNIT_H = UNIT_H; readonly GATE_PAD = GATE_PAD; readonly PAD = PAD;
   readonly TOOL_HALF = TOOL_HALF;
-  readonly BOARD_W = BOARD_W; readonly BOARD_H = BOARD_H; readonly RAIL_H = RAIL_H;
-  readonly SCRIM_H = SCRIM_H;
+  readonly BOARD_W = BOARD_W; readonly BOARD_H = BOARD_H;
   readonly PORT_H = PORT_H; readonly TAB_W = TAB_W; readonly TAB_H = TAB_H;
-  readonly SERVO_PORTS = SERVO_PORTS; readonly FIND_W = FIND_W;
+  readonly SERVO_PORTS = SERVO_PORTS;
 
   // ── wiring layer ────────────────────────────────────────────────────────────
-  /** Which view of the canvas is on. The pieces and their cells are identical in
-   *  both — only what's drawn over them changes. */
-  /** controllerId → slot index along the rail. Boards are one-dimensional: the rail
-   *  sits above the whole grid, which is what makes "a cable always leaves the
-   *  underside of its port and goes down" an invariant instead of a hope. */
-  private boardSlots = new Map<string, number>();
+  /** controllerId → the grid cell that board stands on. Its OWN map rather than an
+   *  entry in `cells`, because board ids come from mDNS hostnames and an element id
+   *  is minted here — one flat map would let a board called `sel1` quietly take a
+   *  gate's square. Same grid, same units, same drop checks. */
+  private boardCells = new Map<string, Cell>();
   /** Overflow menu in the toolbar — everything that isn't Save or the layer switch. */
   moreOpen = false;
-  /** The WiFi network the boards are on, once the device tells us. Empty until then,
-   *  and empty forever on a device too old to report it — the rail just shows
-   *  BOARDS, which is honest, rather than a guess at the shop's network. */
-  netName = '';
   /** Mid-drag rubber cable. `mode` says which END came loose: from a tab you're
    *  hunting a port, from a port you're hunting a tab. */
   wireDrag: {
@@ -239,7 +237,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     overGate: string | null;                           // hovered tab
   } | null = null;
   /** A tray chip being dragged onto the canvas, or a placed board being moved. */
-  private bodrag: { id: string; dx: number; dy: number; fromTray: boolean; moved: boolean } | null = null;
+  private bodrag: { id: string; dx: number; dy: number; moved: boolean } | null = null;
   /** Why the cable being dragged can't land where the pointer is, or ''. */
   wireBlocked = '';
   /** What a legal drop will DO, when that isn't just "connect" — currently a swap. */
@@ -285,6 +283,9 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       configure:     svg('<path d="M4 8h10M18 8h2M4 16h4M12 16h8"/><circle cx="16" cy="8" r="2"/><circle cx="10" cy="16" r="2"/>'),
       // A wall socket, for the smart-plug row.
       outlet:        svg('<rect x="4" y="4" width="16" height="16" rx="3"/><circle cx="9.5" cy="11" r="1.1" fill="currentColor" stroke="none"/><circle cx="14.5" cy="11" r="1.1" fill="currentColor" stroke="none"/><path d="M9 16h6"/>'),
+      // A controller: the module and its port strip, the same shape the canvas draws.
+      placeBoard:    svg('<rect x="4" y="6" width="16" height="10" rx="2"/><path d="M8 16v2M12 16v2M16 16v2"/>'),
+      findBoards:    svg('<circle cx="11" cy="11" r="6"/><path d="M15.5 15.5 20 20"/>'),
     };
   }
 
@@ -329,9 +330,6 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     this.livePoll = setInterval(() => {
       void this.api.getStatus().then(st => this.applyLive(st)).catch(() => { /* offline */ });
     }, 2000);
-    // The rail names the network the boards share. Best-effort: an unreachable or
-    // older device just leaves the label off.
-    try { this.netName = (await this.api.getMotionStatus()).ssid ?? ''; } catch { /* no device */ }
     // The load is async, so it can settle either side of ngAfterViewInit. Both paths
     // ask to fit and maybeFit() runs whichever gets there second, once with a real
     // layout and a measurable wrap.
@@ -357,11 +355,17 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   /** Natural size of the drawing in board units, set by recomputeExtent(). */
   private contentW = 0; private contentH = 0;
 
-  /** The bounding box of the drawing itself — glyphs and the board rail — with a
+  /** The bounding box of the drawing itself — every glyph, boards included — with a
    *  little air, in board units. */
   inkExtent(): { w: number; h: number } {
     if (!this.nodes.length) return { w: this.contentW, h: this.contentH };
     let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+    // A board off to the right of the shop is part of the drawing and has to be on
+    // screen when the canvas fits itself — it holds the far end of every cable.
+    for (const c of this.boardCells.values()) {
+      x0 = Math.min(x0, cellX(c.col) - BOARD_W / 2); x1 = Math.max(x1, cellX(c.col) + BOARD_W / 2);
+      y0 = Math.min(y0, cellY(c.row) - BOARD_H / 2); y1 = Math.max(y1, cellY(c.row) + BOARD_H / 2);
+    }
     for (const n of this.nodes) {
       // A UNIT's origin is its FIRST OUTLET, not its centre: the body runs right
       // from there and overhangs by GATE_PAD at each end. Treating its half-width
@@ -376,11 +380,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       y0 = Math.min(y0, this.ny(n) - hh - 16); y1 = Math.max(y1, this.ny(n) + hh);
     }
     const AIR = 24;
-    return {
-      w: Math.max(1, x1 - x0 + AIR * 2),
-      // The rail sits above the drawing and has to be on screen too.
-      h: Math.max(1, y1 - y0 + AIR * 2 + RAIL_H),
-    };
+    return { w: Math.max(1, x1 - x0 + AIR * 2), h: Math.max(1, y1 - y0 + AIR * 2) };
   }
 
   private livePoll: ReturnType<typeof setInterval> | null = null;
@@ -416,6 +416,13 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       id: n.id, glyph: n.glyph, isUnit: n.isUnit, span: n.span,
       x: this.routeX(n), y: this.routeY(n),
     }));
+    // Boards are obstacles too — that is the whole point of a board owning its cell.
+    // They carry no ducts, so they only ever appear here as boxes to steer around.
+    // Their DRAG position is deliberately not used: a board mid-drag would re-solve
+    // every run in the shop on the way past, and it isn't standing anywhere yet.
+    for (const [id, c] of this.boardCells) {
+      nodes.push({ id, glyph: 'board', isUnit: false, span: 1, x: cellX(c.col), y: cellY(c.row) });
+    }
     const ducts = this.ducts.map(d => ({
       childId: d.childId,
       parentId: this.parentOf.get(d.childId),
@@ -833,14 +840,14 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   namePos(): { left: number; top: number } {
     const n = this.namedPiece();
     if (!n) return { left: -9999, top: -9999 };
-    // + RAIL_H because the field is a DOM element measured from the top of the SVG,
-    // and the SVG's viewBox starts at -RAIL_H (the board rail). Without it the field
-    // lands a rail's height above the label it replaces — the name appeared to jump
-    // upward the moment you clicked a piece.
+    // The viewBox starts at the origin, so board y IS distance from the top of the
+    // SVG. This used to add RAIL_H, because the box started at -RAIL_H to make room
+    // for the board rail above the grid, and without it the field landed a rail's
+    // height above the label it replaced.
     // × zoom: left/top are wrap pixels, and the SVG next to it is drawn scaled.
     return {
       left: (this.nx(n) + this.labelX(n)) * this.vp.zoom,
-      top: (this.ny(n) + this.labelY(n) - 4 + RAIL_H) * this.vp.zoom,
+      top: (this.ny(n) + this.labelY(n) - 4) * this.vp.zoom,
     };
   }
 
@@ -862,6 +869,23 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     this.focus(n.id);
     this.selectedId = n.id;
     this.openMenu(evt.clientX, evt.clientY, { convert: n.id });
+  }
+
+  /** Right-click empty canvas: what goes in this cell.
+   *
+   *  The background only ever deselected before. It needs a menu now because a board
+   *  is placed rather than ordered, and a board with no cell — one paired while the
+   *  canvas was elsewhere, or one whose square was dropped on load — otherwise has no
+   *  way back onto the drawing. Ducts and fittings are NOT offered here: they hang
+   *  off a run, and a fitting standing alone in a cell is connected to nothing.
+   *
+   *  A right-click on a PIECE opens that piece's own menu instead (onNodeContext),
+   *  which is why this one only has to answer for empty board. */
+  onCanvasContext(evt: MouseEvent): void {
+    evt.preventDefault(); evt.stopPropagation();
+    const p = this.toSvg(evt as unknown as PointerEvent);
+    const cell = this.dragCell(p);
+    this.openMenu(evt.clientX, evt.clientY, { empty: cell });
   }
 
   /** Open the gate config straight from its dot, without selecting-then-tapping.
@@ -1046,8 +1070,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     n.dragX = pt.x - this.grab.dx; n.dragY = pt.y - this.grab.dy;
     // Validity is re-checked only when the pointer crosses into a new cell — the
     // check walks every duct, and the answer can't change inside one cell anyway.
-    const col = Math.max(0, Math.round((n.dragX - PAD) / CELL));
-    const row = Math.max(0, Math.round((n.dragY - PAD) / CELL));
+    const { col, row } = this.dragCell({ x: n.dragX, y: n.dragY });
     if (col === this.hoverCell?.col && row === this.hoverCell?.row) return;
     this.hoverCell = { col, row };
     this.dropBlocked = (col === n.col && row === n.row) ? '' : this.placeBlockedBy(n, col, row);
@@ -1060,7 +1083,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     const dragged = n?.dragX != null && n?.dragY != null;
     let moved = false;
     if (n && dragged) {
-      const col = Math.max(0, Math.round((n.dragX! - PAD) / CELL)), row = Math.max(0, Math.round((n.dragY! - PAD) / CELL));
+      const { col, row } = this.dragCell({ x: n.dragX!, y: n.dragY! });
       moved = col !== n.col || row !== n.row;
       if (this.canPlace(n, col, row) && moved) {
         this.pushHistory(null);
@@ -1117,18 +1140,14 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     // to reflow the other system out of the way mid-gesture.
     const band = this.bandBlockedBy(n.id, row);
     if (band) return `That row belongs to ${band}. A piece stays in its own system.`;
-    const occ = new Map<string, NodeVM>();
-    for (const m of this.nodes) {
-      if (m.id === n.id || m.glyph === 'pickup') continue;   // rides its machine's cell
-      if (m.isUnit) for (let i = 0; i < m.span; i++) occ.set((m.col + i) + ',' + m.row, m);
-      else occ.set(m.col + ',' + m.row, m);
-    }
     const cells: Cell[] = n.isUnit ? Array.from({ length: n.span }, (_, i) => ({ col: col + i, row })) : [{ col, row }];
-    const hit = cells.map(c => occ.get(c.col + ',' + c.row)).find(m => m);
+    // occupantAt covers boards as well as pieces — a board owns its cell, so a gate
+    // dropped on one is refused with the board named, same as any other collision.
+    const hit = cells.map(c => this.occupantAt(c.col, c.row, n.id)).find(name => name);
     if (hit) {
       return n.isUnit
-        ? `${this.pieceLabel(n)} needs ${n.span} free cells in a row — ${hit.name} is in the way.`
-        : `${hit.name} is already in that cell.`;
+        ? `${this.pieceLabel(n)} needs ${n.span} free cells in a row — ${hit} is in the way.`
+        : `${hit} is already in that cell.`;
     }
     // No duct may cross a device. Test at the CANDIDATE position (so the moved node's
     // own ducts reroute), then require every device to be clear of every foreign duct —
@@ -1284,7 +1303,8 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     // the menu is dismissed; every other context shows the menu alone.
     if (!ctx.convert) this.selectedId = null;
     this.menu = { x, y, ...ctx };
-    this.menuTitle = ctx.convert ? this.convertTitle(ctx.convert)
+    this.menuTitle = ctx.empty ? 'This empty cell'
+                   : ctx.convert ? this.convertTitle(ctx.convert)
                    // A tee reaches this menu by being a junction, but it is a fork,
                    // not an end — and saying "the end of this run" over a list that
                    // refuses to cap or delete it explains nothing.
@@ -1358,6 +1378,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
    *   • anything needing a cell — greyed "(no room)" when that exact cell is taken. */
   private resolveOptions(): MenuOption[] {
     const m = this.menu; if (!m) return [];
+    if (m.empty) return this.emptyCellOptions(m.empty);
     if (m.convert) return this.convertOptions(m.convert);
     const mid = !!m.branch;
     // A junction with legs is a TEE, not an end, however you arrived at its menu:
@@ -1418,6 +1439,31 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       return this.childrenOf(id).length;
     }
     return 0;
+  }
+
+  /** What empty board offers: put a board here, or go and pair one.
+   *
+   *  Only boards. Everything else on this canvas is drawn OFF something — a fitting
+   *  hangs on a run, a tool terminates one — so a menu that offered a ball valve in
+   *  an empty cell would be offering a piece connected to nothing. A board is the one
+   *  object with no duct, which is exactly why it is the one thing you place directly.
+   *
+   *  Greyed rather than absent when there is no unplaced board, same as everywhere
+   *  else: a list that changes shape between right-clicks is a list you have to read
+   *  every time. */
+  private emptyCellOptions(cell: Cell): MenuOption[] {
+    const placed = new Set(this.boardCells.keys());
+    const spare = this.controllersRaw().find(c => !placed.has(c['id'] as string));
+    this.placeableBoard = (spare?.['id'] as string) ?? null;
+    const blocked = this.placeableBoard
+      ? this.boardBlockedBy(this.placeableBoard, cell.col, cell.row) : '';
+    return [
+      { kind: 'placeBoard',
+        label: spare ? `Put ${(spare['name'] as string) || spare['id']} here` : 'Put a board here',
+        enabled: !!spare && !blocked,
+        note: !spare ? 'every paired board is placed' : (blocked ? 'no room' : undefined) },
+      { kind: 'findBoards', label: 'Find boards…', enabled: true, note: 'pair another brain' },
+    ];
   }
 
   /** Menu heading for a tap on a placed piece — named after what you tapped. */
@@ -1495,7 +1541,20 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   choose(kind: MenuKind): void {
     const m = this.menu; if (!m || !this.topo) return;
     if (!this.menuOptions.find(o => o.kind === kind)?.enabled) return;
+    // Navigating away isn't an edit, so it must not leave an undo point behind — it
+    // goes before pushHistory rather than into the branch below.
+    if (kind === 'findBoards') { this.closeMenu(); this.goBoards(); return; }
     this.pushHistory(null);
+    if (m.empty) {
+      const cell = m.empty, id = this.placeableBoard;
+      this.closeMenu();
+      if (kind === 'placeBoard' && id) {
+        this.boardCells.set(id, cell);
+        this.dirty = true; this.saveError = ''; this.saveNote = '';
+        this.recomputeExtent();
+      }
+      return;
+    }
     if (m.convert) {
       const id = m.convert; this.closeMenu();
       if (kind === 'board' || kind === 'travel') this.configure(id, kind);
@@ -1983,6 +2042,13 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       const span = el && isUnitKind(el['kind']) ? Math.max(1, (el['branches'] as unknown[] | undefined)?.length ?? 1) : 1;
       for (let i = 0; i < span; i++) occ.add((c.col + i) + ',' + c.row);
     }
+    // A board owns its cell EXCLUSIVELY (decided 2026-08-15). It is a real module on
+    // a real wall, so it behaves like one: nothing else may stand on it, and being an
+    // obstacle here is what stops a duct being drawn through the hardware.
+    for (const [id, c] of this.boardCells) {
+      if (id === except) continue;
+      occ.add(c.col + ',' + c.row);
+    }
     return occ;
   }
   // ── wiring layer ──────────────────────────────────────────────────────────────
@@ -2017,33 +2083,112 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       } as unknown as RawEl);
       added = true;
     }
-    if (added) this.ensureSlots();
+    if (added) this.ensureBoardCells();
   }
 
-
-
-  /** Boards that have been placed on the canvas, with their port rosters. */
-  /** Every paired board gets a slot, in controller order, keeping whatever order was
-   *  saved. Stale entries (a board that has since been unpaired) drop out. */
-  private ensureSlots(): void {
+  /** Every paired board stands somewhere, keeping whatever cell was saved. Stale
+   *  entries (a board that has since been unpaired) drop out — an unpaired board's
+   *  square would otherwise sit there blocking a cell for hardware that isn't in the
+   *  shop any more. */
+  private ensureBoardCells(): void {
     const ids = this.controllersRaw().map(c => c['id'] as string);
-    for (const id of [...this.boardSlots.keys()]) if (!ids.includes(id)) this.boardSlots.delete(id);
-    const used = new Set(this.boardSlots.values());
-    let next = 0;
+    for (const id of [...this.boardCells.keys()]) if (!ids.includes(id)) this.boardCells.delete(id);
     for (const id of ids) {
-      if (this.boardSlots.has(id)) continue;
-      while (used.has(next)) next++;
-      this.boardSlots.set(id, next); used.add(next);
+      if (this.boardCells.has(id)) continue;
+      this.boardCells.set(id, this.defaultBoardCell(id));
     }
   }
+
+  /** Where a board that has just been paired lands: the top-RIGHT corner of the
+   *  system you are working in, one column past its widest row.
+   *
+   *  Not the shop's corner. A board added while working on the second collector
+   *  belongs beside THAT collector rather than back up at the first one's, and
+   *  `activeSystemId` already follows whatever you last touched (focus()), so there
+   *  is no mode to read.
+   *
+   *  A board is the one piece with no system of its own — it may drive selectors in
+   *  any system (shop.js §controllers) and `systemOf` does not contain it. So this is
+   *  a PLACEMENT default and nothing more: it says where the square is drawn, not
+   *  which gates the board's channels can reach.
+   *
+   *  Top-right rather than anywhere else because it is the whole reason boards can
+   *  come back onto the canvas at all. A brain placed BELOW the gates it drives sends
+   *  every cable climbing back up through the pieces in between — which is what the
+   *  rail was built to avoid. From up here wires run down-and-left into a shop that
+   *  grows down-and-right, the one direction the lane router handles well, and the
+   *  auto-layout leaves that corner empty by construction. */
+  private defaultBoardCell(selfId: string): Cell {
+    let top = Infinity, right = -1;
+    for (const e of this.sys()?.elements ?? []) {
+      const id = e['id'] as string;
+      const c = this.cells.get(id); if (!c) continue;
+      const el = this.elem(id);
+      const span = el && isUnitKind(el['kind'])
+        ? Math.max(1, (el['branches'] as unknown[] | undefined)?.length ?? 1) : 1;
+      top = Math.min(top, c.row);
+      right = Math.max(right, c.col + span - 1);
+    }
+    // Nothing placed in this system yet — there is no corner to be right of.
+    const start: Cell = isFinite(top) ? { col: right + 1, row: top } : { col: 0, row: 0 };
+    // The corner is only the FIRST choice. Another board is usually already parked
+    // there, and a cell a board owns is as blocked as one a gate stands on.
+    for (let i = 0; i < 256; i++) {
+      const cell = { col: start.col + i, row: start.row };
+      if (this.boardRoomAt(cell.col, cell.row, selfId)) return cell;
+    }
+    return start;
+  }
+
+  /** Room for a BOARD at (col,row): on the canvas, nothing else in the cell, and no
+   *  duct running through it.
+   *
+   *  Deliberately not roomAt(). That one also enforces the system row bands, and a
+   *  board belongs to no system — refusing it a row because the collector below owns
+   *  that stripe would be enforcing a membership a board doesn't have. */
+  private boardRoomAt(col: number, row: number, selfId: string): boolean {
+    if (col < 0 || row < 0) return false;
+    if (this.cellOccupied(selfId).has(col + ',' + row)) return false;
+    return !this.cellOnDuct(col, row, selfId);
+  }
+
+  /** Why a board can't stand at (col,row) — '' when it can. Same guidance-bar
+   *  sentence a piece drag gets, naming the thing in the way. */
+  private boardBlockedBy(selfId: string, col: number, row: number): string {
+    if (col < 0 || row < 0) return '';
+    const hit = this.occupantAt(col, row, selfId);
+    if (hit) return `${hit} is already in that cell.`;
+    if (this.cellOnDuct(col, row, selfId)) return 'A duct runs through that cell.';
+    return '';
+  }
+
+  /** What is standing on this cell, named — a piece, or another board. */
+  private occupantAt(col: number, row: number, selfId: string): string | null {
+    for (const n of this.nodes) {
+      if (n.id === selfId || n.glyph === 'pickup') continue;
+      const span = n.isUnit ? n.span : 1;
+      if (n.row === row && col >= n.col && col < n.col + span) return n.name;
+    }
+    for (const [id, c] of this.boardCells) {
+      if (id === selfId || c.col !== col || c.row !== row) continue;
+      const board = this.controllersRaw().find(b => b['id'] === id);
+      return (board?.['name'] as string) || id;
+    }
+    return null;
+  }
+  /** Every board that has a cell, ready to draw. Deliberately does NOT place the ones
+   *  that don't: this runs on every change-detection pass, and handing a board a cell
+   *  from inside a render is how a drawing ends up disagreeing with itself for a
+   *  frame. Placement happens at the seams where a board becomes known — load,
+   *  import, and the paired-board merge — and anything still without a cell simply
+   *  isn't on the canvas, which is the state the empty-cell menu puts right. */
   boards(): BoardVM[] {
     if (!this.topo) return [];
-    this.ensureSlots();
     const out: BoardVM[] = [];
     const fallback = this.defaultControllerId();
     for (const c of this.controllersRaw()) {
       const id = c['id'] as string;
-      const slot = this.boardSlots.get(id); if (slot === undefined) continue;
+      const cell = this.boardCells.get(id); if (!cell) continue;
       const used = new Map<number, string>();
       let servoCount = 0;
       // A board is shop-level and may drive selectors in any system, so its port
@@ -2056,44 +2201,26 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
         const ch = ((e['servo'] as RawEl | undefined)?.['channel'] as number) ?? 0;
         used.set(ch, e['id'] as string); servoCount++;
       }
-      const p = railSlot(slot);
       const drag = this.bodrag?.id === id ? this.bodrag : null;
       out.push({
         id, name: (c['name'] as string) || id, primary: c['role'] === 'primary',
-        col: slot, row: 0, x: p.x, y: p.y, used, servoCount,
+        col: cell.col, row: cell.row, x: cellX(cell.col), y: cellY(cell.row), used, servoCount,
         dragX: drag ? this.boardDragPt?.x : undefined,
         dragY: drag ? this.boardDragPt?.y : undefined,
       });
     }
-    return out.sort((a, b) => a.col - b.col);
+    // Reading order, which is also cable order: the lane bias below is per BOARD
+    // index, so it has to be an order that doesn't shuffle when a board is dragged
+    // a column sideways.
+    return out.sort((a, b) => a.row - b.row || a.col - b.col);
   }
   private boardDragPt: Pt | null = null;
-  /** x of the "+ Find boards" chip. Pinned to the FAR RIGHT of the rail rather than
-   *  trailing the last board: it's the one control up here, it shouldn't wander every
-   *  time a board is paired, and the space between it and the boards is what makes
-   *  the free slots visible. */
-  findX(): number { return this.vbW - FIND_W - 14; }
-  /** Last slot a board can occupy without sliding under the Find boards chip. */
-  private maxSlot(): number {
-    const limit = this.findX() - 14 - BOARD_W / 2;
-    let s = 0;
-    while (railSlot(s + 1).x <= limit) s++;
-    return s;
-  }
   goBoards(): void { void this.nav.navigate(['/boards']); }
+  /** The one funnel every part of a board goes through — its glyph, its ports, the
+   *  cable that leaves them, and the hit-testing for a drop. A board mid-drag tracks
+   *  the pointer; at rest it sits on its cell. */
   bx(b: BoardVM): number { return b.dragX ?? b.x; }
-  /** The rail's pin shift rides HERE, in the one funnel every part of a board goes
-   *  through — its glyph, its ports, the cable that leaves them, and the hit-testing
-   *  for a drop. Add it once and the whole rail pins coherently; add it in the
-   *  template and the cable would stay behind while the board moved. */
-  by(b: BoardVM): number { return (b.dragY ?? b.y) + this.railShift(); }
-  /** How far down the rail has been pushed to stay on screen. 0 at rest. */
-  railShift(): number { return this.vp.pinShift(); }
-  railPinned(): boolean { return this.vp.pinned(); }
-  /** Board y of the scrim's lower edge — the band a cable may cross for free. */
-  scrimBottom(): number { return this.railShift() + SCRIM_H; }
-  /** Anything being dragged right now, which is when the scrim backs off. */
-  dragActive(): boolean { return !!this.dragId || !!this.bodrag; }
+  by(b: BoardVM): number { return b.dragY ?? b.y; }
 
   private rosterFor(boardId: string): Map<number, string> {
     const used = new Map<number, string>();
@@ -2151,7 +2278,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       return {
         id: n.id, x: this.tabX(n), y: this.tabY(n),
         channel: linear ? 'ST' : String(ch),
-        wired: this.boardSlots.has(board),
+        wired: this.boardCells.has(board),
         shade: this.boardShade(board),
       };
     });
@@ -2196,13 +2323,11 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       .filter(n => n.id !== gateId)
       .map(n => deviceBox(this.sceneNode(n), 6));
     const ducts = this.ducts.map(d => this.ductPoints(d.childId)).filter(p => p.length > 1);
-    // The band under a pinned rail is a FREE LANE. Everything down there is faded on
-    // purpose, so a wire crossing it says nothing misleading — and making cables detour
-    // around glyphs the user can barely see would produce contortions with no visible
-    // cause. Only while pinned: at rest that band is ordinary board.
-    const free = this.railPinned() ? this.scrimBottom() : -Infinity;
+    // There used to be a FREE LANE here — the faded band under a pinned rail, which a
+    // wire could cross for nothing because everything down there was dimmed anyway.
+    // The rail is gone and with it the band: every stretch of this canvas is ordinary
+    // board now, and a wire drawn over a piece means the same thing wherever it is.
     return (a, b) => {
-      if (Math.max(a.y, b.y) <= free) return 0;
       let c = 0;
       for (const box of boxes) if (segBoxHit(a, b, box)) c += 100;
       for (const pts of ducts) {
@@ -2214,11 +2339,17 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     };
   }
 
-  /** The shade this board's wiring wears, by its slot on the rail. Stable under a
-   *  reorder is not the goal — being DISTINCT from its neighbour is. */
+  /** The shade this board's wiring wears.
+   *
+   *  Keyed off the board's place in `controllers[]` — the order /boards paired them
+   *  in — and not off where it stands. It used to be the rail slot, which meant
+   *  dragging a board recoloured every cable leaving it; now that a board can be
+   *  dragged anywhere, a shade that moved with it would be a colour that means
+   *  nothing. Being DISTINCT from the neighbouring board is the goal, and pairing
+   *  order gives that for free without changing under a drag. */
   boardShade(boardId: string): string {
-    const slot = this.boardSlots.get(boardId) ?? 0;
-    return CABLE_SHADES[slot % CABLE_SHADES.length];
+    const i = this.controllersRaw().findIndex(c => c['id'] === boardId);
+    return CABLE_SHADES[Math.max(0, i) % CABLE_SHADES.length];
   }
 
   cables(): CableVM[] {
@@ -2254,23 +2385,38 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   // ── dragging a board ────────────────────────────────────────────────────────
+  // An ordinary grid drag, the same gesture and the same refusals a piece gets. It
+  // was a one-axis reorder along the rail until 2026-08-16; a board owns its cell
+  // exclusively now, which is what makes "you can't drop that here" mean the same
+  // thing for a brain as it does for a gate.
+  //
+  // Nothing stops you dragging a board low, where its cables route badly — decided,
+  // see docs/boards-on-canvas-plan.md. The cables redraw live during the drag, so a
+  // bad drop shows as ugly wire inside the same gesture, and that is the feedback.
   onBoardDown(evt: PointerEvent, b: BoardVM): void {
     evt.preventDefault(); evt.stopPropagation();
     const p = this.toSvg(evt);
-    this.bodrag = { id: b.id, dx: p.x - b.x, dy: 0, fromTray: false, moved: false };
+    this.bodrag = { id: b.id, dx: p.x - b.x, dy: p.y - b.y, moved: false };
     this.boardDragPt = { x: b.x, y: b.y };
+    this.selectedId = null; this.menu = null;
     window.addEventListener('pointermove', this.boMove);
     window.addEventListener('pointerup', this.boUp);
     this.vp.beginEdgeScroll(this.boMove, evt);
   }
-  // Boards slide ALONG the rail and nowhere else, so a drag is a reorder rather than
-  // a placement — there is no invalid drop and nothing to refuse.
   private onBoardMove(evt: PointerEvent): void {
     this.vp.trackEdge(evt);
-    if (!this.bodrag) return;
-    this.bodrag.moved = true;
+    const d = this.bodrag; if (!d) return;
+    d.moved = true;
     const p = this.toSvg(evt);
-    this.boardDragPt = { x: p.x - this.bodrag.dx, y: -RAIL_H / 2 };
+    this.boardDragPt = { x: p.x - d.dx, y: p.y - d.dy };
+    const at = this.dragCell(this.boardDragPt);
+    // Same as a piece drag: only re-check when the pointer crosses into a new cell.
+    // The check walks every duct and the answer can't change inside one cell.
+    if (at.col === this.hoverCell?.col && at.row === this.hoverCell?.row) return;
+    this.hoverCell = at;
+    const home = this.boardCells.get(d.id);
+    this.dropBlocked = (home && at.col === home.col && at.row === home.row)
+      ? '' : this.boardBlockedBy(d.id, at.col, at.row);
   }
   private onBoardUp(): void {
     this.vp.endEdgeScroll();
@@ -2278,20 +2424,25 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     window.removeEventListener('pointerup', this.boUp);
     const d = this.bodrag; const pt = this.boardDragPt;
     this.bodrag = null; this.boardDragPt = null;
+    this.hoverCell = null; this.dropBlocked = '';
     if (!d || !pt || !d.moved) return;
-    // A board goes wherever there's room, not into a packed left-justified queue —
-    // the rail is a shelf, and where you put a board on it is information (the one
-    // by the far wall belongs over there). So: drop into the slot under the pointer,
-    // and if something is already in it, the two trade places.
-    const from = this.boardSlots.get(d.id);
-    const to = Math.max(0, Math.min(this.maxSlot(), slotAt(pt.x)));
-    if (from === undefined || from === to) return;
-    const occupant = [...this.boardSlots.entries()].find(([id, s]) => s === to && id !== d.id);
+    const to = this.dragCell(pt);
+    const home = this.boardCells.get(d.id);
+    if (!home || (to.col === home.col && to.row === home.row)) return;
+    if (this.boardBlockedBy(d.id, to.col, to.row)) return;
     this.pushHistory(null);
-    this.boardSlots.set(d.id, to);
-    if (occupant) this.boardSlots.set(occupant[0], from);
+    this.boardCells.set(d.id, to);
     this.dirty = true; this.saveError = ''; this.saveNote = '';
     this.recomputeExtent();
+  }
+  /** The cell a drag's top-left board point snaps to. Shared by the piece and board
+   *  drags so the two can't round differently and disagree about what is under the
+   *  pointer. */
+  private dragCell(p: Pt): Cell {
+    return {
+      col: Math.max(0, Math.round((p.x - PAD) / CELL)),
+      row: Math.max(0, Math.round((p.y - PAD) / CELL)),
+    };
   }
 
   // ── dragging a cable ────────────────────────────────────────────────────────
@@ -2450,7 +2601,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   /** Snapshot now, and remember what produced it so keystroke-by-keystroke edits
    *  (renaming) collapse into one undo step instead of dozens. */
   private snapshot(): string {
-    return JSON.stringify({ topo: this.topo, cells: [...this.cells], boards: [...this.boardSlots] });
+    return JSON.stringify({ topo: this.topo, cells: [...this.cells], boards: [...this.boardCells] });
   }
   private pushHistory(tag: string | null): void {
     if (!this.topo) return;
@@ -2472,10 +2623,10 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   private step(from: string[], to: string[]): void {
     const snap = from.pop(); if (!snap || !this.topo) return;
     to.push(this.snapshot());
-    const state = JSON.parse(snap) as { topo: Topology; cells: [string, Cell][]; boards?: [string, number][] };
+    const state = JSON.parse(snap) as { topo: Topology; cells: [string, Cell][]; boards?: [string, Cell][] };
     this.topo = state.topo;
     this.cells = new Map(state.cells);
-    this.boardSlots = new Map(state.boards ?? []);
+    this.boardCells = new Map(state.boards ?? []);
     this.lastTag = null;                       // never coalesce across an undo
     this.selectedId = null; this.closeMenu();
     this.dirty = true; this.saveError = ''; this.wip = ''; this.saveNote = '';
@@ -2837,11 +2988,11 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   private docWithLayout(): Record<string, unknown> {
     const layout: Record<string, Cell> = {};
     for (const [id, c] of this.cells) layout[id] = { col: c.col, row: c.row };
-    // Board ORDER along the rail, under its own key — board ids come from mDNS
-    // hostnames while element ids are minted here, and one flat map would let a
-    // board called "sel1" quietly take a gate's square.
-    const boards: Record<string, number> = {};
-    for (const [id, slot] of this.boardSlots) boards[id] = slot;
+    // Board CELLS, under their own key — board ids come from mDNS hostnames while
+    // element ids are minted here, and one flat map would let a board called "sel1"
+    // quietly take a gate's square. Same grid, two maps.
+    const boards: Record<string, Cell> = {};
+    for (const [id, c] of this.boardCells) boards[id] = { col: c.col, row: c.row };
     const ui: Record<string, unknown> = { layout };
     if (Object.keys(boards).length) ui['wiring'] = { boards };
     return { ...(this.topo as Record<string, unknown>), ui };
@@ -3490,6 +3641,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       if (n.isUnit) for (let i = 0; i < n.span; i++) occ.add((n.col + i) + ',' + n.row);
       else occ.add(n.col + ',' + n.row);
     }
+    for (const [id, c] of this.boardCells) if (!exclude.has(id)) occ.add(c.col + ',' + c.row);
     return occ;
   }
   /** The board is at least the whole visible area and grows past it as the layout
@@ -3498,27 +3650,21 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   private recomputeExtent(): void {
     // Boards count toward the extent too, or one parked past the last tool would
     // sit outside the scrollable area with no way to reach it.
-    const maxCol = Math.max(1, ...this.nodes.map(n => n.col + n.span - 1));
-    const maxRow = Math.max(1, ...this.nodes.map(n => n.row));
+    const cols = [...this.nodes.map(n => n.col + n.span - 1), ...[...this.boardCells.values()].map(c => c.col)];
+    const rows = [...this.nodes.map(n => n.row), ...[...this.boardCells.values()].map(c => c.row)];
+    const maxCol = Math.max(1, ...cols);
+    const maxRow = Math.max(1, ...rows);
     const wrap = this.wrapRef?.nativeElement;
-    // The rail has to fit too: out to the FURTHEST OCCUPIED slot (boards can sit
-    // anywhere along it now, so a count isn't the width) plus the chip on the end.
-    const last = Math.max(0, ...this.boardSlots.values());
-    const railW = railSlot(last).x + BOARD_W / 2 + 14 + FIND_W + 14;
     // What the drawing actually occupies, BEFORE the viewport floor below. fitZoom()
     // needs this: vbW/vbH are grown to fill the screen, so they always "fit" by
     // construction and are useless for deciding a scale.
-    this.contentW = Math.max(PAD * 2 + maxCol * CELL + CELL, railW);
-    this.contentH = PAD * 2 + maxRow * CELL + CELL + RAIL_H;
+    this.contentW = PAD * 2 + maxCol * CELL + CELL;
+    this.contentH = PAD * 2 + maxRow * CELL + CELL;
     // The wrap's size is in SCREEN px and the extent is in BOARD units, so the
     // viewport floor has to be divided back through the zoom — otherwise zooming out
     // grows the board to fill the screen again and there is nothing left to zoom out to.
     this.vbW = Math.max(this.contentW, (wrap?.clientWidth ?? 0) / this.vp.zoom);
-    // − RAIL_H because the SVG renders vbH PLUS the rail above it. Flooring vbH at the
-    // full viewport height made the drawing exactly one rail taller than the screen at
-    // every zoom, so the board never quite fit vertically and always kept a sliver of
-    // scroll.
-    this.vbH = Math.max(PAD * 2 + maxRow * CELL + CELL, (wrap?.clientHeight ?? 0) / this.vp.zoom - RAIL_H);
+    this.vbH = Math.max(this.contentH, (wrap?.clientHeight ?? 0) / this.vp.zoom);
   }
   /** The grey ground under each system: the rows its pieces occupy, full width.
    *
@@ -3673,22 +3819,26 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     return (t as { ui?: { wiring?: { boards?: Record<string, number | Cell> } } }).ui?.wiring?.boards ?? null;
   }
   /** Restore board placements, dropping any whose board is no longer paired — an
-   *  unpaired board's square would otherwise sit there blocking cells for a device
-   *  that isn't in the shop any more. */
+   *  unpaired board's square would otherwise sit there blocking a cell for hardware
+   *  that isn't in the shop any more.
+   *
+   *  A saved NUMBER is a rail slot, from the months boards lived in a strip above the
+   *  grid. It is dropped rather than converted: a slot was an x along that strip and
+   *  never named a row, so any cell we invented for it would be a guess — and the
+   *  rail's own left-to-right order carried no meaning worth preserving either, since
+   *  every board sat in the same band. They fall through to the default placement
+   *  instead, which puts them where a board paired today would land. */
   private loadBoardCells(t: Topology): void {
-    this.boardSlots.clear();
+    this.boardCells.clear();
     const saved = this.savedBoards(t);
-    // Docs written before the rail stored a {col,row} cell. Their LEFT-TO-RIGHT
-    // order is the part that still means something, so read it as the slot order
-    // rather than discarding the layout someone arranged.
     if (saved) {
       const known = new Set(this.controllersRaw().map(c => c['id'] as string));
-      const rows = Object.entries(saved).filter(([id]) => known.has(id))
-        .map(([id, v]) => [id, typeof v === 'number' ? v : v.col] as const)
-        .sort((a, b) => a[1] - b[1]);
-      rows.forEach(([id], i) => this.boardSlots.set(id, i));
+      for (const [id, v] of Object.entries(saved)) {
+        if (!known.has(id) || typeof v === 'number') continue;
+        this.boardCells.set(id, { col: v.col, row: v.row });
+      }
     }
-    this.ensureSlots();
+    this.ensureBoardCells();
   }
   private applyLive(status: TopologyStatus): void {
     // Per-machine draw, for the plug row. Keyed by machine in the device's own

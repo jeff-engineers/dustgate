@@ -28,6 +28,9 @@ const at = (col: number, row: number) => ({ x: PAD + col * CELL, y: PAD + row * 
 const collector = (id: string, col: number, row: number): SceneNode => ({ id, glyph: 'collector', isUnit: false, span: 1, ...at(col, row) });
 const tool = (id: string, col: number, row: number): SceneNode => ({ id, glyph: 'tool', isUnit: false, span: 1, ...at(col, row) });
 const unit = (id: string, col: number, row: number, span: number): SceneNode => ({ id, glyph: 'slidingGate', isUnit: true, span, ...at(col, row) });
+/** A controller board. It carries no duct — it is only ever an obstacle, which is
+ *  the whole meaning of a board owning its cell. */
+const board = (id: string, col: number, row: number): SceneNode => ({ id, glyph: 'board', isUnit: false, span: 1, ...at(col, row) });
 
 function scene(nodes: SceneNode[], ducts: Scene['ducts']): Scene {
   return { nodes, ducts, bounds: sceneBounds(nodes) };
@@ -139,6 +142,29 @@ group('R4  obstacle in the span — one detour, no lasso');
   const p2 = path(routeAll(s2), 'sander');
   eqPath('obstacle removed → 1-bend side entry', p2, [[172, 207], [172, 280], [350, 280]]);
   ok('the detour is caused by the obstacle, not by the port table', p2.length < p.length);
+}
+
+// ── R4b · a board is an obstacle like any other ──────────────────────────────
+
+// Boards came back onto the canvas on 2026-08-16 (docs/boards-on-canvas-plan.md).
+// A board owns its cell exclusively, and this is what that has to mean for the
+// router: a duct steers around the hardware rather than being drawn through it.
+group('R4b a duct routes around a board');
+{
+  // The same shape as R4, with a BOARD standing where the obstacle tool stood.
+  const s = scene(
+    [unit('gate', 0, 1, 2), board('brain', 2, 2), tool('sander', 3, 2)],
+    [{ childId: 'sander', outlet: { unitId: 'gate', index: 1 } }],
+  );
+  const p = path(routeAll(s), 'sander');
+  ok('clears the board box', !crossesADevice(s, 'sander', p), JSON.stringify(p));
+  ok('no reversal (no lasso)', !reverses(p));
+  // Take the board away and the straight side entry comes back, so the detour is
+  // the board's doing and not a preference baked into the port table.
+  const s2 = scene([unit('gate', 0, 1, 2), tool('sander', 3, 2)], [{ childId: 'sander', outlet: { unitId: 'gate', index: 1 } }]);
+  const p2 = path(routeAll(s2), 'sander');
+  ok('the detour is caused by the board', p2.length < p.length,
+     `with ${JSON.stringify(p)} without ${JSON.stringify(p2)}`);
 }
 
 // ── R5 · drag stability ──────────────────────────────────────────────────────

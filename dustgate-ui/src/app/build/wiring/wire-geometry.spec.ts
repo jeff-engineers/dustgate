@@ -5,11 +5,11 @@
  */
 
 import {
-  type Pt, BOARD_H, CORNER_R, HOP_R, LANE_GAP, LANE_STEP, PORT_H, SERVO_PORTS,
+  type Pt, BOARD_H, BOARD_W, CORNER_R, HOP_R, LANE_GAP, LANE_STEP, PORT_H, SERVO_PORTS,
   cablePath, cableRun, crossing, portExit, portPos, PORT_STUB,
-  railSlot, rankByTravel, segmentsOf, slotAt, BOARD_SLOT, RAIL_H, RAIL_X0,
+  rankByTravel, segmentsOf,
 } from './wire-geometry';
-import { CELL } from '../routing/geometry';
+import { CELL, cellX, cellY, halfH, halfW } from '../routing/geometry';
 
 let failures = 0, checks = 0;
 function ok(name: string, cond: boolean, detail?: string): void {
@@ -25,17 +25,30 @@ const near = (a: number, b: number, eps = 0.01) => Math.abs(a - b) < eps;
 // ── W1 · ports ───────────────────────────────────────────────────────────────
 group('W1 the port strip is the hardware budget');
 {
-  const c = railSlot(1);
-  ok('board sits in its rail slot', c.x === RAIL_X0 + BOARD_SLOT && c.y === -RAIL_H / 2);
-  ok('the rail is above the whole grid', c.y < 0);
-  ok('a slot round-trips', slotAt(c.x) === 1 && slotAt(railSlot(3).x) === 3);
+  // A board stands on an ordinary grid cell. It sat in a rail above the whole grid
+  // until 2026-08-16, in negative y with its own slot pitch — see
+  // docs/boards-on-canvas-plan.md for why that came out.
+  const c = { x: cellX(3), y: cellY(0) };
   const xs = [0, 1, 2, 3, 4].map(ch => portPos(c, ch).x);
   ok('five ports, evenly pitched', xs.every((x, i) => i === 0 || x - xs[i - 1] === 18), xs.join());
-  ok('the rail leaves a caption column before slot 0', RAIL_X0 > 64, String(RAIL_X0));
   ok('strip is centred on the board', near((xs[0] + xs[4]) / 2, c.x));
   ok('ports straddle the underside', portPos(c, 0).y > c.y && portPos(c, 0).y < c.y + BOARD_H / 2);
   ok('cable leaves the port underside', near(portExit(c, 0).y, portPos(c, 0).y + PORT_H / 2));
   ok('channel 4 is the stepper, past the servo bank', SERVO_PORTS === 4);
+}
+
+// ── W1b · a board is a glyph on the grid ─────────────────────────────────────
+group('W1b a board owns its cell, so ducts have a box to steer around');
+{
+  const b = { id: 'primary', glyph: 'board' as const, isUnit: false, span: 1, x: cellX(2), y: cellY(1) };
+  ok('the router sizes it from the drawn body', halfW(b) === BOARD_W / 2 && halfH(b) === BOARD_H / 2);
+  // Narrower than a cell, or two boards side by side share an edge and read as one
+  // module — and a duct could never slip between them.
+  ok('a board is narrower than its cell', BOARD_W < CELL, `${BOARD_W} vs ${CELL}`);
+  ok('and shorter than one', BOARD_H < CELL, `${BOARD_H} vs ${CELL}`);
+  ok('the whole strip fits inside the body',
+     portPos({ x: b.x, y: b.y }, 0).x > b.x - BOARD_W / 2
+     && portPos({ x: b.x, y: b.y }, SERVO_PORTS).x < b.x + BOARD_W / 2);
 }
 
 // ── W2 · the lane ────────────────────────────────────────────────────────────
@@ -185,8 +198,8 @@ group('W6 the five-gate shop draws without a single cable-over-cable hop');
 // ── W7 · the gate row is left alone ──────────────────────────────────────────
 group('W7 cables travel in the empty band, not through the ductwork');
 {
-  // Five cables to gates spread across the shop, all off one board on the rail.
-  const board = P(172, -38);
+  // Five cables to gates spread across the shop, all off one board in the top row.
+  const board = P(172, 64);
   const targets = [94, 202, 310, 418, 526].map(x => P(x, 280));
   const legs = targets.map((t, i) => ({ from: portExit(board, i % 5), to: t }));
   const rank = rankByTravel(legs, l => Math.abs(l.to.x - l.from.x));
@@ -194,8 +207,14 @@ group('W7 cables travel in the empty band, not through the ductwork');
   const gateRow = 280 - 40;                      // anywhere near the gates' boxes
   ok('no horizontal run travels down at gate level',
      runs.every(r => r[1].y < gateRow), runs.map(r => r[1].y).join());
-  ok('every lane sits in the top third of the drop',
-     runs.every(r => r[1].y < board.y + (280 - board.y) / 3), runs.map(r => r[1].y).join());
+  // This read "the top THIRD" while boards lived on a rail two bands above the shop,
+  // where the drop was 318 units and five nested lanes used a sixth of it. A board
+  // stands on the grid now — usually one row above the gates it drives — so the same
+  // five lanes occupy a real share of a much shorter drop. The half is what the claim
+  // was always about: the cables bunch at the TOP of the gap and come down onto their
+  // tabs, rather than crossing the shop at the height the ductwork runs at.
+  ok('every lane sits in the upper half of the drop',
+     runs.every(r => r[1].y < (board.y + 280) / 2), runs.map(r => r[1].y).join());
 }
 
 // ── W8 · lane spacing ────────────────────────────────────────────────────────
@@ -210,9 +229,12 @@ group('W8 lane spacing');
 }
 
 // ── W9 · a gate above the board ──────────────────────────────────────────────
-group('W9 a board below its gate (off-rail) still leaves from the underside');
+group('W9 a board below its gate still leaves from the underside');
 {
-  const board = P(172, 496);                                  // hypothetically low
+  // Reachable now that boards stand on the grid: drag one under the gates it drives
+  // and this is the run you get. Nothing refuses the drop — see the plan's "what not
+  // to re-buy" — so the geometry has to hold up rather than be unreachable.
+  const board = P(172, 496);
   const from = portExit(board, 0);
   const to = P(400, 280);                                      // a tab well above it
   ok('the cable leaves the port underside, not the top edge', from.y > board.y);

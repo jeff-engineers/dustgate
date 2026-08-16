@@ -11,15 +11,16 @@
  *  the whole thing is testable with `npm run test:wiring`.
  */
 
-import { CELL, PAD } from '../routing/geometry';
+import { BOARD_H, BOARD_W, CELL, PAD } from '../routing/geometry';
 
 // ── board metrics ────────────────────────────────────────────────────────────
 /** A board is drawn as the module it is: a body with a row of ports on its
- *  underside. One cell wide, so it occupies a single grid square like any piece. */
-/** Deliberately narrower than a CELL (108) so two boards on neighbouring cells have
- *  air between them instead of sharing an edge and reading as one module. */
-export const BOARD_W = 96;
-export const BOARD_H = 52;
+ *  underside. One cell wide, so it occupies a single grid square like any piece.
+ *
+ *  Its BOX lives in routing/geometry with every other glyph's, because a board on
+ *  the grid is something ducts have to steer around — re-exported here so the
+ *  wiring layer still has one import for everything about a board. */
+export { BOARD_H, BOARD_W };
 /** Servo channels + stepper drivers one ESP32 can drive. Mirrors MAX_SERVOS_PER_HOST
  *  and MAX_LINEAR_PER_HOST in shared/device-model/topology.js — the PWM bank and the
  *  single stepper driver. The port strip IS this budget, drawn. */
@@ -50,29 +51,13 @@ export const TAB_H = 14;
 export interface Pt { x: number; y: number; }
 export interface Cell { col: number; row: number; }
 
-/** Height of the board rail — the band above the grid where every board lives.
- *  Drawn in NEGATIVE y, so the cell grid below keeps the coordinates it always had
- *  and no saved layout has to move. */
-export const RAIL_H = 76;
-/** Pitch of a board slot along the rail: BOARD_W plus air, so two boards can't
- *  share an edge however you order them. */
-export const BOARD_SLOT = 124;
-/** Width of the "+ Find boards" chip, which is pinned to the rail's right end. */
-export const FIND_W = 128;
-
-/** Left edge of slot 0, leaving the rail a caption column: the boards used to start
- *  at PAD and paint straight over the BOARDS label, which is drawn before them. */
-export const RAIL_X0 = PAD + 98;
-
-/** Centre of the nth slot in the rail. Boards are one-dimensional now — the rail
- *  is above every gate, so a cable can only ever leave a port downward. */
-export function railSlot(slot: number): Pt {
-  return { x: RAIL_X0 + slot * BOARD_SLOT, y: -RAIL_H / 2 };
-}
-/** Which slot a point falls in, for a drag. */
-export function slotAt(x: number): number {
-  return Math.max(0, Math.round((x - RAIL_X0) / BOARD_SLOT));
-}
+/* The board rail — a band in NEGATIVE y above the grid, with a slot pitch, a pin
+ * translate and a scrim under it — was deleted on 2026-08-16. It existed because a
+ * brain placed BELOW the gates it drives routes its cables badly, and it paid for
+ * that with the other end of every cable sitting somewhere you can't see the moment
+ * you scroll. Boards are ordinary pieces on the grid now and the fix for the
+ * original problem is a better DEFAULT placement — top-right of the system you're
+ * working in. See docs/boards-on-canvas-plan.md. */
 
 /** Where port `ch` sits on a board centred at `c`. Channel 0..3 are servo; passing
  *  SERVO_PORTS gives the stepper port. Returns the port's CENTRE, and its bottom
@@ -167,10 +152,10 @@ export function cableRun(from: Pt, to: Pt, rank: number, bias = 0, clear = 0, co
   // and let the lane logic route around whatever is standing in it.
   if (Math.abs(from.x - to.x) < 0.5 && price(from, to) === 0) return [from, to];
 
-  // Gate ABOVE the board. Unreachable while every board sits in the rail, which is
-  // above the whole grid — kept because it is the correct answer if a board is ever
-  // allowed off the rail, and because it is what makes the port strip's side an
-  // invariant rather than a coincidence. The cable still leaves downward, drops
+  // Gate ABOVE the board. Written while every board still sat in a rail over the
+  // whole grid, where it was unreachable; boards stand on the grid now, so a brain
+  // dragged below the gates it drives comes through here. The cable still leaves
+  // downward — the port strip's side is an invariant, not a coincidence — drops
   // clear of the board, runs across, then climbs.
   if (to.y < from.y) {
     const lane = from.y + clear + LANE_GAP + rank * LANE_STEP + bias;
@@ -288,6 +273,5 @@ export function cablePath(pts: readonly Pt[], under: readonly Seg[] = []): strin
 
 /* The wireless hop between the primary and a secondary used to be drawn here, as a
  * dotted curve with a transport badge on it. It was removed deliberately: every
- * board on the rail is on the same network by definition, so the curve drew a fact
- * that is never not true while adding a line that crossed the shop. The network's
- * name in the rail says the same thing in the space it already occupies. */
+ * paired board is on the same network by definition, so the curve drew a fact that
+ * is never not true while adding a line that crossed the shop. */

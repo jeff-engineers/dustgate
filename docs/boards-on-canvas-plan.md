@@ -1,7 +1,36 @@
 # Putting the brains back on the canvas
 
-**Status: planned, not started.** Written 2026-08-15, at the end of the session that
-built the pinned rail — which this plan largely deletes.
+**Status: DONE 2026-08-16**, in the order 1 → 2 → 4 → 3. Written 2026-08-15, at the
+end of the session that built the pinned rail — which this plan largely deleted.
+Verified against the demo in a browser; nothing here has run on hardware.
+
+Kept as the record of WHY, which the diff doesn't carry: the rejected alternatives
+(pinning a board to a row, a drop-check rule, letting a board float above the grid)
+are argued below and should not be re-proposed without new evidence.
+
+What the steps actually became:
+
+| Step | Landed as |
+|---|---|
+| 1 | `boardCells: Map<id, Cell>`, its own map beside `cells` — see below. `BOARD_W/H` moved to `routing/geometry` and `board` joined `Glyph`, so the router sizes a board like any other piece. `boardShade()` re-keyed to pairing order. |
+| 2 | `defaultBoardCell()`, called only from `ensureBoardCells()` at the three seams where a board becomes known (load, import, merge) — never from `boards()`, which renders. |
+| 4 | Rail, slot pitch, pin translate, scroll listener, scrim, free lane, negative-origin viewBox, `netName`, `+ Find boards` chip. The errand moved to the toolbar overflow. |
+| 3 | `onCanvasContext()` → a two-row menu: put an unplaced board here, or go pair one. |
+
+Two things the plan didn't anticipate:
+
+- **Boards kept their own map** rather than moving into `ui.layout`. The plan said
+  "entries in the same `ui.layout` map every other piece uses"; the reason they were
+  separate has not changed — board ids come from mDNS hostnames and element ids are
+  minted locally, so one flat map lets a board called `sel1` take a gate's square.
+  Same grid, same cells, same drop checks, two maps. The saved shape went
+  `Record<id, number>` → `Record<id, Cell>`; a saved NUMBER is a dead rail slot and
+  is dropped rather than converted, because a slot was an x along a strip and never
+  named a row. Those boards fall through to the step-2 default.
+- **W7 in the wiring spec had to be re-pitched.** It asserted every cable lane sits
+  in the "top third of the drop", a bound that only held because the rail sat two
+  bands above the shop. A board one row above its gates has a much shorter drop, so
+  the assertion is now the upper half — which is what the claim was always about.
 
 ## Why
 
@@ -64,6 +93,10 @@ a strip along the top says boards live somewhere other than the ductwork does.
 40%, and they cost nothing. Note the open edge recorded when they landed: the shade
 keys off the board's rail *slot*, so it will need re-keying (to the controller id, or
 to the cell) once slots are gone.
+
+*Done: keyed to the board's index in `controllers[]`, which is the order /boards
+paired them in. Not the cell — a shade that moved when you dragged a board would
+recolour every cable leaving it, which is a colour that means nothing.*
 
 ## Decided: a board owns its cell
 

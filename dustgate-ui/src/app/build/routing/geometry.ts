@@ -42,10 +42,19 @@ export const INLET_GAP = 12;
 
 /** `pickup` is a machine's SUPPLEMENTAL port — an overarm guard, a hood. It has no
  *  cell of its own: it rides on the top edge of the machine's box as a second inlet,
- *  which is what stops a shop with a two-port saw reading as a shop with two saws. */
-export type Glyph = 'collector' | 'slidingGate' | 'ballvalve' | 'manifold' | 'junction' | 'tool' | 'pickup';
+ *  which is what stops a shop with a two-port saw reading as a shop with two saws.
+ *
+ *  `board` is a controller. It lived on a rail above the grid until 2026-08-16 and
+ *  is an ordinary piece on it now — which is why its size is HERE rather than with
+ *  the rest of the wiring metrics: a board occupies a cell, so a duct has to steer
+ *  around the same box the drawing puts there. */
+export type Glyph = 'collector' | 'slidingGate' | 'ballvalve' | 'manifold' | 'junction' | 'tool' | 'pickup' | 'board';
 /** Half-width of the hood a pickup draws, and the box the router steers around. */
 export const PICKUP_HALF = 9;
+/** A board's body. Deliberately narrower than a CELL so two boards on neighbouring
+ *  cells have air between them instead of sharing an edge and reading as one module. */
+export const BOARD_W = 96;
+export const BOARD_H = 52;
 
 /** The router's view of a placed device. `x`/`y` are the resolved centre — for a
  *  unit that is its FIRST outlet, not the middle of the bar. */
@@ -70,6 +79,7 @@ export function halfW(n: SceneNode): number {
     case 'ballvalve': return 22;
     case 'junction': return 8;
     case 'pickup': return PICKUP_HALF;
+    case 'board': return BOARD_W / 2;
     default: return 38;
   }
 }
@@ -81,6 +91,7 @@ export function halfH(n: SceneNode): number {
     case 'ballvalve': return 22;
     case 'junction': return 8;
     case 'pickup': return PICKUP_HALF;
+    case 'board': return BOARD_H / 2;
     default: return TOOL_HALF;
   }
 }

@@ -29,11 +29,23 @@ than restated. Delete an item when it lands; the git history is the record.
   *channels* but says nothing about a board before you select it.
 - **Hide the left port on dust collectors** when the collector is in the
   leftmost column.
+- **The network name lost its home.** It was captioned in the board rail; the rail
+  is gone and `/boards` — where you actually pair — doesn't show it. The device
+  reports it as `ssid` from `/api/motion-status`.
 
 ## Carried debt
 
-- **`boardShade()` keys off the rail slot**, so it needs re-keying to the
-  controller id or the cell once `boardSlots` is gone —
-  `build.component.ts:boardShade`. Noted in the boards-on-canvas plan.
-- **Boards back onto the canvas** — [boards-on-canvas-plan.md](../docs/boards-on-canvas-plan.md).
-  Decided, not started. Step 4 deletes the rail machinery, so it wants a clear run.
+- **A board is placed but never unplaced.** `defaultBoardCell()` gives every paired
+  board a cell, so the empty-cell menu's "Put a board here" is nearly always greyed
+  with "every paired board is placed". Either give a board a way off the canvas, or
+  fold the row into "Find boards…".
+
+## Testing
+### Bench Testing
+
+- Servo pin strapping issues - need instructions on how to test this again please.
+- Claude - update this to list bench testing steps that I need to do, including instructions
+
+### GUI Testing
+
+- Same here for GUI

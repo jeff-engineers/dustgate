@@ -40,8 +40,8 @@
 svg.canvas { display: block; touch-action: none; }
 
 /* Zoom control. Floating over the canvas rather than in the toolbar, which
-   already wraps to two rows on a phone. Bottom-right, thumb-reachable, and out
-   of the way of the rail (top) and the guide bar. */
+   already wraps to two rows on a phone. Bottom-right, thumb-reachable, and clear
+   of the guide bar. */
 .zoomer { position: absolute; right: 12px; bottom: 12px; z-index: 15;
           display: flex; flex-direction: column; align-items: stretch;
           background: var(--surface); border: 1px solid var(--border-strong, #444);
@@ -77,11 +77,6 @@ svg.canvas { display: block; touch-action: none; }
 /* A system's ground. Barely there on purpose: it has to survive the zoom-out that
    a hairline wouldn't, without competing with the ductwork drawn on top of it. */
 .ground { fill: #191919; }
-/* The fade under a pinned rail. Never takes the pointer — it covers live board, and
-   a scrim that swallowed taps would make the top of the shop unusable. Backs almost
-   all the way off during a drag, so a piece being placed up there stays visible. */
-.scrim { pointer-events: none; transition: opacity 120ms ease; }
-.scrim.quiet { opacity: 0.15; }
 /* The seam between two systems, and the name of the one below it. Muted caps: it
    is a caption on the board, not a piece standing on it. */
 .sysdiv line { stroke: var(--border); stroke-width: 1.5; }
@@ -146,8 +141,8 @@ svg.canvas { display: block; touch-action: none; }
 .dock.armed .dock-bg { stroke: var(--accent); stroke-dasharray: none; }
 
 /* ── plug tray ─────────────────────────────────────────────────────────── */
-/* ONE LINE, and it shares the band with the board rail rather than claiming a
-   shelf of its own. It was a head row plus two wrapped rows of chips — 165px
+/* ONE LINE, rather than a shelf of its own.
+   It was a head row plus two wrapped rows of chips — 165px
    of a 812px phone, a fifth of the screen, to say "here are two plugs".
    Everything is on the strip now and the chips scroll sideways. */
 .tray { flex: 0 0 auto; display: flex; align-items: center; gap: 8px;
@@ -286,20 +281,14 @@ svg.canvas { display: block; touch-action: none; }
 .tab.lit .tab-ch { fill: var(--accent); }
 .port-hit { cursor: grab; }
 
-.rail { fill: #161616; }
-.rail-edge { stroke: var(--border); stroke-width: 1; }
-.rail-lbl { fill: #6f6f6f; font-size: 8.5px; letter-spacing: 0.16em;
-            font-family: ui-monospace, Menlo, monospace; }
-.findboards { cursor: pointer; }
-.findboards rect { fill: none; stroke: var(--border); stroke-width: 1.2; stroke-dasharray: 4 3; }
-.findboards text { fill: var(--muted); font-size: 12px; text-anchor: middle; }
-.findboards:hover rect { stroke: var(--accent); }
-.findboards:hover text { fill: var(--accent); }
-/* Boards slide along the rail only — a drag is a reorder, not a placement. */
-.board { cursor: ew-resize; }
+/* A board is placed, not ordered: it drags anywhere on the grid, and a drop that
+   won't take goes red the same way a piece's does. */
+.board { cursor: grab; }
 .board.dragging { cursor: grabbing; }
 .board-body { fill: var(--surface); stroke: #4a4a4a; stroke-width: 1.6; }
 .board.primary .board-body { stroke: var(--accent); }
+.board.dragging.bad .board-body { stroke: var(--danger); stroke-width: 2.5; }
+.board.dragging.bad { opacity: 0.75; }
 .board-name { fill: var(--text); font-size: 12px; font-weight: 600; }
 .board-role { fill: var(--muted); font-size: 7.5px; letter-spacing: 0.12em;
               font-family: ui-monospace, Menlo, monospace; }
@@ -314,8 +303,3 @@ svg.canvas { display: block; touch-action: none; }
 .port-label { fill: #777; font-size: 7px; text-anchor: middle;
               font-family: ui-monospace, Menlo, monospace; }
 
-/* The network every board is on, named once in the rail. It replaced a dotted
-   curve between boards with a transport badge on it — which drew a fact that is
-   always true, and drew it right across the shop. */
-.rail-net { fill: #77a3b8; font-size: 9px; font-family: ui-monospace, Menlo, monospace; }
-.rail-wifi { fill: none; stroke: #4d7f99; stroke-width: 1.3; stroke-linecap: round; }
