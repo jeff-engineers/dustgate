@@ -87,6 +87,12 @@ These are decided; don't relitigate them in code review or suggestions.
   scope.
 - **The plug belongs to the tool**, and draws under the tool's name — never on a
   port.
+- **New pieces default into the system you're working in.** Adding a gate or a
+  board places it inside the active system's row band (`activeSystemId`, which
+  follows whatever you last touched), not at some shop-wide origin. Systems own
+  contiguous, non-interleaving row bands — that is what makes the grey ground
+  drawable and what `bandBlockedBy()` enforces on a drag — so a default that
+  ignores the band can put a piece somewhere a drag would refuse to move it.
 - A secondary node gets already-resolved angles/positions on the wire, never
   state names. That's what lets a $5 board be a node and keeps a schema change
   from needing a flash to every board in the shop.

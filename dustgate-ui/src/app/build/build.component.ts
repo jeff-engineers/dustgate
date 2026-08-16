@@ -1155,24 +1155,84 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
    *  Growing downward into the empty row between two systems is allowed — that just
    *  moves the boundary, which is the layout doing its job. */
   private bandBlockedBy(id: string, row: number): string | null {
-    if (!this.topo) return null;
-    const mine = this.systemOf.get(id);
-    const bands = systemsOf(this.topo as unknown as ShopDoc).map(s => {
+    const bands = this.systemRowBands();
+    if (bands.length < 2) return null;
+    const i = bands.findIndex(b => b.id === this.systemOf.get(id));
+    if (i < 0) return null;
+    const above = bands[i - 1], below = bands[i + 1];
+    if (above && row <= above.hi) return above.name ?? 'another collector';
+    if (below && row >= below.lo) return below.name ?? 'another collector';
+    return null;
+  }
+
+  /** Each system's row band, topmost first. A system with nothing placed yet has no
+   *  band and drops out — there is no stripe to defend until something is on it.
+   *
+   *  The one place rows-per-system is worked out: the drag check above, the placement
+   *  defaults below, and the grey ground that draws these bands all read it. Two of
+   *  them disagreeing is how you get a ground drawn where a piece may not stand, or a
+   *  default that puts a piece where a later drag refuses to move it.
+   *
+   *  `name` stays raw — the collector's own, or undefined when it hasn't been named
+   *  yet. Callers supply their own fallback because they are writing different
+   *  sentences: a label on the ground, versus who is in your way. */
+  private systemRowBands(): Array<{ id: string; lo: number; hi: number; name?: string }> {
+    if (!this.topo) return [];
+    return systemsOf(this.topo as unknown as ShopDoc).map(s => {
       let lo = Infinity, hi = -Infinity;
       for (const e of s.elements) {
         const c = this.cells.get(e['id'] as string); if (!c) continue;
         lo = Math.min(lo, c.row); hi = Math.max(hi, c.row);
       }
       const dc = s.elements.find(e => e['type'] === 'collector');
-      return { id: s.id, lo, hi, name: (dc?.['name'] as string) || 'another collector' };
+      return { id: s.id, lo, hi, name: dc?.['name'] as string | undefined };
     }).filter(b => isFinite(b.lo)).sort((a, b) => a.lo - b.lo);
-    if (bands.length < 2) return null;
-    const i = bands.findIndex(b => b.id === mine);
-    if (i < 0) return null;
-    const above = bands[i - 1], below = bands[i + 1];
-    if (above && row <= above.hi) return above.name;
-    if (below && row >= below.lo) return below.name;
-    return null;
+  }
+
+  /** The first row a piece in `id`'s system must not reach: the top of the next system
+   *  down, or Infinity when nothing is below it.
+   *
+   *  Deliberately the neighbour's `lo` and not this system's `hi` — growing downward
+   *  into the empty gap between two systems just moves the boundary, which is the
+   *  layout doing its job. Landing IN the neighbour's rows is what interleaves the two
+   *  and makes the grey ground undrawable. Same predicate `bandBlockedBy()` refuses on
+   *  a drag. */
+  private bandFloor(id: string): number {
+    const bands = this.systemRowBands();
+    const i = bands.findIndex(b => b.id === this.systemOf.get(id));
+    return i >= 0 && bands[i + 1] ? bands[i + 1].lo : Infinity;
+  }
+
+  /** The mirror of bandFloor(): the last row above `id`'s system that belongs to the
+   *  neighbour, or -Infinity with nothing above. A default that reaches up — a hood's
+   *  open end — has to clear it. */
+  private bandCeiling(id: string): number {
+    const bands = this.systemRowBands();
+    const i = bands.findIndex(b => b.id === this.systemOf.get(id));
+    return i > 0 ? bands[i - 1].hi : -Infinity;
+  }
+
+  /** Where a piece displaced from `cell` goes: the nearest free cell still inside its
+   *  own system's band. Straight down first — which is where it went unconditionally
+   *  before, and still does whenever the band has room — then a column over, because
+   *  columns are free to grow rightward and rows are not.
+   *
+   *  Without the floor the downward walk was bounded only by the shop: a column filled
+   *  contiguously below would march the piece past the gap and into the next system,
+   *  interleaving the bands `bandBlockedBy()` exists to keep apart. */
+  private freeCellBelow(id: string, cell: Cell): Cell {
+    const taken = new Set([...this.cells].filter(([k]) => k !== id).map(([, c]) => c.col + ',' + c.row));
+    const floor = this.bandFloor(id);
+    for (let dc = 0; dc < 256; dc++) {
+      const col = cell.col + dc;
+      for (let row = cell.row + 1; row < floor; row++) {
+        if (!taken.has(col + ',' + row)) return { col, row };
+      }
+      // Sitting on the last row before the neighbour: sideways is the only way out,
+      // so the piece keeps its row and steps over instead.
+      if (dc > 0 && !taken.has(col + ',' + cell.row)) return { col, row: cell.row };
+    }
+    return cell;
   }
 
   /** What to call a piece in a sentence. */
@@ -1623,6 +1683,11 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
 
   private roomAt(col: number, row: number, span: number, selfId: string, occ = this.cellOccupied(), allowNegative = false): boolean {
     if (!allowNegative && (col < 0 || row < 0)) return false;
+    // Another system's rows are not room, even when the cell is empty. Every default
+    // placement comes through here, so this is where "new pieces land in the system
+    // you're working in" is one rule rather than a habit each call site has to keep.
+    // An id with no system yet answers null and stays permissive, as before.
+    if (this.bandBlockedBy(selfId, row)) return false;
     for (let i = 0; i < Math.max(1, span); i++) {
       if (occ.has((col + i) + ',' + row)) return false;
       if (this.cellOnDuct(col + i, row, selfId)) return false;
@@ -2940,15 +3005,12 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
         if (pb) pb.role = 'feed';
       }
       this.ductsRaw().push(up);
-      // The gate takes the tool's cell and the tool moves down to the first free
-      // row — capping a shared outlet inserts several gates at once, so "one row
-      // down" alone would stack tools on top of each other.
+      // The gate takes the tool's cell and the tool moves to the first free cell in
+      // its own system — capping a shared outlet inserts several gates at once, so
+      // "one row down" alone would stack tools on top of each other.
       const tcell = this.cells.get(id) ?? { col: 0, row: 0 };
       this.cells.set(gate['id'] as string, { col: tcell.col, row: tcell.row });
-      let row = tcell.row + 1;
-      const taken = new Set([...this.cells].filter(([k]) => k !== id).map(([, c]) => c.col + ',' + c.row));
-      while (taken.has(tcell.col + ',' + row)) row++;
-      this.cells.set(id, { col: tcell.col, row });
+      this.cells.set(id, this.freeCellBelow(id, tcell));
     }
     this.buildGraph(this.topo);
     return true;
@@ -3046,9 +3108,12 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     sys.ducts.push({ child: port['id'], parent: end['id'] });
     this.buildGraph(this.topo);
     // The open end DOES get a cell: it is a piece you place. One row above the
-    // machine and one column right, which is where its hood points.
+    // machine and one column right, which is where its hood points — but not up out
+    // of its own system. A machine on its band's top row keeps the end level with it
+    // rather than reaching into the collector above.
     const c = this.cells.get(toolId);
-    if (c) this.cells.set(end['id'] as string, { col: c.col + 1, row: Math.max(0, c.row - 1) });
+    const id = end['id'] as string;
+    if (c) this.cells.set(id, { col: c.col + 1, row: Math.max(0, this.bandCeiling(id) + 1, c.row - 1) });
     this.selectedId = null;
     this.dirty = true; this.saveError = '';
     this.syncNodes(); this.refreshHandles(); this.recomputeExtent();
@@ -3439,28 +3504,18 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     return out;
   }
 
-  /** Each system's rows, in board px, top to bottom. */
+  /** Each system's rows, in board px, top to bottom. The drawn form of
+   *  systemRowBands() — same rows, so the ground can't disagree with the rule that
+   *  decides what may stand on it. */
   private systemBands(): Array<{ id: string; name: string; y0: number; y1: number }> {
-    if (!this.topo) return [];
-    const out: Array<{ id: string; name: string; y0: number; y1: number }> = [];
-    for (const s of systemsOf(this.topo as unknown as ShopDoc)) {
-      let lo = Infinity, hi = -Infinity;
-      for (const e of s.elements) {
-        const c = this.cells.get(e['id'] as string); if (!c) continue;
-        lo = Math.min(lo, c.row); hi = Math.max(hi, c.row);
-      }
-      if (!isFinite(lo)) continue;
-      const dc = s.elements.find(e => e['type'] === 'collector');
-      out.push({
-        id: s.id,
-        name: (dc?.['name'] as string) || 'Dust collector',
-        // Half a cell of air past the outermost row, less GROUND_INSET so two bands
-        // that end up adjacent still show a seam rather than fusing into one.
-        y0: PAD + lo * CELL - CELL / 2 + GROUND_INSET,
-        y1: PAD + hi * CELL + CELL / 2 - GROUND_INSET,
-      });
-    }
-    return out.sort((a, b) => a.y0 - b.y0);
+    return this.systemRowBands().map(b => ({
+      id: b.id,
+      name: b.name ?? 'Dust collector',
+      // Half a cell of air past the outermost row, less GROUND_INSET so two bands
+      // that end up adjacent still show a seam rather than fusing into one.
+      y0: PAD + b.lo * CELL - CELL / 2 + GROUND_INSET,
+      y1: PAD + b.hi * CELL + CELL / 2 - GROUND_INSET,
+    }));
   }
   private childrenOf(id: string): string[] { const out: string[] = []; for (const [c, p] of this.parentOf) if (p === id) out.push(c); return out; }
   private canAddChild(id: string): boolean {
