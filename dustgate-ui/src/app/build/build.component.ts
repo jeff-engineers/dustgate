@@ -2969,15 +2969,32 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     const top = bottom + SYSTEM_GAP + 1;
     this.cells.set(sys.elements[0]['id'] as string, { col: 0, row: top });
     this.cells.set(sys.elements[1]['id'] as string, { col: 0, row: top + 1 });
-    this.selectedId = null;
+    // Numbered from the start, so two collectors are never both "Dust collector"
+    // even if the name field is dismissed without typing.
+    sys.elements[0]['name'] = `Dust collector ${systemsOf(doc).length}`;
+    // SELECTED, not deselected: selecting a piece is what puts the editable name on
+    // it, so the new collector arrives with its name field live and the caret in it.
+    // That name IS the system's name on the seam above it — leaving the user to
+    // discover renaming later is how a shop ends up unable to tell them apart.
+    this.selectedId = sys.elements[0]['id'] as string;
     this.dirty = true; this.saveError = '';
     this.syncNodes(); this.refreshHandles();
     // The drawing just got a band taller, so the extent has to be recomputed before
     // anything measures it — then scroll to what was just made. A new collector that
     // lands below the fold looks like the menu item did nothing.
     this.recomputeExtent();
+    this.focusName();
     this.vp.revealBoard(PAD + top * CELL - CELL, PAD + (top + 1) * CELL + CELL / 2);
   }
+  /** Put the caret in the selected piece's name field, once Angular has drawn it.
+   *  Two frames: the field only exists after the render that selection triggers. */
+  private focusName(): void {
+    setTimeout(() => {
+      const el = document.querySelector('input.nameedit') as HTMLInputElement | null;
+      el?.focus(); el?.select();
+    });
+  }
+
   /** System ids only have to be unique among systems, but they share the counter so
    *  a doc never grows two things called `s3`. */
   private newSystemId(): string {

@@ -8,7 +8,7 @@
 
 import {
   type Box, type Pt, type SceneNode,
-  CELL, CLEARANCE, GATE_PAD, INLET_GAP, LATTICE, OUTLET_STUB, PAD, UNIT_H,
+  CELL, CLEARANCE, GATE_PAD, INLET_GAP, LATTICE, OUTLET_STUB, PAD, PICKUP_HALF, UNIT_H,
   deviceBox, halfH, halfW, ptInBox, segBoxHit, simplifyPts,
 } from './geometry';
 
@@ -105,6 +105,11 @@ export function inPorts(n: SceneNode): Port[] {
   // read as one shape and you couldn't see where the pipe ended.
   if (n.isUnit) return [{ pt: { x: n.x, y: n.y - UNIT_H / 2 - INLET_GAP }, dir: 3 }];
   if (n.glyph === 'tool' || n.glyph === 'ballvalve') return sidePorts(n, 3);
+  // A PICKUP is a hood on the top edge of a machine's box, so there is exactly one
+  // way in: down onto its point. Left it on allSidePorts and a duct would happily
+  // arrive from beneath — which means straight up through the machine the hood is
+  // mounted on, ending nowhere near the thing it feeds.
+  if (n.glyph === 'pickup') return [{ pt: { x: n.x, y: n.y - PICKUP_HALF - INLET_GAP }, dir: 3 }];
   return allSidePorts(n);
 }
 
