@@ -117,7 +117,21 @@ interface BoardVM {
   dragX?: number; dragY?: number;
 }
 /** One cable run, port → the gate's servo tab. */
-interface CableVM { id: string; gateId: string; boardId: string; channel: number; d: string; }
+interface CableVM { id: string; gateId: string; boardId: string; channel: number; d: string; shade: string; }
+
+/** One shade per board, so a wire can be traced back to the brain it leaves without
+ *  following it.
+ *
+ *  All four stay firmly in the blue family, and deliberately so: azure means WIRE on
+ *  this canvas the way amber means setup, green means live and red means fault. A
+ *  board tinted toward green would claim a state it isn't in. What varies is hue
+ *  within the band and not value, because a board drawn brighter than its neighbour
+ *  reads as the important one — and none of them is.
+ *
+ *  Both ends take it: the cable, and the gate's servo tab. The tab is the half you
+ *  can see when the rail is scrolled away, which makes it the half that has to
+ *  answer "which brain is this on". */
+const CABLE_SHADES = ['#38b6f0', '#45cfd8', '#6f9df2', '#2f9fd0'];
 
 
 type Fitting = SelKind | 'tool' | 'duct';
@@ -2041,15 +2055,17 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
    *  ends well left of its own outlets — the tab landed nearer the next tool than
    *  its own gate: the cable looked like it went to the jointer. Half-in, half-out
    *  of the body, there is nothing to misread. */
-  gateTabs(): Array<{ id: string; x: number; y: number; channel: string; wired: boolean }> {
+  gateTabs(): Array<{ id: string; x: number; y: number; channel: string; wired: boolean; shade: string }> {
     return this.nodes.filter(n => this.isGate(n)).map(n => {
       const el = this.elem(n.id);
       const linear = el?.['kind'] === 'linear';
       const ch = linear ? SERVO_PORTS : (((el?.['servo'] as RawEl | undefined)?.['channel'] as number) ?? 0);
+      const board = this.boardOf(n.id);
       return {
         id: n.id, x: this.tabX(n), y: this.tabY(n),
         channel: linear ? 'ST' : String(ch),
-        wired: this.boardSlots.has(this.boardOf(n.id)),
+        wired: this.boardSlots.has(board),
+        shade: this.boardShade(board),
       };
     });
   }
@@ -2111,6 +2127,13 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     };
   }
 
+  /** The shade this board's wiring wears, by its slot on the rail. Stable under a
+   *  reorder is not the goal — being DISTINCT from its neighbour is. */
+  boardShade(boardId: string): string {
+    const slot = this.boardSlots.get(boardId) ?? 0;
+    return CABLE_SHADES[slot % CABLE_SHADES.length];
+  }
+
   cables(): CableVM[] {
     if (!this.topo) return [];
     const out: CableVM[] = [];
@@ -2136,7 +2159,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
         // when the cable landed underneath and had to get past the gate to reach it.
         const pts = cableRun(l.from, l.to, rank.get(l) ?? 0, bias, 0, this.cableCost(l.gateId));
         out.push({ id: b.id + ':' + l.channel, gateId: l.gateId, boardId: b.id, channel: l.channel,
-                   d: cablePath(pts, drawn) });
+                   d: cablePath(pts, drawn), shade: this.boardShade(b.id) });
         drawn.push(...segmentsOf(pts));
       }
     });

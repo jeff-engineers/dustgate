@@ -245,7 +245,7 @@
       <!-- Cable runs. Under the pieces on purpose, so each end tucks beneath the
            tab it lands on rather than stopping short of it. -->
       <g class="wiring">
-        <path *ngFor="let c of cables()" class="cable" [attr.d]="c.d"/>
+        <path *ngFor="let c of cables()" class="cable" [attr.d]="c.d" [attr.stroke]="c.shade"/>
       </g>
       <path *ngFor="let d of openDucts()" class="open-stub" [attr.d]="openStubD(d.childId)"/>
       <!-- ── wiring layer ────────────────────────────────────────────────
@@ -263,8 +263,8 @@
         <rect [attr.x]="-TAB_W/2 - 5" [attr.y]="-TAB_H/2 - 5"
               [attr.width]="TAB_W + 10" [attr.height]="TAB_H + 10" fill="transparent"/>
         <rect class="tab-body" [attr.x]="-TAB_W/2" [attr.y]="-TAB_H/2"
-              [attr.width]="TAB_W" [attr.height]="TAB_H" rx="3"/>
-        <text class="tab-ch" y="3.3">{{ t.channel }}</text>
+              [attr.width]="TAB_W" [attr.height]="TAB_H" rx="3" [attr.stroke]="t.wired ? t.shade : null"/>
+        <text class="tab-ch" y="3.3" [attr.fill]="t.wired ? t.shade : null">{{ t.channel }}</text>
       </g>
 
       <g *ngFor="let b of boards()" class="board" [class.primary]="b.primary"
