@@ -33,6 +33,10 @@
          rather than on the toolbar. -->
     <button (click)="moreOpen = false; addSystem()" [disabled]="!hasShop">Add system</button>
     <button (click)="moreOpen = false; goBoards()">Find boards</button>
+    <!-- Same reasoning as Find boards: an errand you run rarely. The canvas is
+         where you actually spend time, so it needs a way in that doesn't route
+         through the Live view. -->
+    <button (click)="moreOpen = false; goSettings()">Settings</button>
   </div>
 </div>
 

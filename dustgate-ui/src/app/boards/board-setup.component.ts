@@ -2,6 +2,7 @@ import { Component, OnDestroy, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
+import { Subscription } from 'rxjs';
 import { ApiService, DiscoveredNode, NodeLinkState } from '../services/api.service';
 import type { Topology } from '@topology';
 import {
@@ -51,6 +52,14 @@ interface BoardRow {
     .head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
     .head .step { font-size: 12.5px; color: var(--muted); }
 
+    /* The network name. It used to be captioned in the board rail above the
+       canvas; the rail is gone, and this is the screen where the answer to
+       "same WiFi as what?" actually matters. */
+    .net { display: flex; align-items: center; gap: 7px; margin: -8px 0 16px 2px;
+           font-size: 12.5px; color: var(--muted); }
+    .net svg { width: 14px; height: 14px; flex: none; }
+    .net b { color: var(--text); font-weight: 600; }
+
     .card { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 6px 16px; margin-bottom: 14px; }
     .sec-title { font-size: 12.5px; color: var(--muted); margin: 0 0 6px 2px; }
 
@@ -99,6 +108,17 @@ interface BoardRow {
       <span class="step">{{ rows.length }} {{ rows.length === 1 ? 'board' : 'boards' }}</span>
     </div>
 
+    <!-- Absent while the device is running its own setup AP, and on firmware old
+         enough not to report it — in both cases saying nothing beats guessing. -->
+    <div class="net" *ngIf="ssid">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"
+           stroke-linecap="round" stroke-linejoin="round">
+        <path d="M2.5 8.5a15 15 0 0 1 19 0"/><path d="M5.5 12a10.5 10.5 0 0 1 13 0"/>
+        <path d="M8.5 15.5a6 6 0 0 1 7 0"/><circle cx="12" cy="19" r="1" fill="currentColor" stroke="none"/>
+      </svg>
+      <span>Everything here is on <b>{{ ssid }}</b></span>
+    </div>
+
     <!-- Boards already in the layout -->
     <div class="card" *ngIf="rows.length">
       <div class="row" *ngFor="let r of rows">
@@ -140,9 +160,13 @@ interface BoardRow {
     <!-- Discovery -->
     <p class="sec-title">Add another board</p>
     <div class="card">
+      <!-- "the same WiFi" is only useful if you know which one that is, and the
+           person holding the new board is usually not the person who set it up. -->
       <p class="hint">
-        Power up the board and put it on the same WiFi. It announces itself on the
-        network — tap Scan and it'll show up here.
+        Power up the board and put it on
+        <ng-container *ngIf="ssid; else sameWifi"><b>{{ ssid }}</b></ng-container>
+        <ng-template #sameWifi>the same WiFi</ng-template>.
+        It announces itself on the network — tap Scan and it'll show up here.
       </p>
 
       <div class="row" *ngFor="let n of unadded()">
@@ -181,9 +205,13 @@ export class BoardSetupComponent implements OnInit, OnDestroy {
   blockedRemoval = '';
   renaming: string | null = null;
   renameText = '';
+  /** The WiFi network the controller is joined to. Empty while it's running its
+   *  own setup AP, or on firmware too old to report it. */
+  ssid = '';
 
   private topo: Topology | null = null;
   private poll: ReturnType<typeof setInterval> | null = null;
+  private statusSub: Subscription | null = null;
 
   constructor(private api: ApiService, private router: Router) {}
 
@@ -221,9 +249,17 @@ export class BoardSetupComponent implements OnInit, OnDestroy {
       () => void this.refreshLinks().then(() => { this.syncLayoutControllers(); this.rebuild(); }),
       3000,
     );
+
+    // The network name rides the ordinary status push rather than a fetch of its
+    // own: it can change under us (the device rejoining a different AP) and this
+    // screen is already long-lived.
+    this.statusSub = this.api.status$.subscribe(s => { this.ssid = s?.ssid ?? ''; });
   }
 
-  ngOnDestroy(): void { if (this.poll) clearInterval(this.poll); }
+  ngOnDestroy(): void {
+    if (this.poll) clearInterval(this.poll);
+    this.statusSub?.unsubscribe();
+  }
 
   // ── discovery ─────────────────────────────────────────────────────────────
   async scan(): Promise<void> {

@@ -125,11 +125,15 @@ const POLL_MS = 2000;
     .ctlerr {
       font-size: 13px; color: var(--danger); margin: 0 8px 10px; line-height: 1.5;
     }
-    .nav { display: flex; gap: 10px; margin-top: 18px; }
-    .nav a { flex: 1; display: flex; align-items: center; justify-content: center; gap: 8px;
-             padding: 12px; border: 1px solid var(--border); border-radius: var(--radius);
-             color: var(--muted); text-decoration: none; font-size: 14px; }
-    .nav a svg { width: 18px; height: 18px; flex: none; }
+    /* Three across, not two. At 375px a 14px label plus an 18px icon no longer
+       fits, and "Shop layout" wrapped to two lines while its neighbours stayed on
+       one — a ragged row. Everything here is a notch smaller so all three labels
+       stay single-line on the narrowest phone we target. */
+    .nav { display: flex; gap: 8px; margin-top: 18px; }
+    .nav a { flex: 1; display: flex; align-items: center; justify-content: center; gap: 7px;
+             padding: 12px 6px; border: 1px solid var(--border); border-radius: var(--radius);
+             color: var(--muted); text-decoration: none; font-size: 13px; white-space: nowrap; }
+    .nav a svg { width: 17px; height: 17px; flex: none; }
     .empty {
       text-align: center; color: var(--muted); padding: 48px 20px;
     }
@@ -198,7 +202,9 @@ const POLL_MS = 2000;
       </div>
 
       <!-- The way out of the Live view. Since / forwards straight here, the
-           switcher has to live on the page it leaves. -->
+           switcher has to live on the page it leaves — and that includes
+           Settings, which had a route and a back button but nothing anywhere in
+           the app pointing at it. -->
       <div class="nav">
         <a routerLink="/build">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
@@ -218,6 +224,19 @@ const POLL_MS = 2000;
           </svg>
           Tools
         </a>
+        <a routerLink="/settings">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+               stroke-linecap="round" stroke-linejoin="round">
+            <!-- A cog, not a sunburst: the first draft was a hub plus eight
+                 detached rays, which at 17px read as a sun. The outer ring is what
+                 makes it a gear — the ticks are teeth crossing a rim, not rays. -->
+            <circle cx="12" cy="12" r="7.4"/>
+            <circle cx="12" cy="12" r="2.9"/>
+            <path d="M12 2.8v2.3M12 18.9v2.3M2.8 12h2.3M18.9 12h2.3
+                     M5.5 5.5l1.6 1.6M16.9 16.9l1.6 1.6M5.5 18.5l1.6-1.6M16.9 7.1l1.6-1.6"/>
+          </svg>
+          Settings
+        </a>
       </div>
     </ng-container>
 
@@ -225,6 +244,10 @@ const POLL_MS = 2000;
       <div class="empty">
         <p>No shop configured yet.</p>
         <p><a routerLink="/build">Set up your shop →</a></p>
+        <!-- The nav above is inside the has-tools branch, so without this a device
+             with no layout — the one most likely to need Forget WiFi — has no way
+             to reach Settings at all. -->
+        <p><a routerLink="/settings">Settings</a></p>
       </div>
     </ng-template>
   `,

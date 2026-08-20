@@ -2293,6 +2293,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   }
   private boardDragPt: Pt | null = null;
   goBoards(): void { void this.nav.navigate(['/boards']); }
+  goSettings(): void { void this.nav.navigate(['/settings']); }
   /** The one funnel every part of a board goes through — its glyph, its ports, the
    *  cable that leaves them, and the hit-testing for a drop. A board mid-drag tracks
    *  the pointer; at rest it sits on its cell. */
