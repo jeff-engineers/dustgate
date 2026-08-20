@@ -191,11 +191,29 @@ group('R3d a secondary port takes a side entry rather than looping over the shop
      `ended at ${JSON.stringify(end)}`);
   ok('from the RIGHT side, the side its collector is on',
      Math.round(end.x) === Math.round(saw.x + 38), `ended at x=${Math.round(end.x)}`);
-  ok('offset below the midline so it cannot stack on the primary port',
-     Math.round(end.y) === Math.round(saw.y + SECONDARY_PORT_DX), `ended at y=${Math.round(end.y)}`);
+  // Changed 2026-08-20. It used to be offset below the midline unconditionally, to
+  // guard a stack that only happens when the machine's OTHER run lands on the same
+  // side — and here the primary comes down from the top, so the side is this port's
+  // alone and it takes the middle of it. The offset is now handed in as portDy by
+  // whoever can see both landings; the case it exists for is the next block.
+  ok('and dead centre on that side, because nothing else landed there',
+     Math.round(end.y) === Math.round(saw.y), `ended at y=${Math.round(end.y)}, midline ${saw.y}`);
   // The whole point: nothing in the run goes ABOVE the machine any more.
   ok('and never climbs over the top of the shop to get there',
      p.every(pt => pt.y > topOfSaw - 20), JSON.stringify(p));
+
+  // The case the offset DOES exist for: portDy set, and the run lands off-midline.
+  const shared = scene([collector('dc', 0, 0), { ...saw, inletDx: PRIMARY_PORT_DX }, dc2,
+                        { ...aux, portDy: SECONDARY_PORT_DX }],
+                       [{ childId: 'saw', parentId: 'dc' }, { childId: 'saw-aux', parentId: 'dc2' }]);
+  const sp = path(routeAll(shared), 'saw-aux');
+  ok('portDy steps it off the midline so it cannot stack on a port sharing that side',
+     Math.round(sp[sp.length - 1].y) === Math.round(saw.y + SECONDARY_PORT_DX),
+     `ended at y=${Math.round(sp[sp.length - 1].y)}`);
+  // …and the approach to that off-lattice point stays square.
+  const lastTwo = sp.slice(-2);
+  ok('and the last segment is level, not a diagonal jab at the port',
+     Math.abs(lastTwo[0].y - lastTwo[1].y) < 0.5, JSON.stringify(lastTwo));
 
   // Without a hostBox it is still top-entry only — the pre-D-41 behaviour, kept as
   // the fallback for any caller that hasn't got a machine to hand.

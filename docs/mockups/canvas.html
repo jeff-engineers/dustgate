@@ -183,7 +183,9 @@
           </svg>
           <div><div class="what">Ground &amp; seam</div>
             <div class="means">One grey band per airflow system. Only drawn once there are
-              two — with one collector it would say nothing.</div></div>
+              two — with one collector it would say nothing. It is <b>ground, not a lid</b>:
+              the board's dots run through it, and a right-click on it opens the same
+              "what goes here" menu the bare board does (D-42).</div></div>
         </div>
 
       </div>
@@ -278,6 +280,13 @@
         their own picture, and a port that behaves differently by shape is a thing to remember
         every time you drag a machine. Both options are drawn in
         <code>archived/side-entry-hood.html</code>.</p>
+      <p class="note"><b>Where on the edge.</b> A port sits at the <b>centre</b> of whichever edge its
+        run arrives at. It steps aside only when another of that machine's runs lands on the
+        <em>same</em> edge — the primary square goes left, the tapered ports go right — so a lone
+        port is never drawn dodging a neighbour that went somewhere else (D-48). A duct always
+        meets a port <b>square</b>: where the port sits off the lattice, the run jogs along it and
+        turns in at 90°, because a short jog reads as pipe and a slant reads as a mistake.</p>
+
       <p class="note"><b>The rule, stated once.</b> A machine lives in one system. A machine's
         <em>ports</em> are elements in the airflow tree, each with exactly one parent duct — a
         tool may never have two parents, which is why a second port is a new port element
@@ -302,6 +311,8 @@
           <tr><th>Condition</th><th>Result</th></tr>
           <tr><td><b>The cell is occupied</b></td>
               <td><span style="color:var(--danger)">Refused.</span> Named: "Bandsaw is already in that cell."</td></tr>
+          <tr><td><b>You are dragging a run END</b></td>
+              <td><span style="color:var(--ok,#3cbe6e)">Allowed anywhere.</span> An end is bare pipe, not a piece — it crosses into another system freely and claims no rows of its own (D-47). Filling it there is what gets refused.</td></tr>
           <tr><td><b>The row belongs to another system</b></td>
               <td><span style="color:var(--danger)">Refused.</span> Systems own contiguous row bands; interleaving them makes the grey ground undrawable.</td></tr>
           <tr><td>A duct will cross a device</td>

@@ -9,7 +9,7 @@
 import {
   type Box, type Pt, type SceneNode,
   CELL, CLEARANCE, GATE_PAD, INLET_GAP, LATTICE, OUTLET_STUB, PAD,
-  SECONDARY_PORT_DX, SECONDARY_PORT_HALF, UNIT_H,
+  SECONDARY_PORT_HALF, UNIT_H,
   deviceBox, halfH, halfW, ptInBox, segBoxHit, simplifyPts,
 } from './geometry';
 
@@ -137,15 +137,16 @@ export function inPorts(n: SceneNode): Port[] {
   // over the whole shop to come down on top of it — [202,496] → [226,64] → [187,117]
   // in the shop that found it.
   //
-  // Side ports sit SECONDARY_PORT_DX below the machine's midline so that a machine
-  // whose two runs both arrive from the same side lands them on two points rather
-  // than one, and the two glyphs don't stack. It costs the router nothing: entry()
-  // rounds a side port to the nearest lattice ROW, and 15px rounds to the same one.
+  // A side port sits on the machine's midline, and only steps off it (portDy) when
+  // another of that machine's runs actually landed on the same side — otherwise a
+  // lone secondary port hung below the middle of the edge for no visible reason.
+  // It costs the router nothing either way: entry() rounds a side port to the
+  // nearest lattice ROW, and an offset this small rounds to the same one.
   if (n.glyph === 'secondaryPort') {
     const top: Port = { pt: { x: n.x, y: n.y - SECONDARY_PORT_HALF - INLET_GAP }, dir: 3 };
     const b = n.hostBox;
     if (!b) return [top];
-    const midY = (b.y0 + b.y1) / 2 + SECONDARY_PORT_DX;
+    const midY = (b.y0 + b.y1) / 2 + (n.portDy ?? 0);
     return [
       top,
       { pt: { x: b.x0, y: midY }, dir: 2, bias: TOP_ENTRY_BIAS },
@@ -402,7 +403,46 @@ export function routeOne(from: Port[], to: Port[], opts: GridOpts): RouteResult 
     }
   }
   pts.push(bestGoalPort.pt);
-  return { pts: simplifyPts(pts), edges, nodes, ok: true };
+  return { pts: simplifyPts(squareOffEnds(pts, startPort, bestGoalPort)), edges, nodes, ok: true };
+}
+
+/**
+ * Keep the first and last segments square.
+ *
+ * The lattice is a grid, but a PORT need not sit on it — a port offset along its
+ * edge (to clear another port on the same edge) is off-lattice by design. Joining
+ * the lattice straight to it drew a diagonal for the last few pixels, which is the
+ * one place ductwork stopped looking like ductwork: real pipe turns at 90°, and a
+ * short jog across says "it enters here" where a slanted line says "something is
+ * slightly wrong".
+ *
+ * The elbow goes in along the port's OWN axis: a top or bottom port is approached
+ * vertically, so the jog runs along the lattice row and drops in; a side port is
+ * approached horizontally, so it runs down the lattice column and comes in level.
+ * The corner therefore sits on the lattice line the run already occupies and never
+ * cuts a new way across anything.
+ *
+ * simplifyPts() drops it again whenever the port was on-lattice after all, so an
+ * ordinary run is untouched.
+ */
+function squareOffEnds(pts: Pt[], start: Port, goal: Port): Pt[] {
+  if (pts.length < 2) return pts;
+  const out = pts.slice();
+  const vertical = (d: Dir) => d === 1 || d === 3;
+  const corner = (port: Port, next: Pt): Pt =>
+    vertical(port.dir) ? { x: port.pt.x, y: next.y } : { x: next.x, y: port.pt.y };
+
+  const goalNext = out[out.length - 2];
+  const g = corner(goal, goalNext);
+  if (Math.abs(g.x - goal.pt.x) > 0.5 || Math.abs(g.y - goal.pt.y) > 0.5) {
+    out.splice(out.length - 1, 0, g);
+  }
+  const startNext = out[1];
+  const st = corner(start, startNext);
+  if (Math.abs(st.x - start.pt.x) > 0.5 || Math.abs(st.y - start.pt.y) > 0.5) {
+    out.splice(1, 0, st);
+  }
+  return out;
 }
 
 /** Boxed in: emit the straight dogleg so there's still something to draw, and let

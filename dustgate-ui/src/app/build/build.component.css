@@ -81,6 +81,9 @@ svg.canvas { display: block; touch-action: none; }
    stub because it is a gesture, not ductwork — it exists only until you let go. */
 .drag-stub { stroke: var(--accent); stroke-width: 3.5; fill: none; stroke-linecap: round;
              stroke-dasharray: 7 6; pointer-events: none; }
+/* Dragged into ANOTHER system: the grey of a cross-seam run (.duct.sec), so the
+   colour changes while you are still deciding rather than on release. */
+.drag-stub.crossing { stroke: var(--border-strong, #3a3a3a); }
 .node.drop-target .body, .node.drop-target .unit { stroke: var(--accent); stroke-width: 2.5; }
 .node.drop-target .tool-body { stroke: var(--accent); stroke-width: 2.5; }
 .open-end .dot { fill: var(--accent); }
@@ -88,6 +91,9 @@ svg.canvas { display: block; touch-action: none; }
 /* A system's ground. Barely there on purpose: it has to survive the zoom-out that
    a hairline wouldn't, without competing with the ductwork drawn on top of it. */
 .ground { fill: #191919; }
+/* The board's dots, re-laid over the grey so the grid runs unbroken through a
+   system's ground. Inert: the grey underneath it is what answers a click. */
+.ground-dots { pointer-events: none; }
 /* The seam between two systems, and the name of the one below it. Muted caps: it
    is a caption on the board, not a piece standing on it. */
 .sysdiv line { stroke: var(--border); stroke-width: 1.5; }

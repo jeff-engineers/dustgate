@@ -69,9 +69,20 @@
            labelled: a system's identity is its collector, which is sitting on the
            ground's top-left cell where you can read its name. -->
       <g class="grounds" *ngIf="systemGrounds().length > 1">
-        <rect *ngFor="let g of systemGrounds()" class="ground"
-              x="8" [attr.y]="g.y" [attr.width]="vbW - 16" [attr.height]="g.h" rx="14"
-              (pointerdown)="deselect()"/>
+        <!-- Two rects per ground, not one: the grey is opaque, so the dotted board
+             has to be laid back over it or a system reads as a hole in the grid.
+             Same #bdots pattern in userSpaceOnUse, so it stays in step with the
+             dots outside the band for free — no offset to keep aligned by hand.
+             The right-click belongs on the GREY, which is the one that gets hit:
+             without it a second system swallowed the "what goes here" menu, since
+             the ground sits over the board rect that used to answer. -->
+        <g *ngFor="let g of systemGrounds()">
+          <rect class="ground"
+                x="8" [attr.y]="g.y" [attr.width]="vbW - 16" [attr.height]="g.h" rx="14"
+                (pointerdown)="deselect()" (contextmenu)="onCanvasContext($event)"/>
+          <rect class="ground-dots" fill="url(#bdots)"
+                x="8" [attr.y]="g.y" [attr.width]="vbW - 16" [attr.height]="g.h" rx="14"/>
+        </g>
         <!-- The line between two systems, naming the one below it. The blank row was
              doing this alone and stopped the moment something was dragged into it. -->
         <g *ngFor="let s of systemSeparators()" class="sysdiv">
@@ -96,7 +107,7 @@
 
       <!-- The pipe being dragged. Accent + dashed: the same "unfinished" language an
            open stub wears, so it reads as a run you have not committed yet. -->
-      <path *ngIf="dragLineD() as dl" class="drag-stub" [attr.d]="dl"/>
+      <path *ngIf="dragLineD() as dl" class="drag-stub" [class.crossing]="dragCrossesSeam()" [attr.d]="dl"/>
 
       <g *ngFor="let bd of branchDots()" class="bdot" (pointerdown)="onBranchDotDown($event, bd)">
         <circle [attr.cx]="bd.x" [attr.cy]="bd.y" r="14" fill="transparent"/>

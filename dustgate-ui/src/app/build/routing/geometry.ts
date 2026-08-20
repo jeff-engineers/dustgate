@@ -93,11 +93,24 @@ export interface SceneNode {
   span: number;
   x: number;
   y: number;
-  /** Shifts this device's TOP inlet off its centreline so a duct lands on the glyph
-   *  marking the entry rather than the middle of the box. Both a machine's inlets sit
-   *  on the TOP edge, offset slightly from each other — a side entry is for a run
-   *  that is genuinely shorter from the side, never a consequence of this. */
+  /** Shifts this device's TOP inlet off its centreline, so that when a machine's
+   *  primary and secondary ports BOTH land on the top edge their glyphs don't stack.
+   *
+   *  Set only when they actually do share that edge — a lone primary sits on the
+   *  centreline, which is what the run coming down to it already looks like. It used
+   *  to be set on any machine that HAD a secondary port, which shifted the square
+   *  aside to dodge a glyph that had gone off to a side edge and wasn't there.
+   *
+   *  Safe to derive from the previous solve (see resolvePortOffsets): |dx| here is
+   *  smaller than half a lattice step, so entry() rounds to the same lattice column
+   *  with or without it. The offset can move the drawn end of a run; it cannot change
+   *  which way the run goes, so the derivation can't oscillate. */
   inletDx?: number;
+  /** The same idea one edge over: for a SECONDARY PORT, how far its side entry sits
+   *  off its machine's vertical midline. 0 — dead centre — unless another of that
+   *  machine's runs landed on the same side. Rounds to the same lattice ROW for the
+   *  same reason inletDx rounds to the same column. */
+  portDy?: number;
   /** For a SECONDARY PORT only: the box of the machine it rides on. A secondary port
    *  is entered on its machine's edges, not on the 9px glyph's own — the glyph is
    *  drawn wherever the run lands (D-41), so the machine is what the router aims at.

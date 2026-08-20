@@ -20,6 +20,7 @@ import {
   machinesOf, outletOf, portsOf, primaryPortOf, removeMachine, removePort, supplementalCount,
   systemById, systemsOf, systemViews, toShop,
 } from '../services/shop-doc';
+import { wipSummary } from '../services/wip-message';
 import {
   type Glyph, type Pt, type SceneNode,
   BOARD_H, BOARD_W, CELL, GATE_PAD, PAD, TOOL_HALF, UNIT_H,
@@ -81,9 +82,12 @@ interface NodeVM {
    *  supplemental port has NO cell — it rides on the top edge of the machine's box,
    *  which is what keeps one machine drawn as one machine. */
   anchor?: { dx: number; dy: number };
-  /** Shifts this machine's TOP inlet off the centreline to make room for its glyph(s).
-   *  0 when it has none. Both inlets stay on the top edge — see PRIMARY_PORT_DX. */
+  /** Shifts this machine's TOP inlet off the centreline — only when a secondary port
+   *  actually shares that edge with it. See resolvePortOffsets(). */
   inletDx: number;
+  /** A secondary port's step off its machine's midline on a SIDE entry, for the same
+   *  reason and set the same way. 0 unless it shares that side. */
+  portDy?: number;
   /** The primary-port node this one rides on — set for a secondary port, so its glyph tracks
    *  the machine's live drag rather than its own snapped cell. */
   follows?: string;
@@ -98,8 +102,54 @@ interface DuctVM { childId: string; live: boolean; open: boolean; secondary: boo
  *  point on a straight; corners carry `legs` — the cells a new leg could take,
  *  already in preference order, because a corner's free directions depend on which
  *  way it turns and can't be derived from `axis` alone. */
+/** Corner radius where a run turns. */
+const CORNER_R = 12;
+
+/**
+ * A polyline drawn the way ductwork is drawn: straight legs, rounded corners.
+ *
+ * Lifted out of ductD() so the DRAG PREVIEW can use it too. That is the whole
+ * point — the line you pull out of an outlet should be the shape of the pipe you
+ * are about to get, not a rubber band pointing at where it will end up.
+ */
+function roundedPath(pts: Pt[]): string {
+  if (!pts.length) return '';
+  if (pts.length === 1) return `M ${pts[0].x} ${pts[0].y}`;
+  const dist = (p: Pt, q: Pt) => Math.hypot(q.x - p.x, q.y - p.y);
+  const toward = (from: Pt, to: Pt, r: number) => {
+    const L = dist(from, to) || 1; return { x: from.x + (to.x - from.x) / L * r, y: from.y + (to.y - from.y) / L * r };
+  };
+  const n = pts.length;
+  let d = `M ${pts[0].x} ${pts[0].y}`;
+  for (let i = 1; i < n; i++) {
+    if (i === n - 1) { d += ` L ${pts[i].x} ${pts[i].y}`; break; }
+    const r = Math.min(CORNER_R, dist(pts[i - 1], pts[i]) / 2, dist(pts[i], pts[i + 1]) / 2);
+    const before = toward(pts[i], pts[i - 1], r), after = toward(pts[i], pts[i + 1], r);
+    d += ` L ${before.x} ${before.y} Q ${pts[i].x} ${pts[i].y} ${after.x} ${after.y}`;
+  }
+  return d;
+}
+
+/**
+ * Two straight legs from `from` to `to`, leaving along the axis the run actually
+ * leaves on. `horizontalFirst` is that axis, not a preference.
+ *
+ * Collapses to a single leg when the two points already line up, so a drag straight
+ * out from an outlet draws one clean stretch rather than a corner on top of itself.
+ */
+function elbow(from: Pt, to: Pt, horizontalFirst: boolean): Pt[] {
+  const corner = horizontalFirst ? { x: to.x, y: from.y } : { x: from.x, y: to.y };
+  const same = (p: Pt, q: Pt) => Math.abs(p.x - q.x) < 0.5 && Math.abs(p.y - q.y) < 0.5;
+  if (same(corner, from) || same(corner, to)) return [from, to];
+  return [from, corner, to];
+}
+
 interface BDot { x: number; y: number; childId: string; col: number; row: number; axis: 'h' | 'v'; elbow?: boolean; legs?: Cell[]; }
-interface ODot { x: number; y: number; parentId: string; branchId?: string; cell: Cell; }
+interface ODot { x: number; y: number; parentId: string; branchId?: string; cell: Cell;
+  /** The direction the run leaves this outlet — which is what decides whether the
+   *  drag preview turns horizontally first or vertically first. A collector has one
+   *  per free side; a gate's outlets always leave downward. */
+  dx: number; dy: number; }
 
 // ── Wiring layer ──────────────────────────────────────────────────────────────
 // A second view of the same canvas: where the boards are and what cable runs to
@@ -466,7 +516,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     const at = new Map(this.nodes.map(n => [n.id, { x: this.routeX(n), y: this.routeY(n) }]));
     const nodes: SceneNode[] = this.nodes.map(n => ({
       id: n.id, glyph: n.glyph, isUnit: n.isUnit, span: n.span,
-      x: at.get(n.id)!.x, y: at.get(n.id)!.y, inletDx: n.inletDx,
+      x: at.get(n.id)!.x, y: at.get(n.id)!.y, inletDx: n.inletDx, portDy: n.portDy,
       // A secondary port is aimed at its MACHINE's box, not its own 9px one (D-41).
       // Taken from the same resolved positions as everything else here, so a port
       // being dragged and a port riding a dragged machine both aim at the right box.
@@ -574,22 +624,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
    *  A crossing is now a gap punched by the casing stroke (see .duct-casing), which
    *  needs no geometry at all. */
   ductD(childId: string): string {
-    const pts = this.ductPoints(childId); if (!pts.length) return '';
-    if (pts.length === 1) return `M ${pts[0].x} ${pts[0].y}`;
-    const CORNER_R = 12;
-    const dist = (p: Pt, q: Pt) => Math.hypot(q.x - p.x, q.y - p.y);
-    const toward = (from: Pt, to: Pt, r: number) => {
-      const L = dist(from, to) || 1; return { x: from.x + (to.x - from.x) / L * r, y: from.y + (to.y - from.y) / L * r };
-    };
-    const n = pts.length;
-    let d = `M ${pts[0].x} ${pts[0].y}`;
-    for (let i = 1; i < n; i++) {
-      if (i === n - 1) { d += ` L ${pts[i].x} ${pts[i].y}`; break; }
-      const r = Math.min(CORNER_R, dist(pts[i - 1], pts[i]) / 2, dist(pts[i], pts[i + 1]) / 2);
-      const before = toward(pts[i], pts[i - 1], r), after = toward(pts[i], pts[i + 1], r);
-      d += ` L ${before.x} ${before.y} Q ${pts[i].x} ${pts[i].y} ${after.x} ${after.y}`;
-    }
-    return d;
+    return roundedPath(this.ductPoints(childId));
   }
 
   openDucts(): DuctVM[] { return this.ducts.filter(d => d.open); }
@@ -1300,6 +1335,39 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     return { blocked: '', warn: '' };
   }
 
+  /** The system whose rows this menu's end is sitting in, when that isn't its own —
+   *  null when there's nothing in the way.
+   *
+   *  Asked of the END's cell rather than the piece's, because filling an end puts the
+   *  new piece exactly where the end was. */
+  private fillBlockedBy(m: NonNullable<BuildComponent['menu']>): string | null {
+    const endId = m.end ?? (m.branch ? m.branch.childId : null);
+    if (!endId) return null;
+    const cell = this.cells.get(endId);
+    return cell ? this.bandBlockedByFor(endId, cell.row) : null;
+  }
+
+  /** bandBlockedBy() without the run-end exemption — "would a PIECE be allowed here". */
+  private bandBlockedByFor(id: string, row: number): string | null {
+    const bands = this.systemRowBands();
+    if (bands.length < 2) return null;
+    const i = bands.findIndex(b => b.id === this.systemOf.get(id));
+    if (i < 0) return null;
+    const above = bands[i - 1], below = bands[i + 1];
+    if (above && row <= above.hi) return above.name ?? 'another collector';
+    if (below && row >= below.lo) return below.name ?? 'another collector';
+    return null;
+  }
+
+  /** Bare pipe rather than a piece: the loose end of a run, with nothing on it.
+   *
+   *  A TEE is a junction too and is deliberately included — it is still just pipe.
+   *  What matters is that the moment an end becomes a real piece (fillEnd), the band
+   *  rule applies again, which is checked there. */
+  private isRunEnd(id: string): boolean {
+    return this.elem(id)?.['type'] === 'junction';
+  }
+
   /** Why `id` can't sit on `row`, in terms of the system next door — null when it can.
    *
    *  Systems keep their rows in order, and a piece stays between its neighbours: the
@@ -1310,14 +1378,16 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
    *  Growing downward into the empty row between two systems is allowed — that just
    *  moves the boundary, which is the layout doing its job. */
   private bandBlockedBy(id: string, row: number): string | null {
-    const bands = this.systemRowBands();
-    if (bands.length < 2) return null;
-    const i = bands.findIndex(b => b.id === this.systemOf.get(id));
-    if (i < 0) return null;
-    const above = bands[i - 1], below = bands[i + 1];
-    if (above && row <= above.hi) return above.name ?? 'another collector';
-    if (below && row >= below.lo) return below.name ?? 'another collector';
-    return null;
+    // A run END is not a piece. It is the loose end of a duct — bare pipe with
+    // nothing on it — and pipe is allowed to reach into the next system (that is
+    // what a secondary port's run does for a living). Refusing it here was the band
+    // rule answering a question nobody asked: it stopped you pulling a run DOWN
+    // towards the other collector, which is exactly the gesture that ends in a
+    // second port. The two halves of this definition have to agree — an end is also
+    // left out of systemRowBands() below, or a run reaching across would stretch its
+    // own system's stripe over the neighbour's and the grey ground would overlap.
+    if (this.isRunEnd(id)) return null;
+    return this.bandBlockedByFor(id, row);
   }
 
   /** Each system's row band, topmost first. A system with nothing placed yet has no
@@ -1336,6 +1406,11 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     return systemsOf(this.topo as unknown as ShopDoc).map(s => {
       let lo = Infinity, hi = -Infinity;
       for (const e of s.elements) {
+        // A run end claims no band, for the same reason it isn't checked against one
+        // (bandBlockedBy). A system owns the rows its PIECES stand on; a loose end is
+        // where its pipe happens to have got to, and letting that stretch the stripe
+        // would draw grey over a neighbour a run merely reaches towards.
+        if (e['type'] === 'junction') continue;
         const c = this.cells.get(e['id'] as string); if (!c) continue;
         lo = Math.min(lo, c.row); hi = Math.max(hi, c.row);
       }
@@ -1535,6 +1610,15 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       // A duct is exempt: it hangs another leg off the tee rather than replacing it.
       else if (tee && f.kind !== 'duct' && outletsFor(f.kind) < legsHere) {
         enabled = false; note = `a tee needs ${legsHere} outlets`;
+      }
+      // Filling an end turns bare pipe into a PIECE, and a piece obeys the band rule
+      // even though the end it replaces did not (bandBlockedBy / isRunEnd). This is
+      // where that comes back: pull a run down into the next system and you may leave
+      // it there as pipe, but you cannot stand a gate or a tool on it. Without this,
+      // the two systems' stripes would overlap the moment you filled it.
+      if (enabled && f.kind !== 'duct') {
+        const band = this.fillBlockedBy(m);
+        if (band) { enabled = false; note = `${band}'s rows`; }
       }
       if (enabled) {
         const t = this.targetCells(f.kind, m);
@@ -1825,16 +1909,50 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
    * There was nothing at all before: outputDots() hides the add-dot for the duration,
    * so a drag off an outlet showed no line, no dot and no target — you found out
    * where it went by letting go.
+   *
+   * It BENDS, and that is the point (2026-08-20). A straight line from the outlet to
+   * the pointer is a line of sight: it shows where the run will END and says nothing
+   * true about the pipe, which can only ever leave the outlet along its own axis and
+   * turn at right angles. Pulling a diagonal out of a collector and getting an elbow
+   * on release meant the preview and the result were different pictures. Same
+   * roundedPath() the finished duct is drawn with, so they agree by construction.
+   *
+   * Not the real router, deliberately: it solves against the whole scene and would
+   * re-solve every pointer move, and mid-gesture there is no child element to route
+   * TO. One elbow is honest about the geometry without pretending to know the
+   * obstacles — the routed run appears on release, as it always did.
    */
   dragLineD(): string {
     const o = this.odrag;
-    if (o?.moved && o.at) return `M ${o.od.x} ${o.od.y} L ${o.at.x} ${o.at.y}`;
+    if (o?.moved && o.at) return roundedPath(elbow({ x: o.od.x, y: o.od.y }, o.at, o.od.dx !== 0));
     const i = this.idrag;
     if (i?.moved && i.at) {
       const n = this.byId.get(i.portId);
-      if (n) return `M ${this.nx(n)} ${this.ny(n)} L ${i.at.x} ${i.at.y}`;
+      // A machine's port takes its run on the TOP edge, so this one leaves vertically.
+      if (n) return roundedPath(elbow({ x: this.nx(n), y: this.ny(n) }, i.at, false));
     }
     return '';
+  }
+
+  /**
+   * Is the run being dragged reaching into a DIFFERENT system than it starts in?
+   *
+   * Only a secondary port's run may cross the seam, and the finished thing is drawn
+   * grey-dashed for it (.duct.sec) so a shared machine reads as shared. The drag
+   * preview now says the same thing at the same moment, rather than looking like an
+   * ordinary run right up until it lands and changes colour.
+   *
+   * Accent-orange means UNFINISHED and grey-dashed means CROSSES — two different
+   * facts, and the preview is allowed to be both, so this only swaps the colour.
+   */
+  dragCrossesSeam(): boolean {
+    const i = this.idrag;
+    if (!i?.moved || !i.at) return false;
+    const from = this.systemOf.get(i.portId);
+    if (!from) return false;
+    const row = this.dragCell(i.at).row;
+    const band = this.systemRowBands().find(b => row >= b.lo && row <= b.hi);
+    return !!band && band.id !== from;
   }
 
   /** The piece a drag is hovering, so the drop target lights up before you commit. */
@@ -1861,14 +1979,20 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
         // the 4-wide main gate in the demo layout, so every menu item read "no room"
         // while (1,0) sat empty beside it.
         const hw = this.halfW(n), hh = this.halfH(n);
+        //
+        // The LEFT side drops out in column 0. Growing left is legal — the cell is
+        // negative for one beat and normalizeCells() slides the board back under it
+        // — but on the leftmost collector it offers to shove the entire shop sideways
+        // to reach a cell that is already there on the right. Nothing is lost: a
+        // collector that has been dragged off the left edge gets its ⊕ back.
         const sides: Array<{ dx: number; dy: number; x: number; y: number }> = [
           { dx: 1, dy: 0, x: this.nx(n) + hw + 16, y: this.ny(n) },
-          { dx: -1, dy: 0, x: this.nx(n) - hw - 16, y: this.ny(n) },
+          ...(n.col > 0 ? [{ dx: -1, dy: 0, x: this.nx(n) - hw - 16, y: this.ny(n) }] : []),
           { dx: 0, dy: 1, x: this.nx(n), y: this.ny(n) + hh + 16 },
         ];
         for (const s of sides) {
           const cell = this.firstFreeCellToward(n, s.dx, s.dy, 1, n.id);
-          if (cell) out.push({ x: s.x, y: s.y, parentId: n.id, cell });
+          if (cell) out.push({ x: s.x, y: s.y, parentId: n.id, cell, dx: s.dx, dy: s.dy });
         }
       } else if (el?.['type'] === 'selector') {
         const branches = (el['branches'] as Branch[]) ?? [];
@@ -1876,7 +2000,8 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
           if (b.role !== 'blocked') return;
           const x = n.isUnit ? this.nx(n) + i * CELL : this.nx(n);
           const y = this.ny(n) + this.halfH(n) + 18;
-          out.push({ x, y, parentId: n.id, branchId: b.id, cell: { col: n.col + (n.isUnit ? i : 0), row: n.row + 1 } });
+          out.push({ x, y, parentId: n.id, branchId: b.id, dx: 0, dy: 1,
+                     cell: { col: n.col + (n.isUnit ? i : 0), row: n.row + 1 } });
         });
       }
     }
@@ -2963,12 +3088,21 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     else el['servo'] = { ...(el['servo'] as RawEl ?? {}), channel: ch };
   }
 
-  /** The rubber cable while a drag is in flight. Dashed, and it follows the pointer
-   *  rather than snapping — the routed run only appears once it lands. */
+  /** The cable while a drag is in flight. Dashed — it is a gesture until you let go —
+   *  but the same SHAPE the landed cable will have: cableRun() and cablePath() are the
+   *  functions that draw the real thing, called here with the pointer as the far end.
+   *
+   *  It was an S-curve between the two points, which is the same line-of-sight problem
+   *  the duct drag had (2026-08-20): a cable leaves a port on its underside and turns
+   *  at right angles, so a bezier drawn straight at the pointer was a picture of
+   *  nothing the wiring layer would ever produce.
+   *
+   *  Rank 0 and no cost model, deliberately: lanes and crossing avoidance are about
+   *  a cable's neighbours, and mid-drag this one has no place among them yet. The
+   *  shape is honest; the exact lane arrives with the drop. */
   dragCableD(): string {
     const d = this.wireDrag; if (!d) return '';
-    const mx = (d.from.x + d.to.x) / 2;
-    return `M ${d.from.x} ${d.from.y} C ${mx} ${d.from.y}, ${mx} ${d.to.y}, ${d.to.x} ${d.to.y}`;
+    return cablePath(cableRun(d.from, d.to, 0));
   }
 
   // ── undo / redo ───────────────────────────────────────────────────────────────
@@ -3410,7 +3544,9 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     // reads as "stop", which is the confusion this whole split exists to undo.
     if (this.dropWarn) return { text: this.dropWarn, kind: 'info' };
     if (this.saveError) return { text: this.saveError, kind: 'warn' };
-    if (this.wip) return { text: `Work in progress — saved here, but the controller won’t take it yet: ${this.wip}.`, kind: 'warn' };
+    // No trailing period: wip is a whole sentence of its own now (wip-message.ts),
+    // and the lead-in is what says why it's only saved here.
+    if (this.wip) return { text: `Saved here, but the controller won’t take it yet — ${this.wip}`, kind: 'warn' };
 
     // Below the real problems, above the general nudges: a redundant gate is a
     // working shop with a part in it that isn't doing anything. Worth saying once,
@@ -3506,7 +3642,10 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     try {
       this.topo = doc as Topology;                     // keep the draft either way
       if (!v.ok) {
-        this.wip = v.errors[0]?.message ?? 'incomplete layout';
+        // The model's own message names ids ("element \"p8\"") because ids are what a
+        // document is made of. Nobody typed those, so they get translated on the way
+        // to the guide bar — see services/wip-message.ts.
+        this.wip = wipSummary(doc as unknown as ShopDoc, v.errors);
         return;                                        // still dirty — retry once it's whole
       }
       await this.api.putTopology(doc as Topology);
@@ -3717,7 +3856,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       const v = validateShop(this.docWithLayout());
       if (!v.ok) {
         this.dirty = true;
-        this.wip = v.errors[0]?.message ?? 'incomplete layout';
+        this.wip = wipSummary(this.docWithLayout() as unknown as ShopDoc, v.errors);
         return;
       }
       await this.api.putTopology(this.docWithLayout() as Topology);
@@ -4082,13 +4221,6 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   /** Does this primary port's machine also have a secondary port? Only then does the
    *  primary draw a primary port — the square glyph exists to be told apart from a
    *  tapered one, so on a single-inlet machine it would distinguish nothing. */
-  private hasSecondaryPorts(e: RawEl): boolean {
-    const doc = this.topo as unknown as ShopDoc;
-    const machine = machineOfPort(doc, e);
-    return !!machine && supplementalCount(doc, machine.id as string) > 0;
-  }
-
-
   /** What a secondary port is FOR, in the woodworker's word for it — the only thing
    *  that distinguishes two ports on one saw. Falls back to the name a port is born
    *  with (D-39) rather than to a type name, which would caption the canvas in
@@ -4134,11 +4266,87 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
                branchCount, isUnit, span: isUnit ? Math.max(1, branchCount) : 1,
                live: false, openIndex: 0, setup, redundant: redundant.has(id),
                anchor: seat?.anchor, follows: seat?.follows,
-               inletDx: glyph === 'tool' && this.hasSecondaryPorts(e) ? PRIMARY_PORT_DX : 0 };
+               // Centred to begin with. resolvePortOffsets() steps a port aside only
+               // where one actually shares an edge with another of the same machine's.
+               inletDx: 0, portDy: 0 };
     });
     this.byId = new Map(this.nodes.map(n => [n.id, n]));
     this.recomputeExtent();
+    this.resolvePortOffsets();
   }
+
+  /**
+   * Step a port off its edge's centreline, but only where it would otherwise stack on
+   * another port of the SAME machine.
+   *
+   * A machine's ports all prefer the top edge and each takes a side when its own run
+   * is genuinely shorter that way, so which edge each one ends up on is a fact about
+   * the finished route, not something that can be known in advance. The offsets used
+   * to be applied up front to every machine that had a secondary port at all — which
+   * is why a jointer whose auxiliary went off to the LEFT still had its primary square
+   * shoved left on the top edge, dodging a glyph that wasn't there.
+   *
+   * So: solve, look at which edge each run actually landed on, and offset only the
+   * ports that share one.
+   *
+   * WHY THIS TERMINATES, which is the whole reason it is allowed to read its own
+   * output: every offset here is smaller than half a lattice step, and entry() rounds
+   * a port to the nearest lattice column (top) or row (side). An offset therefore
+   * lands on the SAME lattice node with or without it — it can move where a run is
+   * drawn to end, never which way the run goes, and so never which edge it picks. One
+   * pass is enough, and a second could only ever agree with the first. The re-solve
+   * costs a memo miss on a change that has just re-solved anyway.
+   */
+  private resolvePortOffsets(): void {
+    const doc = this.topo as unknown as ShopDoc;
+    let changed = false;
+
+    for (const n of this.nodes) {
+      if (n.glyph !== 'tool') continue;
+      const machine = machineOfPort(doc, this.elem(n.id));
+      if (!machine) continue;
+      const secondaries = this.nodes.filter(s => s.glyph === 'secondaryPort' && s.follows === n.id);
+      if (!secondaries.length) continue;
+
+      const primaryEdge = this.landedEdge(n.id, n);
+      // Top edge: the primary steps LEFT and the secondaries already sit right of the
+      // centreline (their own seats), so the pair reads as a pair.
+      const sharedTop = primaryEdge === 'top'
+        && secondaries.some(sp => this.landedEdge(sp.id, n) === 'top');
+      const inletDx = sharedTop ? PRIMARY_PORT_DX : 0;
+      if (n.inletDx !== inletDx) { n.inletDx = inletDx; changed = true; }
+
+      // Side edges: a secondary steps DOWN only if the primary came in the same side.
+      // Two secondaries on one side step by SECONDARY_PORT_STEP so they don't stack
+      // on each other either.
+      let stacked = 0;
+      for (const sp of secondaries) {
+        const edge = this.landedEdge(sp.id, n);
+        const side = edge === 'left' || edge === 'right';
+        const clash = side && primaryEdge === edge;
+        const portDy = clash ? SECONDARY_PORT_DX + stacked * SECONDARY_PORT_STEP : 0;
+        if (clash) stacked++;
+        if (sp.portDy !== portDy) { sp.portDy = portDy; changed = true; }
+      }
+    }
+    // Only when something moved: the scene hash changes, so the next read re-solves
+    // with the offsets in place. Without the guard this would dirty the memo on every
+    // single sync for no change at all.
+    if (changed) this.router.invalidate();
+  }
+
+  /** Which edge of `host`'s box the run for `id` came in on, from the solved route. */
+  private landedEdge(id: string, host: NodeVM): 'top' | 'left' | 'right' | 'bottom' | null {
+    const last = this.ductPoints(id).at(-1); if (!last) return null;
+    const hw = this.halfW(host), hh = this.halfH(host);
+    const dx = last.x - this.nx(host), dy = last.y - this.ny(host);
+    if (dy <= -hh + 1) return 'top';
+    if (dx <= -hw + 1) return 'left';
+    if (dx >= hw - 1) return 'right';
+    if (dy >= hh - 1) return 'bottom';
+    return null;
+  }
+
   private occupiedExcept(exclude: Set<string>): Set<string> {
     const occ = new Set<string>();
     for (const n of this.nodes) {

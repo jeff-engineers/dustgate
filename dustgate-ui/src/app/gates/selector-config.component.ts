@@ -5,9 +5,12 @@ import type { Topology } from '@topology';
 import { ApiService, NodeLinkState } from '../services/api.service';
 import { ServoCalibrationComponent } from './servo-calibration.component';
 import { LinearCalibrationComponent } from './linear-calibration.component';
+import { systemsOf } from '@shop';
+import type { Shop, System } from '@shop';
 import {
-  ConfigurableSelector, Controller, LinearSelector, ServoSelector,
-  controllersOf, isCalibrated, isServoKind, kindLabel, servoSelectorsOf,
+  AnyElement, ConfigurableSelector, Controller, LinearSelector, ServoSelector,
+  configurableSelectorsOf, controllersOf, isCalibrated, isConfigurableSelector,
+  isServoKind, kindLabel, servoSelectorsOf,
 } from './selector-types';
 
 // ── Configuring one ball valve or manifold ───────────────────────────────────
@@ -148,7 +151,7 @@ export class SelectorConfigComponent implements OnInit {
     this.name = this.sel.name ?? '';
     this.controllerId = this.sel.controllerId;
     this.channel = isServoKind(this.sel) ? (this.sel.servo?.channel ?? 0) : 0;
-    this.controllers = controllersOf(this.topo);
+    this.controllers = this.orderBoards(controllersOf(this.topo));
     this.working = isServoKind(this.sel)
       ? { ...this.sel, servo: { ...this.sel.servo } }
       : { ...this.sel, linear: { ...(this.sel as LinearSelector).linear } };
@@ -197,11 +200,70 @@ export class SelectorConfigComponent implements OnInit {
         link: { transport: 'wifi-ws', host: l.host },
       });
     }
-    this.controllers = controllersOf(this.topo);
+    this.controllers = this.orderBoards(controllersOf(this.topo));
   }
 
+  /** Name, role, and — the part that was missing — what is still FREE on it.
+   *
+   *  The channel picker beside this one already said "free" per channel, but only
+   *  once you had committed to a board; choosing between boards meant selecting each
+   *  in turn to find out which had room. A servo gate wants a free channel, a slider
+   *  wants the board's one stepper, so each asks about the thing it actually needs. */
   boardLabel(c: Controller): string {
-    return `${c.name || c.id}${c.role === 'primary' ? ' (primary)' : ''}`;
+    const name = `${c.name || c.id}${c.role === 'primary' ? ' (primary)' : ''}`;
+    if (this.isServo) {
+      const free = this.freeChannels(c);
+      return `${name} — ${free ? `${free} of ${this.channels.length} free` : 'no free channel'}`;
+    }
+    return `${name} — ${this.stepperTaken(c) ? 'stepper in use' : 'stepper free'}`;
+  }
+
+  /** Free servo channels on a board, NOT counting the gate being edited: the question
+   *  is "if I move it here, is there room", and a gate never competes with itself.
+   *  Without that, the board a gate is already on always reads one short. */
+  private freeChannels(c: Controller): number {
+    const taken = new Set(
+      servoSelectorsOf(this.topo)
+        .filter((s) => s.controllerId === c.id && s.id !== this.sel.id)
+        .map((s) => s.servo?.channel)
+        .filter((ch): ch is number => typeof ch === 'number'),
+    );
+    return this.channels.filter((ch) => !taken.has(ch)).length;
+  }
+
+  /** Is this board's ONE stepper driver already spoken for by another sliding gate? */
+  private stepperTaken(c: Controller): boolean {
+    return configurableSelectorsOf(this.topo)
+      .some((s) => s.controllerId === c.id && s.id !== this.sel.id && !isServoKind(s));
+  }
+
+  /** Boards already driving something in THIS system first, the rest after.
+   *
+   *  A board is mounted where the cable reaches, so the one already wired into this
+   *  system's other gates is nearly always the answer — and in a two-collector shop
+   *  the list is otherwise shop-wide with no hint which half you are in. Stable
+   *  within each group, so the primary keeps its place among its peers. */
+  private orderBoards(list: Controller[]): Controller[] {
+    const here = this.boardsInThisSystem();
+    return [...list].sort((a, b) => Number(here.has(b.id)) - Number(here.has(a.id)));
+  }
+
+  /** Controllers driving the other gates in the system this gate belongs to.
+   *
+   *  Goes through the shop's systems[] rather than the flattening readers in
+   *  selector-types: this is the one question here that is about WHICH system, which
+   *  is exactly the seam that file says to leave alone. A v1 document has no
+   *  systems[] and answers with an empty set, which just leaves the order as it was. */
+  private boardsInThisSystem(): Set<string> {
+    const shop = this.topo as unknown as Shop;
+    const mine = systemsOf(shop).find(
+      (sys: System) => (sys.elements as AnyElement[] ?? []).some((e) => e.id === this.sel.id),
+    );
+    const out = new Set<string>();
+    for (const e of (mine?.elements as AnyElement[]) ?? []) {
+      if (isConfigurableSelector(e) && e.id !== this.sel.id && e.controllerId) out.add(e.controllerId);
+    }
+    return out;
   }
 
   /** Which OTHER gate already holds this channel on the selected board — the schema

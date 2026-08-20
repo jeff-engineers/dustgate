@@ -87,7 +87,8 @@ BACKUP_DIR="$SCRIPT_DIR/.dustgate-backups"
 TOPO_BACKUP=""          # path to this run's backup, empty if we didn't take one
 TOPO_BACKUP_HAD_DOC=false
 
-# Where the device lives. mDNS, same name the provision step configures.
+# Where the device WILL live once this deploy is done: the name being flashed on.
+# Right for the restore, which happens after the board has come back up under it.
 topo_host() { echo "${DUSTGATE_HOST:-${HOSTNAME_CFG}.local}"; }
 
 # The API key is handed out unauthenticated by /api/info, the same bootstrap the
@@ -95,20 +96,55 @@ topo_host() { echo "${DUSTGATE_HOST:-${HOSTNAME_CFG}.local}"; }
 # Fetched fresh on each side of the flash rather than cached: the key lives in
 # NVS and normally survives, but an NVS erase regenerates it, and a stale key
 # would fail the restore at the very end when it is most expensive to notice.
-topo_api_key() {
-  curl -fsS --max-time 5 "http://$(topo_host)/api/info" 2>/dev/null \
+topo_api_key() { host_api_key "$(topo_host)"; }
+
+host_api_key() {
+  curl -fsS --max-time 5 "http://$1/api/info" 2>/dev/null \
     | python3 -c 'import json,sys; print(json.load(sys.stdin).get("apiKey",""))' 2>/dev/null || true
 }
 
-backup_topology() {
-  local host key http out
-  host="$(topo_host)"
-  echo "▶ Saving the shop layout off the device first…"
-  echo "  (a filesystem flash erases it — $host)"
+# Where the device lives RIGHT NOW, which is not the same question.
+#
+# The backup runs before anything is flashed, so the board is still answering to
+# whatever name it already had — while HOSTNAME_CFG is the name it is ABOUT to be
+# given. Asking the new name is asking a host that does not exist yet, so a rename
+# could never back itself up: it dialled dustgate-bench.local while the board was
+# still plain dustgate, got nothing, and correctly refused to erase a layout it
+# couldn't save. (The refusal was right; the address was wrong.)
+#
+# So: try the old name first, then the new one, and take whichever actually
+# answers — no rename, and the two are the same string anyway. DUSTGATE_HOST is
+# an explicit override and is tried ALONE: someone pointing it at an IP is
+# telling us where the board is, and quietly falling back past that would hide a
+# typo behind a backup of the wrong board.
+backup_candidates() {
+  if [[ -n "${DUSTGATE_HOST:-}" ]]; then echo "$DUSTGATE_HOST"; return; fi
+  # dev.sh hands us the old name directly when it has one (it prompted for the new
+  # one and knows what was there before); tools/.env is the fallback for a bare
+  # `bash deploy.sh`.
+  local prev="${DUSTGATE_PREV_HOST:-${ENV_FILE_HOSTNAME:-}}" next="${HOSTNAME_CFG}"
+  [[ -n "$prev" ]] && echo "${prev}.local"
+  [[ -n "$next" && "$next" != "$prev" ]] && echo "${next}.local"
+  return 0
+}
 
-  key="$(topo_api_key)"
+backup_topology() {
+  local host key http out cand tried=""
+  echo "▶ Saving the shop layout off the device first…"
+
+  # Walk the candidates and stop at the first board that answers. `host` and `key`
+  # are set together on purpose: backing up from one address using a key read from
+  # another is the kind of mix-up that only shows up as a failed restore later.
+  host=""; key=""
+  for cand in $(backup_candidates); do
+    tried="${tried:+$tried, }$cand"
+    key="$(host_api_key "$cand")"
+    if [[ -n "$key" ]]; then host="$cand"; break; fi
+  done
+
   if [[ -z "$key" ]]; then
-    echo "  ⚠  Couldn't reach $host to read its API key."
+    echo "  (a filesystem flash erases it)"
+    echo "  ⚠  Couldn't reach the board to read its API key. Tried: $tried"
     echo "     If this board has a shop saved on it, THIS DEPLOY WILL ERASE IT."
     echo "     Options: fix the connection and re-run, point DUSTGATE_HOST at its"
     echo "     IP, or pass --no-topology-backup to say you don't need it."
@@ -123,6 +159,8 @@ backup_topology() {
     fi
     return 0
   fi
+
+  echo "  (a filesystem flash erases it — reading from $host)"
 
   mkdir -p "$BACKUP_DIR"
   out="$BACKUP_DIR/topology-$(date +%Y%m%d-%H%M%S).json"
@@ -242,6 +280,7 @@ use_core_for_env "$PIO_ENV"
 WIFI_SSID="${WIFI_SSID:-}"
 WIFI_PASS="${WIFI_PASS:-}"
 HOSTNAME_CFG="${HOSTNAME_CFG:-}"
+ENV_FILE_HOSTNAME=""    # the hostname on file, i.e. the one the board answers to now
 
 if [[ -f "$ENV_FILE" ]]; then
   while IFS='=' read -r key val; do
@@ -251,7 +290,12 @@ if [[ -f "$ENV_FILE" ]]; then
     case "$key" in
       WIFI_SSID)     [[ -z "$WIFI_SSID" ]]     && WIFI_SSID="$val" ;;
       WIFI_PASS)     [[ -z "$WIFI_PASS" ]]     && WIFI_PASS="$val" ;;
-      HOSTNAME)      [[ -z "$HOSTNAME_CFG" ]]  && HOSTNAME_CFG="$val" ;;
+      # Recorded even when HOSTNAME_CFG is already set: a caller that has just
+      # prompted for a NEW name has overwritten it, and the file still holds the
+      # name the board is answering to until this deploy lands. backup_candidates()
+      # is the one thing that needs the old one.
+      HOSTNAME)      ENV_FILE_HOSTNAME="$val"
+                     [[ -z "$HOSTNAME_CFG" ]]  && HOSTNAME_CFG="$val" ;;
     esac
   done < "$ENV_FILE"
 fi

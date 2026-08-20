@@ -19,22 +19,13 @@ than restated. Delete an item when it lands; the git history is the record.
 
 ## UI
 
-- **Error message in ui** "Work in progress — saved here, but the controller 
-  won’t take it yet: system "s2": element "p8" must have exactly one parent 
-  duct (has 0)." - the user has no idea what s2 and p8 mean here.  
-  In fact neither does Jeff.  Need to use friendier names, and/or a graphical
-  to highlight issues
-
-- **Show free ports in the board dropdown**, and sort boards by the one already
-  driving this system. `boards/board-setup.component.ts` already computes
-  `gatesOn()`; the picker in `gates/selector-config.component.ts` labels free
-  *channels* but says nothing about a board before you select it.
-- **Hide the left port on dust collectors** when the collector is in the
-  leftmost column.
-- **Secondary system right click**
-  Once a second system is added, the right click context menu goes away because of
-  the dark grey box behind the systems.  Also, please try to fix the grid pattern to
-  show on the grey background as well, as long as it's aligned with the original grid
+- **Highlight a validation problem ON THE CANVAS.** The message half landed
+  2026-08-20 (`services/wip-message.ts`): the guide bar now names the piece and
+  the system instead of `s2`/`p8`. What is still missing is the graphical half —
+  every issue carries a `ref` (the element id), so the piece it is about is
+  already known and could be marked on the board. Wants a mockup first; it is a
+  new marking on the canvas, and there is no vocabulary for "this piece is the
+  problem" yet.
 
 - **Moving the whole shop to a new WiFi is a per-board errand nobody is told
   about.** Settings → Forget WiFi resets the PRIMARY only. Each node holds its own
@@ -66,35 +57,16 @@ than restated. Delete an item when it lands; the git history is the record.
   numbered outlet icons, probably others. Low priority — and hover can't be the
   only way in (see the mockup rules), so whatever this becomes needs a tap path too.
 
-## Deploy
-
-- **Can't save the layout before a flash.** The "saving the shop layout off the
-  device first" step doesn't work. Likely cause: it asks the board for its API key
-  at the hostname you are flashing TO, not the one the board currently answers to —
-  so a rename can never back itself up. It may also just be broken outright.
-
-  The abort is doing its job here, and that part is right: it refuses rather than
-  silently erasing a saved shop.
-
-  ```
-  Choose: 3
-  ▶ Real hardware — flashing ESP32.
-    Using port: /dev/cu.usbserial-140
-
-    Hostname — device will be at http://<host>.local [dustgate]: dustgate-bench
-
-  ▶ Saving the shop layout off the device first…
-    (a filesystem flash erases it — dustgate-bench.local)
-
-    ⚠  Couldn't reach dustgate-bench.local to read its API key.
-       If this board has a shop saved on it, THIS DEPLOY WILL ERASE IT.
-       Options: fix the connection and re-run, point DUSTGATE_HOST at its
-       IP, or pass --no-topology-backup to say you don't need it.
-      Continue anyway and lose any saved layout? [y/N]   Aborted.
-  ```
-
-  Note the board was still `dustgate` at that point — `dustgate-bench` is the name
-  being flashed on. That is exactly the shape the guess above predicts.
+- **Status screen (SSD1306 OLED) — designed, not built.** 128x64 on I2C so "is it
+  connected?" doesn't need a phone. Layouts and the decisions behind them are in
+  [`docs/mockups/oled-status.html`](../docs/mockups/oled-status.html); wiring is
+  `WIRING.md` §6 plus `wiring/devkitc.md` §5 (GPIO16/4 — **not** the usual 21/22,
+  those are TMC EN/DIR) and `wiring/xiao-c5.md` §4 (D4/D5). Board headers carry
+  commented `PIN_OLED_*` blocks; uncommenting them is the seam. Settled already:
+  the screen mirrors `statusled::Status` rather than defining its own vocabulary,
+  it sleeps at idle and wakes on events (burn-in), and it never replaces the pixel.
+  Still open: probe 0x3C at boot vs declare it in the build, and whether a wake
+  button earns a pad at all. Screens are on hand; nothing has been wired.
 
 ## Carried debt
 
@@ -148,7 +120,7 @@ Pass: the suite is green AND servos physically move. Green with nothing moving
 means the link works and the actuator doesn't — which is exactly the split this
 test exists to make visible. Then walk all four channels and confirm each moves
 its own servo. Then repeat for `c5` — its pins are cleared (see
-`firmware/wiring/xiao-c5.md` §5), and it needs
+`firmware/wiring/xiao-c5.md` §6), and it needs
 `PLATFORMIO_CORE_DIR=~/.platformio-pioarduino` if you build it by hand rather
 than through `dev.sh`.
 
@@ -184,6 +156,14 @@ specific thing to try:
   (`SmartOutletControl::checkLocalIpChange()`).
 - *Main-loop watchdog* — induce a hang. Pass: `esp_task_wdt` reboots it inside
   ~10 s.
+
+**4b. The layout backup survives a RENAME.** The backup read the hostname being
+flashed TO rather than the one the board answers to, so renaming a board could
+never back itself up — it aborted instead (correctly) and the deploy stopped.
+Fixed 2026-08-20 by probing the old name first (`backup_candidates()` in
+`deploy.sh`), and verified only against a fake HTTP board. Pass: flash a board
+under a NEW hostname with a shop saved on it, and confirm the layout comes back
+after the reboot.
 
 **5. The multi-system shop on hardware.** Model, firmware and UI all shipped
 without a hardware pass. Draw a two-collector shop, save it to a real device,

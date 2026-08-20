@@ -530,6 +530,13 @@ run_flash() {
   fi
 
   cd "$SCRIPT_DIR"
+  # The name the board is answering to RIGHT NOW, which is not HOSTNAME_CFG once
+  # the prompt above has renamed it. deploy.sh needs it to read the shop layout
+  # off the device before the flash erases it — see backup_candidates() there.
+  # Passed explicitly rather than left for deploy.sh to re-read from tools/.env:
+  # with --save that file has already been rewritten to the NEW name by now, and
+  # the old one would be gone.
+  export DUSTGATE_PREV_HOST="${ENV_HOST:-}"
   # deploy.sh's internal `pio run` calls pick this up automatically —
   # PlatformIO honors PLATFORMIO_UPLOAD_PORT as an override for upload_port.
   PLATFORMIO_UPLOAD_PORT="$port" bash deploy.sh "$@"
