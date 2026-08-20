@@ -88,9 +88,9 @@
       reading, but a decision that matters lives <em>here</em>.
       <br><br>
       <b style="color:var(--text)">How to use this page.</b> Update it in place. When a
-      decision is made, change the section it affects <em>and</em> add a row to the
-      decision log at the bottom. Do not open a new mockup for a settled question —
-      that is what produced six pages that disagreed with each other.
+      decision is made, change the section it affects here <em>and</em> add an entry to the
+      <a href="decisions.html">decision register</a>. Do not open a new mockup for a settled
+      question — that is what produced seven pages that disagreed with each other.
     </p>
   </header>
 
@@ -330,25 +330,34 @@
       <div class="opt">
         <div style="display:flex;align-items:baseline;gap:8px"><h2>…and it asks</h2></div>
         <div class="screen" style="aspect-ratio:375/240">
-          <svg viewBox="0 0 375 240" aria-label="The confirmation sheet">
-            <rect x="26" y="26" width="323" height="188" rx="14" fill="var(--raised)" stroke="var(--border)"/>
-            <text x="48" y="60" class="lbl" style="text-anchor:start;font-size:13.5">Router table already has a duct.</text>
-            <text x="48" y="82" class="tiny">What is this second one?</text>
+          <svg viewBox="0 0 375 240" aria-label="The confirmation sheet, with an editable name">
+            <rect x="26" y="20" width="323" height="200" rx="14" fill="var(--raised)" stroke="var(--border)"/>
+            <text x="48" y="52" class="lbl" style="text-anchor:start;font-size:13.5">Router table already has a duct.</text>
+            <text x="48" y="72" class="tiny">Add this as a second pickup?</text>
 
-            <rect x="48" y="96" width="279" height="40" rx="9" fill="var(--bg)" stroke="var(--accent)"/>
-            <path class="inlet" d="M64 124 L72 110 L80 124 Z"/>
-            <text x="92" y="114" class="lbl" style="text-anchor:start;font-size:11.5">An overarm guard</text>
-            <text x="92" y="128" class="tiny">a second pickup on the same machine</text>
+            <text x="48" y="98" class="tiny" style="font-size:9">WHAT IS IT?</text>
+            <rect x="48" y="104" width="279" height="34" rx="9" fill="var(--bg)" stroke="var(--accent)"/>
+            <path class="inlet" d="M62 128 L70 114 L78 128 Z"/>
+            <text x="90" y="126" class="lbl" style="text-anchor:start;font-size:12">Auxiliary</text>
+            <rect x="286" y="112" width="30" height="18" rx="5" fill="none" stroke="var(--border)"/>
+            <text x="301" y="125" class="sub" style="font-size:8.5">edit</text>
 
-            <rect x="48" y="146" width="279" height="34" rx="9" fill="var(--bg)" stroke="var(--border)"/>
-            <text x="64" y="167" class="lbl" style="text-anchor:start;font-size:11.5">Cancel</text>
+            <rect x="48" y="150" width="134" height="34" rx="9" fill="var(--bg)" stroke="var(--border)"/>
+            <text x="115" y="171" class="lbl" style="font-size:11.5">Cancel</text>
+            <rect x="192" y="150" width="135" height="34" rx="9" fill="var(--accent)"/>
+            <text x="259" y="171" class="lbl" style="font-size:11.5;fill:#1a1200;font-weight:600">Add pickup</text>
 
-            <text x="48" y="200" class="tiny">Replacing the existing run is deliberately not offered.</text>
+            <text x="48" y="206" class="tiny">Replacing the existing run is deliberately not offered.</text>
           </svg>
         </div>
-        <p class="note">Two choices, because there are only two: it is a second pickup, or it was
+        <p class="note">Two outcomes, because there are only two: it is a second pickup, or it was
           a misdrop. Replacing the existing run is a delete wearing a friendly hat — and the run
-          it would destroy is the one the machine cannot work without.</p>
+          it would destroy is the one the machine cannot work without.
+          <br><br>
+          <b>The name is the user's.</b> It arrives as <b>Auxiliary</b> and is editable right
+          there, because only the person with the shop knows whether that hose is an overarm
+          guard, a downdraft table or the second port on a lathe. The name is what gets captioned
+          beside the hood, so a guessed one is wrong on the canvas forever.</p>
       </div>
     </div>
 
@@ -363,66 +372,14 @@
 
   <hr class="rule"/>
 
-  <!-- ══ 5. DECISION LOG ═════════════════════════════════════════════════ -->
+  <!-- ══ 5. DECISIONS ════════════════════════════════════════════════ -->
   <section class="sec">
-    <h3>5 · Decision log</h3>
-    <p class="note" style="max-width:68ch">Newest first. Add a row whenever something above
-      changes, so the reasoning survives the edit.</p>
-    <div class="card" style="padding:4px 16px 8px">
-      <div class="tblwrap">
-        <table>
-          <tr><th class="when">When</th><th>Decision</th></tr>
-
-          <tr><td class="when">2026-08-20</td>
-              <td><b>This page is canonical.</b> Every other mockup archived. Decisions get logged
-                  here rather than in a new page — six pages that disagreed is what caused
-                  cross-system and the dash vocabulary to each be re-litigated three times.</td></tr>
-
-          <tr><td class="when">2026-08-20</td>
-              <td><b>Secondary runs may cross the seam; tools may not.</b> A machine lives in one
-                  system. A supplemental port's run is the only thing that crosses, drawn grey and
-                  dashed, and may be disconnected to route to a primary on the second system.
-                  Supersedes a same-day entry that cut cross-system entirely — that was too broad.</td></tr>
-
-          <tr><td class="when">2026-08-20</td>
-              <td><b>Grey dashed = secondary run.</b> There was no conflict with "unfinished": an
-                  open end's stub is <em>accent orange</em> dashed, not grey. The treatment was
-                  already drawn in <code>outlet-docks-multi-system.html</code> and had been
-                  missed.</td></tr>
-
-          <tr><td class="when">2026-08-20</td>
-              <td><b>Adding a pickup becomes a drag, not a menu item</b> — drop a run end on a
-                  machine that already has a duct, and confirm. Not yet built.</td></tr>
-
-          <tr><td class="when">2026-08-20</td>
-              <td><b>Only an occupied cell or another system's band refuses a drop.</b> Everything
-                  about routing quality is advisory. A pre-existing unroutable run used to freeze
-                  every piece on the board.</td></tr>
-
-          <tr><td class="when">2026-08-20</td>
-              <td><b>Both of a machine's inlets are drawn, and each duct lands on its own glyph.</b>
-                  Square spigot left of the centreline for the primary, tapered hood right for each
-                  pickup.</td></tr>
-
-          <tr><td class="when">2026-08-19</td>
-              <td><b>A system's only tool needs no gate.</b> An ungated tool is a leak only when
-                  there is another tool to leak away from — a sander on a shopvac is a valid shop.</td></tr>
-
-          <tr><td class="when">2026-08-16</td>
-              <td><b>A board is an ordinary piece on the grid</b> and owns its cell exclusively;
-                  ducts route around it. The pinned rail above the canvas was deleted — see
-                  <code>archived/board-rail-pinning.html</code>.</td></tr>
-
-          <tr><td class="when">2026-08-15</td>
-              <td><b>Each system gets its own grey ground</b>, one contiguous row band, drawn only
-                  when there are two or more.</td></tr>
-
-          <tr><td class="when">2026-08-14</td>
-              <td><b>Ports are primary or supplemental</b>, and nothing greys out — a machine with
-                  a port in play stays fully legible.</td></tr>
-        </table>
-      </div>
-    </div>
+    <h3>5 · Decisions</h3>
+    <p class="note" style="max-width:68ch">Every decision — canvas and otherwise — lives in
+      <a href="decisions.html"><code>docs/mockups/decisions.html</code></a>, the register.
+      It is searchable and filterable by area, and records the open questions too.
+      <b>This page does not keep its own log:</b> two lists that drift apart is the exact
+      failure that produced seven disagreeing mockups.</p>
   </section>
 
   <hr class="rule"/>

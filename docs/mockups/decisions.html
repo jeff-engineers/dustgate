@@ -1,0 +1,399 @@
+<title>DustGate Decision Register</title>
+
+<style>
+  :root {
+    --bg: #111; --surface: #1e1e1e; --raised: #262626; --border: #2e2e2e;
+    --text: #e8e8e8; --muted: #8a8a86; --accent: #f0a500; --success: #3cbe6e;
+    --danger: #d94444; --cable: #38b6f0; --radius: 14px;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); margin: 0; padding: 22px 18px 72px;
+         font-family: system-ui, -apple-system, sans-serif; font-size: 15px; line-height: 1.5; }
+  .wrap { max-width: 940px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px; }
+  h1 { font-size: 22px; font-weight: 600; margin: 6px 0 0; letter-spacing: -0.01em; }
+  .eyebrow { font-size: 11px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--muted); }
+  .lede { color: var(--muted); font-size: 13.5px; max-width: 68ch; margin: 6px 0 0; }
+  p { margin: 0; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9em; color: var(--text); }
+  a { color: var(--accent); }
+
+  /* ── controls ─────────────────────────────────────────────────────── */
+  .controls { display: flex; flex-direction: column; gap: 10px;
+              position: sticky; top: 0; background: var(--bg); padding: 10px 0 12px;
+              border-bottom: 1px solid var(--border); z-index: 5; }
+  .chips { display: flex; flex-wrap: wrap; gap: 7px; }
+  .chip { font-size: 12px; padding: 6px 12px; border-radius: 20px; cursor: pointer;
+          background: var(--surface); border: 1px solid var(--border); color: var(--muted);
+          font-family: inherit; }
+  .chip:hover { color: var(--text); }
+  .chip[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #1a1200; font-weight: 600; }
+  .chip:focus-visible, #q:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  #q { background: var(--surface); border: 1px solid var(--border); color: var(--text);
+       border-radius: 10px; padding: 10px 13px; font-size: 14px; font-family: inherit; width: 100%; }
+  #q::placeholder { color: var(--muted); }
+  .count { font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+  /* ── entries ──────────────────────────────────────────────────────── */
+  .list { display: flex; flex-direction: column; gap: 10px; }
+  .d { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+       padding: 13px 15px; display: flex; flex-direction: column; gap: 7px; }
+  .d.open { border-left: 3px solid var(--muted); }
+  .d.soon { border-left: 3px solid var(--accent); }
+  .meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 11px; }
+  .id { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted);
+        font-variant-numeric: tabular-nums; }
+  .when { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .area { padding: 2px 8px; border-radius: 20px; letter-spacing: 0.04em; text-transform: uppercase;
+          font-size: 10px; font-weight: 600; background: var(--raised); color: var(--muted); }
+  .area.control  { color: var(--accent);  background: rgba(240,165,0,0.13); }
+  .area.model    { color: var(--success); background: rgba(60,190,110,0.13); }
+  .area.canvas   { color: var(--cable);   background: rgba(56,182,240,0.13); }
+  .area.hardware { color: #c58bd8;        background: rgba(197,139,216,0.13); }
+  .area.process  { color: var(--muted);   background: rgba(138,138,134,0.15); }
+  .status { margin-left: auto; font-size: 10px; letter-spacing: 0.04em; text-transform: uppercase;
+            font-weight: 600; color: var(--muted); }
+  .status.soon { color: var(--accent); }
+  .status.open { color: var(--muted); }
+  .what { font-size: 14.5px; font-weight: 600; line-height: 1.4; text-wrap: balance; }
+  .why  { font-size: 12.5px; color: var(--muted); line-height: 1.55; }
+  .why b { color: var(--text); font-weight: 600; }
+  .where { font-size: 11.5px; color: var(--muted); }
+  .where code { color: var(--muted); }
+  .empty { color: var(--muted); font-size: 13px; padding: 24px 4px; }
+
+  mark { background: rgba(240,165,0,0.28); color: var(--text); border-radius: 2px; padding: 0 1px; }
+</style>
+
+<div class="wrap">
+
+  <header>
+    <span class="eyebrow">DustGate · canonical</span>
+    <h1>Decision register</h1>
+    <p class="lede">
+      Every decision that still stands, with the reason and where it lives. Reversed
+      and superseded calls are <em>not</em> here — only the version in force, so this
+      can be read as fact rather than history.
+      <br><br>
+      <b style="color:var(--text)">Adding one:</b> append an object to
+      <code>DECISIONS</code> at the top of this file. Newest first. If a decision
+      replaces an older one, edit the old entry rather than adding a second —
+      two entries that disagree is the failure this register exists to prevent.
+    </p>
+  </header>
+
+  <div class="controls">
+    <input id="q" type="search" placeholder="Search decisions…" autocomplete="off" aria-label="Search decisions"/>
+    <div class="chips" id="chips" role="group" aria-label="Filter by area"></div>
+    <span class="count" id="count"></span>
+  </div>
+
+  <div class="list" id="list"></div>
+</div>
+
+<script>
+// ─────────────────────────────────────────────────────────────────────────
+// THE REGISTER. Append here; the page renders itself from this array.
+//   status: 'standing'  in force and built
+//           'soon'      agreed, not built yet
+//           'open'      deliberately undecided — recorded so it isn't decided by accident
+// ─────────────────────────────────────────────────────────────────────────
+const DECISIONS = [
+  // ── open questions, deliberately parked ──────────────────────────────
+  { id: 'D-38', date: '2026-08-16', area: 'control', status: 'open',
+    what: 'Which blower starts when one machine is fed by two collectors — never both',
+    why: 'A machine with a supplemental port in another system can be reached by either blower. Running both is ruled out; which one starts, and what happens when the other is already running, is <b>not decided</b>. No firmware should move until it is.',
+    where: 'Parked in the 2026-08-16 commit that recorded the secondary duct type. An archived mockup asserted "both collectors open together" — that was never agreed.' },
+
+  { id: 'D-37', date: '2026-08-12', area: 'hardware', status: 'open',
+    what: 'A serial-bus servo could replace both the stepper and the PWM servos',
+    why: 'One ST3215-style bus would lift the four-channel ceiling and remove the stepper entirely. Reopened 2026-08-12, never closed.',
+    where: 'memory: serial-bus-servo-option' },
+
+  { id: 'D-36', date: '2026-08-16', area: 'hardware', status: 'open',
+    what: 'The Feather S2 is validated or marked experimental — not left ambiguous',
+    why: 'Unvalidated since Gen1 removal, push, and the board abstraction. Leaving it undeclared is the worst of the three options.',
+    where: 'TODO/TODO.md, bench test 7' },
+
+  // ── canvas ───────────────────────────────────────────────────────────
+  { id: 'D-35', date: '2026-08-20', area: 'canvas', status: 'soon',
+    what: 'A second pickup is added by dragging a run onto the machine, not from a menu',
+    why: 'Drop a run end on a machine that already has a duct and confirm. The port is born attached, so there is never an orphan open end or an invalid document. Replaces the menu item entirely — two ways in would mean keeping the broken one.',
+    where: 'canvas.html §4. The gesture was first recorded 2026-08-16: "you drag a hose across the boundary and land it on a port, and the same action can create that port."' },
+
+  { id: 'D-39', date: '2026-08-20', area: 'canvas', status: 'soon',
+    what: 'The user names a secondary port; it defaults to "Auxiliary"',
+    why: 'Only the person with the shop knows whether that hose is an overarm guard, a downdraft table or the second port on a lathe. The name is captioned beside the hood, so a guessed one is wrong on the canvas forever. Editable in the same confirmation that creates the port.',
+    where: 'canvas.html §4. Replaces the old auto-naming, which picked "overarm" then "hood" by position.' },
+
+  { id: 'D-34', date: '2026-08-20', area: 'canvas', status: 'standing',
+    what: 'Only an occupied cell or another system’s row band refuses a drop',
+    why: 'Everything about routing quality is advisory. A user is never frozen out of moving pieces because the shop is in a bad state — that state is exactly what they are dragging their way out of.',
+    where: 'canvas.html §3 · build.component.ts placeCheck()' },
+
+  { id: 'D-33', date: '2026-08-20', area: 'canvas', status: 'standing',
+    what: 'Both of a machine’s inlets are drawn, and each duct lands on its own glyph',
+    why: 'Square spigot left of the centreline for the primary, tapered hood right for each pickup. The glyph <b>is</b> the entry point; one drawn anywhere else is a decal.',
+    where: 'canvas.html §1–2 · SceneNode.inletDx in routing/geometry.ts' },
+
+  { id: 'D-32', date: '2026-08-20', area: 'canvas', status: 'standing',
+    what: 'Grey dashed means secondary run; accent orange dashed means unfinished',
+    why: 'One meaning per colour. There was never a conflict between the two — an open end’s stub is <code>.open-stub</code>, accent orange. Assuming otherwise cost a round trip.',
+    where: 'canvas.html §1' },
+
+  { id: 'D-31', date: '2026-08-16', area: 'canvas', status: 'standing',
+    what: 'A secondary port’s run is the only thing that may cross the seam between systems',
+    why: 'A tool lives in one system and is drawn there once. Its supplemental run may be fed from the other collector, drawn grey/dashed/thinner so a shared machine reads as shared, and may be disconnected to route to a primary on the second system. <b>Carve an exemption</b> in the shop.js check rather than deleting it — the check also stops a 4" tool being plumbed into the 2.5" manifold.',
+    where: 'canvas.html §2 · CLAUDE.md design constraints' },
+
+  { id: 'D-30', date: '2026-08-15', area: 'canvas', status: 'standing',
+    what: 'A machine is ONE box, however many ports it has',
+    why: 'A second pickup is a differently-shaped inlet on the same box — never a second body, never a dashed identity link. A drawing that reads as two saws lies about the shop.',
+    where: 'canvas.html §2 · archived/secondary-ports.html Option A' },
+
+  { id: 'D-29', date: '2026-08-16', area: 'canvas', status: 'standing',
+    what: 'A board is an ordinary piece on the grid and owns its cell exclusively',
+    why: 'Nothing else may stand there and ducts route around it. It lived on a pinned rail above the grid until 2026-08-16. Nothing stops you dragging a board somewhere its cables route badly — the fix is the default, not a rule.',
+    where: 'docs/boards-on-canvas-plan.md · archived/board-rail-pinning.html' },
+
+  { id: 'D-28', date: '2026-08-16', area: 'canvas', status: 'standing',
+    what: 'New pieces default into the system you are working in',
+    why: 'Into the active system’s row band, not a shop-wide origin — otherwise a piece lands somewhere a drag would refuse to move it. A board is placed top-right of the active extent but never band-checked, since it belongs to no system.',
+    where: 'CLAUDE.md · activeSystemId, defaultBoardCell()' },
+
+  { id: 'D-27', date: '2026-08-16', area: 'canvas', status: 'standing',
+    what: 'Every piece on the canvas has a right-click menu',
+    why: 'The badge and the right-click open the same menu, so there is no piece you can only act on one way.',
+    where: 'build.component.ts onNodeContext()' },
+
+  { id: 'D-26', date: '2026-08-15', area: 'canvas', status: 'standing',
+    what: 'Each system gets its own grey ground, in one contiguous row band',
+    why: 'Bands never interleave — that is what makes the ground drawable as a rectangle rather than a shape, and what the band rule enforces on a drag. Drawn only once there are two systems; with one it would say nothing.',
+    where: 'canvas.html §1 · bandBlockedBy()' },
+
+  { id: 'D-25', date: '2026-08-14', area: 'canvas', status: 'standing',
+    what: 'The smart plug belongs to the TOOL, drawn under its name — never on a port',
+    why: 'A plug lives on <code>machine.sensor.outlet</code>; ports are a plumbing fact, not an electrical one. Per-port would put one plug on screen three times and invite reading them as separate.',
+    where: 'memory: canvas-drawing-constraints' },
+
+  { id: 'D-24', date: '2026-08-14', area: 'canvas', status: 'standing',
+    what: 'Never draw duct size, anywhere in the UI',
+    why: 'Sizing is deliberately out of scope — the woodworker’s job. Not a field, not a caption, not a validation rule, and no inferring airflow consequences from it.',
+    where: 'memory: canvas-drawing-constraints' },
+
+  { id: 'D-23', date: '', area: 'canvas', status: 'standing',
+    what: 'Hover is never the only trigger, and focus dims rather than hides',
+    why: 'The shop is laid out on a phone. Anything reachable only by hover is unreachable there.',
+    where: 'CLAUDE.md UI work' },
+
+  { id: 'D-22', date: '', area: 'canvas', status: 'standing',
+    what: 'The live view is a mobile tool LIST, not a graph',
+    why: 'The canvas is for building; the live view is for a person standing at a machine. Manual override is essential, and the vocabulary is the woodworker’s.',
+    where: 'memory: ui-direction' },
+
+  // ── model ────────────────────────────────────────────────────────────
+  { id: 'D-21', date: '2026-08-19', area: 'model', status: 'standing',
+    what: 'A system’s only tool needs no gate',
+    why: 'An ungated tool is a leak only when there is another tool to leak away from. A sander on a shopvac is a valid shop and must not be blocked from running.',
+    where: 'shared/device-model/topology.js airflowIssues()' },
+
+  { id: 'D-20', date: '2026-08-13', area: 'model', status: 'standing',
+    what: 'A machine has exactly one primary port, and it cannot be removed',
+    why: 'It is the connection the machine cannot run without. Supplemental ports delete like anything else.',
+    where: 'shared/device-model/shop.js' },
+
+  { id: 'D-19', date: '2026-08-12', area: 'model', status: 'standing',
+    what: 'A shop owns N airflow systems; arbitration is per-system and both collectors may run at once',
+    why: 'Jeff’s shop runs two independent systems (4" ball valves + 2.5" Rockler manifold) and he expects that is common. <b>This corrected the earlier "1 dust collector per shop" scope</b>, which was wrong.',
+    where: 'docs/shop-schema-rfc.md · memory: shop-schema-v2-multisystem' },
+
+  { id: 'D-18', date: '2026-08-12', area: 'model', status: 'standing',
+    what: 'A primary port beats a supplemental one, regardless of which started more recently',
+    why: 'Without it, starting the table saw after someone’s bandsaw hands the manifold to the saw’s overarm and leaves the bandsaw cutting into a closed gate — recency beating need.',
+    where: 'shared/device-model/shop.js routeShop() arbitration order' },
+
+  { id: 'D-17', date: '2026-08-12', area: 'model', status: 'standing',
+    what: 'The shop document is five top-level lists, and a `tool` inside a system is a PORT',
+    why: '<code>controllers</code>, <code>systems[]</code>, <code>machines[]</code>, <code>devices[]</code> — each meaning exactly one thing. The machine is what you switch on; a port is where a duct lands.',
+    where: 'docs/shop-schema-rfc.md' },
+
+  { id: 'D-16', date: '', area: 'model', status: 'standing',
+    what: 'shared/device-model/ is the single source of truth; firmware is certified against it',
+    why: 'Behaviour used to be implemented three times and drifted constantly. The mock and demo both require the same model; firmware can’t import JS, so the conformance suites certify it against the same contract.',
+    where: 'CLAUDE.md · the anti-drift rule and its twin-pair table' },
+
+  { id: 'D-15', date: '2026-08-13', area: 'model', status: 'standing',
+    what: 'Never steal a plug, and a node has exactly one owner',
+    why: 'Two brains on one LAN must not fight over a valve or silently repoint each other’s outlets. Taking one requires an explicit, confirmed user action.',
+    where: 'shared/device-model/plug-claim.js · control/NodeRegistry.h' },
+
+  // ── control ──────────────────────────────────────────────────────────
+  { id: 'D-14', date: '2026-07-28', area: 'control', status: 'standing',
+    what: 'Never dead-head the collector — transitions are make-before-break',
+    why: 'Open the new gate before closing the old one. Most-recent-tool-wins, and idle leaves the gate where it is: the system rests open.',
+    where: 'CLAUDE.md · memory: v2-control-scope-deadhead' },
+
+  { id: 'D-13', date: '2026-07-28', area: 'control', status: 'standing',
+    what: 'One brain: the primary owns topology, routing and Shelly polling',
+    why: 'Secondaries are dumb actuator banks that enumerate, set and report. Keeps a $5 board viable as a node.',
+    where: 'CLAUDE.md · memory: v2-servo-ballvalve-direction' },
+
+  { id: 'D-12', date: '2026-07-28', area: 'control', status: 'standing',
+    what: 'A node receives resolved angles and positions on the wire, never state names',
+    why: 'That is what lets a cheap board be a node, and what keeps a schema change from needing a flash to every board in the shop.',
+    where: 'control/NodeLink.h · shared/device-model/nodelink.js' },
+
+  { id: 'D-11', date: '2026-07-28', area: 'control', status: 'standing',
+    what: 'Link-loss safe state is HOLD — no autonomous behaviour on a node',
+    why: 'Kill the primary mid-move and every servo holds. No timeout closing gates, no homing on reconnect. The one that matters with a tool running.',
+    where: 'control/NodeLink.h · TODO bench test 2' },
+
+  { id: 'D-10', date: '2026-07-28', area: 'control', status: 'standing',
+    what: 'Every actuator is a branch selector; the linear actuator is the N-branch case',
+    why: 'Binary gate = 1 branch + closed, manifold = 2 + closed, linear = N + home. One HAL interface, not a special case per mechanism.',
+    where: 'memory: v2-servo-ballvalve-direction' },
+
+  { id: 'D-09', date: '2026-07-28', area: 'control', status: 'standing',
+    what: 'Servos are positional (angle) only',
+    why: 'The HAL is state → angle + move-time. Continuous-rotation servos are explicitly out of scope.',
+    where: 'motor/ServoActuator.h' },
+
+  { id: 'D-08', date: '2026-07-28', area: 'control', status: 'standing',
+    what: 'Target is a small-to-midsize hobby shop, one person, switchover not concurrency',
+    why: 'Commercial systems already serve large shops. Genuine multi-tool contention is rare; a second operator is handled by degrading loudly rather than by scheduling people.',
+    where: 'memory: v2-control-scope-deadhead' },
+
+  { id: 'D-07', date: '2026-08-12', area: 'control', status: 'standing',
+    what: 'The configurator is manual and visual — no chatbot',
+    why: 'Drag-and-drop topology on a canvas. The AI chatbot path was built, rejected, and deleted from the codebase.',
+    where: 'memory: phase-consolidation-2026-08-12' },
+
+  // ── hardware ─────────────────────────────────────────────────────────
+  { id: 'D-06', date: '2026-08-19', area: 'hardware', status: 'standing',
+    what: 'XIAO C5 GPIO8/GPIO9 are ordinary IO — the servo block is safe',
+    why: 'Confirmed against the ESP32-C5 datasheet (Table 3-1) and then on the bench: the board boots with a servo wired to the block. The strapping worry was C3 muscle memory.',
+    where: 'firmware/wiring/xiao-c5.md §5' },
+
+  { id: 'D-05', date: '2026-08-14', area: 'hardware', status: 'standing',
+    what: 'The C5 gets its own PLATFORMIO_CORE_DIR',
+    why: 'It rides pioarduino, not espressif32, and the two publish packages under the same names — sharing one core directory broke both, twice, in ways PlatformIO neither detects nor repairs. Isolation beats fixing collisions one at a time.',
+    where: 'tools/boardinfo.sh · firmware/wiring/xiao-c5.md' },
+
+  { id: 'D-04', date: '2026-08-14', area: 'hardware', status: 'standing',
+    what: 'The QT Py ESP32-C3 is dropped; nodes are the QT Py S3 and the XIAO C5',
+    why: 'Its pin map had to dodge strapping pins on GPIO2/8/9, and there was no reason to carry a third node target.',
+    where: 'memory: board-fleet-and-node-target' },
+
+  { id: 'D-03', date: '', area: 'hardware', status: 'standing',
+    what: 'The primary target board is the official ESP32-DevKitC',
+    why: 'Sourcing and a 1.0" carrier spec drove it. No-OTA partition.',
+    where: 'memory: target-board-devkitc' },
+
+  { id: 'D-02', date: '', area: 'hardware', status: 'standing',
+    what: 'Gate count must be even',
+    why: 'Rockler manifolds ship in pairs; an odd count places gates between real ports.',
+    where: 'CLAUDE.md · memory: rockler-even-gate-count' },
+
+  { id: 'D-01', date: '', area: 'hardware', status: 'standing',
+    what: 'Size slide gates for 6–8; past that, ball valves on a trunk',
+    why: 'The slide-gate approach has a practical ceiling. Beyond it the topology changes shape, not just size.',
+    where: 'memory: slide-gate-count-ceiling' },
+
+  // ── process ──────────────────────────────────────────────────────────
+  { id: 'D-00', date: '2026-08-20', area: 'process', status: 'standing',
+    what: 'canvas.html is the canonical canvas design; this register is the canonical decision list',
+    why: 'Seven mockups that disagreed made cross-system runs and the meaning of a dashed line each get re-litigated three times. Update both in place; archive explorations rather than leaving them looking current.',
+    where: 'docs/mockups/canvas.html · docs/mockups/archived/README.md' },
+
+  { id: 'D-00b', date: '', area: 'process', status: 'standing',
+    what: 'Build a mockup and publish it before writing non-trivial UI code',
+    why: 'Cheaper to reject a drawing than an implementation. Fold the outcome into canvas.html and archive the exploration.',
+    where: 'CLAUDE.md · memory: mockup-first-ui-design' },
+
+  { id: 'D-00c', date: '', area: 'process', status: 'standing',
+    what: 'Flashing hardware is Jeff’s call — always confirm first',
+    why: 'Anything that writes to a board waits for an explicit go-ahead. Committing when asked is fine.',
+    where: 'memory: flashing-is-jeffs-call' },
+
+  { id: 'D-00d', date: '', area: 'process', status: 'standing',
+    what: 'Nothing is described as verified until it has run on hardware',
+    why: 'Almost all of DustGate compiles and passes host tests without ever having run on a board. "It compiled" is not a pass.',
+    where: 'CLAUDE.md status line · TODO/TODO.md bench list' },
+];
+
+// ─────────────────────────────────────────────────────────────────────────
+const AREAS = ['all', 'control', 'model', 'canvas', 'hardware', 'process', 'open'];
+const LABEL = { all: 'All', control: 'Control', model: 'Model', canvas: 'Canvas',
+                hardware: 'Hardware', process: 'Process', open: 'Open questions' };
+let area = 'all', query = '';
+
+const el = (t, c) => { const n = document.createElement(t); if (c) n.className = c; return n; };
+const esc = s => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+function highlight(html, q) {
+  if (!q) return html;
+  // Only ever inject <mark>; split on tags so we never highlight inside one.
+  return html.split(/(<[^>]*>)/).map(part =>
+    part.startsWith('<') ? part
+      : part.replace(new RegExp('(' + q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'ig'), '<mark>$1</mark>')
+  ).join('');
+}
+
+function render() {
+  const list = document.getElementById('list');
+  list.textContent = '';
+  const q = query.trim().toLowerCase();
+  const rows = DECISIONS.filter(d => {
+    if (area === 'open' ? d.status !== 'open' : (area !== 'all' && d.area !== area)) return false;
+    if (!q) return true;
+    return (d.what + ' ' + d.why + ' ' + d.where + ' ' + d.id).toLowerCase().includes(q);
+  });
+
+  document.getElementById('count').textContent =
+    rows.length + ' of ' + DECISIONS.length + ' decisions'
+    + (area === 'all' && !q ? '' : ' shown');
+
+  if (!rows.length) {
+    const e = el('div', 'empty');
+    e.textContent = 'Nothing matches that.';
+    list.appendChild(e);
+    return;
+  }
+
+  for (const d of rows) {
+    const card = el('div', 'd' + (d.status === 'open' ? ' open' : d.status === 'soon' ? ' soon' : ''));
+    const meta = el('div', 'meta');
+
+    const id = el('span', 'id'); id.textContent = d.id; meta.appendChild(id);
+    const ar = el('span', 'area ' + d.area); ar.textContent = LABEL[d.area]; meta.appendChild(ar);
+    if (d.date) { const w = el('span', 'when'); w.textContent = d.date; meta.appendChild(w); }
+    if (d.status !== 'standing') {
+      const st = el('span', 'status ' + d.status);
+      st.textContent = d.status === 'open' ? 'Open' : 'Agreed · not built';
+      meta.appendChild(st);
+    }
+    card.appendChild(meta);
+
+    const what = el('div', 'what'); what.innerHTML = highlight(esc(d.what), q); card.appendChild(what);
+    const why = el('div', 'why'); why.innerHTML = highlight(d.why, q); card.appendChild(why);
+    const where = el('div', 'where'); where.innerHTML = highlight(d.where, q); card.appendChild(where);
+
+    list.appendChild(card);
+  }
+}
+
+const chips = document.getElementById('chips');
+for (const a of AREAS) {
+  const b = el('button', 'chip');
+  b.type = 'button';
+  b.textContent = LABEL[a];
+  b.setAttribute('aria-pressed', String(a === 'all'));
+  b.addEventListener('click', () => {
+    area = a;
+    [...chips.children].forEach((c, i) => c.setAttribute('aria-pressed', String(AREAS[i] === a)));
+    render();
+  });
+  chips.appendChild(b);
+}
+document.getElementById('q').addEventListener('input', e => { query = e.target.value; render(); });
+render();
+</script>
