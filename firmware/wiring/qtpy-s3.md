@@ -113,7 +113,32 @@ nothing, which is easy to mistake for a dead board.
 | Servo PWM channel 4 | A3  | 8    | Ordinary GPIO on the S3 — not strapping |
 | Status pixel (DIN)  | —   | 39   | Onboard NeoPixel |
 | Status pixel power  | —   | 38   | Must be driven HIGH before the pixel lights |
+| External pixel (DIN)| MOSI| 35   | Optional second pixel, driven 4× brighter — see below |
 | Onboard user LED    | —   | —    | There isn't one — the pixel is the only indicator |
+
+### The external pixel
+
+The onboard pixel is a bench indicator. Once this board is screwed to a joist
+above a manifold it is invisible from anywhere you would actually stand, so
+`PIN_PIXEL_EXT` takes a second WS2812 on the **MOSI pad (GPIO35)**.
+`StatusLed.h` drives both in parallel with the same colour — the onboard one at
+1×, the external at `PIXEL_EXT_GAIN` (4×, so `kBright` 48 → 192). Solder nothing
+and the pad costs a few bytes clocked into open air.
+
+```
+5V (or 3V3 — see WIRING.md §1) ──── Pixel VDD
+GND ─────────────────────────────── Pixel GND ──── QT Py GND   (common, mandatory)
+GPIO35 ──── [330R] ──────────────── Pixel DIN
+```
+
+MOSI was picked because it is free on **both** QT Py builds — the node uses
+A0–A3 for servos, the linear build uses A0–A3 plus SDA/SCL/TX — so one loom fits
+either without re-pinning, and it sits on the same edge as 5V and GND, so all
+three wires leave from one corner. Nothing here uses SPI.
+
+⚠ GPIO35–37 are the octal-PSRAM pins on some ESP32-S3 modules. Both variants
+this map covers (N4R2 quad PSRAM, and the no-PSRAM 5426) leave them free — worth
+re-checking before reusing this pad on a different S3.
 
 **Strapping pins on this part are GPIO0, 3, 45 and 46**, none of which are used
 here. That is why this map can spend GPIO8 and GPIO9 freely while the C3 and C5

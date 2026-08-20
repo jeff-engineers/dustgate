@@ -42,5 +42,14 @@
 #define PIN_PIXEL          33
 #define PIN_PIXEL_POWER    21
 
+// -- External status pixel (optional, brighter) --
+// Same idea and the same pad number as both QT Py headers, deliberately: MOSI is
+// free on every S2/S3 board here, so ONE external-pixel loom fits all of them.
+// StatusLed.h drives it in parallel with the onboard pixel at PIXEL_EXT_GAIN
+// (4×); solder nothing and it costs a few bytes into open air.
+//
+// Wire: 5V -> pixel VDD, GND -> GND, GPIO35 -> 330R -> pixel DIN (WIRING.md §1).
+#define PIN_PIXEL_EXT      35   // MOSI
+
 // -- Board capabilities --
 #define BOARD_HAS_NATIVE_USB 1  // native USB-CDC Serial; wait for the monitor at boot

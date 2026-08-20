@@ -32,11 +32,16 @@
 //
 //
 // PIN NUMBERS ARE FROM SEEED'S PUBLISHED PINOUT, NOT FROM A MULTIMETER.
-//   D0..D10 map to GPIO 1, 0, 25, 7, 23, 24, 11, 12, 8, 9, 10. Before trusting
-//   this on hardware, confirm against the ESP32-C5 datasheet which of those are
-//   STRAPPING pins — a servo signal idling on one can stop the board booting,
-//   which is the trap the QT Py C3's map had to dodge (GPIO2/8/9 there).
-//   GPIO8 and GPIO9 are used below and are the first two to check.
+//   D0..D10 map to GPIO 1, 0, 25, 7, 23, 24, 11, 12, 8, 9, 10 — checked against
+//   Seeed's pin-definition drawing on 2026-08-16, still not against a meter.
+//
+//   STRAPPING PINS ARE NOW CHECKED (datasheet v1.4, Table 3-1): on the C5 they
+//   are GPIO25, 26, 27, 28, 7, MTMS and MTDI. GPIO8 and GPIO9 are NOT among them
+//   — that was C3 muscle memory (straps are GPIO2/8/9 there), and the servo block
+//   below is clear. The one strap we do touch is GPIO25, the status pixel, and it
+//   is harmless: it selects the SDIO sampling edge, a peripheral this build never
+//   uses, and a WS2812 DIN is high-impedance so nothing holds the line at reset.
+//   The boot-mode straps (26/27/28) and the JTAG strap (7) reach no pad we use.
 // =============================================================================
 #pragma once
 
@@ -55,18 +60,27 @@
 #define SERVO_PWM_PIN_4    10   // D10
 
 // -- Status pixel (external) --
-// The XIAO's onboard indicator is a plain yellow user LED on GPIO27, not an RGB
+// The XIAO's onboard indicator is a plain green user LED on GPIO27, not an RGB
 // pixel, so a colour indicator means adding one. GPIO25 (D2) is a plain pad with
-// no bus function to give up.
+// no bus function to give up — it is a strapping pin, but only for the SDIO
+// sampling edge, which nothing here uses (see the note at the top).
 //
 // If you would rather not spend a pad: delete PIN_PIXEL and define
 // `PIN_LED 27` instead — StatusLed.h falls back to blink patterns on the onboard
-// LED. Strictly worse (that ambiguity is why the pixel exists) but free.
+// LED. Strictly worse (that ambiguity is why the pixel exists) but free. GPIO27
+// is a strapping pin (UART0 ROM message printing, default pull-up), but straps
+// latch at Chip Reset and the pin is then an ordinary IO, so driving it from the
+// app is safe.
 //
 // Wire: 5V -> pixel VDD, GND -> GND, GPIO25 -> 330R -> pixel DIN.
 // See WIRING.md §1 for the level-shift and decoupling notes, and
 // firmware/wiring/xiao-c5.md for this board's full wiring.
 #define PIN_PIXEL          25   // D2
+
+// Like the DevKitC, this board's pixel is already external, so the brighter
+// option is a gain rather than a second pad. Uncomment for the same 4× the
+// QT Py/Feather external pixels run at.
+// #define PIXEL_GAIN      4
 
 // -- Reserved: serial-servo bus --
 // D6/D7 are the board's hardware UART (GPIO11/GPIO12). D7 doubles as

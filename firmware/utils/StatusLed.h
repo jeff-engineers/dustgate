@@ -46,6 +46,22 @@
 // is genuinely painful indoors, wastes current on a 5V rail shared with servos,
 // and washes out colour discrimination — which is the whole point here.
 //
+// That reasoning is about a pixel ON the board, a hand's width from your face at
+// the bench. A pixel screwed to a joist and read from across a shop is the
+// opposite problem, so brightness is a per-pin multiplier:
+//
+//   PIN_PIXEL      × PIXEL_GAIN      (default 1 — the board's own indicator)
+//   PIN_PIXEL_EXT  × PIXEL_EXT_GAIN  (default 4 — an added, remote one)
+//
+// Both pins are optional and independent. A board with only PIN_PIXEL behaves
+// exactly as before; a board that defines both drives them in parallel with the
+// same colour, so the onboard pixel stays useful at the bench while the external
+// one carries across the room. Boards whose ONLY pixel is already external
+// (DevKitC, XIAO C5) raise PIXEL_GAIN instead of adding a second pin.
+//
+// Gains multiply and saturate at 255, so a colour's RATIO survives — orange
+// stays (v, v/3, 0) and doesn't drift toward yellow as it gets brighter.
+//
 // Boards without a pixel fall back to PIN_LED, where each colour degrades to a
 // blink pattern (see the #else branch). Boards with neither compile every entry
 // point to nothing, so this header is always safe to call unconditionally.
@@ -111,12 +127,31 @@ inline void setMoving(bool m) { _motion() = m ? MOVING : STILL; }
 // than a stutter, which is also the honest picture.
 inline void flashActivity() { _flashUntil() = millis() + 400; }
 
-#ifdef PIN_PIXEL
+#if defined(PIN_PIXEL) || defined(PIN_PIXEL_EXT)
 
 // Low on purpose — see the brightness note in the header comment. These are
-// the raw 0-255 channel values, not a percentage.
+// the raw 0-255 channel values, not a percentage, and they are what a gain of 1
+// produces.
 static const uint8_t kDim    = 12;
 static const uint8_t kBright = 48;
+
+// Per-pin brightness multipliers. A board header overrides either one; the
+// defaults encode "onboard is read at arm's length, external is read across a
+// shop". 4 × kBright is 192, still short of the full-scale glare the header
+// comment warns about.
+#ifndef PIXEL_GAIN
+#define PIXEL_GAIN      1
+#endif
+#ifndef PIXEL_EXT_GAIN
+#define PIXEL_EXT_GAIN  4
+#endif
+
+// Saturating, so a gain can't wrap a channel back around to dark — the failure
+// there would be an indicator that goes black exactly when it means FAULT.
+inline uint8_t _scale(uint8_t v, uint16_t gain) {
+    const uint16_t s = (uint16_t)v * gain;
+    return s > 255 ? 255 : (uint8_t)s;
+}
 
 // The core's own RMT-driven pixel write, so a single status pixel costs no
 // library dependency. Adafruit_NeoPixel would pull in a whole strip driver to
@@ -125,11 +160,25 @@ static const uint8_t kBright = 48;
 // Core 3.x renamed neopixelWrite() to rgbLedWrite() and deprecated the old name;
 // the four supported targets are still on 2.0.x, so both spellings have to work
 // until the platform question in platformio.ini's xiao_c5 env is settled.
-inline void _raw(uint8_t r, uint8_t g, uint8_t b) {
+inline void _write(uint8_t pin, uint8_t r, uint8_t g, uint8_t b) {
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
-    rgbLedWrite(PIN_PIXEL, r, g, b);
+    rgbLedWrite(pin, r, g, b);
 #else
-    neopixelWrite(PIN_PIXEL, r, g, b);
+    neopixelWrite(pin, r, g, b);
+#endif
+}
+
+// Drives every pixel this board has, each at its own gain. Writing to a pad with
+// nothing soldered to it is harmless — it clocks a few bytes into open air — so
+// a header can reserve PIN_PIXEL_EXT before anyone wires one up.
+inline void _raw(uint8_t r, uint8_t g, uint8_t b) {
+#ifdef PIN_PIXEL
+    _write(PIN_PIXEL, _scale(r, PIXEL_GAIN), _scale(g, PIXEL_GAIN),
+           _scale(b, PIXEL_GAIN));
+#endif
+#ifdef PIN_PIXEL_EXT
+    _write(PIN_PIXEL_EXT, _scale(r, PIXEL_EXT_GAIN), _scale(g, PIXEL_EXT_GAIN),
+           _scale(b, PIXEL_EXT_GAIN));
 #endif
 }
 

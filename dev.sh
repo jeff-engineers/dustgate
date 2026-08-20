@@ -14,6 +14,9 @@
 #   bash dev.sh flash --host shop --ssid Shop-WiFi        # override what tools/.env says
 #   bash dev.sh flash --ask                               # prompt for all three, prefilled
 #     A bare word is the hostname, as with flash-node: `dev.sh flash shop`.
+#     A firmware flash (`flash` / `flash --fw`) always CONFIRMS the hostname,
+#     prefilled from tools/.env — Enter keeps it. Pass --host to answer up front,
+#     or redirect stdin from /dev/null to take the default unattended.
 #     Overrides apply to THAT flash only — add --save to write them to tools/.env.
 #     --pass SECRET works but lands in your shell history; prefer --ssid alone
 #     (it asks for the password hidden) or --ask.
@@ -330,9 +333,14 @@ save_env_defaults() {
 # through without this function needing to know about it.
 PROVISION_REST=()
 OV_HOST=""; OV_SSID=""; OV_PASS=""; OV_ASK=0; OV_SAVE=0
+# Set by prompt_credentials so a caller can tell whether the full interactive
+# path already ran — run_flash asks for the hostname on its own otherwise, and
+# asking twice in one flash is worse than not asking at all.
+PROVISION_PROMPTED=0
 parse_provision_overrides() {
   PROVISION_REST=()
   OV_HOST=""; OV_SSID=""; OV_PASS=""; OV_ASK=0; OV_SAVE=0
+  PROVISION_PROMPTED=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --host)   OV_HOST="${2:-}"; shift 2 ;;
@@ -408,6 +416,7 @@ prompt_credentials() {
   WIFI_PASS="${WIFI_PASS:-$ENV_PASS}"
   read -rp "  Hostname — device will be at http://<host>.local [$ENV_HOST]: " HOSTNAME_CFG
   HOSTNAME_CFG="${HOSTNAME_CFG:-$ENV_HOST}"
+  PROVISION_PROMPTED=1
   export WIFI_SSID WIFI_PASS HOSTNAME_CFG
   (( ${OV_SAVE:-0} )) && save_env_defaults
   return 0
@@ -472,6 +481,32 @@ run_mock() {
   wait
 }
 
+# Ask the primary's hostname on every firmware flash (menu 3 and 4).
+#
+# It used to be asked exactly once — on a first run, when tools/.env had no SSID
+# yet — and silently reused forever after. That is the wrong default for the one
+# value the whole shop types into a phone: reflashing a second controller, or
+# renaming one, went through with the old name and the two boards then fought
+# over the same mDNS record. Cheap to confirm, expensive to get wrong.
+#
+# Skipped when the answer is already settled or can't apply:
+#   - prompt_credentials just asked (PROVISION_PROMPTED) — don't ask twice
+#   - an explicit --host/bare word was given — the flag IS the answer
+#   - --ui, which pushes the filesystem only and rewrites no NVS
+confirm_primary_hostname() {
+  (( PROVISION_PROMPTED )) && return 0
+  [[ -n "$OV_HOST" ]] && return 0
+  [[ "$*" == *"--ui"* ]] && return 0
+
+  local suggested="${HOSTNAME_CFG:-${ENV_HOST:-dustgate}}"
+  echo ""
+  read -rp "  Hostname — device will be at http://<host>.local [$suggested]: " HOSTNAME_CFG
+  HOSTNAME_CFG="${HOSTNAME_CFG:-$suggested}"
+  export HOSTNAME_CFG
+  (( ${OV_SAVE:-0} )) && save_env_defaults
+  return 0
+}
+
 run_flash() {
   # --host/--ssid/--pass/--ask/--save come out here; everything else (--fw, --ui,
   # --no-provision, …) carries on to deploy.sh untouched.
@@ -489,6 +524,7 @@ run_flash() {
   # be flashed with no way onto a network.
   if [[ "$*" != *"--no-provision"* && "$*" != *"--provision-only"* ]]; then
     apply_provision_overrides 1
+    confirm_primary_hostname "$@"
   elif [[ -n "$OV_HOST$OV_SSID$OV_PASS" ]]; then
     echo "  ⚠  Ignoring --host/--ssid/--pass: provisioning is disabled by --no-provision."
   fi

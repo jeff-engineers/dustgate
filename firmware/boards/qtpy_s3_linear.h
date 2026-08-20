@@ -73,6 +73,14 @@
 #define PIN_PIXEL            39
 #define PIN_PIXEL_POWER      38
 
+// -- External status pixel (optional, brighter) --
+// Same pad and same reasoning as boards/qtpy_s3.h: MOSI is the one pin free on
+// both QT Py builds, so an external-pixel loom fits either without re-pinning.
+// StatusLed.h drives it alongside the onboard pixel at PIXEL_EXT_GAIN (4×).
+// Unsoldered, it costs nothing. It matters more here than on a node — a primary
+// is the board you look up at to ask "is it moving?" from the far end of a cut.
+#define PIN_PIXEL_EXT        35   // MOSI
+
 // PIN_LED deliberately NOT defined. This board is a plausible PRIMARY (it has
 // the stepper pins), and the primary's status used to be single-LED blink codes
 // that were simply invisible here. That gap is closed: StatusLed.h drives the

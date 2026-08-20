@@ -56,6 +56,27 @@
 #define PIN_PIXEL            39
 #define PIN_PIXEL_POWER      38
 
+// -- External status pixel (optional, brighter) --
+// The onboard pixel is a bench indicator: it is 2mm across and, once this board
+// is screwed to a joist above a manifold, invisible from anywhere you'd stand.
+// This pad takes a second WS2812 you can actually see across a shop. StatusLed.h
+// drives both in parallel with the same colour, the external one at
+// PIXEL_EXT_GAIN (4×) — so the bench view is unchanged and the remote one is
+// readable. Solder nothing here and this costs a few bytes clocked into open air.
+//
+// WHY MOSI: it is free on BOTH QT Py headers (the node uses A0–A3 for servos, the
+// linear build uses A0–A3 + SDA/SCL/TX), so one loom fits either, and on this
+// board it sits on the same edge as 5V and GND — all three pixel wires leave from
+// one corner instead of straddling the board. Nothing here uses SPI.
+//
+// GPIO35–37 are the octal-PSRAM pins on some ESP32-S3 modules. Both variants this
+// header covers (N4R2 quad, and the no-PSRAM 5426) leave them free — but that is
+// the thing to re-check before assuming this pad on some other S3.
+//
+// Wire: 5V -> pixel VDD, GND -> GND, GPIO35 -> 330R -> pixel DIN.
+// See WIRING.md §1 for the level-shift and decoupling notes.
+#define PIN_PIXEL_EXT        35   // MOSI
+
 // PIN_LED deliberately NOT defined: there is no plain user LED to fall back to,
 // and defining one would make StatusLed.h blink a pin that lights nothing.
 

@@ -65,6 +65,12 @@
 // WIRING.md §1 (status pixel) before assuming DIN is happy.
 #define PIN_PIXEL          17
 
+// This board's pixel is ALREADY the external one, so it takes no second pin —
+// the brighter option here is a gain, not another pad. Uncomment to run it at
+// the same 4× the QT Py/Feather external pixels use; the default 1× matches the
+// bench-calibrated levels in StatusLed.h.
+// #define PIXEL_GAIN      4
+
 // No PIN_LED: the pixel covers every state. StatusLed.h's plain-LED fallback is
 // for boards that have an LED and no pixel, which this one does not.
 

@@ -62,8 +62,39 @@ than restated. Delete an item when it lands; the git history is the record.
   problem — the primary can only reach the nodes on the OLD network, so anything
   that misses the message needs a defined fallback.
 
+- **Hover tooltips on the canvas glyphs.** Primary vs secondary port, the 1–4
+  numbered outlet icons, probably others. Low priority — and hover can't be the
+  only way in (see the mockup rules), so whatever this becomes needs a tap path too.
+
 ## Deploy
-- **Cant save layout** the 'saving the shop layout' step of the deploy doesnt work, presumably because it's trying to hit the current hostname not the previous - or it just doesn't work at all
+
+- **Can't save the layout before a flash.** The "saving the shop layout off the
+  device first" step doesn't work. Likely cause: it asks the board for its API key
+  at the hostname you are flashing TO, not the one the board currently answers to —
+  so a rename can never back itself up. It may also just be broken outright.
+
+  The abort is doing its job here, and that part is right: it refuses rather than
+  silently erasing a saved shop.
+
+  ```
+  Choose: 3
+  ▶ Real hardware — flashing ESP32.
+    Using port: /dev/cu.usbserial-140
+
+    Hostname — device will be at http://<host>.local [dustgate]: dustgate-bench
+
+  ▶ Saving the shop layout off the device first…
+    (a filesystem flash erases it — dustgate-bench.local)
+
+    ⚠  Couldn't reach dustgate-bench.local to read its API key.
+       If this board has a shop saved on it, THIS DEPLOY WILL ERASE IT.
+       Options: fix the connection and re-run, point DUSTGATE_HOST at its
+       IP, or pass --no-topology-backup to say you don't need it.
+      Continue anyway and lose any saved layout? [y/N]   Aborted.
+  ```
+
+  Note the board was still `dustgate` at that point — `dustgate-bench` is the name
+  being flashed on. That is exactly the shape the guess above predicts.
 
 ## Carried debt
 
