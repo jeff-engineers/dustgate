@@ -142,31 +142,35 @@
           <!-- Two rows: the machine's name, then its smart plug. The plug is
                drawn INSIDE the body because it belongs to the machine — see
                plugOf(). Height follows TOOL_HALF, which the router also reads. -->
-          <!-- A machine's body, plus — only when it also has a pickup — the SQUARE
-               spigot marking its own inlet. Square against the pickup's tapered
-               hood is the whole vocabulary: two entries on one top edge, each
+          <!-- A machine's body, plus — only when it also has a secondary port — the SQUARE
+               primary port marking its own inlet. Square against tapered is the whole
+               vocabulary: two entries on one top edge, each
                offset from the centreline, each with its duct landing on it. -->
-          <!-- A machine's body, plus the SQUARE spigot marking where its own duct
+          <!-- A machine's body, plus the SQUARE primary port marking where its own duct
                lands. Drawn on whichever edge the run actually arrives at, not pinned
                to the top — the glyph is the entry point, and one drawn anywhere else
                is a decal. Top is preferred by the router, not guaranteed. -->
           <g *ngSwitchCase="'tool'">
             <rect class="body tool-body" x="-38" [attr.y]="-TOOL_HALF" width="76" [attr.height]="TOOL_HALF * 2" rx="11"/>
-            <rect *ngIf="spigotSeat(n) as sp" class="spigot" rx="2"
-                  [attr.x]="-SPIGOT_W / 2" [attr.y]="-SPIGOT_H + 2"
-                  [attr.width]="SPIGOT_W" [attr.height]="SPIGOT_H"
+            <rect *ngIf="primaryPortSeat(n) as sp" class="primary-port" rx="2"
+                  [attr.x]="-PRIMARY_PORT_W / 2" [attr.y]="-PRIMARY_PORT_H + 2"
+                  [attr.width]="PRIMARY_PORT_W" [attr.height]="PRIMARY_PORT_H"
                   [attr.transform]="'translate(' + sp.x + ',' + sp.y + ') rotate(' + sp.rot + ')'"/>
           </g>
-          <!-- A supplemental port: a tapered HOOD on the machine's own top edge, not a
+          <!-- A supplemental port: a TAPERED inlet on the machine's own top edge, not a
                second body. One machine stays one box — which is the whole point, since
                a shop drawn with two saws in it is a drawing that lies about the shop.
-               The duct lands on the hood; the role is captioned beside it. -->
+               The duct lands on the glyph; the role is captioned beside it. -->
           <!-- Drag it onto another gate to re-run its pipe. There is deliberately no
-               placeholder to drag OUT of: a hood exists only once its pickup does. -->
-          <g *ngSwitchCase="'pickup'" class="hood-grab" (pointerdown)="onHoodDown($event, n)">
-            <circle cx="0" cy="-7" r="14" fill="transparent"/>
-            <path class="hood" d="M-9 0 L0 -13 L9 0 Z"/>
-            <text class="hood-role" x="0" y="-18">{{ pickupRole(n) }}</text>
+               placeholder to drag OUT of: a glyph exists only once its port does. -->
+          <g *ngSwitchCase="'secondaryPort'" class="secondary-port-grab" (pointerdown)="onSecondaryPortDown($event, n)">
+            <g *ngIf="secondaryPortGlyph(n) as sp" [attr.transform]="'translate(' + sp.x + ',' + sp.y + ')'">
+              <circle cx="0" cy="-7" r="14" fill="transparent"/>
+              <path class="secondary-port" d="M-9 0 L0 -13 L9 0 Z"
+                    [attr.transform]="'rotate(' + sp.rot + ')'"/>
+              <text class="secondary-port-role" [attr.x]="sp.tx" [attr.y]="sp.ty"
+                    [attr.text-anchor]="sp.anchor">{{ secondaryPortRole(n) }}</text>
+            </g>
           </g>
         </ng-container>
         <!-- Hidden while selected — the editable field (below, outside the SVG)
@@ -175,11 +179,11 @@
              old test was "is this selected", but selection and the field are not
              the same thing — a piece stays selected behind its menu, where the
              field is suppressed, so the name vanished entirely for that beat. -->
-        <!-- A pickup is captioned by its own role beside the hood, and nothing else:
+        <!-- A secondary port is captioned by its own role beside the glyph, and nothing else:
              its element name is "Table saw · overarm", and drawing THAT at machine
              size puts the saw's name on the canvas twice — the one thing this whole
              treatment exists to avoid. -->
-        <text *ngIf="n.glyph !== 'junction' && n.glyph !== 'pickup' && !isEditingName(n)"
+        <text *ngIf="n.glyph !== 'junction' && n.glyph !== 'secondaryPort' && !isEditingName(n)"
               class="glabel" [class.gatename]="isGate(n)"
               [attr.x]="labelX(n)" [attr.y]="labelY(n)">{{ n.name }}</text>
         <!-- The plug row. Replaced an 'auto'/'manual' caption that said whether a
@@ -398,29 +402,29 @@
   </app-selector-config>
 </div>
 
-<!-- Confirming a second pickup. Raised by BOTH directions of the drag (a loose end
+<!-- Confirming a second port. Raised by BOTH directions of the drag (a loose end
      dropped on a machine, or a run pulled out of a machine's spare inlet), so the
      question and the naming live in exactly one place. -->
-<div class="sheet-bg" *ngIf="pickupAsk" (pointerdown)="pickupAsk = null"></div>
-<div class="sheet" *ngIf="pickupAsk as ask">
-  <button type="button" class="sheet-close" (click)="pickupAsk = null" aria-label="Close without saving">
+<div class="sheet-bg" *ngIf="secondaryPortAsk" (pointerdown)="secondaryPortAsk = null"></div>
+<div class="sheet" *ngIf="secondaryPortAsk as ask">
+  <button type="button" class="sheet-close" (click)="secondaryPortAsk = null" aria-label="Close without saving">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
   </button>
-  <div class="card pickup">
+  <div class="card secondary-port">
     <div class="head">
       <span class="kind">{{ ask.machineName }} already has a duct.</span>
     </div>
-    <p class="q-sub">Add this as a second pickup?</p>
+    <p class="q-sub">Add this as a second port?</p>
     <div class="field">
-      <label for="pickup-name">What is it?</label>
-      <input id="pickup-name" [(ngModel)]="ask.name" (keyup.enter)="commitPickup()"
+      <label for="secondary-port-name">What is it?</label>
+      <input id="secondary-port-name" [(ngModel)]="ask.name" (keyup.enter)="commitSecondaryPort()"
              placeholder="Auxiliary" autofocus/>
       <p class="why">Only you know whether that hose is an overarm guard, a downdraft
         table or the second port on a lathe. This is what gets captioned beside it.</p>
     </div>
     <div class="actions">
-      <button type="button" (click)="pickupAsk = null">Cancel</button>
-      <button type="button" class="primary" (click)="commitPickup()">Add pickup</button>
+      <button type="button" (click)="secondaryPortAsk = null">Cancel</button>
+      <button type="button" class="primary" (click)="commitSecondaryPort()">Add port</button>
     </div>
   </div>
 </div>

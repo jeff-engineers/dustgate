@@ -8,7 +8,8 @@
 
 import {
   type Box, type Pt, type SceneNode,
-  CELL, CLEARANCE, GATE_PAD, INLET_GAP, LATTICE, OUTLET_STUB, PAD, PICKUP_HALF, UNIT_H,
+  CELL, CLEARANCE, GATE_PAD, INLET_GAP, LATTICE, OUTLET_STUB, PAD,
+  SECONDARY_PORT_DX, SECONDARY_PORT_HALF, UNIT_H,
   deviceBox, halfH, halfW, ptInBox, segBoxHit, simplifyPts,
 } from './geometry';
 
@@ -118,7 +119,7 @@ export function inPorts(n: SceneNode): Port[] {
   // sending the router miles out of its way when a side entry is genuinely the
   // shorter path — see TOP_ENTRY_BIAS.
   //
-  // The top port carries `inletDx`, so on a machine wearing a spigot the duct lands
+  // The top port carries `inletDx`, so on a machine wearing a primary port the duct lands
   // ON that glyph. It costs the router nothing: entry() rounds a top port to the
   // nearest lattice COLUMN, and a ±17px shift rounds to the same one — only the
   // final drawn segment jogs across to the glyph.
@@ -126,11 +127,31 @@ export function inPorts(n: SceneNode): Port[] {
     return sidePorts(n, 3).map(p => p.dir === 3
       ? { ...p, pt: { x: p.pt.x + (n.inletDx ?? 0), y: p.pt.y } }
       : { ...p, bias: TOP_ENTRY_BIAS });
-  // A PICKUP is a hood on the top edge of a machine's box, so there is exactly one
-  // way in: down onto its point. Left it on allSidePorts and a duct would happily
-  // arrive from beneath — which means straight up through the machine the hood is
-  // mounted on, ending nowhere near the thing it feeds.
-  if (n.glyph === 'pickup') return [{ pt: { x: n.x, y: n.y - PICKUP_HALF - INLET_GAP }, dir: 3 }];
+  // A SECONDARY PORT is entered on ITS MACHINE'S edges, not on the 9px glyph's own —
+  // the same three sides, biased the same way, because a port that behaved differently
+  // depending on its shape would be a second rule to hold in your head (D-41). The
+  // glyph is then drawn wherever the run actually landed.
+  //
+  // It had only a downward top port until 2026-08-20, and the cost was a detour rather
+  // than a wrong picture: a run fed from a collector BELOW the machine had to climb
+  // over the whole shop to come down on top of it — [202,496] → [226,64] → [187,117]
+  // in the shop that found it.
+  //
+  // Side ports sit SECONDARY_PORT_DX below the machine's midline so that a machine
+  // whose two runs both arrive from the same side lands them on two points rather
+  // than one, and the two glyphs don't stack. It costs the router nothing: entry()
+  // rounds a side port to the nearest lattice ROW, and 15px rounds to the same one.
+  if (n.glyph === 'secondaryPort') {
+    const top: Port = { pt: { x: n.x, y: n.y - SECONDARY_PORT_HALF - INLET_GAP }, dir: 3 };
+    const b = n.hostBox;
+    if (!b) return [top];
+    const midY = (b.y0 + b.y1) / 2 + SECONDARY_PORT_DX;
+    return [
+      top,
+      { pt: { x: b.x0, y: midY }, dir: 2, bias: TOP_ENTRY_BIAS },
+      { pt: { x: b.x1, y: midY }, dir: 0, bias: TOP_ENTRY_BIAS },
+    ];
+  }
   return allSidePorts(n);
 }
 
@@ -402,13 +423,13 @@ export function obstaclesFor(nodes: SceneNode[], exempt: ReadonlySet<string>): B
   const out: Box[] = [];
   for (const n of nodes) {
     if (exempt.has(n.id) || n.glyph === 'junction') continue;
-    // A PICKUP is not an obstacle. It is a 9px hood riding the top edge of a machine
+    // A SECONDARY PORT is not an obstacle. It is a 9px glyph riding the top edge of a machine
     // whose own box is already in this list, so it adds nothing to steer around —
     // but inflated by CLEARANCE it becomes a ~48px box straddling that edge, and the
     // lattice node a top entry arrives through sits 20px above the edge, INSIDE it.
     // That made isBlocked() throw the machine's own top port away as a goal, so a
-    // machine grew a pickup and its primary run promptly fled to a side entry.
-    if (n.glyph === 'pickup') continue;
+    // machine grew a secondary port and its primary run promptly fled to a side entry.
+    if (n.glyph === 'secondaryPort') continue;
     out.push(deviceBox(n, CLEARANCE));
   }
   return out;

@@ -112,41 +112,43 @@ svg.canvas { display: block; touch-action: none; }
    and a tool wearing it next to a live cable reads as wired or selected rather
    than as a machine. Desaturated and dark, it reads as its own class of thing. */
 .node .tool-body { fill: #16262e; stroke: #2d6a86; }
-/* A second pickup, drawn ON the machine rather than beside it. Same azure family as
-   the body it sits on, because it IS that machine — just another way in. */
-/* The two inlet glyphs share one look on purpose — same fill, same stroke — so the
-   only thing telling them apart is the SHAPE: square spigot = the machine's primary
-   port, tapered hood = a pickup. Colouring them differently would add a second
-   variable to read where one does the job. */
-.node .hood, .node .spigot { fill: #1d3540; stroke: #2d6a86; stroke-width: 1.6; }
-.node.sel .hood, .node.sel .spigot { stroke: var(--accent); stroke-width: 2.2; }
-/* An existing hood is the handle for re-running its own pipe. Nothing hollow or
-   dashed advertises a pickup that doesn't exist yet — a hood appears with its
-   port and never before. */
-.hood-grab { cursor: grab; }
-.hood-grab:hover .hood { stroke: var(--accent); }
+/* A second port, drawn ON the machine rather than beside it. Same azure family as
+   the body it sits on, because it IS that machine — just another way in.
+   The two share one look on purpose — same fill, same stroke — so the only thing
+   telling them apart is the SHAPE: square = primary, tapered = secondary. Colouring
+   them differently would add a second variable to read where one does the job. */
+.node .secondary-port, .node .primary-port { fill: #1d3540; stroke: #2d6a86; stroke-width: 1.6; }
+.node.sel .secondary-port, .node.sel .primary-port { stroke: var(--accent); stroke-width: 2.2; }
+/* An existing port is the handle for re-running its own pipe. Nothing hollow or
+   dashed advertises a port that doesn't exist yet — the glyph appears with the port
+   and never before. */
+.secondary-port-grab { cursor: grab; }
+.secondary-port-grab:hover .secondary-port { stroke: var(--accent); }
 
-/* The second-pickup confirmation. Reuses the gate sheet's card so the two sheets
+/* The second-port confirmation. Reuses the gate sheet's card so the two sheets
    are the same object with different contents. */
-.sheet .card.pickup { background: var(--surface); border: 1px solid var(--border);
+.sheet .card.secondary-port { background: var(--surface); border: 1px solid var(--border);
                       border-radius: 16px; padding: 18px 16px; display: flex;
                       flex-direction: column; gap: 14px; }
-.sheet .card.pickup .head .kind { font-size: 14px; font-weight: 600; color: var(--text); }
-.sheet .card.pickup .q-sub { font-size: 12.5px; color: var(--muted); margin: -8px 0 0; }
-.sheet .card.pickup .field { display: flex; flex-direction: column; gap: 6px; }
-.sheet .card.pickup label { font-size: 12px; color: var(--muted); text-transform: uppercase;
+.sheet .card.secondary-port .head .kind { font-size: 14px; font-weight: 600; color: var(--text); }
+.sheet .card.secondary-port .q-sub { font-size: 12.5px; color: var(--muted); margin: -8px 0 0; }
+.sheet .card.secondary-port .field { display: flex; flex-direction: column; gap: 6px; }
+.sheet .card.secondary-port label { font-size: 12px; color: var(--muted); text-transform: uppercase;
                             letter-spacing: 0.05em; }
-.sheet .card.pickup input { background: var(--bg); border: 1px solid var(--border);
+.sheet .card.secondary-port input { background: var(--bg); border: 1px solid var(--border);
                             color: var(--text); border-radius: 8px; padding: 10px 12px;
                             font-size: 14px; font-family: inherit; }
-.sheet .card.pickup input:focus { outline: none; border-color: var(--accent); }
-.sheet .card.pickup .why { font-size: 11.5px; color: var(--muted); line-height: 1.5; margin: 0; }
-.sheet .card.pickup .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-.sheet .card.pickup .actions button { border-radius: 8px; padding: 10px 12px; font-size: 14px;
+.sheet .card.secondary-port input:focus { outline: none; border-color: var(--accent); }
+.sheet .card.secondary-port .why { font-size: 11.5px; color: var(--muted); line-height: 1.5; margin: 0; }
+.sheet .card.secondary-port .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.sheet .card.secondary-port .actions button { border-radius: 8px; padding: 10px 12px; font-size: 14px;
                                       border: 1px solid var(--border); background: var(--bg); color: var(--text); }
-.sheet .card.pickup .actions button.primary { background: var(--accent); border-color: var(--accent);
+.sheet .card.secondary-port .actions button.primary { background: var(--accent); border-color: var(--accent);
                                               color: #241a00; font-weight: 600; }
-.hood-role { fill: var(--muted); font-size: 9px; text-anchor: middle; letter-spacing: 0.05em; }
+/* No text-anchor here on purpose: the caption sits above the glyph on a top entry
+   and beside it on a side one, so the anchor is set per-seat on the element. A CSS
+   rule would win over that attribute and pin every caption to centre. */
+.secondary-port-role { fill: var(--muted); font-size: 9px; letter-spacing: 0.05em; }
 .node.sel .body, .node.sel .unit { stroke: var(--accent); stroke-width: 2.5; }
 .node.live .body, .node.live .unit { stroke: var(--success); }
 .glabel { fill: var(--text); font-size: 12.5px; text-anchor: middle; font-weight: 500; }

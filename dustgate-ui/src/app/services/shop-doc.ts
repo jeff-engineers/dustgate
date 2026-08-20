@@ -15,7 +15,7 @@
 //
 //   MACHINES — a `tool` element is now a PORT. The thing you switch on is a
 //   machine, and it owns the display name, the trip point and the smart plug. A
-//   table saw with a cabinet port and an overarm pickup is ONE machine with one
+//   table saw with a cabinet port and an overarm secondary port is ONE machine with one
 //   plug behind two gates (RFC §6.3), which is exactly why the plug can't live on
 //   the port any more.
 //
@@ -122,7 +122,7 @@ export function portsOf(doc: ShopDoc | null, machineId: string): { systemId: str
 /**
  * A port counts unless explicitly switched off. Absent means enabled.
  *
- * Only SUPPLEMENTAL ports can be switched off (RFC §6.6) — that is the hood
+ * Only SUPPLEMENTAL ports can be switched off (RFC §6.6) — that is the glyph
  * coming off the saw for an afternoon. A primary is always enabled, so the UI
  * must not draw a disable control on one at all.
  */
@@ -237,12 +237,12 @@ export function addSystem(doc: ShopDoc, ids: { system: string; collector: string
 }
 
 /**
- * Add a SUPPLEMENTAL port to a machine that already has a primary — a second pickup
+ * Add a SUPPLEMENTAL port to a machine that already has a primary — a second port
  * on the same tool.
  *
  * It is a port, not a machine: no name of its own, no smart outlet, no trip point.
  * Those all live on the machine, which already exists. What it carries is a `role`
- * — "overarm", "hood" — because two ports on one saw are only distinguishable by
+ * — "overarm", "glyph" — because two ports on one saw are only distinguishable by
  * where on the saw they are.
  *
  * The system is the caller's choice and may be a different one from the primary's:
@@ -278,7 +278,7 @@ function dropElements(doc: ShopDoc, ids: Set<string>): void {
  * Remove a SUPPLEMENTAL port. Refuses anything else, and says so by returning
  * false.
  *
- * Dropping a bonus pickup is a non-event: the machine survives with one fewer
+ * Dropping a bonus secondary port is a non-event: the machine survives with one fewer
  * port, keeps its plug and its name, and stays valid. **A primary port is not
  * deletable** (RFC §6.3) — it is the machine's one required connection, so the
  * only way it goes away is with the machine, through `removeMachine`. Callers

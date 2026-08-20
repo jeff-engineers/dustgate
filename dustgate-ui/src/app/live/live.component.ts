@@ -409,7 +409,7 @@ export class LiveViewComponent implements OnInit, OnDestroy {
 
     // The list is of MACHINES, not ports. This view answers "what is running",
     // and what runs is a machine — a table saw with a cabinet port and an overarm
-    // pickup is one row with one switch, not two. The status blob keys its `tools`
+    // secondary port is one row with one switch, not two. The status blob keys its `tools`
     // map by machine id for the same reason, so these ids line up with it.
     this.tools = machinesOf(doc).map(m => ({
       id: m.id,

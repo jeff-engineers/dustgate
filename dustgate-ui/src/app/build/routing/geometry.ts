@@ -33,14 +33,14 @@ export const TOOL_HALF = 34;
 export const OUTLET_STUB = UNIT_H / 2 + 12;
 /** Where a unit's feed run stops, measured from its top edge. Matches the 12px the
  *  OUTLETS stub out of the bottom, because the unit now draws an inlet stub to meet
- *  it — so the trunk lands on a spigot rather than butting into the body.
+ *  it — so the trunk lands on a primary port rather than butting into the body.
  *
  *  5px was not enough: the duct is stroked 6 with a ROUND cap, so its ink runs 3px
  *  past the endpoint, leaving barely a pixel against the box outline. It still read
  *  as touching. */
 export const INLET_GAP = 12;
 
-/** `pickup` is a machine's SUPPLEMENTAL port — an overarm guard, a hood. It has no
+/** `secondaryPort` is a machine's SUPPLEMENTAL port — an overarm guard, a hood. It has no
  *  cell of its own: it rides on the top edge of the machine's box as a second inlet,
  *  which is what stops a shop with a two-port saw reading as a shop with two saws.
  *
@@ -48,25 +48,37 @@ export const INLET_GAP = 12;
  *  is an ordinary piece on it now — which is why its size is HERE rather than with
  *  the rest of the wiring metrics: a board occupies a cell, so a duct has to steer
  *  around the same box the drawing puts there. */
-export type Glyph = 'collector' | 'slidingGate' | 'ballvalve' | 'manifold' | 'junction' | 'tool' | 'pickup' | 'board';
-/** Half-width of the hood a pickup draws, and the box the router steers around. */
-export const PICKUP_HALF = 9;
+export type Glyph = 'collector' | 'slidingGate' | 'ballvalve' | 'manifold' | 'junction' | 'tool' | 'secondaryPort' | 'board';
+/** Half-width of the glyph a secondary port draws, and the box the router steers around. */
+export const SECONDARY_PORT_HALF = 9;
 
-/** The SPIGOT: the square inlet a machine's PRIMARY port draws on its top edge,
- *  opposite the tapered hood(s) of its pickups. Square = the main port, tapered =
- *  a pickup — the vocabulary docs/mockups/secondary-ports.html Option A settles on.
+/** The PRIMARY PORT: the square inlet a machine's own duct lands on, opposite the
+ *  tapered glyph(s) of its secondary ports. Square = primary, tapered = secondary —
+ *  the vocabulary canvas.html §1 settles on.
  *
- *  It appears only on a machine that HAS a pickup. The point of the pair is to say
+ *  It appears only on a machine that HAS a secondary port. The point of the pair is to say
  *  which inlet is which, and a lone duct landing on a lone box already says that,
- *  so a spigot on every tool in the shop would be decoration rather than
+ *  so a primary port on every tool in the shop would be decoration rather than
  *  information.
  *
- *  {@link SPIGOT_DX} shifts the top inlet PORT to match, so the duct lands on the
+ *  {@link PRIMARY_PORT_DX} shifts the top inlet PORT to match, so the duct lands on the
  *  glyph. Free, because entry() rounds a top port to the nearest lattice column and
  *  this shift rounds to the same one. */
-export const SPIGOT_W = 14;
-export const SPIGOT_H = 11;
-export const SPIGOT_DX = -17;
+/** Where the first secondary port sits on a machine's top edge, and the pitch
+ *  between them. RIGHT of the centreline, with the primary going LEFT of it
+ *  ({@link PRIMARY_PORT_DX}).
+ *
+ *  Tightened from 20/20 when the primary port arrived: at the old pitch a second one
+ *  sat at +40 on a body whose edge is at +38, so it hung off the corner. At 15/14 the
+ *  furthest ends exactly on the edge, and the primary still clears the nearest by
+ *  16px. The router reads DX too — it offsets a side entry by the same amount so two
+ *  runs arriving on one edge don't land on the same point. */
+export const SECONDARY_PORT_DX = 15;
+export const SECONDARY_PORT_STEP = 14;
+
+export const PRIMARY_PORT_W = 14;
+export const PRIMARY_PORT_H = 11;
+export const PRIMARY_PORT_DX = -17;
 /** A board's body. Deliberately narrower than a CELL so two boards on neighbouring
  *  cells have air between them instead of sharing an edge and reading as one module. */
 export const BOARD_W = 96;
@@ -86,6 +98,11 @@ export interface SceneNode {
    *  on the TOP edge, offset slightly from each other — a side entry is for a run
    *  that is genuinely shorter from the side, never a consequence of this. */
   inletDx?: number;
+  /** For a SECONDARY PORT only: the box of the machine it rides on. A secondary port
+   *  is entered on its machine's edges, not on the 9px glyph's own — the glyph is
+   *  drawn wherever the run lands (D-41), so the machine is what the router aims at.
+   *  Absent, the port falls back to a top entry, which is all it had before D-41. */
+  hostBox?: Box;
 }
 
 export function cellX(col: number): number { return PAD + col * CELL; }
@@ -99,7 +116,7 @@ export function halfW(n: SceneNode): number {
     case 'collector': return 30;
     case 'ballvalve': return 22;
     case 'junction': return 8;
-    case 'pickup': return PICKUP_HALF;
+    case 'secondaryPort': return SECONDARY_PORT_HALF;
     case 'board': return BOARD_W / 2;
     default: return 38;
   }
@@ -111,7 +128,7 @@ export function halfH(n: SceneNode): number {
     case 'collector': return 30;
     case 'ballvalve': return 22;
     case 'junction': return 8;
-    case 'pickup': return PICKUP_HALF;
+    case 'secondaryPort': return SECONDARY_PORT_HALF;
     case 'board': return BOARD_H / 2;
     default: return TOOL_HALF;
   }

@@ -1,0 +1,184 @@
+<title>Side-Entry Hood</title>
+
+<style>
+  :root {
+    --bg: #111; --surface: #1e1e1e; --border: #2e2e2e;
+    --text: #e8e8e8; --muted: #8a8a86; --accent: #f0a500;
+    --duct: #3a3a3a; --radius: 14px;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); margin: 0; padding: 22px 18px 60px;
+         font-family: system-ui, -apple-system, sans-serif; font-size: 15px; line-height: 1.5; }
+  .wrap { max-width: 1020px; margin: 0 auto; display: flex; flex-direction: column; gap: 22px; }
+  h1 { font-size: 22px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
+  h2 { font-size: 15px; font-weight: 600; margin: 0; }
+  .lede { color: var(--muted); font-size: 13.5px; max-width: 70ch; margin: 6px 0 0; }
+  .eyebrow { font-size: 11px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--muted); }
+  p { margin: 0; }
+  code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
+  hr.rule { height: 1px; background: var(--border); border: 0; margin: 0; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: 16px; }
+  .opt { display: flex; flex-direction: column; gap: 10px; }
+  .screen { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+            overflow: hidden; }
+  .screen svg { display: block; width: 100%; height: auto; }
+  .note { font-size: 12.5px; color: var(--muted); line-height: 1.55; }
+  .note b { color: var(--text); font-weight: 600; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+          padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; }
+  .card.flag { border-left: 3px solid var(--accent); }
+  .tag { display: inline-block; font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase;
+         padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); }
+  .tag.good { color: #3cbe6e; border-color: #24503a; }
+  .tag.bad  { color: #d94444; border-color: #5a2727; }
+  ul { margin: 0; padding-left: 18px; font-size: 12.5px; color: var(--muted); line-height: 1.6; }
+  ul b { color: var(--text); font-weight: 600; }
+
+  .duct     { fill: none; stroke: var(--duct); stroke-width: 7; stroke-linecap: round; stroke-linejoin: round; }
+  .duct.sec { stroke-width: 5; stroke-dasharray: 11 8; }
+  .inlet    { fill: #1d3540; stroke: #2d6a86; stroke-width: 1.6; }
+  .toolbox  { fill: #16262e; stroke: #2d6a86; stroke-width: 2; }
+  .unit     { fill: var(--surface); stroke: #444; stroke-width: 1.6; }
+  .lbl   { fill: var(--text); font-size: 11.5px; text-anchor: middle; font-weight: 500; }
+  .sub   { fill: var(--muted); font-size: 9.5px; text-anchor: middle; }
+  .tiny  { fill: var(--muted); font-size: 9.5px; }
+  .acc-t { fill: var(--accent); font-size: 9.5px; }
+</style>
+
+<div class="wrap">
+<div style="background:rgba(217,68,68,0.10);border:1px solid var(--danger,#d94444);border-radius:12px;padding:13px 15px;margin-bottom:4px">
+  <p style="margin:0;color:var(--danger,#d94444);font-size:13px;line-height:1.55">
+    <b>Archived 2026-08-20 — not current.</b> The canonical canvas design lives in
+    <code>docs/mockups/canvas.html</code>, which is the only page decisions are recorded in
+    now. <b>Option A won</b> (D-41) — both ports slide to whichever edge their duct arrives at,
+    because one rule for both shapes beats two rules that each need their own picture. B is
+    kept here for the argument it made, which was a good one. This page also predates the
+    rename: what it calls a <em>spigot</em> is a <b>primary port</b> and what it calls a
+    <em>hood</em> is a <b>secondary port</b>.
+  </p>
+</div>
+
+  <div>
+    <span class="eyebrow">Exploration · 2026-08-20</span>
+    <h1>Where does the hood go when its run arrives from the side?</h1>
+    <p class="lede">A pickup can only be entered from directly above today, so an aux run fed
+      from a collector <em>below</em> it has to climb over the whole shop to get on top. Letting
+      a hood take a side entry fixes the route — but it has to keep satisfying the rule that a
+      duct always lands on a glyph, and that glyphs prefer the top edge.</p>
+  </div>
+
+  <hr class="rule"/>
+
+  <section>
+    <span class="eyebrow">What it does now</span>
+    <div class="screen" style="margin-top:8px">
+      <svg viewBox="0 0 720 250" aria-label="The aux run climbing to the top of the board and back down">
+        <path class="duct" d="M150 18 V96"/>
+        <rect class="toolbox" x="120" y="108" width="130" height="70" rx="11"/>
+        <text class="lbl" x="185" y="140">Jointer</text>
+        <text class="sub" x="185" y="156">jointer · 1.1 kW</text>
+        <rect class="inlet" x="142" y="96" width="16" height="12" rx="2"/>
+        <path class="inlet" d="M196 108 L206 95 L216 108 Z"/>
+
+        <rect class="unit" x="560" y="196" width="120" height="30" rx="8"/>
+        <text class="sub" x="620" y="215">Dust collector 2</text>
+
+        <path class="duct sec" d="M680 211 H700 V34 H206 V95"/>
+        <text class="acc-t" x="330" y="26">up, over the entire shop, and back down</text>
+      </svg>
+    </div>
+    <p class="note" style="margin-top:9px">Measured, not guessed: the run leaves DC2 from its
+      <b>right</b> outlet — a collector has no top outlet at all — then climbs to the top of the
+      board because the hood's only inlet faces down.</p>
+  </section>
+
+  <hr class="rule"/>
+
+  <section style="display:flex;flex-direction:column;gap:12px">
+    <h2>The two options</h2>
+
+    <div class="grid">
+
+      <!-- ── OPTION A ─────────────────────────────────────────────── -->
+      <div class="opt">
+        <div style="display:flex;align-items:baseline;gap:8px">
+          <h2>A · The hood follows its duct</h2><span class="tag">like the spigot</span>
+        </div>
+        <div class="screen">
+          <svg viewBox="0 0 375 250" aria-label="Hood rotated onto the machine's right edge">
+            <path class="duct" d="M120 18 V96"/>
+            <rect class="toolbox" x="90" y="108" width="130" height="70" rx="11"/>
+            <text class="lbl" x="155" y="140">Jointer</text>
+            <text class="sub" x="155" y="156">jointer · 1.1 kW</text>
+            <rect class="inlet" x="112" y="96" width="16" height="12" rx="2"/>
+
+            <path class="inlet" d="M220 120 L233 130 L220 140 Z"/>
+            <text class="tiny" x="238" y="118">overarm</text>
+
+            <rect class="unit" x="250" y="200" width="110" height="28" rx="8"/>
+            <text class="sub" x="305" y="218">Dust collector 2</text>
+            <path class="duct sec" d="M305 200 V130 H233"/>
+          </svg>
+        </div>
+        <p class="note">The hood rotates onto whichever edge its run actually arrives at, exactly
+          the way the square spigot already does. Top stays preferred; the side is what you get
+          when the side run is genuinely shorter.</p>
+        <ul>
+          <li><b>One rule, not two.</b> Both glyphs obey "sit where your duct lands."</li>
+          <li><b>Shortest possible pipe</b> — straight up from the collector, no hook.</li>
+          <li>A tapered hood pointing <em>sideways</em> is a slightly odd picture of an
+            overarm guard, which really does hang above the work.</li>
+          <li>Two pickups on the same machine can now sit on different edges — more places
+            to keep straight.</li>
+        </ul>
+      </div>
+
+      <!-- ── OPTION B ─────────────────────────────────────────────── -->
+      <div class="opt">
+        <div style="display:flex;align-items:baseline;gap:8px">
+          <h2>B · The hood stays on top</h2><span class="tag">pipe hooks over</span>
+        </div>
+        <div class="screen">
+          <svg viewBox="0 0 375 250" aria-label="Hood pinned to the top edge with the duct hooking over">
+            <path class="duct" d="M120 18 V96"/>
+            <rect class="toolbox" x="90" y="108" width="130" height="70" rx="11"/>
+            <text class="lbl" x="155" y="140">Jointer</text>
+            <text class="sub" x="155" y="156">jointer · 1.1 kW</text>
+            <rect class="inlet" x="112" y="96" width="16" height="12" rx="2"/>
+
+            <path class="inlet" d="M180 108 L190 95 L200 108 Z"/>
+            <text class="tiny" x="206" y="88">overarm</text>
+
+            <rect class="unit" x="250" y="200" width="110" height="28" rx="8"/>
+            <text class="sub" x="305" y="218">Dust collector 2</text>
+            <path class="duct sec" d="M305 200 V72 H190 V95"/>
+          </svg>
+        </div>
+        <p class="note">The hood never leaves the top edge. The run climbs the right side, crosses
+          just above the box, and drops in — a short hook past one corner, not a lap of the shop.</p>
+        <ul>
+          <li><b>A hood is always a hood</b>, one shape in one place, on every machine.</li>
+          <li>Matches the thing it draws: an overarm pickup <em>is</em> above the work.</li>
+          <li>Costs one extra corner and a stretch of pipe running along the top of the box —
+            close to the machine's own name.</li>
+          <li>Two hoods on one top edge start to crowd the spigot already sitting there.</li>
+        </ul>
+      </div>
+
+    </div>
+  </section>
+
+  <hr class="rule"/>
+
+  <div class="card flag">
+    <p class="note"><b>Either way the loop dies.</b> The bug is that a hood has exactly one inlet
+      and it faces down; both options give it more. The choice is only what the drawing says.</p>
+    <p class="note"><b>What I'd pick: B.</b> The top-edge rule is the one you've had to repeat
+      most, and it is the one that makes a drawing readable without tracing pipe. A hook past one
+      corner is cheap; a glyph that moves to a different edge on every machine is a second rule to
+      hold in your head. A is the better answer only if you'd rather the picture never carry a
+      pipe segment across a machine's own box.</p>
+  </div>
+
+</div>

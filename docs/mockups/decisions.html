@@ -105,9 +105,14 @@ const DECISIONS = [
     where: 'Already implemented and tested on both sides: arbitration order (primary beats supplemental, then most-recent-wins within each) in shop.js routeShop() and control/Shop.h:260, and the C++ test "one machine starts both blowers" (test_nodebus.cpp). A dropped supplemental degrades a machine to <code>partial</code>, never <code>stripped</code>.' },
 
   { id: 'D-40', date: '2026-08-20', area: 'canvas', status: 'standing',
-    what: 'A duct always lands on a glyph, never on bare box',
-    why: 'Every machine draws its square spigot at the point its own run arrives, and a pickup\u2019s hood is where that run arrives — so the drawing says which pipe feeds what without following either of them. The glyphs prefer the TOP edge and the router prefers a top entry to match; when a side run is genuinely shorter the spigot <b>moves to that side</b> rather than leaving the pipe pointing at nothing. Dragging a machine carries its glyphs with it. Nothing hollow or dashed advertises a pickup that does not exist yet — a hood appears with its port and never before, and an existing hood is the handle for re-running its own pipe.',
-    where: 'canvas.html §1–2 · spigotSeat() and pickupSeat() in build.component.ts' },
+    what: 'A duct always lands on a port, never on bare box',
+    why: 'Every machine draws its square <b>primary port</b> at the point its own run arrives, and a <b>secondary port</b> sits where its own run arrives — so the drawing says which pipe feeds what without following either of them. Both prefer the TOP edge and the router prefers a top entry to match; when a side run is genuinely shorter the port <b>moves to that side</b> rather than leaving the pipe pointing at nothing (D-41 extends that to both). Dragging a machine carries both with it. Nothing hollow or dashed advertises a port that does not exist yet — the glyph appears with its port and never before, and an existing port is the handle for re-running its own pipe.',
+    where: 'canvas.html §1–2 · primaryPortSeat() and secondaryPortSeat() in build.component.ts' },
+
+  { id: 'D-41', date: '2026-08-20', area: 'canvas', status: 'standing',
+    what: 'Both ports slide to whichever edge their duct arrives at — square and tapered alike',
+    why: 'A machine\u2019s primary port already moves to the edge its run reaches it from (D-40); its <b>secondary port does the same</b>. The alternative was drawn and very nearly taken: pin the tapered port to the top edge on the grounds that it stands for something that really does hang above the work — an overarm guard — and let the pipe hook over the box to reach it. <b>Consistency beat literalism.</b> One rule that fits in a sentence beats two rules that each need their own picture, and a port that behaves differently depending on its shape is a thing to re-remember every time you drag a machine. <b>The bug this closes is separate from the drawing:</b> a secondary port has exactly one inlet and it faces down, so a run from a collector <em>below</em> it had to climb to the top of the board and come back — measured as [202,496] \u2192 [226,64] \u2192 [187,117]. Either option would have killed that loop; only the picture was ever open.',
+    where: 'canvas.html \u00a72. Both options drawn in archived/side-entry-hood.html \u2014 this is option A. Built: inPorts() aims a secondary port at its MACHINE\u2019s three edges (route-grid.ts), side entries offset SECONDARY_PORT_DX below the midline so two runs on one edge can\u2019t land on the same point, and secondaryPortGlyph() draws the glyph where the run finished. Regression R3d in router.spec.ts.' },
 
   // ── open questions, deliberately parked ──────────────────────────────
   { id: 'D-37', date: '2026-08-12', area: 'hardware', status: 'open',
@@ -122,13 +127,13 @@ const DECISIONS = [
 
   // ── canvas ───────────────────────────────────────────────────────────
   { id: 'D-35', date: '2026-08-20', area: 'canvas', status: 'standing',
-    what: 'A second pickup is added by a drag, in either direction — not from a menu',
+    what: 'A second port is added by a drag, in either direction — not from a menu',
     why: 'Drop a run end on a machine that already has a duct, <b>or</b> pull a run out of that machine’s hollow spare inlet and drop it on a gate in the other system. Same confirmation, same port, whichever way you dragged: the two ends sit in different systems and often far apart on a stacked canvas, so neither end is privileged and neither is made the only handle. The port is born attached, so there is never an orphan open end or an invalid document. Replaces the menu item entirely — two ways in would mean keeping the broken one.',
-    where: 'canvas.html §4 · build.component.ts askPickup()/commitPickup(). First recorded 2026-08-16: "you drag a hose across the boundary and land it on a port, and the same action can create that port." <b>Needed no schema change</b> — the port element lives in the system that feeds it, so nothing structural crosses the seam; shop.test.js and test_shop.cpp already carried that shape.' },
+    where: 'canvas.html §4 · build.component.ts askSecondaryPort()/commitSecondaryPort(). First recorded 2026-08-16: "you drag a hose across the boundary and land it on a port, and the same action can create that port." <b>Needed no schema change</b> — the port element lives in the system that feeds it, so nothing structural crosses the seam; shop.test.js and test_shop.cpp already carried that shape.' },
 
   { id: 'D-39', date: '2026-08-20', area: 'canvas', status: 'standing',
     what: 'The user names a secondary port; it defaults to "Auxiliary"',
-    why: 'Only the person with the shop knows whether that hose is an overarm guard, a downdraft table or the second port on a lathe. The name is captioned beside the hood, so a guessed one is wrong on the canvas forever. Editable in the same confirmation that creates the port.',
+    why: 'Only the person with the shop knows whether that hose is an overarm guard, a downdraft table or the second port on a lathe. The name is captioned beside the port, so a guessed one is wrong on the canvas forever. Editable in the same confirmation that creates the port.',
     where: 'canvas.html §4 · the confirmation sheet in build.component.html. Replaces the old auto-naming, which picked "overarm" then "hood" by position.' },
 
   { id: 'D-34', date: '2026-08-20', area: 'canvas', status: 'standing',
@@ -138,7 +143,7 @@ const DECISIONS = [
 
   { id: 'D-33', date: '2026-08-20', area: 'canvas', status: 'standing',
     what: 'Both of a machine’s inlets are drawn, and each duct lands on its own glyph',
-    why: 'Square spigot left of the centreline for the primary, tapered hood right for each pickup. The glyph <b>is</b> the entry point; one drawn anywhere else is a decal.',
+    why: 'Square left of the centreline for the primary port, tapered right for each secondary port. The glyph <b>is</b> the entry point; one drawn anywhere else is a decal.',
     where: 'canvas.html §1–2 · SceneNode.inletDx in routing/geometry.ts' },
 
   { id: 'D-32', date: '2026-08-20', area: 'canvas', status: 'standing',
@@ -153,7 +158,7 @@ const DECISIONS = [
 
   { id: 'D-30', date: '2026-08-15', area: 'canvas', status: 'standing',
     what: 'A machine is ONE box, however many ports it has',
-    why: 'A second pickup is a differently-shaped inlet on the same box — never a second body, never a dashed identity link. A drawing that reads as two saws lies about the shop.',
+    why: 'A second secondary port is a differently-shaped inlet on the same box — never a second body, never a dashed identity link. A drawing that reads as two saws lies about the shop.',
     where: 'canvas.html §2 · archived/secondary-ports.html Option A' },
 
   { id: 'D-29', date: '2026-08-16', area: 'canvas', status: 'standing',

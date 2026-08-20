@@ -38,4 +38,5 @@ Hence one page, updated in place.
 | `multi-system.html` | 2026-08-20 | System grounds and the band rule are now `canvas.html` §1 and §3. |
 | `two-system-shop.html` | 2026-08-20 | Early two-system prototype, overtaken by `multi-system.html` and then `canvas.html`. |
 | `vertical-layout.html` | 2026-08-20 | Column-count study for the phone. The layout it settled is in the app; nothing here is still open. |
+| `side-entry-hood.html` | 2026-08-20 | Exploration: where a pickup's hood is drawn when its run arrives from the side. Option A won (D-41) — both ports slide to the edge their duct arrives at, for consistency. Predates the primary/secondary port rename: "spigot" and "hood" here mean primary and secondary port. |
 | `second-duct-gesture.html` | 2026-08-20 | Folded into `canvas.html` §4. Its claim that dashes collided with "unfinished" was wrong. |

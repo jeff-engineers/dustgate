@@ -4,7 +4,8 @@
  *      npm run test:routing
  */
 
-import { type SceneNode, CELL, CLEARANCE, PAD, SPIGOT_DX, cellX, cellY, deviceBox, segBoxHit } from './geometry';
+import { type SceneNode, CELL, CLEARANCE, PAD, PRIMARY_PORT_DX, SECONDARY_PORT_DX, TOOL_HALF,
+         cellX, cellY, deviceBox, segBoxHit } from './geometry';
 import { type Scene, type RoutedDuct, Router, routeAll, sceneBounds } from './router';
 
 // ── harness ──────────────────────────────────────────────────────────────────
@@ -135,12 +136,12 @@ group('R3b top entry is preferred when it is roughly as cheap as a side one');
   // there; this just adds the near-tie this bias exists for.
 }
 
-// ── R3c · a pickup must not push its machine's own run off the top ──────────
+// ── R3c · a secondary port must not push its machine's own run off the top ──────────
 
-group('R3c a machine keeps its straight drop after growing a pickup');
+group('R3c a machine keeps its straight drop after growing a secondary port');
 {
-  const pickup = (id: string, on: SceneNode, dx: number): SceneNode =>
-    ({ id, glyph: 'pickup', isUnit: false, span: 1, x: on.x + dx, y: on.y - 34 });
+  const secondaryPort = (id: string, on: SceneNode, dx: number): SceneNode =>
+    ({ id, glyph: 'secondaryPort', isUnit: false, span: 1, x: on.x + dx, y: on.y - 34 });
 
   // Gate directly above the tool: the run is a straight drop, and must stay one.
   const saw = tool('saw', 0, 1);
@@ -148,21 +149,61 @@ group('R3c a machine keeps its straight drop after growing a pickup');
   const before = path(routeAll(plain), 'saw');
   ok('baseline is a straight drop', before.length === 2, JSON.stringify(before));
 
-  // Same shop, but the saw now has a hood on its top edge and its inlet has shifted
-  // to make room. The hood is NOT an obstacle — inflated by CLEARANCE it would cover
-  // the very lattice node a top entry arrives through, which used to make the router
-  // throw the top port away and come in from the side instead.
-  const withHood: SceneNode = { ...saw, inletDx: SPIGOT_DX };
-  const hood = pickup('saw-aux', saw, 15);
-  const after = scene([collector('dc', 0, 0), withHood, hood],
+  // Same shop, but the saw now has a secondary port on its top edge and its inlet has
+  // shifted to make room. That port is NOT an obstacle — inflated by CLEARANCE it would
+  // cover the very lattice node a top entry arrives through, which used to make the
+  // router throw the top port away and come in from the side instead.
+  const grown: SceneNode = { ...saw, inletDx: PRIMARY_PORT_DX };
+  const aux = secondaryPort('saw-aux', saw, 15);
+  const after = scene([collector('dc', 0, 0), grown, aux],
                       [{ childId: 'saw', parentId: 'dc' }, { childId: 'saw-aux', parentId: 'dc' }]);
   const p = path(routeAll(after), 'saw');
   const end = p[p.length - 1];
   ok('still enters from the TOP, not a side',
      Math.round(end.y) < Math.round(cellY(1)), `ended at ${JSON.stringify(end)}`);
-  ok('and lands on the spigot, not the centreline',
-     Math.round(end.x) === Math.round(cellX(0) + SPIGOT_DX),
-     `ended at x=${Math.round(end.x)}, spigot at ${cellX(0) + SPIGOT_DX}`);
+  ok('and lands on the primary port, not the centreline',
+     Math.round(end.x) === Math.round(cellX(0) + PRIMARY_PORT_DX),
+     `ended at x=${Math.round(end.x)}, primary port at ${cellX(0) + PRIMARY_PORT_DX}`);
+}
+
+// ── R3d · a secondary port fed from below comes in the side, not over the shop ──
+
+group('R3d a secondary port takes a side entry rather than looping over the shop');
+{
+  // The shape that found this: a machine high on the canvas, a second collector
+  // BELOW and to the right of it. A secondary port could only be entered from
+  // directly above, so the only legal route climbed to the top of the board and
+  // came back down over everything in between.
+  const saw = tool('saw', 0, 1);
+  const dc2 = collector('dc2', 2, 3);
+  const aux: SceneNode = {
+    id: 'saw-aux', glyph: 'secondaryPort', isUnit: false, span: 1,
+    x: saw.x + SECONDARY_PORT_DX, y: saw.y - 34, hostBox: deviceBox(saw),
+  };
+  const s = scene([collector('dc', 0, 0), { ...saw, inletDx: PRIMARY_PORT_DX }, dc2, aux],
+                  [{ childId: 'saw', parentId: 'dc' }, { childId: 'saw-aux', parentId: 'dc2' }]);
+  const p = path(routeAll(s), 'saw-aux');
+  const end = p[p.length - 1];
+  const topOfSaw = saw.y - TOOL_HALF;
+
+  ok('it lands on the machine, not on the 9px glyph',
+     Math.abs(end.x - saw.x) <= 38 + 1 && Math.abs(end.y - saw.y) <= TOOL_HALF + 1,
+     `ended at ${JSON.stringify(end)}`);
+  ok('from the RIGHT side, the side its collector is on',
+     Math.round(end.x) === Math.round(saw.x + 38), `ended at x=${Math.round(end.x)}`);
+  ok('offset below the midline so it cannot stack on the primary port',
+     Math.round(end.y) === Math.round(saw.y + SECONDARY_PORT_DX), `ended at y=${Math.round(end.y)}`);
+  // The whole point: nothing in the run goes ABOVE the machine any more.
+  ok('and never climbs over the top of the shop to get there',
+     p.every(pt => pt.y > topOfSaw - 20), JSON.stringify(p));
+
+  // Without a hostBox it is still top-entry only — the pre-D-41 behaviour, kept as
+  // the fallback for any caller that hasn't got a machine to hand.
+  const orphan = scene([collector('dc', 0, 0), saw, dc2, { ...aux, hostBox: undefined }],
+                       [{ childId: 'saw', parentId: 'dc' }, { childId: 'saw-aux', parentId: 'dc2' }]);
+  const op = path(routeAll(orphan), 'saw-aux');
+  ok('no host box → still comes down from above',
+     op[op.length - 1].y < topOfSaw, JSON.stringify(op.at(-1)));
 }
 
 // ── R4 · obstacle in the span ────────────────────────────────────────────────

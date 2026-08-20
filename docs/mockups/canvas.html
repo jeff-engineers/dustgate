@@ -135,7 +135,7 @@
           </svg>
           <div><div class="what">Pipe being dragged</div>
             <div class="means">Follows the pointer while you drag a run out of an outlet or a
-              hood, and the piece it would land on lights up. Accent, dashed, thinner than a
+              port, and the piece it would land on lights up. Accent, dashed, thinner than a
               real stub — it is a gesture, not ductwork.</div></div>
         </div>
 
@@ -154,24 +154,25 @@
         </div>
 
         <div class="leg">
-          <svg viewBox="0 0 96 34" aria-label="Square spigot glyph">
+          <svg viewBox="0 0 96 34" aria-label="Square primary port glyph">
             <rect class="toolbox" x="18" y="16" width="60" height="16" rx="4"/>
             <rect class="inlet" x="30" y="7" width="14" height="11" rx="2"/>
           </svg>
-          <div><div class="what">Spigot — square</div>
-            <div class="means">A machine's <b>primary</b> inlet. Always drawn, on whichever
-              edge its duct actually arrives at — top preferred, sides when a side run is
-              genuinely shorter.</div></div>
+          <div><div class="what">Primary port — square</div>
+            <div class="means">A machine's <b>primary</b> inlet — the port its main duct
+              plugs into. Always drawn, on whichever edge that duct actually arrives at: top
+              preferred, sides when a side run is genuinely shorter.</div></div>
         </div>
 
         <div class="leg">
-          <svg viewBox="0 0 96 34" aria-label="Tapered hood glyph">
+          <svg viewBox="0 0 96 34" aria-label="Tapered secondary port glyph">
             <rect class="toolbox" x="18" y="16" width="60" height="16" rx="4"/>
             <path class="inlet" d="M52 17 L60 4 L68 17 Z"/>
           </svg>
-          <div><div class="what">Hood — tapered</div>
-            <div class="means">A <b>pickup</b>. Appears only once its port exists — never as a
-              placeholder — and its duct lands on it. Drag it to re-run its pipe.</div></div>
+          <div><div class="what">Secondary port — tapered</div>
+            <div class="means">A <b>secondary</b> inlet on the same machine — an overarm
+              guard, a downdraft table. Appears only once the port exists, never as a
+              placeholder, and its duct lands on it. Drag it to re-run its pipe.</div></div>
         </div>
 
         <div class="leg" style="border-bottom:none">
@@ -200,7 +201,7 @@
       <div class="opt">
         <div style="display:flex;align-items:baseline;gap:8px"><h2>Two inlets, one body</h2></div>
         <div class="screen" style="aspect-ratio:375/230">
-          <svg viewBox="0 0 375 230" aria-label="One machine with a square spigot and a tapered hood">
+          <svg viewBox="0 0 375 230" aria-label="One machine with a square primary port and a tapered secondary port">
             <path class="duct" d="M56 16 V40"/>
             <rect class="unit" x="56" y="40" width="150" height="24" rx="7"/>
             <text class="gatelbl" x="131" y="34">MAIN GATE</text>
@@ -219,7 +220,7 @@
             <text class="tiny" x="14" y="216">One box, one name, one plug, one thing you switch on.</text>
           </svg>
         </div>
-        <p class="note">A second pickup is a differently-shaped inlet on the <em>same</em> box —
+        <p class="note">A second port is a differently-shaped inlet on the <em>same</em> box —
           never a second body, never a dashed identity link. A drawing that reads as two saws
           is a drawing that lies about the shop.</p>
       </div>
@@ -264,15 +265,22 @@
         first run. It used to arrive with a drop already hanging off it, which guessed at a run
         nobody asked for and put it somewhere you then had to move. Every collector wears
         add-dots on its free outlets, so starting the first run is one drag away.</p>
-      <p class="note"><b>A duct always lands on a glyph.</b> Never on bare box. Every machine
-        draws its square spigot at the point its own run arrives, and every pickup's hood is
-        where that run arrives — so the drawing says which pipe feeds what without following
-        either of them. The glyphs prefer the TOP edge, and the router prefers a top entry to
-        match; when a side run is genuinely shorter the spigot moves to that side rather than
-        leaving the pipe pointing at nothing. Dragging the machine carries both glyphs with it.</p>
+      <p class="note"><b>A duct always lands on a port.</b> Never on bare box. Every machine
+        draws its square primary port at the point its own run arrives, and every secondary port
+        sits where <em>its</em> run arrives — so the drawing says which pipe feeds what without
+        following either of them. Both prefer the TOP edge, and the router prefers a top entry to
+        match; when a side run is genuinely shorter the port moves to that side rather than
+        leaving the pipe pointing at nothing. Dragging the machine carries both with it.</p>
+      <p class="note"><b>Both ports slide the same way</b> — square and tapered alike. The
+        tapered one was very nearly pinned to the top edge on the grounds that it draws something
+        that really does hang above the work, and the pipe would hook over the box to reach it.
+        Consistency won: one rule you can state in a sentence beats two rules that each need
+        their own picture, and a port that behaves differently by shape is a thing to remember
+        every time you drag a machine. Both options are drawn in
+        <code>archived/side-entry-hood.html</code>.</p>
       <p class="note"><b>The rule, stated once.</b> A machine lives in one system. A machine's
         <em>ports</em> are elements in the airflow tree, each with exactly one parent duct — a
-        tool may never have two parents, which is why a second pickup is a new port element
+        tool may never have two parents, which is why a second port is a new port element
         rather than a second parent on the old one. A supplemental port's run is the only run
         allowed to cross the seam, and may be disconnected and re-routed to a primary on the
         second system if that is what the shop wants.</p>
@@ -314,12 +322,12 @@
 
   <hr class="rule"/>
 
-  <!-- ══ 4. ADDING A SECOND PICKUP ═══════════════════════════════════ -->
+  <!-- ══ 4. ADDING A SECOND PORT ═══════════════════════════════════ -->
   <section class="sec">
-    <h3>4 · Adding a second pickup</h3>
+    <h3>4 · Adding a second port</h3>
     <span class="pill built">Built · 2026-08-20</span>
     <p class="note" style="max-width:68ch">One gesture, <b>either direction</b>. The two ends
-      of a pickup's run are a machine's spare inlet and a gate in the other system — and you
+      of a secondary port's run are a machine's spare inlet and a gate in the other system — and you
       may start the drag from whichever of them you happen to be looking at.</p>
 
     <div class="grid">
@@ -364,7 +372,7 @@
 
       <div class="opt">
         <div style="display:flex;align-items:baseline;gap:8px"><h2>Or re-run it</h2>
-          <span style="margin-left:auto;font-size:11.5px;color:var(--muted)">hood → gate</span></div>
+          <span style="margin-left:auto;font-size:11.5px;color:var(--muted)">port → gate</span></div>
         <div class="screen" style="aspect-ratio:375/250">
           <svg viewBox="0 0 375 250" aria-label="Dragging out of the machine's spare inlet down to a gate in the other system">
             <rect class="ground" x="8" y="8" width="359" height="132" rx="11"/>
@@ -391,13 +399,13 @@
 
             <circle cx="296" cy="196" r="26" fill="none" stroke="var(--accent)"
                     stroke-width="2" stroke-dasharray="5 4"/>
-            <text class="acc-t" x="168" y="46">drag the hood itself</text>
+            <text class="acc-t" x="168" y="46">drag the port itself</text>
             <text class="acc-t" x="120" y="234">…onto a gate over here</text>
           </svg>
         </div>
-        <p class="note">An existing hood is its own handle: drag it onto another gate, a
+        <p class="note">An existing port is its own handle: drag it onto another gate, a
           collector or a loose end — including one across the seam — and its pipe re-runs from
-          there. <b>Nothing hollow advertises a pickup that doesn't exist yet</b>; a hood
+          there. <b>Nothing hollow advertises a port that doesn't exist yet</b>; the glyph
           appears with its port and never before.</p>
       </div>
 
@@ -407,7 +415,7 @@
           <svg viewBox="0 0 375 250" aria-label="The confirmation sheet, with an editable name">
             <rect x="26" y="26" width="323" height="200" rx="14" fill="var(--raised)" stroke="var(--border)"/>
             <text x="48" y="58" class="lbl" style="text-anchor:start;font-size:13.5">Router table already has a duct.</text>
-            <text x="48" y="78" class="tiny">Add this as a second pickup?</text>
+            <text x="48" y="78" class="tiny">Add this as a second port?</text>
 
             <text x="48" y="104" class="tiny" style="font-size:9">WHAT IS IT?</text>
             <rect x="48" y="110" width="279" height="34" rx="9" fill="var(--bg)" stroke="var(--accent)"/>
@@ -419,18 +427,18 @@
             <rect x="48" y="156" width="134" height="34" rx="9" fill="var(--bg)" stroke="var(--border)"/>
             <text x="115" y="177" class="lbl" style="font-size:11.5">Cancel</text>
             <rect x="192" y="156" width="135" height="34" rx="9" fill="var(--accent)"/>
-            <text x="259" y="177" class="lbl" style="font-size:11.5;fill:#1a1200;font-weight:600">Add pickup</text>
+            <text x="259" y="177" class="lbl" style="font-size:11.5;fill:#1a1200;font-weight:600">Add port</text>
 
             <text x="48" y="212" class="tiny">Replacing the existing run is deliberately not offered.</text>
           </svg>
         </div>
         <p class="note">The same sheet, the same port, whichever direction you dragged. Two
-          outcomes, because there are only two: it is a second pickup, or it was a misdrop.
+          outcomes, because there are only two: it is a second port, or it was a misdrop.
           <br><br>
           <b>The name is the user's.</b> It arrives as <b>Auxiliary</b> and is editable right
           there — only the person with the shop knows whether that hose is an overarm guard, a
           downdraft table or the second port on a lathe, and the name is what gets captioned
-          beside the hood.</p>
+          beside the port.</p>
       </div>
     </div>
 

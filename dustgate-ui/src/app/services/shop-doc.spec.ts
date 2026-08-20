@@ -125,7 +125,7 @@ const v1 = () => JSON.parse(JSON.stringify({
     JSON.stringify(validateShop(shop).errors));
 }
 {
-  // A machine survives losing a SUPPLEMENTAL port. That is the bonus pickup
+  // A machine survives losing a SUPPLEMENTAL port. That is the bonus secondary port
   // coming off, and it is a non-event: the machine keeps its plug, its name and
   // its primary connection.
   const shop = toShop(v1())!;

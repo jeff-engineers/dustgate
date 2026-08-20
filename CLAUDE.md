@@ -128,8 +128,8 @@ These are decided; don't relitigate them in code review or suggestions.
   and which alternatives were rejected. Nothing stops you dragging a board low,
   where its cables route badly: the fix is the default, not a rule.
 - **A machine is ONE box, however many ports it has.** A second pickup — an
-  overarm guard, a hood — is a differently-shaped inlet on that same box (square
-  spigot = the primary port, tapered hood = a pickup), not a second body. It owns
+  overarm guard, a hood — is a differently-shaped inlet on that same box (square =
+  the primary port, tapered = the secondary port), not a second body. It owns
   no cell; it rides its machine's box, and each duct lands on its own glyph.
 - **A tool lives in ONE system; a SECONDARY port's run may cross the seam.** That
   run is the only thing allowed to, and it is drawn grey, dashed and thinner so a

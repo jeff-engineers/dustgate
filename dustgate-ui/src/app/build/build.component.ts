@@ -24,7 +24,7 @@ import {
   type Glyph, type Pt, type SceneNode,
   BOARD_H, BOARD_W, CELL, GATE_PAD, PAD, TOOL_HALF, UNIT_H,
   cellX, cellY, deviceBox, halfH as glyphHalfH, halfW as glyphHalfW, ptSegDist, segBoxHit,
-  SPIGOT_DX, SPIGOT_H, SPIGOT_W,
+  PRIMARY_PORT_DX, PRIMARY_PORT_H, PRIMARY_PORT_W, SECONDARY_PORT_DX, SECONDARY_PORT_STEP,
 } from './routing/geometry';
 import { type RoutedDuct, type Scene, Router, sceneBounds } from './routing/router';
 import { CanvasViewport } from './canvas-viewport';
@@ -58,19 +58,9 @@ const SYSTEM_GAP = 1;
 /** How far a system's grey ground stops short of its outermost row. Enough that two
  *  bands dragged flush against each other still read as two. */
 const GROUND_INSET = 10;
-/** Where the first pickup hood sits on a machine's top edge, and the pitch between
- *  them. RIGHT of the centreline, with the primary's spigot going LEFT of it
- *  (SPIGOT_DX) — the two-inlet arrangement Option A settles on.
- *
- *  Tightened from 20/20 when the spigot arrived: at the old pitch a second hood sat
- *  at +40 on a body whose edge is at +38, so it hung off the corner. At 15/14 the
- *  furthest hood ends exactly on the edge, and the spigot still clears the nearest
- *  one by 16px. */
-const PICKUP_DX = 15;
-const PICKUP_STEP = 14;
-/** Extra pickups one machine may have. Mirrors MAX_SUPPLEMENTAL_PORTS in shop.js —
+/** Extra secondary ports one machine may have. Mirrors MAX_SUPPLEMENTAL_PORTS in shop.js —
  *  change one, change both. */
-const MAX_PICKUPS = 2;
+const MAX_SECONDARY_PORTS = 2;
 
 interface Cell { col: number; row: number; }
 interface RawEl { [k: string]: unknown; }
@@ -87,14 +77,14 @@ interface NodeVM {
    *  derived fresh on every mutation, so it clears itself the moment it stops
    *  being true. See redundantSelectors() in shared/device-model/topology.js. */
   redundant: boolean;
-  /** Offset from the node's own cell, in board px. Only a `pickup` uses it: a
+  /** Offset from the node's own cell, in board px. Only a `secondaryPort` uses it: a
    *  supplemental port has NO cell — it rides on the top edge of the machine's box,
    *  which is what keeps one machine drawn as one machine. */
   anchor?: { dx: number; dy: number };
-  /** Shifts this machine's TOP inlet off the centreline to make room for its hood(s).
-   *  0 when it has none. Both inlets stay on the top edge — see SPIGOT_DX. */
+  /** Shifts this machine's TOP inlet off the centreline to make room for its glyph(s).
+   *  0 when it has none. Both inlets stay on the top edge — see PRIMARY_PORT_DX. */
   inletDx: number;
-  /** The primary-port node this one rides on — set for a pickup, so its hood tracks
+  /** The primary-port node this one rides on — set for a secondary port, so its glyph tracks
    *  the machine's live drag rather than its own snapped cell. */
   follows?: string;
   dragX?: number; dragY?: number;
@@ -150,7 +140,7 @@ const CABLE_SHADES = ['#38b6f0', '#45cfd8', '#6f9df2', '#2f9fd0'];
 
 
 type Fitting = SelKind | 'tool' | 'duct';
-type MenuKind = Fitting | 'cap' | 'uncap' | 'delete' | 'board' | 'travel' | 'outlet' | 'pickup'
+type MenuKind = Fitting | 'cap' | 'uncap' | 'delete' | 'board' | 'travel' | 'outlet' | 'secondaryPort'
               | 'addSystem' | 'findBoards' | 'rename' | 'moveSystem' | 'system' | 'boardSetup';
 
 const FITTINGS: Array<{ kind: Fitting; label: string }> = [
@@ -220,10 +210,10 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   /** Why the cell under a drag won't take the piece, or '' while it will. Shown live
    *  in the guidance bar so a refused drop is never a silent one. */
   dropBlocked = '';
-  /** A pending "make this a second pickup" confirmation. Raised when a loose end is
+  /** A pending "make this a second port" confirmation. Raised when a loose end is
    *  dropped on a machine that already has a duct, or when a machine's spare inlet is
    *  dragged onto a gate — both directions land here. See canvas.html §4. */
-  pickupAsk: {
+  secondaryPortAsk: {
     machineId: string; machineName: string; name: string;
     /** Where the new port's run comes FROM. 'end' reuses an existing open end's own
      *  parent duct; 'outlet' claims a free branch on a gate. */
@@ -249,9 +239,9 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   menuTitle = '';
   readonly CELL = CELL; readonly UNIT_H = UNIT_H; readonly GATE_PAD = GATE_PAD; readonly PAD = PAD;
   readonly TOOL_HALF = TOOL_HALF;
-  readonly SPIGOT_DX = SPIGOT_DX;
-  readonly SPIGOT_W = SPIGOT_W;
-  readonly SPIGOT_H = SPIGOT_H;
+  readonly PRIMARY_PORT_DX = PRIMARY_PORT_DX;
+  readonly PRIMARY_PORT_W = PRIMARY_PORT_W;
+  readonly PRIMARY_PORT_H = PRIMARY_PORT_H;
   readonly BOARD_W = BOARD_W; readonly BOARD_H = BOARD_H;
   readonly PORT_H = PORT_H; readonly TAB_W = TAB_W; readonly TAB_H = TAB_H;
   readonly SERVO_PORTS = SERVO_PORTS;
@@ -321,8 +311,8 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       cap:           svg('<path d="M6 12h9"/><rect x="15" y="8" width="3" height="8" rx="1" fill="currentColor" stroke="none"/>'),
       uncap:         svg('<path d="M5 12h9"/><circle cx="18" cy="12" r="2.5"/>'),
       delete:        svg('<path d="M6 7h12M10 7V5h4v2M9 7l1 12h4l1-12"/>'),
-      // A hood: the tapered inlet a second pickup draws on the machine's edge.
-      pickup:        svg('<path d="M6 17 L12 7 L18 17 Z"/><path d="M4 20h16"/>'),
+      // A glyph: the tapered inlet a second port draws on the machine's edge.
+      secondaryPort: svg('<path d="M6 17 L12 7 L18 17 Z"/><path d="M4 20h16"/>'),
       configure:     svg('<path d="M4 8h10M18 8h2M4 16h4M12 16h8"/><circle cx="16" cy="8" r="2"/><circle cx="10" cy="16" r="2"/>'),
       // A wall socket, for the smart-plug row.
       outlet:        svg('<rect x="4" y="4" width="16" height="16" rx="3"/><circle cx="9.5" cy="11" r="1.1" fill="currentColor" stroke="none"/><circle cx="14.5" cy="11" r="1.1" fill="currentColor" stroke="none"/><path d="M9 16h6"/>'),
@@ -452,9 +442,9 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   iconFor(kind: string): SafeHtml { return this.icons[kind]; }
 
   // ── geometry ────────────────────────────────────────────────────────────────
-  /** A pickup has no cell of its own — it rides its machine's box, and that has to
+  /** A secondary port has no cell of its own — it rides its machine's box, and that has to
    *  include WHILE the machine is being dragged. Reading only its own snapped cell
-   *  left the hood behind on the old position until the finger came up. */
+   *  left the glyph behind on the old position until the finger came up. */
   nx(n: NodeVM): number {
     const host = n.follows ? this.byId.get(n.follows) : undefined;
     const base = host?.dragX ?? n.dragX ?? (PAD + n.col * CELL);
@@ -473,9 +463,17 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
    *  with the endpoint it hangs off. Built fresh each call — it's cheap, and the
    *  Router memoizes on a hash of it, so nothing re-solves unless something moved. */
   private scene(): Scene {
+    const at = new Map(this.nodes.map(n => [n.id, { x: this.routeX(n), y: this.routeY(n) }]));
     const nodes: SceneNode[] = this.nodes.map(n => ({
       id: n.id, glyph: n.glyph, isUnit: n.isUnit, span: n.span,
-      x: this.routeX(n), y: this.routeY(n), inletDx: n.inletDx,
+      x: at.get(n.id)!.x, y: at.get(n.id)!.y, inletDx: n.inletDx,
+      // A secondary port is aimed at its MACHINE's box, not its own 9px one (D-41).
+      // Taken from the same resolved positions as everything else here, so a port
+      // being dragged and a port riding a dragged machine both aim at the right box.
+      hostBox: n.glyph === 'secondaryPort' && n.follows && at.has(n.follows)
+        ? deviceBox({ id: n.follows, glyph: 'tool', isUnit: false, span: 1,
+                      x: at.get(n.follows)!.x, y: at.get(n.follows)!.y })
+        : undefined,
     }));
     // Boards are obstacles too — that is the whole point of a board owning its cell.
     // They carry no ducts, so they only ever appear here as boxes to steer around.
@@ -497,16 +495,16 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
    *  cell boundary, not on every pixel of travel. That alone is most of why dragging
    *  used to degrade the further you went.
    *
-   *  The `anchor` is added back on afterwards, because a pickup HAS no cell of its
+   *  The `anchor` is added back on afterwards, because a secondary port HAS no cell of its
    *  own — it borrows its machine's and lives at an offset from it. Snapping alone
-   *  therefore put the router's idea of a hood at the centre of the machine's box
-   *  while the drawing had it 15px to the right, so a pickup's duct terminated on
-   *  the machine's centreline and the hood sat off on its own with nothing reaching
+   *  therefore put the router's idea of a glyph at the centre of the machine's box
+   *  while the drawing had it 15px to the right, so a secondary port's duct terminated on
+   *  the machine's centreline and the glyph sat off on its own with nothing reaching
    *  it. That is the whole "the second port gets centered" bug. */
   private routeX(n: NodeVM): number {
-    // A pickup borrows its machine's cell, so mid-drag it has to borrow the machine's
-    // SNAPPED drag cell too. Reading only its own stored cell left the hood's duct
-    // solving to where the machine used to be while the hood itself moved with it —
+    // A secondary port borrows its machine's cell, so mid-drag it has to borrow the machine's
+    // SNAPPED drag cell too. Reading only its own stored cell left the glyph's duct
+    // solving to where the machine used to be while the glyph itself moved with it —
     // which looked like the run detaching.
     const drag = (n.follows ? this.byId.get(n.follows)?.dragX : undefined) ?? n.dragX;
     const cell = drag == null ? PAD + n.col * CELL : PAD + Math.max(0, Math.round((drag - PAD) / CELL)) * CELL;
@@ -527,8 +525,8 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   private frozenDucts(): ReadonlySet<string> | undefined {
     if (!this.dragId) return undefined;
     const moving = this.dragId;
-    // A pickup rides the machine being dragged, so ITS run has to re-solve too —
-    // frozen, the hood moved with the machine while its pipe stayed pinned to the
+    // A secondary port rides the machine being dragged, so ITS run has to re-solve too —
+    // frozen, the glyph moved with the machine while its pipe stayed pinned to the
     // old position, which read as the duct coming adrift.
     const riders = new Set(this.nodes.filter(n => n.follows === moving).map(n => n.id));
     const frozen = new Set<string>();
@@ -1146,9 +1144,9 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   // ── drag (reposition) / tap ───────────────────────────────────────────────────
   startDrag(evt: PointerEvent, n: NodeVM): void {
     evt.preventDefault(); evt.stopPropagation();
-    // A pickup has no cell to drag it to — it is part of a machine, and the machine
+    // A secondary port has no cell to drag it to — it is part of a machine, and the machine
     // is the thing that moves. A press on one opens its menu instead.
-    if (n.glyph === 'pickup') {
+    if (n.glyph === 'secondaryPort') {
       this.focus(n.id); this.selectedId = n.id;
       this.openMenu(evt.clientX, evt.clientY, { convert: n.id });
       return;
@@ -1187,12 +1185,12 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       const { col, row } = this.dragCell({ x: n.dragX!, y: n.dragY! });
       moved = col !== n.col || row !== n.row;
       // A loose end dropped ON a machine that already has a duct is not a collision
-      // — it is the second-pickup gesture. Checked before canPlace(), which would
+      // — it is the second-port gesture. Checked before canPlace(), which would
       // otherwise refuse it as "already in that cell".
       const onto = moved ? this.machineAtCell(col, row) : null;
       if (onto && n.glyph === 'junction' && this.childrenOf(n.id).length === 0) {
         n.dragX = undefined; n.dragY = undefined;
-        this.askPickup(onto, { kind: 'end', endId: n.id });
+        this.askSecondaryPort(onto, { kind: 'end', endId: n.id });
         this.dragId = null; this.hoverCell = null; this.dropBlocked = ''; this.dropWarn = '';
         this.detachDrag();
         return;
@@ -1253,7 +1251,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
    * advisory, because a half-finished shop is exactly the state someone is dragging
    * their way OUT of — refusing those moves strands them in a layout they can't
    * edit. That is not hypothetical: the duct checks below used to refuse, and one
-   * unroutable run anywhere (an unplumbed pickup, say) froze every piece on the
+   * unroutable run anywhere (an unplumbed secondary port, say) froze every piece on the
    * board.
    */
   private placeCheck(n: NodeVM, col: number, row: number): { blocked: string; warn: string } {
@@ -1361,7 +1359,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   /** The mirror of bandFloor(): the last row above `id`'s system that belongs to the
-   *  neighbour, or -Infinity with nothing above. A default that reaches up — a hood's
+   *  neighbour, or -Infinity with nothing above. A default that reaches up — a glyph's
    *  open end — has to clear it. */
   private bandCeiling(id: string): number {
     const bands = this.systemRowBands();
@@ -1643,9 +1641,9 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
    *  (−) badge came off on 2026-08-15, and a phone has no Delete key. */
   private convertOptions(id: string): MenuOption[] {
     const n = this.byId.get(id); if (!n) return [];
-    // A pickup is a port, not a piece: it has no plug, no kind to convert to and no
+    // A secondary port is a port, not a piece: it has no plug, no kind to convert to and no
     // cell to move it to. All it can do is go.
-    if (n.glyph === 'pickup') return [this.deleteOption(n)];
+    if (n.glyph === 'secondaryPort') return [this.deleteOption(n)];
     if (n.glyph === 'tool' || n.glyph === 'collector') {
       const paired = n.setup === 'done';
       const opts: MenuOption[] = [{
@@ -1654,7 +1652,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
         enabled: true,
         note: paired ? undefined : (n.glyph === 'collector' ? 'started by hand' : 'switched by hand'),
       }];
-      // "Add second pickup" used to live here. It is a DRAG now — drop a loose end on
+      // "Add second port" used to live here. It is a DRAG now — drop a loose end on
       // the machine, or pull one out of its spare inlet — because the menu route had
       // to invent an open end, guess a cell for it (landing on a live gate outlet on
       // the demo shop), and leave the document invalid until you plumbed it. Two ways
@@ -1848,7 +1846,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       const m = this.machineAtCell(c.col, c.row);
       if (m) return this.nodes.find(n => n.glyph === 'tool' && n.col === c.col && n.row === c.row)?.id ?? null;
     }
-    const t = this.idrag ? this.pickupTargetAt(at, this.idrag.portId) : null;
+    const t = this.idrag ? this.secondaryPortTargetAt(at, this.idrag.portId) : null;
     return t ? (t.kind === 'end' ? t.endId : t.parentId) : null;
   }
 
@@ -1884,14 +1882,14 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     }
     return out;
   }
-  /** Drag an EXISTING hood onto another gate to re-run its pipe. The mirror of
-   *  dropping a loose end on the machine: the two ends of a pickup's run live in
+  /** Drag an EXISTING glyph onto another gate to re-run its pipe. The mirror of
+   *  dropping a loose end on the machine: the two ends of a secondary port's run live in
    *  different systems and are often far apart, so neither is the only handle.
    *
-   *  There is deliberately no placeholder to drag out of — a hood appears when the
-   *  pickup does, and never before. A dotted ghost inlet on every machine in the
+   *  There is deliberately no placeholder to drag out of — a glyph appears when the
+   *  secondary port does, and never before. A dotted ghost inlet on every machine in the
    *  shop advertised a thing that did not exist yet. */
-  onHoodDown(evt: PointerEvent, n: NodeVM): void {
+  onSecondaryPortDown(evt: PointerEvent, n: NodeVM): void {
     evt.preventDefault(); evt.stopPropagation();
     this.focus(n.id); this.selectedId = n.id;
     this.idrag = { portId: n.id, x0: evt.clientX, y0: evt.clientY, moved: false };
@@ -1903,7 +1901,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     if (Math.hypot(evt.clientX - this.idrag.x0, evt.clientY - this.idrag.y0) > 8) this.idrag.moved = true;
     this.idrag.at = this.toSvg(evt);
     if (this.idrag.moved) {
-      const t = this.pickupTargetAt(this.idrag.at);
+      const t = this.secondaryPortTargetAt(this.idrag.at);
       this.wireNote = t ? '' : 'Drop it on a gate, a free outlet or a loose end.';
     }
   }
@@ -1913,18 +1911,18 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     const d = this.idrag; this.idrag = null;
     this.wireNote = '';
     if (!d) return;
-    // A press that went nowhere is a tap: open the hood's own menu, which is how it
+    // A press that went nowhere is a tap: open the glyph's own menu, which is how it
     // was reached before it became draggable.
     if (!d.moved || !d.at) { this.openMenu(evt.clientX, evt.clientY, { convert: d.portId }); return; }
-    const t = this.pickupTargetAt(d.at, d.portId);
-    if (t) this.reroutePickup(d.portId, t);
+    const t = this.secondaryPortTargetAt(d.at, d.portId);
+    if (t) this.rerouteSecondaryPort(d.portId, t);
   }
 
-  /** Re-hang an existing pickup on a different gate — including one across the seam,
+  /** Re-hang an existing secondary port on a different gate — including one across the seam,
    *  which is the whole point. The port ELEMENT moves to the feeding system with its
    *  run, because that is where a supplemental port lives; only the box it is drawn
    *  on stays where it was. */
-  private reroutePickup(portId: string, t: { kind: 'end'; endId: string } | { kind: 'outlet'; parentId: string }): void {
+  private rerouteSecondaryPort(portId: string, t: { kind: 'end'; endId: string } | { kind: 'outlet'; parentId: string }): void {
     if (!this.topo) return;
     const doc = this.topo as unknown as ShopDoc;
     const parentId = t.kind === 'end' ? this.parentOf.get(t.endId) : t.parentId;
@@ -1970,7 +1968,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
 
   /** What a spare-inlet drag may land on: a gate with a free branch, or a loose end
    *  (which already owns a run, so the port takes that run over). */
-  private pickupTargetAt(at: Pt, selfId?: string): { kind: 'end'; endId: string } | { kind: 'outlet'; parentId: string } | null {
+  private secondaryPortTargetAt(at: Pt, selfId?: string): { kind: 'end'; endId: string } | { kind: 'outlet'; parentId: string } | null {
     const c = this.dragCell(at);
     const own = selfId ? this.parentOf.get(selfId) : null;
     for (const n of this.nodes) {
@@ -1983,7 +1981,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
           && (el['branches'] as Branch[] | undefined)?.some(b => b.role === 'blocked')) {
         return { kind: 'outlet', parentId: n.id };
       }
-      // A collector is a legitimate parent too — it takes no branch, and a pickup
+      // A collector is a legitimate parent too — it takes no branch, and a secondary port
       // hung straight off one is the ungated shape the airflow check advises about
       // rather than forbids (see D-21). Refusing it here would also make the guide
       // bar's "a free outlet" a promise the drop doesn't keep.
@@ -2011,12 +2009,12 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     window.removeEventListener('pointerup', this.oUp);
     const d = this.odrag; this.odrag = null; if (!d) return;
     if (d.moved) {
-      // Dropped ON a machine that already has a duct → the second-pickup gesture,
+      // Dropped ON a machine that already has a duct → the second-port gesture,
       // wired straight off this outlet with no open end in between.
       if (d.at) {
         const c = this.dragCell(d.at);
         const onto = this.machineAtCell(c.col, c.row);
-        if (onto) { this.askPickup(onto, { kind: 'outlet', parentId: d.od.parentId }); return; }
+        if (onto) { this.askSecondaryPort(onto, { kind: 'outlet', parentId: d.od.parentId }); return; }
       }
       if (!this.roomAt(d.od.cell.col, d.od.cell.row, 1, d.od.parentId)) return;   // nowhere to put it
       this.pushHistory(null);
@@ -2490,7 +2488,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   /** What is standing on this cell, named — a piece, or another board. */
   private occupantAt(col: number, row: number, selfId: string): string | null {
     for (const n of this.nodes) {
-      if (n.id === selfId || n.glyph === 'pickup') continue;
+      if (n.id === selfId || n.glyph === 'secondaryPort') continue;
       const span = n.isUnit ? n.span : 1;
       if (n.row === row && col >= n.col && col < n.col + span) return n.name;
     }
@@ -3130,7 +3128,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   }
   /** A new port, and the machine that owns it.
    *
-   *  "Add a tool" has always meant one machine with one pickup, so that is what
+   *  "Add a tool" has always meant one machine with one port, so that is what
    *  this makes: a port and a machine sharing an id. Sharing it is deliberate —
    *  anything already holding that id (`ui.layout`, a status blob, a bug report)
    *  still resolves, which is the same choice migrateToShop makes (RFC §12).
@@ -3342,7 +3340,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     // Deleting a tool node deletes the MACHINE. A primary port is not deletable
     // on its own (RFC §6.3) — it is the machine's one required connection — so
     // the machine and its ports go together. Dropping a single supplemental
-    // pickup is `removePort`, which the multi-port UI will call instead.
+    // secondary port is `removePort`, which the multi-port UI will call instead.
     const doomed = this.elem(id);
     const machineId = doomed?.['machineId'] as string | undefined;
     if (doomed?.['type'] === 'tool' && machineId) {
@@ -3919,61 +3917,61 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     }
   }
   /** Where a supplemental port sits: on the top edge of its machine's primary box,
-   *  right of the trunk's own inlet, one hood per pickup.
+   *  right of the trunk's own inlet, one glyph per port.
    *
    *  It borrows the primary's CELL rather than owning one. Everything about placement
    *  on this canvas is written in cells — the layout, the drop checks, the band rule —
-   *  and a pickup is not a thing you place; it is part of a machine that has already
+   *  and a secondary port is not a thing you place; it is part of a machine that has already
    *  been placed. Giving it a cell would let you drag half a saw into another system. */
-  private pickupSeat(e: RawEl): { cell: Cell; follows: string; anchor: { dx: number; dy: number } } | null {
+  private secondaryPortSeat(e: RawEl): { cell: Cell; follows: string; anchor: { dx: number; dy: number } } | null {
     const doc = this.topo as unknown as ShopDoc;
     const machine = machineOfPort(doc, e); if (!machine) return null;
     const primary = primaryPortOf(doc, machine.id as string); if (!primary) return null;
     const primaryId = primary['id'] as string;
     const cell = this.cells.get(primaryId); if (!cell) return null;
-    // Which pickup this is, in document order, so two hoods never land on each other.
+    // Which secondary port this is, in document order, so two glyphs never land on each other.
     const mine = portsOf(doc, machine.id as string)
       .filter(({ port }) => isPortSupplemental(port))
       .map(({ port }) => port['id'] as string);
     const i = Math.max(0, mine.indexOf(e['id'] as string));
-    return { cell, follows: primaryId, anchor: { dx: PICKUP_DX + i * PICKUP_STEP, dy: -TOOL_HALF } };
+    return { cell, follows: primaryId, anchor: { dx: SECONDARY_PORT_DX + i * SECONDARY_PORT_STEP, dy: -TOOL_HALF } };
   }
 
-  /** The machine standing on this cell that could take another pickup — null when
+  /** The machine standing on this cell that could take another port — null when
    *  the cell is empty, holds something else, or holds a machine already at its
-   *  pickup ceiling. Shared by both directions of the gesture. */
+   *  secondary port ceiling. Shared by both directions of the gesture. */
   private machineAtCell(col: number, row: number): string | null {
     const doc = this.topo as unknown as ShopDoc;
     for (const n of this.nodes) {
       if (n.glyph !== 'tool' || n.row !== row || n.col !== col) continue;
       const m = machineOfPort(doc, this.elem(n.id));
       const id = m?.id as string | undefined;
-      return this.canTakePickup(id) ? id! : null;
+      return this.canTakeSecondaryPort(id) ? id! : null;
     }
     return null;
   }
 
-  /** Can `machineId` take another pickup fed from a loose end? The drop target test
+  /** Can `machineId` take another secondary port fed from a loose end? The drop target test
    *  for both directions of the gesture. */
-  private canTakePickup(machineId: string | null | undefined): boolean {
+  private canTakeSecondaryPort(machineId: string | null | undefined): boolean {
     if (!machineId || !this.topo) return false;
     const doc = this.topo as unknown as ShopDoc;
-    return !!primaryPortOf(doc, machineId) && supplementalCount(doc, machineId) < MAX_PICKUPS;
+    return !!primaryPortOf(doc, machineId) && supplementalCount(doc, machineId) < MAX_SECONDARY_PORTS;
   }
 
   /** Raise the confirmation. Named rather than created immediately, because a drop on
    *  an occupied machine is ambiguous — it could be a slip. */
-  private askPickup(machineId: string, src: { kind: 'end'; endId: string } | { kind: 'outlet'; parentId: string }): void {
+  private askSecondaryPort(machineId: string, src: { kind: 'end'; endId: string } | { kind: 'outlet'; parentId: string }): void {
     const doc = this.topo as unknown as ShopDoc;
     const m = machineById(doc, machineId);
-    this.pickupAsk = {
+    this.secondaryPortAsk = {
       machineId, machineName: (m?.name as string) || 'This machine',
       name: 'Auxiliary', src,
     };
   }
 
   /**
-   * Wire the confirmed pickup up.
+   * Wire the confirmed secondary port up.
    *
    * The port element goes in the system that FEEDS it — alongside the gate it hangs
    * off, not alongside the machine it is drawn on. That is what lets the run cross the
@@ -3981,10 +3979,10 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
    * one system, `validateShop` is untouched, and the machine simply owns ports in two
    * systems (which shop.test.js and test_shop.cpp have both carried all along).
    */
-  commitPickup(): void {
-    const ask = this.pickupAsk; if (!ask || !this.topo) return;
+  commitSecondaryPort(): void {
+    const ask = this.secondaryPortAsk; if (!ask || !this.topo) return;
     const doc = this.topo as unknown as ShopDoc;
-    // The user's word for it, and the caption that ends up beside the hood. Falling
+    // The user's word for it, and the caption that ends up beside the glyph. Falling
     // back rather than refusing an empty box: the name is a label, not a key.
     const role = ask.name.trim() || 'Auxiliary';
 
@@ -3993,7 +3991,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       : ask.src.parentId;
     const sysId = parentId ? this.systemOf.get(parentId) : null;
     const sys = sysId ? systemById(doc, sysId) : null;
-    if (!parentId || !sys) { this.pickupAsk = null; return; }
+    if (!parentId || !sys) { this.secondaryPortAsk = null; return; }
 
     // A gate needs a free branch before anything is created — the same order
     // addTool() uses, so a refusal can't leave a stray port behind.
@@ -4001,18 +3999,18 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     let branch: Branch | undefined;
     if (ask.src.kind === 'outlet' && pel && pel['type'] === 'selector') {
       branch = (pel['branches'] as Branch[]).find(x => x.role === 'blocked');
-      if (!branch) { this.pickupAsk = null; return; }
+      if (!branch) { this.secondaryPortAsk = null; return; }
     }
 
     this.pushHistory(null);
     const port = addSupplementalPort(doc, sys, ask.machineId, this.newId('p'), role);
 
-    this.finishPickup(ask, port, parentId, branch);
+    this.finishSecondaryPort(ask, port, parentId, branch);
   }
 
   /** The half that differs by direction: rehome the run onto the new port. */
-  private finishPickup(
-    ask: NonNullable<BuildComponent['pickupAsk']>, port: RawEl,
+  private finishSecondaryPort(
+    ask: NonNullable<BuildComponent['secondaryPortAsk']>, port: RawEl,
     parentId: string, branch: Branch | undefined,
   ): void {
     const doc = this.topo as unknown as ShopDoc;
@@ -4027,13 +4025,13 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       if (branch) { branch.role = 'tool'; duct['parentBranch'] = branch.id; }
       this.ductsRaw().push(duct);
     }
-    this.pickupAsk = null;
+    this.secondaryPortAsk = null;
     this.dirty = true; this.saveError = '';
     this.afterMutation(null);
   }
 
   /**
-   * Where a machine's square spigot is drawn: ON the edge its duct actually arrives
+   * Where a machine's square primary port is drawn: ON the edge its duct actually arrives
    * at, in node-local coordinates, with the rotation that makes it sit proud of that
    * edge. Returns null only before the run has been routed.
    *
@@ -4042,7 +4040,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
    * genuinely shorter (R3 in router.spec.ts). Top is PREFERRED, not required, so the
    * glyph has to follow rather than assume.
    */
-  spigotSeat(n: NodeVM): { x: number; y: number; rot: number } | null {
+  primaryPortSeat(n: NodeVM): { x: number; y: number; rot: number } | null {
     if (n.glyph !== 'tool') return null;
     const last = this.ductPoints(n.id).at(-1); if (!last) return null;
     const x = last.x - this.nx(n), y = last.y - this.ny(n);
@@ -4055,23 +4053,51 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     return { x, y: -hh, rot: 0 };
   }
 
-  /** Does this primary port's machine also have a pickup? Only then does the
-   *  primary draw a spigot — the square glyph exists to be told apart from a
+  /** Where a secondary port's glyph sits, in the port node's own frame: exactly where
+   *  its duct lands, on whichever edge of its machine that turned out to be (D-41).
+   *  The same rule as the primary's square, deliberately — a port that moved for one
+   *  shape and not the other would be a second thing to remember every time you drag
+   *  a machine.
+   *
+   *  `tx`/`ty`/`anchor` place the role caption clear of the box on that same edge,
+   *  because a caption drawn over the machine's own name is how two ports on one
+   *  saw stop being readable. */
+  secondaryPortGlyph(n: NodeVM): { x: number; y: number; rot: number; tx: number; ty: number; anchor: string } {
+    const flat = { x: 0, y: 0, rot: 0, tx: 0, ty: -18, anchor: 'middle' };
+    const host = this.nodes.find(h => h.id === n.follows);
+    const last = this.ductPoints(n.id).at(-1);
+    if (!host || !last) return flat;
+    const hx = this.nx(host), hy = this.ny(host), hw = this.halfW(host), hh = this.halfH(host);
+    const dx = last.x - hx, dy = last.y - hy;
+    // Top first, so a run that lands in the corner reads as the top entry it prefers.
+    const seat = dy <= -hh + 1 ? { x: dx, y: -hh, rot: 0,   tx: 0,   ty: -18, anchor: 'middle' }
+               : dx <= -hw + 1 ? { x: -hw, y: dy, rot: -90, tx: -18, ty: 4,   anchor: 'end' }
+               : dx >=  hw - 1 ? { x:  hw, y: dy, rot: 90,  tx: 18,  ty: 4,   anchor: 'start' }
+               : { ...flat, x: dx, y: -hh };
+    // Back into the port's own frame: the <g> is already translated to the port node,
+    // which sits on the machine's top edge whether or not the duct ended up there.
+    return { ...seat, x: hx + seat.x - this.nx(n), y: hy + seat.y - this.ny(n) };
+  }
+
+  /** Does this primary port's machine also have a secondary port? Only then does the
+   *  primary draw a primary port — the square glyph exists to be told apart from a
    *  tapered one, so on a single-inlet machine it would distinguish nothing. */
-  private hasPickups(e: RawEl): boolean {
+  private hasSecondaryPorts(e: RawEl): boolean {
     const doc = this.topo as unknown as ShopDoc;
     const machine = machineOfPort(doc, e);
     return !!machine && supplementalCount(doc, machine.id as string) > 0;
   }
 
 
-  /** What a pickup is FOR, in the woodworker's word for it — the only thing that
-   *  distinguishes two ports on one saw. */
-  pickupRole(n: NodeVM): string { return (this.elem(n.id)?.['role'] as string) || 'pickup'; }
+  /** What a secondary port is FOR, in the woodworker's word for it — the only thing
+   *  that distinguishes two ports on one saw. Falls back to the name a port is born
+   *  with (D-39) rather than to a type name, which would caption the canvas in
+   *  vocabulary nobody at a bench uses. */
+  secondaryPortRole(n: NodeVM): string { return (this.elem(n.id)?.['role'] as string) || 'Auxiliary'; }
 
   private glyphFor(e: RawEl): Glyph {
     if (e['type'] === 'collector') return 'collector';
-    if (e['type'] === 'tool') return isPortSupplemental(e) ? 'pickup' : 'tool';
+    if (e['type'] === 'tool') return isPortSupplemental(e) ? 'secondaryPort' : 'tool';
     if (e['type'] === 'junction') return 'junction';
     switch (e['kind']) { case 'servoGate': return 'ballvalve'; case 'servoManifold': return 'manifold'; default: return 'slidingGate'; }
   }
@@ -4102,13 +4128,13 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
         configurable ? (isCalibrated(el as unknown as ConfigurableSelector) ? 'done' : 'todo')
         : (glyph === 'tool' || glyph === 'collector') ? (this.hasPlugEl(e) ? 'done' : 'todo')
         : '';
-      const seat = glyph === 'pickup' ? this.pickupSeat(e) : null;
+      const seat = glyph === 'secondaryPort' ? this.secondaryPortSeat(e) : null;
       return { id, glyph, name: (e['name'] as string) || id,
                col: seat?.cell.col ?? c.col, row: seat?.cell.row ?? c.row,
                branchCount, isUnit, span: isUnit ? Math.max(1, branchCount) : 1,
                live: false, openIndex: 0, setup, redundant: redundant.has(id),
                anchor: seat?.anchor, follows: seat?.follows,
-               inletDx: glyph === 'tool' && this.hasPickups(e) ? SPIGOT_DX : 0 };
+               inletDx: glyph === 'tool' && this.hasSecondaryPorts(e) ? PRIMARY_PORT_DX : 0 };
     });
     this.byId = new Map(this.nodes.map(n => [n.id, n]));
     this.recomputeExtent();
@@ -4116,7 +4142,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   private occupiedExcept(exclude: Set<string>): Set<string> {
     const occ = new Set<string>();
     for (const n of this.nodes) {
-      if (exclude.has(n.id) || n.glyph === 'pickup') continue;   // rides its machine's cell
+      if (exclude.has(n.id) || n.glyph === 'secondaryPort') continue;   // rides its machine's cell
       if (n.isUnit) for (let i = 0; i < n.span; i++) occ.add((n.col + i) + ',' + n.row);
       else occ.add(n.col + ',' + n.row);
     }
@@ -4246,8 +4272,8 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     const place = (id: string, row: number, forceCol?: number): void => {
       deepest = Math.max(deepest, row);
       const el = this.elem(id);
-      // A pickup is skipped entirely: it has no cell, it sits on its machine's box.
-      const kids = this.childrenOf(id).filter(k => this.glyphFor(this.elem(k) ?? {}) !== 'pickup');
+      // A secondary port is skipped entirely: it has no cell, it sits on its machine's box.
+      const kids = this.childrenOf(id).filter(k => this.glyphFor(this.elem(k) ?? {}) !== 'secondaryPort');
       const onOutlet = kids.filter(k => this.isUnitChild(k));
       const runKids = kids.filter(k => !this.isUnitChild(k));
       if (isUnitKind(el?.['kind'])) {
