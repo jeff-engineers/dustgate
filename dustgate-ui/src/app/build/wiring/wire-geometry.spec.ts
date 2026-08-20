@@ -5,8 +5,8 @@
  */
 
 import {
-  type Pt, BOARD_H, BOARD_W, CORNER_R, HOP_R, LANE_GAP, LANE_STEP, PORT_H, SERVO_PORTS,
-  cablePath, cableRun, crossing, portExit, portPos, PORT_STUB,
+  type Pt, BOARD_H, BOARD_W, CORNER_R, CROSSING_COST, HOP_R, LANE_GAP, LANE_STEP, PORT_H, SERVO_PORTS,
+  cablePath, cableRun, crossing, crossingCost, portExit, portPos, PORT_STUB,
   rankByTravel, segmentsOf,
 } from './wire-geometry';
 import { CELL, cellX, cellY, halfH, halfW } from '../routing/geometry';
@@ -273,6 +273,31 @@ group('W10 a cable pays to cross a piece, so it comes down beside one instead');
   // Nothing in the way: no detour, no extra bend.
   const clean = cableRun(from, P(496, 200), 0, 0, 0, cost);
   ok('an empty column is left alone', clean.length === 4, JSON.stringify(clean));
+}
+
+// ── W11 · crossing weights: box > wire > duct ────────────────────────────────
+group('W11 crossingCost weighs a device body over another cable over a duct');
+{
+  const a = P(0, 100), b = P(200, 100);          // one horizontal segment to score
+  const box = { x0: 90, y0: 50, x1: 110, y1: 150 };     // straddles y=100
+  const duct = [P(90, 0), P(90, 200)];                  // a vertical duct crossing it
+  const wire = [P(150, 0), P(150, 200)] as const;       // a previously-drawn cable, same shape
+
+  ok('nothing in the way costs nothing', crossingCost([], [], [])(a, b) === 0);
+  ok('a device body costs CROSSING_COST.box',
+     crossingCost([box], [], [])(a, b) === CROSSING_COST.box);
+  ok('a duct costs CROSSING_COST.duct', crossingCost([], [duct], [])(a, b) === CROSSING_COST.duct);
+  ok('another wire costs CROSSING_COST.wire', crossingCost([], [], [wire])(a, b) === CROSSING_COST.wire);
+  ok('a wire costs more than a duct — the point of this whole table',
+     CROSSING_COST.wire > CROSSING_COST.duct);
+  ok('a device body costs more than either', CROSSING_COST.box > CROSSING_COST.wire);
+  // All three at once: costs add, they do not just take the worst offender.
+  ok('costs from every kind of thing in the way add up',
+     crossingCost([box], [duct], [wire])(a, b) === CROSSING_COST.box + CROSSING_COST.duct + CROSSING_COST.wire);
+  // A segment that misses everything pays nothing, even with plenty around to hit.
+  const clear = P(300, 100);
+  ok('a segment that clears every obstacle is untouched',
+     crossingCost([box], [duct], [wire])(P(250, 100), clear) === 0);
 }
 
 console.log(`\n${checks - failures}/${checks} checks passed`);

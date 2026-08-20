@@ -18,8 +18,13 @@ const DX = [1, 0, -1, 0];
 const DY = [0, 1, 0, -1];
 const opposite = (d: Dir): Dir => ((d + 2) % 4) as Dir;
 
-/** A place a duct may attach, and the direction it leaves the device in. */
-export interface Port { pt: Pt; dir: Dir; }
+/** A place a duct may attach, and the direction it leaves the device in.
+ *
+ *  `bias` is a soft extra cost charged ONLY if the search settles on this port as
+ *  the goal — it never affects the search while a cheaper pairing is still live, so
+ *  a genuinely shorter run to a biased port still wins. Used to prefer one entrance
+ *  over another that's otherwise equally valid, without closing the door on it. */
+export interface Port { pt: Pt; dir: Dir; bias?: number; }
 
 /** Costs, in units where one lattice step is 4. The plan specifies 1 / +8 / +6 /
  *  +2 / −3; everything is scaled by 4 so the reuse discount can't make an edge
@@ -33,6 +38,8 @@ const CROSS = 40;     // a NODE another duct passes through: this is what a cros
                       // than a bend, because the tidiest crossing is the one not drawn.
 const HUG = 8;        // an edge running right alongside a device
 const REUSE = 3;      // discount for an edge this duct used last frame — keeps a good prefix
+const TOP_ENTRY_BIAS = STEP * 3;   // see the Port.bias doc — enough to win a near-tie,
+                                    // not enough to out-price a meaningfully shorter side run
 /** Cheapest an edge can ever be; the A* heuristic must not exceed this per step. */
 const MIN_STEP = STEP - REUSE;
 
@@ -104,7 +111,14 @@ export function inPorts(n: SceneNode): Port[] {
   // duct's 6px stroke half on top of the gate's own outline, so the run and the box
   // read as one shape and you couldn't see where the pipe ended.
   if (n.isUnit) return [{ pt: { x: n.x, y: n.y - UNIT_H / 2 - INLET_GAP }, dir: 3 }];
-  if (n.glyph === 'tool' || n.glyph === 'ballvalve') return sidePorts(n, 3);
+  // A trunk really can reach a tool from either side, and closing that off would
+  // be wrong — but a duct dropping in from directly above reads as "this is what
+  // feeds it" at a glance, where a side entry can look like it's skirting past on
+  // its way somewhere else. The bias breaks a near-tie toward the top without
+  // sending the router miles out of its way when a side entry is genuinely the
+  // shorter path — see TOP_ENTRY_BIAS.
+  if (n.glyph === 'tool' || n.glyph === 'ballvalve')
+    return sidePorts(n, 3).map(p => p.dir === 3 ? p : { ...p, bias: TOP_ENTRY_BIAS });
   // A PICKUP is a hood on the top edge of a machine's box, so there is exactly one
   // way in: down onto its point. Left it on allSidePorts and a duct would happily
   // arrive from beneath — which means straight up through the machine the hood is
@@ -301,7 +315,7 @@ export function routeOne(from: Port[], to: Port[], opts: GridOpts): RouteResult 
       const here = goals.get(cell);
       if (here) {
         for (const goal of here) {
-          const cost = g[state] + (d === goal.approach ? 0 : TURN);
+          const cost = g[state] + (d === goal.approach ? 0 : TURN) + (goal.port.bias ?? 0);
           if (cost < bestGoalCost) { bestGoalCost = cost; bestGoal = state; bestGoalPort = goal.port; }
         }
       }

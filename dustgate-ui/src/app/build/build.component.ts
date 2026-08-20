@@ -29,8 +29,9 @@ import { type RoutedDuct, type Scene, Router, sceneBounds } from './routing/rout
 import { CanvasViewport } from './canvas-viewport';
 import {
   PORT_H, SERVO_PORTS, TAB_H, TAB_W,
-  cablePath, cableRun, crossing,
+  cablePath, cableRun, crossingCost,
   portPos, portWidth, portExit, rankByTravel, segmentsOf,
+  type Seg,
 } from './wiring/wire-geometry';
 
 // ── Layout model ──────────────────────────────────────────────────────────────
@@ -2451,16 +2452,14 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
    * those turns an ordinary run into a washboard.
    */
   /** What a cable pays to cross things, for the drop-column choice in cableRun().
+   *  The weighting itself (box vs duct vs another wire) is crossingCost() in
+   *  wire-geometry.ts, so it's asserted directly rather than only observed through
+   *  whichever path a full route happens to settle on — this just supplies this
+   *  board's own geometry.
    *
-   *  A device body is expensive: a wire drawn over a gate or through a tool reads as
-   *  going INTO it, and the piece it actually serves is somewhere else entirely. A
-   *  duct is cheap but not free — cable crosses ductwork all day in a real shop, and
-   *  a crossing is drawn plainly rather than hopped (see cablePath), so it costs
-   *  enough to break a tie and not enough to send a wire round the shop to avoid one.
-   *
-   *  The gate being wired is excluded: its tab sits ON its own top edge, so it would
-   *  otherwise price every approach to itself out of reach. */
-  private cableCost(gateId: string): (a: Pt, b: Pt) => number {
+   *  The gate being wired is excluded from device bodies: its tab sits ON its own
+   *  top edge, so it would otherwise price every approach to itself out of reach. */
+  private cableCost(gateId: string, drawn: readonly Seg[]): (a: Pt, b: Pt) => number {
     const boxes = this.nodes
       .filter(n => n.id !== gateId)
       .map(n => deviceBox(this.sceneNode(n), 6));
@@ -2469,16 +2468,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     // wire could cross for nothing because everything down there was dimmed anyway.
     // The rail is gone and with it the band: every stretch of this canvas is ordinary
     // board now, and a wire drawn over a piece means the same thing wherever it is.
-    return (a, b) => {
-      let c = 0;
-      for (const box of boxes) if (segBoxHit(a, b, box)) c += 100;
-      for (const pts of ducts) {
-        for (let i = 0; i < pts.length - 1; i++) {
-          if (crossing([a, b] as const, [pts[i], pts[i + 1]] as const)) { c += 3; break; }
-        }
-      }
-      return c;
-    };
+    return crossingCost(boxes, ducts, drawn);
   }
 
   /** The shade this board's wiring wears.
@@ -2517,7 +2507,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
         // No body clearance to reserve any more: the tab is on the gate's TOP edge,
         // so a lane one gap above it is already clear of the box. It was halfH back
         // when the cable landed underneath and had to get past the gate to reach it.
-        const pts = cableRun(l.from, l.to, rank.get(l) ?? 0, bias, 0, this.cableCost(l.gateId));
+        const pts = cableRun(l.from, l.to, rank.get(l) ?? 0, bias, 0, this.cableCost(l.gateId, drawn));
         out.push({ id: b.id + ':' + l.channel, gateId: l.gateId, boardId: b.id, channel: l.channel,
                    d: cablePath(pts, drawn), shade: this.boardShade(b.id) });
         drawn.push(...segmentsOf(pts));

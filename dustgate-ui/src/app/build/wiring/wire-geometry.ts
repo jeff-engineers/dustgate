@@ -11,7 +11,7 @@
  *  the whole thing is testable with `npm run test:wiring`.
  */
 
-import { BOARD_H, BOARD_W, CELL, PAD } from '../routing/geometry';
+import { type Box, type Pt as GeomPt, BOARD_H, BOARD_W, CELL, PAD, segBoxHit } from '../routing/geometry';
 
 // ── board metrics ────────────────────────────────────────────────────────────
 /** A board is drawn as the module it is: a body with a row of ports on its
@@ -112,6 +112,39 @@ export function tabPos(gate: Pt, halfW: number): Pt {
  */
 export type SegCost = (a: Pt, b: Pt) => number;
 
+/** What a cable pays to cross each kind of thing in its way, for pickDrop()'s
+ *  choice of column. Exported so the weighting is asserted directly rather than
+ *  only observed through whichever path a full route happens to settle on.
+ *
+ *  A device body is expensive: a wire drawn over a gate or through a tool reads as
+ *  going INTO it, and the piece it actually serves is somewhere else entirely. A
+ *  duct is cheap — cable crosses ductwork all day in a real shop, and the crossing
+ *  is drawn plainly rather than hopped (see cablePath) — so it costs just enough to
+ *  break a tie, never enough to send a wire round the shop to dodge one. A
+ *  previously-drawn CABLE costs more than a duct: the per-board lane nesting in
+ *  cableRun already keeps one board's own runs apart, this is for the crossings it
+ *  can't reach — two boards' bundles, or two runs to opposite corners of the
+ *  canvas — which used to get a cosmetic hop and nothing else, so the router had no
+ *  reason to prefer the tidier column when one was available. */
+export const CROSSING_COST = { box: 100, duct: 1, wire: 8 } as const;
+
+/** A SegCost that charges CROSSING_COST for each kind of thing `[a, b]` crosses.
+ *  `ducts` is a set of polylines (their own individual segments are checked);
+ *  `drawn` is already-flattened wire segments. */
+export function crossingCost(boxes: readonly Box[], ducts: readonly GeomPt[][], drawn: readonly Seg[] = []): SegCost {
+  return (a, b) => {
+    let c = 0;
+    for (const box of boxes) if (segBoxHit(a, b, box)) c += CROSSING_COST.box;
+    for (const pts of ducts) {
+      for (let i = 0; i < pts.length - 1; i++) {
+        if (crossing([a, b] as const, [pts[i], pts[i + 1]] as const)) { c += CROSSING_COST.duct; break; }
+      }
+    }
+    for (const seg of drawn) if (crossing([a, b] as const, seg)) c += CROSSING_COST.wire;
+    return c;
+  };
+}
+
 /** Which vertical corridor a cable comes down in.
  *
  *  It used to be "the tab's own x, always", which is right until something stands
@@ -189,7 +222,7 @@ export function rankByTravel<T>(items: T[], span: (t: T) => number): Map<T, numb
 }
 
 // ── crossings ────────────────────────────────────────────────────────────────
-type Seg = readonly [Pt, Pt];
+export type Seg = readonly [Pt, Pt];
 const isH = (s: Seg) => Math.abs(s[0].y - s[1].y) < 0.5;
 
 export function segmentsOf(pts: readonly Pt[]): Seg[] {

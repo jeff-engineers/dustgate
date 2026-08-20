@@ -117,6 +117,24 @@ group('R3  sideways runs enter the tool from the side');
      `terminated at ${JSON.stringify(last)}`);
 }
 
+// ── R3b · a near-tie between top and side entry favours the top ─────────────
+
+group('R3b top entry is preferred when it is roughly as cheap as a side one');
+{
+  // Diagonal offset, one cell each way: the tool's left port and its top port are
+  // almost exactly as far from the collector's right port (152px, one bend,
+  // either way) — the kind of near-tie R3's flat and directly-below cases don't
+  // reach, and where the router used to have no reason to prefer one over the
+  // other. TOP_ENTRY_BIAS (route-grid.ts) is what decides it now.
+  const s = scene([collector('dc', 0, 0), tool('t', 1, 1)], [{ childId: 't', parentId: 'dc' }]);
+  eqPath('diagonal down-right → still enters from the top', path(routeAll(s), 't'),
+    [[94, 64], [172, 64], [172, 138]]);
+
+  // The bias is a tiebreaker, not a mandate — R3 already covers the case where a
+  // side entry is CLEARLY shorter (same row, flat) and confirms it still wins
+  // there; this just adds the near-tie this bias exists for.
+}
+
 // ── R4 · obstacle in the span ────────────────────────────────────────────────
 
 // The y of every tool endpoint moved 256 → 246 (and 148 → 138) on 2026-08-15,
