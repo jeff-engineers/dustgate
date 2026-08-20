@@ -101,7 +101,7 @@ const DECISIONS = [
   // ── newest ───────────────────────────────────────────────────────────
   { id: 'D-38', date: '2026-08-20', area: 'control', status: 'standing',
     what: 'Primary ports are always on; secondary ports are on whenever possible',
-    why: 'A tool’s <b>primary</b> port is always connected to suction with its collector running — non-negotiable. Its <b>secondary</b> port gets its own system’s collector turned on too, whenever that system is free. When another tool needs that system, the auxiliary port is temporarily disconnected and the tool that needs it runs; it reconnects once the contest clears. <b>Supersedes the earlier "never both" constraint</b> — both blowers do run when they can.',
+    why: 'A tool’s <b>primary</b> port is always connected to suction with its collector running — non-negotiable. Its <b>secondary</b> port gets its own system’s collector turned on too, whenever that system is free. When another tool needs that system, the auxiliary port is temporarily disconnected and the tool that needs it runs; it reconnects once the contest clears. <b>"Never both" in the 2026-08-16 parking note meant two TOOLS at once, not two blowers</b> — one machine drives both its collectors, and the one-tool-at-a-time assumption is D-08, untouched.',
     where: 'Already implemented and tested on both sides: arbitration order (primary beats supplemental, then most-recent-wins within each) in shop.js routeShop() and control/Shop.h:260, and the C++ test "one machine starts both blowers" (test_nodebus.cpp). A dropped supplemental degrades a machine to <code>partial</code>, never <code>stripped</code>.' },
 
   // ── open questions, deliberately parked ──────────────────────────────
@@ -117,8 +117,8 @@ const DECISIONS = [
 
   // ── canvas ───────────────────────────────────────────────────────────
   { id: 'D-35', date: '2026-08-20', area: 'canvas', status: 'soon',
-    what: 'A second pickup is added by dragging a run onto the machine, not from a menu',
-    why: 'Drop a run end on a machine that already has a duct and confirm. The port is born attached, so there is never an orphan open end or an invalid document. Replaces the menu item entirely — two ways in would mean keeping the broken one.',
+    what: 'A second pickup is added by a drag, in either direction — not from a menu',
+    why: 'Drop a run end on a machine that already has a duct, <b>or</b> pull a run out of that machine’s hollow spare inlet and drop it on a gate in the other system. Same confirmation, same port, whichever way you dragged: the two ends sit in different systems and often far apart on a stacked canvas, so neither end is privileged and neither is made the only handle. The port is born attached, so there is never an orphan open end or an invalid document. Replaces the menu item entirely — two ways in would mean keeping the broken one.',
     where: 'canvas.html §4. The gesture was first recorded 2026-08-16: "you drag a hose across the boundary and land it on a port, and the same action can create that port."' },
 
   { id: 'D-39', date: '2026-08-20', area: 'canvas', status: 'soon',
