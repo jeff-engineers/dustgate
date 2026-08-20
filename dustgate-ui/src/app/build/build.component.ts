@@ -215,6 +215,9 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   /** Why the cell under a drag won't take the piece, or '' while it will. Shown live
    *  in the guidance bar so a refused drop is never a silent one. */
   dropBlocked = '';
+  /** Advisory counterpart to dropBlocked: the drop IS allowed, this just says what
+   *  the ductwork will look like once it lands. See placeCheck(). */
+  dropWarn = '';
   /** Snapped cell under the pointer mid-drag; drives the target-cell highlight. */
   hoverCell: Cell | null = null;
   menu: { x: number; y: number; branch?: BDot; end?: string; convert?: string;
@@ -1128,7 +1131,9 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     const { col, row } = this.dragCell({ x: n.dragX, y: n.dragY });
     if (col === this.hoverCell?.col && row === this.hoverCell?.row) return;
     this.hoverCell = { col, row };
-    this.dropBlocked = (col === n.col && row === n.row) ? '' : this.placeBlockedBy(n, col, row);
+    const chk = (col === n.col && row === n.row)
+      ? { blocked: '', warn: '' } : this.placeCheck(n, col, row);
+    this.dropBlocked = chk.blocked; this.dropWarn = chk.warn;
   }
   private onUp(evt: PointerEvent): void {
     const n = this.byId.get(this.dragId ?? '');
@@ -1166,7 +1171,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     // editable name on its label. What the piece IS — its kind, its setup, its plug —
     // moved to the badge, because tapping the name to rename it and tapping it to
     // open a menu were the same gesture, and the menu won.
-    this.dragId = null; this.hoverCell = null; this.dropBlocked = '';
+    this.dragId = null; this.hoverCell = null; this.dropBlocked = ''; this.dropWarn = '';
     this.detachDrag();
   }
   private detachDrag(): void {
@@ -1182,46 +1187,67 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   private canPlace(n: NodeVM, col: number, row: number): boolean {
-    return this.placeBlockedBy(n, col, row) === '';
+    return this.placeCheck(n, col, row).blocked === '';
   }
 
-  /** Why `n` can't stand at (col,row) — '' when it can. The wording is what the user
-   *  sees in the guidance bar mid-drag, so it names the thing in the way, not the
-   *  predicate that failed. */
-  private placeBlockedBy(n: NodeVM, col: number, row: number): string {
+  /**
+   * What happens if `n` stands at (col,row): `blocked` is non-empty only when the
+   * drop is REFUSED, `warn` says what the ductwork will look like otherwise. Both
+   * are the wording the user sees in the guidance bar mid-drag, so they name the
+   * thing involved rather than the predicate that fired.
+   *
+   * ONLY two things refuse a drop: another piece is already standing there, or the
+   * row belongs to a different system. Everything about routing QUALITY is
+   * advisory, because a half-finished shop is exactly the state someone is dragging
+   * their way OUT of — refusing those moves strands them in a layout they can't
+   * edit. That is not hypothetical: the duct checks below used to refuse, and one
+   * unroutable run anywhere (an unplumbed pickup, say) froze every piece on the
+   * board.
+   */
+  private placeCheck(n: NodeVM, col: number, row: number): { blocked: string; warn: string } {
     // A system owns a contiguous stripe of rows, and that's what makes the grey
     // ground drawable at all: the two never interleave, so the boundary is one row
     // rather than a shape. Refusing the drop keeps that true without the drag having
     // to reflow the other system out of the way mid-gesture.
     const band = this.bandBlockedBy(n.id, row);
-    if (band) return `That row belongs to ${band}. A piece stays in its own system.`;
+    if (band) return { blocked: `That row belongs to ${band}. A piece stays in its own system.`, warn: '' };
     const cells: Cell[] = n.isUnit ? Array.from({ length: n.span }, (_, i) => ({ col: col + i, row })) : [{ col, row }];
     // occupantAt covers boards as well as pieces — a board owns its cell, so a gate
     // dropped on one is refused with the board named, same as any other collision.
     const hit = cells.map(c => this.occupantAt(c.col, c.row, n.id)).find(name => name);
     if (hit) {
-      return n.isUnit
+      return { blocked: n.isUnit
         ? `${this.pieceLabel(n)} needs ${n.span} free cells in a row — ${hit} is in the way.`
-        : `${hit} is already in that cell.`;
+        : `${hit} is already in that cell.`, warn: '' };
     }
-    // No duct may cross a device. Test at the CANDIDATE position (so the moved node's
-    // own ducts reroute), then require every device to be clear of every foreign duct —
-    // this catches both "device lands on a duct" and "moved duct now runs through
-    // another device". Restore position afterwards.
+
+    // Everything from here is advisory, and BASELINED against where things already
+    // stand: only a run this move actually breaks is worth mentioning. Reporting the
+    // shop's existing damage at every candidate cell is what made the old refusal
+    // permanent rather than situational.
+    const devices = this.nodes.filter(m => m.glyph !== 'junction' && m.glyph !== 'collector');
+    const wasCrossed = new Set(devices.filter(m => this.deviceCrossed(m)).map(m => m.id));
+    const wasBoxed = new Set(this.ducts.filter(d => this.ductBoxedIn(d.childId)).map(d => d.childId));
+
+    // Test at the CANDIDATE position so the moved node's own ducts reroute, then
+    // restore. Catches both "device lands on a duct" and "moved duct now runs
+    // through another device".
     const sc = n.col, sr = n.row, dx = n.dragX, dy = n.dragY;
     n.col = col; n.row = row; n.dragX = undefined; n.dragY = undefined;
     let blocker: NodeVM | null = null;
-    let boxedIn = false;
-    for (const m of this.nodes) {
-      if (m.glyph === 'junction' || m.glyph === 'collector') continue;   // devices only
-      if (this.deviceCrossed(m)) { blocker = m; break; }
+    for (const m of devices) {
+      if (!wasCrossed.has(m.id) && this.deviceCrossed(m)) { blocker = m; break; }
     }
-    if (!blocker) boxedIn = this.ducts.some(d => this.ductBoxedIn(d.childId));
+    const newlyBoxed = !blocker
+      && this.ducts.some(d => !wasBoxed.has(d.childId) && this.ductBoxedIn(d.childId));
     n.col = sc; n.row = sr; n.dragX = dx; n.dragY = dy;
     this.router.invalidate();
-    if (blocker) return `A duct would have to run through ${blocker.name} to get there.`;
-    if (boxedIn) return 'No room for the duct to reach it there.';
-    return '';
+
+    // Present tense on purpose. These read "would have to … to get there" while they
+    // were refusals; they now describe what the drawing does, not what stops you.
+    if (blocker) return { blocked: '', warn: `The duct will have to run through ${blocker.name}.` };
+    if (newlyBoxed) return { blocked: '', warn: 'The duct has no clear way in there.' };
+    return { blocked: '', warn: '' };
   }
 
   /** Why `id` can't sit on `row`, in terms of the system next door — null when it can.
@@ -2256,12 +2282,16 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
 
   /** Why a board can't stand at (col,row) — '' when it can. Same guidance-bar
    *  sentence a piece drag gets, naming the thing in the way. */
-  private boardBlockedBy(selfId: string, col: number, row: number): string {
-    if (col < 0 || row < 0) return '';
+  private boardCheck(selfId: string, col: number, row: number): { blocked: string; warn: string } {
+    if (col < 0 || row < 0) return { blocked: '', warn: '' };
     const hit = this.occupantAt(col, row, selfId);
-    if (hit) return `${hit} is already in that cell.`;
-    if (this.cellOnDuct(col, row, selfId)) return 'A duct runs through that cell.';
-    return '';
+    if (hit) return { blocked: `${hit} is already in that cell.`, warn: '' };
+    // Advisory, not a refusal: a board owns its cell and ducts route AROUND it, so a
+    // run crossing that cell today simply moves once the board lands. Refusing
+    // assumed the duct was stuck where it was.
+    if (this.cellOnDuct(col, row, selfId))
+      return { blocked: '', warn: 'A duct runs through there — it will reroute around the board.' };
+    return { blocked: '', warn: '' };
   }
 
   /** What is standing on this cell, named — a piece, or another board. */
@@ -2571,8 +2601,9 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     if (at.col === this.hoverCell?.col && at.row === this.hoverCell?.row) return;
     this.hoverCell = at;
     const home = this.boardCells.get(d.id);
-    this.dropBlocked = (home && at.col === home.col && at.row === home.row)
-      ? '' : this.boardBlockedBy(d.id, at.col, at.row);
+    const chk = (home && at.col === home.col && at.row === home.row)
+      ? { blocked: '', warn: '' } : this.boardCheck(d.id, at.col, at.row);
+    this.dropBlocked = chk.blocked; this.dropWarn = chk.warn;
   }
   private onBoardUp(): void {
     this.vp.endEdgeScroll();
@@ -2580,12 +2611,12 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     window.removeEventListener('pointerup', this.boUp);
     const d = this.bodrag; const pt = this.boardDragPt;
     this.bodrag = null; this.boardDragPt = null;
-    this.hoverCell = null; this.dropBlocked = '';
+    this.hoverCell = null; this.dropBlocked = ''; this.dropWarn = '';
     if (!d || !pt || !d.moved) return;
     const to = this.dragCell(pt);
     const home = this.boardCells.get(d.id);
     if (!home || (to.col === home.col && to.row === home.row)) return;
-    if (this.boardBlockedBy(d.id, to.col, to.row)) return;
+    if (this.boardCheck(d.id, to.col, to.row).blocked) return;
     this.pushHistory(null);
     this.boardCells.set(d.id, to);
     this.dirty = true; this.saveError = ''; this.saveNote = '';
@@ -3183,6 +3214,10 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     // Mid-drag, the reason a drop won't work outranks everything: it's about the
     // gesture in progress, and saying it before the finger lifts is the whole point.
     if (this.dropBlocked) return { text: this.dropBlocked, kind: 'warn' };
+    // …and just under it, what the drop WILL do if it isn't refused. Deliberately
+    // 'info', not 'warn': the amber of a refusal on a move that is about to succeed
+    // reads as "stop", which is the confusion this whole split exists to undo.
+    if (this.dropWarn) return { text: this.dropWarn, kind: 'info' };
     if (this.saveError) return { text: this.saveError, kind: 'warn' };
     if (this.wip) return { text: `Work in progress — saved here, but the controller won’t take it yet: ${this.wip}.`, kind: 'warn' };
 
