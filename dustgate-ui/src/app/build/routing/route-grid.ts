@@ -117,8 +117,14 @@ export function inPorts(n: SceneNode): Port[] {
   // its way somewhere else. The bias breaks a near-tie toward the top without
   // sending the router miles out of its way when a side entry is genuinely the
   // shorter path — see TOP_ENTRY_BIAS.
+  //
+  // The top port also carries `inletDx`, so on a machine wearing a spigot the duct
+  // lands ON that glyph instead of on the box's centreline — the glyph IS the
+  // entry point, and one drawn anywhere else is just a decal.
   if (n.glyph === 'tool' || n.glyph === 'ballvalve')
-    return sidePorts(n, 3).map(p => p.dir === 3 ? p : { ...p, bias: TOP_ENTRY_BIAS });
+    return sidePorts(n, 3).map(p => p.dir === 3
+      ? { ...p, pt: { x: p.pt.x + (n.inletDx ?? 0), y: p.pt.y } }
+      : { ...p, bias: TOP_ENTRY_BIAS });
   // A PICKUP is a hood on the top edge of a machine's box, so there is exactly one
   // way in: down onto its point. Left it on allSidePorts and a duct would happily
   // arrive from beneath — which means straight up through the machine the hood is

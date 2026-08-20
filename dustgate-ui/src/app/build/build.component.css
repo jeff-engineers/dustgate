@@ -103,8 +103,12 @@ svg.canvas { display: block; touch-action: none; }
 .node .tool-body { fill: #16262e; stroke: #2d6a86; }
 /* A second pickup, drawn ON the machine rather than beside it. Same azure family as
    the body it sits on, because it IS that machine — just another way in. */
-.node .hood { fill: #1d3540; stroke: #2d6a86; stroke-width: 1.6; }
-.node.sel .hood { stroke: var(--accent); stroke-width: 2.2; }
+/* The two inlet glyphs share one look on purpose — same fill, same stroke — so the
+   only thing telling them apart is the SHAPE: square spigot = the machine's primary
+   port, tapered hood = a pickup. Colouring them differently would add a second
+   variable to read where one does the job. */
+.node .hood, .node .spigot { fill: #1d3540; stroke: #2d6a86; stroke-width: 1.6; }
+.node.sel .hood, .node.sel .spigot { stroke: var(--accent); stroke-width: 2.2; }
 .hood-role { fill: var(--muted); font-size: 9px; text-anchor: middle; letter-spacing: 0.05em; }
 .node.sel .body, .node.sel .unit { stroke: var(--accent); stroke-width: 2.5; }
 .node.live .body, .node.live .unit { stroke: var(--success); }

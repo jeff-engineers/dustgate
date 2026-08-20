@@ -51,6 +51,23 @@ export const INLET_GAP = 12;
 export type Glyph = 'collector' | 'slidingGate' | 'ballvalve' | 'manifold' | 'junction' | 'tool' | 'pickup' | 'board';
 /** Half-width of the hood a pickup draws, and the box the router steers around. */
 export const PICKUP_HALF = 9;
+
+/** The SPIGOT: the square inlet a machine's PRIMARY port draws on its top edge,
+ *  opposite the tapered hood(s) of its pickups. Square = the main port, tapered =
+ *  a pickup — the vocabulary docs/mockups/secondary-ports.html Option A settles on.
+ *
+ *  It appears only on a machine that HAS a pickup. The point of the pair is to say
+ *  which inlet is which, and a lone duct landing on a lone box already says that,
+ *  so a spigot on every tool in the shop would be decoration rather than
+ *  information.
+ *
+ *  {@link SPIGOT_DX} is why the router needs {@link SceneNode.inletDx}: the duct has
+ *  to LAND on the glyph, so the top inlet port moves left with it. The offsets are
+ *  the mockup's proportions (-0.40 and +0.57 of half-width) rescaled to this
+ *  canvas's narrower 76px tool body. */
+export const SPIGOT_W = 14;
+export const SPIGOT_H = 11;
+export const SPIGOT_DX = -17;
 /** A board's body. Deliberately narrower than a CELL so two boards on neighbouring
  *  cells have air between them instead of sharing an edge and reading as one module. */
 export const BOARD_W = 96;
@@ -65,6 +82,11 @@ export interface SceneNode {
   span: number;
   x: number;
   y: number;
+  /** Shifts this device's TOP inlet off its centreline, so a duct lands on the
+   *  glyph that marks the entry rather than on the middle of the box. Set for a
+   *  machine wearing a spigot ({@link SPIGOT_DX}); 0 or absent for everything
+   *  else, which keeps every other device entering dead centre as before. */
+  inletDx?: number;
 }
 
 export function cellX(col: number): number { return PAD + col * CELL; }

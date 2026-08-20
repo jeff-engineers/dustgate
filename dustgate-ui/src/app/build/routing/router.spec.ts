@@ -4,7 +4,7 @@
  *      npm run test:routing
  */
 
-import { type SceneNode, CELL, CLEARANCE, PAD, deviceBox, segBoxHit } from './geometry';
+import { type SceneNode, CELL, CLEARANCE, PAD, SPIGOT_DX, cellX, deviceBox, segBoxHit } from './geometry';
 import { type Scene, type RoutedDuct, Router, routeAll, sceneBounds } from './router';
 
 // ── harness ──────────────────────────────────────────────────────────────────
@@ -133,6 +133,29 @@ group('R3b top entry is preferred when it is roughly as cheap as a side one');
   // The bias is a tiebreaker, not a mandate — R3 already covers the case where a
   // side entry is CLEARLY shorter (same row, flat) and confirms it still wins
   // there; this just adds the near-tie this bias exists for.
+}
+
+// ── R3c · a duct lands on the spigot, not the centreline ────────────────────
+
+group('R3c inletDx moves the top inlet onto the glyph that marks it');
+{
+  // A machine wearing a spigot: its top inlet shifts with the glyph, so the duct
+  // terminates ON it. Without this the drawing put a square inlet 17px left of
+  // where the pipe actually arrived, which is the whole point of the glyph.
+  const withSpigot: SceneNode = { ...tool('saw', 0, 1), inletDx: SPIGOT_DX };
+  const s = scene([collector('dc', 0, 0), withSpigot], [{ childId: 'saw', parentId: 'dc' }]);
+  const p = path(routeAll(s), 'saw');
+  const end = p[p.length - 1];
+  ok('the duct ends on the spigot, not the box centre',
+     Math.round(end.x) === Math.round(cellX(0) + SPIGOT_DX),
+     `ended at ${JSON.stringify(end)}, spigot at x=${cellX(0) + SPIGOT_DX}`);
+
+  // Unset (every other device, and a machine with no pickup) is unchanged: dead
+  // centre, exactly as R3's directly-below case already asserts.
+  const plain = scene([collector('dc', 0, 0), tool('saw', 0, 1)], [{ childId: 'saw', parentId: 'dc' }]);
+  const pe = path(routeAll(plain), 'saw');
+  ok('without inletDx the inlet stays on the centreline',
+     Math.round(pe[pe.length - 1].x) === Math.round(cellX(0)));
 }
 
 // ── R4 · obstacle in the span ────────────────────────────────────────────────

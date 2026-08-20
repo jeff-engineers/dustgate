@@ -24,6 +24,7 @@ import {
   type Glyph, type Pt, type SceneNode,
   BOARD_H, BOARD_W, CELL, GATE_PAD, PAD, TOOL_HALF, UNIT_H,
   cellX, cellY, deviceBox, halfH as glyphHalfH, halfW as glyphHalfW, ptSegDist, segBoxHit,
+  SPIGOT_DX, SPIGOT_H, SPIGOT_W,
 } from './routing/geometry';
 import { type RoutedDuct, type Scene, Router, sceneBounds } from './routing/router';
 import { CanvasViewport } from './canvas-viewport';
@@ -58,10 +59,15 @@ const SYSTEM_GAP = 1;
  *  bands dragged flush against each other still read as two. */
 const GROUND_INSET = 10;
 /** Where the first pickup hood sits on a machine's top edge, and the pitch between
- *  them. Right of centre, because the trunk's own inlet lands at the middle and every
- *  drawing that already exists has to keep landing there. */
-const PICKUP_DX = 20;
-const PICKUP_STEP = 20;
+ *  them. RIGHT of the centreline, with the primary's spigot going LEFT of it
+ *  (SPIGOT_DX) — the two-inlet arrangement Option A settles on.
+ *
+ *  Tightened from 20/20 when the spigot arrived: at the old pitch a second hood sat
+ *  at +40 on a body whose edge is at +38, so it hung off the corner. At 15/14 the
+ *  furthest hood ends exactly on the edge, and the spigot still clears the nearest
+ *  one by 16px. */
+const PICKUP_DX = 15;
+const PICKUP_STEP = 14;
 /** Extra pickups one machine may have. Mirrors MAX_SUPPLEMENTAL_PORTS in shop.js —
  *  change one, change both. */
 const MAX_PICKUPS = 2;
@@ -85,6 +91,10 @@ interface NodeVM {
    *  supplemental port has NO cell — it rides on the top edge of the machine's box,
    *  which is what keeps one machine drawn as one machine. */
   anchor?: { dx: number; dy: number };
+  /** This machine wears a square spigot on its top edge, because it also has at
+   *  least one tapered hood and the pair is what tells them apart. Moves its top
+   *  inlet off the centreline to match — see SPIGOT_DX. */
+  spigot?: boolean;
   dragX?: number; dragY?: number;
 }
 interface DuctVM { childId: string; live: boolean; open: boolean; }
@@ -222,6 +232,9 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   menuTitle = '';
   readonly CELL = CELL; readonly UNIT_H = UNIT_H; readonly GATE_PAD = GATE_PAD; readonly PAD = PAD;
   readonly TOOL_HALF = TOOL_HALF;
+  readonly SPIGOT_DX = SPIGOT_DX;
+  readonly SPIGOT_W = SPIGOT_W;
+  readonly SPIGOT_H = SPIGOT_H;
   readonly BOARD_W = BOARD_W; readonly BOARD_H = BOARD_H;
   readonly PORT_H = PORT_H; readonly TAB_W = TAB_W; readonly TAB_H = TAB_H;
   readonly SERVO_PORTS = SERVO_PORTS;
@@ -430,6 +443,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     const nodes: SceneNode[] = this.nodes.map(n => ({
       id: n.id, glyph: n.glyph, isUnit: n.isUnit, span: n.span,
       x: this.routeX(n), y: this.routeY(n),
+      inletDx: n.spigot ? SPIGOT_DX : 0,
     }));
     // Boards are obstacles too — that is the whole point of a board owning its cell.
     // They carry no ducts, so they only ever appear here as boxes to steer around.
@@ -449,12 +463,21 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   /** Where the router thinks a node is. A dragged glyph tracks the pointer visually,
    *  but routes off the SNAPPED cell — so a run re-solves when the pointer crosses a
    *  cell boundary, not on every pixel of travel. That alone is most of why dragging
-   *  used to degrade the further you went. */
+   *  used to degrade the further you went.
+   *
+   *  The `anchor` is added back on afterwards, because a pickup HAS no cell of its
+   *  own — it borrows its machine's and lives at an offset from it. Snapping alone
+   *  therefore put the router's idea of a hood at the centre of the machine's box
+   *  while the drawing had it 15px to the right, so a pickup's duct terminated on
+   *  the machine's centreline and the hood sat off on its own with nothing reaching
+   *  it. That is the whole "the second port gets centered" bug. */
   private routeX(n: NodeVM): number {
-    return n.dragX == null ? PAD + n.col * CELL : PAD + Math.max(0, Math.round((n.dragX - PAD) / CELL)) * CELL;
+    const cell = n.dragX == null ? PAD + n.col * CELL : PAD + Math.max(0, Math.round((n.dragX - PAD) / CELL)) * CELL;
+    return cell + (n.anchor?.dx ?? 0);
   }
   private routeY(n: NodeVM): number {
-    return n.dragY == null ? PAD + n.row * CELL : PAD + Math.max(0, Math.round((n.dragY - PAD) / CELL)) * CELL;
+    const cell = n.dragY == null ? PAD + n.row * CELL : PAD + Math.max(0, Math.round((n.dragY - PAD) / CELL)) * CELL;
+    return cell + (n.anchor?.dy ?? 0);
   }
 
   /** Solved routes for the whole board. During a drag every duct NOT attached to the
@@ -490,7 +513,8 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   /** Approximate half-height of a glyph, for anchoring badges to its edges. */
   private halfH(n: NodeVM): number { return glyphHalfH(this.sceneNode(n)); }
   private sceneNode(n: NodeVM): SceneNode {
-    return { id: n.id, glyph: n.glyph, isUnit: n.isUnit, span: n.span, x: this.nx(n), y: this.ny(n) };
+    return { id: n.id, glyph: n.glyph, isUnit: n.isUnit, span: n.span, x: this.nx(n), y: this.ny(n),
+             inletDx: n.spigot ? SPIGOT_DX : 0 };
   }
 
   /** Plain ortho path (no hops) — used for the fat invisible hit target. */
@@ -3729,6 +3753,15 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     return { cell, anchor: { dx: PICKUP_DX + i * PICKUP_STEP, dy: -TOOL_HALF } };
   }
 
+  /** Does this primary port's machine also have a pickup? Only then does the
+   *  primary draw a spigot — the square glyph exists to be told apart from a
+   *  tapered one, so on a single-inlet machine it would distinguish nothing. */
+  private hasPickups(e: RawEl): boolean {
+    const doc = this.topo as unknown as ShopDoc;
+    const machine = machineOfPort(doc, e);
+    return !!machine && supplementalCount(doc, machine.id as string) > 0;
+  }
+
   /** What a pickup is FOR, in the woodworker's word for it — the only thing that
    *  distinguishes two ports on one saw. */
   pickupRole(n: NodeVM): string { return (this.elem(n.id)?.['role'] as string) || 'pickup'; }
@@ -3771,7 +3804,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
                col: seat?.cell.col ?? c.col, row: seat?.cell.row ?? c.row,
                branchCount, isUnit, span: isUnit ? Math.max(1, branchCount) : 1,
                live: false, openIndex: 0, setup, redundant: redundant.has(id),
-               anchor: seat?.anchor };
+               anchor: seat?.anchor, spigot: glyph === 'tool' && this.hasPickups(e) };
     });
     this.byId = new Map(this.nodes.map(n => [n.id, n]));
     this.recomputeExtent();
