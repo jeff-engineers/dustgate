@@ -54,6 +54,11 @@ svg.canvas { display: block; touch-action: none; }
 
 .duct { stroke: var(--border-strong, #3a3a3a); stroke-width: 6; fill: none; stroke-linecap: round; stroke-linejoin: round; }
 .duct.live { stroke: var(--success); }
+/* A supplemental port's run. Thinner and dashed so a machine shared between two
+   systems reads as shared at a glance, rather than needing the pipe followed to its
+   end. Grey, never accent — orange dashes already mean an UNFINISHED run
+   (.open-stub), and one colour must mean one thing. */
+.duct.sec { stroke-width: 4.5; stroke-dasharray: 11 8; }
 /* The knockout that makes a crossing legible: 5px of canvas either side of the
    duct on top. It runs the whole length, so every duct sits in a thin clear
    corridor through the dot grid — deliberate, and it costs nothing to draw. */
@@ -109,6 +114,34 @@ svg.canvas { display: block; touch-action: none; }
    variable to read where one does the job. */
 .node .hood, .node .spigot { fill: #1d3540; stroke: #2d6a86; stroke-width: 1.6; }
 .node.sel .hood, .node.sel .spigot { stroke: var(--accent); stroke-width: 2.2; }
+/* A spare inlet: room for another pickup, and the handle you pull a run out of.
+   Hollow + dashed is the "not wired yet" language a bare servo tab already wears,
+   so it reads as an offer rather than a part that exists. */
+.hood.spare { fill: none; stroke: var(--muted); stroke-width: 1.4; stroke-dasharray: 3 2.5; }
+.node.sel .hood.spare { stroke: var(--muted); stroke-width: 1.4; }
+.spare-inlet { cursor: cell; }
+.spare-inlet:hover .hood.spare { stroke: var(--accent); stroke-dasharray: none; }
+
+/* The second-pickup confirmation. Reuses the gate sheet's card so the two sheets
+   are the same object with different contents. */
+.sheet .card.pickup { background: var(--surface); border: 1px solid var(--border);
+                      border-radius: 16px; padding: 18px 16px; display: flex;
+                      flex-direction: column; gap: 14px; }
+.sheet .card.pickup .head .kind { font-size: 14px; font-weight: 600; color: var(--text); }
+.sheet .card.pickup .q-sub { font-size: 12.5px; color: var(--muted); margin: -8px 0 0; }
+.sheet .card.pickup .field { display: flex; flex-direction: column; gap: 6px; }
+.sheet .card.pickup label { font-size: 12px; color: var(--muted); text-transform: uppercase;
+                            letter-spacing: 0.05em; }
+.sheet .card.pickup input { background: var(--bg); border: 1px solid var(--border);
+                            color: var(--text); border-radius: 8px; padding: 10px 12px;
+                            font-size: 14px; font-family: inherit; }
+.sheet .card.pickup input:focus { outline: none; border-color: var(--accent); }
+.sheet .card.pickup .why { font-size: 11.5px; color: var(--muted); line-height: 1.5; margin: 0; }
+.sheet .card.pickup .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.sheet .card.pickup .actions button { border-radius: 8px; padding: 10px 12px; font-size: 14px;
+                                      border: 1px solid var(--border); background: var(--bg); color: var(--text); }
+.sheet .card.pickup .actions button.primary { background: var(--accent); border-color: var(--accent);
+                                              color: #241a00; font-weight: 600; }
 .hood-role { fill: var(--muted); font-size: 9px; text-anchor: middle; letter-spacing: 0.05em; }
 .node.sel .body, .node.sel .unit { stroke: var(--accent); stroke-width: 2.5; }
 .node.live .body, .node.live .unit { stroke: var(--success); }

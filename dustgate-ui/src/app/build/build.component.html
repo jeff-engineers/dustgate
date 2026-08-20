@@ -91,7 +91,7 @@
            they cross, which is the whole crossing treatment — no hop geometry. -->
       <g *ngFor="let d of ducts">
         <path class="duct-casing" [attr.d]="ductD(d.childId)"/>
-        <path class="duct" [class.live]="d.live" [attr.d]="ductD(d.childId)"/>
+        <path class="duct" [class.live]="d.live" [class.sec]="d.secondary" [attr.d]="ductD(d.childId)"/>
       </g>
 
       <g *ngFor="let bd of branchDots()" class="bdot" (pointerdown)="onBranchDotDown($event, bd)">
@@ -146,6 +146,13 @@
             <rect *ngIf="n.spigot" class="spigot" rx="2"
                   [attr.x]="SPIGOT_DX - SPIGOT_W / 2" [attr.y]="-TOOL_HALF - SPIGOT_H + 2"
                   [attr.width]="SPIGOT_W" [attr.height]="SPIGOT_H"/>
+            <!-- Room for another pickup: a hollow hood you can pull a run out of.
+                 Hollow and dashed borrows the "not wired yet" language a bare servo
+                 tab already uses, so it reads as an offer rather than a part. -->
+            <g *ngIf="spareInletDx(n) as sdx" class="spare-inlet" (pointerdown)="onInletDown($event, n)">
+              <circle [attr.cx]="sdx" [attr.cy]="-TOOL_HALF - 6" r="13" fill="transparent"/>
+              <path class="hood spare" [attr.d]="'M' + (sdx - 9) + ' ' + (-TOOL_HALF) + ' L' + sdx + ' ' + (-TOOL_HALF - 13) + ' L' + (sdx + 9) + ' ' + (-TOOL_HALF) + ' Z'"/>
+            </g>
           </g>
           <!-- A supplemental port: a tapered HOOD on the machine's own top edge, not a
                second body. One machine stays one box — which is the whole point, since
@@ -383,6 +390,33 @@
   <app-selector-config [sel]="cfg" [topo]="topoDoc" [pane]="configPane"
                        (saved)="onConfigured($event)" (cancelled)="configuring = null">
   </app-selector-config>
+</div>
+
+<!-- Confirming a second pickup. Raised by BOTH directions of the drag (a loose end
+     dropped on a machine, or a run pulled out of a machine's spare inlet), so the
+     question and the naming live in exactly one place. -->
+<div class="sheet-bg" *ngIf="pickupAsk" (pointerdown)="pickupAsk = null"></div>
+<div class="sheet" *ngIf="pickupAsk as ask">
+  <button type="button" class="sheet-close" (click)="pickupAsk = null" aria-label="Close without saving">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+  </button>
+  <div class="card pickup">
+    <div class="head">
+      <span class="kind">{{ ask.machineName }} already has a duct.</span>
+    </div>
+    <p class="q-sub">Add this as a second pickup?</p>
+    <div class="field">
+      <label for="pickup-name">What is it?</label>
+      <input id="pickup-name" [(ngModel)]="ask.name" (keyup.enter)="commitPickup()"
+             placeholder="Auxiliary" autofocus/>
+      <p class="why">Only you know whether that hose is an overarm guard, a downdraft
+        table or the second port on a lathe. This is what gets captioned beside it.</p>
+    </div>
+    <div class="actions">
+      <button type="button" (click)="pickupAsk = null">Cancel</button>
+      <button type="button" class="primary" (click)="commitPickup()">Add pickup</button>
+    </div>
+  </div>
 </div>
 
 <!-- Pairing a tool (or the collector) with its plug — same sheet as a gate. -->

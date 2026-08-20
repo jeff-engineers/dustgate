@@ -16,7 +16,7 @@ import {
 } from '../gates/selector-types';
 import {
   type ShopDoc, type ShopSystem,
-  addMachineWithPort, addSupplementalPort, addSystem, isPortSupplemental, machineOfPort,
+  addMachineWithPort, addSupplementalPort, addSystem, isPortSupplemental, machineById, machineOfPort,
   machinesOf, outletOf, portsOf, primaryPortOf, removeMachine, removePort, supplementalCount,
   systemById, systemsOf, systemViews, toShop,
 } from '../services/shop-doc';
@@ -97,7 +97,10 @@ interface NodeVM {
   spigot?: boolean;
   dragX?: number; dragY?: number;
 }
-interface DuctVM { childId: string; live: boolean; open: boolean; }
+/** `secondary` marks a supplemental port's run: drawn thinner and dashed, because it
+ *  is the one run that may cross the seam and a shared machine should read as shared
+ *  without following the pipe to its end. See canvas.html §1. */
+interface DuctVM { childId: string; live: boolean; open: boolean; secondary: boolean; }
 /** A tee point on a run. `axis` is the direction the run travels here, so a new
  *  leg can be sent off perpendicular to it. `elbow` marks a corner rather than a
  *  point on a straight; corners carry `legs` — the cells a new leg could take,
@@ -215,6 +218,15 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   /** Why the cell under a drag won't take the piece, or '' while it will. Shown live
    *  in the guidance bar so a refused drop is never a silent one. */
   dropBlocked = '';
+  /** A pending "make this a second pickup" confirmation. Raised when a loose end is
+   *  dropped on a machine that already has a duct, or when a machine's spare inlet is
+   *  dragged onto a gate — both directions land here. See canvas.html §4. */
+  pickupAsk: {
+    machineId: string; machineName: string; name: string;
+    /** Where the new port's run comes FROM. 'end' reuses an existing open end's own
+     *  parent duct; 'outlet' claims a free branch on a gate. */
+    src: { kind: 'end'; endId: string } | { kind: 'outlet'; parentId: string };
+  } | null = null;
   /** Advisory counterpart to dropBlocked: the drop IS allowed, this just says what
    *  the ductwork will look like once it lands. See placeCheck(). */
   dropWarn = '';
@@ -285,7 +297,12 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   private bdrag: { bd: BDot; x0: number; y0: number; moved: boolean } | null = null;
   private bMove = (e: PointerEvent) => this.onBDotMove(e);
   private bUp = (e: PointerEvent) => this.onBDotUp(e);
-  private odrag: { od: ODot; x0: number; y0: number; moved: boolean } | null = null;
+  private odrag: { od: ODot; x0: number; y0: number; moved: boolean; at?: Pt } | null = null;
+  /** Dragging OUT of a machine's spare inlet — the other direction of the same
+   *  gesture. Ends on a gate, a free outlet or a loose end. */
+  private idrag: { machineId: string; x0: number; y0: number; moved: boolean; at?: Pt } | null = null;
+  private iMove = (e: PointerEvent) => this.onInletMove(e);
+  private iUp   = () => this.onInletUp();
   private oMove = (e: PointerEvent) => this.onODotMove(e);
   private oUp = (e: PointerEvent) => this.onODotUp(e);
 
@@ -1145,6 +1162,17 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     if (n && dragged) {
       const { col, row } = this.dragCell({ x: n.dragX!, y: n.dragY! });
       moved = col !== n.col || row !== n.row;
+      // A loose end dropped ON a machine that already has a duct is not a collision
+      // — it is the second-pickup gesture. Checked before canPlace(), which would
+      // otherwise refuse it as "already in that cell".
+      const onto = moved ? this.machineAtCell(col, row) : null;
+      if (onto && n.glyph === 'junction' && this.childrenOf(n.id).length === 0) {
+        n.dragX = undefined; n.dragY = undefined;
+        this.askPickup(onto, { kind: 'end', endId: n.id });
+        this.dragId = null; this.hoverCell = null; this.dropBlocked = ''; this.dropWarn = '';
+        this.detachDrag();
+        return;
+      }
       if (this.canPlace(n, col, row) && moved) {
         this.pushHistory(null);
         n.col = col; n.row = row; this.cells.set(n.id, { col, row });
@@ -1602,20 +1630,11 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
         enabled: true,
         note: paired ? undefined : (n.glyph === 'collector' ? 'started by hand' : 'switched by hand'),
       }];
-      // A machine can grow a second place to collect from — an overarm guard, a hood.
-      // Offered on the tool itself because that is where the question comes up, and
-      // capped where the model caps it: a list long enough to scroll is a modelling
-      // mistake, not a shop.
-      if (n.glyph === 'tool') {
-        const doc = this.topo as unknown as ShopDoc;
-        const machine = machineOfPort(doc, this.elem(n.id));
-        const used = machine ? supplementalCount(doc, machine.id as string) : 0;
-        opts.push({
-          kind: 'pickup', label: 'Add second pickup',
-          enabled: !!machine && used < MAX_PICKUPS,
-          note: used >= MAX_PICKUPS ? `${MAX_PICKUPS} is the limit` : 'overarm guard, hood',
-        });
-      }
+      // "Add second pickup" used to live here. It is a DRAG now — drop a loose end on
+      // the machine, or pull one out of its spare inlet — because the menu route had
+      // to invent an open end, guess a cell for it (landing on a live gate outlet on
+      // the demo shop), and leave the document invalid until you plumbed it. Two ways
+      // in would have meant keeping the broken one. See canvas.html §4.
       opts.push({ kind: 'rename', label: 'Rename', enabled: true });
       // The collector is the one piece with nothing above it, so there's no run to
       // heal — it stays, and offering a dead Delete would only invite the tap.
@@ -1686,7 +1705,6 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       const id = m.convert; this.closeMenu();
       if (kind === 'board' || kind === 'travel') this.configure(id, kind);
       else if (kind === 'outlet') this.configureOutlet(id);
-      else if (kind === 'pickup') this.addPickup(id);
       else if (kind === 'rename') this.startRename(id);
       else if (kind === 'delete') { this.selectedId = id; this.deleteSelected(); }
       else this.convertKind(id, kind as SelKind);
@@ -1810,6 +1828,60 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     }
     return out;
   }
+  /** Pull a run out of a machine's spare inlet. The mirror of dropping a loose end
+   *  ON the machine — the two ends of a pickup's run sit in different systems and
+   *  often far apart, so neither is made the only handle. See canvas.html §4. */
+  onInletDown(evt: PointerEvent, n: NodeVM): void {
+    evt.preventDefault(); evt.stopPropagation();
+    const m = machineOfPort(this.topo as unknown as ShopDoc, this.elem(n.id));
+    const id = m?.id as string | undefined;
+    if (!this.canTakePickup(id)) return;
+    this.idrag = { machineId: id!, x0: evt.clientX, y0: evt.clientY, moved: false };
+    window.addEventListener('pointermove', this.iMove);
+    window.addEventListener('pointerup', this.iUp);
+  }
+  private onInletMove(evt: PointerEvent): void {
+    if (!this.idrag) return;
+    if (Math.hypot(evt.clientX - this.idrag.x0, evt.clientY - this.idrag.y0) > 8) this.idrag.moved = true;
+    this.idrag.at = this.toSvg(evt);
+    if (this.idrag.moved) {
+      const t = this.pickupTargetAt(this.idrag.at);
+      this.wireNote = t ? '' : 'Drop it on a gate, a free outlet or a loose end.';
+    }
+  }
+  private onInletUp(): void {
+    window.removeEventListener('pointermove', this.iMove);
+    window.removeEventListener('pointerup', this.iUp);
+    const d = this.idrag; this.idrag = null;
+    this.wireNote = '';
+    if (!d || !d.moved || !d.at) return;
+    const t = this.pickupTargetAt(d.at);
+    if (t) this.askPickup(d.machineId, t);
+  }
+
+  /** What a spare-inlet drag may land on: a gate with a free branch, or a loose end
+   *  (which already owns a run, so the port takes that run over). */
+  private pickupTargetAt(at: Pt): { kind: 'end'; endId: string } | { kind: 'outlet'; parentId: string } | null {
+    const c = this.dragCell(at);
+    for (const n of this.nodes) {
+      if (n.row !== c.row) continue;
+      const span = n.isUnit ? n.span : 1;
+      if (c.col < n.col || c.col >= n.col + span) continue;
+      if (n.glyph === 'junction' && this.childrenOf(n.id).length === 0) return { kind: 'end', endId: n.id };
+      const el = this.elem(n.id);
+      if (el && el['type'] === 'selector'
+          && (el['branches'] as Branch[] | undefined)?.some(b => b.role === 'blocked')) {
+        return { kind: 'outlet', parentId: n.id };
+      }
+      // A collector is a legitimate parent too — it takes no branch, and a pickup
+      // hung straight off one is the ungated shape the airflow check advises about
+      // rather than forbids (see D-21). Refusing it here would also make the guide
+      // bar's "a free outlet" a promise the drop doesn't keep.
+      if (el && el['type'] === 'collector') return { kind: 'outlet', parentId: n.id };
+    }
+    return null;
+  }
+
   onODotDown(evt: PointerEvent, od: ODot): void {
     evt.preventDefault(); evt.stopPropagation();
     this.odrag = { od, x0: evt.clientX, y0: evt.clientY, moved: false };
@@ -1819,12 +1891,23 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   private onODotMove(evt: PointerEvent): void {
     if (!this.odrag) return;
     if (Math.hypot(evt.clientX - this.odrag.x0, evt.clientY - this.odrag.y0) > 8) this.odrag.moved = true;
+    // Remembered so the release can ask what is under the pointer. Without it a
+    // stub could only ever grow into its own cell, and "drag from any open end"
+    // would exclude the one straight off a manifold, collector or slider.
+    this.odrag.at = this.toSvg(evt);
   }
   private onODotUp(evt: PointerEvent): void {
     window.removeEventListener('pointermove', this.oMove);
     window.removeEventListener('pointerup', this.oUp);
     const d = this.odrag; this.odrag = null; if (!d) return;
     if (d.moved) {
+      // Dropped ON a machine that already has a duct → the second-pickup gesture,
+      // wired straight off this outlet with no open end in between.
+      if (d.at) {
+        const c = this.dragCell(d.at);
+        const onto = this.machineAtCell(c.col, c.row);
+        if (onto) { this.askPickup(onto, { kind: 'outlet', parentId: d.od.parentId }); return; }
+      }
       if (!this.roomAt(d.od.cell.col, d.od.cell.row, 1, d.od.parentId)) return;   // nowhere to put it
       this.pushHistory(null);
       const endId = this.addOpenEndOn(d.od.parentId, d.od.branchId);   // passive branch off the output
@@ -3475,45 +3558,6 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     return id;
   }
 
-  /** A second place this machine collects from — an overarm guard, a hood.
-   *
-   *  A PORT, not a machine: the name, the plug and the trip point already exist and
-   *  stay where they are. It lands in the system the machine already lives in and
-   *  arrives as an open end you drag out and gate like any other run — including,
-   *  if you drag it there, into the other collector's system, which is the case the
-   *  shop container exists for.
-   *
-   *  It never gets a cell. The hood rides on the machine's own box (pickupSeat), so
-   *  the drawing gains an inlet rather than a second saw. */
-  private addPickup(toolId: string): void {
-    if (!this.topo) return;
-    const doc = this.topo as unknown as ShopDoc;
-    const machine = machineOfPort(doc, this.elem(toolId)); if (!machine) return;
-    const used = supplementalCount(doc, machine.id as string);
-    if (used >= MAX_PICKUPS) return;
-    const sys = this.sys(); if (!sys) return;
-    this.pushHistory(null);
-    const port = addSupplementalPort(
-      doc, sys, machine.id as string, this.newId('p'),
-      used === 0 ? 'overarm' : 'hood',
-    );
-    // An open end above it, so there is something to drag pipe out of — the same
-    // shape every other run starts as.
-    const end: RawEl = { id: this.newId('j'), type: 'junction', name: 'Open end' };
-    sys.elements.push(end);
-    sys.ducts.push({ child: port['id'], parent: end['id'] });
-    this.buildGraph(this.topo);
-    // The open end DOES get a cell: it is a piece you place. One row above the
-    // machine and one column right, which is where its hood points — but not up out
-    // of its own system. A machine on its band's top row keeps the end level with it
-    // rather than reaching into the collector above.
-    const c = this.cells.get(toolId);
-    const id = end['id'] as string;
-    if (c) this.cells.set(id, { col: c.col + 1, row: Math.max(0, this.bandCeiling(id) + 1, c.row - 1) });
-    this.selectedId = null;
-    this.dirty = true; this.saveError = '';
-    this.syncNodes(); this.refreshHandles(); this.recomputeExtent();
-  }
 
   /** Download the whole shop (topology + layout) as a JSON file the user can keep. */
   exportShop(): void {
@@ -3759,7 +3803,8 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
         const idx = (pel['branches'] as Branch[]).findIndex(b => b.id === d['parentBranch']);
         if (idx >= 0) this.outletOf.set(child, { unitId: parent, index: idx });
       }
-      return { childId: child, live: false, open: false };
+      return { childId: child, live: false, open: false,
+               secondary: isPortSupplemental(this.elem(child) ?? {}) };
     });
     // A run is "open" when it dead-ends at an unpopulated junction — bare pipe
     // waiting for a tool or gate. Second pass: parentOf is fully built now.
@@ -3788,6 +3833,99 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     return { cell, anchor: { dx: PICKUP_DX + i * PICKUP_STEP, dy: -TOOL_HALF } };
   }
 
+  /** The machine standing on this cell that could take another pickup — null when
+   *  the cell is empty, holds something else, or holds a machine already at its
+   *  pickup ceiling. Shared by both directions of the gesture. */
+  private machineAtCell(col: number, row: number): string | null {
+    const doc = this.topo as unknown as ShopDoc;
+    for (const n of this.nodes) {
+      if (n.glyph !== 'tool' || n.row !== row || n.col !== col) continue;
+      const m = machineOfPort(doc, this.elem(n.id));
+      const id = m?.id as string | undefined;
+      return this.canTakePickup(id) ? id! : null;
+    }
+    return null;
+  }
+
+  /** Can `machineId` take another pickup fed from a loose end? The drop target test
+   *  for both directions of the gesture. */
+  private canTakePickup(machineId: string | null | undefined): boolean {
+    if (!machineId || !this.topo) return false;
+    const doc = this.topo as unknown as ShopDoc;
+    return !!primaryPortOf(doc, machineId) && supplementalCount(doc, machineId) < MAX_PICKUPS;
+  }
+
+  /** Raise the confirmation. Named rather than created immediately, because a drop on
+   *  an occupied machine is ambiguous — it could be a slip. */
+  private askPickup(machineId: string, src: { kind: 'end'; endId: string } | { kind: 'outlet'; parentId: string }): void {
+    const doc = this.topo as unknown as ShopDoc;
+    const m = machineById(doc, machineId);
+    this.pickupAsk = {
+      machineId, machineName: (m?.name as string) || 'This machine',
+      name: 'Auxiliary', src,
+    };
+  }
+
+  /**
+   * Wire the confirmed pickup up.
+   *
+   * The port element goes in the system that FEEDS it — alongside the gate it hangs
+   * off, not alongside the machine it is drawn on. That is what lets the run cross the
+   * seam without anything structural crossing it: both ends of the duct stay inside
+   * one system, `validateShop` is untouched, and the machine simply owns ports in two
+   * systems (which shop.test.js and test_shop.cpp have both carried all along).
+   */
+  commitPickup(): void {
+    const ask = this.pickupAsk; if (!ask || !this.topo) return;
+    const doc = this.topo as unknown as ShopDoc;
+    // The user's word for it, and the caption that ends up beside the hood. Falling
+    // back rather than refusing an empty box: the name is a label, not a key.
+    const role = ask.name.trim() || 'Auxiliary';
+
+    const parentId = ask.src.kind === 'end'
+      ? this.parentOf.get(ask.src.endId)
+      : ask.src.parentId;
+    const sysId = parentId ? this.systemOf.get(parentId) : null;
+    const sys = sysId ? systemById(doc, sysId) : null;
+    if (!parentId || !sys) { this.pickupAsk = null; return; }
+
+    // A gate needs a free branch before anything is created — the same order
+    // addTool() uses, so a refusal can't leave a stray port behind.
+    const pel = this.elem(parentId);
+    let branch: Branch | undefined;
+    if (ask.src.kind === 'outlet' && pel && pel['type'] === 'selector') {
+      branch = (pel['branches'] as Branch[]).find(x => x.role === 'blocked');
+      if (!branch) { this.pickupAsk = null; return; }
+    }
+
+    this.pushHistory(null);
+    const port = addSupplementalPort(doc, sys, ask.machineId, this.newId('p'), role);
+
+    this.finishPickup(ask, port, parentId, branch);
+  }
+
+  /** The half that differs by direction: rehome the run onto the new port. */
+  private finishPickup(
+    ask: NonNullable<BuildComponent['pickupAsk']>, port: RawEl,
+    parentId: string, branch: Branch | undefined,
+  ): void {
+    const doc = this.topo as unknown as ShopDoc;
+    if (ask.src.kind === 'end') {
+      const endId = ask.src.endId;
+      const duct = this.allDucts(this.topo!).find(d => d['child'] === endId);
+      if (duct) duct['child'] = port['id'];
+      for (const s of systemsOf(doc)) s.elements = s.elements.filter(e => e['id'] !== endId);
+      this.cells.delete(endId);
+    } else {
+      const duct: RawEl = { child: port['id'], parent: parentId };
+      if (branch) { branch.role = 'tool'; duct['parentBranch'] = branch.id; }
+      this.ductsRaw().push(duct);
+    }
+    this.pickupAsk = null;
+    this.dirty = true; this.saveError = '';
+    this.afterMutation(null);
+  }
+
   /** Does this primary port's machine also have a pickup? Only then does the
    *  primary draw a spigot — the square glyph exists to be told apart from a
    *  tapered one, so on a single-inlet machine it would distinguish nothing. */
@@ -3795,6 +3933,17 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     const doc = this.topo as unknown as ShopDoc;
     const machine = machineOfPort(doc, e);
     return !!machine && supplementalCount(doc, machine.id as string) > 0;
+  }
+
+  /** Where a machine's SPARE inlet is drawn — the next free hood slot, or null when
+   *  it is at its ceiling. Same offsets as a real hood so the drawing does not jump
+   *  when the drag turns one into the other. */
+  spareInletDx(n: NodeVM): number | null {
+    if (n.glyph !== 'tool' || !this.topo) return null;
+    const doc = this.topo as unknown as ShopDoc;
+    const m = machineOfPort(doc, this.elem(n.id));
+    if (!this.canTakePickup(m?.id as string | undefined)) return null;
+    return PICKUP_DX + supplementalCount(doc, m!.id as string) * PICKUP_STEP;
   }
 
   /** What a pickup is FOR, in the woodworker's word for it — the only thing that

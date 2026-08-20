@@ -305,7 +305,7 @@
   <!-- ══ 4. ADDING A SECOND PICKUP ═══════════════════════════════════ -->
   <section class="sec">
     <h3>4 · Adding a second pickup</h3>
-    <span class="pill agreed">Agreed · not yet built</span>
+    <span class="pill built">Built · 2026-08-20</span>
     <p class="note" style="max-width:68ch">One gesture, <b>either direction</b>. The two ends
       of a pickup's run are a machine's spare inlet and a gate in the other system — and you
       may start the drag from whichever of them you happen to be looking at.</p>
@@ -344,9 +344,10 @@
             <text class="acc-t" x="200" y="106">drop on the machine</text>
           </svg>
         </div>
-        <p class="note">Drag the aux system's run end onto a machine that already has a duct.
-          The machine highlights — because <em>already having one</em> is what makes this a
-          second port rather than an ordinary connection.</p>
+        <p class="note">Drag <b>any</b> loose end onto a machine that already has a duct — a
+          run's open end, or a free outlet stub straight off a manifold, collector or sliding
+          gate. The machine highlights, because <em>already having a duct</em> is what makes
+          this a second port rather than an ordinary connection.</p>
       </div>
 
       <div class="opt">
@@ -382,8 +383,8 @@
           </svg>
         </div>
         <p class="note">Every machine with room for another pickup wears a hollow inlet. Pull a
-          run out of it and drop it on a gate or a free outlet — including one across the seam,
-          which is the case this whole treatment exists for.</p>
+          run out of it and drop it on a gate, a free outlet or a loose end — including one
+          across the seam, which is the case this whole treatment exists for.</p>
       </div>
 
       <div class="opt">
@@ -420,7 +421,13 @@
     </div>
 
     <div class="card flag">
-      <p class="note"><b>Why both directions.</b> The two ends live in different systems, often
+      <p class="note"><b>It needs no schema change.</b> The supplemental port element lives in
+        the system that FEEDS it, alongside the gate it hangs off — only the box it is drawn on
+        sits in the other band, so nothing structural crosses the seam and
+        <code>validateShop</code> is untouched. Both test suites already carry the shape: a
+        table saw with its cabinet port in one system and its overarm in the other.
+        <br><br>
+        <b>Why both directions.</b> The two ends live in different systems, often
         far apart on a stacked canvas. Forcing the drag to start at the machine means scrolling
         to it after you have already found the gate — and forcing it to start at the gate means
         the reverse. Neither end is privileged, so neither is made the only handle.

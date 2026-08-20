@@ -116,15 +116,15 @@ const DECISIONS = [
     where: 'TODO/TODO.md, bench test 7' },
 
   // ── canvas ───────────────────────────────────────────────────────────
-  { id: 'D-35', date: '2026-08-20', area: 'canvas', status: 'soon',
+  { id: 'D-35', date: '2026-08-20', area: 'canvas', status: 'standing',
     what: 'A second pickup is added by a drag, in either direction — not from a menu',
     why: 'Drop a run end on a machine that already has a duct, <b>or</b> pull a run out of that machine’s hollow spare inlet and drop it on a gate in the other system. Same confirmation, same port, whichever way you dragged: the two ends sit in different systems and often far apart on a stacked canvas, so neither end is privileged and neither is made the only handle. The port is born attached, so there is never an orphan open end or an invalid document. Replaces the menu item entirely — two ways in would mean keeping the broken one.',
-    where: 'canvas.html §4. The gesture was first recorded 2026-08-16: "you drag a hose across the boundary and land it on a port, and the same action can create that port."' },
+    where: 'canvas.html §4 · build.component.ts askPickup()/commitPickup(). First recorded 2026-08-16: "you drag a hose across the boundary and land it on a port, and the same action can create that port." <b>Needed no schema change</b> — the port element lives in the system that feeds it, so nothing structural crosses the seam; shop.test.js and test_shop.cpp already carried that shape.' },
 
-  { id: 'D-39', date: '2026-08-20', area: 'canvas', status: 'soon',
+  { id: 'D-39', date: '2026-08-20', area: 'canvas', status: 'standing',
     what: 'The user names a secondary port; it defaults to "Auxiliary"',
     why: 'Only the person with the shop knows whether that hose is an overarm guard, a downdraft table or the second port on a lathe. The name is captioned beside the hood, so a guessed one is wrong on the canvas forever. Editable in the same confirmation that creates the port.',
-    where: 'canvas.html §4. Replaces the old auto-naming, which picked "overarm" then "hood" by position.' },
+    where: 'canvas.html §4 · the confirmation sheet in build.component.html. Replaces the old auto-naming, which picked "overarm" then "hood" by position.' },
 
   { id: 'D-34', date: '2026-08-20', area: 'canvas', status: 'standing',
     what: 'Only an occupied cell or another system’s row band refuses a drop',
