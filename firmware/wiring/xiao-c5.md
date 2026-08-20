@@ -5,10 +5,15 @@
 > A supported node target as of 2026-08-14. A board has been flashed and booted
 > (2026-08-13): full boot log, WiFi joined, `ready` at 1986 ms.
 >
-> But **the pin numbers below come from Seeed's published pinout, not from a
-> multimeter**, and nothing has been wired to a servo yet. Two of them (GPIO8,
-> GPIO9) are the ones most likely to be wrong in a way that stops the board
-> booting — see [§5](#5-before-you-trust-this). If it appears not to boot, read
+> **The strapping-pin worry is closed** — GPIO8/GPIO9 are ordinary IO on this
+> part, confirmed against the datasheet and then on the bench (2026-08-19), so a
+> servo signal idling there does not hold the board out of its app. See
+> [§5](#5-before-you-trust-this).
+>
+> What is still unproven is the other half: **the pin numbers below come from
+> Seeed's published pinout, not from a multimeter, and no servo has been seen to
+> MOVE on any of them.** A board that boots with a servo attached has not yet
+> shown that the signal reaches it. If it appears not to boot, read
 > [§4](#4-if-it-looks-dead) first, because the first time, it was booting fine.
 >
 > Authoritative source for every number here:
@@ -88,16 +93,18 @@ alone on a hung board gets you nothing, which is easy to mistake for a dead boar
 
 ### The numbers
 
-XIAO silkscreen pads D0–D10 map to GPIO **1, 0, 25, 7, 23, 24, 11, 12, 8, 9, 10**.
+XIAO silkscreen pads D0–D10 map to GPIO **1, 0, 25, 7, 23, 24, 11, 12, 8, 9, 10**
+— confirmed 2026-08-16 against Seeed's pin-definition drawing, so this row is no
+longer hearsay.
 
 | Signal              | Pad | GPIO | Notes |
 |---------------------|-----|------|-------|
 | Servo PWM channel 1 | D7  | 12   | Also the hardware UART TX — see §3 |
-| Servo PWM channel 2 | D8  | 8    | ⚠ verify strapping duty before wiring |
-| Servo PWM channel 3 | D9  | 9    | ⚠ verify strapping duty before wiring |
-| Servo PWM channel 4 | D10 | 10   | |
-| Status pixel (DIN)  | D2  | 25   | External part; onboard LED is plain yellow, not RGB |
-| Onboard user LED    | —   | 27   | Yellow, single colour. Fallback only |
+| Servo PWM channel 2 | D8  | 8    | Ordinary GPIO on the C5 — not strapping. Alt: SDIO_DATA0 |
+| Servo PWM channel 3 | D9  | 9    | Ordinary GPIO on the C5 — not strapping. Alt: SDIO_CLK |
+| Servo PWM channel 4 | D10 | 10   | Alt: SDIO_CMD |
+| Status pixel (DIN)  | D2  | 25   | External part; onboard LED is green, not RGB. Strapping — see §5 |
+| Onboard user LED    | —   | 27   | Green, single colour. Strapping pin, but latched at reset — see §5. Fallback only |
 
 **Deliberately absent: motor and endstop pins.** `config.h` derives `HAS_LINEAR`
 from whether `PIN_TMC_STEP` is defined, so leaving them out is what makes this a
@@ -200,15 +207,54 @@ something else is wrong — it appears on every boot.
 
 ## 5. Before you trust this
 
-### Confirm the strapping pins first
+### Strapping pins — checked, and the map is clear
 
-**GPIO8 and GPIO9 are the two to check**, against the ESP32-C5 datasheet, before
-a servo is wired to either. A servo signal idling on a strapping pin can stop the
-board booting — the trap the QT Py C3's map had to dodge (GPIO2/8/9 there). Symptom is a board that flashes fine and then appears
-dead, which reads as a bad flash rather than a pin choice.
+Settled 2026-08-16 against the **ESP32-C5 Series Datasheet v1.4, Table 3-1**. The
+strapping pins are **GPIO25, GPIO26, GPIO27, GPIO28, GPIO7, MTMS and MTDI**.
 
-Also worth confirming while you have the datasheet open: whether four ADC pads are
-genuinely free, since the published pinout is the only source so far.
+**GPIO8 and GPIO9 are not among them.** That worry was C3 muscle memory — the
+straps are GPIO2/8/9 on *that* part — so the whole servo block (GPIO12/8/9/10) is
+ordinary IO and a servo idling there cannot hold the board out of its app.
+
+**Confirmed on the bench, 2026-08-19.** The board boots with a servo wired to the
+block; the datasheet reading and the hardware agree, so nothing here needs moving
+and this question is closed. (Booting is all this proves — whether the signal
+actually reaches the servo is bench test 2 in `TODO/TODO.md`.)
+
+The one strap this board's map does touch is **GPIO25, the status pixel**, and it
+is benign: GPIO25 (with MTDI) selects the **SDIO sampling edge**, a peripheral
+this build never brings up, and a WS2812 DIN is a high-impedance input so nothing
+holds the line either way while the latches sample at reset. Boot mode lives on
+GPIO26/27/28 and the JTAG source on GPIO7; none of those reach a pad we use.
+
+Two straps are already spoken for by the board itself: **GPIO28 is the BOOT
+button** (held low at reset = serial bootloader) and **GPIO27 carries the onboard
+green user LED** while also selecting UART0 ROM-message printing. GPIO27 defaults
+pull-up, so ROM logging stays on; and because straps are latched at Chip Reset and
+the pins then revert to ordinary IO, the `PIN_LED 27` fallback in the header is
+safe — it only ever drives the pin long after the latch closed.
+
+If anything is ever wired to 27 or 28 externally, note they default **pull-up**
+and the combination **27 = 0 with 28 = 0 is invalid** — the datasheet calls the
+behaviour undefined.
+
+### ADC: one pin on the edge, four on the back — and two of those strap
+
+Also settled, from Seeed's own pin-definition drawing: the board has **1 analog
+pin plus 4 analog pads on the reverse side**, not five equal ones.
+
+| | Pad | GPIO | Also |
+|---|---|---|---|
+| A0 | **D0**, edge | 1 | the only analog pin on the castellated edge |
+| A1 | back pad | 2 | MTMS — **strapping** |
+| A2 | back pad | 3 | MTDI — **strapping** |
+| A3 | back pad | 4 | MTCK |
+| A4 | back pad | 5 | MTDO |
+
+So "four free ADC pads" was too generous. A1–A4 are the **JTAG pads on the
+underside** — no castellation, no header, you solder to the belly of the board —
+and A1/A2 double as strapping pins. If a node ever needs analog (a current sense,
+a pot), A0 is the only one you can reach from a plugged-in board.
 
 ### It rides a different platform — and now lives in its own core directory
 

@@ -7,9 +7,13 @@ Anything with a plan behind it lives in `docs/` and is linked from here rather
 than restated. Delete an item when it lands; the git history is the record.
 
 ## Bugs
-
-- **A system with a single tool and no gate is perfectly valid.** That's a tool
-  the user wants driven automatically — say a sander with a shopvac connected.
+- **wifi pairing between nodes and masters sucks** not very reliable. Bench
+  observation 2026-08-19: the **XIAO C5 nodes hold a link fine**; the **Adafruit
+  QT Py S3 does not**. Two boards, one NodeLink implementation, so the first
+  question is whether this is the radio/antenna on that part rather than
+  anything in `RemoteActuatorBus`/`dustgate_node` — which would make it the
+  same decision as bench test 7 (Feather S2), not a code fix. Worth capturing a
+  monitor log from both sides of an S3 drop before changing code.
 - **All dialogs should have an [X] box**, so the user can close out of one
   without saving.
 - **Wire mapping should penalize crossing over wires slightly more.**
@@ -78,9 +82,40 @@ than restated. Delete an item when it lands; the git history is the record.
   *channels* but says nothing about a board before you select it.
 - **Hide the left port on dust collectors** when the collector is in the
   leftmost column.
-- **The network name lost its home.** It was captioned in the board rail; the rail
-  is gone and `/boards` — where you actually pair — doesn't show it. The device
-  reports it as `ssid` from `/api/motion-status`.
+- **Secondary system right click**
+  Once a second system is added, the right click context menu goes away because of
+  the dark grey box behind the systems.  Also, please try to fix the grid pattern to
+  show on the grey background as well, as long as it's aligned with the original grid
+- **Wires crossing ducts needs to be less penalized** wires crossing other wires should be more penalized
+
+- **Moving the whole shop to a new WiFi is a per-board errand nobody is told
+  about.** Settings → Forget WiFi resets the PRIMARY only. Each node holds its own
+  credentials and has no way to be re-pointed from the app, so a router swap means
+  visiting every board in the shop.
+
+  It is not as bad as it looks — a node runs the same `WiFiProvisioner` as the
+  primary, so a board that can't join within 12 s **at boot** raises its own
+  captive portal and can be re-pointed from a phone. No re-flash needed. Two sharp
+  edges make that unusable as-is:
+
+  - **Only at boot.** `maintain()` nudges `WiFi.reconnect()` forever while down and
+    never falls back to the portal, so a node that was already running when the AP
+    changed sits there retrying a network that no longer exists. You have to know
+    to power-cycle it.
+  - **Nothing tells you.** The primary can't see a node on a different network, so
+    the shop just shows boards "not answering" — the same symptom as a dead board,
+    a bad flash, or a hostname collision. Nothing says "these three are on the old
+    SSID, go press reset."
+
+  So the cheap version is probably not a fleet-wide push at all: it is `/boards`
+  knowing an SSID change just happened and saying which boards haven't reappeared
+  and what to do about each. A real push (primary stages new credentials over
+  NodeLink before anything moves) is the ambitious version, and has an ordering
+  problem — the primary can only reach the nodes on the OLD network, so anything
+  that misses the message needs a defined fallback.
+
+## Deploy
+- **Cant save layout** the 'saving the shop layout' step of the deploy doesnt work, presumably because it's trying to hit the current hostname not the previous - or it just doesn't work at all
 
 ## Carried debt
 
@@ -89,6 +124,22 @@ than restated. Delete an item when it lands; the git history is the record.
   same point, so it may be redundant — and "delete this run", which has no
   primitive behind it: removing a duct means deciding what happens to everything
   downstream of it. Left out deliberately until that question has an answer.
+
+- **Hostname collision is guarded in one direction only.** `run_flash_node`
+  refuses a node hostname that matches the primary's (`dev.sh`), but a primary
+  flash will happily take a name a node is already using, and then the two fight
+  over the same mDNS record. The primary flash now confirms the hostname on every
+  firmware flash, so this is a prompt away from being catchable.
+
+- **Nothing stops two NODES sharing a hostname either**, which is the harder and
+  more valuable half. `next_node_hostname` suggests the next free-looking name,
+  but nothing verifies it: flash two boards accepting the default and both answer
+  to the same `.local`, the primary reaches exactly one of them, and the symptom
+  is a node that "works" while its twin is silently dead. Worth thinking about
+  whether an mDNS probe before flashing, a check against the saved topology's
+  `link.host` values, or a hostname derived from the chip's MAC is the right
+  answer — a MAC-derived default would make collisions structurally impossible,
+  at the cost of names nobody can read.
 
 ## Testing
 
@@ -102,34 +153,7 @@ Delete an item once it has genuinely run. "It compiled" is not a pass.
 
 ### Bench Testing
 
-**1. XIAO C5 strapping pins — do this before wiring a servo to one.**
-`boards/xiao_c5.h` takes its pin map from Seeed's published pinout, not from a
-datasheet or a multimeter. Servo channels 2 and 3 are **GPIO8 and GPIO9**, and
-nobody has confirmed those aren't strapping pins on the C5. A servo signal idling
-on a strapping pin can stop the board booting — and the symptom is a board that
-flashes fine and then looks dead, which reads as a bad flash rather than a bad
-pin choice. That's the trap the QT Py C3's map had to dodge (GPIO2/8/9 there).
-
-- Open the ESP32-C5 datasheet, find the strapping-pin table, and check GPIO8 and
-  GPIO9 against it. Write the answer into `firmware/wiring/xiao-c5.md` §5 either
-  way — the point is to stop re-deriving it.
-- Then prove it empirically, one channel at a time, servo unplugged first:
-  ```bash
-  bash dev.sh flash-node c5 dustgate-node-c5
-  ```
-  Boot it bare and confirm it comes up. Wire ONE servo to D8 (GPIO8), power-cycle,
-  confirm it still boots. Repeat for D9. A board that boots bare but not with the
-  servo attached is the strapping failure, not a flash problem.
-- While the datasheet is open: confirm four ADC pads are genuinely free. Same
-  reason — the published pinout is the only source so far.
-- If either pin is strapping, move the channel and update `boards/xiao_c5.h`,
-  `firmware/wiring/xiao-c5.md`, and the pin table in both.
-
-Note the C5 needs its own core dir and can't share a `pio run` with any other
-env — `dev.sh` handles it, but by hand it's
-`PLATFORMIO_CORE_DIR=~/.platformio-pioarduino pio run -e xiao_c5`.
-
-**2. A node drives a real servo — no primary needed.** Neither the QT Py S3 nor
+**1. A node drives a real servo — no primary needed.** Neither the QT Py S3 nor
 the XIAO C5 has ever moved one; the whole secondary path is compile-only. A node
 has **no serial console** — it is a dumb bank that only acts on HELLO/PING/SET
 over its `/nodelink` WebSocket — so `servo 1 90` on the primary's console moves
@@ -144,10 +168,13 @@ node shared/device-model/nodelink-conformance.js ws://dustgate-node.local/nodeli
 Pass: the suite is green AND servos physically move. Green with nothing moving
 means the link works and the actuator doesn't — which is exactly the split this
 test exists to make visible. Then walk all four channels and confirm each moves
-its own servo. Repeat for `c5` once step 1 clears its pins.
+its own servo. Then repeat for `c5` — its pins are cleared (see
+`firmware/wiring/xiao-c5.md` §5), and it needs
+`PLATFORMIO_CORE_DIR=~/.platformio-pioarduino` if you build it by hand rather
+than through `dev.sh`.
 
-**3. NodeLink end to end — the primary commands a node.** Only after 2 passes;
-if 2 fails, this can only tell you the same thing more expensively. Flash a
+**2. NodeLink end to end — the primary commands a node.** Only after 1 passes;
+if 1 fails, this can only tell you the same thing more expensively. Flash a
 primary and a node, pair them, assign a gate to a node channel, and drive it from
 the UI. Pass: the primary resolves the angle and the node moves. Worth watching
 the wire: a node must receive resolved angles/positions and never state names —
@@ -158,7 +185,7 @@ Also check the fail-safe deliberately, since it is the one that matters with a
 tool running: kill the primary mid-move. Pass: every servo **holds**. No timeout
 closing gates, no homing on reconnect, no autonomous behaviour at all.
 
-**4. Certify real firmware against the conformance suite.** This is the one that
+**3. Certify real firmware against the conformance suite.** This is the one that
 tells you whether firmware has drifted from `shared/device-model/` — the whole
 point of the suite. DESTRUCTIVE (it homes, moves and wipes), so it refuses a
 non-localhost target without `--force`:
@@ -168,7 +195,7 @@ node shared/device-model/conformance.js http://dustgate.local <api-key> --force
 Should be green. If it isn't, it has found real drift, which is a result, not a
 failure of the test.
 
-**5. The three resilience fixes, all compile-only since 2026-07-28.** Each has one
+**4. The three resilience fixes, all compile-only since 2026-07-28.** Each has one
 specific thing to try:
 - *WiFi auto-recovery* — pull the AP, wait, bring it back. Pass: it rejoins with
   no power cycle (`WiFiProvisioner::maintain()` nudges `WiFi.reconnect()` every
@@ -179,17 +206,17 @@ specific thing to try:
 - *Main-loop watchdog* — induce a hang. Pass: `esp_task_wdt` reboots it inside
   ~10 s.
 
-**6. The multi-system shop on hardware.** Model, firmware and UI all shipped
+**5. The multi-system shop on hardware.** Model, firmware and UI all shipped
 without a hardware pass. Draw a two-collector shop, save it to a real device,
 power-cycle, and confirm it comes back intact and routes per system.
 
-**7. The 4" Rockler profile.** BLOCKED — needs a built 4" slider. `rockler-4`
+**6. The 4" Rockler profile.** BLOCKED — needs a built 4" slider. `rockler-4`
 (pitch 127 mm) is derived by the same method that validated 2.5", never measured,
 and stays disabled in the UI until one `calibrate rockler-4 <gates>` sweep
 confirms it. Also still open: pitch uniformity past 2 gates.
 
-**8. Feather S2 — a decision, not a test.** Unvalidated since Gen1 removal, push,
-and the board abstraction. Either run it through steps 2–4 or mark it
+**7. Feather S2 — a decision, not a test.** Unvalidated since Gen1 removal, push,
+and the board abstraction. Either run it through steps 1–3 or mark it
 experimental in `platformio.ini` and CLAUDE.md. Leaving it ambiguous is the worst
 of the three.
 
