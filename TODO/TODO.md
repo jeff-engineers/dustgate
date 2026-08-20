@@ -14,6 +14,9 @@ than restated. Delete an item when it lands; the git history is the record.
   anything in `RemoteActuatorBus`/`dustgate_node` — which would make it the
   same decision as bench test 7 (Feather S2), not a code fix. Worth capturing a
   monitor log from both sides of an S3 drop before changing code.
+- **Secondary ports are not being tied to secondary ports.** If a secondary port
+  is added but the primary doesn't enter from the top, the second port gets
+  centered.
 - **A tool is overlapping a gate** — see `Screenshot 2026-08-16 at 7.06.02 AM.png`
   next to this file.
 

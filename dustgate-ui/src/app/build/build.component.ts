@@ -3710,17 +3710,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     }
   }
   /** Where a supplemental port sits: on the top edge of its machine's primary box,
-   *  right of the trunk's own inlet, one hood per pickup — mirrored to the left
-   *  when the trunk's own duct is the one occupying the right side.
-   *
-   *  Routing prefers a top entry on a near-tie but doesn't require one (R3 in
-   *  router.spec.ts), so a side entry is a real case. Top and left entries leave
-   *  the box's right edge clear, which is exactly where the hood already sits —
-   *  nothing to do there. A right entry is the one case that crowds it: the
-   *  primary's own duct lands right where the hood's fixed rightward offset
-   *  would put it, and on the second pickup (dx up to PICKUP_DX + PICKUP_STEP)
-   *  that's close enough to read as sharing the connection rather than having
-   *  its own.
+   *  right of the trunk's own inlet, one hood per pickup.
    *
    *  It borrows the primary's CELL rather than owning one. Everything about placement
    *  on this canvas is written in cells — the layout, the drop checks, the band rule —
@@ -3736,15 +3726,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       .filter(({ port }) => isPortSupplemental(port))
       .map(({ port }) => port['id'] as string);
     const i = Math.max(0, mine.indexOf(e['id'] as string));
-    // The primary's OWN duct — same lookup checkReady/liveLeaks already use for
-    // every other duct on the canvas — tells us which side it actually lands on.
-    // Its last point sits exactly on the box edge (inPorts' entry ports in
-    // route-grid.ts), so comparing it to the box's own x is enough: greater means
-    // the right side is taken; equal (top) or less (left) leaves it free.
-    const boxX = cellX(cell.col);
-    const last = this.ductPoints(primary['id'] as string).at(-1);
-    const sign = last && last.x > boxX + 0.5 ? -1 : 1;
-    return { cell, anchor: { dx: sign * (PICKUP_DX + i * PICKUP_STEP), dy: -TOOL_HALF } };
+    return { cell, anchor: { dx: PICKUP_DX + i * PICKUP_STEP, dy: -TOOL_HALF } };
   }
 
   /** What a pickup is FOR, in the woodworker's word for it — the only thing that
