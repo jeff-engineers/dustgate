@@ -14,8 +14,6 @@ than restated. Delete an item when it lands; the git history is the record.
   anything in `RemoteActuatorBus`/`dustgate_node` — which would make it the
   same decision as bench test 7 (Feather S2), not a code fix. Worth capturing a
   monitor log from both sides of an S3 drop before changing code.
-- **All dialogs should have an [X] box**, so the user can close out of one
-  without saving.
 - **Wire mapping should penalize crossing over wires slightly more.**
 - **Secondary ports are not being tied to secondary ports.** If a secondary port
   is added but the primary doesn't enter from the top, the second port gets

@@ -362,9 +362,15 @@
   <span>{{ cd.outlet.name || cd.outlet.hostname }}</span>
 </div>
 
-<!-- Configuring one gate — a sheet over the canvas, so the layout stays put. -->
+<!-- Configuring one gate — a sheet over the canvas, so the layout stays put.
+     The [X] is here, not inside app-selector-config, because it has to sit above
+     BOTH panes that component can show (board wiring, travel calibration) without
+     each one growing its own close button. -->
 <div class="sheet-bg" *ngIf="configuring" (pointerdown)="configuring = null"></div>
 <div class="sheet" *ngIf="configuring as cfg">
+  <button type="button" class="sheet-close" (click)="configuring = null" aria-label="Close without saving">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+  </button>
   <app-selector-config [sel]="cfg" [topo]="topoDoc" [pane]="configPane"
                        (saved)="onConfigured($event)" (cancelled)="configuring = null">
   </app-selector-config>
@@ -373,6 +379,9 @@
 <!-- Pairing a tool (or the collector) with its plug — same sheet as a gate. -->
 <div class="sheet-bg" *ngIf="outletTool" (pointerdown)="outletTool = null"></div>
 <div class="sheet" *ngIf="outletTool as ot">
+  <button type="button" class="sheet-close" (click)="outletTool = null" aria-label="Close without saving">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+  </button>
   <app-element-outlet-config [element]="ot" [mode]="outletMode"
                              [excludeIps]="outletExcludeIps"
                              [excludeReason]="outletExcludeReason"

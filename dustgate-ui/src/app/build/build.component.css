@@ -218,8 +218,23 @@ svg.canvas { display: block; touch-action: none; }
 /* The config sheet floats over the canvas rather than replacing it — you keep your
    bearings on which gate you're setting up. */
 .sheet-bg { position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 25; }
+/* padding-top clears a band for .sheet-close so it never sits over a pane's own
+   header content (name, badge) — the first draft floated it on top and it
+   covered the "Configured" badge on every pane that has one. */
 .sheet { position: fixed; z-index: 26; left: 50%; top: 50%; transform: translate(-50%, -50%);
-         width: min(440px, calc(100vw - 28px)); max-height: calc(100vh - 40px); overflow-y: auto; }
+         width: min(440px, calc(100vw - 28px)); max-height: calc(100vh - 40px); overflow-y: auto;
+         padding-top: 38px; }
+/* One close button per sheet, above whichever pane is loaded inside it — the
+   panes themselves (board wiring, travel calibration, outlet pairing) each
+   already have their own Cancel/Back, but those are buried at the bottom of a
+   multi-step flow. This is the tap that always works, from anywhere in it,
+   without touching whatever's mid-edit underneath. */
+.sheet-close { position: absolute; top: 4px; right: 10px; z-index: 1;
+               width: 30px; height: 30px; border-radius: 50%; padding: 0;
+               display: flex; align-items: center; justify-content: center;
+               background: var(--bg); border: 1px solid var(--border); color: var(--muted); }
+.sheet-close svg { width: 15px; height: 15px; }
+.sheet-close:active { opacity: 0.6; }
 /* Destructive menu row reads red — it's the only door to Delete now. */
 .menu button.danger { color: var(--danger); }
 .menu button.danger svg { color: var(--danger); }
