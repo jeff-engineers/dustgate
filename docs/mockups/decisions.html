@@ -98,12 +98,13 @@
 //           'open'      deliberately undecided — recorded so it isn't decided by accident
 // ─────────────────────────────────────────────────────────────────────────
 const DECISIONS = [
-  // ── open questions, deliberately parked ──────────────────────────────
-  { id: 'D-38', date: '2026-08-16', area: 'control', status: 'open',
-    what: 'Which blower starts when one machine is fed by two collectors — never both',
-    why: 'A machine with a supplemental port in another system can be reached by either blower. Running both is ruled out; which one starts, and what happens when the other is already running, is <b>not decided</b>. No firmware should move until it is.',
-    where: 'Parked in the 2026-08-16 commit that recorded the secondary duct type. An archived mockup asserted "both collectors open together" — that was never agreed.' },
+  // ── newest ───────────────────────────────────────────────────────────
+  { id: 'D-38', date: '2026-08-20', area: 'control', status: 'standing',
+    what: 'Primary ports are always on; secondary ports are on whenever possible',
+    why: 'A tool’s <b>primary</b> port is always connected to suction with its collector running — non-negotiable. Its <b>secondary</b> port gets its own system’s collector turned on too, whenever that system is free. When another tool needs that system, the auxiliary port is temporarily disconnected and the tool that needs it runs; it reconnects once the contest clears. <b>Supersedes the earlier "never both" constraint</b> — both blowers do run when they can.',
+    where: 'Already implemented and tested on both sides: arbitration order (primary beats supplemental, then most-recent-wins within each) in shop.js routeShop() and control/Shop.h:260, and the C++ test "one machine starts both blowers" (test_nodebus.cpp). A dropped supplemental degrades a machine to <code>partial</code>, never <code>stripped</code>.' },
 
+  // ── open questions, deliberately parked ──────────────────────────────
   { id: 'D-37', date: '2026-08-12', area: 'hardware', status: 'open',
     what: 'A serial-bus servo could replace both the stepper and the PWM servos',
     why: 'One ST3215-style bus would lift the four-channel ceiling and remove the stepper entirely. Reopened 2026-08-12, never closed.',
@@ -111,7 +112,7 @@ const DECISIONS = [
 
   { id: 'D-36', date: '2026-08-16', area: 'hardware', status: 'open',
     what: 'The Feather S2 is validated or marked experimental — not left ambiguous',
-    why: 'Unvalidated since Gen1 removal, push, and the board abstraction. Leaving it undeclared is the worst of the three options.',
+    why: 'Unvalidated since Gen1 removal, push, and the board abstraction. Leaving it undeclared is the worst of the three options. <b>Deliberately deferred 2026-08-20</b> pending a few more bench sessions — the likely outcome is dropping the board, but not before the hardware has had a fair run.',
     where: 'TODO/TODO.md, bench test 7' },
 
   // ── canvas ───────────────────────────────────────────────────────────
