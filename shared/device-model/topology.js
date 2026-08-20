@@ -496,7 +496,14 @@ function airflowIssues(topology) {
   const alwaysOpen = new Set();
 
   // ── 1. always-open: nothing actuated between the tool and the collector ──
-  for (const tool of tools) {
+  // Except when it is the system's ONLY tool. "Always open" is a leak because
+  // suction bleeds away from whatever you meant to run; with one tool there is
+  // nothing else to run and nowhere else for the air to go, so the ungated shape
+  // is the correct one — a sander on a shopvac, which the user wants switched on
+  // automatically and never wants a gate in front of. Flagging it blocked the
+  // Live view on a shop that routes perfectly (routeShop already reports the tool
+  // `routed` with no states to command).
+  if (tools.length > 1) for (const tool of tools) {
     let cur = tool.id, gated = false;
     for (;;) {
       const d = parentDuct.get(cur);

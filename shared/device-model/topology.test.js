@@ -11,7 +11,8 @@ const { validateTopology, servoCommandAngle, airflowIssues, redundantSelectors,
         absoluteAngles, applyAbsoluteAngles } = require('./topology');
 const { computeRouting } = require('./routing');
 const { planTransition } = require('./sequencer');
-const { createTopologyDevice, setToolPower, statusView } = require('./topology-device');
+const { createTopologyDevice, setToolPower, statusView,
+        DEFAULT_COLLECTOR_OFF_DELAY_MS: COAST_MS } = require('./topology-device');
 const { clone, star, feedChain, twoGates } = require('./topology.fixtures');
 
 // ── tiny harness (same style as conformance.js) ─────────────────────────────
@@ -254,10 +255,13 @@ const idxOf = (plan, sel) => plan.moves.findIndex((m) => m.selectorId === sel);
     s.actuators.gate1 === 'closed' && s.actuators.gate2 === 'open' &&
     s.collectorOn === true && s.collectorCoasting === true);
 
-  s = statusView(d, t0 + 3999);
+  // Off the constant, not a literal: this pair used to read 3999/4000 and had to
+  // be hand-edited when the default moved. Its C++ twin
+  // (firmware/test/test_nodebus.cpp) already used the symbol.
+  s = statusView(d, t0 + COAST_MS - 1);
   check('dev idle: still coasting just before the delay expires', s.collectorOn === true);
 
-  s = statusView(d, t0 + 4000);
+  s = statusView(d, t0 + COAST_MS);
   check('dev idle: collector off once the coast-down expires',
     s.collectorOn === false && s.collectorCoasting === undefined);
 
@@ -414,6 +418,29 @@ const idxOf = (plan, sel) => plan.moves.findIndex((m) => m.selectorId === sel);
   const li2 = airflowIssues(leaky);
   check('airflow: ungated tool is not double-reported as co-open',
     li2.length === 1 && li2[0].kind === 'always-open');
+
+  // A system whose ONLY tool has no gate is a valid design, not a leak: a sander
+  // on a shopvac, switched on automatically with nothing to gate it away from.
+  // There is nowhere else for the air to go, so "always open" describes the
+  // intent rather than a fault.
+  const lone = {
+    schemaVersion: 1,
+    elements: [
+      { id: 'dc', type: 'collector', name: 'Shopvac' },
+      { id: 'sander', type: 'tool', name: 'Sander' },
+    ],
+    ducts: [{ child: 'sander', parent: 'dc' }],
+  };
+  eq('airflow: the only tool in a system needs no gate', airflowIssues(lone), []);
+
+  // …and the exemption is about being ALONE, not about being first: add a second
+  // tool and both ungated tools are leaks again.
+  const twoLoose = clone(lone);
+  twoLoose.elements.push({ id: 'vac2', type: 'tool', name: 'Bench Vac' });
+  twoLoose.ducts.push({ child: 'vac2', parent: 'dc' });
+  const tl = airflowIssues(twoLoose);
+  check('airflow: a second ungated tool makes both leaks',
+    tl.length === 2 && tl.every((i) => i.kind === 'always-open'));
 }
 
 // ── servo channels: two gates on one board can't share a PWM channel ─────────
