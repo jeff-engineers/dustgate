@@ -326,3 +326,91 @@ capacitance:
 - **Sags and stays down** — the supply is undersized or the run is too long. Size the
   buck for *stall* current × the number of servos that can move together, not rated
   current, and shorten or thicken the run.
+
+---
+
+## 6. Status Screen (SSD1306 OLED) — optional
+
+> **UNBUILT.** No display has been wired to a DustGate board and no firmware
+> draws to one. Everything in this chapter is a design, including the pins each
+> board doc proposes. It is written down so the wiring is settled before someone
+> starts soldering, not because any of it has been verified.
+
+A 0.96" 128×64 SSD1306 on I²C, so *"is it connected?"* has an answer you can read
+at the machine instead of on a phone. The layouts — what each screen says, and
+the eight-row budget they have to say it in — are in
+[`docs/mockups/oled-status.html`](../docs/mockups/oled-status.html); this chapter
+is only the wire.
+
+### It never replaces the pixel
+
+The pixel is readable across a dusty shop; the screen is readable at arm's
+length. That is the whole division of labour. §1 stays fitted on every board,
+and the screen — where one is fitted at all — mirrors the *same*
+`statusled::Status` state the pixel is showing rather than inventing a second
+vocabulary. Two indicators that could disagree with each other would be worse
+than one.
+
+### Wiring
+
+Four wires, and no level shifting: run the module from **3V3**, and its I²C lines
+are then already at the ESP32's logic level.
+
+```
+3V3 ─────────────── VCC
+GND ─────────────── GND   ── common with the board's ground
+SDA pin ─────────── SDA
+SCL pin ─────────── SCL
+```
+
+Which pins is per board — see [`wiring/devkitc.md`](wiring/devkitc.md) and
+[`wiring/xiao-c5.md`](wiring/xiao-c5.md). The XIAO uses its standard D4/D5 pair
+and everything lines up; the **DevKitC cannot** — the GPIO21/22 that every ESP32
+example assumes are the TMC2209's EN and DIR on that board.
+
+**Do not run it from 5V.** These modules will take it, but then their SDA/SCL
+idle at 5V through the onboard pull-ups, and no ESP32 here is 5V tolerant. The
+3V3 rail has ample headroom for it — the panel draws under 20mA with every pixel
+lit, and far less showing text.
+
+**Address is 0x3C** on essentially all of the 4-pin 0.96" modules (0x3D exists on
+some 128×64 parts; if it scans up as 0x3D, that is why). No pull-up resistors to
+add — the modules carry their own.
+
+### Burn-in, and why the screen sleeps
+
+An OLED with fixed labels lit 24/7 burns them in — the ghost of `gates` and
+`nodes` etched across every later screen. So the intended behaviour is:
+
+- **Blank after a couple of minutes idle.**
+- **Wake on events** — a gate moving, a tool drawing power, a node dropping, any
+  fault.
+- **A fault holds it awake.** Nobody should have to press anything to find out
+  what broke.
+
+Which makes a lit screen mean *something happened*, instead of becoming wallpaper
+you stop reading. That is a firmware behaviour, not a wiring one, but it is the
+reason the wake button below is a convenience rather than a requirement.
+
+### The wake button — optional, and optional on purpose
+
+Wake-on-event covers the cases that matter, so a button only buys you a
+deliberate wake (and paging, if paging ever earns its keep). Ordinary momentary
+switch to GND on any input-capable pin, read with `INPUT_PULLUP`:
+
+```
+GPIO ──── [momentary NO] ──── GND
+```
+
+Same NC-vs-NO caution as the endstops in reverse: this one is **normally OPEN**,
+so the pin idles HIGH and a strapping pin is harmless here — nothing holds the
+line at reset unless someone is pressing the button while the board boots.
+
+### Fitting one is a build-time fact
+
+A DustGate ships without a screen unless somebody fits one, so the display has to
+compile out completely when its pins aren't defined — the same seam `HAS_LINEAR`
+and `PIN_PIXEL` already use. No display, no library, no flash spent. **Open
+question:** whether a fitted screen is probed for at boot (an I²C read at 0x3C) or
+declared by the build. Probing is friendlier to a user who adds one later;
+declaring is what the rest of this firmware does.

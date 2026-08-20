@@ -74,6 +74,19 @@
 // No PIN_LED: the pixel covers every state. StatusLed.h's plain-LED fallback is
 // for boards that have an LED and no pixel, which this one does not.
 
+// -- Reserved: status screen (SSD1306 OLED) --
+// Optional and UNBUILT. NOT the usual GPIO21/22 — those are PIN_TMC_EN and
+// PIN_TMC_DIR above, so copy-pasted I2C example code would drive the stepper's
+// enable line. GPIO16/4 are the board's last two general-purpose spares and sit
+// next to the pixel's GPIO17 on the V4 right header, keeping the indicator group
+// together on a carrier. Fitting a screen therefore fills this board.
+//
+// WROVER WARNING: GPIO16/17 are the PSRAM interface on WROVER modules — that is
+// SDA *and* PIN_PIXEL, on a module that drops into the same footprint, with no
+// spares left to move them to. See firmware/wiring/devkitc.md §5.
+// #define PIN_OLED_SDA    16
+// #define PIN_OLED_SCL     4
+
 // -- Reserved: servo PWM outputs (4 in a row) --
 #define SERVO_PWM_PIN_1    25
 #define SERVO_PWM_PIN_2    26

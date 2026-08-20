@@ -37,10 +37,13 @@ is the equivalent pin on that legacy board.
 | Home endstop           | GPIO32               | D10          |
 | Far endstop            | GPIO33               | D11          |
 | Status pixel           | GPIO17 (external)    | GPIO33 (onboard) |
+| Status screen SDA *(opt)* | GPIO16            | —            |
+| Status screen SCL *(opt)* | GPIO4             | —            |
 
 **Reserved for servo gates:** GPIO25, GPIO26, GPIO27, GPIO14 — a contiguous 4-pin block
 for servo PWM outputs. Unused by the sliding gate; do not repurpose them on the carrier.
-**Spare:** GPIO16, GPIO4.
+**Spare:** none left once a status screen is fitted — GPIO16 and GPIO4 were the
+last two, and the optional OLED ([§5](#5-status-screen-ssd1306-oled--optional)) takes both.
 
 ### Status pixel (DevKitC needs an external one)
 
@@ -381,7 +384,64 @@ flashes through the onboard CP2102/CH340 USB-serial chip.
 
 ---
 
-## 5. Pin Budget
+## 5. Status Screen (SSD1306 OLED) — optional
+
+> **UNBUILT**, like the whole chapter it belongs to. See
+> [`WIRING.md` §6](../WIRING.md#6-status-screen-ssd1306-oled--optional) for what the
+> screen is for, the burn-in/sleep behaviour and the 3V3 rule; the layouts are in
+> [`docs/mockups/oled-status.html`](../../docs/mockups/oled-status.html). Only the
+> DevKitC-specific part is here.
+
+| Signal | DevKitC pin | Note |
+|---|---|---|
+| SDA | GPIO16 | labeled spare, non-strapping |
+| SCL | GPIO4  | labeled spare, non-strapping |
+
+```
+3V3 ────────── VCC        (never 5V — see WIRING.md §6)
+GND ────────── GND
+GPIO16 ─────── SDA
+GPIO4 ──────── SCL
+```
+
+**Not GPIO21/22, which is what every ESP32 example uses.** Those are the TMC2209's
+EN and DIR here. I²C is fully remappable through the GPIO matrix, so the fix is one
+`Wire.begin(16, 4)` — but it does mean copy-pasted example code will silently drive
+the stepper's enable line instead of a display. GPIO16 and GPIO4 also sit adjacent to
+the pixel's GPIO17 on the V4 right header, so the whole indicator group is one block
+on the carrier.
+
+> On a **servo-only** build (`esp32dev_servo`) no TMC2209 is fitted and GPIO21/22 are
+> electrically free — but the pin map is deliberately the same across both envs, so a
+> carrier built for one board works on the other. Use 16/4 anyway.
+
+### This spends the board's last two spare pins
+
+The DevKitC is full. GPIO16 and GPIO4 were the only general-purpose pins left, and
+fitting a screen takes them both. Everything after this is input-only (GPIO34/35/36/39,
+no output and no internal pull-up) or a strapping pin.
+
+Which is fine for a **wake button**, since a button only needs to be read: put it on
+an input-only pin with an **external 10kΩ pull-up to 3V3** (the internal one those
+pins lack), momentary to GND.
+
+```
+3V3 ──[10kΩ]──┬── GPIO34
+              └── [momentary NO] ──── GND
+```
+
+### ⚠ If you ever swap to an ESP32-WROVER
+
+**GPIO16 and GPIO17 are the PSRAM interface on WROVER modules.** That is the status
+pixel *and* the display's SDA line, both gone, on a module that drops into the same
+footprint — and there are no spare pins left to move them to. A WROVER swap is
+therefore a repin of the whole indicator group, not a drop-in. Worth knowing before
+the carrier is fabbed, because "add PSRAM later" is exactly the kind of decision that
+looks free.
+
+---
+
+## 6. Pin Budget
 
 | Signal                    | DevKitC pin   | Notes                                |
 |---------------------------|---------------|--------------------------------------|
@@ -393,21 +453,26 @@ flashes through the onboard CP2102/CH340 USB-serial chip.
 | Home-side limit switch    | GPIO32        | FEEDBACK_LIMIT_DISTANCE (required)   |
 | Far-side limit switch     | GPIO33        | FEEDBACK_LIMIT_DISTANCE (required)   |
 | Status pixel (WS2812)     | GPIO17        | External; 330R in series on DIN — see [WIRING.md §1](../WIRING.md#1-status-pixel-ws2812--neopixel) |
+| Status screen SDA         | GPIO16        | Optional — see [§5](#5-status-screen-ssd1306-oled--optional) |
+| Status screen SCL         | GPIO4         | Optional; **not** the usual GPIO21/22 — those are TMC EN/DIR |
 | Remote reset button       | EN            | Optional, not code-visible           |
 | Remote boot button        | GPIO0         | Optional, not code-visible           |
 
 Both limit switches are required. Which one acts as the home datum is decided at
 setup time (always the user's LEFT end) — see `g_homeIsMaxEndstop`.
 
-**Active header pins: 8** (GPIO23, 22, 21, 19, 18, 32, 33, 17). The status pixel
-costs a header pin on this board — the DevKitC has no onboard user LED to ride.
+**Active header pins: 8** (GPIO23, 22, 21, 19, 18, 32, 33, 17), or **10** with a
+status screen fitted (+ GPIO16, 4). The status pixel costs a header pin on this
+board — the DevKitC has no onboard user LED to ride.
 
 **Reserved for servo PWM:** GPIO25, 26, 27, 14 (contiguous 4-pin block).
-**Free for other expansion:** GPIO16, 4, plus the input-only GPIO34/35/36/39
-(input/ADC only — no output, no internal pull-up).
+**Free for other expansion:** GPIO16 and 4 — **but those are the status screen's
+I²C pair if one is fitted**, and nothing general-purpose remains after that. Beyond
+them only the input-only GPIO34/35/36/39 (input/ADC only — no output, no internal
+pull-up), which will do for a button with an external pull-up and nothing else.
 
 EN/GPIO0 aren't GPIOs the firmware reads — they're the hardware reset/bootloader
 lines, listed here only so the pin budget stays accurate if you wire the
-enclosure buttons from §6.
+enclosure buttons from [§4](#4-remote-boot--reset-buttons-enclosure-mounted-optional).
 
 ---

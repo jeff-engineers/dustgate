@@ -8,13 +8,13 @@
 > **The strapping-pin worry is closed** — GPIO8/GPIO9 are ordinary IO on this
 > part, confirmed against the datasheet and then on the bench (2026-08-19), so a
 > servo signal idling there does not hold the board out of its app. See
-> [§5](#5-before-you-trust-this).
+> [§6](#6-before-you-trust-this).
 >
 > What is still unproven is the other half: **the pin numbers below come from
 > Seeed's published pinout, not from a multimeter, and no servo has been seen to
 > MOVE on any of them.** A board that boots with a servo attached has not yet
 > shown that the signal reaches it. If it appears not to boot, read
-> [§4](#4-if-it-looks-dead) first, because the first time, it was booting fine.
+> [§5](#5-if-it-looks-dead) first, because the first time, it was booting fine.
 >
 > Authoritative source for every number here:
 > [`firmware/boards/xiao_c5.h`](../boards/xiao_c5.h). If this file and that header
@@ -104,7 +104,10 @@ longer hearsay.
 | Servo PWM channel 3 | D9  | 9    | Ordinary GPIO on the C5 — not strapping. Alt: SDIO_CLK |
 | Servo PWM channel 4 | D10 | 10   | Alt: SDIO_CMD |
 | Status pixel (DIN)  | D2  | 25   | External part; onboard LED is green, not RGB. Strapping — see §5 |
-| Onboard user LED    | —   | 27   | Green, single colour. Strapping pin, but latched at reset — see §5. Fallback only |
+| Onboard user LED    | —   | 27   | Green, single colour. Strapping pin, but latched at reset — see §6. Fallback only |
+| Status screen SDA *(opt)* | D4 | 23 | XIAO-standard I²C — see §4 |
+| Status screen SCL *(opt)* | D5 | 24 | XIAO-standard I²C — see §4 |
+| Wake button *(opt)*  | D1  | 0    | Momentary to GND, `INPUT_PULLUP`. Not strapping on the C5 |
 
 **Deliberately absent: motor and endstop pins.** `config.h` derives `HAS_LINEAR`
 from whether `PIN_TMC_STEP` is defined, so leaving them out is what makes this a
@@ -171,7 +174,73 @@ but free.
 
 ---
 
-## 4. If it looks dead
+## 4. Status Screen (SSD1306 OLED) — optional
+
+> **UNBUILT.** No display has been wired to any DustGate board. See
+> [`WIRING.md` §6](../WIRING.md#6-status-screen-ssd1306-oled--optional) for what the
+> screen is for, the burn-in/sleep behaviour and the 3V3 rule; the layouts are in
+> [`docs/mockups/oled-status.html`](../../docs/mockups/oled-status.html). Only the
+> C5-specific part is here.
+
+| Signal | Pad | GPIO | Note |
+|---|---|---|---|
+| SDA | D4 | 23 | the XIAO-standard I²C position |
+| SCL | D5 | 24 | ditto |
+
+```
+3V3 ────────── VCC        (never 5V — see WIRING.md §6)
+GND ────────── GND ────── XIAO GND   (common, mandatory)
+D4 (GPIO23) ── SDA
+D5 (GPIO24) ── SCL
+```
+
+**These are the pads Seeed's own I²C accessories expect**, so a Grove connector or a
+XIAO expansion board lands on them without a rework — which is the opposite of the
+DevKitC's situation, where the obvious I²C pins are already the stepper's. Same
+caveat as every number in this file: D4/D5 is Seeed's published convention, not
+something traced with a meter.
+
+### It fits in both roles, which is the point
+
+D4/D5 are free whether this board is running four PWM gates or an ST3215 slider,
+so one carrier design carries the screen in either configuration:
+
+| | Primary / PWM node | Slider node |
+|---|---|---|
+| D4, D5 | **screen** | **screen** |
+| D6, D7 | free | ST3215 bus TX/RX |
+| D7–D10 | servo ch 1–4 | — |
+| D8, D9 | — | endstops |
+| D2 | pixel | pixel |
+| D1 | wake button *(opt)* | wake button *(opt)* |
+| D0, D3 | free | free |
+
+**D0 (GPIO1) is deliberately left out of that**: it is the only analog pin on the
+castellated edge (§6), and spending it on a digital button you could put on D1
+instead would be the last thing you did before needing a current sense.
+
+### The wake button
+
+D1 is GPIO0 — which on most ESP32 parts would be the boot strap and a bad choice,
+but **not on the C5**, where the boot straps are GPIO26/27/28 (§6). A momentary
+switch to GND with `INPUT_PULLUP` is safe here even at reset, since a normally-open
+button leaves the pin pulled high unless someone is holding it.
+
+```
+D1 (GPIO0) ──── [momentary NO] ──── GND
+```
+
+**The onboard RESET and BOOT buttons are at the USB-C end**, and disappear the
+moment the board is in a case ([§1](#1-pin-map)). Unlike the DevKitC — which breaks
+EN and GPIO0 out to the header, so a panel-mount reset is just two wires — the C5's
+castellated edge is D0–D10, 5V, GND and 3V3, with **no RST pad among them**. A
+panel-mount reset on a C5 carrier therefore means soldering to the button itself or
+finding a test pad on the underside; whether a usable one exists is **unconfirmed**,
+and worth checking against a real board before a case design depends on it.
+
+---
+
+## 5. If it looks dead
 
 **It probably isn't.** On 2026-08-13 this board appeared completely dead — no
 serial output past the ROM banner, no pixel, BOOT button doing nothing — and was
@@ -205,7 +274,7 @@ allocate dummy cacheline for PSRAM memory barrier!`. It comes from IDF's
 afterwards. Unexplained, harmless so far, and **not** worth chasing when
 something else is wrong — it appears on every boot.
 
-## 5. Before you trust this
+## 6. Before you trust this
 
 ### Strapping pins — checked, and the map is clear
 
