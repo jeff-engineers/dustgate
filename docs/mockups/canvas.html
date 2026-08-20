@@ -148,8 +148,9 @@
             <rect class="inlet" x="30" y="7" width="14" height="11" rx="2"/>
           </svg>
           <div><div class="what">Spigot — square</div>
-            <div class="means">A machine's <b>primary</b> inlet. Drawn only when the machine
-              also has a pickup; its duct lands on it.</div></div>
+            <div class="means">A machine's <b>primary</b> inlet. Always drawn, on whichever
+              edge its duct actually arrives at — top preferred, sides when a side run is
+              genuinely shorter.</div></div>
         </div>
 
         <div class="leg">
@@ -158,18 +159,8 @@
             <path class="inlet" d="M52 17 L60 4 L68 17 Z"/>
           </svg>
           <div><div class="what">Hood — tapered</div>
-            <div class="means">A <b>pickup</b>: an overarm guard, a hood. What one physically
-              is. Its role is captioned beside it.</div></div>
-        </div>
-
-        <div class="leg">
-          <svg viewBox="0 0 96 34" aria-label="Hollow dashed hood glyph">
-            <rect class="toolbox" x="18" y="16" width="60" height="16" rx="4"/>
-            <path class="inlet spare" d="M52 17 L60 4 L68 17 Z"/>
-          </svg>
-          <div><div class="what">Spare inlet</div>
-            <div class="means">Room for another pickup. Hollow and dashed like an unwired
-              tab — <b>drag out of it</b> to run a pickup's pipe.</div></div>
+            <div class="means">A <b>pickup</b>. Appears only once its port exists — never as a
+              placeholder — and its duct lands on it. Drag it to re-run its pipe.</div></div>
         </div>
 
         <div class="leg" style="border-bottom:none">
@@ -258,6 +249,12 @@
     </div>
 
     <div class="card flag">
+      <p class="note"><b>A duct always lands on a glyph.</b> Never on bare box. Every machine
+        draws its square spigot at the point its own run arrives, and every pickup's hood is
+        where that run arrives — so the drawing says which pipe feeds what without following
+        either of them. The glyphs prefer the TOP edge, and the router prefers a top entry to
+        match; when a side run is genuinely shorter the spigot moves to that side rather than
+        leaving the pipe pointing at nothing. Dragging the machine carries both glyphs with it.</p>
       <p class="note"><b>The rule, stated once.</b> A machine lives in one system. A machine's
         <em>ports</em> are elements in the airflow tree, each with exactly one parent duct — a
         tool may never have two parents, which is why a second pickup is a new port element
@@ -351,8 +348,8 @@
       </div>
 
       <div class="opt">
-        <div style="display:flex;align-items:baseline;gap:8px"><h2>Or pull it out</h2>
-          <span style="margin-left:auto;font-size:11.5px;color:var(--muted)">machine → gate</span></div>
+        <div style="display:flex;align-items:baseline;gap:8px"><h2>Or re-run it</h2>
+          <span style="margin-left:auto;font-size:11.5px;color:var(--muted)">hood → gate</span></div>
         <div class="screen" style="aspect-ratio:375/250">
           <svg viewBox="0 0 375 250" aria-label="Dragging out of the machine's spare inlet down to a gate in the other system">
             <rect class="ground" x="8" y="8" width="359" height="132" rx="11"/>
@@ -373,18 +370,20 @@
             <line x1="296" y1="180" x2="296" y2="212" stroke="var(--muted)" stroke-width="2.5"/>
             <text class="gatelbl" x="296" y="160">AUX VALVE</text>
 
-            <path class="inlet spare" d="M140 79 L150 66 L160 79 Z"/>
+            <path class="inlet" d="M140 79 L150 66 L160 79 Z"/>
+            <text class="sub" x="150" y="60" style="font-size:9">overarm</text>
             <path class="drag" d="M154 70 L280 178"/>
 
             <circle cx="296" cy="196" r="26" fill="none" stroke="var(--accent)"
                     stroke-width="2" stroke-dasharray="5 4"/>
-            <text class="acc-t" x="168" y="60">drag out of the spare inlet</text>
+            <text class="acc-t" x="168" y="46">drag the hood itself</text>
             <text class="acc-t" x="120" y="234">…onto a gate over here</text>
           </svg>
         </div>
-        <p class="note">Every machine with room for another pickup wears a hollow inlet. Pull a
-          run out of it and drop it on a gate, a free outlet or a loose end — including one
-          across the seam, which is the case this whole treatment exists for.</p>
+        <p class="note">An existing hood is its own handle: drag it onto another gate, a
+          collector or a loose end — including one across the seam — and its pipe re-runs from
+          there. <b>Nothing hollow advertises a pickup that doesn't exist yet</b>; a hood
+          appears with its port and never before.</p>
       </div>
 
       <div class="opt">

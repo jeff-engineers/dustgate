@@ -104,6 +104,11 @@ const DECISIONS = [
     why: 'A tool’s <b>primary</b> port is always connected to suction with its collector running — non-negotiable. Its <b>secondary</b> port gets its own system’s collector turned on too, whenever that system is free. When another tool needs that system, the auxiliary port is temporarily disconnected and the tool that needs it runs; it reconnects once the contest clears. <b>"Never both" in the 2026-08-16 parking note meant two TOOLS at once, not two blowers</b> — one machine drives both its collectors, and the one-tool-at-a-time assumption is D-08, untouched.',
     where: 'Already implemented and tested on both sides: arbitration order (primary beats supplemental, then most-recent-wins within each) in shop.js routeShop() and control/Shop.h:260, and the C++ test "one machine starts both blowers" (test_nodebus.cpp). A dropped supplemental degrades a machine to <code>partial</code>, never <code>stripped</code>.' },
 
+  { id: 'D-40', date: '2026-08-20', area: 'canvas', status: 'standing',
+    what: 'A duct always lands on a glyph, never on bare box',
+    why: 'Every machine draws its square spigot at the point its own run arrives, and a pickup\u2019s hood is where that run arrives — so the drawing says which pipe feeds what without following either of them. The glyphs prefer the TOP edge and the router prefers a top entry to match; when a side run is genuinely shorter the spigot <b>moves to that side</b> rather than leaving the pipe pointing at nothing. Dragging a machine carries its glyphs with it. Nothing hollow or dashed advertises a pickup that does not exist yet — a hood appears with its port and never before, and an existing hood is the handle for re-running its own pipe.',
+    where: 'canvas.html §1–2 · spigotSeat() and pickupSeat() in build.component.ts' },
+
   // ── open questions, deliberately parked ──────────────────────────────
   { id: 'D-37', date: '2026-08-12', area: 'hardware', status: 'open',
     what: 'A serial-bus servo could replace both the stepper and the PWM servos',

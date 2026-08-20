@@ -114,13 +114,11 @@ svg.canvas { display: block; touch-action: none; }
    variable to read where one does the job. */
 .node .hood, .node .spigot { fill: #1d3540; stroke: #2d6a86; stroke-width: 1.6; }
 .node.sel .hood, .node.sel .spigot { stroke: var(--accent); stroke-width: 2.2; }
-/* A spare inlet: room for another pickup, and the handle you pull a run out of.
-   Hollow + dashed is the "not wired yet" language a bare servo tab already wears,
-   so it reads as an offer rather than a part that exists. */
-.hood.spare { fill: none; stroke: var(--muted); stroke-width: 1.4; stroke-dasharray: 3 2.5; }
-.node.sel .hood.spare { stroke: var(--muted); stroke-width: 1.4; }
-.spare-inlet { cursor: cell; }
-.spare-inlet:hover .hood.spare { stroke: var(--accent); stroke-dasharray: none; }
+/* An existing hood is the handle for re-running its own pipe. Nothing hollow or
+   dashed advertises a pickup that doesn't exist yet — a hood appears with its
+   port and never before. */
+.hood-grab { cursor: grab; }
+.hood-grab:hover .hood { stroke: var(--accent); }
 
 /* The second-pickup confirmation. Reuses the gate sheet's card so the two sheets
    are the same object with different contents. */

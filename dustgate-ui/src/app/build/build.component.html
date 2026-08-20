@@ -141,24 +141,25 @@
                spigot marking its own inlet. Square against the pickup's tapered
                hood is the whole vocabulary: two entries on one top edge, each
                offset from the centreline, each with its duct landing on it. -->
+          <!-- A machine's body, plus the SQUARE spigot marking where its own duct
+               lands. Drawn on whichever edge the run actually arrives at, not pinned
+               to the top — the glyph is the entry point, and one drawn anywhere else
+               is a decal. Top is preferred by the router, not guaranteed. -->
           <g *ngSwitchCase="'tool'">
             <rect class="body tool-body" x="-38" [attr.y]="-TOOL_HALF" width="76" [attr.height]="TOOL_HALF * 2" rx="11"/>
-            <rect *ngIf="n.spigot" class="spigot" rx="2"
-                  [attr.x]="SPIGOT_DX - SPIGOT_W / 2" [attr.y]="-TOOL_HALF - SPIGOT_H + 2"
-                  [attr.width]="SPIGOT_W" [attr.height]="SPIGOT_H"/>
-            <!-- Room for another pickup: a hollow hood you can pull a run out of.
-                 Hollow and dashed borrows the "not wired yet" language a bare servo
-                 tab already uses, so it reads as an offer rather than a part. -->
-            <g *ngIf="spareInletDx(n) as sdx" class="spare-inlet" (pointerdown)="onInletDown($event, n)">
-              <circle [attr.cx]="sdx" [attr.cy]="-TOOL_HALF - 6" r="13" fill="transparent"/>
-              <path class="hood spare" [attr.d]="'M' + (sdx - 9) + ' ' + (-TOOL_HALF) + ' L' + sdx + ' ' + (-TOOL_HALF - 13) + ' L' + (sdx + 9) + ' ' + (-TOOL_HALF) + ' Z'"/>
-            </g>
+            <rect *ngIf="spigotSeat(n) as sp" class="spigot" rx="2"
+                  [attr.x]="-SPIGOT_W / 2" [attr.y]="-SPIGOT_H + 2"
+                  [attr.width]="SPIGOT_W" [attr.height]="SPIGOT_H"
+                  [attr.transform]="'translate(' + sp.x + ',' + sp.y + ') rotate(' + sp.rot + ')'"/>
           </g>
           <!-- A supplemental port: a tapered HOOD on the machine's own top edge, not a
                second body. One machine stays one box — which is the whole point, since
                a shop drawn with two saws in it is a drawing that lies about the shop.
                The duct lands on the hood; the role is captioned beside it. -->
-          <g *ngSwitchCase="'pickup'">
+          <!-- Drag it onto another gate to re-run its pipe. There is deliberately no
+               placeholder to drag OUT of: a hood exists only once its pickup does. -->
+          <g *ngSwitchCase="'pickup'" class="hood-grab" (pointerdown)="onHoodDown($event, n)">
+            <circle cx="0" cy="-7" r="14" fill="transparent"/>
             <path class="hood" d="M-9 0 L0 -13 L9 0 Z"/>
             <text class="hood-role" x="0" y="-18">{{ pickupRole(n) }}</text>
           </g>
