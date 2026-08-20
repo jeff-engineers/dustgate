@@ -113,7 +113,8 @@ export class DemoApiService extends ApiService {
    *  invisible while nothing displayed watts. The canvas's plug row does, and it
    *  rendered a switched-on tool as "100.0 kW" — a number no shop tool draws.
    *  Three times the trip point clears every threshold test the same way and
-   *  reads like a machine. */
+   *  reads like a machine. Mirrors manualWattsFor() in
+   *  firmware/control/TopologyRuntime.h — see the twin-pair table in CLAUDE.md. */
   override async setToolManual(toolId: string, on: boolean): Promise<unknown> {
     if (!this.td) throw new Error('no topology configured');
     // toolThreshold() is machineThreshold under its v1 name, and already falls

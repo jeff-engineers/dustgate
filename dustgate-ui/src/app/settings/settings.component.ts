@@ -4,6 +4,9 @@ import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
 import { ApiService } from '../services/api.service';
 import { HardwareProfileService, PortSize } from '../services/hardware-profile.service';
+import type { Topology } from '@topology';
+import { DEFAULT_COLLECTOR_OFF_DELAY_MS } from '@topology-device';
+import { toShop, systemsOf, type ShopDoc, type RawEl } from '../services/shop-doc';
 
 /**
  * SettingsComponent — device configuration hub, reached via the gear icon.
@@ -204,20 +207,44 @@ import { HardwareProfileService, PortSize } from '../services/hardware-profile.s
         </button>
       </div>
 
-      <!-- Power -->
+      <!-- Dust collection -->
+      <!-- Per collector, because that is where the value lives: offDelayMs is a
+           field on the collector element, and a two-collector shop can legitimately
+           want a big cyclone to wind down slowly and a shopvac to cut straight
+           away. With one collector — nearly every shop — this renders as the single
+           control it reads like. -->
       <div class="section">
-        <span class="section-title">Power</span>
+        <span class="section-title">Dust collection</span>
+
         <div class="row">
           <div>
-            <div class="row-label">Idle power-off</div>
-            <div class="row-hint">Minutes of inactivity before the motor driver powers off. Rehomes automatically on next use. 0 = never.</div>
+            <div class="row-label">Coast-down</div>
+            <div class="row-hint">
+              Seconds the collector keeps running after the last tool switches off.
+              Clears the duct instead of leaving it packed, and stops the blower
+              short-cycling between cuts. 0 = cut immediately.
+            </div>
           </div>
         </div>
-        <div class="row">
-          <input type="number" min="0" max="1440" [(ngModel)]="idleTimeoutMin" (ngModelChange)="clearStatus()" />
-          <button class="save-btn" [disabled]="savingIdleTimeout" (click)="saveIdleTimeout()">
-            {{ savingIdleTimeout ? 'Saving…' : 'Save' }}
+
+        <div class="row" *ngFor="let c of coasts">
+          <!-- The name only earns its place when there's more than one to tell
+               apart; on a one-collector shop it is noise above a single field. -->
+          <span class="row-label" *ngIf="coasts.length > 1">{{ c.name }}</span>
+          <input type="number" min="0" max="120" [(ngModel)]="c.seconds" (ngModelChange)="clearStatus()" />
+        </div>
+
+        <!-- Right-aligned like every other Save on this page. One button rather
+             than one per collector: the shop is written whole, so a partial save
+             isn't a thing the document can express. -->
+        <div class="row" *ngIf="coasts.length" style="justify-content: flex-end">
+          <button class="save-btn" [disabled]="savingCoast" (click)="saveCoast()">
+            {{ savingCoast ? 'Saving…' : 'Save' }}
           </button>
+        </div>
+
+        <div class="row-hint" *ngIf="!coasts.length">
+          No dust collector yet — draw the shop layout first and this will follow it.
         </div>
       </div>
 
@@ -290,16 +317,20 @@ import { HardwareProfileService, PortSize } from '../services/hardware-profile.s
 })
 export class SettingsComponent implements OnInit {
 
-  idleTimeoutMin = 60;
   numGates = 1;
   portSize: PortSize = '2.5in';
 
-  savingIdleTimeout = false;
   savingDirection   = false;
   savingNumGates    = false;
 
   confirmingReset      = false;
   confirmingWifiReset  = false;
+
+  /** One row per collector in the saved shop — see the template's note on why
+   *  this is per collector rather than one device-wide number. */
+  coasts: { systemId: string; name: string; seconds: number }[] = [];
+  savingCoast = false;
+  private doc: ShopDoc | null = null;
 
   statusMsg = '';
   errorMsg  = '';
@@ -316,10 +347,67 @@ export class SettingsComponent implements OnInit {
     // deviceInfo may not have loaded yet on a hard refresh straight into /settings.
     this.api.ready$.subscribe(ready => {
       if (!ready) return;
-      this.idleTimeoutMin = Math.round((this.api.deviceInfo?.idleTimeoutSec ?? 3600) / 60);
       this.numGates       = this.api.deviceInfo?.numStops || 1;
       this.cd.markForCheck();
     });
+    void this.loadCoasts();
+  }
+
+  /** A missing layout is normal, not an error — someone can open Settings on a
+   *  device they have not drawn a shop on yet. */
+  private async loadCoasts(): Promise<void> {
+    try {
+      this.doc = toShop(await this.api.getTopology());
+    } catch {
+      this.doc = null;
+    }
+    this.coasts = [];
+    for (const sys of systemsOf(this.doc)) {
+      const c = (sys.elements || []).find(e => (e as RawEl)['type'] === 'collector') as RawEl | undefined;
+      if (!c) continue;
+      const control = (c['control'] ?? {}) as RawEl;
+      const ms = typeof control['offDelayMs'] === 'number'
+        ? control['offDelayMs'] as number
+        : DEFAULT_COLLECTOR_OFF_DELAY_MS;
+      this.coasts.push({
+        systemId: sys.id,
+        name: (c['name'] as string) || sys.name || 'Dust collector',
+        // Whole seconds in the UI: the field is milliseconds because firmware
+        // counts in them, but nobody sets a coast-down to 4.25 s.
+        seconds: Math.round(ms / 1000),
+      });
+    }
+    this.cd.markForCheck();
+  }
+
+  /** Writes every collector in one PUT — the document is saved whole, so a
+   *  per-collector endpoint would just be the same write with more steps. */
+  async saveCoast(): Promise<void> {
+    if (!this.doc) return;
+    this.savingCoast = true;
+    this.statusMsg = '';
+    this.errorMsg  = '';
+    this.cd.markForCheck();
+    try {
+      for (const row of this.coasts) {
+        const sys = systemsOf(this.doc).find(x => x.id === row.systemId);
+        const c = (sys?.elements || []).find(e => (e as RawEl)['type'] === 'collector') as RawEl | undefined;
+        if (!c) continue;
+        const secs = Math.max(0, Math.min(120, Math.round(row.seconds)));
+        row.seconds = secs;
+        // Merge, never replace: `control` also carries the collector's plug.
+        c['control'] = { ...((c['control'] ?? {}) as RawEl), offDelayMs: secs * 1000 };
+      }
+      await this.api.putTopology(this.doc as unknown as Topology);
+      this.statusMsg = 'Coast-down saved.';
+    } catch {
+      // The likeliest cause is a half-drawn shop the controller won't accept —
+      // saying "check connection" would send someone hunting the wrong fault.
+      this.errorMsg = 'Could not save. If the shop layout is unfinished, finish it first.';
+    } finally {
+      this.savingCoast = false;
+      this.cd.markForCheck();
+    }
   }
 
   back()            { this.router.navigate(['/']); }
@@ -327,7 +415,7 @@ export class SettingsComponent implements OnInit {
 
   clearStatus() { this.statusMsg = ''; this.errorMsg = ''; }
 
-  private async run(action: () => Promise<unknown>, busyFlag: 'savingIdleTimeout' | 'savingDirection' | 'savingNumGates', successMsg: string) {
+  private async run(action: () => Promise<unknown>, busyFlag: 'savingDirection' | 'savingNumGates', successMsg: string) {
     this[busyFlag] = true;
     this.statusMsg = '';
     this.errorMsg  = '';
@@ -341,11 +429,6 @@ export class SettingsComponent implements OnInit {
       this[busyFlag] = false;
       this.cd.markForCheck();
     }
-  }
-
-  saveIdleTimeout() {
-    const sec = Math.max(0, Math.min(1440, Math.round(this.idleTimeoutMin))) * 60;
-    this.run(() => this.api.setIdleTimeout(sec), 'savingIdleTimeout', 'Idle timeout saved.');
   }
 
   setMotorDirection(invert: boolean) {

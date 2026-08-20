@@ -30,6 +30,33 @@ drifted constantly. Now `shared/device-model/` is the spec:
 - Where a JS unit test asserts a specific number, the matching C++ test asserts
   the same number — `nodelink.test.js` ↔ `firmware/test/test_nodebus.cpp` is the
   reference pair. **Change one, change both.**
+- Below that, individual constants have the same problem on a smaller scale: a
+  bare number in `shared/device-model/` that firmware also hardcodes, with
+  nothing but a comment holding the two together. The known pairs, so a change
+  doesn't have to be re-discovered by grep every time:
+
+  | JS (`shared/device-model/`) | C++ (`firmware/`) | What it is |
+  |---|---|---|
+  | `DEFAULT_COLLECTOR_OFF_DELAY_MS` (topology-device.js) | `kDefaultCollectorOffDelayMs` (control/TopologyRuntime.h) | collector coast-down default |
+  | `DEFAULT_THRESHOLD_W` (topology-device.js) | `kDefaultThresholdW` (control/TopologyController.h) | machine-on wattage default |
+  | the `* 3` in `setToolManual()` (dustgate-ui demo-api.service.ts) | the `* 3.0f` in `manualWattsFor()` (control/TopologyRuntime.h) | synthetic wattage for a manual switch-on |
+  | `MAX_SERVOS_PER_HOST` / `MAX_LINEAR_PER_HOST` (topology.js) | `SERVO_COUNT` (config.h) | servo bank size a controller can actually drive |
+  | `NUM_STOPS` (device-model.js) | `NUM_STOPS` (config.h) | compile-time max stops |
+  | `MIN_STOP_SEPARATION_MM` (device-model.js) | `MIN_STOP_SEPARATION_MM` (config.h) | overlap backstop between stops |
+  | `IDLE_TIMEOUT_SEC_DEFAULT` (device-model.js) | `IDLE_TIMEOUT_SEC_DEFAULT` (config.h) | idle power-off default |
+  | `NODELINK_VERSION`, `PING_INTERVAL_MS`, `PONG_TIMEOUT_MS`, `RECONNECT_MIN_MS`, `RECONNECT_MAX_MS` (nodelink.js) | `kVersion`, `kPingIntervalMs`, `kPongTimeoutMs`, `kReconnectMinMs`, `kReconnectMaxMs` (control/NodeLink.h) | NodeLink protocol timing |
+
+  **This table is a cache, not the source of truth — keep it honest or delete
+  rows rather than let them go stale.** Touching either side of a pair: update
+  the other side's value AND this table's "What it is" cell if the meaning
+  moved. Landing a NEW pair (a JS default with a C++ mirror, or vice versa,
+  that didn't exist before): add a row here in the same change — that's what
+  keeps the next person (or model) from re-deriving it from scratch the way
+  the coast-down default (row 1) had to be on 2026-08-19, with no comment
+  pointing either way until then. A constant that's read straight out of the
+  saved document at runtime (like `offDelayMs` itself) isn't a pair — only the
+  **default applied when the document doesn't say** is, since that's the value
+  that can silently disagree.
 
 Read `shared/device-model/README.md` before touching anything in that directory.
 

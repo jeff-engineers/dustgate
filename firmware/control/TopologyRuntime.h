@@ -80,15 +80,19 @@ namespace topo {
 //
 // Three times the trip point makes the same activation decision and reads like a
 // machine. The floor keeps it strictly positive when a threshold is set to 0, so
-// "manually on" can never be indistinguishable from "drawing nothing".
+// "manually on" can never be indistinguishable from "drawing nothing". Mirrors
+// setToolManual() in dustgate-ui/.../demo-api.service.ts — see the twin-pair
+// table in CLAUDE.md.
 static inline float manualWattsFor(float threshold) {
     return threshold > 0.0f ? threshold * 3.0f : 15.0f;
 }
 
 // Coast-down used when the collector element doesn't name one. Not zero on
-// purpose: every shop wants some, nobody has a UI to set it yet, and the
-// stop-selection path's equivalent slack is 3 s. Matches the schema doc's example.
-static const uint32_t kDefaultCollectorOffDelayMs = 4000;
+// purpose: every shop wants some, and the stop-selection path's equivalent slack
+// is 3 s. Jeff's call, 2026-08-19, when the setting got a UI at last.
+// CHANGE THIS AND CHANGE DEFAULT_COLLECTOR_OFF_DELAY_MS in
+// shared/device-model/topology-device.js — the conformance suite compares them.
+static const uint32_t kDefaultCollectorOffDelayMs = 5000;
 
 // A move that has been issued but whose bus rejected it (offline node, missing
 // calibration). Surfaced through /api/status so the UI can say which gate.

@@ -35,7 +35,7 @@ const T = require('./topology');
 const S = require('./shop');
 
 const DEFAULT_THRESHOLD_W = 5;
-const DEFAULT_COLLECTOR_OFF_DELAY_MS = 4000;
+const DEFAULT_COLLECTOR_OFF_DELAY_MS = 5000;  // ↔ kDefaultCollectorOffDelayMs (TopologyRuntime.h)
 
 const machineIndex = (shop) => S.machineIndex(shop);
 
