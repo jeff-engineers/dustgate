@@ -77,6 +77,12 @@ svg.canvas { display: block; touch-action: none; }
    plain pipe; only the LAST stretch is a dashed accent + accent end-dot, so the
    "unfinished" signal sits at the end and doesn't drown the branch dots along it. */
 .open-stub { stroke: var(--accent); stroke-width: 6; fill: none; stroke-linecap: round; stroke-dasharray: 6 5; }
+/* The pipe you are dragging, and the piece it would land on. Thinner than a real
+   stub because it is a gesture, not ductwork — it exists only until you let go. */
+.drag-stub { stroke: var(--accent); stroke-width: 3.5; fill: none; stroke-linecap: round;
+             stroke-dasharray: 7 6; pointer-events: none; }
+.node.drop-target .body, .node.drop-target .unit { stroke: var(--accent); stroke-width: 2.5; }
+.node.drop-target .tool-body { stroke: var(--accent); stroke-width: 2.5; }
 .open-end .dot { fill: var(--accent); }
 .open-end .end-ring { fill: none; stroke: var(--accent); stroke-width: 1.5; opacity: 0.6; }
 /* A system's ground. Barely there on purpose: it has to survive the zoom-out that

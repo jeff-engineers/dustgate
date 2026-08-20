@@ -225,14 +225,13 @@ export function addMachineWithPort(doc: ShopDoc, system: ShopSystem, id: string,
  * systems sharing an element id would collide in `ui.layout` and in firmware status,
  * and validateShop rejects it.
  */
-export function addSystem(doc: ShopDoc, ids: { system: string; collector: string; end: string }): ShopSystem {
+export function addSystem(doc: ShopDoc, ids: { system: string; collector: string }): ShopSystem {
+  // Bare on purpose: a collector and nothing else. It used to arrive with an open
+  // end already hanging off it, which guessed at a first run nobody had asked for —
+  // and put it somewhere you then had to move. Every collector shows add-dots on its
+  // free outlets, so starting the first run is one drag away.
   const collector: RawEl = { id: ids.collector, type: 'collector', name: 'Dust collector' };
-  const end: RawEl = { id: ids.end, type: 'junction', name: 'Open end' };
-  const system: ShopSystem = {
-    id: ids.system,
-    elements: [collector, end],
-    ducts: [{ child: ids.end, parent: ids.collector }],
-  };
+  const system: ShopSystem = { id: ids.system, elements: [collector], ducts: [] };
   doc.systems.push(system);
   return system;
 }

@@ -61,10 +61,9 @@ export const PICKUP_HALF = 9;
  *  so a spigot on every tool in the shop would be decoration rather than
  *  information.
  *
- *  {@link SPIGOT_DX} is why the router needs {@link SceneNode.inletDx}: the duct has
- *  to LAND on the glyph, so the top inlet port moves left with it. The offsets are
- *  the mockup's proportions (-0.40 and +0.57 of half-width) rescaled to this
- *  canvas's narrower 76px tool body. */
+ *  {@link SPIGOT_DX} shifts the top inlet PORT to match, so the duct lands on the
+ *  glyph. Free, because entry() rounds a top port to the nearest lattice column and
+ *  this shift rounds to the same one. */
 export const SPIGOT_W = 14;
 export const SPIGOT_H = 11;
 export const SPIGOT_DX = -17;
@@ -82,10 +81,10 @@ export interface SceneNode {
   span: number;
   x: number;
   y: number;
-  /** Shifts this device's TOP inlet off its centreline, so a duct lands on the
-   *  glyph that marks the entry rather than on the middle of the box. Set for a
-   *  machine wearing a spigot ({@link SPIGOT_DX}); 0 or absent for everything
-   *  else, which keeps every other device entering dead centre as before. */
+  /** Shifts this device's TOP inlet off its centreline so a duct lands on the glyph
+   *  marking the entry rather than the middle of the box. Both a machine's inlets sit
+   *  on the TOP edge, offset slightly from each other — a side entry is for a run
+   *  that is genuinely shorter from the side, never a consequence of this. */
   inletDx?: number;
 }
 

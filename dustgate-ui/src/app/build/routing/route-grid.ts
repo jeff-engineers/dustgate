@@ -118,9 +118,10 @@ export function inPorts(n: SceneNode): Port[] {
   // sending the router miles out of its way when a side entry is genuinely the
   // shorter path — see TOP_ENTRY_BIAS.
   //
-  // The top port also carries `inletDx`, so on a machine wearing a spigot the duct
-  // lands ON that glyph instead of on the box's centreline — the glyph IS the
-  // entry point, and one drawn anywhere else is just a decal.
+  // The top port carries `inletDx`, so on a machine wearing a spigot the duct lands
+  // ON that glyph. It costs the router nothing: entry() rounds a top port to the
+  // nearest lattice COLUMN, and a ±17px shift rounds to the same one — only the
+  // final drawn segment jogs across to the glyph.
   if (n.glyph === 'tool' || n.glyph === 'ballvalve')
     return sidePorts(n, 3).map(p => p.dir === 3
       ? { ...p, pt: { x: p.pt.x + (n.inletDx ?? 0), y: p.pt.y } }
@@ -401,6 +402,13 @@ export function obstaclesFor(nodes: SceneNode[], exempt: ReadonlySet<string>): B
   const out: Box[] = [];
   for (const n of nodes) {
     if (exempt.has(n.id) || n.glyph === 'junction') continue;
+    // A PICKUP is not an obstacle. It is a 9px hood riding the top edge of a machine
+    // whose own box is already in this list, so it adds nothing to steer around —
+    // but inflated by CLEARANCE it becomes a ~48px box straddling that edge, and the
+    // lattice node a top entry arrives through sits 20px above the edge, INSIDE it.
+    // That made isBlocked() throw the machine's own top port away as a goal, so a
+    // machine grew a pickup and its primary run promptly fled to a side entry.
+    if (n.glyph === 'pickup') continue;
     out.push(deviceBox(n, CLEARANCE));
   }
   return out;

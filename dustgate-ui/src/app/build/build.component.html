@@ -94,6 +94,10 @@
         <path class="duct" [class.live]="d.live" [class.sec]="d.secondary" [attr.d]="ductD(d.childId)"/>
       </g>
 
+      <!-- The pipe being dragged. Accent + dashed: the same "unfinished" language an
+           open stub wears, so it reads as a run you have not committed yet. -->
+      <path *ngIf="dragLineD() as dl" class="drag-stub" [attr.d]="dl"/>
+
       <g *ngFor="let bd of branchDots()" class="bdot" (pointerdown)="onBranchDotDown($event, bd)">
         <circle [attr.cx]="bd.x" [attr.cy]="bd.y" r="14" fill="transparent"/>
         <circle class="bdot-dot" [attr.cx]="bd.x" [attr.cy]="bd.y" r="3.5"/>
@@ -109,6 +113,7 @@
       <g *ngFor="let n of nodes" class="node"
          [class.sel]="n.id === selectedId" [class.live]="n.live" [class.dragging]="n.id === dragId"
          [class.bad]="n.id === dragId && !!dropBlocked"
+         [class.drop-target]="n.id === dragHoverId()"
          [attr.transform]="'translate(' + nx(n) + ',' + ny(n) + ')'" (pointerdown)="startDrag($event, n)"
          (contextmenu)="onNodeContext($event, n)">
         <ng-container [ngSwitch]="n.glyph">

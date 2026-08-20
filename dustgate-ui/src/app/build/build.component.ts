@@ -91,13 +91,12 @@ interface NodeVM {
    *  supplemental port has NO cell — it rides on the top edge of the machine's box,
    *  which is what keeps one machine drawn as one machine. */
   anchor?: { dx: number; dy: number };
+  /** Shifts this machine's TOP inlet off the centreline to make room for its hood(s).
+   *  0 when it has none. Both inlets stay on the top edge — see SPIGOT_DX. */
+  inletDx: number;
   /** The primary-port node this one rides on — set for a pickup, so its hood tracks
    *  the machine's live drag rather than its own snapped cell. */
   follows?: string;
-  /** Shifts this machine's TOP inlet off the centreline to make room for its
-   *  hood(s). 0 when it has none. The spigot glyph is drawn at whichever edge the
-   *  duct actually arrives on — see spigotSeat(). */
-  inletDx: number;
   dragX?: number; dragY?: number;
 }
 /** `secondary` marks a supplemental port's run: drawn thinner and dashed, because it
@@ -476,8 +475,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   private scene(): Scene {
     const nodes: SceneNode[] = this.nodes.map(n => ({
       id: n.id, glyph: n.glyph, isUnit: n.isUnit, span: n.span,
-      x: this.routeX(n), y: this.routeY(n),
-      inletDx: n.inletDx,
+      x: this.routeX(n), y: this.routeY(n), inletDx: n.inletDx,
     }));
     // Boards are obstacles too — that is the whole point of a board owning its cell.
     // They carry no ducts, so they only ever appear here as boxes to steer around.
@@ -506,11 +504,17 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
    *  the machine's centreline and the hood sat off on its own with nothing reaching
    *  it. That is the whole "the second port gets centered" bug. */
   private routeX(n: NodeVM): number {
-    const cell = n.dragX == null ? PAD + n.col * CELL : PAD + Math.max(0, Math.round((n.dragX - PAD) / CELL)) * CELL;
+    // A pickup borrows its machine's cell, so mid-drag it has to borrow the machine's
+    // SNAPPED drag cell too. Reading only its own stored cell left the hood's duct
+    // solving to where the machine used to be while the hood itself moved with it —
+    // which looked like the run detaching.
+    const drag = (n.follows ? this.byId.get(n.follows)?.dragX : undefined) ?? n.dragX;
+    const cell = drag == null ? PAD + n.col * CELL : PAD + Math.max(0, Math.round((drag - PAD) / CELL)) * CELL;
     return cell + (n.anchor?.dx ?? 0);
   }
   private routeY(n: NodeVM): number {
-    const cell = n.dragY == null ? PAD + n.row * CELL : PAD + Math.max(0, Math.round((n.dragY - PAD) / CELL)) * CELL;
+    const drag = (n.follows ? this.byId.get(n.follows)?.dragY : undefined) ?? n.dragY;
+    const cell = drag == null ? PAD + n.row * CELL : PAD + Math.max(0, Math.round((drag - PAD) / CELL)) * CELL;
     return cell + (n.anchor?.dy ?? 0);
   }
 
@@ -523,9 +527,15 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   private frozenDucts(): ReadonlySet<string> | undefined {
     if (!this.dragId) return undefined;
     const moving = this.dragId;
+    // A pickup rides the machine being dragged, so ITS run has to re-solve too —
+    // frozen, the hood moved with the machine while its pipe stayed pinned to the
+    // old position, which read as the duct coming adrift.
+    const riders = new Set(this.nodes.filter(n => n.follows === moving).map(n => n.id));
     const frozen = new Set<string>();
     for (const d of this.ducts) {
-      if (d.childId === moving || this.parentOf.get(d.childId) === moving || this.outletOf.get(d.childId)?.unitId === moving) continue;
+      if (d.childId === moving || riders.has(d.childId)
+          || this.parentOf.get(d.childId) === moving
+          || this.outletOf.get(d.childId)?.unitId === moving) continue;
       frozen.add(d.childId);
     }
     return frozen;
@@ -1810,6 +1820,38 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   // selector outlet). Click → menu (add a branch/gate/valve/manifold/cap/tool there);
   // drag → tee out a passive open-end leg. This is how you add more runs off the
   // collector or off a gate/manifold/slider now that the + handles are gone.
+  /**
+   * The pipe you are dragging, drawn while you drag it. Accent + dashed, the same
+   * "unfinished run" language an open stub already wears.
+   *
+   * There was nothing at all before: outputDots() hides the add-dot for the duration,
+   * so a drag off an outlet showed no line, no dot and no target — you found out
+   * where it went by letting go.
+   */
+  dragLineD(): string {
+    const o = this.odrag;
+    if (o?.moved && o.at) return `M ${o.od.x} ${o.od.y} L ${o.at.x} ${o.at.y}`;
+    const i = this.idrag;
+    if (i?.moved && i.at) {
+      const n = this.byId.get(i.portId);
+      if (n) return `M ${this.nx(n)} ${this.ny(n)} L ${i.at.x} ${i.at.y}`;
+    }
+    return '';
+  }
+
+  /** The piece a drag is hovering, so the drop target lights up before you commit. */
+  dragHoverId(): string | null {
+    const at = (this.odrag?.moved && this.odrag.at) || (this.idrag?.moved && this.idrag.at);
+    if (!at) return null;
+    if (this.odrag) {
+      const c = this.dragCell(at);
+      const m = this.machineAtCell(c.col, c.row);
+      if (m) return this.nodes.find(n => n.glyph === 'tool' && n.col === c.col && n.row === c.row)?.id ?? null;
+    }
+    const t = this.idrag ? this.pickupTargetAt(at, this.idrag.portId) : null;
+    return t ? (t.kind === 'end' ? t.endId : t.parentId) : null;
+  }
+
   outputDots(): ODot[] {
     const out: ODot[] = [];
     if (this.dragId || this.bdrag || this.odrag) return out;
@@ -3567,11 +3609,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     if (!this.topo) return;
     this.pushHistory(null);
     const doc = this.topo as unknown as ShopDoc;
-    const sys = addSystem(doc, {
-      system: this.newSystemId(),
-      collector: this.newId('dc'),
-      end: this.newId('j'),
-    });
+    const sys = addSystem(doc, { system: this.newSystemId(), collector: this.newId('dc') });
     this.activeSystemId = sys.id;
     this.buildGraph(this.topo);
     // Place the new pair below everything drawn rather than re-running the whole
@@ -3580,7 +3618,6 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     for (const c of this.cells.values()) bottom = Math.max(bottom, c.row);
     const top = bottom + SYSTEM_GAP + 1;
     this.cells.set(sys.elements[0]['id'] as string, { col: 0, row: top });
-    this.cells.set(sys.elements[1]['id'] as string, { col: 0, row: top + 1 });
     // Numbered from the start, so two collectors are never both "Dust collector"
     // even if the name field is dismissed without typing.
     sys.elements[0]['name'] = `Dust collector ${systemsOf(doc).length}`;

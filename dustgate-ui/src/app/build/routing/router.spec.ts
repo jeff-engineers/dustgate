@@ -4,7 +4,7 @@
  *      npm run test:routing
  */
 
-import { type SceneNode, CELL, CLEARANCE, PAD, SPIGOT_DX, cellX, deviceBox, segBoxHit } from './geometry';
+import { type SceneNode, CELL, CLEARANCE, PAD, SPIGOT_DX, cellX, cellY, deviceBox, segBoxHit } from './geometry';
 import { type Scene, type RoutedDuct, Router, routeAll, sceneBounds } from './router';
 
 // ── harness ──────────────────────────────────────────────────────────────────
@@ -135,27 +135,34 @@ group('R3b top entry is preferred when it is roughly as cheap as a side one');
   // there; this just adds the near-tie this bias exists for.
 }
 
-// ── R3c · a duct lands on the spigot, not the centreline ────────────────────
+// ── R3c · a pickup must not push its machine's own run off the top ──────────
 
-group('R3c inletDx moves the top inlet onto the glyph that marks it');
+group('R3c a machine keeps its straight drop after growing a pickup');
 {
-  // A machine wearing a spigot: its top inlet shifts with the glyph, so the duct
-  // terminates ON it. Without this the drawing put a square inlet 17px left of
-  // where the pipe actually arrived, which is the whole point of the glyph.
-  const withSpigot: SceneNode = { ...tool('saw', 0, 1), inletDx: SPIGOT_DX };
-  const s = scene([collector('dc', 0, 0), withSpigot], [{ childId: 'saw', parentId: 'dc' }]);
-  const p = path(routeAll(s), 'saw');
-  const end = p[p.length - 1];
-  ok('the duct ends on the spigot, not the box centre',
-     Math.round(end.x) === Math.round(cellX(0) + SPIGOT_DX),
-     `ended at ${JSON.stringify(end)}, spigot at x=${cellX(0) + SPIGOT_DX}`);
+  const pickup = (id: string, on: SceneNode, dx: number): SceneNode =>
+    ({ id, glyph: 'pickup', isUnit: false, span: 1, x: on.x + dx, y: on.y - 34 });
 
-  // Unset (every other device, and a machine with no pickup) is unchanged: dead
-  // centre, exactly as R3's directly-below case already asserts.
-  const plain = scene([collector('dc', 0, 0), tool('saw', 0, 1)], [{ childId: 'saw', parentId: 'dc' }]);
-  const pe = path(routeAll(plain), 'saw');
-  ok('without inletDx the inlet stays on the centreline',
-     Math.round(pe[pe.length - 1].x) === Math.round(cellX(0)));
+  // Gate directly above the tool: the run is a straight drop, and must stay one.
+  const saw = tool('saw', 0, 1);
+  const plain = scene([collector('dc', 0, 0), saw], [{ childId: 'saw', parentId: 'dc' }]);
+  const before = path(routeAll(plain), 'saw');
+  ok('baseline is a straight drop', before.length === 2, JSON.stringify(before));
+
+  // Same shop, but the saw now has a hood on its top edge and its inlet has shifted
+  // to make room. The hood is NOT an obstacle — inflated by CLEARANCE it would cover
+  // the very lattice node a top entry arrives through, which used to make the router
+  // throw the top port away and come in from the side instead.
+  const withHood: SceneNode = { ...saw, inletDx: SPIGOT_DX };
+  const hood = pickup('saw-aux', saw, 15);
+  const after = scene([collector('dc', 0, 0), withHood, hood],
+                      [{ childId: 'saw', parentId: 'dc' }, { childId: 'saw-aux', parentId: 'dc' }]);
+  const p = path(routeAll(after), 'saw');
+  const end = p[p.length - 1];
+  ok('still enters from the TOP, not a side',
+     Math.round(end.y) < Math.round(cellY(1)), `ended at ${JSON.stringify(end)}`);
+  ok('and lands on the spigot, not the centreline',
+     Math.round(end.x) === Math.round(cellX(0) + SPIGOT_DX),
+     `ended at x=${Math.round(end.x)}, spigot at ${cellX(0) + SPIGOT_DX}`);
 }
 
 // ── R4 · obstacle in the span ────────────────────────────────────────────────
