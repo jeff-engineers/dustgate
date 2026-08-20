@@ -1,0 +1,438 @@
+<title>The Shop Canvas</title>
+
+<style>
+  :root {
+    --bg: #111; --surface: #1e1e1e; --raised: #262626; --border: #2e2e2e;
+    --text: #e8e8e8; --muted: #8a8a86; --accent: #f0a500; --success: #3cbe6e;
+    --danger: #d94444; --duct: #3a3a3a; --cable: #38b6f0; --radius: 14px;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); margin: 0; padding: 22px 18px 72px;
+         font-family: system-ui, -apple-system, sans-serif; font-size: 15px; line-height: 1.5; }
+  .wrap { max-width: 1080px; margin: 0 auto; display: flex; flex-direction: column; gap: 24px; }
+  h1 { font-size: 22px; font-weight: 600; margin: 6px 0 0; letter-spacing: -0.01em; text-wrap: balance; }
+  h2 { font-size: 13.5px; font-weight: 600; margin: 0; }
+  h3 { font-size: 15px; font-weight: 600; margin: 0 0 2px; }
+  .lede { color: var(--muted); font-size: 13.5px; max-width: 68ch; margin: 6px 0 0; }
+  .eyebrow { font-size: 11px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--muted); }
+  p { margin: 0; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.92em; color: var(--text); }
+  a { color: var(--accent); }
+
+  .rule { height: 1px; background: var(--border); border: 0; margin: 0; }
+  .sec { display: flex; flex-direction: column; gap: 12px; }
+
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 15px 16px; }
+  .card p + p { margin-top: 9px; }
+  .card em { color: var(--text); font-style: normal; }
+  .flag { border-left: 3px solid var(--accent); padding-left: 12px; }
+  .flag.open { border-left-color: var(--muted); }
+  .note { font-size: 12.5px; color: var(--muted); line-height: 1.55; }
+  .note b { color: var(--text); font-weight: 600; }
+
+  /* ── the legend ─────────────────────────────────────────────────────── */
+  .legend { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 0; }
+  .leg { display: grid; grid-template-columns: 96px 1fr; gap: 12px; align-items: center;
+         padding: 11px 12px; border-bottom: 1px solid var(--border); }
+  .leg svg { display: block; width: 96px; height: 34px; }
+  .leg .what { font-size: 13px; font-weight: 600; }
+  .leg .means { font-size: 11.5px; color: var(--muted); line-height: 1.45; margin-top: 1px; }
+
+  .duct     { fill: none; stroke: var(--duct); stroke-width: 7; stroke-linecap: round; stroke-linejoin: round; }
+  .duct.sec { stroke-width: 5; stroke-dasharray: 11 8; }
+  .stub     { fill: none; stroke: var(--accent); stroke-width: 6; stroke-linecap: round; stroke-dasharray: 6 5; }
+  .cable    { fill: none; stroke: var(--cable); stroke-width: 2.4; }
+  .cable.dragging { stroke-dasharray: 6 5; }
+  .inlet    { fill: #1d3540; stroke: #2d6a86; stroke-width: 1.6; }
+  .toolbox  { fill: #16262e; stroke: #2d6a86; stroke-width: 2; }
+  .unit     { fill: var(--surface); stroke: #444; stroke-width: 1.6; }
+  .ground   { fill: #191919; }
+  .seam     { stroke: var(--border); stroke-width: 1.5; }
+
+  .lbl   { fill: var(--text); font-size: 11.5px; text-anchor: middle; font-family: system-ui, sans-serif; font-weight: 500; }
+  .sub   { fill: var(--muted); font-size: 9.5px; text-anchor: middle; font-family: system-ui, sans-serif; }
+  .gatelbl { fill: var(--muted); font-size: 9px; text-anchor: middle; letter-spacing: 0.08em; font-family: system-ui, sans-serif; }
+  .tiny  { fill: var(--muted); font-size: 9.5px; font-family: system-ui, sans-serif; }
+  .acc-t { fill: var(--accent); font-size: 9.5px; font-family: system-ui, sans-serif; }
+  .seamt { fill: var(--muted); font-size: 9.5px; font-weight: 600; letter-spacing: 0.09em;
+           text-transform: uppercase; font-family: system-ui, sans-serif; }
+
+  .screen { background: var(--bg); border: 1px solid var(--border); border-radius: 9px; overflow: hidden; }
+  .screen svg { display: block; width: 100%; height: 100%; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; align-items: start; }
+  .opt { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+         padding: 12px; display: flex; flex-direction: column; gap: 9px; }
+
+  .pill { font-size: 11px; padding: 3px 9px; border-radius: 20px; align-self: flex-start;
+          letter-spacing: 0.03em; }
+  .pill.built  { color: var(--success); background: rgba(60,190,110,0.12); }
+  .pill.agreed { color: var(--accent);  background: rgba(240,165,0,0.12); }
+  .pill.open   { color: var(--muted);   background: rgba(138,138,134,0.14); }
+
+  .tblwrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th, td { text-align: left; padding: 8px 12px 8px 0; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--muted); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em; }
+  td.when { color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+</style>
+
+<div class="wrap">
+
+  <header>
+    <span class="eyebrow">DustGate · canonical</span>
+    <h1>The shop canvas</h1>
+    <p class="lede">
+      The single source of truth for how the build canvas looks and behaves. Every
+      other mockup in this folder has been archived — their reasoning is still worth
+      reading, but a decision that matters lives <em>here</em>.
+      <br><br>
+      <b style="color:var(--text)">How to use this page.</b> Update it in place. When a
+      decision is made, change the section it affects <em>and</em> add a row to the
+      decision log at the bottom. Do not open a new mockup for a settled question —
+      that is what produced six pages that disagreed with each other.
+    </p>
+  </header>
+
+  <hr class="rule"/>
+
+  <!-- ══ 1. VOCABULARY ═══════════════════════════════════════════════════ -->
+  <section class="sec">
+    <h3>1 · The marks and what they mean</h3>
+    <p class="note" style="max-width:68ch">Every line style on the canvas, in one place.
+      This list exists because "dashed" was read as meaning two different things at
+      once; it means exactly one thing per colour.</p>
+
+    <div class="card" style="padding:0">
+      <div class="legend">
+
+        <div class="leg">
+          <svg viewBox="0 0 96 34" aria-label="Solid grey line"><path class="duct" d="M8 17 H88"/></svg>
+          <div><div class="what">Duct</div>
+            <div class="means">Real ductwork inside one system. Solid, grey, full weight.</div></div>
+        </div>
+
+        <div class="leg">
+          <svg viewBox="0 0 96 34" aria-label="Dashed grey line, thinner"><path class="duct sec" d="M8 17 H88"/></svg>
+          <div><div class="what">Secondary run</div>
+            <div class="means">A supplemental port's run — and the only thing allowed to cross
+              the seam between two systems. Grey, dashed, thinner.</div></div>
+        </div>
+
+        <div class="leg">
+          <svg viewBox="0 0 96 34" aria-label="Dashed orange stub"><path class="stub" d="M8 17 H60"/><circle cx="72" cy="17" r="6" fill="none" stroke="var(--accent)" stroke-width="2"/></svg>
+          <div><div class="what">Open end</div>
+            <div class="means">Pipe with nothing on it yet. <b>Accent orange</b>, dashed —
+              never grey, which is what keeps it distinct from a secondary run.</div></div>
+        </div>
+
+        <div class="leg">
+          <svg viewBox="0 0 96 34" aria-label="Solid azure line"><path class="cable" d="M8 17 H88"/></svg>
+          <div><div class="what">Cable</div>
+            <div class="means">A board's wire to a gate. Azure, thin — never the app's red,
+              which already means danger.</div></div>
+        </div>
+
+        <div class="leg">
+          <svg viewBox="0 0 96 34" aria-label="Dashed azure line"><path class="cable dragging" d="M8 17 H88"/></svg>
+          <div><div class="what">Cable, mid-drag</div>
+            <div class="means">Only while you are dragging one. Azure keeps it unambiguous
+              against the orange open end.</div></div>
+        </div>
+
+        <div class="leg">
+          <svg viewBox="0 0 96 34" aria-label="Square spigot glyph">
+            <rect class="toolbox" x="18" y="16" width="60" height="16" rx="4"/>
+            <rect class="inlet" x="30" y="7" width="14" height="11" rx="2"/>
+          </svg>
+          <div><div class="what">Spigot — square</div>
+            <div class="means">A machine's <b>primary</b> inlet. Drawn only when the machine
+              also has a pickup; its duct lands on it.</div></div>
+        </div>
+
+        <div class="leg">
+          <svg viewBox="0 0 96 34" aria-label="Tapered hood glyph">
+            <rect class="toolbox" x="18" y="16" width="60" height="16" rx="4"/>
+            <path class="inlet" d="M52 17 L60 4 L68 17 Z"/>
+          </svg>
+          <div><div class="what">Hood — tapered</div>
+            <div class="means">A <b>pickup</b>: an overarm guard, a hood. What one physically
+              is. Its role is captioned beside it.</div></div>
+        </div>
+
+        <div class="leg" style="border-bottom:none">
+          <svg viewBox="0 0 96 34" aria-label="Grey ground band with a seam">
+            <rect class="ground" x="4" y="3" width="88" height="12" rx="4"/>
+            <line class="seam" x1="4" y1="18" x2="92" y2="18"/>
+            <rect class="ground" x="4" y="21" width="88" height="10" rx="4"/>
+          </svg>
+          <div><div class="what">Ground &amp; seam</div>
+            <div class="means">One grey band per airflow system. Only drawn once there are
+              two — with one collector it would say nothing.</div></div>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <hr class="rule"/>
+
+  <!-- ══ 2. MACHINES AND PORTS ═══════════════════════════════════════════ -->
+  <section class="sec">
+    <h3>2 · A machine is one box, however many ports it has</h3>
+    <span class="pill built">Built</span>
+
+    <div class="grid">
+      <div class="opt">
+        <div style="display:flex;align-items:baseline;gap:8px"><h2>Two inlets, one body</h2></div>
+        <div class="screen" style="aspect-ratio:375/230">
+          <svg viewBox="0 0 375 230" aria-label="One machine with a square spigot and a tapered hood">
+            <path class="duct" d="M56 16 V40"/>
+            <rect class="unit" x="56" y="40" width="150" height="24" rx="7"/>
+            <text class="gatelbl" x="131" y="34">MAIN GATE</text>
+            <path class="duct" d="M92 64 V112"/>
+
+            <path class="duct sec" d="M330 24 V100 H150 V110"/>
+
+            <rect class="toolbox" x="56" y="120" width="120" height="72" rx="11"/>
+            <text class="lbl" x="116" y="150">Table saw</text>
+            <rect x="76" y="158" width="80" height="20" rx="5" fill="#0d1a20" stroke="#2d6a86" stroke-width="1"/>
+            <text class="sub" x="116" y="172">tablesaw · 1.4 kW</text>
+            <rect class="inlet" x="84" y="110" width="16" height="12" rx="2"/>
+            <path class="inlet" d="M140 122 L150 109 L160 122 Z"/>
+            <text class="sub" x="150" y="103" style="font-size:9">overarm</text>
+
+            <text class="tiny" x="14" y="216">One box, one name, one plug, one thing you switch on.</text>
+          </svg>
+        </div>
+        <p class="note">A second pickup is a differently-shaped inlet on the <em>same</em> box —
+          never a second body, never a dashed identity link. A drawing that reads as two saws
+          is a drawing that lies about the shop.</p>
+      </div>
+
+      <div class="opt">
+        <div style="display:flex;align-items:baseline;gap:8px"><h2>Where a machine lives</h2></div>
+        <div class="screen" style="aspect-ratio:375/230">
+          <svg viewBox="0 0 375 230" aria-label="A machine in one system with a secondary run crossing the seam">
+            <rect class="ground" x="8" y="8" width="359" height="112" rx="11"/>
+            <rect class="ground" x="8" y="134" width="359" height="88" rx="11"/>
+            <line class="seam" x1="8" y1="127" x2="367" y2="127"/>
+            <text x="20" y="122" class="seamt">Shop vac</text>
+
+            <path class="duct" d="M40 22 V44 H72"/>
+            <circle cx="40" cy="22" r="12" class="unit"/>
+            <rect class="unit" x="72" y="34" width="120" height="20" rx="6"/>
+            <path class="duct" d="M106 54 V66"/>
+
+            <rect class="toolbox" x="74" y="66" width="88" height="42" rx="10"/>
+            <text class="lbl" x="118" y="84" style="font-size:10.5">Bandsaw</text>
+            <rect class="inlet" x="98" y="57" width="14" height="11" rx="2"/>
+            <path class="inlet" d="M132 68 L140 55 L148 68 Z"/>
+
+            <circle cx="290" cy="176" r="14" class="unit"/>
+            <line x1="290" y1="162" x2="290" y2="190" stroke="var(--muted)" stroke-width="2.5"/>
+            <text class="gatelbl" x="290" y="155">AUX VALVE</text>
+            <path class="duct sec" d="M290 162 V55 H140"/>
+
+            <text class="acc-t" x="14" y="212">The machine sits in ONE system. Only its secondary</text>
+            <text class="acc-t" x="14" y="224">run crosses the seam.</text>
+          </svg>
+        </div>
+        <p class="note">A tool belongs to exactly one system and is drawn there, once. A
+          <b>secondary port's run</b> may be fed from the other collector — that is the one
+          thing permitted to cross the seam, and it is drawn as a secondary run so a shared
+          machine reads as shared.</p>
+      </div>
+    </div>
+
+    <div class="card flag">
+      <p class="note"><b>The rule, stated once.</b> A machine lives in one system. A machine's
+        <em>ports</em> are elements in the airflow tree, each with exactly one parent duct — a
+        tool may never have two parents, which is why a second pickup is a new port element
+        rather than a second parent on the old one. A supplemental port's run is the only run
+        allowed to cross the seam, and may be disconnected and re-routed to a primary on the
+        second system if that is what the shop wants.</p>
+    </div>
+  </section>
+
+  <hr class="rule"/>
+
+  <!-- ══ 3. DRAG RULES ═══════════════════════════════════════════════════ -->
+  <section class="sec">
+    <h3>3 · What can stop a drag</h3>
+    <span class="pill built">Built · 2026-08-20</span>
+    <div class="card">
+      <p class="note"><b>Almost nothing.</b> A user is never blocked from moving a piece because
+        the shop is in a bad state — a broken layout is exactly the thing they are dragging
+        their way out of. Only two things refuse a drop:</p>
+      <div class="tblwrap" style="margin-top:10px">
+        <table>
+          <tr><th>Condition</th><th>Result</th></tr>
+          <tr><td><b>The cell is occupied</b></td>
+              <td><span style="color:var(--danger)">Refused.</span> Named: "Bandsaw is already in that cell."</td></tr>
+          <tr><td><b>The row belongs to another system</b></td>
+              <td><span style="color:var(--danger)">Refused.</span> Systems own contiguous row bands; interleaving them makes the grey ground undrawable.</td></tr>
+          <tr><td>A duct will cross a device</td>
+              <td><span style="color:var(--success)">Allowed.</span> Advisory only — says what the drawing will do.</td></tr>
+          <tr><td>A duct loses its clear way in</td>
+              <td><span style="color:var(--success)">Allowed.</span> Advisory, and baselined so it reports what <em>this</em> move breaks.</td></tr>
+          <tr><td>A duct runs through a board's new cell</td>
+              <td><span style="color:var(--success)">Allowed.</span> Ducts route around boards, so the run simply moves.</td></tr>
+          <tr><td>The shop is leaking / unfinished / invalid</td>
+              <td><span style="color:var(--success)">Allowed.</span> Never a reason to freeze the canvas.</td></tr>
+        </table>
+      </div>
+      <p class="note" style="margin-top:10px">Advisory text is written in the present tense
+        ("The duct will have to run through Table saw") and rendered muted, not amber — an
+        alarm colour on a move that is about to succeed reads as "stop".</p>
+    </div>
+  </section>
+
+  <hr class="rule"/>
+
+  <!-- ══ 4. ADDING A SECOND PICKUP ═══════════════════════════════════════ -->
+  <section class="sec">
+    <h3>4 · Adding a second pickup</h3>
+    <span class="pill agreed">Agreed · not yet built</span>
+
+    <div class="grid">
+      <div class="opt">
+        <div style="display:flex;align-items:baseline;gap:8px"><h2>Drag a run onto the machine</h2></div>
+        <div class="screen" style="aspect-ratio:375/240">
+          <svg viewBox="0 0 375 240" aria-label="Dragging a run end onto a machine that already has a duct">
+            <path class="duct" d="M40 16 V40"/>
+            <rect class="unit" x="40" y="40" width="300" height="22" rx="7"/>
+            <text class="gatelbl" x="150" y="34">MAIN GATE</text>
+            <path class="duct" d="M251 62 V126"/>
+
+            <rect class="toolbox" x="205" y="126" width="92" height="56" rx="11"/>
+            <text class="lbl" x="251" y="150">Router table</text>
+            <rect class="inlet" x="237" y="117" width="14" height="11" rx="2"/>
+
+            <circle cx="80" cy="96" r="24" class="unit"/>
+            <line x1="80" y1="72" x2="80" y2="120" stroke="var(--muted)" stroke-width="3"/>
+            <text class="gatelbl" x="80" y="64">GUARD VALVE</text>
+            <path class="duct" d="M80 120 V150 H146"/>
+            <circle cx="146" cy="150" r="6" fill="none" stroke="var(--accent)" stroke-width="2"/>
+            <path class="stub" d="M153 150 H194"/>
+
+            <rect x="199" y="120" width="104" height="68" rx="14" fill="none"
+                  stroke="var(--accent)" stroke-width="2" stroke-dasharray="5 4"/>
+            <text class="acc-t" x="92" y="176">drop it on the machine</text>
+            <text class="tiny" x="14" y="216">It highlights because it already HAS a duct — which is</text>
+            <text class="tiny" x="14" y="230">what makes this a second port and not a connection.</text>
+          </svg>
+        </div>
+        <p class="note">The port is created <b>already attached</b> to the gate you dragged from.
+          No orphan open end, no blind cell choice, and no window where the document is invalid.</p>
+      </div>
+
+      <div class="opt">
+        <div style="display:flex;align-items:baseline;gap:8px"><h2>…and it asks</h2></div>
+        <div class="screen" style="aspect-ratio:375/240">
+          <svg viewBox="0 0 375 240" aria-label="The confirmation sheet">
+            <rect x="26" y="26" width="323" height="188" rx="14" fill="var(--raised)" stroke="var(--border)"/>
+            <text x="48" y="60" class="lbl" style="text-anchor:start;font-size:13.5">Router table already has a duct.</text>
+            <text x="48" y="82" class="tiny">What is this second one?</text>
+
+            <rect x="48" y="96" width="279" height="40" rx="9" fill="var(--bg)" stroke="var(--accent)"/>
+            <path class="inlet" d="M64 124 L72 110 L80 124 Z"/>
+            <text x="92" y="114" class="lbl" style="text-anchor:start;font-size:11.5">An overarm guard</text>
+            <text x="92" y="128" class="tiny">a second pickup on the same machine</text>
+
+            <rect x="48" y="146" width="279" height="34" rx="9" fill="var(--bg)" stroke="var(--border)"/>
+            <text x="64" y="167" class="lbl" style="text-anchor:start;font-size:11.5">Cancel</text>
+
+            <text x="48" y="200" class="tiny">Replacing the existing run is deliberately not offered.</text>
+          </svg>
+        </div>
+        <p class="note">Two choices, because there are only two: it is a second pickup, or it was
+          a misdrop. Replacing the existing run is a delete wearing a friendly hat — and the run
+          it would destroy is the one the machine cannot work without.</p>
+      </div>
+    </div>
+
+    <div class="card flag">
+      <p class="note"><b>What it replaces.</b> The tool-menu route creates an unattached open end,
+        picks its cell with no collision check, and leaves the document invalid until you plumb
+        it. Measured on the demo shop, that end lands at <code>(496,172)</code> — which is Main
+        gate's outlet 4, already feeding the manifold. The menu item goes away with the gesture;
+        two ways in would mean keeping the broken one.</p>
+    </div>
+  </section>
+
+  <hr class="rule"/>
+
+  <!-- ══ 5. DECISION LOG ═════════════════════════════════════════════════ -->
+  <section class="sec">
+    <h3>5 · Decision log</h3>
+    <p class="note" style="max-width:68ch">Newest first. Add a row whenever something above
+      changes, so the reasoning survives the edit.</p>
+    <div class="card" style="padding:4px 16px 8px">
+      <div class="tblwrap">
+        <table>
+          <tr><th class="when">When</th><th>Decision</th></tr>
+
+          <tr><td class="when">2026-08-20</td>
+              <td><b>This page is canonical.</b> Every other mockup archived. Decisions get logged
+                  here rather than in a new page — six pages that disagreed is what caused
+                  cross-system and the dash vocabulary to each be re-litigated three times.</td></tr>
+
+          <tr><td class="when">2026-08-20</td>
+              <td><b>Secondary runs may cross the seam; tools may not.</b> A machine lives in one
+                  system. A supplemental port's run is the only thing that crosses, drawn grey and
+                  dashed, and may be disconnected to route to a primary on the second system.
+                  Supersedes a same-day entry that cut cross-system entirely — that was too broad.</td></tr>
+
+          <tr><td class="when">2026-08-20</td>
+              <td><b>Grey dashed = secondary run.</b> There was no conflict with "unfinished": an
+                  open end's stub is <em>accent orange</em> dashed, not grey. The treatment was
+                  already drawn in <code>outlet-docks-multi-system.html</code> and had been
+                  missed.</td></tr>
+
+          <tr><td class="when">2026-08-20</td>
+              <td><b>Adding a pickup becomes a drag, not a menu item</b> — drop a run end on a
+                  machine that already has a duct, and confirm. Not yet built.</td></tr>
+
+          <tr><td class="when">2026-08-20</td>
+              <td><b>Only an occupied cell or another system's band refuses a drop.</b> Everything
+                  about routing quality is advisory. A pre-existing unroutable run used to freeze
+                  every piece on the board.</td></tr>
+
+          <tr><td class="when">2026-08-20</td>
+              <td><b>Both of a machine's inlets are drawn, and each duct lands on its own glyph.</b>
+                  Square spigot left of the centreline for the primary, tapered hood right for each
+                  pickup.</td></tr>
+
+          <tr><td class="when">2026-08-19</td>
+              <td><b>A system's only tool needs no gate.</b> An ungated tool is a leak only when
+                  there is another tool to leak away from — a sander on a shopvac is a valid shop.</td></tr>
+
+          <tr><td class="when">2026-08-16</td>
+              <td><b>A board is an ordinary piece on the grid</b> and owns its cell exclusively;
+                  ducts route around it. The pinned rail above the canvas was deleted — see
+                  <code>archived/board-rail-pinning.html</code>.</td></tr>
+
+          <tr><td class="when">2026-08-15</td>
+              <td><b>Each system gets its own grey ground</b>, one contiguous row band, drawn only
+                  when there are two or more.</td></tr>
+
+          <tr><td class="when">2026-08-14</td>
+              <td><b>Ports are primary or supplemental</b>, and nothing greys out — a machine with
+                  a port in play stays fully legible.</td></tr>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <hr class="rule"/>
+
+  <section class="sec">
+    <h3>Where the old pages went</h3>
+    <p class="note" style="max-width:68ch">All of them are in <code>docs/mockups/archived/</code>
+      with a banner saying what replaced them. They are worth reading for <em>why</em> — the
+      alternatives that were drawn and rejected are not repeated here — but nothing in that
+      folder is current, and nothing there should be treated as a decision.</p>
+  </section>
+
+</div>

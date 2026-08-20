@@ -129,14 +129,13 @@ These are decided; don't relitigate them in code review or suggestions.
   where its cables route badly: the fix is the default, not a rule.
 - **A machine is ONE box, however many ports it has.** A second pickup — an
   overarm guard, a hood — is a differently-shaped inlet on that same box (square
-  spigot = the primary port, tapered hood = a pickup), not a second body and not a
-  dashed relationship. It owns no cell; it rides its machine's box.
-  `docs/mockups/secondary-ports.html` → Option A is the pick and the record — but
-  disregard that mockup's "When the pickup is on the other collector" section
-  (2026-08-19): a machine's ports all live in its ONE system, never split across
-  two collectors. The cross-seam duct, the both-collectors-open-together control
-  scheme, and the `validateShop` reasoning for why that's still structurally
-  single-system were the ambitious half of that mockup and are explicitly out.
+  spigot = the primary port, tapered hood = a pickup), not a second body. It owns
+  no cell; it rides its machine's box, and each duct lands on its own glyph.
+- **A tool lives in ONE system; a SECONDARY port's run may cross the seam.** That
+  run is the only thing allowed to, and it is drawn grey, dashed and thinner so a
+  shared machine reads as shared. It can be disconnected and re-routed to a primary
+  on the second system. (Grey dashed is free: an unfinished run's stub is *accent
+  orange*, `.open-stub`. Getting that backwards cost a round trip on 2026-08-20.)
 - A secondary node gets already-resolved angles/positions on the wire, never
   state names. That's what lets a $5 board be a node and keeps a schema change
   from needing a flash to every board in the shop.
@@ -144,20 +143,26 @@ These are decided; don't relitigate them in code review or suggestions.
 
 ## UI work
 
-Build an interactive HTML mockup in `docs/mockups/` and publish it for review
-**before** writing non-trivial UI code. Hover is never the only trigger for
+**[`docs/mockups/canvas.html`](docs/mockups/canvas.html) is the canonical canvas
+design and the only place decisions are recorded.** Read it before changing
+anything on the build canvas, and before re-deriving a UI decision from scratch.
+It carries the line/glyph vocabulary, the port and system rules, the drag rules,
+and a dated decision log.
+
+**Update it IN PLACE.** A settled question does not get a new page: change the
+section it affects and add a row to the decision log. Seven mockups that disagreed
+with each other is what made cross-system runs and the meaning of a dashed line
+each get re-litigated three times (2026-08-20).
+
+Still build a throwaway mockup when *exploring* something genuinely new, and
+publish it for review before writing non-trivial UI code — then fold the outcome
+into `canvas.html` and archive the exploration. Hover is never the only trigger for
 anything. Focus dims rather than hides.
 
-**`docs/mockups/` is also where design decisions already made are recorded**, not
-just a staging area for new ones. A mockup that marks an option as "the pick" has
-settled that question, and the panels around it usually answer the follow-ups too.
-Check for one before re-deriving a UI decision from scratch — `secondary-ports.html`
-got re-litigated three times because nobody looked.
-
-`docs/mockups/archived/` holds designs **decided against**, or built and later
-removed. Nothing in there is a proposal; each page opens with a banner saying what
-replaced it. Move a page there when its design dies, and add that banner — a stale
-mockup that still looks current is worse than no mockup at all.
+`docs/mockups/archived/` holds everything superseded, decided against, or built and
+later removed. Nothing in there is current; each page opens with a banner saying
+what replaced it. Add that banner when you move something in — a stale mockup that
+still looks current is worse than no mockup at all.
 
 `dustgate-ui/src/app/build/build.component.ts` is ~4k lines — grep it, don't
 read it whole.
