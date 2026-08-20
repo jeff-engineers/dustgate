@@ -130,12 +130,13 @@ These are decided; don't relitigate them in code review or suggestions.
 - **A machine is ONE box, however many ports it has.** A second pickup — an
   overarm guard, a hood — is a differently-shaped inlet on that same box (square
   spigot = the primary port, tapered hood = a pickup), not a second body and not a
-  dashed relationship. It owns no cell; it rides its machine's box. Its run may be
-  fed by the *other* collector, in which case the duct crosses the seam **in the
-  drawing only** — both its ends stay in one system, so `validateShop`'s "no duct
-  is shared between two systems" holds. Switching the machine on opens gates on
-  both collectors, because it really is connected to both.
-  `docs/mockups/secondary-ports.html` → Option A is the pick and the record.
+  dashed relationship. It owns no cell; it rides its machine's box.
+  `docs/mockups/secondary-ports.html` → Option A is the pick and the record — but
+  disregard that mockup's "When the pickup is on the other collector" section
+  (2026-08-19): a machine's ports all live in its ONE system, never split across
+  two collectors. The cross-seam duct, the both-collectors-open-together control
+  scheme, and the `validateShop` reasoning for why that's still structurally
+  single-system were the ambitious half of that mockup and are explicitly out.
 - A secondary node gets already-resolved angles/positions on the wire, never
   state names. That's what lets a $5 board be a node and keeps a schema change
   from needing a flash to every board in the shop.

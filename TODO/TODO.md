@@ -28,49 +28,6 @@ than restated. Delete an item when it lands; the git history is the record.
   In fact neither does Jeff.  Need to use friendier names, and/or a graphical
   to highlight issues
 
-- **A duct that crosses the seam to a second pickup — mockup Option A.**
-  [docs/mockups/secondary-ports.html](../docs/mockups/secondary-ports.html),
-  "What a second port looks like" → **A · One machine, two spigots**, which the
-  mockup already marks as the pick. Read it before building; the decisions below
-  are all recorded there and this is the third time the question has come up.
-
-  **Option A:** the machine keeps ONE box, one name and one plug, and grows a
-  second inlet of a different SHAPE — square spigot for the primary port, tapered
-  hood for a pickup, which is what an overarm guard physically is. The role is
-  captioned beside it. The run below it is solid, real ductwork, not a dashed
-  relationship: dashes are already spoken for by an unfinished run.
-
-  **It needs no schema change.** The duct crosses the seam in the DRAWING only.
-  Structurally both its ends stay in one system — the pickup element and the gate
-  feeding it both live in the second system; only the box it is anchored to is
-  drawn in the first. So "no duct is shared between two systems, no element belongs
-  to two of them" stays true and `validateShop` is untouched. (An earlier version
-  of this entry called for relaxing that check. Wrong — nothing structural crosses.)
-
-  **Control is decided, and already implemented.** The plug stays on the primary
-  port, in the system the machine calls home; switching the machine on opens gates
-  on BOTH collectors, because the saw really is connected to both. shop.js already
-  works this way — see "Final per-machine verdict, across all its systems", which
-  reports `routed` / `partial` / `stripped` per machine over every system its ports
-  live in, with a lost SUPPLEMENTAL port degrading to `partial` and a lost PRIMARY
-  being the alarm case.
-
-  **Most of the drawing already exists**, from the same-system pickup: glyph
-  `pickup`, `pickupSeat()` anchoring a hood to the machine's box with no cell of its
-  own, and the router terminating at that anchor. The mockup names the no-cell part
-  as A's real cost and notes it is confined to where a duct's endpoint is resolved —
-  which is where it is confined today. `pickupSeat()` already looks the machine's
-  primary port up shop-wide, so it works across systems as written.
-
-  **What's actually missing:**
-  - `addPickup()` hardcodes `const sys = this.sys()`, so a pickup always lands in
-    the machine's own system. It needs to be able to target another.
-  - The gesture: dragging a run end in the second system onto a machine drawn in
-    the first, creating the pickup there. `bandBlockedBy()` refuses moving a PIECE
-    across bands and should keep doing so — a duct is not a piece.
-  - The open end's cell in `addPickup()` is clamped by `bandCeiling()` to stay in
-    its own band. For a pickup fed from another system that clamp is the wrong
-    band.
 - **Show free ports in the board dropdown**, and sort boards by the one already
   driving this system. `boards/board-setup.component.ts` already computes
   `gatesOn()`; the picker in `gates/selector-config.component.ts` labels free
