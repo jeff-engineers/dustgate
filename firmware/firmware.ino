@@ -1755,6 +1755,21 @@ void loop() {
                 e["ip"]     = hits[i].ip;
                 e["board"]  = hits[i].board;
                 e["servos"] = hits[i].servos;
+                // A board that belongs to another shop's primary is still worth
+                // LISTING — hiding it makes a board that is right there, powered
+                // and answering, look like it never showed up, and the two have
+                // completely different fixes. Named, with the same two fields
+                // GET /api/nodes already uses for a refused link, so the UI has
+                // one vocabulary for "someone else has this" wherever it appears.
+                //
+                // Ours doesn't count: a node this board already owns is simply a
+                // node you can pair, and the paired list filters it out anyway.
+                const String& owner = hits[i].owner;
+                if (owner.length() &&
+                    !owner.equalsIgnoreCase(WiFiProvisioner::getHostname())) {
+                    e["claimedBy"] = owner;
+                    e["takeable"]  = true;
+                }
             }
             if (attempt < 2) delay(150);
         }

@@ -377,6 +377,18 @@ void setup() {
         MDNS.addServiceTxt("dustgate", "tcp", "role",   "secondary");
         MDNS.addServiceTxt("dustgate", "tcp", "board",  BOARD_NAME);
         MDNS.addServiceTxt("dustgate", "tcp", "servos", String(SERVO_COUNT).c_str());
+        // Who owns this board, so a primary scanning the network can SAY that a
+        // node is spoken for instead of listing it as free and only finding out
+        // when the handshake is refused. Empty string = unclaimed.
+        //
+        // A HINT, not the authority. It is published once, here, from the claim
+        // loaded at boot: a node claimed later in its life keeps advertising the
+        // old value until it reboots. The refusal in the WELCOME frame is what
+        // actually decides ownership (see THE CLAIM above), and it is always
+        // current. Publishing a stale hint is safe in the direction that matters
+        // — a board wrongly shown as free still refuses the pairing, which is the
+        // pre-existing path with its own message.
+        MDNS.addServiceTxt("dustgate", "tcp", "owner", g_owner.c_str());
     }
 
     bootTrace("mdns");

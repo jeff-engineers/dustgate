@@ -268,12 +268,16 @@ export class DemoApiService extends ApiService {
   }
 
   // ── Secondary boards ───────────────────────────────────────────────────
-  // Two fake nodes so the boards surface is explorable in the demo. One is
-  // deliberately already in DEMO_TOPOLOGY's controllers[] and one isn't, so both
-  // the "add" and the "already added" paths are visible without any hardware.
+  // Three fake nodes so the boards surface is explorable in the demo. One is
+  // deliberately already in DEMO_TOPOLOGY's controllers[], one isn't, and one
+  // belongs to another primary — so "add", "already added" and "claimed by
+  // someone else" are all visible without any hardware. Matches NETWORK_BOARDS
+  // in tools/mock-api.js, which is the same fixture on the other runner.
   private readonly demoNodes: DiscoveredNode[] = [
     { host: 'dustgate-node-1', ip: '192.168.87.61', board: 'qtpy_s3', servos: 4 },
     { host: 'dustgate-node-2', ip: '192.168.87.62', board: 'devkitc', servos: 4 },
+    { host: 'dustgate-node-3', ip: '192.168.87.63', board: 'xiao_c5', servos: 4,
+      claimedBy: 'dustgate-garage', takeable: true },
   ];
 
   override async discoverNodes(): Promise<DiscoveredNode[]> {

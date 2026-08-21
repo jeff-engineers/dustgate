@@ -93,6 +93,20 @@ export interface DiscoveredNode {
   board: string;
   /** Servo channels it offers. */
   servos: number;
+  /**
+   * The primary that has already claimed this board, if any. Present only for
+   * boards owned by SOMEONE ELSE — a board this device owns is just a board you
+   * can pair, and the paired list filters it out anyway.
+   *
+   * Same two fields GET /api/nodes reports for a refused link, deliberately: one
+   * vocabulary for "someone else has this" wherever it turns up. The device
+   * learns it from the node's `owner` mDNS TXT record, published when the node
+   * booted — so it is a hint that can be stale, and the handshake stays the
+   * authority. A board wrongly shown as free simply refuses the pairing.
+   */
+  claimedBy?: string;
+  /** Whether a takeover is offered for it. */
+  takeable?: boolean;
 }
 
 /** Live link state for one controller in the topology (GET /api/nodes). */
@@ -455,8 +469,15 @@ export class ApiService {
    * paired across a layout wipe (a full firmware+filesystem flash rewrites the
    * partition the topology lives in) and links before any shop is drawn.
    */
-  pairNode(host: string, name?: string): Promise<unknown> {
-    return this.post('/api/nodes/pair', { host, ...(name ? { name } : {}) });
+  pairNode(host: string, name?: string, takeover?: boolean): Promise<unknown> {
+    // `takeover` rides exactly one pairing attempt — the device arms it for the
+    // next HELLO and clears it as it sends, so a confirmation can never turn
+    // into a reconnect loop that keeps re-claiming someone else's board.
+    return this.post('/api/nodes/pair', {
+      host,
+      ...(name ? { name } : {}),
+      ...(takeover ? { takeover: true } : {}),
+    });
   }
   unpairNode(host: string): Promise<unknown> {
     return this.post('/api/nodes/pair', { host, remove: true });

@@ -84,7 +84,17 @@ interface BoardRow {
     button.act { border-radius: 8px; padding: 7px 12px; font-size: 12.5px; flex-shrink: 0;
                  background: var(--bg); border: 1px solid var(--border); color: var(--text); }
     button.act.add { background: var(--accent); border: none; color: #1a1200; font-weight: 600; }
+    /* Deliberately NOT the accent fill "Add" gets. Taking a board off another
+       shop is a real consequence, so it reads as the secondary action it is —
+       outlined, in the warning colour, never the thing your thumb lands on by
+       default. */
+    button.act.take { border-color: var(--danger); color: var(--danger); background: transparent; }
     button.act:disabled { opacity: 0.45; }
+
+    /* Sits under the board's own line, in the row, so the claim travels with the
+       board it describes rather than becoming a legend somewhere else. */
+    .claimed { font-size: 12px; color: var(--danger); line-height: 1.5; margin-top: 4px; }
+    .claimed b { font-weight: 600; }
 
     input.rename { background: var(--bg); border: 1px solid var(--border); color: var(--text);
                    border-radius: 8px; padding: 7px 9px; font-size: 13.5px; width: 100%; }
@@ -173,8 +183,17 @@ interface BoardRow {
         <div style="flex:1; min-width:0">
           <div class="nm">{{ n.host }}</div>
           <div class="sub">{{ n.board }} · {{ n.ip }} · {{ n.servos }} servo channels</div>
+          <!-- Shown, not hidden: a board that is powered and answering but absent
+               from this list looks exactly like one that never announced itself,
+               and those two have opposite fixes. Naming the owner is what turns
+               "why isn't it here" into a decision. -->
+          <div class="claimed" *ngIf="n.claimedBy">
+            Already claimed by <b>{{ n.claimedBy }}</b> — taking it over will stop
+            that shop driving this board.
+          </div>
         </div>
-        <button class="act add" (click)="add(n)">Add</button>
+        <button class="act add" *ngIf="!n.claimedBy" (click)="add(n)">Add</button>
+        <button class="act take" *ngIf="n.claimedBy" (click)="add(n)">Take over</button>
       </div>
 
       <div class="empty" *ngIf="scanned && !unadded().length">
@@ -299,8 +318,17 @@ export class BoardSetupComponent implements OnInit, OnDestroy {
    *  node before any gate has been assigned to it. Binding just tells the layout
    *  which board drives what. */
   async add(n: DiscoveredNode): Promise<void> {
+    // Taking a board off another shop is not an undo-able mistake to make by
+    // mistap: the previous owner simply stops being able to drive those gates,
+    // with no error on its side. So the claim gets a confirmation, and the label
+    // says what actually happens rather than "are you sure?".
+    if (n.claimedBy &&
+        !confirm(`${n.host} belongs to ${n.claimedBy}.\n\n` +
+                 `Taking it over stops that shop driving this board. Continue?`)) {
+      return;
+    }
     try {
-      await this.api.pairNode(n.host);
+      await this.api.pairNode(n.host, undefined, !!n.claimedBy);
     } catch (e: unknown) {
       this.error = this.message(e);
       return;

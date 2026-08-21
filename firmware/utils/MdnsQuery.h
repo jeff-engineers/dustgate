@@ -31,6 +31,9 @@ struct MdnsHit {
     String role;  // "role" TXT — DustGate nodes advertise role=secondary
     String board; // "board" TXT — build target of a DustGate node
     int    servos; // "servos" TXT — servo channel count on a DustGate node
+    String owner;  // "owner" TXT — the primary that has claimed this node
+                   // ("" = unclaimed). A hint published at the node's boot, not
+                   // a live authority; see the note where the node sets it.
 };
 
 // Queries <service>.<proto>, waiting up to timeoutMs for responses. Returns the
@@ -53,9 +56,9 @@ inline int mdnsQueryService(const char* service, const char* proto,
 
         // TXT records are optional and order isn't guaranteed — scan for the
         // keys we care about. Shelly plugs carry "gen"; DustGate secondary nodes
-        // carry "role"/"board"/"servos" (see node/dustgate_node.cpp).
+        // carry "role"/"board"/"servos"/"owner" (see node/dustgate_node.cpp).
         int gen = 0, servos = 0;
-        String role, board;
+        String role, board, owner;
         for (size_t t = 0; t < r->txt_count; t++) {
             const char* k = r->txt[t].key;
             const char* v = r->txt[t].value;
@@ -64,6 +67,7 @@ inline int mdnsQueryService(const char* service, const char* proto,
             else if (strcmp(k, "servos") == 0) servos = atoi(v);
             else if (strcmp(k, "role")   == 0) role   = v;
             else if (strcmp(k, "board")  == 0) board  = v;
+            else if (strcmp(k, "owner")  == 0) owner  = v;
         }
 
         hits[count].hostname = r->hostname ? String(r->hostname) : String();
@@ -72,6 +76,7 @@ inline int mdnsQueryService(const char* service, const char* proto,
         hits[count].role     = role;
         hits[count].board    = board;
         hits[count].servos   = servos;
+        hits[count].owner    = owner;
         count++;
     }
     mdns_query_results_free(results);

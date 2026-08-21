@@ -64,6 +64,15 @@ const pairedNodes = [];   // [{ host, name }]
 const NETWORK_BOARDS = [
   { host: 'dustgate-node-1', ip: '192.168.87.61', board: 'qtpy_s3', servos: 4 },
   { host: 'dustgate-node-2', ip: '192.168.87.62', board: 'devkitc', servos: 4 },
+  // A board that belongs to SOMEONE ELSE's primary. It is listed, not hidden:
+  // a board sitting there powered and answering, absent from the list, looks
+  // exactly like a board that never announced itself — and those two have
+  // completely different fixes. `claimedBy` + `takeable` are the same fields
+  // GET /api/nodes uses for a refused link, so there is one vocabulary for
+  // "someone else has this" wherever it shows up. Firmware learns it from the
+  // node's `owner` mDNS TXT record.
+  { host: 'dustgate-node-3', ip: '192.168.87.63', board: 'xiao_c5', servos: 4,
+    claimedBy: 'dustgate-garage', takeable: true },
 ];
 const OFFLINE_HOSTS = ['dustgate-node-2'];
 
