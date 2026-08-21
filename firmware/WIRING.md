@@ -331,10 +331,24 @@ capacitance:
 
 ## 6. Status Screen (SSD1306 OLED) — optional
 
-> **UNBUILT.** No display has been wired to a DustGate board and no firmware
-> draws to one. Everything in this chapter is a design, including the pins each
-> board doc proposes. It is written down so the wiring is settled before someone
-> starts soldering, not because any of it has been verified.
+> **WORKING ON ONE BOARD, as of 2026-08-21.** A 0.96" SSD1306 answered at 0x3C on
+> a DevKitC's GPIO16/4 and the firmware drew to it — the first display any
+> DustGate board has driven:
+>
+> ```
+> [SCREEN] panel answered at 0x3C — drawing
+> [I2C] Scanning SDA=GPIO16 SCL=GPIO4 at 100kHz...
+>   0x3C  SSD1306 OLED (the expected status screen)
+> ```
+>
+> What that verifies: **these pins, this address, on this board.** Not verified:
+> the sleep/wake behaviour over hours, whether every layout reads well on real
+> glass, and the pins proposed for the two node boards — those are still
+> transcribed from published pinouts and have driven nothing.
+>
+> **It took a swapped pair to get there**, which is the failure this chapter
+> should make you check first: SDA and SCL reversed scan exactly like a dead
+> module. GPIO16 is SDA, GPIO4 is SCL.
 
 A 0.96" 128×64 SSD1306 on I²C, so *"is it connected?"* has an answer you can read
 at the machine instead of on a phone. The layouts — what each screen says, and
@@ -363,10 +377,30 @@ SDA pin ─────────── SDA
 SCL pin ─────────── SCL
 ```
 
-Which pins is per board — see [`wiring/devkitc.md`](wiring/devkitc.md) and
-[`wiring/xiao-c5.md`](wiring/xiao-c5.md). The XIAO uses its standard D4/D5 pair
-and everything lines up; the **DevKitC cannot** — the GPIO21/22 that every ESP32
-example assumes are the TMC2209's EN and DIR on that board.
+Which pins is per board, and the three boards are not equally lucky:
+
+| Board | SDA / SCL | How it goes |
+|---|---|---|
+| [QT Py ESP32-S3](wiring/qtpy-s3.md) | GPIO41 / GPIO40 | **Easiest.** The STEMMA QT socket is a second I²C bus — a cable, no soldering, no header pad, nothing else disturbed |
+| [XIAO ESP32C5](wiring/xiao-c5.md) | GPIO23 / GPIO24 (D4/D5) | The XIAO-standard I²C position, so Seeed's own accessories land on it; free in either node role |
+| [ESP32-DevKitC](wiring/devkitc.md) | **GPIO16 / GPIO4** | The awkward one — and it spends the board's last two spare pins |
+
+**The DevKitC cannot use GPIO21/22**, which is what every ESP32 I²C example
+assumes: those are the TMC2209's `EN` and `DIR` on that board. I²C remaps through
+the GPIO matrix, so the fix is one `Wire.begin(16, 4)` — but copy-pasted example
+code will silently drive the stepper's enable line instead of a display. GPIO16
+and GPIO4 also sit next to the pixel's GPIO17 on the V4 right header, keeping the
+whole indicator group as one block on a carrier.
+
+Two consequences worth knowing before a carrier is fabbed:
+
+- **Fitting a screen fills the DevKitC.** Everything left after GPIO16 and GPIO4
+  is input-only or strapping — fine for a wake button, which only needs reading,
+  with an external 10kΩ pull-up standing in for the one those pins lack.
+- **WROVER warning:** GPIO16/17 are the PSRAM interface on WROVER modules. That
+  is SDA *and* `PIN_PIXEL`, on a module that drops into the same footprint, with
+  no spares left to move them to. "Add PSRAM later" is exactly the kind of
+  decision that looks free.
 
 **Do not run it from 5V.** These modules will take it, but then their SDA/SCL
 idle at 5V through the onboard pull-ups, and no ESP32 here is 5V tolerant. The
@@ -376,6 +410,32 @@ lit, and far less showing text.
 **Address is 0x3C** on essentially all of the 4-pin 0.96" modules (0x3D exists on
 some 128×64 parts; if it scans up as 0x3D, that is why). No pull-up resistors to
 add — the modules carry their own.
+
+### Finding out whether it is wired right
+
+`i2c` on the serial console scans the bus and says what answered, at what
+address, and what it probably is:
+
+```
+i2c              # scans the pins this build declares for the screen
+i2c 16 4         # scans a pair you name — the useful form when hunting
+```
+
+It separates the three failures that look identical from outside: nothing
+powered, wrong address (0x3D rather than 0x3C), and SDA/SCL swapped. It also
+names a **PCF8574 character-LCD backpack** (0x27/0x3F) if that is what is on the
+bus, because that is a different part this firmware cannot drive at all — not a
+setting to change.
+
+It **refuses** to scan `PIN_TMC_EN`/`PIN_TMC_DIR`. EN is active LOW, so a scan
+pulling it down is a scan that silently energises the driver — the same trap the
+DevKitC's pin map dodges, and a debug command is exactly where someone walks back
+into it. On a bench board with no driver fitted those are just pins, so the
+refusal can be lifted deliberately: `i2c 21 22 force`.
+
+Scans at 100kHz rather than the screen's 400kHz: a marginal pull-up or a long
+dupont run fails at 400k and answers fine at 100k, and "the module is alive" is
+the thing you need first.
 
 ### Burn-in, and why the screen sleeps
 
@@ -391,6 +451,11 @@ An OLED with fixed labels lit 24/7 burns them in — the ghost of `gates` and
 Which makes a lit screen mean *something happened*, instead of becoming wallpaper
 you stop reading. That is a firmware behaviour, not a wiring one, but it is the
 reason the wake button below is a convenience rather than a requirement.
+
+That policy is `statusscreen::awake()` in
+[`utils/StatusScreenModel.h`](utils/StatusScreenModel.h), and it is a decision
+rather than a comment: the captive portal holds the screen awake too, since a
+blank panel is useless to a stranger being asked to join an AP.
 
 ### The wake button — optional, and optional on purpose
 
@@ -410,7 +475,37 @@ line at reset unless someone is pressing the button while the board boots.
 
 A DustGate ships without a screen unless somebody fits one, so the display has to
 compile out completely when its pins aren't defined — the same seam `HAS_LINEAR`
-and `PIN_PIXEL` already use. No display, no library, no flash spent. **Open
-question:** whether a fitted screen is probed for at boot (an I²C read at 0x3C) or
-declared by the build. Probing is friendlier to a user who adds one later;
-declaring is what the rest of this firmware does.
+and `PIN_PIXEL` already use. No display, no library, no flash spent. That guard
+sits on the *driver*: the layout model is pure C++ that touches no pin, so a
+board with no screen pays only what the linker drops.
+
+**Settled 2026-08-20: declared by the build — and then probed to check the
+declaration is true.** Not probe-to-discover; probe-to-verify. An env sets
+`-DHAS_STATUS_SCREEN`, the board header turns that into its own two pins, and
+`pio run -e esp32dev_screen` is a DevKitC with a screen fitted. Probing at 0x3C
+would have been friendlier to someone adding one later; declaring is how every
+other fitted-or-not part on these boards is decided, and one seam beats two.
+
+A screen that is *declared and not actually there* is handled, because that is
+the mistake someone will make: `StatusScreen::begin()` does a zero-length write
+at 0x3C first, and an ACK is the whole test. No ACK → it says so and disables
+every later call, so a missing panel cannot hang the brain in Wire's timeout once
+per pass of `loop()`.
+
+**That probe is ours, and it has to be.** `Adafruit_SSD1306::begin()` does not
+check anything — read it: the only `return false` is a failed `malloc` of the
+1 KB framebuffer. It clocks the init sequence into open air and reports success
+regardless. Trusting it printed `SSD1306 up` on a board with an empty bus
+(2026-08-21), which is a worse failure than no message at all.
+
+**And pass `periphBegin = false`.** Left at its default the library calls
+`wire->begin()` with no arguments, which on an ESP32 re-initialises I²C on the
+core default pins — **GPIO21/22**. On the DevKitC those are the TMC2209's EN and
+DIR. Everything above about keeping I²C off those pins is undone by a default
+argument in a display library, silently: the panel talks to nothing while the
+stepper's enable line gets driven as a clock.
+
+The two Adafruit libraries (SSD1306 + GFX) are why that env is separate rather
+than a flag on the default one. A board with no panel should not download,
+compile or store a display driver — the screen env costs ~32 KB of flash over
+`esp32dev_servo`, which is exactly what an unfitted board declines to pay.

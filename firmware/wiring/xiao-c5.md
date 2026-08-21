@@ -1,19 +1,22 @@
 # Wiring — Seeed XIAO ESP32C5 (servo-only node)
 
-> ## ⚠️ THE PIN NUMBERS HAVE NOT DRIVEN A SERVO
+> ## The servo block is proven. The rest of this map is not.
 >
-> A supported node target as of 2026-08-14. A board has been flashed and booted
-> (2026-08-13): full boot log, WiFi joined, `ready` at 1986 ms.
+> A supported node target as of 2026-08-14, and as of **2026-08-21 all four PWM
+> channels have driven real servos** — the signal reaches the pin on every one of
+> D7/D8/D9/D10. That closes the question this banner used to be about: the pin
+> numbers came from Seeed's published pinout rather than a multimeter, and now
+> the four that matter have been confirmed by a servo moving.
 >
-> **The strapping-pin worry is closed** — GPIO8/GPIO9 are ordinary IO on this
-> part, confirmed against the datasheet and then on the bench (2026-08-19), so a
-> servo signal idling there does not hold the board out of its app. See
-> [§6](#6-before-you-trust-this).
+> Earlier: flashed and booted 2026-08-13 (full boot log, WiFi joined, `ready` at
+> 1986 ms), and **the strapping-pin worry closed** 2026-08-19 — GPIO8/GPIO9 are
+> ordinary IO on this part, so a servo signal idling there does not hold the board
+> out of its app. See [§6](#6-before-you-trust-this).
 >
-> What is still unproven is the other half: **the pin numbers below come from
-> Seeed's published pinout, not from a multimeter, and no servo has been seen to
-> MOVE on any of them.** A board that boots with a servo attached has not yet
-> shown that the signal reaches it. If it appears not to boot, read
+> **Still unproven on this board:** the status screen pins (D4/D5 — a panel works
+> on a DevKitC but nothing has been wired to a C5), the serial-servo bus pads, and
+> every non-servo pad's physical position, which is still Seeed's drawing rather
+> than something traced. If it appears not to boot, read
 > [§5](#5-if-it-looks-dead) first, because the first time, it was booting fine.
 >
 > Authoritative source for every number here:
@@ -176,7 +179,14 @@ but free.
 
 ## 4. Status Screen (SSD1306 OLED) — optional
 
-> **UNBUILT.** No display has been wired to any DustGate board. See
+> **NEVER TESTED ON THIS BOARD.** The driver is proven on a DevKitC as of
+> 2026-08-21 (`wiring/devkitc.md` §5), but nothing has been wired to a C5 and
+> D4/D5 below is still Seeed's published convention rather than a measurement.
+> The build is ready and waiting:
+>
+> ```
+> PLATFORMIO_CORE_DIR=~/.platformio-pioarduino pio run -e xiao_c5_screen
+> ``` See
 > [`WIRING.md` §6](../WIRING.md#6-status-screen-ssd1306-oled--optional) for what the
 > screen is for, the burn-in/sleep behaviour and the 3V3 rule; the layouts are in
 > [`docs/mockups/oled-status.html`](../../docs/mockups/oled-status.html). Only the
@@ -199,6 +209,27 @@ XIAO expansion board lands on them without a rework — which is the opposite of
 DevKitC's situation, where the obvious I²C pins are already the stepper's. Same
 caveat as every number in this file: D4/D5 is Seeed's published convention, not
 something traced with a meter.
+
+### Turning it on
+
+Declared by the build, not probed for: `-DHAS_STATUS_SCREEN` activates the
+`PIN_OLED_*` block in [`boards/xiao_c5.h`](../boards/xiao_c5.h), and the driver is
+[`utils/StatusScreen.h`](../utils/StatusScreen.h) over the host-tested layout model
+beside it. The env is **`xiao_c5_screen`** — `xiao_c5` plus `-DHAS_STATUS_SCREEN` and the two
+Adafruit libraries, which do resolve against this fork's Arduino core 3.x
+(compiled clean 2026-08-21). Same isolated core dir as every C5 build:
+
+```
+PLATFORMIO_CORE_DIR=~/.platformio-pioarduino pio run -e xiao_c5_screen -t upload
+```
+
+**On first light, check the swap before suspecting anything else.** The DevKitC's
+panel took a reversed SDA/SCL to come up, and a swapped pair scans exactly like a
+dead module — nothing answers, with no hint as to why. Run `i2c`; if it comes back
+empty, run `i2c 24 23`.
+
+A declared-but-absent panel is handled the same way everywhere: no ACK at 0x3C, a
+line on serial, driver disabled.
 
 ### It fits in both roles, which is the point
 
@@ -287,8 +318,12 @@ ordinary IO and a servo idling there cannot hold the board out of its app.
 
 **Confirmed on the bench, 2026-08-19.** The board boots with a servo wired to the
 block; the datasheet reading and the hardware agree, so nothing here needs moving
-and this question is closed. (Booting is all this proves — whether the signal
-actually reaches the servo is bench test 2 in `TODO/TODO.md`.)
+and this question is closed.
+
+**And the signal does reach them, 2026-08-21:** all four channels drive real
+servos. Booting with a servo attached only ever proved the strap question; this
+proves the map. The C5's half of bench test 1 in `TODO/TODO.md` is done — the
+QT Py S3 has still never moved one.
 
 The one strap this board's map does touch is **GPIO25, the status pixel**, and it
 is benign: GPIO25 (with MTDI) selects the **SDIO sampling edge**, a peripheral

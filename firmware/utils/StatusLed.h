@@ -70,35 +70,14 @@
 
 #include <Arduino.h>
 #include "../config.h"
+#include "StatusVocab.h"
 
 namespace statusled {
 
-// One state per thing you'd actually want to distinguish while standing in a
-// workshop. Ordered roughly worst → best, which is also the order the boot
-// sequence walks through.
-enum Status {
-    FAULT,        // red — pulsing
-    BOOTING,      // orange — pre-WiFi
-    PORTAL,       // white — blinking; captive portal waiting for credentials
-    NO_WIFI,      // orange — was connected, isn't now (or never joined)
-    ONLINE,       // blue — on WiFi, not ready to work (node: unlinked;
-                  //        primary: no topology stored, or a paired board is dark)
-    READY         // green — node: primary linked.
-                  //         primary: routing live AND every paired board answering.
-};
-
-// Motion overlays. These OUTRANK Status while active, because during a move the
-// motion IS the news — a gate that isn't moving when you asked it to is the
-// thing you're standing there trying to diagnose.
-//
-// All three are orange; the rate distinguishes them for anyone who cares to
-// look closer, and nobody who doesn't is misled.
-enum Motion {
-    STILL,        // nothing in flight — Status shows through
-    MOVING,       // solid orange   — a normal move or a servo sweep
-    HOMING,       // slow blink     — seeking the home datum
-    CALIBRATING   // fast blink     — reference sweep between the endstops
-};
+// Status and Motion live in StatusVocab.h — pure, no Arduino.h — so the
+// optional OLED status screen can mirror this exact vocabulary and still be
+// host-testable. Nothing else moved; the colour meanings above are still the
+// design, this file is still where the pixel is driven.
 
 // ---------------------------------------------------------------------------
 // Shared state. Kept in function-local statics so this stays header-only with
@@ -110,6 +89,12 @@ inline unsigned long& _flashUntil() { static unsigned long t = 0; return t; }
 
 inline void set(Status s)      { _state()  = s; }
 inline void setMotion(Motion m) { _motion() = m; }
+
+// Read back what the indicator is currently saying. The optional status screen
+// spells out this exact state (StatusScreenModel.h) rather than deciding one of
+// its own — two indicators that could disagree would be worse than one.
+inline Status state()  { return _state();  }
+inline Motion motion() { return _motion(); }
 
 // Back-compat with the node's original call: "a servo is sweeping" is just
 // MOVING. Kept because it reads better at the call site than setMotion(MOVING).

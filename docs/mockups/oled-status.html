@@ -111,11 +111,18 @@
   </div>
 
   <div class="banner">
-    <b>Nothing here is built.</b> No display has been wired to a DustGate board, no
-    firmware draws any of this, and the pins these screens assume are proposals — the
-    board headers in <code>firmware/boards/</code> are still the authority. This page
-    exists to settle the layout <em>before</em> any of that, because the only real
-    question a 128&times;64 screen asks is <em>what actually fits</em>.
+    <b>It works, on one board.</b> As of 2026-08-21 a 0.96" SSD1306 answered at 0x3C on a
+    DevKitC's GPIO16/4 and the firmware drew to it — the first display any DustGate board has
+    driven. <code>StatusScreenModel.h</code> turns board facts into these exact rows,
+    <code>test_statusscreen.cpp</code> asserts every screen below against the 21&times;8
+    budget on a host, and <code>StatusScreen.h</code> puts them on glass
+    (<code>pio run -e esp32dev_screen</code>).
+    <br><br>
+    <b>What that does not verify:</b> the sleep and wake behaviour over hours, whether each
+    layout below actually reads well on real glass at arm's length, and the pins proposed for
+    the two node boards — those are still transcribed from published pinouts and have driven
+    nothing. The screens on this page remain the design; the model and this page are the same
+    design stated twice, so <b>change a screen here, change the test</b>.
   </div>
 
   <hr class="rule">
@@ -228,15 +235,25 @@
       </p>
     </div>
 
-    <div class="card flag open">
+    <div class="card flag">
       <h3>Optional at build time — this is a product concern, not a bench one</h3>
       <p class="note">
         Every DustGate ships without a screen unless someone fits one. So the display compiles
         out entirely when its pins aren't defined, the same seam every other optional part on
-        these boards already uses — no display, no library, no flash spent. <b>Open:</b> whether
-        a fitted screen is detected at boot (I&sup2;C probe at 0x3C) or declared by the build.
-        Probing is friendlier and costs a few milliseconds; declaring is what the rest of the
-        firmware does.
+        these boards already uses — no display, no library, no flash spent.
+      </p>
+      <p class="note">
+        <b>Settled:</b> a fitted screen is <em>declared by the build</em>
+        (<code>-DHAS_STATUS_SCREEN</code> &rarr; the board header's own two pins) rather than
+        discovered at 0x3C — and then probed at 0x3C anyway, to check the declaration is
+        true. Probing would have been friendlier to someone adding one later; declaring
+        is how every other fitted-or-not part on these boards is decided, and one seam beats
+        two. A screen declared but not wired is still handled — no ACK, a line on serial, and
+        the driver disables itself, because a missing panel must not hang the brain in Wire's
+        timeout once per loop. That probe has to be ours:
+        <code>Adafruit_SSD1306::begin()</code> checks nothing but its own malloc and reports
+        success into an empty bus, which is how 2026-08-21 got <code>SSD1306 up</code> on a
+        board with no panel on those pins.
       </p>
     </div>
   </div>
@@ -274,6 +291,55 @@
               <td>At 6&times;8 it is ~1.5mm on a 0.96" panel. Every screen had exactly one
                   spare row and this is the best use of it — "is the wifi ok" is half of
                   why anyone looks at the screen.</td>
+            </tr>
+            <tr>
+              <td>2026-08-21</td>
+              <td>First panel driven — layouts survived contact with glass unchanged</td>
+              <td>Three bugs stood between the design and a lit screen, none of them in the
+                  layouts: swapped SDA/SCL (scans identically to a dead module),
+                  <code>Adafruit_SSD1306::begin()</code> reporting success into an empty bus,
+                  and its <code>periphBegin</code> default silently moving I&sup2;C onto the
+                  stepper's pins. The 21&times;8 model needed no change, which is the argument
+                  for having written it first.</td>
+            </tr>
+            <tr>
+              <td>2026-08-20</td>
+              <td>The build stamp takes the spare eighth row — where there is one</td>
+              <td>Provenance is worth a row nothing else wanted, and worth nothing at all if it
+                  can push a fact off the panel. Offered to every screen, taken only where the
+                  body used seven rows or fewer.</td>
+            </tr>
+            <tr>
+              <td>2026-08-20</td>
+              <td>A dark node blinks the band but keeps the hostname — it is not a FAULT screen</td>
+              <td>Found by writing the firmware against this page: the pixel shows a dark
+                  paired board as <em>blue</em>, not red (<code>StatusLed.h</code> is explicit
+                  about it), so a band reading FAULT would have been the screen disagreeing with
+                  the pixel beside it — the exact thing this design forbids. Blinking says "this
+                  is the part you walked over to read" without borrowing red.</td>
+            </tr>
+            <tr>
+              <td>2026-08-20</td>
+              <td>Fitted screens are <em>declared by the build</em>, not probed for at boot</td>
+              <td>Probing is friendlier to a retrofit, but declaring is how every other
+                  optional part on these boards is decided, and a second seam is a second
+                  thing to get wrong. The retrofit case is covered instead by handling a
+                  declared-but-absent panel gracefully.</td>
+            </tr>
+            <tr>
+              <td>2026-08-20</td>
+              <td>The layout is a pure C++ model with a host test, written before any driver</td>
+              <td>The only question a 128&times;64 panel really asks is what fits, and that is
+                  answerable on a laptop. <code>firmware/utils/StatusScreenModel.h</code> and
+                  <code>firmware/test/test_statusscreen.cpp</code> make this page executable
+                  rather than aspirational — change a screen here, change the test.</td>
+            </tr>
+            <tr>
+              <td>2026-08-20</td>
+              <td><code>Status</code> and <code>Motion</code> moved to <code>StatusVocab.h</code>,
+                  shared by pixel and screen</td>
+              <td>"The screen mirrors <code>statusled::Status</code>" was a promise a comment had
+                  to keep. Now there is one enum to mirror, so the two indicators cannot drift.</td>
             </tr>
             <tr>
               <td>2026-08-20</td>
@@ -337,10 +403,10 @@
         { text: "gate 3   closing" }
       ] },
 
-    { role: "Primary", what: "A node went dark", maps: "FAULT", fault: true, why:
-      "Names the board, says how long, and still shows what is left working.",
+    { role: "Primary", what: "A node went dark", maps: "ONLINE (a paired board dark)", fault: true, why:
+      "Names the board, says how long, and still shows what is left working. The pixel is BLUE here, not red — nothing on this board is broken, part of the shop is unreachable — so the band keeps the hostname and blinks instead of shouting FAULT.",
       rows: [
-        { bar: "FAULT", wifi: 3, blink: true },
+        { bar: "dustgate-a1", wifi: 3, blink: true },
         { text: "NODE DARK", size: 2 },
         { text: "qtpy-2 lost link" },
         { text: "last seen  42s ago" },

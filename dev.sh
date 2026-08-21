@@ -14,6 +14,9 @@
 #   bash dev.sh flash --host shop --ssid Shop-WiFi        # override what tools/.env says
 #   bash dev.sh flash --ask                               # prompt for all three, prefilled
 #     A bare word is the hostname, as with flash-node: `dev.sh flash shop`.
+#     --screen (or --env NAME) flashes a primary built from a different env —
+#     today that means esp32dev_screen, the build with the SSD1306 status
+#     screen compiled in. UNTESTED HARDWARE: no panel has ever driven one.
 #     A firmware flash (`flash` / `flash --fw`) always CONFIRMS the hostname,
 #     prefilled from tools/.env — Enter keeps it. Pass --host to answer up front,
 #     or redirect stdin from /dev/null to take the default unattended.
@@ -333,6 +336,10 @@ save_env_defaults() {
 # through without this function needing to know about it.
 PROVISION_REST=()
 OV_HOST=""; OV_SSID=""; OV_PASS=""; OV_ASK=0; OV_SAVE=0
+# Which env a primary flash targets. Empty = platformio.ini's default_envs. Only
+# needed so the serial monitor afterwards uses that env's settings — deploy.sh
+# gets told separately, through PROVISION_REST.
+FLASH_ENV=""
 # Set by prompt_credentials so a caller can tell whether the full interactive
 # path already ran — run_flash asks for the hostname on its own otherwise, and
 # asking twice in one flash is worse than not asking at all.
@@ -340,6 +347,7 @@ PROVISION_PROMPTED=0
 parse_provision_overrides() {
   PROVISION_REST=()
   OV_HOST=""; OV_SSID=""; OV_PASS=""; OV_ASK=0; OV_SAVE=0
+  FLASH_ENV=""
   PROVISION_PROMPTED=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -351,6 +359,13 @@ parse_provision_overrides() {
       --pass=*) OV_PASS="${1#*=}"; shift ;;
       --ask)    OV_ASK=1; shift ;;
       --save)   OV_SAVE=1; shift ;;
+      # Env selection for a PRIMARY. Handled here rather than left to the --*
+      # passthrough because the space form would otherwise drop NAME into the
+      # bare-word branch below and silently flash the board with a hostname of
+      # "esp32dev_screen".
+      --env)    FLASH_ENV="${2:-}"; PROVISION_REST+=("--env=${2:-}"); shift 2 ;;
+      --env=*)  FLASH_ENV="${1#*=}"; PROVISION_REST+=("$1"); shift ;;
+      --screen) FLASH_ENV="esp32dev_screen"; PROVISION_REST+=("--screen"); shift ;;
       --*)      PROVISION_REST+=("$1"); shift ;;
       *)        OV_HOST="$1"; shift ;;    # bare word = hostname, as in flash-node
     esac
@@ -547,7 +562,7 @@ run_flash() {
   echo "  post-flash reset handshake is occasionally unreliable on this board."
   echo ""
   echo "▶ Opening serial monitor so you can see what's happening (Ctrl+C to exit)…"
-  run_monitor --scan-boot
+  run_monitor --scan-boot ${FLASH_ENV:+"$FLASH_ENV"}
 }
 
 run_flash_node() {
@@ -913,7 +928,7 @@ case "${1:-}" in
   "")        show_menu ;;
   *)
     echo "Unknown mode: $1"
-    echo "Usage: dev.sh [demo|mock|flash [--fw|--ui|--no-provision] [--host N] [--ssid N] [--pass S] [--ask] [--save]|flash-node [s3|c5] [hostname]|monitor [node|c5]|ports [--pin]|erase|provision [--host N] [--ssid N]|live [host]]"
+    echo "Usage: dev.sh [demo|mock|flash [--fw|--ui|--no-provision] [--screen|--env NAME] [--host N] [--ssid N] [--pass S] [--ask] [--save]|flash-node [s3|c5] [hostname]|monitor [node|c5]|ports [--pin]|erase|provision [--host N] [--ssid N]|live [host]]"
     exit 1
     ;;
 esac

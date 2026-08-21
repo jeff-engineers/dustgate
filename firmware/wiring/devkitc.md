@@ -386,7 +386,11 @@ flashes through the onboard CP2102/CH340 USB-serial chip.
 
 ## 5. Status Screen (SSD1306 OLED) — optional
 
-> **UNBUILT**, like the whole chapter it belongs to. See
+> **VERIFIED ON HARDWARE 2026-08-21** — the first panel any DustGate board has
+> driven. A 0.96" SSD1306 on GPIO16/4 answered at 0x3C and the firmware drew to
+> it. The wiring below is now measured, not proposed. **SDA and SCL were swapped
+> on the first attempt**, which scans identically to a dead module — check that
+> before anything else. See
 > [`WIRING.md` §6](../WIRING.md#6-status-screen-ssd1306-oled--optional) for what the
 > screen is for, the burn-in/sleep behaviour and the 3V3 rule; the layouts are in
 > [`docs/mockups/oled-status.html`](../../docs/mockups/oled-status.html). Only the
@@ -414,6 +418,28 @@ on the carrier.
 > On a **servo-only** build (`esp32dev_servo`) no TMC2209 is fitted and GPIO21/22 are
 > electrically free — but the pin map is deliberately the same across both envs, so a
 > carrier built for one board works on the other. Use 16/4 anyway.
+
+
+### Turning it on
+
+Fitting a screen is a **build-time** fact, declared, not probed for — the same way
+"is a stepper fitted?" is answered by which env you flash. `-DHAS_STATUS_SCREEN`
+is what activates the `PIN_OLED_*` block in the board header:
+
+```
+pio run -e esp32dev_screen -t upload      # a DevKitC with a screen fitted
+```
+
+The firmware behind it is [`utils/StatusScreen.h`](../utils/StatusScreen.h) (I²C,
+font, sleep timer) over [`utils/StatusScreenModel.h`](../utils/StatusScreenModel.h)
+(what it says — pure, host-tested against the 21×8 budget). It costs about **32 KB
+of flash** over `esp32dev_servo`, which is why it is a separate env: a board with
+no panel should not carry a display driver.
+
+**Flashing this env onto a board with no screen wired is harmless.** `begin()` gets
+no ACK at 0x3C, prints `[SCREEN] declared but no ACK` and disables itself — a
+missing panel must never hang the shop's brain in Wire's timeout once per loop.
+
 
 ### This spends the board's last two spare pins
 

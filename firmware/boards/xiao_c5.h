@@ -83,15 +83,20 @@
 // #define PIXEL_GAIN      4
 
 // -- Reserved: status screen (SSD1306 OLED) + wake button --
-// Optional and UNBUILT — no display has been wired to any DustGate board. D4/D5 are
+// Optional, and unbuilt ON THIS BOARD — a panel works on the DevKitC (2026-08-21)
+// but nothing has been wired to a C5. D4/D5 are
 // the XIAO-standard I2C position, so Seeed's own accessories land on them, and they
 // stay free whether this board is driving four PWM gates or an ST3215 slider.
 // D1 is GPIO0, which is an ordinary pad on the C5 (the boot straps are 26/27/28),
 // so a momentary-to-GND button there is safe even at reset.
 // Uncommenting these is what fits a screen; see firmware/wiring/xiao-c5.md §4 and
 // the layouts in docs/mockups/oled-status.html.
-// #define PIN_OLED_SDA    23   // D4
-// #define PIN_OLED_SCL    24   // D5
+// Fitted by -DHAS_STATUS_SCREEN, the same build-time switch the DevKitC uses;
+// no env sets it for this board yet, and no panel has been connected to one.
+#ifdef HAS_STATUS_SCREEN
+#define PIN_OLED_SDA    23   // D4
+#define PIN_OLED_SCL    24   // D5
+#endif
 // #define PIN_WAKE_BTN     0   // D1, INPUT_PULLUP, momentary to GND
 
 // -- Reserved: serial-servo bus --

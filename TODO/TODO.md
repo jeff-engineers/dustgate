@@ -104,9 +104,12 @@ Delete an item once it has genuinely run. "It compiled" is not a pass.
 
 ### Bench Testing
 
-**1. A node drives a real servo — no primary needed.** Neither the QT Py S3 nor
-the XIAO C5 has ever moved one; the whole secondary path is compile-only. A node
-has **no serial console** — it is a dumb bank that only acts on HELLO/PING/SET
+**1. A node drives a real servo — no primary needed.** ✅ **XIAO C5: passed
+2026-08-21** — all four PWM channels drive real servos, so the C5's pin map is
+confirmed by movement rather than by Seeed's drawing. **The QT Py S3 has still
+never moved one**, and it is the *default* node env (`dustgate_node`), so the
+board most likely to be flashed is the one least proven. What remains below is
+that board. A node has **no serial console** — it is a dumb bank that only acts on HELLO/PING/SET
 over its `/nodelink` WebSocket — so `servo 1 90` on the primary's console moves
 the PRIMARY's own pins, not the node's. The cheap isolated test is to be the
 primary yourself, by pointing the NodeLink conformance runner at the real node:
@@ -119,13 +122,17 @@ node shared/device-model/nodelink-conformance.js ws://dustgate-node.local/nodeli
 Pass: the suite is green AND servos physically move. Green with nothing moving
 means the link works and the actuator doesn't — which is exactly the split this
 test exists to make visible. Then walk all four channels and confirm each moves
-its own servo. Then repeat for `c5` — its pins are cleared (see
-`firmware/wiring/xiao-c5.md` §6), and it needs
-`PLATFORMIO_CORE_DIR=~/.platformio-pioarduino` if you build it by hand rather
-than through `dev.sh`.
+its own servo.
+
+No need to repeat this for the C5 — that is the part already done. Its pin map is
+proven end to end (`firmware/wiring/xiao-c5.md` §6); if you do rebuild it by hand
+it still needs `PLATFORMIO_CORE_DIR=~/.platformio-pioarduino`.
 
 **2. NodeLink end to end — the primary commands a node.** Only after 1 passes;
-if 1 fails, this can only tell you the same thing more expensively. Flash a
+if 1 fails, this can only tell you the same thing more expensively. On the C5, 1
+now passes — but that does not settle this item, whose point is the *link*: a
+primary resolving an angle and a node acting on it, then holding through a
+primary that dies mid-move. Flash a
 primary and a node, pair them, assign a gate to a node channel, and drive it from
 the UI. Pass: the primary resolves the angle and the node moves. Worth watching
 the wire: a node must receive resolved angles/positions and never state names —

@@ -48,6 +48,7 @@
 #include "../motor/ServoActuator.h"
 #include "../control/NodeLink.h"
 #include "../utils/StatusLed.h"
+#include "../utils/StatusScreen.h"   // optional SSD1306; nothing on a board without one
 
 #if !HAS_SERVO
   #error "dustgate_node needs a servo bank — build with -DENABLE_SERVO and a board that defines SERVO_PWM_PIN_1"
@@ -77,6 +78,10 @@ static bool awaitingSettle   = false;
 // Written from the AsyncTCP task, read by loop() for the status pixel. A plain
 // bool is enough: it is advisory display state, not a control input.
 static volatile bool g_primaryLinked = false;
+// When the last SET was actually commanded. The screen ages it ("last cmd 3s
+// ago"), which is the one number that separates "linked" from "linked and
+// being talked to" — the two look identical on the pixel.
+static volatile uint32_t g_lastCmdMs = 0;
 static volatile uint32_t g_linkedClientId = 0;
 
 // ── THE CLAIM ──────────────────────────────────────────────────────────────
@@ -323,6 +328,14 @@ void setup() {
     statusled::set(statusled::BOOTING);
     statusled::update();
 
+    // Jeff wants a screen on the nodes in his own shop; a product can't require
+    // one on every board in the building. So it is the same optional fitting
+    // here as on the primary, and a node without one is unchanged.
+    if (statusscreen::begin()) Serial.println(F("[SCREEN] panel answered at 0x3C — drawing"));
+#if defined(PIN_OLED_SDA) && defined(PIN_OLED_SCL)
+    else Serial.println(F("[SCREEN] declared, but nothing answered; disabled"));
+#endif
+
     Serial.println(F("=== DustGate node (secondary) ==="));
     Serial.print(F("Board: ")); Serial.println(BOARD_NAME);
 
@@ -334,6 +347,15 @@ void setup() {
     WiFiProvisioner::setPortalTick([]() {
         statusled::set(statusled::PORTAL);
         statusled::update();
+        // A headless node in the portal is the hardest state in the shop to
+        // read. Where a screen is fitted, it is the only thing that says what
+        // to join and where to go.
+        statusscreen::Facts f;
+        f.role     = statusscreen::Role::NODE;
+        f.status   = statusled::PORTAL;
+        f.apName   = WIFI_PORTAL_SSID;
+        f.portalIp = "192.168.4.1";
+        statusscreen::update(f);
     });
     // Load the claim BEFORE the WebSocket can accept anyone: a HELLO that
     // arrived first would otherwise adopt a node that already has an owner.
@@ -373,6 +395,48 @@ void setup() {
     bootTrace("ready");
 }
 
+
+// -----------------------------------------------------------------------------
+// The optional status screen. A node's whole world is one question — can the
+// brain reach me? — so that is what its screen answers, and it answers it with
+// the same statusled state the pixel is showing.
+//
+// UNVERIFIED: no panel has been wired to any board. Compiles to nothing on a
+// node built without one, which is every node today.
+// -----------------------------------------------------------------------------
+static void updateStatusScreen() {
+    if (!statusscreen::present()) return;
+
+    statusscreen::Facts f;
+    f.role   = statusscreen::Role::NODE;
+    f.status = statusled::state();
+    f.motion = statusled::motion();
+
+    static String host;
+    if (!host.length()) host = WiFiProvisioner::getHostname();
+    f.hostname = host.c_str();
+
+    static String ssid;
+    ssid = WiFi.SSID();
+    f.ssid = ssid.length() ? ssid.c_str() : nullptr;
+    if (WiFi.status() == WL_CONNECTED) {
+        const int rssi = WiFi.RSSI();
+        f.wifiBars = rssi >= -60 ? 4 : rssi >= -70 ? 3 : rssi >= -80 ? 2 : rssi >= -90 ? 1 : 0;
+    } else {
+        f.wifiBars = 0;
+    }
+
+    f.servoCount = SERVO_COUNT;
+    // The OWNER, not "whoever is connected": that is the name this node will
+    // still be waiting for after a reboot, and the useful thing to read when it
+    // is waiting.
+    if (g_primaryLinked && g_owner.length()) f.primaryHost = g_owner.c_str();
+
+    if (g_lastCmdMs) f.lastCmdSec = (int)((millis() - g_lastCmdMs) / 1000);
+
+    statusscreen::update(f);
+}
+
 void loop() {
     watchdog::pet();
     WiFiProvisioner::maintain();
@@ -396,6 +460,7 @@ void loop() {
     // Orange for the whole sweep, not just the instant the frame landed.
     statusled::setMoving(anyServoMoving());
     statusled::update();
+    updateStatusScreen();
 
     // Advance sweeps and effect the deferred detach.
     for (int i = 0; i < SERVO_COUNT; i++) servos[i].update();
@@ -419,6 +484,8 @@ void loop() {
         topo::nodelink::strlcpy_(pendingState, cmd.stateId,    sizeof(pendingState));
         awaitingSettle = true;
         statusled::flashActivity();   // visible confirmation at the gate itself
+        g_lastCmdMs = millis();
+        statusscreen::note();
         reportState(pendingSel, pendingState, true);
     }
 

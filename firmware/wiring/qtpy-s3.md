@@ -196,7 +196,81 @@ deliberately not defined in the header.
 
 ---
 
-## 4. If it looks dead
+## 4. Status Screen (SSD1306 OLED) — optional
+
+> **NEVER TESTED ON THIS BOARD.** A panel works on the DevKitC as of 2026-08-21
+> (`wiring/devkitc.md` §5), so the firmware path is proven — but nothing has been
+> wired to a QT Py, the STEMMA pins below are still transcribed from Adafruit's
+> pinout, and **no env sets `-DHAS_STATUS_SCREEN` for this board**. See
+> [`WIRING.md` §6](../WIRING.md#6-status-screen-ssd1306-oled--optional) for what the
+> screen is for, the burn-in/sleep behaviour and the 3V3 rule; the layouts are in
+> [`docs/mockups/oled-status.html`](../../docs/mockups/oled-status.html). Only the
+> QT Py-specific part is here.
+
+**This board has the easiest version of it on the whole fleet: use the STEMMA QT
+connector.** It is a *second* I²C bus on its own 4-pin JST SH socket, so a screen
+on a STEMMA cable costs **no header pad, no soldering, and nothing this node
+already uses** — the servo block and both pixels are untouched. That is what makes
+a screen retrofittable on a node that is already screwed to a joist, which is not
+true of the DevKitC (where fitting one spends its last two spare pins).
+
+| Signal | Where | GPIO | Note |
+|---|---|---|---|
+| SDA | STEMMA QT | 41 | `SDA1` — the second bus, not the header pads |
+| SCL | STEMMA QT | 40 | `SCL1` |
+
+```
+STEMMA QT socket ──[ 4-pin JST SH cable ]── SSD1306 with a STEMMA QT socket
+                                            (power and both signals in the cable)
+```
+
+For a bare module with flying leads instead, the **header pads SDA/SCL (GPIO7 and
+GPIO6)** are free on a node build — the servos take A0–A3 and the external pixel
+takes MOSI, so nothing collides. Wire it the ordinary way and swap the two numbers
+in [`boards/qtpy_s3.h`](../boards/qtpy_s3.h); `Wire.begin()` takes whichever pair
+the header names.
+
+```
+3V3 ────────── VCC        (never 5V — see WIRING.md §6)
+GND ────────── GND ────── QT Py GND   (common, mandatory)
+GPIO7  (SDA) ─ SDA
+GPIO6  (SCL) ─ SCL
+```
+
+⚠ Same caveat as everything in [§1](#1-pin-map): the GPIO numbers come from
+Adafruit's variant header, but the **physical pad order down each side has not been
+checked with a meter**. Count pads before wiring I²C off the drawing — and prefer
+the STEMMA connector, which cannot be miscounted.
+
+### Turning it on
+
+Declared by the build, not probed for — the same seam that answers "is a stepper
+fitted?" elsewhere. `-DHAS_STATUS_SCREEN` activates the `PIN_OLED_*` block in the
+board header; the driver is [`utils/StatusScreen.h`](../utils/StatusScreen.h) over
+[`utils/StatusScreenModel.h`](../utils/StatusScreenModel.h), which decides what the
+screen says and is host-tested against the 21×8 character budget.
+
+What is missing here is only the env: copy `dustgate_node` in `platformio.ini`, add
+the flag, and extend its `lib_deps` with the two Adafruit libraries (SSD1306 + GFX).
+Budget about **32 KB of flash** — irrelevant on this board's `huge_app` partition,
+and the reason it stays opt-in rather than default.
+
+A declared-but-absent panel is handled everywhere the same way: no ACK at 0x3C, a
+`[SCREEN] declared but no ACK` line on serial, driver disabled. It must never hang a
+node in Wire's timeout once per loop.
+
+### What a node's screen actually says
+
+A node's whole world is one question — *can the brain reach me?* — so its screens
+are the two at the bottom of the layouts page: `LINKED`, naming the primary that
+owns it and ageing the last command, or `UNLINKED`, which is the state the pairing
+bug currently needs a serial monitor to see at all. Jeff wants screens on the nodes
+in his own shop; a product cannot require one on every board in the building, which
+is why this is a fitting and not a feature.
+
+---
+
+## 5. If it looks dead
 
 **Check the monitor's line handling before suspecting the board.** This board's
 convention is the **opposite** of the C5's, and getting it wrong produces silence
@@ -234,7 +308,7 @@ truncated trace names the stage it died in, which is the point of it.
 
 ---
 
-## 5. Flashing it
+## 6. Flashing it
 
 Picks the env, the native-USB port and the right DTR/RTS convention, then prompts
 for WiFi credentials and a hostname:

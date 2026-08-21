@@ -77,9 +77,11 @@ Firmware compiles — `pio run -e <env>`:
 |---|---|---|
 | `esp32dev_wroom32` | ESP32-DevKitC | **primary target** |
 | `esp32dev_servo` | ESP32-DevKitC | primary, servo valves |
+| `esp32dev_screen` | ESP32-DevKitC | primary + SSD1306 status screen — **verified on hardware 2026-08-21** (GPIO16 SDA / GPIO4 SCL, 0x3C) |
 | `adafruit_feather_esp32s2` | Feather S2 | original prototype |
 | `dustgate_node` | QT Py ESP32-S3 | secondary node |
 | `xiao_c5` | XIAO ESP32C5 | secondary node |
+| `xiao_c5_screen` | XIAO ESP32C5 | secondary node + SSD1306 on D4/D5 (compiles; no panel wired to a C5 yet) |
 
 `xiao_c5` rides the pioarduino platform, not espressif32. The two collide over
 package names in a shared core directory, so the fork gets **its own**

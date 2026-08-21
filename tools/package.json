@@ -19,7 +19,8 @@
     "firmware:nodebus:test": "cd .. && c++ -std=c++17 -I \"$(dirname \"$(find .pio.nosync/libdeps -path '*/ArduinoJson/src/ArduinoJson.h' | head -1)\")\" firmware/test/test_nodebus.cpp -o /tmp/dustgate-nbtest && /tmp/dustgate-nbtest firmware/test/fixtures/",
     "firmware:shop:test": "cd .. && c++ -std=c++17 -I \"$(dirname \"$(find .pio.nosync/libdeps -path '*/ArduinoJson/src/ArduinoJson.h' | head -1)\")\" firmware/test/test_shop.cpp -o /tmp/dustgate-shoptest && /tmp/dustgate-shoptest firmware/test/fixtures/",
     "firmware:faults:test": "cd .. && c++ -std=c++17 firmware/test/test_faults.cpp -o /tmp/dustgate-faulttest && /tmp/dustgate-faulttest",
-    "firmware:test": "npm run firmware:router:test && npm run firmware:controller:test && npm run firmware:nodebus:test && npm run firmware:shop:test && npm run firmware:faults:test && npm run firmware:plugclaim:test",
+    "firmware:screen:test": "cd .. && c++ -std=c++17 firmware/test/test_statusscreen.cpp -o /tmp/dustgate-screentest && /tmp/dustgate-screentest",
+    "firmware:test": "npm run firmware:router:test && npm run firmware:controller:test && npm run firmware:nodebus:test && npm run firmware:shop:test && npm run firmware:faults:test && npm run firmware:plugclaim:test && npm run firmware:screen:test",
     "plugclaim:test": "node ../shared/device-model/plug-claim.test.js",
     "firmware:plugclaim:test": "cd .. && c++ -std=c++17 firmware/test/test_plugclaim.cpp -o /tmp/dustgate-pctest && /tmp/dustgate-pctest"
   },

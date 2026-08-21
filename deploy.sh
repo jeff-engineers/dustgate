@@ -256,6 +256,12 @@ for arg in "$@"; do
     # Bare --node keeps the default, which is the QT Py S3 that gets bench-tested.
     --node)   PIO_ENV="dustgate_node"; DO_UI=false; DO_FS=false ;;
     --node=*) PIO_ENV="${arg#--node=}"; DO_UI=false; DO_FS=false ;;
+    # A PRIMARY on a non-default env — same board, same UI bundle, different
+    # build flags. --screen is the one that exists today: esp32dev_servo plus
+    # -DHAS_STATUS_SCREEN and the SSD1306 driver. Unlike --node this keeps the
+    # Angular bundle and the LittleFS image, because it is still a primary.
+    --screen) PIO_ENV="esp32dev_screen" ;;
+    --env=*)  PIO_ENV="${arg#--env=}" ;;
   esac
 done
 

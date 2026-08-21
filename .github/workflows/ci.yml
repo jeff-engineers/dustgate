@@ -131,10 +131,14 @@ jobs:
       #
       # Its pin map is unverified against hardware anyway. Revisit if the node
       # firmware starts changing often enough that a local-only check gets missed.
+      # esp32dev_screen is here to keep the optional OLED path compiling, not
+      # because anyone flashes it: it is esp32dev_servo plus -DHAS_STATUS_SCREEN
+      # and the two Adafruit display libraries. Nothing has ever driven a real
+      # panel, so a compile is the only check there is.
       - name: Compile firmware (all espressif32 targets, incl. the servo-only node)
-        run: pio run -e esp32dev_servo -e esp32dev_wroom32 -e adafruit_feather_esp32s2 -e dustgate_node
+        run: pio run -e esp32dev_servo -e esp32dev_wroom32 -e adafruit_feather_esp32s2 -e dustgate_node -e esp32dev_screen
       # Host tests for the pure C++ control layer. They need ArduinoJson, which
       # the `pio run` above has already fetched into .pio.nosync/libdeps.
-      - name: Host tests (router, controller, nodebus/nodelink, shop, faults)
+      - name: Host tests (router, controller, nodebus/nodelink, shop, faults, screen)
         run: npm run firmware:test
         working-directory: tools

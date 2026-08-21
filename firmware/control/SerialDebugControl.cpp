@@ -3,6 +3,7 @@
 // =============================================================================
 
 #include "SerialDebugControl.h"
+#include <Wire.h>                  // the `i2c` bring-up scan
 #include "../utils/MotionMath.h"
 #include "../utils/WiFiConfig.h"   // NVS constants + applyProvisionJson() — safe to include always
 #ifdef CONTROL_SMART_OUTLET
@@ -299,6 +300,35 @@ void SerialDebugControl::processLine(const String& line) {
         Serial.println(F("[ENDSTOP] FEEDBACK_LIMIT_DISTANCE not enabled"));
 #endif
 
+    } else if (cmd == "i2c" || cmd.startsWith("i2c ")) {
+        // "i2c" with no args scans wherever the build says the screen is;
+        // "i2c <sda> <scl>" scans a pair you name, which is the useful form
+        // when you are trying to find out where a module actually landed.
+        int sda = -1, scl = -1; bool force = false;
+        if (cmd.length() > 4) {
+            String args = cmd.substring(4);
+            args.trim();
+            // Trailing "force" lifts the TMC pin refusal below — for a bench
+            // board with no driver fitted, where those pins are just pins.
+            if (args.endsWith(" force")) { force = true; args = args.substring(0, args.length() - 6); args.trim(); }
+            int sp = args.indexOf(' ');
+            if (sp > 0) {
+                sda = args.substring(0, sp).toInt();
+                scl = args.substring(sp + 1).toInt();
+            }
+        }
+#if defined(PIN_OLED_SDA) && defined(PIN_OLED_SCL)
+        if (sda < 0) { sda = PIN_OLED_SDA; scl = PIN_OLED_SCL; }
+#endif
+        if (sda < 0 || scl < 0) {
+            Serial.println(F("[I2C] This build declares no I2C pins — name them: i2c <sda> <scl>"));
+#if defined(BOARD_DEVKITC)
+            Serial.println(F("[I2C] On this board the status screen would be: i2c 16 4"));
+#endif
+        } else {
+            runI2cScan(sda, scl, force);
+        }
+
     } else if (cmd == "status") {
         printStatus();
 
@@ -399,6 +429,102 @@ void SerialDebugControl::runDiscover() {
 }
 #endif
 
+
+// -----------------------------------------------------------------------------
+// `i2c [sda] [scl]` — what is actually on the bus.
+//
+// Written for the status-screen bring-up, where the first question is never
+// "is my code right" but "is the module answering at all". A scan separates
+// three failures that look identical from the outside: nothing powered, wrong
+// address, and SDA/SCL swapped.
+//
+// It names the pins in its output on purpose. I2C on an ESP32 is remapped
+// through the GPIO matrix, every board here puts it somewhere different, and a
+// scan of the wrong pair reports "no devices" just as confidently as a dead
+// module does.
+// -----------------------------------------------------------------------------
+void SerialDebugControl::runI2cScan(int sda, int scl, bool force) {
+    // REFUSED, not warned about: on the DevKitC the "obvious" I2C pins are the
+    // TMC2209's EN and DIR, and EN is active LOW — a scan pulling it down is a
+    // scan that silently energises the motor. This is the same trap the board's
+    // pin map dodges (see boards/devkitc_wroom32.h), and a debug command is
+    // exactly where someone would walk back into it.
+#if defined(PIN_TMC_EN) && defined(PIN_TMC_DIR)
+    if (!force && (sda == PIN_TMC_EN || sda == PIN_TMC_DIR ||
+                   scl == PIN_TMC_EN || scl == PIN_TMC_DIR)) {
+        Serial.print(F("[I2C] Refusing: GPIO"));
+        Serial.print(PIN_TMC_EN); Serial.print(F("/"));
+        Serial.print(PIN_TMC_DIR);
+        Serial.println(F(" are the TMC2209 EN/DIR on this board — scanning them drives the driver."));
+        Serial.println(F("[I2C] If no driver is fitted, repeat with: i2c <sda> <scl> force"));
+        return;
+    }
+    if (force) Serial.println(F("[I2C] force: scanning pins that are normally refused."));
+#endif
+
+    Serial.print(F("[I2C] Scanning SDA=GPIO")); Serial.print(sda);
+    Serial.print(F(" SCL=GPIO")); Serial.print(scl);
+    Serial.println(F(" at 100kHz..."));
+
+    // Wire.end() FIRST, and this is not defensive tidiness. On a board with a
+    // status screen the bus is already running (StatusScreen::begin() took it at
+    // boot), and a second Wire.begin() on a live bus does not re-initialise it —
+    // it leaves the peripheral in a state where every address NAKs. The symptom
+    // is the one that cost a bench cycle here: `[SCREEN] SSD1306 up` at boot,
+    // and then a scan of those same pins reporting an empty bus.
+    Wire.end();
+    // 100kHz for the scan even though the screen runs at 400k: a marginal pull-up
+    // or a long dupont run fails at 400k and answers fine at 100k, and knowing
+    // the module is ALIVE is worth more here than knowing it is fast.
+    Wire.begin(sda, scl);
+    Wire.setClock(100000);
+
+    int found = 0;
+    for (uint8_t addr = 0x08; addr < 0x78; addr++) {
+        Wire.beginTransmission(addr);
+        if (Wire.endTransmission() != 0) continue;
+        found++;
+        Serial.print(F("  0x"));
+        if (addr < 0x10) Serial.print('0');
+        Serial.print(addr, HEX);
+        // A guess at what answered, because "0x27" means nothing at 11pm and the
+        // difference between an SSD1306 and a character-LCD backpack is the
+        // difference between a firmware setting and the wrong part entirely.
+        switch (addr) {
+            case 0x3C: Serial.println(F("  SSD1306 OLED (the expected status screen)")); break;
+            case 0x3D: Serial.println(F("  SSD1306 OLED at its ALTERNATE address — set -DOLED_I2C_ADDR=0x3D")); break;
+            case 0x27:
+            case 0x3F: Serial.println(F("  looks like a PCF8574 character-LCD backpack — NOT an SSD1306; this firmware cannot drive it")); break;
+            case 0x68: Serial.println(F("  RTC or IMU")); break;
+            case 0x76:
+            case 0x77: Serial.println(F("  BME/BMP sensor")); break;
+            default:   Serial.println(F("  unknown device")); break;
+        }
+    }
+
+    if (found == 0) {
+        Serial.println(F("[I2C] Nothing answered. In the order worth checking:"));
+        Serial.println(F("  1. Power — VCC on 3V3 (NOT 5V), GND common with the board"));
+        Serial.println(F("  2. SDA/SCL swapped — try: i2c <scl> <sda>"));
+        Serial.println(F("  3. Wrong pins for how it is actually wired"));
+        Serial.println(F("  4. Bad jumper. A scan cannot tell a broken wire from a dead module."));
+    } else {
+        Serial.print(F("[I2C] ")); Serial.print(found); Serial.println(F(" device(s) answered."));
+    }
+
+#if defined(PIN_OLED_SDA) && defined(PIN_OLED_SCL)
+    // Hand the bus back the way the screen driver left it. Without this a scan
+    // would leave the display running at 100kHz for the rest of the session —
+    // harmless, but it would quietly invalidate the refresh timing anyone
+    // measured afterwards.
+    if (sda != PIN_OLED_SDA || scl != PIN_OLED_SCL) {
+        Wire.end();
+        Wire.begin(PIN_OLED_SDA, PIN_OLED_SCL);
+    }
+    Wire.setClock(400000);
+#endif
+}
+
 void SerialDebugControl::printStatus() {
     Serial.println(F("--- Status ---"));
     Serial.print(F("  Requested stop:    ")); Serial.println(_requestedStop);
@@ -439,6 +565,7 @@ void SerialDebugControl::printHelp() {
     Serial.println(F("  gconf             Read GCONF + CHOPCONF from driver"));
     Serial.println(F("  status            Print state, stop positions, both endstops"));
     Serial.println(F("  endstops (e)      Print both endstop states (D10 home, D11 far)"));
+    Serial.println(F("  i2c [sda] [scl]   Scan the I2C bus — what is out there, and at what address ('force' to override refusals)"));
 #ifdef CONTROL_SMART_OUTLET
     Serial.println(F("  discover          Scan mDNS for Shelly outlets, print raw + filtered results"));
 #endif

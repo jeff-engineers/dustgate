@@ -90,6 +90,10 @@ private:
     void printHelp();
 #ifdef CONTROL_SMART_OUTLET
     void runDiscover();
+    // Bus scan for bring-up. Takes the pins explicitly because I2C on an ESP32
+    // is remappable and every board here puts it somewhere different — see the
+    // command's own comment for why it refuses some of them.
+    void runI2cScan(int sda, int scl, bool force = false);
 #endif
 };
 

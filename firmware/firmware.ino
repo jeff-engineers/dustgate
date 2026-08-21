@@ -19,6 +19,7 @@
 #include "config.h"
 #include "utils/MotionMath.h"
 #include "utils/StatusLed.h"
+#include "utils/StatusScreen.h"   // optional SSD1306; compiles to nothing unfitted
 #include "motor/MotorDriver.h"
 #include "feedback/FeedbackSystem.h"
 #include "control/ControlInput.h"
@@ -655,6 +656,17 @@ void setup() {
     statusled::set(statusled::BOOTING);
     statusled::update();
 
+    // The screen, where one is fitted. Reports itself either way, because a
+    // board built with -DHAS_STATUS_SCREEN and no panel wired is exactly the
+    // mistake worth naming on serial rather than leaving as a dark rectangle.
+    if (statusscreen::begin()) {
+        DEBUG_PRINTLN(F("[SCREEN] panel answered at 0x3C — drawing"));
+    } else {
+#if defined(PIN_OLED_SDA) && defined(PIN_OLED_SCL)
+        DEBUG_PRINTLN(F("[SCREEN] declared, but nothing answered — run 'i2c' to see what is on the bus; disabled"));
+#endif
+    }
+
     // WiFi provisioning — must run before any WiFi-dependent control mode.
     // If WIFI_STA_SSID is hardcoded in config.h it is used directly.
     // Otherwise stored NVS credentials are tried; if none exist or connection
@@ -667,6 +679,14 @@ void setup() {
     WiFiProvisioner::setPortalTick([]() {
         statusled::set(statusled::PORTAL);
         statusled::update();
+        // The portal loop never returns, and this is the one screen a stranger
+        // has to follow — "join DustGate-Setup, then open 192.168.4.1". Without
+        // a tick here it would sit blank for exactly as long as that matters.
+        statusscreen::Facts f;
+        f.status   = statusled::PORTAL;
+        f.apName   = WIFI_PORTAL_SSID;
+        f.portalIp = "192.168.4.1";
+        statusscreen::update(f);
     });
     WiFiProvisioner::begin();
     WiFiProvisioner::setPortalTick(nullptr);
@@ -911,6 +931,109 @@ static bool allNodesLinked() {
     return cached;
 }
 
+// -----------------------------------------------------------------------------
+// The optional status screen. Everything it knows comes from here, and it knows
+// nothing the pixel doesn't — the state word IS statusled::state(), spelled.
+//
+// UNVERIFIED, like everything else about the screen: no panel has been wired to
+// a board. Compiles to nothing on a build without one, so this function costs an
+// unfitted board a call to an empty inline.
+//
+// The gaps, stated rather than faked: the runtime publishes THAT the shop is
+// transitioning, not WHICH selector is in flight, so the make-before-break
+// screen in docs/mockups/oled-status.html can name the tool but not yet its two
+// gates. Naming a plausible gate would be worse than leaving the line out.
+// -----------------------------------------------------------------------------
+static void updateStatusScreen() {
+    if (!statusscreen::present()) return;
+
+    statusscreen::Facts f;
+    f.role   = statusscreen::Role::PRIMARY;
+    f.status = statusled::state();
+    f.motion = statusled::motion();
+
+#if defined(CONTROL_SMART_OUTLET) || defined(ENABLE_HTTP_API)
+    static String host;
+    if (!host.length()) host = WiFiProvisioner::getHostname();
+    f.hostname = host.c_str();
+    // A static, not the String WiFi.SSID() returns: that temporary dies at the
+    // end of this statement and Facts holds a bare pointer into it.
+    static String ssid;
+    ssid = WiFi.SSID();
+    f.ssid = ssid.length() ? ssid.c_str() : nullptr;
+    if (WiFi.status() == WL_CONNECTED) {
+        // Four bars from RSSI. The thresholds are the usual ones and not worth
+        // agonising over: this glyph answers "is the wifi ok", not "what is my
+        // link margin".
+        const int rssi = WiFi.RSSI();
+        f.wifiBars = rssi >= -60 ? 4 : rssi >= -70 ? 3 : rssi >= -80 ? 2 : rssi >= -90 ? 1 : 0;
+    } else {
+        // Half of all WiFi faults are the wrong SSID, so the NO_WIFI screen
+        // says which network it is looking for — the core keeps the configured
+        // one here even while disconnected.
+        f.wifiBars = 0;
+    }
+#endif
+
+    // Gates: how many of the shop's selectors can actually be driven right now.
+    // "ready" is onlineFor(), not "configured" — a gate on a node that stopped
+    // answering is exactly the one you want counted as missing.
+    if (g_topoRuntime.loaded()) {
+        int total = 0, ready = 0;
+        for (const topo::SystemView& sys : topo::systemsOf(g_topoRuntime.topology())) {
+            for (JsonObjectConst el : sys.elements) {
+                if (!el["type"].is<const char*>()) continue;
+                if (strcmp(el["type"].as<const char*>(), "selector") != 0) continue;
+                total++;
+                if (g_nodeBus.onlineFor(el)) ready++;
+            }
+        }
+        f.gatesTotal = total;
+        f.gatesReady = ready;
+        f.collectorOn = g_topoRuntime.collectorOn();
+
+        // The tool by ITS name, never a port or machine id — that is what the
+        // woodworker recognises, and it is the same rule the canvas follows.
+        static std::string toolName;
+        toolName.clear();
+        std::vector<std::string> active = g_topoRuntime.activeMachines();
+        if (!active.empty()) {
+            JsonObjectConst m = topo::machineDoc(g_topoRuntime.topology(), active.front());
+            const char* n = m["name"].as<const char*>();
+            toolName = (n && *n) ? n : active.front();
+            f.toolName = toolName.c_str();
+        }
+    }
+
+    // Nodes: linked / paired. Zero paired nodes leaves the line off entirely
+    // rather than printing "nodes 0/0", which reads like a fault on a shop that
+    // simply has one board.
+    if (g_remoteCount > 0) {
+        int linked = 0;
+        for (int i = 0; i < g_remoteCount; i++)
+            if (g_remoteBuses[i].info().connected) linked++;
+        f.nodesTotal  = g_remoteCount;
+        f.nodesLinked = linked;
+
+        // A dark board is the fault worth naming: which one, and for how long.
+        static std::string darkHost;
+        for (int i = 0; i < g_remoteCount; i++) {
+            topo::RemoteActuatorBus::NodeInfo n = g_remoteBuses[i].info();
+            if (n.connected) continue;
+            darkHost = g_remoteBuses[i].host();
+            f.darkNode = darkHost.c_str();
+            // "last seen 42s ago" is the number that says whether this is a
+            // board that just rebooted or one that has been off all morning.
+            // Zero means it has never answered since boot, which is a different
+            // sentence, so the line is left off rather than reading "0s ago".
+            if (n.lastSeenMs) f.darkForSec = (int)((millis() - n.lastSeenMs) / 1000);
+            break;
+        }
+    }
+
+    statusscreen::update(f);
+}
+
 static void updateStatusLed() {
     switch (currentState) {
         case STATE_HOMING:      statusled::setMotion(statusled::HOMING);      break;
@@ -954,6 +1077,7 @@ static void updateStatusLed() {
     }
 
     statusled::update();
+    updateStatusScreen();
 }
 
 void loop() {
