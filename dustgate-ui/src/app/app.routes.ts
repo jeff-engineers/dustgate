@@ -15,10 +15,15 @@ export const routes: Routes = [
   { path: 'boards',       loadComponent: () => import('./boards/board-setup.component').then(m => m.BoardSetupComponent) },
   { path: 'settings',     component: SettingsComponent },
 
-  // Retired paths. /gates was a separate "set up every gate" pass — the canvas now
-  // shows which gates are unset and configuring one is a tap on its badge. /setup
-  // was the old guided wizard; building the layout IS the setup now.
-  { path: 'gates',        redirectTo: 'build' },
+  // /gates is BACK, and not as the screen that was retired. That one was a "set up
+  // every gate" pass the canvas made redundant — the canvas shows which gates are
+  // unset and configuring one is a tap on its badge. This is the other errand:
+  // recalibrating a valve that got knocked, from the shop floor, without opening a
+  // layout tool. Same calibration underneath. See docs/mockups/gates-list.html.
+  { path: 'gates',        loadComponent: () => import('./gates/gate-list.component').then(m => m.GateListComponent) },
+
+  // Retired paths. /setup was the old guided wizard; building the layout IS the
+  // setup now.
   { path: 'setup',        pathMatch: 'full', redirectTo: 'build' },
   { path: 'setup/manual', redirectTo: 'build' },
 

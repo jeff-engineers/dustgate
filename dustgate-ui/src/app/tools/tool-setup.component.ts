@@ -77,22 +77,49 @@ const DEFAULT_THRESHOLD = 50;
     .nav .back { flex: 0 0 auto; background: var(--surface); border: 1px solid var(--border); color: var(--text); }
     .nav .next { flex: 1; background: var(--accent); border: none; color: #1a1200; font-weight: 600; }
     .nav .next:disabled { opacity: 0.5; }
+    /* Back is disabled on the first tool, and until now said so only by not
+       responding — a button that looks live and does nothing reads as a broken
+       page, not as "you are at the beginning". */
+    .nav .back:disabled { opacity: 0.4; }
+
+    /* Same round control Settings uses, so "leave this screen" looks the same
+       wherever it appears. Setup used to have no way out at all except finishing
+       it: every tool walked, then Finish. */
+    .exit-btn { background: var(--surface); border: 1px solid var(--border);
+                border-radius: 50%; width: 34px; height: 34px; flex-shrink: 0;
+                display: flex; align-items: center; justify-content: center;
+                color: var(--muted); }
+    .exit-btn:active { opacity: 0.6; }
+    .head .left { display: flex; align-items: center; gap: 10px; }
   `],
   template: `
-    <ng-container *ngIf="cur() as c">
-      <div class="head">
+    <!-- OUTSIDE the tools check, deliberately. With no tools drawn yet this screen
+         was a dead end: an empty-state sentence and nothing to press, on a page
+         reachable straight from the landing screen. The way out must not depend
+         on there being something to set up. -->
+    <div class="head">
+      <div class="left">
+        <button class="exit-btn" (click)="exit()" aria-label="Leave tool setup">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M19 12H5M12 19l-7-7 7-7"/>
+          </svg>
+        </button>
         <span class="step">Set up your tools</span>
-        <div class="dots">
-          <i *ngFor="let t of tools; let i = index" [class.done]="i < index" [class.cur]="i === index"></i>
-          <span class="step" style="margin-left:5px">{{ index + 1 }} of {{ tools.length }}</span>
-        </div>
       </div>
+      <div class="dots" *ngIf="tools.length">
+        <i *ngFor="let t of tools; let i = index" [class.done]="i < index" [class.cur]="i === index"></i>
+        <span class="step" style="margin-left:5px">{{ index + 1 }} of {{ tools.length }}</span>
+      </div>
+    </div>
+
+    <ng-container *ngIf="cur() as c">
 
       <div class="card">
         <div class="toolrow">
           <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.6" stroke-linecap="round"><rect x="5" y="7" width="14" height="10" rx="2"/></svg></span>
           <div style="flex:1">
-            <input class="name-in" [(ngModel)]="c.name"/>
+            <input class="name-in" [(ngModel)]="c.name" (ngModelChange)="touched = true"/>
             <div class="gate">{{ c.gateLabel }}</div>
           </div>
         </div>
@@ -100,8 +127,8 @@ const DEFAULT_THRESHOLD = 50;
         <div class="q">
           <span>Smart outlet on this tool?</span>
           <div class="yesno">
-            <button [class.on]="c.hasPlug" (click)="c.hasPlug = true">Yes</button>
-            <button [class.on]="!c.hasPlug" (click)="c.hasPlug = false">No</button>
+            <button [class.on]="c.hasPlug" (click)="c.hasPlug = true; touched = true">Yes</button>
+            <button [class.on]="!c.hasPlug" (click)="c.hasPlug = false; touched = true">No</button>
           </div>
         </div>
 
@@ -129,7 +156,8 @@ const DEFAULT_THRESHOLD = 50;
 
           <div class="thresh" *ngIf="c.ip">
             <div class="r"><span>Start collection above</span><b>{{ c.thresholdW }} W</b></div>
-            <input type="range" min="0" max="400" step="10" [(ngModel)]="c.thresholdW"/>
+            <input type="range" min="0" max="400" step="10" [(ngModel)]="c.thresholdW"
+                   (ngModelChange)="touched = true"/>
             <div class="why">Catches the motor, ignores standby draw.</div>
           </div>
         </ng-container>
@@ -157,6 +185,11 @@ export class ToolSetupComponent implements OnInit {
   saving = false;
 
   private topo: Topology | null = null;
+  /**
+   * Has the user actually changed anything? Set by the edit affordances
+   * themselves rather than derived by comparing a snapshot — see exit().
+   */
+  touched = false;
 
   constructor(private api: ApiService, private router: Router) {}
 
@@ -193,6 +226,7 @@ export class ToolSetupComponent implements OnInit {
   pick(d: DiscoveredOutlet, c: ToolCfg): void {
     if (this.isAssignedElsewhere(d.ip, c)) return;
     c.ip = d.ip; c.gen = d.generation || 2; c.hostname = d.hostname;
+    this.touched = true;
     if (d.powerW >= 5 && (c.thresholdW === DEFAULT_THRESHOLD)) {
       c.thresholdW = Math.max(10, Math.round(d.powerW * 0.9 / 10) * 10);
     }
@@ -206,6 +240,24 @@ export class ToolSetupComponent implements OnInit {
   }
 
   prev(): void { if (this.index > 0) this.index--; }
+
+  /**
+   * Leave without finishing. Nothing is written until Finish — save() runs once,
+   * on the last tool — so walking out mid-way discards every edit made since the
+   * screen opened. That is worth a question, but only when there is something to
+   * lose — landing here by accident should cost one tap to leave, not a dialog.
+   *
+   * `touched` is set by the edit affordances themselves. The first cut compared a
+   * JSON snapshot taken at load, and asked on a screen nobody had typed into:
+   * binding a range input writes its value back through ngModel, so the model
+   * differs from its own snapshot before the user has done anything. An explicit
+   * flag cannot drift that way.
+   */
+  async exit(): Promise<void> {
+    if (this.touched &&
+        !confirm('Leave without saving?\n\nPlug assignments and names from this session will be lost.')) return;
+    await this.router.navigate(['/']);
+  }
 
   async next(): Promise<void> {
     if (this.index < this.tools.length - 1) { this.index++; return; }

@@ -10,7 +10,9 @@
 
 import { suite } from '../../test-harness';
 import type { Topology } from '@topology';
-import { controllersOf, ductsOf, elementsOf } from './selector-types';
+import {
+  ConfigurableSelector, controllersOf, ductsOf, elementsOf, swingSequence,
+} from './selector-types';
 
 const { check, eq, report } = suite();
 
@@ -84,6 +86,35 @@ const shop = {
   // hand-edited file shouldn't crash the canvas on load.
   check('a non-array `systems` falls back to root reading',
     elementsOf({ systems: 'nope', elements: [{ id: 'x', type: 'tool' }] } as unknown as Topology).length === 1);
+}
+
+
+
+// ── swingSequence — what the gates screen's Test is allowed to drive ─────────
+//
+// The whole safety property in one place: a Test may only ever send positions the
+// gate was TAUGHT. A clutchless servo driven past its hard stop stalls and cooks,
+// so "no calibration" has to mean "refuse", never "pick something plausible".
+{
+  const calibrated = gate('g1', 0);
+  const uncal = { ...gate('g2', 1), servo: { channel: 1 } };            // no referenceAngle
+  const noPair = {
+    ...gate('g3', 2),
+    states: [{ id: 'a', isClosed: false, offsetDeg: 0 }, { id: 'b', isClosed: false, offsetDeg: 30 }],
+  };
+
+  const seq = swingSequence(calibrated as unknown as ConfigurableSelector);
+  check('a calibrated gate swings', !!seq);
+  eq('closed, open, closed', JSON.stringify(seq), JSON.stringify(['closed', 'open', 'closed']));
+  check('it ends closed — a test must not change where the shop rests',
+        seq![seq!.length - 1] === 'closed');
+  check('every step is a state the gate actually has',
+        seq!.every((id) => calibrated.states.some((s) => s.id === id)));
+
+  check('an UNCALIBRATED gate refuses — there is no known-safe angle to send',
+        swingSequence(uncal as unknown as ConfigurableSelector) === null);
+  check('a gate with no closed state refuses',
+        swingSequence(noPair as unknown as ConfigurableSelector) === null);
 }
 
 report();

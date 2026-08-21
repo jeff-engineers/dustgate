@@ -217,6 +217,27 @@ export function isCalibrated(sel: ConfigurableSelector): boolean {
   return typeof span === 'number' && span > 0;
 }
 
+/**
+ * The closed → open → closed swing the gates screen's Test runs, as state ids.
+ *
+ * Returns null when there is nothing safe to drive: an UNCALIBRATED gate has no
+ * known-reachable positions, and a gate without both an open and a closed state
+ * has no pair to swing between. Refusing is the point — a clutchless servo driven
+ * past its hard stop stalls and cooks, so the only values this feature may ever
+ * send are ones the gate was taught, never an interpolated or assumed one.
+ *
+ * Ends CLOSED, and that is deliberate: a test that left a gate open would change
+ * where the shop rests, and idle is supposed to leave gates where routing put
+ * them, not where a diagnostic did.
+ */
+export function swingSequence(sel: ConfigurableSelector): string[] | null {
+  if (!isCalibrated(sel)) return null;
+  const closed = sel.states.find((s) => s.isClosed);
+  const open   = sel.states.find((s) => !s.isClosed);
+  if (!closed || !open) return null;
+  return [closed.id, open.id, closed.id];
+}
+
 export function isServoKind(sel: ConfigurableSelector): sel is ServoSelector {
   return sel.kind === 'servoGate' || sel.kind === 'servoManifold';
 }

@@ -224,6 +224,22 @@ const POLL_MS = 2000;
           </svg>
           Tools
         </a>
+        <!-- Gate calibration used to be reachable only by finding the gate on the
+             build canvas and tapping it — a layout tool, opened with a wrench in
+             your other hand. Recalibrating a knocked valve is a shop-floor errand,
+             so it gets an entry where the app already puts "go somewhere else". -->
+        <a routerLink="/gates">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+               stroke-linecap="round" stroke-linejoin="round">
+            <!-- A butterfly valve seen edge-on: a duct, and a disc across it at an
+                 angle. The gate glyph the canvas uses is a dot on a line, which at
+                 17px in a nav bar is indistinguishable from the layout icon. -->
+            <path d="M4 7h16M4 17h16"/>
+            <path d="M8 16.5L16 7.5"/>
+            <circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none"/>
+          </svg>
+          Gates
+        </a>
         <a routerLink="/settings">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
                stroke-linecap="round" stroke-linejoin="round">
