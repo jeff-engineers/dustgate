@@ -31,6 +31,11 @@ SmartOutletControl::SmartOutletControl()
       _pendingStartMs(0)
 {
     memset(_outlets, 0, sizeof(_outlets));
+    memset(_retired, 0, sizeof(_retired));
+    memset(_retiredCycle, 0, sizeof(_retiredCycle));
+    _retiredCount = 0;
+    _pollCycle    = 0;
+    _retireMutex  = xSemaphoreCreateMutex();
     memset(_prevActive, 0, sizeof(_prevActive));
     memset(_collectors, 0, sizeof(_collectors));
     memset(_dcOn, 0, sizeof(_dcOn));
@@ -149,6 +154,51 @@ int SmartOutletControl::readRequestedStop() {
 // Poll task — runs on Core 0, every OUTLET_POLL_INTERVAL_MS
 // =============================================================================
 
+// =============================================================================
+// Retire / reap — see the long note in the header for why plugs are not deleted
+// where they are reconfigured.
+// =============================================================================
+
+void SmartOutletControl::retire(SmartOutlet* o) {
+    if (!o) return;
+    xSemaphoreTake(_retireMutex, portMAX_DELAY);
+    if (_retiredCount >= RETIRE_SLOTS) {
+        // Only reachable if the shop is reconfigured more times in two poll
+        // cycles than it has plug slots. Freeing the oldest is the least-bad
+        // answer — it has already survived at least one full cycle — but say so
+        // out loud, because it is the one path here that can still race.
+        DEBUG_PRINTLN(F("[Outlets] retire list full — freeing the oldest early"));
+        delete _retired[0];
+        for (int i = 1; i < RETIRE_SLOTS; i++) {
+            _retired[i - 1]      = _retired[i];
+            _retiredCycle[i - 1] = _retiredCycle[i];
+        }
+        _retiredCount = RETIRE_SLOTS - 1;
+    }
+    _retired[_retiredCount]      = o;
+    _retiredCycle[_retiredCount] = _pollCycle;
+    _retiredCount++;
+    xSemaphoreGive(_retireMutex);
+}
+
+void SmartOutletControl::reapRetired() {
+    xSemaphoreTake(_retireMutex, portMAX_DELAY);
+    int keep = 0;
+    for (int i = 0; i < _retiredCount; i++) {
+        // Unsigned subtraction, so this stays right across the millis-scale
+        // wrap of the cycle counter.
+        if ((uint32_t)(_pollCycle - _retiredCycle[i]) >= 2) {
+            delete _retired[i];
+            continue;
+        }
+        _retired[keep]      = _retired[i];
+        _retiredCycle[keep] = _retiredCycle[i];
+        keep++;
+    }
+    _retiredCount = keep;
+    xSemaphoreGive(_retireMutex);
+}
+
 void SmartOutletControl::pollTaskFn(void* param) {
     SmartOutletControl* self = static_cast<SmartOutletControl*>(param);
     while (true) {
@@ -189,6 +239,12 @@ void SmartOutletControl::checkLocalIpChange() {
 }
 
 void SmartOutletControl::doPoll() {
+    // Top of the pass, before a single plug pointer is read: this is the one
+    // place in the firmware that frees a SmartOutlet, and the only point where
+    // this task provably holds none of them.
+    _pollCycle++;
+    reapRetired();
+
     checkLocalIpChange();   // re-point plugs if our DHCP IP moved out from under us
 
     // Push-provision plugs (Ws + name) when flagged (first run after boot, and
@@ -223,6 +279,11 @@ void SmartOutletControl::doPoll() {
     float bestPower  = 0.0f;
     bool  risingEdge = false;
 
+    // Read without the lock, deliberately. Lifetime is safe because nothing frees
+    // a plug except this task, at the top of doPoll() (see retire()) — so the
+    // worst case here is polling a plug that was reconfigured a moment ago, which
+    // costs one stale reading and is fixed on the next pass. Taking _mutex across
+    // this loop would put every API request behind seconds of plug HTTP.
     for (int i = 0; i < _count; i++) {
         SmartOutlet* o = _outlets[i];
         if (!o) continue;
@@ -486,19 +547,25 @@ void SmartOutletControl::configureOutlet(int slot, int generation,
                                          const char* host) {
     if (slot < 0 || slot >= SMART_OUTLET_COUNT) return;
 
-    // Replace existing outlet object
-    delete _outlets[slot];
-
     // Gen2+ only (Gen1 dropped); `generation` is retained in the config/API
     // for compatibility but is always >= 2.
     (void)generation;
+    // Built BEFORE the lock: constructing a plug touches the heap and no other
+    // task can see it yet, so there is nothing to serialize.
     SmartOutlet* o = new ShellyGen2Outlet(ip, name);
     o->setStopIndex(stopIndex);
     o->setThresholdW(thresholdW);
     o->setHost(host);
-    _outlets[slot] = o;
 
+    // Swap under the lock, retire outside it. The old object is NOT deleted
+    // here — the poll task may be mid-HTTP holding it. See retire().
+    SmartOutlet* old;
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    old = _outlets[slot];
+    _outlets[slot] = o;
     if (slot >= _count) _count = slot + 1;
+    xSemaphoreGive(_mutex);
+    retire(old);
 
     DEBUG_PRINT(F("[Outlets] Slot ")); Serial.print(slot);
     DEBUG_PRINT(F(" configured: ")); Serial.print(name);
@@ -513,24 +580,37 @@ void SmartOutletControl::configureOutlet(int slot, int generation,
 
 void SmartOutletControl::removeOutlet(int slot) {
     if (slot < 0 || slot >= SMART_OUTLET_COUNT) return;
-    delete _outlets[slot];
+    // This is the call that crashed the board: adopting a stored topology drops
+    // the slots the new layout doesn't want, from the main loop, while the poll
+    // task is inside provisionPushOutlets() holding one of them.
+    SmartOutlet* old;
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    old = _outlets[slot];
     _outlets[slot] = nullptr;
+    xSemaphoreGive(_mutex);
+    retire(old);
 }
 
 void SmartOutletControl::clearAllOutlets() {
+    // Collected under the lock, retired after it: retire() takes its own mutex,
+    // and nesting it inside _mutex would deadlock on a plain binary semaphore.
+    SmartOutlet* oldOutlets[SMART_OUTLET_COUNT];
+    SmartOutlet* oldCollectors[COLLECTOR_COUNT];
     xSemaphoreTake(_mutex, portMAX_DELAY);
     for (int i = 0; i < SMART_OUTLET_COUNT; i++) {
-        delete _outlets[i];
+        oldOutlets[i] = _outlets[i];
         _outlets[i] = nullptr;
     }
     _count = 0;
     for (int i = 0; i < COLLECTOR_COUNT; i++) {
-        delete _collectors[i];
+        oldCollectors[i] = _collectors[i];
         _collectors[i] = nullptr;
         _dcOn[i]     = false;
         _dcSynced[i] = false;
     }
     xSemaphoreGive(_mutex);
+    for (int i = 0; i < SMART_OUTLET_COUNT; i++) retire(oldOutlets[i]);
+    for (int i = 0; i < COLLECTOR_COUNT; i++)    retire(oldCollectors[i]);
 
     OutletConfig::erase();
     DEBUG_PRINTLN(F("[Outlets] All outlet config cleared (RAM + NVS)."));
@@ -562,15 +642,20 @@ void SmartOutletControl::saveAll() {
 
 void SmartOutletControl::configureCollector(int idx, int generation, const char* ip, const char* host) {
     if (idx < 0 || idx >= COLLECTOR_COUNT) return;
-    // Swap the plug object. Same lifetime assumption as configureOutlet: config
-    // changes are rare and the poll task tolerates a brief window here.
+    // Swap the plug object, retire the old one. "Config changes are rare and the
+    // poll task tolerates a brief window" is what this used to say, and it is
+    // what crashed the board: reconcileCollectors() holds this pointer across a
+    // blocking setSwitch(), so "brief" is however long a plug takes to answer.
+    SmartOutlet* fresh = new ShellyGen2Outlet(ip, "Dust Collector");  // Gen2+ only
+    fresh->setHost(host);
+    SmartOutlet* old;
     xSemaphoreTake(_mutex, portMAX_DELAY);
-    delete _collectors[idx];
-    _collectors[idx] = new ShellyGen2Outlet(ip, "Dust Collector");  // Gen2+ only
-    _collectors[idx]->setHost(host);
+    old = _collectors[idx];
+    _collectors[idx] = fresh;
     _dcOn[idx]     = false;
     _dcSynced[idx] = false;   // force a switch command on the next reconcile
     xSemaphoreGive(_mutex);
+    retire(old);
 
     // Only slot 0 persists: it is the one the pre-topology path uses at boot,
     // before any layout has been adopted. The rest are rebuilt from the layout
@@ -592,14 +677,16 @@ void SmartOutletControl::configureCollector(int idx, int generation, const char*
 
 void SmartOutletControl::removeCollector(int idx) {
     if (idx < 0 || idx >= COLLECTOR_COUNT) return;
+    SmartOutlet* old;
     xSemaphoreTake(_mutex, portMAX_DELAY);
-    delete _collectors[idx];
+    old = _collectors[idx];
     _collectors[idx] = nullptr;
     _dcOn[idx]             = false;
     _dcSynced[idx]         = false;
     _dcManualOverride[idx] = false;
     _dcManualState[idx]    = false;
     xSemaphoreGive(_mutex);
+    retire(old);   // never delete here — see retire()
     if (idx == 0) OutletConfig::eraseDustCollector();
     DEBUG_PRINT(F("[Outlets] Collector ")); Serial.print(idx);
     DEBUG_PRINTLN(F(" removed."));

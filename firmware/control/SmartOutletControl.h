@@ -163,6 +163,48 @@ private:
     bool              _manualOverride;   // true = ignore outlet selection until next tool-on
     SemaphoreHandle_t _mutex;
 
+    // ── Retired plug objects, awaiting reclamation ───────────────────────────
+    //
+    // WHY THIS EXISTS: the poll task holds a raw SmartOutlet* across blocking
+    // HTTP (a provisioning probe is seconds), while the main loop and the async
+    // web server can reconfigure plugs at any moment. `delete` on those paths
+    // freed an object the poll task was still using — a use-after-free that
+    // crashed the board every boot, right after topology adoption dropped the
+    // slots a new layout no longer wanted:
+    //
+    //   Guru Meditation Error: Core 0 panic'ed (LoadProhibited)
+    //   Backtrace: SmartOutletControl::doPoll() → pollTaskFn()
+    //
+    // A mutex alone cannot fix it. Holding _mutex across the poll loop would
+    // block every API request behind seconds of plug HTTP, and taking it only
+    // around the delete leaves the poll task dereferencing a pointer it read
+    // before the lock was taken.
+    //
+    // So configuration NEVER frees. It swaps the pointer out of the array under
+    // _mutex — after which no task can newly reach it — and hands the old object
+    // here. The POLL TASK frees, at the top of doPoll(), where it holds no plug
+    // pointer of its own, and only once two poll cycles have passed: one to
+    // outlive whatever pass was in flight when the object was retired, one for
+    // the brief dereferences the main loop and API make inside a single call.
+    //
+    // That grace is a bound, not a proof. It is generous (a cycle is
+    // OUTLET_POLL_INTERVAL_MS plus however long the plug HTTP took) and the
+    // alternative — proving quiescence across three tasks — is a much larger
+    // change to a board that runs a real shop.
+    static const int RETIRE_SLOTS = SMART_OUTLET_COUNT + COLLECTOR_COUNT;
+    SmartOutlet*      _retired[RETIRE_SLOTS];
+    uint32_t          _retiredCycle[RETIRE_SLOTS];
+    int               _retiredCount;
+    uint32_t          _pollCycle;
+    // Its own lock: retire() is called both with and without _mutex held, and
+    // _mutex is a plain binary semaphore that would deadlock on re-entry.
+    SemaphoreHandle_t _retireMutex;
+
+    /** Hand an outlet object over to be freed later. Null is ignored. */
+    void retire(SmartOutlet* o);
+    /** Poll task only, at the top of doPoll(): free what has aged out. */
+    void reapRetired();
+
     // Poll task handle — lets setDcManual() wake the task immediately (via
     // xTaskNotifyGive) so a manual dust-collector toggle switches at once
     // instead of waiting up to OUTLET_POLL_INTERVAL_MS for the next tick.
