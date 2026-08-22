@@ -12,9 +12,9 @@ import { suite } from '../../test-harness';
 import { validateShop } from '@shop';
 import {
   type ShopDoc, type RawEl,
-  addMachineWithPort, displayName, isPortEnabled, isShopDoc, machineById,
+  addMachineWithPort, addSupplementalPort, displayName, isPortEnabled, isShopDoc, machineById,
   machineOfPort, machinesOf, outletOf, portsOf, primaryPortOf, removeMachine, removePort,
-  setOutlet,
+  healMachineNames, renameMachine, setOutlet,
   systemById, systemViews, systemsOf, toShop,
 } from './shop-doc';
 
@@ -210,6 +210,77 @@ const v1 = () => JSON.parse(JSON.stringify({
   check('and ducts', Array.isArray(view.ducts) && view.ducts.length > 0);
   check('and the shop-level controllers spliced in',
     Array.isArray(view.controllers) && view.controllers.length === 1);
+}
+
+// ── renaming a machine reaches every copy of its name ───────────────────────
+{
+  const shop = toShop(v1())!;
+  const sys = systemsOf(shop)[0];
+  addSupplementalPort(shop, sys, 'saw', 'saw-oa', 'overarm');
+
+  const port = () => portsOf(shop, 'saw').find(({ port: p }) => !p['supplemental'])!.port;
+  const supp = () => portsOf(shop, 'saw').find(({ port: p }) => p['supplemental'])!.port;
+
+  eq('the caption starts out quoting the machine', supp()['name'], 'Table saw · overarm');
+
+  renameMachine(shop, 'saw', 'Cabinet saw');
+  eq('the machine takes the new name', machineById(shop, 'saw')!.name, 'Cabinet saw');
+  // The canvas draws the PORT's copy, so a rename that stopped at the machine left
+  // the two screens showing different names for one saw (2026-08-22).
+  eq('and so does its primary port', port()['name'], 'Cabinet saw');
+  eq('the supplemental caption is re-derived, not left quoting the old name',
+     supp()['name'], 'Cabinet saw · overarm');
+  eq('...and it still names its role', supp()['role'], 'overarm');
+
+  // Nothing else moves: a rename is a rename.
+  eq('the port keeps its machine', port()['machineId'], 'saw');
+  check('and its plug is untouched — a rename is a rename',
+        (outletOf(shop, port()) as RawEl | null)?.['ip'] === '10.0.0.5');
+
+  // A machine that has gone (deleted under a stale id) must not throw — the canvas
+  // calls this from a text field, mid-edit.
+  renameMachine(shop, 'nope', 'Nothing');
+  eq('an unknown machine changes nothing', machineById(shop, 'saw')!.name, 'Cabinet saw');
+}
+
+// ── a shop saved before renameMachine gets its names back on read ───────────
+{
+  // Exactly what a canvas-built shop looked like: every port named, every machine
+  // still on the creation default (jeff-s-shop-5.json, 2026-08-22).
+  const damaged = {
+    schemaVersion: 2, name: "Jeff's Shop",
+    controllers: [{ id: 'primary', role: 'primary' }],
+    systems: [{ id: 's1', name: 'Dust collection', elements: [
+      { id: 'dc', type: 'collector', name: 'Cyclone' },
+      { id: 't1', type: 'tool', name: 'Table Saw', machineId: 't1' },
+      { id: 't2', type: 'tool', name: 'Bandsaw', machineId: 't2' },
+      { id: 'p3', type: 'tool', name: 'New tool · Overarm', machineId: 't2',
+        supplemental: true, role: 'Overarm' },
+      { id: 't4', type: 'tool', name: 'New tool', machineId: 't4' },
+      { id: 't5', type: 'tool', name: 'Old port name', machineId: 't5' },
+    ], ducts: [] }],
+    machines: [
+      { id: 't1', name: 'New tool' }, { id: 't2', name: 'New tool' },
+      { id: 't4', name: 'New tool' }, { id: 't5', name: 'Named in tool setup' },
+    ],
+  };
+  const shop = toShop(damaged as unknown as Parameters<typeof toShop>[0])!;
+  const m = (id: string) => machineById(shop, id)!.name;
+
+  eq('a machine takes the name its port is carrying', m('t1'), 'Table Saw');
+  eq('...for every machine, not just the first', m('t2'), 'Bandsaw');
+  // The caption quoted the default, so healing the machine has to re-derive it.
+  const supp = portsOf(shop, 't2').find(({ port }) => port['supplemental'])!.port;
+  eq('and a supplemental caption stops quoting "New tool"', supp['name'], 'Bandsaw · Overarm');
+  eq('a machine nobody has named at all is left alone', m('t4'), 'New tool');
+  // The other direction is a real case — renamed in tool setup, never touched on
+  // the canvas — and healing it too would make whichever screen ran last win.
+  eq('a machine with a name of its own keeps it', m('t5'), 'Named in tool setup');
+  eq('...and its port is not overwritten either',
+     portsOf(shop, 't5')[0].port['name'], 'Old port name');
+  // Idempotent: reading twice must not walk the names backwards.
+  healMachineNames(shop);
+  eq('healing again changes nothing', m('t1'), 'Table Saw');
 }
 
 report();

@@ -302,16 +302,22 @@ export class DemoApiService extends ApiService {
   }
 
   // ── Secondary boards ───────────────────────────────────────────────────
-  // Three fake nodes so the boards surface is explorable in the demo. One is
-  // deliberately already in DEMO_TOPOLOGY's controllers[], one isn't, and one
-  // belongs to another primary — so "add", "already added" and "claimed by
-  // someone else" are all visible without any hardware. Matches NETWORK_BOARDS
-  // in tools/mock-api.js, which is the same fixture on the other runner.
+  // Four fake nodes so the boards surface is explorable in the demo. Two are
+  // already in DEMO_TOPOLOGY's controllers[], one is not, and one belongs to
+  // another primary — so "add", "already added" and "claimed by someone else"
+  // are all visible without any hardware. Matches NETWORK_BOARDS in
+  // tools/mock-api.js, which is the same fixture on the other runner.
+  //
+  // node-4 is here because the seed shop grew: node-2 used to be the unpaired
+  // one, and the real layout that replaced the hand-built seed has it paired
+  // (and driving nothing, which is its own thing worth being able to see). A
+  // fourth board keeps every state on the screen.
   private readonly demoNodes: DiscoveredNode[] = [
     { host: 'dustgate-node-1', ip: '192.168.87.61', board: 'qtpy_s3', servos: 4 },
     { host: 'dustgate-node-2', ip: '192.168.87.62', board: 'devkitc', servos: 4 },
     { host: 'dustgate-node-3', ip: '192.168.87.63', board: 'xiao_c5', servos: 4,
       claimedBy: 'dustgate-garage', takeable: true },
+    { host: 'dustgate-node-4', ip: '192.168.87.64', board: 'xiao_c5', servos: 4 },
   ];
 
   override async discoverNodes(): Promise<DiscoveredNode[]> {
@@ -341,13 +347,27 @@ export class DemoApiService extends ApiService {
     return this.paired;
   }
 
-  override async pairNode(host: string, _name?: string): Promise<unknown> {
+  override async pairNode(host: string, name?: string): Promise<unknown> {
     this.pairedHosts().add(host);
+    if (name) this.pairedNames.set(host, name);
     return { ok: true };
   }
   override async unpairNode(host: string): Promise<unknown> {
     this.pairedHosts().delete(host);
+    this.pairedNames.delete(host);
     return { ok: true };
+  }
+
+  /** The friendly name a paired board carries. On the device this lives in the
+   *  node registry (NVS), NOT in the layout — so it survives a layout wipe — and
+   *  the mock keeps its own copy for the same reason. The demo had neither, so
+   *  every board on /boards read as its hostname while the canvas, which reads
+   *  controllers[], called the same board "Back wall". */
+  private readonly pairedNames = new Map<string, string>();
+  private nameForHost(host: string): string {
+    const seeded = (this.td?.topology as { controllers?: Array<{ name?: string; link?: { host?: string } }> })
+      ?.controllers?.find(c => c.link?.host === host)?.name;
+    return this.pairedNames.get(host) ?? seeded ?? '';
   }
 
   override async getNodes(): Promise<NodeLinkState[]> {
@@ -361,6 +381,7 @@ export class DemoApiService extends ApiService {
         host,
         online,
         lastSeen: online ? Date.now() : 0,
+        name: this.nameForHost(host),
         board: known?.board ?? 'unknown',
         fw: online ? '1.0.0-demo' : '',
         caps: { servos: known?.servos ?? 0, linear: 0 },

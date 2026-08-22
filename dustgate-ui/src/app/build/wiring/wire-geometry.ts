@@ -125,8 +125,18 @@ export type SegCost = (a: Pt, b: Pt) => number;
  *  cableRun already keeps one board's own runs apart, this is for the crossings it
  *  can't reach — two boards' bundles, or two runs to opposite corners of the
  *  canvas — which used to get a cosmetic hop and nothing else, so the router had no
- *  reason to prefer the tidier column when one was available. */
-export const CROSSING_COST = { box: 100, duct: 1, wire: 8 } as const;
+ *  reason to prefer the tidier column when one was available.
+ *
+ *  `share` is the dearest of the three, and it is not a crossing at all: it is two
+ *  cables running down the SAME corridor, one drawn over the other. Crossings are
+ *  legible — the hop says the two don't touch — but a shared corridor draws two
+ *  cables as one line, and the second one has simply disappeared until it peels
+ *  off somewhere further down. That is worse than either cable taking a longer way
+ *  round, so it is priced above a crossing and well clear of the per-cell penalty
+ *  that keeps a drop near its own tab. Wires only: a cable sharing a duct's column
+ *  is a different (and much rarer) kind of untidy, and pricing it here would send
+ *  cables round the shop to dodge the trunk they are meant to run beside. */
+export const CROSSING_COST = { box: 100, duct: 1, wire: 8, share: 40 } as const;
 
 /** A SegCost that charges CROSSING_COST for each kind of thing `[a, b]` crosses.
  *  `ducts` is a set of polylines (their own individual segments are checked);
@@ -140,7 +150,10 @@ export function crossingCost(boxes: readonly Box[], ducts: readonly GeomPt[][], 
         if (crossing([a, b] as const, [pts[i], pts[i + 1]] as const)) { c += CROSSING_COST.duct; break; }
       }
     }
-    for (const seg of drawn) if (crossing([a, b] as const, seg)) c += CROSSING_COST.wire;
+    for (const seg of drawn) {
+      if (crossing([a, b] as const, seg)) c += CROSSING_COST.wire;
+      else if (sharesLane([a, b] as const, seg)) c += CROSSING_COST.share;
+    }
     return c;
   };
 }
@@ -179,7 +192,16 @@ function pickDrop(to: Pt, lane: number, cost: SegCost): number {
   return best;
 }
 
-export function cableRun(from: Pt, to: Pt, rank: number, bias = 0, clear = 0, cost?: SegCost): Pt[] {
+/**
+ * @param rank   0 is the longest run and takes the highest lane; see above.
+ * @param lanes  how many cables are nesting in this band — the caller knows, and
+ *               without it the spacing can only assume there is room for another
+ *               LANE_STEP and collapse everything onto the ceiling when there
+ *               isn't. Defaults to "this one is the last", which is the old
+ *               behaviour for any caller that doesn't care.
+ */
+export function cableRun(from: Pt, to: Pt, rank: number, bias = 0, clear = 0, cost?: SegCost,
+                         lanes = rank + 1): Pt[] {
   const price = cost ?? (() => 0);
   // Straight drop — but only if the column is actually empty; otherwise fall through
   // and let the lane logic route around whatever is standing in it.
@@ -198,11 +220,24 @@ export function cableRun(from: Pt, to: Pt, rank: number, bias = 0, clear = 0, co
   // Gate below: run high, then drop. The floor is far enough off the port that the
   // cable is clear of the board before it turns, so you can still see which port it
   // left from; the ceiling keeps it off the gate's body if the two are close.
-  const floor = from.y + PORT_STUB;
+  const floor = from.y + PORT_STUB + bias;
   const ceil = to.y - clear - LANE_GAP;
-  let lane = floor + rank * LANE_STEP + bias;
-  // Squeezed: give up height rather than clearance — a lane that turns close to the
-  // board is untidy, a lane inside the gate's box is the bug.
+  // Nesting has to fit in the gap there IS, not the gap LANE_STEP assumes.
+  //
+  // This used to be `floor + rank * LANE_STEP`, clamped to the ceiling — and a
+  // clamp is not a fallback, it is a collision: with the gates one row under
+  // their board, every rank past the first computed a lane below the ceiling and
+  // was pushed onto exactly the same line, so three cables were drawn as one
+  // (the shop, 2026-08-22 — two of the six runs shared 378 units of lane). The
+  // spacing compresses instead. It only ever compresses: a roomy drop still
+  // steps by LANE_STEP, which is what keeps the lanes readable in the normal
+  // case that this whole scheme was tuned for.
+  const span = Math.max(0, ceil - floor);
+  const step = lanes > 1 ? Math.min(LANE_STEP, span / (lanes - 1)) : LANE_STEP;
+  let lane = floor + rank * step;
+  // Still no room — the board is sitting on top of its gate. Give up height
+  // rather than clearance: a lane that turns close to the board is untidy, a lane
+  // inside the gate's box is the bug.
   if (lane > ceil) lane = ceil;
   // Unless there is no room at all, in which case take the plain dog-leg and let the
   // pieces sort themselves out.
@@ -229,6 +264,31 @@ export function segmentsOf(pts: readonly Pt[]): Seg[] {
   const out: Seg[] = [];
   for (let i = 0; i < pts.length - 1; i++) out.push([pts[i], pts[i + 1]] as const);
   return out;
+}
+
+/**
+ * Do two axis-aligned segments run down the SAME line and overlap along it?
+ *
+ * The failure this exists to catch: two cables off one board, both routed into the
+ * same clear gutter, drawn one exactly over the other. Nothing in crossing() sees
+ * it — they never intersect, they coincide — so it cost the router nothing and it
+ * picked that column twice. On screen the second cable is invisible for the whole
+ * shared stretch and then appears out of nowhere where it peels off.
+ *
+ * Meeting end-to-end is NOT overlapping: consecutive segments of one run share a
+ * point by construction, and a cable that continues past where another one stopped
+ * is drawing exactly what is there. So the shared stretch has to have length.
+ */
+export function sharesLane(a: Seg, b: Seg, eps = 0.5): boolean {
+  const ah = isH(a), bh = isH(b);
+  if (ah !== bh) return false;                                  // perpendicular
+  const axis = (s: Seg) => (isH(s) ? s[0].y : s[0].x);          // the line it sits on
+  if (Math.abs(axis(a) - axis(b)) > eps) return false;          // parallel, not collinear
+  const span = (s: Seg) => (isH(s)
+    ? [Math.min(s[0].x, s[1].x), Math.max(s[0].x, s[1].x)]
+    : [Math.min(s[0].y, s[1].y), Math.max(s[0].y, s[1].y)]);
+  const [a0, a1] = span(a), [b0, b1] = span(b);
+  return Math.min(a1, b1) - Math.max(a0, b0) > eps;
 }
 
 /** Where two axis-aligned segments cross, or null. Touching endpoints don't count —

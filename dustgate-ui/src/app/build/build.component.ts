@@ -18,24 +18,68 @@ import {
 import {
   type ShopDoc, type ShopSystem,
   addMachineWithPort, addSupplementalPort, addSystem, isPortSupplemental, machineById, machineOfPort,
-  machinesOf, outletOf, portsOf, primaryPortOf, removeMachine, removePort, supplementalCount,
+  machinesOf, NEW_MACHINE_NAME, outletOf, portsOf, primaryPortOf, removeMachine, removePort,
+  renameMachine,
+  supplementalCount,
   systemById, systemsOf, systemViews, toShop,
 } from '../services/shop-doc';
 import { wipSummary } from '../services/wip-message';
 import {
   type Glyph, type Pt, type SceneNode,
-  BOARD_H, BOARD_W, CELL, GATE_PAD, PAD, TOOL_HALF, UNIT_H,
+  BOARD_H, BOARD_W, CELL, GATE_PAD, PAD, TOOL_HALF, TOOL_HALF_W, UNIT_H,
   cellX, cellY, deviceBox, halfH as glyphHalfH, halfW as glyphHalfW, ptSegDist, segBoxHit,
   PRIMARY_PORT_DX, PRIMARY_PORT_H, PRIMARY_PORT_W, SECONDARY_PORT_DX, SECONDARY_PORT_STEP,
 } from './routing/geometry';
 import { type RoutedDuct, type Scene, Router, sceneBounds } from './routing/router';
 import { CanvasViewport } from './canvas-viewport';
+import { fitText, plugLabel } from './plug-label';
 import {
   PORT_H, SERVO_PORTS, TAB_H, TAB_W,
   cablePath, cableRun, crossingCost,
   portPos, portWidth, portExit, rankByTravel, segmentsOf,
   type Seg,
 } from './wiring/wire-geometry';
+
+// ── the plug chip ─────────────────────────────────────────────────────────────
+// The row drawn inside a machine's body: outlet icon, then either which plug it
+// is or what it is drawing. Sized here rather than typed into the template,
+// because the NAME has to be trimmed to whatever room the icon leaves it — two
+// sets of numbers for one box is how "Drum Sander" ended up drawn over its own
+// icon and out through the right-hand edge (2026-08-22).
+/** 4 units inside the 76-wide machine body, either side. It was 62 — the extra
+ *  6 is the cheapest room available, and every unit of it goes to the name. */
+export const DOCK_W = 68;
+export const DOCK_H = 22;
+/** Must match `.dock-t` in build.component.css. */
+export const DOCK_FONT = 9.5;
+/** The icon's group origin, and its half-width once the 0.62 scale is applied. */
+export const DOCK_ICON_X = -27;
+const DOCK_ICON_HALF = 9 * 0.62;
+const DOCK_GAP = 3;      // icon to text
+const DOCK_PAD = 3;      // text to the chip's right edge
+const DOCK_TEXT_L = DOCK_ICON_X + DOCK_ICON_HALF + DOCK_GAP;
+const DOCK_TEXT_R = DOCK_W / 2 - DOCK_PAD;
+/** What a name has to fit into, and where it is centred within that. */
+export const DOCK_TEXT_W = DOCK_TEXT_R - DOCK_TEXT_L;
+export const DOCK_TEXT_X = (DOCK_TEXT_L + DOCK_TEXT_R) / 2;
+
+/** A machine's name is drawn across its body, and until 2026-08-22 nothing
+ *  stopped it: "Cabinet table saw" hangs 15 units past a 76-wide body on each
+ *  side, over the ducts and whatever stands beside it.
+ *
+ *  Must match `.glabel` in build.component.css. */
+export const GLABEL_FONT = 12.5;
+/**
+ * How far a name may hang past the body before it is trimmed.
+ *
+ * NOT zero, deliberately. Names have always run edge to edge — "Drum sander" is
+ * 77 units on a 76-unit body — and trimming to the body itself would put an
+ * ellipsis in half the names in a real shop to buy back one unit nobody can see.
+ * What must not happen is a name reaching the piece beside it, and with pieces a
+ * CELL apart there are (108 - 76) / 2 = 16 units of gap on each side. Six of them
+ * is room to breathe with clearance still left over.
+ */
+const NAME_OVERHANG = 6;
 
 // ── Layout model ──────────────────────────────────────────────────────────────
 // The canvas is pure presentation: each element gets a grid cell (col,row). The
@@ -298,6 +342,9 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   readonly PRIMARY_PORT_H = PRIMARY_PORT_H;
   readonly BOARD_W = BOARD_W; readonly BOARD_H = BOARD_H;
   readonly PORT_H = PORT_H; readonly TAB_W = TAB_W; readonly TAB_H = TAB_H;
+  readonly DOCK_W = DOCK_W; readonly DOCK_H = DOCK_H;
+  readonly DOCK_ICON_X = DOCK_ICON_X; readonly DOCK_TEXT_X = DOCK_TEXT_X;
+  readonly TOOL_HALF_W = TOOL_HALF_W;
   readonly SERVO_PORTS = SERVO_PORTS;
 
   // ── wiring layer ────────────────────────────────────────────────────────────
@@ -651,6 +698,24 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   todoY(n: NodeVM): number { return -this.halfH(n); }
 
   labelX(n: NodeVM): number { return n.isUnit ? (n.span - 1) * CELL / 2 : 0; }
+
+  /**
+   * The name as drawn.
+   *
+   * A machine's name lives INSIDE its body, so it is trimmed to fit — see
+   * GLABEL_FONT. A gate's is a caption sitting ABOVE its unit with open canvas
+   * either side, and a unit can be many cells wide, so trimming that one to a
+   * tool's width would cut names that had nothing in their way. The full name is
+   * always one tap from here (the label is the edit field) and rides along as the
+   * title, so nothing is lost by the trim — see nameTitle().
+   */
+  nameLabel(n: NodeVM): string {
+    if (n.glyph !== 'tool') return n.name;
+    return fitText(n.name, (TOOL_HALF_W + NAME_OVERHANG) * 2, GLABEL_FONT);
+  }
+  /** The whole name, but only where the drawn one is short of it — a tooltip that
+   *  repeats what is already legible is noise. */
+  nameTitle(n: NodeVM): string { return this.nameLabel(n) === n.name ? '' : n.name; }
   /** Below the glyph AND below its add-dot, which sits at halfH + 18 — the two used
    *  to land on top of each other on a ball valve. */
   /** Directly under the name, in the slot the name itself normally occupies. */
@@ -704,11 +769,10 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   private fmtW(w: number): string { return w >= 1000 ? (w / 1000).toFixed(1) + ' kW' : Math.round(w) + ' W'; }
-  /** The row is 62 units wide; a Shelly's own hostname is longer than that. */
-  private shortPlug(name: string): string {
-    const s = name.replace(/^shelly(plug(us)?|plus)?-?/i, '');
-    return s.length > 11 ? s.slice(0, 10) + '…' : (s || name);
-  }
+  /** Trimmed to the room the chip's icon leaves it, BY WIDTH — see plug-label.ts.
+   *  A flat character count is what let "Drum Sander" (11 characters, 60 units)
+   *  run back over its own icon. */
+  private shortPlug(name: string): string { return plugLabel(name, DOCK_TEXT_W, DOCK_FONT); }
 
   // ── the plug tray ────────────────────────────────────────────────────────────
   /** Every plug the last scan found. Not filtered here — freeOutlets() decides
@@ -2595,7 +2659,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   private addJunctionChild(junctionId: string, kind: SelKind | 'tool' | 'duct'): string | null {
     if (!this.topo) return null;
     if (kind === 'tool') {
-      const tool = this.newPort('New tool');
+      const tool = this.newPort(NEW_MACHINE_NAME);
       if (!tool) return null;
       this.ductsRaw().push({ child: tool['id'], parent: junctionId });
       return tool['id'] as string;
@@ -3010,7 +3074,8 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
         // No body clearance to reserve any more: the tab is on the gate's TOP edge,
         // so a lane one gap above it is already clear of the box. It was halfH back
         // when the cable landed underneath and had to get past the gate to reach it.
-        const pts = cableRun(l.from, l.to, rank.get(l) ?? 0, bias, 0, this.cableCost(l.gateId, drawn));
+        const pts = cableRun(l.from, l.to, rank.get(l) ?? 0, bias, 0,
+                             this.cableCost(l.gateId, drawn), legs.length);
         out.push({ id: b.id + ':' + l.channel, gateId: l.gateId, boardId: b.id, channel: l.channel,
                    d: cablePath(pts, drawn), shade: this.boardShade(b.id) });
         drawn.push(...segmentsOf(pts));
@@ -3560,7 +3625,21 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     const el = this.elem(id); if (!el) return;
     this.focus(id);
     this.pushHistory('rename:' + id);   // a whole typed name undoes as one step
-    el['name'] = name; const n = this.byId.get(id); if (n) n.name = name; this.dirty = true;
+    // A TOOL's name belongs to the machine, not to the port you happen to be
+    // looking at — see renameMachine(), which writes both copies. Writing the
+    // element alone is what left the plug tray's "Use it for" picker, the live
+    // view and tool setup on the old name (2026-08-22).
+    const machine = machineOfPort(this.topo as unknown as ShopDoc, el);
+    if (machine) renameMachine(this.topo as unknown as ShopDoc, machine.id as string, name);
+    else el['name'] = name;
+    // Every port of that machine, so a second one re-captions with it.
+    for (const n of this.nodes) {
+      const e = this.elem(n.id);
+      if (n.id === id || (machine && e && e['machineId'] === machine.id)) {
+        n.name = (this.elem(n.id)?.['name'] as string) || n.name;
+      }
+    }
+    this.dirty = true;
   }
   /** Anything with at most ONE thing below it can go: the run heals into plain duct
    *  (see removeElement). Only a real fork — two or more legs — has to be thinned

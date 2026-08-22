@@ -258,7 +258,13 @@ svg.canvas { display: block; touch-action: none; }
 .chip { display: flex; align-items: center; gap: 5px; background: var(--bg);
         border: 1px solid var(--border); border-radius: 8px; padding: 3px 8px;
         color: var(--text); font-size: 12px; cursor: grab; touch-action: none;
-        white-space: nowrap; max-width: 40vw; overflow: hidden; text-overflow: ellipsis; }
+        white-space: nowrap; max-width: 40vw; overflow: hidden; }
+/* The ellipsis has to live on the TEXT, not on the chip: text-overflow applies to
+   the block that holds the text, and the chip is a flex row whose text is in a
+   child — so a plug still carrying its factory hostname was chopped mid-character
+   at the chip's edge instead of trailing off (2026-08-22). min-width:0 is what
+   lets that child shrink at all inside the flex row. */
+.chip .nm { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .chip .face { width: 13px; height: 13px; color: var(--muted); flex: 0 0 auto; }
 .chip .face .shell { fill: none; stroke: currentColor; stroke-width: 1.6; }
 .chip .face .slot { fill: currentColor; opacity: 0.75; }

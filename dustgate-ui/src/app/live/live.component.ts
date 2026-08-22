@@ -162,8 +162,17 @@ const POLL_MS = 2000;
        fits, and "Shop layout" wrapped to two lines while its neighbours stayed on
        one — a ragged row. Everything here is a notch smaller so all three labels
        stay single-line on the narrowest phone we target. */
-    .nav { display: flex; gap: 8px; margin-top: 18px; }
-    .nav a { flex: 1; display: flex; align-items: center; justify-content: center; gap: 7px;
+    /* A GRID, not a flex row: four destinations at 13px with an icon each are
+       wider than a phone, and flex:1 on a nowrap label cannot shrink below its
+       own text — so the last one hung off the right edge of a 375px screen (found
+       2026-08-22, once /gates made it four).
+       auto-fit rather than a fixed 2x2: this column is capped at 460px, so four
+       entries land two-by-two at every width, but the fifth entry — or the fourth
+       going away again — re-flows on its own instead of needing this rule edited
+       to match. */
+    .nav { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+           gap: 8px; margin-top: 18px; }
+    .nav a { display: flex; align-items: center; justify-content: center; gap: 7px;
              padding: 12px 6px; border: 1px solid var(--border); border-radius: var(--radius);
              color: var(--muted); text-decoration: none; font-size: 13px; white-space: nowrap; }
     .nav a svg { width: 17px; height: 17px; flex: none; }

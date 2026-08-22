@@ -27,10 +27,20 @@ than restated. Delete an item when it lands; the git history is the record.
   new marking on the canvas, and there is no vocabulary for "this piece is the
   problem" yet.
 
-- **Moving the whole shop to a new WiFi is a per-board errand nobody is told
-  about.** Settings → Forget WiFi resets the PRIMARY only. Each node holds its own
+- ** Dragging a duct to a gate is still triggering the 'Toolname is already in
+  that cell' error message, this shouldn't happen ( we can put a warning
+  that this will trigger an auxilliary port)
+  
+- **Highlight ducts and wires when hovering over them** might also trigger this on 
+  hover of tools/gates/etc - aka "show the airflow/electron path"
+
+- **Moving the whole shop to a new WiFi is a per-board errand nobody is told about**
+  aSettings → Forget WiFi resets the PRIMARY only. Each node holds its own
   credentials and has no way to be re-pointed from the app, so a router swap means
   visiting every board in the shop.
+
+- **Add a 'Clear shop' button** Add this to the shop dropdown menu, go back to a single
+  dust collector with no connections
 
   It is not as bad as it looks — a node runs the same `WiFiProvisioner` as the
   primary, so a board that can't join within 12 s **at boot** raises its own
@@ -57,16 +67,6 @@ than restated. Delete an item when it lands; the git history is the record.
   numbered outlet icons, probably others. Low priority — and hover can't be the
   only way in (see the mockup rules), so whatever this becomes needs a tap path too.
 
-- **Status screen (SSD1306 OLED) — designed, not built.** 128x64 on I2C so "is it
-  connected?" doesn't need a phone. Layouts and the decisions behind them are in
-  [`docs/mockups/oled-status.html`](../docs/mockups/oled-status.html); wiring is
-  `WIRING.md` §6 plus `wiring/devkitc.md` §5 (GPIO16/4 — **not** the usual 21/22,
-  those are TMC EN/DIR) and `wiring/xiao-c5.md` §4 (D4/D5). Board headers carry
-  commented `PIN_OLED_*` blocks; uncommenting them is the seam. Settled already:
-  the screen mirrors `statusled::Status` rather than defining its own vocabulary,
-  it sleeps at idle and wakes on events (burn-in), and it never replaces the pixel.
-  Still open: probe 0x3C at boot vs declare it in the build, and whether a wake
-  button earns a pad at all. Screens are on hand; nothing has been wired.
 
 ## Carried debt
 
@@ -91,6 +91,10 @@ than restated. Delete an item when it lands; the git history is the record.
   `link.host` values, or a hostname derived from the chip's MAC is the right
   answer — a MAC-derived default would make collisions structurally impossible,
   at the cost of names nobody can read.
+
+- **Nothing stops two tools or plugs from sharing names** - a tool and a plug
+  can have the same name, but not 2 tools or 2 plugs.  Really in general
+  we need to make sure names are distinct, at least acros systems
 
 ## Testing
 

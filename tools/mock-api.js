@@ -73,6 +73,10 @@ const NETWORK_BOARDS = [
   // node's `owner` mDNS TXT record.
   { host: 'dustgate-node-3', ip: '192.168.87.63', board: 'xiao_c5', servos: 4,
     claimedBy: 'dustgate-garage', takeable: true },
+  // Mirrors the demo's fourth board — see demoNodes in demo-api.service.ts. It
+  // exists so there is always one board that is present, free, and NOT already
+  // in the seed shop's controllers[].
+  { host: 'dustgate-node-4', ip: '192.168.87.64', board: 'xiao_c5', servos: 4 },
 ];
 const OFFLINE_HOSTS = ['dustgate-node-2'];
 

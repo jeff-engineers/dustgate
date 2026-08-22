@@ -61,7 +61,40 @@ export interface ShopDoc extends Record<string, unknown> {
  */
 export function toShop(doc: Topology | null | undefined): ShopDoc | null {
   if (!doc) return null;
-  return asShop(doc) as unknown as ShopDoc;
+  const shop = asShop(doc) as unknown as ShopDoc;
+  healMachineNames(shop);
+  return shop;
+}
+
+/** What addMachineWithPort calls a machine nobody has named yet. */
+export const NEW_MACHINE_NAME = 'New tool';
+
+/**
+ * Give a machine back the name its port is carrying.
+ *
+ * Repairs shops saved before 2026-08-22, when the canvas rename wrote only the
+ * port element: every machine in a shop built entirely on the canvas is still
+ * called "New tool", so the live view, tool setup and the plug tray's "Use it
+ * for" picker all listed a shop full of identical entries while the canvas
+ * showed the real names. renameMachine() stops it happening again; this is for
+ * the documents it already happened to, and it runs on read so nobody has to
+ * retype eleven names.
+ *
+ * ONE DIRECTION ONLY. A machine that has a name of its own keeps it — the
+ * opposite case is real (renamed in tool setup, which always wrote the machine,
+ * and never touched on the canvas) and healing both ways would make whichever
+ * screen ran last the winner.
+ */
+export function healMachineNames(doc: ShopDoc | null): void {
+  if (!doc) return;
+  for (const m of machinesOf(doc)) {
+    const own = (m.name as string | undefined)?.trim();
+    if (own && own !== NEW_MACHINE_NAME) continue;
+    const port = primaryPortOf(doc, m.id as string);
+    const fromPort = (port?.['name'] as string | undefined)?.trim();
+    if (!fromPort || fromPort === own) continue;
+    renameMachine(doc, m.id as string, fromPort);
+  }
 }
 
 export const isShopDoc = (doc: unknown): boolean => isShop(doc);
@@ -259,6 +292,32 @@ export function addSupplementalPort(
   };
   system.elements.push(port);
   return port;
+}
+
+/**
+ * Rename a machine — the ONE place a machine's name is written.
+ *
+ * A machine's name is stored twice over: once on the machine, and once on each
+ * of its ports, where addMachineWithPort and addSupplementalPort snapshot it at
+ * creation ("Table saw", "Table saw · overarm"). Both copies have readers — the
+ * canvas draws the port's, the live view and the plug tray's "Use it for" picker
+ * read the machine's — and until 2026-08-22 each screen wrote only the one it
+ * happened to read: renaming on the canvas left the picker on the old name, and
+ * renaming in tool setup left the canvas on it. A machine with two names is
+ * exactly the "which saw is that?" question this UI exists to answer.
+ *
+ * So the copies stay, and the WRITER is single. A supplemental port's caption is
+ * derived rather than carried across, since it quotes the name it was built from
+ * and would otherwise keep quoting the old one.
+ */
+export function renameMachine(doc: ShopDoc, machineId: string, name: string): void {
+  const machine = machineById(doc, machineId);
+  if (machine) machine.name = name;
+  for (const { port } of portsOf(doc, machineId)) {
+    port['name'] = isPortSupplemental(port)
+      ? `${name} · ${(port['role'] as string) || 'Auxiliary'}`
+      : name;
+  }
 }
 
 /** How many supplemental ports this machine already has, across every system. */

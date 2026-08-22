@@ -7,7 +7,7 @@
 import {
   type Pt, BOARD_H, BOARD_W, CORNER_R, CROSSING_COST, HOP_R, LANE_GAP, LANE_STEP, PORT_H, SERVO_PORTS,
   cablePath, cableRun, crossing, crossingCost, portExit, portPos, PORT_STUB,
-  rankByTravel, segmentsOf,
+  rankByTravel, segmentsOf, sharesLane,
 } from './wire-geometry';
 import { CELL, cellX, cellY, halfH, halfW } from '../routing/geometry';
 
@@ -228,6 +228,35 @@ group('W8 lane spacing');
   ok('lanes descend from the highest rank', lanes[0] < lanes[3]);
 }
 
+// ── W8b · lanes that don't fit compress rather than collapse ─────────────────
+group('W8b a squeezed band still gives every cable its own lane');
+{
+  // The shop, 2026-08-22: three gates one row under their board. floor and ceil
+  // are ~18 units apart, LANE_STEP is 14, so ranks 1 and 2 both computed a lane
+  // past the ceiling and were clamped onto it — two cables drawn as one line for
+  // 378 units, which is not a cable you can trace.
+  const from = P(1000, 89.5), tabY = 150;
+  const tos = [P(194, tabY), P(410, tabY), P(626, tabY)];
+  const runs = tos.map((to, r) => cableRun(from, to, r, 7, 0, undefined, tos.length));
+  const lanes = runs.map(r => r[1].y);
+  ok('three cables, three lanes', new Set(lanes).size === 3, lanes.join());
+  ok('all of them still clear of the gates', lanes.every(y => y <= tabY - LANE_GAP), lanes.join());
+  ok('and still below the port they left', lanes.every(y => y > from.y), lanes.join());
+  ok('nesting order survives the squeeze', lanes[0] < lanes[1] && lanes[1] < lanes[2], lanes.join());
+
+  // Compression is a LAST resort: a drop with room to spare is unchanged, or the
+  // ordinary shop pays for a case only the cramped one has.
+  const roomy = [0, 1, 2].map(r => cableRun(P(136, 60), P(400, 400), r, 0, 0, undefined, 3));
+  ok('a roomy band still steps by the full LANE_STEP',
+     near(roomy[1][1].y - roomy[0][1].y, LANE_STEP), roomy.map(r => r[1].y).join());
+
+  // No room at all is still the old answer: better a shared lane than one drawn
+  // through the gate body.
+  const none = [0, 1].map(r => cableRun(P(136, 200), P(400, 210), r, 0, 0, undefined, 2));
+  ok('a board sitting on its gate still emits a lane between the two ends',
+     none.every(run => run[1].y >= 200 && run[1].y <= 210), none.map(r => r[1].y).join());
+}
+
 // ── W9 · a gate above the board ──────────────────────────────────────────────
 group('W9 a board below its gate still leaves from the underside');
 {
@@ -298,6 +327,57 @@ group('W11 crossingCost weighs a device body over another cable over a duct');
   const clear = P(300, 100);
   ok('a segment that clears every obstacle is untouched',
      crossingCost([box], [duct], [wire])(P(250, 100), clear) === 0);
+}
+
+// ── W12 · two cables must not share one corridor ─────────────────────────────
+group('W12 a shared corridor costs more than a crossing');
+{
+  const v = [P(100, 0), P(100, 200)] as const;
+  ok('the same column, overlapping, is sharing',
+     sharesLane([P(100, 50), P(100, 150)] as const, v));
+  ok('and so is the same row', sharesLane([P(0, 9), P(50, 9)] as const, [P(20, 9), P(80, 9)] as const));
+  ok('a parallel column a hair away is not', !sharesLane([P(102, 50), P(102, 150)] as const, v));
+  ok('a crossing is not sharing', !sharesLane([P(0, 100), P(200, 100)] as const, v));
+  // Consecutive segments of one run meet by construction; that must stay free.
+  ok('meeting end to end is not sharing',
+     !sharesLane([P(100, 200), P(100, 300)] as const, v));
+
+  ok('sharing costs CROSSING_COST.share',
+     crossingCost([], [], [v])(P(100, 50), P(100, 150)) === CROSSING_COST.share);
+  ok('...which is dearer than crossing that same cable', CROSSING_COST.share > CROSSING_COST.wire);
+  // The whole point: dearer than walking several cells away to find a clear one.
+  ok('and dearer than several cells of straying from the tab', CROSSING_COST.share > 8);
+}
+
+// ── W13 · the case from the shop ─────────────────────────────────────────────
+group('W13 two cables off one board come down different columns');
+{
+  // Two gates far below and to the LEFT of their board, with the shop between —
+  // so both cables are pushed off their own columns, and the nearest clear gutter
+  // is the SAME one for both. That is where they used to land on top of each
+  // other (the shop, 2026-08-22: the runs to the jointer valve and the ball valve
+  // were drawn one over the other for the whole descent). Both tabs on the left
+  // is what makes it bite: with one tab either side of the obstacle each cable
+  // has its own nearest gutter and the collision never comes up.
+  const from0 = P(1100, 100), from1 = P(1118, 100);
+  const to0 = P(300, 660), to1 = P(470, 1300);
+  const wall = [{ x0: 230, y0: 200, x1: 1050, y1: 800 }];       // the shop, in the way
+
+  const drawn: ReturnType<typeof segmentsOf> = [];
+  const runs = [[from0, to0], [from1, to1]].map(([f, t], i) => {
+    const pts = cableRun(f, t, i, 0, 0, crossingCost(wall, [], drawn));
+    drawn.push(...segmentsOf(pts));
+    return pts;
+  });
+
+  const verticals = (pts: Pt[]) => segmentsOf(pts).filter(sg => Math.abs(sg[0].x - sg[1].x) < 0.5);
+  const shared = verticals(runs[0]).some(a => verticals(runs[1]).some(b => sharesLane(a, b)));
+  ok('neither descent is drawn over the other', !shared,
+     JSON.stringify(runs.map(r => r.map(p => [p.x, p.y]))));
+  // Not by giving up and going through the shop instead.
+  ok('and neither was pushed through the shop to manage it',
+     crossingCost(wall, [], [])(runs[0][1], runs[0][2]) === 0
+     && crossingCost(wall, [], [])(runs[1][1], runs[1][2]) === 0);
 }
 
 console.log(`\n${checks - failures}/${checks} checks passed`);

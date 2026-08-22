@@ -29,6 +29,10 @@ export const GATE_PAD = 0.42 * CELL;
  *  The router reads this as the obstacle's half-height, so growing the drawing
  *  without growing this would route ducts straight through the plug row. */
 export const TOOL_HALF = 34;
+/** Half-WIDTH of a tool body — the same 76 units the template draws, named so the
+ *  drawing, the obstacle the router steers around, and the room a machine's name
+ *  has to fit into are all one number. */
+export const TOOL_HALF_W = 38;
 /** How far below a unit's body an outlet stub starts. */
 export const OUTLET_STUB = UNIT_H / 2 + 12;
 /** Where a unit's feed run stops, measured from its top edge. Matches the 12px the
@@ -131,7 +135,7 @@ export function halfW(n: SceneNode): number {
     case 'junction': return 8;
     case 'secondaryPort': return SECONDARY_PORT_HALF;
     case 'board': return BOARD_W / 2;
-    default: return 38;
+    default: return TOOL_HALF_W;
   }
 }
 

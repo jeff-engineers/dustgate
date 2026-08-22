@@ -5,7 +5,7 @@ import { Router } from '@angular/router';
 import { ApiService, DiscoveredOutlet, Topology } from '../services/api.service';
 import { PairedOutletRowComponent } from './paired-outlet-row.component';
 import { elementsOf, ductsOf } from '../gates/selector-types';
-import { type ShopDoc, machineOfPort, outletOf, toShop } from '../services/shop-doc';
+import { type ShopDoc, machineOfPort, outletOf, renameMachine, toShop } from '../services/shop-doc';
 
 // ── The tools screen ─────────────────────────────────────────────────────────
 // Every tool in the shop in one list, each tappable into its own tagging page:
@@ -428,7 +428,10 @@ export class ToolSetupComponent implements OnInit {
       // only ever reads machines — sensing nothing.
       const m = el ? machineOfPort(this.topo as unknown as ShopDoc, el) : null;
       if (!m) { this.error = "That tool is no longer in the layout."; return; }
-      m.name = c.name;
+      // Through renameMachine, not m.name — the machine's name is also carried on
+      // each of its ports, which is what the canvas draws. Writing one copy is
+      // what left the two screens disagreeing (2026-08-22).
+      renameMachine(this.topo as unknown as ShopDoc, m.id as string, c.name);
       if (c.hasPlug && c.ip) {
         const outlet: RawEl = { gen: c.gen || 2, ip: c.ip, thresholdW: c.thresholdW || DEFAULT_THRESHOLD };
         if (c.hostname) outlet['host'] = c.hostname;
