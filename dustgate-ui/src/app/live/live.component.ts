@@ -5,7 +5,7 @@ import { ApiService, Topology, TopologyStatus } from '../services/api.service';
 import { airflowIssues } from '@topology';
 import { validateShop } from '@shop';
 import { configurableSelectorsOf, isCalibrated } from '../gates/selector-types';
-import { type ShopDoc, machinesOf, portsOf, systemViews, toShop } from '../services/shop-doc';
+import { type ShopDoc, machinesOf, portsOf, primaryPortOf, systemsOf, systemViews, toShop } from '../services/shop-doc';
 
 // One tool row's static identity (from the topology) merged with its live state
 // (from /api/status). `collecting` is the routing winner — the single tool
@@ -18,6 +18,29 @@ interface ToolRow {
   auto: boolean;          // has a smart outlet → senses its own power
   on: boolean;            // drawing / requested power
   collecting: boolean;    // won a clear path (reachable) — the green one
+}
+
+/**
+ * One airflow system: its blower, and the tools that breathe through it.
+ *
+ * The view used to be one collector card over one flat list, which had nothing to
+ * say about a two-system shop — the card read "2 dust collectors" and the switch
+ * on it stopped every tool in the building. A blower is per system and so is the
+ * decision to shut one down, so the page is per system too.
+ *
+ * `id` is '' for the orphan group: machines with no port in any system. They are
+ * a layout fault the readiness check already reports, but they must still be
+ * LISTED — they were visible in the flat list, and quietly dropping a tool from
+ * the page is a worse answer than showing it can't collect.
+ */
+interface SystemGroup {
+  id: string;
+  name: string;
+  tools: ToolRow[];
+  on: boolean;
+  coasting: boolean;
+  /** The tool currently winning this system's air, for the subtitle. */
+  activeName: string;
 }
 
 const POLL_MS = 2000;
@@ -76,6 +99,16 @@ const POLL_MS = 2000;
       font-size: 12px; color: var(--muted); letter-spacing: 0.06em;
       text-transform: uppercase; padding: 0 8px 8px;
     }
+
+    /* Systems are separated by space, not by a rule: the collector card already
+       reads as a header, and a divider on top of it is one boundary too many. */
+    .sys + .sys { margin-top: 26px; }
+    .orphan {
+      font-size: 13.5px; color: var(--accent); background: rgba(240,165,0,0.10);
+      border-radius: var(--radius); padding: 12px 14px; margin-bottom: 18px;
+      line-height: 1.45;
+    }
+    .rows-empty { font-size: 13px; color: var(--muted); padding: 6px 8px; }
 
     /* tool rows */
     .rows { display: flex; flex-direction: column; gap: 10px; }
@@ -168,37 +201,53 @@ const POLL_MS = 2000;
         <a [routerLink]="fixLink">Finish setup →</a>
       </div>
 
-      <div class="collector" [class.running]="collectorOn" [class.locked]="!ready">
-        <span class="cyc">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
-               stroke-linecap="round" stroke-linejoin="round">
-            <path d="M13 5a7 7 0 1 0 6 7"/><path d="M12 8a4 4 0 1 1-4 4"/>
-            <circle cx="12" cy="12" r="1.2" fill="currentColor" stroke="none"/>
-          </svg>
-        </span>
-        <div class="c-body">
-          <div class="c-name">{{ collectorName }}</div>
-          <div class="c-sub">{{ collectorSub() }}</div>
-        </div>
-        <button class="sw" [class.on]="collectorOn"
-                [attr.aria-label]="collectorOn ? 'Stop collection' : 'System idle'"
-                (click)="stopAll()"></button>
-      </div>
-
       <p class="ctlerr" *ngIf="error">{{ error }}</p>
 
-      <div class="label">Tools</div>
-      <div class="rows" [class.locked]="!ready">
-        <button class="row" *ngFor="let t of tools" [class.collecting]="t.collecting"
-                (click)="toggle(t)"
-                [attr.aria-pressed]="t.on">
-          <div class="r-body">
-            <div class="r-name">{{ t.name }}</div>
-            <div class="r-src">{{ sourceLine(t) }}</div>
+      <!-- One block per airflow system, in the order the shop layout draws them
+           top to bottom. A blower and the tools that breathe through it belong
+           together: which collector a tool runs is the single most useful thing
+           this page knows about it, and a flat list threw it away. -->
+      <div class="sys" *ngFor="let g of groups">
+        <div class="collector" *ngIf="g.id" [class.running]="g.on" [class.locked]="!ready">
+          <span class="cyc">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+                 stroke-linecap="round" stroke-linejoin="round">
+              <path d="M13 5a7 7 0 1 0 6 7"/><path d="M12 8a4 4 0 1 1-4 4"/>
+              <circle cx="12" cy="12" r="1.2" fill="currentColor" stroke="none"/>
+            </svg>
+          </span>
+          <div class="c-body">
+            <div class="c-name">{{ g.name }}</div>
+            <div class="c-sub">{{ collectorSub(g) }}</div>
           </div>
-          <span class="pill" *ngIf="t.collecting; else sw">Collecting</span>
-          <ng-template #sw><span class="sw" [class.on]="t.on"></span></ng-template>
-        </button>
+          <!-- Stops THIS system's tools. It used to stop every tool in the shop,
+               which on a two-system layout switched off a machine in the other
+               half of the building that had nothing to do with the card. -->
+          <button class="sw" [class.on]="g.on"
+                  [attr.aria-label]="g.on ? 'Stop ' + g.name : g.name + ' idle'"
+                  [title]="g.on ? 'Switch off every tool running on ' + g.name : g.name + ' is idle'"
+                  (click)="stopSystem(g)"></button>
+        </div>
+
+        <!-- No card, because there is no collector to card. Named rather than
+             silently mixed in: these tools cannot collect, and the readiness
+             banner above says why. -->
+        <div class="orphan" *ngIf="!g.id">{{ g.name }}</div>
+
+        <div class="label">Tools</div>
+        <div class="rows" [class.locked]="!ready">
+          <button class="row" *ngFor="let t of g.tools" [class.collecting]="t.collecting"
+                  (click)="toggle(t)"
+                  [attr.aria-pressed]="t.on">
+            <div class="r-body">
+              <div class="r-name">{{ t.name }}</div>
+              <div class="r-src">{{ sourceLine(t) }}</div>
+            </div>
+            <span class="pill" *ngIf="t.collecting; else sw">Collecting</span>
+            <ng-template #sw><span class="sw" [class.on]="t.on"></span></ng-template>
+          </button>
+          <div class="rows-empty" *ngIf="!g.tools.length">Nothing plumbed into this one yet.</div>
+        </div>
       </div>
 
       <!-- The way out of the Live view. Since / forwards straight here, the
@@ -270,7 +319,10 @@ const POLL_MS = 2000;
 })
 export class LiveViewComponent implements OnInit, OnDestroy {
   shopName = 'The Shop';
-  collectorName = 'Dust collector';
+  /** One block per airflow system, in shop-layout order. */
+  groups: SystemGroup[] = [];
+  /** Every tool across every system, flat. Kept because the shop-wide questions —
+   *  is anything running, is the layout ready — are still shop-wide. */
   tools: ToolRow[] = [];
   collectorOn = false;
   /** The blower is still on, but only to finish clearing the ducts — every tool is
@@ -317,10 +369,10 @@ export class LiveViewComponent implements OnInit, OnDestroy {
    *  rows. The coast-down gets said out loud: a blower running with every tool off
    *  otherwise reads as a stuck relay, and someone would go looking for the fault
    *  instead of waiting the few seconds out. */
-  collectorSub(): string {
-    if (!this.collectorOn) return 'Idle';
-    if (this.collectorCoasting) return 'Collecting · coasting down';
-    return this.activeName ? 'Collecting · ' + this.activeName : 'Collecting';
+  collectorSub(g: SystemGroup): string {
+    if (!g.on) return 'Idle';
+    if (g.coasting) return 'Collecting · coasting down';
+    return g.activeName ? 'Collecting · ' + g.activeName : 'Collecting';
   }
 
   sourceLine(t: ToolRow): string {
@@ -346,12 +398,15 @@ export class LiveViewComponent implements OnInit, OnDestroy {
     }
   }
 
-  async stopAll(): Promise<void> {
-    if (this.busy || !this.collectorOn || !this.ready) return;
+  /** Switch off everything running on ONE blower. The old stopAll() stopped every
+   *  tool in the shop from whichever card you tapped, which on a two-system layout
+   *  reached across and shut down a machine in the other half of the building. */
+  async stopSystem(g: SystemGroup): Promise<void> {
+    if (this.busy || !g.on || !this.ready) return;
     this.busy = true;
     this.error = '';
     try {
-      for (const t of this.tools) if (t.on) await this.api.setToolManual(t.id, false);
+      for (const t of g.tools) if (t.on) await this.api.setToolManual(t.id, false);
       await this.refresh(true);
     } catch {
       this.error = 'Couldn\'t reach the controller — nothing was switched.';
@@ -377,6 +432,18 @@ export class LiveViewComponent implements OnInit, OnDestroy {
     this.collectorOn = !!status.collectorOn;
     this.collectorCoasting = !!status.collectorCoasting;
     this.activeName = this.tools.find(t => t.collecting)?.name ?? '';
+
+    // Per-blower truth if the device sends it — both the firmware and the model
+    // always have. A device that doesn't falls back to the shop-wide pair, which
+    // is exactly right for a one-system shop and the best available guess
+    // anywhere else; the alternative is showing nothing.
+    const per = status.systems;
+    for (const g of this.groups) {
+      const s = per?.[g.id];
+      g.on = s ? !!s.collectorOn : this.collectorOn;
+      g.coasting = s ? !!s.coasting : this.collectorCoasting;
+      g.activeName = g.tools.find(t => t.collecting)?.name ?? '';
+    }
   }
 
   /** The shop has to be structurally whole, free of always-open leaks, AND have every
@@ -435,14 +502,73 @@ export class LiveViewComponent implements OnInit, OnDestroy {
       collecting: false,
     }));
 
-    // With one system this is the blower's name, as it always was. With several
-    // there is no single answer, so say so rather than picking one arbitrarily and
-    // showing the wrong name half the time.
-    const collectors = systemViews(doc)
-      .flatMap(view => ((view as { elements?: Array<Record<string, unknown>> }).elements ?? []))
-      .filter(e => e['type'] === 'collector');
-    this.collectorName = collectors.length === 1
-      ? ((collectors[0]['name'] as string) || 'Dust collector')
-      : `${collectors.length} dust collectors`;
+    this.groups = this.buildGroups(doc);
+  }
+
+  /**
+   * Split the tools across their systems, in the order the build canvas draws
+   * them.
+   *
+   * ORDER comes from `ui.layout` — the canvas stripes its systems by the topmost
+   * row any of their pieces stands on (systemRowBands()), so reading the same
+   * saved cells and sorting the same way is what makes this page and that one
+   * agree. Document order is the fallback when a shop has never been laid out;
+   * it is what the canvas would auto-layout from anyway.
+   *
+   * A machine belongs to the system of its PRIMARY port. A secondary port's run
+   * may cross the seam — it is the one thing allowed to — but the tool itself
+   * lives in one system, and that is the one whose blower it starts.
+   */
+  private buildGroups(doc: ShopDoc): SystemGroup[] {
+    const layout = (doc as unknown as { ui?: { layout?: Record<string, { row: number }> } }).ui?.layout;
+    const topRow = (sysId: string): number => {
+      const sys = systemsOf(doc).find(s => s.id === sysId);
+      if (!sys || !layout) return Number.POSITIVE_INFINITY;
+      let lo = Number.POSITIVE_INFINITY;
+      for (const e of sys.elements as Array<Record<string, unknown>>) {
+        // Junctions skipped, exactly as systemRowBands() does: a loose run end is
+        // where pipe happens to have reached, not a row the system stands on.
+        if (e['type'] === 'junction') continue;
+        const c = layout[e['id'] as string];
+        if (c) lo = Math.min(lo, c.row);
+      }
+      return lo;
+    };
+
+    const order = systemsOf(doc).map((s, i) => ({ s, i, row: topRow(s.id) }))
+      // Ties and un-laid-out systems keep document order, so the sort is stable
+      // in the cases where the canvas has nothing to say.
+      .sort((a, b) => (a.row - b.row) || (a.i - b.i));
+
+    const byId = new Map<string, SystemGroup>();
+    for (const { s } of order) {
+      const dc = (s.elements as Array<Record<string, unknown>>).find(e => e['type'] === 'collector');
+      byId.set(s.id, {
+        id: s.id,
+        name: (dc?.['name'] as string) || (s.name as string) || 'Dust collector',
+        tools: [], on: false, coasting: false, activeName: '',
+      });
+    }
+
+    // Machines with no port anywhere. A layout fault the readiness banner already
+    // explains — but they were visible in the flat list this replaces, and a tool
+    // that silently vanishes off the page is worse than one shown as unable to
+    // collect.
+    const orphans: SystemGroup = {
+      id: '', name: 'Not connected to a collector — finish the layout to run these.',
+      tools: [], on: false, coasting: false, activeName: '',
+    };
+
+    for (const t of this.tools) {
+      const primary = primaryPortOf(doc, t.id);
+      const sysId = primary
+        ? portsOf(doc, t.id).find(p => p.port === primary)?.systemId
+        : undefined;
+      (byId.get(sysId ?? '') ?? orphans).tools.push(t);
+    }
+
+    const groups = order.map(({ s }) => byId.get(s.id) as SystemGroup);
+    if (orphans.tools.length) groups.push(orphans);
+    return groups;
   }
 }

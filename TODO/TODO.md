@@ -30,9 +30,6 @@ than restated. Delete an item when it lands; the git history is the record.
 - ** Tool setup ** match the format of Gates setup - a list of all tools that takes
   the user to each tool page, rather than making them click through all tools
 
-- ** Tools page - Don't show "2 Dust Collectors" - group dust collectors and 
-  tools by system.
-
 - **Moving the whole shop to a new WiFi is a per-board errand nobody is told
   about.** Settings → Forget WiFi resets the PRIMARY only. Each node holds its own
   credentials and has no way to be re-pointed from the app, so a router swap means
