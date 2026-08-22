@@ -7,11 +7,21 @@ import { PairedOutletRowComponent } from './paired-outlet-row.component';
 import { elementsOf, ductsOf } from '../gates/selector-types';
 import { type ShopDoc, machineOfPort, outletOf, toShop } from '../services/shop-doc';
 
-// ── Tool-tagging pass ────────────────────────────────────────────────────────
-// After the plumbing is drawn (build canvas), walk the tool list once and tag
-// each: smart outlet or manual, and if smart, which plug + at what threshold.
-// The trick is identify-by-power: switch the tool on and watch
-// which plug jumps to green. Writes `sensor.outlet` onto each tool element.
+// ── The tools screen ─────────────────────────────────────────────────────────
+// Every tool in the shop in one list, each tappable into its own tagging page:
+// smart outlet or manual, and if smart, which plug + at what threshold. The
+// trick for finding the plug is identify-by-power — switch the tool on and
+// watch which one jumps to green. Writes `sensor.outlet` onto the tool's
+// machine.
+//
+// This was a WIZARD until 2026-08-22: tool 1 of N, Next, Next, Finish, with
+// every edit held in memory until the last screen. It shares its shape with
+// /gates now, and for the same reasons (gate-list.component.ts has the long
+// version). The short one: coming back to change the plug on the bandsaw meant
+// walking past every other tool to reach it, and a walk-out anywhere along the
+// way threw away the whole session's work. A list answers "which tools still
+// have no plug" at a glance, which the wizard could only answer by walking it,
+// and each tool now saves on its own Save.
 
 interface RawEl { [k: string]: unknown; }
 interface Branch { id: string; }
@@ -37,12 +47,33 @@ const DEFAULT_THRESHOLD = 50;
   imports: [CommonModule, FormsModule, PairedOutletRowComponent],
   styles: [`
     :host { display: block; max-width: 460px; margin: 0 auto; padding: 16px 14px 40px; }
-    .head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
-    .head .step { font-size: 12.5px; color: var(--muted); }
-    .dots { display: flex; gap: 5px; align-items: center; }
-    .dots i { width: 7px; height: 7px; border-radius: 50%; background: var(--border-strong, #444); }
-    .dots i.done { background: var(--success); } .dots i.cur { background: var(--accent); }
+    .head { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+    /* Same round control Settings and Gates use, so "leave this screen" looks
+       the same wherever it appears. */
+    .back-btn { background: var(--surface); border: 1px solid var(--border); border-radius: 50%;
+                width: 34px; height: 34px; flex-shrink: 0; display: flex; align-items: center;
+                justify-content: center; color: var(--muted); }
+    .back-btn:active { opacity: 0.6; }
+    .title { font-size: 17px; font-weight: 600; }
+    .hint-line { font-size: 12px; color: var(--muted); line-height: 1.6; margin: 0 2px 12px; }
 
+    /* ── the list ── */
+    .list { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; }
+    .row { display: flex; align-items: center; gap: 10px; padding: 13px 14px; width: 100%;
+           text-align: left; background: none; border: 0; border-bottom: 1px solid var(--border);
+           color: var(--text); }
+    .row:last-child { border-bottom: 0; }
+    .row:active { background: var(--bg); }
+    .grow { flex: 1; min-width: 0; }
+    .nm { font-size: 15.5px; font-weight: 500; }
+    .sub { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+    .pill { font-size: 11px; padding: 2px 9px; border-radius: 20px; display: inline-block; margin-top: 5px; }
+    .pill.ok    { color: var(--success); background: rgba(60,190,110,0.12); }
+    .pill.todo  { color: var(--accent);  background: rgba(240,165,0,0.12); }
+    .pill.plain { color: var(--muted);   background: rgba(128,128,128,0.12); }
+    .chev { color: var(--muted); flex-shrink: 0; }
+
+    /* ── one tool ── */
     .card { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 18px 16px; }
     .toolrow { display: flex; align-items: center; gap: 11px; margin-bottom: 16px; }
     .toolrow .ic { width: 42px; height: 42px; border-radius: 11px; background: var(--bg); border: 1px solid var(--border); display: flex; align-items: center; justify-content: center; }
@@ -80,23 +111,11 @@ const DEFAULT_THRESHOLD = 50;
 
     .nav { display: flex; gap: 10px; margin-top: 18px; }
     .nav button { border-radius: var(--radius); padding: 12px 16px; font-size: 14px; }
-    .nav .back { flex: 0 0 auto; background: var(--surface); border: 1px solid var(--border); color: var(--text); }
-    .nav .next { flex: 1; background: var(--accent); border: none; color: #1a1200; font-weight: 600; }
-    .nav .next:disabled { opacity: 0.5; }
-    /* Back is disabled on the first tool, and until now said so only by not
-       responding — a button that looks live and does nothing reads as a broken
-       page, not as "you are at the beginning". */
-    .nav .back:disabled { opacity: 0.4; }
+    .nav .cancel { flex: 0 0 auto; background: var(--surface); border: 1px solid var(--border); color: var(--text); }
+    .nav .save { flex: 1; background: var(--accent); border: none; color: #1a1200; font-weight: 600; }
+    .nav .save:disabled { opacity: 0.5; }
 
-    /* Same round control Settings uses, so "leave this screen" looks the same
-       wherever it appears. Setup used to have no way out at all except finishing
-       it: every tool walked, then Finish. */
-    .exit-btn { background: var(--surface); border: 1px solid var(--border);
-                border-radius: 50%; width: 34px; height: 34px; flex-shrink: 0;
-                display: flex; align-items: center; justify-content: center;
-                color: var(--muted); }
-    .exit-btn:active { opacity: 0.6; }
-    .head .left { display: flex; align-items: center; gap: 10px; }
+    .err { color: var(--danger); font-size: 12.5px; margin: 12px 2px 0; }
   `],
   template: `
     <!-- OUTSIDE the tools check, deliberately. With no tools drawn yet this screen
@@ -104,22 +123,44 @@ const DEFAULT_THRESHOLD = 50;
          reachable straight from the landing screen. The way out must not depend
          on there being something to set up. -->
     <div class="head">
-      <div class="left">
-        <button class="exit-btn" (click)="exit()" aria-label="Leave tool setup">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-               stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M19 12H5M12 19l-7-7 7-7"/>
-          </svg>
-        </button>
-        <span class="step">Set up your tools</span>
-      </div>
-      <div class="dots" *ngIf="tools.length">
-        <i *ngFor="let t of tools; let i = index" [class.done]="i < index" [class.cur]="i === index"></i>
-        <span class="step" style="margin-left:5px">{{ index + 1 }} of {{ tools.length }}</span>
-      </div>
+      <button class="back-btn" (click)="back()" aria-label="Back">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M19 12H5M12 19l-7-7 7-7"/>
+        </svg>
+      </button>
+      <span class="title">{{ editing ? editingName : 'Tools' }}</span>
     </div>
 
-    <ng-container *ngIf="cur() as c">
+    <!-- ── The list ─────────────────────────────────────────────────────────── -->
+    <ng-container *ngIf="!editing">
+      <p class="hint-line">
+        Tap a tool to say which smart outlet it's plugged into, and how much power means
+        it's running. A tool without a plug is one you switch on yourself from the shop list.
+      </p>
+
+      <div class="list" *ngIf="tools.length">
+        <button class="row" *ngFor="let t of tools" (click)="configure(t)">
+          <div class="grow">
+            <div class="nm">{{ t.name }}</div>
+            <div class="sub">{{ t.gateLabel }}</div>
+            <span class="pill ok"    *ngIf="t.hasPlug && t.ip">{{ plugPill(t) }}</span>
+            <span class="pill todo"  *ngIf="t.hasPlug && !t.ip">No plug paired yet</span>
+            <span class="pill plain" *ngIf="!t.hasPlug">Switched on by hand</span>
+          </div>
+          <svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M9 18l6-6-6-6"/>
+          </svg>
+        </button>
+      </div>
+
+      <div class="empty" *ngIf="!tools.length">No tools to set up yet. Draw your plumbing first.</div>
+      <p class="err" *ngIf="error">{{ error }}</p>
+    </ng-container>
+
+    <!-- ── One tool ─────────────────────────────────────────────────────────── -->
+    <ng-container *ngIf="editing as c">
 
       <div class="card">
         <!-- Labelled, because the plug's name field below is the same control at
@@ -199,22 +240,24 @@ const DEFAULT_THRESHOLD = 50;
       </div>
 
       <div class="nav">
-        <button class="back" (click)="prev()" [disabled]="index === 0">← Back</button>
-        <button class="next" (click)="next()" [disabled]="saving">
-          {{ index === tools.length - 1 ? (saving ? 'Saving…' : 'Finish') : 'Next tool →' }}
+        <button class="cancel" (click)="cancel()">Cancel</button>
+        <button class="save" (click)="save()" [disabled]="saving">
+          {{ saving ? 'Saving…' : 'Save' }}
         </button>
       </div>
+      <p class="err" *ngIf="error">{{ error }}</p>
     </ng-container>
-
-    <div class="empty" *ngIf="!tools.length">No tools to set up yet. Draw your plumbing first.</div>
   `,
 })
 export class ToolSetupComponent implements OnInit {
   tools: ToolCfg[] = [];
-  index = 0;
+  /** The tool being edited — a WORKING COPY, so Cancel leaves the list untouched. */
+  editing: ToolCfg | null = null;
+  editingName = '';
   outlets: DiscoveredOutlet[] = [];
   scanning = false;
   saving = false;
+  error = '';
   /** Our mDNS name — the owner suffix stamped on plugs we own. */
   owner = '';
   /** What happened to the plug on the last unpair, when it's worth saying. The
@@ -223,8 +266,9 @@ export class ToolSetupComponent implements OnInit {
 
   private topo: Topology | null = null;
   /**
-   * Has the user actually changed anything? Set by the edit affordances
-   * themselves rather than derived by comparing a snapshot — see exit().
+   * Has the user actually changed anything on the tool they're editing? Set by
+   * the edit affordances themselves rather than derived by comparing a snapshot
+   * — see cancel().
    */
   touched = false;
 
@@ -237,13 +281,37 @@ export class ToolSetupComponent implements OnInit {
       this.topo = toShop(JSON.parse(JSON.stringify(await this.api.getTopology())) as Topology) as unknown as Topology;
       // whenReady() has already fetched /api/info; deviceInfo is the cached copy.
       this.owner = this.api.deviceInfo?.owner ?? '';
-    } catch { return; }
-    const els = this.elems();
-    this.tools = els.filter(e => e['type'] === 'tool').map(e => this.toCfg(e));
+    } catch (e) {
+      // A device with nothing drawn yet answers 404 to /api/topology. That is an
+      // empty shop, not a dead controller, and the empty state below already says
+      // the right thing — claiming "couldn't reach" there sends someone hunting a
+      // network fault that isn't real.
+      if ((e as { status?: number })?.status !== 404) this.error = "Couldn't reach the controller.";
+      return;
+    }
+    this.rebuild();
+    // Up front, not on opening a tool: the list itself shows which plug each tool
+    // is on, and a scan started here has finished by the time anyone taps a row.
     if (this.tools.length) void this.scan();
   }
 
-  cur(): ToolCfg | null { return this.tools[this.index] ?? null; }
+  private rebuild(): void {
+    this.tools = this.elems().filter(e => e['type'] === 'tool').map(e => this.toCfg(e));
+  }
+
+  /** What the list says about a paired tool: the plug's name, and its threshold. */
+  plugPill(t: ToolCfg): string {
+    const who = t.label || t.hostname || t.ip;
+    return `${who} · above ${t.thresholdW} W`;
+  }
+
+  configure(t: ToolCfg): void {
+    this.error = '';
+    this.unpairNote = '';
+    this.touched = false;
+    this.editingName = t.name;
+    this.editing = { ...t };   // working copy; the list keeps the saved values
+  }
 
   drawLevel(d: DiscoveredOutlet): 'off' | 'low' | 'on' {
     if (!d.reachable || d.powerW < 1) return 'off';
@@ -258,8 +326,9 @@ export class ToolSetupComponent implements OnInit {
     return lvl === 'on' ? `${w} W · running` : lvl === 'low' ? `${w} W · standby` : `${w} W · idle`;
   }
 
+  /** Compared by id, not by object: `c` is a working copy of one of `tools`. */
   isAssignedElsewhere(ip: string, c: ToolCfg): boolean {
-    return this.tools.some(t => t !== c && t.hasPlug && t.ip === ip);
+    return this.tools.some(t => t.id !== c.id && t.hasPlug && t.ip === ip);
   }
 
   /** This tool's plug as the last scan saw it — carries who owns it, which is
@@ -269,9 +338,8 @@ export class ToolSetupComponent implements OnInit {
   }
 
   /** Take the plug off this tool, locally. The device half already ran inside the
-   *  row; this drops it from the config so the scan list comes back and the plug
-   *  is pickable for something else. Written out with the rest on Finish, like
-   *  every other edit on this screen. */
+   *  row; this drops it from the working copy so the scan list comes back and the
+   *  plug is pickable for something else. Written out on Save. */
   unpair(c: ToolCfg, note: string): void {
     c.ip = ''; c.hostname = ''; c.label = '';
     this.unpairNote = note;
@@ -296,56 +364,62 @@ export class ToolSetupComponent implements OnInit {
     finally { this.scanning = false; }
   }
 
-  prev(): void { if (this.index > 0) this.index--; }
-
   /**
-   * Leave without finishing. Nothing is written until Finish — save() runs once,
-   * on the last tool — so walking out mid-way discards every edit made since the
-   * screen opened. That is worth a question, but only when there is something to
-   * lose — landing here by accident should cost one tap to leave, not a dialog.
+   * Drop this tool's edits and go back to the list.
    *
-   * `touched` is set by the edit affordances themselves. The first cut compared a
-   * JSON snapshot taken at load, and asked on a screen nobody had typed into:
-   * binding a range input writes its value back through ngModel, so the model
-   * differs from its own snapshot before the user has done anything. An explicit
-   * flag cannot drift that way.
+   * A tool is written on its own Save, so backing out loses only what was
+   * changed on this one tool — but that is still worth a question when there is
+   * something to lose. `touched` is set by the edit affordances themselves. The
+   * first cut compared a JSON snapshot taken on open, and asked on a tool nobody
+   * had typed into: binding a range input writes its value back through ngModel,
+   * so the model differs from its own snapshot before the user has done
+   * anything. An explicit flag cannot drift that way.
    */
-  async exit(): Promise<void> {
+  cancel(): void {
     if (this.touched &&
-        !confirm('Leave without saving?\n\nPlug assignments and names from this session will be lost.')) return;
-    await this.router.navigate(['/']);
+        !confirm('Leave without saving?\n\nThe plug and name changes on this tool will be lost.')) return;
+    this.editing = null;
+    this.touched = false;
   }
 
-  async next(): Promise<void> {
-    if (this.index < this.tools.length - 1) { this.index++; return; }
-    await this.save();
+  /** Back out of a tool, or off the screen entirely — same as Gates. */
+  back(): void {
+    if (this.editing) { this.cancel(); return; }
+    void this.router.navigate(['/']);
   }
 
-  private async save(): Promise<void> {
-    if (!this.topo || this.saving) return;
+  /** Write the one tool being edited, then return to the list. */
+  async save(): Promise<void> {
+    const c = this.editing;
+    if (!this.topo || !c || this.saving) return;
     this.saving = true;
+    this.error = '';
     try {
-      for (const c of this.tools) {
-        const el = this.elems().find(e => e['id'] === c.id);
-        if (!el) continue;
-        // The name and the plug both belong to the MACHINE now: this screen is
-        // "which plug is this tool on", and a tool is a machine even when it has
-        // one port. Writing them to the port would leave the routing brain — which
-        // only ever reads machines — sensing nothing.
-        const m = machineOfPort(this.topo as unknown as ShopDoc, el);
-        if (!m) continue;
-        m.name = c.name;
-        if (c.hasPlug && c.ip) {
-          const outlet: RawEl = { gen: c.gen || 2, ip: c.ip, thresholdW: c.thresholdW || DEFAULT_THRESHOLD };
-          if (c.hostname) outlet['host'] = c.hostname;
-          if (c.label) outlet['name'] = c.label;
-          m.sensor = { outlet };
-        } else {
-          delete m.sensor;
-        }
+      const el = this.elems().find(e => e['id'] === c.id);
+      // The name and the plug both belong to the MACHINE now: this screen is
+      // "which plug is this tool on", and a tool is a machine even when it has
+      // one port. Writing them to the port would leave the routing brain — which
+      // only ever reads machines — sensing nothing.
+      const m = el ? machineOfPort(this.topo as unknown as ShopDoc, el) : null;
+      if (!m) { this.error = "That tool is no longer in the layout."; return; }
+      m.name = c.name;
+      if (c.hasPlug && c.ip) {
+        const outlet: RawEl = { gen: c.gen || 2, ip: c.ip, thresholdW: c.thresholdW || DEFAULT_THRESHOLD };
+        if (c.hostname) outlet['host'] = c.hostname;
+        if (c.label) outlet['name'] = c.label;
+        m.sensor = { outlet };
+      } else {
+        delete m.sensor;
       }
       await this.api.putTopology(this.topo);
-      await this.router.navigate(['/shop']);
+      this.editing = null;
+      this.touched = false;
+      this.rebuild();
+    } catch {
+      // The doc in memory now disagrees with the device. Re-reading it here would
+      // throw away the edit the user just made, so say so and leave the screen as
+      // it is — Save again is the retry.
+      this.error = "Couldn't save that tool — is the controller still answering?";
     } finally {
       this.saving = false;
     }
@@ -365,9 +439,9 @@ export class ToolSetupComponent implements OnInit {
       name: (machine?.name as string) || (e['name'] as string) || (e['id'] as string),
       gateLabel: this.gateLabel(e['id'] as string),
       // Mirrors what is actually paired. This was hardcoded true, so a tool
-      // deliberately set to manual re-opened the wizard showing "Yes" with no
-      // plug beside it — a toggle stating the opposite of the truth. The cost is
-      // one extra tap on a brand-new tool, which is the right trade.
+      // deliberately set to manual re-opened showing "Yes" with no plug beside
+      // it — a toggle stating the opposite of the truth. The cost is one extra
+      // tap on a brand-new tool, which is the right trade.
       hasPlug: !!outlet,
       ip: (outlet?.['ip'] as string) ?? '',
       gen: (outlet?.['gen'] as number) ?? 2,
