@@ -79,6 +79,18 @@ than restated. Delete an item when it lands; the git history is the record.
 
 ## Carried debt
 
+- **`POST /api/dustcollector/switch` is dead under a shop.** It drives collector
+  slot 0 directly (`SmartOutletControl::setDcManual`), and with a topology loaded
+  the main loop re-asserts every slot from `g_topoRuntime.collectorOn(systemId)`
+  on every pass — so the switch is undone microseconds after it lands. It reports
+  success the whole time, which is the worst way for an endpoint to be broken.
+  `POST /api/collector {systemId?, on}` replaced it (D-59) and goes through the
+  routing runtime, where the decision survives. Deleting the old route is
+  phase-1 cleanup: the route, `_dcSwitchPending`/`consumeDustCollectorSwitchRequest`,
+  its consumer in `firmware.ino`, and `ApiService.setDustCollector()` +
+  `DemoApiService`'s override. `setDcManual`/`setCollectorManual` themselves STAY —
+  the runtime is what calls them.
+
 - **No right-click menu on a duct.** Every other thing on the canvas has one now.
   A duct would want "add a fitting here" — which the branch dots already do, at the
   same point, so it may be redundant — and "delete this run", which has no
@@ -114,6 +126,14 @@ cheapest-and-most-unblocking first. Flashing goes through `dev.sh` — see the
 shop unless `dev.sh` does the backup for you.
 
 Delete an item once it has genuinely run. "It compiled" is not a pass.
+
+**This list is the critical path now.** Phase 2 merged to `main` on 2026-08-22 —
+222 files, and the only things in it proven on hardware are the C5 driving four
+servos (bench 1) and the SSD1306 screen. Everything else compiles and passes host
+tests, which is not the same claim. The newest arrival is the sharpest example:
+running a blower BY HAND (D-59) opens a path through the ordinary move queue
+before it starts the collector, so it exercises exactly the code a bench session
+would reach first — and no gate has ever moved for it.
 
 ### Bench Testing
 
