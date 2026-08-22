@@ -62,7 +62,7 @@ async function pollStatus(pred, { timeoutMs = 30000, intervalMs = 300 } = {}) {
   const start = Date.now();
   let last;
   while (Date.now() - start < timeoutMs) {
-    last = (await req('GET', '/api/status')).json;
+    last = (await req('GET', '/api/motion')).json;
     if (last && pred(last)) return last;
     await sleep(intervalMs);
   }
@@ -91,8 +91,8 @@ async function waitForServer({ timeoutMs = 15000, intervalMs = 300 } = {}) {
 async function run() {
   // 1. Auth — a protected route without the key is rejected.
   {
-    const r = await req('GET', '/api/status', undefined, { auth: false });
-    check('auth: /api/status without key → 401', r.status === 401, `got ${r.status}`);
+    const r = await req('GET', '/api/motion', undefined, { auth: false });
+    check('auth: /api/motion without key → 401', r.status === 401, `got ${r.status}`);
   }
 
   // 2. Start clean so the rest is deterministic.
@@ -101,7 +101,7 @@ async function run() {
     check('clearcal → ok', r.status === 200);
     const info = (await req('GET', '/api/info')).json;
     check('clearcal: info.numStops === 0', info && info.numStops === 0, `numStops=${info?.numStops}`);
-    const s = (await req('GET', '/api/status')).json;
+    const s = (await req('GET', '/api/motion')).json;
     check('clearcal: status homed=false currentStop=-1 outlets=[]',
       s && s.homed === false && s.currentStop === -1 && Array.isArray(s.outlets) && s.outlets.length === 0);
   }
@@ -115,9 +115,9 @@ async function run() {
       JSON.stringify(i));
   }
 
-  // 4. /api/status shape (unhomed).
+  // 4. /api/motion shape (unhomed).
   {
-    const s = (await req('GET', '/api/status')).json;
+    const s = (await req('GET', '/api/motion')).json;
     check('status shape', s && isStr(s.state) && isNum(s.currentStop) && isBool(s.homed)
       && isBool(s.enabled) && isBool(s.endstopHome) && Array.isArray(s.stops) && Array.isArray(s.outlets)
       && isBool(s.farEndstop) && isStr(s.manifoldModel) && isNum(s.stepsPerMm),
@@ -190,7 +190,7 @@ async function run() {
     check('outlet: missing stop → 400', (await req('PUT', '/api/outlets/2', { name: 'X', stop: 0 })).status === 400);
     const r = await req('PUT', '/api/outlets/2', { name: 'TestTool', stop: 2, ip: '192.168.1.250', gen: 2, threshold: 600 });
     check('outlet: valid config → ok', r.status === 200);
-    const s = (await req('GET', '/api/status')).json;
+    const s = (await req('GET', '/api/motion')).json;
     const o = (s.outlets || []).find(x => x.slot === 2);
     check('outlet: appears in status with name', o && o.name === 'TestTool', JSON.stringify(o));
   }
@@ -221,17 +221,17 @@ async function run() {
   // 13. Dust collector config/switch/delete.
   {
     await req('PUT', '/api/dustcollector', { gen: 2, ip: '192.168.1.251' });
-    let s = (await req('GET', '/api/status')).json;
+    let s = (await req('GET', '/api/motion')).json;
     check('dc: config → dcConfigured=true', s && s.dcConfigured === true, `dcConfigured=${s?.dcConfigured}`);
     check('dc: missing ip → 400', (await req('PUT', '/api/dustcollector', { gen: 2 })).status === 400);
     const sw = await req('POST', '/api/dustcollector/switch', { on: true });
     check('dc: switch → ok', sw.status === 200);
     if (isLocal) {
-      s = (await req('GET', '/api/status')).json;
+      s = (await req('GET', '/api/motion')).json;
       check('dc [local]: switch on → dcOn=true', s && s.dcOn === true);
     }
     await req('DELETE', '/api/dustcollector');
-    s = (await req('GET', '/api/status')).json;
+    s = (await req('GET', '/api/motion')).json;
     check('dc: delete → dcConfigured=false', s && s.dcConfigured === false);
   }
 
@@ -250,6 +250,25 @@ async function run() {
       `stop1=${s?.stops?.[1]?.mm}`);
     check('calibrate: gate role present', s && s.stops[1] && isStr(s.stops[1].role), JSON.stringify(s?.stops?.[1]));
     check('calibrate: bad gateCount → 400', (await req('POST', '/api/calibrate', { model: 'rockler-2.5', gateCount: 0 })).status === 400);
+  }
+
+  // 14b. Rockler manifolds ship in pairs → an ODD gate count rounds UP to even
+  //      (the extra port is a spare); 'custom' is left as entered.
+  {
+    await req('POST', '/api/calibrate', { model: 'rockler-2.5', gateCount: 3 });
+    let s = await pollStatus(x => x.state !== 'HOMING' && x.homed === true, { timeoutMs: 40000 });
+    let i = (await req('GET', '/api/info')).json;
+    check('calibrate: odd Rockler count 3 → rounded up to 4', i && i.numStops === 4, `numStops=${i?.numStops}`);
+    check('calibrate: spare gate 4 placed', s && s.stops[4] && s.stops[4].mm !== null, `stop4=${s?.stops?.[4]?.mm}`);
+
+    await req('POST', '/api/calibrate', { model: 'custom', gateCount: 3 });
+    await pollStatus(x => x.state !== 'HOMING' && x.homed === true, { timeoutMs: 40000 });
+    i = (await req('GET', '/api/info')).json;
+    check('calibrate: custom count 3 left as-is (no even rounding)', i && i.numStops === 3, `numStops=${i?.numStops}`);
+
+    // Restore the rockler-2.5 × 4 auto-placed state the later scenarios build on.
+    await req('POST', '/api/calibrate', { model: 'rockler-2.5', gateCount: 4 });
+    await pollStatus(x => x.state !== 'HOMING' && x.homed === true, { timeoutMs: 40000 });
 
     // Home is always the user's LEFT endstop, so gates always read Gate 1..N with
     // ascending position from home — the home-side answer never reorders them.
@@ -266,7 +285,7 @@ async function run() {
   {
     const ok = await req('POST', '/api/config/port-role', { index: 2, role: 'blocked' });
     check('port-role → ok', ok.status === 200);
-    const s = (await req('GET', '/api/status')).json;
+    const s = (await req('GET', '/api/motion')).json;
     check('port-role: gate 2 blocked', s && s.stops[2] && s.stops[2].role === 'blocked', `role=${s?.stops?.[2]?.role}`);
     check('port-role: invalid role → 400', (await req('POST', '/api/config/port-role', { index: 2, role: 'bogus' })).status === 400);
   }
@@ -275,7 +294,7 @@ async function run() {
   {
     await req('POST', '/api/clearcal');
     const i = (await req('GET', '/api/info')).json;
-    const s = (await req('GET', '/api/status')).json;
+    const s = (await req('GET', '/api/motion')).json;
     check('final clearcal: reset (numStops 0, unhomed, no outlets, dc off, cal cleared)',
       i && i.numStops === 0 && s && s.homed === false && s.currentStop === -1
       && s.outlets.length === 0 && s.dcConfigured === false

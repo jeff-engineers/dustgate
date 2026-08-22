@@ -1,7 +1,13 @@
 import { Injectable } from '@angular/core';
-import { HttpClient, HttpHeaders } from '@angular/common/http';
-import { BehaviorSubject, Observable, Subject, firstValueFrom } from 'rxjs';
+import { HttpClient, HttpErrorResponse, HttpHeaders } from '@angular/common/http';
+import { BehaviorSubject, Observable, Subject, filter, firstValueFrom, take } from 'rxjs';
 import { HardwareProfileService } from './hardware-profile.service';
+import type { Topology } from '@topology';
+import type { TopologyStatus } from '@topology-device';
+
+// Re-export so components/services can import topology types from one place.
+export type { Topology } from '@topology';
+export type { TopologyStatus } from '@topology-device';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -41,6 +47,7 @@ export interface SystemStatus {
   stepsPerMm?: number;        // calibrated steps/mm (nominal until a sweep runs)
   dcConfigured?: boolean;     // true once a dust collector plug has been assigned
   dcOn?: boolean;             // current dust collector switch state
+  ssid?: string;              // WiFi network the board is joined to; absent on older firmware
   stops?: StopInfo[];         // per-stop mm positions; embedded in every status push
   outlets: OutletStatus[];
 }
@@ -74,6 +81,80 @@ export interface DiscoveredOutlet {
   powerW: number;
   /** Shelly API generation (1 or 2); 0 if the mDNS hit didn't respond to a probe. */
   generation: number;
+  /** Who owns it (RFC §8): ours | unclaimed | dustgate | foreign | unknown.
+   *  Absent when the device couldn't ask. Decides whether renaming is offered
+   *  unprompted — we never write a plug someone else owns without being told to. */
+  claim?: string;
+  /** Who has it now, for the explanation on the row. */
+  holder?: string;
+  /** Someone else has it, but a human who has been told what breaks MAY take it.
+   *  The whole point of RFC §8 is that this is never automatic — see
+   *  takeoverOutlet(). */
+  takeable?: boolean;
+  /** Why it isn't pickable, or how it will be paired — device-supplied UI text. */
+  claimReason?: string;
+}
+
+/** What POST /api/outlets/name answered. */
+export interface OutletNameResult {
+  ok: boolean;
+  /** The full name that landed on the plug, owner suffix and all. */
+  name?: string;
+  error?: string;
+}
+
+/** What POST /api/outlets/release answered — the device half of unpairing. */
+export interface OutletReleaseResult {
+  ok: boolean;
+  /** Whether anything was actually written to the plug. False for a poll-only
+   *  plug, which we never wrote to in the first place. */
+  released: boolean;
+  /** Whether a previous owner's push target was handed back. */
+  restored?: boolean;
+  note?: string;
+  error?: string;
+}
+
+/** A secondary board found on the network by GET /api/nodes/discover. */
+export interface DiscoveredNode {
+  /** mDNS hostname — the STABLE key a topology binds link.host to. */
+  host: string;
+  /** Last-known address. Informational: the link re-resolves via host. */
+  ip: string;
+  /** Build target it reports, e.g. "qtpy_s3". */
+  board: string;
+  /** Servo channels it offers. */
+  servos: number;
+  /**
+   * The primary that has already claimed this board, if any. Present only for
+   * boards owned by SOMEONE ELSE — a board this device owns is just a board you
+   * can pair, and the paired list filters it out anyway.
+   *
+   * Same two fields GET /api/nodes reports for a refused link, deliberately: one
+   * vocabulary for "someone else has this" wherever it turns up. The device
+   * learns it from the node's `owner` mDNS TXT record, published when the node
+   * booted — so it is a hint that can be stale, and the handshake stays the
+   * authority. A board wrongly shown as free simply refuses the pairing.
+   */
+  claimedBy?: string;
+  /** Whether a takeover is offered for it. */
+  takeable?: boolean;
+}
+
+/** Live link state for one controller in the topology (GET /api/nodes). */
+export interface NodeLinkState {
+  id: string;
+  host: string;
+  /** Friendly name, stored on the device beside the pairing — so a board keeps it
+   *  through a layout wipe and can be named before any layout exists. Empty until
+   *  someone renames it. */
+  name?: string;
+  online: boolean;
+  /** millis() on the device when we last heard from it. Informational. */
+  lastSeen: number;
+  board: string;
+  fw: string;
+  caps: { servos: number; linear: number };
 }
 
 export interface DeviceInfo {
@@ -84,6 +165,11 @@ export interface DeviceInfo {
   idleTimeoutSec?: number;  // seconds of inactivity before the driver powers off; 0 = never
   manifoldModel?: string;   // manifold profile last calibrated against
   stepsPerMm?: number;      // calibrated steps/mm
+  /** Our mDNS name — the owner suffix this brain writes into the friendly name
+   *  of every plug it owns. Shown beside the outlet-name field so what lands on
+   *  the plug is never a surprise; discovery strips it, so this is the only way
+   *  the app learns it. */
+  owner?: string;
 }
 
 // ── Service ────────────────────────────────────────────────────────────────────
@@ -107,6 +193,9 @@ export class ApiService {
 
   deviceInfo: DeviceInfo | null = null;
 
+  /** Current /api/info retry delay, doubled on each failure up to a minute. */
+  private infoRetryMs = 3000;
+
   constructor(protected http: HttpClient, protected hardwareProfile: HardwareProfileService) {
     // Deferred to a microtask so subclass field initializers (which run after
     // super() returns) are set before an overridden init() can read them.
@@ -125,13 +214,39 @@ export class ApiService {
       );
       this.apiKey    = info.apiKey;
       this.deviceInfo = info;
+      this.infoRetryMs = 3000;   // so a later reconnect isn't stuck at the backed-off delay
       this.ready$.next(true);
       this.connectWebSocket();
     } catch (e) {
-      console.error('[API] Failed to fetch /api/info:', e);
-      // Retry after 3s (device might still be booting)
-      setTimeout(() => this.init(), 3000);
+      // A 200 that still lands here is the dev-server SPA fallback answering /api/info
+      // with index.html, which fails JSON parsing — i.e. `ng serve` is running with no
+      // /api proxy and there is no backend at all. That surfaces as
+      // "HttpErrorResponse {status: 200, ok: false}", which reads like a device fault
+      // and isn't one, so name it instead of logging the raw error.
+      if (e instanceof HttpErrorResponse && e.status === 200) {
+        console.error(
+          '[API] /api/info returned HTML, not JSON — the dev server has no /api proxy ' +
+          'and no backend is running. Use `bash dev.sh mock` (mock ESP32) or ' +
+          '`bash dev.sh demo` (no backend; needs ?demo=true in the URL).');
+      } else {
+        console.error('[API] Failed to fetch /api/info:', e);
+      }
+      // Back off rather than retrying at a fixed 3s forever: a missing backend never
+      // recovers on its own, and hammering it buried the console in repeats of the
+      // same stack. A booting device still gets caught by the early retries.
+      this.infoRetryMs = Math.min(this.infoRetryMs * 2, 60_000);
+      setTimeout(() => this.init(), this.infoRetryMs);
     }
+  }
+
+  /**
+   * Resolves once the API key is in hand. init() runs on a microtask, so a component
+   * that fetches straight out of ngOnInit would otherwise race it and get a 401 —
+   * which reads as "no shop configured" rather than "not ready yet". Await this first.
+   */
+  whenReady(): Promise<void> {
+    if (this.ready$.value) return Promise.resolve();
+    return firstValueFrom(this.ready$.pipe(filter(Boolean), take(1))).then(() => undefined);
   }
 
   // ── WebSocket ─────────────────────────────────────────────────────────────────
@@ -196,9 +311,10 @@ export class ApiService {
     );
   }
 
-  getStatus(): Promise<SystemStatus> {
+  /** Motion-hardware view: stepper state, position, endstops, outlet readings. */
+  getMotionStatus(): Promise<SystemStatus> {
     return firstValueFrom(
-      this.http.get<SystemStatus>(`${this.baseUrl}/api/status`, { headers: this.headers() })
+      this.http.get<SystemStatus>(`${this.baseUrl}/api/motion`, { headers: this.headers() })
     );
   }
 
@@ -225,7 +341,7 @@ export class ApiService {
     });
   }
 
-  /** Pings a Shelly outlet — the device auto-detects the API generation, trying Gen 1 then Gen 2. */
+  /** Pings a Shelly outlet — the device speaks the Shelly Gen2+ local API (Gen1 is not supported). */
   async pingOutlet(ip: string): Promise<PingResult> {
     const raw = await this.post<{ reachable: boolean; powerW: number; gen: number; name?: string }>(
       '/api/outlets/ping', { ip }
@@ -240,7 +356,9 @@ export class ApiService {
    * Each hit is already probed for reachability/generation/wattage, same as pingOutlet().
    */
   async discoverOutlets(): Promise<DiscoveredOutlet[]> {
-    const raw = await this.get<Array<{ ip: string; hostname: string; name: string; reachable: boolean; powerW: number; gen: number }>>(
+    const raw = await this.get<Array<{ ip: string; hostname: string; name: string; reachable: boolean;
+                                       powerW: number; gen: number; claim?: string; holder?: string;
+                                       takeable?: boolean; claimReason?: string }>>(
       '/api/outlets/discover'
     );
     return raw.map(r => ({
@@ -249,8 +367,64 @@ export class ApiService {
       name: r.name,
       reachable: r.reachable,
       powerW: r.powerW,
-      generation: r.gen
+      generation: r.gen,
+      claim: r.claim,
+      holder: r.holder,
+      takeable: r.takeable,
+      claimReason: r.claimReason,
     }));
+  }
+
+  /**
+   * Rename a plug — writes the Shelly's own app-visible name.
+   *
+   * `label` is the HUMAN half only. The device reattaches its owner suffix
+   * ("· dustgate-shop") when the plug is already ours, and leaves it off a plug
+   * that is merely unclaimed, so callers never handle the suffix and a round
+   * trip can't double it.
+   *
+   * Never throws on a refusal: a plug owned by someone else, or not answering,
+   * comes back as { ok: false, error } for the row to explain.
+   */
+  async renameOutlet(ip: string, label: string, takeover = false): Promise<OutletNameResult> {
+    try {
+      return await this.post<OutletNameResult>('/api/outlets/name',
+        { ip, label, ...(takeover ? { takeover: true } : {}) });
+    } catch { return { ok: false, error: 'the device could not be reached' }; }
+  }
+
+  /**
+   * TAKE a plug that currently reports to another controller (RFC §8).
+   *
+   * The deliberate, rare act, and its own endpoint rather than a flag on pairing:
+   * it breaks something on a machine the user isn't looking at, so nothing in the
+   * firmware can reach it except a call made here. The device arms a one-shot
+   * approval and repoints the plug on its next provisioning pass — there is no
+   * second way to repoint a plug, which is what keeps "never steal" true
+   * everywhere else.
+   *
+   * The caller MUST have shown the user takeoverWarning() first. The device can't
+   * verify that; it can only guarantee nothing takes a plug without this call.
+   *
+   * The plug must already be paired to something — the approval is stored on the
+   * outlet, so there is nowhere to put it otherwise.
+   */
+  async takeoverOutlet(ip: string): Promise<{ ok: boolean; error?: string }> {
+    try { return await this.post<{ ok: boolean; error?: string }>('/api/outlets/takeover', { ip }); }
+    catch { return { ok: false, error: 'the device could not be reached' }; }
+  }
+
+  /**
+   * Hand a plug back — strip our owner suffix and restore its push target.
+   *
+   * The DEVICE half of unpairing only. The caller deletes `sensor.outlet` either
+   * way: a plug you have physically unplugged is exactly when you want to detach
+   * it, so this failing must never block the unpair — it just changes what the
+   * UI says happened.
+   */
+  async releaseOutlet(ip: string): Promise<OutletReleaseResult> {
+    try { return await this.post<OutletReleaseResult>('/api/outlets/release', { ip }); }
+    catch { return { ok: false, released: false, error: 'the device could not be reached' }; }
   }
 
   saveOutletConfig() { return this.post('/api/outlets/save'); }
@@ -344,9 +518,107 @@ export class ApiService {
     return this.post('/api/config/port-role', { index, role });
   }
 
+  // ── topology API (additive; DemoApiService overrides these in-process) ──
+  /** Fetch the configured topology, or throws/404 if none is set. */
+  getTopology(): Promise<Topology> { return this.get<Topology>('/api/topology'); }
+  /** Replace the topology (validated device-side; 400 on invalid). */
+  putTopology(topology: Topology): Promise<{ ok: boolean }> { return this.put('/api/topology', topology); }
+  /** Live status: actuator states, tool activity, collector, conflicts, reachability. */
+  getStatus(): Promise<TopologyStatus> { return this.get<TopologyStatus>('/api/status'); }
+  /** Sim/demo only: inject a tool's power reading to drive routing (real firmware senses plugs). */
+  simTool(toolId: string, watts: number): Promise<TopologyStatus> {
+    return this.post<TopologyStatus>('/api/sim/tool', { toolId, watts });
+  }
+
+  /**
+   * Switch a tool on or off BY HAND — what the Live view's rows do.
+   *
+   * Distinct from simTool(), which injects a fake wattage and exists only in the
+   * mock and the browser demo. The Live view used to call that, so on real
+   * hardware every tap 404'd and the daily-driver screen drove nothing. Sensed
+   * tools still routed themselves off their Shelly plugs, which is what hid it.
+   */
+  setToolManual(toolId: string, on: boolean): Promise<unknown> {
+    return this.post('/api/tool', { toolId, on });
+  }
+
+  /**
+   * Run ONE system's blower by hand, or stop it.
+   *
+   * NOT setDustCollector() above, which posts to the pre-topology
+   * /api/dustcollector/switch and drives collector slot 0 directly. Under a shop
+   * that call cannot stick: the firmware asserts every slot from the routing
+   * runtime on every loop pass, so a plug switched behind the runtime's back is
+   * switched off again immediately. The decision has to be made where the routing
+   * is — see TopologyRuntime::setCollectorManual.
+   *
+   * `systemId` is optional: a shop with one blower has exactly one answer.
+   */
+  setCollectorManual(on: boolean, systemId?: string): Promise<unknown> {
+    return this.post('/api/collector', systemId ? { systemId, on } : { on });
+  }
+
+  /**
+   * Setup only: drive one servo directly so the user can watch the valve and capture
+   * where it lands. Rejects with 501 on a build without servo support, which the gate
+   * configurator surfaces rather than pretending the nudge worked.
+   */
+  // ── Secondary boards ───────────────────────────────────────────────────
+  /**
+   * Sweep the network for secondary boards (mDNS _dustgate._tcp, role=secondary).
+   * Discovery only POPULATES the picker — the saved topology still binds each
+   * board by an explicit link.host, so a spare board on the bench or a second
+   * system in the shop can never silently adopt itself into a live layout.
+   */
+  discoverNodes(): Promise<DiscoveredNode[]> {
+    return this.get<DiscoveredNode[]>('/api/nodes/discover');
+  }
+
+  /**
+   * Pair a secondary board, by mDNS host. The device persists this in NVS and
+   * dials it immediately — INDEPENDENT of the topology, so a paired board stays
+   * paired across a layout wipe (a full firmware+filesystem flash rewrites the
+   * partition the topology lives in) and links before any shop is drawn.
+   */
+  pairNode(host: string, name?: string, takeover?: boolean): Promise<unknown> {
+    // `takeover` rides exactly one pairing attempt — the device arms it for the
+    // next HELLO and clears it as it sends, so a confirmation can never turn
+    // into a reconnect loop that keeps re-claiming someone else's board.
+    return this.post('/api/nodes/pair', {
+      host,
+      ...(name ? { name } : {}),
+      ...(takeover ? { takeover: true } : {}),
+    });
+  }
+  unpairNode(host: string): Promise<unknown> {
+    return this.post('/api/nodes/pair', { host, remove: true });
+  }
+
+  /** Live link state per controller — which boards are actually answering. */
+  async getNodes(): Promise<NodeLinkState[]> {
+    const r = await this.get<{ nodes: NodeLinkState[] }>('/api/nodes');
+    return r?.nodes ?? [];
+  }
+
+  /**
+   * Nudge one servo to an absolute angle for calibration.
+   *
+   * `controllerId` says WHICH board — the primary relays it to that node. Pass the
+   * selector's own controllerId always, not just for secondaries: every board
+   * numbers its channels 0-3, so omitting it silently jogs the primary's servo on
+   * the same channel, which is a different valve entirely.
+   */
+  jogServo(channel: number, angle: number, controllerId?: string): Promise<unknown> {
+    return this.post('/api/servo/jog', { channel, angle, ...(controllerId ? { controllerId } : {}) });
+  }
+  /** De-energize a servo — the valve holds by friction/detent. */
+  detachServo(channel: number, controllerId?: string): Promise<unknown> {
+    return this.post('/api/servo/jog', { channel, detach: true, ...(controllerId ? { controllerId } : {}) });
+  }
+
   /**
    * Reset calibration and gate count — returns the device to unconfigured state
-   * so the setup wizard can run again from scratch.
+   * so setup can run again from scratch.
    */
   resetSetup() {
     if (this.deviceInfo) this.deviceInfo.numStops = 0;
@@ -386,31 +658,5 @@ export class ApiService {
     } catch {
       // Non-fatal — optimistic update from resetSetup() already set numStops = 0
     }
-  }
-
-  // ── Agent ─────────────────────────────────────────────────────────────────────
-
-  /**
-   * Forward a full Anthropic /v1/messages request through the ESP32 proxy.
-   * body should be the complete request object (model, messages, tools, etc.)
-   *
-   * Returns the raw fetch Response rather than a parsed body: the demo
-   * deployment (DemoApiService, /api/claude) streams Server-Sent Events back
-   * so the UI can render text as it's generated, while the real ESP32 proxy
-   * (/api/agent/chat) still returns one buffered JSON object. ClaudeService
-   * tells the two apart by response Content-Type, so both work through the
-   * same call site — we use fetch here instead of HttpClient because
-   * HttpClient doesn't expose a readable byte stream for the SSE case.
-   */
-  agentChat(body: unknown): Promise<Response> {
-    return fetch(`${this.baseUrl}/api/agent/chat`, {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Api-Key': this.apiKey },
-      body:    JSON.stringify(body),
-    });
-  }
-
-  setAnthropicKey(key: string) {
-    return this.put('/api/agent/key', { key });
   }
 }

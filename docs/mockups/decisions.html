@@ -1,0 +1,500 @@
+<title>DustGate Decision Register</title>
+
+<style>
+  :root {
+    --bg: #111; --surface: #1e1e1e; --raised: #262626; --border: #2e2e2e;
+    --text: #e8e8e8; --muted: #8a8a86; --accent: #f0a500; --success: #3cbe6e;
+    --danger: #d94444; --cable: #38b6f0; --radius: 14px;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); margin: 0; padding: 22px 18px 72px;
+         font-family: system-ui, -apple-system, sans-serif; font-size: 15px; line-height: 1.5; }
+  .wrap { max-width: 940px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px; }
+  h1 { font-size: 22px; font-weight: 600; margin: 6px 0 0; letter-spacing: -0.01em; }
+  .eyebrow { font-size: 11px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--muted); }
+  .lede { color: var(--muted); font-size: 13.5px; max-width: 68ch; margin: 6px 0 0; }
+  p { margin: 0; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9em; color: var(--text); }
+  a { color: var(--accent); }
+
+  /* ── controls ─────────────────────────────────────────────────────── */
+  .controls { display: flex; flex-direction: column; gap: 10px;
+              position: sticky; top: 0; background: var(--bg); padding: 10px 0 12px;
+              border-bottom: 1px solid var(--border); z-index: 5; }
+  .chips { display: flex; flex-wrap: wrap; gap: 7px; }
+  .chip { font-size: 12px; padding: 6px 12px; border-radius: 20px; cursor: pointer;
+          background: var(--surface); border: 1px solid var(--border); color: var(--muted);
+          font-family: inherit; }
+  .chip:hover { color: var(--text); }
+  .chip[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #1a1200; font-weight: 600; }
+  .chip:focus-visible, #q:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  #q { background: var(--surface); border: 1px solid var(--border); color: var(--text);
+       border-radius: 10px; padding: 10px 13px; font-size: 14px; font-family: inherit; width: 100%; }
+  #q::placeholder { color: var(--muted); }
+  .count { font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+  /* ── entries ──────────────────────────────────────────────────────── */
+  .list { display: flex; flex-direction: column; gap: 10px; }
+  .d { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+       padding: 13px 15px; display: flex; flex-direction: column; gap: 7px; }
+  .d.open { border-left: 3px solid var(--muted); }
+  .d.soon { border-left: 3px solid var(--accent); }
+  .meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 11px; }
+  .id { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted);
+        font-variant-numeric: tabular-nums; }
+  .when { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .area { padding: 2px 8px; border-radius: 20px; letter-spacing: 0.04em; text-transform: uppercase;
+          font-size: 10px; font-weight: 600; background: var(--raised); color: var(--muted); }
+  .area.control  { color: var(--accent);  background: rgba(240,165,0,0.13); }
+  .area.model    { color: var(--success); background: rgba(60,190,110,0.13); }
+  .area.canvas   { color: var(--cable);   background: rgba(56,182,240,0.13); }
+  .area.hardware { color: #c58bd8;        background: rgba(197,139,216,0.13); }
+  .area.process  { color: var(--muted);   background: rgba(138,138,134,0.15); }
+  .status { margin-left: auto; font-size: 10px; letter-spacing: 0.04em; text-transform: uppercase;
+            font-weight: 600; color: var(--muted); }
+  .status.soon { color: var(--accent); }
+  .status.open { color: var(--muted); }
+  .what { font-size: 14.5px; font-weight: 600; line-height: 1.4; text-wrap: balance; }
+  .why  { font-size: 12.5px; color: var(--muted); line-height: 1.55; }
+  .why b { color: var(--text); font-weight: 600; }
+  .where { font-size: 11.5px; color: var(--muted); }
+  .where code { color: var(--muted); }
+  .empty { color: var(--muted); font-size: 13px; padding: 24px 4px; }
+
+  mark { background: rgba(240,165,0,0.28); color: var(--text); border-radius: 2px; padding: 0 1px; }
+</style>
+
+<div class="wrap">
+
+  <header>
+    <span class="eyebrow">DustGate · canonical</span>
+    <h1>Decision register</h1>
+    <p class="lede">
+      Every decision that still stands, with the reason and where it lives. Reversed
+      and superseded calls are <em>not</em> here — only the version in force, so this
+      can be read as fact rather than history.
+      <br><br>
+      <b style="color:var(--text)">Adding one:</b> append an object to
+      <code>DECISIONS</code> at the top of this file. Newest first. If a decision
+      replaces an older one, edit the old entry rather than adding a second —
+      two entries that disagree is the failure this register exists to prevent.
+    </p>
+  </header>
+
+  <div class="controls">
+    <input id="q" type="search" placeholder="Search decisions…" autocomplete="off" aria-label="Search decisions"/>
+    <div class="chips" id="chips" role="group" aria-label="Filter by area"></div>
+    <span class="count" id="count"></span>
+  </div>
+
+  <div class="list" id="list"></div>
+</div>
+
+<script>
+// ─────────────────────────────────────────────────────────────────────────
+// THE REGISTER. Append here; the page renders itself from this array.
+//   status: 'standing'  in force and built
+//           'soon'      agreed, not built yet
+//           'open'      deliberately undecided — recorded so it isn't decided by accident
+// ─────────────────────────────────────────────────────────────────────────
+const DECISIONS = [
+  // ── newest ───────────────────────────────────────────────────────────
+  { id: 'D-59', date: '2026-08-22', area: 'ui', status: 'standing',
+    what: 'A blower can be run BY HAND, per system \u2014 and the decision lives in the routing runtime',
+    why: 'The collector card\u2019s switch was stop-only: it returned immediately unless the system was already running, so tapping an idle blower did nothing while looking exactly like a control that would start it. Running the blower on its own is a real errand \u2014 clear a clog, sweep up, prove a run \u2014 and the routing brain has always been built for it (idle-hold exists so that "a manual collector start can\u2019t dead-head"). <b>The capability was half there and unreachable.</b> SmartOutletControl has had <code>setCollectorManual(slot, on)</code> per system all along, and <code>POST /api/dustcollector/switch</code> reaches slot 0 \u2014 but under a shop that call cannot stick, because the main loop asserts every collector plug from <code>g_topoRuntime.collectorOn(systemId)</code> on every pass and switches it straight back. So the flag had to live IN the runtime, next to the routing, which is where the new <code>POST /api/collector {systemId?, on}</code> goes. <b>It HOLDS</b>: there is no automation to hand back to, and a blower that switched itself off partway through clearing a clog would be worse than one left running \u2014 a machine starting on the same system routes over the top and the run outlives it. <b>It opens a path FIRST</b>, through the ordinary move queue, so ON still waits for the moves to drain: a system whose gates are all closed (a layout just adopted, or one stopped by dead-head risk) is precisely what a blower must not start into. The gate it opens is the system\u2019s first machine in document order \u2014 not "the last one served", which sounds better but is never different, since the only way to reach a sealed system is one where nothing has run. <b>Off is immediate, with no coast</b>: the coast catches dust still in the pipe after a cut, and nothing was being cut.',
+    where: 'setCollectorManual() in shared/device-model/topology-device.js \u00b7 TopologyRuntime::setCollectorManual/queueOpenPath/systemHasOpenPath \u00b7 POST /api/collector in HttpApiServer.cpp + firmware.ino + tools/mock-api.js \u00b7 toggleCollector() in live.component.ts \u00b7 paired cases in manual-blower.test.js and test_manual_blower.cpp, plus \u00a73b of topology-conformance.js' },
+
+  { id: 'D-58', date: '2026-08-22', area: 'ui', status: 'standing',
+    what: 'Demo mode is seeded with a REAL exported shop, not a composed one',
+    why: 'The seed was hand-built: one blower, one of each gate kind, everything named and plugged in \u2014 a teaching example, and tidier than any shop anyone actually has. It has been replaced by an export off the bench device (<code>jeff-s-shop-5.json</code>, 2026-08-22), because the lumps in a real layout are exactly what the UI has to survive. <b>Two systems</b> (a cyclone and a shop vacuum with a six-outlet sliding gate), so the live view\u2019s per-system blocks and the canvas\u2019s row bands have something to draw. <b>A port that crosses the seam</b> \u2014 the table saw\u2019s overarm collector stands in the shop-vac system while its machine lives on the cyclone \u2014 which is the one case the grey dashed run exists for and the old seed never exercised by eye. <b>Six plugs and five machines without</b>, so both halves of the plug row and a non-empty tray are on screen. <b>Machine names were healed on the way in</b>: the shop was drawn entirely on the canvas, so every machine in the export is still called \u201cNew tool\u201d (see D-57) \u2014 baked in here so the fixture is a fixture and not a bug preserved in amber. A fourth fake board was added to the node fixtures on both runners, because the new shop pairs the board that used to be the \u201cfound but not added\u201d example.',
+    where: 'services/demo-topology.ts \u00b7 demoNodes in demo-api.service.ts \u00b7 NETWORK_BOARDS in tools/mock-api.js' },
+
+  { id: 'D-57', date: '2026-08-22', area: 'canvas', status: 'standing',
+    what: 'A machine\u2019s name is written in ONE place, and old shops get theirs back on read',
+    why: 'A machine\u2019s name is stored twice \u2014 on the machine, and on each of its ports, where it is snapshotted at creation (\u201cTable saw\u201d, \u201cTable saw \u00b7 overarm\u201d). Both copies have readers, and each screen wrote only the one it read: the canvas rename wrote the PORT, tool setup wrote the MACHINE. So renaming on the canvas left the live view, tool setup and the plug tray\u2019s <em>Use it for</em> picker on the old name, and renaming in tool setup left the canvas on it. A machine with two names is the \u201cwhich saw is that?\u201d question this UI exists to answer. <b>Both paths go through <code>renameMachine()</code> now</b>, which writes the machine and re-derives every port caption \u2014 derived rather than copied across, since a supplemental caption quotes the name it was built from and would otherwise keep quoting the old one. <b>And the damage is repaired on read.</b> A shop drawn entirely on the canvas has every machine still called \u201cNew tool\u201d (the bench shop had eleven), so <code>healMachineNames()</code> in toShop() gives a defaulted machine the name its primary port carries. ONE DIRECTION ONLY: a machine with a name of its own keeps it, because \u201crenamed in tool setup, never touched on the canvas\u201d is a real case and healing both ways would make whichever screen ran last the winner.',
+    where: 'renameMachine()/healMachineNames() in services/shop-doc.ts \u00b7 rename() in build.component.ts \u00b7 save() in tools/tool-setup.component.ts \u00b7 shop-doc.spec.ts' },
+
+  { id: 'D-56', date: '2026-08-22', area: 'ui', status: 'standing',
+    what: 'Text that cannot fit is trimmed where the text is, not clipped by the box around it',
+    why: 'Two of the same bug on different screens, both found while checking the app was screenshot-clean. The live view\u2019s nav row was a flex row of four destinations with <code>flex: 1</code> and <code>white-space: nowrap</code> \u2014 and flex:1 cannot shrink an item below its own text, so <b>Settings hung off the right edge of a 375px phone</b> the moment /gates made it four. It is a grid now, <code>repeat(auto-fit, minmax(150px, 1fr))</code>, which lays them two-by-two inside the 460px column and re-flows on its own if the count changes again \u2014 a breakpoint tuned to \u201cfour\u201d would be one more thing to remember to edit. The plug tray\u2019s chips carried <code>text-overflow: ellipsis</code> on the CHIP, which does nothing: the property applies to the block holding the text and the chip is a flex row whose text is a child, so a plug still on its factory hostname was <b>chopped mid-character</b> at the chip edge. The ellipsis moved onto the label, with <code>min-width: 0</code> so it can shrink inside the row at all.',
+    where: '.nav in live/live.component.ts \u00b7 .chip .nm in build/build.component.css' },
+
+  { id: 'D-55', date: '2026-08-22', area: 'canvas', status: 'standing',
+    what: 'A label is trimmed to the room it has, and two cables never share one corridor',
+    why: 'Three drawing bugs in the shop, each with the same root: a number typed in one place and assumed in another. <b>The plug chip</b> trimmed a name at a flat 11 characters, which is not a width \u2014 \u201cDrum Sander\u201d is 11 characters and 60 units wide in a chip that had about 30 to spare, so it ran back over its own outlet icon and out through the right-hand edge. The chip is 6 units wider now (68 of the body\u2019s 76) and the name is trimmed BY MEASURE to whatever the icon leaves it, from one set of constants the template and the trimmer both read. <b>A machine\u2019s name</b> had no limit at all: \u201cCabinet table saw\u201d overhangs a 76-wide body by 15 units on each side, over the ducts and whatever stands beside it. It is trimmed the same way, but to the body plus <b>6 units of tolerated overhang</b> \u2014 not to the body itself: names have always run edge to edge (\u201cDrum sander\u201d is 77 units on a 76-unit body), and trimming to the box would put an ellipsis in half the names in a real shop to buy back a unit nobody can see. What must not happen is a name reaching the piece beside it, and there are 16 units of gap either side. The full name rides along as the title wherever it was cut. <b>Two cables</b> could be routed down the SAME clear gutter, one drawn exactly over the other \u2014 nothing in the crossing test saw it, because they never intersect, they coincide. Two cables could also share the horizontal LANE, which no cost function sees: the lane is picked from the cable\u2019s rank, and with the gates one row under their board every rank past the first computed a lane below the ceiling and was CLAMPED onto it \u2014 three cables drawn as one line. The nesting compresses to the gap there actually is now, and only ever compresses, so a roomy drop still steps by the full LANE_STEP. Sharing a corridor is also the dearest thing a cable can do, above crossing another cable: a crossing is legible (the hop says they don\u2019t touch), but a shared corridor draws two cables as one line and the second has simply vanished until it peels off. Widths come from a table rather than getBBox \u2014 this runs once per machine per change-detection pass, and a layout read there is how a canvas starts to crawl \u2014 and the table is rounded UP, so it trims a character early rather than letting text back over the icon.',
+    where: 'build/plug-label.ts (+ its spec) \u00b7 DOCK_* and nameLabel()/nameTitle() in build.component.ts \u00b7 TOOL_HALF_W in build/routing/geometry.ts \u00b7 sharesLane() + CROSSING_COST.share and the lane-spacing compression in build/wiring/wire-geometry.ts, cases W8b and W12\u2013W13' },
+
+  { id: 'D-54', date: '2026-08-22', area: 'ui', status: 'standing',
+    what: 'The live view is one block per airflow system, in shop-layout order \u2014 and its stop switch stops one blower, not the shop',
+    why: 'The page was one collector card over one flat list of every tool in the building. With a second system that card read <b>"2 dust collectors"</b> \u2014 a count, not a name \u2014 and the list said nothing about which blower any tool ran, which is the single most useful fact this page knows about it. Now each system gets its own card and its own tools. <b>ORDER comes from the canvas:</b> the build page stripes systems by the topmost row any of their pieces stands on (<code>systemRowBands()</code>), so this reads the same saved <code>ui.layout</code> cells and sorts the same way \u2014 two pages disagreeing about which collector is "the first one" would be worse than the count it replaced. Document order is the fallback for a shop never laid out, which is what auto-layout would produce anyway. <b>A machine belongs to the system of its PRIMARY port</b> \u2014 a secondary run may cross the seam, but the tool lives in one system and that is the blower it starts. <b>Two things fixed on the way:</b> the card\u2019s switch called <code>stopAll()</code>, which stopped every tool in the shop from whichever card you tapped \u2014 on a two-system layout that reached across and shut down a machine in the other half of the building; and the cards now read per-system state from <code>status.systems</code>, which the firmware (TopologyRuntime::writeStatus) and the model (statusView) have both published all along but which was missing from the TopologyStatus interface, so no caller could see it. Without it every card would show the shop-wide <code>collectorOn</code> and an idle blower would claim to be running whenever the other one was. Machines with no port in any system get a named group rather than being dropped \u2014 they were visible in the flat list, and a tool vanishing off the page is worse than one shown as unable to collect.',
+    where: 'buildGroups()/stopSystem()/applyStatus() in live/live.component.ts \u00b7 SystemStatus + TopologyStatus.systems in shared/device-model/topology-device.d.ts' },
+
+  { id: 'D-53', date: '2026-08-21', area: 'canvas', status: 'standing',
+    what: 'A takeover approval is held against the ADDRESS, so one dialog does naming, pairing and taking',
+    why: 'D-52 shipped the takeover but left an errand behind it: a plug not yet on a tool could only be renamed, and the dialog told you to go pair it with a tool, find that tool\u2019s outlet row, and take it over there. <b>That errand was invented by where the approval happened to be stored</b>, not by anything the user cares about \u2014 <code>SmartOutlet::approveTakeover()</code> lives on the outlet OBJECT, and an unpaired plug has none. Storing it against the IP instead removes the errand and fixes a second bug nobody had hit yet: <code>configureOutlet()</code> builds a BRAND NEW outlet on every topology adopt, and adopt is exactly what pairing performs \u2014 so an approval recorded against the old object was discarded by the very save that made the plug usable. Approvals now wait at the address and are applied to whatever plug turns up there. <b>The invariant is untouched:</b> still settable only from POST /api/outlets/takeover, still one-shot, still cleared the moment the repoint lands, and the repoint itself still happens on the ordinary provisioning pass \u2014 there remains exactly one way to repoint a plug. The tray dialog consequently grew a <em>Use it for</em> tool picker and its own takeover button, and its Save writes the name to the plug FIRST, then the pairing to the layout, so a plug that refuses the rename doesn\u2019t leave a tool paired to something the Shelly app calls a different name.',
+    where: 'SmartOutletControl::approveTakeoverByIp/takeoverApprovedFor/clearTakeoverApproval \u00b7 the carry-over in configureOutlet() \u00b7 the takeover block in firmware.ino \u00b7 pairableMachines()/doChipTakeover()/commitChipRename() in build.component.ts' },
+
+  { id: 'D-52', date: '2026-08-21', area: 'canvas', status: 'standing',
+    what: 'Ownership GATES a write, it does not forbid it \u2014 and renaming someone else\u2019s outlet is a different act from taking it',
+    why: 'D-49 and D-50 left the refusal absolute: a plug owned by Home Assistant or another brain showed a greyed name box, an explanation, and no way forward at all. That is the wrong shape. <b>The invariant worth protecting is that nothing AUTOMATIC ever writes a plug we don\u2019t own</b> \u2014 which is what makes silent theft structurally impossible \u2014 and a human who has been told what breaks was never the threat. plug-claim\u2019s <code>mayRepoint(claim, confirmed)</code> has carried that second argument from the start; the outlet UI simply never passed it, and <code>POST /api/outlets/takeover</code> had been in the firmware since the claim work with <b>nothing in the app able to call it</b>. <b>Two overrides, kept apart, because their blast radius is not the same:</b> <em>Rename it anyway</em> writes the label and nothing else \u2014 the plug keeps reporting to its owner, no automation over there stops working, and it gets NO owner suffix because a plug does not become ours by being relabelled. <em>Take this outlet</em> repoints its push target, which is the one that makes something go quiet on a machine the user isn\u2019t looking at, so it names who goes quiet using plug-claim\u2019s own <code>takeoverWarning()</code> \u2014 shared with the device so the sentence cannot drift \u2014 and says that Remove hands it back. <b>Neither override is offered when the ownership read FAILED:</b> we cannot show whose plug it is, and confirming a question nobody could pose is not consent. Refusing outright would only move the same repoint into the Shelly app, where there is no record of it at all.',
+    where: 'POST /api/outlets/name accepts <code>takeover</code> \u00b7 POST /api/outlets/takeover finally reachable via ApiService.takeoverOutlet() \u00b7 canTakeover()/overrideName() in paired-outlet-row.component.ts \u00b7 chipOverride in build.component.ts \u00b7 the @plug-claim path alias, so the UI reuses the warning rather than restating it' },
+
+  { id: 'D-49', date: '2026-08-21', area: 'canvas', status: 'standing',
+    what: 'A smart outlet\u2019s name lives on the plug; the layout keeps a copy only so an offline plug still reads as a name',
+    why: 'The name shown for a plug was read live off the Shelly on every scan (<code>Switch.GetConfig</code>, falling back to <code>Sys.GetConfig</code>) and stored nowhere \u2014 so a plug that was switched off, or paired before the last sweep, decayed to a hostname or a bare IP, and reopening the pairing sheet on a paired tool showed an address rather than a name. <b>The fix is not a second name.</b> DustGate already writes the plug\u2019s friendly name on pairing (\u201c&lt;label&gt; \u00b7 &lt;our mDNS name&gt;\u201d, so the plug says who is using it in the Shelly app where no DustGate UI exists to explain it) \u2014 you simply never got to choose the label half. So renaming writes the plug, and <code>sensor.outlet.name</code> holds a CACHED copy for display: the live scan always wins, which means renaming a plug in the Shelly app still shows up here on the next sweep. <b>Superseded in part by D-52:</b> the refusal described here is a gate, not a wall \u2014 a human can override it. <b>You can rename a plug before pairing it</b> \u2014 four identical <code>shellyplug-s-\u2026</code> on a shelf is exactly when a name earns its keep, and a name that only arrives after pairing arrives too late to help you pair. An unclaimed plug renamed that way gets the BARE label: stamping our owner suffix on a plug we have not taken would be a claim we have not earned.',
+    where: 'POST /api/outlets/name \u00b7 PairedOutletRowComponent \u00b7 the tray-chip rename sheet in build.component.html \u00b7 the Outlet typedef in shared/device-model/topology.js' },
+
+  { id: 'D-50', date: '2026-08-21', area: 'canvas', status: 'standing',
+    what: 'Unpairing is a verb, it hands the plug back, and it never blocks on the plug answering',
+    why: 'Removing a smart outlet from a tool was only possible as a side effect \u2014 flip \u201cSmart outlet on this tool?\u201d to No and Save \u2014 and all it did was drop <code>sensor.outlet</code>. The plug kept our owner suffix and kept pushing at us forever, and a plug we had TAKEN from another controller was never handed back, even though <code>previousPushUrl</code> had been stored on every takeover for exactly that and read by nothing. <b>Remove now does three things:</b> drops it from the layout, strips our suffix from the plug\u2019s name, and restores its previous push target (or disables pushing, if it was unclaimed when we found it). <b>The device half is best-effort by design.</b> A plug you have physically unplugged is precisely when you want to detach it, so the layout write happens whatever the plug says, and the UI reports what it actually managed \u2014 including \u201cthe outlet kept DustGate\u2019s name and is still reporting here\u201d. The confirm is inline rather than a browser dialog because the consequence differs by who owns the plug: a poll-only plug owned by Home Assistant was never written to, so nothing is written on the way out either, and saying \u201creleased\u201d would imply we reached into someone else\u2019s device.',
+    where: 'POST /api/outlets/release \u00b7 ShellyGen2Outlet::releasePush() \u00b7 PairedOutletRowComponent.doRemove() \u00b7 the release block in firmware.ino' },
+
+  { id: 'D-51', date: '2026-08-21', area: 'canvas', status: 'standing',
+    what: 'Anything ambiguous carries a tooltip \u2014 and the tooltip is never the only place it is said',
+    why: 'Standing habit, adopted while building the outlet row: a control whose consequence is not obvious from its label gets a <code>title</code> \u2014 \u201cRemove this outlet from Table saw and from the system\u201d, not just \u201cRemove\u201d. <b>It supplements, it does not carry.</b> Hover does not exist on the phone this UI is designed for, so anything a person must know to act stays in visible text: the confirm spells the consequence out, the row explains in plain sight why a foreign plug cannot be renamed, and the tooltip only saves you from having to try it. Same reason a field gets a visible label rather than a placeholder \u2014 two name inputs of the same size sat on the setup screen, the tool\u2019s and the plug\u2019s, with nothing but position to tell them apart.',
+    where: 'title= throughout paired-outlet-row.component.ts, element-outlet-config.component.ts and tool-setup.component.ts \u00b7 extends the existing \u201chover is never the only trigger\u201d rule' },
+
+  { id: 'D-38', date: '2026-08-20', area: 'control', status: 'standing',
+    what: 'Primary ports are always on; secondary ports are on whenever possible',
+    why: 'A tool’s <b>primary</b> port is always connected to suction with its collector running — non-negotiable. Its <b>secondary</b> port gets its own system’s collector turned on too, whenever that system is free. When another tool needs that system, the auxiliary port is temporarily disconnected and the tool that needs it runs; it reconnects once the contest clears. <b>"Never both" in the 2026-08-16 parking note meant two TOOLS at once, not two blowers</b> — one machine drives both its collectors, and the one-tool-at-a-time assumption is D-08, untouched.',
+    where: 'Already implemented and tested on both sides: arbitration order (primary beats supplemental, then most-recent-wins within each) in shop.js routeShop() and control/Shop.h:260, and the C++ test "one machine starts both blowers" (test_nodebus.cpp). A dropped supplemental degrades a machine to <code>partial</code>, never <code>stripped</code>.' },
+
+  { id: 'D-48', date: '2026-08-20', area: 'canvas', status: 'standing',
+    what: 'A port sits at the centre of its edge unless it actually shares that edge \u2014 and a duct meets it square',
+    why: 'Two habits of the port drawing were fighting the picture. <b>The offsets were preemptive:</b> any machine that HAD a secondary port shifted its primary square left, and every secondary side entry hung <code>SECONDARY_PORT_DX</code> below the midline \u2014 both to dodge a collision that only happens when two of a machine\u2019s runs land on the SAME edge. A jointer whose auxiliary went off to the left still had its square shoved aside, dodging a glyph that wasn\u2019t there, and the auxiliary sat low on the left edge for no reason a reader could see. Which edge each run lands on is a fact about the finished route, so the offsets are now <b>derived from the solve</b> (resolvePortOffsets) and applied only where an edge really is shared. <b>Why reading its own output is safe:</b> every offset is smaller than half a lattice step and entry() rounds to the nearest lattice column/row, so an offset lands on the same lattice node either way \u2014 it can move where a run is drawn to end, never which way the run goes, and therefore never which edge it picks. One pass; a second could only agree. <b>Second habit:</b> a port that is off-lattice was joined to the lattice by a straight line, which drew a diagonal for the last few pixels \u2014 the one place ductwork stopped looking like ductwork. squareOffEnds() puts an elbow in along the port\u2019s own axis instead, so the jog runs along the lattice line the run already occupies and drops in square. A short jog beats a slant: real pipe turns at 90\u00b0.',
+    where: 'squareOffEnds() in route-grid.ts \u00b7 resolvePortOffsets() / landedEdge() in build.component.ts \u00b7 SceneNode.portDy \u00b7 R3d in router.spec.ts covers both the centred and the shared case' },
+
+  { id: 'D-47', date: '2026-08-20', area: 'canvas', status: 'standing',
+    what: 'A run END is not a piece: it crosses into another system freely, and claims no rows of its own',
+    why: 'The band rule refused to let anything sit in another system\u2019s rows, and it was catching the loose end of a duct \u2014 <code>That row belongs to Dust collector 2</code> \u2014 which stopped you pulling a run <em>towards</em> the other collector, the exact gesture that ends in a second port. <b>An end is bare pipe, not a piece</b>, and pipe already crosses the seam for a living. Both halves of that definition have to land together, and the second is the one that is easy to miss: an end is also left OUT of <code>systemRowBands()</code>, or a run reaching across would stretch its own system\u2019s stripe over the neighbour\u2019s and the grey ground would overlap \u2014 the very thing the band rule exists to prevent. The rule comes back the moment the end stops being one: <b>filling an end standing in another system\u2019s rows is refused</b>, greyed in the menu with whose rows they are, so pipe may reach across but a gate or a tool may not stand there. Cap and Delete stay live \u2014 neither makes it a piece. <b>Bands stay contiguous, D-42 is untouched.</b>',
+    where: 'isRunEnd() / bandBlockedBy() / bandBlockedByFor() / fillBlockedBy() and systemRowBands() in build.component.ts' },
+
+  { id: 'D-45', date: '2026-08-20', area: 'canvas', status: 'standing',
+    what: 'A drag preview is drawn in the geometry of the thing it will become \u2014 never line-of-sight',
+    why: 'Pulling a run out of an outlet drew a straight line from the dot to the pointer, and dragging a cable off a board port drew an S-curve between the two. Both are <b>lines of sight</b>: they show where the thing will END and say nothing true about its shape. A duct leaves an outlet along its own axis and turns at right angles; a cable leaves a port on its underside and runs a lane. So the preview and the result were different pictures, and you learned the real one on release. Now each preview is drawn by <b>the same function that draws the finished thing</b> \u2014 <code>roundedPath()</code> for a duct (lifted out of ductD()), <code>cableRun()</code>+<code>cablePath()</code> for a cable \u2014 so they agree by construction rather than by two people remembering to keep them in step. What the preview deliberately does NOT do is solve the route: one elbow, rank 0, no cost model. Lanes and obstacle avoidance are facts about a run\u2019s neighbours, and mid-gesture it has none \u2014 pretending otherwise would make the line jump around under the pointer. <b>Honest about the geometry, silent about the traffic.</b>',
+    where: 'dragLineD() / elbow() / roundedPath() and dragCableD() in build.component.ts' },
+
+  { id: 'D-46', date: '2026-08-20', area: 'canvas', status: 'standing',
+    what: 'A drag that reaches into another system goes grey while you are still holding it',
+    why: 'A secondary port\u2019s run is the one thing allowed to cross the seam, and the finished run says so by being grey and dashed (D-\u2011 the .duct.sec vocabulary). The drag that creates it looked like any other run right up to the drop, then changed colour \u2014 so the one moment the rule is worth stating was the one moment it wasn\u2019t. The preview now takes the grey as soon as the pointer is over another system\u2019s band. <b>Only the colour moves:</b> accent-orange means UNFINISHED and grey means CROSSES, they are different facts, and a preview is legitimately both \u2014 so it stays dashed either way.',
+    where: 'dragCrossesSeam() in build.component.ts \u00b7 .drag-stub.crossing in build.component.css' },
+
+  { id: 'D-44', date: '2026-08-20', area: 'canvas', status: 'standing',
+    what: 'Validation errors are translated for the guide bar, and the translation lives in the UI',
+    why: 'The guide bar was printing the model\u2019s own words: <code>system "s2": element "p8" must have exactly one parent duct (has 0)</code>. <b>Nobody named anything s2 or p8</b> \u2014 the editor did, silently \u2014 so the one line meant to tell a woodworker what to fix named two things they have never seen and a rule in schema vocabulary. The translation is a <b>UI</b> concern and stays out of <code>shared/device-model</code>: those message strings are part of the contract firmware is certified against, while what a person should be told changes on UI grounds. Two layers, and the second is load-bearing \u2014 a hand-written sentence per failure the canvas can actually produce, and under it a fallback that keeps the model\u2019s words but swaps every quoted id for the thing\u2019s name. New checks land in the model without the UI knowing, so an unknown message has to come out <b>stiff but correct, never a raw id</b>. The system is named only when the shop has two, and a machine\u2019s only port is known by the MACHINE\u2019s name (displayName()). Still open: marking the offending piece on the canvas \u2014 every issue carries a <code>ref</code>, so the data is there and only the drawing is missing.',
+    where: 'services/wip-message.ts \u00b7 wip-message.spec.ts pins the phrasings against the REAL validator strings' },
+
+  { id: 'D-42', date: '2026-08-20', area: 'canvas', status: 'standing',
+    what: 'A system\u2019s grey ground is board, not a lid \u2014 the grid runs through it and it answers a right-click',
+    why: 'The grey band under each system was drawn as an opaque rect over the dotted board, which made it read as a <b>panel laid on top</b> rather than as ground the shop stands on. Two things followed from that and both were bugs: the dots stopped at the band, so a second system looked like a hole punched in the grid; and the rect sat over the board rect that carries the canvas menu, so <b>right-clicking anywhere inside a second system did nothing</b> \u2014 the one gesture that places a piece into an empty cell was swallowed the moment a shop grew a second collector. Fixed by treating the ground as board: the same <code>#bdots</code> pattern is re-laid over the grey (userSpaceOnUse, so it stays in step with the dots outside the band with no offset to maintain), and the grey itself carries the same context menu the bare board does.',
+    where: 'canvas.html \u00a71 \u00b7 .grounds in build.component.html, .ground-dots in build.component.css' },
+
+  { id: 'D-43', date: '2026-08-20', area: 'canvas', status: 'standing',
+    what: 'A collector in column 0 offers no LEFT \u2295',
+    why: 'A collector draws one \u2295 per free side. Growing LEFT is legal in general \u2014 the cell is negative for a beat and <code>normalizeCells()</code> slides the whole board back under it \u2014 but on the leftmost collector that offer is <b>to shove the entire shop sideways to reach a cell already sitting free on the right</b>. So the left side drops out at column 0 and comes back the moment the collector is dragged off the edge. The rule is about the offer, not the capability: nothing else changed about growing left.',
+    where: 'outputDots() in build.component.ts' },
+
+  { id: 'D-40', date: '2026-08-20', area: 'canvas', status: 'standing',
+    what: 'A duct always lands on a port, never on bare box',
+    why: 'Every machine draws its square <b>primary port</b> at the point its own run arrives, and a <b>secondary port</b> sits where its own run arrives — so the drawing says which pipe feeds what without following either of them. Both prefer the TOP edge and the router prefers a top entry to match; when a side run is genuinely shorter the port <b>moves to that side</b> rather than leaving the pipe pointing at nothing (D-41 extends that to both). Dragging a machine carries both with it. Nothing hollow or dashed advertises a port that does not exist yet — the glyph appears with its port and never before, and an existing port is the handle for re-running its own pipe.',
+    where: 'canvas.html §1–2 · primaryPortSeat() and secondaryPortSeat() in build.component.ts' },
+
+  { id: 'D-41', date: '2026-08-20', area: 'canvas', status: 'standing',
+    what: 'Both ports slide to whichever edge their duct arrives at — square and tapered alike',
+    why: 'A machine\u2019s primary port already moves to the edge its run reaches it from (D-40); its <b>secondary port does the same</b>. The alternative was drawn and very nearly taken: pin the tapered port to the top edge on the grounds that it stands for something that really does hang above the work — an overarm guard — and let the pipe hook over the box to reach it. <b>Consistency beat literalism.</b> One rule that fits in a sentence beats two rules that each need their own picture, and a port that behaves differently depending on its shape is a thing to re-remember every time you drag a machine. <b>The bug this closes is separate from the drawing:</b> a secondary port has exactly one inlet and it faces down, so a run from a collector <em>below</em> it had to climb to the top of the board and come back — measured as [202,496] \u2192 [226,64] \u2192 [187,117]. Either option would have killed that loop; only the picture was ever open.',
+    where: 'canvas.html \u00a72. Both options drawn in archived/side-entry-hood.html \u2014 this is option A. Built: inPorts() aims a secondary port at its MACHINE\u2019s three edges (route-grid.ts), side entries offset SECONDARY_PORT_DX below the midline so two runs on one edge can\u2019t land on the same point, and secondaryPortGlyph() draws the glyph where the run finished. Regression R3d in router.spec.ts.' },
+
+  // ── open questions, deliberately parked ──────────────────────────────
+  { id: 'D-37', date: '2026-08-12', area: 'hardware', status: 'open',
+    what: 'A serial-bus servo could replace both the stepper and the PWM servos',
+    why: 'One ST3215-style bus would lift the four-channel ceiling and remove the stepper entirely. Reopened 2026-08-12, never closed.',
+    where: 'memory: serial-bus-servo-option' },
+
+  { id: 'D-36', date: '2026-08-16', area: 'hardware', status: 'open',
+    what: 'The Feather S2 is validated or marked experimental — not left ambiguous',
+    why: 'Unvalidated since Gen1 removal, push, and the board abstraction. Leaving it undeclared is the worst of the three options. <b>Deliberately deferred 2026-08-20</b> pending a few more bench sessions — the likely outcome is dropping the board, but not before the hardware has had a fair run.',
+    where: 'TODO/TODO.md, bench test 7' },
+
+  // ── canvas ───────────────────────────────────────────────────────────
+  { id: 'D-35', date: '2026-08-20', area: 'canvas', status: 'standing',
+    what: 'A second port is added by a drag, in either direction — not from a menu',
+    why: 'Drop a run end on a machine that already has a duct, <b>or</b> pull a run out of that machine’s hollow spare inlet and drop it on a gate in the other system. Same confirmation, same port, whichever way you dragged: the two ends sit in different systems and often far apart on a stacked canvas, so neither end is privileged and neither is made the only handle. The port is born attached, so there is never an orphan open end or an invalid document. Replaces the menu item entirely — two ways in would mean keeping the broken one.',
+    where: 'canvas.html §4 · build.component.ts askSecondaryPort()/commitSecondaryPort(). First recorded 2026-08-16: "you drag a hose across the boundary and land it on a port, and the same action can create that port." <b>Needed no schema change</b> — the port element lives in the system that feeds it, so nothing structural crosses the seam; shop.test.js and test_shop.cpp already carried that shape.' },
+
+  { id: 'D-39', date: '2026-08-20', area: 'canvas', status: 'standing',
+    what: 'The user names a secondary port; it defaults to "Auxiliary"',
+    why: 'Only the person with the shop knows whether that hose is an overarm guard, a downdraft table or the second port on a lathe. The name is captioned beside the port, so a guessed one is wrong on the canvas forever. Editable in the same confirmation that creates the port.',
+    where: 'canvas.html §4 · the confirmation sheet in build.component.html. Replaces the old auto-naming, which picked "overarm" then "hood" by position.' },
+
+  { id: 'D-34', date: '2026-08-20', area: 'canvas', status: 'standing',
+    what: 'Only an occupied cell or another system’s row band refuses a drop',
+    why: 'Everything about routing quality is advisory. A user is never frozen out of moving pieces because the shop is in a bad state — that state is exactly what they are dragging their way out of.',
+    where: 'canvas.html §3 · build.component.ts placeCheck()' },
+
+  { id: 'D-33', date: '2026-08-20', area: 'canvas', status: 'standing',
+    what: 'Both of a machine’s inlets are drawn, and each duct lands on its own glyph',
+    why: 'Square left of the centreline for the primary port, tapered right for each secondary port. The glyph <b>is</b> the entry point; one drawn anywhere else is a decal.',
+    where: 'canvas.html §1–2 · SceneNode.inletDx in routing/geometry.ts' },
+
+  { id: 'D-32', date: '2026-08-20', area: 'canvas', status: 'standing',
+    what: 'Grey dashed means secondary run; accent orange dashed means unfinished',
+    why: 'One meaning per colour. There was never a conflict between the two — an open end’s stub is <code>.open-stub</code>, accent orange. Assuming otherwise cost a round trip.',
+    where: 'canvas.html §1' },
+
+  { id: 'D-31', date: '2026-08-16', area: 'canvas', status: 'standing',
+    what: 'A secondary port’s run is the only thing that may cross the seam between systems',
+    why: 'A tool lives in one system and is drawn there once. Its supplemental run may be fed from the other collector, drawn grey/dashed/thinner so a shared machine reads as shared, and may be disconnected to route to a primary on the second system. <b>Carve an exemption</b> in the shop.js check rather than deleting it — the check also stops a 4" tool being plumbed into the 2.5" manifold.',
+    where: 'canvas.html §2 · CLAUDE.md design constraints' },
+
+  { id: 'D-30', date: '2026-08-15', area: 'canvas', status: 'standing',
+    what: 'A machine is ONE box, however many ports it has',
+    why: 'A second secondary port is a differently-shaped inlet on the same box — never a second body, never a dashed identity link. A drawing that reads as two saws lies about the shop.',
+    where: 'canvas.html §2 · archived/secondary-ports.html Option A' },
+
+  { id: 'D-29', date: '2026-08-16', area: 'canvas', status: 'standing',
+    what: 'A board is an ordinary piece on the grid and owns its cell exclusively',
+    why: 'Nothing else may stand there and ducts route around it. It lived on a pinned rail above the grid until 2026-08-16. Nothing stops you dragging a board somewhere its cables route badly — the fix is the default, not a rule.',
+    where: 'docs/boards-on-canvas-plan.md · archived/board-rail-pinning.html' },
+
+  { id: 'D-28', date: '2026-08-16', area: 'canvas', status: 'standing',
+    what: 'New pieces default into the system you are working in',
+    why: 'Into the active system’s row band, not a shop-wide origin — otherwise a piece lands somewhere a drag would refuse to move it. A board is placed top-right of the active extent but never band-checked, since it belongs to no system.',
+    where: 'CLAUDE.md · activeSystemId, defaultBoardCell()' },
+
+  { id: 'D-27', date: '2026-08-16', area: 'canvas', status: 'standing',
+    what: 'Every piece on the canvas has a right-click menu',
+    why: 'The badge and the right-click open the same menu, so there is no piece you can only act on one way.',
+    where: 'build.component.ts onNodeContext()' },
+
+  { id: 'D-26', date: '2026-08-15', area: 'canvas', status: 'standing',
+    what: 'Each system gets its own grey ground, in one contiguous row band',
+    why: 'Bands never interleave — that is what makes the ground drawable as a rectangle rather than a shape, and what the band rule enforces on a drag. Drawn only once there are two systems; with one it would say nothing.',
+    where: 'canvas.html §1 · bandBlockedBy()' },
+
+  { id: 'D-25', date: '2026-08-14', area: 'canvas', status: 'standing',
+    what: 'The smart plug belongs to the TOOL, drawn under its name — never on a port',
+    why: 'A plug lives on <code>machine.sensor.outlet</code>; ports are a plumbing fact, not an electrical one. Per-port would put one plug on screen three times and invite reading them as separate.',
+    where: 'memory: canvas-drawing-constraints' },
+
+  { id: 'D-24', date: '2026-08-14', area: 'canvas', status: 'standing',
+    what: 'Never draw duct size, anywhere in the UI',
+    why: 'Sizing is deliberately out of scope — the woodworker’s job. Not a field, not a caption, not a validation rule, and no inferring airflow consequences from it.',
+    where: 'memory: canvas-drawing-constraints' },
+
+  { id: 'D-23', date: '', area: 'canvas', status: 'standing',
+    what: 'Hover is never the only trigger, and focus dims rather than hides',
+    why: 'The shop is laid out on a phone. Anything reachable only by hover is unreachable there.',
+    where: 'CLAUDE.md UI work' },
+
+  { id: 'D-22', date: '', area: 'canvas', status: 'standing',
+    what: 'The live view is a mobile tool LIST, not a graph',
+    why: 'The canvas is for building; the live view is for a person standing at a machine. Manual override is essential, and the vocabulary is the woodworker’s.',
+    where: 'memory: ui-direction' },
+
+  // ── model ────────────────────────────────────────────────────────────
+  { id: 'D-21', date: '2026-08-19', area: 'model', status: 'standing',
+    what: 'A system’s only tool needs no gate',
+    why: 'An ungated tool is a leak only when there is another tool to leak away from. A sander on a shopvac is a valid shop and must not be blocked from running.',
+    where: 'shared/device-model/topology.js airflowIssues()' },
+
+  { id: 'D-20', date: '2026-08-13', area: 'model', status: 'standing',
+    what: 'A machine has exactly one primary port, and it cannot be removed',
+    why: 'It is the connection the machine cannot run without. Supplemental ports delete like anything else.',
+    where: 'shared/device-model/shop.js' },
+
+  { id: 'D-19', date: '2026-08-12', area: 'model', status: 'standing',
+    what: 'A shop owns N airflow systems; arbitration is per-system and both collectors may run at once',
+    why: 'Jeff’s shop runs two independent systems (4" ball valves + 2.5" Rockler manifold) and he expects that is common. <b>This corrected the earlier "1 dust collector per shop" scope</b>, which was wrong.',
+    where: 'docs/shop-schema-rfc.md · memory: shop-schema-v2-multisystem' },
+
+  { id: 'D-18', date: '2026-08-12', area: 'model', status: 'standing',
+    what: 'A primary port beats a supplemental one, regardless of which started more recently',
+    why: 'Without it, starting the table saw after someone’s bandsaw hands the manifold to the saw’s overarm and leaves the bandsaw cutting into a closed gate — recency beating need.',
+    where: 'shared/device-model/shop.js routeShop() arbitration order' },
+
+  { id: 'D-17', date: '2026-08-12', area: 'model', status: 'standing',
+    what: 'The shop document is five top-level lists, and a `tool` inside a system is a PORT',
+    why: '<code>controllers</code>, <code>systems[]</code>, <code>machines[]</code>, <code>devices[]</code> — each meaning exactly one thing. The machine is what you switch on; a port is where a duct lands.',
+    where: 'docs/shop-schema-rfc.md' },
+
+  { id: 'D-16', date: '', area: 'model', status: 'standing',
+    what: 'shared/device-model/ is the single source of truth; firmware is certified against it',
+    why: 'Behaviour used to be implemented three times and drifted constantly. The mock and demo both require the same model; firmware can’t import JS, so the conformance suites certify it against the same contract.',
+    where: 'CLAUDE.md · the anti-drift rule and its twin-pair table' },
+
+  { id: 'D-15', date: '2026-08-13', area: 'model', status: 'standing',
+    what: 'Never steal a plug, and a node has exactly one owner',
+    why: 'Two brains on one LAN must not fight over a valve or silently repoint each other’s outlets. Taking one requires an explicit, confirmed user action.',
+    where: 'shared/device-model/plug-claim.js · control/NodeRegistry.h' },
+
+  // ── control ──────────────────────────────────────────────────────────
+  { id: 'D-14', date: '2026-07-28', area: 'control', status: 'standing',
+    what: 'Never dead-head the collector — transitions are make-before-break',
+    why: 'Open the new gate before closing the old one. Most-recent-tool-wins, and idle leaves the gate where it is: the system rests open.',
+    where: 'CLAUDE.md · memory: v2-control-scope-deadhead' },
+
+  { id: 'D-13', date: '2026-07-28', area: 'control', status: 'standing',
+    what: 'One brain: the primary owns topology, routing and Shelly polling',
+    why: 'Secondaries are dumb actuator banks that enumerate, set and report. Keeps a $5 board viable as a node.',
+    where: 'CLAUDE.md · memory: v2-servo-ballvalve-direction' },
+
+  { id: 'D-12', date: '2026-07-28', area: 'control', status: 'standing',
+    what: 'A node receives resolved angles and positions on the wire, never state names',
+    why: 'That is what lets a cheap board be a node, and what keeps a schema change from needing a flash to every board in the shop.',
+    where: 'control/NodeLink.h · shared/device-model/nodelink.js' },
+
+  { id: 'D-11', date: '2026-07-28', area: 'control', status: 'standing',
+    what: 'Link-loss safe state is HOLD — no autonomous behaviour on a node',
+    why: 'Kill the primary mid-move and every servo holds. No timeout closing gates, no homing on reconnect. The one that matters with a tool running.',
+    where: 'control/NodeLink.h · TODO bench test 2' },
+
+  { id: 'D-10', date: '2026-07-28', area: 'control', status: 'standing',
+    what: 'Every actuator is a branch selector; the linear actuator is the N-branch case',
+    why: 'Binary gate = 1 branch + closed, manifold = 2 + closed, linear = N + home. One HAL interface, not a special case per mechanism.',
+    where: 'memory: v2-servo-ballvalve-direction' },
+
+  { id: 'D-09', date: '2026-07-28', area: 'control', status: 'standing',
+    what: 'Servos are positional (angle) only',
+    why: 'The HAL is state → angle + move-time. Continuous-rotation servos are explicitly out of scope.',
+    where: 'motor/ServoActuator.h' },
+
+  { id: 'D-08', date: '2026-07-28', area: 'control', status: 'standing',
+    what: 'Target is a small-to-midsize hobby shop, one person, switchover not concurrency',
+    why: 'Commercial systems already serve large shops. Genuine multi-tool contention is rare; a second operator is handled by degrading loudly rather than by scheduling people.',
+    where: 'memory: v2-control-scope-deadhead' },
+
+  { id: 'D-07', date: '2026-08-12', area: 'control', status: 'standing',
+    what: 'The configurator is manual and visual — no chatbot',
+    why: 'Drag-and-drop topology on a canvas. The AI chatbot path was built, rejected, and deleted from the codebase.',
+    where: 'memory: phase-consolidation-2026-08-12' },
+
+  // ── hardware ─────────────────────────────────────────────────────────
+  { id: 'D-06', date: '2026-08-19', area: 'hardware', status: 'standing',
+    what: 'XIAO C5 GPIO8/GPIO9 are ordinary IO — the servo block is safe',
+    why: 'Confirmed against the ESP32-C5 datasheet (Table 3-1) and then on the bench: the board boots with a servo wired to the block. The strapping worry was C3 muscle memory.',
+    where: 'firmware/wiring/xiao-c5.md §5' },
+
+  { id: 'D-05', date: '2026-08-14', area: 'hardware', status: 'standing',
+    what: 'The C5 gets its own PLATFORMIO_CORE_DIR',
+    why: 'It rides pioarduino, not espressif32, and the two publish packages under the same names — sharing one core directory broke both, twice, in ways PlatformIO neither detects nor repairs. Isolation beats fixing collisions one at a time.',
+    where: 'tools/boardinfo.sh · firmware/wiring/xiao-c5.md' },
+
+  { id: 'D-04', date: '2026-08-14', area: 'hardware', status: 'standing',
+    what: 'The QT Py ESP32-C3 is dropped; nodes are the QT Py S3 and the XIAO C5',
+    why: 'Its pin map had to dodge strapping pins on GPIO2/8/9, and there was no reason to carry a third node target.',
+    where: 'memory: board-fleet-and-node-target' },
+
+  { id: 'D-03', date: '', area: 'hardware', status: 'standing',
+    what: 'The primary target board is the official ESP32-DevKitC',
+    why: 'Sourcing and a 1.0" carrier spec drove it. No-OTA partition.',
+    where: 'memory: target-board-devkitc' },
+
+  { id: 'D-02', date: '', area: 'hardware', status: 'standing',
+    what: 'Gate count must be even',
+    why: 'Rockler manifolds ship in pairs; an odd count places gates between real ports.',
+    where: 'CLAUDE.md · memory: rockler-even-gate-count' },
+
+  { id: 'D-01', date: '', area: 'hardware', status: 'standing',
+    what: 'Size slide gates for 6–8; past that, ball valves on a trunk',
+    why: 'The slide-gate approach has a practical ceiling. Beyond it the topology changes shape, not just size.',
+    where: 'memory: slide-gate-count-ceiling' },
+
+  // ── process ──────────────────────────────────────────────────────────
+  { id: 'D-00', date: '2026-08-20', area: 'process', status: 'standing',
+    what: 'canvas.html is the canonical canvas design; this register is the canonical decision list',
+    why: 'Seven mockups that disagreed made cross-system runs and the meaning of a dashed line each get re-litigated three times. Update both in place; archive explorations rather than leaving them looking current.',
+    where: 'docs/mockups/canvas.html · docs/mockups/archived/README.md' },
+
+  { id: 'D-00b', date: '', area: 'process', status: 'standing',
+    what: 'Build a mockup and publish it before writing non-trivial UI code',
+    why: 'Cheaper to reject a drawing than an implementation. Fold the outcome into canvas.html and archive the exploration.',
+    where: 'CLAUDE.md · memory: mockup-first-ui-design' },
+
+  { id: 'D-00c', date: '', area: 'process', status: 'standing',
+    what: 'Flashing hardware is Jeff’s call — always confirm first',
+    why: 'Anything that writes to a board waits for an explicit go-ahead. Committing when asked is fine.',
+    where: 'memory: flashing-is-jeffs-call' },
+
+  { id: 'D-00d', date: '', area: 'process', status: 'standing',
+    what: 'Nothing is described as verified until it has run on hardware',
+    why: 'Almost all of DustGate compiles and passes host tests without ever having run on a board. "It compiled" is not a pass.',
+    where: 'CLAUDE.md status line · TODO/TODO.md bench list' },
+];
+
+// ─────────────────────────────────────────────────────────────────────────
+const AREAS = ['all', 'control', 'model', 'canvas', 'hardware', 'process', 'open'];
+const LABEL = { all: 'All', control: 'Control', model: 'Model', canvas: 'Canvas',
+                hardware: 'Hardware', process: 'Process', open: 'Open questions' };
+let area = 'all', query = '';
+
+const el = (t, c) => { const n = document.createElement(t); if (c) n.className = c; return n; };
+const esc = s => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+function highlight(html, q) {
+  if (!q) return html;
+  // Only ever inject <mark>; split on tags so we never highlight inside one.
+  return html.split(/(<[^>]*>)/).map(part =>
+    part.startsWith('<') ? part
+      : part.replace(new RegExp('(' + q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'ig'), '<mark>$1</mark>')
+  ).join('');
+}
+
+function render() {
+  const list = document.getElementById('list');
+  list.textContent = '';
+  const q = query.trim().toLowerCase();
+  const rows = DECISIONS.filter(d => {
+    if (area === 'open' ? d.status !== 'open' : (area !== 'all' && d.area !== area)) return false;
+    if (!q) return true;
+    return (d.what + ' ' + d.why + ' ' + d.where + ' ' + d.id).toLowerCase().includes(q);
+  });
+
+  document.getElementById('count').textContent =
+    rows.length + ' of ' + DECISIONS.length + ' decisions'
+    + (area === 'all' && !q ? '' : ' shown');
+
+  if (!rows.length) {
+    const e = el('div', 'empty');
+    e.textContent = 'Nothing matches that.';
+    list.appendChild(e);
+    return;
+  }
+
+  for (const d of rows) {
+    const card = el('div', 'd' + (d.status === 'open' ? ' open' : d.status === 'soon' ? ' soon' : ''));
+    const meta = el('div', 'meta');
+
+    const id = el('span', 'id'); id.textContent = d.id; meta.appendChild(id);
+    const ar = el('span', 'area ' + d.area); ar.textContent = LABEL[d.area]; meta.appendChild(ar);
+    if (d.date) { const w = el('span', 'when'); w.textContent = d.date; meta.appendChild(w); }
+    if (d.status !== 'standing') {
+      const st = el('span', 'status ' + d.status);
+      st.textContent = d.status === 'open' ? 'Open' : 'Agreed · not built';
+      meta.appendChild(st);
+    }
+    card.appendChild(meta);
+
+    const what = el('div', 'what'); what.innerHTML = highlight(esc(d.what), q); card.appendChild(what);
+    const why = el('div', 'why'); why.innerHTML = highlight(d.why, q); card.appendChild(why);
+    const where = el('div', 'where'); where.innerHTML = highlight(d.where, q); card.appendChild(where);
+
+    list.appendChild(card);
+  }
+}
+
+const chips = document.getElementById('chips');
+for (const a of AREAS) {
+  const b = el('button', 'chip');
+  b.type = 'button';
+  b.textContent = LABEL[a];
+  b.setAttribute('aria-pressed', String(a === 'all'));
+  b.addEventListener('click', () => {
+    area = a;
+    [...chips.children].forEach((c, i) => c.setAttribute('aria-pressed', String(AREAS[i] === a)));
+    render();
+  });
+  chips.appendChild(b);
+}
+document.getElementById('q').addEventListener('input', e => { query = e.target.value; render(); });
+render();
+</script>

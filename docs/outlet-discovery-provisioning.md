@@ -1,15 +1,19 @@
 # Outlet discovery & provisioning — design doc
 
-**Status:** draft (2026-07) — **Phase 1 implemented** (§4.1 discovery via
-`_shelly._tcp` + TXT generation detection, §4.2 static-IP demotion). Compiles
-clean; **not yet validated against real Shelly hardware** — see §6. Phases 2–3
-(§4.5 auto-map, §4.3 provisioning, §4.4 Outbound WebSocket) are still proposals.
-The goal is replacing the four-step manual outlet setup with a flow driven
-entirely by Shelly's documented local APIs.
+**Status:** draft (2026-07) — **Phases 1 & 3 implemented, plus Gen1 dropped and
+friendly-name write.** Done: §4.1 discovery via `_shelly._tcp`+TXT, §4.2
+static-IP demotion, and §4.4 push (Gen2 Outbound WebSocket → `/shelly-rpc` on
+the ESP32, replacing per-outlet power polling; HTTP polling retained only as a
+per-outlet fallback when a plug's push connection is down). Gen2-only now:
+`ShellyGen1Outlet` deleted and all Gen1 code paths removed. Added: plugs are
+auto-named (`Switch.SetConfig`) and pointed back at us (`Ws.SetConfig`, using
+our current IP so it self-heals across DHCP) during provisioning. **All compiles
+clean; NOT yet validated against real Shelly hardware** — see §6/§7. Still a
+proposal: §4.3 app-free plug WiFi provisioning, §4.5 power-spike auto-map.
 **Scope:** the smart-outlet control path (`CONTROL_SMART_OUTLET`) on v1. The
 transport/discovery decisions here should carry forward to v2 nodes.
-**Companion docs:** [`v2-architecture-rfc.md`](v2-architecture-rfc.md),
-[`manual-setup-wizard-requirements.md`](manual-setup-wizard-requirements.md).
+**Companion docs:** [`architecture-rfc.md`](architecture-rfc.md),
+[`ui-design.md`](ui-design.md).
 Any API/model surface added here goes through the canonical-model + conformance
 discipline in [`../shared/device-model/README.md`](../shared/device-model/README.md).
 
@@ -22,7 +26,7 @@ interfaces:
 
 1. Provision the plug onto WiFi **using the Shelly mobile app**.
 2. Assign it a **static IP** (via the app or the router).
-3. **Discover** it from the Angular setup wizard hosted on the ESP32.
+3. **Discover** it from the Angular UI hosted on the ESP32.
 4. **Tie it to a specific tool/gate** by hand.
 
 Every step is a place users get stuck, and steps 1–2 require software we don't
@@ -35,10 +39,10 @@ implementable in our existing C++ firmware.
 
 | Concern | Current implementation |
 |---|---|
-| Discovery | mDNS `PTR` query for **`_http._tcp`** ([`utils/MdnsQuery.h:29`](../linear_actuator/utils/MdnsQuery.h)) |
-| Shelly identification | Substring match `hostname.indexOf("shelly")` ([`linear_actuator.ino:921`](../linear_actuator/linear_actuator.ino)) |
-| Generation detection | Probe Gen2 RPC, fall back to Gen1 on failure ([`linear_actuator.ino:957-966`](../linear_actuator/linear_actuator.ino)) |
-| Addressing | Static IP, with mDNS hostname re-resolve on failure (`ShellyGen2Outlet::reresolve()`, [`outlets/ShellyGen2Outlet.cpp:18`](../linear_actuator/outlets/ShellyGen2Outlet.cpp)) |
+| Discovery | mDNS `PTR` query for **`_http._tcp`** ([`utils/MdnsQuery.h:29`](../firmware/utils/MdnsQuery.h)) |
+| Shelly identification | Substring match `hostname.indexOf("shelly")` ([`firmware.ino:921`](../firmware/firmware.ino)) |
+| Generation detection | Probe Gen2 RPC, fall back to Gen1 on failure ([`firmware.ino:957-966`](../firmware/firmware.ino)) |
+| Addressing | Static IP, with mDNS hostname re-resolve on failure (`ShellyGen2Outlet::reresolve()`, [`outlets/ShellyGen2Outlet.cpp:18`](../firmware/outlets/ShellyGen2Outlet.cpp)) |
 | Status | HTTP **poll** every `OUTLET_POLL_INTERVAL_MS` (500 ms) with `OUTLET_HTTP_TIMEOUT_MS` (400 ms) per outlet |
 | Discovery robustness | 3 mDNS attempts × 400 ms, merged by IP (`DISCOVER_MDNS_*` in `config.h`) |
 
@@ -94,7 +98,7 @@ today.
 
 The ESP-IDF `mdns_query_ptr()` already used in `MdnsQuery.h` returns TXT data via
 `r->txt` / `r->txt_count`, so this is contained to that helper plus the
-discovery block in `linear_actuator.ino`.
+discovery block in `firmware.ino`.
 
 **Note:** with generation known up front, the retry/merge logic can likely
 relax — but keep the multi-attempt merge until measured on real hardware. mDNS
@@ -119,7 +123,7 @@ Shelly AP-mode provisioning is a single RPC call:
 http://192.168.33.1/rpc/WiFi.SetConfig?config={"sta":{"ssid":"...","pass":"...","enable":true}}
 ```
 
-Proposed flow, driven from the setup wizard:
+Proposed flow, driven from the Tools screen:
 
 1. `WiFi.scanNetworks()` → offer SSIDs matching `Shelly*`.
 2. ESP32 connects to the selected (open) Shelly AP.
@@ -136,7 +140,7 @@ ESP32 already has it.
 **Design constraints:**
 
 - **The ESP32 leaves the network for ~20–40 s** while associated with the Shelly
-  AP — and it is the host of the Angular UI. The wizard needs a
+  AP — and it is the host of the Angular UI. The UI needs a
   "provisioning… reconnecting" state that polls until the device returns. The
   captive-portal flow already establishes this UX shape; reuse it.
 - **We forward the user's WiFi password to the plug.** It is already in NVS, so
@@ -173,30 +177,31 @@ concern independent of transport.
 
 ### 4.5 Auto-map the tool by watching for the power spike
 
-Not a protocol change — a wizard inversion. Instead of asking the user to
+Not a protocol change — a flow inversion. Instead of asking the user to
 associate an IP with a tool, prompt: *"Turn on your table saw now."* Whichever
 outlet crosses its threshold gets bound to that gate.
 
 This removes the most confusing step in the current flow, uses data we already
 collect, and becomes markedly snappier under §4.4.
 
-## 5. Gen1 compatibility
+## 5. Gen1 compatibility — dropped
 
-Gen1 devices support neither `_shelly._tcp` nor Outbound WebSocket. Their push
-mechanism is CoIoT (CoAP multicast), which is a separate implementation.
-
-**Proposed position:** Gen2+ is the supported path (the reference device is a
-Shelly Plug US G4). Gen1 keeps the existing `_http._tcp` discovery and HTTP
-polling as a legacy fallback. Do **not** invest in CoIoT unless real Gen1 demand
-appears.
+**Decided & implemented (2026-07):** Gen1 is no longer supported. Nobody sources
+a Gen1 Shelly for a fresh build, and Gen1 supports neither `_shelly._tcp` nor
+Outbound WebSocket (its push is CoIoT/CoAP-multicast, a separate stack). Rather
+than carry that, `ShellyGen1Outlet` and every Gen1 code path (discovery
+fallback, probe fallback, dispatch branches) were removed. The `gen` field is
+retained in the config/API/model as always-2 to avoid a disruptive migration.
 
 ## 6. Suggested sequencing
 
 | Phase | Contents | Status | Rationale |
 |---|---|---|---|
 | 1 | §4.1 discovery + §4.2 static-IP demotion | **done (unvalidated)** | Contained, removes a real bug and a setup step |
+| — | Drop Gen1 support + friendly-name write | **done (unvalidated)** | Shrinks the code; naming removes the ongoing "which plug is which" confusion |
+| 3 | §4.4 Outbound WebSocket (push) | **done (unvalidated)** | Removes the polling storm; sub-second tool reaction |
 | 2 | §4.5 auto-map by power spike | proposed | Pure UX, no protocol work, large clarity win |
-| 3 | §4.3 ESP32 provisioning + §4.4 Outbound WebSocket | proposed | Headline UX win; both configure the device at provisioning time |
+| 3b | §4.3 app-free plug WiFi provisioning | proposed | Bigger UX win; needs the reconnect-handling UI |
 
 Phases 1 and 2 are independently shippable and do not block each other.
 
@@ -218,6 +223,26 @@ trusting it:
       from a cold boot (exercises the resolve-first path).
 - [ ] Re-check whether `DISCOVER_MDNS_ATTEMPTS` can drop now that the query is
       Shelly-specific — see §7.
+
+### Push (§4.4) + Gen1-drop + names — hardware validation checklist
+
+None of this can be exercised without a real Gen2 plug; it only compiles so far.
+Boot log shows `[Outlets] Push endpoint for plugs: ws://<ip>:80/shelly-rpc`.
+
+- [ ] After adding a plug in the UI, the serial log shows `Ws.SetConfig … -> ok`
+      and `Switch.SetConfig name=<gate> … -> ok`, then the plug appears as
+      `[Outlets] Push connected: <ip>`.
+- [ ] Turning the tool on/off moves the gate **within ~1s** (push), not at the
+      500 ms poll cadence — and the serial log stops showing per-poll HTTP for
+      that plug (push path skips it).
+- [ ] The plug's name in the Shelly app / a re-scan now reads the gate name
+      (friendly-name write landed).
+- [ ] Pull a plug off WiFi → `Push disconnected` logged and that gate's tool
+      reads inactive (falls back to HTTP poll, doesn't hang open on stale power).
+- [ ] Reboot the ESP32 on a new DHCP lease → plugs re-provision to the new IP and
+      reconnect (self-healing addressing).
+- [ ] Decide whether the `/shelly-rpc` endpoint needs auth beyond source-IP
+      matching (currently frames from unknown IPs are ignored) — see §7.
 
 ## 7. Open questions
 

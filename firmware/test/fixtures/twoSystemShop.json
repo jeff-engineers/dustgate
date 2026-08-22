@@ -1,0 +1,241 @@
+{
+  "schemaVersion": 2,
+  "name": "Jeff's Shop",
+  "controllers": [
+    {
+      "id": "primary",
+      "role": "primary",
+      "name": "Shop Brain",
+      "board": "devkitc"
+    }
+  ],
+  "systems": [
+    {
+      "id": "big",
+      "name": "4\" system",
+      "elements": [
+        {
+          "id": "dc-big",
+          "type": "collector",
+          "name": "Cyclone"
+        },
+        {
+          "id": "bv-cab",
+          "type": "selector",
+          "name": "Cabinet valve",
+          "controllerId": "primary",
+          "kind": "servoGate",
+          "states": [
+            {
+              "id": "open",
+              "isClosed": false,
+              "offsetDeg": 0
+            },
+            {
+              "id": "closed",
+              "isClosed": true,
+              "offsetDeg": 90
+            }
+          ],
+          "branches": [
+            {
+              "id": "c1",
+              "opensState": "open",
+              "role": "tool"
+            }
+          ],
+          "servo": {
+            "channel": 0,
+            "referenceAngle": 10,
+            "moveMs": 600,
+            "holdAtRest": false
+          }
+        },
+        {
+          "id": "bv-jnt",
+          "type": "selector",
+          "name": "Jointer valve",
+          "controllerId": "primary",
+          "kind": "servoGate",
+          "states": [
+            {
+              "id": "open",
+              "isClosed": false,
+              "offsetDeg": 0
+            },
+            {
+              "id": "closed",
+              "isClosed": true,
+              "offsetDeg": 90
+            }
+          ],
+          "branches": [
+            {
+              "id": "j1",
+              "opensState": "open",
+              "role": "tool"
+            }
+          ],
+          "servo": {
+            "channel": 1,
+            "referenceAngle": 10,
+            "moveMs": 600,
+            "holdAtRest": false
+          }
+        },
+        {
+          "id": "ts-cabinet",
+          "type": "tool",
+          "name": "Cabinet · 4\"",
+          "machineId": "table-saw"
+        },
+        {
+          "id": "jnt-port",
+          "type": "tool",
+          "name": "Jointer · 4\"",
+          "machineId": "jointer"
+        }
+      ],
+      "ducts": [
+        {
+          "child": "bv-cab",
+          "parent": "dc-big"
+        },
+        {
+          "child": "bv-jnt",
+          "parent": "dc-big"
+        },
+        {
+          "child": "ts-cabinet",
+          "parent": "bv-cab",
+          "parentBranch": "c1"
+        },
+        {
+          "child": "jnt-port",
+          "parent": "bv-jnt",
+          "parentBranch": "j1"
+        }
+      ]
+    },
+    {
+      "id": "small",
+      "name": "2.5\" system",
+      "elements": [
+        {
+          "id": "dc-small",
+          "type": "collector",
+          "name": "Shop vac"
+        },
+        {
+          "id": "man",
+          "type": "selector",
+          "name": "Manifold",
+          "controllerId": "primary",
+          "kind": "linear",
+          "states": [
+            {
+              "id": "home",
+              "isClosed": true,
+              "positionMm": 0
+            },
+            {
+              "id": "m1",
+              "isClosed": false,
+              "positionMm": 12.5
+            },
+            {
+              "id": "m2",
+              "isClosed": false,
+              "positionMm": 95.4
+            }
+          ],
+          "branches": [
+            {
+              "id": "p1",
+              "opensState": "m1",
+              "role": "tool"
+            },
+            {
+              "id": "p2",
+              "opensState": "m2",
+              "role": "tool"
+            }
+          ],
+          "linear": {
+            "calibration": {
+              "stepsPerMm": 51.47,
+              "measuredSpanSteps": 4387,
+              "homeIsMaxEndstop": false,
+              "manifoldModel": "rockler-2.5"
+            }
+          }
+        },
+        {
+          "id": "ts-overarm",
+          "type": "tool",
+          "name": "Overarm · 2.5\"",
+          "machineId": "table-saw",
+          "supplemental": true
+        },
+        {
+          "id": "drill-port",
+          "type": "tool",
+          "name": "Drill Press",
+          "machineId": "drill-press"
+        }
+      ],
+      "ducts": [
+        {
+          "child": "man",
+          "parent": "dc-small"
+        },
+        {
+          "child": "ts-overarm",
+          "parent": "man",
+          "parentBranch": "p1"
+        },
+        {
+          "child": "drill-port",
+          "parent": "man",
+          "parentBranch": "p2"
+        }
+      ]
+    }
+  ],
+  "machines": [
+    {
+      "id": "table-saw",
+      "name": "Table Saw",
+      "sensor": {
+        "outlet": {
+          "gen": 2,
+          "ip": "192.168.87.30",
+          "thresholdW": 100
+        }
+      }
+    },
+    {
+      "id": "jointer",
+      "name": "Jointer",
+      "sensor": {
+        "outlet": {
+          "gen": 2,
+          "ip": "192.168.87.40",
+          "thresholdW": 40
+        }
+      }
+    },
+    {
+      "id": "drill-press",
+      "name": "Drill Press",
+      "sensor": {
+        "outlet": {
+          "gen": 2,
+          "ip": "192.168.87.41",
+          "thresholdW": 20
+        }
+      }
+    }
+  ],
+  "devices": []
+}

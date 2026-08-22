@@ -25,7 +25,7 @@
 
 'use strict';
 
-// ── Constants (mirror linear_actuator/config.h where noted) ─────────────────
+// ── Constants (mirror firmware/config.h where noted) ─────────────────
 const NUM_STOPS = 16;              // compile-time max stops (config.h NUM_STOPS)
 const STEPS_PER_MM = 40;           // mock-only resolution; not real hardware (see TODO.md)
 const MIN_STOP_SEPARATION_MM = 10; // config.h MIN_STOP_SEPARATION_MM — overlap backstop
@@ -35,7 +35,7 @@ const CALIBRATE_MS = 4000;         // simulated reference-sweep duration
 const TOOL_NAMES = ['Table Saw', 'Drill Press', 'Router Table'];
 
 // Per-port role — what a linear-actuator port/gate is used for. Lets the
-// actuator act as a node in the larger v2 topology graph (see v2 RFC §5.2).
+// actuator act as a node in the larger topology graph (see architecture-rfc.md §5.2).
 const PORT_ROLES = ['tool', 'unassigned', 'blocked', 'feed'];
 
 // Manifold geometry profiles: (model, gateCount) → mm positions referenced to the
@@ -56,6 +56,21 @@ const MANIFOLD_PROFILES = {
   // Unconfirmed on hardware (4" slider not built yet); 4" path disabled in the UI.
   'rockler-4':   { firstGateOffsetMm: 1,  gatePitchMm: 127,  endMarginMm: 1 },
 };
+
+/** True for a known Rockler manifold profile (ships in 2-gate units → even count). */
+function isRocklerModel(model) { return model in MANIFOLD_PROFILES; }
+
+/** Round a gate count up to the next even number (Rockler manifolds pair gates). */
+function roundUpEven(n) { return n % 2 === 0 ? n : n + 1; }
+
+/**
+ * Physical gate count for a model: Rockler profiles are even (round odd up — the
+ * extra port is a spare, capped/unused); 'custom' is left as-is. Clamped to NUM_STOPS.
+ */
+function physicalGateCount(model, n) {
+  const g = isRocklerModel(model) ? roundUpEven(n) : n;
+  return Math.min(g, NUM_STOPS);
+}
 
 /** (model, gateCount) → { spanMm, gatesMm[] }, or null for custom/unknown. */
 function manifoldProfile(model, gateCount) {
@@ -91,6 +106,9 @@ function createDevice() {
     stepsPerMm:        STEPS_PER_MM, // calibrated by the sweep; nominal until then
     dcConfigured:   false,
     dcOn:           false,
+    // The network the board joined. The simulated device is always "on" one; the
+    // firmware reports WiFi.SSID(), and an unprovisioned board reports ''.
+    ssid:           'Shop-WiFi',
     dcIp:           null,
     dcHost:         '',
     // mm: null = position not yet saved (distinct from a stop saved at 0.00).
@@ -108,7 +126,7 @@ function createDevice() {
 
 // ── Wire projections ────────────────────────────────────────────────────────
 
-/** The status object pushed over WebSocket and returned by GET /api/status. */
+/** The status object pushed over WebSocket and returned by GET /api/motion. */
 function statusView(d) {
   return {
     state:          d.state,
@@ -128,6 +146,7 @@ function statusView(d) {
     stepsPerMm:     d.stepsPerMm,
     dcConfigured:   d.dcConfigured,
     dcOn:           d.dcOn,
+    ssid:           d.ssid,
     stops:          d.stops,
     outlets:        d.outlets,
   };
@@ -143,6 +162,8 @@ function infoView(d, apiKey, version) {
     idleTimeoutSec: d.idleTimeoutSec,
     manifoldModel:  d.manifoldModel,
     stepsPerMm:     d.stepsPerMm,
+    // The owner suffix this brain stamps on plugs it owns — see nameOutlet().
+    owner:          OUR_NAME,
   };
 }
 
@@ -337,8 +358,11 @@ function beginCalibrate(d, model, gateCount) {
   if (!Number.isInteger(gateCount) || gateCount < 1 || gateCount > NUM_STOPS) {
     throw badRequest('gateCount out of range');
   }
-  d.manifoldModel = (model in MANIFOLD_PROFILES) ? model : 'custom';
-  d._calGateCount = gateCount;
+  d.manifoldModel = isRocklerModel(model) ? model : 'custom';
+  // Rockler manifolds ship in pairs → physical gate count is EVEN. Round an odd
+  // request up; the extra port is a spare the user caps/leaves unused. 'custom'
+  // has no fixed geometry, so it's left as entered.
+  d._calGateCount = physicalGateCount(d.manifoldModel, gateCount);
   d.state = 'HOMING'; // the sweep starts by homing to the near endstop
   d.manualOverride = false;
   return CALIBRATE_MS;
@@ -422,6 +446,12 @@ function switchDustCollector(d, on) { d.dcOn = !!on; return { ok: true }; }
 // threshold step, where the first ping to an outlet catches it still off (0W)
 // and later pings read its running draw once "switched on".
 
+// The owner suffix DustGate appends to a plug it owns. U+00B7 MIDDLE DOT,
+// spaced — must match OWNER_SEP in plug-claim.js and ownerSep() in PlugClaim.h.
+const OWNER_SEP = ' \u00b7 ';
+// Who this simulated brain says it is, in that suffix.
+const OUR_NAME = 'dustgate-demo';
+
 function _randHex(len) {
   let s = '';
   for (let i = 0; i < len; i++) s += Math.floor(Math.random() * 16).toString(16);
@@ -449,14 +479,171 @@ function ensureDiscovered(d) {
       reachable: true,
       powerW:    0, // off during the scan (real power switch, no standby)
       gen:       2,
+      // Ownership (RFC §8). The LAST plug in the list always belongs to someone
+      // else, so the refusal paths — you cannot rename or release a plug another
+      // controller owns — are reachable on the bench without staging a second
+      // brain on the network. Everything else is out of the box.
+      claim:     i === count - 1 ? 'foreign' : 'unclaimed',
+      holder:    i === count - 1 ? 'home-assistant.local' : null,
+      // Takeable, but only by a human who has been told what breaks. Refusing
+      // outright would just move the same repoint into the Shelly app, where
+      // there is no record of it at all — see plug-claim.js.
+      takeable:  i === count - 1,
+      claimReason: i === count - 1
+        ? 'shared with home-assistant.local — polled, not pushed' : undefined,
     };
   });
   return d._discovered;
 }
 
-/** GET /api/outlets/discover — the discovered list (tools off → 0W). */
+/**
+ * POST /api/outlets/name — rename a plug.
+ *
+ * The owner suffix is the device's business, not the caller's: `label` is the
+ * human half and the suffix is reattached here, so a round trip can never double
+ * it. Mirrors the main-loop handler in firmware.ino, including the rule that an
+ * UNCLAIMED plug gets the bare label — we have not earned the right to stamp our
+ * name on a plug we have not paired.
+ */
+function nameOutlet(d, ip, label, takeover) {
+  if (!ip) throw badRequest("missing 'ip'");
+  const hit = (d._discovered || []).find(x => x.ip === ip);
+  if (!hit) return { ok: false, error: 'not responding' };
+  // Refused unless a human explicitly overrode it. Only the NAME is written
+  // either way — the plug keeps reporting to whoever owns it.
+  const owned = hit.claim === 'foreign' || hit.claim === 'dustgate';
+  if (owned && !takeover) {
+    return { ok: false, error: `owned by ${hit.holder || 'another controller'}` };
+  }
+  // The owner suffix means "this plug is being USED by that brain", so it goes
+  // on only when that is true — never on an overridden rename or an unclaimed
+  // plug named before pairing.
+  const full = hit.claim === 'ours' && label
+    ? `${label}${OWNER_SEP}${OUR_NAME}`
+    : String(label || '');
+  hit.name = full;
+  return { ok: true, name: full, label: String(label || '') };
+}
+
+/**
+ * POST /api/outlets/takeover — repoint a plug that reports to someone else.
+ *
+ * The loud one: unlike a name override, this is what actually breaks the other
+ * controller. On real hardware the approval is one-shot and the repoint lands on
+ * the next provisioning pass; here it takes effect at once, which is the only
+ * honest simplification available without simulating a provisioning cycle.
+ */
+function takeoverOutlet(d, ip) {
+  if (!ip) throw badRequest("missing 'ip'");
+  const hit = (d._discovered || []).find(x => x.ip === ip);
+  if (!hit) return { ok: false, error: 'not responding' };
+  if (!hit.takeable) {
+    return { ok: false, error: 'nothing to take — no other controller has this outlet' };
+  }
+  hit.claim = 'ours';
+  hit.holder = null;
+  hit.takeable = false;
+  hit.claimReason = undefined;
+  hit.prevPushUrl = 'ws://home-assistant.local:80/shelly-rpc';   // so release can hand it back
+  return { ok: true, claim: 'ours' };
+}
+
+/**
+ * POST /api/outlets/release — the device half of unpairing.
+ *
+ * Best-effort by design: the layout half happens whatever this returns, because
+ * a plug you have physically unplugged is exactly when you want to detach it.
+ */
+function releaseOutlet(d, ip) {
+  if (!ip) throw badRequest("missing 'ip'");
+  const hit = (d._discovered || []).find(x => x.ip === ip);
+  if (!hit) return { ok: false, released: false, error: 'not responding' };
+  if (hit.claim === 'foreign' || hit.claim === 'dustgate') {
+    return { ok: true, released: false,
+             note: 'polled only — nothing was written to this plug' };
+  }
+  const i = hit.name.lastIndexOf(OWNER_SEP);
+  if (i >= 0) hit.name = hit.name.slice(0, i);
+  const restored = !!hit.prevPushUrl;
+  hit.claim = 'unclaimed';
+  hit.holder = null;
+  return { ok: true, released: true, restored };
+}
+
+/** GET /api/outlets/discover — the discovered list (tools off → 0W).
+ *
+ * The name is reported with any owner suffix STRIPPED, exactly as the firmware
+ * does (plugclaim::decide → claim.label, firmware.ino). The suffix is our
+ * bookkeeping: shown in the picker it would look like part of the tool's name,
+ * then get saved back and doubled. The stored entry keeps the full name, because
+ * that is what the plug itself actually holds.
+ */
 function discoverOutlets(d) {
-  return ensureDiscovered(d).map(x => ({ ...x }));
+  const suffix = OWNER_SEP + OUR_NAME;
+  return ensureDiscovered(d).map(x => ({
+    ...x,
+    name: x.name && x.name.endsWith(suffix) ? x.name.slice(0, -suffix.length) : x.name,
+  }));
+}
+
+/**
+ * Put the plugs a saved shop is ALREADY PAIRED TO on the simulated network.
+ *
+ * ensureDiscovered() invents 2-4 plugs at random IPs, which is the right shape
+ * for "sweep the network and see what's out there" — and it meant a shop loaded
+ * from a document could never see its own plugs. The demo shop pairs the table
+ * saw to 192.168.87.30; the simulated network had no such plug; so every screen
+ * that shows a paired plug showed it as not responding, with no wattage and no
+ * name, and rename, release and takeover all answered "not responding". A saved
+ * plug that the network has never heard of is a state real hardware can be in
+ * (unplugged), but it can't be the state EVERY paired plug is in on a runner
+ * whose whole job is to be explorable.
+ *
+ * Adopted plugs are claimed OURS: pairing a plug is what claiming it means, and
+ * anything else would make the demo's own seeded shop look stolen. An IP already
+ * on the network is left exactly as it is — including the deliberately foreign
+ * last entry, which is the only way the refusal paths stay reachable.
+ *
+ * Takes the document, so callers don't each re-derive where a plug hides. Both
+ * shapes: a v1 topology (tool.sensor.outlet / collector.control.outlet) and a
+ * shop (machines[].sensor.outlet), since either can be PUT.
+ */
+function adoptOutlets(d, doc) {
+  const list = ensureDiscovered(d);
+  for (const o of _docOutlets(doc)) {
+    if (!o.ip || list.some(x => x.ip === o.ip)) continue;
+    list.push({
+      ip: o.ip,
+      hostname: o.host || `ShellyPlugUSG4-${_randHex(12)}`,
+      // The plug holds the FULL name, suffix and all — discoverOutlets() strips
+      // it on the way out, exactly as the firmware does.
+      name: o.name ? `${o.name}${OWNER_SEP}${OUR_NAME}` : '',
+      reachable: true,
+      powerW: 0,          // tools are off during a scan; same rule as the rest
+      gen: o.gen || 2,
+      claim: 'ours',
+      holder: null,
+      takeable: false,
+    });
+  }
+  return list;
+}
+
+/** Every smart outlet a document mentions, whichever shape it is in. */
+function _docOutlets(doc) {
+  if (!doc || typeof doc !== 'object') return [];
+  const out = [];
+  const take = (o) => { if (o && o.ip) out.push(o); };
+  for (const m of doc.machines || []) take(m && m.sensor && m.sensor.outlet);
+  const systems = doc.systems || [doc];
+  for (const sys of systems) {
+    for (const e of (sys && sys.elements) || []) {
+      if (!e) continue;
+      take(e.sensor && e.sensor.outlet);
+      take(e.control && e.control.outlet);
+    }
+  }
+  return out;
 }
 
 /** Shelly-app device name for an IP if it's one we've discovered, else ''. */
@@ -503,7 +690,9 @@ module.exports = {
   saveStop, setHomedLeft, setMotorInverted, setNumGates, setIdleTimeout, clearCal,
   // dual-endstop calibration + port roles
   manifoldProfile, beginCalibrate, completeCalibrate, setPortRole,
+  isRocklerModel, roundUpEven, physicalGateCount,
   // outlets
   configureOutlet, deleteOutlet, configureDustCollector, deleteDustCollector, switchDustCollector,
-  ensureDiscovered, discoverOutlets, pingOutlet, nameForIp,
+  ensureDiscovered, discoverOutlets, adoptOutlets, pingOutlet, nameForIp,
+  nameOutlet, releaseOutlet, takeoverOutlet,
 };

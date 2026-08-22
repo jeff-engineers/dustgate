@@ -2,7 +2,7 @@ name: CI
 
 # Three independent checks, run in parallel on every push / PR:
 #   conformance — certifies the device API contract against the Node mock
-#   ui-build    — builds the Angular app (also validates the @device-model wiring)
+#   ui-build    — builds the Angular app and runs its unit suites
 #   firmware    — compiles the ESP32 firmware with PlatformIO
 #
 # The conformance job is the load-bearing one for the mock/demo/firmware sync
@@ -32,9 +32,21 @@ jobs:
       - name: Run conformance suite against the mock
         run: npm run conformance:ci
         working-directory: tools
+      - name: Pure model tests (topology, routing, NodeLink frames)
+        run: npm run model:test
+        working-directory: tools
+      - name: Topology conformance against the mock
+        run: npm run topology:conformance:ci
+        working-directory: tools
+      # End-to-end NodeLink: a simulated primary drives a simulated secondary
+      # over a real WebSocket. Covers the conversation (accept-vs-arrive,
+      # refusals, hold-on-link-loss) that per-frame unit tests can't reach.
+      - name: NodeLink conformance against the mock node
+        run: npm run nodelink:conformance:ci
+        working-directory: tools
 
   ui-build:
-    name: UI build
+    name: UI build + tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -49,6 +61,11 @@ jobs:
       - name: Build (also type-checks the shared @device-model import)
         run: npm run build
         working-directory: dustgate-ui
+      # Plain-node suites: no browser, no headless Chrome to install. See
+      # dustgate-ui/tsconfig.spec.json for why it's built this way.
+      - name: UI unit tests (shop seam, readiness, geometry)
+        run: npm test
+        working-directory: dustgate-ui
 
   firmware:
     name: Firmware compile
@@ -58,14 +75,70 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Cache PlatformIO
+      # The host tests are driven by the tools/ npm scripts (they locate the
+      # ArduinoJson headers PlatformIO fetched), so this job needs Node too.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: tools/package-lock.json
+      - name: Install tools deps
+        run: npm ci
+        working-directory: tools
+      # Two caches, because they turn over for different reasons.
+      #
+      # The PlatformIO core (platform packages, Arduino framework, xtensa
+      # toolchain) is the expensive one — gigabytes. Its key hashes
+      # platformio.ini so that changing `platform` or `lib_deps` re-resolves,
+      # but ANY edit to that file changes the hash, and platformio.ini is edited
+      # often (build_flags, partitions, comments). Without restore-keys that
+      # meant a full cold re-download roughly one run in six.
+      #
+      # restore-keys fixes it: an exact miss falls back to the newest cache with
+      # the same prefix, and PlatformIO tops up only what actually changed — it
+      # resolves the version spec against what's installed rather than assuming
+      # it's current. The exact key still changes, so the topped-up core is saved
+      # as a fresh entry (cache entries are immutable; you add, never overwrite).
+      - name: Cache the PlatformIO core
         uses: actions/cache@v4
         with:
-          path: |
-            ~/.platformio
-            ~/.cache/pip
+          path: ~/.platformio
           key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+          restore-keys: |
+            pio-${{ runner.os }}-
+      # pip has nothing to do with platformio.ini — it was sharing that key and
+      # being thrown away for an unrelated reason. It only holds the platformio
+      # wheel and its deps, so it's keyed on the workflow that installs it.
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-${{ hashFiles('.github/workflows/ci.yml') }}
+          restore-keys: |
+            pip-${{ runner.os }}-
       - name: Install PlatformIO
         run: pip install --upgrade platformio
-      - name: Compile firmware
-        run: pio run
+      # Every env on the espressif32 platform, which is all of them but xiao_c5.
+      #
+      # xiao_c5 is deliberately NOT built here. It rides the pioarduino platform
+      # fork, which collides with espressif32 over package names, so it needs its
+      # own PLATFORMIO_CORE_DIR — 7.6 GB measured. That can't share this `pio run`
+      # (a core dir is one env var per process), and caching a second core that
+      # size would evict everything else from the repo's 10 GB cache budget. So
+      # the C5 is a local-only compile for now:
+      #
+      #   PLATFORMIO_CORE_DIR=~/.platformio-pioarduino pio run -e xiao_c5
+      #
+      # Its pin map is unverified against hardware anyway. Revisit if the node
+      # firmware starts changing often enough that a local-only check gets missed.
+      # esp32dev_screen is here to keep the optional OLED path compiling, not
+      # because anyone flashes it: it is esp32dev_servo plus -DHAS_STATUS_SCREEN
+      # and the two Adafruit display libraries. Nothing has ever driven a real
+      # panel, so a compile is the only check there is.
+      - name: Compile firmware (all espressif32 targets, incl. the servo-only node)
+        run: pio run -e esp32dev_servo -e esp32dev_wroom32 -e adafruit_feather_esp32s2 -e dustgate_node -e esp32dev_screen
+      # Host tests for the pure C++ control layer. They need ArduinoJson, which
+      # the `pio run` above has already fetched into .pio.nosync/libdeps.
+      - name: Host tests (router, controller, nodebus/nodelink, shop, faults, screen)
+        run: npm run firmware:test
+        working-directory: tools

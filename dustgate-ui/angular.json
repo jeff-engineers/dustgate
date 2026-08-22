@@ -21,7 +21,10 @@
             ],
             "tsConfig": "tsconfig.app.json",
             "allowedCommonJsDependencies": [
-              "@device-model"
+              "@device-model",
+              "@topology",
+              "@topology-device",
+              "@shop"
             ],
             "assets": [],
             "styles": [
@@ -39,8 +42,8 @@
                 },
                 {
                   "type": "anyComponentStyle",
-                  "maximumWarning": "8kb",
-                  "maximumError": "12kb"
+                  "maximumWarning": "16kb",
+                  "maximumError": "24kb"
                 }
               ],
               "outputHashing": "all"

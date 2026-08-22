@@ -1,0 +1,334 @@
+<title>DustGate — a second collector on the canvas</title>
+
+<style>
+  :root {
+    --bg: #111; --surface: #1e1e1e; --raised: #262626; --border: #2e2e2e;
+    --text: #e8e8e8; --muted: #8a8a86; --accent: #f0a500; --success: #3cbe6e;
+    --danger: #d94444; --duct: #3a3a3a; --cable: #38b6f0; --radius: 14px;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); margin: 0; padding: 22px 18px 60px;
+         font-family: system-ui, -apple-system, sans-serif; font-size: 15px; line-height: 1.5; }
+  .wrap { max-width: 1080px; margin: 0 auto; display: flex; flex-direction: column; gap: 22px; }
+  h1 { font-size: 20px; font-weight: 600; margin: 6px 0 0; letter-spacing: -0.01em; text-wrap: balance; }
+  h2 { font-size: 13.5px; font-weight: 600; margin: 0; }
+  h3 { font-size: 15px; font-weight: 600; margin: 0 0 2px; }
+  .lede { color: var(--muted); font-size: 13.5px; max-width: 68ch; margin: 6px 0 0; }
+  .eyebrow { font-size: 11px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--muted); }
+  p { margin: 0; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.92em; color: var(--text); }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(215px, 1fr)); gap: 14px; align-items: start; }
+  .grid.wide { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+  .opt { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+         padding: 12px; display: flex; flex-direction: column; gap: 9px; }
+  .opt.pick { border-color: var(--accent); }
+  .opt.today { border-style: dashed; }
+  .hd { display: flex; align-items: baseline; gap: 8px; }
+  .hd .w { margin-left: auto; font-size: 11.5px; color: var(--muted); }
+  .opt.pick .hd .w { color: var(--accent); }
+  .screen { background: var(--bg); border: 1px solid var(--border); border-radius: 9px;
+            aspect-ratio: 375 / 600; overflow: hidden; }
+  .screen.short { aspect-ratio: 375 / 330; }
+  .screen svg { display: block; width: 100%; height: 100%; }
+  .note { font-size: 12px; color: var(--muted); line-height: 1.5; }
+  .note b { color: var(--text); font-weight: 600; }
+  .verdict { font-size: 11.5px; padding: 4px 8px; border-radius: 6px; align-self: flex-start; }
+  .verdict.good { color: var(--success); background: rgba(60,190,110,0.12); }
+  .verdict.bad  { color: var(--danger);  background: rgba(217,68,68,0.12); }
+  .verdict.mid  { color: var(--accent);  background: rgba(240,165,0,0.12); }
+
+  .duct { fill: none; stroke: var(--duct); stroke-width: 7; stroke-linecap: round; stroke-linejoin: round; }
+  .body { fill: var(--surface); stroke: var(--border); stroke-width: 2; }
+  .unit { fill: var(--surface); stroke: var(--border); stroke-width: 2; }
+  .stroke { stroke: var(--muted); fill: none; }
+  .lbl { fill: var(--text); font-size: 11px; text-anchor: middle; font-family: system-ui, sans-serif; }
+  .sub { fill: var(--muted); font-size: 10px; text-anchor: middle; font-family: system-ui, sans-serif; }
+  .tiny { fill: var(--muted); font-size: 9px; font-family: system-ui, sans-serif; }
+
+  /* the agreed system ground */
+  .ground { fill: #191919; }
+  .same   { fill: none; stroke: var(--accent); stroke-width: 1.6; stroke-dasharray: 5 5; opacity: 0.8; }
+  .cable  { fill: none; stroke: var(--cable); stroke-width: 2; }
+
+  /* tool-vs-gate candidates, all azure-family */
+  .tool-a { fill: #16262e; stroke: #2d6a86; stroke-width: 2; }
+  .tool-b { fill: #14222a; stroke: var(--cable); stroke-width: 2; }
+  .plug   { fill: #0d1a20; stroke: #2d6a86; stroke-width: 1; }
+  .gatelbl{ fill: var(--muted); font-size: 9px; text-anchor: middle; letter-spacing: 0.08em;
+            font-family: system-ui, sans-serif; }
+
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 15px 16px; }
+  .card p + p { margin-top: 9px; }
+  .card em { color: var(--text); font-style: normal; }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; margin-top: 4px; }
+  th, td { text-align: left; padding: 5px 8px 5px 0; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em; }
+</style>
+
+<div class="wrap">
+<div style="background:rgba(217,68,68,0.10);border:1px solid var(--danger);border-radius:12px;padding:13px 15px;margin-bottom:4px">
+  <p style="margin:0;color:var(--danger);font-size:13px;line-height:1.55">
+    <b>Archived 2026-08-20 — not current.</b> The canonical canvas design lives in
+    <code>docs/mockups/canvas.html</code>, which is the only page decisions are
+    recorded in now. Its system-ground and band decisions are recorded in canvas.html §1 and §3. Kept for the reasoning, not the conclusions.
+  </p>
+</div>
+
+  <header>
+    <span class="eyebrow">DustGate · build canvas</span>
+    <h1>A second collector on the same canvas</h1>
+    <p class="lede">
+      The model has carried N airflow systems for a while — the container, the
+      per-system checks, the live view's "3 dust collectors". The build canvas is the
+      last thing that only knows about one: it picks <code>systems[0]</code> at load and
+      never offers another.
+      <br><br>
+      <em>The load-bearing fact:</em> a system is exactly one collector and one duct
+      tree, and <b style="color:var(--text)">no duct is ever shared between two of
+      them</b> — that's structural in <code>shop.js</code>, not a convention. Air never
+      crosses between systems. Only a <em>machine</em> does, when its overarm pickup
+      hangs off a different collector than its cabinet port. So the boundary never has
+      to be searched for; it only has to be drawn.
+    </p>
+  </header>
+
+  <!-- ── 1. the boundary ─────────────────────────────────────────────────────── -->
+  <h3>Each system on its own ground</h3>
+  <p class="note" style="max-width:68ch">A grey ground per system and <b>exactly one
+    empty cell row</b> between them. No name chip, no gutter, no double space — the
+    ground itself says where one system stops. A new collector lands on the
+    <b>top-left cell of its own area</b>, which is where the trunk lane already starts.</p>
+
+  <div class="grid">
+    <div class="opt pick">
+      <div class="hd"><h2>Two systems</h2><span class="w">one row apart</span></div>
+      <div class="screen">
+        <svg viewBox="0 0 375 600" aria-label="Two systems, each on a grey ground, one cell row apart">
+          <!-- system 1 ground: rows 0–3 -->
+          <rect class="ground" x="0" y="14" width="375" height="330" rx="10"/>
+          <path class="duct" d="M40 78 V250"/>
+          <circle cx="40" cy="60" r="17" class="body"/>
+          <path class="stroke" fill="none" stroke-width="2.4" d="M40 49 a11 11 0 1 0 3.5 1.2 l-3.5 9.8"/>
+          <text x="40" y="34" class="sub">Cyclone</text>
+          <path class="duct" d="M40 128 H74"/>
+          <rect class="unit" x="74" y="116" width="196" height="24" rx="7"/>
+          <text x="172" y="110" class="sub">Main gate</text>
+          <path class="duct" d="M110 140 V166 M180 140 V166 M250 140 V166"/>
+          <rect class="body" x="86" y="166" width="48" height="32" rx="8"/><text class="lbl" x="110" y="186">Saw</text>
+          <rect class="body" x="156" y="166" width="48" height="32" rx="8"/><text class="lbl" x="180" y="186">Band</text>
+          <rect class="body" x="226" y="166" width="48" height="32" rx="8"/><text class="lbl" x="250" y="186">Router</text>
+          <path class="duct" d="M40 250 H74"/>
+          <circle cx="90" cy="250" r="14" class="body"/><line class="stroke" x1="90" y1="236" x2="90" y2="264" stroke-width="3"/>
+          <path class="duct" d="M90 264 V286"/>
+          <rect class="body" x="66" y="286" width="48" height="32" rx="8"/><text class="lbl" x="90" y="306">Jointer</text>
+
+          <!-- one empty cell row, rows 4 -->
+          <text class="tiny" x="16" y="368">one cell — nobody's</text>
+
+          <!-- system 2 ground -->
+          <rect class="ground" x="0" y="392" width="375" height="196" rx="10"/>
+          <path class="duct" d="M40 456 V520"/>
+          <circle cx="40" cy="438" r="17" class="body"/>
+          <path class="stroke" fill="none" stroke-width="2.4" d="M40 427 a11 11 0 1 0 3.5 1.2 l-3.5 9.8"/>
+          <text x="46" y="414" class="sub" style="text-anchor:start">Shop vac</text>
+          <path class="duct" d="M40 490 H74"/>
+          <rect class="unit" x="74" y="478" width="126" height="24" rx="12"/>
+          <path class="duct" d="M110 502 V528 M180 502 V528"/>
+          <rect class="body" x="86" y="528" width="48" height="32" rx="8"/><text class="lbl" x="110" y="544">Saw</text>
+          <text class="sub" x="110" y="556" style="font-size:8.5">overarm</text>
+          <rect class="body" x="156" y="528" width="48" height="32" rx="8"/><text class="lbl" x="180" y="548">Sander</text>
+
+          <!-- the machine link -->
+          <path class="same" d="M110 198 V216 H314 V578 H110 V560"/>
+          <text class="tiny" x="308" y="366" style="fill:var(--accent);text-anchor:end">same machine</text>
+        </svg>
+      </div>
+      <span class="verdict good">No line, no label, no wasted row</span>
+      <p class="note">The dashed amber run is the <b>table saw's overarm pickup</b>,
+        which hangs off the shop vac while its cabinet port stays on the cyclone. It is
+        not a duct — it's the machine, saying "these two boxes are one tool". It is the
+        only thing that ever crosses the gap.</p>
+    </div>
+
+    <div class="opt" style="grid-column:span 2;min-width:0">
+      <div class="hd"><h2>Why one row is enough</h2><span class="w">the band rule</span></div>
+      <div class="screen short">
+        <svg viewBox="0 0 375 330" aria-label="Systems own disjoint row bands">
+          <rect class="ground" x="8" y="14" width="359" height="128" rx="8"/>
+          <rect class="ground" x="8" y="176" width="359" height="134" rx="8"/>
+          <g opacity="0.55">
+            <circle cx="52" cy="46" r="13" class="body"/>
+            <rect x="90" y="72" width="150" height="18" rx="5" class="unit"/>
+            <rect x="100" y="106" width="42" height="22" rx="6" class="body"/>
+            <rect x="152" y="106" width="42" height="22" rx="6" class="body"/>
+            <circle cx="52" cy="208" r="13" class="body"/>
+            <rect x="90" y="238" width="70" height="18" rx="9" class="unit"/>
+            <rect x="100" y="272" width="42" height="22" rx="6" class="body"/>
+          </g>
+          <text x="187" y="163" class="tiny" style="text-anchor:middle">one empty cell row</text>
+          <path d="M300 128 L300 152" stroke="var(--danger)" stroke-width="1.6" marker-end="url(#ar)"/>
+          <defs><marker id="ar" markerWidth="7" markerHeight="7" refX="5" refY="3.5" orient="auto">
+            <path d="M0 0 L6 3.5 L0 7 z" fill="var(--danger)"/></marker></defs>
+          <text x="357" y="126" class="tiny" style="fill:var(--danger);text-anchor:end">drag down…</text>
+          <text x="357" y="200" class="tiny" style="text-anchor:end">…the whole band below</text>
+          <text x="357" y="214" class="tiny" style="text-anchor:end">slides down with it</text>
+        </svg>
+      </div>
+      <p class="note">Each system owns a contiguous range of rows. A drag that would land
+        in the next system's rows pushes that system down instead of crossing into it,
+        so the two grounds never interleave and the gap stays exactly one cell. That
+        invariant is what makes the boundary <b>free to draw</b> — no search, no A* run
+        per repaint, and no shop where the answer is "there isn't one".</p>
+      <p class="note">Adding a system is a row in the <code>⋯</code> menu next to Import
+        and Export, since a shop grows a second collector roughly once. The collector
+        appears on the top-left cell of the new ground with an open end below it, and
+        takes its name from whatever smart outlet you pair to it — so no dialog.</p>
+    </div>
+  </div>
+
+  <!-- ── 2. tool vs gate ─────────────────────────────────────────────────────── -->
+  <h3 style="margin-top:6px">Telling a tool from a gate</h3>
+  <p class="note" style="max-width:68ch">Today they're both a dark rounded rectangle with
+    a pale label, differing mainly in proportion — the first thing lost when the drawing
+    scales to fit a phone. Three ways to spend the azure on it. All three leave gates,
+    valves and the collector exactly as they are, so whatever changes, changes on the
+    machines.</p>
+
+  <div class="grid wide">
+
+    <div class="opt today">
+      <div class="hd"><h2>Today</h2><span class="w">shape only</span></div>
+      <div class="screen short">
+        <svg viewBox="0 0 375 330" aria-label="Today, tools and gates share a fill">
+          <path class="duct" d="M60 34 V70"/>
+          <rect class="unit" x="60" y="70" width="230" height="26" rx="7"/>
+          <text x="175" y="62" class="sub">Main gate</text>
+          <path class="duct" d="M104 96 V126 M232 96 V126"/>
+          <rect class="body" x="76" y="126" width="56" height="44" rx="9"/>
+          <text class="lbl" x="104" y="145">Table saw</text>
+          <rect x="84" y="150" width="40" height="14" rx="3" fill="#242424" stroke="var(--border)"/>
+          <rect class="body" x="204" y="126" width="56" height="44" rx="9"/>
+          <text class="lbl" x="232" y="145">Bandsaw</text>
+          <rect x="212" y="150" width="40" height="14" rx="3" fill="#242424" stroke="var(--border)"/>
+          <circle cx="310" cy="220" r="20" class="body"/><line class="stroke" x1="310" y1="200" x2="310" y2="240" stroke-width="3"/>
+          <text x="310" y="192" class="sub">Ball valve</text>
+          <rect class="body" x="60" y="200" width="56" height="44" rx="9"/>
+          <text class="lbl" x="88" y="219">Jointer</text>
+          <rect x="68" y="224" width="40" height="14" rx="3" fill="#242424" stroke="var(--border)"/>
+          <text x="18" y="290" class="tiny">Same fill, same stroke, same corner radius.</text>
+          <text x="18" y="305" class="tiny">At 55% the bar and the box are two grey rectangles.</text>
+        </svg>
+      </div>
+      <p class="note">The plug chip is already a tool-only marker, but it's the smallest
+        thing on the piece and the first casualty of zooming out.</p>
+    </div>
+
+    <div class="opt pick">
+      <div class="hd"><h2>A · Azure ground</h2><span class="w">the pick</span></div>
+      <div class="screen short">
+        <svg viewBox="0 0 375 330" aria-label="Option A, machines on a dark azure ground">
+          <path class="duct" d="M60 34 V70"/>
+          <rect class="unit" x="60" y="70" width="230" height="26" rx="7"/>
+          <text x="175" y="62" class="gatelbl">MAIN GATE</text>
+          <path class="duct" d="M104 96 V126 M232 96 V126"/>
+          <rect class="tool-a" x="76" y="126" width="56" height="44" rx="9"/>
+          <text class="lbl" x="104" y="145">Table saw</text>
+          <rect class="plug" x="84" y="150" width="40" height="14" rx="3"/>
+          <rect class="tool-a" x="204" y="126" width="56" height="44" rx="9"/>
+          <text class="lbl" x="232" y="145">Bandsaw</text>
+          <rect class="plug" x="212" y="150" width="40" height="14" rx="3"/>
+          <circle cx="310" cy="220" r="20" class="body"/><line class="stroke" x1="310" y1="200" x2="310" y2="240" stroke-width="3"/>
+          <text x="310" y="192" class="gatelbl">BALL VALVE</text>
+          <rect class="tool-a" x="60" y="200" width="56" height="44" rx="9"/>
+          <text class="lbl" x="88" y="219">Jointer</text>
+          <rect class="plug" x="68" y="224" width="40" height="14" rx="3"/>
+          <text x="18" y="286" class="tiny">Fill #16262e, stroke #2d6a86 — a desaturated azure, well</text>
+          <text x="18" y="300" class="tiny">short of the #38b6f0 the cables use.</text>
+          <text x="18" y="314" class="tiny" style="fill:var(--cable)">The machines are the electrical half of the drawing.</text>
+        </svg>
+      </div>
+      <span class="verdict good">Distinct at 40%</span>
+      <p class="note">A dark azure ground on machines only, with the plug chip picking up
+        the same family. Saturation stays low: the cable's full azure keeps meaning
+        "wire", and a tool never competes with one. The gate label drops to small muted
+        caps so a gate reads as infrastructure.</p>
+    </div>
+
+    <div class="opt">
+      <div class="hd"><h2>B · Azure outline</h2></div>
+      <div class="screen short">
+        <svg viewBox="0 0 375 330" aria-label="Option B, machines outlined in full azure">
+          <path class="duct" d="M60 34 V70"/>
+          <rect class="unit" x="60" y="70" width="230" height="26" rx="7"/>
+          <text x="175" y="62" class="gatelbl">MAIN GATE</text>
+          <path class="duct" d="M104 96 V126 M232 96 V126"/>
+          <rect class="tool-b" x="76" y="126" width="56" height="44" rx="9"/>
+          <text class="lbl" x="104" y="145">Table saw</text>
+          <rect class="plug" x="84" y="150" width="40" height="14" rx="3"/>
+          <rect class="tool-b" x="204" y="126" width="56" height="44" rx="9"/>
+          <text class="lbl" x="232" y="145">Bandsaw</text>
+          <rect class="plug" x="212" y="150" width="40" height="14" rx="3"/>
+          <circle cx="310" cy="220" r="20" class="body"/><line class="stroke" x1="310" y1="200" x2="310" y2="240" stroke-width="3"/>
+          <text x="310" y="192" class="gatelbl">BALL VALVE</text>
+          <rect class="tool-b" x="60" y="200" width="56" height="44" rx="9"/>
+          <text class="lbl" x="88" y="219">Jointer</text>
+          <rect class="plug" x="68" y="224" width="40" height="14" rx="3"/>
+          <path class="cable" d="M290 40 H330 V126 H262"/>
+          <text x="18" y="292" class="tiny">Unmistakable — and the same hue as the cable arriving</text>
+          <text x="18" y="306" class="tiny">at the gate, which is what "wired" already means here.</text>
+        </svg>
+      </div>
+      <span class="verdict mid">Loudest, and ambiguous</span>
+      <p class="note">The full <code>#38b6f0</code> as an outline. It separates the two
+        instantly, but azure is already the wiring layer's colour — a tool wearing it
+        beside a live cable reads as <em>wired</em> or <em>selected</em> rather than as
+        a machine. Shown because it's the version worth rejecting deliberately.</p>
+    </div>
+
+    <div class="opt">
+      <div class="hd"><h2>C · Azure on the plug only</h2></div>
+      <div class="screen short">
+        <svg viewBox="0 0 375 330" aria-label="Option C, azure confined to the plug row">
+          <path class="duct" d="M60 34 V70"/>
+          <rect class="unit" x="60" y="70" width="230" height="26" rx="7"/>
+          <text x="175" y="62" class="gatelbl">MAIN GATE</text>
+          <path class="duct" d="M104 96 V126 M232 96 V126"/>
+          <rect class="body" x="76" y="126" width="56" height="44" rx="9"/>
+          <text class="lbl" x="104" y="145">Table saw</text>
+          <rect x="84" y="150" width="40" height="14" rx="3" fill="#0e2530" stroke="var(--cable)" stroke-width="1.2"/>
+          <rect class="body" x="204" y="126" width="56" height="44" rx="9"/>
+          <text class="lbl" x="232" y="145">Bandsaw</text>
+          <rect x="212" y="150" width="40" height="14" rx="3" fill="#0e2530" stroke="var(--cable)" stroke-width="1.2"/>
+          <circle cx="310" cy="220" r="20" class="body"/><line class="stroke" x1="310" y1="200" x2="310" y2="240" stroke-width="3"/>
+          <text x="310" y="192" class="gatelbl">BALL VALVE</text>
+          <rect class="body" x="60" y="200" width="56" height="44" rx="9"/>
+          <text class="lbl" x="88" y="219">Jointer</text>
+          <rect x="68" y="224" width="40" height="14" rx="3" fill="#0e2530" stroke="var(--cable)" stroke-width="1.2"/>
+          <text x="18" y="292" class="tiny">Smallest change — but the marker is 40×14, and it is</text>
+          <text x="18" y="306" class="tiny">the first thing to vanish at 55%.</text>
+        </svg>
+      </div>
+      <span class="verdict mid">Too small to carry it</span>
+      <p class="note">Leaves the body alone and puts the azure where it's already
+        earned — the plug. Honest, and it fails at exactly the zoom level the problem
+        shows up at, which is the whole reason for asking.</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>What this doesn't touch</h3>
+    <p class="note">Nothing here changes the topology, the router, or what saves to the
+      device. The system ground is a rectangle drawn under a band; the tool treatment is
+      fill, stroke and label weight. Both are reversible in an afternoon.</p>
+    <table>
+      <thead><tr><th>Piece</th><th>Ground</th><th>Label</th><th>Says</th></tr></thead>
+      <tbody>
+        <tr><td>Collector</td><td>surface grey</td><td>name</td><td>the blower</td></tr>
+        <tr><td>Gate / valve / manifold</td><td>surface grey</td><td>small muted caps</td><td>air passes through</td></tr>
+        <tr><td>Machine</td><td>dark azure</td><td>name + plug row</td><td>the run ends here</td></tr>
+        <tr><td>Open end</td><td>—</td><td>—</td><td>unfinished pipe</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>

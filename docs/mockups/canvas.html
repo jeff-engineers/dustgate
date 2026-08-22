@@ -1,0 +1,572 @@
+<title>The Shop Canvas</title>
+
+<style>
+  :root {
+    --bg: #111; --surface: #1e1e1e; --raised: #262626; --border: #2e2e2e;
+    --text: #e8e8e8; --muted: #8a8a86; --accent: #f0a500; --success: #3cbe6e;
+    --danger: #d94444; --duct: #3a3a3a; --cable: #38b6f0; --radius: 14px;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); margin: 0; padding: 22px 18px 72px;
+         font-family: system-ui, -apple-system, sans-serif; font-size: 15px; line-height: 1.5; }
+  .wrap { max-width: 1080px; margin: 0 auto; display: flex; flex-direction: column; gap: 24px; }
+  h1 { font-size: 22px; font-weight: 600; margin: 6px 0 0; letter-spacing: -0.01em; text-wrap: balance; }
+  h2 { font-size: 13.5px; font-weight: 600; margin: 0; }
+  h3 { font-size: 15px; font-weight: 600; margin: 0 0 2px; }
+  .lede { color: var(--muted); font-size: 13.5px; max-width: 68ch; margin: 6px 0 0; }
+  .eyebrow { font-size: 11px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--muted); }
+  p { margin: 0; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.92em; color: var(--text); }
+  a { color: var(--accent); }
+
+  .rule { height: 1px; background: var(--border); border: 0; margin: 0; }
+  .sec { display: flex; flex-direction: column; gap: 12px; }
+
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 15px 16px; }
+  .card p + p { margin-top: 9px; }
+  .card em { color: var(--text); font-style: normal; }
+  .flag { border-left: 3px solid var(--accent); padding-left: 12px; }
+  .flag.open { border-left-color: var(--muted); }
+  .note { font-size: 12.5px; color: var(--muted); line-height: 1.55; }
+  .note b { color: var(--text); font-weight: 600; }
+
+  /* ── the legend ─────────────────────────────────────────────────────── */
+  .legend { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 0; }
+  .leg { display: grid; grid-template-columns: 96px 1fr; gap: 12px; align-items: center;
+         padding: 11px 12px; border-bottom: 1px solid var(--border); }
+  .leg svg { display: block; width: 96px; height: 34px; }
+  .leg .what { font-size: 13px; font-weight: 600; }
+  .leg .means { font-size: 11.5px; color: var(--muted); line-height: 1.45; margin-top: 1px; }
+
+  .duct     { fill: none; stroke: var(--duct); stroke-width: 7; stroke-linecap: round; stroke-linejoin: round; }
+  .duct.sec { stroke-width: 5; stroke-dasharray: 11 8; }
+  .stub     { fill: none; stroke: var(--accent); stroke-width: 6; stroke-linecap: round; stroke-dasharray: 6 5; }
+  .cable    { fill: none; stroke: var(--cable); stroke-width: 2.4; }
+  .cable.dragging { stroke-dasharray: 6 5; }
+  .inlet    { fill: #1d3540; stroke: #2d6a86; stroke-width: 1.6; }
+  .inlet.spare { fill: none; stroke: var(--muted); stroke-width: 1.4; stroke-dasharray: 3 2.5; }
+  .drag     { fill: none; stroke: var(--accent); stroke-width: 2.4; stroke-dasharray: 6 5; }
+  .toolbox  { fill: #16262e; stroke: #2d6a86; stroke-width: 2; }
+  .unit     { fill: var(--surface); stroke: #444; stroke-width: 1.6; }
+  .ground   { fill: #191919; }
+  .seam     { stroke: var(--border); stroke-width: 1.5; }
+
+  .lbl   { fill: var(--text); font-size: 11.5px; text-anchor: middle; font-family: system-ui, sans-serif; font-weight: 500; }
+  .sub   { fill: var(--muted); font-size: 9.5px; text-anchor: middle; font-family: system-ui, sans-serif; }
+  .gatelbl { fill: var(--muted); font-size: 9px; text-anchor: middle; letter-spacing: 0.08em; font-family: system-ui, sans-serif; }
+  .tiny  { fill: var(--muted); font-size: 9.5px; font-family: system-ui, sans-serif; }
+  .acc-t { fill: var(--accent); font-size: 9.5px; font-family: system-ui, sans-serif; }
+  .seamt { fill: var(--muted); font-size: 9.5px; font-weight: 600; letter-spacing: 0.09em;
+           text-transform: uppercase; font-family: system-ui, sans-serif; }
+
+  .screen { background: var(--bg); border: 1px solid var(--border); border-radius: 9px; overflow: hidden; }
+  .screen svg { display: block; width: 100%; height: 100%; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; align-items: start; }
+  .opt { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+         padding: 12px; display: flex; flex-direction: column; gap: 9px; }
+
+  .pill { font-size: 11px; padding: 3px 9px; border-radius: 20px; align-self: flex-start;
+          letter-spacing: 0.03em; }
+  .pill.built  { color: var(--success); background: rgba(60,190,110,0.12); }
+  .pill.agreed { color: var(--accent);  background: rgba(240,165,0,0.12); }
+  .pill.open   { color: var(--muted);   background: rgba(138,138,134,0.14); }
+
+  .tblwrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th, td { text-align: left; padding: 8px 12px 8px 0; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--muted); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em; }
+  td.when { color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+</style>
+
+<div class="wrap">
+
+  <header>
+    <span class="eyebrow">DustGate · canonical</span>
+    <h1>The shop canvas</h1>
+    <p class="lede">
+      The single source of truth for how the build canvas looks and behaves. Every
+      other mockup in this folder has been archived — their reasoning is still worth
+      reading, but a decision that matters lives <em>here</em>.
+      <br><br>
+      <b style="color:var(--text)">How to use this page.</b> Update it in place. When a
+      decision is made, change the section it affects here <em>and</em> add an entry to the
+      <a href="decisions.html">decision register</a>. Do not open a new mockup for a settled
+      question — that is what produced seven pages that disagreed with each other.
+    </p>
+  </header>
+
+  <hr class="rule"/>
+
+  <!-- ══ 1. VOCABULARY ═══════════════════════════════════════════════════ -->
+  <section class="sec">
+    <h3>1 · The marks and what they mean</h3>
+    <p class="note" style="max-width:68ch">Every line style on the canvas, in one place.
+      This list exists because "dashed" was read as meaning two different things at
+      once; it means exactly one thing per colour.</p>
+
+    <div class="card" style="padding:0">
+      <div class="legend">
+
+        <div class="leg">
+          <svg viewBox="0 0 96 34" aria-label="Solid grey line"><path class="duct" d="M8 17 H88"/></svg>
+          <div><div class="what">Duct</div>
+            <div class="means">Real ductwork inside one system. Solid, grey, full weight.</div></div>
+        </div>
+
+        <div class="leg">
+          <svg viewBox="0 0 96 34" aria-label="Dashed grey line, thinner"><path class="duct sec" d="M8 17 H88"/></svg>
+          <div><div class="what">Secondary run</div>
+            <div class="means">A supplemental port's run — and the only thing allowed to cross
+              the seam between two systems. Grey, dashed, thinner.</div></div>
+        </div>
+
+        <div class="leg">
+          <svg viewBox="0 0 96 34" aria-label="Dashed orange stub"><path class="stub" d="M8 17 H60"/><circle cx="72" cy="17" r="6" fill="none" stroke="var(--accent)" stroke-width="2"/></svg>
+          <div><div class="what">Open end</div>
+            <div class="means">Pipe with nothing on it yet. <b>Accent orange</b>, dashed —
+              never grey, which is what keeps it distinct from a secondary run.</div></div>
+        </div>
+
+        <div class="leg">
+          <svg viewBox="0 0 96 34" aria-label="Thin dashed accent line">
+            <path d="M8 17 H84" fill="none" stroke="var(--accent)" stroke-width="2.4"
+                  stroke-linecap="round" stroke-dasharray="7 6"/>
+          </svg>
+          <div><div class="what">Pipe being dragged</div>
+            <div class="means">Follows the pointer while you drag a run out of an outlet or a
+              port, and the piece it would land on lights up. Accent, dashed, thinner than a
+              real stub — it is a gesture, not ductwork.</div></div>
+        </div>
+
+        <div class="leg">
+          <svg viewBox="0 0 96 34" aria-label="Solid azure line"><path class="cable" d="M8 17 H88"/></svg>
+          <div><div class="what">Cable</div>
+            <div class="means">A board's wire to a gate. Azure, thin — never the app's red,
+              which already means danger.</div></div>
+        </div>
+
+        <div class="leg">
+          <svg viewBox="0 0 96 34" aria-label="Dashed azure line"><path class="cable dragging" d="M8 17 H88"/></svg>
+          <div><div class="what">Cable, mid-drag</div>
+            <div class="means">Only while you are dragging one. Azure keeps it unambiguous
+              against the orange open end.</div></div>
+        </div>
+
+        <div class="leg">
+          <svg viewBox="0 0 96 34" aria-label="Square primary port glyph">
+            <rect class="toolbox" x="18" y="16" width="60" height="16" rx="4"/>
+            <rect class="inlet" x="30" y="7" width="14" height="11" rx="2"/>
+          </svg>
+          <div><div class="what">Primary port — square</div>
+            <div class="means">A machine's <b>primary</b> inlet — the port its main duct
+              plugs into. Always drawn, on whichever edge that duct actually arrives at: top
+              preferred, sides when a side run is genuinely shorter.</div></div>
+        </div>
+
+        <div class="leg">
+          <svg viewBox="0 0 96 34" aria-label="Tapered secondary port glyph">
+            <rect class="toolbox" x="18" y="16" width="60" height="16" rx="4"/>
+            <path class="inlet" d="M52 17 L60 4 L68 17 Z"/>
+          </svg>
+          <div><div class="what">Secondary port — tapered</div>
+            <div class="means">A <b>secondary</b> inlet on the same machine — an overarm
+              guard, a downdraft table. Appears only once the port exists, never as a
+              placeholder, and its duct lands on it. Drag it to re-run its pipe.</div></div>
+        </div>
+
+        <div class="leg" style="border-bottom:none">
+          <svg viewBox="0 0 96 34" aria-label="Grey ground band with a seam">
+            <rect class="ground" x="4" y="3" width="88" height="12" rx="4"/>
+            <line class="seam" x1="4" y1="18" x2="92" y2="18"/>
+            <rect class="ground" x="4" y="21" width="88" height="10" rx="4"/>
+          </svg>
+          <div><div class="what">Ground &amp; seam</div>
+            <div class="means">One grey band per airflow system. Only drawn once there are
+              two — with one collector it would say nothing. It is <b>ground, not a lid</b>:
+              the board's dots run through it, and a right-click on it opens the same
+              "what goes here" menu the bare board does (D-42).</div></div>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <hr class="rule"/>
+
+  <!-- ══ 2. MACHINES AND PORTS ═══════════════════════════════════════════ -->
+  <section class="sec">
+    <h3>2 · A machine is one box, however many ports it has</h3>
+    <span class="pill built">Built</span>
+
+    <div class="grid">
+      <div class="opt">
+        <div style="display:flex;align-items:baseline;gap:8px"><h2>Two inlets, one body</h2></div>
+        <div class="screen" style="aspect-ratio:375/230">
+          <svg viewBox="0 0 375 230" aria-label="One machine with a square primary port and a tapered secondary port">
+            <path class="duct" d="M56 16 V40"/>
+            <rect class="unit" x="56" y="40" width="150" height="24" rx="7"/>
+            <text class="gatelbl" x="131" y="34">MAIN GATE</text>
+            <path class="duct" d="M92 64 V112"/>
+
+            <path class="duct sec" d="M330 24 V100 H150 V110"/>
+
+            <rect class="toolbox" x="56" y="120" width="120" height="72" rx="11"/>
+            <text class="lbl" x="116" y="150">Table saw</text>
+            <rect x="76" y="158" width="80" height="20" rx="5" fill="#0d1a20" stroke="#2d6a86" stroke-width="1"/>
+            <text class="sub" x="116" y="172">tablesaw · 1.4 kW</text>
+            <rect class="inlet" x="84" y="110" width="16" height="12" rx="2"/>
+            <path class="inlet" d="M140 122 L150 109 L160 122 Z"/>
+            <text class="sub" x="150" y="103" style="font-size:9">overarm</text>
+
+            <text class="tiny" x="14" y="216">One box, one name, one plug, one thing you switch on.</text>
+          </svg>
+        </div>
+        <p class="note">A second port is a differently-shaped inlet on the <em>same</em> box —
+          never a second body, never a dashed identity link. A drawing that reads as two saws
+          is a drawing that lies about the shop.</p>
+      </div>
+
+      <div class="opt">
+        <div style="display:flex;align-items:baseline;gap:8px"><h2>Where a machine lives</h2></div>
+        <div class="screen" style="aspect-ratio:375/230">
+          <svg viewBox="0 0 375 230" aria-label="A machine in one system with a secondary run crossing the seam">
+            <rect class="ground" x="8" y="8" width="359" height="112" rx="11"/>
+            <rect class="ground" x="8" y="134" width="359" height="88" rx="11"/>
+            <line class="seam" x1="8" y1="127" x2="367" y2="127"/>
+            <text x="20" y="122" class="seamt">Shop vac</text>
+
+            <path class="duct" d="M40 22 V44 H72"/>
+            <circle cx="40" cy="22" r="12" class="unit"/>
+            <rect class="unit" x="72" y="34" width="120" height="20" rx="6"/>
+            <path class="duct" d="M106 54 V66"/>
+
+            <rect class="toolbox" x="74" y="66" width="88" height="42" rx="10"/>
+            <text class="lbl" x="118" y="84" style="font-size:10.5">Bandsaw</text>
+            <rect class="inlet" x="98" y="57" width="14" height="11" rx="2"/>
+            <path class="inlet" d="M132 68 L140 55 L148 68 Z"/>
+
+            <circle cx="290" cy="176" r="14" class="unit"/>
+            <line x1="290" y1="162" x2="290" y2="190" stroke="var(--muted)" stroke-width="2.5"/>
+            <text class="gatelbl" x="290" y="155">AUX VALVE</text>
+            <path class="duct sec" d="M290 162 V55 H140"/>
+
+            <text class="acc-t" x="14" y="212">The machine sits in ONE system. Only its secondary</text>
+            <text class="acc-t" x="14" y="224">run crosses the seam.</text>
+          </svg>
+        </div>
+        <p class="note">A tool belongs to exactly one system and is drawn there, once. A
+          <b>secondary port's run</b> may be fed from the other collector — that is the one
+          thing permitted to cross the seam, and it is drawn as a secondary run so a shared
+          machine reads as shared.</p>
+      </div>
+    </div>
+
+    <div class="card flag">
+      <p class="note"><b>A new system is a bare collector.</b> Nothing else — no open end, no
+        first run. It used to arrive with a drop already hanging off it, which guessed at a run
+        nobody asked for and put it somewhere you then had to move. Every collector wears
+        add-dots on its free outlets, so starting the first run is one drag away.</p>
+      <p class="note"><b>A duct always lands on a port.</b> Never on bare box. Every machine
+        draws its square primary port at the point its own run arrives, and every secondary port
+        sits where <em>its</em> run arrives — so the drawing says which pipe feeds what without
+        following either of them. Both prefer the TOP edge, and the router prefers a top entry to
+        match; when a side run is genuinely shorter the port moves to that side rather than
+        leaving the pipe pointing at nothing. Dragging the machine carries both with it.</p>
+      <p class="note"><b>Both ports slide the same way</b> — square and tapered alike. The
+        tapered one was very nearly pinned to the top edge on the grounds that it draws something
+        that really does hang above the work, and the pipe would hook over the box to reach it.
+        Consistency won: one rule you can state in a sentence beats two rules that each need
+        their own picture, and a port that behaves differently by shape is a thing to remember
+        every time you drag a machine. Both options are drawn in
+        <code>archived/side-entry-hood.html</code>.</p>
+      <p class="note"><b>Where on the edge.</b> A port sits at the <b>centre</b> of whichever edge its
+        run arrives at. It steps aside only when another of that machine's runs lands on the
+        <em>same</em> edge — the primary square goes left, the tapered ports go right — so a lone
+        port is never drawn dodging a neighbour that went somewhere else (D-48). A duct always
+        meets a port <b>square</b>: where the port sits off the lattice, the run jogs along it and
+        turns in at 90°, because a short jog reads as pipe and a slant reads as a mistake.</p>
+
+      <p class="note"><b>The rule, stated once.</b> A machine lives in one system. A machine's
+        <em>ports</em> are elements in the airflow tree, each with exactly one parent duct — a
+        tool may never have two parents, which is why a second port is a new port element
+        rather than a second parent on the old one. A supplemental port's run is the only run
+        allowed to cross the seam, and may be disconnected and re-routed to a primary on the
+        second system if that is what the shop wants.</p>
+    </div>
+  </section>
+
+  <hr class="rule"/>
+
+  <!-- ══ 3. DRAG RULES ═══════════════════════════════════════════════════ -->
+  <section class="sec">
+    <h3>3 · What can stop a drag</h3>
+    <span class="pill built">Built · 2026-08-20</span>
+    <div class="card">
+      <p class="note"><b>Almost nothing.</b> A user is never blocked from moving a piece because
+        the shop is in a bad state — a broken layout is exactly the thing they are dragging
+        their way out of. Only two things refuse a drop:</p>
+      <div class="tblwrap" style="margin-top:10px">
+        <table>
+          <tr><th>Condition</th><th>Result</th></tr>
+          <tr><td><b>The cell is occupied</b></td>
+              <td><span style="color:var(--danger)">Refused.</span> Named: "Bandsaw is already in that cell."</td></tr>
+          <tr><td><b>You are dragging a run END</b></td>
+              <td><span style="color:var(--ok,#3cbe6e)">Allowed anywhere.</span> An end is bare pipe, not a piece — it crosses into another system freely and claims no rows of its own (D-47). Filling it there is what gets refused.</td></tr>
+          <tr><td><b>The row belongs to another system</b></td>
+              <td><span style="color:var(--danger)">Refused.</span> Systems own contiguous row bands; interleaving them makes the grey ground undrawable.</td></tr>
+          <tr><td>A duct will cross a device</td>
+              <td><span style="color:var(--success)">Allowed.</span> Advisory only — says what the drawing will do.</td></tr>
+          <tr><td>A duct loses its clear way in</td>
+              <td><span style="color:var(--success)">Allowed.</span> Advisory, and baselined so it reports what <em>this</em> move breaks.</td></tr>
+          <tr><td>A duct runs through a board's new cell</td>
+              <td><span style="color:var(--success)">Allowed.</span> Ducts route around boards, so the run simply moves.</td></tr>
+          <tr><td>The shop is leaking / unfinished / invalid</td>
+              <td><span style="color:var(--success)">Allowed.</span> Never a reason to freeze the canvas.</td></tr>
+        </table>
+      </div>
+      <p class="note" style="margin-top:10px">Advisory text is written in the present tense
+        ("The duct will have to run through Table saw") and rendered muted, not amber — an
+        alarm colour on a move that is about to succeed reads as "stop".</p>
+    </div>
+  </section>
+
+  <hr class="rule"/>
+
+  <!-- ══ 4. ADDING A SECOND PORT ═══════════════════════════════════ -->
+  <section class="sec">
+    <h3>4 · Adding a second port</h3>
+    <span class="pill built">Built · 2026-08-20</span>
+    <p class="note" style="max-width:68ch">One gesture, <b>either direction</b>. The two ends
+      of a secondary port's run are a machine's spare inlet and a gate in the other system — and you
+      may start the drag from whichever of them you happen to be looking at.</p>
+
+    <div class="grid">
+
+      <div class="opt">
+        <div style="display:flex;align-items:baseline;gap:8px"><h2>Pull it in</h2>
+          <span style="margin-left:auto;font-size:11.5px;color:var(--muted)">gate → machine</span></div>
+        <div class="screen" style="aspect-ratio:375/250">
+          <svg viewBox="0 0 375 250" aria-label="Dragging a run end from the other system up onto the machine">
+            <rect class="ground" x="8" y="8" width="359" height="132" rx="11"/>
+            <line class="seam" x1="8" y1="148" x2="367" y2="148"/>
+            <text x="20" y="143" class="seamt">Shop vac</text>
+            <rect class="ground" x="8" y="156" width="359" height="86" rx="11"/>
+
+            <path class="duct" d="M60 18 V34"/>
+            <rect class="unit" x="60" y="34" width="180" height="20" rx="6"/>
+            <text class="gatelbl" x="150" y="29">MAIN GATE</text>
+            <path class="duct" d="M113 54 V78"/>
+
+            <rect class="toolbox" x="72" y="78" width="110" height="56" rx="11"/>
+            <text class="lbl" x="127" y="106">Router table</text>
+            <rect class="inlet" x="106" y="69" width="14" height="11" rx="2"/>
+
+            <circle cx="296" cy="196" r="16" class="unit"/>
+            <line x1="296" y1="180" x2="296" y2="212" stroke="var(--muted)" stroke-width="2.5"/>
+            <text class="gatelbl" x="296" y="160">AUX VALVE</text>
+
+            <path class="duct" d="M296 180 V162 H252"/>
+            <circle cx="252" cy="162" r="6" fill="none" stroke="var(--accent)" stroke-width="2"/>
+            <path class="drag" d="M246 158 L196 116"/>
+
+            <rect x="66" y="72" width="122" height="68" rx="15" fill="none"
+                  stroke="var(--accent)" stroke-width="2" stroke-dasharray="5 4"/>
+            <text class="acc-t" x="200" y="106">drop on the machine</text>
+          </svg>
+        </div>
+        <p class="note">Drag <b>any</b> loose end onto a machine that already has a duct — a
+          run's open end, or a free outlet stub straight off a manifold, collector or sliding
+          gate. The machine highlights, because <em>already having a duct</em> is what makes
+          this a second port rather than an ordinary connection.</p>
+      </div>
+
+      <div class="opt">
+        <div style="display:flex;align-items:baseline;gap:8px"><h2>Or re-run it</h2>
+          <span style="margin-left:auto;font-size:11.5px;color:var(--muted)">port → gate</span></div>
+        <div class="screen" style="aspect-ratio:375/250">
+          <svg viewBox="0 0 375 250" aria-label="Dragging out of the machine's spare inlet down to a gate in the other system">
+            <rect class="ground" x="8" y="8" width="359" height="132" rx="11"/>
+            <line class="seam" x1="8" y1="148" x2="367" y2="148"/>
+            <text x="20" y="143" class="seamt">Shop vac</text>
+            <rect class="ground" x="8" y="156" width="359" height="86" rx="11"/>
+
+            <path class="duct" d="M60 18 V34"/>
+            <rect class="unit" x="60" y="34" width="180" height="20" rx="6"/>
+            <text class="gatelbl" x="150" y="29">MAIN GATE</text>
+            <path class="duct" d="M113 54 V78"/>
+
+            <rect class="toolbox" x="72" y="78" width="110" height="56" rx="11"/>
+            <text class="lbl" x="127" y="106">Router table</text>
+            <rect class="inlet" x="106" y="69" width="14" height="11" rx="2"/>
+
+            <circle cx="296" cy="196" r="16" class="unit"/>
+            <line x1="296" y1="180" x2="296" y2="212" stroke="var(--muted)" stroke-width="2.5"/>
+            <text class="gatelbl" x="296" y="160">AUX VALVE</text>
+
+            <path class="inlet" d="M140 79 L150 66 L160 79 Z"/>
+            <text class="sub" x="150" y="60" style="font-size:9">overarm</text>
+            <path class="drag" d="M154 70 L280 178"/>
+
+            <circle cx="296" cy="196" r="26" fill="none" stroke="var(--accent)"
+                    stroke-width="2" stroke-dasharray="5 4"/>
+            <text class="acc-t" x="168" y="46">drag the port itself</text>
+            <text class="acc-t" x="120" y="234">…onto a gate over here</text>
+          </svg>
+        </div>
+        <p class="note">An existing port is its own handle: drag it onto another gate, a
+          collector or a loose end — including one across the seam — and its pipe re-runs from
+          there. <b>Nothing hollow advertises a port that doesn't exist yet</b>; the glyph
+          appears with its port and never before.</p>
+      </div>
+
+      <div class="opt">
+        <div style="display:flex;align-items:baseline;gap:8px"><h2>Either way, it asks</h2></div>
+        <div class="screen" style="aspect-ratio:375/250">
+          <svg viewBox="0 0 375 250" aria-label="The confirmation sheet, with an editable name">
+            <rect x="26" y="26" width="323" height="200" rx="14" fill="var(--raised)" stroke="var(--border)"/>
+            <text x="48" y="58" class="lbl" style="text-anchor:start;font-size:13.5">Router table already has a duct.</text>
+            <text x="48" y="78" class="tiny">Add this as a second port?</text>
+
+            <text x="48" y="104" class="tiny" style="font-size:9">WHAT IS IT?</text>
+            <rect x="48" y="110" width="279" height="34" rx="9" fill="var(--bg)" stroke="var(--accent)"/>
+            <path class="inlet" d="M62 134 L70 120 L78 134 Z"/>
+            <text x="90" y="132" class="lbl" style="text-anchor:start;font-size:12">Auxiliary</text>
+            <rect x="286" y="118" width="30" height="18" rx="5" fill="none" stroke="var(--border)"/>
+            <text x="301" y="131" class="sub" style="font-size:8.5">edit</text>
+
+            <rect x="48" y="156" width="134" height="34" rx="9" fill="var(--bg)" stroke="var(--border)"/>
+            <text x="115" y="177" class="lbl" style="font-size:11.5">Cancel</text>
+            <rect x="192" y="156" width="135" height="34" rx="9" fill="var(--accent)"/>
+            <text x="259" y="177" class="lbl" style="font-size:11.5;fill:#1a1200;font-weight:600">Add port</text>
+
+            <text x="48" y="212" class="tiny">Replacing the existing run is deliberately not offered.</text>
+          </svg>
+        </div>
+        <p class="note">The same sheet, the same port, whichever direction you dragged. Two
+          outcomes, because there are only two: it is a second port, or it was a misdrop.
+          <br><br>
+          <b>The name is the user's.</b> It arrives as <b>Auxiliary</b> and is editable right
+          there — only the person with the shop knows whether that hose is an overarm guard, a
+          downdraft table or the second port on a lathe, and the name is what gets captioned
+          beside the port.</p>
+      </div>
+    </div>
+
+    <div class="card flag">
+      <p class="note"><b>It needs no schema change.</b> The supplemental port element lives in
+        the system that FEEDS it, alongside the gate it hangs off — only the box it is drawn on
+        sits in the other band, so nothing structural crosses the seam and
+        <code>validateShop</code> is untouched. Both test suites already carry the shape: a
+        table saw with its cabinet port in one system and its overarm in the other.
+        <br><br>
+        <b>Why both directions.</b> The two ends live in different systems, often
+        far apart on a stacked canvas. Forcing the drag to start at the machine means scrolling
+        to it after you have already found the gate — and forcing it to start at the gate means
+        the reverse. Neither end is privileged, so neither is made the only handle.
+        <br><br>
+        <b>What it replaces.</b> The tool-menu route creates an unattached open end, picks its
+        cell with no collision check, and leaves the document invalid until you plumb it. Measured
+        on the demo shop, that end lands at <code>(496,172)</code> — Main gate's outlet 4, already
+        feeding the manifold. The menu item goes away; two ways in would mean keeping the broken
+        one.</p>
+    </div>
+  </section>
+
+  <hr class="rule"/>
+
+  <!-- ══ 5. THE PLUG ROW AND THE TRAY ════════════════════════════════ -->
+  <section class="sec">
+    <span class="pill built">Built · 2026-08-21</span>
+    <h3>5 · The plug row, the tray, and naming an outlet</h3>
+    <p class="note" style="max-width:68ch">
+      A tool box is two rows: its name, and its <b>plug row</b>. The plug row is its own tap
+      target — the body drags the tool, the row opens the outlet. It shows the draw when the
+      tool is drawing and <em>which</em> outlet when it isn't, because an idle number tells you
+      nothing and the identity does.
+    </p>
+
+    <div class="grid">
+      <div class="card">
+        <h3>Where the name comes from</h3>
+        <p class="note">
+          The plug's own app-visible name, read live off the Shelly on every scan. Below that
+          sits <code>sensor.outlet.name</code>, a <b>cached copy</b> so a plug that is switched
+          off, or paired before the last sweep, still reads as a name rather than an IP. The
+          live scan always wins — rename a plug in the Shelly app and this follows.
+          Order: <code>lastScan.name || outlet.name || host || ip</code>.
+        </p>
+        <p class="note">
+          DustGate writes the other half of that name itself — <code>"&lt;label&gt; ·
+          &lt;our mDNS name&gt;"</code> — so a plug says who is using it in the Shelly app,
+          where no DustGate UI exists to explain why it is spoken for.
+        </p>
+      </div>
+
+      <div class="card">
+        <h3>The tray, and pairing</h3>
+        <p class="note">
+          Every outlet on the network not yet on a machine. One line each: name, and draw only
+          when it is drawing. <b>Drag</b> a chip onto a tool's plug row, or <b>tap a row</b> to
+          arm it and then tap a chip — same pairing, minus the drag, which is what a phone wants.
+          <em>Match</em> pairs by name where the names already agree.
+        </p>
+        <p class="note">
+          A <b>tap on a chip with nothing armed</b> opens that outlet's own dialog: name it, pick
+          which tool it's for, and take it off whoever owns it — all three in one place. Naming
+          before pairing is the point: four identical <code>shellyplug-s-…</code> on a shelf is
+          exactly when a name earns its keep.
+        </p>
+      </div>
+
+      <div class="card flag">
+        <h3>Ownership gates every write — it doesn't forbid it</h3>
+        <p class="note">
+          The LAN is not ours alone. A plug owned by Home Assistant or another brain is paired
+          <b>read-only, by polling</b>, and nothing automatic ever writes it. The row says who
+          has it, and then offers two ways past, kept apart because their blast radius isn't
+          the same: <b>Rename it anyway</b> writes the label only — the plug keeps reporting to
+          its owner, so nothing over there stops working — and <b>Take this outlet</b> repoints
+          its push target, naming who goes quiet first. Neither is offered when the ownership
+          read failed: we can't say whose plug it is, and confirming a question nobody could
+          pose isn't consent.
+        </p>
+        <p class="note">
+          <b>Remove</b> is the one verb that undoes a pairing: it drops the outlet from the
+          layout, takes our suffix off the plug's name, and hands its push target back. The
+          device half is best-effort and reported — a plug you have physically unplugged is
+          exactly when you want to detach it, so the layout write never waits on the plug.
+        </p>
+      </div>
+    </div>
+
+    <p class="note" style="max-width:68ch">
+      Full reasoning in <a href="decisions.html">D-49 through D-53</a>. The exploration that
+      produced them is <code>archived/outlet-rename-unpair.html</code>, which carries the
+      three-claim-state matrix these screens have to survive.
+    </p>
+  </section>
+
+  <hr class="rule"/>
+
+  <!-- ══ 6. DECISIONS ════════════════════════════════════════════════ -->
+  <section class="sec">
+    <h3>6 · Decisions</h3>
+    <p class="note" style="max-width:68ch">Every decision — canvas and otherwise — lives in
+      <a href="decisions.html"><code>docs/mockups/decisions.html</code></a>, the register.
+      It is searchable and filterable by area, and records the open questions too.
+      <b>This page does not keep its own log:</b> two lists that drift apart is the exact
+      failure that produced seven disagreeing mockups.</p>
+  </section>
+
+  <hr class="rule"/>
+
+  <section class="sec">
+    <h3>Where the old pages went</h3>
+    <p class="note" style="max-width:68ch">All of them are in <code>docs/mockups/archived/</code>
+      with a banner saying what replaced them. They are worth reading for <em>why</em> — the
+      alternatives that were drawn and rejected are not repeated here — but nothing in that
+      folder is current, and nothing there should be treated as a decision.</p>
+  </section>
+
+</div>

@@ -1,0 +1,420 @@
+:host { display: flex; flex-direction: column; height: 100dvh; height: 100vh; overflow: hidden; }
+/* Wraps rather than clips: the row already overflowed a phone-width viewport
+   before Boards was added, silently pushing Save off the edge. */
+.bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; padding: 12px 16px;
+       border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.bar .title { font-size: 15px; font-weight: 600; flex: 1 0 auto; }
+.bar button { background: var(--surface); border: 1px solid var(--border); color: var(--text); border-radius: var(--radius); padding: 9px 14px; font-size: 14px; }
+
+/* Contextual guidance bar — pinned under the toolbar. */
+.guide { display: flex; align-items: center; gap: 10px; padding: 8px 16px; border-bottom: 1px solid var(--border);
+  flex-shrink: 0; font-size: 13px; line-height: 1.4; color: var(--muted); background: var(--surface); }
+.guide span { flex: 1; }
+.guide.warn { color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, var(--surface)); }
+.guide.ok   { color: var(--success); }
+.guide .cap { background: var(--danger); border: none; color: #fff; border-radius: 7px; padding: 5px 10px; font-size: 12px; flex-shrink: 0; }
+.bar button.primary { background: var(--accent); border-color: var(--accent); color: #1a1200; font-weight: 600; }
+.bar button:disabled { opacity: 0.45; }
+
+/* Column, not row: the board tray sits UNDER the canvas. As a row it became a
+   second column and squeezed the canvas to a slot. */
+/* position: relative so the zoom control can anchor to the stage rather than to
+   the canvas's scrolled content — see the note on .zoomer in the template. */
+.stage { flex: 1; display: flex; flex-direction: column; min-height: 0; position: relative; }
+/* overflow stays auto — it is what makes the element scrollable at all, which the
+   pan gesture, the zoom anchoring and the wheel all drive through scrollLeft/Top.
+   Only the BARS are hidden: they framed the drawing in permanent grey furniture,
+   and with fit-on-open, pan, and the zoom readout there is nothing left for them
+   to tell you. Both axes go, not just the vertical — a lone horizontal bar under a
+   bare right edge reads as a rendering fault rather than a decision. */
+.canvas-wrap { flex: 1; overflow: auto; background: var(--bg); position: relative;
+               overscroll-behavior: contain; scrollbar-width: none; }
+.canvas-wrap::-webkit-scrollbar { display: none; }
+/* The canvas owns every touch, and the component decides what each one means:
+   background → pan, handle → drag. That arbitration CANNOT be done in CSS.
+   touch-action is honored on the <svg> root but not dependably on its <g>
+   children (WebKit ignores it there), so "none on .node, pan on the canvas" works
+   in Chrome and silently fails on iOS — a finger on a glyph pans the board
+   instead of moving the piece. Since the split has to live in code anyway, the
+   root takes "none" and onCanvasDown/pinch below implement pan and zoom. */
+svg.canvas { display: block; touch-action: none; }
+
+/* Zoom control. Floating over the canvas rather than in the toolbar, which
+   already wraps to two rows on a phone. Bottom-right, thumb-reachable, and clear
+   of the guide bar. */
+.zoomer { position: absolute; right: 12px; bottom: 12px; z-index: 15;
+          display: flex; flex-direction: column; align-items: stretch;
+          background: var(--surface); border: 1px solid var(--border-strong, #444);
+          border-radius: 10px; box-shadow: 0 4px 14px rgba(0,0,0,0.4); overflow: hidden; }
+.zoomer button { background: none; border: none; color: var(--text); font-size: 17px;
+                 line-height: 1; padding: 0; width: 40px; height: 38px; touch-action: manipulation; }
+.zoomer button.pct { font-size: 11px; height: 30px; color: var(--muted);
+                     border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+.zoomer button:disabled { opacity: 0.35; }
+
+.duct { stroke: var(--border-strong, #3a3a3a); stroke-width: 6; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+.duct.live { stroke: var(--success); }
+/* A supplemental port's run. Thinner and dashed so a machine shared between two
+   systems reads as shared at a glance, rather than needing the pipe followed to its
+   end. Grey, never accent — orange dashes already mean an UNFINISHED run
+   (.open-stub), and one colour must mean one thing. */
+.duct.sec { stroke-width: 4.5; stroke-dasharray: 11 8; }
+/* The knockout that makes a crossing legible: 5px of canvas either side of the
+   duct on top. It runs the whole length, so every duct sits in a thin clear
+   corridor through the dot grid — deliberate, and it costs nothing to draw. */
+.duct-casing { stroke: var(--bg); stroke-width: 16; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+/* Branch points: a subtle dot at each grid step on a duct; click to branch there. */
+.bdot { cursor: cell; }
+.bdot-dot { fill: var(--muted); opacity: 0.5; transition: r .1s, opacity .1s, fill .1s; }
+.bdot:hover .bdot-dot { fill: var(--accent); opacity: 1; r: 6; }
+/* Output add-dots: a hollow ⊕ ring at each free output — add a run there. */
+.odot { cursor: cell; }
+.odot-ring { fill: var(--bg); stroke: var(--muted); stroke-width: 1.5; transition: r .1s, stroke .1s; }
+.odot-plus { stroke: var(--muted); stroke-width: 1.5; stroke-linecap: round; transition: stroke .1s; }
+.odot:hover .odot-ring { stroke: var(--accent); r: 7; }
+.odot:hover .odot-plus { stroke: var(--accent); }
+/* Open run — bare pipe dead-ending at an unpopulated end. The run itself stays a
+   plain pipe; only the LAST stretch is a dashed accent + accent end-dot, so the
+   "unfinished" signal sits at the end and doesn't drown the branch dots along it. */
+.open-stub { stroke: var(--accent); stroke-width: 6; fill: none; stroke-linecap: round; stroke-dasharray: 6 5; }
+/* The pipe you are dragging, and the piece it would land on. Thinner than a real
+   stub because it is a gesture, not ductwork — it exists only until you let go. */
+.drag-stub { stroke: var(--accent); stroke-width: 3.5; fill: none; stroke-linecap: round;
+             stroke-dasharray: 7 6; pointer-events: none; }
+/* Dragged into ANOTHER system: the grey of a cross-seam run (.duct.sec), so the
+   colour changes while you are still deciding rather than on release. */
+.drag-stub.crossing { stroke: var(--border-strong, #3a3a3a); }
+.node.drop-target .body, .node.drop-target .unit { stroke: var(--accent); stroke-width: 2.5; }
+.node.drop-target .tool-body { stroke: var(--accent); stroke-width: 2.5; }
+.open-end .dot { fill: var(--accent); }
+.open-end .end-ring { fill: none; stroke: var(--accent); stroke-width: 1.5; opacity: 0.6; }
+/* A system's ground. Barely there on purpose: it has to survive the zoom-out that
+   a hairline wouldn't, without competing with the ductwork drawn on top of it. */
+.ground { fill: #191919; }
+/* The board's dots, re-laid over the grey so the grid runs unbroken through a
+   system's ground. Inert: the grey underneath it is what answers a click. */
+.ground-dots { pointer-events: none; }
+/* The seam between two systems, and the name of the one below it. Muted caps: it
+   is a caption on the board, not a piece standing on it. */
+.sysdiv line { stroke: var(--border); stroke-width: 1.5; }
+.sysdiv text { fill: var(--muted); font-size: 11px; font-weight: 600;
+               letter-spacing: 0.09em; text-transform: uppercase; }
+.node { cursor: grab; }
+.node.dragging { cursor: grabbing; }
+/* Live drop feedback: the target cell, and the ghost itself when it's refused. */
+.target { fill: color-mix(in srgb, var(--accent) 10%, transparent); stroke: var(--accent);
+          stroke-width: 1.5; stroke-dasharray: 5 4; pointer-events: none; }
+.target.bad { fill: color-mix(in srgb, var(--danger) 12%, transparent); stroke: var(--danger); }
+.node.dragging.bad .body, .node.dragging.bad .unit { stroke: var(--danger); stroke-width: 2.5; }
+.node.dragging.bad { opacity: 0.75; }
+.node .body, .node .unit { fill: var(--surface); stroke: var(--border-strong, #444); stroke-width: 1.5; }
+/* A MACHINE gets a dark azure ground; the ductwork stays grey.
+   Tools and gates were both a grey rounded rectangle differing mainly in
+   proportion, and proportion is the first thing to go when the drawing scales to
+   fit a phone — at 55% the bar and the box are two grey rectangles. Value and hue
+   survive that; shape doesn't.
+   Deliberately well short of the cable's own #38b6f0. At full saturation azure
+   means "wire" everywhere else on this canvas (cables, servo tabs, taken ports),
+   and a tool wearing it next to a live cable reads as wired or selected rather
+   than as a machine. Desaturated and dark, it reads as its own class of thing. */
+.node .tool-body { fill: #16262e; stroke: #2d6a86; }
+/* A second port, drawn ON the machine rather than beside it. Same azure family as
+   the body it sits on, because it IS that machine — just another way in.
+   The two share one look on purpose — same fill, same stroke — so the only thing
+   telling them apart is the SHAPE: square = primary, tapered = secondary. Colouring
+   them differently would add a second variable to read where one does the job. */
+.node .secondary-port, .node .primary-port { fill: #1d3540; stroke: #2d6a86; stroke-width: 1.6; }
+.node.sel .secondary-port, .node.sel .primary-port { stroke: var(--accent); stroke-width: 2.2; }
+/* An existing port is the handle for re-running its own pipe. Nothing hollow or
+   dashed advertises a port that doesn't exist yet — the glyph appears with the port
+   and never before. */
+.secondary-port-grab { cursor: grab; }
+.secondary-port-grab:hover .secondary-port { stroke: var(--accent); }
+
+/* Naming a tray plug — the same sheet object as the gate and second-port cards,
+   just narrower, because it asks for one short string and nothing else. */
+.sheet .rename-card { background: var(--surface); border: 1px solid var(--border);
+                      border-radius: 16px; padding: 18px 16px; display: flex;
+                      flex-direction: column; gap: 9px; }
+.sheet .rename-card .rn-head { font-size: 12.5px; color: var(--muted); }
+.sheet .rename-card .rn-head b { color: var(--text); font-weight: 600; }
+.sheet .rename-card .rn-head .sep { opacity: 0.6; margin: 0 5px; }
+.sheet .rename-card .rn-fld { font-size: 11px; letter-spacing: 0.07em; text-transform: uppercase;
+                              color: var(--muted); }
+.sheet .rename-card .rn-in { background: var(--bg); border: 1px solid var(--border);
+                             color: var(--text); border-radius: 8px; padding: 10px 12px;
+                             font-size: 15px; font-family: inherit; }
+.sheet .rename-card .rn-in:focus { outline: none; border-color: var(--accent); }
+.sheet .rename-card .rn-in:disabled { color: var(--muted); }
+.sheet .rename-card .rn-meta { font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.sheet .rename-card .rn-why { font-size: 11.5px; color: var(--cable, #38b6f0); line-height: 1.5; }
+.sheet .rename-card .rn-why.bad { color: var(--accent); }
+.sheet .rename-card select.rn-in { appearance: none; background-image:
+    linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+    linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+  background-position: calc(100% - 17px) 50%, calc(100% - 12px) 50%;
+  background-size: 5px 5px, 5px 5px; background-repeat: no-repeat; padding-right: 32px; }
+/* The loud one: amber, not red — a takeover moves something, it doesn't destroy it. */
+.sheet .rename-card .rn-take { background: var(--surface); border: 1px solid rgba(240,165,0,0.4);
+                               color: var(--accent); border-radius: 9px; padding: 9px 10px;
+                               font-size: 12.5px; width: 100%; margin-top: 2px; }
+.sheet .rename-card .rn-take:disabled { opacity: 0.4; }
+.sheet .rename-card .rn-confirm { background: rgba(240,165,0,0.07); border: 1px solid rgba(240,165,0,0.4);
+                                  border-radius: 12px; padding: 13px; display: flex;
+                                  flex-direction: column; gap: 10px; margin-top: 4px; }
+.sheet .rename-card .rn-confirm h4 { margin: 0; font-size: 14px; font-weight: 600; color: var(--accent); }
+.sheet .rename-card .rn-confirm p { margin: 0; font-size: 12.5px; color: var(--muted); line-height: 1.55; }
+.sheet .rename-card .rn-confirm p b { color: var(--text); font-weight: 500; }
+.sheet .rename-card .rn-confirm .rn-acts { margin-top: 0; }
+.sheet .rename-card .rn-link { background: none; border: none; padding: 0; margin-left: 6px;
+                               font: inherit; color: var(--accent); text-decoration: underline;
+                               cursor: pointer; }
+.sheet .rename-card .rn-acts { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 4px; }
+.sheet .rename-card .rn-acts button { border-radius: 8px; padding: 10px 12px; font-size: 14px;
+                                      border: 1px solid var(--border); background: var(--bg); color: var(--text); }
+.sheet .rename-card .rn-acts button.go { background: var(--accent); border-color: var(--accent);
+                                         color: #241a00; font-weight: 600; }
+.sheet .rename-card .rn-acts button:disabled { opacity: 0.5; }
+
+/* The second-port confirmation. Reuses the gate sheet's card so the two sheets
+   are the same object with different contents. */
+.sheet .card.secondary-port { background: var(--surface); border: 1px solid var(--border);
+                      border-radius: 16px; padding: 18px 16px; display: flex;
+                      flex-direction: column; gap: 14px; }
+.sheet .card.secondary-port .head .kind { font-size: 14px; font-weight: 600; color: var(--text); }
+.sheet .card.secondary-port .q-sub { font-size: 12.5px; color: var(--muted); margin: -8px 0 0; }
+.sheet .card.secondary-port .field { display: flex; flex-direction: column; gap: 6px; }
+.sheet .card.secondary-port label { font-size: 12px; color: var(--muted); text-transform: uppercase;
+                            letter-spacing: 0.05em; }
+.sheet .card.secondary-port input { background: var(--bg); border: 1px solid var(--border);
+                            color: var(--text); border-radius: 8px; padding: 10px 12px;
+                            font-size: 14px; font-family: inherit; }
+.sheet .card.secondary-port input:focus { outline: none; border-color: var(--accent); }
+.sheet .card.secondary-port .why { font-size: 11.5px; color: var(--muted); line-height: 1.5; margin: 0; }
+.sheet .card.secondary-port .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.sheet .card.secondary-port .actions button { border-radius: 8px; padding: 10px 12px; font-size: 14px;
+                                      border: 1px solid var(--border); background: var(--bg); color: var(--text); }
+.sheet .card.secondary-port .actions button.primary { background: var(--accent); border-color: var(--accent);
+                                              color: #241a00; font-weight: 600; }
+/* No text-anchor here on purpose: the caption sits above the glyph on a top entry
+   and beside it on a side one, so the anchor is set per-seat on the element. A CSS
+   rule would win over that attribute and pin every caption to centre. */
+.secondary-port-role { fill: var(--muted); font-size: 9px; letter-spacing: 0.05em; }
+.node.sel .body, .node.sel .unit { stroke: var(--accent); stroke-width: 2.5; }
+.node.live .body, .node.live .unit { stroke: var(--success); }
+.glabel { fill: var(--text); font-size: 12.5px; text-anchor: middle; font-weight: 500; }
+/* A gate is infrastructure — it shouldn't compete with the machine names, which
+   are the things the woodworker actually thinks in. The rename field carries the
+   same treatment so the label doesn't change size under the cursor. */
+.glabel.gatename, .nameedit.gatename { font-size: 10.5px; font-weight: 500; letter-spacing: 0.07em;
+                                       text-transform: uppercase; }
+.glabel.gatename { fill: var(--muted); }
+.gsub   { fill: var(--muted); font-size: 10.5px; text-anchor: middle; }
+
+/* The plug row inside a tool body. One fact at a time: the plug's NAME when
+   it's idle, its WATTS when it's drawing. Showing both repeats the machine
+   name from the line directly above and truncates the number that's actually
+   changing. */
+.dock { cursor: pointer; }
+/* Recessed into the machine's own ground, so it belongs to the tool rather than
+   sitting on it. Follows the body's azure family for the neutral states only —
+   standby and live below still own their colours, which is what they're for. */
+.dock-bg   { fill: #0d1a20; stroke: #2d6a86; stroke-width: 1; stroke-dasharray: 3 2.5; }
+.dock-shell{ fill: none; stroke: var(--muted); stroke-width: 1.7; opacity: 0.85; }
+.dock-slot { fill: var(--muted); opacity: 0.8; }
+.dock-t    { fill: var(--muted); font-size: 9.5px; text-anchor: middle; }
+/* Paired: solid edge, and the colour carries the state. */
+.dock.idle .dock-bg    { stroke-dasharray: none; fill: #17303c; }
+.dock.standby .dock-bg { stroke-dasharray: none; stroke: var(--accent); fill: rgba(240,165,0,0.12); }
+.dock.standby .dock-t, .dock.standby .dock-slot { fill: var(--accent); }
+.dock.standby .dock-shell { stroke: var(--accent); }
+.dock.live .dock-bg    { stroke-dasharray: none; stroke: var(--success); fill: rgba(60,190,110,0.14); }
+.dock.live .dock-t, .dock.live .dock-slot { fill: var(--success); }
+.dock.live .dock-shell { stroke: var(--success); }
+/* Waiting for a plug to be picked out of the tray. */
+.dock.armed .dock-bg { stroke: var(--accent); stroke-dasharray: none; }
+
+/* ── plug tray ─────────────────────────────────────────────────────────── */
+/* ONE LINE, rather than a shelf of its own.
+   It was a head row plus two wrapped rows of chips — 165px
+   of a 812px phone, a fifth of the screen, to say "here are two plugs".
+   Everything is on the strip now and the chips scroll sideways. */
+.tray { flex: 0 0 auto; display: flex; align-items: center; gap: 8px;
+        background: var(--surface); border-top: 1px solid var(--border);
+        padding: 5px 10px; min-height: 38px; }
+.tray.armed { border-top-color: var(--accent); }
+.tray .t { font-size: 12px; font-weight: 600; flex: 0 0 auto; }
+.tray .n { font-size: 11px; color: var(--muted); flex: 0 0 auto; }
+.tray.armed .n { color: var(--accent); }
+.tray .act { background: var(--bg); border: 1px solid var(--border); color: var(--text);
+             border-radius: 7px; padding: 4px 9px; font-size: 11.5px; flex: 0 0 auto; }
+.tray .act.primary { border-color: var(--accent); color: var(--accent); }
+.tray .act:disabled { opacity: 0.4; }
+/* The chips take the slack and scroll; the buttons never get pushed off. */
+.chips { display: flex; gap: 5px; align-items: center; flex: 1; min-width: 0;
+         overflow-x: auto; scrollbar-width: none; padding: 1px 0; }
+.chips::-webkit-scrollbar { display: none; }
+.chip { flex: 0 0 auto; }
+.chip { display: flex; align-items: center; gap: 5px; background: var(--bg);
+        border: 1px solid var(--border); border-radius: 8px; padding: 3px 8px;
+        color: var(--text); font-size: 12px; cursor: grab; touch-action: none;
+        white-space: nowrap; max-width: 40vw; overflow: hidden; }
+/* The ellipsis has to live on the TEXT, not on the chip: text-overflow applies to
+   the block that holds the text, and the chip is a flex row whose text is in a
+   child — so a plug still carrying its factory hostname was chopped mid-character
+   at the chip's edge instead of trailing off (2026-08-22). min-width:0 is what
+   lets that child shrink at all inside the flex row. */
+.chip .nm { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.chip .face { width: 13px; height: 13px; color: var(--muted); flex: 0 0 auto; }
+.chip .face .shell { fill: none; stroke: currentColor; stroke-width: 1.6; }
+.chip .face .slot { fill: currentColor; opacity: 0.75; }
+.chip .w { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.chip[data-level="standby"] .face, .chip[data-level="standby"] .w { color: var(--accent); }
+.chip[data-level="live"] .face,    .chip[data-level="live"] .w    { color: var(--success); }
+.chip.ghost { position: fixed; z-index: 60; pointer-events: none; opacity: 0.92;
+              transform: translate(-50%, -50%); box-shadow: 0 8px 22px rgba(0,0,0,0.5); }
+.tray-empty { font-size: 12px; color: var(--muted); }
+.gsub.redundant { fill: var(--accent); opacity: 0.85; }
+/* The selected piece's name is edited WHERE IT IS DRAWN — a foreignObject input
+   sitting exactly on top of its label, matching it in size and weight, so the
+   text doesn't jump when it becomes editable. It replaced a text field in the
+   floating inspector, which showed the same name twice: once on the node and
+   again in a box above it, with no cue which one you were changing. */
+/* Absolutely positioned INSIDE the scrolling canvas, in board coordinates, so it
+   travels with the board. It used to be position:fixed at a screen point computed
+   from getScreenCTM() — which nothing recomputes on scroll, so the field drifted
+   off its glyph as soon as you panned. */
+.nameedit { position: absolute; z-index: 20; transform: translate(-50%, -50%);
+            box-sizing: border-box; background: transparent; border: none;
+            border-radius: 0; color: var(--text); caret-color: var(--accent);
+            font-size: 12.5px; font-weight: 500; font-family: inherit; text-align: center;
+            padding: 1px 2px 2px; outline: none; cursor: text; }
+/* A name is editable, so it gets the I-beam rather than the body's grab hand. */
+.glabel { cursor: text; }
+.stroke { stroke: var(--muted); } .node.live .stroke { stroke: var(--success); }
+.fillmuted { fill: var(--muted); } .node.live .fillmuted { fill: var(--success); }
+.puck { fill: var(--border-strong, #555); } .node.live .puck { fill: var(--success); }
+
+.menu, .inspector { position: fixed; z-index: 20; background: var(--surface); border: 1px solid var(--border-strong, #444); border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.5); }
+/* A menu opened near an edge would otherwise hang off it — openMenu measures and
+   pulls it back on screen, and this caps a long list to the viewport. */
+.menu { padding: 6px; min-width: 150px; max-height: calc(100dvh - 16px); overflow-y: auto; }
+.menu button { display: flex; align-items: center; gap: 10px; width: 100%; background: none; border: none; color: var(--text); padding: 9px 12px; border-radius: 8px; font-size: 14px; text-align: left; }
+.menu button:hover:not(:disabled) { background: var(--bg); }
+/* Invalid here — kept in place (greyed) so the list is the same everywhere. */
+.menu button:disabled { opacity: 0.4; cursor: default; }
+.menu button .note { margin-left: auto; padding-left: 10px; font-size: 11.5px; color: var(--muted); }
+.menu svg { width: 18px; height: 18px; color: var(--muted); flex-shrink: 0; }
+.menu-sect { font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); padding: 6px 12px 3px; }
+.menu-sep { height: 1px; background: var(--border); margin: 5px 8px; }
+.backdrop { position: fixed; inset: 0; z-index: 15; }
+
+/* Floats just above the selected element (see inspectorPos). */
+.inspector { transform: translate(-50%, calc(-100% - 12px)); padding: 8px 10px; display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+.inspector input { background: var(--bg); border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: 7px 9px; font-size: 14px; width: 140px; }
+.inspector .meta { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 7px; }
+.inspector .step { width: 26px; height: 26px; border-radius: 7px; background: var(--bg); border: 1px solid var(--border); color: var(--text); font-size: 15px; padding: 0; }
+.inspector .step:disabled { opacity: 0.35; }
+/* The config sheet floats over the canvas rather than replacing it — you keep your
+   bearings on which gate you're setting up. */
+.sheet-bg { position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 25; }
+/* padding-top clears a band for .sheet-close so it never sits over a pane's own
+   header content (name, badge) — the first draft floated it on top and it
+   covered the "Configured" badge on every pane that has one. */
+.sheet { position: fixed; z-index: 26; left: 50%; top: 50%; transform: translate(-50%, -50%);
+         width: min(440px, calc(100vw - 28px)); max-height: calc(100vh - 40px); overflow-y: auto;
+         padding-top: 38px; }
+/* One close button per sheet, above whichever pane is loaded inside it — the
+   panes themselves (board wiring, travel calibration, outlet pairing) each
+   already have their own Cancel/Back, but those are buried at the bottom of a
+   multi-step flow. This is the tap that always works, from anywhere in it,
+   without touching whatever's mid-edit underneath. */
+.sheet-close { position: absolute; top: 4px; right: 10px; z-index: 1;
+               width: 30px; height: 30px; border-radius: 50%; padding: 0;
+               display: flex; align-items: center; justify-content: center;
+               background: var(--bg); border: 1px solid var(--border); color: var(--muted); }
+.sheet-close svg { width: 15px; height: 15px; }
+.sheet-close:active { opacity: 0.6; }
+/* Destructive menu row reads red — it's the only door to Delete now. */
+.menu button.danger { color: var(--danger); }
+.menu button.danger svg { color: var(--danger); }
+.node .cap { fill: var(--muted); }
+.node .fan { opacity: 0.55; }
+/* Setup badge: needs doing / done. */
+.todo { fill: var(--accent); stroke: var(--surface); stroke-width: 2; }
+.done { fill: var(--success); stroke: var(--surface); stroke-width: 2; }
+.tick { fill: none; stroke: var(--bg); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.todo-hit { cursor: pointer; }
+
+/* ── wiring layer ──────────────────────────────────────────────────────
+   Cable is azure, never the app's --danger red: that red already means
+   "something is wrong with this gate" everywhere else in the UI, and a
+   cable wearing it reads as a fault. Azure is the one hue the palette
+   hadn't spent, and it's the node-editor convention for a connection. */
+.seg { display: inline-flex; background: var(--bg); border: 1px solid var(--border);
+       border-radius: 10px; padding: 3px; gap: 3px; margin-right: 4px; }
+.seg button { background: transparent; border: none; color: var(--muted);
+              border-radius: 7px; padding: 6px 12px; font-size: 13px;
+              display: inline-flex; align-items: center; gap: 6px; }
+.seg button.on { background: rgba(240,165,0,0.2); color: var(--accent); font-weight: 600; }
+.seg svg { width: 15px; height: 15px; }
+.bar .ico { display: inline-flex; align-items: center; justify-content: center;
+            width: 38px; padding: 0; }
+.bar .ico svg { width: 18px; height: 18px; }
+.bar .ico.on { border-color: var(--accent); color: var(--accent); }
+.more-bg { position: fixed; inset: 0; z-index: 40; }
+.more { position: absolute; right: 8px; top: 100%; z-index: 41; margin-top: 6px;
+        background: var(--surface); border: 1px solid var(--border);
+        border-radius: var(--radius); padding: 6px; display: flex; flex-direction: column;
+        min-width: 168px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+.more button { background: transparent; border: none; color: var(--text);
+               text-align: left; padding: 10px 12px; border-radius: 8px; font-size: 14px; }
+.more button:disabled { color: var(--muted); }
+.bar { position: relative; }
+
+/* NOTHING ON THIS CANVAS DIMS. Removed 2026-08-15.
+   The ducts view used to grey the wiring out (and vice versa), killing
+   pointer-events on whichever layer you weren't in. It kept producing
+   one moment: you click something you can plainly see and nothing happens,
+   because it belongs to the other layer. The obvious repair — click a dimmed
+   thing to switch into its layer — keeps the mode you have to learn and only
+   adds an escape hatch, so the dimming went instead.
+   Both layers are drawn at full strength and both take the pointer. */
+
+.cable { fill: none; stroke: var(--cable, #38b6f0); stroke-width: 2;
+         stroke-linecap: round; stroke-linejoin: round; }
+.cable.drag { stroke-dasharray: 6 5; pointer-events: none; }
+.cable.drag.bad { stroke: var(--danger); }
+
+.tab { cursor: grab; }
+.tab-body { fill: #0e2530; stroke: var(--cable, #38b6f0); stroke-width: 1.3; }
+.tab-ch { fill: var(--cable, #38b6f0); font-size: 9px; font-weight: 600;
+          text-anchor: middle; font-family: ui-monospace, Menlo, monospace; }
+.tab.unwired .tab-body { stroke: var(--muted); stroke-dasharray: 3 2; fill: none; }
+.tab.unwired .tab-ch { fill: var(--muted); }
+.tab:hover .tab-body, .tab.lit .tab-body { stroke-width: 2.4; stroke: var(--accent); }
+.tab.lit .tab-ch { fill: var(--accent); }
+.port-hit { cursor: grab; }
+
+/* A board is placed, not ordered: it drags anywhere on the grid, and a drop that
+   won't take goes red the same way a piece's does. */
+.board { cursor: grab; }
+.board.dragging { cursor: grabbing; }
+.board-body { fill: var(--surface); stroke: #4a4a4a; stroke-width: 1.6; }
+.board.primary .board-body { stroke: var(--accent); }
+.board.dragging.bad .board-body { stroke: var(--danger); stroke-width: 2.5; }
+.board.dragging.bad { opacity: 0.75; }
+.board-name { fill: var(--text); font-size: 12px; font-weight: 600; }
+.board-role { fill: var(--muted); font-size: 7.5px; letter-spacing: 0.12em;
+              font-family: ui-monospace, Menlo, monospace; }
+.board.primary .board-role { fill: var(--accent); }
+.board-count { fill: var(--muted); font-size: 8.5px; text-anchor: end;
+               font-family: ui-monospace, Menlo, monospace; }
+.board-count.full { fill: var(--accent); }
+.port { fill: none; stroke: #5a5a5a; stroke-width: 1.2; }
+.port.stepper { stroke-dasharray: 2 2; }
+.port.taken { fill: var(--cable, #38b6f0); stroke: none; }
+.port.lit { stroke: var(--accent); stroke-width: 1.8; stroke-dasharray: none; }
+.port-label { fill: #777; font-size: 7px; text-anchor: middle;
+              font-family: ui-monospace, Menlo, monospace; }
+

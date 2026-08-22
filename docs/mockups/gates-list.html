@@ -1,0 +1,288 @@
+<title>The Gates Screen</title>
+
+<style>
+  :root {
+    --bg: #111; --surface: #1e1e1e; --raised: #262626; --border: #2e2e2e;
+    --text: #e8e8e8; --muted: #8a8a86; --accent: #f0a500; --success: #3cbe6e;
+    --danger: #d94444; --radius: 14px;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); margin: 0; padding: 22px 18px 72px;
+         font-family: system-ui, -apple-system, sans-serif; font-size: 15px; line-height: 1.5; }
+  .wrap { max-width: 1080px; margin: 0 auto; display: flex; flex-direction: column; gap: 24px; }
+  h1 { font-size: 22px; font-weight: 600; margin: 6px 0 0; letter-spacing: -0.01em; }
+  h2 { font-size: 13.5px; font-weight: 600; margin: 0; }
+  h3 { font-size: 15px; font-weight: 600; margin: 0 0 2px; }
+  .lede { color: var(--muted); font-size: 13.5px; max-width: 68ch; margin: 6px 0 0; }
+  .eyebrow { font-size: 11px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--muted); }
+  p { margin: 0; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.92em; }
+  a { color: var(--accent); }
+  .rule { height: 1px; background: var(--border); border: 0; margin: 0; }
+  .sec { display: flex; flex-direction: column; gap: 12px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 15px 16px; }
+  .card p + p { margin-top: 9px; }
+  .note { font-size: 12.5px; color: var(--muted); line-height: 1.55; }
+  .note b { color: var(--text); font-weight: 600; }
+  .banner { background: #241c06; border: 1px solid #4a3a0d; border-radius: var(--radius);
+            padding: 13px 15px; font-size: 13px; line-height: 1.55; }
+  .banner b { color: var(--accent); }
+
+  /* ── the phone ───────────────────────────────────────────────────────── */
+  .phones { display: flex; gap: 20px; flex-wrap: wrap; }
+  .phone { width: 375px; max-width: 100%; background: var(--bg); border: 1px solid #202225;
+           border-radius: 18px; padding: 14px 13px 18px; flex: none; }
+  .phone .cap { font-size: 12px; color: var(--muted); margin-bottom: 10px; }
+
+  .head { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+  .back { background: var(--surface); border: 1px solid var(--border); border-radius: 50%;
+          width: 34px; height: 34px; display: flex; align-items: center; justify-content: center;
+          color: var(--muted); flex: none; }
+  .title { font-size: 17px; font-weight: 600; }
+
+  .grow { flex: 1; min-width: 0; }
+  .row { display: flex; align-items: center; gap: 12px; padding: 13px 14px;
+         border-bottom: 1px solid var(--border); }
+  .row:last-child { border-bottom: 0; }
+  .nm { font-size: 15.5px; font-weight: 500; }
+  .sub { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+  .act { border-radius: 8px; padding: 7px 12px; font-size: 12.5px; flex: none;
+         background: var(--bg); border: 1px solid var(--border); color: var(--text); }
+  .act.warn { border-color: var(--accent); color: var(--accent); }
+  .pill { font-size: 11px; padding: 2px 9px; border-radius: 20px; display: inline-block; margin-top: 5px; }
+  .pill.ok   { color: var(--success); background: rgba(60,190,110,0.12); }
+  .pill.no   { color: var(--accent);  background: rgba(240,165,0,0.12); }
+  .pill.dark { color: var(--danger);  background: rgba(217,68,68,0.12); }
+  .hint { font-size: 12px; color: var(--muted); line-height: 1.6; padding: 0 2px 12px; }
+
+  table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em; }
+  td:first-child { white-space: nowrap; color: var(--muted); }
+</style>
+
+<div class="wrap">
+
+  <div class="sec">
+    <p class="eyebrow">DustGate · device UI · exploration</p>
+    <h1>The Gates Screen</h1>
+    <p class="lede">
+      A way into gate calibration that isn't the build canvas. Every configured gate in one
+      list, each one tappable into the calibration it already has.
+    </p>
+  </div>
+
+  <div class="banner">
+    <b>Built 2026-08-21</b>, as <code>dustgate-ui/src/app/gates/gate-list.component.ts</code> on
+    <code>/gates</code>, with a <b>Gates</b> entry in the live view's nav. The calibration it
+    opens (<code>app-selector-config</code>, and the servo and linear calibrators under it) was
+    already there and is unchanged — what was new is only the way in.
+    <br><br>
+    Two things moved from the open questions below: <b>Test is in</b> (it swings a gate closed →
+    open → closed and stops), and <b>"last calibrated" is out</b> — it would cost a schema field
+    and a migration to answer a question the calibrated pill mostly answers already.
+    <b>UNTESTED ON HARDWARE:</b> the swing has driven demo servos, never a real valve.
+  </div>
+
+  <hr class="rule">
+
+  <div class="sec">
+    <h2>The screen</h2>
+    <div class="phones">
+
+      <div class="phone">
+        <p class="cap">The list — every gate the shop is configured with</p>
+        <div class="head">
+          <span class="back">←</span><span class="title">Gates</span>
+        </div>
+        <p class="hint">
+          Tap a gate to teach it where its positions are. Everything keeps working while you do
+          — a gate you're calibrating just isn't routed to.
+        </p>
+        <div class="card" style="padding:0">
+          <div class="row">
+            <div class="grow">
+              <div class="nm">Main gate</div>
+              <div class="sub">Manifold · this board · channel 1</div>
+              <span class="pill ok">Calibrated</span>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:6px">
+              <button class="act">Recalibrate</button>
+              <button class="act">Test</button>
+            </div>
+          </div>
+          <div class="row">
+            <div class="grow">
+              <div class="nm">Back wall</div>
+              <div class="sub">Ball valve · qtpy-2 · channel 1</div>
+              <span class="pill no">Never calibrated</span>
+            </div>
+            <button class="act warn">Calibrate</button>
+          </div>
+          <div class="row">
+            <div class="grow">
+              <div class="nm">Bench slider</div>
+              <div class="sub">Sliding gate · this board · 4 stops</div>
+              <span class="pill ok">Calibrated</span>
+            </div>
+            <button class="act">Run setup again</button>
+          </div>
+          <div class="row">
+            <div class="grow">
+              <div class="nm">Lathe hood</div>
+              <div class="sub">Ball valve · qtpy-3 · channel 2</div>
+              <span class="pill dark">Board not answering</span>
+            </div>
+            <button class="act" disabled style="opacity:.45">Calibrate</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="phone">
+        <p class="cap">Tapping one — the calibration that already exists, unchanged</p>
+        <div class="head">
+          <span class="back">←</span><span class="title">Main gate</span>
+        </div>
+        <div class="card">
+          <p class="note" style="color:var(--text)"><b>app-selector-config</b></p>
+          <p class="note" style="margin-top:8px">
+            The existing component, handed this gate and the topology. It already dispatches to
+            the servo calibrator (nudge the handle, capture where it lands — no degrees anywhere)
+            or the linear one (the reference sweep between endstops), and already emits
+            <code>saved</code> / <code>cancelled</code>.
+          </p>
+          <p class="note" style="margin-top:8px">
+            Nothing about calibration is redesigned here. <b>Save</b> returns to the list with the
+            row's pill updated; <b>Cancel</b> returns with nothing written.
+          </p>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <hr class="rule">
+
+  <div class="sec">
+    <h2>What each decision is</h2>
+
+    <div class="card">
+      <h3>One list, not a wizard</h3>
+      <p class="note">
+        "Run through all the gates" could be a forced march — gate 1, next, gate 2, next — the
+        shape tool setup used to have, until it was rebuilt as a list on this pattern
+        (2026-08-22). A list is better because <b>recalibration is almost always
+        about one gate</b>: the valve that got knocked, the one that was never done. A march
+        makes you walk past three working gates to reach it. The list also answers a question a
+        wizard can't: <em>which</em> gates still need doing, at a glance.
+      </p>
+    </div>
+
+    <div class="card">
+      <h3>The verb changes with the gate</h3>
+      <p class="note">
+        <b>Ball valve / manifold</b> — "Calibrate" or "Recalibrate": teaching one servo where its
+        positions are, by eye, at the gate.
+        <b>Sliding gate</b> — "Run setup again": the reference sweep re-measures the whole rail
+        and replaces every stop, which is a bigger, more disruptive act than nudging one valve.
+        Same button, honest about what it does.
+      </p>
+    </div>
+
+    <div class="card">
+      <h3>A gate on a dark board is shown, and disabled</h3>
+      <p class="note">
+        Same rule as a claimed board in the boards list: hiding it makes a gate you configured
+        look like it vanished. It stays, with the reason, and the button is out — there is
+        nothing to nudge if the board it lives on isn't answering.
+      </p>
+    </div>
+
+    <div class="card">
+      <h3>Test may only ever drive SAVED positions</h3>
+      <p class="note">
+        The swing sends the gate's own calibrated values and nothing else — the schema's angle
+        for that state, already clamped to the servo's travel, or a saved stop index for a
+        slider. Nothing is interpolated or assumed, and an <b>uncalibrated gate refuses</b>
+        rather than being given a plausible angle: a clutchless servo driven past its hard stop
+        stalls and cooks. That rule lives in <code>swingSequence()</code> in
+        <code>selector-types.ts</code>, where it is unit-tested without a browser.
+      </p>
+      <p class="note">
+        <b>One cycle, not a loop</b>, so it cannot run away while nobody is watching, and one
+        gate at a time shop-wide — the same one-servo-at-a-time budget routing keeps. It
+        <b>ends closed</b>: a test that left a gate open would change where the shop rests.
+      </p>
+    </div>
+
+    <div class="card">
+      <h3>Where the entry point goes</h3>
+      <p class="note">
+        A fourth item in the live view's nav, beside Shop layout / Tools / Settings — the place
+        the app already puts "go somewhere else". Today gate calibration is reachable only by
+        finding the gate on the build canvas and tapping it, which is a layout tool, not
+        something you want to open with a wrench in your other hand.
+      </p>
+    </div>
+  </div>
+
+  <hr class="rule">
+
+  <div class="sec">
+    <h2>Open questions</h2>
+    <div class="card">
+      <p class="note">
+        <b>Both answered 2026-08-21.</b> <b>Test is in</b>, and it is the reason the safety rule
+        below exists. <b>"Last calibrated" is out</b> — a schema field and a migration to answer
+        a question the pill mostly answers already.
+      </p>
+      <p class="note">
+        Still open: whether a test belongs on the Live view's tool rows too, where you are
+        already looking when a tool doesn't pull.
+      </p>
+    </div>
+  </div>
+
+  <hr class="rule">
+
+  <div class="sec">
+    <h2>Decision log</h2>
+    <div class="card" style="padding:0">
+      <table>
+        <tr><th>Date</th><th>Decision</th><th>Why</th></tr>
+        <tr>
+          <td>2026-08-21</td>
+          <td>Gate calibration gets its own entry, off the daily-driver nav</td>
+          <td>It was reachable only through the build canvas — a layout tool. Recalibrating a
+              knocked valve is a shop-floor errand, not a layout edit.</td>
+        </tr>
+        <tr>
+          <td>2026-08-21</td>
+          <td>Test drives only saved positions, one cycle, ending closed</td>
+          <td>The failure it must not have is driving a valve into its hard stop, so an
+              uncalibrated gate refuses instead of guessing. Ending closed keeps a diagnostic
+              from deciding where the shop rests.</td>
+        </tr>
+        <tr>
+          <td>2026-08-21</td>
+          <td>No "last calibrated" timestamp</td>
+          <td>A schema field plus a migration, to improve on a pill that already says whether
+              the numbers exist.</td>
+        </tr>
+        <tr>
+          <td>2026-08-21</td>
+          <td>A list, not a wizard</td>
+          <td>Recalibration is nearly always about one specific gate, and a list says which ones
+              still need doing.</td>
+        </tr>
+        <tr>
+          <td>2026-08-22</td>
+          <td>Tool setup adopted this shape — list of tools, each into its own page</td>
+          <td>Same argument, and one more: the wizard held every edit until Finish, so walking
+              out anywhere along the march discarded the lot. Each tool saves on its own now.</td>
+        </tr>
+      </table>
+    </div>
+  </div>
+
+</div>
