@@ -91,6 +91,18 @@
 #ifdef HAS_STATUS_SCREEN
 #define PIN_OLED_SDA    16
 #define PIN_OLED_SCL     4
+
+// -- Wake button (fitted with the screen) --
+// The screen blanks after two minutes so it doesn't burn a static layout in; a
+// button is how you get it back without walking to a phone. See WakeButton.h.
+//
+// GPIO34 because fitting the screen took the last two general-purpose pins and
+// this is what's left: input-only, no output, and — the part that matters —
+// NO INTERNAL PULL-UP. INPUT_PULLUP is accepted here and does nothing, so this
+// pin needs an external 10kOhm to 3V3 and the plain INPUT below. Wiring is in
+// firmware/wiring/devkitc.md §5.
+#define PIN_WAKE_BTN        34
+#define WAKE_BTN_INPUT_MODE INPUT   // external 10kOhm pull-up — 34 has none
 #endif
 
 // -- Reserved: servo PWM outputs (4 in a row) --

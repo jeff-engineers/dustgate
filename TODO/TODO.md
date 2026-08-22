@@ -27,6 +27,12 @@ than restated. Delete an item when it lands; the git history is the record.
   new marking on the canvas, and there is no vocabulary for "this piece is the
   problem" yet.
 
+- ** Tool setup ** match the format of Gates setup - a list of all tools that takes
+  the user to each tool page, rather than making them click through all tools
+
+- ** Tools page - Don't show "2 Dust Collectors" - group dust collectors and 
+  tools by system.
+
 - **Moving the whole shop to a new WiFi is a per-board errand nobody is told
   about.** Settings → Forget WiFi resets the PRIMARY only. Each node holds its own
   credentials and has no way to be re-pointed from the app, so a router swap means
@@ -185,6 +191,31 @@ confirms it. Also still open: pitch uniformity past 2 gates.
 and the board abstraction. Either run it through steps 1–3 or mark it
 experimental in `platformio.ini` and CLAUDE.md. Leaving it ambiguous is the worst
 of the three.
+
+**8. The wake button — no button has been wired to any board.** `utils/WakeButton.h`
+plus the pin maps on all three boards, the primary and the node. It compiles
+everywhere and has run nowhere. Cheap to prove and worth proving early, because
+the failure mode is silent: press it and the screen lights, or it doesn't.
+- **DevKitC is the one to watch.** GPIO34 is input-only and has **no internal
+  pull-up** — `INPUT_PULLUP` is accepted and does nothing — so that board carries
+  an external 10kΩ to 3V3 and `WAKE_BTN_INPUT_MODE INPUT` instead
+  (`wiring/devkitc.md` §5). Forget the resistor and the pin floats: the screen
+  wakes at random, which reads as a firmware bug rather than a missing part.
+- **QT Py S3 (GPIO37/MISO) and XIAO C5 (GPIO0/D1)** both use the internal pull-up
+  and want a plain momentary to GND. The C5 pad is safe at reset (its straps are
+  26/27/28), which is the whole reason D1 was chosen — worth confirming a held
+  button doesn't stop it booting anyway.
+- Pass: pressing it lights a blanked screen within a beat, and a button held down
+  through reset does **not** light the screen at boot (`begin()` seeds from the
+  pin for exactly that).
+
+**9. Everything the screen work touched is hardware-untested apart from one
+DevKitC.** The SSD1306 itself ran on a DevKitC 2026-08-21 (GPIO16 SDA / GPIO4 SCL,
+0x3C) and that is the entire hardware record. Not proven: any panel on a **node**
+(`xiao_c5_screen` compiles; nothing has been wired), the S3's STEMMA-QT path, the
+`dev.sh flash-node --screen` flow, and the wiring docs for all three boards —
+those were written from datasheets and pin maps, not from a board on a bench.
+Treat `wiring/*.md` as a proposal until someone has built one.
 
 ### GUI Testing
 

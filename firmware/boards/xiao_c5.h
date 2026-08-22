@@ -89,15 +89,21 @@
 // stay free whether this board is driving four PWM gates or an ST3215 slider.
 // D1 is GPIO0, which is an ordinary pad on the C5 (the boot straps are 26/27/28),
 // so a momentary-to-GND button there is safe even at reset.
-// Uncommenting these is what fits a screen; see firmware/wiring/xiao-c5.md §4 and
-// the layouts in docs/mockups/oled-status.html.
-// Fitted by -DHAS_STATUS_SCREEN, the same build-time switch the DevKitC uses;
-// no env sets it for this board yet, and no panel has been connected to one.
+// See firmware/wiring/xiao-c5.md §4 and the layouts in
+// docs/mockups/oled-status.html.
+// Fitted by -DHAS_STATUS_SCREEN, the same build-time switch the DevKitC uses —
+// env `xiao_c5_screen`. No panel has been connected to a C5 yet.
 #ifdef HAS_STATUS_SCREEN
 #define PIN_OLED_SDA    23   // D4
 #define PIN_OLED_SCL    24   // D5
+
+// The screen sleeps after two minutes; the button is how a person gets it back
+// without walking to a phone. See utils/WakeButton.h. D1 is GPIO0, which would
+// be the boot strap on most ESP32 parts and a bad place for a switch — on the
+// C5 the straps are 26/27/28, so a normally-open momentary here is safe even at
+// reset. D0 is deliberately not used: it is the only analog pad on the edge.
+#define PIN_WAKE_BTN     0   // D1, INPUT_PULLUP, momentary to GND
 #endif
-// #define PIN_WAKE_BTN     0   // D1, INPUT_PULLUP, momentary to GND
 
 // -- Reserved: serial-servo bus --
 // D6/D7 are the board's hardware UART (GPIO11/GPIO12). D7 doubles as

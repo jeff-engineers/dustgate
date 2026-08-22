@@ -49,6 +49,7 @@
 #include "../control/NodeLink.h"
 #include "../utils/StatusLed.h"
 #include "../utils/StatusScreen.h"   // optional SSD1306; nothing on a board without one
+#include "../utils/WakeButton.h"     // the button that lights it; ditto
 
 #if !HAS_SERVO
   #error "dustgate_node needs a servo bank — build with -DENABLE_SERVO and a board that defines SERVO_PWM_PIN_1"
@@ -335,6 +336,7 @@ void setup() {
 #if defined(PIN_OLED_SDA) && defined(PIN_OLED_SCL)
     else Serial.println(F("[SCREEN] declared, but nothing answered; disabled"));
 #endif
+    wakebutton::begin();   // the button that wakes it after the two-minute blank
 
     Serial.println(F("=== DustGate node (secondary) ==="));
     Serial.print(F("Board: ")); Serial.println(BOARD_NAME);
@@ -472,6 +474,7 @@ void loop() {
     // Orange for the whole sweep, not just the instant the frame landed.
     statusled::setMoving(anyServoMoving());
     statusled::update();
+    wakebutton::update();   // before the screen decides whether to be lit
     updateStatusScreen();
 
     // Advance sweeps and effect the deferred detach.

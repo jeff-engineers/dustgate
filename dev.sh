@@ -27,12 +27,16 @@
 #     partition with the Angular bundle), so deploy.sh copies it off the device
 #     first and puts it back at the end. Backups: .dustgate-backups/, restore by
 #     hand with `bash tools/restore-topology.sh`. Skip with --no-topology-backup.
-#   bash dev.sh flash-node [board] [host]  # flash a SECONDARY servo-only node (+ WiFi creds)
+#   bash dev.sh flash-node [board] [--screen] [host]  # flash a SECONDARY servo-only node (+ WiFi creds)
 #                                    #   board: s3 (default) | c5
 #                                    #   e.g. bash dev.sh flash-node c5 dustgate-node-c5
+#     --screen builds the board's screen-fitted env instead — a screen is compiled
+#     in, not detected, so it is a different env (xiao_c5_screen). Only the C5 has
+#     one today; the S3 would need its own env in platformio.ini first.
+#     UNTESTED HARDWARE: no panel has been wired to a node board.
 #   bash dev.sh monitor             # serial monitor (primary)
 #   bash dev.sh monitor node        # serial monitor for a secondary node
-#   bash dev.sh monitor c5          # ...for a XIAO C5 node
+#   bash dev.sh monitor c5          # ...for a XIAO C5 node (c5s = one with a screen)
 #   bash dev.sh ports               # list attached boards + which role each is pinned to
 #   bash dev.sh ports --pin         # pin each board's USB SERIAL to a role (do this once)
 #     DUSTGATE_PORT=/dev/cu.xxx     # force a port for this one command
@@ -65,7 +69,20 @@ node_env_for() {
   case "${1:-}" in
     ""|s3|qtpy|qtpy_s3|dustgate_node) echo "dustgate_node" ;;
     c5|xiao|xiao_c5)                  echo "xiao_c5" ;;
+    c5s|c5-screen|xiao_c5_screen)     echo "xiao_c5_screen" ;;
     *)                                echo "" ;;   # not a board word
+  esac
+}
+
+# The same board with a status screen fitted. A screen is a BUILD-TIME fact
+# (-DHAS_STATUS_SCREEN — see WIRING.md §6), so "with a screen" is a different env
+# rather than a runtime flag, and --screen has to resolve to one that exists.
+# Empty means this board has no screen env — worth saying out loud rather than
+# failing later inside pio with a name it never heard of.
+node_screen_env_for() {
+  case "${1:-}" in
+    xiao_c5|xiao_c5_screen) echo "xiao_c5_screen" ;;
+    *)                      echo "" ;;
   esac
 }
 
@@ -576,9 +593,36 @@ run_flash_node() {
     shift
   fi
 
+  # --screen anywhere in the remaining args upgrades the board to its
+  # screen-fitted env. Stripped out here so the hostname positional below still
+  # sees exactly what it always saw.
+  local want_screen=false a
+  local rest=()
+  for a in "$@"; do
+    case "$a" in
+      --screen) want_screen=true ;;
+      *)        rest+=("$a") ;;
+    esac
+  done
+  set -- ${rest[@]+"${rest[@]}"}
+
+  if [[ "$want_screen" == true ]]; then
+    local screen_env
+    screen_env="$(node_screen_env_for "$node_env")"
+    if [[ -z "$screen_env" ]]; then
+      echo "  ✗ No screen env for '$node_env'."
+      echo "    A screen is compiled in, not detected, so it needs its own env in"
+      echo "    platformio.ini ($node_env plus -DHAS_STATUS_SCREEN and the two"
+      echo "    Adafruit libraries). Today only the C5 has one:"
+      echo "        bash dev.sh flash-node c5 --screen"
+      exit 1
+    fi
+    node_env="$screen_env"
+  fi
+
   echo "▶ Secondary NODE — flashing the servo-only firmware."
   echo "  Target: $(describe_env "$node_env")"
-  if [[ "$node_env" == "xiao_c5" ]]; then
+  if [[ "$node_env" == xiao_c5* ]]; then
     echo ""
     echo "  ⚠  The C5 rides the pioarduino platform, not the espressif32 one every"
     echo "     other target uses. The two collide over package names, so the fork"
@@ -593,6 +637,13 @@ run_flash_node() {
   echo "  A node is a dumb actuator bank: it drives up to four servo valves and"
   echo "  nothing else. No web UI, no stepper, no plug polling — the primary does"
   echo "  all the thinking and sends it already-resolved angles."
+  if [[ "$node_env" == *_screen ]]; then
+    echo ""
+    echo "  + SSD1306 status screen and its wake button, compiled in. A node's"
+    echo "    screen answers one question — can the brain reach me — and blanks"
+    echo "    itself after two minutes; the button lights it again."
+    echo "    UNTESTED HARDWARE: no panel has been wired to this board."
+  fi
   echo ""
 
   # Prefer the port family this board actually uses, so a node and the primary
@@ -880,6 +931,7 @@ show_menu() {
   echo "  5) Flash (UI/filesystem only)"
   echo "  n) Flash a SECONDARY node — servo-only board, + WiFi creds  (QT Py S3)"
   echo "     nc5 = the same, onto a XIAO ESP32C5 instead"
+  echo "     nc5s = a XIAO C5 with the SSD1306 screen + wake button compiled in"
   echo "  6) Serial monitor            (6n = monitor a secondary NODE instead)"
   echo "  7) Full chip erase (fixes corrupted-partition weirdness)"
   echo "  8) (Re)send WiFi/key/hostname to an already-flashed board"
@@ -895,6 +947,7 @@ show_menu() {
     5) run_flash --ui ;;
     n|N)       run_flash_node ;;
     nc5|NC5)   run_flash_node c5 ;;
+    nc5s|NC5S) run_flash_node c5 --screen ;;
     6) run_monitor ;;
     6n|6N) run_monitor dustgate_node ;;
     6c5)   run_monitor xiao_c5 ;;
@@ -917,7 +970,7 @@ case "${1:-}" in
     shift || true
     case "${1:-}" in
       node|n)     run_monitor dustgate_node ;;
-      c5|s3)      run_monitor "$(node_env_for "$1")" ;;
+      c5|c5s|s3)  run_monitor "$(node_env_for "$1")" ;;
       *)          run_monitor ;;
     esac
     ;;
@@ -928,7 +981,7 @@ case "${1:-}" in
   "")        show_menu ;;
   *)
     echo "Unknown mode: $1"
-    echo "Usage: dev.sh [demo|mock|flash [--fw|--ui|--no-provision] [--screen|--env NAME] [--host N] [--ssid N] [--pass S] [--ask] [--save]|flash-node [s3|c5] [hostname]|monitor [node|c5]|ports [--pin]|erase|provision [--host N] [--ssid N]|live [host]]"
+    echo "Usage: dev.sh [demo|mock|flash [--fw|--ui|--no-provision] [--screen|--env NAME] [--host N] [--ssid N] [--pass S] [--ask] [--save]|flash-node [s3|c5] [--screen] [hostname]|monitor [node|c5|c5s]|ports [--pin]|erase|provision [--host N] [--ssid N]|live [host]]"
     exit 1
     ;;
 esac

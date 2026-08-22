@@ -225,13 +225,27 @@
       </p>
     </div>
 
-    <div class="card flag open">
-      <h3>The button is optional, and might not be needed</h3>
+    <div class="card flag">
+      <h3>The button wakes the screen, and does nothing else</h3>
       <p class="note">
-        Wake-on-event covers the cases that matter, so a button is a convenience: wake the
-        screen deliberately, or page through more detail than eight rows can hold. Worth a pad
-        on the carrier; not worth blocking the display on. <b>Open question:</b> whether paging
-        earns its complexity at all, or whether one screen per role is the honest answer.
+        <b>Settled 2026-08-21, and built.</b> Wake-on-event covers the cases that matter, so
+        what a button buys is the <i>deliberate</i> wake &mdash; the board is fine, nothing is
+        changing, and you want to read what a screen two feet away already knows. That case is
+        common enough to be worth a pad.
+      </p>
+      <p class="note">
+        <b>Paging was rejected, not deferred.</b> One edge, one wake: no long-press, no
+        double-tap, no menu. A second gesture means a second thing it could mean, and a button
+        that could change what the shop <i>does</i> would need every confirmation the web UI
+        has &mdash; which is a different part with a different name. One screen per role is the
+        honest answer.
+      </p>
+      <p class="note">
+        Fitted with the panel rather than separately (<code>-DHAS_STATUS_SCREEN</code> defines
+        all three pins), since a board with no screen has nothing for a button to wake. Driver:
+        <code>firmware/utils/WakeButton.h</code>. Pins per board: DevKitC GPIO34 (input-only
+        &mdash; needs an <b>external</b> 10k&Omega; pull-up), QT Py MISO/GPIO37, XIAO C5 D1/GPIO0.
+        <b>No button has been wired to a board yet.</b>
       </p>
     </div>
 
@@ -291,6 +305,14 @@
               <td>At 6&times;8 it is ~1.5mm on a 0.96" panel. Every screen had exactly one
                   spare row and this is the best use of it — "is the wifi ok" is half of
                   why anyone looks at the screen.</td>
+            </tr>
+            <tr>
+              <td>2026-08-21</td>
+              <td>The wake button is in, and paging is out</td>
+              <td>The deliberate wake is the case wake-on-event can't cover, and it is worth one
+                  pad. Paging is a second meaning for the same button, on a device where anything
+                  that changes shop state needs the web UI's confirmations — so one edge, one
+                  wake, one screen per role.</td>
             </tr>
             <tr>
               <td>2026-08-21</td>

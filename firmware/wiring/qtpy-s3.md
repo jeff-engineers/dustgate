@@ -68,22 +68,33 @@ reference**; the STEMMA QT connector at the opposite end is the second one.
                         ┌───────┐
               ┌─────┬───┴───────┴───┬─────┐
    GPIO18  A0 │  o  │               │  o  │ 5V      do NOT power servos here
-   GPIO17  A1 │  o  │               │  o  │ GND     ← servo/pixel ground
-    GPIO9  A2 │  o  │   QT Py       │  o  │ 3V
-    GPIO8  A3 │  o  │   ESP32-S3    │  o  │ MO   GPIO35
-    GPIO7 SDA │  o  │               │  o  │ MI   GPIO37
+   GPIO17  A1 │  o  │               │  o  │ GND     ← servo/pixel/screen ground
+    GPIO9  A2 │  o  │   QT Py       │  o  │ 3V      ← screen VCC (never 5V)
+    GPIO8  A3 │  o  │   ESP32-S3    │  o  │ MO   GPIO35  ── external pixel DIN
+    GPIO7 SDA │  o  │               │  o  │ MI   GPIO37  ── WAKE BUTTON (§4)
     GPIO6 SCL │  o  │  (top view)   │  o  │ SCK  GPIO36
     GPIO5  TX │  o  │               │  o  │ RX   GPIO16
               └─────┴───┬───────┬───┴─────┘
                  ▲      └───────┘
-                 │      STEMMA QT (GPIO41 SDA1 / GPIO40 SCL1 — separate bus)
-                 │
+                 │      STEMMA QT ── SCREEN GOES HERE (§4)
+                 │      GPIO41 SDA1 / GPIO40 SCL1 — a separate bus, so it
+                 │      costs no pad and collides with nothing
                  └── servo block: the FOUR pads NEAREST the USB-C end,
                      channel 1 in the corner beside the connector
 
+   The SDA/SCL pads above (GPIO7/6) are the screen's FALLBACK wiring, for a bare
+   panel with flying leads rather than a STEMMA cable — see §4. Prefer the
+   connector; it cannot be miscounted.
+
    NeoPixel: GPIO39 data, GPIO38 power — onboard, no wiring needed
-   Buttons at the USB-C end: RESET, and BOOT on GPIO0
+   Buttons at the USB-C end: RESET, and BOOT on GPIO0 — both vanish in a case
 ```
+
+The screen and its wake button are one optional fitting: `-DHAS_STATUS_SCREEN`
+defines the STEMMA pair and MISO together, so either all three are spoken for or
+none are. The button is on **MISO, not one of the SDA/SCL pads**, because those
+two are the fallback wiring for a bare panel — a button that only worked when the
+screen arrived on a STEMMA cable would be a trap.
 
 **Counting rule when it's docked:** hold the USB-C end *toward* you. The servo
 block is the near end of the left column, channel 1 closest to the connector.
@@ -114,6 +125,9 @@ nothing, which is easy to mistake for a dead board.
 | Status pixel (DIN)  | —   | 39   | Onboard NeoPixel |
 | Status pixel power  | —   | 38   | Must be driven HIGH before the pixel lights |
 | External pixel (DIN)| MOSI| 35   | Optional second pixel, driven 4× brighter — see below |
+| Status screen SDA *(opt)* | STEMMA QT | 41 | `SDA1` — a second bus, no header pad — see §4 |
+| Status screen SCL *(opt)* | STEMMA QT | 40 | `SCL1` |
+| Wake button *(opt)* | MISO| 37   | Momentary to GND, `INPUT_PULLUP`. Fitted with the screen — see §4 |
 | Onboard user LED    | —   | —    | There isn't one — the pixel is the only indicator |
 
 ### The external pixel
@@ -241,6 +255,29 @@ GPIO6  (SCL) ─ SCL
 Adafruit's variant header, but the **physical pad order down each side has not been
 checked with a meter**. Count pads before wiring I²C off the drawing — and prefer
 the STEMMA connector, which cannot be miscounted.
+
+### The wake button
+
+The screen blanks after two minutes so it doesn't burn a static layout into itself
+on a node that idles for weeks. The button is how a person gets it back without
+walking to a phone — one edge, one wake, nothing else. `-DHAS_STATUS_SCREEN` fits
+the button along with the panel, since there is nothing for it to wake otherwise.
+
+```
+MISO (GPIO37) ──── [momentary NO] ──── GND
+```
+
+`INPUT_PULLUP`, which works on every pad on this part — no external resistor, unlike
+the DevKitC. **MISO rather than one of the SDA/SCL pads**, because those two are the
+fallback wiring for a bare panel above: a button that only worked when the screen
+came in on a STEMMA cable would be a trap. Nothing here uses SPI, and it sits beside
+the external pixel's MOSI, so the indicator group leaves from one corner. Same
+GPIO35–37 octal-PSRAM caveat as the pixel.
+
+The driver is [`utils/WakeButton.h`](../utils/WakeButton.h), and it does one thing:
+lights the glass. There is no long-press and no menu — a button that could change
+what the shop *does* would need every confirmation the web UI has. **No button has
+been wired to any board yet.**
 
 ### Turning it on
 

@@ -39,11 +39,61 @@ is the equivalent pin on that legacy board.
 | Status pixel           | GPIO17 (external)    | GPIO33 (onboard) |
 | Status screen SDA *(opt)* | GPIO16            | —            |
 | Status screen SCL *(opt)* | GPIO4             | —            |
+| Wake button *(opt)*       | GPIO34            | —            |
 
 **Reserved for servo gates:** GPIO25, GPIO26, GPIO27, GPIO14 — a contiguous 4-pin block
 for servo PWM outputs. Unused by the sliding gate; do not repurpose them on the carrier.
 **Spare:** none left once a status screen is fitted — GPIO16 and GPIO4 were the
 last two, and the optional OLED ([§5](#5-status-screen-ssd1306-oled--optional)) takes both.
+
+### Top view — where those numbers actually are
+
+Unlike the two node boards, the DevKitC's silkscreen is on the **top**, so this
+drawing is a convenience rather than a rescue — right up until the board is in a
+socket on a carrier with the labels underneath, which is where it's headed. The
+**USB connector is the orientation reference** and is at the bottom here.
+
+```
+                     ┌──── 3V3 ─┬───────────┬─ GND ────┐
+                     │     EN   │           │   IO23   │ ── TMC STEP
+                     │  VP  36  │           │   IO22   │ ── TMC DIR
+                     │  VN  39  │           │   TX0  1 │
+  wake button (§5) ──│     34   │           │   RX0  3 │
+                     │     35   │  ESP32-   │   IO21   │ ── TMC EN (+10kΩ→3V3)
+       home endstop ─│     32   │  WROOM-32 │    GND   │
+        far endstop ─│     33   │           │   IO19   │ ── TMC UART TX
+        servo ch 1 ──│     25   │ (top view)│   IO18   │ ── TMC UART RX
+        servo ch 2 ──│     26   │           │   IO5    │
+        servo ch 3 ──│     27   │           │   IO17   │ ── status pixel DIN
+        servo ch 4 ──│     14   │           │   IO16   │ ── screen SDA ─┐ §5
+                     │     12   │           │   IO4    │ ── screen SCL ─┘
+                     │    GND   │           │   IO0    │ ── boot button (§4)
+                     │     13   │           │   IO2    │
+                     │  D2   9 ▓│           │  IO15    │
+                     │  D3  10 ▓│           │▓ D1    8 │
+                     │  CMD 11 ▓│           │▓ D0    7 │
+                     │      5V  │           │▓ CLK   6 │
+                     └──────────┴───┬───┬───┴──────────┘
+                                    │USB│
+                                    └───┘
+   ▓ = GPIO6–11, the module's internal flash. Not usable, on either header.
+   EN pin (top left) = reset — the enclosure reset button lands there (§4)
+```
+
+The whole indicator group is **three adjacent pins on the right header** —
+GPIO17 pixel, GPIO16 SDA, GPIO4 SCL — which is deliberate, so one connector on
+the carrier carries the pixel and the screen together.
+
+The **wake button on GPIO34 is on the opposite side and needs an external
+pull-up**, which is not an aesthetic choice: fitting the screen spends the last
+two general-purpose pins, and GPIO34 is input-only with no internal pull-up
+([§5](#5-status-screen-ssd1306-oled--optional)).
+
+> Same confidence caveat the node files carry: the **signal assignments** come
+> out of [`boards/devkitc_wroom32.h`](../boards/devkitc_wroom32.h), which is what
+> the build reads. The **physical pin order** is Espressif's published V4 38-pin
+> silkscreen, transcribed rather than traced with a meter — and clones vary.
+> Count against your own board before wiring anything this file doesn't drive.
 
 ### Status pixel (DevKitC needs an external one)
 
@@ -447,14 +497,39 @@ The DevKitC is full. GPIO16 and GPIO4 were the only general-purpose pins left, a
 fitting a screen takes them both. Everything after this is input-only (GPIO34/35/36/39,
 no output and no internal pull-up) or a strapping pin.
 
-Which is fine for a **wake button**, since a button only needs to be read: put it on
-an input-only pin with an **external 10kΩ pull-up to 3V3** (the internal one those
-pins lack), momentary to GND.
+Which is fine for the **wake button**, since a button only needs to be read. It is on
+**GPIO34** — input-only, and therefore with an **external 10kΩ pull-up to 3V3**, since
+those pins have no internal one. Momentary, normally open, to GND.
 
 ```
 3V3 ──[10kΩ]──┬── GPIO34
               └── [momentary NO] ──── GND
 ```
+
+**The external resistor is not optional here, and leaving it off doesn't look like a
+missing part.** `INPUT_PULLUP` on GPIO34 is accepted by the core and does nothing; the
+pin then floats and reads as a stream of phantom presses, so the symptom is a screen
+that lights on its own. The board header pairs `PIN_WAKE_BTN` with
+`WAKE_BTN_INPUT_MODE INPUT` for exactly this reason.
+
+### What the button does, and what it deliberately doesn't
+
+One thing: it lights the screen. The panel blanks itself after two minutes so it
+doesn't burn a static layout in over a year on a wall, which is right until you want
+to read it — the board is fine, nothing is changing, so nothing wakes the glass.
+Walking to a phone to learn what a screen two feet away already knows is the whole
+problem this solves.
+
+There is no long-press, no double-tap and no menu. A button that could change what
+the shop *does* would need every confirmation the web UI has, and that is a different
+part. The driver is [`utils/WakeButton.h`](../utils/WakeButton.h) — a debounced poll
+and one call to `statusscreen::note()`.
+
+It is **fitted with the screen**: `-DHAS_STATUS_SCREEN` defines all three pins at
+once, and a board with no panel has nothing for a button to wake.
+
+> **UNVERIFIED.** No button has been wired to any board. The screen it wakes has run
+> on a DevKitC; this half of the pair has not.
 
 ### ⚠ If you ever swap to an ESP32-WROVER
 
@@ -481,14 +556,15 @@ looks free.
 | Status pixel (WS2812)     | GPIO17        | External; 330R in series on DIN — see [WIRING.md §1](../WIRING.md#1-status-pixel-ws2812--neopixel) |
 | Status screen SDA         | GPIO16        | Optional — see [§5](#5-status-screen-ssd1306-oled--optional) |
 | Status screen SCL         | GPIO4         | Optional; **not** the usual GPIO21/22 — those are TMC EN/DIR |
+| Wake button               | GPIO34        | Optional, fitted with the screen; **external 10kΩ pull-up** — see [§5](#5-status-screen-ssd1306-oled--optional) |
 | Remote reset button       | EN            | Optional, not code-visible           |
 | Remote boot button        | GPIO0         | Optional, not code-visible           |
 
 Both limit switches are required. Which one acts as the home datum is decided at
 setup time (always the user's LEFT end) — see `g_homeIsMaxEndstop`.
 
-**Active header pins: 8** (GPIO23, 22, 21, 19, 18, 32, 33, 17), or **10** with a
-status screen fitted (+ GPIO16, 4). The status pixel costs a header pin on this
+**Active header pins: 8** (GPIO23, 22, 21, 19, 18, 32, 33, 17), or **11** with a
+status screen fitted (+ GPIO16, 4 and the wake button on GPIO34). The status pixel costs a header pin on this
 board — the DevKitC has no onboard user LED to ride.
 
 **Reserved for servo PWM:** GPIO25, 26, 27, 14 (contiguous 4-pin block).

@@ -96,6 +96,19 @@
 #ifdef HAS_STATUS_SCREEN
 #define PIN_OLED_SDA    41   // SDA1 — STEMMA QT
 #define PIN_OLED_SCL    40   // SCL1 — STEMMA QT
+
+// -- Wake button (fitted with the screen) --
+// The screen sleeps after two minutes; this is how a person gets it back. See
+// utils/WakeButton.h. Momentary to GND, internal pull-up — the S3 has one on
+// every pad here, unlike the DevKitC.
+//
+// MISO (GPIO37) rather than the SDA/SCL pads: those two are the fallback wiring
+// for a bare panel with flying leads (see above), and a button that only works
+// when the screen came in on a STEMMA cable is a trap. Nothing uses SPI, and
+// this sits beside PIN_PIXEL_EXT so the whole indicator group leaves from one
+// corner. Same GPIO35-37 octal-PSRAM caveat as the pixel: free on both variants
+// this map covers, worth re-checking on a different S3.
+#define PIN_WAKE_BTN    37   // MISO
 #endif
 
 // PIN_LED deliberately NOT defined: there is no plain user LED to fall back to,

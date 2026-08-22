@@ -457,11 +457,12 @@ That policy is `statusscreen::awake()` in
 rather than a comment: the captive portal holds the screen awake too, since a
 blank panel is useless to a stranger being asked to join an AP.
 
-### The wake button — optional, and optional on purpose
+### The wake button
 
 Wake-on-event covers the cases that matter, so a button only buys you a
-deliberate wake (and paging, if paging ever earns its keep). Ordinary momentary
-switch to GND on any input-capable pin, read with `INPUT_PULLUP`:
+**deliberate** wake — which turns out to be the case you notice: the board is
+fine, nothing is changing, and you want to read what a screen two feet away
+already knows. Ordinary momentary switch to GND, read with `INPUT_PULLUP`:
 
 ```
 GPIO ──── [momentary NO] ──── GND
@@ -470,6 +471,30 @@ GPIO ──── [momentary NO] ──── GND
 Same NC-vs-NO caution as the endstops in reverse: this one is **normally OPEN**,
 so the pin idles HIGH and a strapping pin is harmless here — nothing holds the
 line at reset unless someone is pressing the button while the board boots.
+
+**It is fitted with the screen, not separately.** `-DHAS_STATUS_SCREEN` defines
+`PIN_WAKE_BTN` alongside the I²C pair, because a board with no panel has nothing
+for a button to wake. Per board:
+
+| Board | Pin | Pull-up |
+|---|---|---|
+| DevKitC | GPIO34 | **External 10kΩ to 3V3** — the pin is input-only and has none |
+| QT Py S3 | GPIO37 (MISO) | Internal |
+| XIAO C5 | GPIO0 (D1) | Internal |
+
+The DevKitC row is the one that bites: `INPUT_PULLUP` on an input-only pin is
+accepted and does nothing, and a floating input reads as phantom presses — a
+screen that lights by itself. Its header pairs the pin with
+`WAKE_BTN_INPUT_MODE INPUT` so the external resistor is the only option.
+
+The driver is [`utils/WakeButton.h`](utils/WakeButton.h): a debounced poll and
+one call to `statusscreen::note()`. **One edge, one wake, and nothing else** —
+no long-press, no double-tap, no menu. A button that could change what the shop
+*does* would need every confirmation the web UI has, and that is a different
+part with a different name.
+
+> **UNVERIFIED.** No button has been wired to any board. The screen it wakes has
+> run on a DevKitC; this half has not.
 
 ### Fitting one is a build-time fact
 

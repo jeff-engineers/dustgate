@@ -67,19 +67,26 @@ symmetrical, and it is easy to count a servo lead onto the wrong row.
                         ┌───────┐
               ┌─────┬───┴───────┴───┬─────┐
    GPIO1   D0 │  o  │               │  o  │ 5V      do NOT power servos here
-   GPIO0   D1 │  o  │               │  o  │ GND     ← servo/pixel ground
-  GPIO25   D2 │  o  │    XIAO       │  o  │ 3V3
+   GPIO0   D1 │  o  │               │  o  │ GND     ← servo/pixel/screen ground
+  GPIO25   D2 │  o  │    XIAO       │  o  │ 3V3     ← screen VCC (never 5V)
    GPIO7   D3 │  o  │    ESP32C5    │  o  │ D10  GPIO10   ── servo ch 4
   GPIO23   D4 │  o  │               │  o  │ D9   GPIO9    ── servo ch 3  ⚠
   GPIO24   D5 │  o  │  (top view)   │  o  │ D8   GPIO8    ── servo ch 2  ⚠
   GPIO11   D6 │  o  │               │  o  │ D7   GPIO12   ── servo ch 1
               └─────┴───────────────┴─────┘
-                 ▲                     ▲
-                 │                     └── servo block: the FOUR pads
-                 │                         furthest from the USB-C end,
-                 │                         channel 1 nearest the corner
-                 └── D2 = status pixel DIN
+                 ▲ ▲ ▲                 ▲
+                 │ │ │                 └── servo block: the FOUR pads
+                 │ │ │                     furthest from the USB-C end,
+                 │ │ │                     channel 1 nearest the corner
+                 │ │ └── D4 = screen SDA, D5 = screen SCL  (§4, optional)
+                 │ └──── D2 = status pixel DIN
+                 └────── D1 = wake button, momentary to GND (§4, optional)
 ```
+
+The optional parts are the screen and its button, and they are one fitting: with
+`-DHAS_STATUS_SCREEN` the board header defines all three pads at once, so D1, D4
+and D5 are either all spoken for or all free. What's left after fitting them is
+D0, D3 and D6.
 
 Counting rule when it's docked and you can see nothing: **hold the USB-C end
 away from you.** Left column is D0→D6 running away from the connector; right
@@ -252,6 +259,12 @@ instead would be the last thing you did before needing a current sense.
 
 ### The wake button
 
+The screen blanks after two minutes so it doesn't burn a static layout into itself
+on a node that idles for weeks — right until you want to read it, at which point
+nothing is changing and so nothing wakes the glass. The button is how a person gets
+it back without walking to a phone. `-DHAS_STATUS_SCREEN` fits it along with the
+panel, so D1, D4 and D5 are either all spoken for or all free.
+
 D1 is GPIO0 — which on most ESP32 parts would be the boot strap and a bad choice,
 but **not on the C5**, where the boot straps are GPIO26/27/28 (§6). A momentary
 switch to GND with `INPUT_PULLUP` is safe here even at reset, since a normally-open
@@ -260,6 +273,11 @@ button leaves the pin pulled high unless someone is holding it.
 ```
 D1 (GPIO0) ──── [momentary NO] ──── GND
 ```
+
+The driver is [`utils/WakeButton.h`](../utils/WakeButton.h), and it does exactly one
+thing: lights the screen. No long-press, no double-tap, no menu — a button that could
+change what the shop *does* would need every confirmation the web UI has, and that is
+a different part. **No button has been wired to a board yet**, on this or any other.
 
 **The onboard RESET and BOOT buttons are at the USB-C end**, and disappear the
 moment the board is in a case ([§1](#1-pin-map)). Unlike the DevKitC — which breaks
