@@ -520,6 +520,12 @@ to read it — the board is fine, nothing is changing, so nothing wakes the glas
 Walking to a phone to learn what a screen two feet away already knows is the whole
 problem this solves.
 
+Since 2026-08-22 that timer has **no exceptions**: a fault used to hold the screen
+lit, which is the same thing as burning `NODE DARK` into a panel over a weekend
+nobody is in the shop. Events still wake it; nothing holds it. That makes the button
+required rather than nice-to-have, and `WakeButton.h` `#error`s a screen build that
+doesn't define `PIN_WAKE_BTN`.
+
 There is no long-press, no double-tap and no menu. A button that could change what
 the shop *does* would need every confirmation the web UI has, and that is a different
 part. The driver is [`utils/WakeButton.h`](../utils/WakeButton.h) — a debounced poll

@@ -265,9 +265,10 @@ inline void update(const Facts& in) {
     if (h != _lastHash()) { _lastHash() = h; _lastEvent() = now; }
 
     // The sleep decision is statusscreen::awake() in the model — pure, and
-    // host-tested, including the millis() rollover and the states that hold the
-    // screen awake regardless of the timer.
-    const bool wantLit = awake(f, _lastEvent(), now);
+    // host-tested, including the millis() rollover. It looks only at the clock:
+    // a change in the facts above has already bumped _lastEvent(), which is how
+    // a fault or a move lights the panel, and nothing holds it lit after that.
+    const bool wantLit = awake(_lastEvent(), now);
     if (!wantLit) {
         if (_lit()) {
             // DISPLAYOFF, not a cleared framebuffer: it stops the panel driving

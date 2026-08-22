@@ -97,8 +97,8 @@
 #define PIN_OLED_SDA    23   // D4
 #define PIN_OLED_SCL    24   // D5
 
-// The screen sleeps after two minutes; the button is how a person gets it back
-// without walking to a phone. See utils/WakeButton.h. D1 is GPIO0, which would
+// The screen sleeps after two minutes and nothing relights it on its own, so the
+// button is the only way a person gets it back without walking to a phone. See utils/WakeButton.h. D1 is GPIO0, which would
 // be the boot strap on most ESP32 parts and a bad place for a switch — on the
 // C5 the straps are 26/27/28, so a normally-open momentary here is safe even at
 // reset. D0 is deliberately not used: it is the only analog pad on the edge.

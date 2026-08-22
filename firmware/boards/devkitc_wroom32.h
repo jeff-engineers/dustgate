@@ -93,8 +93,9 @@
 #define PIN_OLED_SCL     4
 
 // -- Wake button (fitted with the screen) --
-// The screen blanks after two minutes so it doesn't burn a static layout in; a
-// button is how you get it back without walking to a phone. See WakeButton.h.
+// The screen blanks after two minutes — with no exceptions since 2026-08-22, so
+// not even a fault lights it again by itself. The button is the only way back,
+// which is why a screen build without one fails to compile. See WakeButton.h.
 //
 // GPIO34 because fitting the screen took the last two general-purpose pins and
 // this is what's left: input-only, no output, and — the part that matters —

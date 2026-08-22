@@ -221,17 +221,25 @@
         something happened</em> rather than becoming wallpaper you stop seeing.
       </p>
       <p class="note" style="margin-top:9px">
-        A fault holds it awake. Nobody should have to press anything to find out what broke.
+        <b>Nothing holds it awake &mdash; changed 2026-08-22.</b> A fault used to, on the
+        reasoning that nobody should have to press anything to find out what broke. But a
+        fault is exactly the state that <i>lasts</i>: a node goes dark on a Friday and the
+        panel spends a weekend burning <code>NODE DARK</code> into itself with nobody in the
+        shop. An alarm still <em>wakes</em> the screen, so a person standing there watches it
+        happen; anyone arriving later presses the button. The captive portal blanks on the
+        same timer for the same reason.
       </p>
     </div>
 
     <div class="card flag">
       <h3>The button wakes the screen, and does nothing else</h3>
       <p class="note">
-        <b>Settled 2026-08-21, and built.</b> Wake-on-event covers the cases that matter, so
-        what a button buys is the <i>deliberate</i> wake &mdash; the board is fine, nothing is
-        changing, and you want to read what a screen two feet away already knows. That case is
-        common enough to be worth a pad.
+        <b>Settled 2026-08-21, built, and mandatory since 2026-08-22.</b> What a button buys
+        is the <i>deliberate</i> wake &mdash; the board is fine, nothing is changing, and you
+        want to read what a screen two feet away already knows. Once the sleep timer stopped
+        making exceptions, that stopped being a convenience: the button is the only way to see
+        a state the screen has already slept through. <code>WakeButton.h</code> fails the build
+        with an <code>#error</code> if a board defines the panel pins and not the button.
       </p>
       <p class="note">
         <b>Paging was rejected, not deferred.</b> One edge, one wake: no long-press, no
@@ -294,8 +302,16 @@
                   is worse than having neither.</td>
             </tr>
             <tr>
+              <td>2026-08-22</td>
+              <td>The sleep timer has <b>no exceptions</b>; the wake button becomes required</td>
+              <td>A fault is the state that lasts, so &ldquo;a fault holds it awake&rdquo; was
+                  the burn-in case dressed as a safety feature. Events still wake the panel.
+                  With nothing self-lighting, a screen without a button has states it can never
+                  show you, so the build refuses that combination.</td>
+            </tr>
+            <tr>
               <td>2026-08-20</td>
-              <td>Sleep at idle, wake on event; a fault holds it awake</td>
+              <td>Sleep at idle, wake on event; a fault holds it awake <i>(superseded 2026-08-22)</i></td>
               <td>Burn-in is real on a fixed-label screen, and a display that is only lit when
                   something happened carries information by being lit.</td>
             </tr>

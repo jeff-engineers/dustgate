@@ -259,8 +259,10 @@ the STEMMA connector, which cannot be miscounted.
 ### The wake button
 
 The screen blanks after two minutes so it doesn't burn a static layout into itself
-on a node that idles for weeks. The button is how a person gets it back without
-walking to a phone — one edge, one wake, nothing else. `-DHAS_STATUS_SCREEN` fits
+on a node that idles for weeks, and since 2026-08-22 nothing — not even a fault —
+holds it lit past that. The button is the only way a person gets it back without
+walking to a phone: one edge, one wake, nothing else. A screen build that doesn't
+define it won't compile. `-DHAS_STATUS_SCREEN` fits
 the button along with the panel, since there is nothing for it to wake otherwise.
 
 ```

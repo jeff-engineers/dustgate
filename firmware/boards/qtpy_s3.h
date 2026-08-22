@@ -98,8 +98,8 @@
 #define PIN_OLED_SCL    40   // SCL1 — STEMMA QT
 
 // -- Wake button (fitted with the screen) --
-// The screen sleeps after two minutes; this is how a person gets it back. See
-// utils/WakeButton.h. Momentary to GND, internal pull-up — the S3 has one on
+// The screen sleeps after two minutes and nothing relights it on its own, so
+// this is the ONLY way a person gets it back. See utils/WakeButton.h. Momentary to GND, internal pull-up — the S3 has one on
 // every pad here, unlike the DevKitC.
 //
 // MISO (GPIO37) rather than the SDA/SCL pads: those two are the fallback wiring

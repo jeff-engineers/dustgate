@@ -442,27 +442,32 @@ the thing you need first.
 An OLED with fixed labels lit 24/7 burns them in — the ghost of `gates` and
 `nodes` etched across every later screen. So the intended behaviour is:
 
-- **Blank after a couple of minutes idle.**
+- **Blank after a couple of minutes idle, always.**
 - **Wake on events** — a gate moving, a tool drawing power, a node dropping, any
   fault.
-- **A fault holds it awake.** Nobody should have to press anything to find out
-  what broke.
+- **Nothing holds it awake** (changed 2026-08-22). A fault used to, on the
+  reasoning that nobody should have to press anything to find out what broke.
+  But a fault is exactly the state that *lasts*: a node goes dark on a Friday
+  and the panel spends the weekend burning "NODE DARK" into itself with nobody
+  in the shop. The alarm still lights the screen when it happens — it just
+  doesn't hold it. Anyone arriving later presses the button.
 
 Which makes a lit screen mean *something happened*, instead of becoming wallpaper
 you stop reading. That is a firmware behaviour, not a wiring one, but it is the
-reason the wake button below is a convenience rather than a requirement.
+reason the wake button below is a **requirement** on any board with a panel and
+not the convenience it started as.
 
 That policy is `statusscreen::awake()` in
 [`utils/StatusScreenModel.h`](utils/StatusScreenModel.h), and it is a decision
-rather than a comment: the captive portal holds the screen awake too, since a
-blank panel is useless to a stranger being asked to join an AP.
+rather than a comment — the captive portal blanks along with everything else, so
+a stranger being asked to join an AP may have to press the button too.
 
 ### The wake button
 
-Wake-on-event covers the cases that matter, so a button only buys you a
-**deliberate** wake — which turns out to be the case you notice: the board is
-fine, nothing is changing, and you want to read what a screen two feet away
-already knows. Ordinary momentary switch to GND, read with `INPUT_PULLUP`:
+Since the timer has no exceptions, the button is the **only** way to see a state
+the screen has already slept through — a fault raised on Friday, a portal waiting
+on Saturday, or just a healthy board you want to read from two feet away.
+Ordinary momentary switch to GND, read with `INPUT_PULLUP`:
 
 ```
 GPIO ──── [momentary NO] ──── GND
@@ -472,9 +477,11 @@ Same NC-vs-NO caution as the endstops in reverse: this one is **normally OPEN**,
 so the pin idles HIGH and a strapping pin is harmless here — nothing holds the
 line at reset unless someone is pressing the button while the board boots.
 
-**It is fitted with the screen, not separately.** `-DHAS_STATUS_SCREEN` defines
-`PIN_WAKE_BTN` alongside the I²C pair, because a board with no panel has nothing
-for a button to wake. Per board:
+**It is fitted with the screen, not separately, and now enforced.**
+`-DHAS_STATUS_SCREEN` defines `PIN_WAKE_BTN` alongside the I²C pair, because a
+board with no panel has nothing for a button to wake — and `WakeButton.h` fails
+the build with an `#error` on the reverse case, a panel with no button. Per
+board:
 
 | Board | Pin | Pull-up |
 |---|---|---|

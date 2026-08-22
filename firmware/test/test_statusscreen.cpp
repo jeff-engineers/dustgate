@@ -337,23 +337,26 @@ int main() {
     }
 
     // ── sleep policy ─────────────────────────────────────────────────────
+    // The timer has no exceptions as of 2026-08-22: a fault that lasts a
+    // weekend would otherwise burn itself into the glass. What used to hold the
+    // screen lit now only WAKES it, via the state hash in StatusScreen.h.
     {
-        Facts ready;  ready.status = statusled::READY;
-        Facts fault;  fault.status = statusled::FAULT;
-        Facts portal; portal.status = statusled::PORTAL;
-        Facts moving; moving.status = statusled::READY; moving.motion = statusled::MOVING;
-
-        ok("awake right after an event",  awake(ready, 1000, 1000));
-        ok("awake a minute later",        awake(ready, 1000, 61000));
-        ok("asleep after two minutes",   !awake(ready, 1000, 1000 + kIdleBlankMs));
-        // Nobody should have to press a button to find out what broke.
-        ok("a fault holds it awake",      awake(fault, 1000, 1000 + kIdleBlankMs * 10));
-        // A blank screen is useless to a stranger being asked to join an AP.
-        ok("the portal holds it awake",   awake(portal, 1000, 1000 + kIdleBlankMs * 10));
-        ok("motion holds it awake",       awake(moving, 1000, 1000 + kIdleBlankMs * 10));
+        ok("awake right after an event",  awake(1000, 1000));
+        ok("awake a minute later",        awake(1000, 61000));
+        ok("asleep after two minutes",   !awake(1000, 1000 + kIdleBlankMs));
+        ok("a fault does not hold it awake",  !awake(1000, 1000 + kIdleBlankMs * 10));
         // A shop controller is expected to run past 49.7 days.
         ok("survives the millis rollover",
-           awake(ready, 0xFFFFFF00u, 0x00000100u));
+           awake(0xFFFFFF00u, 0x00000100u));
+    }
+
+    // isAlarm() still exists — it blinks the header band — it just no longer
+    // has anything to do with sleeping.
+    {
+        Facts fault;  fault.status = statusled::FAULT;
+        Facts ready;  ready.status = statusled::READY;
+        ok("a fault still blinks the band", render(fault).barBlink);
+        ok("a ready board does not",       !render(ready).barBlink);
     }
 
     printf("\n%d/%d passed\n", passed, passed + failed);

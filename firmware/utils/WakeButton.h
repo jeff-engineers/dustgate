@@ -12,6 +12,12 @@
 // the glass. Walking to a phone to find out what a screen two feet away already
 // knows is the failure this part exists to prevent.
 //
+// REQUIRED, not optional, on a board that carries a panel — and the #error below
+// enforces it. This was a convenience while faults held the screen lit by
+// themselves; since 2026-08-22 the sleep timer has no exceptions (a fault left
+// lit all weekend is the burn-in the blanking exists to prevent), so a screen
+// build with no button has states it can never show you again.
+//
 // So this is deliberately NOT a general input layer. There is no long-press, no
 // double-tap, no menu — one edge, one call to statusscreen::note(), and the
 // existing sleep timer does the rest. A button that could change what the shop
@@ -19,7 +25,8 @@
 // different part.
 //
 // COMPILES OUT COMPLETELY without PIN_WAKE_BTN, the same seam PIN_PIXEL,
-// HAS_LINEAR and PIN_OLED_* already use. A board with no button pays nothing.
+// HAS_LINEAR and PIN_OLED_* already use — which now means only a board with no
+// PANEL either, since the two are required together. A blind board pays nothing.
 //
 // PULL-UP, and the one place it bites: the default is INPUT_PULLUP, which is
 // what a plain momentary-to-GND wants. The DevKitC's only free pins are the
@@ -32,6 +39,12 @@
 #include <Arduino.h>
 #include "../config.h"
 #include "StatusScreen.h"
+
+#if defined(PIN_OLED_SDA) && defined(PIN_OLED_SCL) && !defined(PIN_WAKE_BTN)
+#error "A board with an OLED must define PIN_WAKE_BTN: the screen blanks after \
+two minutes with no exceptions, so without a button there is no way to light it \
+again. See WakeButton.h and firmware/wiring/<board>.md."
+#endif
 
 #if defined(PIN_WAKE_BTN)
 

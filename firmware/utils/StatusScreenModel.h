@@ -274,7 +274,9 @@ inline const char* stateWord(const Facts& f) {
 
 /**
  * True when the board is in a state a human has to do something about — which
- * is what makes the header band blink, and what holds the screen awake.
+ * is what makes the header band blink. It no longer holds the screen awake:
+ * the sleep timer has no exceptions (see below), so an alarm blinks for as long
+ * as the panel is lit and then blanks with everything else.
  *
  * A dark node is on this list even though the PIXEL shows it blue rather than
  * red. That is not the two indicators disagreeing: blue is the honest colour
@@ -408,20 +410,32 @@ inline Screen render(const Facts& f) {
 // dropping. A lit screen then MEANS something happened, instead of becoming
 // wallpaper nobody reads.
 //
-// A state a human has to act on holds it awake, because nobody should have to
-// press a button to find out what broke. That includes the captive portal: a
-// blank screen is useless to a stranger being asked to join an AP.
+// THE TIMER HAS NO EXCEPTIONS, as of 2026-08-22. It used to: a fault, a dark
+// node or the captive portal held the glass lit indefinitely, on the reasoning
+// that nobody should have to press a button to find out what broke. But a fault
+// is exactly the state that lasts — a node goes dark on a Friday and the panel
+// burns "NODE DARK" into itself over a weekend nobody is in the shop. The alarm
+// still WAKES the screen (a state change bumps the event timestamp in
+// StatusScreen.h), so a person standing there sees it happen; it just doesn't
+// hold it. Anyone arriving later presses the button.
+//
+// Which makes the wake button REQUIRED on any board carrying a panel, not the
+// convenience it was when faults were self-lighting. WakeButton.h refuses to
+// compile a screen build without one.
 // ---------------------------------------------------------------------------
-// uint32_t, not unsigned long, everywhere below: millis() is 32-bit on the
-// device and 64-bit on a test host, and the rollover arithmetic is only correct
-// at the device's width. Getting that wrong would pass every host test and then
-// blank the screen for 49 days on a real board.
+// uint32_t, not unsigned long: millis() is 32-bit on the device and 64-bit on a
+// test host, and the rollover arithmetic is only correct at the device's width.
+// Getting that wrong would pass every host test and then blank the screen for
+// 49 days on a real board.
 static const uint32_t kIdleBlankMs = 120000;   // two minutes
 
-inline bool awake(const Facts& f, uint32_t lastEventMs, uint32_t nowMs,
+/**
+ * True while the panel should be lit. Takes no Facts on purpose: what the board
+ * is doing no longer changes the answer, and a signature that still accepted
+ * state would invite putting an exception back one case at a time.
+ */
+inline bool awake(uint32_t lastEventMs, uint32_t nowMs,
                   uint32_t idleMs = kIdleBlankMs) {
-    if (isAlarm(f) || f.status == statusled::PORTAL) return true;
-    if (f.motion != statusled::STILL) return true;
     // Unsigned subtraction, so this stays correct across the millis() rollover
     // at 49.7 days — a shop controller is expected to run past one.
     return (nowMs - lastEventMs) < idleMs;

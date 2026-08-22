@@ -261,8 +261,9 @@ instead would be the last thing you did before needing a current sense.
 
 The screen blanks after two minutes so it doesn't burn a static layout into itself
 on a node that idles for weeks — right until you want to read it, at which point
-nothing is changing and so nothing wakes the glass. The button is how a person gets
-it back without walking to a phone. `-DHAS_STATUS_SCREEN` fits it along with the
+nothing is changing and so nothing wakes the glass. Since 2026-08-22 the timer makes
+no exceptions (not even for a fault), so the button is the only way a person gets it
+back without walking to a phone — and a screen build without one won't compile. `-DHAS_STATUS_SCREEN` fits it along with the
 panel, so D1, D4 and D5 are either all spoken for or all free.
 
 D1 is GPIO0 — which on most ESP32 parts would be the boot strap and a bad choice,
