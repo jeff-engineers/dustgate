@@ -5,6 +5,8 @@ import {
   DeviceInfo,
   DiscoveredNode,
   DiscoveredOutlet,
+  OutletNameResult,
+  OutletReleaseResult,
   NodeLinkState,
   OutletConfigCmd,
   PingResult,
@@ -59,6 +61,11 @@ export class DemoApiService extends ApiService {
       numStops:      0,
       version:       '1.0-demo',
       motorInverted: false,
+      // Taken from the model rather than typed here: this is the owner suffix the
+      // demo's own nameOutlet() stamps on a plug, and the UI shows it beside the
+      // name field as what WILL be written. Two literals would eventually disagree
+      // and the preview would quietly start lying.
+      owner:         model.infoView(this.d, 'demo', '1.0-demo').owner,
     } satisfies DeviceInfo;
     this.apiKey = 'demo';
     this.ready$.next(true);
@@ -264,7 +271,26 @@ export class DemoApiService extends ApiService {
       reachable:  x.reachable,
       powerW:     x.powerW,
       generation: x.gen,
+      claim:      x.claim,
+      holder:     x.holder ?? undefined,
+      takeable:   x.takeable,
+      claimReason: x.claimReason,
     }));
+  }
+
+  override async renameOutlet(ip: string, label: string, takeover = false): Promise<OutletNameResult> {
+    await this.delay(350);   // a write to a plug over the LAN is not instant
+    return model.nameOutlet(this.d, ip, label, takeover);
+  }
+
+  override async takeoverOutlet(ip: string): Promise<{ ok: boolean; error?: string }> {
+    await this.delay(400);
+    return model.takeoverOutlet(this.d, ip);
+  }
+
+  override async releaseOutlet(ip: string): Promise<OutletReleaseResult> {
+    await this.delay(350);
+    return model.releaseOutlet(this.d, ip);
   }
 
   // ── Secondary boards ───────────────────────────────────────────────────

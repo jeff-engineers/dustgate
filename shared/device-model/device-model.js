@@ -162,6 +162,8 @@ function infoView(d, apiKey, version) {
     idleTimeoutSec: d.idleTimeoutSec,
     manifoldModel:  d.manifoldModel,
     stepsPerMm:     d.stepsPerMm,
+    // The owner suffix this brain stamps on plugs it owns — see nameOutlet().
+    owner:          OUR_NAME,
   };
 }
 
@@ -444,6 +446,12 @@ function switchDustCollector(d, on) { d.dcOn = !!on; return { ok: true }; }
 // threshold step, where the first ping to an outlet catches it still off (0W)
 // and later pings read its running draw once "switched on".
 
+// The owner suffix DustGate appends to a plug it owns. U+00B7 MIDDLE DOT,
+// spaced — must match OWNER_SEP in plug-claim.js and ownerSep() in PlugClaim.h.
+const OWNER_SEP = ' \u00b7 ';
+// Who this simulated brain says it is, in that suffix.
+const OUR_NAME = 'dustgate-demo';
+
 function _randHex(len) {
   let s = '';
   for (let i = 0; i < len; i++) s += Math.floor(Math.random() * 16).toString(16);
@@ -471,14 +479,111 @@ function ensureDiscovered(d) {
       reachable: true,
       powerW:    0, // off during the scan (real power switch, no standby)
       gen:       2,
+      // Ownership (RFC §8). The LAST plug in the list always belongs to someone
+      // else, so the refusal paths — you cannot rename or release a plug another
+      // controller owns — are reachable on the bench without staging a second
+      // brain on the network. Everything else is out of the box.
+      claim:     i === count - 1 ? 'foreign' : 'unclaimed',
+      holder:    i === count - 1 ? 'home-assistant.local' : null,
+      // Takeable, but only by a human who has been told what breaks. Refusing
+      // outright would just move the same repoint into the Shelly app, where
+      // there is no record of it at all — see plug-claim.js.
+      takeable:  i === count - 1,
+      claimReason: i === count - 1
+        ? 'shared with home-assistant.local — polled, not pushed' : undefined,
     };
   });
   return d._discovered;
 }
 
-/** GET /api/outlets/discover — the discovered list (tools off → 0W). */
+/**
+ * POST /api/outlets/name — rename a plug.
+ *
+ * The owner suffix is the device's business, not the caller's: `label` is the
+ * human half and the suffix is reattached here, so a round trip can never double
+ * it. Mirrors the main-loop handler in firmware.ino, including the rule that an
+ * UNCLAIMED plug gets the bare label — we have not earned the right to stamp our
+ * name on a plug we have not paired.
+ */
+function nameOutlet(d, ip, label, takeover) {
+  if (!ip) throw badRequest("missing 'ip'");
+  const hit = (d._discovered || []).find(x => x.ip === ip);
+  if (!hit) return { ok: false, error: 'not responding' };
+  // Refused unless a human explicitly overrode it. Only the NAME is written
+  // either way — the plug keeps reporting to whoever owns it.
+  const owned = hit.claim === 'foreign' || hit.claim === 'dustgate';
+  if (owned && !takeover) {
+    return { ok: false, error: `owned by ${hit.holder || 'another controller'}` };
+  }
+  // The owner suffix means "this plug is being USED by that brain", so it goes
+  // on only when that is true — never on an overridden rename or an unclaimed
+  // plug named before pairing.
+  const full = hit.claim === 'ours' && label
+    ? `${label}${OWNER_SEP}${OUR_NAME}`
+    : String(label || '');
+  hit.name = full;
+  return { ok: true, name: full, label: String(label || '') };
+}
+
+/**
+ * POST /api/outlets/takeover — repoint a plug that reports to someone else.
+ *
+ * The loud one: unlike a name override, this is what actually breaks the other
+ * controller. On real hardware the approval is one-shot and the repoint lands on
+ * the next provisioning pass; here it takes effect at once, which is the only
+ * honest simplification available without simulating a provisioning cycle.
+ */
+function takeoverOutlet(d, ip) {
+  if (!ip) throw badRequest("missing 'ip'");
+  const hit = (d._discovered || []).find(x => x.ip === ip);
+  if (!hit) return { ok: false, error: 'not responding' };
+  if (!hit.takeable) {
+    return { ok: false, error: 'nothing to take — no other controller has this outlet' };
+  }
+  hit.claim = 'ours';
+  hit.holder = null;
+  hit.takeable = false;
+  hit.claimReason = undefined;
+  hit.prevPushUrl = 'ws://home-assistant.local:80/shelly-rpc';   // so release can hand it back
+  return { ok: true, claim: 'ours' };
+}
+
+/**
+ * POST /api/outlets/release — the device half of unpairing.
+ *
+ * Best-effort by design: the layout half happens whatever this returns, because
+ * a plug you have physically unplugged is exactly when you want to detach it.
+ */
+function releaseOutlet(d, ip) {
+  if (!ip) throw badRequest("missing 'ip'");
+  const hit = (d._discovered || []).find(x => x.ip === ip);
+  if (!hit) return { ok: false, released: false, error: 'not responding' };
+  if (hit.claim === 'foreign' || hit.claim === 'dustgate') {
+    return { ok: true, released: false,
+             note: 'polled only — nothing was written to this plug' };
+  }
+  const i = hit.name.lastIndexOf(OWNER_SEP);
+  if (i >= 0) hit.name = hit.name.slice(0, i);
+  const restored = !!hit.prevPushUrl;
+  hit.claim = 'unclaimed';
+  hit.holder = null;
+  return { ok: true, released: true, restored };
+}
+
+/** GET /api/outlets/discover — the discovered list (tools off → 0W).
+ *
+ * The name is reported with any owner suffix STRIPPED, exactly as the firmware
+ * does (plugclaim::decide → claim.label, firmware.ino). The suffix is our
+ * bookkeeping: shown in the picker it would look like part of the tool's name,
+ * then get saved back and doubled. The stored entry keeps the full name, because
+ * that is what the plug itself actually holds.
+ */
 function discoverOutlets(d) {
-  return ensureDiscovered(d).map(x => ({ ...x }));
+  const suffix = OWNER_SEP + OUR_NAME;
+  return ensureDiscovered(d).map(x => ({
+    ...x,
+    name: x.name && x.name.endsWith(suffix) ? x.name.slice(0, -suffix.length) : x.name,
+  }));
 }
 
 /** Shelly-app device name for an IP if it's one we've discovered, else ''. */
@@ -529,4 +634,5 @@ module.exports = {
   // outlets
   configureOutlet, deleteOutlet, configureDustCollector, deleteDustCollector, switchDustCollector,
   ensureDiscovered, discoverOutlets, pingOutlet, nameForIp,
+  nameOutlet, releaseOutlet, takeoverOutlet,
 };

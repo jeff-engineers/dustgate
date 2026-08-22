@@ -378,7 +378,9 @@
   <span class="n">{{ trayNote() }}</span>
   <div class="chips">
     <button *ngFor="let o of freeOutlets()" class="chip" [attr.data-level]="chipLevel(o)"
-            [title]="o.hostname + ' · ' + o.ip"
+            [title]="o.hostname + ' · ' + o.ip + (armedTool
+                       ? ' — tap to pair it with the armed tool'
+                       : ' — drag onto a tool to pair it, or tap to rename it')"
             (pointerdown)="onChipDown($event, o)">
       <svg class="face" viewBox="0 0 24 24"><rect class="shell" x="3.5" y="3.5" width="17" height="17" rx="5"/><rect class="slot" x="8.4" y="7.6" width="2.1" height="5.6" rx="1"/><rect class="slot" x="13.5" y="7.6" width="2.1" height="5.6" rx="1"/><circle class="slot" cx="12" cy="16.4" r="1.5"/></svg>
       <span>{{ o.name || o.hostname }}</span>
@@ -440,6 +442,87 @@
   </div>
 </div>
 
+<!-- The tray plug's own dialog: name it, say which tool it's for, and take it off
+     whoever owns it — all three in one place.
+     Four identical "shellyplug-s-…" on one shelf is exactly when a name earns its
+     keep, and it has to be possible BEFORE pairing or it arrives too late to help
+     you pair. Taking it over is here for the same reason: sending someone away to
+     pair it first and come back was an errand invented by an implementation
+     detail, not by anything the user cares about. -->
+<div class="sheet-bg" *ngIf="renamingChip" (pointerdown)="renamingChip = null"></div>
+<div class="sheet narrow" *ngIf="renamingChip as rc">
+  <button type="button" class="sheet-close" (click)="renamingChip = null" aria-label="Close without renaming">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+  </button>
+  <div class="rename-card">
+    <div class="rn-head"><b>Outlet:</b> {{ rc.name || rc.hostname }}<span class="sep">—</span>Setup</div>
+    <label class="rn-fld" for="chip-name">Outlet name</label>
+    <input id="chip-name" class="rn-in" [(ngModel)]="chipDraft"
+           [disabled]="(!chipRenamable(rc) && !chipOverride) || chipBusy"
+           title="The name this outlet shows in the Shelly app. Saved to the outlet itself."/>
+    <div class="rn-meta">{{ rc.hostname }} · {{ rc.ip }}</div>
+    <div class="rn-why" *ngIf="!chipRenamable(rc)">
+      {{ chipRenameWhy(rc) }}
+      <!-- The refusal is a gate, not a wall. Only the NAME is written — the outlet
+           keeps reporting to whoever owns it, so nothing over there stops working.
+           Repointing it is a louder act and needs the outlet on a tool first, which
+           is what the line below says rather than leaving you to discover it. -->
+      <button class="rn-link" *ngIf="chipOwnedByOther(rc) && rc.reachable"
+              (click)="chipOverride = true; chipSaid = ''"
+              title="Write the name to this outlet anyway. Only the name — it keeps reporting to its current owner.">
+        Rename it anyway
+      </button>
+    </div>
+    <div class="rn-why" *ngIf="chipOverride && chipOwnedByOther(rc)">
+      Naming unblocked. This writes the name only — {{ rc.holder || 'its owner' }} keeps
+      receiving its updates. Use <b>Take this outlet</b> below if you want it to report
+      to DustGate instead.
+    </div>
+
+    <!-- Which tool it's for, right here. Dragging a chip onto a tool still works
+         and is the faster gesture; this is the same act for anyone who opened the
+         dialog first, or who is on a phone and would rather pick than drag. -->
+    <label class="rn-fld" for="chip-tool">Use it for</label>
+    <select id="chip-tool" class="rn-in" [(ngModel)]="chipTool"
+            title="Pair this outlet with a tool, so DustGate knows when that tool is running.">
+      <option value="">— not yet —</option>
+      <option *ngFor="let m of pairableMachines()" [value]="m.id">{{ m.label }}</option>
+    </select>
+
+    <button class="rn-take" *ngIf="rc.takeable && rc.reachable"
+            (click)="chipTakeAsking = true; chipSaid = ''" [disabled]="chipBusy"
+            [title]="'Point this outlet at DustGate instead of ' + (rc.holder || 'its current owner') + '. Breaks what they have built on it.'">
+      Take this outlet from {{ rc.holder || 'its owner' }}
+    </button>
+
+    <div class="rn-why bad" *ngIf="chipSaid">{{ chipSaid }}</div>
+    <div class="rn-acts">
+      <button (click)="renamingChip = null" title="Close without saving">Cancel</button>
+      <button class="go" [disabled]="chipBusy" (click)="commitChipRename()"
+              [title]="chipTool
+                 ? 'Write the name to the outlet and pair it with the chosen tool'
+                 : 'Write this name to the outlet itself'">
+        {{ chipBusy ? 'Saving…' : (chipTool ? 'Save and pair' : 'Save to outlet') }}
+      </button>
+    </div>
+
+    <!-- Same confirm as the tool row's, and the same shared warning text. -->
+    <div class="rn-confirm" *ngIf="chipTakeAsking">
+      <h4>Take this outlet from {{ rc.holder || 'its current owner' }}?</h4>
+      <p>{{ chipTakeoverText(rc) }}</p>
+      <p><b>You can hand it back.</b> Removing the outlet from its tool later restores
+         the target it reports to now.</p>
+      <div class="rn-acts">
+        <button (click)="chipTakeAsking = false" title="Leave it where it is — nothing changes">Leave it</button>
+        <button class="go" (click)="doChipTakeover()" [disabled]="chipBusy"
+                title="Repoint this outlet at DustGate now">
+          {{ chipBusy ? 'Taking…' : 'Take it' }}
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- Pairing a tool (or the collector) with its plug — same sheet as a gate. -->
 <div class="sheet-bg" *ngIf="outletTool" (pointerdown)="outletTool = null"></div>
 <div class="sheet" *ngIf="outletTool as ot">
@@ -449,6 +532,8 @@
   <app-element-outlet-config [element]="ot" [mode]="outletMode"
                              [excludeIps]="outletExcludeIps"
                              [excludeReason]="outletExcludeReason"
-                             (saved)="onOutletConfigured($event)" (cancelled)="outletTool = null">
+                             [outlets]="outlets" [owner]="owner"
+                             (saved)="onOutletConfigured($event)" (cancelled)="outletTool = null"
+                             (note)="unpairNote = $event" (rescan)="scanOutlets()">
   </app-element-outlet-config>
 </div>

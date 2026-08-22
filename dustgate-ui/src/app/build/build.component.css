@@ -131,6 +131,51 @@ svg.canvas { display: block; touch-action: none; }
 .secondary-port-grab { cursor: grab; }
 .secondary-port-grab:hover .secondary-port { stroke: var(--accent); }
 
+/* Naming a tray plug — the same sheet object as the gate and second-port cards,
+   just narrower, because it asks for one short string and nothing else. */
+.sheet .rename-card { background: var(--surface); border: 1px solid var(--border);
+                      border-radius: 16px; padding: 18px 16px; display: flex;
+                      flex-direction: column; gap: 9px; }
+.sheet .rename-card .rn-head { font-size: 12.5px; color: var(--muted); }
+.sheet .rename-card .rn-head b { color: var(--text); font-weight: 600; }
+.sheet .rename-card .rn-head .sep { opacity: 0.6; margin: 0 5px; }
+.sheet .rename-card .rn-fld { font-size: 11px; letter-spacing: 0.07em; text-transform: uppercase;
+                              color: var(--muted); }
+.sheet .rename-card .rn-in { background: var(--bg); border: 1px solid var(--border);
+                             color: var(--text); border-radius: 8px; padding: 10px 12px;
+                             font-size: 15px; font-family: inherit; }
+.sheet .rename-card .rn-in:focus { outline: none; border-color: var(--accent); }
+.sheet .rename-card .rn-in:disabled { color: var(--muted); }
+.sheet .rename-card .rn-meta { font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.sheet .rename-card .rn-why { font-size: 11.5px; color: var(--cable, #38b6f0); line-height: 1.5; }
+.sheet .rename-card .rn-why.bad { color: var(--accent); }
+.sheet .rename-card select.rn-in { appearance: none; background-image:
+    linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+    linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+  background-position: calc(100% - 17px) 50%, calc(100% - 12px) 50%;
+  background-size: 5px 5px, 5px 5px; background-repeat: no-repeat; padding-right: 32px; }
+/* The loud one: amber, not red — a takeover moves something, it doesn't destroy it. */
+.sheet .rename-card .rn-take { background: var(--surface); border: 1px solid rgba(240,165,0,0.4);
+                               color: var(--accent); border-radius: 9px; padding: 9px 10px;
+                               font-size: 12.5px; width: 100%; margin-top: 2px; }
+.sheet .rename-card .rn-take:disabled { opacity: 0.4; }
+.sheet .rename-card .rn-confirm { background: rgba(240,165,0,0.07); border: 1px solid rgba(240,165,0,0.4);
+                                  border-radius: 12px; padding: 13px; display: flex;
+                                  flex-direction: column; gap: 10px; margin-top: 4px; }
+.sheet .rename-card .rn-confirm h4 { margin: 0; font-size: 14px; font-weight: 600; color: var(--accent); }
+.sheet .rename-card .rn-confirm p { margin: 0; font-size: 12.5px; color: var(--muted); line-height: 1.55; }
+.sheet .rename-card .rn-confirm p b { color: var(--text); font-weight: 500; }
+.sheet .rename-card .rn-confirm .rn-acts { margin-top: 0; }
+.sheet .rename-card .rn-link { background: none; border: none; padding: 0; margin-left: 6px;
+                               font: inherit; color: var(--accent); text-decoration: underline;
+                               cursor: pointer; }
+.sheet .rename-card .rn-acts { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 4px; }
+.sheet .rename-card .rn-acts button { border-radius: 8px; padding: 10px 12px; font-size: 14px;
+                                      border: 1px solid var(--border); background: var(--bg); color: var(--text); }
+.sheet .rename-card .rn-acts button.go { background: var(--accent); border-color: var(--accent);
+                                         color: #241a00; font-weight: 600; }
+.sheet .rename-card .rn-acts button:disabled { opacity: 0.5; }
+
 /* The second-port confirmation. Reuses the gate sheet's card so the two sheets
    are the same object with different contents. */
 .sheet .card.secondary-port { background: var(--surface); border: 1px solid var(--border);

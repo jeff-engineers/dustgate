@@ -29,6 +29,9 @@ public:
     // app-visible name (Switch.SetConfig). Blocking HTTP — poll task only.
     bool        configureOutboundWs(const char* wsUrl) override;
     bool        setName(const char* name) override;
+    // Hand the plug back on unpair — restore `restoreUrl` if we took it from
+    // another controller, otherwise disable Ws so it pushes nowhere.
+    bool        releasePush(const char* restoreUrl) override;
 
     // Ws.GetConfig — read who this plug currently pushes to. THE AUTHORITY on
     // ownership (docs/shop-schema-rfc.md §8): names are user-editable, this is

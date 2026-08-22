@@ -73,6 +73,30 @@ public:
     SmartOutlet* outletByIp(const char* ip);
 
     // -------------------------------------------------------------------------
+    // TAKEOVER approval, held BY ADDRESS (RFC §8).
+    //
+    // The approval used to live on the SmartOutlet object, which broke it twice
+    // over. A plug not yet paired with anything has no outlet object, so there
+    // was nowhere to put the answer and the UI had to send the user off to pair
+    // it first and come back. Worse, configureOutlet() builds a BRAND NEW outlet
+    // on every topology adopt — and adopt is what pairing does — so an approval
+    // recorded against the old object was thrown away by the very save that made
+    // the plug takeable in the first place.
+    //
+    // Holding it against the IP fixes both: approve whenever, pair whenever, and
+    // the approval is applied to whatever outlet turns up at that address.
+    //
+    // What does NOT change is the thing that matters: this is still settable only
+    // from POST /api/outlets/takeover, still one-shot, and still just an
+    // approval — the actual repoint happens on the ordinary provisioning pass,
+    // through the same code as any other plug. There remains exactly one way to
+    // repoint a plug, which is what keeps "never steal" true everywhere else.
+    void approveTakeoverByIp(const char* ip);
+    // Consumed by configureOutlet(), and cleared once the repoint has landed.
+    bool takeoverApprovedFor(const char* ip) const;
+    void clearTakeoverApproval(const char* ip);
+
+    // -------------------------------------------------------------------------
     // Collector plugs — switchable Shelly outlets (we turn them on/off) rather
     // than power sensors. Their blocking HTTP switch calls stay off the motor
     // loop by living on the poll task.
@@ -242,6 +266,13 @@ private:
     // is at any more.
     char              _ourHost[40];
     char              _ourName[40];
+
+    // Addresses the user has approved a takeover for, whether or not a plug is
+    // configured there yet. Small and fixed: approvals are rare, deliberate, and
+    // consumed almost immediately. A full table simply refuses the newest rather
+    // than evicting an older approval the user may still be acting on.
+    static const int  kMaxPendingTakeovers = 4;
+    char              _pendingTakeoverIp[kMaxPendingTakeovers][40];
 
     // Debounce tracking (poll task only — no mutex needed)
     int               _pendingStop;

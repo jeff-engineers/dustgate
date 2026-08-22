@@ -4,6 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router as NgRouter, RouterLink } from '@angular/router';
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
 import { ApiService, DiscoveredOutlet, NodeLinkState, Topology, TopologyStatus } from '../services/api.service';
+import { takeoverWarning } from '@plug-claim';
 import { airflowIssues, redundantSelectors, type AirflowIssue } from '@topology';
 import { validateShop, SHOP_SCHEMA_VERSION } from '@shop';
 import { SelectorConfigComponent } from '../gates/selector-config.component';
@@ -239,6 +240,9 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   saving = false;
   saveError = '';
   saveNote = '';
+  /** What happened to a plug on the last unpair, when it's worth saying. Consumed
+   *  by the next save() — see there for why it isn't written to saveNote directly. */
+  unpairNote = '';
   /** Structural gap that stops the controller accepting the doc (draft kept here). */
   wip = '';
   /** The gate whose config sheet is open, or null. */
@@ -681,13 +685,14 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       return { state: 'none', text: 'no plug',
                hint: `No smart plug on ${n.name} — you switch it on yourself. Tap to pair one.` };
     }
-    // The topology stores gen/ip/host/thresholdW — no friendly name, because the
-    // name lives on the Shelly itself. So prefer what the last scan saw it call
-    // itself ("Table Saw"), and fall back to the hostname only when we haven't
-    // scanned. Otherwise the row reads "G4-295BD19…", which identifies nothing.
+    // The name lives on the Shelly itself, so what the last scan saw it call
+    // itself wins — rename a plug in the Shelly app and this follows. Below that
+    // sits `label`, the copy cached when it was last named from here: it is what
+    // keeps a plug that is switched off, or paired before the last sweep, from
+    // decaying to "G4-295BD19…" or a bare IP, which identify nothing.
     const ip = outlet['ip'] as string | undefined;
     const seen = ip ? this.outlets.find(o => o.ip === ip) : undefined;
-    const name = seen?.name || (outlet['host'] as string) || ip || 'plug';
+    const name = seen?.name || (outlet['name'] as string) || (outlet['host'] as string) || ip || 'plug';
     const machine = machineOfPort(doc, el);
     const watts = (machine && this.machineWatts.get(machine.id as string)) ?? 0;
     const trip = (outlet['thresholdW'] as number) ?? 0;
@@ -710,6 +715,25 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
    *  what's still unclaimed, so a plug that gets unpaired reappears without a
    *  rescan. */
   outlets: DiscoveredOutlet[] = [];
+  /** Our mDNS name — the owner suffix stamped on plugs we own. Shown beside every
+   *  outlet-name field so what lands on the plug is never a surprise. */
+  owner = '';
+  /** A tray chip being renamed. Naming a plug BEFORE it is paired is the point:
+   *  four identical `shellyplug-s-…` on a shelf is exactly when a name earns its
+   *  keep, and the tap that opens this was a dead gesture until now. */
+  renamingChip: DiscoveredOutlet | null = null;
+  chipDraft = '';
+  chipBusy = false;
+  chipSaid = '';
+  /** The user said "rename it anyway" for a tray plug someone else owns. Resets
+   *  with the sheet — an override of a safety rule should not outlive the
+   *  question that raised it. */
+  chipOverride = false;
+  /** Machine this tray plug is being paired with, '' for none. Pairing lives in
+   *  the same dialog as naming and takeover because splitting them was an errand
+   *  invented by where the firmware happened to store an approval. */
+  chipTool = '';
+  chipTakeAsking = false;
   scanning = false;
   scanned = false;
   chipDrag: { outlet: DiscoveredOutlet; x: number; y: number; moved: boolean; over: string | null } | null = null;
@@ -724,6 +748,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   async scanOutlets(): Promise<void> {
+    this.owner = this.api.deviceInfo?.owner ?? this.owner;
     if (this.scanning) return;
     this.scanning = true;
     try { this.outlets = await this.api.discoverOutlets(); }
@@ -836,13 +861,121 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     const d = this.chipDrag; this.chipDrag = null;
     if (!d) return;
     const target = d.over ?? (d.moved ? null : this.armedTool);
-    if (!target) return;
+    if (!target) {
+      // A tap on a chip with no tool armed used to do nothing at all. It is the
+      // natural place to name the plug you are looking at, and it cannot collide
+      // with the drag: this branch only runs when nothing moved and nothing is
+      // waiting to be paired.
+      if (!d.moved) this.startChipRename(d.outlet);
+      return;
+    }
     const machine = machineOfPort(this.topo as unknown as ShopDoc, this.elem(target));
     if (!machine) return;
     this.pairPlug(d.outlet, machine.id as string);
     this.armedTool = null; this.matchNote = '';
     this.afterMutation(null);
   };
+
+  startChipRename(o: DiscoveredOutlet): void {
+    this.renamingChip = o;
+    this.chipDraft = o.name || '';
+    this.chipSaid = '';
+    this.chipOverride = false;
+    this.chipTool = '';
+    this.chipTakeAsking = false;
+  }
+
+  /** Every machine this plug could be put on. Machines that already have one are
+   *  listed too, and say so — picking one replaces its plug, which is the same
+   *  thing dropping a chip on an occupied tool already does. */
+  pairableMachines(): Array<{ id: string; label: string }> {
+    const doc = this.topo as unknown as ShopDoc;
+    return machinesOf(doc).map(m => {
+      const ip = ((m.sensor as RawEl | undefined)?.['outlet'] as RawEl | undefined)?.['ip'] as string | undefined;
+      const name = (m.name as string) || (m.id as string);
+      return { id: m.id as string, label: ip ? `${name} (replaces its current outlet)` : name };
+    });
+  }
+
+  /** The sentence naming who goes quiet — from the shared claim model, so this
+   *  and the tool row cannot end up describing the same act differently. */
+  chipTakeoverText(o: DiscoveredOutlet): string {
+    return takeoverWarning({
+      state: (o.claim ?? 'foreign') as 'foreign' | 'dustgate' | 'ours' | 'unclaimed',
+      owner: null, holder: o.holder ?? null, takeable: !!o.takeable,
+    }) ?? 'Its current owner will stop receiving updates from this outlet.';
+  }
+
+  async doChipTakeover(): Promise<void> {
+    const o = this.renamingChip;
+    if (!o) return;
+    this.chipBusy = true;
+    try {
+      const r = await this.api.takeoverOutlet(o.ip);
+      if (r.ok) {
+        // The device holds the approval against the ADDRESS and repoints on its
+        // next provisioning pass, so this needs no pairing first and no ordering
+        // dance — see SmartOutletControl::approveTakeoverByIp.
+        o.claim = 'ours'; o.takeable = false; o.holder = undefined;
+        this.chipSaid = 'Taken. This outlet reports to DustGate now.';
+      } else {
+        this.chipSaid = r.error ? `Couldn't take it: ${r.error}.` : 'Couldn\'t take it.';
+      }
+    } finally {
+      this.chipBusy = false;
+      this.chipTakeAsking = false;
+    }
+  }
+
+  /** Someone else has it. Distinct from "not answering", which has no override
+   *  worth offering — there is nothing on the other end to write to. */
+  chipOwnedByOther(o: DiscoveredOutlet): boolean {
+    return o.claim === 'foreign' || o.claim === 'dustgate';
+  }
+
+  /** Can this plug be renamed at all? We never write a plug someone else owns —
+   *  same rule that governs repointing its push target (RFC §8). */
+  chipRenamable(o: DiscoveredOutlet): boolean {
+    if (!o.reachable) return false;
+    return !o.claim || o.claim === 'ours' || o.claim === 'unclaimed';
+  }
+
+  chipRenameWhy(o: DiscoveredOutlet): string {
+    if (!o.reachable) return 'This outlet isn\'t answering, so its name can\'t be changed until it\'s back.';
+    return `${o.holder || 'Something else on the network'} owns this outlet. DustGate reads it and never writes to it.`;
+  }
+
+  /** Save the dialog: the name goes to the plug, the pairing goes to the layout.
+   *  Two destinations, one press — and the name is written FIRST so a plug that
+   *  refuses the rename doesn't leave a tool paired to something the user thinks
+   *  is called one thing and the Shelly app calls another. */
+  async commitChipRename(): Promise<void> {
+    const o = this.renamingChip;
+    if (!o) return;
+    const v = this.chipDraft.trim();
+    this.chipBusy = true; this.chipSaid = '';
+    try {
+      if (v !== (o.name || '')) {
+        const r = await this.api.renameOutlet(o.ip, v, this.chipOverride && this.chipOwnedByOther(o));
+        if (!r.ok) {
+          this.chipSaid = r.error ? `Couldn't rename it: ${r.error}.` : 'Couldn\'t rename it.';
+          return;   // pairing would bury the failure under a success
+        }
+        // The label, not r.name — see PairedOutletRowComponent.commit(). The scan
+        // reports names with our owner suffix stripped; caching the full one would
+        // show a suffix that disappears at the next sweep.
+        o.name = v;
+      }
+      if (this.chipTool) {
+        this.pairPlug(o, this.chipTool);
+        this.armedTool = null; this.matchNote = '';
+        this.afterMutation(null);
+      }
+      this.renamingChip = null;
+    } finally {
+      this.chipBusy = false;
+    }
+  }
 
   /** The plug row's own tap target.
    *
@@ -3651,7 +3784,11 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       await this.api.putTopology(doc as Topology);
       this.dirty = false;
       this.airflowErrors = this.liveLeaks();
-      this.saveNote = this.airflowErrors.length ? '' : 'Saved.';
+      // An unpair that couldn't fully release the plug says so HERE rather than in
+      // the sheet, which closes on the way out. It replaces "Saved." exactly once
+      // — the layout did save; the plug is the part worth mentioning.
+      this.saveNote = this.airflowErrors.length ? '' : (this.unpairNote || 'Saved.');
+      this.unpairNote = '';
     } catch {
       this.saveError = 'Couldn’t reach the controller — your layout is kept here.';
     } finally { this.saving = false; }

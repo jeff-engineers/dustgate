@@ -20,6 +20,7 @@
 #include "utils/MotionMath.h"
 #include "utils/StatusLed.h"
 #include "utils/StatusScreen.h"   // optional SSD1306; compiles to nothing unfitted
+#include "utils/WakeButton.h"    // the button that lights it; ditto
 #include "motor/MotorDriver.h"
 #include "feedback/FeedbackSystem.h"
 #include "control/ControlInput.h"
@@ -667,6 +668,10 @@ void setup() {
 #endif
     }
 
+    // The button that wakes it back up after the two-minute blank. Nothing on a
+    // board without one, and it never does anything but light the glass.
+    wakebutton::begin();
+
     // WiFi provisioning — must run before any WiFi-dependent control mode.
     // If WIFI_STA_SSID is hardcoded in config.h it is used directly.
     // Otherwise stored NVS credentials are tried; if none exist or connection
@@ -1077,6 +1082,9 @@ static void updateStatusLed() {
     }
 
     statusled::update();
+    // Before the screen decides whether to be lit, so a press shows up on this
+    // pass rather than the next one.
+    wakebutton::update();
     updateStatusScreen();
 }
 
@@ -2042,18 +2050,173 @@ void loop() {
     {
         char takeIp[40];
         if (apiServer.consumeTakeoverRequest(takeIp, sizeof(takeIp))) {
-            SmartOutlet* o = control.outletByIp(takeIp);
-            if (!o) {
-                // Pair it first, then take it. Approving a takeover for a plug we
-                // don't have would be an approval with nothing to apply it to.
-                DEBUG_PRINT(F("[TAKEOVER] No configured outlet at ")); DEBUG_PRINT(takeIp);
-                DEBUG_PRINTLN(F(" — pair the plug first."));
+            // Recorded against the ADDRESS, not against an outlet object. A plug
+            // that isn't paired with anything yet has no outlet — and used to be
+            // refused here, which sent the user off to pair it and come back —
+            // and an outlet that DOES exist is rebuilt from scratch by the next
+            // topology adopt, which is what pairing performs. Both cases now
+            // land the same way: the approval waits at the address until a plug
+            // there is provisioned. See SmartOutletControl::approveTakeoverByIp.
+            control.approveTakeoverByIp(takeIp);
+            control.requestProvision();   // don't wait for the next reconcile
+            DEBUG_PRINT(F("[TAKEOVER] Approved for ")); DEBUG_PRINT(takeIp);
+            DEBUG_PRINTLN(F(" — its push target is repointed on the next pass, "
+                            "whenever a plug there is provisioned."));
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Plug RENAME — POST /api/outlets/name.
+    //
+    // On the main loop for the same reason ping is: Switch.SetConfig blocks on a
+    // device that may not answer.
+    //
+    // The suffix rule is the interesting part. A plug that is already OURS gets
+    // "<label> · <our mDNS name>", because in the Shelly app there is no DustGate
+    // UI to explain why a plug is spoken for. A plug that is merely UNCLAIMED —
+    // renamed from the tray before it is paired with any tool — gets the bare
+    // label: stamping ownership on a plug we have not taken would be a claim we
+    // have not earned, and pairing will add the suffix when it is true.
+    // ------------------------------------------------------------------
+    {
+        char nameIp[40], nameLabel[48];
+        bool nameTakeover = false;
+        if (apiServer.consumeOutletNameRequest(nameIp, sizeof(nameIp),
+                                               nameLabel, sizeof(nameLabel),
+                                               nameTakeover)) {
+            StaticJsonDocument<256> resp;
+            ShellyGen2Outlet plug(nameIp, "rename");
+
+            if (!plug.poll()) {
+                resp["ok"]    = false;
+                resp["error"] = "not responding";
+                DEBUG_PRINT(F("[RENAME] ")); DEBUG_PRINT(nameIp);
+                DEBUG_PRINTLN(F(" is not answering — name unchanged."));
             } else {
-                o->approveTakeover();
-                control.requestProvision();   // don't wait for the next reconcile
-                DEBUG_PRINT(F("[TAKEOVER] Approved for ")); DEBUG_PRINT(takeIp);
-                DEBUG_PRINTLN(F(" — will repoint its push target on the next pass."));
+                String  wsServer; bool wsEnabled = false;
+                String  devName = fetchShellyDeviceName(nameIp, 2);
+                const bool claimKnown = plug.readPushConfig(wsServer, wsEnabled);
+                plugclaim::Claim claim;
+                if (claimKnown) {
+                    claim = plugclaim::decide(wsServer.c_str(), wsEnabled,
+                                              control.ourHost(), devName.c_str(),
+                                              control.ourName());
+                }
+
+                // Same rule that governs repointing, applied to the name: never
+                // write a plug someone else owns — UNLESS a human said to. That
+                // is what `nameTakeover` is, and mayRepoint()'s `confirmed`
+                // argument has always existed for exactly this shape of answer.
+                //
+                // A read we could not make is "we don't know", and stays a no in
+                // both cases: overriding a refusal is a decision about a KNOWN
+                // owner, and we cannot show the user whose plug it is if we could
+                // not ask. Confirming a question nobody was able to pose is not
+                // consent.
+                //
+                // Note this only ever writes the NAME. The plug keeps reporting to
+                // whoever owns it; nothing over there stops working. Repointing is
+                // a separate, louder act — POST /api/outlets/takeover.
+                if (!claimKnown || !plugclaim::mayRepoint(claim, nameTakeover)) {
+                    // String(), not c_str(): ArduinoJson stores a bare const char*
+                    // BY REFERENCE, and claim/full die at the end of this block
+                    // while serializeJson runs after it.
+                    String why = claimKnown ? String(claim.reason.c_str())
+                                            : String("could not read who owns this plug");
+                    resp["ok"]    = false;
+                    resp["error"] = why;
+                    DEBUG_PRINT(F("[RENAME] Refused for ")); DEBUG_PRINT(nameIp);
+                    DEBUG_PRINT(F(" — ")); DEBUG_PRINTLN(why);
+                } else {
+                    // The suffix says "this plug is being USED by that brain", so
+                    // it goes on only when that is true. A plug renamed under an
+                    // override still belongs to whoever it reports to, and an
+                    // unclaimed plug renamed before pairing is not ours yet
+                    // either — both get the bare label, and pairing adds the
+                    // suffix later, when it has become true.
+                    const bool ours  = (claim.state == plugclaim::State::Ours);
+                    std::string full = ours
+                        ? plugclaim::formatName(nameLabel, control.ourName())
+                        : std::string(nameLabel);
+                    bool ok = plug.setName(full.c_str());
+                    resp["ok"]    = ok;
+                    resp["name"]  = String(full.c_str());   // what landed, suffix and all
+                    resp["label"] = String(nameLabel);
+                    if (!ok) resp["error"] = "the plug refused the name";
+                    DEBUG_PRINT(F("[RENAME] ")); DEBUG_PRINT(nameIp);
+                    DEBUG_PRINT(F(" -> \"")); DEBUG_PRINT(full.c_str());
+                    DEBUG_PRINT(F("\" ")); DEBUG_PRINTLN(ok ? F("ok") : F("FAILED"));
+
+                    // Keep the in-memory outlet's label in step, so the next
+                    // status push doesn't report the name we just replaced.
+                    SmartOutlet* configured = control.outletByIp(nameIp);
+                    if (ok && configured) configured->setName(full.c_str());
+                }
             }
+            String out; serializeJson(resp, out);
+            apiServer.respondOutletName(out);
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Plug RELEASE — POST /api/outlets/release. The device half of unpairing.
+    //
+    // Best-effort BY DESIGN: the layout half (deleting sensor.outlet) is a plain
+    // topology write the UI does regardless, because a plug you have unplugged is
+    // exactly when you want to detach it. So this reports what it managed and
+    // never blocks the unpair — see the endpoint comment in HttpApiServer.cpp.
+    // ------------------------------------------------------------------
+    {
+        char relIp[40];
+        if (apiServer.consumeOutletReleaseRequest(relIp, sizeof(relIp))) {
+            StaticJsonDocument<256> resp;
+            SmartOutlet* configured = control.outletByIp(relIp);
+
+            // A poll-only plug was never written to — no suffix of ours on its
+            // name, no Ws config we touched. Saying "released" would imply we
+            // reached into someone else's device, which we did not.
+            if (configured && configured->isPollOnly()) {
+                resp["ok"]       = true;
+                resp["released"] = false;
+                resp["note"]     = "polled only — nothing was written to this plug";
+                DEBUG_PRINT(F("[RELEASE] ")); DEBUG_PRINT(relIp);
+                DEBUG_PRINTLN(F(" was poll-only — nothing to hand back."));
+            } else {
+                ShellyGen2Outlet plug(relIp, "release");
+                if (!plug.poll()) {
+                    resp["ok"]       = false;
+                    resp["released"] = false;
+                    resp["error"]    = "not responding";
+                    DEBUG_PRINT(F("[RELEASE] ")); DEBUG_PRINT(relIp);
+                    DEBUG_PRINTLN(F(" is not answering — it keeps our name and push target."));
+                } else {
+                    // Name first, then push — the same ordering pairing uses, and
+                    // for the same reason: a Ws write makes the plug reopen its
+                    // socket and a name write landing on top of that gets lost.
+                    String devName = fetchShellyDeviceName(relIp, 2);
+                    std::string lbl, own;
+                    plugclaim::parseName(devName.c_str(), lbl, own);
+                    bool nameOk = true;
+                    if (!own.empty() && own == control.ourName()) {
+                        nameOk = plug.setName(lbl.c_str());
+                        delay(150);
+                    }
+
+                    const char* restore = configured ? configured->previousPushUrl() : "";
+                    bool pushOk = plug.releasePush(restore);
+
+                    resp["ok"]       = nameOk && pushOk;
+                    resp["released"] = true;
+                    resp["restored"] = (restore && *restore);
+                    if (!nameOk) resp["error"] = "the plug kept our name";
+                    else if (!pushOk) resp["error"] = "the plug kept pushing to us";
+                    DEBUG_PRINT(F("[RELEASE] ")); DEBUG_PRINT(relIp);
+                    DEBUG_PRINT(F(" name=")); DEBUG_PRINT(nameOk ? F("ok") : F("FAILED"));
+                    DEBUG_PRINT(F(" push=")); DEBUG_PRINTLN(pushOk ? F("ok") : F("FAILED"));
+                }
+            }
+            String out; serializeJson(resp, out);
+            apiServer.respondOutletRelease(out);
         }
     }
 #endif // CONTROL_SMART_OUTLET

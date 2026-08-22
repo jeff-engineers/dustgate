@@ -97,6 +97,8 @@ export interface InfoView {
   idleTimeoutSec: number;
   manifoldModel: string;
   stepsPerMm: number;
+  /** Our mDNS name — the owner suffix stamped on plugs this brain owns. */
+  owner: string;
 }
 
 export interface OutletConfigInput {
@@ -122,6 +124,33 @@ export interface DiscoveredOutlet {
   reachable: boolean;
   powerW: number;
   gen: number;
+  /** Who owns it (RFC §8) — decides whether we may write its name unprompted. */
+  claim?: string;
+  /** Who has it now, for the explanation shown on the row. */
+  holder?: string | null;
+  /** Someone else has it, but a human told what breaks may take it. */
+  takeable?: boolean;
+  /** Why it isn't pickable, or how it will be paired — UI text. */
+  claimReason?: string;
+}
+
+/** POST /api/outlets/name — rename a plug (label only; the device adds its own
+ *  owner suffix when the plug is already ours). */
+export interface OutletNameResult {
+  ok: boolean;
+  name?: string;
+  label?: string;
+  error?: string;
+}
+
+/** POST /api/outlets/release — the device half of unpairing. Best-effort: the
+ *  caller drops sensor.outlet whatever this says. */
+export interface OutletReleaseResult {
+  ok: boolean;
+  released: boolean;
+  restored?: boolean;
+  note?: string;
+  error?: string;
 }
 
 export interface PingResult {
@@ -174,3 +203,6 @@ export function ensureDiscovered(d: Device): DiscoveredOutlet[];
 export function discoverOutlets(d: Device): DiscoveredOutlet[];
 export function pingOutlet(d: Device, ip: string): PingResult;
 export function nameForIp(d: Device, ip: string): string;
+export function nameOutlet(d: Device, ip: string, label: string, takeover?: boolean): OutletNameResult;
+export function takeoverOutlet(d: Device, ip: string): { ok: boolean; claim?: string; error?: string };
+export function releaseOutlet(d: Device, ip: string): OutletReleaseResult;

@@ -45,6 +45,7 @@ SmartOutletControl::SmartOutletControl()
     _wsUrl[0]   = '\0';
     _ourHost[0] = '\0';
     _ourName[0] = '\0';
+    for (int i = 0; i < kMaxPendingTakeovers; i++) _pendingTakeoverIp[i][0] = '\0';
 }
 
 SmartOutletControl::~SmartOutletControl() {
@@ -499,11 +500,24 @@ bool SmartOutletControl::provisionPushOutlets() {
         if (strlen(o->name()) > 0) {
             std::string label, owner;
             plugclaim::parseName(o->name(), label, owner);   // never double-suffix
-            o->setName(plugclaim::formatName(label, _ourHost).c_str());
+            // _ourName, NOT _ourHost. The suffix is read by humans in the Shelly
+            // app, and it is also what plugclaim::decide() matches to recognise
+            // our own plug at a stale address after a DHCP renewal — a
+            // comparison against `ourName` that an IP could never satisfy. This
+            // wrote _ourHost until 2026-08-21, which put a rotting IP in every
+            // plug's name and left the stale-address recovery path dead.
+            o->setName(plugclaim::formatName(label, _ourName).c_str());
             delay(150);
         }
-        if (o->configureOutboundWs(_wsUrl)) o->setProvisioned(true);
-        else                                pending = true;
+        if (o->configureOutboundWs(_wsUrl)) {
+            o->setProvisioned(true);
+            // Landed. The plug now reads as ours, so the approval has nothing
+            // left to authorize — which is exactly when a destructive
+            // confirmation should expire.
+            clearTakeoverApproval(o->ip());
+        } else {
+            pending = true;
+        }
         delay(50);
     }
 
@@ -541,6 +555,41 @@ void SmartOutletControl::onPushDisconnect(const char* ip) {
 // Setup API
 // =============================================================================
 
+void SmartOutletControl::approveTakeoverByIp(const char* ip) {
+    if (!ip || !*ip) return;
+    // Apply it to a plug that already exists, so an approval for something
+    // already paired takes effect on the next pass without waiting for a
+    // reconfigure that may never come.
+    if (SmartOutlet* o = outletByIp(ip)) o->approveTakeover();
+
+    for (int i = 0; i < kMaxPendingTakeovers; i++)
+        if (strcmp(_pendingTakeoverIp[i], ip) == 0) return;   // already recorded
+    for (int i = 0; i < kMaxPendingTakeovers; i++) {
+        if (_pendingTakeoverIp[i][0] == '\0') {
+            strlcpy(_pendingTakeoverIp[i], ip, sizeof(_pendingTakeoverIp[i]));
+            return;
+        }
+    }
+    // Full. Refuse the newest rather than evict an older approval the user may
+    // still be part-way through acting on. Four unconsumed takeovers at once is
+    // not a real shop; it is a bug or a script.
+    DEBUG_PRINT(F("[Outlets] Too many pending takeovers — not recording "));
+    DEBUG_PRINTLN(ip);
+}
+
+bool SmartOutletControl::takeoverApprovedFor(const char* ip) const {
+    if (!ip || !*ip) return false;
+    for (int i = 0; i < kMaxPendingTakeovers; i++)
+        if (strcmp(_pendingTakeoverIp[i], ip) == 0) return true;
+    return false;
+}
+
+void SmartOutletControl::clearTakeoverApproval(const char* ip) {
+    if (!ip || !*ip) return;
+    for (int i = 0; i < kMaxPendingTakeovers; i++)
+        if (strcmp(_pendingTakeoverIp[i], ip) == 0) _pendingTakeoverIp[i][0] = '\0';
+}
+
 void SmartOutletControl::configureOutlet(int slot, int generation,
                                          const char* ip, const char* name,
                                          int stopIndex, float thresholdW,
@@ -556,6 +605,14 @@ void SmartOutletControl::configureOutlet(int slot, int generation,
     o->setStopIndex(stopIndex);
     o->setThresholdW(thresholdW);
     o->setHost(host);
+    // Carry over an approval the user gave for this ADDRESS. Without this, every
+    // topology adopt — including the one that pairs the plug — would silently
+    // discard the answer, because this object is new and the old one is retired.
+    if (takeoverApprovedFor(ip)) {
+        o->approveTakeover();
+        DEBUG_PRINT(F("[Outlets] Approved takeover carried onto new outlet at "));
+        DEBUG_PRINTLN(ip);
+    }
 
     // Swap under the lock, retire outside it. The old object is NOT deleted
     // here — the poll task may be mid-HTTP holding it. See retire().

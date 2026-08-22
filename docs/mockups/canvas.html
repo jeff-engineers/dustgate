@@ -475,9 +475,83 @@
 
   <hr class="rule"/>
 
-  <!-- ══ 5. DECISIONS ════════════════════════════════════════════════ -->
+  <!-- ══ 5. THE PLUG ROW AND THE TRAY ════════════════════════════════ -->
   <section class="sec">
-    <h3>5 · Decisions</h3>
+    <span class="pill built">Built · 2026-08-21</span>
+    <h3>5 · The plug row, the tray, and naming an outlet</h3>
+    <p class="note" style="max-width:68ch">
+      A tool box is two rows: its name, and its <b>plug row</b>. The plug row is its own tap
+      target — the body drags the tool, the row opens the outlet. It shows the draw when the
+      tool is drawing and <em>which</em> outlet when it isn't, because an idle number tells you
+      nothing and the identity does.
+    </p>
+
+    <div class="grid">
+      <div class="card">
+        <h3>Where the name comes from</h3>
+        <p class="note">
+          The plug's own app-visible name, read live off the Shelly on every scan. Below that
+          sits <code>sensor.outlet.name</code>, a <b>cached copy</b> so a plug that is switched
+          off, or paired before the last sweep, still reads as a name rather than an IP. The
+          live scan always wins — rename a plug in the Shelly app and this follows.
+          Order: <code>lastScan.name || outlet.name || host || ip</code>.
+        </p>
+        <p class="note">
+          DustGate writes the other half of that name itself — <code>"&lt;label&gt; ·
+          &lt;our mDNS name&gt;"</code> — so a plug says who is using it in the Shelly app,
+          where no DustGate UI exists to explain why it is spoken for.
+        </p>
+      </div>
+
+      <div class="card">
+        <h3>The tray, and pairing</h3>
+        <p class="note">
+          Every outlet on the network not yet on a machine. One line each: name, and draw only
+          when it is drawing. <b>Drag</b> a chip onto a tool's plug row, or <b>tap a row</b> to
+          arm it and then tap a chip — same pairing, minus the drag, which is what a phone wants.
+          <em>Match</em> pairs by name where the names already agree.
+        </p>
+        <p class="note">
+          A <b>tap on a chip with nothing armed</b> opens that outlet's own dialog: name it, pick
+          which tool it's for, and take it off whoever owns it — all three in one place. Naming
+          before pairing is the point: four identical <code>shellyplug-s-…</code> on a shelf is
+          exactly when a name earns its keep.
+        </p>
+      </div>
+
+      <div class="card flag">
+        <h3>Ownership gates every write — it doesn't forbid it</h3>
+        <p class="note">
+          The LAN is not ours alone. A plug owned by Home Assistant or another brain is paired
+          <b>read-only, by polling</b>, and nothing automatic ever writes it. The row says who
+          has it, and then offers two ways past, kept apart because their blast radius isn't
+          the same: <b>Rename it anyway</b> writes the label only — the plug keeps reporting to
+          its owner, so nothing over there stops working — and <b>Take this outlet</b> repoints
+          its push target, naming who goes quiet first. Neither is offered when the ownership
+          read failed: we can't say whose plug it is, and confirming a question nobody could
+          pose isn't consent.
+        </p>
+        <p class="note">
+          <b>Remove</b> is the one verb that undoes a pairing: it drops the outlet from the
+          layout, takes our suffix off the plug's name, and hands its push target back. The
+          device half is best-effort and reported — a plug you have physically unplugged is
+          exactly when you want to detach it, so the layout write never waits on the plug.
+        </p>
+      </div>
+    </div>
+
+    <p class="note" style="max-width:68ch">
+      Full reasoning in <a href="decisions.html">D-49 through D-53</a>. The exploration that
+      produced them is <code>archived/outlet-rename-unpair.html</code>, which carries the
+      three-claim-state matrix these screens have to survive.
+    </p>
+  </section>
+
+  <hr class="rule"/>
+
+  <!-- ══ 6. DECISIONS ════════════════════════════════════════════════ -->
+  <section class="sec">
+    <h3>6 · Decisions</h3>
     <p class="note" style="max-width:68ch">Every decision — canvas and otherwise — lives in
       <a href="decisions.html"><code>docs/mockups/decisions.html</code></a>, the register.
       It is searchable and filterable by area, and records the open questions too.

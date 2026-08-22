@@ -120,13 +120,18 @@ HttpApiServer::HttpApiServer()
       _dcSwitchPending(false), _dcSwitchOn(false),
       _discoverPending(false), _discoverReq(nullptr),
       _pingPending(false), _pingReq(nullptr),
-      _takeoverPending(false)
+      _takeoverPending(false),
+      _outletNamePending(false), _outletNameReq(nullptr), _outletNameTakeover(false),
+      _outletReleasePending(false), _outletReleaseReq(nullptr)
 #endif
 {
     _calModel[0] = '\0';
 #ifdef CONTROL_SMART_OUTLET
     _pingIp[0] = '\0';
     _takeoverIp[0] = '\0';
+    _outletNameIp[0] = '\0';
+    _outletNameLabel[0] = '\0';
+    _outletReleaseIp[0] = '\0';
 #endif
 }
 
@@ -631,6 +636,46 @@ void HttpApiServer::respondPing(const String& json) {
     xSemaphoreGive(_mutex);
     if (req) req->send(200, "application/json", json);
 }
+
+bool HttpApiServer::consumeOutletNameRequest(char* outIp, size_t ipLen,
+                                             char* outLabel, size_t labelLen,
+                                             bool& outTakeover) {
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    bool v = _outletNamePending;
+    if (v) {
+        strlcpy(outIp, _outletNameIp, ipLen);
+        strlcpy(outLabel, _outletNameLabel, labelLen);
+        outTakeover = _outletNameTakeover;
+    }
+    xSemaphoreGive(_mutex);
+    return v;
+}
+
+void HttpApiServer::respondOutletName(const String& json) {
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    AsyncWebServerRequest* req = _outletNameReq;
+    _outletNamePending = false;
+    _outletNameReq     = nullptr;
+    xSemaphoreGive(_mutex);
+    if (req) req->send(200, "application/json", json);
+}
+
+bool HttpApiServer::consumeOutletReleaseRequest(char* outIp, size_t ipLen) {
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    bool v = _outletReleasePending;
+    if (v) strlcpy(outIp, _outletReleaseIp, ipLen);
+    xSemaphoreGive(_mutex);
+    return v;
+}
+
+void HttpApiServer::respondOutletRelease(const String& json) {
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    AsyncWebServerRequest* req = _outletReleaseReq;
+    _outletReleasePending = false;
+    _outletReleaseReq     = nullptr;
+    xSemaphoreGive(_mutex);
+    if (req) req->send(200, "application/json", json);
+}
 #endif
 
 #undef CONSUME
@@ -664,6 +709,12 @@ void HttpApiServer::registerRoutes() {
         doc["idleTimeoutSec"] = _idleTimeoutSec;
         doc["manifoldModel"]  = g_manifoldModel;
         doc["stepsPerMm"]     = serialized(String(g_measuredStepsPerMM > 0 ? g_measuredStepsPerMM : stepsPerMM(), 3));
+        // Our mDNS name — the owner suffix this brain writes into the friendly
+        // name of every plug it owns (RFC §8). The UI shows it beside the name
+        // field so what will land on the plug is never a surprise. Discovery
+        // strips the suffix before reporting a name, so this is the only place
+        // the app can learn it.
+        doc["owner"]          = WiFiProvisioner::getHostname();
         String out; serializeJson(doc, out);
         req->send(200, "application/json", out);
     });
@@ -1417,6 +1468,76 @@ void HttpApiServer::registerRoutes() {
             xSemaphoreGive(_mutex);
             DEBUG_PRINT(F("[UI] Takeover approved for plug ")); DEBUG_PRINTLN(ip);
             sendOk(req);
+        }
+    );
+
+    // ------------------------------------------------------------------
+    // POST /api/outlets/name   body: {"ip":"192.168.1.42","label":"Table Saw"}
+    //
+    // Rename a plug. The label is the HUMAN half only — the main loop reattaches
+    // our owner suffix before writing, so a round trip through this endpoint can
+    // never double it, and the caller never has to know the suffix exists.
+    //
+    // Deferred to the main loop (see consumeOutletNameRequest) because the write
+    // blocks on the plug, and refused there for any plug we do not own. An empty
+    // label is legal and means "clear the name back to nothing".
+    // ------------------------------------------------------------------
+    _server.on("/api/outlets/name", HTTP_POST,
+        [](AsyncWebServerRequest* req) {},
+        nullptr,
+        [this](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t, size_t) {
+            if (!checkAuth(req)) return;
+            StaticJsonDocument<192> doc;
+            if (deserializeJson(doc, data, len)) { sendError(req, 400, "invalid JSON"); return; }
+            const char* ip    = doc["ip"] | "";
+            const char* label = doc["label"] | "";
+            // Explicit override for a plug another controller owns. The UI has to
+            // have said whose it is first; this only says a human answered.
+            const bool  take  = doc["takeover"] | false;
+            if (strlen(ip) == 0) { sendError(req, 400, "missing 'ip'"); return; }
+
+            xSemaphoreTake(_mutex, portMAX_DELAY);
+            _outletNamePending  = true;
+            _outletNameReq      = req;
+            _outletNameTakeover = take;
+            strlcpy(_outletNameIp,    ip,    sizeof(_outletNameIp));
+            // Truncated rather than rejected: the plug's own name field is short,
+            // and silently losing the tail is friendlier than refusing a rename
+            // for being three characters long.
+            strlcpy(_outletNameLabel, label, sizeof(_outletNameLabel));
+            xSemaphoreGive(_mutex);
+            // response sent later by the main loop via respondOutletName()
+        }
+    );
+
+    // ------------------------------------------------------------------
+    // POST /api/outlets/release   body: {"ip":"192.168.1.42"}
+    //
+    // The device half of unpairing: strip our owner suffix from the plug's name
+    // and hand its push target back (RFC §8). The layout half — deleting
+    // sensor.outlet — is an ordinary topology write and happens separately.
+    //
+    // That split is deliberate. A plug you have physically unplugged is exactly
+    // when you want to detach it, so the UI must be able to unpair whether or not
+    // this call succeeds. This endpoint therefore reports what it managed rather
+    // than failing the unpair, and the UI says so.
+    // ------------------------------------------------------------------
+    _server.on("/api/outlets/release", HTTP_POST,
+        [](AsyncWebServerRequest* req) {},
+        nullptr,
+        [this](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t, size_t) {
+            if (!checkAuth(req)) return;
+            StaticJsonDocument<128> doc;
+            if (deserializeJson(doc, data, len)) { sendError(req, 400, "invalid JSON"); return; }
+            const char* ip = doc["ip"] | "";
+            if (strlen(ip) == 0) { sendError(req, 400, "missing 'ip'"); return; }
+
+            xSemaphoreTake(_mutex, portMAX_DELAY);
+            _outletReleasePending = true;
+            _outletReleaseReq     = req;
+            strlcpy(_outletReleaseIp, ip, sizeof(_outletReleaseIp));
+            xSemaphoreGive(_mutex);
+            // response sent later by the main loop via respondOutletRelease()
         }
     );
 

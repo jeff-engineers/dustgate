@@ -187,6 +187,35 @@ bool ShellyGen2Outlet::configureOutboundWs(const char* wsUrl) {
     return ok;
 }
 
+// Ws.SetConfig, in reverse. Unpairing has to undo what pairing did, or a plug
+// you detached keeps dialling us forever and whoever we took it from stays deaf.
+//
+// Two cases, and the difference matters to somebody: if we took the plug from
+// another controller we point it back at exactly where it was (the URL stored on
+// the takeover), so that controller starts hearing from it again with no action
+// on their part. If it was unclaimed when we found it, there is nothing to
+// restore and we disable pushing — back to how it shipped.
+bool ShellyGen2Outlet::releasePush(const char* restoreUrl) {
+    char body[192];
+    const bool restore = restoreUrl && *restoreUrl;
+    if (restore) {
+        snprintf(body, sizeof(body),
+                 "{\"id\":1,\"method\":\"Ws.SetConfig\",\"params\":{\"config\":"
+                 "{\"enable\":true,\"server\":\"%s\"}}}",
+                 restoreUrl);
+    } else {
+        snprintf(body, sizeof(body),
+                 "{\"id\":1,\"method\":\"Ws.SetConfig\",\"params\":{\"config\":"
+                 "{\"enable\":false,\"server\":\"\"}}}");
+    }
+    bool ok = rpcPost(body);
+    DEBUG_PRINT(F("[Outlets] Ws release ")); DEBUG_PRINT(_ip);
+    DEBUG_PRINT(restore ? F(" -> restored to ") : F(" -> push disabled"));
+    if (restore) DEBUG_PRINT(restoreUrl);
+    DEBUG_PRINT(F(" ")); DEBUG_PRINTLN(ok ? F("ok") : F("FAILED"));
+    return ok;
+}
+
 // Switch.SetConfig — set the plug's app-visible name (the label discovery reads
 // back via ShellyDeviceName.h), so a plug is self-identifying after setup.
 bool ShellyGen2Outlet::setName(const char* name) {

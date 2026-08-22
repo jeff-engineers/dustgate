@@ -3,6 +3,7 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { DiscoveredOutlet } from '../services/api.service';
 import { OutletPickerComponent } from './outlet-picker.component';
+import { PairedOutletRowComponent } from './paired-outlet-row.component';
 
 // ── Pairing one element with its smart plug ──────────────────────────────────
 // Opened from the build canvas, alongside the gate config sheet, because a plug is
@@ -30,12 +31,14 @@ const DEFAULT_THRESHOLD = 50;
 @Component({
   selector: 'app-element-outlet-config',
   standalone: true,
-  imports: [CommonModule, FormsModule, OutletPickerComponent],
+  imports: [CommonModule, FormsModule, OutletPickerComponent, PairedOutletRowComponent],
   styles: [`
     :host { display: block; }
     .card { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 18px 16px; }
     .head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 15px; }
     .head .kind { font-size: 12.5px; color: var(--muted); }
+    .head .kind b { color: var(--text); font-weight: 600; }
+    .head .kind .sep { opacity: 0.6; }
     .badge { font-size: 11.5px; padding: 3px 10px; border-radius: 20px; }
     .badge.ok   { color: var(--success); background: rgba(60,190,110,0.12); }
     .badge.todo { color: var(--accent);  background: rgba(240,165,0,0.12); }
@@ -48,12 +51,7 @@ const DEFAULT_THRESHOLD = 50;
                 border-radius: 8px; padding: 6px 14px; font-size: 13px; }
     .q button.on { background: var(--success); border-color: var(--success); color: #05230f; font-weight: 600; }
 
-    .paired { background: var(--bg); border: 1px solid var(--border); border-radius: 12px;
-              padding: 11px 13px; margin-bottom: 14px; }
-    .paired .r { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-    .paired .nm { font-size: 14px; font-weight: 500; }
-    .paired .meta { font-size: 11.5px; color: var(--muted); margin-top: 3px; }
-    .paired .chg { background: none; border: none; color: var(--accent); font-size: 12.5px; padding: 0; }
+    app-paired-outlet-row { display: block; margin-bottom: 14px; }
 
     .thresh { border-top: 1px solid var(--border); padding-top: 13px; margin-bottom: 4px; }
     .thresh .r { display: flex; align-items: center; justify-content: space-between; margin-bottom: 5px; font-size: 13px; }
@@ -69,33 +67,45 @@ const DEFAULT_THRESHOLD = 50;
   `],
   template: `
     <div class="card">
+      <!-- Says WHOSE outlet this is and WHAT the screen is for, in that order.
+           It read "Table Saw · smart outlet", which is a description of the plug
+           and left the tool's name looking like a heading rather than a subject. -->
       <div class="head">
-        <span class="kind">{{ name || 'Tool' }} · smart outlet</span>
-        <span class="badge" [class.ok]="hasPlug && !!ip" [class.todo]="!hasPlug || !ip">
+        <span class="kind"><b>{{ isSwitch ? 'Collector' : 'Tool' }}:</b> {{ name || 'Unnamed' }}
+          <span class="sep">—</span> Smart outlet setup</span>
+        <span class="badge" [class.ok]="hasPlug && !!ip" [class.todo]="!hasPlug || !ip"
+              [title]="hasPlug && ip
+                 ? 'A smart outlet is paired, so DustGate switches this automatically.'
+                 : 'No smart outlet — you switch this on yourself.'">
           {{ hasPlug && ip ? 'Paired' : 'Manual' }}
         </span>
       </div>
 
-      <div class="q">
+      <!-- Only while there is nothing paired. Once there is, Remove on the row
+           below is how you say No — one verb instead of a toggle that silently
+           throws the pairing away on Save. -->
+      <div class="q" *ngIf="!ip || changing">
         <span>{{ isSwitch ? 'Switch the collector automatically?' : 'Smart outlet on this tool?' }}</span>
         <div class="yesno">
-          <button [class.on]="hasPlug" (click)="hasPlug = true">Yes</button>
-          <button [class.on]="!hasPlug" (click)="hasPlug = false">No</button>
+          <button [class.on]="hasPlug" (click)="hasPlug = true"
+                  title="Pair a smart outlet, so DustGate knows when this is running">Yes</button>
+          <button [class.on]="!hasPlug" (click)="hasPlug = false"
+                  title="No smart outlet — you switch this on yourself from the shop list">No</button>
         </div>
       </div>
 
       <ng-container *ngIf="hasPlug; else noPlug">
-        <!-- Already chosen: show it and offer to change, rather than making someone
-             re-identify a plug they've already found. -->
-        <div class="paired" *ngIf="ip && !changing">
-          <div class="r">
-            <div>
-              <div class="nm">{{ plugName || host || ip }}</div>
-              <div class="meta">{{ host ? host + ' · ' : '' }}{{ ip }}</div>
-            </div>
-            <button class="chg" (click)="changing = true">Change</button>
-          </div>
-        </div>
+        <!-- Already chosen: show it, name it, and offer the way out — rather than
+             making someone re-identify a plug they've already found. -->
+        <app-paired-outlet-row *ngIf="ip && !changing"
+                               [toolName]="name" [ip]="ip" [host]="host" [label]="label"
+                               [seen]="seenOutlet()" [owner]="owner" [isSwitch]="isSwitch"
+                               fieldId="sheet-outlet-name"
+                               (renamed)="label = $event"
+                               (rescan)="rescan.emit()"
+                               (change)="changing = true"
+                               (removed)="unpair($event)">
+        </app-paired-outlet-row>
 
         <app-outlet-picker *ngIf="!ip || changing"
                            [toolName]="name" [selectedIp]="ip"
@@ -105,7 +115,7 @@ const DEFAULT_THRESHOLD = 50;
 
         <!-- Sensor role only. The collector's plug is commanded, never read, so a
              threshold would be a setting that does nothing. -->
-        <div class="thresh" *ngIf="ip && !isSwitch">
+        <div class="thresh" *ngIf="ip && !changing && !isSwitch">
           <div class="r"><span>Start collection above</span><b>{{ thresholdW }} W</b></div>
           <input type="range" min="0" max="1500" step="10" [(ngModel)]="thresholdW"/>
           <p class="why">Catches the motor, ignores standby draw.</p>
@@ -135,15 +145,29 @@ export class ElementOutletConfigComponent implements OnInit {
   /** Plugs already spoken for: other tools' sensors and the collector's own switch. */
   @Input() excludeIps: string[] = [];
   @Input() excludeReason: Record<string, string> = {};
+  /** The last scan, from whoever opened this sheet. Passed in rather than swept
+   *  for: an mDNS sweep is slow and the caller has already done one. */
+  @Input() outlets: DiscoveredOutlet[] = [];
+  /** Our mDNS name, from GET /api/info — the owner suffix we stamp on our plugs. */
+  @Input() owner = '';
   @Output() saved = new EventEmitter<RawEl>();
   @Output() cancelled = new EventEmitter<void>();
+  /** What actually happened to the plug on an unpair, when it's worth saying.
+   *  Surfaced by the caller: this sheet closes on unpair, so a message shown
+   *  here would be gone before it could be read. */
+  @Output() note = new EventEmitter<string>();
+  /** A takeover landed — the caller's cached scan no longer describes this plug. */
+  @Output() rescan = new EventEmitter<void>();
 
   name = '';
   hasPlug = false;
   changing = false;
   ip = '';
   host = '';
-  plugName = '';
+  /** Cached display name for the plug. NOT the source of truth — the Shelly holds
+   *  that, and a live scan overrides this — but it keeps a name on screen for a
+   *  plug that is switched off or wasn't in the last sweep. */
+  label = '';
   gen = 2;
   thresholdW = DEFAULT_THRESHOLD;
 
@@ -157,15 +181,33 @@ export class ElementOutletConfigComponent implements OnInit {
     this.ip         = (outlet?.['ip'] as string) ?? '';
     this.host       = (outlet?.['host'] as string) ?? '';
     this.gen        = (outlet?.['gen'] as number) ?? 2;
+    this.label      = (outlet?.['name'] as string) ?? '';
     this.thresholdW = (outlet?.['thresholdW'] as number) ?? DEFAULT_THRESHOLD;
     // Default to whatever this element already is, rather than assuming: re-opening a
     // manual tool shouldn't silently arm a plug picker it never had.
     this.hasPlug = !!this.ip;
   }
 
+  /** This plug as the last scan saw it — carries wattage and, more importantly,
+   *  who owns it, which is what decides whether renaming is offered at all. */
+  seenOutlet(): DiscoveredOutlet | null {
+    return this.outlets.find(o => o.ip === this.ip) ?? null;
+  }
+
+  /** Remove said yes. The device half already ran inside the row; this is the
+   *  layout half, and it commits immediately rather than waiting for Save —
+   *  the plug has already been let go, so leaving the layout claiming it until
+   *  someone presses Save would be the two halves disagreeing. */
+  unpair(note: string): void {
+    this.ip = ''; this.host = ''; this.label = '';
+    this.hasPlug = false; this.changing = false;
+    if (note) this.note.emit(note);
+    this.save();
+  }
+
   pick(d: DiscoveredOutlet): void {
     this.ip = d.ip; this.host = d.hostname; this.gen = d.generation || 2;
-    this.plugName = d.name || '';
+    this.label = d.name || '';
     this.changing = false;
     // Seed the threshold from what the tool is drawing right now, ~10% under so it
     // clears standby but still trips. Only when it's still the untouched default —
@@ -181,6 +223,7 @@ export class ElementOutletConfigComponent implements OnInit {
       const outlet: RawEl = { gen: this.gen, ip: this.ip };
       if (!this.isSwitch) outlet['thresholdW'] = this.thresholdW;
       if (this.host) outlet['host'] = this.host;
+      if (this.label) outlet['name'] = this.label;
       // The collector's `control` carries offDelayMs alongside the plug — keep
       // whatever's there rather than dropping it on a re-pair.
       const prev = (this.element[this.field] as RawEl | undefined) ?? {};

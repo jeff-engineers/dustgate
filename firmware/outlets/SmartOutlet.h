@@ -103,6 +103,14 @@ public:
     virtual bool configureOutboundWs(const char* /*wsUrl*/) { return false; }
     virtual bool setName(const char* /*name*/)              { return false; }
 
+    // Let the plug go: point its push target back at `restoreUrl` if we took it
+    // from someone, or disable pushing entirely if it was unclaimed when we
+    // found it. The inverse of configureOutboundWs(), and the reason
+    // previousPushUrl() is stored on every takeover — without this, unpairing
+    // leaves the previous owner permanently deaf and the plug still dialling a
+    // brain that no longer cares. Blocking HTTP — poll/main task only.
+    virtual bool releasePush(const char* /*restoreUrl*/)    { return false; }
+
     // Read the plug's current push target (Ws.GetConfig) — the ownership
     // authority of RFC §8. Base returns false, meaning "don't know", which
     // callers must treat as "don't touch it".

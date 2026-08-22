@@ -36,7 +36,11 @@ const MAX_LINEAR_PER_HOST = 1;
  * @property {2} gen                 Shelly generation (always 2; Gen1 dropped)
  * @property {string} ip
  * @property {string} [host]         mDNS hostname (device id), for DHCP re-resolve
- * @property {string} [name]         Shelly-app name
+ * @property {string} [name]         Shelly-app name, CACHED. The plug itself holds
+ *                                  the real one and a live scan overrides this —
+ *                                  it exists so a plug that is switched off, or
+ *                                  paired before the last sweep, still shows a
+ *                                  human name instead of an IP.
  * @property {number} [thresholdW]   tool sensor: watts above which the tool is "on"
  *
  * @typedef {Object} SelectorState

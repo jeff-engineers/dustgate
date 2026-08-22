@@ -81,6 +81,38 @@ export interface DiscoveredOutlet {
   powerW: number;
   /** Shelly API generation (1 or 2); 0 if the mDNS hit didn't respond to a probe. */
   generation: number;
+  /** Who owns it (RFC §8): ours | unclaimed | dustgate | foreign | unknown.
+   *  Absent when the device couldn't ask. Decides whether renaming is offered
+   *  unprompted — we never write a plug someone else owns without being told to. */
+  claim?: string;
+  /** Who has it now, for the explanation on the row. */
+  holder?: string;
+  /** Someone else has it, but a human who has been told what breaks MAY take it.
+   *  The whole point of RFC §8 is that this is never automatic — see
+   *  takeoverOutlet(). */
+  takeable?: boolean;
+  /** Why it isn't pickable, or how it will be paired — device-supplied UI text. */
+  claimReason?: string;
+}
+
+/** What POST /api/outlets/name answered. */
+export interface OutletNameResult {
+  ok: boolean;
+  /** The full name that landed on the plug, owner suffix and all. */
+  name?: string;
+  error?: string;
+}
+
+/** What POST /api/outlets/release answered — the device half of unpairing. */
+export interface OutletReleaseResult {
+  ok: boolean;
+  /** Whether anything was actually written to the plug. False for a poll-only
+   *  plug, which we never wrote to in the first place. */
+  released: boolean;
+  /** Whether a previous owner's push target was handed back. */
+  restored?: boolean;
+  note?: string;
+  error?: string;
 }
 
 /** A secondary board found on the network by GET /api/nodes/discover. */
@@ -133,6 +165,11 @@ export interface DeviceInfo {
   idleTimeoutSec?: number;  // seconds of inactivity before the driver powers off; 0 = never
   manifoldModel?: string;   // manifold profile last calibrated against
   stepsPerMm?: number;      // calibrated steps/mm
+  /** Our mDNS name — the owner suffix this brain writes into the friendly name
+   *  of every plug it owns. Shown beside the outlet-name field so what lands on
+   *  the plug is never a surprise; discovery strips it, so this is the only way
+   *  the app learns it. */
+  owner?: string;
 }
 
 // ── Service ────────────────────────────────────────────────────────────────────
@@ -319,7 +356,9 @@ export class ApiService {
    * Each hit is already probed for reachability/generation/wattage, same as pingOutlet().
    */
   async discoverOutlets(): Promise<DiscoveredOutlet[]> {
-    const raw = await this.get<Array<{ ip: string; hostname: string; name: string; reachable: boolean; powerW: number; gen: number }>>(
+    const raw = await this.get<Array<{ ip: string; hostname: string; name: string; reachable: boolean;
+                                       powerW: number; gen: number; claim?: string; holder?: string;
+                                       takeable?: boolean; claimReason?: string }>>(
       '/api/outlets/discover'
     );
     return raw.map(r => ({
@@ -328,8 +367,64 @@ export class ApiService {
       name: r.name,
       reachable: r.reachable,
       powerW: r.powerW,
-      generation: r.gen
+      generation: r.gen,
+      claim: r.claim,
+      holder: r.holder,
+      takeable: r.takeable,
+      claimReason: r.claimReason,
     }));
+  }
+
+  /**
+   * Rename a plug — writes the Shelly's own app-visible name.
+   *
+   * `label` is the HUMAN half only. The device reattaches its owner suffix
+   * ("· dustgate-shop") when the plug is already ours, and leaves it off a plug
+   * that is merely unclaimed, so callers never handle the suffix and a round
+   * trip can't double it.
+   *
+   * Never throws on a refusal: a plug owned by someone else, or not answering,
+   * comes back as { ok: false, error } for the row to explain.
+   */
+  async renameOutlet(ip: string, label: string, takeover = false): Promise<OutletNameResult> {
+    try {
+      return await this.post<OutletNameResult>('/api/outlets/name',
+        { ip, label, ...(takeover ? { takeover: true } : {}) });
+    } catch { return { ok: false, error: 'the device could not be reached' }; }
+  }
+
+  /**
+   * TAKE a plug that currently reports to another controller (RFC §8).
+   *
+   * The deliberate, rare act, and its own endpoint rather than a flag on pairing:
+   * it breaks something on a machine the user isn't looking at, so nothing in the
+   * firmware can reach it except a call made here. The device arms a one-shot
+   * approval and repoints the plug on its next provisioning pass — there is no
+   * second way to repoint a plug, which is what keeps "never steal" true
+   * everywhere else.
+   *
+   * The caller MUST have shown the user takeoverWarning() first. The device can't
+   * verify that; it can only guarantee nothing takes a plug without this call.
+   *
+   * The plug must already be paired to something — the approval is stored on the
+   * outlet, so there is nowhere to put it otherwise.
+   */
+  async takeoverOutlet(ip: string): Promise<{ ok: boolean; error?: string }> {
+    try { return await this.post<{ ok: boolean; error?: string }>('/api/outlets/takeover', { ip }); }
+    catch { return { ok: false, error: 'the device could not be reached' }; }
+  }
+
+  /**
+   * Hand a plug back — strip our owner suffix and restore its push target.
+   *
+   * The DEVICE half of unpairing only. The caller deletes `sensor.outlet` either
+   * way: a plug you have physically unplugged is exactly when you want to detach
+   * it, so this failing must never block the unpair — it just changes what the
+   * UI says happened.
+   */
+  async releaseOutlet(ip: string): Promise<OutletReleaseResult> {
+    try { return await this.post<OutletReleaseResult>('/api/outlets/release', { ip }); }
+    catch { return { ok: false, released: false, error: 'the device could not be reached' }; }
   }
 
   saveOutletConfig() { return this.post('/api/outlets/save'); }

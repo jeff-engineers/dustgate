@@ -180,6 +180,24 @@ function handler(req, res) {
     return body(req, data => runModel(res, () => json(res, M.pingOutlet(d, data.ip))));
   }
 
+  // Rename a plug (label only — the device reattaches its own owner suffix).
+  if (pathname === '/api/outlets/name' && req.method === 'POST') {
+    return body(req, data => runModel(res, () =>
+      json(res, M.nameOutlet(d, data.ip, data.label, data.takeover))));
+  }
+
+  // Repoint a plug that reports to another controller (RFC §8). Its own route,
+  // never a flag on pairing — nothing automatic can reach it.
+  if (pathname === '/api/outlets/takeover' && req.method === 'POST') {
+    return body(req, data => runModel(res, () => json(res, M.takeoverOutlet(d, data.ip))));
+  }
+
+  // The device half of unpairing. Best-effort: the caller drops sensor.outlet
+  // whatever this says, so an unplugged plug can still be detached.
+  if (pathname === '/api/outlets/release' && req.method === 'POST') {
+    return body(req, data => runModel(res, () => json(res, M.releaseOutlet(d, data.ip))));
+  }
+
   if (pathname === '/api/outlets/save' && req.method === 'POST') return json(res, { ok: true });
 
   // PUT /api/outlets/:slot — configure/update a single outlet

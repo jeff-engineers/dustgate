@@ -3,6 +3,7 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
 import { ApiService, DiscoveredOutlet, Topology } from '../services/api.service';
+import { PairedOutletRowComponent } from './paired-outlet-row.component';
 import { elementsOf, ductsOf } from '../gates/selector-types';
 import { type ShopDoc, machineOfPort, outletOf, toShop } from '../services/shop-doc';
 
@@ -23,6 +24,8 @@ interface ToolCfg {
   ip: string;
   gen: number;
   hostname: string;
+  /** Cached display name for the plug — see PairedOutletRowComponent. */
+  label: string;
   thresholdW: number;
 }
 
@@ -31,7 +34,7 @@ const DEFAULT_THRESHOLD = 50;
 @Component({
   selector: 'app-tool-setup',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, PairedOutletRowComponent],
   styles: [`
     :host { display: block; max-width: 460px; margin: 0 auto; padding: 16px 14px 40px; }
     .head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
@@ -44,6 +47,9 @@ const DEFAULT_THRESHOLD = 50;
     .toolrow { display: flex; align-items: center; gap: 11px; margin-bottom: 16px; }
     .toolrow .ic { width: 42px; height: 42px; border-radius: 11px; background: var(--bg); border: 1px solid var(--border); display: flex; align-items: center; justify-content: center; }
     .toolrow .ic svg { width: 22px; height: 22px; stroke: var(--muted); }
+    .fld { display: block; font-size: 11px; letter-spacing: 0.07em; text-transform: uppercase;
+           color: var(--muted); margin-bottom: 4px; }
+    app-paired-outlet-row { display: block; margin-bottom: 12px; }
     .name-in { font-size: 17px; font-weight: 500; background: var(--bg); border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: 6px 9px; width: 100%; }
     .gate { font-size: 11.5px; color: var(--accent); background: rgba(240,165,0,0.12); display: inline-block; padding: 2px 8px; border-radius: 20px; margin-top: 5px; }
 
@@ -116,27 +122,48 @@ const DEFAULT_THRESHOLD = 50;
     <ng-container *ngIf="cur() as c">
 
       <div class="card">
+        <!-- Labelled, because the plug's name field below is the same control at
+             the same size and nothing else says which name you are editing. -->
         <div class="toolrow">
           <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.6" stroke-linecap="round"><rect x="5" y="7" width="14" height="10" rx="2"/></svg></span>
           <div style="flex:1">
-            <input class="name-in" [(ngModel)]="c.name" (ngModelChange)="touched = true"/>
+            <label class="fld" for="tool-name">Tool name</label>
+            <input id="tool-name" class="name-in" [(ngModel)]="c.name" (ngModelChange)="touched = true"
+                   title="What you call this machine in the shop. Not the smart outlet's name."/>
             <div class="gate">{{ c.gateLabel }}</div>
           </div>
         </div>
 
-        <div class="q">
+        <!-- Only while nothing is paired: once there is an outlet, Remove on the
+             row below is how you say No. -->
+        <div class="q" *ngIf="!c.ip">
           <span>Smart outlet on this tool?</span>
           <div class="yesno">
-            <button [class.on]="c.hasPlug" (click)="c.hasPlug = true; touched = true">Yes</button>
-            <button [class.on]="!c.hasPlug" (click)="c.hasPlug = false; touched = true">No</button>
+            <button [class.on]="c.hasPlug" (click)="c.hasPlug = true; touched = true"
+                    title="Pair a smart outlet, so DustGate knows when this tool is running">Yes</button>
+            <button [class.on]="!c.hasPlug" (click)="c.hasPlug = false; touched = true"
+                    title="No smart outlet — you switch this tool on yourself from the shop list">No</button>
           </div>
         </div>
 
         <ng-container *ngIf="c.hasPlug; else manual">
-          <div class="hint">
+          <!-- Paired: the scan list collapses to the row, which is where the name
+               and the way out live. -->
+          <app-paired-outlet-row *ngIf="c.ip"
+                                 [toolName]="c.name" [ip]="c.ip" [host]="c.hostname" [label]="c.label"
+                                 [seen]="seenOutlet(c)" [owner]="owner"
+                                 fieldId="setup-outlet-name"
+                                 (renamed)="c.label = $event; touched = true"
+                                 (rescan)="scan()"
+                                 (change)="unpair(c, '')"
+                                 (removed)="unpair(c, $event)">
+          </app-paired-outlet-row>
+
+          <div class="hint" *ngIf="unpairNote">{{ unpairNote }}</div>
+          <div class="hint" *ngIf="!c.ip">
             <span>💡</span><span>Turn {{ c.name }} on — the plug that jumps to <b>green</b> is the one.</span>
           </div>
-          <div class="scan" *ngIf="outlets.length; else noplugs">
+          <div class="scan" *ngIf="!c.ip && outlets.length; else noplugs">
             <button class="plug" *ngFor="let d of outlets"
                     [class.sel]="d.ip === c.ip" [disabled]="isAssignedElsewhere(d.ip, c)"
                     (click)="pick(d, c)">
@@ -150,12 +177,17 @@ const DEFAULT_THRESHOLD = 50;
             <button class="rescan" (click)="scan()">↻ {{ scanning ? 'Scanning…' : 'Rescan' }}</button>
           </div>
           <ng-template #noplugs>
-            <div class="empty">{{ scanning ? 'Scanning…' : 'No plugs found on the network.' }}</div>
-            <button class="rescan" (click)="scan()">↻ Rescan</button>
+            <ng-container *ngIf="!c.ip">
+              <div class="empty">{{ scanning ? 'Scanning…' : 'No plugs found on the network.' }}</div>
+              <button class="rescan" (click)="scan()" title="Sweep the network for smart outlets again">↻ Rescan</button>
+            </ng-container>
           </ng-template>
 
           <div class="thresh" *ngIf="c.ip">
-            <div class="r"><span>Start collection above</span><b>{{ c.thresholdW }} W</b></div>
+            <div class="r">
+              <span title="How much power this tool has to draw before DustGate treats it as running">Start collection above</span>
+              <b>{{ c.thresholdW }} W</b>
+            </div>
             <input type="range" min="0" max="400" step="10" [(ngModel)]="c.thresholdW"
                    (ngModelChange)="touched = true"/>
             <div class="why">Catches the motor, ignores standby draw.</div>
@@ -183,6 +215,11 @@ export class ToolSetupComponent implements OnInit {
   outlets: DiscoveredOutlet[] = [];
   scanning = false;
   saving = false;
+  /** Our mDNS name — the owner suffix stamped on plugs we own. */
+  owner = '';
+  /** What happened to the plug on the last unpair, when it's worth saying. The
+   *  row that reported it is gone by then, so it lands here. */
+  unpairNote = '';
 
   private topo: Topology | null = null;
   /**
@@ -198,6 +235,8 @@ export class ToolSetupComponent implements OnInit {
       await this.api.whenReady();          // else the first fetch 401s and reads as "no tools"
       // Migrated on read, like every other entry point — see shop-doc.ts.
       this.topo = toShop(JSON.parse(JSON.stringify(await this.api.getTopology())) as Topology) as unknown as Topology;
+      // whenReady() has already fetched /api/info; deviceInfo is the cached copy.
+      this.owner = this.api.deviceInfo?.owner ?? '';
     } catch { return; }
     const els = this.elems();
     this.tools = els.filter(e => e['type'] === 'tool').map(e => this.toCfg(e));
@@ -223,9 +262,27 @@ export class ToolSetupComponent implements OnInit {
     return this.tools.some(t => t !== c && t.hasPlug && t.ip === ip);
   }
 
+  /** This tool's plug as the last scan saw it — carries who owns it, which is
+   *  what decides whether the row offers a rename. */
+  seenOutlet(c: ToolCfg): DiscoveredOutlet | null {
+    return this.outlets.find(o => o.ip === c.ip) ?? null;
+  }
+
+  /** Take the plug off this tool, locally. The device half already ran inside the
+   *  row; this drops it from the config so the scan list comes back and the plug
+   *  is pickable for something else. Written out with the rest on Finish, like
+   *  every other edit on this screen. */
+  unpair(c: ToolCfg, note: string): void {
+    c.ip = ''; c.hostname = ''; c.label = '';
+    this.unpairNote = note;
+    this.touched = true;
+    void this.scan();   // the freed plug should reappear as available
+  }
+
   pick(d: DiscoveredOutlet, c: ToolCfg): void {
     if (this.isAssignedElsewhere(d.ip, c)) return;
     c.ip = d.ip; c.gen = d.generation || 2; c.hostname = d.hostname;
+    c.label = d.name || '';
     this.touched = true;
     if (d.powerW >= 5 && (c.thresholdW === DEFAULT_THRESHOLD)) {
       c.thresholdW = Math.max(10, Math.round(d.powerW * 0.9 / 10) * 10);
@@ -281,6 +338,7 @@ export class ToolSetupComponent implements OnInit {
         if (c.hasPlug && c.ip) {
           const outlet: RawEl = { gen: c.gen || 2, ip: c.ip, thresholdW: c.thresholdW || DEFAULT_THRESHOLD };
           if (c.hostname) outlet['host'] = c.hostname;
+          if (c.label) outlet['name'] = c.label;
           m.sensor = { outlet };
         } else {
           delete m.sensor;
@@ -306,10 +364,15 @@ export class ToolSetupComponent implements OnInit {
       id: e['id'] as string,
       name: (machine?.name as string) || (e['name'] as string) || (e['id'] as string),
       gateLabel: this.gateLabel(e['id'] as string),
-      hasPlug: true,                     // default Yes; prefilled if already set
+      // Mirrors what is actually paired. This was hardcoded true, so a tool
+      // deliberately set to manual re-opened the wizard showing "Yes" with no
+      // plug beside it — a toggle stating the opposite of the truth. The cost is
+      // one extra tap on a brand-new tool, which is the right trade.
+      hasPlug: !!outlet,
       ip: (outlet?.['ip'] as string) ?? '',
       gen: (outlet?.['gen'] as number) ?? 2,
       hostname: (outlet?.['host'] as string) ?? '',
+      label: (outlet?.['name'] as string) ?? '',
       thresholdW: (outlet?.['thresholdW'] as number) ?? DEFAULT_THRESHOLD,
     };
   }

@@ -239,6 +239,36 @@ public:
     // to do by accident. Nothing else in the firmware can set the approval this
     // records — see SmartOutlet::approveTakeover().
     bool consumeTakeoverRequest(char* outIp, size_t ipLen);
+
+    // Plug RENAME — POST /api/outlets/name {"ip":"...","label":"Table Saw"}.
+    //
+    // Writes the plug's own app-visible name (Switch.SetConfig), with our owner
+    // suffix reattached by the main loop. Deferred and request-holding for the
+    // same reason ping is: the write blocks on a device that may not answer, and
+    // holding a raw request across that on a detached task is a use-after-free
+    // waiting to happen. respondOutletName() replies once it has landed.
+    //
+    // Takes an IP rather than a slot deliberately — a plug can be renamed before
+    // it is paired with anything, which is when a shelf of identical
+    // "shellyplug-s-…" most needs telling apart.
+    // `outTakeover` carries the user's explicit "rename it anyway" for a plug
+    // another controller owns. A NAME write, and only that — it does not touch
+    // the plug's push config, so nobody's automation breaks; it just stops the
+    // refusal being absolute, since a person who wants this can always do it in
+    // the Shelly app and we would rather it happened where there is a record.
+    bool consumeOutletNameRequest(char* outIp, size_t ipLen,
+                                  char* outLabel, size_t labelLen,
+                                  bool& outTakeover);
+    void respondOutletName(const String& json);
+
+    // Plug RELEASE — POST /api/outlets/release {"ip":"..."}.
+    //
+    // The device half of unpairing: take our owner suffix off the plug's name
+    // and hand its push target back. The LAYOUT half (dropping sensor.outlet) is
+    // an ordinary topology write and does not come through here — which is why
+    // this endpoint failing must not block an unpair. See firmware.ino.
+    bool consumeOutletReleaseRequest(char* outIp, size_t ipLen);
+    void respondOutletRelease(const String& json);
 #endif
 
     // Expose the API key for the front-end / serial display
@@ -340,6 +370,16 @@ private:
     bool            _pingPending;
     AsyncWebServerRequest* _pingReq;
     char            _pingIp[40];
+    // Rename / release both hold their request across a blocking device write,
+    // exactly as ping does.
+    bool            _outletNamePending;
+    AsyncWebServerRequest* _outletNameReq;
+    char            _outletNameIp[40];
+    char            _outletNameLabel[48];
+    bool            _outletNameTakeover;
+    bool            _outletReleasePending;
+    AsyncWebServerRequest* _outletReleaseReq;
+    char            _outletReleaseIp[40];
     bool            _takeoverPending;
     char            _takeoverIp[40];
 #endif
