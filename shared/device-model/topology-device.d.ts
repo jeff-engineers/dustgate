@@ -17,6 +17,9 @@ export interface SystemStatus {
   /** Firmware only — no mock analogue. Additive, so the contract holds. */
   deadHeadRisk?: boolean;
   transitioning?: boolean;
+  /** This blower is running because a person switched it on, with no machine
+   *  asking for it. See setCollectorManual. */
+  manual?: boolean;
 }
 
 export interface TopologyStatus {
@@ -45,6 +48,11 @@ export interface TopologyStatus {
 export function createTopologyDevice(t: Topology): TopologyDevice;
 export function setToolPower(d: TopologyDevice, toolId: string, watts: number, nowMs?: number): unknown;
 export function statusView(d: TopologyDevice, nowMs?: number): TopologyStatus;
+/** Run ONE system's blower by hand, or stop it. Holds until switched off; opens a
+ *  path first, so it can never dead-head. Mirrors
+ *  TopologyRuntime::setCollectorManual. */
+export function setCollectorManual(d: TopologyDevice, systemId: string, on: boolean, nowMs?: number): unknown;
+export function collectorIsManual(d: TopologyDevice, systemId: string): boolean;
 export function tickCollector(d: TopologyDevice, nowMs: number): void;
 /** Coast-down applied when a collector names none. Mirrors
  *  kDefaultCollectorOffDelayMs in firmware/control/TopologyRuntime.h. */

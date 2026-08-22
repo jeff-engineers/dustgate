@@ -1692,6 +1692,29 @@ void loop() {
     }
 #endif
 
+    // -- Manual blower switch (POST /api/collector) ---------------------------
+    // The Live view's collector card. Through the RUNTIME, not through
+    // SmartOutletControl: the collector assert further down drives every slot from
+    // g_topoRuntime.collectorOn(), so a plug switched directly here would be
+    // switched back on the same pass. See HttpApiServer's route comment.
+#ifdef ENABLE_HTTP_API
+    {
+        String sysId; bool blowerOn = false;
+        if (apiServer.consumeCollectorManualRequest(sysId, blowerOn)) {
+            std::string id = sysId.c_str();
+            if (id.empty()) {
+                // No system named — a shop with one blower has one answer.
+                std::vector<std::string> ids = g_topoRuntime.systemIds();
+                if (!ids.empty()) id = ids.front();
+            }
+            bool known = g_topoRuntime.setCollectorManual(id, blowerOn);
+            DEBUG_PRINT(F("[UI] Manual blower ")); DEBUG_PRINT(id.c_str());
+            if (!known) DEBUG_PRINTLN(F(" — NO SUCH SYSTEM in the layout (ignored)"));
+            else        DEBUG_PRINTLN(blowerOn ? F(" ON") : F(" off"));
+        }
+    }
+#endif
+
     // -- Pair / un-pair a secondary (POST /api/nodes/pair) --------------------
     // Registry write + redial, on the main loop because dialling spawns a task and
     // tears sockets down. Independent of the topology by design (NodeRegistry.h).

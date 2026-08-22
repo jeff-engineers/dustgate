@@ -27,12 +27,21 @@ than restated. Delete an item when it lands; the git history is the record.
   new marking on the canvas, and there is no vocabulary for "this piece is the
   problem" yet.
 
-- ** Dragging a duct to a gate is still triggering the 'Toolname is already in
+- **Dragging a duct** to a gate is still triggering the 'Toolname is already in
   that cell' error message, this shouldn't happen ( we can put a warning
   that this will trigger an auxilliary port)
   
 - **Highlight ducts and wires when hovering over them** might also trigger this on 
   hover of tools/gates/etc - aka "show the airflow/electron path"
+
+- **The /tools and /gates pages should split by system, with anything unassigned 
+  listed in an "Unassigned" section after the systems
+
+- **We should probably expose /boards page** that behaves similarly to the tools and 
+  gates page
+
+- **Move all the setup buttons on the bottom of /shop to a dropdown menu** on the top
+  right of the page
 
 - **Moving the whole shop to a new WiFi is a per-board errand nobody is told about**
   aSettings → Forget WiFi resets the PRIMARY only. Each node holds its own

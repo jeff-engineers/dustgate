@@ -402,6 +402,24 @@ function handler(req, res) {
     });
   }
 
+  // POST /api/collector { systemId?, on } — run ONE system's blower by hand.
+  // `systemId` is optional: a shop with one blower has exactly one answer.
+  if (pathname === '/api/collector' && req.method === 'POST') {
+    return body(req, data => {
+      if (!td) return json(res, { error: 'no topology configured' }, 404);
+      if (typeof data.on !== 'boolean') return json(res, { error: "missing 'on'" }, 400);
+      const systems = SHOP.systemsOf(td.topology);
+      const sysId = data.systemId || (systems[0] && systems[0].id);
+      // Refused rather than ignored, like an unknown toolId: a switch that reports
+      // success and does nothing is the failure mode worth being loud about.
+      if (!systems.some(sys => sys.id === sysId)) {
+        return json(res, { error: `no system '${data.systemId || ''}'` }, 404);
+      }
+      TD.setCollectorManual(td, sysId, data.on);
+      json(res, { ok: true });
+    });
+  }
+
   if (pathname === '/api/sim/tool' && req.method === 'POST') {
     return body(req, data => {
       if (!td) return json(res, { error: 'no topology configured' }, 404);

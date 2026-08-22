@@ -15,8 +15,8 @@ import {
 import { HardwareProfileService } from './hardware-profile.service';
 import * as model from '@device-model';
 import { validateTopology, type Topology } from '@topology';
-import { isShop, validateShop } from '@shop';
-import { createTopologyDevice, setToolPower, statusView as topoStatus, toolThreshold, type TopologyDevice, type TopologyStatus } from '@topology-device';
+import { isShop, systemsOf, validateShop } from '@shop';
+import { createTopologyDevice, setCollectorManual, setToolPower, statusView as topoStatus, toolThreshold, type TopologyDevice, type TopologyStatus } from '@topology-device';
 import { DEMO_TOPOLOGY } from './demo-topology';
 
 // ── Service ────────────────────────────────────────────────────────────────────
@@ -136,6 +136,15 @@ export class DemoApiService extends ApiService {
     // back to the default for a machine that has no plug configured.
     const trip = toolThreshold(this.td.topology, toolId);
     setToolPower(this.td, toolId, on ? Math.round(trip * 3) : 0);
+    return { ok: true };
+  }
+
+  override async setCollectorManual(on: boolean, systemId?: string): Promise<unknown> {
+    if (!this.td) throw new Error('no topology configured');
+    const systems = systemsOf(this.td.topology as unknown as Parameters<typeof systemsOf>[0]);
+    const id = systemId || (systems[0] && (systems[0].id as string));
+    if (!id) throw new Error('no system');
+    setCollectorManual(this.td, id, on);
     return { ok: true };
   }
 

@@ -46,6 +46,10 @@ drifted constantly. Now `shared/device-model/` is the spec:
   | `IDLE_TIMEOUT_SEC_DEFAULT` (device-model.js) | `IDLE_TIMEOUT_SEC_DEFAULT` (config.h) | idle power-off default |
   | `NODELINK_VERSION`, `PING_INTERVAL_MS`, `PONG_TIMEOUT_MS`, `RECONNECT_MIN_MS`, `RECONNECT_MAX_MS` (nodelink.js) | `kVersion`, `kPingIntervalMs`, `kPongTimeoutMs`, `kReconnectMinMs`, `kReconnectMaxMs` (control/NodeLink.h) | NodeLink protocol timing |
 
+  The reference pair has company now: `manual-blower.test.js` ↔
+  `firmware/test/test_manual_blower.cpp` covers running a blower by hand, and the
+  two assert the same cases in the same order for the same reason.
+
   **This table is a cache, not the source of truth — keep it honest or delete
   rows rather than let them go stale.** Touching either side of a pair: update
   the other side's value AND this table's "What it is" cell if the meaning
@@ -66,8 +70,8 @@ Tests live in two package.json files. UI suites run under plain node (no browser
 
 ```
 cd dustgate-ui && npm test        # spec-runner + routing + wiring geometry
-cd tools && npm run model:test    # topology, shop, nodelink, plug-claim, adopt-outlets (JS)
-cd tools && npm run firmware:test # the C++ host tests (router, controller, nodebus, shop, faults, plugclaim)
+cd tools && npm run model:test    # topology, shop, nodelink, plug-claim, adopt-outlets, manual-blower (JS)
+cd tools && npm run firmware:test # the C++ host tests (router, controller, nodebus, shop, faults, plugclaim, screen, blower)
 cd tools && npm run conformance:ci topology:conformance:ci nodelink:conformance:ci  # run separately
 ```
 

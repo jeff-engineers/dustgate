@@ -39,6 +39,8 @@ interface SystemGroup {
   tools: ToolRow[];
   on: boolean;
   coasting: boolean;
+  /** Running because a person switched it on, not because a tool is drawing. */
+  manual: boolean;
   /** The tool currently winning this system's air, for the subtitle. */
   activeName: string;
 }
@@ -229,13 +231,15 @@ const POLL_MS = 2000;
             <div class="c-name">{{ g.name }}</div>
             <div class="c-sub">{{ collectorSub(g) }}</div>
           </div>
-          <!-- Stops THIS system's tools. It used to stop every tool in the shop,
-               which on a two-system layout switched off a machine in the other
-               half of the building that had nothing to do with the card. -->
+          <!-- Starts and stops THIS system's blower. Stop-only until 2026-08-22,
+               which made an idle card's switch a control that did nothing. Off
+               still stops this system's TOOLS — it used to stop every tool in the
+               shop, which on a two-system layout reached across and switched off
+               a machine in the other half of the building. -->
           <button class="sw" [class.on]="g.on"
-                  [attr.aria-label]="g.on ? 'Stop ' + g.name : g.name + ' idle'"
-                  [title]="g.on ? 'Switch off every tool running on ' + g.name : g.name + ' is idle'"
-                  (click)="stopSystem(g)"></button>
+                  [attr.aria-label]="(g.on ? 'Stop ' : 'Run ') + g.name"
+                  [title]="collectorSwitchTitle(g)"
+                  (click)="toggleCollector(g)"></button>
         </div>
 
         <!-- No card, because there is no collector to card. Named rather than
@@ -381,7 +385,50 @@ export class LiveViewComponent implements OnInit, OnDestroy {
   collectorSub(g: SystemGroup): string {
     if (!g.on) return 'Idle';
     if (g.coasting) return 'Collecting · coasting down';
+    // Said out loud, because a blower running with every tool off otherwise reads
+    // as a stuck relay — the same reason the coast-down says so.
+    if (g.manual && !g.activeName) return 'Running · switched on by hand';
     return g.activeName ? 'Collecting · ' + g.activeName : 'Collecting';
+  }
+
+  /**
+   * The collector card's switch, which is a SWITCH now.
+   *
+   * It was stop-only: tapping an idle blower did nothing at all, while looking
+   * exactly like a control that would start it (reported 2026-08-22). Running the
+   * blower on its own is a real errand — clear a clog, sweep up, prove a run —
+   * and the routing brain has always been built to allow it: idle-hold keeps a
+   * path open precisely so a hand start can't dead-head.
+   *
+   * OFF still means "stop what is running here". With tools running that is the
+   * tools, because a blower switched off under a running saw would just come back
+   * on the next poll; with only a hand-run to stop, it is the hand-run.
+   */
+  async toggleCollector(g: SystemGroup): Promise<void> {
+    if (this.busy || !this.ready) return;
+    this.busy = true;
+    this.error = '';
+    try {
+      if (!g.on) {
+        await this.api.setCollectorManual(true, g.id);
+      } else {
+        // Tools first: stopping them is what "off" means while any are running,
+        // and clearing the hand-run as well leaves nothing behind holding it on.
+        for (const t of g.tools) if (t.on) await this.api.setToolManual(t.id, false);
+        if (g.manual) await this.api.setCollectorManual(false, g.id);
+      }
+      await this.refresh(true);
+    } catch {
+      this.error = "Couldn't reach the controller — nothing was switched.";
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  collectorSwitchTitle(g: SystemGroup): string {
+    if (!g.on) return `Run ${g.name} by hand — opens a gate first, then starts the blower`;
+    if (g.manual && !g.activeName) return `Stop ${g.name}`;
+    return `Switch off every tool running on ${g.name}`;
   }
 
   sourceLine(t: ToolRow): string {
@@ -399,23 +446,6 @@ export class LiveViewComponent implements OnInit, OnDestroy {
       // Optimistic, then confirmed: the device answers the POST before its main
       // loop has routed, so the authoritative state comes from the refresh.
       t.on = !t.on;
-      await this.refresh(true);
-    } catch {
-      this.error = 'Couldn\'t reach the controller — nothing was switched.';
-    } finally {
-      this.busy = false;
-    }
-  }
-
-  /** Switch off everything running on ONE blower. The old stopAll() stopped every
-   *  tool in the shop from whichever card you tapped, which on a two-system layout
-   *  reached across and shut down a machine in the other half of the building. */
-  async stopSystem(g: SystemGroup): Promise<void> {
-    if (this.busy || !g.on || !this.ready) return;
-    this.busy = true;
-    this.error = '';
-    try {
-      for (const t of g.tools) if (t.on) await this.api.setToolManual(t.id, false);
       await this.refresh(true);
     } catch {
       this.error = 'Couldn\'t reach the controller — nothing was switched.';
@@ -451,6 +481,7 @@ export class LiveViewComponent implements OnInit, OnDestroy {
       const s = per?.[g.id];
       g.on = s ? !!s.collectorOn : this.collectorOn;
       g.coasting = s ? !!s.coasting : this.collectorCoasting;
+      g.manual = !!s?.manual;
       g.activeName = g.tools.find(t => t.collecting)?.name ?? '';
     }
   }
@@ -555,7 +586,7 @@ export class LiveViewComponent implements OnInit, OnDestroy {
       byId.set(s.id, {
         id: s.id,
         name: (dc?.['name'] as string) || (s.name as string) || 'Dust collector',
-        tools: [], on: false, coasting: false, activeName: '',
+        tools: [], on: false, coasting: false, manual: false, activeName: '',
       });
     }
 
@@ -565,7 +596,7 @@ export class LiveViewComponent implements OnInit, OnDestroy {
     // collect.
     const orphans: SystemGroup = {
       id: '', name: 'Not connected to a collector — finish the layout to run these.',
-      tools: [], on: false, coasting: false, activeName: '',
+      tools: [], on: false, coasting: false, manual: false, activeName: '',
     };
 
     for (const t of this.tools) {

@@ -543,6 +543,22 @@ export class ApiService {
   }
 
   /**
+   * Run ONE system's blower by hand, or stop it.
+   *
+   * NOT setDustCollector() above, which posts to the pre-topology
+   * /api/dustcollector/switch and drives collector slot 0 directly. Under a shop
+   * that call cannot stick: the firmware asserts every slot from the routing
+   * runtime on every loop pass, so a plug switched behind the runtime's back is
+   * switched off again immediately. The decision has to be made where the routing
+   * is — see TopologyRuntime::setCollectorManual.
+   *
+   * `systemId` is optional: a shop with one blower has exactly one answer.
+   */
+  setCollectorManual(on: boolean, systemId?: string): Promise<unknown> {
+    return this.post('/api/collector', systemId ? { systemId, on } : { on });
+  }
+
+  /**
    * Setup only: drive one servo directly so the user can watch the valve and capture
    * where it lands. Rejects with 501 on a build without servo support, which the gate
    * configurator surfaces rather than pretending the nudge worked.

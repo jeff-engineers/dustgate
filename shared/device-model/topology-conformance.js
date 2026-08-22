@@ -123,6 +123,54 @@ async function run() {
     check('collector switches off once the coast-down expires', off);
   }
 
+  // 3b. Running a blower BY HAND — the Live view's collector card.
+  //
+  // Certified here rather than only in the unit tests because the interesting
+  // half is the HTTP contract and the fact that it STICKS: on real firmware the
+  // main loop re-asserts every collector plug from the routing runtime on every
+  // pass, so a switch made anywhere else is undone microseconds later and would
+  // pass a unit test while doing nothing on a board.
+  {
+    await req('PUT', '/api/topology', fixtures.twoGates);
+    let r = await req('POST', '/api/collector', { on: true });
+    check('collector switch accepted', r.status === 200, `status=${r.status}`);
+
+    // Polled: the device answers the POST before its loop has routed, and the
+    // path has to be opened before the blower may start.
+    const started = await waitFor(async () => {
+      const s = await req('GET', '/api/status');
+      return s.json?.collectorOn === true;
+    });
+    check('a hand-started blower runs', started);
+
+    const st = await req('GET', '/api/status');
+    const sysId = Object.keys(st.json?.systems || {})[0];
+    check('and says it is running by hand', st.json?.systems?.[sysId]?.manual === true,
+      JSON.stringify(st.json?.systems));
+    // The rule this project has a hard line about: something must be open.
+    check('...against an open path, never a sealed shop',
+      Object.values(st.json?.actuators || {}).some((v) => v !== null && v !== 'closed'),
+      JSON.stringify(st.json?.actuators));
+    check('it is not coasting — nothing was being cut', st.json?.collectorCoasting !== true);
+
+    // It HOLDS. A coast-down would have expired long before this.
+    await new Promise((res) => setTimeout(res, 7000));
+    const held = await req('GET', '/api/status');
+    check('and it holds rather than timing out', held.json?.collectorOn === true);
+
+    r = await req('POST', '/api/collector', { on: false });
+    const stopped = await waitFor(async () => {
+      const s = await req('GET', '/api/status');
+      return s.json?.collectorOn === false;
+    });
+    check('switching it off stops it', stopped);
+
+    check('an unknown system is refused',
+      (await req('POST', '/api/collector', { systemId: 'no-such-system', on: true })).status === 404);
+    check("a body with no 'on' is refused",
+      (await req('POST', '/api/collector', {})).status === 400);
+  }
+
   // 4. Most-recent-wins on a single shared selector.
   {
     await req('PUT', '/api/topology', fixtures.star);

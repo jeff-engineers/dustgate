@@ -535,6 +535,18 @@ bool HttpApiServer::consumeToolManualRequest(String& outToolId, bool& outOn) {
     return v;
 }
 
+bool HttpApiServer::consumeCollectorManualRequest(String& outSystemId, bool& outOn) {
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    bool v = _collectorManualPending;
+    if (v) {
+        outSystemId = _collectorManualSystem;
+        outOn       = _collectorManualOn;
+        _collectorManualPending = false;
+    }
+    xSemaphoreGive(_mutex);
+    return v;
+}
+
 bool HttpApiServer::consumeNodePairRequest(String& outHost, String& outName, bool& outRemove,
                                            bool& outTakeover) {
     xSemaphoreTake(_mutex, portMAX_DELAY);
@@ -1073,6 +1085,41 @@ void HttpApiServer::registerRoutes() {
             xSemaphoreGive(_mutex);
             // Routing belongs to the main loop, so the reply can't carry the new
             // status. The Live view polls /api/status anyway.
+            sendOk(req);
+        }
+    );
+
+    // ------------------------------------------------------------------
+    // POST /api/collector  { systemId?: "system-1", on: true }
+    //
+    // Run ONE system's blower by hand — the Live view's collector card.
+    //
+    // NOT /api/dustcollector/switch, which is still here and still drives the
+    // pre-topology single blower (collector slot 0) directly. On a shop that call
+    // cannot work: the main loop asserts every slot from the routing runtime on
+    // every pass, so a plug switched behind the runtime's back is switched off
+    // again microseconds later. The decision has to be made where the routing is,
+    // which is TopologyRuntime::setCollectorManual.
+    //
+    // `systemId` is optional: a shop with one blower has exactly one answer, and
+    // making the daily-driver screen name it would be ceremony.
+    // ------------------------------------------------------------------
+    _server.on("/api/collector", HTTP_POST,
+        [](AsyncWebServerRequest* req) {},
+        nullptr,
+        [this](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t, size_t) {
+            if (!checkAuth(req)) return;
+            StaticJsonDocument<160> doc;
+            if (deserializeJson(doc, data, len)) { sendError(req, 400, "invalid JSON"); return; }
+            if (!doc.containsKey("on")) { sendError(req, 400, "missing 'on'"); return; }
+
+            xSemaphoreTake(_mutex, portMAX_DELAY);
+            _collectorManualSystem  = doc["systemId"].as<const char*>() ? doc["systemId"].as<const char*>() : "";
+            _collectorManualOn      = doc["on"].as<bool>();
+            _collectorManualPending = true;
+            xSemaphoreGive(_mutex);
+            // Routing belongs to the main loop, so the reply can't carry the new
+            // state. The Live view polls /api/status anyway.
             sendOk(req);
         }
     );

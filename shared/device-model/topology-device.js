@@ -54,7 +54,7 @@ function createTopologyDevice(doc) {
   const actuatorStates = {};
   const collectors = {};
   for (const sys of S.systemsOf(shop)) {
-    collectors[sys.id] = { on: false, coasting: false, coastUntilMs: 0 };
+    collectors[sys.id] = { on: false, coasting: false, coastUntilMs: 0, manual: false };
     for (const sel of T.selectorsOf(S.systemView(shop, sys))) {
       const cs = T.closedState(sel);
       actuatorStates[sel.id] = cs ? cs.id : null;
@@ -159,6 +159,13 @@ function reconcile(d, nowMs) {
       }
       c.on = true;
       c.coasting = false;      // a machine is running here again — coast is moot
+    } else if (c.manual) {
+      // Running by hand: no tool is asking for this blower, the user is. Hold the
+      // positions like any idle system — except that idle-hold is only safe while
+      // something is open, and here the blower is about to run. See openAPath().
+      openAPath(d, sys);
+      c.on = true;
+      c.coasting = false;      // not coasting down: it was not left running, it was started
     } else {
       // Idle: hold this system's positions and COAST its blower down. Safe
       // because idle moves nothing: no path can close under a running blower.
@@ -178,6 +185,84 @@ function reconcile(d, nowMs) {
   // is that system's plan, which is what they have always been handed.
   return { routing, plans, plan: plans[0] || { moves: [], deadHeadRisk: false } };
 }
+
+/**
+ * Make sure ONE system has somewhere for its air to go.
+ *
+ * Idle-hold leaves every selector where it was, which is safe precisely because
+ * nothing is running — and it is the reason a manual start is normally safe too:
+ * the shop rests open. But "normally" is not "always". A layout adopted a moment
+ * ago starts with every selector CLOSED (createTopologyDevice), and a system whose
+ * last act was closing down can be sealed. Starting a blower into that is the one
+ * thing this project has a hard rule about, so a manual run opens a path first —
+ * make-before-break, the same order a tool transition uses.
+ *
+ * WHICH path: the system's first machine in document order. Deliberately not
+ * "the last one this blower served" — that sounds better and is almost never
+ * different, because the only way to reach a SEALED system is a layout just
+ * adopted (nothing has run yet) or a dead-head stop. Remembering a winner to use
+ * in the one case where there is no winner to remember buys nothing, and it would
+ * be a second thing to keep identical between this file and TopologyRuntime.h.
+ *
+ * It is not a guess about what the user wants, either. A manual run is about
+ * moving air, not about a tool; the alternative — refusing to start until someone
+ * opens a gate — would make the one job this button exists for (clear a clog)
+ * impossible on a freshly-adopted layout.
+ */
+function openAPath(d, sys) {
+  const shop = d.topology;
+  const view = S.systemView(shop, sys);
+  const sels = T.selectorsOf(view);
+
+  // Already open? A selector that isn't sitting in its closed state is a path.
+  // Same test planTransition uses for deadHeadRisk, so the two agree about what
+  // "sealed" means. A system with no selectors at all is open by construction.
+  const sealed = sels.length > 0 && sels.every((sel) => {
+    const closed = T.closedState(sel);
+    return !!closed && d.actuatorStates[sel.id] === closed.id;
+  });
+  if (!sealed) return;
+
+  const ports = S.portsByMachine(shop);
+  const inThisSystem = (mid) => (ports.get(mid) || [])
+    .some((pp) => pp.systemId === sys.id && S.portEnabled(pp.port));
+  const target = (shop.machines || []).map((m) => m.id).find(inThisSystem);
+  if (!target) return;   // a system with no machines has nothing to open toward
+
+  const routing = S.routeShop(shop, [target]);
+  for (const sel of sels) {
+    if (sel.id in routing.states) d.actuatorStates[sel.id] = routing.states[sel.id];
+  }
+}
+
+/**
+ * Run ONE system's blower by hand, or stop it.
+ *
+ * It HOLDS. There is no automation to hand back to — a blower with no tool asking
+ * for it is running because a person said so — and the errand this exists for
+ * (clear a clog, sweep the floor, test a run) is one where a blower that switched
+ * itself off partway would be worse than one left running. A tool starting on the
+ * same system does not clear it either: routing proceeds normally over the top,
+ * and when that tool stops the blower keeps running instead of coasting, which is
+ * what "I switched this on" should mean. Switching it off is the only thing that
+ * ends it.
+ *
+ * Mirrors TopologyRuntime::setCollectorManual.
+ */
+function setCollectorManual(d, systemId, on, nowMs = Date.now()) {
+  tickCollector(d, nowMs);
+  const c = d.collectors[systemId];
+  if (!c) return reconcile(d, nowMs);
+  c.manual = !!on;
+  // Switching OFF ends the run outright rather than starting a coast-down: the
+  // coast exists to catch the dust still in the pipe after a CUT, and nothing was
+  // being cut. Leaves the gates where they are, like every other idle.
+  if (!c.manual && !activeMachines(d).length) { c.on = false; c.coasting = false; }
+  return reconcile(d, nowMs);
+}
+
+/** Is this system's blower running because a person switched it on? */
+const collectorIsManual = (d, systemId) => !!(d.collectors[systemId] || {}).manual;
 
 /** Set a MACHINE's live power reading; tracks the OFF→ON edge and reconciles. */
 function setMachinePower(d, machineId, watts, nowMs = Date.now()) {
@@ -205,7 +290,7 @@ function statusView(d, nowMs = Date.now()) {
   }
   const systems = {};
   for (const [sysId, c] of Object.entries(d.collectors)) {
-    systems[sysId] = { collectorOn: c.on, coasting: c.coasting };
+    systems[sysId] = { collectorOn: c.on, coasting: c.coasting, manual: !!c.manual };
   }
   return {
     actuators: { ...d.actuatorStates },
@@ -232,6 +317,7 @@ module.exports = {
   machineThreshold, collectorOffDelayMs,
   createTopologyDevice, activeMachines, reconcile, setMachinePower, statusView,
   tickCollector, anyCollectorOn, anyCollectorCoasting,
+  setCollectorManual, collectorIsManual,
   // v1 spellings — a tool WAS the machine before ports existed.
   toolThreshold, activeTools, setToolPower,
 };

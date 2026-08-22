@@ -52,6 +52,14 @@
 //   would pull against a closed system. A failed break only leaks suction, so it
 //   doesn't block — one dead secondary shouldn't make the whole shop unusable.
 //   deadHeadRisk forces OFF regardless.
+//   A MANUAL RUN (setCollectorManual) is a blower running because a person said
+//   so, with no machine asking for it. It holds — there is no automation to hand
+//   back to — and it never coasts, because a coast catches the dust still in the
+//   pipe after a cut and nothing was being cut. It obeys every rule above: the
+//   path is opened first (queued moves, drained before ON, exactly like a tool
+//   transition), so "never dead-head" is not weakened by it. Mirrors
+//   setCollectorManual() in shared/device-model/topology-device.js — the paired
+//   cases live in manual-blower.test.js and test_manual_blower.cpp.
 //
 // PURE — ArduinoJson + STL only, NO Arduino.h. `nowMs` is injected so the host
 // conformance test can drive time deterministically.
@@ -119,6 +127,7 @@ struct CollectorState {
     uint32_t coastUntilMs;
     bool     desired;       // the brain wants this system routing air
     bool     deadHeadRisk;
+    bool     manualRun;     // a person switched this blower on; no machine is asking
 };
 
 class TopologyRuntime {
@@ -148,7 +157,7 @@ public:
         _inFlightSystem.clear();
         _collectors.clear();
         for (const SystemView& sys : systemsOf(topology()))
-            _collectors[std::string(sys.id ? sys.id : "")] = CollectorState{false, false, 0, false, false};
+            _collectors[std::string(sys.id ? sys.id : "")] = CollectorState{false, false, 0, false, false, false};
         _loaded = true;
         return true;
     }
@@ -202,6 +211,41 @@ public:
         // is also what a plug reports for a machine at rest.
         ingest(_ctrl.setMachinePower(machineId, on ? manualWattsFor(_ctrl.machineThreshold(machineId)) : 0.0f));
         return true;
+    }
+
+    // Run ONE system's blower by hand, or stop it. The Live view's collector card.
+    //
+    // It HOLDS: a blower with no machine asking for it is running because a person
+    // said so, and there is no automation to hand back to. A machine starting on
+    // the same system routes over the top as usual and the run outlives it — a
+    // blower that switched itself off partway through clearing a clog would be
+    // worse than one left running. Only switching it off ends it.
+    //
+    // Opening the path is the first thing it does, not an afterthought: a system
+    // whose gates are all closed (a layout adopted a moment ago, or one stopped by
+    // dead-head risk) is exactly what a blower must not start into. Those moves go
+    // through the ordinary queue, so ON still waits for them to drain.
+    //
+    // Returns false for a system that isn't in the layout — a typo'd id otherwise
+    // looks exactly like a switch that does nothing.
+    bool setCollectorManual(const std::string& systemId, bool on) {
+        if (!_loaded) return false;
+        auto it = _collectors.find(systemId);
+        if (it == _collectors.end()) return false;
+        CollectorState& c = it->second;
+        c.manualRun = on;
+        if (!on && !machineActiveOn(systemId)) {
+            // Off is off. No coast on the way out — see the header note.
+            c.running = false;
+            c.coasting = false;
+        }
+        ingest(_ctrl.reconcile());
+        return true;
+    }
+
+    bool collectorIsManual(const std::string& systemId) const {
+        auto it = _collectors.find(systemId);
+        return it != _collectors.end() && it->second.manualRun;
     }
 
     bool hasMachine(const std::string& machineId) const {
@@ -274,7 +318,12 @@ public:
         // pending move must not hold the 4" blower shut, and vice versa.
         for (auto& kv : _collectors) {
             CollectorState& c = kv.second;
-            if (c.desired && !c.deadHeadRisk && !anyMakeFailed(kv.first)) c.running = true;
+            if (!c.desired || c.deadHeadRisk || anyMakeFailed(kv.first)) continue;
+            // A blower started BY HAND has no routing plan behind it to guarantee
+            // an open path, so the guarantee is checked here instead, at the
+            // moment of starting and after its opening moves have drained.
+            if (c.manualRun && !systemHasOpenPath(kv.first)) continue;
+            c.running = true;
         }
     }
 
@@ -435,6 +484,10 @@ public:
             JsonObject s = systems.createNestedObject(kv.first);
             s["collectorOn"]   = kv.second.running;
             s["coasting"]      = kv.second.coasting;
+            // So the Live view can say WHY a blower is running with nothing on it,
+            // and offer the switch that ends it. Mirrors statusView() in
+            // topology-device.js.
+            s["manual"]        = kv.second.manualRun;
             s["deadHeadRisk"]  = kv.second.deadHeadRisk;
             s["transitioning"] = transitioning(kv.first);
         }
@@ -486,6 +539,33 @@ private:
             const SystemPlan* plan = nullptr;
             for (const SystemPlan& p : plans) if (p.systemId == sysId) { plan = &p; break; }
 
+            if (!c.desired && c.manualRun) {
+                // Running by hand. Held exactly like an idle system — its gates
+                // stay where they are and its moves are not queued — but the
+                // blower is WANTED, so it goes through the same ON path an active
+                // system uses: update() starts it once this system's moves drain.
+                //
+                // The dead-head question is asked against the gates we are
+                // actually leaving it at, NOT against the plan. The plan's
+                // destination for a system with nothing running is "all closed",
+                // which is the one destination that dead-heads — and the moves
+                // that would get there are precisely the ones being dropped.
+                c.desired  = true;
+                c.coasting = false;
+                // Queued HERE and not in setCollectorManual(): ingest() rebuilds
+                // the queue from scratch on every reconcile, so moves pushed
+                // before it are thrown away — and re-deriving them each pass also
+                // means a system still sealed when the next power event lands
+                // gets another go at opening.
+                queueOpenPath(sysId);
+                // Whether it may actually start is asked in update(), against the
+                // gates as they stand once these moves have drained. A verdict
+                // recorded here would be a verdict about the system BEFORE the
+                // moves that fix it.
+                c.deadHeadRisk = false;
+                continue;
+            }
+
             if (!c.desired) {
                 // Idle. Policy is HOLD: leave this system's gates exactly where
                 // they are rather than driving it closed (routing.states would say
@@ -517,6 +597,83 @@ private:
             // held, which is what makes coasting safe.
             if (plan)
                 for (const Move& m : plan->moves) _queue.push_back(QueuedMove{sysId, m});
+        }
+    }
+
+    // Is anything in this system open — the same test planTransition calls "not
+    // sealed", asked of the gates as they actually stand. A system with no
+    // selectors at all is open by construction: there is nothing there to close.
+    bool systemHasOpenPath(const std::string& systemId) const {
+        bool any = false;
+        for (const SystemView& sys : systemsOf(topology())) {
+            if (std::string(sys.id ? sys.id : "") != systemId) continue;
+            for (JsonObjectConst e : sys.elements) {
+                if (!_eq(e["type"], "selector")) continue;
+                any = true;
+                std::string id = e["id"].as<const char*>();
+                const char* closed = _closedState(e);
+                auto it = _hwStates.find(id);
+                // Unknown position counts as CLOSED. Nothing has been commanded,
+                // so the honest answer is "we don't know", and guessing "open"
+                // here is the guess that starts a blower into a sealed system.
+                if (it == _hwStates.end()) continue;
+                if (!closed || it->second != std::string(closed)) return true;
+            }
+        }
+        return !any;
+    }
+
+    // Does any machine drawing power have an enabled port in this system?
+    bool machineActiveOn(const std::string& systemId) const {
+        auto ports = portsByMachine(topology());
+        for (const std::string& mid : _ctrl.activeMachines()) {
+            auto pit = ports.find(mid);
+            if (pit == ports.end()) continue;
+            for (const PortRef& pr : pit->second)
+                if (pr.systemId == systemId && portEnabled(pr.port)) return true;
+        }
+        return false;
+    }
+
+    // Open SOMETHING in this system, so a hand-started blower has somewhere to
+    // pull from. Routes toward the system's first machine in document order —
+    // the same choice openAPath() makes in topology-device.js, and for the same
+    // reason: the only way to reach a sealed system is a layout just adopted or a
+    // dead-head stop, and in neither is there a "last one served" worth keeping.
+    // A system already open is left exactly as it is; idle-hold means the shop
+    // rests where you left it, and reshuffling gates nobody asked about is its own
+    // kind of surprise.
+    void queueOpenPath(const std::string& systemId) {
+        if (systemHasOpenPath(systemId)) return;
+        auto ports = portsByMachine(topology());
+        std::string target;
+        for (const std::string& mid : machineIds(topology())) {
+            auto pit = ports.find(mid);
+            if (pit == ports.end()) continue;
+            for (const PortRef& pr : pit->second)
+                if (pr.systemId == systemId && portEnabled(pr.port)) { target = mid; break; }
+            if (!target.empty()) break;
+        }
+        if (target.empty()) return;    // a system with no machines has nothing to open toward
+
+        ShopRouting r = routeShop(topology(), { target });
+        std::map<std::string, std::string> desired;
+        for (const SystemView& sys : systemsOf(topology())) {
+            if (std::string(sys.id ? sys.id : "") != systemId) continue;
+            for (JsonObjectConst e : sys.elements) {
+                if (!_eq(e["type"], "selector")) continue;
+                std::string id = e["id"].as<const char*>();
+                auto sit = r.states.find(id);
+                if (sit != r.states.end()) desired[id] = sit->second;
+            }
+        }
+        // Through the ordinary queue, so these are make-before-break and ON still
+        // waits for them — a hand start is not a shortcut past the safety rule.
+        std::map<std::string, bool> running;
+        for (auto& kv : _collectors) running[kv.first] = kv.second.running;
+        for (const SystemPlan& p : planShopTransition(topology(), _hwStates, desired, running)) {
+            if (p.systemId != systemId) continue;
+            for (const Move& m : p.moves) _queue.push_back(QueuedMove{systemId, m});
         }
     }
 

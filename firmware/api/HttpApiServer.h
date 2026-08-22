@@ -175,6 +175,9 @@ public:
     // Manual tool switch from the Live view (POST /api/tool). Consumed on the
     // main loop, which owns the routing brain.
     bool consumeToolManualRequest(String& outToolId, bool& outOn);
+    // POST /api/collector — run ONE system's blower by hand. Empty systemId means
+    // "the first system", which is what a single-blower shop always meant.
+    bool consumeCollectorManualRequest(String& outSystemId, bool& outOn);
 
     // Home-side answer (POST /api/config/orientation {homedLeft}). Consumed by the
     // main loop, which ensures the home datum is the user's left endstop (re-homing
@@ -351,6 +354,9 @@ private:
     String                 _nodePairName;
     bool                   _toolManualPending = false;
     String                 _toolManualId;
+    bool                   _collectorManualPending = false;
+    String                 _collectorManualSystem;
+    bool                   _collectorManualOn = false;
     bool                   _toolManualOn = false;
     bool                   _nodePairRemove = false;
     // User-confirmed: adopt a node that another primary owns (RFC §8 for boards).
