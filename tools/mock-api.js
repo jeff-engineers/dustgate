@@ -298,6 +298,10 @@ function handler(req, res) {
       if (!v.ok) return json(res, { error: 'invalid topology', errors: v.errors }, 400);
       td = TD.createTopologyDevice(data);
       rawTopology = data;
+      // The plugs this shop is paired to are on the simulated network from here
+      // on — otherwise every paired plug reads as not responding and the rename
+      // and release paths can't be walked at all. See adoptOutlets().
+      M.adoptOutlets(d, data);
       json(res, { ok: true });
     });
   }

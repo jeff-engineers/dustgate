@@ -586,6 +586,66 @@ function discoverOutlets(d) {
   }));
 }
 
+/**
+ * Put the plugs a saved shop is ALREADY PAIRED TO on the simulated network.
+ *
+ * ensureDiscovered() invents 2-4 plugs at random IPs, which is the right shape
+ * for "sweep the network and see what's out there" — and it meant a shop loaded
+ * from a document could never see its own plugs. The demo shop pairs the table
+ * saw to 192.168.87.30; the simulated network had no such plug; so every screen
+ * that shows a paired plug showed it as not responding, with no wattage and no
+ * name, and rename, release and takeover all answered "not responding". A saved
+ * plug that the network has never heard of is a state real hardware can be in
+ * (unplugged), but it can't be the state EVERY paired plug is in on a runner
+ * whose whole job is to be explorable.
+ *
+ * Adopted plugs are claimed OURS: pairing a plug is what claiming it means, and
+ * anything else would make the demo's own seeded shop look stolen. An IP already
+ * on the network is left exactly as it is — including the deliberately foreign
+ * last entry, which is the only way the refusal paths stay reachable.
+ *
+ * Takes the document, so callers don't each re-derive where a plug hides. Both
+ * shapes: a v1 topology (tool.sensor.outlet / collector.control.outlet) and a
+ * shop (machines[].sensor.outlet), since either can be PUT.
+ */
+function adoptOutlets(d, doc) {
+  const list = ensureDiscovered(d);
+  for (const o of _docOutlets(doc)) {
+    if (!o.ip || list.some(x => x.ip === o.ip)) continue;
+    list.push({
+      ip: o.ip,
+      hostname: o.host || `ShellyPlugUSG4-${_randHex(12)}`,
+      // The plug holds the FULL name, suffix and all — discoverOutlets() strips
+      // it on the way out, exactly as the firmware does.
+      name: o.name ? `${o.name}${OWNER_SEP}${OUR_NAME}` : '',
+      reachable: true,
+      powerW: 0,          // tools are off during a scan; same rule as the rest
+      gen: o.gen || 2,
+      claim: 'ours',
+      holder: null,
+      takeable: false,
+    });
+  }
+  return list;
+}
+
+/** Every smart outlet a document mentions, whichever shape it is in. */
+function _docOutlets(doc) {
+  if (!doc || typeof doc !== 'object') return [];
+  const out = [];
+  const take = (o) => { if (o && o.ip) out.push(o); };
+  for (const m of doc.machines || []) take(m && m.sensor && m.sensor.outlet);
+  const systems = doc.systems || [doc];
+  for (const sys of systems) {
+    for (const e of (sys && sys.elements) || []) {
+      if (!e) continue;
+      take(e.sensor && e.sensor.outlet);
+      take(e.control && e.control.outlet);
+    }
+  }
+  return out;
+}
+
 /** Shelly-app device name for an IP if it's one we've discovered, else ''. */
 function nameForIp(d, ip) {
   const hit = (d._discovered || []).find(x => x.ip === ip);
@@ -633,6 +693,6 @@ module.exports = {
   isRocklerModel, roundUpEven, physicalGateCount,
   // outlets
   configureOutlet, deleteOutlet, configureDustCollector, deleteDustCollector, switchDustCollector,
-  ensureDiscovered, discoverOutlets, pingOutlet, nameForIp,
+  ensureDiscovered, discoverOutlets, adoptOutlets, pingOutlet, nameForIp,
   nameOutlet, releaseOutlet, takeoverOutlet,
 };

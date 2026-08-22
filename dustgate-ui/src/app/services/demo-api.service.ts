@@ -55,6 +55,11 @@ export class DemoApiService extends ApiService {
     // state, not a hardcoded-always-true override.
     this.d.dcConfigured = true;
     this.d.dcIp = '192.168.87.50';
+    // The seeded shop's plugs are ON the simulated network. Without this the
+    // scan invents its own plugs at random IPs and DEMO_TOPOLOGY's — the table
+    // saw's, the bandsaw's — belong to no device anyone can reach, so the demo
+    // showed every paired plug as not responding and refused every rename.
+    model.adoptOutlets(this.d, DEMO_TOPOLOGY);
 
     this.deviceInfo = {
       apiKey:        'demo',
@@ -98,6 +103,9 @@ export class DemoApiService extends ApiService {
     const v = isShop(topology) ? validateShop(topology) : validateTopology(topology);
     if (!v.ok) throw new Error('invalid topology: ' + JSON.stringify(v.errors));
     this.td = createTopologyDevice(topology);
+    // Whatever this shop is paired to is on the simulated network from here on,
+    // the same as the mock does on PUT. See adoptOutlets().
+    model.adoptOutlets(this.d, topology);
     return { ok: true };
   }
 

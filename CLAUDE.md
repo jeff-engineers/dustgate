@@ -66,7 +66,7 @@ Tests live in two package.json files. UI suites run under plain node (no browser
 
 ```
 cd dustgate-ui && npm test        # spec-runner + routing + wiring geometry
-cd tools && npm run model:test    # topology, shop, nodelink, plug-claim (JS)
+cd tools && npm run model:test    # topology, shop, nodelink, plug-claim, adopt-outlets (JS)
 cd tools && npm run firmware:test # the C++ host tests (router, controller, nodebus, shop, faults, plugclaim)
 cd tools && npm run conformance:ci topology:conformance:ci nodelink:conformance:ci  # run separately
 ```

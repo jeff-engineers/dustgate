@@ -194,7 +194,7 @@ const DEFAULT_THRESHOLD = 50;
                                  [toolName]="c.name" [ip]="c.ip" [host]="c.hostname" [label]="c.label"
                                  [seen]="seenOutlet(c)" [owner]="owner"
                                  fieldId="setup-outlet-name"
-                                 (renamed)="c.label = $event; touched = true"
+                                 (renamed)="onRenamed(c, $event)"
                                  (rescan)="scan()"
                                  (change)="unpair(c, '')"
                                  (removed)="unpair(c, $event)">
@@ -265,6 +265,8 @@ export class ToolSetupComponent implements OnInit {
   unpairNote = '';
 
   private topo: Topology | null = null;
+  /** A rename landed ON THE PLUG during this edit — see discardWarning(). */
+  private plugRenamed = false;
   /**
    * Has the user actually changed anything on the tool they're editing? Set by
    * the edit affordances themselves rather than derived by comparing a snapshot
@@ -309,6 +311,7 @@ export class ToolSetupComponent implements OnInit {
     this.error = '';
     this.unpairNote = '';
     this.touched = false;
+    this.plugRenamed = false;
     this.editingName = t.name;
     this.editing = { ...t };   // working copy; the list keeps the saved values
   }
@@ -376,10 +379,33 @@ export class ToolSetupComponent implements OnInit {
    * anything. An explicit flag cannot drift that way.
    */
   cancel(): void {
-    if (this.touched &&
-        !confirm('Leave without saving?\n\nThe plug and name changes on this tool will be lost.')) return;
+    if (this.touched && !confirm(this.discardWarning())) return;
     this.editing = null;
     this.touched = false;
+    this.plugRenamed = false;
+  }
+
+  /**
+   * What Cancel actually throws away — which is not everything that happened.
+   *
+   * Renaming the plug is a write to a device on the far side of the LAN and
+   * landed the moment you tapped away (see PairedOutletRowComponent); no Cancel
+   * here can reach over and undo it. Saying "your name changes will be lost"
+   * would be a straight lie about the one edit that already stuck.
+   */
+  private discardWarning(): string {
+    const base = "Leave without saving?\n\nThis tool's name, its plug and its trip point go back to what they were.";
+    return this.plugRenamed
+      ? `${base}\n\nThe outlet's own name is not part of that — that rename already went to the plug.`
+      : base;
+  }
+
+  /** The plug's new name, already written to the plug itself. Cached on the
+   *  layout by Save, as a fallback for when the plug can't be reached. */
+  onRenamed(c: ToolCfg, label: string): void {
+    c.label = label;
+    this.plugRenamed = true;
+    this.touched = true;
   }
 
   /** Back out of a tool, or off the screen entirely — same as Gates. */
@@ -414,6 +440,7 @@ export class ToolSetupComponent implements OnInit {
       await this.api.putTopology(this.topo);
       this.editing = null;
       this.touched = false;
+      this.plugRenamed = false;
       this.rebuild();
     } catch {
       // The doc in memory now disagrees with the device. Re-reading it here would

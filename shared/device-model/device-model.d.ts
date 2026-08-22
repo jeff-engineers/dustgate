@@ -201,6 +201,8 @@ export function setPortRole(d: Device, index: number, role: PortRole): { ok: boo
 
 export function ensureDiscovered(d: Device): DiscoveredOutlet[];
 export function discoverOutlets(d: Device): DiscoveredOutlet[];
+/** Put the plugs a saved document is already paired to on the simulated network. */
+export function adoptOutlets(d: Device, doc: unknown): DiscoveredOutlet[];
 export function pingOutlet(d: Device, ip: string): PingResult;
 export function nameForIp(d: Device, ip: string): string;
 export function nameOutlet(d: Device, ip: string, label: string, takeover?: boolean): OutletNameResult;
