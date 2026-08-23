@@ -9,8 +9,7 @@
 #   bash deploy.sh --no-topology-backup  # (no-op since 2026-08-22 — the save/
 #                                        #  restore step is commented out; see
 #                                        #  "0. Save the shop layout" below)
-#   bash deploy.sh --node                # SECONDARY servo-only node (QT Py S3)
-#   bash deploy.sh --node=xiao_c5        # ...a different node board (any pio env)
+#   bash deploy.sh --node                # SECONDARY servo-only node
 #
 # Anything that flashes the filesystem WIPES the saved shop, so the deploy pulls
 # topology.json off the device first (§0) and puts it back at the end (§5).
@@ -242,8 +241,8 @@ FORCE_PROVISION=false
 # (see "0. Save the shop layout"). Kept, along with the flag below, so turning
 # the step back on is uncommenting call sites rather than reconstructing this.
 DO_TOPO_BACKUP=true
-# Which PlatformIO env to build. Empty = platformio.ini's default_envs (the
-# primary DevKitC). --node switches to the servo-only secondary.
+# Which PlatformIO env to build. Empty = platformio.ini's default_envs (the C5
+# primary). --node switches to the servo-only secondary.
 PIO_ENV=""
 
 for arg in "$@"; do
@@ -259,15 +258,14 @@ for arg in "$@"; do
     # image at all — a node's entire interface is the /nodelink WebSocket, which
     # is exactly why it fits on a 4MB board. Credentials still go over serial.
     #
-    # --node=<env> names a different node board — xiao_c5 is the other one today.
-    # Bare --node keeps the default, which is the QT Py S3 that gets bench-tested.
-    --node)   PIO_ENV="dustgate_node"; DO_UI=false; DO_FS=false ;;
+    # --node=<env> is still accepted so dev.sh can name it explicitly, but there
+    # is one node env now (2026-08-23) and bare --node is it.
+    --node)   PIO_ENV="xiao_c5"; DO_UI=false; DO_FS=false ;;
     --node=*) PIO_ENV="${arg#--node=}"; DO_UI=false; DO_FS=false ;;
-    # A PRIMARY on a non-default env — same board, same UI bundle, different
-    # build flags (esp32dev_wroom32 is the rack-fitted one). Unlike --node this
-    # keeps the Angular bundle and the LittleFS image, because it is still a
-    # primary. --screen used to name esp32dev_servo-plus-the-OLED; every env
-    # carries the OLED now (2026-08-22), so it is accepted and ignored.
+    # --env= names a primary env explicitly. With one primary env left this only
+    # ever restates the default; kept because dev.sh passes it and because the
+    # slider board will be the next env to name. --screen named an OLED variant
+    # until 2026-08-22; every build carries the driver now.
     --screen) echo "  (--screen is the default now — every build carries the screen driver.)" ;;
     --env=*)  PIO_ENV="${arg#--env=}" ;;
   esac
@@ -281,11 +279,9 @@ done
 PIO_ENV_ARGS=()
 [[ -n "$PIO_ENV" ]] && PIO_ENV_ARGS=(-e "$PIO_ENV")
 
-# The xiao_c5 env rides a different platform (the pioarduino fork), which shares
-# package NAMES with the official one and would overwrite it. Send it to its own
-# core directory before anything builds, so the two installations never meet.
-# Exported here, so every pio call this script makes agrees. See
-# tools/boardinfo.sh.
+# Every env rides the pioarduino fork, which keeps its own core directory. Point
+# this shell at it before anything builds; exported here so every pio call this
+# script makes agrees. See tools/boardinfo.sh.
 use_core_for_env "$PIO_ENV"
 
 # ── Load credentials from tools/.env if present ────────────────────────────

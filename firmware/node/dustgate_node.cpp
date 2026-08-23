@@ -26,7 +26,7 @@
 // that closes gates, no homing on reconnect, no autonomous behaviour of any
 // kind. Losing the link mid-cut must never slam a gate on a running tool.
 //
-// Build:  pio run -e dustgate_node
+// Build:  pio run -e xiao_c5
 // =============================================================================
 
 #include <Arduino.h>

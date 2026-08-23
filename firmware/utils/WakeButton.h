@@ -66,7 +66,7 @@
 // input-only GPIO34/35/36/39, which have NO internal pull-up at all — Arduino
 // accepts INPUT_PULLUP on them and silently gives you a floating pin that reads
 // as random presses. That board defines WAKE_BTN_INPUT_MODE as plain INPUT and
-// carries an external 10kΩ to 3V3 instead; see firmware/wiring/devkitc.md §5.
+// carries an external 10kΩ to 3V3 instead; see firmware/attic/linear/devkitc-wiring.md §5.
 // =============================================================================
 
 #include <Arduino.h>

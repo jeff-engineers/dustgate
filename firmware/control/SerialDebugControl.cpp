@@ -311,13 +311,13 @@ void SerialDebugControl::processLine(const String& line) {
 #endif
 
     } else if (cmd == "endstops" || cmd == "e") {
-#ifdef FEEDBACK_LIMIT_DISTANCE
+#if HAS_LINEAR
         Serial.print(F("[ENDSTOP] Home (D10): "));
         Serial.print(digitalRead(PIN_ENDSTOP_HOME) == HIGH ? F("TRIGGERED") : F("open"));
         Serial.print(F("   Far (D11): "));
         Serial.println(digitalRead(PIN_ENDSTOP_MAX) == HIGH ? F("TRIGGERED") : F("open"));
 #else
-        Serial.println(F("[ENDSTOP] FEEDBACK_LIMIT_DISTANCE not enabled"));
+        Serial.println(F("[ENDSTOP] no slider on this board"));
 #endif
 
     } else if (cmd == "i2c" || cmd.startsWith("i2c ")) {
@@ -342,9 +342,6 @@ void SerialDebugControl::processLine(const String& line) {
 #endif
         if (sda < 0 || scl < 0) {
             Serial.println(F("[I2C] This build declares no I2C pins — name them: i2c <sda> <scl>"));
-#if defined(BOARD_DEVKITC)
-            Serial.println(F("[I2C] On this board the status screen would be: i2c 16 4"));
-#endif
         } else {
             runI2cScan(sda, scl, force);
         }
@@ -583,7 +580,7 @@ void SerialDebugControl::runI2cScan(int sda, int scl, bool force) {
     // REFUSED, not warned about: on the DevKitC the "obvious" I2C pins are the
     // TMC2209's EN and DIR, and EN is active LOW — a scan pulling it down is a
     // scan that silently energises the motor. This is the same trap the board's
-    // pin map dodges (see boards/devkitc_wroom32.h), and a debug command is
+    // pin map dodges (see attic/linear/devkitc_wroom32.h), and a debug command is
     // exactly where someone would walk back into it.
 #if defined(PIN_TMC_EN) && defined(PIN_TMC_DIR)
     if (!force && (sda == PIN_TMC_EN || sda == PIN_TMC_DIR ||
@@ -666,7 +663,7 @@ void SerialDebugControl::printStatus() {
     Serial.print(F("  Requested stop:    ")); Serial.println(_requestedStop);
     Serial.print(F("  EStop pending:     ")); Serial.println(_eStopPending ? F("YES") : F("no"));
     Serial.print(F("  Homing speed:      ")); Serial.print(HOMING_SPEED_STEPS_PER_SEC, 0); Serial.println(F(" steps/sec"));
-#ifdef FEEDBACK_LIMIT_DISTANCE
+#if HAS_LINEAR
     Serial.print(F("  Home endstop (D10):")); Serial.print(F(" "));
     Serial.println(digitalRead(PIN_ENDSTOP_HOME) == HIGH ? F("TRIGGERED") : F("open"));
     Serial.print(F("  Far endstop (D11): "));

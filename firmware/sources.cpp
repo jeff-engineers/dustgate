@@ -13,9 +13,9 @@
 // handle subdirectory compilation automatically and will get duplicate symbols.
 // =============================================================================
 
-#include "motor/StepperTMC2209Driver.cpp"
-
-#include "feedback/LimitSwitchDistance.cpp"
+// The stepper and the limit-switch feedback moved to attic/linear/ on
+// 2026-08-23 and are not compiled by anything. Nothing replaces them here: the
+// sketch takes NullMotorDriver / NullFeedback, which are header-only.
 
 #include "control/SerialDebugControl.cpp"
 #include "control/SmartOutletControl.cpp"

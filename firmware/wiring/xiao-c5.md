@@ -43,24 +43,20 @@ wiring, smart plugs, power supply, decoupling — are in
 ## Why this board is interesting
 
 - Real Espressif module in a thumb-sized package, USB-C, native USB.
-- **8 MB flash + 8 MB PSRAM** against the DevKitC's 4 MB and no PSRAM.
+- **8 MB flash + 8 MB PSRAM.**
 - **Dual-band WiFi 6**, so the controller's own link can leave a 2.4 GHz band
   that a shop full of motors and Shelly plugs has already crowded.
 
-## Why it is servo-only, and why that is the point
+## Single core, and why it stopped mattering
 
-The C5 is **single-core**. The primary's design leans on two: the Shelly poller
-and the NodeLink client are pinned to core 0 specifically so their blocking HTTP
-can never disturb step generation on core 1. Software step pulses are the one
-workload here that turns scheduler jitter into physical error — lost steps, a
-rough-sounding rail.
+The C5 has one core, and the old primary design leaned on two: the Shelly poller
+and the NodeLink client were pinned to core 0 so their blocking HTTP could never
+disturb step generation on core 1. Software step pulses were the one workload
+here that turned scheduler jitter into physical error.
 
-Servos have no such problem. PWM is LEDC hardware and a bus servo is a UART
-write; both are fire-and-forget, and neither cares that something else is using
-the CPU. So single-core is a bad trade for a stepper primary and a non-issue for
-a servo-only board — which is why this pin map defines no motor pins at all.
-
-The same reasoning governs every servo-only node header here.
+Nothing generates steps any more. PWM is LEDC hardware and a bus servo is a UART
+write — both fire-and-forget, neither cares that something else is using the CPU.
+That is what makes this board a primary as well as a node.
 
 ---
 
@@ -241,7 +237,7 @@ but free.
 >
 > Since the same day there is no separate screen build: the `xiao_c5` env carries
 > the driver like every other target, and probes for the panel at boot. The driver was already proven on a DevKitC
-> (`wiring/devkitc.md` §5); this is the second board it has run on.
+> (`../attic/linear/devkitc-wiring.md` §5); this is the second board it has run on.
 >
 > See
 > [`WIRING.md` §6](../WIRING.md#6-status-screen-ssd1306-oled--optional) for what the
@@ -370,7 +366,7 @@ RTS, which on this part is the ROM's **download-mode trigger**, not CDC line
 state. The board left the app for the bootloader the instant the monitor opened.
 
 Fixed in `platformio.ini` (`monitor_dtr = 0` / `monitor_rts = 0` for this env),
-so `bash dev.sh monitor c5` is now correct. If you ever bypass the scripts, hold
+so `bash dev.sh monitor node` is now correct. If you ever bypass the scripts, hold
 both lines low or you will re-run the same scare.
 
 Reading the port directly, with the lines low, is the tie-breaker when a board
@@ -450,74 +446,27 @@ underside** — no castellation, no header, you solder to the belly of the board
 and A1/A2 double as strapping pins. If a node ever needs analog (a current sense,
 a pot), A0 is the only one you can reach from a plugged-in board.
 
-### It rides a different platform — and now lives in its own core directory
+### It rides a different platform, in its own core directory
 
-The C5 needs the **pioarduino** fork (official `espressif32` has no C5) and a
-newer Arduino core than every other target here. Both platforms publish packages
-under the *same names* — `framework-arduinoespressif32`, `toolchain-riscv32-esp`
-— so while they shared one `~/.platformio`, building either one broke the other.
-Two distinct failures, neither of which PlatformIO detects or repairs:
-
-1. **The Arduino core.** The loser's package is left in place, judged not to
-   satisfy the spec, and the builder gets a `None` path — surfacing as
-   `TypeError: expected str, bytes or os.PathLike object, not NoneType`, four
-   frames deep in SCons, naming no package.
-2. **The riscv toolchain**, worse. The official platform half-removed it: sysroot
-   deleted, `.piopm` still claiming 14.2.0. `pio pkg install` reports "Already
-   up-to-date" while every compile fails with `riscv32-esp-elf-g++: command not
-   found` or `fatal error: stdint.h: No such file or directory`.
-
-**Fixed properly on 2026-08-14: this env gets its own `PLATFORMIO_CORE_DIR`**
-(`~/.platformio-pioarduino`), so the two installations never meet. `dev.sh` and
-`deploy.sh` set it before every build and before the monitor —
-`use_core_for_env()` in [`tools/boardinfo.sh`](../../tools/boardinfo.sh). Costs
-**7.6 GB** of disk (measured 2026-08-14), downloaded once.
-
-The old shared installation keeps the fork's leftovers — another 6.8 GB of
-packages nothing builds against any more. Reclaim them if the disk is tight:
+The C5 needs the **pioarduino** fork (official `espressif32` has no C5) and
+Arduino core 3.x. It builds against its own `PLATFORMIO_CORE_DIR`
+(`~/.platformio-pioarduino`, 7.6 GB, downloaded once), which `dev.sh` and
+`deploy.sh` set via `use_core_for_env()` in
+[`tools/boardinfo.sh`](../../tools/boardinfo.sh). By hand:
 
 ```bash
-rm -rf ~/.platformio/packages/.dustgate-core-fork \
-       ~/.platformio/packages/framework-arduinoespressif32-libs \
-       ~/.platformio/packages/toolchain-riscv32-esp@src-* \
-       ~/.platformio/packages/tool-riscv32-esp-elf-gdb \
-       ~/.platformio/platforms/espressif32@src-* \
-       ~/.platformio/tools/toolchain-riscv32-esp \
-       ~/.platformio/tools/tool-riscv32-esp-elf-gdb
+PLATFORMIO_CORE_DIR=~/.platformio-pioarduino pio run -e xiao_c5_primary -e xiao_c5
 ```
 
-All of it is re-downloadable, and none of it is what the isolated directory
-uses — that has its own copies.
-
-The earlier fix swapped the core package in and out around each build. It
-handled (1) and not (2), which was the lesson: a shared directory has an unknown
-number of collisions in it, and each one is found the same expensive way.
-
-**Building by hand needs the core dir set too** — this is now the only correct
-way to build this env outside the scripts:
-
-```bash
-PLATFORMIO_CORE_DIR=~/.platformio-pioarduino pio run -e xiao_c5
-```
-
-Set `DUSTGATE_FORK_CORE_DIR` to put it elsewhere if `~` is tight. A bare
-`pio run -e xiao_c5` will try to install the fork over the official
-installation — the old breakage, now the only way left to reach it. If you do it
-by accident, the recovery is to delete what it half-installed:
-
-```bash
-rm -rf ~/.platformio/packages/toolchain-riscv32-esp ~/.platformio/tools/toolchain-riscv32-esp
-```
-
-Mixing envs in one command is still wrong — `pio run -e xiao_c5 -e dustgate_node`
-can't work, since one pio process has one core dir — but it is now a clear
-failure rather than a trap that corrupts an installation.
+Set `DUSTGATE_FORK_CORE_DIR` to put it elsewhere if `~` is tight. `~/.platformio`
+holds an unused official installation plus leftovers — ~6.8 GB, all
+re-downloadable, safe to delete if the disk is tight.
 
 **Flash it** (picks the env, the core dir, the native-USB port and the right
 DTR/RTS convention, then prompts for WiFi credentials and a hostname):
 
 ```bash
-bash dev.sh flash-node c5
+bash dev.sh flash-node
 ```
 
 Or with the hostname up front — it must be unique per node, since that string is
@@ -525,25 +474,14 @@ the board's identity in the claim handshake and the name the primary's picker
 binds to:
 
 ```bash
-bash dev.sh flash-node c5 dustgate-node-c5
+bash dev.sh flash-node dustgate-node-c5
 ```
 
 Serial monitor for it afterwards:
 
 ```bash
-bash dev.sh monitor c5
+bash dev.sh monitor node
 ```
-
-### Still open: one fleet or two platforms
-
-Isolation makes the two platforms coexist; it does not make them one. Every
-other target stays on espressif32 6.x / Arduino core 2.0.x, so the C5 is the only
-board here running core 3.x — a second library set (ESP32Async forks, ESP32Servo
-3.x) that gets exercised only when this board is built.
-
-Collapsing that means moving **every** target to pioarduino / core 3.x, which
-re-validates all of them on hardware. Worth doing eventually, deliberately, not
-as a side effect of needing a node. See TODO.md §0.5.
 
 ### What this board already fixed elsewhere
 

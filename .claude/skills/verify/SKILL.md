@@ -48,29 +48,18 @@ npm run nodelink:conformance:ci   # primary↔secondary WS conversation vs mock-
 
 ### Firmware compiles
 
-Default pair — the primary target and the node target:
+Two envs, which is every env — one board, two roles. They build together:
 
 ```bash
-pio run -e esp32dev_wroom32 -e dustgate_node
+PLATFORMIO_CORE_DIR=~/.platformio-pioarduino pio run -e xiao_c5_primary -e xiao_c5
 ```
 
-Everything the CI job covers (still one command, all on the espressif32 platform):
+The core dir is REQUIRED: the pioarduino platform lives there, and a bare
+`pio run` won't set it (`dev.sh`/`deploy.sh` do).
 
-```bash
-pio run -e esp32dev_servo -e esp32dev_wroom32 -e adafruit_feather_esp32s2 -e dustgate_node
-```
-
-`xiao_c5` **must** be built alone, and against its own core directory — it rides
-the pioarduino platform, which collides with espressif32 over package names. The
-core dir is one env var per process, so it cannot share a `pio run`. It does not
-disturb `~/.platformio`:
-
-```bash
-PLATFORMIO_CORE_DIR=~/.platformio-pioarduino pio run -e xiao_c5
-```
-
-Only build `xiao_c5` when the change touches C5 pin maps, `boards/xiao_c5.h`, or
-node firmware. Say so if you skip it.
+`xiao_c5_primary` builds the full sketch and catches the most. Build both anyway —
+~45 s together — unless the change is provably UI-only or JS-only. Any command
+naming an `esp32dev_*`, `adafruit_feather_*` or `dustgate_node` env is stale.
 
 ## 3. Report
 

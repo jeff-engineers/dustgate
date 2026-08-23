@@ -3,7 +3,7 @@
 // =============================================================================
 
 #include "LimitSwitchDistance.h"
-#include "../utils/MotionMath.h"
+#include "../../utils/MotionMath.h"
 
 #ifdef FEEDBACK_LIMIT_DISTANCE
 

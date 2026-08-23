@@ -6,12 +6,11 @@ failing to answer quickly was "which pin, on the board in my hand".
 
 ## Which board are you wiring?
 
-| Board | Role | Wiring |
-|-------|------|--------|
-| **Espressif ESP32-DevKitC** (WROOM-32) | Primary, with the linear rack, stepper and endstops | [`wiring/devkitc.md`](wiring/devkitc.md) |
-| **Seeed XIAO ESP32C5** | Servo-only node | [`wiring/xiao-c5.md`](wiring/xiao-c5.md) |
-| Adafruit ESP32-S2 Feather | Legacy primary variant | in [`wiring/devkitc.md`](wiring/devkitc.md) — it shares that design |
-| Adafruit QT Py ESP32-S3 | Servo-only node — **the default node** | [`wiring/qtpy-s3.md`](wiring/qtpy-s3.md) |
+One board: the **Seeed XIAO ESP32C5**, primary or node depending on which
+program you flash it with. Pin map: [`wiring/xiao-c5.md`](wiring/xiao-c5.md).
+The retired rack wiring (stepper, endstops) is in
+[`../attic/linear/devkitc-wiring.md`](../attic/linear/devkitc-wiring.md), which is
+what the ST3215 slider gets rebuilt from.
 
 Every board's authoritative pin numbers are its header in
 [`firmware/boards/`](boards/) — the build reads those, and a wiring doc that
@@ -41,19 +40,10 @@ in one glance where a blink rate is not.
 Orange outranks everything except nothing-happening, deliberately: "is anything
 actually moving?" is the first question every time a gate misbehaves.
 
-### Which boards have one
+### Wiring it
 
-| Board | Pixel | Notes |
-|-------|-------|-------|
-| ESP32-DevKitC | **GPIO17, external** | No onboard user LED at all — you add this part |
-| Adafruit ESP32-S2 Feather | GPIO33 onboard | Power gated by GPIO21 (`PIN_PIXEL_POWER`) |
-| Adafruit QT Py ESP32-S3 | GPIO39 onboard | Power gated by GPIO38 |
-| Seeed XIAO ESP32C5 | GPIO25, external | Onboard LED is plain yellow, not RGB |
-
-Boards with an onboard pixel need no wiring. Only the DevKitC and the XIAO need
-a part added.
-
-### Wiring an external pixel (DevKitC)
+The XIAO C5 drives an **external** pixel on GPIO25 (D2) — its onboard LED is
+plain yellow, not RGB, so this is a part you add.
 
 ```
 5V  ──────────────┬──── Pixel VDD
@@ -62,7 +52,7 @@ a part added.
                   │
 GND ──────────────┴──── Pixel GND ──── ESP32 GND   (common ground, mandatory)
 
-GPIO17 ──── [330R] ──── Pixel DIN
+GPIO25 ──── [330R] ──── Pixel DIN
 ```
 
 The 330Ω series resistor and the bulk capacitor are the two things people skip
@@ -87,15 +77,6 @@ routine, so there is no library to add.
 same supply as the servos, a servo's inrush can brown the pixel into a garbage
 colour — which then reads as a fault that isn't one. The bulk cap above helps;
 powering the pixel from 3V3 sidesteps it entirely.
-
-### Boards with no pixel
-
-`StatusLed.h` falls back to blink patterns on `PIN_LED` for any board that
-defines one and no pixel (fast = fault, slow = working, solid = ready). That path
-exists for compatibility, not as a design goal — the ambiguity it reintroduces is
-the whole reason the pixel replaced it.
-
----
 
 ---
 
@@ -150,12 +131,12 @@ design that fails on some perfectly good chargers. This is the reason to prefer 
 
 #### Bench-validated chain (2026-08-12)
 
-Measured on the bench, not derived: a DevKitC primary with the status pixel and one
-6kg digital servo, through a deliberate stall, showed **no brownout and no reset —
+Measured on the bench, not derived: a primary with the status pixel and one 6kg
+digital servo, through a deliberate stall, showed **no brownout and no reset —
 with no capacitors fitted at all.**
 
 ```
-USB-C charger ──> HUSB238 (PD trigger, 15V) ──> MPM3610 buck ──> 5V ──┬── DevKitC 5V/VIN
+USB-C charger ──> HUSB238 (PD trigger, 15V) ──> MPM3610 buck ──> 5V ──┬── board 5V/VIN
                                                                       └── servo V+
 ```
 
@@ -195,27 +176,20 @@ peripheral.
 >
 > It has **not** been shown to be what happened here. What was actually observed on
 > 2026-08-12: flashing failed with `Wrong boot mode detected (0x13)` while the
-> DevKitC was seated on its carrier and succeeded with the board off it; the
+> board was seated on its carrier and succeeded with the board off it; the
 > carrier's NeoPixel was later found installed **backwards**; the carrier was then
 > dismantled before anything was isolated. A reversed WS2812 is its own fault with
 > its own conduction path, and no measurement tied either one to the strapping
 > failure. Treat this section as a thing to check, not a thing to conclude — see
 > the open item in TODO.md.
 
-#### Planned: 9V for serial-bus servos
+#### Planned: the serial-bus slider
 
-The serial bus servo (ST3215-class) replaces both the stepper and the PWM servo
-bank. It is a 12V-class part, but the plan is to run it from **9V PD** rather than
-12V, precisely because 9V is a spec-normative fixed voltage and 12V is not — a 9V
-design works off any compliant charger.
-
-The trade is torque: the headline rating is at 12V, so expect meaningfully less at
-9V. Size the gate mechanism for the 9V figure, not the datasheet's. Not yet built —
-see the serial-bus notes in the board headers.
-
-> **Note (vs. the Feather):** the DevKitC has **no onboard LiPo charger** — power it
-> from USB or a regulated 5V source on the 5V/VIN pin. The Feather's battery/charging
-> features do not apply to the primary build.
+The ST3215 replaces the stepper, on **its own board riding with the slider** — it
+never shares a board with PWM servos. Power is local at the gate (12V barrel, its
+rated voltage for 30 kg·cm), which is what keeps the TTL bus short. Note PD is not
+a shortcut here: the XIAO's USB-C is a device port and won't negotiate, so a PD
+umbilical still needs a trigger module at the sled. Not built yet.
 
 ---
 
@@ -226,7 +200,7 @@ see the serial-bus notes in the board headers.
 > **Untested on hardware.** This is standard practice written down so the bench
 > session starts from a known-good arrangement, not a measured result. The only
 > value here that predates it is the 100µF at VMOT in
-> [`wiring/devkitc.md` §2](wiring/devkitc.md#2-motor--tmc2209).
+> [`../attic/linear/devkitc-wiring.md` §2](../attic/linear/devkitc-wiring.md#2-motor--tmc2209).
 
 The WROOM-32's brownout detector resets the chip when 3V3 sags past **~2.8V**.
 Nothing on the ESP32 side causes that. The loads sharing the rail do:
@@ -285,7 +259,7 @@ Servo node — the one that matters:
 ```
 
 ```
-ESP32 DevKitC input:
+ESP32 board input:
 
   5V buck out ──┬──────────┬───── VIN (5V pin)
                 │          │
@@ -304,7 +278,7 @@ vent.
 
 ### The four rules that matter more than the caps
 
-1. **Don't power servos from the DevKitC 5V pin.** That routes servo current through
+1. **Don't power servos from the board's 5V pin.** That routes servo current through
    the board's traces and its USB/regulator path, which is the fastest way to brown
    out. Feed servos from the buck converter directly; the ESP32 gets its own leg off
    the same buck.
@@ -313,7 +287,7 @@ vent.
    ESP32's ground reference.
 3. **Fat wire on the power legs** — 18–20AWG for servo and motor power, short runs to
    the node. 22AWG and up is fine for signal.
-4. **Common ground is mandatory.** [`wiring/devkitc.md` §2](wiring/devkitc.md#2-motor--tmc2209) already says this for
+4. **Common ground is mandatory.** [`../attic/linear/devkitc-wiring.md` §2](../attic/linear/devkitc-wiring.md#2-motor--tmc2209) already says this for
    the motor; it is equally true for every servo. Without it the PWM and STEP/DIR signals
    have no reference.
 
@@ -331,24 +305,11 @@ capacitance:
 
 ## 6. Status Screen (SSD1306 OLED) — optional
 
-> **WORKING ON ONE BOARD, as of 2026-08-21.** A 0.96" SSD1306 answered at 0x3C on
-> a DevKitC's GPIO16/4 and the firmware drew to it — the first display any
-> DustGate board has driven:
+> **WORKING**, on a C5's D4/D5 at 0x3C. Not verified: the sleep/wake behaviour
+> over hours, or whether every layout reads well on real glass.
 >
-> ```
-> [SCREEN] panel answered at 0x3C — drawing
-> [I2C] Scanning SDA=GPIO16 SCL=GPIO4 at 100kHz...
->   0x3C  SSD1306 OLED (the expected status screen)
-> ```
->
-> What that verifies: **these pins, this address, on this board.** Not verified:
-> the sleep/wake behaviour over hours, whether every layout reads well on real
-> glass, and the pins proposed for the two node boards — those are still
-> transcribed from published pinouts and have driven nothing.
->
-> **It took a swapped pair to get there**, which is the failure this chapter
-> should make you check first: SDA and SCL reversed scan exactly like a dead
-> module. GPIO16 is SDA, GPIO4 is SCL.
+> **Check for a swapped pair first** — SDA and SCL reversed scan exactly like a
+> dead module, which is what it took to get there the first time.
 
 A 0.96" 128×64 SSD1306 on I²C, so *"is it connected?"* has an answer you can read
 at the machine instead of on a phone. The layouts — what each screen says, and
@@ -377,30 +338,9 @@ SDA pin ─────────── SDA
 SCL pin ─────────── SCL
 ```
 
-Which pins is per board, and the three boards are not equally lucky:
-
-| Board | SDA / SCL | How it goes |
-|---|---|---|
-| [QT Py ESP32-S3](wiring/qtpy-s3.md) | GPIO41 / GPIO40 | **Easiest.** The STEMMA QT socket is a second I²C bus — a cable, no soldering, no header pad, nothing else disturbed |
-| [XIAO ESP32C5](wiring/xiao-c5.md) | GPIO23 / GPIO24 (D4/D5) | The XIAO-standard I²C position, so Seeed's own accessories land on it; free in either node role |
-| [ESP32-DevKitC](wiring/devkitc.md) | **GPIO16 / GPIO4** | The awkward one — and it spends the board's last two spare pins |
-
-**The DevKitC cannot use GPIO21/22**, which is what every ESP32 I²C example
-assumes: those are the TMC2209's `EN` and `DIR` on that board. I²C remaps through
-the GPIO matrix, so the fix is one `Wire.begin(16, 4)` — but copy-pasted example
-code will silently drive the stepper's enable line instead of a display. GPIO16
-and GPIO4 also sit next to the pixel's GPIO17 on the V4 right header, keeping the
-whole indicator group as one block on a carrier.
-
-Two consequences worth knowing before a carrier is fabbed:
-
-- **Fitting a screen fills the DevKitC.** Everything left after GPIO16 and GPIO4
-  is input-only or strapping — fine for a wake button, which only needs reading,
-  with an external 10kΩ pull-up standing in for the one those pins lack.
-- **WROVER warning:** GPIO16/17 are the PSRAM interface on WROVER modules. That
-  is SDA *and* `PIN_PIXEL`, on a module that drops into the same footprint, with
-  no spares left to move them to. "Add PSRAM later" is exactly the kind of
-  decision that looks free.
+On the [XIAO C5](wiring/xiao-c5.md) that is **GPIO23 / GPIO24 (D4/D5)** — the
+XIAO-standard I²C position, so Seeed's own accessories land on it, and free in
+either role.
 
 **Do not run it from 5V.** These modules will take it, but then their SDA/SCL
 idle at 5V through the onboard pull-ups, and no ESP32 here is 5V tolerant. The
@@ -426,12 +366,6 @@ powered, wrong address (0x3D rather than 0x3C), and SDA/SCL swapped. It also
 names a **PCF8574 character-LCD backpack** (0x27/0x3F) if that is what is on the
 bus, because that is a different part this firmware cannot drive at all — not a
 setting to change.
-
-It **refuses** to scan `PIN_TMC_EN`/`PIN_TMC_DIR`. EN is active LOW, so a scan
-pulling it down is a scan that silently energises the driver — the same trap the
-DevKitC's pin map dodges, and a debug command is exactly where someone walks back
-into it. On a bench board with no driver fitted those are just pins, so the
-refusal can be lifted deliberately: `i2c 21 22 force`.
 
 Scans at 100kHz rather than the screen's 400kHz: a marginal pull-up or a long
 dupont run fails at 400k and answers fine at 100k, and "the module is alive" is
@@ -496,22 +430,11 @@ Same NC-vs-NO caution as the endstops in reverse: this one is **normally OPEN**,
 so the pin idles HIGH and a strapping pin is harmless here — nothing holds the
 line at reset unless someone is pressing the button while the board boots.
 
-**It is fitted with the screen, not separately, and now enforced.** A board
-header defines `PIN_WAKE_BTN` alongside the I²C pair, because a board with
-nowhere to put a panel has nothing for a button to wake — and `WakeButton.h`
-fails the build with an `#error` on the reverse case, a panel with no button. Per
-board:
-
-| Board | Pin | Pull-up |
-|---|---|---|
-| DevKitC | GPIO34 | **External 10kΩ to 3V3** — the pin is input-only and has none |
-| QT Py S3 | GPIO37 (MISO) | Internal |
-| XIAO C5 | GPIO0 (D1) | Internal |
-
-The DevKitC row is the one that bites: `INPUT_PULLUP` on an input-only pin is
-accepted and does nothing, and a floating input reads as phantom presses — a
-screen that lights by itself. Its header pairs the pin with
-`WAKE_BTN_INPUT_MODE INPUT` so the external resistor is the only option.
+**It is fitted with the screen, not separately, and enforced.** A board header
+defines `PIN_WAKE_BTN` alongside the I²C pair, because a board with nowhere to
+put a panel has nothing for a button to wake — and `WakeButton.h` fails the build
+with an `#error` on the reverse case. On the XIAO C5 it is GPIO0 (D1), internal
+pull-up.
 
 The driver is [`utils/WakeButton.h`](utils/WakeButton.h): a debounced poll, a
 short press that calls `statusscreen::toggle()`, and a one-second hold that calls
@@ -522,12 +445,8 @@ channels, and a refusal instead of a prompt. Anything that changed what the shop
 *does* in service would still need every confirmation the web UI has, and that is
 a different part with a different name.
 
-> **Verified on a XIAO C5, 2026-08-22** — D1/GPIO0, internal pull-up, momentary
-> to GND: a press lights the panel. Two things are still unproven. The
-> **DevKitC's GPIO34** arrangement (external pull-up, plain `INPUT`) is the one
-> with a way to go wrong and has not been pressed, nor has the QT Py's MISO. And
-> the **toggle is newer than the test**: press-to-light ran on a board,
-> press-again-to-blank was written afterwards.
+> **Verified on a XIAO C5** — a press lights the panel. The **toggle is newer
+> than the test**: press-again-to-blank has never been pressed.
 
 ### Fitting one is a build-time fact
 
@@ -537,21 +456,10 @@ and `PIN_PIXEL` already use. No display, no library, no flash spent. That guard
 sits on the *driver*: the layout model is pure C++ that touches no pin, so a
 board with no screen pays only what the linker drops.
 
-**Settled 2026-08-20 as a build-time declaration; reversed 2026-08-22.** The
-original answer was an env per board with `-DHAS_STATUS_SCREEN` — declaring a
-screen the way every other fitted-or-not part on these boards is declared, with
-the 0x3C probe there only to verify the declaration. That is now one env per
-board, all of them carrying the driver, with the same probe doing the deciding.
-
-What changed is the carrier: it always has the panel and its button, so the two
-pins were never going to be free for anything else, and the flag's remaining
-effect was to let a `flash-node` without the right suffix produce a board whose
-screen and button had compiled to nothing — silently. Measured cost of carrying
-it everywhere: 16.4 KB of flash on the DevKitC, 21.6 KB on the C5, 296 bytes of
-RAM. The 1 KB framebuffer is allocated only after a real ACK.
-
-The compile-out seam didn't go away, it moved down one level: a board header
-with no `PIN_OLED_*` (the Feather S2) still links no driver at all.
+There is no screen-vs-no-screen env — every build carries the driver (21.6 KB of
+flash, 296 bytes of RAM) and the 0x3C probe decides. Don't reintroduce one: the
+flag's only remaining effect was letting a flash without the right env suffix
+produce a board whose screen and button had compiled to nothing, silently.
 
 A board with the pins and *no panel on them* is now the ordinary case rather than
 a mistake: `StatusScreen::begin()` does a zero-length write at 0x3C first, and an
@@ -567,12 +475,10 @@ regardless. Trusting it printed `SSD1306 up` on a board with an empty bus
 
 **And pass `periphBegin = false`.** Left at its default the library calls
 `wire->begin()` with no arguments, which on an ESP32 re-initialises I²C on the
-core default pins — **GPIO21/22**. On the DevKitC those are the TMC2209's EN and
-DIR. Everything above about keeping I²C off those pins is undone by a default
-argument in a display library, silently: the panel talks to nothing while the
-stepper's enable line gets driven as a clock.
+core default pins — **GPIO21/22** — rather than the ones the board header names.
+The panel then talks to nothing while two unrelated pins get driven as a bus.
 
 The two Adafruit libraries (SSD1306 + GFX) are why that env is separate rather
 than a flag on the default one. A board with no panel should not download,
 compile or store a display driver — the screen env costs ~32 KB of flash over
-`esp32dev_servo`, which is exactly what an unfitted board declines to pay.
+a servo-only build, which is exactly what an unfitted board declines to pay.

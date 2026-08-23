@@ -277,10 +277,10 @@ static inline bool farSwitchTriggered() {
 
 // -- Motor driver --
 // Which one is a property of the BOARD, not of the env: HAS_LINEAR comes from
-// whether the pin map wires a stepper. See motor/NullMotorDriver.h.
+// whether the pin map wires the serial-servo bus. See motor/NullMotorDriver.h.
 #if HAS_LINEAR
-  #include "motor/StepperTMC2209Driver.h"
-  StepperTMC2209Driver motor;
+  // No linear driver in the tree yet — failing here beats failing at the linker.
+  #error "HAS_LINEAR board with no motor driver — see firmware/attic/linear/README.md"
 #else
   #include "motor/NullMotorDriver.h"
   NullMotorDriver motor;
@@ -298,13 +298,10 @@ static const int SERVO_PINS[SERVO_COUNT] = { SERVO_PWM_PIN_1, SERVO_PWM_PIN_2, S
 // -- Feedback system --
 // Same seam as the motor above. The #error this used to carry is gone with it:
 // "no feedback type" is now a legitimate board rather than a misconfiguration.
-#ifdef FEEDBACK_LIMIT_DISTANCE
-  #include "feedback/LimitSwitchDistance.h"
-  LimitSwitchDistance feedback;
-#else
-  #include "feedback/NullFeedback.h"
-  NullFeedback feedback;
-#endif
+// The only arm today — LimitSwitchDistance is in attic/linear/, and comes back
+// with the ST3215 slider.
+#include "feedback/NullFeedback.h"
+NullFeedback feedback;
 
 // -- Control input --
 #ifdef CONTROL_SMART_OUTLET
@@ -677,10 +674,8 @@ void setup() {
     // every target — including boards with no stepper — so the first line of
     // every boot log was wrong about what you were looking at.
     DEBUG_PRINT(F("Target: ")); DEBUG_PRINT(F(BOARD_NAME));
-#if defined(NO_LINEAR_FITTED)
-    DEBUG_PRINTLN(F(" + servos (no rack fitted)"));
-#elif HAS_LINEAR
-    DEBUG_PRINTLN(F(" + TMC2209"));
+#if HAS_LINEAR
+    DEBUG_PRINTLN(F(" + slider"));
 #else
     DEBUG_PRINTLN(F(" (servo only)"));
 #endif
@@ -767,19 +762,11 @@ void setup() {
     stages.motor    = !okMotor;
     stages.endstops = !okFeedback;
     stages.outlets  = !okControl;
-#if !HAS_LINEAR || defined(NO_LINEAR_FITTED)
-    // No rack, for either of the two reasons there are — and they are different
-    // reasons with the same answer:
-    //   !HAS_LINEAR          the board's pin map wires no stepper at all, so
-    //                        `motor` is NullMotorDriver and begin() returned true
-    //                        because nothing failed (a XIAO C5 primary).
-    //   NO_LINEAR_FITTED     the pin map HAS a rack, but none is attached to this
-    //                        particular board, so the TMC2209 check really did
-    //                        fail and its failure is not news.
-    // The check above still ran and still printed its diagnosis; clearing the
-    // stage before anything reports on it is what keeps a servo-only board from
-    // announcing a TMC2209 failure that is the build working as designed. See
-    // config.h's NO_LINEAR_FITTED block.
+#if !HAS_LINEAR
+    // The board's pin map wires no slider, so `motor` is NullMotorDriver and
+    // begin() returned true because nothing failed. Clearing the stage before
+    // anything reports on it is what keeps a servo-only board from announcing a
+    // motor failure that is the build working as designed.
     const bool kRackFitted = false;
     stages.motor = false;
 #else
@@ -857,7 +844,7 @@ void setup() {
     DEBUG_PRINT(F("  gates=ok  plugs="));
     Serial.println(g_faultOutlets ? "offline" : "ok");
 
-#if defined(NO_LINEAR_FITTED)
+#if !HAS_LINEAR
     // policy.linearMotion is already true here — no rack means every motion
     // entry point must keep refusing, and reusing the existing latch is what
     // keeps that small: issueMove() and SketchLinearDrive::moveToMm() check it
@@ -869,9 +856,9 @@ void setup() {
     // the message reads like a bug, so name the real reason. Only when empty:
     // a true failure above owns this field and must not be overwritten.
     if (g_faultStages[0] == '\0')
-        snprintf(g_faultStages, sizeof(g_faultStages), "no rack fitted (by build)");
-    DEBUG_PRINTLN(F("[INIT] No linear rack fitted (-DNO_LINEAR_FITTED) — "
-                    "motion disabled by design; servos and routing are live."));
+        snprintf(g_faultStages, sizeof(g_faultStages), "no slider on this board");
+    DEBUG_PRINTLN(F("[INIT] No slider on this board — motion disabled by design; "
+                    "servos and routing are live."));
 #endif
 
 #ifdef ENABLE_HTTP_API
@@ -1114,7 +1101,7 @@ static void updateStatusLed() {
             break;
     }
 
-#if !HAS_LINEAR || defined(NO_LINEAR_FITTED)
+#if !HAS_LINEAR
     // g_hardwareFault is set unconditionally on these builds to keep motion
     // refused (see setup(): FaultPolicy returns linearMotion = true whenever
     // there is no rack, which is the correct answer to "may I move?" and the
@@ -1122,11 +1109,9 @@ static void updateStatusLed() {
     // indicator — STATE_ERROR does. A real failure of the endstops or the
     // outlets still reaches this branch, because that path sets STATE_ERROR too.
     //
-    // The !HAS_LINEAR half of that condition was missing until 2026-08-22 and a
-    // XIAO C5 primary sat in FAULT from boot, pixel red and the screen's header
-    // band reading FAULT, over a stepper it was never built with — which is the
-    // exact bug the NO_LINEAR_FITTED half was written to prevent, on the exact
-    // board that has no rack for a different reason. Both reasons, one branch.
+    // The latch answers "may I move?", not "is anything broken?" — and the
+    // indicator wants the second question. Getting that wrong sat a rackless
+    // board in FAULT from boot over a stepper it was never built with.
     if (currentState == STATE_ERROR) {
 #else
     if (g_hardwareFault || currentState == STATE_ERROR) {
@@ -1224,7 +1209,7 @@ void loop() {
     // Directional: stops travel *toward* a triggered switch but allows backing
     // AWAY to release it. Homing drives into the home switch on purpose;
     // STATE_MOVING has its own endstop handling, so both are skipped here.
-#ifdef FEEDBACK_LIMIT_DISTANCE
+#if HAS_LINEAR
     // Applies to jogs AND commanded moves (STATE_MOVING). Homing drives into the
     // home switch on purpose; the calibration sweep manages the far switch itself.
     if (motor.isMoving() && currentState != STATE_HOMING && currentState != STATE_CALIBRATING) {
@@ -1250,7 +1235,7 @@ void loop() {
     // -- Endstop transition logging — AFTER update() so the logged position is
     //    the post-step position at the actual trigger point. Change-gated (jogs
     //    included, since jogs never enter STATE_MOVING).
-#ifdef FEEDBACK_LIMIT_DISTANCE
+#if HAS_LINEAR
     {
         // Debounced transition logging. When parked exactly on the home datum the
         // switch sits right at its trigger edge and chatters open/triggered; a raw

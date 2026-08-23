@@ -75,8 +75,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      # The host tests are driven by the tools/ npm scripts (they locate the
-      # ArduinoJson headers PlatformIO fetched), so this job needs Node too.
+      # The host tests are driven by the tools/ npm scripts, which locate the
+      # ArduinoJson headers in .pio.nosync/libdeps — so they depend on the
+      # compile step below having fetched them. If that step is ever dropped,
+      # replace it with `pio pkg install` rather than deleting it outright.
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
@@ -87,8 +89,8 @@ jobs:
         working-directory: tools
       # Two caches, because they turn over for different reasons.
       #
-      # The PlatformIO core (platform packages, Arduino framework, xtensa
-      # toolchain) is the expensive one — gigabytes. Its key hashes
+      # The PlatformIO core (the pioarduino platform, the Arduino framework, the
+      # riscv toolchain) is the expensive one — gigabytes. Its key hashes
       # platformio.ini so that changing `platform` or `lib_deps` re-resolves,
       # but ANY edit to that file changes the hash, and platformio.ini is edited
       # often (build_flags, partitions, comments). Without restore-keys that
@@ -99,6 +101,14 @@ jobs:
       # resolves the version spec against what's installed rather than assuming
       # it's current. The exact key still changes, so the topped-up core is saved
       # as a fresh entry (cache entries are immutable; you add, never overwrite).
+      #
+      # A runner uses the DEFAULT core dir, unlike a bench machine: the fork
+      # needs its own directory locally only because ~/.platformio still holds
+      # the retired official installation. A runner starts empty, so there is
+      # nothing to collide with. Local size is 7.6 GB across BOTH cores; a
+      # C5-only install is smaller, and how much smaller is UNMEASURED. If this
+      # starts evicting the repo's other caches, drop the compile step below and
+      # keep `pio pkg install` — the host tests only need the headers.
       - name: Cache the PlatformIO core
         uses: actions/cache@v4
         with:
@@ -118,34 +128,17 @@ jobs:
             pip-${{ runner.os }}-
       - name: Install PlatformIO
         run: pip install --upgrade platformio
-      # Every env on the espressif32 platform, which is all of them but xiao_c5.
+      # Both envs, which is every env: one board, two roles. They can share a
+      # `pio run` now — the core-dir-per-process rule that kept xiao_c5 out of
+      # every other command was about two PLATFORMS, and there is one left.
       #
-      # Neither xiao_c5 env is built here — the node one or the primary one. It rides the pioarduino platform
-      # fork, which collides with espressif32 over package names, so it needs its
-      # own PLATFORMIO_CORE_DIR — 7.6 GB measured. That can't share this `pio run`
-      # (a core dir is one env var per process), and caching a second core that
-      # size would evict everything else from the repo's 10 GB cache budget. So
-      # the C5 is a local-only compile for now:
-      #
-      #   PLATFORMIO_CORE_DIR=~/.platformio-pioarduino pio run -e xiao_c5
-      #   PLATFORMIO_CORE_DIR=~/.platformio-pioarduino pio run -e xiao_c5_primary
-      #
-      # xiao_c5_primary is the one that would most benefit from CI: it is the only
-      # env that builds the primary sketch with HAS_LINEAR == 0, so it is the only
-      # thing that catches a change re-introducing the stepper path into a board
-      # that hasn't got one. esp32dev_* all have a rack in their pin map and will
-      # compile such a change happily.
-      #
-      # Revisit if the node firmware starts changing often enough that a
-      # local-only check gets missed.
-      # There is no longer a separate esp32dev_screen to build: as of 2026-08-22
-      # every env carries the OLED driver and probes for a panel at boot, so the
-      # display path is covered by esp32dev_servo and dustgate_node below rather
-      # than by an env of its own.
-      - name: Compile firmware (all espressif32 targets, incl. the servo-only node)
-        run: pio run -e esp32dev_servo -e esp32dev_wroom32 -e adafruit_feather_esp32s2 -e dustgate_node
-      # Host tests for the pure C++ control layer. They need ArduinoJson, which
-      # the `pio run` above has already fetched into .pio.nosync/libdeps.
+      # This job was compile-only for the espressif32 fleet until 2026-08-23 and
+      # skipped the C5 entirely, on the grounds that a second 7.6 GB core would
+      # evict the repo's cache budget. Those envs are gone, so this is now the
+      # only compile coverage there is — including the only check that the
+      # primary sketch still builds with HAS_LINEAR == 0.
+      - name: Compile firmware (primary + node)
+        run: pio run -e xiao_c5_primary -e xiao_c5
       - name: Host tests (router, controller, nodebus/nodelink, shop, faults, screen)
         run: npm run firmware:test
         working-directory: tools

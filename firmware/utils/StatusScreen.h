@@ -150,7 +150,7 @@ inline bool begin() {
     // at its default the library calls wire->begin() with NO ARGUMENTS, which on
     // an ESP32 re-initialises I2C on the CORE DEFAULT pins — GPIO21/22. On the
     // DevKitC those are the TMC2209's EN and DIR. The board's whole pin choice
-    // exists to keep I2C off them (see boards/devkitc_wroom32.h), and a default
+    // exists to keep I2C off them (see attic/linear/devkitc_wroom32.h), and a default
     // argument in a display library walks straight back into it: the display
     // talks to nothing while the stepper's enable line gets driven as a clock.
     _present() = _oled().begin(SSD1306_SWITCHCAPVCC, OLED_I2C_ADDR,

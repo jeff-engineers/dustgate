@@ -1,61 +1,52 @@
 #!/usr/bin/env bash
 # dev.sh — one entry point for every way to run DustGate.
 #
+# ONE BOARD, TWO ROLES. Every target is a XIAO ESP32C5; a board is a PRIMARY or a
+# NODE depending only on which program you flash. So every command below is one
+# or the other, and there are no board words to type.
+#
 # Interactive:
 #   bash dev.sh
 #
 # Direct:
-#   bash dev.sh demo               # browser-only, fully simulated (DemoApiService), no backend
-#   bash dev.sh mock                # ng serve + tools/mock-api.js backend (real HTTP/WS contract)
-#   bash dev.sh flash               # full real-hardware deploy (UI build + firmware + filesystem + provision)
+#   bash dev.sh demo                # browser-only, fully simulated, no backend
+#   bash dev.sh mock                # ng serve + tools/mock-api.js (real HTTP/WS contract)
+#
+#   bash dev.sh flash               # PRIMARY: UI + firmware + filesystem + provision
 #   bash dev.sh flash --fw          # firmware only
-#   bash dev.sh flash --ui          # UI + filesystem only (skip firmware)
+#   bash dev.sh flash --ui          # UI + filesystem only
 #   bash dev.sh flash --no-provision
-#   bash dev.sh flash --host shop --ssid Shop-WiFi        # override what tools/.env says
-#   bash dev.sh flash --ask                               # prompt for all three, prefilled
-#     A bare word is the hostname, as with flash-node: `dev.sh flash shop`.
-#     --env NAME flashes a primary built from a different env, and takes the same
-#     kind of shorthand flash-node does: dk|servo, rack, c5. --c5 is shorthand
-#     for --env c5 (xiao_c5_primary) — a XIAO C5 running the PRIMARY firmware
-#     rather than the node one. Same board and same carrier as `flash-node c5`;
-#     the only difference is which program it runs. It has no rack and needs
-#     none: config.h derives HAS_LINEAR from the pin map, so the stepper and the
-#     endstops compile out. The status screen is no longer one of those choices:
-#     every env carries it and probes for a panel at boot.
-#     A firmware flash (`flash` / `flash --fw`) always CONFIRMS the hostname,
-#     prefilled from tools/.env — Enter keeps it. Pass --host to answer up front,
-#     or redirect stdin from /dev/null to take the default unattended.
-#     Overrides apply to THAT flash only — add --save to write them to tools/.env.
-#     --pass SECRET works but lands in your shell history; prefer --ssid alone
-#     (it asks for the password hidden) or --ask.
+#   bash dev.sh flash shop          # a bare word is the hostname
+#   bash dev.sh flash --host shop --ssid Shop-WiFi     # override what tools/.env says
+#   bash dev.sh flash --ask         # prompt for all three, prefilled
+#     A firmware flash always CONFIRMS the hostname, prefilled from tools/.env —
+#     Enter keeps it. Overrides apply to THAT flash only; --save writes them to
+#     tools/.env. --pass SECRET works but lands in your shell history; prefer
+#     --ssid alone (it asks for the password hidden) or --ask.
 #     Flashing the filesystem ERASES the saved shop (topology.json shares that
-#     partition with the Angular bundle). deploy.sh used to copy it off the
-#     device first and put it back at the end; that step is COMMENTED OUT as of
-#     2026-08-22 and to be revisited — see "0. Save the shop layout" in
-#     deploy.sh for why and what to decide. Until it returns, a filesystem flash
-#     loses the layout silently. Save one by hand first if it matters:
+#     partition with the Angular bundle). The copy-off-and-restore step is
+#     COMMENTED OUT as of 2026-08-22 — see "0. Save the shop layout" in
+#     deploy.sh. Until it returns, save one by hand first if it matters:
 #       curl -H "X-Api-Key: <key>" http://<host>/api/topology > my-shop.json
 #       bash tools/restore-topology.sh my-shop.json
-#   bash dev.sh flash-node [board] [host]  # flash a SECONDARY servo-only node (+ WiFi creds)
-#                                    #   board: s3 (default) | c5
-#                                    #   e.g. bash dev.sh flash-node c5 dustgate-node-c5
-#     Every node build carries the SSD1306 driver and the wake button, and probes
-#     0x3C at boot — there is no screen-vs-no-screen env any more (2026-08-22).
-#     A board with no panel prints one line and carries on.
-#     Panel verified on a C5 node 2026-08-22; its wake button is still unwired.
+#
+#   bash dev.sh flash-node [host]   # NODE: servo-only firmware + WiFi creds
+#     A node is a dumb actuator bank — four servo valves, no UI, no plug polling.
+#     Its hostname is load-bearing (mDNS, the Boards screen, link.host in the
+#     topology) and must be unique per node.
+#
 #   bash dev.sh monitor             # serial monitor (primary)
-#   bash dev.sh monitor node        # serial monitor for a secondary node
-#   bash dev.sh monitor c5          # ...for a XIAO C5 node (c5p = a C5 primary)
+#   bash dev.sh monitor node        # ...a node instead
 #   bash dev.sh ports               # list attached boards + which role each is pinned to
-#   bash dev.sh ports --pin         # pin each board's USB SERIAL to a role (do this once)
+#   bash dev.sh ports --pin primary # pin the attached board to a role (do this once)
+#   bash dev.sh ports --pin node
 #     DUSTGATE_PORT=/dev/cu.xxx     # force a port for this one command
 #     DUSTGATE_PORT_PRIMARY=…       # force a port for a role, e.g. in ~/.zshrc
 #     DUSTGATE_PORT_NODE=…
-#   bash dev.sh erase                # full chip erase (fixes corrupted-partition weirdness)
-#   bash dev.sh provision            # (re)send WiFi/key/hostname without reflashing
-#   bash dev.sh provision --host shop --ssid Shop-WiFi   # ...without the prompts
-#   bash dev.sh live [host]          # ng serve with hot reload, proxied to REAL hardware
-#                                    #   (default host: dustgate.local)
+#   bash dev.sh erase               # full chip erase (fixes corrupted-partition weirdness)
+#   bash dev.sh provision           # (re)send WiFi/key/hostname without reflashing
+#   bash dev.sh live [host]         # ng serve with hot reload, proxied to REAL hardware
+#                                   #   (default host: dustgate.local)
 #
 # NOTE for future work: this is deliberately a thin bash wrapper around
 # PlatformIO/esptool/serial commands, not a real tool. If this grows much more
@@ -71,29 +62,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=tools/boardinfo.sh
 source "$SCRIPT_DIR/tools/boardinfo.sh"
 
-# Node board shorthand → PlatformIO env. The shorthand exists because nobody at a
-# bench wants to type "dustgate_node" in full, and the env names can't be
-# shortened without breaking `pio run -e`.
-node_env_for() {
-  case "${1:-}" in
-    ""|s3|qtpy|qtpy_s3|dustgate_node) echo "dustgate_node" ;;
-    c5|xiao|xiao_c5)                  echo "xiao_c5" ;;
-    *)                                echo "" ;;   # not a board word
-  esac
-}
-
-# PRIMARY env shorthand, the counterpart of node_env_for above. Same reason it
-# exists — nobody at a bench types "xiao_c5_primary" — and the same rule: an
-# unrecognised word is echoed back unchanged, so `--env <any real env name>`
-# still works and a typo fails inside pio with the name you actually typed.
-primary_env_for() {
-  case "${1:-}" in
-    ""|dk|devkitc|servo)   echo "esp32dev_servo" ;;
-    rack|linear)           echo "esp32dev_wroom32" ;;
-    c5|xiao|c5p)           echo "xiao_c5_primary" ;;
-    *)                     echo "${1:-}" ;;
-  esac
-}
+# The two envs, which are the two ROLES. Same board, same carrier, same pin map;
+# the difference is build_src_filter and -DDUSTGATE_SECONDARY.
+PRIMARY_ENV="xiao_c5_primary"
+NODE_ENV="xiao_c5"
 
 UI_DIR="$SCRIPT_DIR/dustgate-ui"
 TOOLS_DIR="$SCRIPT_DIR/tools"
@@ -108,39 +80,35 @@ fi
 
 # ── Board identification ─────────────────────────────────────────────────────
 #
-# /dev/cu.* PATHS ARE NOT STABLE. The same DevKitC has appeared as both
-# cu.usbserial-110 and cu.usbserial-1110 in one afternoon — macOS derives the
-# suffix from the USB topology, so moving hubs or ports renames the board. Any
-# scheme built on "first matching glob" is therefore a coin flip the moment two
-# boards are attached, and you learn which one you got by flashing it.
+# /dev/cu.* PATHS ARE NOT STABLE. macOS derives the suffix from the USB topology,
+# so moving hubs or ports renames the board. Any scheme built on "first matching
+# glob" is a coin flip the moment two boards are attached, and you learn which
+# one you got by flashing it.
 #
-# USB SERIAL NUMBERS are stable, per-board, and reported by every chip we use.
-# So: identify by VID (which family) and remember by serial (which board).
+# USB SERIAL NUMBERS are stable and per-board. So: pin a role to a serial once,
+# and every later command finds that exact board no matter what it is called
+# this week.
 #
-#   bridge → DevKitC primary, via a USB-serial chip:
-#              10c4 = CP2102 (Silicon Labs), 1a86 = CH340, 0403 = FTDI
-#   native → QT Py / Feather node, USB straight off the MCU:
-#              303a = Espressif, 239a = Adafruit
+# PINNING IS THE ONLY MECHANISM, not a nicety: both boards are C5s with the same
+# VID and the same description, distinguishable only by serial. With two plugged
+# in and nothing pinned, the first enumerated is a guess and is announced as one.
 #
-# Once a role is pinned (dev.sh ports --pin), the serial goes in .dustgate-ports
-# and every later command finds that exact board no matter what it's called this
-# week. Overrides, highest priority first:
+# Overrides, highest priority first:
 #
 #   DUSTGATE_PORT=/dev/cu.xxx     one-shot, applies to whatever you're running
 #   DUSTGATE_PORT_PRIMARY / _NODE per-role, e.g. in your shell profile
 #   .dustgate-ports               pinned serials (gitignored)
-#   VID family match              the fallback, and fine with one board per family
+#   first enumerated              the fallback, and fine with one board attached
 
 PORTS_FILE="$(dirname "${BASH_SOURCE[0]}")/.dustgate-ports"
 
-# Emits one "port|vid|serial|description" line per attached board, bridges first.
-# PlatformIO already knows how to enumerate with hwid, and shells out to nothing
-# we'd otherwise have to write per-platform.
+# Emits one "port|vid|serial|description" line per attached board. PlatformIO
+# already knows how to enumerate with hwid, and shells out to nothing we'd
+# otherwise have to write per-platform.
 list_boards() {
   pio device list --json-output 2>/dev/null | python3 -c '
 import json, re, sys
-BRIDGE = {"10c4": "bridge", "1a86": "bridge", "0403": "bridge"}
-NATIVE = {"303a": "native", "239a": "native"}
+OURS = {"303a"}                       # Espressif native USB — every board we have
 rows = []
 try:
     devs = json.load(sys.stdin)
@@ -152,15 +120,13 @@ for d in devs:
     if not m:
         continue                      # Bluetooth-Incoming-Port and friends
     vid = m.group(1).lower()
-    fam = BRIDGE.get(vid) or NATIVE.get(vid)
-    if not fam:
+    if vid not in OURS:
         continue                      # some other USB serial device, not ours
     ser = re.search(r"SER=(\S+)", hwid)
-    rows.append((fam, d.get("port",""), vid, ser.group(1) if ser else "",
+    rows.append((d.get("port",""), vid, ser.group(1) if ser else "",
                  (d.get("description") or "").strip()))
-rows.sort(key=lambda r: 0 if r[0] == "bridge" else 1)
-for fam, port, vid, ser, desc in rows:
-    print("%s|%s|%s|%s|%s" % (fam, port, vid, ser, desc))
+for port, vid, ser, desc in rows:
+    print("%s|%s|%s|%s" % (port, vid, ser, desc))
 ' || true
 }
 
@@ -171,13 +137,9 @@ pinned_serial() {
   grep -E "^${role}=" "$PORTS_FILE" 2>/dev/null | tail -1 | cut -d= -f2- || true
 }
 
-# detect_port [bridge|native]
-#
-# The family hint is a PREFERENCE, not a filter: with one board attached the
-# other family is still used, because that is nearly always what you meant.
+# detect_port [primary|node]
 detect_port() {
-  local prefer="${1:-bridge}"
-  local role; [[ "$prefer" == "native" ]] && role="node" || role="primary"
+  local role="${1:-primary}"
 
   if [[ -n "${DUSTGATE_PORT:-}" ]]; then echo "$DUSTGATE_PORT"; return; fi
   local envvar="DUSTGATE_PORT_$(echo "$role" | tr '[:lower:]' '[:upper:]')"
@@ -186,47 +148,53 @@ detect_port() {
   local boards; boards="$(list_boards)"
   [[ -z "$boards" ]] && return 0
 
-  # A pinned serial wins over family matching — it names one physical board,
-  # which is the whole point of pinning it.
+  # A pinned serial names one physical board, which is the whole point.
   local want; want="$(pinned_serial "$role")"
   if [[ -n "$want" ]]; then
     local hit
-    hit="$(awk -F'|' -v s="$want" '$4 == s { print $2; exit }' <<<"$boards")"
+    hit="$(awk -F'|' -v s="$want" '$3 == s { print $1; exit }' <<<"$boards")"
     [[ -n "$hit" ]] && { echo "$hit"; return; }
   fi
 
-  local same other
-  same="$(awk -F'|' -v f="$prefer" '$1 == f { print $2; exit }' <<<"$boards")"
-  other="$(awk -F'|' -v f="$prefer" '$1 != f { print $2; exit }' <<<"$boards")"
-  echo "${same:-$other}"
+  # Nothing pinned: take the board the OTHER role isn't pinned to, then fall back
+  # to the first enumerated. Two unpinned boards is a guess — report_port_choice
+  # says so.
+  local other_role other_want candidate
+  [[ "$role" == "primary" ]] && other_role="node" || other_role="primary"
+  other_want="$(pinned_serial "$other_role")"
+  if [[ -n "$other_want" ]]; then
+    candidate="$(awk -F'|' -v s="$other_want" '$3 != s { print $1; exit }' <<<"$boards")"
+    [[ -n "$candidate" ]] && { echo "$candidate"; return; }
+  fi
+  awk -F'|' '{ print $1; exit }' <<<"$boards"
 }
 
 # Warn when the choice was actually ambiguous, so a wrong guess is visible before
 # it costs a flash rather than after.
 report_port_choice() {
-  local chosen="$1" prefer="${2:-bridge}"
+  local chosen="$1" role="${2:-primary}"
   [[ -n "${DUSTGATE_PORT:-}" ]] && return
   local boards; boards="$(list_boards)"
   local n; n="$(grep -c . <<<"$boards" || true)"
   [[ "${n:-0}" -le 1 ]] && return
 
-  local role; [[ "$prefer" == "native" ]] && role="node" || role="primary"
-  echo "  ℹ  More than one board is attached:"
+  echo "  ℹ  More than one board is attached, and they are identical:"
   # `local` is load-bearing. Bash scoping is DYNAMIC: an undeclared loop variable
   # named `port` here reassigns the caller's `port` — which is exactly what
   # require_port holds the chosen device in. Without this, require_port returned
-  # the empty string left over after the last read, and every command that used it
-  # ran with no --port at all.
-  local fam port vid ser desc mark
-  while IFS='|' read -r fam port vid ser desc; do
+  # the empty string left over after the last read, and every command that used
+  # it ran with no --port at all.
+  local port vid ser desc mark
+  while IFS='|' read -r port vid ser desc; do
     [[ -z "$port" ]] && continue
     mark="  "; [[ "$port" == "$chosen" ]] && mark="→ "
-    printf "     %s%-24s %-8s %s\n" "$mark" "$port" "$fam" "${desc:-$vid}"
+    printf "     %s%-24s %-14s %s\n" "$mark" "$port" "${ser:0:12}" "${desc:-$vid}"
   done <<<"$boards"
   if [[ -n "$(pinned_serial "$role")" ]]; then
     echo "     Chose the board pinned as '$role' in .dustgate-ports."
   else
-    echo "     Chose by USB family. Pin it once and stop guessing:  bash dev.sh ports --pin"
+    echo "     Nothing pinned as '$role' — this is a GUESS. Pin it once:"
+    echo "       bash dev.sh ports --pin $role"
   fi
 }
 
@@ -234,11 +202,15 @@ report_port_choice() {
 # path nobody can tell apart at a glance.
 describe_port() {
   local port="$1"
-  awk -F'|' -v p="$port" '$2 == p { printf "%s, %s", $5, $1; exit }' <<<"$(list_boards)"
+  awk -F'|' -v p="$port" '$1 == p { printf "%s, serial %s", $4, substr($3,1,12); exit }' <<<"$(list_boards)"
 }
 
-# `dev.sh ports` — show what's attached; `--pin` records each board's SERIAL
-# against a role so later commands are deterministic.
+# `dev.sh ports` — show what's attached; `--pin ROLE` records a board's SERIAL
+# against that role so later commands are deterministic.
+#
+# One role at a time, because the boards are indistinguishable: the honest
+# workflow is to plug in the one you mean and say which it is. With more than one
+# attached it asks rather than guessing.
 run_ports() {
   local boards; boards="$(list_boards)"
   if [[ -z "$boards" ]]; then
@@ -246,32 +218,53 @@ run_ports() {
     return 1
   fi
   echo "Attached boards:"
-  local fam port vid ser desc
-  while IFS='|' read -r fam port vid ser desc; do
+  local port vid ser desc
+  while IFS='|' read -r port vid ser desc; do
     [[ -z "$port" ]] && continue
-    printf "  %-24s %-8s %-14s %s\n" "$port" "$fam" "${ser:0:12}" "${desc:-$vid}"
+    printf "  %-24s %-14s %s\n" "$port" "${ser:0:12}" "${desc:-$vid}"
   done <<<"$boards"
 
   if [[ "${1:-}" != "--pin" ]]; then
     echo
     echo "Pinned roles ($PORTS_FILE):"
-    if [[ -f "$PORTS_FILE" ]]; then sed 's/^/  /' "$PORTS_FILE"; else echo "  (none — run: bash dev.sh ports --pin)"; fi
+    if [[ -f "$PORTS_FILE" ]]; then sed 's/^/  /' "$PORTS_FILE"; else echo "  (none — run: bash dev.sh ports --pin primary)"; fi
     return 0
   fi
 
-  # Pin the first board of each family. Two nodes on one bench is the case this
-  # can't resolve by itself; DUSTGATE_PORT_NODE covers it.
-  : > "$PORTS_FILE"
-  local pser nser
-  pser="$(awk -F'|' '$1 == "bridge" { print $4; exit }' <<<"$boards")"
-  nser="$(awk -F'|' '$1 == "native" { print $4; exit }' <<<"$boards")"
-  [[ -n "$pser" ]] && echo "primary=$pser" >> "$PORTS_FILE"
-  [[ -n "$nser" ]] && echo "node=$nser"    >> "$PORTS_FILE"
+  local role="${2:-}"
+  case "$role" in
+    primary|node) ;;
+    *) echo; echo "Which role? Usage: bash dev.sh ports --pin [primary|node]"; return 1 ;;
+  esac
+
+  local n; n="$(grep -c . <<<"$boards")"
+  local chosen_ser chosen_port
+  if [[ "$n" -eq 1 ]]; then
+    chosen_port="$(awk -F'|' '{ print $1; exit }' <<<"$boards")"
+    chosen_ser="$(awk -F'|'  '{ print $3; exit }' <<<"$boards")"
+  else
+    echo
+    echo "More than one board attached — which one is the $role?"
+    local i=1
+    while IFS='|' read -r port vid ser desc; do
+      [[ -z "$port" ]] && continue
+      printf "  %d) %-24s %s\n" "$i" "$port" "${ser:0:12}"
+      i=$((i+1))
+    done <<<"$boards"
+    local pick; read -rp "  Number: " pick
+    chosen_port="$(awk -F'|' -v k="$pick" 'NF { c++ } c == k { print $1; exit }' <<<"$boards")"
+    chosen_ser="$(awk -F'|'  -v k="$pick" 'NF { c++ } c == k { print $3; exit }' <<<"$boards")"
+    [[ -z "$chosen_ser" ]] && { echo "  Not a listed board."; return 1; }
+  fi
+
+  local tmp; tmp="$(mktemp)"
+  [[ -f "$PORTS_FILE" ]] && { grep -vE "^${role}=" "$PORTS_FILE" || true; } > "$tmp"
+  echo "${role}=${chosen_ser}" >> "$tmp"
+  mv "$tmp" "$PORTS_FILE"
   echo
-  echo "Pinned by USB serial (survives replugging and renamed /dev paths):"
+  echo "Pinned $role to $chosen_port (serial ${chosen_ser:0:12}) — survives replugging"
+  echo "and renamed /dev paths."
   sed 's/^/  /' "$PORTS_FILE"
-  [[ -z "$nser" ]] && echo "  (no node attached — plug it in and re-run to pin it too)"
-  [[ -z "$pser" ]] && echo "  (no primary attached — plug it in and re-run to pin it too)"
   return 0
 }
 
@@ -279,26 +272,26 @@ run_ports() {
 # BOOT+RESET if it doesn't appear right away — native USB-CDC boards don't
 # always respond to the automatic 1200bps-touch reset.
 require_port() {
-  local prefer="${1:-bridge}"
+  local role="${1:-primary}"
   local port
-  port="$(detect_port "$prefer")"
+  port="$(detect_port "$role")"
   if [[ -n "$port" ]]; then
-    report_port_choice "$port" "$prefer" >&2
+    report_port_choice "$port" "$role" >&2
     echo "$port"
     return 0
   fi
 
-  echo "  No ESP32 serial port detected (looked for usbserial / SLAB_USBtoUART /" >&2
-  echo "  wchusbserial / usbmodem under /dev/cu.*)." >&2
+  echo "  No ESP32 serial port detected (looked for a usbmodem under /dev/cu.*)." >&2
   echo "  Checks: use a DATA USB cable (not charge-only); confirm the board shows up" >&2
-  echo "  with 'ls /dev/cu.*'; a CP2102/CH340 DevKitC needs the matching macOS driver." >&2
+  echo "  with 'ls /dev/cu.*'. The C5's port comes straight off the MCU, so it also" >&2
+  echo "  disappears whenever the board is in the bootloader or unpowered." >&2
   echo "  If it's a flashing-handshake issue: hold BOOT, tap RESET, release BOOT after" >&2
   echo "  ~1s — then this will retry." >&2
   for _ in $(seq 1 60); do
     sleep 1
-    port="$(detect_port "$prefer")"
+    port="$(detect_port "$role")"
     if [[ -n "$port" ]]; then
-      report_port_choice "$port" "$prefer" >&2
+      report_port_choice "$port" "$role" >&2
       echo "$port"
       return 0
     fi
@@ -362,10 +355,9 @@ save_env_defaults() {
 # through without this function needing to know about it.
 PROVISION_REST=()
 OV_HOST=""; OV_SSID=""; OV_PASS=""; OV_ASK=0; OV_SAVE=0
-# Which env a primary flash targets. Empty = platformio.ini's default_envs. Only
-# needed so the serial monitor afterwards uses that env's settings — deploy.sh
-# gets told separately, through PROVISION_REST.
-FLASH_ENV=""
+# Which env a primary flash targets. One board, one answer — kept as a variable
+# only because the serial monitor afterwards needs the env name.
+FLASH_ENV="$PRIMARY_ENV"
 # Set by prompt_credentials so a caller can tell whether the full interactive
 # path already ran — run_flash asks for the hostname on its own otherwise, and
 # asking twice in one flash is worse than not asking at all.
@@ -373,7 +365,7 @@ PROVISION_PROMPTED=0
 parse_provision_overrides() {
   PROVISION_REST=()
   OV_HOST=""; OV_SSID=""; OV_PASS=""; OV_ASK=0; OV_SAVE=0
-  FLASH_ENV=""
+  FLASH_ENV="$PRIMARY_ENV"
   PROVISION_PROMPTED=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -385,16 +377,10 @@ parse_provision_overrides() {
       --pass=*) OV_PASS="${1#*=}"; shift ;;
       --ask)    OV_ASK=1; shift ;;
       --save)   OV_SAVE=1; shift ;;
-      # Env selection for a PRIMARY. Handled here rather than left to the --*
-      # passthrough because the space form would otherwise drop NAME into the
-      # bare-word branch below and silently flash the board with a hostname of
-      # "esp32dev_wroom32".
-      --env)    FLASH_ENV="$(primary_env_for "${2:-}")"; PROVISION_REST+=("--env=$FLASH_ENV"); shift 2 ;;
-      --env=*)  FLASH_ENV="$(primary_env_for "${1#*=}")"; PROVISION_REST+=("--env=$FLASH_ENV"); shift ;;
-      # The C5 as a PRIMARY rather than a node — same board, same carrier, same
-      # pins, different program. Spelled as its own flag because "flash the C5"
-      # is now ambiguous in a way it wasn't before 2026-08-22.
-      --c5)     FLASH_ENV="xiao_c5_primary"; PROVISION_REST+=("--env=xiao_c5_primary"); shift ;;
+      # One primary env, so these say nothing. Accepted and ignored rather than
+      # failing a flash on muscle memory.
+      --env)    shift 2 ;;
+      --env=*|--c5) shift ;;
       --*)      PROVISION_REST+=("$1"); shift ;;
       *)        OV_HOST="$1"; shift ;;    # bare word = hostname, as in flash-node
     esac
@@ -557,9 +543,9 @@ run_flash() {
   parse_provision_overrides "$@"
   set -- "${PROVISION_REST[@]+"${PROVISION_REST[@]}"}"
 
-  echo "▶ Real hardware — flashing ESP32."
+  echo "▶ Real hardware — flashing a PRIMARY (XIAO C5)."
   local port
-  port="$(require_port)" || exit 1
+  port="$(require_port primary)" || exit 1
   echo "  Using port: $port"
   echo ""
 
@@ -595,62 +581,24 @@ run_flash() {
 }
 
 run_flash_node() {
-  # First argument MAY be a board word (s3/c5). If it isn't, it's the hostname
-  # — which is how this command has always been called, and stays working.
-  local node_env="dustgate_node"
-  local maybe_env
-  maybe_env="$(node_env_for "${1:-}")"
-  if [[ -n "$maybe_env" && -n "${1:-}" ]]; then
-    node_env="$maybe_env"
-    shift
-  fi
-
-  # --screen used to pick a second env per board. There is one env per board now
-  # (2026-08-22), and it always carries the screen driver, so the flag is
-  # accepted and ignored rather than failing a muscle-memory command.
-  local a
-  local rest=()
-  for a in "$@"; do
-    case "$a" in
-      --screen) echo "  (--screen is the default now — every node build carries the screen driver.)" ;;
-      *)        rest+=("$a") ;;
-    esac
-  done
-  set -- ${rest[@]+"${rest[@]}"}
+  # Any argument is the hostname.
+  local node_env="$NODE_ENV"
 
   echo "▶ Secondary NODE — flashing the servo-only firmware."
   echo "  Target: $(describe_env "$node_env")"
-  if [[ "$node_env" == xiao_c5* ]]; then
-    echo ""
-    echo "  ⚠  The C5 rides the pioarduino platform, not the espressif32 one every"
-    echo "     other target uses. The two collide over package names, so the fork"
-    echo "     gets its OWN core directory (~/.platformio-pioarduino) rather than"
-    echo "     sharing one — use_core_for_env sets it for you, and nothing in"
-    echo "     ~/.platformio is touched. First build there downloads ~7.6 GB."
-    echo "     A core dir is one env var per process, so this env can never share"
-    echo "     a pio run with another."
-    echo "     Pin map: firmware/wiring/xiao-c5.md — servo block and screen pins are
-     confirmed on a board; the rest is still Seeed's drawing."
-  fi
   echo ""
   echo "  A node is a dumb actuator bank: it drives up to four servo valves and"
-  echo "  nothing else. No web UI, no stepper, no plug polling — the primary does"
-  echo "  all the thinking and sends it already-resolved angles."
+  echo "  nothing else. No web UI, no plug polling — the primary does all the"
+  echo "  thinking and sends it already-resolved angles."
   echo ""
-  echo "  + SSD1306 status screen and its wake button, compiled into every node"
-  echo "    build and probed for at boot — no panel, one line on serial, carry on."
-  echo "    A node's screen answers one question: can the brain reach me. It blanks"
-  echo "    itself after two minutes; the button toggles it on and off."
-  echo "    Panel and button both verified on a C5, 2026-08-22."
+  echo "  + SSD1306 status screen and its wake button, compiled in and probed for"
+  echo "    at boot — no panel, one line on serial, carry on. A node's screen"
+  echo "    answers one question: can the brain reach me. It blanks itself after"
+  echo "    two minutes; the button toggles it."
   echo ""
 
-  # Prefer the port family this board actually uses, so a node and the primary
-  # can be plugged in together without grabbing the wrong one. Derived from the
-  # board header rather than assumed — every node so far is native-USB, but that
-  # is a property of the board, not of the word "node".
-  local port prefer=bridge
-  board_has_native_usb "$node_env" && prefer=native
-  port="$(require_port "$prefer")" || exit 1
+  local port
+  port="$(require_port node)" || exit 1
   { what="$(describe_port "$port")"; echo "  Using port: $port${what:+  ($what)}"; }
 
   # WiFi creds first. The primary CANNOT provision a node over the network — the
@@ -689,7 +637,7 @@ run_flash_node() {
   echo "  Flashing as: $HOSTNAME_CFG  (will appear at $HOSTNAME_CFG.local)"
   echo ""
   cd "$SCRIPT_DIR"
-  PLATFORMIO_UPLOAD_PORT="$port" bash deploy.sh "--node=$node_env" "${@:2}"
+  PLATFORMIO_UPLOAD_PORT="$port" bash deploy.sh "--node=$node_env"
 
   echo ""
   echo "  ✓ Node flashed. Next:"
@@ -779,11 +727,10 @@ EOF
 # already-running device, where it'd just be a pointless 5s delay.
 #
 # env: which platformio.ini environment's monitor settings to apply. This is
-# NOT optional dressing — see the -e note below. Defaults to the ini's
-# default_envs (the DevKitC primary).
+# NOT optional dressing — see the -e note below. Defaults to the primary.
 run_monitor() {
   echo "▶ Serial monitor (Ctrl+C to exit)."
-  local scan_boot=false env=""
+  local scan_boot=false env="$PRIMARY_ENV"
   local a
   for a in "$@"; do
     case "$a" in
@@ -792,23 +739,22 @@ run_monitor() {
     esac
   done
 
-  # Same board-family split as run_flash_node, from the same source of truth:
-  # pick the port that matches the env being monitored, so a node and the primary
-  # can share the bench. Getting this wrong on a native-USB board is silent — the
-  # monitor opens the other board's port and shows nothing.
-  local prefer=bridge
-  board_has_native_usb "$env" && prefer=native
+  # Which physical board, from which env: the two are pinned to roles, and
+  # getting it wrong is silent — the monitor opens the other board's port and
+  # shows nothing.
+  local role=primary
+  [[ "$env" == "$NODE_ENV" ]] && role=node
 
   local port
-  port="$(require_port "$prefer")" || exit 1
+  port="$(require_port "$role")" || exit 1
   local what; what="$(describe_port "$port")"
   echo "  Using port: $port${what:+  ($what)}"
 
   # A monitor left running from an earlier session holds the port open, and the
   # second one fails in ways that look like a board problem rather than a
-  # bookkeeping one. Worse, an old monitor may be sitting on the OTHER board — we
-  # found one running "--port <primary> -e dustgate_node", which is exactly the
-  # kind of mismatch this whole port-pinning exercise exists to prevent.
+  # bookkeeping one. Worse, an old monitor may be sitting on the OTHER board —
+  # the mismatch this whole port-pinning exercise exists to prevent, and easy to
+  # hit when the two boards look identical.
   local stale
   stale="$(pgrep -fl "device monitor" 2>/dev/null | grep -v "^$$ " || true)"
   if [[ -n "$stale" ]]; then
@@ -842,13 +788,9 @@ run_monitor() {
     fi
   fi
 
-  # -e is REQUIRED, not a nicety. Without it pio applies default_envs' monitor
-  # settings to whatever is plugged in — so monitoring a QT Py node picked up the
-  # DevKitC's `monitor_dtr = 0`, and on a NATIVE-USB board that means TinyUSB
-  # never reports the port connected and USBCDC::write() silently discards every
-  # byte. Result: a working board that prints absolutely nothing. (The giveaway
-  # was the exception decoder loading esp32dev_wroom32/firmware.elf while
-  # monitoring an S3.)
+  # -e is REQUIRED, not a nicety: it picks which build's .elf the exception
+  # decoder loads, so the wrong env decodes crash addresses against the wrong
+  # binary. Both envs share DTR/RTS handling, so a mismatch is quiet.
   local env_args=()
   [[ -n "$env" ]] && env_args=(-e "$env")
 
@@ -858,18 +800,11 @@ run_monitor() {
   # install it. Same call the build makes; see tools/boardinfo.sh.
   use_core_for_env "$env" >/dev/null
 
-  # --no-reconnect: pio's monitor otherwise retries forever when the port goes
-  # away, and each retry reprints "--- forcing RTS inactive" etc. on a loop after
-  # you unplug. Right for the DevKitC, whose CP2102 keeps the port alive across
-  # an EN reset — so the port only disappears when the CABLE does.
-  #
-  # Native-USB boards (QT Py S3, Feather S2) drop the port on EVERY reset, so
-  # reconnect is what lets the monitor survive a reboot. Keep it for those.
-  local reconnect_arg="--no-reconnect"
-  case "$env" in
-    dustgate_node*|adafruit_feather_esp32s2) reconnect_arg="" ;;
-  esac
-  [[ "${DUSTGATE_MONITOR_RECONNECT:-0}" == "1" ]] && reconnect_arg=""
+  # RECONNECT IS ON: the C5's port comes straight off the MCU and disappears on
+  # EVERY reset, so reconnect is what lets the monitor survive a reboot instead of
+  # exiting at the first one. DUSTGATE_MONITOR_NO_RECONNECT=1 turns it off.
+  local reconnect_arg=""
+  [[ "${DUSTGATE_MONITOR_NO_RECONNECT:-0}" == "1" ]] && reconnect_arg="--no-reconnect"
 
   "$PIO" device monitor --port "$port" \
       ${env_args[@]+"${env_args[@]}"} \
@@ -880,6 +815,7 @@ run_erase() {
   echo "▶ Full chip erase — wipes firmware AND filesystem."
   echo "  Use this if you're seeing corrupted-partition symptoms (e.g."
   echo "  persistent 'LittleFS mount failed' after reflashing normally)."
+  echo "  Erases whichever board is attached — role doesn't matter here."
   local port
   port="$(require_port)" || exit 1
   echo "  Using port: $port"
@@ -922,54 +858,52 @@ show_menu() {
   echo ""
   echo "DustGate dev launcher"
   echo "====================="
+  echo "  Every board is a XIAO C5. Primary or node is which program you flash."
+  echo ""
   echo "  1) Demo       — browser only, fully simulated, no backend"
   echo "  2) Mock       — ng serve + tools/mock-api.js (real API contract)"
-  echo "  3) Flash      — full deploy to real ESP32 (UI + firmware + filesystem)"
-  echo "  4) Flash (firmware only)"
-  echo "  5) Flash (UI/filesystem only)"
-  echo "  5c) Flash a PRIMARY onto a XIAO C5 (servo-only, no rack)"
-  echo "  n) Flash a SECONDARY node — servo-only board, + WiFi creds  (QT Py S3)"
-  echo "     nc5 = the same, onto a XIAO ESP32C5 instead"
-  echo "  6) Serial monitor            (6n = monitor a secondary NODE instead)"
-  echo "  7) Full chip erase (fixes corrupted-partition weirdness)"
+  echo "  3) Live       — local UI + hot reload, talking to REAL hardware"
+  echo ""
+  echo "  4) Flash a PRIMARY      — UI + firmware + filesystem + provision"
+  echo "     4f = firmware only     4u = UI/filesystem only"
+  echo "  5) Flash a NODE         — servo-only firmware + WiFi creds"
+  echo ""
+  echo "  6) Monitor the PRIMARY      (6n = monitor a NODE instead)"
+  echo "  7) Ports — list attached boards, and pin one to a role"
   echo "  8) (Re)send WiFi/key/hostname to an already-flashed board"
-  echo "  9) Live — local UI + hot reload, talking to REAL hardware"
+  echo "  9) Full chip erase (fixes corrupted-partition weirdness)"
   echo "  q) Quit"
   echo ""
   read -rp "Choose: " choice
   case "$choice" in
     1) run_demo ;;
     2) run_mock ;;
-    3) run_flash ;;
-    4) run_flash --fw ;;
-    5) run_flash --ui ;;
-    5c|5C) run_flash --c5 ;;
-    n|N)       run_flash_node ;;
-    nc5|NC5)   run_flash_node c5 ;;
+    3) read -rp "  Device host [dustgate.local]: " h; run_live "${h:-dustgate.local}" ;;
+    4) run_flash ;;
+    4f|4F) run_flash --fw ;;
+    4u|4U) run_flash --ui ;;
+    5) run_flash_node ;;
     6) run_monitor ;;
-    6n|6N) run_monitor dustgate_node ;;
-    6c5)   run_monitor xiao_c5 ;;
-    7) run_erase ;;
+    6n|6N) run_monitor "$NODE_ENV" ;;
+    7) run_ports ;;
     8) run_provision ;;
-    9) read -rp "  Device host [dustgate.local]: " h; run_live "${h:-dustgate.local}" ;;
+    9) run_erase ;;
     q|Q) exit 0 ;;
     *) echo "Unknown choice."; show_menu ;;
   esac
 }
 
 case "${1:-}" in
-  ports)     run_ports "${2:-}" ;;
+  ports)     run_ports "${2:-}" "${3:-}" ;;
   demo)      run_demo ;;
   mock)      run_mock ;;
   flash)     shift; run_flash "$@" ;;
-  # "monitor node" targets a secondary: picks the node's native-USB port over the
-  # primary's bridge port, and applies the node env's monitor settings.
+  # "monitor node" targets a secondary: picks the board pinned as the node, and
+  # applies the node env's monitor settings.
   monitor)
     shift || true
     case "${1:-}" in
-      node|n)     run_monitor dustgate_node ;;
-      c5|s3)      run_monitor "$(node_env_for "$1")" ;;
-      c5p)        run_monitor xiao_c5_primary ;;
+      node|n)     run_monitor "$NODE_ENV" ;;
       *)          run_monitor ;;
     esac
     ;;
@@ -980,7 +914,10 @@ case "${1:-}" in
   "")        show_menu ;;
   *)
     echo "Unknown mode: $1"
-    echo "Usage: dev.sh [demo|mock|flash [--fw|--ui|--no-provision] [--c5|--env NAME] [--host N] [--ssid N] [--pass S] [--ask] [--save]|flash-node [s3|c5] [hostname]|monitor [node|c5|c5p|s3]|ports [--pin]|erase|provision [--host N] [--ssid N]|live [host]]"
+    echo "Usage: dev.sh [demo|mock|live [host]"
+    echo "              |flash [--fw|--ui|--no-provision] [--host N] [--ssid N] [--pass S] [--ask] [--save]"
+    echo "              |flash-node [hostname]"
+    echo "              |monitor [node]|ports [--pin primary|node]|erase|provision [--host N] [--ssid N]]"
     exit 1
     ;;
 esac

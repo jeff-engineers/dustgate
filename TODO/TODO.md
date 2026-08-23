@@ -7,13 +7,6 @@ Anything with a plan behind it lives in `docs/` and is linked from here rather
 than restated. Delete an item when it lands; the git history is the record.
 
 ## Bugs
-- **wifi pairing between nodes and masters sucks** not very reliable. Bench
-  observation 2026-08-19: the **XIAO C5 nodes hold a link fine**; the **Adafruit
-  QT Py S3 does not**. Two boards, one NodeLink implementation, so the first
-  question is whether this is the radio/antenna on that part rather than
-  anything in `RemoteActuatorBus`/`dustgate_node` — which would make it the
-  same decision as bench test 7 (Feather S2), not a code fix. Worth capturing a
-  monitor log from both sides of an S3 drop before changing code.
 - **A tool is overlapping a gate** — see `Screenshot 2026-08-16 at 7.06.02 AM.png`
   next to this file.
 
@@ -139,29 +132,23 @@ would reach first — and no gate has ever moved for it.
 
 ### Bench Testing
 
-**1. A node drives a real servo — no primary needed.** ✅ **XIAO C5: passed
-2026-08-21** — all four PWM channels drive real servos, so the C5's pin map is
-confirmed by movement rather than by Seeed's drawing. **The QT Py S3 has still
-never moved one**, and it is the *default* node env (`dustgate_node`), so the
-board most likely to be flashed is the one least proven. What remains below is
-that board. A node has **no serial console** — it is a dumb bank that only acts on HELLO/PING/SET
-over its `/nodelink` WebSocket — so `servo 1 90` on the primary's console moves
-the PRIMARY's own pins, not the node's. The cheap isolated test is to be the
-primary yourself, by pointing the NodeLink conformance runner at the real node:
+**1. A node drives a real servo — no primary needed.** ✅ **DONE** — all four PWM
+channels drive real servos (`firmware/wiring/xiao-c5.md` §6).
+
+Kept for the technique, which the ST3215 slider node will want again: a node has
+**no serial console** — it only acts on HELLO/PING/SET over its `/nodelink`
+WebSocket — so `servo 1 90` on the primary's console moves the PRIMARY's pins.
+The cheap isolated test is to *be* the primary, by pointing the conformance
+runner at the real node:
 
 ```bash
-bash dev.sh flash-node s3 dustgate-node
+bash dev.sh flash-node dustgate-node
 bash dev.sh monitor node          # watch the other side while it runs
 node shared/device-model/nodelink-conformance.js ws://dustgate-node.local/nodelink http://dustgate-node.local
 ```
 Pass: the suite is green AND servos physically move. Green with nothing moving
-means the link works and the actuator doesn't — which is exactly the split this
-test exists to make visible. Then walk all four channels and confirm each moves
-its own servo.
-
-No need to repeat this for the C5 — that is the part already done. Its pin map is
-proven end to end (`firmware/wiring/xiao-c5.md` §6); if you do rebuild it by hand
-it still needs `PLATFORMIO_CORE_DIR=~/.platformio-pioarduino`.
+means the link works and the actuator doesn't — exactly the split this test
+exists to make visible.
 
 **2. NodeLink — the happy path passes, THE FAIL-SAFE HAS NEVER BEEN TRIED.**
 
@@ -217,38 +204,22 @@ power-cycle, and confirm it comes back intact and routes per system.
 and stays disabled in the UI until one `calibrate rockler-4 <gates>` sweep
 confirms it. Also still open: pitch uniformity past 2 gates.
 
-**7. Feather S2 — a decision, not a test.** Unvalidated since Gen1 removal, push,
-and the board abstraction. Either run it through steps 1–3 or mark it
-experimental in `platformio.ini` and CLAUDE.md. Leaving it ambiguous is the worst
-of the three.
-
-**8. The wake button — proven on the C5, not on the other two.** A press on a
-XIAO C5's D1 lights the panel (2026-08-22). What that leaves:
+**8. The wake button — a press on D1 lights the panel.** What that leaves:
 - **The toggle's off half.** Press-again-to-blank was written after that test and
   has never been pressed. `statusscreen::toggle()`; the pass is that a second
   press puts the panel out and the next real event still lights it.
-- **The other two boards' pin arrangements**, below. The driver is proven; what
-  isn't is each board's electrical choice.
-- **DevKitC is the one to watch.** GPIO34 is input-only and has **no internal
-  pull-up** — `INPUT_PULLUP` is accepted and does nothing — so that board carries
-  an external 10kΩ to 3V3 and `WAKE_BTN_INPUT_MODE INPUT` instead
-  (`wiring/devkitc.md` §5). Forget the resistor and the pin floats: the screen
-  wakes at random, which reads as a firmware bug rather than a missing part.
-- **QT Py S3 (GPIO37/MISO) and XIAO C5 (GPIO0/D1)** both use the internal pull-up
-  and want a plain momentary to GND. The C5 pad is safe at reset (its straps are
-  26/27/28), which is the whole reason D1 was chosen — worth confirming a held
-  button doesn't stop it booting anyway.
+- **A held button through reset.** D1 uses the internal pull-up and a plain
+  momentary to GND. The pad is safe at reset (the C5's straps are 26/27/28),
+  which is why D1 was chosen — worth confirming a held button doesn't stop it
+  booting anyway.
 - Pass: pressing it lights a blanked screen within a beat, and a button held down
   through reset does **not** light the screen at boot (`begin()` seeds from the
   pin for exactly that).
 
 **9. What the screen work has and hasn't touched hardware.** Proven: the SSD1306
-on a DevKitC 2026-08-21 (GPIO16 SDA / GPIO4 SCL, 0x3C) and on a XIAO C5 node
-2026-08-22 (D4/D5), and the C5's wake button the same day. Not proven: the S3's
-STEMMA-QT path, the other two boards' button wiring (item 8), the toggle's off
-half, and the wiring docs' non-servo pin positions, which were written from
-datasheets and pin maps rather than from a board on a bench. Treat the unverified
-rows of `wiring/*.md` as a proposal until someone has built one.
+on D4/D5 at 0x3C, and the wake button on D1. Not proven: the toggle's off half,
+and the pads nothing has been attached to — D0/D3, and D6 (ST3215 bus).
+Everything the build actually drives is confirmed by a working signal.
 
 **10. A XIAO C5 as a PRIMARY — BOOTED on hardware 2026-08-22.** First run of the
 primary sketch with `HAS_LINEAR == 0`. What the boot log proved: it comes up,

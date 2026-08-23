@@ -1,6 +1,6 @@
 // =============================================================================
 // config.h — DustGate Configuration
-// Target hardware: Adafruit ESP32-S2 Feather + Adafruit TMC2209 Breakout (#6121)
+// Target hardware: Seeed XIAO ESP32C5 — primary or node, decided at flash time
 // =============================================================================
 // All project settings live here. Change values to match your build.
 // Recompile after any change.
@@ -9,25 +9,10 @@
 #pragma once
 
 // -----------------------------------------------------------------------------
-// MOTOR AND FEEDBACK TYPE — derived, not selected. See BOARD CAPABILITIES below.
-//
-// These were two hand-set #defines here (MOTOR_STEPPER_TMC2209 and
-// FEEDBACK_LIMIT_DISTANCE) until 2026-08-22. They are now switched on by
-// HAS_LINEAR, which comes from the board's pin map — because a board header that
-// wires no stepper cannot be made to have one by a #define at the top of this
-// file, and pretending otherwise is what made a rackless PRIMARY impossible to
-// build. The defines still exist, still guard the same files, and are still what
-// StepperTMC2209Driver.cpp and LimitSwitchDistance.cpp key off; they are just set
-// further down, once the pin map is known.
-//
-// PIN_ENDSTOP_HOME wiring: NC switch between D10 and GND, INPUT_PULLUP.
-//   Normal (contacts closed): pin pulled to GND → LOW → readHomeSwitch() = false
-//   Triggered (contacts open): pullup wins → HIGH → readHomeSwitch() = true
-// Fail-safe: broken wire → HIGH → reads as triggered → motor stops.
-// PIN_ENDSTOP_MAX (far end) is wired identically (NC, INPUT_PULLUP, HIGH =
-// triggered). It is REQUIRED on new builds: it provides over-travel safety and
-// is the far reference for the self-calibrating reference sweep — see
-// docs/dual-endstop-calibration.md.
+// MOTOR AND FEEDBACK TYPE — derived from the pin map. See BOARD CAPABILITIES
+// below. No board has either today: the stepper and limit-switch feedback are in
+// firmware/attic/linear/, awaiting the ST3215 slider. What is live is the SEAM —
+// MotorDriver / FeedbackSystem and their null implementations.
 
 // -----------------------------------------------------------------------------
 // CONTROL INPUT — select exactly one
@@ -150,33 +135,6 @@ extern int g_homeDirection;        // defined in firmware.ino
 // 50 steps ≈ 0.49mm — conservative, well within the 4.145mm margin.
 #define HOME_BACKOFF_STEPS   50  // ~1mm at 51.47 steps/mm — clears backlash without overshooting gate 1
 
-// -----------------------------------------------------------------------------
-// TMC2209 PARAMETERS
-// Adafruit TMC2209 Breakout (#6121) specifics:
-//   - R_SENSE: 0.11Ω (verify on your board — check silkscreen or schematic)
-//   - VDD: connect to 3.3V (Feather 3V3 pin) — board supports 3.3–5V logic
-//   - Current pot: hardware ceiling; UART current setting cannot exceed pot limit
-//   - UART: single-wire half-duplex on the board's "UART" pin
-// -----------------------------------------------------------------------------
-#define TMC2209_R_SENSE         0.11f   // Sense resistor (Ω) — verify on your board
-#define TMC2209_CURRENT_MA       800    // Run current in mA — raise if stalls mid-travel
-#define TMC2209_HOLD_CURRENT_MA   30    // Hold current — motor held between moves (low = cool).
-                                        // Heat ~ I²: 30mA dissipates ~16% of what 75mA did. The
-                                        // gate's rack-and-pinion friction holds position at idle;
-                                        // set to 0 for a fully-freewheeling (coolest) standstill if
-                                        // a little drift between moves is acceptable.
-
-// Standstill power-down delay: clocks after the last step before the driver
-// drops from run current (IRUN) to hold current (IHOLD). Set explicitly so the
-// transition is guaranteed to engage promptly — otherwise a motor can linger at
-// run current between moves and run hot even though the hold current is low.
-// Range 0–255 (~0–5.6s); ~0.2s here.
-#define TMC2209_TPOWERDOWN        10
-
-// StallGuard threshold — not used for homing (physical limit switch) but left
-// as a safety floor; TMC2209 still raises DIAG on severe overload/stall.
-#define TMC2209_STALL_THRESHOLD   50
-
 // Idle power-off: if no move/home command is issued for this many seconds,
 // the driver is fully disabled (not just dropped to hold current) and the
 // position is marked unknown, requiring a rehome before the next move.
@@ -227,28 +185,17 @@ extern int g_homeDirection;        // defined in firmware.ino
 // holding, and the ball valve holds position by friction/detent once seated.
 #define SERVO_HOLD_MS              1000
 
-// UART address (0–3, set by MS1/MS2 pins — Adafruit board default is 0)
-#define TMC2209_ADDRESS            0
-
 // -----------------------------------------------------------------------------
 // PIN ASSIGNMENTS — selected per board
 // The concrete pin map lives in a boards/*.h header chosen by a -DBOARD_* build
 // flag (set per PlatformIO env). Everything downstream uses the PIN_* / SERIAL1_*
-// macros unchanged. Primary target is the ESP32-DevKitC; the Feather is kept as
-// an unadvertised variant. All GPIO are 3.3V logic.
+// macros unchanged. One board, two roles: the flag is the same either way and
+// the ROLE comes from -DDUSTGATE_SECONDARY. All GPIO are 3.3V logic.
 // -----------------------------------------------------------------------------
-#if defined(BOARD_DEVKITC)
-  #include "boards/devkitc_wroom32.h"
-#elif defined(BOARD_FEATHER_S2)
-  #include "boards/feather_s2.h"
-#elif defined(BOARD_QTPY_S3)
-  #include "boards/qtpy_s3.h"
-#elif defined(BOARD_XIAO_C5)
+#if defined(BOARD_XIAO_C5)
   #include "boards/xiao_c5.h"
 #else
-  // No board flag set (e.g. a bare Arduino IDE build) — default to the Feather,
-  // which is the original hardware and has native-USB defaults.
-  #include "boards/feather_s2.h"
+  #error "No board flag set. Build with -DBOARD_XIAO_C5 (see platformio.ini)."
 #endif
 
 // -----------------------------------------------------------------------------
@@ -259,35 +206,29 @@ extern int g_homeDirection;        // defined in firmware.ino
 // a board header can't claim hardware it doesn't wire up, and adding a new
 // target is one file rather than a pin map plus a matching set of feature flags.
 //
-//   HAS_LINEAR  — a stepper + endstops (the rack). Absent on servo-only nodes.
+//   HAS_LINEAR  — this board can drive a sliding gate (a carriage on a rack).
 //   HAS_SERVO   — the PWM servo bank.
 //
 // These replaced the old `#error "No feedback type defined"` / `"No control type
 // defined"` walls in the sketch, which made a stepper-less build impossible to
 // express at all.
 // -----------------------------------------------------------------------------
-#if defined(PIN_TMC_STEP)
+
+// A board can drive a sliding gate if it wires the serial-servo bus. Nothing
+// defines these pins yet, so HAS_LINEAR is 0 everywhere; the branches it guards
+// are kept as the seam an ST3215 driver plugs into. See attic/linear/README.md.
+#if defined(PIN_SERVO_BUS_TX)
   #define HAS_LINEAR 1
 #else
   #define HAS_LINEAR 0
 #endif
 
-// ...and here is where HAS_LINEAR stopped being decorative (2026-08-22). These
-// two macros guard StepperTMC2209Driver.{h,cpp} and LimitSwitchDistance.{h,cpp}
-// in their entirety — they always did — so deriving them from the pin map is the
-// whole of what compiles the rack out of a board that hasn't got one. The sketch
-// picks NullMotorDriver / NullFeedback instead; see the header of
-// motor/NullMotorDriver.h for why those are null objects and not #if at 46 call
-// sites.
-//
-// The libraries follow: with the two .cpp files empty, nothing includes
-// TMCStepper or AccelStepper, so a rackless env doesn't need them in lib_deps.
-// That is what lets the XIAO C5 — one PWM-only pin map, no motor pins — build as
-// a primary at all: neither library has ever been compiled for RISC-V or against
-// Arduino core 3.x, and now neither has to be.
-#if HAS_LINEAR
-  #define MOTOR_STEPPER_TMC2209     // Stepper via TMC2209 (STEP/DIR + UART)
-  #define FEEDBACK_LIMIT_DISTANCE   // Home + far limit switch, position by step count
+// PWM AND SERIAL NEVER SHARE A BOARD. The slider gets dedicated hardware that
+// rides along with it, so a bus board drives no ball valves and vice versa. That
+// is a decision, not a pin shortage — and it is why the D6/D7 overlap on the
+// XIAO C5 (bus RX is also PWM channel 1) costs nothing.
+#if HAS_LINEAR && defined(SERVO_PWM_PIN_1)
+  #error "A board drives PWM servos or a serial bus, never both — see boards/xiao_c5.h"
 #endif
 
 #if defined(ENABLE_SERVO) && defined(SERVO_PWM_PIN_1)
@@ -295,43 +236,6 @@ extern int g_homeDirection;        // defined in firmware.ino
 #else
   #define HAS_SERVO 0
 #endif
-
-// -----------------------------------------------------------------------------
-// NO_LINEAR_FITTED (-DNO_LINEAR_FITTED) — "this board's pin map has a rack, but
-// no rack is physically attached."
-//
-// A master's job is the routing brain: hold the topology, poll the plugs,
-// compute the transition, drive gates. None of that needs a stepper, and the
-// direction of travel is servo ball valves, so requiring a TMC2209 on every
-// brain taxes builds for hardware most of them will never carry.
-//
-// WHAT IT DOES, AND THE ONE THING IT DOESN'T
-//   The TMC2209 UART health check still RUNS and still prints its full
-//   diagnosis — that check is the only thing that separates a wiring fault from
-//   a working driver, and deleting it would trade a loud failure at boot for a
-//   silent one during the first move. What changes is only how the sketch REACTS
-//   to it: a missing driver becomes the expected state rather than a fault, so
-//   the board doesn't sit in STATE_ERROR with the status pixel pulsing red about
-//   a stepper you chose not to fit. Motion stays disabled either way, via the
-//   same g_hardwareFault latch — there is genuinely no motor to move.
-//   That reaction now lives in one place, control/FaultPolicy.h: this flag is
-//   the `rackFitted` argument, and "refuse motion but do not go red" is a row in
-//   its table rather than a patch applied after the fault branch.
-//
-// WHY THIS IS A REACTION FLAG AND NOT HAS_LINEAR
-//   HAS_LINEAR above is the RIGHT seam and is currently read by nothing. Making
-//   it load-bearing means guarding StepperTMC2209Driver.cpp and
-//   LimitSwitchDistance.cpp, adding a null MotorDriver, and gating the endstop
-//   reads in firmware.ino and SerialDebugControl.cpp — a change to motion code
-//   that has never run on hardware. Every servo-only board so far has been a
-//   NODE, which sidesteps all of it by compiling from firmware/node/ instead, so
-//   HAS_LINEAR == 0 has never actually been built for the primary sketch.
-//
-//   This flag is the deliberately small stand-in: it costs the servo build the
-//   flash the stepper occupies and still prints "D10: TRIGGERED" for unwired
-//   endstop pins (open reads as triggered on an NC switch), but it touches no
-//   motion logic. The real HAS_LINEAR work is logged in TODO.md.
-// -----------------------------------------------------------------------------
 
 // -----------------------------------------------------------------------------
 // SECONDARY ROLE (-DDUSTGATE_SECONDARY)

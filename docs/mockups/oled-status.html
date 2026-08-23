@@ -111,17 +111,15 @@
   </div>
 
   <div class="banner">
-    <b>It works, on one board.</b> As of 2026-08-21 a 0.96" SSD1306 answered at 0x3C on a
-    DevKitC's GPIO16/4 and the firmware drew to it — the first display any DustGate board has
-    driven. <code>StatusScreenModel.h</code> turns board facts into these exact rows,
+    <b>It works.</b> A 0.96" SSD1306 answers at 0x3C on a XIAO C5's D4/D5 and the firmware
+    draws to it. <code>StatusScreenModel.h</code> turns board facts into these exact rows,
     <code>test_statusscreen.cpp</code> asserts every screen below against the 21&times;8
     budget on a host, and <code>StatusScreen.h</code> puts them on glass
-    (<code>pio run -e esp32dev_servo</code> &mdash; every env carries it since 2026-08-22).
+    (<code>pio run -e xiao_c5_primary</code> &mdash; every env carries it since 2026-08-22).
     <br><br>
-    <b>What that does not verify:</b> the sleep and wake behaviour over hours, whether each
-    layout below actually reads well on real glass at arm's length, and the pins proposed for
-    the two node boards — those are still transcribed from published pinouts and have driven
-    nothing. The screens on this page remain the design; the model and this page are the same
+    <b>What that does not verify:</b> the sleep and wake behaviour over hours, or whether
+    each layout below actually reads well on real glass at arm's length.
+    The screens on this page remain the design; the model and this page are the same
     design stated twice, so <b>change a screen here, change the test</b>.
   </div>
 
@@ -287,12 +285,9 @@
         pins), since a board with nowhere to put a screen has nothing for a button to wake.
         Driver:
         <code>firmware/utils/WakeButton.h</code>, over <code>statusscreen::toggle()</code>. Pins
-        per board: DevKitC GPIO34 (input-only &mdash; needs an <b>external</b> 10k&Omega;
-        pull-up), QT Py MISO/GPIO37, XIAO C5 D1/GPIO0.
-        <b>Verified on a XIAO C5, 2026-08-22</b> — a press on D1 lights the panel. The
-        DevKitC's GPIO34 (external pull-up, plain <code>INPUT</code>) and the QT Py's MISO
-        have not been pressed, and the <b>toggle is newer than the test</b>: the
-        press-to-light half ran on a board, the press-again-to-blank half did not.
+        XIAO C5 D1/GPIO0, internal pull-up.
+        <b>Verified</b> — a press on D1 lights the panel. The <b>toggle is newer than the
+        test</b>: the press-again-to-blank half has never been pressed.
       </p>
     </div>
 
@@ -313,7 +308,7 @@
         the button, so the pins were never going to be free anyway; and the flag's only
         remaining effect was to let a flash without the right env suffix produce a board whose
         screen and button had compiled to <em>nothing</em>, silently. Measured cost of carrying
-        it everywhere: 16.4&nbsp;KB of flash on the DevKitC, 21.6&nbsp;KB on the C5, 296 bytes
+        it everywhere: 21.6&nbsp;KB of flash on the C5, 296 bytes
         of RAM.
       </p>
       <p class="note">

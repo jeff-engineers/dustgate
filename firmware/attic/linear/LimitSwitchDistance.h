@@ -4,8 +4,8 @@
 // =============================================================================
 
 #pragma once
-#include "FeedbackSystem.h"
-#include "../config.h"
+#include "../../feedback/FeedbackSystem.h"
+#include "../../config.h"
 
 #ifdef FEEDBACK_LIMIT_DISTANCE
 
