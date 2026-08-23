@@ -77,10 +77,12 @@
 // See WIRING.md §1 for the level-shift and decoupling notes.
 #define PIN_PIXEL_EXT        35   // MOSI
 
-// -- Reserved: status screen (SSD1306 OLED) --
-// Optional, and untested ON THIS BOARD — a panel works on the DevKitC
-// (2026-08-21), but nothing has been wired to a QT Py and no env sets
-// -DHAS_STATUS_SCREEN for this one yet.
+// -- Status screen (SSD1306 OLED) --
+// Untested ON THIS BOARD — a panel works on the DevKitC (2026-08-21) and on a
+// C5 node (2026-08-22), but nothing has been wired to a QT Py. It is compiled in
+// regardless as of 2026-08-22: there is one env per board now, and it assumes a
+// screen (see the note at the top of platformio.ini). Nothing answers at 0x3C on
+// a bare board, so the driver disables itself at boot.
 //
 // This board has the easiest version of the problem on the whole fleet: the
 // STEMMA QT connector is a SECOND I²C bus (SDA1/SCL1) with its own 4-pin JST
@@ -93,7 +95,6 @@
 // loose wires rather than a STEMMA cable; they are free on a node build for the
 // same reason MOSI is (see PIN_PIXEL_EXT above). Swap the numbers below if you
 // wire it that way — Wire.begin() takes whichever pair this names.
-#ifdef HAS_STATUS_SCREEN
 #define PIN_OLED_SDA    41   // SDA1 — STEMMA QT
 #define PIN_OLED_SCL    40   // SCL1 — STEMMA QT
 
@@ -109,7 +110,6 @@
 // corner. Same GPIO35-37 octal-PSRAM caveat as the pixel: free on both variants
 // this map covers, worth re-checking on a different S3.
 #define PIN_WAKE_BTN    37   // MISO
-#endif
 
 // PIN_LED deliberately NOT defined: there is no plain user LED to fall back to,
 // and defining one would make StatusLed.h blink a pin that lights nothing.

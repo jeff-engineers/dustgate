@@ -36,14 +36,20 @@ inline void begin() {
         .idle_core_mask = 0,
         .trigger_panic  = true,
     };
-    // On IDF 5 the TWDT is usually ALREADY running before app_main — the C5
-    // bring-up log said so out loud ("esp_task_wdt_init(517): TWDT already
-    // initialized"). Left there, init fails, our timeout is silently ignored and
-    // the task runs under whatever the sdkconfig default happens to be. That is
-    // the bad kind of failure: the watchdog still exists, so nothing looks
-    // broken, but it fires at a period nobody chose. Reconfigure instead.
-    if (esp_task_wdt_init(&cfg) == ESP_ERR_INVALID_STATE) {
-        esp_task_wdt_reconfigure(&cfg);
+    // On IDF 5 the TWDT is usually ALREADY running before app_main. Left
+    // unhandled, init fails, our timeout is silently ignored and the task runs
+    // under whatever the sdkconfig default happens to be — the bad kind of
+    // failure, because the watchdog still exists and nothing looks broken while
+    // it fires at a period nobody chose.
+    //
+    // RECONFIGURE FIRST, init only if that says there is nothing to reconfigure.
+    // Both orders work; this one is quieter. Each function logs an ESP_LOGE of
+    // its own before returning ESP_ERR_INVALID_STATE, so whichever we call first
+    // on the wrong-state path puts a red E(...) line in the boot log — and
+    // "already initialized" was the common case on every C5 boot, which is a
+    // scary-looking line for a condition we handle correctly.
+    if (esp_task_wdt_reconfigure(&cfg) == ESP_ERR_INVALID_STATE) {
+        esp_task_wdt_init(&cfg);
     }
 #else
     esp_task_wdt_init(WDT_TIMEOUT_SEC, /*panic=*/true);

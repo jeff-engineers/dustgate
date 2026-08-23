@@ -116,7 +116,7 @@
     driven. <code>StatusScreenModel.h</code> turns board facts into these exact rows,
     <code>test_statusscreen.cpp</code> asserts every screen below against the 21&times;8
     budget on a host, and <code>StatusScreen.h</code> puts them on glass
-    (<code>pio run -e esp32dev_screen</code>).
+    (<code>pio run -e esp32dev_servo</code> &mdash; every env carries it since 2026-08-22).
     <br><br>
     <b>What that does not verify:</b> the sleep and wake behaviour over hours, whether each
     layout below actually reads well on real glass at arm's length, and the pins proposed for
@@ -232,28 +232,67 @@
     </div>
 
     <div class="card flag">
-      <h3>The button wakes the screen, and does nothing else</h3>
+      <h3>The button is the screen's power switch, and nothing else</h3>
       <p class="note">
-        <b>Settled 2026-08-21, built, and mandatory since 2026-08-22.</b> What a button buys
-        is the <i>deliberate</i> wake &mdash; the board is fine, nothing is changing, and you
-        want to read what a screen two feet away already knows. Once the sleep timer stopped
-        making exceptions, that stopped being a convenience: the button is the only way to see
-        a state the screen has already slept through. <code>WakeButton.h</code> fails the build
-        with an <code>#error</code> if a board defines the panel pins and not the button.
+        <b>Settled 2026-08-21, built, mandatory since 2026-08-22, a toggle since 2026-08-22.</b>
+        What a button buys is the <i>deliberate</i> wake &mdash; the board is fine, nothing is
+        changing, and you want to read what a screen two feet away already knows. Once the sleep
+        timer stopped making exceptions, that stopped being a convenience: the button is the only
+        way to see a state the screen has already slept through. <code>WakeButton.h</code> fails
+        the build with an <code>#error</code> if a board defines the panel pins and not the button.
       </p>
       <p class="note">
-        <b>Paging was rejected, not deferred.</b> One edge, one wake: no long-press, no
-        double-tap, no menu. A second gesture means a second thing it could mean, and a button
-        that could change what the shop <i>does</i> would need every confirmation the web UI
-        has &mdash; which is a different part with a different name. One screen per role is the
-        honest answer.
+        <b>Press again and it goes out.</b> The same edge, read against what is currently on the
+        glass: dark &rarr; lit, lit &rarr; dark. Wake-only left no way to end a reading except to
+        stand there for the two minutes the timer takes, on a panel whose whole reason for
+        blanking is that lit time costs it something. The timer is unchanged and still has the
+        last word &mdash; walk away mid-read and it blanks itself as before.
       </p>
       <p class="note">
-        Fitted with the panel rather than separately (<code>-DHAS_STATUS_SCREEN</code> defines
-        all three pins), since a board with no screen has nothing for a button to wake. Driver:
-        <code>firmware/utils/WakeButton.h</code>. Pins per board: DevKitC GPIO34 (input-only
-        &mdash; needs an <b>external</b> 10k&Omega; pull-up), QT Py MISO/GPIO37, XIAO C5 D1/GPIO0.
-        <b>No button has been wired to a board yet.</b>
+        <b>Off means &ldquo;I'm done reading&rdquo;, not &ldquo;stay dark&rdquo;.</b> A manual
+        blank sets the event clock back by exactly one timeout rather than latching a flag, so
+        the very next thing worth seeing &mdash; a gate moving, a node dropping &mdash; lights
+        the panel again exactly as it would have. There is no state a press can hide.
+      </p>
+      <p class="note">
+        <b>Hold it a second and it sweeps every servo</b> &mdash; added 2026-08-22, and it
+        breaks the rule below rather than bending it. Channel 1 to 4, out and back, one at a
+        time, with the channel and the commanded angle on this screen while it runs. It talks
+        to the servo driver directly: no topology, no gates, no calibration, because the layer
+        it is testing is the bottom one and every check above it is a way to refuse when the
+        thing you want to know is whether the pin still moves.
+      </p>
+      <p class="note">
+        It earned the exception by being the only way to see a specific invisible failure. On
+        Arduino core 3.x <code>Servo::detach()</code> wedged the LEDC channel, so a servo moved
+        exactly once per boot and was then dead &mdash; UI reporting success, log silent, valve
+        still. Catching that by hand needs a laptop, a shop laid out, and the patience to try
+        each gate twice. Catching it with this needs a finger.
+      </p>
+      <p class="note">
+        <b>The one confirmation a button can carry: it refuses.</b> Held while the collector is
+        running, it does nothing and says <code>REFUSED / collector on</code> on the panel &mdash;
+        sweeping every gate shut against a pulling collector is the dead-head the whole system
+        exists to prevent, and a button cannot ask "are you sure".
+      </p>
+      <p class="note">
+        <b>Paging is still rejected.</b> One edge, one meaning: no double-tap, no menu. The
+        toggle costs no second gesture at all; the hold costs exactly one, spends it on a bench
+        tool rather than on shop control, and pays for it with a refusal. Anything that changed
+        what the shop <i>does</i> in service would still need every confirmation the web UI has,
+        which is a different part with a different name.
+      </p>
+      <p class="note">
+        Fitted with the panel rather than separately (the board header defines all three
+        pins), since a board with nowhere to put a screen has nothing for a button to wake.
+        Driver:
+        <code>firmware/utils/WakeButton.h</code>, over <code>statusscreen::toggle()</code>. Pins
+        per board: DevKitC GPIO34 (input-only &mdash; needs an <b>external</b> 10k&Omega;
+        pull-up), QT Py MISO/GPIO37, XIAO C5 D1/GPIO0.
+        <b>Verified on a XIAO C5, 2026-08-22</b> — a press on D1 lights the panel. The
+        DevKitC's GPIO34 (external pull-up, plain <code>INPUT</code>) and the QT Py's MISO
+        have not been pressed, and the <b>toggle is newer than the test</b>: the
+        press-to-light half ran on a board, the press-again-to-blank half did not.
       </p>
     </div>
 
@@ -265,14 +304,22 @@
         these boards already uses — no display, no library, no flash spent.
       </p>
       <p class="note">
-        <b>Settled:</b> a fitted screen is <em>declared by the build</em>
-        (<code>-DHAS_STATUS_SCREEN</code> &rarr; the board header's own two pins) rather than
-        discovered at 0x3C — and then probed at 0x3C anyway, to check the declaration is
-        true. Probing would have been friendlier to someone adding one later; declaring
-        is how every other fitted-or-not part on these boards is decided, and one seam beats
-        two. A screen declared but not wired is still handled — no ACK, a line on serial, and
-        the driver disables itself, because a missing panel must not hang the brain in Wire's
-        timeout once per loop. That probe has to be ours:
+        <b>Settled 2026-08-20 as a build-time declaration, and reversed 2026-08-22.</b> A
+        fitted screen used to be <em>declared by the build</em>
+        (<code>-DHAS_STATUS_SCREEN</code> and a second env per board), on the reasoning that
+        declaring is how every other fitted-or-not part on these boards is decided. It is now
+        one env per board, all of them carrying the driver, with the 0x3C probe deciding.
+        Two things moved: the carrier design settled into one that always has the panel and
+        the button, so the pins were never going to be free anyway; and the flag's only
+        remaining effect was to let a flash without the right env suffix produce a board whose
+        screen and button had compiled to <em>nothing</em>, silently. Measured cost of carrying
+        it everywhere: 16.4&nbsp;KB of flash on the DevKitC, 21.6&nbsp;KB on the C5, 296 bytes
+        of RAM.
+      </p>
+      <p class="note">
+        A board with the pins and no panel on them is the ordinary case now, not a mistake —
+        no ACK, a line on serial, and the driver disables itself, because a missing panel must
+        not hang the brain in Wire's timeout once per loop. That probe has to be ours:
         <code>Adafruit_SSD1306::begin()</code> checks nothing but its own malloc and reports
         success into an empty bus, which is how 2026-08-21 got <code>SSD1306 up</code> on a
         board with no panel on those pins.
@@ -300,6 +347,37 @@
               <td>The screen mirrors <code>statusled::Status</code> — it does not define its own states</td>
               <td>Two status vocabularies drift, and a screen disagreeing with the pixel beside it
                   is worse than having neither.</td>
+            </tr>
+            <tr>
+              <td>2026-08-22</td>
+              <td><b>One env per board, and every one assumes a screen</b>
+                  <i>(supersedes &ldquo;declared by the build&rdquo;, 2026-08-20)</i></td>
+              <td>The carrier always carries the panel and its button, so the two pins were
+                  never going to be free &mdash; which was the only argument for the flag that
+                  wasn't about bytes. It cost 16&ndash;22&nbsp;KB of flash to carry everywhere
+                  and bought a silent failure: a flash without the right env suffix produced a
+                  board with no screen and no button in it, and nothing on serial to say so.
+                  <code>-DHAS_STATUS_SCREEN</code>, <code>esp32dev_screen</code> and
+                  <code>xiao_c5_screen</code> are gone; the compile-out seam moved down to the
+                  board header, which is where the pins live anyway.</td>
+            </tr>
+            <tr>
+              <td>2026-08-22</td>
+              <td>A <b>one-second hold</b> runs a servo self-test
+                  <i>(overrides &ldquo;no long-press&rdquo;, 2026-08-21)</i></td>
+              <td>A core-3.x bug let a servo answer exactly once per boot, silently &mdash; the
+                  failure had no symptom short of watching a valve not move. A gesture at the
+                  board, with the channel and commanded angle on the glass, is the cheapest
+                  instrument for it. Bench tool, not shop control: raw channels, no topology
+                  needed, and it refuses outright while the collector runs.</td>
+            </tr>
+            <tr>
+              <td>2026-08-22</td>
+              <td>The wake button <b>toggles</b> &mdash; press to light, press again to blank</td>
+              <td>Wake-only gave a reader no way to finish except to wait out the two-minute
+                  timer, on a panel that blanks precisely because lit time costs it something.
+                  One edge still means one thing, so paging stays rejected. The blank is a
+                  backdated event clock, not a latch, so the next real event still lights it.</td>
             </tr>
             <tr>
               <td>2026-08-22</td>

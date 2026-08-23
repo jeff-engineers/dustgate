@@ -81,11 +81,35 @@ Firmware compiles — `pio run -e <env>`:
 |---|---|---|
 | `esp32dev_wroom32` | ESP32-DevKitC | **primary target** |
 | `esp32dev_servo` | ESP32-DevKitC | primary, servo valves |
-| `esp32dev_screen` | ESP32-DevKitC | primary + SSD1306 status screen — **verified on hardware 2026-08-21** (GPIO16 SDA / GPIO4 SCL, 0x3C) |
 | `adafruit_feather_esp32s2` | Feather S2 | original prototype |
 | `dustgate_node` | QT Py ESP32-S3 | secondary node |
 | `xiao_c5` | XIAO ESP32C5 | secondary node |
-| `xiao_c5_screen` | XIAO ESP32C5 | secondary node + SSD1306 on D4/D5 (compiles; no panel wired to a C5 yet) |
+| `xiao_c5_primary` | XIAO ESP32C5 | **primary** on the node's board — servo-only, no rack |
+
+**One env per board, and every one of them assumes a screen** (2026-08-22). The
+`-DHAS_STATUS_SCREEN` flag and the two `*_screen` envs are gone: a board header
+that names `PIN_OLED_*` gets the driver, and an I²C ACK at 0x3C at boot decides
+whether a panel is really there. The panel has run on a DevKitC (2026-08-21,
+GPIO16/4) and a C5 node (2026-08-22, D4/D5), and its **wake button works on the
+C5** (D1, 2026-08-22) — the only board where one has been pressed. The reasoning and the measured cost are at the top of
+`platformio.ini`.
+
+**A C5 can be either role, and the hardware is identical** (2026-08-22). Same
+board, same carrier, same pin map; `xiao_c5_primary` vs `xiao_c5` is only which
+program gets compiled (`build_src_filter`) and whether `-DDUSTGATE_SECONDARY` is
+set. **The primary role is proven on hardware** — WiFi, the Angular UI served off
+LittleFS, and servo movement, 2026-08-22. NodeLink to a secondary from a C5
+primary is the one part of that role still untested. What made that possible is `HAS_LINEAR` finally becoming load-bearing:
+config.h derives it from the pin map, and since the C5 header wires no
+`PIN_TMC_*`, the stepper and endstop code now compiles out entirely and the
+sketch takes `NullMotorDriver` / `NullFeedback` instead. Before that a rackless
+board could only be a node, because the primary sketch could not be built without
+a rack. `NO_LINEAR_FITTED` is a different thing and stays: it means "this pin map
+has a rack, but no rack is attached".
+
+Bench: `bash dev.sh flash --c5`. It needs its own partition table
+(`partitions-xiao-c5-primary.csv`) — core 3.x builds ~350 KB larger, which
+overflows the DevKitC's split.
 
 `xiao_c5` rides the pioarduino platform, not espressif32. The two collide over
 package names in a shared core directory, so the fork gets **its own**

@@ -90,9 +90,9 @@ reference**; the STEMMA QT connector at the opposite end is the second one.
    Buttons at the USB-C end: RESET, and BOOT on GPIO0 — both vanish in a case
 ```
 
-The screen and its wake button are one optional fitting: `-DHAS_STATUS_SCREEN`
-defines the STEMMA pair and MISO together, so either all three are spoken for or
-none are. The button is on **MISO, not one of the SDA/SCL pads**, because those
+The screen and its wake button are one fitting: the board header defines the
+STEMMA pair and MISO together, so all three go as a set on every S3 node build,
+whether or not a panel is plugged in. The button is on **MISO, not one of the SDA/SCL pads**, because those
 two are the fallback wiring for a bare panel — a button that only worked when the
 screen arrived on a STEMMA cable would be a trap.
 
@@ -213,9 +213,11 @@ deliberately not defined in the header.
 ## 4. Status Screen (SSD1306 OLED) — optional
 
 > **NEVER TESTED ON THIS BOARD.** A panel works on the DevKitC as of 2026-08-21
-> (`wiring/devkitc.md` §5), so the firmware path is proven — but nothing has been
-> wired to a QT Py, the STEMMA pins below are still transcribed from Adafruit's
-> pinout, and **no env sets `-DHAS_STATUS_SCREEN` for this board**. See
+> (`wiring/devkitc.md` §5) and on a XIAO C5 node as of 2026-08-22, so the firmware
+> path is proven — but nothing has been wired to a QT Py and the STEMMA pins below
+> are still transcribed from Adafruit's pinout. The driver IS in the
+> `dustgate_node` build (2026-08-22: one env per board, all of them carrying it),
+> so trying a panel is now just plugging one in. See
 > [`WIRING.md` §6](../WIRING.md#6-status-screen-ssd1306-oled--optional) for what the
 > screen is for, the burn-in/sleep behaviour and the 3V3 rule; the layouts are in
 > [`docs/mockups/oled-status.html`](../../docs/mockups/oled-status.html). Only the
@@ -261,9 +263,11 @@ the STEMMA connector, which cannot be miscounted.
 The screen blanks after two minutes so it doesn't burn a static layout into itself
 on a node that idles for weeks, and since 2026-08-22 nothing — not even a fault —
 holds it lit past that. The button is the only way a person gets it back without
-walking to a phone: one edge, one wake, nothing else. A screen build that doesn't
-define it won't compile. `-DHAS_STATUS_SCREEN` fits
-the button along with the panel, since there is nothing for it to wake otherwise.
+walking to a phone — and since 2026-08-22 it toggles, so a second press puts it out
+early instead of waiting out the timer. One edge, one meaning, nothing else. A
+board header that names the panel pins and not the button won't compile: the
+header fits the two together, since there is nothing for a button to wake
+otherwise.
 
 ```
 MISO (GPIO37) ──── [momentary NO] ──── GND
@@ -276,16 +280,21 @@ came in on a STEMMA cable would be a trap. Nothing here uses SPI, and it sits be
 the external pixel's MOSI, so the indicator group leaves from one corner. Same
 GPIO35–37 octal-PSRAM caveat as the pixel.
 
-The driver is [`utils/WakeButton.h`](../utils/WakeButton.h), and it does one thing:
-lights the glass. There is no long-press and no menu — a button that could change
-what the shop *does* would need every confirmation the web UI has. **No button has
-been wired to any board yet.**
+The driver is [`utils/WakeButton.h`](../utils/WakeButton.h). A short press toggles the
+glass; a one-second hold sweeps every servo channel out and back as a bench self-test
+([`motor/ServoSelfTest.h`](../motor/ServoSelfTest.h)), refusing while the collector
+runs. No double-tap and no menu beyond those two — anything that changed what the shop
+*does* in service would need every confirmation the web UI has. **No button has been
+wired to a QT Py yet** — one works on a XIAO C5 as of 2026-08-22, on the same
+internal-pull-up arrangement this board would use.
 
 ### Turning it on
 
-Declared by the build, not probed for — the same seam that answers "is a stepper
-fitted?" elsewhere. `-DHAS_STATUS_SCREEN` activates the `PIN_OLED_*` block in the
-board header; the driver is [`utils/StatusScreen.h`](../utils/StatusScreen.h) over
+Nothing to turn on, as of 2026-08-22: naming `PIN_OLED_*` in the board header is
+what fits a screen, every `dustgate_node` build carries the driver, and an I²C ACK
+at 0x3C at boot is what decides whether a panel is really there. (It used to be a
+build flag, `-DHAS_STATUS_SCREEN` — see the note at the top of `platformio.ini`.)
+The driver is [`utils/StatusScreen.h`](../utils/StatusScreen.h) over
 [`utils/StatusScreenModel.h`](../utils/StatusScreenModel.h), which decides what the
 screen says and is host-tested against the 21×8 character budget.
 

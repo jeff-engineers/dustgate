@@ -9,15 +9,17 @@
 #pragma once
 
 // -----------------------------------------------------------------------------
-// MOTOR TYPE — TMC2209 stepper driver
-// -----------------------------------------------------------------------------
-#define MOTOR_STEPPER_TMC2209  // Stepper via TMC2209 (STEP/DIR + UART)
-
-// -----------------------------------------------------------------------------
-// FEEDBACK TYPE
-// -----------------------------------------------------------------------------
-#define FEEDBACK_LIMIT_DISTANCE   // Home limit switch + step count for gate positions
-
+// MOTOR AND FEEDBACK TYPE — derived, not selected. See BOARD CAPABILITIES below.
+//
+// These were two hand-set #defines here (MOTOR_STEPPER_TMC2209 and
+// FEEDBACK_LIMIT_DISTANCE) until 2026-08-22. They are now switched on by
+// HAS_LINEAR, which comes from the board's pin map — because a board header that
+// wires no stepper cannot be made to have one by a #define at the top of this
+// file, and pretending otherwise is what made a rackless PRIMARY impossible to
+// build. The defines still exist, still guard the same files, and are still what
+// StepperTMC2209Driver.cpp and LimitSwitchDistance.cpp key off; they are just set
+// further down, once the pin map is known.
+//
 // PIN_ENDSTOP_HOME wiring: NC switch between D10 and GND, INPUT_PULLUP.
 //   Normal (contacts closed): pin pulled to GND → LOW → readHomeSwitch() = false
 //   Triggered (contacts open): pullup wins → HIGH → readHomeSwitch() = true
@@ -268,6 +270,24 @@ extern int g_homeDirection;        // defined in firmware.ino
   #define HAS_LINEAR 1
 #else
   #define HAS_LINEAR 0
+#endif
+
+// ...and here is where HAS_LINEAR stopped being decorative (2026-08-22). These
+// two macros guard StepperTMC2209Driver.{h,cpp} and LimitSwitchDistance.{h,cpp}
+// in their entirety — they always did — so deriving them from the pin map is the
+// whole of what compiles the rack out of a board that hasn't got one. The sketch
+// picks NullMotorDriver / NullFeedback instead; see the header of
+// motor/NullMotorDriver.h for why those are null objects and not #if at 46 call
+// sites.
+//
+// The libraries follow: with the two .cpp files empty, nothing includes
+// TMCStepper or AccelStepper, so a rackless env doesn't need them in lib_deps.
+// That is what lets the XIAO C5 — one PWM-only pin map, no motor pins — build as
+// a primary at all: neither library has ever been compiled for RISC-V or against
+// Arduino core 3.x, and now neither has to be.
+#if HAS_LINEAR
+  #define MOTOR_STEPPER_TMC2209     // Stepper via TMC2209 (STEP/DIR + UART)
+  #define FEEDBACK_LIMIT_DISTANCE   // Home + far limit switch, position by step count
 #endif
 
 #if defined(ENABLE_SERVO) && defined(SERVO_PWM_PIN_1)

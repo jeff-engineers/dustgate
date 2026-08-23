@@ -120,7 +120,7 @@ jobs:
         run: pip install --upgrade platformio
       # Every env on the espressif32 platform, which is all of them but xiao_c5.
       #
-      # xiao_c5 is deliberately NOT built here. It rides the pioarduino platform
+      # Neither xiao_c5 env is built here — the node one or the primary one. It rides the pioarduino platform
       # fork, which collides with espressif32 over package names, so it needs its
       # own PLATFORMIO_CORE_DIR — 7.6 GB measured. That can't share this `pio run`
       # (a core dir is one env var per process), and caching a second core that
@@ -128,15 +128,22 @@ jobs:
       # the C5 is a local-only compile for now:
       #
       #   PLATFORMIO_CORE_DIR=~/.platformio-pioarduino pio run -e xiao_c5
+      #   PLATFORMIO_CORE_DIR=~/.platformio-pioarduino pio run -e xiao_c5_primary
       #
-      # Its pin map is unverified against hardware anyway. Revisit if the node
-      # firmware starts changing often enough that a local-only check gets missed.
-      # esp32dev_screen is here to keep the optional OLED path compiling, not
-      # because anyone flashes it: it is esp32dev_servo plus -DHAS_STATUS_SCREEN
-      # and the two Adafruit display libraries. Nothing has ever driven a real
-      # panel, so a compile is the only check there is.
+      # xiao_c5_primary is the one that would most benefit from CI: it is the only
+      # env that builds the primary sketch with HAS_LINEAR == 0, so it is the only
+      # thing that catches a change re-introducing the stepper path into a board
+      # that hasn't got one. esp32dev_* all have a rack in their pin map and will
+      # compile such a change happily.
+      #
+      # Revisit if the node firmware starts changing often enough that a
+      # local-only check gets missed.
+      # There is no longer a separate esp32dev_screen to build: as of 2026-08-22
+      # every env carries the OLED driver and probes for a panel at boot, so the
+      # display path is covered by esp32dev_servo and dustgate_node below rather
+      # than by an env of its own.
       - name: Compile firmware (all espressif32 targets, incl. the servo-only node)
-        run: pio run -e esp32dev_servo -e esp32dev_wroom32 -e adafruit_feather_esp32s2 -e dustgate_node -e esp32dev_screen
+        run: pio run -e esp32dev_servo -e esp32dev_wroom32 -e adafruit_feather_esp32s2 -e dustgate_node
       # Host tests for the pure C++ control layer. They need ArduinoJson, which
       # the `pio run` above has already fetched into .pio.nosync/libdeps.
       - name: Host tests (router, controller, nodebus/nodelink, shop, faults, screen)

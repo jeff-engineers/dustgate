@@ -445,6 +445,8 @@ An OLED with fixed labels lit 24/7 burns them in — the ghost of `gates` and
 - **Blank after a couple of minutes idle, always.**
 - **Wake on events** — a gate moving, a tool drawing power, a node dropping, any
   fault.
+- **Blank on demand too** (2026-08-22) — a second press of the wake button puts
+  the panel out early. It does not latch: the next event still lights it.
 - **Nothing holds it awake** (changed 2026-08-22). A fault used to, on the
   reasoning that nobody should have to press anything to find out what broke.
   But a fault is exactly the state that *lasts*: a node goes dark on a Friday
@@ -467,6 +469,23 @@ a stranger being asked to join an AP may have to press the button too.
 Since the timer has no exceptions, the button is the **only** way to see a state
 the screen has already slept through — a fault raised on Friday, a portal waiting
 on Saturday, or just a healthy board you want to read from two feet away.
+
+**It toggles** (2026-08-22): press to light the panel, press again to put it out
+instead of standing in front of a finished reading for the two minutes the timer
+takes. The timer still has the last word, and a manual blank doesn't suppress
+anything — the next real event lights the glass exactly as it would have. The
+short press fires on RELEASE, because of the hold below.
+
+**Hold it for a second and it sweeps every servo** (2026-08-22) — channel 1 to 4,
+out and back, one at a time, with the channel and commanded angle on the panel.
+A bench instrument for a failure with no other symptom: a servo that answers once
+per boot and then silently stops (see `ServoActuator::_deenergize()`). It drives
+the servo driver directly, so a board with no shop stored and no gates allocated
+runs it exactly the same. **It refuses while the collector is running** and says
+so on the panel — sweeping the gates shut against a pulling collector is a
+dead-head, and a button can't ask "are you sure". Driver:
+[`motor/ServoSelfTest.h`](motor/ServoSelfTest.h).
+
 Ordinary momentary switch to GND, read with `INPUT_PULLUP`:
 
 ```
@@ -477,10 +496,10 @@ Same NC-vs-NO caution as the endstops in reverse: this one is **normally OPEN**,
 so the pin idles HIGH and a strapping pin is harmless here — nothing holds the
 line at reset unless someone is pressing the button while the board boots.
 
-**It is fitted with the screen, not separately, and now enforced.**
-`-DHAS_STATUS_SCREEN` defines `PIN_WAKE_BTN` alongside the I²C pair, because a
-board with no panel has nothing for a button to wake — and `WakeButton.h` fails
-the build with an `#error` on the reverse case, a panel with no button. Per
+**It is fitted with the screen, not separately, and now enforced.** A board
+header defines `PIN_WAKE_BTN` alongside the I²C pair, because a board with
+nowhere to put a panel has nothing for a button to wake — and `WakeButton.h`
+fails the build with an `#error` on the reverse case, a panel with no button. Per
 board:
 
 | Board | Pin | Pull-up |
@@ -494,14 +513,21 @@ accepted and does nothing, and a floating input reads as phantom presses — a
 screen that lights by itself. Its header pairs the pin with
 `WAKE_BTN_INPUT_MODE INPUT` so the external resistor is the only option.
 
-The driver is [`utils/WakeButton.h`](utils/WakeButton.h): a debounced poll and
-one call to `statusscreen::note()`. **One edge, one wake, and nothing else** —
-no long-press, no double-tap, no menu. A button that could change what the shop
-*does* would need every confirmation the web UI has, and that is a different
-part with a different name.
+The driver is [`utils/WakeButton.h`](utils/WakeButton.h): a debounced poll, a
+short press that calls `statusscreen::toggle()`, and a one-second hold that calls
+`servoselftest::start()`. **Two gestures, and no more** — no double-tap, no menu,
+no paging. The self-test earned the second one by being the only instrument for
+an invisible failure, and it stays a bench tool rather than shop control: raw
+channels, and a refusal instead of a prompt. Anything that changed what the shop
+*does* in service would still need every confirmation the web UI has, and that is
+a different part with a different name.
 
-> **UNVERIFIED.** No button has been wired to any board. The screen it wakes has
-> run on a DevKitC; this half has not.
+> **Verified on a XIAO C5, 2026-08-22** — D1/GPIO0, internal pull-up, momentary
+> to GND: a press lights the panel. Two things are still unproven. The
+> **DevKitC's GPIO34** arrangement (external pull-up, plain `INPUT`) is the one
+> with a way to go wrong and has not been pressed, nor has the QT Py's MISO. And
+> the **toggle is newer than the test**: press-to-light ran on a board,
+> press-again-to-blank was written afterwards.
 
 ### Fitting one is a build-time fact
 
@@ -511,18 +537,27 @@ and `PIN_PIXEL` already use. No display, no library, no flash spent. That guard
 sits on the *driver*: the layout model is pure C++ that touches no pin, so a
 board with no screen pays only what the linker drops.
 
-**Settled 2026-08-20: declared by the build — and then probed to check the
-declaration is true.** Not probe-to-discover; probe-to-verify. An env sets
-`-DHAS_STATUS_SCREEN`, the board header turns that into its own two pins, and
-`pio run -e esp32dev_screen` is a DevKitC with a screen fitted. Probing at 0x3C
-would have been friendlier to someone adding one later; declaring is how every
-other fitted-or-not part on these boards is decided, and one seam beats two.
+**Settled 2026-08-20 as a build-time declaration; reversed 2026-08-22.** The
+original answer was an env per board with `-DHAS_STATUS_SCREEN` — declaring a
+screen the way every other fitted-or-not part on these boards is declared, with
+the 0x3C probe there only to verify the declaration. That is now one env per
+board, all of them carrying the driver, with the same probe doing the deciding.
 
-A screen that is *declared and not actually there* is handled, because that is
-the mistake someone will make: `StatusScreen::begin()` does a zero-length write
-at 0x3C first, and an ACK is the whole test. No ACK → it says so and disables
-every later call, so a missing panel cannot hang the brain in Wire's timeout once
-per pass of `loop()`.
+What changed is the carrier: it always has the panel and its button, so the two
+pins were never going to be free for anything else, and the flag's remaining
+effect was to let a `flash-node` without the right suffix produce a board whose
+screen and button had compiled to nothing — silently. Measured cost of carrying
+it everywhere: 16.4 KB of flash on the DevKitC, 21.6 KB on the C5, 296 bytes of
+RAM. The 1 KB framebuffer is allocated only after a real ACK.
+
+The compile-out seam didn't go away, it moved down one level: a board header
+with no `PIN_OLED_*` (the Feather S2) still links no driver at all.
+
+A board with the pins and *no panel on them* is now the ordinary case rather than
+a mistake: `StatusScreen::begin()` does a zero-length write at 0x3C first, and an
+ACK is the whole test. No ACK → it says so on serial and disables every later
+call, so a missing panel cannot hang the brain in Wire's timeout once per pass of
+`loop()`.
 
 **That probe is ours, and it has to be.** `Adafruit_SSD1306::begin()` does not
 check anything — read it: the only `return false` is a failed `malloc` of the

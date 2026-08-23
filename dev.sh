@@ -14,9 +14,14 @@
 #   bash dev.sh flash --host shop --ssid Shop-WiFi        # override what tools/.env says
 #   bash dev.sh flash --ask                               # prompt for all three, prefilled
 #     A bare word is the hostname, as with flash-node: `dev.sh flash shop`.
-#     --screen (or --env NAME) flashes a primary built from a different env —
-#     today that means esp32dev_screen, the build with the SSD1306 status
-#     screen compiled in. UNTESTED HARDWARE: no panel has ever driven one.
+#     --env NAME flashes a primary built from a different env, and takes the same
+#     kind of shorthand flash-node does: dk|servo, rack, c5. --c5 is shorthand
+#     for --env c5 (xiao_c5_primary) — a XIAO C5 running the PRIMARY firmware
+#     rather than the node one. Same board and same carrier as `flash-node c5`;
+#     the only difference is which program it runs. It has no rack and needs
+#     none: config.h derives HAS_LINEAR from the pin map, so the stepper and the
+#     endstops compile out. The status screen is no longer one of those choices:
+#     every env carries it and probes for a panel at boot.
 #     A firmware flash (`flash` / `flash --fw`) always CONFIRMS the hostname,
 #     prefilled from tools/.env — Enter keeps it. Pass --host to answer up front,
 #     or redirect stdin from /dev/null to take the default unattended.
@@ -24,19 +29,23 @@
 #     --pass SECRET works but lands in your shell history; prefer --ssid alone
 #     (it asks for the password hidden) or --ask.
 #     Flashing the filesystem ERASES the saved shop (topology.json shares that
-#     partition with the Angular bundle), so deploy.sh copies it off the device
-#     first and puts it back at the end. Backups: .dustgate-backups/, restore by
-#     hand with `bash tools/restore-topology.sh`. Skip with --no-topology-backup.
-#   bash dev.sh flash-node [board] [--screen] [host]  # flash a SECONDARY servo-only node (+ WiFi creds)
+#     partition with the Angular bundle). deploy.sh used to copy it off the
+#     device first and put it back at the end; that step is COMMENTED OUT as of
+#     2026-08-22 and to be revisited — see "0. Save the shop layout" in
+#     deploy.sh for why and what to decide. Until it returns, a filesystem flash
+#     loses the layout silently. Save one by hand first if it matters:
+#       curl -H "X-Api-Key: <key>" http://<host>/api/topology > my-shop.json
+#       bash tools/restore-topology.sh my-shop.json
+#   bash dev.sh flash-node [board] [host]  # flash a SECONDARY servo-only node (+ WiFi creds)
 #                                    #   board: s3 (default) | c5
 #                                    #   e.g. bash dev.sh flash-node c5 dustgate-node-c5
-#     --screen builds the board's screen-fitted env instead — a screen is compiled
-#     in, not detected, so it is a different env (xiao_c5_screen). Only the C5 has
-#     one today; the S3 would need its own env in platformio.ini first.
-#     UNTESTED HARDWARE: no panel has been wired to a node board.
+#     Every node build carries the SSD1306 driver and the wake button, and probes
+#     0x3C at boot — there is no screen-vs-no-screen env any more (2026-08-22).
+#     A board with no panel prints one line and carries on.
+#     Panel verified on a C5 node 2026-08-22; its wake button is still unwired.
 #   bash dev.sh monitor             # serial monitor (primary)
 #   bash dev.sh monitor node        # serial monitor for a secondary node
-#   bash dev.sh monitor c5          # ...for a XIAO C5 node (c5s = one with a screen)
+#   bash dev.sh monitor c5          # ...for a XIAO C5 node (c5p = a C5 primary)
 #   bash dev.sh ports               # list attached boards + which role each is pinned to
 #   bash dev.sh ports --pin         # pin each board's USB SERIAL to a role (do this once)
 #     DUSTGATE_PORT=/dev/cu.xxx     # force a port for this one command
@@ -69,20 +78,20 @@ node_env_for() {
   case "${1:-}" in
     ""|s3|qtpy|qtpy_s3|dustgate_node) echo "dustgate_node" ;;
     c5|xiao|xiao_c5)                  echo "xiao_c5" ;;
-    c5s|c5-screen|xiao_c5_screen)     echo "xiao_c5_screen" ;;
     *)                                echo "" ;;   # not a board word
   esac
 }
 
-# The same board with a status screen fitted. A screen is a BUILD-TIME fact
-# (-DHAS_STATUS_SCREEN — see WIRING.md §6), so "with a screen" is a different env
-# rather than a runtime flag, and --screen has to resolve to one that exists.
-# Empty means this board has no screen env — worth saying out loud rather than
-# failing later inside pio with a name it never heard of.
-node_screen_env_for() {
+# PRIMARY env shorthand, the counterpart of node_env_for above. Same reason it
+# exists — nobody at a bench types "xiao_c5_primary" — and the same rule: an
+# unrecognised word is echoed back unchanged, so `--env <any real env name>`
+# still works and a typo fails inside pio with the name you actually typed.
+primary_env_for() {
   case "${1:-}" in
-    xiao_c5|xiao_c5_screen) echo "xiao_c5_screen" ;;
-    *)                      echo "" ;;
+    ""|dk|devkitc|servo)   echo "esp32dev_servo" ;;
+    rack|linear)           echo "esp32dev_wroom32" ;;
+    c5|xiao|c5p)           echo "xiao_c5_primary" ;;
+    *)                     echo "${1:-}" ;;
   esac
 }
 
@@ -379,10 +388,13 @@ parse_provision_overrides() {
       # Env selection for a PRIMARY. Handled here rather than left to the --*
       # passthrough because the space form would otherwise drop NAME into the
       # bare-word branch below and silently flash the board with a hostname of
-      # "esp32dev_screen".
-      --env)    FLASH_ENV="${2:-}"; PROVISION_REST+=("--env=${2:-}"); shift 2 ;;
-      --env=*)  FLASH_ENV="${1#*=}"; PROVISION_REST+=("$1"); shift ;;
-      --screen) FLASH_ENV="esp32dev_screen"; PROVISION_REST+=("--screen"); shift ;;
+      # "esp32dev_wroom32".
+      --env)    FLASH_ENV="$(primary_env_for "${2:-}")"; PROVISION_REST+=("--env=$FLASH_ENV"); shift 2 ;;
+      --env=*)  FLASH_ENV="$(primary_env_for "${1#*=}")"; PROVISION_REST+=("--env=$FLASH_ENV"); shift ;;
+      # The C5 as a PRIMARY rather than a node — same board, same carrier, same
+      # pins, different program. Spelled as its own flag because "flash the C5"
+      # is now ambiguous in a way it wasn't before 2026-08-22.
+      --c5)     FLASH_ENV="xiao_c5_primary"; PROVISION_REST+=("--env=xiao_c5_primary"); shift ;;
       --*)      PROVISION_REST+=("$1"); shift ;;
       *)        OV_HOST="$1"; shift ;;    # bare word = hostname, as in flash-node
     esac
@@ -593,32 +605,18 @@ run_flash_node() {
     shift
   fi
 
-  # --screen anywhere in the remaining args upgrades the board to its
-  # screen-fitted env. Stripped out here so the hostname positional below still
-  # sees exactly what it always saw.
-  local want_screen=false a
+  # --screen used to pick a second env per board. There is one env per board now
+  # (2026-08-22), and it always carries the screen driver, so the flag is
+  # accepted and ignored rather than failing a muscle-memory command.
+  local a
   local rest=()
   for a in "$@"; do
     case "$a" in
-      --screen) want_screen=true ;;
+      --screen) echo "  (--screen is the default now — every node build carries the screen driver.)" ;;
       *)        rest+=("$a") ;;
     esac
   done
   set -- ${rest[@]+"${rest[@]}"}
-
-  if [[ "$want_screen" == true ]]; then
-    local screen_env
-    screen_env="$(node_screen_env_for "$node_env")"
-    if [[ -z "$screen_env" ]]; then
-      echo "  ✗ No screen env for '$node_env'."
-      echo "    A screen is compiled in, not detected, so it needs its own env in"
-      echo "    platformio.ini ($node_env plus -DHAS_STATUS_SCREEN and the two"
-      echo "    Adafruit libraries). Today only the C5 has one:"
-      echo "        bash dev.sh flash-node c5 --screen"
-      exit 1
-    fi
-    node_env="$screen_env"
-  fi
 
   echo "▶ Secondary NODE — flashing the servo-only firmware."
   echo "  Target: $(describe_env "$node_env")"
@@ -631,19 +629,19 @@ run_flash_node() {
     echo "     ~/.platformio is touched. First build there downloads ~7.6 GB."
     echo "     A core dir is one env var per process, so this env can never share"
     echo "     a pio run with another."
-    echo "     Pin map: firmware/wiring/xiao-c5.md — UNVERIFIED against hardware."
+    echo "     Pin map: firmware/wiring/xiao-c5.md — servo block and screen pins are
+     confirmed on a board; the rest is still Seeed's drawing."
   fi
   echo ""
   echo "  A node is a dumb actuator bank: it drives up to four servo valves and"
   echo "  nothing else. No web UI, no stepper, no plug polling — the primary does"
   echo "  all the thinking and sends it already-resolved angles."
-  if [[ "$node_env" == *_screen ]]; then
-    echo ""
-    echo "  + SSD1306 status screen and its wake button, compiled in. A node's"
-    echo "    screen answers one question — can the brain reach me — and blanks"
-    echo "    itself after two minutes; the button lights it again."
-    echo "    UNTESTED HARDWARE: no panel has been wired to this board."
-  fi
+  echo ""
+  echo "  + SSD1306 status screen and its wake button, compiled into every node"
+  echo "    build and probed for at boot — no panel, one line on serial, carry on."
+  echo "    A node's screen answers one question: can the brain reach me. It blanks"
+  echo "    itself after two minutes; the button toggles it on and off."
+  echo "    Panel and button both verified on a C5, 2026-08-22."
   echo ""
 
   # Prefer the port family this board actually uses, so a node and the primary
@@ -929,9 +927,9 @@ show_menu() {
   echo "  3) Flash      — full deploy to real ESP32 (UI + firmware + filesystem)"
   echo "  4) Flash (firmware only)"
   echo "  5) Flash (UI/filesystem only)"
+  echo "  5c) Flash a PRIMARY onto a XIAO C5 (servo-only, no rack)"
   echo "  n) Flash a SECONDARY node — servo-only board, + WiFi creds  (QT Py S3)"
   echo "     nc5 = the same, onto a XIAO ESP32C5 instead"
-  echo "     nc5s = a XIAO C5 with the SSD1306 screen + wake button compiled in"
   echo "  6) Serial monitor            (6n = monitor a secondary NODE instead)"
   echo "  7) Full chip erase (fixes corrupted-partition weirdness)"
   echo "  8) (Re)send WiFi/key/hostname to an already-flashed board"
@@ -945,9 +943,9 @@ show_menu() {
     3) run_flash ;;
     4) run_flash --fw ;;
     5) run_flash --ui ;;
+    5c|5C) run_flash --c5 ;;
     n|N)       run_flash_node ;;
     nc5|NC5)   run_flash_node c5 ;;
-    nc5s|NC5S) run_flash_node c5 --screen ;;
     6) run_monitor ;;
     6n|6N) run_monitor dustgate_node ;;
     6c5)   run_monitor xiao_c5 ;;
@@ -970,7 +968,8 @@ case "${1:-}" in
     shift || true
     case "${1:-}" in
       node|n)     run_monitor dustgate_node ;;
-      c5|c5s|s3)  run_monitor "$(node_env_for "$1")" ;;
+      c5|s3)      run_monitor "$(node_env_for "$1")" ;;
+      c5p)        run_monitor xiao_c5_primary ;;
       *)          run_monitor ;;
     esac
     ;;
@@ -981,7 +980,7 @@ case "${1:-}" in
   "")        show_menu ;;
   *)
     echo "Unknown mode: $1"
-    echo "Usage: dev.sh [demo|mock|flash [--fw|--ui|--no-provision] [--screen|--env NAME] [--host N] [--ssid N] [--pass S] [--ask] [--save]|flash-node [s3|c5] [--screen] [hostname]|monitor [node|c5|c5s]|ports [--pin]|erase|provision [--host N] [--ssid N]|live [host]]"
+    echo "Usage: dev.sh [demo|mock|flash [--fw|--ui|--no-provision] [--c5|--env NAME] [--host N] [--ssid N] [--pass S] [--ask] [--save]|flash-node [s3|c5] [hostname]|monitor [node|c5|c5p|s3]|ports [--pin]|erase|provision [--host N] [--ssid N]|live [host]]"
     exit 1
     ;;
 esac

@@ -50,6 +50,7 @@
 #include "../utils/StatusLed.h"
 #include "../utils/StatusScreen.h"   // optional SSD1306; nothing on a board without one
 #include "../utils/WakeButton.h"     // the button that lights it; ditto
+#include "../motor/ServoSelfTest.h"   // and, held for a second, sweeps every servo
 
 #if !HAS_SERVO
   #error "dustgate_node needs a servo bank — build with -DENABLE_SERVO and a board that defines SERVO_PWM_PIN_1"
@@ -337,6 +338,10 @@ void setup() {
     else Serial.println(F("[SCREEN] declared, but nothing answered; disabled"));
 #endif
     wakebutton::begin();   // the button that wakes it after the two-minute blank
+    // A node owns no collector, so there is nothing to dead-head and no query to
+    // register — wakebutton treats an unset query as "not running", which is the
+    // right answer here rather than a missing one.
+    servoselftest::begin(servos, SERVO_COUNT);
 
     Serial.println(F("=== DustGate node (secondary) ==="));
     Serial.print(F("Board: ")); Serial.println(BOARD_NAME);
@@ -415,14 +420,19 @@ void setup() {
 // brain reach me? — so that is what its screen answers, and it answers it with
 // the same statusled state the pixel is showing.
 //
-// UNVERIFIED: no panel has been wired to any board. Compiles to nothing on a
-// node built without one, which is every node today.
+// A panel has run on a C5 node (2026-08-22) and on a DevKitC primary
+// (2026-08-21), and the C5's wake button lights it. Compiles to nothing on a
+// board whose header names no screen pins.
 // -----------------------------------------------------------------------------
 static void updateStatusScreen() {
     if (!statusscreen::present()) return;
 
     statusscreen::Facts f;
     f.role   = statusscreen::Role::NODE;
+    f.selfTestCh    = servoselftest::channel();
+    f.selfTestOf    = SERVO_COUNT;
+    f.selfTestAngle = servoselftest::angle();
+    if (!servoselftest::active()) f.selfTestRefused = servoselftest::refusal();
     f.status = statusled::state();
     f.motion = statusled::motion();
 
@@ -475,6 +485,7 @@ void loop() {
     statusled::setMoving(anyServoMoving());
     statusled::update();
     wakebutton::update();   // before the screen decides whether to be lit
+    servoselftest::update();
     updateStatusScreen();
 
     // Advance sweeps and effect the deferred detach.

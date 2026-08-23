@@ -1,0 +1,27 @@
+# DustGate — XIAO ESP32C5 (4 MB) running as a PRIMARY
+#
+# Same 4 MB and the same no-OTA reasoning as partitions-devkitc-noota.csv, with
+# the split moved. That table gives the app 1.75 MB, which is right for the
+# DevKitC (74.5% used) and NOT right here: the same firmware built against the
+# pioarduino fork's Arduino core 3.x / IDF 5.x comes out ~350 KB larger and
+# lands at 93.5% — a 119 KB margin, which is not enough to add a feature to.
+#
+#   app0  2.62 MB  — 1.72 MB used at 2026-08-22, so ~35% headroom
+#   ffat  1.44 MB  — LittleFS for the Angular bundle; ~0.44 MB used, ~3x headroom
+#
+# The bundle is the thing that can be measured and is not growing fast; the
+# firmware is the thing that surprised us. So the slack goes to the app.
+#
+# The filesystem partition MUST be labeled "ffat": HttpApiServer mounts it with
+# LittleFS.begin(true, "/littlefs", 10, "ffat"). (LittleFS mounts by label
+# regardless of the "fat" subtype.)
+#
+# A C5 NODE uses huge_app.csv instead — no web UI, so no filesystem to size.
+#
+# Fills 4 MB exactly (0x400000).
+#
+# Name,   Type, SubType, Offset,   Size,      Flags
+nvs,      data, nvs,     0x9000,   0x5000,
+otadata,  data, ota,     0xe000,   0x2000,
+app0,     app,  ota_0,   0x10000,  0x280000,
+ffat,     data, fat,     0x290000, 0x170000,

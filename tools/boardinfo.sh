@@ -42,13 +42,14 @@ env_section() {
 # -DBOARD_* for an env. Handles both the one-line and the indented-continuation
 # spellings of build_flags, because platformio.ini uses both.
 #
-# AND follows ${env:OTHER.build_flags}, because the screen envs are built that
-# way: xiao_c5_screen is xiao_c5's flags plus -DHAS_STATUS_SCREEN, so its own
-# section names no board at all. Reading it literally answered "no -DBOARD_*,
-# USB-serial bridge" for a native-USB C5 — which is the exact silent failure
-# this whole file exists to prevent, one env later. Two hops is plenty for how
-# platformio.ini is written; the depth guard is there so a typo'd self-reference
-# can't spin.
+# AND follows ${env:OTHER.build_flags}. Nothing in platformio.ini inherits flags
+# that way today — the screen envs that did (xiao_c5_screen was xiao_c5's flags
+# plus -DHAS_STATUS_SCREEN, naming no board of its own) were folded away on
+# 2026-08-22. The hop stays because of what it cost to find: read literally, that
+# env answered "no -DBOARD_*, USB-serial bridge" for a native-USB C5, which is
+# the exact silent failure this whole file exists to prevent. Two hops is plenty
+# for how platformio.ini is written; the depth guard is there so a typo'd
+# self-reference can't spin.
 env_board_macro() {
   local env="${1:-}" depth="${2:-0}" macro parent
   [[ -z "$env" ]] && env="$(pio_default_env)"

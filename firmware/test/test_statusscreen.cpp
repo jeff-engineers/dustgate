@@ -350,6 +350,59 @@ int main() {
            awake(0xFFFFFF00u, 0x00000100u));
     }
 
+    // ── the servo self-test screen ───────────────────────────────────────
+    // The bench tool on the wake button's long press. It owns the panel while it
+    // runs: a person is standing at the board comparing this angle to a valve.
+    {
+        Facts f;
+        f.role = Role::NODE;              // both roles show it — a node has servos too
+        f.status = statusled::READY;
+        f.hostname = "dustgate-node-1";
+        f.selfTestCh = 3; f.selfTestOf = 4; f.selfTestAngle = 120;
+        Screen s = render(f);
+        ok("the self-test names itself",   !strcmp(stateWord(f), "SERVOTEST"));
+        ok("...says which channel",        hasLine(s, "servo             3/4"));
+        ok("...and the commanded angle",   hasLine(s, "commanded      120deg"));
+        ok("...and the board, in the band", !strcmp(s.bar, "dustgate-node-1"));
+        fits("the self-test screen fits", s);
+        // It outranks a fault on purpose: the finger on the button wins over a
+        // standing condition, because the question being asked is "did that do
+        // anything?" and the answer has to be on the glass.
+        Facts g = f; g.status = statusled::FAULT;
+        ok("...and it outranks a fault",   !strcmp(stateWord(g), "SERVOTEST"));
+    }
+    {
+        Facts f;
+        f.status = statusled::READY;
+        f.selfTestRefused = "collector on";
+        Screen s = render(f);
+        ok("a refusal says so",          !strcmp(stateWord(f), "REFUSED"));
+        ok("...and says why",            hasLine(s, "collector on"));
+        fits("the refusal screen fits", s);
+    }
+
+    // ── the button's off half ────────────────────────────────────────────
+    // A press on a lit panel blanks it (2026-08-22), by backdating the event
+    // clock rather than carrying a second "user turned it off" concept. These
+    // assert the property that choice buys: off now, but not off through the
+    // next thing worth seeing.
+    {
+        const uint32_t now = 500000;
+        ok("a deliberate blank reads as asleep",
+           !awake(blankedAt(now), now));
+        ok("...and stays asleep as time passes",
+           !awake(blankedAt(now), now + 60000));
+        ok("...but the next event lights it again",
+           awake(now + 1, now + 1));
+        // Pressed inside the first two minutes after boot, blankedAt() wraps.
+        // Same-width subtraction in awake() makes that a non-event; get the
+        // width wrong and the panel refuses to blank until the board has been
+        // up for two minutes.
+        const uint32_t early = 5000;
+        ok("blanks correctly before the clock reaches one timeout",
+           !awake(blankedAt(early), early));
+    }
+
     // isAlarm() still exists — it blinks the header band — it just no longer
     // has anything to do with sleeping.
     {

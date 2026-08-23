@@ -117,6 +117,8 @@ than restated. Delete an item when it lands; the git history is the record.
   can have the same name, but not 2 tools or 2 plugs.  Really in general
   we need to make sure names are distinct, at least acros systems
 
+-**clicking calibrate from the /gates page doesn't give a cailbrate option**
+  routes to http://dustgate.local/#/gates
 ## Testing
 
 Nearly all of DustGate compiles and passes host tests without ever having run on
@@ -219,10 +221,13 @@ and the board abstraction. Either run it through steps 1–3 or mark it
 experimental in `platformio.ini` and CLAUDE.md. Leaving it ambiguous is the worst
 of the three.
 
-**8. The wake button — no button has been wired to any board.** `utils/WakeButton.h`
-plus the pin maps on all three boards, the primary and the node. It compiles
-everywhere and has run nowhere. Cheap to prove and worth proving early, because
-the failure mode is silent: press it and the screen lights, or it doesn't.
+**8. The wake button — proven on the C5, not on the other two.** A press on a
+XIAO C5's D1 lights the panel (2026-08-22). What that leaves:
+- **The toggle's off half.** Press-again-to-blank was written after that test and
+  has never been pressed. `statusscreen::toggle()`; the pass is that a second
+  press puts the panel out and the next real event still lights it.
+- **The other two boards' pin arrangements**, below. The driver is proven; what
+  isn't is each board's electrical choice.
 - **DevKitC is the one to watch.** GPIO34 is input-only and has **no internal
   pull-up** — `INPUT_PULLUP` is accepted and does nothing — so that board carries
   an external 10kΩ to 3V3 and `WAKE_BTN_INPUT_MODE INPUT` instead
@@ -236,13 +241,39 @@ the failure mode is silent: press it and the screen lights, or it doesn't.
   through reset does **not** light the screen at boot (`begin()` seeds from the
   pin for exactly that).
 
-**9. Everything the screen work touched is hardware-untested apart from one
-DevKitC.** The SSD1306 itself ran on a DevKitC 2026-08-21 (GPIO16 SDA / GPIO4 SCL,
-0x3C) and that is the entire hardware record. Not proven: any panel on a **node**
-(`xiao_c5_screen` compiles; nothing has been wired), the S3's STEMMA-QT path, the
-`dev.sh flash-node --screen` flow, and the wiring docs for all three boards —
-those were written from datasheets and pin maps, not from a board on a bench.
-Treat `wiring/*.md` as a proposal until someone has built one.
+**9. What the screen work has and hasn't touched hardware.** Proven: the SSD1306
+on a DevKitC 2026-08-21 (GPIO16 SDA / GPIO4 SCL, 0x3C) and on a XIAO C5 node
+2026-08-22 (D4/D5), and the C5's wake button the same day. Not proven: the S3's
+STEMMA-QT path, the other two boards' button wiring (item 8), the toggle's off
+half, and the wiring docs' non-servo pin positions, which were written from
+datasheets and pin maps rather than from a board on a bench. Treat the unverified
+rows of `wiring/*.md` as a proposal until someone has built one.
+
+**10. A XIAO C5 as a PRIMARY — BOOTED on hardware 2026-08-22.** First run of the
+primary sketch with `HAS_LINEAR == 0`. What the boot log proved: it comes up,
+`NullMotorDriver`/`NullFeedback` report clean (`linear=refused gates=ok
+plugs=ok`), LittleFS mounts, the API server listens on port 80, servo bring-up is
+ready. Two bugs it found, both fixed the same day — the FAULT indicator latching
+on a board with no rack, and the pre-topology outlet→stop machinery running a
+full move/arrive round trip against a carriage that doesn't exist.
+
+**It serves the UI, and well** (2026-08-22) — the single-core worry did not
+materialise: async web server, Shelly poll task and loop() together, and the page
+is responsive. Servos move. That was the gate on retiring the other variants, and
+it is passed; see [[c5-everywhere-architecture]] for the env cleanup that unlocks.
+
+Still open on this board:
+- **The collector refusal on the self-test has not been exercised.** All four
+  channels sweep on both a primary and a node (2026-08-22), which also confirms
+  the `_deenergize()` fix — repeated moves on one channel is exactly what the
+  sweep does. What nobody has tried is holding the button *while the collector
+  runs* and confirming it refuses rather than moving anything.
+- **NodeLink from a C5 primary to a secondary.** The only part of the primary
+  role untested. `[NODE] Paired nodes dialling: 0` is as far as it has been
+  exercised.
+- The API still advertises the linear vocabulary — position, homing, stops — to a
+  UI on a board that has none. Now user-visible, since the UI loads.
+- Routing a real gate end to end from a topology, rather than servo bring-up.
 
 ### GUI Testing
 

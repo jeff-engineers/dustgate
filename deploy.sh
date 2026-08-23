@@ -6,7 +6,9 @@
 #   bash deploy.sh --fw     # firmware only (skip UI build + filesystem)
 #   bash deploy.sh --no-provision  # skip auto-provision step
 #   bash deploy.sh --provision-only  # skip build/flash, just (re)send credentials
-#   bash deploy.sh --no-topology-backup  # don't save/restore the shop layout
+#   bash deploy.sh --no-topology-backup  # (no-op since 2026-08-22 — the save/
+#                                        #  restore step is commented out; see
+#                                        #  "0. Save the shop layout" below)
 #   bash deploy.sh --node                # SECONDARY servo-only node (QT Py S3)
 #   bash deploy.sh --node=xiao_c5        # ...a different node board (any pio env)
 #
@@ -236,6 +238,9 @@ DO_FW=true
 DO_FS=true
 DO_PROVISION=true
 FORCE_PROVISION=false
+# Reads nothing at the moment: both places that tested it are commented out
+# (see "0. Save the shop layout"). Kept, along with the flag below, so turning
+# the step back on is uncommenting call sites rather than reconstructing this.
 DO_TOPO_BACKUP=true
 # Which PlatformIO env to build. Empty = platformio.ini's default_envs (the
 # primary DevKitC). --node switches to the servo-only secondary.
@@ -247,6 +252,8 @@ for arg in "$@"; do
     --fw) DO_UI=false; DO_FS=false ;;
     --no-provision) DO_PROVISION=false ;;
     --provision-only) DO_UI=false; DO_FW=false; DO_FS=false; FORCE_PROVISION=true ;;
+    # Accepted and inert while the backup step is commented out — still parsed
+    # so a script or a habit that passes it doesn't die on "unknown option".
     --no-topology-backup) DO_TOPO_BACKUP=false ;;
     # A SECONDARY node: servo-only firmware, and no Angular bundle or LittleFS
     # image at all — a node's entire interface is the /nodelink WebSocket, which
@@ -257,10 +264,11 @@ for arg in "$@"; do
     --node)   PIO_ENV="dustgate_node"; DO_UI=false; DO_FS=false ;;
     --node=*) PIO_ENV="${arg#--node=}"; DO_UI=false; DO_FS=false ;;
     # A PRIMARY on a non-default env — same board, same UI bundle, different
-    # build flags. --screen is the one that exists today: esp32dev_servo plus
-    # -DHAS_STATUS_SCREEN and the SSD1306 driver. Unlike --node this keeps the
-    # Angular bundle and the LittleFS image, because it is still a primary.
-    --screen) PIO_ENV="esp32dev_screen" ;;
+    # build flags (esp32dev_wroom32 is the rack-fitted one). Unlike --node this
+    # keeps the Angular bundle and the LittleFS image, because it is still a
+    # primary. --screen used to name esp32dev_servo-plus-the-OLED; every env
+    # carries the OLED now (2026-08-22), so it is accepted and ignored.
+    --screen) echo "  (--screen is the default now — every build carries the screen driver.)" ;;
     --env=*)  PIO_ENV="${arg#--env=}" ;;
   esac
 done
@@ -313,14 +321,41 @@ echo "║        DustGate Deploy           ║"
 echo "╚══════════════════════════════════╝"
 echo ""
 
-# ── 0. Save the shop layout ────────────────────────────────────────────────
+# ── 0. Save the shop layout ── DISABLED 2026-08-22, TO REVISIT ─────────────
 # Before anything is built or flashed, so a board we can't reach stops the
 # deploy while it is still cheap to stop. Only when the filesystem is going to
 # be rewritten — that is the step that erases it.
-if $DO_FS && $DO_TOPO_BACKUP; then
-  backup_topology
-  echo ""
-fi
+#
+# TURNED OFF FOR NOW, at the call site only: backup_topology() and
+# restore_topology() above are untouched and still correct, so switching this
+# back on is uncommenting these three lines and the matching pair in step 5.
+#
+# WHAT THIS COSTS, and it is not small — **a filesystem flash now silently
+# erases whatever shop is saved on the device.** No backup, no prompt, no abort.
+# There is still a manual path, and it is the whole safety net until this comes
+# back:
+#
+#     curl -H "X-Api-Key: <key>" http://<host>/api/topology > my-shop.json
+#     bash tools/restore-topology.sh my-shop.json
+#
+# WHY IT IS OFF. The step assumes a board that is up, on the network and holding
+# a shop worth keeping, and refuses to proceed when it can't confirm that —
+# aborting outright when stdin isn't a terminal. That is the right instinct for a
+# shop in service and the wrong one for the current bench, where boards are
+# being flashed repeatedly with no topology on them at all (a fresh C5 primary
+# answers `topology stored: no`), and every deploy pays a network round trip and
+# a possible abort to preserve nothing.
+#
+# WHAT TO DECIDE WHEN REVISITING — the flag already exists
+# (--no-topology-backup), so "let the operator opt out" is not the answer; the
+# operator has to remember, and the failure is silent and permanent. Likelier:
+# only run it when the device actually has a document (ask /api/topology first
+# and skip quietly on 404, which is the ordinary bench case), and never abort a
+# deploy over a board that has nothing to lose.
+#if $DO_FS && $DO_TOPO_BACKUP; then
+#  backup_topology
+#  echo ""
+#fi
 
 # ── 1. Build Angular UI ────────────────────────────────────────────────────
 if $DO_UI; then
@@ -542,12 +577,15 @@ PY
   echo ""
 fi
 
-# ── 5. Put the shop layout back ────────────────────────────────────────────
+# ── 5. Put the shop layout back ── DISABLED 2026-08-22, TO REVISIT ─────────
 # After provisioning, not before: a freshly-flashed board may not rejoin WiFi
 # until its credentials land, and this restore travels over the network.
-if $DO_FS && $DO_TOPO_BACKUP; then
-  restore_topology
-  echo ""
-fi
+#
+# Off with step 0 — see the note there. This half is inert on its own anyway:
+# restore_topology() returns immediately unless step 0 actually saved a document.
+#if $DO_FS && $DO_TOPO_BACKUP; then
+#  restore_topology
+#  echo ""
+#fi
 
 echo "✓ Deploy complete."

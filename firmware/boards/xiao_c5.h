@@ -83,27 +83,28 @@
 // #define PIXEL_GAIN      4
 
 // -- Reserved: status screen (SSD1306 OLED) + wake button --
-// Optional, and unbuilt ON THIS BOARD — a panel works on the DevKitC (2026-08-21)
-// but nothing has been wired to a C5. D4/D5 are
+// Optional, and PROVEN on this board: a panel ran on D4/D5 of a real C5 on
+// 2026-08-22, after the DevKitC proved the driver on 2026-08-21. D4/D5 are
 // the XIAO-standard I2C position, so Seeed's own accessories land on them, and they
 // stay free whether this board is driving four PWM gates or an ST3215 slider.
 // D1 is GPIO0, which is an ordinary pad on the C5 (the boot straps are 26/27/28),
 // so a momentary-to-GND button there is safe even at reset.
 // See firmware/wiring/xiao-c5.md §4 and the layouts in
 // docs/mockups/oled-status.html.
-// Fitted by -DHAS_STATUS_SCREEN, the same build-time switch the DevKitC uses —
-// env `xiao_c5_screen`. No panel has been connected to a C5 yet.
-#ifdef HAS_STATUS_SCREEN
+// Fitted by naming the pins here, and no longer by a build flag: one env per
+// board as of 2026-08-22, every one of them assuming a screen (see the note at
+// the top of platformio.ini). The button on D1 was pressed on a real C5 and lit
+// a real panel, 2026-08-22 — the only board where that is true.
 #define PIN_OLED_SDA    23   // D4
 #define PIN_OLED_SCL    24   // D5
 
 // The screen sleeps after two minutes and nothing relights it on its own, so the
-// button is the only way a person gets it back without walking to a phone. See utils/WakeButton.h. D1 is GPIO0, which would
+// button is the only way a person gets it back without walking to a phone — and a
+// second press puts it out early. See utils/WakeButton.h. D1 is GPIO0, which would
 // be the boot strap on most ESP32 parts and a bad place for a switch — on the
 // C5 the straps are 26/27/28, so a normally-open momentary here is safe even at
 // reset. D0 is deliberately not used: it is the only analog pad on the edge.
 #define PIN_WAKE_BTN     0   // D1, INPUT_PULLUP, momentary to GND
-#endif
 
 // -- Reserved: serial-servo bus --
 // D6/D7 are the board's hardware UART (GPIO11/GPIO12). D7 doubles as
