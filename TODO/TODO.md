@@ -163,18 +163,21 @@ No need to repeat this for the C5 — that is the part already done. Its pin map
 proven end to end (`firmware/wiring/xiao-c5.md` §6); if you do rebuild it by hand
 it still needs `PLATFORMIO_CORE_DIR=~/.platformio-pioarduino`.
 
-**2. NodeLink end to end — the primary commands a node.** ✅ **PASSED 2026-08-23**
-on a C5 primary driving a C5 node: paired, gate assigned to a node channel, and
-the node moves when the primary resolves the angle. **Routing from a real tool
-passes too** — a tool drawing power opens its gate, which is bench item 5's
-core loop and the first time the whole chain has run end to end.
+**2. NodeLink — the happy path passes, THE FAIL-SAFE HAS NEVER BEEN TRIED.**
 
-Still unchecked on this item, and it is the half that matters with a tool
-running: the fail-safe.
+The link itself: ✅ **passed 2026-08-23** on a C5 primary driving a C5 node —
+paired, gate assigned to a node channel, and the node moves when the primary
+resolves the angle. **Routing from a real tool passes too**: a tool drawing
+power opens its gate, the first time the whole chain has run end to end.
 
-Also check the fail-safe deliberately, since it is the one that matters with a
-tool running: kill the primary mid-move. Pass: every servo **holds**. No timeout
-closing gates, no homing on reconnect, no autonomous behaviour at all.
+**Still open, and it is the half that matters with a tool actually running:**
+kill the primary mid-move. Pass = every servo **HOLDS** where it is. No timeout
+closing gates, no homing on reconnect, no autonomous behaviour at all. A node
+that tidies up after a lost primary can shut a gate under a running tool, which
+is the dead-head the whole system exists to prevent.
+
+Two minutes with both boards already on the bench, so there is no good reason
+for this to keep waiting behind bigger items.
 
 **3. Certify real firmware against the conformance suite.** This is the one that
 tells you whether firmware has drifted from `shared/device-model/` — the whole
