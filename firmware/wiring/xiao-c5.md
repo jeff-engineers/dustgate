@@ -121,13 +121,15 @@ alone on a hung board gets you nothing, which is easy to mistake for a dead boar
 > | Confirmed by a working signal | Still drawing-only |
 > |---|---|
 > | D7, D8, D9, D10 — servos moved (2026-08-21) | D0, D3 — never connected to anything |
-> | D4, D5 — panel answered at 0x3C (2026-08-22) | D6 — reserved, no ST3215 on the bench |
-> | D1 — button press lit the screen (2026-08-22) | D2 — pixel is external and none has been fitted to a C5 |
+> | D4, D5 — panel answered at 0x3C (2026-08-22) | |
+> | D1 — button press lit the screen (2026-08-22) | D6 — reserved for the ST3215 bus, nothing on the bench to talk to |
+> | D2 — a WS2812 lit and showed the right colours (2026-08-23) | |
 >
-> So the servo block, the I²C pair and the button are as good as traced. **D2 is
-> the one to check with a meter before laying it out**: it is the only pad in the
-> "used today" list whose hardware has never existed on this board, and a pixel
-> that doesn't light looks identical to a wrong pad number.
+> **Every pad this firmware actually uses is now confirmed by a working signal.**
+> The servo block, the I²C pair, the button and the pixel are all as good as
+> traced. What is left in the right-hand column is pads nothing has ever been
+> attached to — a wrong number there costs a board spin, but no test can find it
+> until something is wired to them.
 >
 > The physical *positions* of the pads on the edge are still Seeed's drawing
 > throughout. The header [`boards/xiao_c5.h`](../boards/xiao_c5.h) is what the
