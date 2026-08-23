@@ -163,16 +163,14 @@ No need to repeat this for the C5 — that is the part already done. Its pin map
 proven end to end (`firmware/wiring/xiao-c5.md` §6); if you do rebuild it by hand
 it still needs `PLATFORMIO_CORE_DIR=~/.platformio-pioarduino`.
 
-**2. NodeLink end to end — the primary commands a node.** Only after 1 passes;
-if 1 fails, this can only tell you the same thing more expensively. On the C5, 1
-now passes — but that does not settle this item, whose point is the *link*: a
-primary resolving an angle and a node acting on it, then holding through a
-primary that dies mid-move. Flash a
-primary and a node, pair them, assign a gate to a node channel, and drive it from
-the UI. Pass: the primary resolves the angle and the node moves. Worth watching
-the wire: a node must receive resolved angles/positions and never state names —
-that's the constraint that lets a $5 board be a node and keeps a schema change
-from needing a flash to every board in the shop.
+**2. NodeLink end to end — the primary commands a node.** ✅ **PASSED 2026-08-23**
+on a C5 primary driving a C5 node: paired, gate assigned to a node channel, and
+the node moves when the primary resolves the angle. **Routing from a real tool
+passes too** — a tool drawing power opens its gate, which is bench item 5's
+core loop and the first time the whole chain has run end to end.
+
+Still unchecked on this item, and it is the half that matters with a tool
+running: the fail-safe.
 
 Also check the fail-safe deliberately, since it is the one that matters with a
 tool running: kill the primary mid-move. Pass: every servo **holds**. No timeout
@@ -268,18 +266,49 @@ deferred-reply pattern 501s on the ESP32Async fork the C5 pulls in, and the mDNS
 window (400ms plugs / 800ms nodes) was far too short for this network — 3000ms
 finds everything first try. Details in the commit messages and MdnsQuery.h.
 
+**NodeLink out to a secondary passes** (2026-08-23), which was the last untested
+part of the primary role. See bench item 2.
+
 Still open on this board:
 - **The collector refusal on the self-test has not been exercised.** All four
   channels sweep on both a primary and a node (2026-08-22), which also confirms
   the `_deenergize()` fix — repeated moves on one channel is exactly what the
   sweep does. What nobody has tried is holding the button *while the collector
   runs* and confirming it refuses rather than moving anything.
-- **NodeLink from a C5 primary to a secondary.** The only part of the primary
-  role untested. `[NODE] Paired nodes dialling: 0` is as far as it has been
-  exercised.
 - The API still advertises the linear vocabulary — position, homing, stops — to a
   UI on a board that has none. Now user-visible, since the UI loads.
 - Routing a real gate end to end from a topology, rather than servo bring-up.
+
+**11. The collector takes 5-10 seconds to notice a tool (2026-08-23).** Real
+complaint from a real bench run, and it is a latency problem, not a correctness
+one — the gate opens and the collector starts, just late enough to be annoying.
+
+Our own budget only explains ~1.5s of it: one 500ms reconcile
+(`OUTLET_POLL_INTERVAL_MS`) plus the 1000ms `OUTLET_ON_DEBOUNCE_MS`. The wake-on-
+push already exists, so a reading is acted on the tick it lands.
+
+The structural suspect is in `SmartOutletControl::doPoll()`:
+
+```cpp
+if (!o->isPushConnected()) o->poll();
+```
+
+A push-connected plug is **never** HTTP-polled, so once the WebSocket is up the
+500ms poll stops and detection latency becomes whatever cadence the plug chooses
+to report `apower` at. If a Gen4 plug reports power periodically rather than on
+change, push is not a slower path than polling — it is the only path, and the
+poll that would have caught it is switched off.
+
+**Measure before touching either number.** `plugtrace` on the primary's console
+timestamps every frame a plug sends; the gaps between `[PUSH]` lines are the
+plug's cadence, and `[DEBOUNCE] committed after Xms` is our half. Then:
+- *Plug slow to report* → poll a plug whose last push is stale, so push
+  accelerates detection but never gates it. This is the likely fix.
+- *Plug reports promptly* → the time is between `[PUSH]` and `[DEBOUNCE]`, and
+  the debounce is the knob. Don't shrink it blind: it is there to stop motor
+  inrush from false-triggering a gate.
+
+Board-independent — nothing here is specific to the C5 or blocks it.
 
 ### GUI Testing
 

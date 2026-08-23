@@ -325,12 +325,30 @@ void SmartOutletControl::doPoll() {
 
     if (bestStop != _pendingStop) {
         // Restart the debounce window — nothing commits this tick.
+        // Logged because it is the other half of the [PUSH] line: together they
+        // say how much of the delay between flipping a tool and the collector
+        // starting is ours (this to the commit below) and how much happened
+        // before we ever heard about it.
+        DEBUG_PRINT(F("[DEBOUNCE] t=")); DEBUG_PRINT(now);
+        DEBUG_PRINT(F(" candidate stop ")); DEBUG_PRINT(bestStop);
+        DEBUG_PRINT(F(" (was ")); DEBUG_PRINT(_pendingStop);
+        DEBUG_PRINT(F(") — waiting "));
+        DEBUG_PRINT(bestStop == 0 ? OUTLET_OFF_DEBOUNCE_MS : OUTLET_ON_DEBOUNCE_MS);
+        DEBUG_PRINTLN(F("ms"));
         _pendingStop    = bestStop;
         _pendingStartMs = now;
     } else {
         unsigned long window = (bestStop == 0) ? OUTLET_OFF_DEBOUNCE_MS
                                                : OUTLET_ON_DEBOUNCE_MS;
         if (now - _pendingStartMs >= window) {
+            static int lastCommitted = -1;
+            if (bestStop != lastCommitted) {
+                lastCommitted = bestStop;
+                DEBUG_PRINT(F("[DEBOUNCE] t=")); DEBUG_PRINT(now);
+                DEBUG_PRINT(F(" committed stop ")); DEBUG_PRINT(bestStop);
+                DEBUG_PRINT(F(" after ")); DEBUG_PRINT(now - _pendingStartMs);
+                DEBUG_PRINTLN(F("ms"));
+            }
             xSemaphoreTake(_mutex, portMAX_DELAY);
             // Track the active tool (0 = idle) for dust-collector control, and
             // release any manual DC override on a real tool on/off event.
@@ -537,7 +555,33 @@ void SmartOutletControl::onPushedPower(const char* ip, float apower) {
     SmartOutlet* o = outletByIp(ip);
     if (!o) return;
     o->setPushConnected(true);   // a push implies the connection is live
+
+    // Timestamp the moment the PLUG spoke, separately from the moment we act on
+    // it. Jeff saw 5-10s between flipping a tool and the collector noticing
+    // (2026-08-23), and our own budget only explains ~1.5s of that — one 500ms
+    // reconcile plus the 1000ms ON debounce. The rest is either the plug taking
+    // its time to report, or push being connected-but-quiet, and those look
+    // identical from the outside. This says which.
+    //
+    // A push-connected plug is never HTTP-polled (see doPoll), so when push is
+    // slow it is not a slower path than polling — it is the ONLY path.
+    const bool wasActive = o->isActive();
     o->setPushedPower(apower);
+    const bool nowActive = o->isActive();
+
+    if (outlettrace::enabled()) {
+        DEBUG_PRINT(F("[PUSH] t=")); DEBUG_PRINT(millis());
+        DEBUG_PRINT(F(" ")); DEBUG_PRINT(ip);
+        DEBUG_PRINT(F(" ")); DEBUG_PRINT(apower);
+        DEBUG_PRINTLN(F("W"));
+    } else if (nowActive != wasActive) {
+        // Always, trace or no trace: the crossing is the event the whole system
+        // turns on, and one line per tool switch is not noise.
+        DEBUG_PRINT(F("[PUSH] t=")); DEBUG_PRINT(millis());
+        DEBUG_PRINT(F(" ")); DEBUG_PRINT(ip);
+        DEBUG_PRINT(F(" ")); DEBUG_PRINT(apower);
+        DEBUG_PRINTLN(nowActive ? F("W — crossed ON") : F("W — crossed off"));
+    }
     // Wake the poll task so a tool turning on/off is acted on immediately
     // (subject to the usual on/off debounce), not at the next 500ms tick.
     if (_pollTaskHandle) xTaskNotifyGive(_pollTaskHandle);

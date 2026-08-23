@@ -14,6 +14,7 @@
 #ifdef CONTROL_SMART_OUTLET
   #include "../outlets/ShellyGen2Outlet.h"
   #include "../outlets/ShellyDeviceName.h"
+  #include "SmartOutletControl.h"    // `plugtrace` — outlettrace::enabled()
 #endif
 
 #if defined(CONTROL_SERIAL_DEBUG) || defined(ENABLE_SERIAL_COMMANDS)
@@ -296,6 +297,17 @@ void SerialDebugControl::processLine(const String& line) {
 #if defined(CONTROL_SMART_OUTLET) || defined(ENABLE_HTTP_API)
     } else if (cmd == "mdnsprobe") {
         runMdnsProbe();
+#endif
+
+#ifdef CONTROL_SMART_OUTLET
+    } else if (cmd == "plugtrace") {
+        outlettrace::enabled() = !outlettrace::enabled();
+        Serial.print(F("[DEBUG] Plug push tracing "));
+        Serial.println(outlettrace::enabled()
+            ? F("ON — every frame a plug sends, timestamped. Flip a tool and "
+                "read the gaps between [PUSH] lines: that is the plug's cadence, "
+                "and the delay before the collector notices lives in it.")
+            : F("off."));
 #endif
 
     } else if (cmd == "endstops" || cmd == "e") {
@@ -695,6 +707,9 @@ void SerialDebugControl::printHelp() {
 #endif
 #if defined(CONTROL_SMART_OUTLET) || defined(ENABLE_HTTP_API)
     Serial.println(F("  mdnsprobe         Radio facts, then time every mDNS answer (once per boot — it warms the cache)"));
+#endif
+#ifdef CONTROL_SMART_OUTLET
+    Serial.println(F("  plugtrace         Toggle: timestamp every frame a plug pushes — how fast does it report?"));
 #endif
     Serial.println(F("  provision <json>  Write WiFi+host to NVS: {\"ssid\":\"x\",\"pass\":\"y\",\"host\":\"dustgate\"}"));
     Serial.println(F("  help              Show this list"));

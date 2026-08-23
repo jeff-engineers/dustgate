@@ -20,6 +20,18 @@
 
 #ifdef CONTROL_SMART_OUTLET
 
+// Verbose push tracing, off by default, toggled by the `plugtrace` serial
+// command. On, every frame a plug sends is timestamped and printed — which is
+// the only way to see the plug's REPORTING CADENCE, as opposed to the moments it
+// happens to cross a threshold. Off, a crossing still prints one line.
+//
+// A toggle rather than a build flag because the question it answers ("why did
+// the collector take 8 seconds to notice?") only comes up with a real tool, a
+// real plug and a person watching, and reflashing to ask it is a poor trade.
+namespace outlettrace {
+inline bool& enabled() { static bool e = false; return e; }
+}
+
 class SmartOutletControl : public ControlInput {
 public:
     SmartOutletControl();
