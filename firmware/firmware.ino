@@ -1828,15 +1828,15 @@ void loop() {
 
         static const int kMaxNodeHits = 8;
         MdnsHit hits[kMaxNodeHits];
-        // Two short attempts rather than one long one: mDNS is UDP and lossy, so
-        // a board only needs to answer once across the attempts to show up.
-        // Same shape as outlet discovery, which works reliably: more attempts,
-        // each a little longer, with a gap between them. Two 600ms shots was
-        // marginal against a node in WiFi power-save — it answers, but not always
-        // inside the window, which reads as "no boards found" with no way to tell
-        // that from "nothing out there".
-        for (int attempt = 0; attempt < 3; attempt++) {
-            int n = mdnsQueryDustgateTcp(800, hits, kMaxNodeHits);
+        // Same window as outlet discovery, and for the same reason — see
+        // DISCOVER_MDNS_TIMEOUT_MS in config.h. This path had its own hand-tuned
+        // number (three 800ms attempts, itself a bump from two 600ms ones that
+        // were "marginal") and kept losing the same argument: a node that
+        // answers, but not inside the window, reads as "no boards found" with
+        // nothing to distinguish it from an empty network. Tuning it twice
+        // without fixing the shape is what made it worth sharing the constant.
+        for (int attempt = 0; attempt < DISCOVER_MDNS_ATTEMPTS; attempt++) {
+            int n = mdnsQueryDustgateTcp(DISCOVER_MDNS_TIMEOUT_MS, hits, kMaxNodeHits);
             DEBUG_PRINT(F("[NODES] attempt ")); DEBUG_PRINT(attempt + 1);
             DEBUG_PRINT(F(": ")); DEBUG_PRINT(n); DEBUG_PRINTLN(F(" hit(s)"));
             for (int i = 0; i < n; i++) {

@@ -403,18 +403,28 @@ extern int g_homeDirection;        // defined in firmware.ino
 // unprovisioned plugs; already-pushing plugs are skipped, so this is cheap.
 #define OUTLET_PROVISION_RETRY_MS   15000
 
-// mDNS discovery (setup wizard's "Scan for outlets" / serial 'discover') is
-// UDP-based and lossy — a single query commonly misses devices that answer
-// on a repeat query. Re-querying a few times and merging by IP gives a much
-// more complete/consistent list. Each query blocks for DISCOVER_MDNS_TIMEOUT_MS
-// waiting for responses (see utils/MdnsQuery.h) — keep the total across all
-// attempts well under a few seconds: on a local LAN, devices that are going
-// to answer at all do so within tens of milliseconds, and blocking the main
-// loop for too long risked a watchdog reset / stale HTTP request (see
-// MdnsQuery.h for the full story).
-#define DISCOVER_MDNS_ATTEMPTS       3
-#define DISCOVER_MDNS_TIMEOUT_MS     400
-#define DISCOVER_MDNS_RETRY_DELAY_MS 150
+// mDNS discovery (setup wizard's "Scan for outlets" / serial 'discover').
+//
+// ONE LONG QUERY, NOT SEVERAL SHORT ONES (2026-08-22). This was 3 attempts of
+// 400ms, on the theory that mDNS is lossy UDP and a device only has to answer
+// once across the attempts — with a comment asserting that anything that will
+// answer does so "within tens of milliseconds". That is true of a plain LAN and
+// was flatly untrue of the shop's: a C5 primary found ZERO of four Shelly plugs
+// at 400ms and all four, first try from cold, at 3000ms.
+//
+// Short-and-repeated is the wrong shape for that anyway. ESP-IDF retransmits
+// the query itself over the life of one search, so a single 3000ms window
+// already gives a slow responder several chances — while three separate 400ms
+// searches give it three chances that all close before it speaks. And a second
+// search reads back the mDNS cache the first one filled, which makes repeat
+// attempts look far more effective in testing than they are in the field.
+//
+// The window is affordable now because the query no longer blocks: MdnsQuery.h
+// polls an async search and pets the watchdog. Raising it is cheap; the cost is
+// that gate control doesn't run while a scan is in flight. See MdnsQuery.h.
+#define DISCOVER_MDNS_ATTEMPTS       1
+#define DISCOVER_MDNS_TIMEOUT_MS     3000
+#define DISCOVER_MDNS_RETRY_DELAY_MS 250
 #define DISCOVER_MAX_RESULTS         16
 
 // How long a tool must be drawing above threshold before the gate moves (ms).
