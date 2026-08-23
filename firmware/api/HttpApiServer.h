@@ -345,9 +345,57 @@ private:
     bool                      _nodeSetPending  = false;
     topo::nodelink::SetCommand _nodeSetCmd;
 
+    // ------------------------------------------------------------------
+    // Replies the MAIN LOOP produces, for work that blocks (an mDNS sweep, an
+    // HTTP write to a plug). The loop owns them because doing them on the async
+    // TCP task is worse; the question is how the request waits.
+    //
+    // It USED TO WAIT AS A POINTER: the handler stashed the
+    // AsyncWebServerRequest* and returned without answering, and the loop called
+    // send() on it later. That worked on me-no-dev/ESPAsyncWebServer 1.2.3 and is
+    // a hard error on the ESP32Async 3.x fork the C5 rides, which answers a
+    // handler that returned without responding:
+    //
+    //     HTTP 501  "Handler did not handle the request"
+    //
+    // — immediately, and then the loop's later send() is writing to a request the
+    // library has already finished with. On a C5 primary that broke BOTH scans
+    // and the plug rename/release, all with the same 501, while the serial log
+    // showed the work completing perfectly (found 2026-08-22 from /boards).
+    //
+    // So the request now waits AS AN OPEN RESPONSE instead. The handler answers
+    // immediately with a chunked response whose filler returns RESPONSE_TRY_AGAIN
+    // until the loop fills the body in — legal on both libraries, and the request
+    // is never held across a loop iteration by anything but the library itself.
+    // Long enough for three 800ms mDNS attempts plus slack; short enough that a
+    // loop that never answers fails the request instead of hanging the page. A
+    // timed-out reply is a normal JSON error, not a dropped connection.
+    static const uint32_t kDeferredTimeoutMs = 15000;
+
+    struct Deferred {
+        // volatile, and set LAST: the filler runs on the async task and reads
+        // this without a lock, so the body must be complete before it turns true.
+        volatile bool ready = false;
+        String        body;
+        uint32_t      startedMs = 0;
+        // Spaces emitted while waiting — see beginDeferred() for why they exist.
+        // They are part of the response, so the body's offset is index - pad.
+        size_t        pad = 0;
+
+        // True while a reply is still owed on this slot. A second request must
+        // not reset it: doing so clears the body the in-flight filler is about
+        // to read, and that request then waits forever.
+        bool busy() const {
+            return startedMs != 0 && !ready &&
+                   (millis() - startedMs) < kDeferredTimeoutMs;
+        }
+    };
+    void beginDeferred(AsyncWebServerRequest* req, Deferred& slot);
+    void finishDeferred(Deferred& slot, const String& json);
+
     // Node discovery + link state (see consumeNodeDiscoverRequest / publishNodeStatus)
     bool                   _nodeDiscoverPending = false;
-    AsyncWebServerRequest* _nodeDiscoverReq     = nullptr;
+    Deferred               _nodeDiscoverReply;
     String                 _nodeStatusJson;
     bool                   _nodePairPending = false;
     String                 _nodePairHost;
@@ -372,19 +420,19 @@ private:
     bool            _dcDeletePending;
     bool            _dcSwitchPending;  bool _dcSwitchOn;
     bool            _discoverPending;
-    AsyncWebServerRequest* _discoverReq;
+    Deferred        _discoverReply;
     bool            _pingPending;
-    AsyncWebServerRequest* _pingReq;
+    Deferred        _pingReply;
     char            _pingIp[40];
     // Rename / release both hold their request across a blocking device write,
     // exactly as ping does.
     bool            _outletNamePending;
-    AsyncWebServerRequest* _outletNameReq;
+    Deferred        _outletNameReply;
     char            _outletNameIp[40];
     char            _outletNameLabel[48];
     bool            _outletNameTakeover;
     bool            _outletReleasePending;
-    AsyncWebServerRequest* _outletReleaseReq;
+    Deferred        _outletReleaseReply;
     char            _outletReleaseIp[40];
     bool            _takeoverPending;
     char            _takeoverIp[40];

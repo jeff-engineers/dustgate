@@ -118,11 +118,11 @@ HttpApiServer::HttpApiServer()
       _dcConfigPending(false),
       _dcDeletePending(false),
       _dcSwitchPending(false), _dcSwitchOn(false),
-      _discoverPending(false), _discoverReq(nullptr),
-      _pingPending(false), _pingReq(nullptr),
+      _discoverPending(false),
+      _pingPending(false),
       _takeoverPending(false),
-      _outletNamePending(false), _outletNameReq(nullptr), _outletNameTakeover(false),
-      _outletReleasePending(false), _outletReleaseReq(nullptr)
+      _outletNamePending(false), _outletNameTakeover(false),
+      _outletReleasePending(false)
 #endif
 {
     _calModel[0] = '\0';
@@ -509,6 +509,68 @@ void HttpApiServer::reportNodeState(const char* selectorId, const char* stateId,
     _nodeWs.textAll(s);      // same main-loop→textAll pattern as the status push
 }
 
+// ---------------------------------------------------------------------------
+// Deferred replies. See the Deferred struct in the header for why these exist
+// and what broke without them.
+// ---------------------------------------------------------------------------
+void HttpApiServer::beginDeferred(AsyncWebServerRequest* req, Deferred& slot) {
+    slot.ready     = false;
+    slot.body      = String();
+    slot.pad       = 0;
+    slot.startedMs = millis();
+
+    // Capturing &slot is safe: every slot is a member of this server, which
+    // outlives every request it answers.
+    AsyncWebServerResponse* res = req->beginChunkedResponse(
+        "application/json",
+        [this, &slot](uint8_t* buffer, size_t maxLen, size_t index) -> size_t {
+            if (!slot.ready) {
+                // Unsigned subtraction: correct across the millis() rollover.
+                if ((millis() - slot.startedMs) >= kDeferredTimeoutMs) {
+                    // Answer the timeout as data rather than dropping the
+                    // socket: a page that gets JSON back can say what happened,
+                    // and a dead connection looks like a network fault to
+                    // whoever is reading.
+                    slot.body  = String(F("{\"error\":\"timed out waiting for the controller\"}"));
+                    slot.ready = true;
+                } else {
+                    // A SPACE, not RESPONSE_TRY_AGAIN, and this is the whole
+                    // reason the first version of this didn't work: TRY_AGAIN
+                    // writes nothing, nothing written means no TCP ack, and no
+                    // ack means the library never comes back to ask again. The
+                    // request sat with its headers sent and its body empty until
+                    // the connection timed out — 200 OK, zero bytes, "transfer
+                    // closed with outstanding read data" at the client, while
+                    // the serial log showed the scan finishing perfectly.
+                    //
+                    // One byte of whitespace per poll keeps the acks coming, and
+                    // therefore keeps the filler being called. It costs nothing
+                    // to the reader: leading whitespace is legal JSON, so every
+                    // parser skips it. Verified on hardware 2026-08-22.
+                    if (maxLen == 0) return RESPONSE_TRY_AGAIN;
+                    buffer[0] = ' ';
+                    slot.pad++;
+                    return 1;
+                }
+            }
+            // index counts EVERY byte already sent, padding included, so the
+            // body's own offset is index minus the padding.
+            const size_t total = slot.body.length();
+            const size_t off   = (index >= slot.pad) ? (index - slot.pad) : 0;
+            if (off >= total) return 0;              // 0 = the response is complete
+            size_t n = total - off;
+            if (n > maxLen) n = maxLen;
+            memcpy(buffer, slot.body.c_str() + off, n);
+            return n;
+        });
+    req->send(res);
+}
+
+void HttpApiServer::finishDeferred(Deferred& slot, const String& json) {
+    slot.body  = json;
+    slot.ready = true;      // LAST: the filler reads this without a lock
+}
+
 bool HttpApiServer::consumeNodeDiscoverRequest() {
     xSemaphoreTake(_mutex, portMAX_DELAY);
     bool v = _nodeDiscoverPending;
@@ -518,9 +580,7 @@ bool HttpApiServer::consumeNodeDiscoverRequest() {
 }
 
 void HttpApiServer::respondNodeDiscover(const String& json) {
-    AsyncWebServerRequest* req = _nodeDiscoverReq;
-    _nodeDiscoverReq = nullptr;
-    if (req) req->send(200, "application/json", json);
+    finishDeferred(_nodeDiscoverReply, json);
 }
 
 bool HttpApiServer::consumeToolManualRequest(String& outToolId, bool& outOn) {
@@ -625,11 +685,9 @@ bool HttpApiServer::consumeDiscoverRequest() {
 
 void HttpApiServer::respondDiscover(const String& json) {
     xSemaphoreTake(_mutex, portMAX_DELAY);
-    AsyncWebServerRequest* req = _discoverReq;
     _discoverPending = false;
-    _discoverReq     = nullptr;
     xSemaphoreGive(_mutex);
-    if (req) req->send(200, "application/json", json);
+    finishDeferred(_discoverReply, json);
 }
 
 bool HttpApiServer::consumePingRequest(char* outIp, size_t ipLen) {
@@ -642,11 +700,9 @@ bool HttpApiServer::consumePingRequest(char* outIp, size_t ipLen) {
 
 void HttpApiServer::respondPing(const String& json) {
     xSemaphoreTake(_mutex, portMAX_DELAY);
-    AsyncWebServerRequest* req = _pingReq;
     _pingPending = false;
-    _pingReq     = nullptr;
     xSemaphoreGive(_mutex);
-    if (req) req->send(200, "application/json", json);
+    finishDeferred(_pingReply, json);
 }
 
 bool HttpApiServer::consumeOutletNameRequest(char* outIp, size_t ipLen,
@@ -665,11 +721,9 @@ bool HttpApiServer::consumeOutletNameRequest(char* outIp, size_t ipLen,
 
 void HttpApiServer::respondOutletName(const String& json) {
     xSemaphoreTake(_mutex, portMAX_DELAY);
-    AsyncWebServerRequest* req = _outletNameReq;
     _outletNamePending = false;
-    _outletNameReq     = nullptr;
     xSemaphoreGive(_mutex);
-    if (req) req->send(200, "application/json", json);
+    finishDeferred(_outletNameReply, json);
 }
 
 bool HttpApiServer::consumeOutletReleaseRequest(char* outIp, size_t ipLen) {
@@ -682,11 +736,9 @@ bool HttpApiServer::consumeOutletReleaseRequest(char* outIp, size_t ipLen) {
 
 void HttpApiServer::respondOutletRelease(const String& json) {
     xSemaphoreTake(_mutex, portMAX_DELAY);
-    AsyncWebServerRequest* req = _outletReleaseReq;
     _outletReleasePending = false;
-    _outletReleaseReq     = nullptr;
     xSemaphoreGive(_mutex);
-    if (req) req->send(200, "application/json", json);
+    finishDeferred(_outletReleaseReply, json);
 }
 #endif
 
@@ -1045,12 +1097,13 @@ void HttpApiServer::registerRoutes() {
     // ------------------------------------------------------------------
     _server.on("/api/nodes/discover", HTTP_GET, [this](AsyncWebServerRequest* req) {
         if (!checkAuth(req)) return;
-        if (_nodeDiscoverPending) { sendError(req, 429, "discovery already running"); return; }
+        if (_nodeDiscoverPending || _nodeDiscoverReply.busy()) { sendError(req, 429, "discovery already running"); return; }
         xSemaphoreTake(_mutex, portMAX_DELAY);
         _nodeDiscoverPending = true;
-        _nodeDiscoverReq     = req;
         xSemaphoreGive(_mutex);
-        // No response here — the main loop answers via respondNodeDiscover().
+        // Answered immediately as an open chunked response; the main loop fills
+        // in the body via respondNodeDiscover(). See Deferred in the header.
+        beginDeferred(req, _nodeDiscoverReply);
     });
 
     // ------------------------------------------------------------------
@@ -1447,9 +1500,9 @@ void HttpApiServer::registerRoutes() {
         if (!checkAuth(req)) return;
         xSemaphoreTake(_mutex, portMAX_DELAY);
         _discoverPending = true;
-        _discoverReq     = req;
         xSemaphoreGive(_mutex);
-        // response sent later by the main loop via respondDiscover()
+        // body filled later by the main loop via respondDiscover()
+        beginDeferred(req, _discoverReply);
     });
 
     // GET /api/outlets — list with live readings
@@ -1479,10 +1532,10 @@ void HttpApiServer::registerRoutes() {
 
             xSemaphoreTake(_mutex, portMAX_DELAY);
             _pingPending = true;
-            _pingReq     = req;
             strlcpy(_pingIp, ip, sizeof(_pingIp));
             xSemaphoreGive(_mutex);
-            // response sent later by the main loop via respondPing()
+            // body filled later by the main loop via respondPing()
+            beginDeferred(req, _pingReply);
         }
     );
 
@@ -1545,7 +1598,6 @@ void HttpApiServer::registerRoutes() {
 
             xSemaphoreTake(_mutex, portMAX_DELAY);
             _outletNamePending  = true;
-            _outletNameReq      = req;
             _outletNameTakeover = take;
             strlcpy(_outletNameIp,    ip,    sizeof(_outletNameIp));
             // Truncated rather than rejected: the plug's own name field is short,
@@ -1553,7 +1605,8 @@ void HttpApiServer::registerRoutes() {
             // for being three characters long.
             strlcpy(_outletNameLabel, label, sizeof(_outletNameLabel));
             xSemaphoreGive(_mutex);
-            // response sent later by the main loop via respondOutletName()
+            // body filled later by the main loop via respondOutletName()
+            beginDeferred(req, _outletNameReply);
         }
     );
 
@@ -1581,10 +1634,10 @@ void HttpApiServer::registerRoutes() {
 
             xSemaphoreTake(_mutex, portMAX_DELAY);
             _outletReleasePending = true;
-            _outletReleaseReq     = req;
             strlcpy(_outletReleaseIp, ip, sizeof(_outletReleaseIp));
             xSemaphoreGive(_mutex);
-            // response sent later by the main loop via respondOutletRelease()
+            // body filled later by the main loop via respondOutletRelease()
+            beginDeferred(req, _outletReleaseReply);
         }
     );
 
