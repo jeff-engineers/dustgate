@@ -262,6 +262,12 @@ materialise: async web server, Shelly poll task and loop() together, and the pag
 is responsive. Servos move. That was the gate on retiring the other variants, and
 it is passed; see [[c5-everywhere-architecture]] for the env cleanup that unlocks.
 
+**Both scans work** (2026-08-23) — the setup wizard lists real Shelly plugs and
+/boards lists the real node. Two bugs stood in the way and both are fixed: the
+deferred-reply pattern 501s on the ESP32Async fork the C5 pulls in, and the mDNS
+window (400ms plugs / 800ms nodes) was far too short for this network — 3000ms
+finds everything first try. Details in the commit messages and MdnsQuery.h.
+
 Still open on this board:
 - **The collector refusal on the self-test has not been exercised.** All four
   channels sweep on both a primary and a node (2026-08-22), which also confirms
