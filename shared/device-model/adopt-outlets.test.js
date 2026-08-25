@@ -81,6 +81,50 @@ const find = (d, ip) => M.ensureDiscovered(d).find(x => x.ip === ip);
   eq("and its ownership is left exactly as it was", find(d, foreign.ip).claim, foreign.claim);
 }
 
+// ── a rename survives re-adopting the layout ────────────────────────────────
+//
+// A PLUG'S NAME BELONGS TO THE PLUG, not to whatever the layout calls the
+// machine it senses. The document's `name` is a DEFAULT for a plug nobody has
+// named yet, and adopting is not a rename.
+//
+// The firmware had this wrong until 2026-08-24: syncTopologyOutlets() rebuilt
+// every outlet from the layout on EVERY save, passing the machine's name, which
+// discarded the rename and then wrote the machine name back onto the physical
+// plug on the next provisioning pass. Intermittent, because provisioning skips a
+// plug that is already push-connected — so whether the revert reached the device
+// depended on how fast its WebSocket came back. This model always skipped a plug
+// it already knew; the assertions were simply never written down.
+{
+  const d = M.createDevice();
+  const doc = {
+    machines: [{ id: 'saw', name: 'Table Saw',
+                 sensor: { outlet: { gen: 2, ip: '10.0.0.30', host: 'plug-saw', name: 'Table Saw' } } }],
+  };
+  M.adoptOutlets(d, doc);
+  eq('adopted under the machine name',
+     M.discoverOutlets(d).find(x => x.ip === '10.0.0.30').name, 'Table Saw');
+
+  M.nameOutlet(d, '10.0.0.30', 'Bench plug 2', false);
+  eq('the rename lands', M.discoverOutlets(d).find(x => x.ip === '10.0.0.30').name, 'Bench plug 2');
+  check('and the plug carries the owner suffix',
+        find(d, '10.0.0.30').name.endsWith(' · dustgate-demo'), find(d, '10.0.0.30').name);
+
+  // Saving the layout again — the exact act that used to revert it. Twice, since
+  // the reported symptom was intermittent and a single pass could get lucky.
+  M.adoptOutlets(d, doc);
+  M.adoptOutlets(d, doc);
+  eq('and re-adopting the SAME layout does not revert it',
+     M.discoverOutlets(d).find(x => x.ip === '10.0.0.30').name, 'Bench plug 2');
+
+  // Renaming the MACHINE is not renaming the plug either — they are separate
+  // things that happen to have shared a default once.
+  doc.machines[0].name = 'Cabinet Saw';
+  doc.machines[0].sensor.outlet.name = 'Cabinet Saw';
+  M.adoptOutlets(d, doc);
+  eq('nor does renaming the machine it senses',
+     M.discoverOutlets(d).find(x => x.ip === '10.0.0.30').name, 'Bench plug 2');
+}
+
 {
   const d = M.createDevice();
   const before = M.ensureDiscovered(d).length;

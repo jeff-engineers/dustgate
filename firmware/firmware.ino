@@ -1196,6 +1196,24 @@ void loop() {
                     control.setCollectorManual((int)i, want);
                     g_dcAsserted[i] = want; g_dcHave[i] = true;
                 }
+                // Feed the plug's own reading back, the same way tool watts go in
+                // above. `collectorOn` is what we COMMANDED; this is what came
+                // back, and the two coming apart is a tripped breaker, a blower
+                // switched off at its own panel, or an unplugged cord.
+                //
+                // Only for a slot that actually has a plug — reporting zeroes for
+                // a collector nobody paired would read as a dead blower rather
+                // than an absent one.
+                if (control.collectorConfigured((int)i)) {
+                    uint32_t since = control.collectorOnSinceMs((int)i);
+                    // millis() is read HERE and handed over as an age: the runtime
+                    // owns no clock, which is what keeps it host-testable.
+                    uint32_t onFor = since ? (millis() - since) : 0;
+                    g_topoRuntime.setCollectorPlug(sysIds[i],
+                                                   control.collectorWatts((int)i),
+                                                   control.collectorReachable((int)i),
+                                                   onFor);
+                }
             }
         }
 #endif
@@ -2229,9 +2247,17 @@ void loop() {
                     DEBUG_PRINT(F("\" ")); DEBUG_PRINTLN(ok ? F("ok") : F("FAILED"));
 
                     // Keep the in-memory outlet's label in step, so the next
-                    // status push doesn't report the name we just replaced.
-                    SmartOutlet* configured = control.outletByIp(nameIp);
-                    if (ok && configured) configured->setName(full.c_str());
+                    // status push doesn't report the name we just replaced —
+                    // AND write it to NVS, or the rename lives only until the
+                    // next reboot. The slot's stored name is what begin() loads
+                    // and what every later provisioning pass writes back to the
+                    // plug, so an unsaved rename is a rename that un-happens.
+                    int slot = control.outletSlotByIp(nameIp);
+                    SmartOutlet* configured = (slot >= 0) ? control.outlet(slot) : nullptr;
+                    if (ok && configured) {
+                        configured->setName(full.c_str());
+                        control.saveSlot(slot);
+                    }
                 }
             }
             String out; serializeJson(resp, out);

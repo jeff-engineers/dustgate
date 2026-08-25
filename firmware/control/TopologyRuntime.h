@@ -128,6 +128,17 @@ struct CollectorState {
     bool     desired;       // the brain wants this system routing air
     bool     deadHeadRisk;
     bool     manualRun;     // a person switched this blower on; no machine is asking
+
+    // ── What the plug says, fed in from the outlet layer ─────────────────────
+    //
+    // `running` above is what we COMMANDED. These are what came back. The
+    // runtime never judges them — it reports them, and the verdict lives once in
+    // collectorPlugState() in shared/device-model/topology-device.js. See
+    // SmartOutletControl.h.
+    bool     plugKnown;     // false = nothing has reported; omit `plug` entirely
+    bool     plugReachable;
+    float    plugWatts;
+    uint32_t plugOnForMs;   // how long it has been commanded on
 };
 
 class TopologyRuntime {
@@ -157,7 +168,8 @@ public:
         _inFlightSystem.clear();
         _collectors.clear();
         for (const SystemView& sys : systemsOf(topology()))
-            _collectors[std::string(sys.id ? sys.id : "")] = CollectorState{false, false, 0, false, false, false};
+            _collectors[std::string(sys.id ? sys.id : "")] =
+                CollectorState{false, false, 0, false, false, false, false, false, 0.0f, 0};
         _loaded = true;
         return true;
     }
@@ -228,6 +240,24 @@ public:
     //
     // Returns false for a system that isn't in the layout — a typo'd id otherwise
     // looks exactly like a switch that does nothing.
+    /**
+     * Hand this system's blower plug reading in, the same way setMachinePower()
+     * hands a tool's in. The sketch owns the slot↔system pairing and the clock;
+     * this stays pure.
+     *
+     * `onForMs` is an AGE, not a timestamp — millis() never crosses this seam,
+     * which is what keeps the runtime host-testable.
+     */
+    void setCollectorPlug(const std::string& systemId, float watts, bool reachable,
+                          uint32_t onForMs) {
+        auto it = _collectors.find(systemId);
+        if (it == _collectors.end()) return;
+        it->second.plugKnown     = true;
+        it->second.plugReachable = reachable;
+        it->second.plugWatts     = watts;
+        it->second.plugOnForMs   = onForMs;
+    }
+
     bool setCollectorManual(const std::string& systemId, bool on) {
         if (!_loaded) return false;
         auto it = _collectors.find(systemId);
@@ -490,6 +520,16 @@ public:
             s["manual"]        = kv.second.manualRun;
             s["deadHeadRisk"]  = kv.second.deadHeadRisk;
             s["transitioning"] = transitioning(kv.first);
+            // Omitted entirely when no plug has reported: an all-zero reading
+            // would render as a dead blower rather than an absent one, which is
+            // the opposite of the truth for a shop that starts its collector by
+            // hand. Mirrors statusView() in topology-device.js.
+            if (kv.second.plugKnown) {
+                JsonObject p = s.createNestedObject("plug");
+                p["watts"]     = kv.second.plugWatts;
+                p["reachable"] = kv.second.plugReachable;
+                p["onForMs"]   = kv.second.plugOnForMs;
+            }
         }
 
         out["transitioning"] = transitioning();

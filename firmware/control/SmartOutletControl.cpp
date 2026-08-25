@@ -42,6 +42,7 @@ SmartOutletControl::SmartOutletControl()
     memset(_dcSynced, 0, sizeof(_dcSynced));
     memset(_dcManualOverride, 0, sizeof(_dcManualOverride));
     memset(_dcManualState, 0, sizeof(_dcManualState));
+    memset(_dcOnSinceMs, 0, sizeof(_dcOnSinceMs));
     _wsUrl[0]   = '\0';
     _ourHost[0] = '\0';
     _ourName[0] = '\0';
@@ -383,6 +384,17 @@ void SmartOutletControl::reconcileCollectors() {
     for (int i = 0; i < COLLECTOR_COUNT; i++) {
         if (!_collectors[i]) continue;
 
+        // Read the plug back before deciding anything with it. A collector plug
+        // is switched, not sensed — but it reports its own power regardless, and
+        // that reading is the only way to tell a running blower from a tripped
+        // breaker. Blocking HTTP is fine here for the same reason setSwitch()
+        // below is: this is the poll task on Core 0, never the motor loop.
+        //
+        // Push doesn't apply to these: we never provision a collector plug's
+        // outbound WebSocket (it is ours to command, not to subscribe to), so
+        // there is no isPushConnected() shortcut to take.
+        if (strlen(_collectors[i]->ip()) > 0) _collectors[i]->poll();
+
         // Desired: while an override is active, follow the forced state.
         // Otherwise fall back to the legacy stop-index automation — ON whenever a
         // TOOL is actively running, OFF at idle — which only slot 0 has. The
@@ -404,6 +416,12 @@ void SmartOutletControl::reconcileCollectors() {
         // Blocking HTTP — safe here (poll task, Core 0), never on the motor loop.
         if (_collectors[i]->setSwitch(desired)) {
             xSemaphoreTake(_mutex, portMAX_DELAY);
+            // Stamp the spin-up clock at the COMMAND, and only on a real
+            // off→on edge: re-asserting an already-running blower must not
+            // restart the clock, or a shop that re-syncs often would never let
+            // the grace period expire and a dead blower would go unreported.
+            if (desired && !_dcOn[i]) _dcOnSinceMs[i] = millis();
+            if (!desired)             _dcOnSinceMs[i] = 0;
             _dcOn[i]     = desired;
             _dcSynced[i] = true;
             xSemaphoreGive(_mutex);
@@ -422,12 +440,17 @@ void SmartOutletControl::reconcileCollectors() {
 // HTTP server's WS callback both call this; the outlet array only grows/shrinks
 // during (rare) reconfiguration, so a lock-free scan is acceptable here.
 SmartOutlet* SmartOutletControl::outletByIp(const char* ip) {
-    if (!ip || !ip[0]) return nullptr;
+    const int slot = outletSlotByIp(ip);
+    return slot >= 0 ? _outlets[slot] : nullptr;
+}
+
+int SmartOutletControl::outletSlotByIp(const char* ip) {
+    if (!ip || !ip[0]) return -1;
     for (int i = 0; i < _count; i++) {
         SmartOutlet* o = _outlets[i];
-        if (o && strcmp(o->ip(), ip) == 0) return o;
+        if (o && strcmp(o->ip(), ip) == 0) return i;
     }
-    return nullptr;
+    return -1;
 }
 
 // Poll task: tell every configured Gen2 plug to open an Outbound WebSocket back
@@ -662,6 +685,28 @@ void SmartOutletControl::configureOutlet(int slot, int generation,
     // here — the poll task may be mid-HTTP holding it. See retire().
     SmartOutlet* old;
     xSemaphoreTake(_mutex, portMAX_DELAY);
+    // A PLUG'S NAME BELONGS TO THE PLUG, not to whatever the layout calls the
+    // machine it senses. `name` here is only a DEFAULT for a plug nobody has
+    // named yet: syncTopologyOutlets() passes the machine's name, and it runs on
+    // every layout save, so taking it literally threw away every rename — and
+    // then _needsProvision below wrote the machine name back onto the physical
+    // plug, so the name in the Shelly app reverted too.
+    //
+    // Intermittent, which is what made it hard to see: provisionPushTargets()
+    // skips a plug that is already push-connected, so whether the revert
+    // actually reached the device depended on how fast the plug's WebSocket came
+    // back after the swap.
+    //
+    // Same carry-over, and the same reason, as the takeover approval above: this
+    // object is new, the old one is retired, and anything the user told us about
+    // this ADDRESS has to survive the swap or it never survives at all.
+    for (int i = 0; i < _count; i++) {
+        SmartOutlet* prev = _outlets[i];
+        if (prev && strcmp(prev->ip(), ip) == 0 && strlen(prev->name()) > 0) {
+            o->setName(prev->name());
+            break;
+        }
+    }
     old = _outlets[slot];
     _outlets[slot] = o;
     if (slot >= _count) _count = slot + 1;
@@ -797,6 +842,26 @@ bool SmartOutletControl::collectorOn(int idx) {
     if (idx < 0 || idx >= COLLECTOR_COUNT) return false;
     xSemaphoreTake(_mutex, portMAX_DELAY);
     bool v = _dcOn[idx];
+    xSemaphoreGive(_mutex);
+    return v;
+}
+
+float SmartOutletControl::collectorWatts(int idx) {
+    if (idx < 0 || idx >= COLLECTOR_COUNT || !_collectors[idx]) return 0.0f;
+    // getPowerW() reads one float written by the poll task; see the alignment
+    // note at the top of SmartOutlet.h for why this needs no lock.
+    return _collectors[idx]->getPowerW();
+}
+
+bool SmartOutletControl::collectorReachable(int idx) {
+    if (idx < 0 || idx >= COLLECTOR_COUNT || !_collectors[idx]) return false;
+    return _collectors[idx]->isReachable();
+}
+
+uint32_t SmartOutletControl::collectorOnSinceMs(int idx) {
+    if (idx < 0 || idx >= COLLECTOR_COUNT) return 0;
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    uint32_t v = _dcOnSinceMs[idx];
     xSemaphoreGive(_mutex);
     return v;
 }

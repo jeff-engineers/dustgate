@@ -50,6 +50,14 @@ drifted constantly. Now `shared/device-model/` is the spec:
   `firmware/test/test_manual_blower.cpp` covers running a blower by hand, and the
   two assert the same cases in the same order for the same reason.
 
+  **Not everything shared is a pair, and saying so is part of the job.**
+  `collector-plug.test.js` has NO C++ partner on purpose: the firmware reports
+  what a collector's plug says (`systems[].plug` — watts, reachable, onForMs) and
+  never judges it, so `COLLECTOR_RUNNING_W` and `COLLECTOR_SPINUP_GRACE_MS` exist
+  once, in `topology-device.js`, with nothing to drift against. If the OLED ever
+  needs to say "blower not starting" too, that is the moment those become a pair
+  and earn a row above — not before.
+
   **This table is a cache, not the source of truth — keep it honest or delete
   rows rather than let them go stale.** Touching either side of a pair: update
   the other side's value AND this table's "What it is" cell if the meaning
@@ -70,7 +78,7 @@ Tests live in two package.json files. UI suites run under plain node (no browser
 
 ```
 cd dustgate-ui && npm test        # spec-runner + routing + wiring geometry
-cd tools && npm run model:test    # topology, shop, nodelink, plug-claim, adopt-outlets, manual-blower (JS)
+cd tools && npm run model:test    # topology, shop, nodelink, plug-claim, adopt-outlets, manual-blower, collector-plug (JS)
 cd tools && npm run firmware:test # the C++ host tests (router, controller, nodebus, shop, faults, plugclaim, screen, blower)
 cd tools && npm run conformance:ci topology:conformance:ci nodelink:conformance:ci  # run separately
 ```

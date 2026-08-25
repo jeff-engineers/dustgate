@@ -70,6 +70,9 @@ public:
 
     void removeOutlet(int slot);
     void saveSlot(int slot);       // persist a single slot to NVS
+    // Which slot holds this plug, or -1. Callers that need to PERSIST a change
+    // want this rather than outletByIp(), since saveSlot() is keyed by slot.
+    int  outletSlotByIp(const char* ip);
     void saveAll();                // persist all slots to NVS
     void printConfig();            // dump current config to Serial
 
@@ -142,6 +145,24 @@ public:
     }
     bool collectorOn(int idx);       // thread-safe read for status JSON
 
+    // ── What the plug says, as opposed to what we commanded ──────────────────
+    //
+    // A collector plug is switched, never sensed — that is the whole reason the
+    // slot kinds are separate. But a Gen2 plug reports its own power whether we
+    // ask it to or not, and the difference between "we closed the relay" and
+    // "current is flowing" is the difference between a blower running and a
+    // tripped breaker, a switched-off blower, or an unplugged cord.
+    //
+    // These REPORT; they do not judge. The verdict — is this a failed start or
+    // just a slow spin-up — lives once, in collectorPlugState() in
+    // shared/device-model/topology-device.js. Putting a threshold here as well
+    // would be a second copy to keep in sync for no gain.
+    float collectorWatts(int idx);       // last reading; 0 if unconfigured
+    bool  collectorReachable(int idx);   // false = the plug isn't answering
+    // millis() when we last commanded this collector ON, or 0 if it is off. The
+    // caller turns this into an age; storing the age would need a clock in here.
+    uint32_t collectorOnSinceMs(int idx);
+
     // Force one collector on/off. On slot 0 this holds until the next automatic
     // gate change (tool on/off), then the legacy automation resumes; on the other
     // slots there is no automation to resume to, so it simply holds.
@@ -187,6 +208,10 @@ private:
     bool              _dcSynced[COLLECTOR_COUNT];          // false = force a switch command on next reconcile
     bool              _dcManualOverride[COLLECTOR_COUNT];  // true = follow _dcManualState, not gate state
     bool              _dcManualState[COLLECTOR_COUNT];     // forced on/off while override active
+    // millis() at the moment we commanded slot i ON, 0 while it is off. Stamped
+    // at the COMMAND rather than at the first reading, because the spin-up window
+    // a consumer measures against starts when the relay closes.
+    uint32_t          _dcOnSinceMs[COLLECTOR_COUNT];
 
     // Shared state between poll task and main loop — protected by _mutex
     int               _requestedStop;

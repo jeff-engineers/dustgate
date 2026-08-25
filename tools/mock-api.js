@@ -428,6 +428,20 @@ function handler(req, res) {
     });
   }
 
+  // Sim-only, like /sim/tool: stage a collector plug failure so the states that
+  // matter can be seen without tripping a real breaker. `fault` is null (healthy),
+  // 'dead' (relay closes, nothing draws) or 'offline' (the plug stops answering).
+  // Real firmware has no analogue — its plug either works or it doesn't.
+  if (pathname === '/api/sim/collector' && req.method === 'POST') {
+    return body(req, data => {
+      if (!td) return json(res, { error: 'no topology configured' }, 404);
+      if (!data.systemId) return json(res, { error: "missing 'systemId'" }, 400);
+      const r = TD.setCollectorPlugFault(td, data.systemId, data.fault || null);
+      if (!r.ok) return json(res, { error: 'unknown system' }, 404);
+      json(res, TD.statusView(td));
+    });
+  }
+
   json(res, { error: 'not found' }, 404);
 }
 
