@@ -1,0 +1,1305 @@
+<title>Shop Page Status Chips</title>
+
+<style>
+  :root {
+    --bg: #111; --surface: #1e1e1e; --raised: #262626; --border: #2e2e2e;
+    --text: #e8e8e8; --muted: #8a8a86; --accent: #f0a500; --success: #3cbe6e;
+    --danger: #d94444; --radius: 14px;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); margin: 0; padding: 22px 18px 72px;
+         font-family: system-ui, -apple-system, sans-serif; font-size: 15px; line-height: 1.5; }
+  .wrap { max-width: 1080px; margin: 0 auto; display: flex; flex-direction: column; gap: 24px; }
+  h1 { font-size: 22px; font-weight: 600; margin: 6px 0 0; letter-spacing: -0.01em; }
+  h2 { font-size: 13.5px; font-weight: 600; margin: 0; }
+  h3 { font-size: 15px; font-weight: 600; margin: 0 0 2px; }
+  .lede { color: var(--muted); font-size: 13.5px; max-width: 68ch; margin: 6px 0 0; }
+  .eyebrow { font-size: 11px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--muted); }
+  p { margin: 0; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.92em; }
+  a { color: var(--accent); }
+  .rule { height: 1px; background: var(--border); border: 0; margin: 0; }
+  .sec { display: flex; flex-direction: column; gap: 12px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 15px 16px; }
+  .card p + p { margin-top: 9px; }
+  .note { font-size: 12.5px; color: var(--muted); line-height: 1.55; }
+  .note b { color: var(--text); font-weight: 600; }
+  .banner { background: #241c06; border: 1px solid #4a3a0d; border-radius: var(--radius);
+            padding: 13px 15px; font-size: 13px; line-height: 1.55; }
+  .banner b { color: var(--accent); }
+  .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
+
+  /* ── the phone ───────────────────────────────────────────────────────── */
+  .phones { display: flex; gap: 20px; flex-wrap: wrap; }
+  .phone { width: 375px; max-width: 100%; background: var(--bg); border: 1px solid #202225;
+           border-radius: 18px; padding: 14px 13px 18px; flex: none; }
+  .phone .cap { font-size: 12px; color: var(--muted); margin-bottom: 10px; line-height: 1.5; }
+  .phone .cap b { color: var(--text); font-weight: 600; }
+
+  .top { display: flex; align-items: center; justify-content: space-between; padding: 2px 6px 12px; }
+  .shopname { font-size: 14px; color: var(--muted); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .dot.live { background: var(--success); }
+
+  .collector { display: flex; align-items: center; gap: 12px; background: var(--surface);
+               border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; margin-bottom: 14px; }
+  .collector.running { border-color: var(--success); }
+  .cyc { width: 40px; height: 40px; border-radius: 50%; flex: none; display: flex;
+         align-items: center; justify-content: center; background: var(--bg); color: var(--muted); }
+  .collector.running .cyc { color: var(--success); }
+  .cyc svg { width: 22px; height: 22px; }
+  .c-body { flex: 1; min-width: 0; }
+  .c-name { font-size: 15.5px; font-weight: 600; }
+  .c-sub { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+  .collector.running .c-sub { color: var(--success); }
+  .sw { width: 44px; height: 26px; border-radius: 999px; flex: none; background: var(--bg);
+        border: 1px solid var(--border); position: relative; }
+  .sw::after { content: ''; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px;
+               border-radius: 50%; background: var(--muted); }
+  .sw.on { background: var(--success); border-color: var(--success); }
+  .sw.on::after { transform: translateX(18px); background: #fff; }
+
+  .label { font-size: 11px; color: var(--muted); letter-spacing: 0.07em;
+           text-transform: uppercase; padding: 0 6px 8px; }
+  .rows { display: flex; flex-direction: column; gap: 9px; }
+
+  /* A tool row. The whole row is the control; the chip on the right is state. */
+  .trow { display: flex; align-items: center; gap: 11px; background: var(--surface);
+          border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; }
+  .trow .grow { flex: 1; min-width: 0; }
+  .t-name { font-size: 15.5px; font-weight: 500; }
+  .t-sub { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+
+  .trow.collecting { background: rgba(60,190,110,0.10); border-color: var(--success); }
+  .trow.collecting .t-name { color: var(--success); }
+  .trow.waiting { border-color: rgba(240,165,0,0.55); }
+  .trow.fault { border-color: rgba(217,68,68,0.55); }
+  .trow.fault .t-name { color: var(--muted); }
+
+  /* ── the chips ───────────────────────────────────────────────────────── */
+  .chip { font-size: 11.5px; font-weight: 600; padding: 5px 11px; border-radius: 999px;
+          flex: none; white-space: nowrap; display: inline-flex; align-items: center; gap: 6px; }
+  .chip::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex: none; }
+  .chip.go   { color: var(--success); background: rgba(60,190,110,0.16); }
+  .chip.wait { color: var(--accent);  background: rgba(240,165,0,0.15); }
+  .chip.bad  { color: var(--danger);  background: rgba(217,68,68,0.15); }
+  /* Idle is the absence of a story: hollow, so a shelf of sleeping tools stays
+     visually quiet and the two that matter carry all the colour on the page. */
+  .chip.off  { color: var(--muted); background: transparent; border: 1px solid var(--border); }
+  .chip.off::before { background: transparent; border: 1px solid var(--muted); }
+
+  .ghost { border-radius: 8px; padding: 6px 11px; font-size: 12px; flex: none;
+           background: var(--bg); border: 1px solid var(--border); color: var(--text); }
+
+  /* Out of service: the tool is still listed — a machine that vanishes off the
+     page is the failure mode the orphan group already exists to avoid. */
+  .trow.oos { opacity: 0.5; }
+
+  /* ── the tool detail page ────────────────────────────────────────────── */
+  .head { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+  .back { background: var(--surface); border: 1px solid var(--border); border-radius: 50%;
+          width: 32px; height: 32px; display: flex; align-items: center; justify-content: center;
+          color: var(--muted); flex: none; font-size: 15px; }
+  .title { font-size: 17px; font-weight: 600; }
+  .grp { background: var(--surface); border: 1px solid var(--border);
+         border-radius: var(--radius); margin-bottom: 14px; }
+  .grp .srow { display: flex; align-items: center; gap: 11px; padding: 13px 14px;
+               border-bottom: 1px solid var(--border); }
+  .grp .srow:last-child { border-bottom: 0; }
+  .grp .srow .grow { flex: 1; min-width: 0; }
+  .s-name { font-size: 14.5px; font-weight: 500; }
+  .s-sub { font-size: 12px; color: var(--muted); margin-top: 3px; line-height: 1.45; }
+  .grp .sw { width: 42px; height: 25px; }
+  .grp .sw::after { width: 17px; height: 17px; }
+  .grp .sw.on::after { transform: translateX(17px); }
+  .glabel { font-size: 11px; color: var(--muted); letter-spacing: 0.07em;
+            text-transform: uppercase; padding: 0 6px 8px; }
+  .locked { font-size: 11.5px; color: var(--muted); flex: none; }
+  /* A picker, not a switch: three settings, and which one is on matters more
+     than that any is. */
+  .rad { width: 19px; height: 19px; border-radius: 50%; flex: none;
+         border: 1px solid var(--border); position: relative; }
+  .rad.on { border-color: var(--success); }
+  .rad.on::after { content: ''; position: absolute; inset: 4px; border-radius: 50%;
+                   background: var(--success); }
+  .beta { font-size: 10px; font-weight: 700; letter-spacing: 0.05em; color: var(--accent);
+          border: 1px solid rgba(240,165,0,0.45); border-radius: 4px; padding: 0 5px;
+          margin-left: 6px; vertical-align: 1px; }
+
+  /* ── LED comparison ──────────────────────────────────────────────────── */
+  .pix { width: 13px; height: 13px; border-radius: 50%; flex: none; display: inline-block;
+         box-shadow: 0 0 7px 1px currentColor; background: currentColor; }
+  .pix.red   { color: #d94444; }
+  .pix.org   { color: #f0a500; }
+  .pix.wht   { color: #e8e8e8; }
+  .pix.blu   { color: #4a7ddb; }
+  .pix.grn   { color: #3cbe6e; }
+  .ledtab td:first-child { white-space: nowrap; }
+  .ledtab .agree { color: var(--success); font-weight: 600; }
+  .ledtab .diverge { color: var(--accent); font-weight: 600; }
+
+  /* ── collector card states ───────────────────────────────────────────── */
+  .collector.warn { border-color: rgba(240,165,0,0.55); }
+  .collector.warn .cyc { color: var(--accent); }
+  .collector.bad  { border-color: rgba(217,68,68,0.55); }
+  .collector.bad .cyc { color: var(--danger); }
+  .collector.bad .c-sub { color: var(--danger); }
+  .collector.warn .c-sub { color: var(--accent); }
+  .collector.supp { opacity: 0.55; }
+  .ccol { display: flex; flex-direction: column; align-items: flex-end; gap: 7px; flex: none; }
+
+  .swatches { display: flex; flex-direction: column; gap: 10px; }
+  .swatch { display: flex; align-items: center; gap: 12px; }
+  .swatch .chip { min-width: 132px; justify-content: flex-start; }
+  .swatch .why { font-size: 12.5px; color: var(--muted); line-height: 1.5; }
+  .swatch .why b { color: var(--text); font-weight: 600; }
+
+  table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em; }
+  tr:last-child td { border-bottom: 0; }
+  td b { font-weight: 600; }
+  .tw { overflow-x: auto; }
+  ul { margin: 0; padding-left: 18px; }
+  li { margin: 5px 0; }
+</style>
+
+<div class="wrap">
+
+  <div>
+    <p class="eyebrow">Exploration · 2026-08-24 · /shop</p>
+    <h1>The switch on a tool row becomes a status chip</h1>
+    <p class="lede">
+      Today every tool row carries a toggle switch on its right. It looks like a setting —
+      auto vs. manual is the natural read — and it is not one. It is a
+      <code>&lt;span&gt;</code> that mirrors <code>t.on</code>; the real control is the whole
+      row. Two glyphs, one screen, and the collector card above uses the same switch shape for
+      a control that <em>is</em> real.
+    </p>
+  </div>
+
+  <div class="banner">
+    <b>The switch has to go, not get relabelled.</b> A tool row has more than two states, and
+    the interesting ones are the ones a switch cannot say: <em>this saw is running and getting
+    no air, because the jointer took the gate.</em> That is the question the shop page exists
+    to answer, and today it renders identically to “running and fine”.
+  </div>
+
+  <hr class="rule">
+
+  <!-- ── vocabulary ─────────────────────────────────────────────────────── -->
+  <div class="sec">
+    <h2 class="eyebrow">The chip vocabulary</h2>
+    <div class="card swatches">
+      <div class="swatch">
+        <span class="chip go">Collecting</span>
+        <span class="why"><b>Green — air is reaching this tool.</b> It won the routing vote and
+          has a clear path to a running blower. At most one per system.</span>
+      </div>
+      <div class="swatch">
+        <span class="chip wait">Waiting</span>
+        <span class="why"><b>Orange — powered, but out-voted.</b> The tool is drawing (or was
+          switched on by hand) and something more recent holds the gate. The subtitle names
+          who, because “which one do I turn off” is the next question.</span>
+      </div>
+      <div class="swatch">
+        <span class="chip bad">Gate offline</span>
+        <span class="why"><b>Red — it cannot collect, and that is a fault.</b> The node owning
+          this gate is not answering.</span>
+      </div>
+      <div class="swatch">
+        <span class="chip wait">Not set up</span>
+        <span class="why">Orange. The gate has never been calibrated — nobody has shown it where
+          the valve positions are. Nothing is <em>broken</em>; it is unfinished, and the canvas
+          already dots an uncalibrated gate orange. Today this is a shop-wide banner; it is
+          really per gate.</span>
+      </div>
+      <div class="swatch">
+        <span class="chip bad">No reading</span>
+        <span class="why">Red. A smart outlet is configured and the poll is failing. Distinct
+          from having no outlet at all — power here is <em>unknown</em>, not <em>off</em>.</span>
+      </div>
+      <div class="swatch">
+        <span class="chip wait">No gate</span>
+        <span class="why">Orange, for the same reason — unfinished, not faulty. The machine has
+          no port in any system, so no gate stands between it and the trunk. Today it is dumped
+          into an orphan group with prose.</span>
+      </div>
+      <div class="swatch">
+        <span class="chip off">Idle</span>
+        <span class="why"><b>Grey — nothing to say.</b> Hollow rather than filled, so a shelf
+          of sleeping tools stays quiet and the two rows that matter carry the colour.</span>
+      </div>
+    </div>
+    <p class="note">
+      <b>Colour is the severity axis; the words are the specific.</b> Red chips all read the
+      same at a glance — <em>this one is broken right now</em> — and only need reading closely
+      once you have decided to care; orange ones read as <em>no air here, and it is not the
+      hardware's fault</em>. That is also why every chip carries text: green/orange/red
+      alone fails for a colour-blind woodworker in a dim shop, and the dot before each label is
+      a second, redundant cue rather than the cue.
+    </p>
+    <p class="note">
+      <b>Auto vs. manual is not a chip.</b> It moves to the subtitle, where it already lives.
+      The chip answers exactly one question — <em>is air reaching this tool</em> — and mixing a
+      settings fact into that axis is what made the switch ambiguous in the first place.
+    </p>
+    <p class="note">
+      <b>Transients are deliberately absent.</b> No “Opening…”, no “Closing…”. Gate travel is
+      seconds and nobody is watching the phone during it; a chip that flickers through a state
+      you cannot act on is noise. A gate that fails to <em>arrive</em> is a fault and gets a
+      red chip.
+    </p>
+  </div>
+
+  <hr class="rule">
+
+  <!-- ── phones ─────────────────────────────────────────────────────────── -->
+  <div class="sec">
+    <h2 class="eyebrow">On the page</h2>
+    <div class="phones">
+
+      <!-- 1: the ordinary morning -->
+      <div class="phone">
+        <p class="cap"><b>Ordinary.</b> One tool running, everything else asleep. Colour appears
+          exactly once.</p>
+        <div class="top"><span class="shopname">Jeff’s Shop</span><span class="dot live"></span></div>
+        <div class="collector running">
+          <span class="cyc"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+            stroke-linecap="round" stroke-linejoin="round"><path d="M13 5a7 7 0 1 0 6 7"/>
+            <path d="M12 8a4 4 0 1 1-4 4"/><circle cx="12" cy="12" r="1.2" fill="currentColor" stroke="none"/></svg></span>
+          <div class="c-body">
+            <div class="c-name">Cyclone</div>
+            <div class="c-sub">Collecting · Table saw</div>
+          </div>
+          <span class="sw on"></span>
+        </div>
+        <div class="label">Tools</div>
+        <div class="rows">
+          <div class="trow collecting">
+            <div class="grow"><div class="t-name">Table saw</div><div class="t-sub">Auto · sensing power</div></div>
+            <span class="chip go">Collecting</span>
+          </div>
+          <div class="trow">
+            <div class="grow"><div class="t-name">Jointer</div><div class="t-sub">Auto</div></div>
+            <span class="chip off">Idle</span>
+          </div>
+          <div class="trow">
+            <div class="grow"><div class="t-name">Planer</div><div class="t-sub">Auto</div></div>
+            <span class="chip off">Idle</span>
+          </div>
+          <div class="trow">
+            <div class="grow"><div class="t-name">Bandsaw</div><div class="t-sub">Manual</div></div>
+            <span class="chip off">Idle</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 2: contention -->
+      <div class="phone">
+        <p class="cap"><b>Contention.</b> The saw is running and getting nothing. This is the
+          state the old switch could not express — and the reason for the whole change.</p>
+        <div class="top"><span class="shopname">Jeff’s Shop</span><span class="dot live"></span></div>
+        <div class="collector running">
+          <span class="cyc"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+            stroke-linecap="round" stroke-linejoin="round"><path d="M13 5a7 7 0 1 0 6 7"/>
+            <path d="M12 8a4 4 0 1 1-4 4"/><circle cx="12" cy="12" r="1.2" fill="currentColor" stroke="none"/></svg></span>
+          <div class="c-body">
+            <div class="c-name">Cyclone</div>
+            <div class="c-sub">Collecting · Jointer</div>
+          </div>
+          <span class="sw on"></span>
+        </div>
+        <div class="label">Tools</div>
+        <div class="rows">
+          <div class="trow collecting">
+            <div class="grow"><div class="t-name">Jointer</div><div class="t-sub">Auto · sensing power</div></div>
+            <span class="chip go">Collecting</span>
+          </div>
+          <div class="trow waiting">
+            <div class="grow"><div class="t-name">Table saw</div><div class="t-sub">Auto · Jointer has the gate</div></div>
+            <span class="chip wait">Waiting</span>
+          </div>
+          <div class="trow waiting">
+            <div class="grow"><div class="t-name">Bandsaw</div><div class="t-sub">Switched on by hand · Jointer has the gate</div></div>
+            <span class="chip wait">Waiting</span>
+          </div>
+          <div class="trow">
+            <div class="grow"><div class="t-name">Planer</div><div class="t-sub">Auto</div></div>
+            <span class="chip off">Idle</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 3: faults -->
+      <div class="phone">
+        <p class="cap"><b>Can’t collect.</b> Four different reasons, which today all look like
+          “not collecting” — and two severities. Red is broken now; orange is unfinished setup.
+          Neither row is tappable: you cannot hand-run a tool whose gate will not move.</p>
+        <div class="top"><span class="shopname">Jeff’s Shop</span><span class="dot"></span></div>
+        <div class="collector">
+          <span class="cyc"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+            stroke-linecap="round" stroke-linejoin="round"><path d="M13 5a7 7 0 1 0 6 7"/>
+            <path d="M12 8a4 4 0 1 1-4 4"/><circle cx="12" cy="12" r="1.2" fill="currentColor" stroke="none"/></svg></span>
+          <div class="c-body">
+            <div class="c-name">Cyclone</div>
+            <div class="c-sub">Idle</div>
+          </div>
+          <span class="sw"></span>
+        </div>
+        <div class="label">Tools</div>
+        <div class="rows">
+          <div class="trow fault">
+            <div class="grow"><div class="t-name">Planer</div><div class="t-sub">Shop node hasn’t answered since 9:14</div></div>
+            <span class="chip bad">Gate offline</span>
+          </div>
+          <div class="trow waiting">
+            <div class="grow"><div class="t-name">Drum sander</div><div class="t-sub">Its gate has never been calibrated</div></div>
+            <span class="chip wait">Not set up</span>
+          </div>
+          <div class="trow fault">
+            <div class="grow"><div class="t-name">Table saw</div><div class="t-sub">Outlet <code>shelly-3a1f</code> not responding</div></div>
+            <span class="chip bad">No reading</span>
+          </div>
+          <div class="trow waiting">
+            <div class="grow"><div class="t-name">Router table</div><div class="t-sub">Not plumbed into a system yet</div></div>
+            <span class="chip wait">No gate</span>
+          </div>
+          <div class="trow">
+            <div class="grow"><div class="t-name">Bandsaw</div><div class="t-sub">Manual</div></div>
+            <span class="chip off">Idle</span>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <hr class="rule">
+
+  <!-- ── the open question ──────────────────────────────────────────────── -->
+  <div class="sec">
+    <h2 class="eyebrow">Settled — what says “you can tap this”</h2>
+    <p class="note">
+      The switch was the wrong control, but it <em>was</em> the only thing on the row that
+      looked like a control. Removing it leaves a row that is still a button and no longer
+      advertises it. Two answers:
+    </p>
+    <div class="cols">
+      <div class="card">
+        <h3>A1 — the row is the button</h3>
+        <p class="note">Chip is pure state, the whole row takes the tap, and the press state
+          plus a border lift carry the affordance. Cleanest, and it matches how the tool rows
+          already behave. Risk: “run the bandsaw by hand” becomes an undiscoverable gesture —
+          and hand-running a blower to clear a clog is a real errand, not an edge case.</p>
+        <div class="rows" style="margin-top:12px">
+          <div class="trow">
+            <div class="grow"><div class="t-name">Bandsaw</div><div class="t-sub">Manual</div></div>
+            <span class="chip off">Idle</span>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <h3>A2 — chip plus a verb</h3>
+        <p class="note">The chip states, a small ghost button acts. Nothing is ambiguous and
+          the two jobs never share a glyph again. Costs width — at 375px a long chip plus
+          <em>Stop</em> is tight — and puts a second tap target on a row that is itself
+          tappable, which is its own small lie.</p>
+        <div class="rows" style="margin-top:12px">
+          <div class="trow">
+            <div class="grow"><div class="t-name">Bandsaw</div><div class="t-sub">Manual</div></div>
+            <span class="chip off">Idle</span>
+            <button class="ghost">Run</button>
+          </div>
+          <div class="trow collecting">
+            <div class="grow"><div class="t-name">Bandsaw</div><div class="t-sub">Switched on by hand</div></div>
+            <span class="chip go">Collecting</span>
+            <button class="ghost">Stop</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <p class="note">
+      <b>A1, decided 2026-08-24.</b> The collector card already owns the one hand-run people reach for,
+      and a row that is a button everywhere except visually is a smaller problem than a row
+      with two controls on it. A2 stays drawn here as the rejected alternative.
+    </p>
+  </div>
+
+  <hr class="rule">
+
+  <!-- ── LED reconciliation ─────────────────────────────────────────────── -->
+  <div class="sec">
+    <h2 class="eyebrow">Against the board LEDs</h2>
+    <p class="note">
+      The phone is not the only thing in this shop showing status, or even the most-read one.
+      Every board carries a pixel — on a node it is the <em>entire</em> user interface, screwed
+      to a joist above a manifold with no screen, no buttons and no cable — and its vocabulary is
+      already written down in <code>firmware/utils/StatusLed.h</code>. There is a third surface
+      too: the light on the cyclone, wired years ago and owing nothing to any of this. A chip in
+      your hand that disagrees with a pixel on the ceiling about what a colour means is a genuine
+      hazard, so:
+    </p>
+    <div class="card"><div class="tw"><table class="ledtab">
+      <tr><th>Signal</th><th>Means in the shop</th><th>Chip</th><th></th></tr>
+      <tr>
+        <td><span class="pix grn"></span> Green</td>
+        <td>Ready. Reserved for fully-working <em>on purpose</em>.</td>
+        <td><span class="chip go">Collecting</span></td>
+        <td class="agree">Agrees</td>
+      </tr>
+      <tr>
+        <td><span class="pix red"></span> Red</td>
+        <td>Fault the board can’t fix itself.</td>
+        <td><span class="chip bad">Gate offline</span></td>
+        <td class="agree">Agrees</td>
+      </tr>
+      <tr>
+        <td><span class="pix org"></span> Orange</td>
+        <td><b>Motion or activity</b> — “is anything actually happening?”. Also pre-WiFi and
+          lost-WiFi.</td>
+        <td><span class="chip wait">Waiting</span></td>
+        <td class="diverge">Diverges</td>
+      </tr>
+      <tr>
+        <td><span class="pix blu"></span> Blue</td>
+        <td>On WiFi, not ready to work — no topology, or a paired board is dark.</td>
+        <td>—</td>
+        <td class="diverge">No equivalent</td>
+      </tr>
+      <tr>
+        <td><span class="pix wht"></span> White</td>
+        <td>Captive portal, waiting for credentials. Blinking.</td>
+        <td>—</td>
+        <td>Can’t collide</td>
+      </tr>
+      <tr>
+        <td><span class="pix grn"></span> Green<br><span class="note">bin light</span></td>
+        <td>The light already on the cyclone: powered and good.</td>
+        <td><span class="chip go">Collecting</span></td>
+        <td class="agree">Agrees</td>
+      </tr>
+      <tr>
+        <td><span class="pix red"></span> Red strobe<br><span class="note">bin light</span></td>
+        <td>Bin is full. Wired discretely today, no controller involved.</td>
+        <td><span class="chip bad">Bin full</span></td>
+        <td class="agree">Agrees</td>
+      </tr>
+    </table></div></div>
+
+    <p class="note">
+      <b>Green and red are the load-bearing pair, and all three surfaces already agree.</b>
+      Green means working, red means stop and deal with it — on the ceiling, on the cyclone, and
+      in your hand. Those are the two a
+      woodworker actually reads at a distance and they must never diverge — locking them is
+      most of the value of this comparison. That the bin light was wired years before any of
+      this existed and landed on the same two colours is a decent sign they are the right two.
+    </p>
+    <p class="note">
+      <b>Orange diverges, and that is defensible — but only because the UI has no transients.</b>
+      On the pixel, orange is <em>motion</em>. On a chip, orange is <em>no air here, and it isn’t
+      the hardware’s fault</em>. Those look contradictory until you notice they can never
+      describe the same moment: the pixel’s orange window is a gate in flight, which is
+      precisely the window we decided <em>not</em> to render. By the time a chip has settled on
+      orange the pixel beside it has gone back to green or red. Two different subjects — the
+      pixel diagnoses <em>a board</em>, the chip diagnoses <em>the airflow</em> — and they are
+      disjoint in time.
+    </p>
+    <p class="note">
+      <b>Blue and white don’t come across, deliberately.</b> White is the captive portal: if
+      it’s lit there is no app to look at, so it cannot collide. Blue is the honest tempting
+      one — “configured but not ready to work” is exactly <em>Not set up</em> — but it would
+      mean adding a colour the app’s palette (<code>styles.css</code>) does not have, to say
+      something orange already says on the build canvas. Agreeing with the <em>canvas</em>
+      matters more here than agreeing with the pixel: they are both screens, read at the same
+      distance, often minutes apart.
+    </p>
+    <div class="banner">
+      <b>What actually moved because of this comparison.</b> <em>Not set up</em> and
+      <em>No gate</em> were red in the first draft. Lining them up against the pixel exposed
+      that they aren’t faults at all — nothing is broken, the shop is unfinished — and the
+      build canvas has always dotted an uncalibrated gate <em>orange</em>. They are orange now,
+      which cost nothing and stopped two screens contradicting each other.
+    </div>
+    <p class="note">
+      <b>No blinking in the UI, and no blink <em>codes</em> anywhere.</b> The pixel uses rate
+      only as a second-order detail inside a colour, never as the primary signal — the header is
+      blunt about why (counting flashes through sawdust at ten feet is miserable). The bin
+      light’s red strobe is the same rule kept, not broken: red is what carries the meaning and
+      the strobe only makes it carry further across a room. A chip has words, so it needs no
+      second channel at all.
+    </p>
+  </div>
+
+  <hr class="rule">
+
+  <!-- ── option B ───────────────────────────────────────────────────────── -->
+  <div class="sec">
+    <h2 class="eyebrow">Where the switch goes instead — the tool detail page</h2>
+    <p class="note">
+      A switch is the right glyph for a <em>setting</em>. Taking it off the shop list doesn’t
+      mean there is no setting worth switching — it means the setting isn’t a daily-driver
+      control, and belongs on the page you open when you tap a tool’s name. Two live there.
+    </p>
+
+    <div class="phones">
+      <div class="phone">
+        <p class="cap"><b>Tool detail.</b> Reached by tapping the name on the shop list. Both
+          switches are real <code>&lt;button&gt;</code>s and both change saved state.</p>
+        <div class="head">
+          <span class="back">‹</span>
+          <span class="title">Table saw</span>
+        </div>
+
+        <div class="glabel">Collection</div>
+        <div class="grp">
+          <div class="srow">
+            <div class="grow">
+              <div class="s-name">In service</div>
+              <div class="s-sub">Off means DustGate ignores this tool completely — no gate,
+                no blower, even if the outlet reads power.</div>
+            </div>
+            <span class="sw on"></span>
+          </div>
+          <div class="srow">
+            <div class="grow">
+              <div class="s-name">Overarm guard</div>
+              <div class="s-sub">The second pickup. Switch off when the guard is off the saw,
+                so its gate stays shut instead of bleeding suction.</div>
+            </div>
+            <span class="sw on"></span>
+          </div>
+          <div class="srow">
+            <div class="grow">
+              <div class="s-name">Cabinet port</div>
+              <div class="s-sub">The primary. A saw can’t run without it, so there is nothing
+                here to switch.</div>
+            </div>
+            <span class="locked">Always on</span>
+          </div>
+        </div>
+
+        <div class="glabel">Power</div>
+        <div class="grp">
+          <div class="srow">
+            <div class="grow">
+              <div class="s-name">Smart outlet</div>
+              <div class="s-sub"><code>shelly-3a1f</code> · 1,850 W now · starts above 300 W</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="phone">
+        <p class="cap"><b>Back on the shop list.</b> An out-of-service tool is dimmed and still
+          listed. It keeps a chip, because “why is nothing happening when I hit the switch” has
+          to have an answer on the page you are already looking at.</p>
+        <div class="top"><span class="shopname">Jeff’s Shop</span><span class="dot live"></span></div>
+        <div class="label">Tools</div>
+        <div class="rows">
+          <div class="trow collecting">
+            <div class="grow"><div class="t-name">Jointer</div><div class="t-sub">Auto · sensing power</div></div>
+            <span class="chip go">Collecting</span>
+          </div>
+          <div class="trow oos">
+            <div class="grow"><div class="t-name">Drum sander</div><div class="t-sub">Out of service · drawing 1,200 W</div></div>
+            <span class="chip off">Ignored</span>
+          </div>
+          <div class="trow">
+            <div class="grow"><div class="t-name">Planer</div><div class="t-sub">Auto</div></div>
+            <span class="chip off">Idle</span>
+          </div>
+        </div>
+        <p class="note" style="margin-top:12px">
+          Dimmed, not hidden — and the subtitle still reports the power draw, so a tool that is
+          being ignored <em>while running</em> says so rather than looking asleep.
+        </p>
+      </div>
+    </div>
+
+    <div class="banner">
+      <b>Cost check: “In service” is new state, and the schema currently says it shouldn’t exist.</b>
+      The <code>enabled</code> flag in <code>shared/device-model/shop.js</code> is per <em>port</em>,
+      not per machine, and RFC §6.6 makes the primary permanently enabled on purpose — the comment
+      is explicit that “collect nothing from this tool” is what deleting the machine is for. So the
+      <b>Overarm guard</b> switch above is free: it is exactly the existing
+      <code>enabled: false</code> hood-off-the-saw case, which today has no UI at all. The
+      <b>In service</b> switch is not — it needs a new machine-level field, routing that skips
+      the machine, and a <code>validateShop</code> rule that stops it from being the reason a
+      shop looks empty.
+    </div>
+    <p class="note">
+      Worth doing anyway, I think: deleting a machine to sit out a repair loses its plug pairing,
+      its gate calibration and its place on the canvas, and you rebuild all of it next week. But
+      it is a schema change with a firmware side, not a UI tweak — so it is a separate change
+      from the chips, landing after them.
+    </p>
+  </div>
+
+  <hr class="rule">
+
+  <!-- ── the collector card ─────────────────────────────────────────────── -->
+  <div class="sec">
+    <h2 class="eyebrow">The collector card, same axis</h2>
+    <p class="note">
+      The card keeps its switch — unlike the tool rows, it is a real
+      <code>&lt;button&gt;</code> already and it does what it looks like. What it gains is the
+      chip, on the same one question rephrased for a blower: <em>is this thing actually moving
+      air?</em>
+    </p>
+    <div class="banner">
+      <b>The asymmetry that makes this possible: a tool’s plug senses, the collector’s plug
+      commands.</b> <code>SmartOutletControl.h</code> is explicit — collector slots are
+      “switchable Shelly outlets (we turn them on/off) <em>rather than power sensors</em>”, and
+      <code>collectorOn(idx)</code> returns what we <em>commanded</em>, never what is happening.
+      So the card can be showing confident green while the blower’s own switch is off, the
+      breaker has tripped, or nobody plugged it back in. The same Shelly reports watts — it is
+      the identical <code>ShellyGen2Outlet</code> the tool slots poll — we simply never ask.
+      <b>Polling the collector plug for power was new firmware work</b> — done 2026-08-24:
+      <code>reconcileCollectors()</code> now polls each collector slot before it decides
+      anything, <code>SmartOutletControl</code> stamps the spin-up clock at the command, and
+      the runtime publishes <code>systems[].plug</code> alongside <code>collectorOn</code>.
+      The verdict lives in <code>collectorPlugState()</code> in the shared model, not in the
+      firmware — the device reports, the model judges, once.
+    </div>
+
+    <div class="phones">
+      <div class="phone">
+        <p class="cap"><b>Working.</b> Green only when we commanded it on <em>and</em> the plug
+          reports running current. That is a stronger claim than the card makes today.</p>
+        <div class="collector running">
+          <span class="cyc"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+            stroke-linecap="round" stroke-linejoin="round"><path d="M13 5a7 7 0 1 0 6 7"/>
+            <path d="M12 8a4 4 0 1 1-4 4"/><circle cx="12" cy="12" r="1.2" fill="currentColor" stroke="none"/></svg></span>
+          <div class="c-body">
+            <div class="c-name">Cyclone</div>
+            <div class="c-sub">Table saw · 384 W</div>
+          </div>
+          <div class="ccol">
+            <span class="chip go">Collecting</span>
+            <span class="sw on"></span>
+          </div>
+        </div>
+        <div class="collector running">
+          <span class="cyc"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+            stroke-linecap="round" stroke-linejoin="round"><path d="M13 5a7 7 0 1 0 6 7"/>
+            <path d="M12 8a4 4 0 1 1-4 4"/><circle cx="12" cy="12" r="1.2" fill="currentColor" stroke="none"/></svg></span>
+          <div class="c-body">
+            <div class="c-name">Cyclone</div>
+            <div class="c-sub">Switched on by hand · stops itself in 12 min</div>
+          </div>
+          <div class="ccol">
+            <span class="chip go">Running by hand</span>
+            <span class="sw on"></span>
+          </div>
+        </div>
+        <div class="collector ">
+          <span class="cyc"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+            stroke-linecap="round" stroke-linejoin="round"><path d="M13 5a7 7 0 1 0 6 7"/>
+            <path d="M12 8a4 4 0 1 1-4 4"/><circle cx="12" cy="12" r="1.2" fill="currentColor" stroke="none"/></svg></span>
+          <div class="c-body">
+            <div class="c-name">Cyclone</div>
+            <div class="c-sub">Tools are off · clearing the ducts</div>
+          </div>
+          <div class="ccol">
+            <span class="chip off">Coasting</span>
+            <span class="sw on"></span>
+          </div>
+        </div>
+        <div class="collector ">
+          <span class="cyc"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+            stroke-linecap="round" stroke-linejoin="round"><path d="M13 5a7 7 0 1 0 6 7"/>
+            <path d="M12 8a4 4 0 1 1-4 4"/><circle cx="12" cy="12" r="1.2" fill="currentColor" stroke="none"/></svg></span>
+          <div class="c-body">
+            <div class="c-name">Cyclone</div>
+            <div class="c-sub">Nothing running</div>
+          </div>
+          <div class="ccol">
+            <span class="chip off">Idle</span>
+            <span class="sw"></span>
+          </div>
+        </div>
+      </div>
+
+      <div class="phone">
+        <p class="cap"><b>Wrong.</b> Every one of these renders today as plain green
+          “Collecting” or plain grey “Idle”.</p>
+        <div class="collector bad">
+          <span class="cyc"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+            stroke-linecap="round" stroke-linejoin="round"><path d="M13 5a7 7 0 1 0 6 7"/>
+            <path d="M12 8a4 4 0 1 1-4 4"/><circle cx="12" cy="12" r="1.2" fill="currentColor" stroke="none"/></svg></span>
+          <div class="c-body">
+            <div class="c-name">Cyclone</div>
+            <div class="c-sub">We switched it on · plug reports 0 W</div>
+          </div>
+          <div class="ccol">
+            <span class="chip bad">Not starting</span>
+            <span class="sw on"></span>
+          </div>
+        </div>
+        <div class="collector bad">
+          <span class="cyc"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+            stroke-linecap="round" stroke-linejoin="round"><path d="M13 5a7 7 0 1 0 6 7"/>
+            <path d="M12 8a4 4 0 1 1-4 4"/><circle cx="12" cy="12" r="1.2" fill="currentColor" stroke="none"/></svg></span>
+          <div class="c-body">
+            <div class="c-name">Cyclone</div>
+            <div class="c-sub">Outlet <code>shelly-51c0</code> hasn’t answered since 9:07</div>
+          </div>
+          <div class="ccol">
+            <span class="chip bad">Outlet offline</span>
+            <span class="sw on"></span>
+          </div>
+        </div>
+        <div class="collector bad">
+          <span class="cyc"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+            stroke-linecap="round" stroke-linejoin="round"><path d="M13 5a7 7 0 1 0 6 7"/>
+            <path d="M12 8a4 4 0 1 1-4 4"/><circle cx="12" cy="12" r="1.2" fill="currentColor" stroke="none"/></svg></span>
+          <div class="c-body">
+            <div class="c-name">Cyclone</div>
+            <div class="c-sub">Running with every gate shut</div>
+          </div>
+          <div class="ccol">
+            <span class="chip bad">Dead-headed</span>
+            <span class="sw on"></span>
+          </div>
+        </div>
+        <div class="collector warn">
+          <span class="cyc"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+            stroke-linecap="round" stroke-linejoin="round"><path d="M13 5a7 7 0 1 0 6 7"/>
+            <path d="M12 8a4 4 0 1 1-4 4"/><circle cx="12" cy="12" r="1.2" fill="currentColor" stroke="none"/></svg></span>
+          <div class="c-body">
+            <div class="c-name">Cyclone</div>
+            <div class="c-sub">Table saw is asking · Drum sander’s gate isn’t set up</div>
+          </div>
+          <div class="ccol">
+            <span class="chip wait">Blocked</span>
+            <span class="sw"></span>
+          </div>
+        </div>
+        <div class="collector bad">
+          <span class="cyc"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+            stroke-linecap="round" stroke-linejoin="round"><path d="M13 5a7 7 0 1 0 6 7"/>
+            <path d="M12 8a4 4 0 1 1-4 4"/><circle cx="12" cy="12" r="1.2" fill="currentColor" stroke="none"/></svg></span>
+          <div class="c-body">
+            <div class="c-name">Cyclone</div>
+            <div class="c-sub">Bin sensor is covered · empty it before the next cut</div>
+          </div>
+          <div class="ccol">
+            <span class="chip bad">Bin full</span>
+            <span class="sw on"></span>
+          </div>
+        </div>
+        <div class="collector warn">
+          <span class="cyc"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+            stroke-linecap="round" stroke-linejoin="round"><path d="M13 5a7 7 0 1 0 6 7"/>
+            <path d="M12 8a4 4 0 1 1-4 4"/><circle cx="12" cy="12" r="1.2" fill="currentColor" stroke="none"/></svg></span>
+          <div class="c-body">
+            <div class="c-name">Cyclone</div>
+            <div class="c-sub">No outlet paired — there is nothing to switch</div>
+          </div>
+          <div class="ccol">
+            <span class="chip wait">No outlet</span>
+            
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card swatches">
+      <div class="swatch">
+        <span class="chip bad">Not starting</span>
+        <span class="why"><b>The headline of the whole section.</b> Relay closed, ~0 W on the
+          other side of it. Its own switch is off, the breaker went, it’s unplugged, or the
+          motor is stalled. Today you find this out by listening — which means the phone lies to
+          you at exactly the moment you would most want to trust it.</span>
+      </div>
+      <div class="swatch">
+        <span class="chip bad">Dead-headed</span>
+        <span class="why">Running with no path open. <code>sequencer.js</code> already computes
+          <code>deadHeadRisk</code>, and it is the one hard rule this project has. If the state
+          is ever reached the card should say so, not show green.</span>
+      </div>
+      <div class="swatch">
+        <span class="chip wait">Blocked</span>
+        <span class="why"><b>Orange, and this is where the tools’ “Waiting” went.</b> A blower is
+          never out-voted — it runs or it doesn’t — so there is no <em>Waiting</em> here.
+          <em>Blocked</em> carries the same feeling: something wants air and isn’t getting it.
+          The subtitle names both halves, because “which tool, and what’s stopping it” is the
+          next question.</span>
+      </div>
+      <div class="swatch">
+        <span class="chip bad">Bin full</span>
+        <span class="why"><b>Red, to match the strobe already on the wall.</b> A real discrete
+          signal, not an inference — see the sensor note below. It is red rather than orange
+          because you have to stop and deal with it: a full bin is lost suction, and past a
+          point it is a fire and a clogged filter.</span>
+      </div>
+      <div class="swatch">
+        <span class="chip off">Coasting</span>
+        <span class="why">Grey, not green: the tools are already off and this is wind-down, not
+          work. It is the one state the card gets right today, and it stays — a blower running
+          with everything off otherwise reads as a stuck relay.</span>
+      </div>
+    </div>
+
+    <p class="note">
+      <b>Spin-up is not a chip, it is a grace period.</b> An induction motor takes a second or
+      three to reach running draw, so <em>Not starting</em> evaluated the instant we close the
+      relay would false-alarm on every single start. It is a debounce before raising the alarm,
+      not a state to render — the same call we made about gate travel on the tool rows, for the
+      same reason.
+    </p>
+    <p class="note">
+      <b>Filter loading is still not here.</b> Nothing senses it, and the only available signals
+      — a slowly rising baseline draw, accumulated runtime hours — are guesses dressed as
+      measurements. Bin level is a different story entirely; see below.
+    </p>
+  </div>
+
+  <hr class="rule">
+
+  <!-- ── suppressed ─────────────────────────────────────────────────────── -->
+  <div class="sec">
+    <h2 class="eyebrow">Suppressed — the state, kept; the switch, buried</h2>
+    <p class="note">
+      “Don’t run this blower even if a tool asks.” Shop-vac days, and late evenings when the
+      neighbours would rather not hear a 2 hp cyclone. It is a real errand — and a genuinely
+      dangerous control to leave where a sleeve can catch it, because a suppressed collector
+      looks exactly like a broken one to anyone who didn’t set it.
+    </p>
+    <p class="note">
+      <b>So the state gets a chip and the control gets buried.</b> Those are separable, and
+      splitting them is the whole design. Settings is where you go on purpose; the shop page is
+      where you glance. Nothing on the shop page can turn suppression <em>on</em>, and the chip
+      that says it is on is impossible to miss and one tap from the way out.
+    </p>
+
+    <div class="phones">
+      <div class="phone">
+        <p class="cap"><b>Settings.</b> Below the fold, under its own heading, with the
+          consequence spelled out rather than implied.</p>
+        <div class="head">
+          <span class="back">‹</span>
+          <span class="title">Settings</span>
+        </div>
+        <div class="glabel">Collectors</div>
+        <div class="grp">
+          <div class="srow">
+            <div class="grow">
+              <div class="s-name">Hold Cyclone off</div>
+              <div class="s-sub">Tools won’t start it. Gates still move, so nothing gets
+                dead-headed — you just get no suction until you switch this back.</div>
+            </div>
+            <span class="sw"></span>
+          </div>
+          <div class="srow">
+            <div class="grow">
+              <div class="s-name">Hold Shop vac off</div>
+              <div class="s-sub">Same, for the second system.</div>
+            </div>
+            <span class="sw"></span>
+          </div>
+        </div>
+        <p class="note">
+          Worded as <b>“Hold … off”</b>, not “Suppressed”. It is a verb describing what happens,
+          it says which blower, and it cannot be misread as a fault the way a bare technical noun
+          can. The chip on the card is where the shorter word belongs.
+        </p>
+      </div>
+
+      <div class="phone">
+        <p class="cap"><b>On the shop page.</b> Dimmed like an out-of-service tool, no switch at
+          all, and the row underneath explains itself instead of looking broken.</p>
+        <div class="top"><span class="shopname">Jeff’s Shop</span><span class="dot"></span></div>
+        <div class="collector supp">
+          <span class="cyc"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+            stroke-linecap="round" stroke-linejoin="round"><path d="M13 5a7 7 0 1 0 6 7"/>
+            <path d="M12 8a4 4 0 1 1-4 4"/><circle cx="12" cy="12" r="1.2" fill="currentColor" stroke="none"/></svg></span>
+          <div class="c-body">
+            <div class="c-name">Cyclone</div>
+            <div class="c-sub">Held off in Settings · tools won’t start it</div>
+          </div>
+          <div class="ccol"><span class="chip off">Held off</span></div>
+        </div>
+        <div class="label">Tools</div>
+        <div class="rows">
+          <div class="trow">
+            <div class="grow"><div class="t-name">Table saw</div><div class="t-sub">Auto · drawing 1,850 W · Cyclone is held off</div></div>
+            <span class="chip off">No suction</span>
+          </div>
+          <div class="trow">
+            <div class="grow"><div class="t-name">Jointer</div><div class="t-sub">Auto</div></div>
+            <span class="chip off">Idle</span>
+          </div>
+        </div>
+        <p class="note" style="margin-top:12px">
+          <b>Grey, not orange.</b> This was the close call. Orange would be truthful — a running
+          saw is getting no air — but orange means <em>something is wrong</em> everywhere else on
+          this page, and here nothing is: you asked for exactly this an hour ago. Grey plus a
+          subtitle that names the cause and where to undo it says it without crying wolf.
+        </p>
+      </div>
+    </div>
+
+    <div class="banner">
+      <b>Cost check.</b> Cheaper than <em>In service</em>. It is one boolean per system, and the
+      routing hook already exists — <code>setCollectorManual()</code> is the seam that decides
+      whether a system’s blower runs, so suppression is a check in the same place rather than a
+      new concept. It still needs schema, persistence and a firmware side; the only genuinely new
+      rule is that gates must keep routing normally while it is on, so switching it back mid-cut
+      can’t dead-head anything.
+    </div>
+  </div>
+
+  <hr class="rule">
+
+  <!-- ── bin sensor ─────────────────────────────────────────────────────── -->
+  <div class="sec">
+    <h2 class="eyebrow">Bin and clog — two sources, both optional</h2>
+    <p class="note">
+      There is already a <b>Banner QS18VP6D</b> diffuse photoelectric sensor watching the bin on
+      the cyclone, driving a green / red-strobe light. It is discretely wired — no controller,
+      because until now there was nothing for a controller to do with it. Bringing it into
+      DustGate is planned and not designed yet.
+    </p>
+    <p class="note">
+      <b>It is not the only way in, and it must not become mandatory.</b> A photoelectric sensor
+      is not cheap, it is a nuisance on a shop vac that gets dragged around the shop, and plenty
+      of people simply will not want one. So bin monitoring is <b>per collector</b> and has three
+      settings — and the second one, watching the motor’s draw, is a seam left open rather than a
+      feature being designed here.
+    </p>
+
+    <div class="card"><div class="tw"><table>
+      <tr><th style="width:150px">Source</th><th>How much it knows</th><th style="width:150px">Chip</th></tr>
+      <tr><td><b>Nothing</b><br><span class="note">the default</span></td>
+          <td>No claim at all. The card says nothing about the bin, ever. This is most shops and
+            it must stay the honest default — a system that guesses when it has no signal teaches
+            you to ignore it.</td>
+          <td>—</td></tr>
+      <tr><td><b>Optical sensor</b></td>
+          <td>A discrete bit that is set or not. Trustworthy the way gate positions are
+            trustworthy. Earns a flat assertion and a red chip.</td>
+          <td><span class="chip bad">Bin full</span></td></tr>
+      <tr><td><b>Motor draw</b><br><span class="note">not built</span></td>
+          <td>An inference from a learned baseline. Can be right often and wrong sometimes, and
+            it cannot tell a full bin from a clogged duct from a hose off a port. Earns a
+            question, not a statement.</td>
+          <td><span class="chip wait">Check suction</span></td></tr>
+    </table></div></div>
+
+    <div class="banner">
+      <b>Confidence sets the colour and the wording — this is the rule the whole page rests on.</b>
+      A discrete sensor gets red and “Bin full”, because we know. An inference gets orange and
+      “Check suction”, because we don’t: it could be the bin, a clogged elbow, a blast gate
+      someone left open, or a hose off a port. Wording it as an assertion would be the fastest
+      way to make a woodworker stop believing every other chip on this page. Orange also already
+      means <em>no air here, and it isn’t the hardware’s fault</em>, which is exactly the claim.
+    </div>
+    <div class="card"><div class="tw"><table>
+      <tr><th style="width:150px">What it is</th><th>What that buys, and what it costs</th></tr>
+      <tr><td><b>Discrete, not inferred</b></td>
+          <td>This is the important one. A bin-level chip is not a guess from a drifting wattage
+            baseline — it is a bit that is either set or not. It can be trusted the way the gate
+            positions are trusted, which is why <em>Bin full</em> is a real chip above while
+            filter loading is still in the not-built list.</td></tr>
+      <tr><td><b>Complementary PNP</b></td>
+          <td>The part has both a normally-open and a normally-closed output. Reading
+            <em>both</em> means a cut wire or a dead sensor is detectable — they stop
+            disagreeing — instead of silently reading as “bin is fine forever”. That matters
+            here more than it would elsewhere: a sensor that fails quiet is worse than no
+            sensor, because you stop checking.</td></tr>
+      <tr><td><b>10–30 V dc, PNP</b></td>
+          <td>The output swings to supply, and the C5 carrier is a 3.3 V part on a 5 V rail. It
+            needs an optocoupler or a divider — this cannot land on a bare GPIO. A wiring
+            question, not a UI one, but it is the reason this is “eventually” and not
+            “next”.</td></tr>
+      <tr><td><b>Optional, per collector</b></td>
+          <td>Cost, and a shop vac that moves. The status shape has to carry the <em>source</em>
+            alongside the state, not just a boolean — that is what lets the card word itself
+            honestly, and what stops a shop with no sensor inheriting a claim from one that has
+            one. Cheap to get right now, awkward to retrofit.</td></tr>
+      <tr><td><b>It lives at the cyclone</b></td>
+          <td>Which may well be a node, not the primary — and that is the real architectural
+            question. Nodes today are dumb actuator banks: they receive already-resolved
+            positions and send nothing back but pings. A sensor on a node makes it an
+            <em>input</em> device, which is new NodeLink protocol, not new wiring. Worth deciding
+            deliberately when the time comes rather than discovering it mid-build.</td></tr>
+    </table></div></div>
+
+    <div class="phones">
+      <div class="phone">
+        <p class="cap"><b>Per collector, and off by default.</b> A picker rather than a switch —
+          which source is in use is what the card’s wording depends on.</p>
+        <div class="head"><span class="back">‹</span><span class="title">Cyclone</span></div>
+        <div class="glabel">Bin monitoring</div>
+        <div class="grp">
+          <div class="srow">
+            <div class="grow">
+              <div class="s-name">Don’t monitor</div>
+              <div class="s-sub">The card says nothing about the bin. Right for most shops, and
+                right until you have fitted something.</div>
+            </div>
+            <span class="rad"></span>
+          </div>
+          <div class="srow">
+            <div class="grow">
+              <div class="s-name">Bin sensor</div>
+              <div class="s-sub">A full/not-full signal wired to a board. Trusted outright —
+                this is the only source that gets a red chip.</div>
+            </div>
+            <span class="rad on"></span>
+          </div>
+          <div class="srow">
+            <div class="grow">
+              <div class="s-name">Watch the motor<span class="beta">LATER</span></div>
+              <div class="s-sub">Learns this blower’s normal running draw and asks you to check
+                when it sags. No wiring. Can’t tell a full bin from a clogged elbow, so it
+                asks rather than tells.</div>
+            </div>
+            <span class="rad"></span>
+          </div>
+        </div>
+        <p class="note">
+          A shop vac gets <b>Don’t monitor</b> and probably always will: nobody is fitting a
+          photoelectric sensor to something they drag across the shop, and its draw changes every
+          time they do.
+        </p>
+      </div>
+
+      <div class="phone">
+        <p class="cap"><b>The same blower, three settings.</b> What changes is not just whether
+          there is a chip — it is how hard a claim the card makes.</p>
+        <div class="collector running">
+          <span class="cyc"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+            stroke-linecap="round" stroke-linejoin="round"><path d="M13 5a7 7 0 1 0 6 7"/>
+            <path d="M12 8a4 4 0 1 1-4 4"/><circle cx="12" cy="12" r="1.2" fill="currentColor" stroke="none"/></svg></span>
+          <div class="c-body">
+            <div class="c-name">Shop vac</div>
+            <div class="c-sub">Router table · 1,040 W</div>
+          </div>
+          <div class="ccol"><span class="chip go">Collecting</span><span class="sw on"></span></div>
+        </div>
+        <p class="note" style="margin:-4px 0 14px">
+          <b>Don’t monitor.</b> No claim, no chip, no hedge. Silence is the honest answer.
+        </p>
+
+        <div class="collector bad">
+          <span class="cyc"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+            stroke-linecap="round" stroke-linejoin="round"><path d="M13 5a7 7 0 1 0 6 7"/>
+            <path d="M12 8a4 4 0 1 1-4 4"/><circle cx="12" cy="12" r="1.2" fill="currentColor" stroke="none"/></svg></span>
+          <div class="c-body">
+            <div class="c-name">Cyclone</div>
+            <div class="c-sub">Bin sensor is covered · empty it before the next cut</div>
+          </div>
+          <div class="ccol"><span class="chip bad">Bin full</span><span class="sw on"></span></div>
+        </div>
+        <p class="note" style="margin:-4px 0 14px">
+          <b>Bin sensor.</b> A flat statement, in red, with an instruction. We know.
+        </p>
+
+        <div class="collector warn">
+          <span class="cyc"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+            stroke-linecap="round" stroke-linejoin="round"><path d="M13 5a7 7 0 1 0 6 7"/>
+            <path d="M12 8a4 4 0 1 1-4 4"/><circle cx="12" cy="12" r="1.2" fill="currentColor" stroke="none"/></svg></span>
+          <div class="c-body">
+            <div class="c-name">Cyclone</div>
+            <div class="c-sub">Pulling 310 W, usually 380 · bin, a clog, or a gate left open</div>
+          </div>
+          <div class="ccol"><span class="chip wait">Check suction</span><span class="sw on"></span></div>
+        </div>
+        <p class="note" style="margin:-4px 0 0">
+          <b>Watch the motor.</b> Orange, a question, and it shows its working — the two numbers
+          let you judge the guess instead of taking it on faith. It lists what it might be
+          because it genuinely cannot tell.
+        </p>
+      </div>
+    </div>
+
+    <p class="note">
+      <b>Wattage clog detection: leave the seam, don’t cut the wood.</b> No calibration, no
+      thresholds, no learned baseline in this design — those need a real blower, a real bench and
+      numbers nobody has measured. What this page fixes is the part that is expensive to change
+      later: the chip exists, it is orange, it asks rather than asserts, and the status shape
+      carries which source it came from. Adding the maths later is then a firmware change, not a
+      redesign of this screen.
+    </p>
+    <p class="note">
+      <b>One physics note, unverified, so the first attempt doesn’t start backwards.</b> The
+      naive expectation is that a blockage makes the motor work harder. For a centrifugal blower
+      or a vac it is the opposite — starve the inlet and mass flow drops, so the motor
+      <em>unloads</em> and draw falls. It is the same effect as the pitch rising when you cover a
+      shop-vac hose with your hand. So the signal to look for is running draw sagging below its
+      learned baseline, not spiking above it. Nothing in this shop has measured it; treat it as
+      the direction to test first, not a fact.
+    </p>
+    <p class="note">
+      <b>Does a full bin stop the shop?</b> Not proposed here, and worth its own conversation —
+      refusing to start a blower into a full bin is defensible, and so is “tell me, don’t decide
+      for me”. This page only claims the <em>chip</em>. The stop-the-shop question touches
+      routing and the never-dead-head rule and should not be settled as a side effect of a
+      colour decision.
+    </p>
+  </div>
+
+  <hr class="rule">
+
+  <!-- ── deferred ───────────────────────────────────────────────────────── -->
+  <div class="sec">
+    <h2 class="eyebrow">Named, not built</h2>
+    <div class="card"><div class="tw"><table>
+      <tr><th>State</th><th>Why it isn’t a chip here</th></tr>
+      <tr><td><b>Out of service</b></td>
+          <td>Kept, but moved — see the tool detail page above. It is a genuine setting, so a
+            switch is the right glyph; putting it back on the shop row would recreate the
+            ambiguity we just removed. Needs new machine-level schema, so it lands after the
+            chips, not with them.</td></tr>
+      <tr><td><b>Coasting</b></td>
+          <td>Per-tool coast-down after a stop. The collector card already says it, and a row
+            that lingers green for a few seconds after you switch off reads as a stuck relay
+            rather than as information.</td></tr>
+      <tr><td><b>Secondary port</b></td>
+          <td>A machine with an overarm guard has two runs, and the secondary may cross into
+            the other system — so “collecting” is really two booleans. One row, one chip is a
+            deliberate simplification; the split belongs on the detail page if anywhere.</td></tr>
+      <tr><td><b>A collector's outlet on the canvas</b></td>
+          <td>A tool wears its outlet on the build canvas (the dock row under its name); a
+            collector does not, so the one outlet that can be commanded rather than sensed is
+            the one you cannot see. The collector badge is a different shape from a tool's and
+            has no room for it as drawn — so this is a canvas change, not a label change, and it
+            wants its own pass. Noted 2026-08-24.</td></tr>
+      <tr><td><b>Filter loading</b></td>
+          <td>Nothing senses it, and unlike bin level there is no sensor planned. A rising
+            baseline draw or a runtime-hours counter are the only signals available, and both are
+            guesses dressed as measurements.</td></tr>
+      <tr><td><b>Opening / Closing</b></td>
+          <td>Transient and unactionable. A gate that fails to arrive becomes
+            <span class="chip bad" style="padding:2px 8px">Gate offline</span> instead.</td></tr>
+    </table></div></div>
+  </div>
+
+  <hr class="rule">
+
+  <!-- ── log ────────────────────────────────────────────────────────────── -->
+  <div class="sec">
+    <h2 class="eyebrow">Decision log</h2>
+    <div class="card"><div class="tw"><table>
+      <tr><th style="width:96px">Date</th><th>Decision</th></tr>
+      <tr><td>2026-08-24</td>
+          <td>The tool-row switch is <b>removed</b>, not relabelled. It was a
+            <code>&lt;span&gt;</code> mirroring <code>t.on</code> while the whole row carried
+            the tap — an indicator drawn as a control, and drawn as the <em>same</em> control
+            the collector card uses for real.</td></tr>
+      <tr><td>2026-08-24</td>
+          <td>Right side becomes a <b>status chip</b> on one axis: <em>is air reaching this
+            tool</em>. Green collecting, orange waiting, red fault, hollow grey idle. Auto vs.
+            manual moves to the subtitle.</td></tr>
+      <tr><td>2026-08-24</td>
+          <td><b>Waiting</b> is the point of the exercise. <code>on &amp;&amp; !collecting</code>
+            — a tool drawing power that lost the gate to something more recent — was
+            indistinguishable from running normally, on the page whose job is to explain
+            exactly that.</td></tr>
+      <tr><td>2026-08-24</td>
+          <td>Six can’t-collect chips across two severities, not one: <em>Gate offline</em>, <em>Not set up</em>,
+            <em>No reading</em> in <b>red</b>; <em>Not set up</em> and <em>No gate</em> in
+            <b>orange</b>. Red is broken now, orange is unfinished setup — and orange is already
+            what the canvas dots an uncalibrated gate with, so the two screens agree.</td></tr>
+      <tr><td>2026-08-24</td>
+          <td>No transient chips. Gate travel is seconds and unactionable; failure to arrive is
+            a fault, and that <em>is</em> shown.</td></tr>
+      <tr><td>2026-08-24</td>
+          <td>The setting the switch <em>looked</em> like moves to the <b>tool detail page</b>,
+            where a switch means what a switch means. <b>Overarm guard</b> is the existing
+            per-port <code>enabled</code> flag finally getting a UI; <b>In service</b> is new
+            machine-level state and ships separately.</td></tr>
+      <tr><td>2026-08-24</td>
+          <td>An out-of-service tool stays <b>listed and dimmed</b> with an <em>Ignored</em>
+            chip, and its subtitle still reports power draw — being ignored while running is
+            the confusing case, so that is the one that must say so.</td></tr>
+      <tr><td>2026-08-24</td>
+          <td>Checked against <code>StatusLed.h</code>. <b>Green and red are locked</b> to the
+            pixel’s meanings and already agreed. <b>Orange deliberately diverges</b> — motion on
+            a board, no-air-here on a chip — which is safe only because the UI renders no
+            transients, so the two oranges can never describe the same moment. Blue and white do
+            not come across.</td></tr>
+      <tr><td>2026-08-24</td>
+          <td>The collector card <b>keeps its switch</b> (it is already a real button that does
+            what it looks like) and <b>gains a chip</b> on the same axis. No <em>Waiting</em> — a
+            blower is never out-voted — so orange goes to <b>Blocked</b> instead.</td></tr>
+      <tr><td>2026-08-24</td>
+          <td><b>Not starting</b> is the collector’s headline state, and it needs the collector
+            plug polled for watts. <code>SmartOutletControl.h</code> switches those slots and
+            never reads them, so this is new firmware work — without it the card keeps reporting
+            the command as if it were the truth.</td></tr>
+      <tr><td>2026-08-24</td>
+          <td><b>Suppression splits</b>: the state gets a <em>Held off</em> chip on the card, the
+            control lives in Settings only. Nothing on the shop page can switch it on, so it
+            can’t be bumped — but a shop that isn’t collecting always says why on the page you
+            are already looking at. Grey, not orange: you asked for it.</td></tr>
+      <tr><td>2026-08-24</td>
+          <td><b>Bin full is a real chip</b>, red, because a Banner QS18VP6D already watches the
+            bin and drives a green / red-strobe light on the cyclone. Discrete signal, not a
+            wattage inference — which is exactly why it qualifies and filter loading doesn’t.
+            The colours were chosen independently years earlier and agree; a third surface
+            landing on the same green/red is a good sign they are the right two.</td></tr>
+      <tr><td>2026-08-24</td>
+          <td><b>Bin monitoring is per collector and off by default</b>, with three settings:
+            none, bin sensor, watch-the-motor. A sensor costs money and is a nuisance on a shop
+            vac that moves, so it can never be assumed. The status shape carries the
+            <b>source</b> next to the state — that is what lets the card word itself honestly and
+            is awkward to retrofit.</td></tr>
+      <tr><td>2026-08-24</td>
+          <td><b>Confidence sets colour and wording.</b> A discrete sensor gets red and a
+            statement (<em>Bin full</em>); an inference gets orange and a question
+            (<em>Check suction</em>) plus the numbers behind it. Asserting a guess is the fastest
+            way to make someone stop believing every other chip on the page.</td></tr>
+      <tr><td>2026-08-24</td>
+          <td><b>Watch-the-motor is a seam, not a feature.</b> No thresholds, no baseline, no
+            calibration here — those need a bench and numbers nobody has measured. Reserving the
+            chip, the colour and the source field now means the maths lands later as firmware,
+            not as a redesign of this screen. Direction to test first (unverified): a starved
+            centrifugal blower <em>unloads</em>, so draw <b>sags</b> below baseline rather than
+            spiking.</td></tr>
+      <tr><td>2026-08-24</td>
+          <td>Reading that sensor is <b>not designed</b>. It needs level shifting (10–30 V PNP
+            into a 3.3 V part), and if it lands on a node it needs NodeLink to carry an
+            <em>input</em> — nodes send nothing but pings today. Flagged so it is decided rather
+            than discovered.</td></tr>
+      <tr><td>2026-08-24</td>
+          <td><b>One machine per system gets the air.</b> Found from the shop page: several
+            tools hand-switched on the same blower all sat green. <code>computeRouting</code>
+            only ever resolved contests over a SELECTOR, so tools on independent gates
+            contested nothing and every gate opened — co-open, half the velocity at each, and
+            flatly against the locked scope of one tool at a time. Arbitration now picks a
+            winner; the rest read <em>Waiting · &lt;winner&gt; has the gate</em>. Per MACHINE,
+            so a saw with a cabinet gate and an overarm still opens both.</td></tr>
+      <tr><td>2026-08-24</td>
+          <td><b>"Plug" is retired from anything a person reads</b> — it is an <em>outlet</em>
+            everywhere in the UI now. "Plug" means too many other things in a woodshop, and the
+            API had said <code>/api/outlets</code> all along while the words on screen said
+            otherwise. Identifiers, CSS classes and filenames still say plug; that rename spans
+            the firmware (<code>PlugClaim.h</code>, <code>plugclaim::</code>) and is its own
+            change.</td></tr>
+      <tr><td>2026-08-24</td>
+          <td>A tool that is <em>Manual</em> now says <b>why</b>: "Manual · no outlet paired".
+            The mode without the cause left the reader with nothing to act on, and the cause is
+            a setup fact they can fix.</td></tr>
+      <tr><td>2026-08-24</td>
+          <td>No blinking chips. The pixel uses blink rate only as a second-order detail inside a
+            colour and never as the primary signal; a chip has words and needs no second
+            channel.</td></tr>
+      <tr><td>2026-08-24</td>
+          <td>Every chip carries text and a dot as well as colour — a dim shop and a
+            colour-blind woodworker both break a colour-only encoding.</td></tr>
+    </table></div></div>
+    <p class="note">
+      Nothing here has been built. Landing order: the <b>tool chips</b> and the <b>collector
+      chips that need no new data</b> are pure <code>live.component.ts</code> work and go first;
+      <b>Not starting</b> / <b>Outlet offline</b> wait on collector watt polling in the firmware;
+      <b>Held off</b> and <b>In service</b> are schema changes and go last. <b>Bin full</b> sits
+      outside that order entirely — it waits on hardware that isn’t wired to a controller yet. When it is all in,
+      this page moves to <code>docs/mockups/archived/</code> with a banner.
+    </p>
+  </div>
+
+</div>

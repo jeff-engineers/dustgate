@@ -3,9 +3,13 @@ import { CommonModule } from '@angular/common';
 import { RouterLink } from '@angular/router';
 import { ApiService, Topology, TopologyStatus } from '../services/api.service';
 import { airflowIssues } from '@topology';
+import { collectorPlugState } from '@topology-device';
 import { validateShop } from '@shop';
 import { configurableSelectorsOf, isCalibrated } from '../gates/selector-types';
 import { type ShopDoc, machinesOf, portsOf, primaryPortOf, systemsOf, systemViews, toShop } from '../services/shop-doc';
+
+/** What a tool row's chip says. One axis: is air reaching this tool? */
+type ToolChip = 'collecting' | 'nosuction' | 'waiting' | 'nogate' | 'idle';
 
 // One tool row's static identity (from the topology) merged with its live state
 // (from /api/status). `collecting` is the routing winner — the single tool
@@ -17,7 +21,18 @@ interface ToolRow {
   name: string;
   auto: boolean;          // has a smart outlet → senses its own power
   on: boolean;            // drawing / requested power
-  collecting: boolean;    // won a clear path (reachable) — the green one
+  collecting: boolean;    // won a clear path — the green one
+  /** The device says a person threw this on, rather than a plug noticing it.
+   *  Firmware-only; the mock drives a hand-run through synthetic watts and
+   *  cannot tell, so absent means "don't know", never "no". */
+  manual: boolean;
+  /** This machine has no port in any system — no gate stands between it and the
+   *  trunk. A layout fault, not a runtime one. */
+  orphan: boolean;
+  /** A supplemental port lost its path while the primary kept one: the overarm
+   *  guard is shut but the cabinet is collecting. Still one row and one chip (a
+   *  machine is ONE box) — this rides the subtitle instead. */
+  partial: boolean;
 }
 
 /**
@@ -43,7 +58,33 @@ interface SystemGroup {
   manual: boolean;
   /** The tool currently winning this system's air, for the subtitle. */
   activeName: string;
+  /** Running with nothing open. The firmware publishes this per system; the mock
+   *  has no analogue, so it is simply never true in demo. It is the one hard rule
+   *  this project has, and a card showing green through it would be a lie. */
+  deadHead: boolean;
+  /** No switchable plug named for this blower — a legitimate shop ("I start that
+   *  one by hand"), but the card must not offer a switch that cannot work. */
+  noPlug: boolean;
+  /**
+   * What the plug reported back, judged against what we commanded.
+   *
+   *   'running'      commanded on, current flowing — the only green we've earned
+   *   'notStarting'  commanded on, past spin-up, drawing nothing
+   *   'unknown'      no plug reading at all, or the plug isn't answering
+   *
+   * A device that doesn't poll its collector plug answers 'unknown' for
+   * everything, which is exactly what this page knew before it did.
+   */
+  plug: ReturnType<typeof collectorPlugState>;
+  /** Last plug reading, for the subtitle — showing the number is what lets
+   *  someone judge the claim instead of taking it on faith. */
+  plugWatts: number;
 }
+
+/** What a collector card's chip says. Same axis: is this thing moving air? */
+type CollectorChip = 'collecting' | 'byhand' | 'coasting' | 'deadhead'
+                   | 'notstarting' | 'plugoffline'
+                   | 'blocked' | 'noplug' | 'idle';
 
 const POLL_MS = 2000;
 
@@ -85,6 +126,12 @@ const POLL_MS = 2000;
       border-radius: var(--radius); padding: 16px; margin-bottom: 18px;
     }
     .collector.running { border-color: var(--success); }
+    .collector.warn { border-color: rgba(240,165,0,0.55); }
+    .collector.warn .cyc { color: var(--accent); }
+    .collector.warn .c-sub { color: var(--accent); }
+    .collector.bad { border-color: rgba(217,68,68,0.55); }
+    .collector.bad .cyc { color: var(--danger); }
+    .collector.bad .c-sub { color: var(--danger); }
     .cyc {
       width: 44px; height: 44px; border-radius: 50%; flex-shrink: 0;
       display: flex; align-items: center; justify-content: center;
@@ -122,6 +169,9 @@ const POLL_MS = 2000;
       transition: border-color 0.12s;
     }
     .row.collecting { background: rgba(60,190,110,0.10); border-color: var(--success); }
+    /* Orange gets a border only, no wash: green has to stay the loudest thing on
+       the page, and a shop mid-transition can have several rows waiting at once. */
+    .row.waiting { border-color: rgba(240,165,0,0.55); }
     .r-body { flex: 1; min-width: 0; }
     .r-name { font-size: 16px; font-weight: 500; }
     .r-src {
@@ -129,12 +179,45 @@ const POLL_MS = 2000;
       display: flex; align-items: center; gap: 5px;
     }
     .row.collecting .r-name { color: var(--success); }
+    /* A tool with no gate can't be hand-run — the row is inert, and reads that
+       way rather than looking like a control that ignores you. */
+    .row.inert { opacity: 0.62; pointer-events: none; }
 
-    .pill {
-      font-size: 12px; font-weight: 600; color: var(--success);
-      background: rgba(60,190,110,0.16); padding: 5px 12px; border-radius: 999px;
-      flex-shrink: 0;
+    /* ── the chip ────────────────────────────────────────────────────────
+       This replaces the switch that used to sit here. That switch was a SPAN
+       mirroring "on" while the whole row carried the tap — an indicator drawn as
+       a control, and drawn as the same control the collector card uses for real.
+       Worse, it could only say two things, and the state worth saying is the
+       third: a tool drawing power that lost the gate to something more recent.
+
+       Colour is the severity axis, the words carry the specific. It is checked
+       against the board LEDs (firmware/utils/StatusLed.h): green = working and
+       red = broken agree across the pixel, this page and the bin light on the
+       cyclone. Orange deliberately diverges — motion on a pixel, "no air here"
+       on a chip — which is safe only because this page renders no transients, so
+       the two can never describe the same moment. Every chip carries text and a
+       dot as well as colour: a dim shop and a colour-blind woodworker both break
+       a colour-only encoding. See docs/mockups/shop-status-chips.html. */
+    .chip {
+      font-size: 12px; font-weight: 600; padding: 5px 12px; border-radius: 999px;
+      flex-shrink: 0; white-space: nowrap;
+      display: inline-flex; align-items: center; gap: 6px;
     }
+    .chip::before {
+      content: ''; width: 7px; height: 7px; border-radius: 50%;
+      background: currentColor; flex: none;
+    }
+    .chip.go   { color: var(--success); background: rgba(60,190,110,0.16); }
+    .chip.wait { color: var(--accent);  background: rgba(240,165,0,0.15); }
+    .chip.bad  { color: var(--danger);  background: rgba(217,68,68,0.15); }
+    /* Idle is the absence of a story: hollow, so a shelf of sleeping tools stays
+       quiet and the row that matters carries all the colour on the page. */
+    .chip.off  { color: var(--muted); background: transparent; border: 1px solid var(--border); }
+    .chip.off::before { background: transparent; border: 1px solid var(--muted); }
+
+    /* The card keeps its switch — unlike a tool row it is a real button that does
+       what it looks like — so the chip stacks above it. */
+    .ccol { display: flex; flex-direction: column; align-items: flex-end; gap: 7px; flex-shrink: 0; }
 
     /* toggle */
     .sw {
@@ -219,7 +302,11 @@ const POLL_MS = 2000;
            together: which collector a tool runs is the single most useful thing
            this page knows about it, and a flat list threw it away. -->
       <div class="sys" *ngFor="let g of groups">
-        <div class="collector" *ngIf="g.id" [class.running]="g.on" [class.locked]="!ready">
+        <div class="collector" *ngIf="g.id"
+             [class.running]="collectorChipTone(g) === 'go'"
+             [class.warn]="collectorChipTone(g) === 'wait'"
+             [class.bad]="collectorChipTone(g) === 'bad'"
+             [class.locked]="!ready">
           <span class="cyc">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
                  stroke-linecap="round" stroke-linejoin="round">
@@ -231,15 +318,23 @@ const POLL_MS = 2000;
             <div class="c-name">{{ g.name }}</div>
             <div class="c-sub">{{ collectorSub(g) }}</div>
           </div>
-          <!-- Starts and stops THIS system's blower. Stop-only until 2026-08-22,
-               which made an idle card's switch a control that did nothing. Off
-               still stops this system's TOOLS — it used to stop every tool in the
-               shop, which on a two-system layout reached across and switched off
-               a machine in the other half of the building. -->
-          <button class="sw" [class.on]="g.on"
-                  [attr.aria-label]="(g.on ? 'Stop ' : 'Run ') + g.name"
-                  [title]="collectorSwitchTitle(g)"
-                  (click)="toggleCollector(g)"></button>
+          <div class="ccol">
+            <!-- State, on the same axis as the tool rows: is this thing moving
+                 air? Note there is no "Waiting" here — a blower is never
+                 out-voted, it runs or it doesn't, so orange goes to Blocked. -->
+            <span class="chip" [class]="'chip ' + collectorChipTone(g)">{{ collectorChipText(g) }}</span>
+            <!-- Starts and stops THIS system's blower. Stop-only until 2026-08-22,
+                 which made an idle card's switch a control that did nothing. Off
+                 still stops this system's TOOLS — it used to stop every tool in the
+                 shop, which on a two-system layout reached across and switched off
+                 a machine in the other half of the building.
+                 Hidden with no outlet paired: there is genuinely nothing to switch,
+                 and a dead control is what this whole change is about removing. -->
+            <button class="sw" *ngIf="!g.noPlug" [class.on]="g.on"
+                    [attr.aria-label]="(g.on ? 'Stop ' : 'Run ') + g.name"
+                    [title]="collectorSwitchTitle(g)"
+                    (click)="toggleCollector(g)"></button>
+          </div>
         </div>
 
         <!-- No card, because there is no collector to card. Named rather than
@@ -249,15 +344,20 @@ const POLL_MS = 2000;
 
         <div class="label">Tools</div>
         <div class="rows" [class.locked]="!ready">
-          <button class="row" *ngFor="let t of g.tools" [class.collecting]="t.collecting"
+          <!-- The ROW is the button — it always was. What changed is that the
+               right-hand side no longer pretends to be a second one. -->
+          <button class="row" *ngFor="let t of g.tools"
+                  [class.collecting]="toolChipTone(t, g) === 'go'"
+                  [class.waiting]="toolChipTone(t, g) === 'wait'"
+                  [class.inert]="t.orphan"
+                  [disabled]="t.orphan"
                   (click)="toggle(t)"
                   [attr.aria-pressed]="t.on">
             <div class="r-body">
               <div class="r-name">{{ t.name }}</div>
-              <div class="r-src">{{ sourceLine(t) }}</div>
+              <div class="r-src">{{ sourceLine(t, g) }}</div>
             </div>
-            <span class="pill" *ngIf="t.collecting; else sw">Collecting</span>
-            <ng-template #sw><span class="sw" [class.on]="t.on"></span></ng-template>
+            <span class="chip" [class]="'chip ' + toolChipTone(t, g)">{{ toolChipText(t, g) }}</span>
           </button>
           <div class="rows-empty" *ngIf="!g.tools.length">Nothing plumbed into this one yet.</div>
         </div>
@@ -378,17 +478,37 @@ export class LiveViewComponent implements OnInit, OnDestroy {
     if (this.poll) clearInterval(this.poll);
   }
 
-  /** What the collector is doing, in the same `thing · detail` shape as the tool
-   *  rows. The coast-down gets said out loud: a blower running with every tool off
-   *  otherwise reads as a stuck relay, and someone would go looking for the fault
-   *  instead of waiting the few seconds out. */
+  /**
+   * The line under the blower's name: ONLY what the chip beside it cannot carry.
+   *
+   * The chip says the state now, so repeating it here ("Collecting" over
+   * "Collecting · Table Saw") spends the one line that could have said something
+   * useful on saying the same word twice. What is left is the detail: which tool
+   * has the air, why a blower is running with nothing on it, what to do about a
+   * fault.
+   */
   collectorSub(g: SystemGroup): string {
-    if (!g.on) return 'Idle';
-    if (g.coasting) return 'Collecting · coasting down';
-    // Said out loud, because a blower running with every tool off otherwise reads
-    // as a stuck relay — the same reason the coast-down says so.
-    if (g.manual && !g.activeName) return 'Running · switched on by hand';
-    return g.activeName ? 'Collecting · ' + g.activeName : 'Collecting';
+    if (g.noPlug) return 'No outlet paired — there is nothing to switch';
+    // The one hard rule this project has. Said plainly, because a blower running
+    // into a sealed system is the thing you stop what you are doing to fix.
+    if (g.deadHead) return 'Running with nothing open — stop it';
+    // Show the reading. The number is what lets someone tell "the breaker went"
+    // from "the app is confused", and it is the first thing they would ask for.
+    if (this.collectorChip(g) === 'notstarting') {
+      return 'Switched on, drawing ' + Math.round(g.plugWatts) + ' W — check its switch and breaker';
+    }
+    if (this.collectorChip(g) === 'plugoffline') return "Its outlet isn't answering — it may still be running";
+    if (!this.ready && g.tools.some(t => t.on)) {
+      const asking = g.tools.find(t => t.on)?.name ?? 'A tool';
+      return asking + ' is asking — the layout isn\'t finished';
+    }
+    if (!g.on) return 'Nothing is asking for it';
+    // Both of these are said out loud because a blower running with every tool
+    // off otherwise reads as a stuck relay, and someone goes looking for a fault
+    // instead of waiting the few seconds out.
+    if (g.coasting) return 'Every tool is off — clearing the ducts';
+    if (g.manual && !g.activeName) return 'No tool is asking — you started it';
+    return g.activeName || 'Running';
   }
 
   /**
@@ -425,20 +545,163 @@ export class LiveViewComponent implements OnInit, OnDestroy {
     }
   }
 
+  /**
+   * The collector card's state, same axis rephrased for a blower: is it moving
+   * air?
+   *
+   * There is deliberately no "Waiting" — a blower is never out-voted, it runs or
+   * it doesn't. Orange goes to `blocked` instead, which carries the same feeling:
+   * something wants air and isn't getting it.
+   *
+   * NOT here, because the device cannot know them yet: "not starting" (commanded
+   * on, plug reporting no current) and "plug offline". Collector plugs are
+   * switched, never polled — SmartOutletControl.h is explicit that they are
+   * "switchable Shelly outlets… rather than power sensors" — so `collectorOn`
+   * is what we COMMANDED, not what is happening. Until the plug is polled for
+   * watts this card cannot tell a running blower from a tripped breaker, and it
+   * must not pretend otherwise by inventing a chip for it.
+   */
+  collectorChip(g: SystemGroup): CollectorChip {
+    if (g.noPlug)   return 'noplug';
+    if (g.deadHead) return 'deadhead';
+    // The plug disagreeing with the command outranks everything below: a blower
+    // we think is collecting while nothing draws is the worst thing this page
+    // can get wrong, and it looks identical to working unless we say so.
+    if (g.plug === 'notStarting') return 'notstarting';
+    // Unreachable is NOT an accusation — the blower may well be running. But it
+    // is only worth mentioning while we are asking it to run; an idle plug we
+    // can't reach is tomorrow's problem.
+    if (g.plug === 'unknown' && g.on && !g.coasting) return 'plugoffline';
+    // Asked for, and can't be given: a tool is drawing here while the layout is
+    // unfinished. Only worth saying when something actually wants air — an idle
+    // shop mid-setup is just idle.
+    if (!this.ready && g.tools.some(t => t.on)) return 'blocked';
+    if (g.coasting) return 'coasting';
+    if (!g.on)      return 'idle';
+    return (g.manual && !g.activeName) ? 'byhand' : 'collecting';
+  }
+
+  collectorChipText(g: SystemGroup): string {
+    switch (this.collectorChip(g)) {
+      case 'notstarting':  return 'Not starting';
+      case 'plugoffline':  return 'Outlet offline';
+      case 'noplug':     return 'No outlet';
+      case 'deadhead':   return 'Dead-headed';
+      case 'blocked':    return 'Blocked';
+      case 'coasting':   return 'Coasting';
+      case 'byhand':     return 'Running by hand';
+      case 'collecting': return 'Collecting';
+      default:           return 'Idle';
+    }
+  }
+
+  collectorChipTone(g: SystemGroup): string {
+    switch (this.collectorChip(g)) {
+      case 'deadhead':
+      case 'notstarting':
+      case 'plugoffline':       return 'bad';
+      case 'blocked':
+      case 'noplug':            return 'wait';
+      case 'byhand':
+      case 'collecting':        return 'go';
+      default:                  return 'off';
+    }
+  }
+
   collectorSwitchTitle(g: SystemGroup): string {
     if (!g.on) return `Run ${g.name} by hand — opens a gate first, then starts the blower`;
     if (g.manual && !g.activeName) return `Stop ${g.name}`;
     return `Switch off every tool running on ${g.name}`;
   }
 
-  sourceLine(t: ToolRow): string {
-    if (t.collecting) return t.auto ? 'Auto · sensing power' : 'Manual · on';
-    if (t.on)         return t.auto ? 'Auto · powered' : 'Manual · on';
-    return t.auto ? 'Auto · idle' : 'Manual';
+  // ── chips ────────────────────────────────────────────────────────────────
+  //
+  // ONE question: is air reaching this tool? Auto-vs-manual is a settings fact
+  // and lives in the subtitle — mixing it into this axis is exactly what made
+  // the switch that used to sit here unreadable.
+
+  /**
+   * @returns the tool row's state on the air-reaching-it axis.
+   *
+   * Winning the routing vote is NOT the same as getting air. A tool can hold a
+   * wide-open path to a blower that is not turning — and rendering that green
+   * would be the same lie the collector card used to tell, just moved one row
+   * down. So a confirmed dead blower strips every tool under it back to
+   * "No suction".
+   *
+   * Only a CONFIRMED one. An unreachable plug leaves the blower's state unknown,
+   * and a shop whose collector has no plug at all starts it by hand and has air
+   * — neither is an accusation, and neither changes this row.
+   */
+  toolChip(t: ToolRow, g?: SystemGroup): ToolChip {
+    if (t.orphan)      return 'nogate';
+    if (!t.on)         return 'idle';
+    if (!t.collecting) return 'waiting';
+    return g?.plug === 'notStarting' ? 'nosuction' : 'collecting';
+  }
+
+  toolChipText(t: ToolRow, g?: SystemGroup): string {
+    switch (this.toolChip(t, g)) {
+      case 'nogate':     return 'No gate';
+      case 'collecting': return 'Collecting';
+      case 'nosuction':  return 'No suction';
+      case 'waiting':    return 'Waiting';
+      default:           return 'Idle';
+    }
+  }
+
+  toolChipTone(t: ToolRow, g?: SystemGroup): string {
+    switch (this.toolChip(t, g)) {
+      case 'collecting': return 'go';
+      case 'nosuction':
+      case 'waiting':
+      case 'nogate':     return 'wait';
+      default:           return 'off';
+    }
+  }
+
+  /**
+   * The line under the name: how this tool is driven, and — when it is running
+   * and getting nothing — WHY.
+   *
+   * Naming the winner is the point. "Waiting" alone leaves you hunting the list
+   * for whatever took the gate; naming it makes the next action obvious, because
+   * the answer is always "go and switch that one off".
+   */
+  sourceLine(t: ToolRow, g?: SystemGroup): string {
+    if (t.orphan) return 'Not plumbed into a system yet';
+
+    // How it came on. `manual` is the device's own account and beats our guess
+    // from the layout; absent (the mock never sends it) falls back to whether a
+    // plug exists at all, which is what this line has always said.
+    // "Manual" alone says what, never why — and the why is a setup fact the
+    // reader can act on: nothing is paired, so nothing can sense this tool
+    // starting. Said on every manual row, not just an unexpected one.
+    const how = t.manual ? 'Switched on by hand'
+              : t.auto   ? (t.on ? 'Auto · sensing power' : 'Auto')
+                         : 'Manual · no outlet paired';
+
+    if (t.collecting) {
+      // Its gate is open and the blower is not turning: the fault is upstairs,
+      // so say so here rather than leaving someone to check this tool.
+      if (g?.plug === 'notStarting') return how + ' · ' + g.name + " isn't running";
+      // A machine is ONE box however many ports it has, so a lost overarm does
+      // not get its own row or its own chip — but it is still worth saying.
+      return t.partial ? how + ' · second port is shut' : how;
+    }
+    if (!t.on) return how;
+
+    const winner = g?.activeName;
+    if (winner && winner !== t.name) return how + ' · ' + winner + ' has the gate';
+    // On, not collecting, and nothing else won either: the blower for this
+    // system isn't running yet, or the layout won't let it.
+    return how + ' · no clear path to the collector';
   }
 
   async toggle(t: ToolRow): Promise<void> {
-    if (this.busy || !this.ready) return;
+    // An orphan has no gate to open, so there is nothing to hand-run into. The
+    // row is already inert in the template; this is the backstop.
+    if (this.busy || !this.ready || t.orphan) return;
     this.busy = true;
     this.error = '';
     try {
@@ -463,10 +726,28 @@ export class LiveViewComponent implements OnInit, OnDestroy {
 
   private applyStatus(status: TopologyStatus): void {
     const st = status.tools ?? {};
+    // `machines`, not `reachable`. `reachable` is keyed by PORT id, so looking a
+    // MACHINE up in it returns undefined for any tool whose port id differs from
+    // its own — which is every shop-schema layout. Every row read as "not
+    // collecting", forever. `machines` is the rolled-up per-machine verdict the
+    // device has published all along, and it distinguishes a lost supplemental
+    // port (partial) from a lost primary (stripped), which a boolean can't.
+    const verdict = status.machines ?? {};
     const reach = status.reachable ?? {};
     for (const t of this.tools) {
       t.on = !!st[t.id]?.active;
-      t.collecting = reach[t.id] === true;
+      t.manual = st[t.id]?.manual === true;
+      const v = verdict[t.id];
+      if (v) {
+        t.collecting = v.status !== 'stripped';
+        t.partial    = v.status === 'partial';
+      } else {
+        // No verdict for this machine: it wasn't in the routing pass at all,
+        // which for an active tool means it got nothing. Fall back to the port
+        // map for the one shape where the ids DO line up (a v1 topology).
+        t.collecting = reach[t.id] === true;
+        t.partial = false;
+      }
     }
     this.collectorOn = !!status.collectorOn;
     this.collectorCoasting = !!status.collectorCoasting;
@@ -482,6 +763,13 @@ export class LiveViewComponent implements OnInit, OnDestroy {
       g.on = s ? !!s.collectorOn : this.collectorOn;
       g.coasting = s ? !!s.coasting : this.collectorCoasting;
       g.manual = !!s?.manual;
+      // Firmware-only; the mock has no analogue, so this is simply never true in
+      // demo rather than being faked into one.
+      g.deadHead = s?.deadHeadRisk === true;
+      // The verdict lives in the shared model, not here — the same function the
+      // mock and the demo use, so all three agree by construction.
+      g.plug = collectorPlugState(s?.plug, g.on);
+      g.plugWatts = s?.plug?.watts ?? 0;
       g.activeName = g.tools.find(t => t.collecting)?.name ?? '';
     }
   }
@@ -540,6 +828,11 @@ export class LiveViewComponent implements OnInit, OnDestroy {
       auto: !!m.sensor?.outlet,
       on: false,
       collecting: false,
+      manual: false,
+      // Set in buildGroups, which is where "has a port in a system" is already
+      // being decided in order to place the row.
+      orphan: false,
+      partial: false,
     }));
 
     this.groups = this.buildGroups(doc);
@@ -587,6 +880,12 @@ export class LiveViewComponent implements OnInit, OnDestroy {
         id: s.id,
         name: (dc?.['name'] as string) || (s.name as string) || 'Dust collector',
         tools: [], on: false, coasting: false, manual: false, activeName: '',
+        deadHead: false, plug: 'noplug', plugWatts: 0,
+        // A system with no plug means "I start that collector by hand" — a
+        // legitimate shop the firmware explicitly supports (see the collector
+        // slot loop in firmware.ino). The card must say so rather than offer a
+        // switch that cannot do anything.
+        noPlug: !((dc?.['control'] as Record<string, unknown> | undefined)?.['outlet']),
       });
     }
 
@@ -597,6 +896,7 @@ export class LiveViewComponent implements OnInit, OnDestroy {
     const orphans: SystemGroup = {
       id: '', name: 'Not connected to a collector — finish the layout to run these.',
       tools: [], on: false, coasting: false, manual: false, activeName: '',
+      deadHead: false, noPlug: true, plug: 'noplug', plugWatts: 0,
     };
 
     for (const t of this.tools) {
@@ -604,7 +904,12 @@ export class LiveViewComponent implements OnInit, OnDestroy {
       const sysId = primary
         ? portsOf(doc, t.id).find(p => p.port === primary)?.systemId
         : undefined;
-      (byId.get(sysId ?? '') ?? orphans).tools.push(t);
+      const group = byId.get(sysId ?? '');
+      // No system owns it → no gate between it and the trunk. The row still gets
+      // listed (a tool that silently vanishes is worse than one shown as unable
+      // to collect) but it wears the chip that says so and can't be hand-run.
+      t.orphan = !group;
+      (group ?? orphans).tools.push(t);
     }
 
     const groups = order.map(({ s }) => byId.get(s.id) as SystemGroup);
