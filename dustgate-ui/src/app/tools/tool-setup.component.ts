@@ -1,11 +1,11 @@
-import { Component, OnInit } from '@angular/core';
+import { Component, OnInit, ViewChild } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
 import { ApiService, DiscoveredOutlet, Topology } from '../services/api.service';
 import { PairedOutletRowComponent } from './paired-outlet-row.component';
 import { elementsOf, ductsOf } from '../gates/selector-types';
-import { type ShopDoc, machineOfPort, outletOf, renameMachine, toShop } from '../services/shop-doc';
+import { type ShopDoc, machineOfPort, outletOf, outletTakenByAnotherMachine, renameMachine, toShop } from '../services/shop-doc';
 
 // ── The tools screen ─────────────────────────────────────────────────────────
 // Every tool in the shop in one list, each tappable into its own tagging page:
@@ -47,6 +47,8 @@ const DEFAULT_THRESHOLD = 50;
   imports: [CommonModule, FormsModule, PairedOutletRowComponent],
   styles: [`
     :host { display: block; max-width: 460px; margin: 0 auto; padding: 16px 14px 40px; }
+
+
     .head { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
     /* Same round control Settings and Gates use, so "leave this screen" looks
        the same wherever it appears. */
@@ -132,11 +134,12 @@ const DEFAULT_THRESHOLD = 50;
       <span class="title">{{ editing ? editingName : 'Tools' }}</span>
     </div>
 
+
     <!-- ── The list ─────────────────────────────────────────────────────────── -->
     <ng-container *ngIf="!editing">
       <p class="hint-line">
         Tap a tool to say which smart outlet it's plugged into, and how much power means
-        it's running. A tool without a plug is one you switch on yourself from the shop list.
+        it's running. A tool with no outlet is one you switch on yourself from the shop list.
       </p>
 
       <div class="list" *ngIf="tools.length">
@@ -145,7 +148,7 @@ const DEFAULT_THRESHOLD = 50;
             <div class="nm">{{ t.name }}</div>
             <div class="sub">{{ t.gateLabel }}</div>
             <span class="pill ok"    *ngIf="t.hasPlug && t.ip">{{ plugPill(t) }}</span>
-            <span class="pill todo"  *ngIf="t.hasPlug && !t.ip">No plug paired yet</span>
+            <span class="pill todo"  *ngIf="t.hasPlug && !t.ip">No outlet paired yet</span>
             <span class="pill plain" *ngIf="!t.hasPlug">Switched on by hand</span>
           </div>
           <svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -196,13 +199,13 @@ const DEFAULT_THRESHOLD = 50;
                                  fieldId="setup-outlet-name"
                                  (renamed)="onRenamed(c, $event)"
                                  (rescan)="scan()"
-                                 (change)="unpair(c, '')"
-                                 (removed)="unpair(c, $event)">
+                                 (changeOutlet)="unpair(c, '')"
+                                 (removed)="unpair(c, $event, 'remove')">
           </app-paired-outlet-row>
 
           <div class="hint" *ngIf="unpairNote">{{ unpairNote }}</div>
           <div class="hint" *ngIf="!c.ip">
-            <span>💡</span><span>Turn {{ c.name }} on — the plug that jumps to <b>green</b> is the one.</span>
+            <span>💡</span><span>Turn {{ c.name }} on — the outlet that jumps to <b>green</b> is the one.</span>
           </div>
           <div class="scan" *ngIf="!c.ip && outlets.length; else noplugs">
             <button class="plug" *ngFor="let d of outlets"
@@ -219,7 +222,7 @@ const DEFAULT_THRESHOLD = 50;
           </div>
           <ng-template #noplugs>
             <ng-container *ngIf="!c.ip">
-              <div class="empty">{{ scanning ? 'Scanning…' : 'No plugs found on the network.' }}</div>
+              <div class="empty">{{ scanning ? 'Scanning…' : 'No outlets found on the network.' }}</div>
               <button class="rescan" (click)="scan()" title="Sweep the network for smart outlets again">↻ Rescan</button>
             </ng-container>
           </ng-template>
@@ -255,6 +258,7 @@ export class ToolSetupComponent implements OnInit {
   editing: ToolCfg | null = null;
   editingName = '';
   outlets: DiscoveredOutlet[] = [];
+
   scanning = false;
   saving = false;
   error = '';
@@ -302,8 +306,18 @@ export class ToolSetupComponent implements OnInit {
   }
 
   /** What the list says about a paired tool: the plug's name, and its threshold. */
+  /**
+   * What the list says about a paired tool: the outlet's name, and its threshold.
+   *
+   * THE LIVE NAME FIRST. `t.label` is the layout's cached copy, written on Save —
+   * so the list showed a factory hostname for an outlet that had been given a
+   * friendly name but whose layout had not been saved yet, and it would go on
+   * showing a stale name for one renamed in the Shelly app. The scan is what the
+   * outlet actually calls itself; the cache is the fallback for when there has
+   * been no scan, which is exactly the order the row's own displayName() uses.
+   */
   plugPill(t: ToolCfg): string {
-    const who = t.label || t.hostname || t.ip;
+    const who = this.seenOutlet(t)?.name || t.label || t.hostname || t.ip;
     return `${who} · above ${t.thresholdW} W`;
   }
 
@@ -329,9 +343,24 @@ export class ToolSetupComponent implements OnInit {
     return lvl === 'on' ? `${w} W · running` : lvl === 'low' ? `${w} W · standby` : `${w} W · idle`;
   }
 
-  /** Compared by id, not by object: `c` is a working copy of one of `tools`. */
+  /**
+   * Is this outlet spoken for by a DIFFERENT MACHINE?
+   *
+   * By machine, not by row. This screen lists PORTS — a table saw with a cabinet
+   * gate and an overarm is two rows — while the outlet belongs to the machine
+   * (one box, one plug; the brain only ever senses machines). Comparing `t.id`,
+   * which is a port id, made each of a two-port tool's rows see the other as
+   * "another tool", so the saw's own outlet showed as `already assigned to
+   * another tool` and `pick()` refused to re-select it.
+   *
+   * That was not just a wrong label. pick() bails on a blocked outlet, so `c.ip`
+   * stayed empty, and save() then read "no outlet" and deleted the pairing —
+   * a rename-and-save on a two-port tool silently unpaired it and asked you to
+   * choose all over again (reported 2026-08-24).
+   */
   isAssignedElsewhere(ip: string, c: ToolCfg): boolean {
-    return this.tools.some(t => t.id !== c.id && t.hasPlug && t.ip === ip);
+    return outletTakenByAnotherMachine(
+      this.topo as unknown as ShopDoc, this.tools, ip, c.id);
   }
 
   /** This tool's plug as the last scan saw it — carries who owns it, which is
@@ -343,11 +372,20 @@ export class ToolSetupComponent implements OnInit {
   /** Take the plug off this tool, locally. The device half already ran inside the
    *  row; this drops it from the working copy so the scan list comes back and the
    *  plug is pickable for something else. Written out on Save. */
-  unpair(c: ToolCfg, note: string): void {
+  /**
+   * Drop the outlet from the working copy.
+   *
+   * `intent` is the difference between the two callers, and it matters at Save:
+   * "change" is mid-swap and must leave `hasPlug` alone, so an unfinished swap
+   * keeps the existing pairing; "remove" is the user saying No, and is the only
+   * thing that deletes it.
+   */
+  unpair(c: ToolCfg, note: string, intent: 'change' | 'remove' = 'change'): void {
     c.ip = ''; c.hostname = ''; c.label = '';
+    if (intent === 'remove') c.hasPlug = false;
     this.unpairNote = note;
     this.touched = true;
-    void this.scan();   // the freed plug should reappear as available
+    void this.scan();   // the freed outlet should reappear as available
   }
 
   pick(d: DiscoveredOutlet, c: ToolCfg): void {
@@ -394,14 +432,17 @@ export class ToolSetupComponent implements OnInit {
    * would be a straight lie about the one edit that already stuck.
    */
   private discardWarning(): string {
-    const base = "Leave without saving?\n\nThis tool's name, its plug and its trip point go back to what they were.";
+    const base = "Leave without saving?\n\nThis tool's name, its outlet and its trip point go back to what they were.";
     return this.plugRenamed
-      ? `${base}\n\nThe outlet's own name is not part of that — that rename already went to the plug.`
+      ? `${base}\n\nThe outlet's own name is not part of that — that rename already went to the outlet.`
       : base;
   }
 
-  /** The plug's new name, already written to the plug itself. Cached on the
-   *  layout by Save, as a fallback for when the plug can't be reached. */
+  /** The outlet's new name, already written to the outlet itself. Cached on the
+   *  layout by Save, as a fallback for when the outlet can't be reached. The
+   *  scan cache is already current: the row mutates the very entry seenOutlet()
+   *  handed it, so what is on the network and what this screen shows cannot
+   *  drift apart. */
   onRenamed(c: ToolCfg, label: string): void {
     c.label = label;
     this.plugRenamed = true;
@@ -414,6 +455,10 @@ export class ToolSetupComponent implements OnInit {
     void this.router.navigate(['/']);
   }
 
+  /** The paired-outlet row, when one is on screen. Only needed so Save can wait
+   *  to land the outlet name before the layout is written — see flush(). */
+  @ViewChild(PairedOutletRowComponent) private outletRow?: PairedOutletRowComponent;
+
   /** Write the one tool being edited, then return to the list. */
   async save(): Promise<void> {
     const c = this.editing;
@@ -421,6 +466,13 @@ export class ToolSetupComponent implements OnInit {
     this.saving = true;
     this.error = '';
     try {
+      // A rename may still be on the wire. Blur fires BEFORE the click that
+      // caused it, so tapping Save straight after typing a name starts that
+      // write and lands here while it is still out — and c.label is only set
+      // when it comes back. Writing the layout now would store the OLD name
+      // beside an outlet that has already taken the new one, which reads on the
+      // list as a rename that silently didn't happen.
+      await this.outletRow?.flush();
       const el = this.elems().find(e => e['id'] === c.id);
       // The name and the plug both belong to the MACHINE now: this screen is
       // "which plug is this tool on", and a tool is a machine even when it has
@@ -437,9 +489,15 @@ export class ToolSetupComponent implements OnInit {
         if (c.hostname) outlet['host'] = c.hostname;
         if (c.label) outlet['name'] = c.label;
         m.sensor = { outlet };
-      } else {
+      } else if (!c.hasPlug) {
+        // Said No, or used Remove. An explicit act, so honour it.
         delete m.sensor;
       }
+      // The remaining case — wants an outlet, hasn't chosen one — is a swap left
+      // half-finished (Change outlet, then Save). Deleting there destroys a
+      // working pairing on the strength of an empty field, which is how a
+      // blocked pick() turned into a lost outlet. Leaving it alone means Save
+      // does nothing to the pairing, and Remove stays the one way to drop it.
       await this.api.putTopology(this.topo);
       this.editing = null;
       this.touched = false;

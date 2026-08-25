@@ -40,8 +40,8 @@ import { ApiService, DiscoveredOutlet } from '../services/api.service';
   `],
   template: `
     <p class="hint">
-      <b>Which plug is this one's?</b> Switch {{ toolName || 'the tool' }} on, then scan —
-      the plug drawing power is the one.
+      <b>Which outlet is this one's?</b> Switch {{ toolName || 'the tool' }} on, then scan —
+      the outlet drawing power is the one.
     </p>
 
     <div class="list" *ngIf="outlets.length; else none">
@@ -59,7 +59,7 @@ import { ApiService, DiscoveredOutlet } from '../services/api.service';
     </div>
     <ng-template #none>
       <div class="empty">
-        {{ scanning ? 'Scanning…' : 'No smart plugs found. Check it\\'s powered and on the same WiFi.' }}
+        {{ scanning ? 'Scanning…' : 'No smart outlets found. Check it\\'s powered and on the same WiFi.' }}
       </div>
     </ng-template>
 

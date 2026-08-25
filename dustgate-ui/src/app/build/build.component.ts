@@ -747,8 +747,8 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     const doc = this.topo as unknown as ShopDoc;
     const outlet = outletOf(doc, el);
     if (!outlet) {
-      return { state: 'none', text: 'no plug',
-               hint: `No smart plug on ${n.name} — you switch it on yourself. Tap to pair one.` };
+      return { state: 'none', text: 'no outlet',
+               hint: `No smart outlet on ${n.name} — you switch it on yourself. Tap to pair one.` };
     }
     // The name lives on the Shelly itself, so what the last scan saw it call
     // itself wins — rename a plug in the Shelly app and this follows. Below that
@@ -757,7 +757,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     // decaying to "G4-295BD19…" or a bare IP, which identify nothing.
     const ip = outlet['ip'] as string | undefined;
     const seen = ip ? this.outlets.find(o => o.ip === ip) : undefined;
-    const name = seen?.name || (outlet['name'] as string) || (outlet['host'] as string) || ip || 'plug';
+    const name = seen?.name || (outlet['name'] as string) || (outlet['host'] as string) || ip || 'outlet';
     const machine = machineOfPort(doc, el);
     const watts = (machine && this.machineWatts.get(machine.id as string)) ?? 0;
     const trip = (outlet['thresholdW'] as number) ?? 0;
@@ -863,7 +863,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   trayNote(): string {
     if (this.armedTool) {
       const n = this.byId.get(this.armedTool);
-      return `tap the plug powering the ${n?.name ?? 'tool'}`;
+      return `tap the outlet powering the ${n?.name ?? 'tool'}`;
     }
     if (this.matchNote) return this.matchNote;
     const left = this.unpairedMachines().length;

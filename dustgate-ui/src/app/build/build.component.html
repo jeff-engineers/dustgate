@@ -377,7 +377,7 @@
      and any name-match hint are in the tooltip. They were on the chip at first
      and turned a glanceable strip into three rows of prose. -->
 <div class="tray" *ngIf="showTray" [class.armed]="armedTool">
-  <span class="t">Plugs</span>
+  <span class="t">Outlets</span>
   <span class="n">{{ trayNote() }}</span>
   <div class="chips">
     <button *ngFor="let o of freeOutlets()" class="chip" [attr.data-level]="chipLevel(o)"

@@ -35,10 +35,25 @@ import { DEMO_TOPOLOGY } from './demo-topology';
 @Injectable()
 export class DemoApiService extends ApiService {
 
-  /** The canonical device instance (in-memory, resets on page load). */
+  /**
+   * Where the demo keeps what you changed, so a reload doesn't wipe it.
+   *
+   * The demo used to live entirely in memory, which made it useless for trying
+   * anything that outlives one page: rename an outlet, reload, and you were back
+   * to the seed shop with the rename gone — indistinguishable from a rename that
+   * never saved. Worse under `ng serve`, where every source edit triggers a
+   * live-reload and silently resets the shop mid-test.
+   *
+   * sessionStorage, not localStorage: a demo that remembered a shop you built
+   * months ago in another tab would be its own kind of confusing. Closing the tab
+   * still gives everyone the seeded shop.
+   */
+  private static readonly SAVE_KEY = 'dustgate_demo_state';
+
+  /** The canonical device instance. Restored from sessionStorage when present. */
   private d: model.Device = model.createDevice();
 
-  /** topology-native device (in-memory; seeded with DEMO_TOPOLOGY in init). */
+  /** topology-native device (seeded with DEMO_TOPOLOGY, or with what you saved). */
   private td: TopologyDevice | null = createTopologyDevice(DEMO_TOPOLOGY);
 
   constructor(http: HttpClient, hardwareProfile: HardwareProfileService) {
@@ -47,6 +62,35 @@ export class DemoApiService extends ApiService {
   }
 
   // ── Bootstrap (no HTTP, no WebSocket) ────────────────────────────────────────
+
+  /** The two things a person actually changes: the layout, and the outlets they
+   *  have named or paired. Everything else is derived or transient. */
+  private persist(): void {
+    try {
+      sessionStorage.setItem(DemoApiService.SAVE_KEY, JSON.stringify({
+        topology: this.td ? this.td.topology : null,
+        discovered: (this.d as unknown as { _discovered?: unknown })._discovered ?? null,
+      }));
+    } catch { /* private browsing, or quota — the demo still works, just forgets */ }
+  }
+
+  private restore(): boolean {
+    try {
+      const raw = sessionStorage.getItem(DemoApiService.SAVE_KEY);
+      if (!raw) return false;
+      const saved = JSON.parse(raw) as { topology?: unknown; discovered?: unknown };
+      if (!saved.topology) return false;
+      this.td = createTopologyDevice(saved.topology as Topology);
+      if (saved.discovered) {
+        (this.d as unknown as { _discovered?: unknown })._discovered = saved.discovered;
+      }
+      return true;
+    } catch {
+      // A saved shape this build no longer understands is worse than none.
+      try { sessionStorage.removeItem(DemoApiService.SAVE_KEY); } catch { /* ignore */ }
+      return false;
+    }
+  }
 
   protected override async init(): Promise<void> {
     // Seed the showcase with a pre-configured dust collector so the collector
@@ -59,7 +103,11 @@ export class DemoApiService extends ApiService {
     // scan invents its own plugs at random IPs and DEMO_TOPOLOGY's — the table
     // saw's, the bandsaw's — belong to no device anyone can reach, so the demo
     // showed every paired plug as not responding and refused every rename.
+    // Restored state wins over the seed — but the seed still has to run first, so
+    // a restore that only carries a layout still finds the demo network populated.
     model.adoptOutlets(this.d, DEMO_TOPOLOGY);
+    const restored = this.restore();
+    if (restored) model.adoptOutlets(this.d, this.td!.topology as unknown as Topology);
 
     this.deviceInfo = {
       apiKey:        'demo',
@@ -106,6 +154,7 @@ export class DemoApiService extends ApiService {
     // Whatever this shop is paired to is on the simulated network from here on,
     // the same as the mock does on PUT. See adoptOutlets().
     model.adoptOutlets(this.d, topology);
+    this.persist();
     return { ok: true };
   }
 
@@ -296,18 +345,26 @@ export class DemoApiService extends ApiService {
   }
 
   override async renameOutlet(ip: string, label: string, takeover = false): Promise<OutletNameResult> {
-    await this.delay(350);   // a write to a plug over the LAN is not instant
-    return model.nameOutlet(this.d, ip, label, takeover);
+    await this.delay(350);   // a write to an outlet over the LAN is not instant
+    const r = model.nameOutlet(this.d, ip, label, takeover);
+    // The name lives on the OUTLET, not in the layout, so it is saved here — a
+    // rename followed by a reload with no layout save must still stick.
+    if (r.ok) this.persist();
+    return r;
   }
 
   override async takeoverOutlet(ip: string): Promise<{ ok: boolean; error?: string }> {
     await this.delay(400);
-    return model.takeoverOutlet(this.d, ip);
+    const r = model.takeoverOutlet(this.d, ip);
+    if (r.ok) this.persist();
+    return r;
   }
 
   override async releaseOutlet(ip: string): Promise<OutletReleaseResult> {
     await this.delay(350);
-    return model.releaseOutlet(this.d, ip);
+    const r = model.releaseOutlet(this.d, ip);
+    this.persist();
+    return r;
   }
 
   // ── Secondary boards ───────────────────────────────────────────────────

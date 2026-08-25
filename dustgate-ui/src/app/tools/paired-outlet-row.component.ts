@@ -121,14 +121,14 @@ import { takeoverWarning } from '@plug-claim';
     <div class="paired" *ngIf="!confirming && !takeAsking">
       <label class="fld" [attr.for]="fieldId">Outlet name</label>
       <div class="namerow">
-        <input [id]="fieldId" [(ngModel)]="draft" (blur)="commit()"
+        <input [id]="fieldId" [(ngModel)]="draft" (blur)="commit()" (keyup.enter)="commit()"
                [disabled]="!canRename() || busy"
                placeholder="Not named yet"
                [title]="canRename()
-                  ? 'The name this plug shows in the Shelly app. Saved to the plug itself when you tap away.'
+                  ? 'The name this outlet shows in the Shelly app. Saved to the outlet itself when you tap away.'
                   : renameBlockedWhy()"/>
         <span class="suffix" *ngIf="showSuffix()"
-              title="DustGate adds its own name so the plug says who is using it in the Shelly app. You don't type this part.">·&nbsp;{{ owner }}</span>
+              title="DustGate adds its own name so the outlet says who is using it in the Shelly app. You don't type this part.">·&nbsp;{{ owner }}</span>
       </div>
 
       <div class="meta">{{ metaLine() }}</div>
@@ -146,7 +146,7 @@ import { takeoverWarning } from '@plug-claim';
       <div class="said" [class.bad]="saidBad" [class.good]="!saidBad" *ngIf="said">{{ said }}</div>
 
       <div class="btns">
-        <button (click)="change.emit()" [disabled]="busy"
+        <button (click)="changeOutlet.emit()" [disabled]="busy"
                 [title]="'Pick a different smart outlet for ' + (toolName || 'this tool') + '. The current one is freed for something else.'">
           Change outlet
         </button>
@@ -210,7 +210,26 @@ export class PairedOutletRowComponent implements OnChanges {
    *  caches it on `sensor.outlet.label` when it next writes the layout. */
   @Output() renamed = new EventEmitter<string>();
   /** Re-open the picker. */
-  @Output() change = new EventEmitter<void>();
+  /**
+   * "Pick a different outlet."
+   *
+   * NAMED `changeOutlet`, NOT `change` — and that is load-bearing, not taste.
+   * `change` is a native DOM event: an <input> fires one when its value has
+   * changed AND it loses focus, and it BUBBLES. An Angular `(change)` binding on
+   * a component element listens for both the @Output and any native `change`
+   * arriving from inside it, so the two are indistinguishable.
+   *
+   * With this called `change`, typing a name into the row and then clicking Save
+   * fired the native event, it bubbled to <app-paired-outlet-row>, and the host's
+   * (change) handler unpaired the outlet — on both the tools screen and the
+   * canvas sheet. The rename never had a chance: the tool was unpaired before
+   * save() ran, so it wrote "no outlet" and reopened on the picker.
+   *
+   * It only ever broke when you TYPED, because a native change needs an edit
+   * plus a blur — which is exactly why every rename failed while everything else
+   * on the row worked (found 2026-08-24).
+   */
+  @Output() changeOutlet = new EventEmitter<void>();
   /** A takeover landed, so the parent's cached scan is stale. */
   @Output() rescan = new EventEmitter<void>();
   /** Unpaired — the parent deletes `sensor.outlet`. Fired whether or not the
@@ -379,9 +398,55 @@ export class PairedOutletRowComponent implements OnChanges {
            'so it\'s free for anything else on the network.';
   }
 
-  /** Rename, on blur. The plug is a separate device from the layout and can't be
-   *  part of its transaction, so this lands when you tap away and says so. */
+  /**
+   * A rename that is still in flight, or null.
+   *
+   * Blur fires BEFORE the click that caused it, so tapping Save straight after
+   * typing starts this write and then runs the layout save while it is still
+   * out on the network. The layout would be written with the old label, leaving
+   * the outlet called one thing and the shop list showing another — the rename
+   * looking like it never took (reported 2026-08-24).
+   */
+  private inflight: Promise<void> | null = null;
+
+  /** Resolves once any pending rename has landed. */
+  private whenSettled(): Promise<void> { return this.inflight ?? Promise.resolve(); }
+
+  /**
+   * Land whatever is in the name field, then resolve. Call this BEFORE writing
+   * the layout.
+   *
+   * Not just "wait for a rename already running" — it has to be able to START
+   * one, because there may be no blur at all. The rename is bound to (blur), and
+   * a blur only happens if focus actually leaves the field:
+   *
+   *   - press Enter and the caret stays put — no blur, no rename;
+   *   - and SAFARI DOES NOT FOCUS A BUTTON ON CLICK, so tapping Save moves focus
+   *     nowhere and the field never blurs either.
+   *
+   * On Safari that made the rename silently do nothing at all, on both the tools
+   * screen and the canvas sheet, however long you waited — the field showed the
+   * new name, the layout kept the old one, and nothing anywhere reported a
+   * failure (found 2026-08-24, after three fixes aimed at the wrong thing: my
+   * own test harness dispatched blur by hand, so it could never see this).
+   *
+   * Idempotent: commit() returns immediately when the draft already matches what
+   * is on the outlet, so a blur that already did the work is not repeated.
+   */
+  async flush(): Promise<void> {
+    await this.whenSettled();
+    await this.commit();
+  }
+
+  /** Rename, on blur. The outlet is a separate device from the layout and can't
+   *  be part of its transaction, so this lands when you tap away and says so. */
   async commit(): Promise<void> {
+    const p = this.doCommit();
+    this.inflight = p;
+    try { await p; } finally { if (this.inflight === p) this.inflight = null; }
+  }
+
+  private async doCommit(): Promise<void> {
     const v = this.draft.trim();
     if (!this.canRename() || v === this.displayName()) return;
     this.busy = true; this.said = ''; this.saidBad = false;

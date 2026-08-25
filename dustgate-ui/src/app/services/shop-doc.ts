@@ -146,6 +146,40 @@ export function machineOfPort(doc: ShopDoc | null, el: RawEl | null | undefined)
 }
 
 /** Every port of a machine, disabled ones included, with the system each is in. */
+/**
+ * Is this outlet already sensing a DIFFERENT machine?
+ *
+ * Rows on the tools screen are PORTS — a table saw with a cabinet gate and an
+ * overarm is two of them — while an outlet belongs to the MACHINE (one box, one
+ * outlet; the routing brain only ever senses machines). So "is it taken" has to
+ * be asked machine-to-machine.
+ *
+ * Asking it row-to-row is what broke: each of a two-port tool's rows saw the
+ * other as a different tool, so the saw's own outlet read as taken and could not
+ * be re-selected — and because the picker refuses a taken outlet, the row was
+ * left with no ip and the save deleted the pairing outright (2026-08-24).
+ */
+export function outletTakenByAnotherMachine(
+  doc: ShopDoc | null,
+  rows: { id: string; ip: string; hasPlug: boolean }[],
+  ip: string,
+  portId: string,
+): boolean {
+  if (!ip) return false;
+  const mine = machineIdOfPort(doc, portId);
+  return rows.some(r => r.hasPlug && r.ip === ip && machineIdOfPort(doc, r.id) !== mine);
+}
+
+/** The machine a PORT belongs to. Falls back to the port's own id, so a document
+ *  we cannot read compares like-for-like instead of matching everything. */
+export function machineIdOfPort(doc: ShopDoc | null, portId: string): string {
+  for (const sys of systemsOf(doc)) {
+    const el = (sys.elements as RawEl[]).find(e => e['id'] === portId);
+    if (el) return (machineOfPort(doc, el)?.id as string) || portId;
+  }
+  return portId;
+}
+
 export function portsOf(doc: ShopDoc | null, machineId: string): { systemId: string; port: RawEl }[] {
   if (!doc) return [];
   return (portsByMachine(doc as unknown as Shop).get(machineId) ?? []) as

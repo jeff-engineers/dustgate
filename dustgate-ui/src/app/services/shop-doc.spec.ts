@@ -13,7 +13,8 @@ import { validateShop } from '@shop';
 import {
   type ShopDoc, type RawEl,
   addMachineWithPort, addSupplementalPort, displayName, isPortEnabled, isShopDoc, machineById,
-  machineOfPort, machinesOf, outletOf, portsOf, primaryPortOf, removeMachine, removePort,
+  machineIdOfPort, machineOfPort, machinesOf, outletOf, outletTakenByAnotherMachine,
+  portsOf, primaryPortOf, removeMachine, removePort,
   healMachineNames, renameMachine, setOutlet,
   systemById, systemViews, systemsOf, toShop,
 } from './shop-doc';
@@ -210,6 +211,44 @@ const v1 = () => JSON.parse(JSON.stringify({
   check('and ducts', Array.isArray(view.ducts) && view.ducts.length > 0);
   check('and the shop-level controllers spliced in',
     Array.isArray(view.controllers) && view.controllers.length === 1);
+}
+
+// ── "is this outlet taken" is asked MACHINE to machine, never row to row ─────
+//
+// The tools screen lists PORTS, so a two-port saw is two rows — but the outlet
+// belongs to the machine. Comparing rows made each of the saw's rows see the
+// other as a different tool, so its OWN outlet read as taken, the picker refused
+// to re-select it, and the save that followed deleted the pairing outright.
+{
+  const shop = toShop(v1())!;
+  const sys = systemsOf(shop)[0];
+  addSupplementalPort(shop, sys, 'saw', 'saw-oa', 'overarm');
+  const primary = primaryPortOf(shop, 'saw')!['id'] as string;
+
+  eq('both of a saw\'s ports report the same machine',
+     machineIdOfPort(shop, primary), machineIdOfPort(shop, 'saw-oa'));
+  eq('...and that machine is the saw', machineIdOfPort(shop, 'saw'), 'saw');
+  // A port the document has never heard of compares as itself, so an unreadable
+  // layout blocks nothing rather than blocking everything.
+  eq('an unknown port falls back to its own id', machineIdOfPort(shop, 'ghost'), 'ghost');
+
+  // Both rows carry the machine's outlet, which is exactly the shape that broke.
+  const rows = [
+    { id: primary,  ip: '10.0.0.5', hasPlug: true },
+    { id: 'saw-oa', ip: '10.0.0.5', hasPlug: true },
+  ];
+  check('a tool\'s own outlet is NOT taken, seen from either of its ports',
+    !outletTakenByAnotherMachine(shop, rows, '10.0.0.5', primary)
+    && !outletTakenByAnotherMachine(shop, rows, '10.0.0.5', 'saw-oa'));
+
+  // ...while a genuinely shared outlet still is. An outlet belongs to one tool.
+  const withOther = rows.concat([{ id: 'jointer-port', ip: '10.0.0.5', hasPlug: true }]);
+  check('but another MACHINE holding it still counts as taken',
+    outletTakenByAnotherMachine(shop, withOther, '10.0.0.5', 'jointer-port'));
+  check('a row with no outlet claims nothing',
+    !outletTakenByAnotherMachine(shop, [{ id: 'x', ip: '10.0.0.9', hasPlug: false }], '10.0.0.9', primary));
+  check('and an empty ip is never taken',
+    !outletTakenByAnotherMachine(shop, rows, '', primary));
 }
 
 // ── renaming a machine reaches every copy of its name ───────────────────────
