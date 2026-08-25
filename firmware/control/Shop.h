@@ -269,17 +269,75 @@ inline ShopRouting routeShop(JsonObjectConst doc,
     std::vector<std::string> activePorts = primaries;
     activePorts.insert(activePorts.end(), supplementals.begin(), supplementals.end());
 
+    // ── ONE MACHINE PER SYSTEM GETS THE AIR ──────────────────────────────────
+    //
+    // computeRouting only resolves contests over a SELECTOR: two tools on
+    // independent gates contest nothing, so both used to win and both gates
+    // opened. That is co-open — the same condition airflowIssues() reports as a
+    // layout fault — and it halves the velocity at both, which is the exact
+    // failure automated gates exist to prevent. It also contradicts the locked
+    // scope: one blower, one tool at a time, arbitrated per system.
+    //
+    // So the order above no longer just breaks ties, it picks a WINNER: the
+    // machine owning the first port in arbitration order. Every other machine in
+    // this system loses, however free its gate happens to be.
+    //
+    // Per MACHINE, not per port — a saw with a cabinet gate and an overarm on the
+    // same collector wants both open (one box, two pickups; RFC §6.3).
+    //
+    // ↔ routeShop() in shared/device-model/shop.js. Change one, change both.
+    std::map<std::string, std::string> ownerOfPort;
+    for (auto& mp : portsOfMachineHere)
+      for (const std::string& pid : mp.second) ownerOfPort[pid] = mp.first;
+
+    std::vector<std::string> winningPorts;
+    if (!activePorts.empty()) {
+      const std::string winner = ownerOfPort[activePorts.front()];
+      for (const std::string& pid : activePorts)
+        if (ownerOfPort[pid] == winner) winningPorts.push_back(pid);
+    }
+
     for (JsonObjectConst el : sys.elements)
       if (_eq(el["type"], "tool")) {
         const char* pid = el["id"].as<const char*>();
         if (pid) portIndex[pid] = el;
       }
 
-    Routing r = computeRouting(sys, activePorts);
+    Routing r = computeRouting(sys, winningPorts);
+
+    // CONFLICTS come from a second pass over every active port, because they
+    // answer a different question: not "what opened" but "who wanted the same
+    // selector as someone else". Filtering the losers out before the first pass
+    // would report a shop where nothing ever contests anything, when contesting
+    // a manifold stop is precisely the thing worth telling someone about.
+    //
+    // Only the conflicts are taken from it — states and reachability come from
+    // the authoritative pass above. Cheap: a handful of elements, on tool on/off.
+    //
+    // A machine that lost the SYSTEM without contesting any selector (its gate
+    // was free; it simply was not the winner) is deliberately not a conflict —
+    // nothing was contested. machines[id].status == MACHINE_STRIPPED reports it.
+    // Held in a NAMED local, not bound straight off the temporary. Lifetime
+    // extension does not reach a member subobject through a conditional
+    // operator, so `const auto& c = cond ? f().conflicts : r.conflicts;` reads a
+    // destroyed vector — and would pass these tests anyway, right up until the
+    // allocator reused the block. This file already has one use-after-free in
+    // its history (see retire() in SmartOutletControl.cpp); one is enough.
+    const bool someoneLost = activePorts.size() > winningPorts.size();
+    Routing contestedPass;
+    if (someoneLost) contestedPass = computeRouting(sys, activePorts);
+    const std::vector<Conflict>& contested = someoneLost ? contestedPass.conflicts
+                                                         : r.conflicts;
+
+    // Losers are reported false, not left out. "We considered it and it lost"
+    // and "we never heard of it" are different answers, and callers have always
+    // been able to read reachable[portId] == false for the first.
+    for (const std::string& pid : activePorts)
+      if (r.reachable.find(pid) == r.reachable.end()) r.reachable[pid] = false;
 
     for (auto& kv : r.states)    out.states[kv.first]    = kv.second;
     for (auto& kv : r.reachable) out.reachable[kv.first] = kv.second;
-    for (const Conflict& c : r.conflicts)
+    for (const Conflict& c : contested)
       out.conflicts.push_back(ShopConflict{ sysId, c.selectorId, c.winner, c.winnerState, c.losers });
 
     for (auto& mp : portsOfMachineHere) {
