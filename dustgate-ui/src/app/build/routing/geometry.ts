@@ -33,6 +33,19 @@ export const TOOL_HALF = 34;
  *  drawing, the obstacle the router steers around, and the room a machine's name
  *  has to fit into are all one number. */
 export const TOOL_HALF_W = 38;
+/** Half-extent of a collector body, which is SQUARE — 76 x 76.
+ *
+ *  30 until 2026-08-25, when the circle-and-impeller became a barrel that carries
+ *  its own name and its own plug row (docs/mockups/collector-glyph.html). The two
+ *  rows are a machine's two rows, so the width is a machine's width; the extra 8
+ *  of height is the room the lid seam takes.
+ *
+ *  38 is also the CEILING, not a taste. Every footprint is inflated by CLEARANCE
+ *  before the router treats it as an obstacle, and the lattice is half a cell:
+ *  38 + 15 = 53 leaves the lattice line on the cell boundary (54) usable, and 39
+ *  would swallow it — no duct could pass along the row or column beside a
+ *  collector. Grow this and a shop silently loses routes. */
+export const COLLECTOR_HALF = 38;
 /** How far below a unit's body an outlet stub starts. */
 export const OUTLET_STUB = UNIT_H / 2 + 12;
 /** Where a unit's feed run stops, measured from its top edge. Matches the 12px the
@@ -130,7 +143,7 @@ export function cellY(row: number): number { return PAD + row * CELL; }
 export function halfW(n: SceneNode): number {
   if (n.isUnit) return (n.span - 1) * CELL / 2 + GATE_PAD;
   switch (n.glyph) {
-    case 'collector': return 30;
+    case 'collector': return COLLECTOR_HALF;
     case 'ballvalve': return 22;
     case 'junction': return 8;
     case 'secondaryPort': return SECONDARY_PORT_HALF;
@@ -142,7 +155,7 @@ export function halfW(n: SceneNode): number {
 export function halfH(n: SceneNode): number {
   if (n.isUnit) return UNIT_H / 2;
   switch (n.glyph) {
-    case 'collector': return 30;
+    case 'collector': return COLLECTOR_HALF;
     case 'ballvalve': return 22;
     case 'junction': return 8;
     case 'secondaryPort': return SECONDARY_PORT_HALF;

@@ -128,7 +128,17 @@
          [attr.transform]="'translate(' + nx(n) + ',' + ny(n) + ')'" (pointerdown)="startDrag($event, n)"
          (contextmenu)="onNodeContext($event, n)">
         <ng-container [ngSwitch]="n.glyph">
-          <g *ngSwitchCase="'collector'"><circle class="body" r="30"/><path class="stroke" fill="none" stroke-width="3" stroke-linecap="round" d="M0 -19 a19 19 0 1 0 6 2 l-6 17"/><circle class="fillmuted" r="3.5"/></g>
+          <!-- A barrel, not a circle-with-an-impeller. The spiral was the only thing
+               inside the old glyph and it was spending the room the two rows a
+               collector actually has to show need: its NAME, and its plug. Both are
+               a machine's rows, drawn by the same code — the body is what says this
+               is not a machine. See docs/mockups/canvas.html. -->
+          <g *ngSwitchCase="'collector'">
+            <rect class="body coll-body" [attr.x]="-COLLECTOR_HALF" [attr.y]="-COLLECTOR_HALF"
+                  [attr.width]="COLLECTOR_HALF * 2" [attr.height]="COLLECTOR_HALF * 2" rx="17"/>
+            <line class="coll-seam" x1="-37" y1="-26" x2="37" y2="-26"/>
+            <line class="coll-seam" x1="-37" y1="24" x2="37" y2="24"/>
+          </g>
           <g *ngSwitchCase="'ballvalve'"><circle class="body" r="22"/><line class="stroke" x1="0" y1="-22" x2="0" y2="22" stroke-width="4"/></g>
           <g *ngSwitchCase="'junction'" [class.open-end]="isOpenEnd(n.id)">
             <circle fill="transparent" r="16"/>
@@ -201,7 +211,9 @@
         <!-- The plug row. Replaced an 'auto'/'manual' caption that said whether a
              plug existed and nothing else — not which one, and not what it reads.
              Its own tap target: the body drags the tool, this opens the plug. -->
-        <g *ngIf="n.glyph === 'tool'" class="dock" [attr.data-tool]="n.id" [attr.class]="'dock ' + plugOf(n).state"
+        <g *ngIf="n.glyph === 'tool' || n.glyph === 'collector'" class="dock"
+           [attr.data-tool]="n.id" [attr.class]="'dock ' + plugOf(n).state + (n.glyph === 'collector' ? ' coll' : '')"
+           [attr.transform]="'translate(0,' + dockDY(n) + ')'"
            [class.armed]="armedTool === n.id" (pointerdown)="onDockDown($event, n)">
           <title>{{ plugOf(n).hint }}</title>
           <rect class="dock-bg" [attr.x]="-DOCK_W / 2" y="4" [attr.width]="DOCK_W" [attr.height]="DOCK_H" rx="6"/>

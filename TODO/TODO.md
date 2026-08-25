@@ -65,6 +65,42 @@ than restated. Delete an item when it lands; the git history is the record.
   problem — the primary can only reach the nodes on the OLD network, so anything
   that misses the message needs a defined fallback.
 
+- **Finish the collector barrel (2026-08-25).** The glyph itself LANDED — the
+  canvas draws a 76x76 violet barrel carrying its own name and its own plug row,
+  the impeller is gone, and the router's footprint grew with it
+  (`COLLECTOR_HALF`, geometry.ts). Three loose ends:
+  - `docs/mockups/canvas.html` was never updated, so the canonical mockup still
+    describes the circle. Update it IN PLACE and add a decision-log row, then
+    move `docs/mockups/collector-glyph.html` (the exploration) into
+    `archived/` with the banner that page's neighbours all wear.
+  - The collector's live plug row is UNVERIFIED. `systemWatts`/`systemIdOf()` in
+    build.component.ts feed it from `status.systems[].plug`, and nothing has ever
+    had a plug paired to a collector while the blower drew current — so the green
+    "412 W" state has been reasoned about, not seen.
+  - The Live view's collector card still draws the old impeller spiral as its
+    icon (live.component.ts, `.cyc`). The canvas and that card no longer agree,
+    and the card is the other place a collector is drawn.
+
+- **"No outlet paired" should be a link, on /shop.** Today the collector card
+  says "No outlet paired - there is nothing to switch" and an unpaired tool row
+  says "Manual - no outlet paired": both name a setup fact and then leave you to
+  go find the page that fixes it. Wanted: the short line plus a link straight to
+  that piece's pairing panel.
+  - /tools needs to accept a deep link (`?el=<id>`) that opens one piece's config
+    on arrival. It has none today.
+  - **A COLLECTOR has to be pairable there too** (decided 2026-08-25) - /tools
+    lists `type === 'tool'` only, so a collector's plug can be paired nowhere but
+    the build canvas, which is the trip this whole item exists to avoid. Give each
+    system's collector a row above that system's tools, same pairing panel. Lines
+    up with the "split /tools by system" item above; do them together.
+  - The obstacle worth knowing before starting: a tool ROW is itself a
+    `<button>` (tapping it hand-runs the tool), so a link cannot simply be nested
+    inside it. The row and the link have to become siblings in a wrapper that
+    carries the card styling.
+  - `docs/mockups/shop-status-chips.html` is the canonical page for this screen
+    and carries the current wording (line ~798) plus a decision log - update it
+    in the same change.
+
 - **Hover tooltips on the canvas glyphs.** Primary vs secondary port, the 1–4
   numbered outlet icons, probably others. Low priority — and hover can't be the
   only way in (see the mockup rules), so whatever this becomes needs a tap path too.

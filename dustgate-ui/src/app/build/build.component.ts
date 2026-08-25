@@ -6,6 +6,7 @@ import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
 import { ApiService, DiscoveredOutlet, NodeLinkState, Topology, TopologyStatus } from '../services/api.service';
 import { takeoverWarning } from '@plug-claim';
 import { airflowIssues, redundantSelectors, type AirflowIssue } from '@topology';
+import { COLLECTOR_RUNNING_W } from '@topology-device';
 import { validateShop, SHOP_SCHEMA_VERSION } from '@shop';
 import { SelectorConfigComponent } from '../gates/selector-config.component';
 import { ElementOutletConfigComponent } from '../tools/element-outlet-config.component';
@@ -26,7 +27,7 @@ import {
 import { wipSummary } from '../services/wip-message';
 import {
   type Glyph, type Pt, type SceneNode,
-  BOARD_H, BOARD_W, CELL, GATE_PAD, PAD, TOOL_HALF, TOOL_HALF_W, UNIT_H,
+  BOARD_H, BOARD_W, CELL, COLLECTOR_HALF, GATE_PAD, PAD, TOOL_HALF, TOOL_HALF_W, UNIT_H,
   cellX, cellY, deviceBox, halfH as glyphHalfH, halfW as glyphHalfW, ptSegDist, segBoxHit,
   PRIMARY_PORT_DX, PRIMARY_PORT_H, PRIMARY_PORT_W, SECONDARY_PORT_DX, SECONDARY_PORT_STEP,
 } from './routing/geometry';
@@ -80,6 +81,22 @@ export const GLABEL_FONT = 12.5;
  * is room to breathe with clearance still left over.
  */
 const NAME_OVERHANG = 6;
+/**
+ * The same allowance for a COLLECTOR, which needs two units more than a machine.
+ *
+ * "Dust collector" — the name every shop starts with, on the one piece every shop
+ * has — measures 88.2 by the table in plug-label.ts against a machine's budget of
+ * 88, and so ellipsized on 0.2 of a unit that isn't even real: the table rounds
+ * every character UP on purpose, and the string renders nearer 84. A default name
+ * that arrives pre-trimmed reads as a bug in the drawing, which is worse than the
+ * two units this spends.
+ *
+ * Eight, not more: a machine beside it takes 6 of the 16 units of gap from its
+ * own side, so 8 still leaves 2 units of air between two names that both run
+ * full width — and a collector heads its system's band, where a neighbour on
+ * either side is the uncommon case to begin with.
+ */
+const COLLECTOR_NAME_OVERHANG = 8;
 
 // ── Layout model ──────────────────────────────────────────────────────────────
 // The canvas is pure presentation: each element gets a grid cell (col,row). The
@@ -337,6 +354,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   menuTitle = '';
   readonly CELL = CELL; readonly UNIT_H = UNIT_H; readonly GATE_PAD = GATE_PAD; readonly PAD = PAD;
   readonly TOOL_HALF = TOOL_HALF;
+  readonly COLLECTOR_HALF = COLLECTOR_HALF;
   readonly PRIMARY_PORT_DX = PRIMARY_PORT_DX;
   readonly PRIMARY_PORT_W = PRIMARY_PORT_W;
   readonly PRIMARY_PORT_H = PRIMARY_PORT_H;
@@ -710,9 +728,14 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
    * title, so nothing is lost by the trim — see nameTitle().
    */
   nameLabel(n: NodeVM): string {
-    if (n.glyph !== 'tool') return n.name;
-    return fitText(n.name, (TOOL_HALF_W + NAME_OVERHANG) * 2, GLABEL_FONT);
+    if (!this.hasBodyName(n)) return n.name;
+    const over = n.glyph === 'collector' ? COLLECTOR_NAME_OVERHANG : NAME_OVERHANG;
+    return fitText(n.name, (TOOL_HALF_W + over) * 2, GLABEL_FONT);
   }
+  /** Pieces whose name is drawn INSIDE the body — a machine, and since 2026-08-25
+   *  the collector, which is the same 76 wide. Everything else captions from
+   *  outside and has open canvas to spill into. */
+  private hasBodyName(n: NodeVM): boolean { return n.glyph === 'tool' || n.glyph === 'collector'; }
   /** The whole name, but only where the drawn one is short of it — a tooltip that
    *  repeats what is already legible is noise. */
   nameTitle(n: NodeVM): string { return this.nameLabel(n) === n.name ? '' : n.name; }
@@ -726,13 +749,28 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     // glyph. namePos() follows this, so the edit field stays on the name.
     return this.nameBaseY(n) - (n.redundant ? 13 : 0);
   }
-  private nameBaseY(n: NodeVM): number { return n.glyph === 'tool' ? -8 : (n.isUnit ? -UNIT_H / 2 - 9 : -34); }
+  private nameBaseY(n: NodeVM): number {
+    if (n.glyph === 'tool') return -8;
+    // Higher in the barrel than a machine's, because a collector's body is 8
+    // taller and the two rows sit centred in it rather than pinned to the top.
+    if (n.glyph === 'collector') return -6;
+    return n.isUnit ? -UNIT_H / 2 - 9 : -34;
+  }
+  /** How far the plug row shifts off the seat a machine gives it. A collector's
+   *  body is taller, so its two rows sit 4 higher to stay centred between the
+   *  lid seam and the base band. */
+  dockDY(n: NodeVM): number { return n.glyph === 'collector' ? -4 : 0; }
   toolAuto(id: string): boolean { return !!outletOf(this.topo as unknown as ShopDoc, this.elem(id)); }
 
   // ── the plug row ─────────────────────────────────────────────────────────────
   // Live wattage per MACHINE, from /api/status. Keyed by machine because that is
   // what draws power — a two-port saw is one reading, not two.
   private machineWatts = new Map<string, number>();
+  /** What each SYSTEM's collector plug last read, keyed by system id. The
+   *  collector's draw doesn't come through `tools` — it isn't a machine — and
+   *  without it a barrel with a plug paired would sit on "idle" while the blower
+   *  roared. */
+  private systemWatts = new Map<string, number>();
   /** A machine waiting for the next tap in the plug tray. */
   armedTool: string | null = null;
   /** The tool whose plug row the current press started on, or null. Set on
@@ -758,14 +796,32 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     const ip = outlet['ip'] as string | undefined;
     const seen = ip ? this.outlets.find(o => o.ip === ip) : undefined;
     const name = seen?.name || (outlet['name'] as string) || (outlet['host'] as string) || ip || 'outlet';
+    // A collector is not a machine and has no threshold of its own: what counts as
+    // running is the one number the model already keeps for a blower. Judging it
+    // no further than that is deliberate — whether a blower is FAILING to start is
+    // the Live view's call (collectorPlugState), and it needs a grace window and
+    // what we commanded, neither of which the layout tool has.
+    const collector = n.glyph === 'collector';
     const machine = machineOfPort(doc, el);
-    const watts = (machine && this.machineWatts.get(machine.id as string)) ?? 0;
-    const trip = (outlet['thresholdW'] as number) ?? 0;
+    const watts = collector
+      ? (this.systemWatts.get(this.systemIdOf(n.id) ?? '') ?? 0)
+      : ((machine && this.machineWatts.get(machine.id as string)) ?? 0);
+    const trip = collector ? COLLECTOR_RUNNING_W : ((outlet['thresholdW'] as number) ?? 0);
     const detail = `${name} · ${(outlet['ip'] as string) ?? ''} · ${Math.round(watts)} W`;
     if (watts >= trip && trip > 0) return { state: 'live', text: this.fmtW(watts), hint: detail };
     if (watts >= 1) return { state: 'standby', text: this.fmtW(watts), hint: detail };
     // Idle: show WHICH plug, since there's no number worth reading yet.
     return { state: 'idle', text: this.shortPlug(name), hint: detail };
+  }
+
+  /** Which system an element belongs to. The canvas flattens every system into one
+   *  node list, so a collector's own status — which is keyed by SYSTEM — has to be
+   *  found back through the system that holds it. */
+  private systemIdOf(elId: string): string | null {
+    for (const sys of systemsOf(this.topo as unknown as ShopDoc)) {
+      if (sys.elements?.some(e => e['id'] === elId)) return sys.id;
+    }
+    return null;
   }
 
   private fmtW(w: number): string { return w >= 1000 ? (w / 1000).toFixed(1) + ' kW' : Math.round(w) + ' W'; }
@@ -4775,6 +4831,14 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     this.machineWatts.clear();
     for (const [id, t] of Object.entries(status.tools ?? {})) {
       this.machineWatts.set(id, (t as { watts?: number }).watts ?? 0);
+    }
+    // Per-system draw, for the collector's plug row. `plug` is absent on a system
+    // whose blower has no switchable outlet, which is the same nothing its row
+    // already shows.
+    this.systemWatts.clear();
+    for (const [id, sys] of Object.entries(status.systems ?? {})) {
+      const plug = (sys as { plug?: { watts?: number } }).plug;
+      if (plug) this.systemWatts.set(id, plug.watts ?? 0);
     }
     const reach = status.reachable ?? {}, actuators = status.actuators ?? {}, liveSet = new Set<string>();
     for (const [toolId, ok] of Object.entries(reach)) {
