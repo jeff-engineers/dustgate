@@ -22,25 +22,30 @@ because the adapter answers the half-duplex question and *raises* a power one.
   is actually on — see §5).
 - **It uses D6/D7**, which is what this env's pin map already says.
 
-### 0.1 ⚠️ It backfeeds the XIAO, so mind the two supplies
+### 0.1 Power, as measured (2026-08-26)
 
-With the adapter's jack live the XIAO powers up through its `5V` pad. That pad
-is **raw VBUS and bidirectional**, so with a USB cable also plugged in for
-flashing, two supplies meet there. Whether that is fine depends on a diode
-nobody here has traced.
+Metered on the bench, so these are facts rather than the datasheet's silence:
 
-Two things to meter before making a habit of it, jack live, **USB unplugged**:
+| Where | Reading | What it settles |
+|---|---|---|
+| XIAO `5V` pad, jack live | **5 V** | The adapter REGULATES the jack down for the XIAO. The destructive case — 12 V onto a 5 V pad — is off the table. |
+| Servo socket power pins | **12 V** | The jack reaches the servo unregulated, at its full rail. A servo that answers on the bus but feels weak under load is therefore not a starved-rail story. |
+| Adapter rail, powered from the XIAO's USB instead | **5 V** | USB can power the whole thing. It does NOT say whether there is a blocking diode — see below. |
 
-1. **The XIAO's `5V` pad.** ~5 V means the adapter regulates and it is behaving
-   like any powered carrier. Anything near the jack voltage means the jack is
-   passed straight through, and the board is already living on borrowed time.
-2. **The servo socket's power pin.** Seeed does not document whether the jack is
-   regulated down to the socket or passed through. A 12 V servo wants the jack
-   voltage there — 5 V would explain a servo that answers but will not move
-   under any load.
+**The one thing still open: is the `5V` pad isolated from USB VBUS?** That pad is
+raw VBUS and bidirectional, so with jack and USB both live, two 5 V sources meet
+across whatever sits between them. The third reading above does not answer it: a
+diode oriented VBUS → `5V` pad passes current in exactly that direction, and what
+it blocks is the reverse. What would answer it:
 
-Until #1 reads ~5 V, prefer one supply at a time: jack for driving the servo,
-USB alone for flashing.
+- Jack live, **USB unplugged**, meter VBUS at the USB-C connector itself. ~5 V
+  means the pad backfeeds VBUS and there is no blocking diode; ~0 V means there
+  is one.
+- Or with USB alone, compare VBUS against the `5V` pad — a Schottky shows up as
+  a ~0.3 V step.
+
+It is 5 V against 5 V either way, which is the benign version of this. Cheap
+insurance while it is unanswered: **pull the jack while flashing.**
 
 ## 1. Power, if you wire it yourself instead
 
