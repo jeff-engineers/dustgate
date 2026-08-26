@@ -61,16 +61,25 @@
 #if defined(DUSTGATE_SERVO_BUS)
 
 // -- Serial-servo bus (Feetech ST3215 and friends) --
-// D6/D7 are GPIO11/12, the board's only exposed hardware UART, and the same
-// pads Seeed's own XIAO Bus Servo Adapter uses. ONE WIRE, half duplex: both of
-// these land on the servo's single signal line, so a reply arrives on RX and
-// our own transmission echoes back there too — the driver drains its own echo.
+// D6/D7 are GPIO11/12, the board's only exposed hardware UART, and the pads
+// Seeed's XIAO Bus Servo Adapter sockets onto. ONE WIRE, half duplex at the
+// servo end; whether our own transmission echoes back depends on what is
+// driving the line (see ST3215Bus::receive — it copes with both).
+//
+// TX IS D7 AND RX IS D6, which reads backwards and is not.
+// The adapter's own labels are from ITS point of view: Seeed's wiki says
+// "connect the RX pin on the Driver Board to the TX pin (D7) on your host…
+// the TX pin on the Driver Board to the RX pin (D6)". These two were the other
+// way round here until 2026-08-26, written from a design note rather than from
+// the board, and a servo answered nothing at any baud — a well-formed frame
+// leaving on the pad nobody was listening to. Bench-confirmed order now.
 //
 // ⚠️ The bus LOGIC LEVEL is still unconfirmed (3.3V vs 5V) and the C5 is NOT 5V
-// tolerant. Meter the servo's idle signal pin before either of these pads is
-// connected to it. See firmware/wiring/st3215-bench.md.
-#define PIN_SERVO_BUS_TX   11   // D6
-#define PIN_SERVO_BUS_RX   12   // D7
+// tolerant. That is moot through the adapter, which buffers, and it matters the
+// moment a servo lead meets one of these pads directly.
+// See firmware/wiring/st3215-bench.md.
+#define PIN_SERVO_BUS_TX   12   // D7 — to the adapter's RX
+#define PIN_SERVO_BUS_RX   11   // D6 — from the adapter's TX
 
 #else
 

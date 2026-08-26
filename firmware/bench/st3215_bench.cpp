@@ -63,6 +63,9 @@ static void help() {
     Serial.println(F(
         "\n"
         "  scan [hi]        ping every id from 0 to hi (default 20)\n"
+        "  sweep [hi]       scan at every plausible baud, both pin orders, and stay on what works\n"
+        "  pins             which pad is TX and which is RX right now\n"
+        "  swap             flip them, and reopen\n"
         "  baud <n>         reopen the bus at another rate (factory is 1000000)\n"
         "  id <n>           which servo the commands below talk to\n"
         "  ping             is it there, and what is its status byte\n"
@@ -110,6 +113,56 @@ static int16_t signedField(uint16_t raw) {
 // Commands
 // -----------------------------------------------------------------------------
 
+/** Ping every id up to `hi`, printing only what answers. Returns how many did. */
+static uint8_t scanQuiet(uint8_t hi) {
+    uint8_t found = 0;
+    for (uint8_t id = 0; id <= hi; id++) {
+        uint8_t err = 0;
+        if (bus.ping(id, &err)) {
+            Serial.printf("  id %-3u answered (status 0x%02X)\n", id, err);
+            found++;
+        }
+        // Also the yield that keeps the idle task fed through a long hunt.
+        delay(2);
+    }
+    return found;
+}
+
+/**
+ * The whole search space, when nothing answers and you don't know why.
+ *
+ * A silent bus has three ordinary causes and they are indistinguishable from the
+ * console: the baud is wrong, the pins are the other way round, or nothing is
+ * listening. This walks the first two — every plausible rate, both pin orders —
+ * and leaves the bus configured on whatever worked. Then the remaining silence
+ * means the third, and that is a meter question, not a firmware one.
+ */
+static void doSweep(uint8_t hi) {
+    static const uint32_t kBauds[] = { 1000000, 500000, 250000, 128000, 115200, 76800, 57600, 38400, 19200, 9600 };
+
+    for (uint8_t order = 0; order < 2; order++) {
+        for (uint8_t b = 0; b < sizeof(kBauds) / sizeof(kBauds[0]); b++) {
+            bus.begin(kBauds[b], order == 1);
+            Serial.printf("  %lu baud, %s pins ... ", (unsigned long)kBauds[b],
+                          order ? "swapped" : "normal");
+            uint8_t found = scanQuiet(hi);
+            if (!found) { Serial.println(F("nothing")); continue; }
+
+            busBaud = kBauds[b];
+            Serial.printf("  ^ that one. Bus left at %lu baud, %s pins (TX GPIO%d, RX GPIO%d).\n",
+                          (unsigned long)busBaud, bus.swapped() ? "swapped" : "normal",
+                          bus.txPin(), bus.rxPin());
+            return;
+        }
+    }
+
+    // Back to where we started, so a failed sweep leaves nothing behind.
+    bus.begin(busBaud, false);
+    Serial.println(F("  nothing answered at any rate, either way round.\n"
+                     "  That is now a wiring question, not a settings one — see\n"
+                     "  firmware/wiring/st3215-bench.md section 5."));
+}
+
 static void doScan(uint8_t hi) {
     Serial.printf("  scanning 0..%u at %lu baud\n", hi, (unsigned long)busBaud);
     uint8_t found = 0;
@@ -123,9 +176,9 @@ static void doScan(uint8_t hi) {
     }
     if (!found) {
         Serial.println(F("  nothing answered.\n"
-                         "  Check, in this order: servo power (a dead servo is silent, not noisy),\n"
-                         "  the signal wire, then `baud 115200` / `baud 500000` — a servo that has\n"
-                         "  been configured before may not be at the factory rate."));
+                         "  `sweep` tries every baud both pin orders — do that before reaching\n"
+                         "  for the meter. A servo that has been configured before keeps whatever\n"
+                         "  rate it was given, and a silent bus cannot say which of the two it is."));
     }
 }
 
@@ -218,6 +271,17 @@ static void handle(const String& line) {
 
     if (cmd == "help" || cmd == "?")      { help(); return; }
     if (cmd == "scan")                    { doScan(arg(line,1).length() ? arg(line,1).toInt() : 20); return; }
+    if (cmd == "sweep")                   { doSweep(arg(line,1).length() ? arg(line,1).toInt() : 20); return; }
+    if (cmd == "pins") {
+        Serial.printf("  TX GPIO%d, RX GPIO%d (%s)\n", bus.txPin(), bus.rxPin(),
+                      bus.swapped() ? "swapped" : "as the board header has them");
+        return;
+    }
+    if (cmd == "swap") {
+        bus.begin(busBaud, !bus.swapped());
+        Serial.printf("  reopened: TX GPIO%d, RX GPIO%d\n", bus.txPin(), bus.rxPin());
+        return;
+    }
 
     if (cmd == "baud") {
         long b = arg(line, 1).toInt();

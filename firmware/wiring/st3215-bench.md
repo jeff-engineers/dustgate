@@ -17,10 +17,21 @@ The XIAO sockets straight into it, the servo plugs into its 3-pin socket, and
 its own jack feeds both. That removes most of §1–§3 — **read §0.1 anyway**,
 because the adapter answers the half-duplex question and *raises* a power one.
 
-- **It drives the line for you.** No series resistor, no direction pin, and
-  usually no echo: the firmware tolerates either (`ping` reports which wiring it
-  is actually on — see §5).
-- **It uses D6/D7**, which is what this env's pin map already says.
+- **It drives the line for you.** No series resistor, no direction pin to
+  drive, and usually no echo: the firmware tolerates either (`ping` reports
+  which wiring it is actually on — see §5).
+- **It uses D6/D7 — with TX on D7 and RX on D6.** The adapter's silkscreen is
+  written from its own point of view, so its `RX` goes to the host's `TX` (D7)
+  and its `TX` to the host's `RX` (D6). This project had them the other way
+  round until 2026-08-26 and got exactly the symptom you would expect: a
+  well-formed frame on the trace, and silence at every id and every baud, on the
+  pad nobody was listening to. `sweep` finds this on its own now.
+- **1 Mbps**, per Seeed's own example (`COMSerial.begin(1000000, SERIAL_8N1)`).
+- **No mode jumper on this board** — "you don't need to modify any circuits".
+  The bigger *Bus Servo Driver Board* is the one with a UART-vs-USB solder
+  bridge, so check for one if that is the board on your bench.
+
+Source: [Seeed's XIAO Bus Servo Adapter wiki](https://wiki.seeedstudio.com/xiao_bus_servo_adapter/).
 
 ### 0.1 Power, as measured (2026-08-26)
 
@@ -139,12 +150,15 @@ If `scan` finds nothing, in this order:
    contact — check it with the meter instead.
 2. **The signal wire and the common ground** (§1, §3) — or, on the adapter, that
    the XIAO is seated the right way round in its socket.
-3. **The baud.** The factory rate is 1 000 000, but a servo that has been
-   configured before keeps whatever it was given: `baud 115200`, `scan`, then
-   `baud 500000`, `scan`. Register 6 is a baud *index*, not a rate.
+3. **`sweep`.** Every plausible baud, both pin orders, staying on whatever
+   answers. It exists because the two settings that can be wrong are
+   indistinguishable from the console, and both have now been wrong once: a
+   servo configured before keeps whatever rate it was given (register 6 is a
+   baud *index*, not a rate), and the TX/RX order was inverted in this repo
+   until the adapter arrived.
 4. **`trace on`**, then `ping`. TX bytes with no RX bytes is a bus that is not
    hearing us or a servo that is not there; RX bytes that fail the checksum is
-   the wrong baud, or the two drivers of §3 fighting.
+   the wrong baud, or two drivers fighting on a hand-wired line (§3).
 
 If the numbers from `read` are nonsense but the checksum passes, try
 `endian hi` — the ST/STS series is little-endian and the SCS series is big, and

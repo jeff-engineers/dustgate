@@ -27,6 +27,7 @@
 // =============================================================================
 #pragma once
 #include <Arduino.h>
+#include "../../config.h"      // the board's PIN_SERVO_BUS_* — see txPin()/rxPin()
 
 // -----------------------------------------------------------------------------
 // Instructions
@@ -81,9 +82,16 @@ public:
      * Open the UART on the board's bus pins. `baud` is a real baud rate, not
      * the servo's register-6 index — talking to a servo means matching whatever
      * IT was last set to, which is why the bench can re-open at another rate.
+     *
+     * `swapPins` puts TX on the RX pad and vice versa. It exists because a
+     * silent bus cannot tell you WHY it is silent, and "the adapter expects the
+     * other order" is one of the three reasons — cheaper to try than to trace.
      */
-    bool begin(uint32_t baud = ST_DEFAULT_BAUD);
+    bool begin(uint32_t baud = ST_DEFAULT_BAUD, bool swapPins = false);
     uint32_t baud() const { return _baud; }
+    bool swapped() const { return _swapped; }
+    int  txPin() const { return _swapped ? PIN_SERVO_BUS_RX : PIN_SERVO_BUS_TX; }
+    int  rxPin() const { return _swapped ? PIN_SERVO_BUS_TX : PIN_SERVO_BUS_RX; }
 
     /** Both directions as hex, to Serial. Off by default; the bench turns it on. */
     void trace(bool on) { _trace = on; }
@@ -137,6 +145,7 @@ private:
     bool        _trace      = false;
     bool        _little     = true;
     bool        _echoSeen   = false;
+    bool        _swapped    = false;
     const char* _lastError  = "";
     // A whole reply is ~10 bytes; 32 is room for a generous raw dump.
     static const uint8_t kMaxParams = 32;

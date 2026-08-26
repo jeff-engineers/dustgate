@@ -16,10 +16,11 @@ static const uint32_t kReplyTimeoutMs = 20;
 // The UART. HardwareSerial 1 — Serial0 is the USB CDC console on this part.
 #define BUS Serial1
 
-bool ST3215Bus::begin(uint32_t baud) {
-    _baud = baud;
+bool ST3215Bus::begin(uint32_t baud, bool swapPins) {
+    _baud    = baud;
+    _swapped = swapPins;
     BUS.end();
-    BUS.begin(baud, SERIAL_8N1, PIN_SERVO_BUS_RX, PIN_SERVO_BUS_TX);
+    BUS.begin(baud, SERIAL_8N1, rxPin(), txPin());
     // Anything the line collected while we were not listening is not a reply.
     delay(2);
     while (BUS.available()) BUS.read();
