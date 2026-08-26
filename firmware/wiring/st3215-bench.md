@@ -11,24 +11,59 @@
 > under `-DDUSTGATE_SERVO_BUS`. If this file disagrees with that header, the
 > header is right — the build reads it.
 
-## 1. Power, which is not the board's problem
+## 0. On the bench today: Seeed's XIAO Bus Servo Adapter
+
+The XIAO sockets straight into it, the servo plugs into its 3-pin socket, and
+its own jack feeds both. That removes most of §1–§3 — **read §0.1 anyway**,
+because the adapter answers the half-duplex question and *raises* a power one.
+
+- **It drives the line for you.** No series resistor, no direction pin, and
+  usually no echo: the firmware tolerates either (`ping` reports which wiring it
+  is actually on — see §5).
+- **It uses D6/D7**, which is what this env's pin map already says.
+
+### 0.1 ⚠️ It backfeeds the XIAO, so mind the two supplies
+
+With the adapter's jack live the XIAO powers up through its `5V` pad. That pad
+is **raw VBUS and bidirectional**, so with a USB cable also plugged in for
+flashing, two supplies meet there. Whether that is fine depends on a diode
+nobody here has traced.
+
+Two things to meter before making a habit of it, jack live, **USB unplugged**:
+
+1. **The XIAO's `5V` pad.** ~5 V means the adapter regulates and it is behaving
+   like any powered carrier. Anything near the jack voltage means the jack is
+   passed straight through, and the board is already living on borrowed time.
+2. **The servo socket's power pin.** Seeed does not document whether the jack is
+   regulated down to the socket or passed through. A 12 V servo wants the jack
+   voltage there — 5 V would explain a servo that answers but will not move
+   under any load.
+
+Until #1 reads ~5 V, prefer one supply at a time: jack for driving the servo,
+USB alone for flashing.
+
+## 1. Power, if you wire it yourself instead
 
 The servo runs on **12 V at the servo**, its own supply, its own wires. It never
-comes through the XIAO, and in particular never through the `5V` pad — that pad
-is raw VBUS, bidirectional, and a bench supply against a plugged-in USB port is
-two supplies shorted together.
+comes through the XIAO, and in particular never through the `5V` pad — same pad,
+same reason as §0.1.
 
 | Servo lead | Goes to |
 |---|---|
 | V+ (red) | 12 V bench supply, current-limited if it can be — a stall is ~2.7 A |
 | GND (black/brown) | supply ground **and** a XIAO GND pad — see below |
-| Signal (yellow/white) | D6/D7, through §2 |
+| Signal (yellow/white) | D6/D7, through §3 |
 
 **The common ground is not optional.** A single-ended TTL bus has no other
 reference; without it the servo sees the signal swinging around an arbitrary
-offset, and the usual symptom is a scan that finds nothing at any baud.
+offset, and the usual symptom is a scan that finds nothing at any baud. The
+adapter of §0 gets this right by construction, which is half of why it is worth
+using.
 
-## 2. ⚠️ Logic level — measure before connecting
+## 2. ⚠️ Logic level — measure before connecting anything hand-wired
+
+Moot with the adapter of §0, which is what its buffer is for. It applies the
+moment a servo signal lead meets a XIAO pad directly.
 
 The C5 is **not 5 V tolerant**. Feetech's bus is documented as TTL without
 saying which TTL, and no source reachable from here settles it.
@@ -53,18 +88,17 @@ The bench build's default assumption is the simple version:
 ```
 
 The 1k limits the current when both ends drive at once; the servo, driving
-harder, wins. This is the arrangement the firmware is written for — it hears its
-own transmission echoed back on RX and drains it (`ST3215Bus::drainEcho`).
+harder, wins. On this wiring we hear everything we say, and the firmware drops
+the frame it recognises as its own. It does not *depend* on hearing it — the
+adapter of §0 suppresses the echo and the same code works either way.
 
 Two things that are also fine, and one that is not:
 
-- **Seeed's XIAO Bus Servo Adapter** — it does this properly, with a buffer. Use
-  it if it is on the bench; the firmware does not care, the echo drain is
-  harmless either way. ⚠️ Unconfirmed whether its 5–12 V jack regulates down to
-  the servo socket — meter the socket before trusting it with a 12 V servo.
-- **A 74LVC1G125 with a direction pin** — what a shop install should have, since
-  it protects the GPIO pad from a metre of unshielded wire beside charged
-  ductwork. Needs a pin and a code change; not needed for first contact.
+- **Seeed's XIAO Bus Servo Adapter** — §0. It does this properly, with a buffer,
+  and it is what is on the bench.
+- **A 74LVC1G125 with a direction pin** — what a hand-built shop install should
+  have, since it protects the GPIO pad from a metre of unshielded wire beside
+  charged ductwork. Needs a pin and a code change.
 - **Tying TX and RX directly together with no resistor** — works right up until
   it doesn't, and what fails is the C5's pad.
 
@@ -85,7 +119,7 @@ you type a command.
 
 ```
 scan            # every id 0..20 at 1 Mbps. A virgin servo answers at id 1.
-ping            # again, at the target id, with its status byte spelled out
+ping            # status byte, and which half-duplex wiring you are actually on
 read            # position, load, volts, temp — volts is the sanity check on §1
 torque on
 move 2048 200   # a slow half turn
@@ -98,7 +132,8 @@ If `scan` finds nothing, in this order:
 1. **Power.** A servo with no 12 V is silent, not noisy. `read` would have shown
    the voltage if anything were answering, which is the circular part of first
    contact — check it with the meter instead.
-2. **The signal wire and the common ground** (§1, §3).
+2. **The signal wire and the common ground** (§1, §3) — or, on the adapter, that
+   the XIAO is seated the right way round in its socket.
 3. **The baud.** The factory rate is 1 000 000, but a servo that has been
    configured before keeps whatever it was given: `baud 115200`, `scan`, then
    `baud 500000`, `scan`. Register 6 is a baud *index*, not a rate.

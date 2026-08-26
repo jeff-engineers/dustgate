@@ -10,13 +10,15 @@
 // ~(ID + LEN + INSTR + params) & 0xFF. A reply is the same shape with the
 // instruction byte replaced by an error byte.
 //
-// ONE WIRE, HALF DUPLEX. TX and RX both sit on the servo's single signal line,
-// so every frame we send arrives back on RX before the servo answers. This
-// drains that echo in software rather than trusting the IDF's RS485 mode — the
-// mode may well work on the C5, but "may well" is not something to find out
-// through a servo that is bolted to a gate. `traceOn()` prints both directions
-// as hex, which is the only way to tell a silent bus from a wrong baud from a
-// servo that is answering something you didn't mean to ask.
+// ONE WIRE, HALF DUPLEX — AND TWO WAYS TO WIRE IT. With TX and RX tied to the
+// signal line through a resistor, every frame we send comes straight back at us;
+// with a buffered adapter (Seeed's XIAO Bus Servo Adapter, or a 74LVC1G125 and a
+// direction pin) something turns the line around and it never does. This works
+// on both: it reads FRAMES and drops any frame identical to the one just sent,
+// rather than counting bytes it assumes are an echo. `trace(true)` prints both
+// directions as hex, labelling the echo when there is one — which is the only
+// way to tell a silent bus from a wrong baud from a servo answering something
+// you didn't mean to ask.
 //
 // ⚠️ NOTHING HERE HAS TALKED TO A SERVO YET. The frame shape is solid; the
 // REGISTER MAP below is from the STS/ST series docs and is the part most likely
@@ -88,6 +90,17 @@ public:
     bool tracing() const { return _trace; }
 
     /**
+     * Has this bus ever heard its own transmission come back?
+     *
+     * TRUE means TX and RX are on the one wire (a series resistor, no buffer);
+     * FALSE means something is turning the line around for us — an adapter with
+     * a direction driver. Neither is wrong, and the protocol above works on
+     * both; this is here because "which one am I actually on" is a question a
+     * bench session asks in its first minute.
+     */
+    bool echoSeen() const { return _echoSeen; }
+
+    /**
      * Byte order for 16-bit registers. ST/STS is little-endian, SCS is big —
      * and a servo sold as one has been known to behave like the other, so this
      * is a runtime switch and the bench program can flip it in a second.
@@ -118,13 +131,17 @@ public:
 private:
     bool  send(uint8_t id, uint8_t instr, const uint8_t* params, uint8_t len);
     bool  receive(uint8_t id, uint8_t* params, uint8_t maxParams, uint8_t* got, uint8_t* err);
-    void  drainEcho(uint8_t sentBytes);
     void  hexdump(const char* dir, const uint8_t* buf, uint8_t len);
 
     uint32_t    _baud       = 0;
     bool        _trace      = false;
     bool        _little     = true;
+    bool        _echoSeen   = false;
     const char* _lastError  = "";
     // A whole reply is ~10 bytes; 32 is room for a generous raw dump.
     static const uint8_t kMaxParams = 32;
+    // The last frame sent, kept so a bounced copy of it can be recognised and
+    // dropped — see receive().
+    uint8_t     _sent[6 + kMaxParams];
+    uint8_t     _sentLen    = 0;
 };

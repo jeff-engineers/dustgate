@@ -47,34 +47,37 @@ bool ST3215Bus::send(uint8_t id, uint8_t instr, const uint8_t* params, uint8_t l
     frame[n++] = (uint8_t)(~sum & 0xFF);
 
     // Nothing on the line is ours until this frame is: a stale byte from a
-    // half-heard reply would otherwise be read back as this one's echo.
+    // half-heard reply would otherwise be read back as part of this one.
     while (BUS.available()) BUS.read();
 
     if (_trace) hexdump("TX", frame, n);
     BUS.write(frame, n);
     BUS.flush();                                        // wait for the last bit out
-    drainEcho(n);
+
+    // Remember it verbatim. Whether it comes back depends on hardware we do not
+    // control (see receive()), so the only safe way to recognise our own echo is
+    // to compare against the bytes themselves.
+    for (uint8_t i = 0; i < n; i++) _sent[i] = frame[i];
+    _sentLen = n;
     return true;
 }
 
 /**
- * Swallow our own transmission.
+ * Read one reply frame addressed to `id`, ignoring our own echo if there is one.
  *
- * TX and RX share one wire, so the bytes we just sent come straight back. They
- * are not checked against what we sent: a mismatch here means a wiring fault or
- * a second talker, and either way the reply parse below is what decides whether
- * the transaction worked. Bounded like everything else on this bus.
- */
-void ST3215Bus::drainEcho(uint8_t sentBytes) {
-    uint32_t deadline = millis() + kReplyTimeoutMs;
-    uint8_t seen = 0;
-    while (seen < sentBytes && (int32_t)(millis() - deadline) < 0) {
-        if (BUS.available()) { BUS.read(); seen++; }
-    }
-}
-
-/**
- * Read one reply frame addressed to `id`.
+ * WHETHER THERE IS ONE IS NOT OURS TO DECIDE. Two wirings are both normal:
+ *
+ *   - TX and RX tied to the one signal line through a series resistor. We hear
+ *     everything we say, so the first frame back is always our own.
+ *   - A buffered adapter (Seeed's XIAO Bus Servo Adapter, a 74LVC1G125 and a
+ *     direction pin). It turns the line around for us and the echo never
+ *     appears; the first frame back is the servo's.
+ *
+ * So this reads FRAMES, not bytes, and throws away any frame identical to the
+ * one just sent. Counting bytes instead — drain exactly as many as we wrote —
+ * is what the first version did, and on a buffered adapter it ate the reply
+ * and reported a silent bus. Costing an afternoon to a wiring choice the code
+ * could simply tolerate is not a trade worth making.
  *
  * Resyncs on the FF FF header rather than assuming the next byte is one: with a
  * shared wire and an unknown baud, landing mid-frame is the normal failure, and
@@ -106,6 +109,17 @@ bool ST3215Bus::receive(uint8_t id, uint8_t* params, uint8_t maxParams, uint8_t*
         uint8_t total = 4 + raw[3];                // FF FF ID LEN + (LEN bytes)
         if (n < total) {
             if (total > sizeof(raw)) { _lastError = "reply longer than the buffer"; return false; }
+            continue;
+        }
+
+        // Our own transmission, bounced back off a shared wire. Note it (it is
+        // worth knowing which wiring you are on) and keep listening.
+        bool isEcho = (n == _sentLen);
+        for (uint8_t i = 0; isEcho && i < n; i++) isEcho = (raw[i] == _sent[i]);
+        if (isEcho) {
+            if (_trace) hexdump("RX(echo)", raw, n);
+            _echoSeen = true;
+            n = 0; synced = false;
             continue;
         }
 

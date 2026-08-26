@@ -240,6 +240,12 @@ static void handle(const String& line) {
         if (!bus.ping(target, &err)) { fail("ping"); return; }
         Serial.printf("  id %u is there\n", target);
         printErrBits(err);
+        // Which of the two wirings this is, answered by the bus rather than by
+        // looking at the bench. Both work; knowing which one you are on is what
+        // makes the next odd symptom readable.
+        Serial.printf("  wiring: %s\n", bus.echoSeen()
+            ? "our own frames come back — TX and RX share the wire"
+            : "no echo — something is turning the line around (buffered adapter)");
         return;
     }
     if (cmd == "read")   { doRead(); return; }
