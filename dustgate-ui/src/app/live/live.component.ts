@@ -51,8 +51,8 @@ interface ToolRow {
  */
 interface SystemGroup {
   id: string;
-  /** The collector ELEMENT's id, for the link to its pairing panel. Empty for the
-   *  orphan group, and for a system drawn without a collector yet. */
+  /** The collector ELEMENT's id — its subtitle links to its pairing panel.
+   *  Empty for the orphan group, and for a system drawn without a collector. */
   collectorId: string;
   name: string;
   tools: ToolRow[];
@@ -145,8 +145,24 @@ const POLL_MS = 2000;
     .cyc svg { width: 24px; height: 24px; }
     .c-body { flex: 1; min-width: 0; }
     .c-name { font-size: 16px; font-weight: 600; }
-    .c-sub  { font-size: 13px; color: var(--muted); margin-top: 2px; }
+    .c-sub  { font-size: 13px; color: var(--muted); margin-top: 2px; display: block; }
     .collector.running .c-sub { color: var(--success); }
+    /* ── the setup line IS the way to fix it ──────────────────────────────
+       When the only thing wrong is that no outlet is paired, that line says so
+       and goes there. It used to be two lines — the fact, then "Pair an outlet
+       →" under it — which is one thought spending two lines on a page whose
+       whole argument is that a row gets one. Underlined, because underline is
+       the only "this is a link" signal that survives a thumb: there is no hover
+       on the phone this page is read on. */
+    a.c-sub, .r-src a {
+      text-decoration: underline; text-underline-offset: 2px; text-decoration-thickness: 1px;
+    }
+    /* Accent, the same colour the standalone "Pair an outlet →" link wore: the
+       one thing on an otherwise quiet row worth reaching for. The collector's
+       line already inherits it from the card's warn state; a tool row has no
+       such state, so it is set here. */
+    .r-src a { color: var(--accent); }
+    a.c-sub:active, .r-src a:active { opacity: 0.65; }
 
     .label {
       font-size: 12px; color: var(--muted); letter-spacing: 0.06em;
@@ -165,52 +181,54 @@ const POLL_MS = 2000;
 
     /* tool rows */
     .rows { display: flex; flex-direction: column; gap: 10px; }
-    /* THE WRAPPER CARRIES THE CARD, not the button inside it.
-       The row is a <button> — tapping it hand-runs the tool — so a link cannot be
-       nested in it; the two have to be siblings. Everything that draws the card
-       (surface, border, radius, the state washes) therefore lives out here, and
-       the button is a transparent hit area sitting on top of it. */
+    /* THE WRAPPER CARRIES THE CARD, and the row's TEXT sits outside its button.
+       Tapping the row hand-runs the tool, and one line of that row is a link to
+       the pairing screen — a link cannot be nested in a button. So the button is
+       a transparent hit area stretched over the row, drawn under the text, and
+       the link lifts itself back above it. Everything that draws the card
+       (surface, border, radius, the state washes) lives on the wrapper. */
     .rowwrap {
       background: var(--surface); border: 1px solid var(--border);
       border-radius: var(--radius); transition: border-color 0.12s;
     }
     .row {
+      position: relative;
       display: flex; align-items: center; gap: 12px;
-      background: none; border: 0; border-radius: var(--radius); padding: 14px 16px;
+      border-radius: var(--radius); padding: 14px 16px;
       text-align: left; width: 100%; color: inherit;
     }
+    .hit {
+      position: absolute; inset: 0; width: 100%;
+      background: none; border: 0; border-radius: var(--radius); padding: 0;
+    }
+    .hit:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
+    /* Above the hit area, and only this. Everything else on the row is text the
+       button is meant to swallow the tap for. */
+    .r-src a { position: relative; z-index: 1; }
     .rowwrap.collecting { background: rgba(60,190,110,0.10); border-color: var(--success); }
     /* Orange gets a border only, no wash: green has to stay the loudest thing on
        the page, and a shop mid-transition can have several rows waiting at once. */
     .rowwrap.waiting { border-color: rgba(240,165,0,0.55); }
     .r-body { flex: 1; min-width: 0; }
     .r-name { font-size: 16px; font-weight: 500; }
-    .r-src {
-      font-size: 12.5px; color: var(--muted); margin-top: 2px;
-      display: flex; align-items: center; gap: 5px;
-    }
+    .r-src { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
     .rowwrap.collecting .r-name { color: var(--success); }
     /* A tool with no gate can't be hand-run — the row is inert, and reads that
        way rather than looking like a control that ignores you. The dimming is on
        the wrapper, the deadening on the button: an inert row may still carry a
        link, and a link is not a control this page has any reason to refuse. */
     .rowwrap.inert { opacity: 0.62; }
-    .rowwrap.inert .row { pointer-events: none; }
-
-    /* ── "go and fix that" ───────────────────────────────────────────────
-       A setup fact stated on this page used to be a dead end: "No outlet paired"
-       named the problem and left you to go find the screen that fixes it. Both
-       places that say it now carry the way there. Accent, because it is the only
-       thing on a quiet row worth reaching for — and always a visible line of
-       text, never a hover affordance. */
-    .fixlink {
-      display: block; padding: 9px 16px; font-size: 12.5px;
-      color: var(--accent); text-decoration: none; border-top: 1px solid var(--border);
-    }
-    .fixlink:active { background: var(--bg); }
-    /* On the collector card the link sits inside the body, under the subtitle,
-       so it reads as part of the same sentence. */
-    .c-body .fixlink { padding: 5px 0 0; border-top: 0; }
+    .rowwrap.inert .hit { pointer-events: none; }
+    /* An unfinished layout locks the row's CONTROL. It cannot lock the row
+       wholesale any more: the greying is opacity, opacity applies to children,
+       and the one child that must stay lit is the link to the screen that
+       finishes the layout. So the name and the chip grey; a line that is a link
+       does not. */
+    .rowwrap.locked .hit { pointer-events: none; }
+    .rowwrap.locked .r-name,
+    .rowwrap.locked .chip { opacity: 0.45; filter: grayscale(1); }
+    .rowwrap.locked .r-src { opacity: 0.45; }
+    .rowwrap.locked .r-src.pair { opacity: 1; }
 
     /* ── the chip ────────────────────────────────────────────────────────
        This replaces the switch that used to sit here. That switch was a SPAN
@@ -349,16 +367,16 @@ const POLL_MS = 2000;
           </span>
           <div class="c-body">
             <div class="c-name">{{ g.name }}</div>
-            <div class="c-sub">{{ collectorSub(g) }}</div>
-            <!-- The subtitle above states the fact; this is what to do about it.
-                 A collector's outlet could be paired nowhere but the build canvas
-                 until 2026-08-25 — so the one thing this card cannot do anything
-                 about was also the one thing it wouldn't tell you how to fix. -->
-            <a class="fixlink" *ngIf="g.noPlug && g.collectorId"
+            <!-- The same line, twice: as a link when the fix is a screen away,
+                 as plain text otherwise. A collector's outlet could be paired
+                 nowhere but the build canvas until 2026-08-25 — so the one thing
+                 this card cannot do anything about was also the one thing it
+                 wouldn't tell you how to fix. -->
+            <a class="c-sub" *ngIf="g.noPlug && g.collectorId"
                [routerLink]="['/tools']" [queryParams]="{ el: g.collectorId }"
-               [title]="'Pair a smart outlet with ' + g.name + ', so DustGate can start it'">
-              Pair an outlet →
-            </a>
+               [title]="'Pair a smart outlet with ' + g.name + ', so DustGate can start it'"
+               >{{ collectorSub(g) }}</a>
+            <div class="c-sub" *ngIf="!(g.noPlug && g.collectorId)">{{ collectorSub(g) }}</div>
           </div>
           <div class="ccol">
             <!-- State, on the same axis as the tool rows: is this thing moving
@@ -386,33 +404,34 @@ const POLL_MS = 2000;
 
         <div class="label">Tools</div>
         <div class="rows">
-          <!-- The ROW is the button — it always was. What changed is that the
-               right-hand side no longer pretends to be a second one, and that the
-               card around it is now a wrapper: a button cannot contain a link, so
-               the row and its "pair an outlet" link are siblings. -->
+          <!-- The ROW is a button — tapping it hand-runs the tool — but its text
+               is no longer INSIDE that button, because one line of the text is a
+               link and a button cannot contain one. The button is a transparent
+               hit area under the text instead; it carries its own label, since it
+               no longer has any of its own. -->
           <div class="rowwrap" *ngFor="let t of g.tools"
                [class.collecting]="toolChipTone(t, g) === 'go'"
                [class.waiting]="toolChipTone(t, g) === 'wait'"
+               [class.locked]="!ready"
                [class.inert]="t.orphan">
-            <button class="row" [class.locked]="!ready"
-                    [disabled]="t.orphan"
-                    (click)="toggle(t)"
-                    [attr.aria-pressed]="t.on">
+            <div class="row">
+              <button class="hit"
+                      [disabled]="t.orphan"
+                      (click)="toggle(t)"
+                      [attr.aria-pressed]="t.on"
+                      [attr.aria-label]="(t.on ? 'Stop ' : 'Run ') + t.name"></button>
               <div class="r-body">
                 <div class="r-name">{{ t.name }}</div>
-                <div class="r-src">{{ sourceLine(t, g) }}</div>
+                <!-- Not shown as a link on an orphan — its subtitle is about the
+                     LAYOUT, and an outlet would not help it. -->
+                <div class="r-src" *ngIf="!pairable(t)">{{ sourceLine(t, g) }}</div>
+                <div class="r-src pair" *ngIf="pairable(t)">{{ sourceLead(t)
+                  }}<a [routerLink]="['/tools']" [queryParams]="{ el: t.id }"
+                       [title]="'Pair a smart outlet with ' + t.name + ', so it starts collection on its own'"
+                       >{{ pairHint }}</a>{{ sourceTail(t, g) }}</div>
               </div>
               <span class="chip" [class]="'chip ' + toolChipTone(t, g)">{{ toolChipText(t, g) }}</span>
-            </button>
-            <!-- Same errand as the collector card's: the subtitle says "no outlet
-                 paired", and this is the way to the screen that pairs one. Not
-                 shown on an orphan — its subtitle is about the LAYOUT, and an
-                 outlet would not help it. -->
-            <a class="fixlink" *ngIf="!t.auto && !t.orphan"
-               [routerLink]="['/tools']" [queryParams]="{ el: t.id }"
-               [title]="'Pair a smart outlet with ' + t.name + ', so it starts collection on its own'">
-              Pair an outlet →
-            </a>
+            </div>
           </div>
           <div class="rows-empty" *ngIf="!g.tools.length">Nothing plumbed into this one yet.</div>
         </div>
@@ -543,7 +562,11 @@ export class LiveViewComponent implements OnInit, OnDestroy {
    * fault.
    */
   collectorSub(g: SystemGroup): string {
-    if (g.noPlug) return 'No outlet paired — there is nothing to switch';
+    // Not "no outlet paired" — that names the state and stops. The one line
+    // this card has says the state AND the fix in the same breath, and IS the
+    // way there (the template links it), which is what a second line of link
+    // text used to be spent on.
+    if (g.noPlug) return 'Manual · ' + this.pairHint;
     // The one hard rule this project has. Said plainly, because a blower running
     // into a sealed system is the thing you stop what you are doing to fix.
     if (g.deadHead) return 'Running with nothing open — stop it';
@@ -724,33 +747,66 @@ export class LiveViewComponent implements OnInit, OnDestroy {
    * the answer is always "go and switch that one off".
    */
   sourceLine(t: ToolRow, g?: SystemGroup): string {
-    if (t.orphan) return 'Not plumbed into a system yet';
+    return this.sourceHow(t) + this.sourceTail(t, g);
+  }
 
-    // How it came on. `manual` is the device's own account and beats our guess
-    // from the layout; absent (the mock never sends it) falls back to whether a
-    // plug exists at all, which is what this line has always said.
-    // "Manual" alone says what, never why — and the why is a setup fact the
-    // reader can act on: nothing is paired, so nothing can sense this tool
-    // starting. Said on every manual row, not just an unexpected one.
-    const how = t.manual ? 'Switched on by hand'
-              : t.auto   ? (t.on ? 'Auto · sensing power' : 'Auto')
-                         : 'Manual · no outlet paired';
+  /**
+   * Whether this row's line is a LINK — the unpaired case, where the whole
+   * reason it says anything is that a screen elsewhere fixes it.
+   *
+   * Same condition the standalone "Pair an outlet →" link carried before the
+   * two collapsed into one line: paired tools have nothing to fix, and an
+   * orphan's problem is the layout, which an outlet would not help.
+   */
+  pairable(t: ToolRow): boolean { return !t.auto && !t.orphan; }
+
+  /** The words the link itself is made of, so the two renderings can't drift. */
+  readonly pairHint = 'pair an outlet to automate';
+
+  /** What comes before the link on a pairable row. */
+  sourceLead(t: ToolRow): string {
+    return (t.manual ? 'Switched on by hand' : 'Manual') + ' · ';
+  }
+
+  /**
+   * How it came on. `manual` is the device's own account and beats our guess
+   * from the layout; absent (the mock never sends it) falls back to whether a
+   * plug exists at all, which is what this line has always said.
+   *
+   * "Manual" alone says what, never why — and the why is a setup fact the reader
+   * can act on: nothing is paired, so nothing can sense this tool starting. Say
+   * the FIX rather than the fact, in the line that's already there. Said on
+   * every unpaired row, not just an unexpected one.
+   */
+  private sourceHow(t: ToolRow): string {
+    if (t.orphan) return 'Not plumbed into a system yet';
+    if (this.pairable(t)) return this.sourceLead(t) + this.pairHint;
+    return t.manual ? 'Switched on by hand'
+                    : (t.on ? 'Auto · sensing power' : 'Auto');
+  }
+
+  /**
+   * What follows the "how", whether or not the how is a link — so the link can
+   * be one element in the middle of the line and this can be the text after it.
+   */
+  sourceTail(t: ToolRow, g?: SystemGroup): string {
+    if (t.orphan) return '';
 
     if (t.collecting) {
       // Its gate is open and the blower is not turning: the fault is upstairs,
       // so say so here rather than leaving someone to check this tool.
-      if (g?.plug === 'notStarting') return how + ' · ' + g.name + " isn't running";
+      if (g?.plug === 'notStarting') return ' · ' + g.name + " isn't running";
       // A machine is ONE box however many ports it has, so a lost overarm does
       // not get its own row or its own chip — but it is still worth saying.
-      return t.partial ? how + ' · second port is shut' : how;
+      return t.partial ? ' · second port is shut' : '';
     }
-    if (!t.on) return how;
+    if (!t.on) return '';
 
     const winner = g?.activeName;
-    if (winner && winner !== t.name) return how + ' · ' + winner + ' has the gate';
+    if (winner && winner !== t.name) return ' · ' + winner + ' has the gate';
     // On, not collecting, and nothing else won either: the blower for this
     // system isn't running yet, or the layout won't let it.
-    return how + ' · no clear path to the collector';
+    return ' · no clear path to the collector';
   }
 
   async toggle(t: ToolRow): Promise<void> {

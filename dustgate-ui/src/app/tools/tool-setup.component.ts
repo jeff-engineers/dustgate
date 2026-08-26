@@ -29,10 +29,10 @@ import { type ShopDoc, type RawEl as DocEl, collectorOf, isPortSupplemental, mac
 //
 // SPLIT BY SYSTEM, and each system's COLLECTOR heads its own group (2026-08-25).
 // Two reasons, and only the second is about tidiness. The first: a collector's
-// outlet could be paired nowhere but the build canvas, so the shop page's "No
-// outlet paired — there is nothing to switch" sent you to a layout tool to fix a
-// wiring fact. It links here now (`?el=<id>`, see deep-link.ts), and the row it
-// lands on has to exist. The second: which blower a tool breathes through is the
+// outlet could be paired nowhere but the build canvas, so the shop page's "no
+// outlet paired" sent you to a layout tool to fix a wiring fact. Its subtitle is
+// a link here now — "Manual · pair an outlet to automate", `?el=<id>`, see
+// deep-link.ts — and the row it lands on has to exist. The second: which blower a tool breathes through is the
 // most useful thing to know about it, and a flat list threw that away — the same
 // argument the shop page made when it grouped.
 

@@ -2,8 +2,8 @@
 //
 // `/tools?el=<id>` opens that piece's pairing panel on arrival instead of the
 // list. It exists so the shop page can stop naming a setup fact and leaving you
-// to go find the screen that fixes it: "No outlet paired" is a link now, and
-// this is where it lands.
+// to go find the screen that fixes it: "pair an outlet to automate" IS the link
+// there — the row's own subtitle — and this is where it lands.
 //
 // The awkward part is that `<id>` arrives from a screen that speaks a DIFFERENT
 // vocabulary. The shop list is a list of MACHINES (a table saw with a cabinet
