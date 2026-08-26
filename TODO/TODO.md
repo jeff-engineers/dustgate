@@ -7,17 +7,7 @@ Anything with a plan behind it lives in `docs/` and is linked from here rather
 than restated. Delete an item when it lands; the git history is the record.
 
 ## Bugs
-- **A tool is overlapping a gate** — see `Screenshot 2026-08-16 at 7.06.02 AM.png`
-  next to this file. **Not reproduced on the current canvas (looked 2026-08-25).**
-  The screenshot is of a canvas that no longer exists: boards on a pinned rail
-  above the grid, a circle collector with an impeller, `⊕` side handles — all
-  three came out afterwards. Every drag path goes through `roomAt()`/`occupantAt()`
-  now and refuses an occupied cell. The one place left that can silently hand back
-  an occupied one is `freeCellBelow()`'s last-resort `return cell`
-  (build.component.ts), reached only when 256 columns of the band AND the whole row
-  are full — the shape of the old bug, but not obviously reachable. **Wants a fresh
-  repro on the current canvas before it is worth chasing**; if it can't be
-  reproduced, delete this and the screenshot.
+
 
 ## UI
 
@@ -81,7 +71,7 @@ than restated. Delete an item when it lands; the git history is the record.
     "412 W" state has been reasoned about, not seen.
   - The Live view's collector card still draws the old impeller spiral as its
     icon (live.component.ts, `.cyc`). The canvas and that card no longer agree,
-    and the card is the other place a collector is drawn.
+    and the card is the other place a collector is drawn. -- I'm actually OK with this -Jeffs
 
 - **Hover tooltips on the canvas glyphs.** Primary vs secondary port, the 1–4
   numbered outlet icons, probably others. Low priority — and hover can't be the
