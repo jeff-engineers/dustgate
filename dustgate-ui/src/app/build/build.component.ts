@@ -19,7 +19,7 @@ import {
 import {
   type ShopDoc, type ShopSystem,
   addMachineWithPort, addSupplementalPort, addSystem, isPortSupplemental, machineById, machineOfPort,
-  machinesOf, NEW_MACHINE_NAME, outletExcludes, outletOf, portsOf, primaryPortOf,
+  machinesOf, NEW_MACHINE_NAME, outletExcludes, outletOf, portsOf, primaryPortOf, setOutlet,
   removeMachine, removePort,
   renameMachine,
   supplementalCount,
@@ -275,6 +275,15 @@ interface MenuOption { kind: MenuKind; label: string; enabled: boolean; note?: s
 const isUnitKind = (kind: unknown): boolean => kind === 'linear' || kind === 'servoManifold';
 /** Undo depth. Snapshots are a few KB of JSON each — this is cheap. */
 const HISTORY_MAX = 60;
+
+/**
+ * How far a press may wander and still count as a TAP, in screen pixels.
+ *
+ * Shared by the two press-or-drag gestures on this canvas — a tray chip and an
+ * output dot — because they were not shared, and the chip had no slop at all: a
+ * single stray pointermove made it a drag, which on a touchscreen is every tap.
+ */
+const DRAG_SLOP = 8;
 /** Grid cells a fitting takes up: a unit is one horizontal bar N cells wide. */
 const spanFor = (kind: MenuKind): number => kind === 'linear' ? 4 : kind === 'servoManifold' ? 2 : 1;
 
@@ -486,7 +495,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     // Sweep for plugs ONCE, and only when there's a job for them: a machine on the
     // canvas with nothing paired to it. A shop that's fully wired opens without an
     // mDNS sweep and without a tray.
-    if (this.unpairedMachines().length) void this.scanOutlets();
+    if (this.unpairedTargets().length) void this.scanOutlets();
     this.livePoll = setInterval(() => {
       void this.api.getStatus().then(st => this.applyLive(st)).catch(() => { /* offline */ });
     }, 2000);
@@ -857,7 +866,18 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   chipTakeAsking = false;
   scanning = false;
   scanned = false;
-  chipDrag: { outlet: DiscoveredOutlet; x: number; y: number; moved: boolean; over: string | null } | null = null;
+  chipDrag: {
+    outlet: DiscoveredOutlet; x: number; y: number;
+    /** Where the press landed — a tap is measured from here. See chipMove. */
+    x0: number; y0: number;
+    moved: boolean; over: string | null;
+  } | null = null;
+
+  /** The ghost only exists once the gesture IS a drag. Drawing it on pointerdown
+   *  put a plug under the finger of someone who was only tapping. */
+  get ghostChip(): { outlet: DiscoveredOutlet; x: number; y: number } | null {
+    return this.chipDrag?.moved ? this.chipDrag : null;
+  }
 
   /** Hidden until there is something to say — an empty strip under a fresh canvas
    *  is furniture. Appears while scanning, and afterwards for as long as there is
@@ -865,7 +885,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   get showTray(): boolean {
     if (this.scanning) return true;
     if (!this.scanned) return false;
-    return this.freeOutlets().length > 0 || this.unpairedMachines().length > 0;
+    return this.freeOutlets().length > 0 || this.unpairedTargets().length > 0;
   }
 
   async scanOutlets(): Promise<void> {
@@ -907,15 +927,36 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   }
   chipWatts(o: DiscoveredOutlet): string { return this.fmtW(o.powerW); }
 
-  /** Machines with no plug yet — what Match by name has to work with. */
-  private unpairedMachines(): { id: string; name: string }[] {
+  /**
+   * Everything still waiting for an outlet — machines AND collectors.
+   *
+   * Collectors were missing, and they are the ones that matter most: the shop
+   * page nags about an unpaired blower ("No outlet paired — there is nothing to
+   * switch") and this tray both under-counted it and refused to place it. Match
+   * by name never paired one either, which is a shame — a Shelly called "Cyclone"
+   * beside a collector called "Cyclone" is the easiest match on the page.
+   *
+   * Keyed by ELEMENT id — a machine's primary port, a collector's own element —
+   * because that is what setOutlet() takes and what the docks are labelled with.
+   */
+  private unpairedTargets(): { id: string; name: string }[] {
     const doc = this.topo as unknown as ShopDoc;
-    return machinesOf(doc)
-      .filter(m => !((m.sensor as RawEl | undefined)?.['outlet']))
-      .map(m => ({ id: m.id as string, name: (m.name as string) || (m.id as string) }));
+    const out: { id: string; name: string }[] = [];
+    for (const m of machinesOf(doc)) {
+      if ((m.sensor as RawEl | undefined)?.['outlet']) continue;
+      const port = primaryPortOf(doc, m.id as string);
+      if (port) out.push({ id: port['id'] as string, name: (m.name as string) || (m.id as string) });
+    }
+    for (const e of this.allElems()) {
+      const el = e as RawEl;
+      if (el['type'] !== 'collector') continue;
+      if ((el['control'] as RawEl | undefined)?.['outlet']) continue;
+      out.push({ id: el['id'] as string, name: (el['name'] as string) || 'Dust collector' });
+    }
+    return out;
   }
 
-  canMatch(): boolean { return this.freeOutlets().length > 0 && this.unpairedMachines().length > 0; }
+  canMatch(): boolean { return this.freeOutlets().length > 0 && this.unpairedTargets().length > 0; }
 
   trayNote(): string {
     if (this.armedTool) {
@@ -923,7 +964,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       return `tap the outlet powering the ${n?.name ?? 'tool'}`;
     }
     if (this.matchNote) return this.matchNote;
-    const left = this.unpairedMachines().length;
+    const left = this.unpairedTargets().length;
     return `${this.freeOutlets().length} free · ${left} to place`;
   }
   private matchNote = '';
@@ -933,40 +974,80 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
    *  perfect one wanted. See outlet-match.ts. */
   matchByName(): void {
     const free = this.freeOutlets().map(o => ({ id: o.ip, name: o.name || o.hostname }));
-    const pairs = matchAll(free, this.unpairedMachines());
+    // matchAll is name-blind about what it is pairing — `machineId` on the way out
+    // is just "the other id", and here it is an element's.
+    const pairs = matchAll(free, this.unpairedTargets());
     for (const p of pairs) {
       const o = this.outlets.find(x => x.ip === p.outletId);
-      if (o) this.pairPlug(o, p.machineId);
+      if (o) this.pairOutlet(o, p.machineId);
     }
-    const left = this.unpairedMachines().length;
+    const left = this.unpairedTargets().length;
     this.matchNote = pairs.length
       ? `paired ${pairs.length}${left ? ` · ${left} to drag` : ' · all done'}`
       : 'no clear name match — drag them across';
     if (pairs.length) { this.afterMutation(null); }
   }
 
-  /** Write a plug onto a MACHINE. Threshold seeded from what it's drawing right
-   *  now, ~10% under so it clears standby but still trips — the same guess the
-   *  pairing sheet makes. */
-  private pairPlug(o: DiscoveredOutlet, machineId: string): void {
+  /**
+   * Write an outlet onto whatever the tray was aimed at, by ELEMENT id.
+   *
+   * By element, and that is the fix. Every caller had one — the docks are
+   * labelled with element ids — and every caller then went through
+   * machineOfPort() to reach a machine. A COLLECTOR has no machine, so the lookup
+   * returned null and the handler fell out silently: arming the Cyclone made the
+   * tray say "tap the outlet powering the Cyclone" and then ignore every chip you
+   * tapped, and dragging one onto its dock did nothing either. setOutlet() has
+   * known the asymmetry all along (a tool's sensor lives on its machine, a
+   * collector's switch on the element), so going through it is both the fix and
+   * one less place that has to remember.
+   *
+   * The role split that is LEFT is the threshold: a tool's outlet is watched and
+   * needs one, a collector's is commanded and must not have one at all.
+   */
+  private pairOutlet(o: DiscoveredOutlet, elementId: string): boolean {
     const doc = this.topo as unknown as ShopDoc;
-    const m = machinesOf(doc).find(x => x.id === machineId);
-    if (!m) return;
+    const el = this.elem(elementId);
+    if (!el || (el['type'] !== 'tool' && el['type'] !== 'collector')) return false;
     const outlet: RawEl = { gen: o.generation || 2, ip: o.ip };
     if (o.hostname) outlet['host'] = o.hostname;
-    outlet['thresholdW'] = o.powerW >= 5 ? Math.max(10, Math.round(o.powerW * 0.9 / 10) * 10) : 50;
-    (m as unknown as RawEl)['sensor'] = { outlet };
+    // Cached beside the pairing, as both the sheet and the tools list already do —
+    // it is what keeps a name on screen for an outlet that is switched off or
+    // missed the last sweep.
+    if (o.name) outlet['name'] = o.name;
+    if (el['type'] !== 'collector') {
+      // Seeded from what it is drawing right now, ~10% under so it clears standby
+      // but still trips — the same guess the pairing sheet makes.
+      outlet['thresholdW'] = o.powerW >= 5 ? Math.max(10, Math.round(o.powerW * 0.9 / 10) * 10) : 50;
+    }
+    setOutlet(doc, el, outlet);
+    return true;
   }
 
   // ── dragging a chip onto a tool ──────────────────────────────────────────────
   onChipDown(evt: PointerEvent, o: DiscoveredOutlet): void {
     evt.preventDefault();
-    this.chipDrag = { outlet: o, x: evt.clientX, y: evt.clientY, moved: false, over: null };
+    this.chipDrag = {
+      outlet: o, x: evt.clientX, y: evt.clientY,
+      x0: evt.clientX, y0: evt.clientY, moved: false, over: null,
+    };
     window.addEventListener('pointermove', this.chipMove);
     window.addEventListener('pointerup', this.chipUp);
+    // The browser can take the gesture away mid-drag — a second finger, a scroll
+    // it decides to own. Without this the release never arrives, so the ghost
+    // stays stuck under the pointer and the listeners leak.
+    window.addEventListener('pointercancel', this.chipUp);
   }
   private chipMove = (evt: PointerEvent): void => {
     if (!this.chipDrag) return;
+    // A TAP IS ALLOWED TO WOBBLE. Any pointermove at all used to promote the
+    // gesture to a drag — and a tap that wanders one pixel is every tap on a
+    // touchscreen and most on a trackpad. The release then found `moved` true
+    // with no dock underneath, took neither the drag branch nor the tap branch,
+    // and did nothing whatsoever: the armed tool stayed armed and the tray went
+    // on inviting a tap that could never land. Same slop the output-dot drag has
+    // used all along, a few lines down.
+    if (!this.chipDrag.moved
+        && Math.hypot(evt.clientX - this.chipDrag.x0, evt.clientY - this.chipDrag.y0) <= DRAG_SLOP) return;
     this.chipDrag.moved = true;
     this.chipDrag.x = evt.clientX; this.chipDrag.y = evt.clientY;
     // Hit-test against the real DOM rather than doing the inverse transform by
@@ -976,11 +1057,15 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     this.chipDrag.over = dock ? (dock.getAttribute('data-tool') ?? null) : null;
     this.zone.run(() => { /* repaint the ghost */ });
   };
-  private chipUp = (): void => {
+  private chipUp = (evt?: Event): void => {
     window.removeEventListener('pointermove', this.chipMove);
     window.removeEventListener('pointerup', this.chipUp);
+    window.removeEventListener('pointercancel', this.chipUp);
     const d = this.chipDrag; this.chipDrag = null;
     if (!d) return;
+    // Cancelled, not released: nothing was dropped anywhere, so nothing pairs and
+    // nothing opens. Clearing chipDrag above is the whole job.
+    if (evt?.type === 'pointercancel') return;
     const target = d.over ?? (d.moved ? null : this.armedTool);
     if (!target) {
       // A tap on a chip with no tool armed used to do nothing at all. It is the
@@ -990,9 +1075,10 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       if (!d.moved) this.startChipRename(d.outlet);
       return;
     }
-    const machine = machineOfPort(this.topo as unknown as ShopDoc, this.elem(target));
-    if (!machine) return;
-    this.pairPlug(d.outlet, machine.id as string);
+    // Aimed at something that takes no outlet — a gate, a junction. Leave the tool
+    // armed rather than clearing it: the gesture missed, and the next tap should
+    // still land.
+    if (!this.pairOutlet(d.outlet, target)) return;
     this.armedTool = null; this.matchNote = '';
     this.afterMutation(null);
   };
@@ -1009,13 +1095,33 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   /** Every machine this plug could be put on. Machines that already have one are
    *  listed too, and say so — picking one replaces its plug, which is the same
    *  thing dropping a chip on an occupied tool already does. */
-  pairableMachines(): Array<{ id: string; label: string }> {
+  /**
+   * Everything this outlet could be paired with, from the chip's own dialog —
+   * already-paired ones included, flagged, because re-pairing is a real errand.
+   *
+   * Collectors are in the list for the same reason they are in unpairedTargets():
+   * the dropdown offered machines only, so the one outlet the shop page complains
+   * about could not be chosen here either. Element ids, like everything else that
+   * feeds pairOutlet().
+   */
+  pairableTargets(): Array<{ id: string; label: string }> {
     const doc = this.topo as unknown as ShopDoc;
-    return machinesOf(doc).map(m => {
+    const flag = (name: string, paired: boolean): string =>
+      paired ? `${name} (replaces its current outlet)` : name;
+    const out: Array<{ id: string; label: string }> = [];
+    for (const m of machinesOf(doc)) {
+      const port = primaryPortOf(doc, m.id as string);
+      if (!port) continue;
       const ip = ((m.sensor as RawEl | undefined)?.['outlet'] as RawEl | undefined)?.['ip'] as string | undefined;
-      const name = (m.name as string) || (m.id as string);
-      return { id: m.id as string, label: ip ? `${name} (replaces its current outlet)` : name };
-    });
+      out.push({ id: port['id'] as string, label: flag((m.name as string) || (m.id as string), !!ip) });
+    }
+    for (const e of this.allElems()) {
+      const el = e as RawEl;
+      if (el['type'] !== 'collector') continue;
+      const ip = ((el['control'] as RawEl | undefined)?.['outlet'] as RawEl | undefined)?.['ip'] as string | undefined;
+      out.push({ id: el['id'] as string, label: flag((el['name'] as string) || 'Dust collector', !!ip) });
+    }
+    return out;
   }
 
   /** The sentence naming who goes quiet — from the shared claim model, so this
@@ -1088,7 +1194,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
         o.name = v;
       }
       if (this.chipTool) {
-        this.pairPlug(o, this.chipTool);
+        this.pairOutlet(o, this.chipTool);
         this.armedTool = null; this.matchNote = '';
         this.afterMutation(null);
       }
@@ -2373,7 +2479,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   }
   private onODotMove(evt: PointerEvent): void {
     if (!this.odrag) return;
-    if (Math.hypot(evt.clientX - this.odrag.x0, evt.clientY - this.odrag.y0) > 8) this.odrag.moved = true;
+    if (Math.hypot(evt.clientX - this.odrag.x0, evt.clientY - this.odrag.y0) > DRAG_SLOP) this.odrag.moved = true;
     // Remembered so the release can ask what is under the pointer. Without it a
     // stub could only ever grow into its own cell, and "drag from any open end"
     // would exclude the one straight off a manifold, collector or slider.

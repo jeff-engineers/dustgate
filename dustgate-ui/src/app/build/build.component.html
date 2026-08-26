@@ -385,6 +385,11 @@
      a tool's plug row, or tap a row to arm it and then tap a chip — same
      pairing, minus the drag, which is what a phone wants.
 
+     A COLLECTOR's row takes both, same as a tool's. It didn't until 2026-08-25:
+     the drop handler reached for the dropped-on element's MACHINE, and a
+     collector has none, so the tray said "tap the outlet powering the Cyclone"
+     and then quietly ignored every chip you tapped.
+
      ONE LINE PER PLUG: its name, and its draw only when it's drawing. The IP
      and any name-match hint are in the tooltip. They were on the chip at first
      and turned a glanceable strip into three rows of prose. -->
@@ -394,8 +399,8 @@
   <div class="chips">
     <button *ngFor="let o of freeOutlets()" class="chip" [attr.data-level]="chipLevel(o)"
             [title]="o.hostname + ' · ' + o.ip + (armedTool
-                       ? ' — tap to pair it with the armed tool'
-                       : ' — drag onto a tool to pair it, or tap to rename it')"
+                       ? ' — tap to pair it with the armed piece'
+                       : ' — drag it onto a tool or a collector to pair it, or tap to rename it')"
             (pointerdown)="onChipDown($event, o)">
       <svg class="face" viewBox="0 0 24 24"><rect class="shell" x="3.5" y="3.5" width="17" height="17" rx="5"/><rect class="slot" x="8.4" y="7.6" width="2.1" height="5.6" rx="1"/><rect class="slot" x="13.5" y="7.6" width="2.1" height="5.6" rx="1"/><circle class="slot" cx="12" cy="16.4" r="1.5"/></svg>
       <span class="nm">{{ o.name || o.hostname }}</span>
@@ -410,8 +415,10 @@
     {{ scanning ? '…' : '↻' }}
   </button>
 </div>
-<!-- The chip under the pointer while dragging one onto a machine. -->
-<div class="chip ghost" *ngIf="chipDrag as cd" [style.left.px]="cd.x" [style.top.px]="cd.y">
+<!-- The chip under the pointer while dragging one onto a machine. `ghostChip`,
+     not `chipDrag`: the gesture is not a drag until it has travelled, and drawing
+     this on pointerdown put a plug under the finger of someone who was tapping. -->
+<div class="chip ghost" *ngIf="ghostChip as cd" [style.left.px]="cd.x" [style.top.px]="cd.y">
   <svg class="face" viewBox="0 0 24 24"><rect class="shell" x="3.5" y="3.5" width="17" height="17" rx="5"/><rect class="slot" x="8.4" y="7.6" width="2.1" height="5.6" rx="1"/><rect class="slot" x="13.5" y="7.6" width="2.1" height="5.6" rx="1"/><circle class="slot" cx="12" cy="16.4" r="1.5"/></svg>
   <span>{{ cd.outlet.name || cd.outlet.hostname }}</span>
 </div>
@@ -501,7 +508,7 @@
     <select id="chip-tool" class="rn-in" [(ngModel)]="chipTool"
             title="Pair this outlet with a tool, so DustGate knows when that tool is running.">
       <option value="">— not yet —</option>
-      <option *ngFor="let m of pairableMachines()" [value]="m.id">{{ m.label }}</option>
+      <option *ngFor="let m of pairableTargets()" [value]="m.id">{{ m.label }}</option>
     </select>
 
     <button class="rn-take" *ngIf="rc.takeable && rc.reachable"
