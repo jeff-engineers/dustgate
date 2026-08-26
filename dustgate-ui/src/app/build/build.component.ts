@@ -19,7 +19,8 @@ import {
 import {
   type ShopDoc, type ShopSystem,
   addMachineWithPort, addSupplementalPort, addSystem, isPortSupplemental, machineById, machineOfPort,
-  machinesOf, NEW_MACHINE_NAME, outletOf, portsOf, primaryPortOf, removeMachine, removePort,
+  machinesOf, NEW_MACHINE_NAME, outletExcludes, outletOf, portsOf, primaryPortOf,
+  removeMachine, removePort,
   renameMachine,
   supplementalCount,
   systemById, systemsOf, systemViews, toShop,
@@ -1314,39 +1315,12 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     this.outletTool = JSON.parse(JSON.stringify(target)) as RawEl;
     // Computed once, on open, rather than from the template: a getter would hand
     // the child freshly-allocated arrays on every change-detection pass.
-    const ex = this.outletExcludes(id);
+    // Which outlets are already spoken for lives in shop-doc, not here: the tools
+    // list opens this same sheet for a collector now, and two copies of the rule
+    // would become two answers the first time one of them was taught something.
+    const ex = outletExcludes(this.topo as unknown as ShopDoc, id);
     this.outletExcludeIps = ex.ips;
     this.outletExcludeReason = ex.reason;
-  }
-
-  /** Plugs that can't be picked for `toolId`, and why. One physical outlet driving
-   *  two tools would make the routing brain believe two machines started at once;
-   *  the collector's own switch is off-limits for the obvious reason. */
-  private outletExcludes(me: string): { ips: string[]; reason: Record<string, string> } {
-    const ips: string[] = [];
-    const reason: Record<string, string> = {};
-    for (const e of this.allElems()) {
-      const el = e as RawEl;
-      if (el['type'] === 'collector') {
-        // …unless the collector IS what's being configured: its own plug has to
-        // stay pickable, or re-opening the sheet greys out the current choice.
-        if (el['id'] === me) continue;
-        const dc = ((el['control'] as RawEl | undefined)?.['outlet'] as RawEl | undefined)?.['ip'] as string | undefined;
-        if (dc) { ips.push(dc); reason[dc] = 'reserved — dust collector'; }
-        continue;
-      }
-    }
-    // Tool plugs live on MACHINES now, and the exclusion is per machine too: a
-    // machine's ports share one plug by design, so two ports of the same saw are
-    // not a clash — two different machines are.
-    const doc = this.topo as unknown as ShopDoc;
-    const myMachine = machineOfPort(doc, this.elem(me))?.id ?? me;
-    for (const m of machinesOf(doc)) {
-      if (m.id === myMachine) continue;
-      const ip = (m.sensor?.outlet as RawEl | undefined)?.['ip'] as string | undefined;
-      if (ip) { ips.push(ip); reason[ip] = `already paired with ${m.name || 'another tool'}`; }
-    }
-    return { ips, reason };
   }
 
   /** Splice the paired tool back in. Shares onConfigured's path deliberately: a
@@ -1475,8 +1449,8 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       // A loose end dropped ON a machine that already has a duct is not a collision
       // — it is the second-port gesture. Checked before canPlace(), which would
       // otherwise refuse it as "already in that cell".
-      const onto = moved ? this.machineAtCell(col, row) : null;
-      if (onto && n.glyph === 'junction' && this.childrenOf(n.id).length === 0) {
+      const onto = moved ? this.secondPortDrop(n, col, row) : null;
+      if (onto) {
         n.dragX = undefined; n.dragY = undefined;
         this.askSecondaryPort(onto, { kind: 'end', endId: n.id });
         this.dragId = null; this.hoverCell = null; this.dropBlocked = ''; this.dropWarn = '';
@@ -1543,6 +1517,20 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
    * board.
    */
   private placeCheck(n: NodeVM, col: number, row: number): { blocked: string; warn: string } {
+    // THE SECOND-PORT GESTURE, and it outranks both refusals below — which is
+    // exactly where onUp() puts it. Above the collision check because the machine
+    // standing there is the TARGET, not an obstacle; above the band check because a
+    // secondary port's run is the one thing allowed to cross the seam between two
+    // systems (see the design constraints in CLAUDE.md), and the drop has always
+    // honoured that even while this said otherwise.
+    const second = this.secondPortDrop(n, col, row);
+    if (second) {
+      const name = (machineById(this.topo as unknown as ShopDoc, second)?.name as string) || 'that machine';
+      // Said in full, because "you'll be asked" is what makes a drop on an occupied
+      // machine feel deliberate rather than like a slip that got away from you.
+      return { blocked: '', warn: `Drop here to give ${name} a second port — you'll be asked to name it.` };
+    }
+
     // A system owns a contiguous stripe of rows, and that's what makes the grey
     // ground drawable at all: the two never interleave, so the boundary is one row
     // rather than a shape. Refusing the drop keeps that true without the drag having
@@ -2210,6 +2198,15 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
 
   /** The piece a drag is hovering, so the drop target lights up before you commit. */
   dragHoverId(): string | null {
+    // A loose end being dragged onto a machine is the same gesture the outlet drag
+    // below performs, and it lit nothing up: the only feedback was the guidance
+    // line, and until this change that line was telling you the drop was refused.
+    const n = this.byId.get(this.dragId ?? '');
+    if (n && this.hoverCell) {
+      const m = this.secondPortDrop(n, this.hoverCell.col, this.hoverCell.row);
+      if (m) return this.nodes.find(x => x.glyph === 'tool'
+        && x.col === this.hoverCell!.col && x.row === this.hoverCell!.row)?.id ?? null;
+    }
     const at = (this.odrag?.moved && this.odrag.at) || (this.idrag?.moved && this.idrag.at);
     if (!at) return null;
     if (this.odrag) {
@@ -4360,6 +4357,23 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       return this.canTakeSecondaryPort(id) ? id! : null;
     }
     return null;
+  }
+
+  /**
+   * The machine a drop of `n` at (col,row) would give a SECOND PORT to, or null.
+   *
+   * ONE definition, because there used to be two and they disagreed. The drop
+   * itself (onUp) has checked for this gesture before canPlace() since the gesture
+   * existed; the mid-drag guidance (placeCheck) never learned about it, so the
+   * whole way across the machine the bar said "Table Saw is already in that cell"
+   * in refusal amber, the glyph went red — and then the drop worked anyway and
+   * asked you to name the port.
+   */
+  private secondPortDrop(n: NodeVM, col: number, row: number): string | null {
+    // A loose END only: a run end with nothing hanging off it is the thing the
+    // gesture moves. Anything else landing on an occupied cell is a collision.
+    if (n.glyph !== 'junction' || this.childrenOf(n.id).length !== 0) return null;
+    return this.machineAtCell(col, row);
   }
 
   /** Can `machineId` take another secondary port fed from a loose end? The drop target test

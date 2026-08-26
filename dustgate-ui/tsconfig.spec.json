@@ -39,6 +39,7 @@
     "src/app/services/wip-message.spec.ts",
     "src/app/gates/selector-types.spec.ts",
     "src/app/tools/outlet-match.spec.ts",
+    "src/app/tools/deep-link.spec.ts",
     "src/app/build/plug-label.spec.ts"
   ]
 }

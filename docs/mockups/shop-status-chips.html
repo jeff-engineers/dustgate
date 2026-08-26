@@ -70,6 +70,19 @@
   .t-name { font-size: 15.5px; font-weight: 500; }
   .t-sub { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
 
+  /* THE CARD IS A WRAPPER when the row carries a link.
+     The row is a <button> and a button cannot contain a link, so the two have to
+     be siblings — which means everything that draws the card moves out here and
+     the button becomes a transparent hit area on top of it. */
+  .tcard { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
+  .tcard .trow { background: none; border: 0; }
+  .tcard.waiting { border-color: rgba(240,165,0,0.55); }
+
+  /* "Go and fix that." Always a visible line of text, never a hover affordance. */
+  .fixlink { display: block; border-top: 1px solid var(--border); padding: 8px 14px;
+             font-size: 12px; color: var(--accent); text-decoration: none; }
+  .c-body .fixlink { border-top: 0; padding: 4px 0 0; }
+
   .trow.collecting { background: rgba(60,190,110,0.10); border-color: var(--success); }
   .trow.collecting .t-name { color: var(--success); }
   .trow.waiting { border-color: rgba(240,165,0,0.55); }
@@ -796,6 +809,7 @@
           <div class="c-body">
             <div class="c-name">Cyclone</div>
             <div class="c-sub">No outlet paired — there is nothing to switch</div>
+            <a class="fixlink" href="#">Pair an outlet →</a>
           </div>
           <div class="ccol">
             <span class="chip wait">No outlet</span>
@@ -853,6 +867,124 @@
       <b>Filter loading is still not here.</b> Nothing senses it, and the only available signals
       — a slowly rising baseline draw, accumulated runtime hours — are guesses dressed as
       measurements. Bin level is a different story entirely; see below.
+    </p>
+  </div>
+
+  <hr class="rule">
+
+  <!-- ── the setup fact is a link ───────────────────────────────────────── -->
+  <div class="sec">
+    <h2 class="eyebrow">A setup fact is a link, not a dead end</h2>
+    <p class="note">
+      Two lines on this page name something that is <em>not set up</em> and then stop:
+      <b>“No outlet paired — there is nothing to switch”</b> on a collector card, and
+      <b>“Manual · no outlet paired”</b> under a tool. Both are correct, both are actionable,
+      and until 2026-08-25 neither said where the action happens — you went looking for the
+      screen that pairs an outlet. The collector was worse than that: its outlet could be
+      paired <em>nowhere but the build canvas</em>, so the one thing the shop page could do
+      nothing about was also the one thing it wouldn’t point you at.
+    </p>
+
+    <div class="phones">
+      <div class="phone">
+        <p class="cap"><b>The collector.</b> The subtitle states the fact; the line under it is
+          what to do about it. It lands on that collector’s own pairing panel — not the top of
+          a setup screen with the hunt still ahead of you.</p>
+        <div class="collector warn">
+          <span class="cyc"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+            stroke-linecap="round" stroke-linejoin="round"><path d="M13 5a7 7 0 1 0 6 7"/>
+            <path d="M12 8a4 4 0 1 1-4 4"/><circle cx="12" cy="12" r="1.2" fill="currentColor" stroke="none"/></svg></span>
+          <div class="c-body">
+            <div class="c-name">Cyclone</div>
+            <div class="c-sub">No outlet paired — there is nothing to switch</div>
+            <a class="fixlink" href="#">Pair an outlet →</a>
+          </div>
+          <div class="ccol"><span class="chip wait">No outlet</span></div>
+        </div>
+
+        <div class="label">Tools</div>
+        <div class="rows">
+          <div class="tcard">
+            <div class="trow">
+              <div class="grow"><div class="t-name">Drum sander</div>
+                <div class="t-sub">Manual · no outlet paired</div></div>
+              <span class="chip off">Idle</span>
+            </div>
+            <a class="fixlink" href="#">Pair an outlet →</a>
+          </div>
+          <div class="trow">
+            <div class="grow"><div class="t-name">Planer</div><div class="t-sub">Auto</div></div>
+            <span class="chip off">Idle</span>
+          </div>
+        </div>
+        <p class="note" style="margin-top:12px">
+          A paired tool gets no link — there is nothing to fix. An <em>orphan</em> gets none
+          either: its subtitle is about the layout, and an outlet would not help it.
+        </p>
+      </div>
+
+      <div class="phone">
+        <p class="cap"><b>Where it lands.</b> The tools screen, split by system, with each
+          system’s <em>collector</em> as the row above its tools. That row is new: it is what
+          gives the collector’s link somewhere to go.</p>
+        <div class="head"><span class="back">‹</span><span class="title">Tools</span></div>
+        <div class="glabel">Dust collection</div>
+        <div class="grp">
+          <div class="srow">
+            <span class="cyc" style="width:30px;height:30px;border:1px solid var(--border)">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" style="width:17px;height:17px"
+                stroke-linecap="round" stroke-linejoin="round"><path d="M13 5a7 7 0 1 0 6 7"/>
+                <path d="M12 8a4 4 0 1 1-4 4"/><circle cx="12" cy="12" r="1.2" fill="currentColor" stroke="none"/></svg></span>
+            <div class="grow"><div class="s-name">Cyclone</div>
+              <div class="s-sub">Dust collector<br><span class="chip wait" style="padding:2px 9px;font-size:11px;margin-top:4px">No outlet paired</span></div></div>
+            <span class="locked">›</span>
+          </div>
+          <div class="srow">
+            <div class="grow"><div class="s-name">Drum sander</div>
+              <div class="s-sub">Ball valve · outlet 1</div></div>
+            <span class="locked">›</span>
+          </div>
+          <div class="srow">
+            <div class="grow"><div class="s-name">Planer</div>
+              <div class="s-sub">Ball valve · outlet 2</div></div>
+            <span class="locked">›</span>
+          </div>
+        </div>
+        <div class="glabel">Shop vacuum</div>
+        <div class="grp">
+          <div class="srow">
+            <span class="cyc" style="width:30px;height:30px;border:1px solid var(--border)">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" style="width:17px;height:17px"
+                stroke-linecap="round" stroke-linejoin="round"><path d="M13 5a7 7 0 1 0 6 7"/>
+                <path d="M12 8a4 4 0 1 1-4 4"/><circle cx="12" cy="12" r="1.2" fill="currentColor" stroke="none"/></svg></span>
+            <div class="grow"><div class="s-name">Shop vacuum</div>
+              <div class="s-sub">Dust collector</div></div>
+            <span class="locked">›</span>
+          </div>
+          <div class="srow">
+            <div class="grow"><div class="s-name">Bandsaw</div>
+              <div class="s-sub">Slide gate · outlet 3</div></div>
+            <span class="locked">›</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="banner">
+      <b>An unpaired collector is orange where an unpaired tool is grey, and that asymmetry is
+      deliberate.</b> A tool with no outlet is one you hand-run from the shop list — that works,
+      it is a whole legitimate way to own a machine, and nagging about it would be wrong. A
+      blower with no outlet is one <em>nothing on that page can switch on at all</em>. Same
+      words, different severity, and the two screens now say it in the same colour.
+    </div>
+
+    <p class="note">
+      <b>The lock had to be re-aimed.</b> An unfinished layout greys this page out so nothing
+      can drive hardware — and it greyed out the whole collector card and the whole tool list,
+      which is where these links now live. Mid-setup is exactly when someone needs them, so the
+      lock moved off the cards and onto the <em>controls</em>: the collector’s switch and the
+      tool row’s button. A link switches nothing on. The red banner at the top of the page is
+      what still says “none of this can run yet”, and it always was.
     </p>
   </div>
 
@@ -1284,6 +1416,26 @@
           <td>A tool that is <em>Manual</em> now says <b>why</b>: "Manual · no outlet paired".
             The mode without the cause left the reader with nothing to act on, and the cause is
             a setup fact they can fix.</td></tr>
+      <tr><td>2026-08-25</td>
+          <td>A setup fact on this page is a <b>link</b>. "No outlet paired" on a collector card
+            and "Manual · no outlet paired" under a tool both gain
+            <em>Pair an outlet →</em>, landing on that piece's own panel
+            (<code>/tools?el=&lt;id&gt;</code>). Naming a problem and leaving the reader to find
+            the screen that fixes it is the one thing this whole page exists not to do.</td></tr>
+      <tr><td>2026-08-25</td>
+          <td>Which meant <b>/tools had to be able to pair a COLLECTOR</b>, and it listed
+            <code>type === 'tool'</code> only — a collector's outlet could be set nowhere but the
+            build canvas, which is the trip the link exists to avoid. Each system's collector is
+            now the row above that system's tools, on the same pairing sheet the canvas opens
+            (its <em>switch</em> role — commanded, never sensed, so no threshold).</td></tr>
+      <tr><td>2026-08-25</td>
+          <td>The tool row's <b>card became a wrapper</b>. The row is a <code>&lt;button&gt;</code>
+            and a button cannot contain a link, so the row and the link are siblings and the card
+            styling moved out to hold them both.</td></tr>
+      <tr><td>2026-08-25</td>
+          <td><b>The unfinished-layout lock moved from the cards to the controls.</b> It exists so
+            nothing drives hardware; a link drives nothing, and an unfinished layout is precisely
+            when it is wanted. The red banner still carries "none of this can run yet".</td></tr>
       <tr><td>2026-08-24</td>
           <td>No blinking chips. The pixel uses blink rate only as a second-order detail inside a
             colour and never as the primary signal; a chip has words and needs no second

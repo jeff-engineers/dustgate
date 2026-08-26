@@ -8,7 +8,16 @@ than restated. Delete an item when it lands; the git history is the record.
 
 ## Bugs
 - **A tool is overlapping a gate** — see `Screenshot 2026-08-16 at 7.06.02 AM.png`
-  next to this file.
+  next to this file. **Not reproduced on the current canvas (looked 2026-08-25).**
+  The screenshot is of a canvas that no longer exists: boards on a pinned rail
+  above the grid, a circle collector with an impeller, `⊕` side handles — all
+  three came out afterwards. Every drag path goes through `roomAt()`/`occupantAt()`
+  now and refuses an occupied cell. The one place left that can silently hand back
+  an occupied one is `freeCellBelow()`'s last-resort `return cell`
+  (build.component.ts), reached only when 256 columns of the band AND the whole row
+  are full — the shape of the old bug, but not obviously reachable. **Wants a fresh
+  repro on the current canvas before it is worth chasing**; if it can't be
+  reproduced, delete this and the screenshot.
 
 ## UI
 
@@ -20,15 +29,8 @@ than restated. Delete an item when it lands; the git history is the record.
   new marking on the canvas, and there is no vocabulary for "this piece is the
   problem" yet.
 
-- **Dragging a duct** to a gate is still triggering the 'Toolname is already in
-  that cell' error message, this shouldn't happen ( we can put a warning
-  that this will trigger an auxilliary port)
-  
 - **Highlight ducts and wires when hovering over them** might also trigger this on 
   hover of tools/gates/etc - aka "show the airflow/electron path"
-
-- **The /tools and /gates pages should split by system, with anything unassigned 
-  listed in an "Unassigned" section after the systems
 
 - **We should probably expose /boards page** that behaves similarly to the tools and 
   gates page
@@ -40,9 +42,6 @@ than restated. Delete an item when it lands; the git history is the record.
   aSettings → Forget WiFi resets the PRIMARY only. Each node holds its own
   credentials and has no way to be re-pointed from the app, so a router swap means
   visiting every board in the shop.
-
-- **Add a 'Clear shop' button** Add this to the shop dropdown menu, go back to a single
-  dust collector with no connections
 
   It is not as bad as it looks — a node runs the same `WiFiProvisioner` as the
   primary, so a board that can't join within 12 s **at boot** raises its own
@@ -65,6 +64,9 @@ than restated. Delete an item when it lands; the git history is the record.
   problem — the primary can only reach the nodes on the OLD network, so anything
   that misses the message needs a defined fallback.
 
+- **Add a 'Clear shop' button** Add this to the shop dropdown menu, go back to a single
+  dust collector with no connections.
+
 - **Finish the collector barrel (2026-08-25).** The glyph itself LANDED — the
   canvas draws a 76x76 violet barrel carrying its own name and its own plug row,
   the impeller is gone, and the router's footprint grew with it
@@ -80,26 +82,6 @@ than restated. Delete an item when it lands; the git history is the record.
   - The Live view's collector card still draws the old impeller spiral as its
     icon (live.component.ts, `.cyc`). The canvas and that card no longer agree,
     and the card is the other place a collector is drawn.
-
-- **"No outlet paired" should be a link, on /shop.** Today the collector card
-  says "No outlet paired - there is nothing to switch" and an unpaired tool row
-  says "Manual - no outlet paired": both name a setup fact and then leave you to
-  go find the page that fixes it. Wanted: the short line plus a link straight to
-  that piece's pairing panel.
-  - /tools needs to accept a deep link (`?el=<id>`) that opens one piece's config
-    on arrival. It has none today.
-  - **A COLLECTOR has to be pairable there too** (decided 2026-08-25) - /tools
-    lists `type === 'tool'` only, so a collector's plug can be paired nowhere but
-    the build canvas, which is the trip this whole item exists to avoid. Give each
-    system's collector a row above that system's tools, same pairing panel. Lines
-    up with the "split /tools by system" item above; do them together.
-  - The obstacle worth knowing before starting: a tool ROW is itself a
-    `<button>` (tapping it hand-runs the tool), so a link cannot simply be nested
-    inside it. The row and the link have to become siblings in a wrapper that
-    carries the card styling.
-  - `docs/mockups/shop-status-chips.html` is the canonical page for this screen
-    and carries the current wording (line ~798) plus a decision log - update it
-    in the same change.
 
 - **Hover tooltips on the canvas glyphs.** Primary vs secondary port, the 1–4
   numbered outlet icons, probably others. Low priority — and hover can't be the

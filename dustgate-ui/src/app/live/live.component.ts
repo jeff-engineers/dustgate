@@ -6,7 +6,8 @@ import { airflowIssues } from '@topology';
 import { collectorPlugState } from '@topology-device';
 import { validateShop } from '@shop';
 import { configurableSelectorsOf, isCalibrated } from '../gates/selector-types';
-import { type ShopDoc, machinesOf, portsOf, primaryPortOf, systemsOf, systemViews, toShop } from '../services/shop-doc';
+import { type ShopDoc, machinesOf, portsOf, primaryPortOf, systemViews,
+         systemsInLayoutOrder, toShop } from '../services/shop-doc';
 
 /** What a tool row's chip says. One axis: is air reaching this tool? */
 type ToolChip = 'collecting' | 'nosuction' | 'waiting' | 'nogate' | 'idle';
@@ -50,6 +51,9 @@ interface ToolRow {
  */
 interface SystemGroup {
   id: string;
+  /** The collector ELEMENT's id, for the link to its pairing panel. Empty for the
+   *  orphan group, and for a system drawn without a collector yet. */
+  collectorId: string;
   name: string;
   tools: ToolRow[];
   on: boolean;
@@ -161,27 +165,52 @@ const POLL_MS = 2000;
 
     /* tool rows */
     .rows { display: flex; flex-direction: column; gap: 10px; }
+    /* THE WRAPPER CARRIES THE CARD, not the button inside it.
+       The row is a <button> — tapping it hand-runs the tool — so a link cannot be
+       nested in it; the two have to be siblings. Everything that draws the card
+       (surface, border, radius, the state washes) therefore lives out here, and
+       the button is a transparent hit area sitting on top of it. */
+    .rowwrap {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); transition: border-color 0.12s;
+    }
     .row {
       display: flex; align-items: center; gap: 12px;
-      background: var(--surface); border: 1px solid var(--border);
-      border-radius: var(--radius); padding: 14px 16px;
+      background: none; border: 0; border-radius: var(--radius); padding: 14px 16px;
       text-align: left; width: 100%; color: inherit;
-      transition: border-color 0.12s;
     }
-    .row.collecting { background: rgba(60,190,110,0.10); border-color: var(--success); }
+    .rowwrap.collecting { background: rgba(60,190,110,0.10); border-color: var(--success); }
     /* Orange gets a border only, no wash: green has to stay the loudest thing on
        the page, and a shop mid-transition can have several rows waiting at once. */
-    .row.waiting { border-color: rgba(240,165,0,0.55); }
+    .rowwrap.waiting { border-color: rgba(240,165,0,0.55); }
     .r-body { flex: 1; min-width: 0; }
     .r-name { font-size: 16px; font-weight: 500; }
     .r-src {
       font-size: 12.5px; color: var(--muted); margin-top: 2px;
       display: flex; align-items: center; gap: 5px;
     }
-    .row.collecting .r-name { color: var(--success); }
+    .rowwrap.collecting .r-name { color: var(--success); }
     /* A tool with no gate can't be hand-run — the row is inert, and reads that
-       way rather than looking like a control that ignores you. */
-    .row.inert { opacity: 0.62; pointer-events: none; }
+       way rather than looking like a control that ignores you. The dimming is on
+       the wrapper, the deadening on the button: an inert row may still carry a
+       link, and a link is not a control this page has any reason to refuse. */
+    .rowwrap.inert { opacity: 0.62; }
+    .rowwrap.inert .row { pointer-events: none; }
+
+    /* ── "go and fix that" ───────────────────────────────────────────────
+       A setup fact stated on this page used to be a dead end: "No outlet paired"
+       named the problem and left you to go find the screen that fixes it. Both
+       places that say it now carry the way there. Accent, because it is the only
+       thing on a quiet row worth reaching for — and always a visible line of
+       text, never a hover affordance. */
+    .fixlink {
+      display: block; padding: 9px 16px; font-size: 12.5px;
+      color: var(--accent); text-decoration: none; border-top: 1px solid var(--border);
+    }
+    .fixlink:active { background: var(--bg); }
+    /* On the collector card the link sits inside the body, under the subtitle,
+       so it reads as part of the same sentence. */
+    .c-body .fixlink { padding: 5px 0 0; border-top: 0; }
 
     /* ── the chip ────────────────────────────────────────────────────────
        This replaces the switch that used to sit here. That switch was a SPAN
@@ -279,6 +308,11 @@ const POLL_MS = 2000;
       border-radius: 8px; padding: 6px 12px; font-size: 13px;
       text-decoration: none; font-weight: 600;
     }
+    /* Applied to the CONTROLS, not to the cards around them.
+       It used to grey out the whole collector card and the whole tool list, which
+       was fine while everything in there drove hardware. It no longer is: those
+       cards now carry links to the setup screens, and an unfinished layout is
+       precisely when someone needs them. A link switches nothing on. */
     .locked { opacity: 0.45; pointer-events: none; filter: grayscale(1); }
   `],
   template: `
@@ -305,8 +339,7 @@ const POLL_MS = 2000;
         <div class="collector" *ngIf="g.id"
              [class.running]="collectorChipTone(g) === 'go'"
              [class.warn]="collectorChipTone(g) === 'wait'"
-             [class.bad]="collectorChipTone(g) === 'bad'"
-             [class.locked]="!ready">
+             [class.bad]="collectorChipTone(g) === 'bad'">
           <span class="cyc">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
                  stroke-linecap="round" stroke-linejoin="round">
@@ -317,6 +350,15 @@ const POLL_MS = 2000;
           <div class="c-body">
             <div class="c-name">{{ g.name }}</div>
             <div class="c-sub">{{ collectorSub(g) }}</div>
+            <!-- The subtitle above states the fact; this is what to do about it.
+                 A collector's outlet could be paired nowhere but the build canvas
+                 until 2026-08-25 — so the one thing this card cannot do anything
+                 about was also the one thing it wouldn't tell you how to fix. -->
+            <a class="fixlink" *ngIf="g.noPlug && g.collectorId"
+               [routerLink]="['/tools']" [queryParams]="{ el: g.collectorId }"
+               [title]="'Pair a smart outlet with ' + g.name + ', so DustGate can start it'">
+              Pair an outlet →
+            </a>
           </div>
           <div class="ccol">
             <!-- State, on the same axis as the tool rows: is this thing moving
@@ -330,7 +372,7 @@ const POLL_MS = 2000;
                  a machine in the other half of the building.
                  Hidden with no outlet paired: there is genuinely nothing to switch,
                  and a dead control is what this whole change is about removing. -->
-            <button class="sw" *ngIf="!g.noPlug" [class.on]="g.on"
+            <button class="sw" *ngIf="!g.noPlug" [class.on]="g.on" [class.locked]="!ready"
                     [attr.aria-label]="(g.on ? 'Stop ' : 'Run ') + g.name"
                     [title]="collectorSwitchTitle(g)"
                     (click)="toggleCollector(g)"></button>
@@ -343,22 +385,35 @@ const POLL_MS = 2000;
         <div class="orphan" *ngIf="!g.id">{{ g.name }}</div>
 
         <div class="label">Tools</div>
-        <div class="rows" [class.locked]="!ready">
+        <div class="rows">
           <!-- The ROW is the button — it always was. What changed is that the
-               right-hand side no longer pretends to be a second one. -->
-          <button class="row" *ngFor="let t of g.tools"
-                  [class.collecting]="toolChipTone(t, g) === 'go'"
-                  [class.waiting]="toolChipTone(t, g) === 'wait'"
-                  [class.inert]="t.orphan"
-                  [disabled]="t.orphan"
-                  (click)="toggle(t)"
-                  [attr.aria-pressed]="t.on">
-            <div class="r-body">
-              <div class="r-name">{{ t.name }}</div>
-              <div class="r-src">{{ sourceLine(t, g) }}</div>
-            </div>
-            <span class="chip" [class]="'chip ' + toolChipTone(t, g)">{{ toolChipText(t, g) }}</span>
-          </button>
+               right-hand side no longer pretends to be a second one, and that the
+               card around it is now a wrapper: a button cannot contain a link, so
+               the row and its "pair an outlet" link are siblings. -->
+          <div class="rowwrap" *ngFor="let t of g.tools"
+               [class.collecting]="toolChipTone(t, g) === 'go'"
+               [class.waiting]="toolChipTone(t, g) === 'wait'"
+               [class.inert]="t.orphan">
+            <button class="row" [class.locked]="!ready"
+                    [disabled]="t.orphan"
+                    (click)="toggle(t)"
+                    [attr.aria-pressed]="t.on">
+              <div class="r-body">
+                <div class="r-name">{{ t.name }}</div>
+                <div class="r-src">{{ sourceLine(t, g) }}</div>
+              </div>
+              <span class="chip" [class]="'chip ' + toolChipTone(t, g)">{{ toolChipText(t, g) }}</span>
+            </button>
+            <!-- Same errand as the collector card's: the subtitle says "no outlet
+                 paired", and this is the way to the screen that pairs one. Not
+                 shown on an orphan — its subtitle is about the LAYOUT, and an
+                 outlet would not help it. -->
+            <a class="fixlink" *ngIf="!t.auto && !t.orphan"
+               [routerLink]="['/tools']" [queryParams]="{ el: t.id }"
+               [title]="'Pair a smart outlet with ' + t.name + ', so it starts collection on its own'">
+              Pair an outlet →
+            </a>
+          </div>
           <div class="rows-empty" *ngIf="!g.tools.length">Nothing plumbed into this one yet.</div>
         </div>
       </div>
@@ -853,31 +908,17 @@ export class LiveViewComponent implements OnInit, OnDestroy {
    * lives in one system, and that is the one whose blower it starts.
    */
   private buildGroups(doc: ShopDoc): SystemGroup[] {
-    const layout = (doc as unknown as { ui?: { layout?: Record<string, { row: number }> } }).ui?.layout;
-    const topRow = (sysId: string): number => {
-      const sys = systemsOf(doc).find(s => s.id === sysId);
-      if (!sys || !layout) return Number.POSITIVE_INFINITY;
-      let lo = Number.POSITIVE_INFINITY;
-      for (const e of sys.elements as Array<Record<string, unknown>>) {
-        // Junctions skipped, exactly as systemRowBands() does: a loose run end is
-        // where pipe happens to have reached, not a row the system stands on.
-        if (e['type'] === 'junction') continue;
-        const c = layout[e['id'] as string];
-        if (c) lo = Math.min(lo, c.row);
-      }
-      return lo;
-    };
-
-    const order = systemsOf(doc).map((s, i) => ({ s, i, row: topRow(s.id) }))
-      // Ties and un-laid-out systems keep document order, so the sort is stable
-      // in the cases where the canvas has nothing to say.
-      .sort((a, b) => (a.row - b.row) || (a.i - b.i));
+    // The ordering lives in shop-doc now: /tools and /gates group by system too,
+    // and three screens deriving canvas order from `ui.layout` separately is three
+    // chances to disagree with the drawing they are all describing.
+    const order = systemsInLayoutOrder(doc);
 
     const byId = new Map<string, SystemGroup>();
-    for (const { s } of order) {
+    for (const s of order) {
       const dc = (s.elements as Array<Record<string, unknown>>).find(e => e['type'] === 'collector');
       byId.set(s.id, {
         id: s.id,
+        collectorId: (dc?.['id'] as string) ?? '',
         name: (dc?.['name'] as string) || (s.name as string) || 'Dust collector',
         tools: [], on: false, coasting: false, manual: false, activeName: '',
         deadHead: false, plug: 'noplug', plugWatts: 0,
@@ -894,7 +935,8 @@ export class LiveViewComponent implements OnInit, OnDestroy {
     // that silently vanishes off the page is worse than one shown as unable to
     // collect.
     const orphans: SystemGroup = {
-      id: '', name: 'Not connected to a collector — finish the layout to run these.',
+      id: '', collectorId: '',
+      name: 'Not connected to a collector — finish the layout to run these.',
       tools: [], on: false, coasting: false, manual: false, activeName: '',
       deadHead: false, noPlug: true, plug: 'noplug', plugWatts: 0,
     };
@@ -912,7 +954,7 @@ export class LiveViewComponent implements OnInit, OnDestroy {
       (group ?? orphans).tools.push(t);
     }
 
-    const groups = order.map(({ s }) => byId.get(s.id) as SystemGroup);
+    const groups = order.map(s => byId.get(s.id) as SystemGroup);
     if (orphans.tools.length) groups.push(orphans);
     return groups;
   }

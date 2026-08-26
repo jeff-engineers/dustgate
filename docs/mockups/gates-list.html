@@ -54,6 +54,10 @@
   .pill.no   { color: var(--accent);  background: rgba(240,165,0,0.12); }
   .pill.dark { color: var(--danger);  background: rgba(217,68,68,0.12); }
   .hint { font-size: 12px; color: var(--muted); line-height: 1.6; padding: 0 2px 12px; }
+  /* Systems are separated by space, not a rule: the label is already the boundary. */
+  .syslabel { font-size: 11px; color: var(--muted); letter-spacing: 0.07em;
+              text-transform: uppercase; padding: 0 6px 7px; }
+  .sys + .sys { margin-top: 20px; }
 
   table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
   th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
@@ -99,6 +103,8 @@
           Tap a gate to teach it where its positions are. Everything keeps working while you do
           — a gate you're calibrating just isn't routed to.
         </p>
+        <div class="sys">
+        <div class="syslabel">Cyclone</div>
         <div class="card" style="padding:0">
           <div class="row">
             <div class="grow">
@@ -121,14 +127,6 @@
           </div>
           <div class="row">
             <div class="grow">
-              <div class="nm">Bench slider</div>
-              <div class="sub">Sliding gate · this board · 4 stops</div>
-              <span class="pill ok">Calibrated</span>
-            </div>
-            <button class="act">Run setup again</button>
-          </div>
-          <div class="row">
-            <div class="grow">
               <div class="nm">Lathe hood</div>
               <div class="sub">Ball valve · qtpy-3 · channel 2</div>
               <span class="pill dark">Board not answering</span>
@@ -136,6 +134,26 @@
             <button class="act" disabled style="opacity:.45">Calibrate</button>
           </div>
         </div>
+        </div>
+
+        <div class="sys">
+        <div class="syslabel">Shop vacuum</div>
+        <div class="card" style="padding:0">
+          <div class="row">
+            <div class="grow">
+              <div class="nm">Bench slider</div>
+              <div class="sub">Sliding gate · this board · 4 stops</div>
+              <span class="pill ok">Calibrated</span>
+            </div>
+            <button class="act">Run setup again</button>
+          </div>
+        </div>
+        </div>
+        <p class="note" style="margin-top:12px">
+          The label only appears when there is more than one system. A one-system shop's gates
+          all sit under the same blower, and saying so above the only list is a line that
+          carries nothing.
+        </p>
       </div>
 
       <div class="phone">
@@ -274,6 +292,21 @@
           <td>A list, not a wizard</td>
           <td>Recalibration is nearly always about one specific gate, and a list says which ones
               still need doing.</td>
+        </tr>
+        <tr>
+          <td>2026-08-25</td>
+          <td>Split by system, in the order the canvas draws them</td>
+          <td>Which blower a gate sits under is how you find it on the floor — you are standing
+              at the cyclone with a wrench in your hand. A flat list of eight ball valves named
+              after the machines below them made you read every one. The order comes from
+              <code>systemsInLayoutOrder()</code>, shared with /shop and /tools, so all three
+              agree with the drawing rather than each deriving it.</td>
+        </tr>
+        <tr>
+          <td>2026-08-25</td>
+          <td>This screen migrates the document on read, like every other entry point</td>
+          <td>It read the raw topology, which was harmless while it only flattened elements. It
+              is not once it groups them: a v1 layout has no <code>systems[]</code> to group by.</td>
         </tr>
         <tr>
           <td>2026-08-22</td>
