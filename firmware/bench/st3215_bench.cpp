@@ -578,7 +578,7 @@ static void check(const char* name, bool ok, const char* fmt, ...) {
 }
 
 static void meas(const char* name, const char* fmt, ...) {
-    char detail[120];
+    char detail[160];
     va_list ap;
     va_start(ap, fmt);
     vsnprintf(detail, sizeof(detail), fmt, ap);
@@ -706,31 +706,58 @@ void doSuite() {
           highest - lowest, lowest, highest);
 
     // ---- multi-turn, which is where the slider actually lives ----------------
-    // MODE 3 IS NOT MULTI-TURN. Tried first, and a goal of 8192 moved the shaft
-    // three counts — whatever "step servo" means on this part, it is not this.
-    // What unlocks travel past one turn is POSITION mode with both angle limits
-    // at zero, which is the documented reading of registers 9 and 11.
-    // Mode and limits are EEPROM, so this section owns putting them back.
-    bus.write8(target, ST_REG_MODE, 0);
+    //
+    // Still unsolved, and the history matters because two of the three attempts
+    // were invalidated by other bugs:
+    //   - mode 3 + goal 8192 moved the shaft 3 counts. But that was through the
+    //     broken write path, where the speed never landed either — so it proved
+    //     nothing, and mode 3 is retested here properly.
+    //   - mode 0 + both angle limits 0 + goal 8192 travelled to 0x0FFC = 4092,
+    //     i.e. it stopped dead at one turn. Either the limits did not take, or
+    //     they take only after the servo is power-cycled, or something else
+    //     governs this entirely.
+    // So this section reads the limits back rather than assuming, and tries both
+    // modes with the working write path. Mode and limits are EEPROM; this
+    // section owns putting them back.
     bus.write16(target, ST_REG_MIN_ANGLE, 0);
     bus.write16(target, ST_REG_MAX_ANGLE, 0);
     delay(50);
+    uint16_t mlo = 1, mhi = 1;
+    bus.read16(target, ST_REG_MIN_ANGLE, &mlo);
+    bus.read16(target, ST_REG_MAX_ANGLE, &mhi);
+    check("limits cleared", mlo == 0 && mhi == 0, "read back %u..%u", mlo, mhi);
 
-    uint16_t before = 0;
-    bus.read16(target, ST_REG_PRESENT_POS, &before);
-    bus.moveTo(target, 8192, 1500);                        // two turns
-    delay(8000);
-    uint16_t mt = 0;
-    bus.read16(target, ST_REG_PRESENT_POS, &mt);
-    // Both readings, because which encoding PRESENT_POSITION uses past one turn
-    // is still unsettled — see read's multi-turn line.
-    meas("multi-turn", "goal 8192, read 0x%04X = %+.2f turns sign-mag, %+.2f two's comp",
-         mt, signedField(mt) / 4096.0f, (int16_t)mt / 4096.0f);
-    check("multi-turn travelled", labs((long)mt - (long)before) > 4096,
-          "moved %ld counts, more than one turn", labs((long)mt - (long)before));
+    long best = 0;
+    for (uint8_t m = 0; m < 2; m++) {
+        uint8_t mode3 = m ? 3 : 0;
+        bus.write8(target, ST_REG_MODE, mode3);
+        delay(50);
 
-    bus.moveTo(target, 0, 1500);
-    delay(8000);
+        uint16_t before = 0;
+        bus.read16(target, ST_REG_PRESENT_POS, &before);
+        bus.moveTo(target, 8192, 1500);                    // two turns
+        delay(8000);
+        uint16_t mt = 0;
+        bus.read16(target, ST_REG_PRESENT_POS, &mt);
+
+        long moved = labs((long)mt - (long)before);
+        if (moved > best) best = moved;
+        // Both encodings, because which one PRESENT_POSITION uses past a turn is
+        // exactly what a successful run would settle.
+        char label[24];
+        snprintf(label, sizeof(label), "multi-turn mode %u", mode3);
+        meas(label, "goal 8192 -> 0x%04X, moved %ld counts (%+.2f turns sign-mag, %+.2f two's comp)",
+             mt, moved, signedField(mt) / 4096.0f, (int16_t)mt / 4096.0f);
+
+        bus.moveTo(target, 0, 1500);
+        delay(8000);
+    }
+    check("travels past one turn", best > 4200, "best attempt moved %ld counts", best);
+    if (best <= 4200) {
+        Serial.println(F("       ^ if this keeps failing: power-cycle the SERVO (not the board) with the\n"
+                         "         limits at 0 and re-run — EEPROM settings on these parts are documented\n"
+                         "         as taking effect at startup, and nothing here can restart it."));
+    }
 
     // ---- put it back ---------------------------------------------------------
     bus.write8(target, ST_REG_MODE, 0);
