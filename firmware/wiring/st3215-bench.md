@@ -200,6 +200,28 @@ If the numbers from `read` are nonsense but the checksum passes, try
 parts get sold under the wrong name. **The part on this bench is little-endian**
 (the default), confirmed by `read` agreeing with a meter on the supply voltage.
 
+## 5.0 `suite` — run everything, get a baseline
+
+```
+suite
+```
+
+One command: it sets the state it depends on, exercises travel, speed, mid-move
+retargeting, `stop`, repeatability and multi-turn, puts the servo back the way it
+found it, and prints a PASS/FAIL line per check with a count at the end. **The
+shaft turns**, so nothing should be bolted to it.
+
+It exists because hand-typed sequences kept landing in state left by the command
+before them, and every one of those produced a confident wrong conclusion —
+"speed 0 means stop" (it means maximum; the servo was in mode 3 at the time),
+"it stalled" (it was reversing), "it is straining to hold" (the load field was
+being decoded with the wrong sign bit). A scripted run is a report you can diff
+against the last build instead of a transcript two people have to interpret.
+
+Anything added to it follows three rules, written at the top of `doSuite()`: set
+the state you depend on, put the servo back, and don't count a measurement as a
+check.
+
 ## 5.1 When nothing answers at all: prove the UART first
 
 `scan` finding nothing is the least informative result this program can produce
