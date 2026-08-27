@@ -393,8 +393,7 @@ static void doMTurn(long counts, long speed) {
     uint16_t raw = (uint16_t)labs(counts);
     if (counts < 0) raw |= 0x8000;
 
-    if (speed >= 0 && !bus.write16(target, ST_REG_GOAL_SPEED, (uint16_t)speed)) { fail("set speed"); return; }
-    if (!bus.write16(target, ST_REG_GOAL_POSITION, raw)) { fail("mturn"); return; }
+    if (!bus.moveTo(target, raw, speed >= 0 ? (uint16_t)speed : 0)) { fail("mturn"); return; }
     Serial.printf("  goal %ld counts (%.2f turns) sent as 0x%04X\n",
                   counts, counts / 4096.0f, raw);
 }
@@ -441,13 +440,15 @@ static const int16_t kCloseEnough = 8;
 static Settle settleAt(uint16_t goal, long speed, uint32_t timeoutMs = 15000) {
     Settle r = { false, false, 0, 0, 0 };
     if (!bus.read16(target, ST_REG_PRESENT_POS, &r.from)) return r;
-    if (speed >= 0 && !bus.write16(target, ST_REG_GOAL_SPEED, (uint16_t)speed)) return r;
 
     const uint32_t kStartGraceMs = 1000;
     const uint32_t kQuietMs      = 300;
 
+    // ONE BLOCK WRITE, not a speed write followed by a position write. See
+    // ST3215Bus::moveTo — a standalone GOAL_SPEED is ignored and every move runs
+    // at the servo's maximum.
     uint32_t started = millis();
-    if (!bus.write16(target, ST_REG_GOAL_POSITION, goal)) return r;
+    if (!bus.moveTo(target, goal, speed >= 0 ? (uint16_t)speed : 0)) return r;
 
     uint32_t deadline   = started + timeoutMs;
     uint16_t last       = r.from;
@@ -512,12 +513,9 @@ static void doDump(uint8_t addr, uint8_t len) {
 
 static void doMove(uint16_t pos, long speed) {
     if (pos > ST_POS_MAX) pos = ST_POS_MAX;
-    if (speed >= 0 && !bus.write16(target, ST_REG_GOAL_SPEED, (uint16_t)speed)) {
-        fail("set speed"); return;
-    }
-    if (!bus.write16(target, ST_REG_GOAL_POSITION, pos)) { fail("move"); return; }
-    Serial.printf("  goal %u sent%s\n", pos,
-                  speed >= 0 ? "" : " (speed left as it was)");
+    // Speed rides with the position in one write, or it is ignored entirely.
+    if (!bus.moveTo(target, pos, speed >= 0 ? (uint16_t)speed : 0)) { fail("move"); return; }
+    Serial.printf("  goal %u at speed %ld sent\n", pos, speed >= 0 ? speed : 0);
 }
 
 /**
@@ -531,8 +529,11 @@ static void doMove(uint16_t pos, long speed) {
 static void doStop() {
     uint16_t pos = 0;
     if (!bus.read16(target, ST_REG_PRESENT_POS, &pos)) { fail("read position"); return; }
-    if (!bus.write16(target, ST_REG_GOAL_POSITION, pos)) { fail("stop"); return; }
-    Serial.printf("  stopped at %u, still holding (`torque off` to let go)\n", pos);
+    // Aim at where it is, at the speed it can decelerate with. It will overshoot
+    // and come back — a full-speed run overshot ~1000 counts on the bench — so
+    // "stopped" means "settled near here", not "froze on the spot".
+    if (!bus.moveTo(target, pos, 0)) { fail("stop"); return; }
+    Serial.printf("  aiming at %u — it overshoots and returns; `read` to see where it settled\n", pos);
 }
 
 static void doTorque(bool on) {
@@ -620,10 +621,13 @@ void doSuite() {
           "%.1fV, %u C", volt / 10.0f, temp);
 
     // ---- it goes where it is told -------------------------------------------
+    // Park first: "travel to 3000" from 2997 passed in 0.00s once, which proved
+    // nothing at all.
+    settleAt(500, 0);
     Settle a = settleAt(3000, 0);
-    check("travel to 3000", a.arrived, "%u -> %u in %.2fs", a.from, a.pos, a.ms / 1000.0f);
+    check("travel to 3000", a.arrived && a.from != a.pos, "%u -> %u in %.2fs", a.from, a.pos, a.ms / 1000.0f);
     Settle b = settleAt(500, 0);
-    check("travel to 500", b.arrived, "%u -> %u in %.2fs", b.from, b.pos, b.ms / 1000.0f);
+    check("travel to 500", b.arrived && b.from != b.pos, "%u -> %u in %.2fs", b.from, b.pos, b.ms / 1000.0f);
 
     meas("top speed", "%.0f counts/s = %.1f rpm at speed 0",
          measuredCps(b), measuredCps(b) * 60.0f / 4096.0f);
@@ -632,6 +636,10 @@ void doSuite() {
     // Loose tolerance by design: a settle includes both acceleration ramps, so a
     // measured figure is always under the setting. The question is whether the
     // number tracks, not whether it matches.
+    //
+    // These failed flat (asked 300, got 1599) until the move became a single
+    // block write of position+time+speed. A standalone GOAL_SPEED write is
+    // accepted, reads back, and does nothing.
     struct { uint16_t goal; long speed; } legs[] = { { 3000, 300 }, { 500, 1200 } };
     for (auto& leg : legs) {
         Settle s = settleAt(leg.goal, leg.speed);
@@ -640,6 +648,12 @@ void doSuite() {
         check("speed tracks", s.arrived && ratio > 0.6f && ratio < 1.15f,
               "asked %ld, measured %.0f counts/s (%.0f%%)", leg.speed, cps, ratio * 100);
     }
+
+    // Does the servo even keep what we wrote? Worth its own line, because
+    // "written, readable, and ignored" is a state we have now seen.
+    uint16_t spdBack = 0;
+    bus.read16(target, ST_REG_GOAL_SPEED, &spdBack);
+    meas("goal speed readback", "register 46 holds %u after the last move", spdBack);
 
     // ---- a goal written mid-move is honoured --------------------------------
     // This is what `stop` is built on, and what a make-before-break gate change
@@ -651,23 +665,34 @@ void doSuite() {
     check("retarget mid-move", r.arrived, "diverted to %u", r.pos);
 
     // ---- stop, and hold ------------------------------------------------------
-    bus.write16(target, ST_REG_GOAL_SPEED, 400);
-    bus.write16(target, ST_REG_GOAL_POSITION, 3500);
-    delay(600);
+    // A stop is not a freeze. Caught at full speed the shaft overshot ~1000
+    // counts and then came back, and sampling 500ms in caught it mid-return and
+    // called it a failure. So: let it settle, then ask the two questions that
+    // actually matter — did it end up near where it was told, and did it STAY.
+    settleAt(500, 0);
+    bus.moveTo(target, 3500, 400);
+    delay(900);
     uint16_t caught = 0;
     bus.read16(target, ST_REG_PRESENT_POS, &caught);
-    bus.write16(target, ST_REG_GOAL_POSITION, caught);     // this is what `stop` does
-    delay(500);
-    uint16_t after = 0;
-    bus.read16(target, ST_REG_PRESENT_POS, &after);
-    // Some overshoot is inevitable — it has to decelerate — so the check is that
-    // it stopped near where it was told and then STAYED, not that it froze.
-    int32_t drift = (int32_t)after - (int32_t)caught;
-    delay(500);
+    bus.moveTo(target, caught, 0);                      // this is what `stop` does
+
+    uint16_t peak = caught, settled = caught;
+    uint32_t until = millis() + 2500;
+    while ((int32_t)(millis() - until) < 0) {
+        delay(20);
+        bus.read16(target, ST_REG_PRESENT_POS, &settled);
+        if (settled > peak) peak = settled;
+    }
     uint16_t later = 0;
+    delay(600);
     bus.read16(target, ST_REG_PRESENT_POS, &later);
-    check("stop and hold", labs((long)later - (long)after) <= kCloseEnough && labs(drift) < 400,
-          "caught %u, settled %+ld, then held to %+ld", caught, (long)drift, (long)later - (long)after);
+
+    meas("stopping distance", "overshot %ld counts past the catch at speed 400",
+         (long)peak - (long)caught);
+    check("stop and hold", labs((long)later - (long)settled) <= kCloseEnough
+                           && labs((long)settled - (long)caught) < 200,
+          "caught %u, settled %+ld, then moved %+ld",
+          caught, (long)settled - (long)caught, (long)later - (long)settled);
 
     // ---- does it land in the same place twice? -------------------------------
     uint16_t lowest = 0xFFFF, highest = 0;
@@ -681,17 +706,20 @@ void doSuite() {
           highest - lowest, lowest, highest);
 
     // ---- multi-turn, which is where the slider actually lives ----------------
+    // MODE 3 IS NOT MULTI-TURN. Tried first, and a goal of 8192 moved the shaft
+    // three counts — whatever "step servo" means on this part, it is not this.
+    // What unlocks travel past one turn is POSITION mode with both angle limits
+    // at zero, which is the documented reading of registers 9 and 11.
     // Mode and limits are EEPROM, so this section owns putting them back.
-    bus.write8(target, ST_REG_MODE, 3);
+    bus.write8(target, ST_REG_MODE, 0);
     bus.write16(target, ST_REG_MIN_ANGLE, 0);
     bus.write16(target, ST_REG_MAX_ANGLE, 0);
     delay(50);
 
     uint16_t before = 0;
     bus.read16(target, ST_REG_PRESENT_POS, &before);
-    bus.write16(target, ST_REG_GOAL_SPEED, 1500);
-    bus.write16(target, ST_REG_GOAL_POSITION, 8192);       // two turns
-    delay(6000);
+    bus.moveTo(target, 8192, 1500);                        // two turns
+    delay(8000);
     uint16_t mt = 0;
     bus.read16(target, ST_REG_PRESENT_POS, &mt);
     // Both readings, because which encoding PRESENT_POSITION uses past one turn
@@ -701,8 +729,8 @@ void doSuite() {
     check("multi-turn travelled", labs((long)mt - (long)before) > 4096,
           "moved %ld counts, more than one turn", labs((long)mt - (long)before));
 
-    bus.write16(target, ST_REG_GOAL_POSITION, 0);
-    delay(6000);
+    bus.moveTo(target, 0, 1500);
+    delay(8000);
 
     // ---- put it back ---------------------------------------------------------
     bus.write8(target, ST_REG_MODE, 0);

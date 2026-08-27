@@ -145,6 +145,21 @@ public:
     void littleEndian(bool on) { _little = on; }
     bool isLittleEndian() const { return _little; }
 
+    /**
+     * Position, time and speed as ONE write at register 42 — the canonical
+     * Feetech move command.
+     *
+     * Writing GOAL_SPEED on its own and then GOAL_POSITION does not work: the
+     * servo ran every move at its maximum no matter what 46 had been set to
+     * (measured 2026-08-26 — asked 300, got 1599; asked 1200, got 1646; the
+     * ceiling being 1630). Speed is latched when the block lands, so it has to
+     * travel with the position that it applies to.
+     *
+     * `time` is the alternative to speed — a duration for the move — and 0
+     * leaves speed in charge. Nothing here has tested it.
+     */
+    bool moveTo(uint8_t id, uint16_t pos, uint16_t speed, uint16_t time = 0);
+
     /** Is anything answering to this id? `err` gets the servo's status byte. */
     bool ping(uint8_t id, uint8_t* err = nullptr);
 

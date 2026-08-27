@@ -200,6 +200,20 @@ bool ST3215Bus::broadcastWrite(uint8_t addr, const uint8_t* data, uint8_t len) {
     return send(0xFE, ST_WRITE, p, (uint8_t)(len + 1));
 }
 
+bool ST3215Bus::moveTo(uint8_t id, uint16_t pos, uint16_t speed, uint16_t time) {
+    uint8_t b[6];
+    if (_little) {
+        b[0] = pos   & 0xFF; b[1] = pos   >> 8;
+        b[2] = time  & 0xFF; b[3] = time  >> 8;
+        b[4] = speed & 0xFF; b[5] = speed >> 8;
+    } else {
+        b[0] = pos   >> 8;   b[1] = pos   & 0xFF;
+        b[2] = time  >> 8;   b[3] = time  & 0xFF;
+        b[4] = speed >> 8;   b[5] = speed & 0xFF;
+    }
+    return writeRegs(id, ST_REG_GOAL_POSITION, b, 6);
+}
+
 bool ST3215Bus::read8(uint8_t id, uint8_t addr, uint8_t* out) {
     return readRegs(id, addr, 1, out);
 }
