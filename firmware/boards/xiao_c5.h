@@ -66,20 +66,23 @@
 // servo end; whether our own transmission echoes back depends on what is
 // driving the line (see ST3215Bus::receive — it copes with both).
 //
-// TX IS D7 AND RX IS D6, which reads backwards and is not.
-// The adapter's own labels are from ITS point of view: Seeed's wiki says
-// "connect the RX pin on the Driver Board to the TX pin (D7) on your host…
-// the TX pin on the Driver Board to the RX pin (D6)". These two were the other
-// way round here until 2026-08-26, written from a design note rather than from
-// the board, and a servo answered nothing at any baud — a well-formed frame
-// leaving on the pad nobody was listening to. Bench-confirmed order now.
+// WHICH PAD IS TX IS NOT SETTLED, AND THE TWO SOURCES DISAGREE:
+//   - Every XIAO's silkscreen labels D6 TX and D7 RX. A board you socket into
+//     is routed to that convention, so this is what we default to.
+//   - Seeed's own wiki for the Bus Servo Driver Board says the opposite —
+//     "connect the RX pin on the Driver Board to the TX pin (D7) on your host…
+//     the TX pin on the Driver Board to the RX pin (D6)".
+// One of them is a typo and no servo has answered yet to say which. The bench
+// console's `sweep` tries both orders, and `swap` flips them at runtime, so
+// being wrong here costs a command rather than a reflash. When a servo finally
+// answers, write the winner down HERE and delete this paragraph.
 //
 // ⚠️ The bus LOGIC LEVEL is still unconfirmed (3.3V vs 5V) and the C5 is NOT 5V
 // tolerant. That is moot through the adapter, which buffers, and it matters the
 // moment a servo lead meets one of these pads directly.
 // See firmware/wiring/st3215-bench.md.
-#define PIN_SERVO_BUS_TX   12   // D7 — to the adapter's RX
-#define PIN_SERVO_BUS_RX   11   // D6 — from the adapter's TX
+#define PIN_SERVO_BUS_TX   11   // D6, the pad the XIAO silkscreen calls TX
+#define PIN_SERVO_BUS_RX   12   // D7, ditto RX
 
 #else
 

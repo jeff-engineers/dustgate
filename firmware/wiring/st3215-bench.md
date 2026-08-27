@@ -20,12 +20,11 @@ because the adapter answers the half-duplex question and *raises* a power one.
 - **It drives the line for you.** No series resistor, no direction pin to
   drive, and usually no echo: the firmware tolerates either (`ping` reports
   which wiring it is actually on — see §5).
-- **It uses D6/D7 — with TX on D7 and RX on D6.** The adapter's silkscreen is
-  written from its own point of view, so its `RX` goes to the host's `TX` (D7)
-  and its `TX` to the host's `RX` (D6). This project had them the other way
-  round until 2026-08-26 and got exactly the symptom you would expect: a
-  well-formed frame on the trace, and silence at every id and every baud, on the
-  pad nobody was listening to. `sweep` finds this on its own now.
+- **It uses D6/D7, and WHICH ONE IS TX IS UNSETTLED.** Every XIAO's silkscreen
+  says D6 = TX, D7 = RX; Seeed's own wiki for this board says the opposite
+  ("connect the `RX` pin on the Driver Board to the `TX` pin (D7) on your host").
+  One is a typo and no servo has answered yet to say which. The build defaults to
+  the silkscreen, `sweep` tries both orders, and `swap` flips them live.
 - **1 Mbps**, per Seeed's own example (`COMSerial.begin(1000000, SERIAL_8N1)`).
 - **No mode jumper on this board** — "you don't need to modify any circuits".
   The bigger *Bus Servo Driver Board* is the one with a UART-vs-USB solder
@@ -164,6 +163,26 @@ If the numbers from `read` are nonsense but the checksum passes, try
 `endian hi` — the ST/STS series is little-endian and the SCS series is big, and
 parts get sold under the wrong name. Everything below `move` will start working
 the moment that is right.
+
+## 5.1 When nothing answers at all: prove the UART first
+
+`scan` finding nothing is the least informative result this program can produce
+— it is equally consistent with a dead servo, a deaf driver board, the wrong
+pads, and a UART that never transmitted. `selftest` splits that:
+
+```
+selftest        # TX to RX inside the chip. No servo, no board, no wire.
+selftest wire   # the same through a jumper from D6 to D7, XIAO out of its socket
+blast 5         # transmit continuously, so a meter or scope can see the pin
+```
+
+- **Internal fails** → the peripheral, the baud or this program is broken, and
+  nothing outside the chip is worth touching yet.
+- **Internal passes, wire fails** → those two pads are not this UART. `swap`,
+  try again; if it still fails the pin numbers in the board header are wrong.
+- **Both pass, `scan` still silent** → the chip is fine and the fault is on the
+  board or the servo: power, the jumper, the cable, the servo itself. That is
+  where a meter earns its keep, and `blast 5` is what to meter against.
 
 ## 6. What this bench does not answer
 

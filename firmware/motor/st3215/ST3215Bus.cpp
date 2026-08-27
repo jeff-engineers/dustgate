@@ -3,6 +3,7 @@
 // =============================================================================
 #include "ST3215Bus.h"
 #include "../../config.h"
+#include "driver/uart.h"       // uart_set_loop_back() — see loopback()
 
 #if !defined(PIN_SERVO_BUS_TX) || !defined(PIN_SERVO_BUS_RX)
   #error "ST3215Bus needs PIN_SERVO_BUS_TX/RX — build with -DDUSTGATE_SERVO_BUS"
@@ -25,6 +26,10 @@ bool ST3215Bus::begin(uint32_t baud, bool swapPins) {
     delay(2);
     while (BUS.available()) BUS.read();
     return true;
+}
+
+bool ST3215Bus::loopback(bool on) {
+    return uart_set_loop_back(UART_NUM_1, on) == ESP_OK;
 }
 
 void ST3215Bus::hexdump(const char* dir, const uint8_t* buf, uint8_t len) {

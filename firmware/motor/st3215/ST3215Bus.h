@@ -107,6 +107,18 @@ public:
      * bench session asks in its first minute.
      */
     bool echoSeen() const { return _echoSeen; }
+    void clearEchoSeen() { _echoSeen = false; }
+
+    /**
+     * Wire the UART's own TX to its own RX, inside the chip.
+     *
+     * The one test that needs no servo, no adapter and no wire: with this on, a
+     * frame we send must come back to us. If it does, the peripheral, the pin
+     * mapping's existence, the baud and this file's framing are all fine and the
+     * fault is outside the chip. If it does NOT, nothing beyond this point is
+     * worth debugging. `selftest` at the bench drives it.
+     */
+    bool loopback(bool on);
 
     /**
      * Byte order for 16-bit registers. ST/STS is little-endian, SCS is big —

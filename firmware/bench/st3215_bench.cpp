@@ -65,6 +65,9 @@ static void help() {
         "  scan [hi]        ping every id from 0 to hi (default 20)\n"
         "  sweep [hi]       scan at every plausible baud, both pin orders, and stay on what works\n"
         "  pins             which pad is TX and which is RX right now\n"
+        "  selftest         loop TX to RX inside the chip — proves the UART with no servo at all\n"
+        "  selftest wire    the same, through a jumper from D6 to D7 (XIAO out of the board)\n"
+        "  blast [s]        transmit continuously so a meter or scope can see the pin\n"
         "  swap             flip them, and reopen\n"
         "  baud <n>         reopen the bus at another rate (factory is 1000000)\n"
         "  id <n>           which servo the commands below talk to\n"
@@ -161,6 +164,71 @@ static void doSweep(uint8_t hi) {
     Serial.println(F("  nothing answered at any rate, either way round.\n"
                      "  That is now a wiring question, not a settings one — see\n"
                      "  firmware/wiring/st3215-bench.md section 5."));
+}
+
+/**
+ * Prove the UART before blaming the bus.
+ *
+ * Three layers, and each one only means something if the one before it passed:
+ *
+ *   1. INSIDE THE CHIP — TX tied to RX in silicon. Passing means the peripheral,
+ *      the baud and this program's framing are all sound, and every remaining
+ *      suspect is outside the board.
+ *   2. AT THE PADS — the same test with a wire from D6 to D7 (XIAO out of its
+ *      socket). Passing means both pads are really the UART, and the numbers in
+ *      the board header are right.
+ *   3. THE BUS ITSELF — that is `scan`, and it is only worth running once 1 and
+ *      2 pass.
+ *
+ * A servo that answers nothing tells you nothing about which of the three is
+ * broken, which is the whole reason this exists.
+ */
+static void doSelfTest(bool internal) {
+    Serial.println(internal
+        ? F("  looping TX back to RX inside the chip...")
+        : F("  expecting a wire from D6 to D7 (XIAO out of the servo board)..."));
+
+    if (internal && !bus.loopback(true)) {
+        Serial.println(F("  the chip refused internal loopback — that itself is a finding"));
+        return;
+    }
+
+    bus.clearEchoSeen();
+    uint8_t err = 0;
+    bus.ping(target, &err);          // the reply is beside the point; the ECHO is the test
+    bool heard = bus.echoSeen();
+
+    if (internal) bus.loopback(false);
+
+    if (heard) {
+        Serial.printf("  PASS — what we sent came back%s.\n", internal ? " inside the chip" : " through the pads");
+        if (internal) Serial.println(F("  So the UART, the baud and the framing are fine. Try `selftest wire` next."));
+        else          Serial.println(F("  So both pads are live and the header's pin numbers are right."));
+    } else {
+        Serial.printf("  FAIL — nothing came back%s.\n", internal ? " inside the chip" : "");
+        if (internal) Serial.println(F("  Nothing past this point is worth debugging: the UART is not doing its job."));
+        else          Serial.println(F("  Either the wire is not on D6/D7, or those pads are not this UART.\n"
+                                       "  `swap` and try again; if that also fails, the pin numbers are wrong."));
+    }
+}
+
+/**
+ * Talk continuously so a meter or a scope can see it.
+ *
+ * A DMM on the TX pad reads ~3.3 V idle and visibly lower while this runs; a
+ * scope sees the frames. It is the only way to answer "is anything coming out
+ * of that pin at all" without another board to listen with.
+ */
+static void doBlast(uint32_t seconds) {
+    Serial.printf("  transmitting on GPIO%d for %lus — meter it. Any key stops.\n",
+                  bus.txPin(), (unsigned long)seconds);
+    uint32_t until = millis() + seconds * 1000;
+    while ((int32_t)(millis() - until) < 0) {
+        bus.ping(target);
+        delay(1);                    // keeps the idle task fed
+        if (Serial.available()) { while (Serial.available()) Serial.read(); break; }
+    }
+    Serial.println(F("  done"));
 }
 
 static void doScan(uint8_t hi) {
@@ -272,6 +340,8 @@ static void handle(const String& line) {
     if (cmd == "help" || cmd == "?")      { help(); return; }
     if (cmd == "scan")                    { doScan(arg(line,1).length() ? arg(line,1).toInt() : 20); return; }
     if (cmd == "sweep")                   { doSweep(arg(line,1).length() ? arg(line,1).toInt() : 20); return; }
+    if (cmd == "selftest") { doSelfTest(arg(line,1) != "wire"); return; }
+    if (cmd == "blast")    { doBlast(arg(line,1).length() ? (uint32_t)arg(line,1).toInt() : 5); return; }
     if (cmd == "pins") {
         Serial.printf("  TX GPIO%d, RX GPIO%d (%s)\n", bus.txPin(), bus.rxPin(),
                       bus.swapped() ? "swapped" : "as the board header has them");
