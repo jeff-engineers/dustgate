@@ -150,6 +150,17 @@ bool ST3215Bus::receive(uint8_t id, uint8_t* params, uint8_t maxParams, uint8_t*
     return false;
 }
 
+void ST3215Bus::stream(uint8_t id, uint32_t ms) {
+    uint32_t until = millis() + ms;
+    uint32_t frames = 0;
+    while ((int32_t)(millis() - until) < 0) {
+        send(id, ST_PING, nullptr, 0);
+        // ~6 bytes at this baud is tens of microseconds, so yield rarely enough
+        // to keep the line busy and often enough to keep the idle task alive.
+        if ((++frames % 200) == 0) delay(1);
+    }
+}
+
 bool ST3215Bus::ping(uint8_t id, uint8_t* err) {
     if (!send(id, ST_PING, nullptr, 0)) return false;
     uint8_t params[kMaxParams], got = 0;

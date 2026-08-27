@@ -1,17 +1,52 @@
 # Wiring — ST3215 bus servo on the bench (XIAO ESP32C5)
 
-> ## Nothing here has been done yet.
+> ## First contact: 2026-08-26. A servo answered.
 >
-> No bus servo has been talked to from this project. Every number below is from
-> the vendor documentation or from the ESP32-C5 datasheet, and the two marked ⚠️
-> are **unconfirmed and can destroy the board if they are wrong**. Meter first,
-> connect second. Written 2026-08-26, the day the parts landed on the bench.
+> `id 1 answered (status 0x00)` at **1 000 000 baud, TX on D6, RX on D7**,
+> through Seeed's Bus Servo Driver Board with **no jumper fitted and the barrel
+> jack powered**. That settles the pin order, the baud and the wiring for this
+> board — the rest of this file is now a record rather than a guess.
+>
+> Then it moved. `move 2048` turned the shaft, the same session.
+>
+> `read` decodes correctly too, and the proof is a cross-check rather than a
+> vibe: it reported **12.1 V** against a meter reading 12 V at the socket. A
+> wrong byte order or a wrong register address cannot produce the right voltage
+> by accident, so the register map in `ST3215Bus.h` and little-endian are both
+> confirmed for this part.
+>
+> Metering advice below still applies to anything hand-wired; the ⚠️ logic-level
+> warning is moot through this board, which buffers.
 >
 > Authoritative pin source: [`firmware/boards/xiao_c5.h`](../boards/xiao_c5.h)
 > under `-DDUSTGATE_SERVO_BUS`. If this file disagrees with that header, the
 > header is right — the build reads it.
 
-## 0. On the bench today: Seeed's XIAO Bus Servo Adapter
+## 0. On the bench: Seeed's Bus Servo Driver Board for XIAO
+
+**The working configuration, as it actually ran:**
+
+| | |
+|---|---|
+| Jumper on the front 2-pin header | **not fitted** (Seeed: "it's not shorted by default") |
+| Barrel jack | **powered** — 12 V |
+| XIAO pads | **TX = D6/GPIO11, RX = D7/GPIO12** |
+| Baud | **1 000 000** |
+| Servo | answered at **id 1**, status `0x00`, and moved on `move 2048` |
+| `read` | `pos 439 (38 deg) speed 0 load 0 12.1V 23 C still` — the 12.1 V is the meter cross-check that confirms the register map |
+
+**What the hour of silence before that was, we never established.** Every one of
+those settings had already been tried, in both pin orders, at every baud
+`sweep` knows — so nothing in this table is what fixed it. The only thing that
+changed was that the XIAO came out of the socket for a loopback test and went
+back in. Assume a seating or cable-contact problem, and reseat everything before
+believing a silent bus.
+
+The diagnostic ladder that came out of that hour is §5.1, and it is the part of
+this file worth reading twice: it is what turns "nothing answered" into a
+statement about *which half* of the bench is broken.
+
+## 0.0 Notes that apply to either Seeed board
 
 The XIAO sockets straight into it, the servo plugs into its 3-pin socket, and
 its own jack feeds both. That removes most of §1–§3 — **read §0.1 anyway**,
@@ -20,11 +55,12 @@ because the adapter answers the half-duplex question and *raises* a power one.
 - **It drives the line for you.** No series resistor, no direction pin to
   drive, and usually no echo: the firmware tolerates either (`ping` reports
   which wiring it is actually on — see §5).
-- **It uses D6/D7, and WHICH ONE IS TX IS UNSETTLED.** Every XIAO's silkscreen
-  says D6 = TX, D7 = RX; Seeed's own wiki for this board says the opposite
-  ("connect the `RX` pin on the Driver Board to the `TX` pin (D7) on your host").
-  One is a typo and no servo has answered yet to say which. The build defaults to
-  the silkscreen, `sweep` tries both orders, and `swap` flips them live.
+- **TX is D6.** Settled on the bench, and by the Arduino core's own variant
+  table for this board (`variants/XIAO_ESP32C5/pins_arduino.h`: `TX = 11,
+  D6 = 11`), which is the table the build compiles against. Seeed's wiki line —
+  "connect the `RX` pin on the Driver Board to the `TX` pin (D7) on your host" —
+  is a typo; believing it costs an afternoon. `swap` flips the order live if you
+  ever need to check again.
 - **1 Mbps**, per Seeed's own example (`COMSerial.begin(1000000, SERIAL_8N1)`).
 - **No mode jumper on this board** — "you don't need to modify any circuits".
   The bigger *Bus Servo Driver Board* is the one with a UART-vs-USB solder
@@ -161,8 +197,8 @@ If `scan` finds nothing, in this order:
 
 If the numbers from `read` are nonsense but the checksum passes, try
 `endian hi` — the ST/STS series is little-endian and the SCS series is big, and
-parts get sold under the wrong name. Everything below `move` will start working
-the moment that is right.
+parts get sold under the wrong name. **The part on this bench is little-endian**
+(the default), confirmed by `read` agreeing with a meter on the supply voltage.
 
 ## 5.1 When nothing answers at all: prove the UART first
 

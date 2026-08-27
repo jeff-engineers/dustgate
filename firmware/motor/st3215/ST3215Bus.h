@@ -20,10 +20,13 @@
 // way to tell a silent bus from a wrong baud from a servo answering something
 // you didn't mean to ask.
 //
-// ⚠️ NOTHING HERE HAS TALKED TO A SERVO YET. The frame shape is solid; the
-// REGISTER MAP below is from the STS/ST series docs and is the part most likely
-// to be wrong for a given part — which is why the bench program can read raw
-// addresses and flip endianness without a reflash. Confirm, then trust.
+// TALKED TO A REAL SERVO 2026-08-26: ping, status byte, register reads and a
+// move, at 1 Mbps through Seeed's Bus Servo Driver Board. The register map
+// below was the part most likely to be wrong for a given part, and it is now
+// confirmed for THIS one — `read` reported 12.1 V against a meter's 12 V, which
+// is not a number a wrong address or byte order produces by accident. The bench
+// program can still read raw addresses and flip endianness without a reflash;
+// the next part off a different supplier may still need it.
 // =============================================================================
 #pragma once
 #include <Arduino.h>
@@ -50,6 +53,9 @@ enum : uint8_t {
 // eventual MotorDriver both read this map.
 // -----------------------------------------------------------------------------
 enum : uint8_t {
+    // Confirmed on the bench for the part in hand (2026-08-26): PRESENT_POS,
+    // PRESENT_VOLTAGE, TORQUE_ENABLE, GOAL_POSITION and GOAL_SPEED all behave.
+    // The rest are still docs.
     ST_REG_ID              = 5,    // EEPROM, 1 byte
     ST_REG_BAUD            = 6,    // EEPROM, 1 byte (index, not a baud)
     ST_REG_MIN_ANGLE       = 9,    // EEPROM, 2 bytes — both 0 means multi-turn
@@ -119,6 +125,17 @@ public:
      * worth debugging. `selftest` at the bench drives it.
      */
     bool loopback(bool on);
+
+    /**
+     * Write ping frames back to back for `ms`, never waiting for a reply.
+     *
+     * For a METER, not for a servo. One ping every reply-timeout leaves the line
+     * idle ~99% of the time and a DMM reads a flat idle-high — which is exactly
+     * what a dead UART reads too. Back to back, the average drops far enough to
+     * see, so "is anything coming out of this pad" becomes a question a $20
+     * meter can answer.
+     */
+    void stream(uint8_t id, uint32_t ms);
 
     /**
      * Byte order for 16-bit registers. ST/STS is little-endian, SCS is big —

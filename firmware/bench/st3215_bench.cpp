@@ -68,6 +68,7 @@ static void help() {
         "  selftest         loop TX to RX inside the chip — proves the UART with no servo at all\n"
         "  selftest wire    the same, through a jumper from D6 to D7 (XIAO out of the board)\n"
         "  blast [s]        transmit continuously so a meter or scope can see the pin\n"
+        "  continuity       DC test of the same jumper, no UART — is the wire even on?\n"
         "  swap             flip them, and reopen\n"
         "  baud <n>         reopen the bus at another rate (factory is 1000000)\n"
         "  id <n>           which servo the commands below talk to\n"
@@ -213,6 +214,43 @@ static void doSelfTest(bool internal) {
 }
 
 /**
+ * Continuity between the two pads, with no UART involved at all.
+ *
+ * `selftest wire` failing tells you the pads did not carry a 1 Mbps frame, and
+ * that has two very different causes: the jumper is not making contact, or the
+ * UART is not really on those pads. This separates them by driving one pad from
+ * plain GPIO and reading the other — DC levels, no timing, nothing to get wrong.
+ *
+ * Both pads go back to the UART afterwards.
+ */
+static void doContinuity() {
+    const int tx = bus.txPin(), rx = bus.rxPin();
+    Serial.printf("  driving GPIO%d, reading GPIO%d — wire them together first\n", tx, rx);
+
+    pinMode(tx, OUTPUT);
+    pinMode(rx, INPUT_PULLDOWN);
+    digitalWrite(tx, HIGH); delay(5);
+    bool high = digitalRead(rx);
+    digitalWrite(tx, LOW);  delay(5);
+    bool low  = digitalRead(rx);
+
+    // Whatever happens, leave the bus usable.
+    bus.begin(busBaud, bus.swapped());
+
+    if (high && !low) {
+        Serial.println(F("  PASS — the two pads are connected.\n"
+                         "  So the wire is fine and the UART is not reaching them: that is a firmware\n"
+                         "  or core problem, not a bench one."));
+    } else if (!high && !low) {
+        Serial.println(F("  FAIL — the reading pad never went high. The jumper is not making contact\n"
+                         "  (castellated pads need a header pin or real pressure), or it is on the\n"
+                         "  wrong two pads. D6 and D7 are the two nearest the USB connector's far end."));
+    } else {
+        Serial.printf("  ODD — high:%d low:%d. Something else is driving GPIO%d.\n", high, low, rx);
+    }
+}
+
+/**
  * Talk continuously so a meter or a scope can see it.
  *
  * A DMM on the TX pad reads ~3.3 V idle and visibly lower while this runs; a
@@ -220,14 +258,12 @@ static void doSelfTest(bool internal) {
  * of that pin at all" without another board to listen with.
  */
 static void doBlast(uint32_t seconds) {
-    Serial.printf("  transmitting on GPIO%d for %lus — meter it. Any key stops.\n",
+    Serial.printf("  streaming on GPIO%d for %lus.\n"
+                  "  Meter DC, black on GND, red on the pad: ~3.3 V idle, and clearly\n"
+                  "  lower (roughly 1.5-2.5 V) while this runs. Then meter the same signal\n"
+                  "  where it ARRIVES — the servo connector — and see if the board passed it on.\n",
                   bus.txPin(), (unsigned long)seconds);
-    uint32_t until = millis() + seconds * 1000;
-    while ((int32_t)(millis() - until) < 0) {
-        bus.ping(target);
-        delay(1);                    // keeps the idle task fed
-        if (Serial.available()) { while (Serial.available()) Serial.read(); break; }
-    }
+    bus.stream(target, seconds * 1000);
     Serial.println(F("  done"));
 }
 
@@ -341,6 +377,7 @@ static void handle(const String& line) {
     if (cmd == "scan")                    { doScan(arg(line,1).length() ? arg(line,1).toInt() : 20); return; }
     if (cmd == "sweep")                   { doSweep(arg(line,1).length() ? arg(line,1).toInt() : 20); return; }
     if (cmd == "selftest") { doSelfTest(arg(line,1) != "wire"); return; }
+    if (cmd == "continuity") { doContinuity(); return; }
     if (cmd == "blast")    { doBlast(arg(line,1).length() ? (uint32_t)arg(line,1).toInt() : 5); return; }
     if (cmd == "pins") {
         Serial.printf("  TX GPIO%d, RX GPIO%d (%s)\n", bus.txPin(), bus.rxPin(),

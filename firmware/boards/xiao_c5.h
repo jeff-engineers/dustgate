@@ -66,16 +66,17 @@
 // servo end; whether our own transmission echoes back depends on what is
 // driving the line (see ST3215Bus::receive — it copes with both).
 //
-// WHICH PAD IS TX IS NOT SETTLED, AND THE TWO SOURCES DISAGREE:
-//   - Every XIAO's silkscreen labels D6 TX and D7 RX. A board you socket into
-//     is routed to that convention, so this is what we default to.
-//   - Seeed's own wiki for the Bus Servo Driver Board says the opposite —
-//     "connect the RX pin on the Driver Board to the TX pin (D7) on your host…
-//     the TX pin on the Driver Board to the RX pin (D6)".
-// One of them is a typo and no servo has answered yet to say which. The bench
-// console's `sweep` tries both orders, and `swap` flips them at runtime, so
-// being wrong here costs a command rather than a reflash. When a servo finally
-// answers, write the winner down HERE and delete this paragraph.
+// TX IS D6. Two sources against one, checked 2026-08-26 after a bus servo
+// answered nothing:
+//   - The Arduino core's own variant table for this board (framework-
+//     arduinoespressif32/variants/XIAO_ESP32C5/pins_arduino.h) says
+//     `TX = 11, RX = 12` and `D6 = 11, D7 = 12`. That is the table the build
+//     itself uses, so it is the one that decides.
+//   - Every XIAO silkscreen agrees: D6 TX, D7 RX.
+//   - Seeed's wiki for the Bus Servo Driver Board says the opposite ("connect
+//     the RX pin on the Driver Board to the TX pin (D7) on your host"). Treat
+//     that line as a typo — but the bench console can `swap` at runtime, so it
+//     costs a command to find out rather than a reflash.
 //
 // ⚠️ The bus LOGIC LEVEL is still unconfirmed (3.3V vs 5V) and the C5 is NOT 5V
 // tolerant. That is moot through the adapter, which buffers, and it matters the
