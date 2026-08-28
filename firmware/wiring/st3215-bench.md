@@ -224,7 +224,8 @@ check.
 
 ### 5.0.1 The baseline, 2026-08-26 (ST3215 at 8.7 V, Bus Servo Driver Board)
 
-12 passed, 0 failed. Numbers a later run should be compared against:
+**13 passed, 0 failed, 17 checks.** Numbers a later run should be compared
+against — they have held to within a few counts across five runs:
 
 | Check | Result |
 |---|---|
