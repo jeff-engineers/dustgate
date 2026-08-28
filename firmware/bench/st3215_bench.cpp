@@ -149,21 +149,24 @@ static int16_t signedLoad(uint16_t raw) {
 // -----------------------------------------------------------------------------
 // Where the shaft actually is, across turns
 //
-// PRESENT_POSITION IN STEP MODE IS NOT A CIRCLE, and this file spent three
-// wrong models finding that out. `stepdump 4096` settled it (2026-08-26): the
-// shaft ran from +4100 to +3 in one monotonic ramp, 205 samples, no wrap and no
-// jump — and +4100 is past one turn, so the register carries values a 0..4095
-// counter cannot hold. It is signed sign-magnitude, and it counts through turns.
+// WHAT PRESENT_POSITION DOES PAST ONE TURN IS STILL UNKNOWN, and this comment
+// has been wrong twice, so read the caveat before trusting a number here.
 //
-// So there is no unwrapping to do here, and the accumulator that used to live in
-// this spot was answering a question the hardware had already answered. What is
-// left is an ORIGIN: `zero` remembers where you started so a reading can be
-// shown relative to it.
+// It used to say the register counts through turns, on the strength of
+// `stepdump 4096`: a monotonic ramp from +4100 to +3, no wrap, no jump, and
+// +4100 is past 4095. That trace was taken IN MODE 0 — `suite` restores mode 0
+// when it finishes — where register 42 is a position and 4096|0x8000 masks down
+// to 0. The servo was simply driving to zero, and +4100 is limit slop, not a
+// second turn. `stepdump 12288` on 2026-08-28 did exactly the same thing from
+// +2053, which is what exposed it. doStep() now refuses to run outside mode 3.
 //
-// STILL OPEN: how far it counts before something gives. The vendor claims about
-// ±7 turns. And one earlier observation still does not fit — two same-direction
-// step commands ended at +4 rather than two turns away — so the range and the
-// end-of-move behaviour want one more trace before any driver leans on them.
+// What survives: nothing here unwraps anything, which is still right, because a
+// guessed unwrapper is worse than an honest gap. What is left is an ORIGIN:
+// `zero` remembers where you started so a reading can be shown relative to it.
+//
+// The trace that would actually settle it: 'stepmode on', power-cycle, then
+// 'stepdump 12288 15000'. Three turns is far enough that a wrap, an
+// accumulation, or a hard limit each look completely different.
 // -----------------------------------------------------------------------------
 static int32_t origin = 0;
 
@@ -572,16 +575,44 @@ static void doStepMode(bool on) {
 }
 
 /**
+ * Refuse a stepping command unless the servo is actually in stepping mode.
+ *
+ * See doStep() — the failure this prevents is silent and convincing.
+ */
+static bool requireStepMode(const char* what) {
+    uint8_t mode = 255;
+    if (!bus.read8(target, ST_REG_MODE, &mode)) { fail("mode read"); return false; }
+    if (mode == 3) return true;
+    Serial.printf("  %s needs mode 3; the servo is in mode %u, where register 42 is a\n"
+                  "  POSITION and a step count masks down to something arbitrary.\n"
+                  "  Sequence: 'stepmode on', power-cycle the servo, then %s.\n",
+                  what, mode, what);
+    return false;
+}
+
+/**
  * A number of STEPS, not a position — that is what register 42 means in mode 3.
  * Bit 15 carries the direction.
  *
- * BIT 15 CLEAR MEANS THE POSITION GOES DOWN. Measured, not assumed: `step 4096`
- * sent 0x1000 and the shaft ran from +4100 to +3 in one smooth ramp
- * (2026-08-26). So a positive step count here sets bit 15, because "positive
- * steps raise the position" is the only mapping that will not trip up whoever
- * writes the driver.
+ * ONLY IN MODE 3. In mode 0 that same register is a position, and a step count
+ * with bit 15 set lands somewhere the servo never meant to go: `stepdump 12288`
+ * on 2026-08-28 sent 0xB000 to a mode-0 servo, which took the low twelve bits,
+ * read position 0, and drove smoothly to +4. It looks exactly like a servo that
+ * ignores the step count. It also explains the two earlier readings this file
+ * used to call unexplained — `step 4096` twice ending at +4 is 0x9000 masked to
+ * zero, both times.
+ *
+ * So this refuses to run outside mode 3 rather than producing a plausible trace
+ * of the wrong thing. The trap is easy to fall into on purpose: `suite` restores
+ * mode 0 when it finishes, so the very next `step` is in the wrong mode.
+ *
+ * WHICH WAY BIT 15 COUNTS IS STILL UNPROVEN. Every observation we had was made
+ * in mode 0 and means nothing. Positive counts set bit 15 here because "positive
+ * raises the position" is the mapping a driver wants; one real mode-3 step will
+ * confirm or flip it.
  */
 static void doStep(long steps) {
+    if (!requireStepMode("step")) return;
     uint16_t before = 0;
     bus.read16(target, ST_REG_PRESENT_POS, &before);
 
@@ -610,9 +641,10 @@ static void doStep(long steps) {
  * large jump after the motion has stopped.
  */
 static void doStepDump(long steps, uint32_t ms) {
+    if (!requireStepMode("stepdump")) return;
     uint16_t raw = (uint16_t)labs(steps);
     if (raw > 32767) raw = 32767;
-    if (steps > 0) raw |= 0x8000;          // bit 15 clear counts DOWN — see doStep
+    if (steps > 0) raw |= 0x8000;          // direction, mapping unproven — see doStep
 
     Serial.printf("  %ld steps, sampling %lums at 20ms. ms, raw, signed, delta\n",
                   steps, (unsigned long)ms);
@@ -862,22 +894,21 @@ void doSuite() {
 
     // ---- stepping: travel past one turn --------------------------------------
     //
-    // The slider's actual mode, and the one that took four wrong models to
-    // understand. What is true, all of it measured:
+    // The slider's actual mode. What is true, all of it measured:
     //   - mode 3 is STEPPING. Register 42 there is a NUMBER OF STEPS, not a
-    //     position, with bit 15 as direction — and bit 15 CLEAR counts DOWN.
+    //     position, with bit 15 as direction.
     //   - it needs both angle limits at 0, and the mode written through the
     //     EEPROM lock, or the setting evaporates at the next power cycle.
-    //   - PRESENT_POSITION is signed sign-magnitude and carries values past
-    //     4095, so the servo counts through turns itself. No software unwrap.
     //
-    // The one thing this cannot do is power-cycle the servo, so the mode change
-    // takes effect only if the servo was already in mode 3. That is why the
-    // section reports what it sees rather than failing: `stepmode on`, a power
-    // cycle, and `suite` again is the sequence that exercises it fully.
-    // The suite has just set mode 0 above, and mode changes only take effect
-    // after a servo power cycle — so a single run can never exercise stepping.
-    // It says what to do instead of pretending otherwise.
+    // What is NOT known, and was twice believed on mode-0 evidence: which way
+    // bit 15 counts, and what PRESENT_POSITION does past one turn. Every trace
+    // we had was taken after the suite restored mode 0, where a step count is
+    // read as a masked position — see the comment above circlePos().
+    //
+    // The one thing this cannot do is power-cycle the servo, so a mode change
+    // takes effect only if the servo was ALREADY in mode 3. The section reports
+    // what it sees rather than failing: `stepmode on`, a power cycle, and
+    // `suite` again is the sequence that exercises it.
     uint8_t stepMode = 255;
     bus.read8(target, ST_REG_MODE, &stepMode);
     if (stepMode != 3) {
