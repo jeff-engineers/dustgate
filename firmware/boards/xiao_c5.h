@@ -49,7 +49,45 @@
 // the topology schema's controllers[].board values (docs/topology-schema.md).
 #define BOARD_NAME "xiao_c5"
 
-// -- Servo PWM block (the only actuators this board drives) --
+// -- What this board drives: FOUR PWM SERVOS *OR* ONE SERIAL BUS --
+//
+// PWM and serial never share a board (see config.h), and on this part they
+// physically can't anyway: D7 is PWM channel 1 and the UART's RX. So the flag
+// picks which personality the header presents, and config.h's #error stays as
+// the backstop for a board header that tries to claim both.
+//
+// -DDUSTGATE_SERVO_BUS is the slider's build. Everything else — primary and
+// PWM node — gets the four-channel block and no bus.
+#if defined(DUSTGATE_SERVO_BUS)
+
+// -- Serial-servo bus (Feetech ST3215 and friends) --
+// D6/D7 are GPIO11/12, the board's only exposed hardware UART, and the pads
+// Seeed's XIAO Bus Servo Adapter sockets onto. ONE WIRE, half duplex at the
+// servo end; whether our own transmission echoes back depends on what is
+// driving the line (see ST3215Bus::receive — it copes with both).
+//
+// TX IS D6. Two sources against one, checked 2026-08-26 after a bus servo
+// answered nothing:
+//   - The Arduino core's own variant table for this board (framework-
+//     arduinoespressif32/variants/XIAO_ESP32C5/pins_arduino.h) says
+//     `TX = 11, RX = 12` and `D6 = 11, D7 = 12`. That is the table the build
+//     itself uses, so it is the one that decides.
+//   - Every XIAO silkscreen agrees: D6 TX, D7 RX.
+//   - Seeed's wiki for the Bus Servo Driver Board says the opposite ("connect
+//     the RX pin on the Driver Board to the TX pin (D7) on your host"). Treat
+//     that line as a typo — but the bench console can `swap` at runtime, so it
+//     costs a command to find out rather than a reflash.
+//
+// ⚠️ The bus LOGIC LEVEL is still unconfirmed (3.3V vs 5V) and the C5 is NOT 5V
+// tolerant. That is moot through the adapter, which buffers, and it matters the
+// moment a servo lead meets one of these pads directly.
+// See firmware/wiring/st3215-bench.md.
+#define PIN_SERVO_BUS_TX   11   // D6, the pad the XIAO silkscreen calls TX
+#define PIN_SERVO_BUS_RX   12   // D7, ditto RX
+
+#else
+
+// -- Servo PWM block --
 // D7..D10 — four adjacent pads on one edge, same physical-grouping rule as every
 // other board here, so a servo loom can be built once and moved between them.
 // Channel order matched the retired boards/qtpy_s3.h (channel 1 = first pad of
@@ -58,6 +96,8 @@
 #define SERVO_PWM_PIN_2     8   // D8
 #define SERVO_PWM_PIN_3     9   // D9
 #define SERVO_PWM_PIN_4    10   // D10
+
+#endif
 
 // -- Status pixel (external) --
 // The XIAO's onboard indicator is a plain green user LED on GPIO27, not an RGB
@@ -106,14 +146,11 @@
 // reset. D0 is deliberately not used: it is the only analog pad on the edge.
 #define PIN_WAKE_BTN     0   // D1, INPUT_PULLUP, momentary to GND
 
-// -- Reserved: serial-servo bus --
-// D6/D7 are the board's hardware UART (GPIO11/GPIO12). D7 doubles as
-// SERVO_PWM_PIN_1 above, so a build that drives a serial bus servo has to give
-// up PWM channel 1 — which is the right trade, since one bus replaces the whole
-// four-channel block and lifts the SERVO_COUNT ceiling with it. Left commented
-// until there is a bus servo on the bench to talk to.
-// #define SERIAL1_TX_PIN  11   // D6
-// #define SERIAL1_RX_PIN  12   // D7
+// -- The serial-servo bus moved UP --
+// It is defined with the PWM block it replaces (-DDUSTGATE_SERVO_BUS), because
+// the two are one choice and reading them apart is what let the pin map claim
+// both. Giving up PWM channel 1 is the right trade: one bus replaces the whole
+// four-channel block and lifts the SERVO_COUNT ceiling with it.
 
 // -- Board capabilities --
 // USB Serial/JTAG built into the chip, no bridge. Requires
@@ -141,8 +178,8 @@
 // -----------------------------------------------------------------------------
 // Motor / endstop pins are DELIBERATELY ABSENT.
 //
-// config.h derives HAS_LINEAR from whether PIN_TMC_STEP is defined, so leaving
-// these out is what makes this a servo-only build — the stepper driver, the
+// config.h derives HAS_LINEAR from the serial-bus pins now, so leaving these out
+// is what makes this a servo-only build — the stepper driver, the
 // feedback system and the endstop supervisor all compile out. Defining them
 // here to "keep the interface uniform" would silently re-enable code that has
 // no hardware behind it, and on this part would also re-introduce the
