@@ -294,8 +294,19 @@ position is the driver's to keep by counting what it commanded, and it cannot
 survive a power cycle — which is exactly why the endstops stay on the rail and
 the homing sweep remains the calibration path.
 
-Still to confirm, one command's worth: a second `step` should restart the
-countdown at the new value rather than continuing from 0.
+**Confirmed on the second trace (2026-08-28).** `step 4096` following the 12288
+run read `0x9003` on its first sample — the new command's count, not a
+continuation — and fell to `0x8003`. It is a per-command remaining counter, and
+it **carries the remainder**: 4096 asked with 3 still outstanding showed 4099.
+Nothing is dropped between commands, which is what makes commanded distance a
+sound basis for tracking the slider's position between homing sweeps.
+
+It settles a few counts short of zero rather than reaching it — 3 and 4 across
+the two runs. **Arrival is "the count stopped falling", never "the count is 0"**;
+a driver waiting for zero waits forever. Measured rate for the second run was
+4096 steps in 3.12 s (~1310 counts/s including the ramp) against 1442 counts/s
+for the longer 12288 move, the difference being how much of each move is spent
+accelerating.
 
 **A servo that has just powered up comes back with TORQUE OFF.** That is not a bench curiosity: a slider node must
 enable torque explicitly when it connects, because a servo that has just powered

@@ -162,10 +162,15 @@ static int16_t signedLoad(uint16_t raw) {
 //     the shaft IS, only how much of the last command is left. Which settles the
 //     endstop question for the slider the hard way — see the calibration doc.
 //
-// STILL TO CONFIRM, one command's worth: a second `step` should restart the
-// countdown at the new command's value rather than continuing from 0. If it
-// does, "steps remaining" is proven and "absolute position that happened to
-// start at the commanded value" is dead.
+// CONFIRMED 2026-08-28, second trace: `step 4096` after the 12288 run read
+// 0x9003 on its first sample — the new command's count, not a continuation —
+// and fell to 0x8003. So it is a per-command remaining counter, and it CARRIES
+// THE REMAINDER: 4096 asked with 3 still outstanding showed 4099. Nothing is
+// dropped between commands, which is what makes commanded distance a sound
+// basis for tracking the slider.
+//
+// It settles a few counts short of zero rather than reaching it (3 and 4 across
+// two runs). Arrival is "the count stopped falling", never "the count is 0".
 //
 // This file's signed decoder renders all of it as sign-magnitude, so the trace
 // above prints as -12288 climbing to -4. That is the DISPLAY, not the meaning.
@@ -915,43 +920,66 @@ void doSuite() {
     // we had was taken after the suite restored mode 0, where a step count is
     // read as a masked position — see the comment above circlePos().
     //
-    // The one thing this cannot do is power-cycle the servo, so a mode change
-    // takes effect only if the servo was ALREADY in mode 3. The section reports
-    // what it sees rather than failing: `stepmode on`, a power cycle, and
-    // `suite` again is the sequence that exercises it.
+    // A mode change now takes effect immediately (the EEPROM lock was the whole
+    // mechanism; no power cycle is involved), but this suite has just set mode 0
+    // above, so a single run still only reports what it finds. `stepmode on`
+    // then `suite` is the sequence that exercises the stepping path.
     uint8_t stepMode = 255;
     bus.read8(target, ST_REG_MODE, &stepMode);
     if (stepMode != 3) {
-        meas("stepping", "mode %u — this suite runs the position checks; for stepping: `stepmode on`, power-cycle, then step",
+        meas("stepping", "mode %u — this suite runs the position checks; for stepping: `stepmode on`, then `suite` again",
              stepMode);
     } else {
-        bus.write8(target, ST_REG_TORQUE_ENABLE, 1);      // it comes back from a power cycle holding nothing
+        bus.write8(target, ST_REG_TORQUE_ENABLE, 1);      // a freshly powered servo holds nothing
         delay(50);
 
-        uint16_t a = 0, b = 0, c = 0;
-        bus.read16(target, ST_REG_PRESENT_POS, &a);
-        bus.moveTo(target, 4096 | 0x8000, 1500);          // one turn's steps, upwards
-        delay(5000);
-        bus.read16(target, ST_REG_PRESENT_POS, &b);
-        bus.moveTo(target, 4096, 1500);                   // and the same back down
-        delay(5000);
-        bus.read16(target, ST_REG_PRESENT_POS, &c);
+        // Register 56 in step mode is a COUNTDOWN of steps still to go, not a
+        // position — so this measures the countdown, not a displacement. Two
+        // 4096-step commands in the same direction: the second must restart the
+        // count rather than continue the first, which is what tells a remaining
+        // counter apart from an accumulator.
+        const uint16_t kSteps = 4096;
+        long first = 0, settledA = 0, second = 0, settledB = 0;
+        uint32_t travelMs = 0;
 
-        long up   = (long)circlePos(b) - (long)circlePos(a);
-        long down = (long)circlePos(c) - (long)circlePos(b);
+        uint16_t before = 0;
+        bus.read16(target, ST_REG_PRESENT_POS, &before);
+        long residual = (long)(before & 0x7FFF);
 
-        meas("step travel", "%+ld -> %+ld -> %+ld (up %+ld, down %+ld)",
-             (long)circlePos(a), (long)circlePos(b), (long)circlePos(c), up, down);
-        check("steps a full turn", labs(up) > 3900 && labs(up) < 4300,
-              "asked 4096 steps, moved %+ld", up);
-        check("direction bit", up > 0 && down < 0,
-              "bit 15 set went %s, clear went %s", up > 0 ? "up" : "down", down < 0 ? "down" : "up");
-        check("returns to start", labs((long)circlePos(c) - (long)circlePos(a)) < 60,
-              "ended %+ld counts from where it began", (long)circlePos(c) - (long)circlePos(a));
-        // Past one turn is where the register's range matters, and the vendor's
-        // claim of about +/-7 turns has never been tested here.
-        meas("position range", "reading is %+ld; values past 4095 are real, the ceiling is untested",
-             (long)circlePos(c));
+        for (int pass = 0; pass < 2; pass++) {
+            uint32_t t0 = millis();
+            bus.moveTo(target, kSteps | 0x8000, 1500);
+            delay(20);
+            uint16_t r = 0;
+            bus.read16(target, ST_REG_PRESENT_POS, &r);
+            long start = (long)(r & 0x7FFF);
+
+            // Done when the count stops falling, NOT when it reaches zero: it
+            // settles a few counts short every time (3 and 4 on 2026-08-28).
+            long last = start; int still = 0;
+            while (millis() - t0 < 8000 && still < 10) {
+                delay(20);
+                if (!bus.read16(target, ST_REG_PRESENT_POS, &r)) continue;
+                long now = (long)(r & 0x7FFF);
+                still = (now == last) ? still + 1 : 0;
+                last = now;
+            }
+            if (pass == 0) { first = start;  settledA = last; travelMs = millis() - t0; }
+            else           { second = start; settledB = last; }
+        }
+
+        meas("step countdown", "%ld left before, then %ld -> %ld, then %ld -> %ld",
+             residual, first, settledA, second, settledB);
+        check("countdown restarts", second > kSteps - 200 && second < kSteps + 200,
+              "second command read %ld, not a continuation of %ld", second, settledA);
+        check("carries the remainder", first >= kSteps && first <= kSteps + 50,
+              "asked %u with %ld outstanding, register showed %ld", kSteps, residual, first);
+        check("retires the count", settledA < 20 && settledB < 20,
+              "settled at %ld and %ld — short of zero, but done", settledA, settledB);
+        meas("step rate", "%lu ms for %u steps = %ld counts/s including the ramp",
+             (unsigned long)travelMs, kSteps, travelMs ? (long)kSteps * 1000 / (long)travelMs : 0);
+        // Two turns in this section; three are proven. The vendor claims ~7.
+        meas("turn budget", "3 turns confirmed in one command (2026-08-28); the ceiling is untested");
     }
 
     // ---- put it back ---------------------------------------------------------
