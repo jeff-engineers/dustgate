@@ -94,6 +94,7 @@ static void help() {
         "  stepmode on|off  mode 3 + limits 0, the documented way to step indefinitely\n"
         "  step <n>         in stepmode: a NUMBER OF STEPS, signed. Not a position\n"
         "  zero             reset the tracked across-turns position to 0 (it wraps; we count)\n"
+        "  stepdump <n> [ms]  step, and stream the raw position through the move — what does it DO?\n"
         "  timeit <pos> [spd]  move there and time it, in counts/s and rpm — measures what 46 means\n"
         "\n"
         "  suite            run every check, print PASS/FAIL and a baseline. THE SHAFT TURNS.\n"
@@ -407,7 +408,12 @@ static void doRead() {
 
     // The register wraps, so this is the only running total of where the shaft
     // is. `zero` resets it; a power cycle of the servo invalidates it.
-    Serial.printf("  tracked: %+ld counts = %+.2f turns since `zero`\n", absPos, absPos / 4096.0f);
+    // PROVISIONAL. This assumes a 4096-count circle, and a mid-move reading of
+    // +8085 says that is not the whole story — two forward turns tracked as
+    // -2.00. `stepdump` is the command that will settle what the register does;
+    // until it has, this number is a hypothesis with a sign bug in it.
+    Serial.printf("  tracked: %+ld counts = %+.2f turns since `zero` (PROVISIONAL — see stepdump)\n",
+                  absPos, absPos / 4096.0f);
     if (cur) Serial.printf("  current %u (units per the register map, unconfirmed)\n", cur);
 }
 
@@ -602,6 +608,50 @@ static void doStep(long steps) {
 
     Serial.printf("  %ld steps sent as 0x%04X, from %+ld (tracked %+ld) — the tracker follows it from here\n",
                   steps, raw, (long)circlePos(before), absPos);
+}
+
+/**
+ * Issue a step and stream the RAW position while it runs.
+ *
+ * Three readings have now implied three different models of what
+ * PRESENT_POSITION does past one turn — wraps at 4096, reports sign-magnitude
+ * below zero, accumulates to 8085 in flight and shows 4 when it stops. Two of
+ * those cannot both be true, and every guess so far has cost a build. So this
+ * prints the sequence itself: raw hex, the signed reading, and the delta from
+ * the sample before, at 20ms across the whole move.
+ *
+ * Read the deltas, not the values. A clean wrap shows one delta of about
+ * ±4096; an accumulator shows none; a renormalisation at the end shows a single
+ * large jump after the motion has stopped.
+ */
+static void doStepDump(long steps, uint32_t ms) {
+    uint16_t raw = (uint16_t)labs(steps);
+    if (raw > 32767) raw = 32767;
+    if (steps < 0) raw |= 0x8000;
+
+    Serial.printf("  %ld steps, sampling %lums at 20ms. ms, raw, signed, delta\n",
+                  steps, (unsigned long)ms);
+
+    uint16_t prev = 0;
+    bool     havePrev = false;
+    uint32_t started = millis();
+    if (!bus.moveTo(target, raw, 1500)) { fail("step"); return; }
+
+    while (millis() - started < ms) {
+        delay(20);
+        uint16_t now = 0;
+        if (!bus.read16(target, ST_REG_PRESENT_POS, &now)) continue;
+
+        int32_t delta = havePrev ? (int32_t)circlePos(now) - (int32_t)circlePos(prev) : 0;
+        // Only print when something changed, or the log is mostly padding.
+        if (!havePrev || now != prev) {
+            Serial.printf("  %5lu  0x%04X  %+6ld  %+6ld\n",
+                          (unsigned long)(millis() - started), now,
+                          (long)circlePos(now), (long)delta);
+        }
+        prev = now; havePrev = true;
+    }
+    Serial.println(F("  ---- done. Settled value is the last row above."));
 }
 
 static void doDump(uint8_t addr, uint8_t len) {
@@ -955,6 +1005,11 @@ static void handle(const String& line) {
     if (cmd == "mode")   { doMode((uint8_t)arg(line,1).toInt()); return; }
     if (cmd == "limits")   { doLimits(arg(line,1) != "turn"); return; }
     if (cmd == "stepmode") { doStepMode(arg(line,1) != "off"); return; }
+    if (cmd == "stepdump") {
+        if (!arg(line,1).length()) { Serial.println(F("  stepdump <steps> [ms]")); return; }
+        doStepDump(arg(line,1).toInt(), arg(line,2).length() ? (uint32_t)arg(line,2).toInt() : 6000);
+        return;
+    }
     if (cmd == "zero") {
         absPos = 0; haveLast = false;
         Serial.println(F("  tracked position zeroed here"));
