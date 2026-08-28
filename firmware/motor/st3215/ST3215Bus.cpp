@@ -223,10 +223,14 @@ bool ST3215Bus::writeEeprom8(uint8_t id, uint8_t addr, uint8_t value) {
     if (!eepromUnlocked(id, true)) return false;
     delay(5);
     bool ok = write8(id, addr, value);
+    // Grab the reason NOW. Re-locking is itself a transaction, and a successful
+    // one clears _lastError — which is how a failed write here used to surface
+    // at the bench as "failed:" with nothing after it.
+    const char* why = ok ? nullptr : lastError();
     delay(10);                                  // the cell needs a moment
     eepromUnlocked(id, false);                  // re-lock even if the write failed
     delay(5);
-    if (!ok) return false;
+    if (!ok) { _lastError = why; return false; }
 
     uint8_t back = 0;
     if (!read8(id, addr, &back)) return false;
@@ -238,10 +242,11 @@ bool ST3215Bus::writeEeprom16(uint8_t id, uint8_t addr, uint16_t value) {
     if (!eepromUnlocked(id, true)) return false;
     delay(5);
     bool ok = write16(id, addr, value);
+    const char* why = ok ? nullptr : lastError();   // see writeEeprom8()
     delay(10);
     eepromUnlocked(id, false);
     delay(5);
-    if (!ok) return false;
+    if (!ok) { _lastError = why; return false; }
 
     uint16_t back = 0;
     if (!read16(id, addr, &back)) return false;

@@ -149,24 +149,31 @@ static int16_t signedLoad(uint16_t raw) {
 // -----------------------------------------------------------------------------
 // Where the shaft actually is, across turns
 //
-// WHAT PRESENT_POSITION DOES PAST ONE TURN IS STILL UNKNOWN, and this comment
-// has been wrong twice, so read the caveat before trusting a number here.
+// IN STEP MODE, REGISTER 56 IS NOT A POSITION AT ALL — it counts DOWN the steps
+// still to go. First clean mode-3 trace, 2026-08-28: `stepdump 12288 15000`
+// wrote 0xB000 and the register read 0xB000 on the first sample, then fell
+// monotonically to 0x8004 over 8.5 s. Strip bit 15 and that is 12288 -> 4: the
+// commanded step count, retiring at ~1500 counts/s, which is exactly the speed
+// asked for. Bit 15 stayed set the whole way, mirroring the command's direction.
 //
-// It used to say the register counts through turns, on the strength of
-// `stepdump 4096`: a monotonic ramp from +4100 to +3, no wrap, no jump, and
-// +4100 is past 4095. That trace was taken IN MODE 0 — `suite` restores mode 0
-// when it finishes — where register 42 is a position and 4096|0x8000 masks down
-// to 0. The servo was simply driving to zero, and +4100 is limit slop, not a
-// second turn. `stepdump 12288` on 2026-08-28 did exactly the same thing from
-// +2053, which is what exposed it. doStep() now refuses to run outside mode 3.
+// Two things follow, and they matter more than the register does:
+//   - MULTI-TURN WORKS. Three full turns in one command, no wrap, no clamp.
+//   - THERE IS NO ABSOLUTE POSITION IN STEP MODE. Nothing here tells you where
+//     the shaft IS, only how much of the last command is left. Which settles the
+//     endstop question for the slider the hard way — see the calibration doc.
 //
-// What survives: nothing here unwraps anything, which is still right, because a
-// guessed unwrapper is worse than an honest gap. What is left is an ORIGIN:
-// `zero` remembers where you started so a reading can be shown relative to it.
+// STILL TO CONFIRM, one command's worth: a second `step` should restart the
+// countdown at the new command's value rather than continuing from 0. If it
+// does, "steps remaining" is proven and "absolute position that happened to
+// start at the commanded value" is dead.
 //
-// The trace that would actually settle it: 'stepmode on', power-cycle, then
-// 'stepdump 12288 15000'. Three turns is far enough that a wrap, an
-// accumulation, or a hard limit each look completely different.
+// This file's signed decoder renders all of it as sign-magnitude, so the trace
+// above prints as -12288 climbing to -4. That is the DISPLAY, not the meaning.
+// Read the magnitude.
+//
+// In mode 0 the same register is an ordinary 0..4095 position and everything
+// above is irrelevant. `origin` is a mode-0 convenience: `zero` remembers where
+// you started so a reading can be shown relative to it.
 // -----------------------------------------------------------------------------
 static int32_t origin = 0;
 
@@ -606,10 +613,11 @@ static bool requireStepMode(const char* what) {
  * of the wrong thing. The trap is easy to fall into on purpose: `suite` restores
  * mode 0 when it finishes, so the very next `step` is in the wrong mode.
  *
- * WHICH WAY BIT 15 COUNTS IS STILL UNPROVEN. Every observation we had was made
- * in mode 0 and means nothing. Positive counts set bit 15 here because "positive
- * raises the position" is the mapping a driver wants; one real mode-3 step will
- * confirm or flip it.
+ * WHICH PHYSICAL DIRECTION BIT 15 PICKS IS STILL UNRECORDED. The 2026-08-28
+ * trace proved the bit reaches the servo and that the step count is honoured
+ * three turns deep, but nobody wrote down which way the shaft actually turned.
+ * Positive counts set bit 15 here because "positive raises the position" is the
+ * mapping a driver wants; watching one step decides whether that is a lie.
  */
 static void doStep(long steps) {
     if (!requireStepMode("step")) return;

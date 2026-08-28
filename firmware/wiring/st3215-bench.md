@@ -253,9 +253,12 @@ mode 3, and three things must be true together:
 1. `ST_REG_MODE` (33) = 3;
 2. **both** angle limits (9 and 11) = 0 — "otherwise it is impossible to step
    indefinitely";
-3. the **servo power-cycled** since those were set. They are EEPROM and are
-   documented as taking effect at startup; nothing in firmware can restart it,
-   which is why the suite can only measure the un-restarted case.
+3. ~~the **servo power-cycled** since those were set.~~ **Not required —
+   disproven 2026-08-28.** `stepmode on` followed immediately by `stepdump`,
+   with no restart of any kind, stepped three full turns. The power cycle was
+   never the mechanism; the EEPROM lock below was, and once writes go through
+   the lock the mode takes effect at once. Every "it needs a restart" reading
+   before this was a servo that had never actually been in mode 3.
 
 **And EEPROM IS WRITE-PROTECTED — register 55.** This is the one that hid
 everything else. With the lock set (the factory default), a write to any
@@ -272,24 +275,38 @@ servo's id.
 **Stepping works (2026-08-26).** Mode 3, written through the lock, survived a
 power cycle; `torque on`; `step 4096` turned the shaft a full revolution.
 
-**What it does NOT give you is an absolute position.** `PRESENT_POSITION` is a
-point on a 4096-count circle, reported sign-magnitude — 4096 steps forward from
-0 lands back at 4, and stepping backwards reads `0x8B51`, which is **-2897**,
-not 35665. Nothing in the register map counts turns. So the slider's absolute
-position is the driver's to keep, by unwrapping those readings, and it must
-sample faster than the shaft can travel half a turn (2048 counts ≈ 1.2 s at the
-measured ceiling) or it silently loses one. It cannot survive a power cycle
-either — which is exactly why the endstops stay on the rail and the homing sweep
-remains the calibration path.
+**What it does NOT give you is an absolute position — and register 56 is not
+what it looks like.** In step mode it counts DOWN the steps still to go.
+`stepdump 12288 15000` (2026-08-28) wrote `0xB000` and read `0xB000` back on the
+first sample, then watched it fall monotonically to `0x8004` over 8.5 s. Strip
+bit 15 and that is 12288 → 4: the commanded step count retiring at ~1500
+counts/s, which is precisely the speed asked for. Bit 15 stayed set throughout,
+mirroring the command.
 
-**With that, mode 3 finally survived a power cycle** — and the servo
-came back with **TORQUE OFF**. That is not a bench curiosity: a slider node must
+So **multi-turn works** — three full turns in one command, no wrap, no clamp,
+which is the first direct evidence the ±7-turn budget the 30T pinion sizing
+assumes is real — and **nothing in the register map tells you where the shaft
+is**, only how much of the last command is outstanding. The earlier claim here,
+that position is a 4096-count circle needing a software unwrapper sampled faster
+than half a turn, was measured in mode 0 and does not apply; there is no
+unwrapping to do because there is nothing to unwrap. The slider's absolute
+position is the driver's to keep by counting what it commanded, and it cannot
+survive a power cycle — which is exactly why the endstops stay on the rail and
+the homing sweep remains the calibration path.
+
+Still to confirm, one command's worth: a second `step` should restart the
+countdown at the new value rather than continuing from 0.
+
+**A servo that has just powered up comes back with TORQUE OFF.** That is not a bench curiosity: a slider node must
 enable torque explicitly when it connects, because a servo that has just powered
 up holds nothing and ignores every move it is sent.
 
 And in mode 3, register 42 **is not a position**. It is a NUMBER OF STEPS with
-bit 15 as the direction — which is why "goal 8192, to go two turns" moved the
-shaft three counts. `stepmode on` sets conditions 1 and 2 and prompts for 3;
+bit 15 as the direction. (The old note here — that "goal 8192, to go two turns"
+moved the shaft three counts — was a MODE 0 observation: `8192|0x8000` masks to
+position 0, so the servo simply drove to zero. It proved nothing about stepping,
+and `doStep` now refuses to run outside mode 3 rather than let that happen
+again.) `stepmode on` sets conditions 1 and 2 and prompts for 3;
 `step <n>` sends a signed step count.
 
 Source: [python-st3215 register notes](https://github.com/Mickael-Roger/python-st3215),
