@@ -149,48 +149,28 @@ static int16_t signedLoad(uint16_t raw) {
 // -----------------------------------------------------------------------------
 // Where the shaft actually is, across turns
 //
-// PRESENT_POSITION IS ONE TURN, SIGNED, AND IT WRAPS. Measured 2026-08-26:
-// 4096 steps forward from 0 lands back at 4, and stepping backwards from there
-// reads 0x8B51 — bit 15 set, sign-magnitude, so -2897 rather than 35665. So the
-// value is a position on a 4096-count circle, reported as -4095..+4095 depending
-// on which side of zero the shaft sits.
+// PRESENT_POSITION IN STEP MODE IS NOT A CIRCLE, and this file spent three
+// wrong models finding that out. `stepdump 4096` settled it (2026-08-26): the
+// shaft ran from +4100 to +3 in one monotonic ramp, 205 samples, no wrap and no
+// jump — and +4100 is past one turn, so the register carries values a 0..4095
+// counter cannot hold. It is signed sign-magnitude, and it counts through turns.
 //
-// Nothing in the register map counts turns, so absolute position is ours to
-// keep: decode the sign first, then unwrap.
+// So there is no unwrapping to do here, and the accumulator that used to live in
+// this spot was answering a question the hardware had already answered. What is
+// left is an ORIGIN: `zero` remembers where you started so a reading can be
+// shown relative to it.
 //
-// THE SAMPLING RULE THIS DEPENDS ON: a jump of more than half a turn between two
-// samples is indistinguishable from a smaller jump the other way, so this must
-// be fed faster than the shaft can travel 2048 counts. At the measured ceiling
-// of ~1700 counts/s that is 1.2s, and everything here samples at 15-200ms. A
-// slider node polling slower than that would silently lose turns.
-//
-// It cannot survive a power cycle, which is why the endstops stay on the rail
-// and the homing sweep is still the calibration path.
-//
-// AND IT HAS TO RUN ON ITS OWN. Sampling only when someone types `read` counts
-// nothing: two `step 4096` commands between two reads look like no movement at
-// all, because the wraps happened unobserved. loop() polls it, which is exactly
-// what the slider node will have to do — the turn count is only as good as the
-// polling behind it.
+// STILL OPEN: how far it counts before something gives. The vendor claims about
+// ±7 turns. And one earlier observation still does not fit — two same-direction
+// step commands ended at +4 rather than two turns away — so the range and the
+// end-of-move behaviour want one more trace before any driver leans on them.
 // -----------------------------------------------------------------------------
-static long    absPos     = 0;
-static int32_t lastSigned = 0;
-static bool    haveLast   = false;
+static int32_t origin = 0;
 
-/** The signed position on the circle: -4095..+4095, sign in bit 15. */
+/** The signed reading: sign-magnitude, and in step mode it spans turns. */
 static int32_t circlePos(uint16_t raw) { return signedField(raw); }
 
-static void trackPosition(uint16_t raw) {
-    int32_t now = circlePos(raw);
-    if (haveLast) {
-        int32_t delta = now - lastSigned;
-        if (delta >  2048) delta -= 4096;      // wrapped backwards past zero
-        if (delta < -2048) delta += 4096;      // wrapped forwards past the top
-        absPos += delta;
-    }
-    lastSigned = now;
-    haveLast   = true;
-}
+static void trackPosition(uint16_t) { /* the servo counts; nothing to do here */ }
 
 /** Mode and torque, in words. Every state-reporting line prints these. */
 static void printState() {
@@ -408,12 +388,10 @@ static void doRead() {
 
     // The register wraps, so this is the only running total of where the shaft
     // is. `zero` resets it; a power cycle of the servo invalidates it.
-    // PROVISIONAL. This assumes a 4096-count circle, and a mid-move reading of
-    // +8085 says that is not the whole story — two forward turns tracked as
-    // -2.00. `stepdump` is the command that will settle what the register does;
-    // until it has, this number is a hypothesis with a sign bug in it.
-    Serial.printf("  tracked: %+ld counts = %+.2f turns since `zero` (PROVISIONAL — see stepdump)\n",
-                  absPos, absPos / 4096.0f);
+    if (origin != 0) {
+        Serial.printf("  since `zero`: %+ld counts = %+.2f turns\n",
+                      (long)(signedPos - origin), (signedPos - origin) / 4096.0f);
+    }
     if (cur) Serial.printf("  current %u (units per the register map, unconfirmed)\n", cur);
 }
 
@@ -595,7 +573,13 @@ static void doStepMode(bool on) {
 
 /**
  * A number of STEPS, not a position — that is what register 42 means in mode 3.
- * Bit 15 carries the direction, so -4096 is 0x9000, not 0xF000.
+ * Bit 15 carries the direction.
+ *
+ * BIT 15 CLEAR MEANS THE POSITION GOES DOWN. Measured, not assumed: `step 4096`
+ * sent 0x1000 and the shaft ran from +4100 to +3 in one smooth ramp
+ * (2026-08-26). So a positive step count here sets bit 15, because "positive
+ * steps raise the position" is the only mapping that will not trip up whoever
+ * writes the driver.
  */
 static void doStep(long steps) {
     uint16_t before = 0;
@@ -603,11 +587,12 @@ static void doStep(long steps) {
 
     uint16_t raw = (uint16_t)labs(steps);
     if (raw > 32767) raw = 32767;
-    if (steps < 0) raw |= 0x8000;
+    if (steps > 0) raw |= 0x8000;
     if (!bus.moveTo(target, raw, 1500)) { fail("step"); return; }
 
-    Serial.printf("  %ld steps sent as 0x%04X, from %+ld (tracked %+ld) — the tracker follows it from here\n",
-                  steps, raw, (long)circlePos(before), absPos);
+    Serial.printf("  %ld steps sent as 0x%04X, from %+ld — bit 15 %s, so the position goes %s\n",
+                  steps, raw, (long)circlePos(before),
+                  (raw & 0x8000) ? "set" : "clear", (raw & 0x8000) ? "up" : "down");
 }
 
 /**
@@ -627,7 +612,7 @@ static void doStep(long steps) {
 static void doStepDump(long steps, uint32_t ms) {
     uint16_t raw = (uint16_t)labs(steps);
     if (raw > 32767) raw = 32767;
-    if (steps < 0) raw |= 0x8000;
+    if (steps > 0) raw |= 0x8000;          // bit 15 clear counts DOWN — see doStep
 
     Serial.printf("  %ld steps, sampling %lums at 20ms. ms, raw, signed, delta\n",
                   steps, (unsigned long)ms);
@@ -875,49 +860,76 @@ void doSuite() {
     bus.read8(target, ST_REG_LOCK, &lockState);
     check("eeprom re-locked", lockState == 1, "register 55 reads %u after the writes above", lockState);
 
-    // ---- travel past one turn ------------------------------------------------
+    // ---- stepping: travel past one turn --------------------------------------
     //
-    // WHAT THE VENDOR DOCS SAY, found after three bench attempts failed:
-    //   - Mode 3 is STEPPING mode, and register 42 is not a position there. It
-    //     is a NUMBER OF STEPS, with bit 15 as the direction. So "goal 8192"
-    //     was never a request to go to two turns, and the 3 counts it moved
-    //     were the servo doing something else entirely.
-    //   - Mode 3 also requires BOTH angle limits at 0, "otherwise it is
-    //     impossible to step indefinitely".
-    //   - Mode 0 stops at one turn by design. That is not a bug to chase.
+    // The slider's actual mode, and the one that took four wrong models to
+    // understand. What is true, all of it measured:
+    //   - mode 3 is STEPPING. Register 42 there is a NUMBER OF STEPS, not a
+    //     position, with bit 15 as direction — and bit 15 CLEAR counts DOWN.
+    //   - it needs both angle limits at 0, and the mode written through the
+    //     EEPROM lock, or the setting evaporates at the next power cycle.
+    //   - PRESENT_POSITION is signed sign-magnitude and carries values past
+    //     4095, so the servo counts through turns itself. No software unwrap.
     //
-    // The combination never yet tried is mode 3 + limits 0 + a POWER CYCLE of
-    // the servo, and nothing in firmware can power-cycle it. So this is a
-    // measurement with instructions, not a check: a suite should not fail on a
-    // step a human has to perform. `stepmode on` sets it up.
-    bus.writeEeprom16(target, ST_REG_MIN_ANGLE, 0);
-    bus.writeEeprom16(target, ST_REG_MAX_ANGLE, 0);
-    delay(50);
-    uint16_t mlo = 1, mhi = 1;
-    bus.read16(target, ST_REG_MIN_ANGLE, &mlo);
-    bus.read16(target, ST_REG_MAX_ANGLE, &mhi);
-    check("limits cleared", mlo == 0 && mhi == 0, "read back %u..%u", mlo, mhi);
+    // The one thing this cannot do is power-cycle the servo, so the mode change
+    // takes effect only if the servo was already in mode 3. That is why the
+    // section reports what it sees rather than failing: `stepmode on`, a power
+    // cycle, and `suite` again is the sequence that exercises it fully.
+    // The suite has just set mode 0 above, and mode changes only take effect
+    // after a servo power cycle — so a single run can never exercise stepping.
+    // It says what to do instead of pretending otherwise.
+    uint8_t stepMode = 255;
+    bus.read8(target, ST_REG_MODE, &stepMode);
+    if (stepMode != 3) {
+        meas("stepping", "mode %u — this suite runs the position checks; for stepping: `stepmode on`, power-cycle, then step",
+             stepMode);
+    } else {
+        bus.write8(target, ST_REG_TORQUE_ENABLE, 1);      // it comes back from a power cycle holding nothing
+        delay(50);
 
-    bus.writeEeprom8(target, ST_REG_MODE, 3);
-    delay(50);
-    uint16_t before = 0;
-    bus.read16(target, ST_REG_PRESENT_POS, &before);
-    bus.moveTo(target, 4096, 1500);              // 4096 STEPS, one turn's worth
-    delay(6000);
-    uint16_t after = 0;
-    bus.read16(target, ST_REG_PRESENT_POS, &after);
-    meas("step mode 4096 steps", "%u -> %u, moved %ld counts (no power cycle since mode 3 was set)",
-         before, after, labs((long)after - (long)before));
+        uint16_t a = 0, b = 0, c = 0;
+        bus.read16(target, ST_REG_PRESENT_POS, &a);
+        bus.moveTo(target, 4096 | 0x8000, 1500);          // one turn's steps, upwards
+        delay(5000);
+        bus.read16(target, ST_REG_PRESENT_POS, &b);
+        bus.moveTo(target, 4096, 1500);                   // and the same back down
+        delay(5000);
+        bus.read16(target, ST_REG_PRESENT_POS, &c);
+
+        long up   = (long)circlePos(b) - (long)circlePos(a);
+        long down = (long)circlePos(c) - (long)circlePos(b);
+
+        meas("step travel", "%+ld -> %+ld -> %+ld (up %+ld, down %+ld)",
+             (long)circlePos(a), (long)circlePos(b), (long)circlePos(c), up, down);
+        check("steps a full turn", labs(up) > 3900 && labs(up) < 4300,
+              "asked 4096 steps, moved %+ld", up);
+        check("direction bit", up > 0 && down < 0,
+              "bit 15 set went %s, clear went %s", up > 0 ? "up" : "down", down < 0 ? "down" : "up");
+        check("returns to start", labs((long)circlePos(c) - (long)circlePos(a)) < 60,
+              "ended %+ld counts from where it began", (long)circlePos(c) - (long)circlePos(a));
+        // Past one turn is where the register's range matters, and the vendor's
+        // claim of about +/-7 turns has never been tested here.
+        meas("position range", "reading is %+ld; values past 4095 are real, the ceiling is untested",
+             (long)circlePos(c));
+    }
 
     // ---- put it back ---------------------------------------------------------
-    bus.writeEeprom8(target, ST_REG_MODE, 0);
-    bus.writeEeprom16(target, ST_REG_MIN_ANGLE, 0);
-    bus.writeEeprom16(target, ST_REG_MAX_ANGLE, ST_POS_MAX);
-    delay(50);
-    settleAt(2048, 800);
-    bus.read8(target, ST_REG_MODE, &mode);
-    bus.read16(target, ST_REG_MAX_ANGLE, &hi);
-    check("restored", mode == 0 && hi == ST_POS_MAX, "mode %u, limits 0..%u, parked at centre", mode, hi);
+    // A servo left in stepping mode was PUT there deliberately — restoring it to
+    // position mode behind the operator's back would undo the setup they just
+    // power-cycled to apply, which is the sort of help nobody asked for.
+    if (stepMode == 3) {
+        bus.read8(target, ST_REG_MODE, &mode);
+        check("left as found", mode == 3, "still in stepping mode, limits untouched");
+    } else {
+        bus.writeEeprom8(target, ST_REG_MODE, 0);
+        bus.writeEeprom16(target, ST_REG_MIN_ANGLE, 0);
+        bus.writeEeprom16(target, ST_REG_MAX_ANGLE, ST_POS_MAX);
+        delay(50);
+        settleAt(2048, 800);
+        bus.read8(target, ST_REG_MODE, &mode);
+        bus.read16(target, ST_REG_MAX_ANGLE, &hi);
+        check("restored", mode == 0 && hi == ST_POS_MAX, "mode %u, limits 0..%u, parked at centre", mode, hi);
+    }
 
     Serial.printf("\n  %u passed, %u failed, %u checks total.\n", sPass, sFail, sStep);
     Serial.println(F("  Paste this block back; it is the baseline for the next build.\n"));
@@ -1011,8 +1023,10 @@ static void handle(const String& line) {
         return;
     }
     if (cmd == "zero") {
-        absPos = 0; haveLast = false;
-        Serial.println(F("  tracked position zeroed here"));
+        uint16_t pos = 0;
+        if (!bus.read16(target, ST_REG_PRESENT_POS, &pos)) { fail("zero"); return; }
+        origin = circlePos(pos);
+        Serial.printf("  origin set at %+ld — readings are shown relative to it\n", (long)origin);
         return;
     }
     if (cmd == "step") {
@@ -1068,22 +1082,10 @@ void setup() {
     banner();
 }
 
-/** The background poll that makes the turn count mean anything. */
-static void trackerTick() {
-    static uint32_t next = 0;
-    if ((int32_t)(millis() - next) < 0) return;
-    next = millis() + 100;                 // well inside the half-turn rule
-
-    uint16_t pos = 0;
-    if (bus.read16(target, ST_REG_PRESENT_POS, &pos)) trackPosition(pos);
-}
-
 void loop() {
     static String line;
 
-    // Before the console, so a move commanded and left running is still being
-    // counted while nobody is typing.
-    trackerTick();
+
 
     while (Serial.available()) {
         char c = Serial.read();
