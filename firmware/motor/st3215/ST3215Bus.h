@@ -164,6 +164,26 @@ public:
      */
     bool moveTo(uint8_t id, uint16_t pos, uint16_t speed, uint16_t time = 0);
 
+    /**
+     * EEPROM is WRITE-PROTECTED, and the protection is silent.
+     *
+     * Register 55 is a lock. With it set — the factory default — a write to an
+     * EEPROM register below address 40 is accepted, reads back as the new value,
+     * and is gone the moment the servo restarts. That cost most of a bench
+     * session on 2026-08-26: mode 3 "written and confirmed" a dozen times, and a
+     * power cycle brought back mode 0 every time, because only the RAM shadow
+     * ever changed.
+     *
+     * So every EEPROM write goes: unlock, write, lock. Leaving it unlocked is
+     * not an option — that is what stops a wild write during a brownout from
+     * rewriting the servo's id.
+     */
+    bool eepromUnlocked(uint8_t id, bool unlocked);
+
+    /** Unlock, write, re-lock, and read back to prove it took. */
+    bool writeEeprom8(uint8_t id, uint8_t addr, uint8_t value);
+    bool writeEeprom16(uint8_t id, uint8_t addr, uint16_t value);
+
     /** Is anything answering to this id? `err` gets the servo's status byte. */
     bool ping(uint8_t id, uint8_t* err = nullptr);
 

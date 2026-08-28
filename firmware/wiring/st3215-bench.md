@@ -256,6 +256,18 @@ mode 3, and three things must be true together:
    documented as taking effect at startup; nothing in firmware can restart it,
    which is why the suite can only measure the un-restarted case.
 
+**And EEPROM IS WRITE-PROTECTED — register 55.** This is the one that hid
+everything else. With the lock set (the factory default), a write to any
+register below address 40 is accepted, reads back as the new value, and is gone
+on the next restart: only the RAM shadow changed. So "mode 3, written and
+confirmed" was true and worthless a dozen times over, and the power cycle that
+was supposed to make it take effect was the very thing that undid it.
+
+Every EEPROM write now goes unlock (55 := 0) → write → re-lock (55 := 1) →
+read back, in `ST3215Bus::writeEeprom8/16`. Leaving it unlocked is not the
+answer: the lock is what stops a wild write during a brownout from rewriting the
+servo's id.
+
 And in mode 3, register 42 **is not a position**. It is a NUMBER OF STEPS with
 bit 15 as the direction — which is why "goal 8192, to go two turns" moved the
 shaft three counts. `stepmode on` sets conditions 1 and 2 and prompts for 3;

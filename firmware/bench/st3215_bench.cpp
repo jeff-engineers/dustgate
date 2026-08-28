@@ -370,8 +370,8 @@ static void doRead() {
  * ⚠️ EEPROM, and it persists. `limits turn` puts them back.
  */
 static void doLimits(bool off) {
-    if (!bus.write16(target, ST_REG_MIN_ANGLE, 0))                  { fail("min angle"); return; }
-    if (!bus.write16(target, ST_REG_MAX_ANGLE, off ? 0 : ST_POS_MAX)) { fail("max angle"); return; }
+    if (!bus.writeEeprom16(target, ST_REG_MIN_ANGLE, 0))                  { fail("min angle"); return; }
+    if (!bus.writeEeprom16(target, ST_REG_MAX_ANGLE, off ? 0 : ST_POS_MAX)) { fail("max angle"); return; }
 
     uint16_t lo = 0, hi = 0;
     bus.read16(target, ST_REG_MIN_ANGLE, &lo);
@@ -514,18 +514,20 @@ static void doTimeIt(uint16_t goal, long speed) {
  * was already running.
  */
 static void doStepMode(bool on) {
-    bus.write8(target, ST_REG_MODE, on ? 3 : 0);
-    bus.write16(target, ST_REG_MIN_ANGLE, 0);
-    bus.write16(target, ST_REG_MAX_ANGLE, on ? 0 : ST_POS_MAX);
-    delay(50);
+    // All three of these are EEPROM, so all three go through the lock. Writing
+    // them plainly is what made every previous attempt evaporate on restart.
+    bool ok = bus.writeEeprom8(target, ST_REG_MODE, on ? 3 : 0)
+            & bus.writeEeprom16(target, ST_REG_MIN_ANGLE, 0)
+            & bus.writeEeprom16(target, ST_REG_MAX_ANGLE, on ? 0 : ST_POS_MAX);
+    if (!ok) { fail("stepmode"); return; }
 
     uint8_t mode = 255; uint16_t lo = 1, hi = 1;
     bus.read8(target, ST_REG_MODE, &mode);
     bus.read16(target, ST_REG_MIN_ANGLE, &lo);
     bus.read16(target, ST_REG_MAX_ANGLE, &hi);
-    Serial.printf("  mode %u, limits %u..%u\n", mode, lo, hi);
-    if (on) Serial.println(F("  NOW POWER-CYCLE THE SERVO, then `step 4096` — one turn's worth of steps.\n"
-                             "  These settings are EEPROM and are documented as taking effect at startup."));
+    Serial.printf("  mode %u, limits %u..%u — written through the EEPROM lock and verified\n", mode, lo, hi);
+    if (on) Serial.println(F("  Power-cycle the servo, then `read` to confirm it comes back in MODE 3.\n"
+                             "  Then `step 4096` — a number of steps, not a position."));
     else    Serial.println(F("  back to position mode, one turn"));
 }
 
@@ -587,10 +589,11 @@ static void doTorque(bool on) {
 }
 
 static void doMode(uint8_t mode) {
-    // Mode lives in EEPROM. It survives a power cycle, which is the point, and
-    // it also means this is not a register to poke in a loop.
-    if (!bus.write8(target, ST_REG_MODE, mode)) { fail("mode"); return; }
-    Serial.printf("  mode %u written (EEPROM — it persists)\n", mode);
+    // Mode lives in EEPROM behind the register-55 lock, so this goes through the
+    // unlock/write/verify path. A plain write reads back correct and evaporates
+    // on the next power cycle — see ST3215Bus::eepromUnlocked.
+    if (!bus.writeEeprom8(target, ST_REG_MODE, mode)) { fail("mode"); return; }
+    Serial.printf("  mode %u written and verified — this one survives a power cycle\n", mode);
 }
 
 // -----------------------------------------------------------------------------
@@ -642,10 +645,12 @@ void doSuite() {
     }
     check("ping", err == 0, "id %u, status 0x%02X", target, err);
 
-    bus.write8(target, ST_REG_MODE, 0);
-    bus.write16(target, ST_REG_MIN_ANGLE, 0);
-    bus.write16(target, ST_REG_MAX_ANGLE, ST_POS_MAX);
-    bus.write8(target, ST_REG_TORQUE_ENABLE, 1);
+    // Through the lock, or these are RAM-only and the next power cycle undoes
+    // them without saying so.
+    bus.writeEeprom8(target, ST_REG_MODE, 0);
+    bus.writeEeprom16(target, ST_REG_MIN_ANGLE, 0);
+    bus.writeEeprom16(target, ST_REG_MAX_ANGLE, ST_POS_MAX);
+    bus.write8(target, ST_REG_TORQUE_ENABLE, 1);          // RAM, no lock involved
 
     uint8_t mode = 255, torque = 255;
     uint16_t lo = 1, hi = 0;
@@ -756,6 +761,14 @@ void doSuite() {
     check("repeatability", (highest - lowest) <= 12, "3 approaches spread %u counts (%u..%u)",
           highest - lowest, lowest, highest);
 
+    // ---- the EEPROM lock -----------------------------------------------------
+    // Register 55 guards every setting below address 40. Written past it, a
+    // value reads back correctly and vanishes on the next restart, which is how
+    // "mode 3, confirmed" survived a dozen readbacks and no power cycles.
+    uint8_t lockState = 255;
+    bus.read8(target, ST_REG_LOCK, &lockState);
+    check("eeprom re-locked", lockState == 1, "register 55 reads %u after the writes above", lockState);
+
     // ---- travel past one turn ------------------------------------------------
     //
     // WHAT THE VENDOR DOCS SAY, found after three bench attempts failed:
@@ -771,15 +784,15 @@ void doSuite() {
     // the servo, and nothing in firmware can power-cycle it. So this is a
     // measurement with instructions, not a check: a suite should not fail on a
     // step a human has to perform. `stepmode on` sets it up.
-    bus.write16(target, ST_REG_MIN_ANGLE, 0);
-    bus.write16(target, ST_REG_MAX_ANGLE, 0);
+    bus.writeEeprom16(target, ST_REG_MIN_ANGLE, 0);
+    bus.writeEeprom16(target, ST_REG_MAX_ANGLE, 0);
     delay(50);
     uint16_t mlo = 1, mhi = 1;
     bus.read16(target, ST_REG_MIN_ANGLE, &mlo);
     bus.read16(target, ST_REG_MAX_ANGLE, &mhi);
     check("limits cleared", mlo == 0 && mhi == 0, "read back %u..%u", mlo, mhi);
 
-    bus.write8(target, ST_REG_MODE, 3);
+    bus.writeEeprom8(target, ST_REG_MODE, 3);
     delay(50);
     uint16_t before = 0;
     bus.read16(target, ST_REG_PRESENT_POS, &before);
@@ -791,9 +804,9 @@ void doSuite() {
          before, after, labs((long)after - (long)before));
 
     // ---- put it back ---------------------------------------------------------
-    bus.write8(target, ST_REG_MODE, 0);
-    bus.write16(target, ST_REG_MIN_ANGLE, 0);
-    bus.write16(target, ST_REG_MAX_ANGLE, ST_POS_MAX);
+    bus.writeEeprom8(target, ST_REG_MODE, 0);
+    bus.writeEeprom16(target, ST_REG_MIN_ANGLE, 0);
+    bus.writeEeprom16(target, ST_REG_MAX_ANGLE, ST_POS_MAX);
     delay(50);
     settleAt(2048, 800);
     bus.read8(target, ST_REG_MODE, &mode);

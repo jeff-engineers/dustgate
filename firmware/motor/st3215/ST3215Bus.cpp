@@ -214,6 +214,41 @@ bool ST3215Bus::moveTo(uint8_t id, uint16_t pos, uint16_t speed, uint16_t time) 
     return writeRegs(id, ST_REG_GOAL_POSITION, b, 6);
 }
 
+bool ST3215Bus::eepromUnlocked(uint8_t id, bool unlocked) {
+    // 0 unlocks, 1 locks. Backwards from how it reads, so it is written once here.
+    return write8(id, ST_REG_LOCK, unlocked ? 0 : 1);
+}
+
+bool ST3215Bus::writeEeprom8(uint8_t id, uint8_t addr, uint8_t value) {
+    if (!eepromUnlocked(id, true)) return false;
+    delay(5);
+    bool ok = write8(id, addr, value);
+    delay(10);                                  // the cell needs a moment
+    eepromUnlocked(id, false);                  // re-lock even if the write failed
+    delay(5);
+    if (!ok) return false;
+
+    uint8_t back = 0;
+    if (!read8(id, addr, &back)) return false;
+    if (back != value) { _lastError = "EEPROM write did not stick"; return false; }
+    return true;
+}
+
+bool ST3215Bus::writeEeprom16(uint8_t id, uint8_t addr, uint16_t value) {
+    if (!eepromUnlocked(id, true)) return false;
+    delay(5);
+    bool ok = write16(id, addr, value);
+    delay(10);
+    eepromUnlocked(id, false);
+    delay(5);
+    if (!ok) return false;
+
+    uint16_t back = 0;
+    if (!read16(id, addr, &back)) return false;
+    if (back != value) { _lastError = "EEPROM write did not stick"; return false; }
+    return true;
+}
+
 bool ST3215Bus::read8(uint8_t id, uint8_t addr, uint8_t* out) {
     return readRegs(id, addr, 1, out);
 }
