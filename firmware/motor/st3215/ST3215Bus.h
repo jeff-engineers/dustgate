@@ -58,12 +58,16 @@ enum : uint8_t {
     // The rest are still docs.
     ST_REG_ID              = 5,    // EEPROM, 1 byte
     ST_REG_BAUD            = 6,    // EEPROM, 1 byte (index, not a baud)
-    ST_REG_MIN_ANGLE       = 9,    // EEPROM, 2 bytes — both 0 means multi-turn
+    ST_REG_MIN_ANGLE       = 9,    // EEPROM, 2 bytes — BOTH at 0 is required by mode 3
     ST_REG_MAX_ANGLE       = 11,   // EEPROM, 2 bytes
     ST_REG_MODE            = 33,   // EEPROM, 1 byte: 0 = position, 1 = wheel, 2 = PWM, 3 = step
     ST_REG_TORQUE_ENABLE   = 40,
     ST_REG_ACCELERATION    = 41,
-    ST_REG_GOAL_POSITION   = 42,   // 2 bytes, 0..4095 over one turn in mode 0
+    // 0..4095 over one turn IN MODE 0. In mode 3 this register is not a position
+    // at all: it is a NUMBER OF STEPS with bit 15 as the direction, which is why
+    // writing 8192 there "to go two turns" moved the shaft three counts
+    // (2026-08-26). Waveshare's docs, after the bench disproved two guesses.
+    ST_REG_GOAL_POSITION   = 42,
     ST_REG_GOAL_TIME       = 44,   // 2 bytes
     ST_REG_GOAL_SPEED      = 46,   // 2 bytes, steps/s
     ST_REG_LOCK            = 55,   // 1 = EEPROM write-protected

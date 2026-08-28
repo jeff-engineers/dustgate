@@ -91,6 +91,8 @@ static void help() {
         "  mode 0|3         0 = position (one turn), 3 = multi-turn step\n"
         "  limits off|turn  off = both angle limits to 0, which is what UNLOCKS multi-turn\n"
         "  mturn <n> [spd]  goal in counts past one turn, signed. 4096 counts = one turn\n"
+        "  stepmode on|off  mode 3 + limits 0, the documented way to step indefinitely\n"
+        "  step <n>         in stepmode: a NUMBER OF STEPS, signed. Not a position\n"
         "  timeit <pos> [spd]  move there and time it, in counts/s and rpm — measures what 46 means\n"
         "\n"
         "  suite            run every check, print PASS/FAIL and a baseline. THE SHAFT TURNS.\n"
@@ -502,6 +504,48 @@ static void doTimeIt(uint16_t goal, long speed) {
     }
 }
 
+/**
+ * Stepping mode, set up the way the vendor documentation actually describes it.
+ *
+ * Three things have to be true at once, and we had never had all three: mode 3,
+ * both angle limits at zero, and — the one nothing in firmware can do — the
+ * servo restarted since. EEPROM settings on these parts are documented as taking
+ * effect at startup, and every attempt so far changed the mode on a servo that
+ * was already running.
+ */
+static void doStepMode(bool on) {
+    bus.write8(target, ST_REG_MODE, on ? 3 : 0);
+    bus.write16(target, ST_REG_MIN_ANGLE, 0);
+    bus.write16(target, ST_REG_MAX_ANGLE, on ? 0 : ST_POS_MAX);
+    delay(50);
+
+    uint8_t mode = 255; uint16_t lo = 1, hi = 1;
+    bus.read8(target, ST_REG_MODE, &mode);
+    bus.read16(target, ST_REG_MIN_ANGLE, &lo);
+    bus.read16(target, ST_REG_MAX_ANGLE, &hi);
+    Serial.printf("  mode %u, limits %u..%u\n", mode, lo, hi);
+    if (on) Serial.println(F("  NOW POWER-CYCLE THE SERVO, then `step 4096` — one turn's worth of steps.\n"
+                             "  These settings are EEPROM and are documented as taking effect at startup."));
+    else    Serial.println(F("  back to position mode, one turn"));
+}
+
+/**
+ * A number of STEPS, not a position — that is what register 42 means in mode 3.
+ * Bit 15 carries the direction, so -4096 is 0x9000, not 0xF000.
+ */
+static void doStep(long steps) {
+    uint16_t before = 0;
+    bus.read16(target, ST_REG_PRESENT_POS, &before);
+
+    uint16_t raw = (uint16_t)labs(steps);
+    if (raw > 32767) raw = 32767;
+    if (steps < 0) raw |= 0x8000;
+    if (!bus.moveTo(target, raw, 1500)) { fail("step"); return; }
+
+    Serial.printf("  %ld steps sent as 0x%04X, from %u — `read` in a moment to see where it got to\n",
+                  steps, raw, before);
+}
+
 static void doDump(uint8_t addr, uint8_t len) {
     uint8_t buf[32];
     if (len > sizeof(buf)) len = sizeof(buf);
@@ -605,12 +649,19 @@ void doSuite() {
 
     uint8_t mode = 255, torque = 255;
     uint16_t lo = 1, hi = 0;
-    bus.read8(target, ST_REG_MODE, &mode);
-    bus.read8(target, ST_REG_TORQUE_ENABLE, &torque);
-    bus.read16(target, ST_REG_MIN_ANGLE, &lo);
-    bus.read16(target, ST_REG_MAX_ANGLE, &hi);
-    check("state readback", mode == 0 && torque == 1 && lo == 0 && hi == ST_POS_MAX,
-          "mode %u torque %u limits %u..%u", mode, torque, lo, hi);
+    // A failed READ is not a failed STATE, and conflating them cost a run: a
+    // transient miss right after a servo power cycle printed "torque 255" and
+    // read as a fault in the servo rather than a dropped reply.
+    bool got = bus.read8(target, ST_REG_MODE, &mode)
+             & bus.read8(target, ST_REG_TORQUE_ENABLE, &torque)
+             & bus.read16(target, ST_REG_MIN_ANGLE, &lo)
+             & bus.read16(target, ST_REG_MAX_ANGLE, &hi);
+    if (!got) {
+        check("state readback", false, "a register read failed: %s — bus, not state", bus.lastError());
+    } else {
+        check("state readback", mode == 0 && torque == 1 && lo == 0 && hi == ST_POS_MAX,
+              "mode %u torque %u limits %u..%u", mode, torque, lo, hi);
+    }
 
     uint8_t volt = 0, temp = 0;
     bus.read8(target, ST_REG_PRESENT_VOLTAGE, &volt);
@@ -705,20 +756,21 @@ void doSuite() {
     check("repeatability", (highest - lowest) <= 12, "3 approaches spread %u counts (%u..%u)",
           highest - lowest, lowest, highest);
 
-    // ---- multi-turn, which is where the slider actually lives ----------------
+    // ---- travel past one turn ------------------------------------------------
     //
-    // Still unsolved, and the history matters because two of the three attempts
-    // were invalidated by other bugs:
-    //   - mode 3 + goal 8192 moved the shaft 3 counts. But that was through the
-    //     broken write path, where the speed never landed either — so it proved
-    //     nothing, and mode 3 is retested here properly.
-    //   - mode 0 + both angle limits 0 + goal 8192 travelled to 0x0FFC = 4092,
-    //     i.e. it stopped dead at one turn. Either the limits did not take, or
-    //     they take only after the servo is power-cycled, or something else
-    //     governs this entirely.
-    // So this section reads the limits back rather than assuming, and tries both
-    // modes with the working write path. Mode and limits are EEPROM; this
-    // section owns putting them back.
+    // WHAT THE VENDOR DOCS SAY, found after three bench attempts failed:
+    //   - Mode 3 is STEPPING mode, and register 42 is not a position there. It
+    //     is a NUMBER OF STEPS, with bit 15 as the direction. So "goal 8192"
+    //     was never a request to go to two turns, and the 3 counts it moved
+    //     were the servo doing something else entirely.
+    //   - Mode 3 also requires BOTH angle limits at 0, "otherwise it is
+    //     impossible to step indefinitely".
+    //   - Mode 0 stops at one turn by design. That is not a bug to chase.
+    //
+    // The combination never yet tried is mode 3 + limits 0 + a POWER CYCLE of
+    // the servo, and nothing in firmware can power-cycle it. So this is a
+    // measurement with instructions, not a check: a suite should not fail on a
+    // step a human has to perform. `stepmode on` sets it up.
     bus.write16(target, ST_REG_MIN_ANGLE, 0);
     bus.write16(target, ST_REG_MAX_ANGLE, 0);
     delay(50);
@@ -727,37 +779,16 @@ void doSuite() {
     bus.read16(target, ST_REG_MAX_ANGLE, &mhi);
     check("limits cleared", mlo == 0 && mhi == 0, "read back %u..%u", mlo, mhi);
 
-    long best = 0;
-    for (uint8_t m = 0; m < 2; m++) {
-        uint8_t mode3 = m ? 3 : 0;
-        bus.write8(target, ST_REG_MODE, mode3);
-        delay(50);
-
-        uint16_t before = 0;
-        bus.read16(target, ST_REG_PRESENT_POS, &before);
-        bus.moveTo(target, 8192, 1500);                    // two turns
-        delay(8000);
-        uint16_t mt = 0;
-        bus.read16(target, ST_REG_PRESENT_POS, &mt);
-
-        long moved = labs((long)mt - (long)before);
-        if (moved > best) best = moved;
-        // Both encodings, because which one PRESENT_POSITION uses past a turn is
-        // exactly what a successful run would settle.
-        char label[24];
-        snprintf(label, sizeof(label), "multi-turn mode %u", mode3);
-        meas(label, "goal 8192 -> 0x%04X, moved %ld counts (%+.2f turns sign-mag, %+.2f two's comp)",
-             mt, moved, signedField(mt) / 4096.0f, (int16_t)mt / 4096.0f);
-
-        bus.moveTo(target, 0, 1500);
-        delay(8000);
-    }
-    check("travels past one turn", best > 4200, "best attempt moved %ld counts", best);
-    if (best <= 4200) {
-        Serial.println(F("       ^ if this keeps failing: power-cycle the SERVO (not the board) with the\n"
-                         "         limits at 0 and re-run — EEPROM settings on these parts are documented\n"
-                         "         as taking effect at startup, and nothing here can restart it."));
-    }
+    bus.write8(target, ST_REG_MODE, 3);
+    delay(50);
+    uint16_t before = 0;
+    bus.read16(target, ST_REG_PRESENT_POS, &before);
+    bus.moveTo(target, 4096, 1500);              // 4096 STEPS, one turn's worth
+    delay(6000);
+    uint16_t after = 0;
+    bus.read16(target, ST_REG_PRESENT_POS, &after);
+    meas("step mode 4096 steps", "%u -> %u, moved %ld counts (no power cycle since mode 3 was set)",
+         before, after, labs((long)after - (long)before));
 
     // ---- put it back ---------------------------------------------------------
     bus.write8(target, ST_REG_MODE, 0);
@@ -853,7 +884,13 @@ static void handle(const String& line) {
     if (cmd == "stop")   { doStop(); return; }
     if (cmd == "centre" || cmd == "center") { doMove(2048, -1); return; }
     if (cmd == "mode")   { doMode((uint8_t)arg(line,1).toInt()); return; }
-    if (cmd == "limits") { doLimits(arg(line,1) != "turn"); return; }
+    if (cmd == "limits")   { doLimits(arg(line,1) != "turn"); return; }
+    if (cmd == "stepmode") { doStepMode(arg(line,1) != "off"); return; }
+    if (cmd == "step") {
+        if (!arg(line,1).length()) { Serial.println(F("  step <steps> — signed; 4096 is a turn's worth")); return; }
+        doStep(arg(line,1).toInt());
+        return;
+    }
     if (cmd == "suite")  { doSuite(); return; }
     if (cmd == "timeit") {
         if (!arg(line,1).length()) { Serial.println(F("  timeit <pos> [speed]")); return; }
