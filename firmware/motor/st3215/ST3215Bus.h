@@ -71,7 +71,12 @@ enum : uint8_t {
     ST_REG_GOAL_TIME       = 44,   // 2 bytes
     ST_REG_GOAL_SPEED      = 46,   // 2 bytes, steps/s
     ST_REG_LOCK            = 55,   // 1 = EEPROM write-protected
-    ST_REG_PRESENT_POS     = 56,   // 2 bytes
+    // 2 bytes, and NOT a plain 0..4095 counter. It is a position on a 4096-count
+    // circle reported sign-magnitude: 0x8B51 is -2897, not 35665. It wraps, and
+    // nothing here counts turns — absolute position across turns is the driver's
+    // job (see the tracker in bench/st3215_bench.cpp), and it cannot survive a
+    // power cycle. Which is why the endstops stay on the rail.
+    ST_REG_PRESENT_POS     = 56,
     ST_REG_PRESENT_SPEED   = 58,   // 2 bytes, sign in bit 15
     ST_REG_PRESENT_LOAD    = 60,   // 2 bytes, sign in bit 15
     ST_REG_PRESENT_VOLTAGE = 62,   // 1 byte, tenths of a volt

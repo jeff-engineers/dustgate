@@ -93,6 +93,7 @@ static void help() {
         "  mturn <n> [spd]  goal in counts past one turn, signed. 4096 counts = one turn\n"
         "  stepmode on|off  mode 3 + limits 0, the documented way to step indefinitely\n"
         "  step <n>         in stepmode: a NUMBER OF STEPS, signed. Not a position\n"
+        "  zero             reset the tracked across-turns position to 0 (it wraps; we count)\n"
         "  timeit <pos> [spd]  move there and time it, in counts/s and rpm — measures what 46 means\n"
         "\n"
         "  suite            run every check, print PASS/FAIL and a baseline. THE SHAFT TURNS.\n"
@@ -142,6 +143,46 @@ static int16_t signedField(uint16_t raw) {
 static int16_t signedLoad(uint16_t raw) {
     int16_t mag = (int16_t)(raw & 0x03FF);
     return (raw & 0x0400) ? (int16_t)-mag : mag;
+}
+
+// -----------------------------------------------------------------------------
+// Where the shaft actually is, across turns
+//
+// PRESENT_POSITION IS ONE TURN, SIGNED, AND IT WRAPS. Measured 2026-08-26:
+// 4096 steps forward from 0 lands back at 4, and stepping backwards from there
+// reads 0x8B51 — bit 15 set, sign-magnitude, so -2897 rather than 35665. So the
+// value is a position on a 4096-count circle, reported as -4095..+4095 depending
+// on which side of zero the shaft sits.
+//
+// Nothing in the register map counts turns, so absolute position is ours to
+// keep: decode the sign first, then unwrap.
+//
+// THE SAMPLING RULE THIS DEPENDS ON: a jump of more than half a turn between two
+// samples is indistinguishable from a smaller jump the other way, so this must
+// be fed faster than the shaft can travel 2048 counts. At the measured ceiling
+// of ~1700 counts/s that is 1.2s, and everything here samples at 15-200ms. A
+// slider node polling slower than that would silently lose turns.
+//
+// It cannot survive a power cycle, which is why the endstops stay on the rail
+// and the homing sweep is still the calibration path.
+// -----------------------------------------------------------------------------
+static long    absPos     = 0;
+static int32_t lastSigned = 0;
+static bool    haveLast   = false;
+
+/** The signed position on the circle: -4095..+4095, sign in bit 15. */
+static int32_t circlePos(uint16_t raw) { return signedField(raw); }
+
+static void trackPosition(uint16_t raw) {
+    int32_t now = circlePos(raw);
+    if (haveLast) {
+        int32_t delta = now - lastSigned;
+        if (delta >  2048) delta -= 4096;      // wrapped backwards past zero
+        if (delta < -2048) delta += 4096;      // wrapped forwards past the top
+        absPos += delta;
+    }
+    lastSigned = now;
+    haveLast   = true;
 }
 
 /** Mode and torque, in words. Every state-reporting line prints these. */
@@ -344,8 +385,13 @@ static void doRead() {
     bus.read8 (target, ST_REG_MOVING, &moving);
     bus.read16(target, ST_REG_PRESENT_CURRENT, &cur);
 
-    Serial.printf("  id %u  pos %4u (%3u deg)  speed %5d  load %5d  %4.1fV  %u C  %s\n",
-                  target, pos, (unsigned)((uint32_t)pos * 360 / (ST_POS_MAX + 1)),
+    trackPosition(pos);
+    // Decode the sign before doing arithmetic on it: raw 35665 is 0x8B51, which
+    // is -2897, and printing it as 35665 "degrees 3134" is how that got missed.
+    int32_t signedPos = circlePos(pos);
+    int32_t deg = ((signedPos % 4096) + 4096) % 4096 * 360 / 4096;
+    Serial.printf("  id %u  pos %+5ld (%3ld deg)  speed %5d  load %5d  %4.1fV  %u C  %s\n",
+                  target, (long)signedPos, (long)deg,
                   signedField(spd), signedLoad(load),
                   volt / 10.0f, temp, moving ? "MOVING" : "still");
     // The state that silently decides whether a goal does anything at all. It
@@ -353,12 +399,10 @@ static void doRead() {
     // ago looks exactly like a servo that has stopped working.
     printState();
 
-    // Past one turn the raw word stops being a plain angle, and which encoding
-    // it uses is undocumented. Print both and let the shaft settle the argument:
-    // turn it a known amount by hand and see which number tracks.
-    if (pos > ST_POS_MAX || (pos & 0x8000)) {
-        Serial.printf("  multi-turn: 0x%04X = %+.2f turns sign-magnitude, %+.2f turns two's complement\n",
-                      pos, signedField(pos) / 4096.0f, (int16_t)pos / 4096.0f);
+    // The register wraps, so this is the only running total of where the shaft
+    // is. `zero` resets it; a power cycle of the servo invalidates it.
+    if (absPos != 0) {
+        Serial.printf("  tracked: %+ld counts = %+.2f turns since `zero`\n", absPos, absPos / 4096.0f);
     }
     if (cur) Serial.printf("  current %u (units per the register map, unconfirmed)\n", cur);
 }
@@ -465,6 +509,7 @@ static Settle settleAt(uint16_t goal, long speed, uint32_t timeoutMs = 15000) {
         delay(15);
         uint16_t now = 0;
         if (!bus.read16(target, ST_REG_PRESENT_POS, &now)) continue;
+        trackPosition(now);
         if (now != last) { last = now; lastChange = millis(); everMoved = true; }
 
         bool stillEnough = (millis() - lastChange) >= kQuietMs;
@@ -551,8 +596,8 @@ static void doStep(long steps) {
     if (steps < 0) raw |= 0x8000;
     if (!bus.moveTo(target, raw, 1500)) { fail("step"); return; }
 
-    Serial.printf("  %ld steps sent as 0x%04X, from %u — `read` in a moment to see where it got to\n",
-                  steps, raw, before);
+    Serial.printf("  %ld steps sent as 0x%04X, from %u (tracked %+ld) — `watch` it, or `read` when it is done\n",
+                  steps, raw, before, absPos);
 }
 
 static void doDump(uint8_t addr, uint8_t len) {
@@ -906,6 +951,11 @@ static void handle(const String& line) {
     if (cmd == "mode")   { doMode((uint8_t)arg(line,1).toInt()); return; }
     if (cmd == "limits")   { doLimits(arg(line,1) != "turn"); return; }
     if (cmd == "stepmode") { doStepMode(arg(line,1) != "off"); return; }
+    if (cmd == "zero") {
+        absPos = 0; haveLast = false;
+        Serial.println(F("  tracked position zeroed here"));
+        return;
+    }
     if (cmd == "step") {
         if (!arg(line,1).length()) { Serial.println(F("  step <steps> — signed; 4096 is a turn's worth")); return; }
         doStep(arg(line,1).toInt());

@@ -269,7 +269,20 @@ read back, in `ST3215Bus::writeEeprom8/16`. Leaving it unlocked is not the
 answer: the lock is what stops a wild write during a brownout from rewriting the
 servo's id.
 
-**With that, mode 3 finally survived a power cycle (2026-08-26)** — and the servo
+**Stepping works (2026-08-26).** Mode 3, written through the lock, survived a
+power cycle; `torque on`; `step 4096` turned the shaft a full revolution.
+
+**What it does NOT give you is an absolute position.** `PRESENT_POSITION` is a
+point on a 4096-count circle, reported sign-magnitude — 4096 steps forward from
+0 lands back at 4, and stepping backwards reads `0x8B51`, which is **-2897**,
+not 35665. Nothing in the register map counts turns. So the slider's absolute
+position is the driver's to keep, by unwrapping those readings, and it must
+sample faster than the shaft can travel half a turn (2048 counts ≈ 1.2 s at the
+measured ceiling) or it silently loses one. It cannot survive a power cycle
+either — which is exactly why the endstops stay on the rail and the homing sweep
+remains the calibration path.
+
+**With that, mode 3 finally survived a power cycle** — and the servo
 came back with **TORQUE OFF**. That is not a bench curiosity: a slider node must
 enable torque explicitly when it connects, because a servo that has just powered
 up holds nothing and ignores every move it is sent.
