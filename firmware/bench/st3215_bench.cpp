@@ -618,11 +618,18 @@ static bool requireStepMode(const char* what) {
  * of the wrong thing. The trap is easy to fall into on purpose: `suite` restores
  * mode 0 when it finishes, so the very next `step` is in the wrong mode.
  *
- * WHICH PHYSICAL DIRECTION BIT 15 PICKS IS STILL UNRECORDED. The 2026-08-28
- * trace proved the bit reaches the servo and that the step count is honoured
- * three turns deep, but nobody wrote down which way the shaft actually turned.
- * Positive counts set bit 15 here because "positive raises the position" is the
- * mapping a driver wants; watching one step decides whether that is a lie.
+ * BIT 15 SET TURNS THE SHAFT CLOCKWISE VIEWED FROM THE BACK OF THE MOTOR
+ * (observed 2026-08-28), which in the intended slider layout drives the carriage
+ * to the RIGHT — away from home, since home is always the user's left. So a
+ * positive step count here means "further from the datum", and that is the sign
+ * convention the driver should keep.
+ *
+ * CAVEAT WORTH ITS LINE: the motor mount does not exist yet. The bit-to-rotation
+ * fact is a property of the servo and will hold; the rotation-to-carriage fact is
+ * a property of a mount and a rack that have not been built, and a pinion on the
+ * far side of the rack reverses it. Re-check the second half once there is
+ * something to bolt the servo to — the homing sweep already detects a backwards
+ * motor, so a flip is a wiring-class annoyance, not a redesign.
  */
 static void doStep(long steps) {
     if (!requireStepMode("step")) return;

@@ -320,6 +320,20 @@ and `doStep` now refuses to run outside mode 3 rather than let that happen
 again.) `stepmode on` sets conditions 1 and 2 and prompts for 3;
 `step <n>` sends a signed step count.
 
+**Direction, observed 2026-08-28.** Bit 15 **set** turns the shaft **clockwise
+viewed from the back of the motor**, which in the intended slider layout moves
+the carriage to the **right** — away from home, since home is always the user's
+left ([`docs/dual-endstop-calibration.md`](../../docs/dual-endstop-calibration.md)).
+So a positive step count means "further from the datum", and that is the sign
+convention the driver keeps.
+
+Half of that is durable and half is not. Bit-to-rotation is a property of the
+servo. Rotation-to-carriage is a property of a mount and a rack that have not
+been built yet, and a pinion on the far side of the rack reverses it — so
+re-check it once there is something to bolt the servo to. The homing sweep
+already auto-detects a backwards motor, so a flip costs a persisted flag, not a
+redesign.
+
 Source: [python-st3215 register notes](https://github.com/Mickael-Roger/python-st3215),
 from Waveshare's ST3215 documentation.
 
