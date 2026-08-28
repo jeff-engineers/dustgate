@@ -165,6 +165,12 @@ static int16_t signedLoad(uint16_t raw) {
 //
 // It cannot survive a power cycle, which is why the endstops stay on the rail
 // and the homing sweep is still the calibration path.
+//
+// AND IT HAS TO RUN ON ITS OWN. Sampling only when someone types `read` counts
+// nothing: two `step 4096` commands between two reads look like no movement at
+// all, because the wraps happened unobserved. loop() polls it, which is exactly
+// what the slider node will have to do — the turn count is only as good as the
+// polling behind it.
 // -----------------------------------------------------------------------------
 static long    absPos     = 0;
 static int32_t lastSigned = 0;
@@ -401,9 +407,7 @@ static void doRead() {
 
     // The register wraps, so this is the only running total of where the shaft
     // is. `zero` resets it; a power cycle of the servo invalidates it.
-    if (absPos != 0) {
-        Serial.printf("  tracked: %+ld counts = %+.2f turns since `zero`\n", absPos, absPos / 4096.0f);
-    }
+    Serial.printf("  tracked: %+ld counts = %+.2f turns since `zero`\n", absPos, absPos / 4096.0f);
     if (cur) Serial.printf("  current %u (units per the register map, unconfirmed)\n", cur);
 }
 
@@ -596,8 +600,8 @@ static void doStep(long steps) {
     if (steps < 0) raw |= 0x8000;
     if (!bus.moveTo(target, raw, 1500)) { fail("step"); return; }
 
-    Serial.printf("  %ld steps sent as 0x%04X, from %u (tracked %+ld) — `watch` it, or `read` when it is done\n",
-                  steps, raw, before, absPos);
+    Serial.printf("  %ld steps sent as 0x%04X, from %+ld (tracked %+ld) — the tracker follows it from here\n",
+                  steps, raw, (long)circlePos(before), absPos);
 }
 
 static void doDump(uint8_t addr, uint8_t len) {
@@ -1009,8 +1013,22 @@ void setup() {
     banner();
 }
 
+/** The background poll that makes the turn count mean anything. */
+static void trackerTick() {
+    static uint32_t next = 0;
+    if ((int32_t)(millis() - next) < 0) return;
+    next = millis() + 100;                 // well inside the half-turn rule
+
+    uint16_t pos = 0;
+    if (bus.read16(target, ST_REG_PRESENT_POS, &pos)) trackPosition(pos);
+}
+
 void loop() {
     static String line;
+
+    // Before the console, so a move commanded and left running is still being
+    // counted while nobody is typing.
+    trackerTick();
 
     while (Serial.available()) {
         char c = Serial.read();
