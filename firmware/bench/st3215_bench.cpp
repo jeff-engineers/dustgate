@@ -104,7 +104,11 @@ static void help() {
 }
 
 static void fail(const char* what) {
-    Serial.printf("  %s failed: %s\n", what, bus.lastError());
+    const char* why = bus.lastError();
+    // An empty reason is itself a bug — something failed and then a later
+    // successful transaction cleared the record before we printed it. Say so
+    // rather than printing "failed: " and leaving the reader to guess.
+    Serial.printf("  %s failed: %s\n", what, (why && *why) ? why : "(reason already overwritten — retry)");
 }
 
 /** The servo's status byte, spelled out. 0 is a healthy reply. */
@@ -516,10 +520,12 @@ static void doTimeIt(uint16_t goal, long speed) {
 static void doStepMode(bool on) {
     // All three of these are EEPROM, so all three go through the lock. Writing
     // them plainly is what made every previous attempt evaporate on restart.
-    bool ok = bus.writeEeprom8(target, ST_REG_MODE, on ? 3 : 0)
-            & bus.writeEeprom16(target, ST_REG_MIN_ANGLE, 0)
-            & bus.writeEeprom16(target, ST_REG_MAX_ANGLE, on ? 0 : ST_POS_MAX);
-    if (!ok) { fail("stepmode"); return; }
+    // Short-circuit and report WHICH one, keeping the reason: the non-short-
+    // circuit version ran all three, and the last one's success wiped the error
+    // string, printing "stepmode failed:" with nothing after it.
+    if (!bus.writeEeprom8(target, ST_REG_MODE, on ? 3 : 0))                    { fail("mode write"); return; }
+    if (!bus.writeEeprom16(target, ST_REG_MIN_ANGLE, 0))                       { fail("min angle write"); return; }
+    if (!bus.writeEeprom16(target, ST_REG_MAX_ANGLE, on ? 0 : ST_POS_MAX))     { fail("max angle write"); return; }
 
     uint8_t mode = 255; uint16_t lo = 1, hi = 1;
     bus.read8(target, ST_REG_MODE, &mode);
@@ -527,6 +533,7 @@ static void doStepMode(bool on) {
     bus.read16(target, ST_REG_MAX_ANGLE, &hi);
     Serial.printf("  mode %u, limits %u..%u — written through the EEPROM lock and verified\n", mode, lo, hi);
     if (on) Serial.println(F("  Power-cycle the servo, then `read` to confirm it comes back in MODE 3.\n"
+                             "  It comes back with TORQUE OFF — `torque on` first, or nothing moves.\n"
                              "  Then `step 4096` — a number of steps, not a position."));
     else    Serial.println(F("  back to position mode, one turn"));
 }

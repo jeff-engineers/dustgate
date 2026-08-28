@@ -269,6 +269,11 @@ read back, in `ST3215Bus::writeEeprom8/16`. Leaving it unlocked is not the
 answer: the lock is what stops a wild write during a brownout from rewriting the
 servo's id.
 
+**With that, mode 3 finally survived a power cycle (2026-08-26)** — and the servo
+came back with **TORQUE OFF**. That is not a bench curiosity: a slider node must
+enable torque explicitly when it connects, because a servo that has just powered
+up holds nothing and ignores every move it is sent.
+
 And in mode 3, register 42 **is not a position**. It is a NUMBER OF STEPS with
 bit 15 as the direction — which is why "goal 8192, to go two turns" moved the
 shaft three counts. `stepmode on` sets conditions 1 and 2 and prompts for 3;
