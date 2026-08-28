@@ -629,9 +629,11 @@ static void doStep(long steps) {
     if (steps > 0) raw |= 0x8000;
     if (!bus.moveTo(target, raw, 1500)) { fail("step"); return; }
 
-    Serial.printf("  %ld steps sent as 0x%04X, from %+ld — bit 15 %s, so the position goes %s\n",
-                  steps, raw, (long)circlePos(before),
-                  (raw & 0x8000) ? "set" : "clear", (raw & 0x8000) ? "up" : "down");
+    Serial.printf("  %ld steps sent as 0x%04X, bit 15 %s. Register 56 was reading %ld\n"
+                  "  (steps left from the previous command) — poll `read`, or use `stepdump`\n"
+                  "  to watch this one retire.\n",
+                  steps, raw, (raw & 0x8000) ? "set" : "clear",
+                  (long)(before & 0x7FFF));
 }
 
 /**
