@@ -222,6 +222,48 @@ Anything added to it follows three rules, written at the top of `doSuite()`: set
 the state you depend on, put the servo back, and don't count a measurement as a
 check.
 
+### 5.0.1 The baseline, 2026-08-26 (ST3215 at 8.7 V, Bus Servo Driver Board)
+
+12 passed, 0 failed. Numbers a later run should be compared against:
+
+| Check | Result |
+|---|---|
+| top speed | **1695 counts/s ≈ 24.8 rpm** at speed 0 (this is at ~9 V; both scale with supply) |
+| speed tracking | asked 300 → **296** (99%); asked 1200 → **1046** (87%) |
+| stopping distance | **31 counts** past the catch point at speed 400 |
+| stop and hold | caught at 826, settled +2, then moved 0 |
+| repeatability | **0–2 counts** spread over three approaches |
+| retarget mid-move | diverted cleanly to 1005 from a move in flight |
+
+For the slider, on the 30T pinion at 124 mm/rev: top speed ≈ **51 mm/s**, and 31
+counts of stopping distance ≈ **0.9 mm** of carriage overshoot. Repeatability of
+a couple of counts is far inside anything a blast gate cares about.
+
+**What none of that covers:** load. Every number here is a bare shaft spinning
+free, and the measurement that decides 9 V vs 12 V for the shop is `load` and
+`current` while actually driving a gate — see the note in the 9 V discussion.
+
+### 5.0.2 Travel past one turn: use STEPPING mode
+
+Mode 0 is one turn **by design** — its clamp at 4092 was never a bug, and two
+bench sessions were spent proving that the hard way. Travel past a revolution is
+mode 3, and three things must be true together:
+
+1. `ST_REG_MODE` (33) = 3;
+2. **both** angle limits (9 and 11) = 0 — "otherwise it is impossible to step
+   indefinitely";
+3. the **servo power-cycled** since those were set. They are EEPROM and are
+   documented as taking effect at startup; nothing in firmware can restart it,
+   which is why the suite can only measure the un-restarted case.
+
+And in mode 3, register 42 **is not a position**. It is a NUMBER OF STEPS with
+bit 15 as the direction — which is why "goal 8192, to go two turns" moved the
+shaft three counts. `stepmode on` sets conditions 1 and 2 and prompts for 3;
+`step <n>` sends a signed step count.
+
+Source: [python-st3215 register notes](https://github.com/Mickael-Roger/python-st3215),
+from Waveshare's ST3215 documentation.
+
 ## 5.1 When nothing answers at all: prove the UART first
 
 `scan` finding nothing is the least informative result this program can produce
