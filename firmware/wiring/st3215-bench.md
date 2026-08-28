@@ -334,6 +334,12 @@ re-check it once there is something to bolt the servo to. The homing sweep
 already auto-detects a backwards motor, so a flip costs a persisted flag, not a
 redesign.
 
+**The servo is a Waveshare ST3215**, not a Feetech-branded one. Same part, same
+protocol — the ST/STS/SCS wire format is Feetech's design and the driver is named
+for it — but Waveshare's documentation is the one with the register map right,
+and it is where every number in this file was sourced from. Check
+`~/code/Datasheets` before searching the web.
+
 Source: [python-st3215 register notes](https://github.com/Mickael-Roger/python-st3215),
 from Waveshare's ST3215 documentation.
 

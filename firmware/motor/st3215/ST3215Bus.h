@@ -1,6 +1,12 @@
 // =============================================================================
 // ST3215Bus.h — the wire protocol for Feetech serial bus servos (ST/STS/SCS)
 //
+// THE PART ON THE BENCH IS A WAVESHARE ST3215. The protocol is Feetech's — the
+// ST/STS/SCS family is their design and this file is named for it — but the
+// servo is Waveshare-branded, and it is Waveshare's documentation that has the
+// register map right (Feetech's own is thinner and disagrees in places). Look
+// there first, and see ~/code/Datasheets before searching the web at all.
+//
 // Hand-rolled on purpose. The vendor libraries are AVR/Xtensa and lean on
 // SoftwareSerial; the protocol itself is a dozen lines:
 //
