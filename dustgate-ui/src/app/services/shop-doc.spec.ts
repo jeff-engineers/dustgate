@@ -12,10 +12,12 @@ import { suite } from '../../test-harness';
 import { validateShop } from '@shop';
 import {
   type ShopDoc, type RawEl,
-  addMachineWithPort, addSupplementalPort, displayName, isPortEnabled, isShopDoc, machineById,
-  machineOfPort, machinesOf, outletOf, portsOf, primaryPortOf, removeMachine, removePort,
+  addMachineWithPort, addSupplementalPort, addSystem, displayName, isPortEnabled, isShopDoc, machineById,
+  collectorOf, machineIdOfPort, machineOfPort, machinesOf, outletExcludes, outletOf,
+  outletTakenByAnotherMachine,
+  portsOf, primaryPortOf, removeMachine, removePort,
   healMachineNames, renameMachine, setOutlet,
-  systemById, systemViews, systemsOf, toShop,
+  systemById, systemLabel, systemViews, systemsInLayoutOrder, systemsOf, toShop,
 } from './shop-doc';
 
 const { check, eq, report } = suite();
@@ -210,6 +212,128 @@ const v1 = () => JSON.parse(JSON.stringify({
   check('and ducts', Array.isArray(view.ducts) && view.ducts.length > 0);
   check('and the shop-level controllers spliced in',
     Array.isArray(view.controllers) && view.controllers.length === 1);
+}
+
+// ── "is this outlet taken" is asked MACHINE to machine, never row to row ─────
+//
+// The tools screen lists PORTS, so a two-port saw is two rows — but the outlet
+// belongs to the machine. Comparing rows made each of the saw's rows see the
+// other as a different tool, so its OWN outlet read as taken, the picker refused
+// to re-select it, and the save that followed deleted the pairing outright.
+{
+  const shop = toShop(v1())!;
+  const sys = systemsOf(shop)[0];
+  addSupplementalPort(shop, sys, 'saw', 'saw-oa', 'overarm');
+  const primary = primaryPortOf(shop, 'saw')!['id'] as string;
+
+  eq('both of a saw\'s ports report the same machine',
+     machineIdOfPort(shop, primary), machineIdOfPort(shop, 'saw-oa'));
+  eq('...and that machine is the saw', machineIdOfPort(shop, 'saw'), 'saw');
+  // A port the document has never heard of compares as itself, so an unreadable
+  // layout blocks nothing rather than blocking everything.
+  eq('an unknown port falls back to its own id', machineIdOfPort(shop, 'ghost'), 'ghost');
+
+  // Both rows carry the machine's outlet, which is exactly the shape that broke.
+  const rows = [
+    { id: primary,  ip: '10.0.0.5', hasPlug: true },
+    { id: 'saw-oa', ip: '10.0.0.5', hasPlug: true },
+  ];
+  check('a tool\'s own outlet is NOT taken, seen from either of its ports',
+    !outletTakenByAnotherMachine(shop, rows, '10.0.0.5', primary)
+    && !outletTakenByAnotherMachine(shop, rows, '10.0.0.5', 'saw-oa'));
+
+  // ...while a genuinely shared outlet still is. An outlet belongs to one tool.
+  const withOther = rows.concat([{ id: 'jointer-port', ip: '10.0.0.5', hasPlug: true }]);
+  check('but another MACHINE holding it still counts as taken',
+    outletTakenByAnotherMachine(shop, withOther, '10.0.0.5', 'jointer-port'));
+  check('a row with no outlet claims nothing',
+    !outletTakenByAnotherMachine(shop, [{ id: 'x', ip: '10.0.0.9', hasPlug: false }], '10.0.0.9', primary));
+  check('and an empty ip is never taken',
+    !outletTakenByAnotherMachine(shop, rows, '', primary));
+}
+
+// ── how the list screens name and order the systems ─────────────────────────
+//
+// /shop, /tools and /gates all print this, and all three used to work it out for
+// themselves. The order has to match the CANVAS, because that is the drawing the
+// reader is holding in their head — the canvas stripes its systems by the topmost
+// row any of their pieces stands on.
+{
+  const shop = toShop(v1())!;
+  const sys = systemsOf(shop)[0];
+
+  // Migration hands the one system the shop's own name, so that is what shows.
+  eq('a named system prints its own name', systemLabel(sys), 'Old Shop');
+  delete (sys as unknown as Record<string, unknown>)['name'];
+  eq('...and an unnamed one falls back to its collector', systemLabel(sys), 'Cyclone');
+  sys.elements = sys.elements.filter(e => e['type'] !== 'collector');
+  eq('...and a system with neither is still printable', systemLabel(sys), 'System');
+  eq('as is no system at all', systemLabel(null), 'System');
+  sys.name = 'Dust collection';
+
+  // A second system, added ABOVE the first on the canvas.
+  const second = addSystem(shop, { system: 'sys2', collector: 'dc2' });
+  second.name = 'Shop vacuum';
+  eq('document order is the fallback with no layout saved',
+     systemsInLayoutOrder(shop).map(x => x.id).join(','),
+     systemsOf(shop).map(x => x.id).join(','));
+
+  (shop as Record<string, unknown>)['ui'] = { layout: { dc: { col: 0, row: 9 }, dc2: { col: 0, row: 1 } } };
+  eq('the canvas decides the order, top row first',
+     systemsInLayoutOrder(shop).map(x => x.id).join(','), 'sys2,' + sys.id);
+
+  // A loose run end is where pipe happened to reach, not a row the system stands
+  // on — systemRowBands() skips junctions and so must this, or one dragged stub
+  // reorders the whole page.
+  sys.elements.push({ id: 'stub', type: 'junction' });
+  (shop as Record<string, unknown>)['ui'] = {
+    layout: { dc: { col: 0, row: 9 }, dc2: { col: 0, row: 1 }, stub: { col: 0, row: 0 } },
+  };
+  eq('a junction dragged above everything does not reorder the systems',
+     systemsInLayoutOrder(shop).map(x => x.id).join(','), 'sys2,' + sys.id);
+}
+
+// ── which outlets the picker must refuse, and why ───────────────────────────
+//
+// The same answer has to serve the build canvas and the tools list, which is why
+// it lives here: two copies would become two answers the day one of them learned
+// about a new kind of outlet holder. Both screens now open the SAME pairing sheet
+// for a collector, so a collector's switch being off-limits to a tool — and the
+// collector's own switch staying pickable when it is the thing being configured —
+// are the cases that matter.
+{
+  const shop = toShop(v1())!;
+  const sys = systemsOf(shop)[0];
+  const dc = collectorOf(sys)!;
+  eq('a system knows its collector', dc['id'], 'dc');
+  dc['control'] = { outlet: { gen: 2, ip: '10.0.0.9' } };
+
+  addMachineWithPort(shop, sys, 'jointer', 'Jointer');
+  machineById(shop, 'jointer')!.sensor = { outlet: { gen: 2, ip: '10.0.0.7' } };
+  const primary = primaryPortOf(shop, 'saw')!['id'] as string;
+
+  const forSaw = outletExcludes(shop, primary);
+  check("the collector's switch is off-limits to a tool", forSaw.ips.includes('10.0.0.9'));
+  eq('...and says why', forSaw.reason['10.0.0.9'], 'reserved — dust collector');
+  check("another machine's outlet is off-limits too", forSaw.ips.includes('10.0.0.7'));
+  eq('...named, so the clash is findable', forSaw.reason['10.0.0.7'], 'already paired with Jointer');
+  check("a tool's own outlet stays pickable", !forSaw.ips.includes('10.0.0.5'));
+
+  // Re-opening the collector's own sheet must not grey out the choice it is
+  // already showing.
+  const forDc = outletExcludes(shop, 'dc');
+  check("the collector's own switch stays pickable", !forDc.ips.includes('10.0.0.9'));
+  check('...while every tool outlet is still taken',
+    forDc.ips.includes('10.0.0.5') && forDc.ips.includes('10.0.0.7'));
+
+  // The tools screen hands this a PORT id and the canvas may hand it a machine
+  // id. Both have to mean the same machine, or a saw's own outlet reads as taken.
+  eq('a machine id excludes the same set as its port',
+     JSON.stringify(outletExcludes(shop, 'saw').ips.slice().sort()),
+     JSON.stringify(forSaw.ips.slice().sort()));
+
+  // A system drawn before its collector, or after one was deleted.
+  eq('a system with no collector has none', collectorOf({ id: 's', elements: [], ducts: [] }), null);
 }
 
 // ── renaming a machine reaches every copy of its name ───────────────────────

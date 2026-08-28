@@ -1,4 +1,4 @@
-import { Component, EventEmitter, Input, OnInit, Output } from '@angular/core';
+import { Component, EventEmitter, Input, OnInit, Output, ViewChild } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { DiscoveredOutlet } from '../services/api.service';
@@ -68,8 +68,9 @@ const DEFAULT_THRESHOLD = 50;
   template: `
     <div class="card">
       <!-- Says WHOSE outlet this is and WHAT the screen is for, in that order.
-           It read "Table Saw · smart outlet", which is a description of the plug
+           It read "Table Saw · smart outlet", which is a description of the outlet
            and left the tool's name looking like a heading rather than a subject. -->
+
       <div class="head">
         <span class="kind"><b>{{ isSwitch ? 'Collector' : 'Tool' }}:</b> {{ name || 'Unnamed' }}
           <span class="sep">—</span> Smart outlet setup</span>
@@ -77,7 +78,7 @@ const DEFAULT_THRESHOLD = 50;
               [title]="hasPlug && ip
                  ? 'A smart outlet is paired, so DustGate switches this automatically.'
                  : 'No smart outlet — you switch this on yourself.'">
-          {{ hasPlug && ip ? 'Paired' : 'Manual' }}
+          {{ hasPlug && ip ? 'Paired' : 'No outlet' }}
         </span>
       </div>
 
@@ -103,7 +104,7 @@ const DEFAULT_THRESHOLD = 50;
                                fieldId="sheet-outlet-name"
                                (renamed)="label = $event"
                                (rescan)="rescan.emit()"
-                               (change)="changing = true"
+                               (changeOutlet)="changing = true"
                                (removed)="unpair($event)">
         </app-paired-outlet-row>
 
@@ -202,7 +203,7 @@ export class ElementOutletConfigComponent implements OnInit {
     this.ip = ''; this.host = ''; this.label = '';
     this.hasPlug = false; this.changing = false;
     if (note) this.note.emit(note);
-    this.save();
+    void this.save();
   }
 
   pick(d: DiscoveredOutlet): void {
@@ -217,7 +218,25 @@ export class ElementOutletConfigComponent implements OnInit {
     }
   }
 
-  save(): void {
+  /** The paired-outlet row, when one is on screen. Only needed so Save can wait
+   *  to land the outlet name before the layout is written — see flush(). */
+  @ViewChild(PairedOutletRowComponent) private outletRow?: PairedOutletRowComponent;
+
+  /**
+   * Write the element back.
+   *
+   * ASYNC only because of the first line. A rename may still be on the wire:
+   * blur fires BEFORE the click that caused it, so tapping Save straight after
+   * typing a name starts that write and arrives here while it is still out —
+   * and `this.label` is only set by the row's (renamed) output when it returns.
+   * Emitting now stored the OLD name against an outlet that had already taken
+   * the new one, which reads everywhere else as a rename that never happened.
+   *
+   * The same race the tools screen had; this one was worse, because save() here
+   * did not await anything at all (found 2026-08-24).
+   */
+  async save(): Promise<void> {
+    await this.outletRow?.flush();
     const el: RawEl = { ...this.element };
     if (this.hasPlug && this.ip) {
       const outlet: RawEl = { gen: this.gen, ip: this.ip };

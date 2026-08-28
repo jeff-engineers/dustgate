@@ -182,21 +182,36 @@ int main(int argc, char** argv) {
     ok("gate2 dispatched to node2", joined(node2.log) == "gate2->open", joined(node2.log));
     ok("nothing sent to the local bus", local.log.empty(), joined(local.log));
 
+    // ONE MACHINE PER SYSTEM, so starting toolX does not just open gate1 — it
+    // takes the air from toolY and shuts gate2 as well, on the other board. The
+    // switchover spans two controllers and is still make-before-break.
     node2.log.clear();
     rt.setToolPower("toolX", 200);
     drain(rt, {&local, &node2});
     ok("gate1 dispatched to the local bus", joined(local.log) == "gate1->open", joined(local.log));
+    ok("and the loser's gate is shut on the OTHER board",
+       joined(node2.log) == "gate2->closed", joined(node2.log));
 
     // The current mutex is global: a busy local bus stalls a remote move too.
+    // Switching back to toolY is what needs the remote gate opened again — and
+    // it has to be a rising EDGE to count as newest, so it stops first. Setting
+    // an already-active tool to the same watts is not a restart and does not
+    // reorder anything (see activationSeq).
+    rt.setToolPower("toolY", 0);
+    drain(rt, {&local, &node2});
     local.log.clear(); node2.log.clear();
     local.moving = true;
-    rt.setToolPower("toolY", 0);          // wants gate2->closed
+    rt.setToolPower("toolY", 200);        // newest again → wants gate2->open
     rt.update(); rt.update();
     ok("busy local bus blocks a remote move", node2.log.empty(), joined(node2.log));
     local.settle();
     drain(rt, {&local, &node2});
     ok("remote move proceeds once the local bus frees up",
-       joined(node2.log) == "gate2->closed", joined(node2.log));
+       joined(node2.log) == "gate2->open", joined(node2.log));
+    // Make-before-break held across the boards: the remote gate opened, and only
+    // then did the local one close.
+    ok("and the local gate closes only after it", joined(local.log) == "gate1->closed",
+       joined(local.log));
   }
 
   // ── offline and unregistered controllers fail loudly ─────────────────────

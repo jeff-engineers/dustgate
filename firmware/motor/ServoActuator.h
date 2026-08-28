@@ -19,6 +19,10 @@
 //
 // POWER: servos run off an EXTERNAL 5–6V rail, NOT the ESP32 pins — only the PWM
 // signal wire goes to the GPIO, and grounds must be common.
+//
+// DE-ENERGIZING IS NOT DETACHING, on Arduino core 3.x. See _deenergize() below:
+// the obvious Servo::detach() is a one-way door on that core and kills the
+// channel for the rest of the boot. Everything else here is unchanged.
 // =============================================================================
 
 #pragma once
@@ -88,13 +92,13 @@ public:
             return;                                  // never detach mid-sweep
         }
         if (_detachArmed && _servo.attached() && (long)(now - _detachAtMs) >= 0) {
-            _servo.detach();
+            _deenergize();
             _detachArmed = false;
         }
     }
 
     // Immediately de-energize (stop pulses; ball holds by friction/detent).
-    void detach() { _servo.detach(); _detachArmed = false; _sweeping = false; }
+    void detach() { _deenergize(); _detachArmed = false; _sweeping = false; }
 
     bool attached() { return _servo.attached(); }
     int  pin() const { return _pin; }
@@ -112,6 +116,43 @@ public:
     }
 
 private:
+    // Stop driving the servo, WITHOUT giving up the LEDC channel.
+    //
+    // What we want physically is "no pulse train", so an analog servo goes limp
+    // instead of hunting and groaning against its hard stop. Servo::detach() is
+    // the obvious way to get that and it is a trap on Arduino core 3.x:
+    //
+    //   Servo::detach() -> ESP32PWM::detachPin() -> ledcDetach(pin) + deallocate()
+    //
+    // On the ESP32-C5 (core 3.x, ESP32Servo 3.2.1) the ledcDetach() half does not
+    // clear the core's per-pin binding, while deallocate() clears the library's
+    // own bookkeeping regardless. The two then disagree permanently: attached()
+    // reports false, so the next moveTo() re-attaches, and the core refuses —
+    //
+    //   ledcAttachChannel(): Pin 12 is already attached to LEDC (channel 0, ...)
+    //   attachPin(): [ESP32PWM] ERROR PWM channel failed to configure on pin 12!
+    //
+    // — and attachPin() returns WITHOUT setting attachedState, so the channel is
+    // gone for the rest of the boot. Symptom: a gate moves exactly once after a
+    // reboot and is then dead, silently, while the UI still looks like it is
+    // working. Found on a C5 primary 2026-08-22 from the jog slider; the fix is
+    // confirmed on hardware the same day, on a primary and a node, by the wake
+    // button's self-test sweeping all four channels repeatedly.
+    //
+    // So on core 3.x we attach once and never let go: duty 0 is a constant LOW,
+    // which is the same "no pulses" the servo needs, and the next write() picks
+    // the channel straight back up. On core 2.0.x — the DevKitC, the QT Py node —
+    // detach/attach cycles correctly and there is no reason to change it, so it
+    // keeps the behaviour it has been running with.
+    void _deenergize() {
+        if (_pin < 0) return;
+#if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
+        if (_servo.attached()) ledcWrite(_pin, 0);
+#else
+        _servo.detach();
+#endif
+    }
+
     // Sweep duration for a move of this many degrees. Proportional to travel so a
     // full quarter-turn still eases over the deliberate SERVO_SWEEP_MS while a small
     // setup nudge lands immediately — see the SERVO_MS_PER_DEG note in config.h.

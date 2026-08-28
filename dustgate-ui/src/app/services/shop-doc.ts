@@ -146,6 +146,40 @@ export function machineOfPort(doc: ShopDoc | null, el: RawEl | null | undefined)
 }
 
 /** Every port of a machine, disabled ones included, with the system each is in. */
+/**
+ * Is this outlet already sensing a DIFFERENT machine?
+ *
+ * Rows on the tools screen are PORTS — a table saw with a cabinet gate and an
+ * overarm is two of them — while an outlet belongs to the MACHINE (one box, one
+ * outlet; the routing brain only ever senses machines). So "is it taken" has to
+ * be asked machine-to-machine.
+ *
+ * Asking it row-to-row is what broke: each of a two-port tool's rows saw the
+ * other as a different tool, so the saw's own outlet read as taken and could not
+ * be re-selected — and because the picker refuses a taken outlet, the row was
+ * left with no ip and the save deleted the pairing outright (2026-08-24).
+ */
+export function outletTakenByAnotherMachine(
+  doc: ShopDoc | null,
+  rows: { id: string; ip: string; hasPlug: boolean }[],
+  ip: string,
+  portId: string,
+): boolean {
+  if (!ip) return false;
+  const mine = machineIdOfPort(doc, portId);
+  return rows.some(r => r.hasPlug && r.ip === ip && machineIdOfPort(doc, r.id) !== mine);
+}
+
+/** The machine a PORT belongs to. Falls back to the port's own id, so a document
+ *  we cannot read compares like-for-like instead of matching everything. */
+export function machineIdOfPort(doc: ShopDoc | null, portId: string): string {
+  for (const sys of systemsOf(doc)) {
+    const el = (sys.elements as RawEl[]).find(e => e['id'] === portId);
+    if (el) return (machineOfPort(doc, el)?.id as string) || portId;
+  }
+  return portId;
+}
+
 export function portsOf(doc: ShopDoc | null, machineId: string): { systemId: string; port: RawEl }[] {
   if (!doc) return [];
   return (portsByMachine(doc as unknown as Shop).get(machineId) ?? []) as
@@ -177,6 +211,99 @@ export const canDisablePort = (port: RawEl): boolean => isPortSupplemental(port)
 /** The one port a machine cannot do without, or null for a malformed machine. */
 export function primaryPortOf(doc: ShopDoc | null, machineId: string): RawEl | null {
   return portsOf(doc, machineId).find(({ port }) => !isPortSupplemental(port))?.port ?? null;
+}
+
+/**
+ * What to call a system on a LIST screen — /shop, /tools, /gates.
+ *
+ * The collector's name is the fallback rather than the first choice, and that
+ * order matters: a woodworker names the blower ("Cyclone"), and the system is
+ * usually left as whatever the canvas called it — but once someone HAS named the
+ * system, that is the name they expect to see. One definition because three
+ * screens now print it, and three copies would become three names.
+ */
+export function systemLabel(sys: ShopSystem | null | undefined): string {
+  if (!sys) return 'System';
+  return (sys.name as string) || (collectorOf(sys)?.['name'] as string) || 'System';
+}
+
+/**
+ * Every system, in the order the build canvas draws them top to bottom.
+ *
+ * The canvas stripes its systems by the topmost row any of their pieces stands
+ * on, so reading the same saved cells and sorting the same way is what makes the
+ * list screens agree with the drawing. Document order is the fallback for a shop
+ * that has never been laid out — which is what the canvas would auto-layout from
+ * anyway — and ties keep it, so the sort is stable wherever the layout has
+ * nothing to say.
+ *
+ * JUNCTIONS ARE SKIPPED, exactly as the canvas's own systemRowBands() does: a
+ * loose run end is where pipe happened to reach, not a row the system stands on.
+ */
+export function systemsInLayoutOrder(doc: ShopDoc | null): ShopSystem[] {
+  const layout = (doc as unknown as { ui?: { layout?: Record<string, { row: number }> } } | null)?.ui?.layout;
+  const topRow = (sys: ShopSystem): number => {
+    if (!layout) return Number.POSITIVE_INFINITY;
+    let lo = Number.POSITIVE_INFINITY;
+    for (const e of sys.elements as RawEl[]) {
+      if (e['type'] === 'junction') continue;
+      const c = layout[e['id'] as string];
+      if (c) lo = Math.min(lo, c.row);
+    }
+    return lo;
+  };
+  return systemsOf(doc)
+    .map((s, i) => ({ s, i, row: topRow(s) }))
+    .sort((a, b) => (a.row - b.row) || (a.i - b.i))
+    .map(({ s }) => s);
+}
+
+/** The collector element of a system, or null for a system drawn without one yet. */
+export function collectorOf(sys: ShopSystem | null | undefined): RawEl | null {
+  if (!sys) return null;
+  return (sys.elements as RawEl[]).find(e => e['type'] === 'collector') ?? null;
+}
+
+/** Every element in the shop, flattened across systems. */
+function allElems(doc: ShopDoc | null): RawEl[] {
+  return systemsOf(doc).flatMap(s => s.elements as RawEl[]);
+}
+
+/**
+ * Outlets that may NOT be picked for `targetId`, and why, for the outlet picker.
+ *
+ * One physical outlet driving two tools would make the routing brain believe two
+ * machines started at once; a collector's own switch is off-limits for the
+ * obvious reason. Exclusion is per MACHINE, not per row: a machine's ports share
+ * one outlet by design, so two ports of the same saw are not a clash.
+ *
+ * `targetId` is whatever is being configured — a port, a machine, or a collector
+ * element. All three resolve to "the machine (or collector) this outlet would
+ * belong to", which is the only identity the comparison cares about.
+ *
+ * Lives here rather than on either screen because BOTH the build canvas and the
+ * tools list open the same sheet, and two copies of "which outlets are taken"
+ * would be two answers the day one of them learned about a new plug holder.
+ */
+export function outletExcludes(doc: ShopDoc | null, targetId: string):
+    { ips: string[]; reason: Record<string, string> } {
+  const ips: string[] = [];
+  const reason: Record<string, string> = {};
+  for (const el of allElems(doc)) {
+    if (el['type'] !== 'collector') continue;
+    // …unless the collector IS what is being configured: its own outlet has to
+    // stay pickable, or re-opening the sheet greys out the current choice.
+    if (el['id'] === targetId) continue;
+    const ip = ((el['control'] as RawEl | undefined)?.['outlet'] as RawEl | undefined)?.['ip'] as string | undefined;
+    if (ip) { ips.push(ip); reason[ip] = 'reserved — dust collector'; }
+  }
+  const mine = machineOfPort(doc, allElems(doc).find(e => e['id'] === targetId))?.id ?? targetId;
+  for (const m of machinesOf(doc)) {
+    if (m.id === mine) continue;
+    const ip = (m.sensor?.outlet as RawEl | undefined)?.['ip'] as string | undefined;
+    if (ip) { ips.push(ip); reason[ip] = `already paired with ${m.name || 'another tool'}`; }
+  }
+  return { ips, reason };
 }
 
 // ── the plug ────────────────────────────────────────────────────────────────

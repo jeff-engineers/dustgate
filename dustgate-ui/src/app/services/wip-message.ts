@@ -214,7 +214,7 @@ const PHRASINGS: Array<{
   // ── plugs ──
   {
     re: /^smart outlet ([^ ]+) is on two elements \("([^"]+)" and "([^"]+)"\)$/,
-    say: (d, m) => `${label(d, m[2])} and ${label(d, m[3])} are both paired to the plug at ${m[1]}. A plug belongs to one tool.`,
+    say: (d, m) => `${label(d, m[2])} and ${label(d, m[3])} are both paired to the outlet at ${m[1]}. An outlet belongs to one tool.`,
   },
 ];
 

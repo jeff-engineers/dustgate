@@ -84,11 +84,12 @@
 //
 // WROVER WARNING: GPIO16/17 are the PSRAM interface on WROVER modules — that is
 // SDA *and* PIN_PIXEL, on a module that drops into the same footprint, with no
-// spares left to move them to. See firmware/wiring/devkitc.md §5.
-// Declared by the BUILD, not probed for: -DHAS_STATUS_SCREEN (env
-// esp32dev_screen) fits one, and which pins that means stays this file's
-// business. Still unbuilt hardware — no panel has been connected to this board.
-#ifdef HAS_STATUS_SCREEN
+// spares left to move them to. See devkitc-wiring.md §5 (beside this file).
+// Declared by the BOARD, and no longer by the build: the -DHAS_STATUS_SCREEN
+// flag and the esp32dev_screen env are gone as of 2026-08-22 (see the note at
+// the top of platformio.ini). Defining these two pins is what fits a screen, the
+// driver probes 0x3C at boot, and a DevKitC with nothing plugged in says so on
+// serial and moves on. The carrier this board goes on always carries a panel.
 #define PIN_OLED_SDA    16
 #define PIN_OLED_SCL     4
 
@@ -101,10 +102,9 @@
 // this is what's left: input-only, no output, and — the part that matters —
 // NO INTERNAL PULL-UP. INPUT_PULLUP is accepted here and does nothing, so this
 // pin needs an external 10kOhm to 3V3 and the plain INPUT below. Wiring is in
-// firmware/wiring/devkitc.md §5.
+// devkitc-wiring.md §5 (beside this file).
 #define PIN_WAKE_BTN        34
 #define WAKE_BTN_INPUT_MODE INPUT   // external 10kOhm pull-up — 34 has none
-#endif
 
 // -- Reserved: servo PWM outputs (4 in a row) --
 #define SERVO_PWM_PIN_1    25

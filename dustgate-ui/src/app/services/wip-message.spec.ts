@@ -133,8 +133,8 @@ const says = (message: string) => humaniseIssue(shop(), { message });
 
   eq('two tools on one plug',
      says('system "s1": smart outlet 192.168.1.9 is on two elements ("p1" and "g1")'),
-     'Main line: Cabinet and Saw gate are both paired to the plug at 192.168.1.9. '
-     + 'A plug belongs to one tool.');
+     'Main line: Cabinet and Saw gate are both paired to the outlet at 192.168.1.9. '
+     + 'An outlet belongs to one tool.');
 }
 
 // ── the fallback, which is what has to survive the model changing ───────────

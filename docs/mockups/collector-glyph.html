@@ -1,0 +1,233 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Collector glyph — exploration</title>
+<style>
+  :root {
+    --bg:#111; --surface:#1e1e1e; --border:#2e2e2e; --text:#e8e8e8; --muted:#888;
+    --accent:#f0a500; --danger:#d94444; --success:#3cbe6e;
+  }
+  html,body { background:var(--bg); color:var(--text);
+    font-family:system-ui,-apple-system,sans-serif; margin:0; }
+  main { max-width:1040px; margin:0 auto; padding:28px 20px 80px; }
+  h1 { font-size:22px; margin:0 0 4px; }
+  h2 { font-size:16px; margin:34px 0 6px; font-weight:600; }
+  h3 { font-size:13px; margin:0 0 2px; font-weight:600; letter-spacing:.02em; }
+  p  { font-size:14px; line-height:1.55; color:#c9c9c9; margin:8px 0; }
+  .lede { color:var(--muted); }
+  b { color:var(--text); }
+  code { font-family:ui-monospace,Menlo,monospace; font-size:12.5px; color:var(--accent); }
+  .row { display:flex; flex-wrap:wrap; gap:16px; margin-top:14px; }
+  .card { background:#161616; border:1px solid var(--border); border-radius:14px;
+          padding:12px 12px 8px; }
+  .card .cap { font-size:12px; color:var(--muted); margin-top:6px; line-height:1.45; max-width:250px; }
+  .stage { background:var(--bg); border-radius:10px; display:block; }
+  .note { border-left:3px solid var(--accent); padding:6px 0 6px 12px; margin:14px 0;
+          font-size:13.5px; color:#d0d0d0; line-height:1.55; }
+  .note.warn { border-color:var(--danger); }
+  table { border-collapse:collapse; font-size:13px; margin-top:10px; width:100%; }
+  th,td { border-bottom:1px solid var(--border); text-align:left; padding:6px 10px 6px 0; vertical-align:top; }
+  th { color:var(--muted); font-weight:600; }
+
+  /* ── canvas vocabulary, lifted from build.component.css so the shapes are
+       judged in the colours they will actually wear ── */
+  .body      { fill:var(--surface); stroke:#444; stroke-width:1.5; }
+  .tool-body { fill:#16262e; stroke:#2d6a86; }
+  .coll-body { fill:#241f2e; stroke:#6a5a8c; }
+  .unit      { fill:var(--surface); stroke:#444; stroke-width:1.5; }
+  .puck      { fill:#3a3a3a; }
+  .stroke    { stroke:var(--muted); }
+  .glabel    { fill:var(--text); font-size:12.5px; text-anchor:middle; font-weight:500; }
+  .glabel.gatename { font-size:10.5px; fill:var(--muted); letter-spacing:.07em; text-transform:uppercase; }
+  .dock-bg   { fill:#0d1a20; stroke:#2d6a86; stroke-width:1; stroke-dasharray:3 2.5; }
+  .coll .dock-bg { stroke:#6a5a8c; fill:#191527; }
+  .dock-shell{ fill:none; stroke:var(--muted); stroke-width:1.7; opacity:.85; }
+  .dock-slot { fill:var(--muted); opacity:.8; }
+  .dock-t    { fill:var(--muted); font-size:9.5px; text-anchor:middle; }
+  .live  .dock-bg { stroke-dasharray:none; stroke:var(--success); fill:rgba(60,190,110,.14); }
+  .live  .dock-t, .live .dock-slot { fill:var(--success); }
+  .live  .dock-shell { stroke:var(--success); }
+  .standby .dock-bg { stroke-dasharray:none; stroke:var(--accent); fill:rgba(240,165,0,.12); }
+  .standby .dock-t, .standby .dock-slot { fill:var(--accent); }
+  .standby .dock-shell { stroke:var(--accent); }
+  .duct { stroke:#6f6f6f; stroke-width:6; fill:none; stroke-linecap:round; stroke-linejoin:round; }
+  .todo-dot { fill:var(--accent); }
+  .sel .coll-body, .sel .tool-body, .sel .unit { stroke:var(--accent); stroke-width:2.5; }
+  .foot { fill:none; stroke:var(--danger); stroke-width:1; stroke-dasharray:4 3; opacity:.75; }
+  .footlbl { fill:var(--danger); font-size:9px; opacity:.9; }
+</style>
+<main>
+<h1>Collector glyph — exploration</h1>
+<p class="lede">Throwaway. Explores replacing the circle-and-impeller collector with a
+body that carries its own name and its own plug, the way a machine already does.
+Fold the outcome into <code>docs/mockups/canvas.html</code> and archive this.</p>
+
+<h2>What is wrong with the circle</h2>
+<p>Two things, and they are the same thing. The collector's <b>name floats outside
+the glyph</b> — every other named piece on the canvas now carries its name inside
+its body — and <b>the collector's plug is invisible</b>: a system's blower has a
+<code>plug</code> exactly like a tool does, and today the only sign of it is the
+amber setup dot. The impeller spiral is what is eating the room both need. It buys
+nothing a shape cannot say on its own.</p>
+
+<div class="note warn"><b>Hard ceiling: 76 × 76.</b> The router inflates every device
+footprint by <code>CLEARANCE</code> = 15 before treating it as an obstacle, and the
+A* lattice is half a cell = 54. A half-extent of 38 inflates to 53 and leaves the
+lattice line on the cell boundary usable; <b>39 blocks it</b>, and a duct can no
+longer pass along the row or column beside the collector. So the barrel gets 76 wide
+by 76 tall at the most — 8 units taller than a machine's 76 × 68, no more. All
+differentiation has to come out of the silhouette, not the size.</div>
+
+<h2>The three shapes</h2>
+<p>Same two rows in all three — name on top, plug chip beneath it, both borrowed
+whole from the machine body so nothing new has to be invented for them. Only the
+outline differs. Each is drawn beside a machine and a gate at 1:1, because the
+question is not whether the shape is nice, it is whether it is <em>telling apart</em>.</p>
+
+<div class="row">
+  <div class="card">
+    <h3>A · Cyclone</h3>
+    <svg class="stage" width="250" height="210" viewBox="-125 -62 250 210">
+      <g class="coll">
+        <path class="body coll-body" d="M-38 -38 h76 v50 l-23 26 h-30 l-23 -26 z"/>
+        <text class="glabel" y="-16">Dust collector</text>
+        <g transform="translate(0,-8)">
+          <rect class="dock-bg" x="-34" y="4" width="68" height="22" rx="6"/>
+          <g transform="translate(-27,15) scale(0.62)">
+            <rect class="dock-shell" x="-9" y="-9" width="18" height="18" rx="5"/>
+            <rect class="dock-slot" x="-4.3" y="-5.6" width="2.2" height="5.8" rx="1"/>
+            <rect class="dock-slot" x="1.9" y="-5.6" width="2.2" height="5.8" rx="1"/>
+            <circle class="dock-slot" cx="0" cy="3.6" r="1.6"/>
+          </g>
+          <text class="dock-t" x="6.5" y="19">Shop plug</text>
+        </g>
+      </g>
+      <g transform="translate(0,100)">
+        <rect class="body tool-body" x="-38" y="-34" width="76" height="68" rx="11"/>
+        <text class="glabel" y="-8">Table saw</text>
+      </g>
+    </svg>
+    <div class="cap">A real cyclone. The cone is unmistakable and no other piece on
+      the canvas has a sloping edge — but the taper is exactly where the plug chip
+      wants to be, so the chip has to ride high and the cone stays empty.</div>
+  </div>
+
+  <div class="card">
+    <h3>B · Barrel</h3>
+    <svg class="stage" width="250" height="210" viewBox="-125 -62 250 210">
+      <g class="coll">
+        <rect class="body coll-body" x="-38" y="-38" width="76" height="76" rx="17"/>
+        <path class="stroke" fill="none" stroke-width="1.5" opacity=".7"
+              d="M-37 -26 a 37 9 0 0 0 74 0"/>
+        <path class="stroke" fill="none" stroke-width="1.5" opacity=".5" d="M-37.5 24 h75"/>
+        <text class="glabel" y="-6">Dust collector</text>
+        <rect class="dock-bg" x="-34" y="0" width="68" height="22" rx="6"/>
+        <g transform="translate(-27,11) scale(0.62)">
+          <rect class="dock-shell" x="-9" y="-9" width="18" height="18" rx="5"/>
+          <rect class="dock-slot" x="-4.3" y="-5.6" width="2.2" height="5.8" rx="1"/>
+          <rect class="dock-slot" x="1.9" y="-5.6" width="2.2" height="5.8" rx="1"/>
+          <circle class="dock-slot" cx="0" cy="3.6" r="1.6"/>
+        </g>
+        <text class="dock-t" x="6.5" y="15">Shop plug</text>
+      </g>
+      <g transform="translate(0,100)">
+        <rect class="body tool-body" x="-38" y="-34" width="76" height="68" rx="11"/>
+        <text class="glabel" y="-8">Table saw</text>
+      </g>
+    </svg>
+    <div class="cap">A drum seen head-on: fat corners, a lid arc across the top and a
+      base band at the bottom. Full 76-wide interior for both rows. Against a
+      machine's <code>rx 11</code> it is the same family, one size rounder — which
+      is either the point or the problem.</div>
+  </div>
+
+  <div class="card">
+    <h3>C · Bag house</h3>
+    <svg class="stage" width="250" height="210" viewBox="-125 -62 250 210">
+      <g class="coll">
+        <path class="body coll-body" d="M-38 -20 a 38 20 0 0 1 76 0 v52 a 6 6 0 0 1 -6 6 h-64 a 6 6 0 0 1 -6 -6 z"/>
+        <path class="stroke" fill="none" stroke-width="1.5" opacity=".5" d="M-38 -12 h76"/>
+        <text class="glabel" y="-2">Dust collector</text>
+        <rect class="dock-bg" x="-34" y="6" width="68" height="22" rx="6"/>
+        <g transform="translate(-27,17) scale(0.62)">
+          <rect class="dock-shell" x="-9" y="-9" width="18" height="18" rx="5"/>
+          <rect class="dock-slot" x="-4.3" y="-5.6" width="2.2" height="5.8" rx="1"/>
+          <rect class="dock-slot" x="1.9" y="-5.6" width="2.2" height="5.8" rx="1"/>
+          <circle class="dock-slot" cx="0" cy="3.6" r="1.6"/>
+        </g>
+        <text class="dock-t" x="6.5" y="21">Shop plug</text>
+      </g>
+      <g transform="translate(0,100)">
+        <rect class="body tool-body" x="-38" y="-34" width="76" height="68" rx="11"/>
+        <text class="glabel" y="-8">Table saw</text>
+      </g>
+    </svg>
+    <div class="cap">Domed top, flat base — the single-stage bagger most of these
+      shops actually own. The dome reads at a glance and, unlike the cone, it gives
+      the rows back their room. Its arc is also where the trunk lands, which the
+      cone and the barrel both handle more gracefully.</div>
+  </div>
+</div>
+
+<h2>Where the duct lands</h2>
+<p>Today a run may arrive at the circle from any side and it looks the same from all
+of them. A box has edges, and the shape has to survive every one — the collector
+usually sits top-left, so <b>right and bottom</b> are the common cases, but nothing
+stops a shop that feeds it from above.</p>
+
+<div class="row">
+  <div class="card">
+    <h3>B, fed three ways</h3>
+    <svg class="stage" width="480" height="180" viewBox="-60 -90 480 180">
+      <g id="scene-b">
+        <path class="duct" d="M38 0 H86"/>
+        <path class="duct" d="M170 -38 V-70 H236"/>
+        <path class="duct" d="M330 38 V64"/>
+      </g>
+      <g class="coll">
+        <rect class="body coll-body" x="-38" y="-38" width="76" height="76" rx="17"/>
+        <path class="stroke" fill="none" stroke-width="1.5" opacity=".7" d="M-37 -26 a 37 9 0 0 0 74 0"/>
+        <path class="stroke" fill="none" stroke-width="1.5" opacity=".5" d="M-37.5 24 h75"/>
+        <text class="glabel" y="-6">Dust collector</text>
+        <rect class="dock-bg" x="-34" y="0" width="68" height="22" rx="6"/>
+        <text class="dock-t" x="0" y="15">Shop plug</text>
+      </g>
+      <g class="coll live" transform="translate(170,0)">
+        <rect class="body coll-body" x="-38" y="-38" width="76" height="76" rx="17"/>
+        <path class="stroke" fill="none" stroke-width="1.5" opacity=".7" d="M-37 -26 a 37 9 0 0 0 74 0"/>
+        <path class="stroke" fill="none" stroke-width="1.5" opacity=".5" d="M-37.5 24 h75"/>
+        <text class="glabel" y="-6">Dust collector</text>
+        <rect class="dock-bg" x="-34" y="0" width="68" height="22" rx="6"/>
+        <text class="dock-t" x="0" y="15">412 W</text>
+      </g>
+      <g class="coll" transform="translate(330,0)">
+        <rect class="body coll-body" x="-38" y="-38" width="76" height="76" rx="17"/>
+        <path class="stroke" fill="none" stroke-width="1.5" opacity=".7" d="M-37 -26 a 37 9 0 0 0 74 0"/>
+        <path class="stroke" fill="none" stroke-width="1.5" opacity=".5" d="M-37.5 24 h75"/>
+        <text class="glabel" y="-6">Overflow DC</text>
+        <rect class="dock-bg" x="-34" y="0" width="68" height="22" rx="6"/>
+        <text class="dock-t" x="0" y="15">Shop plug</text>
+        <circle class="todo-dot" cx="-38" cy="-38" r="5"/>
+      </g>
+    </svg>
+    <div class="cap">Left: fed from the right, the everyday case. Middle: running —
+      the plug row goes green and says what it is drawing, exactly as a tool's does.
+      Right: no plug yet, so it keeps the amber setup dot on its corner.</div>
+  </div>
+</div>
+
+<h2>What this decides</h2>
+<table>
+  <tr><th>Question</th><th>Answer here</th></tr>
+  <tr><td>Impeller spiral</td><td>Gone. It was the only thing in the circle and it said less than the outline can.</td></tr>
+  <tr><td>The name</td><td>Inside the body, same <code>.glabel</code>, same trim rule as a machine's — so a long name can no longer sit over a duct.</td></tr>
+  <tr><td>The plug</td><td>Drawn, as the same dock chip a machine wears. It is the collector's plug, and it draws under the collector's name.</td></tr>
+  <tr><td>Footprint</td><td>76 × 76 — <code>halfW</code>/<code>halfH</code> go 30 → 38. Both are read by the router, so this is the number that matters.</td></tr>
+  <tr><td>Colour</td><td>Its own, not the machine teal. A collector is not a machine and the shape alone is a thin thing to hang that on.</td></tr>
+</table>
+
+<h2>Still open</h2>
+<p>Which outline. And whether the collector's body should carry a third line — the
+coast-down, say, or which system it heads — or whether that stays where it is, on
+the Live view's card.</p>
+</main>

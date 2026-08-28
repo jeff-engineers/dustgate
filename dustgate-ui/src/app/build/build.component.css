@@ -85,7 +85,7 @@ svg.canvas { display: block; touch-action: none; }
    colour changes while you are still deciding rather than on release. */
 .drag-stub.crossing { stroke: var(--border-strong, #3a3a3a); }
 .node.drop-target .body, .node.drop-target .unit { stroke: var(--accent); stroke-width: 2.5; }
-.node.drop-target .tool-body { stroke: var(--accent); stroke-width: 2.5; }
+.node.drop-target .tool-body, .node.drop-target .coll-body { stroke: var(--accent); stroke-width: 2.5; }
 .open-end .dot { fill: var(--accent); }
 .open-end .end-ring { fill: none; stroke: var(--accent); stroke-width: 1.5; opacity: 0.6; }
 /* A system's ground. Barely there on purpose: it has to survive the zoom-out that
@@ -118,6 +118,19 @@ svg.canvas { display: block; touch-action: none; }
    and a tool wearing it next to a live cable reads as wired or selected rather
    than as a machine. Desaturated and dark, it reads as its own class of thing. */
 .node .tool-body { fill: #16262e; stroke: #2d6a86; }
+/* A COLLECTOR gets its own violet ground, for the same reason a machine gets
+   azure: the barrel and the machine box are both 76-wide rounded rectangles that
+   differ by 8 units of height and a corner radius, and proportion is the first
+   thing to go when the drawing scales to fit a phone. The colour is what still
+   says "this is not a machine" at 55%.
+   Violet rather than a warmer hue on purpose — amber is "needs setting up" and
+   green is "running" everywhere on this canvas, and a body wearing either would
+   claim a state it isn't in. */
+.node .coll-body { fill: #241f2e; stroke: #6a5a8c; }
+/* The lid seam and the base band. Straight, not arced: the arc drew a barrel and
+   the barrel isn't the point — the two lines are what keep the body from reading
+   as an oversized machine, and they cost nothing at any zoom. */
+.coll-seam { stroke: #9a86c4; stroke-width: 1.5; }
 /* A second port, drawn ON the machine rather than beside it. Same azure family as
    the body it sits on, because it IS that machine — just another way in.
    The two share one look on purpose — same fill, same stroke — so the only thing
@@ -220,6 +233,11 @@ svg.canvas { display: block; touch-action: none; }
    sitting on it. Follows the body's azure family for the neutral states only —
    standby and live below still own their colours, which is what they're for. */
 .dock-bg   { fill: #0d1a20; stroke: #2d6a86; stroke-width: 1; stroke-dasharray: 3 2.5; }
+/* The same recess in the collector's violet, so the row belongs to the barrel the
+   way a tool's belongs to its box. Neutral states only — standby and live keep
+   their own colours on both bodies, because what they mean is the same thing. */
+.dock.coll .dock-bg { fill: #191527; stroke: #6a5a8c; }
+.dock.coll.idle .dock-bg { fill: #2b2440; }
 .dock-shell{ fill: none; stroke: var(--muted); stroke-width: 1.7; opacity: 0.85; }
 .dock-slot { fill: var(--muted); opacity: 0.8; }
 .dock-t    { fill: var(--muted); font-size: 9.5px; text-anchor: middle; }

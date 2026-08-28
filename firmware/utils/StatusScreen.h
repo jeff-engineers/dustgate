@@ -14,22 +14,25 @@
 //   StatusScreen.h       puts those characters on glass. I²C, a font, a sleep
 //                        timer, and nothing else. No policy lives here.
 //
-// COMPILES OUT COMPLETELY when the board has no screen: without PIN_OLED_SDA /
-// PIN_OLED_SCL every entry point below is an empty inline, the same seam
-// PIN_PIXEL and HAS_LINEAR already use. A DustGate ships without a display
-// unless somebody fits one, so a board that hasn't spends no flash and pulls in
-// no library.
+// COMPILES OUT COMPLETELY when the board has nowhere to put a screen: without
+// PIN_OLED_SDA / PIN_OLED_SCL every entry point below is an empty inline, the
+// same seam PIN_PIXEL and HAS_LINEAR already use, and the LDF never even links
+// the driver. That is now a property of the BOARD HEADER alone.
 //
-// DECLARED BY THE BUILD, not probed for — that was the open question in
-// docs/mockups/oled-status.html, and this is the answer: an env sets
-// -DHAS_STATUS_SCREEN, the board header turns that into its own two pins, and
-// which pins a board uses stays the board header's business. It matches how
-// every other fitted-or-not part on these boards is decided.
+// DECLARED BY THE BOARD, PROBED AT BOOT — and that is a reversal, so it is worth
+// saying why. The original answer (docs/mockups/oled-status.html) was to declare
+// a screen in the build, matching how every other fitted-or-not part on these
+// boards is decided: an env set -DHAS_STATUS_SCREEN and there were two envs per
+// board. That went on 2026-08-22, when the carrier design became one that always
+// has the panel and its button, which left the flag costing a silent failure —
+// flash the env without the suffix and the screen and button are simply absent —
+// to save ~20 KB nothing was short of. Per-board reasoning is in the note at the
+// top of platformio.ini.
 //
-// A declared screen that isn't actually there is still handled, because that is
-// the mistake someone will make: begin() reports the missing ACK, sets _present
-// false and every later call returns immediately. A missing panel must not hang
-// the shop's brain in Wire's timeout on every pass of loop().
+// So a board with the pins but NO PANEL is now the ordinary case, not a mistake:
+// begin() reports the missing ACK, sets _present false, and every later call
+// returns immediately. A missing panel must not hang the shop's brain in Wire's
+// timeout on every pass of loop().
 // =============================================================================
 
 #include <Arduino.h>
@@ -91,6 +94,25 @@ inline uint32_t& _lastHash()   { static uint32_t h = 0; return h; }
  */
 inline void note() { _lastEvent() = millis(); }
 
+/**
+ * The wake button's edge: light the panel if it is dark, put it out if it is
+ * lit. Nothing else calls this — an EVENT never blanks a screen, so note() and
+ * toggle() are deliberately not the same entry point.
+ *
+ * Reads _lit() rather than recomputing awake(), so the toggle turns off exactly
+ * what the user can see. The two agree anyway (update() runs every loop and
+ * settles _lit() from the clock); using the visible one means a press can never
+ * appear to do nothing because the timer expired between draw and press.
+ *
+ * The off state is a backdated timestamp, not a flag — see blankedAt() in
+ * StatusScreenModel.h for why, and for what it deliberately does NOT suppress.
+ */
+inline void toggle() {
+    if (!_present()) return;
+    if (_lit()) _lastEvent() = blankedAt(millis());
+    else        note();
+}
+
 /** Whether a panel actually answered at begin(). False on every other board. */
 inline bool present() { return _present(); }
 
@@ -128,7 +150,7 @@ inline bool begin() {
     // at its default the library calls wire->begin() with NO ARGUMENTS, which on
     // an ESP32 re-initialises I2C on the CORE DEFAULT pins — GPIO21/22. On the
     // DevKitC those are the TMC2209's EN and DIR. The board's whole pin choice
-    // exists to keep I2C off them (see boards/devkitc_wroom32.h), and a default
+    // exists to keep I2C off them (see attic/linear/devkitc_wroom32.h), and a default
     // argument in a display library walks straight back into it: the display
     // talks to nothing while the stepper's enable line gets driven as a clock.
     _present() = _oled().begin(SSD1306_SWITCHCAPVCC, OLED_I2C_ADDR,
@@ -298,6 +320,7 @@ namespace statusscreen {
 inline bool begin()   { return false; }
 inline bool present() { return false; }
 inline void note()    {}
+inline void toggle()  {}
 inline void update(const Facts&) {}
 } // namespace statusscreen
 

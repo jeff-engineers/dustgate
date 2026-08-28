@@ -5,9 +5,10 @@ import { ApiService, type NodeLinkState } from '../services/api.service';
 import { SelectorConfigComponent } from './selector-config.component';
 import type { Topology } from '@topology';
 import {
-  ConfigurableSelector, commandAngle, configurableSelectorsOf, elementsOf,
-  isCalibrated, isServoKind, kindLabel, swingSequence,
+  AnyElement, ConfigurableSelector, commandAngle, elementsOf,
+  isCalibrated, isConfigurableSelector, isServoKind, kindLabel, swingSequence,
 } from './selector-types';
+import { type ShopDoc, systemLabel, systemsInLayoutOrder, toShop } from '../services/shop-doc';
 
 // ── The gates screen ─────────────────────────────────────────────────────────
 // Every configured gate in one list, each tappable into the calibration it
@@ -24,6 +25,12 @@ import {
 // recalibration is nearly always about one specific gate, and a march makes you
 // walk past three working ones to reach it. The list also answers which gates
 // still need doing, which a wizard can't.
+//
+// SPLIT BY SYSTEM (2026-08-25), the same shape /tools took the same day and in
+// the same order the canvas draws them (systemsInLayoutOrder). Which blower a
+// gate sits under is how you find it on the floor — you are standing at the
+// cyclone with a wrench — and a flat list of eight ball valves named after the
+// machines below them made you read every one.
 
 /** One row: a gate plus the things this screen needs to decide about it. */
 interface GateRow {
@@ -34,6 +41,13 @@ interface GateRow {
   calibrated: boolean;
   /** Empty when the board is answering; otherwise why it isn't. */
   offline: string;
+}
+
+/** One system's gates, under the name the other list screens use for it. */
+interface GateGroup {
+  id: string;
+  name: string;
+  rows: GateRow[];
 }
 
 @Component({
@@ -50,6 +64,11 @@ interface GateRow {
     .title { font-size: 17px; font-weight: 600; }
     .hint { font-size: 12px; color: var(--muted); line-height: 1.6; margin: 0 2px 12px; }
 
+    /* Space between systems, not a rule — the label above each block is already
+       the boundary. Same call /shop and /tools made. */
+    .sys + .sys { margin-top: 22px; }
+    .syslabel { font-size: 11px; color: var(--muted); letter-spacing: 0.07em;
+                text-transform: uppercase; padding: 0 8px 7px; }
     .card { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; }
     .row { display: flex; align-items: center; gap: 10px; padding: 13px 14px;
            border-bottom: 1px solid var(--border); }
@@ -94,8 +113,13 @@ interface GateRow {
         closed again, using only the positions it already has saved.
       </p>
 
-      <div class="card" *ngIf="rows.length">
-        <div class="row" *ngFor="let r of rows">
+      <div class="sys" *ngFor="let g of groups">
+        <!-- Named only when there is more than one. A one-system shop's gates all
+             sit under the same blower, and saying so above every list is a line
+             that carries nothing. -->
+        <div class="syslabel" *ngIf="groups.length > 1">{{ g.name }}</div>
+        <div class="card">
+        <div class="row" *ngFor="let r of g.rows">
           <div class="grow">
             <div class="nm">{{ r.name }}</div>
             <div class="sub">{{ r.kind }} · {{ r.where }}</div>
@@ -119,9 +143,14 @@ interface GateRow {
             </button>
           </div>
         </div>
+        <!-- A system with a blower and no gates yet is not the empty screen — it is
+             one half of a shop mid-build, and dropping it would leave the other
+             system's label looking like the whole story. -->
+        <div class="empty" *ngIf="!g.rows.length">No gates on this one yet.</div>
+        </div>
       </div>
 
-      <div class="empty" *ngIf="!rows.length && loaded">
+      <div class="empty" *ngIf="!groups.length && loaded">
         No gates configured yet. Draw your plumbing first.
       </div>
       <p class="err" *ngIf="error">{{ error }}</p>
@@ -129,6 +158,9 @@ interface GateRow {
   `,
 })
 export class GateListComponent implements OnInit {
+  /** One block per system, in canvas order. */
+  groups: GateGroup[] = [];
+  /** Every row, flat — "is any gate swinging" is a shop-wide question. */
   rows: GateRow[] = [];
   topo: Topology | null = null;
   editing: ConfigurableSelector | null = null;
@@ -145,7 +177,11 @@ export class GateListComponent implements OnInit {
   async ngOnInit(): Promise<void> {
     try {
       await this.api.whenReady();
-      this.topo = await this.api.getTopology() as Topology;
+      // Migrated on read, like every other entry point — see shop-doc.ts. This
+      // screen read the raw document until 2026-08-25, which was harmless while it
+      // only flattened elements and is not once it groups them: a v1 layout has no
+      // `systems[]` to group BY.
+      this.topo = toShop(await this.api.getTopology()) as unknown as Topology;
       try { this.links = await this.api.getNodes(); } catch { this.links = []; }
     } catch {
       this.error = "Couldn't reach the controller.";
@@ -157,15 +193,22 @@ export class GateListComponent implements OnInit {
   }
 
   private rebuild(): void {
-    if (!this.topo) { this.rows = []; return; }
-    this.rows = configurableSelectorsOf(this.topo).map((sel) => ({
-      sel,
-      name: (sel as { name?: string }).name || sel.id,
-      kind: kindLabel(sel),
-      where: this.where(sel),
-      calibrated: isCalibrated(sel),
-      offline: this.offlineReason(sel),
+    if (!this.topo) { this.groups = []; this.rows = []; return; }
+    this.groups = systemsInLayoutOrder(this.topo as unknown as ShopDoc).map((sys) => ({
+      id: sys.id,
+      name: systemLabel(sys),
+      rows: (sys.elements as unknown as AnyElement[])
+        .filter(isConfigurableSelector)
+        .map((sel) => ({
+          sel,
+          name: (sel as { name?: string }).name || sel.id,
+          kind: kindLabel(sel),
+          where: this.where(sel),
+          calibrated: isCalibrated(sel),
+          offline: this.offlineReason(sel),
+        })),
     }));
+    this.rows = this.groups.flatMap((g) => g.rows);
   }
 
   /** Which board drives this gate, in the words the boards screen uses. */

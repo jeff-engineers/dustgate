@@ -99,6 +99,17 @@ struct Facts {
     int  servoCount  = -1;
     int  lastCmdSec  = -1;
 
+    // -- servo self-test (the wake button held for a second) ------------------
+    // Applies to BOTH roles: a node's screen answers for a node's servos. The
+    // header band already says which board you are looking at, which is the
+    // other half of "what is moving".
+    int  selfTestCh    = -1;     // 1-based channel under test; -1 = not running
+    int  selfTestOf    = -1;     // how many channels the sweep will cover
+    int  selfTestAngle = -1;     // the angle it has been COMMANDED to, which is
+                                 // the number worth showing: comparing it to
+                                 // where the valve actually is is the test
+    const char* selfTestRefused = nullptr;  // why it wouldn't start, if it didn't
+
     // -- faults ---------------------------------------------------------------
     const char* darkNode  = nullptr;  // a board that stopped answering
     int  darkForSec = -1;
@@ -245,6 +256,11 @@ inline void formatBuild(const char* date, const char* time, char* out, size_t n)
  * spellings they are. Motion outranks Status, same rule as the pixel.
  */
 inline const char* stateWord(const Facts& f) {
+    // Outranks everything, including a fault: it is a thing a person is doing
+    // to the board right now, with their finger on it, and they are watching
+    // this word to see whether the board agreed. 9 characters.
+    if (f.selfTestCh >= 0) return "SERVOTEST";
+    if (f.selfTestRefused)  return "REFUSED";
     switch (f.motion) {
         case statusled::MOVING:      return "MOVING";
         case statusled::HOMING:      return "HOMING";
@@ -334,6 +350,22 @@ inline Screen _renderBody(const Facts& f) {
         if (f.ssid)         { _pair(buf, "ssid", f.ssid);                 _add(s, buf); }
         if (f.retrySec >= 0){ _pairNum(buf, "retrying in", f.retrySec, "s"); _add(s, buf); }
         if (f.role == Role::PRIMARY && f.gatesTotal >= 0) _add(s, "gates local only");
+        return s;
+    }
+
+    // The self-test owns the panel while it runs — it is a bench tool and the
+    // person is standing in front of the board watching this and the valve.
+    if (f.selfTestCh >= 0) {
+        if (f.selfTestOf > 0) _pairFrac(buf, "servo", f.selfTestCh, f.selfTestOf);
+        else                  _pairNum(buf, "servo", f.selfTestCh);
+        _add(s, buf);
+        if (f.selfTestAngle >= 0) { _pairNum(buf, "commanded", f.selfTestAngle, "deg"); _add(s, buf); }
+        _add(s, "watch the valve");
+        return s;
+    }
+    if (f.selfTestRefused) {
+        _add(s, "servo self-test");
+        _add(s, f.selfTestRefused);
         return s;
     }
 
@@ -439,6 +471,30 @@ inline bool awake(uint32_t lastEventMs, uint32_t nowMs,
     // Unsigned subtraction, so this stays correct across the millis() rollover
     // at 49.7 days — a shop controller is expected to run past one.
     return (nowMs - lastEventMs) < idleMs;
+}
+
+/**
+ * The event timestamp that means "already slept" — what a deliberate blank sets
+ * instead of carrying a separate flag.
+ *
+ * The button is a toggle as of 2026-08-22: press once to light the panel, press
+ * again to put it out rather than standing there for two minutes waiting. Off is
+ * therefore a state someone can ask for, and the cheapest honest way to say it
+ * is to backdate the clock by exactly one timeout — awake() then returns false
+ * for the same reason it does after a real idle, with no second concept for the
+ * drawing code to reconcile.
+ *
+ * What that buys, and it is the reason to prefer it to a sticky "user turned it
+ * off" flag: a manual blank does NOT suppress the next event. A gate moves, a
+ * node drops, and the panel lights itself again, exactly as it would have. The
+ * press means "I'm done reading", not "stay dark".
+ *
+ * Correct in the first two minutes after boot, where nowMs < idleMs and this
+ * wraps: awake() subtracts in the same width, so the difference is still
+ * exactly idleMs.
+ */
+inline uint32_t blankedAt(uint32_t nowMs, uint32_t idleMs = kIdleBlankMs) {
+    return nowMs - idleMs;
 }
 
 } // namespace statusscreen

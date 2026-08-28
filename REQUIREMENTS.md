@@ -8,11 +8,15 @@ browser on the local network, and the controller routes from that layout.
 
 ## 1. Hardware (decided)
 
+> **Superseded in part.** The MCU is the Seeed XIAO ESP32C5 and the stepper is
+> retired in favour of an ST3215 serial bus servo (not built yet). The struck
+> rows are what the measurements below were taken on.
+
 | Component | Selection | Notes |
 |-----------|-----------|-------|
-| MCU | Adafruit ESP32-S2 Feather (#5000) | Replaced STM32 — better WiFi, larger ecosystem |
-| Stepper driver | Adafruit TMC2209 Breakout (#6121) | UART current control |
-| Motor | LDO-42STH48-2004MAH (NEMA 17) | 1.8° step, 2A, matched to TMC2209 |
+| MCU | ~~Adafruit ESP32-S2 Feather (#5000)~~ → Seeed XIAO ESP32C5 | Replaced STM32 — better WiFi, larger ecosystem |
+| Stepper driver | ~~Adafruit TMC2209 Breakout (#6121)~~ → ST3215 bus servo | UART current control |
+| Motor | ~~LDO-42STH48-2004MAH (NEMA 17)~~ | 1.8° step, 2A, matched to TMC2209 |
 | Drive | 15-tooth pinion + 20T/4.145mm pitch rack | ~51.47 steps/mm at 16× microstep |
 | Smart outlets | Shelly Plug US Gen 4 (~$21 ea., us.shelly.com) | Fully local REST API, 1800W/15A, no cloud required |
 | Home endstop | NC mechanical limit switch on D10 | Fail-safe: open wire reads as triggered |
@@ -298,9 +302,12 @@ npm start
 
 - **PlatformIO** (preferred) — `platformio.ini` at project root
 - **Arduino IDE** — also supported; install libraries manually
-- Board: `adafruit_feather_esp32s2`
-- Framework: Arduino
-- Key libraries: TMCStepper, AccelStepper, ArduinoJson v6, AsyncTCP, ESPAsyncWebServer
+- Board: `seeed_xiao_esp32c5`, on the pioarduino platform (official
+  `espressif32` has no ESP32-C5) — envs `xiao_c5_primary` and `xiao_c5`
+- Framework: Arduino (core 3.x / IDF 5.x)
+- Key libraries: ArduinoJson v6, ESP32Async AsyncTCP + ESPAsyncWebServer,
+  ESP32Servo 3.x, links2004/WebSockets, Adafruit SSD1306 + GFX.
+  TMCStepper/AccelStepper are gone with the stepper (2026-08-23)
 - Build flag: `-DARDUINO_USB_CDC_ON_BOOT=1` (native USB CDC Serial)
 
 ---

@@ -21,17 +21,20 @@ Check what's attached and which role each board is pinned to:
 bash dev.sh ports
 ```
 
-`/dev/cu.*` paths are **not stable** — the same DevKitC has shown up as
-`cu.usbserial-110` and `cu.usbserial-1110` in one afternoon, because macOS
-derives the suffix from USB topology. Boards are identified by USB serial number
-instead, pinned once into `.dustgate-ports`:
+`/dev/cu.*` paths are **not stable** — one board has shown up under two
+different suffixes in one afternoon, because macOS derives them from USB
+topology. Boards are identified by USB serial number instead, pinned once into
+`.dustgate-ports`, one role at a time:
 
 ```bash
-bash dev.sh ports --pin
+bash dev.sh ports --pin primary
+bash dev.sh ports --pin node
 ```
 
-If a flash targets the wrong board, that's the cause. Re-pin rather than
-guessing at a path. One-shot override: `DUSTGATE_PORT=/dev/cu.xxx`.
+**Pin them.** Primary and node are the same board with the same USB VID and
+description, so with both attached and nothing pinned the choice is a guess —
+`dev.sh` says so, but it still has to pick one. If a flash targets the wrong
+board, that's the cause. One-shot override: `DUSTGATE_PORT=/dev/cu.xxx`.
 
 ## The trap: flashing the filesystem erases the shop
 
@@ -81,25 +84,22 @@ A node is a dumb actuator bank: up to four servo valves, no web UI, no stepper,
 no plug polling. The primary sends it already-resolved angles.
 
 ```bash
-bash dev.sh flash-node            # QT Py ESP32-S3 (default)
-bash dev.sh flash-node c5 dustgate-node-c5
+bash dev.sh flash-node                    # prompts for the node's hostname
+bash dev.sh flash-node dustgate-node-1    # ...or give it up front
 ```
 
-The C5 rides the pioarduino platform and builds against its own
-`PLATFORMIO_CORE_DIR` (`~/.platformio-pioarduino`); `dev.sh` sets it via
-`use_core_for_env`. The first build there downloads ~7.6 GB — warn the user
-before starting one. Nothing in `~/.platformio` is touched. Its pin map in
-`firmware/wiring/xiao-c5.md` is **unverified against hardware** — flag that when
-flashing a C5.
+Builds go against `PLATFORMIO_CORE_DIR=~/.platformio-pioarduino`, which `dev.sh`
+sets. A first build there downloads ~7.6 GB — warn the user before starting one.
 
-(`dev.sh` itself still prints an older warning about "swapping the core in and
-out". That text is stale; the mechanism is isolation.)
+`firmware/wiring/xiao-c5.md` is confirmed by working signals for everything the
+build drives (servos D7-D10, I²C D4/D5, button D1, pixel D2). Still
+drawing-only: D0/D3, and D6 (reserved for the ST3215 bus).
 
 ## After flashing
 
 ```bash
 bash dev.sh monitor               # serial, primary
-bash dev.sh monitor node          # or: monitor c5
+bash dev.sh monitor node
 bash dev.sh live [host]           # ng serve with hot reload, proxied to the real device
 ```
 

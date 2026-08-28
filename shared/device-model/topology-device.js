@@ -37,6 +37,55 @@ const S = require('./shop');
 const DEFAULT_THRESHOLD_W = 5;
 const DEFAULT_COLLECTOR_OFF_DELAY_MS = 5000;  // ↔ kDefaultCollectorOffDelayMs (TopologyRuntime.h)
 
+// ── Is the blower actually running? ─────────────────────────────────────────
+//
+// A tool's plug SENSES; a collector's plug COMMANDS. So `collectorOn` has always
+// meant "we closed the relay", never "air is moving" — and the two come apart in
+// the ways that matter most: the blower's own switch is off, the breaker went,
+// somebody unplugged it, the motor is stalled. The device now reports the plug's
+// own power reading back, and these two numbers turn it into an answer.
+//
+// DELIBERATELY NOT MIRRORED IN C++. The firmware reports the plug facts (watts,
+// reachable, how long since we commanded it on) and does not judge them; the
+// judgement lives here, once. If the OLED ever needs to say "not starting" too,
+// THAT is the moment this becomes a matched pair and earns a row in CLAUDE.md —
+// not before.
+const COLLECTOR_RUNNING_W = 50;
+
+// How long a blower gets to reach running draw before we call it a failure.
+// An induction motor takes a second or three to spin up, and a lightly-loaded
+// one draws very little before it does; judging it the instant the relay closes
+// would raise a false alarm on every single start. This is a debounce on the
+// ALARM, not a state anyone is shown — see the "no transients" decision in
+// docs/mockups/shop-status-chips.html.
+const COLLECTOR_SPINUP_GRACE_MS = 4000;
+
+/**
+ * What the collector's plug says is happening, as opposed to what we asked for.
+ *
+ *   'noplug'      no switchable plug configured — nothing to know
+ *   'unknown'     the plug isn't answering; it may well be running
+ *   'off'         we aren't asking it to run
+ *   'starting'    commanded on, inside the spin-up grace — no claim yet
+ *   'running'     commanded on and drawing running current
+ *   'notStarting' commanded on, past the grace, and drawing nothing
+ *
+ * `onForMs` is how long the plug has been commanded ON. A device that predates
+ * the plug report sends nothing, and every commanded-on system answers
+ * 'unknown' — which is honest: it is exactly what we knew before.
+ */
+function collectorPlugState(plug, commandedOn) {
+  if (!plug) return commandedOn ? 'unknown' : 'noplug';
+  if (plug.reachable === false) return 'unknown';
+  if (!commandedOn) return 'off';
+  if (plug.watts >= COLLECTOR_RUNNING_W) return 'running';
+  // Still inside the grace: no claim either way. `onForMs` absent means we don't
+  // know how long it has been on, and guessing "long enough" would turn a
+  // just-started blower into an alarm.
+  if (typeof plug.onForMs !== 'number' || plug.onForMs < COLLECTOR_SPINUP_GRACE_MS) return 'starting';
+  return 'notStarting';
+}
+
 const machineIndex = (shop) => S.machineIndex(shop);
 
 /** Watts above which a MACHINE counts as "on" (from its sensor outlet, or default). */
@@ -54,7 +103,17 @@ function createTopologyDevice(doc) {
   const actuatorStates = {};
   const collectors = {};
   for (const sys of S.systemsOf(shop)) {
-    collectors[sys.id] = { on: false, coasting: false, coastUntilMs: 0, manual: false };
+    collectors[sys.id] = {
+      on: false, coasting: false, coastUntilMs: 0, manual: false,
+      // When we last commanded this blower ON, so statusView can report how long
+      // it has had to spin up. 0 = never.
+      onSinceMs: 0,
+      // What the simulated plug reports back. null = a healthy blower that draws
+      // running current when switched on. The mock and the demo drive this to
+      // stage the failures a real shop would otherwise have to produce with a
+      // tripped breaker: see setCollectorPlugFault.
+      plugFault: null,
+    };
     for (const sel of T.selectorsOf(S.systemView(shop, sys))) {
       const cs = T.closedState(sel);
       actuatorStates[sel.id] = cs ? cs.id : null;
@@ -97,8 +156,52 @@ function tickCollector(d, nowMs) {
     if (c.coasting && nowMs >= c.coastUntilMs) {
       c.coasting = false;
       c.on = false;
+      c.onSinceMs = 0;
     }
   }
+}
+
+/** The collector element's switchable plug, or undefined if it has none. */
+function collectorOutlet(doc, systemId) {
+  const shop = S.asShop(doc);
+  const sys = S.systemsOf(shop).find((x) => x.id === systemId);
+  const c = sys && (sys.elements || []).find((e) => e.type === 'collector');
+  return c && c.control && c.control.outlet;
+}
+
+// What a healthy blower draws once it is up. Arbitrary — this is a simulation of
+// a plug reading, not a claim about anyone's motor; only its relationship to
+// COLLECTOR_RUNNING_W matters.
+const SIM_COLLECTOR_RUNNING_W = 380;
+
+/**
+ * Stage a plug failure on one system's blower, for the mock and the demo.
+ *
+ *   null        healthy — draws running current whenever it is switched on
+ *   'dead'      relay closes, nothing draws (own switch off, breaker, unplugged)
+ *   'offline'   the plug itself stops answering
+ *
+ * This exists because the states worth showing are the ones nobody can produce
+ * on demand: you cannot ask a woodworker to trip a breaker to see what the app
+ * does about it.
+ */
+function setCollectorPlugFault(d, systemId, fault) {
+  const c = d.collectors[systemId];
+  if (!c) return { ok: false };
+  c.plugFault = fault || null;
+  return { ok: true };
+}
+
+/** What the plug reports, or undefined when the collector has no plug at all. */
+function collectorPlugView(d, systemId, nowMs) {
+  const c = d.collectors[systemId];
+  if (!c || !collectorOutlet(d.topology, systemId)) return undefined;
+  if (c.plugFault === 'offline') return { watts: 0, reachable: false, onForMs: 0 };
+  return {
+    watts: (c.on && c.plugFault !== 'dead') ? SIM_COLLECTOR_RUNNING_W : 0,
+    reachable: true,
+    onForMs: c.on && c.onSinceMs ? Math.max(0, nowMs - c.onSinceMs) : 0,
+  };
 }
 
 /** Is ANY blower running / coasting — the single-collector shorthand. */
@@ -157,6 +260,7 @@ function reconcile(d, nowMs) {
       for (const sel of T.selectorsOf(S.systemView(shop, sys))) {
         if (sel.id in routing.states) d.actuatorStates[sel.id] = routing.states[sel.id];
       }
+      if (!c.on) c.onSinceMs = nowMs;   // the spin-up clock starts at the command
       c.on = true;
       c.coasting = false;      // a machine is running here again — coast is moot
     } else if (c.manual) {
@@ -164,6 +268,7 @@ function reconcile(d, nowMs) {
       // positions like any idle system — except that idle-hold is only safe while
       // something is open, and here the blower is about to run. See openAPath().
       openAPath(d, sys);
+      if (!c.on) c.onSinceMs = nowMs;
       c.on = true;
       c.coasting = false;      // not coasting down: it was not left running, it was started
     } else {
@@ -177,6 +282,7 @@ function reconcile(d, nowMs) {
         c.coastUntilMs = nowMs + delay;
       } else if (!c.coasting) {
         c.on = false;
+        c.onSinceMs = 0;
       }
     }
   }
@@ -257,7 +363,7 @@ function setCollectorManual(d, systemId, on, nowMs = Date.now()) {
   // Switching OFF ends the run outright rather than starting a coast-down: the
   // coast exists to catch the dust still in the pipe after a CUT, and nothing was
   // being cut. Leaves the gates where they are, like every other idle.
-  if (!c.manual && !activeMachines(d).length) { c.on = false; c.coasting = false; }
+  if (!c.manual && !activeMachines(d).length) { c.on = false; c.coasting = false; c.onSinceMs = 0; }
   return reconcile(d, nowMs);
 }
 
@@ -291,6 +397,11 @@ function statusView(d, nowMs = Date.now()) {
   const systems = {};
   for (const [sysId, c] of Object.entries(d.collectors)) {
     systems[sysId] = { collectorOn: c.on, coasting: c.coasting, manual: !!c.manual };
+    // What the plug says, as opposed to what we commanded. Omitted entirely when
+    // the collector has no switchable plug — there is nothing to report, and an
+    // all-zero reading would read as a dead blower rather than an absent one.
+    const plug = collectorPlugView(d, sysId, nowMs);
+    if (plug) systems[sysId].plug = plug;
   }
   return {
     actuators: { ...d.actuatorStates },
@@ -314,10 +425,11 @@ function statusView(d, nowMs = Date.now()) {
 
 module.exports = {
   DEFAULT_THRESHOLD_W, DEFAULT_COLLECTOR_OFF_DELAY_MS,
+  COLLECTOR_RUNNING_W, COLLECTOR_SPINUP_GRACE_MS, collectorPlugState,
   machineThreshold, collectorOffDelayMs,
   createTopologyDevice, activeMachines, reconcile, setMachinePower, statusView,
   tickCollector, anyCollectorOn, anyCollectorCoasting,
-  setCollectorManual, collectorIsManual,
+  setCollectorManual, collectorIsManual, setCollectorPlugFault,
   // v1 spellings — a tool WAS the machine before ports existed.
   toolThreshold, activeTools, setToolPower,
 };

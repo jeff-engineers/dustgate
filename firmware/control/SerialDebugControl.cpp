@@ -6,11 +6,15 @@
 #include <Wire.h>                  // the `i2c` bring-up scan
 #include "../utils/MotionMath.h"
 #include "../utils/WiFiConfig.h"   // NVS constants + applyProvisionJson() — safe to include always
-#ifdef CONTROL_SMART_OUTLET
+#if defined(CONTROL_SMART_OUTLET) || defined(ENABLE_HTTP_API)
   #include "../utils/WiFiProvisioner.h"
-  #include "../utils/MdnsQuery.h"
+  #include "../utils/MdnsQuery.h"   // `mdnsprobe` — wanted on any board that queries
+  #include "../utils/Watchdog.h"    // the probe outlives a loop() iteration
+#endif
+#ifdef CONTROL_SMART_OUTLET
   #include "../outlets/ShellyGen2Outlet.h"
   #include "../outlets/ShellyDeviceName.h"
+  #include "SmartOutletControl.h"    // `plugtrace` — outlettrace::enabled()
 #endif
 
 #if defined(CONTROL_SERIAL_DEBUG) || defined(ENABLE_SERIAL_COMMANDS)
@@ -290,14 +294,30 @@ void SerialDebugControl::processLine(const String& line) {
         runDiscover();
 #endif
 
+#if defined(CONTROL_SMART_OUTLET) || defined(ENABLE_HTTP_API)
+    } else if (cmd == "mdnsprobe") {
+        runMdnsProbe();
+#endif
+
+#ifdef CONTROL_SMART_OUTLET
+    } else if (cmd == "plugtrace") {
+        outlettrace::enabled() = !outlettrace::enabled();
+        Serial.print(F("[DEBUG] Plug push tracing "));
+        Serial.println(outlettrace::enabled()
+            ? F("ON — every frame a plug sends, timestamped. Flip a tool and "
+                "read the gaps between [PUSH] lines: that is the plug's cadence, "
+                "and the delay before the collector notices lives in it.")
+            : F("off."));
+#endif
+
     } else if (cmd == "endstops" || cmd == "e") {
-#ifdef FEEDBACK_LIMIT_DISTANCE
+#if HAS_LINEAR
         Serial.print(F("[ENDSTOP] Home (D10): "));
         Serial.print(digitalRead(PIN_ENDSTOP_HOME) == HIGH ? F("TRIGGERED") : F("open"));
         Serial.print(F("   Far (D11): "));
         Serial.println(digitalRead(PIN_ENDSTOP_MAX) == HIGH ? F("TRIGGERED") : F("open"));
 #else
-        Serial.println(F("[ENDSTOP] FEEDBACK_LIMIT_DISTANCE not enabled"));
+        Serial.println(F("[ENDSTOP] no slider on this board"));
 #endif
 
     } else if (cmd == "i2c" || cmd.startsWith("i2c ")) {
@@ -322,9 +342,6 @@ void SerialDebugControl::processLine(const String& line) {
 #endif
         if (sda < 0 || scl < 0) {
             Serial.println(F("[I2C] This build declares no I2C pins — name them: i2c <sda> <scl>"));
-#if defined(BOARD_DEVKITC)
-            Serial.println(F("[I2C] On this board the status screen would be: i2c 16 4"));
-#endif
         } else {
             runI2cScan(sda, scl, force);
         }
@@ -342,13 +359,129 @@ void SerialDebugControl::processLine(const String& line) {
     }
 }
 
+#if defined(CONTROL_SMART_OUTLET) || defined(ENABLE_HTTP_API)
+// -----------------------------------------------------------------------------
+// mdnsprobe — how long does an mDNS answer actually take to arrive here?
+//
+// Written on 2026-08-22 for a XIAO C5 primary that advertised itself perfectly —
+// a laptop's `dns-sd -B _dustgate._tcp local.` listed both the primary and its
+// node — while every query the SAME board made came back empty: 0 nodes, and 0
+// Shelly plugs out of the four that are definitely there. Responder fine,
+// querier blind.
+//
+// The first version of this probe answered the first question and got the
+// second one wrong, in two ways worth recording because both are easy to walk
+// back into:
+//
+//   1. IT MEASURED THE CACHE. It asked at 3000ms (found everything), then
+//      walked a ladder of shorter timeouts to find the threshold — and 200ms
+//      "found" all four plugs, which is nonsense on a network where 400ms had
+//      just found none. The 3000ms query had populated the mDNS cache and every
+//      rung after it was answered locally. A latency ladder has exactly one
+//      cold rung, the first, and this one had spent it. Any timing question
+//      here has to be asked ONCE, on a cold cache, or not at all.
+//
+//   2. IT RESET THE BOARD. Three 3000ms blocking queries plus the ladder is
+//      ~11s inside a single processLine() call, and loop() — the only thing
+//      that pets the watchdog (firmware.ino) — never came round. WDT_TIMEOUT_SEC
+//      is 10. The first run survived at ~9s and the second died at ~11s, which
+//      is the least useful kind of intermittent.
+//
+// So this version asks asynchronously and polls. mdns_query_async_new() starts
+// the search and returns immediately; we watch the answer count climb, printing
+// the moment each one lands, and pet the watchdog every pass. Nothing blocks for
+// more than a poll interval, the arrival times are real, and each service type
+// is asked exactly once from cold.
+//
+// That last property is why THE ORDER MATTERS and why running mdnsprobe twice
+// in one boot tells you less than running it once: the second run reads its own
+// cache back. Reboot between runs.
+//
+// This is also a prototype of where production has to go. The reason
+// DISCOVER_MDNS_TIMEOUT_MS is 400ms is that the query blocks the loop task, and
+// the crash above is what the far end of that tradeoff looks like — a window
+// long enough to hear the plugs was, in the same breath, long enough to reset
+// the board. Async removes the tradeoff instead of tuning it.
+// -----------------------------------------------------------------------------
+
+static const uint32_t kProbeWindowMs = 3000;
+
+// Runs one PTR query and lists what answered. mdnsQueryService() does the async
+// polling and the watchdog petting; this only adds the per-answer detail, which
+// production doesn't print and a person at the bench wants.
+static int probeOneService(const char* service, const char* proto) {
+    Serial.println(F(""));
+    Serial.print(F("  --- ")); Serial.print(service);
+    Serial.print(F(".")); Serial.print(proto);
+    Serial.print(F("  (")); Serial.print(kProbeWindowMs);
+    Serial.println(F("ms, cold) ---"));
+
+    static const int kMax = 24;
+    MdnsHit hits[kMax];
+    int n = mdnsQueryService(service, proto, kProbeWindowMs, hits, kMax);
+
+    for (int i = 0; i < n; i++) {
+        Serial.print(F("      "));
+        Serial.print(hits[i].hostname.length() ? hits[i].hostname : String("(no hostname)"));
+        Serial.print(F("  ")); Serial.print(hits[i].ip);
+        if (hits[i].role.length()) { Serial.print(F("  role=")); Serial.print(hits[i].role); }
+        if (hits[i].gen)           { Serial.print(F("  gen="));  Serial.print(hits[i].gen); }
+        Serial.println();
+    }
+    return n;
+}
+
+void SerialDebugControl::runMdnsProbe() {
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.println(F("[MDNSPROBE] WiFi not connected — nothing to probe."));
+        return;
+    }
+
+    int ch = WiFi.channel();
+    Serial.println(F(""));
+    Serial.println(F("=== mDNS probe ==="));
+    Serial.println(F("  Each service type is asked ONCE, from cold. Run this twice in"));
+    Serial.println(F("  one boot and the second run just reads the cache back — reboot"));
+    Serial.println(F("  between runs if you want the timings again."));
+    Serial.print(F("  hostname   ")); Serial.print(WiFiProvisioner::getHostname());
+    Serial.println(F(".local"));
+    Serial.print(F("  ip         ")); Serial.print(WiFi.localIP().toString());
+    Serial.print(F("  gw "));         Serial.print(WiFi.gatewayIP().toString());
+    Serial.print(F("  mask "));       Serial.println(WiFi.subnetMask().toString());
+    Serial.print(F("  ap         ")); Serial.print(WiFi.SSID());
+    Serial.print(F("  bssid "));      Serial.println(WiFi.BSSIDstr());
+    Serial.print(F("  channel    ")); Serial.print(ch);
+    Serial.print(ch > 14 ? F("  (5 GHz)") : F("  (2.4 GHz)"));
+    Serial.print(F("   rssi "));      Serial.print(WiFi.RSSI());
+    Serial.println(F(" dBm"));
+
+    // The two we actually route on go FIRST, while their caches are cold — they
+    // are the ones whose arrival times decide what the production timeout has
+    // to be. The meta-query goes last: it is a presence check ("does ANY
+    // multicast answer reach this board"), and by the time it runs it has
+    // already been answered by the two above.
+    probeOneService("_shelly",   "_tcp");
+    probeOneService("_dustgate", "_tcp");
+    // Presence check, last: "does ANY multicast answer reach this board". By
+    // the time it runs the two above have already answered that, which is the
+    // point — it only earns its 3 seconds when they come back empty.
+    probeOneService("_services._dns-sd", "_udp");
+
+    Serial.println(F(""));
+    Serial.println(F("  These use the same window production does now"));
+    Serial.print(F("  (DISCOVER_MDNS_TIMEOUT_MS = ")); Serial.print(DISCOVER_MDNS_TIMEOUT_MS);
+    Serial.println(F("ms), so what this finds, a scan finds."));
+    Serial.println(F(""));
+}
+#endif // CONTROL_SMART_OUTLET || ENABLE_HTTP_API
+
 #ifdef CONTROL_SMART_OUTLET
 void SerialDebugControl::runDiscover() {
     if (WiFi.status() != WL_CONNECTED) {
         Serial.println(F("[DISCOVER] WiFi not connected — can't scan."));
         return;
     }
-    Serial.println(F("[DISCOVER] Querying mDNS for _http._tcp ..."));
+    Serial.println(F("[DISCOVER] Querying mDNS for _shelly._tcp ..."));
 
     // mDNS/UDP query is lossy — retry a few times and merge unique hosts by
     // IP, same as the HTTP discover endpoint (see firmware.ino).
@@ -447,7 +580,7 @@ void SerialDebugControl::runI2cScan(int sda, int scl, bool force) {
     // REFUSED, not warned about: on the DevKitC the "obvious" I2C pins are the
     // TMC2209's EN and DIR, and EN is active LOW — a scan pulling it down is a
     // scan that silently energises the motor. This is the same trap the board's
-    // pin map dodges (see boards/devkitc_wroom32.h), and a debug command is
+    // pin map dodges (see attic/linear/devkitc_wroom32.h), and a debug command is
     // exactly where someone would walk back into it.
 #if defined(PIN_TMC_EN) && defined(PIN_TMC_DIR)
     if (!force && (sda == PIN_TMC_EN || sda == PIN_TMC_DIR ||
@@ -530,7 +663,7 @@ void SerialDebugControl::printStatus() {
     Serial.print(F("  Requested stop:    ")); Serial.println(_requestedStop);
     Serial.print(F("  EStop pending:     ")); Serial.println(_eStopPending ? F("YES") : F("no"));
     Serial.print(F("  Homing speed:      ")); Serial.print(HOMING_SPEED_STEPS_PER_SEC, 0); Serial.println(F(" steps/sec"));
-#ifdef FEEDBACK_LIMIT_DISTANCE
+#if HAS_LINEAR
     Serial.print(F("  Home endstop (D10):")); Serial.print(F(" "));
     Serial.println(digitalRead(PIN_ENDSTOP_HOME) == HIGH ? F("TRIGGERED") : F("open"));
     Serial.print(F("  Far endstop (D11): "));
@@ -568,6 +701,12 @@ void SerialDebugControl::printHelp() {
     Serial.println(F("  i2c [sda] [scl]   Scan the I2C bus — what is out there, and at what address ('force' to override refusals)"));
 #ifdef CONTROL_SMART_OUTLET
     Serial.println(F("  discover          Scan mDNS for Shelly outlets, print raw + filtered results"));
+#endif
+#if defined(CONTROL_SMART_OUTLET) || defined(ENABLE_HTTP_API)
+    Serial.println(F("  mdnsprobe         Radio facts, then time every mDNS answer (once per boot — it warms the cache)"));
+#endif
+#ifdef CONTROL_SMART_OUTLET
+    Serial.println(F("  plugtrace         Toggle: timestamp every frame a plug pushes — how fast does it report?"));
 #endif
     Serial.println(F("  provision <json>  Write WiFi+host to NVS: {\"ssid\":\"x\",\"pass\":\"y\",\"host\":\"dustgate\"}"));
     Serial.println(F("  help              Show this list"));

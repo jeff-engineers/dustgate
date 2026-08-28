@@ -66,12 +66,25 @@ int main(int argc, char** argv) {
     ok("twoGates x=200: collector on", c.collectorOn(kSys));
     ok("twoGates x=200: no dead-head", !r1.planFor(kSys).deadHeadRisk);
 
+    // ONE MACHINE PER SYSTEM. These gates contest no selector, so both used to
+    // open — co-open, half the velocity at each, the exact failure automated
+    // gates exist to prevent. toolY is newer, so it takes the air and toolX is
+    // left waiting even though its own gate was free.
+    //
+    // And the switchover is make-before-break without being asked: gate2 opens
+    // BEFORE gate1 closes, so the blower is never pulling against a sealed
+    // system. ↔ topology.test.js "dev X+Y on: only the NEWER tool gets a gate".
     auto r2 = c.setToolPower("toolY", 200);   // toolY newest
-    ok("twoGates y=200: move gate2 open (make)", movesStr(r2.planFor(kSys)) == "gate2->open(make)", movesStr(r2.planFor(kSys)));
-    ok("twoGates y=200: both open", stateOf(c, "gate1") == "open" && stateOf(c, "gate2") == "open");
+    ok("twoGates y=200: gate2 opens before gate1 closes",
+       movesStr(r2.planFor(kSys)) == "gate2->open(make)|gate1->closed(break)", movesStr(r2.planFor(kSys)));
+    ok("twoGates y=200: only the newer tool has a gate",
+       stateOf(c, "gate1") == "closed" && stateOf(c, "gate2") == "open");
+    ok("twoGates y=200: no dead-head", !r2.planFor(kSys).deadHeadRisk);
 
     auto r3 = c.setToolPower("toolX", 0);     // toolX off, toolY still on
-    ok("twoGates x=0: move gate1 closed (break)", movesStr(r3.planFor(kSys)) == "gate1->closed(break)", movesStr(r3.planFor(kSys)));
+    // Nothing to do: toolX already lost its gate when toolY won, so it stopping
+    // changes no state at all.
+    ok("twoGates x=0: nothing left to move", movesStr(r3.planFor(kSys)).empty(), movesStr(r3.planFor(kSys)));
     ok("twoGates x=0: gate1 closed, gate2 open", stateOf(c, "gate1") == "closed" && stateOf(c, "gate2") == "open");
     ok("twoGates x=0: collector still on", c.collectorOn(kSys));
 

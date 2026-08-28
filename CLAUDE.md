@@ -50,6 +50,14 @@ drifted constantly. Now `shared/device-model/` is the spec:
   `firmware/test/test_manual_blower.cpp` covers running a blower by hand, and the
   two assert the same cases in the same order for the same reason.
 
+  **Not everything shared is a pair, and saying so is part of the job.**
+  `collector-plug.test.js` has NO C++ partner on purpose: the firmware reports
+  what a collector's plug says (`systems[].plug` — watts, reachable, onForMs) and
+  never judges it, so `COLLECTOR_RUNNING_W` and `COLLECTOR_SPINUP_GRACE_MS` exist
+  once, in `topology-device.js`, with nothing to drift against. If the OLED ever
+  needs to say "blower not starting" too, that is the moment those become a pair
+  and earn a row above — not before.
+
   **This table is a cache, not the source of truth — keep it honest or delete
   rows rather than let them go stale.** Touching either side of a pair: update
   the other side's value AND this table's "What it is" cell if the meaning
@@ -70,7 +78,7 @@ Tests live in two package.json files. UI suites run under plain node (no browser
 
 ```
 cd dustgate-ui && npm test        # spec-runner + routing + wiring geometry
-cd tools && npm run model:test    # topology, shop, nodelink, plug-claim, adopt-outlets, manual-blower (JS)
+cd tools && npm run model:test    # topology, shop, nodelink, plug-claim, adopt-outlets, manual-blower, collector-plug (JS)
 cd tools && npm run firmware:test # the C++ host tests (router, controller, nodebus, shop, faults, plugclaim, screen, blower)
 cd tools && npm run conformance:ci topology:conformance:ci nodelink:conformance:ci  # run separately
 ```
@@ -79,33 +87,37 @@ Firmware compiles — `pio run -e <env>`:
 
 | Env | Board | Role |
 |---|---|---|
-| `esp32dev_wroom32` | ESP32-DevKitC | **primary target** |
-| `esp32dev_servo` | ESP32-DevKitC | primary, servo valves |
-| `esp32dev_screen` | ESP32-DevKitC | primary + SSD1306 status screen — **verified on hardware 2026-08-21** (GPIO16 SDA / GPIO4 SCL, 0x3C) |
-| `adafruit_feather_esp32s2` | Feather S2 | original prototype |
-| `dustgate_node` | QT Py ESP32-S3 | secondary node |
+| `xiao_c5_primary` | XIAO ESP32C5 | **primary** — the routing brain |
 | `xiao_c5` | XIAO ESP32C5 | secondary node |
-| `xiao_c5_screen` | XIAO ESP32C5 | secondary node + SSD1306 on D4/D5 (compiles; no panel wired to a C5 yet) |
 
-`xiao_c5` rides the pioarduino platform, not espressif32. The two collide over
-package names in a shared core directory, so the fork gets **its own**
-`PLATFORMIO_CORE_DIR` (`~/.platformio-pioarduino`, 7.6 GB, downloaded once) —
-see the essay at the top of `tools/boardinfo.sh` for why isolation beats fixing
-collisions one at a time. `dev.sh` and `deploy.sh` call `use_core_for_env` for
-you. By hand:
+**One board, two roles.** Same board, same carrier, same pin map; the difference
+is `build_src_filter` and `-DDUSTGATE_SECONDARY`. Both roles are proven on
+hardware, including NodeLink between them and a real tool opening its gate.
+
+**PWM servos and a serial bus never share a board.** The slider gets dedicated
+hardware that rides along with it. `config.h` `#error`s if a pin map claims both,
+and `HAS_LINEAR` derives from the bus pins — it is 0 on every target today, and
+the branches it guards are the seam the ST3215 driver plugs into. The retired
+stepper and limit-switch code is in `firmware/attic/linear/` (not compiled, kept
+to repurpose); read its README before reviving any of it.
+
+**Every env assumes a screen.** A board header that names `PIN_OLED_*` gets the
+driver, and an I²C ACK at 0x3C at boot decides whether a panel is really there.
+Verified on a C5 (D4/D5), wake button on D1.
+
+Both envs ride the pioarduino platform (official `espressif32` has no ESP32-C5)
+and build against `~/.platformio-pioarduino`, which `dev.sh`/`deploy.sh` set for
+you. By hand, and they can share one `pio run`:
 
 ```bash
-PLATFORMIO_CORE_DIR=~/.platformio-pioarduino pio run -e xiao_c5
+PLATFORMIO_CORE_DIR=~/.platformio-pioarduino pio run -e xiao_c5_primary -e xiao_c5
 ```
 
-Because the core dir is one env var per process, **`xiao_c5` can't share a
-`pio run` with any other env.** Nothing in `~/.platformio` is touched by a C5
-build. (The warning `dev.sh` prints about "swapping the core in and out" is
-stale — that was the earlier approach.)
-
-Bench work goes through `dev.sh` (`demo`, `mock`, `flash`, `flash-node`,
-`monitor`, `ports`, `live`) — its header comment is the reference. Prefer it
-over raw `pio`/`esptool`. See the `flash` skill for the gotchas.
+Bench work goes through `dev.sh` (`demo`, `mock`, `live`, `flash`, `flash-node`,
+`monitor [node]`, `ports [--pin primary|node]`, `provision`, `erase`) — its header
+comment is the reference. Prefer it over raw `pio`/`esptool`. See the `flash`
+skill for the gotchas. **Pin the boards**: primary and node are the same part with
+the same USB VID, so nothing but a pinned serial can tell them apart.
 
 ## Design constraints
 

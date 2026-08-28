@@ -472,13 +472,20 @@ on the carrier.
 
 ### Turning it on
 
-Fitting a screen is a **build-time** fact, declared, not probed for — the same way
-"is a stepper fitted?" is answered by which env you flash. `-DHAS_STATUS_SCREEN`
-is what activates the `PIN_OLED_*` block in the board header:
+Nothing to turn on. The driver is in **every** DevKitC build as of 2026-08-22 —
+naming `PIN_OLED_SDA`/`PIN_OLED_SCL` in the board header is what fits a screen,
+and the firmware probes 0x3C at boot to find out whether a panel is really there:
 
 ```
-pio run -e esp32dev_screen -t upload      # a DevKitC with a screen fitted
+pio run -e esp32dev_servo -t upload       # screen driver included, panel optional
 ```
+
+It used to be a build-time declaration (`-DHAS_STATUS_SCREEN`, env
+`esp32dev_screen`), the same way "is a stepper fitted?" still is. That went when
+the carrier design settled into one that always carries a panel and its button —
+at which point the flag's only remaining job was to let you flash a board that
+silently had no screen support in it. The note at the top of `platformio.ini` has
+the numbers.
 
 The firmware behind it is [`utils/StatusScreen.h`](../utils/StatusScreen.h) (I²C,
 font, sleep timer) over [`utils/StatusScreenModel.h`](../utils/StatusScreenModel.h)
@@ -514,11 +521,16 @@ that lights on its own. The board header pairs `PIN_WAKE_BTN` with
 
 ### What the button does, and what it deliberately doesn't
 
-One thing: it lights the screen. The panel blanks itself after two minutes so it
+One thing: it switches the screen. The panel blanks itself after two minutes so it
 doesn't burn a static layout in over a year on a wall, which is right until you want
 to read it — the board is fine, nothing is changing, so nothing wakes the glass.
 Walking to a phone to learn what a screen two feet away already knows is the whole
 problem this solves.
+
+Since 2026-08-22 it **toggles**: press again when you're done and the panel goes out
+rather than idling lit for the rest of the timeout. The timer is unchanged and still
+blanks a screen you walk away from, and the early blank doesn't latch — the next
+event lights it exactly as it would have.
 
 Since 2026-08-22 that timer has **no exceptions**: a fault used to hold the screen
 lit, which is the same thing as burning `NODE DARK` into a panel over a weekend
@@ -529,13 +541,15 @@ doesn't define `PIN_WAKE_BTN`.
 There is no long-press, no double-tap and no menu. A button that could change what
 the shop *does* would need every confirmation the web UI has, and that is a different
 part. The driver is [`utils/WakeButton.h`](../utils/WakeButton.h) — a debounced poll
-and one call to `statusscreen::note()`.
+and one call to `statusscreen::toggle()`.
 
-It is **fitted with the screen**: `-DHAS_STATUS_SCREEN` defines all three pins at
-once, and a board with no panel has nothing for a button to wake.
+It is **fitted with the screen**: the board header defines all three pins at once,
+and a board with nowhere to put a panel has nothing for a button to wake.
 
-> **UNVERIFIED.** No button has been wired to any board. The screen it wakes has run
-> on a DevKitC; this half of the pair has not.
+> **UNVERIFIED ON THIS BOARD.** A wake button works on a XIAO C5 (2026-08-22),
+> which proves the driver — but that board has an internal pull-up and this one
+> does not. GPIO34 + external 10kΩ + `WAKE_BTN_INPUT_MODE INPUT` is the whole
+> reason the DevKitC row is the one to watch, and nobody has pressed it yet.
 
 ### ⚠ If you ever swap to an ESP32-WROVER
 

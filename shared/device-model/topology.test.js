@@ -237,9 +237,16 @@ const idxOf = (plan, sel) => plan.moves.findIndex((m) => m.selectorId === sel);
   check('dev X on: gate1 open, gate2 closed, collector on',
     s.actuators.gate1 === 'open' && s.actuators.gate2 === 'closed' && s.collectorOn === true);
 
-  setToolPower(d, 'toolY', 10);   // > threshold 9 — both run (independent gates)
+  // ONE MACHINE PER SYSTEM. Independent gates contest no selector, so both used
+  // to open — which is co-open: half the velocity at each, and the exact thing
+  // automated gates exist to prevent. Y is newer, so Y takes the air and X is
+  // left waiting, even though X's gate had nothing competing for it.
+  setToolPower(d, 'toolY', 10);   // > threshold 9 — newer, so it wins the blower
   s = statusView(d);
-  check('dev X+Y on: both gates open', s.actuators.gate1 === 'open' && s.actuators.gate2 === 'open');
+  check('dev X+Y on: only the NEWER tool gets a gate',
+    s.actuators.gate1 === 'closed' && s.actuators.gate2 === 'open');
+  check('dev X+Y on: X is still drawing, and reported as not reachable',
+    s.tools.toolX.active === true && s.reachable.toolX === false);
 
   setToolPower(d, 'toolX', 0);    // X off, Y still on → focus suction on Y
   s = statusView(d);

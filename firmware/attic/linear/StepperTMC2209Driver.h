@@ -4,8 +4,8 @@
 // =============================================================================
 
 #pragma once
-#include "MotorDriver.h"
-#include "../config.h"
+#include "../../motor/MotorDriver.h"
+#include "../../config.h"
 
 #ifdef MOTOR_STEPPER_TMC2209
 

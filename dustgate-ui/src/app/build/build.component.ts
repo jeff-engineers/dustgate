@@ -6,6 +6,7 @@ import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
 import { ApiService, DiscoveredOutlet, NodeLinkState, Topology, TopologyStatus } from '../services/api.service';
 import { takeoverWarning } from '@plug-claim';
 import { airflowIssues, redundantSelectors, type AirflowIssue } from '@topology';
+import { COLLECTOR_RUNNING_W } from '@topology-device';
 import { validateShop, SHOP_SCHEMA_VERSION } from '@shop';
 import { SelectorConfigComponent } from '../gates/selector-config.component';
 import { ElementOutletConfigComponent } from '../tools/element-outlet-config.component';
@@ -18,7 +19,8 @@ import {
 import {
   type ShopDoc, type ShopSystem,
   addMachineWithPort, addSupplementalPort, addSystem, isPortSupplemental, machineById, machineOfPort,
-  machinesOf, NEW_MACHINE_NAME, outletOf, portsOf, primaryPortOf, removeMachine, removePort,
+  machinesOf, NEW_MACHINE_NAME, outletExcludes, outletOf, portsOf, primaryPortOf, setOutlet,
+  removeMachine, removePort,
   renameMachine,
   supplementalCount,
   systemById, systemsOf, systemViews, toShop,
@@ -26,7 +28,7 @@ import {
 import { wipSummary } from '../services/wip-message';
 import {
   type Glyph, type Pt, type SceneNode,
-  BOARD_H, BOARD_W, CELL, GATE_PAD, PAD, TOOL_HALF, TOOL_HALF_W, UNIT_H,
+  BOARD_H, BOARD_W, CELL, COLLECTOR_HALF, GATE_PAD, PAD, TOOL_HALF, TOOL_HALF_W, UNIT_H,
   cellX, cellY, deviceBox, halfH as glyphHalfH, halfW as glyphHalfW, ptSegDist, segBoxHit,
   PRIMARY_PORT_DX, PRIMARY_PORT_H, PRIMARY_PORT_W, SECONDARY_PORT_DX, SECONDARY_PORT_STEP,
 } from './routing/geometry';
@@ -80,6 +82,22 @@ export const GLABEL_FONT = 12.5;
  * is room to breathe with clearance still left over.
  */
 const NAME_OVERHANG = 6;
+/**
+ * The same allowance for a COLLECTOR, which needs two units more than a machine.
+ *
+ * "Dust collector" — the name every shop starts with, on the one piece every shop
+ * has — measures 88.2 by the table in plug-label.ts against a machine's budget of
+ * 88, and so ellipsized on 0.2 of a unit that isn't even real: the table rounds
+ * every character UP on purpose, and the string renders nearer 84. A default name
+ * that arrives pre-trimmed reads as a bug in the drawing, which is worse than the
+ * two units this spends.
+ *
+ * Eight, not more: a machine beside it takes 6 of the 16 units of gap from its
+ * own side, so 8 still leaves 2 units of air between two names that both run
+ * full width — and a collector heads its system's band, where a neighbour on
+ * either side is the uncommon case to begin with.
+ */
+const COLLECTOR_NAME_OVERHANG = 8;
 
 // ── Layout model ──────────────────────────────────────────────────────────────
 // The canvas is pure presentation: each element gets a grid cell (col,row). The
@@ -257,6 +275,15 @@ interface MenuOption { kind: MenuKind; label: string; enabled: boolean; note?: s
 const isUnitKind = (kind: unknown): boolean => kind === 'linear' || kind === 'servoManifold';
 /** Undo depth. Snapshots are a few KB of JSON each — this is cheap. */
 const HISTORY_MAX = 60;
+
+/**
+ * How far a press may wander and still count as a TAP, in screen pixels.
+ *
+ * Shared by the two press-or-drag gestures on this canvas — a tray chip and an
+ * output dot — because they were not shared, and the chip had no slop at all: a
+ * single stray pointermove made it a drag, which on a touchscreen is every tap.
+ */
+const DRAG_SLOP = 8;
 /** Grid cells a fitting takes up: a unit is one horizontal bar N cells wide. */
 const spanFor = (kind: MenuKind): number => kind === 'linear' ? 4 : kind === 'servoManifold' ? 2 : 1;
 
@@ -337,6 +364,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   menuTitle = '';
   readonly CELL = CELL; readonly UNIT_H = UNIT_H; readonly GATE_PAD = GATE_PAD; readonly PAD = PAD;
   readonly TOOL_HALF = TOOL_HALF;
+  readonly COLLECTOR_HALF = COLLECTOR_HALF;
   readonly PRIMARY_PORT_DX = PRIMARY_PORT_DX;
   readonly PRIMARY_PORT_W = PRIMARY_PORT_W;
   readonly PRIMARY_PORT_H = PRIMARY_PORT_H;
@@ -467,7 +495,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     // Sweep for plugs ONCE, and only when there's a job for them: a machine on the
     // canvas with nothing paired to it. A shop that's fully wired opens without an
     // mDNS sweep and without a tray.
-    if (this.unpairedMachines().length) void this.scanOutlets();
+    if (this.unpairedTargets().length) void this.scanOutlets();
     this.livePoll = setInterval(() => {
       void this.api.getStatus().then(st => this.applyLive(st)).catch(() => { /* offline */ });
     }, 2000);
@@ -710,9 +738,14 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
    * title, so nothing is lost by the trim — see nameTitle().
    */
   nameLabel(n: NodeVM): string {
-    if (n.glyph !== 'tool') return n.name;
-    return fitText(n.name, (TOOL_HALF_W + NAME_OVERHANG) * 2, GLABEL_FONT);
+    if (!this.hasBodyName(n)) return n.name;
+    const over = n.glyph === 'collector' ? COLLECTOR_NAME_OVERHANG : NAME_OVERHANG;
+    return fitText(n.name, (TOOL_HALF_W + over) * 2, GLABEL_FONT);
   }
+  /** Pieces whose name is drawn INSIDE the body — a machine, and since 2026-08-25
+   *  the collector, which is the same 76 wide. Everything else captions from
+   *  outside and has open canvas to spill into. */
+  private hasBodyName(n: NodeVM): boolean { return n.glyph === 'tool' || n.glyph === 'collector'; }
   /** The whole name, but only where the drawn one is short of it — a tooltip that
    *  repeats what is already legible is noise. */
   nameTitle(n: NodeVM): string { return this.nameLabel(n) === n.name ? '' : n.name; }
@@ -726,13 +759,28 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     // glyph. namePos() follows this, so the edit field stays on the name.
     return this.nameBaseY(n) - (n.redundant ? 13 : 0);
   }
-  private nameBaseY(n: NodeVM): number { return n.glyph === 'tool' ? -8 : (n.isUnit ? -UNIT_H / 2 - 9 : -34); }
+  private nameBaseY(n: NodeVM): number {
+    if (n.glyph === 'tool') return -8;
+    // Higher in the barrel than a machine's, because a collector's body is 8
+    // taller and the two rows sit centred in it rather than pinned to the top.
+    if (n.glyph === 'collector') return -6;
+    return n.isUnit ? -UNIT_H / 2 - 9 : -34;
+  }
+  /** How far the plug row shifts off the seat a machine gives it. A collector's
+   *  body is taller, so its two rows sit 4 higher to stay centred between the
+   *  lid seam and the base band. */
+  dockDY(n: NodeVM): number { return n.glyph === 'collector' ? -4 : 0; }
   toolAuto(id: string): boolean { return !!outletOf(this.topo as unknown as ShopDoc, this.elem(id)); }
 
   // ── the plug row ─────────────────────────────────────────────────────────────
   // Live wattage per MACHINE, from /api/status. Keyed by machine because that is
   // what draws power — a two-port saw is one reading, not two.
   private machineWatts = new Map<string, number>();
+  /** What each SYSTEM's collector plug last read, keyed by system id. The
+   *  collector's draw doesn't come through `tools` — it isn't a machine — and
+   *  without it a barrel with a plug paired would sit on "idle" while the blower
+   *  roared. */
+  private systemWatts = new Map<string, number>();
   /** A machine waiting for the next tap in the plug tray. */
   armedTool: string | null = null;
   /** The tool whose plug row the current press started on, or null. Set on
@@ -747,8 +795,8 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     const doc = this.topo as unknown as ShopDoc;
     const outlet = outletOf(doc, el);
     if (!outlet) {
-      return { state: 'none', text: 'no plug',
-               hint: `No smart plug on ${n.name} — you switch it on yourself. Tap to pair one.` };
+      return { state: 'none', text: 'no outlet',
+               hint: `No smart outlet on ${n.name} — you switch it on yourself. Tap to pair one.` };
     }
     // The name lives on the Shelly itself, so what the last scan saw it call
     // itself wins — rename a plug in the Shelly app and this follows. Below that
@@ -757,15 +805,33 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     // decaying to "G4-295BD19…" or a bare IP, which identify nothing.
     const ip = outlet['ip'] as string | undefined;
     const seen = ip ? this.outlets.find(o => o.ip === ip) : undefined;
-    const name = seen?.name || (outlet['name'] as string) || (outlet['host'] as string) || ip || 'plug';
+    const name = seen?.name || (outlet['name'] as string) || (outlet['host'] as string) || ip || 'outlet';
+    // A collector is not a machine and has no threshold of its own: what counts as
+    // running is the one number the model already keeps for a blower. Judging it
+    // no further than that is deliberate — whether a blower is FAILING to start is
+    // the Live view's call (collectorPlugState), and it needs a grace window and
+    // what we commanded, neither of which the layout tool has.
+    const collector = n.glyph === 'collector';
     const machine = machineOfPort(doc, el);
-    const watts = (machine && this.machineWatts.get(machine.id as string)) ?? 0;
-    const trip = (outlet['thresholdW'] as number) ?? 0;
+    const watts = collector
+      ? (this.systemWatts.get(this.systemIdOf(n.id) ?? '') ?? 0)
+      : ((machine && this.machineWatts.get(machine.id as string)) ?? 0);
+    const trip = collector ? COLLECTOR_RUNNING_W : ((outlet['thresholdW'] as number) ?? 0);
     const detail = `${name} · ${(outlet['ip'] as string) ?? ''} · ${Math.round(watts)} W`;
     if (watts >= trip && trip > 0) return { state: 'live', text: this.fmtW(watts), hint: detail };
     if (watts >= 1) return { state: 'standby', text: this.fmtW(watts), hint: detail };
     // Idle: show WHICH plug, since there's no number worth reading yet.
     return { state: 'idle', text: this.shortPlug(name), hint: detail };
+  }
+
+  /** Which system an element belongs to. The canvas flattens every system into one
+   *  node list, so a collector's own status — which is keyed by SYSTEM — has to be
+   *  found back through the system that holds it. */
+  private systemIdOf(elId: string): string | null {
+    for (const sys of systemsOf(this.topo as unknown as ShopDoc)) {
+      if (sys.elements?.some(e => e['id'] === elId)) return sys.id;
+    }
+    return null;
   }
 
   private fmtW(w: number): string { return w >= 1000 ? (w / 1000).toFixed(1) + ' kW' : Math.round(w) + ' W'; }
@@ -800,7 +866,18 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   chipTakeAsking = false;
   scanning = false;
   scanned = false;
-  chipDrag: { outlet: DiscoveredOutlet; x: number; y: number; moved: boolean; over: string | null } | null = null;
+  chipDrag: {
+    outlet: DiscoveredOutlet; x: number; y: number;
+    /** Where the press landed — a tap is measured from here. See chipMove. */
+    x0: number; y0: number;
+    moved: boolean; over: string | null;
+  } | null = null;
+
+  /** The ghost only exists once the gesture IS a drag. Drawing it on pointerdown
+   *  put a plug under the finger of someone who was only tapping. */
+  get ghostChip(): { outlet: DiscoveredOutlet; x: number; y: number } | null {
+    return this.chipDrag?.moved ? this.chipDrag : null;
+  }
 
   /** Hidden until there is something to say — an empty strip under a fresh canvas
    *  is furniture. Appears while scanning, and afterwards for as long as there is
@@ -808,7 +885,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   get showTray(): boolean {
     if (this.scanning) return true;
     if (!this.scanned) return false;
-    return this.freeOutlets().length > 0 || this.unpairedMachines().length > 0;
+    return this.freeOutlets().length > 0 || this.unpairedTargets().length > 0;
   }
 
   async scanOutlets(): Promise<void> {
@@ -850,23 +927,44 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   }
   chipWatts(o: DiscoveredOutlet): string { return this.fmtW(o.powerW); }
 
-  /** Machines with no plug yet — what Match by name has to work with. */
-  private unpairedMachines(): { id: string; name: string }[] {
+  /**
+   * Everything still waiting for an outlet — machines AND collectors.
+   *
+   * Collectors were missing, and they are the ones that matter most: the shop
+   * page nags about an unpaired blower ("No outlet paired — there is nothing to
+   * switch") and this tray both under-counted it and refused to place it. Match
+   * by name never paired one either, which is a shame — a Shelly called "Cyclone"
+   * beside a collector called "Cyclone" is the easiest match on the page.
+   *
+   * Keyed by ELEMENT id — a machine's primary port, a collector's own element —
+   * because that is what setOutlet() takes and what the docks are labelled with.
+   */
+  private unpairedTargets(): { id: string; name: string }[] {
     const doc = this.topo as unknown as ShopDoc;
-    return machinesOf(doc)
-      .filter(m => !((m.sensor as RawEl | undefined)?.['outlet']))
-      .map(m => ({ id: m.id as string, name: (m.name as string) || (m.id as string) }));
+    const out: { id: string; name: string }[] = [];
+    for (const m of machinesOf(doc)) {
+      if ((m.sensor as RawEl | undefined)?.['outlet']) continue;
+      const port = primaryPortOf(doc, m.id as string);
+      if (port) out.push({ id: port['id'] as string, name: (m.name as string) || (m.id as string) });
+    }
+    for (const e of this.allElems()) {
+      const el = e as RawEl;
+      if (el['type'] !== 'collector') continue;
+      if ((el['control'] as RawEl | undefined)?.['outlet']) continue;
+      out.push({ id: el['id'] as string, name: (el['name'] as string) || 'Dust collector' });
+    }
+    return out;
   }
 
-  canMatch(): boolean { return this.freeOutlets().length > 0 && this.unpairedMachines().length > 0; }
+  canMatch(): boolean { return this.freeOutlets().length > 0 && this.unpairedTargets().length > 0; }
 
   trayNote(): string {
     if (this.armedTool) {
       const n = this.byId.get(this.armedTool);
-      return `tap the plug powering the ${n?.name ?? 'tool'}`;
+      return `tap the outlet powering the ${n?.name ?? 'tool'}`;
     }
     if (this.matchNote) return this.matchNote;
-    const left = this.unpairedMachines().length;
+    const left = this.unpairedTargets().length;
     return `${this.freeOutlets().length} free · ${left} to place`;
   }
   private matchNote = '';
@@ -876,40 +974,80 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
    *  perfect one wanted. See outlet-match.ts. */
   matchByName(): void {
     const free = this.freeOutlets().map(o => ({ id: o.ip, name: o.name || o.hostname }));
-    const pairs = matchAll(free, this.unpairedMachines());
+    // matchAll is name-blind about what it is pairing — `machineId` on the way out
+    // is just "the other id", and here it is an element's.
+    const pairs = matchAll(free, this.unpairedTargets());
     for (const p of pairs) {
       const o = this.outlets.find(x => x.ip === p.outletId);
-      if (o) this.pairPlug(o, p.machineId);
+      if (o) this.pairOutlet(o, p.machineId);
     }
-    const left = this.unpairedMachines().length;
+    const left = this.unpairedTargets().length;
     this.matchNote = pairs.length
       ? `paired ${pairs.length}${left ? ` · ${left} to drag` : ' · all done'}`
       : 'no clear name match — drag them across';
     if (pairs.length) { this.afterMutation(null); }
   }
 
-  /** Write a plug onto a MACHINE. Threshold seeded from what it's drawing right
-   *  now, ~10% under so it clears standby but still trips — the same guess the
-   *  pairing sheet makes. */
-  private pairPlug(o: DiscoveredOutlet, machineId: string): void {
+  /**
+   * Write an outlet onto whatever the tray was aimed at, by ELEMENT id.
+   *
+   * By element, and that is the fix. Every caller had one — the docks are
+   * labelled with element ids — and every caller then went through
+   * machineOfPort() to reach a machine. A COLLECTOR has no machine, so the lookup
+   * returned null and the handler fell out silently: arming the Cyclone made the
+   * tray say "tap the outlet powering the Cyclone" and then ignore every chip you
+   * tapped, and dragging one onto its dock did nothing either. setOutlet() has
+   * known the asymmetry all along (a tool's sensor lives on its machine, a
+   * collector's switch on the element), so going through it is both the fix and
+   * one less place that has to remember.
+   *
+   * The role split that is LEFT is the threshold: a tool's outlet is watched and
+   * needs one, a collector's is commanded and must not have one at all.
+   */
+  private pairOutlet(o: DiscoveredOutlet, elementId: string): boolean {
     const doc = this.topo as unknown as ShopDoc;
-    const m = machinesOf(doc).find(x => x.id === machineId);
-    if (!m) return;
+    const el = this.elem(elementId);
+    if (!el || (el['type'] !== 'tool' && el['type'] !== 'collector')) return false;
     const outlet: RawEl = { gen: o.generation || 2, ip: o.ip };
     if (o.hostname) outlet['host'] = o.hostname;
-    outlet['thresholdW'] = o.powerW >= 5 ? Math.max(10, Math.round(o.powerW * 0.9 / 10) * 10) : 50;
-    (m as unknown as RawEl)['sensor'] = { outlet };
+    // Cached beside the pairing, as both the sheet and the tools list already do —
+    // it is what keeps a name on screen for an outlet that is switched off or
+    // missed the last sweep.
+    if (o.name) outlet['name'] = o.name;
+    if (el['type'] !== 'collector') {
+      // Seeded from what it is drawing right now, ~10% under so it clears standby
+      // but still trips — the same guess the pairing sheet makes.
+      outlet['thresholdW'] = o.powerW >= 5 ? Math.max(10, Math.round(o.powerW * 0.9 / 10) * 10) : 50;
+    }
+    setOutlet(doc, el, outlet);
+    return true;
   }
 
   // ── dragging a chip onto a tool ──────────────────────────────────────────────
   onChipDown(evt: PointerEvent, o: DiscoveredOutlet): void {
     evt.preventDefault();
-    this.chipDrag = { outlet: o, x: evt.clientX, y: evt.clientY, moved: false, over: null };
+    this.chipDrag = {
+      outlet: o, x: evt.clientX, y: evt.clientY,
+      x0: evt.clientX, y0: evt.clientY, moved: false, over: null,
+    };
     window.addEventListener('pointermove', this.chipMove);
     window.addEventListener('pointerup', this.chipUp);
+    // The browser can take the gesture away mid-drag — a second finger, a scroll
+    // it decides to own. Without this the release never arrives, so the ghost
+    // stays stuck under the pointer and the listeners leak.
+    window.addEventListener('pointercancel', this.chipUp);
   }
   private chipMove = (evt: PointerEvent): void => {
     if (!this.chipDrag) return;
+    // A TAP IS ALLOWED TO WOBBLE. Any pointermove at all used to promote the
+    // gesture to a drag — and a tap that wanders one pixel is every tap on a
+    // touchscreen and most on a trackpad. The release then found `moved` true
+    // with no dock underneath, took neither the drag branch nor the tap branch,
+    // and did nothing whatsoever: the armed tool stayed armed and the tray went
+    // on inviting a tap that could never land. Same slop the output-dot drag has
+    // used all along, a few lines down.
+    if (!this.chipDrag.moved
+        && Math.hypot(evt.clientX - this.chipDrag.x0, evt.clientY - this.chipDrag.y0) <= DRAG_SLOP) return;
     this.chipDrag.moved = true;
     this.chipDrag.x = evt.clientX; this.chipDrag.y = evt.clientY;
     // Hit-test against the real DOM rather than doing the inverse transform by
@@ -919,11 +1057,15 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     this.chipDrag.over = dock ? (dock.getAttribute('data-tool') ?? null) : null;
     this.zone.run(() => { /* repaint the ghost */ });
   };
-  private chipUp = (): void => {
+  private chipUp = (evt?: Event): void => {
     window.removeEventListener('pointermove', this.chipMove);
     window.removeEventListener('pointerup', this.chipUp);
+    window.removeEventListener('pointercancel', this.chipUp);
     const d = this.chipDrag; this.chipDrag = null;
     if (!d) return;
+    // Cancelled, not released: nothing was dropped anywhere, so nothing pairs and
+    // nothing opens. Clearing chipDrag above is the whole job.
+    if (evt?.type === 'pointercancel') return;
     const target = d.over ?? (d.moved ? null : this.armedTool);
     if (!target) {
       // A tap on a chip with no tool armed used to do nothing at all. It is the
@@ -933,9 +1075,10 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       if (!d.moved) this.startChipRename(d.outlet);
       return;
     }
-    const machine = machineOfPort(this.topo as unknown as ShopDoc, this.elem(target));
-    if (!machine) return;
-    this.pairPlug(d.outlet, machine.id as string);
+    // Aimed at something that takes no outlet — a gate, a junction. Leave the tool
+    // armed rather than clearing it: the gesture missed, and the next tap should
+    // still land.
+    if (!this.pairOutlet(d.outlet, target)) return;
     this.armedTool = null; this.matchNote = '';
     this.afterMutation(null);
   };
@@ -952,13 +1095,33 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   /** Every machine this plug could be put on. Machines that already have one are
    *  listed too, and say so — picking one replaces its plug, which is the same
    *  thing dropping a chip on an occupied tool already does. */
-  pairableMachines(): Array<{ id: string; label: string }> {
+  /**
+   * Everything this outlet could be paired with, from the chip's own dialog —
+   * already-paired ones included, flagged, because re-pairing is a real errand.
+   *
+   * Collectors are in the list for the same reason they are in unpairedTargets():
+   * the dropdown offered machines only, so the one outlet the shop page complains
+   * about could not be chosen here either. Element ids, like everything else that
+   * feeds pairOutlet().
+   */
+  pairableTargets(): Array<{ id: string; label: string }> {
     const doc = this.topo as unknown as ShopDoc;
-    return machinesOf(doc).map(m => {
+    const flag = (name: string, paired: boolean): string =>
+      paired ? `${name} (replaces its current outlet)` : name;
+    const out: Array<{ id: string; label: string }> = [];
+    for (const m of machinesOf(doc)) {
+      const port = primaryPortOf(doc, m.id as string);
+      if (!port) continue;
       const ip = ((m.sensor as RawEl | undefined)?.['outlet'] as RawEl | undefined)?.['ip'] as string | undefined;
-      const name = (m.name as string) || (m.id as string);
-      return { id: m.id as string, label: ip ? `${name} (replaces its current outlet)` : name };
-    });
+      out.push({ id: port['id'] as string, label: flag((m.name as string) || (m.id as string), !!ip) });
+    }
+    for (const e of this.allElems()) {
+      const el = e as RawEl;
+      if (el['type'] !== 'collector') continue;
+      const ip = ((el['control'] as RawEl | undefined)?.['outlet'] as RawEl | undefined)?.['ip'] as string | undefined;
+      out.push({ id: el['id'] as string, label: flag((el['name'] as string) || 'Dust collector', !!ip) });
+    }
+    return out;
   }
 
   /** The sentence naming who goes quiet — from the shared claim model, so this
@@ -1031,7 +1194,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
         o.name = v;
       }
       if (this.chipTool) {
-        this.pairPlug(o, this.chipTool);
+        this.pairOutlet(o, this.chipTool);
         this.armedTool = null; this.matchNote = '';
         this.afterMutation(null);
       }
@@ -1258,39 +1421,12 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     this.outletTool = JSON.parse(JSON.stringify(target)) as RawEl;
     // Computed once, on open, rather than from the template: a getter would hand
     // the child freshly-allocated arrays on every change-detection pass.
-    const ex = this.outletExcludes(id);
+    // Which outlets are already spoken for lives in shop-doc, not here: the tools
+    // list opens this same sheet for a collector now, and two copies of the rule
+    // would become two answers the first time one of them was taught something.
+    const ex = outletExcludes(this.topo as unknown as ShopDoc, id);
     this.outletExcludeIps = ex.ips;
     this.outletExcludeReason = ex.reason;
-  }
-
-  /** Plugs that can't be picked for `toolId`, and why. One physical outlet driving
-   *  two tools would make the routing brain believe two machines started at once;
-   *  the collector's own switch is off-limits for the obvious reason. */
-  private outletExcludes(me: string): { ips: string[]; reason: Record<string, string> } {
-    const ips: string[] = [];
-    const reason: Record<string, string> = {};
-    for (const e of this.allElems()) {
-      const el = e as RawEl;
-      if (el['type'] === 'collector') {
-        // …unless the collector IS what's being configured: its own plug has to
-        // stay pickable, or re-opening the sheet greys out the current choice.
-        if (el['id'] === me) continue;
-        const dc = ((el['control'] as RawEl | undefined)?.['outlet'] as RawEl | undefined)?.['ip'] as string | undefined;
-        if (dc) { ips.push(dc); reason[dc] = 'reserved — dust collector'; }
-        continue;
-      }
-    }
-    // Tool plugs live on MACHINES now, and the exclusion is per machine too: a
-    // machine's ports share one plug by design, so two ports of the same saw are
-    // not a clash — two different machines are.
-    const doc = this.topo as unknown as ShopDoc;
-    const myMachine = machineOfPort(doc, this.elem(me))?.id ?? me;
-    for (const m of machinesOf(doc)) {
-      if (m.id === myMachine) continue;
-      const ip = (m.sensor?.outlet as RawEl | undefined)?.['ip'] as string | undefined;
-      if (ip) { ips.push(ip); reason[ip] = `already paired with ${m.name || 'another tool'}`; }
-    }
-    return { ips, reason };
   }
 
   /** Splice the paired tool back in. Shares onConfigured's path deliberately: a
@@ -1419,8 +1555,8 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       // A loose end dropped ON a machine that already has a duct is not a collision
       // — it is the second-port gesture. Checked before canPlace(), which would
       // otherwise refuse it as "already in that cell".
-      const onto = moved ? this.machineAtCell(col, row) : null;
-      if (onto && n.glyph === 'junction' && this.childrenOf(n.id).length === 0) {
+      const onto = moved ? this.secondPortDrop(n, col, row) : null;
+      if (onto) {
         n.dragX = undefined; n.dragY = undefined;
         this.askSecondaryPort(onto, { kind: 'end', endId: n.id });
         this.dragId = null; this.hoverCell = null; this.dropBlocked = ''; this.dropWarn = '';
@@ -1487,6 +1623,20 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
    * board.
    */
   private placeCheck(n: NodeVM, col: number, row: number): { blocked: string; warn: string } {
+    // THE SECOND-PORT GESTURE, and it outranks both refusals below — which is
+    // exactly where onUp() puts it. Above the collision check because the machine
+    // standing there is the TARGET, not an obstacle; above the band check because a
+    // secondary port's run is the one thing allowed to cross the seam between two
+    // systems (see the design constraints in CLAUDE.md), and the drop has always
+    // honoured that even while this said otherwise.
+    const second = this.secondPortDrop(n, col, row);
+    if (second) {
+      const name = (machineById(this.topo as unknown as ShopDoc, second)?.name as string) || 'that machine';
+      // Said in full, because "you'll be asked" is what makes a drop on an occupied
+      // machine feel deliberate rather than like a slip that got away from you.
+      return { blocked: '', warn: `Drop here to give ${name} a second port — you'll be asked to name it.` };
+    }
+
     // A system owns a contiguous stripe of rows, and that's what makes the grey
     // ground drawable at all: the two never interleave, so the boundary is one row
     // rather than a shape. Refusing the drop keeps that true without the drag having
@@ -2154,6 +2304,15 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
 
   /** The piece a drag is hovering, so the drop target lights up before you commit. */
   dragHoverId(): string | null {
+    // A loose end being dragged onto a machine is the same gesture the outlet drag
+    // below performs, and it lit nothing up: the only feedback was the guidance
+    // line, and until this change that line was telling you the drop was refused.
+    const n = this.byId.get(this.dragId ?? '');
+    if (n && this.hoverCell) {
+      const m = this.secondPortDrop(n, this.hoverCell.col, this.hoverCell.row);
+      if (m) return this.nodes.find(x => x.glyph === 'tool'
+        && x.col === this.hoverCell!.col && x.row === this.hoverCell!.row)?.id ?? null;
+    }
     const at = (this.odrag?.moved && this.odrag.at) || (this.idrag?.moved && this.idrag.at);
     if (!at) return null;
     if (this.odrag) {
@@ -2320,7 +2479,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   }
   private onODotMove(evt: PointerEvent): void {
     if (!this.odrag) return;
-    if (Math.hypot(evt.clientX - this.odrag.x0, evt.clientY - this.odrag.y0) > 8) this.odrag.moved = true;
+    if (Math.hypot(evt.clientX - this.odrag.x0, evt.clientY - this.odrag.y0) > DRAG_SLOP) this.odrag.moved = true;
     // Remembered so the release can ask what is under the pointer. Without it a
     // stub could only ever grow into its own cell, and "drag from any open end"
     // would exclude the one straight off a manifold, collector or slider.
@@ -4306,6 +4465,23 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     return null;
   }
 
+  /**
+   * The machine a drop of `n` at (col,row) would give a SECOND PORT to, or null.
+   *
+   * ONE definition, because there used to be two and they disagreed. The drop
+   * itself (onUp) has checked for this gesture before canPlace() since the gesture
+   * existed; the mid-drag guidance (placeCheck) never learned about it, so the
+   * whole way across the machine the bar said "Table Saw is already in that cell"
+   * in refusal amber, the glyph went red — and then the drop worked anyway and
+   * asked you to name the port.
+   */
+  private secondPortDrop(n: NodeVM, col: number, row: number): string | null {
+    // A loose END only: a run end with nothing hanging off it is the thing the
+    // gesture moves. Anything else landing on an occupied cell is a collision.
+    if (n.glyph !== 'junction' || this.childrenOf(n.id).length !== 0) return null;
+    return this.machineAtCell(col, row);
+  }
+
   /** Can `machineId` take another secondary port fed from a loose end? The drop target test
    *  for both directions of the gesture. */
   private canTakeSecondaryPort(machineId: string | null | undefined): boolean {
@@ -4775,6 +4951,14 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     this.machineWatts.clear();
     for (const [id, t] of Object.entries(status.tools ?? {})) {
       this.machineWatts.set(id, (t as { watts?: number }).watts ?? 0);
+    }
+    // Per-system draw, for the collector's plug row. `plug` is absent on a system
+    // whose blower has no switchable outlet, which is the same nothing its row
+    // already shows.
+    this.systemWatts.clear();
+    for (const [id, sys] of Object.entries(status.systems ?? {})) {
+      const plug = (sys as { plug?: { watts?: number } }).plug;
+      if (plug) this.systemWatts.set(id, plug.watts ?? 0);
     }
     const reach = status.reachable ?? {}, actuators = status.actuators ?? {}, liveSet = new Set<string>();
     for (const [toolId, ok] of Object.entries(reach)) {

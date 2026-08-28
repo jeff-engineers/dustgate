@@ -26,6 +26,10 @@ function group(name: string): void { console.log(`\n${name}`); }
 // ── scene builders ───────────────────────────────────────────────────────────
 
 const at = (col: number, row: number) => ({ x: PAD + col * CELL, y: PAD + row * CELL });
+// A collector's half-extent is COLLECTOR_HALF = 38 — it grew from 30 on
+// 2026-08-25, when the glyph became a barrel carrying its own name and plug row.
+// That is why every run that starts on a collector's edge below starts 8 further
+// out than it used to.
 const collector = (id: string, col: number, row: number): SceneNode => ({ id, glyph: 'collector', isUnit: false, span: 1, ...at(col, row) });
 const tool = (id: string, col: number, row: number): SceneNode => ({ id, glyph: 'tool', isUnit: false, span: 1, ...at(col, row) });
 const unit = (id: string, col: number, row: number, span: number): SceneNode => ({ id, glyph: 'slidingGate', isUnit: true, span, ...at(col, row) });
@@ -83,7 +87,7 @@ group('R1  demo layout stays a straight drop');
   );
   const r = routeAll(s);
   ok('routes all 5 ducts', r.size === 5);
-  eqPath('dc→sel is the straight drop', path(r, 'sel'), [[64, 94], [64, 137]]);
+  eqPath('dc→sel is the straight drop', path(r, 'sel'), [[64, 102], [64, 137]]);
   eqPath('sel.b1→saw', path(r, 'saw'), [[64, 207], [64, 246]]);
   eqPath('sel.b2→band', path(r, 'band'), [[172, 207], [172, 246]]);
   eqPath('sel.b3→router', path(r, 'router'), [[280, 207], [280, 246]]);
@@ -100,15 +104,15 @@ group('R3  sideways runs enter the tool from the side');
 {
   const s = scene([collector('dc', 0, 0), tool('planer', 1, 0)], [{ childId: 'planer', parentId: 'dc' }]);
   const r = routeAll(s);
-  eqPath('collector right port → tool left port, flat', path(r, 'planer'), [[94, 64], [134, 64]]);
+  eqPath('collector right port → tool left port, flat', path(r, 'planer'), [[102, 64], [134, 64]]);
 
   // Mirrored: the tool on the left uses its right port and is equally flat.
   const s2 = scene([collector('dc', 1, 0), tool('planer', 0, 0)], [{ childId: 'planer', parentId: 'dc' }]);
-  eqPath('mirrored, tool right port', path(routeAll(s2), 'planer'), [[142, 64], [102, 64]]);
+  eqPath('mirrored, tool right port', path(routeAll(s2), 'planer'), [[134, 64], [102, 64]]);
 
   // Directly below: top port still wins, because it costs no bends there.
   const s3 = scene([collector('dc', 0, 0), tool('saw', 0, 1)], [{ childId: 'saw', parentId: 'dc' }]);
-  eqPath('directly below → top port, straight drop', path(routeAll(s3), 'saw'), [[64, 94], [64, 138]]);
+  eqPath('directly below → top port, straight drop', path(routeAll(s3), 'saw'), [[64, 102], [64, 138]]);
 
   // No route may ever enter a tool from underneath.
   const s4 = scene([collector('dc', 0, 2), tool('saw', 0, 0)], [{ childId: 'saw', parentId: 'dc' }]);
@@ -129,7 +133,7 @@ group('R3b top entry is preferred when it is roughly as cheap as a side one');
   // other. TOP_ENTRY_BIAS (route-grid.ts) is what decides it now.
   const s = scene([collector('dc', 0, 0), tool('t', 1, 1)], [{ childId: 't', parentId: 'dc' }]);
   eqPath('diagonal down-right → still enters from the top', path(routeAll(s), 't'),
-    [[94, 64], [172, 64], [172, 138]]);
+    [[102, 64], [172, 64], [172, 138]]);
 
   // The bias is a tiebreaker, not a mandate — R3 already covers the case where a
   // side entry is CLEARLY shorter (same row, flat) and confirms it still wins

@@ -88,6 +88,11 @@ private:
     void processLine(const String& line);
     void printStatus();
     void printHelp();
+#if defined(CONTROL_SMART_OUTLET) || defined(ENABLE_HTTP_API)
+    // Bench diagnostic: radio facts plus three long mDNS queries. See the
+    // function's comment for what each of the three is there to rule out.
+    void runMdnsProbe();
+#endif
 #ifdef CONTROL_SMART_OUTLET
     void runDiscover();
     // Bus scan for bring-up. Takes the pins explicitly because I2C on an ESP32

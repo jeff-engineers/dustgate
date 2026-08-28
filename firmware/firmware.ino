@@ -21,6 +21,7 @@
 #include "utils/StatusLed.h"
 #include "utils/StatusScreen.h"   // optional SSD1306; compiles to nothing unfitted
 #include "utils/WakeButton.h"    // the button that lights it; ditto
+#include "motor/ServoSelfTest.h"  // and, held for a second, sweeps every servo
 #include "motor/MotorDriver.h"
 #include "feedback/FeedbackSystem.h"
 #include "control/ControlInput.h"
@@ -248,20 +249,42 @@ static void persistHomeDatum() {
     CalibrationStore::save(cal);
 }
 
+// The two raw endstop pins, and the ONLY place they are read. Everything above
+// them — the datum/far mapping, the debounced logging, the status JSON — goes
+// through these, so a board with no endstop pins needs no #if of its own.
+//
+// A board without a rack reads both as FALSE, not "triggered". That is the
+// opposite of the fail-safe convention on a real switch (NC, so open reads as
+// triggered and a broken wire stops the motor) and deliberately so: there is no
+// wire to break and no motor to stop, and "triggered" would put an unfitted
+// board into the over-travel branch on its first pass of loop().
+#if HAS_LINEAR
+static inline bool readEndstopHome() { return digitalRead(PIN_ENDSTOP_HOME) == HIGH; }
+static inline bool readEndstopMax()  { return digitalRead(PIN_ENDSTOP_MAX)  == HIGH; }
+#else
+static inline bool readEndstopHome() { return false; }
+static inline bool readEndstopMax()  { return false; }
+#endif
+
 // Physical read of the endstop currently serving as the HOME datum (the user's left).
 static inline bool datumSwitchTriggered() {
-    return g_homeIsMaxEndstop ? (digitalRead(PIN_ENDSTOP_MAX)  == HIGH)
-                              : (digitalRead(PIN_ENDSTOP_HOME) == HIGH);
+    return g_homeIsMaxEndstop ? readEndstopMax() : readEndstopHome();
 }
 // Physical read of the far endstop (opposite the datum).
 static inline bool farSwitchTriggered() {
-    return g_homeIsMaxEndstop ? (digitalRead(PIN_ENDSTOP_HOME) == HIGH)
-                              : (digitalRead(PIN_ENDSTOP_MAX)  == HIGH);
+    return g_homeIsMaxEndstop ? readEndstopHome() : readEndstopMax();
 }
 
-// -- Motor driver (TMC2209) --
-#include "motor/StepperTMC2209Driver.h"
-StepperTMC2209Driver motor;
+// -- Motor driver --
+// Which one is a property of the BOARD, not of the env: HAS_LINEAR comes from
+// whether the pin map wires the serial-servo bus. See motor/NullMotorDriver.h.
+#if HAS_LINEAR
+  // No linear driver in the tree yet — failing here beats failing at the linker.
+  #error "HAS_LINEAR board with no motor driver — see firmware/attic/linear/README.md"
+#else
+  #include "motor/NullMotorDriver.h"
+  NullMotorDriver motor;
+#endif
 
 // -- servo bring-up (ball-valve gates) --
 // Four positional servos on the reserved PWM pins (25/26/27/14 on DevKitC).
@@ -273,12 +296,12 @@ static const int SERVO_PINS[SERVO_COUNT] = { SERVO_PWM_PIN_1, SERVO_PWM_PIN_2, S
 #endif
 
 // -- Feedback system --
-#ifdef FEEDBACK_LIMIT_DISTANCE
-  #include "feedback/LimitSwitchDistance.h"
-  LimitSwitchDistance feedback;
-#else
-  #error "No feedback type defined in config.h — define FEEDBACK_LIMIT_DISTANCE in config.h"
-#endif
+// Same seam as the motor above. The #error this used to carry is gone with it:
+// "no feedback type" is now a legitimate board rather than a misconfiguration.
+// The only arm today — LimitSwitchDistance is in attic/linear/, and comes back
+// with the ST3215 slider.
+#include "feedback/NullFeedback.h"
+NullFeedback feedback;
 
 // -- Control input --
 #ifdef CONTROL_SMART_OUTLET
@@ -387,6 +410,18 @@ bool          g_driverAsleep   = false;
 
 // Forward declarations
 void issueMove(int stop);
+
+// Whether this board has a carriage to move at all. A compile-time constant
+// rather than #if at each site, for the same reason NullMotorDriver is a null
+// object: the state machine stays readable and the compiler folds the branches
+// away. HAS_LINEAR comes from the pin map — see config.h.
+//
+// NullMotorDriver already makes the MOVE harmless; this is about the STATE
+// machine around it. Without it a rackless board announces "Moving to stop 0",
+// drops into STATE_MOVING, is told by NullFeedback that it has arrived, and logs
+// "Arrived at stop 0" — a complete round trip through machinery for hardware it
+// hasn't got, once per outlet event. Seen on a XIAO C5 primary, 2026-08-22.
+static const bool kRackPresent = (HAS_LINEAR != 0);
 void startHoming();
 void setHomedLeft(bool homedLeft);
 
@@ -639,10 +674,8 @@ void setup() {
     // every target — including boards with no stepper — so the first line of
     // every boot log was wrong about what you were looking at.
     DEBUG_PRINT(F("Target: ")); DEBUG_PRINT(F(BOARD_NAME));
-#if defined(NO_LINEAR_FITTED)
-    DEBUG_PRINTLN(F(" + servos (no rack fitted)"));
-#elif HAS_LINEAR
-    DEBUG_PRINTLN(F(" + TMC2209"));
+#if HAS_LINEAR
+    DEBUG_PRINTLN(F(" + slider"));
 #else
     DEBUG_PRINTLN(F(" (servo only)"));
 #endif
@@ -657,9 +690,9 @@ void setup() {
     statusled::set(statusled::BOOTING);
     statusled::update();
 
-    // The screen, where one is fitted. Reports itself either way, because a
-    // board built with -DHAS_STATUS_SCREEN and no panel wired is exactly the
-    // mistake worth naming on serial rather than leaving as a dark rectangle.
+    // The screen, where one is plugged in. Reports itself either way: every
+    // build carries the driver now, so "no panel on the bus" is an ordinary
+    // outcome and worth one line on serial rather than a dark rectangle.
     if (statusscreen::begin()) {
         DEBUG_PRINTLN(F("[SCREEN] panel answered at 0x3C — drawing"));
     } else {
@@ -729,12 +762,11 @@ void setup() {
     stages.motor    = !okMotor;
     stages.endstops = !okFeedback;
     stages.outlets  = !okControl;
-#if defined(NO_LINEAR_FITTED)
-    // No rack on this board. The check above still ran and still printed its
-    // diagnosis; a missing driver is simply not news here, so it is cleared
-    // before anything reports on it — otherwise every boot of a servo-only board
-    // would announce a TMC2209 failure that is the build working as designed.
-    // See config.h's NO_LINEAR_FITTED block.
+#if !HAS_LINEAR
+    // The board's pin map wires no slider, so `motor` is NullMotorDriver and
+    // begin() returned true because nothing failed. Clearing the stage before
+    // anything reports on it is what keeps a servo-only board from announcing a
+    // motor failure that is the build working as designed.
     const bool kRackFitted = false;
     stages.motor = false;
 #else
@@ -761,7 +793,13 @@ void setup() {
 #endif
 #if defined(ENABLE_SERVO) && defined(SERVO_PWM_PIN_1)
     for (int i = 0; i < SERVO_COUNT; i++) g_servos[i].begin(SERVO_PINS[i]);  // bind pins; attach on first move
+    servoselftest::begin(g_servos, SERVO_COUNT);
+    // The button's long press needs to know whether the collector is pulling
+    // before it sweeps every gate. A lambda rather than a stored flag: the
+    // answer has to be true AT THE MOMENT OF THE HOLD, not whenever setup ran.
+    wakebutton::setCollectorQuery([]() { return g_topoRuntime.collectorOn(); });
     DEBUG_PRINTLN(F("[SERVO] Bring-up ready — 'servo <1-4> <angle>' (external 5-6V rail, common GND)."));
+    DEBUG_PRINTLN(F("[SERVO] Hold the wake button 1s to sweep every channel."));
 #endif
 
     // A hardware fault disables ONE CAPABILITY, not the whole device. Do NOT
@@ -806,7 +844,7 @@ void setup() {
     DEBUG_PRINT(F("  gates=ok  plugs="));
     Serial.println(g_faultOutlets ? "offline" : "ok");
 
-#if defined(NO_LINEAR_FITTED)
+#if !HAS_LINEAR
     // policy.linearMotion is already true here — no rack means every motion
     // entry point must keep refusing, and reusing the existing latch is what
     // keeps that small: issueMove() and SketchLinearDrive::moveToMm() check it
@@ -818,9 +856,9 @@ void setup() {
     // the message reads like a bug, so name the real reason. Only when empty:
     // a true failure above owns this field and must not be overwritten.
     if (g_faultStages[0] == '\0')
-        snprintf(g_faultStages, sizeof(g_faultStages), "no rack fitted (by build)");
-    DEBUG_PRINTLN(F("[INIT] No linear rack fitted (-DNO_LINEAR_FITTED) — "
-                    "motion disabled by design; servos and routing are live."));
+        snprintf(g_faultStages, sizeof(g_faultStages), "no slider on this board");
+    DEBUG_PRINTLN(F("[INIT] No slider on this board — motion disabled by design; "
+                    "servos and routing are live."));
 #endif
 
 #ifdef ENABLE_HTTP_API
@@ -954,6 +992,10 @@ static void updateStatusScreen() {
 
     statusscreen::Facts f;
     f.role   = statusscreen::Role::PRIMARY;
+    f.selfTestCh      = servoselftest::channel();
+    f.selfTestOf      = SERVO_COUNT;
+    f.selfTestAngle   = servoselftest::angle();
+    if (!servoselftest::active()) f.selfTestRefused = servoselftest::refusal();
     f.status = statusled::state();
     f.motion = statusled::motion();
 
@@ -1059,11 +1101,17 @@ static void updateStatusLed() {
             break;
     }
 
-#if defined(NO_LINEAR_FITTED)
-    // g_hardwareFault is set unconditionally on this build to keep motion
-    // refused (see setup()), so it can no longer speak for the indicator —
-    // STATE_ERROR does. A real failure of the endstops or the outlets still
-    // reaches this branch, because that path sets STATE_ERROR too.
+#if !HAS_LINEAR
+    // g_hardwareFault is set unconditionally on these builds to keep motion
+    // refused (see setup(): FaultPolicy returns linearMotion = true whenever
+    // there is no rack, which is the correct answer to "may I move?" and the
+    // wrong answer to "is anything broken?"). So it can no longer speak for the
+    // indicator — STATE_ERROR does. A real failure of the endstops or the
+    // outlets still reaches this branch, because that path sets STATE_ERROR too.
+    //
+    // The latch answers "may I move?", not "is anything broken?" — and the
+    // indicator wants the second question. Getting that wrong sat a rackless
+    // board in FAULT from boot over a stepper it was never built with.
     if (currentState == STATE_ERROR) {
 #else
     if (g_hardwareFault || currentState == STATE_ERROR) {
@@ -1085,6 +1133,7 @@ static void updateStatusLed() {
     // Before the screen decides whether to be lit, so a press shows up on this
     // pass rather than the next one.
     wakebutton::update();
+    servoselftest::update();   // after the button, so a hold starts on this pass
     updateStatusScreen();
 }
 
@@ -1147,6 +1196,24 @@ void loop() {
                     control.setCollectorManual((int)i, want);
                     g_dcAsserted[i] = want; g_dcHave[i] = true;
                 }
+                // Feed the plug's own reading back, the same way tool watts go in
+                // above. `collectorOn` is what we COMMANDED; this is what came
+                // back, and the two coming apart is a tripped breaker, a blower
+                // switched off at its own panel, or an unplugged cord.
+                //
+                // Only for a slot that actually has a plug — reporting zeroes for
+                // a collector nobody paired would read as a dead blower rather
+                // than an absent one.
+                if (control.collectorConfigured((int)i)) {
+                    uint32_t since = control.collectorOnSinceMs((int)i);
+                    // millis() is read HERE and handed over as an age: the runtime
+                    // owns no clock, which is what keeps it host-testable.
+                    uint32_t onFor = since ? (millis() - since) : 0;
+                    g_topoRuntime.setCollectorPlug(sysIds[i],
+                                                   control.collectorWatts((int)i),
+                                                   control.collectorReachable((int)i),
+                                                   onFor);
+                }
             }
         }
 #endif
@@ -1160,7 +1227,7 @@ void loop() {
     // Directional: stops travel *toward* a triggered switch but allows backing
     // AWAY to release it. Homing drives into the home switch on purpose;
     // STATE_MOVING has its own endstop handling, so both are skipped here.
-#ifdef FEEDBACK_LIMIT_DISTANCE
+#if HAS_LINEAR
     // Applies to jogs AND commanded moves (STATE_MOVING). Homing drives into the
     // home switch on purpose; the calibration sweep manages the far switch itself.
     if (motor.isMoving() && currentState != STATE_HOMING && currentState != STATE_CALIBRATING) {
@@ -1186,7 +1253,7 @@ void loop() {
     // -- Endstop transition logging — AFTER update() so the logged position is
     //    the post-step position at the actual trigger point. Change-gated (jogs
     //    included, since jogs never enter STATE_MOVING).
-#ifdef FEEDBACK_LIMIT_DISTANCE
+#if HAS_LINEAR
     {
         // Debounced transition logging. When parked exactly on the home datum the
         // switch sits right at its trigger edge and chatters open/triggered; a raw
@@ -1197,8 +1264,8 @@ void loop() {
         static bool candHome = false, candFar = false;
         static unsigned long candHomeSince = 0, candFarSince = 0;
         unsigned long nowMs = millis();
-        bool home = (digitalRead(PIN_ENDSTOP_HOME) == HIGH); // HIGH = triggered (NC open)
-        bool far  = (digitalRead(PIN_ENDSTOP_MAX)  == HIGH);
+        bool home = readEndstopHome();   // HIGH = triggered (NC open)
+        bool far  = readEndstopMax();
         if (!esInit) {
             lastHome = candHome = home; lastFar = candFar = far;
             candHomeSince = candFarSince = nowMs; esInit = true;
@@ -1370,7 +1437,16 @@ void loop() {
         // Fire from AT_STOP too, not just IDLE — otherwise after landing on a gate
         // (which leaves us in STATE_AT_STOP) the next stop command is ignored until
         // a re-home.
-        if (serialStop >= 0 && serialStop != _scLastActioned && !g_eStopTriggered &&
+        // kRackPresent: this is a stop-index move, so it means nothing on a board
+        // with no carriage. It is also the one such path that fires WITHOUT any
+        // input — SerialDebugControl's _requestedStop starts at 0 and
+        // _scLastActioned at -1, so the first pass through STATE_IDLE issues a
+        // move to stop 0 on its own. On a rack that is harmless (it is already
+        // there); on a XIAO C5 primary it printed a whole move/arrive round trip
+        // into the boot log for hardware that doesn't exist, which is what gave
+        // this away on 2026-08-22.
+        if (kRackPresent &&
+            serialStop >= 0 && serialStop != _scLastActioned && !g_eStopTriggered &&
             (currentState == STATE_IDLE || currentState == STATE_AT_STOP)) {
             _scLastActioned = serialStop;
             targetStop = serialStop;
@@ -1755,15 +1831,15 @@ void loop() {
 
         static const int kMaxNodeHits = 8;
         MdnsHit hits[kMaxNodeHits];
-        // Two short attempts rather than one long one: mDNS is UDP and lossy, so
-        // a board only needs to answer once across the attempts to show up.
-        // Same shape as outlet discovery, which works reliably: more attempts,
-        // each a little longer, with a gap between them. Two 600ms shots was
-        // marginal against a node in WiFi power-save — it answers, but not always
-        // inside the window, which reads as "no boards found" with no way to tell
-        // that from "nothing out there".
-        for (int attempt = 0; attempt < 3; attempt++) {
-            int n = mdnsQueryDustgateTcp(800, hits, kMaxNodeHits);
+        // Same window as outlet discovery, and for the same reason — see
+        // DISCOVER_MDNS_TIMEOUT_MS in config.h. This path had its own hand-tuned
+        // number (three 800ms attempts, itself a bump from two 600ms ones that
+        // were "marginal") and kept losing the same argument: a node that
+        // answers, but not inside the window, reads as "no boards found" with
+        // nothing to distinguish it from an empty network. Tuning it twice
+        // without fixing the shape is what made it worth sharing the constant.
+        for (int attempt = 0; attempt < DISCOVER_MDNS_ATTEMPTS; attempt++) {
+            int n = mdnsQueryDustgateTcp(DISCOVER_MDNS_TIMEOUT_MS, hits, kMaxNodeHits);
             DEBUG_PRINT(F("[NODES] attempt ")); DEBUG_PRINT(attempt + 1);
             DEBUG_PRINT(F(": ")); DEBUG_PRINT(n); DEBUG_PRINTLN(F(" hit(s)"));
             for (int i = 0; i < n; i++) {
@@ -2171,9 +2247,17 @@ void loop() {
                     DEBUG_PRINT(F("\" ")); DEBUG_PRINTLN(ok ? F("ok") : F("FAILED"));
 
                     // Keep the in-memory outlet's label in step, so the next
-                    // status push doesn't report the name we just replaced.
-                    SmartOutlet* configured = control.outletByIp(nameIp);
-                    if (ok && configured) configured->setName(full.c_str());
+                    // status push doesn't report the name we just replaced —
+                    // AND write it to NVS, or the rename lives only until the
+                    // next reboot. The slot's stored name is what begin() loads
+                    // and what every later provisioning pass writes back to the
+                    // plug, so an unsaved rename is a rename that un-happens.
+                    int slot = control.outletSlotByIp(nameIp);
+                    SmartOutlet* configured = (slot >= 0) ? control.outlet(slot) : nullptr;
+                    if (ok && configured) {
+                        configured->setName(full.c_str());
+                        control.saveSlot(slot);
+                    }
                 }
             }
             String out; serializeJson(resp, out);
@@ -2379,12 +2463,18 @@ void loop() {
             int requested = control.readRequestedStop();
 
             if (!enabled) {
-                if (currentStop != 0 && currentStop != -1) {
+                if (kRackPresent && currentStop != 0 && currentStop != -1) {
                     targetStop = 0;
                     issueMove(0);
                 }
                 break;
             }
+
+            // Nothing below this line concerns a board without a rack: it is all
+            // the pre-topology outlet→stop path, which moves a carriage. Servo
+            // gates and the routing runtime are driven from loop() above and are
+            // unaffected.
+            if (!kRackPresent) break;
 
             // Not homed yet — require explicit 'home' command before accepting moves
             if (currentStop == -1) {
@@ -2433,10 +2523,12 @@ void loop() {
             int requested = control.readRequestedStop();
 
             if (!enabled) {
-                targetStop = 0;
-                issueMove(0);
+                if (kRackPresent) { targetStop = 0; issueMove(0); }
+                else              { currentState = STATE_IDLE; }
                 break;
             }
+
+            if (!kRackPresent) break;   // see STATE_IDLE
 
             // See STATE_IDLE: routing owns the rack while a topology is loaded.
             if (!g_topoRuntime.loaded() && requested != currentStop && requested >= 0) {
@@ -2500,8 +2592,8 @@ void loop() {
         s.positionMM     = (float)s.positionSteps / stepsPerMM() / (-HOME_DIRECTION);
         s.homed          = (currentStop != -1);
         s.enabled        = control.isEnabled();
-        s.endstopHome    = (digitalRead(PIN_ENDSTOP_HOME) == HIGH); // HIGH = triggered (NC switch open)
-        s.endstopMax     = (digitalRead(PIN_ENDSTOP_MAX)  == HIGH); // HIGH = triggered (NC switch open)
+        s.endstopHome    = readEndstopHome();   // HIGH = triggered (NC switch open)
+        s.endstopMax     = readEndstopMax();    // both false on a board with no rack
         s.numActiveStops = g_numActiveStops;
         s.measuredStepsPerMM = g_measuredStepsPerMM;
         s.measuredSpanSteps  = g_measuredSpanSteps;

@@ -14,9 +14,8 @@ Each tool plugs into a [Shelly smart outlet](https://us.shelly.com). When a tool
 
 | Part | Source | Notes |
 |------|--------|-------|
-| Adafruit ESP32-S2 Feather | [Adafruit #5000](https://www.adafruit.com/product/5000) | Main controller |
-| Adafruit TMC2209 Breakout | [Adafruit #6121](https://www.adafruit.com/product/6121) | Stepper driver |
-| LDO-42STH48-2004MAH (NEMA 17) | Various | Stepper motor |
+| Seeed XIAO ESP32C5 | [Seeed](https://www.seeedstudio.com) | Controller — the same board is the primary or a node |
+| Feetech/Waveshare ST3215 serial bus servo | Waveshare | Sliding gate — **not built yet** |
 | Rack & pinion | 3d Printed | 20T rack, 15T pinion, 4.145mm pitch |
 | Mechanical Assembly | 3d printed | Integrates with COTS dust gate |
 | NC mechanical limit switch ×2 | Various | Home endstop (D10) + far endstop (D11) — both required |
@@ -27,9 +26,8 @@ Each tool plugs into a [Shelly smart outlet](https://us.shelly.com). When a tool
 The reference build is a 2.5" dust port system, with adjacent gates spaced about 82.9mm apart (these measured numbers feed the dual-endstop self-calibration — see [`docs/dual-endstop-calibration.md`](docs/dual-endstop-calibration.md)). A 4" variant is planned but not yet built or measured, so it's **disabled in the UI** until real hardware exists to measure its manifold profile (the logic is kept in place for when it does).
 
 For wiring details see [`firmware/WIRING.md`](firmware/WIRING.md) (shop-wide) and
-the per-board files it links: [DevKitC](firmware/wiring/devkitc.md),
-[QT Py ESP32-S3](firmware/wiring/qtpy-s3.md),
-[XIAO ESP32C5](firmware/wiring/xiao-c5.md).
+the board file it links: [XIAO ESP32C5](firmware/wiring/xiao-c5.md). The retired
+rack wiring is in [`firmware/attic/linear/`](firmware/attic/linear/README.md).
 
 ---
 
@@ -154,15 +152,9 @@ web UI. The primary does all the routing and sends it already-resolved angles.
 ./dev.sh flash-node
 ```
 
-The default node board is the Adafruit QT Py ESP32-S3. Add a board word for a
-different one — `flash-node c5` ([XIAO ESP32C5](firmware/wiring/xiao-c5.md)) —
-and an optional hostname after it: `./dev.sh flash-node c5 dustgate-node-c5`.
-Both are supported node boards; neither has driven a servo on the bench yet.
-
-The C5 builds against its own PlatformIO installation (it needs the pioarduino
-platform, which shares package names with the official one and would overwrite
-it). `dev.sh` handles that; building it by hand needs
-`PLATFORMIO_CORE_DIR=~/.platformio-pioarduino pio run -e xiao_c5`.
+A node is the same [XIAO ESP32C5](firmware/wiring/xiao-c5.md) as the primary —
+only the program differs. Give it a hostname, unique per node since that is what
+the primary finds it by: `./dev.sh flash-node dustgate-node-1`.
 
 This flashes the servo-only firmware and pushes WiFi credentials over the USB
 cable. The credentials have to go over serial: the primary reaches a node over
@@ -264,24 +256,24 @@ firmware/         Firmware (Arduino / PlatformIO)
   config.h               All compile-time settings
   firmware.ino    Main sketch + state machine
   api/                   HTTP REST + WebSocket server
-  boards/                Per-board pin maps (devkitc, feather_s2, qtpy_s3)
+  attic/linear/          Retired stepper + limit-switch code, kept to repurpose
+                         for the ST3215 slider — NOT compiled (see its README)
+  boards/                Per-board pin maps (xiao_c5)
   control/               Control input modes + the v2 routing brain:
                            TopologyRouter/Sequencer/Controller (pure, host-tested)
                            ActuatorBus/NodeBus/TopologyRuntime (the dispatch seam)
                            RemoteActuatorBus + NodeLink (multi-node transport)
-  feedback/              Homing and position feedback
-  motor/                 TMC2209 stepper driver + ServoActuator (ball valves)
+  feedback/              The FeedbackSystem seam (position/homing; null today)
+  motor/                 ServoActuator (ball valves) + the MotorDriver seam
   node/                  SECONDARY node firmware — a separate ~200-line program
-                         (env: dustgate_node), not a flavour of the main sketch
+                         (env: xiao_c5), not a flavour of the main sketch
   outlets/               Shelly outlet polling
   test/                  Host (g++) conformance tests for the pure C++ control layer
   training/              Calibration storage
   utils/                 WiFi provisioning, motion math, mDNS queries
   data/                  LittleFS filesystem image (generated — don't edit)
   WIRING.md              Wiring reference (shop-wide)
-  wiring/devkitc.md      Pin map + stepper/endstops for the rack primary
-  wiring/qtpy-s3.md      Pin map for the QT Py ESP32-S3 servo node
-  wiring/xiao-c5.md      Pin map for the XIAO ESP32C5 servo node
+  wiring/xiao-c5.md      Pin map for the XIAO ESP32C5 — primary or node
 
 dustgate-ui/             Web UI (Angular 17) — see dustgate-ui/README.md for
                          local dev instructions and a full breakdown

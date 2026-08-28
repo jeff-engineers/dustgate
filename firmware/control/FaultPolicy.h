@@ -41,7 +41,7 @@ struct Policy {
 
 /**
  * @param s           which stages failed
- * @param rackFitted  false on a build with no linear rack (NO_LINEAR_FITTED)
+ * @param rackFitted  false on a board whose pin map wires no slider (!HAS_LINEAR)
  *
  * The two rules, and why each is drawn where it is:
  *

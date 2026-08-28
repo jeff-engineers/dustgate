@@ -128,7 +128,17 @@
          [attr.transform]="'translate(' + nx(n) + ',' + ny(n) + ')'" (pointerdown)="startDrag($event, n)"
          (contextmenu)="onNodeContext($event, n)">
         <ng-container [ngSwitch]="n.glyph">
-          <g *ngSwitchCase="'collector'"><circle class="body" r="30"/><path class="stroke" fill="none" stroke-width="3" stroke-linecap="round" d="M0 -19 a19 19 0 1 0 6 2 l-6 17"/><circle class="fillmuted" r="3.5"/></g>
+          <!-- A barrel, not a circle-with-an-impeller. The spiral was the only thing
+               inside the old glyph and it was spending the room the two rows a
+               collector actually has to show need: its NAME, and its plug. Both are
+               a machine's rows, drawn by the same code — the body is what says this
+               is not a machine. See docs/mockups/canvas.html. -->
+          <g *ngSwitchCase="'collector'">
+            <rect class="body coll-body" [attr.x]="-COLLECTOR_HALF" [attr.y]="-COLLECTOR_HALF"
+                  [attr.width]="COLLECTOR_HALF * 2" [attr.height]="COLLECTOR_HALF * 2" rx="17"/>
+            <line class="coll-seam" x1="-37" y1="-26" x2="37" y2="-26"/>
+            <line class="coll-seam" x1="-37" y1="24" x2="37" y2="24"/>
+          </g>
           <g *ngSwitchCase="'ballvalve'"><circle class="body" r="22"/><line class="stroke" x1="0" y1="-22" x2="0" y2="22" stroke-width="4"/></g>
           <g *ngSwitchCase="'junction'" [class.open-end]="isOpenEnd(n.id)">
             <circle fill="transparent" r="16"/>
@@ -201,7 +211,9 @@
         <!-- The plug row. Replaced an 'auto'/'manual' caption that said whether a
              plug existed and nothing else — not which one, and not what it reads.
              Its own tap target: the body drags the tool, this opens the plug. -->
-        <g *ngIf="n.glyph === 'tool'" class="dock" [attr.data-tool]="n.id" [attr.class]="'dock ' + plugOf(n).state"
+        <g *ngIf="n.glyph === 'tool' || n.glyph === 'collector'" class="dock"
+           [attr.data-tool]="n.id" [attr.class]="'dock ' + plugOf(n).state + (n.glyph === 'collector' ? ' coll' : '')"
+           [attr.transform]="'translate(0,' + dockDY(n) + ')'"
            [class.armed]="armedTool === n.id" (pointerdown)="onDockDown($event, n)">
           <title>{{ plugOf(n).hint }}</title>
           <rect class="dock-bg" [attr.x]="-DOCK_W / 2" y="4" [attr.width]="DOCK_W" [attr.height]="DOCK_H" rx="6"/>
@@ -373,17 +385,22 @@
      a tool's plug row, or tap a row to arm it and then tap a chip — same
      pairing, minus the drag, which is what a phone wants.
 
+     A COLLECTOR's row takes both, same as a tool's. It didn't until 2026-08-25:
+     the drop handler reached for the dropped-on element's MACHINE, and a
+     collector has none, so the tray said "tap the outlet powering the Cyclone"
+     and then quietly ignored every chip you tapped.
+
      ONE LINE PER PLUG: its name, and its draw only when it's drawing. The IP
      and any name-match hint are in the tooltip. They were on the chip at first
      and turned a glanceable strip into three rows of prose. -->
 <div class="tray" *ngIf="showTray" [class.armed]="armedTool">
-  <span class="t">Plugs</span>
+  <span class="t">Outlets</span>
   <span class="n">{{ trayNote() }}</span>
   <div class="chips">
     <button *ngFor="let o of freeOutlets()" class="chip" [attr.data-level]="chipLevel(o)"
             [title]="o.hostname + ' · ' + o.ip + (armedTool
-                       ? ' — tap to pair it with the armed tool'
-                       : ' — drag onto a tool to pair it, or tap to rename it')"
+                       ? ' — tap to pair it with the armed piece'
+                       : ' — drag it onto a tool or a collector to pair it, or tap to rename it')"
             (pointerdown)="onChipDown($event, o)">
       <svg class="face" viewBox="0 0 24 24"><rect class="shell" x="3.5" y="3.5" width="17" height="17" rx="5"/><rect class="slot" x="8.4" y="7.6" width="2.1" height="5.6" rx="1"/><rect class="slot" x="13.5" y="7.6" width="2.1" height="5.6" rx="1"/><circle class="slot" cx="12" cy="16.4" r="1.5"/></svg>
       <span class="nm">{{ o.name || o.hostname }}</span>
@@ -398,8 +415,10 @@
     {{ scanning ? '…' : '↻' }}
   </button>
 </div>
-<!-- The chip under the pointer while dragging one onto a machine. -->
-<div class="chip ghost" *ngIf="chipDrag as cd" [style.left.px]="cd.x" [style.top.px]="cd.y">
+<!-- The chip under the pointer while dragging one onto a machine. `ghostChip`,
+     not `chipDrag`: the gesture is not a drag until it has travelled, and drawing
+     this on pointerdown put a plug under the finger of someone who was tapping. -->
+<div class="chip ghost" *ngIf="ghostChip as cd" [style.left.px]="cd.x" [style.top.px]="cd.y">
   <svg class="face" viewBox="0 0 24 24"><rect class="shell" x="3.5" y="3.5" width="17" height="17" rx="5"/><rect class="slot" x="8.4" y="7.6" width="2.1" height="5.6" rx="1"/><rect class="slot" x="13.5" y="7.6" width="2.1" height="5.6" rx="1"/><circle class="slot" cx="12" cy="16.4" r="1.5"/></svg>
   <span>{{ cd.outlet.name || cd.outlet.hostname }}</span>
 </div>
@@ -489,7 +508,7 @@
     <select id="chip-tool" class="rn-in" [(ngModel)]="chipTool"
             title="Pair this outlet with a tool, so DustGate knows when that tool is running.">
       <option value="">— not yet —</option>
-      <option *ngFor="let m of pairableMachines()" [value]="m.id">{{ m.label }}</option>
+      <option *ngFor="let m of pairableTargets()" [value]="m.id">{{ m.label }}</option>
     </select>
 
     <button class="rn-take" *ngIf="rc.takeable && rc.reachable"

@@ -49,6 +49,7 @@ const SUITES = [
   ['services/wip-message.spec.js', 'wip-message'],
   ['gates/selector-types.spec.js', 'selector-types'],
   ['tools/outlet-match.spec.js', 'outlet-match'],
+  ['tools/deep-link.spec.js', 'deep-link'],
   ['build/plug-label.spec.js', 'plug-label'],
 ];
 

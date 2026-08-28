@@ -99,14 +99,21 @@ async function run() {
       `status=${det.status}`);
   }
 
-  // 3. Tool power drives routing (independent gates run concurrently).
+  // 3. Tool power drives routing, and ONE MACHINE PER SYSTEM gets the air.
   {
     let r = await req('POST', '/api/sim/tool', { toolId: 'toolX', watts: 10 });
     check('X on → gate1 open, collector on', r.json?.actuators?.gate1 === 'open' && r.json?.collectorOn === true);
+    // These gates contest no selector, so both used to open — co-open, half the
+    // velocity at each. Y is newer, so Y takes the air and X's gate shuts even
+    // though nothing was competing for it. ↔ topology.test.js and
+    // test_topology_controller.cpp assert the same switchover.
     r = await req('POST', '/api/sim/tool', { toolId: 'toolY', watts: 10 });
-    check('X+Y on → both gates open', r.json?.actuators?.gate1 === 'open' && r.json?.actuators?.gate2 === 'open');
+    check('X+Y on → only the NEWER tool gets a gate',
+      r.json?.actuators?.gate1 === 'closed' && r.json?.actuators?.gate2 === 'open');
+    check('X+Y on → X is drawing but not reachable',
+      r.json?.tools?.toolX?.active === true && r.json?.reachable?.toolX === false);
     r = await req('POST', '/api/sim/tool', { toolId: 'toolX', watts: 0 });
-    check('X off (Y on) → gate1 closes, gate2 open',
+    check('X off (Y on) → gate1 closed, gate2 open',
       r.json?.actuators?.gate1 === 'closed' && r.json?.actuators?.gate2 === 'open' && r.json?.collectorOn === true);
     r = await req('POST', '/api/sim/tool', { toolId: 'toolY', watts: 0 });
     // Idle HOLDS the gates, and the blower COASTS rather than cutting — a bandsaw
