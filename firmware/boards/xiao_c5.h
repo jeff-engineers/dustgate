@@ -85,6 +85,33 @@
 #define PIN_SERVO_BUS_TX   11   // D6, the pad the XIAO silkscreen calls TX
 #define PIN_SERVO_BUS_RX   12   // D7, ditto RX
 
+// -- Endstops: the two switches that make multi-turn survivable --
+//
+// NOT OPTIONAL, and not a leftover from the stepper. The ST3215 in step mode
+// reports how much of the last command is still outstanding, never where the
+// shaft is (wiring/st3215-bench.md §5.0.2), so absolute position is something
+// the driver counts — and counting does not survive a power cycle. The homing
+// sweep of docs/dual-endstop-calibration.md is therefore still the calibration
+// path, and it needs both switches: one is the datum, the other measures the
+// span and catches over-travel.
+//
+// D8/D9 = GPIO8/9, and they are ORDINARY PADS on this part. That needed
+// checking: on the ESP32-C3 the straps are GPIO2/8/9, and a NORMALLY-CLOSED
+// switch holds its pin LOW at reset, which on a strap would change how the chip
+// boots. The C5's straps are GPIO25/26/27/28/7 + MTMS/MTDI (datasheet v1.4
+// Table 3-1), so neither of these is one.
+//
+// WIRED NORMALLY-CLOSED, to GND, with INPUT_PULLUP: untriggered reads LOW,
+// triggered reads HIGH — and so does a broken wire or an unplugged connector.
+// That is the point. A snapped lead in a shop full of vibration stops the
+// carriage instead of letting it drive into the end of the rail.
+//
+// HOME vs MAX is a WIRING label, not a role. Which switch is the datum is
+// g_homeIsMaxEndstop, decided at setup by the one wizard question ("did it home
+// to the left?"), because home is always the user's LEFT.
+#define PIN_ENDSTOP_HOME    8   // D8, NC to GND, INPUT_PULLUP
+#define PIN_ENDSTOP_MAX     9   // D9, ditto
+
 #else
 
 // -- Servo PWM block --

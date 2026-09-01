@@ -9,13 +9,39 @@
 
 const clone = (o) => JSON.parse(JSON.stringify(o));
 
+// The default brain drives the PWM bank. `drives` is omitted rather than set to
+// 'servo' on purpose: absent means servo, and leaving it out keeps these
+// fixtures exercising that default the way a topology saved before the field
+// existed does.
 const primary = { id: 'primary', role: 'primary', name: 'Shop Brain', board: 'devkitc' };
+
+// The same brain, flashed for the rack. A board is one or the other from the
+// moment it is flashed — see Controller.drives in topology.js.
+const sliderPrimary = { ...primary, drives: 'linear' };
+
+// The second board the feed chain needs. A slider host drives a serial bus and a
+// servo host drives PWM, and one ESP32 cannot do both — the two personalities
+// contend for the same pads, and firmware/config.h #errors on a pin map claiming
+// both. So "sliding gate feeds a servo manifold" is a TWO-BOARD topology, and it
+// always was in hardware; the model just used to let it be drawn on one.
+const servoNode = {
+  id: 'node1', role: 'secondary', name: 'Manifold Node', board: 'xiao_c5',
+  link: { transport: 'wifi-ws', host: 'dustgate-node-1.local' },
+};
+
+// A slider at the far end of a NodeLink socket: one rack, its own 12V supply at
+// the gate, and no PWM channels at all.
+const sliderNode = {
+  id: 'slider1', role: 'secondary', name: 'Slider Node', board: 'xiao_c5',
+  drives: 'linear',
+  link: { transport: 'wifi-ws', host: 'dustgate-slider-1.local' },
+};
 
 // ── star: one linear actuator, two tools on two branches ────────────────────
 const star = {
   schemaVersion: 1,
   name: 'star',
-  controllers: [primary],
+  controllers: [sliderPrimary],
   elements: [
     { id: 'dc', type: 'collector', name: 'Dust Collector' },
     {
@@ -45,7 +71,7 @@ const star = {
 const feedChain = {
   schemaVersion: 1,
   name: 'feedChain',
-  controllers: [primary],
+  controllers: [sliderPrimary, servoNode],
   elements: [
     { id: 'dc', type: 'collector', name: 'Dust Collector' },
     {
@@ -64,7 +90,8 @@ const feedChain = {
       linear: { calibration: { stepsPerMm: 51.47, measuredSpanSteps: 4387, homeIsMaxEndstop: false, manifoldModel: 'rockler-2.5' } },
     },
     {
-      id: 'man', type: 'selector', name: 'Manifold A', controllerId: 'primary', kind: 'servoManifold',
+      // On the NODE, not the primary: the primary here is the slider board.
+      id: 'man', type: 'selector', name: 'Manifold A', controllerId: 'node1', kind: 'servoManifold',
       // LEFT is the reference (offset 0); closed/right are the ball's port offsets.
       states: [
         { id: 'left', isClosed: false, offsetDeg: 0 },
@@ -131,10 +158,18 @@ const twoGates = {
 // The table saw is the case the RFC exists for: ONE machine with a cabinet port
 // on the 4" system and an overarm port on the 2.5" one. Its overarm is marked
 // supplemental, so losing it is `partial` rather than `stripped`.
+//
+// TWO BOARDS, NOT ONE — corrected 2026-08-28. The RFC said "ONE brain", and one
+// brain still owns the routing for both systems; what changed is that the brain
+// cannot also be the hands for both. The 4" ball valves are PWM and the 2.5"
+// Rockler manifold is a serial-bus slider, and those two builds contend for the
+// same pads (firmware/config.h #errors on a pin map claiming both). So the
+// slider hangs off its own node, which is what the hardware plan always assumed:
+// the slider gets dedicated hardware riding with it and a 12V supply at the gate.
 const twoSystemShop = {
   schemaVersion: 2,
   name: "Jeff's Shop",
-  controllers: [primary],
+  controllers: [primary, sliderNode],
   systems: [
     {
       id: 'big', name: '4" system',
@@ -167,7 +202,8 @@ const twoSystemShop = {
       elements: [
         { id: 'dc-small', type: 'collector', name: 'Shop vac' },
         {
-          id: 'man', type: 'selector', name: 'Manifold', controllerId: 'primary', kind: 'linear',
+          // On its own board — see the two-boards note above.
+          id: 'man', type: 'selector', name: 'Manifold', controllerId: 'slider1', kind: 'linear',
           states: [
             { id: 'home', isClosed: true,  positionMm: 0 },
             { id: 'm1',   isClosed: false, positionMm: 12.5 },
@@ -197,4 +233,4 @@ const twoSystemShop = {
   devices: [],
 };
 
-module.exports = { clone, star, feedChain, twoGates, twoSystemShop };
+module.exports = { clone, star, primary, sliderPrimary, servoNode, sliderNode, feedChain, twoGates, twoSystemShop };

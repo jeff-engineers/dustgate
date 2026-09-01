@@ -5,8 +5,13 @@ outlets; when one draws power, the controller opens that tool's blast gate and
 starts the collector. The shop is laid out once on a canvas in a phone browser,
 and the firmware routes from that topology.
 
-**Status: hardware-UNTESTED.** Everything compiles and passes host tests; almost
-none of it has run on real hardware. Do not describe behaviour as verified.
+**Status: mostly hardware-UNTESTED, with real exceptions.** Everything compiles
+and passes host tests. What has actually run on hardware: primary and node roles
+with PWM servos and NodeLink between them; and, since 2026-08-28, the **ST3215
+slider as a primary** — homing, the reference sweep, and gate moves on a 4-gate
+rockler-2.5 rack. Everything else — the slider NODE, anything under load, the 4"
+manifold — is unverified. Do not describe behaviour as verified unless it is on
+that list.
 
 ## Layout
 
@@ -44,6 +49,7 @@ drifted constantly. Now `shared/device-model/` is the spec:
   | `NUM_STOPS` (device-model.js) | `NUM_STOPS` (config.h) | compile-time max stops |
   | `MIN_STOP_SEPARATION_MM` (device-model.js) | `MIN_STOP_SEPARATION_MM` (config.h) | overlap backstop between stops |
   | `IDLE_TIMEOUT_SEC_DEFAULT` (device-model.js) | `IDLE_TIMEOUT_SEC_DEFAULT` (config.h) | idle power-off default |
+  | `MANIFOLD_PROFILES` — `gatePitchMm` / `firstGateOffsetMm` / `endMarginMm` (device-model.js) | `MANIFOLD_2_5_GATE_PITCH_MM`, `MANIFOLD_4_GATE_PITCH_MM` and friends (config.h) | Rockler manifold geometry. **Found unregistered on 2026-08-28** — it had been a pair since the profiles were written, with nothing pointing either way, which is exactly the situation this table exists to prevent. `gatePitchMm` is the number the reference sweep trusts and centres the gate array on, so a change on one side alone mis-places every gate on real hardware while every test still passes. |
   | `NODELINK_VERSION`, `PING_INTERVAL_MS`, `PONG_TIMEOUT_MS`, `RECONNECT_MIN_MS`, `RECONNECT_MAX_MS` (nodelink.js) | `kVersion`, `kPingIntervalMs`, `kPongTimeoutMs`, `kReconnectMinMs`, `kReconnectMaxMs` (control/NodeLink.h) | NodeLink protocol timing |
 
   The reference pair has company now: `manual-blower.test.js` ↔
@@ -57,6 +63,14 @@ drifted constantly. Now `shared/device-model/` is the spec:
   once, in `topology-device.js`, with nothing to drift against. If the OLED ever
   needs to say "blower not starting" too, that is the moment those become a pair
   and earn a row above — not before.
+
+  `kMoveTimeoutMs` (control/NodeLink.h) is the same shape and catches people out
+  harder, because it sits in the one file that otherwise mirrors `nodelink.js`
+  frame for frame. It is the primary's own bookkeeping — how long to wait for a
+  STATE before calling a move lost — and it never goes on the wire, so there is
+  no `MOVE_TIMEOUT_MS` on the JS side to keep it in step with. Change it alone.
+  (It went 12s → 90s on 2026-08-28: it had been sized for the stepper, and both
+  a slider traverse and a node's boot-time homing sweep outrun 12s.)
 
   **This table is a cache, not the source of truth — keep it honest or delete
   rows rather than let them go stale.** Touching either side of a pair: update
@@ -87,8 +101,11 @@ Firmware compiles — `pio run -e <env>`:
 
 | Env | Board | Role |
 |---|---|---|
-| `xiao_c5_primary` | XIAO ESP32C5 | **primary** — the routing brain |
-| `xiao_c5` | XIAO ESP32C5 | secondary node |
+| `xiao_c5_primary` | XIAO ESP32C5 | **primary** — the routing brain, 4 PWM valves |
+| `xiao_c5` | XIAO ESP32C5 | secondary node, 4 PWM valves |
+| `xiao_c5_linear_primary` | XIAO ESP32C5 | **primary** on the slider board (ST3215 rack) |
+| `xiao_c5_linear` | XIAO ESP32C5 | secondary node on the slider board |
+| `xiao_c5_bus_bench` | XIAO ESP32C5 | not a role — the bus-servo console |
 
 **One board, two roles.** Same board, same carrier, same pin map; the difference
 is `build_src_filter` and `-DDUSTGATE_SECONDARY`. Both roles are proven on
@@ -96,10 +113,27 @@ hardware, including NodeLink between them and a real tool opening its gate.
 
 **PWM servos and a serial bus never share a board.** The slider gets dedicated
 hardware that rides along with it. `config.h` `#error`s if a pin map claims both,
-and `HAS_LINEAR` derives from the bus pins — it is 0 on every target today, and
-the branches it guards are the seam the ST3215 driver plugs into. The retired
-stepper and limit-switch code is in `firmware/attic/linear/` (not compiled, kept
-to repurpose); read its README before reviving any of it.
+and `HAS_LINEAR` derives from the bus pins — 1 on the two `_linear` envs and the
+bench, 0 on the PWM pair. `-DDUSTGATE_SERVO_BUS` is what flips a board between
+the two personalities: the header then presents the bus pins (D6/D7) and the
+endstops (D8/D9) instead of the four PWM pads.
+
+**The slider is BOTH a primary and a node, and the node is the interesting one.**
+A one-slider shop is a whole shop, so `xiao_c5_linear_primary` is a complete
+brain that happens to drive a rack. `xiao_c5_linear` is the same actuator at the
+far end of a NodeLink socket — and it is **the first node in this design with a
+brain**, because a homing sweep is a closed loop between an endstop and a servo
+that cannot round-trip per step over WiFi. It owns a sweep state machine, ticked
+from `loop()` (a blocking sweep outruns the 10s watchdog), homes itself at boot,
+and holds any move it is sent until the datum lands. Moves are still
+already-resolved numbers off the wire — only *calibration* is local. Read the
+CALIBRATION note at the top of `firmware/node/dustgate_node.cpp` before changing
+any of it.
+
+The retired **stepper** code is in `firmware/attic/linear/` (not compiled, kept
+to repurpose); read its README first. `LimitSwitchDistance` came back OUT of the
+attic on 2026-08-28 — the endstops outlived the stepper, because a step-counting
+bus servo has no datum either.
 
 **Every env assumes a screen.** A board header that names `PIN_OLED_*` gets the
 driver, and an I²C ACK at 0x3C at boot decides whether a panel is really there.

@@ -46,9 +46,12 @@ export interface Device {
   positionSteps: number;
   positionMM: number;
   homed: boolean;
+  /** Does this board drive a sliding gate? HAS_LINEAR in the firmware, derived
+   *  from the pin map — so a board's port count follows the hardware rather than
+   *  a saved setting. See Controller.drives in topology.js. */
+  hasLinear: boolean;
   enabled: boolean;
   manualOverride: boolean;
-  motorInverted: boolean;
   numActiveStops: number;
   idleTimeoutSec: number;
   farEndstop: boolean;
@@ -76,6 +79,10 @@ export interface StatusView {
   positionSteps: number;
   positionMM: number;
   homed: boolean;
+  /** Does this board drive a sliding gate? HAS_LINEAR in the firmware, derived
+   *  from the pin map — so a board's port count follows the hardware rather than
+   *  a saved setting. See Controller.drives in topology.js. */
+  hasLinear: boolean;
   enabled: boolean;
   endstopHome: boolean;
   manualOverride: boolean;
@@ -93,7 +100,6 @@ export interface InfoView {
   apiKey: string;
   numStops: number;
   version: string;
-  motorInverted: boolean;
   idleTimeoutSec: number;
   manifoldModel: string;
   stepsPerMm: number;
@@ -180,7 +186,6 @@ export function setEnabled(d: Device, on: boolean): { ok: boolean };
 
 export function saveStop(d: Device, index: number): SaveStopResult;
 export function setHomedLeft(d: Device, homedLeft: boolean): { ok: boolean };
-export function setMotorInverted(d: Device, invert: boolean): { ok: boolean };
 export function setNumGates(d: Device, n: number): { ok: boolean };
 export function setIdleTimeout(d: Device, seconds: number): { ok: boolean };
 export function clearCal(d: Device): { ok: boolean };

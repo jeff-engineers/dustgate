@@ -22,7 +22,7 @@
 SerialDebugControl::SerialDebugControl()
     : _requestedStop(0),
       _eStopPending(false),
-      _homePending(false),
+      _homePending(false), _resetPending(false),
       _clearCalPending(false),
       _gconfPending(false),
       _jogPending(false),
@@ -127,6 +127,12 @@ bool SerialDebugControl::consumeClearCalRequest() {
     return false;
 }
 
+bool SerialDebugControl::consumeResetRequest() {
+    if (!_resetPending) return false;
+    _resetPending = false;
+    return true;
+}
+
 bool SerialDebugControl::consumeGconfRequest() {
     if (_gconfPending) {
         _gconfPending = false;
@@ -175,6 +181,16 @@ void SerialDebugControl::processLine(const String& line) {
         _eStopPending = false;     // clear any latched estop
         _homePending = true;
         Serial.println(F("[DEBUG] Homing requested."));
+
+    } else if (cmd == "reset" || cmd == "retry") {
+        // Not a reboot. It re-attempts the things that are latched for the life
+        // of a boot — the drive coming up, and the fault flags that came with
+        // it — so a servo plugged in after the board started can be picked up
+        // without power-cycling the board and losing the log.
+        _resetPending = true;
+        _eStopPending = false;
+        Serial.println(F("[DEBUG] Reset requested — retrying the drive and clearing"));
+        Serial.println(F("        latched boot faults. This does NOT reboot the board."));
 
     } else if (cmd == "gconf") {
         _gconfPending = true;
@@ -312,9 +328,16 @@ void SerialDebugControl::processLine(const String& line) {
 
     } else if (cmd == "endstops" || cmd == "e") {
 #if HAS_LINEAR
-        Serial.print(F("[ENDSTOP] Home (D10): "));
+        // GPIO numbers, not pad nicknames. These said "D10"/"D11" until
+        // 2026-08-28, which were the DevKitC's labels — and the XIAO C5 has no
+        // D11 pad at all (the castellated edge is D0..D10), so the one board
+        // this can run on today was being told to check a pin that does not
+        // exist. The macro is the only thing that knows where the switch is.
+        Serial.print(F("[ENDSTOP] Home (GPIO"));
+        Serial.print(PIN_ENDSTOP_HOME); Serial.print(F("): "));
         Serial.print(digitalRead(PIN_ENDSTOP_HOME) == HIGH ? F("TRIGGERED") : F("open"));
-        Serial.print(F("   Far (D11): "));
+        Serial.print(F("   Far (GPIO"));
+        Serial.print(PIN_ENDSTOP_MAX); Serial.print(F("): "));
         Serial.println(digitalRead(PIN_ENDSTOP_MAX) == HIGH ? F("TRIGGERED") : F("open"));
 #else
         Serial.println(F("[ENDSTOP] no slider on this board"));
@@ -664,13 +687,13 @@ void SerialDebugControl::printStatus() {
     Serial.print(F("  EStop pending:     ")); Serial.println(_eStopPending ? F("YES") : F("no"));
     Serial.print(F("  Homing speed:      ")); Serial.print(HOMING_SPEED_STEPS_PER_SEC, 0); Serial.println(F(" steps/sec"));
 #if HAS_LINEAR
-    Serial.print(F("  Home endstop (D10):")); Serial.print(F(" "));
+    Serial.print(F("  Home endstop (GPIO")); Serial.print(PIN_ENDSTOP_HOME); Serial.print(F("): "));
     Serial.println(digitalRead(PIN_ENDSTOP_HOME) == HIGH ? F("TRIGGERED") : F("open"));
-    Serial.print(F("  Far endstop (D11): "));
+    Serial.print(F("  Far endstop (GPIO"));  Serial.print(PIN_ENDSTOP_MAX);  Serial.print(F("): "));
     Serial.println(digitalRead(PIN_ENDSTOP_MAX)  == HIGH ? F("TRIGGERED") : F("open"));
 #endif
     Serial.print(F("  Home datum endstop:")); Serial.print(F(" "));
-    Serial.println(g_homeIsMaxEndstop ? F("D11/MAX (left)") : F("D10/HOME (left)"));
+    Serial.println(g_homeIsMaxEndstop ? F("MAX (the user's left)") : F("HOME (the user's left)"));
     Serial.println(F("  Stop positions (from g_stopPositionsMM[], Gate 1..N left→right):"));
     for (int i = 0; i <= NUM_STOPS; i++) {
         Serial.print(F("    [")); Serial.print(i); Serial.print(F("]  "));
@@ -697,7 +720,8 @@ void SerialDebugControl::printHelp() {
     Serial.println(F("  wifireset         Erase WiFi credentials, reboot into setup portal"));
     Serial.println(F("  gconf             Read GCONF + CHOPCONF from driver"));
     Serial.println(F("  status            Print state, stop positions, both endstops"));
-    Serial.println(F("  endstops (e)      Print both endstop states (D10 home, D11 far)"));
+    Serial.println(F("  reset (retry)     Retry the drive and clear latched boot faults (no reboot)"));
+    Serial.println(F("  endstops (e)      Print both endstop states, with their GPIO numbers"));
     Serial.println(F("  i2c [sda] [scl]   Scan the I2C bus — what is out there, and at what address ('force' to override refusals)"));
 #ifdef CONTROL_SMART_OUTLET
     Serial.println(F("  discover          Scan mDNS for Shelly outlets, print raw + filtered results"));

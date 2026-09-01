@@ -236,9 +236,93 @@ against — they have held to within a few counts across five runs:
 | repeatability | **0–2 counts** spread over three approaches |
 | retarget mid-move | diverted cleanly to 1005 from a move in flight |
 
-For the slider, on the 30T pinion at 124 mm/rev: top speed ≈ **51 mm/s**, and 31
-counts of stopping distance ≈ **0.9 mm** of carriage overshoot. Repeatability of
-a couple of counts is far inside anything a blast gate cares about.
+For the slider, on the 30T pinion at **165.8 mm/rev** (§5.0.3): top speed ≈
+**68 mm/s**, and 31 counts of stopping distance ≈ **1.26 mm** of carriage
+overshoot. Repeatability of a couple of counts is **0.08 mm**, far inside
+anything a blast gate cares about.
+
+**Read that 1.26 mm carefully: it is an ABORT figure, not a positioning one.**
+The 31 counts were measured past the catch point of a `stop` command, so it is
+what the carriage does when a move is INTERRUPTED — an e-stop, or an endstop
+tripping during the sweep. A move that runs to its own goal lands on it, and the
+repeatability row is the number for that. Which makes HOMING speed, not approach
+speed, the thing to keep low: the sweep's accuracy is limited by how far past
+the switch the carriage coasts before it is told to stop.
+
+(An earlier version of this paragraph said 124 mm/rev, 51 mm/s and 0.9 mm. That
+came from `RACK_PITCH_MM 4.145`, which §5.0.3 explains is an artifact.)
+
+### 5.0.3 The rack and pinion those millimetres assume
+
+**`RACK_PITCH_MM 4.145` in `config.h` is an artifact — do not build to it.** It
+was back-derived (Rockler gate pitch 82.9 mm ÷ an *assumed* 20 teeth) and it is a
+**linear pitch**, not a module. Module is pitch/π, so 4.145 typed into a CAD
+generator's Module field makes every tooth π× too coarse — a 255 mm part where an
+82.9 mm one was wanted, which is how this was caught (2026-08-28). It also
+implies module 1.3193, which is not a standard module and not a rack anyone can
+buy: the tell that it was never measured. It belongs to the retired 15T-pinion
+stepper build in `firmware/attic/linear/`.
+
+**Choose teeth-per-segment; derive the module.** The rack ships as printable
+segments — nobody has a printer that runs off a 6- or 8-gate rack in one piece —
+and a segment tiles only if it holds a whole number of teeth:
+
+```
+p = 82.9 / N              linear pitch
+m = p / π = 82.9 / (N·π)    module
+```
+
+That makes the segment exactly one Rockler gate pitch by construction, with no
+scaling. **Chosen: N = 15, module 1.7592, 30T pinion.**
+
+| | |
+|---|---|
+| Segment | 82.9 mm / 15 teeth, or 165.8 mm / 30 teeth (fits a 220 bed straight) |
+| Pitch | 5.5267 mm |
+| Pinion | 30T, PD 52.77 mm, OD 56.3 mm — needs a real hub on the ST3215 horn |
+| Travel/rev | **165.8 mm = exactly 2 gate pitches** |
+| 8 gates, 2.5" (582 mm) | 3.5 turns |
+| 8 gates, 4" (891 mm) | 5.4 turns — inside ±7 |
+| Rack force | ~111 N |
+
+15 rather than 20 or 21 because 30 ÷ 15 means **one revolution is exactly two
+gates**, so every multi-turn figure is checkable by hand instead of by float. And
+coarse teeth suit a shop full of dust: 2.76 mm thick at the pitch line, against
+1.96 mm at module 1.25. If the 56 mm pinion or the 1.26 mm overshoot is a
+problem, **24T** gives 132.6 mm/rev, 1.0 mm overshoot, 45.7 mm OD, and 8 gates at
+4" in 6.7 turns — tighter, but inside.
+
+**Chaining the segments — integer teeth is necessary, not sufficient.** The phase
+at the cut has to be right too, or every joint is a step the pinion climbs.
+
+- **Cut both ends at the centre of a tooth SPACE, never through a tooth.**
+  Half-space + half-space = one full space, so pitch continues across the butt
+  and every tooth stays a whole printed feature with both flanks intact.
+  Splitting through a tooth puts a seam exactly where the pinion bears.
+- **Don't trust the generator's end phase.** Generate ~18 teeth, then cut with
+  two parallel planes 82.9 mm apart, each on a valley centreline.
+- **Break the seam edges 0.2–0.3 mm.** Elephant's foot at a butt joint is the
+  bump being avoided; a slightly wide valley is harmless, a slightly fat tooth
+  binds.
+- **Interlock below the tooth line** (a ~10 mm half-lap tongue into a pocket, or
+  two Ø3 dowels in the back face) so segments self-align in height and yaw while
+  the toothed top stays exactly 82.9. Screw each segment down independently — the
+  rail carries the load, not the joint.
+- **If you ever scale to make something line up, scale the rack AND the pinion by
+  the same factor.** Scaling the rack alone changes its pitch while the pinion
+  keeps its own, and the mesh error accumulates across the segment until it
+  binds.
+
+**Error budget:** per-segment length error accumulates (~0.05 mm each, ~0.35 mm
+over 7 joints), and the span-based sweep of `docs/dual-endstop-calibration.md`
+absorbs that, because placement is proportional. What it does *not* absorb is
+local pitch error at a bad joint — which is the whole reason for the rules above.
+
+**One module for both manifolds, with a caveat:** at m = 1.7592, 23 teeth =
+127.11 mm, within 0.11 mm of the 4" Rockler pitch — so one pinion serves both
+(15-tooth segments for 2.5", 23-tooth for 4"). But 127 mm is *derived* (Rockler's
+10" manifold ÷ 2), not measured, and the 4" path is disabled in the UI until a
+sweep confirms it. Don't print a pile of 4" segments on that number.
 
 **What none of that covers:** load. Every number here is a bare shaft spinning
 free, and the measurement that decides 9 V vs 12 V for the shop is `load` and
@@ -285,7 +369,7 @@ mirroring the command.
 
 So **multi-turn works** — three full turns in one command, no wrap, no clamp,
 which is the first direct evidence the ±7-turn budget the 30T pinion sizing
-assumes is real — and **nothing in the register map tells you where the shaft
+assumes is real (5.4 turns for the worst realistic build — §5.0.3) — and **nothing in the register map tells you where the shaft
 is**, only how much of the last command is outstanding. The earlier claim here,
 that position is a 4096-count circle needing a software unwrapper sampled faster
 than half a turn, was measured in mode 0 and does not apply; there is no

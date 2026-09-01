@@ -84,10 +84,17 @@
                 x="8" [attr.y]="g.y" [attr.width]="vbW - 16" [attr.height]="g.h" rx="14"/>
         </g>
         <!-- The line between two systems, naming the one below it. The blank row was
-             doing this alone and stopped the moment something was dragged into it. -->
+             doing this alone and stopped the moment something was dragged into it.
+
+             THE NAME SITS BELOW THE LINE, on the band it names. It was 7px ABOVE,
+             which put it on the previous system's grey — labelling one band while
+             standing on another — and left it with nothing but the gap between
+             bands for headroom, so it was chopped off the moment that gap reached
+             the top of the viewport. Below the line it is always inside the
+             region it belongs to, and the region is always inside the extent. -->
         <g *ngFor="let s of systemSeparators()" class="sysdiv">
           <line x1="8" [attr.y1]="s.y" [attr.x2]="vbW - 16" [attr.y2]="s.y"/>
-          <text x="20" [attr.y]="s.y - 7">{{ s.name }}</text>
+          <text x="20" [attr.y]="s.y + 16">{{ s.name }}</text>
         </g>
       </g>
 
@@ -289,10 +296,12 @@
         <text class="board-name" *ngIf="renamingBoard !== b.id"
               [attr.x]="-BOARD_W/2 + 8" [attr.y]="-BOARD_H/2 + 19">{{ b.name }}</text>
         <text class="board-role" [attr.x]="-BOARD_W/2 + 8" [attr.y]="-BOARD_H/2 + 33">{{ b.primary ? 'PRIMARY' : 'SECONDARY' }}</text>
-        <!-- The port count IS the hardware budget (4 servo + 1 stepper). Amber
-             when it's full: the board isn't broken, it's out of room. -->
+        <!-- The port count IS the hardware budget, and the budget depends on what
+             the board is flashed to drive: four PWM channels, or ONE sliding
+             gate. Never 4+1 — those are the same pads. Amber when it's full: the
+             board isn't broken, it's out of room. -->
         <text class="board-count" [class.full]="boardFull(b)"
-              [attr.x]="BOARD_W/2 - 8" [attr.y]="-BOARD_H/2 + 33">{{ b.servoCount }}/{{ SERVO_PORTS }}</text>
+              [attr.x]="BOARD_W/2 - 8" [attr.y]="-BOARD_H/2 + 33">{{ portUsedCount(b) }}/{{ portCapacity(b) }}</text>
         <!-- The other end of the cable. Grab a port and the GATE end comes
              loose; a bigger invisible target than the 7px port it draws. -->
         <g *ngFor="let ch of portsOf(b)" class="port-hit" (pointerdown)="onPortDown($event, b, ch)">
@@ -375,7 +384,8 @@
   <span class="meta" *ngIf="ins.glyph === 'slidingGate'">
     <button class="step" (click)="changeOutlets(ins.id, -2)" [disabled]="!canRemoveOutlets(ins)">−</button>
     {{ ins.branchCount }} outlets
-    <button class="step" (click)="changeOutlets(ins.id, 2)">+</button>
+    <button class="step" (click)="changeOutlets(ins.id, 2)"
+            [disabled]="!canAddOutlets(ins)" [title]="addOutletsWhyNot(ins)">+</button>
   </span>
   <span class="meta" *ngIf="ins.glyph === 'manifold'">2 outlets</span>
 </div>

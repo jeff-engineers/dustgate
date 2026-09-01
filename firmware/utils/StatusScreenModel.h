@@ -99,6 +99,20 @@ struct Facts {
     int  servoCount  = -1;
     int  lastCmdSec  = -1;
 
+    // -- node: the SLIDER variant ---------------------------------------------
+    // A slider node drives one rack instead of a servo bank, so "servos held" is
+    // the wrong sentence for it and servoCount stays -1. `sliderFitted` is what
+    // selects the two lines below; a PWM node leaves it false and renders
+    // exactly as it always did.
+    //
+    // `sliderHomed` earns its line by being the state that makes the node refuse
+    // work: a step-counting servo has no datum until the sweep gives it one, so
+    // an unhomed slider ACKs nothing and moves nowhere. Reading "not homed" on
+    // the panel at the gate is the difference between that and a dead link.
+    bool  sliderFitted = false;
+    bool  sliderHomed  = false;
+    float sliderMm     = 0.0f;   // carriage position from the datum
+
     // -- servo self-test (the wake button held for a second) ------------------
     // Applies to BOTH roles: a node's screen answers for a node's servos. The
     // header band already says which board you are looking at, which is the
@@ -382,6 +396,15 @@ inline Screen _renderBody(const Facts& f) {
         if (f.servoCount >= 0) {
             if (f.status == statusled::ONLINE) _add(s, "servos held");
             else { _pairNum(buf, "servos", f.servoCount); _add(s, buf); }
+        }
+        if (f.sliderFitted) {
+            // Position without a datum is a number that looks like knowledge and
+            // isn't, so an unhomed slider says so instead of showing millimetres.
+            if (!f.sliderHomed) _add(s, "slider: not homed");
+            else {
+                snprintf(buf, sizeof(buf), "slider: %dmm", (int)(f.sliderMm + 0.5f));
+                _add(s, buf);
+            }
         }
         if (f.lastCmdSec >= 0) { _pairNum(buf, "last cmd", f.lastCmdSec, "s ago"); _add(s, buf); }
         return s;

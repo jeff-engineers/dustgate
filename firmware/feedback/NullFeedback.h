@@ -32,6 +32,16 @@ public:
     bool updateHoming() override      { return true; }   // nothing to home: done
     bool updateMoving(int) override   { return true; }   // nowhere to go: arrived
     long stepsForStop(int) override   { return 0; }
+
+    // The other half of updateHoming() returning true. A board with nothing to
+    // home cannot fail to home, so this is false and stays false — the same
+    // "nothing here is broken" answer NullMotorDriver::begin() gives, and for
+    // the same reason: a rackless board must never paint itself red.
+    // The nominal value, because nothing ever measured a real one. Nothing on a
+    // rackless board calls this, but the calibration math is compiled either way.
+    long backoffSteps() const         { return HOME_BACKOFF_STEPS; }
+    bool failed() const               { return false; }
+    const char* failure() const       { return ""; }
 };
 
 #endif // !HAS_LINEAR

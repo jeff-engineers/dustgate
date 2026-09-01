@@ -34,13 +34,34 @@ extern float   g_measuredStepsPerMM;        // calibrated steps/mm (0 = not cali
 extern long    g_measuredSpanSteps;         // near→far span in steps (0 = not calibrated)
 extern char    g_manifoldModel[16];         // "rockler-2.5" | "rockler-4" | "custom"
 extern bool    g_homeIsMaxEndstop;          // which endstop is the home datum (= user's
-                                            //   LEFT): false = D10, true = D11. Homing
-                                            //   always drives to this one.
+                                            //   LEFT): false = PIN_ENDSTOP_HOME, true =
+                                            //   PIN_ENDSTOP_MAX. Homing always drives to
+                                            //   this one. (Said "D10/D11" until 2026-08-28
+                                            //   — the DevKitC's labels, and the XIAO C5
+                                            //   has no D11 pad at all. The board header
+                                            //   is the only thing that knows the pins.)
 
-// Steps ↔ mm conversion using config.h gear parameters
+// Steps ↔ mm conversion using config.h gear parameters.
+//
+// A "STEP" IS WHATEVER THE BOARD'S DRIVE COUNTS IN, and the two are an order of
+// magnitude apart:
+//
+//   ST3215 slider   4096 encoder counts / 165.8mm = 24.70 counts/mm
+//   retired stepper (200 × 16) microsteps / 62.175mm = 51.47 microsteps/mm
+//
+// Putting the branch HERE rather than at the call sites is what let the ST3215
+// slide in behind the existing seam: every mm↔step conversion in the sketch, the
+// homing sweep, the stop table and the calibration store kept working with the
+// units swapped underneath them. The cost is that a bare "steps" in a log line
+// means different distances on different boards — which is why the driver prints
+// mm alongside counts.
 inline float stepsPerMM() {
+#if HAS_LINEAR
+    return ST3215_COUNTS_PER_MM;
+#else
     return (float)(STEPS_PER_REV * MICROSTEPS) /
            ((float)PINION_TEETH * RACK_PITCH_MM);
+#endif
 }
 
 inline long mmToSteps(float mm) {

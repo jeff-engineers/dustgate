@@ -41,6 +41,14 @@ public:
     // Returns true once per home-request event, then clears the flag.
     bool consumeHomeRequest();
 
+    // Returns true once when user types 'reset'. The way back from a latched
+    // fault WITHOUT power-cycling the board: the caller re-attempts the drive,
+    // clears the boot fault flags and drops the estop. It exists because a
+    // serial bus servo can arrive AFTER the board booted — plugging USB in first
+    // and the servo lead second is the ordinary bench order — and because a
+    // servo that has latched an overload needs its torque cycled to come back.
+    bool consumeResetRequest();
+
     // Returns true once when user types 'clearcal'.
     bool consumeClearCalRequest();
 
@@ -69,6 +77,7 @@ private:
     int  _requestedStop;
     bool _eStopPending;
     bool _homePending;
+    bool _resetPending;
     bool _clearCalPending;
     bool _gconfPending;
     bool  _jogPending;

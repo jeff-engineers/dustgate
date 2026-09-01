@@ -42,7 +42,7 @@ struct CalibrationData {
     uint8_t  stopRole[NUM_STOPS + 1];   // PortRole per stop
     char     manifoldModel[16];         // "rockler-2.5" | "rockler-4" | "custom"
     uint8_t  homeIsMaxEndstop;          // which endstop is the HOME datum (= the user's
-                                        //   LEFT). 0 = D10/PIN_ENDSTOP_HOME, 1 = D11/
+                                        //   LEFT). 0 = PIN_ENDSTOP_HOME, 1 =
                                         //   PIN_ENDSTOP_MAX. Set during first-home setup
                                         //   so the carriage always homes to the left end.
     uint16_t crc;

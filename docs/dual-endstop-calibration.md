@@ -147,7 +147,7 @@ sweep's `steps/mm` calibration, over-travel safety, and span check for free.
   `SPAN_CHECK_TOLERANCE_MM`, `STEPS_PER_MM_PLAUSIBILITY_PCT`. Nominal
   `STEPS_PER_REV/MICROSTEPS/PINION_TEETH/RACK_PITCH_MM` stay only as the
   plausibility bound.
-- Homing/limit logic: read both endstops; direction auto-detect; sweep routine;
+- Homing/limit logic: read both endstops; sweep routine;
   both-endstops-as-limits in the motion state machine.
 - `CalibrationStore`: persist the new fields above.
 - API/status: expose far-endstop state, `measuredSpanSteps`, calibrated

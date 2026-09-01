@@ -38,7 +38,25 @@ static const unsigned long kReconnectMaxMs  = 15000;
 // A move that takes longer than this without a STATE(moving=false) is assumed
 // lost rather than left to wedge the move queue forever. Generously longer than
 // SERVO_SWEEP_MS + SERVO_HOLD_MS, and longer than a full-span rack traverse.
-static const unsigned long kMoveTimeoutMs   = 12000;
+//
+// RAISED FROM 12s TO 90s ON 2026-08-28, because the second half of that sentence
+// stopped being true. It was written against the stepper at 19mm/s; the ST3215
+// slider crosses an 8-gate 2.5" span (582mm) at ~42mm/s in 14s, so 12s declared
+// a perfectly healthy traverse lost. Worse, a slider NODE homes at boot and
+// defers the move it was sent until the sweep finds the datum — a sweep that can
+// legitimately take the better part of a minute (see the CALIBRATION note in
+// node/dustgate_node.cpp).
+//
+// A timeout this long is only tolerable because it is not how a move normally
+// ends: arrival is a STATE frame, and this fires only when one never comes. It
+// is the "the node stopped answering" backstop, and sizing it for the slowest
+// legitimate case is the whole job.
+//
+// C++-ONLY, despite living in the file that mirrors nodelink.js frame for frame:
+// there is no MOVE_TIMEOUT_MS on the JS side, because the timeout is the
+// primary's own bookkeeping and never goes on the wire. Not a pair — nothing to
+// keep in step, and no row in CLAUDE.md's table.
+static const unsigned long kMoveTimeoutMs   = 90000;
 
 // -----------------------------------------------------------------------------
 // Primary → secondary

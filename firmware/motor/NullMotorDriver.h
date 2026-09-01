@@ -50,10 +50,14 @@ public:
     void setHome() override            {}
     void enable(bool) override         {}
 
-    // The two the sketch calls on the concrete type rather than through
+    // The ones the sketch calls on the concrete type rather than through
     // MotorDriver*, so they have to exist here too.
     void setMaxSpeed(float)            {}
     long distanceToGo()                { return 0; }
+    // True for the same reason begin() is: there is nothing here to reconnect
+    // TO, and nothing is broken. A board with no rack must not report a retry
+    // as a failure — that would put a red pixel on healthy hardware.
+    bool reconnect()                   { return true; }
     void printDriverRegs() {
         Serial.println(F("[MOTOR] no linear rack in this build (no PIN_TMC_STEP "
                          "in the board header) — no registers to read."));

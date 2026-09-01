@@ -59,6 +59,11 @@ export class DemoApiService extends ApiService {
   constructor(http: HttpClient, hardwareProfile: HardwareProfileService) {
     super(http, hardwareProfile);
     // super() triggers init() via the parent ctor; our override runs instead.
+    // The simulated brain's own capability follows the demo layout — see
+    // syncHasLinear(). Without it the demo shipped a servo brain reporting a
+    // rack, which drew a lone slider port on the brain and four servo ports on
+    // the rack node.
+    this.syncHasLinear();
   }
 
   // ── Bootstrap (no HTTP, no WebSocket) ────────────────────────────────────────
@@ -81,6 +86,7 @@ export class DemoApiService extends ApiService {
       const saved = JSON.parse(raw) as { topology?: unknown; discovered?: unknown };
       if (!saved.topology) return false;
       this.td = createTopologyDevice(saved.topology as Topology);
+      this.syncHasLinear();
       if (saved.discovered) {
         (this.d as unknown as { _discovered?: unknown })._discovered = saved.discovered;
       }
@@ -113,7 +119,6 @@ export class DemoApiService extends ApiService {
       apiKey:        'demo',
       numStops:      0,
       version:       '1.0-demo',
-      motorInverted: false,
       // Taken from the model rather than typed here: this is the owner suffix the
       // demo's own nameOutlet() stamps on a plug, and the UI shows it beside the
       // name field as what WILL be written. Two literals would eventually disagree
@@ -151,6 +156,7 @@ export class DemoApiService extends ApiService {
     const v = isShop(topology) ? validateShop(topology) : validateTopology(topology);
     if (!v.ok) throw new Error('invalid topology: ' + JSON.stringify(v.errors));
     this.td = createTopologyDevice(topology);
+    this.syncHasLinear();
     // Whatever this shop is paired to is on the simulated network from here on,
     // the same as the mock does on PUT. See adoptOutlets().
     model.adoptOutlets(this.d, topology);
@@ -218,7 +224,6 @@ export class DemoApiService extends ApiService {
   private syncInfo(): void {
     if (!this.deviceInfo) return;
     this.deviceInfo.numStops      = this.d.numActiveStops;
-    this.deviceInfo.motorInverted = this.d.motorInverted;
     this.deviceInfo.idleTimeoutSec = this.d.idleTimeoutSec;
   }
 
@@ -380,6 +385,9 @@ export class DemoApiService extends ApiService {
   // fourth board keeps every state on the screen.
   private readonly demoNodes: DiscoveredNode[] = [
     { host: 'dustgate-node-1', ip: '192.168.87.61', board: 'qtpy_s3', servos: 4 },
+    // The slider board: no PWM channels at all, one rack. getNodes() turns
+    // `drives: linear` in the layout into caps {servos: 0, linear: 1}.
+    { host: 'dustgate-slider-1', ip: '192.168.87.65', board: 'xiao_c5', servos: 0 },
     { host: 'dustgate-node-2', ip: '192.168.87.62', board: 'devkitc', servos: 4 },
     { host: 'dustgate-node-3', ip: '192.168.87.63', board: 'xiao_c5', servos: 4,
       claimedBy: 'dustgate-garage', takeable: true },
@@ -442,6 +450,13 @@ export class DemoApiService extends ApiService {
     return [...this.pairedHosts()].map(host => {
       const known = this.demoNodes.find(n => n.host === host);
       const online = host !== 'dustgate-node-2';
+      // CAPS FOLLOW THE LAYOUT, because in the demo the layout IS the hardware.
+      // They were hardcoded to `linear: 0`, so the demo's slider node reported
+      // itself as a four-channel servo board and drew four ports under a rack.
+      // On real hardware caps come from the node's WELCOME and the layout is the
+      // copy; here there is nothing else to ask, so the simulated board is made
+      // to agree with the shop it is standing in rather than contradict it.
+      const linear = this.drivesOfController(host) === 'linear';
       return {
         id: host,                          // the node's host IS its controllerId
         host,
@@ -450,9 +465,27 @@ export class DemoApiService extends ApiService {
         name: this.nameForHost(host),
         board: known?.board ?? 'unknown',
         fw: online ? '1.0.0-demo' : '',
-        caps: { servos: known?.servos ?? 0, linear: 0 },
+        caps: linear ? { servos: 0, linear: 1 } : { servos: known?.servos ?? 0, linear: 0 },
       };
     });
+  }
+
+  /** What the demo layout says a board is flashed to drive. */
+  private drivesOfController(id: string): 'servo' | 'linear' {
+    const cs = (this.td?.topology as { controllers?: Array<{ id: string; drives?: string }> })?.controllers ?? [];
+    return cs.find(c => c.id === id)?.drives === 'linear' ? 'linear' : 'servo';
+  }
+
+  /** The PRIMARY's own capability, reported in status as hasLinear.
+   *
+   *  Same reasoning as caps above: the demo's brain drives servo gates and the
+   *  rack hangs off its own node, so a device reporting hasLinear would put a
+   *  lone slider port on the brain and four servo ports on the rack — precisely
+   *  backwards, which is what it did. */
+  private syncHasLinear(): void {
+    const cs = (this.td?.topology as { controllers?: Array<{ id: string; role: string; drives?: string }> })?.controllers ?? [];
+    const primary = cs.find(c => c.role === 'primary');
+    this.d.hasLinear = primary ? primary.drives === 'linear' : true;
   }
 
   override saveOutletConfig(): Promise<{ ok: boolean }> {
@@ -471,12 +504,6 @@ export class DemoApiService extends ApiService {
     model.setHomedLeft(this.d, homedLeft);
     this.syncInfo();
     this.pushStatus();
-    return Promise.resolve({ ok: true });
-  }
-
-  override setMotorDirection(invert: boolean): Promise<{ ok: boolean }> {
-    model.setMotorInverted(this.d, invert);
-    this.syncInfo();
     return Promise.resolve({ ok: true });
   }
 

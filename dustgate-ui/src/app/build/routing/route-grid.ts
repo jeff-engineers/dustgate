@@ -93,10 +93,28 @@ export function outPorts(n: SceneNode, outlet?: number): Port[] {
   }
   const hw = halfW(n), hh = halfH(n);
   if (n.glyph === 'collector') {
+    // ALL FOUR SIDES, top included (2026-08-28). It was bottom/left/right, and
+    // the missing top made a collector standing directly beside a wide unit take
+    // a long way round: to reach a sliding gate's inlet — which is at the top of
+    // its LEFTMOST cell — the run has to get above the gate, and with no top port
+    // the only way up is out of a side and then a turn.
+    //
+    // That turn needs a free lattice column, and beside an adjacent unit there
+    // isn't one. At CELL 108 the collector's obstacle reaches x+60 and the gate's
+    // starts at x+39, so the two clearance boxes OVERLAP: the ~40px of daylight
+    // you can see between the drawn glyphs is narrower than the router is allowed
+    // to squeeze through. So the run went out the far side and wrapped all the way
+    // around — correct for the ports it had, and obviously silly to look at.
+    //
+    // Rising straight out of the top needs no gap at all. Nothing about airflow
+    // objects: a collector is the ROOT of the duct tree and everything drawn from
+    // it flows inward, so no side of it reads as backwards the way a gate's top
+    // does.
     return [
       { pt: { x: n.x, y: n.y + hh }, dir: 1 },
       { pt: { x: n.x - hw, y: n.y }, dir: 2 },
       { pt: { x: n.x + hw, y: n.y }, dir: 0 },
+      { pt: { x: n.x, y: n.y - hh }, dir: 3 },
     ];
   }
   // A gate never emits from its top — air leaves a gate going downstream, and a duct

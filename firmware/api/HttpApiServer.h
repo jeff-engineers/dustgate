@@ -45,6 +45,14 @@ struct ApiStatus {
                               // lets the UI show continuous movement while jogging,
                               // since currentStop/targetStop don't change during a jog
     bool homed;
+    // Does this board drive a sliding gate at all? Straight from HAS_LINEAR, so
+    // it is a property of the BUILD and cannot disagree with the hardware.
+    //
+    // The app needs it because a board's port count depends on it — four PWM
+    // channels or one rack, never both — and asking the user which they flashed
+    // is asking them to restate something the board already knows. Nodes report
+    // the same fact in their WELCOME caps; this is the primary's copy.
+    bool hasLinear;
     bool enabled;
     bool endstopHome;        // true = home switch currently triggered
     bool endstopMax;         // true = far switch currently triggered
@@ -89,9 +97,6 @@ public:
     // Main loop must read current position and write it to g_stopPositionsMM.
     bool consumeSetStopRequest(int& outIndex); // outIndex: 1-N
 
-    // Motor homing direction override (1 = normal, -1 = inverted).
-    // Written to NVS by the handler; consumed by main loop to update g_homeDirection.
-    bool consumeSetDirectionRequest(int& outDir);
 
     // Active gate count (runtime; bounded by compile-time NUM_STOPS).
     // Written to NVS by the handler; consumed by main loop to update g_numActiveStops.
@@ -308,6 +313,19 @@ private:
     // no more often than every POSITION_PUSH_MIN_MS.
     long              _lastPushedPositionSteps;
     unsigned long     _lastPositionPushMs;
+    // A client has connected and has been told NOTHING yet.
+    //
+    // Status is pushed ON CHANGE ONLY — there is no heartbeat — so a client that
+    // connects after the interesting change already happened hears nothing until
+    // the next one. That is what left the calibration wizard's button reading
+    // "Homing…" forever on 2026-08-28: the socket dropped during a home (a long
+    // run of blocking waits), reconnected once the board was already IDLE and
+    // homed, and no field ever changed again.
+    //
+    // Set from the AsyncTCP task, consumed by the main-loop push, because
+    // textAll() belongs on the main loop here — the same discipline the node
+    // socket's push follows.
+    volatile bool     _statusPushForced = false;
 
     // Pending commands (written by request handlers, read by main loop)
     bool  _estopPending;
@@ -318,14 +336,12 @@ private:
     bool  _jogPending;     float _jogMM;
     bool  _clearCalPending;
     bool  _setStopPending;         int  _setStopIndex;
-    bool  _setDirectionPending;    int  _newDirection;        // 1 or -1
     bool  _setNumGatesPending;     int  _newNumGates;
     bool  _calibratePending;       char _calModel[16];  int _calGateCount;
     bool  _portRolePending;        int  _portRoleIndex; int _portRoleValue;
     bool  _orientationPending;     bool _orientationValue;    // POST /api/config/orientation {homedLeft}
     bool  _servoJogPending;        int  _servoJogChannel; int _servoJogAngle; bool _servoJogDetach;
     String _servoJogController;    // "" = this board; else a secondary's controllerId
-    int   _homeDirection;          // runtime direction; loaded from NVS, updated via API
     int   _cachedNumActiveStops;   // from ApiStatus.numActiveStops; returned in /api/info
     int   _idleTimeoutSec;         // persisted idle power-off timeout; see idleTimeoutSec()
 

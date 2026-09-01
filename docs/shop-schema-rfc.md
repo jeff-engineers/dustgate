@@ -407,8 +407,13 @@ right about the problem and limited by being *at the collector*. The whole point
 is that you are at the saw, wearing hearing protection, and the collector is
 behind you.
 
-Every node is already planned to carry a NeoPixel, which makes an indicator a
-**shop-level output with many surfaces**, not a property of the collector:
+Every node carries a NeoPixel — not planned, *present*: `StatusLed.h` ships on
+every env, and a WS2812 on D2 was lit and showing the right colours on a C5 on
+2026-08-23 ([`wiring/xiao-c5.md`](../firmware/wiring/xiao-c5.md)). It is an
+external pixel with a 330 Ω series resistor today and is part of the PCB design
+for the eventual printed system, so the surface this section needs is already
+there on every board. That makes an indicator a **shop-level output with many
+surfaces**, not a property of the collector:
 
 ```jsonc
 "indicators": [
@@ -417,7 +422,7 @@ Every node is already planned to carry a NeoPixel, which makes an indicator a
 ],
 "alerts": {
   "collectorRunning": { "pattern": "solid",   "color": "green", "scope": "own" },
-  "binNearFull":      { "pattern": "blink",   "color": "red",   "scope": "own" },
+  "binNearFull":      { "pattern": "blink",   "color": "red",   "scope": "system" },
   "clog":             { "pattern": "strobe",  "color": "red",   "scope": "shop" }
 }
 ```
@@ -427,10 +432,91 @@ current rig. *shop* lights **every** node, so a clog strobes at the gate next to
 your hand. That is the thing the manual version can't do, and the reason the
 alert policy belongs to the shop rather than to the collector element.
 
+*system* is the middle one, added 2026-08-31, and it is what `binNearFull`
+actually wants: the big strobe stays on the collector, **and** every board
+serving a gate fed by *that* collector flashes red alongside it. A full bin is
+one system's problem. In a two-collector shop, *shop* scope would strobe boards
+on the other system for a bin that has nothing to do with them, and an alert
+that cries wolf is an alert that gets ignored — which defeats the only purpose
+here, which is that the user notices and empties the thing.
+
+**This set is derived, not stored, and that is the catch.** §14 resolved that a
+board is *not* pinned to a system — a controller may drive selectors in any
+number of systems, because a node is mounted where the cable is convenient. So
+"the boards on this collector" has to be resolved at alert time: collector →
+its system's elements → their selectors → the distinct `controllerId`s. The
+primary owns topology, so it is the only thing that can do it, which is
+consistent with one brain. The unresolved part is a board that serves two
+systems and is in scope for one collector's alert but not the other's: it has
+one NeoPixel and may be asked for two states at once. Nothing decides that yet.
+
 Open before any of this is built: what distinguishes a clog from a full bin from
 a bag that needs shaking, whether a false strobe mid-cut is worse than a missed
 clog, and whether the rangefinder wants to be IR or ultrasonic in an environment
 that is, definitionally, full of airborne dust.
+
+### 7.4 The collector node, concretely (2026-08-31)
+
+Nothing here is built. It is written down because §7.2 left the hardware open
+("that is a hardware decision, not a schema one") and the parts have since been
+picked, so the next person doesn't re-derive them.
+
+**A collector node is a new node type: one sensor in, two lamps out.** It is not
+an actuator bank — it drives no gate — which makes it the first node whose job is
+purely reporting. Everything on it runs off **one 12 V rail**, and the ESP32 runs
+off USB 5 V as usual, so the two grounds must be tied.
+
+| Role | Part | Notes |
+|---|---|---|
+| Bin level in | Banner **QS18VN6D** diffuse photoelectric, 10–30 V dc | `VN` = **NPN, sinking, open-collector**. The `P` variant sources +12 V and would kill a GPIO — check the stamped model, not the notes. |
+| Tripped (bin full) out | 12 V red flashing LED strobe beacon ([B07SC3TNLC](https://www.amazon.com/dp/B07SC3TNLC)) | |
+| Not tripped (level OK) out | Alpinetech L22 22 mm 12 V dc green pilot lamp ([B00HU06OYY](https://www.amazon.com/dp/B00HU06OYY)) | |
+
+Those two lamps are the **existing manual rig** from §7.3 — green when powered,
+blinking red when near full. This node absorbs that rig rather than replacing it
+with something new; the NeoPixel fan-out in §7.3 is what it eventually gains on
+top, not instead. The intent (2026-08-31): the big flashy light stays **on the
+collector**, and a trip *also* flashes red on every board serving a gate fed by
+that collector — `scope: "system"`, not `"shop"` — so the alert reaches whoever
+is standing at a tool with hearing protection on. The strobe is the one you see
+when you turn around; the board NeoPixels are the ones that make you turn
+around.
+
+Note this pins the bin-level sensor as a **photoelectric beam, not the
+rangefinder** §7.1 and §7.2 assume. A diffuse sensor answers "is there dust at
+this height, yes or no" — a threshold at one point, not a distance — so the
+`emptyMm`/`fullMm`/`warnPct` shape in §7.2 does not fit it and would need a
+threshold-style variant of `bin.sensor`. That is unresolved, and the open
+question at the end of §7.3 about IR vs ultrasonic in an airborne-dust
+environment is *not* settled by this: it is sidestepped by asking a coarser
+question.
+
+**Input coupling: optocoupler, decided.** The QS18's NPN output can drive a GPIO
+directly with a pull-up to 3.3 V — the sensor only ever sinks, so the high level
+is whatever the pull-up is tied to, and no level shifter is involved. That is the
+simpler circuit and it is *not* the one chosen. A collector sits at the end of a
+long cable run next to a motor and possibly a VFD, so the node takes the
+isolation instead:
+
+```
+12 V ── 1 kΩ ── PC817 LED anode
+                PC817 LED cathode ── QS18 black (output; sinks when active)
+PC817 collector ── 10 kΩ ── 3.3 V, and to GPIO
+PC817 emitter   ── ESP32 GND
+```
+
+~10 mA through the LED, far inside the QS18's 150 mA sink rating. **This
+inverts the sense** — GPIO low means sensor active — which is the kind of detail
+that reads as a wiring fault at the bench if it isn't written down.
+
+Lamp side: both are 12 V loads, so a low-side logic-level MOSFET (AO3400 /
+2N7002 class) per lamp, gate straight off a GPIO, flyback not needed for LED
+lamps but harmless. The green lamp is ~20 mA; the strobe's draw is unmeasured
+and needs a meter before the FET is sized with any confidence.
+
+**Unverified — none of this has been wired.** The part numbers are chosen, the
+coupling is decided, the current draw of the strobe and the mounting height of
+the QS18 over a full bin are both guesses.
 
 ## 8. Claims: sharing a LAN
 

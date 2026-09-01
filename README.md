@@ -18,7 +18,7 @@ Each tool plugs into a [Shelly smart outlet](https://us.shelly.com). When a tool
 | Feetech/Waveshare ST3215 serial bus servo | Waveshare | Sliding gate — **not built yet** |
 | Rack & pinion | 3d Printed | 20T rack, 15T pinion, 4.145mm pitch |
 | Mechanical Assembly | 3d printed | Integrates with COTS dust gate |
-| NC mechanical limit switch ×2 | Various | Home endstop (D10) + far endstop (D11) — both required |
+| NC mechanical limit switch ×2 | Various | Two endstops — both required. On the XIAO C5 slider build they are D8/D9 (GPIO8/9); see `firmware/wiring/xiao-c5.md` |
 | Shelly Plug US (one per tool) | [us.shelly.com](https://us.shelly.com) | ~$21 each, Gen 4 recommended |
 | Shelly Plug US (dust collector) | [us.shelly.com](https://us.shelly.com) | One more to switch the dust collector on/off |
 | 12–24V DC power supply (≥2A) | Various | Motor power |
@@ -227,7 +227,7 @@ Tap the **⚙ gear icon** to reach Settings, which covers:
 
 - A link back to the **Shop Layout** canvas any time, not just on first run
 - Idle power-off timeout
-- Home endstop side, motor direction, number of gates, port size
+- Home endstop side, number of gates, port size
 - **Forget WiFi** — erases stored credentials and reboots into the setup portal (same effect as the serial `wifireset` command, no serial access needed)
 - **Reset gate calibration** ("Start Over") — clears trained positions and outlet mappings
 

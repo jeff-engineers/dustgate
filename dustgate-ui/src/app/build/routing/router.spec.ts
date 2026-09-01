@@ -7,6 +7,7 @@
 import { type SceneNode, CELL, CLEARANCE, PAD, PRIMARY_PORT_DX, SECONDARY_PORT_DX, TOOL_HALF,
          cellX, cellY, deviceBox, segBoxHit } from './geometry';
 import { type Scene, type RoutedDuct, Router, routeAll, sceneBounds } from './router';
+import { outPorts } from './route-grid';
 
 // ── harness ──────────────────────────────────────────────────────────────────
 
@@ -105,6 +106,19 @@ group('R3  sideways runs enter the tool from the side');
   const s = scene([collector('dc', 0, 0), tool('planer', 1, 0)], [{ childId: 'planer', parentId: 'dc' }]);
   const r = routeAll(s);
   eqPath('collector right port → tool left port, flat', path(r, 'planer'), [[102, 64], [134, 64]]);
+
+  // A collector may leave from its TOP. Without that port, a collector standing
+  // directly beside a wide unit had to reach the unit's top inlet by turning up
+  // out of a SIDE — and beside an adjacent unit the two clearance boxes overlap,
+  // so there is no column to turn on and the run wrapped the long way round.
+  {
+    const c = { id: 'dc', glyph: 'collector' as const, isUnit: false, span: 1, x: 200, y: 200 };
+    const tops = outPorts(c).filter(p => p.dir === 3);
+    ok('a collector offers a top port', tops.length === 1);
+    ok('...at the top edge, on its centreline',
+       tops[0].pt.x === c.x && tops[0].pt.y < c.y);
+    ok('and still offers all three of the others', outPorts(c).length === 4);
+  }
 
   // Mirrored: the tool on the left uses its right port and is equally flat.
   const s2 = scene([collector('dc', 1, 0), tool('planer', 0, 0)], [{ childId: 'planer', parentId: 'dc' }]);

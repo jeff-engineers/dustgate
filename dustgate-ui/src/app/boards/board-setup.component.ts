@@ -41,6 +41,11 @@ interface BoardRow {
   primary: boolean;
   link: NodeLinkState | null;   // null for the primary (it's local) or before the first poll
   gates: number;
+  /** What the board is FLASHED to drive. Not a preference — the PWM bank and the
+   *  serial bus use the same pads, so a board is one or the other from the
+   *  moment it is flashed (`dev.sh flash --slider`). This screen is where you
+   *  tell the app which one you flashed. */
+  drives: 'servo' | 'linear';
 }
 
 @Component({
@@ -249,6 +254,7 @@ export class BoardSetupComponent implements OnInit, OnDestroy {
     // before this layout existed) has no controllers[] entry, and without one the
     // per-gate "Driven by" picker never offers it.
     this.syncLayoutControllers();
+    this.syncDrivesFromHardware();
     this.rebuild();
     // Link state is the point of this screen, so keep it live rather than
     // showing a snapshot that goes stale while someone walks to the shop.
@@ -265,7 +271,7 @@ export class BoardSetupComponent implements OnInit, OnDestroy {
     // call is additive and only writes when something actually changed, so
     // running it repeatedly costs nothing.
     this.poll = setInterval(
-      () => void this.refreshLinks().then(() => { this.syncLayoutControllers(); this.rebuild(); }),
+      () => void this.refreshLinks().then(() => { this.syncLayoutControllers(); this.syncDrivesFromHardware(); this.rebuild(); }),
       3000,
     );
 
@@ -410,9 +416,15 @@ export class BoardSetupComponent implements OnInit, OnDestroy {
 
   subtitle(r: BoardRow): string {
     const bits: string[] = [];
+    // What it drives, in the words the canvas uses for its ports. Read-only: the
+    // board reported this, nobody chose it.
+    bits.push(r.drives === 'linear' ? 'sliding gate' : 'servo valves');
     bits.push(r.primary ? 'primary — runs the app' : (r.host || 'no address'));
     if (r.board) bits.push(r.board);
-    bits.push(`${r.gates} of ${SERVO_CHANNELS_PER_BOARD} gates`);   // plural follows the 4, not the count
+    // A slider board's whole capacity is one rack, so "of 4" would be a lie on it.
+    bits.push(r.drives === 'linear'
+      ? `${r.gates} of 1 sliding gate`
+      : `${r.gates} of ${SERVO_CHANNELS_PER_BOARD} gates`);   // plural follows the 4, not the count
     if (r.link?.fw) bits.push(`fw ${r.link.fw}`);
     return bits.join(' · ');
   }
@@ -440,6 +452,7 @@ export class BoardSetupComponent implements OnInit, OnDestroy {
       host: '',
       board: primary?.board ?? '',
       primary: true,
+      drives: primary?.drives ?? 'servo',
       link: null,
       gates: this.gatesOn(primary?.id ?? 'primary'),
     }];
@@ -450,6 +463,7 @@ export class BoardSetupComponent implements OnInit, OnDestroy {
         host: l.host,
         board: l.board,
         primary: false,
+        drives: (this.controllerDrives(l.id)) ?? 'servo',
         link: l,
         gates: this.gatesOn(l.id),
       });
@@ -458,6 +472,53 @@ export class BoardSetupComponent implements OnInit, OnDestroy {
 
   private gatesOn(controllerId: string): number {
     return this.topo ? selectorsOnController(this.topo, controllerId).length : 0;
+  }
+
+  private controllerDrives(id: string): 'servo' | 'linear' | null {
+    if (!this.topo) return null;
+    const c = controllersOf(this.topo).find((x) => x.id === id);
+    return c?.drives ?? null;
+  }
+
+  /** Write down what each board REPORTED it drives.
+   *
+   *  NOT A USER CHOICE, and it was briefly built as one before the obvious
+   *  objection landed: the board already knows. A node says so in its WELCOME
+   *  caps (`caps.linear`) and the primary says so in its status (`hasLinear`),
+   *  both straight from HAS_LINEAR in the firmware — which is derived from the
+   *  pin map, so it cannot disagree with the hardware. Asking someone to restate
+   *  which build they flashed is asking them to be wrong.
+   *
+   *  Controller.drives is therefore a CACHE of that fact, kept so the canvas can
+   *  draw the right port strip on a board that is asleep or not yet paired. Same
+   *  shape as `board` and the node's `owner` hint: the live report always wins.
+   *  A board never heard from stays 'servo', which is the default and what every
+   *  layout saved before this field meant. */
+  private syncDrivesFromHardware(): void {
+    if (!this.topo) return;
+    let changed = false;
+    for (const c of controllersOf(this.topo)) {
+      const reported = this.reportedDrives(c.id);
+      if (!reported) continue;                      // never heard from it — leave the cache alone
+      const current = c.drives ?? 'servo';
+      if (reported === current) continue;
+      if (reported === 'servo') delete c.drives; else c.drives = 'linear';
+      changed = true;
+    }
+    if (changed) void this.persist();
+  }
+
+  /** What a board SAYS it drives, or null if it has not said. */
+  private reportedDrives(id: string): 'servo' | 'linear' | null {
+    if (!this.topo) return null;
+    const primary = controllersOf(this.topo).find((c) => c.role === 'primary');
+    if (primary && id === primary.id) {
+      const s = this.api.status$.value;
+      return s && typeof s.hasLinear === 'boolean' ? (s.hasLinear ? 'linear' : 'servo') : null;
+    }
+    const link = this.links.find((l) => l.id === id);
+    if (!link || !link.caps) return null;
+    return link.caps.linear > 0 ? 'linear' : 'servo';
   }
 
   /** Keep the layout's controllers[] in step with what's paired — additively, and

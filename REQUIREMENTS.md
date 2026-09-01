@@ -19,8 +19,8 @@ browser on the local network, and the controller routes from that layout.
 | Motor | ~~LDO-42STH48-2004MAH (NEMA 17)~~ | 1.8° step, 2A, matched to TMC2209 |
 | Drive | 15-tooth pinion + 20T/4.145mm pitch rack | ~51.47 steps/mm at 16× microstep |
 | Smart outlets | Shelly Plug US Gen 4 (~$21 ea., us.shelly.com) | Fully local REST API, 1800W/15A, no cloud required |
-| Home endstop | NC mechanical limit switch on D10 | Fail-safe: open wire reads as triggered |
-| Far endstop | NC mechanical limit switch on D11 (required) | Over-travel safety + reference for self-calibration; wired identically (NC, HIGH = triggered) |
+| Home endstop | NC mechanical limit switch on `PIN_ENDSTOP_HOME` (D8/GPIO8 on the XIAO C5 slider build) | Fail-safe: open wire reads as triggered |
+| Far endstop | NC mechanical limit switch on `PIN_ENDSTOP_MAX` (D9/GPIO9), required | Over-travel safety + reference for self-calibration; wired identically (NC, HIGH = triggered) |
 
 
 ### Planned carrier PCB (Task 5)
@@ -191,7 +191,7 @@ Source lives in `dustgate-ui/`. Served from ESP32 LittleFS flash.
 | `/#/build` | **Build canvas** — the setup. Place the collector, run duct, attach gates and tools. Gate badges open calibration in place |
 | `/#/tools` | **Tools** — tag each tool with its smart outlet (identify-by-power) and threshold, or mark it manual |
 | `/#/boards` | **Boards** — discover and pair secondary nodes, assign gates to them |
-| `/#/settings` | **Settings** — idle power-off timeout, home orientation, motor direction, gate count, port size (client-side only), forget-WiFi, reset-calibration |
+| `/#/settings` | **Settings** — idle power-off timeout, home orientation, gate count, port size (client-side only), forget-WiFi, reset-calibration |
 
 - Tool names come from the topology; live state comes from the status endpoint
 - Dust collector toggle drives a Shelly smart plug via `/api/dustcollector/switch`
@@ -264,7 +264,7 @@ npm start
 | Angular front-end | ✅ Done | Live view, Build canvas, Tools, Boards, Settings — served from LittleFS |
 | LittleFS static serving + `/api/info` | ✅ Done | Auto-serves .gz, bootstrap key endpoint |
 | Dust collector (Shelly plug) | ✅ Done | Auto + manual toggle via `/api/dustcollector`; scan-first discovery |
-| Settings screen | ✅ Done | `/#/settings` — idle timeout, orientation, motor direction, gate count, port size, forget-WiFi, reset-calibration |
+| Settings screen | ✅ Done | `/#/settings` — idle timeout, orientation, gate count, port size, forget-WiFi, reset-calibration. Motor direction came OUT on 2026-08-28: it is derived from which endstop is the datum, and a serial bus servo cannot be wired backwards. |
 | Outlet mDNS discovery | ✅ Done | "Scan for outlets" — replaces manual IP entry as the primary path |
 | Idle power-off | ✅ Done | Driver disables after inactivity; forces rehome on next use |
 | Physical e-stop button | ❌ Removed | Hardware deemed too low-power to need one; software e-stop only |

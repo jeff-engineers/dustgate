@@ -14,7 +14,7 @@ import { matchAll } from '../tools/outlet-match';
 import {
   AnyElement, ConfigurableSelector, elementsOf,
   controllersOf, firstFreeChannel, isCalibrated, isLinearSelector, isServoSelector,
-  selectorsOnController,
+  selectorsOnController, SLIDE_MAX_OUTLETS,
 } from '../gates/selector-types';
 import {
   type ShopDoc, type ShopSystem,
@@ -232,6 +232,10 @@ interface BoardVM {
   col: number; row: number; x: number; y: number;
   used: Map<number, string>;
   servoCount: number;
+  /** What this board is FLASHED to drive — Controller.drives in topology.js.
+   *  'servo' is four PWM channels; 'linear' is ONE sliding gate and nothing else.
+   *  Never both: the two builds contend for the same pads. */
+  drives: 'servo' | 'linear';
   dragX?: number; dragY?: number;
 }
 /** One cable run, port → the gate's servo tab. */
@@ -2869,10 +2873,15 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
    *
    *  In memory only. Persisting from here would make merely LOOKING at the canvas
    *  a write, and the Boards screen already saves this the moment it is opened. */
+  /** The paired nodes' last reported state, kept so the port strip can be drawn
+   *  from what each board SAYS it drives rather than from a cached guess. */
+  private nodeLinks: NodeLinkState[] = [];
+
   private async mergePairedBoards(): Promise<void> {
     if (!this.topo) return;
     let links: NodeLinkState[] = [];
     try { links = await this.api.getNodes(); } catch { return; }   // older/offline device
+    this.nodeLinks = links;
     const controllers = this.controllersRaw();
     let added = false;
     for (const l of links) {
@@ -3008,6 +3017,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       const drag = this.bodrag?.id === id ? this.bodrag : null;
       out.push({
         id, name: (c['name'] as string) || id, primary: c['role'] === 'primary',
+        drives: this.drivesOf(c),
         col: cell.col, row: cell.row, x: cellX(cell.col), y: cellY(cell.row), used, servoCount,
         dragX: drag ? this.boardDragPt?.x : undefined,
         dragY: drag ? this.boardDragPt?.y : undefined,
@@ -3104,15 +3114,62 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     return used;
   }
 
+  /** What a board drives, asking the HARDWARE first.
+   *
+   *  `Controller.drives` in the layout is only a cache — it exists so a board
+   *  that is asleep or not yet paired still draws the right strip. The live
+   *  report wins whenever there is one, because it is HAS_LINEAR in the
+   *  firmware, derived from the pin map, and it cannot be out of date the way a
+   *  saved field can. Reading the cache first is what left a freshly flashed
+   *  slider brain drawing four servo ports (2026-08-28): the cache is only
+   *  written when someone opens the Boards screen, and nothing makes them.
+   *
+   *  The primary reports it as `hasLinear` in its status; a node reports it as
+   *  `caps.linear` in its WELCOME, which reaches us through /api/nodes. */
+  private drivesOf(c: RawEl): 'servo' | 'linear' {
+    const cached = (c['drives'] as 'servo' | 'linear' | undefined) ?? 'servo';
+    if (c['role'] === 'primary') {
+      const s = this.api.status$.value;
+      return typeof s?.hasLinear === 'boolean' ? (s.hasLinear ? 'linear' : 'servo') : cached;
+    }
+    const link = this.nodeLinks.find((l) => l.id === c['id']);
+    if (link?.caps && typeof link.caps.linear === 'number') {
+      return link.caps.linear > 0 ? 'linear' : 'servo';
+    }
+    return cached;
+  }
+
   // ── ports and tabs ──────────────────────────────────────────────────────────
-  portsOf(b: BoardVM): number[] { return Array.from({ length: SERVO_PORTS + 1 }, (_, i) => i); }
-  portX(b: BoardVM, ch: number): number { return portPos({ x: this.bx(b), y: this.by(b) }, ch).x - portWidth(ch) / 2; }
-  portY(b: BoardVM, ch: number): number { return portPos({ x: this.bx(b), y: this.by(b) }, ch).y - PORT_H / 2; }
+  /** The ports a board ACTUALLY HAS, which is four or one and never five.
+   *
+   *  This used to return SERVO_PORTS + 1 — the PWM bank plus a stepper port —
+   *  and drew a fifth port on every board in the shop. No board has ever had
+   *  that: the serial bus and PWM channel 1 are the same pads, and config.h
+   *  #errors on a pin map claiming both. A board is flashed as one or the other
+   *  (dev.sh flash --slider), which is what `drives` records. */
+  portsOf(b: BoardVM): number[] {
+    return b.drives === 'linear' ? [SERVO_PORTS]
+                                 : Array.from({ length: SERVO_PORTS }, (_, i) => i);
+  }
+  portX(b: BoardVM, ch: number): number { return portPos({ x: this.bx(b), y: this.by(b) }, ch, b.drives === 'linear').x - portWidth(ch) / 2; }
+  portY(b: BoardVM, ch: number): number { return portPos({ x: this.bx(b), y: this.by(b) }, ch, b.drives === 'linear').y - PORT_H / 2; }
   portW(ch: number): number { return portWidth(ch); }
   portTaken(b: BoardVM, ch: number): boolean { return b.used.has(ch); }
-  portLabel(ch: number): string { return ch >= SERVO_PORTS ? 'ST' : String(ch); }
-  /** Amber, not red: a full board isn't broken, it's out of room. */
-  boardFull(b: BoardVM): boolean { return b.servoCount >= SERVO_PORTS; }
+  /** 'SL' for the slider, not 'ST' — the stepper it was named for went to the
+   *  attic in 2026-08-23 and the port drives a serial bus servo now. */
+  portLabel(ch: number): string { return ch >= SERVO_PORTS ? 'SL' : String(ch); }
+  /** Amber, not red: a full board isn't broken, it's out of room. A slider board
+   *  is full at one gate, because one rack IS its whole capacity. */
+  boardFull(b: BoardVM): boolean {
+    return b.drives === 'linear' ? b.used.has(SERVO_PORTS)
+                                 : b.servoCount >= SERVO_PORTS;
+  }
+  /** How many gates this board can carry, for the "n/N" badge. */
+  portCapacity(b: BoardVM): number { return b.drives === 'linear' ? 1 : SERVO_PORTS; }
+  /** ...and how many it is carrying. */
+  portUsedCount(b: BoardVM): number {
+    return b.drives === 'linear' ? (b.used.has(SERVO_PORTS) ? 1 : 0) : b.servoCount;
+  }
   portLit(b: BoardVM, ch: number): boolean {
     const d = this.wireDrag; if (!d) return false;
     if (!!d.over && d.over.boardId === b.id && d.over.channel === ch) return true;
@@ -3146,7 +3203,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       const board = this.boardOf(n.id);
       return {
         id: n.id, x: this.tabX(n), y: this.tabY(n),
-        channel: linear ? 'ST' : String(ch),
+        channel: linear ? 'SL' : String(ch),
         wired: this.boardCells.has(board),
         shade: this.boardShade(board),
       };
@@ -3384,7 +3441,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   private portUnder(p: Pt): { boardId: string; channel: number } | null {
     for (const b of this.boards()) {
       for (const ch of this.portsOf(b)) {
-        const c = portPos({ x: this.bx(b), y: this.by(b) }, ch);
+        const c = portPos({ x: this.bx(b), y: this.by(b) }, ch, b.drives === 'linear');
         if (Math.abs(p.x - c.x) <= 11 && Math.abs(p.y - c.y) <= 12) return { boardId: b.id, channel: ch };
       }
     }
@@ -3412,10 +3469,22 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     const el = this.elem(gateId);
     if (!el) return { blocked: 'That gate is gone.', note: '' };
     const linear = el['kind'] === 'linear';
-    // The one thing that can't be traded: a stepper port and a servo channel are
-    // different hardware.
-    if (linear && ch < SERVO_PORTS) return { blocked: 'A sliding gate needs the stepper port, not a servo channel.', note: '' };
-    if (!linear && ch >= SERVO_PORTS) return { blocked: 'The stepper port drives a sliding gate, not a valve.', note: '' };
+
+    // THE BOARD ITSELF FIRST. A board is flashed to drive the PWM bank or one
+    // serial-bus slider — the two builds use the same pads, so this is not a
+    // setting anyone can change from here. Refusing with the reason beats
+    // letting someone draw a shop that cannot be built, and it is the same
+    // refusal the topology validator gives.
+    const board = this.boards().find((b) => b.id === boardId);
+    const drives = board?.drives ?? 'servo';
+    if (drives === 'linear' && !linear)
+      return { blocked: 'That board drives a sliding gate, so it has no servo channels. A valve needs its own board.', note: '' };
+    if (drives === 'servo' && linear)
+      return { blocked: 'That board is running the servo-valve firmware, so it has no slider port. Use a board flashed for a sliding gate.', note: '' };
+
+    // Then the port: a slider port and a servo channel are different hardware.
+    if (linear && ch < SERVO_PORTS) return { blocked: 'A sliding gate needs the slider port, not a servo channel.', note: '' };
+    if (!linear && ch >= SERVO_PORTS) return { blocked: 'The slider port drives a sliding gate, not a valve.', note: '' };
     const holder = this.rosterFor(boardId).get(ch);
     if (!holder || holder === gateId) return { blocked: '', note: '' };
     const other = this.elem(holder);
@@ -3680,6 +3749,13 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   private appendLinearOutlets(sel: RawEl, count: number): void {
     const states = sel['states'] as RawEl[]; const branches = sel['branches'] as Branch[];
     const start = branches.length;
+    // Clamped HERE rather than only at the buttons, because four different paths
+    // reach this — the +/- stepper, a wide fork dropped on a duct, a fresh gate,
+    // and a gate-type swap — and a rack past SLIDE_MAX_OUTLETS is one the
+    // topology validator refuses anyway. Better to not build it than to draw it
+    // and fail validation later.
+    count = Math.min(count, SLIDE_MAX_OUTLETS - start);
+    if (count <= 0) return;
     for (let i = start + 1; i <= start + count; i++) {
       states.push({ id: 's' + i, isClosed: false, positionMm: Math.round(i * 82.9 * 10) / 10 });
       branches.push({ id: 'b' + i, opensState: 's' + i, role: 'blocked' });
@@ -3691,6 +3767,18 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   canRemoveOutlets(n: NodeVM): boolean {
     const b = (this.elem(n.id)?.['branches'] as Branch[] | undefined) ?? [];
     return b.length > 2 && b.slice(-2).every(x => x.role === 'blocked');
+  }
+  /** A sliding gate grows in PAIRS, so the ceiling is reached two at a time. */
+  canAddOutlets(n: NodeVM): boolean {
+    const b = (this.elem(n.id)?.['branches'] as Branch[] | undefined) ?? [];
+    return b.length + 2 <= SLIDE_MAX_OUTLETS;
+  }
+  /** Why the + is greyed, for the tooltip. Empty when it isn't. */
+  addOutletsWhyNot(n: NodeVM): string {
+    return this.canAddOutlets(n) ? ''
+      : `A sliding gate tops out at ${SLIDE_MAX_OUTLETS} outlets — every one is its own `
+      + 'flexible duct run radiating from the rack, and past this a trunk with ball '
+      + 'valves is cheaper and tidier than a longer rack.';
   }
   changeOutlets(id: string, delta: number): void {
     const el = this.elem(id); if (!el || el['kind'] !== 'linear' || !this.topo) return;
