@@ -153,8 +153,6 @@ function handler(req, res) {
     return json(res, { ok: true });
   }
 
-  if (pathname === '/api/enable'  && req.method === 'POST') { M.setEnabled(d, true);  return json(res, { ok: true }); }
-  if (pathname === '/api/disable' && req.method === 'POST') { M.setEnabled(d, false); return json(res, { ok: true }); }
   if (pathname === '/api/estop'   && req.method === 'POST') { M.estop(d); broadcast(); return json(res, { ok: true }); }
 
   if (pathname === '/api/move' && req.method === 'POST') {

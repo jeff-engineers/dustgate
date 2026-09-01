@@ -96,8 +96,6 @@ HttpApiServer::HttpApiServer()
       _lastPositionPushMs(0),
       _estopPending(false),
       _homePending(false),
-      _enablePending(false),
-      _disablePending(false),
       _movePending(false),  _moveStop(0),
       _jogPending(false),   _jogMM(0.0f),
       _clearCalPending(false),
@@ -411,8 +409,6 @@ void HttpApiServer::update(const ApiStatus& status
 
 bool HttpApiServer::consumeEStopRequest()   { CONSUME(_estopPending)   }
 bool HttpApiServer::consumeHomeRequest()    { CONSUME(_homePending)    }
-bool HttpApiServer::consumeEnableRequest()  { CONSUME(_enablePending)  }
-bool HttpApiServer::consumeDisableRequest() { CONSUME(_disablePending) }
 bool HttpApiServer::consumeClearCalRequest(){ CONSUME(_clearCalPending)}
 
 bool HttpApiServer::consumeMoveRequest(int& outStop) {
@@ -1342,26 +1338,6 @@ void HttpApiServer::registerRoutes() {
         DEBUG_PRINTLN(F("[UI] Home requested."));
         xSemaphoreTake(_mutex, portMAX_DELAY);
         _homePending = true;
-        xSemaphoreGive(_mutex);
-        sendOk(req);
-    });
-
-    // POST /api/enable
-    _server.on("/api/enable", HTTP_POST, [this](AsyncWebServerRequest* req) {
-        if (!checkAuth(req)) return;
-        DEBUG_PRINTLN(F("[UI] Enable requested."));
-        xSemaphoreTake(_mutex, portMAX_DELAY);
-        _enablePending = true;
-        xSemaphoreGive(_mutex);
-        sendOk(req);
-    });
-
-    // POST /api/disable
-    _server.on("/api/disable", HTTP_POST, [this](AsyncWebServerRequest* req) {
-        if (!checkAuth(req)) return;
-        DEBUG_PRINTLN(F("[UI] Disable requested."));
-        xSemaphoreTake(_mutex, portMAX_DELAY);
-        _disablePending = true;
         xSemaphoreGive(_mutex);
         sendOk(req);
     });

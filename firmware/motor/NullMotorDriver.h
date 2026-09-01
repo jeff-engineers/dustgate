@@ -59,8 +59,8 @@ public:
     // as a failure — that would put a red pixel on healthy hardware.
     bool reconnect()                   { return true; }
     void printDriverRegs() {
-        Serial.println(F("[MOTOR] no linear rack in this build (no PIN_TMC_STEP "
-                         "in the board header) — no registers to read."));
+        Serial.println(F("[MOTOR] no linear rack in this build (the board header "
+                         "wires no serial-servo bus) — no registers to read."));
     }
 
 private:

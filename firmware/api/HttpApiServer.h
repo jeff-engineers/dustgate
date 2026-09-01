@@ -88,8 +88,6 @@ public:
     // ------------------------------------------------------------------
     bool consumeEStopRequest();
     bool consumeHomeRequest();
-    bool consumeEnableRequest();
-    bool consumeDisableRequest();
     bool consumeMoveRequest(int& outStop);      // outStop: 0 = home, 1-N = gate
     bool consumeJogRequest(float& outMM);      // outMM: + = away from home
     bool consumeClearCalRequest();
@@ -330,8 +328,6 @@ private:
     // Pending commands (written by request handlers, read by main loop)
     bool  _estopPending;
     bool  _homePending;
-    bool  _enablePending;
-    bool  _disablePending;
     bool  _movePending;    int   _moveStop;
     bool  _jogPending;     float _jogMM;
     bool  _clearCalPending;

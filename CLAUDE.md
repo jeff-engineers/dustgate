@@ -130,10 +130,12 @@ already-resolved numbers off the wire — only *calibration* is local. Read the
 CALIBRATION note at the top of `firmware/node/dustgate_node.cpp` before changing
 any of it.
 
-The retired **stepper** code is in `firmware/attic/linear/` (not compiled, kept
-to repurpose); read its README first. `LimitSwitchDistance` came back OUT of the
-attic on 2026-08-28 — the endstops outlived the stepper, because a step-counting
-bus servo has no datum either.
+The **stepper is gone entirely** as of 2026-08-28 — driver, TMC2209 params,
+DevKitC pin map and all. It spent a week in `firmware/attic/linear/` waiting to
+be repurposed and the ST3215 driver ended up owing it nothing but the
+`MotorDriver` contract. `LimitSwitchDistance` is the one part that came back:
+the endstops outlived the stepper, because a step-counting bus servo has no
+datum either. `git log` has the rest.
 
 **Every env assumes a screen.** A board header that names `PIN_OLED_*` gets the
 driver, and an I²C ACK at 0x3C at boot decides whether a panel is really there.

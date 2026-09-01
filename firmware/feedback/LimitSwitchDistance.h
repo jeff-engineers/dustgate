@@ -1,9 +1,9 @@
 // =============================================================================
 // LimitSwitchDistance.h — two endstops and a step count, for the sliding gate.
 //
-// BACK FROM THE ATTIC, 2026-08-28, for the ST3215 slider. It was retired with
-// the stepper on 2026-08-23 because HAS_LINEAR derived from PIN_TMC_STEP and no
-// board defined one; it comes back unchanged in shape because the reason it
+// THE ONE PIECE OF THE STEPPER RIG THAT SURVIVED IT. Retired with the stepper on
+// 2026-08-23 and brought back for the ST3215 slider on 2026-08-28, unchanged in
+// shape, because the reason it
 // existed never went away. A bus servo in stepping mode reports how much of the
 // last command is outstanding, never where the shaft is, so its zero does not
 // survive a power cycle — and the homing sweep of
@@ -13,7 +13,7 @@
 // WHAT CHANGED IN THE PORT: nothing structural. The arithmetic here counts
 // "steps", and on this board a step is one encoder count instead of one
 // microstep — utils/MotionMath.h absorbs that, so the sweep, the backoff and the
-// span all read the same as they did against the stepper. The attic README
+// span all read the same as they did against the stepper. The retirement note
 // guessed this file's step arithmetic would have to go; it didn't, because the
 // unit change happened one level down.
 //

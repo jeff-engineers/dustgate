@@ -58,6 +58,13 @@
 // NB: HOME_BACKOFF_STEPS does NOT affect pitch (cancels); it only shifts the
 // steps/mm span — the sweep must add HOME_BACKOFF_STEPS back to the home→far step
 // count before dividing by span mm.
+// firstGateOffset / endMargin are DOCUMENTATION now, not inputs. The firmware
+// places gates by centring the array in the span it MEASURED, so the only
+// profile number it reads is the pitch. They stay because the JS side keeps its
+// own copies (MANIFOLD_PROFILES in device-model.js models a span from them) and
+// because they record what the manifold is — but nothing here computes from
+// them, and the one function that did (manifoldProfile(), the nominal-offset
+// placement this replaced) was deleted on 2026-08-28.
 #define MANIFOLD_2_5_FIRST_GATE_OFFSET_MM   1.0f
 // Rockler Dust Right 2.5" — 83.57mm, CORRECTED ON HARDWARE 2026-08-28.
 //
@@ -117,47 +124,27 @@
                      "Stop 12", "Stop 13", "Stop 14", "Stop 15", "Stop 16" }
 
 // -----------------------------------------------------------------------------
-// MOTION PARAMETERS — RETIRED STEPPER GEOMETRY. NOT A BUILD SPEC.
-// Hardware: LDO-42STH48-2004MAH motor + 15-tooth pinion + 20-tooth rack
+// MOTION PARAMETERS
 //
-// This whole block belongs to the stepper slider that now lives in
-// firmware/attic/linear/. HAS_LINEAR is 0 on every target, so nothing moves on
-// these numbers; they survive only because stepsPerMM() in utils/MotionMath.h
-// and CalibrationStore::print() still compile against them. Freeze them —
-// changing a value here silently changes every mm↔step conversion in the
-// primary build for no gain.
+// The stepper's geometry used to live here — STEPS_PER_REV, MICROSTEPS,
+// PINION_TEETH, RACK_PITCH_MM — frozen and unused, kept only because
+// stepsPerMM() had an arm that computed from them. All four went with the
+// stepper on 2026-08-28. The live rack geometry is the ST3215 block further
+// down, next to the capability it depends on.
 //
-// ⚠ RACK_PITCH_MM IS AN ARTIFACT, AND IT IS NOT A MODULE. It was back-derived
-// (gate pitch 82.9mm ÷ an ASSUMED 20 teeth), and it is a LINEAR PITCH — module
-// is pitch/π. Typing 4.145 into a CAD generator's Module field makes every tooth
-// π× too coarse; that cost a 255mm rack where an 82.9mm one was wanted
-// (2026-08-28). It also implies module 1.3193, which is not a standard module
-// and not a rack anyone can buy — the tell that it was never measured.
+// One of them is worth remembering as a cautionary tale rather than a constant:
+// RACK_PITCH_MM 4.145 was NOT A MODULE and not a measurement. It was
+// back-derived (gate pitch 82.9mm ÷ an ASSUMED 20 teeth) and it was a LINEAR
+// pitch — module is pitch/π — so typing it into a CAD generator's Module field
+// made every tooth π× too coarse and produced a 255mm rack where an 82.9mm one
+// was wanted. It implied module 1.3193, which is not a standard module and not a
+// rack anyone can buy: the tell that it had never been measured. The rack that
+// replaced it, and the derivation that keeps this from happening again, is
+// §5.0.3 of firmware/wiring/st3215-bench.md.
 //
-// The real rack the ST3215 slider gets built to — 15 teeth per 82.9mm segment,
-// module 1.7592, 30T pinion, 165.8 mm/rev, and the seam rules that let it print
-// in chainable pieces — is §5.0.3 of firmware/wiring/st3215-bench.md. When the
-// ST3215 driver lands, its counts↔mm conversion comes from there and these
-// defines go to the attic with the rest of the stepper.
+// Speeds and the homing backoff still live here, and the ST3215 block overrides
+// them on a board that has a rack.
 // -----------------------------------------------------------------------------
-
-// Standard 1.8° step angle → 200 native steps/rev
-#define STEPS_PER_REV       200
-
-// Microstepping divisor (set via TMC2209 UART at startup)
-#define MICROSTEPS           16
-
-// Pinion: 15 teeth
-#define PINION_TEETH         15
-
-// Rack: 82.9mm / 20 teeth = 4.145mm tooth pitch — see the warning above
-#define RACK_PITCH_MM       4.145f
-
-// Derived motion values (for reference):
-//   Travel per revolution  = 15 × 4.145mm = 62.175mm
-//   Steps per mm (16× µs)  = (200 × 16) / 62.175 = ~51.47 steps/mm
-//   Steps per gate-to-gate = 82.9mm × 51.47 = ~4270 steps (measured: 4270 ✓)
-//   Endstop to gate 1      = ~155 steps = 3.01mm (measured)
 
 // ── Homing: which step direction moves TOWARD the datum ─────────────────────
 //

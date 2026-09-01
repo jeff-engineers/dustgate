@@ -11,12 +11,12 @@
 //
 // Configuration is entirely in config.h; the pin map is boards/xiao_c5.h.
 // Libraries come from platformio.ini, not the Arduino Library Manager — and
-// AccelStepper/TMCStepper are deliberately ABSENT. If a build starts asking for
-// them, something re-included the attic's stepper path.
+// AccelStepper/TMCStepper are deliberately ABSENT. Nothing here generates steps
+// any more; the rack is a serial bus servo.
 //
 // (This header named an ESP32-S2 Feather and a TMC2209 breakout until
-// 2026-08-28. Neither has been a target since the fleet was retired on
-// 2026-08-23; the stepper is in firmware/attic/linear/.)
+// 2026-08-28. Neither had been a target since the fleet was retired on
+// 2026-08-23, and the stepper itself was deleted the same day.)
 //
 // State machine:
 //   STARTUP → HOMING → IDLE → MOVING → AT_STOP
@@ -122,22 +122,6 @@ void loadCalibration() {
     }
 }
 
-// ── Manifold profile (mirror shared/device-model MANIFOLD_PROFILES) ──────────
-// Fills gatesMm[1..gateCount] and spanMm for a known model. Returns false for
-// 'custom'/unknown (→ manual jog, no auto-placement).
-static bool manifoldProfile(const char* model, int gateCount, float* gatesMm, float& spanMm) {
-    float first, pitch, endMargin;
-    if (strcmp(model, "rockler-2.5") == 0) {
-        first = MANIFOLD_2_5_FIRST_GATE_OFFSET_MM; pitch = MANIFOLD_2_5_GATE_PITCH_MM; endMargin = MANIFOLD_2_5_END_MARGIN_MM;
-    } else if (strcmp(model, "rockler-4") == 0) {
-        first = MANIFOLD_4_FIRST_GATE_OFFSET_MM;   pitch = MANIFOLD_4_GATE_PITCH_MM;   endMargin = MANIFOLD_4_END_MARGIN_MM;
-    } else {
-        return false;
-    }
-    for (int i = 1; i <= gateCount; i++) gatesMm[i] = first + (i - 1) * pitch;
-    spanMm = first + (gateCount - 1) * pitch + endMargin;
-    return true;
-}
 
 // Reference-sweep parameters, captured when a /api/calibrate request is consumed
 // and used by the STATE_HOMING → STATE_CALIBRATING flow.
@@ -949,7 +933,7 @@ void setup() {
         DEBUG_PRINT(F("  control="));         Serial.println(okControl ? "ok" : "FAIL");
         // Name the drive this board actually has. This said "TMC2209 UART"
         // until 2026-08-28, which sent anyone reading it to check a stepper
-        // driver that has been in the attic since 2026-08-23 — on a board whose
+        // driver that was retired on 2026-08-23 and deleted on 2026-08-28 — on a board whose
         // only motor is a servo on a serial bus.
         snprintf(g_faultStages, sizeof(g_faultStages), "%s%s%s",
                  okMotor    ? "" : (HAS_LINEAR ? "motor(ST3215 bus) " : "motor "),

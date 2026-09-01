@@ -27,7 +27,7 @@ The reference build is a 2.5" dust port system, with adjacent gates spaced about
 
 For wiring details see [`firmware/WIRING.md`](firmware/WIRING.md) (shop-wide) and
 the board file it links: [XIAO ESP32C5](firmware/wiring/xiao-c5.md). The retired
-rack wiring is in [`firmware/attic/linear/`](firmware/attic/linear/README.md).
+rack wiring is in [`firmware/wiring/st3215-bench.md`](firmware/wiring/st3215-bench.md).
 
 ---
 
@@ -256,7 +256,7 @@ firmware/         Firmware (Arduino / PlatformIO)
   config.h               All compile-time settings
   firmware.ino    Main sketch + state machine
   api/                   HTTP REST + WebSocket server
-  attic/linear/          Retired stepper + limit-switch code, kept to repurpose
+  motor/st3215/          ST3215 serial bus servo: the wire protocol and the rack driver
                          for the ST3215 slider — NOT compiled (see its README)
   boards/                Per-board pin maps (xiao_c5)
   control/               Control input modes + the v2 routing brain:

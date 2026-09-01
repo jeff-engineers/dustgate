@@ -268,8 +268,6 @@ export class DemoApiService extends ApiService {
     return Promise.resolve({ ok: true });
   }
 
-  override enable():  Promise<{ ok: boolean }> { return Promise.resolve(model.setEnabled(this.d, true)); }
-  override disable(): Promise<{ ok: boolean }> { return Promise.resolve(model.setEnabled(this.d, false)); }
 
   // ── Dust collector ──────────────────────────────────────────────────────────────
 

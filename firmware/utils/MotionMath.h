@@ -55,12 +55,19 @@ extern bool    g_homeIsMaxEndstop;          // which endstop is the home datum (
 // units swapped underneath them. The cost is that a bare "steps" in a log line
 // means different distances on different boards — which is why the driver prints
 // mm alongside counts.
+//
+// A BOARD WITH NO RACK RETURNS 1. It used to compute the retired stepper's
+// 51.47 microsteps/mm, which was a real-looking number for hardware that does
+// not exist on any target: the conversions it feeds — mmToSteps, stepsForStop,
+// the whole stop table — are only ever reached through NullMotorDriver and
+// NullFeedback, which move nothing and answer 0. One is the honest scale for a
+// unit that has no length, and it keeps the arithmetic from producing plausible
+// distances nobody can travel.
 inline float stepsPerMM() {
 #if HAS_LINEAR
     return ST3215_COUNTS_PER_MM;
 #else
-    return (float)(STEPS_PER_REV * MICROSTEPS) /
-           ((float)PINION_TEETH * RACK_PITCH_MM);
+    return 1.0f;
 #endif
 }
 

@@ -327,8 +327,6 @@ export class ApiService {
   moveToStop(stop: number)  { return this.post('/api/move', { stop }); }
   jog(mm: number)           { return this.post('/api/jog', { mm }); }
   estop()                   { return this.post('/api/estop'); }
-  enable()                  { return this.post('/api/enable'); }
-  disable()                 { return this.post('/api/disable'); }
   clearCal()                { return this.post('/api/clearcal'); }
 
   // ── Outlet commands ───────────────────────────────────────────────────────────

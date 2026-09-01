@@ -276,7 +276,10 @@ function saveStop(d, index) {
 function estop(d) { d.state = 'ERROR'; return { ok: true }; }
 
 /** Vestigial enable/disable (firmware's isEnabled() is hardcoded true). */
-function setEnabled(d, on) { d.enabled = !!on; return { ok: true }; }
+// setEnabled went with /api/enable and /api/disable on 2026-08-28 — nothing
+// called them, and the firmware's flags were never consumed, so the endpoints
+// answered 200 and did nothing. `enabled` itself STAYS in the status: the
+// firmware reports control.isEnabled() there for real.
 
 // Record which side the actuator homed to. Home is always the user's LEFT endstop
 // and gates are numbered 1..N left→right from it, so there's nothing to reorder in
@@ -698,7 +701,7 @@ module.exports = {
   // lifecycle
   createDevice, statusView, infoView,
   // motion
-  beginHome, completeHome, beginMove, completeMove, beginJog, completeJog, estop, setEnabled,
+  beginHome, completeHome, beginMove, completeMove, beginJog, completeJog, estop,
   // calibration / config
   saveStop, setHomedLeft, setNumGates, setIdleTimeout, clearCal,
   // dual-endstop calibration + port roles
