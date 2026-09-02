@@ -38,6 +38,10 @@ export interface SystemStatus {
   positionMM?: number;    // raw actuator position, independent of any saved stop (used to
                           // render continuous movement while jogging between stops)
   homed: boolean;
+  /** Does this board drive a sliding gate? Straight from HAS_LINEAR in the
+   *  firmware, so it is a property of the BUILD. The Boards screen turns it into
+   *  Controller.drives; nodes report the same fact in their WELCOME caps. */
+  hasLinear?: boolean;
   enabled: boolean;
   endstopHome: boolean;
   manualOverride?: boolean;   // true while user-commanded move blocks outlet auto-select
@@ -161,7 +165,6 @@ export interface DeviceInfo {
   apiKey: string;
   numStops: number;
   version: string;
-  motorInverted?: boolean;  // true = homing direction was auto-flipped during homing
   idleTimeoutSec?: number;  // seconds of inactivity before the driver powers off; 0 = never
   manifoldModel?: string;   // manifold profile last calibrated against
   stepsPerMm?: number;      // calibrated steps/mm
@@ -324,8 +327,6 @@ export class ApiService {
   moveToStop(stop: number)  { return this.post('/api/move', { stop }); }
   jog(mm: number)           { return this.post('/api/jog', { mm }); }
   estop()                   { return this.post('/api/estop'); }
-  enable()                  { return this.post('/api/enable'); }
-  disable()                 { return this.post('/api/disable'); }
   clearCal()                { return this.post('/api/clearcal'); }
 
   // ── Outlet commands ───────────────────────────────────────────────────────────
@@ -486,14 +487,7 @@ export class ApiService {
     return this.post('/api/config/orientation', { homedLeft });
   }
 
-  /**
-   * Flip the motor homing direction (normal vs inverted).
-   * Use when the actuator runs away from the endstop instead of toward it.
-   */
-  setMotorDirection(invert: boolean) {
-    if (this.deviceInfo) this.deviceInfo.motorInverted = invert;
-    return this.post('/api/config/motor', { invertDirection: invert });
-  }
+
 
   /**
    * Set the number of active blast gates.

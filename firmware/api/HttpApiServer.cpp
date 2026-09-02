@@ -96,19 +96,15 @@ HttpApiServer::HttpApiServer()
       _lastPositionPushMs(0),
       _estopPending(false),
       _homePending(false),
-      _enablePending(false),
-      _disablePending(false),
       _movePending(false),  _moveStop(0),
       _jogPending(false),   _jogMM(0.0f),
       _clearCalPending(false),
       _setStopPending(false),      _setStopIndex(0),
-      _setDirectionPending(false), _newDirection(HOME_DIRECTION_DEFAULT),
       _setNumGatesPending(false),  _newNumGates(0),
       _calibratePending(false),    _calGateCount(0),
       _portRolePending(false),     _portRoleIndex(0), _portRoleValue(0),
       _orientationPending(false),  _orientationValue(false),
       _servoJogPending(false),     _servoJogChannel(0), _servoJogAngle(0), _servoJogDetach(false),
-      _homeDirection(HOME_DIRECTION_DEFAULT),
       _cachedNumActiveStops(0),
       _idleTimeoutSec(IDLE_TIMEOUT_SEC_DEFAULT)
 #ifdef CONTROL_SMART_OUTLET
@@ -154,7 +150,6 @@ bool HttpApiServer::begin() {
         prefs.begin(NVS_NS, true);
         // Mounting orientation now lives in CalibrationData (persisted by the main
         // loop), reported here via ApiStatus each update() — not loaded from NVS.
-        _homeDirection = prefs.getInt("home_dir",  HOME_DIRECTION_DEFAULT);
         _cachedNumActiveStops = prefs.getInt("num_gates", 0); // 0 = not yet configured
         _idleTimeoutSec = prefs.getInt("idle_to", IDLE_TIMEOUT_SEC_DEFAULT);
         prefs.end();
@@ -180,9 +175,15 @@ bool HttpApiServer::begin() {
     }
 
     // WebSocket cleanup handler — free client resources on disconnect
-    _ws.onEvent([](AsyncWebSocket*, AsyncWebSocketClient*, AwsEventType type,
-                   void*, uint8_t*, size_t) {
-        if (type == WS_EVT_DISCONNECT || type == WS_EVT_ERROR) {
+    _ws.onEvent([this](AsyncWebSocket*, AsyncWebSocketClient*, AwsEventType type,
+                       void*, uint8_t*, size_t) {
+        if (type == WS_EVT_CONNECT) {
+            // A fresh client knows nothing, and the next push only happens when
+            // something CHANGES — so without this it waits for the board to do
+            // something rather than being told what the board already is.
+            // See _statusPushForced.
+            _statusPushForced = true;
+        } else if (type == WS_EVT_DISCONNECT || type == WS_EVT_ERROR) {
             // AsyncWebServer handles cleanup; nothing extra needed here
         }
     });
@@ -370,7 +371,11 @@ void HttpApiServer::update(const ApiStatus& status
     bool positionDrifted = driftSteps > (long)stepsPerMM()
                         && (millis() - _lastPositionPushMs) >= POSITION_PUSH_MIN_MS;
 
-    bool changed = fieldsChanged || positionDrifted;
+    // A newly connected client counts as a change: from its point of view
+    // everything is new.
+    const bool forced = _statusPushForced;
+    bool changed = fieldsChanged || positionDrifted || forced;
+    if (forced) _statusPushForced = false;
 
     if (!changed && _ws.count() == 0) return; // nothing to do
 
@@ -404,8 +409,6 @@ void HttpApiServer::update(const ApiStatus& status
 
 bool HttpApiServer::consumeEStopRequest()   { CONSUME(_estopPending)   }
 bool HttpApiServer::consumeHomeRequest()    { CONSUME(_homePending)    }
-bool HttpApiServer::consumeEnableRequest()  { CONSUME(_enablePending)  }
-bool HttpApiServer::consumeDisableRequest() { CONSUME(_disablePending) }
 bool HttpApiServer::consumeClearCalRequest(){ CONSUME(_clearCalPending)}
 
 bool HttpApiServer::consumeMoveRequest(int& outStop) {
@@ -424,13 +427,6 @@ bool HttpApiServer::consumeSetStopRequest(int& outIndex) {
     return v;
 }
 
-bool HttpApiServer::consumeSetDirectionRequest(int& outDir) {
-    xSemaphoreTake(_mutex, portMAX_DELAY);
-    bool v = _setDirectionPending;
-    if (v) { outDir = _newDirection; _setDirectionPending = false; }
-    xSemaphoreGive(_mutex);
-    return v;
-}
 
 bool HttpApiServer::consumeSetNumGatesRequest(int& outN) {
     xSemaphoreTake(_mutex, portMAX_DELAY);
@@ -769,7 +765,10 @@ void HttpApiServer::registerRoutes() {
         // exactly the question that kept coming up during hardware debugging.
         doc["built"]         = __DATE__ " " __TIME__;
         doc["uptimeSec"]     = (uint32_t)(millis() / 1000);
-        doc["motorInverted"]  = (_homeDirection < 0);    // true when direction was flipped
+        // motorInverted is GONE (2026-08-28). There is no runtime direction to
+        // report: it is derived from which endstop is the datum. A serial bus
+        // servo cannot be wired backwards, which is the only thing the flip ever
+        // corrected for.
         doc["idleTimeoutSec"] = _idleTimeoutSec;
         doc["manifoldModel"]  = g_manifoldModel;
         doc["stepsPerMm"]     = serialized(String(g_measuredStepsPerMM > 0 ? g_measuredStepsPerMM : stepsPerMM(), 3));
@@ -828,36 +827,6 @@ void HttpApiServer::registerRoutes() {
             xSemaphoreGive(_mutex);
             DEBUG_PRINT(F("[API] Home side: homed on the "));
             DEBUG_PRINTLN(homedLeft ? F("left") : F("right"));
-            sendOk(req);
-        }
-    );
-
-    // ------------------------------------------------------------------
-    // POST /api/config/motor   body: {"invertDirection": true|false}
-    // Flips the homing direction.  Persists to NVS; takes effect immediately
-    // via the pending-command pattern (main loop updates g_homeDirection).
-    // ------------------------------------------------------------------
-    _server.on("/api/config/motor", HTTP_POST,
-        [](AsyncWebServerRequest* req) {},
-        nullptr,
-        [this](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t, size_t) {
-            if (!checkAuth(req)) return;
-            StaticJsonDocument<64> doc;
-            if (deserializeJson(doc, data, len)) { sendError(req, 400, "invalid JSON"); return; }
-            if (!doc.containsKey("invertDirection")) { sendError(req, 400, "missing invertDirection"); return; }
-            bool invert = doc["invertDirection"].as<bool>();
-            int  dir    = invert ? -HOME_DIRECTION_DEFAULT : HOME_DIRECTION_DEFAULT;
-            xSemaphoreTake(_mutex, portMAX_DELAY);
-            _homeDirection       = dir;
-            _setDirectionPending = true;
-            _newDirection        = dir;
-            xSemaphoreGive(_mutex);
-            Preferences prefs;
-            prefs.begin(NVS_NS, false);
-            prefs.putInt("home_dir", dir);
-            prefs.end();
-            DEBUG_PRINT(F("[API] Motor direction: "));
-            DEBUG_PRINTLN(invert ? F("inverted") : F("normal"));
             sendOk(req);
         }
     );
@@ -1373,26 +1342,6 @@ void HttpApiServer::registerRoutes() {
         sendOk(req);
     });
 
-    // POST /api/enable
-    _server.on("/api/enable", HTTP_POST, [this](AsyncWebServerRequest* req) {
-        if (!checkAuth(req)) return;
-        DEBUG_PRINTLN(F("[UI] Enable requested."));
-        xSemaphoreTake(_mutex, portMAX_DELAY);
-        _enablePending = true;
-        xSemaphoreGive(_mutex);
-        sendOk(req);
-    });
-
-    // POST /api/disable
-    _server.on("/api/disable", HTTP_POST, [this](AsyncWebServerRequest* req) {
-        if (!checkAuth(req)) return;
-        DEBUG_PRINTLN(F("[UI] Disable requested."));
-        xSemaphoreTake(_mutex, portMAX_DELAY);
-        _disablePending = true;
-        xSemaphoreGive(_mutex);
-        sendOk(req);
-    });
-
     // POST /api/estop
     _server.on("/api/estop", HTTP_POST, [this](AsyncWebServerRequest* req) {
         if (!checkAuth(req)) return;
@@ -1792,6 +1741,7 @@ String HttpApiServer::buildStatusJson(const ApiStatus& s
     doc["positionSteps"] = s.positionSteps;
     doc["positionMM"]    = s.positionMM;
     doc["homed"]         = s.homed;
+    doc["hasLinear"]     = s.hasLinear;
     doc["enabled"]       = s.enabled;
     doc["endstopHome"]   = s.endstopHome;
     doc["farEndstop"]    = s.endstopMax;

@@ -23,7 +23,9 @@
 > [`firmware/boards/xiao_c5.h`](../boards/xiao_c5.h). If this file and that header
 > ever disagree, the header is right — the build reads it.
 
-**Role:** servo-only. Four PWM gates, no stepper, no endstops — as a secondary
+**Role:** either personality. Four PWM gates and no endstops, *or* one ST3215
+serial-bus servo on D6/D7 with two endstops on D8/D9 — never both, and
+`-DDUSTGATE_SERVO_BUS` picks. In the PWM build: no stepper, no endstops — as a secondary
 node (`xiao_c5`) or as the shop's primary (`xiao_c5_primary`). **Both roles have
 run on this board.** The primary was proven 2026-08-22: it joins WiFi, serves the
 Angular UI well, and drives servos. Still untested in that role: talking to a
@@ -165,12 +167,21 @@ directly, with the bulk and bypass caps at the servo terminals (§2) — the pad
 above carry signal and ground only. The most expensive mistake available on this
 carrier is running four servos' current through the XIAO's 5V pad.
 
-**Deliberately absent: motor and endstop pins.** `config.h` derives `HAS_LINEAR`
-from whether `PIN_TMC_STEP` is defined, so leaving them out is what makes this a
-servo-only build — the stepper driver, the feedback system and the endstop
-supervisor all compile out. Defining them "to keep the interface uniform" would
-silently re-enable code with no hardware behind it, and on this part would
-re-introduce the single-core step-timing problem above.
+**Absent from the PWM build, present in the slider build.** `config.h` derives
+`HAS_LINEAR` from whether the board header defines `PIN_SERVO_BUS_TX` — not from
+`PIN_TMC_STEP`, which is what this note used to say and stopped being true when
+the stepper went to the attic on 2026-08-23. So the same header presents two pin
+maps and `-DDUSTGATE_SERVO_BUS` chooses:
+
+- **without it** (`xiao_c5_primary`, `xiao_c5`): four PWM pads, no bus, no
+  endstops, `HAS_LINEAR` 0. The driver, the feedback system and the endstop
+  supervisor all compile out.
+- **with it** (`xiao_c5_linear_primary`, `xiao_c5_linear`, `xiao_c5_bus_bench`):
+  the bus on D6/D7 and the endstops on D8/D9, `HAS_LINEAR` 1, no PWM block at
+  all.
+
+Defining both "to keep the interface uniform" is not merely untidy — `config.h`
+`#error`s on it. PWM and serial never share a board.
 
 ---
 
@@ -199,13 +210,48 @@ here, and it matters more on a part this small: feed servos from the buck
 directly, and give the board its own leg off the same buck. See
 [`WIRING.md` §5](../WIRING.md#5-decoupling--keeping-the-esp32-out-of-brownout).
 
-### Reserved: serial-servo bus
+### The serial-servo bus, and the endstops that come with it
+
+> **A servo answered on these pads 2026-08-26**, stepped three full turns on
+> 2026-08-28, and **drove a real 4-gate rack the same day**: homed to its datum,
+> ran the reference sweep, and moved to every gate. The endstops below are proven
+> on that rail too. What has NOT run is the same actuator as a NodeLink *node*.
 
 D6/D7 (GPIO11/GPIO12) are the hardware UART. **D7 doubles as servo channel 1**,
 so a build driving a serial-bus servo gives up PWM channel 1 — the right trade,
 since one bus replaces the whole four-channel block and lifts the `SERVO_COUNT`
-ceiling with it. Left commented out in the header until there is a bus servo on
-the bench to talk to.
+ceiling with it.
+
+```
+D6 (GPIO11, TX) ──┐
+                  ├── ST3215 signal    (through the adapter, or a 1k on TX —
+D7 (GPIO12, RX) ──┘                     see wiring/st3215-bench.md §3)
+```
+
+**The endstops are not optional, and they are not stepper leftovers.** A bus
+servo in stepping mode reports how much of the last command is outstanding, never
+where the shaft is, so absolute position is something the firmware counts — and
+counting does not survive a power cycle. The homing sweep is still the only thing
+that can put a datum on the rail.
+
+```
+D8 (GPIO8) ──── endstop 1 ──── GND      normally-CLOSED, INPUT_PULLUP
+D9 (GPIO9) ──── endstop 2 ──── GND      ditto
+```
+
+Wired NC so untriggered reads LOW and triggered reads HIGH — **and so does a
+broken wire**. That is the point: a snapped lead in a shop full of vibration
+stops the carriage instead of letting it drive into the end of the rail. Both
+reading triggered at boot is not a carriage in two places, it is a missing
+ground or an unplugged loom, and the firmware says so at startup.
+
+Which switch is the datum is not wired, it is decided: `g_homeIsMaxEndstop`,
+settled by the one setup question, because **home is always the user's LEFT**.
+A motor wired backwards is detected by the sweep itself (the far switch answering
+first) and costs one direction flip, not a rewire.
+
+Servo power does **not** come through the XIAO. 12V at the gate, its own supply
+— see `wiring/st3215-bench.md` §0.1 for what is metered where.
 
 ---
 

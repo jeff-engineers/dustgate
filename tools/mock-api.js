@@ -153,8 +153,6 @@ function handler(req, res) {
     return json(res, { ok: true });
   }
 
-  if (pathname === '/api/enable'  && req.method === 'POST') { M.setEnabled(d, true);  return json(res, { ok: true }); }
-  if (pathname === '/api/disable' && req.method === 'POST') { M.setEnabled(d, false); return json(res, { ok: true }); }
   if (pathname === '/api/estop'   && req.method === 'POST') { M.estop(d); broadcast(); return json(res, { ok: true }); }
 
   if (pathname === '/api/move' && req.method === 'POST') {
@@ -251,9 +249,6 @@ function handler(req, res) {
 
   if (pathname === '/api/config/orientation' && req.method === 'POST') {
     return body(req, data => { M.setHomedLeft(d, data.homedLeft); json(res, { ok: true }); });
-  }
-  if (pathname === '/api/config/motor' && req.method === 'POST') {
-    return body(req, data => { M.setMotorInverted(d, data.invertDirection); json(res, { ok: true }); });
   }
   if (pathname === '/api/config/gates' && req.method === 'POST') {
     return body(req, data => { M.setNumGates(d, data.numGates); json(res, { ok: true }); });

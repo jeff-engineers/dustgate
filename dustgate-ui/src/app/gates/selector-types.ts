@@ -99,12 +99,34 @@ export interface Controller {
   name?: string;
   /** Build target, e.g. "devkitc" | "qtpy_s3". */
   board?: string;
+  /** What this board is FLASHED to drive. Mirrors Controller.drives in
+   *  shared/device-model/topology.js.
+   *
+   *  'servo'  the four-channel PWM bank
+   *  'linear' ONE serial-bus sliding gate, and nothing else
+   *
+   *  Never both, and not a runtime setting: the two builds use the same pads and
+   *  firmware/config.h #errors on a pin map claiming both. Absent means 'servo',
+   *  because every board that existed before this field was one. */
+  drives?: 'servo' | 'linear';
   link?: ControllerLink;
 }
 
 /** Servo channels one board can drive — SERVO_COUNT in config.h,
  *  MAX_SERVOS_PER_HOST in topology.js. */
 export const SERVO_CHANNELS_PER_BOARD = 4;
+
+/** Outlets ONE sliding gate may serve — MAX_SLIDE_BRANCHES in topology.js.
+ *
+ *  Not a firmware limit: NUM_STOPS is 16, and that was "find the maximum sane
+ *  value and double it" — an array bound, not a target. The ceiling is DUCTING.
+ *  A slide manifold is a star, so every outlet is its own flexible run radiating
+ *  from one point, and past about eight the flex cost and the clutter dominate;
+ *  the right answer then becomes ball valves along a trunk, not a longer rack.
+ *  It is a length too — 8 gates at the 4" pitch is a rack over 890mm long.
+ *
+ *  Eight is already pushing it. Six is comfortable. */
+export const SLIDE_MAX_OUTLETS = 8;
 
 /** Selectors driven by a given board. */
 export function selectorsOnController(t: Topology, controllerId: string): ConfigurableSelector[] {

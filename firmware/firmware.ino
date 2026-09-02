@@ -1,13 +1,22 @@
 // =============================================================================
-// firmware.ino — Main sketch
-// Target: Adafruit ESP32-S2 Feather + Adafruit TMC2209 Breakout (#6121)
+// firmware.ino — the PRIMARY sketch. The routing brain.
 //
-// Configuration is entirely in config.h.
+// Target: XIAO ESP32C5, in either of its two personalities. Which one is a
+// property of the BOARD, derived from the pin map, and the sketch is the same
+// either way:
 //
-// Required libraries (install via Arduino Library Manager):
-//   - AccelStepper (by Mike McCauley)
-//   - TMCStepper (by teemuatlut)
-//   - EEPROM (built-in with ESP32 Arduino core)
+//   xiao_c5_primary         four PWM ball valves, HAS_LINEAR 0
+//   xiao_c5_linear_primary  one ST3215 on a serial bus + two endstops,
+//                           HAS_LINEAR 1
+//
+// Configuration is entirely in config.h; the pin map is boards/xiao_c5.h.
+// Libraries come from platformio.ini, not the Arduino Library Manager — and
+// AccelStepper/TMCStepper are deliberately ABSENT. Nothing here generates steps
+// any more; the rack is a serial bus servo.
+//
+// (This header named an ESP32-S2 Feather and a TMC2209 breakout until
+// 2026-08-28. Neither had been a target since the fleet was retired on
+// 2026-08-23, and the stepper itself was deleted the same day.)
 //
 // State machine:
 //   STARTUP → HOMING → IDLE → MOVING → AT_STOP
@@ -54,15 +63,11 @@ int g_numTrainedStops = 0;
 // MUST remain <= NUM_STOPS; array bounds are determined at compile time.
 int g_numActiveStops = 0;   // 0 = unconfigured
 
-// Homing direction — loaded from NVS so the user can flip it via setup wizard without
-// recompiling.  All existing code references HOME_DIRECTION which now expands to this.
-int g_homeDirection = HOME_DIRECTION_DEFAULT;
-
-// Auto motor-direction detect: set true once per homing sequence after we've
-// already flipped direction in response to the FAR endstop tripping, so a second
-// far-hit is treated as a real fault instead of an infinite flip loop. Reset when
-// a fresh homing sequence begins (see loop() entry detection).
-bool g_homeDirCorrected = false;
+// g_homeDirection is GONE (2026-08-28) — homing direction is now derived from
+// g_homeIsMaxEndstop by homeDirection() in config.h. The auto-detect that used to
+// maintain it existed for the stepper, where a swapped coil pair reverses
+// rotation; a keyed serial-bus connector cannot be wired backwards. Read the
+// HOME_DIRECTION block in config.h before reintroducing anything like it.
 
 bool g_notHomedWarnShown = false; // suppress repeated "not homed" warnings
 
@@ -72,7 +77,7 @@ float   g_measuredStepsPerMM = 0.0f;   // 0 = not calibrated → status reports 
 long    g_measuredSpanSteps  = 0;      // 0 = not calibrated
 char    g_manifoldModel[16]  = "custom";
 bool    g_homeIsMaxEndstop   = false;  // which endstop is the HOME datum = the user's
-                                       // LEFT. false = D10/PIN_ENDSTOP_HOME, true = D11/
+                                       // LEFT. false = PIN_ENDSTOP_HOME, true =
                                        // PIN_ENDSTOP_MAX. Chosen during first-home setup
                                        // so the carriage ALWAYS homes to the user's left;
                                        // gates are then numbered 1..N left→right from it.
@@ -117,22 +122,6 @@ void loadCalibration() {
     }
 }
 
-// ── Manifold profile (mirror shared/device-model MANIFOLD_PROFILES) ──────────
-// Fills gatesMm[1..gateCount] and spanMm for a known model. Returns false for
-// 'custom'/unknown (→ manual jog, no auto-placement).
-static bool manifoldProfile(const char* model, int gateCount, float* gatesMm, float& spanMm) {
-    float first, pitch, endMargin;
-    if (strcmp(model, "rockler-2.5") == 0) {
-        first = MANIFOLD_2_5_FIRST_GATE_OFFSET_MM; pitch = MANIFOLD_2_5_GATE_PITCH_MM; endMargin = MANIFOLD_2_5_END_MARGIN_MM;
-    } else if (strcmp(model, "rockler-4") == 0) {
-        first = MANIFOLD_4_FIRST_GATE_OFFSET_MM;   pitch = MANIFOLD_4_GATE_PITCH_MM;   endMargin = MANIFOLD_4_END_MARGIN_MM;
-    } else {
-        return false;
-    }
-    for (int i = 1; i <= gateCount; i++) gatesMm[i] = first + (i - 1) * pitch;
-    spanMm = first + (gateCount - 1) * pitch + endMargin;
-    return true;
-}
 
 // Reference-sweep parameters, captured when a /api/calibrate request is consumed
 // and used by the STATE_HOMING → STATE_CALIBRATING flow.
@@ -165,14 +154,55 @@ static int physicalGateCount(const char* model, int n) {
     return n;
 }
 
+// Defined below, once `feedback` exists. Declared here because the calibration
+// math above it needs the backoff the homing sweep actually used.
+long homingBackoffSteps();
+
 // Finish the reference sweep: given the measured far-endstop trigger position (in
 // steps, from home datum 0), place all gates and persist. See the placement
 // derivation in docs/dual-endstop-calibration.md. Span-based: absorbs per-build
 // steps/mm + endstop-location variance; pitch is the fixed manifold property.
 static void finishCalibrationSweep(long farTriggerSteps) {
     long farSpanSteps     = farTriggerSteps < 0 ? -farTriggerSteps : farTriggerSteps; // home→far
-    long triggerSpanSteps = farSpanSteps + HOME_BACKOFF_STEPS;   // near→far triggers
+    // The ACTUAL backoff, not the nominal one. The datum sits however far off the
+    // near trigger point the switch needed to release, and homing extends the
+    // backoff until it does — so using the HOME_BACKOFF_STEPS constant here would
+    // under-measure the span by the extra and shift every gate (2026-08-28).
+    long backoff          = homingBackoffSteps();
+    long triggerSpanSteps = farSpanSteps + backoff;              // near→far triggers
     float spm = stepsPerMM();                                    // nominal (validated ~0.3%)
+
+    // ── SANITY-CHECK THE SPAN BEFORE ANYTHING IS SAVED ──────────────────────
+    //
+    // A measured span has to be big enough to hold the gates that were asked
+    // for. If it is not, the sweep did not measure the rail — and the numbers it
+    // produces are not merely imprecise, they are actively dangerous: on
+    // 2026-08-28 a far-trigger position that read as 0 gave span=1.4mm and put
+    // gate 1 at -125mm, which was written to EEPROM and then drove the carriage
+    // into an endstop on the next commanded move.
+    //
+    // Refusing here is the difference between a calibration you re-run and a
+    // stored table that hurts the machine every time it is used. The board keeps
+    // whatever calibration it already had.
+    {
+        float measuredMm = (float)triggerSpanSteps / spm;
+        float pitch      = manifoldPitchMm(g_calModel);
+        // The gates alone, with no margin at all — anything at or below this is
+        // arithmetically impossible, never mind tight.
+        float neededMm   = (pitch > 0.0f) ? (float)(g_calGateCount - 1) * pitch : 10.0f;
+        if (measuredMm < neededMm) {
+            Serial.println(F("[CAL] ✗ REFUSED — the measured span cannot hold the gates asked for."));
+            Serial.print(F("      measured ")); Serial.print(measuredMm, 1);
+            Serial.print(F("mm, need at least ")); Serial.print(neededMm, 1);
+            Serial.print(F("mm for ")); Serial.print(g_calGateCount);
+            Serial.println(F(" gates."));
+            Serial.println(F("      The sweep did not measure the rail. Nothing has been saved;"));
+            Serial.println(F("      the previous calibration is untouched. Check that both"));
+            Serial.println(F("      endstops trigger ('e'), then home and calibrate again."));
+            g_calibratePending = false;
+            return;
+        }
+    }
 
     g_measuredSpanSteps  = triggerSpanSteps;
     g_measuredStepsPerMM = spm;
@@ -186,7 +216,7 @@ static void finishCalibrationSweep(long farTriggerSteps) {
         // Center the (N-1)*pitch gate array in the measured trigger-to-trigger span.
         // Work in mm-from-home (positive = away from home). Near trigger sits
         // backoffMm toward home from the datum (negative); gate1 is slack/2 past it.
-        float backoffMm = (float)HOME_BACKOFF_STEPS / spm;
+        float backoffMm = (float)backoff / spm;
         float slackMm   = ((float)triggerSpanSteps / spm) - (float)(g_calGateCount - 1) * pitchMm;
         float gate1Mm   = -backoffMm + slackMm / 2.0f;
         for (int i = 1; i <= g_calGateCount && i <= NUM_STOPS; i++) {
@@ -217,15 +247,6 @@ static void finishCalibrationSweep(long farTriggerSteps) {
     cal.homeIsMaxEndstop = g_homeIsMaxEndstop ? 1 : 0;
     strlcpy(cal.manifoldModel, g_calModel, sizeof(cal.manifoldModel));
     CalibrationStore::save(cal);
-}
-
-// Persist the runtime home direction to NVS. Uses the same "api_cfg" namespace/key
-// that setup() and HttpApiServer read, so an auto-flip survives reboot.
-static void persistHomeDirection() {
-    Preferences prefs;
-    prefs.begin("api_cfg", false);
-    prefs.putInt("home_dir", g_homeDirection);
-    prefs.end();
 }
 
 // Persist g_homeIsMaxEndstop (which endstop is the home datum) into CalibrationData,
@@ -279,8 +300,8 @@ static inline bool farSwitchTriggered() {
 // Which one is a property of the BOARD, not of the env: HAS_LINEAR comes from
 // whether the pin map wires the serial-servo bus. See motor/NullMotorDriver.h.
 #if HAS_LINEAR
-  // No linear driver in the tree yet — failing here beats failing at the linker.
-  #error "HAS_LINEAR board with no motor driver — see firmware/attic/linear/README.md"
+  #include "motor/st3215/ST3215LinearDriver.h"
+  ST3215LinearDriver motor;
 #else
   #include "motor/NullMotorDriver.h"
   NullMotorDriver motor;
@@ -296,12 +317,22 @@ static const int SERVO_PINS[SERVO_COUNT] = { SERVO_PWM_PIN_1, SERVO_PWM_PIN_2, S
 #endif
 
 // -- Feedback system --
-// Same seam as the motor above. The #error this used to carry is gone with it:
-// "no feedback type" is now a legitimate board rather than a misconfiguration.
-// The only arm today — LimitSwitchDistance is in attic/linear/, and comes back
-// with the ST3215 slider.
-#include "feedback/NullFeedback.h"
-NullFeedback feedback;
+// Same seam as the motor above, and the same board property decides it: a rack
+// means two endstops, and no rack means nothing to home. The #error this used to
+// carry is gone for good — "no feedback type" is a legitimate board, not a
+// misconfiguration.
+#if HAS_LINEAR
+  #include "feedback/LimitSwitchDistance.h"
+  LimitSwitchDistance feedback;
+#else
+  #include "feedback/NullFeedback.h"
+  NullFeedback feedback;
+#endif
+
+// How far the last homing sweep backed off the datum switch. Wrapped rather than
+// reached for directly so the calibration math above can be written before the
+// feedback object exists.
+long homingBackoffSteps() { return feedback.backoffSteps(); }
 
 // -- Control input --
 #ifdef CONTROL_SMART_OUTLET
@@ -345,7 +376,10 @@ volatile bool g_eStopTriggered = false;
 // mutex failed to allocate also refused to home the rack — two subsystems that
 // share no wire.
 //
-//   g_faultMotor     TMC2209 UART handshake. No stepper.
+//   g_faultMotor     the drive itself failed to come up. On a slider board that
+//                    is ST3215LinearDriver::begin() — the UART, the servo's
+//                    answer to a ping, or the stepping-mode write. It prints the
+//                    specific one on its own [ST3215] lines just above.
 //   g_faultEndstops  limit switches. There IS a motor, but homing it without a
 //                    reference is how you drive a carriage into its own end.
 //   g_faultOutlets   WiFi / Shelly plugs. Nothing mechanical about it, and
@@ -374,10 +408,29 @@ bool g_faultOutlets  = false;
 // split is to change WHICH failures set it — not to churn twenty call sites.
 bool          g_hardwareFault  = false;
 
+// Re-attempt whatever failed at boot, and clear what can be cleared.
+//
+// THE FAULT FLAGS ARE LATCHED FOR THE BOOT ON PURPOSE — the one-shot [INIT] line
+// scrolls away long before anyone notices motion is refused, so a refusal has to
+// be able to say why. But "latched for the boot" was the wrong lifetime for a
+// SERIAL BUS SERVO, which is a device on a cable, not a chip soldered next to
+// the MCU. Plugging USB into the board first and the servo lead in second is the
+// ordinary bench order, and it left the board dead until someone power-cycled
+// it and lost the log they were reading.
+//
+// So the latch stays, and this is the deliberate way out of it. Called by the
+// `reset` command and automatically by `home`, because homing is the one
+// operation that cannot proceed without a working drive and is always something
+// a person asked for.
+//
+// Declared here, defined after the motor object exists.
+bool retryDrive(const char* why);
+
 // Which begin() stage failed, latched for the life of the boot. The one-shot
 // [INIT] line at startup scrolls away long before anyone notices motion is
-// refused, so every refusal repeats it: "motor" is the TMC2209 UART handshake,
-// "endstops" the limit switches, "outlets" WiFi/Shelly.
+// refused, so every refusal repeats it: "motor" is the drive failing to start
+// (the ST3215 bus on a slider board), "endstops" the limit switches, "outlets"
+// WiFi/Shelly.
 char          g_faultStages[40] = "";
 
 // =============================================================================
@@ -396,6 +449,66 @@ enum State {
 
 State currentState = STATE_STARTUP;
 int   currentStop  = -1;
+
+// Defined here rather than at the declaration above so it sits below `motor`,
+// `feedback` and the fault globals it touches.
+bool retryDrive(const char* why) {
+    Serial.print(F("[RETRY] re-attempting the drive ("));
+    Serial.print(why);
+    Serial.println(F(")..."));
+
+    faults::Stages stages;
+    stages.outlets = g_faultOutlets;   // WiFi recovers on its own; don't disturb it
+
+    // The drive first: on a bus board this re-opens the UART, re-pings the
+    // servo, re-asserts stepping mode and cycles torque (which is what clears a
+    // latched overload after a carriage has been driven into a hard stop).
+    const bool okMotor = motor.reconnect();
+    stages.motor = !okMotor;
+
+    // Then the endstops. Cheap, and a loom reseated at the same time as the
+    // servo lead is exactly the case worth re-reading.
+    const bool okFeedback = feedback.begin(&motor);
+    stages.endstops = !okFeedback;
+
+#if !HAS_LINEAR
+    const bool kRackFitted = false;
+    stages.motor = false;
+#else
+    const bool kRackFitted = true;
+#endif
+    const faults::Policy policy = faults::decide(stages, kRackFitted);
+
+    g_faultMotor    = stages.motor;
+    g_faultEndstops = stages.endstops;
+    g_hardwareFault = policy.linearMotion;
+
+    g_faultStages[0] = '\0';
+    if (stages.motor || stages.endstops || stages.outlets) {
+        snprintf(g_faultStages, sizeof(g_faultStages), "%s%s%s",
+                 stages.motor    ? (HAS_LINEAR ? "motor(ST3215 bus) " : "motor ") : "",
+                 stages.endstops ? "endstops " : "",
+                 stages.outlets  ? "outlets(WiFi/Shelly) " : "");
+    }
+
+    // The position is gone either way — reconnect() drops it, because a servo
+    // that was unplugged or overloaded is a servo whose count stopped being true
+    // at a moment nobody observed. Say so, and put the state machine back where
+    // an unhomed board belongs so nothing moves on a stale datum.
+    currentStop      = -1;
+    g_eStopTriggered = false;
+    feedback.resetHoming();
+    if (currentState != STATE_HOMING) currentState = STATE_STARTUP;
+
+    if (!g_hardwareFault) {
+        Serial.println(F("[RETRY] drive is up. NOT HOMED — type 'home' to find the datum."));
+    } else {
+        Serial.print(F("[RETRY] still faulted: "));
+        Serial.println(g_faultStages);
+    }
+    return !g_hardwareFault;
+}
+
 int   targetStop   = 0;
 
 // =============================================================================
@@ -424,6 +537,37 @@ void issueMove(int stop);
 static const bool kRackPresent = (HAS_LINEAR != 0);
 void startHoming();
 void setHomedLeft(bool homedLeft);
+
+// Was the FAR switch already triggered when this sweep began?
+//
+// A carriage parked at the far end of the rail — where the last session left it —
+// starts homing with that switch already made, and calling that a fault would
+// fail a home that is about to work perfectly well. Until the switch has RELEASED
+// at least once, a far reading is just where we started.
+static bool g_farMadeAtHomeStart = false;
+
+// How long the far switch has read triggered, IN MILLISECONDS.
+//
+// It was a count of consecutive loops, which is not a debounce at all: loop()
+// runs thousands of times a second, so "3 loops" is under a millisecond. A
+// carriage sweeping 0.7mm off a switch it was parked on chattered once at the
+// release edge and that was enough to trip the check (2026-08-28). Time is the
+// unit that means something here; 40ms matches the endstop transition logger.
+static uint32_t g_farSinceMs = 0;
+static const uint32_t kFarConfirmMs = 40;
+
+// Where the sweep started, and how far the carriage must get from there before a
+// far-switch reading is believed.
+//
+// The parked-on-the-switch flag alone is not enough, because it clears the
+// instant the contact opens — and a switch sitting at its release edge on a rig
+// with a millimetre of slop opens and closes repeatedly. Distance is the honest
+// discriminator: a sweep genuinely running the wrong way reaches the far switch
+// after real travel, while a release-edge chatter happens within a millimetre of
+// where it started.
+static long g_homeSweepStartPos = 0;
+static const float kFarConfirmMinTravelMm = 10.0f;
+
 
 // =============================================================================
 // Topology runtime — the routing brain wired to actual hardware.
@@ -740,17 +884,21 @@ void setup() {
     {
         Preferences prefs;
         prefs.begin("api_cfg", true);
-        g_homeDirection  = prefs.getInt("home_dir",  HOME_DIRECTION_DEFAULT);
+        // "home_dir" is DELIBERATELY NOT READ any more. Direction is derived from
+        // the datum now (config.h), so a value left in NVS by an older build is
+        // stale rather than useful — and reading it back would resurrect exactly
+        // the state the auto-detect used to corrupt. Left in flash rather than
+        // erased: it costs four bytes and deleting it buys nothing.
         int nvsGates     = prefs.getInt("num_gates", 0); // 0 = not saved yet
         prefs.end();
         if (nvsGates >= 1 && nvsGates <= NUM_STOPS) g_numActiveStops = nvsGates;
     }
-    DEBUG_PRINT(F("[CFG] homeDirection=")); Serial.print(g_homeDirection);
-    DEBUG_PRINT(F("  numActiveStops="));   Serial.println(g_numActiveStops);
+    DEBUG_PRINT(F("[CFG] homeDirection=")); Serial.print(HOME_DIRECTION);
+    DEBUG_PRINT(F(" (from the datum)  numActiveStops="));   Serial.println(g_numActiveStops);
 
-    // Report each stage separately: a bare "INIT FAILED" can't tell a TMC2209
-    // UART problem from an endstop or a WiFi/outlet one, which are three very
-    // different pieces of wiring to go stare at.
+    // Report each stage separately: a bare "INIT FAILED" can't tell a drive
+    // problem (the ST3215 bus) from an endstop or a WiFi/outlet one, which are
+    // three very different pieces of wiring to go stare at.
     const bool okMotor    = motor.begin();
     const bool okFeedback = feedback.begin(&motor);
     const bool okControl  = control.begin();
@@ -783,8 +931,12 @@ void setup() {
         DEBUG_PRINT(F("[INIT] motor="));      Serial.print(okMotor    ? "ok" : "FAIL");
         DEBUG_PRINT(F("  feedback="));        Serial.print(okFeedback ? "ok" : "FAIL");
         DEBUG_PRINT(F("  control="));         Serial.println(okControl ? "ok" : "FAIL");
+        // Name the drive this board actually has. This said "TMC2209 UART"
+        // until 2026-08-28, which sent anyone reading it to check a stepper
+        // driver that was retired on 2026-08-23 and deleted on 2026-08-28 — on a board whose
+        // only motor is a servo on a serial bus.
         snprintf(g_faultStages, sizeof(g_faultStages), "%s%s%s",
-                 okMotor    ? "" : "motor(TMC2209 UART) ",
+                 okMotor    ? "" : (HAS_LINEAR ? "motor(ST3215 bus) " : "motor "),
                  okFeedback ? "" : "endstops ",
                  okControl  ? "" : "outlets(WiFi/Shelly) ");
     }
@@ -1234,7 +1386,7 @@ void loop() {
         long dtg = motor.distanceToGo();               // signed steps to target
         // HOME_DIRECTION points toward the datum, so +HOME_DIRECTION*dtg > 0 = toward
         // the datum, -HOME_DIRECTION*dtg > 0 = toward the far end. The switch on each
-        // side is datum/far-relative (not fixed D10/D11), so this stays correct
+        // side is datum/far-relative (not a fixed pin), so this stays correct
         // whichever endstop is the home datum.
         bool towardFar  = (dtg * (long)(-HOME_DIRECTION)) > 0; // away from datum
         bool towardHome = (dtg * (long)( HOME_DIRECTION)) > 0;
@@ -1322,11 +1474,21 @@ void loop() {
         g_eStopTriggered = true;
     }
 
+    if (_SC.consumeResetRequest()) {
+        retryDrive("reset");
+    }
+
     if (_SC.consumeHomeRequest() && currentState != STATE_HOMING) {
+        // Homing is the natural place to retry: it cannot work without a drive,
+        // and it is never automatic — a person typed it or pressed it. So a
+        // board that came up with no servo on the bus gets one more chance here
+        // rather than sending someone to the reset button.
+        if (g_hardwareFault) retryDrive("home");
+
         if (g_hardwareFault) {
-            DEBUG_PRINT(F("[ERROR] Hardware fault at boot — failed: "));
+            DEBUG_PRINT(F("[ERROR] Drive fault — failed: "));
             Serial.print(g_faultStages);
-            DEBUG_PRINTLN(F(" — fix wiring and reset before homing."));
+            DEBUG_PRINTLN(F(" — fix it and type 'reset' (or 'home') to retry. No reboot needed."));
         } else {
             g_eStopTriggered = false;
             g_notHomedWarnShown = false;
@@ -1613,15 +1775,6 @@ void loop() {
         }
     }
 
-    // Motor direction (runtime NVS override)
-    {
-        int newDir = 0;
-        if (apiServer.consumeSetDirectionRequest(newDir)) {
-            g_homeDirection = newDir;
-            DEBUG_PRINT(F("[API] Motor direction: "));
-            DEBUG_PRINTLN(newDir > 0 ? F("normal") : F("inverted"));
-        }
-    }
 
     // Active gate count (runtime NVS override)
     {
@@ -2350,15 +2503,6 @@ void loop() {
     }
 #endif // ENABLE_HTTP_API
 
-    // Detect the start of a fresh homing sequence so auto motor-direction detect
-    // gets one flip per sequence (a re-home triggered by the flip itself stays in
-    // STATE_HOMING and must not reset the guard).
-    {
-        static State prevState = STATE_STARTUP;
-        if (currentState == STATE_HOMING && prevState != STATE_HOMING) g_homeDirCorrected = false;
-        prevState = currentState;
-    }
-
     switch (currentState) {
 
         case STATE_STARTUP:
@@ -2367,22 +2511,60 @@ void loop() {
         // ------------------------------------------------------------------
         case STATE_HOMING:
 
-            // Auto motor-direction detect: homing must drive toward the HOME DATUM.
-            // If the FAR endstop trips instead, the motor is wired backwards — flip
-            // the direction, persist, and re-home once. A second far-hit is a real
-            // fault (wiring), so error out rather than loop.
-            if (farSwitchTriggered() && !datumSwitchTriggered()) {
+            // THE FAR ENDSTOP DURING HOMING IS A FAULT, NOT A CLUE.
+            //
+            // It used to mean "the motor is wired backwards": flip the direction,
+            // persist it, re-home once. That was written for the STEPPER, where a
+            // swapped coil pair reverses rotation and is as easy to do as not. A
+            // serial bus servo has a keyed connector and a direction BIT — it
+            // cannot be wired backwards, so there is nothing left for that
+            // heuristic to detect and it could only misfire, which it did
+            // (2026-08-28: a chattering far switch flipped the direction and
+            // rewrote flash).
+            //
+            // What reaching the far switch while seeking the datum means now is
+            // simply that something is wrong — the datum is on the other end than
+            // configured, or the carriage is not moving the way the mount says it
+            // should. Both need a person, and neither is fixed by driving the
+            // other way. Stop and say so.
+            //
+            // The debounce and the travel guard stay: an endstop at its release
+            // edge chatters, and stopping the sweep on one bounce would fail a
+            // healthy home.
+            if (farSwitchTriggered()) {
+                if (g_farSinceMs == 0) g_farSinceMs = millis();
+            } else {
+                g_farSinceMs = 0;
+                g_farMadeAtHomeStart = false;   // released: from here a far hit MEANS something
+            }
+
+            // Braced: declarations inside a switch case cannot cross a later
+            // case label.
+            {
+            const bool farHeld = g_farSinceMs != 0 && (millis() - g_farSinceMs) >= kFarConfirmMs;
+            const bool travelled =
+                labs(motor.getPosition() - g_homeSweepStartPos) >
+                (long)(kFarConfirmMinTravelMm * stepsPerMM());
+
+            if (farHeld && travelled && !g_farMadeAtHomeStart && !datumSwitchTriggered()) {
                 motor.stop();
-                if (!g_homeDirCorrected) {
-                    g_homeDirCorrected = true;
-                    g_homeDirection = -g_homeDirection;
-                    persistHomeDirection();
-                    DEBUG_PRINTLN(F("[HOME] Far endstop hit while homing — motor was backwards. Flipped direction, re-homing."));
-                    startHoming();
-                } else {
-                    DEBUG_PRINTLN(F("[HOME] Far endstop hit again after flip — check endstop/motor wiring."));
-                    currentState = STATE_ERROR;
-                }
+                DEBUG_PRINTLN(F("[HOME] Far endstop reached while seeking the datum."));
+                DEBUG_PRINTLN(F("       The carriage drove away from home, not toward it. Either the"));
+                DEBUG_PRINTLN(F("       datum is set to the wrong end (answer the 'did it home to the"));
+                DEBUG_PRINTLN(F("       left?' question again), or the servo is not mounted the way"));
+                DEBUG_PRINTLN(F("       HOME_DIRECTION_MOUNT in config.h describes."));
+                currentState = STATE_ERROR;
+                break;
+            }
+            }
+
+            // A sweep that gave up says so rather than spinning here forever.
+            // The message it already printed is the diagnosis; this is what
+            // turns it into a state the rest of the board can see.
+            if (feedback.failed()) {
+                DEBUG_PRINT(F("[HOME] aborted — "));
+                Serial.println(feedback.failure());
+                currentState = STATE_ERROR;
                 break;
             }
 
@@ -2556,13 +2738,43 @@ void loop() {
             // tick, then refused every later API move — motion that visibly works
             // paired with "Hardware fault — reset before homing".
 #ifndef CONTROL_SERIAL_DEBUG
-            if (!g_hardwareFault &&
-                !g_eStopTriggered &&
-                control.isEnabled()) {
-                motor.enable(true);
-                currentState = STATE_HOMING;
-                startHoming();
-                DEBUG_PRINTLN(F("E-stop cleared. Re-homing..."));
+            // BACK OFF BETWEEN ATTEMPTS. This branch used to re-home the instant
+            // nothing was latched, which is right for a fault that clears itself
+            // and a tight loop for one that doesn't: on 2026-08-28 a far endstop
+            // reading sent the board round error → re-home → far hit → error
+            // several times a second, each pass jogging the carriage and filling
+            // the log with the same four lines.
+            //
+            // A retry is still automatic, because most of what lands here is
+            // transient. It is just no longer free.
+            {
+                static uint32_t lastErrorRetryMs = 0;
+                static uint8_t  errorRetries     = 0;
+                static const uint32_t kErrorRetryMs  = 5000;
+                static const uint8_t  kMaxErrorRetries = 3;
+
+                if (currentState != STATE_ERROR) { errorRetries = 0; }
+
+                const bool clear = !g_hardwareFault && !g_eStopTriggered && control.isEnabled();
+                const bool waited = (millis() - lastErrorRetryMs) > kErrorRetryMs;
+
+                if (clear && waited && errorRetries < kMaxErrorRetries) {
+                    lastErrorRetryMs = millis();
+                    errorRetries++;
+                    DEBUG_PRINT(F("E-stop cleared. Re-homing (attempt "));
+                    Serial.print(errorRetries); Serial.print(F(" of "));
+                    Serial.print(kMaxErrorRetries); DEBUG_PRINTLN(F(")..."));
+                    motor.enable(true);
+                    currentState = STATE_HOMING;
+                    startHoming();
+                } else if (clear && waited && errorRetries == kMaxErrorRetries) {
+                    // Say it ONCE and stop. Repeating it is what made the log
+                    // unreadable, and the useful information — that automatic
+                    // recovery has given up — is exactly what got buried.
+                    errorRetries++;
+                    DEBUG_PRINTLN(F("[ERROR] re-homing failed 3 times; not retrying on its own."));
+                    DEBUG_PRINTLN(F("        Fix the cause, then type 'home' (or 'reset')."));
+                }
             }
 #endif
             break;
@@ -2591,6 +2803,7 @@ void loop() {
         // HOME_DIRECTION inverts the step sign so positive mm is away from home.
         s.positionMM     = (float)s.positionSteps / stepsPerMM() / (-HOME_DIRECTION);
         s.homed          = (currentStop != -1);
+        s.hasLinear      = (HAS_LINEAR != 0);
         s.enabled        = control.isEnabled();
         s.endstopHome    = readEndstopHome();   // HIGH = triggered (NC switch open)
         s.endstopMax     = readEndstopMax();    // both false on a board with no rack
@@ -2675,6 +2888,13 @@ void loop() {
 void startHoming() {
     g_lastActivityMs = millis();
     g_driverAsleep   = false;
+    g_farMadeAtHomeStart = farSwitchTriggered();
+    g_farSinceMs = 0;
+    g_homeSweepStartPos = motor.getPosition();
+    if (g_farMadeAtHomeStart) {
+        DEBUG_PRINTLN(F("[HOME] far switch is already made — the carriage is parked at that"));
+        DEBUG_PRINTLN(F("       end. Sweeping away from it; not treating this as backwards."));
+    }
     // Guarantee normal move speed as a baseline. The calibration sweep lowers
     // maxSpeed to homing speed and restores it on its own exits — but a global
     // e-stop during the sweep goes straight to STATE_ERROR without restoring it,
@@ -2683,7 +2903,17 @@ void startHoming() {
     feedback.resetHoming(); // clear _homed so updateHoming() actually runs
     DEBUG_PRINT(F("[HOME] speed=")); Serial.print(HOMING_SPEED_STEPS_PER_SEC, 0);
     Serial.println(F(" steps/sec"));
-    motor.startHoming();
+
+    // THE SWEEP IS STARTED BY THE FEEDBACK SYSTEM, NOT HERE.
+    //
+    // It used to be commanded on this line, before anything had checked whether
+    // the carriage was already sitting on the datum switch. On a bus servo that
+    // is not a cosmetic ordering problem: a new command does not supersede the
+    // one in flight, so the release move could not cancel this sweep, and
+    // pressing `home` while the datum was made drove the carriage harder into
+    // it. LimitSwitchDistance::updateHoming() now releases first and calls
+    // startHoming() itself once the switch is clear — one pass of loop() later,
+    // which is invisible.
 }
 
 // =============================================================================
@@ -2707,9 +2937,11 @@ void issueMove(int stop) {
 // can't race the calibrate request the wizard sends right after.
 void setHomedLeft(bool homedLeft) {
     if (!homedLeft) {
+        // ONE flip now, not two. This used to move the datum and the motor
+        // direction together — which is the tell that direction was never
+        // independent information. It is derived from the datum by
+        // homeDirection() in config.h, so switching the datum switches it too.
         g_homeIsMaxEndstop = !g_homeIsMaxEndstop;
-        g_homeDirection    = -g_homeDirection;
-        persistHomeDirection();
         DEBUG_PRINTLN(F("[CFG] Homed on the right — datum switched to the other (left) endstop; next home parks left."));
     } else {
         DEBUG_PRINTLN(F("[CFG] Home confirmed on the left."));

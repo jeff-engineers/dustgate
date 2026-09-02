@@ -253,14 +253,6 @@ import { toShop, systemsOf, type ShopDoc, type RawEl } from '../services/shop-do
         <span class="section-title">Hardware</span>
 
         <div class="row">
-          <span class="row-label">Motor direction</span>
-          <div class="toggle-group" style="flex: 0 0 auto; width: 160px;">
-            <button class="toggle-btn" [class.selected]="!(api.deviceInfo?.motorInverted ?? false)" [disabled]="savingDirection" (click)="setMotorDirection(false)">Normal</button>
-            <button class="toggle-btn" [class.selected]="api.deviceInfo?.motorInverted ?? false" [disabled]="savingDirection" (click)="setMotorDirection(true)">Inverted</button>
-          </div>
-        </div>
-
-        <div class="row">
           <div>
             <div class="row-label">Number of gates</div>
             <div class="row-hint">Not counting home. Lowering this clears trained positions beyond the new count.</div>
@@ -320,7 +312,6 @@ export class SettingsComponent implements OnInit {
   numGates = 1;
   portSize: PortSize = '2.5in';
 
-  savingDirection   = false;
   savingNumGates    = false;
 
   confirmingReset      = false;
@@ -415,7 +406,7 @@ export class SettingsComponent implements OnInit {
 
   clearStatus() { this.statusMsg = ''; this.errorMsg = ''; }
 
-  private async run(action: () => Promise<unknown>, busyFlag: 'savingDirection' | 'savingNumGates', successMsg: string) {
+  private async run(action: () => Promise<unknown>, busyFlag: 'savingNumGates', successMsg: string) {
     this[busyFlag] = true;
     this.statusMsg = '';
     this.errorMsg  = '';
@@ -429,10 +420,6 @@ export class SettingsComponent implements OnInit {
       this[busyFlag] = false;
       this.cd.markForCheck();
     }
-  }
-
-  setMotorDirection(invert: boolean) {
-    this.run(() => this.api.setMotorDirection(invert), 'savingDirection', 'Motor direction saved.');
   }
 
   saveNumGates() {

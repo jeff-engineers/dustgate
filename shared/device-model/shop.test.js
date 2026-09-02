@@ -173,7 +173,12 @@ check('a migrated shop, where machine ids ARE their port ids, stays valid',
 // ── systemView: what the per-system functions actually receive ──────────────
 {
   const view = systemView(twoSystemShop, sys(twoSystemShop, 'big'));
-  check('systemView carries shop controllers down', view.controllers.length === 1);
+  // TWO now, not one: the shop's boards are shop-wide, and a slider needs its own
+  // board alongside the PWM brain (see the two-boards note on twoSystemShop).
+  // systemView hands the WHOLE controller list down rather than filtering to the
+  // boards this system happens to use — which is what lets validateTopology below
+  // resolve every selector's controllerId no matter which system it sits in.
+  check('systemView carries shop controllers down', view.controllers.length === 2);
   check('systemView is a valid topology on its own', validateTopology(view).ok,
     JSON.stringify(validateTopology(view).errors));
 }

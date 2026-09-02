@@ -22,13 +22,37 @@ const CONTROLLER_ROLES = ['primary', 'secondary'];
 const ELEMENT_TYPES    = ['collector', 'selector', 'tool', 'junction'];
 const SELECTOR_KINDS   = ['linear', 'servoGate', 'servoManifold'];
 const BRANCH_ROLES     = ['tool', 'unassigned', 'blocked', 'feed'];
+// What a board is flashed to drive. Absent = 'servo', because every board that
+// existed before this field was a PWM board.
+const CONTROLLER_DRIVES = ['servo', 'linear'];
 const LINK_TRANSPORTS  = ['wifi-ws', 'esp-now'];
 
-// Per-host (per-controller) actuator budget — one ESP32 drives at most the servo
-// PWM bank (g_servos[4]) plus a single stepper driver. More than this on one host
-// is a hardware impossibility; spread selectors across secondary controllers.
+// Per-host (per-controller) actuator budget, and these are ALTERNATIVES rather
+// than a sum. One ESP32 drives EITHER the four-channel PWM servo bank OR a single
+// serial-bus slider — never both, because the two personalities contend for the
+// same pads and firmware/config.h #errors on a pin map that claims both. A board
+// is flashed as one or the other (xiao_c5 vs xiao_c5_linear).
+//
+// Reading these as 4+1 is what put a fifth port on every board in the
+// configurator (corrected 2026-08-28). More than the budget on one host is a
+// hardware impossibility; spread selectors across secondary controllers.
 const MAX_SERVOS_PER_HOST = 4;
 const MAX_LINEAR_PER_HOST = 1;
+
+// How many outlets ONE sliding gate may serve.
+//
+// Not a firmware limit — NUM_STOPS is 16, and that number was "find the maximum
+// sane value and double it", an array bound rather than a target. The real
+// ceiling is ducting: a slide manifold is a STAR, so every outlet is its own
+// flexible run radiating from one point, and past about eight the flex cost and
+// the clutter dominate. The right answer then stops being a longer rack and
+// becomes ball valves distributed along a trunk.
+//
+// It is also a length: 8 gates at the 4" pitch is a rack over 890mm long, and at
+// 16 it would be more than six feet.
+//
+// EIGHT IS ALREADY PUSHING IT. Six is the comfortable number.
+const MAX_SLIDE_BRANCHES = 8;
 
 // ── Typedefs (JSDoc — gives TS consumers types without a build step) ─────────
 /**
@@ -69,6 +93,22 @@ const MAX_LINEAR_PER_HOST = 1;
  * @property {'primary'|'secondary'} role
  * @property {string} [name]
  * @property {string} [board]
+ * @property {'servo'|'linear'} [drives]  what this board is FLASHED to drive:
+ *                                   'servo' = the four-channel PWM bank,
+ *                                   'linear' = one serial-bus sliding gate.
+ *                                   Absent means 'servo' — every board that
+ *                                   existed before this field was one.
+ *
+ *                                   REPORTED BY THE BOARD, NOT CHOSEN. It is
+ *                                   HAS_LINEAR in the firmware, derived from the
+ *                                   pin map, so it cannot disagree with the
+ *                                   hardware: a node sends it as caps.linear in
+ *                                   its WELCOME and the primary sends it as
+ *                                   hasLinear in its status. This field is a
+ *                                   CACHE of that, so a layout can be drawn with
+ *                                   a board asleep; the live report always wins.
+ *                                   The two builds use the same pads and
+ *                                   config.h #errors on a pin map claiming both.
  * @property {Link} [link]
  *
  * @typedef {Object} Duct
@@ -239,6 +279,8 @@ function validateTopology(t) {
     if (ctrlIds.has(c.id)) err('controller', `duplicate controller id: ${c.id}`, c.id);
     ctrlIds.add(c.id);
     if (!CONTROLLER_ROLES.includes(c.role)) err('controller', `bad role "${c.role}"`, c.id);
+    if (c.drives !== undefined && !CONTROLLER_DRIVES.includes(c.drives))
+      err('controller', `bad drives "${c.drives}" (servo|linear)`, c.id);
     if (c.role === 'primary') primaries++;
     if (c.link !== undefined) {
       if (typeof c.link !== 'object' || c.link === null) err('controller', 'link must be an object', c.id);
@@ -376,13 +418,54 @@ function validateTopology(t) {
       err('selector', `branches (${branches.length}) must equal non-closed states (${nonClosed})`, ref);
   }
 
-  // ── per-host actuator budget: ≤4 servos + ≤1 stepper on any one controller ──
+  // ── per-host actuator budget ──
+  //
+  // A host drives the PWM bank OR one serial-bus slider. NEVER BOTH, and never
+  // 4+1: the two personalities use the same pads (bus RX is PWM channel 1), and
+  // firmware/config.h #errors on a pin map that claims both. A board is flashed
+  // as one or the other. So the budget is not "4 servos plus a slider" — that
+  // was a fifth port this model allowed and no hardware can offer.
   for (const [cid, n] of hostServos)
     if (n > MAX_SERVOS_PER_HOST)
       err('controller', `host "${cid}" has ${n} servo selectors (max ${MAX_SERVOS_PER_HOST} per host)`, cid);
   for (const [cid, n] of hostLinear)
     if (n > MAX_LINEAR_PER_HOST)
       err('controller', `host "${cid}" has ${n} linear selectors (max ${MAX_LINEAR_PER_HOST} per host)`, cid);
+  for (const [cid, n] of hostLinear) {
+    const servos = hostServos.get(cid) || 0;
+    if (n > 0 && servos > 0)
+      err('controller',
+          `host "${cid}" drives both a sliding gate and ${servos} servo gate(s) — one board does one or the other`,
+          cid);
+  }
+  // ── a sliding gate serves at most MAX_SLIDE_BRANCHES outlets ──
+  // Counted in BRANCHES (outlets served), not states: the closed state is not an
+  // outlet, and it is the duct runs that this ceiling is about.
+  for (const el of selectorsOf(t)) {
+    if (el.kind !== 'linear') continue;
+    const n = (el.branches || []).length;
+    if (n > MAX_SLIDE_BRANCHES)
+      err('selector',
+          `sliding gate "${el.name || el.id}" serves ${n} outlets (max ${MAX_SLIDE_BRANCHES}) — past that, a trunk with ball valves beats a longer rack`,
+          el.id);
+  }
+
+  // ...and the gates on a board have to match what it was FLASHED to drive.
+  // A slider board with a servo gate on it is not a configuration mistake the
+  // firmware can work around: those pads are the serial bus.
+  for (const c of t.controllers) {
+    const drives = c.drives || 'servo';
+    const servos = hostServos.get(c.id) || 0;
+    const linear = hostLinear.get(c.id) || 0;
+    if (drives === 'linear' && servos > 0)
+      err('controller',
+          `board "${c.name || c.id}" is set up as a sliding-gate board but has ${servos} servo gate(s) on it`,
+          c.id);
+    if (drives === 'servo' && linear > 0)
+      err('controller',
+          `board "${c.name || c.id}" is set up as a servo board but has a sliding gate on it`,
+          c.id);
+  }
 
   // ── ducts: refs, collector-is-root, parentBranch rules ──
   const parentCount = new Map(); // childId → number of parent ducts
@@ -676,6 +759,7 @@ function redundantSelectors(topology) {
 }
 
 module.exports = {
+  MAX_SLIDE_BRANCHES,
   CONTROLLER_ROLES, ELEMENT_TYPES, SELECTOR_KINDS, BRANCH_ROLES,
   elementIndex, controllerIndex, parentDuctIndex,
   collectorOf, selectorsOf, toolsOf, closedState, servoCommandAngle,

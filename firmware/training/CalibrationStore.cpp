@@ -3,6 +3,7 @@
 // =============================================================================
 
 #include "CalibrationStore.h"
+#include "../utils/MotionMath.h"   // stepsPerMM() — the board's own scale
 
 // -----------------------------------------------------------------------------
 // CRC-16/CCITT-FALSE over all fields except the crc field itself
@@ -72,8 +73,11 @@ void CalibrationStore::erase() {
 
 // -----------------------------------------------------------------------------
 void CalibrationStore::print(const CalibrationData& data) {
-    float theoreticalSPMM = (float)(STEPS_PER_REV * MICROSTEPS) /
-                            ((float)PINION_TEETH * RACK_PITCH_MM);
+    // The scale the BOARD believes in, from utils/MotionMath.h. It used to be
+    // recomputed here from the stepper's own gear numbers, which stopped being
+    // anything once the rack became a bus servo — and a second expression for
+    // one quantity is a second place for it to disagree.
+    const float theoreticalSPMM = stepsPerMM();
 
     Serial.println(F(""));
     Serial.println(F("=== Calibration Data ==="));
@@ -119,12 +123,14 @@ void CalibrationStore::printConfigSnippet(const CalibrationData& data) {
     Serial.println(F(""));
     Serial.print(F("// Measured steps/mm: "));
     Serial.println(data.measuredStepsPerMM, 3);
-    Serial.print(F("// To match exactly, set: "));
-    // Suggest a STEPS_PER_REV * MICROSTEPS combination that gives the measured value
-    // measuredSPMM = (STEPS_PER_REV * MICROSTEPS) / (PINION_TEETH * RACK_PITCH_MM)
-    // STEPS_PER_REV * MICROSTEPS = measuredSPMM * PINION_TEETH * RACK_PITCH_MM
-    float rawSteps = data.measuredStepsPerMM * (float)PINION_TEETH * RACK_PITCH_MM;
-    Serial.print(F("STEPS_PER_REV * MICROSTEPS = "));
-    Serial.println(rawSteps, 1);
+    // The old snippet here suggested a STEPS_PER_REV × MICROSTEPS pair that would
+    // reproduce the measured scale. There is nothing to suggest on a bus servo:
+    // its counts/rev is fixed at 4096 and the only adjustable term is the
+    // GEOMETRY, so a scale that disagrees means the rack or the pinion is not
+    // what config.h says it is.
+    Serial.print(F("// Nominal is "));
+    Serial.print(stepsPerMM(), 3);
+    Serial.println(F(" — if the measured value disagrees, check the pinion tooth"));
+    Serial.println(F("//   count and the rack pitch against wiring/st3215-bench.md §5.0.3."));
     Serial.println(F("// ============================"));
 }

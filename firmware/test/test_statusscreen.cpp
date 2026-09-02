@@ -221,6 +221,41 @@ int main() {
         ok("...and blinks about it",   s.barBlink);
     }
 
+    // ── node: the SLIDER variant ─────────────────────────────────────────
+    // A slider node has no servo bank, so it must not borrow the servo bank's
+    // sentences. servoCount stays -1 and the two lines below take their place.
+    {
+        Facts f;
+        f.role = Role::NODE;
+        f.hostname = "slider-1"; f.wifiBars = 3;
+        f.status = statusled::READY;
+        f.primaryHost = "dustgate-a1";
+        f.sliderFitted = true; f.sliderHomed = true; f.sliderMm = 249.0f;
+        Screen s = render(f);
+        fits("slider node fits", s);
+        ok("...names its brain",    hasLine(s, "to        dustgate-a1"));
+        ok("...shows the position", hasLine(s, "slider: 249mm"));
+        ok("...counts no servos",   !hasLine(s, "servos              4"));
+    }
+
+    // ── node: a slider with no datum ─────────────────────────────────────
+    // THE STATE THAT MATTERS. An unhomed slider accepts moves and holds them,
+    // and its position is a number that means nothing — so it must never be
+    // shown one. Reading "not homed" at the gate is the difference between a
+    // node that is working on it and a node that is dead.
+    {
+        Facts f;
+        f.role = Role::NODE;
+        f.hostname = "slider-1"; f.wifiBars = 3;
+        f.status = statusled::READY;
+        f.primaryHost = "dustgate-a1";
+        f.sliderFitted = true; f.sliderHomed = false; f.sliderMm = 137.0f;
+        Screen s = render(f);
+        fits("unhomed slider fits", s);
+        ok("...says it has no datum", hasLine(s, "slider: not homed"));
+        ok("...and shows NO position", !hasLine(s, "slider: 137mm"));
+    }
+
     // ── the vocabulary is not re-invented ────────────────────────────────
     // Every statusled::Status has a word, and no word is empty. A state the
     // pixel can show but the screen can't spell would be exactly the drift

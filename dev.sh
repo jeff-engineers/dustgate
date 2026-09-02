@@ -35,6 +35,21 @@
 #     Its hostname is load-bearing (mDNS, the Boards screen, link.host in the
 #     topology) and must be unique per node.
 #
+#   THE SLIDER BOARD — add --slider to either flash command:
+#
+#   bash dev.sh flash --slider        # a PRIMARY that drives the rack
+#   bash dev.sh flash-node --slider   # a NODE that drives the rack
+#     Same XIAO C5, same two roles. What changes is that the four PWM channels
+#     become one ST3215 serial bus servo on D6/D7 plus two endstops on D8/D9 —
+#     PWM and serial never share a board, so this is a different program, not a
+#     runtime option. config.h #errors if a pin map ever claims both.
+#
+#     A SLIDER HOMES BEFORE IT CAN MOVE, and the carriage sweeps to find its
+#     datum on the first boot after flashing. That is not optional: the servo
+#     counts steps and has no idea where it is, least of all after a power cycle.
+#     A slider NODE does that sweep itself — the one thing in this design a node
+#     decides for itself — and holds any move it is sent until the datum lands.
+#
 #   bash dev.sh monitor             # serial monitor (primary)
 #   bash dev.sh monitor node        # ...a node instead
 #   bash dev.sh ports               # list attached boards + which role each is pinned to
@@ -66,6 +81,13 @@ source "$SCRIPT_DIR/tools/boardinfo.sh"
 # the difference is build_src_filter and -DDUSTGATE_SECONDARY.
 PRIMARY_ENV="xiao_c5_primary"
 NODE_ENV="xiao_c5"
+
+# The SLIDER pair. Same board and the same two roles — what changes is that the
+# four PWM channels are traded for one ST3215 on a serial bus, because PWM and
+# serial never share a board. A slider board is therefore a THIRD thing to flash
+# in each role, not a flag on the servo build, and `--slider` picks it.
+LINEAR_PRIMARY_ENV="xiao_c5_linear_primary"
+LINEAR_NODE_ENV="xiao_c5_linear"
 
 UI_DIR="$SCRIPT_DIR/dustgate-ui"
 TOOLS_DIR="$SCRIPT_DIR/tools"
@@ -377,8 +399,12 @@ parse_provision_overrides() {
       --pass=*) OV_PASS="${1#*=}"; shift ;;
       --ask)    OV_ASK=1; shift ;;
       --save)   OV_SAVE=1; shift ;;
-      # One primary env, so these say nothing. Accepted and ignored rather than
-      # failing a flash on muscle memory.
+      # The rack board: one ST3215 on a serial bus and two endstops, instead of
+      # four PWM channels. Consumed here rather than passed through, because the
+      # env it selects is handed to deploy.sh as --env= below.
+      --slider|--linear|--rack) FLASH_ENV="$LINEAR_PRIMARY_ENV"; shift ;;
+      # Two primary envs now, and --slider picks between them, so these say
+      # nothing. Accepted and ignored rather than failing a flash on muscle memory.
       --env)    shift 2 ;;
       --env=*|--c5) shift ;;
       --*)      PROVISION_REST+=("$1"); shift ;;
@@ -543,7 +569,21 @@ run_flash() {
   parse_provision_overrides "$@"
   set -- "${PROVISION_REST[@]+"${PROVISION_REST[@]}"}"
 
-  echo "▶ Real hardware — flashing a PRIMARY (XIAO C5)."
+  if [[ "$FLASH_ENV" == "$LINEAR_PRIMARY_ENV" ]]; then
+    echo "▶ Real hardware — flashing a SLIDER PRIMARY (XIAO C5 + ST3215)."
+    echo "  Target: $(describe_env "$FLASH_ENV")"
+    echo ""
+    echo "  The routing brain, on the board that drives the rack. Everything a"
+    echo "  primary has — topology, web UI, Shelly polling, NodeLink, the screen"
+    echo "  — with the four PWM channels traded for one bus servo on D6/D7 and"
+    echo "  two endstops on D8/D9."
+    echo ""
+    echo "  It HOMES BEFORE IT CAN MOVE: a step-counting servo has no datum of"
+    echo "  its own. Expect the carriage to sweep after the first boot."
+    echo ""
+  else
+    echo "▶ Real hardware — flashing a PRIMARY (XIAO C5)."
+  fi
   local port
   port="$(require_port primary)" || exit 1
   echo "  Using port: $port"
@@ -569,7 +609,7 @@ run_flash() {
   export DUSTGATE_PREV_HOST="${ENV_HOST:-}"
   # deploy.sh's internal `pio run` calls pick this up automatically —
   # PlatformIO honors PLATFORMIO_UPLOAD_PORT as an override for upload_port.
-  PLATFORMIO_UPLOAD_PORT="$port" bash deploy.sh "$@"
+  PLATFORMIO_UPLOAD_PORT="$port" bash deploy.sh "--env=$FLASH_ENV" "$@"
 
   echo ""
   echo "  If the device doesn't respond below (no boot log, WiFi not connecting,"
@@ -581,9 +621,35 @@ run_flash() {
 }
 
 run_flash_node() {
-  # Any argument is the hostname.
-  local node_env="$NODE_ENV"
+  # A bare argument is the hostname; --slider picks the rack build.
+  local node_env="$NODE_ENV" args=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --slider|--linear|--rack) node_env="$LINEAR_NODE_ENV"; shift ;;
+      *) args+=("$1"); shift ;;
+    esac
+  done
+  set -- "${args[@]+"${args[@]}"}"
 
+  if [[ "$node_env" == "$LINEAR_NODE_ENV" ]]; then
+    echo "▶ Secondary NODE — flashing the SLIDER firmware (XIAO C5 + ST3215)."
+    echo "  Target: $(describe_env "$node_env")"
+    echo ""
+    echo "  This node drives ONE rack instead of a servo bank: one bus servo on"
+    echo "  D6/D7, two endstops on D8/D9, and its own 12V supply at the gate. The"
+    echo "  primary sends it an absolute position in mm and it turns that into"
+    echo "  encoder counts."
+    echo ""
+    echo "  IT HOMES AT BOOT, and that is the one thing this node decides for"
+    echo "  itself. A step-counting servo has no datum and comes back from a"
+    echo "  power cycle holding nothing, so the carriage WILL sweep on the first"
+    echo "  boot after flashing. Moves sent during the sweep are held, not lost."
+    echo ""
+    echo "  + the same SSD1306 status screen and wake button as any other board."
+    echo "    On a slider it also says 'not homed' — which is the state in which"
+    echo "    the node accepts moves and holds them."
+    echo ""
+  else
   echo "▶ Secondary NODE — flashing the servo-only firmware."
   echo "  Target: $(describe_env "$node_env")"
   echo ""
@@ -596,6 +662,7 @@ run_flash_node() {
   echo "    answers one question: can the brain reach me. It blanks itself after"
   echo "    two minutes; the button toggles it."
   echo ""
+  fi
 
   local port
   port="$(require_port node)" || exit 1
@@ -743,7 +810,7 @@ run_monitor() {
   # getting it wrong is silent — the monitor opens the other board's port and
   # shows nothing.
   local role=primary
-  [[ "$env" == "$NODE_ENV" ]] && role=node
+  [[ "$env" == "$NODE_ENV" || "$env" == "$LINEAR_NODE_ENV" ]] && role=node
 
   local port
   port="$(require_port "$role")" || exit 1
@@ -866,7 +933,9 @@ show_menu() {
   echo ""
   echo "  4) Flash a PRIMARY      — UI + firmware + filesystem + provision"
   echo "     4f = firmware only     4u = UI/filesystem only"
+  echo "     4s = the SLIDER primary (ST3215 rack instead of PWM valves)"
   echo "  5) Flash a NODE         — servo-only firmware + WiFi creds"
+  echo "     5s = a SLIDER node (one rack, homes itself at boot)"
   echo ""
   echo "  6) Monitor the PRIMARY      (6n = monitor a NODE instead)"
   echo "  7) Ports — list attached boards, and pin one to a role"
@@ -882,7 +951,9 @@ show_menu() {
     4) run_flash ;;
     4f|4F) run_flash --fw ;;
     4u|4U) run_flash --ui ;;
+    4s|4S) run_flash --slider ;;
     5) run_flash_node ;;
+    5s|5S) run_flash_node --slider ;;
     6) run_monitor ;;
     6n|6N) run_monitor "$NODE_ENV" ;;
     7) run_ports ;;
@@ -915,8 +986,8 @@ case "${1:-}" in
   *)
     echo "Unknown mode: $1"
     echo "Usage: dev.sh [demo|mock|live [host]"
-    echo "              |flash [--fw|--ui|--no-provision] [--host N] [--ssid N] [--pass S] [--ask] [--save]"
-    echo "              |flash-node [hostname]"
+    echo "              |flash [--fw|--ui|--slider|--no-provision] [--host N] [--ssid N] [--pass S] [--ask] [--save]"
+    echo "              |flash-node [--slider] [hostname]"
     echo "              |monitor [node]|ports [--pin primary|node]|erase|provision [--host N] [--ssid N]]"
     exit 1
     ;;

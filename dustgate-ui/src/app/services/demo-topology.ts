@@ -55,13 +55,14 @@ export const DEMO_TOPOLOGY: Topology = {
       }
     },
     {
-      id: "dustgate-node-2",
+      id: "dustgate-slider-1",
       role: "secondary",
-      name: "dustgate-node-2",
-      board: "devkitc",
+      name: "ShopVac node",
+      board: "xiao_c5",
+      drives: "linear",
       link: {
         transport: "wifi-ws",
-        host: "dustgate-node-2"
+        host: "dustgate-slider-1"
       }
     }
   ],
@@ -378,7 +379,7 @@ export const DEMO_TOPOLOGY: Topology = {
           id: "sel36",
           type: "selector",
           name: "Sliding gate",
-          controllerId: "dustgate-node-1",
+          controllerId: "dustgate-slider-1",
           kind: "linear",
           states: [
             {
@@ -721,16 +722,16 @@ export const DEMO_TOPOLOGY: Topology = {
     wiring: {
       boards: {
         primary: {
-          col: 9,
+          col: 7,
           row: 0
         },
         "dustgate-node-1": {
           col: 9,
-          row: 2
-        },
-        "dustgate-node-2": {
-          col: 7,
           row: 0
+        },
+        "dustgate-slider-1": {
+          col: 7,
+          row: 6
         }
       }
     }

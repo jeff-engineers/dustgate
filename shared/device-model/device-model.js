@@ -50,7 +50,17 @@ const MANIFOLD_PROFILES = {
   // NB: the switch backoff (HOME_BACKOFF_STEPS) does NOT enter the pitch (it cancels);
   // it only affects steps/mm — the sweep must add HOME_BACKOFF_STEPS back to the
   // home→far step count before dividing by the 84.9mm span. (Pitch validated at 2 gates.)
-  'rockler-2.5': { firstGateOffsetMm: 1,  gatePitchMm: 82.9, endMarginMm: 1 },
+  // gatePitchMm 83.57 — CORRECTED ON HARDWARE 2026-08-28, was 82.9.
+  // On a real 4-gate rack the outer gates landed ~1mm toward the centre while the
+  // inner two were dead on; placement centres the array in the measured span, so
+  // that signature is pitch and nothing else (spread comes from pitch, centre from
+  // span). 83.57 = 82.9 + 2/3 of the observed 1mm — a closed-loop trim, not a
+  // measurement. The measured span implies 83.33, so treat this as the top of a
+  // 83.33-83.57 range until someone measures gate 1 to gate 4 and divides by 3.
+  // firstGateOffsetMm/endMarginMm are now inconsistent with it ((84.9−83.57)/2 =
+  // 0.67) and left alone: the firmware never uses them to place a gate.
+  // PAIR: firmware/config.h MANIFOLD_2_5_GATE_PITCH_MM. Change both — see CLAUDE.md.
+  'rockler-2.5': { firstGateOffsetMm: 1,  gatePitchMm: 83.57, endMarginMm: 1 },
   // rockler-4 pitch = Rockler 10" manifold width ÷ 2 gates = 5" = 127mm center-to-
   // center; same rack pitch + endstop margin as 2.5", so offset/end-margin = 1mm.
   // Unconfirmed on hardware (4" slider not built yet); 4" path disabled in the UI.
@@ -94,9 +104,13 @@ function createDevice() {
     positionSteps:  0,
     positionMM:     0,
     homed:          false,
+    // Does the simulated board drive a sliding gate? The mock and the demo are a
+    // slider brain, because that is what the linear vocabulary they expose is
+    // for — and a mock reporting `false` here would draw four servo ports under
+    // a canvas full of sliding-gate controls.
+    hasLinear:      true,
     enabled:        true,
     manualOverride: false,
-    motorInverted:  false,
     numActiveStops: 0,        // runtime-active gate count (0 = unconfigured)
     idleTimeoutSec: IDLE_TIMEOUT_SEC_DEFAULT,
     // ── dual-endstop calibration (see docs/dual-endstop-calibration.md) ──
@@ -135,6 +149,7 @@ function statusView(d) {
     positionSteps:  d.positionSteps,
     positionMM:     d.positionMM,
     homed:          d.homed,
+    hasLinear:      d.hasLinear !== false,
     enabled:        d.enabled,
     // Only meaningful once homed — before that the sensor reads untriggered
     // rather than misleadingly "at home".
@@ -158,7 +173,6 @@ function infoView(d, apiKey, version) {
     apiKey,
     numStops:       d.numActiveStops,
     version,
-    motorInverted:  d.motorInverted,
     idleTimeoutSec: d.idleTimeoutSec,
     manifoldModel:  d.manifoldModel,
     stepsPerMm:     d.stepsPerMm,
@@ -262,7 +276,10 @@ function saveStop(d, index) {
 function estop(d) { d.state = 'ERROR'; return { ok: true }; }
 
 /** Vestigial enable/disable (firmware's isEnabled() is hardcoded true). */
-function setEnabled(d, on) { d.enabled = !!on; return { ok: true }; }
+// setEnabled went with /api/enable and /api/disable on 2026-08-28 — nothing
+// called them, and the firmware's flags were never consumed, so the endpoints
+// answered 200 and did nothing. `enabled` itself STAYS in the status: the
+// firmware reports control.isEnabled() there for real.
 
 // Record which side the actuator homed to. Home is always the user's LEFT endstop
 // and gates are numbered 1..N left→right from it, so there's nothing to reorder in
@@ -270,7 +287,6 @@ function setEnabled(d, on) { d.enabled = !!on; return { ok: true }; }
 function setHomedLeft(_d, _homedLeft) {
   return { ok: true };
 }
-function setMotorInverted(d, invert)    { d.motorInverted = !!invert;    return { ok: true }; }
 
 function setNumGates(d, n) {
   if (Number.isInteger(n) && n >= 1 && n <= NUM_STOPS) {
@@ -685,9 +701,9 @@ module.exports = {
   // lifecycle
   createDevice, statusView, infoView,
   // motion
-  beginHome, completeHome, beginMove, completeMove, beginJog, completeJog, estop, setEnabled,
+  beginHome, completeHome, beginMove, completeMove, beginJog, completeJog, estop,
   // calibration / config
-  saveStop, setHomedLeft, setMotorInverted, setNumGates, setIdleTimeout, clearCal,
+  saveStop, setHomedLeft, setNumGates, setIdleTimeout, clearCal,
   // dual-endstop calibration + port roles
   manifoldProfile, beginCalibrate, completeCalibrate, setPortRole,
   isRocklerModel, roundUpEven, physicalGateCount,

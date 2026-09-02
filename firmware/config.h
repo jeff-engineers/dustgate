@@ -58,8 +58,46 @@
 // NB: HOME_BACKOFF_STEPS does NOT affect pitch (cancels); it only shifts the
 // steps/mm span — the sweep must add HOME_BACKOFF_STEPS back to the home→far step
 // count before dividing by span mm.
+// firstGateOffset / endMargin are DOCUMENTATION now, not inputs. The firmware
+// places gates by centring the array in the span it MEASURED, so the only
+// profile number it reads is the pitch. They stay because the JS side keeps its
+// own copies (MANIFOLD_PROFILES in device-model.js models a span from them) and
+// because they record what the manifold is — but nothing here computes from
+// them, and the one function that did (manifoldProfile(), the nominal-offset
+// placement this replaced) was deleted on 2026-08-28.
 #define MANIFOLD_2_5_FIRST_GATE_OFFSET_MM   1.0f
-#define MANIFOLD_2_5_GATE_PITCH_MM          82.9f
+// Rockler Dust Right 2.5" — 83.57mm, CORRECTED ON HARDWARE 2026-08-28.
+//
+// It was 82.9 from two direct measurements on the reference build (trigger-to-
+// trigger span 84.9mm at 2 gates, gate-to-gate pitch 82.9mm), and 82.9 is what a
+// 4-gate rack showed to be wrong. Gates 2 and 3 landed dead on while gates 1 and
+// 4 both sat ~1mm TOWARD THE CENTRE — a signature that can only be pitch, since
+// placement centres the array in the measured span: the CENTRE comes from span +
+// backoff, the SPREAD comes from pitch alone. A pitch error d appears as 1.5d at
+// the outer gates and 0.5d at the inner ones, so 1mm outside with the inside
+// clean means d ≈ 0.67mm.
+//
+// 83.57 = 82.9 + (2/3 × 1mm), which is the closed-loop trim rather than a
+// measurement: the centre does not move when pitch changes, so the correction is
+// two-thirds of the observed outer error. If the outer gates now sit ~1mm OUTSIDE
+// instead, subtract two-thirds of that and go again.
+//
+// CONFIRMED BY THE TRIM PASS, same day: after hand-adjusting all four gates on
+// the rack, gate 1 to gate 4 came to 250.90mm, which is 83.63mm per pitch
+// against the 83.57 set here. That is the gate-1-to-gate-4 measurement this note
+// used to ask for, and it agrees to 0.06mm. LEAVE IT — the individual
+// gate-to-gate spans in the same pass scattered 82.61 / 84.53 / 83.76, so a
+// ±1mm noise floor swamps that 0.06 and chasing it would be fitting to slop.
+//
+// THE 1mm/SIDE OFFSET BELOW IS NOW INCONSISTENT and left alone deliberately:
+// (84.9 − 83.57)/2 = 0.67mm, so one of the two original measurements is off.
+// It does not affect gate placement — the firmware centres in the SPAN it
+// measures and never uses the offset — so correcting it on a guess would add a
+// second unmeasured number to fix nothing.
+//
+// PAIR: shared/device-model/device-model.js MANIFOLD_PROFILES holds the same
+// number. See the table in CLAUDE.md.
+#define MANIFOLD_2_5_GATE_PITCH_MM          83.57f
 #define MANIFOLD_2_5_END_MARGIN_MM          1.0f
 // Rockler Dust Right 4": pitch derived from Rockler's 10" manifold width ÷ 2 gates
 // = 5.000" = 127.0mm center-to-center (their 6.5"/2 = 3.25" ≈ measured 82.9mm on the
@@ -87,34 +125,61 @@
 
 // -----------------------------------------------------------------------------
 // MOTION PARAMETERS
-// Hardware: LDO-42STH48-2004MAH motor + 15-tooth pinion + 20-tooth rack
+//
+// The stepper's geometry used to live here — STEPS_PER_REV, MICROSTEPS,
+// PINION_TEETH, RACK_PITCH_MM — frozen and unused, kept only because
+// stepsPerMM() had an arm that computed from them. All four went with the
+// stepper on 2026-08-28. The live rack geometry is the ST3215 block further
+// down, next to the capability it depends on.
+//
+// One of them is worth remembering as a cautionary tale rather than a constant:
+// RACK_PITCH_MM 4.145 was NOT A MODULE and not a measurement. It was
+// back-derived (gate pitch 82.9mm ÷ an ASSUMED 20 teeth) and it was a LINEAR
+// pitch — module is pitch/π — so typing it into a CAD generator's Module field
+// made every tooth π× too coarse and produced a 255mm rack where an 82.9mm one
+// was wanted. It implied module 1.3193, which is not a standard module and not a
+// rack anyone can buy: the tell that it had never been measured. The rack that
+// replaced it, and the derivation that keeps this from happening again, is
+// §5.0.3 of firmware/wiring/st3215-bench.md.
+//
+// Speeds and the homing backoff still live here, and the ST3215 block overrides
+// them on a board that has a rack.
 // -----------------------------------------------------------------------------
 
-// Standard 1.8° step angle → 200 native steps/rev
-#define STEPS_PER_REV       200
-
-// Microstepping divisor (set via TMC2209 UART at startup)
-#define MICROSTEPS           16
-
-// Pinion: 15 teeth
-#define PINION_TEETH         15
-
-// Rack: 82.9mm / 20 teeth = 4.145mm tooth pitch
-#define RACK_PITCH_MM       4.145f
-
-// Derived motion values (for reference):
-//   Travel per revolution  = 15 × 4.145mm = 62.175mm
-//   Steps per mm (16× µs)  = (200 × 16) / 62.175 = ~51.47 steps/mm
-//   Steps per gate-to-gate = 82.9mm × 51.47 = ~4270 steps (measured: 4270 ✓)
-//   Endstop to gate 1      = ~155 steps = 3.01mm (measured)
-
-// Homing: direction to drive toward home endstop
-// 1 = positive step direction, -1 = negative step direction
-// Compile-time default — overridden at runtime by g_homeDirection (loaded from NVS).
-// All files keep using HOME_DIRECTION unchanged; the macro now resolves to the global.
-#define HOME_DIRECTION_DEFAULT  (1)
-extern int g_homeDirection;        // defined in firmware.ino
-#define HOME_DIRECTION           g_homeDirection
+// ── Homing: which step direction moves TOWARD the datum ─────────────────────
+//
+// DERIVED, NOT STORED, AND NOT AUTO-DETECTED (2026-08-28).
+//
+// It used to be a persisted runtime value that the homing sweep discovered for
+// itself: if the FAR endstop tripped while seeking the datum, the motor was
+// taken to be wired backwards, the direction was flipped and written to NVS.
+// That existed for the STEPPER, where swapping one coil pair reverses rotation
+// and is as easy to do as not — the same coin-flip a 3D printer deals with.
+//
+// A serial bus servo cannot be wired backwards. Its connector is keyed, its
+// direction is a protocol bit, and bit 15 turns the shaft the same way every
+// time. So the thing the detection protected against no longer exists, and all
+// it could do was misfire — which it did, flipping the direction and rewriting
+// flash because a far endstop chattered at its release edge.
+//
+// What DOES vary is which end of the rail the datum is on, and that has one
+// answer already: g_homeIsMaxEndstop, settled by the wizard's single "did it
+// home to the left?" question. The two were always changed together —
+// setHomedLeft() flipped both in lockstep — which is the tell that direction was
+// never independent information. So it is computed from the datum instead of
+// tracked beside it, and one of the two ways to be wrong is gone.
+//
+// HOME_DIRECTION_MOUNT is the remaining fixed fact: which step sign drives the
+// carriage toward the PIN_ENDSTOP_HOME end. That is a property of the mount and
+// the pinion's side of the rack, identical on every unit of a given design.
+#define HOME_DIRECTION_MOUNT  (1)
+// Kept as an alias: the API and the NVS migration still name the old constant.
+#define HOME_DIRECTION_DEFAULT  HOME_DIRECTION_MOUNT
+extern bool g_homeIsMaxEndstop;    // defined in firmware.ino / node
+inline int homeDirection() {
+    return g_homeIsMaxEndstop ? -HOME_DIRECTION_MOUNT : HOME_DIRECTION_MOUNT;
+}
+#define HOME_DIRECTION           homeDirection()
 
 // Speed & acceleration
 // steps/mm ≈ 102.94, so:
@@ -236,6 +301,86 @@ extern int g_homeDirection;        // defined in firmware.ino
 #else
   #define HAS_SERVO 0
 #endif
+
+// -----------------------------------------------------------------------------
+// THE ST3215 SLIDER — rack, pinion, and the motion numbers that go with them.
+//
+// This is the LIVE geometry, as against the frozen stepper block near the top of
+// this file. It only exists on a board that wires the serial-servo bus, and when
+// it does it OVERRIDES the stepper's speeds and backoff: those are in units of
+// microsteps at 51.47 steps/mm, and a bus servo counts in encoder counts at
+// 24.7 counts/mm. Same macro names on purpose — every call site in the sketch
+// keeps working, and "how fast does the carriage move" has one answer per board
+// rather than one per driver.
+//
+// The rack itself: 15 teeth per 82.9mm Rockler gate pitch, module 1.7592, 30T
+// pinion. §5.0.3 of wiring/st3215-bench.md carries the derivation, the seam
+// rules for printing it in chainable segments, and the warning about the
+// artifact pitch the stepper block still holds. DO NOT re-derive it from
+// RACK_PITCH_MM up there.
+// -----------------------------------------------------------------------------
+#if HAS_LINEAR
+
+// The servo's encoder, and the only honest position source on the rail.
+#define ST3215_COUNTS_PER_REV     4096.0f
+
+// 30 teeth × 5.5266667mm — one revolution is exactly two gate pitches, which is
+// the whole reason 30 and 15 were chosen over 24 and 12. See §5.0.3.
+#define ST3215_PINION_TEETH         30
+#define ST3215_RACK_PITCH_MM     5.5266667f
+#define ST3215_MM_PER_REV        (ST3215_PINION_TEETH * ST3215_RACK_PITCH_MM)   // 165.8
+
+// 4096 / 165.8 = 24.7045 counts/mm. utils/MotionMath.h's stepsPerMM() returns
+// this on a bus board, so every mm↔"step" conversion in the sketch is really
+// mm↔counts and nothing else had to change.
+#define ST3215_COUNTS_PER_MM     (ST3215_COUNTS_PER_REV / ST3215_MM_PER_REV)
+
+// Which servo on the bus. One slider, one servo, and a virgin part answers at 1.
+#define ST3215_SERVO_ID              1
+
+// A real baud, not register 6's index. The factory rate, and Seeed's own
+// example — see ST3215Bus::begin().
+#define ST3215_BAUD            1000000
+
+// -- Motion, in counts/sec, from the bench baseline (st3215-bench.md §5.0.1) --
+//
+// Top speed measured 1695 counts/s at ~9V, and both speed and supply move
+// together, so asking for more than the servo can do is asking to be lied to
+// about how fast it went. 1200 tracked to 1046 (87%) and is the fastest number
+// this file is willing to claim: ~42mm/s.
+#undef  MAX_SPEED_STEPS_PER_SEC
+#define MAX_SPEED_STEPS_PER_SEC      1200.0f
+
+// HOMING IS SLOW BECAUSE OVERSHOOT IS AN ABORT FIGURE. A move that runs to its
+// own goal lands on it; a move INTERRUPTED — which is exactly what tripping an
+// endstop is — coasts 31 counts past the catch point at speed 400. That coast
+// is the error in the datum, so 250 counts/s (~10mm/s) is the sweep's accuracy
+// budget, not its patience budget.
+#undef  HOMING_SPEED_STEPS_PER_SEC
+#define HOMING_SPEED_STEPS_PER_SEC    250.0f
+
+// The servo ramps in hardware (register 41); nothing generates steps here, so
+// this exists only because the shared motion code names it.
+#undef  ACCELERATION_STEPS_PER_SEC2
+#define ACCELERATION_STEPS_PER_SEC2  1000.0f
+
+// Back off far enough to release the switch and clear backlash, no further —
+// this lands between the datum and gate 1.
+//
+// RAISED 25 → 60 ON 2026-08-28. 25 counts (1.0mm) was the millimetre the stepper
+// used, and on the real rail it never released the switch first time: every home
+// logged "still on the datum switch — backing off further" twice before clearing
+// at ~51 counts. Each of those extensions is a torque cycle and a second of
+// travel for nothing. 60 counts ≈ 2.4mm clears it in one move, and still lands
+// well short of gate 1.
+//
+// Homing extends this until the switch actually opens and reports the distance
+// it used, so this is a starting guess, not a limit — see
+// LimitSwitchDistance::backoffSteps().
+#undef  HOME_BACKOFF_STEPS
+#define HOME_BACKOFF_STEPS            60
+
+#endif // HAS_LINEAR
 
 // -----------------------------------------------------------------------------
 // SECONDARY ROLE (-DDUSTGATE_SECONDARY)

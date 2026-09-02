@@ -110,7 +110,7 @@ async function run() {
   {
     const i = (await req('GET', '/api/info')).json;
     check('info shape', i && isStr(i.apiKey) && isNum(i.numStops) && isStr(i.version)
-      && isBool(i.motorInverted) && isNum(i.idleTimeoutSec)
+      && isNum(i.idleTimeoutSec)
       && isStr(i.manifoldModel) && isNum(i.stepsPerMm),
       JSON.stringify(i));
   }
@@ -128,15 +128,14 @@ async function run() {
   {
     await req('POST', '/api/config/gates', { numGates: 4 });
     await req('POST', '/api/config/orientation', { homedLeft: true });   // home-side answer → ok
-    await req('POST', '/api/config/motor', { invertDirection: true });
     await req('POST', '/api/config/idle-timeout', { seconds: 1800 });
     const i = (await req('GET', '/api/info')).json;
     check('config: numGates=4 → info.numStops', i && i.numStops === 4, `numStops=${i?.numStops}`);
     check('config: orientation accepted', (await req('POST', '/api/config/orientation', { homedLeft: false })).status === 200);
-    check('config: motor → info.motorInverted', i && i.motorInverted === true);
     check('config: idle-timeout → info.idleTimeoutSec', i && i.idleTimeoutSec === 1800, `got ${i?.idleTimeoutSec}`);
-    // Reset motor direction so a real device isn't left inverted by the run.
-    await req('POST', '/api/config/motor', { invertDirection: false });
+    // /api/config/motor is GONE (2026-08-28). Homing direction is derived from
+    // which endstop is the datum — a serial bus servo cannot be wired backwards,
+    // so there was nothing left for an inversion switch to correct.
   }
 
   // 6. Home lifecycle.

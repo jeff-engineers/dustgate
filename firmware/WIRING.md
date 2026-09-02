@@ -8,9 +8,9 @@ failing to answer quickly was "which pin, on the board in my hand".
 
 One board: the **Seeed XIAO ESP32C5**, primary or node depending on which
 program you flash it with. Pin map: [`wiring/xiao-c5.md`](wiring/xiao-c5.md).
-The retired rack wiring (stepper, endstops) is in
-[`../attic/linear/devkitc-wiring.md`](../attic/linear/devkitc-wiring.md), which is
-what the ST3215 slider gets rebuilt from.
+The rack's own wiring — the ST3215 bus and the two endstops — is in
+[`wiring/st3215-bench.md`](wiring/st3215-bench.md) and the `-DDUSTGATE_SERVO_BUS`
+half of [`wiring/xiao-c5.md`](wiring/xiao-c5.md).
 
 Every board's authoritative pin numbers are its header in
 [`firmware/boards/`](boards/) — the build reads those, and a wiring doc that
@@ -198,9 +198,9 @@ umbilical still needs a trigger module at the sled. Not built yet.
 ## 5. Decoupling — keeping the ESP32 out of brownout
 
 > **Untested on hardware.** This is standard practice written down so the bench
-> session starts from a known-good arrangement, not a measured result. The only
-> value here that predates it is the 100µF at VMOT in
-> [`../attic/linear/devkitc-wiring.md` §2](../attic/linear/devkitc-wiring.md#2-motor--tmc2209).
+> session starts from a known-good arrangement, not a measured result. (It used
+> to cite a 100µF at the stepper's VMOT as the one measured value; that document
+> went with the stepper on 2026-08-28.)
 
 The WROOM-32's brownout detector resets the chip when 3V3 sags past **~2.8V**.
 Nothing on the ESP32 side causes that. The loads sharing the rail do:
@@ -287,9 +287,11 @@ vent.
    ESP32's ground reference.
 3. **Fat wire on the power legs** — 18–20AWG for servo and motor power, short runs to
    the node. 22AWG and up is fine for signal.
-4. **Common ground is mandatory.** [`../attic/linear/devkitc-wiring.md` §2](../attic/linear/devkitc-wiring.md#2-motor--tmc2209) already says this for
-   the motor; it is equally true for every servo. Without it the PWM and STEP/DIR signals
-   have no reference.
+4. **Common ground is mandatory** — for every servo, and for the ST3215 bus
+   above all: a single-ended TTL line has no other reference, and the usual
+   symptom of a missing ground is a bus scan that finds nothing at any baud
+   (`wiring/st3215-bench.md` §1). Without it, PWM signals have no reference
+   either.
 
 ### If it still browns out
 

@@ -21,7 +21,10 @@ namespace faults {
 
 /** One flag per begin() stage. True = that stage FAILED. */
 struct Stages {
-    bool motor    = false;   // TMC2209 UART handshake
+    bool motor    = false;   // the drive failed to start — on a slider board,
+                             // ST3215LinearDriver::begin() (UART, ping or the
+                             // stepping-mode write). Was named for the TMC2209
+                             // until 2026-08-28; that chip is in the attic.
     bool endstops = false;   // limit switches
     bool outlets  = false;   // WiFi / Shelly plugs
 };

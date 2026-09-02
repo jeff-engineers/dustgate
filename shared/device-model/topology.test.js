@@ -81,8 +81,13 @@ check('validate twoGates ok', validateTopology(twoGates).ok, JSON.stringify(vali
   const hasMsg = (r, sub) => r.errors.some((e) => e.message.includes(sub));
   // A shop-in-a-box: one host, `servos` servo gates + `linears` linear selectors,
   // each feeding one tool. Valid apart from whatever count we're stressing.
+  // `drives` follows what is being put on the host, so these cases test the
+  // BUDGET rather than the board-mismatch rule. A host carrying any linear
+  // selector is a slider board; the mixed cases below are deliberately left as
+  // a slider board so the error they trip is the mixing one.
   const buildHost = (servos, linears) => {
-    const t = { schemaVersion: 1, name: 'budget', controllers: [{ id: 'h', role: 'primary' }],
+    const t = { schemaVersion: 1, name: 'budget',
+      controllers: [{ id: 'h', role: 'primary', drives: linears > 0 ? 'linear' : 'servo' }],
       elements: [{ id: 'dc', type: 'collector' }], ducts: [] };
     let n = 0;
     for (let i = 0; i < servos; i++, n++) {
@@ -110,8 +115,69 @@ check('validate twoGates ok', validateTopology(twoGates).ok, JSON.stringify(vali
   check('1 linear on one host → valid (at budget)', validateTopology(buildHost(0, 1)).ok);
   const r2 = validateTopology(buildHost(0, 2));
   check('2 linears on one host → invalid (controller)', !r2.ok && hasCode(r2, 'controller') && hasMsg(r2, 'max 1'));
-  // Mixed at budget: 4 servos + 1 linear on one host is fine.
-  check('4 servos + 1 linear on one host → valid', validateTopology(buildHost(4, 1)).ok);
+  // MIXED IS NOT A BUDGET, IT IS A CONTRADICTION. This used to assert that
+  // 4 servos + 1 linear on one host was valid — reading the two limits as a sum.
+  // They are alternatives: a board is flashed to drive the PWM bank or the serial
+  // bus, the pads overlap, and config.h #errors on a map that claims both. The
+  // old reading is what put a fifth port on every board in the configurator.
+  const rMix = validateTopology(buildHost(4, 1));
+  check('4 servos + 1 linear on one host → invalid (controller)',
+        !rMix.ok && hasCode(rMix, 'controller') && hasMsg(rMix, 'one board does one or the other'));
+  const rMix1 = validateTopology(buildHost(1, 1));
+  check('even 1 servo + 1 linear → invalid (it is not about count)',
+        !rMix1.ok && hasCode(rMix1, 'controller'));
+
+  // The other half of the same hardware fact: what a board is FLASHED to drive
+  // has to match what is drawn on it. A servo board with a rack on it is not a
+  // configuration the firmware can work around — those pads are the serial bus.
+  const asServo = buildHost(0, 1);
+  asServo.controllers[0].drives = 'servo';
+  const rWrong = validateTopology(asServo);
+  check('sliding gate on a board set up for servos → invalid (controller)',
+        !rWrong.ok && hasCode(rWrong, 'controller') && hasMsg(rWrong, 'servo board but has a sliding gate'));
+
+  const asLinear = buildHost(1, 0);
+  asLinear.controllers[0].drives = 'linear';
+  const rWrong2 = validateTopology(asLinear);
+  check('servo gate on a board set up as a slider → invalid (controller)',
+        !rWrong2.ok && hasCode(rWrong2, 'controller') && hasMsg(rWrong2, 'sliding-gate board but has'));
+
+  // ── a sliding gate tops out at MAX_SLIDE_BRANCHES outlets ──
+  {
+    const wide = (n) => {
+      const t = { schemaVersion: 1, name: 'wide',
+        controllers: [{ id: 'h', role: 'primary', drives: 'linear' }],
+        elements: [{ id: 'dc', type: 'collector' }], ducts: [] };
+      const states = [{ id: 'home', isClosed: true, positionMm: 0 }];
+      const branches = [];
+      for (let i = 1; i <= n; i++) {
+        states.push({ id: 's' + i, isClosed: false, positionMm: i * 83 });
+        branches.push({ id: 'b' + i, opensState: 's' + i, role: 'tool' });
+        t.elements.push({ id: 't' + i, type: 'tool' });
+      }
+      t.elements.push({ id: 'lin', type: 'selector', controllerId: 'h', kind: 'linear', states, branches });
+      t.ducts.push({ child: 'lin', parent: 'dc' });
+      for (let i = 1; i <= n; i++) t.ducts.push({ child: 't' + i, parent: 'lin', parentBranch: 'b' + i });
+      return t;
+    };
+    check('8 outlets on a sliding gate → valid (at the ceiling)', validateTopology(wide(8)).ok,
+          JSON.stringify(validateTopology(wide(8)).errors));
+    const r9 = validateTopology(wide(9));
+    check('9 outlets on a sliding gate → invalid (selector)',
+          !r9.ok && hasCode(r9, 'selector') && hasMsg(r9, 'max 8'));
+    // The ceiling is about DUCTING, not the firmware's NUM_STOPS of 16 — so a
+    // count between the two must still be refused.
+    const r12 = validateTopology(wide(12));
+    check('12 outlets → invalid, even though NUM_STOPS is 16',
+          !r12.ok && hasCode(r12, 'selector'));
+  }
+
+  check('drives defaults to servo when absent',
+        validateTopology(buildHost(4, 0)).ok);
+  const rBadDrives = buildHost(4, 0);
+  rBadDrives.controllers[0].drives = 'nonsense';
+  check('bad drives value → invalid (controller)',
+        !validateTopology(rBadDrives).ok && hasCode(validateTopology(rBadDrives), 'controller'));
 }
 {
   const t = mut((t) => { t.ducts = t.ducts.filter((d) => d.child !== 'toolA'); }); // orphan toolA

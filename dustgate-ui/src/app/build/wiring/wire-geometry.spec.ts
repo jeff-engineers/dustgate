@@ -29,12 +29,19 @@ group('W1 the port strip is the hardware budget');
   // until 2026-08-16, in negative y with its own slot pitch — see
   // docs/boards-on-canvas-plan.md for why that came out.
   const c = { x: cellX(3), y: cellY(0) };
-  const xs = [0, 1, 2, 3, 4].map(ch => portPos(c, ch).x);
-  ok('five ports, evenly pitched', xs.every((x, i) => i === 0 || x - xs[i - 1] === 18), xs.join());
-  ok('strip is centred on the board', near((xs[0] + xs[4]) / 2, c.x));
+  // FOUR, not five. The strip used to carry the PWM bank plus a stepper port,
+  // reading MAX_SERVOS_PER_HOST and MAX_LINEAR_PER_HOST as a sum. They are
+  // alternatives: a board drives the bank OR one serial-bus slider, on the same
+  // pads. No board has ever had five ports (corrected 2026-08-28).
+  const xs = [0, 1, 2, 3].map(ch => portPos(c, ch).x);
+  ok('four ports, evenly pitched', xs.every((x, i) => i === 0 || x - xs[i - 1] === 18), xs.join());
+  ok('strip is centred on the board', near((xs[0] + xs[3]) / 2, c.x));
   ok('ports straddle the underside', portPos(c, 0).y > c.y && portPos(c, 0).y < c.y + BOARD_H / 2);
   ok('cable leaves the port underside', near(portExit(c, 0).y, portPos(c, 0).y + PORT_H / 2));
-  ok('channel 4 is the stepper, past the servo bank', SERVO_PORTS === 4);
+  ok('channel 4 is the slider port, past the servo bank', SERVO_PORTS === 4);
+  // A slider board has ONE port, and it belongs in the middle — not at the right
+  // hand end of a four-port strip it is not part of.
+  ok('a slider board centres its single port', near(portPos(c, SERVO_PORTS, true).x, c.x));
 }
 
 // ── W1b · a board is a glyph on the grid ─────────────────────────────────────
@@ -48,7 +55,7 @@ group('W1b a board owns its cell, so ducts have a box to steer around');
   ok('and shorter than one', BOARD_H < CELL, `${BOARD_H} vs ${CELL}`);
   ok('the whole strip fits inside the body',
      portPos({ x: b.x, y: b.y }, 0).x > b.x - BOARD_W / 2
-     && portPos({ x: b.x, y: b.y }, SERVO_PORTS).x < b.x + BOARD_W / 2);
+     && portPos({ x: b.x, y: b.y }, SERVO_PORTS - 1).x < b.x + BOARD_W / 2);
 }
 
 // ── W2 · the lane ────────────────────────────────────────────────────────────
@@ -96,13 +103,23 @@ group('W3 lanes nest, so cables do not cross each other');
   const legs = targets.map((t, i) => ({ from: portExit(c, chans[i]), to: t }));
   const rank = rankByTravel(legs, l => Math.abs(l.to.x - l.from.x));
 
-  ok('the shortest traveller ranks last, nested lowest', rank.get(legs[0]) === 2);
-  ok('the furthest ranks first, taking the highest lane', rank.get(legs[2]) === 0);
+  // Asserted by TRAVEL, not by index. These used to name legs[0] and legs[2]
+  // directly, which quietly encoded where the ports happened to sit — so
+  // re-centring the strip from five ports to four (2026-08-28) flipped which leg
+  // was shortest and failed a rule that had not changed. The rule is about
+  // distance; say that.
+  const travel = (l: typeof legs[number]) => Math.abs(l.to.x - l.from.x);
+  const byTravel = [...legs].sort((a, b) => travel(a) - travel(b));
+  const shortest = byTravel[0], furthest = byTravel[byTravel.length - 1];
+
+  ok('the shortest traveller ranks last, nested lowest', rank.get(shortest) === 2);
+  ok('the furthest ranks first, taking the highest lane', rank.get(furthest) === 0);
 
   const runs = legs.map(l => cableRun(l.from, l.to, rank.get(l)!));
+  const laneY = (l: typeof legs[number]) => cableRun(l.from, l.to, rank.get(l)!)[1].y;
   ok('furthest run takes the highest lane',
-     runs[2][1].y < runs[1][1].y && runs[1][1].y < runs[0][1].y,
-     runs.map(r => r[1].y).join());
+     laneY(furthest) < laneY(byTravel[1]) && laneY(byTravel[1]) < laneY(shortest),
+     byTravel.map(laneY).join());
 
   // The whole point: no cable may cross another.
   let hits = 0;

@@ -21,9 +21,14 @@ import { type Box, type Pt as GeomPt, BOARD_H, BOARD_W, CELL, PAD, segBoxHit } f
  *  the grid is something ducts have to steer around — re-exported here so the
  *  wiring layer still has one import for everything about a board. */
 export { BOARD_H, BOARD_W };
-/** Servo channels + stepper drivers one ESP32 can drive. Mirrors MAX_SERVOS_PER_HOST
- *  and MAX_LINEAR_PER_HOST in shared/device-model/topology.js — the PWM bank and the
- *  single stepper driver. The port strip IS this budget, drawn. */
+/** Servo channels one ESP32 can drive. Mirrors MAX_SERVOS_PER_HOST in
+ *  shared/device-model/topology.js.
+ *
+ *  It is NOT 4 + a stepper. MAX_SERVOS_PER_HOST and MAX_LINEAR_PER_HOST are
+ *  ALTERNATIVES, not a sum: a board is flashed to drive the PWM bank or one
+ *  serial-bus slider, and the two contend for the same pads. Reading them as 4+1
+ *  is what put a fifth port on every board on this canvas until 2026-08-28.
+ *  The port strip IS the budget, drawn — four ports, or one. */
 export const SERVO_PORTS = 4;
 export const PORT_PITCH = 18;
 export const PORT_W = 12;
@@ -60,10 +65,19 @@ export interface Cell { col: number; row: number; }
  * working in. See docs/boards-on-canvas-plan.md. */
 
 /** Where port `ch` sits on a board centred at `c`. Channel 0..3 are servo; passing
- *  SERVO_PORTS gives the stepper port. Returns the port's CENTRE, and its bottom
- *  edge is where a cable leaves. */
-export function portPos(c: Pt, ch: number): Pt {
-  const first = -((SERVO_PORTS) * PORT_PITCH) / 2;         // centre the 5-port strip
+ *  SERVO_PORTS gives the slider port. Returns the port's CENTRE, and its bottom
+ *  edge is where a cable leaves.
+ *
+ *  `linear` says which STRIP is being drawn, and it changes the centring rather
+ *  than just hiding a port. A board has four PWM channels OR one sliding gate,
+ *  never 4+1 — those are the same pads (see Controller.drives). This used to
+ *  centre a five-port strip unconditionally, so dropping the fifth port would
+ *  have left the remaining four sitting half a pitch left of centre, and a lone
+ *  slider port out at the right-hand end of a strip that no longer exists. */
+export function portPos(c: Pt, ch: number, linear = false): Pt {
+  // One port, and it belongs in the middle of the board.
+  if (linear) return { x: c.x, y: c.y + PORT_DY };
+  const first = -((SERVO_PORTS - 1) * PORT_PITCH) / 2;     // centre the 4-port strip
   return { x: c.x + first + ch * PORT_PITCH, y: c.y + PORT_DY };
 }
 export function portWidth(ch: number): number { return ch >= SERVO_PORTS ? STEPPER_W : PORT_W; }
@@ -77,7 +91,7 @@ export function portWidth(ch: number): number { return ch >= SERVO_PORTS ? STEPP
  * strip itself and cableRun detours them clear instead.
  */
 export function portExit(c: Pt, ch: number): Pt {
-  const p = portPos(c, ch);
+  const p = portPos(c, ch, ch >= SERVO_PORTS);
   return { x: p.x, y: p.y + PORT_H / 2 };
 }
 
