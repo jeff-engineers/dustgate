@@ -131,6 +131,7 @@ const MAX_SLIDE_BRANCHES = 8;
  * @property {Object} [servo]             (selector servo kinds) { channel, moveMs, holdAtRest, ... }
  * @property {Object} [sensor]            (tool) { outlet }
  * @property {Object} [control]           (collector) { outlet, offDelayMs }
+ * @property {Object} [bin]               (collector) { sensor: { kind, controllerId, invert } }
  *
  * @typedef {Object} Topology
  * @property {number} schemaVersion
@@ -465,6 +466,28 @@ function validateTopology(t) {
       err('controller',
           `board "${c.name || c.id}" is set up as a servo board but has a sliding gate on it`,
           c.id);
+  }
+
+  // ── collector bin sensor: kind, and a controller that resolves ──
+  //
+  // `kind` is 'threshold' for the diffuse beam actually in hand — it answers
+  // "dust at this height, y/n", NOT a distance, so it does not carry the
+  // emptyMm/fullMm/warnPct a rangefinder would (shop-schema-rfc.md §7.5).
+  //
+  // controllerId is OPTIONAL and means "this board" when absent, matching every
+  // selector and NodeBus's own rule. A named one must resolve, for the same
+  // reason a selector's must: a typo that silently means "local" is a shop where
+  // the wrong board is watching and nothing says so.
+  for (const e of t.elements) {
+    if (e.type !== 'collector' || !e.bin) continue;
+    const sensor = e.bin.sensor;
+    if (!sensor) { err('bin', 'bin requires a sensor', e.id); continue; }
+    if (sensor.kind !== 'threshold')
+      err('bin', `unknown bin sensor kind "${sensor.kind}"`, e.id);
+    if (sensor.controllerId && !ctrlIds.has(sensor.controllerId))
+      err('bin', `controllerId "${sensor.controllerId}" does not resolve`, e.id);
+    if (sensor.invert !== undefined && typeof sensor.invert !== 'boolean')
+      err('bin', 'invert must be a boolean', e.id);
   }
 
   // ── ducts: refs, collector-is-root, parentBranch rules ──

@@ -518,6 +518,148 @@ and needs a meter before the FET is sized with any confidence.
 coupling is decided, the current draw of the strobe and the mounting height of
 the QS18 over a full bin are both guesses.
 
+### 7.5 Bin sensing is a CAPABILITY, not a node type (2026-09-04)
+
+§7.4 called the collector node "a new node type". That is the wrong factoring,
+and this section supersedes it on that point only — the parts, the coupling and
+the warnings in §7.4 all stand.
+
+**Why the slider earned an env and this does not.** PWM and a serial bus
+physically collide: D7 is both PWM channel 1 and the UART's RX, so `config.h`
+`#error`s if a header claims both and `-DDUSTGATE_SERVO_BUS` picks a
+personality. A bin sensor is **one input pin**. It collides with nothing.
+
+So: `PIN_BIN_SENSOR` in the board header, `HAS_BIN` derived from it exactly as
+`HAS_LINEAR` derives from `PIN_SERVO_BUS_TX`. No new env, no new node type. That
+honours §7.2's `bin.sensor.controllerId`, which always pointed at *a* controller
+rather than a special one; making it a build target would have narrowed the
+schema to fit the hardware instead of the other way round.
+
+**The primary gets it for free**, which was the question that prompted this. A
+primary is a board with the pin defined. A one-collector shop whose brain sits
+on the collector is then a configuration, not a build target.
+
+#### Pin budget, and the one thing that does not fit
+
+Eleven pads. A primary driving four PWM gates with a screen spends eight:
+
+| Pad | GPIO | Spoken for |
+|---|---|---|
+| D1 | 0 | wake button |
+| D2 | 25 | status pixel |
+| D4 / D5 | 23 / 24 | OLED SDA / SCL |
+| D7–D10 | 12, 8, 9, 10 | servo channels 1–4 |
+
+Leaving D0, D3, D6 — and D3 is out (below), so **two usable pads on a fully
+loaded primary**:
+
+| Pad | GPIO | Use |
+|---|---|---|
+| **D6** | 11 | **bin sensor in** — ordinary pad, free on every build except the slider, and a collector board will never also be a slider rack |
+| **D0** | 1 | **reserved: CT** — the only analog pad on the edge. Do not spend it on anything else |
+
+**The RF transmitter does not fit on a four-servo primary, and should not have
+been asked to.** It belongs on the board *at the collector*: that is where the
+receiver is, and the node contract already covers it — the primary sends a
+resolved "collector on/off" and the far board keys the HT12E
+([`tool-sensing-rfc.md`](tool-sensing-rfc.md) §4.2). A primary driving four
+gates *and* transmitting across the shop was the wrong picture. A board with
+fewer gates, or no screen, has room to spare; nothing here requires four.
+
+**D3 / GPIO7 is a strapping pin — the sensor must not go there.** Datasheet
+§2.3.4: the C5's straps are GPIO2, 3, 7, 25, 26, 27, 28. The header in
+[`boards/xiao_c5.h`](../firmware/boards/xiao_c5.h) listed 25/26/27/28/7 plus
+MTMS/MTDI and omitted GPIO2 and GPIO3 — corrected 2026-09-04. Neither omission
+reaches a XIAO pad so nothing was ever wired wrong, but **D3 is GPIO7**, and the
+optocoupler pulls it LOW when the bin is full. A board that reboots with a full
+bin would boot with a strap held down: correct on an empty bin, wrong exactly
+when it matters, which is the worst class of intermittent there is.
+
+#### The lamps stay on 12 V
+
+§7.4 has the node absorbing the manual rig — one sensor in, two lamps out. As
+built it will only **observe**: the green pilot and the red strobe stay wired as
+they are on the 12 V side.
+
+It is simpler, and **hardwired lamps keep working when the board does not** —
+the green still says the rig has power with the ESP32 bricked mid-flash.
+
+The cost, stated plainly: the strobe can then only ever mean *this sensor
+tripped*. It cannot mean clog (§7.1's current-spike signal) and cannot take part
+in a shop-scope alert. Two pads stay reserved for low-side FETs so that is
+recoverable, but it is not the shipping shape. None of this touches the NeoPixel
+fan-out in §7.3, which is where the new value actually is — the alert that
+reaches someone standing at a tool in hearing protection.
+
+**Watch the sink budget.** The QS18 sinks 150 mA maximum and will now carry the
+existing lamp load *plus* the optocoupler's ~10 mA. Fine unless the strobe is
+already near the limit — and the strobe's draw is still one of §7.4's
+unmeasured guesses.
+
+#### The coupling part, confirmed
+
+The module in hand is a **HiLetgo PC817 2-channel isolation board, 3.6–30 V in**
+([B0CFZGGGSY](https://www.amazon.com/dp/B0CFZGGGSY)) — §7.4's discrete circuit,
+pre-built, series resistor included, one channel spare.
+
+| §7.4's discrete circuit | On the module |
+|---|---|
+| 12 V → 1 kΩ → PC817 anode | input **+** → 12 V |
+| PC817 cathode → QS18 black | input **−** → QS18 black (sinks when active) |
+| collector → 10 kΩ → 3.3 V, and to GPIO | output VCC → **3.3 V**, OUT → GPIO |
+| emitter → ESP32 GND | GND → ESP32 GND |
+
+Two things to check on the physical board: whether the output side carries its
+own pull-up (add 10 kΩ if not), and that output VCC is a **separate pin** rather
+than bonded to the input side. If it is bonded, the isolation is decorative and
+§7.4's discrete circuit is the fallback.
+
+The inversion is unchanged, and is still the detail that reads as a wiring fault
+at the bench: **GPIO low = bin full.**
+
+#### Schema: a threshold sensor is not a rangefinder
+
+§7.4 flagged this and left it open. Resolved:
+
+```jsonc
+"bin": {
+  "sensor": { "kind": "threshold", "controllerId": "node-dc", "invert": true }
+}
+```
+
+`emptyMm` / `fullMm` / `warnPct` belong to `kind: "ultrasonic"` if that is ever
+built. `invert` is here because the inversion is a property of **the wiring, not
+the sensor** — anyone who takes §7.4's rejected direct-pull-up path gets the
+opposite polarity and should be able to say so without a reflash.
+
+#### Sequencing: primary first, and why
+
+A node reporting bin state upstream is **a new direction of travel on NodeLink**.
+Nodes have only ever *received* already-resolved numbers. That is a new frame
+and, per the anti-drift rule, a new JS↔C++ pair (`nodelink.js` ↔
+`test_nodebus.cpp`).
+
+It is also precisely the gap the tool-sensing work ran into
+([`tool-sensing-rfc.md`](tool-sensing-rfc.md) §7). One bit of bin state is a far
+cheaper way to build that road than a wattage stream is.
+
+1. **Primary first.** It reads its own GPIO and puts the result in the status
+   view. No protocol work, no new frame, no schema drift. Every hardware unknown
+   — opto wiring, polarity, mounting height, debounce — gets settled here.
+2. **Node second**, once the hardware is proven and the only new thing is the
+   frame.
+
+#### Open before this ships
+
+- **Debounce and latch.** Dust at the beam will flicker. Does a trip latch until
+  acknowledged, or follow the sensor? A strobe that stutters as chips swirl past
+  is exactly the alert that §7.3 warns gets ignored.
+- **What the UI draws.** §7.3's alert policy is written; nothing in the Angular
+  app renders a bin state yet.
+- **The two-system board** — one NeoPixel, two possible alert states (§7.3).
+  Not forced by this, but a `scope: "system"` fan-out reaches it.
+- **Everything §7.4 called a guess still is.** Nothing has been wired.
+
 ## 8. Claims: sharing a LAN
 
 ### 8.1 The failure

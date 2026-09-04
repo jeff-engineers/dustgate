@@ -139,6 +139,18 @@ struct CollectorState {
     bool     plugReachable;
     float    plugWatts;
     uint32_t plugOnForMs;   // how long it has been commanded on
+
+    // ── Dust bin, fed in from whatever is watching the sensor ────────────────
+    //
+    // Same contract as the plug above: the runtime REPORTS and never judges. The
+    // debounce lives in utils/BinSensor.h and the inversion lives in the wiring,
+    // so by the time it reaches here it is simply "full, or not".
+    //
+    // `binKnown` false means NOBODY IS WATCHING — omit `bin` entirely. An
+    // unwatched bin and an empty bin are different claims, and defaulting to
+    // "not full" would quietly promise a warning that can never come.
+    bool     binKnown;
+    bool     binFull;
 };
 
 class TopologyRuntime {
@@ -530,6 +542,13 @@ public:
                 p["reachable"] = kv.second.plugReachable;
                 p["onForMs"]   = kv.second.plugOnForMs;
             }
+            // Omitted when nothing is watching this bin, for the same reason the
+            // plug is: absent and empty are different claims. Mirrors
+            // statusView() in topology-device.js.
+            if (kv.second.binKnown) {
+                JsonObject b = s.createNestedObject("bin");
+                b["full"] = kv.second.binFull;
+            }
         }
 
         out["transitioning"] = transitioning();
@@ -541,6 +560,30 @@ public:
             o["toState"]    = f.toState;
             o["reason"]     = f.reason;
         }
+    }
+
+    // Feed in what the bin sensor says. The CALLER owns the pin, the debounce
+    // and the question of which system this is — see localBinSystemId() in
+    // utils/BinSensor.h. Calling it at all is what makes `bin` appear in the
+    // status; a system nobody calls this for stays silent.
+    void setBinFull(const std::string& systemId, bool full) {
+        auto it = _collectors.find(systemId);
+        if (it == _collectors.end()) return;   // no such system: say nothing
+        it->second.binKnown = true;
+        it->second.binFull  = full;
+    }
+
+    // This system's collector's bin sensor, or a null object if it has none.
+    // The caller reads `invert` off it — the inversion belongs to the WIRING,
+    // not to the firmware build (see boards/xiao_c5.h).
+    JsonObjectConst binSensorFor(const std::string& systemId) const {
+        if (!_doc) return JsonObjectConst();
+        for (const SystemView& sys : systemsOf(topology())) {
+            if (!sys.id || systemId != sys.id) continue;
+            for (JsonObjectConst e : sys.elements)
+                if (_eq(e["type"], "collector")) return e["bin"]["sensor"];
+        }
+        return JsonObjectConst();
     }
 
     JsonObjectConst selectorById(const std::string& id) const {

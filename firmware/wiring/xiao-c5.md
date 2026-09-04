@@ -149,10 +149,10 @@ owes the net; where it says none, none is needed.
 | D0  | 1    | *free* | — | **The only ADC pad on the edge.** Keep it free for a current sense; don't spend it on a digital function that fits elsewhere |
 | D1  | 0    | Wake button | none — internal pull-up | Momentary NO to GND, `INPUT_PULLUP`. Not a strap on the C5, so safe held down through reset. Verified 2026-08-22 |
 | D2  | 25   | Status pixel DIN | **330 Ω series** | External WS2812; the onboard LED is plain yellow. See §3 |
-| D3  | 7    | *free* | — | Ordinary GPIO |
+| D3  | 7    | *free, but* | — | ⚠️ **GPIO7 is a strapping pin** (JTAG source). Fine as an output or as an input that idles HIGH; never for one that can be held LOW through reset. See §6 |
 | D4  | 23   | Screen SDA | none (module carries its own pull-ups) | XIAO-standard I²C. Verified 2026-08-22. If a bare panel with no pull-ups is ever used, 4.7 kΩ to 3V3 |
 | D5  | 24   | Screen SCL | none (as SDA) | ditto |
-| D6  | 11   | *rsvd* — ST3215 bus TX | **1 kΩ series** when fitted | Hardware UART TX. Half-duplex: see the note in §2 before tying TX and RX |
+| D6  | 11   | **Bin sensor in** (PWM builds) / ST3215 bus TX (slider builds) | **1 kΩ series** on the bus when fitted; none for the bin sensor | One pad, two mutually exclusive jobs — `config.h` `#error`s if a build claims both. Bin sensor: §7. Bus: hardware UART TX, half-duplex, see §2 |
 | D7  | 12   | Servo ch 1 — **and** ST3215 bus RX | none | The one genuinely contended pad: a serial-bus build gives up PWM channel 1 |
 | D8  | 8    | Servo ch 2 | none | Ordinary GPIO, not strapping (bench-confirmed 2026-08-19). Alt: SDIO_DATA0 |
 | D9  | 9    | Servo ch 3 | none | Ordinary GPIO, not strapping (same). Alt: SDIO_CLK |
@@ -441,8 +441,15 @@ something else is wrong — it appears on every boot.
 
 ### Strapping pins — checked, and the map is clear
 
-Settled 2026-08-16 against the **ESP32-C5 Series Datasheet v1.4, Table 3-1**. The
-strapping pins are **GPIO25, GPIO26, GPIO27, GPIO28, GPIO7, MTMS and MTDI**.
+Settled 2026-08-16, **corrected 2026-09-04** against the ESP32-C5 datasheet
+§2.3.4, which lists them outright in its priority-3 caution list: the strapping
+pins are **GPIO2, GPIO3, GPIO7, GPIO25, GPIO26, GPIO27 and GPIO28**.
+
+The old wording here — "GPIO25, 26, 27, 28, 7, MTMS and MTDI" — named MTMS/MTDI
+(which *are* GPIO2 and GPIO3, so it was right by another name) but read as though
+GPIO2 and GPIO3 were something other than pads. The ADC table further down had it
+right the whole time. Nothing was ever miswired; what it cost was making **D3
+look free**, which it is not.
 
 **GPIO8 and GPIO9 are not among them.** That worry was C3 muscle memory — the
 straps are GPIO2/8/9 on *that* part — so the whole servo block (GPIO12/8/9/10) is
@@ -535,3 +542,123 @@ Two portability fixes fell out of bringing it up, and are in the tree:
 [`utils/Watchdog.h`](../utils/Watchdog.h) (IDF 5 changed `esp_task_wdt_init()` to
 a config struct) and the `rgbLedWrite`/`neopixelWrite` guard in
 [`utils/StatusLed.h`](../utils/StatusLed.h).
+
+---
+
+## 7. Dust bin level sensor — optional
+
+**NOTHING HERE HAS BEEN WIRED.** Every number is from a datasheet or a product
+page. Treat this as a plan to check against a meter, not a record of something
+that worked. Design rationale and the decisions behind it:
+[`docs/shop-schema-rfc.md`](../../docs/shop-schema-rfc.md) §7.4–§7.5.
+
+One input pin, which is why this is a **capability rather than a board role** —
+it needs no env of its own and works on a primary and a node alike.
+
+### Parts
+
+| Role | Part | Notes |
+|---|---|---|
+| Sensor | Banner **QS18VN6D** diffuse photoelectric, 10–30 V dc | **`VN` = NPN, sinking, open-collector.** The `VP` variant SOURCES +12 V and would kill the pin. One character apart — check what is stamped on the sensor, not these notes |
+| Isolation | HiLetgo **PC817** 2-channel optocoupler board, 3.6–30 V in | Series resistor already on it. One channel spare |
+| Supply | Existing 12 V rail + a 12→5 V regulator | The ESP32 can also run off USB; either way **the grounds must be tied** |
+
+### The circuit
+
+```
+  +12V ─────┬──────────────────┬─────────────────┐
+            │                  │                 │
+       QS18 brown         opto IN+          (existing 12V lamps,
+            │                  │             left wired as they are)
+       ┌────┴────┐             │
+       │  QS18   │             │
+       │ VN6D    │        ╔════╧════╗
+       └──┬───┬──┘        ║ PC817   ║   input side
+    black │   │ blue      ║  ch 1   ║
+          │   │           ╚════╤════╝
+          └───┼───────────  IN─┘         sinks when the beam is made
+              │
+  12V GND ────┴──────────────────────────┬──  TIE THIS TO ESP32 GND
+                                         │
+       ╔═════════════════════════════════╧═╗
+       ║ PC817 ch 1, output side           ║
+       ║   VCC ── 3V3    OUT ── D6    GND ─╫── ESP32 GND
+       ╚═══════════════════════════════════╝
+```
+
+XIAO side, three wires:
+
+| Opto output pin | XIAO pad |
+|---|---|
+| VCC | **3V3** — not 5 V. This is what sets the logic level |
+| OUT | **D6** (GPIO11) |
+| GND | **GND** |
+
+### ⚠️ The optocoupler inverts the sense
+
+**D6 reads LOW when the bin is FULL.** Say it out loud before you debug anything,
+because at the bench it reads exactly like a wiring fault.
+
+The firmware does not hardcode it: `bin.sensor.invert` in the document decides,
+defaulting `true` because the optocoupler is the documented build. Anyone who
+wires the sensor straight to a pull-up instead (simpler, no isolation, rejected
+in RFC §7.4) flips the flag rather than reflashing.
+
+The pin is read `INPUT_PULLUP`, so an **unwired board reads HIGH → "bin OK"**. A
+board with nothing connected must not scream, and topology gates it anyway:
+nothing is reported unless a collector's `bin.sensor.controllerId` names this
+board.
+
+### Check these three things on the physical opto board
+
+1. **Is output VCC a separate pin from the input side?** If the two are bonded,
+   the isolation is decorative and you may as well use RFC §7.4's discrete
+   circuit. This is the one that decides whether the module was worth buying.
+2. **Does the output side carry its own pull-up?** Most do. If not, add 10 kΩ
+   from OUT to 3V3.
+3. **Sink budget.** The QS18 sinks 150 mA max and is now carrying the existing
+   lamp load *plus* roughly 10 mA for the opto LED. Measure the strobe before
+   assuming there is room — its draw is still a guess.
+
+### Why D6 and not somewhere else
+
+On a primary already driving four PWM gates with a screen, **D0, D3 and D6 are
+the only pads left**. D3 is GPIO7, a strapping pin (§6), and the sensor pulls it
+LOW exactly when the bin is full — a board that reboots with a full bin would
+boot with a strap held down, which is right on an empty bin and wrong precisely
+when it matters. D0 is the only ADC pad on the edge and is reserved for a current
+sense. That leaves D6, by elimination rather than preference.
+
+**D6 is the servo bus on a slider build**, so the two are mutually exclusive; the
+board header guards it and `config.h` `#error`s as the backstop. A board at a
+collector will never also be driving a rack, so nothing is lost.
+
+**The RF transmitter for the collector remote does not fit on a four-gate
+primary** — and belongs at the collector anyway, next to the receiver. See
+[`docs/tool-sensing-rfc.md`](../../docs/tool-sensing-rfc.md) §4.2.
+
+### The lamps stay on 12 V
+
+The green pilot and the red strobe stay wired as they already are. Simpler, and
+they keep working when the board does not.
+
+The cost: the strobe can then only ever mean *this sensor tripped* — never a
+clog, never a shop-wide alert. Two pads stay reserved for low-side FETs
+(AO3400 / 2N7002 class, gate straight off a GPIO) if that changes.
+
+### What you should see
+
+With the firmware running and a collector configured with a bin sensor,
+`GET /api/status` grows a field:
+
+```jsonc
+"systems": { "big": { "collectorOn": false, "bin": { "full": false } } }
+```
+
+**`bin` is absent entirely** if no collector names this board — that is correct,
+not a fault. An unwatched bin and an empty bin are different claims.
+
+A change takes **`kBinDebounceMs` (2 s)** to appear, so block the beam and wait
+before deciding it is broken. That number is a guess picked from how a bin
+behaves in the author's head; it is the first thing to revisit once a beam is
+over a real bin. See [`utils/BinSensor.h`](../utils/BinSensor.h).

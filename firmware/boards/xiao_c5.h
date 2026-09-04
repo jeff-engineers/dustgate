@@ -35,13 +35,25 @@
 //   D0..D10 map to GPIO 1, 0, 25, 7, 23, 24, 11, 12, 8, 9, 10 — checked against
 //   Seeed's pin-definition drawing on 2026-08-16, still not against a meter.
 //
-//   STRAPPING PINS ARE NOW CHECKED (datasheet v1.4, Table 3-1): on the C5 they
-//   are GPIO25, 26, 27, 28, 7, MTMS and MTDI. GPIO8 and GPIO9 are NOT among them
-//   — that was C3 muscle memory (straps are GPIO2/8/9 there), and the servo block
-//   below is clear. The one strap we do touch is GPIO25, the status pixel, and it
-//   is harmless: it selects the SDIO sampling edge, a peripheral this build never
-//   uses, and a WS2812 DIN is high-impedance so nothing holds the line at reset.
-//   The boot-mode straps (26/27/28) and the JTAG strap (7) reach no pad we use.
+//   STRAPPING PINS ARE CHECKED: on the C5 they are GPIO2, 3, 7, 25, 26, 27 and
+//   28 (datasheet §2.3.4, in the priority-3 caution list). GPIO8 and GPIO9 are
+//   NOT among them — that was C3 muscle memory (straps are GPIO2/8/9 there), and
+//   the servo block below is clear.
+//
+//   Corrected 2026-09-04: this note used to read "GPIO25, 26, 27, 28, 7, MTMS
+//   and MTDI", which omitted GPIO2 and GPIO3 and named two signals the datasheet
+//   does not list as straps. Nothing was ever wired wrong — GPIO2 and GPIO3
+//   reach no XIAO pad — but the omission mattered the moment someone went
+//   looking for a free pad, which is exactly what happened.
+//
+//   The one strap we drive is GPIO25, the status pixel, and it is harmless: it
+//   selects the SDIO sampling edge, a peripheral this build never uses, and a
+//   WS2812 DIN is high-impedance so nothing holds the line at reset.
+//
+//   ⚠️ D3 IS GPIO7, AND GPIO7 IS A STRAP. It is the one free-looking pad on this
+//   board that is not free. Nothing uses it today, and nothing should use it for
+//   an input that can be held LOW at reset — see PIN_BIN_SENSOR below for the
+//   case that nearly landed there.
 // =============================================================================
 #pragma once
 
@@ -98,8 +110,8 @@
 // D8/D9 = GPIO8/9, and they are ORDINARY PADS on this part. That needed
 // checking: on the ESP32-C3 the straps are GPIO2/8/9, and a NORMALLY-CLOSED
 // switch holds its pin LOW at reset, which on a strap would change how the chip
-// boots. The C5's straps are GPIO25/26/27/28/7 + MTMS/MTDI (datasheet v1.4
-// Table 3-1), so neither of these is one.
+// boots. The C5's straps are GPIO2/3/7/25/26/27/28 (datasheet §2.3.4; see the
+// corrected list at the top of this file), so neither of these is one.
 //
 // WIRED NORMALLY-CLOSED, to GND, with INPUT_PULLUP: untriggered reads LOW,
 // triggered reads HIGH — and so does a broken wire or an unplugged connector.
@@ -172,6 +184,52 @@
 // C5 the straps are 26/27/28, so a normally-open momentary here is safe even at
 // reset. D0 is deliberately not used: it is the only analog pad on the edge.
 #define PIN_WAKE_BTN     0   // D1, INPUT_PULLUP, momentary to GND
+
+// -- Optional: dust-bin level sensor (collector boards) --
+//
+// One input pin, and that is the whole feature — which is why bin sensing is a
+// CAPABILITY rather than a board role: it collides with nothing, so it needs no
+// env of its own and works on a primary and a node alike. See
+// docs/shop-schema-rfc.md §7.5, which supersedes §7.4's "new node type".
+//
+// Banner QS18VN6D diffuse photoelectric through a PC817 optocoupler. The `VN` is
+// load-bearing: NPN, sinking, open-collector. The `VP` variant SOURCES +12 V and
+// would kill this pin — check the part stamped on the sensor, not the notes.
+//
+// ⚠️ THE OPTOCOUPLER INVERTS THE SENSE: this pin reads LOW when the bin is FULL.
+// That reads as a wiring fault at the bench if you are not expecting it, and it
+// is why the schema carries `bin.sensor.invert` — someone who wires the sensor
+// straight to a pull-up instead (simpler, less isolation, rejected in §7.4) gets
+// the opposite polarity and should not need a reflash to say so.
+//
+// WHY D6 (GPIO11). It is an ordinary pad, and it is free on every build except
+// the slider — where D6/D7 are the servo bus — and a board at a collector will
+// never also be driving a rack. On a primary already driving four PWM gates with
+// a screen, D0/D3/D6 are the only pads left, D3 is a strapping pin (see above),
+// and D0 is the only analog pad on the edge and is spoken for by a future CT.
+// That leaves exactly this one.
+//
+// GPIO11 is UART0 TX, which this build never uses — the console is USB
+// Serial/JTAG. It is also PIN_SERVO_BUS_TX on a slider build, which is why
+// config.h derives HAS_BIN with the bus excluded rather than trusting the pin
+// to be free.
+//
+// DEFINED means "this board COULD have one", not "one is fitted" — the same
+// contract as HAS_LINEAR. Whether a given board actually watches a bin is a
+// TOPOLOGY fact (`bin.sensor.controllerId`), because the primary is the only
+// thing that knows. There is no probe for it the way an I2C ACK settles the
+// screen: a digital input cannot be asked whether anything is on the other end.
+//
+// So the pin is read with INPUT_PULLUP, and an unwired board reads HIGH — which
+// with the inversion above means "bin OK". A board with nothing connected must
+// not scream, and topology gates it regardless.
+//
+// Wire: QS18 brown -> +12 V, blue -> 12 V GND, black -> opto input (-).
+//       Opto input (+) -> +12 V. Opto out VCC -> 3V3, GND -> ESP32 GND,
+//       OUT -> D6. TIE THE 12 V GROUND TO THE ESP32 GROUND.
+#if !defined(DUSTGATE_SERVO_BUS)
+#define PIN_BIN_SENSOR  11   // D6, opto output, LOW = bin full
+#endif
 
 // -- The serial-servo bus moved UP --
 // It is defined with the PWM block it replaces (-DDUSTGATE_SERVO_BUS), because

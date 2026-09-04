@@ -75,6 +75,15 @@ drifted constantly. Now `shared/device-model/` is the spec:
   needs to say "blower not starting" too, that is the moment those become a pair
   and earn a row above — not before.
 
+  `kBinDebounceMs` (utils/BinSensor.h) is another: how long the dust-bin beam
+  must hold a reading before the firmware believes it. No JS model simulates a
+  flickering beam — the mock and demo STAGE bin state directly, the way they
+  stage a plug fault — so it exists once and has nothing to drift against. What
+  *is* shared is the reported shape, and `bin-sensor.test.js` ↔
+  `firmware/test/test_binsensor.cpp` are a collector-plug-style pair rather than
+  a nodelink-style one: same rule (`systems[].bin` is omitted when nothing
+  watches that bin), two engines, deliberately NOT the same numbers twice.
+
   `kMoveTimeoutMs` (control/NodeLink.h) is the same shape and catches people out
   harder, because it sits in the one file that otherwise mirrors `nodelink.js`
   frame for frame. It is the primary's own bookkeeping — how long to wait for a
@@ -103,8 +112,8 @@ Tests live in two package.json files. UI suites run under plain node (no browser
 
 ```
 cd dustgate-ui && npm test        # spec-runner + routing + wiring geometry
-cd tools && npm run model:test    # topology, shop, nodelink, plug-claim, adopt-outlets, manual-blower, collector-plug (JS)
-cd tools && npm run firmware:test # the C++ host tests (router, controller, nodebus, shop, faults, plugclaim, screen, blower)
+cd tools && npm run model:test    # topology, shop, nodelink, plug-claim, adopt-outlets, manual-blower, collector-plug, bin-sensor (JS)
+cd tools && npm run firmware:test # the C++ host tests (router, controller, nodebus, shop, faults, plugclaim, screen, blower, binsensor)
 cd tools && npm run conformance:ci topology:conformance:ci nodelink:conformance:ci  # run separately
 ```
 

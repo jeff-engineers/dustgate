@@ -273,6 +273,7 @@ inline int homeDirection() {
 //
 //   HAS_LINEAR  — this board can drive a sliding gate (a carriage on a rack).
 //   HAS_SERVO   — the PWM servo bank.
+//   HAS_BIN     — this board can watch a dust-bin level sensor.
 //
 // These replaced the old `#error "No feedback type defined"` / `"No control type
 // defined"` walls in the sketch, which made a stepper-less build impossible to
@@ -300,6 +301,34 @@ inline int homeDirection() {
   #define HAS_SERVO 1
 #else
   #define HAS_SERVO 0
+#endif
+
+// A board can watch a dust bin if it wires the sensor pin. Note what this is
+// NOT: it is not "a bin sensor is fitted", and it is not a board role.
+//
+// Bin sensing is ONE INPUT PIN, so it collides with nothing and needs no env of
+// its own — a primary and a node get it on the same terms, which is the whole
+// argument in docs/shop-schema-rfc.md §7.5 (superseding §7.4's "new node type").
+// A board is not a "collector node"; it is a board that happens to be near a
+// bin.
+//
+// Whether a given board is actually WATCHING one is a topology fact
+// (`bin.sensor.controllerId`) and the primary owns it, because there is no way
+// to probe a digital input for whether anything is on the other end — unlike the
+// screen, which an I2C ACK at 0x3C settles at boot. HAS_BIN only says the pin
+// exists to be read.
+#if defined(PIN_BIN_SENSOR)
+  #define HAS_BIN 1
+#else
+  #define HAS_BIN 0
+#endif
+
+// The bin pin is D6/GPIO11, which is PIN_SERVO_BUS_TX on a slider build. The
+// board header already guards against defining both, and this is the backstop —
+// same shape as the PWM-vs-bus #error above, and for the same reason: a pin map
+// that quietly claims one pad twice is a bench session nobody enjoys.
+#if HAS_BIN && defined(PIN_SERVO_BUS_TX) && (PIN_BIN_SENSOR == PIN_SERVO_BUS_TX)
+  #error "PIN_BIN_SENSOR collides with the servo bus — see boards/xiao_c5.h"
 #endif
 
 // -----------------------------------------------------------------------------
