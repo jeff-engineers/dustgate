@@ -6,6 +6,9 @@ import { Subscription } from 'rxjs';
 import { ApiService, DiscoveredNode, NodeLinkState } from '../services/api.service';
 import type { Topology } from '@topology';
 import {
+  type Drives, DEFAULT_DRIVES, applyDrivesCache, drivesFromCaps, drivesFromHasLinear, resolveDrives,
+} from './board-drives';
+import {
   Controller, SERVO_CHANNELS_PER_BOARD,
   controllersOf, selectorsOnController,
 } from '../gates/selector-types';
@@ -45,7 +48,7 @@ interface BoardRow {
    *  serial bus use the same pads, so a board is one or the other from the
    *  moment it is flashed (`dev.sh flash --slider`). This screen is where you
    *  tell the app which one you flashed. */
-  drives: 'servo' | 'linear';
+  drives: Drives;
 }
 
 @Component({
@@ -443,6 +446,12 @@ export class BoardSetupComponent implements OnInit, OnDestroy {
   /** Rows come from the device's pairing list, plus the primary (which is always
    *  present — it's the board serving this page). The layout only supplies gate
    *  counts and the primary's label, and contributes nothing when absent. */
+  /** LIVE REPORT FIRST, cache second — the same precedence drivesOf() uses on the
+   *  canvas, and for the same reason: `drives` is only written when someone opens
+   *  this screen, so reading it first shows a freshly paired slider node as a
+   *  4-gate servo board until a poll tick happens to correct it. That is exactly
+   *  what it did (2026-09-02): the canvas drew "0/1 SL" while this list, one tap
+   *  away, said "0 of 4 gates" about the same board. */
   private rebuild(): void {
     const ctrls = this.topo ? controllersOf(this.topo) : [];
     const primary = ctrls.find((c) => c.role === 'primary');
@@ -452,7 +461,7 @@ export class BoardSetupComponent implements OnInit, OnDestroy {
       host: '',
       board: primary?.board ?? '',
       primary: true,
-      drives: primary?.drives ?? 'servo',
+      drives: resolveDrives(this.reportedDrives(primary?.id ?? 'primary'), primary?.drives),
       link: null,
       gates: this.gatesOn(primary?.id ?? 'primary'),
     }];
@@ -463,7 +472,7 @@ export class BoardSetupComponent implements OnInit, OnDestroy {
         host: l.host,
         board: l.board,
         primary: false,
-        drives: (this.controllerDrives(l.id)) ?? 'servo',
+        drives: resolveDrives(this.reportedDrives(l.id), this.controllerDrives(l.id)),
         link: l,
         gates: this.gatesOn(l.id),
       });
@@ -474,7 +483,7 @@ export class BoardSetupComponent implements OnInit, OnDestroy {
     return this.topo ? selectorsOnController(this.topo, controllerId).length : 0;
   }
 
-  private controllerDrives(id: string): 'servo' | 'linear' | null {
+  private controllerDrives(id: string): Drives | null {
     if (!this.topo) return null;
     const c = controllersOf(this.topo).find((x) => x.id === id);
     return c?.drives ?? null;
@@ -500,25 +509,19 @@ export class BoardSetupComponent implements OnInit, OnDestroy {
     for (const c of controllersOf(this.topo)) {
       const reported = this.reportedDrives(c.id);
       if (!reported) continue;                      // never heard from it — leave the cache alone
-      const current = c.drives ?? 'servo';
-      if (reported === current) continue;
-      if (reported === 'servo') delete c.drives; else c.drives = 'linear';
+      if (reported === (c.drives ?? DEFAULT_DRIVES)) continue;
+      applyDrivesCache(c as unknown as Record<string, unknown>, reported);
       changed = true;
     }
     if (changed) void this.persist();
   }
 
   /** What a board SAYS it drives, or null if it has not said. */
-  private reportedDrives(id: string): 'servo' | 'linear' | null {
+  private reportedDrives(id: string): Drives | null {
     if (!this.topo) return null;
     const primary = controllersOf(this.topo).find((c) => c.role === 'primary');
-    if (primary && id === primary.id) {
-      const s = this.api.status$.value;
-      return s && typeof s.hasLinear === 'boolean' ? (s.hasLinear ? 'linear' : 'servo') : null;
-    }
-    const link = this.links.find((l) => l.id === id);
-    if (!link || !link.caps) return null;
-    return link.caps.linear > 0 ? 'linear' : 'servo';
+    if (primary && id === primary.id) return drivesFromHasLinear(this.api.status$.value?.hasLinear);
+    return drivesFromCaps(this.links.find((l) => l.id === id)?.caps);
   }
 
   /** Keep the layout's controllers[] in step with what's paired — additively, and

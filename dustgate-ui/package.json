@@ -2,6 +2,10 @@
   "name": "dustgate-ui",
   "version": "0.1.0",
   "scripts": {
+    "gen:build-info": "node gen-build-info.js",
+    "prebuild": "node gen-build-info.js",
+    "prestart": "node gen-build-info.js",
+    "prestart:mock": "node gen-build-info.js",
     "start": "ng serve --configuration development",
     "start:mock": "ng serve --configuration development --proxy-config proxy.conf.json",
     "build": "ng build --configuration production",

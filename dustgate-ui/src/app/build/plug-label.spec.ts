@@ -75,4 +75,8 @@ group('P4 a Shelly hostname identifies by its tail');
 }
 
 console.log(`\n${checks - failures}/${checks} checks passed`);
-process.exit(failures ? 1 : 0);
+// exitCode, NOT exit(): spec-runner.js requires the suites into ONE process, so
+// an outright exit here ends the run. This called process.exit(0) until
+// 2026-09-02, which made plug-label permanently the last suite that could
+// execute — two suites added after it in SUITES never ran and never said so.
+if (failures) process.exitCode = 1;

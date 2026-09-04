@@ -168,11 +168,33 @@ function statusView(d) {
 }
 
 /** The unauthenticated GET /api/info payload. */
+/**
+ * A compile stamp in the firmware's own shape — `__DATE__ " " __TIME__`, e.g.
+ * "Sep  2 2026 07:25:00", SPACE-PADDED day and all.
+ *
+ * A simulated device has no compile step, so this is the moment the model was
+ * loaded — the closest true answer to "when did this thing come into being". It
+ * exists so the UI's build stamp can be exercised without hardware: leaving the
+ * field off entirely made the footer's device half permanently blank in demo and
+ * mock, which is indistinguishable from the formatter being broken.
+ */
+const BUILT = (() => {
+  const M = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+             'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, '0');
+  // padStart(2, ' ') is the __DATE__ quirk, not a typo — the firmware's parser is
+  // tested against it and so is the UI's.
+  return `${M[d.getMonth()]} ${String(d.getDate()).padStart(2, ' ')} ${d.getFullYear()} `
+       + `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+})();
+
 function infoView(d, apiKey, version) {
   return {
     apiKey,
     numStops:       d.numActiveStops,
     version,
+    built:          BUILT,
     idleTimeoutSec: d.idleTimeoutSec,
     manifoldModel:  d.manifoldModel,
     stepsPerMm:     d.stepsPerMm,

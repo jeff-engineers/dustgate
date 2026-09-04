@@ -1,5 +1,9 @@
 import { Component } from '@angular/core';
+import { NgIf } from '@angular/common';
 import { RouterOutlet } from '@angular/router';
+import { BUILD_TIME_MS } from '../build-info';
+import { ApiService } from './services/api.service';
+import { formatBuildStamp, formatEpochStamp } from './build-stamp';
 
 /**
  * A short token identifying the BUNDLE that is running, for the footer stamp.
@@ -25,12 +29,10 @@ function buildToken(): string {
   return 'dev';
 }
 
-const pad = (n: number) => String(n).padStart(2, '0');
-
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [RouterOutlet],
+  imports: [RouterOutlet, NgIf],
   styles: [`
     :host {
       display: block;
@@ -65,26 +67,59 @@ const pad = (n: number) => String(n).padStart(2, '0');
       font-size: 10px;
       letter-spacing: 0.04em;
       text-align: center;
+      /* Three segments that each have to stay whole. At 375px the line no longer
+         fits — it wraps, and left to itself it broke INSIDE a timestamp, which
+         reads as a rendering fault rather than a wrap. Flex with nowrap segments
+         puts the break at a separator instead, where it looks intentional. */
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 0 4px;
       /* Dimmer than --muted on purpose: --muted is for text meant to be read. */
       color: #3a3a38;
       padding: 18px 8px 12px;
       user-select: text;
     }
+    .build-stamp span { white-space: nowrap; }
     /* Highlighting it is how you read it, so make the selection legible. */
     .build-stamp::selection { background: var(--accent); color: #000; }
+    .build-stamp span::selection { background: var(--accent); color: #000; }
   `],
   template: `
     <router-outlet />
-    <div class="build-stamp">build {{ build }} · loaded {{ loaded }}</div>
+    <div class="build-stamp">
+      <span>build {{ build }}</span>
+      <span *ngIf="app">· app {{ app }}</span>
+      <span *ngIf="device">· device {{ device }}</span>
+    </div>
   `
 })
 export class AppComponent {
   readonly build = buildToken();
-  /** When this page was loaded — the other half of "am I looking at current
-   *  code": a fresh token with an old load time means a reload is all that's
-   *  missing. */
-  readonly loaded = (() => {
-    const d = new Date();
-    return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-  })();
+
+  /** When THIS BUNDLE was compiled — the app's own __DATE__/__TIME__, baked in by
+   *  gen-build-info.js. Answers "is the ng build I just made the one I'm looking
+   *  at", which the hash token identifies but cannot date. */
+  readonly app = formatEpochStamp(BUILD_TIME_MS);
+
+  /** When the DEVICE's firmware was compiled, exactly as the OLED shows it.
+   *
+   *  The two together are the diagnostic. Deployed onto the device they move as a
+   *  pair, so a mismatch means a half-finished deploy; under `ng serve` against a
+   *  real board they are meant to differ, and seeing how far apart they are is the
+   *  fastest way to know which half is stale.
+   *
+   *  Absent until /api/info answers, and absent forever with no device — the stamp
+   *  drops the segment rather than showing a placeholder, because an empty slot
+   *  reads as "not known" and a placeholder reads as a value. */
+  device = '';
+
+  constructor(private readonly api: ApiService) {
+    // A snapshot, not a subscription: /api/info is fetched once at startup and a
+    // compile stamp cannot change without the board rebooting, which reloads this
+    // page anyway. ready$ is a BehaviorSubject, so a late subscriber still gets it.
+    this.api.ready$.subscribe(() => {
+      this.device = formatBuildStamp(this.api.deviceInfo?.built);
+    });
+  }
 }

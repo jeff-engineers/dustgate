@@ -51,6 +51,8 @@ const SUITES = [
   ['tools/outlet-match.spec.js', 'outlet-match'],
   ['tools/deep-link.spec.js', 'deep-link'],
   ['build/plug-label.spec.js', 'plug-label'],
+  ['boards/board-drives.spec.js', 'board-drives'],
+  ['build-stamp.spec.js', 'build-stamp'],
 ];
 
 try {

@@ -7,11 +7,22 @@ and the firmware routes from that topology.
 
 **Status: mostly hardware-UNTESTED, with real exceptions.** Everything compiles
 and passes host tests. What has actually run on hardware: primary and node roles
-with PWM servos and NodeLink between them; and, since 2026-08-28, the **ST3215
-slider as a primary** — homing, the reference sweep, and gate moves on a 4-gate
-rockler-2.5 rack. Everything else — the slider NODE, anything under load, the 4"
-manifold — is unverified. Do not describe behaviour as verified unless it is on
-that list.
+with PWM servos and NodeLink between them; since 2026-08-28, the **ST3215 slider
+as a primary** — homing, the reference sweep, and gate moves on a 4-gate
+rockler-2.5 rack; and since 2026-09-02, the **slider NODE (`xiao_c5_linear`)
+booting, joining NodeLink, and reporting itself correctly to the UI**.
+
+**The slider node moves a gate, confirmed 2026-09-03** — it homes, finds its
+datum, takes a SET and drives the rack. That was the last unknown on the node
+path.
+
+What is NOT yet exercised is how homing is now TRIGGERED. The node used to sweep
+at boot; as of 2026-09-03 it sweeps **on demand** — on the first SET that needs a
+datum, or on a one-second hold of the wake button — because an unasked movement
+at power-up is the wrong default near a rack. The sweep itself is the same proven
+code; only its trigger is new, and neither trigger has run on hardware. Anything
+under load, 9V vs 12V, and the 4" manifold remain unverified too. Do not describe
+behaviour as verified unless it is on that list.
 
 ## Layout
 
@@ -168,6 +179,15 @@ These are decided; don't relitigate them in code review or suggestions.
   scope.
 - **The plug belongs to the tool**, and draws under the tool's name — never on a
   port.
+- **Sensing is not switching.** A tool is only ever *sensed*; the collector is
+  the one thing DustGate commands. They were fused only because a smart plug
+  happened to do both, and a 1HP collector tripping a Shelly Plus Plug US on
+  2026-09-03 broke that. Large tools get a no-relay metering plug (or our own
+  CT); the collector is switched by the RF dust-collector remote already in the
+  shop, so **nothing in the control path carries motor current**.
+  `sensor.outlet` vs `control.outlet` in the model already said this. See
+  [`docs/tool-sensing-rfc.md`](docs/tool-sensing-rfc.md) — decided, nothing
+  bench-tested.
 - **New pieces default into the system you're working in.** Adding a gate places
   it inside the active system's row band (`activeSystemId`, which follows whatever
   you last touched), not at some shop-wide origin. Systems own contiguous,

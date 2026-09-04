@@ -40,6 +40,8 @@
     "src/app/gates/selector-types.spec.ts",
     "src/app/tools/outlet-match.spec.ts",
     "src/app/tools/deep-link.spec.ts",
-    "src/app/build/plug-label.spec.ts"
+    "src/app/build/plug-label.spec.ts",
+    "src/app/boards/board-drives.spec.ts",
+    "src/app/build-stamp.spec.ts"
   ]
 }

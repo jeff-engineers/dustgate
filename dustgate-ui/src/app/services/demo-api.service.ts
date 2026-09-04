@@ -124,6 +124,9 @@ export class DemoApiService extends ApiService {
       // name field as what WILL be written. Two literals would eventually disagree
       // and the preview would quietly start lying.
       owner:         model.infoView(this.d, 'demo', '1.0-demo').owner,
+      // Same source as the mock's, so the footer's device stamp is exercised in
+      // the demo too rather than only against real hardware.
+      built:         model.infoView(this.d, 'demo', '1.0-demo').built,
     } satisfies DeviceInfo;
     this.apiKey = 'demo';
     this.ready$.next(true);

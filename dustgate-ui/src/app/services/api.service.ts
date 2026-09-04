@@ -165,6 +165,11 @@ export interface DeviceInfo {
   apiKey: string;
   numStops: number;
   version: string;
+  /** Compile stamp — `__DATE__ " " __TIME__` from the firmware, e.g. "Sep  2 2026
+   *  07:25:00". The same fact the OLED puts on its bottom row; the footer renders
+   *  it with the same formatter so the two read identically. Optional: a board
+   *  built before this field existed simply doesn't send it. */
+  built?: string;
   idleTimeoutSec?: number;  // seconds of inactivity before the driver powers off; 0 = never
   manifoldModel?: string;   // manifold profile last calibrated against
   stepsPerMm?: number;      // calibrated steps/mm

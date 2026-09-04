@@ -100,6 +100,9 @@ export interface InfoView {
   apiKey: string;
   numStops: number;
   version: string;
+  /** Compile stamp in `__DATE__ " " __TIME__` shape. The firmware's is real; a
+   *  simulated device reports when the model was loaded. */
+  built: string;
   idleTimeoutSec: number;
   manifoldModel: string;
   stepsPerMm: number;

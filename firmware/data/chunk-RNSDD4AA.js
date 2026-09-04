@@ -1,0 +1,1 @@
+var n="servo";function o(e){return typeof e=="boolean"?e?"linear":"servo":null}function t(e){return e&&typeof e.linear=="number"?e.linear>0?"linear":"servo":null}function i(e,r){return e??r??n}function l(e,r){return e===(r==="linear"?"linear":"servo")}function u(e,r){r!==null&&(r==="servo"?delete e.drives:e.drives="linear")}export{n as a,o as b,t as c,i as d,l as e,u as f};

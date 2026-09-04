@@ -119,6 +119,17 @@ inline bool&     _longFired()  { static bool b = false;  return b; }
  */
 inline void setCollectorQuery(bool (*fn)()) { _collectorRunningFn() = fn; }
 
+// What the hold DOES, for a board where sweeping every servo is not the useful
+// gesture. A slider node has no servos to sweep and no serial console to type
+// into, so the hold is its only way to say "home yourself now" at the board —
+// which is the manual half of the on-demand homing rule (node/dustgate_node.cpp).
+//
+// A hook rather than an #if because the button has no business knowing what kind
+// of actuator is fitted; it knows the gesture, the board says what it means.
+// Unset keeps the servo self-test, which is what every PWM board wants.
+inline void (*&_holdActionFn())() { static void (*f)() = nullptr; return f; }
+inline void setHoldAction(void (*fn)()) { _holdActionFn() = fn; }
+
 inline void begin() {
     pinMode(PIN_WAKE_BTN, WAKE_BTN_INPUT_MODE);
     // Seed from the pin rather than assuming HIGH: a button held down through
@@ -179,6 +190,9 @@ inline void _checkHold() {
     // is meant to be the cure for.
     statusscreen::note();
 
+    void (*action)() = _holdActionFn();
+    if (action) { action(); return; }
+
     if (servoselftest::start(collectorOn)) {
         Serial.println(F("[SELFTEST] Sweeping every servo — button held."));
     } else {
@@ -195,6 +209,7 @@ namespace wakebutton {
 inline void begin()  {}
 inline void update() {}
 inline void setCollectorQuery(bool (*)()) {}
+inline void setHoldAction(void (*)()) {}
 } // namespace wakebutton
 
 #endif  // PIN_WAKE_BTN
