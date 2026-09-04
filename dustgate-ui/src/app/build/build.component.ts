@@ -36,6 +36,9 @@ import { type RoutedDuct, type Scene, Router, sceneBounds } from './routing/rout
 import { CanvasViewport } from './canvas-viewport';
 import { fitText, plugLabel } from './plug-label';
 import {
+  type Drives, DEFAULT_DRIVES, applyDrivesCache, canHost, drivesFromCaps, drivesFromHasLinear, resolveDrives,
+} from '../boards/board-drives';
+import {
   PORT_H, SERVO_PORTS, TAB_H, TAB_W,
   cablePath, cableRun, crossingCost,
   portPos, portWidth, portExit, rankByTravel, segmentsOf,
@@ -2885,9 +2888,22 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     const controllers = this.controllersRaw();
     let added = false;
     for (const l of links) {
-      if (!l.id || controllers.some(c => c['id'] === l.id)) continue;
+      if (!l.id) continue;
+      const drives = drivesFromCaps(l.caps);
+      const existing = controllers.find(c => c['id'] === l.id);
+      if (existing) {
+        // Refresh the CACHE from what the board just said. drivesOf() already reads
+        // the live report, so the canvas drew this correctly either way — but the
+        // cache is what gets SAVED, and validation reads the saved field. A slider
+        // node merged in with no `drives` at all defaulted to 'servo' on the way to
+        // the device, so a layout that looked right on screen came back "set up as a
+        // servo board but has a sliding gate on it" (2026-09-02).
+        applyDrivesCache(existing, drives);
+        continue;
+      }
       controllers.push({
         id: l.id, role: 'secondary', name: l.name || l.host || l.id, board: l.board,
+        ...(drives === 'linear' ? { drives } : {}),
         link: { transport: 'wifi-ws', host: l.host },
       } as unknown as RawEl);
       added = true;
@@ -3126,17 +3142,14 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
    *
    *  The primary reports it as `hasLinear` in its status; a node reports it as
    *  `caps.linear` in its WELCOME, which reaches us through /api/nodes. */
-  private drivesOf(c: RawEl): 'servo' | 'linear' {
-    const cached = (c['drives'] as 'servo' | 'linear' | undefined) ?? 'servo';
-    if (c['role'] === 'primary') {
-      const s = this.api.status$.value;
-      return typeof s?.hasLinear === 'boolean' ? (s.hasLinear ? 'linear' : 'servo') : cached;
-    }
-    const link = this.nodeLinks.find((l) => l.id === c['id']);
-    if (link?.caps && typeof link.caps.linear === 'number') {
-      return link.caps.linear > 0 ? 'linear' : 'servo';
-    }
-    return cached;
+  private drivesOf(c: RawEl): Drives {
+    return resolveDrives(this.reportedDrives(c), c['drives'] as Drives | undefined);
+  }
+
+  /** What a board SAYS it drives, or null if it has not said. */
+  private reportedDrives(c: RawEl): Drives | null {
+    if (c['role'] === 'primary') return drivesFromHasLinear(this.api.status$.value?.hasLinear);
+    return drivesFromCaps(this.nodeLinks.find((l) => l.id === c['id'])?.caps);
   }
 
   // ── ports and tabs ──────────────────────────────────────────────────────────
@@ -3662,11 +3675,20 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       this.elems(t).filter(e => e['type'] === 'selector')
         .map(e => (e['controllerId'] as string | undefined) ?? primary),
     );
+    // CAN it, before HAS it room. A sliding gate needs a board flashed for the
+    // serial bus and a valve needs the PWM bank; the two builds contend for the
+    // same pads, so neither substitutes for the other. Without this the primary's
+    // "is the default" bonus won outright and a second sliding gate landed on a
+    // servo board at a port that cannot exist (2026-09-02).
+    const canDrive = (id: string) => {
+      const c = this.controllersRaw().find(x => x['id'] === id);
+      return canHost(c ? this.drivesOf(c) : DEFAULT_DRIVES, kind);
+    };
     const hasRoom = (id: string) => kind === 'linear'
       ? !selectorsOnController(t, id).some(s => s.kind === 'linear')
       : firstFreeChannel(t, id) !== null;
     const rank = (id: string) =>
-      (hasRoom(id) ? 0 : 4) + (here.has(id) ? 0 : 2) + (id === primary ? 0 : 1);
+      (canDrive(id) ? 0 : 8) + (hasRoom(id) ? 0 : 4) + (here.has(id) ? 0 : 2) + (id === primary ? 0 : 1);
 
     const best = [...ids].sort((a, b) => rank(a) - rank(b))[0];
     return { controllerId: best, channel: kind === 'linear' ? 0 : firstFreeChannel(t, best) ?? 0 };

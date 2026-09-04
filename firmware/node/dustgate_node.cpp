@@ -46,14 +46,32 @@
 // sweep at homing speed takes the better part of a minute. A blocking sweep
 // would reboot the board somewhere in the middle of it.
 //
-// WHY IT HOMES AT BOOT, unasked. A step-counting servo has no datum of its own
-// and comes back from a power cycle holding nothing (torque off), so a node that
-// has just restarted does not know where its carriage is AND is not holding it
-// there. There is no safe move to make from that state and no way to answer a
-// SET honestly. Sweeping is how it gets an answer. The risk this accepts is a
-// node that reboots mid-cut moving its carriage; the alternative — refusing
-// every SET until a human walks over — is worse, and the carriage was already
-// unheld the moment the power dropped.
+// WHEN IT HOMES: ON DEMAND, NEVER AT BOOT (changed 2026-09-03).
+//
+// A step-counting servo has no datum of its own and comes back from a power
+// cycle holding nothing (torque off), so a node that has just restarted does not
+// know where its carriage is. It has to sweep before it can answer a SET
+// honestly — the only question is WHEN.
+//
+// It used to sweep at boot, unasked. That was wrong in the way an unasked
+// movement is always wrong: a board that is powered up on a bench, or that
+// brown-outs and reboots while someone has their hands near the rack, drives its
+// carriage the length of the rail with nobody having asked for anything. The
+// note that used to be here reasoned that the alternative was refusing every SET
+// until a human walked over, and that refusing was worse. That was a false
+// choice: the deferred-move slot below already existed, so the third option —
+// sweep WHEN FIRST ASKED, and hold the asking move until the datum lands — costs
+// one flag and refuses nothing.
+//
+// So the sweep starts on either of:
+//   * the first SET that needs a datum (the primary routing a tool here), or
+//   * the wake button held for a second, which is the deliberate "home yourself
+//     now" gesture at the board itself (see wakebutton::setHoldAction).
+//
+// The cost, stated plainly: the FIRST gate selection after a reboot pays for a
+// full sweep before the gate moves, which is seconds, not milliseconds. That is
+// the right place to spend it — it is a move someone asked for, at a moment they
+// are watching, instead of a move nobody asked for at a moment nobody is.
 //
 // FAIL-SAFE: if the primary disappears, every actuator HOLDS. There is no
 // timeout that closes gates, no re-homing on reconnect, no autonomous behaviour
@@ -142,6 +160,16 @@ enum HomingPhase : uint8_t {
 };
 static HomingPhase g_homing = HOME_NEEDED;
 static uint32_t    g_homingStartedMs = 0;
+
+// Has anything ASKED for a datum yet? HOME_NEEDED alone is not enough to start a
+// sweep — that is the whole of the on-demand rule (see the note at the top of
+// this file). Set by the first SET that needs a datum, and by the button hold.
+//
+// It STAYS set once asked, which is what makes the drive retry below do the
+// right thing: a servo that was missing at boot and gets plugged in later
+// completes the request that is already outstanding, rather than starting a
+// sweep nobody is waiting for.
+static bool g_homeAsked = false;
 
 // A node has no serial console to type `reset` into, so the retry the primary
 // gets as a command it has to get on a timer. Same reason as the primary's:
@@ -285,16 +313,22 @@ static void startSweep() {
 // is not homed and not sweeping — a working, homed slider is never disturbed.
 static void retryDriveIfNeeded() {
     if (g_homing == HOME_DONE || g_homing == HOME_RUNNING) return;
-    if (motor.online() && g_homing == HOME_NEEDED) return;   // nothing wrong; the sweep is about to start
+    if (motor.online() && g_homing == HOME_NEEDED) return;   // nothing wrong; it just has not been asked yet
 
     uint32_t now = millis();
     if (now - g_lastDriveRetryMs < kDriveRetryMs) return;
     g_lastDriveRetryMs = now;
 
     if (motor.reconnect()) {
-        Serial.println(F("[NODE] the servo is answering now — homing."));
+        // NOT "— homing": whether a sweep follows depends on whether anything
+        // asked for one. A servo plugged in on a quiet bench goes back to ready
+        // and sits still; one plugged in with a move already waiting sweeps on
+        // the next tick and then runs it.
+        Serial.print(F("[NODE] the servo is answering now"));
+        Serial.println(g_homeAsked ? F(" — homing, a move is waiting.")
+                                   : F(" — idle until something asks for a gate."));
         feedback.begin(&motor);
-        g_homing = HOME_NEEDED;   // the tick below starts the sweep
+        g_homing = HOME_NEEDED;
     }
 }
 
@@ -591,6 +625,20 @@ void setup() {
 #if HAS_SERVO
     servoselftest::begin(servos, SERVO_COUNT);
 #endif
+#if HAS_LINEAR
+    // A slider has no servo bank to sweep, so the hold means "home yourself now"
+    // — the deliberate, at-the-board half of the on-demand rule at the top of
+    // this file. It only ASKS: loop() owns the sweep, and a hold while one is
+    // already running or finished is a no-op rather than a restart.
+    wakebutton::setHoldAction([]() {
+        if (g_homing == HOME_DONE || g_homing == HOME_RUNNING) {
+            Serial.println(F("[HOME] button held — already homed or homing; ignored."));
+            return;
+        }
+        g_homeAsked = true;
+        Serial.println(F("[HOME] button held — homing on request."));
+    });
+#endif
 
     Serial.println(F("=== DustGate node (secondary) ==="));
     Serial.print(F("Board: ")); Serial.println(BOARD_NAME);
@@ -783,7 +831,7 @@ void loop() {
     // A servo that arrived late, or came back after being unplugged. Checked
     // before the sweep so a successful retry starts homing on the same pass.
     retryDriveIfNeeded();
-    if (g_homing == HOME_NEEDED && motor.online()) startSweep();
+    if (g_homeAsked && g_homing == HOME_NEEDED && motor.online()) startSweep();
     updateSweep();
 #endif
 
@@ -824,13 +872,22 @@ void loop() {
                 Serial.print(F("[MOVE] REFUSED — no datum (homing failed). "));
                 Serial.print(cmd.positionMm, 1); Serial.println(F("mm discarded."));
             } else {
-                // Still sweeping. Hold the LATEST position and run it when the
-                // datum lands — see g_deferredMove for why only the latest.
+                // HOME_NEEDED or HOME_RUNNING. Either way the move is held until
+                // there is a datum to measure it from; the difference is that
+                // HOME_NEEDED also has to ASK for one, which is the on-demand
+                // rule at the top of this file. loop() starts the sweep on the
+                // next tick — not here, because this runs on the AsyncTCP task
+                // and the sweep must only ever be driven from loop().
+                g_homeAsked = true;
+                // Hold the LATEST position and run it when the datum lands —
+                // see g_deferredMove for why only the latest.
                 g_deferredMove = true;
                 g_deferredMm   = cmd.positionMm;
                 topo::nodelink::strlcpy_(g_deferredSel,   cmd.selectorId, sizeof(g_deferredSel));
                 topo::nodelink::strlcpy_(g_deferredState, cmd.stateId,    sizeof(g_deferredState));
-                Serial.print(F("[MOVE] deferred until the sweep finishes: "));
+                Serial.print(g_homing == HOME_RUNNING
+                             ? F("[MOVE] deferred until the sweep finishes: ")
+                             : F("[MOVE] no datum yet — homing first, then: "));
                 Serial.print(cmd.positionMm, 1); Serial.println(F("mm"));
             }
         }
