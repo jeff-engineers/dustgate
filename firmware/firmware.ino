@@ -30,6 +30,7 @@
 #include "utils/StatusLed.h"
 #include "utils/StatusScreen.h"   // optional SSD1306; compiles to nothing unfitted
 #include "utils/WakeButton.h"    // the button that lights it; ditto
+#include "utils/BinSensor.h"     // dust-bin level: debounce + whose bin it is
 #include "motor/ServoSelfTest.h"  // and, held for a second, sweeps every servo
 #include "motor/MotorDriver.h"
 #include "feedback/FeedbackSystem.h"
@@ -615,6 +616,11 @@ public:
 static SketchLinearDrive      g_linearDrive;
 static topo::LocalActuatorBus g_localBus;
 static topo::NodeBus          g_nodeBus;
+#if HAS_BIN
+// One bin per board, because it is one pin. A shop with two collectors and one
+// board between them is a wiring problem before it is a schema one.
+static topo::BinDebounce       g_binDebounce;
+#endif
 static topo::TopologyRuntime  g_topoRuntime;
 static topo::TopologyStore    g_topoStoreSketch;   // read-only view; the API server owns writes
 
@@ -848,6 +854,13 @@ void setup() {
     // The button that wakes it back up after the two-minute blank. Nothing on a
     // board without one, and it never does anything but light the glass.
     wakebutton::begin();
+#if HAS_BIN
+    // INPUT_PULLUP so an unwired board reads HIGH, which with the optocoupler's
+    // inversion means "bin OK". A board with nothing connected must not scream —
+    // and topology gates it anyway, since nothing reports unless a collector
+    // names this board (boards/xiao_c5.h, docs/shop-schema-rfc.md §7.5).
+    pinMode(PIN_BIN_SENSOR, INPUT_PULLUP);
+#endif
 
     // WiFi provisioning — must run before any WiFi-dependent control mode.
     // If WIFI_STA_SSID is hardcoded in config.h it is used directly.
@@ -1325,6 +1338,38 @@ void loop() {
             if (!machineId.empty()) g_topoRuntime.setMachinePower(machineId, o->getPowerW());
         }
 #endif
+#if HAS_BIN
+        // -- dust bin level ------------------------------------------------
+        //
+        // Read the pin, debounce it, and hand the answer to whichever system's
+        // collector names this board. Everything worth testing here lives in
+        // utils/BinSensor.h; this is the Arduino-shaped edge of it.
+        //
+        // THE PIN IS INVERTED BY THE OPTOCOUPLER: LOW means FULL. That is a
+        // property of the WIRING, so `bin.sensor.invert` in the document decides
+        // it rather than this line — someone who wires the sensor straight to a
+        // pull-up (simpler, less isolation; §7.4 rejected it) flips the flag
+        // instead of reflashing. Default true, because the optocoupler is the
+        // documented build.
+        //
+        // The resolve is redone every pass rather than cached at adopt time. It
+        // is a walk over one array of elements, it costs nothing next to the HTTP
+        // work above, and caching it would mean one more thing to invalidate when
+        // a topology is adopted — which is exactly the class of bug that put
+        // controllerId→host resolution back on the adopt path.
+        {
+            std::string binSys = topo::localBinSystemId(
+                g_topoRuntime.topology(), g_nodeBus.ownControllerId().c_str());
+            if (!binSys.empty()) {
+                JsonObjectConst sensor = g_topoRuntime.binSensorFor(binSys);
+                const bool invert = sensor["invert"] | true;
+                const bool raw    = (digitalRead(PIN_BIN_SENSOR) == LOW);
+                g_binDebounce.sample(invert ? raw : !raw, millis());
+                g_topoRuntime.setBinFull(binSys, g_binDebounce.full());
+            }
+        }
+#endif
+
         // millis() is passed in rather than read inside: the runtime is pure
         // (host-testable, no Arduino.h). It drives the collector coast-down.
         g_topoRuntime.update(millis());
