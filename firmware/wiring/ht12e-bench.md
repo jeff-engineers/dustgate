@@ -9,6 +9,13 @@ receiver and switched a lamp. The three numbers that took finding:
 | fOSC | **~3.5 kHz** with 1.0 MΩ at 3.3 V, and that works. Holtek's ~3 kHz is a reference, not a target. |
 | Data word | **`data 14`** — AD8 low, the other three don't-care. Every even value keys it, nothing odd. One button, one pin. |
 
+**And the encoder is optional.** An RMT-generated frame from the ESP32 keys the
+receiver with no HT12E in the circuit at all — move the TX module's DATA jumper
+from HT12E pin 17 to **D4** and use `rmt`. A tick sweep found **85–400+ µs all
+work**, because the HT12D does ratio detection rather than rate matching, so the
+tick is nearly a free parameter. Settled at **270 µs, 24 repeats** (~473 ms
+airtime, matching the proven 500 ms hold). The address becomes a software value.
+
 No antenna was fitted for any of it.
 
 **What it is for.** Keying the Rockler dust collector remote's receiver from an
@@ -40,7 +47,7 @@ for — four candidates, one of them switches the collector.
 | | |
 |---|---|
 | HT12E, DIP-18 | The encoder. Datasheet at `~/code/Datasheets/ht12e-holtek.pdf` |
-| 315 MHz TX module | Powered at **5 V** for range; its data input takes 3.3 V logic |
+| 315 MHz TX module | **5 V on the bench, 12 V for a real install** — see below. Its data input takes 3.3 V logic either way |
 | 8-position SPST DIP switch | Address. DIP-16 body, 2.54 mm |
 | 1.0 MΩ resistor | Rosc. See §5 |
 | XIAO ESP32C5 | Any spare one |
@@ -83,6 +90,45 @@ So a permanent build is **an 8-position DIP, two wires to ground (VSS and AD8),
 one to 3V3, one GPIO, one to the transmitter, and a resistor.** Only one ESP32
 pad is spent — TE — which is what makes this fit on a primary with two pads free.
 
+### As a breakout: four pins
+
+Put the HT12E, the DIP, the resistor, the TX module and the antenna on their own
+little board and the host has to supply exactly four things:
+
+| | |
+|---|---|
+| **3V3** | HT12E VDD, and the TX module too — 3.3 V proved enough for 40 ft through walls |
+| **GND** | common |
+| **TE** | the one signal |
+
+(Drop the HT12E for the RMT path and it is **3.3 V, GND, DATA** — three pins.)
+
+**Both rails are needed, and 3V3 cannot be dropped.** VIH on the HT12E is
+0.8 × VDD, so at 5 V it wants 4.0 V to read TE high and no 3.3 V host can produce
+that. Open-drain nearly rescues it — the firmware never drives TE high, it
+releases to high-Z and lets the internal 1.5 MΩ pull-up idle it — but at 5 V VDD
+that pull-up parks TE at 5 V, into a C5 pin that is not 5 V tolerant. A 3.3 V
+regulator on the breakout would get it to three pins; one extra wire is cheaper
+than an active part.
+
+**Give the transmitter 12 V, not 5 V.** The fob runs from a 12 V "23A" cell —
+the whole thing, encoder and transmitter — and the fob is what actually achieves
+Rockler's 50 ft through walls. These modules take 3.5–12 V and their output power
+goes up with supply, so 12 V is the reference, not an optimisation. This shop
+already has a 12 V rail for the bin sensor and the collector lamps.
+
+**The two supplies are independent, which is why you can have both.** The
+ENCODER's supply sets the data rate (fOSC against VDD, §5) and has nothing to do
+with range; the TRANSMITTER's supply sets radiated power and has nothing to do
+with the data rate. So the HT12E stays at 3.3 V for GPIO compatibility while the
+module gets 12 V for range. Do not run the HT12E at 12 V to match the fob — VIH
+would become 9.6 V and TE would be undrivable.
+
+⚠️ **Verify at the bench:** that the HT12E's 3.3 V DOUT still keys the module's
+data input when the module is on 12 V. It is normally a transistor base behind a
+series resistor and 3.3 V usually drives it fine, but that is a habit, not a
+datasheet reading.
+
 **Address on a DIP, data on a strap, and the split is not arbitrary.** The
 address is the per-device setting: another receiver has another code, and a DIP
 is how one board design works with any of them without unsoldering. AD8 is not
@@ -107,7 +153,7 @@ right-hand column are what it was actually running.
 ```
   3V3 ──┬─────────────── HT12E pin 18 (VDD)     3.3V, not 5V — see §5
         │
-        │   ┌── 5V ───── TX module VCC          5V for range, NOT 3V3
+        │   ┌── 5V ───── TX module VCC          bench. 12V for real range — §3
         │   │
         │   └─ HT12E 17 (DOUT) ── TX module DATA
         │                          TX module GND ── GND
@@ -205,9 +251,17 @@ with a lot of garage-door and gate hardware, and a neighbour's receiver is not
 yours to key. Keep the bench range short and the question stays between you and
 your own collector.
 
-**Fit the antenna at install time**: 23.8 cm of solid core wire (quarter wave at
-315 MHz) in the ANT pad. Rockler claims 50 ft through walls for the fob, and
-nothing unmatched will get near that.
+**As it turns out, you may never need to.** Measured 2026-09-06: **~40 ft
+through several interior walls at 3.3 V with nothing in the ANT pad** — close to
+the 50 ft Rockler claims for the fob, which runs from a 12 V cell. The 12 V
+supply and the quarter-wave wire are headroom, not requirements.
+
+Arguably leave it. Extra range at 315 MHz with an 8-bit fixed code is extra
+chance of keying a neighbour's gear, and 40 ft already covers a shop.
+
+If you do want it: 23.8 cm of solid core wire (quarter wave) in the ANT pad. And
+note that if the module's coil is a loading coil forming a complete antenna
+system, a wire may *detune* it — measure, fit, measure again.
 
 ## 6. Optional stage 2 — a receiver of your own
 

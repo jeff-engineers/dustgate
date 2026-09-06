@@ -137,6 +137,58 @@ Rockler receiver. What that settles, and the two things that were not obvious:
 | **TE hold** | **≥ ~500 ms. This is the one that bites.** 120 ms keyed the receiver only intermittently while the fob was rock solid. Four words is the HT12E's documented *minimum* transmission because the decoder validates by seeing the same frame more than once — so a truncated group produces **no output rather than a wrong one**, which is indistinguishable from a range problem. Default is now 400 ms; 500 is proven. |
 | Antenna | **Not needed at bench range** — an unfitted module radiates plenty across a bench, which is its own trap in the other direction. Fit the 23.8 cm quarter-wave at install. |
 
+### The encoder comes out (2026-09-06)
+
+**An RMT-generated frame keys the receiver, with no HT12E in the circuit.** The
+ESP32 clocks the waveform out of hardware straight into the transmitter's data
+pin. That drops the encoder, the address DIP and the oscillator resistor from the
+BOM, and — the actual prize — **makes the address a software value**, so one
+board works with any receiver without a jumper to set or document.
+
+RMT is what makes it viable. Option B was rejected earlier because bit-banging
+270 µs pulses on a primary running WiFi means FreeRTOS stretches one and the
+command is silently lost. RMT clocks the train out in hardware; nothing the CPU
+does afterwards can disturb it.
+
+**The tick turns out to be nearly a free parameter, and that was a surprise.** A
+sweep found **85 µs to at least 400 µs all work** — a 5:1 window. The reason is
+that an HT12D does *ratio* detection: each bit is 1:2 or 2:1 within itself, so
+the decoder compares the two halves of a symbol and never needs to know the rate.
+The 50:1 fOSC rule is an oversampling requirement, not a matched-frequency one.
+
+That retires a whole thread of anxiety. It is why 1.0 MΩ giving 3.5 kHz instead
+of Holtek's nominal 3.0 never caused trouble, and why copying the fob's resistor
+would have been solving a non-problem.
+
+**Settled values: tick 270 µs, 24 repeats.** 270 is the middle of the proven
+range and is what real HT12E parts produce; 24 repeats is ~473 ms of airtime,
+which lands on the 500 ms that was independently proven with the encoder. Those
+two numbers agreeing from opposite directions is the useful part — **reliability
+is about total airtime, not tick length.** The decoder needs to see the same code
+several times, and that is the only timing constraint that ever mattered.
+
+The receiver is genuinely decoding, not detecting carrier: `data 15` and every
+odd value still fail. A receiver that toggled on any 315 MHz energy would be a
+hazard, and this one is not.
+
+**Range is solved, and more cheaply than expected (2026-09-06).** ~40 ft through
+several interior walls, at **3.3 V, with nothing in the ANT pad** — near the
+50 ft Rockler claims for the fob, which runs at 12 V.
+
+So the 12 V supply and the quarter-wave wire recommended earlier are **headroom,
+not requirements**, and this document previously said otherwise. The breakout
+drops to **three pins: 3.3 V, GND, DATA** — one rail, no level shifting, no
+antenna.
+
+There is a case for leaving it that way rather than banking the headroom. At
+315 MHz with an 8-bit fixed code, extra range is extra opportunity to key a
+neighbour's gear or be keyed by theirs, and 40 ft already covers the shop.
+
+**Still to check:** a house is a kinder RF environment than a shop. The receiver
+will sit beside a large grounded steel collector, and a universal motor's brushes
+are a broadband noise source. The test that counts is at the install location
+with the collector running.
+
 **Design consequence: do not block for 500 ms.** `setSwitch()` on a primary
 cannot sit in a busy wait that long — it would stall the web server and the
 servo update pass for half a second on every collector change. Assert TE, record

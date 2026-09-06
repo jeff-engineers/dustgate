@@ -45,6 +45,17 @@
 static const int PIN_TE   = 0;    // D1  → HT12E pin 14, TE (active low)
 static const int PIN_OSC  = 1;    // D0  ← HT12E pin 15, OSC2 (frequency check)
 static const int PIN_VT   = 11;   // D6  ← HT12D pin 17, VT  (optional stage 2)
+// D4 → the TX module's DATA — the encoder-less path, where the ESP32 keys the
+// transmitter directly and the HT12E is out of the circuit.
+//
+// ⚠️ ONE WIRE, MOVED. Do NOT tie this and HT12E pin 17 to DATA together. DOUT is
+// a CMOS output and is never high-impedance — in standby it is still driving —
+// so both connected is two outputs fighting over the same net, not a harmless
+// wired-OR. (The AD pins tolerate that because nothing ever drives them HIGH;
+// DOUT is the opposite case.) To A/B, move the DATA jumper between HT12E 17 and
+// D4. Same board, same module, same antenna, same receiver — which is the whole
+// reason to do it on one prototype rather than two.
+static const int PIN_TXDATA = 23; // D4  → TX module DATA (encoder bypassed)
 static const int PIN_AD[4] = {
     12,   // D7  → HT12E pin 10, AD8
     8,    // D8  → HT12E pin 11, AD9
@@ -184,6 +195,76 @@ static void measureOsc(bool assertTe) {
         Serial.println(F("  compare with `oscf` — the fob's rate is the one to match."));
 }
 
+// =============================================================================
+// The encoder-less path: generate the HT12E waveform ourselves, in RMT hardware.
+//
+// WHY THIS EXISTS. The HT12E is a guarantee — its waveform is right by
+// construction — but it is also three parts (encoder, address DIP, Rosc) and a
+// hardware-fixed address. Generating the frame instead drops the BOM to the
+// ESP32 and the transmitter, and makes the address a SOFTWARE value, which is
+// what lets one board work with any receiver without jumpers.
+//
+// WHY RMT AND NOT delayMicroseconds(). This is option B from
+// docs/tool-sensing-rfc.md §4.2, which was rejected for timing: the primary runs
+// WiFi, and FreeRTOS will preempt a bit-banging loop and stretch a pulse. RMT
+// clocks the pulse train out in HARDWARE from a list of (duration, level) pairs,
+// so nothing the CPU does afterwards can disturb it. That single difference is
+// what turns "reimplementing the protocol badly" into "reimplementing it".
+//
+// THE SHAPE comes from RCSwitch protocol 11 — { 270, {36,1}, {1,2}, {2,1}, true }
+// — a base tick, a long sync, and two three-tick symbols. But the tick is NOT
+// taken on faith: our encoder measured ~3.5 kHz where Holtek's example says 3.0,
+// so this chip's symbols are around 17% shorter than a nominal one's. `tick` and
+// `inv` are runtime settings precisely because the published numbers are a
+// starting point and the receiver is the authority.
+// =============================================================================
+static uint32_t g_tickUs  = 270;    // RCSwitch protocol 11's base tick
+static bool     g_inv     = true;   // protocol 11 is an inverted protocol
+static uint16_t g_repeats = 24;     // ~500 ms at 270 us, matching the proven hold
+
+// Address as EIGHT BITS, bit i = A_i, 1 = "left open" = logic 1. The Rockler's
+// DIP has rockers 1, 6, 8 closed — A0, A5, A7 grounded — which is 0b01011110.
+// THE POINT OF THE WHOLE EXERCISE: this is a variable, not a switch.
+static uint8_t  g_addr = 0b01011110;
+
+static bool     g_rmtReady = false;
+
+// One HT12E symbol as an RMT entry: a low run then a high run, or the reverse
+// when g_inv is false. RCSwitch counts {high, low} in ticks and then inverts the
+// levels, so a "1" is {2,1} → two ticks low, one tick high.
+static void sym(rmt_data_t& e, uint8_t firstTicks, uint8_t secondTicks) {
+    e.level0    = g_inv ? 0 : 1;
+    e.duration0 = firstTicks  * g_tickUs;
+    e.level1    = g_inv ? 1 : 0;
+    e.duration1 = secondTicks * g_tickUs;
+}
+
+// 12 bits (A0..A7 then AD8..AD11, transmission order per the datasheet) plus the
+// sync, repeated. A repeating frame is cyclic, so sync-last matches sync-first.
+static void rmtSend() {
+    if (!g_rmtReady) {
+        if (!rmtInit(PIN_TXDATA, RMT_TX_MODE, RMT_MEM_NUM_BLOCKS_1, 1000000)) {
+            Serial.println(F("  rmtInit failed"));
+            return;
+        }
+        g_rmtReady = true;
+    }
+    rmt_data_t frame[13];
+    for (int i = 0; i < 8; i++) {                       // address, A0 first
+        const bool one = (g_addr >> i) & 1;
+        if (one) sym(frame[i], 2, 1); else sym(frame[i], 1, 2);
+    }
+    for (int i = 0; i < 4; i++) {                       // data, AD8 first
+        const bool one = (g_data >> i) & 1;
+        if (one) sym(frame[8 + i], 2, 1); else sym(frame[8 + i], 1, 2);
+    }
+    sym(frame[12], 36, 1);                              // sync / pilot
+
+    for (uint16_t r = 0; r < g_repeats; r++) {
+        rmtWrite(PIN_TXDATA, frame, 13, RMT_WAIT_FOR_EVER);
+    }
+}
+
 // -- Console ------------------------------------------------------------------
 static void banner() {
     Serial.println(F("\nHT12E bench — 315 MHz injection for the Rockler DC switch"));
@@ -195,6 +276,13 @@ static void banner() {
     Serial.println(F("  osc           measure OUR fOSC on OSC2"));
     Serial.println(F("  oscf          measure the FOB's fOSC — the rate to match"));
     Serial.println(F("  vt            report whether the HT12D saw the last burst"));
+    Serial.println(F("\n  -- encoder-less path: move the DATA jumper to D4 first --"));
+    Serial.println(F("  rmt           send the frame from RMT hardware, no HT12E"));
+    Serial.println(F("  tick <us>     base tick (now 270, from RCSwitch protocol 11)"));
+    Serial.println(F("  rsweep [a b s] sweep the tick to find the WINDOW (default 100-400/10)"));
+    Serial.println(F("  inv <0|1>     invert the waveform (now 1)"));
+    Serial.println(F("  addr <0-255>  address in SOFTWARE. bit i = A_i, 1 = open"));
+    Serial.println(F("  reps <n>      frame repeats (now 24, ~= the 500ms hold)"));
     Serial.println(F("\nNOTHING TRANSMITS UNTIL YOU TYPE IT."));
     // A lamp, not the collector: nobody has a dust collector at their bench, and
     // a lamp is the better indicator anyway — instant, unambiguous, no spin-up to
@@ -287,6 +375,75 @@ static void handle(String line) {
         Serial.println(F("  then re-check `osc` against `oscf` and the address DIP."));
     }
     else if (cmd == "sweep") { scan(0, 15); }
+    // ── the encoder-less path ────────────────────────────────────────────
+    else if (cmd == "rmt") {
+        Serial.printf("  RMT: addr 0x%02X data %u tick %luus inv %d x%u ... ",
+                      g_addr, g_data, (unsigned long)g_tickUs, (int)g_inv, g_repeats);
+        rmtSend();
+        Serial.println(F("sent"));
+    }
+    else if (cmd == "tick") {
+        const int v = arg.toInt();
+        if (v < 50 || v > 1000) { Serial.println(F("  50-1000 us")); return; }
+        g_tickUs = (uint32_t)v;
+        Serial.printf("  tick = %luus\n", (unsigned long)g_tickUs);
+    }
+    else if (cmd == "inv") {
+        g_inv = (arg.toInt() != 0);
+        Serial.printf("  inverted = %d\n", (int)g_inv);
+    }
+    else if (cmd == "addr") {
+        const int v = arg.toInt();
+        if (v < 0 || v > 255) { Serial.println(F("  0-255")); return; }
+        g_addr = (uint8_t)v;
+        Serial.printf("  addr = 0x%02X — A7..A0 = ", g_addr);
+        for (int i = 7; i >= 0; i--) Serial.print((g_addr >> i) & 1);
+        Serial.println();
+    }
+    else if (cmd == "reps") {
+        const int v = arg.toInt();
+        if (v < 1 || v > 200) { Serial.println(F("  1-200")); return; }
+        g_repeats = (uint16_t)v;
+        Serial.printf("  repeats = %u\n", g_repeats);
+    }
+    // The tick is the one number RCSwitch's protocol 11 gives us that our own
+    // chip contradicts (~3.5 kHz measured against Holtek's nominal 3.0), so sweep
+    // it rather than trust it. This also measures how WIDE the receiver's window
+    // is, which no single working value would tell you.
+    else if (cmd == "rsweep") {
+        // Range is settable because the first run found its answer at 180, the
+        // very bottom of the original 180-360 span — which is an EDGE, not a
+        // result. A working value at the end of a sweep means the window
+        // probably continues past it and you have no idea how far.
+        uint32_t from = 100, to = 400, step = 10;
+        if (arg.length()) sscanf(arg.c_str(), "%lu %lu %lu",
+                                 (unsigned long*)&from, (unsigned long*)&to,
+                                 (unsigned long*)&step);
+        if (from < 40 || to > 1200 || from >= to || step < 1) {
+            Serial.println(F("  rsweep [from] [to] [step]   (40-1200us)"));
+            return;
+        }
+        const uint32_t saved = g_tickUs;
+        drainInput();
+        Serial.printf("  sweeping %lu-%luus step %lu — watch the lamp for CHANGES\n",
+                      (unsigned long)from, (unsigned long)to, (unsigned long)step);
+        Serial.println(F("  NOTE EVERY TICK THAT TOGGLES IT, not just the first."));
+        Serial.println(F("  You want the MIDDLE of the working range, not an edge."));
+        Serial.println(F("  (press any key to stop)"));
+        for (uint32_t t = from; t <= to; t += step) {
+            g_tickUs = t;
+            Serial.printf("  tick %4luus ... ", (unsigned long)t);
+            rmtSend();
+            Serial.println(F("sent"));
+            delay(2000);
+            if (aborted()) { g_tickUs = saved; return; }
+        }
+        g_tickUs = saved;
+        Serial.printf("  rsweep complete, tick restored to %luus.\n",
+                      (unsigned long)saved);
+        Serial.println(F("  If the working values run to either END of the sweep,"));
+        Serial.println(F("  widen it — you found a boundary, not a window."));
+    }
     else if (cmd == "osc")   { measureOsc(true); }
     else if (cmd == "oscf")  {
         Serial.println(F("  clip D0 to the FOB's OSC2 (pin 15) and hold its button now..."));
