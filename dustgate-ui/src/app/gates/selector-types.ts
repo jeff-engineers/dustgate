@@ -118,12 +118,14 @@ export const SERVO_CHANNELS_PER_BOARD = 4;
 
 /** Outlets ONE sliding gate may serve — MAX_SLIDE_BRANCHES in topology.js.
  *
- *  Not a firmware limit: NUM_STOPS is 16, and that was "find the maximum sane
- *  value and double it" — an array bound, not a target. The ceiling is DUCTING.
- *  A slide manifold is a star, so every outlet is its own flexible run radiating
- *  from one point, and past about eight the flex cost and the clutter dominate;
- *  the right answer then becomes ball valves along a trunk, not a longer rack.
- *  It is a length too — 8 gates at the 4" pitch is a rack over 890mm long.
+ *  The ceiling is DUCTING. A slide manifold is a star, so every outlet is its
+ *  own flexible run radiating from one point, and past about eight the flex cost
+ *  and the clutter dominate; the right answer then becomes ball valves along a
+ *  trunk, not a longer rack. It is a length too — 8 gates at the 4" pitch is a
+ *  rack over 890mm long.
+ *
+ *  It is the FIRMWARE limit as well since 2026-09-05: NUM_STOPS was 16 (an array
+ *  bound, not a target) and is now 8, so all three numbers agree.
  *
  *  Eight is already pushing it. Six is comfortable. */
 export const SLIDE_MAX_OUTLETS = 8;

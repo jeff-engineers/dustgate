@@ -19,7 +19,8 @@
 #include "../config.h"
 
 static const uint16_t CALIB_MAGIC   = 0xCA1B;
-static const uint8_t  CALIB_VERSION = 4;     // v4: homeIsMaxEndstop (left = home datum)
+static const uint8_t  CALIB_VERSION = 5;     // v5: NUM_STOPS 16 → 8, so stopMM/stopRole shrank
+                                             // v4: homeIsMaxEndstop (left = home datum)
 static const int      CALIB_ADDRESS = 0;    // EEPROM start address
 
 // Port roles — mirror shared/device-model PORT_ROLES. Stored per stop so a
@@ -49,7 +50,9 @@ struct CalibrationData {
 };
 
 // EEPROM size needed.
-// With NUM_STOPS=16: 2+1+1+(17×4)+4+4+(17×1)+16+2 = 115 bytes; 128 leaves margin.
+// With NUM_STOPS=8: 2+1+1+(9×4)+4+4+(9×1)+16+2 = 75 bytes; 128 leaves margin.
+// (Was 115 bytes at NUM_STOPS=16. The region did not shrink — there is simply
+// more headroom now, and no reason to reclaim it.)
 // NOTE: changing NUM_STOPS or the struct layout invalidates the CRC/version of any
 // existing cal data — run clearcal after reflash (the version bump forces this too).
 static const int CALIB_EEPROM_SIZE = 128;
