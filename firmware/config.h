@@ -33,7 +33,33 @@
 // Compile-time maximum — sets array sizes in CalibrationData and g_stopPositionsMM.
 // The runtime count (g_numActiveStops) is set during setup and stored in NVS.
 // Bumping this requires clearing calibration (clearcal) because CalibrationData changes size.
-#define NUM_STOPS         16      // max selectable positions (position 0 = home)
+// Max selectable positions on one sliding gate (position 0 = home).
+//
+// EIGHT, AND IT IS THE SAME EIGHT AS EVERYWHERE ELSE (2026-09-05). This used to
+// be 16 — "find the maximum sane value and double it", an array bound rather
+// than a target — while `MAX_SLIDE_BRANCHES` (shared/device-model/topology.js)
+// and `SLIDE_MAX_OUTLETS` (dustgate-ui gates/selector-types.ts) had long since
+// settled on 8 as the real ceiling. Two numbers claiming to be the limit is how
+// a rack gets configured that the firmware will accept and the rail cannot hold:
+// eight gates at the 4" pitch is already 891 mm, and sixteen would be over six
+// feet of rack fed by sixteen flexible runs radiating from one point.
+//
+// So the array bound now IS the ducting ceiling. Past eight, the answer is not a
+// longer rack — it is ball valves distributed along a trunk.
+//
+// PAIR: shared/device-model/device-model.js NUM_STOPS. Change both — see CLAUDE.md.
+// Changing it also changes the CalibrationData layout: bump CALIB_VERSION with it
+// (training/CalibrationStore.h) or old EEPROM data is read against a new shape.
+#define NUM_STOPS          8
+
+// EVEN, and something depends on it. Rockler manifolds ship in 2-gate units, so
+// physicalGateCount() rounds an odd request UP — and that round-up can only ever
+// stay inside the bound if the bound is itself even. It used to clamp afterwards
+// to be safe; with this assertion the clamp is unnecessary rather than merely
+// unused, which is the difference between dead code and a proof.
+static_assert(NUM_STOPS % 2 == 0,
+              "NUM_STOPS must be even — physicalGateCount() rounds odd gate "
+              "counts up, and Rockler manifolds ship in pairs");
 
 // Minimum spacing (mm) between two saved gate positions. Authoritative backstop
 // against saving two gates on top of each other (e.g. "forgot to jog" — saving
@@ -189,11 +215,24 @@ inline int homeDirection() {
 #define HOMING_SPEED_STEPS_PER_SEC   500.0f
 #define ACCELERATION_STEPS_PER_SEC2  1000.0f
 
-// Maximum travel during homing — safety cutoff if the home switch is never triggered.
-// 700 mm covers an 8-gate installation (7 × 82.9 mm ≈ 580 mm) plus generous margin.
-// At homing speed (~9.7 mm/sec) this limits runaway to ~72 s before the firmware
-// forces the position to home regardless of the switch.
-#define HOMING_MAX_TRAVEL_MM  700.0f
+// Maximum travel during homing — safety cutoff if the home switch is never
+// triggered. This is the RUNAWAY GUARD, and it has to be longer than the longest
+// rail anyone can build, because the carriage may start at the far end.
+//
+// RAISED 700 → 950 ON 2026-09-05. 700 was sized for the 2.5" manifold and its
+// note said so ("7 × 82.9 mm ≈ 580 mm"). The 4" manifold has a 127 mm pitch, so
+// eight gates span **891 mm** (manifoldProfile('rockler-4', 8) in
+// shared/device-model/device-model.js) — 191 mm MORE than the guard. On a full
+// 4" rack the sweep would have given up before it ever reached the datum, and
+// reported failure on healthy hardware.
+//
+// 950 mm = 891 + ~7%, and 891 mm is now the longest rack anything will accept:
+// NUM_STOPS is 8, matching the ducting ceiling, so the 4" pitch cannot produce a
+// longer one. When this guard was written on 2026-09-05 that was not true —
+// NUM_STOPS was still 16 and a document could legally ask for 1907 mm of rack,
+// which this would have failed to home with a message about a missing datum.
+// Lowering NUM_STOPS the same day closed that gap rather than papering over it.
+#define HOMING_MAX_TRAVEL_MM  950.0f
 
 // After homing, back off this many steps before zeroing position.
 // Endstop margin = 1 tooth = ~427 steps; backoff just needs to clear the switch.
@@ -273,6 +312,7 @@ inline int homeDirection() {
 //
 //   HAS_LINEAR  — this board can drive a sliding gate (a carriage on a rack).
 //   HAS_SERVO   — the PWM servo bank.
+//   HAS_BIN     — this board can watch a dust-bin level sensor.
 //
 // These replaced the old `#error "No feedback type defined"` / `"No control type
 // defined"` walls in the sketch, which made a stepper-less build impossible to
@@ -300,6 +340,34 @@ inline int homeDirection() {
   #define HAS_SERVO 1
 #else
   #define HAS_SERVO 0
+#endif
+
+// A board can watch a dust bin if it wires the sensor pin. Note what this is
+// NOT: it is not "a bin sensor is fitted", and it is not a board role.
+//
+// Bin sensing is ONE INPUT PIN, so it collides with nothing and needs no env of
+// its own — a primary and a node get it on the same terms, which is the whole
+// argument in docs/shop-schema-rfc.md §7.5 (superseding §7.4's "new node type").
+// A board is not a "collector node"; it is a board that happens to be near a
+// bin.
+//
+// Whether a given board is actually WATCHING one is a topology fact
+// (`bin.sensor.controllerId`) and the primary owns it, because there is no way
+// to probe a digital input for whether anything is on the other end — unlike the
+// screen, which an I2C ACK at 0x3C settles at boot. HAS_BIN only says the pin
+// exists to be read.
+#if defined(PIN_BIN_SENSOR)
+  #define HAS_BIN 1
+#else
+  #define HAS_BIN 0
+#endif
+
+// The bin pin is D6/GPIO11, which is PIN_SERVO_BUS_TX on a slider build. The
+// board header already guards against defining both, and this is the backstop —
+// same shape as the PWM-vs-bus #error above, and for the same reason: a pin map
+// that quietly claims one pad twice is a bench session nobody enjoys.
+#if HAS_BIN && defined(PIN_SERVO_BUS_TX) && (PIN_BIN_SENSOR == PIN_SERVO_BUS_TX)
+  #error "PIN_BIN_SENSOR collides with the servo bus — see boards/xiao_c5.h"
 #endif
 
 // -----------------------------------------------------------------------------
@@ -334,6 +402,45 @@ inline int homeDirection() {
 // this on a bus board, so every mm↔"step" conversion in the sketch is really
 // mm↔counts and nothing else had to change.
 #define ST3215_COUNTS_PER_MM     (ST3215_COUNTS_PER_REV / ST3215_MM_PER_REV)
+
+// -- How long a homing sweep may take before it is called lost --
+//
+// DERIVED, not picked. A hand-set number goes stale the moment someone changes
+// the rail length or the sweep speed, and it goes stale SILENTLY — the symptom
+// is a healthy home failing on the longest rack somebody owns, which is the one
+// hardest to get in front of a bench.
+//
+// The worst case is the whole runaway guard travelled at homing speed, because
+// the carriage may start at the far end:
+//
+//   HOMING_MAX_TRAVEL_MM          950 mm   (an 8-gate 4" rack is 891 mm)
+//   HOMING_SPEED_STEPS_PER_SEC    250 counts/s
+//   ST3215_COUNTS_PER_MM          24.70    → 10.1 mm/s commanded
+//
+// ...except commanded is not achieved. The bench baseline has 1200 counts/s
+// tracking at 1046 (87%, st3215-bench.md §5.0.1), so the budget uses 87% even
+// though tracking should be BETTER at 250 than near the servo's ceiling. A
+// timeout that is too generous costs a slow failure; one that is too tight fails
+// a working machine, so the error is deliberately taken in the generous
+// direction.
+//
+//   950 mm ÷ (10.1 × 0.87) mm/s ≈ **108 s** of pure travel.
+//
+// Then +50%, as asked for on 2026-09-05: **≈ 162 s**. The margin is not
+// decoration — it is what pays for the release phase, the backoff, and the gaps
+// between 25 mm chunks, none of which are modelled above. Sizing those
+// individually would be false precision on numbers nobody has measured.
+//
+// This does NOT bound a stuck carriage — kHomeStallMs in node/dustgate_node.cpp
+// catches that in 10 s by watching position. This is the backstop for the case
+// the stall check cannot see: a sweep that keeps moving and never arrives,
+// because the switch is unplugged, the rail is longer than anyone declared, or
+// the servo is turning something that is not the pinion.
+#define HOMING_SPEED_MM_PER_SEC   (HOMING_SPEED_STEPS_PER_SEC / ST3215_COUNTS_PER_MM)
+#define HOMING_TRACKING_FACTOR    0.87f
+#define HOMING_TIMEOUT_MS \
+    ((uint32_t)((HOMING_MAX_TRAVEL_MM / (HOMING_SPEED_MM_PER_SEC * HOMING_TRACKING_FACTOR)) \
+                * 1000.0f * 1.5f))
 
 // Which servo on the bus. One slider, one servo, and a virgin part answers at 1.
 #define ST3215_SERVO_ID              1

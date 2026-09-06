@@ -191,6 +191,32 @@ static long     g_homeLastPos    = 0;
 static uint32_t g_homeLastMoveMs = 0;
 static const uint32_t kHomeStallMs = 10000;
 
+// The OTHER backstop: a sweep that keeps moving and never arrives.
+//
+// kHomeStallMs above watches POSITION, so it catches a carriage that has
+// stopped — a jam, a dead servo, a bus that went quiet. It cannot see the
+// opposite failure: a sweep travelling perfectly well toward a switch that will
+// never fire, because the endstop is unplugged at the far end, the rail is
+// longer than anyone declared, or the pinion is turning without the rack. In
+// that case position changes every pass and the stall check never trips, right
+// up until the runaway guard ends the move — and on a long rack that is minutes.
+//
+// HOMING_TIMEOUT_MS is derived in config.h from the runaway guard, the sweep
+// speed and the bench tracking factor, so changing the rail length or the speed
+// moves this with them. ~162 s on the current numbers, which is sized for the
+// longest rack the design admits: 8 gates on the 4" manifold, 891 mm.
+static_assert(HOMING_TIMEOUT_MS > kHomeStallMs,
+              "the overall homing timeout must outlast the stall check, or the "
+              "stall check can never be the thing that reports");
+
+// And the primary must outlast BOTH, or it calls the move lost while the node is
+// still legitimately sweeping — and the node's far more specific diagnosis never
+// reaches anyone. This is the only translation unit that sees both numbers;
+// NodeLink.h is pure and does not include config.h.
+static_assert(topo::nodelink::kMoveTimeoutMs > HOMING_TIMEOUT_MS,
+              "kMoveTimeoutMs (control/NodeLink.h) must exceed HOMING_TIMEOUT_MS "
+              "(config.h) — see the note above kMoveTimeoutMs");
+
 // Reaching the FAR switch while seeking the datum is a FAULT, not a clue. It
 // used to mean "the motor is wired backwards" and cost a direction flip — a
 // stepper problem (swapped coil pair) that a keyed serial-bus connector cannot
@@ -389,6 +415,23 @@ static void updateSweep() {
         Serial.println(F("[HOME] FAILED — the carriage has not moved for 10s and no switch"));
         Serial.println(F("       has been reached. Endstops, a jam, or a servo that is not"));
         Serial.println(F("       actually turning. `status` on a primary prints the mode."));
+        return;
+    }
+
+    // Still moving, still nowhere. The stall check above cannot see this one —
+    // see the note on HOMING_TIMEOUT_MS. Stop the carriage before saying so: it
+    // is by definition still travelling, and the whole reason we are here is
+    // that nothing else is going to end the move soon.
+    if (millis() - g_homingStartedMs > HOMING_TIMEOUT_MS) {
+        motor.stop();
+        g_homing = HOME_FAILED;
+        Serial.print(F("[HOME] FAILED — no datum after "));
+        Serial.print(HOMING_TIMEOUT_MS / 1000);
+        Serial.println(F("s. The carriage kept MOVING the whole time, so this is"));
+        Serial.println(F("       not a jam: the datum switch never fired. An unplugged NC"));
+        Serial.println(F("       switch reads triggered rather than silent, so suspect the"));
+        Serial.println(F("       far end — a rail longer than the manifold declares, or a"));
+        Serial.println(F("       pinion turning without the rack."));
     }
 }
 #endif // HAS_LINEAR

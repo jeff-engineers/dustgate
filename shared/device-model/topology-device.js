@@ -192,6 +192,44 @@ function setCollectorPlugFault(d, systemId, fault) {
   return { ok: true };
 }
 
+/**
+ * The collector's bin sensor, or undefined if it has none.
+ *
+ * Unlike the plug this is not simulated at all — there is no synthetic "dust
+ * arrives" model and there should not be one. A bin fills over days; anything
+ * the mock invented would be theatre. Bin state is STAGED (setBinFull) the way
+ * a plug fault is, for exactly the reason given there: the states worth showing
+ * are the ones nobody can produce on demand.
+ */
+function collectorBinSensor(doc, systemId) {
+  const shop = S.asShop(doc);
+  const sys = S.systemsOf(shop).find((x) => x.id === systemId);
+  const c = sys && (sys.elements || []).find((e) => e.type === 'collector');
+  return c && c.bin && c.bin.sensor;
+}
+
+/** Stage the bin as full or not, for the mock and the demo. */
+function setBinFull(d, systemId, full) {
+  const c = d.collectors[systemId];
+  if (!c) return { ok: false };
+  c.binFull = !!full;
+  return { ok: true };
+}
+
+/**
+ * What the bin sensor says, or undefined when no sensor watches this collector.
+ *
+ * OMITTED rather than reported false, matching the plug above and
+ * TopologyRuntime::writeStatus: an unwatched bin and an empty bin are different
+ * claims, and defaulting to "not full" quietly promises a warning that can never
+ * come.
+ */
+function collectorBinView(d, systemId) {
+  const c = d.collectors[systemId];
+  if (!c || !collectorBinSensor(d.topology, systemId)) return undefined;
+  return { full: !!c.binFull };
+}
+
 /** What the plug reports, or undefined when the collector has no plug at all. */
 function collectorPlugView(d, systemId, nowMs) {
   const c = d.collectors[systemId];
@@ -402,6 +440,9 @@ function statusView(d, nowMs = Date.now()) {
     // all-zero reading would read as a dead blower rather than an absent one.
     const plug = collectorPlugView(d, sysId, nowMs);
     if (plug) systems[sysId].plug = plug;
+    // Same omission rule as the plug — see collectorBinView.
+    const bin = collectorBinView(d, sysId);
+    if (bin) systems[sysId].bin = bin;
   }
   return {
     actuators: { ...d.actuatorStates },
@@ -425,6 +466,7 @@ function statusView(d, nowMs = Date.now()) {
 
 module.exports = {
   DEFAULT_THRESHOLD_W, DEFAULT_COLLECTOR_OFF_DELAY_MS,
+  setBinFull, collectorBinView,
   COLLECTOR_RUNNING_W, COLLECTOR_SPINUP_GRACE_MS, collectorPlugState,
   machineThreshold, collectorOffDelayMs,
   createTopologyDevice, activeMachines, reconcile, setMachinePower, statusView,

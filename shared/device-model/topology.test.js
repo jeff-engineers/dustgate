@@ -165,11 +165,14 @@ check('validate twoGates ok', validateTopology(twoGates).ok, JSON.stringify(vali
     const r9 = validateTopology(wide(9));
     check('9 outlets on a sliding gate → invalid (selector)',
           !r9.ok && hasCode(r9, 'selector') && hasMsg(r9, 'max 8'));
-    // The ceiling is about DUCTING, not the firmware's NUM_STOPS of 16 — so a
-    // count between the two must still be refused.
+    // Well past the ceiling, and still refused by the selector rule rather than
+    // by anything downstream. This used to read "even though NUM_STOPS is 16" —
+    // the array bound was double the ducting ceiling, and this case sat between
+    // the two. NUM_STOPS is 8 now, so 12 is over both; the check still belongs
+    // here because the selector rule is what must produce the message.
     const r12 = validateTopology(wide(12));
-    check('12 outlets → invalid, even though NUM_STOPS is 16',
-          !r12.ok && hasCode(r12, 'selector'));
+    check('12 outlets → invalid, well past the ceiling',
+          !r12.ok && hasCode(r12, 'selector') && hasMsg(r12, 'max 8'));
   }
 
   check('drives defaults to servo when absent',

@@ -41,15 +41,18 @@ const MAX_LINEAR_PER_HOST = 1;
 
 // How many outlets ONE sliding gate may serve.
 //
-// Not a firmware limit — NUM_STOPS is 16, and that number was "find the maximum
-// sane value and double it", an array bound rather than a target. The real
-// ceiling is ducting: a slide manifold is a STAR, so every outlet is its own
+// The ceiling is DUCTING: a slide manifold is a STAR, so every outlet is its own
 // flexible run radiating from one point, and past about eight the flex cost and
 // the clutter dominate. The right answer then stops being a longer rack and
 // becomes ball valves distributed along a trunk.
 //
-// It is also a length: 8 gates at the 4" pitch is a rack over 890mm long, and at
-// 16 it would be more than six feet.
+// It is also a length: 8 gates at the 4" pitch is a rack over 890mm long.
+//
+// AND IT IS NOW THE FIRMWARE LIMIT TOO (2026-09-05). This note used to open
+// "not a firmware limit — NUM_STOPS is 16", which was true and was the problem:
+// the array bound was double the real ceiling, so a document could be accepted
+// by one layer and impossible for the other. NUM_STOPS is 8 on both sides now,
+// and this is the number it agrees with.
 //
 // EIGHT IS ALREADY PUSHING IT. Six is the comfortable number.
 const MAX_SLIDE_BRANCHES = 8;
@@ -131,6 +134,7 @@ const MAX_SLIDE_BRANCHES = 8;
  * @property {Object} [servo]             (selector servo kinds) { channel, moveMs, holdAtRest, ... }
  * @property {Object} [sensor]            (tool) { outlet }
  * @property {Object} [control]           (collector) { outlet, offDelayMs }
+ * @property {Object} [bin]               (collector) { sensor: { kind, controllerId, invert } }
  *
  * @typedef {Object} Topology
  * @property {number} schemaVersion
@@ -465,6 +469,28 @@ function validateTopology(t) {
       err('controller',
           `board "${c.name || c.id}" is set up as a servo board but has a sliding gate on it`,
           c.id);
+  }
+
+  // ── collector bin sensor: kind, and a controller that resolves ──
+  //
+  // `kind` is 'threshold' for the diffuse beam actually in hand — it answers
+  // "dust at this height, y/n", NOT a distance, so it does not carry the
+  // emptyMm/fullMm/warnPct a rangefinder would (shop-schema-rfc.md §7.5).
+  //
+  // controllerId is OPTIONAL and means "this board" when absent, matching every
+  // selector and NodeBus's own rule. A named one must resolve, for the same
+  // reason a selector's must: a typo that silently means "local" is a shop where
+  // the wrong board is watching and nothing says so.
+  for (const e of t.elements) {
+    if (e.type !== 'collector' || !e.bin) continue;
+    const sensor = e.bin.sensor;
+    if (!sensor) { err('bin', 'bin requires a sensor', e.id); continue; }
+    if (sensor.kind !== 'threshold')
+      err('bin', `unknown bin sensor kind "${sensor.kind}"`, e.id);
+    if (sensor.controllerId && !ctrlIds.has(sensor.controllerId))
+      err('bin', `controllerId "${sensor.controllerId}" does not resolve`, e.id);
+    if (sensor.invert !== undefined && typeof sensor.invert !== 'boolean')
+      err('bin', 'invert must be a boolean', e.id);
   }
 
   // ── ducts: refs, collector-is-root, parentBranch rules ──
