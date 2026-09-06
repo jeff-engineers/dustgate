@@ -57,7 +57,7 @@ drifted constantly. Now `shared/device-model/` is the spec:
   | `DEFAULT_THRESHOLD_W` (topology-device.js) | `kDefaultThresholdW` (control/TopologyController.h) | machine-on wattage default |
   | the `* 3` in `setToolManual()` (dustgate-ui demo-api.service.ts) | the `* 3.0f` in `manualWattsFor()` (control/TopologyRuntime.h) | synthetic wattage for a manual switch-on |
   | `MAX_SERVOS_PER_HOST` / `MAX_LINEAR_PER_HOST` (topology.js) | `SERVO_COUNT` (config.h) | servo bank size a controller can actually drive |
-  | `NUM_STOPS` (device-model.js) | `NUM_STOPS` (config.h) | compile-time max stops |
+  | `NUM_STOPS` (device-model.js) | `NUM_STOPS` (config.h) | max stops on one sliding gate. **8 since 2026-09-05**, lowered from 16 so it matches `MAX_SLIDE_BRANCHES` (topology.js) and `SLIDE_MAX_OUTLETS` (dustgate-ui) — three numbers that all claim to be the same limit, and were not. Must stay EVEN (`static_assert` in config.h): Rockler ships gates in pairs, so an odd request rounds up. Changing it changes the persisted `CalibrationData` layout — bump `CALIB_VERSION` with it |
   | `MIN_STOP_SEPARATION_MM` (device-model.js) | `MIN_STOP_SEPARATION_MM` (config.h) | overlap backstop between stops |
   | `IDLE_TIMEOUT_SEC_DEFAULT` (device-model.js) | `IDLE_TIMEOUT_SEC_DEFAULT` (config.h) | idle power-off default |
   | `MANIFOLD_PROFILES` — `gatePitchMm` / `firstGateOffsetMm` / `endMarginMm` (device-model.js) | `MANIFOLD_2_5_GATE_PITCH_MM`, `MANIFOLD_4_GATE_PITCH_MM` and friends (config.h) | Rockler manifold geometry. **Found unregistered on 2026-08-28** — it had been a pair since the profiles were written, with nothing pointing either way, which is exactly the situation this table exists to prevent. `gatePitchMm` is the number the reference sweep trusts and centres the gate array on, so a change on one side alone mis-places every gate on real hardware while every test still passes. |
@@ -89,8 +89,21 @@ drifted constantly. Now `shared/device-model/` is the spec:
   frame for frame. It is the primary's own bookkeeping — how long to wait for a
   STATE before calling a move lost — and it never goes on the wire, so there is
   no `MOVE_TIMEOUT_MS` on the JS side to keep it in step with. Change it alone.
-  (It went 12s → 90s on 2026-08-28: it had been sized for the stepper, and both
-  a slider traverse and a node's boot-time homing sweep outrun 12s.)
+  (12s → 90s on 2026-08-28: it had been sized for the stepper, and both a slider
+  traverse and a node's homing sweep outrun 12s. **90s → 210s on 2026-09-05**,
+  because homing is now triggered BY a move, so the primary's clock runs for the
+  whole sweep — and a sweep sized for an 8-gate 4" rack is ~162s. It must exceed
+  `HOMING_TIMEOUT_MS`, which `firmware/node/dustgate_node.cpp` static_asserts.)
+
+  `HOMING_TIMEOUT_MS` (config.h) is firmware-only too, and **derived** — from
+  `HOMING_MAX_TRAVEL_MM`, `HOMING_SPEED_STEPS_PER_SEC` and a bench tracking
+  factor — so it moves when the rail or the speed does. There is a real
+  cross-language invariant near it that is NOT in the table above because it is a
+  relationship rather than a shared value: `HOMING_MAX_TRAVEL_MM` must exceed
+  `manifoldProfile('rockler-4', gates).spanMm` from device-model.js for the
+  largest rack anyone builds. It did not, until 2026-09-05 — 700mm against an
+  891mm 8-gate 4" rack — and the symptom would have been a healthy home failing
+  on the biggest rack in the shop.
 
   **This table is a cache, not the source of truth — keep it honest or delete
   rows rather than let them go stale.** Touching either side of a pair: update
@@ -126,6 +139,7 @@ Firmware compiles — `pio run -e <env>`:
 | `xiao_c5_linear_primary` | XIAO ESP32C5 | **primary** on the slider board (ST3215 rack) |
 | `xiao_c5_linear` | XIAO ESP32C5 | secondary node on the slider board |
 | `xiao_c5_bus_bench` | XIAO ESP32C5 | not a role — the bus-servo console |
+| `xiao_c5_ht12e_bench` | XIAO ESP32C5 | not a role — the HT12E/315MHz console, for keying the Rockler DC remote ([`wiring/ht12e-bench.md`](firmware/wiring/ht12e-bench.md)) |
 
 **One board, two roles.** Same board, same carrier, same pin map; the difference
 is `build_src_filter` and `-DDUSTGATE_SECONDARY`. Both roles are proven on

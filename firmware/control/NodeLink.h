@@ -42,10 +42,24 @@ static const unsigned long kReconnectMaxMs  = 15000;
 // RAISED FROM 12s TO 90s ON 2026-08-28, because the second half of that sentence
 // stopped being true. It was written against the stepper at 19mm/s; the ST3215
 // slider crosses an 8-gate 2.5" span (582mm) at ~42mm/s in 14s, so 12s declared
-// a perfectly healthy traverse lost. Worse, a slider NODE homes at boot and
-// defers the move it was sent until the sweep finds the datum — a sweep that can
-// legitimately take the better part of a minute (see the CALIBRATION note in
-// node/dustgate_node.cpp).
+// a perfectly healthy traverse lost. Worse, a slider NODE defers the move it was
+// sent until a sweep finds the datum — and since 2026-09-03 that sweep is
+// triggered BY the move (on-demand homing), so the primary's clock is running
+// for the whole of it (see the CALIBRATION note in node/dustgate_node.cpp).
+//
+// RAISED 90s → 210s ON 2026-09-05, and it is not a comfort margin. The node's
+// own homing timeout is derived in config.h as HOMING_TIMEOUT_MS — ~162 s, sized
+// for the longest rack the design admits (8 gates on the 4" manifold, 891 mm).
+// At 90 s the primary gave up while the node was still legitimately sweeping,
+// so a 4" rack would have reported every first move as lost. 210 s covers that
+// sweep plus a full-length traverse afterwards (~21 s at tracked top speed).
+//
+// THE INVARIANT: this must exceed HOMING_TIMEOUT_MS, or the node can never be
+// the one to report a failed home — the primary would always call it first, and
+// the node's far more specific diagnosis (switch never fired vs. carriage stuck)
+// would never reach anyone. Asserted in node/dustgate_node.cpp, which is the one
+// translation unit that sees both numbers; this header is PURE and does not
+// include config.h.
 //
 // A timeout this long is only tolerable because it is not how a move normally
 // ends: arrival is a STATE frame, and this fires only when one never comes. It
@@ -56,7 +70,7 @@ static const unsigned long kReconnectMaxMs  = 15000;
 // there is no MOVE_TIMEOUT_MS on the JS side, because the timeout is the
 // primary's own bookkeeping and never goes on the wire. Not a pair — nothing to
 // keep in step, and no row in CLAUDE.md's table.
-static const unsigned long kMoveTimeoutMs   = 90000;
+static const unsigned long kMoveTimeoutMs   = 210000;
 
 // -----------------------------------------------------------------------------
 // Primary → secondary

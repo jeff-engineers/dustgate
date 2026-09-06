@@ -876,7 +876,16 @@ void HttpApiServer::registerRoutes() {
             StaticJsonDocument<96> doc;
             if (deserializeJson(doc, data, len)) { sendError(req, 400, "invalid JSON"); return; }
             int n = doc["gateCount"] | -1;
-            if (n < 1 || n > NUM_STOPS) { sendError(req, 400, "gateCount out of range"); return; }
+            if (n < 1 || n > NUM_STOPS) {
+                // Say the number. "Out of range" makes someone go and find the
+                // limit; NUM_STOPS is 8 and past that the answer is a trunk with
+                // ball valves, not a longer rack, which is worth saying once here.
+                sendError(req, 400,
+                          ("gateCount out of range (1-" + String(NUM_STOPS) +
+                           "); past " + String(NUM_STOPS) +
+                           " gates a trunk with ball valves beats a longer rack").c_str());
+                return;
+            }
             const char* model = doc["model"] | "custom";
             xSemaphoreTake(_mutex, portMAX_DELAY);
             strlcpy(_calModel, model, sizeof(_calModel));

@@ -26,7 +26,12 @@
 'use strict';
 
 // ── Constants (mirror firmware/config.h where noted) ─────────────────
-const NUM_STOPS = 16;              // compile-time max stops (config.h NUM_STOPS)
+// Max selectable positions on one sliding gate. EIGHT since 2026-09-05, and it
+// is the same eight as MAX_SLIDE_BRANCHES in topology.js — this was 16, an array
+// bound rather than a limit, while the ducting ceiling had long been 8. Two
+// numbers claiming to be the limit is how a rack gets accepted that the rail
+// cannot hold. PAIR: config.h NUM_STOPS. Change both — see CLAUDE.md.
+const NUM_STOPS = 8;
 const STEPS_PER_MM = 40;           // mock-only resolution; not real hardware (see TODO.md)
 const MIN_STOP_SEPARATION_MM = 10; // config.h MIN_STOP_SEPARATION_MM — overlap backstop
 const IDLE_TIMEOUT_SEC_DEFAULT = 3600; // config.h IDLE_TIMEOUT_SEC_DEFAULT
@@ -75,11 +80,22 @@ function roundUpEven(n) { return n % 2 === 0 ? n : n + 1; }
 
 /**
  * Physical gate count for a model: Rockler profiles are even (round odd up — the
- * extra port is a spare, capped/unused); 'custom' is left as-is. Clamped to NUM_STOPS.
+ * extra port is a spare, capped/unused); 'custom' is left as-is.
+ *
+ * THROWS above NUM_STOPS rather than clamping (2026-09-05). Clamping handed back
+ * a different rack than the one asked for and said nothing, which is the whole
+ * class of bug that let a 16-gate document look acceptable. Callers validate
+ * first, and the round-up cannot carry an in-range count out of range because
+ * NUM_STOPS is even — so reaching this throw means someone called it directly
+ * with a bad number, and silence would be the wrong answer.
  */
 function physicalGateCount(model, n) {
   const g = isRocklerModel(model) ? roundUpEven(n) : n;
-  return Math.min(g, NUM_STOPS);
+  if (g > NUM_STOPS) {
+    throw badRequest(`gate count ${g} exceeds the maximum of ${NUM_STOPS}` +
+      (g === n ? '' : ` (${n} rounded up — Rockler manifolds ship in pairs)`));
+  }
+  return g;
 }
 
 /** (model, gateCount) → { spanMm, gatesMm[] }, or null for custom/unknown. */

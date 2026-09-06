@@ -41,15 +41,18 @@ const MAX_LINEAR_PER_HOST = 1;
 
 // How many outlets ONE sliding gate may serve.
 //
-// Not a firmware limit — NUM_STOPS is 16, and that number was "find the maximum
-// sane value and double it", an array bound rather than a target. The real
-// ceiling is ducting: a slide manifold is a STAR, so every outlet is its own
+// The ceiling is DUCTING: a slide manifold is a STAR, so every outlet is its own
 // flexible run radiating from one point, and past about eight the flex cost and
 // the clutter dominate. The right answer then stops being a longer rack and
 // becomes ball valves distributed along a trunk.
 //
-// It is also a length: 8 gates at the 4" pitch is a rack over 890mm long, and at
-// 16 it would be more than six feet.
+// It is also a length: 8 gates at the 4" pitch is a rack over 890mm long.
+//
+// AND IT IS NOW THE FIRMWARE LIMIT TOO (2026-09-05). This note used to open
+// "not a firmware limit — NUM_STOPS is 16", which was true and was the problem:
+// the array bound was double the real ceiling, so a document could be accepted
+// by one layer and impossible for the other. NUM_STOPS is 8 on both sides now,
+// and this is the number it agrees with.
 //
 // EIGHT IS ALREADY PUSHING IT. Six is the comfortable number.
 const MAX_SLIDE_BRANCHES = 8;

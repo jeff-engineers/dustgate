@@ -151,7 +151,11 @@ static bool isKnownManifoldModel(const char* model) {
 // Mirrors shared/device-model physicalGateCount().
 static int physicalGateCount(const char* model, int n) {
     if (manifoldPitchMm(model) > 0.0f && (n % 2) != 0) n += 1;
-    if (n > NUM_STOPS) n = NUM_STOPS;
+    // No clamp here any more (2026-09-05). Callers already refuse anything above
+    // NUM_STOPS before they get here, and the round-up above cannot carry an
+    // in-range count out of range because NUM_STOPS is even — asserted in
+    // config.h. A clamp would silently hand back a different rack than the one
+    // asked for, which is exactly the failure this change was made to remove.
     return n;
 }
 

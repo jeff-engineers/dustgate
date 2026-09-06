@@ -126,6 +126,24 @@ hardware 2026-09-03, so none of this is inference any more:
 | Address DIP | rockers **1, 6, 8 on**, rest off |
 | Buttons | **one** |
 
+**KEYED ON THE BENCH 2026-09-06 — the first verified thing in this document.**
+An HT12E of our own, address strapped to match, switched a lamp through the
+Rockler receiver. What that settles, and the two things that were not obvious:
+
+| | |
+|---|---|
+| Rosc | **1.0 MΩ at 3.3 V → ~3.5 kHz measured**, and it works. Holtek's ~3 kHz is a *reference point*, not a requirement — the HT12D's capture window is wider than the datasheet's example implies. An earlier draft of this section treated 2.4–3.6 kHz as pass/fail; it is not. |
+| Data word | **`data 14`** (`0b1110`) — **AD8 low; AD9, AD10 and AD11 are all don't-cares.** A full 16-value sweep keys on every EVEN value (0,2,4,6,8,10,12,14) and nothing odd, which is exactly "bit 0 clear". One button, one pin. 14 leaves the other three open, so it is what the fob actually sends. <br><br>One guess died here properly: that the receiver toggled on VT and ignored the data bits entirely. `data 15` does nothing, so it does not. (An intermediate reading suggested AD8 **and** AD9 were both needed; the operator thinks that was a mistype, and the full sweep does not support it. Recorded only so the number is not re-derived from a half-remembered result.) |
+| **TE hold** | **≥ ~500 ms. This is the one that bites.** 120 ms keyed the receiver only intermittently while the fob was rock solid. Four words is the HT12E's documented *minimum* transmission because the decoder validates by seeing the same frame more than once — so a truncated group produces **no output rather than a wrong one**, which is indistinguishable from a range problem. Default is now 400 ms; 500 is proven. |
+| Antenna | **Not needed at bench range** — an unfitted module radiates plenty across a bench, which is its own trap in the other direction. Fit the 23.8 cm quarter-wave at install. |
+
+**Design consequence: do not block for 500 ms.** `setSwitch()` on a primary
+cannot sit in a busy wait that long — it would stall the web server and the
+servo update pass for half a second on every collector change. Assert TE, record
+the time, release it on a later loop pass. The hold is a duration to *schedule*,
+not to *wait out*, and that is a nicer shape anyway: it composes with the
+read-compare-pulse loop the toggle already forces on us.
+
 No rolling code, no pairing handshake — the fob sends the same word every time.
 Two paths:
 

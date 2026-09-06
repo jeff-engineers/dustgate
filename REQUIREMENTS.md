@@ -33,7 +33,7 @@ browser on the local network, and the controller routes from that layout.
 
 ## 2. Motion System
 
-- **Rack-and-pinion** linear actuator, up to `NUM_STOPS` selectable stop positions (compile-time max, currently 16); the runtime-active count (≤ max) is separately configurable via `/api/config/gates` or Settings without recompiling
+- **Rack-and-pinion** linear actuator, up to `NUM_STOPS` selectable stop positions (compile-time max, **8** since 2026-09-05 — the same ceiling `MAX_SLIDE_BRANCHES` and `SLIDE_MAX_OUTLETS` enforce; past eight the answer is ball valves on a trunk, not a longer rack); the runtime-active count (≤ max) is separately configurable via `/api/config/gates` or Settings without recompiling
 - **Stop 0** = home/disabled position
 - **Homing:** drive toward the near NC limit switch at `HOMING_SPEED_STEPS_PER_SEC`, back off `HOME_BACKOFF_STEPS` after trigger, zero position
 - **Dual-endstop self-calibration:** a **reference sweep** (near endstop → far endstop) measures the step span, derives `steps/mm` empirically per unit, and places gates by **proportion of the measured span** — immune to per-unit mechanical variance. For a known manifold (Rockler 2.5") gate positions are computed from a stored profile; `custom` falls back to manual jog. Also provides over-travel safety, lost-step detection, and auto motor-direction detection. See [`docs/dual-endstop-calibration.md`](docs/dual-endstop-calibration.md). *(Model + mock + conformance implemented; firmware foundation done, sweep motion pending hardware.)*
@@ -276,7 +276,7 @@ npm start
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `NUM_STOPS` | compile-time max | Number of gate positions (runtime-active count is separately configurable up to this max, via `/api/config/gates` or Settings) |
+| `NUM_STOPS` | 8 | Max gate positions on one sliding gate; must stay even. Runtime-active count is separately configurable up to this max, via `/api/config/gates` or Settings |
 | `MICROSTEPS` | 16 | TMC2209 microstep divisor |
 | `TMC2209_CURRENT_MA` | 800 | UART run current (mA) |
 | `TMC2209_HOLD_CURRENT_MA` | 75 | UART hold current (mA) — kept low so the motor stays cool between moves |
