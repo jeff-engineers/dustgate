@@ -142,6 +142,8 @@ Firmware compiles — `pio run -e <env>`:
 | `xiao_c5_linear_primary` | XIAO ESP32C5 | **primary** on the slider board (ST3215 rack) |
 | `xiao_c5_linear` | XIAO ESP32C5 | secondary node on the slider board |
 | `xiao_c5_bus_bench` | XIAO ESP32C5 | not a role — the bus-servo console |
+| `xiao_c5_ht12e_bench` | XIAO ESP32C5 | not a role — the HT12E/315MHz console, for keying the Rockler DC remote ([`wiring/ht12e-bench.md`](firmware/wiring/ht12e-bench.md)) |
+| `xiao_c5_ct_bench` | XIAO ESP32C5 | not a role — a walk-around CT current meter, for judging whether a 30A clamp can tell a running tool from an idle one ([`wiring/ct-bench.md`](firmware/wiring/ct-bench.md)) |
 
 **One board, two roles.** Same board, same carrier, same pin map; the difference
 is `build_src_filter` and `-DDUSTGATE_SECONDARY`. Both roles are proven on
