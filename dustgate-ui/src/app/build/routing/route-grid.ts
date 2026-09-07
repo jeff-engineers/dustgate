@@ -49,7 +49,21 @@ const STEP = 4;
 // instead, which is the wrong trade — at 96 the two gate-above-the-collector scenes
 // each drop a bend and gain a cell of pipe over the top.
 const TURN = 64;      // strongly prefer few bends
-const USED = 24;      // an edge another duct already took — soft, so parallel runs separate
+// An edge another duct already took. SOFT, and it is now the only thing standing
+// between two runs and a shared lane — the caller used to wall these edges off
+// entirely and fall back, which is what sent the manifold's feed up over the whole
+// shop rather than share two lattice edges with the leg beside it (2026-09-07).
+//
+// A wall could not weigh the two pictures against each other, and that was the
+// whole problem: the detour it chose cost 416 where sharing cost 360, and no amount
+// of extra pipe would ever have changed its mind. A cost can. It is also no longer
+// the last line of defence — separateLanes() nests whatever still shares a lane 12px
+// apart, so the outcome this is steering away from is a pair drawn side by side, not
+// a pair drawn on top of each other.
+//
+// Flat on every bench scene from 24 to 128, and the fuzz set is marginally BETTER at
+// 24 (721 bends against 729), so it stays where it was.
+const USED = 24;
 const CROSS = 40;     // a NODE another duct passes through: this is what a crossing costs.
                       // Two orthogonal runs on a lattice can only meet at a node, so
                       // charging for the node is charging for the crossing — worth more
@@ -86,11 +100,6 @@ export interface GridOpts {
   bounds: Box;
   /** Edge keys another duct has already claimed this pass. */
   usedEdges?: ReadonlySet<string>;
-  /** Treat `usedEdges` as walls rather than as expensive. Two ducts sharing a lattice
-   *  edge is exactly what "the ducts overlap" looks like on screen, and no cost
-   *  setting makes that reliably not happen — a long enough detour always eventually
-   *  costs more than sharing. The caller tries this first and falls back. */
-  blockUsed?: boolean;
   /** Node keys another duct passes through — entering one is a crossing. */
   usedNodes?: ReadonlySet<string>;
   /** Edge keys this duct used on the previous solve. */
@@ -107,8 +116,8 @@ export interface GridOpts {
   ceilingY?: number;
   /** Treat the ceiling as a WALL rather than as expensive. Pipe above the outlet
    *  height is not a compromise a woodworker would accept, so the caller asks for
-   *  the wall first and falls back to the cost — the same shape as `blockUsed`.
-   *  The fallback is what keeps a machine parked above the collector reachable. */
+   *  the wall first and falls back to the cost. The fallback is what keeps a machine
+   *  parked above the collector reachable. */
   ceilingBlocks?: boolean;
 }
 
@@ -432,7 +441,6 @@ export function routeOne(from: Port[], to: Port[], opts: GridOpts): RouteResult 
         if (grid.isBlocked(nx, ny)) continue;
         const [ax, ay] = grid.abs(ix, iy), [bx, by] = grid.abs(nx, ny);
         const key = edgeKey(ax, ay, bx, by);
-        if (opts.blockUsed && used.has(key)) continue;   // no shared lanes on this pass
         let cost = STEP;
         if (nd !== d) cost += TURN;
         if (used.has(key)) cost += USED;

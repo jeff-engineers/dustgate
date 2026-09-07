@@ -3082,10 +3082,20 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     const out: BDot[] = [];
     if (this.dragId || this.bdrag || this.odrag) return out;   // hide while dragging
     const seen = new Set<string>();
+    const occ = this.cellOccupied();
     const push = (x: number, y: number, childId: string, axis: 'h' | 'v', elbow?: boolean, legs?: Cell[]) => {
       const col = Math.round((x - PAD) / CELL), row = Math.round((y - PAD) / CELL);
       const key = col + ',' + row;
       if (seen.has(key)) return;                      // one dot per cell even where ducts overlap
+      // A dot whose CELL already has a piece in it has nowhere to put the tee.
+      // branchDuct() places the new wye at bd.col/bd.row with nothing checking, so
+      // this dot used to seat one inside the manifold it was drawn above — the run
+      // feeding that manifold then had to reach a point in the middle of another
+      // device's body, and went round three sides of it to do so (reported from the
+      // shop, 2026-09-07). The corner dots below have always been checked this way;
+      // the straight segments never were, and a run passing a unit's inlet rounds
+      // into that unit's own cell.
+      if (occ.has(key)) return;
       seen.add(key); out.push({ x, y, childId, col, row, axis, elbow, legs });
     };
     for (const d of this.ducts) {
@@ -3142,12 +3152,9 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
                            axis: Math.abs(prev.x - p.x) < 0.5 ? 'v' : 'h' });
       }
     }
-    const occ = this.cellOccupied();
-    for (const [key, e] of perCell) {
-      // A corner that rounds onto a piece has nowhere to put the fitting; the dot
-      // would just sit on top of the glyph.
-      if (!e || occ.has(key)) continue;
-      push(e.x, e.y, e.childId, e.axis, true, e.legs);
+    for (const e of perCell.values()) {
+      if (!e) continue;                               // two corners in one cell — ambiguous
+      push(e.x, e.y, e.childId, e.axis, true, e.legs);   // push() drops it if the cell is taken
     }
     return out;
   }
