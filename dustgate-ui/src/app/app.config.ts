@@ -1,5 +1,5 @@
 import { ApplicationConfig } from '@angular/core';
-import { provideRouter, withHashLocation } from '@angular/router';
+import { provideRouter, withHashLocation, withInMemoryScrolling } from '@angular/router';
 import { provideHttpClient } from '@angular/common/http';
 import { routes } from './app.routes';
 import { ApiService } from './services/api.service';
@@ -47,7 +47,15 @@ const isDemo = !isLocalNetworkHost(window.location.hostname) || readForcedDemo()
 
 export const appConfig: ApplicationConfig = {
   providers: [
-    provideRouter(routes, withHashLocation()),
+    // Every route is its own screen, so every navigation starts at the top of it.
+    // Without this Angular leaves the window where the PREVIOUS screen left it:
+    // scrolling down the Live list and tapping "Shop layout" landed on the build
+    // canvas with the toolbar and guide bar already scrolled off the top, and the
+    // canvas fills the rest, so there was nothing left to scroll back UP with.
+    // 'enabled' (not 'top') so the back button still returns you to where you were.
+    provideRouter(routes, withHashLocation(), withInMemoryScrolling({
+      scrollPositionRestoration: 'enabled',
+    })),
     provideHttpClient(),
     // In demo mode, substitute DemoApiService everywhere ApiService is injected.
     // Every component injects ApiService — the override is transparent.

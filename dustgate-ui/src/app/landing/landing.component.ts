@@ -24,7 +24,7 @@ import { shopReadiness } from '../services/shop-ready';
   imports: [CommonModule, RouterLink],
   styles: [`
     :host { display: flex; align-items: center; justify-content: center;
-            min-height: 100dvh; min-height: 100vh; padding: 24px; }
+            min-height: 100vh; min-height: 100dvh; padding: 24px; }
     .card { width: 100%; max-width: 360px; display: flex; flex-direction: column;
             align-items: center; gap: 16px; text-align: center; }
     .spinner { width: 26px; height: 26px; border: 2.5px solid var(--border);

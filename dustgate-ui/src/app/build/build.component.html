@@ -347,7 +347,8 @@
     <!-- Scaled by the same factor as the board rather than re-measured: the width
          and font stay in BOARD px, and one transform puts them on the glyph at any
          zoom. namePos() already multiplies through, since left/top are wrap px. -->
-    <input *ngIf="namedPiece() as np" class="nameedit" [class.gatename]="isGate(np)" placeholder="Name"
+    <input *ngIf="namedPiece() as np" class="nameedit" [class.gatename]="isGate(np)"
+           [class.editing]="nameEditing" placeholder="Name"
            [style.transform]="'translate(-50%, -50%) scale(' + vp.zoom + ')'"
            [style.left.px]="namePos().left" [style.top.px]="namePos().top" [style.width.px]="nameW(np)"
            [ngModel]="np.name" (ngModelChange)="rename(np.id, $event)"

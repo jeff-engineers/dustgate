@@ -431,6 +431,19 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   private counter = 0;
   private moveH = (e: PointerEvent) => this.onMove(e);
   private upH = (e: PointerEvent) => this.onUp(e);
+  /* EVERY drag below listens for pointercancel as well as pointerup. The system can
+   * take a gesture away mid-drag — a second finger, a call arriving, iOS deciding the
+   * press was one of its own — and it does NOT send a pointerup afterwards. Without a
+   * cancel path the drag simply never ended: window listeners stayed attached, the
+   * piece stayed floating at the last position, and the next press landed inside a
+   * gesture that was still running. A cancel puts everything back where it was; there
+   * is no position worth trusting at that point, and half a move nobody asked for is
+   * worse than none. */
+  private cancelH = () => this.cancelDrag();
+  private boCancelH = () => this.cancelBoardDrag();
+  private oCancelH = () => this.cancelODotDrag();
+  private bCancelH = () => this.cancelBDotDrag();
+  private wCancelH = () => this.cancelWireDrag();
   private bdrag: { bd: BDot; x0: number; y0: number; moved: boolean } | null = null;
   private bMove = (e: PointerEvent) => this.onBDotMove(e);
   private bUp = (e: PointerEvent) => this.onBDotUp(e);
@@ -525,6 +538,13 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   ngAfterViewInit(): void {
     setTimeout(() => { this.recomputeExtent(); this.vp.maybeFit(); });
     this.vp.attach();
+    // The CANVAS is the scroller on this screen; the page behind it has no business
+    // moving at all. It is a viewport tall and would sit still, except that the build
+    // stamp hangs below it — 40-odd px of document that a rubber-band or a restored
+    // scroll position can use to push the toolbar off the top, on a screen with
+    // nothing left to scroll back with. Locked here rather than in styles.css
+    // because every OTHER screen is a list that has to scroll normally.
+    document.body.style.overflow = 'hidden';
   }
 
   // ── viewport ──────────────────────────────────────────────────────────────────
@@ -571,17 +591,17 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   private livePoll: ReturnType<typeof setInterval> | null = null;
 
   ngOnDestroy(): void {
+    document.body.style.overflow = '';
     if (this.livePoll) clearInterval(this.livePoll);
+    this.endHold();
+    // Each of these takes its own move/up/cancel trio off the window — one call per
+    // drag now that they each have a cancel listener to forget as well.
     this.detachDrag();
+    this.detachBDotDrag();
+    this.detachODotDrag();
+    this.detachWireDrag();
+    this.detachBoardDrag();
     this.vp.destroy();
-    window.removeEventListener('pointermove', this.bMove);
-    window.removeEventListener('pointerup', this.bUp);
-    window.removeEventListener('pointermove', this.oMove);
-    window.removeEventListener('pointerup', this.oUp);
-    window.removeEventListener('pointermove', this.wMove);
-    window.removeEventListener('pointerup', this.wUp);
-    window.removeEventListener('pointermove', this.boMove);
-    window.removeEventListener('pointerup', this.boUp);
   }
 
   iconFor(kind: string): SafeHtml { return this.icons[kind]; }
@@ -1332,15 +1352,25 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
    *  actually typed, so clicking in and straight back out changes nothing and the
    *  undo history stays clean. */
   onNameFocus(evt: Event, n: NodeVM): void {
+    this.nameEditing = true;
     if (!BuildComponent.PLACEHOLDER_NAMES.has(n.name)) return;
     (evt.target as HTMLInputElement).value = '';
   }
 
   /** Put the default back if they left without typing anything. */
   onNameBlur(evt: Event, n: NodeVM): void {
+    this.nameEditing = false;
     const el = evt.target as HTMLInputElement;
     if (!el.value.trim()) el.value = n.name;
   }
+
+  /** Whether the name field is actually being edited, rather than merely drawn.
+   *
+   *  The CSS could ask `:focus` for this and nearly does — but on touch the field
+   *  only takes the pointer once it IS being edited, so if that selector ever fails
+   *  to match, the field becomes unreachable rather than merely mis-styled. A flag
+   *  the component sets from its own focus and blur handlers cannot fail that way. */
+  nameEditing = false;
 
   /** Width of the in-place name field, sized to the piece it sits on. */
   nameW(n: NodeVM): number {
@@ -1383,6 +1413,13 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
    *  that works. Same menu, same options, so there is nothing extra to learn. */
   onNodeContext(evt: MouseEvent, n: NodeVM): void {
     evt.preventDefault(); evt.stopPropagation();
+    // A long press on a phone raises this ~180ms after our own hold has already
+    // picked the piece up, so the platform's menu landed on top of a drag in
+    // progress — "Change this tool" over a machine following your finger (jeff,
+    // 2026-09-07, with a screenshot of exactly that). preventDefault above kills the
+    // platform's callout; returning here keeps OUR menu off the same gesture, since
+    // on touch the press already means something.
+    if (this.touchGesture()) return;
     this.focus(n.id);
     // A junction is a run END (or a tee), not a piece with a kind — its menu is the
     // one a left-tap opens, carrying the fittings, Cap/Reopen and Delete. It used to
@@ -1411,6 +1448,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
    *  this one only has to answer for empty board. */
   onCanvasContext(evt: MouseEvent): void {
     evt.preventDefault(); evt.stopPropagation();
+    if (this.touchGesture()) return;
     this.openMenu(evt.clientX, evt.clientY, { canvas: true });
   }
 
@@ -1418,8 +1456,14 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
    *  the one thing on the canvas you could move and nothing else. */
   onBoardContext(evt: MouseEvent, b: BoardVM): void {
     evt.preventDefault(); evt.stopPropagation();
+    if (this.touchGesture()) return;
     this.openMenu(evt.clientX, evt.clientY, { board: b.id });
   }
+
+  /** Whether the gesture that raised a contextmenu came from a finger. The event
+   *  itself cannot say — it is a plain MouseEvent however it was produced — so this
+   *  reads the pointerdown that started the gesture. */
+  private touchGesture(): boolean { return this.lastPointerType !== 'mouse'; }
 
   /** Open the gate config straight from its dot, without selecting-then-tapping.
    *  Must swallow the event: the node group under it starts a drag on pointerdown,
@@ -1553,6 +1597,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   // ── drag (reposition) / tap ───────────────────────────────────────────────────
   startDrag(evt: PointerEvent, n: NodeVM): void {
     evt.preventDefault(); evt.stopPropagation();
+    this.lastPointerType = evt.pointerType;
     // A secondary port has no cell to drag it to — it is part of a machine, and the machine
     // is the thing that moves. A press on one opens its menu instead.
     if (n.glyph === 'secondaryPort') {
@@ -1562,14 +1607,136 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     }
     this.focus(n.id);
     this.selectedId = n.id; this.menu = null;
-    this.pressedGlyph = n.id;                 // lights the trace, until the release
+    // A finger gets to say what it meant before the piece moves — see beginHold().
+    if (evt.pointerType !== 'mouse') {
+      this.beginHold(evt, e => this.armDrag(e, n), e => { this.dragId = n.id; this.onUp(e); });
+      return;
+    }
+    this.armDrag(evt, n);
+  }
+
+  /** The reposition proper: from here the piece follows the pointer. Split out of
+   *  startDrag because touch reaches it late, by way of the hold.
+   *
+   *  The TRACE lights here rather than on the press, which is what puts it on the
+   *  same clock as the drag: a finger that is on its way past a machine lit the run
+   *  for a third of a second and then dropped it, and a highlight that flashes as
+   *  you scroll past is noise wearing the clothes of an answer. A mouse still lights
+   *  it on the button, because a mouse arms instantly. */
+  private armDrag(evt: PointerEvent, n: NodeVM): void {
+    this.pressedGlyph = n.id;                 // lit until the release
     this.dragId = n.id;
     const pt = this.toSvg(evt);
     this.grab = { dx: pt.x - this.nx(n), dy: pt.y - this.ny(n) };
     window.addEventListener('pointermove', this.moveH);
     window.addEventListener('pointerup', this.upH);
+    window.addEventListener('pointercancel', this.cancelH);
     this.vp.beginEdgeScroll(this.moveH, evt);
   }
+  private cancelDrag(): void {
+    const n = this.byId.get(this.dragId ?? '');
+    if (n) { n.dragX = undefined; n.dragY = undefined; }
+    this.dragId = null; this.hoverCell = null; this.dropBlocked = ''; this.dropWarn = '';
+    this.dockTap = null;
+    this.detachDrag();
+  }
+
+  // ── press-and-hold (touch) ────────────────────────────────────────────────────
+  /* A finger on a glyph is three gestures at once — tap it, scroll past it, move it
+   * — and a drag that armed on contact won every ambiguous one. Scrolling a shop
+   * meant hunting for a gap between pieces, and missing the gap moved a machine you
+   * never meant to touch (jeff, 2026-09-07). So on touch the press waits: travel
+   * first and it is a scroll, lift first and it is a tap, hold still and the piece
+   * comes with you. A MOUSE keeps the instant drag — it has a cursor and a button,
+   * so its press was aimed, and the delay would only be felt as lag. */
+  /** How long the finger must stay put before the press becomes a drag. */
+  private readonly TOUCH_HOLD_MS = 320;
+  /** Travel, in px, that settles it as a scroll instead. Looser than the viewport's
+   *  own PAN_SLOP: a finger resting on a glyph wanders a few px by itself, and the
+   *  cost of being wrong here is a machine that jumps rather than a stiff scroll. */
+  private readonly TOUCH_HOLD_SLOP = 12;
+  /** `arm` picks the thing up; `tap` is what a press that goes nowhere means. What is
+   *  being held — a piece, a board — is entirely the caller's business. */
+  private hold: {
+    x: number; y: number; last: PointerEvent; timer: ReturnType<typeof setTimeout>;
+    arm: (e: PointerEvent) => void; tap: (e: PointerEvent) => void;
+  } | null = null;
+
+  /** What kind of pointer started the gesture in progress. A long press on a phone
+   *  fires `contextmenu` a couple of hundred ms AFTER our own hold has armed a drag,
+   *  and the event carries nothing to say it came from a finger — so the pointerdown
+   *  that preceded it is the only place that fact exists. See onNodeContext(). */
+  private lastPointerType = 'mouse';
+
+  private beginHold(evt: PointerEvent, arm: (e: PointerEvent) => void, tap: (e: PointerEvent) => void): void {
+    // Hand the press to the pan straight away, so a scroll that happens to start on
+    // a machine moves from the first pixel instead of after a 320ms stutter. If the
+    // hold wins instead, the pan is cancelled having gone nowhere.
+    this.vp.onCanvasDown(evt);
+    this.hold = {
+      x: evt.clientX, y: evt.clientY, last: evt, arm, tap,
+      timer: setTimeout(() => this.holdFired(), this.TOUCH_HOLD_MS),
+    };
+    window.addEventListener('pointermove', this.holdMoveH);
+    window.addEventListener('pointerup', this.holdUpH);
+    window.addEventListener('pointercancel', this.holdCancelH);
+  }
+
+  /** Stop waiting. Says nothing about which gesture won — each caller does that. */
+  private endHold(): void {
+    if (this.hold) clearTimeout(this.hold.timer);
+    this.hold = null;
+    window.removeEventListener('pointermove', this.holdMoveH);
+    window.removeEventListener('pointerup', this.holdUpH);
+    window.removeEventListener('pointercancel', this.holdCancelH);
+  }
+
+  /** Held still long enough: pick the piece up. */
+  private holdFired(): void {
+    const h = this.hold; if (!h) return;
+    this.endHold();
+    this.vp.cancelPan();
+    // The one moment on a phone where nothing on screen has moved yet and the
+    // gesture has nonetheless changed meaning. A short buzz is the whole feedback.
+    try { navigator.vibrate?.(8); } catch { /* unsupported or blocked — no matter */ }
+    // Belt and braces with the canvas's user-select:none — a selection made anywhere
+    // else on the page turns the drag that follows into a text drag on some browsers.
+    try { getSelection()?.removeAllRanges(); } catch { /* not available — no matter */ }
+    // From where the finger IS, not where it landed: a hold drifts a few px inside
+    // the slop, and grabbing from the original point would offset the piece from the
+    // finger by that much for the rest of the drag.
+    h.arm(h.last);
+  }
+
+  /** Moved off first: the viewport already has the gesture, so let go of the piece. */
+  private readonly holdMoveH = (e: PointerEvent): void => {
+    const h = this.hold; if (!h) return;
+    h.last = e;
+    if (Math.hypot(e.clientX - h.x, e.clientY - h.y) < this.TOUCH_HOLD_SLOP) return;
+    this.endHold();
+    // No releaseTrace(): on touch the trace does not light until the hold fires, so
+    // a press that turns into a scroll never lit one.
+    // dockTap IS claimed on pointerdown, and settled by onUp — which a scroll never
+    // reaches. Left set, it would fire on the next release over that same plug row.
+    this.dockTap = null;
+  };
+
+  /** Lifted first: an ordinary tap. Routed through the normal release so touch and
+   *  mouse taps do the same thing — dock action, run-end menu, badge-less menu. */
+  private readonly holdUpH = (e: PointerEvent): void => {
+    const h = this.hold; if (!h) return;
+    this.endHold();
+    this.vp.cancelPan();
+    h.tap(e);
+  };
+
+  /** The system took the gesture away (a second finger starting a pinch, a call
+   *  arriving). Nothing happened, and nothing should. */
+  private readonly holdCancelH = (): void => {
+    if (!this.hold) return;
+    this.endHold();
+    this.dockTap = null;
+  };
   private onMove(evt: PointerEvent): void {
     this.vp.trackEdge(evt);
     const n = this.byId.get(this.dragId ?? ''); if (!n) return;
@@ -1639,6 +1806,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     this.vp.endEdgeScroll();
     window.removeEventListener('pointermove', this.moveH);
     window.removeEventListener('pointerup', this.upH);
+    window.removeEventListener('pointercancel', this.cancelH);
   }
   private toSvg(evt: PointerEvent): { x: number; y: number } {
     const svg = this.svgRef?.nativeElement; if (!svg) return { x: 0, y: 0 };
@@ -2591,14 +2759,36 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
 
   onODotDown(evt: PointerEvent, od: ODot): void {
     evt.preventDefault(); evt.stopPropagation();
+    this.lastPointerType = evt.pointerType;
+    // Same wait as a piece — see beginHold(). A dot is a SMALLER target than a
+    // machine, so a finger scrolling the shop is at least as likely to land on one,
+    // and pulling pipe out of the shop by accident is harder to undo than moving a box.
+    if (evt.pointerType !== 'mouse') {
+      this.beginHold(evt, e => this.armODotDrag(e, od), e => { this.armODotDrag(evt, od); this.onODotUp(e); });
+      return;
+    }
+    this.armODotDrag(evt, od);
+  }
+  private armODotDrag(evt: PointerEvent, od: ODot): void {
     this.odrag = { od, x0: evt.clientX, y0: evt.clientY, moved: false };
     window.addEventListener('pointermove', this.oMove);
     window.addEventListener('pointerup', this.oUp);
+    window.addEventListener('pointercancel', this.oCancelH);
     // The one drag that never got this. Pulling pipe off an outlet is exactly the
     // gesture most likely to need it — the thing you are reaching for is in another
     // system, a screen or two away — and without it the drag simply stopped at the
     // edge of the viewport with no way to go further.
     this.vp.beginEdgeScroll(this.oMove, evt);
+  }
+  private cancelODotDrag(): void {
+    this.detachODotDrag();
+    this.odrag = null;
+  }
+  private detachODotDrag(): void {
+    this.vp.endEdgeScroll();
+    window.removeEventListener('pointermove', this.oMove);
+    window.removeEventListener('pointerup', this.oUp);
+    window.removeEventListener('pointercancel', this.oCancelH);
   }
   private onODotMove(evt: PointerEvent): void {
     if (!this.odrag) return;
@@ -2610,9 +2800,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     this.odrag.at = this.toSvg(evt);
   }
   private onODotUp(evt: PointerEvent): void {
-    window.removeEventListener('pointermove', this.oMove);
-    window.removeEventListener('pointerup', this.oUp);
-    this.vp.endEdgeScroll();
+    this.detachODotDrag();
     const d = this.odrag; this.odrag = null; if (!d) return;
     if (d.moved) {
       // Dropped ON a machine that already has a duct → the second-port gesture,
@@ -2709,9 +2897,29 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   // extend or populate — no gate forced on you.
   onBranchDotDown(evt: PointerEvent, bd: BDot): void {
     evt.preventDefault(); evt.stopPropagation();
+    this.lastPointerType = evt.pointerType;
+    // Held before it tees, same as everything else on the canvas. This one sits ON a
+    // duct, which is the line a finger follows while scrolling along a run.
+    if (evt.pointerType !== 'mouse') {
+      this.beginHold(evt, e => this.armBDotDrag(e, bd), e => { this.armBDotDrag(evt, bd); this.onBDotUp(e); });
+      return;
+    }
+    this.armBDotDrag(evt, bd);
+  }
+  private armBDotDrag(evt: PointerEvent, bd: BDot): void {
     this.bdrag = { bd, x0: evt.clientX, y0: evt.clientY, moved: false };
     window.addEventListener('pointermove', this.bMove);
     window.addEventListener('pointerup', this.bUp);
+    window.addEventListener('pointercancel', this.bCancelH);
+  }
+  private cancelBDotDrag(): void {
+    this.detachBDotDrag();
+    this.bdrag = null;
+  }
+  private detachBDotDrag(): void {
+    window.removeEventListener('pointermove', this.bMove);
+    window.removeEventListener('pointerup', this.bUp);
+    window.removeEventListener('pointercancel', this.bCancelH);
   }
   // No edge auto-scroll here, unlike every other drag: this one never reads the
   // pointer's POSITION. It only asks whether the press turned into a drag, and the
@@ -2722,8 +2930,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     if (Math.hypot(evt.clientX - this.bdrag.x0, evt.clientY - this.bdrag.y0) > 8) this.bdrag.moved = true;
   }
   private onBDotUp(evt: PointerEvent): void {
-    window.removeEventListener('pointermove', this.bMove);
-    window.removeEventListener('pointerup', this.bUp);
+    this.detachBDotDrag();
     const d = this.bdrag; this.bdrag = null; if (!d) return;
     if (d.moved) {
       this.pushHistory(null);
@@ -3488,13 +3695,36 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   // bad drop shows as ugly wire inside the same gesture, and that is the feedback.
   onBoardDown(evt: PointerEvent, b: BoardVM): void {
     evt.preventDefault(); evt.stopPropagation();
+    this.lastPointerType = evt.pointerType;
+    this.selectedId = null; this.menu = null;
+    // A board is the biggest thing standing on the canvas, so it is the easiest to
+    // grab by accident while scrolling past. Same press-and-hold as a piece; a tap
+    // on one has never done anything, so there is nothing for the tap branch to do.
+    if (evt.pointerType !== 'mouse') {
+      this.beginHold(evt, e => this.armBoardDrag(e, b), () => { /* no tap action */ });
+      return;
+    }
+    this.armBoardDrag(evt, b);
+  }
+  private armBoardDrag(evt: PointerEvent, b: BoardVM): void {
     const p = this.toSvg(evt);
     this.bodrag = { id: b.id, dx: p.x - b.x, dy: p.y - b.y, moved: false };
     this.boardDragPt = { x: b.x, y: b.y };
-    this.selectedId = null; this.menu = null;
     window.addEventListener('pointermove', this.boMove);
     window.addEventListener('pointerup', this.boUp);
+    window.addEventListener('pointercancel', this.boCancelH);
     this.vp.beginEdgeScroll(this.boMove, evt);
+  }
+  private cancelBoardDrag(): void {
+    this.detachBoardDrag();
+    this.bodrag = null; this.boardDragPt = null;
+    this.hoverCell = null; this.dropBlocked = ''; this.dropWarn = '';
+  }
+  private detachBoardDrag(): void {
+    this.vp.endEdgeScroll();
+    window.removeEventListener('pointermove', this.boMove);
+    window.removeEventListener('pointerup', this.boUp);
+    window.removeEventListener('pointercancel', this.boCancelH);
   }
   private onBoardMove(evt: PointerEvent): void {
     this.vp.trackEdge(evt);
@@ -3513,9 +3743,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     this.dropBlocked = chk.blocked; this.dropWarn = chk.warn;
   }
   private onBoardUp(): void {
-    this.vp.endEdgeScroll();
-    window.removeEventListener('pointermove', this.boMove);
-    window.removeEventListener('pointerup', this.boUp);
+    this.detachBoardDrag();
     const d = this.bodrag; const pt = this.boardDragPt;
     this.bodrag = null; this.boardDragPt = null;
     this.hoverCell = null; this.dropBlocked = ''; this.dropWarn = '';
@@ -3548,23 +3776,53 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   /** From a gate's tab: the loose end is the board end, so we're hunting a port. */
   onTabDown(evt: PointerEvent, t: { id: string; x: number; y: number }): void {
     evt.preventDefault(); evt.stopPropagation();
+    this.lastPointerType = evt.pointerType;
+    if (evt.pointerType !== 'mouse') {
+      // A cable is PULLED, so there is no tap to preserve: a press that goes nowhere
+      // ends a drag that drew nothing, which is what onWireUp already does with it.
+      this.beginHold(evt, e => this.armTabWire(e, t), () => { /* nothing pulled */ });
+      return;
+    }
+    this.armTabWire(evt, t);
+  }
+  private armTabWire(evt: PointerEvent, t: { id: string; x: number; y: number }): void {
     const p = { x: t.x, y: t.y };
     this.wireDrag = { mode: 'toPort', gateId: t.id, from: p, to: p, over: null, overGate: null };
     this.wireBlocked = ''; this.wireNote = '';
-    window.addEventListener('pointermove', this.wMove);
-    window.addEventListener('pointerup', this.wUp);
-    this.vp.beginEdgeScroll(this.wMove, evt);
+    this.attachWireDrag(evt);
   }
   /** From a board port: the loose end is the gate end, so we're hunting a tab. An
    *  occupied port picks up the cable that's already there. */
   onPortDown(evt: PointerEvent, b: BoardVM, ch: number): void {
     evt.preventDefault(); evt.stopPropagation();
+    this.lastPointerType = evt.pointerType;
+    if (evt.pointerType !== 'mouse') {
+      this.beginHold(evt, e => this.armPortWire(e, b, ch), () => { /* nothing pulled */ });
+      return;
+    }
+    this.armPortWire(evt, b, ch);
+  }
+  private armPortWire(evt: PointerEvent, b: BoardVM, ch: number): void {
     const p = portExit({ x: this.bx(b), y: this.by(b) }, ch);
     this.wireDrag = { mode: 'toGate', port: { boardId: b.id, channel: ch }, from: p, to: p, over: null, overGate: null };
     this.wireBlocked = ''; this.wireNote = '';
+    this.attachWireDrag(evt);
+  }
+  private attachWireDrag(evt: PointerEvent): void {
     window.addEventListener('pointermove', this.wMove);
     window.addEventListener('pointerup', this.wUp);
+    window.addEventListener('pointercancel', this.wCancelH);
     this.vp.beginEdgeScroll(this.wMove, evt);
+  }
+  private cancelWireDrag(): void {
+    this.detachWireDrag();
+    this.wireDrag = null; this.wireBlocked = ''; this.wireNote = '';
+  }
+  private detachWireDrag(): void {
+    this.vp.endEdgeScroll();
+    window.removeEventListener('pointermove', this.wMove);
+    window.removeEventListener('pointerup', this.wUp);
+    window.removeEventListener('pointercancel', this.wCancelH);
   }
   private onWireMove(evt: PointerEvent): void {
     this.vp.trackEdge(evt);
@@ -3594,9 +3852,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     }
   }
   private onWireUp(): void {
-    this.vp.endEdgeScroll();
-    window.removeEventListener('pointermove', this.wMove);
-    window.removeEventListener('pointerup', this.wUp);
+    this.detachWireDrag();
     const d = this.wireDrag; this.wireDrag = null;
     const blocked = this.wireBlocked; this.wireBlocked = ''; this.wireNote = '';
     if (!d || blocked) return;
@@ -4510,7 +4766,12 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   private focusName(): void {
     setTimeout(() => {
       const el = document.querySelector('input.nameedit') as HTMLInputElement | null;
-      el?.focus(); el?.select();
+      el?.focus();
+      // Select-all is the fast path to replacing a name with a mouse. On a phone it
+      // raises the platform's edit callout over the field you just asked to open,
+      // which is the thing this screen has spent the day declining — so there the
+      // caret simply lands in the name.
+      if (window.matchMedia('(hover: hover)').matches) el?.select();
     });
   }
 
@@ -5174,8 +5435,13 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
    * says what you are working on, and "where does this run go" is a question you ask
    * for a second and have then answered (jeff, 2026-09-07 — first that the highlight
    * should not outlive the pointer leaving the glyph, then that press-and-hold is
-   * the gesture). Nothing special is needed for touch: a finger held on a machine
-   * lights the same path a mouse button does, and lifting it reverts.
+   * the gesture). ON TOUCH IT WAITS FOR THE SAME HOLD THE DRAG DOES — see armDrag().
+   * Lighting it on contact meant every finger that scrolled past a machine flashed
+   * that machine's run for a third of a second on its way by (jeff, 2026-09-07), and
+   * a highlight you see mostly by accident teaches you to stop reading it. So the
+   * gesture on a phone is one gesture: hold a machine and its run lights, look, and
+   * either move it or lift without moving. A mouse still lights on the button — it
+   * arms instantly, and there is nothing to disambiguate.
    *
    * It stays lit THROUGH a drag, which was not the first answer: the trace let go
    * once a press crossed the drag threshold, on the grounds that it would compete
