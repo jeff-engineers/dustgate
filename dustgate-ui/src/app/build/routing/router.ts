@@ -74,14 +74,29 @@ export function routeAllShared(scene: Scene, opts: RouteAllOpts = {}): { out: Ma
   let best: { out: Map<string, RoutedDuct>; shared: string[] } | null = null;
   for (let attempt = 0; attempt < 3; attempt++) {
     const pass = routePass(scene, opts, order);
-    pass.shared = union(pass.shared, drawnOverlaps(pass.out));
-    if (!pass.shared.length) return pass;
-    if (!best) best = pass;                     // keep the first result as the floor
-    const promote = pass.shared[0];
+    // What comes BACK is what is drawn over something. What the pass reports —
+    // `gaveUpLane` — is a different and weaker fact: that duct could not be routed
+    // under the no-shared-lane rule, so the rule was relaxed for it. The relaxed
+    // route often lands somewhere clean anyway, and reporting it as an overlap
+    // named runs that are perfectly fine (2026-09-07: moving the demo's drum sander
+    // down one cell said two runs were drawn over each other, and nothing was).
+    //
+    // It is still the right thing to REORDER on, which is why the pass keeps
+    // reporting it: a duct that could not get an exclusive lane is the one worth
+    // routing first next time, whether or not this attempt ended up tidy.
+    const drawn = drawnOverlaps(pass.out);
+    if (!drawn.length) return { out: pass.out, shared: [] };
+    const result = { out: pass.out, shared: drawn };
+    // The TIDIEST attempt wins, not the first. Keeping the first was written when
+    // this list meant "gave up a lane", where one attempt was as good as another;
+    // now it counts runs actually drawn over something, so a reorder that halves it
+    // is a better picture and was being thrown away.
+    if (!best || result.shared.length < best.shared.length) best = result;
+    const promote = pass.gaveUpLane[0] ?? drawn[0];
     if (order[0] === promote) break;            // already first; reordering can't help
     order = [promote, ...order.filter(id => id !== promote)];
   }
-  return best ?? routePass(scene, opts, order);
+  return best ?? { out: routePass(scene, opts, order).out, shared: [] };
 }
 
 /**
@@ -143,14 +158,6 @@ function collinearOverlap(a0: Pt, a1: Pt, b0: Pt, b1: Pt): boolean {
   return Math.min(s1, t1) - Math.max(s0, t0) > EPS;
 }
 
-/** Both lists, no duplicates, order preserved — the first entry is what the retry
- *  promotes, so the edge-based finding stays in front where it was. */
-function union(a: readonly string[], b: readonly string[]): string[] {
-  const out = [...a];
-  for (const id of b) if (!out.includes(id)) out.push(id);
-  return out;
-}
-
 /** A port's identity for reuse: where it is, and which way the run goes through it.
  *  Rounded, because a port sits on a device edge in float pixels and the same port
  *  must key identically for every duct that reaches it. */
@@ -184,7 +191,7 @@ function charge(ports: Port[], taken: ReadonlySet<string>): Port[] {
     : p));
 }
 
-function routePass(scene: Scene, opts: RouteAllOpts, order: string[]): { out: Map<string, RoutedDuct>; shared: string[] } {
+function routePass(scene: Scene, opts: RouteAllOpts, order: string[]): { out: Map<string, RoutedDuct>; gaveUpLane: string[] } {
   const byId = new Map(scene.nodes.map(n => [n.id, n]));
   const prior = opts.prior;
   const frozen = opts.frozen;
@@ -201,7 +208,9 @@ function routePass(scene: Scene, opts: RouteAllOpts, order: string[]): { out: Ma
 
   const rank = new Map(order.map((id, i) => [id, i]));
   const ducts = [...scene.ducts].sort((a, b) => (rank.get(a.childId) ?? 0) - (rank.get(b.childId) ?? 0));
-  const shared: string[] = [];
+  // Ducts the strict pass could not fit without sharing a lane. NOT a claim that
+  // they overlap — see routeAllShared — only that the rule had to be relaxed.
+  const gaveUpLane: string[] = [];
 
   // Frozen runs claim their edges first, so the duct actually being dragged routes
   // around where the others already are rather than the other way round.
@@ -244,7 +253,7 @@ function routePass(scene: Scene, opts: RouteAllOpts, order: string[]): { out: Ma
     const strict = obstaclesFor(scene.nodes, EMPTY);
     let res: RouteResult = routeOne(from, to, { ...common, obstacles: strict, blockUsed: true });
     if (!res.ok) {
-      shared.push(d.childId);                   // had to give up its exclusive lane
+      gaveUpLane.push(d.childId);               // had to give up its exclusive lane
       res = routeOne(from, to, { ...common, obstacles: strict });
       if (!res.ok) {
         res = routeOne(from, to, { ...common, obstacles: obstaclesFor(scene.nodes, new Set([child.id, parent.id])) });
@@ -257,7 +266,7 @@ function routePass(scene: Scene, opts: RouteAllOpts, order: string[]): { out: Ma
     out.set(d.childId, { pts: res.pts, ok: res.ok, edges: res.edges, nodes: res.nodes });
   }
 
-  return { out, shared };
+  return { out, gaveUpLane };
 }
 
 /** Board bounds wide enough to hold every glyph, before the lattice adds its own
