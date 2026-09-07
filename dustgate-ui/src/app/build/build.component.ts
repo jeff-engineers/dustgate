@@ -338,6 +338,10 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   private future: string[] = [];
   private lastTag: string | null = null;
   airflowErrors: AirflowIssue[] = [];
+  /** Element ids from the last validation failure, for the halo. The MESSAGE is
+   *  `wip`; these are the same failures' `ref`s, kept because a sentence cannot
+   *  point at anything. */
+  private wipRefs: string[] = [];
   vbW = 400; vbH = 300;
   /** Solves every duct on the board, memoized on the scene — see routing/router.ts. */
   private readonly router = new Router();
@@ -4122,6 +4126,49 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     return this.router.shared().map(id => this.byId.get(id)?.name ?? id);
   }
 
+  /**
+   * Pieces a problem is ABOUT, for the halo the canvas draws round them.
+   *
+   * The guide bar has named the piece since 2026-08-20 and that was always half an
+   * answer: one line at the top of a canvas three screens wide, naming something it
+   * cannot point at. This is the other half (D-66).
+   *
+   * Two sources, both of which already know which element they mean: an airflow
+   * leak names the tool (and its partners, for a shared outlet — every piece in a
+   * co-open group is part of the same problem, so every one of them is marked), and
+   * a validation failure carries `ref`. Live, not stored: computed from the doc as
+   * it stands, so a halo appears as you make the mistake and goes when you fix it,
+   * without waiting for a Save.
+   *
+   * What deliberately does NOT get one: an unset gate, which has the orange dot —
+   * a to-do you can clear, not a fault — and a redundant gate, which is an offer.
+   * Overlapping ducts do not either: an overlap is about two RUNS, one of them
+   * invisible underneath the other, and a ring round a box cannot say that. The
+   * decision there is to stop them happening instead (D-66).
+   */
+  problemIds(): ReadonlySet<string> {
+    const out = new Set<string>();
+    for (const l of this.liveLeaks()) {
+      out.add(l.id);
+      for (const w of l.with ?? []) out.add(w.id);
+    }
+    for (const r of this.wipRefs) out.add(r);
+    return out;
+  }
+
+  /** True when this glyph is one of them. Read per node by the template. */
+  hasProblem(id: string): boolean { return this.problemIds().has(id); }
+
+  /** The halo's box: the glyph's own extent plus a margin, so one shape serves a
+   *  circle, a barrel and a 4-cell manifold without a case for each. */
+  haloBox(n: NodeVM): { x: number; y: number; w: number; h: number; r: number } {
+    const m = 7;
+    const hw = this.halfW(n), hh = this.halfH(n);
+    const x = n.isUnit ? -GATE_PAD - m : -hw - m;
+    const w = n.isUnit ? this.unitW(n) + 2 * m : hw * 2 + 2 * m;
+    return { x, y: -hh - m, w, h: hh * 2 + 2 * m, r: n.glyph === 'ballvalve' ? hh + m : 15 };
+  }
+
   /** Live always-open leaks (tools with no gate on their path to the collector). */
   private liveLeaks(): AirflowIssue[] {
     if (!this.topo) return [];
@@ -4268,7 +4315,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     if (!this.topo || this.saving) return;
     const doc = this.docWithLayout();
     const v = validateShop(doc);
-    this.saving = true; this.saveError = ''; this.saveNote = ''; this.wip = '';
+    this.saving = true; this.saveError = ''; this.saveNote = ''; this.wip = ''; this.wipRefs = [];
     try {
       this.topo = doc as Topology;                     // keep the draft either way
       if (!v.ok) {
@@ -4276,6 +4323,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
         // document is made of. Nobody typed those, so they get translated on the way
         // to the guide bar — see services/wip-message.ts.
         this.wip = wipSummary(doc as unknown as ShopDoc, v.errors);
+        this.wipRefs = (v.errors as { ref?: string }[]).map(e => e.ref).filter((r): r is string => !!r);
         return;                                        // still dirty — retry once it's whole
       }
       await this.api.putTopology(doc as Topology);

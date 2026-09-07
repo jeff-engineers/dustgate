@@ -84,6 +84,9 @@ export function routeAllShared(scene: Scene, opts: RouteAllOpts = {}): { out: Ma
     // It is still the right thing to REORDER on, which is why the pass keeps
     // reporting it: a duct that could not get an exclusive lane is the one worth
     // routing first next time, whether or not this attempt ended up tidy.
+    // Separate first, then judge: what comes back is what is STILL drawn over
+    // something after the lanes are nested, which for most boards is nothing.
+    separateLanes(pass.out);
     const drawn = drawnOverlaps(pass.out);
     if (!drawn.length) return { out: pass.out, shared: [] };
     const result = { out: pass.out, shared: drawn };
@@ -97,6 +100,92 @@ export function routeAllShared(scene: Scene, opts: RouteAllOpts = {}): { out: Ma
     order = [promote, ...order.filter(id => id !== promote)];
   }
   return best ?? { out: routePass(scene, opts, order).out, shared: [] };
+}
+
+/** How far apart two runs sharing a lane are pulled. A duct is stroked at 6, so
+ *  this is a clear gap rather than a graze — the same reasoning as LANE_STEP in the
+ *  wiring layer, which has separated cables this way since boards went on the grid. */
+export const LANE_STEP = 12;
+
+/**
+ * Pull runs that share a lane apart, the way the wiring layer nests its cables.
+ *
+ * Ducts and cables had opposite answers to the same problem and only one of them
+ * worked. A cable that would share a corridor is given its own LANE and nested
+ * beside its neighbours; a duct that would share one was sent round the shop to
+ * find a lane of its own, and when there wasn't one, drawn on top of its neighbour
+ * and reported. That detour is most of what makes a layout look like plumbing
+ * nobody would build — bends that exist to satisfy a rule rather than to get
+ * anywhere.
+ *
+ * So the router still solves on the lattice, and then the drawn line is nudged off
+ * it. Both runs move, symmetrically about the lane they wanted, so neither is "the
+ * one that got shifted" and a pair reads as a pair.
+ *
+ * This makes the picture inexact ON PURPOSE, and that is worth being explicit
+ * about: the canvas is a representation of a shop, not a blueprint. Nobody measures
+ * off it and nothing is cut to it, so a run drawn 6px from the lattice it routed on
+ * costs nothing real and buys a picture where both runs can be seen.
+ *
+ * Only the SEGMENT that clashes moves, with its two endpoints — so the neighbouring
+ * legs, being perpendicular, stay perpendicular and simply grow or shrink. An
+ * endpoint on a port moves too: a duct leaving a junction dot 6px off centre still
+ * visibly leaves that dot, and pinning it would need a dogleg that costs more
+ * legibility than it buys.
+ */
+function separateLanes(out: Map<string, RoutedDuct>): void {
+  type Ref = { id: string; i: number };            // segment i of run id
+  const groups = new Map<string, Ref[]>();
+
+  for (const [id, r] of out) {
+    for (let i = 0; i < r.pts.length - 1; i++) {
+      const a = r.pts[i], b = r.pts[i + 1];
+      const horiz = Math.abs(a.y - b.y) < 0.5, vert = Math.abs(a.x - b.x) < 0.5;
+      if (!horiz && !vert) continue;
+      // Keyed on the LINE it sits on, so everything sharing that line is compared;
+      // which of them actually overlap is settled below.
+      const key = horiz ? `h${Math.round(a.y)}` : `v${Math.round(a.x)}`;
+      const list = groups.get(key);
+      if (list) list.push({ id, i }); else groups.set(key, [{ id, i }]);
+    }
+  }
+
+  for (const refs of groups.values()) {
+    if (refs.length < 2) continue;
+    const span = (r: Ref): [number, number] => {
+      const pts = out.get(r.id)!.pts, a = pts[r.i], b = pts[r.i + 1];
+      return Math.abs(a.y - b.y) < 0.5
+        ? [Math.min(a.x, b.x), Math.max(a.x, b.x)]
+        : [Math.min(a.y, b.y), Math.max(a.y, b.y)];
+    };
+    // Only across DIFFERENT runs: one run doubling back on its own line is its own
+    // business, and nudging half of it apart would just bend it.
+    const clash = refs.filter(r => refs.some(o => {
+      if (o.id === r.id) return false;
+      const [a0, a1] = span(r), [b0, b1] = span(o);
+      return Math.min(a1, b1) - Math.max(a0, b0) > 1;
+    }));
+    if (clash.length < 2) continue;
+
+    // One lane per RUN, not per segment: a run clashing twice on the same line takes
+    // the same lane both times or it zigzags between them. Ordered by id so a shop
+    // draws the same way every time.
+    const lanes = [...new Set(clash.map(r => r.id))].sort();
+    const mid = (lanes.length - 1) / 2;
+    for (const r of clash) {
+      const delta = (lanes.indexOf(r.id) - mid) * LANE_STEP;
+      if (!delta) continue;
+      const pts = out.get(r.id)!.pts;
+      const horiz = Math.abs(pts[r.i].y - pts[r.i + 1].y) < 0.5;
+      if (horiz) {
+        pts[r.i] = { x: pts[r.i].x, y: pts[r.i].y + delta };
+        pts[r.i + 1] = { x: pts[r.i + 1].x, y: pts[r.i + 1].y + delta };
+      } else {
+        pts[r.i] = { x: pts[r.i].x + delta, y: pts[r.i].y };
+        pts[r.i + 1] = { x: pts[r.i + 1].x + delta, y: pts[r.i + 1].y };
+      }
+    }
+  }
 }
 
 /**
@@ -212,6 +301,8 @@ function routePass(scene: Scene, opts: RouteAllOpts, order: string[]): { out: Ma
   // they overlap — see routeAllShared — only that the rule had to be relaxed.
   const gaveUpLane: string[] = [];
 
+  const ceilingY = ceilingOf(scene.nodes);
+
   // Frozen runs claim their edges first, so the duct actually being dragged routes
   // around where the others already are rather than the other way round.
   for (const d of ducts) {
@@ -243,20 +334,30 @@ function routePass(scene: Scene, opts: RouteAllOpts, order: string[]): { out: Ma
     // become passable again, so no route we could previously find is lost.
     const common = {
       bounds: scene.bounds,
+      ceilingY,
       usedEdges: used,
       usedNodes: crossed,
       priorEdges: prior?.get(d.childId)?.edges,
     };
-    // Three attempts, each relaxing one rule, so the picture degrades in the order a
-    // person would accept: never share a lane; then share one rather than cross a
-    // device; then cross your own endpoints rather than fail outright.
     const strict = obstaclesFor(scene.nodes, EMPTY);
-    let res: RouteResult = routeOne(from, to, { ...common, obstacles: strict, blockUsed: true });
+    // FOUR attempts now, each relaxing one rule, so the picture degrades in the order
+    // a person would accept: never climb above the outlet and never share a lane;
+    // then share a lane; then climb; then cross your own endpoints rather than fail.
+    //
+    // The ceiling is relaxed AFTER lane sharing and BEFORE cutting through a device,
+    // and that ordering is the whole judgement: two runs nested 12px apart is a thing
+    // you see in a real shop, and a pipe going up over the ceiling to come back down
+    // is not — but neither is a machine you cannot reach at all, so a tool parked
+    // above the collector still gets its duct.
+    let res: RouteResult = routeOne(from, to, { ...common, obstacles: strict, blockUsed: true, ceilingBlocks: true });
     if (!res.ok) {
       gaveUpLane.push(d.childId);               // had to give up its exclusive lane
-      res = routeOne(from, to, { ...common, obstacles: strict });
+      res = routeOne(from, to, { ...common, obstacles: strict, ceilingBlocks: true });
       if (!res.ok) {
-        res = routeOne(from, to, { ...common, obstacles: obstaclesFor(scene.nodes, new Set([child.id, parent.id])) });
+        res = routeOne(from, to, { ...common, obstacles: strict });
+        if (!res.ok) {
+          res = routeOne(from, to, { ...common, obstacles: obstaclesFor(scene.nodes, new Set([child.id, parent.id])) });
+        }
       }
     }
 
@@ -267,6 +368,29 @@ function routePass(scene: Scene, opts: RouteAllOpts, order: string[]): { out: Ma
   }
 
   return { out, gaveUpLane };
+}
+
+/**
+ * The height ducting should stay below: the topmost collector's outlet.
+ *
+ * A collector's side ports sit on its centreline, and that is where the trunk
+ * leaves — everything downstream of it flows away and DOWN, so pipe drawn above
+ * that line is going up only to come back. The router had no opinion about height,
+ * and the empty band across the top of the board was therefore its favourite place
+ * to put a run it could not fit anywhere else.
+ *
+ * The TOPMOST collector sets it for the whole board, not each system its own: the
+ * router does not know which system a duct belongs to, and the lower system's runs
+ * legitimately pass under the upper one's. A per-system ceiling would need that
+ * knowledge and would buy nothing — the lower system has no reason to climb.
+ *
+ * Undefined on a board with no collector yet, which is a real state while someone
+ * is drawing: no collector, no outlet height, no opinion.
+ */
+export function ceilingOf(nodes: SceneNode[]): number | undefined {
+  let y = Infinity;
+  for (const n of nodes) if (n.glyph === 'collector') y = Math.min(y, n.y);
+  return y === Infinity ? undefined : y;
 }
 
 /** Board bounds wide enough to hold every glyph, before the lattice adds its own

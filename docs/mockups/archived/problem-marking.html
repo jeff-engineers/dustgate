@@ -1,0 +1,355 @@
+<title>Marking a problem on the canvas</title>
+
+<style>
+  :root {
+    --bg: #111; --surface: #1e1e1e; --raised: #262626; --border: #2e2e2e;
+    --text: #e8e8e8; --muted: #8a8a86; --accent: #f0a500; --success: #3cbe6e;
+    --danger: #d94444; --duct: #3a3a3a; --cable: #38b6f0; --radius: 14px;
+    /* Candidate. Not yet spoken for anywhere on the canvas — see §1. */
+    --problem: #c264e0;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); margin: 0; padding: 22px 18px 72px;
+         font-family: system-ui, -apple-system, sans-serif; font-size: 15px; line-height: 1.5; }
+  .wrap { max-width: 1080px; margin: 0 auto; display: flex; flex-direction: column; gap: 24px; }
+  h1 { font-size: 22px; font-weight: 600; margin: 6px 0 0; letter-spacing: -0.01em; }
+  h3 { font-size: 15px; font-weight: 600; margin: 0 0 2px; }
+  .lede { color: var(--muted); font-size: 13.5px; max-width: 68ch; margin: 6px 0 0; }
+  .eyebrow { font-size: 11px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--muted); }
+  p { margin: 0; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.92em; }
+  .rule { height: 1px; background: var(--border); border: 0; margin: 0; }
+  .sec { display: flex; flex-direction: column; gap: 12px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 15px 16px; }
+  .card p + p { margin-top: 9px; }
+  .card em { color: var(--text); font-style: normal; }
+  .note { font-size: 12.5px; color: var(--muted); line-height: 1.55; }
+  .note b { color: var(--text); font-weight: 600; }
+  .flag { border-left: 3px solid var(--accent); padding-left: 12px; }
+  .flag.open { border-left-color: var(--muted); }
+
+  .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
+
+  /* ── the toy canvas ─────────────────────────────────────────────────── */
+  .stage { background: #0d0d0d; border: 1px solid var(--border); border-radius: var(--radius);
+           padding: 0; overflow: hidden; }
+  .stage svg { display: block; width: 100%; height: auto; }
+  .bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
+         padding: 10px 12px; border-bottom: 1px solid var(--border); background: var(--raised); }
+  .bar .lbl { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin-right: 2px; }
+  button { font: inherit; font-size: 12.5px; color: var(--text); background: #2b2b2b;
+           border: 1px solid var(--border); border-radius: 8px; padding: 5px 11px; cursor: pointer; }
+  button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #111; font-weight: 600; }
+  button.ghost[aria-pressed="true"] { background: var(--problem); border-color: var(--problem); color: #fff; }
+
+  /* guide bar mock */
+  .guide { display: flex; gap: 10px; align-items: center; padding: 9px 12px;
+           border-top: 1px solid var(--border); background: var(--raised); font-size: 12.5px; }
+  .guide .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--problem); flex: none; }
+  .guide .txt { color: var(--text); }
+  .guide button { margin-left: auto; flex: none; }
+
+  /* canvas vocabulary, matching build.component.css */
+  .duct   { fill: none; stroke: var(--duct); stroke-width: 7; stroke-linecap: round; stroke-linejoin: round; }
+  .duct.sec { stroke-width: 5; stroke-dasharray: 11 8; }
+  .body   { fill: #16242c; stroke: #2f6d86; stroke-width: 1.6; }
+  .name   { fill: var(--text); font-size: 12px; font-weight: 600; text-anchor: middle; }
+  .cap    { fill: var(--muted); }
+  .tick   { fill: var(--success); }
+  .gate   { fill: none; stroke: #55585c; stroke-width: 1.6; }
+  .disc   { stroke: #cfd2d4; stroke-width: 3; }
+  .lab    { fill: var(--muted); font-size: 10px; letter-spacing: .1em; text-anchor: middle; }
+
+  /* ── the treatments ─────────────────────────────────────────────────── */
+  /* Everything below is off by default; the buttons add classes to <svg>. */
+  .mark { opacity: 0; transition: opacity .18s; }
+  svg.t-halo .mark.halo, svg.t-flag .mark.flag-m, svg.t-dim .mark.halo { opacity: 1; }
+
+  .halo-ring { fill: none; stroke: var(--problem); stroke-width: 2.5; opacity: .95; }
+  .halo-glow { fill: none; stroke: var(--problem); stroke-width: 7; opacity: .18; }
+  .flag-badge { fill: var(--problem); }
+  .flag-glyph { fill: #fff; font-size: 11px; font-weight: 700; text-anchor: middle; }
+
+  /* focus dims rather than hides */
+  svg.t-dim .dimmable { opacity: .22; transition: opacity .18s; }
+
+  /* overlap treatments */
+  .brk { stroke: var(--problem); stroke-width: 2; fill: none; opacity: 0; transition: opacity .18s; }
+  .brk-t { fill: var(--problem); font-size: 10px; text-anchor: middle; opacity: 0; transition: opacity .18s; }
+  svg.o-bracket .brk, svg.o-bracket .brk-t, svg.o-both .brk, svg.o-both .brk-t { opacity: 1; }
+
+  /* peel: the hidden run slides clear of the one on top of it */
+  .peel { transition: transform .28s ease; }
+  svg.o-peel .peel, svg.o-both .peel { transform: translateY(-11px); }
+  svg.o-peel .peel-lab, svg.o-both .peel-lab { opacity: 1; }
+  .peel-lab { fill: var(--problem); font-size: 10px; opacity: 0; transition: opacity .18s; }
+
+  .kbd { font-size: 11px; color: var(--muted); }
+  ul { margin: 8px 0 0; padding-left: 18px; color: var(--muted); font-size: 12.5px; line-height: 1.6; }
+  li b { color: var(--text); font-weight: 600; }
+  .q { border-left: 3px solid var(--problem); padding-left: 12px; }
+</style>
+
+<div class="wrap">
+
+  <div class="card" style="border-left:3px solid var(--accent)">
+    <p class="note"><b>ARCHIVED 2026-09-07 — decided, see
+      <a href="../decisions.html">D-66</a>.</b> The halo won, in ACCENT ORANGE rather than the
+      magenta proposed below (colours need not be exclusive: the unset-gate dot and a fault both
+      mean “your attention is wanted here”), and it is drawn ALWAYS — the “Show me” control in §2
+      is not being built, because a fault the canvas knows about should be pointed at rather than
+      offered on request. <b>Neither overlap treatment was taken.</b> §4 is the useful half of this
+      page, and its conclusion is that we should not need it: the decision is to prevent overlaps
+      rather than annotate them, and to come back here only if the router runs out of room. The
+      page below is unaltered, so the argument reads the way it was made.</p>
+  </div>
+
+  <div>
+    <p class="eyebrow">Exploration · 2026-09-07 · not decided</p>
+    <h1>Marking a problem on the canvas</h1>
+    <p class="lede">The guide bar can say <em>“Table Saw · Overarm Collector, Wye are drawn over
+      another run.”</em> That is a true sentence and a useless one: it is one line at the top of a
+      canvas you are scrolled around inside, naming two pieces without saying where. This page is
+      about the graphical half — and about the case that makes it hard, which is a run that is
+      invisible <em>because</em> something is drawn on top of it.</p>
+    <p class="lede">Throwaway. Whatever wins folds into <code>canvas.html</code> and this page
+      moves to <code>archived/</code>.</p>
+  </div>
+
+  <hr class="rule"/>
+
+  <!-- ══ 1 ═══════════════════════════════════════════════════════════════ -->
+  <section class="sec">
+    <p class="eyebrow">1 · What the colours already mean</p>
+    <div class="card">
+      <p class="note">A new marking has to survive a palette that is nearly full. Everything here
+        is load-bearing today:</p>
+      <ul>
+        <li><b>Accent orange</b> — unfinished. An open stub, a gate nobody has set up yet.
+          <em>Not available:</em> a problem is not the same as unfinished work, and the whole
+          point of the orange dot is that it is a to-do you can clear.</li>
+        <li><b>Red / danger</b> — used by the app for destructive and live-fault states
+          (<code>--danger</code>, the “Cap them” button). Tempting, and probably too strong: an
+          overlap is a picture that cannot be drawn, not a shop that will hurt you.</li>
+        <li><b>Green</b> — set up, ready.</li>
+        <li><b>Azure</b> — a cable. <b>Violet</b> — the collector barrel. <b>Grey</b> — duct.</li>
+      </ul>
+      <p class="note" style="margin-top:10px"><b>The candidate is magenta</b>
+        (<code>--problem: #c264e0</code>) — unspoken-for, reads clearly against both the grey
+        ducts and the azure cables, and does not say “danger”. Shown throughout below. It is a
+        proposal, not a decision.</p>
+    </div>
+  </section>
+
+  <hr class="rule"/>
+
+  <!-- ══ 2 ═══════════════════════════════════════════════════════════════ -->
+  <section class="sec">
+    <p class="eyebrow">2 · Try it</p>
+    <p class="note" style="max-width:68ch">The scene is the real one, traced from the demo layout
+      after the drum sander moves down a cell: the auxiliary run sweeps west along the machine row
+      and the wye’s feed arrives at its tee along the same row. <b>46px of the two are one
+      line.</b> The Planer is also ungated, which is the ordinary kind of problem — a piece, named
+      by a validation <code>ref</code>.</p>
+
+    <div class="stage">
+      <div class="bar">
+        <span class="lbl">Piece</span>
+        <button id="b-none" aria-pressed="true">Nothing</button>
+        <button id="b-halo" class="ghost">Halo</button>
+        <button id="b-flag" class="ghost">Corner flag</button>
+        <button id="b-dim" class="ghost">Halo + dim the rest</button>
+        <span style="width:14px"></span>
+        <span class="lbl">Overlap</span>
+        <button id="o-none" aria-pressed="true">Nothing</button>
+        <button id="o-brk" class="ghost">Bracket</button>
+        <button id="o-peel" class="ghost">Peel apart</button>
+        <button id="o-both" class="ghost">Both</button>
+      </div>
+
+      <svg id="stage" viewBox="0 0 900 380" aria-label="A toy shop with two problems on it">
+        <!-- ducts ------------------------------------------------------- -->
+        <g class="dimmable">
+          <path class="duct" d="M60 60 H820"/>
+          <path class="duct" d="M160 60 V150"/>
+          <path class="duct" d="M420 60 V150"/>
+          <path class="duct" d="M660 60 V220"/>
+        </g>
+
+        <!-- the two runs that share a lane, at y=250 ---------------------- -->
+        <!-- the wye's feed: comes down and turns east into the tee -->
+        <path class="duct" d="M300 150 V250 H470"/>
+        <!-- the auxiliary run, sweeping west along the same row -->
+        <g class="peel">
+          <path class="duct sec" d="M820 250 H300"/>
+        </g>
+        <text class="peel-lab" x="306" y="232">the run that was underneath</text>
+
+        <!-- bracket over the shared stretch (300 → 470) ------------------- -->
+        <path class="brk" d="M300 272 V282 H470 V272"/>
+        <text class="brk-t" x="385" y="298">two runs, one line · 46px</text>
+
+        <!-- pieces -------------------------------------------------------- -->
+        <!-- Planer: ungated -->
+        <g>
+          <rect class="body" x="110" y="150" width="100" height="52" rx="9"/>
+          <text class="name" x="160" y="181">Planer</text>
+          <g class="mark halo">
+            <rect class="halo-glow" x="104" y="144" width="112" height="64" rx="13"/>
+            <rect class="halo-ring" x="104" y="144" width="112" height="64" rx="13"/>
+          </g>
+          <g class="mark flag-m">
+            <circle class="flag-badge" cx="112" cy="150" r="9"/>
+            <text class="flag-glyph" x="112" y="154">!</text>
+          </g>
+        </g>
+
+        <!-- Table Saw -->
+        <g class="dimmable">
+          <rect class="body" x="370" y="150" width="100" height="52" rx="9"/>
+          <text class="name" x="420" y="181">Table Saw</text>
+          <circle class="tick" cx="374" cy="152" r="7"/>
+        </g>
+
+        <!-- a ball valve -->
+        <g class="dimmable">
+          <text class="lab" x="660" y="150">BALL VALVE</text>
+          <circle class="gate" cx="660" cy="185" r="26"/>
+          <line class="disc" x1="660" y1="163" x2="660" y2="207"/>
+        </g>
+
+        <!-- the tee the feed arrives at -->
+        <circle cx="470" cy="250" r="5" fill="#8a8a86"/>
+      </svg>
+
+      <div class="guide">
+        <span class="dot"></span>
+        <span class="txt" id="guide-txt">Planer has no gate between it and the collector · 2 runs
+          are drawn over each other</span>
+        <button id="showme">Show me →</button>
+      </div>
+    </div>
+
+    <p class="note"><b>“Show me”</b> is the part that is not a colour. Hover cannot be the only way
+      in, and neither can noticing a small mark on a canvas three screens wide — so the bar carries
+      a control that pans to the fault and focuses it. Press it above to see the focused state
+      (halo + dim + peel together).</p>
+  </section>
+
+  <hr class="rule"/>
+
+  <!-- ══ 3 ═══════════════════════════════════════════════════════════════ -->
+  <section class="sec">
+    <p class="eyebrow">3 · The three for a piece</p>
+    <div class="cols">
+      <div class="card">
+        <h3>A · Halo</h3>
+        <p class="note">A ring around the glyph, with a soft outer glow so it reads at a glance
+          when zoomed out. Always visible, no gesture needed.</p>
+        <p class="note"><b>Against:</b> a shop with four problems has four halos and starts to look
+          decorated. Competes with the drop-target ring, which is also a ring around a glyph.</p>
+      </div>
+      <div class="card">
+        <h3>B · Corner flag</h3>
+        <p class="note">A badge on the corner, exactly where the orange “needs setup” dot and the
+          green tick already live — so it joins a row that already exists rather than inventing a
+          second language.</p>
+        <p class="note"><b>Against:</b> that corner is getting crowded, and a 9px badge is easy to
+          miss on a phone. Says <em>which</em> piece, not <em>what</em>.</p>
+      </div>
+      <div class="card">
+        <h3>C · Halo + dim the rest</h3>
+        <p class="note">Focus: the implicated pieces keep full contrast, everything else drops to
+          22%. Dims rather than hides, per the standing rule. This is the “Show me” state rather
+          than a resting state.</p>
+        <p class="note"><b>Against:</b> only works for one problem at a time, so it needs the bar
+          to cycle. Which may be right — problems get fixed one at a time.</p>
+      </div>
+    </div>
+    <div class="card flag">
+      <p class="note"><b>These are not exclusive, and the likely answer is B at rest and C on
+        “Show me”.</b> A badge that is always there so nothing is silently wrong, and a focus mode
+        for actually finding it. A is the one to drop if two is too many.</p>
+    </div>
+  </section>
+
+  <hr class="rule"/>
+
+  <!-- ══ 4 ═══════════════════════════════════════════════════════════════ -->
+  <section class="sec">
+    <p class="eyebrow">4 · The hard one: marking a run you cannot see</p>
+    <div class="card">
+      <p>An overlap is not about a piece. It is about <em>two runs</em>, one of which is invisible
+        by definition — it is underneath the other. A halo on a box cannot say that, and neither
+        can naming the pieces the runs feed, which is what the guide bar does today.</p>
+    </div>
+    <div class="cols">
+      <div class="card">
+        <h3>Bracket the stretch</h3>
+        <p class="note">A magenta bracket under the doubled length, captioned. Says exactly where
+          and exactly how much, and needs no gesture.</p>
+        <p class="note"><b>Against:</b> it is one more line on a canvas whose problem is too many
+          lines. And it names a length, not the two runs involved.</p>
+      </div>
+      <div class="card">
+        <h3>Peel apart</h3>
+        <p class="note">On focus, the run underneath slides clear by ~11px and labels itself, then
+          settles back. You see the hidden run and can follow it, which is the actual question:
+          <em>where does that one go?</em></p>
+        <p class="note"><b>Against:</b> it is a lie for as long as it lasts — the run is drawn
+          where it is not. Wants to be obviously temporary.</p>
+      </div>
+      <div class="card">
+        <h3>Both</h3>
+        <p class="note">Bracket at rest so the fault is never silent, peel on focus so it can be
+          understood. Try the <em>Both</em> button above.</p>
+        <p class="note"><b>Note:</b> if the offset work lands (see the branch TODO), a permanent
+          small offset may replace the peel entirely — two runs drawn 6px apart are legible without
+          any marking at all.</p>
+      </div>
+    </div>
+  </section>
+
+  <hr class="rule"/>
+
+  <!-- ══ 5 ═══════════════════════════════════════════════════════════════ -->
+  <section class="sec">
+    <p class="eyebrow">5 · What I need decided</p>
+    <div class="card q">
+      <p class="note"><b>1 · Colour.</b> Magenta as shown, or fold problems into the existing
+        <code>--danger</code> red? Magenta costs a new entry in the vocabulary; red costs the
+        distinction between “this is broken” and “this will hurt you”.</p>
+      <p class="note"><b>2 · Resting vs focused.</b> Is a problem always marked on the canvas, or
+        only when you ask via the guide bar? Always-marked is honest and gets noisy; on-demand is
+        clean and lets a fault sit unnoticed.</p>
+      <p class="note"><b>3 · Does the overlap get a bracket at all,</b> or do we accept that
+        overlaps are only findable through “Show me”, on the grounds that the offset work should
+        make most of them stop happening?</p>
+      <p class="note"><b>4 · One problem at a time, or all of them?</b> “Show me” implies a cursor
+        through a list. That is a small piece of UI the canvas does not have yet.</p>
+    </div>
+  </section>
+
+</div>
+
+<script>
+  const svg = document.getElementById('stage');
+  const piece = { 'b-none': null, 'b-halo': 't-halo', 'b-flag': 't-flag', 'b-dim': 't-dim' };
+  const over  = { 'o-none': null, 'o-brk': 'o-bracket', 'o-peel': 'o-peel', 'o-both': 'o-both' };
+
+  function set(group, id) {
+    Object.keys(group).forEach(k => {
+      document.getElementById(k).setAttribute('aria-pressed', String(k === id));
+      if (group[k]) svg.classList.remove(group[k]);
+    });
+    if (group[id]) svg.classList.add(group[id]);
+  }
+  Object.keys(piece).forEach(k => document.getElementById(k).onclick = () => set(piece, k));
+  Object.keys(over).forEach(k => document.getElementById(k).onclick = () => set(over, k));
+
+  // "Show me" = the focused state, whatever the toggles were.
+  document.getElementById('showme').onclick = () => {
+    set(piece, 'b-dim');
+    set(over, 'o-both');
+  };
+</script>

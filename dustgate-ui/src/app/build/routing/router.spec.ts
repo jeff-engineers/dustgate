@@ -6,7 +6,7 @@
 
 import { type SceneNode, CAP_W, CELL, CLEARANCE, PAD, PRIMARY_PORT_DX, SECONDARY_PORT_DX, TOOL_HALF,
          cellX, cellY, deviceBox, segBoxHit } from './geometry';
-import { type Scene, type RoutedDuct, Router, routeAll, routeAllShared, sceneBounds } from './router';
+import { type Scene, type RoutedDuct, LANE_STEP, Router, ceilingOf, routeAll, routeAllShared, sceneBounds } from './router';
 import { outPorts } from './route-grid';
 
 // ── harness ──────────────────────────────────────────────────────────────────
@@ -18,6 +18,11 @@ function ok(name: string, cond: boolean, detail?: string): void {
   failures++;
   console.log(`  FAIL ${name}${detail ? `\n       ${detail}` : ''}`);
 }
+// The literal coordinates in eqPath expectations below are PITCH-DEPENDENT: they
+// are cellX/cellY plus the glyph's own half-extent, so a change to CELL moves every
+// one of them. They were last regenerated for CELL = 126 (2026-09-07, up from 108).
+// The shapes are what the tests are about — a straight drop, a side entry, two
+// bends — so when the pitch moves, check the shape and take the new numbers.
 function eqPath(name: string, got: readonly { x: number; y: number }[], want: number[][]): void {
   const g = got.map(p => [Math.round(p.x), Math.round(p.y)]);
   ok(name, JSON.stringify(g) === JSON.stringify(want), `got  ${JSON.stringify(g)}\n       want ${JSON.stringify(want)}`);
@@ -88,11 +93,11 @@ group('R1  demo layout stays a straight drop');
   );
   const r = routeAll(s);
   ok('routes all 5 ducts', r.size === 5);
-  eqPath('dc→sel is the straight drop', path(r, 'sel'), [[64, 102], [64, 137]]);
-  eqPath('sel.b1→saw', path(r, 'saw'), [[64, 207], [64, 246]]);
-  eqPath('sel.b2→band', path(r, 'band'), [[172, 207], [172, 246]]);
-  eqPath('sel.b3→router', path(r, 'router'), [[280, 207], [280, 246]]);
-  eqPath('sel.b4→sander', path(r, 'sander'), [[388, 207], [388, 246]]);
+  eqPath('dc→sel is the straight drop', path(r, 'sel'), [[64, 102], [64, 155]]);
+  eqPath('sel.b1→saw', path(r, 'saw'), [[64, 225], [64, 282]]);
+  eqPath('sel.b2→band', path(r, 'band'), [[190, 225], [190, 282]]);
+  eqPath('sel.b3→router', path(r, 'router'), [[316, 225], [316, 282]]);
+  eqPath('sel.b4→sander', path(r, 'sander'), [[442, 225], [442, 282]]);
   ok('every path is 2 points, 0 bends', [...r.values()].every(v => v.pts.length === 2));
   ok('every path is vertical', [...r.values()].every(v => Math.abs(v.pts[0].x - v.pts[1].x) < 0.5));
   ok('nothing crosses a device', [...r.keys()].every(id => !crossesADevice(s, id, path(r, id))));
@@ -105,7 +110,7 @@ group('R3  sideways runs enter the tool from the side');
 {
   const s = scene([collector('dc', 0, 0), tool('planer', 1, 0)], [{ childId: 'planer', parentId: 'dc' }]);
   const r = routeAll(s);
-  eqPath('collector right port → tool left port, flat', path(r, 'planer'), [[102, 64], [134, 64]]);
+  eqPath('collector right port → tool left port, flat', path(r, 'planer'), [[102, 64], [152, 64]]);
 
   // A collector may leave from its TOP. Without that port, a collector standing
   // directly beside a wide unit had to reach the unit's top inlet by turning up
@@ -122,11 +127,11 @@ group('R3  sideways runs enter the tool from the side');
 
   // Mirrored: the tool on the left uses its right port and is equally flat.
   const s2 = scene([collector('dc', 1, 0), tool('planer', 0, 0)], [{ childId: 'planer', parentId: 'dc' }]);
-  eqPath('mirrored, tool right port', path(routeAll(s2), 'planer'), [[134, 64], [102, 64]]);
+  eqPath('mirrored, tool right port', path(routeAll(s2), 'planer'), [[152, 64], [102, 64]]);
 
   // Directly below: top port still wins, because it costs no bends there.
   const s3 = scene([collector('dc', 0, 0), tool('saw', 0, 1)], [{ childId: 'saw', parentId: 'dc' }]);
-  eqPath('directly below → top port, straight drop', path(routeAll(s3), 'saw'), [[64, 102], [64, 138]]);
+  eqPath('directly below → top port, straight drop', path(routeAll(s3), 'saw'), [[64, 102], [64, 156]]);
 
   // No route may ever enter a tool from underneath.
   const s4 = scene([collector('dc', 0, 2), tool('saw', 0, 0)], [{ childId: 'saw', parentId: 'dc' }]);
@@ -147,7 +152,7 @@ group('R3b top entry is preferred when it is roughly as cheap as a side one');
   // other. TOP_ENTRY_BIAS (route-grid.ts) is what decides it now.
   const s = scene([collector('dc', 0, 0), tool('t', 1, 1)], [{ childId: 't', parentId: 'dc' }]);
   eqPath('diagonal down-right → still enters from the top', path(routeAll(s), 't'),
-    [[102, 64], [172, 64], [172, 138]]);
+    [[102, 64], [190, 64], [190, 156]]);
 
   // The bias is a tiebreaker, not a mandate — R3 already covers the case where a
   // side entry is CLEARLY shorter (same row, flat) and confirms it still wins
@@ -256,7 +261,7 @@ group('R4  obstacle in the span — one detour, no lasso');
   );
   const r = routeAll(s);
   const p = path(r, 'sander');
-  eqPath('lane above the obstacle, 2 bends', p, [[172, 207], [172, 226], [388, 226], [388, 246]]);
+  eqPath('lane above the obstacle, 2 bends', p, [[190, 225], [190, 253], [442, 253], [442, 282]]);
   ok('no reversal (no lasso)', !reverses(p));
   ok('clears the obstacle box', !crossesADevice(s, 'sander', p));
 
@@ -265,7 +270,7 @@ group('R4  obstacle in the span — one detour, no lasso');
   // driven purely by the obstacle, not by a hardcoded preference for entering tops.
   const s2 = scene([unit('gate', 0, 1, 2), tool('sander', 3, 2)], [{ childId: 'sander', outlet: { unitId: 'gate', index: 1 } }]);
   const p2 = path(routeAll(s2), 'sander');
-  eqPath('obstacle removed → 1-bend side entry', p2, [[172, 207], [172, 280], [350, 280]]);
+  eqPath('obstacle removed → 1-bend side entry', p2, [[190, 225], [190, 316], [404, 316]]);
   ok('the detour is caused by the obstacle, not by the port table', p2.length < p.length);
 }
 
@@ -446,18 +451,14 @@ group('R12 settled layouts have no overlapping duct');
 
 // ── R13 · the overlap that survives is REPORTED ──────────────────────────────
 
-group('R13 routeAllShared names the ducts that had to share');
+group('R13 runs that would share a lane are nested apart, not stacked');
 {
-  // The fixture is a gate outlet with two ducts on it, because that is the one
-  // shape with NOWHERE else to go: an outlet faces down and nowhere else, so the
-  // second duct has no other port to take and no other lane to use. Everything
-  // else that used to overlap is now routed apart, which is the point — this
-  // exists to prove the REPORTING still works when the picture genuinely cannot
-  // be drawn clean.
-  //
-  // It used to be a cramped board found by search over random layouts. That board
-  // routes cleanly now (2026-09-07, the drawn-line obstacles), which is a better
-  // outcome than the test it broke.
+  // A gate outlet with two ducts on it: the one shape with nowhere else to go,
+  // since an outlet faces down and nowhere else. Before 2026-09-07 the second duct
+  // was drawn on top of the first and the pair was REPORTED as overlapping. Now the
+  // drawn line is nudged off the lattice — the wiring layer has nested cables this
+  // way since boards went on the grid, and the argument is the same: the canvas is
+  // a representation of a shop, not a blueprint.
   const s = scene(
     [collector('dc', 0, 0), unit('g', 0, 1, 2), tool('a', 0, 3), tool('b', 0, 4)],
     [{ childId: 'g', parentId: 'dc' },
@@ -465,41 +466,29 @@ group('R13 routeAllShared names the ducts that had to share');
      { childId: 'b', outlet: { unitId: 'g', index: 0 } }],
   );
   const { out, shared } = routeAllShared(s);
-  ok('the board still routes — sharing is a fallback, not a failure', out.size === 3);
-  ok('and the ducts that had to share are named', shared.length > 0, JSON.stringify(shared));
+  ok('the board routes', out.size === 3);
+  ok('and nothing is left drawn over anything', shared.length === 0, JSON.stringify(shared));
 
-  // Each named duct really is drawn over another, judged the way the canvas draws
-  // it rather than by the lattice — which is the whole reason this list exists.
-  const overlaps = (id: string) => {
-    const mine = out.get(id)!.pts;
-    for (const [other, r] of out) {
-      if (other === id) continue;
-      for (let i = 0; i < mine.length - 1; i++) {
-        for (let j = 0; j < r.pts.length - 1; j++) {
-          const [a, b] = [mine[i], mine[i + 1]], [c, d] = [r.pts[j], r.pts[j + 1]];
-          const hA = Math.abs(a.y - b.y) < 0.5, hB = Math.abs(c.y - d.y) < 0.5;
-          const vA = Math.abs(a.x - b.x) < 0.5, vB = Math.abs(c.x - d.x) < 0.5;
-          if (!((hA && hB) || (vA && vB))) continue;
-          if (Math.abs((hA ? a.y : a.x) - (hB ? c.y : c.x)) > 0.5) continue;
-          const sp = (p: typeof a, q: typeof a) => (hA ? [Math.min(p.x, q.x), Math.max(p.x, q.x)]
-                                                       : [Math.min(p.y, q.y), Math.max(p.y, q.y)]);
-          const [s0, s1] = sp(a, b), [t0, t1] = sp(c, d);
-          if (Math.min(s1, t1) - Math.max(s0, t0) > 1) return true;
-        }
-      }
-    }
-    return false;
-  };
-  ok('...and each named duct really is drawn over another', shared.every(overlaps),
-     JSON.stringify(shared));
+  // The two runs leave the same outlet, so they leave it LANE_STEP apart, one either
+  // side of the lane they both wanted.
+  const ax = out.get('a')!.pts[0].x, bx = out.get('b')!.pts[0].x;
+  ok('the two runs are a full lane step apart', Math.abs(ax - bx) === LANE_STEP,
+     `${ax} vs ${bx}`);
+  ok('...and straddle the outlet rather than both shifting one way',
+     Math.abs((ax + bx) / 2 - cellX(0)) < 0.6, `${ax} / ${bx}`);
 
-  // A clean board reports nothing, and routeAll is still the same answer without
-  // the extra return — every other caller reads it that way.
+  // A clean board still reports nothing, and routeAll is still the same answer
+  // without the extra return — every other caller reads it that way.
   const clean = scene([collector('dc', 0, 0), tool('saw', 0, 2)],
                       [{ childId: 'saw', parentId: 'dc' }]);
   ok('a clean board shares nothing', routeAllShared(clean).shared.length === 0);
   ok('routeAll is routeAllShared without the list',
      JSON.stringify([...routeAll(clean)]) === JSON.stringify([...routeAllShared(clean).out]));
+
+  // `shared` is now a genuine fallback: it reports what separation could not fix.
+  // No scene is known that still reaches it, and inventing one to keep a green tick
+  // would be testing the test. It stays covered by the two assertions above — that
+  // it is EMPTY when the picture is clean.
 }
 
 // ── R14 · a capped end is as wide as the bar it draws ────────────────────────
@@ -546,8 +535,8 @@ group('R15 overlaps the lattice cannot see are still reported');
      { childId: 'b', outlet: { unitId: 'g', index: 0 } }],
   );
   const r1 = routeAllShared(s1);
-  ok('two runs off one outlet, drawn one over the other, are reported',
-     r1.shared.length > 0, JSON.stringify([...r1.out].map(([k, v]) => [k, v.pts])));
+  ok('two runs off one outlet come back nested, not stacked',
+     r1.shared.length === 0, JSON.stringify([...r1.out].map(([k, v]) => [k, v.pts])));
 
   // 2 · A clean board still reports nothing. The check is geometric now, so this
   //     is the one that would catch it crying wolf on ordinary layouts.
@@ -639,6 +628,46 @@ group('R17 the auxiliary run gets the same overlap treatment as any other');
   };
   ok('they leave the collector by different ports', exit('saw') !== exit('guard'),
      `${exit('saw')} vs ${exit('guard')}`);
+}
+
+// ── R18 · ducting stays below the collector's outlet ─────────────────────────
+
+group('R18 nothing is drawn above the height the air leaves at');
+{
+  // The band across the top of a board is the emptiest part of the lattice, so it
+  // was where a squeezed run always went — costing the search almost nothing and
+  // looking, to a woodworker, like pipe going up to come straight back down. The
+  // collector's outlet height is now a wall (ceilingOf / ceilingBlocks), with the
+  // cost behind it for the boards where the wall has to yield.
+  const dc = collector('dc', 0, 0);
+  const s = scene(
+    [dc, tool('a', 1, 2), tool('b', 3, 2), tool('c', 5, 2)],
+    [{ childId: 'a', parentId: 'dc' }, { childId: 'b', parentId: 'dc' }, { childId: 'c', parentId: 'dc' }],
+  );
+  const { out } = routeAllShared(s);
+  ok('the ceiling is the topmost collector\'s outlet', ceilingOf(s.nodes) === dc.y);
+  // A nested lane sits half a LANE_STEP off the line it was nudged from, so the
+  // tolerance here is the nesting, not slack in the rule.
+  let above: string | null = null;
+  for (const [id, r] of out)
+    for (const pt of r.pts)
+      if (pt.y < dc.y - LANE_STEP && !above) above = `${id} at y=${Math.round(pt.y)}`;
+  ok('and no run climbs above it', above === null, above ?? '');
+}
+
+group('R18b a machine parked above the collector is still reached');
+{
+  // The wall yields rather than stranding anything — which is the whole reason it
+  // is the first of four attempts and not a filter on the lattice.
+  const s = scene(
+    [collector('dc', 0, 3), tool('high', 2, 0), tool('low', 2, 4)],
+    [{ childId: 'high', parentId: 'dc' }, { childId: 'low', parentId: 'dc' }],
+  );
+  const { out } = routeAllShared(s);
+  ok('both runs solve', out.size === 2 && [...out.values()].every(v => v.ok));
+  ok('and the one above the collector really does go up',
+     Math.min(...path(out, 'high').map(p => p.y)) < cellY(3),
+     JSON.stringify(path(out, 'high').map(p => [p.x, p.y])));
 }
 
 // ── summary ──────────────────────────────────────────────────────────────────

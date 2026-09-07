@@ -134,6 +134,18 @@
          [class.drop-target]="n.id === dragHoverId()"
          [attr.transform]="'translate(' + nx(n) + ',' + ny(n) + ')'" (pointerdown)="startDrag($event, n)"
          (contextmenu)="onNodeContext($event, n)">
+        <!-- The halo: this piece is what a problem is ABOUT (D-66). Drawn FIRST so the
+             glyph sits on top of it rather than inside it, and always — no hover, no
+             "show me". A fault the canvas knows about is a fault the canvas points at.
+             Accent orange, shared with the unset-gate dot rather than given a colour
+             of its own: both mean "your attention is wanted here", and one more hue
+             on this canvas buys less than it costs. -->
+        <g *ngIf="hasProblem(n.id)" class="halo">
+          <rect class="halo-glow" [attr.x]="haloBox(n).x" [attr.y]="haloBox(n).y"
+                [attr.width]="haloBox(n).w" [attr.height]="haloBox(n).h" [attr.rx]="haloBox(n).r"/>
+          <rect class="halo-ring" [attr.x]="haloBox(n).x" [attr.y]="haloBox(n).y"
+                [attr.width]="haloBox(n).w" [attr.height]="haloBox(n).h" [attr.rx]="haloBox(n).r"/>
+        </g>
         <ng-container [ngSwitch]="n.glyph">
           <!-- A barrel, not a circle-with-an-impeller. The spiral was the only thing
                inside the old glyph and it was spending the room the two rows a

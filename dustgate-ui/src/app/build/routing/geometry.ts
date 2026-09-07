@@ -9,7 +9,7 @@ export interface Pt { x: number; y: number; }
 export interface Box { x0: number; y0: number; x1: number; y1: number; }
 
 /** Grid pitch. One cell = one place a fitting can stand. */
-export const CELL = 108;
+export const CELL = 126;
 /** Board origin offset, so column 0 isn't flush against the canvas edge. */
 export const PAD = 64;
 /** A* lattice spacing — half a cell, which is fine enough to slip a duct between

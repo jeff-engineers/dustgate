@@ -45,30 +45,29 @@ than restated. Delete an item when it lands; the git history is the record.
 
 ## UI
 
-- **Highlight a validation problem ON THE CANVAS. Now blocking, not nice-to-have
-  (2026-09-07).** The message half landed 2026-08-20 (`services/wip-message.ts`):
-  the guide bar names the piece and the system instead of `s2`/`p8`. The graphical
-  half is still missing — every issue carries a `ref` (the element id), so the
-  piece is already known and could be marked on the board.
+- **Highlight a validation problem ON THE CANVAS.** LANDED 2026-09-07 (D-66): an
+  orange halo, always drawn, on every piece an airflow leak or a validation failure
+  names. Explored in `archived/problem-marking.html`.
 
-  What changed: overlapping ducts are now ALLOWED with a warning, because some
-  layouts genuinely cannot be drawn clean. A one-line bar at the top of a canvas
-  you are scrolled around in, naming two pieces, is not a way to find two lines
-  lying on top of each other. If we are going to permit the fault, the canvas has
-  to point at it.
-
-  Wants a mockup first — a new marking, and there is no vocabulary for "this piece
-  is the problem" yet, in a palette that is already busy (accent orange =
-  unfinished, red = danger, green = set up, azure = cable). It has to serve both
-  cases: a piece (validation `ref`) and a RUN (an overlap is about two ducts, not
-  two boxes).
+  What is deliberately NOT marked, and is the open half: **an overlapping duct.**
+  That is two runs with one hidden under the other, which a ring round a box
+  cannot express — the two treatments explored (a bracket over the doubled
+  stretch, peeling the buried run clear on focus) both lost to *not having the
+  overlap*. The guide bar still says one exists; nothing on the canvas points at
+  it. Come back here only if the prevention work below runs out of road.
 
 - **The stock layout looks bad, and the overlap rules are why (2026-09-07,
-  jeff).** Elbows that exist to satisfy the no-shared-lane rule rather than to get
-  anywhere — the picture pays for a constraint the eye did not ask for. **Try the
-  offset again**, on top of A* rather than instead of it.
+  jeff).** LANDED 2026-09-07 — the offset is back, as `separateLanes()` on top of
+  A* rather than instead of it. Two runs that would share a lane are nested
+  LANE_STEP apart, symmetrically, the way the wiring layer has nested cables since
+  boards went on the grid; `shared` is now a genuine fallback nothing on these
+  boards reaches. The grid went to CELL 126 and a bend to TURN 48 alongside it, and
+  ducting is now walled off above the collector's outlet height (D-67).
 
-  Correcting the record while it is fresh: `laneOffset` was deleted in the routing
+  Kept because the reasoning was contested and is worth not re-deriving: the
+  offset was NOT ruled out by the routing rewrite.
+
+  `laneOffset` was deleted in the routing
   rewrite because the LOCAL router was being replaced by A*, not because staggered
   parallel runs are a bad idea. The plan's line that the used-edge cost "replaces
   laneOffset's stagger" is about the mechanism, and reading it as "offsets are
@@ -79,6 +78,31 @@ than restated. Delete an item when it lands; the git history is the record.
   Where it would pay: two runs that must share a corridor could be drawn a few px
   apart and both stay legible, instead of one of them touring the board to find a
   lane it does not need.
+
+- **Consider more room on the grid (2026-09-07, jeff).** LANDED — CELL 108 → 126:
+  the pitch at which the reference scene's overlaps go away, with 144 and 162
+  identical to it. Glyph sizes were left alone; whether `CLEARANCE` is the better
+  knob is still open. Re-measure with `npm run bench:routing`.
+
+  Original note: Rearranging the demo
+  layout by hand meant leaving empty cells around things to get a clear view — so
+  the spacing the canvas ships with is tighter than the one a person chooses.
+  Either bigger glyphs generally, or more likely just more padding between cells.
+
+  It belongs beside the offset work rather than after it: most of what makes a run
+  ugly is having nowhere to go, and the same is true of an overlap. Cheapest
+  version is `CELL` and the clearance margins, and the measurement to take first is
+  what the demo layout's elbow count and overlap count do as those grow — both are
+  now countable.
+
+- **Dropping a piece into the void between two systems should push the shop down
+  (2026-09-07, jeff).** Dragging a tool or a gate into the empty band between two
+  systems currently just refuses, or lands it somewhere it does not belong.
+  Bumping everything below down one cell is the gesture a person expects — the
+  same instinct as inserting a row in a table — and it is the missing half of
+  "there is no way to give a system breathing room" below. Row bands are
+  contiguous and non-interleaving, so the push has to move every system underneath
+  and everything in them, not just the neighbouring band.
 
 - **Replace drag-to-branch on a duct with "move this run here" (2026-09-07,
   jeff).** Today, dragging a branch dot tees in a passive leg. The more useful
