@@ -43,6 +43,8 @@ const unit = (id: string, col: number, row: number, span: number): SceneNode => 
  *  the whole meaning of a board owning its cell. */
 const board = (id: string, col: number, row: number): SceneNode => ({ id, glyph: 'board', isUnit: false, span: 1, ...at(col, row) });
 const junction = (id: string, col: number, row: number): SceneNode => ({ id, glyph: 'junction', isUnit: false, span: 1, ...at(col, row) });
+const valve = (id: string, col: number, row: number): SceneNode => ({ id, glyph: 'ballvalve', isUnit: false, span: 1, ...at(col, row) });
+const manifold = (id: string, col: number, row: number, span: number): SceneNode => ({ id, glyph: 'manifold', isUnit: true, span, ...at(col, row) });
 
 function scene(nodes: SceneNode[], ducts: Scene['ducts']): Scene {
   return { nodes, ducts, bounds: sceneBounds(nodes) };
@@ -413,15 +415,21 @@ group('R11 crossings are avoided when there is a way round');
   ok('every route still solved', [...r.values()].every(v => v.ok));
 }
 
-// ── R12 · no two ducts ever share a lane ─────────────────────────────────────
+// ── R12 · no two ducts are ever DRAWN on top of each other ───────────────────
 
 group('R12 settled layouts have no overlapping duct');
 {
-  // Randomised, fixed seed: 400 shops of a gate feeding scattered tools. Two ducts
-  // running along the same lattice edge is what "the ducts overlap" looks like on
-  // screen, and it used to happen whenever a detour cost more than the sharing
-  // penalty — no cost setting fixes that, so sharing is now a hard constraint with
-  // a reorder-and-retry behind it.
+  // Randomised, fixed seed: 400 shops of a gate feeding scattered tools.
+  //
+  // This asked, until 2026-09-07, that no two runs share a lattice EDGE — which was
+  // the router's own hard constraint at the time, and was doing real damage: to keep
+  // it, a squeezed run would climb to the collector's own line and cross the entire
+  // shop rather than share two edges with the leg beside it. Sharing a lane is a
+  // cost now, and separateLanes() nests whatever still shares one 12px apart.
+  //
+  // So the question moved to the thing that was always actually being asked: is
+  // anything DRAWN over anything else. That is strictly what matters on screen, and
+  // a lattice edge two runs pass along 12px apart no longer is.
   let seed = 12345;
   const rnd = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
   const pickN = (n: number) => Math.floor(rnd() * n);
@@ -439,15 +447,10 @@ group('R12 settled layouts have no overlapping duct');
       nodes.push(tool(`t${i}`, c, r));
       ducts.push({ childId: `t${i}`, outlet: { unitId: 'gate', index: i } });
     }
-    const r = routeAll(scene(nodes, ducts));
-    const sets = [...r.values()].map(v => v.edges);
-    let clash = false;
-    for (let i = 0; i < sets.length && !clash; i++)
-      for (let j = i + 1; j < sets.length && !clash; j++)
-        for (const e of sets[j]) if (sets[i].has(e)) { clash = true; break; }
-    if (clash) { bad++; if (!worstScene) worstScene = JSON.stringify(nodes.map(n => [n.id, n.x, n.y])); }
+    const { shared } = routeAllShared(scene(nodes, ducts));
+    if (shared.length) { bad++; if (!worstScene) worstScene = JSON.stringify(nodes.map(n => [n.id, n.x, n.y])); }
   }
-  ok('400 random layouts, none share a lattice edge', bad === 0, `${bad} bad; first: ${worstScene}`);
+  ok('400 random layouts, nothing drawn over anything', bad === 0, `${bad} bad; first: ${worstScene}`);
 }
 
 // ── R13 · the overlap that survives is REPORTED ──────────────────────────────
@@ -706,6 +709,156 @@ group('R18c each system has its own ceiling, and only the aux run may cross it')
      `guard tops out at ${top('guard')}`);
   ok('while the lower system\'s own run stays in its band', top('j') >= cellY(4) - LANE_STEP,
      `j tops out at ${top('j')}`);
+}
+
+// ── R19 · the trunk is solved first, and keeps its line ──────────────────────
+
+group('R19 the trunk keeps its own lane when a branch is added below it');
+{
+  // The board from the shop, 2026-09-07: a leg teed off the trunk and dragged down
+  // beside the manifold. Two things went wrong at once and both were about ORDER.
+  //
+  // Ducts were solved alphabetically by child id, so every gate and tool was routed
+  // before a single `wye`. Until the trunk was placed, the band along the top of the
+  // board was empty highway — so the manifold's feed took it, went up to the
+  // collector's own line, crossed the whole shop and came back down, and the trunk
+  // then nested ITSELF around the run that had taken its lane. One straight line
+  // drawn at three different heights.
+  const nodes: SceneNode[] = [
+    collector('dc', 0, 0),
+    junction('w2', 1, 0), junction('w7', 3, 0), junction('w1', 4, 0),
+    junction('w13', 5, 0), junction('w20', 6, 2),
+    valve('v4', 1, 1), valve('v9', 3, 1), valve('v15', 5, 1), valve('v19', 6, 3),
+    tool('t6', 1, 2), tool('t11', 3, 2), tool('t17', 5, 2), tool('t18', 6, 4),
+    manifold('man', 3, 3, 2), tool('t31', 2, 4), tool('t32', 4, 4),
+    junction('leg', 5, 4),                       // the branch that was dragged down
+  ];
+  const s = scene(nodes, [
+    { childId: 'w2', parentId: 'dc' }, { childId: 'v4', parentId: 'w2' }, { childId: 't6', parentId: 'v4' },
+    { childId: 'w7', parentId: 'w2' }, { childId: 'v9', parentId: 'w7' }, { childId: 't11', parentId: 'v9' },
+    { childId: 'w1', parentId: 'w7' }, { childId: 'leg', parentId: 'w1' },
+    { childId: 'w13', parentId: 'w1' }, { childId: 'v15', parentId: 'w13' }, { childId: 't17', parentId: 'v15' },
+    { childId: 'w20', parentId: 'w13' }, { childId: 'v19', parentId: 'w20' }, { childId: 't18', parentId: 'v19' },
+    { childId: 'man', parentId: 'w20' },
+    { childId: 't31', outlet: { unitId: 'man', index: 0 } },
+    { childId: 't32', outlet: { unitId: 'man', index: 1 } },
+  ]);
+  const { out } = routeAllShared(s);
+  ok('every run solves', [...out.values()].every(v => v.ok));
+
+  // The trunk is four ducts end to end. Nested lanes are allowed anywhere else, but
+  // not here: these four ARE one line, and the drawing has to say so.
+  const trunkYs = ['w7', 'w1', 'w13', 'w20'].flatMap(id => path(out, id).map(p => p.y))
+    .filter(y => Math.abs(y - cellY(0)) < CELL / 2);
+  ok('the trunk is one line, not three', new Set(trunkYs.map(Math.round)).size === 1,
+     `trunk sits at ${[...new Set(trunkYs.map(Math.round))].join(', ')}`);
+
+  // The manifold's feed comes from a tee to its RIGHT and one row up. Anything that
+  // reaches it by way of the top of the board has gone up to come back down.
+  const feed = path(out, 'man');
+  ok('the manifold\'s feed does not climb over the shop',
+     Math.min(...feed.map(p => p.y)) > cellY(1), `feed tops out at ${Math.min(...feed.map(p => p.y))}`);
+  ok('...and it does not lasso', !reverses(feed), JSON.stringify(feed.map(p => [Math.round(p.x), Math.round(p.y)])));
+}
+
+// ── R20 · a drag does not walk the runs it is not touching ───────────────────
+
+group('R20 frozen runs hold still across drag frames');
+{
+  // separateLanes() nudges a run's points IN PLACE, and a frozen run is handed back
+  // to the next solve as the very object the last one produced. Sharing that array
+  // meant a run nobody was dragging picked up half a lane step per frame — over a
+  // long drag the trunk walked clean off its line (2026-09-07).
+  const withEndAt = (dragCol: number, dragRow: number): Scene => {
+    const nodes: SceneNode[] = [
+      collector('dc', 0, 0), junction('j1', 2, 0), junction('j2', 4, 0), junction('j3', 6, 0),
+      tool('t1', 2, 2), tool('t2', 4, 2), tool('t3', 6, 2),
+      tool('t4', 3, 4), tool('t5', 5, 4), junction('end', dragCol, dragRow),
+    ];
+    return scene(nodes, [
+      { childId: 'j1', parentId: 'dc' }, { childId: 'j2', parentId: 'j1' }, { childId: 'j3', parentId: 'j2' },
+      { childId: 't1', parentId: 'j1' }, { childId: 't2', parentId: 'j2' }, { childId: 't3', parentId: 'j3' },
+      { childId: 't4', parentId: 'j1' }, { childId: 't5', parentId: 'j3' },
+      { childId: 'end', parentId: 'j2' },
+    ]);
+  };
+  const r = new Router();
+  r.routes(withEndAt(7, 1));
+  const frozen = new Set(['j1', 'j2', 'j3', 't1', 't2', 't3', 't4', 't5']);
+  // The LATTICE paths — Router.committed(). What is DRAWN may legitimately move
+  // during the drag: the run being dragged can come alongside a frozen one, and
+  // separateLanes nests the pair, which is the whole point of that pass. What must
+  // not move is the solve underneath, because that is what the next frame re-holds.
+  const held = (m: ReadonlyMap<string, RoutedDuct>) => JSON.stringify([...frozen]
+    .map(id => (m.get(id)?.pts ?? []).map(p => [Math.round(p.x), Math.round(p.y)])));
+  r.routes(withEndAt(7, 1), frozen);
+  const settled = held(r.committed());
+  let moved = '', strayed = 0;
+  for (const [c, rw] of [[7, 2], [7, 3], [7, 4], [6, 4], [5, 5], [4, 5], [3, 5], [2, 5], [1, 5], [1, 4]]) {
+    const solved = r.routes(withEndAt(c, rw), frozen);
+    const now = held(r.committed());
+    if (now !== settled && !moved) moved = `at ${c},${rw}: ${now}`;
+    for (const id of frozen) {
+      const lat = r.committed().get(id)?.pts ?? [], drawn = solved.get(id)?.pts ?? [];
+      for (let i = 0; i < drawn.length && i < lat.length; i++) {
+        strayed = Math.max(strayed, Math.abs(drawn[i].x - lat[i].x), Math.abs(drawn[i].y - lat[i].y));
+      }
+    }
+  }
+  ok('ten drag frames leave every frozen run on the lane it solved to', moved === '',
+     `${moved}\n       settled ${settled}`);
+  // Half a lane step is one nesting. Anything more is the nudge being applied to an
+  // already-nudged path — the drift this pair of checks exists to catch.
+  ok('...and the drawn line never strays further than one nesting from it',
+     strayed <= LANE_STEP / 2, `strayed ${strayed}px`);
+}
+
+// ── R21 · nothing is ever drawn underneath a device ──────────────────────────
+
+group('R21 no duct passes under a gate, tool, board or collector');
+{
+  // Asked for as a rule (jeff, 2026-09-07), and the router already keeps it: every
+  // body is an obstacle inflated by CLEARANCE, so the search cannot cross one.
+  //
+  // What it CANNOT keep is a rule about a fitting seated inside a body — a tee in a
+  // manifold's second cell has to be reached, and any line that reaches it is a line
+  // under the manifold. So this invariant is really two: the router half, checked
+  // here over the same fuzz set as R12, and a PLACEMENT half that lives in
+  // build.component.ts — roomAt() on every cell a piece is put in, branchDots()
+  // included since it was the one path that skipped it.
+  let seed = 12345;
+  const rnd = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+  const pickN = (n: number) => Math.floor(rnd() * n);
+
+  let bad = 0, worst = '';
+  for (let t = 0; t < 400; t++) {
+    const span = 2 + pickN(3);
+    const nodes: SceneNode[] = [collector('dc', 0, 0), unit('gate', 0, 2, span)];
+    const ducts: Scene['ducts'] = [{ childId: 'gate', parentId: 'dc' }];
+    const taken = new Set(['0,0']);
+    for (let i = 0; i < span; i++) {
+      let c = 0, r = 0, k = 0;
+      do { c = pickN(9); r = 4 + pickN(6); k++; } while (taken.has(`${c},${r}`) && k < 40);
+      taken.add(`${c},${r}`);
+      nodes.push(tool(`t${i}`, c, r));
+      ducts.push({ childId: `t${i}`, outlet: { unitId: 'gate', index: i } });
+    }
+    const s = scene(nodes, ducts);
+    const { out } = routeAllShared(s);
+    for (const [id, r] of out) {
+      for (const n of nodes) {
+        if (n.glyph === 'junction' || n.glyph === 'secondaryPort') continue;
+        const box = deviceBox(n);                    // the BODY, not the clearance box
+        for (let i = 0; i < r.pts.length - 1; i++) {
+          if (!segBoxHit(r.pts[i], r.pts[i + 1], box)) continue;
+          bad++;
+          if (!worst) worst = `${id} segment ${i} crosses ${n.id}`;
+          i = r.pts.length;                          // one report per run per device
+        }
+      }
+    }
+  }
+  ok('400 random layouts, nothing drawn under a body', bad === 0, `${bad} crossings; first: ${worst}`);
 }
 
 // ── summary ──────────────────────────────────────────────────────────────────

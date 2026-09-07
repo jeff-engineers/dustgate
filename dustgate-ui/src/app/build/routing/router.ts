@@ -33,6 +33,27 @@ export interface RoutedDuct {
 /** No device exempt — the strict obstacle pass. */
 const EMPTY: ReadonlySet<string> = new Set<string>();
 
+const some = <T,>(xs: Iterable<T>, f: (x: T) => boolean): boolean => {
+  for (const x of xs) if (f(x)) return true;
+  return false;
+};
+
+/**
+ * What one solve produces: the picture, and the lattice it was drawn from.
+ *
+ * `out` is what goes on screen — lanes nested apart by separateLanes(), so a run in
+ * it can sit up to half a lane step off the lattice edge it actually routed on.
+ * `lattice` is the same solve BEFORE that nudge, and it is what the next solve must
+ * be fed back as `prior`. Nesting the picture and then re-nesting the nested picture
+ * next frame is how a run nobody was dragging walked off its line half a lane step
+ * at a time (2026-09-07).
+ */
+export interface Solved {
+  out: Map<string, RoutedDuct>;
+  lattice: Map<string, RoutedDuct>;
+  shared: string[];
+}
+
 export interface RouteAllOpts {
   /** Last solve's result, for the prior-route discount. */
   prior?: ReadonlyMap<string, RoutedDuct>;
@@ -56,7 +77,7 @@ export function routeAll(scene: Scene, opts: RouteAllOpts = {}): Map<string, Rou
 }
 
 /**
- * {@link routeAll}, plus WHICH ducts had to give up their exclusive lane.
+ * {@link routeAll}, plus WHICH ducts are still drawn over another one.
  *
  * The list used to be computed and thrown away — every caller took the map and the
  * fact that two runs are drawn on top of each other went nowhere, so the canvas
@@ -65,41 +86,78 @@ export function routeAll(scene: Scene, opts: RouteAllOpts = {}): Map<string, Rou
  * how the branch-dot menu greys a splice it can't draw (2026-09-07).
  *
  * An id in `shared` means that duct is drawn over some OTHER duct — which one is
- * not recorded, because the pass that gave up doesn't know who it lost to.
+ * not recorded, because the geometric check that finds them works a segment at a
+ * time and has no notion of who was there first.
  */
-export function routeAllShared(scene: Scene, opts: RouteAllOpts = {}): { out: Map<string, RoutedDuct>; shared: string[] } {
-  let order = [...scene.ducts]
-    .map(d => d.childId)
-    .sort((a, b) => a < b ? -1 : a > b ? 1 : 0);
-  let best: { out: Map<string, RoutedDuct>; shared: string[] } | null = null;
+export function routeAllShared(scene: Scene, opts: RouteAllOpts = {}): Solved {
+  let order = trunkFirst(scene);
+  let best: Solved | null = null;
   for (let attempt = 0; attempt < 3; attempt++) {
     const pass = routePass(scene, opts, order);
     // What comes BACK is what is drawn over something. What the pass reports —
-    // `gaveUpLane` — is a different and weaker fact: that duct could not be routed
-    // under the no-shared-lane rule, so the rule was relaxed for it. The relaxed
-    // route often lands somewhere clean anyway, and reporting it as an overlap
+    // `sharedLane` — is a different and weaker fact: that duct's path runs along a
+    // lattice edge an earlier one had already taken. The lanes are nested apart
+    // below, so most of those land somewhere clean, and reporting them as overlaps
     // named runs that are perfectly fine (2026-09-07: moving the demo's drum sander
     // down one cell said two runs were drawn over each other, and nothing was).
     //
     // It is still the right thing to REORDER on, which is why the pass keeps
-    // reporting it: a duct that could not get an exclusive lane is the one worth
+    // reporting it: a duct that had to take someone else's lane is the one worth
     // routing first next time, whether or not this attempt ended up tidy.
     // Separate first, then judge: what comes back is what is STILL drawn over
     // something after the lanes are nested, which for most boards is nothing.
-    separateLanes(pass.out);
-    const drawn = drawnOverlaps(pass.out);
-    if (!drawn.length) return { out: pass.out, shared: [] };
-    const result = { out: pass.out, shared: drawn };
+    const nested = separateLanes(pass.out);
+    const drawn = drawnOverlaps(nested);
+    if (!drawn.length) return { out: nested, lattice: pass.out, shared: [] };
+    const result = { out: nested, lattice: pass.out, shared: drawn };
     // The TIDIEST attempt wins, not the first. Keeping the first was written when
     // this list meant "gave up a lane", where one attempt was as good as another;
     // now it counts runs actually drawn over something, so a reorder that halves it
     // is a better picture and was being thrown away.
     if (!best || result.shared.length < best.shared.length) best = result;
-    const promote = pass.gaveUpLane[0] ?? drawn[0];
+    const promote = pass.sharedLane[0] ?? drawn[0];
     if (order[0] === promote) break;            // already first; reordering can't help
     order = [promote, ...order.filter(id => id !== promote)];
   }
-  return best ?? { out: routePass(scene, opts, order).out, shared: [] };
+  if (best) return best;
+  const last = routePass(scene, opts, order);
+  return { out: separateLanes(last.out), lattice: last.out, shared: [] };
+}
+
+/**
+ * The order ducts are solved in: down the tree from the collector, trunk first.
+ *
+ * It was alphabetical by child id, which is deterministic and nothing else. On the
+ * demo shop that put every `sel*` and `tool*` ahead of every `wye*` — so the MAIN
+ * TRUNK was the last thing routed, and until it was, the band along the top of the
+ * board looked to every other run like empty highway. A manifold feed took it,
+ * crossed the whole shop up there, and the trunk then had to nest itself around the
+ * run that had taken its lane: three pieces of one straight line at three different
+ * heights (reported 2026-09-07).
+ *
+ * Solving from the root outward matches how the shop is actually built and how the
+ * costs are meant to work. An early run claims its lane and later runs pay USED and
+ * CROSS to come near it, and the trunk is the one run that should never be the one
+ * paying — everything downstream hangs off it.
+ *
+ * Depth first, id second, so the result is still fully determined: two ducts at the
+ * same depth are solved in the same order on every board, every frame.
+ */
+function trunkFirst(scene: Scene): string[] {
+  const parentOf = new Map(scene.ducts.map(d => [d.childId, d.outlet?.unitId ?? d.parentId]));
+  const depth = new Map<string, number>();
+  const depthOf = (id: string): number => {
+    const seen = depth.get(id);
+    if (seen !== undefined) return seen;
+    depth.set(id, 0);                        // breaks a cycle in a half-edited doc
+    const up = parentOf.get(id);
+    const d = up === undefined || !parentOf.has(up) ? 0 : depthOf(up) + 1;
+    depth.set(id, d);
+    return d;
+  };
+  return [...scene.ducts]
+    .map(d => d.childId)
+    .sort((a, b) => depthOf(a) - depthOf(b) || (a < b ? -1 : a > b ? 1 : 0));
 }
 
 /** How far apart two runs sharing a lane are pulled. A duct is stroked at 6, so
@@ -133,7 +191,14 @@ export const LANE_STEP = 12;
  * visibly leaves that dot, and pinning it would need a dogleg that costs more
  * legibility than it buys.
  */
-function separateLanes(out: Map<string, RoutedDuct>): void {
+function separateLanes(lattice: ReadonlyMap<string, RoutedDuct>): Map<string, RoutedDuct> {
+  // A COPY, always. The caller keeps the lattice-true solve to hand back as `prior`
+  // next frame, and a frozen run is handed straight through from there — nudging the
+  // original in place meant that run picked up another half lane step every frame of
+  // a drag it was not part of.
+  const out = new Map<string, RoutedDuct>();
+  for (const [id, r] of lattice) out.set(id, { ...r, pts: r.pts.map(p => ({ ...p })) });
+
   type Ref = { id: string; i: number };            // segment i of run id
   const groups = new Map<string, Ref[]>();
 
@@ -186,6 +251,7 @@ function separateLanes(out: Map<string, RoutedDuct>): void {
       }
     }
   }
+  return out;
 }
 
 /**
@@ -280,7 +346,7 @@ function charge(ports: Port[], taken: ReadonlySet<string>): Port[] {
     : p));
 }
 
-function routePass(scene: Scene, opts: RouteAllOpts, order: string[]): { out: Map<string, RoutedDuct>; gaveUpLane: string[] } {
+function routePass(scene: Scene, opts: RouteAllOpts, order: string[]): { out: Map<string, RoutedDuct>; sharedLane: string[] } {
   const byId = new Map(scene.nodes.map(n => [n.id, n]));
   const prior = opts.prior;
   const frozen = opts.frozen;
@@ -297,9 +363,9 @@ function routePass(scene: Scene, opts: RouteAllOpts, order: string[]): { out: Ma
 
   const rank = new Map(order.map((id, i) => [id, i]));
   const ducts = [...scene.ducts].sort((a, b) => (rank.get(a.childId) ?? 0) - (rank.get(b.childId) ?? 0));
-  // Ducts the strict pass could not fit without sharing a lane. NOT a claim that
-  // they overlap — see routeAllShared — only that the rule had to be relaxed.
-  const gaveUpLane: string[] = [];
+  // Ducts whose path runs along an edge an earlier one already took. NOT a claim
+  // that they overlap — see routeAllShared — only that they wanted the same lane.
+  const sharedLane: string[] = [];
 
   const ceilings = ceilingsOf(scene.nodes);
 
@@ -340,26 +406,39 @@ function routePass(scene: Scene, opts: RouteAllOpts, order: string[]): { out: Ma
       priorEdges: prior?.get(d.childId)?.edges,
     };
     const strict = obstaclesFor(scene.nodes, EMPTY);
-    // FOUR attempts now, each relaxing one rule, so the picture degrades in the order
-    // a person would accept: never climb above the outlet and never share a lane;
-    // then share a lane; then climb; then cross your own endpoints rather than fail.
+    // THREE attempts, each relaxing one rule, so the picture degrades in the order a
+    // person would accept: stay under the outlet; then climb; then cross your own
+    // endpoints rather than fail.
     //
-    // The ceiling is relaxed AFTER lane sharing and BEFORE cutting through a device,
-    // and that ordering is the whole judgement: two runs nested 12px apart is a thing
-    // you see in a real shop, and a pipe going up over the ceiling to come back down
-    // is not — but neither is a machine you cannot reach at all, so a tool parked
-    // above the collector still gets its duct.
-    let res: RouteResult = routeOne(from, to, { ...common, obstacles: strict, blockUsed: true, ceilingBlocks: true });
+    // Sharing a lane is NOT a rung on this ladder any more, and taking it off is the
+    // 2026-09-07 fix. It used to be the first one — a pass that walled off every edge
+    // an earlier run had claimed — and a wall cannot weigh two pictures against each
+    // other. On the shop that reported this, the manifold's feed would have shared two
+    // lattice edges with the leg beside it for a cost of 360; walling them off sent it
+    // straight up to the collector's own line, west across the entire shop and back
+    // down, for 416. The search was right by its own rule and the drawing was absurd.
+    //
+    // So lane sharing is priced (USED) rather than forbidden, and the ONE thing that
+    // makes that safe is separateLanes(), which nests whatever still shares a lane
+    // 12px apart afterwards. Without that pass this would be trading a lasso for two
+    // runs drawn on top of each other, which is the worse of the two.
+    //
+    // The ceiling stays a wall first and a cost second, because a pipe going up over
+    // the shop to come back down is not a compromise anyone would accept — but
+    // neither is a machine you cannot reach at all, so a tool parked above the
+    // collector still gets its duct.
+    let res: RouteResult = routeOne(from, to, { ...common, obstacles: strict, ceilingBlocks: true });
     if (!res.ok) {
-      gaveUpLane.push(d.childId);               // had to give up its exclusive lane
-      res = routeOne(from, to, { ...common, obstacles: strict, ceilingBlocks: true });
+      res = routeOne(from, to, { ...common, obstacles: strict });
       if (!res.ok) {
-        res = routeOne(from, to, { ...common, obstacles: strict });
-        if (!res.ok) {
-          res = routeOne(from, to, { ...common, obstacles: obstaclesFor(scene.nodes, new Set([child.id, parent.id])) });
-        }
+        res = routeOne(from, to, { ...common, obstacles: obstaclesFor(scene.nodes, new Set([child.id, parent.id])) });
       }
     }
+    // Which runs ACTUALLY ended up sharing an edge with an earlier one — the reorder
+    // signal routeAllShared works from. It used to be "the strict pass failed", which
+    // was a claim about a rule that no longer exists; asking the finished path is
+    // both simpler and closer to what the reorder is trying to fix.
+    if (some(res.edges, e => used.has(e))) sharedLane.push(d.childId);
 
     for (const e of res.edges) used.add(e);
     for (const n of res.nodes) crossed.add(n);
@@ -367,7 +446,7 @@ function routePass(scene: Scene, opts: RouteAllOpts, order: string[]): { out: Ma
     out.set(d.childId, { pts: res.pts, ok: res.ok, edges: res.edges, nodes: res.nodes });
   }
 
-  return { out, gaveUpLane };
+  return { out, sharedLane };
 }
 
 /**
@@ -458,7 +537,9 @@ export class Router {
     const solved = routeAllShared(scene, { prior: this.last, frozen });
     this.cache = solved.out;
     this.sharedIds = solved.shared;
-    this.last = this.cache;
+    // The LATTICE solve, not the drawn one — see Solved. A frozen run is re-held from
+    // here on every frame of a drag, so it has to be the same base every time.
+    this.last = solved.lattice;
     this.hash = h;
     return this.cache;
   }

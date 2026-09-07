@@ -25,6 +25,18 @@
  * step off the line it was nudged from and is not a climb. `unsolved` and `ov` are
  * failures rather than trade-offs: a run the router could not place at all, and one
  * still drawn over another after the lanes are nested. Both should stay zero.
+ *
+ * `above` DOES NOT catch a run that crosses the shop along the collector's own line,
+ * because that line IS the ceiling and not above it — which is exactly what
+ * branch-on-trunk did before 2026-09-07. `bends` and `length` together are what
+ * caught it (9 → 6 and 3125 → 2867 once the solve order was fixed), and they are why
+ * both columns are here and not just the one the costs are tuned on.
+ *
+ * That change cost demo+sander-down a bend and 252px: a manifold feed that used to
+ * skim west just under the trunk now goes around the outside instead, because the
+ * three valve drops it would have crossed are solved before it is. Two ordinary
+ * pictures, neither obviously better — recorded so the next person knows it was seen
+ * rather than missed.
  */
 import { type SceneNode, CELL, PAD, deviceBox } from './geometry';
 import { type Scene, LANE_STEP, ceilingFor, ceilingsOf, routeAllShared, sceneBounds } from './router';
@@ -166,10 +178,45 @@ function auxCrossesSeam(): Scene {
   return { nodes, ducts, bounds: sceneBounds(nodes) };
 }
 
+/**
+ * The demo shop with a leg teed off the trunk and dragged down beside the manifold —
+ * the board reported from the shop on 2026-09-07.
+ *
+ * Worth a scene of its own because the two failures in it were invisible to every
+ * other scene here: the trunk drawn as three separate lines at three heights, and
+ * the manifold's feed climbing to the collector's line to cross the whole shop. Both
+ * came from the solve ORDER (see trunkFirst), which no existing scene exercised
+ * because none of them had a branch teed into the middle of the trunk.
+ */
+function branchOnTrunk(): Scene {
+  const nodes: SceneNode[] = [
+    N('dc', 'collector', 0, 0),
+    N('w2', 'junction', 1, 0), N('w7', 'junction', 3, 0), N('w1', 'junction', 4, 0),
+    N('w13', 'junction', 5, 0), N('w20', 'junction', 6, 2),
+    N('v4', 'ballvalve', 1, 1), N('v9', 'ballvalve', 3, 1),
+    N('v15', 'ballvalve', 5, 1), N('v19', 'ballvalve', 6, 3),
+    N('t6', 'tool', 1, 2), N('t11', 'tool', 3, 2), N('t17', 'tool', 5, 2), N('t18', 'tool', 6, 4),
+    N('man', 'manifold', 3, 3, 2, true), N('t31', 'tool', 2, 4), N('t32', 'tool', 4, 4),
+    N('leg', 'junction', 5, 4),
+  ];
+  const ducts: Scene['ducts'] = [
+    { childId: 'w2', parentId: 'dc' }, { childId: 'v4', parentId: 'w2' }, { childId: 't6', parentId: 'v4' },
+    { childId: 'w7', parentId: 'w2' }, { childId: 'v9', parentId: 'w7' }, { childId: 't11', parentId: 'v9' },
+    { childId: 'w1', parentId: 'w7' }, { childId: 'leg', parentId: 'w1' },
+    { childId: 'w13', parentId: 'w1' }, { childId: 'v15', parentId: 'w13' }, { childId: 't17', parentId: 'v15' },
+    { childId: 'w20', parentId: 'w13' }, { childId: 'v19', parentId: 'w20' }, { childId: 't18', parentId: 'v19' },
+    { childId: 'man', parentId: 'w20' },
+    { childId: 't31', outlet: { unitId: 'man', index: 0 } },
+    { childId: 't32', outlet: { unitId: 'man', index: 1 } },
+  ];
+  return { nodes, ducts, bounds: sceneBounds(nodes) };
+}
+
 const scenes: Named[] = [
   { name: 'demo', scene: demo() },
   { name: 'demo+manifold-right', scene: demo(3) },
   { name: 'demo+sander-down', scene: demo(2, 3) },
+  { name: 'branch-on-trunk', scene: branchOnTrunk() },
   { name: 'two-systems', scene: twoSystems() },
   { name: 'aux-crosses-seam', scene: auxCrossesSeam() },
   { name: 'long-row', scene: longRow() },
