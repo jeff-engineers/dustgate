@@ -136,6 +136,10 @@ export interface SceneNode {
    *  drawn wherever the run lands (D-41), so the machine is what the router aims at.
    *  Absent, the port falls back to a top entry, which is all it had before D-41. */
   hostBox?: Box;
+  /** Which airflow system this piece belongs to. The router uses it for one thing:
+   *  a system's own collector outlet is the height its ducting stays under, and the
+   *  lower systems each have their own. Absent on a board, which belongs to none. */
+  systemId?: string;
 }
 
 export function cellX(col: number): number { return PAD + col * CELL; }

@@ -591,14 +591,31 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
    *  include WHILE the machine is being dragged. Reading only its own snapped cell
    *  left the glyph behind on the old position until the finger came up. */
   nx(n: NodeVM): number {
-    const host = n.follows ? this.byId.get(n.follows) : undefined;
-    const base = host?.dragX ?? n.dragX ?? (PAD + n.col * CELL);
-    return base + (n.anchor?.dx ?? 0);
+    const seat = this.seatOf(n);
+    return (seat.dragX ?? (PAD + seat.col * CELL)) + (n.anchor?.dx ?? 0);
   }
   ny(n: NodeVM): number {
-    const host = n.follows ? this.byId.get(n.follows) : undefined;
-    const base = host?.dragY ?? n.dragY ?? (PAD + n.row * CELL);
-    return base + (n.anchor?.dy ?? 0);
+    const seat = this.seatOf(n);
+    return (seat.dragY ?? (PAD + seat.row * CELL)) + (n.anchor?.dy ?? 0);
+  }
+
+  /**
+   * The node whose CELL a glyph stands on — itself, or the machine it rides.
+   *
+   * A secondary port has no cell of its own on purpose (secondaryPortSeat: giving it
+   * one would let you drag half a saw into another system), but it is BUILT with a
+   * copy of its machine's, and a copy is a thing that can go stale. It did: a drop
+   * moves the dragged node by writing col/row straight onto it, so the machine moved
+   * and every rider kept the old cell — the port glyph and its duct stayed behind at
+   * the saw's previous position, which reads as the overarm collector coming off its
+   * machine (reported 2026-09-07).
+   *
+   * Resolving through the host at every read is the fix rather than updating riders
+   * at the drop, because there is no list of places that move a node, and the next
+   * one added would break this again the same way.
+   */
+  private seatOf(n: NodeVM): NodeVM {
+    return (n.follows ? this.byId.get(n.follows) : undefined) ?? n;
   }
   unitW(n: NodeVM): number { return (n.span - 1) * CELL + 2 * GATE_PAD; }
   outletXs(n: NodeVM): number[] { return Array.from({ length: n.span }, (_, i) => i * CELL); }
@@ -622,6 +639,9 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
         ? deviceBox({ id: n.follows, glyph: 'tool', isUnit: false, span: 1,
                       x: at.get(n.follows)!.x, y: at.get(n.follows)!.y })
         : undefined,
+      // Only ever read to find the collector whose outlet height this piece's ducting
+      // stays under (ceilingsOf) — the router has no other notion of a system.
+      systemId: this.systemOf.get(n.id),
     }));
     // Boards are obstacles too — that is the whole point of a board owning its cell.
     // They carry no ducts, so they only ever appear here as boxes to steer around.
@@ -650,17 +670,19 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
    *  the machine's centreline and the glyph sat off on its own with nothing reaching
    *  it. That is the whole "the second port gets centered" bug. */
   private routeX(n: NodeVM): number {
-    // A secondary port borrows its machine's cell, so mid-drag it has to borrow the machine's
-    // SNAPPED drag cell too. Reading only its own stored cell left the glyph's duct
-    // solving to where the machine used to be while the glyph itself moved with it —
-    // which looked like the run detaching.
-    const drag = (n.follows ? this.byId.get(n.follows)?.dragX : undefined) ?? n.dragX;
-    const cell = drag == null ? PAD + n.col * CELL : PAD + Math.max(0, Math.round((drag - PAD) / CELL)) * CELL;
+    // A secondary port borrows its machine's cell — see seatOf() — mid-drag AND after
+    // the drop, so its duct solves to wherever the machine actually is.
+    const seat = this.seatOf(n);
+    const cell = seat.dragX == null
+      ? PAD + seat.col * CELL
+      : PAD + Math.max(0, Math.round((seat.dragX - PAD) / CELL)) * CELL;
     return cell + (n.anchor?.dx ?? 0);
   }
   private routeY(n: NodeVM): number {
-    const drag = (n.follows ? this.byId.get(n.follows)?.dragY : undefined) ?? n.dragY;
-    const cell = drag == null ? PAD + n.row * CELL : PAD + Math.max(0, Math.round((drag - PAD) / CELL)) * CELL;
+    const seat = this.seatOf(n);
+    const cell = seat.dragY == null
+      ? PAD + seat.row * CELL
+      : PAD + Math.max(0, Math.round((seat.dragY - PAD) / CELL)) * CELL;
     return cell + (n.anchor?.dy ?? 0);
   }
 
@@ -2464,9 +2486,14 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     this.idrag = { portId: n.id, x0: evt.clientX, y0: evt.clientY, moved: false };
     window.addEventListener('pointermove', this.iMove);
     window.addEventListener('pointerup', this.iUp);
+    // Re-hanging a port is the LONGEST drag on the canvas by design — the run it is
+    // moving is the one allowed to cross the seam, so its new parent is usually in
+    // another system entirely.
+    this.vp.beginEdgeScroll(this.iMove, evt);
   }
   private onInletMove(evt: PointerEvent): void {
     if (!this.idrag) return;
+    this.vp.trackEdge(evt);
     if (Math.hypot(evt.clientX - this.idrag.x0, evt.clientY - this.idrag.y0) > 8) this.idrag.moved = true;
     this.idrag.at = this.toSvg(evt);
     if (this.idrag.moved) {
@@ -2477,6 +2504,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   private onInletUp(evt: PointerEvent): void {
     window.removeEventListener('pointermove', this.iMove);
     window.removeEventListener('pointerup', this.iUp);
+    this.vp.endEdgeScroll();
     const d = this.idrag; this.idrag = null;
     this.wireNote = '';
     if (!d) return;
@@ -2564,9 +2592,15 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     this.odrag = { od, x0: evt.clientX, y0: evt.clientY, moved: false };
     window.addEventListener('pointermove', this.oMove);
     window.addEventListener('pointerup', this.oUp);
+    // The one drag that never got this. Pulling pipe off an outlet is exactly the
+    // gesture most likely to need it — the thing you are reaching for is in another
+    // system, a screen or two away — and without it the drag simply stopped at the
+    // edge of the viewport with no way to go further.
+    this.vp.beginEdgeScroll(this.oMove, evt);
   }
   private onODotMove(evt: PointerEvent): void {
     if (!this.odrag) return;
+    this.vp.trackEdge(evt);
     if (Math.hypot(evt.clientX - this.odrag.x0, evt.clientY - this.odrag.y0) > DRAG_SLOP) this.odrag.moved = true;
     // Remembered so the release can ask what is under the pointer. Without it a
     // stub could only ever grow into its own cell, and "drag from any open end"
@@ -2576,6 +2610,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   private onODotUp(evt: PointerEvent): void {
     window.removeEventListener('pointermove', this.oMove);
     window.removeEventListener('pointerup', this.oUp);
+    this.vp.endEdgeScroll();
     const d = this.odrag; this.odrag = null; if (!d) return;
     if (d.moved) {
       // Dropped ON a machine that already has a duct → the second-port gesture,
@@ -2676,6 +2711,10 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     window.addEventListener('pointermove', this.bMove);
     window.addEventListener('pointerup', this.bUp);
   }
+  // No edge auto-scroll here, unlike every other drag: this one never reads the
+  // pointer's POSITION. It only asks whether the press turned into a drag, and the
+  // new leg goes perpendicular to the run from the dot itself — so scrolling the
+  // board under the finger would change nothing about where the branch lands.
   private onBDotMove(evt: PointerEvent): void {
     if (!this.bdrag) return;
     if (Math.hypot(evt.clientX - this.bdrag.x0, evt.clientY - this.bdrag.y0) > 8) this.bdrag.moved = true;

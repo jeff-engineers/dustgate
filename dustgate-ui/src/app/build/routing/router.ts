@@ -301,7 +301,7 @@ function routePass(scene: Scene, opts: RouteAllOpts, order: string[]): { out: Ma
   // they overlap — see routeAllShared — only that the rule had to be relaxed.
   const gaveUpLane: string[] = [];
 
-  const ceilingY = ceilingOf(scene.nodes);
+  const ceilings = ceilingsOf(scene.nodes);
 
   // Frozen runs claim their edges first, so the duct actually being dragged routes
   // around where the others already are rather than the other way round.
@@ -334,7 +334,7 @@ function routePass(scene: Scene, opts: RouteAllOpts, order: string[]): { out: Ma
     // become passable again, so no route we could previously find is lost.
     const common = {
       bounds: scene.bounds,
-      ceilingY,
+      ceilingY: ceilingFor(child, ceilings),
       usedEdges: used,
       usedNodes: crossed,
       priorEdges: prior?.get(d.childId)?.edges,
@@ -371,26 +371,61 @@ function routePass(scene: Scene, opts: RouteAllOpts, order: string[]): { out: Ma
 }
 
 /**
- * The height ducting should stay below: the topmost collector's outlet.
+ * The heights ducting stays below — one for the board, and one per system.
  *
- * A collector's side ports sit on its centreline, and that is where the trunk
- * leaves — everything downstream of it flows away and DOWN, so pipe drawn above
- * that line is going up only to come back. The router had no opinion about height,
- * and the empty band across the top of the board was therefore its favourite place
- * to put a run it could not fit anywhere else.
+ * A collector's side ports sit on its centreline, and that is where the trunk leaves:
+ * everything downstream of it flows away and DOWN, so pipe drawn above that line is
+ * going up only to come back. The router had no opinion about height at all, and the
+ * empty band across the top of the board was therefore its favourite place to put a
+ * run it could not fit anywhere else.
  *
- * The TOPMOST collector sets it for the whole board, not each system its own: the
- * router does not know which system a duct belongs to, and the lower system's runs
- * legitimately pass under the upper one's. A per-system ceiling would need that
- * knowledge and would buy nothing — the lower system has no reason to climb.
+ * TWO ceilings, because they answer different questions (jeff, 2026-09-07):
  *
- * Undefined on a board with no collector yet, which is a real state while someone
- * is drawing: no collector, no outlet height, no opinion.
+ *   `global` — the topmost collector's outlet. The top of the page. NOTHING goes
+ *     above it, an auxiliary run included.
+ *   `bySystem` — each system's own collector outlet, which for every system below
+ *     the first is lower down the page and therefore tighter. It keeps a system's
+ *     ducting inside its own band instead of climbing into the shop above it.
+ *
+ * An AUXILIARY run is exempt from the per-system ceiling and bound only by the
+ * global one. It is the one run allowed to cross the seam between two systems, so a
+ * ceiling at its own system's collector would forbid the very thing it exists to
+ * do — reach a machine in the system above.
+ *
+ * Undefined on a board with no collector yet, which is a real state while someone is
+ * drawing: no collector, no outlet height, no opinion.
  */
+export interface Ceilings {
+  global?: number;
+  bySystem: Map<string, number>;
+}
+
+export function ceilingsOf(nodes: SceneNode[]): Ceilings {
+  let global = Infinity;
+  const bySystem = new Map<string, number>();
+  for (const n of nodes) {
+    if (n.glyph !== 'collector') continue;
+    global = Math.min(global, n.y);
+    if (n.systemId === undefined) continue;
+    const seen = bySystem.get(n.systemId);
+    if (seen === undefined || n.y < seen) bySystem.set(n.systemId, n.y);
+  }
+  return { global: global === Infinity ? undefined : global, bySystem };
+}
+
+/** The topmost collector's outlet on its own — the global ceiling. */
 export function ceilingOf(nodes: SceneNode[]): number | undefined {
-  let y = Infinity;
-  for (const n of nodes) if (n.glyph === 'collector') y = Math.min(y, n.y);
-  return y === Infinity ? undefined : y;
+  return ceilingsOf(nodes).global;
+}
+
+/** Which of the two applies to the run ending at `child`. */
+export function ceilingFor(child: SceneNode, c: Ceilings): number | undefined {
+  if (child.glyph === 'secondaryPort') return c.global;      // the seam-crossing run
+  const own = child.systemId === undefined ? undefined : c.bySystem.get(child.systemId);
+  if (own === undefined) return c.global;
+  // A system's own ceiling can only ever be at or below the global one; taking the
+  // lower of the two makes that a guarantee rather than an assumption about layout.
+  return c.global === undefined ? own : Math.max(c.global, own);
 }
 
 /** Board bounds wide enough to hold every glyph, before the lattice adds its own

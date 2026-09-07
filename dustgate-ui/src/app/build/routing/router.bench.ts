@@ -27,7 +27,7 @@
  * still drawn over another after the lanes are nested. Both should stay zero.
  */
 import { type SceneNode, CELL, PAD, deviceBox } from './geometry';
-import { type Scene, LANE_STEP, routeAllShared, sceneBounds } from './router';
+import { type Scene, LANE_STEP, ceilingFor, ceilingsOf, routeAllShared, sceneBounds } from './router';
 
 const at = (c: number, r: number) => ({ x: PAD + c * CELL, y: PAD + r * CELL });
 const N = (id: string, glyph: SceneNode['glyph'], c: number, r: number, span = 1, isUnit = false): SceneNode =>
@@ -63,14 +63,18 @@ function demo(manCol = 2, sanderRow = 2): Scene {
   return { nodes, ducts, bounds: sceneBounds(nodes) };
 }
 
-/** Two systems stacked, the second one lower — the shop-vacuum band on the demo. */
+/** Two systems stacked, the second one lower — the shop-vacuum band on the demo.
+ *  Each system's own collector is its ceiling, so system 2's ducting has to stay
+ *  inside its own band instead of climbing into the shop above it. */
 function twoSystems(): Scene {
+  const sysA = { systemId: 'a' }, sysB = { systemId: 'b' };
   const nodes: SceneNode[] = [
-    N('dc', 'collector', 0, 0), N('j1', 'junction', 2, 0), N('j2', 'junction', 4, 0),
-    N('v1', 'ballvalve', 2, 1), N('v2', 'ballvalve', 4, 1),
-    N('planer', 'tool', 2, 2), N('saw', 'tool', 4, 2),
-    N('vac', 'collector', 0, 4), N('g', 'slidingGate', 2, 4, 2, true),
-    N('sander', 'tool', 2, 5), N('router', 'tool', 3, 5),
+    { ...N('dc', 'collector', 0, 0), ...sysA }, { ...N('j1', 'junction', 2, 0), ...sysA },
+    { ...N('j2', 'junction', 4, 0), ...sysA },
+    { ...N('v1', 'ballvalve', 2, 1), ...sysA }, { ...N('v2', 'ballvalve', 4, 1), ...sysA },
+    { ...N('planer', 'tool', 2, 2), ...sysA }, { ...N('saw', 'tool', 4, 2), ...sysA },
+    { ...N('vac', 'collector', 0, 4), ...sysB }, { ...N('g', 'slidingGate', 2, 4, 2, true), ...sysB },
+    { ...N('sander', 'tool', 2, 5), ...sysB }, { ...N('router', 'tool', 3, 5), ...sysB },
   ];
   const ducts: Scene['ducts'] = [
     { childId: 'j1', parentId: 'dc' }, { childId: 'j2', parentId: 'j1' },
@@ -142,30 +146,52 @@ function gateAboveCollector(): Scene {
   return { nodes, ducts, bounds: sceneBounds(nodes) };
 }
 
+/** An auxiliary port on a machine in the UPPER system, fed from the lower one — the
+ *  demo's overarm collector. It is the one run allowed over a system ceiling, and
+ *  the whole reason the per-system ceiling is not simply global. */
+function auxCrossesSeam(): Scene {
+  const saw = { ...N('saw', 'tool', 3, 1), systemId: 'a' };
+  const nodes: SceneNode[] = [
+    { ...N('dc', 'collector', 0, 0), systemId: 'a' }, saw,
+    { ...N('vac', 'collector', 0, 4), systemId: 'b' },
+    { ...N('j', 'junction', 3, 4), systemId: 'b' },
+    { id: 'guard', glyph: 'secondaryPort', isUnit: false, span: 1, systemId: 'b',
+      x: saw.x + 15, y: saw.y - 34, hostBox: deviceBox(saw) },
+  ];
+  const ducts: Scene['ducts'] = [
+    { childId: 'saw', parentId: 'dc' },
+    { childId: 'j', parentId: 'vac' },
+    { childId: 'guard', parentId: 'j' },
+  ];
+  return { nodes, ducts, bounds: sceneBounds(nodes) };
+}
+
 const scenes: Named[] = [
   { name: 'demo', scene: demo() },
   { name: 'demo+manifold-right', scene: demo(3) },
   { name: 'demo+sander-down', scene: demo(2, 3) },
   { name: 'two-systems', scene: twoSystems() },
+  { name: 'aux-crosses-seam', scene: auxCrossesSeam() },
   { name: 'long-row', scene: longRow() },
   { name: 'above-collector', scene: aboveTheCollector() },
   { name: 'gate-on-dc-row', scene: gateOnCollectorRow() },
   { name: 'gate-above-dc', scene: gateAboveCollector() },
 ];
 
-/** Ceiling for measurement: the topmost collector's outlet height. */
-function ceiling(s: Scene): number {
-  let y = Infinity;
-  for (const n of s.nodes) if (n.glyph === 'collector') y = Math.min(y, n.y);
-  return y;
+/** Measured against the ceiling that actually applies to each run: the global one
+ *  for an auxiliary run, its own system's for everything else. */
+function ceilingOfRun(s: Scene, childId: string): number {
+  const child = s.nodes.find(n => n.id === childId);
+  const c = ceilingsOf(s.nodes);
+  return (child ? ceilingFor(child, c) : c.global) ?? Infinity;
 }
 
 function measure(s: Scene) {
   const { out, shared } = routeAllShared(s);
-  const cy = ceiling(s);
   let bends = 0, len = 0, above = 0, minY = Infinity;
   const paths: Record<string, number[][]> = {};
   for (const [id, r] of out) {
+    const cy = ceilingOfRun(s, id);
     paths[id] = r.pts.map(p => [Math.round(p.x), Math.round(p.y)]);
     bends += Math.max(0, r.pts.length - 2);
     for (const p of r.pts) minY = Math.min(minY, p.y);

@@ -6,7 +6,7 @@
 
 import { type SceneNode, CAP_W, CELL, CLEARANCE, PAD, PRIMARY_PORT_DX, SECONDARY_PORT_DX, TOOL_HALF,
          cellX, cellY, deviceBox, segBoxHit } from './geometry';
-import { type Scene, type RoutedDuct, LANE_STEP, Router, ceilingOf, routeAll, routeAllShared, sceneBounds } from './router';
+import { type Scene, type RoutedDuct, LANE_STEP, Router, ceilingFor, ceilingOf, ceilingsOf, routeAll, routeAllShared, sceneBounds } from './router';
 import { outPorts } from './route-grid';
 
 // ── harness ──────────────────────────────────────────────────────────────────
@@ -42,6 +42,7 @@ const unit = (id: string, col: number, row: number, span: number): SceneNode => 
 /** A controller board. It carries no duct — it is only ever an obstacle, which is
  *  the whole meaning of a board owning its cell. */
 const board = (id: string, col: number, row: number): SceneNode => ({ id, glyph: 'board', isUnit: false, span: 1, ...at(col, row) });
+const junction = (id: string, col: number, row: number): SceneNode => ({ id, glyph: 'junction', isUnit: false, span: 1, ...at(col, row) });
 
 function scene(nodes: SceneNode[], ducts: Scene['ducts']): Scene {
   return { nodes, ducts, bounds: sceneBounds(nodes) };
@@ -668,6 +669,43 @@ group('R18b a machine parked above the collector is still reached');
   ok('and the one above the collector really does go up',
      Math.min(...path(out, 'high').map(p => p.y)) < cellY(3),
      JSON.stringify(path(out, 'high').map(p => [p.x, p.y])));
+}
+
+group('R18c each system has its own ceiling, and only the aux run may cross it');
+{
+  // The global ceiling is the top of the page and binds everything. A system BELOW
+  // the first has its own, lower one, which keeps its ducting inside its own band —
+  // except for the auxiliary run, which exists to reach a machine in the system
+  // above and would be forbidden from doing its job by a ceiling at its own
+  // collector (jeff, 2026-09-07).
+  const saw = { ...tool('saw', 3, 1), systemId: 'a' };
+  const nodes: SceneNode[] = [
+    { ...collector('dc', 0, 0), systemId: 'a' }, saw,
+    { ...collector('vac', 0, 4), systemId: 'b' },
+    { ...junction('j', 3, 4), systemId: 'b' },
+    { id: 'guard', glyph: 'secondaryPort', isUnit: false, span: 1, systemId: 'b',
+      x: saw.x + SECONDARY_PORT_DX, y: saw.y - TOOL_HALF, hostBox: deviceBox(saw) },
+  ];
+  const s = scene(nodes, [
+    { childId: 'saw', parentId: 'dc' },
+    { childId: 'j', parentId: 'vac' },
+    { childId: 'guard', parentId: 'j' },
+  ]);
+  const c = ceilingsOf(nodes);
+  ok('the global ceiling is the topmost collector', c.global === cellY(0));
+  ok('and each system keeps its own', c.bySystem.get('a') === cellY(0) && c.bySystem.get('b') === cellY(4));
+  ok('an ordinary run is held to its own system\'s', ceilingFor(nodes[3], c) === cellY(4));
+  ok('the aux run is held only to the global one', ceilingFor(nodes[4], c) === cellY(0));
+
+  const { out } = routeAllShared(s);
+  ok('every run solves', out.size === 3 && [...out.values()].every(v => v.ok));
+  const top = (id: string) => Math.min(...path(out, id).map(p => p.y));
+  ok('the aux run climbs out of the lower system', top('guard') < cellY(4) - CELL,
+     `guard tops out at ${top('guard')}`);
+  ok('...and still stays under the global ceiling', top('guard') >= cellY(0) - LANE_STEP,
+     `guard tops out at ${top('guard')}`);
+  ok('while the lower system\'s own run stays in its band', top('j') >= cellY(4) - LANE_STEP,
+     `j tops out at ${top('j')}`);
 }
 
 // ── summary ──────────────────────────────────────────────────────────────────
