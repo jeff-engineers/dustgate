@@ -553,6 +553,42 @@ group('R15 overlaps the lattice cannot see are still reported');
      JSON.stringify(routeAllShared(s3).shared));
 }
 
+// ── R16 · two legs off one tee leave by different ports ─────────────────────
+
+group('R16 a tee\'s legs do not trail each other out of one port');
+{
+  // The demo layout's own fault, fixed 2026-09-07: a junction whose legs both left
+  // by the SOUTH port — one carrying on down, the other turning west a moment
+  // later — so 34px of the two were drawn as one line. Nothing objected, because a
+  // stub that short claims no lattice edge. A junction offers all four sides; the
+  // leg going west should pay a bend's worth to consider leaving westward, which
+  // is what PORT_REUSE prices.
+  const s = scene(
+    [collector('dc', 2, 0), tool('down', 2, 3), tool('west', 0, 2)],
+    [{ childId: 'down', parentId: 'dc' }, { childId: 'west', parentId: 'dc' }],
+  );
+  const { out, shared } = routeAllShared(s);
+  ok('neither run is drawn over the other', shared.length === 0, JSON.stringify(shared));
+
+  const first = (id: string) => {
+    const p = out.get(id)!.pts;
+    return Math.abs(p[0].x - p[1].x) < 0.5 ? (p[1].y > p[0].y ? 'S' : 'N') : (p[1].x > p[0].x ? 'E' : 'W');
+  };
+  ok('and they leave by different ports', first('down') !== first('west'),
+     `${first('down')} vs ${first('west')}`);
+
+  // Soft, not a wall: a device with ONE way out still routes through it. A gate's
+  // outlet faces down and nowhere else, so two ducts on one outlet still share it —
+  // reported (R15), not re-routed to somewhere that doesn't exist.
+  const oneWay = scene(
+    [collector('dc', 0, 0), unit('g', 0, 1, 2), tool('a', 0, 3), tool('b', 0, 4)],
+    [{ childId: 'g', parentId: 'dc' },
+     { childId: 'a', outlet: { unitId: 'g', index: 0 } },
+     { childId: 'b', outlet: { unitId: 'g', index: 0 } }],
+  );
+  ok('a port that is the only way out is still used', routeAllShared(oneWay).out.size === 3);
+}
+
 // ── summary ──────────────────────────────────────────────────────────────────
 
 console.log(`\n${checks - failures}/${checks} checks passed`);

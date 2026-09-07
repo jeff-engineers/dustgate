@@ -6,7 +6,7 @@
  *  (sorted by child id) the same board always produces the same picture. */
 
 import { type Box, type Pt, type SceneNode, deviceBox } from './geometry';
-import { type Port, type RouteResult, inPorts, obstaclesFor, outPorts, routeOne } from './route-grid';
+import { type Port, type RouteResult, PORT_REUSE, inPorts, obstaclesFor, outPorts, routeOne } from './route-grid';
 
 export interface SceneDuct {
   childId: string;
@@ -151,6 +151,39 @@ function union(a: readonly string[], b: readonly string[]): string[] {
   return out;
 }
 
+/** A port's identity for reuse: where it is, and which way the run goes through it.
+ *  Rounded, because a port sits on a device edge in float pixels and the same port
+ *  must key identically for every duct that reaches it. */
+function portKey(p: Pt, dir: number): string {
+  return `${Math.round(p.x)},${Math.round(p.y)},${dir}`;
+}
+
+/** Which direction the run leaves `a` in, as route-grid numbers them (0=E 1=S 2=W 3=N). */
+function dirOf(a: Pt, b: Pt): number {
+  if (Math.abs(a.x - b.x) < 0.5) return b.y > a.y ? 1 : 3;
+  return b.x > a.x ? 0 : 2;
+}
+
+/** The two ports a finished path actually used — the one it left by and the one it
+ *  arrived at, each named by the direction the run travels through it. */
+function portsOfPath(pts: readonly Pt[]): string[] {
+  if (pts.length < 2) return [];
+  const n = pts.length;
+  return [
+    portKey(pts[0], dirOf(pts[0], pts[1])),
+    portKey(pts[n - 1], dirOf(pts[n - 1], pts[n - 2])),
+  ];
+}
+
+/** Bias every port an earlier run already used, leaving the rest untouched. Soft:
+ *  a device whose only sane exit is taken still routes through it. */
+function charge(ports: Port[], taken: ReadonlySet<string>): Port[] {
+  if (!taken.size) return ports;
+  return ports.map(p => (taken.has(portKey(p.pt, p.dir))
+    ? { ...p, bias: (p.bias ?? 0) + PORT_REUSE }
+    : p));
+}
+
 function routePass(scene: Scene, opts: RouteAllOpts, order: string[]): { out: Map<string, RoutedDuct>; shared: string[] } {
   const byId = new Map(scene.nodes.map(n => [n.id, n]));
   const prior = opts.prior;
@@ -158,6 +191,13 @@ function routePass(scene: Scene, opts: RouteAllOpts, order: string[]): { out: Ma
   const out = new Map<string, RoutedDuct>();
   const used = new Set<string>();
   const crossed = new Set<string>();
+  // Ports an earlier run in this pass has already left (or arrived) by. Two runs
+  // through one port are drawn as one line until they separate, and the stub they
+  // share is usually shorter than a lattice edge, so `used` never sees it — this is
+  // the bookkeeping that does. Keyed on the point AND the direction: two runs may
+  // meet at a tee from opposite sides all day, and that is a junction, not an
+  // overlap.
+  const takenPorts = new Set<string>();
 
   const rank = new Map(order.map((id, i) => [id, i]));
   const ducts = [...scene.ducts].sort((a, b) => (rank.get(a.childId) ?? 0) - (rank.get(b.childId) ?? 0));
@@ -172,6 +212,7 @@ function routePass(scene: Scene, opts: RouteAllOpts, order: string[]): { out: Ma
     out.set(d.childId, held);
     for (const e of held.edges) used.add(e);
     for (const n of held.nodes) crossed.add(n);
+    for (const k of portsOfPath(held.pts)) takenPorts.add(k);
   }
 
   for (const d of ducts) {
@@ -182,8 +223,8 @@ function routePass(scene: Scene, opts: RouteAllOpts, order: string[]): { out: Ma
     const parent = d.outlet ? byId.get(d.outlet.unitId) : (d.parentId ? byId.get(d.parentId) : undefined);
     if (!parent) { out.set(d.childId, { pts: [], ok: false, edges: new Set(), nodes: new Set() }); continue; }
 
-    const from: Port[] = outPorts(parent, d.outlet?.index);
-    const to: Port[] = inPorts(child);
+    const from: Port[] = charge(outPorts(parent, d.outlet?.index), takenPorts);
+    const to: Port[] = charge(inPorts(child), takenPorts);
 
     // Two passes. The strict one treats EVERY device as an obstacle, including this
     // duct's own parent and child — otherwise a run is free to cut straight across
@@ -212,6 +253,7 @@ function routePass(scene: Scene, opts: RouteAllOpts, order: string[]): { out: Ma
 
     for (const e of res.edges) used.add(e);
     for (const n of res.nodes) crossed.add(n);
+    for (const k of portsOfPath(res.pts)) takenPorts.add(k);
     out.set(d.childId, { pts: res.pts, ok: res.ok, edges: res.edges, nodes: res.nodes });
   }
 
