@@ -37,6 +37,7 @@ import { CanvasViewport } from './canvas-viewport';
 import { fitText, plugLabel } from './plug-label';
 import {
   type Drives, DEFAULT_DRIVES, applyDrivesCache, canHost, drivesFromCaps, drivesFromHasLinear, resolveDrives,
+  unpairPrompt,
 } from '../boards/board-drives';
 import {
   PORT_H, SERVO_PORTS, TAB_H, TAB_W,
@@ -1965,10 +1966,16 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     const before = { dirty: this.dirty, saveError: this.saveError, saveNote: this.saveNote,
                      wip: this.wip, airflowErrors: this.airflowErrors, selectedId: this.selectedId,
                      lastTag: this.lastTag };
+    // Compared against the board as it stands, not against zero. A shop that ALREADY
+    // has an overlap somewhere is not a shop where every splice must be refused —
+    // the question is only whether this one makes it worse. Absolute was the first
+    // version and it would have greyed the menu shut on the demo layout, which has
+    // had two runs sharing 34px off one manifold outlet from the day it was drawn.
+    const was = routeAllShared(this.scene()).shared.length;
     try {
       if (!this.absorbTee(bd, kind)) this.insertInline(bd.childId, kind, { col: bd.col, row: bd.row });
       this.buildGraph(this.topo); this.syncNodes();
-      return routeAllShared(this.scene()).shared.length > 0;
+      return routeAllShared(this.scene()).shared.length > was;
     } finally {
       const state = JSON.parse(snap) as { topo: Topology; cells: [string, Cell][]; boards?: [string, Cell][] };
       this.topo = state.topo;
@@ -3157,8 +3164,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     const c = this.controllersRaw().find(x => x['id'] === id);
     const host = (c?.['link'] as { host?: string } | undefined)?.host;
     if (!host) { this.saveError = `${name} has no hostname to unpair — use Board setup.`; return; }
-    if (!window.confirm(`Unpair ${name}? The board stays powered and keeps its WiFi, `
-                      + `but this shop forgets it. Pair it again from Boards.`)) return;
+    if (!window.confirm(unpairPrompt(name))) return;
     this.saveError = ''; this.saveNote = '';
     try { await this.api.unpairNode(host); }
     catch { this.saveError = `Couldn't reach the controller — ${name} is still paired.`; return; }
@@ -4104,6 +4110,18 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     return { ...(this.topo as Record<string, unknown>), ui };
   }
 
+  /** The runs the router had to draw over another run, named by the piece each one
+   *  feeds — which is what the duct is called on this canvas.
+   *
+   *  Solves first rather than trusting the Router's last answer: the memo is keyed
+   *  on the scene, so asking for the routes is what makes `shared()` refer to the
+   *  board as it stands now. Both are cheap — the solve is memoized and this runs
+   *  from the guide getter. */
+  private overlappingRuns(): string[] {
+    this.routes();
+    return this.router.shared().map(id => this.byId.get(id)?.name ?? id);
+  }
+
   /** Live always-open leaks (tools with no gate on their path to the collector). */
   private liveLeaks(): AirflowIssue[] {
     if (!this.topo) return [];
@@ -4199,6 +4217,24 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     }
 
     if (this.saveNote) return { text: this.saveNote, kind: 'ok' };
+
+    // Two runs drawn on top of each other. Not a structural fault — the shop runs
+    // exactly as the document says, and the controller will take it — so it sits
+    // below everything that stops the shop. But it is not cosmetic either: the
+    // canvas is where the shop is AUTHORED, and a shared lane draws two runs as one
+    // line, so the picture stops saying which gate feeds what. The router refuses
+    // to share a lane and only gives that up when a board leaves it no choice
+    // (routeAllShared); until 2026-09-07 the fact was computed and discarded, so
+    // this said nothing at all.
+    const overlap = this.overlappingRuns();
+    if (overlap.length) {
+      const one = overlap.length === 1;
+      return {
+        kind: 'info',
+        text: `${overlap.join(', ')} ${one ? 'is' : 'are'} drawn over another run — there was no clear lane left. `
+            + `Move a piece to open one up, or leave it: the shop still works, the picture just can’t show ${one ? 'that run' : 'those runs'}.`,
+      };
+    }
 
     const ends = this.openEndCount();
     if (ends) {

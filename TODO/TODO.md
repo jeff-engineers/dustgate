@@ -22,13 +22,24 @@ than restated. Delete an item when it lands; the git history is the record.
   - `routeAll()` used to compute WHICH ducts had to share a lane and throw the
     list away. `routeAllShared()` returns it and `Router.shared()` keeps it from
     the last solve.
-  - **Still not surfaced anywhere.** `Router.shared()` has no reader. A shop
-    dragged into a corner can still end up with two runs drawn over each other —
-    that fallback is deliberate, the canvas has to draw something — but nothing
-    SAYS so. The guide bar should, the way a blocked drag names what is in the
-    way. That is the remaining half of this item.
-  - Every other path into an overlap is unguarded: dragging a piece, filling an
-    end, adding at an outlet. Only the branch-dot splice asks.
+  - The guide bar now names the runs that had to share a lane, at `info` — the
+    shop still works, the picture just can't show them.
+  - **Overlap is judged on what is DRAWN, not on the lattice** (2026-09-07). The
+    edge bookkeeping missed two shapes that reach the screen anyway: a sub-cell
+    stub between two adjacent glyphs claims no edge at all (Jeff's second report —
+    drag the Planer's ball valve up beside the Cyclone), and two ducts off ONE
+    outlet leaving in the same direction are the same edge taken by two runs that
+    both legitimately start there.
+  - **The demo layout has had an overlap since the day it was drawn** — 34px of
+    two runs off one manifold outlet, and every edge-based check ever run over it
+    said the board was clean. It is the standing example of the shape the router
+    cannot currently avoid: for a tee, both legs MUST leave the same point, so
+    only a different port choice separates them. Worth doing, not done.
+  - Every other path into an overlap still only REPORTS, it does not refuse:
+    dragging a piece, filling an end, adding at an outlet. Only the branch-dot
+    splice asks first — and it asks relatively (does this make it worse), since a
+    shop that already overlaps somewhere is not one where every splice must be
+    refused.
 
 - **A cable must never run ALONG a duct.** LANDED 2026-09-07. Crossing one is
   fine and stays cheap; riding one is priced (`CROSSING_COST.ductShare`), because
@@ -135,6 +146,7 @@ than restated. Delete an item when it lands; the git history is the record.
   numbered outlet icons, probably others. Low priority — and hover can't be the
   only way in (see the mockup rules), so whatever this becomes needs a tap path too.
 
+- **Fix zoom
 
 ## Carried debt
 

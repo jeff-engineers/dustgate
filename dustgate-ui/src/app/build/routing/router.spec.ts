@@ -509,6 +509,50 @@ group('R14 a capped end claims the width of its stopper bar');
      !segBoxHit({ ...a, x: capped.x + CAP_W / 2 }, { ...b, x: capped.x + CAP_W / 2 }, box));
 }
 
+// ── R15 · overlap is judged on what is DRAWN ─────────────────────────────────
+
+group('R15 overlaps the lattice cannot see are still reported');
+{
+  // The edge bookkeeping is the router's own currency and misses two shapes that
+  // reach the screen anyway. Both were found on the demo layout, one of them
+  // present since the day it was drawn.
+
+  // 1 · A shared origin. Two ducts off one tee, both leaving downward, are one
+  //     line until they separate. No edge is claimed twice — they are the SAME
+  //     edge, taken by two runs that both legitimately start there.
+  const s1 = scene(
+    [collector('dc', 0, 0), unit('g', 0, 1, 2), tool('a', 0, 3), tool('b', 0, 4)],
+    [{ childId: 'g', parentId: 'dc' },
+     { childId: 'a', outlet: { unitId: 'g', index: 0 } },
+     { childId: 'b', outlet: { unitId: 'g', index: 0 } }],
+  );
+  const r1 = routeAllShared(s1);
+  ok('two runs off one outlet, drawn one over the other, are reported',
+     r1.shared.length > 0, JSON.stringify([...r1.out].map(([k, v]) => [k, v.pts])));
+
+  // 2 · A clean board still reports nothing. The check is geometric now, so this
+  //     is the one that would catch it crying wolf on ordinary layouts.
+  const s2 = scene(
+    [collector('dc', 0, 0), unit('g', 0, 1, 2), tool('a', 0, 3), tool('b', 1, 3)],
+    [{ childId: 'g', parentId: 'dc' },
+     { childId: 'a', outlet: { unitId: 'g', index: 0 } },
+     { childId: 'b', outlet: { unitId: 'g', index: 1 } }],
+  );
+  ok('an ordinary board is still clean', routeAllShared(s2).shared.length === 0,
+     JSON.stringify(routeAllShared(s2).shared));
+
+  // A tee where the legs leave in DIFFERENT directions shares only the point they
+  // meet at, which is construction, not overlap.
+  const s3 = scene(
+    [collector('dc', 1, 0), unit('g', 0, 2, 3), tool('a', 0, 4), tool('b', 2, 4)],
+    [{ childId: 'g', parentId: 'dc' },
+     { childId: 'a', outlet: { unitId: 'g', index: 0 } },
+     { childId: 'b', outlet: { unitId: 'g', index: 2 } }],
+  );
+  ok('meeting at a point is not overlapping', routeAllShared(s3).shared.length === 0,
+     JSON.stringify(routeAllShared(s3).shared));
+}
+
 // ── summary ──────────────────────────────────────────────────────────────────
 
 console.log(`\n${checks - failures}/${checks} checks passed`);

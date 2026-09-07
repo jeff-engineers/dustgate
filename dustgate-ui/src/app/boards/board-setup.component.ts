@@ -7,6 +7,7 @@ import { ApiService, DiscoveredNode, NodeLinkState } from '../services/api.servi
 import type { Topology } from '@topology';
 import {
   type Drives, DEFAULT_DRIVES, applyDrivesCache, drivesFromCaps, drivesFromHasLinear, resolveDrives,
+  unpairPrompt,
 } from './board-drives';
 import {
   Controller, SERVO_CHANNELS_PER_BOARD,
@@ -160,8 +161,11 @@ interface BoardRow {
         <div class="actions">
           <ng-container *ngIf="renaming !== r.id; else renameActions">
             <button class="act" (click)="startRename(r)">Rename</button>
+            <!-- UNPAIR, not "Remove". The word is the guard: removing a board means
+                 forgetting hardware, and next to a Rename it reads like tidying a
+                 list. Same word as the canvas board menu. -->
             <button class="act" *ngIf="!r.primary"
-                    [disabled]="r.gates > 0" (click)="remove(r)">Remove</button>
+                    [disabled]="r.gates > 0" (click)="remove(r)">Unpair</button>
           </ng-container>
           <ng-template #renameActions>
             <button class="act add" (click)="commitRename()">Save</button>
@@ -369,6 +373,11 @@ export class BoardSetupComponent implements OnInit, OnDestroy {
       return;
     }
     this.blockedRemoval = '';
+    // Confirmed here as well as on the canvas. This screen used to unpair on a
+    // single click while the canvas asked first, which is the wrong way round: a
+    // row of boards with Rename beside Unpair is the easier of the two to hit by
+    // accident, and neither is undoable.
+    if (!window.confirm(unpairPrompt(r.name))) return;
     try {
       await this.api.unpairNode(r.host);
     } catch (e: unknown) {
