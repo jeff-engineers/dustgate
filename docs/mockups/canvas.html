@@ -362,6 +362,26 @@
         plainly and reads as a crossing; a bend is a fitting somebody has to buy and fit. So the
         router will cross a duct to avoid an elbow, and a <b>four-way junction is allowed</b> —
         no real fitting does that, but the map is clearer for it.</p>
+      <p class="note"><b>The trunk is drawn first, and everything else routes around it.</b>
+        Runs are solved down the tree from the collector, so the main trunk claims its lane
+        before anything hanging off it. It matters because an unclaimed lane is free: while the
+        trunk was solved last, the empty band along the top of the board looked to every other
+        run like open highway, and a manifold feed that took it left the trunk nesting itself
+        around the run that had stolen its line — one straight pipe drawn at three different
+        heights (D-70).</p>
+      <p class="note"><b>Sharing a lane is priced, never forbidden.</b> A rule that simply
+        banned it could not weigh the two pictures against each other, and would buy a clean
+        lane at any price at all — on the shop that reported this, a trip up to the collector's
+        line and back across the whole board, to avoid sharing two lattice steps with the leg
+        beside it. Nesting (above) is what makes the cost safe: the thing being steered away
+        from is a pair drawn side by side, not a pair drawn on top of each other.</p>
+      <p class="note"><b>No duct is ever drawn underneath a machine, gate, board or
+        collector.</b> Every body is an obstacle with clearance around it, so the router cannot
+        cross one. What the router cannot do anything about is a <em>fitting</em> seated inside
+        a body — a tee standing in a manifold's second cell has to be reached, and any line that
+        reaches it runs under the manifold. So this is really a placement rule, and it is
+        enforced where pieces are placed: <b>every cell a piece goes into is checked, branch
+        dots included</b> (section 3).</p>
     </div>
   </section>
 
@@ -394,6 +414,14 @@
               <td><span style="color:var(--success)">Allowed.</span> Never a reason to freeze the canvas.</td></tr>
         </table>
       </div>
+      <p class="note" style="margin-top:10px"><b>The occupied-cell rule governs more than a
+        drop.</b> Anywhere a piece is placed it is checked the same way, and that includes the
+        <b>branch dots</b> along a run: a dot rounds a point on the line to a cell, and clicking
+        it seats a tee there. A dot drawn over a piece therefore offers somewhere a tee cannot
+        stand, so those dots are not offered. It is not a hypothetical — a run passes a gate's
+        inlet half a cell above the gate, which rounds into the gate's own cell, so branching
+        there put a tee inside a manifold and the feed then went round three sides of the body
+        to reach it (D-70).</p>
       <p class="note" style="margin-top:10px">Advisory text is written in the present tense
         ("The duct will have to run through Table saw") and rendered muted, not amber — an
         alarm colour on a move that is about to succeed reads as "stop".</p>
