@@ -397,5 +397,65 @@ group('W13 two cables off one board come down different columns');
      && crossingCost(wall, [], [])(runs[1][1], runs[1][2]) === 0);
 }
 
+// ── W14 · a cable may cross a duct, but not ride on one ──────────────────────
+group('W14 a cable running ALONG a duct costs more than one crossing it');
+{
+  // Reported from the shop 2026-09-07: a cable came down the same column as a
+  // trunk and was swallowed by it — the duct is drawn at 6px and the cable at 2,
+  // so the wire is simply missing for as far as the two agree. Crossing stays
+  // cheap; only riding along is priced.
+  const trunk = [P(400, 100), P(400, 900)];              // a vertical duct
+  const along = crossingCost([], [trunk], [])(P(400, 200), P(400, 800));
+  const across = crossingCost([], [trunk], [])(P(200, 500), P(600, 500));
+
+  ok('crossing a duct still costs CROSSING_COST.duct', across === CROSSING_COST.duct);
+  ok('running along one costs CROSSING_COST.ductShare', along === CROSSING_COST.ductShare);
+  ok('...which is dearer than crossing it', CROSSING_COST.ductShare > CROSSING_COST.duct);
+  ok('dearer than crossing another cable, since a hidden wire is worse than a legible one',
+     CROSSING_COST.ductShare > CROSSING_COST.wire);
+  ok('but cheaper than wire-on-wire, which is indistinguishable rather than obscured',
+     CROSSING_COST.ductShare < CROSSING_COST.share);
+  ok('and nowhere near a device body, so a cable never tours the shop to dodge a trunk',
+     CROSSING_COST.ductShare < CROSSING_COST.box);
+
+  // The centrelines never coincide exactly on real geometry — the duct is 6px
+  // wide, so they overlap while still a few px apart. That near miss is the whole
+  // reason sharesLane's hairline default isn't enough here.
+  const nearMiss = crossingCost([], [trunk], [])(P(403, 200), P(403, 800));
+  ok('a cable 3px off the centreline is still riding on the duct',
+     nearMiss === CROSSING_COST.ductShare);
+  const clearOfIt = crossingCost([], [trunk], [])(P(420, 200), P(420, 800));
+  ok('one a gutter away is clear', clearOfIt === 0);
+
+  // Charged once per duct, worst verdict wins: an L-shaped duct the cable rides
+  // down one leg of and crosses the other pays the share, not share + crossing.
+  const elbow = [P(400, 100), P(400, 900), P(900, 900)];
+  ok('one duct is charged once, at its worst',
+     crossingCost([], [elbow], [])(P(400, 200), P(400, 800)) === CROSSING_COST.ductShare);
+}
+
+// ── W15 · the drop moves off a trunk it would otherwise ride ─────────────────
+group('W15 pickDrop steps a descent off a duct column');
+{
+  // End to end rather than by cost alone: the tab sits directly below its board
+  // with a trunk running down that exact column, which is the shop's case — the
+  // straight drop is available and the router has to decline it.
+  const from = P(cellX(4), cellY(0) + 22);
+  const to = P(cellX(4), cellY(5));
+  const trunk = [P(to.x, cellY(0)), P(to.x, cellY(6))];
+  const pts = cableRun(from, to, 0, 0, 0, crossingCost([], [trunk], []));
+  const verticals = segmentsOf(pts).filter(sg => Math.abs(sg[0].x - sg[1].x) < 0.5);
+  // The PORT_STUB is exempt, and has to be: the cable leaves the underside of its
+  // port whatever is below it (portExit), so a board standing over a trunk always
+  // puts its first 18px on that trunk. Those 18px are beside the board, where the
+  // port itself says what the line is. The DESCENT is the part that gets lost.
+  const descents = verticals.filter(sg => Math.abs(sg[0].y - sg[1].y) > PORT_STUB + 1);
+  const onTrunk = descents.some(sg => sharesLane(sg, [trunk[0], trunk[1]] as const, 6));
+  ok('the descent is not drawn down the trunk', !onTrunk,
+     JSON.stringify(pts.map(pt => [pt.x, pt.y])));
+  ok('and it stays close — one gutter over, not across the shop',
+     verticals.every(sg => Math.abs(sg[0].x - to.x) <= CELL), JSON.stringify(pts));
+}
+
 console.log(`\n${checks - failures}/${checks} checks passed`);
 process.exit(failures ? 1 : 0);

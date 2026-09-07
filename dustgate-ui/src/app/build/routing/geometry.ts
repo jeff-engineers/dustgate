@@ -110,6 +110,9 @@ export interface SceneNode {
   span: number;
   x: number;
   y: number;
+  /** A junction that is CAPPED — it draws a stopper bar rather than a dot, and the
+   *  bar is wider than the dot. Only meaningful on `glyph: 'junction'`. */
+  capped?: boolean;
   /** Shifts this device's TOP inlet off its centreline, so that when a machine's
    *  primary and secondary ports BOTH land on the top edge their glyphs don't stack.
    *
@@ -140,12 +143,24 @@ export function cellY(row: number): number { return PAD + row * CELL; }
 
 /** Half-width of a glyph. A unit is measured from its centre, which is why the
  *  span term is halved here but not in {@link deviceBox}. */
+/** The bar drawn across a CAPPED run end. A plain open end is a dot; a capped one
+ *  is a stopper, and it is wider than the junction it sits on — which is why the
+ *  routing footprint has to know about it (see halfW). Bound by the template, so
+ *  the drawn bar and the box ducts steer around are the same 28px. */
+export const CAP_W = 28;
+export const CAP_H = 10;
+
 export function halfW(n: SceneNode): number {
   if (n.isUnit) return (n.span - 1) * CELL / 2 + GATE_PAD;
   switch (n.glyph) {
     case 'collector': return COLLECTOR_HALF;
     case 'ballvalve': return 22;
-    case 'junction': return 8;
+    // A capped end draws a 28px stopper bar across the run; a plain one is a dot.
+    // Routed as 8 either way, the bar overhung its own clearance by 6px each side
+    // and another run allowed to pass flush along that boundary was drawn under it
+    // (2026-09-07, on a secondary run — the runs most likely to be routed past an
+    // end belonging to something else).
+    case 'junction': return n.capped ? CAP_W / 2 : 8;
     case 'secondaryPort': return SECONDARY_PORT_HALF;
     case 'board': return BOARD_W / 2;
     default: return TOOL_HALF_W;
@@ -157,6 +172,8 @@ export function halfH(n: SceneNode): number {
   switch (n.glyph) {
     case 'collector': return COLLECTOR_HALF;
     case 'ballvalve': return 22;
+    // Not CAP_H/2: the bar is 10 tall, shorter than the 8-half the junction already
+    // claims, so the dot's own clearance is the taller of the two. Only the width grew.
     case 'junction': return 8;
     case 'secondaryPort': return SECONDARY_PORT_HALF;
     case 'board': return BOARD_H / 2;

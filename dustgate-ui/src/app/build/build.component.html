@@ -150,7 +150,8 @@
           <g *ngSwitchCase="'junction'" [class.open-end]="isOpenEnd(n.id)">
             <circle fill="transparent" r="16"/>
             <circle *ngIf="isOpenEnd(n.id)" class="end-ring" r="10"/>
-            <rect *ngIf="isCap(n.id)" class="cap" x="-14" y="-5" width="28" height="10" rx="3"/>
+            <rect *ngIf="isCap(n.id)" class="cap" [attr.x]="-CAP_W / 2" [attr.y]="-CAP_H / 2"
+                  [attr.width]="CAP_W" [attr.height]="CAP_H" rx="3"/>
             <circle *ngIf="!isCap(n.id)" class="fillmuted dot" r="6"/>
           </g>
           <g *ngSwitchCase="'slidingGate'">
