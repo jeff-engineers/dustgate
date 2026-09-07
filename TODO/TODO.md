@@ -45,13 +45,55 @@ than restated. Delete an item when it lands; the git history is the record.
 
 ## UI
 
-- **Highlight a validation problem ON THE CANVAS.** The message half landed
-  2026-08-20 (`services/wip-message.ts`): the guide bar now names the piece and
-  the system instead of `s2`/`p8`. What is still missing is the graphical half —
-  every issue carries a `ref` (the element id), so the piece it is about is
-  already known and could be marked on the board. Wants a mockup first; it is a
-  new marking on the canvas, and there is no vocabulary for "this piece is the
-  problem" yet.
+- **Highlight a validation problem ON THE CANVAS. Now blocking, not nice-to-have
+  (2026-09-07).** The message half landed 2026-08-20 (`services/wip-message.ts`):
+  the guide bar names the piece and the system instead of `s2`/`p8`. The graphical
+  half is still missing — every issue carries a `ref` (the element id), so the
+  piece is already known and could be marked on the board.
+
+  What changed: overlapping ducts are now ALLOWED with a warning, because some
+  layouts genuinely cannot be drawn clean. A one-line bar at the top of a canvas
+  you are scrolled around in, naming two pieces, is not a way to find two lines
+  lying on top of each other. If we are going to permit the fault, the canvas has
+  to point at it.
+
+  Wants a mockup first — a new marking, and there is no vocabulary for "this piece
+  is the problem" yet, in a palette that is already busy (accent orange =
+  unfinished, red = danger, green = set up, azure = cable). It has to serve both
+  cases: a piece (validation `ref`) and a RUN (an overlap is about two ducts, not
+  two boxes).
+
+- **The stock layout looks bad, and the overlap rules are why (2026-09-07,
+  jeff).** Elbows that exist to satisfy the no-shared-lane rule rather than to get
+  anywhere — the picture pays for a constraint the eye did not ask for. **Try the
+  offset again**, on top of A* rather than instead of it.
+
+  Correcting the record while it is fresh: `laneOffset` was deleted in the routing
+  rewrite because the LOCAL router was being replaced by A*, not because staggered
+  parallel runs are a bad idea. The plan's line that the used-edge cost "replaces
+  laneOffset's stagger" is about the mechanism, and reading it as "offsets are
+  ruled out" is wrong — jeff, who made the call, says so. An offset applied to a
+  path A* has already solved is a different animal from the stack of local guesses
+  that came out.
+
+  Where it would pay: two runs that must share a corridor could be drawn a few px
+  apart and both stay legible, instead of one of them touring the board to find a
+  lane it does not need.
+
+- **Replace drag-to-branch on a duct with "move this run here" (2026-09-07,
+  jeff).** Today, dragging a branch dot tees in a passive leg. The more useful
+  gesture is moving the RUN — put it where I want it and keep it there, the way
+  moving a tee already works. That is also the honest answer to a run the router
+  has drawn somewhere ugly: let the person say where it goes, rather than adding
+  another rule to argue with. Needs a story for what "keep it there" means when
+  something later moves under it.
+
+- **No way to move a system, so the shop cannot be given breathing room.** Found
+  2026-09-07 while rearranging the demo layout by hand: a system owns a contiguous
+  row band, and there is no gesture for "push this system down" or for reordering
+  two systems. Everything inside the band would have to travel with it. Related to
+  the delete-a-system item below — both are missing verbs on a system rather than
+  on the pieces in it.
 
 - **Highlight ducts and wires on hover, so a run can be traced start to end.**
   A subtle GLOW is probably the right treatment — the line vocabulary is already
@@ -184,9 +226,17 @@ than restated. Delete an item when it lands; the git history is the record.
   answer — a MAC-derived default would make collisions structurally impossible,
   at the cost of names nobody can read.
 
-- **Nothing stops two tools or plugs from sharing names** - a tool and a plug
-  can have the same name, but not 2 tools or 2 plugs.  Really in general
-  we need to make sure names are distinct, at least acros systems
+- **Nothing stops two tools or plugs from sharing names.** A tool and a plug may
+  share one; two tools or two plugs should not. In general names need to be
+  distinct, at least across systems.
+
+  **Wants a brainstorm before code (2026-09-07, jeff).** The questions that have
+  to be answered first: is uniqueness per-shop or per-system; which KINDS collide
+  (tool vs tool, plug vs plug, gate vs gate, board vs board — and do a tool and a
+  gate collide?); what happens to shops already saved with duplicates; and whether
+  a duplicate blocks the rename, warns, or auto-suffixes. Names are typed in
+  several places (the canvas rename, the tool sheet, the Boards screen), so
+  wherever the rule lives it has to be one rule, not four.
 
 ## Testing
 
