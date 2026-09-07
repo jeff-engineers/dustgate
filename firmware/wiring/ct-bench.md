@@ -8,16 +8,42 @@ well enough for DustGate's routing. Firmware:
 
 ## Wiring
 
-```
-                 3V3 ──┬── [10k] ──┬── CT lead A ── ADC (D0)
-                       │           │
-                       │        [10uF] ── GND        (bias midpoint)
-                       │           │
-                 GND ──┴── [10k] ──┘── CT lead B ────┘
-```
+**REWRITTEN 2026-09-06 — the first version was a confusing schematic and got the
+rig built with D0 at ground, which reads a beautiful and entirely fictional
+0.000 A.** So: as a build, not a drawing.
 
-Both CT leads across the midpoint and D0. Cut the 3.5 mm plug off the SCT-013 and
-use the bare wires; polarity does not matter for an RMS reading.
+**Pick one empty row on the breadboard.** Everything either goes into that row or
+it does not.
+
+| | Goes from | To |
+|---|---|---|
+| 10 kΩ | the `3V3` rail | **that row** |
+| 10 kΩ | **that row** | the `GND` rail |
+| 10 µF | **that row** (long leg / `+`) | the `GND` rail |
+| CT wire 1 | the CT | **that row** |
+| CT wire 2 | the CT | **`D0`** |
+
+That row ends up with four things in it: two resistor legs, the capacitor's `+`
+leg, and one CT wire. **`D0` ends up with exactly one thing in it** — the other CT
+wire — and that is the part that matters. D0 takes its DC level *through the CT
+winding*, which is a few ohms of copper, so it rests halfway up the supply with
+the CT's signal on top. Anything else on D0, ground above all, swamps the two
+10 kΩ resistors and pins the input.
+
+**The check, before believing any number.** Meter between that row and GND: it
+should read **~1.65 V**, which is just the two resistors halving 3.3 V. The
+console also prints `DC ####mV` on every status line and it should say the same.
+`0mV` or `3300mV` means the input is railed, and every reading is meaningless —
+the variance of a constant is zero, which looks exactly like a perfectly quiet
+sensor.
+
+Cut the 3.5 mm plug off the SCT-013 and use the bare wires; polarity does not
+matter for an RMS reading.
+
+**Check it before believing any number:** the console prints `DC ####mV` on every
+line. It must read **~1650 mV**. `0mV` or `3300mV` means the input is railed and
+every reading is meaningless — the variance of a constant is zero, which looks
+exactly like a perfectly quiet sensor.
 
 | | |
 |---|---|

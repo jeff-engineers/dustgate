@@ -556,7 +556,7 @@ loaded primary**:
 | Pad | GPIO | Use |
 |---|---|---|
 | **D6** | 11 | **bin sensor in** — ordinary pad, free on every build except the slider, and a collector board will never also be a slider rack |
-| **D0** | 1 | **reserved: CT** — the only analog pad on the edge. Do not spend it on anything else |
+| **D0** | 1 | **reserved: CT** — the only analog pad on the edge. Do not spend it on anything else. ⚠️ And it does not come free: the OLED's charge pump puts ~0.4 A of apparent current on it through a 10k/10k bias divider, measured 2026-09-06. See [`tool-sensing-rfc.md`](tool-sensing-rfc.md) §5.5 before designing a board that senses current and has a screen |
 
 **The RF transmitter does not fit on a four-servo primary, and should not have
 been asked to.** It belongs on the board *at the collector*: that is where the

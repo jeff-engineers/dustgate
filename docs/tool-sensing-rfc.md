@@ -350,6 +350,51 @@ as off.
 box is out and the contactor build comes back** — it is preserved in §13 rather
 than deleted for exactly that reason.
 
+### 4.3 Direction: Shelly for collectors, Tasmota for tools (2026-09-09)
+
+Jeff, leaning: **stop allowing Shelly on tools entirely**, keep it for collectors
+where switching is the job — a small or medium collector with a relay big enough
+for its inrush is a legitimate use, and §3's safety argument does not apply to a
+blower the way it applies to a table saw.
+
+The schema already encodes half of this: a `tasmota` under a collector's
+`control.outlet` is a validation error, because a plug with no relay cannot
+switch. **The mirror rule is `shelly` under a tool's `sensor.outlet`**, and it
+can become a hard error the same way — but not yet, because every layout written
+so far has Shellys on tools and there is no migration path. Deprecate first,
+enforce after.
+
+**Not before Tasmota is proven.** Jeff has one plug and wants confidence before
+buying a shop's worth. What "proven" means, concretely:
+
+| | |
+|---|---|
+| **Polling load** | **The one to watch.** See below — it is the risk this whole direction rests on |
+| A real session | Drives a real tool for a full session without dropping out or missing a start |
+| Threshold behaviour | No false trips on standby, no missed starts. The measured plug reports 26 W idle on a massager — a real tool's standby is what matters |
+| Power cycle | Survives one, and reconnects to WiFi without help |
+| The claim persists | `Mem1` still holds our hostname afterwards |
+| Thermal | Warm, not hot, at the tool's actual current over a long cut |
+
+#### The polling load, which §6 did not account for
+
+**A Shelly pushes. A Tasmota cannot.** `Ws.SetConfig` points a Shelly at us and it
+reports itself — that is why `readPushConfig()` is the ownership authority in the
+first place. Tasmota has no equivalent, so every Tasmota is **polled at
+`OUTLET_POLL_INTERVAL_MS` (500 ms), permanently**.
+
+At `SMART_OUTLET_COUNT` = 7 that is **14 requests/second** leaving the ESP32, and
+**2 req/s arriving at each ESP8285**, forever, for the life of the shop.
+
+§6 argued for one driver rather than two and that argument still holds — but it
+was about the DRIVER, and losing push changes the TRAFFIC PROFILE, which is a
+different thing entirely. Unmeasured. If it does not hold up, the fix is a
+slower cadence for `kind: tasmota` specifically: a tool starting is not a
+500 ms-latency event, and the collector's own spin-up grace is already 4 s.
+
+That would make the poll interval kind-dependent, which is a small change and an
+honest one — the two device types have genuinely different economics.
+
 ## 5. The 240V / hardwired sensor
 
 240V single-phase in the US is two hots and no neutral, with the motor in series
@@ -414,50 +459,53 @@ open nothing*, and the 240V and hardwired cases stop being the awkward ones.
 That is a large enough prize to test before committing to the split-core path.
 **Untested.** §9 says how.
 
-### 4.3 Direction: Shelly for collectors, Tasmota for tools (2026-09-09)
+### 5.5 The screen is a noise source, and every board has one
 
-Jeff, leaning: **stop allowing Shelly on tools entirely**, keep it for collectors
-where switching is the job — a small or medium collector with a relay big enough
-for its inrush is a legitimate use, and §3's safety argument does not apply to a
-blower the way it applies to a table saw.
+**Measured 2026-09-06, on the bench rig in `firmware/bench/ct_bench.cpp`:**
 
-The schema already encodes half of this: a `tasmota` under a collector's
-`control.outlet` is a validation error, because a plug with no relay cannot
-switch. **The mirror rule is `shelly` under a tool's `sensor.outlet`**, and it
-can become a hard error the same way — but not yet, because every layout written
-so far has Shellys on tools and there is no migration path. Deprecate first,
-enforce after.
-
-**Not before Tasmota is proven.** Jeff has one plug and wants confidence before
-buying a shop's worth. What "proven" means, concretely:
-
-| | |
+| | Apparent current on a DEAD wire |
 |---|---|
-| **Polling load** | **The one to watch.** See below — it is the risk this whole direction rests on |
-| A real session | Drives a real tool for a full session without dropping out or missing a start |
-| Threshold behaviour | No false trips on standby, no missed starts. The measured plug reports 26 W idle on a massager — a real tool's standby is what matters |
-| Power cycle | Survives one, and reconnects to WiFi without help |
-| The claim persists | `Mem1` still holds our hostname afterwards |
-| Thermal | Warm, not hot, at the tool's actual current over a long cut |
+| OLED connected | **~0.4 A** (≈13 mV RMS) |
+| OLED unplugged | **under 1 mV RMS**, i.e. below 0.03 A — under the instrument's resolution |
 
-#### The polling load, which §6 did not account for
+`SSD1306_SWITCHCAPVCC` means the panel generates its own ~7–9 V from 3.3 V with a
+switching charge pump, sharing the rail with the ADC's bias divider. `DISPLAYOFF`
+stops the pump, not just the pixels, so the bench console has a `screen` toggle
+and `zero` now warns when it is measuring with the panel live.
 
-**A Shelly pushes. A Tasmota cannot.** `Ws.SetConfig` points a Shelly at us and it
-reports itself — that is why `readPushConfig()` is the ownership authority in the
-first place. Tasmota has no equivalent, so every Tasmota is **polled at
-`OUTLET_POLL_INTERVAL_MS` (500 ms), permanently**.
+**This is structural, not a bench artifact.** Every DustGate env assumes a screen
+(CLAUDE.md), the panel sits on D4/D5, and the CT's analog pad is D0 on the same
+board and the same rail. A shipping board that senses current AND has a display
+hits this by construction. It is the same shape of problem as the strapping-pin
+error in §7.5 of the schema RFC: a pad that looked free, and was not.
 
-At `SMART_OUTLET_COUNT` = 7 that is **14 requests/second** leaving the ESP32, and
-**2 req/s arriving at each ESP8285**, forever, for the life of the shop.
+**The divider I specified made it worse.** 10 kΩ/10 kΩ presents **5 kΩ** to the
+ADC pin — high enough that the sampling capacitor does not fully settle, and a
+fine antenna besides. The fix, unvalidated:
 
-§6 argued for one driver rather than two and that argument still holds — but it
-was about the DRIVER, and losing push changes the TRAFFIC PROFILE, which is a
-different thing entirely. Unmeasured. If it does not hold up, the fix is a
-slower cadence for `kind: tasmota` specifically: a tool starting is not a
-500 ms-latency event, and the collector's own spin-up grace is already 4 s.
+- **1 kΩ / 1 kΩ**, dropping the source impedance to 500 Ω. Costs 3.3 mA, which is
+  nothing on USB power.
+- **100 nF ceramic** at the pin alongside the 10 µF. The electrolytic does
+  nothing above a few kHz, which is exactly where a charge pump lives.
 
-That would make the poll interval kind-dependent, which is a small change and an
-honest one — the two device types have genuinely different economics.
+**Validate with the screen ON.** That is the condition that breaks it, so a quiet
+reading with the panel unplugged proves nothing about a shipping board.
+
+#### What this does to the threshold question
+
+Unsettled, and the direction moved twice. The first measurement — screen on —
+gave a 0.053 A floor and the tool declared `DEFAULT_THRESHOLD_W` (5 W = 0.042 A)
+unreachable. Screen off it is under 0.03 A and 5 W is back in play, but the
+number is quantization-limited rather than measured: `analogReadMilliVolts()`
+returns whole millivolts, so a genuinely quiet input reads *exactly* zero and
+hides everything below 0.03 A. The console now samples raw counts (~0.61 mV/LSB)
+to see past that.
+
+So the honest state: **a running tool is never in doubt** — the peak against the
+floor was ~80× even on the noisy measurement — and **the low-end threshold is
+still unknown**. What it settles into decides whether a CT-sensed tool can share
+`DEFAULT_THRESHOLD_W` with a plug-sensed one or needs its own, which is a model
+question, not just a tuning one.
 
 ## 6. One seam, not two: emulate Tasmota
 
