@@ -1,4 +1,9 @@
-:host { display: flex; flex-direction: column; height: 100dvh; height: 100vh; overflow: hidden; }
+/* 100vh FIRST, 100dvh second: the second wins wherever both parse, and dvh is the
+   one that tracks Safari's collapsing URL bar. The other order (which is what this
+   was until 2026-09-07) made mobile Safari lay the page out against the LARGE
+   viewport, so the toolbar and guide bar sat under the browser chrome with no way
+   to scroll them back into view — the canvas is the scroller, not the page. */
+:host { display: flex; flex-direction: column; height: 100vh; height: 100dvh; overflow: hidden; }
 /* Wraps rather than clips: the row already overflowed a phone-width viewport
    before Boards was added, silently pushing Save off the edge. */
 .bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; padding: 12px 16px;
@@ -38,6 +43,64 @@
    instead of moving the piece. Since the split has to live in code anyway, the
    root takes "none" and onCanvasDown/pinch below implement pan and zoom. */
 svg.canvas { display: block; touch-action: none; }
+/* Set on the SVG and its text directly as well as inherited from :host below —
+   WebKit has not always carried user-select down into SVG <text>. */
+svg.canvas, svg.canvas text { -webkit-user-select: none; user-select: none; }
+
+/* ON A TOUCH DEVICE, NO TEXT ON THE CANVAS TAKES THE POINTER AT ALL.
+   user-select governs what may be SELECTED; it does not reliably govern what iOS
+   does with a long press on SVG text, and a machine's name kept raising Select /
+   Look Up / Translate with every selection rule above already in force (jeff,
+   2026-09-07, long-pressing the word "Planer"). Nothing can be looked up if the
+   press never lands on the text: every glyph's name, caption and number is drawn
+   INSIDE a group whose shapes handle the press — the tool box under its own name,
+   the plug row's rounded rect under its reading — so the gesture arrives exactly
+   where it did before, minus the platform's opinion about words.
+
+   Touch only, and that is not caution: on a desktop the same text carries the
+   native <title> tooltip that shows a name too long to draw in full, and that
+   needs hit-testing to appear. A phone has no hover, so it never had that anyway.
+   The one thing given up: on a phone, a tap on a GATE's caption — drawn above its
+   body rather than inside it — no longer selects the gate. The body is right below
+   it and much the bigger target. */
+@media (hover: none) {
+  svg.canvas text { pointer-events: none; }
+  /* AND THE NAME FIELD, WHICH IS THE SAME PROBLEM WEARING A DIFFERENT ELEMENT.
+     A selected piece draws its name as a live <input> on top of its glyph, z-index
+     20 — so the press AFTER a drag (which leaves the piece selected) never reached
+     the drawing at all: it landed in a text field, which is exempt from the rule
+     above, exempt from the touchstart suppression by design, and gives you the
+     platform's editing callout. That is the "Look Up on the second press", and the
+     same thing is why a box could not be dragged twice (jeff, 2026-09-07).
+     Unfocused it is a label and behaves like one; the menu's Rename is what makes
+     it a field, and focusName() puts the caret in it. */
+  .nameedit:not(.editing):not(:focus) { pointer-events: none; }
+}
+
+/* NOTHING ON THIS SCREEN IS TEXT YOU SELECT — it is a drawing whose glyphs happen to
+   carry names. Left selectable, a press-and-hold (which is now how a piece is picked
+   up on touch) fired the platform's own long-press instead: iOS raised the callout
+   and the magnifier, a name came up highlighted, and a SECOND press landing on that
+   selection was taken as "drag the selected text" — so the same box could not be
+   moved twice (jeff, 2026-09-07). The selection also survived the gesture and sat
+   there in blue until something else cleared it, and iOS offered Look Up / Translate
+   over a machine that was already following the finger. It covers the whole screen,
+   not just the canvas: a long press on the toolbar or the guide bar has never meant
+   anything either, and the platform's callout there is the same interruption. */
+:host { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+/* The name fields are the exception — real <input>s, where selecting text is the
+   whole point — but only ONCE YOU ARE IN ONE. A selected piece draws its label as a
+   live input sitting on its glyph, so on a phone the label of the piece you are
+   about to drag is a text field, and a long press on it got iOS's text callout
+   (Select · Look Up · Translate) no matter what the canvas underneath said. That is
+   the callout in jeff's screenshot, 2026-09-07. Unfocused it is a label and behaves
+   like one; focused it is a field again. Focus does not need selection, so tapping
+   the name still puts a caret in it. */
+:host input { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+/* `.editing` is set by the component's own focus/blur handlers; `:focus` is kept
+   beside it as the ordinary case. Two selectors for one state, because the field is
+   also unreachable-by-pointer on touch until this matches. */
+:host input:focus, :host input.editing { -webkit-user-select: text; user-select: text; }
 
 /* Zoom control. Floating over the canvas rather than in the toolbar, which
    already wraps to two rows on a phone. Bottom-right, thumb-reachable, and clear

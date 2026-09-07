@@ -218,14 +218,6 @@ than restated. Delete an item when it lands; the git history is the record.
   numbered outlet icons, probably others. Low priority — and hover can't be the
   only way in (see the mockup rules), so whatever this becomes needs a tap path too.
 
-- **Fix zoom on mobile** We start out very zoomed out, should probably start closer to 60% zoom.
-  Also, once zoomed out, the top of the page gets buried under the navigation on safari, meaning
-  I can never clearly see that again.  
-
-- **Improve drag and drop vs scroll accuracy on mobile** Can we add a small delay to drag and drop
-  when on mobile? Turn it into a long press then drag? Without that, it makes scrolling on mobile
-  risky since you're likely to accidentally grab the contents of a cell instead of hitting empty space.s  
-
 ## Carried debt
 
 - **`POST /api/dustcollector/switch` is dead under a shop.** It drives collector

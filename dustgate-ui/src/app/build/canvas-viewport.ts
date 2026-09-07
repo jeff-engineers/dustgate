@@ -67,6 +67,7 @@ export class CanvasViewport {
     // Bound by hand, not in the template: both must be non-passive to preventDefault.
     setTimeout(() => {
       const wrap = this.host.wrapEl(); if (!wrap) return;
+      wrap.addEventListener('touchstart', this.noCallout, { passive: false });
       wrap.addEventListener('touchstart', this.pinchStart, { passive: false });
       wrap.addEventListener('touchmove', this.pinchMove, { passive: false });
       wrap.addEventListener('touchend', this.pinchEnd);
@@ -89,6 +90,7 @@ export class CanvasViewport {
     window.removeEventListener('pointerup', this.panUp);
     window.removeEventListener('pointercancel', this.panUp);
     const wrap = this.host.wrapEl();
+    wrap?.removeEventListener('touchstart', this.noCallout);
     wrap?.removeEventListener('touchstart', this.pinchStart);
     wrap?.removeEventListener('touchmove', this.pinchMove);
     wrap?.removeEventListener('touchend', this.pinchEnd);
@@ -126,7 +128,7 @@ export class CanvasViewport {
     if (!this.didFit) { this.maybeFit(); return; }
     // Still framed as we left it: keep it framed. Touched by hand: leave it alone.
     if (this.userZoomed) return;
-    const z = this.fitZoom();
+    const z = this.openZoom();
     if (Math.abs(z - this.zoom) > 0.005) { this.setZoom(z); this.scrollToOrigin(); }
   }
 
@@ -153,6 +155,21 @@ export class CanvasViewport {
     return Math.max(this.ZOOM_MIN, Math.min(1, z));
   }
 
+  /** Floor for the scale a phone OPENS at. Fitting a whole shop on a 375px screen
+   *  lands around 36%, where a tool's name is a grey smudge and every glyph is too
+   *  small to aim at — an overview you cannot read or use is not worth landing on.
+   *  So the opening frame prefers legibility over completeness: you start at the
+   *  top-left of the shop, at a scale you can work at, and pan or pinch for the rest.
+   *  The (%) button still fits the whole shop on demand — asked for, not imposed. */
+  private readonly OPEN_ZOOM_MIN = 0.6;
+
+  /** The scale the canvas frames itself at with no input from the user: the fit,
+   *  raised to something readable. Never above the fit, so a small shop that fits at
+   *  85% opens at 85% rather than being blown up to 60%-of-nothing. */
+  private openZoom(): number {
+    return Math.max(Math.min(this.fitZoom(), 1), Math.min(this.OPEN_ZOOM_MIN, 1));
+  }
+
   /** True when we're already showing the whole board, within rounding. */
   atFit(): boolean { return Math.abs(this.zoom - this.fitZoom()) < 0.01; }
 
@@ -162,7 +179,11 @@ export class CanvasViewport {
   resetZoom(): void {
     const fit = this.fitZoom();
     const toFit = !this.atFit();
-    this.userZoomed = !toFit;          // going back to fit re-arms auto-reframing
+    // Either way this is a scale the user PICKED, so stop auto-reframing. It used to
+    // re-arm on the way back to fit, which was right while the automatic scale WAS
+    // the fit; now that opening prefers legibility over fit, re-arming would quietly
+    // undo a deliberate "show me everything" the next time the phone was rotated.
+    this.userZoomed = true;
     this.setZoom(toFit ? fit : 1);
     if (toFit) this.scrollToOrigin();
   }
@@ -183,7 +204,7 @@ export class CanvasViewport {
     this.fitToViewport();
   }
   private fitToViewport(): void {
-    const z = this.fitZoom();
+    const z = this.openZoom();
     if (z >= 1) { this.didFit = true; return; }
     this.setZoom(z);
     this.scrollToOrigin();
@@ -240,6 +261,16 @@ export class CanvasViewport {
     window.addEventListener('pointermove', this.panMove);
     window.addEventListener('pointerup', this.panUp);
     window.addEventListener('pointercancel', this.panUp);
+  }
+  /** Give up a pan that has gone nowhere, because the press turned out to be
+   *  something else — a hold that armed a drag, or a tap. Deliberately not panUp():
+   *  there is no travel to glide from, and nothing that reads `moved`. */
+  cancelPan(): void {
+    this.panning = null;
+    this.vx = 0; this.vy = 0;
+    window.removeEventListener('pointermove', this.panMove);
+    window.removeEventListener('pointerup', this.panUp);
+    window.removeEventListener('pointercancel', this.panUp);
   }
   private readonly panMove = (e: PointerEvent): void => {
     const p = this.panning, wrap = this.host.wrapEl();
@@ -326,6 +357,24 @@ export class CanvasViewport {
     if (this.edge?.raf) cancelAnimationFrame(this.edge.raf);
     this.edge = null;
   }
+
+  /** iOS decides for itself what a long press on the page means — the magnifier, a
+   *  selection, the Select / Look Up / Translate callout — and it decides it from the
+   *  TOUCH stream. That is why preventing the POINTER event's default did not stop it,
+   *  and why the user-select rules only ever got part of the way: those govern what
+   *  can be selected, not whether the gesture is claimed. Preventing the touchstart's
+   *  default is what declines the whole thing, and it has to happen here because a
+   *  listener bound in the template cannot be non-passive.
+   *
+   *  FORM CONTROLS ARE EXEMPT. preventDefault also suppresses the synthesized click,
+   *  so swallowing it over the name field would leave a field that can never be
+   *  focused — and typing a machine's name is the one thing on this canvas that is
+   *  genuinely text. */
+  private readonly noCallout = (e: TouchEvent): void => {
+    const t = e.target as Element | null;
+    if (t?.closest?.('input, textarea, select, [contenteditable]')) return;
+    if (e.cancelable) e.preventDefault();
+  };
 
   private readonly pinchStart = (e: TouchEvent): void => {
     if (e.touches.length !== 2) return;
