@@ -1562,6 +1562,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     }
     this.focus(n.id);
     this.selectedId = n.id; this.menu = null;
+    this.pressedGlyph = n.id;                 // lights the trace, until the release
     this.dragId = n.id;
     const pt = this.toSvg(evt);
     this.grab = { dx: pt.x - this.nx(n), dy: pt.y - this.ny(n) };
@@ -1634,6 +1635,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     this.detachDrag();
   }
   private detachDrag(): void {
+    this.releaseTrace();
     this.vp.endEdgeScroll();
     window.removeEventListener('pointermove', this.moveH);
     window.removeEventListener('pointerup', this.upH);
@@ -4750,6 +4752,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   private buildGraph(t: Topology): void {
+    this.graphRev++;
     this.parentOf.clear(); this.outletOf.clear(); this.systemOf.clear();
     // Every system, not just the drawn-on one: the canvas shows the whole shop now,
     // and the id → system index below is what keeps the writes pointed at the right
@@ -5158,6 +5161,76 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       y1: PAD + b.hi * CELL + CELL / 2 - GROUND_INSET,
     }));
   }
+  // ── tracing the selected run ────────────────────────────────────────────────
+  /** Bumped whenever the duct graph is rebuilt, so the trace memo below knows to
+   *  drop what it worked out about the old one. */
+  private graphRev = 0;
+  private traced: { key: string; runs: Set<string>; pieces: Set<string> } | null = null;
+  /**
+   * The glyph currently being PRESSED — the trace is lit for exactly as long as the
+   * button is held on it, and for nothing else.
+   *
+   * Selection is sticky and the trace is not, which is the whole point: a selection
+   * says what you are working on, and "where does this run go" is a question you ask
+   * for a second and have then answered (jeff, 2026-09-07 — first that the highlight
+   * should not outlive the pointer leaving the glyph, then that press-and-hold is
+   * the gesture). Nothing special is needed for touch: a finger held on a machine
+   * lights the same path a mouse button does, and lifting it reverts.
+   *
+   * It stays lit THROUGH a drag, which was not the first answer: the trace let go
+   * once a press crossed the drag threshold, on the grounds that it would compete
+   * with the drop guidance. That argument was really about the dimming, and the
+   * dimming is gone — with only the rim left, keeping it through the drag shows you
+   * the run you are moving, which is worth having (jeff, 2026-09-07).
+   */
+  private pressedGlyph: string | null = null;
+
+  private releaseTrace(): void { this.pressedGlyph = null; }
+
+  /**
+   * Everything between the selected piece and its collector.
+   *
+   * UPSTREAM ONLY. Every port has exactly one parent, so "back to the collector" is a
+   * single chain with nothing to guess — the same walk the live-state highlight has
+   * always done. Continuing the other way was built, tried and cut (D-68): it has to
+   * stop at the first fork, and a highlight that halts partway along a run that
+   * plainly carries on is a fact about the drawing rather than about the shop.
+   *
+   * Memoized on the selection and the graph revision because the template asks per
+   * duct and per glyph, on every change-detection pass.
+   */
+  private tracePath(): { runs: Set<string>; pieces: Set<string> } {
+    const key = `${this.pressedGlyph ?? ''}|${this.graphRev}`;
+    if (this.traced?.key === key) return this.traced;
+    const runs = new Set<string>(), pieces = new Set<string>();
+    let cur = this.pressedGlyph ?? undefined;
+    if (cur) {
+      pieces.add(cur);
+      // `runs` is keyed by CHILD id, which is also how a duct is identified
+      // everywhere else — the run INTO a piece is the piece's own entry.
+      while (cur && this.parentOf.has(cur)) {
+        runs.add(cur);
+        cur = this.parentOf.get(cur);
+        if (cur) pieces.add(cur);
+      }
+      // A tool has no cable of its own: what drives it is the gate upstream, so the
+      // board at the end of that gate's cable belongs on the path too. Nothing here
+      // reaches for a cable the selection cannot claim through its own ductwork.
+      for (const c of this.cables()) if (pieces.has(c.gateId)) pieces.add(c.boardId);
+    }
+    this.traced = { key, runs, pieces };
+    return this.traced;
+  }
+
+  /** Is this piece on the traced path? */
+  onPath(id: string): boolean { return this.tracePath().pieces.has(id); }
+  /** Is this RUN on it? Keyed by child id, like every other duct lookup. */
+  runOnPath(childId: string): boolean { return this.tracePath().runs.has(childId); }
+  /** A cable is lit when the gate it drives is on the path. */
+  cableOnPath(c: CableVM): boolean { return this.tracePath().pieces.has(c.gateId); }
+  /** Just the lit ones, so the template can lay their casings down first. */
+  litCables(): CableVM[] { return this.cables().filter(c => this.cableOnPath(c)); }
+
   private childrenOf(id: string): string[] { const out: string[] = []; for (const [c, p] of this.parentOf) if (p === id) out.push(c); return out; }
   private canAddChild(id: string): boolean {
     const el = this.elem(id); if (!el) return false;

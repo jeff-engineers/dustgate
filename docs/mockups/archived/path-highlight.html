@@ -1,0 +1,357 @@
+<meta charset="utf-8">
+<title>Tracing a run from the piece you picked</title>
+
+<style>
+  :root {
+    --bg: #111; --surface: #1e1e1e; --raised: #262626; --border: #2e2e2e;
+    --text: #e8e8e8; --muted: #8a8a86; --accent: #f0a500; --success: #3cbe6e;
+    --danger: #d94444; --duct: #3a3a3a; --cable: #38b6f0; --radius: 14px;
+    --lit: #cfcfcb;            /* a duct on the traced path */
+    --lit-cable: #7fd4ff;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); margin: 0; padding: 22px 18px 72px;
+         font-family: system-ui, -apple-system, sans-serif; font-size: 15px; line-height: 1.5; }
+  .wrap { max-width: 1080px; margin: 0 auto; display: flex; flex-direction: column; gap: 24px; }
+  h1 { font-size: 22px; font-weight: 600; margin: 6px 0 0; letter-spacing: -0.01em; text-wrap: balance; }
+  h3 { font-size: 15px; font-weight: 600; margin: 0 0 2px; }
+  .lede { color: var(--muted); font-size: 13.5px; max-width: 70ch; margin: 6px 0 0; }
+  .eyebrow { font-size: 11px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--muted); }
+  p { margin: 0; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.92em; }
+  a { color: var(--accent); }
+  .rule { height: 1px; background: var(--border); border: 0; margin: 0; }
+  .sec { display: flex; flex-direction: column; gap: 12px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 15px 16px; }
+  .card p + p { margin-top: 9px; }
+  .note { font-size: 12.5px; color: var(--muted); line-height: 1.55; }
+  .note b { color: var(--text); font-weight: 600; }
+  .flag { border-left: 3px solid var(--accent); padding-left: 12px; }
+  .flag.open { border-left-color: var(--muted); }
+  .pill { display: inline-block; font-size: 10.5px; letter-spacing: 0.07em; text-transform: uppercase;
+          border: 1px solid var(--border); border-radius: 999px; padding: 3px 9px; color: var(--muted); }
+  .pill.rec { border-color: #3d5c48; color: var(--success); }
+
+  .stage { background: #161616; border: 1px solid var(--border); border-radius: var(--radius); padding: 6px; }
+  .stage svg { display: block; width: 100%; height: auto; }
+  .bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
+  .bar .grp { display: flex; gap: 0; border: 1px solid var(--border); border-radius: 9px; overflow: hidden; }
+  .bar button { background: var(--raised); color: var(--muted); border: 0; border-right: 1px solid var(--border);
+                font: inherit; font-size: 12px; padding: 6px 11px; cursor: pointer; }
+  .bar button:last-child { border-right: 0; }
+  .bar button[aria-pressed="true"] { background: #33312a; color: var(--accent); }
+  .said { font-size: 12.5px; color: var(--muted); min-height: 1.5em; }
+  .said b { color: var(--text); }
+
+  /* ── canvas ink ─────────────────────────────────────────────────────── */
+  .duct  { fill: none; stroke: var(--duct); stroke-width: 7; stroke-linecap: round; stroke-linejoin: round; }
+  .duct.sec { stroke-width: 5; stroke-dasharray: 11 8; }
+  .cable { fill: none; stroke: var(--cable); stroke-width: 2.4; }
+  .coll  { fill: #241d33; stroke: #6b4fa8; stroke-width: 2; }
+  .body  { fill: #16262e; stroke: #2d6a86; stroke-width: 2; }
+  .board { fill: #221c10; stroke: #6b5620; stroke-width: 2; }
+  .unit  { fill: var(--surface); stroke: #444; stroke-width: 1.6; }
+  .gate  { fill: #1a1a1a; stroke: #5a5a5a; stroke-width: 2; }
+  .disc  { stroke: #9a9a9a; stroke-width: 3; }
+  .jdot  { fill: #4a4a4a; }
+  .sport { fill: #2d6a86; }
+  .lbl   { fill: var(--text); font-size: 11.5px; text-anchor: middle; font-weight: 500; }
+  .sub   { fill: var(--muted); font-size: 8.5px; text-anchor: middle; letter-spacing: 0.09em; }
+  .gatelbl { fill: var(--muted); font-size: 9px; text-anchor: middle; letter-spacing: 0.08em; }
+  .tiny  { fill: var(--muted); font-size: 9.5px; }
+  .node  { cursor: pointer; }
+
+  /* ── the treatments, switched by a class on <svg> ───────────────────── */
+  svg .duct, svg .cable, svg .node { transition: opacity .13s ease, stroke .13s ease; }
+
+  /* dim: focus dims rather than hides */
+  svg.dim.has-pick .duct:not(.on),
+  svg.dim.has-pick .cable:not(.on) { opacity: .3; }
+  svg.dim.has-pick .node:not(.on)  { opacity: .42; }
+
+  /* brighten */
+  svg.bright .duct.on  { stroke: var(--lit); }
+  svg.bright .cable.on { stroke: var(--lit-cable); stroke-width: 3; }
+
+  /* glow — a white bloom, the same shape of mark D-66 already uses in orange */
+  svg.glow .duct.on  { filter: drop-shadow(0 0 7px rgba(230,230,225,.55)); }
+  svg.glow .cable.on { filter: drop-shadow(0 0 6px rgba(90,190,255,.7)); }
+
+  /* halo — the selection treatment a BOX already gets (a ring plus a soft outer
+     bloom), applied to a line and kept in that line's own colour: grey stays grey,
+     azure stays azure. The pipe is not recoloured, it is ringed. */
+  svg.halo .duct.on  { stroke: #55534f;
+                       filter: drop-shadow(0 0 2.5px rgba(196,194,186,.95))
+                               drop-shadow(0 0 8px rgba(196,194,186,.4)); }
+  svg.halo .cable.on { filter: drop-shadow(0 0 2.5px rgba(56,182,240,1))
+                               drop-shadow(0 0 8px rgba(56,182,240,.55)); }
+
+  .picked rect, .picked circle { stroke: var(--accent) !important; }
+  /* Where a downstream trace gives up at a fork. A RING rather than a bar across the
+     pipe: a bar has to know which way the pipe runs, and a fork is exactly the place
+     where more than one answer is true. */
+  #stopmark { pointer-events: none; }
+  /* An SVG element does not honour the HTML [hidden] attribute on its own. */
+  #stopmark[hidden] { display: none; }
+  #stopmark circle { fill: none; stroke: var(--lit); stroke-width: 2.5; }
+  #stopmark text { fill: var(--muted); font-size: 9.5px; text-anchor: middle; }
+</style>
+
+<div class="wrap">
+  <div class="card" style="border-color:#5a4a1e;background:#221c10;margin-bottom:18px">
+    <p class="note"><b>ARCHIVED 2026-09-07 — built, and this page is the record of how.</b>
+      The trace shipped as <b>D-68</b> and lives in
+      <a href="../canvas.html">canvas.html</a> now. What won: the <b>halo in the line’s own
+      colour</b> (jeff — “try this same effect, but in the existing colour of the line”), which
+      also dissolved this page’s original argument for brightening, since hue is what keeps it
+      clear of D-66’s orange problem bloom. Dimming the rest, and bringing the cable of every
+      gate on the path, went in as proposed. One thing this page gets wrong about the
+    shipped behaviour: here the trace <em>persists</em> after a click, and it
+    does not on the canvas — there it lights only while the button is HELD on a piece, and
+    releasing puts the shop back to normal. Nor does anything dim: that was built as this page
+    proposes it and then taken off, the rim being legible enough on its own.</p>
+    <p class="note"><b>What was cut: continuing downstream.</b> It is still switched on in the
+      toolbar below, because the reason it lost is easier to see than to describe — it has to
+      stop at the first fork, and a highlight halting partway along a run that plainly carries on
+      is a fact about the drawing rather than about the shop. Pick the Cyclone with it on. jeff:
+      “that is confusing — I agree.” Still open, and not built: whether hover previews the trace
+      on a desktop.</p>
+  </div>
+  
+    <div>
+    <div class="eyebrow">Exploration · 2026-09-07</div>
+    <h1>Tracing a run from the piece you picked</h1>
+    <p class="lede">Pick a machine, a valve or a length of pipe and the canvas follows it back to
+      the collector, so “where does this actually go” is answered by looking rather than by
+      tracing a grey line with a finger. Click anything below. Not the shipping canvas — this page
+      exists to settle the treatment before any of it is built.</p>
+  </div>
+
+  <hr class="rule"/>
+
+  <section class="sec">
+    <h3>Try it</h3>
+    <div class="bar">
+      <div class="grp" id="treat">
+        <button data-t="halo" aria-pressed="true">Halo · own colour</button>
+        <button data-t="bright" aria-pressed="false">Brighten</button>
+        <button data-t="glow" aria-pressed="false">Glow · white</button>
+        <button data-t="dim" aria-pressed="true">Dim the rest</button>
+      </div>
+      <div class="grp" id="opts">
+        <button data-o="down" aria-pressed="true">Continue downstream</button>
+        <button data-o="cable" aria-pressed="true">Include the cable</button>
+      </div>
+    </div>
+    <div class="stage">
+      <svg id="board" class="halo dim" viewBox="-28 -28 1036 810">
+        <path class="duct sec" data-run="guard" d="M 946 72 L 946 253 L 457 253 L 457 261"/><path class="duct" data-run="j1" d="M 102 64 L 182 64"/><path class="duct" data-run="j2" d="M 198 64 L 434 64"/><path class="duct" data-run="j3" d="M 450 64 L 686 64"/><path class="duct" data-run="j4" d="M 702 64 L 938 64"/><path class="duct" data-run="jointer" d="M 316 603 L 316 660"/><path class="duct" data-run="man" d="M 954 58 L 1009 58 L 1009 442 L 316 442 L 316 533"/><path class="duct" data-run="miter" d="M 820 590 L 820 660"/><path class="duct" data-run="planer" d="M 190 212 L 190 282"/><path class="duct" data-run="router" d="M 442 603 L 442 694 L 530 694"/><path class="duct" data-run="sander" d="M 694 212 L 694 282"/><path class="duct" data-run="saw" d="M 442 212 L 442 282"/><path class="duct" data-run="v1" d="M 190 72 L 190 168"/><path class="duct" data-run="v2" d="M 442 72 L 442 168"/><path class="duct" data-run="v3" d="M 694 72 L 694 168"/><path class="duct" data-run="v4" d="M 954 70 L 1072 70 L 1072 568 L 842 568"/>
+        <path class="cable" data-cable="v1" d="M 190 168 L 190 120 L 905 120 L 905 96"/><path class="cable" data-cable="v2" d="M 442 168 L 442 132 L 917 132 L 917 96"/><path class="cable" data-cable="v3" d="M 694 168 L 694 144 L 929 144 L 929 96"/><path class="cable" data-cable="v4" d="M 820 546 L 820 300 L 941 300 L 941 96"/>
+        <g class="node" data-id="dc" transform="translate(64,64)"><rect class="coll" x="-38" y="-38" width="76" height="76" rx="17"/><text class="lbl" y="4">Cyclone</text></g><g class="node" data-id="j1" transform="translate(190,64)"><circle class="jdot" r="5"/></g><g class="node" data-id="j2" transform="translate(442,64)"><circle class="jdot" r="5"/></g><g class="node" data-id="j3" transform="translate(694,64)"><circle class="jdot" r="5"/></g><g class="node" data-id="j4" transform="translate(946,64)"><circle class="jdot" r="5"/></g><g class="node" data-id="v1" transform="translate(190,190)"><circle class="gate" r="22"/><line class="disc" x1="0" y1="-22" x2="0" y2="22"/><text class="gatelbl" y="-30">BALL VALVE</text></g><g class="node" data-id="v2" transform="translate(442,190)"><circle class="gate" r="22"/><line class="disc" x1="0" y1="-22" x2="0" y2="22"/><text class="gatelbl" y="-30">BALL VALVE</text></g><g class="node" data-id="v3" transform="translate(694,190)"><circle class="gate" r="22"/><line class="disc" x1="0" y1="-22" x2="0" y2="22"/><text class="gatelbl" y="-30">BALL VALVE</text></g><g class="node" data-id="planer" transform="translate(190,316)"><rect class="body" x="-44" y="-26" width="88" height="52" rx="9"/><text class="lbl" y="4">Planer</text></g><g class="node" data-id="saw" transform="translate(442,316)"><rect class="body" x="-44" y="-26" width="88" height="52" rx="9"/><text class="lbl" y="4">Table Saw</text></g><g class="node" data-id="sander" transform="translate(694,316)"><rect class="body" x="-44" y="-26" width="88" height="52" rx="9"/><text class="lbl" y="4">Drum Sander</text></g><g class="node" data-id="man" transform="translate(316,568)"><rect class="unit" x="-21" y="-23" width="294" height="46" rx="23"/><text class="gatelbl" x="126.0" y="-31">MANIFOLD</text></g><g class="node" data-id="jointer" transform="translate(316,694)"><rect class="body" x="-44" y="-26" width="88" height="52" rx="9"/><text class="lbl" y="4">Jointer</text></g><g class="node" data-id="router" transform="translate(568,694)"><rect class="body" x="-44" y="-26" width="88" height="52" rx="9"/><text class="lbl" y="4">Router Table</text></g><g class="node" data-id="v4" transform="translate(820,568)"><circle class="gate" r="22"/><line class="disc" x1="0" y1="-22" x2="0" y2="22"/><text class="gatelbl" y="-30">BALL VALVE</text></g><g class="node" data-id="miter" transform="translate(820,694)"><rect class="body" x="-44" y="-26" width="88" height="52" rx="9"/><text class="lbl" y="4">Miter Saw</text></g><g class="node" data-id="guard" transform="translate(457,282)"><path class="sport" d="M-7 -8 L7 0 L-7 8 Z"/><text class="tiny" x="-10" y="-12" text-anchor="end">Overarm</text></g>
+        <g class="node" data-id="brain" transform="translate(920,64)"><rect class="board" x="-55" y="-23" width="110" height="46" rx="8"/><text class="lbl" y="-2">Shop Brain</text><text class="sub" y="11">PRIMARY</text></g><g id="stopmark" hidden><circle r="11"/><text y="-19">branches here</text></g>
+      </svg>
+    </div>
+    <p class="said" id="said">Nothing picked. Click a machine, a valve, or a run.</p>
+  </section>
+
+  <hr class="rule"/>
+
+  <section class="sec">
+    <h3>What this page is asking you to decide</h3>
+
+    <div class="card flag">
+      <p><b>1 · A halo, in the line's own colour.</b> <span class="pill rec">Recommended</span></p>
+      <p class="note">All three treatments are in the toolbar. The halo is not a new mark at all:
+        it is <b>exactly what a selected box already gets</b> — a ring and a soft outer bloom —
+        applied to a line and kept in that line's own colour. Grey pipe stays grey pipe with a rim
+        of light around it; the cable's rim is azure. Nothing is recoloured, so nothing has to be
+        learned (jeff, 2026-09-07: "try this same effect, but in the existing colour of the line").</p>
+      <p class="note">This page originally argued for <em>brightening</em> instead, because a glow
+        was already spoken for: D-66 puts a soft orange bloom on anything with a problem, and a
+        second bloom differing only in hue is a mark you have to look twice at. <b>Keeping the halo
+        in the line's own colour dissolves that objection.</b> Hue is precisely what separates the
+        two — orange means "something is wrong here"; grey-on-grey and azure-on-azure mean "this is
+        the path you asked about". A traced run passing straight through a piece that carries a
+        problem halo still reads correctly, which is the case that killed the white glow. Pick the
+        <b>Drum Sander</b> with each in turn.</p>
+      <p class="note">Brightening stays in the toolbar as the fallback. It is honest and cheap, but
+        it changes the pipe's colour in order to say something about selection; the halo says the
+        same thing without touching the pipe.</p>
+    </div>
+
+    <div class="card flag">
+      <p><b>2 · Dim the rest, gently.</b> <span class="pill rec">Recommended</span></p>
+      <p class="note">Lighting one path in a shop of twenty runs is not much use if the other
+        nineteen are equally loud. Focus dims rather than hides (mockup rules), so everything else
+        drops to about a third and stays perfectly readable — you can still see what you are about
+        to pick next.</p>
+    </div>
+
+    <div class="card flag">
+      <p><b>3 · Upstream always; downstream to the first branch.</b> <span class="pill rec">Recommended</span></p>
+      <p class="note">Upstream is never ambiguous: every port has exactly one parent, so “back to
+        the collector” is a single chain. Downstream forks, and at a fork we genuinely do not know
+        which leg you meant — so it stops there, and <b>says</b> it stops, with a small bar across
+        the pipe at the branch. A highlight that just petered out would read as a rendering
+        artefact; a deliberate stop reads as “this is as far as one answer goes”.</p>
+      <p class="note">Worth trying both ways: pick the <b>Cyclone</b> with “continue downstream” on
+        and the trace stops almost immediately, at the first tee. That is honest, and it is also a
+        good argument that downstream is the less valuable half.</p>
+    </div>
+
+    <div class="card flag">
+      <p><b>4 · The cable comes too.</b> <span class="pill rec">Recommended</span></p>
+      <p class="note">One pick answering both “where does this air go” and “what drives this”
+        costs nothing extra to read, because <b>cable already looks nothing like duct</b> — azure,
+        thin, a different shape of line. It is the same brightening rule applied to a line whose
+        colour is already distinct, so the two lit paths never blur into one.</p>
+      <p class="note">The cables drawn above are placed by hand, not solved by the wiring layer —
+        this page is about the treatment, not the geometry.</p>
+    </div>
+
+    <div class="card flag open">
+      <p><b>5 · What triggers it.</b> <span class="pill">Open</span></p>
+      <p class="note">Selection, certainly — tapping a piece is already how you focus it, and this
+        is just what focus now shows. The open half is <b>hover</b>: on a desktop, hovering could
+        preview the same trace without changing the selection, which is what the existing TODO item
+        asks for. Hover is never the only trigger (mockup rules), and here it would be a preview of
+        something selection does properly, so it stays legal. It needs a story for touch, where
+        there is no hover: probably none, and the tap is enough.</p>
+    </div>
+
+    <div class="card flag open">
+      <p><b>6 · Not proposed: flow direction.</b> <span class="pill">Open</span></p>
+      <p class="note">Arrows, or a crawl along the lit path, would say which way the air moves.
+        Deliberately left out: the trace already runs to a collector at one end, the vocabulary is
+        crowded, and an animation on a canvas you are dragging pieces around is a distraction with
+        a battery cost. Easy to add later; hard to take back.</p>
+    </div>
+  </section>
+
+  <hr class="rule"/>
+
+  <section class="sec">
+    <h3>Where this came from</h3>
+    <div class="card">
+      <p class="note">The standing TODO item asks for ducts and wires to be highlighted <em>on
+        hover</em>, so a run can be traced start to end, and suggests a glow. This page is the same
+        need approached from selection instead — jeff, 2026-09-07: “once a tool or valve or duct is
+        selected, follow its line back to the dust collector and highlight everything in the
+        route… optionally continue away from the collector until it hits a branch.”</p>
+      <p class="note">Whatever survives review folds into <code>canvas.html</code> with a decision
+        row, and this page moves to <code>archived/</code> with a banner saying what won.</p>
+    </div>
+  </section>
+</div>
+
+<script>
+const TOPO = {"ducts": [{"childId": "j1", "parentId": "dc"}, {"childId": "j2", "parentId": "j1"}, {"childId": "j3", "parentId": "j2"}, {"childId": "j4", "parentId": "j3"}, {"childId": "v1", "parentId": "j1"}, {"childId": "v2", "parentId": "j2"}, {"childId": "v3", "parentId": "j3"}, {"childId": "planer", "parentId": "v1"}, {"childId": "saw", "parentId": "v2"}, {"childId": "sander", "parentId": "v3"}, {"childId": "man", "parentId": "j4"}, {"childId": "jointer", "outlet": {"unitId": "man", "index": 0}}, {"childId": "router", "outlet": {"unitId": "man", "index": 1}}, {"childId": "v4", "parentId": "j4"}, {"childId": "miter", "parentId": "v4"}, {"childId": "guard", "parentId": "j4"}], "names": {"dc": "Cyclone", "v1": "Ball valve", "v2": "Ball valve", "v3": "Ball valve", "v4": "Ball valve", "planer": "Planer", "saw": "Table Saw", "sander": "Drum Sander", "jointer": "Jointer", "router": "Router Table", "miter": "Miter Saw", "man": "Manifold", "guard": "Overarm"}, "cableOf": {"v1": "brain", "v2": "brain", "v3": "brain", "v4": "brain"}};
+const svg = document.getElementById('board');
+const said = document.getElementById('said');
+
+// parent of each run's child, and children of each piece
+const parentOf = new Map(), childrenOf = new Map();
+for (const d of TOPO.ducts) {
+  const p = d.parentId || (d.outlet && d.outlet.unitId);
+  parentOf.set(d.childId, p);
+  if (!childrenOf.has(p)) childrenOf.set(p, []);
+  childrenOf.get(p).push(d.childId);
+}
+const opts = { down: true, cable: true };
+let picked = null;
+
+function trace(id) {
+  const runs = new Set(), pieces = new Set([id]);
+  // UPSTREAM: one parent each, all the way to the collector. Never ambiguous.
+  let cur = id;
+  while (parentOf.has(cur)) {
+    runs.add(cur);
+    cur = parentOf.get(cur);
+    pieces.add(cur);
+  }
+  // DOWNSTREAM: only while there is exactly one way on.
+  let stop = null;
+  if (opts.down) {
+    let c = id;
+    for (;;) {
+      const kids = childrenOf.get(c) || [];
+      if (kids.length !== 1) { if (kids.length > 1) stop = c; break; }
+      runs.add(kids[0]); pieces.add(kids[0]); c = kids[0];
+    }
+  }
+  return { runs, pieces, stop };
+}
+
+function apply() {
+  for (const el of svg.querySelectorAll('.on')) el.classList.remove('on');
+  for (const el of svg.querySelectorAll('.picked')) el.classList.remove('picked');
+  svg.classList.toggle('has-pick', !!picked);
+  if (!picked) { said.textContent = 'Nothing picked. Click a machine, a valve, or a run.'; return; }
+  const { runs, pieces, stop } = trace(picked);
+  for (const r of runs) {
+    const p = svg.querySelector('[data-run="' + r + '"]');
+    if (p) p.classList.add('on');
+  }
+  for (const p of pieces) {
+    const g = svg.querySelector('[data-id="' + p + '"]');
+    if (g) g.classList.add('on');
+  }
+  const g = svg.querySelector('[data-id="' + picked + '"]');
+  if (g) g.classList.add('picked');
+  // Every GATE on the traced path lights its cable, not just the piece you picked —
+  // a tool has no cable of its own, and "what drives this" is answered by the valve
+  // upstream of it. Picking the Table Saw should light the valve's cable too.
+  let cables = 0;
+  if (opts.cable) {
+    for (const p of pieces) {
+      const board = TOPO.cableOf[p]; if (!board) continue;
+      const c = svg.querySelector('[data-cable="' + p + '"]');
+      if (c) { c.classList.add('on'); cables++; }
+      const b = svg.querySelector('[data-id="' + board + '"]');
+      if (b) b.classList.add('on');
+    }
+  }
+  const sm = svg.querySelector('#stopmark');
+  if (stop) {
+    const g = svg.querySelector('[data-id="' + stop + '"]');
+    const t = g && g.getAttribute('transform');
+    if (t) { sm.setAttribute('transform', t); sm.hidden = false; } else sm.hidden = true;
+  } else sm.hidden = true;
+  const name = TOPO.names[picked] || picked;
+  said.innerHTML = '<b>' + name + '</b> — ' + runs.size + (runs.size === 1 ? ' run' : ' runs')
+    + ' lit back to the collector'
+    + (stop ? ', stopping at a branch downstream' : '')
+    + (cables ? ', plus ' + (cables === 1 ? 'a cable' : cables + ' cables') + ' to the board' : '') + '.';
+}
+
+svg.addEventListener('click', e => {
+  const node = e.target.closest('.node');
+  const run = e.target.closest('[data-run]');
+  const id = node ? node.dataset.id : run ? run.dataset.run : null;
+  picked = (id && id !== picked) ? id : null;
+  apply();
+});
+document.getElementById('treat').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  const t = b.dataset.t;
+  const on = b.getAttribute('aria-pressed') !== 'true';
+  // brighten and glow are alternatives; dim is independent
+  if (t !== 'dim') {
+    for (const o of document.querySelectorAll('#treat button:not([data-t="dim"])')) {
+      const isMe = o === b;
+      o.setAttribute('aria-pressed', String(isMe));
+      svg.classList.toggle(o.dataset.t, isMe);
+    }
+    return;
+  }
+  b.setAttribute('aria-pressed', String(on));
+  svg.classList.toggle(t, on);
+});
+document.getElementById('opts').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  const on = b.getAttribute('aria-pressed') !== 'true';
+  b.setAttribute('aria-pressed', String(on));
+  opts[b.dataset.o] = on;
+  apply();
+});
+</script>

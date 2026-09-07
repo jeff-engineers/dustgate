@@ -107,7 +107,7 @@
       <!-- Each run is stroked twice: a fat casing in the canvas colour, then the
            duct. Later ducts therefore punch a clean gap through earlier ones where
            they cross, which is the whole crossing treatment — no hop geometry. -->
-      <g *ngFor="let d of ducts">
+      <g *ngFor="let d of ducts" [class.on-path]="runOnPath(d.childId)">
         <path class="duct-casing" [attr.d]="ductD(d.childId)"/>
         <path class="duct" [class.live]="d.live" [class.sec]="d.secondary" [attr.d]="ductD(d.childId)"/>
       </g>
@@ -274,7 +274,12 @@
       <!-- Cable runs. Under the pieces on purpose, so each end tucks beneath the
            tab it lands on rather than stopping short of it. -->
       <g class="wiring">
-        <path *ngFor="let c of cables()" class="cable" [attr.d]="c.d" [attr.stroke]="c.shade"/>
+        <!-- The lit cable's casing, drawn before every cable so it lifts the ground
+             under its own line without cutting a hole in the one crossing it. A duct
+             carries its casing always; a cable only needs one while it is traced. -->
+        <path *ngFor="let c of litCables()" class="cable-casing" [attr.d]="c.d"/>
+        <path *ngFor="let c of cables()" class="cable" [attr.d]="c.d" [attr.stroke]="c.shade"
+              [class.on-path]="cableOnPath(c)"/>
       </g>
       <path *ngFor="let d of openDucts()" class="open-stub" [attr.d]="openStubD(d.childId)"/>
       <!-- ── wiring layer ────────────────────────────────────────────────

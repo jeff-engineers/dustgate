@@ -119,7 +119,19 @@ than restated. Delete an item when it lands; the git history is the record.
   the delete-a-system item below — both are missing verbs on a system rather than
   on the pieces in it.
 
+- **Trace a run from the piece you picked (2026-09-07, jeff).** LANDED (D-68).
+  Selecting a machine, valve or duct lights every run back to the collector plus the
+  cable of every gate on the way, as a rim of light in each line's own colour, with
+  everything else dimmed. Upstream only — downstream was built and cut.
+
+  Still open, and the reason the exploration is worth re-reading before anyone
+  touches this: whether **hover** previews the same trace on a desktop, and
+  flow-direction marks, which were argued against rather than forgotten.
+  `archived/path-highlight.html`.
+
 - **Highlight ducts and wires on hover, so a run can be traced start to end.**
+  MOSTLY SUPERSEDED by the trace above, which does this from SELECTION and settled
+  the treatment (D-68). What is left of this item is the hover trigger itself.
   A subtle GLOW is probably the right treatment — the line vocabulary is already
   loaded (weight = trunk vs branch, grey dashed = a secondary crossing the seam,
   accent orange = an unfinished stub), so a highlight that changes colour or
