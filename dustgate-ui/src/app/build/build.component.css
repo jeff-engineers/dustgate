@@ -363,6 +363,45 @@ svg.canvas { display: block; touch-action: none; }
 .halo { pointer-events: none; }
 .halo-ring { fill: none; stroke: var(--accent); stroke-width: 2; opacity: 0.9; }
 .halo-glow { fill: none; stroke: var(--accent); stroke-width: 7; opacity: 0.16; }
+
+/* ── tracing the selected run (D-68) ─────────────────────────────────────────
+   Press a piece and the canvas lights everything between it and the collector,
+   plus the cable of every gate on the way. Release and it is back to normal.
+
+   TWO LAYERS, the same shape as the selection mark on a box: a bright inner line,
+   and the ground lifted a few shades around it. A duct is already stroked twice —
+   a fat casing in the canvas colour, then the pipe — so the lit state is those two
+   strokes with different values, and it costs no new geometry. A CABLE has no
+   casing of its own, so one is drawn under it only while it is lit.
+
+   The LINE keeps its own colour in both cases — grey pipe brightens to a lighter
+   grey, azure cable brightens to a lighter azure — and that is what keeps this clear
+   of the problem halo above, which is the same two-layer shape in accent orange.
+   Orange means "something is wrong here"; a line lit in its own colour means "this
+   is the path you asked about". The two LIFTS differ, and see the cable note below
+   for why.
+
+   Nothing else dims. Dimming the rest of the shop was built and taken off again
+   (jeff, 2026-09-07): the lit run reads on its own, and dropping twenty other runs
+   to a third made the canvas lurch every time you pressed a machine. */
+.on-path .duct-casing { stroke: #34322d; }
+.on-path .duct:not(.live) { stroke: #b9b7b0; }
+/* A LIVE run is already green and a secondary is already dashed; both say more than
+   "you are pressing this", so they keep their own stroke and take the lift only. */
+.on-path .duct.live { filter: brightness(1.25); }
+
+/* WHITE, not a dark azure lift. A duct is 6px of mid grey, so lifting the ground
+   behind it a few shades is plenty; a cable is 2.6px of bright azure, and the same
+   dark lift behind it was invisible — there is too little line for a subtle band to
+   register against (jeff, 2026-09-07). Light instead of dark reads at a glance and
+   still leaves the azure the loudest thing in the pair. */
+.cable-casing { fill: none; stroke: #ffffff; opacity: 0.3; stroke-width: 7;
+                stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
+/* Brightened rather than recoloured: each board owns a shade of azure, and a lit
+   cable that dropped it would stop saying which brain it leaves. */
+.cable.on-path { stroke-width: 2.6; filter: brightness(1.5); }
+
+.on-path .duct, .on-path .duct-casing, .cable.on-path { transition: stroke .13s ease; }
 .node .fan { opacity: 0.55; }
 /* Setup badge: needs doing / done. */
 .todo { fill: var(--accent); stroke: var(--surface); stroke-width: 2; }
