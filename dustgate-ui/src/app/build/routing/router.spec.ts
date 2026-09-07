@@ -589,6 +589,39 @@ group('R16 a tee\'s legs do not trail each other out of one port');
   ok('a port that is the only way out is still used', routeAllShared(oneWay).out.size === 3);
 }
 
+// ── R17 · a secondary port's run is an ordinary duct ─────────────────────────
+
+group('R17 the auxiliary run gets the same overlap treatment as any other');
+{
+  // Worth asserting rather than assuming. A supplemental port's run is drawn
+  // differently — grey, dashed, thinner, and it is the one run allowed to cross a
+  // system seam — which makes it easy to believe it is routed differently too. It
+  // is not: routePass branches on nothing, so PORT_REUSE and the drawn-overlap
+  // check apply to it exactly as they do to a trunk. This is the test that says so
+  // if that ever stops being true.
+  const machine = tool('saw', 2, 3);
+  const aux: SceneNode = {
+    id: 'guard', glyph: 'secondaryPort', isUnit: false, span: 1,
+    x: machine.x + SECONDARY_PORT_DX, y: machine.y - TOOL_HALF,
+    hostBox: deviceBox(machine),
+  };
+  const s = scene(
+    [collector('dc', 2, 0), machine, aux],
+    [{ childId: 'saw', parentId: 'dc' }, { childId: 'guard', parentId: 'dc' }],
+  );
+  const { out, shared } = routeAllShared(s);
+
+  ok('the machine and its auxiliary port both route', out.size === 2);
+  ok('and neither run is drawn over the other', shared.length === 0, JSON.stringify(shared));
+
+  const exit = (id: string) => {
+    const p = out.get(id)!.pts;
+    return Math.abs(p[0].x - p[1].x) < 0.5 ? (p[1].y > p[0].y ? 'S' : 'N') : (p[1].x > p[0].x ? 'E' : 'W');
+  };
+  ok('they leave the collector by different ports', exit('saw') !== exit('guard'),
+     `${exit('saw')} vs ${exit('guard')}`);
+}
+
 // ── summary ──────────────────────────────────────────────────────────────────
 
 console.log(`\n${checks - failures}/${checks} checks passed`);
