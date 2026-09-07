@@ -21,10 +21,15 @@ const opposite = (d: Dir): Dir => ((d + 2) % 4) as Dir;
 
 /** A place a duct may attach, and the direction it leaves the device in.
  *
- *  `bias` is a soft extra cost charged ONLY if the search settles on this port as
- *  the goal — it never affects the search while a cheaper pairing is still live, so
- *  a genuinely shorter run to a biased port still wins. Used to prefer one entrance
- *  over another that's otherwise equally valid, without closing the door on it. */
+ *  `bias` is a soft extra cost for USING this port — added to the start state when
+ *  the run leaves by it, and charged at the goal when the search settles on it. It
+ *  never blocks: a genuinely shorter run through a biased port still wins. Used to
+ *  prefer one entrance over another that's otherwise equally valid (TOP_ENTRY_BIAS),
+ *  and to keep two ducts from leaving a device by the same port (PORT_REUSE).
+ *
+ *  It was goal-only until 2026-09-07. That was enough while bias only expressed
+ *  "enter a machine from the top where you can", and not enough for "don't leave by
+ *  a port someone already left by", which is a fact about the START of a run. */
 export interface Port { pt: Pt; dir: Dir; bias?: number; }
 
 /** Costs, in units where one lattice step is 4. The plan specifies 1 / +8 / +6 /
@@ -41,6 +46,14 @@ const HUG = 8;        // an edge running right alongside a device
 const REUSE = 3;      // discount for an edge this duct used last frame — keeps a good prefix
 const TOP_ENTRY_BIAS = STEP * 3;   // see the Port.bias doc — enough to win a near-tie,
                                     // not enough to out-price a meaningfully shorter side run
+/** Leaving (or entering) a device by a port another duct has already used. Two runs
+ *  off one port are ONE LINE until they separate — the shared stub `laneOffset` used
+ *  to leave behind and the lattice cannot see, because a stub shorter than an edge
+ *  claims no edge. Priced just over a bend: a junction offers all four sides, so the
+ *  leg heading west should pay a turn's worth to consider leaving by the west port
+ *  rather than trailing the leg going south. Not more — a port that is genuinely the
+ *  only sane way out must stay reachable. */
+export const PORT_REUSE = TURN + STEP;
 /** Cheapest an edge can ever be; the A* heuristic must not exceed this per step. */
 const MIN_STEP = STEP - REUSE;
 
@@ -345,10 +358,11 @@ export function routeOne(from: Port[], to: Port[], opts: GridOpts): RouteResult 
     const e = grid.entry(port);
     if (!e || grid.isBlocked(e.ix, e.iy)) continue;
     const s = stateOf(e.ix, e.iy, port.dir);
-    if (g[s] === 0) continue;
-    g[s] = 0;
+    const seed = port.bias ?? 0;
+    if (g[s] <= seed) continue;                  // an equal-or-cheaper way in already seeded
+    g[s] = seed;
     starts.set(s, port);
-    open.push(h(e.ix, e.iy), s);
+    open.push(seed + h(e.ix, e.iy), s);
   }
 
   let bestGoal = -1, bestGoalCost = Infinity, bestGoalPort: Port | null = null;
