@@ -74,6 +74,7 @@ export function routeAllShared(scene: Scene, opts: RouteAllOpts = {}): { out: Ma
   let best: { out: Map<string, RoutedDuct>; shared: string[] } | null = null;
   for (let attempt = 0; attempt < 3; attempt++) {
     const pass = routePass(scene, opts, order);
+    pass.shared = union(pass.shared, drawnOverlaps(pass.out));
     if (!pass.shared.length) return pass;
     if (!best) best = pass;                     // keep the first result as the floor
     const promote = pass.shared[0];
@@ -81,6 +82,73 @@ export function routeAllShared(scene: Scene, opts: RouteAllOpts = {}): { out: Ma
     order = [promote, ...order.filter(id => id !== promote)];
   }
   return best ?? routePass(scene, opts, order);
+}
+
+/**
+ * Ducts whose DRAWN lines lie on top of each other, found geometrically rather
+ * than from the lattice.
+ *
+ * The lane bookkeeping in routePass is the router's own currency — the edges of the
+ * lattice it searches — and it is blind to two things that reach the screen anyway:
+ *
+ *  • **Sub-cell stubs.** Two glyphs standing in adjacent cells are joined by a line
+ *    shorter than a lattice edge, so the run traverses no edge at all and claims
+ *    nothing. Drag a gate next to the tee that feeds it and two runs share that gap
+ *    with nothing objecting (found 2026-09-07).
+ *  • **A shared origin.** Two ducts off one port, both leaving in the same
+ *    direction, are one line until they separate. The demo's own manifold has done
+ *    this from the start: 34px of two runs drawn as one, and every edge-based check
+ *    ever run over it said the board was clean.
+ *
+ * So overlap is judged on what is actually drawn. Touching endpoints don't count —
+ * ducts meet at a tee by construction — only a stretch two runs genuinely share.
+ */
+function drawnOverlaps(out: Map<string, RoutedDuct>): string[] {
+  type Seg = { id: string; a: Pt; b: Pt };
+  const segs: Seg[] = [];
+  for (const [id, r] of out) {
+    for (let i = 0; i < r.pts.length - 1; i++) segs.push({ id, a: r.pts[i], b: r.pts[i + 1] });
+  }
+  const hit = new Set<string>();
+  for (let i = 0; i < segs.length; i++) {
+    for (let j = i + 1; j < segs.length; j++) {
+      const s = segs[i], t = segs[j];
+      if (s.id === t.id) continue;
+      if (hit.has(s.id) && hit.has(t.id)) continue;
+      if (!collinearOverlap(s.a, s.b, t.a, t.b)) continue;
+      hit.add(s.id); hit.add(t.id);
+    }
+  }
+  return [...hit];
+}
+
+/** Do two axis-aligned segments lie on the same line and share more than a point?
+ *  EPS is a hair over float noise, not a tolerance: the two runs are stroked at the
+ *  same width, so any shared length at all is one line hiding another. */
+function collinearOverlap(a0: Pt, a1: Pt, b0: Pt, b1: Pt): boolean {
+  const EPS = 1;
+  const horiz = (p: Pt, q: Pt) => Math.abs(p.y - q.y) < 0.5;
+  const vert = (p: Pt, q: Pt) => Math.abs(p.x - q.x) < 0.5;
+  const aH = horiz(a0, a1), bH = horiz(b0, b1);
+  const aV = vert(a0, a1), bV = vert(b0, b1);
+  let axis: number, bxis: number;
+  if (aH && bH) { axis = a0.y; bxis = b0.y; }
+  else if (aV && bV) { axis = a0.x; bxis = b0.x; }
+  else return false;                                   // perpendicular, or a diagonal
+  if (Math.abs(axis - bxis) > 0.5) return false;       // parallel, not collinear
+  const span = (p: Pt, q: Pt): [number, number] => (aH
+    ? [Math.min(p.x, q.x), Math.max(p.x, q.x)]
+    : [Math.min(p.y, q.y), Math.max(p.y, q.y)]);
+  const [s0, s1] = span(a0, a1), [t0, t1] = span(b0, b1);
+  return Math.min(s1, t1) - Math.max(s0, t0) > EPS;
+}
+
+/** Both lists, no duplicates, order preserved — the first entry is what the retry
+ *  promotes, so the edge-based finding stays in front where it was. */
+function union(a: readonly string[], b: readonly string[]): string[] {
+  const out = [...a];
+  for (const id of b) if (!out.includes(id)) out.push(id);
+  return out;
 }
 
 function routePass(scene: Scene, opts: RouteAllOpts, order: string[]): { out: Map<string, RoutedDuct>; shared: string[] } {

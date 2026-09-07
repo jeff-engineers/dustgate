@@ -476,6 +476,22 @@ const POLL_MS = 2000;
           </svg>
           Gates
         </a>
+        <!-- Boards had a route and a screen and nothing pointing at it: the only way
+             in was the build canvas (right-click a board → Board setup…) or typing
+             the URL. That is the wrong shape for the errands it carries — pairing a
+             new board, checking which one is not answering, unpairing one that has
+             gone — none of which are layout work. -->
+        <a routerLink="/boards">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+               stroke-linecap="round" stroke-linejoin="round">
+            <!-- The board as the canvas draws it: a module with a strip of ports on
+                 its underside. The ports are the whole identity — a plain rounded
+                 rect at 17px is every other icon in the app. -->
+            <rect x="3.5" y="5" width="17" height="10" rx="2.5"/>
+            <path d="M7 15v2.5M12 15v2.5M17 15v2.5"/>
+          </svg>
+          Boards
+        </a>
         <a routerLink="/settings">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
                stroke-linecap="round" stroke-linejoin="round">

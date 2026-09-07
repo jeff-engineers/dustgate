@@ -65,3 +65,20 @@ export function applyDrivesCache(controller: Record<string, unknown>, drives: Dr
   if (drives === 'servo') delete controller['drives'];
   else controller['drives'] = 'linear';
 }
+
+/**
+ * What to ask before forgetting a board, worded once.
+ *
+ * Two screens unpair: the Boards list and the canvas board menu. They said
+ * different things — the canvas asked, the list just did it — which is backwards,
+ * since the list is the easier of the two to click by accident. The wording is here
+ * for the same reason `drivesFromCaps` is: two callers, one answer.
+ *
+ * It says what SURVIVES as well as what goes. "Unpair" sounds destructive to
+ * someone who has just spent an evening provisioning WiFi, and the board keeps
+ * every bit of that — this shop simply stops listing it.
+ */
+export function unpairPrompt(name: string): string {
+  return `Unpair ${name}? The board stays powered and keeps its WiFi, `
+       + `but this shop forgets it. Pair it again from Boards.`;
+}
