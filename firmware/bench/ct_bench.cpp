@@ -89,6 +89,19 @@ static float g_rateKs = 0;    // achieved sample rate, kSPS
 static uint32_t g_dcMv = 0;
 static float    g_dcCounts = 0;
 
+// Dominant frequency of the AC component, from zero crossings. An RMS number
+// cannot tell magnetic pickup from electronics noise, and that is exactly the
+// question once the CT itself becomes the biggest contributor:
+//
+//   ~60 Hz   the CT is a coil sitting in the field of nearby live wiring.
+//            Fix it with distance, orientation and a grounded shield.
+//   ~kHz+    something on the board is talking. Fix it with impedance and
+//            decoupling.
+//
+// Crossings are counted against the PREVIOUS window's mean, which is stable
+// enough and avoids a second pass over 5000 samples.
+static float g_hz = 0;
+
 // -- One measurement ----------------------------------------------------------
 //
 // Sample flat out for a whole number of line cycles, subtract the mean, take the
@@ -118,11 +131,20 @@ static float readAmps() {
 
     // Two passes would be tidier but the signal moves; accumulate both moments
     // in one pass and do the algebra afterwards.
+    static float prevMean = 0;
+    uint32_t crossings = 0;
+    bool above = false, seeded = false;
+
     while (millis() - t0 < windowMs) {
         const uint32_t c = analogRead(PIN_CT);
         sum   += c;
         sumSq += (double)c * (double)c;
         n++;
+        if (prevMean > 1) {
+            const bool nowAbove = ((float)c > prevMean);
+            if (!seeded) { above = nowAbove; seeded = true; }
+            else if (nowAbove != above) { crossings++; above = nowAbove; }
+        }
     }
     if (n < 100) return 0;
     const uint32_t took = millis() - t0;
@@ -131,6 +153,9 @@ static float readAmps() {
     const double mean = sum / n;
     const double var  = (sumSq / n) - (mean * mean);   // RMS of the AC part
     const double rmsCounts = (var > 0 ? sqrt(var) : 0);
+    // Two crossings per cycle.
+    g_hz = (crossings / 2.0f) * (1000.0f / (float)took);
+    prevMean = (float)mean;
 
     // counts -> volts, using the chip's own calibration at the operating point.
     const uint32_t meanMv = analogReadMilliVolts(PIN_CT);
@@ -168,9 +193,9 @@ static void drawScreen() {
 
 static void report() {
     Serial.printf("%7.3f A  %6d W   peak %6.3f A   floor %5.3f A   "
-                  "DC %4lumV/%.0f   %.1f kSPS%s\n",
+                  "%5.0f Hz   DC %4lumV   %.1f kSPS%s\n",
                   g_amps, (int)(g_amps * NOMINAL_VOLTS), g_hold, g_floor,
-                  (unsigned long)g_dcMv, g_dcCounts, g_rateKs,
+                  g_hz, (unsigned long)g_dcMv, g_rateKs,
                   (g_dcMv < 300 || g_dcMv > 3000) ? "  <-- RAILED" : "");
 }
 
@@ -224,8 +249,13 @@ static Phase runPhase(uint32_t secs, bool chatty) {
     if (nMarks > 1)
         p.meanGapS = ((markMs[nMarks - 1] - markMs[0]) / (float)(nMarks - 1)) / 1000.0f;
 
-    Serial.printf("    %lu windows  min %.3f  mean %.3f  max %.3f A\n",
-                  (unsigned long)p.windows, p.mn, p.mean, p.mx);
+    Serial.printf("    %lu windows  min %.3f  mean %.3f  max %.3f A   ~%.0f Hz\n",
+                  (unsigned long)p.windows, p.mn, p.mean, p.mx, g_hz);
+    if (g_hz > 40 && g_hz < 90)
+        Serial.println(F("    ^ mains frequency — that is MAGNETIC PICKUP, not the"
+                         " board. Distance, orientation, grounded shield."));
+    else if (g_hz > 500)
+        Serial.println(F("    ^ well above mains — electronics, not pickup."));
     if (!nMarks) {
         Serial.printf("    no excursions above %.3f A\n", trip);
     } else {
@@ -285,6 +315,16 @@ static void suite(uint32_t secs) {
     else
         Serial.println(F("  * serial traffic is NOT the cause; A and B agree"));
 
+    // Excursion counts were the wrong lens: with a high floor there are no
+    // excursions at all and everything reads "inconclusive". The MEAN of phase C
+    // is the number that matters — a shorted input has no sensor, so whatever it
+    // reads is the board talking to itself.
+    if (g_floor > 0 && c.mean > g_floor * 0.5f)
+        Serial.printf("  * %.0f%% OF THE FLOOR IS THE BOARD, not the sensor: phase C\n"
+                      "    had no CT attached and still read %.3f A. Lower the\n"
+                      "    divider to 1k/1k and add 100nF at the pin.\n",
+                      100.0f * c.mean / g_floor, c.mean);
+
     if (c.marks > (b.marks + d.marks) / 2 / 2)
         Serial.println(F("  * it happens with NO SENSOR ATTACHED, so it is the board"));
     else if (d.marks > c.marks * 2 + 1)
@@ -319,11 +359,35 @@ static void suite(uint32_t secs) {
     Serial.printf("  whole cord   %.3f A mean, %.3f A max\n", e.mean, e.mx);
     Serial.printf("  one conductor %.3f A mean, %.3f A max\n", f.mean, f.mx);
 
-    if (g_floor > 0 && f.mean > g_floor)
-        Serial.printf("  one-conductor margin %.1fx over the floor\n", f.mean / g_floor);
+    // IN QUADRATURE, not by subtraction. These are RMS quantities: an
+    // uncorrelated signal and noise add as sqrt(s^2 + n^2), so the signal is
+    // sqrt(total^2 - floor^2). Subtracting the means understates a signal that
+    // is comparable to the floor — it reported a 15 W motor as "1.2x the floor"
+    // when the signal was actually 0.187 A against 0.272 A of noise.
+    auto deNoise = [](float total, float floorA) -> float {
+        const float d = total * total - floorA * floorA;
+        return d > 0 ? sqrtf(d) : 0.0f;
+    };
+    const float fSig = deNoise(f.mean, g_floor);
+    const float eSig = deNoise(e.mean, g_floor);
+    if (g_floor > 0) {
+        Serial.printf("  one conductor, noise removed: %.3f A (%.0f VA)\n",
+                      fSig, fSig * NOMINAL_VOLTS);
+        Serial.printf("  SNR %.1f  (signal / floor)\n", fSig / g_floor);
+    }
 
-    // The answer that changes the install story.
-    if (g_floor > 0 && e.mean > g_floor * 3) {
+    // The answer that changes the install story — but ONLY if the instrument
+    // could have seen a negative. A high noise floor hides a small leakage, and
+    // reporting that as "the fields cancel" turns an inconclusive run into a
+    // false negative. Require the ONE-CONDUCTOR signal to stand clear of the
+    // floor first: if it does not, nothing here can speak to the whole-cord case.
+    if (g_floor <= 0 || fSig < g_floor) {
+        Serial.println(F("\n  * NO VERDICT on the intact cord. The floor is as big as"));
+        Serial.printf("    the signal (%.3f A signal, %.3f A floor), so a small\n",
+                      fSig, g_floor);
+        Serial.println(F("    leakage would be invisible. Fix the noise, then re-run:"));
+        Serial.println(F("    1k/1k divider instead of 10k/10k, and 100nF at the pin."));
+    } else if (eSig > g_floor) {
         Serial.printf("\n  * THE INTACT CORD READS %.1fx THE FLOOR. If that repeats,\n",
                       e.mean / g_floor);
         Serial.println(F("    240V and hardwired tools stop needing anything opened"));
@@ -334,9 +398,9 @@ static void suite(uint32_t secs) {
         Serial.println(F("    fields cancel as theory says, and every install needs"));
         Serial.println(F("    one conductor separated. shop-schema-rfc.md §5.4."));
     }
-    if (f.mean > 0 && e.mean > 0)
-        Serial.printf("  * whole cord is %.0f%% of one conductor\n",
-                      100.0f * e.mean / f.mean);
+    if (fSig > 0 && eSig > 0)
+        Serial.printf("  * whole cord is %.0f%% of one conductor (noise removed)\n",
+                      100.0f * eSig / fSig);
     Serial.println(F("  A CT MEASURES CURRENT, NOT POWER. A small motor's power"));
     Serial.println(F("  factor is poor, so amps x 120 will read HIGHER than a"));
     Serial.println(F("  wattmeter's real power on the same load. thresholdW in the"));

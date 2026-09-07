@@ -23,6 +23,17 @@ it does not.
 | CT wire 1 | the CT | **that row** |
 | CT wire 2 | the CT | **`D0`** |
 
+```mermaid
+flowchart LR
+  V3(("3V3 rail")):::rail -- "10 kΩ" --> ROW
+  ROW -- "10 kΩ" --> G(("GND rail")):::rail
+  ROW -- "10 µF" --> G
+  ROW["<b>that row</b><br/>should sit at ~1.65 V"]:::node
+  ROW == "CT winding<br/>(a few Ω of copper)" ==> D0["<b>D0</b><br/>the other CT lead,<br/>and nothing else"]:::node
+  classDef rail fill:#eee,stroke:#999
+  classDef node fill:#fff,stroke:#333,stroke-width:2px
+```
+
 That row ends up with four things in it: two resistor legs, the capacitor's `+`
 leg, and one CT wire. **`D0` ends up with exactly one thing in it** — the other CT
 wire — and that is the part that matters. D0 takes its DC level *through the CT
@@ -76,6 +87,57 @@ floor is the number every other reading gets judged against.
 
 Then walk: clamp a tool's hot leg, note the idle reading, switch it on, read the
 peak. `clear` between tools.
+
+## Where this stands — TABLED 2026-09-07, pending a better meter
+
+**The sensor works. The front end does not, and the ADC path may not be the
+place to fix it.** Numbers from the last clean run (bias confirmed at
+`DC 1650mV`, so these count, unlike everything before 2026-09-07):
+
+| | A | mV at the CT | |
+|---|---|---|---|
+| Board alone (phase C, CT unplugged, input shorted) | 0.158 | — | the ADC and divider by themselves |
+| Floor (CT clamped on a **dead** wire) | 0.253 | 8.4 | |
+| **CT's own contribution** | **0.208** | 6.9 | in quadrature, C against D |
+| 15 W load, one conductor | 0.327 total | 10.9 | **0.208 A of signal, ≈25 VA** |
+| 15 W load, whole cord | 0.262 | 8.7 | 0.068 A apparent — below the floor |
+
+**The signal is real and correct.** A 15 W motor with a poor power factor showing
+as ~25 VA is what it should look like, and it measured the same before and after
+the divider change.
+
+**The noise is not the ADC any more.** Dropping the divider from 10k/10k to
+1k/1k took the board's own contribution from 0.228 A to 0.158 A — and the floor
+barely moved, because attaching the CT adds 0.208 A on its own, on a dead
+conductor. A CT is a coil, and it is sitting in the field of whatever live wiring
+is near the bench.
+
+**Unresolved, and the next step is a multimeter, not more firmware.** Read the CT
+directly with the leads off the breadboard, AC volts, lowest range —
+**millivolts × 30 = amps**. Four readings, and the ratios matter more than the
+absolute values:
+
+1. CT held **away from all wiring**, different part of the room
+2. CT on the **dead wire** at the bench — should match the 8.4 mV above
+3. **One conductor**, load on — should be ~10.9 mV
+4. **Whole cord**, load on — ~8.7 mV
+
+**1 against 2 is the decisive pair.** If 1 is much lower, everything called a
+"floor" here is really "ambient field at this bench", and the fix is distance,
+orientation and a grounded shield rather than anything electronic. If they match,
+the noise is in the ESP32 path after all.
+
+These are 1–11 mV readings, the bottom of a handheld's AC range where cheap
+meters are average-responding and least accurate. Worth waiting for a bench meter.
+
+**§5.4 is NOT answered.** The whole-cord reading is 34% of the one-conductor
+signal — suggestive, not nothing — but it sits below the floor, so the run cannot
+tell a real leakage from noise. The console now refuses to give a verdict rather
+than reporting that as a clean negative.
+
+The `Hz` column added on 2026-09-07 exists to settle the pickup question from the
+board itself: ~60 Hz is magnetic pickup, anything above ~500 Hz is electronics.
+It has not been read yet.
 
 ## What to expect, so a surprise is informative
 
