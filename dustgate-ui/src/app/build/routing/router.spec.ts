@@ -4,9 +4,9 @@
  *      npm run test:routing
  */
 
-import { type SceneNode, CELL, CLEARANCE, PAD, PRIMARY_PORT_DX, SECONDARY_PORT_DX, TOOL_HALF,
+import { type SceneNode, CAP_W, CELL, CLEARANCE, PAD, PRIMARY_PORT_DX, SECONDARY_PORT_DX, TOOL_HALF,
          cellX, cellY, deviceBox, segBoxHit } from './geometry';
-import { type Scene, type RoutedDuct, Router, routeAll, sceneBounds } from './router';
+import { type Scene, type RoutedDuct, Router, routeAll, routeAllShared, sceneBounds } from './router';
 import { outPorts } from './route-grid';
 
 // ── harness ──────────────────────────────────────────────────────────────────
@@ -442,6 +442,71 @@ group('R12 settled layouts have no overlapping duct');
     if (clash) { bad++; if (!worstScene) worstScene = JSON.stringify(nodes.map(n => [n.id, n.x, n.y])); }
   }
   ok('400 random layouts, none share a lattice edge', bad === 0, `${bad} bad; first: ${worstScene}`);
+}
+
+// ── R13 · the overlap that survives is REPORTED ──────────────────────────────
+
+group('R13 routeAllShared names the ducts that had to share');
+{
+  // R12 says a settled layout doesn't overlap; this says what happens when one
+  // genuinely can't be settled. The relaxation in routePass ends with an
+  // overlapping picture rather than a failure, which is right — a shop dragged
+  // into a corner still has to draw — but the fact was computed and thrown away,
+  // so nothing upstream could mention it. Found by search over cramped boards:
+  // five tools packed round a 5-outlet gate, one of which has nowhere clean left.
+  const s = scene(
+    [collector('dc', 0, 0), unit('g', 0, 1, 5),
+     tool('t0', 3, 3), tool('t1', 0, 2), tool('t2', 0, 4), tool('t3', 2, 2), tool('t4', 3, 2)],
+    [{ childId: 'g', parentId: 'dc' },
+     { childId: 't0', outlet: { unitId: 'g', index: 0 } },
+     { childId: 't1', outlet: { unitId: 'g', index: 1 } },
+     { childId: 't2', outlet: { unitId: 'g', index: 2 } },
+     { childId: 't3', outlet: { unitId: 'g', index: 3 } },
+     { childId: 't4', outlet: { unitId: 'g', index: 4 } }],
+  );
+  const { out, shared } = routeAllShared(s);
+  ok('the board still routes — sharing is a fallback, not a failure', out.size === 6);
+  ok('and the ducts that had to share are named', shared.length > 0, JSON.stringify(shared));
+  // The named duct is really the one drawn over something else.
+  const sets = new Map([...out].map(([id, v]) => [id, v.edges]));
+  const clashes = (id: string) => [...sets].some(([other, e]) =>
+    other !== id && [...sets.get(id)!].some(k => e.has(k)));
+  ok('...and each named duct really is drawn over another', shared.every(clashes),
+     JSON.stringify(shared));
+
+  // A clean board reports nothing, and routeAll is still the same answer without
+  // the extra return — every other caller reads it that way.
+  const clean = scene([collector('dc', 0, 0), tool('saw', 0, 2)],
+                      [{ childId: 'saw', parentId: 'dc' }]);
+  ok('a clean board shares nothing', routeAllShared(clean).shared.length === 0);
+  ok('routeAll is routeAllShared without the list',
+     JSON.stringify([...routeAll(clean)]) === JSON.stringify([...routeAllShared(clean).out]));
+}
+
+// ── R14 · a capped end is as wide as the bar it draws ────────────────────────
+
+group('R14 a capped end claims the width of its stopper bar');
+{
+  // An open end is a dot; a capped one draws a 28px bar across the run. Both were
+  // routed as a half-8 junction, so the bar overhung its own clearance by 6px each
+  // side — and a duct is deliberately allowed to run flush along a clearance
+  // boundary, which put a run under the bar with nothing in the router objecting.
+  // Reported 2026-09-07 on a secondary run, which is the kind most likely to be
+  // routed past an end belonging to something else.
+  const open: SceneNode = { id: 'e', glyph: 'junction', isUnit: false, span: 1, ...at(2, 2) };
+  const capped: SceneNode = { ...open, capped: true };
+
+  ok('an open end stays a dot', deviceBox(open).x1 - deviceBox(open).x0 === 16);
+  ok('a capped end is the bar it draws', deviceBox(capped).x1 - deviceBox(capped).x0 === CAP_W);
+  ok('...and no taller, since the bar is shorter than the dot it replaces',
+     deviceBox(capped).y1 - deviceBox(capped).y0 === 16);
+
+  // The gap a flush run used to take: 8px off centre is inside the bar, 14 is not.
+  const box = deviceBox(capped);
+  const a = { x: capped.x + 8, y: capped.y - 40 }, b = { x: capped.x + 8, y: capped.y + 40 };
+  ok('a run 8px off the centreline is now inside the capped end', segBoxHit(a, b, box));
+  ok('and one at the bar\'s own edge is not',
+     !segBoxHit({ ...a, x: capped.x + CAP_W / 2 }, { ...b, x: capped.x + CAP_W / 2 }, box));
 }
 
 // ── summary ──────────────────────────────────────────────────────────────────

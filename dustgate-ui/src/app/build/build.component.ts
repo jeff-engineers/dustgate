@@ -28,11 +28,11 @@ import {
 import { wipSummary } from '../services/wip-message';
 import {
   type Glyph, type Pt, type SceneNode,
-  BOARD_H, BOARD_W, CELL, COLLECTOR_HALF, GATE_PAD, PAD, TOOL_HALF, TOOL_HALF_W, UNIT_H,
+  BOARD_H, BOARD_W, CAP_H, CAP_W, CELL, COLLECTOR_HALF, GATE_PAD, PAD, TOOL_HALF, TOOL_HALF_W, UNIT_H,
   cellX, cellY, deviceBox, halfH as glyphHalfH, halfW as glyphHalfW, ptSegDist, segBoxHit,
   PRIMARY_PORT_DX, PRIMARY_PORT_H, PRIMARY_PORT_W, SECONDARY_PORT_DX, SECONDARY_PORT_STEP,
 } from './routing/geometry';
-import { type RoutedDuct, type Scene, Router, sceneBounds } from './routing/router';
+import { type RoutedDuct, type Scene, Router, routeAllShared, sceneBounds } from './routing/router';
 import { CanvasViewport } from './canvas-viewport';
 import { fitText, plugLabel } from './plug-label';
 import {
@@ -261,7 +261,8 @@ const CABLE_SHADES = ['#38b6f0', '#45cfd8', '#6f9df2', '#2f9fd0'];
 
 type Fitting = SelKind | 'tool' | 'duct';
 type MenuKind = Fitting | 'cap' | 'uncap' | 'delete' | 'board' | 'travel' | 'outlet' | 'secondaryPort'
-              | 'addSystem' | 'findBoards' | 'rename' | 'moveSystem' | 'system' | 'boardSetup';
+              | 'addSystem' | 'findBoards' | 'rename' | 'moveSystem' | 'system' | 'boardSetup'
+              | 'unpairBoard';
 
 const FITTINGS: Array<{ kind: Fitting; label: string }> = [
   { kind: 'duct',          label: 'Duct' },          // lay bare pipe; populate the open end later
@@ -370,6 +371,9 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   menuOptions: MenuOption[] = [];
   menuTitle = '';
   readonly CELL = CELL; readonly UNIT_H = UNIT_H; readonly GATE_PAD = GATE_PAD; readonly PAD = PAD;
+  // The stopper bar's own size, so the drawn bar and the box the router steers
+  // around cannot drift apart.
+  readonly CAP_W = CAP_W; readonly CAP_H = CAP_H;
   readonly TOOL_HALF = TOOL_HALF;
   readonly COLLECTOR_HALF = COLLECTOR_HALF;
   readonly PRIMARY_PORT_DX = PRIMARY_PORT_DX;
@@ -603,6 +607,9 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     const nodes: SceneNode[] = this.nodes.map(n => ({
       id: n.id, glyph: n.glyph, isUnit: n.isUnit, span: n.span,
       x: at.get(n.id)!.x, y: at.get(n.id)!.y, inletDx: n.inletDx, portDy: n.portDy,
+      // A capped end is wider than an open one, and the bar is what another run has
+      // to clear — so the router is told which ends are stoppered.
+      capped: n.glyph === 'junction' && this.isCap(n.id),
       // A secondary port is aimed at its MACHINE's box, not its own 9px one (D-41).
       // Taken from the same resolved positions as everything else here, so a port
       // being dragged and a port riding a dragged machine both aim at the right box.
@@ -1932,6 +1939,49 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     return null;
   }
 
+  /**
+   * Would putting `kind` on this branch dot leave a run drawn ON TOP of another run?
+   *
+   * Two ducts sharing a lane is the one thing the canvas must never draw: the
+   * picture stops saying which gate feeds what, and the picture is where the shop
+   * is authored. The router already refuses to share a lane — and then gives the
+   * rule up rather than fail, relaxing in three steps and finally returning the
+   * overlapping picture anyway (routePass). That fallback is right for a shop that
+   * has been dragged into a corner; it is wrong as the answer to "add a ball valve
+   * here", where nothing is lost by declining. Reported from the shop 2026-09-07,
+   * where splicing a valve above another one drew exactly that.
+   *
+   * So the splice is tried for real and rolled back. There is no cheaper honest
+   * version: whether a run fits is a property of the whole solved board, not of the
+   * cell being clicked, and the same edit is fine in one shop and impossible in the
+   * next. It runs on menu OPEN — a gesture, once, for three fittings — not per
+   * frame, and it routes with its own solver rather than the memoized Router, whose
+   * cache and `last` are the live picture and must not see a shop that never
+   * existed.
+   */
+  private spliceOverlaps(kind: SelKind, bd: BDot): boolean {
+    if (!this.topo) return false;
+    const snap = this.snapshot();
+    const before = { dirty: this.dirty, saveError: this.saveError, saveNote: this.saveNote,
+                     wip: this.wip, airflowErrors: this.airflowErrors, selectedId: this.selectedId,
+                     lastTag: this.lastTag };
+    try {
+      if (!this.absorbTee(bd, kind)) this.insertInline(bd.childId, kind, { col: bd.col, row: bd.row });
+      this.buildGraph(this.topo); this.syncNodes();
+      return routeAllShared(this.scene()).shared.length > 0;
+    } finally {
+      const state = JSON.parse(snap) as { topo: Topology; cells: [string, Cell][]; boards?: [string, Cell][] };
+      this.topo = state.topo;
+      this.cells = new Map(state.cells);
+      this.boardCells = new Map(state.boards ?? []);
+      this.dirty = before.dirty; this.saveError = before.saveError; this.saveNote = before.saveNote;
+      this.wip = before.wip; this.airflowErrors = before.airflowErrors;
+      this.selectedId = before.selectedId; this.lastTag = before.lastTag;
+      this.buildGraph(this.topo); this.syncNodes(); this.refreshHandles();
+      this.router.invalidate();          // the dry run moved nothing, but the hash saw a different board
+    }
+  }
+
   /** Every option, every time — with the ones that don't apply here greyed and
    *  labelled why:
    *   • Duct — nothing to lay at an END (you drag the end to run more pipe).
@@ -1981,6 +2031,14 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
         const neg = !!m.addOutput;
         if (!t || !t.cells.every(c => this.roomAt(c.col, c.row, t.span, t.selfId, t.occ, neg))) { enabled = false; note = 'no room'; }
       }
+      // Last, because it is the dearest check by a distance — a whole dry-run solve
+      // of the board — and every cheaper reason to grey the row has already had its
+      // say. Splices only: an add-dot or an end grows the run outward into a cell
+      // that was already checked for room, where the overlap case doesn't arise.
+      if (enabled && m.branch && f.kind !== 'duct' && f.kind !== 'tool'
+          && this.spliceOverlaps(f.kind as SelKind, m.branch)) {
+        enabled = false; note = 'ducts would overlap';
+      }
       return { kind: f.kind, label: f.label, enabled, note };
     });
     if (mid) {
@@ -2025,21 +2083,30 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
 
   /** What a board offers.
    *
-   *  No "remove" here, deliberately. For a board that word means UNPAIR — forgetting
-   *  hardware, which is a Boards-screen job — and a canvas row reading "Remove" next
-   *  to a Delete that only bins a drawn piece is how someone loses a pairing they
-   *  meant to keep. The row goes there instead of pretending to do it here.
+   *  The removal row says UNPAIR, never "Remove". For a board the word means
+   *  forgetting hardware, and a canvas row reading Remove next to a Delete that only
+   *  bins a drawn piece is how someone loses a pairing they meant to keep — so the
+   *  word does that work rather than the row being absent. It lived only on the
+   *  Boards screen until 2026-09-07, which made unpairing a board effectively
+   *  undiscoverable: nothing in the app's navigation points at /boards either.
+   *
+   *  Greyed while gates still name the board, for the reason the Boards screen gives:
+   *  a gate pointing at a controller that doesn't exist fails validation on save, and
+   *  reads as a mysterious save failure rather than a clear reason.
    *
    *  Nor "take off the canvas". Every paired board is placed by construction
    *  (`ensureBoardCells`), and that is what lets the empty-cell menu stay this short:
    *  with no way to unplace a board there is never one to put back. */
   private boardOptions(id: string): MenuOption[] {
     const systems = systemsOf(this.topo as unknown as ShopDoc);
+    const gates = this.topo ? selectorsOnController(this.topo, id).length : 0;
     return [
       { kind: 'rename', label: 'Rename', enabled: true },
       { kind: 'moveSystem', label: 'Move to system…', enabled: systems.length > 1,
         note: systems.length > 1 ? undefined : 'only one system' },
-      { kind: 'boardSetup', label: 'Board setup…', enabled: true, note: 'channels, unpair' },
+      { kind: 'boardSetup', label: 'Board setup…', enabled: true, note: 'channels' },
+      { kind: 'unpairBoard', label: 'Unpair board…', enabled: gates === 0,
+        note: gates ? `drives ${gates} ${gates === 1 ? 'gate' : 'gates'}` : undefined },
     ];
   }
 
@@ -2141,6 +2208,9 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     // is still the same menu, one level down.
     if (kind === 'findBoards') { this.closeMenu(); this.goBoards(); return; }
     if (kind === 'boardSetup') { this.closeMenu(); this.goBoards(); return; }
+    // Not an edit either — it talks to the device, and undo can't take it back. Same
+    // reason as the two above: no undo point may be left behind.
+    if (kind === 'unpairBoard' && m.board) { const id = m.board; this.closeMenu(); void this.unpairBoard(id); return; }
     if (kind === 'moveSystem' && m.board) {
       this.openMenu(m.x, m.y, { moveBoard: m.board });
       return;
@@ -3058,6 +3128,49 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   boardName(id: string): string {
     const c = this.controllersRaw().find(x => x['id'] === id);
     return (c?.['name'] as string) || id;
+  }
+
+  /**
+   * Forget a board: unpair it on the device, then drop its controller from the doc.
+   *
+   * Confirmed rather than undoable. Every other canvas menu action is a pure
+   * document edit, which is what lets undo be a whole-document snapshot
+   * ({@link snapshot}) — but this one changes state on the DEVICE, and restoring a
+   * snapshot would put the controller back in a shop the hardware is no longer
+   * paired with. So it leaves no undo point, and it clears the history behind it:
+   * an older snapshot still holds this controller, and stepping back onto one would
+   * resurrect a board that isn't there. Losing the undo stack is the smaller harm.
+   *
+   * The gate count is recomputed HERE rather than read off the greyed menu row, for
+   * the same reason the Boards screen does it: the row is a render-time snapshot,
+   * and acting on a stale one unpairs a board that still drives gates.
+   */
+  private async unpairBoard(id: string): Promise<void> {
+    if (!this.topo) return;
+    const name = this.boardName(id);
+    const gates = selectorsOnController(this.topo, id).length;
+    if (gates > 0) {                                  // the greyed row is the affordance; this is the guard
+      this.saveError = `${name} still drives ${gates} ${gates === 1 ? 'gate' : 'gates'}. `
+                     + `Move ${gates === 1 ? 'it' : 'them'} to another board first.`;
+      return;
+    }
+    const c = this.controllersRaw().find(x => x['id'] === id);
+    const host = (c?.['link'] as { host?: string } | undefined)?.host;
+    if (!host) { this.saveError = `${name} has no hostname to unpair — use Board setup.`; return; }
+    if (!window.confirm(`Unpair ${name}? The board stays powered and keeps its WiFi, `
+                      + `but this shop forgets it. Pair it again from Boards.`)) return;
+    this.saveError = ''; this.saveNote = '';
+    try { await this.api.unpairNode(host); }
+    catch { this.saveError = `Couldn't reach the controller — ${name} is still paired.`; return; }
+    const controllers = this.controllersRaw();
+    const i = controllers.findIndex(x => x['id'] === id);
+    if (i >= 0) controllers.splice(i, 1);
+    this.boardCells.delete(id);
+    this.past.length = 0; this.future.length = 0;     // see the note above
+    this.buildGraph(this.topo); this.syncNodes(); this.refreshHandles();
+    this.dirty = true;
+    await this.save();
+    if (!this.saveError) this.saveNote = `${name} unpaired.`;
   }
 
   /** Redraw a board beside a different system.

@@ -141,16 +141,33 @@ export type SegCost = (a: Pt, b: Pt) => number;
  *  canvas — which used to get a cosmetic hop and nothing else, so the router had no
  *  reason to prefer the tidier column when one was available.
  *
- *  `share` is the dearest of the three, and it is not a crossing at all: it is two
+ *  `share` is the dearest of the four, and it is not a crossing at all: it is two
  *  cables running down the SAME corridor, one drawn over the other. Crossings are
  *  legible — the hop says the two don't touch — but a shared corridor draws two
  *  cables as one line, and the second one has simply disappeared until it peels
  *  off somewhere further down. That is worse than either cable taking a longer way
  *  round, so it is priced above a crossing and well clear of the per-cell penalty
- *  that keeps a drop near its own tab. Wires only: a cable sharing a duct's column
- *  is a different (and much rarer) kind of untidy, and pricing it here would send
- *  cables round the shop to dodge the trunk they are meant to run beside. */
-export const CROSSING_COST = { box: 100, duct: 1, wire: 8, share: 40 } as const;
+ *  that keeps a drop near its own tab.
+ *
+ *  `ductShare` is that same fault against ductwork, and it was missed until
+ *  2026-09-07 because it hid behind the (correct) rule that CROSSING a duct is
+ *  cheap. Crossing one is fine — cable crosses ductwork all day, and the crossing
+ *  reads as a crossing. Running ALONG one is not: a 2px cable laid on a 6px duct
+ *  is swallowed by it, and the wire is simply missing for as far as the two
+ *  agree. So the two cases are priced apart rather than together. It sits above a
+ *  wire crossing (a hidden wire is worse than a legible one) and below wire-on-
+ *  wire share, because a cable on a duct is at least a different colour and weight
+ *  — it is obscured, where two cables are indistinguishable. Still nowhere near
+ *  `box`, so a cable that has no clear column left keeps running beside the trunk
+ *  rather than touring the shop to dodge it. */
+export const CROSSING_COST = { box: 100, duct: 1, wire: 8, share: 40, ductShare: 20 } as const;
+
+/** How close a cable has to run to a duct's centreline before it counts as riding
+ *  ON it rather than near it. Wider than sharesLane's own hairline default because
+ *  the two are drawn at different weights: the duct is 6px and the cable 2px, so
+ *  they overlap while their centrelines are still ~4px apart. 6 gives that a
+ *  little margin without catching a cable in the next gutter over. */
+export const DUCT_SHARE_EPS = 6;
 
 /** A SegCost that charges CROSSING_COST for each kind of thing `[a, b]` crosses.
  *  `ducts` is a set of polylines (their own individual segments are checked);
@@ -159,10 +176,17 @@ export function crossingCost(boxes: readonly Box[], ducts: readonly GeomPt[][], 
   return (a, b) => {
     let c = 0;
     for (const box of boxes) if (segBoxHit(a, b, box)) c += CROSSING_COST.box;
+    // Charged once per duct, and the worse of the two verdicts wins: a cable that
+    // runs along a duct for a while and also crosses it elsewhere is being hidden,
+    // which is the fault worth pricing.
     for (const pts of ducts) {
+      let worst = 0;
       for (let i = 0; i < pts.length - 1; i++) {
-        if (crossing([a, b] as const, [pts[i], pts[i + 1]] as const)) { c += CROSSING_COST.duct; break; }
+        const seg = [pts[i], pts[i + 1]] as const;
+        if (sharesLane([a, b] as const, seg, DUCT_SHARE_EPS)) { worst = CROSSING_COST.ductShare; break; }
+        if (crossing([a, b] as const, seg)) worst = CROSSING_COST.duct;
       }
+      c += worst;
     }
     for (const seg of drawn) {
       if (crossing([a, b] as const, seg)) c += CROSSING_COST.wire;

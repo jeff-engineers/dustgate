@@ -52,19 +52,35 @@ export interface RouteAllOpts {
  * of attempts, each with a fully determined order.
  */
 export function routeAll(scene: Scene, opts: RouteAllOpts = {}): Map<string, RoutedDuct> {
+  return routeAllShared(scene, opts).out;
+}
+
+/**
+ * {@link routeAll}, plus WHICH ducts had to give up their exclusive lane.
+ *
+ * The list used to be computed and thrown away — every caller took the map and the
+ * fact that two runs are drawn on top of each other went nowhere, so the canvas
+ * could produce an overlap and say nothing about it. Splitting the two lets a
+ * caller ask "would this edit force an overlap?" before committing to it, which is
+ * how the branch-dot menu greys a splice it can't draw (2026-09-07).
+ *
+ * An id in `shared` means that duct is drawn over some OTHER duct — which one is
+ * not recorded, because the pass that gave up doesn't know who it lost to.
+ */
+export function routeAllShared(scene: Scene, opts: RouteAllOpts = {}): { out: Map<string, RoutedDuct>; shared: string[] } {
   let order = [...scene.ducts]
     .map(d => d.childId)
     .sort((a, b) => a < b ? -1 : a > b ? 1 : 0);
-  let best: Map<string, RoutedDuct> | null = null;
+  let best: { out: Map<string, RoutedDuct>; shared: string[] } | null = null;
   for (let attempt = 0; attempt < 3; attempt++) {
-    const { out, shared } = routePass(scene, opts, order);
-    if (!shared.length) return out;
-    if (!best) best = out;                      // keep the first result as the floor
-    const promote = shared[0];
+    const pass = routePass(scene, opts, order);
+    if (!pass.shared.length) return pass;
+    if (!best) best = pass;                     // keep the first result as the floor
+    const promote = pass.shared[0];
     if (order[0] === promote) break;            // already first; reordering can't help
     order = [promote, ...order.filter(id => id !== promote)];
   }
-  return best ?? routePass(scene, opts, order).out;
+  return best ?? routePass(scene, opts, order);
 }
 
 function routePass(scene: Scene, opts: RouteAllOpts, order: string[]): { out: Map<string, RoutedDuct>; shared: string[] } {
@@ -156,15 +172,23 @@ export class Router {
   private hash = '';
   private cache = new Map<string, RoutedDuct>();
   private last = new Map<string, RoutedDuct>();
+  private sharedIds: string[] = [];
 
   routes(scene: Scene, frozen?: ReadonlySet<string>): ReadonlyMap<string, RoutedDuct> {
     const h = sceneHash(scene, frozen);
     if (h === this.hash) return this.cache;
-    this.cache = routeAll(scene, { prior: this.last, frozen });
+    const solved = routeAllShared(scene, { prior: this.last, frozen });
+    this.cache = solved.out;
+    this.sharedIds = solved.shared;
     this.last = this.cache;
     this.hash = h;
     return this.cache;
   }
+
+  /** Ducts drawn over another duct as of the last solve — empty when the picture is
+   *  clean, which is the normal case. Kept beside the routes so a caller can say so
+   *  rather than leaving someone to spot it on the canvas. */
+  shared(): readonly string[] { return this.sharedIds; }
 
   /** Drop the memo — call when the board changes shape in a way the hash can't see. */
   invalidate(): void { this.hash = ''; }
@@ -175,7 +199,9 @@ export class Router {
 
 function sceneHash(scene: Scene, frozen?: ReadonlySet<string>): string {
   const parts: string[] = [];
-  for (const n of scene.nodes) parts.push(`${n.id}:${n.glyph}:${n.span}:${Math.round(n.x)}:${Math.round(n.y)}`);
+  // `capped` is in the hash because it changes a junction's FOOTPRINT, so capping an
+  // end has to re-solve the runs that were steering around the dot it used to be.
+  for (const n of scene.nodes) parts.push(`${n.id}:${n.glyph}:${n.span}:${Math.round(n.x)}:${Math.round(n.y)}:${n.capped ? 'c' : ''}`);
   parts.push('|');
   for (const d of scene.ducts) parts.push(`${d.childId}<${d.parentId ?? ''}<${d.outlet?.unitId ?? ''}:${d.outlet?.index ?? ''}`);
   parts.push('|', `${Math.round(scene.bounds.x1)}x${Math.round(scene.bounds.y1)}`);

@@ -8,6 +8,35 @@ than restated. Delete an item when it lands; the git history is the record.
 
 ## Bugs
 
+- **Calibrate isn't reachable from the /gates page.** Opening a gate there
+  (`http://dustgate.local/#/gates`) offers no calibrate option, so the only way
+  in is whatever other path still has one. Find where the entry point went and
+  put it back on that page.
+
+- **Two ducts must NEVER overlap.** LANDED 2026-09-07 for the reported case — a
+  ball valve spliced on a branch dot above another one. Keeping the entry because
+  the general problem is bigger than the fix:
+  - The splice is dry-run when the branch-dot menu opens, and the row greys
+    *"ducts would overlap"* (`spliceOverlaps()`), which is the decided behaviour:
+    refuse rather than draw something impossible.
+  - `routeAll()` used to compute WHICH ducts had to share a lane and throw the
+    list away. `routeAllShared()` returns it and `Router.shared()` keeps it from
+    the last solve.
+  - **Still not surfaced anywhere.** `Router.shared()` has no reader. A shop
+    dragged into a corner can still end up with two runs drawn over each other —
+    that fallback is deliberate, the canvas has to draw something — but nothing
+    SAYS so. The guide bar should, the way a blocked drag names what is in the
+    way. That is the remaining half of this item.
+  - Every other path into an overlap is unguarded: dragging a piece, filling an
+    end, adding at an outlet. Only the branch-dot splice asks.
+
+- **A cable must never run ALONG a duct.** LANDED 2026-09-07. Crossing one is
+  fine and stays cheap; riding one is priced (`CROSSING_COST.ductShare`), because
+  a 2px cable on a 6px duct is swallowed by it. The port stub is exempt by
+  construction — a cable leaves the underside of its port whatever is below it,
+  so a board standing over a trunk always puts its first 18px on that trunk.
+  Covered by W14/W15; not yet seen on real hardware's screen.
+
 
 ## UI
 
@@ -19,11 +48,31 @@ than restated. Delete an item when it lands; the git history is the record.
   new marking on the canvas, and there is no vocabulary for "this piece is the
   problem" yet.
 
-- **Highlight ducts and wires when hovering over them** might also trigger this on 
-  hover of tools/gates/etc - aka "show the airflow/electron path"
+- **Highlight ducts and wires on hover, so a run can be traced start to end.**
+  A subtle GLOW is probably the right treatment — the line vocabulary is already
+  loaded (weight = trunk vs branch, grey dashed = a secondary crossing the seam,
+  accent orange = an unfinished stub), so a highlight that changes colour or
+  weight would collide with something that already means something.
 
-- **We should probably expose /boards page** that behaves similarly to the tools and 
-  gates page
+  Hovering a wire or duct should light the whole path, not the segment under the
+  cursor — that is the point: "show me the airflow/electron path." Hovering a
+  tool, gate or board should probably do the same for everything connected to it.
+
+  Hover can't be the only way in (mockup rules), so this wants a tap/focus path
+  too, and focus dims rather than hides. Update `docs/mockups/canvas.html` in
+  place with whatever lands — a new marking on the canvas is exactly what that
+  page exists to arbitrate.     
+
+- **Expose the /boards page** the way tools and gates are exposed. The route
+  exists (`app.routes.ts`) and the screen is real, but nothing in the app's own
+  navigation points at it — the only way in is the canvas: right-click a board →
+  "Board setup…" (`goBoards()`), or type the URL.
+
+  Removing a node is no longer part of this: the canvas board menu offers
+  **"Unpair board…"** directly as of 2026-09-07 (D-64), confirmed rather than
+  undoable, greyed while gates still name the board. What is left here is the
+  navigation — /boards is still reachable only from the canvas or by typing the
+  URL, and it is the screen for channels, pairing and the board list.
 
 - **Move all the setup buttons on the bottom of /shop to a dropdown menu** on the top
   right of the page
@@ -53,6 +102,15 @@ than restated. Delete an item when it lands; the git history is the record.
   NodeLink before anything moves) is the ambitious version, and has an ordering
   problem — the primary can only reach the nodes on the OLD network, so anything
   that misses the message needs a defined fallback.
+
+- **No way to delete a system, or a collector.** You can add both and never
+  remove either. A collector delete has one obvious guard — at least one must
+  remain, since a shop with no collector is not a shop — and deleting a SYSTEM is
+  the harder half: it owns a contiguous row band, and everything standing in that
+  band has to go somewhere or go away. Decide what happens to the machines and
+  gates inside it (delete with the system? move to the surviving system's band?
+  refuse while it is non-empty?) before writing any of it. Related to the 'Clear
+  shop' button below, which is the blunt version of the same need.
 
 - **Add a 'Clear shop' button** Add this to the shop dropdown menu, go back to a single
   dust collector with no connections.
@@ -118,8 +176,6 @@ than restated. Delete an item when it lands; the git history is the record.
   can have the same name, but not 2 tools or 2 plugs.  Really in general
   we need to make sure names are distinct, at least acros systems
 
--**clicking calibrate from the /gates page doesn't give a cailbrate option**
-  routes to http://dustgate.local/#/gates
 ## Testing
 
 Nearly all of DustGate compiles and passes host tests without ever having run on
