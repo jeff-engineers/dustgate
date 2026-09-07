@@ -36,13 +36,34 @@ export interface Port { pt: Pt; dir: Dir; bias?: number; }
  *  +2 / −3; everything is scaled by 4 so the reuse discount can't make an edge
  *  cheaper than zero, which would break A*'s optimality guarantee. */
 const STEP = 4;
-const TURN = 32;      // strongly prefer few bends
+// A bend now costs more than crossing another duct (CROSS, below), which is a
+// deliberate ranking rather than a slip: a crossing is drawn plainly and reads as a
+// crossing, while a corner is a piece of pipe nobody would fit. Raised from 32 on
+// 2026-09-07, with room on the grid and lane nesting to make it affordable.
+//
+// 64 is measured, over eight sample layouts and a 200-shop fuzz rather than the one
+// reference scene — which is the difference between this number and 48. The named
+// layouts are FLAT from 32 upward and would have settled it anywhere; the fuzz keeps
+// improving (766 bends at 32, 756 at 48, 731 at 64) and then stops, 80 being
+// identical to 64. Past that it starts buying a bend by climbing over the ceiling
+// instead, which is the wrong trade — at 96 the two gate-above-the-collector scenes
+// each drop a bend and gain a cell of pipe over the top.
+const TURN = 64;      // strongly prefer few bends
 const USED = 24;      // an edge another duct already took — soft, so parallel runs separate
 const CROSS = 40;     // a NODE another duct passes through: this is what a crossing costs.
                       // Two orthogonal runs on a lattice can only meet at a node, so
                       // charging for the node is charging for the crossing — worth more
                       // than a bend, because the tidiest crossing is the one not drawn.
 const HUG = 8;        // an edge running right alongside a device
+/** Per step, for a lattice node ABOVE the ceiling (see GridOpts.ceilingY).
+ *
+ *  Priced to lose against almost any detour that stays under it — a run climbing
+ *  over the shop pays this on EVERY step it spends up there, so a lane four cells
+ *  longer at the right height still wins — while staying a cost rather than a wall.
+ *  A tool genuinely parked above the collector must still be reachable, and a wall
+ *  would either strand it or push the search out through the margin the lattice
+ *  keeps outside the board, which is how a run ended up at y=-44 on 2026-09-07. */
+const ABOVE_CEILING = 96;
 const REUSE = 3;      // discount for an edge this duct used last frame — keeps a good prefix
 const TOP_ENTRY_BIAS = STEP * 3;   // see the Port.bias doc — enough to win a near-tie,
                                     // not enough to out-price a meaningfully shorter side run
@@ -74,6 +95,21 @@ export interface GridOpts {
   usedNodes?: ReadonlySet<string>;
   /** Edge keys this duct used on the previous solve. */
   priorEdges?: ReadonlySet<string>;
+  /** Board pixels: the height of the collector's outlet. Ducting that climbs above
+   *  this is charged ABOVE_CEILING per step.
+   *
+   *  Air leaves the cyclone at this height and everything downstream hangs off it,
+   *  so a duct drawn above it is pipe going UP to come straight back down. The
+   *  router had no opinion about height at all, and the top of the board is where a
+   *  squeezed run always went — it is the emptiest part of the lattice, so a detour
+   *  over the whole shop costs the search almost nothing while looking, to a
+   *  woodworker, like the one route nobody would ever build. */
+  ceilingY?: number;
+  /** Treat the ceiling as a WALL rather than as expensive. Pipe above the outlet
+   *  height is not a compromise a woodworker would accept, so the caller asks for
+   *  the wall first and falls back to the cost — the same shape as `blockUsed`.
+   *  The fallback is what keeps a machine parked above the collector reachable. */
+  ceilingBlocks?: boolean;
 }
 
 /** Canonical key for a lattice node. */
@@ -222,9 +258,11 @@ class Lattice {
     this.blocked = new Uint8Array(this.w * this.h);
     this.hugs = new Uint8Array(this.w * this.h);
 
+    const ceil = opts.ceilingBlocks ? opts.ceilingY : undefined;
     for (let iy = 0; iy < this.h; iy++) {
       for (let ix = 0; ix < this.w; ix++) {
         const p = this.pt(ix, iy);
+        if (ceil !== undefined && p.y < ceil - 1e-6) { this.blocked[iy * this.w + ix] = 1; continue; }
         if (obstacles.some(b => ptInBox(p, b))) this.blocked[iy * this.w + ix] = 1;
       }
     }
@@ -326,6 +364,11 @@ export function routeOne(from: Port[], to: Port[], opts: GridOpts): RouteResult 
   const used = opts.usedEdges ?? new Set<string>();
   const crossed = opts.usedNodes ?? new Set<string>();
   const prior = opts.priorEdges ?? new Set<string>();
+  // The ceiling in lattice rows, so the hot loop compares integers instead of
+  // converting a node back to pixels on every edge it relaxes.
+  const ceilIy = opts.ceilingY === undefined
+    ? -Infinity
+    : (opts.ceilingY - PAD) / LATTICE - grid.gy0;
 
   // Goal ports, keyed by the lattice node they're reached from.
   const goals = new Map<number, { port: Port; approach: Dir }[]>();
@@ -395,6 +438,7 @@ export function routeOne(from: Port[], to: Port[], opts: GridOpts): RouteResult 
         if (used.has(key)) cost += USED;
         if (crossed.has(nodeKey(bx, by))) cost += CROSS;
         if (grid.isHug(nx, ny)) cost += HUG;
+        if (ny < ceilIy - 1e-6) cost += ABOVE_CEILING;
         if (prior.has(key)) cost -= REUSE;
         const ns = stateOf(nx, ny, nd);
         const ng = g[state] + cost;

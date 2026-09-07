@@ -357,6 +357,12 @@ svg.canvas { display: block; touch-action: none; }
 .menu button.danger { color: var(--danger); }
 .menu button.danger svg { color: var(--danger); }
 .node .cap { fill: var(--muted); }
+/* The problem halo. Two strokes: a wide soft one so it reads when zoomed out to a
+   whole shop, and a crisp ring so it is a deliberate mark rather than a smudge.
+   Non-interactive — the glyph underneath keeps every gesture it had. */
+.halo { pointer-events: none; }
+.halo-ring { fill: none; stroke: var(--accent); stroke-width: 2; opacity: 0.9; }
+.halo-glow { fill: none; stroke: var(--accent); stroke-width: 7; opacity: 0.16; }
 .node .fan { opacity: 0.55; }
 /* Setup badge: needs doing / done. */
 .todo { fill: var(--accent); stroke: var(--surface); stroke-width: 2; }

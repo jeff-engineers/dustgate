@@ -140,6 +140,22 @@
         </div>
 
         <div class="leg">
+          <svg viewBox="0 0 96 34" aria-label="Orange ring round a machine box">
+            <rect x="24" y="6" width="48" height="22" rx="6" fill="none" stroke="var(--accent)"
+                  stroke-width="6" opacity="0.16"/>
+            <rect x="24" y="6" width="48" height="22" rx="6" fill="none" stroke="var(--accent)"
+                  stroke-width="1.7" opacity="0.9"/>
+            <rect x="30" y="10" width="36" height="14" rx="4" fill="#16242c" stroke="#2f6d86"/>
+          </svg>
+          <div><div class="what">Problem halo</div>
+            <div class="means">This piece is what a problem is <b>about</b> — an airflow leak, or a
+              validation failure that names it. Always drawn, never on hover: a fault the canvas
+              knows about is one it points at. Orange, the same as the unset-gate dot, because both
+              mean “your attention is wanted here” (D-66). An overlapping duct gets no mark — that
+              is two runs, one hidden under the other, and the answer there is to prevent it.</div></div>
+        </div>
+
+        <div class="leg">
           <svg viewBox="0 0 96 34" aria-label="Solid azure line"><path class="cable" d="M8 17 H88"/></svg>
           <div><div class="what">Cable</div>
             <div class="means">A board's wire to a gate. Azure, thin — never the app's red,
@@ -296,6 +312,32 @@
         rather than a second parent on the old one. A supplemental port's run is the only run
         allowed to cross the seam, and may be disconnected and re-routed to a primary on the
         second system if that is what the shop wants.</p>
+    </div>
+  </section>
+
+  <hr class="rule"/>
+
+  <section class="sec">
+    <h3>2b · How a run is drawn</h3>
+    <span class="pill built">Built · 2026-09-07</span>
+    <div class="card">
+      <p class="note"><b>Nothing climbs above the collector's outlet.</b> Air leaves the cyclone
+        at that height and everything downstream flows away and down, so pipe drawn above the
+        line is going up only to come back. The empty band across the top of the board is the
+        cheapest place for a squeezed run to go and the worst place for it to end up; the
+        topmost collector's outlet is a wall the router only gives up when a machine genuinely
+        sits above it (D-67).</p>
+      <p class="note"><b>Two runs that must share a lane are nested, not sent round the shop.</b>
+        They are pulled a lane apart, symmetrically about the line they both wanted, so neither
+        reads as the one that moved — the same treatment cables have had since boards went on the
+        grid. It puts the drawn line a few pixels off where it routed, deliberately: the canvas
+        is a representation of a shop, not a blueprint. What it buys is the removal of the
+        elbows that existed only to satisfy the rule, which is most of what made a layout look
+        like plumbing nobody would build.</p>
+      <p class="note"><b>A corner costs more than a crossing.</b> Two runs crossing is drawn
+        plainly and reads as a crossing; a bend is a fitting somebody has to buy and fit. So the
+        router will cross a duct to avoid an elbow, and a <b>four-way junction is allowed</b> —
+        no real fitting does that, but the map is clearer for it.</p>
     </div>
   </section>
 
