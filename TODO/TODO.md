@@ -146,7 +146,7 @@ than restated. Delete an item when it lands; the git history is the record.
 
 - **Improve drag and drop vs scroll accuracy on mobile** Can we add a small delay to drag and drop
   when on mobile? Turn it into a long press then drag? Without that, it makes scrolling on mobile
-  risky since you're likely to accidentally grab the contents of a cell instead of hitting empty space.s
+  risky since you're likely to accidentally grab the contents of a cell instead of hitting empty space.s  
 
 ## Carried debt
 

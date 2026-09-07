@@ -448,30 +448,49 @@ group('R12 settled layouts have no overlapping duct');
 
 group('R13 routeAllShared names the ducts that had to share');
 {
-  // R12 says a settled layout doesn't overlap; this says what happens when one
-  // genuinely can't be settled. The relaxation in routePass ends with an
-  // overlapping picture rather than a failure, which is right — a shop dragged
-  // into a corner still has to draw — but the fact was computed and thrown away,
-  // so nothing upstream could mention it. Found by search over cramped boards:
-  // five tools packed round a 5-outlet gate, one of which has nowhere clean left.
+  // The fixture is a gate outlet with two ducts on it, because that is the one
+  // shape with NOWHERE else to go: an outlet faces down and nowhere else, so the
+  // second duct has no other port to take and no other lane to use. Everything
+  // else that used to overlap is now routed apart, which is the point — this
+  // exists to prove the REPORTING still works when the picture genuinely cannot
+  // be drawn clean.
+  //
+  // It used to be a cramped board found by search over random layouts. That board
+  // routes cleanly now (2026-09-07, the drawn-line obstacles), which is a better
+  // outcome than the test it broke.
   const s = scene(
-    [collector('dc', 0, 0), unit('g', 0, 1, 5),
-     tool('t0', 3, 3), tool('t1', 0, 2), tool('t2', 0, 4), tool('t3', 2, 2), tool('t4', 3, 2)],
+    [collector('dc', 0, 0), unit('g', 0, 1, 2), tool('a', 0, 3), tool('b', 0, 4)],
     [{ childId: 'g', parentId: 'dc' },
-     { childId: 't0', outlet: { unitId: 'g', index: 0 } },
-     { childId: 't1', outlet: { unitId: 'g', index: 1 } },
-     { childId: 't2', outlet: { unitId: 'g', index: 2 } },
-     { childId: 't3', outlet: { unitId: 'g', index: 3 } },
-     { childId: 't4', outlet: { unitId: 'g', index: 4 } }],
+     { childId: 'a', outlet: { unitId: 'g', index: 0 } },
+     { childId: 'b', outlet: { unitId: 'g', index: 0 } }],
   );
   const { out, shared } = routeAllShared(s);
-  ok('the board still routes — sharing is a fallback, not a failure', out.size === 6);
+  ok('the board still routes — sharing is a fallback, not a failure', out.size === 3);
   ok('and the ducts that had to share are named', shared.length > 0, JSON.stringify(shared));
-  // The named duct is really the one drawn over something else.
-  const sets = new Map([...out].map(([id, v]) => [id, v.edges]));
-  const clashes = (id: string) => [...sets].some(([other, e]) =>
-    other !== id && [...sets.get(id)!].some(k => e.has(k)));
-  ok('...and each named duct really is drawn over another', shared.every(clashes),
+
+  // Each named duct really is drawn over another, judged the way the canvas draws
+  // it rather than by the lattice — which is the whole reason this list exists.
+  const overlaps = (id: string) => {
+    const mine = out.get(id)!.pts;
+    for (const [other, r] of out) {
+      if (other === id) continue;
+      for (let i = 0; i < mine.length - 1; i++) {
+        for (let j = 0; j < r.pts.length - 1; j++) {
+          const [a, b] = [mine[i], mine[i + 1]], [c, d] = [r.pts[j], r.pts[j + 1]];
+          const hA = Math.abs(a.y - b.y) < 0.5, hB = Math.abs(c.y - d.y) < 0.5;
+          const vA = Math.abs(a.x - b.x) < 0.5, vB = Math.abs(c.x - d.x) < 0.5;
+          if (!((hA && hB) || (vA && vB))) continue;
+          if (Math.abs((hA ? a.y : a.x) - (hB ? c.y : c.x)) > 0.5) continue;
+          const sp = (p: typeof a, q: typeof a) => (hA ? [Math.min(p.x, q.x), Math.max(p.x, q.x)]
+                                                       : [Math.min(p.y, q.y), Math.max(p.y, q.y)]);
+          const [s0, s1] = sp(a, b), [t0, t1] = sp(c, d);
+          if (Math.min(s1, t1) - Math.max(s0, t0) > 1) return true;
+        }
+      }
+    }
+    return false;
+  };
+  ok('...and each named duct really is drawn over another', shared.every(overlaps),
      JSON.stringify(shared));
 
   // A clean board reports nothing, and routeAll is still the same answer without
