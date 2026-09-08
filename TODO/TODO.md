@@ -17,25 +17,6 @@ reasoning was contested, or that a still-open item above leans on.
 
 ## UI
 
-- **Dropping a piece into the void between two systems should push the shop down
-  (2026-09-07, jeff).** Dragging a tool or a gate into the empty band between two
-  systems currently just refuses, or lands it somewhere it does not belong.
-  Bumping everything below down one cell is the gesture a person expects — the
-  same instinct as inserting a row in a table — and it is the missing half of
-  "there is no way to give a system breathing room" below. Row bands are
-  contiguous and non-interleaving, so the push has to move every system underneath
-  and everything in them, not just the neighbouring band.
-
-  **The gap is a consumable, and that is the sharp version of the bug** (jeff,
-  2026-09-08): the first drop into it works and the band simply grows to swallow
-  the row, so every drop after that is refused because the bands now touch. "The
-  extra row vanishes once you do that, meaning that you can't keep moving things
-  down." Nothing puts the row back, so a shop can only ever get tighter.
-
-  Explored in [`docs/mockups/seam-insert.html`](../docs/mockups/seam-insert.html)
-  — published 2026-09-08, NOT yet accepted, and it changes the "What can stop a
-  drag" table in `canvas.html`, so it needs a decision before any code.
-
 - **Replace drag-to-branch on a duct with "move this run here" (2026-09-07,
   jeff).** Today, dragging a branch dot tees in a passive leg. The more useful
   gesture is moving the RUN — put it where I want it and keep it there, the way
@@ -50,6 +31,14 @@ reasoning was contested, or that a still-open item above leans on.
   two systems. Everything inside the band would have to travel with it. Related to
   the delete-a-system item below — both are missing verbs on a system rather than
   on the pieces in it.
+
+  **Half the machinery now exists** (2026-09-08): `openRows()` in
+  build.component.ts does the push, and D-71 drives it from a piece being dropped
+  on the seam. What is missing is a way to ASK for it with no piece involved —
+  dragging the seam itself, or a menu on the grey ground. Jeff called this
+  not critical. It is also the only route to the UPWARD case D-71 deliberately
+  left out: a piece dragged up into the seam is itself what closes the gap, so
+  reopening one means moving the system above.
 
 - **Expose the /boards page** the way tools and gates are exposed. The route
   exists (`app.routes.ts`) and the screen is real, but nothing in the app's own
@@ -445,6 +434,30 @@ history is still the record.
   version is `CELL` and the clearance margins, and the measurement to take first is
   what the demo layout's elbow count and overlap count do as those grow — both are
   now countable.
+
+### Canvas — bands and the seam (2026-09-08)
+
+- **Dropping a piece into the void between two systems should push the shop down
+  (2026-09-07, jeff).** LANDED 2026-09-08 (D-71). A drop at the seam OPENS a row
+  instead of spending one: everything at or below moves down by whatever count
+  leaves an empty row between the piece's band and the neighbour's, so the gesture
+  repeats. Boards ride along — they own a cell while belonging to no system.
+  Silent and one undo step, both jeff's calls.
+
+  Kept because the diagnosis is the part worth not re-deriving: **the gap was a
+  consumable and nobody had noticed it was being spent.** The first drop grew the
+  band over the empty row, so every drop after was refused because the bands then
+  touched, and nothing anywhere put the row back — "the extra row vanishes once
+  you do that, meaning that you can't keep moving things down" (jeff). Half of it
+  had already been met in the DRAWING, which is why `systemSeparators()` exists;
+  that kept the picture honest and never gave the row back.
+
+  Explored in [`archived/seam-insert.html`](../docs/mockups/archived/seam-insert.html),
+  whose demo runs the real rule.
+
+  **Still open, and deliberately:** the push is DOWNWARD only. A piece dragged UP
+  into the seam is itself what closes the gap, so no push below it can reopen one —
+  that needs to move the system ABOVE, which is the seam-drag idea below.
 
 ### Canvas — marking and tracing (2026-09-07)
 
