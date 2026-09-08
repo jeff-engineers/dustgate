@@ -646,18 +646,25 @@ export class LiveViewComponent implements OnInit, OnDestroy {
     if (this.busy || !this.ready) return;
     this.busy = true;
     this.error = '';
+    let switched = 0;   // how much actually landed, for the failure message
     try {
       if (!g.on) {
         await this.api.setCollectorManual(true, g.id);
       } else {
         // Tools first: stopping them is what "off" means while any are running,
         // and clearing the hand-run as well leaves nothing behind holding it on.
-        for (const t of g.tools) if (t.on) await this.api.setToolManual(t.id, false);
-        if (g.manual) await this.api.setCollectorManual(false, g.id);
+        for (const t of g.tools) if (t.on) { await this.api.setToolManual(t.id, false); switched++; }
+        if (g.manual) { await this.api.setCollectorManual(false, g.id); switched++; }
       }
       await this.refresh(true);
     } catch {
-      this.error = "Couldn't reach the controller — nothing was switched.";
+      // "Nothing was switched" is only true if nothing was. This is a LOOP over
+      // several tools, so a failure partway through leaves the earlier ones
+      // already off — and telling someone the shop is as they left it when it
+      // is not is the wrong way round to be wrong.
+      this.error = switched
+        ? 'Only some of it switched before the controller stopped answering — check the shop.'
+        : "Couldn't reach the controller — nothing was switched.";
     } finally {
       this.busy = false;
     }
