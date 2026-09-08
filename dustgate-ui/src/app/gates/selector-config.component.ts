@@ -12,6 +12,9 @@ import {
   configurableSelectorsOf, controllersOf, isCalibrated, isConfigurableSelector,
   isServoKind, kindLabel, servoSelectorsOf,
 } from './selector-types';
+import {
+  type Drives, applyDrivesCache, canHost, drivesFromCaps, drivesFromHasLinear, resolveDrives,
+} from '../boards/board-drives';
 
 // ── Configuring one ball valve or manifold ───────────────────────────────────
 // Two facts the graph can't infer — what it's called, and which board + PWM channel
@@ -29,7 +32,13 @@ import {
 // Still one component because both panes need the same paired-board merge and the
 // same link state; two would either duplicate that or need a third to hold it.
 
-/** Mirrors SERVO_COUNT in config.h / MAX_SERVOS_PER_HOST in topology.js. */
+/** Mirrors SERVO_COUNT in config.h / MAX_SERVOS_PER_HOST in topology.js.
+ *
+ *  A PWM board's ports, and ONLY a PWM board's. A slider board has one port and
+ *  no channels at all — the serial bus and PWM channel 1 are the same pads, so a
+ *  board is flashed as one or the other and never offers both. Reading this as
+ *  every board's capacity is what had a one-port slider node advertising four
+ *  free servo channels (2026-09-08). See boards/board-drives.ts. */
 const SERVO_CHANNELS = [0, 1, 2, 3];
 
 @Component({
@@ -77,20 +86,43 @@ const SERVO_CHANNELS = [0, 1, 2, 3];
 
       <div class="field">
         <label>Driven by</label>
-        <div [class.two]="isServo">
+        <!-- Two columns only when there IS a second control. A slider board has no
+             channel to pick, and the grid left the board picker in half a row with
+             dead space beside it. -->
+        <div [class.two]="isServo && selectedIsServoBoard">
+          <!-- A board this gate cannot run on is SHOWN and disabled, never dropped:
+               the same rule the gates list uses for a sleeping board. Hiding it
+               makes a board you paired look like it never arrived, and the fix for
+               "gone" is nothing like the fix for "wrong kind of board". -->
           <select [(ngModel)]="controllerId" (ngModelChange)="touch()">
-            <option *ngFor="let c of controllers" [value]="c.id">{{ boardLabel(c) }}</option>
+            <option *ngFor="let c of controllers" [value]="c.id" [disabled]="!canDrive(c)">
+              {{ boardLabel(c) }}
+            </option>
           </select>
-          <select *ngIf="isServo" [(ngModel)]="channel" (ngModelChange)="touch()">
+          <!-- Only a PWM board has channels to choose between. On a slider board the
+               one port IS the answer, so there is nothing left to pick. -->
+          <select *ngIf="isServo && selectedIsServoBoard" [(ngModel)]="channel" (ngModelChange)="touch()">
             <option *ngFor="let ch of channels" [ngValue]="ch" [disabled]="!!takenBy(ch)">
               {{ channelLabel(ch) }}
             </option>
           </select>
         </div>
-        <p class="why" *ngIf="!boardOffline">
+        <p class="why" *ngIf="!boardOffline && !wrongKindOfBoard && !noBoardCanDrive">
           {{ isServo
-             ? 'Each board drives up to four servo gates, one per channel.'
-             : 'A sliding gate uses the board\\'s stepper driver — one per board.' }}
+             ? 'Each PWM board drives up to four servo gates, one per channel. A slider board drives none.'
+             : 'A sliding gate needs a board flashed for the serial bus, and that board drives one rack and nothing else.' }}
+        </p>
+        <!-- The state the picker used to allow silently, and the one in the report
+             that started this: a manifold sitting on a slider node. The device
+             refuses that document, so say it here rather than at save time. -->
+        <p class="why offline" *ngIf="wrongKindOfBoard">
+          {{ boardName }} is {{ isServo ? 'a sliding-gate board — it drives one rack over a serial bus, not servos'
+                                        : 'a servo board — it drives the PWM bank, not a rack' }}.
+          Pick another: this gate can't run on it.
+        </p>
+        <p class="why offline" *ngIf="noBoardCanDrive">
+          No board in this shop can drive {{ isServo ? 'a servo gate' : 'a sliding gate' }}.
+          Pair {{ isServo ? 'a PWM board' : 'a board flashed for the slider' }} from Boards and come back.
         </p>
         <p class="why offline" *ngIf="boardOffline">
           {{ boardName }} isn't answering right now. You can still pick it — travel
@@ -192,13 +224,22 @@ export class SelectorConfigComponent implements OnInit {
     const controllers = controllersOf(this.topo);
     for (const l of this.links) {
       if (controllers.some((c) => c.id === l.id)) continue;
-      controllers.push({
+      const entry: Controller = {
         id: l.id,                       // the node's mDNS host IS its controllerId
         role: 'secondary',
         name: l.name || l.host || l.id,
         board: l.board,
         link: { transport: 'wifi-ws', host: l.host },
-      });
+      };
+      // ...INCLUDING what it drives. This merge wrote no `drives` at all until
+      // 2026-09-08, which is B4 in board-drives.spec.ts happening a second time:
+      // the canvas's own merge was fixed, this one was missed. The canvas still
+      // DREW a paired slider correctly, because it reads the live report — but the
+      // document this sheet saved said nothing, and the validator's
+      // `c.drives || 'servo'` default turned a slider node into a servo board the
+      // device then refused.
+      applyDrivesCache(entry as unknown as Record<string, unknown>, drivesFromCaps(l.caps));
+      controllers.push(entry);
     }
     this.controllers = this.orderBoards(controllersOf(this.topo));
   }
@@ -207,16 +248,44 @@ export class SelectorConfigComponent implements OnInit {
    *
    *  The channel picker beside this one already said "free" per channel, but only
    *  once you had committed to a board; choosing between boards meant selecting each
-   *  in turn to find out which had room. A servo gate wants a free channel, a slider
-   *  wants the board's one stepper, so each asks about the thing it actually needs. */
+   *  in turn to find out which had room.
+   *
+   *  ASKS THE BOARD, not the gate. This used to branch on the gate's kind, so a
+   *  servo gate was told every board had "n of 4 free" — including a one-port
+   *  slider node, which advertised four channels it does not have (2026-09-08). A
+   *  board's capacity is a fact about the board; whether this gate can use it is
+   *  the separate question canDrive() answers, and the label says which when the
+   *  answer is no rather than quoting a count nobody can spend. */
   boardLabel(c: Controller): string {
     const name = `${c.name || c.id}${c.role === 'primary' ? ' (primary)' : ''}`;
-    if (this.isServo) {
-      const free = this.freeChannels(c);
-      return `${name} — ${free ? `${free} of ${this.channels.length} free` : 'no free channel'}`;
+    if (!this.canDrive(c)) {
+      return `${name} — ${this.drivesOf(c) === 'linear' ? 'sliding gates only' : 'servo gates only'}`;
     }
-    return `${name} — ${this.stepperTaken(c) ? 'stepper in use' : 'stepper free'}`;
+    if (this.drivesOf(c) === 'linear') {
+      return `${name} — ${this.sliderTaken(c) ? 'its one gate is taken' : 'its one gate is free'}`;
+    }
+    const free = this.freeChannels(c);
+    return `${name} — ${free ? `${free} of ${this.channels.length} free` : 'no free channel'}`;
   }
+
+  /** What a board is FLASHED to drive: live report first, saved cache second,
+   *  'servo' last. Same order and same reason as the canvas and the Boards list —
+   *  see boards/board-drives.ts, which exists because those two once disagreed. */
+  private drivesOf(c: Controller): Drives {
+    return resolveDrives(this.reportedDrives(c), c.drives);
+  }
+
+  /** What a board SAYS it drives, or null if it has not said. The primary reports
+   *  `hasLinear` in its status; a node reports `caps.linear` in its WELCOME. */
+  private reportedDrives(c: Controller): Drives | null {
+    if (c.role === 'primary') return drivesFromHasLinear(this.api.status$.value?.hasLinear);
+    return drivesFromCaps(this.links.find((l) => l.id === c.id)?.caps);
+  }
+
+  /** Can this board run THIS gate at all? An equality test, not a capacity one:
+   *  the PWM bank and the serial bus are the same pads, so neither substitutes for
+   *  the other and a board is flashed as one or the other. */
+  canDrive(c: Controller): boolean { return canHost(this.drivesOf(c), this.sel.kind); }
 
   /** Free servo channels on a board, NOT counting the gate being edited: the question
    *  is "if I move it here, is there room", and a gate never competes with itself.
@@ -231,8 +300,12 @@ export class SelectorConfigComponent implements OnInit {
     return this.channels.filter((ch) => !taken.has(ch)).length;
   }
 
-  /** Is this board's ONE stepper driver already spoken for by another sliding gate? */
-  private stepperTaken(c: Controller): boolean {
+  /** Is this board's ONE slider port already spoken for by another sliding gate?
+   *
+   *  Called the stepper until 2026-09-08, which it has not been since the TMC2209
+   *  went to the attic in 2026-08-28 — the port drives an ST3215 over a serial bus
+   *  now, and the canvas's own port label was corrected at the time. */
+  private sliderTaken(c: Controller): boolean {
     return configurableSelectorsOf(this.topo)
       .some((s) => s.controllerId === c.id && s.id !== this.sel.id && !isServoKind(s));
   }
@@ -292,9 +365,39 @@ export class SelectorConfigComponent implements OnInit {
     return !!link && !link.online;
   }
 
-  /** Every channel on the selected board is spoken for by another gate. */
+  /** Every channel on the selected board is spoken for by another gate. Asked only
+   *  of a board that HAS channels — on a slider board the answer is meaningless. */
   get noFreeChannel(): boolean {
-    return this.isServo && this.channels.every((ch) => !!this.takenBy(ch));
+    return this.isServo && this.selectedIsServoBoard && this.channels.every((ch) => !!this.takenBy(ch));
+  }
+
+  /** The selected board, or undefined while the list is still loading. */
+  private get selected(): Controller | undefined {
+    return this.controllers.find((c) => c.id === this.controllerId);
+  }
+
+  /** Does the selected board have a PWM bank to pick a channel out of? */
+  get selectedIsServoBoard(): boolean {
+    const c = this.selected;
+    return !c || this.drivesOf(c) === 'servo';
+  }
+
+  /** The gate is sitting on a board that cannot drive it.
+   *
+   *  Not reachable by picking any more — those options are disabled — but very
+   *  reachable by ARRIVING: a layout saved before this check, or a gate whose board
+   *  was later re-flashed the other way. The device refuses that document, so the
+   *  sheet says so while there is still something to change. */
+  get wrongKindOfBoard(): boolean {
+    const c = this.selected;
+    return !!c && !this.canDrive(c);
+  }
+
+  /** Nothing in the shop can drive this kind of gate — every option is disabled and
+   *  the picker has no answer to offer. Says to pair a board rather than leaving a
+   *  dropdown that refuses everything with no reason given. */
+  get noBoardCanDrive(): boolean {
+    return this.controllers.length > 0 && !this.controllers.some((c) => this.canDrive(c));
   }
 
   /** Name/wiring edits ride along with the calibration result, so push them into the
