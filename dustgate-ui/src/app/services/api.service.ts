@@ -264,29 +264,45 @@ export class ApiService {
     const host  = location.host;  // same host as the page (ESP32 IP or dev proxy)
     const url   = `${proto}://${host}/ws`;
 
-    this.ws = new WebSocket(url);
+    // Held in a LOCAL, and every handler below closes over it rather than
+    // reading `this.ws`. The field moves on each reconnect, and these handlers
+    // outlive the socket they belong to:
+    //
+    //   onerror did `this.ws?.close()`, so a late error from a socket we had
+    //   already replaced closed the LIVE one — which then reconnected, which
+    //   could error again. A reconnect loop built out of the recovery path.
+    //
+    //   onclose scheduled a reconnect unconditionally, so a superseded socket
+    //   closing started a second chain alongside the first.
+    const sock = new WebSocket(url);
+    this.ws = sock;
 
-    this.ws.onopen = () => {
+    sock.onopen = () => {
+      if (this.ws !== sock) return;
       this.connected$.next(true);
       console.log('[WS] Connected');
     };
 
-    this.ws.onmessage = (ev) => {
+    sock.onmessage = (ev) => {
+      if (this.ws !== sock) return;   // a stale socket's last frame is not news
       try {
         const status = JSON.parse(ev.data) as SystemStatus;
         this.status$.next(status);
       } catch { /* ignore malformed frames */ }
     };
 
-    this.ws.onclose = () => {
+    sock.onclose = () => {
+      // Superseded: something else already owns the connection state and has
+      // its own reconnect in hand. Saying anything here would be about a
+      // socket nobody is using.
+      if (this.ws !== sock) return;
       this.connected$.next(false);
       console.log('[WS] Disconnected — reconnecting in 3s');
       setTimeout(() => this.connectWebSocket(), 3000);
     };
 
-    this.ws.onerror = () => {
-      this.ws?.close();
-    };
+    // THIS socket, not whichever one the field points at now.
+    sock.onerror = () => { sock.close(); };
   }
 
   // ── HTTP helpers ──────────────────────────────────────────────────────────────
