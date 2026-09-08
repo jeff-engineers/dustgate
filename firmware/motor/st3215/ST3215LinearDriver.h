@@ -150,11 +150,6 @@ public:
     int      load();
     ST3215Bus& bus() { return _bus; }
 
-    // How the last stop() actually took effect. "" until one has run. Printed by
-    // printDriverRegs(), because which method works is the open hardware
-    // question this driver most needs answered.
-    const char* lastStopMethod() const { return _lastStopMethod; }
-
 private:
     // Send one relative step command. `steps` is signed in DATUM-RELATIVE terms:
     // positive is away from the datum. Returns false if the bus refused it.

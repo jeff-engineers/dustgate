@@ -202,7 +202,6 @@ public:
   ReconcileResult setToolPower(const std::string& id, float w) { return setMachinePower(id, w); }
   float toolThreshold(const std::string& id) const { return machineThreshold(id); }
   float toolWatts(const std::string& id) const     { return machineWatts(id); }
-  std::vector<std::string> activeTools() const     { return activeMachines(); }
   std::string toolForOutlet(const char* h, const char* i) const { return machineForOutlet(h, i); }
 
 private:

@@ -306,10 +306,11 @@ public:
     }
 
     // ---- v1 spellings, kept for call sites that predate ports ----
+    // Only the three that still have callers. hasTool/toolIsManual/activeTools
+    // were kept for the same reason and turned out to have none — a comment
+    // promising compatibility with nothing.
     void setToolPower(const std::string& id, float w) { setMachinePower(id, w); }
     bool setToolManual(const std::string& id, bool on) { return setMachineManual(id, on); }
-    bool hasTool(const std::string& id) const { return hasMachine(id); }
-    bool toolIsManual(const std::string& id) const { return machineIsManual(id); }
     std::string toolForOutlet(const char* h, const char* i) const { return machineForOutlet(h, i); }
 
     // Pump the move queue. Issues at most one move per call and never while the
@@ -442,7 +443,6 @@ public:
     std::vector<std::string> activeMachines() const {
         return _loaded ? _ctrl.activeMachines() : std::vector<std::string>();
     }
-    std::vector<std::string> activeTools() const { return activeMachines(); }
     const std::vector<FailedMove>& failedMoves() const { return _failed; }
 
     // Serialize the live view into `out`, matching statusView() in
