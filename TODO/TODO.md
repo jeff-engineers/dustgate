@@ -4,96 +4,18 @@ Jeff's parking lot. Add anything here rather than derailing whatever is in
 flight — a line is enough, context can come later.
 
 Anything with a plan behind it lives in `docs/` and is linked from here rather
-than restated. Delete an item when it lands; the git history is the record.
+than restated. When an item lands, either delete it — the git history is the
+record — or move it to **Done** at the bottom, which is for the ones whose
+reasoning was contested, or that a still-open item above leans on.
 
 ## Bugs
 
 - **Calibrate isn't reachable from the /gates page.** Opening a gate there
-  (`http://dustgate.local/#/gates`) offers no calibrate option, so the only way
+  (`http://dustgate.local/#/  gates`) offers no calibrate option, so the only way
   in is whatever other path still has one. Find where the entry point went and
   put it back on that page.
 
-- **Two ducts must NEVER overlap.** LANDED 2026-09-07. Three separate holes, all
-  closed; kept as a record because the shape of the problem is worth not
-  re-deriving.
-  - The branch-dot menu greys a splice that would make it worse
-    (`spliceOverlaps()` — a dry run of the splice, rolled back). RELATIVE, not
-    absolute: a shop that already overlaps somewhere is not one where every splice
-    must be refused.
-  - The guide bar names the runs that had to share a lane, at `info` — the shop
-    still works, the picture is what suffers (`Router.shared()`).
-  - **Overlap is judged on what is DRAWN, not on the lattice.** The edge
-    bookkeeping missed two shapes that reach the screen anyway: a sub-cell stub
-    between adjacent glyphs claims no lattice edge at all, and two runs through
-    one port are one line until they separate.
-  - **And two legs off a tee now leave by different ports** (`PORT_REUSE`), which
-    is what actually stopped the second kind happening rather than merely
-    reporting it. `laneOffset` used to stagger collinear runs and was deleted in
-    the A* rewrite; the note that introduced it admitted it left "only a tiny
-    shared stub" near the source, and that stub is exactly what survived. A port
-    choice, not an offset, is the fix in this architecture.
-  - Still true: every path into an overlap other than the branch-dot splice only
-    REPORTS — dragging a piece, filling an end, adding at an outlet.
-
-- **A cable must never run ALONG a duct.** LANDED 2026-09-07. Crossing one is
-  fine and stays cheap; riding one is priced (`CROSSING_COST.ductShare`), because
-  a 2px cable on a 6px duct is swallowed by it. The port stub is exempt by
-  construction — a cable leaves the underside of its port whatever is below it,
-  so a board standing over a trunk always puts its first 18px on that trunk.
-  Covered by W14/W15; not yet seen on real hardware's screen.
-
-
 ## UI
-
-- **Highlight a validation problem ON THE CANVAS.** LANDED 2026-09-07 (D-66): an
-  orange halo, always drawn, on every piece an airflow leak or a validation failure
-  names. Explored in `archived/problem-marking.html`.
-
-  What is deliberately NOT marked, and is the open half: **an overlapping duct.**
-  That is two runs with one hidden under the other, which a ring round a box
-  cannot express — the two treatments explored (a bracket over the doubled
-  stretch, peeling the buried run clear on focus) both lost to *not having the
-  overlap*. The guide bar still says one exists; nothing on the canvas points at
-  it. Come back here only if the prevention work below runs out of road.
-
-- **The stock layout looks bad, and the overlap rules are why (2026-09-07,
-  jeff).** LANDED 2026-09-07 — the offset is back, as `separateLanes()` on top of
-  A* rather than instead of it. Two runs that would share a lane are nested
-  LANE_STEP apart, symmetrically, the way the wiring layer has nested cables since
-  boards went on the grid; `shared` is now a genuine fallback nothing on these
-  boards reaches. The grid went to CELL 126 and a bend to TURN 48 alongside it, and
-  ducting is now walled off above the collector's outlet height (D-67).
-
-  Kept because the reasoning was contested and is worth not re-deriving: the
-  offset was NOT ruled out by the routing rewrite.
-
-  `laneOffset` was deleted in the routing
-  rewrite because the LOCAL router was being replaced by A*, not because staggered
-  parallel runs are a bad idea. The plan's line that the used-edge cost "replaces
-  laneOffset's stagger" is about the mechanism, and reading it as "offsets are
-  ruled out" is wrong — jeff, who made the call, says so. An offset applied to a
-  path A* has already solved is a different animal from the stack of local guesses
-  that came out.
-
-  Where it would pay: two runs that must share a corridor could be drawn a few px
-  apart and both stay legible, instead of one of them touring the board to find a
-  lane it does not need.
-
-- **Consider more room on the grid (2026-09-07, jeff).** LANDED — CELL 108 → 126:
-  the pitch at which the reference scene's overlaps go away, with 144 and 162
-  identical to it. Glyph sizes were left alone; whether `CLEARANCE` is the better
-  knob is still open. Re-measure with `npm run bench:routing`.
-
-  Original note: Rearranging the demo
-  layout by hand meant leaving empty cells around things to get a clear view — so
-  the spacing the canvas ships with is tighter than the one a person chooses.
-  Either bigger glyphs generally, or more likely just more padding between cells.
-
-  It belongs beside the offset work rather than after it: most of what makes a run
-  ugly is having nowhere to go, and the same is true of an overlap. Cheapest
-  version is `CELL` and the clearance margins, and the measurement to take first is
-  what the demo layout's elbow count and overlap count do as those grow — both are
-  now countable.
 
 - **Dropping a piece into the void between two systems should push the shop down
   (2026-09-07, jeff).** Dragging a tool or a gate into the empty band between two
@@ -118,33 +40,6 @@ than restated. Delete an item when it lands; the git history is the record.
   two systems. Everything inside the band would have to travel with it. Related to
   the delete-a-system item below — both are missing verbs on a system rather than
   on the pieces in it.
-
-- **Trace a run from the piece you picked (2026-09-07, jeff).** LANDED (D-68).
-  Selecting a machine, valve or duct lights every run back to the collector plus the
-  cable of every gate on the way, as a rim of light in each line's own colour, with
-  everything else dimmed. Upstream only — downstream was built and cut.
-
-  Still open, and the reason the exploration is worth re-reading before anyone
-  touches this: whether **hover** previews the same trace on a desktop, and
-  flow-direction marks, which were argued against rather than forgotten.
-  `archived/path-highlight.html`.
-
-- **Highlight ducts and wires on hover, so a run can be traced start to end.**
-  MOSTLY SUPERSEDED by the trace above, which does this from SELECTION and settled
-  the treatment (D-68). What is left of this item is the hover trigger itself.
-  A subtle GLOW is probably the right treatment — the line vocabulary is already
-  loaded (weight = trunk vs branch, grey dashed = a secondary crossing the seam,
-  accent orange = an unfinished stub), so a highlight that changes colour or
-  weight would collide with something that already means something.
-
-  Hovering a wire or duct should light the whole path, not the segment under the
-  cursor — that is the point: "show me the airflow/electron path." Hovering a
-  tool, gate or board should probably do the same for everything connected to it.
-
-  Hover can't be the only way in (mockup rules), so this wants a tap/focus path
-  too, and focus dims rather than hides. Update `docs/mockups/canvas.html` in
-  place with whatever lands — a new marking on the canvas is exactly what that
-  page exists to arbitrate.     
 
 - **Expose the /boards page** the way tools and gates are exposed. The route
   exists (`app.routes.ts`) and the screen is real, but nothing in the app's own
@@ -286,24 +181,6 @@ would reach first — and no gate has ever moved for it.
 
 ### Bench Testing
 
-**1. A node drives a real servo — no primary needed.** ✅ **DONE** — all four PWM
-channels drive real servos (`firmware/wiring/xiao-c5.md` §6).
-
-Kept for the technique, which the ST3215 slider node will want again: a node has
-**no serial console** — it only acts on HELLO/PING/SET over its `/nodelink`
-WebSocket — so `servo 1 90` on the primary's console moves the PRIMARY's pins.
-The cheap isolated test is to *be* the primary, by pointing the conformance
-runner at the real node:
-
-```bash
-bash dev.sh flash-node dustgate-node
-bash dev.sh monitor node          # watch the other side while it runs
-node shared/device-model/nodelink-conformance.js ws://dustgate-node.local/nodelink http://dustgate-node.local
-```
-Pass: the suite is green AND servos physically move. Green with nothing moving
-means the link works and the actuator doesn't — exactly the split this test
-exists to make visible.
-
 **2. NodeLink — the happy path passes, THE FAIL-SAFE HAS NEVER BEEN TRIED.**
 
 The link itself: ✅ **passed 2026-08-23** on a C5 primary driving a C5 node —
@@ -354,9 +231,19 @@ without a hardware pass. Draw a two-collector shop, save it to a real device,
 power-cycle, and confirm it comes back intact and routes per system.
 
 **6. The 4" Rockler profile.** BLOCKED — needs a built 4" slider. `rockler-4`
-(pitch 127 mm) is derived by the same method that validated 2.5", never measured,
-and stays disabled in the UI until one `calibrate rockler-4 <gates>` sweep
-confirms it. Also still open: pitch uniformity past 2 gates.
+(pitch 127 mm) is derived by the same method that validated 2.5" and has never
+been measured. Also still open: pitch uniformity past 2 gates.
+
+**It is NOT disabled in the UI, and this item said it was until 2026-09-08.** Two
+different controls got conflated. What IS disabled is the **port size** dropdown
+on /settings — `<option value="4in" disabled>4" (soon)</option>`. What is not is
+the **manifold profile** picker in the linear calibrator, where `Rockler 4"
+manifold — 127 mm between outlets` is a live, selectable option
+(`MANIFOLDS` in gates/linear-calibration.component.ts) that will run a reference
+sweep against an unmeasured pitch and place every gate from it. Nothing in the
+code gates it. Decide which way that goes — grey it out to match /settings, or
+leave it selectable and accept that the sweep is the measurement — but do not
+re-read this item as a promise that the UI already refuses.
 
 **8. The wake button — a press on D1 lights the panel.** What that leaves:
 - **The toggle's off half.** Press-again-to-blank was written after that test and
@@ -470,3 +357,125 @@ board list is simulated.
 **5. Live view against real hardware.** `bash dev.sh live` (hot reload proxied to
 the real device) and confirm the tool list, manual override, and gate state track
 what the hardware is doing.
+
+
+## Done
+
+Landed, and kept because the shape of the problem is worth not re-deriving —
+or because the open remainder above only makes sense next to the record of
+what closed. Anything with nothing left to say gets deleted from here; the git
+history is still the record.
+
+### Canvas — overlap and legibility (2026-09-07)
+
+- **Two ducts must NEVER overlap.** LANDED 2026-09-07. Three separate holes, all
+  closed; kept as a record because the shape of the problem is worth not
+  re-deriving.
+  - The branch-dot menu greys a splice that would make it worse
+    (`spliceOverlaps()` — a dry run of the splice, rolled back). RELATIVE, not
+    absolute: a shop that already overlaps somewhere is not one where every splice
+    must be refused.
+  - The guide bar names the runs that had to share a lane, at `info` — the shop
+    still works, the picture is what suffers (`Router.shared()`).
+  - **Overlap is judged on what is DRAWN, not on the lattice.** The edge
+    bookkeeping missed two shapes that reach the screen anyway: a sub-cell stub
+    between adjacent glyphs claims no lattice edge at all, and two runs through
+    one port are one line until they separate.
+  - **And two legs off a tee now leave by different ports** (`PORT_REUSE`), which
+    is what actually stopped the second kind happening rather than merely
+    reporting it. `laneOffset` used to stagger collinear runs and was deleted in
+    the A* rewrite; the note that introduced it admitted it left "only a tiny
+    shared stub" near the source, and that stub is exactly what survived. A port
+    choice, not an offset, is the fix in this architecture.
+  - Still true: every path into an overlap other than the branch-dot splice only
+    REPORTS — dragging a piece, filling an end, adding at an outlet.
+
+- **A cable must never run ALONG a duct.** LANDED 2026-09-07. Crossing one is
+  fine and stays cheap; riding one is priced (`CROSSING_COST.ductShare`), because
+  a 2px cable on a 6px duct is swallowed by it. The port stub is exempt by
+  construction — a cable leaves the underside of its port whatever is below it,
+  so a board standing over a trunk always puts its first 18px on that trunk.
+  Covered by W14/W15; not yet seen on real hardware's screen.
+
+- **The stock layout looks bad, and the overlap rules are why (2026-09-07,
+  jeff).** LANDED 2026-09-07 — the offset is back, as `separateLanes()` on top of
+  A* rather than instead of it. Two runs that would share a lane are nested
+  LANE_STEP apart, symmetrically, the way the wiring layer has nested cables since
+  boards went on the grid; `shared` is now a genuine fallback nothing on these
+  boards reaches. The grid went to CELL 126 and a bend to TURN 48 alongside it, and
+  ducting is now walled off above the collector's outlet height (D-67).
+
+  Kept because the reasoning was contested and is worth not re-deriving: the
+  offset was NOT ruled out by the routing rewrite.
+
+  `laneOffset` was deleted in the routing
+  rewrite because the LOCAL router was being replaced by A*, not because staggered
+  parallel runs are a bad idea. The plan's line that the used-edge cost "replaces
+  laneOffset's stagger" is about the mechanism, and reading it as "offsets are
+  ruled out" is wrong — jeff, who made the call, says so. An offset applied to a
+  path A* has already solved is a different animal from the stack of local guesses
+  that came out.
+
+  Where it would pay: two runs that must share a corridor could be drawn a few px
+  apart and both stay legible, instead of one of them touring the board to find a
+  lane it does not need.
+
+- **Consider more room on the grid (2026-09-07, jeff).** LANDED — CELL 108 → 126:
+  the pitch at which the reference scene's overlaps go away, with 144 and 162
+  identical to it. Glyph sizes were left alone; whether `CLEARANCE` is the better
+  knob is still open. Re-measure with `npm run bench:routing`.
+
+  Original note: Rearranging the demo
+  layout by hand meant leaving empty cells around things to get a clear view — so
+  the spacing the canvas ships with is tighter than the one a person chooses.
+  Either bigger glyphs generally, or more likely just more padding between cells.
+
+  It belongs beside the offset work rather than after it: most of what makes a run
+  ugly is having nowhere to go, and the same is true of an overlap. Cheapest
+  version is `CELL` and the clearance margins, and the measurement to take first is
+  what the demo layout's elbow count and overlap count do as those grow — both are
+  now countable.
+
+### Canvas — marking and tracing (2026-09-07)
+
+- **Highlight a validation problem ON THE CANVAS.** LANDED 2026-09-07 (D-66): an
+  orange halo, always drawn, on every piece an airflow leak or a validation failure
+  names. Explored in `archived/problem-marking.html`.
+
+  What is deliberately NOT marked, and is the open half: **an overlapping duct.**
+  That is two runs with one hidden under the other, which a ring round a box
+  cannot express — the two treatments explored (a bracket over the doubled
+  stretch, peeling the buried run clear on focus) both lost to *not having the
+  overlap*. The guide bar still says one exists; nothing on the canvas points at
+  it. Come back here only if the prevention work — the lane offset and the grid
+  pitch, both above — runs out of road.
+
+- **Trace a run from the piece you picked (2026-09-07, jeff).** LANDED (D-68).
+  Selecting a machine, valve or duct lights every run back to the collector plus the
+  cable of every gate on the way, as a rim of light in each line's own colour, with
+  everything else dimmed. Upstream only — downstream was built and cut.
+
+  **Hover is decided against (2026-09-08, jeff)** — selection is the whole
+  gesture, on desktop as well as on the phone, and a separate "highlight ducts
+  and wires on hover" item was deleted with it. Flow-direction marks were argued
+  against rather than forgotten. `archived/path-highlight.html`.
+
+### Bench
+
+**1. A node drives a real servo — no primary needed.** ✅ **DONE** — all four PWM
+channels drive real servos (`firmware/wiring/xiao-c5.md` §6).
+
+Kept for the technique, which the ST3215 slider node will want again: a node has
+**no serial console** — it only acts on HELLO/PING/SET over its `/nodelink`
+WebSocket — so `servo 1 90` on the primary's console moves the PRIMARY's pins.
+The cheap isolated test is to *be* the primary, by pointing the conformance
+runner at the real node:
+
+```bash
+bash dev.sh flash-node dustgate-node
+bash dev.sh monitor node          # watch the other side while it runs
+node shared/device-model/nodelink-conformance.js ws://dustgate-node.local/nodelink http://dustgate-node.local
+```
+Pass: the suite is green AND servos physically move. Green with nothing moving
+means the link works and the actuator doesn't — exactly the split this test
+exists to make visible.
