@@ -343,6 +343,14 @@ void ST3215LinearDriver::moveTo(long targetSteps) {
     // picks up any remainder.
     _target = targetSteps;
     _homing = false;
+    // A NEW MOVE STARTS THE ZERO-TRAVEL TALLY OVER. It counts consecutive
+    // commands that retired without shifting the carriage, and two in a row is
+    // a fault — but "in a row" has to mean within one move. A single zero-travel
+    // retire at the tail of the LAST move is ordinary (a residual too small to
+    // overcome static friction, which is the case kArrivalSlack describes), and
+    // carrying that 1 forward made the first such retire of this move the
+    // second, faulting a move that had gone perfectly well.
+    _zeroTravelRetires = 0;
     sendNextChunk();
 }
 
@@ -359,6 +367,7 @@ void ST3215LinearDriver::startHoming() {
     long sweep = (long)(HOMING_MAX_TRAVEL_MM * ST3215_COUNTS_PER_MM);
     _homing = true;
     _target = _position + sweep * HOME_DIRECTION;   // +HOME_DIRECTION is toward the datum
+    _zeroTravelRetires = 0;                         // see moveTo() — per move, not per lifetime
 
     DEBUG_PRINT(F("[ST3215] homing sweep up to ")); DEBUG_PRINT(sweep);
     DEBUG_PRINT(F(" counts toward the datum at ")); DEBUG_PRINT((int)HOMING_SPEED_STEPS_PER_SEC);
