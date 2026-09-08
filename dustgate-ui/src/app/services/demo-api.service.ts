@@ -193,7 +193,13 @@ export class DemoApiService extends ApiService {
     // toolThreshold() is machineThreshold under its v1 name, and already falls
     // back to the default for a machine that has no plug configured.
     const trip = toolThreshold(this.td.topology, toolId);
-    setToolPower(this.td, toolId, on ? Math.round(trip * 3) : 0);
+    // The FLOOR is not decoration — it is what keeps "switched on by hand" from
+    // being indistinguishable from "drawing nothing". A machine whose thresholdW
+    // is explicitly 0 makes `trip * 3` zero, so the demo showed a hand-switched
+    // tool at 0 W and nothing routed. Both twins have had the floor all along
+    // (manualWattsFor() in TopologyRuntime.h, and mock-api.js); this was the one
+    // of the three that did not. See the twin-pair table in CLAUDE.md.
+    setToolPower(this.td, toolId, on ? Math.round(trip > 0 ? trip * 3 : 15) : 0);
     return { ok: true };
   }
 
