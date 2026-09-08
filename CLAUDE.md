@@ -241,16 +241,30 @@ These are decided; don't relitigate them in code review or suggestions.
 
 ## UI work
 
-**[`docs/mockups/canvas.html`](docs/mockups/canvas.html) is the canonical canvas
-design and the only place decisions are recorded.** Read it before changing
-anything on the build canvas, and before re-deriving a UI decision from scratch.
-It carries the line/glyph vocabulary, the port and system rules, the drag rules,
-and a dated decision log.
+**Two canonical pages, and they are not interchangeable.** This used to say
+canvas.html was "the only place decisions are recorded", which stopped being
+true and sent people to add rows to a page that has no decision log.
 
-**Update it IN PLACE.** A settled question does not get a new page: change the
-section it affects and add a row to the decision log. Seven mockups that disagreed
-with each other is what made cross-system runs and the meaning of a dashed line
-each get re-litigated three times (2026-08-20).
+- **[`docs/mockups/canvas.html`](docs/mockups/canvas.html) is the canonical
+  canvas DESIGN.** The line and glyph vocabulary, the port and system rules, the
+  drag rules, and dated `Built` pills on the sections that have shipped. Read it
+  before changing anything on the build canvas.
+- **[`docs/mockups/decisions.html`](docs/mockups/decisions.html) is the
+  canonical DECISION REGISTER** — the dated list of what was decided and why,
+  rendered from one array at the top of the file. Read it before re-deriving a
+  UI decision from scratch, and append to it when one is settled.
+
+**Update them IN PLACE.** A settled question does not get a new page: change the
+canvas section it affects, and append an entry to the register. Seven mockups
+that disagreed with each other is what made cross-system runs and the meaning of
+a dashed line each get re-litigated three times (2026-08-20).
+
+Three screen-specific pages — `gates-list.html`, `oled-status.html`,
+`shop-status-chips.html` — carry their own decision logs as well. That is
+allowed and useful: a log next to the drawing it explains beats a cross-
+reference. The rule that keeps it from becoming the 2026-08-20 problem again is
+that **a decision affecting more than one screen belongs in the register**, and
+the per-page log links to it rather than restating it.
 
 Still build a throwaway mockup when *exploring* something genuinely new, and
 publish it for review before writing non-trivial UI code — then fold the outcome
@@ -262,7 +276,7 @@ later removed. Nothing in there is current; each page opens with a banner saying
 what replaced it. Add that banner when you move something in — a stale mockup that
 still looks current is worse than no mockup at all.
 
-`dustgate-ui/src/app/build/build.component.ts` is ~4k lines — grep it, don't
+`dustgate-ui/src/app/build/build.component.ts` is ~5.7k lines — grep it, don't
 read it whole.
 
 ## Voice
