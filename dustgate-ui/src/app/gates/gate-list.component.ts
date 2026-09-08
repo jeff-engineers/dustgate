@@ -101,9 +101,12 @@ interface GateGroup {
       <span class="title">{{ editing ? editingName : 'Gates' }}</span>
     </div>
 
-    <!-- Calibrating one gate: the existing component, unchanged. -->
+    <!-- Calibrating one gate: the existing component, opened on its TRAVEL pane.
+         That pane is not the default and has to be asked for — without it this
+         screen lands on the wiring half (name, board, channel), which is a layout
+         decision the canvas owns and has nothing to calibrate on it. -->
     <app-selector-config *ngIf="editing && topo"
-      [sel]="editing" [topo]="topo"
+      [sel]="editing" [topo]="topo" pane="travel"
       (saved)="onConfigured($event)" (cancelled)="editing = null">
     </app-selector-config>
 
