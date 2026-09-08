@@ -552,16 +552,40 @@ export class LiveViewComponent implements OnInit, OnDestroy {
   constructor(private api: ApiService) {}
 
   async ngOnInit(): Promise<void> {
+    await this.api.whenReady();            // else the first fetch 401s and reads as "no shop"
+    await this.loadTopology();
+    await this.refresh();
+    // STARTED UNCONDITIONALLY, and that is the fix rather than a detail.
+    //
+    // This used to sit after a `return` in a catch, so ONE failed fetch — a
+    // device still booting, a transient 404, a dropped request — left the
+    // daily-driver screen empty with no retry and no poll. The only way back was
+    // a manual page reload, on the screen someone is most likely to be looking
+    // at with their hands full.
+    this.poll = setInterval(() => { void this.tick(); }, POLL_MS);
+  }
+
+  /** Read the layout, or leave us in the empty state. Retried by tick() for as
+   *  long as we have no tools, so a device that comes up late is picked up. */
+  private async loadTopology(): Promise<void> {
+    let doc: Topology | null = null;
     try {
-      await this.api.whenReady();          // else the first fetch 401s and reads as "no shop"
-      const topo = toShop(await this.api.getTopology());
-      if (topo) this.parseTopology(topo as unknown as Topology);
+      doc = await this.api.getTopology();
     } catch {
-      this.tools = []; // no topology → empty state
+      this.tools = [];      // not configured yet, or not answering yet
       return;
     }
+    // Deliberately OUTSIDE the try. A parse failure here is a bug in our own
+    // reader, not an absent shop, and swallowing it as "no topology configured"
+    // is what would hide it — the empty state looks identical either way.
+    const topo = toShop(doc);
+    if (topo) this.parseTopology(topo as unknown as Topology);
+  }
+
+  /** One poll. Picks the layout up first if we still haven't got one. */
+  private async tick(): Promise<void> {
+    if (!this.tools.length) await this.loadTopology();
     await this.refresh();
-    this.poll = setInterval(() => { void this.refresh(); }, POLL_MS);
   }
 
   ngOnDestroy(): void {
