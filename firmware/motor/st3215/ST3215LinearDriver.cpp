@@ -181,6 +181,13 @@ bool ST3215LinearDriver::reconnect() {
     _online   = false;
     _moving   = false;
     _homing   = false;
+    // TORQUE IS PART OF THAT RESET, and forgetting it was a real bug. A servo
+    // that has been unplugged or power-cycled comes back holding NOTHING (fact 3
+    // in the header), but enable() is idempotent against _torque — so a stale
+    // `true` here made begin()'s enable(true) a no-op and the servo came back
+    // de-energised. Every later move then refused with "torque is off. Rehome to
+    // re-energise", and the rehome refused for the same reason.
+    _torque   = false;
     _position   = 0;
     _target     = 0;
     _chunkStart = 0;
