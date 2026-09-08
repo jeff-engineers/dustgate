@@ -243,6 +243,41 @@ check('validate twoGates ok', validateTopology(twoGates).ok, JSON.stringify(vali
   check('feed A+L: A reachable, L not', r.reachable.toolA === true && r.reachable.toolL === false);
 }
 
+// ── routing: a CAPPED branch is a dead end, not a route ─────────────────────
+//
+// validateTopology already refuses a blocked branch with a child, so this shape
+// only exists in an INVALID document — and the device's own gate
+// (TopologyStore::validateMinimal) does not check branch roles, so an invalid
+// document can still reach a router. Both engines therefore refuse it
+// defensively rather than relying on the validator having run.
+//
+// PAIR: firmware/test/test_topology_router.cpp "blocked branch". Same fixture,
+// same two assertions, same reason — see CLAUDE.md.
+{
+  const capped = mut((t) => {
+    t.elements.push({ id: 'toolCap', type: 'tool', name: 'Capped Port' });
+    const b = elem(t, 'lin').branches.find((x) => x.role === 'blocked');
+    t.ducts.push({ child: 'toolCap', parent: 'lin', parentBranch: b.id });
+  });
+  const r = computeRouting(capped, ['toolCap']);
+  check('blocked branch: tool on it is unreachable', r.reachable.toolCap === false);
+  // And the selector is NOT moved to the state that branch would have opened —
+  // this is the half that matters, because a gate left closed while the tool
+  // reads reachable is a blower started into a sealed system.
+  eq('blocked branch: selector stays closed', r.states.lin, 'home');
+}
+
+// ── routing: an unknown parentBranch is also a dead end ─────────────────────
+{
+  const dangling = mut((t) => {
+    t.elements.push({ id: 'toolNo', type: 'tool', name: 'Dangling' });
+    t.ducts.push({ child: 'toolNo', parent: 'lin', parentBranch: 'nosuchbranch' });
+  });
+  const r = computeRouting(dangling, ['toolNo']);
+  check('unknown branch: tool is unreachable', r.reachable.toolNo === false);
+  eq('unknown branch: selector stays closed', r.states.lin, 'home');
+}
+
 // ── routing: twoGates (independent selectors run concurrently) ──────────────
 {
   const r = computeRouting(twoGates, ['toolX', 'toolY']);

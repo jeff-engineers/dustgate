@@ -84,6 +84,48 @@ int main(int argc, char** argv) {
     ok("servo angle: gate1 closed = 100", topo::servoCommandAngle(g1, "closed") == 100, std::to_string(topo::servoCommandAngle(g1, "closed")));
   }
 
+  // ── a CAPPED branch is a dead end, not a route ────────────────────────────
+  //
+  // PAIR: shared/device-model/topology.test.js "blocked branch". Same fixture
+  // (feedChain's b3, which is role:"blocked"), same two assertions, same reason
+  // — see CLAUDE.md's twin-pair rule. Change one, change both.
+  //
+  // validateTopology already refuses a blocked branch with a child, so this only
+  // exists in an INVALID document. But the device's own gate
+  // (TopologyStore::validateMinimal) does not check branch roles, so an invalid
+  // document still reaches this router — which is why both engines refuse it
+  // here rather than trusting the validator to have run.
+  {
+    DynamicJsonDocument capped(16384);
+    capped.set(feedChain.as<JsonObjectConst>());
+    JsonObject cap = capped["elements"].createNestedObject();
+    cap["id"] = "toolCap"; cap["type"] = "tool"; cap["name"] = "Capped Port";
+    JsonObject cd = capped["ducts"].createNestedObject();
+    cd["child"] = "toolCap"; cd["parent"] = "lin"; cd["parentBranch"] = "b3";
+
+    auto r = topo::computeRouting(capped.as<JsonObjectConst>(), {"toolCap"});
+    ok("blocked branch: tool on it is unreachable", !reach(r, "toolCap"));
+    // The half that matters: the selector is NOT moved to the state that branch
+    // would have opened. A gate left closed while the tool reads reachable is a
+    // blower started into a sealed system.
+    ok("blocked branch: selector stays closed", state(r, "lin") == "home",
+       "got " + state(r, "lin"));
+  }
+  // ── an unknown parentBranch is also a dead end ────────────────────────────
+  {
+    DynamicJsonDocument dangling(16384);
+    dangling.set(feedChain.as<JsonObjectConst>());
+    JsonObject t2 = dangling["elements"].createNestedObject();
+    t2["id"] = "toolNo"; t2["type"] = "tool"; t2["name"] = "Dangling";
+    JsonObject dd = dangling["ducts"].createNestedObject();
+    dd["child"] = "toolNo"; dd["parent"] = "lin"; dd["parentBranch"] = "nosuchbranch";
+
+    auto r = topo::computeRouting(dangling.as<JsonObjectConst>(), {"toolNo"});
+    ok("unknown branch: tool is unreachable", !reach(r, "toolNo"));
+    ok("unknown branch: selector stays closed", state(r, "lin") == "home",
+       "got " + state(r, "lin"));
+  }
+
   // ── a MALFORMED document must not take the board down ─────────────────────
   //
   // TopologyStore::validateMinimal deliberately does not require an element to

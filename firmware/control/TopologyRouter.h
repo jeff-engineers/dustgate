@@ -152,9 +152,25 @@ inline bool _pathToCollector(const std::string& toolId,
     JsonObjectConst parent = pit->second;
     if (_eq(parent["type"], "selector")) {
       const char* pb = d["parentBranch"].as<const char*>();
+      JsonObjectConst branch;
       for (JsonObjectConst b : parent["branches"].as<JsonArrayConst>()) {
-        if (pb && _eq(b["id"], pb)) { path.push_back({parentId, _str(b["opensState"])}); break; }
+        if (pb && _eq(b["id"], pb)) { branch = b; break; }
       }
+      // BOTH OF THESE ARE A DEAD END, and both used to fall through instead.
+      //
+      // routing.js has said `if (!branch || branch.role === 'blocked') return
+      // null` since it was written; this side had neither check, so a duct
+      // naming a branch that does not exist walked on with no hop recorded, and
+      // a duct on a CAPPED branch was walked as though it were a tool branch.
+      //
+      // The second one is the dangerous half. The selector stays at its closed
+      // state because nothing committed it, but the tool is reported reachable
+      // — so no make fails, nothing holds the blower back, and it starts into a
+      // sealed system. That is the one rule this project says it will not break,
+      // and firmware and model disagreed about the same document.
+      if (branch.isNull()) return false;
+      if (_eq(branch["role"], "blocked")) return false;
+      path.push_back({parentId, _str(branch["opensState"])});
     }
     cur = parentId;   // junctions & the collector fall through with no state
   }
