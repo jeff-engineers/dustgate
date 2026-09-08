@@ -26,6 +26,16 @@ reasoning was contested, or that a still-open item above leans on.
   contiguous and non-interleaving, so the push has to move every system underneath
   and everything in them, not just the neighbouring band.
 
+  **The gap is a consumable, and that is the sharp version of the bug** (jeff,
+  2026-09-08): the first drop into it works and the band simply grows to swallow
+  the row, so every drop after that is refused because the bands now touch. "The
+  extra row vanishes once you do that, meaning that you can't keep moving things
+  down." Nothing puts the row back, so a shop can only ever get tighter.
+
+  Explored in [`docs/mockups/seam-insert.html`](../docs/mockups/seam-insert.html)
+  — published 2026-09-08, NOT yet accepted, and it changes the "What can stop a
+  drag" table in `canvas.html`, so it needs a decision before any code.
+
 - **Replace drag-to-branch on a duct with "move this run here" (2026-09-07,
   jeff).** Today, dragging a branch dot tees in a passive leg. The more useful
   gesture is moving the RUN — put it where I want it and keep it there, the way
