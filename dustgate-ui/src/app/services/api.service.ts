@@ -469,7 +469,14 @@ export class ApiService {
    * Call while the motor is stationary at the desired gate position.
    */
   saveStop(index: number) {
-    this.checkStopConflict(index, this.status$.value?.positionMM ?? 0);
+    // NOT `?? 0`. positionMM is absent on firmware that doesn't publish it, and
+    // defaulting to 0 made the guard compare every save against the datum — so a
+    // gate legitimately saved near home tripped a conflict that wasn't one, and
+    // every other save was checked against a position nobody was at. Not knowing
+    // where the carriage is means there is nothing to check, not that it is at
+    // zero; the device does its own overlap check regardless.
+    const mm = this.status$.value?.positionMM;
+    if (typeof mm === 'number') this.checkStopConflict(index, mm);
     return this.post('/api/setstop', { index });
   }
 
