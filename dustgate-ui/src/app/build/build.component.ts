@@ -1774,7 +1774,12 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
         return;
       }
       if (this.canPlace(n, col, row) && moved) {
+        // ONE history entry for the whole thing (jeff): the push and the drop are one
+        // action, and an undo that put the shop back but left the piece — or the
+        // reverse — would be worse than no undo at all. pushHistory() snapshots the
+        // document before either happens, so a single Ctrl-Z takes back both.
         this.pushHistory(null);
+        this.openRows(row, this.seamInsert(n.id, row) ?? 0, n.id);
         n.col = col; n.row = row; this.cells.set(n.id, { col, row });
         this.dirty = true;
       }
@@ -1853,16 +1858,31 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     // ground drawable at all: the two never interleave, so the boundary is one row
     // rather than a shape. Refusing the drop keeps that true without the drag having
     // to reflow the other system out of the way mid-gesture.
+    // A drop at the SEAM opens a row rather than being refused — see seamInsert().
+    // Deliberately silent: nothing is added to the guide bar for it, because what
+    // happens is plain to watch (jeff, 2026-09-08). The refusal below is now rarer
+    // and more truthful — it means "that is inside another system", not "you
+    // happened to aim at a row that was already spoken for".
+    const opening = this.seamInsert(n.id, row);
     const band = this.bandBlockedBy(n.id, row);
-    if (band) return { blocked: `That row belongs to ${band}. A piece stays in its own system.`, warn: '' };
+    if (band && opening === null) {
+      return { blocked: `That row belongs to ${band}. A piece stays in its own system.`, warn: '' };
+    }
     const cells: Cell[] = n.isUnit ? Array.from({ length: n.span }, (_, i) => ({ col: col + i, row })) : [{ col, row }];
     // occupantAt covers boards as well as pieces — a board owns its cell, so a gate
     // dropped on one is refused with the board named, same as any other collision.
-    const hit = cells.map(c => this.occupantAt(c.col, c.row, n.id)).find(name => name);
-    if (hit) {
-      return { blocked: n.isUnit
-        ? `${this.pieceLabel(n)} needs ${n.span} free cells in a row — ${hit} is in the way.`
-        : `${hit} is already in that cell.`, warn: '' };
+    //
+    // Skipped when the shop is about to open a row, and provably safe to skip:
+    // everything at or below `row` moves DOWN by at least one, and nothing above it
+    // moves at all, so that row is empty by construction. Running the check anyway
+    // would refuse the drop by naming the very piece the push is about to move.
+    if (!(opening && opening > 0)) {
+      const hit = cells.map(c => this.occupantAt(c.col, c.row, n.id)).find(name => name);
+      if (hit) {
+        return { blocked: n.isUnit
+          ? `${this.pieceLabel(n)} needs ${n.span} free cells in a row — ${hit} is in the way.`
+          : `${hit} is already in that cell.`, warn: '' };
+      }
     }
 
     // Everything from here is advisory, and BASELINED against where things already
@@ -1976,6 +1996,67 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       const dc = s.elements.find(e => e['type'] === 'collector');
       return { id: s.id, lo, hi, name: dc?.['name'] as string | undefined };
     }).filter(b => isFinite(b.lo)).sort((a, b) => a.lo - b.lo);
+  }
+
+  /**
+   * How many rows the shop must open at `row` for `id` to stand there — 0 when it
+   * can already, and null when no amount of opening would make it legal.
+   *
+   * THE GAP BETWEEN TWO SYSTEMS IS NOT A CONSUMABLE. It used to be: a piece dropped
+   * into the empty row simply grew its own band over it, so the first drop worked
+   * and every one after was refused because the bands now touched, with no gesture
+   * anywhere to put the row back (jeff, 2026-09-08 — "the extra row vanishes once
+   * you do that, meaning that you can't keep moving things down"). Half of that was
+   * already met in the DRAWING, which is why systemSeparators() exists — a rule was
+   * added so the seam survives being dragged shut. The row itself never came back.
+   *
+   * So a drop at the seam opens a row instead of spending one: everything at or
+   * below `row` moves down, and the count is whatever leaves at least one empty row
+   * between this piece's band and the neighbour's. Landing in a wide gap needs
+   * nothing (0); landing on the seam of a one-row gap needs 1; landing on the
+   * neighbour's first row when the bands already touch needs 2 — one for the piece,
+   * one for the gap.
+   *
+   * DOWNWARD ONLY, and that is not an oversight. A piece dragged UP into the seam
+   * grows its own band upward, so the piece IS the thing closing the gap and no
+   * push below it can reopen one — the shop would have to move the system ABOVE,
+   * which is a different gesture (see the seam-drag item in TODO). That case keeps
+   * the behaviour it has.
+   *
+   * Deeper than the neighbour's first row stays refused, and that is not an
+   * inconsistency: a piece there splits the neighbour's band in two, which is the
+   * interleaving the whole rule exists to prevent. The seam is the only row where
+   * an insert leaves every band contiguous.
+   */
+  private seamInsert(id: string, row: number): number | null {
+    const bands = this.systemRowBands();
+    if (bands.length < 2) return null;
+    const i = bands.findIndex(b => b.id === this.systemOf.get(id));
+    if (i < 0) return null;
+    const above = bands[i - 1], below = bands[i + 1];
+    if (above && row <= above.hi) return null;   // into or past the system above
+    if (!below) return null;                     // nothing below to make room in
+    if (row > below.lo) return null;             // inside the neighbour, not at its edge
+    return Math.max(0, row + 2 - below.lo);
+  }
+
+  /**
+   * Move everything at or below `atRow` down by `count`, leaving `exceptId` alone —
+   * it is the piece being dropped and is about to be placed by hand.
+   *
+   * Boards ride along. A board belongs to no system, but it stands on a cell and
+   * owns it exclusively, so leaving it behind would drop it into a band it was
+   * never in and put it in the way of the piece that just arrived.
+   *
+   * Ducts and cables need nothing: they are derived from where the pieces are, and
+   * the router re-solves from the invalidate below.
+   */
+  private openRows(atRow: number, count: number, exceptId: string): void {
+    if (count <= 0) return;
+    for (const [id, c] of this.cells) if (id !== exceptId && c.row >= atRow) c.row += count;
+    for (const c of this.boardCells.values()) if (c.row >= atRow) c.row += count;
+    for (const n of this.nodes) if (n.id !== exceptId && n.row >= atRow) n.row += count;
+    this.router.invalidate();
   }
 
   /** The first row a piece in `id`'s system must not reach: the top of the next system

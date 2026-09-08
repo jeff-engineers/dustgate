@@ -403,8 +403,10 @@
               <td><span style="color:var(--danger)">Refused.</span> Named: "Bandsaw is already in that cell."</td></tr>
           <tr><td><b>You are dragging a run END</b></td>
               <td><span style="color:var(--ok,#3cbe6e)">Allowed anywhere.</span> An end is bare pipe, not a piece — it crosses into another system freely and claims no rows of its own (D-47). Filling it there is what gets refused.</td></tr>
-          <tr><td><b>The row belongs to another system</b></td>
-              <td><span style="color:var(--danger)">Refused.</span> Systems own contiguous row bands; interleaving them makes the grey ground undrawable.</td></tr>
+          <tr><td><b>The row is the SEAM between two systems</b></td>
+              <td><span style="color:var(--success)">Allowed — the shop opens a row.</span> Everything at or below moves down one, so the gap survives instead of being swallowed (D-71).</td></tr>
+          <tr><td><b>The row is INSIDE another system</b></td>
+              <td><span style="color:var(--danger)">Refused.</span> Systems own contiguous row bands; a piece there splits one in two, and interleaving them makes the grey ground undrawable.</td></tr>
           <tr><td>A duct will cross a device</td>
               <td><span style="color:var(--success)">Allowed.</span> Advisory only — says what the drawing will do.</td></tr>
           <tr><td>A duct loses its clear way in</td>
@@ -415,6 +417,14 @@
               <td><span style="color:var(--success)">Allowed.</span> Never a reason to freeze the canvas.</td></tr>
         </table>
       </div>
+      <p class="note" style="margin-top:10px"><b>The gap between two systems is not a
+        consumable (D-71).</b> It used to be: a piece dropped into the empty row simply grew
+        its own band over it, so the first drop worked and every one after was refused because
+        the bands now touched — and nothing anywhere put the row back, so a shop could only get
+        tighter. A drop at the seam now <em>opens</em> a row rather than spending one. It is
+        silent: nothing is said in the guide bar, because what happens is plain to watch.
+        <b>Downward only</b> — a piece dragged UP into the seam is the thing closing the gap,
+        so no push below it can reopen one.</p>
       <p class="note" style="margin-top:10px"><b>The occupied-cell rule governs more than a
         drop.</b> Anywhere a piece is placed it is checked the same way, and that includes the
         <b>branch dots</b> along a run: a dot rounds a point on the line to a cell, and clicking
