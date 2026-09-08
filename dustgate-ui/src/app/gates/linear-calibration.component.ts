@@ -350,7 +350,16 @@ export class LinearCalibrationComponent implements OnInit, OnDestroy {
       await this.api.saveStop(this.index + 1);
       this.positions.set(st.id, this.liveMm);
     } catch (e: unknown) {
+      // Two shapes reach here, and the local one used to be thrown away.
+      //
+      // checkStopConflict() throws a plain Error BEFORE any HTTP, carrying the
+      // gate number and its saved position — "too close to Gate 3's saved
+      // position (125.4 mm)". Reading only `.error.error` (the device's HTTP
+      // shape) found nothing on it and fell through to the generic line, so the
+      // one message that actually says which gate and by how much never reached
+      // anyone.
       this.error = (e as { error?: { error?: string } })?.error?.error
+        ?? (e instanceof Error ? e.message : null)
         ?? 'Couldn\'t save that position — it may be too close to another outlet.';
       this.busy = false;
       return;
