@@ -693,7 +693,7 @@ private:
             for (JsonObjectConst e : sys.elements) {
                 if (!_eq(e["type"], "selector")) continue;
                 any = true;
-                std::string id = e["id"].as<const char*>();
+                std::string id = _str(e["id"]);
                 const char* closed = _closedState(e);
                 auto it = _hwStates.find(id);
                 // Unknown position counts as CLOSED. Nothing has been commanded,
@@ -745,7 +745,7 @@ private:
             if (std::string(sys.id ? sys.id : "") != systemId) continue;
             for (JsonObjectConst e : sys.elements) {
                 if (!_eq(e["type"], "selector")) continue;
-                std::string id = e["id"].as<const char*>();
+                std::string id = _str(e["id"]);
                 auto sit = r.states.find(id);
                 if (sit != r.states.end()) desired[id] = sit->second;
             }

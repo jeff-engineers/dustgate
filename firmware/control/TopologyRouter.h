@@ -49,6 +49,34 @@ inline bool _eq(JsonVariantConst v, const char* s) {
   return p && s && strcmp(p, s) == 0;
 }
 
+// A JSON string as a std::string, with a MISSING key giving "" rather than
+// undefined behaviour.
+//
+// ArduinoJson returns a null const char* for an absent or non-string key, and
+// std::string(nullptr) is UB — on the ESP32, a panic and a reboot. That matters
+// here more than it looks, because TopologyStore::validateMinimal deliberately
+// does not check for these keys: the UI's validateShop() is the authority, and
+// the device's gate is a cheap structural one. So a document with an element
+// missing `id`, or a duct missing `parent`, is PERSISTED to LittleFS and only
+// then adopted — and the board then crashes on every subsequent boot, with
+// nothing to do about it but erase the filesystem.
+//
+// Every place below that turns a document string into a std::string goes through
+// this, and "" is what a missing one becomes.
+//
+// "" IS THEN TREATED AS "NOT ADDRESSABLE", not as a name — see _byId() and
+// _parentDuct(), which drop such entries instead of indexing them. That
+// distinction is load-bearing and was found by the malformed-document test in
+// test_topology_router.cpp: with "" as an ordinary key, an element with no id
+// and a duct with no parent both land on "" and ACCIDENTALLY CONNECT, so a
+// broken layout routes a tool to a collector it has no duct to and reports it
+// reachable. Reachable is the dangerous direction — it is what lets the blower
+// start — so an unnamed piece is unreachable by construction.
+inline std::string _str(JsonVariantConst v) {
+  const char* p = v.as<const char*>();
+  return p ? std::string(p) : std::string();
+}
+
 // One airflow graph, as three arrays rather than a document.
 //
 // This is the C++ half of systemView() in shared/device-model/shop.js, and it
@@ -83,13 +111,18 @@ inline SystemView viewOf(JsonObjectConst t) {
 
 inline std::map<std::string, JsonObjectConst> _byId(const SystemView& t) {
   std::map<std::string, JsonObjectConst> m;
-  for (JsonObjectConst e : t.elements) m[std::string(e["id"].as<const char*>())] = e;
+  for (JsonObjectConst e : t.elements) {
+    std::string id = _str(e["id"]);
+    if (id.empty()) continue;      // unnamed: nothing can duct to it — see _str()
+    m[id] = e;
+  }
   return m;
 }
 inline std::map<std::string, JsonObjectConst> _parentDuct(const SystemView& t) {
   std::map<std::string, JsonObjectConst> m;
   for (JsonObjectConst d : t.ducts) {
-    std::string child = d["child"].as<const char*>();
+    std::string child = _str(d["child"]);
+    if (child.empty()) continue;   // a duct to nowhere connects nothing
     if (m.find(child) == m.end()) m[child] = d;   // first duct wins (one parent per element)
   }
   return m;
@@ -113,13 +146,14 @@ inline bool _pathToCollector(const std::string& toolId,
     if (_eq(el["type"], "collector")) return true;
     auto dit = parentDuct.find(cur); if (dit == parentDuct.end()) return false;   // orphan
     JsonObjectConst d = dit->second;
-    std::string parentId = d["parent"].as<const char*>();
+    std::string parentId = _str(d["parent"]);
+    if (parentId.empty()) return false;   // duct names no parent: an orphan, not a link to ""
     auto pit = byId.find(parentId); if (pit == byId.end()) return false;
     JsonObjectConst parent = pit->second;
     if (_eq(parent["type"], "selector")) {
       const char* pb = d["parentBranch"].as<const char*>();
       for (JsonObjectConst b : parent["branches"].as<JsonArrayConst>()) {
-        if (pb && _eq(b["id"], pb)) { path.push_back({parentId, std::string(b["opensState"].as<const char*>())}); break; }
+        if (pb && _eq(b["id"], pb)) { path.push_back({parentId, _str(b["opensState"])}); break; }
       }
     }
     cur = parentId;   // junctions & the collector fall through with no state
@@ -179,7 +213,9 @@ inline Routing computeRouting(const SystemView& topology, const std::vector<std:
   for (JsonObjectConst e : topology.elements) {
     if (_eq(e["type"], "selector")) {
       const char* cs = _closedState(e);
-      out.states[std::string(e["id"].as<const char*>())] = cs ? std::string(cs) : std::string();
+      std::string sid = _str(e["id"]);
+      if (sid.empty()) continue;   // unnamed selector: nothing can command it
+      out.states[sid] = cs ? std::string(cs) : std::string();
     }
   }
   for (auto& kv : committed) out.states[kv.first] = kv.second;
