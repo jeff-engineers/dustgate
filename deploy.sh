@@ -363,6 +363,9 @@ if $DO_UI; then
   if [ ! -d "$BROWSER_DIR" ]; then
     BROWSER_DIR="dist/dustgate-ui"
   fi
+  # mkdir, because firmware/data/ is not in the repo — it is build output, and
+  # a fresh clone has no such directory for the copy below to land in.
+  mkdir -p "$DATA_DIR"
   rm -rf "$DATA_DIR"/*
   cp -r "$BROWSER_DIR"/* "$DATA_DIR/"
   echo "  Files in data/:"
