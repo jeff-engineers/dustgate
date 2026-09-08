@@ -75,13 +75,18 @@
 <div class="wrap">
 
   <div class="banner">
-    <p class="note"><b>An exploration, not a decision.</b> Published for review on 2026-09-08.
-      Nothing here is built. If it is accepted, the outcome folds into
-      <a href="canvas.html"><code>canvas.html</code></a> — specifically the
-      <em>What can stop a drag</em> table, which this changes — and this page moves to
-      <code>archived/</code> with a banner saying so. Raised in <code>TODO/TODO.md</code>
-      by jeff, 2026-09-07: <em>"Dropping a piece into the void between two systems should
-      push the shop down."</em></p>
+    <p class="note"><b>ACCEPTED AND BUILT — 2026-09-08.</b> This page is the exploration that
+      led to it, kept for the reasoning; it is no longer where the decision lives. The rule is
+      in <a href="canvas.html"><code>canvas.html</code></a> under <em>What can stop a drag</em>,
+      and the decision is <a href="decisions.html">D-71</a>. The demo below still runs, and
+      still runs the real rule.</p>
+    <p class="note" style="margin-top:9px">What changed between proposing and building: the
+      count is <b>not always one row</b>. Landing in a wide gap needs none, a one-row seam needs
+      one, and a drop on the neighbour's first row when the bands already touch needs two — one
+      for the piece, one to keep the gap. And the gesture is <b>downward only</b>: a piece
+      dragged UP into the seam is itself what closes the gap, so no push below it can reopen
+      one. Section 5's open questions were answered by jeff — no preview and no animation, one
+      undo step with the drop.</p>
   </div>
 
   <div>
