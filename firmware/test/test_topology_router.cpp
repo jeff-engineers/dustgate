@@ -84,6 +84,50 @@ int main(int argc, char** argv) {
     ok("servo angle: gate1 closed = 100", topo::servoCommandAngle(g1, "closed") == 100, std::to_string(topo::servoCommandAngle(g1, "closed")));
   }
 
+  // ── a MALFORMED document must not take the board down ─────────────────────
+  //
+  // TopologyStore::validateMinimal deliberately does not require an element to
+  // have an `id` or a duct to have `parent`/`child` — the UI's validateShop() is
+  // the authority and the device's gate is a cheap structural one. So a document
+  // like this reaches the router, and before _str() every one of these lines was
+  // a std::string built from a null const char*: undefined behaviour, and a
+  // panic-reboot on the ESP32. Worse, the document is PERSISTED before it is
+  // adopted, so the board came up and crashed again on every boot afterwards.
+  //
+  // These assertions are ordinary, but the test earns its place by not crashing:
+  // run this against the old code and the binary dies here rather than failing.
+  {
+    DynamicJsonDocument bad(4096);
+    auto err = deserializeJson(bad, R"({
+      "schemaVersion": 1,
+      "controllers": [{"id":"primary","role":"primary"}],
+      "elements": [
+        {"type":"collector","name":"nameless collector"},
+        {"id":"gate","type":"selector","kind":"servoGate",
+         "states":[{"id":"open","isClosed":false},{"id":"shut","isClosed":true}],
+         "branches":[{"id":"b1","role":"tool"}]},
+        {"id":"toolZ","type":"tool"}
+      ],
+      "ducts": [{"child":"toolZ","parentBranch":"b1"}, {"parent":"dc"}]
+    })");
+    ok("malformed: fixture parses", err == DeserializationError::Ok);
+    auto r = topo::computeRouting(bad.as<JsonObjectConst>(), {"toolZ"});
+    // The duct names no parent, so the walk is an orphan chain and stops.
+    ok("malformed: unreachable, not a crash", !reach(r, "toolZ"));
+    // The branch names no opensState, so the selector falls back to closed.
+    ok("malformed: selector still closed",    state(r, "gate") == "shut",
+       "got " + state(r, "gate"));
+    // And an element with no id at all is simply keyed on "" rather than
+    // dereferencing null on the way into the map.
+    // An element with no id is not addressable at all, rather than being keyed
+    // on "" — otherwise it and the parentless duct above both land on "" and
+    // connect to each other.
+    ok("malformed: nameless collector is not indexed under \"\"",
+       topo::computeRouting(bad.as<JsonObjectConst>(), {}).states.count("") == 0);
+    ok("malformed: idle pass survives too",
+       topo::computeRouting(bad.as<JsonObjectConst>(), {}).states.count("gate") == 1);
+  }
+
   printf("\n%d/%d passed%s\n", passed, passed + failed, failed ? (", " + std::to_string(failed) + " FAILED").c_str() : "");
   return failed ? 1 : 0;
 }

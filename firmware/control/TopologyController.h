@@ -80,7 +80,7 @@ public:
       _collectorOn[std::string(sys.id ? sys.id : "")] = false;
       for (JsonObjectConst sel : sys.elements) {
         if (!_eq(sel["type"], "selector")) continue;
-        std::string id = sel["id"].as<const char*>();
+        std::string id = _str(sel["id"]);
         const char* cs = _closedState(sel);
         _actuatorStates[id] = cs ? std::string(cs) : std::string();
       }
@@ -161,7 +161,7 @@ public:
       if (!r.systemActive[sysId]) { _collectorOn[sysId] = false; continue; }   // idle: hold
       for (JsonObjectConst e : sys.elements) {
         if (!_eq(e["type"], "selector")) continue;
-        std::string id = e["id"].as<const char*>();
+        std::string id = _str(e["id"]);
         auto sit = r.routing.states.find(id);
         if (sit != r.routing.states.end()) _actuatorStates[id] = sit->second;
       }

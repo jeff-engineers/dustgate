@@ -57,7 +57,7 @@ inline TransitionPlan planTransition(const SystemView& topology,
 
   for (JsonObjectConst sel : topology.elements) {
     if (!_eq(sel["type"], "selector")) continue;
-    std::string id = sel["id"].as<const char*>();
+    std::string id = _str(sel["id"]);
 
     auto dit = desiredStates.find(id);
     if (dit == desiredStates.end()) continue;      // not addressed → leave as-is
