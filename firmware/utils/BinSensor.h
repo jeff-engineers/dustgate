@@ -101,7 +101,16 @@ inline std::string localBinSystemId(JsonObjectConst topology, const char* ownId)
             JsonObjectConst sensor = e["bin"]["sensor"];
             if (sensor.isNull()) continue;
             const char* cid = sensor["controllerId"];
-            if (!cid || own.empty() || own == cid) return std::string(sys["id"] | "");
+            // ABSENT, OR EQUAL TO OUR OWN ID. Nothing else.
+            //
+            // There used to be an `own.empty()` clause here as well, which meant
+            // a board that does not yet know its own controllerId claimed the
+            // FIRST bin sensor in the document — whoever it was actually wired
+            // to. Not knowing who you are is a reason to claim nothing, not a
+            // reason to claim everything; a sensor that names a board is owned
+            // by that board and by nobody else. Matches NodeBus's rule exactly,
+            // which is the point of the comment above.
+            if (!cid || own == cid) return std::string(sys["id"] | "");
         }
     }
     return std::string();
