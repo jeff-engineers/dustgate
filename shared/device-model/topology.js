@@ -152,12 +152,6 @@ function elementIndex(t) {
   for (const e of t.elements || []) m.set(e.id, e);
   return m;
 }
-/** id → controller */
-function controllerIndex(t) {
-  const m = new Map();
-  for (const c of t.controllers || []) m.set(c.id, c);
-  return m;
-}
 /** childId → its (single) parent duct */
 function parentDuctIndex(t) {
   const m = new Map();
@@ -787,7 +781,7 @@ function redundantSelectors(topology) {
 module.exports = {
   MAX_SLIDE_BRANCHES,
   CONTROLLER_ROLES, ELEMENT_TYPES, SELECTOR_KINDS, BRANCH_ROLES,
-  elementIndex, controllerIndex, parentDuctIndex,
+  elementIndex, parentDuctIndex,
   collectorOf, selectorsOf, toolsOf, closedState, servoCommandAngle,
   absoluteAngles, applyAbsoluteAngles,
   validateTopology, airflowIssues, redundantSelectors,
