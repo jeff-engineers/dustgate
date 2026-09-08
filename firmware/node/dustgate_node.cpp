@@ -338,8 +338,24 @@ static void startSweep() {
 // Retry a drive that never came up (or went away). Only ever runs while the node
 // is not homed and not sweeping — a working, homed slider is never disturbed.
 static void retryDriveIfNeeded() {
-    if (g_homing == HOME_DONE || g_homing == HOME_RUNNING) return;
-    if (motor.online() && g_homing == HOME_NEEDED) return;   // nothing wrong; it just has not been asked yet
+    if (g_homing == HOME_RUNNING) return;
+    // A DRIVE THAT IS ANSWERING NEEDS NOTHING FROM HERE, whatever the homing
+    // state is. This used to read `motor.online() && g_homing == HOME_NEEDED`,
+    // which let HOME_FAILED with a perfectly healthy servo fall through to the
+    // reconnect below — every 15 seconds, forever.
+    //
+    // Both things that did were bad. reconnect() sets HOME_NEEDED, and
+    // g_homeAsked stays set by design, so loop() started another sweep on the
+    // next tick: the "reached the FAR endstop" fault, whose own message says it
+    // needs a person and is not fixed by driving the other way, drove the
+    // carriage at the far end four times a minute. And reconnect() goes through
+    // begin(), which writes the mode and both angle limits to EEPROM — three
+    // cell writes every 15s, ~17k a day, against a part with a finite number of
+    // them.
+    //
+    // A failed home is now terminal until someone asks again, which is what the
+    // fault message always claimed. The asking is the button hold in setup().
+    if (motor.online()) return;
 
     uint32_t now = millis();
     if (now - g_lastDriveRetryMs < kDriveRetryMs) return;
@@ -677,6 +693,18 @@ void setup() {
         if (g_homing == HOME_DONE || g_homing == HOME_RUNNING) {
             Serial.println(F("[HOME] button held — already homed or homing; ignored."));
             return;
+        }
+        // A HOLD CLEARS A FAILED HOME, and this is the only thing that does.
+        // The automatic retry deliberately no longer does (see
+        // retryDriveIfNeeded), so without this a node that failed its sweep
+        // could not be re-homed without a power cycle — loop() only starts a
+        // sweep from HOME_NEEDED. Someone holding the button at the board IS
+        // the person the fault was waiting for, and the sweep re-reads the
+        // endstops from scratch, so if they have fixed the wiring it now works
+        // and if they have not it fails the same way and says so again.
+        if (g_homing == HOME_FAILED) {
+            Serial.println(F("[HOME] button held — clearing the earlier failure and trying again."));
+            g_homing = HOME_NEEDED;
         }
         g_homeAsked = true;
         Serial.println(F("[HOME] button held — homing on request."));
