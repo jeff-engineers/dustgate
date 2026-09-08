@@ -849,7 +849,12 @@ static void updateStatusScreen() {
     // node holds every move it is sent. See Facts::sliderHomed.
     f.sliderFitted = true;
     f.sliderHomed  = (g_homing == HOME_DONE);
-    f.sliderMm     = motor.getPosition() / ST3215_COUNTS_PER_MM;
+    // Divided by -HOME_DIRECTION as well, because moveTo() MULTIPLIES by it on
+    // the way in. Without that the screen showed the negation of the commanded
+    // position — a gate at 250mm read -250 — which is a poor thing to be reading
+    // while deciding whether homing worked. Every other steps→mm conversion in
+    // the tree already does this (firmware.ino, HttpApiServer, SerialDebugControl).
+    f.sliderMm     = motor.getPosition() / ST3215_COUNTS_PER_MM / (-HOME_DIRECTION);
 #endif
     // The OWNER, not "whoever is connected": that is the name this node will
     // still be waiting for after a reboot, and the useful thing to read when it
