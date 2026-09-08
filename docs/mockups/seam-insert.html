@@ -1,0 +1,466 @@
+<meta charset="utf-8">
+<title>Dropping a Piece in the Seam</title>
+
+<style>
+  :root {
+    --bg: #111; --surface: #1e1e1e; --raised: #262626; --border: #2e2e2e;
+    --text: #e8e8e8; --muted: #8a8a86; --accent: #f0a500; --success: #3cbe6e;
+    --danger: #d94444; --duct: #3a3a3a; --cable: #38b6f0; --radius: 14px;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); margin: 0; padding: 22px 18px 72px;
+         font-family: system-ui, -apple-system, sans-serif; font-size: 15px; line-height: 1.5; }
+  .wrap { max-width: 1080px; margin: 0 auto; display: flex; flex-direction: column; gap: 24px; }
+  h1 { font-size: 22px; font-weight: 600; margin: 6px 0 0; letter-spacing: -0.01em; text-wrap: balance; }
+  h3 { font-size: 15px; font-weight: 600; margin: 0 0 2px; }
+  .lede { color: var(--muted); font-size: 13.5px; max-width: 68ch; margin: 6px 0 0; }
+  .eyebrow { font-size: 11px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--muted); }
+  p { margin: 0; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.92em; }
+  a { color: var(--accent); }
+  .rule { height: 1px; background: var(--border); border: 0; margin: 0; }
+  .sec { display: flex; flex-direction: column; gap: 12px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 15px 16px; }
+  .card p + p { margin-top: 9px; }
+  .card em { color: var(--text); font-style: normal; }
+  .note { font-size: 12.5px; color: var(--muted); line-height: 1.55; }
+  .note b { color: var(--text); font-weight: 600; }
+  .flag { border-left: 3px solid var(--accent); padding-left: 12px; }
+  .flag.open { border-left-color: var(--muted); }
+  .flag.no { border-left-color: var(--danger); }
+
+  .banner { border: 1px solid var(--accent); border-radius: var(--radius);
+            padding: 13px 15px; background: rgba(240,165,0,0.07); }
+  .banner .note b { color: var(--accent); }
+
+  .pill { font-size: 11px; padding: 2px 9px; border-radius: 20px; display: inline-block; }
+  .pill.open   { color: var(--muted);   background: rgba(138,138,134,0.14); }
+  .pill.built  { color: var(--success); background: rgba(60,190,110,0.12); }
+  .pill.agreed { color: var(--accent);  background: rgba(240,165,0,0.12); }
+
+  table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; }
+  .tblwrap { overflow-x: auto; }
+
+  .stage { background: #141414; border: 1px solid var(--border); border-radius: var(--radius); padding: 10px; }
+  .stage svg { display: block; width: 100%; height: auto; }
+  .controls { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+  button { border-radius: 9px; padding: 8px 13px; font-size: 12.5px; cursor: pointer;
+           background: var(--raised); border: 1px solid var(--border); color: var(--text); }
+  button:hover { border-color: #4a4a4a; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #241a00; font-weight: 600; }
+  button[disabled] { opacity: 0.4; cursor: default; }
+  .say { font-size: 12.5px; color: var(--muted); margin-top: 9px; min-height: 2.6em; line-height: 1.5; }
+  .say b { color: var(--text); }
+  .say.warn b, .say.warn { color: var(--danger); }
+  .say.ok b { color: var(--success); }
+
+  .ground   { fill: #191919; }
+  .seam     { stroke: var(--border); stroke-width: 1.5; }
+  .seamt    { fill: var(--muted); font-size: 9.5px; font-weight: 600; letter-spacing: 0.09em;
+              text-transform: uppercase; font-family: system-ui, sans-serif; }
+  .toolbox  { fill: #16262e; stroke: #2d6a86; stroke-width: 2; }
+  .cyc      { fill: #241d33; stroke: #6f5aa8; stroke-width: 2; }
+  .brd      { fill: #10222b; stroke: #2d6a86; stroke-width: 1.6; }
+  .lbl      { fill: var(--text); font-size: 10.5px; text-anchor: middle; font-family: system-ui, sans-serif; font-weight: 500; }
+  .tiny     { fill: var(--muted); font-size: 9px; font-family: system-ui, sans-serif; }
+  .ghost    { fill: rgba(240,165,0,0.10); stroke: var(--accent); stroke-width: 2; stroke-dasharray: 6 5; }
+  .ghostt   { fill: var(--accent); font-size: 10.5px; text-anchor: middle; font-family: system-ui, sans-serif; font-weight: 600; }
+  .movedot  { fill: var(--accent); }
+  .gridline { stroke: #1c1c1c; stroke-width: 1; }
+  .piece, .ground, .seamline, .seamlabel { transition: transform .38s cubic-bezier(.3,.7,.3,1), opacity .3s, y .38s cubic-bezier(.3,.7,.3,1), height .38s cubic-bezier(.3,.7,.3,1); }
+</style>
+
+<div class="wrap">
+
+  <div class="banner">
+    <p class="note"><b>An exploration, not a decision.</b> Published for review on 2026-09-08.
+      Nothing here is built. If it is accepted, the outcome folds into
+      <a href="canvas.html"><code>canvas.html</code></a> — specifically the
+      <em>What can stop a drag</em> table, which this changes — and this page moves to
+      <code>archived/</code> with a banner saying so. Raised in <code>TODO/TODO.md</code>
+      by jeff, 2026-09-07: <em>"Dropping a piece into the void between two systems should
+      push the shop down."</em></p>
+  </div>
+
+  <div>
+    <div class="eyebrow">Canvas · drag &amp; drop</div>
+    <h1>Dropping a piece in the seam should open a row for it</h1>
+    <p class="lede">A shop with two collectors draws them as two grey grounds with a gap
+      between. That gap is where a person aims when they want to add something — and it is
+      the one place the canvas has no good answer for. Today it either swallows the gap or
+      refuses the drop, depending on a distinction nobody can see.</p>
+  </div>
+
+  <hr class="rule"/>
+
+  <!-- ═══ 1 · WHAT HAPPENS TODAY ═══════════════════════════════════════ -->
+  <section class="sec">
+    <h3>1 · What happens today</h3>
+    <span class="pill built">Built — and this is the problem</span>
+    <div class="card">
+      <p class="note">A system owns a <b>contiguous band of rows</b>, and the two never
+        interleave — that invariant is what makes the grey ground drawable at all
+        (<code>systemRowBands()</code>). A drop is checked against the <em>neighbour's</em>
+        band, not against the piece's own:</p>
+      <div class="tblwrap" style="margin-top:10px">
+        <table>
+          <tr><th>Where you drop it</th><th>What happens now</th></tr>
+          <tr>
+            <td><b>In the gap</b>, when there is a spare row between the two bands</td>
+            <td><span style="color:var(--success)">Allowed.</span> The piece lands, and its own
+              band <em>grows</em> to include that row. <b>The gap is gone.</b> The two grounds
+              now meet.</td>
+          </tr>
+          <tr>
+            <td><b>In the gap</b>, when the bands are already touching</td>
+            <td><span style="color:var(--danger)">Refused</span> — "That row belongs to Shop
+              Vacuum. A piece stays in its own system."</td>
+          </tr>
+          <tr>
+            <td><b>Inside the neighbour's rows</b></td>
+            <td><span style="color:var(--danger)">Refused</span>, same message. Correct, and
+              nothing below proposes changing it.</td>
+          </tr>
+        </table>
+      </div>
+      <p class="note" style="margin-top:11px">The first two rows of that table are the same
+        gesture. Which one you get depends on whether a row happens to be spare, which is not
+        drawn and cannot be counted by eye — so the canvas answers the same action two
+        different ways and neither is what was asked for.</p>
+      <p class="note flag no" style="margin-top:11px"><b>And it only works once</b> (jeff,
+        2026-09-08): <em>"the extra row vanishes once you do that, meaning that you can't keep
+        moving things down."</em> The two rows of that table are not two situations — they are
+        the same situation before and after. The gap is a <b>consumable</b>: the first drop eats
+        it, and from then on every drop in the seam is refused, because the bands now touch.
+        There is no gesture that puts the row back, so the shop can only ever get tighter.</p>
+      <p class="note" style="margin-top:9px"><b>Half of this was already found and fixed —
+        in the drawing.</b> <code>systemSeparators()</code> exists because the empty row used
+        to be the only thing separating two systems, and it "stopped the moment anything was
+        dragged into it: two grounds that meet are one ground, and the drawing quietly claimed
+        the shop had a single collector." A labelled rule was added so the seam survives being
+        dragged shut. That kept the picture honest. It did not give the row back.</p>
+    </div>
+  </section>
+
+  <hr class="rule"/>
+
+  <!-- ═══ 2 · THE PROPOSAL ═════════════════════════════════════════════ -->
+  <section class="sec">
+    <h3>2 · The proposal — the seam is a row you can insert into</h3>
+    <span class="pill agreed">Proposed</span>
+    <div class="card">
+      <p class="note">Dropping a piece on the seam <b>opens a new row there</b>. Everything at
+        or below that row moves down one — every system underneath, every piece in them, and
+        every board — and the piece lands on the row that just opened.
+        <b>The seam survives</b>: there is still a gap afterwards, because the shop grew rather
+        than the band eating its neighbour's breathing room.</p>
+      <p class="note" style="margin-top:9px"><b>Which means it repeats.</b> That is the whole
+        test, and the thing today's behaviour fails: the seam is no longer something you spend.
+        Drop into it as many times as you like — the demo below lets you — and it is still there
+        afterwards, one row further down each time.</p>
+      <p class="note" style="margin-top:9px">It is the instinct of inserting a row in a table,
+        and it is the same operation whether or not a spare row happened to be there — which is
+        what makes the two cases above stop disagreeing.</p>
+    </div>
+
+    <div class="stage">
+      <svg id="scene" viewBox="0 0 760 340" aria-label="Two systems with a seam between them"></svg>
+      <div class="controls">
+        <button class="primary" id="btn-seam">Drop the next piece on the seam</button>
+        <button id="btn-inside">Drop it inside Shop Vacuum's rows</button>
+        <button id="btn-reset">Reset</button>
+      </div>
+      <p class="say" id="say">The shop as it stands. Cyclone owns rows 0–1, Shop Vacuum owns
+        rows 3–4, and row 2 is the seam. <b>Drum Sander</b> is the piece being dragged.</p>
+    </div>
+
+    <div class="card">
+      <p class="note"><b>The push is computed, not drawn.</b> The scene above runs the actual
+        rule — <code>insertRowAt(r)</code> bumps every piece and board with
+        <code>row &gt;= r</code>, then the bands are recomputed from where the pieces ended up,
+        exactly as <code>systemRowBands()</code> does. If the picture looks right, the rule is
+        right.</p>
+    </div>
+  </section>
+
+  <hr class="rule"/>
+
+  <!-- ═══ 3 · WHAT MOVES ═══════════════════════════════════════════════ -->
+  <section class="sec">
+    <h3>3 · What moves, and what does not</h3>
+    <div class="card">
+      <div class="tblwrap">
+        <table>
+          <tr><th>Thing</th><th>Does it move?</th><th>Why</th></tr>
+          <tr><td><b>Every system below the seam</b></td><td>Down one row</td>
+              <td>Bands are contiguous and non-interleaving. Moving only the neighbour would
+                  close the <em>next</em> seam down instead of this one.</td></tr>
+          <tr><td><b>Every piece in them</b></td><td>Down one row</td>
+              <td>A band is not a container — it is derived from where its pieces stand. The
+                  pieces are the only thing there is to move.</td></tr>
+          <tr><td><b>Boards</b></td><td>Down one row, if at or below the seam</td>
+              <td>A board belongs to no system but stands on a cell and owns it exclusively.
+                  Leaving it behind would drop it into a band it was never in, and put it in
+                  the way of the piece that just arrived.</td></tr>
+          <tr><td><b>Ducts and cables</b></td><td>Reroute</td>
+              <td>Nothing to move — they are derived from where the pieces are, and the router
+                  already re-solves on every change.</td></tr>
+          <tr><td><b>The system above the seam</b></td><td>Stays</td>
+              <td>Insertion grows the shop downward. Pushing upward would move the piece you
+                  are still holding, which is the one thing a drop must not do.</td></tr>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <hr class="rule"/>
+
+  <!-- ═══ 4 · WHAT STILL REFUSES ═══════════════════════════════════════ -->
+  <section class="sec">
+    <h3>4 · What still refuses, and why that is not an inconsistency</h3>
+    <div class="card">
+      <p class="note flag no"><b>Dropping inside another system's rows stays refused.</b>
+        Inserting a row there would work mechanically — the shop would open up just the same —
+        but the piece would then be standing on a row in the middle of the neighbour's band,
+        which splits that band in two. That is precisely the interleaving the whole rule
+        exists to prevent, and the grey ground would have no shape to draw. The seam is the
+        only row where an insert leaves every band contiguous.</p>
+      <p class="note" style="margin-top:10px">So the refusal message stays, but it is now
+        <em>rarer and more truthful</em>: it means "that is inside another system", not "you
+        happened to aim at a row that was already spoken for".</p>
+    </div>
+  </section>
+
+  <hr class="rule"/>
+
+  <!-- ═══ 5 · OPEN ═════════════════════════════════════════════════════ -->
+  <section class="sec">
+    <h3>5 · Open — needs jeff's call before any of this is written</h3>
+    <span class="pill open">Open</span>
+    <div class="card">
+      <p class="note flag open"><b>Does the drag PREVIEW the push?</b> The guide bar can say
+        "Drop here and the shop opens a row" before the finger lifts, which is what every other
+        drop does (<code>dropWarn</code>, at <code>info</code>). The alternative is showing it —
+        sliding the lower systems down live while the piece hovers the seam. That is honest but
+        it is a lot of movement for a gesture you might not complete, and this canvas has
+        deliberately taken movement <em>away</em> before (D-68 dropped the whole-shop dimming
+        for exactly that reason). <b>Recommendation: say it, don't show it.</b></p>
+      <p class="note flag open" style="margin-top:11px"><b>Is one row always enough?</b> A unit
+        that spans several columns still occupies one row, so yes for every piece the canvas can
+        place today. Worth deciding out loud rather than discovering it later.</p>
+      <p class="note flag open" style="margin-top:11px"><b>Does this need an undo?</b> A drop
+        that reflows twenty pieces is a bigger event than a drop that moves one. The canvas has
+        undo/redo already; the question is whether the push is <em>one</em> undo step together
+        with the drop, which it should be — but nothing checks that today.</p>
+      <p class="note flag open" style="margin-top:11px"><b>Does the same gesture give a system
+        breathing room on its own?</b> The TODO calls this "the missing half" of <em>no way to
+        move a system</em>. If dropping in the seam can insert a row, then dragging the seam
+        itself — or a menu entry on the ground — could insert one with no piece involved. Out of
+        scope here, but it is the same primitive and worth not designing against.</p>
+    </div>
+  </section>
+
+  <hr class="rule"/>
+
+  <!-- ═══ 6 · WHAT IT CHANGES ══════════════════════════════════════════ -->
+  <section class="sec">
+    <h3>6 · What lands in canvas.html if this is accepted</h3>
+    <div class="card">
+      <p class="note">One row of the <em>What can stop a drag</em> table is rewritten, and the
+        table's opening claim — "only two things refuse a drop" — gets weaker in the right
+        direction:</p>
+      <div class="tblwrap" style="margin-top:10px">
+        <table>
+          <tr><th></th><th>Condition</th><th>Result</th></tr>
+          <tr><td class="tiny">WAS</td>
+              <td><b>The row belongs to another system</b></td>
+              <td><span style="color:var(--danger)">Refused.</span> Systems own contiguous row
+                  bands; interleaving them makes the grey ground undrawable.</td></tr>
+          <tr><td class="tiny">BECOMES</td>
+              <td><b>The row is the seam between two systems</b></td>
+              <td><span style="color:var(--success)">Allowed — the shop opens a row.</span>
+                  Everything at or below moves down one, so the seam survives instead of being
+                  swallowed.</td></tr>
+          <tr><td class="tiny">STAYS</td>
+              <td><b>The row is inside another system</b></td>
+              <td><span style="color:var(--danger)">Refused.</span> A piece there would split
+                  that band in two.</td></tr>
+        </table>
+      </div>
+      <p class="note" style="margin-top:11px">Plus a decision-log row in
+        <a href="decisions.html"><code>decisions.html</code></a>, which is where decisions
+        actually live — this page keeps no log of its own.</p>
+    </div>
+  </section>
+
+</div>
+
+<script>
+// ── The model ────────────────────────────────────────────────────────────────
+// Deliberately the same shape the canvas uses: pieces carry {col,row} and a system
+// id, boards carry {col,row} and no system, and a system's BAND is derived from
+// where its pieces ended up rather than stored. If the band were stored, the push
+// could move the pieces and leave the ground behind — which is the class of bug
+// systemRowBands() exists to make impossible.
+const CELL = 58, PAD_X = 46, PAD_Y = 40, INSET = 5;
+
+const START = {
+  pieces: [
+    { id: 'cyc',  name: 'Cyclone',      sys: 'A', col: 0, row: 0, kind: 'cyc' },
+    { id: 'saw',  name: 'Table Saw',    sys: 'A', col: 2, row: 0 },
+    { id: 'plan', name: 'Planer',       sys: 'A', col: 4, row: 1 },
+    { id: 'vac',  name: 'Shop Vacuum',  sys: 'B', col: 0, row: 3, kind: 'cyc' },
+    { id: 'band', name: 'Bandsaw',      sys: 'B', col: 2, row: 3 },
+    { id: 'drill',name: 'Drill Press',  sys: 'B', col: 4, row: 4 },
+  ],
+  boards: [ { id: 'b1', name: 'Back wall', col: 6, row: 4 } ],
+};
+
+/** Pieces waiting to be dragged in, in order. Three of them, because ONE is not a
+ *  test: the fault being fixed is that the gesture works the first time and is
+ *  refused every time after. */
+const QUEUE = [
+  { name: 'Drum Sander', sys: 'A' },
+  { name: 'Miter Saw',   sys: 'A' },
+  { name: 'Lathe',       sys: 'A' },
+];
+
+let state = clone(START), placedAt = null, pushedFrom = null, next = 0;
+function clone(o) { return JSON.parse(JSON.stringify(o)); }
+
+const NAMES = { A: 'Cyclone', B: 'Shop Vacuum' };
+
+/** Each system's row band, derived — the mockup's systemRowBands(). */
+function bands(s) {
+  const out = [];
+  for (const sys of ['A', 'B']) {
+    const rows = s.pieces.filter(p => p.sys === sys).map(p => p.row);
+    if (!rows.length) continue;
+    out.push({ id: sys, name: NAMES[sys], lo: Math.min(...rows), hi: Math.max(...rows) });
+  }
+  return out.sort((a, b) => a.lo - b.lo);
+}
+
+/** The seam row: the empty row between two bands. Null when they already touch. */
+function seamRow(s) {
+  const b = bands(s);
+  if (b.length < 2) return null;
+  return b[0].hi + 1 <= b[1].lo - 1 ? b[0].hi + 1 : null;
+}
+
+/** THE OPERATION. Everything at or below `r` moves down one; nothing above moves. */
+function insertRowAt(s, r) {
+  for (const p of s.pieces) if (p.row >= r) p.row += 1;
+  for (const b of s.boards) if (b.row >= r) b.row += 1;
+}
+
+// ── Rendering ────────────────────────────────────────────────────────────────
+const X = c => PAD_X + c * CELL, Y = r => PAD_Y + r * CELL;
+const svgns = 'http://www.w3.org/2000/svg';
+function el(n, attrs, text) {
+  const e = document.createElementNS(svgns, n);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (text != null) e.textContent = text;
+  return e;
+}
+
+function render() {
+  const svg = document.getElementById('scene');
+  svg.textContent = '';
+  const bs = bands(state);
+
+  // Ground per system, drawn from the derived band.
+  for (const b of bs) {
+    svg.appendChild(el('rect', {
+      class: 'ground', x: 14, width: 732, rx: 11,
+      y: Y(b.lo) - CELL / 2 + INSET,
+      height: (b.hi - b.lo) * CELL + CELL - INSET * 2,
+    }));
+    svg.appendChild(el('text', { class: 'seamt', x: 24, y: Y(b.lo) - CELL / 2 + INSET + 15 }, b.name));
+  }
+
+  // The seam rule between them, and its label.
+  for (let i = 1; i < bs.length; i++) {
+    const y = (Y(bs[i - 1].hi) + CELL / 2 + Y(bs[i].lo) - CELL / 2) / 2;
+    svg.appendChild(el('line', { class: 'seam seamline', x1: 14, x2: 746, y1: y, y2: y }));
+  }
+
+  // The row that just opened, if any.
+  if (placedAt !== null) {
+    svg.appendChild(el('rect', {
+      class: 'ghost', x: X(2) - 34, y: Y(placedAt) - 20, width: 68, height: 40, rx: 7,
+    }));
+    svg.appendChild(el('text', { class: 'ghostt', x: X(2), y: Y(placedAt) + 4 }, 'Drum Sander'));
+  }
+
+  for (const p of state.pieces) {
+    const moved = pushedFrom !== null && p.row > pushedFrom;
+    svg.appendChild(el('rect', {
+      class: 'piece ' + (p.kind === 'cyc' ? 'cyc' : 'toolbox'),
+      x: X(p.col) - 34, y: Y(p.row) - 20, width: 68, height: 40, rx: 7,
+    }));
+    svg.appendChild(el('text', { class: 'lbl', x: X(p.col), y: Y(p.row) + 4 }, p.name));
+    if (moved) svg.appendChild(el('circle', { class: 'movedot', cx: X(p.col) + 28, cy: Y(p.row) - 14, r: 3 }));
+  }
+
+  for (const b of state.boards) {
+    const moved = pushedFrom !== null && b.row > pushedFrom;
+    svg.appendChild(el('rect', {
+      class: 'piece brd', x: X(b.col) - 30, y: Y(b.row) - 17, width: 60, height: 34, rx: 6,
+    }));
+    svg.appendChild(el('text', { class: 'lbl', x: X(b.col), y: Y(b.row) + 4 }, b.name));
+    if (moved) svg.appendChild(el('circle', { class: 'movedot', cx: X(b.col) + 24, cy: Y(b.row) - 12, r: 3 }));
+  }
+
+  // Row numbers down the left, so "row 2" in the prose is findable.
+  const maxRow = Math.max(...state.pieces.map(p => p.row), ...state.boards.map(b => b.row));
+  for (let r = 0; r <= maxRow; r++) {
+    svg.appendChild(el('text', { class: 'tiny', x: 3, y: Y(r) + 3 }, String(r)));
+  }
+  svg.setAttribute('viewBox', `0 0 760 ${Y(maxRow) + 44}`);
+}
+
+function say(html, cls) {
+  const s = document.getElementById('say');
+  s.className = 'say' + (cls ? ' ' + cls : '');
+  s.innerHTML = html;
+}
+
+document.getElementById('btn-seam').onclick = () => {
+  const r = seamRow(state);
+  // Never null under this proposal — which is the point. Guarded anyway, so that if
+  // the rule above is ever changed to something that CAN consume the seam, this page
+  // says so rather than quietly doing nothing.
+  if (r === null) { say('No seam left — the rule above has been broken.', 'warn'); return; }
+  const p = QUEUE[next % QUEUE.length];
+  insertRowAt(state, r);
+  state.pieces.push({ id: 'q' + next, name: p.name, sys: p.sys, col: 2, row: r });
+  placedAt = r; pushedFrom = r; next += 1;
+  render();
+  const again = seamRow(state);
+  say(`A row opened at <b>row ${r}</b> and <b>${p.name}</b> landed on it. Shop Vacuum and `
+    + `everything in it moved down one — so did <b>Back wall</b>, which belongs to no system `
+    + `but stands on a cell (dots mark everything that moved). `
+    + `<b>The seam is still there, now at row ${again}</b> — so you can do it again, and again. `
+    + `That is the half today's canvas is missing: the gap is not spent.`, 'ok');
+};
+
+document.getElementById('btn-inside').onclick = () => {
+  const b = bands(state);
+  say(`<b>Refused — "That row belongs to Shop Vacuum. A piece stays in its own system."</b> `
+    + `Inserting a row at row ${b[1].lo + 1} would work mechanically, but Drum Sander would `
+    + `then stand in the middle of Shop Vacuum's band and split it in two. The seam is the `
+    + `only row where an insert leaves every band contiguous.`, 'warn');
+};
+
+document.getElementById('btn-reset').onclick = () => {
+  state = clone(START); placedAt = null; pushedFrom = null; next = 0;
+  render();
+  say('The shop as it stands. Cyclone owns rows 0–1, Shop Vacuum owns rows 3–4, and row 2 is '
+    + 'the seam. <b>Drum Sander</b> is the piece being dragged.');
+};
+
+render();
+</script>
