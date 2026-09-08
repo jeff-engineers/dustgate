@@ -245,8 +245,32 @@ inline bool parseSetFrame(JsonObjectConst f, SetCommand& out, const char*& err) 
     }
     if (strcmp(drive, "linear") == 0) {
         if (!f.containsKey("positionMm"))     { err = "missing positionMm"; return false; }
+        // TYPE FIRST, and it is not pedantry. ArduinoJson's as<float>() on a
+        // string returns 0.0f rather than failing, so {"positionMm":"far"} came
+        // through the range check below as a perfectly valid request to move to
+        // 0mm — the datum. A garbled field asking for a real move to the end of
+        // the rail is the worst possible reading of it. validateFrame() in
+        // nodelink.js rejects it on `typeof !== 'number'`; this is that.
+        if (!f["positionMm"].is<float>())     { err = "positionMm must be a number"; return false; }
+        const float mm = f["positionMm"].as<float>();
+        // BOUNDED, exactly as validateFrame() bounds it in nodelink.js — this
+        // was the one field on the wire that was not.
+        //
+        // The angle path has clamped 0..180 since it was written; positionMm
+        // took whatever arrived. The node then multiplies it by counts/mm and
+        // casts to long, so a NaN is undefined behaviour in the conversion and
+        // a wild value becomes a command clamped to kMaxStepsPerCommand and
+        // re-issued chunk after chunk until the runaway guard stops it. A
+        // node's whole safety story is that it moves only when told exactly
+        // where, and an unchecked number is not that.
+        //
+        // The NaN test is `mm != mm` rather than std::isnan: this header is
+        // deliberately free of <cmath> and is compiled for both the host tests
+        // and the ESP32.
+        if (mm != mm)                         { err = "positionMm is not a number"; return false; }
+        if (mm < -10000.0f || mm > 10000.0f)  { err = "positionMm out of range";    return false; }
         out.isServo    = false;
-        out.positionMm = f["positionMm"].as<float>();
+        out.positionMm = mm;
         out.angle      = 0;
         out.holdAtRest = false;
         return true;
