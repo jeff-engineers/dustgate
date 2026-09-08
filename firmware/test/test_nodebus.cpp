@@ -462,6 +462,12 @@ int main(int argc, char** argv) {
         R"({"t":"SET","seq":1,"selectorId":"g","stateId":"open","drive":"wat","channel":0})",         // bad drive
         R"({"t":"SET","seq":1,"stateId":"open","drive":"servo","channel":0,"angle":10})",             // no selectorId
         R"({"t":"PING"})",                                                                             // not a SET
+        // The linear half, which used to accept anything at all. Bounds mirror
+        // validateFrame() in nodelink.js — PAIR, see CLAUDE.md.
+        R"({"t":"SET","seq":1,"selectorId":"g","stateId":"open","drive":"linear","channel":0})",              // no positionMm
+        R"({"t":"SET","seq":1,"selectorId":"g","stateId":"open","drive":"linear","channel":0,"positionMm":99999})",  // out of range
+        R"({"t":"SET","seq":1,"selectorId":"g","stateId":"open","drive":"linear","channel":0,"positionMm":-99999})", // out of range, other way
+        R"({"t":"SET","seq":1,"selectorId":"g","stateId":"open","drive":"linear","channel":0,"positionMm":"far"})",  // not a number at all
       };
       int refused = 0;
       for (const char* b : bad) {
@@ -471,7 +477,21 @@ int main(int argc, char** argv) {
         const char* err = nullptr;
         if (!topo::nodelink::parseSetFrame(in.as<JsonObjectConst>(), cmd, err)) refused++;
       }
-      ok("secondary refuses every malformed SET", refused == 5, std::to_string(refused) + "/5");
+      ok("secondary refuses every malformed SET", refused == 9, std::to_string(refused) + "/9");
+
+      // ...and still ACCEPTS an ordinary linear move, so the bounds above are a
+      // gate and not a wall.
+      {
+        DynamicJsonDocument in(512);
+        deserializeJson(in, R"({"t":"SET","seq":7,"selectorId":"lin","stateId":"s2",)"
+                            R"("drive":"linear","channel":0,"positionMm":95.4})");
+        topo::nodelink::SetCommand cmd;
+        const char* err = nullptr;
+        bool okParse = topo::nodelink::parseSetFrame(in.as<JsonObjectConst>(), cmd, err);
+        ok("secondary accepts an in-range linear SET", okParse, err ? err : "");
+        ok("...and keeps its position", okParse && !cmd.isServo &&
+           cmd.positionMm > 95.3f && cmd.positionMm < 95.5f);
+      }
     }
   }
 
