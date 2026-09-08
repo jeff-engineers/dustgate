@@ -66,6 +66,61 @@ export function applyDrivesCache(controller: Record<string, unknown>, drives: Dr
   else controller['drives'] = 'linear';
 }
 
+/** A shop with more gates of one kind than ports to plug them into. */
+export interface PortShortfall {
+  kind: Drives;
+  /** Gates of that kind drawn in the shop. */
+  gates: number;
+  /** Ports of that kind the paired boards actually offer. */
+  ports: number;
+}
+
+/**
+ * Gates drawn with nowhere to plug them in, counted PER KIND.
+ *
+ * The two capacities never substitute for each other, which is the whole reason
+ * this counts twice instead of once: a PWM board offers servo channels and no
+ * slider port, a slider board offers one rack and no channels, and the two builds
+ * contend for the same pads. Four spare servo channels are no help whatsoever to a
+ * second sliding gate, and a single total would say the shop had room.
+ *
+ * `servoPortsPerBoard` is passed in rather than defined here so this file does not
+ * become a fourth place claiming the number 4 — the callers already have it
+ * (SERVO_PORTS in build/wiring/wire-geometry.ts, mirroring MAX_SERVOS_PER_HOST in
+ * topology.js and SERVO_COUNT in config.h).
+ *
+ * Count every PAIRED board, including one not yet placed on the canvas: it drives
+ * gates all the same, and treating it as absent would invent a shortage.
+ */
+export function portShortfalls(
+  boardDrives: Drives[], gateKinds: string[], servoPortsPerBoard: number,
+): PortShortfall[] {
+  let servoPorts = 0, sliderPorts = 0;
+  for (const d of boardDrives) {
+    if (d === 'linear') sliderPorts += 1; else servoPorts += servoPortsPerBoard;
+  }
+  let servoGates = 0, sliderGates = 0;
+  for (const k of gateKinds) {
+    if (k === 'linear') sliderGates += 1; else servoGates += 1;
+  }
+  const out: PortShortfall[] = [];
+  if (servoGates > servoPorts) out.push({ kind: 'servo', gates: servoGates, ports: servoPorts });
+  if (sliderGates > sliderPorts) out.push({ kind: 'linear', gates: sliderGates, ports: sliderPorts });
+  return out;
+}
+
+/** One shortfall as the sentence you would say out loud. No trailing advice — the
+ *  caller adds what to DO about it once, however many shortfalls it is reporting. */
+export function shortfallText(s: PortShortfall): string {
+  const one = s.gates === 1;
+  if (s.kind === 'linear') {
+    return `${s.gates} sliding ${one ? 'gate needs' : 'gates need'} a slider board and this shop has `
+         + `${s.ports === 0 ? 'none' : String(s.ports)} — a slider board drives one rack, so each rack needs its own.`;
+  }
+  return `${s.gates} ${one ? 'gate needs' : 'gates need'} a servo channel and this shop has `
+       + `${s.ports === 0 ? 'none' : `only ${s.ports}`} — each servo board drives four.`;
+}
+
 /**
  * What to ask before forgetting a board, worded once.
  *

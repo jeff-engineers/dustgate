@@ -36,7 +36,8 @@ import { type RoutedDuct, type Scene, Router, routeAllShared, sceneBounds } from
 import { CanvasViewport } from './canvas-viewport';
 import { fitText, plugLabel } from './plug-label';
 import {
-  type Drives, DEFAULT_DRIVES, applyDrivesCache, canHost, drivesFromCaps, drivesFromHasLinear, resolveDrives,
+  type Drives, type PortShortfall, DEFAULT_DRIVES, applyDrivesCache, canHost, drivesFromCaps,
+  drivesFromHasLinear, portShortfalls, resolveDrives, shortfallText,
   unpairPrompt,
 } from '../boards/board-drives';
 import {
@@ -4494,6 +4495,31 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   /**
+   * Gates drawn with nowhere to plug them in, counted per KIND.
+   *
+   * The two capacities do NOT substitute for each other, so they are counted and
+   * reported separately: a PWM board offers four servo channels and no slider port,
+   * a slider board offers one rack and no channels, and the two builds contend for
+   * the same pads (config.h #errors on a pin map claiming both). Four spare servo
+   * channels are no help at all to a second sliding gate.
+   *
+   * Counted off `controllersRaw()` rather than `boards()`, which skips any board
+   * without a canvas cell — a board that is paired but not yet placed still drives
+   * gates, and counting it as absent would invent a shortage.
+   *
+   * Shop-wide, because a board is: it belongs to no system and may drive gates in
+   * any of them.
+   */
+  private portShortfalls(): PortShortfall[] {
+    if (!this.topo) return [];
+    return portShortfalls(
+      this.controllersRaw().map(c => this.drivesOf(c)),
+      this.allElems().filter(e => e['type'] === 'selector').map(e => e['kind'] as string),
+      SERVO_PORTS,
+    );
+  }
+
+  /**
    * The one contextual line in the guide bar. Priority: a failed save first, then
    * live airflow problems (with a fix + Cap action), then a save confirmation,
    * then onboarding (empty shop) → progress nudge.
@@ -4550,6 +4576,21 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
         text: one
           ? `${names} can’t be selected on its own — ${partners} share${(shared[0].with ?? []).length === 1 ? 's' : ''} its outlet with no gate in between, so running it pulls air through ${partners} too. The shop stays off until that’s fixed: put a gate on that leg, move it to a free outlet, or`
           : `${names} can’t be selected on their own — they share an outlet, so opening one opens the others and suction leaks. The shop stays off until that’s fixed: put a gate on each leg, move them to free outlets, or`,
+      };
+    }
+
+    // More gates than ports to plug them into. Above "needs setting up" because a
+    // gate with no port cannot BE set up — sending someone to tap its orange dot
+    // first is sending them to finish something that has nowhere to finish. Below
+    // the leaks, which stop the shop outright rather than one gate.
+    //
+    // Says pair a board, not "delete a gate": the shop you drew is the shop you
+    // want, and the plumbing is the part that is already real.
+    const short = this.portShortfalls();
+    if (short.length) {
+      return {
+        kind: 'warn',
+        text: `${short.map(shortfallText).join(' ')} Pair another board from Boards.`,
       };
     }
 

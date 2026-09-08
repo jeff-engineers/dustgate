@@ -13,7 +13,7 @@
 
 import {
   type Drives, DEFAULT_DRIVES, applyDrivesCache, canHost,
-  drivesFromCaps, drivesFromHasLinear, resolveDrives,
+  drivesFromCaps, drivesFromHasLinear, portShortfalls, resolveDrives, shortfallText,
 } from './board-drives';
 import { validateTopology } from '@topology';
 
@@ -121,6 +121,56 @@ group('B4 a paired slider node survives a save');
   ok('...with the message that was on screen',
      bad.errors.some(e => /servo board but has a sliding gate/.test(e.message)),
      bad.errors.map(e => e.message).join('; '));
+}
+
+// ── B5 · counting ports against gates ────────────────────────────────────────
+//
+// The shortfall is what the guide bar says when the shop has run out of somewhere
+// to plug a gate in, and the reason it counts each kind separately is the same
+// reason canHost() is an equality test: a spare servo channel cannot take a rack.
+group('B5 a shop can run out of ports, and of one kind at a time');
+{
+  const S = 4;   // SERVO_PORTS, passed in by the caller
+
+  ok('one board, four valves, no shortfall',
+     portShortfalls(['servo'], ['servoGate', 'servoGate', 'servoGate', 'servoManifold'], S).length === 0);
+
+  const fifth = portShortfalls(['servo'], Array(5).fill('servoGate'), S);
+  ok('...the fifth valve is one too many', fifth.length === 1);
+  ok('...and it is counted, not just flagged',
+     fifth[0].kind === 'servo' && fifth[0].gates === 5 && fifth[0].ports === 4);
+
+  // The case a single total would get wrong, and the whole reason for two counts.
+  const spare = portShortfalls(['servo'], ['servoGate', 'linear'], S);
+  ok('a servo board with three channels free still cannot take a rack', spare.length === 1);
+  ok('...and the shortfall names the slider, not the servos',
+     spare[0].kind === 'linear' && spare[0].ports === 0);
+
+  ok('a slider board takes exactly one rack',
+     portShortfalls(['linear'], ['linear'], S).length === 0);
+  ok('...and refuses the second', portShortfalls(['linear'], ['linear', 'linear'], S).length === 1);
+  // A slider board contributes NO servo channels: the pads are the serial bus.
+  const sliderOnly = portShortfalls(['linear'], ['servoGate'], S);
+  ok('a slider board offers no servo channel at all',
+     sliderOnly.length === 1 && sliderOnly[0].kind === 'servo' && sliderOnly[0].ports === 0);
+
+  ok('both kinds short is reported as both',
+     portShortfalls(['servo'], Array(5).fill('servoGate').concat(['linear']), S).length === 2);
+
+  ok('an empty shop is not short of anything', portShortfalls([], [], S).length === 0);
+  ok('...but a gate with no board at all is',
+     portShortfalls([], ['servoGate'], S).length === 1);
+
+  // Wording: the sentence has to survive the zero case, which is the one a shop
+  // hits first — a rack drawn before any slider board is paired.
+  ok('zero ports reads as "none", never "only 0"',
+     /has none —/.test(shortfallText({ kind: 'linear', gates: 1, ports: 0 })));
+  ok('one gate is singular',
+     /1 sliding gate needs/.test(shortfallText({ kind: 'linear', gates: 1, ports: 0 })));
+  ok('two gates are plural',
+     /2 sliding gates need/.test(shortfallText({ kind: 'linear', gates: 2, ports: 1 })));
+  ok('a servo shortfall says how many channels there are',
+     /only 4 —/.test(shortfallText({ kind: 'servo', gates: 5, ports: 4 })));
 }
 
 console.log(`\n${checks - failures}/${checks} checks passed`);

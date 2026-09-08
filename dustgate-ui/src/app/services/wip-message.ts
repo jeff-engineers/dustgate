@@ -190,7 +190,20 @@ const PHRASINGS: Array<{
   },
   {
     re: /^host "([^"]+)" has (\d+) linear selectors \(max 1 per host\)$/,
-    say: (d, m) => `${label(d, m[1])} is driving ${m[2]} sliding gates. A board has one stepper, so it drives one.`,
+    say: (d, m) => `${label(d, m[1])} is driving ${m[2]} sliding gates. A board drives one rack — pair another board.`,
+  },
+  // The two halves of "a board is flashed for one job or the other". Reachable by
+  // arriving rather than by picking, now that the gate sheet disables a board that
+  // can't run the gate — an older layout, or a board re-flashed the other way.
+  {
+    re: /^board "([^"]+)" is set up as a sliding-gate board but has (\d+) servo gate\(s\) on it$/,
+    say: (d, m) => `${label(d, m[1])} is a sliding-gate board — it drives one rack over a serial bus, `
+                 + `not servos. Move its ${m[2] === '1' ? 'gate' : `${m[2]} gates`} to a servo board.`,
+  },
+  {
+    re: /^board "([^"]+)" is set up as a servo board but has a sliding gate on it$/,
+    say: (d, m) => `${label(d, m[1])} is a servo board — it drives the PWM bank, not a rack. `
+                 + `A sliding gate needs a board flashed for the slider.`,
   },
   {
     re: /^selector missing controllerId$/,
