@@ -107,6 +107,13 @@ int main() {
            localBinSystemId(t, "primary"));
         ok("a collector with no bin is absent, not empty",
            localBinSystemId(t, "dcB").empty());
+        // A BOARD WITH NO ID OF ITS OWN CLAIMS NOTHING that names an owner.
+        // This used to return "sysA": an `own.empty()` clause treated "I don't
+        // know who I am" as "everything is mine", so an unadopted board reported
+        // a bin wired to node-dc as its own.
+        ok("a board that doesn't know its own id claims nothing named",
+           localBinSystemId(t, "").empty(),
+           localBinSystemId(t, ""));
     }
     {
         // Mirrors NodeBus: no controllerId means local. Single-board shops never
@@ -118,6 +125,10 @@ int main() {
         ]})");
         ok("no controllerId → this board's bin",
            localBinSystemId(doc.as<JsonObjectConst>(), "primary") == "only");
+        // ...and still so for a board with no id, because the SENSOR names
+        // nobody. "Absent means local" is about the sensor, not about us.
+        ok("no controllerId → still ours even with no id of our own",
+           localBinSystemId(doc.as<JsonObjectConst>(), "") == "only");
     }
     {
         StaticJsonDocument<512> doc;
