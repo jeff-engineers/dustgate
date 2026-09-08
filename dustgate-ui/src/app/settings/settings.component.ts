@@ -335,10 +335,17 @@ export class SettingsComponent implements OnInit {
 
   ngOnInit() {
     this.portSize = this.hardwareProfile.portSize;
-    // deviceInfo may not have loaded yet on a hard refresh straight into /settings.
-    this.api.ready$.subscribe(ready => {
-      if (!ready) return;
-      this.numGates       = this.api.deviceInfo?.numStops || 1;
+    // deviceInfo may not have loaded yet on a hard refresh straight into
+    // /settings, so wait for it — but wait ONCE.
+    //
+    // This used to be a bare subscribe() on ready$, which is a BehaviorSubject
+    // that lives as long as the app. The component has no ngOnDestroy, so every
+    // visit to /settings left another subscription behind, holding a destroyed
+    // component and calling markForCheck() on it. whenReady() is the same wait
+    // as a promise that resolves once and holds nothing afterwards — and it
+    // already existed for exactly this.
+    void this.api.whenReady().then(() => {
+      this.numGates = this.api.deviceInfo?.numStops || 1;
       this.cd.markForCheck();
     });
     void this.loadCoasts();
