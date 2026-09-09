@@ -37,6 +37,17 @@ struct MdnsHit {
     String owner;  // "owner" TXT — the primary that has claimed this node
                    // ("" = unclaimed). A hint published at the node's boot, not
                    // a live authority; see the note where the node sets it.
+    String devicetype; // "devicetype" TXT — Tasmota publishes devicetype=tasmota
+                   // on _http._tcp. It is what separates a Tasmota plug from
+                   // every other HTTP responder on the LAN, which is the same
+                   // problem _shelly._tcp was adopted to avoid.
+                   //
+                   // ⚠️ USUALLY ABSENT. Tasmota's mDNS needs USE_DISCOVERY
+                   // compiled in and is NOT in the precompiled builds — upstream
+                   // left it out because "mDNS generates more problems than it
+                   // solves". So an empty result here means "no Tasmota
+                   // ADVERTISED", never "no Tasmota present", and the fallback
+                   // is a hand-entered IP.
 };
 
 // Fills `out` from one mDNS answer. TXT records are optional and their order
@@ -53,7 +64,7 @@ inline void mdnsParseHit(const mdns_result_t* r, MdnsHit& out) {
     }
 
     int gen = 0, servos = 0;
-    String role, board, owner;
+    String role, board, owner, devicetype;
     for (size_t t = 0; t < r->txt_count; t++) {
         const char* k = r->txt[t].key;
         const char* v = r->txt[t].value;
@@ -63,6 +74,7 @@ inline void mdnsParseHit(const mdns_result_t* r, MdnsHit& out) {
         else if (strcmp(k, "role")   == 0) role   = v;
         else if (strcmp(k, "board")  == 0) board  = v;
         else if (strcmp(k, "owner")  == 0) owner  = v;
+        else if (strcmp(k, "devicetype") == 0) devicetype = v;
     }
 
     out.hostname = r->hostname ? String(r->hostname) : String();
@@ -72,6 +84,7 @@ inline void mdnsParseHit(const mdns_result_t* r, MdnsHit& out) {
     out.board    = board;
     out.servos   = servos;
     out.owner    = owner;
+    out.devicetype = devicetype;
 }
 
 // Queries <service>.<proto>, waiting up to timeoutMs for responses. Returns the
