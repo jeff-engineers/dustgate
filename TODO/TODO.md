@@ -15,6 +15,31 @@ reasoning was contested, or that a still-open item above leans on.
   in is whatever other path still has one. Find where the entry point went and
   put it back on that page.
 
+- **`volatile int _nodeLinkClients` is deprecated, and the deprecation is
+  pointing at a real bug (2026-09-09, jeff).** The only two warnings in a clean
+  build, both in `firmware/api/HttpApiServer.cpp`:
+
+  ```
+  264: '++' expression of 'volatile'-qualified type is deprecated [-Wvolatile]
+  269: '--' expression of 'volatile'-qualified type is deprecated [-Wvolatile]
+  ```
+
+  Worth more than a silencing. `volatile` was never a threading primitive — it
+  stops the compiler caching the value and nothing else, so `_nodeLinkClients++`
+  is still a non-atomic read-modify-write. The counter is incremented and
+  decremented from AsyncWebServer's callbacks and read from `loop()`
+  (`nodeLinkConnected()`, and the guard at `.cpp:502`), so two events landing
+  together can lose one — leaving the primary believing a node is connected when
+  none is, or the reverse. C++20 deprecated exactly this construct because it
+  reads as atomic and is not.
+
+  The fix is `std::atomic<int>`, which is what the code has been pretending
+  `volatile` meant. Not urgent: NodeLink connections are rare and the window is
+  tiny, which is also why it would be miserable to find later.
+
+  The other three envs (`xiao_c5`, `xiao_c5_linear`, and the benches) build with
+  no warnings at all, so this is the whole list.
+
 ## UI
 
 - **Replace drag-to-branch on a duct with "move this run here" (2026-09-07,

@@ -27,10 +27,15 @@ hold a motor invalidates both halves of the design at once.
 
 Worth being precise, because the obvious diagnosis leads to the wrong fix.
 
-The Plus Plug US is rated 15A / 1800W. The collector draws roughly 13A
-continuously, which is inside that rating — tight, but inside. What trips is
-**inrush**: an induction motor's locked-rotor current is several times its
-running current for a few hundred milliseconds at startup.
+The Plus Plug US is rated 15A / 1800W. **MEASURED 2026-09-09 with an inrush
+clamp meter: 10 A running, ~50 A inrush.** (This section said "roughly 13A" until
+then — a guess, and pessimistic.)
+
+So 10 A continuous is comfortably inside the plug's rating, not the marginal
+figure the guess implied. What trips it is **inrush**: 50 A is 5× the running
+current and **3.3× the plug's entire rating**, for a few hundred milliseconds at
+startup. That is locked-rotor current, and it is textbook for an induction
+motor.
 
 The overpower protection that catches this exists to protect **the relay
 contacts**. Contacts are the fragile part of a smart plug: they arc on make,
@@ -102,7 +107,7 @@ liability. There is already one in the shop.
 
 | | |
 |---|---|
-| Rating | **15A, 110V, up to 1.5HP** |
+| Rating | **15A, 110V, up to 1.5HP** — measured collector: 10 A running, 50 A inrush, so it fits with room |
 | Install | Plug-in pass-through, 6' grounded cord |
 | Remote | 12V "23A" battery, ~50 ft, through walls |
 | Pairing | **8-position DIP switch** in both fob and receiver |
@@ -422,7 +427,8 @@ its data input takes 3.3V logic happily. Quarter-wave antenna at 315 MHz is
 
 Everything. Specifically:
 
-- No Athom plug has been bought, let alone held 13A continuously.
+- No Athom plug has held the collector's 10 A continuously. One has been talked
+  to over HTTP (§4.1) but nothing has been plugged into it.
 - No CT has been clamped on anything, and §5.4 is a hypothesis with one piece of
   commercial evidence behind it.
 - Nothing has been transmitted to the Rockler receiver. Band, encoder, address
@@ -431,8 +437,10 @@ Everything. Specifically:
   fob's oscillator resistor and picking the right data pin.
 - The claim that a pass-through plug solves the trip is **reasoning from why the
   protection exists**, not an observation.
-- Thermal behaviour of a 15A-body plug at 13A continuous in a dusty shop is
+- Thermal behaviour of a 15A-body plug at **10 A** continuous in a dusty shop is
   exactly the kind of thing that looks fine on a bench and fails in year two.
+  Less marginal than the 13 A guess made it, but still the failure that would
+  take two years to find.
 
 ## 11. Open questions
 

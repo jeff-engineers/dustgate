@@ -310,6 +310,8 @@ void SerialDebugControl::processLine(const String& line) {
 #ifdef CONTROL_SMART_OUTLET
     } else if (cmd == "discover") {
         runDiscover();
+    } else if (cmd.startsWith("probe ")) {
+        runProbe(cmd.substring(6));
     } else if (cmd == "sweep" || cmd.startsWith("sweep ")) {
         int from = 1, to = 254;
         if (cmd.length() > 6) sscanf(cmd.c_str() + 6, "%d %d", &from, &to);
@@ -505,6 +507,89 @@ void SerialDebugControl::runMdnsProbe() {
 #endif // CONTROL_SMART_OUTLET || ENABLE_HTTP_API
 
 #ifdef CONTROL_SMART_OUTLET
+
+// One address, and WHY it failed.
+//
+// `sweep` can only ever say "nothing found", and that is the same answer for an
+// unreachable network, a firewalled host, an HTTP error and a reply we parsed
+// wrongly. Those want completely different fixes, so this walks the same steps
+// and reports each one. Reach for it before believing a negative sweep.
+void SerialDebugControl::runProbe(const String& ipArg) {
+    String ip = ipArg; ip.trim();
+    if (ip.length() == 0) { Serial.println(F("[PROBE] usage: probe <ip>")); return; }
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.println(F("[PROBE] WiFi not connected."));
+        return;
+    }
+
+    Serial.printf("[PROBE] %s   (we are %s on \"%s\")\n",
+                  ip.c_str(), WiFi.localIP().toString().c_str(), WiFi.SSID().c_str());
+
+    // Step 1: raw TCP to port 80. Separates "cannot reach this host at all" —
+    // a different subnet, or guest-network client isolation — from anything
+    // about HTTP or our parsing.
+    WiFiClient probe;
+    probe.setTimeout(2);
+    const uint32_t t0 = millis();
+    const bool connected = probe.connect(ip.c_str(), 80);
+    const uint32_t dt = millis() - t0;
+    probe.stop();
+    Serial.printf("  1. TCP :80          %s  (%lums)\n",
+                  connected ? "connected" : "NO ROUTE / refused", (unsigned long)dt);
+    if (!connected) {
+        Serial.println(F("     Nothing is listening, or we cannot reach it at all."));
+        Serial.println(F("     If curl from a laptop works but this does not, suspect"));
+        Serial.println(F("     GUEST-NETWORK CLIENT ISOLATION — the board and the plug"));
+        Serial.println(F("     are on the same subnet but forbidden to talk."));
+        return;
+    }
+
+    // Step 2: the raw HTTP exchange, BEFORE the driver sees it. Separating this
+    // from the parse is the whole point — the first version of this reported
+    // "Status 8 parse FAILED" for what was actually a chunked-transfer problem,
+    // and a reply that curl renders perfectly. Show the code and the body.
+    {
+        char url[64];
+        snprintf(url, sizeof(url), "http://%s/cm?cmnd=Status%%208", ip.c_str());
+        HTTPClient http;
+        http.begin(url);
+        http.setConnectTimeout(2000);
+        http.setTimeout(2000);
+        const int code = http.GET();
+        const String body = (code == 200) ? http.getString() : String();
+        http.end();
+        Serial.printf("  2. HTTP GET         %d\n", code);
+        if (code == 200) {
+            Serial.print(F("     "));
+            Serial.println(body.substring(0, 160));
+        } else {
+            Serial.println(F("     Reachable on :80 but the endpoint did not answer 200."));
+            return;
+        }
+    }
+
+    // Step 3: the driver, on the same reply.
+    TasmotaOutlet t(ip.c_str(), "probe");
+    const bool ok = t.probe(2000);
+    Serial.printf("  3. Status 8 parse   %s\n", ok ? "ok" : "FAILED");
+    if (ok) {
+        Serial.printf("     %.1f W\n", t.getPowerW());
+    } else {
+        Serial.println(F("     Reachable, but no StatusSNS.ENERGY.Power came back."));
+        Serial.println(F("     Either it is not a Tasmota, or it has no energy monitor."));
+        return;
+    }
+
+    // Step 4: the claim substrate.
+    String marker;
+    if (t.readOwner(marker)) {
+        plugclaim::Claim c = plugclaim::decideMarker(marker.c_str(), "");
+        Serial.printf("  4. Mem1             \"%s\"  -> %s\n",
+                      marker.c_str(), plugclaim::stateName(c.state));
+    } else {
+        Serial.println(F("  4. Mem1             UNREADABLE — claiming is unavailable"));
+    }
+}
 
 // Sweep the local /24 for Tasmota plugs, one address at a time.
 //
@@ -831,6 +916,9 @@ void SerialDebugControl::printHelp() {
     Serial.println(F("  i2c [sda] [scl]   Scan the I2C bus — what is out there, and at what address ('force' to override refusals)"));
 #ifdef CONTROL_SMART_OUTLET
     Serial.println(F("  discover          Scan mDNS for Shelly outlets, print raw + filtered results"));
+    Serial.println(F("  probe <ip>        One address, verbosely, saying WHICH step failed —"));
+    Serial.println(F("                    TCP, the Status 8 parse, or Mem1. Use it before"));
+    Serial.println(F("                    believing a `sweep` that found nothing."));
     Serial.println(F("  sweep [from] [to] Knock on every address in the local /24 looking for"));
     Serial.println(F("                    Tasmota plugs. They advertise NOTHING, so `discover`"));
     Serial.println(F("                    cannot see one however healthy it is. ~1 min; any key"));

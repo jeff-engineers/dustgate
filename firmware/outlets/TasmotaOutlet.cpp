@@ -54,6 +54,13 @@ bool TasmotaOutlet::doPoll(uint32_t timeoutMs) {
 
     HTTPClient http;
     http.begin(url);
+    // CONNECT TIMEOUT TOO, and it is the one that matters here. setTimeout()
+    // bounds the socket READ; establishing the connection has its own budget,
+    // and without this it defaults to seconds. A sweep spends almost all its
+    // time on addresses with nothing at them, where connect is the entire cost
+    // — 10 addresses took 45s before this line existed, against a 250ms
+    // timeout that was doing nothing at all.
+    http.setConnectTimeout(timeoutMs);
     http.setTimeout(timeoutMs);
 
     int code = http.GET();
@@ -73,10 +80,23 @@ bool TasmotaOutlet::doPoll(uint32_t timeoutMs) {
     StaticJsonDocument<128> filter;
     filter["StatusSNS"]["ENERGY"]["Power"] = true;
 
+    // getString(), NOT getStream(). Tasmota answers `Transfer-Encoding: chunked`
+    // and getStream() hands back the raw socket WITH the chunk framing still in
+    // it — hex length lines and CRLFs — so ArduinoJson chokes on the first chunk
+    // header before it ever reaches the JSON. getString() decodes the framing.
+    //
+    // ShellyGen2Outlet streams the same way and is fine because a Shelly sends
+    // Content-Length. That difference cost a bench session: the parse failed on
+    // hardware while curl showed a perfectly good reply, because curl decodes
+    // chunking and getStream() does not.
+    //
+    // Safe to buffer: Status 8 is a few hundred bytes. Do not copy this to an
+    // endpoint that can answer with kilobytes.
     StaticJsonDocument<192> doc;
-    DeserializationError err = deserializeJson(doc, http.getStream(),
-                                               DeserializationOption::Filter(filter));
+    const String body = http.getString();
     http.end();
+    DeserializationError err = deserializeJson(doc, body,
+                                               DeserializationOption::Filter(filter));
 
     if (err) {
         _reachable  = false;
@@ -117,12 +137,22 @@ bool TasmotaOutlet::readOwner(String& out, uint32_t timeoutMs) {
 
     HTTPClient http;
     http.begin(url);
+    // CONNECT TIMEOUT TOO, and it is the one that matters here. setTimeout()
+    // bounds the socket READ; establishing the connection has its own budget,
+    // and without this it defaults to seconds. A sweep spends almost all its
+    // time on addresses with nothing at them, where connect is the entire cost
+    // — 10 addresses took 45s before this line existed, against a 250ms
+    // timeout that was doing nothing at all.
+    http.setConnectTimeout(timeoutMs);
     http.setTimeout(timeoutMs);
     if (http.GET() != 200) { http.end(); return false; }
 
+    // getString() for the same reason doPoll() uses it — Tasmota chunks its
+    // replies and getStream() would deliver the framing along with them.
     StaticJsonDocument<128> doc;
-    DeserializationError err = deserializeJson(doc, http.getStream());
+    const String body = http.getString();
     http.end();
+    DeserializationError err = deserializeJson(doc, body);
     if (err) return false;
 
     // A plug that answers without a Mem1 key is not "unclaimed" — it is a plug
@@ -154,6 +184,7 @@ bool TasmotaOutlet::writeOwner(const char* owner) {
 
     HTTPClient http;
     http.begin(url);
+    http.setConnectTimeout(OUTLET_RPC_WRITE_TIMEOUT_MS);
     http.setTimeout(OUTLET_RPC_WRITE_TIMEOUT_MS);
     const bool ok = (http.GET() == 200);
     http.end();
@@ -174,6 +205,7 @@ static bool sendCmd(const char* ip, const char* cmd) {
     snprintf(url, sizeof(url), "http://%s/cm?cmnd=%s", ip, cmd);
     HTTPClient http;
     http.begin(url);
+    http.setConnectTimeout(OUTLET_RPC_WRITE_TIMEOUT_MS);
     http.setTimeout(OUTLET_RPC_WRITE_TIMEOUT_MS);
     const bool ok = (http.GET() == 200);
     http.end();
