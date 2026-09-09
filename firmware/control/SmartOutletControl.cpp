@@ -8,6 +8,7 @@
 
 #include <WiFi.h>  // for WiFi.status() check in begin()
 #include "../outlets/ShellyGen2Outlet.h"
+#include "../outlets/OutletFactory.h"  // kind -> driver, in one place
 #include "../outlets/OutletConfig.h"
 #include "../outlets/PlugClaim.h"        // who owns a plug, and what we may do to it
 #include "../utils/WiFiConfig.h"         // getHostname() — the owner we write into names
@@ -96,7 +97,7 @@ bool SmartOutletControl::begin() {
         if (!entries[i].valid) continue;
         // Only Gen2+ plugs are supported (Gen1 dropped); stored generation is
         // always >= 2, and Gen3+ speaks the same RPC dialect as Gen2.
-        SmartOutlet* o = new ShellyGen2Outlet(entries[i].ip, entries[i].name);
+        SmartOutlet* o = makeOutlet(entries[i].kind, entries[i].ip, entries[i].name);
         o->setStopIndex(entries[i].stopIndex);
         o->setThresholdW(entries[i].thresholdW);
         o->setHost(entries[i].host);
@@ -115,6 +116,12 @@ bool SmartOutletControl::begin() {
     // slots are rebuilt from the layout on adopt, so there is nothing to load.
     DustCollectorEntry dc;
     if (OutletConfig::loadDustCollector(dc)) {
+        // SHELLY, ALWAYS — a collector plug is SWITCHED, and a Tasmota
+        // no-relay plug cannot switch (TasmotaOutlet leaves setSwitch() at the
+        // base class's `return false`). Building one here would give a collector
+        // that silently never starts. If a Tasmota ever appears on a collector
+        // it is the SENSE half of a two-device collector, which is an open
+        // question in docs/tool-sensing-rfc.md §11, not this.
         _collectors[0] = new ShellyGen2Outlet(dc.ip, "Dust Collector");
         _collectors[0]->setHost(dc.host);
         _dcSynced[0] = false; // force initial off/on sync on first poll
@@ -657,18 +664,18 @@ void SmartOutletControl::clearTakeoverApproval(const char* ip) {
         if (strcmp(_pendingTakeoverIp[i], ip) == 0) _pendingTakeoverIp[i][0] = '\0';
 }
 
-void SmartOutletControl::configureOutlet(int slot, int generation,
+void SmartOutletControl::configureOutlet(int slot, OutletKind kind, int generation,
                                          const char* ip, const char* name,
                                          int stopIndex, float thresholdW,
                                          const char* host) {
     if (slot < 0 || slot >= SMART_OUTLET_COUNT) return;
 
-    // Gen2+ only (Gen1 dropped); `generation` is retained in the config/API
-    // for compatibility but is always >= 2.
+    // Shelly Gen2+ only (Gen1 dropped), and meaningless on a Tasmota, which has
+    // no generation at all. Retained in the config/API for compatibility.
     (void)generation;
     // Built BEFORE the lock: constructing a plug touches the heap and no other
     // task can see it yet, so there is nothing to serialize.
-    SmartOutlet* o = new ShellyGen2Outlet(ip, name);
+    SmartOutlet* o = makeOutlet(kind, ip, name);
     o->setStopIndex(stopIndex);
     o->setThresholdW(thresholdW);
     o->setHost(host);
@@ -792,7 +799,9 @@ void SmartOutletControl::configureCollector(int idx, int generation, const char*
     // poll task tolerates a brief window" is what this used to say, and it is
     // what crashed the board: reconcileCollectors() holds this pointer across a
     // blocking setSwitch(), so "brief" is however long a plug takes to answer.
-    SmartOutlet* fresh = new ShellyGen2Outlet(ip, "Dust Collector");  // Gen2+ only
+    // Shelly, always — see the note in begin(). A collector is switched, and a
+    // no-relay Tasmota cannot switch.
+    SmartOutlet* fresh = new ShellyGen2Outlet(ip, "Dust Collector");
     fresh->setHost(host);
     SmartOutlet* old;
     xSemaphoreTake(_mutex, portMAX_DELAY);

@@ -60,7 +60,16 @@ const MAX_SLIDE_BRANCHES = 8;
 // ── Typedefs (JSDoc — gives TS consumers types without a build step) ─────────
 /**
  * @typedef {Object} Outlet
- * @property {2} gen                 Shelly generation (always 2; Gen1 dropped)
+ * @property {'shelly'|'tasmota'} [kind]  Which protocol the plug speaks.
+ *                                  ABSENT MEANS 'shelly' — every layout written
+ *                                  before 2026-09-09 has one and no field to say
+ *                                  so. A 'tasmota' plug is SENSE-ONLY: it has no
+ *                                  relay, which is the whole reason it exists
+ *                                  (docs/tool-sensing-rfc.md §2), so it may only
+ *                                  ever appear under a tool's `sensor`, never a
+ *                                  collector's `control`.
+ * @property {2} [gen]               Shelly generation (always 2; Gen1 dropped).
+ *                                  Meaningless on a Tasmota, which has none.
  * @property {string} ip
  * @property {string} [host]         mDNS hostname (device id), for DHCP re-resolve
  * @property {string} [name]         Shelly-app name, CACHED. The plug itself holds
@@ -463,6 +472,28 @@ function validateTopology(t) {
       err('controller',
           `board "${c.name || c.id}" is set up as a servo board but has a sliding gate on it`,
           c.id);
+  }
+
+  // ── outlets: a sense-only plug cannot be a collector's switch ──
+  //
+  // A Tasmota no-relay plug has no contacts — that is the point of it — so a
+  // document that names one under a collector's `control.outlet` describes a
+  // collector that can never be started. The firmware would build the driver and
+  // every setSwitch() would quietly return false, which reads as a dead blower
+  // rather than a bad layout. Catch it here, where there is somewhere to say so.
+  for (const e of t.elements) {
+    const control = (e.control || {}).outlet;
+    if (control && control.kind && control.kind !== 'shelly')
+      err('element',
+          `collector "${e.name || e.id}" is switched by a ${control.kind} plug, ` +
+          `which has no relay — a collector needs a plug that can switch`, e.id);
+
+    for (const [where, o] of [['sensor', (e.sensor || {}).outlet],
+                              ['control', control]]) {
+      if (!o || o.kind === undefined) continue;
+      if (o.kind !== 'shelly' && o.kind !== 'tasmota')
+        err('element', `unknown outlet kind "${o.kind}" on ${where}`, e.id);
+    }
   }
 
   // ── collector bin sensor: kind, and a controller that resolves ──

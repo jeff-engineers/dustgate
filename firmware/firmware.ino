@@ -349,6 +349,7 @@ long homingBackoffSteps() { return feedback.backoffSteps(); }
   // /api/outlets/discover route comment for why.
   #include "utils/MdnsQuery.h"
   #include "outlets/ShellyGen2Outlet.h"
+  #include "outlets/OutletFactory.h"  // kind -> driver, and the wire spelling
   #include "outlets/ShellyDeviceName.h"
   #include "outlets/PlugClaim.h"        // RFC §8 — who owns a plug (discovery reports it)
 #elif defined(CONTROL_SERIAL_DEBUG)
@@ -739,7 +740,14 @@ static void syncTopologyOutlets() {
             DEBUG_PRINTLN(F("[Outlets] More paired machines than outlet slots — extras ignored."));
             break;
         }
-        control.configureOutlet(slot++, o["gen"] | 2, ip,
+        // ABSENT `kind` MEANS SHELLY. Every layout written before 2026-09-09
+        // has a Shelly in it and no field to say so, and outletKindFromName()
+        // maps an unknown string the same way — a document from a newer UI
+        // naming a kind this build has never heard of gets the old behaviour
+        // rather than a plug that silently reads nothing.
+        control.configureOutlet(slot++,
+                                outletKindFromName(o["kind"] | "shelly"),
+                                o["gen"] | 2, ip,
                                 m["name"] | mid.c_str(),
                                 /*stopIndex=*/0,
                                 o["thresholdW"] | (float)OUTLET_DEFAULT_THRESHOLD_W,
@@ -2145,7 +2153,8 @@ void loop() {
     {
         HttpApiServer::OutletConfigCmd cmd;
         if (apiServer.consumeOutletConfigRequest(cmd)) {
-            control.configureOutlet(cmd.slot, cmd.generation, cmd.ip, cmd.name,
+            control.configureOutlet(cmd.slot, cmd.kind, cmd.generation,
+                                    cmd.ip, cmd.name,
                                     cmd.stopIndex, cmd.thresholdW, cmd.host);
         }
         int delSlot = -1;

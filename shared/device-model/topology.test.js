@@ -175,6 +175,46 @@ check('validate twoGates ok', validateTopology(twoGates).ok, JSON.stringify(vali
           !r12.ok && hasCode(r12, 'selector') && hasMsg(r12, 'max 8'));
   }
 
+  // ── outlet kind: a sense-only plug cannot switch a collector ──────────────
+  {
+    // Absent kind is Shelly. Every layout written before 2026-09-09 has one and
+    // no field to say so, so silence must stay valid forever.
+    check('no kind on a sensor outlet → still valid', validateTopology(clone(feedChain)).ok);
+
+    const tSense = mut((t) => {
+      t.elements.find((e) => e.id === 'toolA').sensor.outlet.kind = 'tasmota';
+    });
+    check('tasmota on a TOOL sensor → valid', validateTopology(tSense).ok,
+          JSON.stringify(validateTopology(tSense).errors));
+
+    // The one that matters. A no-relay plug has no contacts — that is the whole
+    // point of it — so naming one as a collector's switch describes a collector
+    // that can never start. Without this rule the firmware builds the driver and
+    // every setSwitch() quietly returns false, which reads as a dead blower
+    // rather than a bad layout.
+    const tSwitch = mut((t) => {
+      const dc = t.elements.find((e) => e.type === 'collector');
+      dc.control = { outlet: { kind: 'tasmota', gen: 2, ip: '192.168.1.9' } };
+    });
+    const rSwitch = validateTopology(tSwitch);
+    check('tasmota switching a COLLECTOR → invalid',
+          !rSwitch.ok && hasCode(rSwitch, 'element') && hasMsg(rSwitch, 'has no relay'));
+
+    // A shelly there is the ordinary case and must stay fine.
+    const tShellyDc = mut((t) => {
+      const dc = t.elements.find((e) => e.type === 'collector');
+      dc.control = { outlet: { kind: 'shelly', gen: 2, ip: '192.168.1.9' } };
+    });
+    check('shelly switching a collector → valid', validateTopology(tShellyDc).ok);
+
+    const tBad = mut((t) => {
+      t.elements.find((e) => e.id === 'toolA').sensor.outlet.kind = 'kasa';
+    });
+    const rBad = validateTopology(tBad);
+    check('unknown outlet kind → invalid',
+          !rBad.ok && hasCode(rBad, 'element') && hasMsg(rBad, 'unknown outlet kind'));
+  }
+
   check('drives defaults to servo when absent',
         validateTopology(buildHost(4, 0)).ok);
   const rBadDrives = buildHost(4, 0);

@@ -60,7 +60,9 @@ public:
     const char* ourHost() const { return _ourHost; }
     const char* ourName() const { return _ourName; }
 
-    void configureOutlet(int slot,
+    // `kind` decides the driver; `generation` is Shelly-only bookkeeping that is
+    // stored and reported, never dispatched on. See outlets/OutletFactory.h.
+    void configureOutlet(int slot, OutletKind kind,
                          int generation,      // 1 = Gen 1, 2 = Gen 2/Plus
                          const char* ip,
                          const char* name,

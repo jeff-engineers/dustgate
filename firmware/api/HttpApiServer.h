@@ -19,6 +19,7 @@
 // =============================================================================
 
 #pragma once
+#include "../outlets/SmartOutlet.h"   // OutletKind
 #include <Arduino.h>
 #include "../config.h"
 
@@ -197,6 +198,7 @@ public:
     // SmartOutletControl.
     struct OutletConfigCmd {
         int   slot;
+        OutletKind kind;          // which protocol — absent in the body means Shelly
         int   generation;
         char  ip[16];
         char  host[40];   // mDNS hostname, if known — empty for manual IP entry

@@ -5,6 +5,11 @@
 // Keys are compact so they fit within the 15-char NVS key limit.
 //
 //   o<N>_gen    int   Shelly generation (1 or 2)
+//   o<N>_kind   int   OutletKind — 0 Shelly, 1 Tasmota. ABSENT MEANS SHELLY:
+//                      every config written before 2026-09-09 predates the key,
+//                      and NVS is key-value so an old namespace simply lacks it.
+//                      No migration, no version bump — unlike CalibrationData,
+//                      which is a struct blob and does need one.
 //   o<N>_ip     str   IP address ("192.168.1.x")
 //   o<N>_host   str   mDNS hostname (no ".local"), empty if manually entered.
 //                      Lets the outlet re-resolve its IP after a DHCP lease
@@ -25,9 +30,11 @@
 #include <Arduino.h>
 #include <Preferences.h>
 #include "../config.h"
+#include "SmartOutlet.h"   // OutletKind
 
 struct OutletEntry {
-    int   generation;               // 1 or 2
+    int   generation;               // 1 or 2 (Shelly only; 0 on a Tasmota)
+    OutletKind kind;                // which protocol — this is what dispatches
     char  ip[16];                   // "xxx.xxx.xxx.xxx\0"
     char  host[40];                 // mDNS hostname, empty if manually entered
     char  name[32];                 // display name
@@ -61,6 +68,8 @@ namespace OutletConfig {
             OutletEntry& e = entries[i];
 
             snprintf(key, sizeof(key), "o%d_gen",  i); e.generation = prefs.getInt(key, 1);
+            snprintf(key, sizeof(key), "o%d_kind", i);
+            e.kind = (OutletKind)prefs.getInt(key, OUTLET_SHELLY);
             snprintf(key, sizeof(key), "o%d_ip",   i); prefs.getString(key, e.ip,   sizeof(e.ip));
             e.host[0] = '\0';
             snprintf(key, sizeof(key), "o%d_host", i); prefs.getString(key, e.host, sizeof(e.host));
@@ -84,6 +93,7 @@ namespace OutletConfig {
 
         char key[12];
         snprintf(key, sizeof(key), "o%d_gen",  slot); prefs.putInt(key,    e.generation);
+        snprintf(key, sizeof(key), "o%d_kind", slot); prefs.putInt(key,    (int)e.kind);
         snprintf(key, sizeof(key), "o%d_ip",   slot); prefs.putString(key, e.ip);
         snprintf(key, sizeof(key), "o%d_host", slot); prefs.putString(key, e.host);
         snprintf(key, sizeof(key), "o%d_name", slot); prefs.putString(key, e.name);
