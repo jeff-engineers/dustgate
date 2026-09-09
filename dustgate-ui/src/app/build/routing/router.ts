@@ -119,9 +119,12 @@ export function routeAllShared(scene: Scene, opts: RouteAllOpts = {}): Solved {
     if (order[0] === promote) break;            // already first; reordering can't help
     order = [promote, ...order.filter(id => id !== promote)];
   }
-  if (best) return best;
-  const last = routePass(scene, opts, order);
-  return { out: separateLanes(last.out), lattice: last.out, shared: [] };
+  // `best` is always set by here: the loop returns early when a pass is clean,
+  // and assigns `best` on every pass that is not. There used to be a fallback
+  // routePass() after this line, which could never run — and which reported
+  // `shared: []` unconditionally, so if it ever HAD run it would have claimed a
+  // board with overlaps was clean.
+  return best!;
 }
 
 /**
