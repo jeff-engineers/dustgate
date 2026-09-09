@@ -83,8 +83,16 @@ export interface DiscoveredOutlet {
   name: string;
   reachable: boolean;
   powerW: number;
-  /** Shelly API generation (1 or 2); 0 if the mDNS hit didn't respond to a probe. */
+  /** Shelly API generation (1 or 2); 0 if the mDNS hit didn't respond to a probe,
+   *  and 0 on a Tasmota, which has no generation at all. Read `kind` first. */
   generation: number;
+  /** Which protocol the plug speaks. Absent means 'shelly' — every device found
+   *  before 2026-09-09 was one, and the firmware defaults the same way, so a
+   *  missing field must keep meaning Shelly forever.
+   *
+   *  A 'tasmota' plug is SENSE-ONLY: no relay, which is the point of it, so it
+   *  can never be a collector's switch. */
+  kind?: 'shelly' | 'tasmota';
   /** Who owns it (RFC §8): ours | unclaimed | dustgate | foreign | unknown.
    *  Absent when the device couldn't ask. Decides whether renaming is offered
    *  unprompted — we never write a plug someone else owns without being told to. */
@@ -379,7 +387,8 @@ export class ApiService {
    */
   async discoverOutlets(): Promise<DiscoveredOutlet[]> {
     const raw = await this.get<Array<{ ip: string; hostname: string; name: string; reachable: boolean;
-                                       powerW: number; gen: number; claim?: string; holder?: string;
+                                       powerW: number; gen: number; kind?: string;
+                                       claim?: string; holder?: string;
                                        takeable?: boolean; claimReason?: string }>>(
       '/api/outlets/discover'
     );
@@ -389,6 +398,11 @@ export class ApiService {
       name: r.name,
       reachable: r.reachable,
       powerW: r.powerW,
+      // Unknown strings fall back to 'shelly', matching outletKindFromName() in
+      // the firmware: a device from a newer build naming a kind this UI has
+      // never heard of degrades to the old behaviour rather than to a plug that
+      // reads nothing.
+      kind: r.kind === 'tasmota' ? 'tasmota' : 'shelly',
       generation: r.gen,
       claim: r.claim,
       holder: r.holder,

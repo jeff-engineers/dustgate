@@ -492,7 +492,12 @@ bool SmartOutletControl::provisionPushOutlets() {
         // 3s-timeout writes — mark it pending and retry later.
         bool reachable = o->probe(OUTLET_PROVISION_PROBE_TIMEOUT_MS);
         DEBUG_PRINT(F("[Outlets] provision ")); DEBUG_PRINT(o->ip());
-        DEBUG_PRINT(F(" reachable(GetStatus)=")); DEBUG_PRINTLN(reachable ? F("yes") : F("no"));
+        // Name the endpoint that was actually called. This said "GetStatus" for
+        // every plug until 2026-09-09, which is Shelly's RPC — printed against a
+        // Tasmota it points a reader at a method the device has never heard of.
+        DEBUG_PRINT(o->kind() == OUTLET_TASMOTA ? F(" reachable(Status 8)=")
+                                                : F(" reachable(GetStatus)="));
+        DEBUG_PRINTLN(reachable ? F("yes") : F("no"));
         if (!reachable) { pending = true; continue; }
 
         // ── TASMOTA TAKES A DIFFERENT ROUTE ─────────────────────────────────

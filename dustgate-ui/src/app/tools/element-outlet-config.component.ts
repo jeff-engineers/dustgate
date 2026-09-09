@@ -170,6 +170,10 @@ export class ElementOutletConfigComponent implements OnInit {
    *  plug that is switched off or wasn't in the last sweep. */
   label = '';
   gen = 2;
+  /** Which protocol this plug speaks. 'shelly' unless a document or a discovery
+   *  hit says otherwise — absent means shelly everywhere, so that is the only
+   *  safe default (see topology.js and outletKindFromName()). */
+  kind: 'shelly' | 'tasmota' = 'shelly';
   thresholdW = DEFAULT_THRESHOLD;
 
   get isSwitch(): boolean { return this.mode === 'switch'; }
@@ -182,6 +186,7 @@ export class ElementOutletConfigComponent implements OnInit {
     this.ip         = (outlet?.['ip'] as string) ?? '';
     this.host       = (outlet?.['host'] as string) ?? '';
     this.gen        = (outlet?.['gen'] as number) ?? 2;
+    this.kind       = (outlet?.['kind'] as string) === 'tasmota' ? 'tasmota' : 'shelly';
     this.label      = (outlet?.['name'] as string) ?? '';
     this.thresholdW = (outlet?.['thresholdW'] as number) ?? DEFAULT_THRESHOLD;
     // Default to whatever this element already is, rather than assuming: re-opening a
@@ -207,7 +212,12 @@ export class ElementOutletConfigComponent implements OnInit {
   }
 
   pick(d: DiscoveredOutlet): void {
-    this.ip = d.ip; this.host = d.hostname; this.gen = d.generation || 2;
+    this.ip = d.ip; this.host = d.hostname;
+    this.kind = d.kind ?? 'shelly';
+    // `|| 2` only for a Shelly. A Tasmota reports generation 0 because it HAS no
+    // generation, and coercing that to 2 would write a Shelly generation into a
+    // document describing a device that has never heard of one.
+    this.gen = this.kind === 'tasmota' ? 0 : (d.generation || 2);
     this.label = d.name || '';
     this.changing = false;
     // Seed the threshold from what the tool is drawing right now, ~10% under so it
@@ -240,6 +250,10 @@ export class ElementOutletConfigComponent implements OnInit {
     const el: RawEl = { ...this.element };
     if (this.hasPlug && this.ip) {
       const outlet: RawEl = { gen: this.gen, ip: this.ip };
+      // OMITTED WHEN SHELLY, on purpose. Absent means shelly on both sides
+      // (topology.js, outletKindFromName()), so writing it would add a field to
+      // every existing document to say what silence already said.
+      if (this.kind === 'tasmota') outlet['kind'] = 'tasmota';
       if (!this.isSwitch) outlet['thresholdW'] = this.thresholdW;
       if (this.host) outlet['host'] = this.host;
       if (this.label) outlet['name'] = this.label;

@@ -99,7 +99,12 @@ export class OutletPickerComponent implements OnInit {
     if (why) return why;
     if (this.excludeIps.includes(d.ip)) return 'already paired with another tool';
     if (!d.reachable) return 'not responding';
-    return `${d.hostname} · ${d.ip}`;
+    // Name the kind when it is not the ordinary one. A Tasmota plug is
+    // SENSE-ONLY — no relay, which is the whole reason for using it — so it
+    // behaves differently once paired, and that has to be visible BEFORE
+    // picking rather than discovered afterwards.
+    const kind = d.kind === 'tasmota' ? 'Tasmota · sense only · ' : '';
+    return `${kind}${d.hostname} · ${d.ip}`;
   }
 
   async scan(): Promise<void> {
