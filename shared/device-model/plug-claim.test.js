@@ -183,6 +183,46 @@ const ourUrl = 'ws://10.0.0.2:80/shelly-rpc';
      [null, null]);
 }
 
+// ── the marker claim: Tasmota, which has no push config ─────────────────────
+//
+// PAIRED with the decideMarker block at the end of test_plugclaim.cpp — same
+// cases, same order, same reasons. Change one, change both.
+{
+  const M = PC.claimOfMarker;
+  const US = 'dustgate-shop';
+
+  const free = M('', US);
+  eq('empty marker → unclaimed', free.state, 'unclaimed');
+  check('unclaimed is pickable and repointable', free.pickable && free.repoint);
+  check('...and not takeable — there is nothing to take', free.takeable === false);
+
+  const mine = M(US, US);
+  eq('our own hostname → ours', mine.state, 'ours');
+  check('ours is pickable and repointable', mine.pickable && mine.repoint);
+
+  const theirs = M('dustgate-garage', US);
+  eq('another brain → dustgate', theirs.state, 'dustgate');
+  check('another brain is NOT pickable', theirs.pickable === false);
+  check('...but IS takeable, with confirmation', theirs.takeable === true);
+  eq('...and names the holder, so the refusal has a reason',
+     [theirs.holder, theirs.reason], ['dustgate-garage', 'owned by dustgate-garage']);
+
+  // Tasmota echoes what was written, but a hand-set Mem1 might carry a stray
+  // space. It must not read as a different owner.
+  eq('surrounding whitespace is trimmed', M(`  ${US}  `, US).state, 'ours');
+
+  // A brain with no hostname of its own cannot claim to be the owner of
+  // anything — otherwise an unnamed board would adopt every claimed plug it saw.
+  eq('no hostname of our own → someone else owns it', M('dustgate-garage', '').state, 'dustgate');
+
+  // NO 'foreign' STATE EXISTS HERE, and that is the point of the comment on
+  // claimOfMarker: Home Assistant polling a Tasmota writes nothing, so a plug in
+  // use by something else is indistinguishable from a free one. Asserted so the
+  // limitation is a decision on the record rather than a gap someone "fixes".
+  eq('an unknown marker is another BRAIN, never a foreign system',
+     M('home-assistant', US).state, 'dustgate');
+}
+
 // ── report ──────────────────────────────────────────────────────────────────
 let failed = 0;
 for (const r of results) {

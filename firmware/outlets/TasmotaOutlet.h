@@ -20,14 +20,25 @@
 // collector is the one thing DustGate commands, and it is commanded by RF now.
 // A caller that needs to switch something must not be handed one of these.
 //
-// NO OWNERSHIP CLAIM YET. ShellyGen2Outlet::readPushConfig() is described there
-// as THE authority on who owns a plug, because a Shelly records its push target
-// and we can read it back; names are user-editable and prove nothing. Tasmota
-// has no Ws.SetConfig. The defaults inherited from SmartOutlet (configureOutboundWs,
-// setName, releasePush, readPushConfig all no-ops returning false) are therefore
-// honest rather than lazy: this driver genuinely cannot claim a device, and a
-// stub that pretended otherwise would be worse than none. Unresolved in §11, and
-// it gates discovery — see the note in TasmotaOutlet.cpp.
+// OWNERSHIP, VIA Mem1. ShellyGen2Outlet::readPushConfig() is described there as
+// THE authority on who owns a plug, because a Shelly records its push target and
+// we can read it back; names are user-editable and prove nothing. Tasmota has no
+// Ws.SetConfig — but it does have Mem1..Mem16: free-text variables that persist
+// across reboot and are read and written over the same /cm?cmnd= endpoint. We
+// write our hostname into Mem1 and read it back, which is the same shape of
+// thing: device state we set and can verify, not a name a user might edit.
+//
+// ⚠️ IT IS ADVISORY, NOT ENFORCED, and that is a real weakening rather than an
+// implementation detail. A Shelly can only push to ONE place, so its claim is
+// the mechanism; Mem1 is a note we agree to read. Two brains can poll the same
+// Tasmota plug and neither will notice, because polling leaves no trace. There
+// is also NO Foreign state to be had — Home Assistant polling this plug writes
+// nothing, so a plug reading Unclaimed may well be in use and we cannot tell.
+// See plugclaim::decideMarker().
+//
+// The Shelly-shaped hooks stay at SmartOutlet's defaults, deliberately:
+// configureOutboundWs() and readPushConfig() are about a push config this device
+// does not have, and a stub that pretended otherwise would be worse than none.
 // =============================================================================
 
 #pragma once
@@ -52,6 +63,21 @@ public:
     // 0 is deliberate: "no generation", not "generation zero".
     int         generation() const override { return 0; }
     OutletKind  kind()       const override { return OUTLET_TASMOTA; }
+
+    // ── Ownership marker (Mem1) ──────────────────────────────────────────
+    //
+    // Blocking HTTP, like ShellyGen2Outlet's config calls — discovery and
+    // provisioning paths only, never the poll task.
+
+    // Read Mem1. Returns false if the plug did not answer or did not parse,
+    // which is NOT "unclaimed": a read failure means we do not know, and the
+    // caller must not turn that into permission to take the plug. Same rule
+    // readPushConfig() states for Shelly, and for the same reason.
+    bool readOwner(String& out, uint32_t timeoutMs = OUTLET_RPC_WRITE_TIMEOUT_MS);
+
+    // Write Mem1. Pass "" to release — Tasmota clears a Mem to empty when given
+    // the literal `"` (an empty quoted string), which is what release() sends.
+    bool writeOwner(const char* owner);
 
 private:
     char _ip[16];

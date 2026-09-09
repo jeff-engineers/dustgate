@@ -102,4 +102,68 @@ bool TasmotaOutlet::doPoll(uint32_t timeoutMs) {
     return true;
 }
 
+// -----------------------------------------------------------------------------
+// Ownership marker
+//
+// Mem1 is queried by sending the command with no argument, and set by sending it
+// with one. Both answer with the same shape: {"Mem1":"<value>"}.
+// -----------------------------------------------------------------------------
+
+bool TasmotaOutlet::readOwner(String& out, uint32_t timeoutMs) {
+    if (_ip[0] == '\0' && !reresolve()) return false;
+
+    char url[64];
+    snprintf(url, sizeof(url), "http://%s/cm?cmnd=Mem1", _ip);
+
+    HTTPClient http;
+    http.begin(url);
+    http.setTimeout(timeoutMs);
+    if (http.GET() != 200) { http.end(); return false; }
+
+    StaticJsonDocument<128> doc;
+    DeserializationError err = deserializeJson(doc, http.getStream());
+    http.end();
+    if (err) return false;
+
+    // A plug that answers without a Mem1 key is not "unclaimed" — it is a plug
+    // whose reply we did not understand, and the caller must be able to tell
+    // those apart. Absent → false, so the difference survives.
+    JsonVariant v = doc["Mem1"];
+    if (v.isNull()) return false;
+
+    out = v.as<const char*>();
+    return true;
+}
+
+bool TasmotaOutlet::writeOwner(const char* owner) {
+    if (_ip[0] == '\0' && !reresolve()) return false;
+
+    // Tasmota clears a Mem to empty when the argument is the literal two-char
+    // token `"` — a bare `Mem1` with no argument is a QUERY, not a clear, so
+    // sending an empty string would read the value back and change nothing.
+    const bool clearing = (owner == nullptr || owner[0] == '\0');
+
+    char url[96];
+    if (clearing) {
+        snprintf(url, sizeof(url), "http://%s/cm?cmnd=Mem1%%20%%22", _ip);
+    } else {
+        // Hostnames are [A-Za-z0-9-], so no escaping is needed beyond the space
+        // that separates the command from its argument.
+        snprintf(url, sizeof(url), "http://%s/cm?cmnd=Mem1%%20%s", _ip, owner);
+    }
+
+    HTTPClient http;
+    http.begin(url);
+    http.setTimeout(OUTLET_RPC_WRITE_TIMEOUT_MS);
+    const bool ok = (http.GET() == 200);
+    http.end();
+
+    if (ok) {
+        DEBUG_PRINT(F("[Outlets] Tasmota Mem1 "));
+        DEBUG_PRINT(clearing ? "cleared" : owner);
+        DEBUG_PRINT(F(" on ")); DEBUG_PRINTLN(_ip);
+    }
+    return ok;
+}
+
 #endif  // CONTROL_SMART_OUTLET
