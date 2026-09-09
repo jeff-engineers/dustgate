@@ -2193,23 +2193,31 @@ void loop() {
             String hitIp[DISCOVER_MAX_RESULTS];
             String hitHost[DISCOVER_MAX_RESULTS];
             int    hitGen[DISCOVER_MAX_RESULTS];  // advertised "gen" (2, 3, ...); 1 = Gen1 candidate
+            OutletKind hitKind[DISCOVER_MAX_RESULTS];  // which protocol to probe with
             int    hitCount = 0;
 
             // Merge by IP. A device can answer on both services and across
             // several attempts; first sighting wins, but a later one may fill
             // in a hostname or upgrade an assumed Gen1 to its advertised gen.
-            auto addHit = [&](const String& host, const String& ip, int gen) {
+            auto addHit = [&](const String& host, const String& ip, int gen,
+                              OutletKind kind) {
                 if (ip.length() == 0 || ip == "0.0.0.0") return;  // SRV/A never resolved
                 for (int j = 0; j < hitCount; j++) {
                     if (hitIp[j] != ip) continue;
                     if (gen > hitGen[j])          hitGen[j]  = gen;
                     if (hitHost[j].length() == 0) hitHost[j] = host;
+                    // A Tasmota sighting is more specific than a Shelly one: it
+                    // came with devicetype=tasmota in a TXT record, where the
+                    // Shelly pass only has the service name. If both somehow
+                    // name the same address, believe the specific one.
+                    if (kind == OUTLET_TASMOTA)   hitKind[j] = kind;
                     return;
                 }
                 if (hitCount >= DISCOVER_MAX_RESULTS) return;
                 hitIp[hitCount]   = ip;
                 hitHost[hitCount] = host;
                 hitGen[hitCount]  = gen;
+                hitKind[hitCount] = kind;
                 hitCount++;
             };
 
@@ -2239,14 +2247,56 @@ void loop() {
                     DEBUG_PRINT(F("  [shelly gen="));
                     DEBUG_PRINT(gen);
                     DEBUG_PRINTLN(F("]"));
-                    addHit(mdnsHits[i].hostname, mdnsHits[i].ip, gen);
+                    addHit(mdnsHits[i].hostname, mdnsHits[i].ip, gen, OUTLET_SHELLY);
                 }
 
                 if (attempt < DISCOVER_MDNS_ATTEMPTS - 1) delay(DISCOVER_MDNS_RETRY_DELAY_MS);
             }
 
-            // (Gen1 is not supported, so there's no _http._tcp fallback pass —
-            // _shelly._tcp above is the sole, unambiguous source.)
+            // ── Pass 2: _http._tcp, keeping only devicetype=tasmota ─────────
+            //
+            // There is no _tasmota._tcp to ask for, so this is the generic HTTP
+            // service — printers, NASes, the router, everything. The TXT key is
+            // what makes a hit unambiguous, and it is the same job _shelly._tcp
+            // does for Shelly: without it we would be back to guessing from
+            // hostnames, which broke the moment anyone renamed a device.
+            //
+            // ⚠️ EXPECT THIS TO FIND NOTHING, AND THAT IS NOT A BUG. Tasmota's
+            // mDNS needs USE_DISCOVERY compiled in and is NOT in the precompiled
+            // builds — upstream left it out because "mDNS generates more
+            // problems than it solves". A stock Athom plug is very likely
+            // silent here. Zero hits means "none ADVERTISED", never "none
+            // present", and the fallback is a hand-entered IP, which works
+            // today. A subnet sweep would find them regardless and is the
+            // obvious next step, but it is 254 blocking HTTP requests and wants
+            // chunking across loop() passes, so it is deliberately not here.
+            for (int attempt = 0; attempt < DISCOVER_MDNS_ATTEMPTS; attempt++) {
+                MdnsHit httpHits[DISCOVER_MAX_RESULTS];
+                int n = mdnsQueryHttpTcp(DISCOVER_MDNS_TIMEOUT_MS, httpHits, DISCOVER_MAX_RESULTS);
+                int kept = 0;
+                for (int i = 0; i < n; i++) {
+                    if (httpHits[i].devicetype != "tasmota") continue;  // not ours
+                    kept++;
+                    DEBUG_PRINT(F("  - "));
+                    DEBUG_PRINT(httpHits[i].hostname.length() ? httpHits[i].hostname
+                                                              : String("(no hostname)"));
+                    DEBUG_PRINT(F("  "));
+                    DEBUG_PRINT(httpHits[i].ip);
+                    DEBUG_PRINTLN(F("  [tasmota]"));
+                    // gen 0: a Tasmota has no Shelly generation, and 0 is what
+                    // TasmotaOutlet::generation() reports for the same reason.
+                    addHit(httpHits[i].hostname, httpHits[i].ip, 0, OUTLET_TASMOTA);
+                }
+                DEBUG_PRINT(F("[DISCOVER] _http._tcp attempt "));
+                DEBUG_PRINT(attempt + 1);
+                DEBUG_PRINT(F(": "));
+                DEBUG_PRINT(n);
+                DEBUG_PRINT(F(" responder(s), "));
+                DEBUG_PRINT(kept);
+                DEBUG_PRINTLN(F(" with devicetype=tasmota"));
+
+                if (attempt < DISCOVER_MDNS_ATTEMPTS - 1) delay(DISCOVER_MDNS_RETRY_DELAY_MS);
+            }
 
             DEBUG_PRINT(F("[DISCOVER] "));
             DEBUG_PRINT(hitCount);
@@ -2256,14 +2306,32 @@ void loop() {
                 const String& ip   = hitIp[i];
                 const String& host = hitHost[i];
 
-                // Gen2+ only (Gen1 dropped); Gen3 shares the Gen2 RPC dialect,
-                // so a single Gen2 probe covers every supported device.
-                int apiGen = (hitGen[i] >= 3) ? 3 : 2;
-                ShellyGen2Outlet probe(ip.c_str(), "discover");
-                bool  ok = probe.poll();
-                float pw = probe.getPowerW();
+                const bool isTasmota = (hitKind[i] == OUTLET_TASMOTA);
 
-                String devName = ok ? fetchShellyDeviceName(ip.c_str(), apiGen) : String();
+                // Gen2+ only (Gen1 dropped); Gen3 shares the Gen2 RPC dialect,
+                // so a single Gen2 probe covers every supported device. A
+                // Tasmota has no generation at all — 0, matching
+                // TasmotaOutlet::generation().
+                int apiGen = isTasmota ? 0 : ((hitGen[i] >= 3) ? 3 : 2);
+
+                // Probe with the driver that matches, because the endpoints
+                // share nothing: a Shelly answers /rpc/Switch.GetStatus and a
+                // Tasmota answers /cm?cmnd=Status%208. Probing with the wrong
+                // one reports a live plug as unreachable.
+                ShellyGen2Outlet shellyProbe(ip.c_str(), "discover");
+                TasmotaOutlet    tasProbe(ip.c_str(), "discover");
+                SmartOutlet* probeP = isTasmota ? (SmartOutlet*)&tasProbe
+                                                : (SmartOutlet*)&shellyProbe;
+                bool  ok = probeP->poll();
+                float pw = probeP->getPowerW();
+
+                // A Tasmota has no friendly name we can read the way a Shelly
+                // does, so the picker gets its mDNS hostname. That is the name
+                // the user set in Tasmota's own web UI, so it is not a worse
+                // answer — just a different source.
+                String devName = isTasmota ? host
+                                           : (ok ? fetchShellyDeviceName(ip.c_str(), apiGen)
+                                                 : String());
                 DEBUG_PRINT(F("  - ")); DEBUG_PRINT(host); DEBUG_PRINT(F("  "));
                 DEBUG_PRINT(ip);
                 DEBUG_PRINT(F("  probe -> reachable="));
@@ -2277,13 +2345,25 @@ void loop() {
                 // is the list someone picks from — a plug that belongs to
                 // another brain has to arrive already labelled, not fail
                 // mysteriously after being chosen.
-                String wsServer; bool wsEnabled = false;
-                const bool claimKnown = ok && probe.readPushConfig(wsServer, wsEnabled);
                 plugclaim::Claim claim;
-                if (claimKnown) {
-                    claim = plugclaim::decide(wsServer.c_str(), wsEnabled,
-                                              control.ourHost(), devName.c_str(),
-                                              control.ourName());
+                bool claimKnown = false;
+                if (isTasmota) {
+                    // Mem1, not a push config — see plugclaim::decideMarker().
+                    // WEAKER than the Shelly claim in two ways that are written
+                    // down there: it is advisory rather than enforced, and no
+                    // `foreign` state is reachable because a system that merely
+                    // POLLS this plug leaves no trace for us to find.
+                    String marker;
+                    claimKnown = ok && tasProbe.readOwner(marker);
+                    if (claimKnown)
+                        claim = plugclaim::decideMarker(marker.c_str(), control.ourName());
+                } else {
+                    String wsServer; bool wsEnabled = false;
+                    claimKnown = ok && shellyProbe.readPushConfig(wsServer, wsEnabled);
+                    if (claimKnown)
+                        claim = plugclaim::decide(wsServer.c_str(), wsEnabled,
+                                                  control.ourHost(), devName.c_str(),
+                                                  control.ourName());
                 }
 
                 JsonObject o = results.createNestedObject();
@@ -2296,6 +2376,7 @@ void loop() {
                 o["reachable"] = ok;
                 o["powerW"]    = pw;
                 o["gen"]       = ok ? apiGen : 0;
+                o["kind"]      = outletKindName(hitKind[i]);
                 if (claimKnown) {
                     o["claim"]    = plugclaim::stateName(claim.state);
                     o["owner"]    = claim.owner;
@@ -2309,13 +2390,15 @@ void loop() {
                     o["claim"]    = "unknown";
                     o["pickable"] = false;
                     o["takeable"] = false;
-                    o["claimReason"] = "couldn't read its push config";
+                    o["claimReason"] = isTasmota ? "couldn't read its Mem1 marker"
+                                                 : "couldn't read its push config";
                 }
             }
             if (hitCount == 0) {
-                DEBUG_PRINTLN(F("  (no Shelly devices on either _shelly._tcp or _http._tcp — check the "
-                                 "outlets are powered, joined to WiFi, and that mDNS is enabled in the "
-                                 "Shelly app's device settings)"));
+                DEBUG_PRINTLN(F("  (nothing advertised. For Shelly: check the outlets are "
+                                 "powered, joined to WiFi, and that mDNS is enabled in the Shelly "
+                                 "app. For Tasmota: mDNS is OFF in stock builds, so a plug that is "
+                                 "working fine will still be invisible here — add it by IP.)"));
             }
 
             String out; serializeJson(doc, out);
