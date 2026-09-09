@@ -91,6 +91,25 @@ public:
     // the literal `"` (an empty quoted string), which is what release() sends.
     bool writeOwner(const char* owner);
 
+    // Claim the plug AND make it behave like the pass-through it is meant to be.
+    //
+    // The Athom no-relay plug still ships firmware for its relay sibling: the web
+    // UI has a Toggle button and reports a Power state, and on the no-relay
+    // hardware pressing it does nothing at all (confirmed 2026-09-09). Harmless
+    // there, and confusing — the page will cheerfully say OFF while the tool it
+    // is sensing runs perfectly. On the relay SKU it is worse than confusing.
+    //
+    // So pairing locks it: PowerOnState 1 (always on at boot), then PowerLock 1
+    // (Power commands ignored). ORDER MATTERS — locking first would nail down
+    // whatever state it happens to be in, and a plug locked OFF is a tool that
+    // silently has no power.
+    bool provision(const char* owner);
+
+    // Undo both, and hand the plug back. Unlock BEFORE clearing the claim, so a
+    // failure part-way leaves a plug that is still ours rather than one nobody
+    // owns and nobody can operate.
+    bool release();
+
 private:
     char _ip[16];
     char _name[32];

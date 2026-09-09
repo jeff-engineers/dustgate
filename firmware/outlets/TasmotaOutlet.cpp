@@ -166,4 +166,51 @@ bool TasmotaOutlet::writeOwner(const char* owner) {
     return ok;
 }
 
+// Fire-and-check one Tasmota command. Returns whether it answered 200; the body
+// is not parsed, because every one of these answers with the value it just set
+// and there is nothing to learn from reading it back that a 200 does not say.
+static bool sendCmd(const char* ip, const char* cmd) {
+    char url[96];
+    snprintf(url, sizeof(url), "http://%s/cm?cmnd=%s", ip, cmd);
+    HTTPClient http;
+    http.begin(url);
+    http.setTimeout(OUTLET_RPC_WRITE_TIMEOUT_MS);
+    const bool ok = (http.GET() == 200);
+    http.end();
+    return ok;
+}
+
+bool TasmotaOutlet::provision(const char* owner) {
+    if (_ip[0] == '\0' && !reresolve()) return false;
+
+    if (!writeOwner(owner)) return false;
+
+    // Boot ON first, THEN lock. The other order nails down whatever state the
+    // plug happens to be in, and a plug locked OFF is a tool that silently has
+    // no power — the failure this whole sequence exists to prevent.
+    const bool onState = sendCmd(_ip, "PowerOnState%201");
+    const bool locked  = sendCmd(_ip, "PowerLock%201");
+
+    if (onState && locked) {
+        DEBUG_PRINT(F("[Outlets] Tasmota ")); DEBUG_PRINT(_ip);
+        DEBUG_PRINTLN(F(" locked on — its Toggle button is now inert."));
+    } else {
+        // The claim landed and the lock did not. Say so rather than failing the
+        // whole pairing: a claimed plug that can still be toggled is a working
+        // sensor with a confusing web page, not a broken one.
+        DEBUG_PRINT(F("[Outlets] Tasmota ")); DEBUG_PRINT(_ip);
+        DEBUG_PRINTLN(F(" claimed, but PowerOnState/PowerLock did not take."));
+    }
+    return true;
+}
+
+bool TasmotaOutlet::release() {
+    if (_ip[0] == '\0' && !reresolve()) return false;
+    // Unlock BEFORE clearing the claim. If the second call fails, the plug is
+    // still marked as ours and still operable — which is recoverable. The other
+    // order can leave one that nobody owns and nobody can switch.
+    sendCmd(_ip, "PowerLock%200");
+    return writeOwner("");
+}
+
 #endif  // CONTROL_SMART_OUTLET
