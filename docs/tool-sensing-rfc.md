@@ -344,6 +344,51 @@ open nothing*, and the 240V and hardwired cases stop being the awkward ones.
 That is a large enough prize to test before committing to the split-core path.
 **Untested.** §9 says how.
 
+### 4.3 Direction: Shelly for collectors, Tasmota for tools (2026-09-09)
+
+Jeff, leaning: **stop allowing Shelly on tools entirely**, keep it for collectors
+where switching is the job — a small or medium collector with a relay big enough
+for its inrush is a legitimate use, and §3's safety argument does not apply to a
+blower the way it applies to a table saw.
+
+The schema already encodes half of this: a `tasmota` under a collector's
+`control.outlet` is a validation error, because a plug with no relay cannot
+switch. **The mirror rule is `shelly` under a tool's `sensor.outlet`**, and it
+can become a hard error the same way — but not yet, because every layout written
+so far has Shellys on tools and there is no migration path. Deprecate first,
+enforce after.
+
+**Not before Tasmota is proven.** Jeff has one plug and wants confidence before
+buying a shop's worth. What "proven" means, concretely:
+
+| | |
+|---|---|
+| **Polling load** | **The one to watch.** See below — it is the risk this whole direction rests on |
+| A real session | Drives a real tool for a full session without dropping out or missing a start |
+| Threshold behaviour | No false trips on standby, no missed starts. The measured plug reports 26 W idle on a massager — a real tool's standby is what matters |
+| Power cycle | Survives one, and reconnects to WiFi without help |
+| The claim persists | `Mem1` still holds our hostname afterwards |
+| Thermal | Warm, not hot, at the tool's actual current over a long cut |
+
+#### The polling load, which §6 did not account for
+
+**A Shelly pushes. A Tasmota cannot.** `Ws.SetConfig` points a Shelly at us and it
+reports itself — that is why `readPushConfig()` is the ownership authority in the
+first place. Tasmota has no equivalent, so every Tasmota is **polled at
+`OUTLET_POLL_INTERVAL_MS` (500 ms), permanently**.
+
+At `SMART_OUTLET_COUNT` = 7 that is **14 requests/second** leaving the ESP32, and
+**2 req/s arriving at each ESP8285**, forever, for the life of the shop.
+
+§6 argued for one driver rather than two and that argument still holds — but it
+was about the DRIVER, and losing push changes the TRAFFIC PROFILE, which is a
+different thing entirely. Unmeasured. If it does not hold up, the fix is a
+slower cadence for `kind: tasmota` specifically: a tool starting is not a
+500 ms-latency event, and the collector's own spin-up grace is already 4 s.
+
+That would make the poll interval kind-dependent, which is a small change and an
+honest one — the two device types have genuinely different economics.
+
 ## 6. One seam, not two: emulate Tasmota
 
 The homemade 240V sensor **serves the same endpoint as the Athom plug** —
