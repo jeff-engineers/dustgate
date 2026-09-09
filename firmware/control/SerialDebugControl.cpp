@@ -9,6 +9,8 @@
 #if defined(CONTROL_SMART_OUTLET) || defined(ENABLE_HTTP_API)
   #include "../utils/WiFiProvisioner.h"
   #include "../utils/MdnsQuery.h"   // `mdnsprobe` — wanted on any board that queries
+  #include "../outlets/TasmotaOutlet.h"  // `sweep` — the plugs that advertise nothing
+  #include "../outlets/PlugClaim.h"     // ...and who owns one when we find it
   #include "../utils/Watchdog.h"    // the probe outlives a loop() iteration
 #endif
 #ifdef CONTROL_SMART_OUTLET
@@ -308,6 +310,10 @@ void SerialDebugControl::processLine(const String& line) {
 #ifdef CONTROL_SMART_OUTLET
     } else if (cmd == "discover") {
         runDiscover();
+    } else if (cmd == "sweep" || cmd.startsWith("sweep ")) {
+        int from = 1, to = 254;
+        if (cmd.length() > 6) sscanf(cmd.c_str() + 6, "%d %d", &from, &to);
+        runSweep(from, to);
 #endif
 
 #if defined(CONTROL_SMART_OUTLET) || defined(ENABLE_HTTP_API)
@@ -499,6 +505,106 @@ void SerialDebugControl::runMdnsProbe() {
 #endif // CONTROL_SMART_OUTLET || ENABLE_HTTP_API
 
 #ifdef CONTROL_SMART_OUTLET
+
+// Sweep the local /24 for Tasmota plugs, one address at a time.
+//
+// WHY A BRUTE-FORCE SWEEP EXISTS AT ALL. Shelly plugs advertise _shelly._tcp, so
+// `discover` finds them with three UDP queries and no guessing. Tasmota does not
+// advertise anything: its mDNS needs USE_DISCOVERY compiled in and is NOT in the
+// precompiled builds, upstream having left it out because "mDNS generates more
+// problems than it solves" — so an Athom plug that is powered, joined and
+// working is completely invisible to `discover`. Confirmed against a real plug
+// on 2026-09-09: nothing on _http._tcp, nothing anywhere.
+//
+// That leaves knocking on every door. It is inelegant and it is the only thing
+// that works.
+//
+// SERIAL ONLY, DELIBERATELY. A full pass is around a minute — far past any
+// browser's patience — so putting this behind the HTTP discover endpoint would
+// mean an async job, a progress endpoint and a UI to poll it. That is a real
+// feature and this is not it: this exists so someone can find a plug's address
+// once and type it in, which is the fallback the UI already supports.
+void SerialDebugControl::runSweep(int from, int to) {
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.println(F("[SWEEP] WiFi not connected — nothing to sweep."));
+        return;
+    }
+    if (from < 1)   from = 1;
+    if (to   > 254) to   = 254;
+    if (from > to)  { Serial.println(F("[SWEEP] from > to")); return; }
+
+    const IPAddress self = WiFi.localIP();
+    Serial.printf("[SWEEP] %d.%d.%d.%d-%d, looking for Tasmota. Any key aborts.\n",
+                  self[0], self[1], self[2], from, to);
+    Serial.println(F("        (Shelly plugs advertise and are found by `discover` —"));
+    Serial.println(F("         this is only for devices that advertise nothing.)"));
+
+    while (Serial.available()) Serial.read();
+
+    int found = 0, scanned = 0;
+    const uint32_t t0 = millis();
+
+    for (int host = from; host <= to; host++) {
+        watchdog::pet();                 // a full pass outlives many loop()s
+
+        if (Serial.available()) {
+            while (Serial.available()) Serial.read();
+            Serial.println(F("\n[SWEEP] stopped."));
+            break;
+        }
+        if (host == self[3]) continue;   // that is us
+
+        char ip[16];
+        snprintf(ip, sizeof(ip), "%d.%d.%d.%d", self[0], self[1], self[2], host);
+
+        // A SHORT timeout is the whole budget. An address with nothing at it
+        // never answers ARP, so it costs the full timeout — and there are
+        // usually ~250 of those. 250ms keeps a full pass near a minute; raising
+        // it makes the sweep unusable long before it finds anything new.
+        //
+        // ⚠️ IF A KNOWN PLUG IS MISSED, SUSPECT THIS FIRST. Tasmota ships with
+        // `Sleep 50` — dynamic sleep, up to 50ms of nap per loop — so an
+        // ESP8285 can take noticeably longer than a Shelly to answer. `Sleep 0`
+        // on the plug, or a wider `sweep from to` with fewer addresses to cover,
+        // are both cheaper than raising this for all 254.
+        TasmotaOutlet probe(ip, "sweep");
+        scanned++;
+        if (!probe.probe(250)) {
+            if ((host % 32) == 0) { Serial.print('.'); }
+            continue;
+        }
+
+        // It answered Status 8 with an ENERGY block, which nothing but a
+        // Tasmota energy monitor does.
+        found++;
+        Serial.printf("\n[SWEEP] %-15s  %.1f W", ip, probe.getPowerW());
+
+        // Who owns it, asked here for the same reason discovery asks: this is
+        // the list someone picks from, so a plug belonging to another brain has
+        // to arrive already labelled rather than fail mysteriously later.
+        String marker;
+        if (probe.readOwner(marker)) {
+            plugclaim::Claim c = plugclaim::decideMarker(marker.c_str(), "");
+            Serial.printf("   claim=%s", plugclaim::stateName(c.state));
+            if (!c.holder.empty()) Serial.printf(" (%s)", c.holder.c_str());
+        } else {
+            // Not "unclaimed" — we could not ask, and the difference is what
+            // stops a plug being taken on a failed read.
+            Serial.print(F("   claim=unknown"));
+        }
+        Serial.println();
+    }
+
+    Serial.printf("\n[SWEEP] %d found, %d addresses, %lus\n",
+                  found, scanned, (unsigned long)((millis() - t0) / 1000));
+    if (found == 0) {
+        Serial.println(F("        Nothing answered /cm?cmnd=Status%208 with an ENERGY"));
+        Serial.println(F("        block. A Tasmota with no energy monitor fitted looks"));
+        Serial.println(F("        the same as no Tasmota — that is deliberate, since a"));
+        Serial.println(F("        plug that cannot report watts is no use as a sensor."));
+    }
+}
+
 void SerialDebugControl::runDiscover() {
     if (WiFi.status() != WL_CONNECTED) {
         Serial.println(F("[DISCOVER] WiFi not connected — can't scan."));
@@ -725,6 +831,10 @@ void SerialDebugControl::printHelp() {
     Serial.println(F("  i2c [sda] [scl]   Scan the I2C bus — what is out there, and at what address ('force' to override refusals)"));
 #ifdef CONTROL_SMART_OUTLET
     Serial.println(F("  discover          Scan mDNS for Shelly outlets, print raw + filtered results"));
+    Serial.println(F("  sweep [from] [to] Knock on every address in the local /24 looking for"));
+    Serial.println(F("                    Tasmota plugs. They advertise NOTHING, so `discover`"));
+    Serial.println(F("                    cannot see one however healthy it is. ~1 min; any key"));
+    Serial.println(F("                    aborts. Default range 1-254."));
 #endif
 #if defined(CONTROL_SMART_OUTLET) || defined(ENABLE_HTTP_API)
     Serial.println(F("  mdnsprobe         Radio facts, then time every mDNS answer (once per boot — it warms the cache)"));

@@ -104,6 +104,11 @@ private:
 #endif
 #ifdef CONTROL_SMART_OUTLET
     void runDiscover();
+
+    // Sweep the local /24 looking for Tasmota plugs. Exists because Tasmota's
+    // mDNS is OFF in stock builds, so runDiscover() cannot see one however
+    // healthy it is — see the note on the implementation.
+    void runSweep(int from, int to);
     // Bus scan for bring-up. Takes the pins explicitly because I2C on an ESP32
     // is remappable and every board here puts it somewhere different — see the
     // command's own comment for why it refuses some of them.

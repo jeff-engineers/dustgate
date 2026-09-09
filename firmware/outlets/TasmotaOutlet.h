@@ -9,6 +9,18 @@
 // API endpoint: GET http://<ip>/cm?cmnd=Status%208
 // Power field:  response["StatusSNS"]["ENERGY"]["Power"]  (float, watts)
 //
+// BOTH VERIFIED against a real Athom plug on 2026-09-09 — Tasmota 14.3.0,
+// ESP8285H16. The reply carries more than we read:
+//
+//   {"StatusSNS":{"ENERGY":{"Power":0,"ApparentPower":0,"ReactivePower":0,
+//                           "Factor":0.00,"Voltage":115,"Current":0.000, ...}}}
+//
+// We take Power alone because that is what thresholdW is in. The rest is not
+// waste: `Voltage` is MEASURED (115 V on that plug, not the 120 V nominal the CT
+// bench assumes) and `Current` and `Factor` are exactly what a CT cannot give —
+// see the note in firmware/wiring/ct-bench.md about a CT measuring current
+// rather than power.
+//
 // WHY THIS EXISTS. A 1HP dust collector trips the overpower protection on a
 // Shelly Plus Plug US, and that protection is there to guard the RELAY
 // CONTACTS — so the fix is not a bigger plug, it is removing the relay from the
