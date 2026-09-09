@@ -56,6 +56,20 @@ A tool has its own switch. DustGate never needed to turn a tool on — it only
 ever needed to know *"is this drawing power."* The collector is the opposite: it
 must actually be commanded, and nobody needs to sense it to decide routing.
 
+**And for a tool, not switching is a SAFETY rule, not a convenience** (added
+2026-09-09; the paragraph above was the whole argument until then, and it is the
+weak version). A tool switched off at the OUTLET with its own switch left ON is
+armed. Energise that outlet — remotely, on a schedule, by tapping the wrong row
+in an app — and a table saw spins up with nobody's hand on it, possibly mid
+blade-change. No-volt-release switches and magnetic starters exist precisely to
+prevent that, and a switchable smart outlet hands it back.
+
+So the preference for a no-relay plug is not only about inrush and cost. **It
+structurally cannot start a tool** — not "will not", cannot — and that is the
+property worth buying. It also cannot weld its contacts shut on a stalled tool
+drawing locked-rotor current continuously, which is the failure inrush ratings
+do not cover.
+
 These were fused only because a smart plug happened to do both. Separating them
 costs nothing and dissolves the problem:
 

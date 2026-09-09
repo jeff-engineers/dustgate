@@ -204,10 +204,24 @@ These are decided; don't relitigate them in code review or suggestions.
   scope.
 - **The plug belongs to the tool**, and draws under the tool's name — never on a
   port.
-- **Sensing is not switching.** A tool is only ever *sensed*; the collector is
-  the one thing DustGate commands. They were fused only because a smart plug
-  happened to do both, and a 1HP collector tripping a Shelly Plus Plug US on
-  2026-09-03 broke that. Large tools get a no-relay metering plug (or our own
+- **Sensing is not switching, and for a TOOL that is a safety rule.** A tool is
+  only ever *sensed*; the collector is the one thing DustGate commands.
+
+  This was recorded as a convenience — *a tool has its own switch, so we never
+  needed to* — until 2026-09-09. The real reason is worse than that, and a rule
+  with a weak reason gets relitigated the first time someone wants remote tool
+  control: **a tool switched off at the OUTLET with its own switch left ON is
+  armed.** Energise that outlet — remotely, on a schedule, by tapping the wrong
+  row in an app — and a table saw spins up with nobody's hand on it, possibly
+  mid blade-change. That is the exact hazard no-volt-release switches and
+  magnetic starters exist to prevent, and a switchable smart outlet reintroduces
+  it.
+
+  So: **never add tool switching**, and prefer a plug that structurally cannot
+  do it. A no-relay sense-only plug is not "will not" — it *cannot*.
+
+  The 1HP collector tripping a Shelly Plus Plug US on 2026-09-03 is what first
+  broke the sensing/switching fusion, but it is the smaller reason. Large tools get a no-relay metering plug (or our own
   CT); the collector is switched by the RF dust-collector remote already in the
   shop, so **nothing in the control path carries motor current**.
   `sensor.outlet` vs `control.outlet` in the model already said this. See
