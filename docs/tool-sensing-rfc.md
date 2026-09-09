@@ -436,11 +436,31 @@ Everything. Specifically:
 
 ## 11. Open questions
 
-- **Ownership without `Ws.SetConfig`.** Shelly claims are asserted by writing
-  the push target and reading it back; names are user-editable and therefore not
-  authoritative. Tasmota offers no equivalent. Either the claim model gains a
-  second, weaker mode for Tasmota devices, or Tasmota sensors are claimed by
-  something else entirely. Unresolved, and it gates the discovery work in §8.
+- ~~**Ownership without `Ws.SetConfig`.**~~ **ANSWERED 2026-09-09: Tasmota's
+  `Mem1`.** It is free text, persists across reboot, and is read and written over
+  the same `/cm?cmnd=` endpoint as everything else — so it is the same shape of
+  thing a Shelly's push target is: device state we set and can verify, rather
+  than a name a user might edit. We write our hostname into it.
+
+  The claim model gained the "second, weaker mode" this bullet anticipated:
+  `claimOfMarker()` / `plugclaim::decideMarker()`, same four states, paired
+  across both engines. **It is weaker in two specific ways and both are
+  load-bearing:**
+
+  1. **It is advisory, not enforced.** A Shelly can push to exactly one place, so
+     writing that config *is* the claim; Mem1 is a note we agree to read. Two
+     brains can poll the same Tasmota plug and neither will notice.
+  2. **There is no `foreign` state, and cannot be.** `foreign` is visible on a
+     Shelly only because Home Assistant had to write the push config to receive
+     anything. HA *polling* a Tasmota writes nothing, so a plug reading
+     `unclaimed` may well be in use and we cannot tell.
+
+  The compensation: the marker is a hostname rather than a dialable address, so
+  it does not go stale when DHCP moves us, and the whole `stale`/repair branch
+  `claimOf()` needs has no counterpart.
+
+  This unblocks discovery, which is still not built — the mDNS half (Tasmota
+  advertises differently from Shelly) is untouched.
 - **A collector described by two devices.** Control is an RF code; sense is a
   plug at a different address. The model has never had a system whose
   `control.outlet` and health reading come from different places. §8 lists it as

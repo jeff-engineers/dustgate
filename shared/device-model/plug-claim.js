@@ -198,8 +198,60 @@ function takeoverWarning(claim) {
     : `${who} will stop receiving push updates from this plug. Anything you have built there — automations, dashboards — goes quiet until you point it back.`;
 }
 
+/**
+ * The same four states, for a plug that has no push config to read.
+ *
+ * A Tasmota plug cannot be claimed the way a Shelly is. Shelly's claim is
+ * ENFORCED BY PHYSICS: there is one push target, writing it is what makes push
+ * work, and reading it back is therefore authoritative. Tasmota has no
+ * equivalent, so DustGate writes its own hostname into `Mem1` — a free-text
+ * variable that persists across reboot and is read and written over the same
+ * `/cm?cmnd=` endpoint everything else uses.
+ *
+ * TWO DIFFERENCES THAT MATTER, and neither is a detail:
+ *
+ * 1. THE CLAIM IS ADVISORY. Nothing enforces it. Two brains can poll the same
+ *    Tasmota plug quite happily and neither will notice, because polling leaves
+ *    no trace anywhere. Mem1 is a note we agree to read, not a lock. A Shelly's
+ *    push config cannot be shared; a Tasmota's attention can.
+ *
+ * 2. THERE IS NO `foreign` STATE, and its absence is not an oversight. `foreign`
+ *    means "Home Assistant is pushed to from this plug, so share it politely" —
+ *    and we can see that on a Shelly precisely because HA had to write the push
+ *    config to get it. HA polling a Tasmota writes nothing. So a plug that reads
+ *    `unclaimed` here may well be in use by something else, and we cannot tell.
+ *
+ * The compensation is that this is SIMPLER than the Shelly path: the marker is a
+ * hostname rather than a dialable address, so it does not go stale when DHCP
+ * moves us, and the whole `stale`/repair branch that claimOf() needs has no
+ * counterpart here.
+ *
+ * PAIR: plugclaim::decideMarker() in firmware/outlets/PlugClaim.h.
+ *
+ * @param {string} marker  the plug's Mem1 contents ('' if unset)
+ * @param {string} ourName our hostname, as we would have written it
+ */
+function claimOfMarker(marker, ourName) {
+  const m = String(marker || '').trim();
+  const us = String(ourName || '').trim();
+  const base = { owner: m, label: '' };
+
+  if (!m) {
+    return { ...base, owner: '', state: 'unclaimed', pickable: true,
+             repoint: true, takeable: false, holder: '', stale: false, reason: '' };
+  }
+  if (us && m === us) {
+    return { ...base, state: 'ours', pickable: true, repoint: true,
+             takeable: false, holder: '', stale: false, reason: '' };
+  }
+  // Another brain. Refused, and NAMED — "not on offer" with no reason reads
+  // exactly like a plug that failed to answer discovery.
+  return { ...base, state: 'dustgate', pickable: false, repoint: false,
+           takeable: true, holder: m, stale: false, reason: `owned by ${m}` };
+}
+
 module.exports = {
   OWNER_SEP, DUSTGATE_WS_PATH,
   formatPlugName, parsePlugName, wsHost, wsPath,
-  claimOf, mayRepoint, takeoverWarning,
+  claimOf, claimOfMarker, mayRepoint, takeoverWarning,
 };

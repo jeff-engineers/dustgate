@@ -180,6 +180,49 @@ int main() {
         eqs("host comparison is case-insensitive", stateName(c.state), "ours");
     }
 
+    // ── the marker claim: Tasmota, which has no push config ─────────────────
+    //
+    // PAIRED with the claimOfMarker block in plug-claim.test.js — same cases,
+    // same order, same reasons. Change one, change both.
+    {
+        const std::string US = "dustgate-shop";
+
+        Claim free_ = decideMarker("", US);
+        eqs("empty marker -> unclaimed", stateName(free_.state), "unclaimed");
+        ok("unclaimed is pickable and repointable", free_.pickable && free_.repoint);
+        ok("...and not takeable - there is nothing to take", !free_.takeable);
+
+        Claim mine = decideMarker(US, US);
+        eqs("our own hostname -> ours", stateName(mine.state), "ours");
+        ok("ours is pickable and repointable", mine.pickable && mine.repoint);
+
+        Claim theirs = decideMarker("dustgate-garage", US);
+        eqs("another brain -> dustgate", stateName(theirs.state), "dustgate");
+        ok("another brain is NOT pickable", !theirs.pickable);
+        ok("...but IS takeable, with confirmation", theirs.takeable);
+        eqs("...and names the holder, so the refusal has a reason",
+            theirs.holder, "dustgate-garage");
+        eqs("...with the reason spelled the same as the JS",
+            theirs.reason, "owned by dustgate-garage");
+
+        // Tasmota echoes what was written, but a hand-set Mem1 might carry a
+        // stray space. It must not read as a different owner.
+        eqs("surrounding whitespace is trimmed",
+            stateName(decideMarker("  " + US + "  ", US).state), "ours");
+
+        // A brain with no hostname of its own cannot claim to own anything —
+        // otherwise an unnamed board would adopt every claimed plug it saw.
+        eqs("no hostname of our own -> someone else owns it",
+            stateName(decideMarker("dustgate-garage", "").state), "dustgate");
+
+        // NO Foreign STATE EXISTS HERE. Home Assistant polling a Tasmota writes
+        // nothing, so a plug in use by something else is indistinguishable from
+        // a free one. Asserted so the limitation is a decision on the record
+        // rather than a gap someone "fixes".
+        eqs("an unknown marker is another BRAIN, never a foreign system",
+            stateName(decideMarker("home-assistant", US).state), "dustgate");
+    }
+
     printf("\n%d/%d passed\n", passed, passed + failed);
     return failed == 0 ? 0 : 1;
 }

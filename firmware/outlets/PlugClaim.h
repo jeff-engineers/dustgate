@@ -164,6 +164,60 @@ inline Claim decide(const std::string& pushUrl, bool pushEnabled,
     return c;
 }
 
+/**
+ * The same four states, for a plug that has no push config to read.
+ *
+ * A Tasmota plug cannot be claimed the way a Shelly is. Shelly's claim is
+ * ENFORCED BY PHYSICS: there is one push target, writing it is what makes push
+ * work, and reading it back is therefore authoritative. Tasmota has no
+ * equivalent, so we write our own hostname into `Mem1` — free text, persisted
+ * across reboot, read and written over the same /cm?cmnd= endpoint as everything
+ * else.
+ *
+ * TWO DIFFERENCES THAT MATTER, and neither is a detail:
+ *
+ * 1. THE CLAIM IS ADVISORY. Nothing enforces it. Two brains can poll the same
+ *    Tasmota plug quite happily and neither will notice, because polling leaves
+ *    no trace anywhere. Mem1 is a note we agree to read, not a lock. A Shelly's
+ *    push config cannot be shared; a Tasmota's attention can.
+ *
+ * 2. THERE IS NO Foreign STATE, and its absence is not an oversight. Foreign
+ *    means "Home Assistant is pushed to from this plug, so share it politely" —
+ *    visible on a Shelly precisely because HA had to write the push config to
+ *    get it. HA polling a Tasmota writes nothing. So a plug reading Unclaimed
+ *    here may well be in use by something else, and we cannot tell.
+ *
+ * The compensation is that this is SIMPLER: the marker is a hostname, not a
+ * dialable address, so it does not go stale when DHCP moves us and the whole
+ * stale/repair branch decide() needs has no counterpart.
+ *
+ * PAIR: claimOfMarker() in shared/device-model/plug-claim.js.
+ */
+inline Claim decideMarker(const std::string& marker, const std::string& ourName) {
+    Claim c;
+    std::string m = marker, us = ourName;
+    // Tasmota echoes exactly what was written; trim anyway so a hand-set Mem1
+    // with a stray space does not read as a different owner.
+    auto trim = [](std::string& x) {
+        while (!x.empty() && (x.front() == ' ' || x.front() == '\t')) x.erase(x.begin());
+        while (!x.empty() && (x.back()  == ' ' || x.back()  == '\t')) x.pop_back();
+    };
+    trim(m); trim(us);
+
+    c.owner = m;
+    c.label = "";
+    if (m.empty())            { c.state = State::Unclaimed; return c; }
+    if (!us.empty() && m == us) { c.state = State::Ours;    return c; }
+
+    c.state    = State::Dustgate;
+    c.pickable = false;
+    c.repoint  = false;
+    c.takeable = true;
+    c.holder   = m;
+    c.reason   = "owned by " + m;
+    return c;
+}
+
 /** Wire/UI spelling of a state — must match plug-claim.js. */
 inline const char* stateName(State s) {
     switch (s) {
