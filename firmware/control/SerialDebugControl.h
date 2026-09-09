@@ -109,6 +109,11 @@ private:
     // mDNS is OFF in stock builds, so runDiscover() cannot see one however
     // healthy it is — see the note on the implementation.
     void runSweep(int from, int to);
+
+    // One address, verbosely, saying WHICH step failed. `sweep` can only ever
+    // report "nothing found", which is the same answer for an unreachable
+    // network, a wrong parse and an empty subnet.
+    void runProbe(const String& ip);
     // Bus scan for bring-up. Takes the pins explicitly because I2C on an ESP32
     // is remappable and every board here puts it somewhere different — see the
     // command's own comment for why it refuses some of them.
