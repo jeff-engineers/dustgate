@@ -180,8 +180,14 @@ public:
         _inFlightSystem.clear();
         _collectors.clear();
         for (const SystemView& sys : systemsOf(topology()))
-            _collectors[std::string(sys.id ? sys.id : "")] =
-                CollectorState{false, false, 0, false, false, false, false, false, 0.0f, 0};
+            // Value-initialised rather than listed positionally. The struct
+            // has twelve members and this used to name ten, leaving binKnown
+            // and binFull to fall off the end — correct by luck, and exactly
+            // what breaks silently when someone inserts a field in the middle.
+            // The comment on the struct explains why it has no default member
+            // initializers (gnu++11 aggregate rules), which is the same reason
+            // this cannot simply be `CollectorState c;`.
+            _collectors[std::string(sys.id ? sys.id : "")] = CollectorState{};
         _loaded = true;
         return true;
     }
