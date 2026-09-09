@@ -14,6 +14,23 @@
 #pragma once
 #include <Arduino.h>
 
+// WHICH PROTOCOL a plug speaks, and the thing dispatch happens on.
+//
+// NOT the same axis as generation(). A Shelly generation is a number that means
+// something inside Shelly's world; Tasmota has no generation at all, and Shelly
+// Gen3 and Gen4 exist — so overloading that number to mean "not a Shelly" would
+// make a real Shelly generation unrepresentable the first time one is supported.
+//
+// PAIR: `kind` in a topology's `sensor.outlet` (shared/device-model/topology.js).
+// The wire carries the string, this carries the enum, and the DEFAULT when a
+// document says nothing is the part that can silently disagree — see CLAUDE.md.
+// Absent means SHELLY, because every document written before 2026-09-09 has a
+// Shelly in it and no field to say so.
+enum OutletKind : uint8_t {
+    OUTLET_SHELLY  = 0,   // Gen2+ RPC. The default for a document that is silent.
+    OUTLET_TASMOTA = 1,   // GET /cm?cmnd=Status%208 — sense only, cannot switch
+};
+
 class SmartOutlet {
 public:
     virtual ~SmartOutlet() {}
@@ -63,7 +80,16 @@ public:
 
     // API generation (1 = Gen 1 /status, 2 = Gen 2+ /rpc/).
     // Used by saveSlot() to persist config; avoids RTTI / dynamic_cast.
+    //
+    // ONLY EVER STORED AND REPORTED — nothing dispatches on it. The one caller
+    // is SmartOutletControl.cpp writing it into an OutletEntry. Dispatch is
+    // kind() below.
     virtual int generation() const = 0;
+
+    // Which protocol this outlet speaks. Defaults to Shelly so that adding the
+    // enum did not touch ShellyGen2Outlet, and so a subclass that forgets to
+    // override it gets the behaviour every existing device already had.
+    virtual OutletKind kind() const { return OUTLET_SHELLY; }
 
     // -------------------------------------------------------------------------
     // mDNS hostname (without ".local"), if this outlet was discovered/paired

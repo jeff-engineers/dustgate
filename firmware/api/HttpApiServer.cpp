@@ -3,6 +3,7 @@
 // =============================================================================
 
 #include "HttpApiServer.h"
+#include "../outlets/OutletFactory.h"   // outletKindFromName()
 
 #ifdef ENABLE_HTTP_API
 
@@ -1626,6 +1627,8 @@ void HttpApiServer::registerRoutes() {
             OutletConfigCmd cmd;
             cmd.slot       = slot;
             cmd.generation = doc["gen"]       | 1;
+            // Absent means Shelly — see outletKindFromName().
+            cmd.kind       = outletKindFromName(doc["kind"] | "shelly");
             cmd.stopIndex  = doc["stop"]      | 0;
             cmd.thresholdW = doc["threshold"] | OUTLET_DEFAULT_THRESHOLD_W;
             strlcpy(cmd.ip,   doc["ip"]   | "",  sizeof(cmd.ip));
