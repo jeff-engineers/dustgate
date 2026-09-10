@@ -555,6 +555,84 @@ question, not just a tuning one.
 
 ## 6. One seam, not two: emulate Tasmota
 
+### 6.0 …or don't build the sensor at all (2026-09-10)
+
+**This section was written assuming we build a CT sensor board that impersonates
+a Tasmota. Athom already sells one, and it inverts the argument.**
+
+[Athom 2CH Energy Meter (EM2)](https://www.athom.tech/blank-1/2-ch-energy-meter-made-for-tasmota),
+**$29.40** (list $42), pre-flashed with Tasmota:
+
+| | |
+|---|---|
+| Chip | ESP32-C3, 4 MB — the same family as our own boards |
+| Input | **100–250 V** 50/60 Hz, so 240 V is native rather than a special case |
+| Channels | 1 voltage + **2 current**, 0.1–97 A, split-core clamps on 100 cm leads |
+| Also | A 6CH version, if a bank of 240 V tools is ever worth ganging |
+
+**It is already the thing §6 argued we should emulate**, so `TasmotaOutlet`
+drives it with no new driver, no new protocol, and no new node type. It turns up
+in the sweep like any other Tasmota, claims through `Mem1`, and pairs in the UI
+that already exists.
+
+Three things make this better than the board we were going to build, not merely
+cheaper:
+
+- **It measures VOLTAGE and POWER FACTOR.** Our CT measures current and cannot
+  convert to watts without them (see the note at the top of TasmotaOutlet.h).
+  That means it reports real watts and can share `DEFAULT_THRESHOLD_W` with a
+  plug-sensed tool — which retires the learned-baseline problem of §5.4a for
+  this path entirely.
+- **It is powered from the same mains it measures.** The standalone-CT-node plan
+  existed to avoid USB and 12 V cables running from wall-mounted gates to mobile
+  tools; this needs no separate supply at all. It also sidesteps a hazard that
+  plan had and had not yet noticed — **a node powered off the tool must tap
+  UPSTREAM of the tool's own switch**, or it dies exactly when the tool is off,
+  and a sensor that is unreachable whenever the answer is "not running" cannot
+  be told from a dead board.
+- **It confirms §5.4 independently.** Athom's own manual: *"CT clamps can only be
+  clipped onto single-phase wires (L line or N line)."* A shipping product with
+  the same restriction we measured for ourselves.
+
+At ~$15 per monitored channel it also undercuts the $13 plug per tool when both
+channels are used, while covering the 240 V case the plug cannot. **There is no
+1CH version** — 2CH is the floor.
+
+#### The gap this opens, and it is a real one
+
+**A multi-channel meter is ONE IP serving N sensors, and nothing in the model
+allows that.** `machineForOutlet(host, ip)` maps an address to exactly one
+machine, and `sensor.outlet` carries an `ip` and no channel. Two 240 V tools on
+one EM2 cannot be expressed.
+
+Worse, it fails silently. On a multi-channel device Tasmota reports
+`StatusSNS.ENERGY.Power` as an **array**, and `TasmotaOutlet::doPoll()` does
+`p.as<float>()` on it — which yields **0.0** for a JSON array. That is a
+confident "zero watts" for a working meter: a tool that is never on, forever,
+which is the precise failure the ENERGY-absent guard beside it was written to
+prevent. The guard checks for a MISSING value and an array is present.
+
+So the minimum before an EM2 is usable at all:
+
+1. `doPoll()` must detect an array and either take a configured index or refuse
+   loudly. **Refusing loudly is the right first step** — a wrong channel silently
+   watching the wrong tool is worse than a plug that says it cannot cope.
+2. `sensor.outlet` needs an optional `channel`, defaulting to absent = scalar,
+   so every layout written before this keeps meaning what it meant.
+3. Claiming needs thought: `Mem1` holds one owner for the whole device, but two
+   channels may belong to two machines under the same brain. Fine for us today
+   (same owner either way); not fine if two DustGate primaries ever share a
+   meter, which is already outside what `decideMarker()` can express.
+
+**Buy one and confirm it answers `Status 8` with an ENERGY block first.** If it
+does, the DIY sensor below stops being the plan and becomes the fallback, and
+the CT branch of the `PowerSensor` seam may never need an implementation of
+ours.
+
+### 6.1 The original argument, for a sensor we build
+
+
+
 The homemade 240V sensor **serves the same endpoint as the Athom plug** —
 `GET /cm?cmnd=Status%208`, same JSON, same `StatusSNS.ENERGY.Power` field.
 

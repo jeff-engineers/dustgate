@@ -10,6 +10,26 @@ reasoning was contested, or that a still-open item above leans on.
 
 ## Bugs
 
+- **A multi-channel Tasmota meter reads 0 W, confidently (2026-09-10).**
+  `TasmotaOutlet::doPoll()` filters `StatusSNS.ENERGY.Power` and calls
+  `p.as<float>()`. On a multi-channel device — the Athom EM2/EM6, which
+  `docs/tool-sensing-rfc.md` §6.0 now recommends over building our own — Tasmota
+  reports `Power` as an ARRAY, and `as<float>()` on a JSON array yields 0.0.
+
+  That is a working meter reported as a tool that is never on, forever. The
+  guard directly beneath it catches a MISSING ENERGY block for exactly this
+  reason ("`| 0.0f` would make a tool never on, forever") and does not fire
+  here, because an array is present.
+
+  **Refuse loudly first.** Detect `p.is<JsonArray>()` and report unreachable
+  with a distinct reason, before any attempt at channel support — a meter
+  silently watching the wrong channel is worse than one that says it cannot
+  cope. Channel selection (`sensor.outlet.channel`, absent = scalar) is the
+  follow-up, and §6.0 lists what else it drags in.
+
+  Not urgent until an EM2 is actually bought; sharp the moment one is.
+
+
 - **Calibrate isn't reachable from the /gates page.** Opening a gate there
   (`http://dustgate.local/#/  gates`) offers no calibrate option, so the only way
   in is whatever other path still has one. Find where the entry point went and
