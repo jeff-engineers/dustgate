@@ -278,18 +278,55 @@ A servo can only be as stateful as the control it moves:
 
 | The control | What a servo gives you | State |
 |---|---|---|
-| **Momentary** — a fob button, a start button | A press | **Stateless.** Same as an RF frame: you know what you sent, never what resulted. Toggle semantics, so feedback is mandatory |
-| **Maintained** — a paddle switch, a rocker, a lever | A POSITION | **Stateful, and absolute.** "Set to ON" is idempotent. Send it twice, still on |
+| **Momentary TOGGLE** — one button that alternates | A press | **Stateless, and the worst case.** Same as an RF frame: you know what you sent, never what resulted. A missed or doubled press inverts our belief permanently, so feedback is mandatory |
+| **Momentary DISCRETE** — separate ON and OFF buttons | A press, to a **known destination** | **Idempotent.** Pressing ON twice leaves it on. Stateless to SEND, absolute in MEANING — a missed press is self-correcting on the next one |
+| **Maintained** — a paddle, rocker, lever | A POSITION | **Absolute, and legible.** Same idempotence, plus the control's own position is a truthful display of what the system believes |
 
-That second row is a genuinely better position than any electrical option
-reaches. A collector with a paddle switch, driven by a servo, has **no toggle
-problem at all** — the firmware commands a state rather than an edge, a missed
-or doubled command is self-correcting, and the switch's own physical position is
-a truthful, human-readable display of what the system believes. Feedback
-becomes confirmation rather than the only source of truth.
+**The Rockler fob is the worst row.** One button, alternating — which is why the
+collector's loop needs feedback at all. That is a property of the fob, not of
+this technique, and the other two rows escape it.
 
-So when there is a choice of control to actuate, **prefer a maintained one**,
-even if a momentary one is easier to reach.
+Rows 2 and 3 reach a better position than any electrical option available to us.
+A collector with a paddle switch, or a remote with separate on/off buttons, has
+**no toggle problem**: the firmware commands a state rather than an edge, and a
+missed or doubled command corrects itself. Feedback becomes confirmation rather
+than the only source of truth.
+
+So when there is a choice of control to actuate, **prefer a discrete or
+maintained one**, even if the toggle is easier to reach.
+
+#### Multi-button fobs, and what they open up
+
+Jeff, 2026-09-10: plenty of shop equipment ships a remote with **separate on/off
+and several power settings** — a
+[WEN 3410 air filtration system](https://wenproducts.com/collections/dust-management/products/air-filtration-system-item-3410)
+has power, three fan speeds (300/350/400 CFM) and a timer, all from one fob.
+
+That is row 2, and it changes what mechanical actuation is FOR. It stops being
+"a way to press the button we already press by hand" and becomes **a general
+control surface for shop equipment DustGate does not otherwise speak to.**
+
+Costs and shapes, unresolved:
+
+- **A button per servo, or a servo that travels.** One servo per button is
+  simple and eats channels fast — `SERVO_COUNT` is 4, and power + three speeds is
+  already four. A single arm that moves between buttons is one channel and a
+  harder mechanism, and it has to know where it is (the same datum problem the
+  slider has, at a much smaller scale).
+- **An air cleaner is not a dust collector**, and the model has no room for it.
+  It belongs to no gate, routes no air we switch, and its useful behaviour is
+  different in kind: run while anything is cutting, and **keep running long
+  after** — airborne dust settles over tens of minutes, where a duct clears in
+  seconds. That is a coast measured against a different clock than
+  `offDelayMs`.
+- **Speeds are a policy question we have not asked.** Low while one tool runs,
+  high after a sanding session? Nothing in the shop model expresses "how dirty
+  is the air", and the honest first version is probably one speed, chosen once.
+
+**Not scoped, and not blocking anything.** Recorded because it is the first
+sign that the fob-tapper is a platform rather than a fix, and because the
+discrete-button property in row 2 is worth having found before designing around
+the Rockler's toggle.
 
 #### Where it does NOT go, and this is a hard line
 

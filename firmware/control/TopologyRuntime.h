@@ -429,6 +429,26 @@ public:
         return JsonObjectConst();
     }
 
+    // The SENSE-ONLY plug watching one system's blower ("" if none).
+    //
+    // Independent of collectorOutlet() above, and the distinction is the whole
+    // closed loop (2026-09-10). `control.outlet` is how we SWITCH a blower;
+    // `sensor.outlet` is how we WATCH one. A collector commanded by a servo
+    // pressing its remote, or by RF, has no control.outlet at all — and every
+    // way we press that button is STATELESS, so watching it is the only way to
+    // know whether the press landed. See docs/tool-sensing-rfc.md §4.2a/§4.2b.
+    //
+    // A collector switched by a metering Shelly needs no second device: it
+    // senses itself through the plug that switches it, and the sketch falls back
+    // to the control plug when this is absent.
+    JsonObjectConst collectorSensorOutlet(const std::string& systemId) const {
+        for (const SystemView& sys : systemsOf(topology())) {
+            if (std::string(sys.id ? sys.id : "") != systemId) continue;
+            return collectorOf(sys)["sensor"]["outlet"];
+        }
+        return JsonObjectConst();
+    }
+
     // Coast-down for one system. Absent means "the shop didn't say", not "none"
     // — see kDefaultCollectorOffDelayMs. An explicit 0 does disable it.
     uint32_t collectorOffDelayMs(const std::string& systemId) const {

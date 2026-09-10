@@ -782,8 +782,26 @@ static void syncTopologyOutlets() {
         } else {
             control.removeCollector((int)i);
         }
+
+        // The SENSE-ONLY plug watching this blower, which is a different device
+        // from the one switching it. A collector pressed by a servo or by RF has
+        // no switchable plug at all, and every one of those presses is stateless
+        // — so this is the only thing that can say whether it landed.
+        JsonObjectConst so = g_topoRuntime.collectorSensorOutlet(sysIds[i]);
+        const char* sip = so["ip"].as<const char*>();
+        if (sip && *sip) {
+            if (!control.collectorSensorIs((int)i, sip))
+                control.configureCollectorSensor((int)i,
+                                                 outletKindFromName(so["kind"] | "shelly"),
+                                                 sip, so["host"] | "");
+        } else {
+            control.removeCollectorSensor((int)i);
+        }
     }
-    for (size_t i = sysIds.size(); i < COLLECTOR_COUNT; i++) control.removeCollector((int)i);
+    for (size_t i = sysIds.size(); i < COLLECTOR_COUNT; i++) {
+        control.removeCollector((int)i);
+        control.removeCollectorSensor((int)i);
+    }
 }
 #endif
 
@@ -1543,14 +1561,26 @@ void loop() {
                 // Only for a slot that actually has a plug — reporting zeroes for
                 // a collector nobody paired would read as a dead blower rather
                 // than an absent one.
-                if (control.collectorConfigured((int)i)) {
+                // A DEDICATED SENSOR WINS over the switchable plug's own reading.
+                // Both answer "what is this blower drawing", and when a layout
+                // names both, the sensor is the one chosen for the job — a
+                // metering Tasmota on a blower switched by a relay that may not
+                // meter at all. When there is no sensor, the switch plug's own
+                // reading is used exactly as before; when there is no switch
+                // plug either — a blower pressed by a servo — the sensor is the
+                // ONLY reading there has ever been, and is the whole reason this
+                // branch exists.
+                const bool haveSensor = control.collectorSensorConfigured((int)i);
+                if (haveSensor || control.collectorConfigured((int)i)) {
                     uint32_t since = control.collectorOnSinceMs((int)i);
                     // millis() is read HERE and handed over as an age: the runtime
                     // owns no clock, which is what keeps it host-testable.
                     uint32_t onFor = since ? (millis() - since) : 0;
                     g_topoRuntime.setCollectorPlug(sysIds[i],
-                                                   control.collectorWatts((int)i),
-                                                   control.collectorReachable((int)i),
+                                                   haveSensor ? control.collectorSensorWatts((int)i)
+                                                              : control.collectorWatts((int)i),
+                                                   haveSensor ? control.collectorSensorReachable((int)i)
+                                                              : control.collectorReachable((int)i),
                                                    onFor);
                 }
             }

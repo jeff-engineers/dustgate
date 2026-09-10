@@ -142,7 +142,14 @@ const MAX_SLIDE_BRANCHES = 8;
  *                                        is a wiring question, not a model limit
  * @property {Object} [servo]             (selector servo kinds) { channel, moveMs, holdAtRest, ... }
  * @property {Object} [sensor]            (tool) { outlet }
- * @property {Object} [control]           (collector) { outlet, offDelayMs }
+ * @property {Object} [control]           (collector) { outlet, offDelayMs } — how we
+ *                                   SWITCH it. Absent when the collector is
+ *                                   commanded some other way: a servo pressing
+ *                                   its remote, or RF. See tool-sensing-rfc §4.2.
+ * @property {Object} [sensor]            (collector) { outlet } — how we SENSE it.
+ *                                   Independent of `control`, because a collector
+ *                                   switched by a stateless press still has to be
+ *                                   watched to know whether the press landed.
  * @property {Object} [bin]               (collector) { sensor: { kind, controllerId, invert } }
  *
  * @typedef {Object} Topology
@@ -335,14 +342,30 @@ function validateTopology(t) {
   // believe two machines started at once, and sharing the collector's would have
   // the blower's own draw hold itself on. Firmware's toolForOutlet() maps by
   // ip/host and can only answer with one id, so this has to be unique here.
+  //
+  // A COLLECTOR MAY HAVE BOTH, and that is the interesting case (2026-09-10).
+  // It used to be read as switch-or-nothing, which quietly made feedback
+  // impossible for the collectors most likely to need it: one switched by a
+  // servo pressing its remote, or by RF, has NO control.outlet at all and so
+  // could carry no reading whatsoever. Its `sensor.outlet` is how a sense-only
+  // Tasmota watches a blower DustGate commands by some other means — which is
+  // the whole closed loop, since every way we press that button is stateless.
+  //
+  // The two must still be different plugs. A collector sensing itself through
+  // the plug that switches it is fine and needs no second device; naming the
+  // same ip twice is a layout that thinks it has two.
   const plugOwner = new Map();     // ip → element id
   for (const e of t.elements) {
-    const outlet = e.type === 'collector' ? (e.control || {}).outlet : (e.sensor || {}).outlet;
-    const ip = outlet && outlet.ip;
-    if (!ip) continue;
-    if (plugOwner.has(ip))
-      err('element', `smart outlet ${ip} is on two elements ("${plugOwner.get(ip)}" and "${e.id}")`, e.id);
-    else plugOwner.set(ip, e.id);
+    const outlets = e.type === 'collector'
+      ? [(e.control || {}).outlet, (e.sensor || {}).outlet]
+      : [(e.sensor || {}).outlet];
+    for (const outlet of outlets) {
+      const ip = outlet && outlet.ip;
+      if (!ip) continue;
+      if (plugOwner.has(ip))
+        err('element', `smart outlet ${ip} is on two elements ("${plugOwner.get(ip)}" and "${e.id}")`, e.id);
+      else plugOwner.set(ip, e.id);
+    }
   }
 
   // ── selectors: kind, states, branches, refs ──
