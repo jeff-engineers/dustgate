@@ -42,6 +42,11 @@ reasoning was contested, or that a still-open item above leans on.
 
 ## UI
 
+- **Add a banner indicating demo mode, not driving real hardware** I've shown 
+  this off to people via the vercel app, and immediately been asked "Oh am I 
+  controlling your shop?" - need to make it clear when we're not actively
+  controlling hardwares
+
 - **Replace drag-to-branch on a duct with "move this run here" (2026-09-07,
   jeff).** Today, dragging a branch dot tees in a passive leg. The more useful
   gesture is moving the RUN — put it where I want it and keep it there, the way
@@ -151,11 +156,80 @@ reasoning was contested, or that a still-open item above leans on.
   `DemoApiService`'s override. `setDcManual`/`setCollectorManual` themselves STAY —
   the runtime is what calls them.
 
+- **Every C5 partition table assumes 4 MB. The chip is 8 MB (2026-09-09).**
+  `esptool flash_id` on the bench primary: `Detected flash size: 8MB`, on an
+  ESP32-C5 rev v1.0. Both tables we ship stop at `0x400000` —
+  `partitions-xiao-c5-primary.csv` says so in its closing line ("Fills 4 MB
+  exactly"), and the nodes' `huge_app.csv` lays out the same 4 MB. **Half the
+  flash on every board is unaddressed.**
+
+  Worth more than the free space. That file carries a long comment weighing
+  whether the slack should go to the app or to the LittleFS bundle, and reasons
+  carefully to "the slack goes to the app" — against a total that was wrong by
+  4 MB. The decision is not wrong, but it was never as tight as it reads, and
+  the next person to size a partition will trust that comment. Fix the comment
+  with the table.
+
+  The bootloader already knows: the board JSON declares `flash_size: 8MB`, so
+  only our CSVs are holding the line at 4.
+
+- **OTA updates for our own boards — tabled 2026-09-09, jeff.** Feasible and
+  roomy once the 8 MB above is claimed: dual OTA slots at the *current* app0
+  size (2.62 MB each, 64% used) plus the 1.44 MB bundle is ~6.7 MB of 8, with no
+  shrinking and no trimming the Angular bundle.
+
+  Shape, if it gets built: `Update.h` behind a POST on our own `HttpApiServer`
+  with an upload control in the UI — the same shape as Tasmota's firmware
+  button. **Not `ArduinoOTA`/espota**, which advertises over mDNS and walks
+  straight back into the constraint in CLAUDE.md ("never require anything a
+  network is allowed to block"); our own HTTP endpoint works anywhere the UI is
+  reachable, which is by definition the network it is on.
+
+  Three things that are not incidental:
+
+  - **A partition change cannot be delivered over the air.** Every board needs
+    one wired flash to receive the new table. Free today — bench boards, shop
+    not in service — and genuinely expensive once a node is mounted in a
+    ceiling. That is the argument for doing it *before* the shop goes live, not
+    when we happen to want it.
+  - **Rollback is not free.** `Update.h` does not validate-and-revert by
+    default, and without it a bad image on a node is a board that must come down
+    and go on USB. That recovery cost is exactly what argued *against* writing
+    custom Tasmota firmware (`docs/tool-sensing-rfc.md` §12.4), so it would be
+    dishonest to accept it here without the rollback flag on from the start.
+  - **The primary must refuse an update while anything is moving** or the
+    collector is running.
+
+- **The C5 has an 802.15.4 radio (2026-09-09).** `esptool` reports `Wi-Fi 6
+  (dual-band), BT 5 (LE), IEEE802.15.4` on the board we already ship. Noted
+  because the Zigbee/Thread half of the "other smarthome protocols" question in
+  `docs/tool-sensing-rfc.md` §11 is not a hardware question — the radio is
+  present. Still parked; the near-term job is one shop on one guest network.
+
 - **No right-click menu on a duct.** Every other thing on the canvas has one now.
   A duct would want "add a fitting here" — which the branch dots already do, at the
   same point, so it may be redundant — and "delete this run", which has no
   primitive behind it: removing a duct means deciding what happens to everything
   downstream of it. Left out deliberately until that question has an answer.
+
+- **The outlet picker exists TWICE, and they had already drifted (2026-09-09).**
+  `tools/outlet-picker.component.ts` is used by the build canvas (through
+  `element-outlet-config`); `tool-setup.component.ts` carries its own inline
+  copy for the /tools list. Same interaction — identify-by-power, pick a plug —
+  in two implementations, and they don't even agree on the words: "Scan again"
+  vs "Rescan", "Which outlet is this one's?" vs "Turn X on — the outlet that
+  jumps to green is the one."
+
+  Found the honest way: adding the add-by-address field to the shared component
+  changed nothing on /tools, because /tools does not use it. **It had to be
+  written twice**, which is the whole argument for collapsing them. The next
+  change to either one will hit the same wall, and there is no reason left for
+  two — the inline version predates the extracted component.
+
+  Fold `tool-setup`'s inline picker onto `OutletPickerComponent`. The extracted
+  one is the keeper (it already has the `excludeIps`/`excludeReason` inputs);
+  what needs porting into it is the plug-row styling and the "already assigned
+  to another tool" wording that /tools uses.
 
 - **Hostname collision is guarded in one direction only.** `run_flash_node`
   refuses a node hostname that matches the primary's (`dev.sh`), but a primary
