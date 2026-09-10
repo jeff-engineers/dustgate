@@ -62,19 +62,22 @@ drifted constantly. Now `shared/device-model/` is the spec:
   | `IDLE_TIMEOUT_SEC_DEFAULT` (device-model.js) | `IDLE_TIMEOUT_SEC_DEFAULT` (config.h) | idle power-off default |
   | `MANIFOLD_PROFILES` — `gatePitchMm` / `firstGateOffsetMm` / `endMarginMm` (device-model.js) | `MANIFOLD_2_5_GATE_PITCH_MM`, `MANIFOLD_4_GATE_PITCH_MM` and friends (config.h) | Rockler manifold geometry. **Found unregistered on 2026-08-28** — it had been a pair since the profiles were written, with nothing pointing either way, which is exactly the situation this table exists to prevent. `gatePitchMm` is the number the reference sweep trusts and centres the gate array on, so a change on one side alone mis-places every gate on real hardware while every test still passes. |
   | the **default** for an absent `kind` on `sensor.outlet` / `control.outlet` (topology.js) | the default in `outletKindFromName()` and `OutletConfig`'s `o<N>_kind` (outlets/OutletFactory.h, OutletConfig.h) | which protocol a plug speaks — `shelly` or `tasmota`. The VALUE rides the document and so isn't a pair; the **default when the document is silent** is, and it must be Shelly on both sides or every layout written before 2026-09-09 starts polling the wrong endpoint. An unknown string defaults the same way, so a document from a newer UI degrades to the old behaviour rather than to a plug that reads nothing |
+  | `COLLECTOR_RUNNING_W` / `COLLECTOR_SPINUP_GRACE_MS` (topology-device.js) | `kCollectorRunningW` / `kCollectorSpinupGraceMs` (control/CollectorPlugState.h) | is the blower ACTUALLY running, vs what we commanded. **Became a pair 2026-09-10** — topology-device.js had carried a note saying it deliberately was not one, and naming the exact condition that would change that. This is it, and for a stronger reason than the OLED it predicted: every way we now command a collector is STATELESS (a servo pressing a fob, an RF frame), so what we sent proves nothing and a browser nobody has open cannot be the only thing that notices a failed start. `test_collector_plug.cpp` ↔ `collector-plug.test.js`, same cases, same order, and both numbers asserted literally so a one-sided edit fails at the test rather than on a bench |
   | `NODELINK_VERSION`, `PING_INTERVAL_MS`, `PONG_TIMEOUT_MS`, `RECONNECT_MIN_MS`, `RECONNECT_MAX_MS` (nodelink.js) | `kVersion`, `kPingIntervalMs`, `kPongTimeoutMs`, `kReconnectMinMs`, `kReconnectMaxMs` (control/NodeLink.h) | NodeLink protocol timing |
 
   The reference pair has company now: `manual-blower.test.js` ↔
   `firmware/test/test_manual_blower.cpp` covers running a blower by hand, and the
   two assert the same cases in the same order for the same reason.
 
-  **Not everything shared is a pair, and saying so is part of the job.**
-  `collector-plug.test.js` has NO C++ partner on purpose: the firmware reports
-  what a collector's plug says (`systems[].plug` — watts, reachable, onForMs) and
-  never judges it, so `COLLECTOR_RUNNING_W` and `COLLECTOR_SPINUP_GRACE_MS` exist
-  once, in `topology-device.js`, with nothing to drift against. If the OLED ever
-  needs to say "blower not starting" too, that is the moment those become a pair
-  and earn a row above — not before.
+  **Not everything shared is a pair, and saying so is part of the job** — but a
+  non-pair can BECOME one, and this table's job includes noticing when.
+  `collector-plug.test.js` was the standing example of a deliberate non-pair:
+  the firmware reported what a collector's plug said and never judged it, so the
+  two constants lived once in `topology-device.js` with nothing to drift
+  against. The note there named the condition that would change it — "if the
+  OLED ever needs to say *not starting* too" — and **it changed on 2026-09-10**,
+  for a bigger reason than the OLED. It now has a row above and a C++ partner.
+  Cite it as the example of a non-pair that earned promotion, not as a non-pair.
 
   `kBinDebounceMs` (utils/BinSensor.h) is another: how long the dust-bin beam
   must hold a reading before the firmware believes it. No JS model simulates a

@@ -23,11 +23,12 @@
     "firmware:shop:test": "cd .. && c++ -std=c++17 -I \"$(dirname \"$(find .pio.nosync/libdeps -path '*/ArduinoJson/src/ArduinoJson.h' | head -1)\")\" firmware/test/test_shop.cpp -o /tmp/dustgate-shoptest && /tmp/dustgate-shoptest firmware/test/fixtures/",
     "firmware:faults:test": "cd .. && c++ -std=c++17 firmware/test/test_faults.cpp -o /tmp/dustgate-faulttest && /tmp/dustgate-faulttest",
     "firmware:screen:test": "cd .. && c++ -std=c++17 firmware/test/test_statusscreen.cpp -o /tmp/dustgate-screentest && /tmp/dustgate-screentest",
-    "firmware:test": "npm run firmware:router:test && npm run firmware:controller:test && npm run firmware:nodebus:test && npm run firmware:shop:test && npm run firmware:faults:test && npm run firmware:plugclaim:test && npm run firmware:screen:test && npm run firmware:blower:test && npm run firmware:bin:test",
+    "firmware:test": "npm run firmware:router:test && npm run firmware:controller:test && npm run firmware:nodebus:test && npm run firmware:shop:test && npm run firmware:faults:test && npm run firmware:plugclaim:test && npm run firmware:screen:test && npm run firmware:blower:test && npm run firmware:bin:test && npm run firmware:collectorplug:test",
     "plugclaim:test": "node ../shared/device-model/plug-claim.test.js",
     "bin:test": "node ../shared/device-model/bin-sensor.test.js",
     "firmware:bin:test": "cd .. && c++ -std=c++17 -I \"$(dirname \"$(find .pio.nosync/libdeps -path '*/ArduinoJson/src/ArduinoJson.h' | head -1)\")\" firmware/test/test_binsensor.cpp -o /tmp/dustgate-bintest && /tmp/dustgate-bintest",
-    "firmware:plugclaim:test": "cd .. && c++ -std=c++17 firmware/test/test_plugclaim.cpp -o /tmp/dustgate-pctest && /tmp/dustgate-pctest"
+    "firmware:plugclaim:test": "cd .. && c++ -std=c++17 firmware/test/test_plugclaim.cpp -o /tmp/dustgate-pctest && /tmp/dustgate-pctest",
+    "firmware:collectorplug:test": "cd .. && c++ -std=c++17 firmware/test/test_collector_plug.cpp -o /tmp/dustgate-cptest && /tmp/dustgate-cptest"
   },
   "dependencies": {
     "dotenv": "^16.4.5",

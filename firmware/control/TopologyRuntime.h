@@ -66,6 +66,7 @@
 // =============================================================================
 
 #pragma once
+#include "CollectorPlugState.h"
 #include <ArduinoJson.h>
 #include "TopologyController.h"
 #include "NodeBus.h"
@@ -131,10 +132,17 @@ struct CollectorState {
 
     // ── What the plug says, fed in from the outlet layer ─────────────────────
     //
-    // `running` above is what we COMMANDED. These are what came back. The
-    // runtime never judges them — it reports them, and the verdict lives once in
-    // collectorPlugState() in shared/device-model/topology-device.js. See
-    // SmartOutletControl.h.
+    // `running` above is what we COMMANDED. These are what came back, and the
+    // gap between them is the whole point: every way we command a blower is
+    // STATELESS — a servo pressing a fob, an RF frame — so what we sent proves
+    // nothing and only the draw does.
+    //
+    // The verdict is now computed HERE TOO, in CollectorPlugState.h, a matched
+    // pair with collectorPlugState() in topology-device.js. It used to live only
+    // in JS, on the reasoning that the firmware reports and the browser judges;
+    // that stopped being good enough when the sender became stateless, because a
+    // browser nobody has open cannot be the only thing that notices a blower
+    // failed to start.
     bool     plugKnown;     // false = nothing has reported; omit `plug` entirely
     bool     plugReachable;
     float    plugWatts;
@@ -289,6 +297,23 @@ public:
         }
         ingest(_ctrl.reconcile());
         return true;
+    }
+
+    // What this system's blower is ACTUALLY doing, as opposed to what we asked.
+    // The judgement itself is pure and lives in CollectorPlugState.h; this only
+    // supplies the state to judge.
+    topo::PlugState collectorPlugStateFor(const std::string& systemId) const {
+        auto it = _collectors.find(systemId);
+        if (it == _collectors.end())
+            return topo::collectorPlugState(false, false, 0.0f, 0, false, false);
+        const CollectorState& c = it->second;
+        // plugOnForMs is 0 both for "just commanded" and for "never commanded",
+        // and `running` is what separates them: a blower we are not asking for
+        // has no age to report, and passing haveOnFor=true there would make an
+        // idle system look like one that just started.
+        return topo::collectorPlugState(c.plugKnown, c.plugReachable, c.plugWatts,
+                                        c.plugOnForMs, /*haveOnFor=*/c.running,
+                                        /*commandedOn=*/c.running);
     }
 
     bool collectorIsManual(const std::string& systemId) const {
@@ -567,6 +592,13 @@ public:
                 p["watts"]     = kv.second.plugWatts;
                 p["reachable"] = kv.second.plugReachable;
                 p["onForMs"]   = kv.second.plugOnForMs;
+                // The verdict, alongside the facts it came from. Both are sent:
+                // the facts because a client may want to render the number, and
+                // the state because the device now has an opinion of its own and
+                // the OLED reads it without re-deriving anything. A client that
+                // computes it from the facts must get the same answer — that is
+                // what the matched pair is for.
+                p["state"] = plugStateName(collectorPlugStateFor(kv.first));
             }
             // Omitted when nothing is watching this bin, for the same reason the
             // plug is: absent and empty are different claims. Mirrors

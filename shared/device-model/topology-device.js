@@ -45,11 +45,19 @@ const DEFAULT_COLLECTOR_OFF_DELAY_MS = 5000;  // ↔ kDefaultCollectorOffDelayMs
 // somebody unplugged it, the motor is stalled. The device now reports the plug's
 // own power reading back, and these two numbers turn it into an answer.
 //
-// DELIBERATELY NOT MIRRORED IN C++. The firmware reports the plug facts (watts,
-// reachable, how long since we commanded it on) and does not judge them; the
-// judgement lives here, once. If the OLED ever needs to say "not starting" too,
-// THAT is the moment this becomes a matched pair and earns a row in CLAUDE.md —
-// not before.
+// MIRRORED IN C++ SINCE 2026-09-10 — control/CollectorPlugState.h. This note
+// used to say the opposite, and named the condition that would change it: "if
+// the OLED ever needs to say not starting too". The real trigger was bigger.
+// Every way DustGate now commands a collector is STATELESS — a servo pressing
+// its remote, an RF frame (docs/tool-sensing-rfc.md §4.2a/§4.2b) — so what the
+// device SENT proves nothing about what the blower did, and only the draw does.
+// A browser that may not be open cannot be the only thing that notices a failed
+// start, so the device holds the verdict too.
+//
+// MATCHED PAIR: keep these equal to kCollectorRunningW and
+// kCollectorSpinupGraceMs, and keep collector-plug.test.js in step with
+// firmware/test/test_collector_plug.cpp — same cases, same order. CLAUDE.md has
+// the row.
 const COLLECTOR_RUNNING_W = 50;
 
 // How long a blower gets to reach running draw before we call it a failure.
