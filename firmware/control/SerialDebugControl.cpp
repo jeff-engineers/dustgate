@@ -83,6 +83,12 @@ bool SerialDebugControl::consumeEStop() {
     return false;
 }
 
+bool SerialDebugControl::consumePressRequest() {
+    bool v = _pressRequest;
+    _pressRequest = false;
+    return v;
+}
+
 bool SerialDebugControl::consumeHomeRequest() {
     if (_homePending) {
         _homePending = false;
@@ -319,6 +325,12 @@ void SerialDebugControl::processLine(const String& line) {
 #endif
 
 #if defined(CONTROL_SMART_OUTLET) || defined(ENABLE_HTTP_API)
+    } else if (cmd == "press") {
+        // Fires on the main loop, where the transmitter lives — this only asks.
+        // Same shape as consumeHomeRequest(): a debug command never touches
+        // hardware from the serial task.
+        _pressRequest = true;
+        Serial.println(F("[RF] press queued — watch the receiver."));
     } else if (cmd == "mdnsprobe") {
         runMdnsProbe();
 #endif
@@ -931,6 +943,10 @@ void SerialDebugControl::printHelp() {
     Serial.println(F("  plugtrace         Toggle: timestamp every frame a plug pushes — how fast does it report?"));
 #endif
     Serial.println(F("  provision <json>  Write WiFi+host to NVS: {\"ssid\":\"x\",\"pass\":\"y\",\"host\":\"dustgate\"}"));
+    Serial.println(F("  press             Fire the collector's RF transmitter ONCE, now."));
+    Serial.println(F("                    Bypasses the retry policy — no cooldown, no"));
+    Serial.println(F("                    spin-up grace, no sensor needed. Needs a"));
+    Serial.println(F("                    control.rf block on the layout's collector."));
     Serial.println(F("  help              Show this list"));
 #if defined(PIN_PIXEL) || defined(PIN_LED)
     // The pixel is the only diagnostic you get once the board is in a box and

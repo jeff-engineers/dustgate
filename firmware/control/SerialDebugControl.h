@@ -41,6 +41,15 @@ public:
     // Returns true once per home-request event, then clears the flag.
     bool consumeHomeRequest();
 
+    // `press` — fire the collector's RF transmitter once, by hand.
+    //
+    // Bypasses the retry policy on purpose. The policy refuses to press in
+    // several situations that are correct at runtime and useless at a bench —
+    // the cooldown, the spin-up grace, an unreachable sensor — and a person
+    // standing next to the collector wants to see the relay click NOW. It is
+    // the same escape hatch `dc` gives for a switchable plug.
+    bool consumePressRequest();
+
     // Returns true once when user types 'reset'. The way back from a latched
     // fault WITHOUT power-cycling the board: the caller re-attempts the drive,
     // clears the boot fault flags and drops the estop. It exists because a
@@ -74,6 +83,7 @@ public:
     bool consumeServoRequest(int& outIndex, int& outAngle, bool& outDetach);
 
 private:
+    bool _pressRequest = false;   // `press` — fire the collector's RF once
     int  _requestedStop;
     bool _eStopPending;
     bool _homePending;

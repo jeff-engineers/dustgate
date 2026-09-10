@@ -796,6 +796,37 @@ const idxOf = (plan, sel) => plan.moves.findIndex((m) => m.selectorId === sel);
   check('the same ip as both switch and sensor → invalid', !r.ok && hasCode(r, 'element'));
 }
 
+// ── control.rf: pressing the collector's own remote ─────────────────────────
+{
+  const rf = mut((t) => { elem(t, 'dc').control = { rf: { pin: 4, address: 94, data: 14 } }; });
+  const r = validateTopology(rf);
+  check('a collector may be pressed by RF', r.ok, JSON.stringify(r.errors));
+}
+{
+  // Two ways to command one blower will fight: the plug switches it off while
+  // the transmitter is trying to toggle it on.
+  const both = mut((t) => {
+    elem(t, 'dc').control = { outlet: { ip: '192.168.87.70', kind: 'shelly' },
+                              rf: { pin: 4 } };
+  });
+  const r = validateTopology(both);
+  check('a plug AND an RF presser → invalid', !r.ok && hasCode(r, 'element'));
+}
+{
+  const badAddr = mut((t) => { elem(t, 'dc').control = { rf: { pin: 4, address: 300 } }; });
+  check('an address past 8 bits → invalid', !validateTopology(badAddr).ok);
+  const badData = mut((t) => { elem(t, 'dc').control = { rf: { pin: 4, data: 16 } }; });
+  check('a data word past 4 bits → invalid', !validateTopology(badData).ok);
+  const noPin = mut((t) => { elem(t, 'dc').control = { rf: { address: 94 } }; });
+  check('no pin → invalid', !validateTopology(noPin).ok);
+}
+{
+  // A press is an edge against a toggle, so only a collector has one to press.
+  const onTool = mut((t) => { elem(t, 'man').control = { rf: { pin: 4 } }; });
+  check('RF on something that is not a collector → invalid',
+        !validateTopology(onTool).ok);
+}
+
 // ── report ──────────────────────────────────────────────────────────────────
 let passed = 0;
 for (const r of results) {

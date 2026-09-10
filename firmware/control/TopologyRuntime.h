@@ -476,6 +476,17 @@ public:
 
     // Coast-down for one system. Absent means "the shop didn't say", not "none"
     // — see kDefaultCollectorOffDelayMs. An explicit 0 does disable it.
+    // The RF transmitter that presses this collector's remote ("" if none).
+    // A collector with this has no control.outlet — validateTopology() refuses
+    // both, because two ways to command one blower fight each other.
+    JsonObjectConst collectorRf(const std::string& systemId) const {
+        for (const SystemView& sys : systemsOf(topology())) {
+            if (std::string(sys.id ? sys.id : "") != systemId) continue;
+            return collectorOf(sys)["control"]["rf"];
+        }
+        return JsonObjectConst();
+    }
+
     uint32_t collectorOffDelayMs(const std::string& systemId) const {
         for (const SystemView& sys : systemsOf(topology())) {
             if (std::string(sys.id ? sys.id : "") != systemId) continue;

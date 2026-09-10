@@ -35,7 +35,9 @@
 #include "motor/MotorDriver.h"
 #include "feedback/FeedbackSystem.h"
 #include "control/ControlInput.h"
-#include "control/OutletSweep.h"   // the 254-address knock, one address per loop() pass
+#include "control/OutletSweep.h"
+#include "control/CollectorPress.h"        // the retry policy for a stateless press
+#include "control/RfCollectorPresser.h"    // ...and the one presser that exists   // the 254-address knock, one address per loop() pass
 #include "control/FaultPolicy.h"   // which begin() failure costs which capability
 #include "training/CalibrationStore.h"
 
@@ -719,12 +721,37 @@ static void syncControllerAliases() {
 // change instead of every pass. Cleared whenever a layout is adopted — slot i
 // may then be a different system's blower, and a stale "already asserted" would
 // be an answer about the wrong one.
+// ── Pressing the collector's own remote ──────────────────────────────────────
+//
+// A collector with `control.rf` has no switchable plug: we transmit its
+// remote's frame instead (docs/tool-sensing-rfc.md §4.2). That is an EDGE
+// against a TOGGLE, so it cannot be commanded, only nudged — and whether the
+// nudge landed is answered by the collector's sensor plug, not by us.
+// control/CollectorPress.h holds the policy; this holds the hardware and the
+// per-system bookkeeping it needs.
+//
+// Rebuilt on every adopt rather than reconfigured: a layout may move the
+// transmitter to another pin or name a different fob's address, and there is no
+// state in a presser worth preserving across that.
+static RfCollectorPresser* g_pressers[COLLECTOR_COUNT] = {nullptr};
+static topo::PressState    g_pressState[COLLECTOR_COUNT];
+
+static void clearPressers() {
+    for (int i = 0; i < COLLECTOR_COUNT; i++) {
+        delete g_pressers[i];
+        g_pressers[i]   = nullptr;
+        g_pressState[i] = topo::PressState();
+    }
+}
+
 static bool g_dcAsserted[COLLECTOR_COUNT] = {false};
 static bool g_dcHave[COLLECTOR_COUNT]     = {false};
 
 static void syncTopologyOutlets() {
     JsonObjectConst doc = g_topoRuntime.topology();
     for (int i = 0; i < COLLECTOR_COUNT; i++) g_dcHave[i] = false;
+    // Pressers are rebuilt below from whatever the new layout names.
+    clearPressers();
 
     // Walk MACHINES, not tool elements. A machine owns the plug, and a machine
     // with two ports (cabinet + overarm on a table saw) is still one plug — so
@@ -781,6 +808,22 @@ static void syncTopologyOutlets() {
             DEBUG_PRINTLN(F("[Outlets] Layout names no collector plug — keeping the stored one."));
         } else {
             control.removeCollector((int)i);
+        }
+
+        // The transmitter that presses this blower's remote, if it has one.
+        JsonObjectConst rf = g_topoRuntime.collectorRf(sysIds[i]);
+        if (!rf.isNull()) {
+            const int pin = rf["pin"] | -1;
+            if (pin >= 0) {
+                g_pressers[i] = new RfCollectorPresser(
+                    pin,
+                    (uint8_t)(rf["address"] | (int)RfCollectorPresser::kRocklerAddress),
+                    (uint8_t)(rf["data"]    | (int)RfCollectorPresser::kRocklerData),
+                    (uint32_t)(rf["tickUs"] | (int)RfCollectorPresser::kDefaultTickUs),
+                    (uint16_t)(rf["repeats"]| (int)RfCollectorPresser::kDefaultRepeats));
+                DEBUG_PRINT(F("[RF] Collector ")); DEBUG_PRINT((int)i);
+                DEBUG_PRINT(F(" pressed by RF on pin ")); DEBUG_PRINTLN(pin);
+            }
         }
 
         // The SENSE-ONLY plug watching this blower, which is a different device
@@ -1549,7 +1592,58 @@ void loop() {
             std::vector<std::string> sysIds = g_topoRuntime.systemIds();
             for (size_t i = 0; i < sysIds.size() && i < COLLECTOR_COUNT; i++) {
                 bool want = g_topoRuntime.collectorOn(sysIds[i]);
-                if (!g_dcHave[i] || want != g_dcAsserted[i]) {
+
+                // TWO WAYS TO COMMAND A BLOWER, and a layout has exactly one of
+                // them (validateTopology refuses both — they would fight).
+                if (g_pressers[i]) {
+                    // A PRESS, not a switch. The frame says "change", never "be
+                    // on", so this is a closed loop or nothing: the policy reads
+                    // what the sensor plug reports and presses again if the
+                    // blower disagrees. See control/CollectorPress.h — every
+                    // refusal in there is a case where pressing would have
+                    // turned a healthy blower OFF.
+                    const uint32_t now = millis();
+                    const topo::PlugState seen = g_topoRuntime.collectorPlugStateFor(sysIds[i]);
+                    switch (topo::nextPressAction(g_pressState[i], want, seen, now)) {
+                        case topo::PressAction::Press: {
+                            // ~500 ms of RMT. Acceptable on the main loop only
+                            // because it happens on a state change, not a tick —
+                            // and the watchdog runs at 10 s.
+                            watchdog::pet();
+                            const bool sent = g_pressers[i]->press();
+                            topo::notePress(g_pressState[i], want, now);
+                            DEBUG_PRINT(F("[RF] press #"));
+                            DEBUG_PRINT(g_pressState[i].attempts);
+                            DEBUG_PRINT(F(" wanting "));
+                            DEBUG_PRINT(want ? F("ON") : F("OFF"));
+                            DEBUG_PRINT(F(" (saw "));
+                            DEBUG_PRINT(topo::plugStateName(seen));
+                            DEBUG_PRINTLN(sent ? F(") -> sent") : F(") -> TRANSMIT FAILED"));
+                            watchdog::pet();
+                            break;
+                        }
+                        case topo::PressAction::GiveUp:
+                            if (!g_pressState[i].gaveUp) {
+                                topo::noteGaveUp(g_pressState[i]);
+                                // Said ONCE. The state latches, so this does not
+                                // become a line per loop for the rest of the day.
+                                DEBUG_PRINT(F("[RF] Collector ")); DEBUG_PRINT((int)i);
+                                DEBUG_PRINT(F(" did not respond after "));
+                                DEBUG_PRINT(topo::kMaxPressAttempts);
+                                DEBUG_PRINTLN(F(" presses — check the breaker, the cord, "
+                                                "and the fob's battery."));
+                            }
+                            break;
+                        case topo::PressAction::Nothing:
+                            // Settled: clear the budget so the next disagreement
+                            // gets a full one rather than the tail of this one.
+                            if (seen == (want ? topo::PlugState::Running
+                                              : topo::PlugState::Off))
+                                topo::noteSettled(g_pressState[i]);
+                            break;
+                    }
+                    g_dcAsserted[i] = want; g_dcHave[i] = true;
+                } else if (!g_dcHave[i] || want != g_dcAsserted[i]) {
                     control.setCollectorManual((int)i, want);
                     g_dcAsserted[i] = want; g_dcHave[i] = true;
                 }
@@ -1693,6 +1787,25 @@ void loop() {
 
     if (_SC.consumeResetRequest()) {
         retryDrive("reset");
+    }
+
+    // `press` — fire the collector's transmitter once, by hand.
+    //
+    // Bypasses the retry policy deliberately. That policy refuses to press in
+    // several situations that are right at runtime and useless at a bench (the
+    // cooldown, the spin-up grace, an unreachable sensor), and someone standing
+    // next to the collector wants the relay to click now.
+    if (_SC.consumePressRequest()) {
+        RfCollectorPresser* p = g_pressers[0];
+        if (!p) {
+            Serial.println(F("[RF] No RF presser configured — the layout's collector "
+                             "needs a control.rf block (pin, address, data)."));
+        } else {
+            watchdog::pet();
+            const bool sent = p->press();
+            watchdog::pet();
+            Serial.println(sent ? F("[RF] sent.") : F("[RF] TRANSMIT FAILED."));
+        }
     }
 
     if (_SC.consumeHomeRequest() && currentState != STATE_HOMING) {
