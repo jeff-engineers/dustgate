@@ -1,0 +1,343 @@
+<meta charset="utf-8">
+<title>Matching the Remote</title>
+
+<style>
+  :root {
+    --bg: #111; --surface: #1e1e1e; --raised: #262626; --border: #2e2e2e;
+    --text: #e8e8e8; --muted: #8a8a86; --accent: #f0a500; --success: #3cbe6e;
+    --danger: #d94444; --radius: 14px;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); margin: 0; padding: 22px 18px 72px;
+         font-family: system-ui, -apple-system, sans-serif; font-size: 15px; line-height: 1.5; }
+  .wrap { max-width: 1080px; margin: 0 auto; display: flex; flex-direction: column; gap: 24px; }
+  h1 { font-size: 22px; font-weight: 600; margin: 6px 0 0; letter-spacing: -0.01em; }
+  h2 { font-size: 13.5px; font-weight: 600; margin: 0; }
+  h3 { font-size: 15px; font-weight: 600; margin: 0 0 2px; }
+  .lede { color: var(--muted); font-size: 13.5px; max-width: 68ch; margin: 6px 0 0; }
+  .eyebrow { font-size: 11px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--muted); }
+  p { margin: 0; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.92em; }
+  a { color: var(--accent); }
+  .rule { height: 1px; background: var(--border); border: 0; margin: 0; }
+  .sec { display: flex; flex-direction: column; gap: 12px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 15px 16px; }
+  .card p + p { margin-top: 9px; }
+  .note { font-size: 12.5px; color: var(--muted); line-height: 1.55; }
+  .note b { color: var(--text); font-weight: 600; }
+  .banner { background: #241c06; border: 1px solid #4a3a0d; border-radius: var(--radius);
+            padding: 13px 15px; font-size: 13px; line-height: 1.55; }
+  .banner b { color: var(--accent); }
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
+
+  /* ── the phone ───────────────────────────────────────────────────────── */
+  .phones { display: flex; gap: 20px; flex-wrap: wrap; }
+  .phone { width: 375px; max-width: 100%; background: var(--bg); border: 1px solid #202225;
+           border-radius: 18px; padding: 14px 13px 18px; flex: none; }
+  .phone .cap { font-size: 12px; color: var(--muted); margin-bottom: 10px; }
+  .head { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+  .back { background: var(--surface); border: 1px solid var(--border); border-radius: 50%;
+          width: 34px; height: 34px; display: flex; align-items: center; justify-content: center;
+          color: var(--muted); flex: none; }
+  .title { font-size: 17px; font-weight: 600; }
+  .prompt { font-size: 13.5px; color: var(--muted); line-height: 1.55; margin-bottom: 14px; }
+  .prompt b { color: var(--text); font-weight: 500; }
+
+  /* ── the DIP ─────────────────────────────────────────────────────────────
+     Drawn as the physical part, not as eight checkboxes. The user is holding a
+     switch and copying what they see; anything that does not LOOK like the
+     switch makes them translate, and translation is where it goes wrong. */
+  .dip { background: #17181a; border: 1px solid var(--border); border-radius: 12px;
+         padding: 14px 12px 12px; }
+  .dip-body { background: #d8452f; border-radius: 4px; padding: 9px 8px 7px;
+              display: flex; gap: 5px; justify-content: center; box-shadow: inset 0 -2px 0 rgba(0,0,0,.25); }
+  .rocker { width: 26px; flex: none; text-align: center; }
+  .slot { background: #2a2b2d; border-radius: 3px; height: 46px; position: relative;
+          cursor: pointer; box-shadow: inset 0 1px 3px rgba(0,0,0,.6); }
+  /* The white nub. TOP = ON = closed = grounded = logic 0. That mapping is the
+     one thing on this screen that can be silently wrong — see the notes. */
+  .nub { position: absolute; left: 2px; right: 2px; height: 20px; border-radius: 2px;
+         background: #f2f2ef; box-shadow: 0 1px 2px rgba(0,0,0,.5); transition: top .12s ease; top: 24px; }
+  .slot.on .nub { top: 2px; }
+  .rocker .n { font-size: 10.5px; color: #7a1e13; font-weight: 700; margin-top: 3px; }
+  .dip-on { font-size: 9.5px; letter-spacing: .14em; color: #7a1e13; font-weight: 700;
+            text-align: center; margin-bottom: 4px; text-transform: uppercase; }
+
+  .readout { display: flex; align-items: baseline; justify-content: space-between;
+             margin-top: 13px; padding-top: 12px; border-top: 1px solid var(--border); }
+  .readout .lbl { font-size: 12.5px; color: var(--muted); }
+  .readout .val { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+                  font-size: 19px; font-weight: 600; color: var(--accent); }
+  .readout .bin { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+                  font-size: 11.5px; color: var(--muted); }
+
+  .where { background: var(--raised); border: 1px solid var(--border); border-radius: 11px;
+           padding: 11px 12px; font-size: 12.5px; color: var(--muted); line-height: 1.55; margin-top: 12px; }
+  .where b { color: var(--text); font-weight: 500; }
+
+  .actions { display: flex; gap: 8px; margin-top: 14px; }
+  .btn { flex: 1; padding: 11px; border-radius: 11px; border: 1px solid var(--border);
+         background: var(--surface); color: var(--text); font-size: 14px; text-align: center; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #1a1200; font-weight: 600; }
+  .btn.test { flex: 0 0 auto; padding: 11px 15px; }
+
+  .log { margin-top: 11px; font-size: 12.5px; color: var(--muted); line-height: 1.6; }
+  .log .ok { color: var(--success); }
+
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: 11.5px; text-transform: uppercase; letter-spacing: .06em; }
+  td code { color: var(--accent); }
+</style>
+
+<div class="wrap">
+
+  <div>
+    <p class="eyebrow">exploration · rf collector · 2026-09-10</p>
+    <h1>Matching the Remote</h1>
+    <p class="lede">
+      DustGate presses the dust collector's remote by transmitting its frame. To do that it
+      needs the remote's <b>address</b> — eight bits set by a DIP switch inside the fob. There is
+      no receiver in the product, so the user reads the switch and copies it.
+    </p>
+  </div>
+
+  <div class="banner">
+    <b>The whole screen is one idea:</b> don't ask a woodworker what an address is. Show them a
+    picture of the switch they are holding and let them match it. The number underneath exists
+    for support calls, not for them.
+  </div>
+
+  <hr class="rule">
+
+  <!-- ────────────────────────────────────────────────────────────────── -->
+  <div class="sec">
+    <h2>The screen</h2>
+    <div class="phones">
+
+      <div class="phone">
+        <p class="cap">Setup → Dust collector → Remote</p>
+        <div class="head">
+          <span class="back">←</span>
+          <span class="title">Remote</span>
+        </div>
+        <p class="prompt">
+          Open the battery cover on your collector's remote. Inside is a row of
+          <b>eight small switches</b>. Set these to match.
+        </p>
+
+        <div class="dip">
+          <div class="dip-on">on</div>
+          <div class="dip-body" id="dip"></div>
+          <div class="readout">
+            <span class="lbl">Address</span>
+            <span><span class="bin" id="bin"></span> &nbsp; <span class="val" id="val"></span></span>
+          </div>
+        </div>
+
+        <div class="where">
+          <b>Can't open the remote?</b> The receiver box has the same switch inside — they have to
+          match for the remote to work, so either one gives the right answer.
+        </div>
+
+        <div class="actions">
+          <span class="btn test" id="test">Test</span>
+          <span class="btn primary">Save</span>
+        </div>
+        <p class="log" id="log">Put a lamp in the collector's outlet and tap Test.</p>
+      </div>
+
+      <div class="phone">
+        <p class="cap">After a successful test</p>
+        <div class="head">
+          <span class="back">←</span>
+          <span class="title">Remote</span>
+        </div>
+        <p class="prompt">
+          Open the battery cover on your collector's remote. Inside is a row of
+          <b>eight small switches</b>. Set these to match.
+        </p>
+        <div class="dip">
+          <div class="dip-on">on</div>
+          <div class="dip-body" id="dip2"></div>
+          <div class="readout">
+            <span class="lbl">Address</span>
+            <span><span class="bin" id="bin2"></span> &nbsp; <span class="val" id="val2"></span></span>
+          </div>
+        </div>
+        <div class="where">
+          <b>Can't open the remote?</b> The receiver box has the same switch inside — they have to
+          match for the remote to work, so either one gives the right answer.
+        </div>
+        <div class="actions">
+          <span class="btn test">Test</span>
+          <span class="btn primary">Save</span>
+        </div>
+        <p class="log"><span class="ok">✓ The collector answered.</span> Tap Test again to switch it back off.</p>
+      </div>
+
+    </div>
+  </div>
+
+  <hr class="rule">
+
+  <!-- ────────────────────────────────────────────────────────────────── -->
+  <div class="sec">
+    <h2>Decisions</h2>
+    <div class="grid2">
+
+      <div class="card">
+        <h3>Draw the part, not eight checkboxes</h3>
+        <p class="note">
+          The user is holding a physical switch and copying it. Anything that does not look like
+          that switch makes them <b>translate</b>, and translation is the entire failure mode
+          here. Red body, white nubs, numbers on the package, <code>ON</code> printed along one
+          edge — because that is what is in their hand.
+        </p>
+      </div>
+
+      <div class="card">
+        <h3>The labelling is the only thing that can be silently wrong</h3>
+        <p class="note">
+          Rocker <i>N</i> is address bit <i>N−1</i>, and <b>ON = closed = grounded = 0</b>. Get
+          that inverted and every address comes out bit-flipped — the transmitter works
+          perfectly, the receiver ignores it, and nothing on any screen looks broken. It is why
+          the drawing has to carry the <code>ON</code> legend in the same place the real part
+          does, rather than a caption saying which way is on.
+        </p>
+      </div>
+
+      <div class="card">
+        <h3>Show the number, for someone else's benefit</h3>
+        <p class="note">
+          Nobody setting this up needs to see <code>94</code>. It is there so a support
+          conversation can be <i>"what does it say?"</i> rather than <i>"describe your
+          switches"</i>, and so a layout edited by hand and one set here are visibly the same
+          thing. Kept quiet — muted, under the drawing, never the headline.
+        </p>
+      </div>
+
+      <div class="card">
+        <h3>Test before Save, and test with a lamp</h3>
+        <p class="note">
+          The address is unverifiable by inspection: a wrong one fails silently. So the screen
+          offers one press and watches for the collector's own plug to answer — the closed loop
+          we already built. A <b>lamp</b> in the outlet, not the collector, because a blower
+          takes seconds to spin up and coast down and a lamp is instant and unambiguous.
+        </p>
+      </div>
+
+      <div class="card">
+        <h3>The receiver has the same switch</h3>
+        <p class="note">
+          An HT12D has to match its encoder, so the receiver box carries an identical 8-way DIP.
+          That is a second place to read the same answer, and it matters more than it sounds: a
+          fob can be lost, glued shut, or painted over, and the receiver is screwed to a wall.
+        </p>
+      </div>
+
+      <div class="card">
+        <h3>Not a receiver, deliberately</h3>
+        <p class="note">
+          "Learn mode" — listen for the fob and capture its address off the air — needs receiver
+          hardware in every unit for a step performed once. Reading the switch costs nothing and
+          works when the fob's battery is dead. If a later product already carries a receiver
+          for other reasons, this becomes worth revisiting.
+        </p>
+      </div>
+
+    </div>
+  </div>
+
+  <hr class="rule">
+
+  <!-- ────────────────────────────────────────────────────────────────── -->
+  <div class="sec">
+    <h2>What it writes</h2>
+    <div class="card">
+      <table>
+        <tr><th>Field</th><th>From</th><th>Notes</th></tr>
+        <tr>
+          <td><code>control.rf.address</code></td>
+          <td>this screen</td>
+          <td>0–255. Bit <i>i</i> = rocker <i>i+1</i>, open = 1.</td>
+        </tr>
+        <tr>
+          <td><code>control.rf.data</code></td>
+          <td>not asked</td>
+          <td>Defaults to the measured <code>0b1110</code>. A single-button fob asserts one data
+              line; sweeping for it is a bench job, not a setup question.</td>
+        </tr>
+        <tr>
+          <td><code>control.rf.pin</code></td>
+          <td>not asked</td>
+          <td>A property of how the board is built, not of the user's remote. Comes from the
+              board's default pad.</td>
+        </tr>
+      </table>
+      <p class="note" style="margin-top:11px">
+        A collector with <code>control.rf</code> must not also have <code>control.outlet</code> —
+        two ways to command one blower fight each other, and the model already refuses it.
+      </p>
+    </div>
+  </div>
+
+  <hr class="rule">
+
+  <div class="sec">
+    <h2>Open</h2>
+    <div class="card">
+      <p class="note">
+        <b>Other remotes are not all HT12E.</b> This screen assumes eight address bits and a DIP.
+        Plenty of collector remotes are rolling-code or fixed-code-with-no-switch, and those
+        cannot be matched this way at all — they need the servo presser
+        (<code>tool-sensing-rfc.md</code> §4.2a), which does not care what the protocol is.
+        Deciding how the setup flow ASKS which kind you have is not designed yet, and is
+        probably the first thing that turns this one screen into a branch.
+      </p>
+      <p class="note">
+        <b>Multi-button fobs</b> (§4.2b) would need a data word per button, not one. Out of scope
+        here; the servo path handles them more naturally.
+      </p>
+    </div>
+  </div>
+
+</div>
+
+<script>
+  // The Rockler's own setting: rockers 1, 6 and 8 CLOSED (down = off = grounded),
+  // which is 0b01011110 = 94. Used as the demo state so the drawing shows a real
+  // answer rather than an arbitrary one.
+  const ROCKLER = [false, true, true, true, true, false, true, false]; // index i = rocker i+1 OPEN?
+
+  function build(host, binEl, valEl, state, interactive) {
+    const render = () => {
+      host.innerHTML = '';
+      state.forEach((open, i) => {
+        const r = document.createElement('div');
+        r.className = 'rocker';
+        // `.on` means the nub is UP, at the ON legend — which is CLOSED, which is 0.
+        r.innerHTML = `<div class="slot ${open ? '' : 'on'}"><div class="nub"></div></div>
+                       <div class="n">${i + 1}</div>`;
+        if (interactive) r.querySelector('.slot').onclick = () => { state[i] = !state[i]; render(); };
+        host.appendChild(r);
+      });
+      const v = state.reduce((a, open, i) => a + (open ? (1 << i) : 0), 0);
+      valEl.textContent = v;
+      binEl.textContent = state.map(o => o ? 1 : 0).reverse().join('');
+    };
+    render();
+  }
+
+  build(document.getElementById('dip'),  document.getElementById('bin'),
+        document.getElementById('val'),  ROCKLER.slice(), true);
+  build(document.getElementById('dip2'), document.getElementById('bin2'),
+        document.getElementById('val2'), ROCKLER.slice(), false);
+
+  const log = document.getElementById('log');
+  document.getElementById('test').onclick = () => {
+    log.innerHTML = 'Transmitting…';
+    setTimeout(() => { log.innerHTML = '<span class="ok">✓ The collector answered.</span> ' +
+                                       'Tap Test again to switch it back off.'; }, 900);
+  };
+</script>

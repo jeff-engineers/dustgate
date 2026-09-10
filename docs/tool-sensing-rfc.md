@@ -850,6 +850,46 @@ This is the most valuable decision in the document, because of what it avoids:
 Cost on the sensor board: a few hundred bytes of `WebServer` handler on top of
 the ADC loop.
 
+### 6.2 The collector gets its own hardware (2026-09-10)
+
+**Decided.** A collector board is a board at the collector, doing only collector
+things: bin level, a CT clamp, the RF transmitter, lamps. It does not drive
+gates, and gate-driving boards do not do these jobs.
+
+The alternative — hang each capability off whichever node is nearest — was the
+working assumption until a pin budget killed it. **On a four-gate primary with a
+screen there is exactly ONE ordinary pad left.** D3 is a strapping pin and D0 is
+the only analog pad on the edge (spoken for by a CT), which leaves D6, and the
+bin sensor already had it. So bin-level and RF-transmit could not coexist —
+while wanting, obviously, to be in the same corner of the shop, because the bin
+and the collector's receiver are three feet apart.
+
+A board that drives no gates has the whole D7..D10 PWM block free, and the
+question evaporates. Nothing is being squeezed.
+
+**It is not a new firmware target.** Same node build, same NodeLink, same
+`BOARD_NAME`. What differs is what the LAYOUT asks of it — `bin.sensor.
+controllerId`, `control.rf` — which is a topology fact, exactly as CLAUDE.md
+already says of the bin sensor ("a CAPABILITY not a node type"). The refinement
+is that the capabilities cluster: they are all *collector* capabilities, they
+all want the same location, and together they need more pads than a gate board
+can spare. So they get a board, and it stays a plain node.
+
+Consequences worth stating:
+
+- **Range stops being a worry for the transmitter.** It sits beside the receiver
+  rather than wherever the routing brain happens to live.
+- **A CT at the collector is now easy**, and it is the one place a CT is
+  clearly worth having even with §5.4 closed and §5.4a's threshold question
+  open: a blower is a single large motor with an unambiguous running draw, which
+  is the easiest possible signal to separate from noise.
+- **It is the natural home for the servo fob-presser too** (§4.2a), which needs
+  a PWM channel — and now there are four spare ones.
+- **It costs a board per collector.** That is the honest price, and it buys a
+  clean pin budget and a sane install: one box at the collector, one cable run
+  to it, rather than three capabilities threaded back to boards chosen for
+  where the gates are.
+
 ## 7. One node per tool?
 
 Since the CT already forces a powered, WiFi-connected box at each tool, the gate

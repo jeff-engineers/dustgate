@@ -1796,10 +1796,27 @@ void loop() {
     // cooldown, the spin-up grace, an unreachable sensor), and someone standing
     // next to the collector wants the relay to click now.
     if (_SC.consumePressRequest()) {
+        // FALLS BACK TO THE BOARD'S DEFAULT PAD when no layout names one.
+        //
+        // A bench command that needs a valid layout cannot diagnose a bad
+        // layout, and "does the radio work at all" is the question you ask
+        // BEFORE writing a control.rf block. So an unconfigured `press` uses
+        // PIN_RF_TX with the measured Rockler address and data word — which is
+        // exactly the wiring someone testing this for the first time will have.
         RfCollectorPresser* p = g_pressers[0];
+#ifdef PIN_RF_TX
+        static RfCollectorPresser* benchPresser = nullptr;
         if (!p) {
-            Serial.println(F("[RF] No RF presser configured — the layout's collector "
-                             "needs a control.rf block (pin, address, data)."));
+            if (!benchPresser) benchPresser = new RfCollectorPresser(PIN_RF_TX);
+            p = benchPresser;
+            Serial.print(F("[RF] No control.rf in the layout — using D6/GPIO"));
+            Serial.print(PIN_RF_TX);
+            Serial.println(F(" with the measured Rockler address."));
+        }
+#endif
+        if (!p) {
+            Serial.println(F("[RF] No RF presser configured, and this board has no "
+                             "default pad (a slider build uses D6 for the servo bus)."));
         } else {
             watchdog::pet();
             const bool sent = p->press();

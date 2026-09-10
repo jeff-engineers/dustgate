@@ -231,6 +231,47 @@
 #define PIN_BIN_SENSOR  11   // D6, opto output, LOW = bin full
 #endif
 
+// -- 315 MHz transmitter: pressing the collector's remote --
+//
+// The DATA line of a 315 MHz OOK transmitter module, keyed with the HT12E frame
+// the dust collector's own fob sends (control/RfCollectorPresser.h,
+// docs/tool-sensing-rfc.md §4.2). One pin, output only — the module needs no
+// enable and we never receive.
+//
+// SHARES A PAD WITH THE BIN SENSOR, AND THAT IS FINE — because they never share
+// a BOARD (Jeff, 2026-09-10). The collector gets its own hardware: bin level,
+// CT clamp, transmitter, lamps, in one box at the collector, rather than
+// piggybacking on a board that is also driving gates.
+//
+// That decision is what makes the pin budget work. The conflict this note used
+// to describe was real and ugly — on a four-gate primary with a screen, D6 is
+// the ONLY ordinary pad left (D3 is a strapping pin, D0 is the analog pad a CT
+// wants), so one board could watch a bin or key a transmitter but not both, and
+// both want to be in the same corner of the shop. A board that drives no gates
+// has the whole D7..D10 PWM block free and the question evaporates.
+//
+// So on a COLLECTOR board, put the transmitter on any of D7..D10 and leave D6
+// to the bin sensor. This define stays at D6 because it is the pad that is free
+// on a PRIMARY, which is what the bench `press` command runs on — and a layout's
+// `control.rf.pin` overrides it anyway.
+//
+// RANGE argues the same way: the transmitter wants to be near the receiver, and
+// the primary may be across the shop.
+//
+// NOT WIRED BY DEFAULT. Defining the pin says "this is where it would go", the
+// same contract as PIN_BIN_SENSOR — whether a board actually transmits is
+// decided by the layout's `control.rf`, which carries its own pin and overrides
+// this. This is the fallback the serial `press` command uses so the radio can
+// be tested before any layout names it.
+//
+// Wire: module VCC -> 5V (the cheap modules want 5V for useful range; the DATA
+//       line is 3.3V-tolerant as an input), GND -> GND, DATA -> D6.
+//       A 17 cm wire on the module's ANT pad is a quarter wave at 315 MHz and
+//       is worth more than anything else on this list.
+#if !defined(DUSTGATE_SERVO_BUS)
+#define PIN_RF_TX       11   // D6 — see the bin-sensor conflict above
+#endif
+
 // -- The serial-servo bus moved UP --
 // It is defined with the PWM block it replaces (-DDUSTGATE_SERVO_BUS), because
 // the two are one choice and reading them apart is what let the pin map claim

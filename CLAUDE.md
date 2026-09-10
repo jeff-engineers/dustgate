@@ -289,6 +289,16 @@ These are decided; don't relitigate them in code review or suggestions.
   grid until 2026-08-16; `docs/boards-on-canvas-plan.md` records why that came out
   and which alternatives were rejected. Nothing stops you dragging a board low,
   where its cables route badly: the fix is the default, not a rule.
+- **The collector gets its own board.** Bin level, a CT clamp, the RF
+  transmitter that presses its remote, lamps — all on one board at the
+  collector, none of them hung off a board that also drives gates. Not a new
+  firmware target: same node build, same NodeLink, and which jobs it does is
+  still a TOPOLOGY fact. What forced it is the pin budget — a four-gate primary
+  with a screen has exactly ONE ordinary pad left (D3 is a strap, D0 is the
+  analog pad a CT wants), so bin-level and RF-transmit could not coexist while
+  both wanting to sit three feet from each other. A board driving no gates has
+  the whole PWM block free. `docs/tool-sensing-rfc.md` §6.2.
+
 - **A machine is ONE box, however many ports it has.** A second pickup — an
   overarm guard, a hood — is a differently-shaped inlet on that same box (square =
   the primary port, tapered = the secondary port), not a second body. It owns
