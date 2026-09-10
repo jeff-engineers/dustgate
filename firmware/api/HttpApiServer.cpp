@@ -117,6 +117,8 @@ HttpApiServer::HttpApiServer()
       _dcSwitchPending(false), _dcSwitchOn(false),
       _discoverPending(false),
       _pingPending(false),
+      _sweepStartPending(false),
+      _sweepCancelPending(false),
       _takeoverPending(false),
       _outletNamePending(false), _outletNameTakeover(false),
       _outletReleasePending(false)
@@ -693,6 +695,28 @@ bool HttpApiServer::consumePingRequest(char* outIp, size_t ipLen) {
     if (v) strlcpy(outIp, _pingIp, ipLen);
     xSemaphoreGive(_mutex);
     return v;
+}
+
+bool HttpApiServer::consumeSweepStart() {
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    bool v = _sweepStartPending;
+    _sweepStartPending = false;
+    xSemaphoreGive(_mutex);
+    return v;
+}
+
+bool HttpApiServer::consumeSweepCancel() {
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    bool v = _sweepCancelPending;
+    _sweepCancelPending = false;
+    xSemaphoreGive(_mutex);
+    return v;
+}
+
+void HttpApiServer::publishSweepProgress(const String& json) {
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    _sweepProgressJson = json;
+    xSemaphoreGive(_mutex);
 }
 
 void HttpApiServer::respondPing(const String& json) {
@@ -1462,6 +1486,49 @@ void HttpApiServer::registerRoutes() {
         xSemaphoreGive(_mutex);
         // body filled later by the main loop via respondDiscover()
         beginDeferred(req, _discoverReply);
+    });
+
+    // Subnet sweep — POST to start, GET to poll, DELETE to stop.
+    //
+    // NOT DEFERRED, and that is the difference from every other outlet route
+    // here. discover and ping hold the request open while the main loop works;
+    // a sweep is ~60s and beginDeferred()'s budget is 15s, so holding it would
+    // time out every time. POST answers at once and the browser polls.
+    //
+    // Registered BEFORE /api/outlets for the same prefix-matching reason
+    // documented on the discover route above — ESPAsyncWebServer dispatches to
+    // the first registered match, and the bare list route swallows anything
+    // under /api/outlets/ that is registered after it.
+    _server.on("/api/outlets/sweep", HTTP_POST, [this](AsyncWebServerRequest* req) {
+        if (!checkAuth(req)) return;
+        xSemaphoreTake(_mutex, portMAX_DELAY);
+        _sweepStartPending = true;
+        xSemaphoreGive(_mutex);
+        // Deliberately does NOT report whether a sweep was already running:
+        // that answer is a race by the time the browser reads it, and the very
+        // next poll says so authoritatively. OutletSweep::begin() refuses a
+        // restart, so a double tap cannot lose progress either way.
+        sendOk(req);
+    });
+
+    _server.on("/api/outlets/sweep", HTTP_GET, [this](AsyncWebServerRequest* req) {
+        if (!checkAuth(req)) return;
+        xSemaphoreTake(_mutex, portMAX_DELAY);
+        String out = _sweepProgressJson;
+        xSemaphoreGive(_mutex);
+        // Empty before the loop has ever published — answer the shape the UI
+        // expects rather than nothing, so a poll that races a boot doesn't
+        // have to be special-cased in the browser.
+        if (out.length() == 0) out = F("{\"running\":false,\"scanned\":0,\"total\":254,\"found\":[],\"everRan\":false}");
+        req->send(200, "application/json", out);
+    });
+
+    _server.on("/api/outlets/sweep", HTTP_DELETE, [this](AsyncWebServerRequest* req) {
+        if (!checkAuth(req)) return;
+        xSemaphoreTake(_mutex, portMAX_DELAY);
+        _sweepCancelPending = true;
+        xSemaphoreGive(_mutex);
+        sendOk(req);
     });
 
     // GET /api/outlets — list with live readings

@@ -133,6 +133,11 @@ export interface DiscoveredOutlet {
   reachable: boolean;
   powerW: number;
   gen: number;
+  /** Which protocol the plug speaks. Absent means 'shelly' — the firmware
+   *  defaults the same way, so a missing field must keep meaning Shelly. */
+  kind?: 'shelly' | 'tasmota';
+  /** Whether this row may be chosen as-is (false when ownership is unknown). */
+  pickable?: boolean;
   /** Who owns it (RFC §8) — decides whether we may write its name unprompted. */
   claim?: string;
   /** Who has it now, for the explanation shown on the row. */
@@ -162,12 +167,8 @@ export interface OutletReleaseResult {
   error?: string;
 }
 
-export interface PingResult {
-  reachable: boolean;
-  powerW: number;
-  gen: number;
-  name: string;
-}
+// PingResult is GONE (2026-09-09): /api/outlets/ping answers with a full
+// DiscoveredOutlet, so a plug added by IP is the same shape as a scanned one.
 
 export interface SaveStopResult {
   ok: boolean;
@@ -211,7 +212,23 @@ export function ensureDiscovered(d: Device): DiscoveredOutlet[];
 export function discoverOutlets(d: Device): DiscoveredOutlet[];
 /** Put the plugs a saved document is already paired to on the simulated network. */
 export function adoptOutlets(d: Device, doc: unknown): DiscoveredOutlet[];
-export function pingOutlet(d: Device, ip: string): PingResult;
+export function pingOutlet(d: Device, ip: string): DiscoveredOutlet;
+
+/** Progress of the 254-address sweep — the only way to find a plug that
+ *  advertises nothing. Start / poll / cancel, because on the device it takes
+ *  about a minute. */
+export interface SweepProgress {
+  running: boolean;
+  scanned: number;
+  total: number;
+  everRan: boolean;
+  cancelled: boolean;
+  finishedAgoMs: number;
+  found: DiscoveredOutlet[];
+}
+export function startSweep(d: Device): SweepProgress;
+export function cancelSweep(d: Device): SweepProgress;
+export function sweepProgress(d: Device): SweepProgress;
 export function nameForIp(d: Device, ip: string): string;
 export function nameOutlet(d: Device, ip: string, label: string, takeover?: boolean): OutletNameResult;
 export function takeoverOutlet(d: Device, ip: string): { ok: boolean; claim?: string; error?: string };

@@ -150,6 +150,8 @@ function createDevice() {
     // ── internal sim state (never sent on the wire; underscore-prefixed) ──
     _discovered: null,        // lazily generated discover list, stable per device
     _pingCount:  {},          // pings seen per IP (drives the turn-on model)
+    _sweep:      null,        // subnet sweep state; see startSweep()
+    _sweepable:  null,        // the plugs a sweep can find, staged once
     _pingBase:   {},          // stable running draw (W) per IP
   };
 }
@@ -363,6 +365,8 @@ function clearCal(d) {
   d.dcIp         = null;
   d.dcHost       = '';
   d._pingCount = {};
+  d._sweep = null;
+  d._sweepable = null;
   d._pingBase  = {};
   return { ok: true };
 }
@@ -712,15 +716,52 @@ function _runningWatts(d, ip) {
 }
 
 /** POST /api/outlets/ping — first ping to an IP is 0W (off), then running draw. */
+// Probe ONE address, typed by a person. This is the "add it by IP" path, and it
+// answers with the SAME ROW SHAPE as discoverOutlets() — same fields, same claim
+// — so a plug added by hand is indistinguishable in the picker from one that was
+// found by scanning. That sameness is the feature, not a coincidence: the
+// firmware shares one describeOutletInto() between the two callers for exactly
+// this reason, and this function is the model's half of that contract.
+//
+// It matters most for the device that CANNOT be discovered. A Tasmota does not
+// advertise over mDNS in a stock build, so typing its address is the only way in
+// (docs/tool-sensing-rfc.md §12) — which is why this returns `kind` rather than
+// assuming Shelly the way it did until 2026-09-09.
 function pingOutlet(d, ip) {
   if (!ip) throw badRequest("missing 'ip'");
-  // The dust collector's own plug follows its real on/off switch state.
-  if (ip === d.dcIp) {
-    return { reachable: true, powerW: d.dcOn ? 380 : 0, gen: 2, name: nameForIp(d, ip) };
+
+  // Already known to us? Answer with the row we'd give for it, so adding a plug
+  // by IP that discovery had also found doesn't produce a second, different-
+  // looking entry for the same device.
+  const known = ensureDiscovered(d).find(x => x.ip === ip);
+  if (known) {
+    const suffix = OWNER_SEP + OUR_NAME;
+    return {
+      ...known,
+      name: known.name && known.name.endsWith(suffix)
+        ? known.name.slice(0, -suffix.length) : known.name,
+    };
   }
+
+  const row = (powerW, name) => ({
+    ip,
+    hostname: ip,          // no mDNS name for a hand-typed address; the firmware
+                           // falls back to the address the same way
+    name: name || '',
+    reachable: true,
+    powerW,
+    gen: 2,
+    kind: 'shelly',
+    claim: 'unclaimed',
+    pickable: true,
+    takeable: false,
+  });
+
+  // The dust collector's own plug follows its real on/off switch state.
+  if (ip === d.dcIp) return row(d.dcOn ? 380 : 0, nameForIp(d, ip));
+
   d._pingCount[ip] = (d._pingCount[ip] || 0) + 1;
-  const powerW = d._pingCount[ip] === 1 ? 0 : _runningWatts(d, ip);
-  return { reachable: true, powerW, gen: 2, name: nameForIp(d, ip) };
+  return row(d._pingCount[ip] === 1 ? 0 : _runningWatts(d, ip), nameForIp(d, ip));
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -732,7 +773,106 @@ function badRequest(msg) {
   return e;
 }
 
+// ── Subnet sweep ─────────────────────────────────────────────────────────────
+//
+// The only way to find a plug that advertises nothing. mDNS finds a Shelly in
+// three seconds and will never find a stock Tasmota — so for the sense-only
+// plug this project prefers, knocking on all 254 addresses is the only route
+// that does not require the user to already know the answer.
+//
+// Modelled as start / poll / cancel rather than one call that returns a list,
+// because on the device it takes about a minute and no HTTP request survives
+// that. The UI polls, and the bar shows progress while the user carries on
+// laying out the shop.
+//
+// SIMULATED AGAINST THE WALL CLOCK, not a tick count, so the demo and the mock
+// behave the same whether they are polled twice a second or once. The device
+// paces itself by loop() passes at roughly one address per pass; kSweepMsPerAddr
+// is that same pace expressed as time, which is what a caller can actually
+// observe.
+const SWEEP_TOTAL = 254;
+const SWEEP_MS_PER_ADDR = 240;
+
+/** Begin a pass. A second call while one runs is a no-op, matching
+ *  OutletSweep::begin() — a double tap must not restart and lose progress. */
+function startSweep(d) {
+  if (d._sweep && d._sweep.running) return sweepProgress(d);
+  d._sweep = { startedAt: Date.now(), running: true, cancelled: false,
+               finishedAt: 0, found: [] };
+  return sweepProgress(d);
+}
+
+/** Stop early, KEEPING what was found — someone who stops because they saw the
+ *  plug they wanted appear must not lose it. */
+function cancelSweep(d) {
+  if (d._sweep && d._sweep.running) {
+    d._sweep.running = false;
+    d._sweep.cancelled = true;
+    d._sweep.finishedAt = Date.now();
+  }
+  return sweepProgress(d);
+}
+
+function sweepProgress(d) {
+  const sw = d._sweep;
+  if (!sw) {
+    return { running: false, scanned: 0, total: SWEEP_TOTAL, everRan: false,
+             cancelled: false, finishedAgoMs: 0, found: [] };
+  }
+
+  const end = sw.running ? Date.now() : sw.finishedAt;
+  const scanned = Math.min(SWEEP_TOTAL,
+                           Math.floor((end - sw.startedAt) / SWEEP_MS_PER_ADDR));
+
+  if (sw.running && scanned >= SWEEP_TOTAL) {
+    sw.running = false;
+    sw.finishedAt = sw.startedAt + SWEEP_TOTAL * SWEEP_MS_PER_ADDR;
+  }
+
+  // Reveal the staged plugs progressively, spread across the pass, so a caller
+  // watching the bar sees them arrive rather than all at once at the end —
+  // which is what the real sweep does and what the UI has to render.
+  const staged = ensureSweepable(d);
+  sw.found = staged.filter(x => scanned >= x._at);
+
+  return {
+    running: sw.running,
+    scanned,
+    total: SWEEP_TOTAL,
+    everRan: true,
+    cancelled: sw.cancelled,
+    finishedAgoMs: sw.finishedAt ? Date.now() - sw.finishedAt : 0,
+    found: sw.found.map(({ _at, ...row }) => row),
+  };
+}
+
+/** The plugs a sweep can find: Tasmotas, which is the whole point — a Shelly
+ *  would have turned up in the three-second mDNS scan already. Staged once so
+ *  repeated sweeps agree with each other. */
+function ensureSweepable(d) {
+  if (d._sweepable) return d._sweepable;
+  const used = new Set(ensureDiscovered(d).map(x => x.ip));
+  d._sweepable = [
+    { _at: 62,  last: 43 },
+    { _at: 188, last: 51 },
+  ].filter(x => !used.has(`192.168.87.${x.last}`)).map(({ _at, last }) => ({
+    _at,
+    ip: `192.168.87.${last}`,
+    hostname: `tasmota-${_randHex(6)}`,
+    name: '',
+    reachable: true,
+    powerW: 0,
+    gen: 0,
+    kind: 'tasmota',
+    claim: 'unclaimed',
+    pickable: true,
+    takeable: false,
+  }));
+  return d._sweepable;
+}
+
 module.exports = {
+
   // constants
   NUM_STOPS, STEPS_PER_MM, MIN_STOP_SEPARATION_MM, IDLE_TIMEOUT_SEC_DEFAULT, HOME_MS,
   CALIBRATE_MS, PORT_ROLES, MANIFOLD_PROFILES,
@@ -748,5 +888,6 @@ module.exports = {
   // outlets
   configureOutlet, deleteOutlet, configureDustCollector, deleteDustCollector, switchDustCollector,
   ensureDiscovered, discoverOutlets, adoptOutlets, pingOutlet, nameForIp,
+  startSweep, cancelSweep, sweepProgress,
   nameOutlet, releaseOutlet, takeoverOutlet,
 };

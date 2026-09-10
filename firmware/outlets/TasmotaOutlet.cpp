@@ -8,42 +8,46 @@
 
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
-#include <ESPmDNS.h>
 
 TasmotaOutlet::TasmotaOutlet(const char* ip, const char* name) {
     strlcpy(_ip,   ip,   sizeof(_ip));
     strlcpy(_name, name, sizeof(_name));
 }
 
-// Same DHCP-survival trick as ShellyGen2Outlet: a paired plug knows its mDNS
-// hostname, so a stale IP after a lease change costs one re-resolve instead of
-// going silently unreachable.
-bool TasmotaOutlet::reresolve() {
-    if (_host[0] == '\0') return false;
-    IPAddress resolved = MDNS.queryHost(_host, 2000);
-    if (resolved == IPAddress(0, 0, 0, 0)) return false;
-    strlcpy(_ip, resolved.toString().c_str(), sizeof(_ip));
-    return true;
-}
-
+// NO reresolve() HERE, AND ITS ABSENCE IS THE DESIGN.
+//
+// ShellyGen2Outlet recovers a DHCP lease change by re-resolving its stored mDNS
+// hostname. This class carried a verbatim copy of that until 2026-09-09, with a
+// comment calling it "the same DHCP-survival trick" — and it could never once
+// have worked. Tasmota's mDNS needs USE_DISCOVERY compiled in and is not in the
+// precompiled builds (the same fact that makes discovery need an IP sweep; see
+// the warning on MdnsHit::devicetype in utils/MdnsQuery.h). `_host` is never
+// even populated for a Tasmota, because the sweep finds these by address. So it
+// returned false on its first line every time, and poll()'s retry was a no-op
+// dressed as a safety net.
+//
+// A dead branch that reads like recovery is worse than no recovery at all: it
+// answers the question "what happens when the plug's address changes?" wrongly,
+// and stops anyone asking again. Now poll() simply fails, which is the truth.
+//
+// RECOVERY BELONGS ELSEWHERE, and Mem1 is what makes it possible: the claim we
+// wrote is a durable identifier that survives a lease change, so a plug that
+// goes missing can be found again by sweeping and reading Mem1 for the one that
+// says it is ours. That is a ~60s blocking pass over 254 addresses — categorically
+// not something to run from the poll task on a failed read — so it is a
+// deliberate, user-visible action. See docs/tool-sensing-rfc.md §12.
 bool TasmotaOutlet::poll() {
     if (_ip[0] == '\0') {
-        if (!reresolve()) {
-            _reachable  = false;
-            _lastPowerW = 0.0f;
-            return false;
-        }
+        _reachable  = false;
+        _lastPowerW = 0.0f;
+        return false;
     }
-    if (doPoll()) return true;
-    if (reresolve()) return doPoll();
-    return false;
+    return doPoll();
 }
 
 bool TasmotaOutlet::probe(uint32_t timeoutMs) {
-    if (_ip[0] == '\0' && !reresolve()) return false;
-    if (doPoll(timeoutMs)) return true;
-    if (reresolve()) return doPoll(timeoutMs);
-    return false;
+    if (_ip[0] == '\0') return false;
+    return doPoll(timeoutMs);
 }
 
 bool TasmotaOutlet::doPoll(uint32_t timeoutMs) {
@@ -130,7 +134,7 @@ bool TasmotaOutlet::doPoll(uint32_t timeoutMs) {
 // -----------------------------------------------------------------------------
 
 bool TasmotaOutlet::readOwner(String& out, uint32_t timeoutMs) {
-    if (_ip[0] == '\0' && !reresolve()) return false;
+    if (_ip[0] == '\0') return false;
 
     char url[64];
     snprintf(url, sizeof(url), "http://%s/cm?cmnd=Mem1", _ip);
@@ -166,7 +170,7 @@ bool TasmotaOutlet::readOwner(String& out, uint32_t timeoutMs) {
 }
 
 bool TasmotaOutlet::writeOwner(const char* owner) {
-    if (_ip[0] == '\0' && !reresolve()) return false;
+    if (_ip[0] == '\0') return false;
 
     // Tasmota clears a Mem to empty when the argument is the literal two-char
     // token `"` — a bare `Mem1` with no argument is a QUERY, not a clear, so
@@ -212,8 +216,75 @@ static bool sendCmd(const char* ip, const char* cmd) {
     return ok;
 }
 
+static bool sendCmd(const char* ip, const char* cmd);
+
+// Percent-encode a value for the /cm?cmnd= query string.
+//
+// writeOwner() gets away without this because a hostname is [A-Za-z0-9-]. A
+// DEVICE NAME is user text — "Table Saw", "Jointer · dustgate" — and the space
+// alone would truncate the command at the first word, silently renaming the plug
+// to something shorter than asked. The middle dot in an owner suffix is
+// multi-byte UTF-8, which encodes per byte.
+static void urlEncode(const char* in, char* out, size_t outLen) {
+    static const char* kHex = "0123456789ABCDEF";
+    size_t j = 0;
+    for (const unsigned char* p = (const unsigned char*)in; *p && j + 4 < outLen; p++) {
+        const unsigned char c = *p;
+        if (isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') {
+            out[j++] = (char)c;
+        } else {
+            out[j++] = '%'; out[j++] = kHex[c >> 4]; out[j++] = kHex[c & 0x0F];
+        }
+    }
+    out[j] = '\0';
+}
+
+// Tasmota's DeviceName. The equivalent of a Shelly's Switch.SetConfig name, and
+// like it, the label the picker shows.
+//
+// DeviceName also drives FriendlyName1 when that has not been set separately,
+// which is what makes it the right one of Tasmota's several name fields: it is
+// the one the plug's own web UI puts at the top of the page, so a plug renamed
+// here reads the same in both places.
+bool TasmotaOutlet::setName(const char* name) {
+    if (_ip[0] == '\0') return false;
+    char enc[128];
+    urlEncode(name, enc, sizeof(enc));
+    char cmd[160];
+    snprintf(cmd, sizeof(cmd), "DeviceName%%20%s", enc);
+    const bool ok = sendCmd(_ip, cmd);
+    DEBUG_PRINT(F("[Outlets] Tasmota DeviceName=")); DEBUG_PRINT(name);
+    DEBUG_PRINT(F(" @ ")); DEBUG_PRINT(_ip);
+    DEBUG_PRINT(F(" -> ")); DEBUG_PRINTLN(ok ? F("ok") : F("FAILED"));
+    return ok;
+}
+
+// Read it back. Same query-with-no-argument shape as Mem1.
+bool TasmotaOutlet::readName(String& out, uint32_t timeoutMs) {
+    if (_ip[0] == '\0') return false;
+
+    char url[64];
+    snprintf(url, sizeof(url), "http://%s/cm?cmnd=DeviceName", _ip);
+
+    HTTPClient http;
+    http.begin(url);
+    http.setConnectTimeout(timeoutMs);
+    http.setTimeout(timeoutMs);
+    if (http.GET() != 200) { http.end(); return false; }
+
+    StaticJsonDocument<192> doc;
+    const String body = http.getString();
+    http.end();
+    if (deserializeJson(doc, body)) return false;
+
+    JsonVariant v = doc["DeviceName"];
+    if (v.isNull()) return false;
+    out = v.as<const char*>();
+    return true;
+}
+
 bool TasmotaOutlet::provision(const char* owner) {
-    if (_ip[0] == '\0' && !reresolve()) return false;
+    if (_ip[0] == '\0') return false;
 
     if (!writeOwner(owner)) return false;
 
@@ -237,7 +308,7 @@ bool TasmotaOutlet::provision(const char* owner) {
 }
 
 bool TasmotaOutlet::release() {
-    if (_ip[0] == '\0' && !reresolve()) return false;
+    if (_ip[0] == '\0') return false;
     // Unlock BEFORE clearing the claim. If the second call fails, the plug is
     // still marked as ours and still operable — which is recoverable. The other
     // order can leave one that nobody owns and nobody can switch.

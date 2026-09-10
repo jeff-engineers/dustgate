@@ -444,6 +444,35 @@
     {{ scanning ? '…' : '↻' }}
   </button>
 </div>
+
+<!-- The slow half, reported separately from the tray above.
+
+     mDNS answers in three seconds and fills the tray; a Tasmota announces
+     nothing, so finding one means knocking on all 254 addresses — about a
+     minute. Putting that minute in the picker's footer was rev 1 of the mockup
+     and was wrong: it blocks the screen where the user is trying to work. Here
+     it runs in the background and says how far it has got.
+
+     "Looking for plugs" rather than "scanning your network": true, and it does
+     not invite a question about what else is being read. A number as well as the
+     bar is the proof it is still working — a bar with no numbers reads as broken
+     at twenty seconds. It is a PERCENTAGE rather than the raw 168/254: the
+     denominator is an implementation detail (that we knock on every address on
+     the subnet), and showing it invites the question "254 what?" at the exact
+     moment the answer does not matter. -->
+<div class="sweep" *ngIf="showTray && (sweepRunning || sweepEverRan)">
+  <ng-container *ngIf="sweepRunning; else sweepDone">
+    <div class="bar"><i [style.width.%]="(sweepScanned / sweepTotal) * 100"></i></div>
+    <span class="lbl">Looking for plugs… {{ sweepPct() }}%</span>
+    <button class="act" (click)="stopSweep()">Stop</button>
+  </ng-container>
+  <ng-template #sweepDone>
+    <span class="lbl">{{ sweepAge() }}</span>
+    <button class="act" (click)="startSweep()" title="Knock on every address again — about a minute">
+      Look for new
+    </button>
+  </ng-template>
+</div>
 <!-- The chip under the pointer while dragging one onto a machine. `ghostChip`,
      not `chipDrag`: the gesture is not a drag until it has travelled, and drawing
      this on pointerdown put a plug under the finger of someone who was tapping. -->
