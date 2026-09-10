@@ -239,6 +239,88 @@ So: build the servo path first because it is what ships, and keep the RF driver
 sends the toggle is behind one interface — and the feedback loop is identical
 either way, since both are stateless.
 
+### 4.2b Mechanical actuation, as a general technique (2026-09-10)
+
+The fob-tapper is one instance of something broader, and it is worth stating on
+its own because the next "how do we command a device we did not build" question
+should start here rather than at a soldering iron.
+
+**When you need to operate equipment you do not own the electronics of, moving
+its existing control is often better than interfacing with its circuitry.**
+
+#### Why it keeps winning
+
+- **Nothing is modified.** No opening, no soldering, no cut traces. The device
+  stays certified, stays under warranty, stays insurable, and the whole
+  installation is reversible by unclipping a bracket. Every electrical approach
+  gives up all four.
+- **No reverse engineering.** The HT12E path needed the encoder identified, the
+  address rockers read, the data word found by sweep, the hold time measured and
+  the oscillator characterised — and got the data word wrong twice on the way.
+  A servo needs to know where the button is.
+- **It works on the inaccessible.** Potted assemblies, proprietary boards, sealed
+  remotes, anything with no exposed contact to reach. A physical control is
+  exposed by definition — that is what makes it a control.
+- **The install is mechanical, and so is the audience.** A woodworker cannot
+  reasonably be asked to solder (§4.2a) but can absolutely be asked to bolt a
+  bracket square to a switch. This project already ships printed mechanical
+  parts and a rack-and-pinion drive; brackets are the house competency, not a
+  new one.
+- **It is inspectable.** You can watch it work, and see afterwards whether it
+  did. Nothing on an electrical control path offers that.
+- **It costs a servo channel**, on boards that already drive servos.
+
+#### The property that actually matters: maintained vs momentary
+
+**This is the part that generalises furthest, and it is easy to miss.**
+
+A servo can only be as stateful as the control it moves:
+
+| The control | What a servo gives you | State |
+|---|---|---|
+| **Momentary** — a fob button, a start button | A press | **Stateless.** Same as an RF frame: you know what you sent, never what resulted. Toggle semantics, so feedback is mandatory |
+| **Maintained** — a paddle switch, a rocker, a lever | A POSITION | **Stateful, and absolute.** "Set to ON" is idempotent. Send it twice, still on |
+
+That second row is a genuinely better position than any electrical option
+reaches. A collector with a paddle switch, driven by a servo, has **no toggle
+problem at all** — the firmware commands a state rather than an edge, a missed
+or doubled command is self-correcting, and the switch's own physical position is
+a truthful, human-readable display of what the system believes. Feedback
+becomes confirmation rather than the only source of truth.
+
+So when there is a choice of control to actuate, **prefer a maintained one**,
+even if a momentary one is easier to reach.
+
+#### Where it does NOT go, and this is a hard line
+
+**Never on a tool's own power switch.** §3's safety rule is about the hazard of a
+tool being energised with nobody's hand on it, and a servo that can throw a table
+saw's start switch IS that hazard, built deliberately. The fact that it is
+mechanical rather than electrical makes it worse, not better: it defeats the
+no-volt-release behaviour a switch may have been chosen to provide.
+
+Mechanical actuation is scoped to **the collector, and equipment of that kind** —
+things DustGate is allowed to command at all. It is not a loophole in "sensing is
+not switching"; it is another way of doing the one bit of switching that was
+always permitted.
+
+#### The honest costs
+
+- **A bracket is per-device.** A fob holder does not fit a paddle switch, and one
+  brand's remote does not fit another's. This does not produce one SKU; it
+  produces a family, or a parametric model and a printer.
+- **Force.** A hobby servo has limited torque, and an industrial paddle switch or
+  a stiff magnetic starter may exceed it. Measure before committing to a servo
+  class.
+- **Alignment is now a failure mode.** An arm that drifts, or a device that shifts
+  under vibration — and a woodworking shop vibrates — misses the actuation. On a
+  momentary control that inverts the system's belief; on a maintained one it just
+  fails to arrive, which is another argument for the maintained kind.
+- **It is visible and reachable, which means it is also bumpable.** A human can
+  move a maintained switch the servo is holding. That is a feature (manual
+  override with no UI at all) and a hazard (the system's model goes stale), and
+  it is a third reason the collector's state must be sensed rather than assumed.
+
 ### The encoder comes out (2026-09-06)
 
 **An RMT-generated frame keys the receiver, with no HT12E in the circuit.** The
