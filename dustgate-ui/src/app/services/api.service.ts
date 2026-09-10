@@ -67,13 +67,25 @@ export interface OutletConfigCmd {
   threshold_w?: number;
 }
 
-export interface PingResult {
-  reachable: boolean;
-  powerW: number;
-  /** Shelly API generation the device answered on (1 or 2); 0 if unreachable. */
-  generation: number;
-  /** The name the user gave this device in the Shelly app, if any set. */
-  name?: string;
+// PingResult is GONE (2026-09-09). /api/outlets/ping now answers with a full
+// DiscoveredOutlet row — same probe, same ownership check, same shape as a
+// scanned hit — because a plug added by hand must be indistinguishable from one
+// that was found. A narrower type here was what made the two paths diverge.
+
+/** GET /api/outlets/sweep — progress of the 254-address knock. */
+export interface SweepProgress {
+  running: boolean;
+  scanned: number;
+  total: number;
+  /** Has a pass ever run? Separates "never looked" from "looked, found nothing",
+   *  which the shop bar renders differently. */
+  everRan: boolean;
+  cancelled: boolean;
+  /** How long ago the last pass finished. An AGE, not a timestamp: the device's
+   *  clock means nothing here, but "checked 4 minutes ago" is what the bar says. */
+  finishedAgoMs: number;
+  /** Same row shape as discoverOutlets(), because the two lists merge. */
+  found: DiscoveredOutlet[];
 }
 
 export interface DiscoveredOutlet {
@@ -372,17 +384,85 @@ export class ApiService {
   }
 
   /** Pings a Shelly outlet — the device speaks the Shelly Gen2+ local API (Gen1 is not supported). */
-  async pingOutlet(ip: string): Promise<PingResult> {
-    const raw = await this.post<{ reachable: boolean; powerW: number; gen: number; name?: string }>(
+  /**
+   * Probe ONE address the user typed, and answer with a picker row.
+   *
+   * The escape hatch for a plug discovery cannot see. A Tasmota does not
+   * advertise over mDNS in a stock build, so scanning will never find one and
+   * typing its address is the only way in — see docs/tool-sensing-rfc.md §12.
+   * (The firmware's empty-scan message has said "add it by IP" since long before
+   * there was anywhere to type one.)
+   *
+   * Deliberately returns a DiscoveredOutlet, not a narrower "ping" result: the
+   * device answers with exactly the row `discoverOutlets()` produces, from the
+   * same probe and the same ownership check, so a hand-added plug is
+   * indistinguishable from a found one everywhere downstream. The caller does
+   * not need to know which way a plug arrived, and nothing downstream should
+   * start caring.
+   *
+   * The device tries BOTH protocols, since an IP address says nothing about
+   * which one it speaks, and reports back the `kind` that answered.
+   */
+  async pingOutlet(ip: string): Promise<DiscoveredOutlet> {
+    const raw = await this.post<{ ip: string; hostname: string; name: string; reachable: boolean;
+                                  powerW: number; gen: number; kind?: string;
+                                  claim?: string; holder?: string;
+                                  pickable?: boolean; takeable?: boolean; claimReason?: string }>(
       '/api/outlets/ping', { ip }
     );
-    return { reachable: raw.reachable, powerW: raw.powerW, generation: raw.gen, name: raw.name };
+    return {
+      ip: raw.ip || ip,
+      hostname: raw.hostname || ip,
+      name: raw.name,
+      reachable: raw.reachable,
+      powerW: raw.powerW,
+      // Unknown strings fall back to 'shelly', matching outletKindFromName() in
+      // the firmware and the mapping in discoverOutlets() below.
+      kind: raw.kind === 'tasmota' ? 'tasmota' : 'shelly',
+      generation: raw.gen,
+      claim: raw.claim,
+      holder: raw.holder,
+      takeable: raw.takeable,
+      claimReason: raw.claimReason,
+    };
   }
 
   /**
-   * Scans the local network via mDNS for Shelly outlets (no manual IP entry
-   * required — devices show up as long as they're powered and on the same
-   * subnet, regardless of whether a static IP was ever set in the Shelly app).
+   * Subnet sweep — knock on all 254 addresses, looking for plugs that announce
+   * nothing.
+   *
+   * mDNS finds a Shelly in three seconds and will never find a stock Tasmota,
+   * so for the sense-only plug this project prefers, this is the only route
+   * that doesn't require the user to already know the address.
+   *
+   * Start / poll / cancel rather than one awaited call, because it takes about
+   * a minute on the device and no HTTP request survives that. Poll
+   * `outletSweepProgress()` while `running`.
+   */
+  async startOutletSweep(): Promise<SweepProgress> {
+    return this.post<SweepProgress>('/api/outlets/sweep', {});
+  }
+
+  async outletSweepProgress(): Promise<SweepProgress> {
+    return this.get<SweepProgress>('/api/outlets/sweep');
+  }
+
+  /** Stop early. What was found so far is KEPT — someone who stops because the
+   *  plug they wanted appeared must not lose it. */
+  async cancelOutletSweep(): Promise<SweepProgress> {
+    return this.delete<SweepProgress>('/api/outlets/sweep');
+  }
+
+  /**
+   * Scans the local network via mDNS for Shelly outlets — they show up as long
+   * as they're powered and on the same subnet, whether or not a static IP was
+   * ever set in the Shelly app.
+   *
+   * This finds SHELLY plugs. It will not find a Tasmota: mDNS is off in stock
+   * Tasmota builds, so those must be added by address with pingOutlet(). This
+   * comment used to say "no manual IP entry required", which read as though
+   * typing an address were merely optional — for a Tasmota it is the only way
+   * in, and there was no field to type it into.
    * Each hit is already probed for reachability/generation/wattage, same as pingOutlet().
    */
   async discoverOutlets(): Promise<DiscoveredOutlet[]> {

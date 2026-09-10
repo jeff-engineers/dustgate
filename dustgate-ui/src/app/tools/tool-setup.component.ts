@@ -161,6 +161,20 @@ const DEFAULT_THRESHOLD = 50;
     .rescan, .manual { display: flex; align-items: center; justify-content: center; gap: 6px; color: var(--muted); font-size: 12.5px; padding: 8px; background: none; border: none; width: 100%; }
     .empty { text-align: center; color: var(--muted); font-size: 13px; padding: 16px; }
 
+    /* Adding by address — the only route in for a plug that doesn't advertise. */
+    .manual-add { margin-top: 8px; padding-top: 10px; border-top: 1px solid var(--border); }
+    .manual-add .mrow { display: flex; gap: 7px; }
+    .manual-add input { flex: 1; min-width: 0; padding: 9px 11px; border-radius: 10px;
+                        background: var(--bg); border: 1px solid var(--border);
+                        color: var(--text); font-size: 14px; font-family: inherit; }
+    .manual-add input:disabled { opacity: 0.5; }
+    .manual-add button { flex-shrink: 0; padding: 9px 14px; border-radius: 10px;
+                         background: var(--bg); border: 1px solid var(--border);
+                         color: var(--text); font-size: 13px; }
+    .manual-add button:disabled { opacity: 0.45; }
+    .manual-add .mwhy { font-size: 11.5px; color: var(--muted); margin: 7px 2px 0; line-height: 1.5; }
+    .manual-add .merr { font-size: 12px; color: var(--danger, #e05252); margin: 7px 2px 0; line-height: 1.5; }
+
     .thresh { border-top: 1px solid var(--border); padding-top: 13px; margin-bottom: 4px; }
     .thresh .r { display: flex; align-items: center; justify-content: space-between; margin-bottom: 5px; }
     .thresh .r b { font-weight: 500; }
@@ -327,12 +341,36 @@ const DEFAULT_THRESHOLD = 50;
               <span *ngIf="d.ip === c.ip">✓</span>
             </button>
             <button class="rescan" (click)="scan()">↻ {{ scanning ? 'Scanning…' : 'Rescan' }}</button>
+            <ng-container *ngTemplateOutlet="byAddress"></ng-container>
           </div>
           <ng-template #noplugs>
             <ng-container *ngIf="!c.ip">
-              <div class="empty">{{ scanning ? 'Scanning…' : 'No outlets found on the network.' }}</div>
+              <div class="empty">{{ scanning ? 'Scanning…' : 'No outlets announced themselves.' }}</div>
               <button class="rescan" (click)="scan()" title="Sweep the network for smart outlets again">↻ Rescan</button>
+              <ng-container *ngTemplateOutlet="byAddress"></ng-container>
             </ng-container>
+          </ng-template>
+
+          <!-- Adding by address. Scanning uses mDNS, and a Tasmota plug does not
+               advertise over mDNS in a stock build — so for the sense-only plug
+               this project now prefers, typing the address is the ONLY way in.
+               Shown in both branches: a scan that found nothing is exactly when
+               this is needed most. -->
+          <ng-template #byAddress>
+            <div class="manual-add" *ngIf="!c.ip">
+              <div class="mrow">
+                <input type="text" inputmode="decimal" placeholder="Or type its address — 192.168.1.42"
+                       [(ngModel)]="manualIp" [disabled]="adding"
+                       (keyup.enter)="addByIp(c)" aria-label="Outlet IP address"/>
+                <button (click)="addByIp(c)" [disabled]="adding || !manualIp.trim()">
+                  {{ adding ? 'Checking…' : 'Add' }}
+                </button>
+              </div>
+              <div class="merr" *ngIf="addError; else addWhy">{{ addError }}</div>
+              <ng-template #addWhy>
+                <div class="mwhy">Some outlets don't announce themselves and won't show up in a scan.</div>
+              </ng-template>
+            </div>
           </ng-template>
 
           <div class="thresh" *ngIf="c.ip">
@@ -376,6 +414,11 @@ export class ToolSetupComponent implements OnInit {
   private collectorSysId = '';
   editingName = '';
   outlets: DiscoveredOutlet[] = [];
+
+  // Adding a plug by address — see the byAddress template.
+  manualIp = '';
+  adding = false;
+  addError = '';
 
   scanning = false;
   saving = false;
@@ -633,6 +676,41 @@ export class ToolSetupComponent implements OnInit {
     this.touched = true;
     if (d.powerW >= 5 && (c.thresholdW === DEFAULT_THRESHOLD)) {
       c.thresholdW = Math.max(10, Math.round(d.powerW * 0.9 / 10) * 10);
+    }
+  }
+
+  /** Probe one typed address and put the result in the scan list.
+   *
+   *  The device tries both protocols and reports which answered, so nothing here
+   *  asks the user what kind of plug they have — they typed an address, which is
+   *  all they can reasonably be expected to know.
+   *
+   *  An unreachable result is still added rather than discarded: it renders as
+   *  not responding and cannot be picked, which says the address was understood
+   *  and nothing was there — a different problem from a typo, and one the user
+   *  can act on.
+   */
+  async addByIp(_c: ToolCfg): Promise<void> {
+    const ip = this.manualIp.trim();
+    if (!ip || this.adding) return;
+    this.addError = '';
+    // Loose on purpose: the device is the real validator, and a regex strict
+    // enough to be useful here would also reject a hostname, which works fine.
+    if (!/^[a-zA-Z0-9.\-:]+$/.test(ip)) {
+      this.addError = "That doesn't look like an address. Try something like 192.168.1.42.";
+      return;
+    }
+    this.adding = true;
+    try {
+      const d = await this.api.pingOutlet(ip);
+      const at = this.outlets.findIndex(o => o.ip === d.ip);
+      if (at >= 0) this.outlets[at] = d;
+      else this.outlets = [...this.outlets, d];
+      this.manualIp = '';
+    } catch {
+      this.addError = `Couldn't reach ${ip}. Check the address and that it's on this WiFi.`;
+    } finally {
+      this.adding = false;
     }
   }
 

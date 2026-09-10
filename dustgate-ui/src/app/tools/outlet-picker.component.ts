@@ -1,5 +1,6 @@
 import { Component, EventEmitter, Input, OnInit, Output, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { FormsModule } from '@angular/forms';
 import { ApiService, DiscoveredOutlet } from '../services/api.service';
 
 // ── Finding a tool's smart plug ──────────────────────────────────────────────
@@ -8,13 +9,20 @@ import { ApiService, DiscoveredOutlet } from '../services/api.service';
 // plug that jumped. That's the whole interaction, and it works because the scan
 // already probes every hit for live wattage.
 //
+// ADDING ONE BY ADDRESS is the other half, and it is not a power-user
+// convenience. Scanning uses mDNS, and a Tasmota plug does not advertise over
+// mDNS in a stock build — so for the sense-only plug this project now prefers,
+// typing the address is the ONLY way in (docs/tool-sensing-rfc.md §12). The
+// device probes both protocols and answers with the same row a scan produces,
+// so a plug added by hand is indistinguishable from a found one from here down.
+//
 // This component knows nothing about where the choice gets stored — it emits a
 // DiscoveredOutlet and stops.
 
 @Component({
   selector: 'app-outlet-picker',
   standalone: true,
-  imports: [CommonModule],
+  imports: [CommonModule, FormsModule],
   styles: [`
     :host { display: block; }
     .hint { font-size: 12.5px; color: var(--muted); line-height: 1.55; margin: 0 0 10px; }
@@ -37,6 +45,22 @@ import { ApiService, DiscoveredOutlet } from '../services/api.service';
     .foot { display: flex; align-items: center; justify-content: center; gap: 6px;
             background: none; border: none; color: var(--muted); font-size: 12.5px; padding: 9px; width: 100%; }
     .empty { text-align: center; color: var(--muted); font-size: 13px; padding: 14px 8px; line-height: 1.6; }
+
+    /* Adding by address. Always visible, never behind a disclosure — for a
+       Tasmota this is the only route in, and a scan that found nothing is
+       exactly when a hidden control is hardest to find. */
+    .manual-add { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
+    .manual-add .row { display: flex; gap: 7px; }
+    .manual-add input { flex: 1; min-width: 0; padding: 9px 11px; border-radius: 10px;
+                        background: var(--bg); border: 1px solid var(--border);
+                        color: var(--text); font-size: 14px; font-family: inherit; }
+    .manual-add input:disabled { opacity: 0.5; }
+    .manual-add button { flex-shrink: 0; padding: 9px 14px; border-radius: 10px;
+                         background: var(--bg); border: 1px solid var(--border);
+                         color: var(--text); font-size: 13px; }
+    .manual-add button:disabled { opacity: 0.45; }
+    .manual-add .why { font-size: 11.5px; color: var(--muted); margin: 7px 2px 0; line-height: 1.5; }
+    .manual-add .err { font-size: 12px; color: var(--danger, #e05252); margin: 7px 2px 0; line-height: 1.5; }
   `],
   template: `
     <p class="hint">
@@ -59,13 +83,30 @@ import { ApiService, DiscoveredOutlet } from '../services/api.service';
     </div>
     <ng-template #none>
       <div class="empty">
-        {{ scanning ? 'Scanning…' : 'No smart outlets found. Check it\\'s powered and on the same WiFi.' }}
+        {{ scanning
+           ? 'Scanning…'
+           : 'No outlets announced themselves. Check it\\'s powered and on this WiFi — or add it by address below.' }}
       </div>
     </ng-template>
 
     <button class="foot" (click)="scan()" [disabled]="scanning">
       ↻ {{ scanning ? 'Scanning…' : 'Scan again' }}
     </button>
+
+    <div class="manual-add">
+      <div class="row">
+        <input type="text" inputmode="decimal" placeholder="Or type its address — 192.168.1.42"
+               [(ngModel)]="manualIp" [disabled]="adding"
+               (keyup.enter)="addByIp()" aria-label="Outlet IP address"/>
+        <button (click)="addByIp()" [disabled]="adding || !manualIp.trim()">
+          {{ adding ? 'Checking…' : 'Add' }}
+        </button>
+      </div>
+      <p class="err" *ngIf="addError; else addWhy">{{ addError }}</p>
+      <ng-template #addWhy>
+        <p class="why">Some outlets don't announce themselves and won't show up in a scan.</p>
+      </ng-template>
+    </div>
   `,
 })
 export class OutletPickerComponent implements OnInit {
@@ -84,6 +125,10 @@ export class OutletPickerComponent implements OnInit {
   private readonly api = inject(ApiService);
   outlets: DiscoveredOutlet[] = [];
   scanning = false;
+
+  manualIp = '';
+  adding = false;
+  addError = '';
 
   ngOnInit(): void { void this.scan(); }
 
@@ -105,6 +150,46 @@ export class OutletPickerComponent implements OnInit {
     // picking rather than discovered afterwards.
     const kind = d.kind === 'tasmota' ? 'Tasmota · sense only · ' : '';
     return `${kind}${d.hostname} · ${d.ip}`;
+  }
+
+  /** Probe one typed address and put the result in the list.
+   *
+   *  The device tries both protocols and reports which answered, so nothing here
+   *  asks the user what kind of plug they have — they typed an address, which is
+   *  all they can reasonably be expected to know.
+   *
+   *  An UNREACHABLE result is still added to the list rather than thrown away.
+   *  It renders as "not responding" and is unpickable, which tells the user the
+   *  address was understood and nothing was there — a distinct problem from a
+   *  typo, and one they can act on. Discarding it would leave them staring at an
+   *  unchanged list with no idea whether anything happened.
+   */
+  async addByIp(): Promise<void> {
+    const ip = this.manualIp.trim();
+    if (!ip || this.adding) return;
+    this.addError = '';
+
+    // Loose on purpose: the device is the real validator, and a regex strict
+    // enough to be useful here would also reject a hostname, which works fine.
+    if (!/^[a-zA-Z0-9.\-:]+$/.test(ip)) {
+      this.addError = "That doesn't look like an address. Try something like 192.168.1.42.";
+      return;
+    }
+
+    this.adding = true;
+    try {
+      const d = await this.api.pingOutlet(ip);
+      // Replace rather than append if a scan already found this one, so the same
+      // plug never appears twice under two different-looking rows.
+      const at = this.outlets.findIndex(o => o.ip === d.ip);
+      if (at >= 0) this.outlets[at] = d;
+      else this.outlets = [...this.outlets, d];
+      this.manualIp = '';
+    } catch {
+      this.addError = `Couldn't reach ${ip}. Check the address and that it's on this WiFi.`;
+    } finally {
+      this.adding = false;
+    }
   }
 
   async scan(): Promise<void> {

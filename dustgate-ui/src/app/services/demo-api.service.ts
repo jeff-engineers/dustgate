@@ -5,11 +5,11 @@ import {
   DeviceInfo,
   DiscoveredNode,
   DiscoveredOutlet,
+  SweepProgress,
   OutletNameResult,
   OutletReleaseResult,
   NodeLinkState,
   OutletConfigCmd,
-  PingResult,
   SystemStatus,
 } from './api.service';
 import { HardwareProfileService } from './hardware-profile.service';
@@ -334,10 +334,58 @@ export class DemoApiService extends ApiService {
     return { ok: true };
   }
 
-  override async pingOutlet(ip: string): Promise<PingResult> {
+  override async pingOutlet(ip: string): Promise<DiscoveredOutlet> {
     await this.delay(400);
     const r = model.pingOutlet(this.d, ip);
-    return { reachable: r.reachable, powerW: r.powerW, generation: r.gen, name: r.name };
+    return {
+      ip:         r.ip,
+      hostname:   r.hostname,
+      name:       r.name,
+      reachable:  r.reachable,
+      powerW:     r.powerW,
+      generation: r.gen,
+      kind:       r.kind === 'tasmota' ? 'tasmota' : 'shelly',
+      claim:      r.claim,
+      holder:     r.holder ?? undefined,
+      takeable:   r.takeable,
+      claimReason: r.claimReason,
+    };
+  }
+
+  /** The model names the field `gen`; the UI names it `generation`. One mapper
+   *  rather than three copies of the same rename. */
+  private sweep(p: ReturnType<typeof model.sweepProgress>): SweepProgress {
+    return { ...p, found: p.found.map(x => this.discovered(x)) };
+  }
+
+  private discovered(x: ReturnType<typeof model.discoverOutlets>[number]): DiscoveredOutlet {
+    return {
+      ip:         x.ip,
+      hostname:   x.hostname,
+      name:       x.name,
+      reachable:  x.reachable,
+      powerW:     x.powerW,
+      generation: x.gen,
+      kind:       x.kind === 'tasmota' ? 'tasmota' : 'shelly',
+      claim:      x.claim,
+      holder:     x.holder ?? undefined,
+      takeable:   x.takeable,
+      claimReason: x.claimReason,
+    };
+  }
+
+  override async startOutletSweep(): Promise<SweepProgress> {
+    await this.delay(200);
+    return this.sweep(model.startSweep(this.d));
+  }
+
+  override async outletSweepProgress(): Promise<SweepProgress> {
+    return this.sweep(model.sweepProgress(this.d));
+  }
+
+  override async cancelOutletSweep(): Promise<SweepProgress> {
+    await this.delay(150);
+    return this.sweep(model.cancelSweep(this.d));
   }
 
   override async discoverOutlets(): Promise<DiscoveredOutlet[]> {

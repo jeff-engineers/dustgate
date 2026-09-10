@@ -239,6 +239,17 @@ public:
     bool consumePingRequest(char* outIp, size_t ipLen);
     void respondPing(const String& json);
 
+    // Subnet sweep — the only way to find a plug that advertises nothing.
+    // Unlike discover and ping, this does NOT hold the request: POST answers
+    // immediately and the browser polls GET for progress, because a minute is
+    // far past what a held-open HTTP request survives. The main loop consumes
+    // these flags and drives OutletSweep one address per pass.
+    bool consumeSweepStart();
+    bool consumeSweepCancel();
+    // Progress, published by the main loop after each address so the HTTP task
+    // can answer a poll without touching the sweep itself.
+    void publishSweepProgress(const String& json);
+
     // Plug TAKEOVER (RFC §8) — POST /api/outlets/takeover {"ip":"..."}.
     //
     // Its own endpoint, not a flag on save, and that is the point: taking a plug
@@ -438,6 +449,15 @@ private:
     bool            _pingPending;
     Deferred        _pingReply;
     char            _pingIp[40];
+    // Subnet sweep. NOT a Deferred — a sweep is ~60s of wall time and the
+    // deferred budget is 15s, so this is start / poll / cancel rather than one
+    // held-open request. See control/OutletSweep.h.
+    bool            _sweepStartPending;
+    bool            _sweepCancelPending;
+    // Last progress the main loop published. Read under _mutex by the poll
+    // route; never computed there, because the sweep's own state belongs to
+    // the loop task.
+    String          _sweepProgressJson;
     // Rename / release both hold their request across a blocking device write,
     // exactly as ping does.
     bool            _outletNamePending;

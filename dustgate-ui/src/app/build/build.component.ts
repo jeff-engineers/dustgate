@@ -3,7 +3,7 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router as NgRouter, RouterLink } from '@angular/router';
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
-import { ApiService, DiscoveredOutlet, NodeLinkState, Topology, TopologyStatus } from '../services/api.service';
+import { ApiService, DiscoveredOutlet, NodeLinkState, SweepProgress, Topology, TopologyStatus } from '../services/api.service';
 import { takeoverWarning } from '@plug-claim';
 import { airflowIssues, redundantSelectors, type AirflowIssue } from '@topology';
 import { COLLECTOR_RUNNING_W } from '@topology-device';
@@ -594,6 +594,10 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   ngOnDestroy(): void {
     document.body.style.overflow = '';
     if (this.livePoll) clearInterval(this.livePoll);
+    // A sweep keeps running on the DEVICE after this page closes, deliberately
+    // — it takes a minute and the results are worth keeping. Only the poll
+    // stops, or it leaks a timer per visit.
+    this.endPoll();
     this.endHold();
     // Each of these takes its own move/up/cancel trio off the window — one call per
     // drag now that they each have a cancel listener to forget as well.
@@ -945,10 +949,32 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
    *  is furniture. Appears while scanning, and afterwards for as long as there is
    *  either a free plug to place or a machine still missing one. */
   get showTray(): boolean {
-    if (this.scanning) return true;
+    if (this.scanning || this.sweepRunning) return true;
     if (!this.scanned) return false;
     return this.freeOutlets().length > 0 || this.unpairedTargets().length > 0;
   }
+
+  // ── Finding plugs: two questions with very different costs ────────────────
+  //
+  // mDNS answers "which Shelly plugs exist" in about three seconds. It will
+  // never answer it for a Tasmota — stock builds do not advertise — so the only
+  // way to find the sense-only plug this project now prefers is to knock on all
+  // 254 addresses, which takes about a minute.
+  //
+  // So they run in sequence and are reported differently: the fast scan fills
+  // the tray immediately, then the sweep runs in the BACKGROUND with a progress
+  // count and a Stop, while the user carries on laying out the shop. Nothing is
+  // blocked on the slow half.
+  //
+  // It costs a minute ONCE PER PLUG, EVER: a paired plug's address lives in the
+  // layout, so a sweep is only ever looking for something new. That is why the
+  // button says "Look for new" rather than "Scan".
+  sweepRunning = false;
+  sweepScanned = 0;
+  sweepTotal = 254;
+  sweepEverRan = false;
+  sweepFinishedAgoMs = 0;
+  private sweepPoll: ReturnType<typeof setInterval> | null = null;
 
   async scanOutlets(): Promise<void> {
     this.owner = this.api.deviceInfo?.owner ?? this.owner;
@@ -957,6 +983,77 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     try { this.outlets = await this.api.discoverOutlets(); }
     catch { /* leave the last known list rather than blanking the tray */ }
     finally { this.scanning = false; this.scanned = true; }
+    void this.startSweep();
+  }
+
+  /** Kick off the slow half and start polling it. */
+  async startSweep(): Promise<void> {
+    if (this.sweepRunning) return;
+    try {
+      this.applySweep(await this.api.startOutletSweep());
+    } catch {
+      // A device that doesn't know this endpoint is running older firmware.
+      // The mDNS results are still in the tray, so degrade quietly rather than
+      // showing an error for a feature the user didn't ask for by name.
+      return;
+    }
+    this.pollSweep();
+  }
+
+  async stopSweep(): Promise<void> {
+    try { this.applySweep(await this.api.cancelOutletSweep()); }
+    catch { /* the next poll will report the truth */ }
+  }
+
+  private pollSweep(): void {
+    if (this.sweepPoll) return;
+    this.sweepPoll = setInterval(async () => {
+      try { this.applySweep(await this.api.outletSweepProgress()); }
+      catch { this.endPoll(); }
+      if (!this.sweepRunning) this.endPoll();
+    }, 1000);
+  }
+
+  private endPoll(): void {
+    if (this.sweepPoll) { clearInterval(this.sweepPoll); this.sweepPoll = null; }
+  }
+
+  /** Merge a sweep result into the tray.
+   *
+   *  MERGED, NOT REPLACED: the mDNS scan and the sweep find different devices
+   *  (Shelly announces, Tasmota does not), and a plug that somehow turns up in
+   *  both must appear once. Keyed by IP, sweep result winning — it is the more
+   *  recent probe, so its wattage is the fresher of the two. */
+  private applySweep(p: SweepProgress): void {
+    this.sweepRunning = p.running;
+    this.sweepScanned = p.scanned;
+    this.sweepTotal = p.total || 254;
+    this.sweepEverRan = p.everRan;
+    this.sweepFinishedAgoMs = p.finishedAgoMs;
+
+    if (!p.found?.length) return;
+    const byIp = new Map(this.outlets.map(o => [o.ip, o]));
+    for (const f of p.found) byIp.set(f.ip, f);
+    this.outlets = [...byIp.values()];
+    this.scanned = true;
+  }
+
+  /** Progress as a percentage. Floored, and capped at 99 while still running:
+   *  a bar that reads 100% with work left is worse than one that lingers at 99,
+   *  because the first looks stuck and the second looks busy. */
+  sweepPct(): number {
+    if (!this.sweepTotal) return 0;
+    const pct = Math.floor((this.sweepScanned / this.sweepTotal) * 100);
+    return this.sweepRunning ? Math.min(99, pct) : Math.min(100, pct);
+  }
+
+  /** "Checked 4 minutes ago" — the bar's own words. Empty while running or
+   *  before anything has ever finished, because both have their own line. */
+  sweepAge(): string {
+    if (this.sweepRunning || !this.sweepFinishedAgoMs) return '';
+    const min = Math.floor(this.sweepFinishedAgoMs / 60000);
+    if (min < 1) return 'Checked just now.';
+    return `Checked ${min} minute${min === 1 ? '' : 's'} ago.`;
   }
 
   /** IPs already spoken for, anywhere in the shop — a machine's sensor or the

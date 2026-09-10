@@ -178,6 +178,18 @@ function handler(req, res) {
     return json(res, M.discoverOutlets(d));
   }
 
+  // Subnet sweep — start / poll / cancel. Not one call that returns a list:
+  // on the device it takes about a minute, which no HTTP request survives.
+  if (pathname === '/api/outlets/sweep' && req.method === 'POST') {
+    return runModel(res, () => json(res, M.startSweep(d)));
+  }
+  if (pathname === '/api/outlets/sweep' && req.method === 'GET') {
+    return runModel(res, () => json(res, M.sweepProgress(d)));
+  }
+  if (pathname === '/api/outlets/sweep' && req.method === 'DELETE') {
+    return runModel(res, () => json(res, M.cancelSweep(d)));
+  }
+
   if (pathname === '/api/outlets/ping' && req.method === 'POST') {
     return body(req, data => runModel(res, () => json(res, M.pingOutlet(d, data.ip))));
   }

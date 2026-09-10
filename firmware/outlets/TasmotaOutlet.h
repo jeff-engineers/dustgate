@@ -91,6 +91,14 @@ public:
     // the literal `"` (an empty quoted string), which is what release() sends.
     bool writeOwner(const char* owner);
 
+    // The plug's DeviceName — Tasmota's equivalent of a Shelly's app-visible
+    // name, and the label the picker shows. Renaming used to be Shelly-only,
+    // so renaming a Tasmota answered "not responding" (found on hardware
+    // 2026-09-09: the rename path built a ShellyGen2Outlet regardless of kind
+    // and failed at its first poll).
+    bool setName(const char* name) override;
+    bool readName(String& out, uint32_t timeoutMs = OUTLET_RPC_WRITE_TIMEOUT_MS);
+
     // Claim the plug AND make it behave like the pass-through it is meant to be.
     //
     // The Athom no-relay plug still ships firmware for its relay sibling: the web
@@ -115,5 +123,8 @@ private:
     char _name[32];
 
     bool doPoll(uint32_t timeoutMs = OUTLET_HTTP_TIMEOUT_MS);
-    bool reresolve();
+    // NO reresolve(). Tasmota does not advertise over mDNS in a stock build, so
+    // there is no hostname to re-resolve and a stale IP is simply unreachable
+    // until a sweep finds it again by its Mem1 claim. The .cpp says why at
+    // length, and docs/tool-sensing-rfc.md §12 has the recovery design.
 };

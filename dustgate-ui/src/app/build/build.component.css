@@ -324,6 +324,21 @@ svg.canvas, svg.canvas text { -webkit-user-select: none; user-select: none; }
         background: var(--surface); border-top: 1px solid var(--border);
         padding: 5px 10px; min-height: 38px; }
 .tray.armed { border-top-color: var(--accent); }
+
+/* The slow sweep's own strip, under the tray. Separate from .tray because it
+   reports a different question — "which plugs exist", which takes a minute —
+   and must not compete with the chips for the same row. */
+.sweep { flex: 0 0 auto; display: flex; align-items: center; gap: 9px;
+         background: var(--surface); border-top: 1px solid var(--border);
+         padding: 6px 10px; min-height: 32px; }
+.sweep .bar { flex: 1 1 auto; height: 4px; border-radius: 2px;
+              background: var(--border); overflow: hidden; min-width: 40px; }
+.sweep .bar i { display: block; height: 100%; background: var(--accent);
+                border-radius: 2px; transition: width 240ms linear; }
+.sweep .lbl { font-size: 11px; color: var(--muted); flex: 0 0 auto;
+              font-variant-numeric: tabular-nums; }
+.sweep .act { background: var(--bg); border: 1px solid var(--border); color: var(--text);
+              font-size: 11px; padding: 4px 9px; border-radius: 8px; flex: 0 0 auto; }
 .tray .t { font-size: 12px; font-weight: 600; flex: 0 0 auto; }
 .tray .n { font-size: 11px; color: var(--muted); flex: 0 0 auto; }
 .tray.armed .n { color: var(--accent); }
