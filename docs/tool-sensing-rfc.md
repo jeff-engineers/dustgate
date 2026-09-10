@@ -156,6 +156,89 @@ Rockler receiver. What that settles, and the two things that were not obvious:
 | **TE hold** | **≥ ~500 ms. This is the one that bites.** 120 ms keyed the receiver only intermittently while the fob was rock solid. Four words is the HT12E's documented *minimum* transmission because the decoder validates by seeing the same frame more than once — so a truncated group produces **no output rather than a wrong one**, which is indistinguishable from a range problem. Default is now 400 ms; 500 is proven. |
 | Antenna | **Not needed at bench range** — an unfitted module radiates plenty across a bench, which is its own trap in the other direction. Fit the 23.8 cm quarter-wave at install. |
 
+### 4.2a How we press the button: a servo, not electronics (2026-09-10)
+
+**Preferred, not exclusive. HT12E injection below stays a LIVE option.** For a
+shipped product the collector's fob gets pressed by a **servo arm on a printed
+fixture** — the same PWM servo this project already drives for every gate.
+
+The argument that settles it is not elegance, and not cost. It is that **every
+electronic option ends at "open the fob and solder across the button"**, and
+**woodworkers are not likely to know how to solder.** That is true of the HT12E
+injection path, and equally true of the tidy $11.83 alternative
+([Athom 1CH Inching/Self-lock Relay](https://www.athom.tech/blank-1/1ch-inching-self-lock-relay)
+— dry contact, Tasmota pre-flashed, sold for exactly this job). A servo ends at
+*clip the fob into the holder, plug the servo into the labelled port*.
+
+**This is the same constraint that already killed panel-side CTs (§5), and it
+should be stated once rather than rediscovered per subsystem:**
+
+> **An install step the owner cannot perform is not a cheaper option, it is a
+> different product.** Panel work fails it because it needs an electrician and
+> voids insurance; soldering inside a fob fails it because most woodworkers do
+> not solder. Cost and elegance are ranked BELOW this, not against it.
+
+What the servo buys beyond that:
+
+- **No new device.** A tapper is one more channel on hardware already shipping.
+  The relay would be another Tasmota to discover, claim, power and keep on WiFi
+  — the whole §12 apparatus, for one button.
+- **The fob is untouched.** Not opened, not modified, fully reversible, and it
+  stays a certified transmitter operated exactly as designed. That also retires
+  the 315 MHz emissions problem §11 raises for shipping a product with our own
+  transmitter, rather than working around it.
+- **It is legible.** You can watch it press the button. A user can diagnose it by
+  looking, which nothing else on the control path offers.
+
+**Where it lives: the collector node, and it has to.** `SERVO_COUNT` is 4, so a
+tapper consumes a gate channel — and a slider board has NO PWM channels at all,
+because PWM and the serial bus never share a board (CLAUDE.md). So it cannot go
+on whichever board happens to be nearest. It belongs on the board already beside
+the collector: the one carrying the bin sensor, which CLAUDE.md already frames as
+*a capability, not a node type*. The fob-tapper is a second capability on that
+same board.
+
+**What it does NOT fix, and must not be read as fixing:**
+
+- **A press is still a TOGGLE.** Mechanically pressing a button is exactly as
+  stateless as transmitting a frame. The firmware still cannot know the
+  collector's state from what it sent, so **feedback remains mandatory** — this
+  changes the sending end only.
+- **The fob battery becomes a system dependency.** True of the relay too, but now
+  a dead battery presents as a dead servo. The collector's own wattage feedback
+  is what tells them apart, which is another thing the loop buys.
+
+**New failure mode:** an arm that drifts, or a fob that shifts in its fixture,
+misses the press — and a missed press on a toggle inverts our belief
+permanently. Wants a printed fixture holding fob and servo rigidly against each
+other, which this project already builds parts of that kind. Feedback catches
+the inversion; the fixture is what stops it happening.
+
+**Why HT12E stays live (Jeff, 2026-09-10).** The no-soldering rule is about what
+a CUSTOMER must do, and it does not rule the electronics out — it rules out
+making the customer do the work:
+
+- **Jeff's own shop is not the product.** Soldering is no obstacle here, and the
+  RF path is already proven end to end — address, data word, hold, oscillator,
+  range, all measured in `firmware/bench/ht12e_bench.cpp`. Holding back a working
+  path on a constraint that binds someone else would be a strange trade.
+- **A factory can solder.** Shipping a pre-modified fob, or a small harness that
+  plugs into one, satisfies §4.2a's rule completely — the install step becomes
+  "plug this in". That converts the whole objection into a BOM decision rather
+  than a design one.
+- **Some collectors have no fob to press.** A servo needs a button and a place to
+  clamp. RF needs neither, and a collector whose receiver we can address but
+  whose remote is lost, integrated or absent has no mechanical option at all.
+- **The two fail differently.** A servo misses a press when its arm drifts or the
+  fob shifts; an RF frame misses when it is out of range or stepped on. Neither
+  failure implies the other, so having both is genuine redundancy rather than
+  duplication.
+
+So: build the servo path first because it is what ships, and keep the RF driver
+(§8) on the list rather than striking it. Both drive the same seam — whatever
+sends the toggle is behind one interface — and the feedback loop is identical
+either way, since both are stateless.
+
 ### The encoder comes out (2026-09-06)
 
 **An RMT-generated frame keys the receiver, with no HT12E in the circuit.** The

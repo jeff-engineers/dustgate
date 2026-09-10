@@ -229,6 +229,23 @@ These are decided; don't relitigate them in code review or suggestions.
   `sensor.outlet` vs `control.outlet` in the model already said this. See
   [`docs/tool-sensing-rfc.md`](docs/tool-sensing-rfc.md) — decided, nothing
   bench-tested.
+- **An install step the owner cannot perform is not a cheaper option, it is a
+  different product.** Ranked ABOVE cost and elegance, not against them. Two
+  subsystems hit this independently before it was written down: panel-side CTs
+  are the cheapest way to sense every tool and need an electrician (and void
+  insurance), and every ELECTRONIC way to press the collector's remote — our own
+  HT12E injection, or a $12 dry-contact relay sold for exactly this job — ends at
+  "open the fob and solder across the button". **Woodworkers are not likely to
+  know how to solder.** So the SHIPPING answer is a servo arm on a printed
+  fixture: no new device, the fob untouched and still certified, and an install
+  that is "clip it in, plug it into the labelled port".
+
+  The rule binds what a CUSTOMER must do, not what may exist. RF injection
+  (HT12E) stays a live option — it is already proven on the bench, it is the only
+  route for a collector with no fob to press, and a pre-modified fob shipped from
+  a factory satisfies the rule completely. `docs/tool-sensing-rfc.md` §4.2a.
+  Whichever sends it, it is still a TOGGLE, so feedback stays mandatory.
+
 - **Never require anything a network is allowed to block.** Multicast is the
   specific hazard: mDNS is off on plenty of guest networks, most IoT VLANs and a
   fair number of mesh routers, and the woodworker whose shop stopped working has
