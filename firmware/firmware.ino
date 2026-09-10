@@ -1882,7 +1882,7 @@ void loop() {
         if (!p) {
             if (!benchPresser) benchPresser = new RfCollectorPresser(PIN_RF_TX);
             p = benchPresser;
-            Serial.print(F("[RF] No control.rf in the layout — using D6/GPIO"));
+            Serial.print(F("[RF] No control.rf in the layout — using D9/GPIO"));
             Serial.print(PIN_RF_TX);
             Serial.println(F(" with the measured Rockler address."));
         }

@@ -238,25 +238,31 @@
 // docs/tool-sensing-rfc.md §4.2). One pin, output only — the module needs no
 // enable and we never receive.
 //
-// SHARES A PAD WITH THE BIN SENSOR, AND THAT IS FINE — because they never share
-// a BOARD (Jeff, 2026-09-10). The collector gets its own hardware: bin level,
-// CT clamp, transmitter, lamps, in one box at the collector, rather than
-// piggybacking on a board that is also driving gates.
+// D9, NOT D6 — corrected 2026-09-10, hours after being written wrong.
 //
-// That decision is what makes the pin budget work. The conflict this note used
-// to describe was real and ugly — on a four-gate primary with a screen, D6 is
-// the ONLY ordinary pad left (D3 is a strapping pin, D0 is the analog pad a CT
-// wants), so one board could watch a bin or key a transmitter but not both, and
-// both want to be in the same corner of the shop. A board that drives no gates
-// has the whole D7..D10 PWM block free and the question evaporates.
+// This first sat on D6 with a note saying the clash with PIN_BIN_SENSOR was
+// fine "because they never share a board". That was wrong the moment the
+// collector board was defined: bin level, CT and transmitter all live on it
+// (§6.2), so they share a board by design and D6 can only be one of them.
 //
-// So on a COLLECTOR board, put the transmitter on any of D7..D10 and leave D6
-// to the bin sensor. This define stays at D6 because it is the pad that is free
-// on a PRIMARY, which is what the bench `press` command runs on — and a layout's
-// `control.rf.pin` overrides it anyway.
+// The pin budget on a COLLECTOR board, which drives no gates:
+//
+//   D0   CT clamp        the only analog pad on the edge
+//   D6   bin sensor      opto output; it had this pad first
+//   D7   fob servo ON    \  the PWM block, free because no gates
+//   D8   fob servo OFF   /
+//   D9   RF transmitter  <- here
+//   D10  spare           lamps, or a third fob button
+//
+// ⚠️ ON A GATE-DRIVING BOARD D9 IS SERVO CHANNEL 3. Nothing detects that: which
+// jobs a board does is a topology fact, so a layout naming both a servo gate on
+// channel 3 and `control.rf` without an explicit pin on the same controller is
+// a wiring conflict that will simply not work. Give control.rf an explicit
+// `pin` on any board that also drives gates — or better, do not ask a gate
+// board to transmit, which is what §6.2 decided.
 //
 // RANGE argues the same way: the transmitter wants to be near the receiver, and
-// the primary may be across the shop.
+// the routing brain may be across the shop.
 //
 // NOT WIRED BY DEFAULT. Defining the pin says "this is where it would go", the
 // same contract as PIN_BIN_SENSOR — whether a board actually transmits is
@@ -269,7 +275,7 @@
 //       A 17 cm wire on the module's ANT pad is a quarter wave at 315 MHz and
 //       is worth more than anything else on this list.
 #if !defined(DUSTGATE_SERVO_BUS)
-#define PIN_RF_TX       11   // D6 — see the bin-sensor conflict above
+#define PIN_RF_TX        9   // D9 — see the pin budget above
 #endif
 
 // -- Fob servos: pressing the collector's remote mechanically --
