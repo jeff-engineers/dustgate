@@ -27,7 +27,14 @@ reasoning was contested, or that a still-open item above leans on.
   cope. Channel selection (`sensor.outlet.channel`, absent = scalar) is the
   follow-up, and §6.0 lists what else it drags in.
 
-  Not urgent until an EM2 is actually bought; sharp the moment one is.
+  **This bites on the FIRST EM2, not on the first ganged pair.** The device has
+  two channels in hardware whether or not both have a clamp on them, so it
+  reports an array either way. There is no single-tool configuration that
+  avoids it — a lone tool on an EM2 reads 0 W just as thoroughly as two.
+
+  (The 100 cm CT leads mean both channels must reach from one box, so in
+  practice most installs are one tool per meter at ~$29 rather than two at
+  ~$15. That makes the array the normal case, not the edge one.)
 
 
 - **Calibrate isn't reachable from the /gates page.** Opening a gate there
