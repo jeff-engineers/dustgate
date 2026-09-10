@@ -50,6 +50,11 @@ public:
     // the same escape hatch `dc` gives for a switchable plug.
     bool consumePressRequest();
 
+    // `rfscan` — try the four ways a DIP can be copied wrong, and keep the one
+    // the collector answers. SETUP ONLY; see control/RfAddressGuess.h for why
+    // this must never be a runtime fallback.
+    bool consumeRfScanRequest();
+
     // Returns true once when user types 'reset'. The way back from a latched
     // fault WITHOUT power-cycling the board: the caller re-attempts the drive,
     // clears the boot fault flags and drops the estop. It exists because a
@@ -84,6 +89,7 @@ public:
 
 private:
     bool _pressRequest = false;   // `press` — fire the collector's RF once
+    bool _rfScanRequest = false;  // `rfscan` — find the right address by trying
     int  _requestedStop;
     bool _eStopPending;
     bool _homePending;

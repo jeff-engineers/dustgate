@@ -218,6 +218,24 @@
       </div>
 
       <div class="card">
+        <h3>Getting it wrong is recoverable, not fatal</h3>
+        <p class="note">
+          Reading a DIP upside down reverses the rockers <b>and</b> flips which side is on, so
+          the plausible mistakes are exactly four: as entered, inverted, reversed, both. If the
+          entered address does not answer, the device tries the other three and keeps whichever
+          works — then tells the user which way they read it, so the next one goes right.
+        </p>
+        <p class="note">
+          <b>Setup only, and this is not a detail.</b> An inverted address is not a nonsense
+          value — it is a valid address belonging to some other receiver. A shop with two
+          collector boxes, or a neighbour within 26 feet, is a shop where trying the alternates
+          can start the <i>wrong machine</i>. Acceptable with someone standing here watching a
+          lamp; never acceptable unattended, which is why the runtime retry policy presses the
+          <i>same</i> address three times and then reports a fault instead.
+        </p>
+      </div>
+
+      <div class="card">
         <h3>Test before Save, and test with a lamp</h3>
         <p class="note">
           The address is unverifiable by inspection: a wrong one fails silently. So the screen

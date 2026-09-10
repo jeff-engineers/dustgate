@@ -272,6 +272,37 @@
 #define PIN_RF_TX       11   // D6 — see the bin-sensor conflict above
 #endif
 
+// -- Fob servos: pressing the collector's remote mechanically --
+//
+// TWO, and the second one is not a spare. One servo presses one button, and the
+// Rockler's single button is a TOGGLE — stateless, so a missed or doubled press
+// inverts what the system believes and only the blower's draw can correct it.
+// A fob with SEPARATE ON AND OFF buttons is momentary to press but IDEMPOTENT in
+// meaning: pressing ON twice leaves it on, so a missed press self-corrects and
+// no belief can invert. That is a strictly better control, and it costs exactly
+// one more pad (docs/tool-sensing-rfc.md §4.2b).
+//
+// So: two pads reserved. A single-button fob uses the first and leaves the
+// second unwired; a two-button fob uses both and stops needing the feedback loop
+// to stay correct — though it still wants it, to notice a flat fob battery, a
+// tripped breaker or an arm that has drifted out of alignment.
+//
+// THESE ARE SERVO CHANNELS 1 AND 2. Same pads, same PWM bank, same
+// move-then-detach behaviour — what differs is who commands them: the press
+// policy rather than the router. That is only free because a COLLECTOR BOARD
+// DRIVES NO GATES (§6.2), so nothing else wants those channels. On a board that
+// also drives gates these are the first two gates, and a layout claiming both is
+// a conflict nothing currently detects.
+//
+// A four-button fob (power plus fan speeds, like a WEN air cleaner) would want
+// four, which is the whole PWM block — possible on a collector board, and
+// exactly the point at which "one arm that travels between buttons" starts
+// looking cheaper than a servo per button.
+#if !defined(DUSTGATE_SERVO_BUS)
+#define PIN_FOB_SERVO_ON    12   // D7 — the ON button, or the only button
+#define PIN_FOB_SERVO_OFF    8   // D8 — the OFF button on a two-button fob
+#endif
+
 // -- The serial-servo bus moved UP --
 // It is defined with the PWM block it replaces (-DDUSTGATE_SERVO_BUS), because
 // the two are one choice and reading them apart is what let the pin map claim

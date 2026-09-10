@@ -89,6 +89,12 @@ bool SerialDebugControl::consumePressRequest() {
     return v;
 }
 
+bool SerialDebugControl::consumeRfScanRequest() {
+    bool v = _rfScanRequest;
+    _rfScanRequest = false;
+    return v;
+}
+
 bool SerialDebugControl::consumeHomeRequest() {
     if (_homePending) {
         _homePending = false;
@@ -331,6 +337,9 @@ void SerialDebugControl::processLine(const String& line) {
         // hardware from the serial task.
         _pressRequest = true;
         Serial.println(F("[RF] press queued — watch the receiver."));
+    } else if (cmd == "rfscan") {
+        _rfScanRequest = true;
+        Serial.println(F("[RF] address scan queued."));
     } else if (cmd == "mdnsprobe") {
         runMdnsProbe();
 #endif
@@ -947,6 +956,11 @@ void SerialDebugControl::printHelp() {
     Serial.println(F("                    Bypasses the retry policy — no cooldown, no"));
     Serial.println(F("                    spin-up grace, no sensor needed. Needs a"));
     Serial.println(F("                    control.rf block on the layout's collector."));
+    Serial.println(F("  rfscan            Try the 4 ways a DIP can be copied wrong and"));
+    Serial.println(F("                    keep the one the collector answers. Needs the"));
+    Serial.println(F("                    collector's sensor plug paired. SETUP ONLY —"));
+    Serial.println(F("                    an inverted address is a VALID address for"));
+    Serial.println(F("                    someone else's receiver. Watch it run."));
     Serial.println(F("  help              Show this list"));
 #if defined(PIN_PIXEL) || defined(PIN_LED)
     // The pixel is the only diagnostic you get once the board is in a box and

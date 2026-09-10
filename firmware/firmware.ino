@@ -37,7 +37,8 @@
 #include "control/ControlInput.h"
 #include "control/OutletSweep.h"
 #include "control/CollectorPress.h"        // the retry policy for a stateless press
-#include "control/RfCollectorPresser.h"    // ...and the one presser that exists   // the 254-address knock, one address per loop() pass
+#include "control/RfCollectorPresser.h"    // ...and the one presser that exists
+#include "control/RfAddressGuess.h"        // the four ways a DIP gets copied wrong   // the 254-address knock, one address per loop() pass
 #include "control/FaultPolicy.h"   // which begin() failure costs which capability
 #include "training/CalibrationStore.h"
 
@@ -1505,6 +1506,78 @@ static void describeOutletInto(JsonObject o, const char* ip, const char* mdnsHos
 
 #endif  // CONTROL_SMART_OUTLET
 
+#if defined(CONTROL_SMART_OUTLET) && defined(PIN_RF_TX)
+// Try each way a DIP can be copied wrong, and keep the one the collector
+// answers. Blocking and chatty on purpose: it is a supervised setup step.
+//
+// WHY IT NEEDS THE SENSOR PLUG. The whole method is "press it and see", and
+// seeing is what the collector's sensor.outlet does. Without one there is
+// nothing to test against and the routine would just transmit four addresses
+// into the shop, one of which may belong to someone else.
+static void runRfScan() {
+    std::vector<std::string> sysIds = g_topoRuntime.systemIds();
+    if (sysIds.empty()) { Serial.println(F("[RF] No layout loaded.")); return; }
+    const std::string sys = sysIds[0];
+
+    if (!control.collectorSensorConfigured(0)) {
+        Serial.println(F("[RF] The collector has no sensor plug, so there is nothing"));
+        Serial.println(F("     to test against. Pair one first — this works by"));
+        Serial.println(F("     pressing and watching the draw, not by guessing."));
+        return;
+    }
+
+    JsonObjectConst rf = g_topoRuntime.collectorRf(sys);
+    const uint8_t entered = (uint8_t)(rf["address"] | (int)RfCollectorPresser::kRocklerAddress);
+    const uint8_t data    = (uint8_t)(rf["data"]    | (int)RfCollectorPresser::kRocklerData);
+    const int     pin     = rf["pin"] | (int)PIN_RF_TX;
+
+    uint8_t cand[4]; topo::AddrGuess guess[4];
+    const int n = topo::addrCandidates(entered, cand, guess);
+
+    Serial.printf("\n[RF] Trying %d address(es) from %u. Put a LAMP in the collector's\n", n, entered);
+    Serial.println(F("     outlet — a blower cannot spin up and coast down fast enough"));
+    Serial.println(F("     to read, and this presses several times."));
+
+    for (int i = 0; i < n; i++) {
+        Serial.printf("\n[RF]  %u (%s) ... ", cand[i], topo::addrGuessName(guess[i]));
+        RfCollectorPresser p(pin, cand[i], data);
+        watchdog::pet();
+        if (!p.press()) { Serial.println(F("TRANSMIT FAILED")); continue; }
+        watchdog::pet();
+
+        // Wait out the spin-up grace, then read. Polling continues on its own
+        // task, so this only has to wait — but it has to pet the watchdog while
+        // it does, because loop() is not running underneath it.
+        const uint32_t until = millis() + topo::kCollectorSpinupGraceMs + 1500;
+        while ((int32_t)(millis() - until) < 0) { watchdog::pet(); delay(50); }
+
+        const bool on = control.collectorSensorWatts(0) >= topo::kCollectorRunningW;
+        Serial.println(on ? F("ANSWERED") : F("nothing"));
+        if (!on) continue;
+
+        Serial.printf("[RF] That is the one. Put this in the layout:\n");
+        Serial.printf("       \"control\": { \"rf\": { \"pin\": %d, \"address\": %u } }\n",
+                      pin, cand[i]);
+        if (guess[i] != topo::AddrGuess::AsEntered) {
+            Serial.print(F("     (the switch was read "));
+            Serial.print(topo::addrGuessName(guess[i]));
+            Serial.println(F(")"));
+        }
+        // Leave it as we found it. A scan that ends with the collector running
+        // is a scan that started a motor and walked away.
+        Serial.println(F("[RF] switching it back off..."));
+        watchdog::pet();
+        p.press();
+        watchdog::pet();
+        return;
+    }
+
+    Serial.println(F("\n[RF] None of them worked. That is not an address problem —"));
+    Serial.println(F("     check the transmitter's DATA wire, that it has 5V, that"));
+    Serial.println(F("     it has an antenna, and that the receiver is powered."));
+}
+#endif
+
 void loop() {
     watchdog::pet();   // we're alive this iteration
 
@@ -1823,6 +1896,23 @@ void loop() {
             watchdog::pet();
             Serial.println(sent ? F("[RF] sent.") : F("[RF] TRANSMIT FAILED."));
         }
+    }
+
+    // `rfscan` — find the address by trying, using the loop we already have.
+    //
+    // SETUP ONLY, and the loudest warning in this file. An inverted or reversed
+    // address is not a nonsense value: it is a perfectly valid address belonging
+    // to SOME OTHER RECEIVER. A shop with two Rockler boxes, or a neighbour's
+    // collector within 26 feet, is a shop where this can start the wrong
+    // machine. That is tolerable with a person standing here watching a lamp,
+    // and is exactly why it is a typed command rather than anything automatic.
+    // See control/RfAddressGuess.h.
+    if (_SC.consumeRfScanRequest()) {
+#ifdef PIN_RF_TX
+        runRfScan();
+#else
+        Serial.println(F("[RF] This build has no transmitter pad."));
+#endif
     }
 
     if (_SC.consumeHomeRequest() && currentState != STATE_HOMING) {
