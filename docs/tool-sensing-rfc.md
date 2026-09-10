@@ -3,7 +3,7 @@
 **Status:** decided 2026-09-03, **nothing bench-tested.** Sensor plugs ordered;
 everything else is reasoning from datasheets and product pages, not from a meter
 in this shop. Revised the same day, twice: the collector's switching hardware was
-going to be a contactor we built and isn't (§4.2, §12), and the remote's band,
+going to be a contactor we built and isn't (§4.2, §13), and the remote's band,
 encoder, address and button count are now known rather than assumed (§4.2).
 **Covers:** how the firmware learns a tool is running, and how the collector is
 switched, now that a smart plug can do neither for a large machine.
@@ -277,7 +277,7 @@ as off.
 #### The ceiling
 
 15A / 1.5HP. That covers the current collector with margin. **Above 1.5HP this
-box is out and the contactor build comes back** — it is preserved in §12 rather
+box is out and the contactor build comes back** — it is preserved in §13 rather
 than deleted for exactly that reason.
 
 ## 5. The 240V / hardwired sensor
@@ -544,8 +544,190 @@ Everything. Specifically:
 - **Whether the DIY sensor should ever be a real NodeLink node** rather than a
   Tasmota impersonator (§6). Emulation is right for now; it may stop being right
   if sensors need anything push-shaped or anything the Tasmota JSON cannot say.
+- **Whether DustGate should bring its own network** rather than live on the
+  user's (raised 2026-09-09, deliberately not pursued yet). It would dissolve
+  §12 rather than work around it: on a network we own, nothing is blocked, DHCP
+  is ours, and mDNS either works or is unnecessary. The C5 can run AP and
+  station at once, so it is not obviously infeasible. The costs are the reason
+  it needs real thought rather than a paragraph — a plug on our AP has no route
+  to the internet (which is fine for a sense-only plug and fatal for one wanting
+  OTA updates), and the woodworker's phone would have to leave the house WiFi to
+  reach the UI, which is a worse daily experience than any of the problems §12
+  describes. Routing between the two interfaces is the thing that would decide
+  it, and none of it is understood yet.
 
-## 12. Rejected
+  The adjacent question is **whether the radio should be WiFi at all**. ESP-NOW
+  is the interesting one for our own hardware, because it is the same radio with
+  no AP, no DHCP and no addresses to go stale — every §12 problem gone by
+  construction. It only reaches devices we build (§6's CT board), never a
+  Tasmota, so it is a second path rather than a replacement. Zigbee and
+  Thread/Matter are the standards-shaped answers and each want a coordinator and
+  a certification story. **Explicitly parked**: the near-term job is working
+  reliably on one shop's guest network, and none of this helps with that.
+
+## 12. Staying reachable
+
+Three questions asked together on 2026-09-09 — how a paired plug survives an IP
+change, whether to push instead of poll, and whether to write our own Tasmota
+firmware — turn out to be one question with one governing rule.
+
+**The rule, and it is now a design constraint: never make a working shop depend
+on something a network is allowed to block.** Multicast is the specific hazard.
+mDNS is off by default on plenty of guest networks, most IoT VLANs, and a fair
+number of mesh routers, and the woodworker whose shop stops working has no way
+to know that is why. A feature may *use* mDNS as a fast path; nothing may
+*require* it.
+
+### 12.1 Where we lean on mDNS today
+
+| Path | What mDNS does | If multicast is blocked |
+|---|---|---|
+| Shelly discovery (`_shelly._tcp`) | the only way to find them | wizard finds nothing → hand-typed IP |
+| Tasmota discovery (`_http._tcp` + `devicetype`) | known to usually fail anyway | covered — the IP sweep finds them |
+| Node discovery (`_dustgate._tcp`) | the only way to find nodes | hand-typed IP |
+| `RemoteActuatorBus::resolveAndDial()` | **runtime**, on every reconnect | a node paired by *hostname* never comes back; one paired by IP is fine (`_hostIsIp`) |
+| `ShellyGen2Outlet::reresolve()` | DHCP-change recovery | stale IP is unreachable, permanently |
+
+Every *discovery* path degrades to a hand-typed IP, which is tedious but not
+broken. Both *recovery* paths degrade to nothing — and recovery is the one that
+fails months later, in a shop nobody is watching, on a router reboot.
+
+**SETTLED ON HARDWARE, 2026-09-09.** Two questions that had been reasoned about
+rather than tested, both answered against the Athom plug and the shop network:
+
+- **Tasmota's mDNS is genuinely absent, not merely switched off.**
+  `SetOption55 1` answers `{"SetOption55":"ON"}` — which looks like success and
+  is not. Tasmota stores and echoes any SetOption in the valid range whether or
+  not compiled code reads it, so **a set bit is not a feature**. After a
+  confirmed restart (`UptimeSec` 131) the plug appears in neither
+  `dns-sd -B _http._tcp local.` nor `_arduino._tcp`. `USE_DISCOVERY` is not in
+  the build, there is no command that adds it, and the subnet sweep is therefore
+  the only first-contact route. This is also why `TasmotaOutlet::reresolve()`
+  stays deleted: there is no name to resolve.
+
+- **Multicast is NOT blocked on this network.** The same browse showed
+  `dustgate` immediately. Shelly discovery and `ShellyGen2Outlet::reresolve()`
+  are on solid ground here — which is the opposite of what the contaminated test
+  below suggested, and the reason it is kept as a warning.
+
+**A NETWORK TEST THAT PROVED NOTHING, recorded so it is not repeated.** On
+2026-09-09 `dustgate.local` failed to resolve from the Mac, and that was read as
+evidence multicast was blocked on the shop network. The board was simply powered
+off. There is still **no evidence either way** about mDNS on that network; the
+valid test is `mdnsprobe` on a running ESP32, which asks the querier that
+actually matters rather than the Mac's.
+
+### 12.2 Tasmota recovery: re-sweep, identify by Mem1
+
+`TasmotaOutlet::reresolve()` was a verbatim copy of the Shelly one and could
+never have worked: Tasmota does not advertise over mDNS in a stock build, and
+`_host` is never populated for a Tasmota because the sweep finds these by
+address. It returned false on its first line every time. **Removed 2026-09-09** —
+a dead branch that reads like recovery is worse than no recovery, because it
+answers "what happens when the address changes?" wrongly and stops anyone
+asking again.
+
+The replacement uses what pairing already writes. **`Mem1` is a durable
+identifier**: it holds our hostname, it survives reboots and lease changes, and
+it is exactly the thing an IP is not. So a plug that goes missing is found again
+by sweeping the subnet and reading `Mem1` for the one that says it is ours.
+
+This is a strictly better answer than the alternatives, and it is better
+*because of* §12's rule:
+
+| Option | Why not |
+|---|---|
+| DHCP reservation | Router-side, per-user, and not something the product can do. The right advice for an advanced user; not a mechanism. |
+| Static IP on the plug at pairing (`IPAddress1`) | We would be choosing an address on someone else's subnet with no way to know what is free. A collision is worse than a lease change, and harder to explain. |
+| mDNS | The thing this section exists to stop relying on. |
+
+Shape of the work, none of it built:
+
+- It is **~60s of blocking HTTP over 254 addresses**, so it must never run from
+  the poll task on a failed read. That is why `poll()` now simply fails.
+- It is a **deliberate, user-visible action** with a progress report — the same
+  machinery the layout-page discovery sweep needs (see the two-phase scan
+  mockup), which is the argument for building that first and getting this second
+  nearly free.
+- A sweep may find a plug whose `Mem1` names a *different* brain. That is
+  `plugclaim::decideMarker()`'s existing job and it needs no new policy.
+- **Unresolved:** two plugs claiming the same owner name, after a plug is
+  swapped without being released. The claim identifies the *brain*, not the
+  *tool*, so it cannot tell two of our own plugs apart. Writing `Mem2` with the
+  tool id at pairing time would fix it and costs nothing — worth doing when this
+  is built.
+
+### 12.3 Push instead of poll — yes, and as configuration
+
+The polling load recorded in §4.3 is real: every Tasmota is polled at
+`OUTLET_POLL_INTERVAL_MS` (500 ms), permanently, and at seven plugs that is 14
+requests/second the primary is making forever.
+
+Tasmota can push, with no custom firmware, via a rule:
+
+```
+Rule1 ON Energy#Power DO WebSend [<primary-ip>] /push?w=%value% ENDON
+Rule1 1
+```
+
+`WebSend` sends a Tasmota *command* by default and does a raw HTTP GET when the
+argument starts with `/`. **`WebQuery` is the better fit** — same idea, shaped
+for non-Tasmota targets, which is what we are. Either way this is *setup*, not
+code: it is written once at pairing over the same `/cm?cmnd=` endpoint that
+already writes `Mem1`, `PowerOnState` and `PowerLock`.
+
+**Push the wattage, not the verdict.** The tempting alternative is to put the
+threshold in the plug so it only calls when a tool actually starts. Rejected:
+`thresholdW` is a topology value the user edits, so every edit would mean
+rewriting a device's rule, and the judgement would move out of the primary.
+`TopologyRuntime`'s contract is that a plug *reports* and never *judges*, and
+that is what makes one brain possible. The plug sends a number; we decide.
+
+(`PowerLow`/`PowerHigh` looked like the elegant version of this and are not:
+they emit **MQTT telemetry only** and raise no rule trigger, so with no broker
+they do nothing. Corrected here because the first version of this section said
+otherwise.)
+
+What it costs:
+
+- **Latency.** `Energy#Power` fires roughly every 2s, against a 500ms poll.
+  Acceptable — a gate takes ~2s to move and the collector's spin-up grace is 4s,
+  so the sensing is no longer the slow part of the chain.
+- **Reliability.** Tasmota's own docs are blunt that `WebSend` error handling is
+  poor and MQTT is the reliable transport. A dropped push is a tool that looks
+  idle while it runs, which is the wrong way to fail.
+
+So push does not *replace* polling — it lowers its rate. Keep a slow poll as the
+floor (a few seconds), let push carry the fast path, and the 14 req/s becomes a
+fraction of that without inventing a new failure mode. **And it changes the IP
+problem's shape:** a plug that calls us does not need us to know where it is, so
+a push arriving from an unexpected address is itself a re-resolve — free, if the
+handler reads `Mem1` to confirm who it is before believing it.
+
+### 12.4 Custom Tasmota firmware — no, and the reason is not difficulty
+
+It is entirely possible. Athom's plugs are not locked down: they are documented
+as compatible with the official Tasmota OTA server, people have flashed custom
+builds (mensi.ch documents the process), and the constraints are ordinary —
+`tasmota-minimal.bin` first if flash space is tight, DOUT flash mode on the
+ESP8285.
+
+Rejected anyway. The two things custom firmware would buy are **mDNS**
+(`USE_DISCOVERY`, confirmed absent from the Athom build on 2026-09-09 — see
+§12.1) and **push** — and push is available above as configuration. That leaves mDNS, which §12's own rule says we
+must not depend on, so building our own way to depend on it is backwards.
+
+Against that: it trades Tasmota's mature OTA, WiFi reconnection, energy
+calibration and setup UI for a maintenance burden on a **mains device that has
+to be opened to be recovered** if a bad flash bricks it. That is a bad trade for
+a feature we have decided not to rely on.
+
+**What would reopen it:** needing something the Tasmota JSON genuinely cannot
+say. §6 already contemplates the reverse direction — our own CT board
+*impersonating* Tasmota — and the day emulation stops being expressive enough is
+the day both questions get asked again together.
+
+## 13. Rejected
 
 | Option | Why not |
 |---|---|

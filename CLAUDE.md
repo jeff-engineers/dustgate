@@ -227,6 +227,33 @@ These are decided; don't relitigate them in code review or suggestions.
   `sensor.outlet` vs `control.outlet` in the model already said this. See
   [`docs/tool-sensing-rfc.md`](docs/tool-sensing-rfc.md) — decided, nothing
   bench-tested.
+- **Never require anything a network is allowed to block.** Multicast is the
+  specific hazard: mDNS is off on plenty of guest networks, most IoT VLANs and a
+  fair number of mesh routers, and the woodworker whose shop stopped working has
+  no way to know that is why. A feature may *use* mDNS as a fast path; nothing
+  may *require* it. Today every DISCOVERY path degrades to a hand-typed IP;
+  both RECOVERY paths (`ShellyGen2Outlet::reresolve()`, and the node re-resolve
+  in `RemoteActuatorBus::resolveAndDial()` when a node was paired by hostname
+  rather than IP) degrade to nothing, which is the failure that shows up months
+  later on a router reboot. `docs/tool-sensing-rfc.md` §12 has the dependency
+  map and the Tasmota replacement — re-sweep and identify by the `Mem1` claim,
+  which is durable in the way an IP is not.
+
+  **Tested 2026-09-09:** multicast is NOT blocked on the shop's `GenericGuest`
+  network — `dns-sd -B _http._tcp local.` shows `dustgate` at once. And Tasmota's
+  mDNS is genuinely absent rather than switched off: `SetOption55 1` answers
+  `{"SetOption55":"ON"}` but nothing advertises after a confirmed restart,
+  because Tasmota echoes any SetOption in range whether or not compiled code
+  reads it. **A set SetOption bit is not a feature.** So a Tasmota is found only
+  by the subnet sweep (`POST /api/outlets/sweep`), and `TasmotaOutlet` has no
+  `reresolve()` because there is no name to resolve.
+
+  A corollary, learned the hard way twice in one session: **an unreachable name
+  is not evidence the network blocks anything.** `dustgate.local` failing to
+  resolve was a powered-off board, not blocked multicast, and a whole conclusion
+  was built on it. Test with `mdnsprobe` on a running board, which asks the
+  querier that actually matters.
+
 - **New pieces default into the system you're working in.** Adding a gate places
   it inside the active system's row band (`activeSystemId`, which follows whatever
   you last touched), not at some shop-wide origin. Systems own contiguous,
