@@ -442,7 +442,7 @@ a couple of line cycles, learn the idle baseline at boot, trip on a multiple. No
 calibration constant, no user-facing amps, no accuracy claim to defend. A
 clipped waveform still reads as unambiguously on.
 
-### 5.4 Open: does clamping the *whole cord* work?
+### 5.4 CLOSED — clamping the whole cord does NOT work (2026-09-09)
 
 Everything above assumes the CT goes around exactly one conductor, because hot
 and neutral in an intact cord carry equal and opposite current and their fields
@@ -454,10 +454,56 @@ iVAC's Pro Tool Plus is a shipping product that determines whether a tool is on
 cord. The residual field of an imperfectly balanced pair is evidently enough for
 a threshold decision — which is all this system has ever needed.
 
-If it holds, the whole §5 install story collapses to *clip it onto the cord and
-open nothing*, and the 240V and hardwired cases stop being the awkward ones.
-That is a large enough prize to test before committing to the split-core path.
-**Untested.** §9 says how.
+If it held, the whole §5 install story would have collapsed to *clip it onto the
+cord and open nothing*, and the 240V and hardwired cases would have stopped being
+the awkward ones. That was a large enough prize to test before committing to the
+split-core path.
+
+**It does not hold. Tested 2026-09-09 (jeff): nothing discernible above noise on
+an intact cord, and NOT ONLY with our rig — a bench multimeter could not see it
+either.** That second half is what makes this an answer rather than another
+noise-floor complaint: our own board's floor is under suspicion (§5.5), so a
+null result from it alone would have proved nothing. An instrument we trust
+failing the same way moves the cause from our electronics to the physics.
+
+The residual field of a balanced pair is evidently smaller than iVAC's product
+implies, or they are doing something other than a plain clamp — a specific
+geometry, a much more sensitive front end, or a sensor that is not a CT at all.
+Worth knowing if a cheap clip-on ever matters again; not worth chasing now.
+
+**So the split-core path stands, and §5's install story stays as written**: a
+line splitter, or one conductor exposed. The 240V and hardwired cases stay the
+awkward ones.
+
+### 5.4a What the CT actually has to achieve (2026-09-09)
+
+Sharpened by Jeff, and it is a smaller target than §5.3 and §5.5 have been
+aiming at: **"this tool is running, beyond standby" is the entire question.**
+Not watts, not amps, not accuracy — one bit.
+
+That matters because it moves the CT off the hook for the thing it is worst at.
+A CT measures CURRENT; watts need voltage and power factor, which it cannot
+give (the Athom reports all three, which is exactly what makes it the better
+reference — see the note at the top of TasmotaOutlet.h). Absolute calibration
+against an unresolved noise floor is a hard problem. **Separating a running
+motor from standby is not**: even the noisy screen-on measurement had ~80×
+between the two.
+
+The consequence for the model, which §5.5 raised and this answers:
+**`DEFAULT_THRESHOLD_W` is the wrong shape for a CT-sensed tool.** It is in
+watts, typed by a user, and a CT cannot honour either half. The likely answer is
+a **learned per-tool baseline** — measure standby once at pairing, trip at some
+multiple of it — which sidesteps calibration entirely, because a ratio against
+the tool's own quiet state does not care what the absolute numbers mean or what
+the board's floor is.
+
+**Jeff is gathering the data that decides it**: every tool in the shop, standby
+vs running. Until that exists, the multiple is a guess, and no threshold shape
+should be committed to the schema.
+
+Note this does NOT excuse the noise in §5.5. A floor that moves with whether the
+screen is drawing makes even a ratio unreliable, because the baseline learned at
+pairing may be measured under different conditions than the trip.
 
 ### 5.5 The screen is a noise source, and every board has one
 
@@ -584,7 +630,7 @@ already on hand; the Athom plugs are ordered.
 | 4 | RF replay | 315MHz TX/RX kit | Can the primary drive the receiver with a $2 module, on protocol 11, with the address cross-check passing? |
 | 5 | Fob tap | optocoupler | Fallback if 4 is fiddly. |
 | 6 | CT threshold | SCT-013-030 | Is baseline-and-multiple solid with no calibration? |
-| 7 | **Whole cord vs one conductor** | CT + line splitter | §5.4. Same CT, same load, 1X loop vs intact cord, back to back. |
+| ~~7~~ | ~~Whole cord vs one conductor~~ | — | **DONE 2026-09-09 — it does not work.** §5.4. Nothing above noise on an intact cord, on our rig or a bench multimeter. |
 | 8 | Closed loop | 2 + 4 | Toggle remote + Athom feedback → absolute state. |
 
 Parts for the above, beyond what is on hand: an **HT12E** (~$1), a **315MHz** TX
@@ -606,6 +652,8 @@ Everything. Specifically:
 
 - No Athom plug has held the collector's 10 A continuously. One has been talked
   to over HTTP (§4.1) but nothing has been plugged into it.
+- §5.4 is ANSWERED as of 2026-09-09 and the answer is no. What follows was
+  written while it was still open:
 - No CT has been clamped on anything, and §5.4 is a hypothesis with one piece of
   commercial evidence behind it.
 - Nothing has been transmitted to the Rockler receiver. Band, encoder, address
@@ -855,5 +903,5 @@ the day both questions get asked again together.
 | Converting the collector to 240V | Halves the current and would make everything easier, but needs a 240V circuit run — panel work, which §5 rules out on the same grounds. |
 | Shelly EM Gen3 + CT per tool | Works, and its contactor-control output was genuinely well-matched to the build above. But ~$30/tool, and it buys nothing the $13 Athom plug does not for the common corded case. |
 | Panel-side CTs (Emporia Vue, IoTaWatt) | Cheapest per circuit and the only thing that covers hardwired tools — but it means panel work. Rejected on insurance grounds; see §5. Also ambiguous when two tools share a circuit. |
-| Stick-on accelerometer / vibration sensing | The genuinely cheap idea: ~$5, no mains contact, no enclosure, no electrician, works on hardwired and 240V tools, installs by peeling a sticker. Rejected **for now** only because of cross-talk: once the collector runs the whole shop shakes, and the tool's own gate and duct are physically coupled to it. Very likely separable by magnitude and spectrum; entirely unproven. If §5.4 pans out it is probably moot, since clipping a CT to an intact cord is nearly as easy and gives a number we already know how to interpret. |
+| Stick-on accelerometer / vibration sensing | The genuinely cheap idea: ~$5, no mains contact, no enclosure, no electrician, works on hardwired and 240V tools, installs by peeling a sticker. Rejected **for now** only because of cross-talk: once the collector runs the whole shop shakes, and the tool's own gate and duct are physically coupled to it. Very likely separable by magnitude and spectrum; entirely unproven. **§5.4 did not pan out (2026-09-09)**, so this is no longer moot — a clip-on CT needs the cord opened, which is the cost this idea avoids entirely. It is now the cheapest route to a 240V or hardwired tool, and the strongest reason to revisit it. |
 | HLK-PM01 mains supply inside the DIY sensor | Turns a low-voltage gadget into a homemade mains device for the sake of avoiding a USB brick. §5.1. |
