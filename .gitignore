@@ -95,3 +95,9 @@ firmware/data/
 dustgate-ui/.routing-test/
 dustgate-ui/.wiring-test/
 dustgate-ui/.spec-test/
+
+# PlatformIO regenerates this from firmware.ino on every build ("Converting
+# firmware.ino"). It lands in the SOURCE tree, not the build dir, so it shows up
+# as untracked and looks like a stray. It is not — deleting it mid-build fails
+# the compile at src/firmware.ino.cpp.o (2026-09-09).
+firmware/firmware.ino.cpp
