@@ -239,6 +239,81 @@ So: build the servo path first because it is what ships, and keep the RF driver
 sends the toggle is behind one interface — and the feedback loop is identical
 either way, since both are stateless.
 
+### 4.2c Skip the remote: actuate the collector's OWN switch (2026-09-11)
+
+Jeff's, and it is better than the fob for the case that matters — a servo on the
+dust collector's own paddle or toggle, instead of on a handheld remote.
+
+**It is allowed.** §3's hard line is *never a tool's own power switch*. The
+collector is the one thing DustGate is permitted to command, so its switch is
+fair game in a way a table saw's never is. (That distinction is the whole reason
+the line is drawn where it is; see §4.2b's "where it does NOT go".)
+
+**Where it wins outright is a MAINTAINED switch** — a paddle, a toggle, a rocker.
+That is the best row in §4.2b's table: a servo sets a POSITION, not an edge. It
+is idempotent, a missed command self-corrects, and the switch's own physical
+position becomes a truthful, human-readable display of what the system believes.
+
+And it removes three dependencies at once that the fob path carries:
+
+- **No fob battery.** §4.2a records that the battery becomes a system
+  dependency, and that a flat one presents as a dead servo. Gone.
+- **No RF at all** — no address, no DIP-matching screen (`docs/mockups/
+  rf-address.html`), and none of §11's 315 MHz certification question.
+- **No Rockler box.** Which is the sharpest consequence, so state it plainly:
+  **a servo on the collector's switch and a receiver in the cord are mutually
+  exclusive.** If the receiver is plugged between wall and machine, the
+  collector's own switch has to stay ON for the receiver to control anything. It
+  is one or the other, never both — and choosing this one deletes a $40 device
+  from the chain.
+
+#### What decides whether it works on a given machine
+
+**FORCE, and this breaks an assumption made yesterday.** §6.2 and the collector
+board's pin notes assume **9 g servos** for the fob-presser, on the reasoning
+that a fob button is a light spring and a press is not a stall. A collector's
+paddle is not a fob button: it is a real mechanical switch with a detent, and a
+magnetic starter's button is deliberately firm. **That is metal-gear territory,
+the same servo class the gates use** — which changes the current budget in
+`firmware/wiring/collector-node.md` §6 and may change which isolated converter
+that section recommends. **Unmeasured.** Measure the switch before choosing a
+servo, not after.
+
+**SWITCH TYPE.** Three cases, and they are not equally good:
+
+| | |
+|---|---|
+| **Paddle / toggle** (maintained) | The good case. Absolute, self-correcting, legible |
+| **Magnetic starter, momentary start/stop** | Two servos, discrete buttons — still idempotent, still good (§4.2b) |
+| **A single momentary toggle** | Same stateless problem as the fob. No better than RF |
+
+**NO-VOLT RELEASE.** An NVR switch is designed so the machine stays off after a
+power cut until a person presses start. A servo pressing it defeats that by
+design. Arguably we already do — automatic collector start IS the product, and
+the Rockler receiver defeats it the same way — but it should be recorded rather
+than discovered. A collector is a far milder hazard than the tools NVR was
+invented for, which is the reason this is acceptable here and would not be on a
+saw. It is also a reason the STOP button matters: whatever presses start must be
+able to press stop.
+
+**REACH.** Plenty of collectors put the switch under the motor or around the
+back, where a bracket cannot easily bolt to anything rigid. §4.2b's warning
+applies doubly: fixture and switch must be rigid *relative to each other*, and a
+shop vibrates.
+
+#### Where this leaves the three paths
+
+Nothing is retired. They answer different machines:
+
+| Path | Best for |
+|---|---|
+| **Servo on the collector's own switch** | A maintained paddle or toggle within reach. The best case available |
+| **Servo on the fob** (§4.2a) | A switch that cannot be reached or moved, but a remote that can |
+| **RF injection** (§4.2) | No fob to press, no switch to reach, or a shop where the receiver is already the install |
+
+The first is now the one to aim at, and the one that needs a torque measurement
+before anything else.
+
 ### 4.2b Mechanical actuation, as a general technique (2026-09-10)
 
 The fob-tapper is one instance of something broader, and it is worth stating on

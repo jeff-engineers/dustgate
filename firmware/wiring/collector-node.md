@@ -279,6 +279,17 @@ flowchart LR
   classDef fob fill:#f5f0e0,stroke:#8a7a3a,stroke-width:2px
 ```
 
+**⚠️ THE SERVO CLASS IS UNSETTLED (2026-09-11).** Everything below, and the 5 V
+budget in §6, assumes **9 g servos** — right for a fob button, which is a light
+spring and a short travel. It is very likely WRONG for the better option:
+actuating the **collector's own paddle or starter button** instead of its remote
+(`tool-sensing-rfc.md` §4.2c). That is a real mechanical switch with a detent,
+and a magnetic starter's button is deliberately firm — metal-gear territory, the
+same class the gates use, and a different current draw.
+
+**Measure the switch before buying a servo.** It may also change which isolated
+converter §6 recommends, if topology C is ever needed.
+
 **Two servos, and the second is not a spare.** One servo presses one button, and
 a single-button fob is a **toggle** — stateless, so a missed or doubled press
 inverts what the system believes. A fob with **separate ON and OFF buttons** is
