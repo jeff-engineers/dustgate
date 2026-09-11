@@ -124,6 +124,26 @@
 #define PIN_ENDSTOP_HOME    8   // D8, NC to GND, INPUT_PULLUP
 #define PIN_ENDSTOP_MAX     9   // D9, ditto
 
+#elif defined(DUSTGATE_COLLECTOR)
+
+// -- COLLECTOR board: the PWM block, minus the two pads the collector needs --
+//
+// A collector board drives NO GATES (docs/tool-sensing-rfc.md §6.2), so the four
+// PWM pads are free to be spent on collector jobs instead. Two go to fob servos,
+// one to the transmitter, and one is spare:
+//
+//   D7  fob servo, ON button   \  still PWM channels 1 and 2, same driver
+//   D8  fob servo, OFF button  /   and the same move-then-detach
+//   D9  315 MHz transmitter        (PIN_RF_TX, below)
+//   D10 spare                      lamps, or a third fob button
+//
+// SERVO_COUNT IS 2 HERE, and that is the whole difference from the gate build.
+// The fob servos ARE channels 1 and 2 — same ServoActuator, same `servo` and
+// `stroke` bench commands — so nothing new drives them. What changes is that
+// channels 3 and 4 do not exist, because D9 is the transmitter.
+#define SERVO_PWM_PIN_1    12   // D7 — fob servo, ON (or the only button)
+#define SERVO_PWM_PIN_2     8   // D8 — fob servo, OFF, on a two-button fob
+
 #else
 
 // -- Servo PWM block --
@@ -307,8 +327,14 @@
 //       line is 3.3V-tolerant as an input), GND -> GND, DATA -> D6.
 //       A 17 cm wire on the module's ANT pad is a quarter wave at 315 MHz and
 //       is worth more than anything else on this list.
-#if !defined(DUSTGATE_SERVO_BUS)
-#define PIN_RF_TX        9   // D9 — see the pin budget above
+#if defined(DUSTGATE_COLLECTOR)
+#define PIN_RF_TX        9   // D9 — free here because SERVO_COUNT is 2
+#elif !defined(DUSTGATE_SERVO_BUS)
+// On a GATE board D9 is servo channel 3. Defined anyway so the bench `press`
+// command works on an ordinary primary with nothing on channel 3 — which is how
+// the transmitter was first proven — but a board actually driving four gates
+// must give control.rf an explicit pin, or it will fight channel 3.
+#define PIN_RF_TX        9   // D9 — ⚠️ also SERVO_PWM_PIN_3 on this build
 #endif
 
 // -- Fob servos: pressing the collector's remote mechanically --
@@ -337,9 +363,11 @@
 // four, which is the whole PWM block — possible on a collector board, and
 // exactly the point at which "one arm that travels between buttons" starts
 // looking cheaper than a servo per button.
-#if !defined(DUSTGATE_SERVO_BUS)
-#define PIN_FOB_SERVO_ON    12   // D7 — the ON button, or the only button
-#define PIN_FOB_SERVO_OFF    8   // D8 — the OFF button on a two-button fob
+#if defined(DUSTGATE_COLLECTOR)
+// Aliases, not a second definition — these ARE servo channels 1 and 2. Named so
+// the intent is readable where a press is commanded rather than a gate move.
+#define PIN_FOB_SERVO_ON   SERVO_PWM_PIN_1   // D7
+#define PIN_FOB_SERVO_OFF  SERVO_PWM_PIN_2   // D8
 #endif
 
 // -- The serial-servo bus moved UP --

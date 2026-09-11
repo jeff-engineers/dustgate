@@ -120,7 +120,7 @@ static AsyncWebSocket nodeWs("/nodelink");
 #if HAS_SERVO
 static ServoActuator servos[SERVO_COUNT];
 static const int SERVO_PINS[SERVO_COUNT] = {
-    SERVO_PWM_PIN_1, SERVO_PWM_PIN_2, SERVO_PWM_PIN_3, SERVO_PWM_PIN_4
+    SERVO_PWM_PIN_LIST
 };
 #endif
 

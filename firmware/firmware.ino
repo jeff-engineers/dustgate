@@ -322,7 +322,7 @@ static inline bool farSwitchTriggered() {
 #include "motor/ServoActuator.h"
 #if defined(ENABLE_SERVO) && defined(SERVO_PWM_PIN_1)
 ServoActuator g_servos[SERVO_COUNT];
-static const int SERVO_PINS[SERVO_COUNT] = { SERVO_PWM_PIN_1, SERVO_PWM_PIN_2, SERVO_PWM_PIN_3, SERVO_PWM_PIN_4 };
+static const int SERVO_PINS[SERVO_COUNT] = { SERVO_PWM_PIN_LIST };
 #endif
 
 // -- Feedback system --

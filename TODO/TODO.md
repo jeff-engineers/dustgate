@@ -198,6 +198,71 @@ reasoning was contested, or that a still-open item above leans on.
 
 ## Carried debt
 
+- **Six builds and counting — is the primary/node split worth it? (jeff,
+  2026-09-11.)** There are now three primaries and three nodes (servo, slider,
+  collector), and the pairs differ only by `-DDUSTGATE_SECONDARY` plus a
+  `build_src_filter` that compiles a different sketch. Jeff's question: at what
+  point is it simpler to make **everything a primary** and let a build flag say
+  "this one is really a node"?
+
+  It is a good question and the answer is not obviously no. The user-facing cost
+  is real — six things to pick between, and the difference between them is a
+  thing about OUR code rather than about their shop.
+
+  What is actually load-bearing, so a future decision does not rediscover it:
+
+  - **Partitions differ.** A primary carries the Angular bundle in `ffat`
+    (`partitions-xiao-c5-primary.csv`); a node uses `huge_app.csv` and has no
+    filesystem. Merging means every node ships a web UI it never serves, or the
+    partition table stops being a property of the build.
+  - **They are different sketches**, not different flags: `firmware.ino` vs
+    `node/dustgate_node.cpp`. That was deliberate — see the rationale at the top
+    of the node sketch — and a merged build would compile the routing brain,
+    topology, plug polling and HTTP server onto boards that use none of it.
+  - **8 MB of flash makes the size argument weaker than it was** (see the
+    partition item above): the old "a node cannot afford the primary's code" may
+    simply not be true any more, and nobody has re-measured it.
+
+  A middle path nobody has costed: keep one BUILD per carrier (servo, slider,
+  collector) and make primary-vs-node a **runtime** decision — NVS, or the ID
+  resistor below — which would take six envs to three and let a board change
+  role without a reflash.
+
+- **Auto-detect the carrier with an ID resistor (jeff, 2026-09-11).** A resistor
+  of known value to ground on an otherwise-unused pin, read by the ADC at boot,
+  tells the firmware which carrier it is sitting on. One firmware, no
+  `-D` flags, no picking the wrong env and chasing a dead servo.
+
+  It is how plenty of hardware does exactly this, and it composes with the item
+  above: carrier from the resistor, role from NVS, and the six envs collapse.
+
+  **The wrinkle, which is specific to us:** D0 is the only analog pad on the
+  edge, and on a collector build it is spoken for by the CT. Reading an ID
+  there at boot does not work either — the CT's divider holds that pin at
+  ~1.65 V, which swamps any ID value. So either the collector carrier is the one
+  that has no ID resistor (detected by exclusion, which is fragile), or the ID
+  moves to something that is not an ADC read — a pin strapped high/low, a
+  one-wire EEPROM, an I²C part on the screen's bus. **The I²C option is probably
+  the right one**: the bus already exists on D4/D5, a 24C02 costs cents, and it
+  can carry more than an identity — a serial number, a calibration constant, the
+  carrier revision.
+
+- **A single-servo + CT board for 240 V tools (jeff, 2026-09-11).** Jeff has
+  already built several single-servo nodes for testing, to save wiring time and
+  cost. That is a fourth carrier: one gate, one CT, and the pin budget is easy
+  because three PWM channels come back.
+
+  The variant worth thinking about alongside it is **CT-only, no servo** — for a
+  240 V tool where the gate is elsewhere. The argument is not cost: it is that a
+  CT lead running from the tool to a board that also drives a gate is **a cable
+  across the floor**, and a shop floor with a trip hazard on it is a worse
+  product than one without. A CT-only board sits at the tool and talks over
+  WiFi, so the only wire is its own supply.
+
+  Nothing to decide until the CT is trusted at all (§5.4a, and the noise floor).
+
+
+
 - **`POST /api/dustcollector/switch` is dead under a shop.** It drives collector
   slot 0 directly (`SmartOutletControl::setDcManual`), and with a topology loaded
   the main loop re-asserts every slot from `g_topoRuntime.collectorOn(systemId)`

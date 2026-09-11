@@ -262,14 +262,32 @@ void SerialDebugControl::processLine(const String& line) {
         } else {
             int idx = rest.substring(0, sp).toInt();
             String arg = rest.substring(sp + 1); arg.trim();
-            if (idx < 1 || idx > 4) {
+            if (idx < 1 || idx > (HAS_SERVO ? SERVO_COUNT : 0)) {
                 // Printed from the macros, not typed. This line said
                 // "pins 25/26/27/14" until 2026-09-11 — the retired DevKitC's
                 // pins, wrong on every board still in the tree, and exactly the
                 // sort of thing someone chasing a dead servo would trust.
-                Serial.printf("[SERVO] index must be 1..4 (GPIO %d/%d/%d/%d)\n",
-                              SERVO_PWM_PIN_1, SERVO_PWM_PIN_2,
-                              SERVO_PWM_PIN_3, SERVO_PWM_PIN_4);
+                // Printed from the macros AND from SERVO_COUNT, because a
+                // collector build has two channels, not four — and a hardcoded
+                // "1..4" there would send someone hunting a servo that does not
+                // exist on their board.
+                //
+                // GUARDED ON HAS_SERVO, which the stale hardcoded string it
+                // replaced did not need: a slider board defines no PWM pins at
+                // all, so naming them unguarded breaks that build. (It did, for
+                // about ten minutes.)
+#if HAS_SERVO
+                Serial.print(F("[SERVO] index must be 1.."));
+                Serial.print(SERVO_COUNT);
+                Serial.print(F(" (GPIO"));
+                { const int pins[SERVO_COUNT] = { SERVO_PWM_PIN_LIST };
+                  for (int i = 0; i < SERVO_COUNT; i++) {
+                      Serial.print(i ? '/' : ' '); Serial.print(pins[i]);
+                  } }
+                Serial.println(')');
+#else
+                Serial.println(F("[SERVO] this build drives a serial bus, not PWM servos"));
+#endif
             } else if (arg == "detach") {
                 _servoIndex = idx; _servoDetach = true; _servoPending = true;
                 Serial.print(F("[SERVO] Detach servo ")); Serial.println(idx);
@@ -360,9 +378,10 @@ void SerialDebugControl::processLine(const String& line) {
         if (n < 3) {
             Serial.println(F("[STROKE] Usage: stroke <1-4> <from> <to> [reps] [dwellMs]"));
             Serial.println(F("         e.g. stroke 1 20 90 5   — five presses, 20 deg to 90 deg"));
-        } else if (idx < 1 || idx > 4 ||
+        } else if (idx < 1 || idx > (HAS_SERVO ? SERVO_COUNT : 0) ||
                    from < 0 || from > 180 || to < 0 || to > 180) {
-            Serial.println(F("[STROKE] index 1..4, angles 0..180"));
+            Serial.printf("[STROKE] index 1..%d, angles 0..180\n",
+                          HAS_SERVO ? SERVO_COUNT : 0);
         } else if (reps < 1 || reps > 50) {
             Serial.println(F("[STROKE] reps 1..50"));
         } else {

@@ -37,13 +37,14 @@
 #
 #   THE COLLECTOR BOARD — add --collector:
 #
-#   bash dev.sh flash --collector collector    # bin sensor, RF, fob servos
-#     NOT a separate env. It flashes the PRIMARY build, because that is where
-#     the bin sensor and the RF presser live — dustgate_node.cpp has neither,
-#     and no fob-servo presser exists at all. So a collector board today is a
-#     SECOND PRIMARY: fine on a bench, a fight in a shop that already has one.
-#     Give it its own hostname. firmware/wiring/collector-node.md §0 has the
-#     table of what works where.
+#   bash dev.sh flash --collector collector       # a PRIMARY at the collector
+#   bash dev.sh flash-node --collector collector  # ...or a NODE, if the brain
+#                                                 #    is elsewhere
+#     Drives NO GATES: the PWM block goes to fob servos (D7/D8) and the 315 MHz
+#     transmitter (D9) instead, so SERVO_COUNT is 2. Bin sensor on D6, CT on D0.
+#     ⚠️ The NODE build compiles but has neither the bin sensor nor the RF
+#     transmitter — both still live in firmware.ino. Fob servos work on both.
+#     firmware/wiring/collector-node.md has the table of what works where.
 #
 #   THE SLIDER BOARD — add --slider to either flash command:
 #
@@ -98,6 +99,14 @@ NODE_ENV="xiao_c5"
 # in each role, not a flag on the servo build, and `--slider` picks it.
 LINEAR_PRIMARY_ENV="xiao_c5_linear_primary"
 LINEAR_NODE_ENV="xiao_c5_linear"
+
+# The COLLECTOR pair, and a FOURTH thing to flash in each role for the same
+# reason the slider is a third: it drives different hardware off the same pads.
+# A collector board drives no gates, so the PWM block goes to fob servos (D7/D8)
+# and the 315 MHz transmitter (D9) instead — SERVO_COUNT is 2 there.
+# `--collector` picks it. See tool-sensing-rfc §6.2.
+COLLECTOR_PRIMARY_ENV="xiao_c5_collector"
+COLLECTOR_NODE_ENV="xiao_c5_collector_node"
 
 UI_DIR="$SCRIPT_DIR/dustgate-ui"
 TOOLS_DIR="$SCRIPT_DIR/tools"
@@ -416,7 +425,7 @@ parse_provision_overrides() {
       # The collector board: bin sensor, CT, RF transmitter, fob servos. NOT a
       # separate env — it is the PRIMARY build, because that is where those
       # capabilities actually live today. See the banner in run_flash().
-      --collector|--dc) FLASH_COLLECTOR=1; shift ;;
+      --collector|--dc) FLASH_COLLECTOR=1; FLASH_ENV="$COLLECTOR_PRIMARY_ENV"; shift ;;
       # Two primary envs now, and --slider picks between them, so these say
       # nothing. Accepted and ignored rather than failing a flash on muscle memory.
       --env)    shift 2 ;;
@@ -587,22 +596,27 @@ run_flash() {
     echo "▶ Real hardware — flashing a COLLECTOR board."
     echo "  Target: $(describe_env "$FLASH_ENV")"
     echo ""
-    echo "  ⚠️  THIS IS THE PRIMARY BUILD, and that is not a shortcut — it is"
-    echo "      where the collector's capabilities currently live:"
+    echo "  Drives NO GATES. The PWM block is spent on collector jobs instead:"
     echo ""
-    echo "        bin sensor (D6)      firmware.ino only; the node has no HAS_BIN"
-    echo "        RF transmitter (D9)  firmware.ino only; g_pressers is not in the node"
-    echo "        fob servos           NOT IMPLEMENTED anywhere yet"
-    echo "        CT clamp             bench console only (xiao_c5_ct_bench)"
+    echo "        D0  CT clamp         the only analog pad on the edge"
+    echo "        D6  bin sensor       opto output, LOW = full"
+    echo "        D7  fob servo, ON    PWM channel 1"
+    echo "        D8  fob servo, OFF   PWM channel 2"
+    echo "        D9  315 MHz TX       where channel 3 would be"
+    echo "        D10 spare            lamps, or a third fob button"
     echo ""
-    echo "      Moving them onto a NODE is unbuilt work, not a flag to flip."
+    echo "  ⚠️  WHAT ACTUALLY WORKS TODAY is less than that list implies:"
+    echo "        fob servos    yes — ordinary servo channels (servo / stroke)"
+    echo "        RF TX         yes on this PRIMARY build; NOT on the node"
+    echo "        bin sensor    yes on this PRIMARY build; NOT on the node"
+    echo "        CT clamp      no — bench console only (xiao_c5_ct_bench)"
     echo "      firmware/wiring/collector-node.md has the table."
     echo ""
-    echo "  ⚠️  SO THIS BOARD IS A SECOND BRAIN. Two primaries on one network"
-    echo "      will fight — same mDNS name if you let them, and each believing"
-    echo "      it owns the topology. On a bench with one board that is fine."
-    echo "      In a shop that already has a primary, it is not: give this one"
-    echo "      its own hostname, and do not point the UI at both."
+    echo "  ⚠️  THIS IS A COMPLETE PRIMARY — web UI, topology, plug polling."
+    echo "      A one-collector shop is a whole shop, so that is right. In a shop"
+    echo "      that ALREADY has a routing brain, flash the node instead:"
+    echo "      two primaries on one network fight over the topology and the"
+    echo "      mDNS name. Either way, give this board its own hostname."
     echo ""
     echo "  Bench commands once it is up (bash dev.sh monitor):"
     echo "      press                       fire the RF transmitter once"
@@ -666,6 +680,7 @@ run_flash_node() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --slider|--linear|--rack) node_env="$LINEAR_NODE_ENV"; shift ;;
+      --collector|--dc) node_env="$COLLECTOR_NODE_ENV"; shift ;;
       *) args+=("$1"); shift ;;
     esac
   done
