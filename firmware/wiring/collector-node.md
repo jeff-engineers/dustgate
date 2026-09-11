@@ -305,6 +305,53 @@ is in §3: a CT clamp, feet from an induction motor, on a board whose ADC noise
 floor is unresolved. If the CT proves unusable on a shared ground, an isolated
 DC-DC is the fix that keeps the single-brick install.
 
+#### If you build C: which part, and the budget that decides it
+
+"Isolating buck" is a contradiction — a buck is non-isolated by definition, one
+inductor and a shared return. The parts are flybacks, sold as **isolated DC-DC
+converters**.
+
+| | | |
+|---|---|---|
+| **No fob servos** | [Traco **TMR 3-1211**](https://www.tme.com/us/en-us/details/tmr3-1211/dc-dc-converters/traco-power/tmr-3-1211/) | 9–18 V in, 5 V / **600 mA**, 3 W, regulated, SIP8 |
+| **With fob servos** | [Traco **TMR 6-1211**](https://www.tracopower.com/model/tmr-6-1211) | same, 5 V / **1.2 A**, 6 W |
+
+Mornsun's URB1205S series is the cheaper equivalent of either.
+
+**Buy REGULATED.** The 1–2 W unregulated parts (`B1205S-1W` and friends) are
+cheap and wrong here: their output sags with load, which is exactly the failure
+mode a lumpy load produces.
+
+**The budget, and the two corrections that got it here.** Base load is about
+400 mA peak — ESP32-C5 ~250–300 mA on WiFi TX, OLED ~20 mA, pixel up to 60 mA,
+transmitter ~30 mA while keying. Then:
+
+- **Only one fob servo is ever moving.** Pressing ON and OFF at the same moment
+  is meaningless, so a two-button fob still budgets for ONE servo. (The first
+  version of this note doubled it.)
+- **A button press is not a stall.** A gate valve loads a servo continuously; a
+  fob button is a short travel against a light spring, and `ServoActuator` does
+  move-then-detach, so nothing holds torque afterwards. A **9 g servo** (SG90
+  class — which is all a button needs, not the metal-gear kind the gates use)
+  draws a couple of hundred mA doing that, against ~650 mA if it jams.
+
+So ~400 mA base plus one small servo lands comfortably inside 1.2 A and
+uncomfortably against 600 mA. **TMR 6-1211 for any build with a fob servo**,
+TMR 3-1211 only for RF-only.
+
+**Bulk capacitance does NOT substitute for headroom.** Holding 1 A for 200 ms
+within half a volt needs about 0.4 F. Size the converter.
+
+**And you cannot split the rails.** Feeding the servos from a separate
+non-isolated buck off the same 12 V looks like a cheap way out and is not: a
+servo's ground must be common with whatever drives its signal pin, and that is
+the ESP32 on the isolated side. Splitting puts the servo signal across the
+barrier with no shared return.
+
+**Check it on arrival, in one second:** meter on continuity between input GND
+and output GND. **An isolated module reads open; a plain buck reads ~0 Ω.** Do
+not trust the label — that measurement is the whole claim.
+
 | Rail | Feeds | From |
 |---|---|---|
 | 5 V | the board, the transmitter, the servos | USB brick (A) or a buck off 12 V (B/C) |
