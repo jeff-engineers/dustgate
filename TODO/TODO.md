@@ -10,6 +10,33 @@ reasoning was contested, or that a still-open item above leans on.
 
 ## Bugs
 
+- **Does the CT survive a shared ground? (2026-09-11, decides a purchase.)**
+  The collector node is being built as power topology B —
+  `firmware/wiring/collector-node.md` §6 — one 12 V supply with a plain buck to
+  5 V, so the 12 V and ESP32 grounds are common through the regulator. Chosen
+  because Jeff has the parts; nothing has proven the CT can live with it.
+
+  It is the least favourable arrangement in that document: a CT clamp feet from
+  an induction motor, sharing a ground with the supply that motor's own sensor
+  runs on, on a board whose ADC noise floor was already unresolved before any of
+  this (§5.5 of `ct-bench.md` — the screen's charge pump put ~0.4 A of apparent
+  current on a dead wire).
+
+  **What would disprove it:** a CT reading that cannot separate a running blower
+  from a quiet one. A blower is the easiest possible signal — one large motor,
+  unambiguous draw — so if it fails here it fails everywhere.
+
+  **The fix if it does**, without giving up the single-brick install: topology
+  C, an isolated DC-DC. Traco TMR 6-1211 (6 W, 5 V/1.2 A) for a build with a fob
+  servo, TMR 3-1211 (3 W, 600 mA) for RF-only; Mornsun URB1205S is the cheaper
+  equivalent. Buy REGULATED — the 1–2 W unregulated parts sag under load.
+  Acceptance test is one second with a meter: continuity between input and
+  output GND reads open on an isolated module, ~0 Ω on a plain buck.
+
+  Do not buy anything until the CT has actually failed. That is the whole point
+  of building B first.
+
+
 - **A multi-channel Tasmota meter reads 0 W, confidently (2026-09-10).**
   `TasmotaOutlet::doPoll()` filters `StatusSNS.ENERGY.Power` and calls
   `p.as<float>()`. On a multi-channel device — the Athom EM2/EM6, which

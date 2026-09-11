@@ -285,7 +285,12 @@ Three topologies. Pick one deliberately.
 | **B. One 12 V + plain buck** | one 12 V, buck to 5 V | **common, through the buck** | **Level shifting only** |
 | **C. One 12 V + isolated DC-DC** | one 12 V, isolated 12→5 module | separate | Isolating, on one supply |
 
-**B is the better install and the honest default.** One brick at the collector,
+**DECIDED: B, for now (Jeff, 2026-09-11).** He has the parts, and nothing has
+yet proven the CT needs better. **B until it fails** — and §3 is where it would:
+if the CT cannot separate a running blower from noise on a shared ground, C is
+the fix that keeps the single-brick install. Revisit it there, not here.
+
+**B is the better install anyway.** One brick at the collector,
 one cord, one thing to plug in — against A's two bricks and two outlets, at a
 machine that already has a cord and a remote and a duct. Do not pick A for
 isolation you then throw away with a shared chassis or a common earth anyway.
@@ -361,8 +366,9 @@ not trust the label — that measurement is the whole claim.
 **Never join 12 V to 5 V or 3V3.** That is true in all three, and is a different
 claim from the ground question — the RAILS never meet, whatever the grounds do.
 
-**UNDECIDED.** Nothing has been built, so nothing has proven which of these the
-CT can live with. B until it fails.
+**Nothing has been built**, so "B works" is a plan rather than a result. The
+thing that would disprove it is a CT reading that cannot tell a running blower
+from a quiet one — see §3 and §7.
 
 **Servos and a transmitter share the 5 V rail, and both are lumpy loads.** A
 servo stalls at an amp or more and an OOK module keys hard. Neither has been
@@ -385,6 +391,17 @@ Everything, as a whole board. The pieces have separate histories:
 | Fob servos | Nothing built. No fixture designed |
 | All of it on one board | **Never assembled** |
 
-The specific unknowns worth naming: whether the screen's charge pump still
-poisons the CT with the 1 kΩ divider (§3), and whether the servos and the
-transmitter can share a 5 V brick (§6).
+The specific unknowns worth naming:
+
+- **Whether the 1 kΩ divider and the 100 nF actually fix the screen's charge
+  pump coupling into the CT** (§3). Both changes are reasoned, neither measured.
+- **Whether a shared ground (topology B) is good enough for the CT** (§6). This
+  is the one that decides whether an isolated supply gets bought. A CT clamp
+  feet from an induction motor, sharing a ground with the 12 V supply that
+  motor's sensor runs on, is the least favourable arrangement in the document —
+  and it is the one being built first, on purpose, because the parts are on
+  hand and the alternative costs a converter to answer a question nobody has
+  asked yet.
+- **Whether the servos and the transmitter can share a 5 V supply** (§6). Both
+  are lumpy; never measured together. They are never *needed* at the same
+  instant, so staggering them in firmware is available before adding hardware.
