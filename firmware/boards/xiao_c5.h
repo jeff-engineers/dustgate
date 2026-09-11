@@ -246,11 +246,20 @@
 // needs. And a fault on the 12 V side would have a path straight through the
 // ESP32's ground rather than staying on its own side of the barrier.
 //
+// ⚠️ AND IT IS MOOT IF THE BOARD IS POWERED OFF THE SAME 12 V. A plain buck
+// converter shares its input and output ground by definition, so a 12->5 V
+// regulator ties the two grounds upstream and there is no barrier left to
+// short. On that build the opto is a LEVEL SHIFTER, not an isolator — still
+// earning its place, because the QS18 swings to 12 V and 12 V on a 3.3 V pin
+// destroys it. wiring/collector-node.md §6 has the three power topologies and
+// which one to pick; one brick at the collector is the better install, so
+// expect the common-ground case to be the normal one.
+//
 // A non-isolated build IS allowed — sensor straight to a pull-up, which §7.4 of
 // the schema RFC rejected — and that one has a single shared ground by
 // definition. It also has the opposite polarity, which is what
-// `bin.sensor.invert` is for. What is not allowed is the isolated wiring with
-// the barrier shorted out: all of the cost, none of the benefit.
+// `bin.sensor.invert` is for. What is not allowed is paying for the isolated
+// wiring and then shorting the barrier out on purpose.
 #if !defined(DUSTGATE_SERVO_BUS)
 #define PIN_BIN_SENSOR  11   // D6, opto output, LOW = bin full
 #endif

@@ -90,7 +90,11 @@ flowchart LR
   classDef barrier fill:#fff3cd,stroke:#b8860b,stroke-width:3px,stroke-dasharray: 6 4
 ```
 
-**⚠️ DO NOT TIE THE 12 V GROUND TO THE ESP32 GROUND.** The board header said to
+**⚠️ DO NOT TIE THE 12 V GROUND TO THE ESP32 GROUND — on a two-supply build.**
+See §6: if the board is powered by a plain 12→5 V buck off the same supply, the
+grounds are ALREADY common through the regulator, this warning is moot, and the
+opto is doing level shifting rather than isolation. What follows is about the
+isolated case. The board header said to tie them
 for weeks and this file repeated it; both were wrong, corrected 2026-09-11 when
 Jeff asked whether *both* sides of the opto ground to the ESP32.
 
@@ -266,18 +270,52 @@ because it defeats any no-volt-release the switch was chosen to provide.
 
 ## 6. Power
 
+**THERE IS A CHOICE HERE AND §2 ASSUMED ONE WITHOUT SAYING SO.** Corrected
+2026-09-11, when Jeff asked how the 12 V ground ties to a 12→5 V regulator. The
+answer is that it does, straight through — **a plain buck converter shares its
+input and output ground by definition** — so on a single-supply build the two
+grounds are already common upstream and §2's barrier is bypassed before the
+optocoupler ever sees it.
+
+Three topologies. Pick one deliberately.
+
+| | Supplies | Grounds | What the opto is doing |
+|---|---|---|---|
+| **A. Two bricks** | 12 V for the sensor, USB for the board | **separate** | Isolating, as §2 describes |
+| **B. One 12 V + plain buck** | one 12 V, buck to 5 V | **common, through the buck** | **Level shifting only** |
+| **C. One 12 V + isolated DC-DC** | one 12 V, isolated 12→5 module | separate | Isolating, on one supply |
+
+**B is the better install and the honest default.** One brick at the collector,
+one cord, one thing to plug in — against A's two bricks and two outlets, at a
+machine that already has a cord and a remote and a duct. Do not pick A for
+isolation you then throw away with a shared chassis or a common earth anyway.
+
+**On B the optocoupler still earns its place**, and this is the part worth being
+clear about, because "the isolation is gone" reads as "the part is pointless".
+It is not. The QS18's output swings to **12 V**, and 12 V on a 3.3 V GPIO
+destroys it. The opto translates that to a 3.3 V-referenced signal and keeps the
+pin behind a barrier from a wire that runs across a shop. Two jobs; B keeps one.
+
+If you build B, **§2's warning does not apply** — there is no barrier left to
+short — and the rest of §2 stands unchanged, because the opto is wired the same
+either way.
+
+**C is the one to choose if the noise turns out to matter.** The reason to care
+is in §3: a CT clamp, feet from an induction motor, on a board whose ADC noise
+floor is unresolved. If the CT proves unusable on a shared ground, an isolated
+DC-DC is the fix that keeps the single-brick install.
+
 | Rail | Feeds | From |
 |---|---|---|
-| 5 V | the board, the transmitter, the servos | USB brick |
+| 5 V | the board, the transmitter, the servos | USB brick (A) or a buck off 12 V (B/C) |
 | 3V3 | the CT divider, the opto's output side | the board's regulator |
-| 12 V | the QS18 beam sensor, lamps | separate supply |
+| 12 V | the QS18 beam sensor, lamps | the 12 V supply |
 
-**The 12 V ground must NOT meet the ESP32 ground** (§2) — that is what the
-optocoupler is for, and joining them defeats it. The 12 V rail must not meet 5 V
-or 3V3 anywhere either.
+**Never join 12 V to 5 V or 3V3.** That is true in all three, and is a different
+claim from the ground question — the RAILS never meet, whatever the grounds do.
 
-The one place the two domains touch is *inside the optocoupler*, where light
-crosses and current does not.
+**UNDECIDED.** Nothing has been built, so nothing has proven which of these the
+CT can live with. B until it fails.
 
 **Servos and a transmitter share the 5 V rail, and both are lumpy loads.** A
 servo stalls at an amp or more and an OOK module keys hard. Neither has been
