@@ -9,8 +9,24 @@ measure the blower's draw, press its remote, and drive lamps. It drives **no
 gates**, which is the entire reason its pin budget works
 ([`../../docs/tool-sensing-rfc.md`](../../docs/tool-sensing-rfc.md) §6.2).
 
-It is an ordinary NODE build — `xiao_c5`, same firmware as any other. What makes
-it a collector node is what the *layout* asks of it, not what is flashed.
+**⚠️ THE FIRMWARE FOR THIS DOES NOT EXIST YET (checked 2026-09-11).** This line
+used to say "an ordinary NODE build — same firmware as any other", which is the
+intended design and is not true today:
+
+| | Where it works now |
+|---|---|
+| Bin sensor | **PRIMARY only** — `dustgate_node.cpp` has no `HAS_BIN` block |
+| RF transmitter | **PRIMARY only** — `g_pressers` lives in `firmware.ino` |
+| Fob servos | **Nowhere.** No servo `CollectorPresser` has been written |
+| CT clamp | **Nowhere** in real firmware — bench console only |
+
+So a collector board built today has to be flashed as a **PRIMARY**
+(`xiao_c5_primary`) to exercise any of this, which is fine for a bench and wrong
+for a shop with a separate routing brain. Moving these capabilities onto the
+node is unbuilt work, not a flag to flip.
+
+The design intent stands: what makes a board a collector node should be what the
+*layout* asks of it, not what is flashed.
 
 ---
 
