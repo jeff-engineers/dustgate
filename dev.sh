@@ -35,6 +35,16 @@
 #     Its hostname is load-bearing (mDNS, the Boards screen, link.host in the
 #     topology) and must be unique per node.
 #
+#   THE COLLECTOR BOARD — add --collector:
+#
+#   bash dev.sh flash --collector collector    # bin sensor, RF, fob servos
+#     NOT a separate env. It flashes the PRIMARY build, because that is where
+#     the bin sensor and the RF presser live — dustgate_node.cpp has neither,
+#     and no fob-servo presser exists at all. So a collector board today is a
+#     SECOND PRIMARY: fine on a bench, a fight in a shop that already has one.
+#     Give it its own hostname. firmware/wiring/collector-node.md §0 has the
+#     table of what works where.
+#
 #   THE SLIDER BOARD — add --slider to either flash command:
 #
 #   bash dev.sh flash --slider        # a PRIMARY that drives the rack
@@ -403,6 +413,10 @@ parse_provision_overrides() {
       # four PWM channels. Consumed here rather than passed through, because the
       # env it selects is handed to deploy.sh as --env= below.
       --slider|--linear|--rack) FLASH_ENV="$LINEAR_PRIMARY_ENV"; shift ;;
+      # The collector board: bin sensor, CT, RF transmitter, fob servos. NOT a
+      # separate env — it is the PRIMARY build, because that is where those
+      # capabilities actually live today. See the banner in run_flash().
+      --collector|--dc) FLASH_COLLECTOR=1; shift ;;
       # Two primary envs now, and --slider picks between them, so these say
       # nothing. Accepted and ignored rather than failing a flash on muscle memory.
       --env)    shift 2 ;;
@@ -569,7 +583,33 @@ run_flash() {
   parse_provision_overrides "$@"
   set -- "${PROVISION_REST[@]+"${PROVISION_REST[@]}"}"
 
-  if [[ "$FLASH_ENV" == "$LINEAR_PRIMARY_ENV" ]]; then
+  if [[ "${FLASH_COLLECTOR:-0}" == "1" ]]; then
+    echo "▶ Real hardware — flashing a COLLECTOR board."
+    echo "  Target: $(describe_env "$FLASH_ENV")"
+    echo ""
+    echo "  ⚠️  THIS IS THE PRIMARY BUILD, and that is not a shortcut — it is"
+    echo "      where the collector's capabilities currently live:"
+    echo ""
+    echo "        bin sensor (D6)      firmware.ino only; the node has no HAS_BIN"
+    echo "        RF transmitter (D9)  firmware.ino only; g_pressers is not in the node"
+    echo "        fob servos           NOT IMPLEMENTED anywhere yet"
+    echo "        CT clamp             bench console only (xiao_c5_ct_bench)"
+    echo ""
+    echo "      Moving them onto a NODE is unbuilt work, not a flag to flip."
+    echo "      firmware/wiring/collector-node.md has the table."
+    echo ""
+    echo "  ⚠️  SO THIS BOARD IS A SECOND BRAIN. Two primaries on one network"
+    echo "      will fight — same mDNS name if you let them, and each believing"
+    echo "      it owns the topology. On a bench with one board that is fine."
+    echo "      In a shop that already has a primary, it is not: give this one"
+    echo "      its own hostname, and do not point the UI at both."
+    echo ""
+    echo "  Bench commands once it is up (bash dev.sh monitor):"
+    echo "      press                       fire the RF transmitter once"
+    echo "      rfscan                      find the fob's address by trying"
+    echo "      stroke <1-4> <from> <to> [n]  press a switch, repeatably"
+    echo ""
+  elif [[ "$FLASH_ENV" == "$LINEAR_PRIMARY_ENV" ]]; then
     echo "▶ Real hardware — flashing a SLIDER PRIMARY (XIAO C5 + ST3215)."
     echo "  Target: $(describe_env "$FLASH_ENV")"
     echo ""
