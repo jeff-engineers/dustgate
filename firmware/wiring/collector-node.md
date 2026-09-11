@@ -48,35 +48,72 @@ Every pad on the board, so nothing looks free that is not.
 The beam sensor runs on 12 V and the ESP32 does not, so an opto crosses the gap
 and keeps the two grounds independent of each other's noise.
 
+**Two sides that never meet.** Build them as two separate circuits.
+
+*The 12 V side — nothing here touches the ESP32:*
+
 | | Goes from | To |
 |---|---|---|
 | Brown | QS18 | **+12 V** |
 | Blue | QS18 | **12 V GND** |
-| Black | QS18 (output) | **opto input −** |
-| Wire | **+12 V** | **opto input +** |
-| Wire | opto out `VCC` | **3V3** |
-| Wire | opto out `GND` | **ESP32 GND** |
+| Black | QS18 (output) | **opto `IN−`** |
+| Wire | **+12 V** | **opto `IN+`** |
+
+*The ESP32 side — nothing here touches 12 V:*
+
+| | Goes from | To |
+|---|---|---|
+| Wire | opto `VCC` | **3V3** |
+| Wire | opto `GND` | **ESP32 GND** |
 | Wire | opto `OUT` | **`D6`** |
-| Wire | **12 V GND** | **ESP32 GND** |
 
 ```mermaid
 flowchart LR
-  P12(("+12 V")):::rail --> QSB["QS18VN6D<br/>brown"]:::node
-  QSB --> QS["<b>beam sensor</b><br/>black = output"]:::node
-  QS --> G12(("12 V GND")):::rail
-  QS -- "black" --> OI["opto<br/>input −"]:::node
-  P12 --> OIP["opto<br/>input +"]:::node
-  OO["opto output<br/>transistor"]:::node -- "OUT" --> D6["<b>D6</b><br/>INPUT_PULLUP"]:::node
-  V3(("3V3")):::rail --> OO
-  OO --> GE(("ESP32 GND")):::rail
-  G12 == "TIE THESE TOGETHER" ==> GE
+  subgraph TWELVE["12 V side"]
+    P12(("+12 V")):::rail --> QS["<b>QS18VN6D</b><br/>brown = +12 V<br/>blue = 12 V GND<br/>black = output"]:::node
+    QS -- "blue" --> G12(("12 V GND")):::rail
+    QS -- "black" --> IN["opto <b>IN−</b>"]:::node
+    P12 --> INP["opto <b>IN+</b>"]:::node
+  end
+  subgraph ESP["ESP32 side"]
+    V3(("3V3")):::rail --> OPTO["opto <b>VCC</b>"]:::node
+    OUT["opto <b>OUT</b>"]:::node --> D6["<b>D6</b><br/>INPUT_PULLUP<br/>LOW = bin full"]:::node
+    OPTO2["opto <b>GND</b>"]:::node --> GE(("ESP32 GND")):::rail
+  end
+  IN -.-> BARRIER
+  INP -.-> BARRIER
+  BARRIER["✋ <b>the barrier</b><br/>light crosses, current does not.<br/>DO NOT join the two grounds"]:::barrier
+  BARRIER -.-> OUT
+  BARRIER -.-> OPTO2
   classDef rail fill:#eee,stroke:#999
   classDef node fill:#fff,stroke:#333,stroke-width:2px
+  classDef barrier fill:#fff3cd,stroke:#b8860b,stroke-width:3px,stroke-dasharray: 6 4
 ```
 
-**TIE THE 12 V GROUND TO THE ESP32 GROUND.** The optocoupler isolates the
-*signal*; it does not give the two supplies a shared reference, and without one
-the input floats.
+**⚠️ DO NOT TIE THE 12 V GROUND TO THE ESP32 GROUND.** The board header said to
+for weeks and this file repeated it; both were wrong, corrected 2026-09-11 when
+Jeff asked whether *both* sides of the opto ground to the ESP32.
+
+They do not, and that is the entire point of the part. Joining the grounds
+shorts across the barrier and throws away the only thing an optocoupler does.
+
+Nothing floats without it. **The opto's `GND` pin IS the ESP32 ground** — that is
+the output side's reference, already connected in the second table. The 12 V
+ground is the *input* side's reference and belongs to the 12 V supply alone.
+Each side has its own return; they simply are not the same return.
+
+Why it matters more here than in general: the 12 V supply sits beside a dust
+collector — a large induction motor — feet from a CT clamp whose noise floor is
+already unresolved (§3). A deliberate ground loop between that supply and the
+ADC's reference is the last thing this board needs. And a fault on the 12 V side
+would have a path straight through the ESP32's ground instead of staying on its
+own side.
+
+**A non-isolated build is allowed** — sensor straight to a pull-up, rejected in
+§7.4 of the schema RFC but not forbidden — and that one has a single shared
+ground by definition, plus the opposite polarity, which is what
+`bin.sensor.invert` exists for. What is not allowed is the isolated wiring with
+the barrier shorted out: all of the cost and none of the benefit.
 
 **The polarity is inverted, and that is the wiring's fault, not a bug.** The opto
 pulls the pin LOW when the beam reports full, so `D6` LOW = bin full. The pin is
@@ -235,8 +272,12 @@ because it defeats any no-volt-release the switch was chosen to provide.
 | 3V3 | the CT divider, the opto's output side | the board's regulator |
 | 12 V | the QS18 beam sensor, lamps | separate supply |
 
-**The 12 V ground must meet the ESP32 ground** (§2). The 12 V rail must **not**
-meet 5 V or 3V3 anywhere else.
+**The 12 V ground must NOT meet the ESP32 ground** (§2) — that is what the
+optocoupler is for, and joining them defeats it. The 12 V rail must not meet 5 V
+or 3V3 anywhere either.
+
+The one place the two domains touch is *inside the optocoupler*, where light
+crosses and current does not.
 
 **Servos and a transmitter share the 5 V rail, and both are lumpy loads.** A
 servo stalls at an amp or more and an OOK module keys hard. Neither has been

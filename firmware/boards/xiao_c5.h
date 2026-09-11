@@ -224,9 +224,33 @@
 // with the inversion above means "bin OK". A board with nothing connected must
 // not scream, and topology gates it regardless.
 //
-// Wire: QS18 brown -> +12 V, blue -> 12 V GND, black -> opto input (-).
-//       Opto input (+) -> +12 V. Opto out VCC -> 3V3, GND -> ESP32 GND,
-//       OUT -> D6. TIE THE 12 V GROUND TO THE ESP32 GROUND.
+// Wire — TWO SIDES THAT NEVER MEET:
+//   12 V side:  QS18 brown -> +12 V, blue -> 12 V GND, black -> opto IN-.
+//               Opto IN+ -> +12 V.
+//   ESP32 side: opto VCC -> 3V3, opto GND -> ESP32 GND, opto OUT -> D6.
+//
+// ⚠️ DO NOT TIE THE 12 V GROUND TO THE ESP32 GROUND. This comment said to, for
+// weeks, and it was wrong (corrected 2026-09-11 — Jeff asked whether BOTH sides
+// grounded to the ESP32, which is the question that exposed it). Joining them
+// shorts across the optocoupler and throws away the only thing it does.
+//
+// The module's GND pin IS the ESP32 ground — that is the output side's
+// reference, and it is already connected. The 12 V ground is the INPUT side's
+// reference and belongs to the 12 V supply alone. Nothing floats: each side has
+// its own return.
+//
+// Why it matters here specifically. The 12 V supply sits next to a dust
+// collector — a large induction motor, feet away from a CT clamp whose noise
+// floor is already unresolved (wiring/ct-bench.md §5.5). A deliberate ground
+// loop between that supply and the ADC's reference is the last thing this board
+// needs. And a fault on the 12 V side would have a path straight through the
+// ESP32's ground rather than staying on its own side of the barrier.
+//
+// A non-isolated build IS allowed — sensor straight to a pull-up, which §7.4 of
+// the schema RFC rejected — and that one has a single shared ground by
+// definition. It also has the opposite polarity, which is what
+// `bin.sensor.invert` is for. What is not allowed is the isolated wiring with
+// the barrier shorted out: all of the cost, none of the benefit.
 #if !defined(DUSTGATE_SERVO_BUS)
 #define PIN_BIN_SENSOR  11   // D6, opto output, LOW = bin full
 #endif
