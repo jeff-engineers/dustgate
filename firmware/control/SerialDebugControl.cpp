@@ -89,6 +89,15 @@ bool SerialDebugControl::consumePressRequest() {
     return v;
 }
 
+bool SerialDebugControl::consumeStrokeRequest(int& idx, int& from, int& to,
+                                              int& reps, int& dwellMs) {
+    if (!_strokePending) return false;
+    _strokePending = false;
+    idx = _strokeIdx; from = _strokeFrom; to = _strokeTo;
+    reps = _strokeReps; dwellMs = _strokeDwellMs;
+    return true;
+}
+
 bool SerialDebugControl::consumeRfScanRequest() {
     bool v = _rfScanRequest;
     _rfScanRequest = false;
@@ -254,7 +263,13 @@ void SerialDebugControl::processLine(const String& line) {
             int idx = rest.substring(0, sp).toInt();
             String arg = rest.substring(sp + 1); arg.trim();
             if (idx < 1 || idx > 4) {
-                Serial.println(F("[SERVO] index must be 1..4 (pins 25/26/27/14)"));
+                // Printed from the macros, not typed. This line said
+                // "pins 25/26/27/14" until 2026-09-11 — the retired DevKitC's
+                // pins, wrong on every board still in the tree, and exactly the
+                // sort of thing someone chasing a dead servo would trust.
+                Serial.printf("[SERVO] index must be 1..4 (GPIO %d/%d/%d/%d)\n",
+                              SERVO_PWM_PIN_1, SERVO_PWM_PIN_2,
+                              SERVO_PWM_PIN_3, SERVO_PWM_PIN_4);
             } else if (arg == "detach") {
                 _servoIndex = idx; _servoDetach = true; _servoPending = true;
                 Serial.print(F("[SERVO] Detach servo ")); Serial.println(idx);
@@ -337,6 +352,27 @@ void SerialDebugControl::processLine(const String& line) {
         // hardware from the serial task.
         _pressRequest = true;
         Serial.println(F("[RF] press queued — watch the receiver."));
+    } else if (cmd.startsWith("stroke ")) {
+        // stroke <1-4> <from> <to> [reps] [dwellMs]
+        int idx = 0, from = -1, to = -1, reps = 1, dwell = 400;
+        const int n = sscanf(cmd.c_str() + 7, "%d %d %d %d %d",
+                             &idx, &from, &to, &reps, &dwell);
+        if (n < 3) {
+            Serial.println(F("[STROKE] Usage: stroke <1-4> <from> <to> [reps] [dwellMs]"));
+            Serial.println(F("         e.g. stroke 1 20 90 5   — five presses, 20 deg to 90 deg"));
+        } else if (idx < 1 || idx > 4 ||
+                   from < 0 || from > 180 || to < 0 || to > 180) {
+            Serial.println(F("[STROKE] index 1..4, angles 0..180"));
+        } else if (reps < 1 || reps > 50) {
+            Serial.println(F("[STROKE] reps 1..50"));
+        } else {
+            _strokeIdx = idx; _strokeFrom = from; _strokeTo = to;
+            _strokeReps = reps; _strokeDwellMs = (dwell < 50 ? 50 : (dwell > 5000 ? 5000 : dwell));
+            _strokePending = true;
+            Serial.printf("[STROKE] servo %d: %d -> %d, %d time(s), %dms dwell\n",
+                          idx, from, to, reps, _strokeDwellMs);
+        }
+
     } else if (cmd == "rfscan") {
         _rfScanRequest = true;
         Serial.println(F("[RF] address scan queued."));
@@ -927,6 +963,10 @@ void SerialDebugControl::printHelp() {
     Serial.println(F("  homeside l|r      Report which side it homed to; 'right' re-homes to the left endstop"));
 #if defined(ENABLE_SERVO) && defined(SERVO_PWM_PIN_1)
     Serial.println(F("  servo <1-4> <deg> Servo bring-up: move servo N to angle (or 'servo N detach')"));
+    Serial.println(F("  stroke <1-4> <from> <to> [reps] [dwellMs]"));
+    Serial.println(F("                    Press and release, repeatably — for finding out"));
+    Serial.println(F("                    whether a servo can throw a given switch."));
+    Serial.println(F("                    Detaches at the end; a stalled servo cooks."));
 #endif
     Serial.println(F("  clearcal          Erase EEPROM calibration (reload from config.h)"));
     Serial.println(F("  wifireset         Erase WiFi credentials, reboot into setup portal"));

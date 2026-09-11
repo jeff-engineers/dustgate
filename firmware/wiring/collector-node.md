@@ -306,6 +306,28 @@ same class the gates use, and a different current draw.
 **Measure the switch before buying a servo.** It may also change which isolated
 converter §6 recommends, if topology C is ever needed.
 
+**How to measure it:** `stroke` on the serial console.
+
+```
+stroke <1-4> <from> <to> [reps] [dwellMs]
+stroke 1 20 90 5            # five presses, 20° to 90°, on servo channel 1
+```
+
+A servo has no torque feedback, so there is no number to read — the measurement
+is **watching it try, repeatably, with the arm and angles you actually intend to
+use**. It presses, releases, and **detaches at the end**, which matters: a servo
+left energised against a switch it could not move sits stalled at full current
+and gets hot, which is both a bad measurement and a way to cook a 9 g servo
+while you walk to the next machine.
+
+Two variables are yours, and the first is the one people forget: **arm length.**
+Torque at the switch is force × radius, so a *shorter* arm pushes harder through
+less travel. A 9 g servo that cannot throw a paddle on a 30 mm arm may manage it
+on 12 mm. Try that before concluding you need metal gears.
+
+Worth walking the shop with — there are several switch types down there, and the
+answer is probably not the same for all of them.
+
 **Two servos, and the second is not a spare.** One servo presses one button, and
 a single-button fob is a **toggle** — stateless, so a missed or doubled press
 inverts what the system believes. A fob with **separate ON and OFF buttons** is

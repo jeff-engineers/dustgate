@@ -1989,6 +1989,42 @@ void loop() {
             else         s.moveTo(sAngle);
         }
     }
+
+    // `stroke` — press and release, repeatably, then DETACH.
+    //
+    // For answering "can a 9 g servo throw this switch", which is the open
+    // question behind tool-sensing-rfc §4.2c: a fob button is a light spring and
+    // a collector's paddle is not, and nothing has measured the difference.
+    //
+    // A servo has no torque feedback, so the measurement is watching it try. The
+    // variables that matter are the ARM LENGTH (torque at the switch is force x
+    // radius, so a shorter arm pushes harder through less travel) and the two
+    // angles. Both are yours to vary; this just makes trying repeatable.
+    //
+    // BLOCKING, deliberately — it is a bench command and the alternative is a
+    // state machine nobody needs. The watchdog is petted around each move.
+    {
+        int stIdx = 0, stFrom = 0, stTo = 0, stReps = 1, stDwell = 400;
+        if (_SC.consumeStrokeRequest(stIdx, stFrom, stTo, stReps, stDwell)) {
+            ServoActuator& s = g_servos[stIdx - 1];
+            for (int r = 0; r < stReps; r++) {
+                Serial.printf("[STROKE] %d/%d ", r + 1, stReps);
+                watchdog::pet();
+                s.moveTo(stFrom);
+                for (int w = 0; w < stDwell; w += 50) { watchdog::pet(); delay(50); }
+                Serial.print(F("press "));
+                s.moveTo(stTo);
+                for (int w = 0; w < stDwell; w += 50) { watchdog::pet(); delay(50); }
+                Serial.println(F("release"));
+            }
+            // ALWAYS detach, including after a stroke that achieved nothing. A
+            // servo left energised against a switch it could not move sits
+            // stalled at full current and gets hot — a bad measurement, and a
+            // way to cook a 9 g servo while you walk to the next machine.
+            s.detach();
+            Serial.println(F("[STROKE] done, detached. Did the switch move?"));
+        }
+    }
 #endif
 
     {
