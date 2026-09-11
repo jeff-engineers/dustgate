@@ -166,6 +166,37 @@ DC level *through the CT winding*, a few ohms of copper, so it rests halfway up
 the supply with the signal on top. Anything else on `D0`, ground above all,
 swamps the divider and pins the input.
 
+**THERE IS NO RECTIFIER, AND THE CAPACITORS ARE NOT SMOOTHING CAPS.** This is
+the part of the circuit most likely to be misread, because it looks exactly like
+half of a rectifier-and-smoother and does the opposite job.
+
+A CT puts out **AC** — this one, 1 V RMS at 30 A, swinging about zero. An ADC
+cannot read a negative voltage, so something has to happen. The two obvious
+options, and why only one of them is here:
+
+| | |
+|---|---|
+| **Rectify and smooth** | A diode drops 0.7 V, or ~0.3 V Schottky, against a signal that is 1 V RMS at FULL 30 A scale. Below its forward voltage it conducts nothing at all — so the small end vanishes, and the small end is the entire question: telling an idle tool from a running one. |
+| **Bias to mid-rail, RMS in software** ← | The divider moves the CT's zero to ~1.65 V, so the waveform never goes negative. Firmware samples flat out, subtracts the measured mean, and takes the RMS of what is left. |
+
+`ct_bench.cpp` does the second: `var = sumSq/n − mean²`, then `sqrt`. True RMS,
+arithmetically, with no diode anywhere.
+
+Three things that buys:
+
+- **Linear to nearly zero.** No forward voltage to get over, so the low end —
+  where the answer lives — is not thrown away.
+- **Correct for any waveform.** A motor's current is not a sine wave, and a
+  rectify-and-smooth circuit assumes one. RMS of the samples does not.
+- **Self-calibrating bias.** Subtracting the *measured* mean means the exact
+  resistor values stop mattering; whatever DC level they produce is removed.
+
+**So the 10 µF and the 100 nF hold the BIAS POINT stiff — they do not smooth the
+signal.** Their job is to stop the CT's own current moving the reference it is
+being measured against. A cap across the *signal* would destroy the measurement
+rather than clean it up, which is why both go from that row to **GND** and
+neither goes anywhere near `D0` alone.
+
 **1 kΩ, not the 10 kΩ of the original bench rig.** 10 k/10 k presents 5 kΩ to the
 ADC — high enough that the sampling capacitor does not settle, and a fine antenna
 besides. 1 k halves the source impedance to 500 Ω for 3.3 mA, which is nothing on
