@@ -285,12 +285,28 @@ Three topologies. Pick one deliberately.
 | **B. One 12 V + plain buck** | one 12 V, buck to 5 V | **common, through the buck** | **Level shifting only** |
 | **C. One 12 V + isolated DC-DC** | one 12 V, isolated 12→5 module | separate | Isolating, on one supply |
 
-**DECIDED: B, for now (Jeff, 2026-09-11).** He has the parts, and nothing has
-yet proven the CT needs better. **B until it fails** — and §3 is where it would:
-if the CT cannot separate a running blower from noise on a shared ground, C is
-the fix that keeps the single-brick install. Revisit it there, not here.
+**DECIDED: A FIRST (Jeff, 2026-09-11), then B once it works.**
 
-**B is the better install anyway.** One brick at the collector,
+Not because A is better — it is the worse install, two bricks and two outlets
+at a machine that already has a cord and a remote and a duct. Because it is the
+**baseline**, and this board has too many unknowns to add an avoidable one.
+
+The reasoning is worth keeping, because the first version of this note had it
+backwards. It said "build B, upgrade if the CT fails" — which sounds thrifty and
+is bad diagnosis: **a noisy CT on B tells you nothing**, because you cannot tell
+a shared-ground problem from the screen's charge pump, from the divider, from
+the clamp, or from the motor itself. §3 already has three unvalidated changes in
+it. Adding a shared ground underneath them means a failure has four candidate
+causes and no reference to compare against.
+
+A removes one variable for the price of a second power brick. Then **B becomes a
+measurable change** rather than a guess: same board, same clamp, same firmware,
+one thing different, and a known-good reading to compare to. If B matches A, the
+install gets simpler for free. If it does not, that IS the answer about shared
+grounds, and C is the fix that keeps one brick.
+
+**B is still the better install**, which is why it is what to aim at. One brick
+at the collector,
 one cord, one thing to plug in — against A's two bricks and two outlets, at a
 machine that already has a cord and a remote and a duct. Do not pick A for
 isolation you then throw away with a shared chassis or a common earth anyway.
@@ -366,9 +382,9 @@ not trust the label — that measurement is the whole claim.
 **Never join 12 V to 5 V or 3V3.** That is true in all three, and is a different
 claim from the ground question — the RAILS never meet, whatever the grounds do.
 
-**Nothing has been built**, so "B works" is a plan rather than a result. The
-thing that would disprove it is a CT reading that cannot tell a running blower
-from a quiet one — see §3 and §7.
+**Nothing has been built**, so none of this is a result yet. Build A, get a CT
+reading that separates a running blower from a quiet one, and only then try B —
+with A's numbers in hand to compare against. See §3 and §7.
 
 **Servos and a transmitter share the 5 V rail, and both are lumpy loads.** A
 servo stalls at an amp or more and an OOK module keys hard. Neither has been

@@ -10,31 +10,31 @@ reasoning was contested, or that a still-open item above leans on.
 
 ## Bugs
 
-- **Does the CT survive a shared ground? (2026-09-11, decides a purchase.)**
-  The collector node is being built as power topology B —
-  `firmware/wiring/collector-node.md` §6 — one 12 V supply with a plain buck to
-  5 V, so the 12 V and ESP32 grounds are common through the regulator. Chosen
-  because Jeff has the parts; nothing has proven the CT can live with it.
+- **Can the collector node run on ONE brick? (2026-09-11, decides a purchase.)**
 
-  It is the least favourable arrangement in that document: a CT clamp feet from
-  an induction motor, sharing a ground with the supply that motor's own sensor
-  runs on, on a board whose ADC noise floor was already unresolved before any of
-  this (§5.5 of `ct-bench.md` — the screen's charge pump put ~0.4 A of apparent
-  current on a dead wire).
+  The collector node is being built as power topology **A** first —
+  `firmware/wiring/collector-node.md` §6 — two supplies, grounds genuinely
+  separate. Not because A is better (it is two bricks at one machine, the worse
+  install) but because it is the **baseline**: that board already carries three
+  unvalidated changes in its CT section, and a shared ground underneath them
+  would give any failure four candidate causes and nothing to compare against.
 
-  **What would disprove it:** a CT reading that cannot separate a running blower
-  from a quiet one. A blower is the easiest possible signal — one large motor,
-  unambiguous draw — so if it fails here it fails everywhere.
+  **The real question is whether B works**, since B is the install anyone would
+  want: one 12 V supply, a plain buck to 5 V, grounds common through the
+  regulator. Once A gives a CT reading that cleanly separates a running blower
+  from a quiet one, try B — same board, same clamp, same firmware, one thing
+  different. If it matches, the install gets simpler for free.
 
-  **The fix if it does**, without giving up the single-brick install: topology
-  C, an isolated DC-DC. Traco TMR 6-1211 (6 W, 5 V/1.2 A) for a build with a fob
-  servo, TMR 3-1211 (3 W, 600 mA) for RF-only; Mornsun URB1205S is the cheaper
-  equivalent. Buy REGULATED — the 1–2 W unregulated parts sag under load.
-  Acceptance test is one second with a meter: continuity between input and
-  output GND reads open on an isolated module, ~0 Ω on a plain buck.
+  **If B is worse**, that is a real answer about shared grounds and the fix is
+  topology C, which keeps one brick: an isolated DC-DC. Traco TMR 6-1211 (6 W,
+  5 V/1.2 A) for a build with a fob servo, TMR 3-1211 (3 W, 600 mA) for RF-only;
+  Mornsun URB1205S is the cheaper equivalent. Buy REGULATED — the 1–2 W
+  unregulated parts sag under load, which is the failure mode a lumpy load
+  produces. Acceptance test is one second with a meter: continuity between input
+  and output GND reads open on an isolated module, ~0 Ω on a plain buck.
 
-  Do not buy anything until the CT has actually failed. That is the whole point
-  of building B first.
+  **Buy nothing until B has actually been tried and failed.** A first, B second,
+  C only with evidence.
 
 
 - **A multi-channel Tasmota meter reads 0 W, confidently (2026-09-10).**
