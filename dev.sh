@@ -986,11 +986,25 @@ show_menu() {
   echo "  2) Mock       — ng serve + tools/mock-api.js (real API contract)"
   echo "  3) Live       — local UI + hot reload, talking to REAL hardware"
   echo ""
+  # Show what a flash would provision WITH, because the commonest surprise is a
+  # board that comes up on last month's network. load_env_defaults is cheap and
+  # read-only.
+  load_env_defaults
+  if [[ -n "$ENV_SSID" ]]; then
+    echo "  WiFi: '$ENV_SSID'   hostname: '${ENV_HOST:-dustgate}'   (w = change)"
+  else
+    echo "  WiFi: not set yet — a flash will ask."
+  fi
+  echo ""
   echo "  4) Flash a PRIMARY      — UI + firmware + filesystem + provision"
   echo "     4f = firmware only     4u = UI/filesystem only"
   echo "     4s = the SLIDER primary (ST3215 rack instead of PWM valves)"
+  echo "     4c = the COLLECTOR primary (bin + RF + fob servos, no gates)"
   echo "  5) Flash a NODE         — servo-only firmware + WiFi creds"
   echo "     5s = a SLIDER node (one rack, homes itself at boot)"
+  echo "     5c = a COLLECTOR node (fob servos; no bin/RF yet — see the banner)"
+  echo ""
+  echo "  w) Set the WiFi credentials and hostname used by every flash above"
   echo ""
   echo "  6) Monitor the PRIMARY      (6n = monitor a NODE instead)"
   echo "  7) Ports — list attached boards, and pin one to a role"
@@ -1007,8 +1021,17 @@ show_menu() {
     4f|4F) run_flash --fw ;;
     4u|4U) run_flash --ui ;;
     4s|4S) run_flash --slider ;;
+    4c|4C) run_flash --collector ;;
     5) run_flash_node ;;
     5s|5S) run_flash_node --slider ;;
+    5c|5C) run_flash_node --collector ;;
+    # Prompt for SSID/password/hostname and SAVE them, then come back to the
+    # menu. Separate from a flash on purpose: changing the network is a thing
+    # you do once, and making every flash ask is how people stop reading prompts.
+    w|W) OV_HOST=""; OV_SSID=""; OV_PASS=""; OV_ASK=1; OV_SAVE=1
+         apply_provision_overrides
+         echo "  Saved to tools/.env — every flash uses these until you change them."
+         show_menu ;;
     6) run_monitor ;;
     6n|6N) run_monitor "$NODE_ENV" ;;
     7) run_ports ;;

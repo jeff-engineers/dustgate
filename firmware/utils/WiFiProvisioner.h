@@ -115,6 +115,21 @@ inline void _runPortal() {
     DEBUG_PRINT(F("[WiFi] Starting setup portal — connect to: "));
     DEBUG_PRINTLN(F(WIFI_PORTAL_SSID));
 
+    // EXPECT TWO ERROR LINES HERE, AND IGNORE THEM (documented 2026-09-11).
+    //
+    //   [E][STA.cpp:540] disconnect(): STA disconnect failed! 0xffffffff: ESP_FAIL
+    //   [E][STA.cpp:346] connect(): STA config failed
+    //
+    // They come from the Arduino core, not from us, and they are printed at
+    // ERROR level for something that is not one. We arrive here only after a
+    // station connect has already FAILED, so the STA was never associated —
+    // and mode(WIFI_AP) tears it down anyway. Disconnecting a station that
+    // never connected returns ESP_FAIL, and reconfiguring one that is being
+    // torn down fails for the same reason.
+    //
+    // THE PROOF THAT IT IS COSMETIC is the line below: if the portal prints its
+    // address, the AP came up. Chasing these costs an evening and changes
+    // nothing — which is the only reason this comment is worth its length.
     WiFi.mode(WIFI_AP);
     WiFi.softAP(WIFI_PORTAL_SSID);
 
