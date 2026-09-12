@@ -41,6 +41,35 @@ public:
     // Returns true once per home-request event, then clears the flag.
     bool consumeHomeRequest();
 
+    // `press` — fire the collector's RF transmitter once, by hand.
+    //
+    // Bypasses the retry policy on purpose. The policy refuses to press in
+    // several situations that are correct at runtime and useless at a bench —
+    // the cooldown, the spin-up grace, an unreachable sensor — and a person
+    // standing next to the collector wants to see the relay click NOW. It is
+    // the same escape hatch `dc` gives for a switchable plug.
+    bool consumePressRequest();
+
+    // `rfscan` — try the four ways a DIP can be copied wrong, and keep the one
+    // the collector answers. SETUP ONLY; see control/RfAddressGuess.h for why
+    // this must never be a runtime fallback.
+    bool consumeRfScanRequest();
+
+    // `stroke` — drive a servo from one angle to another and back, N times, then
+    // detach. THE POINT IS THE MEASUREMENT, not the motion: a servo has no torque
+    // feedback, so "can this servo throw that switch" is answered by watching it
+    // try, repeatably, with the arm and angles you actually intend to use.
+    //
+    // Detaching at the end matters. A servo left energised against a switch it
+    // could not move sits there stalled, drawing its full stall current and
+    // getting hot — which is both a bad measurement and a way to cook a 9 g
+    // servo while you go and look at the next machine.
+    bool consumeStrokeRequest(int& idx, int& from, int& to, int& reps, int& dwellMs);
+
+    // `ct` — read the current clamp. `ct <n>` repeats n times, one per second,
+    // which is what you want while walking a tool through idle and running.
+    bool consumeCtRequest(int& reps);
+
     // Returns true once when user types 'reset'. The way back from a latched
     // fault WITHOUT power-cycling the board: the caller re-attempts the drive,
     // clears the boot fault flags and drops the estop. It exists because a
@@ -74,6 +103,8 @@ public:
     bool consumeServoRequest(int& outIndex, int& outAngle, bool& outDetach);
 
 private:
+    bool _pressRequest = false;   // `press` — fire the collector's RF once
+    bool _rfScanRequest = false;  // `rfscan` — find the right address by trying
     int  _requestedStop;
     bool _eStopPending;
     bool _homePending;
@@ -91,6 +122,14 @@ private:
     int   _servoIndex;   // 1-based (1..4)
     int   _servoAngle;   // degrees, or ignored when _servoDetach
     bool  _servoDetach;
+
+    // `stroke` — a repeatable press, for finding out whether a servo can throw a
+    // given switch. See consumeStrokeRequest().
+    bool  _ctPending = false;
+    int   _ctReps = 1;
+    bool  _strokePending = false;
+    int   _strokeIdx = 0, _strokeFrom = 0, _strokeTo = 0, _strokeReps = 1;
+    int   _strokeDwellMs = 400;
 
     String _inputBuffer;
 

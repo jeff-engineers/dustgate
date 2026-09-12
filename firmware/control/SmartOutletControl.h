@@ -161,6 +161,26 @@ public:
     // would be a second copy to keep in sync for no gain.
     float collectorWatts(int idx);       // last reading; 0 if unconfigured
     bool  collectorReachable(int idx);   // false = the plug isn't answering
+
+    // ── A collector's SENSE-ONLY plug ─────────────────────────────────────
+    //
+    // Separate from the switchable plug above, because a blower we command by
+    // pressing its remote — a servo, or RF — has no switchable plug at all, and
+    // every one of those presses is STATELESS. Watching it is the only way to
+    // learn whether the press landed (docs/tool-sensing-rfc.md §4.2b).
+    //
+    // Polled, never switched: this is a PowerSensor and nothing more. It is
+    // usually a no-relay Tasmota, which structurally cannot switch anyway.
+    void  configureCollectorSensor(int idx, OutletKind kind, const char* ip, const char* host);
+    void  removeCollectorSensor(int idx);
+    bool  collectorSensorConfigured(int idx) const {
+        return idx >= 0 && idx < COLLECTOR_COUNT && _collectorSensors[idx] != nullptr;
+    }
+    bool  collectorSensorIs(int idx, const char* ip) const {
+        return collectorSensorConfigured(idx) && ip && strcmp(_collectorSensors[idx]->ip(), ip) == 0;
+    }
+    float collectorSensorWatts(int idx);
+    bool  collectorSensorReachable(int idx);
     // millis() when we last commanded this collector ON, or 0 if it is off. The
     // caller turns this into an age; storing the age would need a clock in here.
     uint32_t collectorOnSinceMs(int idx);
@@ -206,6 +226,9 @@ private:
     // Collector plugs (switchable), one per airflow system. nullptr = not
     // configured. Index 0 is the NVS-persisted one — see the header note above.
     SmartOutlet*      _collectors[COLLECTOR_COUNT];
+    // Sense-only companions to the above. Polled on the same task; setSwitch()
+    // is never called on one, and a Tasmota could not honour it if it were.
+    SmartOutlet*      _collectorSensors[COLLECTOR_COUNT] = {};
     bool              _dcOn[COLLECTOR_COUNT];              // last commanded state (protected by _mutex)
     bool              _dcSynced[COLLECTOR_COUNT];          // false = force a switch command on next reconcile
     bool              _dcManualOverride[COLLECTOR_COUNT];  // true = follow _dcManualState, not gate state

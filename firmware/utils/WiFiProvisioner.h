@@ -115,6 +115,21 @@ inline void _runPortal() {
     DEBUG_PRINT(F("[WiFi] Starting setup portal — connect to: "));
     DEBUG_PRINTLN(F(WIFI_PORTAL_SSID));
 
+    // EXPECT TWO ERROR LINES HERE, AND IGNORE THEM (documented 2026-09-11).
+    //
+    //   [E][STA.cpp:540] disconnect(): STA disconnect failed! 0xffffffff: ESP_FAIL
+    //   [E][STA.cpp:346] connect(): STA config failed
+    //
+    // They come from the Arduino core, not from us, and they are printed at
+    // ERROR level for something that is not one. We arrive here only after a
+    // station connect has already FAILED, so the STA was never associated —
+    // and mode(WIFI_AP) tears it down anyway. Disconnecting a station that
+    // never connected returns ESP_FAIL, and reconfiguring one that is being
+    // torn down fails for the same reason.
+    //
+    // THE PROOF THAT IT IS COSMETIC is the line below: if the portal prints its
+    // address, the AP came up. Chasing these costs an evening and changes
+    // nothing — which is the only reason this comment is worth its length.
     WiFi.mode(WIFI_AP);
     WiFi.softAP(WIFI_PORTAL_SSID);
 
@@ -259,20 +274,84 @@ inline bool begin() {
     WiFi.begin(ssid.c_str(), pass.c_str());
 #endif
 
+    // 30s, raised from 12s on 2026-09-11.
+    //
+    // ⚠️ THE INCIDENT THAT PROMPTED THIS WAS A MISSING ANTENNA. A new board
+    // would not join inside 12s; the theory written here first was that the C5
+    // is dual-band and scans two bands before choosing a BSS, which is true and
+    // was NOT the cause. The board's WiFi antenna was not plugged in. It
+    // associated at all only because it was sitting near the router, and slowly
+    // because it was running on almost no signal.
+    //
+    // So the dual-band argument is UNTESTED and should not be cited as though
+    // it were measured. What actually justifies 30s is below, and stands on its
+    // own — a board with a marginal link is exactly the case a short timeout
+    // handles worst, whatever made the link marginal.
+    //
+    // The cost of being wrong in each direction is lopsided, which is the real
+    // argument: too long and a board with genuinely bad credentials takes half a
+    // minute to offer its portal. Too short and a board with GOOD credentials
+    // gives up and demands the user set up WiFi that is already correct — which
+    // is worse, because the portal is a dead end when nothing is wrong.
+    static const unsigned long kConnectTimeoutMs = 30000UL;
+
     unsigned long t = millis();
-    while (WiFi.status() != WL_CONNECTED && millis() - t < 12000UL) {
+    while (WiFi.status() != WL_CONNECTED && millis() - t < kConnectTimeoutMs) {
         delay(250);
         DEBUG_PRINT(F("."));
     }
     Serial.println();
 
     if (WiFi.status() != WL_CONNECTED) {
-        DEBUG_PRINTLN(F("[WiFi] Connection failed — launching setup portal."));
+        // SAY WHY, not just that. A row of dots and "failed" is the same output
+        // for a wrong password, a network that is not there, and one that is
+        // simply slow — and those want three different responses from whoever
+        // is standing at the bench. wl_status_t already knows which.
+        const wl_status_t st = (wl_status_t)WiFi.status();
+        DEBUG_PRINT(F("[WiFi] Connection failed after "));
+        DEBUG_PRINT((millis() - t) / 1000);
+        DEBUG_PRINT(F("s — status "));
+        DEBUG_PRINT((int)st);
+        switch (st) {
+            case WL_NO_SSID_AVAIL:
+                DEBUG_PRINTLN(F(" (NO SSID) — that network was not seen at all."));
+                DEBUG_PRINTLN(F("       Check the name, and that it is on a band this"));
+                DEBUG_PRINTLN(F("       board can reach. Hidden SSIDs also land here."));
+                break;
+            case WL_CONNECT_FAILED:
+                DEBUG_PRINTLN(F(" (AUTH FAILED) — the network is there and rejected us."));
+                DEBUG_PRINTLN(F("       That is almost always the password."));
+                break;
+            case WL_DISCONNECTED:
+                DEBUG_PRINTLN(F(" (STILL TRYING) — found it, never finished associating."));
+                DEBUG_PRINTLN(F("       A slow or busy AP. Raising kConnectTimeoutMs is"));
+                DEBUG_PRINTLN(F("       the honest fix if this is repeatable."));
+                break;
+            default:
+                DEBUG_PRINTLN(F(" — see wl_status_t in WiFiType.h."));
+                break;
+        }
+        DEBUG_PRINTLN(F("[WiFi] Launching setup portal."));
         _runPortal(); // never returns
     }
 
-    DEBUG_PRINT(F("[WiFi] Connected. IP: "));
-    Serial.println(WiFi.localIP().toString());
+    // ms, not a formatted float: DEBUG_PRINT is a single-argument macro, so the
+    // two-argument Serial.print(x, digits) form does not survive it.
+    DEBUG_PRINT(F("[WiFi] Connected in "));
+    DEBUG_PRINT(millis() - t);
+    DEBUG_PRINT(F("ms. IP: "));
+    Serial.print(WiFi.localIP().toString());
+    // RSSI on every boot, because "it connects but drops later" and "it barely
+    // connected at all" look identical once it is up — and a collector board
+    // lives at the far end of a shop from the router.
+    //
+    // THIS IS THE LINE THAT WOULD HAVE SAVED THE EVENING. The board above was
+    // running with no antenna plugged in, and no amount of staring at a row of
+    // dots says so — a number near -90 dBm does, immediately. Anything worse
+    // than about -75 is worth investigating before anything else is believed.
+    DEBUG_PRINT(F("  RSSI "));
+    DEBUG_PRINT(WiFi.RSSI());
+    DEBUG_PRINTLN(F(" dBm"));
 
     String hostname = getHostname();
     if (MDNS.begin(hostname.c_str())) {

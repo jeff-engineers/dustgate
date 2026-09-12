@@ -746,6 +746,87 @@ const idxOf = (plan, sel) => plan.moves.findIndex((m) => m.selectorId === sel);
   eq('redundant: series has no airflow issues', airflowIssues(series).length, 0);
 }
 
+// ── a collector's SENSOR outlet, separate from its SWITCH ───────────────────
+//
+// A blower commanded by a servo pressing its remote, or by RF, has no
+// `control.outlet` at all — and every one of those presses is stateless, so the
+// only way to learn whether it landed is to watch the blower draw. That is what
+// a collector's `sensor.outlet` is for. Until 2026-09-10 the validator read a
+// collector as switch-or-nothing, which made feedback impossible for exactly
+// the collectors most likely to need it.
+{
+  const withSensor = mut((t) => {
+    const dc = elem(t, 'dc');
+    dc.sensor = { outlet: { ip: '192.168.87.90', kind: 'tasmota' } };
+  });
+  const r = validateTopology(withSensor);
+  check("collector may carry a sense-only sensor.outlet", r.ok, JSON.stringify(r.errors));
+}
+{
+  // Sense-only under `sensor` is fine; the same plug under `control` is not,
+  // and that rule must not have been loosened by allowing the first.
+  const asSwitch = mut((t) => {
+    const dc = elem(t, 'dc');
+    dc.control = { ...(dc.control || {}), outlet: { ip: '192.168.87.91', kind: 'tasmota' } };
+  });
+  const r = validateTopology(asSwitch);
+  check('a tasmota still cannot be a collector SWITCH', !r.ok && hasCode(r, 'element'));
+}
+{
+  // Both at once is the real closed-loop shape: switched by a relay, watched by
+  // a meter. Two different devices.
+  const both = mut((t) => {
+    const dc = elem(t, 'dc');
+    dc.control = { ...(dc.control || {}), outlet: { ip: '192.168.87.92', kind: 'shelly' } };
+    dc.sensor  = { outlet: { ip: '192.168.87.93', kind: 'tasmota' } };
+  });
+  const r = validateTopology(both);
+  check('collector may have BOTH a switch and a sensor', r.ok, JSON.stringify(r.errors));
+}
+{
+  // ...but not the same physical plug named twice. One outlet, one job — the
+  // uniqueness scan now walks both of a collector's outlets, so this is caught
+  // where before only one was ever looked at.
+  const dup = mut((t) => {
+    const dc = elem(t, 'dc');
+    dc.control = { ...(dc.control || {}), outlet: { ip: '192.168.87.94', kind: 'shelly' } };
+    dc.sensor  = { outlet: { ip: '192.168.87.94', kind: 'tasmota' } };
+  });
+  const r = validateTopology(dup);
+  check('the same ip as both switch and sensor → invalid', !r.ok && hasCode(r, 'element'));
+}
+
+// ── control.rf: pressing the collector's own remote ─────────────────────────
+{
+  const rf = mut((t) => { elem(t, 'dc').control = { rf: { pin: 4, address: 94, data: 14 } }; });
+  const r = validateTopology(rf);
+  check('a collector may be pressed by RF', r.ok, JSON.stringify(r.errors));
+}
+{
+  // Two ways to command one blower will fight: the plug switches it off while
+  // the transmitter is trying to toggle it on.
+  const both = mut((t) => {
+    elem(t, 'dc').control = { outlet: { ip: '192.168.87.70', kind: 'shelly' },
+                              rf: { pin: 4 } };
+  });
+  const r = validateTopology(both);
+  check('a plug AND an RF presser → invalid', !r.ok && hasCode(r, 'element'));
+}
+{
+  const badAddr = mut((t) => { elem(t, 'dc').control = { rf: { pin: 4, address: 300 } }; });
+  check('an address past 8 bits → invalid', !validateTopology(badAddr).ok);
+  const badData = mut((t) => { elem(t, 'dc').control = { rf: { pin: 4, data: 16 } }; });
+  check('a data word past 4 bits → invalid', !validateTopology(badData).ok);
+  const noPin = mut((t) => { elem(t, 'dc').control = { rf: { address: 94 } }; });
+  check('no pin → invalid', !validateTopology(noPin).ok);
+}
+{
+  // A press is an edge against a toggle, so only a collector has one to press.
+  const onTool = mut((t) => { elem(t, 'man').control = { rf: { pin: 4 } }; });
+  check('RF on something that is not a collector → invalid',
+        !validateTopology(onTool).ok);
+}
+
 // ── report ──────────────────────────────────────────────────────────────────
 let passed = 0;
 for (const r of results) {

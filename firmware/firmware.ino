@@ -35,7 +35,13 @@
 #include "motor/MotorDriver.h"
 #include "feedback/FeedbackSystem.h"
 #include "control/ControlInput.h"
-#include "control/OutletSweep.h"   // the 254-address knock, one address per loop() pass
+#include "control/OutletSweep.h"
+#include "control/CollectorPress.h"        // the retry policy for a stateless press
+#include "control/RfCollectorPresser.h"    // ...and the one presser that exists
+#include "control/RfAddressGuess.h"        // the four ways a DIP gets copied wrong
+#ifdef PIN_CT
+  #include "sensing/CtSensor.h"           // `ct` — the clamp, on a collector board
+#endif   // the 254-address knock, one address per loop() pass
 #include "control/FaultPolicy.h"   // which begin() failure costs which capability
 #include "training/CalibrationStore.h"
 
@@ -319,7 +325,7 @@ static inline bool farSwitchTriggered() {
 #include "motor/ServoActuator.h"
 #if defined(ENABLE_SERVO) && defined(SERVO_PWM_PIN_1)
 ServoActuator g_servos[SERVO_COUNT];
-static const int SERVO_PINS[SERVO_COUNT] = { SERVO_PWM_PIN_1, SERVO_PWM_PIN_2, SERVO_PWM_PIN_3, SERVO_PWM_PIN_4 };
+static const int SERVO_PINS[SERVO_COUNT] = { SERVO_PWM_PIN_LIST };
 #endif
 
 // -- Feedback system --
@@ -719,12 +725,37 @@ static void syncControllerAliases() {
 // change instead of every pass. Cleared whenever a layout is adopted — slot i
 // may then be a different system's blower, and a stale "already asserted" would
 // be an answer about the wrong one.
+// ── Pressing the collector's own remote ──────────────────────────────────────
+//
+// A collector with `control.rf` has no switchable plug: we transmit its
+// remote's frame instead (docs/tool-sensing-rfc.md §4.2). That is an EDGE
+// against a TOGGLE, so it cannot be commanded, only nudged — and whether the
+// nudge landed is answered by the collector's sensor plug, not by us.
+// control/CollectorPress.h holds the policy; this holds the hardware and the
+// per-system bookkeeping it needs.
+//
+// Rebuilt on every adopt rather than reconfigured: a layout may move the
+// transmitter to another pin or name a different fob's address, and there is no
+// state in a presser worth preserving across that.
+static RfCollectorPresser* g_pressers[COLLECTOR_COUNT] = {nullptr};
+static topo::PressState    g_pressState[COLLECTOR_COUNT];
+
+static void clearPressers() {
+    for (int i = 0; i < COLLECTOR_COUNT; i++) {
+        delete g_pressers[i];
+        g_pressers[i]   = nullptr;
+        g_pressState[i] = topo::PressState();
+    }
+}
+
 static bool g_dcAsserted[COLLECTOR_COUNT] = {false};
 static bool g_dcHave[COLLECTOR_COUNT]     = {false};
 
 static void syncTopologyOutlets() {
     JsonObjectConst doc = g_topoRuntime.topology();
     for (int i = 0; i < COLLECTOR_COUNT; i++) g_dcHave[i] = false;
+    // Pressers are rebuilt below from whatever the new layout names.
+    clearPressers();
 
     // Walk MACHINES, not tool elements. A machine owns the plug, and a machine
     // with two ports (cabinet + overarm on a table saw) is still one plug — so
@@ -782,8 +813,42 @@ static void syncTopologyOutlets() {
         } else {
             control.removeCollector((int)i);
         }
+
+        // The transmitter that presses this blower's remote, if it has one.
+        JsonObjectConst rf = g_topoRuntime.collectorRf(sysIds[i]);
+        if (!rf.isNull()) {
+            const int pin = rf["pin"] | -1;
+            if (pin >= 0) {
+                g_pressers[i] = new RfCollectorPresser(
+                    pin,
+                    (uint8_t)(rf["address"] | (int)RfCollectorPresser::kRocklerAddress),
+                    (uint8_t)(rf["data"]    | (int)RfCollectorPresser::kRocklerData),
+                    (uint32_t)(rf["tickUs"] | (int)RfCollectorPresser::kDefaultTickUs),
+                    (uint16_t)(rf["repeats"]| (int)RfCollectorPresser::kDefaultRepeats));
+                DEBUG_PRINT(F("[RF] Collector ")); DEBUG_PRINT((int)i);
+                DEBUG_PRINT(F(" pressed by RF on pin ")); DEBUG_PRINTLN(pin);
+            }
+        }
+
+        // The SENSE-ONLY plug watching this blower, which is a different device
+        // from the one switching it. A collector pressed by a servo or by RF has
+        // no switchable plug at all, and every one of those presses is stateless
+        // — so this is the only thing that can say whether it landed.
+        JsonObjectConst so = g_topoRuntime.collectorSensorOutlet(sysIds[i]);
+        const char* sip = so["ip"].as<const char*>();
+        if (sip && *sip) {
+            if (!control.collectorSensorIs((int)i, sip))
+                control.configureCollectorSensor((int)i,
+                                                 outletKindFromName(so["kind"] | "shelly"),
+                                                 sip, so["host"] | "");
+        } else {
+            control.removeCollectorSensor((int)i);
+        }
     }
-    for (size_t i = sysIds.size(); i < COLLECTOR_COUNT; i++) control.removeCollector((int)i);
+    for (size_t i = sysIds.size(); i < COLLECTOR_COUNT; i++) {
+        control.removeCollector((int)i);
+        control.removeCollectorSensor((int)i);
+    }
 }
 #endif
 
@@ -822,6 +887,31 @@ static void adoptStoredTopology() {
 // =============================================================================
 // setup()
 // =============================================================================
+// ⚠️ 16 KB, RAISED FROM THE ARDUINO DEFAULT OF 8 KB ON 2026-09-12.
+//
+// A stack protection fault in loopTask, on a collector board at boot:
+//
+//   Guru Meditation Error: Core 0 panic'ed (Stack protection fault)
+//   Stack pointer: 0x4085d060   bounds: 0x4085d068 - 0x4085f060
+//
+// SP eight bytes BELOW the lower bound, with the 0xabba1234 canary sitting on
+// it. The stack held a half-built status JSON, which is the clue: loop() is ONE
+// enormous function, and every StaticJsonDocument declared anywhere inside it
+// reserves space in the SAME FRAME whether or not that branch ever runs.
+//
+// Four of them live in there (2x512, 2x256) and I added two of those in the
+// week before the crash — the sweep's row builder and the widened ping reply —
+// on top of the deferred-reply handlers that were already there. Nothing was
+// individually unreasonable; the frame simply is not a place to keep
+// kilobytes.
+//
+// THE REAL FIX IS SMALLER FUNCTIONS, and the sweep block below is extracted for
+// exactly that reason. This macro is the belt: loop() will keep growing,
+// nobody notices a frame getting bigger, and the failure mode is a reboot loop
+// on a board in a shop rather than a compile error. 8 KB more RAM against 320
+// KB is not a trade worth agonising over.
+SET_LOOP_TASK_STACK_SIZE(16 * 1024);
+
 void setup() {
     Serial.begin(SERIAL_BAUD);
 #if BOARD_HAS_NATIVE_USB
@@ -1317,6 +1407,33 @@ static void updateStatusLed() {
 
 #ifdef CONTROL_SMART_OUTLET
 static OutletSweep g_sweep;
+
+#if defined(CONTROL_SMART_OUTLET)
+// One address of a sweep. EXTRACTED FROM loop() ON 2026-09-12, after a stack
+// protection fault: the StaticJsonDocument below reserved space in loop()'s
+// single enormous frame even on the passes where no sweep was running. Here it
+// costs a frame only while it is actually probing.
+static void sweepProbeOne(const char* ip) {
+    // A SHORT timeout is the whole budget. An address with nothing at it never
+    // answers, so it costs the full timeout — and that is almost every address.
+    // 250ms keeps a pass near a minute; raising it makes the sweep unusable long
+    // before it finds anything new. (If a KNOWN plug is missed, suspect this
+    // first: Tasmota ships with `Sleep 50`, so an ESP8285 can be slower to
+    // answer than a Shelly. `Sleep 0` on the plug is cheaper than raising this
+    // for all 254.)
+    TasmotaOutlet probe(ip, "sweep");
+    if (!probe.probe(250)) return;
+
+    StaticJsonDocument<512> row;
+    JsonObject o = row.to<JsonObject>();
+    describeOutletInto(o, ip, nullptr,
+                       /*kindKnown=*/true, OUTLET_TASMOTA, /*mdnsGen=*/0);
+    String s; serializeJson(row, s);
+    g_sweep.record(s);
+    DEBUG_PRINT(F("[SWEEP] found ")); DEBUG_PRINTLN(ip);
+}
+#endif
+
 // -----------------------------------------------------------------------------
 // describeOutletInto — probe one plug and write the row the picker reads.
 //
@@ -1444,6 +1561,78 @@ static void describeOutletInto(JsonObject o, const char* ip, const char* mdnsHos
 
 #endif  // CONTROL_SMART_OUTLET
 
+#if defined(CONTROL_SMART_OUTLET) && defined(PIN_RF_TX)
+// Try each way a DIP can be copied wrong, and keep the one the collector
+// answers. Blocking and chatty on purpose: it is a supervised setup step.
+//
+// WHY IT NEEDS THE SENSOR PLUG. The whole method is "press it and see", and
+// seeing is what the collector's sensor.outlet does. Without one there is
+// nothing to test against and the routine would just transmit four addresses
+// into the shop, one of which may belong to someone else.
+static void runRfScan() {
+    std::vector<std::string> sysIds = g_topoRuntime.systemIds();
+    if (sysIds.empty()) { Serial.println(F("[RF] No layout loaded.")); return; }
+    const std::string sys = sysIds[0];
+
+    if (!control.collectorSensorConfigured(0)) {
+        Serial.println(F("[RF] The collector has no sensor plug, so there is nothing"));
+        Serial.println(F("     to test against. Pair one first — this works by"));
+        Serial.println(F("     pressing and watching the draw, not by guessing."));
+        return;
+    }
+
+    JsonObjectConst rf = g_topoRuntime.collectorRf(sys);
+    const uint8_t entered = (uint8_t)(rf["address"] | (int)RfCollectorPresser::kRocklerAddress);
+    const uint8_t data    = (uint8_t)(rf["data"]    | (int)RfCollectorPresser::kRocklerData);
+    const int     pin     = rf["pin"] | (int)PIN_RF_TX;
+
+    uint8_t cand[4]; topo::AddrGuess guess[4];
+    const int n = topo::addrCandidates(entered, cand, guess);
+
+    Serial.printf("\n[RF] Trying %d address(es) from %u. Put a LAMP in the collector's\n", n, entered);
+    Serial.println(F("     outlet — a blower cannot spin up and coast down fast enough"));
+    Serial.println(F("     to read, and this presses several times."));
+
+    for (int i = 0; i < n; i++) {
+        Serial.printf("\n[RF]  %u (%s) ... ", cand[i], topo::addrGuessName(guess[i]));
+        RfCollectorPresser p(pin, cand[i], data);
+        watchdog::pet();
+        if (!p.press()) { Serial.println(F("TRANSMIT FAILED")); continue; }
+        watchdog::pet();
+
+        // Wait out the spin-up grace, then read. Polling continues on its own
+        // task, so this only has to wait — but it has to pet the watchdog while
+        // it does, because loop() is not running underneath it.
+        const uint32_t until = millis() + topo::kCollectorSpinupGraceMs + 1500;
+        while ((int32_t)(millis() - until) < 0) { watchdog::pet(); delay(50); }
+
+        const bool on = control.collectorSensorWatts(0) >= topo::kCollectorRunningW;
+        Serial.println(on ? F("ANSWERED") : F("nothing"));
+        if (!on) continue;
+
+        Serial.printf("[RF] That is the one. Put this in the layout:\n");
+        Serial.printf("       \"control\": { \"rf\": { \"pin\": %d, \"address\": %u } }\n",
+                      pin, cand[i]);
+        if (guess[i] != topo::AddrGuess::AsEntered) {
+            Serial.print(F("     (the switch was read "));
+            Serial.print(topo::addrGuessName(guess[i]));
+            Serial.println(F(")"));
+        }
+        // Leave it as we found it. A scan that ends with the collector running
+        // is a scan that started a motor and walked away.
+        Serial.println(F("[RF] switching it back off..."));
+        watchdog::pet();
+        p.press();
+        watchdog::pet();
+        return;
+    }
+
+    Serial.println(F("\n[RF] None of them worked. That is not an address problem —"));
+    Serial.println(F("     check the transmitter's DATA wire, that it has 5V, that"));
+    Serial.println(F("     it has an antenna, and that the receiver is powered."));
+}
+#endif
+
 void loop() {
     watchdog::pet();   // we're alive this iteration
 
@@ -1459,6 +1648,35 @@ void loop() {
 #if defined(ENABLE_SERVO) && defined(SERVO_PWM_PIN_1)
     // Effect any deferred servo auto-detach (move-then-detach; see ServoActuator).
     for (int i = 0; i < SERVO_COUNT; i++) g_servos[i].update();
+#endif
+
+#if HAS_BIN
+    // ── Bin sensor, RAW, and OUTSIDE the topology gate ──────────────────────
+    //
+    // HOISTED 2026-09-12. This was written to answer "is the sensor wired and
+    // does the firmware see it change" on a bench with no shop loaded — and was
+    // then placed INSIDE `if (g_topoRuntime.loaded())`, which is exactly the
+    // gate it existed to escape. A board with no topology printed nothing while
+    // the sensor worked perfectly, which is the failure it was meant to prevent.
+    //
+    // The RAW pin, deliberately: no debounce, no inversion. That is a different
+    // question from "is the bin full" — which is debounced, inverted per the
+    // document, and reported further down, only when a layout names this board.
+    {
+        static int8_t lastRaw = -1;              // -1 = nothing seen yet
+        const bool now = (digitalRead(PIN_BIN_SENSOR) == LOW);
+        if (lastRaw != (int8_t)now) {
+            const bool first = (lastRaw == -1);
+            lastRaw = (int8_t)now;
+            DEBUG_PRINT(F("[BIN] D"));
+            DEBUG_PRINT(PIN_BIN_SENSOR);
+            DEBUG_PRINT(now ? F(" LOW  (beam broken / covered)")
+                            : F(" HIGH (beam clear)"));
+            // An unwired board sits HIGH forever, so the first reading is where
+            // we started rather than a transition that happened.
+            DEBUG_PRINTLN(first ? F("  — initial") : F("  — CHANGED"));
+        }
+    }
 #endif
 
     // -- routing runtime ------------------------------------------------
@@ -1506,8 +1724,20 @@ void loop() {
                 JsonObjectConst sensor = g_topoRuntime.binSensorFor(binSys);
                 const bool invert = sensor["invert"] | true;
                 const bool raw    = (digitalRead(PIN_BIN_SENSOR) == LOW);
+                const bool wasFull = g_binDebounce.full();
                 g_binDebounce.sample(invert ? raw : !raw, millis());
-                g_topoRuntime.setBinFull(binSys, g_binDebounce.full());
+                const bool nowFull = g_binDebounce.full();
+                g_topoRuntime.setBinFull(binSys, nowFull);
+
+                // The DEBOUNCED verdict, which is a different event from the pin
+                // edge above: this one has survived kBinDebounceMs and is what
+                // the shop actually acts on. Logged only on a change, so a full
+                // bin does not fill the console for as long as it stays full.
+                if (nowFull != wasFull) {
+                    DEBUG_PRINT(F("[BIN] "));
+                    DEBUG_PRINT(binSys.c_str());
+                    DEBUG_PRINTLN(nowFull ? F(" -> FULL" ) : F(" -> ok"));
+                }
             }
         }
 #endif
@@ -1531,7 +1761,58 @@ void loop() {
             std::vector<std::string> sysIds = g_topoRuntime.systemIds();
             for (size_t i = 0; i < sysIds.size() && i < COLLECTOR_COUNT; i++) {
                 bool want = g_topoRuntime.collectorOn(sysIds[i]);
-                if (!g_dcHave[i] || want != g_dcAsserted[i]) {
+
+                // TWO WAYS TO COMMAND A BLOWER, and a layout has exactly one of
+                // them (validateTopology refuses both — they would fight).
+                if (g_pressers[i]) {
+                    // A PRESS, not a switch. The frame says "change", never "be
+                    // on", so this is a closed loop or nothing: the policy reads
+                    // what the sensor plug reports and presses again if the
+                    // blower disagrees. See control/CollectorPress.h — every
+                    // refusal in there is a case where pressing would have
+                    // turned a healthy blower OFF.
+                    const uint32_t now = millis();
+                    const topo::PlugState seen = g_topoRuntime.collectorPlugStateFor(sysIds[i]);
+                    switch (topo::nextPressAction(g_pressState[i], want, seen, now)) {
+                        case topo::PressAction::Press: {
+                            // ~500 ms of RMT. Acceptable on the main loop only
+                            // because it happens on a state change, not a tick —
+                            // and the watchdog runs at 10 s.
+                            watchdog::pet();
+                            const bool sent = g_pressers[i]->press();
+                            topo::notePress(g_pressState[i], want, now);
+                            DEBUG_PRINT(F("[RF] press #"));
+                            DEBUG_PRINT(g_pressState[i].attempts);
+                            DEBUG_PRINT(F(" wanting "));
+                            DEBUG_PRINT(want ? F("ON") : F("OFF"));
+                            DEBUG_PRINT(F(" (saw "));
+                            DEBUG_PRINT(topo::plugStateName(seen));
+                            DEBUG_PRINTLN(sent ? F(") -> sent") : F(") -> TRANSMIT FAILED"));
+                            watchdog::pet();
+                            break;
+                        }
+                        case topo::PressAction::GiveUp:
+                            if (!g_pressState[i].gaveUp) {
+                                topo::noteGaveUp(g_pressState[i]);
+                                // Said ONCE. The state latches, so this does not
+                                // become a line per loop for the rest of the day.
+                                DEBUG_PRINT(F("[RF] Collector ")); DEBUG_PRINT((int)i);
+                                DEBUG_PRINT(F(" did not respond after "));
+                                DEBUG_PRINT(topo::kMaxPressAttempts);
+                                DEBUG_PRINTLN(F(" presses — check the breaker, the cord, "
+                                                "and the fob's battery."));
+                            }
+                            break;
+                        case topo::PressAction::Nothing:
+                            // Settled: clear the budget so the next disagreement
+                            // gets a full one rather than the tail of this one.
+                            if (seen == (want ? topo::PlugState::Running
+                                              : topo::PlugState::Off))
+                                topo::noteSettled(g_pressState[i]);
+                            break;
+                    }
+                    g_dcAsserted[i] = want; g_dcHave[i] = true;
+                } else if (!g_dcHave[i] || want != g_dcAsserted[i]) {
                     control.setCollectorManual((int)i, want);
                     g_dcAsserted[i] = want; g_dcHave[i] = true;
                 }
@@ -1543,14 +1824,26 @@ void loop() {
                 // Only for a slot that actually has a plug — reporting zeroes for
                 // a collector nobody paired would read as a dead blower rather
                 // than an absent one.
-                if (control.collectorConfigured((int)i)) {
+                // A DEDICATED SENSOR WINS over the switchable plug's own reading.
+                // Both answer "what is this blower drawing", and when a layout
+                // names both, the sensor is the one chosen for the job — a
+                // metering Tasmota on a blower switched by a relay that may not
+                // meter at all. When there is no sensor, the switch plug's own
+                // reading is used exactly as before; when there is no switch
+                // plug either — a blower pressed by a servo — the sensor is the
+                // ONLY reading there has ever been, and is the whole reason this
+                // branch exists.
+                const bool haveSensor = control.collectorSensorConfigured((int)i);
+                if (haveSensor || control.collectorConfigured((int)i)) {
                     uint32_t since = control.collectorOnSinceMs((int)i);
                     // millis() is read HERE and handed over as an age: the runtime
                     // owns no clock, which is what keeps it host-testable.
                     uint32_t onFor = since ? (millis() - since) : 0;
                     g_topoRuntime.setCollectorPlug(sysIds[i],
-                                                   control.collectorWatts((int)i),
-                                                   control.collectorReachable((int)i),
+                                                   haveSensor ? control.collectorSensorWatts((int)i)
+                                                              : control.collectorWatts((int)i),
+                                                   haveSensor ? control.collectorSensorReachable((int)i)
+                                                              : control.collectorReachable((int)i),
                                                    onFor);
                 }
             }
@@ -1665,6 +1958,108 @@ void loop() {
         retryDrive("reset");
     }
 
+    // `press` — fire the collector's transmitter once, by hand.
+    //
+    // Bypasses the retry policy deliberately. That policy refuses to press in
+    // several situations that are right at runtime and useless at a bench (the
+    // cooldown, the spin-up grace, an unreachable sensor), and someone standing
+    // next to the collector wants the relay to click now.
+    if (_SC.consumePressRequest()) {
+        // FALLS BACK TO THE BOARD'S DEFAULT PAD when no layout names one.
+        //
+        // A bench command that needs a valid layout cannot diagnose a bad
+        // layout, and "does the radio work at all" is the question you ask
+        // BEFORE writing a control.rf block. So an unconfigured `press` uses
+        // PIN_RF_TX with the measured Rockler address and data word — which is
+        // exactly the wiring someone testing this for the first time will have.
+        RfCollectorPresser* p = g_pressers[0];
+#ifdef PIN_RF_TX
+        static RfCollectorPresser* benchPresser = nullptr;
+        if (!p) {
+            if (!benchPresser) benchPresser = new RfCollectorPresser(PIN_RF_TX);
+            p = benchPresser;
+            Serial.print(F("[RF] No control.rf in the layout — using D9/GPIO"));
+            Serial.print(PIN_RF_TX);
+            Serial.println(F(" with the measured Rockler address."));
+        }
+#endif
+        if (!p) {
+            Serial.println(F("[RF] No RF presser configured, and this board has no "
+                             "default pad (a slider build uses D6 for the servo bus)."));
+        } else {
+            watchdog::pet();
+            const bool sent = p->press();
+            watchdog::pet();
+            Serial.println(sent ? F("[RF] sent.") : F("[RF] TRANSMIT FAILED."));
+        }
+    }
+
+    // `ct` — read the clamp, on the console, with or without a screen.
+    //
+    // SERIAL AND ONLY SERIAL, on purpose. The screen is a NOISE SOURCE for this
+    // very measurement — SSD1306_SWITCHCAPVCC runs a charge pump on the rail the
+    // ADC's bias divider shares, and it put ~0.4 A of apparent current on a DEAD
+    // wire (wiring/ct-bench.md §5.5). A reading you can only see by lighting the
+    // thing that corrupts it is not much of a reading, so this one does not care
+    // whether a panel is fitted.
+    {
+        int ctReps = 0;
+        if (_SC.consumeCtRequest(ctReps)) {
+#ifdef PIN_CT
+            static CtSensor ct(PIN_CT);
+            for (int i = 0; i < ctReps; i++) {
+                watchdog::pet();
+                const CtSensor::Reading r = ct.read();
+                if (!r.valid) { Serial.println(F("[CT] too few samples — is D0 wired?")); break; }
+
+                Serial.printf("[CT] %6.3f A   %5.1f Hz   DC %4umV (%.0f counts)  %.0f kSPS",
+                              r.amps, r.hz, r.dcMv, r.dcCounts, r.kSps);
+                // THE ONLY CHECK THAT MATTERS. A railed input reads a constant,
+                // and the variance of a constant is zero — which looks exactly
+                // like a perfectly quiet sensor. Refusing to let 0.000 A pass
+                // unqualified is the whole reason this line exists.
+                if (CtSensor::isRailed(r)) {
+                    Serial.println();
+                    Serial.println(F("[CT] ⚠️ BIAS IS RAILED — that amp figure is fiction."));
+                    Serial.println(F("     D0 should sit at ~1650 mV, the divider halving 3V3."));
+                    Serial.println(F("     0 mV usually means D0 is tied to ground; 3300 means"));
+                    Serial.println(F("     it is on the rail, or the CT is not in circuit."));
+                    break;
+                }
+                Serial.println();
+                // One per second, which is the cadence for walking a tool from
+                // idle to running and watching the number move.
+                if (i + 1 < ctReps) {
+                    const uint32_t until = millis() + 800;
+                    while ((int32_t)(millis() - until) < 0) { watchdog::pet(); delay(50); }
+                }
+            }
+#else
+            (void)ctReps;
+            Serial.println(F("[CT] This build has no CT pad — flash a COLLECTOR build"));
+            Serial.println(F("     (dev.sh flash --collector). D0 is the only ADC pad, and"));
+            Serial.println(F("     a gate board does not wire the bias network."));
+#endif
+        }
+    }
+
+    // `rfscan` — find the address by trying, using the loop we already have.
+    //
+    // SETUP ONLY, and the loudest warning in this file. An inverted or reversed
+    // address is not a nonsense value: it is a perfectly valid address belonging
+    // to SOME OTHER RECEIVER. A shop with two Rockler boxes, or a neighbour's
+    // collector within 26 feet, is a shop where this can start the wrong
+    // machine. That is tolerable with a person standing here watching a lamp,
+    // and is exactly why it is a typed command rather than anything automatic.
+    // See control/RfAddressGuess.h.
+    if (_SC.consumeRfScanRequest()) {
+#ifdef PIN_RF_TX
+        runRfScan();
+#else
+        Serial.println(F("[RF] This build has no transmitter pad."));
+#endif
+    }
+
     if (_SC.consumeHomeRequest() && currentState != STATE_HOMING) {
         // Homing is the natural place to retry: it cannot work without a drive,
         // and it is never automatic — a person typed it or pressed it. So a
@@ -1737,6 +2132,78 @@ void loop() {
             ServoActuator& s = g_servos[sIdx - 1];   // sIdx validated 1..4 by the parser
             if (sDetach) s.detach();
             else         s.moveTo(sAngle);
+        }
+    }
+
+    // `stroke` — press and release, repeatably, then DETACH.
+    //
+    // For answering "can a 9 g servo throw this switch", which is the open
+    // question behind tool-sensing-rfc §4.2c: a fob button is a light spring and
+    // a collector's paddle is not, and nothing has measured the difference.
+    //
+    // A servo has no torque feedback, so the measurement is watching it try. The
+    // variables that matter are the ARM LENGTH (torque at the switch is force x
+    // radius, so a shorter arm pushes harder through less travel) and the two
+    // angles. Both are yours to vary; this just makes trying repeatable.
+    //
+    // BLOCKING, deliberately — it is a bench command and the alternative is a
+    // state machine nobody needs. The watchdog is petted around each move.
+    {
+        int stIdx = 0, stFrom = 0, stTo = 0, stReps = 1, stDwell = 400;
+        if (_SC.consumeStrokeRequest(stIdx, stFrom, stTo, stReps, stDwell)) {
+            ServoActuator& s = g_servos[stIdx - 1];
+
+            // ⚠️ THE WAIT MUST CALL update(), AND THE FIRST VERSION DID NOT.
+            //
+            // ServoActuator is NON-BLOCKING and EASED: moveTo() only sets a
+            // target, and update() — normally called every loop() pass — is what
+            // walks the shaft there. A wait made of bare delay() therefore
+            // produces a perfectly convincing log and NO MOVEMENT AT ALL, which
+            // is exactly what it did on the bench (2026-09-11).
+            //
+            // `servo <n> <deg>` worked the whole time, which is what made it
+            // confusing: that command returns to loop(), where update() runs.
+            // This one blocks, so it has to pump the servo itself.
+            // Pump until the SWEEP FINISHES, then hold for the dwell.
+            //
+            // Waiting a fixed time was the second bug in the same six lines: the
+            // sweep is eased over up to SERVO_SWEEP_MS (2000), scaled by how far
+            // it has to travel, and the default dwell is 400 — so the next
+            // moveTo() retargeted a servo that was still part-way through the
+            // last one, and the arm crept instead of pressing.
+            //
+            // isMoving() already knows. The cap is a backstop against a servo
+            // that never reports arrival, not a timing choice.
+            auto settle = [&](int dwellMs) {
+                const uint32_t cap = millis() + SERVO_SWEEP_MS + 500;
+                while (s.isMoving() && (int32_t)(millis() - cap) < 0) {
+                    s.update();          // the call the first version was missing
+                    watchdog::pet();
+                    delay(5);
+                }
+                const uint32_t until = millis() + (uint32_t)dwellMs;
+                while ((int32_t)(millis() - until) < 0) {
+                    s.update();
+                    watchdog::pet();
+                    delay(5);
+                }
+            };
+
+            for (int r = 0; r < stReps; r++) {
+                Serial.printf("[STROKE] %d/%d ", r + 1, stReps);
+                s.moveTo(stFrom);
+                settle(stDwell);
+                Serial.print(F("press "));
+                s.moveTo(stTo);
+                settle(stDwell);
+                Serial.println(F("release"));
+            }
+            // ALWAYS detach, including after a stroke that achieved nothing. A
+            // servo left energised against a switch it could not move sits
+            // stalled at full current and gets hot — a bad measurement, and a
+            // way to cook a 9 g servo while you walk to the next machine.
+            s.detach();
+            Serial.println(F("[STROKE] done, detached. Did the switch move?"));
         }
     }
 #endif
@@ -2503,24 +2970,9 @@ void loop() {
         if (g_sweep.running()) {
             char ip[16];
             if (g_sweep.nextAddress(ip, sizeof(ip))) {
-                // A SHORT timeout is the whole budget. An address with nothing
-                // at it never answers, so it costs the full timeout — and that
-                // is almost every address. 250ms keeps a pass near a minute;
-                // raising it makes the sweep unusable long before it finds
-                // anything new. (If a KNOWN plug is missed, suspect this first:
-                // Tasmota ships with `Sleep 50`, so an ESP8285 can be slower to
-                // answer than a Shelly. `Sleep 0` on the plug is cheaper than
-                // raising this for all 254.)
-                TasmotaOutlet probe(ip, "sweep");
-                if (probe.probe(250)) {
-                    StaticJsonDocument<512> row;
-                    JsonObject o = row.to<JsonObject>();
-                    describeOutletInto(o, ip, nullptr,
-                                       /*kindKnown=*/true, OUTLET_TASMOTA, /*mdnsGen=*/0);
-                    String s; serializeJson(row, s);
-                    g_sweep.record(s);
-                    DEBUG_PRINT(F("[SWEEP] found ")); DEBUG_PRINTLN(ip);
-                }
+                // Its own function so its StaticJsonDocument lives in ITS frame,
+                // not in loop()'s — see the stack note above setup().
+                sweepProbeOne(ip);
             } else {
                 DEBUG_PRINT(F("[SWEEP] done — "));
                 DEBUG_PRINT(g_sweep.foundCount());

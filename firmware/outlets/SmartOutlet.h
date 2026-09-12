@@ -12,6 +12,7 @@
 // =============================================================================
 
 #pragma once
+#include "../sensing/PowerSensor.h"
 #include <Arduino.h>
 
 // WHICH PROTOCOL a plug speaks, and the thing dispatch happens on.
@@ -31,14 +32,19 @@ enum OutletKind : uint8_t {
     OUTLET_TASMOTA = 1,   // GET /cm?cmnd=Status%208 — sense only, cannot switch
 };
 
-class SmartOutlet {
+// A SmartOutlet IS a PowerSensor, plus everything that is true of a networked
+// PLUG specifically — an address, an owner, a push config, sometimes a relay.
+// The split matters because an onboard CT would be the second PowerSensor and
+// has none of that. See sensing/PowerSensor.h for why the verdict (isActive)
+// belongs to the sensor rather than to the brain.
+class SmartOutlet : public PowerSensor {
 public:
     virtual ~SmartOutlet() {}
 
     // Fetch a fresh power reading from the outlet over the network.
     // Blocking — call only from the poll task, not from loop().
     // Returns true on success; false if unreachable or parse error.
-    virtual bool poll() = 0;
+    bool poll() override = 0;
 
     // Reachability check with a caller-chosen timeout, used by the provisioning
     // path where we can afford to wait for a marginal plug (unlike the tight
@@ -57,13 +63,17 @@ public:
 
     // Last successfully polled power reading in watts.
     // Returns 0 if the outlet has never been reached or is offline.
-    float getPowerW() const { return _lastPowerW; }
+    float getPowerW() const override { return _lastPowerW; }
 
     // True when last reading is at or above the configured threshold.
-    bool isActive() const { return _reachable && (_lastPowerW >= _thresholdW); }
+    // A plug's threshold shape: watts against a user-set thresholdW. That is
+    // ONE answer to PowerSensor::isActive(), not the only possible one — a CT
+    // would compare against a learned baseline instead, because it has no watts
+    // to compare and no user-typed number that would mean anything.
+    bool isActive() const override { return _reachable && (_lastPowerW >= _thresholdW); }
 
     // True if the last poll() call succeeded.
-    bool isReachable() const { return _reachable; }
+    bool isReachable() const override { return _reachable; }
 
     // Watts threshold above which the tool is considered "on".
     // Defaults to OUTLET_DEFAULT_THRESHOLD_W from config.h.

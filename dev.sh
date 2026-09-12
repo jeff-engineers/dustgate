@@ -35,6 +35,17 @@
 #     Its hostname is load-bearing (mDNS, the Boards screen, link.host in the
 #     topology) and must be unique per node.
 #
+#   THE COLLECTOR BOARD — add --collector:
+#
+#   bash dev.sh flash --collector collector       # a PRIMARY at the collector
+#   bash dev.sh flash-node --collector collector  # ...or a NODE, if the brain
+#                                                 #    is elsewhere
+#     Drives NO GATES: the PWM block goes to fob servos (D7/D8) and the 315 MHz
+#     transmitter (D9) instead, so SERVO_COUNT is 2. Bin sensor on D6, CT on D0.
+#     ⚠️ The NODE build compiles but has neither the bin sensor nor the RF
+#     transmitter — both still live in firmware.ino. Fob servos work on both.
+#     firmware/wiring/collector-node.md has the table of what works where.
+#
 #   THE SLIDER BOARD — add --slider to either flash command:
 #
 #   bash dev.sh flash --slider        # a PRIMARY that drives the rack
@@ -49,6 +60,52 @@
 #     counts steps and has no idea where it is, least of all after a power cycle.
 #     A slider NODE does that sweep itself — the one thing in this design a node
 #     decides for itself — and holds any move it is sent until the datum lands.
+#
+#   BENCH COMMANDS — typed at the serial console (bash dev.sh monitor):
+#
+#     press                   Fire the 315 MHz transmitter ONCE, now. Bypasses
+#                             the retry policy — no cooldown, no spin-up grace,
+#                             no sensor needed. Falls back to D9 and the measured
+#                             Rockler address when no layout names one, so it
+#                             works before any control.rf block exists.
+#                             ⚠️ Put a LAMP in the receiver's outlet, not the
+#                             collector: a blower cannot spin up and coast down
+#                             fast enough to read.
+#
+#     rfscan                  Try the four ways a DIP switch gets copied wrong
+#                             — as entered, inverted, reversed, both — and keep
+#                             whichever the collector answers. Needs the
+#                             collector's SENSOR plug paired: the method is
+#                             press-and-see, and that plug is the seeing.
+#                             SETUP ONLY. An inverted address is a valid address
+#                             for someone else's receiver; watch it run.
+#
+#     stroke <1-4> <from> <to> [reps] [dwellMs]
+#                             Press and release a servo, repeatably, then
+#                             DETACH. For finding out whether a 9g servo can
+#                             throw a given switch — there is no torque number
+#                             to read, so the measurement is watching it try.
+#                             e.g. stroke 1 20 90 5
+#                             Try a SHORTER ARM before concluding you need metal
+#                             gears: torque at the switch is force x radius.
+#
+#     ct [n]                  Read the CT clamp n times, one per second. Prints
+#                             amps, the DC bias point and the sample rate.
+#                             SERIAL ONLY, on purpose: the screen's charge pump
+#                             is a noise source for this very measurement, so a
+#                             reading you can only see by lighting the thing that
+#                             corrupts it is no reading at all.
+#                             ⚠️ It refuses to let 0.000 A pass unqualified when
+#                             the bias is RAILED — a railed pin reads a constant,
+#                             and the variance of a constant is zero, which looks
+#                             exactly like a perfectly quiet sensor. D0 should
+#                             sit at ~1650 mV.
+#
+#     servo <1-4> <deg>       Move one servo. `servo N detach` de-energises it.
+#     mdnsprobe               What answers mDNS here, and how fast.
+#     sweep [from] [to]       Knock on every address looking for a Tasmota.
+#     probe <ip>              Why one address did not answer.
+#     help                    Everything, including the non-collector commands.
 #
 #   bash dev.sh monitor             # serial monitor (primary)
 #   bash dev.sh monitor node        # ...a node instead
@@ -88,6 +145,14 @@ NODE_ENV="xiao_c5"
 # in each role, not a flag on the servo build, and `--slider` picks it.
 LINEAR_PRIMARY_ENV="xiao_c5_linear_primary"
 LINEAR_NODE_ENV="xiao_c5_linear"
+
+# The COLLECTOR pair, and a FOURTH thing to flash in each role for the same
+# reason the slider is a third: it drives different hardware off the same pads.
+# A collector board drives no gates, so the PWM block goes to fob servos (D7/D8)
+# and the 315 MHz transmitter (D9) instead — SERVO_COUNT is 2 there.
+# `--collector` picks it. See tool-sensing-rfc §6.2.
+COLLECTOR_PRIMARY_ENV="xiao_c5_collector"
+COLLECTOR_NODE_ENV="xiao_c5_collector_node"
 
 UI_DIR="$SCRIPT_DIR/dustgate-ui"
 TOOLS_DIR="$SCRIPT_DIR/tools"
@@ -403,6 +468,10 @@ parse_provision_overrides() {
       # four PWM channels. Consumed here rather than passed through, because the
       # env it selects is handed to deploy.sh as --env= below.
       --slider|--linear|--rack) FLASH_ENV="$LINEAR_PRIMARY_ENV"; shift ;;
+      # The collector board: bin sensor, CT, RF transmitter, fob servos. NOT a
+      # separate env — it is the PRIMARY build, because that is where those
+      # capabilities actually live today. See the banner in run_flash().
+      --collector|--dc) FLASH_COLLECTOR=1; FLASH_ENV="$COLLECTOR_PRIMARY_ENV"; shift ;;
       # Two primary envs now, and --slider picks between them, so these say
       # nothing. Accepted and ignored rather than failing a flash on muscle memory.
       --env)    shift 2 ;;
@@ -569,7 +638,38 @@ run_flash() {
   parse_provision_overrides "$@"
   set -- "${PROVISION_REST[@]+"${PROVISION_REST[@]}"}"
 
-  if [[ "$FLASH_ENV" == "$LINEAR_PRIMARY_ENV" ]]; then
+  if [[ "${FLASH_COLLECTOR:-0}" == "1" ]]; then
+    echo "▶ Real hardware — flashing a COLLECTOR board."
+    echo "  Target: $(describe_env "$FLASH_ENV")"
+    echo ""
+    echo "  Drives NO GATES. The PWM block is spent on collector jobs instead:"
+    echo ""
+    echo "        D0  CT clamp         the only analog pad on the edge"
+    echo "        D6  bin sensor       opto output, LOW = full"
+    echo "        D7  fob servo, ON    PWM channel 1"
+    echo "        D8  fob servo, OFF   PWM channel 2"
+    echo "        D9  315 MHz TX       where channel 3 would be"
+    echo "        D10 spare            lamps, or a third fob button"
+    echo ""
+    echo "  ⚠️  WHAT ACTUALLY WORKS TODAY is less than that list implies:"
+    echo "        fob servos    yes — ordinary servo channels (servo / stroke)"
+    echo "        RF TX         yes on this PRIMARY build; NOT on the node"
+    echo "        bin sensor    yes on this PRIMARY build; NOT on the node"
+    echo "        CT clamp      no — bench console only (xiao_c5_ct_bench)"
+    echo "      firmware/wiring/collector-node.md has the table."
+    echo ""
+    echo "  ⚠️  THIS IS A COMPLETE PRIMARY — web UI, topology, plug polling."
+    echo "      A one-collector shop is a whole shop, so that is right. In a shop"
+    echo "      that ALREADY has a routing brain, flash the node instead:"
+    echo "      two primaries on one network fight over the topology and the"
+    echo "      mDNS name. Either way, give this board its own hostname."
+    echo ""
+    echo "  Bench commands once it is up (bash dev.sh monitor):"
+    echo "      press                       fire the RF transmitter once"
+    echo "      rfscan                      find the fob's address by trying"
+    echo "      stroke <1-4> <from> <to> [n]  press a switch, repeatably"
+    echo ""
+  elif [[ "$FLASH_ENV" == "$LINEAR_PRIMARY_ENV" ]]; then
     echo "▶ Real hardware — flashing a SLIDER PRIMARY (XIAO C5 + ST3215)."
     echo "  Target: $(describe_env "$FLASH_ENV")"
     echo ""
@@ -626,6 +726,7 @@ run_flash_node() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --slider|--linear|--rack) node_env="$LINEAR_NODE_ENV"; shift ;;
+      --collector|--dc) node_env="$COLLECTOR_NODE_ENV"; shift ;;
       *) args+=("$1"); shift ;;
     esac
   done
@@ -931,13 +1032,31 @@ show_menu() {
   echo "  2) Mock       — ng serve + tools/mock-api.js (real API contract)"
   echo "  3) Live       — local UI + hot reload, talking to REAL hardware"
   echo ""
+  # Show what a flash would provision WITH, because the commonest surprise is a
+  # board that comes up on last month's network. load_env_defaults is cheap and
+  # read-only.
+  load_env_defaults
+  if [[ -n "$ENV_SSID" ]]; then
+    echo "  WiFi: '$ENV_SSID'   hostname: '${ENV_HOST:-dustgate}'   (w = change)"
+  else
+    echo "  WiFi: not set yet — a flash will ask."
+  fi
+  echo ""
   echo "  4) Flash a PRIMARY      — UI + firmware + filesystem + provision"
   echo "     4f = firmware only     4u = UI/filesystem only"
   echo "     4s = the SLIDER primary (ST3215 rack instead of PWM valves)"
+  echo "     4c = the COLLECTOR primary (bin + RF + fob servos, no gates)"
   echo "  5) Flash a NODE         — servo-only firmware + WiFi creds"
   echo "     5s = a SLIDER node (one rack, homes itself at boot)"
+  echo "     5c = a COLLECTOR node (fob servos; no bin/RF yet — see the banner)"
+  echo ""
+  echo "  w) Set the WiFi credentials and hostname used by every flash above"
   echo ""
   echo "  6) Monitor the PRIMARY      (6n = monitor a NODE instead)"
+  echo "     collector bench commands, once connected:"
+  echo "       press   fire the RF transmitter once (lamp in the outlet, not the blower)"
+  echo "       rfscan  find the fob's address by trying the 4 ways a DIP gets misread"
+  echo "       stroke <1-4> <from> <to> [reps]   press a switch repeatably, then detach"
   echo "  7) Ports — list attached boards, and pin one to a role"
   echo "  8) (Re)send WiFi/key/hostname to an already-flashed board"
   echo "  9) Full chip erase (fixes corrupted-partition weirdness)"
@@ -952,8 +1071,17 @@ show_menu() {
     4f|4F) run_flash --fw ;;
     4u|4U) run_flash --ui ;;
     4s|4S) run_flash --slider ;;
+    4c|4C) run_flash --collector ;;
     5) run_flash_node ;;
     5s|5S) run_flash_node --slider ;;
+    5c|5C) run_flash_node --collector ;;
+    # Prompt for SSID/password/hostname and SAVE them, then come back to the
+    # menu. Separate from a flash on purpose: changing the network is a thing
+    # you do once, and making every flash ask is how people stop reading prompts.
+    w|W) OV_HOST=""; OV_SSID=""; OV_PASS=""; OV_ASK=1; OV_SAVE=1
+         apply_provision_overrides
+         echo "  Saved to tools/.env — every flash uses these until you change them."
+         show_menu ;;
     6) run_monitor ;;
     6n|6N) run_monitor "$NODE_ENV" ;;
     7) run_ports ;;

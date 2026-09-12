@@ -62,19 +62,22 @@ drifted constantly. Now `shared/device-model/` is the spec:
   | `IDLE_TIMEOUT_SEC_DEFAULT` (device-model.js) | `IDLE_TIMEOUT_SEC_DEFAULT` (config.h) | idle power-off default |
   | `MANIFOLD_PROFILES` — `gatePitchMm` / `firstGateOffsetMm` / `endMarginMm` (device-model.js) | `MANIFOLD_2_5_GATE_PITCH_MM`, `MANIFOLD_4_GATE_PITCH_MM` and friends (config.h) | Rockler manifold geometry. **Found unregistered on 2026-08-28** — it had been a pair since the profiles were written, with nothing pointing either way, which is exactly the situation this table exists to prevent. `gatePitchMm` is the number the reference sweep trusts and centres the gate array on, so a change on one side alone mis-places every gate on real hardware while every test still passes. |
   | the **default** for an absent `kind` on `sensor.outlet` / `control.outlet` (topology.js) | the default in `outletKindFromName()` and `OutletConfig`'s `o<N>_kind` (outlets/OutletFactory.h, OutletConfig.h) | which protocol a plug speaks — `shelly` or `tasmota`. The VALUE rides the document and so isn't a pair; the **default when the document is silent** is, and it must be Shelly on both sides or every layout written before 2026-09-09 starts polling the wrong endpoint. An unknown string defaults the same way, so a document from a newer UI degrades to the old behaviour rather than to a plug that reads nothing |
+  | `COLLECTOR_RUNNING_W` / `COLLECTOR_SPINUP_GRACE_MS` (topology-device.js) | `kCollectorRunningW` / `kCollectorSpinupGraceMs` (control/CollectorPlugState.h) | is the blower ACTUALLY running, vs what we commanded. **Became a pair 2026-09-10** — topology-device.js had carried a note saying it deliberately was not one, and naming the exact condition that would change that. This is it, and for a stronger reason than the OLED it predicted: every way we now command a collector is STATELESS (a servo pressing a fob, an RF frame), so what we sent proves nothing and a browser nobody has open cannot be the only thing that notices a failed start. `test_collector_plug.cpp` ↔ `collector-plug.test.js`, same cases, same order, and both numbers asserted literally so a one-sided edit fails at the test rather than on a bench |
   | `NODELINK_VERSION`, `PING_INTERVAL_MS`, `PONG_TIMEOUT_MS`, `RECONNECT_MIN_MS`, `RECONNECT_MAX_MS` (nodelink.js) | `kVersion`, `kPingIntervalMs`, `kPongTimeoutMs`, `kReconnectMinMs`, `kReconnectMaxMs` (control/NodeLink.h) | NodeLink protocol timing |
 
   The reference pair has company now: `manual-blower.test.js` ↔
   `firmware/test/test_manual_blower.cpp` covers running a blower by hand, and the
   two assert the same cases in the same order for the same reason.
 
-  **Not everything shared is a pair, and saying so is part of the job.**
-  `collector-plug.test.js` has NO C++ partner on purpose: the firmware reports
-  what a collector's plug says (`systems[].plug` — watts, reachable, onForMs) and
-  never judges it, so `COLLECTOR_RUNNING_W` and `COLLECTOR_SPINUP_GRACE_MS` exist
-  once, in `topology-device.js`, with nothing to drift against. If the OLED ever
-  needs to say "blower not starting" too, that is the moment those become a pair
-  and earn a row above — not before.
+  **Not everything shared is a pair, and saying so is part of the job** — but a
+  non-pair can BECOME one, and this table's job includes noticing when.
+  `collector-plug.test.js` was the standing example of a deliberate non-pair:
+  the firmware reported what a collector's plug said and never judged it, so the
+  two constants lived once in `topology-device.js` with nothing to drift
+  against. The note there named the condition that would change it — "if the
+  OLED ever needs to say *not starting* too" — and **it changed on 2026-09-10**,
+  for a bigger reason than the OLED. It now has a row above and a C++ partner.
+  Cite it as the example of a non-pair that earned promotion, not as a non-pair.
 
   `kBinDebounceMs` (utils/BinSensor.h) is another: how long the dust-bin beam
   must hold a reading before the firmware believes it. No JS model simulates a
@@ -142,6 +145,8 @@ Firmware compiles — `pio run -e <env>`:
 | `xiao_c5_linear_primary` | XIAO ESP32C5 | **primary** on the slider board (ST3215 rack) |
 | `xiao_c5_linear` | XIAO ESP32C5 | secondary node on the slider board |
 | `xiao_c5_bus_bench` | XIAO ESP32C5 | not a role — the bus-servo console |
+| `xiao_c5_ht12e_bench` | XIAO ESP32C5 | not a role — the HT12E/315MHz console, for keying the Rockler DC remote ([`wiring/ht12e-bench.md`](firmware/wiring/ht12e-bench.md)) |
+| `xiao_c5_ct_bench` | XIAO ESP32C5 | not a role — a walk-around CT current meter, for judging whether a 30A clamp can tell a running tool from an idle one ([`wiring/ct-bench.md`](firmware/wiring/ct-bench.md)) |
 
 **One board, two roles.** Same board, same carrier, same pin map; the difference
 is `build_src_filter` and `-DDUSTGATE_SECONDARY`. Both roles are proven on
@@ -227,6 +232,23 @@ These are decided; don't relitigate them in code review or suggestions.
   `sensor.outlet` vs `control.outlet` in the model already said this. See
   [`docs/tool-sensing-rfc.md`](docs/tool-sensing-rfc.md) — decided, nothing
   bench-tested.
+- **An install step the owner cannot perform is not a cheaper option, it is a
+  different product.** Ranked ABOVE cost and elegance, not against them. Two
+  subsystems hit this independently before it was written down: panel-side CTs
+  are the cheapest way to sense every tool and need an electrician (and void
+  insurance), and every ELECTRONIC way to press the collector's remote — our own
+  HT12E injection, or a $12 dry-contact relay sold for exactly this job — ends at
+  "open the fob and solder across the button". **Woodworkers are not likely to
+  know how to solder.** So the SHIPPING answer is a servo arm on a printed
+  fixture: no new device, the fob untouched and still certified, and an install
+  that is "clip it in, plug it into the labelled port".
+
+  The rule binds what a CUSTOMER must do, not what may exist. RF injection
+  (HT12E) stays a live option — it is already proven on the bench, it is the only
+  route for a collector with no fob to press, and a pre-modified fob shipped from
+  a factory satisfies the rule completely. `docs/tool-sensing-rfc.md` §4.2a.
+  Whichever sends it, it is still a TOGGLE, so feedback stays mandatory.
+
 - **Never require anything a network is allowed to block.** Multicast is the
   specific hazard: mDNS is off on plenty of guest networks, most IoT VLANs and a
   fair number of mesh routers, and the woodworker whose shop stopped working has
@@ -267,6 +289,16 @@ These are decided; don't relitigate them in code review or suggestions.
   grid until 2026-08-16; `docs/boards-on-canvas-plan.md` records why that came out
   and which alternatives were rejected. Nothing stops you dragging a board low,
   where its cables route badly: the fix is the default, not a rule.
+- **The collector gets its own board.** Bin level, a CT clamp, the RF
+  transmitter that presses its remote, lamps — all on one board at the
+  collector, none of them hung off a board that also drives gates. Not a new
+  firmware target: same node build, same NodeLink, and which jobs it does is
+  still a TOPOLOGY fact. What forced it is the pin budget — a four-gate primary
+  with a screen has exactly ONE ordinary pad left (D3 is a strap, D0 is the
+  analog pad a CT wants), so bin-level and RF-transmit could not coexist while
+  both wanting to sit three feet from each other. A board driving no gates has
+  the whole PWM block free. `docs/tool-sensing-rfc.md` §6.2.
+
 - **A machine is ONE box, however many ports it has.** A second pickup — an
   overarm guard, a hood — is a differently-shaped inlet on that same box (square =
   the primary port, tapered = the secondary port), not a second body. It owns

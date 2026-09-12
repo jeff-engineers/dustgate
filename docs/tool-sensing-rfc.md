@@ -145,6 +145,353 @@ hardware 2026-09-03, so none of this is inference any more:
 | Address DIP | rockers **1, 6, 8 on**, rest off |
 | Buttons | **one** |
 
+**KEYED ON THE BENCH 2026-09-06 — the first verified thing in this document.**
+An HT12E of our own, address strapped to match, switched a lamp through the
+Rockler receiver. What that settles, and the two things that were not obvious:
+
+| | |
+|---|---|
+| Rosc | **1.0 MΩ at 3.3 V → ~3.5 kHz measured**, and it works. Holtek's ~3 kHz is a *reference point*, not a requirement — the HT12D's capture window is wider than the datasheet's example implies. An earlier draft of this section treated 2.4–3.6 kHz as pass/fail; it is not. |
+| Data word | **`data 14`** (`0b1110`) — **AD8 low; AD9, AD10 and AD11 are all don't-cares.** A full 16-value sweep keys on every EVEN value (0,2,4,6,8,10,12,14) and nothing odd, which is exactly "bit 0 clear". One button, one pin. 14 leaves the other three open, so it is what the fob actually sends. <br><br>One guess died here properly: that the receiver toggled on VT and ignored the data bits entirely. `data 15` does nothing, so it does not. (An intermediate reading suggested AD8 **and** AD9 were both needed; the operator thinks that was a mistype, and the full sweep does not support it. Recorded only so the number is not re-derived from a half-remembered result.) |
+| **TE hold** | **≥ ~500 ms. This is the one that bites.** 120 ms keyed the receiver only intermittently while the fob was rock solid. Four words is the HT12E's documented *minimum* transmission because the decoder validates by seeing the same frame more than once — so a truncated group produces **no output rather than a wrong one**, which is indistinguishable from a range problem. Default is now 400 ms; 500 is proven. |
+| Antenna | **Not needed at bench range** — an unfitted module radiates plenty across a bench, which is its own trap in the other direction. Fit the 23.8 cm quarter-wave at install. |
+
+### 4.2a How we press the button: a servo, not electronics (2026-09-10)
+
+**Preferred, not exclusive. HT12E injection below stays a LIVE option.** For a
+shipped product the collector's fob gets pressed by a **servo arm on a printed
+fixture** — the same PWM servo this project already drives for every gate.
+
+The argument that settles it is not elegance, and not cost. It is that **every
+electronic option ends at "open the fob and solder across the button"**, and
+**woodworkers are not likely to know how to solder.** That is true of the HT12E
+injection path, and equally true of the tidy $11.83 alternative
+([Athom 1CH Inching/Self-lock Relay](https://www.athom.tech/blank-1/1ch-inching-self-lock-relay)
+— dry contact, Tasmota pre-flashed, sold for exactly this job). A servo ends at
+*clip the fob into the holder, plug the servo into the labelled port*.
+
+**This is the same constraint that already killed panel-side CTs (§5), and it
+should be stated once rather than rediscovered per subsystem:**
+
+> **An install step the owner cannot perform is not a cheaper option, it is a
+> different product.** Panel work fails it because it needs an electrician and
+> voids insurance; soldering inside a fob fails it because most woodworkers do
+> not solder. Cost and elegance are ranked BELOW this, not against it.
+
+What the servo buys beyond that:
+
+- **No new device.** A tapper is one more channel on hardware already shipping.
+  The relay would be another Tasmota to discover, claim, power and keep on WiFi
+  — the whole §12 apparatus, for one button.
+- **The fob is untouched.** Not opened, not modified, fully reversible, and it
+  stays a certified transmitter operated exactly as designed. That also retires
+  the 315 MHz emissions problem §11 raises for shipping a product with our own
+  transmitter, rather than working around it.
+- **It is legible.** You can watch it press the button. A user can diagnose it by
+  looking, which nothing else on the control path offers.
+
+**Where it lives: the collector node, and it has to.** `SERVO_COUNT` is 4, so a
+tapper consumes a gate channel — and a slider board has NO PWM channels at all,
+because PWM and the serial bus never share a board (CLAUDE.md). So it cannot go
+on whichever board happens to be nearest. It belongs on the board already beside
+the collector: the one carrying the bin sensor, which CLAUDE.md already frames as
+*a capability, not a node type*. The fob-tapper is a second capability on that
+same board.
+
+**What it does NOT fix, and must not be read as fixing:**
+
+- **A press is still a TOGGLE.** Mechanically pressing a button is exactly as
+  stateless as transmitting a frame. The firmware still cannot know the
+  collector's state from what it sent, so **feedback remains mandatory** — this
+  changes the sending end only.
+- **The fob battery becomes a system dependency.** True of the relay too, but now
+  a dead battery presents as a dead servo. The collector's own wattage feedback
+  is what tells them apart, which is another thing the loop buys.
+
+**New failure mode:** an arm that drifts, or a fob that shifts in its fixture,
+misses the press — and a missed press on a toggle inverts our belief
+permanently. Wants a printed fixture holding fob and servo rigidly against each
+other, which this project already builds parts of that kind. Feedback catches
+the inversion; the fixture is what stops it happening.
+
+**Why HT12E stays live (Jeff, 2026-09-10).** The no-soldering rule is about what
+a CUSTOMER must do, and it does not rule the electronics out — it rules out
+making the customer do the work:
+
+- **Jeff's own shop is not the product.** Soldering is no obstacle here, and the
+  RF path is already proven end to end — address, data word, hold, oscillator,
+  range, all measured in `firmware/bench/ht12e_bench.cpp`. Holding back a working
+  path on a constraint that binds someone else would be a strange trade.
+- **A factory can solder.** Shipping a pre-modified fob, or a small harness that
+  plugs into one, satisfies §4.2a's rule completely — the install step becomes
+  "plug this in". That converts the whole objection into a BOM decision rather
+  than a design one.
+- **Some collectors have no fob to press.** A servo needs a button and a place to
+  clamp. RF needs neither, and a collector whose receiver we can address but
+  whose remote is lost, integrated or absent has no mechanical option at all.
+- **The two fail differently.** A servo misses a press when its arm drifts or the
+  fob shifts; an RF frame misses when it is out of range or stepped on. Neither
+  failure implies the other, so having both is genuine redundancy rather than
+  duplication.
+
+So: build the servo path first because it is what ships, and keep the RF driver
+(§8) on the list rather than striking it. Both drive the same seam — whatever
+sends the toggle is behind one interface — and the feedback loop is identical
+either way, since both are stateless.
+
+### 4.2c Skip the remote: actuate the collector's OWN switch (2026-09-11)
+
+Jeff's, and it is better than the fob for the case that matters — a servo on the
+dust collector's own paddle or toggle, instead of on a handheld remote.
+
+**It is allowed.** §3's hard line is *never a tool's own power switch*. The
+collector is the one thing DustGate is permitted to command, so its switch is
+fair game in a way a table saw's never is. (That distinction is the whole reason
+the line is drawn where it is; see §4.2b's "where it does NOT go".)
+
+**Where it wins outright is a MAINTAINED switch** — a paddle, a toggle, a rocker.
+That is the best row in §4.2b's table: a servo sets a POSITION, not an edge. It
+is idempotent, a missed command self-corrects, and the switch's own physical
+position becomes a truthful, human-readable display of what the system believes.
+
+And it removes three dependencies at once that the fob path carries:
+
+- **No fob battery.** §4.2a records that the battery becomes a system
+  dependency, and that a flat one presents as a dead servo. Gone.
+- **No RF at all** — no address, no DIP-matching screen (`docs/mockups/
+  rf-address.html`), and none of §11's 315 MHz certification question.
+- **No Rockler box.** Which is the sharpest consequence, so state it plainly:
+  **a servo on the collector's switch and a receiver in the cord are mutually
+  exclusive.** If the receiver is plugged between wall and machine, the
+  collector's own switch has to stay ON for the receiver to control anything. It
+  is one or the other, never both — and choosing this one deletes a $40 device
+  from the chain.
+
+#### What decides whether it works on a given machine
+
+**FORCE, and this breaks an assumption made yesterday.** §6.2 and the collector
+board's pin notes assume **9 g servos** for the fob-presser, on the reasoning
+that a fob button is a light spring and a press is not a stall. A collector's
+paddle is not a fob button: it is a real mechanical switch with a detent, and a
+magnetic starter's button is deliberately firm. **That is metal-gear territory,
+the same servo class the gates use** — which changes the current budget in
+`firmware/wiring/collector-node.md` §6 and may change which isolated converter
+that section recommends. **Unmeasured.** Measure the switch before choosing a
+servo, not after.
+
+**SWITCH TYPE.** Three cases, and they are not equally good:
+
+| | |
+|---|---|
+| **Paddle / toggle** (maintained) | The good case. Absolute, self-correcting, legible |
+| **Magnetic starter, momentary start/stop** | Two servos, discrete buttons — still idempotent, still good (§4.2b) |
+| **A single momentary toggle** | Same stateless problem as the fob. No better than RF |
+
+**NO-VOLT RELEASE.** An NVR switch is designed so the machine stays off after a
+power cut until a person presses start. A servo pressing it defeats that by
+design. Arguably we already do — automatic collector start IS the product, and
+the Rockler receiver defeats it the same way — but it should be recorded rather
+than discovered. A collector is a far milder hazard than the tools NVR was
+invented for, which is the reason this is acceptable here and would not be on a
+saw. It is also a reason the STOP button matters: whatever presses start must be
+able to press stop.
+
+**REACH.** Plenty of collectors put the switch under the motor or around the
+back, where a bracket cannot easily bolt to anything rigid. §4.2b's warning
+applies doubly: fixture and switch must be rigid *relative to each other*, and a
+shop vibrates.
+
+#### Where this leaves the three paths
+
+Nothing is retired. They answer different machines:
+
+| Path | Best for |
+|---|---|
+| **Servo on the collector's own switch** | A maintained paddle or toggle within reach. The best case available |
+| **Servo on the fob** (§4.2a) | A switch that cannot be reached or moved, but a remote that can |
+| **RF injection** (§4.2) | No fob to press, no switch to reach, or a shop where the receiver is already the install |
+
+The first is now the one to aim at, and the one that needs a torque measurement
+before anything else.
+
+### 4.2b Mechanical actuation, as a general technique (2026-09-10)
+
+The fob-tapper is one instance of something broader, and it is worth stating on
+its own because the next "how do we command a device we did not build" question
+should start here rather than at a soldering iron.
+
+**When you need to operate equipment you do not own the electronics of, moving
+its existing control is often better than interfacing with its circuitry.**
+
+#### Why it keeps winning
+
+- **Nothing is modified.** No opening, no soldering, no cut traces. The device
+  stays certified, stays under warranty, stays insurable, and the whole
+  installation is reversible by unclipping a bracket. Every electrical approach
+  gives up all four.
+- **No reverse engineering.** The HT12E path needed the encoder identified, the
+  address rockers read, the data word found by sweep, the hold time measured and
+  the oscillator characterised — and got the data word wrong twice on the way.
+  A servo needs to know where the button is.
+- **It works on the inaccessible.** Potted assemblies, proprietary boards, sealed
+  remotes, anything with no exposed contact to reach. A physical control is
+  exposed by definition — that is what makes it a control.
+- **The install is mechanical, and so is the audience.** A woodworker cannot
+  reasonably be asked to solder (§4.2a) but can absolutely be asked to bolt a
+  bracket square to a switch. This project already ships printed mechanical
+  parts and a rack-and-pinion drive; brackets are the house competency, not a
+  new one.
+- **It is inspectable.** You can watch it work, and see afterwards whether it
+  did. Nothing on an electrical control path offers that.
+- **It costs a servo channel**, on boards that already drive servos.
+
+#### The property that actually matters: maintained vs momentary
+
+**This is the part that generalises furthest, and it is easy to miss.**
+
+A servo can only be as stateful as the control it moves:
+
+| The control | What a servo gives you | State |
+|---|---|---|
+| **Momentary TOGGLE** — one button that alternates | A press | **Stateless, and the worst case.** Same as an RF frame: you know what you sent, never what resulted. A missed or doubled press inverts our belief permanently, so feedback is mandatory |
+| **Momentary DISCRETE** — separate ON and OFF buttons | A press, to a **known destination** | **Idempotent.** Pressing ON twice leaves it on. Stateless to SEND, absolute in MEANING — a missed press is self-correcting on the next one |
+| **Maintained** — a paddle, rocker, lever | A POSITION | **Absolute, and legible.** Same idempotence, plus the control's own position is a truthful display of what the system believes |
+
+**The Rockler fob is the worst row.** One button, alternating — which is why the
+collector's loop needs feedback at all. That is a property of the fob, not of
+this technique, and the other two rows escape it.
+
+Rows 2 and 3 reach a better position than any electrical option available to us.
+A collector with a paddle switch, or a remote with separate on/off buttons, has
+**no toggle problem**: the firmware commands a state rather than an edge, and a
+missed or doubled command corrects itself. Feedback becomes confirmation rather
+than the only source of truth.
+
+So when there is a choice of control to actuate, **prefer a discrete or
+maintained one**, even if the toggle is easier to reach.
+
+#### Multi-button fobs, and what they open up
+
+Jeff, 2026-09-10: plenty of shop equipment ships a remote with **separate on/off
+and several power settings** — a
+[WEN 3410 air filtration system](https://wenproducts.com/collections/dust-management/products/air-filtration-system-item-3410)
+has power, three fan speeds (300/350/400 CFM) and a timer, all from one fob.
+
+That is row 2, and it changes what mechanical actuation is FOR. It stops being
+"a way to press the button we already press by hand" and becomes **a general
+control surface for shop equipment DustGate does not otherwise speak to.**
+
+Costs and shapes, unresolved:
+
+- **A button per servo, or a servo that travels.** One servo per button is
+  simple and eats channels fast — `SERVO_COUNT` is 4, and power + three speeds is
+  already four. A single arm that moves between buttons is one channel and a
+  harder mechanism, and it has to know where it is (the same datum problem the
+  slider has, at a much smaller scale).
+- **An air cleaner is not a dust collector**, and the model has no room for it.
+  It belongs to no gate, routes no air we switch, and its useful behaviour is
+  different in kind: run while anything is cutting, and **keep running long
+  after** — airborne dust settles over tens of minutes, where a duct clears in
+  seconds. That is a coast measured against a different clock than
+  `offDelayMs`.
+- **Speeds are a policy question we have not asked.** Low while one tool runs,
+  high after a sanding session? Nothing in the shop model expresses "how dirty
+  is the air", and the honest first version is probably one speed, chosen once.
+
+**Not scoped, and not blocking anything.** Recorded because it is the first
+sign that the fob-tapper is a platform rather than a fix, and because the
+discrete-button property in row 2 is worth having found before designing around
+the Rockler's toggle.
+
+#### Where it does NOT go, and this is a hard line
+
+**Never on a tool's own power switch.** §3's safety rule is about the hazard of a
+tool being energised with nobody's hand on it, and a servo that can throw a table
+saw's start switch IS that hazard, built deliberately. The fact that it is
+mechanical rather than electrical makes it worse, not better: it defeats the
+no-volt-release behaviour a switch may have been chosen to provide.
+
+Mechanical actuation is scoped to **the collector, and equipment of that kind** —
+things DustGate is allowed to command at all. It is not a loophole in "sensing is
+not switching"; it is another way of doing the one bit of switching that was
+always permitted.
+
+#### The honest costs
+
+- **A bracket is per-device.** A fob holder does not fit a paddle switch, and one
+  brand's remote does not fit another's. This does not produce one SKU; it
+  produces a family, or a parametric model and a printer.
+- **Force.** A hobby servo has limited torque, and an industrial paddle switch or
+  a stiff magnetic starter may exceed it. Measure before committing to a servo
+  class.
+- **Alignment is now a failure mode.** An arm that drifts, or a device that shifts
+  under vibration — and a woodworking shop vibrates — misses the actuation. On a
+  momentary control that inverts the system's belief; on a maintained one it just
+  fails to arrive, which is another argument for the maintained kind.
+- **It is visible and reachable, which means it is also bumpable.** A human can
+  move a maintained switch the servo is holding. That is a feature (manual
+  override with no UI at all) and a hazard (the system's model goes stale), and
+  it is a third reason the collector's state must be sensed rather than assumed.
+
+### The encoder comes out (2026-09-06)
+
+**An RMT-generated frame keys the receiver, with no HT12E in the circuit.** The
+ESP32 clocks the waveform out of hardware straight into the transmitter's data
+pin. That drops the encoder, the address DIP and the oscillator resistor from the
+BOM, and — the actual prize — **makes the address a software value**, so one
+board works with any receiver without a jumper to set or document.
+
+RMT is what makes it viable. Option B was rejected earlier because bit-banging
+270 µs pulses on a primary running WiFi means FreeRTOS stretches one and the
+command is silently lost. RMT clocks the train out in hardware; nothing the CPU
+does afterwards can disturb it.
+
+**The tick turns out to be nearly a free parameter, and that was a surprise.** A
+sweep found **85 µs to at least 400 µs all work** — a 5:1 window. The reason is
+that an HT12D does *ratio* detection: each bit is 1:2 or 2:1 within itself, so
+the decoder compares the two halves of a symbol and never needs to know the rate.
+The 50:1 fOSC rule is an oversampling requirement, not a matched-frequency one.
+
+That retires a whole thread of anxiety. It is why 1.0 MΩ giving 3.5 kHz instead
+of Holtek's nominal 3.0 never caused trouble, and why copying the fob's resistor
+would have been solving a non-problem.
+
+**Settled values: tick 270 µs, 24 repeats.** 270 is the middle of the proven
+range and is what real HT12E parts produce; 24 repeats is ~473 ms of airtime,
+which lands on the 500 ms that was independently proven with the encoder. Those
+two numbers agreeing from opposite directions is the useful part — **reliability
+is about total airtime, not tick length.** The decoder needs to see the same code
+several times, and that is the only timing constraint that ever mattered.
+
+The receiver is genuinely decoding, not detecting carrier: `data 15` and every
+odd value still fail. A receiver that toggled on any 315 MHz energy would be a
+hazard, and this one is not.
+
+**Range is solved, and more cheaply than expected (2026-09-06).** ~40 ft through
+several interior walls, at **3.3 V, with nothing in the ANT pad** — near the
+50 ft Rockler claims for the fob, which runs at 12 V.
+
+So the 12 V supply and the quarter-wave wire recommended earlier are **headroom,
+not requirements**, and this document previously said otherwise. The breakout
+drops to **three pins: 3.3 V, GND, DATA** — one rail, no level shifting, no
+antenna.
+
+There is a case for leaving it that way rather than banking the headroom. At
+315 MHz with an 8-bit fixed code, extra range is extra opportunity to key a
+neighbour's gear or be keyed by theirs, and 40 ft already covers the shop.
+
+**Still to check:** a house is a kinder RF environment than a shop. The receiver
+will sit beside a large grounded steel collector, and a universal motor's brushes
+are a broadband noise source. The test that counts is at the install location
+with the collector running.
+
+**Design consequence: do not block for 500 ms.** `setSwitch()` on a primary
+cannot sit in a busy wait that long — it would stall the web server and the
+servo update pass for half a second on every collector change. Assert TE, record
+the time, release it on a later loop pass. The hold is a duration to *schedule*,
+not to *wait out*, and that is a nicer shape anyway: it composes with the
+read-compare-pulse loop the toggle already forces on us.
+
 No rolling code, no pairing handshake — the fob sends the same word every time.
 Two paths:
 
@@ -280,6 +627,51 @@ as off.
 box is out and the contactor build comes back** — it is preserved in §13 rather
 than deleted for exactly that reason.
 
+### 4.3 Direction: Shelly for collectors, Tasmota for tools (2026-09-09)
+
+Jeff, leaning: **stop allowing Shelly on tools entirely**, keep it for collectors
+where switching is the job — a small or medium collector with a relay big enough
+for its inrush is a legitimate use, and §3's safety argument does not apply to a
+blower the way it applies to a table saw.
+
+The schema already encodes half of this: a `tasmota` under a collector's
+`control.outlet` is a validation error, because a plug with no relay cannot
+switch. **The mirror rule is `shelly` under a tool's `sensor.outlet`**, and it
+can become a hard error the same way — but not yet, because every layout written
+so far has Shellys on tools and there is no migration path. Deprecate first,
+enforce after.
+
+**Not before Tasmota is proven.** Jeff has one plug and wants confidence before
+buying a shop's worth. What "proven" means, concretely:
+
+| | |
+|---|---|
+| **Polling load** | **The one to watch.** See below — it is the risk this whole direction rests on |
+| A real session | Drives a real tool for a full session without dropping out or missing a start |
+| Threshold behaviour | No false trips on standby, no missed starts. The measured plug reports 26 W idle on a massager — a real tool's standby is what matters |
+| Power cycle | Survives one, and reconnects to WiFi without help |
+| The claim persists | `Mem1` still holds our hostname afterwards |
+| Thermal | Warm, not hot, at the tool's actual current over a long cut |
+
+#### The polling load, which §6 did not account for
+
+**A Shelly pushes. A Tasmota cannot.** `Ws.SetConfig` points a Shelly at us and it
+reports itself — that is why `readPushConfig()` is the ownership authority in the
+first place. Tasmota has no equivalent, so every Tasmota is **polled at
+`OUTLET_POLL_INTERVAL_MS` (500 ms), permanently**.
+
+At `SMART_OUTLET_COUNT` = 7 that is **14 requests/second** leaving the ESP32, and
+**2 req/s arriving at each ESP8285**, forever, for the life of the shop.
+
+§6 argued for one driver rather than two and that argument still holds — but it
+was about the DRIVER, and losing push changes the TRAFFIC PROFILE, which is a
+different thing entirely. Unmeasured. If it does not hold up, the fix is a
+slower cadence for `kind: tasmota` specifically: a tool starting is not a
+500 ms-latency event, and the collector's own spin-up grace is already 4 s.
+
+That would make the poll interval kind-dependent, which is a small change and an
+honest one — the two device types have genuinely different economics.
+
 ## 5. The 240V / hardwired sensor
 
 240V single-phase in the US is two hots and no neutral, with the motor in series
@@ -327,7 +719,7 @@ a couple of line cycles, learn the idle baseline at boot, trip on a multiple. No
 calibration constant, no user-facing amps, no accuracy claim to defend. A
 clipped waveform still reads as unambiguously on.
 
-### 5.4 Open: does clamping the *whole cord* work?
+### 5.4 CLOSED — clamping the whole cord does NOT work (2026-09-09)
 
 Everything above assumes the CT goes around exactly one conductor, because hot
 and neutral in an intact cord carry equal and opposite current and their fields
@@ -339,57 +731,184 @@ iVAC's Pro Tool Plus is a shipping product that determines whether a tool is on
 cord. The residual field of an imperfectly balanced pair is evidently enough for
 a threshold decision — which is all this system has ever needed.
 
-If it holds, the whole §5 install story collapses to *clip it onto the cord and
-open nothing*, and the 240V and hardwired cases stop being the awkward ones.
-That is a large enough prize to test before committing to the split-core path.
-**Untested.** §9 says how.
+If it held, the whole §5 install story would have collapsed to *clip it onto the
+cord and open nothing*, and the 240V and hardwired cases would have stopped being
+the awkward ones. That was a large enough prize to test before committing to the
+split-core path.
 
-### 4.3 Direction: Shelly for collectors, Tasmota for tools (2026-09-09)
+**It does not hold. Tested 2026-09-09 (jeff): nothing discernible above noise on
+an intact cord, and NOT ONLY with our rig — a bench multimeter could not see it
+either.** That second half is what makes this an answer rather than another
+noise-floor complaint: our own board's floor is under suspicion (§5.5), so a
+null result from it alone would have proved nothing. An instrument we trust
+failing the same way moves the cause from our electronics to the physics.
 
-Jeff, leaning: **stop allowing Shelly on tools entirely**, keep it for collectors
-where switching is the job — a small or medium collector with a relay big enough
-for its inrush is a legitimate use, and §3's safety argument does not apply to a
-blower the way it applies to a table saw.
+The residual field of a balanced pair is evidently smaller than iVAC's product
+implies, or they are doing something other than a plain clamp — a specific
+geometry, a much more sensitive front end, or a sensor that is not a CT at all.
+Worth knowing if a cheap clip-on ever matters again; not worth chasing now.
 
-The schema already encodes half of this: a `tasmota` under a collector's
-`control.outlet` is a validation error, because a plug with no relay cannot
-switch. **The mirror rule is `shelly` under a tool's `sensor.outlet`**, and it
-can become a hard error the same way — but not yet, because every layout written
-so far has Shellys on tools and there is no migration path. Deprecate first,
-enforce after.
+**So the split-core path stands, and §5's install story stays as written**: a
+line splitter, or one conductor exposed. The 240V and hardwired cases stay the
+awkward ones.
 
-**Not before Tasmota is proven.** Jeff has one plug and wants confidence before
-buying a shop's worth. What "proven" means, concretely:
+### 5.4a What the CT actually has to achieve (2026-09-09)
+
+Sharpened by Jeff, and it is a smaller target than §5.3 and §5.5 have been
+aiming at: **"this tool is running, beyond standby" is the entire question.**
+Not watts, not amps, not accuracy — one bit.
+
+That matters because it moves the CT off the hook for the thing it is worst at.
+A CT measures CURRENT; watts need voltage and power factor, which it cannot
+give (the Athom reports all three, which is exactly what makes it the better
+reference — see the note at the top of TasmotaOutlet.h). Absolute calibration
+against an unresolved noise floor is a hard problem. **Separating a running
+motor from standby is not**: even the noisy screen-on measurement had ~80×
+between the two.
+
+The consequence for the model, which §5.5 raised and this answers:
+**`DEFAULT_THRESHOLD_W` is the wrong shape for a CT-sensed tool.** It is in
+watts, typed by a user, and a CT cannot honour either half. The likely answer is
+a **learned per-tool baseline** — measure standby once at pairing, trip at some
+multiple of it — which sidesteps calibration entirely, because a ratio against
+the tool's own quiet state does not care what the absolute numbers mean or what
+the board's floor is.
+
+**Jeff is gathering the data that decides it**: every tool in the shop, standby
+vs running. Until that exists, the multiple is a guess, and no threshold shape
+should be committed to the schema.
+
+Note this does NOT excuse the noise in §5.5. A floor that moves with whether the
+screen is drawing makes even a ratio unreliable, because the baseline learned at
+pairing may be measured under different conditions than the trip.
+
+### 5.5 The screen is a noise source, and every board has one
+
+**Measured 2026-09-06, on the bench rig in `firmware/bench/ct_bench.cpp`:**
+
+| | Apparent current on a DEAD wire |
+|---|---|
+| OLED connected | **~0.4 A** (≈13 mV RMS) |
+| OLED unplugged | **under 1 mV RMS**, i.e. below 0.03 A — under the instrument's resolution |
+
+`SSD1306_SWITCHCAPVCC` means the panel generates its own ~7–9 V from 3.3 V with a
+switching charge pump, sharing the rail with the ADC's bias divider. `DISPLAYOFF`
+stops the pump, not just the pixels, so the bench console has a `screen` toggle
+and `zero` now warns when it is measuring with the panel live.
+
+**This is structural, not a bench artifact.** Every DustGate env assumes a screen
+(CLAUDE.md), the panel sits on D4/D5, and the CT's analog pad is D0 on the same
+board and the same rail. A shipping board that senses current AND has a display
+hits this by construction. It is the same shape of problem as the strapping-pin
+error in §7.5 of the schema RFC: a pad that looked free, and was not.
+
+**The divider I specified made it worse.** 10 kΩ/10 kΩ presents **5 kΩ** to the
+ADC pin — high enough that the sampling capacitor does not fully settle, and a
+fine antenna besides. The fix, unvalidated:
+
+- **1 kΩ / 1 kΩ**, dropping the source impedance to 500 Ω. Costs 3.3 mA, which is
+  nothing on USB power.
+- **100 nF ceramic** at the pin alongside the 10 µF. The electrolytic does
+  nothing above a few kHz, which is exactly where a charge pump lives.
+
+**Validate with the screen ON.** That is the condition that breaks it, so a quiet
+reading with the panel unplugged proves nothing about a shipping board.
+
+#### What this does to the threshold question
+
+Unsettled, and the direction moved twice. The first measurement — screen on —
+gave a 0.053 A floor and the tool declared `DEFAULT_THRESHOLD_W` (5 W = 0.042 A)
+unreachable. Screen off it is under 0.03 A and 5 W is back in play, but the
+number is quantization-limited rather than measured: `analogReadMilliVolts()`
+returns whole millivolts, so a genuinely quiet input reads *exactly* zero and
+hides everything below 0.03 A. The console now samples raw counts (~0.61 mV/LSB)
+to see past that.
+
+So the honest state: **a running tool is never in doubt** — the peak against the
+floor was ~80× even on the noisy measurement — and **the low-end threshold is
+still unknown**. What it settles into decides whether a CT-sensed tool can share
+`DEFAULT_THRESHOLD_W` with a plug-sensed one or needs its own, which is a model
+question, not just a tuning one.
+
+## 6. One seam, not two: emulate Tasmota
+
+### 6.0 …or don't build the sensor at all (2026-09-10)
+
+**This section was written assuming we build a CT sensor board that impersonates
+a Tasmota. Athom already sells one, and it inverts the argument.**
+
+[Athom 2CH Energy Meter (EM2)](https://www.athom.tech/blank-1/2-ch-energy-meter-made-for-tasmota),
+**$29.40** (list $42), pre-flashed with Tasmota:
 
 | | |
 |---|---|
-| **Polling load** | **The one to watch.** See below — it is the risk this whole direction rests on |
-| A real session | Drives a real tool for a full session without dropping out or missing a start |
-| Threshold behaviour | No false trips on standby, no missed starts. The measured plug reports 26 W idle on a massager — a real tool's standby is what matters |
-| Power cycle | Survives one, and reconnects to WiFi without help |
-| The claim persists | `Mem1` still holds our hostname afterwards |
-| Thermal | Warm, not hot, at the tool's actual current over a long cut |
+| Chip | ESP32-C3, 4 MB — the same family as our own boards |
+| Input | **100–250 V** 50/60 Hz, so 240 V is native rather than a special case |
+| Channels | 1 voltage + **2 current**, 0.1–97 A, split-core clamps on 100 cm leads |
+| Also | A 6CH version, if a bank of 240 V tools is ever worth ganging |
 
-#### The polling load, which §6 did not account for
+**It is already the thing §6 argued we should emulate**, so `TasmotaOutlet`
+drives it with no new driver, no new protocol, and no new node type. It turns up
+in the sweep like any other Tasmota, claims through `Mem1`, and pairs in the UI
+that already exists.
 
-**A Shelly pushes. A Tasmota cannot.** `Ws.SetConfig` points a Shelly at us and it
-reports itself — that is why `readPushConfig()` is the ownership authority in the
-first place. Tasmota has no equivalent, so every Tasmota is **polled at
-`OUTLET_POLL_INTERVAL_MS` (500 ms), permanently**.
+Three things make this better than the board we were going to build, not merely
+cheaper:
 
-At `SMART_OUTLET_COUNT` = 7 that is **14 requests/second** leaving the ESP32, and
-**2 req/s arriving at each ESP8285**, forever, for the life of the shop.
+- **It measures VOLTAGE and POWER FACTOR.** Our CT measures current and cannot
+  convert to watts without them (see the note at the top of TasmotaOutlet.h).
+  That means it reports real watts and can share `DEFAULT_THRESHOLD_W` with a
+  plug-sensed tool — which retires the learned-baseline problem of §5.4a for
+  this path entirely.
+- **It is powered from the same mains it measures.** The standalone-CT-node plan
+  existed to avoid USB and 12 V cables running from wall-mounted gates to mobile
+  tools; this needs no separate supply at all. It also sidesteps a hazard that
+  plan had and had not yet noticed — **a node powered off the tool must tap
+  UPSTREAM of the tool's own switch**, or it dies exactly when the tool is off,
+  and a sensor that is unreachable whenever the answer is "not running" cannot
+  be told from a dead board.
+- **It confirms §5.4 independently.** Athom's own manual: *"CT clamps can only be
+  clipped onto single-phase wires (L line or N line)."* A shipping product with
+  the same restriction we measured for ourselves.
 
-§6 argued for one driver rather than two and that argument still holds — but it
-was about the DRIVER, and losing push changes the TRAFFIC PROFILE, which is a
-different thing entirely. Unmeasured. If it does not hold up, the fix is a
-slower cadence for `kind: tasmota` specifically: a tool starting is not a
-500 ms-latency event, and the collector's own spin-up grace is already 4 s.
+At ~$15 per monitored channel it also undercuts the $13 plug per tool when both
+channels are used, while covering the 240 V case the plug cannot. **There is no
+1CH version** — 2CH is the floor.
 
-That would make the poll interval kind-dependent, which is a small change and an
-honest one — the two device types have genuinely different economics.
+#### The gap this opens, and it is a real one
 
-## 6. One seam, not two: emulate Tasmota
+**A multi-channel meter is ONE IP serving N sensors, and nothing in the model
+allows that.** `machineForOutlet(host, ip)` maps an address to exactly one
+machine, and `sensor.outlet` carries an `ip` and no channel. Two 240 V tools on
+one EM2 cannot be expressed.
+
+Worse, it fails silently. On a multi-channel device Tasmota reports
+`StatusSNS.ENERGY.Power` as an **array**, and `TasmotaOutlet::doPoll()` does
+`p.as<float>()` on it — which yields **0.0** for a JSON array. That is a
+confident "zero watts" for a working meter: a tool that is never on, forever,
+which is the precise failure the ENERGY-absent guard beside it was written to
+prevent. The guard checks for a MISSING value and an array is present.
+
+So the minimum before an EM2 is usable at all:
+
+1. `doPoll()` must detect an array and either take a configured index or refuse
+   loudly. **Refusing loudly is the right first step** — a wrong channel silently
+   watching the wrong tool is worse than a plug that says it cannot cope.
+2. `sensor.outlet` needs an optional `channel`, defaulting to absent = scalar,
+   so every layout written before this keeps meaning what it meant.
+3. Claiming needs thought: `Mem1` holds one owner for the whole device, but two
+   channels may belong to two machines under the same brain. Fine for us today
+   (same owner either way); not fine if two DustGate primaries ever share a
+   meter, which is already outside what `decideMarker()` can express.
+
+**Buy one and confirm it answers `Status 8` with an ENERGY block first.** If it
+does, the DIY sensor below stops being the plan and becomes the fallback, and
+the CT branch of the `PowerSensor` seam may never need an implementation of
+ours.
+
+### 6.1 The original argument, for a sensor we build
+
+
 
 The homemade 240V sensor **serves the same endpoint as the Athom plug** —
 `GET /cm?cmnd=Status%208`, same JSON, same `StatusSNS.ENERGY.Power` field.
@@ -405,6 +924,46 @@ This is the most valuable decision in the document, because of what it avoids:
 
 Cost on the sensor board: a few hundred bytes of `WebServer` handler on top of
 the ADC loop.
+
+### 6.2 The collector gets its own hardware (2026-09-10)
+
+**Decided.** A collector board is a board at the collector, doing only collector
+things: bin level, a CT clamp, the RF transmitter, lamps. It does not drive
+gates, and gate-driving boards do not do these jobs.
+
+The alternative — hang each capability off whichever node is nearest — was the
+working assumption until a pin budget killed it. **On a four-gate primary with a
+screen there is exactly ONE ordinary pad left.** D3 is a strapping pin and D0 is
+the only analog pad on the edge (spoken for by a CT), which leaves D6, and the
+bin sensor already had it. So bin-level and RF-transmit could not coexist —
+while wanting, obviously, to be in the same corner of the shop, because the bin
+and the collector's receiver are three feet apart.
+
+A board that drives no gates has the whole D7..D10 PWM block free, and the
+question evaporates. Nothing is being squeezed.
+
+**It is not a new firmware target.** Same node build, same NodeLink, same
+`BOARD_NAME`. What differs is what the LAYOUT asks of it — `bin.sensor.
+controllerId`, `control.rf` — which is a topology fact, exactly as CLAUDE.md
+already says of the bin sensor ("a CAPABILITY not a node type"). The refinement
+is that the capabilities cluster: they are all *collector* capabilities, they
+all want the same location, and together they need more pads than a gate board
+can spare. So they get a board, and it stays a plain node.
+
+Consequences worth stating:
+
+- **Range stops being a worry for the transmitter.** It sits beside the receiver
+  rather than wherever the routing brain happens to live.
+- **A CT at the collector is now easy**, and it is the one place a CT is
+  clearly worth having even with §5.4 closed and §5.4a's threshold question
+  open: a blower is a single large motor with an unambiguous running draw, which
+  is the easiest possible signal to separate from noise.
+- **It is the natural home for the servo fob-presser too** (§4.2a), which needs
+  a PWM channel — and now there are four spare ones.
+- **It costs a board per collector.** That is the honest price, and it buys a
+  clean pin budget and a sane install: one box at the collector, one cable run
+  to it, rather than three capabilities threaded back to boards chosen for
+  where the gates are.
 
 ## 7. One node per tool?
 
@@ -466,7 +1025,7 @@ already on hand; the Athom plugs are ordered.
 | 4 | RF replay | 315MHz TX/RX kit | Can the primary drive the receiver with a $2 module, on protocol 11, with the address cross-check passing? |
 | 5 | Fob tap | optocoupler | Fallback if 4 is fiddly. |
 | 6 | CT threshold | SCT-013-030 | Is baseline-and-multiple solid with no calibration? |
-| 7 | **Whole cord vs one conductor** | CT + line splitter | §5.4. Same CT, same load, 1X loop vs intact cord, back to back. |
+| ~~7~~ | ~~Whole cord vs one conductor~~ | — | **DONE 2026-09-09 — it does not work.** §5.4. Nothing above noise on an intact cord, on our rig or a bench multimeter. |
 | 8 | Closed loop | 2 + 4 | Toggle remote + Athom feedback → absolute state. |
 
 Parts for the above, beyond what is on hand: an **HT12E** (~$1), a **315MHz** TX
@@ -488,6 +1047,8 @@ Everything. Specifically:
 
 - No Athom plug has held the collector's 10 A continuously. One has been talked
   to over HTTP (§4.1) but nothing has been plugged into it.
+- §5.4 is ANSWERED as of 2026-09-09 and the answer is no. What follows was
+  written while it was still open:
 - No CT has been clamped on anything, and §5.4 is a hypothesis with one piece of
   commercial evidence behind it.
 - Nothing has been transmitted to the Rockler receiver. Band, encoder, address
@@ -737,5 +1298,5 @@ the day both questions get asked again together.
 | Converting the collector to 240V | Halves the current and would make everything easier, but needs a 240V circuit run — panel work, which §5 rules out on the same grounds. |
 | Shelly EM Gen3 + CT per tool | Works, and its contactor-control output was genuinely well-matched to the build above. But ~$30/tool, and it buys nothing the $13 Athom plug does not for the common corded case. |
 | Panel-side CTs (Emporia Vue, IoTaWatt) | Cheapest per circuit and the only thing that covers hardwired tools — but it means panel work. Rejected on insurance grounds; see §5. Also ambiguous when two tools share a circuit. |
-| Stick-on accelerometer / vibration sensing | The genuinely cheap idea: ~$5, no mains contact, no enclosure, no electrician, works on hardwired and 240V tools, installs by peeling a sticker. Rejected **for now** only because of cross-talk: once the collector runs the whole shop shakes, and the tool's own gate and duct are physically coupled to it. Very likely separable by magnitude and spectrum; entirely unproven. If §5.4 pans out it is probably moot, since clipping a CT to an intact cord is nearly as easy and gives a number we already know how to interpret. |
+| Stick-on accelerometer / vibration sensing | The genuinely cheap idea: ~$5, no mains contact, no enclosure, no electrician, works on hardwired and 240V tools, installs by peeling a sticker. Rejected **for now** only because of cross-talk: once the collector runs the whole shop shakes, and the tool's own gate and duct are physically coupled to it. Very likely separable by magnitude and spectrum; entirely unproven. **§5.4 did not pan out (2026-09-09)**, so this is no longer moot — a clip-on CT needs the cord opened, which is the cost this idea avoids entirely. It is now the cheapest route to a 240V or hardwired tool, and the strongest reason to revisit it. |
 | HLK-PM01 mains supply inside the DIY sensor | Turns a low-voltage gadget into a homemade mains device for the sake of avoiding a USB brick. §5.1. |

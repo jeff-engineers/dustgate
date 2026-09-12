@@ -83,6 +83,34 @@ bool SerialDebugControl::consumeEStop() {
     return false;
 }
 
+bool SerialDebugControl::consumePressRequest() {
+    bool v = _pressRequest;
+    _pressRequest = false;
+    return v;
+}
+
+bool SerialDebugControl::consumeCtRequest(int& reps) {
+    if (!_ctPending) return false;
+    _ctPending = false;
+    reps = _ctReps;
+    return true;
+}
+
+bool SerialDebugControl::consumeStrokeRequest(int& idx, int& from, int& to,
+                                              int& reps, int& dwellMs) {
+    if (!_strokePending) return false;
+    _strokePending = false;
+    idx = _strokeIdx; from = _strokeFrom; to = _strokeTo;
+    reps = _strokeReps; dwellMs = _strokeDwellMs;
+    return true;
+}
+
+bool SerialDebugControl::consumeRfScanRequest() {
+    bool v = _rfScanRequest;
+    _rfScanRequest = false;
+    return v;
+}
+
 bool SerialDebugControl::consumeHomeRequest() {
     if (_homePending) {
         _homePending = false;
@@ -241,8 +269,32 @@ void SerialDebugControl::processLine(const String& line) {
         } else {
             int idx = rest.substring(0, sp).toInt();
             String arg = rest.substring(sp + 1); arg.trim();
-            if (idx < 1 || idx > 4) {
-                Serial.println(F("[SERVO] index must be 1..4 (pins 25/26/27/14)"));
+            if (idx < 1 || idx > (HAS_SERVO ? SERVO_COUNT : 0)) {
+                // Printed from the macros, not typed. This line said
+                // "pins 25/26/27/14" until 2026-09-11 — the retired DevKitC's
+                // pins, wrong on every board still in the tree, and exactly the
+                // sort of thing someone chasing a dead servo would trust.
+                // Printed from the macros AND from SERVO_COUNT, because a
+                // collector build has two channels, not four — and a hardcoded
+                // "1..4" there would send someone hunting a servo that does not
+                // exist on their board.
+                //
+                // GUARDED ON HAS_SERVO, which the stale hardcoded string it
+                // replaced did not need: a slider board defines no PWM pins at
+                // all, so naming them unguarded breaks that build. (It did, for
+                // about ten minutes.)
+#if HAS_SERVO
+                Serial.print(F("[SERVO] index must be 1.."));
+                Serial.print(SERVO_COUNT);
+                Serial.print(F(" (GPIO"));
+                { const int pins[SERVO_COUNT] = { SERVO_PWM_PIN_LIST };
+                  for (int i = 0; i < SERVO_COUNT; i++) {
+                      Serial.print(i ? '/' : ' '); Serial.print(pins[i]);
+                  } }
+                Serial.println(')');
+#else
+                Serial.println(F("[SERVO] this build drives a serial bus, not PWM servos"));
+#endif
             } else if (arg == "detach") {
                 _servoIndex = idx; _servoDetach = true; _servoPending = true;
                 Serial.print(F("[SERVO] Detach servo ")); Serial.println(idx);
@@ -256,6 +308,36 @@ void SerialDebugControl::processLine(const String& line) {
                     Serial.print(F(" → ")); Serial.print(angle); Serial.println(F("°"));
                 }
             }
+        }
+
+    } else if (cmd == "ct" || cmd.startsWith("ct ")) {
+        int reps = 1;
+        if (cmd.length() > 3) reps = cmd.substring(3).toInt();
+        if (reps < 1)  reps = 1;
+        if (reps > 300) reps = 300;
+        _ctReps = reps; _ctPending = true;
+        Serial.printf("[CT] reading %d time(s)...\n", reps);
+
+    } else if (cmd.startsWith("stroke ")) {
+        // stroke <1-4> <from> <to> [reps] [dwellMs]
+        int idx = 0, from = -1, to = -1, reps = 1, dwell = 400;
+        const int n = sscanf(cmd.c_str() + 7, "%d %d %d %d %d",
+                             &idx, &from, &to, &reps, &dwell);
+        if (n < 3) {
+            Serial.println(F("[STROKE] Usage: stroke <1-4> <from> <to> [reps] [dwellMs]"));
+            Serial.println(F("         e.g. stroke 1 20 90 5   — five presses, 20 deg to 90 deg"));
+        } else if (idx < 1 || idx > (HAS_SERVO ? SERVO_COUNT : 0) ||
+                   from < 0 || from > 180 || to < 0 || to > 180) {
+            Serial.printf("[STROKE] index 1..%d, angles 0..180\n",
+                          HAS_SERVO ? SERVO_COUNT : 0);
+        } else if (reps < 1 || reps > 50) {
+            Serial.println(F("[STROKE] reps 1..50"));
+        } else {
+            _strokeIdx = idx; _strokeFrom = from; _strokeTo = to;
+            _strokeReps = reps; _strokeDwellMs = (dwell < 50 ? 50 : (dwell > 5000 ? 5000 : dwell));
+            _strokePending = true;
+            Serial.printf("[STROKE] servo %d: %d -> %d, %d time(s), %dms dwell\n",
+                          idx, from, to, reps, _strokeDwellMs);
         }
 
     } else if (cmd == "homeside" || cmd.startsWith("homeside ")) {
@@ -319,6 +401,15 @@ void SerialDebugControl::processLine(const String& line) {
 #endif
 
 #if defined(CONTROL_SMART_OUTLET) || defined(ENABLE_HTTP_API)
+    } else if (cmd == "press") {
+        // Fires on the main loop, where the transmitter lives — this only asks.
+        // Same shape as consumeHomeRequest(): a debug command never touches
+        // hardware from the serial task.
+        _pressRequest = true;
+        Serial.println(F("[RF] press queued — watch the receiver."));
+    } else if (cmd == "rfscan") {
+        _rfScanRequest = true;
+        Serial.println(F("[RF] address scan queued."));
     } else if (cmd == "mdnsprobe") {
         runMdnsProbe();
 #endif
@@ -906,6 +997,14 @@ void SerialDebugControl::printHelp() {
     Serial.println(F("  homeside l|r      Report which side it homed to; 'right' re-homes to the left endstop"));
 #if defined(ENABLE_SERVO) && defined(SERVO_PWM_PIN_1)
     Serial.println(F("  servo <1-4> <deg> Servo bring-up: move servo N to angle (or 'servo N detach')"));
+    Serial.println(F("  ct [n]            Read the CT clamp n times, one per second."));
+    Serial.println(F("                    Prints amps, the DC bias point and the sample"));
+    Serial.println(F("                    rate. A RAILED bias makes every amp figure"));
+    Serial.println(F("                    fiction — it says so when it sees one."));
+    Serial.println(F("  stroke <1-4> <from> <to> [reps] [dwellMs]"));
+    Serial.println(F("                    Press and release, repeatably — for finding out"));
+    Serial.println(F("                    whether a servo can throw a given switch."));
+    Serial.println(F("                    Detaches at the end; a stalled servo cooks."));
 #endif
     Serial.println(F("  clearcal          Erase EEPROM calibration (reload from config.h)"));
     Serial.println(F("  wifireset         Erase WiFi credentials, reboot into setup portal"));
@@ -931,6 +1030,15 @@ void SerialDebugControl::printHelp() {
     Serial.println(F("  plugtrace         Toggle: timestamp every frame a plug pushes — how fast does it report?"));
 #endif
     Serial.println(F("  provision <json>  Write WiFi+host to NVS: {\"ssid\":\"x\",\"pass\":\"y\",\"host\":\"dustgate\"}"));
+    Serial.println(F("  press             Fire the collector's RF transmitter ONCE, now."));
+    Serial.println(F("                    Bypasses the retry policy — no cooldown, no"));
+    Serial.println(F("                    spin-up grace, no sensor needed. Needs a"));
+    Serial.println(F("                    control.rf block on the layout's collector."));
+    Serial.println(F("  rfscan            Try the 4 ways a DIP can be copied wrong and"));
+    Serial.println(F("                    keep the one the collector answers. Needs the"));
+    Serial.println(F("                    collector's sensor plug paired. SETUP ONLY —"));
+    Serial.println(F("                    an inverted address is a VALID address for"));
+    Serial.println(F("                    someone else's receiver. Watch it run."));
     Serial.println(F("  help              Show this list"));
 #if defined(PIN_PIXEL) || defined(PIN_LED)
     // The pixel is the only diagnostic you get once the board is in a box and

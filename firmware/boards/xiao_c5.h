@@ -124,6 +124,26 @@
 #define PIN_ENDSTOP_HOME    8   // D8, NC to GND, INPUT_PULLUP
 #define PIN_ENDSTOP_MAX     9   // D9, ditto
 
+#elif defined(DUSTGATE_COLLECTOR)
+
+// -- COLLECTOR board: the PWM block, minus the two pads the collector needs --
+//
+// A collector board drives NO GATES (docs/tool-sensing-rfc.md §6.2), so the four
+// PWM pads are free to be spent on collector jobs instead. Two go to fob servos,
+// one to the transmitter, and one is spare:
+//
+//   D7  fob servo, ON button   \  still PWM channels 1 and 2, same driver
+//   D8  fob servo, OFF button  /   and the same move-then-detach
+//   D9  315 MHz transmitter        (PIN_RF_TX, below)
+//   D10 spare                      lamps, or a third fob button
+//
+// SERVO_COUNT IS 2 HERE, and that is the whole difference from the gate build.
+// The fob servos ARE channels 1 and 2 — same ServoActuator, same `servo` and
+// `stroke` bench commands — so nothing new drives them. What changes is that
+// channels 3 and 4 do not exist, because D9 is the transmitter.
+#define SERVO_PWM_PIN_1    12   // D7 — fob servo, ON (or the only button)
+#define SERVO_PWM_PIN_2     8   // D8 — fob servo, OFF, on a two-button fob
+
 #else
 
 // -- Servo PWM block --
@@ -224,11 +244,156 @@
 // with the inversion above means "bin OK". A board with nothing connected must
 // not scream, and topology gates it regardless.
 //
-// Wire: QS18 brown -> +12 V, blue -> 12 V GND, black -> opto input (-).
-//       Opto input (+) -> +12 V. Opto out VCC -> 3V3, GND -> ESP32 GND,
-//       OUT -> D6. TIE THE 12 V GROUND TO THE ESP32 GROUND.
+// Wire — a DISCRETE 4N35, TWO SIDES THAT NEVER MEET:
+//   12 V side:  QS18 brown -> +12 V, blue -> 12 V GND.
+//               +12 V -> 1 kOhm -> 4N35 pin 1 (LED anode).
+//               QS18 black (output) -> 4N35 pin 2 (LED cathode).
+//   ESP32 side: 4N35 pin 4 (emitter) -> ESP32 GND.
+//               4N35 pin 5 (collector) -> D6, plus 10 kOhm from D6 to 3V3.
+//               Pins 3 and 6: leave open.
+//
+// NOT a PC817 breakout board. One measured 4 V on its output (2026-09-12),
+// above this part's absolute maximum on a GPIO — those boards commonly pull the
+// output up to the INPUT side's supply, which overvolts the pin AND shorts out
+// the isolation. A discrete part has no hidden pull-up.
+//
+// The 1 kOhm gives ~10.8 mA, the 4N35's rated test point — a partly-on
+// phototransistor is what produced an unusable 2 V reading first time round.
+// The 10 kOhm is not optional either: INPUT_PULLUP's internal ~45 kOhm is
+// feeble against leakage. firmware/wiring/collector-node.md §2.
+//
+// ⚠️ DO NOT TIE THE 12 V GROUND TO THE ESP32 GROUND. This comment said to, for
+// weeks, and it was wrong (corrected 2026-09-11 — Jeff asked whether BOTH sides
+// grounded to the ESP32, which is the question that exposed it). Joining them
+// shorts across the optocoupler and throws away the only thing it does.
+//
+// The module's GND pin IS the ESP32 ground — that is the output side's
+// reference, and it is already connected. The 12 V ground is the INPUT side's
+// reference and belongs to the 12 V supply alone. Nothing floats: each side has
+// its own return.
+//
+// Why it matters here specifically. The 12 V supply sits next to a dust
+// collector — a large induction motor, feet away from a CT clamp whose noise
+// floor is already unresolved (wiring/ct-bench.md §5.5). A deliberate ground
+// loop between that supply and the ADC's reference is the last thing this board
+// needs. And a fault on the 12 V side would have a path straight through the
+// ESP32's ground rather than staying on its own side of the barrier.
+//
+// ⚠️ AND IT IS MOOT IF THE BOARD IS POWERED OFF THE SAME 12 V. A plain buck
+// converter shares its input and output ground by definition, so a 12->5 V
+// regulator ties the two grounds upstream and there is no barrier left to
+// short. On that build the opto is a LEVEL SHIFTER, not an isolator — still
+// earning its place, because the QS18 swings to 12 V and 12 V on a 3.3 V pin
+// destroys it. wiring/collector-node.md §6 has the three power topologies and
+// which one to pick; one brick at the collector is the better install, so
+// expect the common-ground case to be the normal one.
+//
+// A non-isolated build IS allowed — sensor straight to a pull-up, which §7.4 of
+// the schema RFC rejected — and that one has a single shared ground by
+// definition. It also has the opposite polarity, which is what
+// `bin.sensor.invert` is for. What is not allowed is paying for the isolated
+// wiring and then shorting the barrier out on purpose.
 #if !defined(DUSTGATE_SERVO_BUS)
 #define PIN_BIN_SENSOR  11   // D6, opto output, LOW = bin full
+#endif
+
+// -- 315 MHz transmitter: pressing the collector's remote --
+//
+// The DATA line of a 315 MHz OOK transmitter module, keyed with the HT12E frame
+// the dust collector's own fob sends (control/RfCollectorPresser.h,
+// docs/tool-sensing-rfc.md §4.2). One pin, output only — the module needs no
+// enable and we never receive.
+//
+// D9, NOT D6 — corrected 2026-09-10, hours after being written wrong.
+//
+// This first sat on D6 with a note saying the clash with PIN_BIN_SENSOR was
+// fine "because they never share a board". That was wrong the moment the
+// collector board was defined: bin level, CT and transmitter all live on it
+// (§6.2), so they share a board by design and D6 can only be one of them.
+//
+// The pin budget on a COLLECTOR board, which drives no gates:
+//
+//   D0   CT clamp        the only analog pad on the edge
+//   D6   bin sensor      opto output; it had this pad first
+//   D7   fob servo ON    \  the PWM block, free because no gates
+//   D8   fob servo OFF   /
+//   D9   RF transmitter  <- here
+//   D10  spare           lamps, or a third fob button
+//
+// ⚠️ ON A GATE-DRIVING BOARD D9 IS SERVO CHANNEL 3. Nothing detects that: which
+// jobs a board does is a topology fact, so a layout naming both a servo gate on
+// channel 3 and `control.rf` without an explicit pin on the same controller is
+// a wiring conflict that will simply not work. Give control.rf an explicit
+// `pin` on any board that also drives gates — or better, do not ask a gate
+// board to transmit, which is what §6.2 decided.
+//
+// RANGE argues the same way: the transmitter wants to be near the receiver, and
+// the routing brain may be across the shop.
+//
+// NOT WIRED BY DEFAULT. Defining the pin says "this is where it would go", the
+// same contract as PIN_BIN_SENSOR — whether a board actually transmits is
+// decided by the layout's `control.rf`, which carries its own pin and overrides
+// this. This is the fallback the serial `press` command uses so the radio can
+// be tested before any layout names it.
+//
+// Wire: module VCC -> 5V (the cheap modules want 5V for useful range; the DATA
+//       line is 3.3V-tolerant as an input), GND -> GND, DATA -> D6.
+//       A 17 cm wire on the module's ANT pad is a quarter wave at 315 MHz and
+//       is worth more than anything else on this list.
+#if defined(DUSTGATE_COLLECTOR)
+#define PIN_RF_TX        9   // D9 — free here because SERVO_COUNT is 2
+#elif !defined(DUSTGATE_SERVO_BUS)
+// On a GATE board D9 is servo channel 3. Defined anyway so the bench `press`
+// command works on an ordinary primary with nothing on channel 3 — which is how
+// the transmitter was first proven — but a board actually driving four gates
+// must give control.rf an explicit pin, or it will fight channel 3.
+#define PIN_RF_TX        9   // D9 — ⚠️ also SERVO_PWM_PIN_3 on this build
+#endif
+
+// -- CT clamp: the collector's own draw --
+//
+// D0/GPIO1 is THE ONLY ANALOG PAD on this edge, which is why nothing else may
+// have it and why the wake button's note says D0 is deliberately left alone.
+//
+// Collector builds only. A gate board has no use for it and defining it there
+// would imply the bias network is fitted, which on a gate board it is not.
+// See firmware/wiring/collector-node.md §3 for the divider — and its warnings,
+// because the noise floor is unresolved and the screen is part of it.
+#if defined(DUSTGATE_COLLECTOR)
+#define PIN_CT              1   // D0, the only ADC pad on this edge
+#endif
+
+// -- Fob servos: pressing the collector's remote mechanically --
+//
+// TWO, and the second one is not a spare. One servo presses one button, and the
+// Rockler's single button is a TOGGLE — stateless, so a missed or doubled press
+// inverts what the system believes and only the blower's draw can correct it.
+// A fob with SEPARATE ON AND OFF buttons is momentary to press but IDEMPOTENT in
+// meaning: pressing ON twice leaves it on, so a missed press self-corrects and
+// no belief can invert. That is a strictly better control, and it costs exactly
+// one more pad (docs/tool-sensing-rfc.md §4.2b).
+//
+// So: two pads reserved. A single-button fob uses the first and leaves the
+// second unwired; a two-button fob uses both and stops needing the feedback loop
+// to stay correct — though it still wants it, to notice a flat fob battery, a
+// tripped breaker or an arm that has drifted out of alignment.
+//
+// THESE ARE SERVO CHANNELS 1 AND 2. Same pads, same PWM bank, same
+// move-then-detach behaviour — what differs is who commands them: the press
+// policy rather than the router. That is only free because a COLLECTOR BOARD
+// DRIVES NO GATES (§6.2), so nothing else wants those channels. On a board that
+// also drives gates these are the first two gates, and a layout claiming both is
+// a conflict nothing currently detects.
+//
+// A four-button fob (power plus fan speeds, like a WEN air cleaner) would want
+// four, which is the whole PWM block — possible on a collector board, and
+// exactly the point at which "one arm that travels between buttons" starts
+// looking cheaper than a servo per button.
+#if defined(DUSTGATE_COLLECTOR)
+// Aliases, not a second definition — these ARE servo channels 1 and 2. Named so
+// the intent is readable where a press is commanded rather than a gate move.
+#define PIN_FOB_SERVO_ON   SERVO_PWM_PIN_1   // D7
+#define PIN_FOB_SERVO_OFF  SERVO_PWM_PIN_2   // D8
 #endif
 
 // -- The serial-servo bus moved UP --

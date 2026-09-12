@@ -389,6 +389,15 @@ void SmartOutletControl::doPoll() {
 // =============================================================================
 
 void SmartOutletControl::reconcileCollectors() {
+    // Sense-only companions first, and OUTSIDE the loop below — that loop skips
+    // any slot with no switchable plug, which is exactly the case a sensor
+    // exists to cover. A blower pressed by a servo has no _collectors[i] at all
+    // and would otherwise never be read.
+    for (int i = 0; i < COLLECTOR_COUNT; i++) {
+        if (_collectorSensors[i] && strlen(_collectorSensors[i]->ip()) > 0)
+            _collectorSensors[i]->poll();
+    }
+
     for (int i = 0; i < COLLECTOR_COUNT; i++) {
         if (!_collectors[i]) continue;
 
@@ -918,6 +927,46 @@ float SmartOutletControl::collectorWatts(int idx) {
 bool SmartOutletControl::collectorReachable(int idx) {
     if (idx < 0 || idx >= COLLECTOR_COUNT || !_collectors[idx]) return false;
     return _collectors[idx]->isReachable();
+}
+
+float SmartOutletControl::collectorSensorWatts(int idx) {
+    if (idx < 0 || idx >= COLLECTOR_COUNT || !_collectorSensors[idx]) return 0.0f;
+    return _collectorSensors[idx]->getPowerW();
+}
+
+bool SmartOutletControl::collectorSensorReachable(int idx) {
+    if (idx < 0 || idx >= COLLECTOR_COUNT || !_collectorSensors[idx]) return false;
+    return _collectorSensors[idx]->isReachable();
+}
+
+void SmartOutletControl::configureCollectorSensor(int idx, OutletKind kind,
+                                                  const char* ip, const char* host) {
+    if (idx < 0 || idx >= COLLECTOR_COUNT) return;
+    // Built before the lock, swapped under it, retired outside it — the same
+    // three-step configureCollector() uses, and for the same reason: the poll
+    // task may be mid-HTTP holding the old pointer.
+    SmartOutlet* fresh = makeOutlet(kind, ip, "Collector sensor");
+    fresh->setHost(host);
+    SmartOutlet* old;
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    old = _collectorSensors[idx];
+    _collectorSensors[idx] = fresh;
+    xSemaphoreGive(_mutex);
+    retire(old);
+
+    DEBUG_PRINT(F("[Outlets] Collector ")); DEBUG_PRINT(idx);
+    DEBUG_PRINT(F(" sensor: ")); DEBUG_PRINT(outletKindName(kind));
+    DEBUG_PRINT(F(" @ ")); DEBUG_PRINTLN(ip);
+}
+
+void SmartOutletControl::removeCollectorSensor(int idx) {
+    if (idx < 0 || idx >= COLLECTOR_COUNT) return;
+    SmartOutlet* old;
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    old = _collectorSensors[idx];
+    _collectorSensors[idx] = nullptr;
+    xSemaphoreGive(_mutex);
+    retire(old);
 }
 
 uint32_t SmartOutletControl::collectorOnSinceMs(int idx) {
