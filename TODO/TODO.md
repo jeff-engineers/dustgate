@@ -96,6 +96,29 @@ reasoning was contested, or that a still-open item above leans on.
 
 ## UI
 
+- **/settings still asks for a gate count, and nothing should (jeff,
+  2026-09-11.)** `settings.component.ts` has a "Number of gates" field (1..16)
+  with its own Save button, calling `api.setNumGates()`. It predates sliders
+  being configured per-rack: **the count is a property of each slider now**, set
+  where the slider is, so a shop-wide number in Settings is at best redundant
+  and at worst a second answer to the same question.
+
+  Three things to check before pulling it, because it is not only a template
+  edit:
+
+  - **`max="16"` is already wrong.** `NUM_STOPS` dropped to 8 on 2026-09-05 and
+    this input never followed — so today it will happily offer a number the
+    firmware rejects. That alone makes it worth removing rather than leaving.
+  - **What still calls `setNumGates()`** and whether the endpoint retires with
+    the field, or is kept because the calibration path uses it. Check
+    `g_numActiveStops` and the `set_num_gates` route before deleting either.
+  - **The hint text says "Lowering this clears trained positions beyond the new
+    count"**, which means this field has a destructive side effect. Whatever
+    replaces it needs to keep that guarantee wherever the per-slider count is
+    now edited — silently orphaned stops are worse than a redundant field.
+
+
+
 - **Add a banner indicating demo mode, not driving real hardware** I've shown 
   this off to people via the vercel app, and immediately been asked "Oh am I 
   controlling your shop?" - need to make it clear when we're not actively
