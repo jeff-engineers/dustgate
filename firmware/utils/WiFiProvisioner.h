@@ -274,20 +274,74 @@ inline bool begin() {
     WiFi.begin(ssid.c_str(), pass.c_str());
 #endif
 
+    // 30s, RAISED FROM 12s ON 2026-09-11 — a brand-new C5 could not join a
+    // guest network inside 12, with correct credentials, while every previously
+    // provisioned board on the same network was fine.
+    //
+    // The C5 is DUAL BAND. It scans 2.4 GHz *and* 5 GHz before choosing a BSS,
+    // where the single-band parts this number was first chosen against scanned
+    // one. Add a busy guest AP and a WPA2 handshake and 12s is simply tight —
+    // it was never a deadline anything needed, just a number.
+    //
+    // The cost of being wrong in each direction is lopsided, which is the real
+    // argument: too long and a board with genuinely bad credentials takes half a
+    // minute to offer its portal. Too short and a board with GOOD credentials
+    // gives up and demands the user set up WiFi that is already correct — which
+    // is worse, because the portal is a dead end when nothing is wrong.
+    static const unsigned long kConnectTimeoutMs = 30000UL;
+
     unsigned long t = millis();
-    while (WiFi.status() != WL_CONNECTED && millis() - t < 12000UL) {
+    while (WiFi.status() != WL_CONNECTED && millis() - t < kConnectTimeoutMs) {
         delay(250);
         DEBUG_PRINT(F("."));
     }
     Serial.println();
 
     if (WiFi.status() != WL_CONNECTED) {
-        DEBUG_PRINTLN(F("[WiFi] Connection failed — launching setup portal."));
+        // SAY WHY, not just that. A row of dots and "failed" is the same output
+        // for a wrong password, a network that is not there, and one that is
+        // simply slow — and those want three different responses from whoever
+        // is standing at the bench. wl_status_t already knows which.
+        const wl_status_t st = (wl_status_t)WiFi.status();
+        DEBUG_PRINT(F("[WiFi] Connection failed after "));
+        DEBUG_PRINT((millis() - t) / 1000);
+        DEBUG_PRINT(F("s — status "));
+        DEBUG_PRINT((int)st);
+        switch (st) {
+            case WL_NO_SSID_AVAIL:
+                DEBUG_PRINTLN(F(" (NO SSID) — that network was not seen at all."));
+                DEBUG_PRINTLN(F("       Check the name, and that it is on a band this"));
+                DEBUG_PRINTLN(F("       board can reach. Hidden SSIDs also land here."));
+                break;
+            case WL_CONNECT_FAILED:
+                DEBUG_PRINTLN(F(" (AUTH FAILED) — the network is there and rejected us."));
+                DEBUG_PRINTLN(F("       That is almost always the password."));
+                break;
+            case WL_DISCONNECTED:
+                DEBUG_PRINTLN(F(" (STILL TRYING) — found it, never finished associating."));
+                DEBUG_PRINTLN(F("       A slow or busy AP. Raising kConnectTimeoutMs is"));
+                DEBUG_PRINTLN(F("       the honest fix if this is repeatable."));
+                break;
+            default:
+                DEBUG_PRINTLN(F(" — see wl_status_t in WiFiType.h."));
+                break;
+        }
+        DEBUG_PRINTLN(F("[WiFi] Launching setup portal."));
         _runPortal(); // never returns
     }
 
-    DEBUG_PRINT(F("[WiFi] Connected. IP: "));
-    Serial.println(WiFi.localIP().toString());
+    // ms, not a formatted float: DEBUG_PRINT is a single-argument macro, so the
+    // two-argument Serial.print(x, digits) form does not survive it.
+    DEBUG_PRINT(F("[WiFi] Connected in "));
+    DEBUG_PRINT(millis() - t);
+    DEBUG_PRINT(F("ms. IP: "));
+    Serial.print(WiFi.localIP().toString());
+    // RSSI on every boot, because "it connects but drops later" and "it barely
+    // connected at all" look identical once it is up — and a collector board
+    // lives at the far end of a shop from the router.
+    DEBUG_PRINT(F("  RSSI "));
+    DEBUG_PRINT(WiFi.RSSI());
+    DEBUG_PRINTLN(F(" dBm"));
 
     String hostname = getHostname();
     if (MDNS.begin(hostname.c_str())) {
