@@ -887,6 +887,31 @@ static void adoptStoredTopology() {
 // =============================================================================
 // setup()
 // =============================================================================
+// ⚠️ 16 KB, RAISED FROM THE ARDUINO DEFAULT OF 8 KB ON 2026-09-12.
+//
+// A stack protection fault in loopTask, on a collector board at boot:
+//
+//   Guru Meditation Error: Core 0 panic'ed (Stack protection fault)
+//   Stack pointer: 0x4085d060   bounds: 0x4085d068 - 0x4085f060
+//
+// SP eight bytes BELOW the lower bound, with the 0xabba1234 canary sitting on
+// it. The stack held a half-built status JSON, which is the clue: loop() is ONE
+// enormous function, and every StaticJsonDocument declared anywhere inside it
+// reserves space in the SAME FRAME whether or not that branch ever runs.
+//
+// Four of them live in there (2x512, 2x256) and I added two of those in the
+// week before the crash — the sweep's row builder and the widened ping reply —
+// on top of the deferred-reply handlers that were already there. Nothing was
+// individually unreasonable; the frame simply is not a place to keep
+// kilobytes.
+//
+// THE REAL FIX IS SMALLER FUNCTIONS, and the sweep block below is extracted for
+// exactly that reason. This macro is the belt: loop() will keep growing,
+// nobody notices a frame getting bigger, and the failure mode is a reboot loop
+// on a board in a shop rather than a compile error. 8 KB more RAM against 320
+// KB is not a trade worth agonising over.
+SET_LOOP_TASK_STACK_SIZE(16 * 1024);
+
 void setup() {
     Serial.begin(SERIAL_BAUD);
 #if BOARD_HAS_NATIVE_USB
@@ -1382,6 +1407,33 @@ static void updateStatusLed() {
 
 #ifdef CONTROL_SMART_OUTLET
 static OutletSweep g_sweep;
+
+#if defined(CONTROL_SMART_OUTLET)
+// One address of a sweep. EXTRACTED FROM loop() ON 2026-09-12, after a stack
+// protection fault: the StaticJsonDocument below reserved space in loop()'s
+// single enormous frame even on the passes where no sweep was running. Here it
+// costs a frame only while it is actually probing.
+static void sweepProbeOne(const char* ip) {
+    // A SHORT timeout is the whole budget. An address with nothing at it never
+    // answers, so it costs the full timeout — and that is almost every address.
+    // 250ms keeps a pass near a minute; raising it makes the sweep unusable long
+    // before it finds anything new. (If a KNOWN plug is missed, suspect this
+    // first: Tasmota ships with `Sleep 50`, so an ESP8285 can be slower to
+    // answer than a Shelly. `Sleep 0` on the plug is cheaper than raising this
+    // for all 254.)
+    TasmotaOutlet probe(ip, "sweep");
+    if (!probe.probe(250)) return;
+
+    StaticJsonDocument<512> row;
+    JsonObject o = row.to<JsonObject>();
+    describeOutletInto(o, ip, nullptr,
+                       /*kindKnown=*/true, OUTLET_TASMOTA, /*mdnsGen=*/0);
+    String s; serializeJson(row, s);
+    g_sweep.record(s);
+    DEBUG_PRINT(F("[SWEEP] found ")); DEBUG_PRINTLN(ip);
+}
+#endif
+
 // -----------------------------------------------------------------------------
 // describeOutletInto — probe one plug and write the row the picker reads.
 //
@@ -2918,24 +2970,9 @@ void loop() {
         if (g_sweep.running()) {
             char ip[16];
             if (g_sweep.nextAddress(ip, sizeof(ip))) {
-                // A SHORT timeout is the whole budget. An address with nothing
-                // at it never answers, so it costs the full timeout — and that
-                // is almost every address. 250ms keeps a pass near a minute;
-                // raising it makes the sweep unusable long before it finds
-                // anything new. (If a KNOWN plug is missed, suspect this first:
-                // Tasmota ships with `Sleep 50`, so an ESP8285 can be slower to
-                // answer than a Shelly. `Sleep 0` on the plug is cheaper than
-                // raising this for all 254.)
-                TasmotaOutlet probe(ip, "sweep");
-                if (probe.probe(250)) {
-                    StaticJsonDocument<512> row;
-                    JsonObject o = row.to<JsonObject>();
-                    describeOutletInto(o, ip, nullptr,
-                                       /*kindKnown=*/true, OUTLET_TASMOTA, /*mdnsGen=*/0);
-                    String s; serializeJson(row, s);
-                    g_sweep.record(s);
-                    DEBUG_PRINT(F("[SWEEP] found ")); DEBUG_PRINTLN(ip);
-                }
+                // Its own function so its StaticJsonDocument lives in ITS frame,
+                // not in loop()'s — see the stack note above setup().
+                sweepProbeOne(ip);
             } else {
                 DEBUG_PRINT(F("[SWEEP] done — "));
                 DEBUG_PRINT(g_sweep.foundCount());

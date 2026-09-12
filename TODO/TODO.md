@@ -10,6 +10,34 @@ reasoning was contested, or that a still-open item above leans on.
 
 ## Bugs
 
+- **loop() is one enormous frame, and that is now a crash waiting to happen
+  (2026-09-12).** A stack protection fault on a collector board at boot —
+  `SP 0x4085d060` against bounds `0x4085d068`, canary `0xabba1234` on the
+  pointer, a half-built status JSON in the stack dump.
+
+  The mechanism is worth knowing because it will recur: **loop() is a single
+  function, so every `StaticJsonDocument` declared anywhere inside it reserves
+  space in the SAME frame whether or not that branch runs.** Four live there
+  (2×512, 2×256) and nothing is individually unreasonable.
+
+  Patched two ways: `SET_LOOP_TASK_STACK_SIZE(16 * 1024)` (was 8 KB), and the
+  sweep's probe extracted into `sweepProbeOne()` so its document costs a frame
+  only while probing.
+
+  **Neither is the fix.** loop() keeps growing, nobody notices a frame getting
+  bigger, and the failure mode is a reboot loop on a board in a shop rather
+  than a compile error. The real work is pulling the deferred-reply handlers —
+  ping, rename, release, discover — out of loop() into their own functions, the
+  way `sweepProbeOne` and `runRfScan` now are. Each is self-contained; it is
+  mechanical, just not free.
+
+  Worth adding a high-water check while it is fresh:
+  `uxTaskGetStackHighWaterMark(NULL)` on the loop task, printed with the boot
+  banner. A number that shrinks release over release is the warning nobody
+  currently gets.
+
+
+
 - **Can the collector node run on ONE brick? (2026-09-11, decides a purchase.)**
 
   The collector node is being built as power topology **A** first —
