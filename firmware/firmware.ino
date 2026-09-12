@@ -1634,14 +1634,55 @@ void loop() {
         // a topology is adopted — which is exactly the class of bug that put
         // controllerId→host resolution back on the adopt path.
         {
+            // ── Bench visibility, independent of any layout ──────────────
+            //
+            // EDGE-TRIGGERED, AND IT RUNS EVEN WITH NO LAYOUT. The debounced
+            // read below only happens when a document names this board's bin
+            // (`bin.sensor.controllerId`), which is right at runtime and useless
+            // during bring-up: a board with no shop loaded reads the pin,
+            // reports nothing, and looks broken while being perfectly fine.
+            //
+            // This is the RAW pin, deliberately — no debounce, no inversion. It
+            // answers "is the sensor wired and does the firmware see it change",
+            // which is a different question from "is the bin full", and the one
+            // you have while holding a hand over a beam.
+            {
+                static int8_t lastRaw = -1;              // -1 = nothing seen yet
+                const bool now = (digitalRead(PIN_BIN_SENSOR) == LOW);
+                if (lastRaw != (int8_t)now) {
+                    const bool first = (lastRaw == -1);
+                    lastRaw = (int8_t)now;
+                    DEBUG_PRINT(F("[BIN] D"));
+                    DEBUG_PRINT(PIN_BIN_SENSOR);
+                    DEBUG_PRINT(now ? F(" LOW  (beam broken / covered)")
+                                    : F(" HIGH (beam clear)"));
+                    // An unwired board sits HIGH forever, so the first reading
+                    // is worth marking as "this is where we started", not as a
+                    // transition that happened.
+                    DEBUG_PRINTLN(first ? F("  — initial") : F("  — CHANGED"));
+                }
+            }
+
             std::string binSys = topo::localBinSystemId(
                 g_topoRuntime.topology(), g_nodeBus.ownControllerId().c_str());
             if (!binSys.empty()) {
                 JsonObjectConst sensor = g_topoRuntime.binSensorFor(binSys);
                 const bool invert = sensor["invert"] | true;
                 const bool raw    = (digitalRead(PIN_BIN_SENSOR) == LOW);
+                const bool wasFull = g_binDebounce.full();
                 g_binDebounce.sample(invert ? raw : !raw, millis());
-                g_topoRuntime.setBinFull(binSys, g_binDebounce.full());
+                const bool nowFull = g_binDebounce.full();
+                g_topoRuntime.setBinFull(binSys, nowFull);
+
+                // The DEBOUNCED verdict, which is a different event from the pin
+                // edge above: this one has survived kBinDebounceMs and is what
+                // the shop actually acts on. Logged only on a change, so a full
+                // bin does not fill the console for as long as it stays full.
+                if (nowFull != wasFull) {
+                    DEBUG_PRINT(F("[BIN] "));
+                    DEBUG_PRINT(binSys.c_str());
+                    DEBUG_PRINTLN(nowFull ? F(" -> FULL" ) : F(" -> ok"));
+                }
             }
         }
 #endif
@@ -2007,14 +2048,50 @@ void loop() {
         int stIdx = 0, stFrom = 0, stTo = 0, stReps = 1, stDwell = 400;
         if (_SC.consumeStrokeRequest(stIdx, stFrom, stTo, stReps, stDwell)) {
             ServoActuator& s = g_servos[stIdx - 1];
+
+            // ⚠️ THE WAIT MUST CALL update(), AND THE FIRST VERSION DID NOT.
+            //
+            // ServoActuator is NON-BLOCKING and EASED: moveTo() only sets a
+            // target, and update() — normally called every loop() pass — is what
+            // walks the shaft there. A wait made of bare delay() therefore
+            // produces a perfectly convincing log and NO MOVEMENT AT ALL, which
+            // is exactly what it did on the bench (2026-09-11).
+            //
+            // `servo <n> <deg>` worked the whole time, which is what made it
+            // confusing: that command returns to loop(), where update() runs.
+            // This one blocks, so it has to pump the servo itself.
+            // Pump until the SWEEP FINISHES, then hold for the dwell.
+            //
+            // Waiting a fixed time was the second bug in the same six lines: the
+            // sweep is eased over up to SERVO_SWEEP_MS (2000), scaled by how far
+            // it has to travel, and the default dwell is 400 — so the next
+            // moveTo() retargeted a servo that was still part-way through the
+            // last one, and the arm crept instead of pressing.
+            //
+            // isMoving() already knows. The cap is a backstop against a servo
+            // that never reports arrival, not a timing choice.
+            auto settle = [&](int dwellMs) {
+                const uint32_t cap = millis() + SERVO_SWEEP_MS + 500;
+                while (s.isMoving() && (int32_t)(millis() - cap) < 0) {
+                    s.update();          // the call the first version was missing
+                    watchdog::pet();
+                    delay(5);
+                }
+                const uint32_t until = millis() + (uint32_t)dwellMs;
+                while ((int32_t)(millis() - until) < 0) {
+                    s.update();
+                    watchdog::pet();
+                    delay(5);
+                }
+            };
+
             for (int r = 0; r < stReps; r++) {
                 Serial.printf("[STROKE] %d/%d ", r + 1, stReps);
-                watchdog::pet();
                 s.moveTo(stFrom);
-                for (int w = 0; w < stDwell; w += 50) { watchdog::pet(); delay(50); }
+                settle(stDwell);
                 Serial.print(F("press "));
                 s.moveTo(stTo);
-                for (int w = 0; w < stDwell; w += 50) { watchdog::pet(); delay(50); }
+                settle(stDwell);
                 Serial.println(F("release"));
             }
             // ALWAYS detach, including after a stroke that achieved nothing. A

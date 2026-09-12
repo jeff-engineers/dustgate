@@ -303,6 +303,28 @@ void SerialDebugControl::processLine(const String& line) {
             }
         }
 
+    } else if (cmd.startsWith("stroke ")) {
+        // stroke <1-4> <from> <to> [reps] [dwellMs]
+        int idx = 0, from = -1, to = -1, reps = 1, dwell = 400;
+        const int n = sscanf(cmd.c_str() + 7, "%d %d %d %d %d",
+                             &idx, &from, &to, &reps, &dwell);
+        if (n < 3) {
+            Serial.println(F("[STROKE] Usage: stroke <1-4> <from> <to> [reps] [dwellMs]"));
+            Serial.println(F("         e.g. stroke 1 20 90 5   — five presses, 20 deg to 90 deg"));
+        } else if (idx < 1 || idx > (HAS_SERVO ? SERVO_COUNT : 0) ||
+                   from < 0 || from > 180 || to < 0 || to > 180) {
+            Serial.printf("[STROKE] index 1..%d, angles 0..180\n",
+                          HAS_SERVO ? SERVO_COUNT : 0);
+        } else if (reps < 1 || reps > 50) {
+            Serial.println(F("[STROKE] reps 1..50"));
+        } else {
+            _strokeIdx = idx; _strokeFrom = from; _strokeTo = to;
+            _strokeReps = reps; _strokeDwellMs = (dwell < 50 ? 50 : (dwell > 5000 ? 5000 : dwell));
+            _strokePending = true;
+            Serial.printf("[STROKE] servo %d: %d -> %d, %d time(s), %dms dwell\n",
+                          idx, from, to, reps, _strokeDwellMs);
+        }
+
     } else if (cmd == "homeside" || cmd.startsWith("homeside ")) {
         // homeside left|right → report which side the carriage homed to. 'right'
         // makes the firmware switch the datum to the other endstop and re-home left.
@@ -370,28 +392,6 @@ void SerialDebugControl::processLine(const String& line) {
         // hardware from the serial task.
         _pressRequest = true;
         Serial.println(F("[RF] press queued — watch the receiver."));
-    } else if (cmd.startsWith("stroke ")) {
-        // stroke <1-4> <from> <to> [reps] [dwellMs]
-        int idx = 0, from = -1, to = -1, reps = 1, dwell = 400;
-        const int n = sscanf(cmd.c_str() + 7, "%d %d %d %d %d",
-                             &idx, &from, &to, &reps, &dwell);
-        if (n < 3) {
-            Serial.println(F("[STROKE] Usage: stroke <1-4> <from> <to> [reps] [dwellMs]"));
-            Serial.println(F("         e.g. stroke 1 20 90 5   — five presses, 20 deg to 90 deg"));
-        } else if (idx < 1 || idx > (HAS_SERVO ? SERVO_COUNT : 0) ||
-                   from < 0 || from > 180 || to < 0 || to > 180) {
-            Serial.printf("[STROKE] index 1..%d, angles 0..180\n",
-                          HAS_SERVO ? SERVO_COUNT : 0);
-        } else if (reps < 1 || reps > 50) {
-            Serial.println(F("[STROKE] reps 1..50"));
-        } else {
-            _strokeIdx = idx; _strokeFrom = from; _strokeTo = to;
-            _strokeReps = reps; _strokeDwellMs = (dwell < 50 ? 50 : (dwell > 5000 ? 5000 : dwell));
-            _strokePending = true;
-            Serial.printf("[STROKE] servo %d: %d -> %d, %d time(s), %dms dwell\n",
-                          idx, from, to, reps, _strokeDwellMs);
-        }
-
     } else if (cmd == "rfscan") {
         _rfScanRequest = true;
         Serial.println(F("[RF] address scan queued."));
