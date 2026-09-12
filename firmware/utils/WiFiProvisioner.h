@@ -274,14 +274,19 @@ inline bool begin() {
     WiFi.begin(ssid.c_str(), pass.c_str());
 #endif
 
-    // 30s, RAISED FROM 12s ON 2026-09-11 — a brand-new C5 could not join a
-    // guest network inside 12, with correct credentials, while every previously
-    // provisioned board on the same network was fine.
+    // 30s, raised from 12s on 2026-09-11.
     //
-    // The C5 is DUAL BAND. It scans 2.4 GHz *and* 5 GHz before choosing a BSS,
-    // where the single-band parts this number was first chosen against scanned
-    // one. Add a busy guest AP and a WPA2 handshake and 12s is simply tight —
-    // it was never a deadline anything needed, just a number.
+    // ⚠️ THE INCIDENT THAT PROMPTED THIS WAS A MISSING ANTENNA. A new board
+    // would not join inside 12s; the theory written here first was that the C5
+    // is dual-band and scans two bands before choosing a BSS, which is true and
+    // was NOT the cause. The board's WiFi antenna was not plugged in. It
+    // associated at all only because it was sitting near the router, and slowly
+    // because it was running on almost no signal.
+    //
+    // So the dual-band argument is UNTESTED and should not be cited as though
+    // it were measured. What actually justifies 30s is below, and stands on its
+    // own — a board with a marginal link is exactly the case a short timeout
+    // handles worst, whatever made the link marginal.
     //
     // The cost of being wrong in each direction is lopsided, which is the real
     // argument: too long and a board with genuinely bad credentials takes half a
@@ -339,6 +344,11 @@ inline bool begin() {
     // RSSI on every boot, because "it connects but drops later" and "it barely
     // connected at all" look identical once it is up — and a collector board
     // lives at the far end of a shop from the router.
+    //
+    // THIS IS THE LINE THAT WOULD HAVE SAVED THE EVENING. The board above was
+    // running with no antenna plugged in, and no amount of staring at a row of
+    // dots says so — a number near -90 dBm does, immediately. Anything worse
+    // than about -75 is worth investigating before anything else is believed.
     DEBUG_PRINT(F("  RSSI "));
     DEBUG_PRINT(WiFi.RSSI());
     DEBUG_PRINTLN(F(" dBm"));
