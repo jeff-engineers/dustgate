@@ -89,6 +89,13 @@ bool SerialDebugControl::consumePressRequest() {
     return v;
 }
 
+bool SerialDebugControl::consumeCtRequest(int& reps) {
+    if (!_ctPending) return false;
+    _ctPending = false;
+    reps = _ctReps;
+    return true;
+}
+
 bool SerialDebugControl::consumeStrokeRequest(int& idx, int& from, int& to,
                                               int& reps, int& dwellMs) {
     if (!_strokePending) return false;
@@ -302,6 +309,14 @@ void SerialDebugControl::processLine(const String& line) {
                 }
             }
         }
+
+    } else if (cmd == "ct" || cmd.startsWith("ct ")) {
+        int reps = 1;
+        if (cmd.length() > 3) reps = cmd.substring(3).toInt();
+        if (reps < 1)  reps = 1;
+        if (reps > 300) reps = 300;
+        _ctReps = reps; _ctPending = true;
+        Serial.printf("[CT] reading %d time(s)...\n", reps);
 
     } else if (cmd.startsWith("stroke ")) {
         // stroke <1-4> <from> <to> [reps] [dwellMs]
@@ -982,6 +997,10 @@ void SerialDebugControl::printHelp() {
     Serial.println(F("  homeside l|r      Report which side it homed to; 'right' re-homes to the left endstop"));
 #if defined(ENABLE_SERVO) && defined(SERVO_PWM_PIN_1)
     Serial.println(F("  servo <1-4> <deg> Servo bring-up: move servo N to angle (or 'servo N detach')"));
+    Serial.println(F("  ct [n]            Read the CT clamp n times, one per second."));
+    Serial.println(F("                    Prints amps, the DC bias point and the sample"));
+    Serial.println(F("                    rate. A RAILED bias makes every amp figure"));
+    Serial.println(F("                    fiction — it says so when it sees one."));
     Serial.println(F("  stroke <1-4> <from> <to> [reps] [dwellMs]"));
     Serial.println(F("                    Press and release, repeatably — for finding out"));
     Serial.println(F("                    whether a servo can throw a given switch."));

@@ -89,6 +89,18 @@
 #                             Try a SHORTER ARM before concluding you need metal
 #                             gears: torque at the switch is force x radius.
 #
+#     ct [n]                  Read the CT clamp n times, one per second. Prints
+#                             amps, the DC bias point and the sample rate.
+#                             SERIAL ONLY, on purpose: the screen's charge pump
+#                             is a noise source for this very measurement, so a
+#                             reading you can only see by lighting the thing that
+#                             corrupts it is no reading at all.
+#                             ⚠️ It refuses to let 0.000 A pass unqualified when
+#                             the bias is RAILED — a railed pin reads a constant,
+#                             and the variance of a constant is zero, which looks
+#                             exactly like a perfectly quiet sensor. D0 should
+#                             sit at ~1650 mV.
+#
 #     servo <1-4> <deg>       Move one servo. `servo N detach` de-energises it.
 #     mdnsprobe               What answers mDNS here, and how fast.
 #     sweep [from] [to]       Knock on every address looking for a Tasmota.

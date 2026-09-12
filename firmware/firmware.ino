@@ -38,7 +38,10 @@
 #include "control/OutletSweep.h"
 #include "control/CollectorPress.h"        // the retry policy for a stateless press
 #include "control/RfCollectorPresser.h"    // ...and the one presser that exists
-#include "control/RfAddressGuess.h"        // the four ways a DIP gets copied wrong   // the 254-address knock, one address per loop() pass
+#include "control/RfAddressGuess.h"        // the four ways a DIP gets copied wrong
+#ifdef PIN_CT
+  #include "sensing/CtSensor.h"           // `ct` — the clamp, on a collector board
+#endif   // the 254-address knock, one address per loop() pass
 #include "control/FaultPolicy.h"   // which begin() failure costs which capability
 #include "training/CalibrationStore.h"
 
@@ -1936,6 +1939,55 @@ void loop() {
             const bool sent = p->press();
             watchdog::pet();
             Serial.println(sent ? F("[RF] sent.") : F("[RF] TRANSMIT FAILED."));
+        }
+    }
+
+    // `ct` — read the clamp, on the console, with or without a screen.
+    //
+    // SERIAL AND ONLY SERIAL, on purpose. The screen is a NOISE SOURCE for this
+    // very measurement — SSD1306_SWITCHCAPVCC runs a charge pump on the rail the
+    // ADC's bias divider shares, and it put ~0.4 A of apparent current on a DEAD
+    // wire (wiring/ct-bench.md §5.5). A reading you can only see by lighting the
+    // thing that corrupts it is not much of a reading, so this one does not care
+    // whether a panel is fitted.
+    {
+        int ctReps = 0;
+        if (_SC.consumeCtRequest(ctReps)) {
+#ifdef PIN_CT
+            static CtSensor ct(PIN_CT);
+            for (int i = 0; i < ctReps; i++) {
+                watchdog::pet();
+                const CtSensor::Reading r = ct.read();
+                if (!r.valid) { Serial.println(F("[CT] too few samples — is D0 wired?")); break; }
+
+                Serial.printf("[CT] %6.3f A   %5.1f Hz   DC %4umV (%.0f counts)  %.0f kSPS",
+                              r.amps, r.hz, r.dcMv, r.dcCounts, r.kSps);
+                // THE ONLY CHECK THAT MATTERS. A railed input reads a constant,
+                // and the variance of a constant is zero — which looks exactly
+                // like a perfectly quiet sensor. Refusing to let 0.000 A pass
+                // unqualified is the whole reason this line exists.
+                if (CtSensor::isRailed(r)) {
+                    Serial.println();
+                    Serial.println(F("[CT] ⚠️ BIAS IS RAILED — that amp figure is fiction."));
+                    Serial.println(F("     D0 should sit at ~1650 mV, the divider halving 3V3."));
+                    Serial.println(F("     0 mV usually means D0 is tied to ground; 3300 means"));
+                    Serial.println(F("     it is on the rail, or the CT is not in circuit."));
+                    break;
+                }
+                Serial.println();
+                // One per second, which is the cadence for walking a tool from
+                // idle to running and watching the number move.
+                if (i + 1 < ctReps) {
+                    const uint32_t until = millis() + 800;
+                    while ((int32_t)(millis() - until) < 0) { watchdog::pet(); delay(50); }
+                }
+            }
+#else
+            (void)ctReps;
+            Serial.println(F("[CT] This build has no CT pad — flash a COLLECTOR build"));
+            Serial.println(F("     (dev.sh flash --collector). D0 is the only ADC pad, and"));
+            Serial.println(F("     a gate board does not wire the bias network."));
+#endif
         }
     }
 

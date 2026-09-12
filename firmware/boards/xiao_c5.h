@@ -337,6 +337,19 @@
 #define PIN_RF_TX        9   // D9 — ⚠️ also SERVO_PWM_PIN_3 on this build
 #endif
 
+// -- CT clamp: the collector's own draw --
+//
+// D0/GPIO1 is THE ONLY ANALOG PAD on this edge, which is why nothing else may
+// have it and why the wake button's note says D0 is deliberately left alone.
+//
+// Collector builds only. A gate board has no use for it and defining it there
+// would imply the bias network is fitted, which on a gate board it is not.
+// See firmware/wiring/collector-node.md §3 for the divider — and its warnings,
+// because the noise floor is unresolved and the screen is part of it.
+#if defined(DUSTGATE_COLLECTOR)
+#define PIN_CT              1   // D0, the only ADC pad on this edge
+#endif
+
 // -- Fob servos: pressing the collector's remote mechanically --
 //
 // TWO, and the second one is not a spare. One servo presses one button, and the

@@ -66,6 +66,10 @@ public:
     // servo while you go and look at the next machine.
     bool consumeStrokeRequest(int& idx, int& from, int& to, int& reps, int& dwellMs);
 
+    // `ct` — read the current clamp. `ct <n>` repeats n times, one per second,
+    // which is what you want while walking a tool through idle and running.
+    bool consumeCtRequest(int& reps);
+
     // Returns true once when user types 'reset'. The way back from a latched
     // fault WITHOUT power-cycling the board: the caller re-attempts the drive,
     // clears the boot fault flags and drops the estop. It exists because a
@@ -121,6 +125,8 @@ private:
 
     // `stroke` — a repeatable press, for finding out whether a servo can throw a
     // given switch. See consumeStrokeRequest().
+    bool  _ctPending = false;
+    int   _ctReps = 1;
     bool  _strokePending = false;
     int   _strokeIdx = 0, _strokeFrom = 0, _strokeTo = 0, _strokeReps = 1;
     int   _strokeDwellMs = 400;
