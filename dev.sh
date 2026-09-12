@@ -61,6 +61,40 @@
 #     A slider NODE does that sweep itself — the one thing in this design a node
 #     decides for itself — and holds any move it is sent until the datum lands.
 #
+#   BENCH COMMANDS — typed at the serial console (bash dev.sh monitor):
+#
+#     press                   Fire the 315 MHz transmitter ONCE, now. Bypasses
+#                             the retry policy — no cooldown, no spin-up grace,
+#                             no sensor needed. Falls back to D9 and the measured
+#                             Rockler address when no layout names one, so it
+#                             works before any control.rf block exists.
+#                             ⚠️ Put a LAMP in the receiver's outlet, not the
+#                             collector: a blower cannot spin up and coast down
+#                             fast enough to read.
+#
+#     rfscan                  Try the four ways a DIP switch gets copied wrong
+#                             — as entered, inverted, reversed, both — and keep
+#                             whichever the collector answers. Needs the
+#                             collector's SENSOR plug paired: the method is
+#                             press-and-see, and that plug is the seeing.
+#                             SETUP ONLY. An inverted address is a valid address
+#                             for someone else's receiver; watch it run.
+#
+#     stroke <1-4> <from> <to> [reps] [dwellMs]
+#                             Press and release a servo, repeatably, then
+#                             DETACH. For finding out whether a 9g servo can
+#                             throw a given switch — there is no torque number
+#                             to read, so the measurement is watching it try.
+#                             e.g. stroke 1 20 90 5
+#                             Try a SHORTER ARM before concluding you need metal
+#                             gears: torque at the switch is force x radius.
+#
+#     servo <1-4> <deg>       Move one servo. `servo N detach` de-energises it.
+#     mdnsprobe               What answers mDNS here, and how fast.
+#     sweep [from] [to]       Knock on every address looking for a Tasmota.
+#     probe <ip>              Why one address did not answer.
+#     help                    Everything, including the non-collector commands.
+#
 #   bash dev.sh monitor             # serial monitor (primary)
 #   bash dev.sh monitor node        # ...a node instead
 #   bash dev.sh ports               # list attached boards + which role each is pinned to
@@ -1007,6 +1041,10 @@ show_menu() {
   echo "  w) Set the WiFi credentials and hostname used by every flash above"
   echo ""
   echo "  6) Monitor the PRIMARY      (6n = monitor a NODE instead)"
+  echo "     collector bench commands, once connected:"
+  echo "       press   fire the RF transmitter once (lamp in the outlet, not the blower)"
+  echo "       rfscan  find the fob's address by trying the 4 ways a DIP gets misread"
+  echo "       stroke <1-4> <from> <to> [reps]   press a switch repeatably, then detach"
   echo "  7) Ports — list attached boards, and pin one to a role"
   echo "  8) (Re)send WiFi/key/hostname to an already-flashed board"
   echo "  9) Full chip erase (fixes corrupted-partition weirdness)"
