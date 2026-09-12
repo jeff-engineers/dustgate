@@ -1650,6 +1650,35 @@ void loop() {
     for (int i = 0; i < SERVO_COUNT; i++) g_servos[i].update();
 #endif
 
+#if HAS_BIN
+    // ── Bin sensor, RAW, and OUTSIDE the topology gate ──────────────────────
+    //
+    // HOISTED 2026-09-12. This was written to answer "is the sensor wired and
+    // does the firmware see it change" on a bench with no shop loaded — and was
+    // then placed INSIDE `if (g_topoRuntime.loaded())`, which is exactly the
+    // gate it existed to escape. A board with no topology printed nothing while
+    // the sensor worked perfectly, which is the failure it was meant to prevent.
+    //
+    // The RAW pin, deliberately: no debounce, no inversion. That is a different
+    // question from "is the bin full" — which is debounced, inverted per the
+    // document, and reported further down, only when a layout names this board.
+    {
+        static int8_t lastRaw = -1;              // -1 = nothing seen yet
+        const bool now = (digitalRead(PIN_BIN_SENSOR) == LOW);
+        if (lastRaw != (int8_t)now) {
+            const bool first = (lastRaw == -1);
+            lastRaw = (int8_t)now;
+            DEBUG_PRINT(F("[BIN] D"));
+            DEBUG_PRINT(PIN_BIN_SENSOR);
+            DEBUG_PRINT(now ? F(" LOW  (beam broken / covered)")
+                            : F(" HIGH (beam clear)"));
+            // An unwired board sits HIGH forever, so the first reading is where
+            // we started rather than a transition that happened.
+            DEBUG_PRINTLN(first ? F("  — initial") : F("  — CHANGED"));
+        }
+    }
+#endif
+
     // -- routing runtime ------------------------------------------------
     // Feed live tool power in, pump the move queue out. Issues at most one move
     // per pass and never while one is in flight — that serialization IS the
@@ -1689,35 +1718,6 @@ void loop() {
         // a topology is adopted — which is exactly the class of bug that put
         // controllerId→host resolution back on the adopt path.
         {
-            // ── Bench visibility, independent of any layout ──────────────
-            //
-            // EDGE-TRIGGERED, AND IT RUNS EVEN WITH NO LAYOUT. The debounced
-            // read below only happens when a document names this board's bin
-            // (`bin.sensor.controllerId`), which is right at runtime and useless
-            // during bring-up: a board with no shop loaded reads the pin,
-            // reports nothing, and looks broken while being perfectly fine.
-            //
-            // This is the RAW pin, deliberately — no debounce, no inversion. It
-            // answers "is the sensor wired and does the firmware see it change",
-            // which is a different question from "is the bin full", and the one
-            // you have while holding a hand over a beam.
-            {
-                static int8_t lastRaw = -1;              // -1 = nothing seen yet
-                const bool now = (digitalRead(PIN_BIN_SENSOR) == LOW);
-                if (lastRaw != (int8_t)now) {
-                    const bool first = (lastRaw == -1);
-                    lastRaw = (int8_t)now;
-                    DEBUG_PRINT(F("[BIN] D"));
-                    DEBUG_PRINT(PIN_BIN_SENSOR);
-                    DEBUG_PRINT(now ? F(" LOW  (beam broken / covered)")
-                                    : F(" HIGH (beam clear)"));
-                    // An unwired board sits HIGH forever, so the first reading
-                    // is worth marking as "this is where we started", not as a
-                    // transition that happened.
-                    DEBUG_PRINTLN(first ? F("  — initial") : F("  — CHANGED"));
-                }
-            }
-
             std::string binSys = topo::localBinSystemId(
                 g_topoRuntime.topology(), g_nodeBus.ownControllerId().c_str());
             if (!binSys.empty()) {

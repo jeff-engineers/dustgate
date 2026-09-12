@@ -640,7 +640,14 @@ primary** — and belongs at the collector anyway, next to the receiver. See
 ### The lamps stay on 12 V
 
 The green pilot and the red strobe stay wired as they already are. Simpler, and
-they keep working when the board does not.
+they keep working when the board does not. Reaffirmed 2026-09-12 — see
+[`collector-node.md`](collector-node.md) §2 for the connection grid and the sink
+budget.
+
+**The green lamp is a POWER pilot, not "bin not full."** That is what lets a
+single-output sensor drive the rig with nothing to invert: green sits straight
+across 12 V, and only the red strobe hangs on the QS18's output — in parallel
+with the opto's LED, which is why a firing strobe proves `D6` moved.
 
 The cost: the strobe can then only ever mean *this sensor tripped* — never a
 clog, never a shop-wide alert. Two pads stay reserved for low-side FETs

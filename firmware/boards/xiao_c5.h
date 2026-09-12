@@ -244,10 +244,23 @@
 // with the inversion above means "bin OK". A board with nothing connected must
 // not scream, and topology gates it regardless.
 //
-// Wire — TWO SIDES THAT NEVER MEET:
-//   12 V side:  QS18 brown -> +12 V, blue -> 12 V GND, black -> opto IN-.
-//               Opto IN+ -> +12 V.
-//   ESP32 side: opto VCC -> 3V3, opto GND -> ESP32 GND, opto OUT -> D6.
+// Wire — a DISCRETE 4N35, TWO SIDES THAT NEVER MEET:
+//   12 V side:  QS18 brown -> +12 V, blue -> 12 V GND.
+//               +12 V -> 1 kOhm -> 4N35 pin 1 (LED anode).
+//               QS18 black (output) -> 4N35 pin 2 (LED cathode).
+//   ESP32 side: 4N35 pin 4 (emitter) -> ESP32 GND.
+//               4N35 pin 5 (collector) -> D6, plus 10 kOhm from D6 to 3V3.
+//               Pins 3 and 6: leave open.
+//
+// NOT a PC817 breakout board. One measured 4 V on its output (2026-09-12),
+// above this part's absolute maximum on a GPIO — those boards commonly pull the
+// output up to the INPUT side's supply, which overvolts the pin AND shorts out
+// the isolation. A discrete part has no hidden pull-up.
+//
+// The 1 kOhm gives ~10.8 mA, the 4N35's rated test point — a partly-on
+// phototransistor is what produced an unusable 2 V reading first time round.
+// The 10 kOhm is not optional either: INPUT_PULLUP's internal ~45 kOhm is
+// feeble against leakage. firmware/wiring/collector-node.md §2.
 //
 // ⚠️ DO NOT TIE THE 12 V GROUND TO THE ESP32 GROUND. This comment said to, for
 // weeks, and it was wrong (corrected 2026-09-11 — Jeff asked whether BOTH sides

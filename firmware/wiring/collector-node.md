@@ -59,10 +59,19 @@ Every pad on the board, so nothing looks free that is not.
 
 ---
 
-## 2. Bin sensor — Banner QS18VN6D through an optocoupler
+## 2. Bin sensor — Banner QS18VN6D through a 4N35
 
-The beam sensor runs on 12 V and the ESP32 does not, so an opto crosses the gap
-and keeps the two grounds independent of each other's noise.
+The beam sensor runs on 12 V and the ESP32 does not, so an optocoupler crosses
+the gap: light carries the signal, current does not.
+
+**A DISCRETE 4N35, not a breakout board — corrected 2026-09-12 after one bit.**
+This first specified a 2-channel PC817 module (HiLetgo, `VCC`/`GND`/`OUT`).
+On the bench its output measured **4 V**, which is above the C5's absolute
+maximum on a GPIO (VDD+0.3 ≈ 3.6 V) and could damage the pin. Those cheap
+boards commonly pull the output up to the **input side's** supply — which is
+12 V here, and which both overvolts the pin and shorts out the isolation the
+part exists to provide. A bare optocoupler has no hidden pull-up: the output
+cannot exceed whatever *you* pull it up to.
 
 **Two sides that never meet.** Build them as two separate circuits.
 
@@ -72,75 +81,146 @@ and keeps the two grounds independent of each other's noise.
 |---|---|---|
 | Brown | QS18 | **+12 V** |
 | Blue | QS18 | **12 V GND** |
-| Black | QS18 (output) | **opto `IN−`** |
-| Wire | **+12 V** | **opto `IN+`** |
+| 1 kΩ | **+12 V** | **4N35 pin 1** (LED anode) |
+| Black | QS18 (output) | **4N35 pin 2** (LED cathode) |
 
 *The ESP32 side — nothing here touches 12 V:*
 
 | | Goes from | To |
 |---|---|---|
-| Wire | opto `VCC` | **3V3** |
-| Wire | opto `GND` | **ESP32 GND** |
-| Wire | opto `OUT` | **`D6`** |
+| Wire | **4N35 pin 4** (emitter) | **ESP32 GND** |
+| Wire | **4N35 pin 5** (collector) | **`D6`** |
+| 10 kΩ | **`D6`** | **3V3** |
+| — | **4N35 pin 3 and pin 6** | **nothing.** Leave both open |
 
 ```mermaid
 flowchart LR
   subgraph TWELVE["12 V side"]
     P12(("+12 V")):::rail --> QS["<b>QS18VN6D</b><br/>brown = +12 V<br/>blue = 12 V GND<br/>black = output"]:::node
     QS -- "blue" --> G12(("12 V GND")):::rail
-    QS -- "black" --> IN["opto <b>IN−</b>"]:::node
-    P12 --> INP["opto <b>IN+</b>"]:::node
+    P12 -- "1 kΩ" --> P1["4N35 <b>pin 1</b><br/>LED anode"]:::node
+    QS -- "black" --> P2["4N35 <b>pin 2</b><br/>LED cathode"]:::node
   end
   subgraph ESP["ESP32 side"]
-    V3(("3V3")):::rail --> OPTO["opto <b>VCC</b>"]:::node
-    OUT["opto <b>OUT</b>"]:::node --> D6["<b>D6</b><br/>INPUT_PULLUP<br/>LOW = bin full"]:::node
-    OPTO2["opto <b>GND</b>"]:::node --> GE(("ESP32 GND")):::rail
+    P5["4N35 <b>pin 5</b><br/>collector"]:::node --> D6["<b>D6</b><br/>INPUT_PULLUP<br/>LOW = bin full"]:::node
+    V3(("3V3")):::rail -- "10 kΩ" --> D6
+    P4["4N35 <b>pin 4</b><br/>emitter"]:::node --> GE(("ESP32 GND")):::rail
   end
-  IN -.-> BARRIER
-  INP -.-> BARRIER
-  BARRIER["✋ <b>the barrier</b><br/>light crosses, current does not.<br/>DO NOT join the two grounds"]:::barrier
-  BARRIER -.-> OUT
-  BARRIER -.-> OPTO2
+  P1 -.-> BARRIER
+  P2 -.-> BARRIER
+  BARRIER["✋ <b>the barrier</b><br/>light crosses, current does not"]:::barrier
+  BARRIER -.-> P5
+  BARRIER -.-> P4
   classDef rail fill:#eee,stroke:#999
   classDef node fill:#fff,stroke:#333,stroke-width:2px
   classDef barrier fill:#fff3cd,stroke:#b8860b,stroke-width:3px,stroke-dasharray: 6 4
 ```
 
-**⚠️ DO NOT TIE THE 12 V GROUND TO THE ESP32 GROUND — on a two-supply build.**
-See §6: if the board is powered by a plain 12→5 V buck off the same supply, the
-grounds are ALREADY common through the regulator, this warning is moot, and the
-opto is doing level shifting rather than isolation. What follows is about the
-isolated case. The board header said to tie them
-for weeks and this file repeated it; both were wrong, corrected 2026-09-11 when
-Jeff asked whether *both* sides of the opto ground to the ESP32.
+**The 1 kΩ is the LED's current, and it is not arbitrary.** (12 − 1.2 V) / 1 kΩ
+≈ **10.8 mA**, which is the 4N35's rated test point — so you get its specified
+transfer ratio rather than the linear-region sag that made the first attempt
+read **2 V**, sitting between the logic bands and belonging to neither. A
+phototransistor that is only partly on is the commonest cause of an
+in-between reading.
 
-They do not, and that is the entire point of the part. Joining the grounds
-shorts across the barrier and throws away the only thing an optocoupler does.
+**The 10 kΩ to 3V3 is not optional either.** `D6` is read with `INPUT_PULLUP`
+and the ESP32's internal one is ~45 kΩ — feeble against a phototransistor's
+leakage, and the other half of why that first reading sat at 2 V.
 
-Nothing floats without it. **The opto's `GND` pin IS the ESP32 ground** — that is
-the output side's reference, already connected in the second table. The 12 V
-ground is the *input* side's reference and belongs to the 12 V supply alone.
-Each side has its own return; they simply are not the same return.
+**⚠️ CONFIRM WHICH WAY THE QS18 DRIVES.** The table assumes its output **sinks**
+(pulls to 12 V ground when active). If it **sources** instead, swap the LED:
+**pin 1 ← QS18 output through the 1 kΩ, pin 2 → 12 V GND.** Backwards, the LED
+never lights and `D6` sits high forever — which looks exactly like a correctly
+wired board watching an empty bin, and is the one failure here that does not
+announce itself.
 
-Why it matters more here than in general: the 12 V supply sits beside a dust
-collector — a large induction motor — feet from a CT clamp whose noise floor is
-already unresolved (§3). A deliberate ground loop between that supply and the
-ADC's reference is the last thing this board needs. And a fault on the 12 V side
-would have a path straight through the ESP32's ground instead of staying on its
-own side.
+**Expected:** `~0 V` covered, `3.3 V` clear, and **never anything above 3.3 V**.
+That ceiling is the point of using a discrete part.
 
-**A non-isolated build is allowed** — sensor straight to a pull-up, rejected in
-§7.4 of the schema RFC but not forbidden — and that one has a single shared
-ground by definition, plus the opposite polarity, which is what
-`bin.sensor.invert` exists for. What is not allowed is the isolated wiring with
-the barrier shorted out: all of the cost and none of the benefit.
+### Grounds
 
-**The polarity is inverted, and that is the wiring's fault, not a bug.** The opto
-pulls the pin LOW when the beam reports full, so `D6` LOW = bin full. The pin is
-read with `INPUT_PULLUP`, so an **unwired board reads HIGH = "bin OK"** — a board
-with nothing connected must not scream. `bin.sensor.invert` in the layout exists
-for anyone who wires the sensor straight to a pull-up instead and gets the
-opposite polarity; that should not need a reflash.
+**On a two-supply build (topology A, §6) do NOT tie the 12 V ground to the
+ESP32 ground.** The board header said to for weeks and this file repeated it;
+both were wrong, corrected 2026-09-11 when Jeff asked whether *both* sides of
+the opto ground to the ESP32. They do not — joining them shorts across the
+barrier and throws away the only thing an optocoupler does.
+
+Nothing floats without it: pin 4 IS the ESP32 ground, and that is the output
+side's reference. The 12 V ground is the input side's and belongs to the 12 V
+supply alone. Each side has its own return; they are simply not the same one.
+
+**On a single-supply build (topology B) the grounds are already common through
+the buck**, this warning is moot, and the 4N35 is doing level shifting rather
+than isolation — still earning its place, because the QS18 swings to 12 V and
+12 V on a 3.3 V GPIO destroys it. §6 has all three topologies; **A is what is
+being built first**, so the warning is live on the bench today.
+
+**The polarity is inverted, and that is the wiring's fault, not a bug.** The
+opto pulls the pin LOW when the beam reports full, so `D6` LOW = bin full. Read
+with `INPUT_PULLUP`, an **unwired board reads HIGH = "bin OK"** — a board with
+nothing connected must not scream. `bin.sensor.invert` in the layout exists for
+anyone who wires the sensor straight to a pull-up instead and gets the opposite
+polarity; that should not need a reflash.
+
+**What you should see on the console**, with no layout loaded at all:
+
+```
+[BIN] D11 HIGH (beam clear) — initial
+[BIN] D11 LOW  (beam broken / covered) — CHANGED
+```
+
+The first line is where the board started, not an event. If nothing prints at
+all, the pin is not changing — meter `D6` to ESP32 GND while breaking the beam
+before suspecting firmware.
+
+### The 12 V lamps — leave them exactly where they are
+
+The green pilot and the red strobe stay wired to the **sensor**, on 12 V,
+untouched by any of the above. Decided 2026-09-04 and reaffirmed 2026-09-12
+against a proposal to drive them from a GPIO instead. Two reasons:
+
+1. **They keep working when the board does not.** A bricked, unflashed or
+   unplugged ESP32 still leaves a shop with a bin indicator.
+2. **The GPIO route is genuinely expensive here.** On topology A the lamps live
+   on the far side of the isolation barrier, so a low-side FET cannot work —
+   its source would sit on the 12 V ground while its gate is referenced to the
+   ESP32's. Each lamp would need its own optocoupler *and* its own FET (a
+   4N35's ~10 mA output will not light a 20 mA lamp), and a collector board has
+   exactly **one** free pad (`D10`, §1) for two of them.
+
+**The green lamp is a POWER pilot, not "bin not full."** That is what makes the
+existing rig work with a single-output sensor: there is nothing to invert.
+
+| | Goes from | To |
+|---|---|---|
+| Green lamp **+** | **+12 V** | |
+| Green lamp **−** | | **12 V GND** |
+| Red strobe **+** | **+12 V** | |
+| Red strobe **−** | | **QS18 black** (the output; sinks when active) |
+
+The 4N35's LED branch (`+12 V → 1 kΩ → pin 1 → pin 2 → QS18 black`) hangs on
+that **same** black output, in parallel with the strobe. That is a feature: the
+opto sees the identical signal that lights the lamp, so **if the strobe fires,
+`D6` moved.** One fewer thing that can be wrong in isolation.
+
+It also means the strobe holds the node at 12 V while the output is open, so
+the opto LED draws nothing until the sensor actually sinks — no standing
+current, no interaction between the two loads.
+
+**⚠️ Meter the strobe before trusting the sink budget.** The QS18 sinks
+**150 mA** maximum and is now carrying the strobe *plus* the opto's ~10.8 mA.
+The green lamp is ~20 mA and does not count — it never touches the output. The
+strobe's draw ([B07SC3TNLC](https://www.amazon.com/dp/B07SC3TNLC)) has never
+been measured; it is a flashing beacon with its own circuit inside, so its
+*peak* is what matters, not its average. If it is over ~130 mA, the strobe
+needs its own low-side FET on the 12 V side with the QS18 driving the gate —
+still no ESP32 involvement.
+
+**The cost of this choice, stated plainly:** the strobe can only ever mean
+*this sensor tripped*. It can never mean a clog, and it can never carry a
+system- or shop-scope alert, because nothing in the firmware is in the path.
+That fan-out lands on the per-board WS2812 (`D2`) instead — one pixel per
+board, no new hardware anywhere. See `docs/shop-schema-rfc.md` §7.3.
 
 ---
 
