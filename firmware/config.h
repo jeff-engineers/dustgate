@@ -339,15 +339,23 @@ inline int homeDirection() {
 //   HAS_LINEAR  — this board can drive a sliding gate (a carriage on a rack).
 //   HAS_SERVO   — the PWM servo bank.
 //   HAS_BIN     — this board can watch a dust-bin level sensor.
+//   HAS_CT      — a current-transformer clamp on the analog pad.
+//   HAS_RF      — a 315 MHz transmitter, for pressing a collector's remote.
 //
 // These replaced the old `#error "No feedback type defined"` / `"No control type
 // defined"` walls in the sketch, which made a stepper-less build impossible to
 // express at all.
 // -----------------------------------------------------------------------------
 
-// A board can drive a sliding gate if it wires the serial-servo bus. Nothing
-// defines these pins yet, so HAS_LINEAR is 0 everywhere; the branches it guards
-// are kept as the seam an ST3215 driver plugs into. See attic/linear/README.md.
+// A board can drive a sliding gate if it wires the serial-servo bus.
+//
+// STALE COMMENT CORRECTED 2026-09-13. This said "nothing defines these pins yet,
+// so HAS_LINEAR is 0 everywhere" — written while the branches were an empty seam
+// waiting for a driver. The ST3215 landed in August: `-DDUSTGATE_SERVO_BUS`
+// presents PIN_SERVO_BUS_TX/RX, so HAS_LINEAR is **1** on both `_linear` envs
+// and the bus bench, and a slider node has moved a real gate. It mattered enough
+// to fix because the serial console now gates whole sections on this macro, and
+// a comment claiming it is always 0 would say those sections are dead code.
 #if defined(PIN_SERVO_BUS_TX)
   #define HAS_LINEAR 1
 #else
@@ -399,6 +407,34 @@ inline int homeDirection() {
   #define HAS_BIN 1
 #else
   #define HAS_BIN 0
+#endif
+
+// HAS_CT and HAS_RF, added 2026-09-13, and the reason is the serial console
+// rather than any branch in the control path.
+//
+// `status` and `help` were printing the whole command set on every board — stop
+// positions and a homing speed on a collector that has no rack, `press` and
+// `rfscan` on a slider with no transmitter. A list that includes commands the
+// build cannot run is worse than a short one: it sends someone debugging a
+// silent board hunting hardware that was never fitted. The pin IS the fact, so
+// derive from it like everything else here rather than adding a flag to remember
+// to set.
+//
+// What they do NOT mean: that a clamp or a transmitter is actually connected. A
+// digital or analog input cannot be probed for what is on the far end (unlike
+// the screen, which an I2C ACK at 0x3C settles at boot) — same caveat as HAS_BIN
+// above, and the same division of labour: the pin exists here, whether anything
+// uses it is a topology fact the primary owns.
+#if defined(PIN_CT)
+  #define HAS_CT 1
+#else
+  #define HAS_CT 0
+#endif
+
+#if defined(PIN_RF_TX)
+  #define HAS_RF 1
+#else
+  #define HAS_RF 0
 #endif
 
 // The bin pin is D6/GPIO11, which is PIN_SERVO_BUS_TX on a slider build. The

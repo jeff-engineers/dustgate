@@ -547,9 +547,12 @@ a config struct) and the `rgbLedWrite`/`neopixelWrite` guard in
 
 ## 7. Dust bin level sensor — optional
 
-**NOTHING HERE HAS BEEN WIRED.** Every number is from a datasheet or a product
-page. Treat this as a plan to check against a meter, not a record of something
-that worked. Design rationale and the decisions behind it:
+**WIRED AND WORKING 2026-09-13** — but not by the circuit below. The PC817
+breakout in this section measured **4 V** on its output, above the C5's absolute
+maximum on a GPIO; the build that actually works is a discrete 4N35 and lives in
+[`collector-node.md`](collector-node.md) §2. **Read that, not this**, for the
+connection grid. What stands here is the pin choice, the inverted sense and the
+sink budget. Design rationale and the decisions behind it:
 [`docs/shop-schema-rfc.md`](../../docs/shop-schema-rfc.md) §7.4–§7.5.
 
 One input pin, which is why this is a **capability rather than a board role** —

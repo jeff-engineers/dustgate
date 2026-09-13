@@ -12,6 +12,12 @@ as a primary** — homing, the reference sweep, and gate moves on a 4-gate
 rockler-2.5 rack; and since 2026-09-02, the **slider NODE (`xiao_c5_linear`)
 booting, joining NodeLink, and reporting itself correctly to the UI**.
 
+**The bin sensor works on hardware, confirmed 2026-09-13** — a Banner QS18VN6D
+through a **discrete 4N35** (not the PC817 breakout the docs specified for weeks:
+it measured 4 V on its output, above a C5 GPIO's absolute maximum), with the
+existing 12 V green pilot and red strobe left wired to the sensor. That is the
+first collector-board capability proven on real hardware. `firmware/wiring/collector-node.md` §2.
+
 **The slider node moves a gate, confirmed 2026-09-03** — it homes, finds its
 datum, takes a SET and drives the rack. That was the last unknown on the node
 path.

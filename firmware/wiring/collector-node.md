@@ -127,6 +127,11 @@ in-between reading.
 and the ESP32's internal one is ~45 kΩ — feeble against a phototransistor's
 leakage, and the other half of why that first reading sat at 2 V.
 
+**The QS18 sinks — settled on hardware 2026-09-13**, so the tables above are
+right as written and this next warning is now history rather than a live task.
+It stays because the failure it describes is silent, and anyone wiring a
+different sensor still owns it.
+
 **⚠️ CONFIRM WHICH WAY THE QS18 DRIVES.** The table assumes its output **sinks**
 (pulls to 12 V ground when active). If it **sources** instead, swap the LED:
 **pin 1 ← QS18 output through the 1 kΩ, pin 2 → 12 V GND.** Backwards, the LED
@@ -206,6 +211,9 @@ opto sees the identical signal that lights the lamp, so **if the strobe fires,
 It also means the strobe holds the node at 12 V while the output is open, so
 the opto LED draws nothing until the sensor actually sinks — no standing
 current, no interaction between the two loads.
+
+**Confirmed correct as drawn, 2026-09-13** — this grid was wired and the lamps
+behave. The one number still unmeasured is below.
 
 **⚠️ Meter the strobe before trusting the sink budget.** The QS18 sinks
 **150 mA** maximum and is now carrying the strobe *plus* the opto's ~10.8 mA.
@@ -561,7 +569,7 @@ Everything, as a whole board. The pieces have separate histories:
 
 | Piece | State |
 |---|---|
-| Bin sensor + opto | Wiring proven; `test_binsensor.cpp` covers the debounce |
+| Bin sensor + opto | **Proven on hardware 2026-09-13** — the 4N35 build in §2 works, the console logs the edges, and the 12 V lamps are correct as drawn. `test_binsensor.cpp` covers the debounce |
 | CT clamp | Rig works, **numbers do not** — noise floor unresolved, §5.5 |
 | 315 MHz transmit | **Proven end to end** on `ht12e_bench.cpp` against the real receiver |
 | Fob servos | Nothing built. No fixture designed |

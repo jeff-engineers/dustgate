@@ -1659,19 +1659,47 @@ void loop() {
     // gate it existed to escape. A board with no topology printed nothing while
     // the sensor worked perfectly, which is the failure it was meant to prevent.
     //
-    // The RAW pin, deliberately: no debounce, no inversion. That is a different
-    // question from "is the bin full" — which is debounced, inverted per the
-    // document, and reported further down, only when a layout names this board.
+    // The RAW pin — no inversion, and its OWN debounce. Still a different
+    // question from "is the bin full", which is debounced by BinSensor, inverted
+    // per the document, and reported further down only when a layout names this
+    // board.
+    //
+    // IT WAS UNDEBOUNCED UNTIL 2026-09-13, when the beam first ran on real
+    // hardware and chattered — an edge printed per flicker, which is a console
+    // full of noise at exactly the moment you are trying to read one transition.
+    //
+    // 1 s, and deliberately NOT kBinDebounceMs (2 s). These are not a pair and
+    // must not be made one: BinSensor's number guards a ROUTING decision and can
+    // afford to be slow, while this one only has to outlast a flicker and still
+    // feel live under a hand passing over a beam. Matching them would hide the
+    // case worth seeing — a pin settling slower than the firmware believes it.
     {
-        static int8_t lastRaw = -1;              // -1 = nothing seen yet
-        const bool now = (digitalRead(PIN_BIN_SENSOR) == LOW);
-        if (lastRaw != (int8_t)now) {
-            const bool first = (lastRaw == -1);
-            lastRaw = (int8_t)now;
+        static const uint32_t kRawLogDebounceMs = 1000;
+        static int8_t   shown    = -1;           // -1 = nothing printed yet
+        static int8_t   cand     = -1;
+        static uint32_t candAtMs = 0;
+
+        const bool     raw   = (digitalRead(PIN_BIN_SENSOR) == LOW);
+        const uint32_t nowMs = millis();
+
+        if (cand != (int8_t)raw) {               // reading moved — restart the clock
+            cand     = (int8_t)raw;
+            candAtMs = nowMs;
+        }
+
+        // The FIRST reading prints at once. Waiting a second to say where the
+        // board started would make a board that boots with a covered beam look
+        // like it saw nothing, and boot is the one moment you are watching.
+        const bool first   = (shown == -1);
+        const bool settled = first ||
+                             (uint32_t)(nowMs - candAtMs) >= kRawLogDebounceMs;
+
+        if (shown != cand && settled) {
+            shown = cand;
             DEBUG_PRINT(F("[BIN] D"));
             DEBUG_PRINT(PIN_BIN_SENSOR);
-            DEBUG_PRINT(now ? F(" LOW  (beam broken / covered)")
-                            : F(" HIGH (beam clear)"));
+            DEBUG_PRINT(cand ? F(" LOW  (beam broken / covered)")
+                             : F(" HIGH (beam clear)"));
             // An unwired board sits HIGH forever, so the first reading is where
             // we started rather than a transition that happened.
             DEBUG_PRINTLN(first ? F("  — initial") : F("  — CHANGED"));
@@ -2053,8 +2081,16 @@ void loop() {
     // and is exactly why it is a typed command rather than anything automatic.
     // See control/RfAddressGuess.h.
     if (_SC.consumeRfScanRequest()) {
-#ifdef PIN_RF_TX
+        // GATED TO MATCH runRfScan()'s OWN definition, not just the pad.
+        // This said `#ifdef PIN_RF_TX` alone until 2026-09-13, while the function
+        // is defined under `CONTROL_SMART_OUTLET && PIN_RF_TX` — so a build with
+        // a transmitter and no outlet support would have failed to link. No env
+        // is shaped that way today, which is exactly why it would have gone
+        // unnoticed until someone added one.
+#if defined(CONTROL_SMART_OUTLET) && defined(PIN_RF_TX)
         runRfScan();
+#elif defined(PIN_RF_TX)
+        Serial.println(F("[RF] rfscan needs smart-outlet support to see the result."));
 #else
         Serial.println(F("[RF] This build has no transmitter pad."));
 #endif

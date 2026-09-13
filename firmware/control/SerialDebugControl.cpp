@@ -963,17 +963,69 @@ void SerialDebugControl::runI2cScan(int sda, int scl, bool force) {
 #endif
 }
 
+// WHAT THIS BOARD IS, in one line, and it leads both `status` and `help`.
+//
+// Added 2026-09-13. Every board in this project is the same part with the same
+// USB VID — that is already a known hazard for flashing (see dev.sh `ports
+// --pin`), and it is the same hazard here: a console that never says which
+// build you are talking to leaves you reading a collector's output as a
+// slider's. It is printed from the build macros, so it cannot disagree with the
+// firmware the way a note taped to the board can.
+static void printBuildIdentity() {
+    Serial.print(F("  Build:             "));
+#ifdef DUSTGATE_SECONDARY
+    Serial.print(F("NODE"));
+#else
+    Serial.print(F("PRIMARY"));
+#endif
+#ifdef DUSTGATE_COLLECTOR
+    Serial.print(F(" / collector"));
+#elif HAS_LINEAR
+    Serial.print(F(" / slider (serial bus)"));
+#elif HAS_SERVO
+    Serial.print(F(" / PWM servo bank"));
+#endif
+    // The capability list, not a build name — because which jobs a board does is
+    // still a TOPOLOGY fact, and this says only what the hardware can reach.
+    Serial.print(F("  ["));
+#if HAS_SERVO
+    Serial.print(F("servo x")); Serial.print(SERVO_COUNT); Serial.print(' ');
+#endif
+#if HAS_LINEAR
+    Serial.print(F("linear "));
+#endif
+#if HAS_BIN
+    Serial.print(F("bin "));
+#endif
+#if HAS_CT
+    Serial.print(F("ct "));
+#endif
+#if HAS_RF
+    Serial.print(F("rf "));
+#endif
+    Serial.println(F("]"));
+}
+
 void SerialDebugControl::printStatus() {
     Serial.println(F("--- Status ---"));
-    Serial.print(F("  Requested stop:    ")); Serial.println(_requestedStop);
+    printBuildIdentity();
     Serial.print(F("  EStop pending:     ")); Serial.println(_eStopPending ? F("YES") : F("no"));
-    Serial.print(F("  Homing speed:      ")); Serial.print(HOMING_SPEED_STEPS_PER_SEC, 0); Serial.println(F(" steps/sec"));
+
+    // ── Motion, and ONLY on a board that has any ─────────────────────────────
+    //
+    // GATED 2026-09-13. A homing speed, a datum endstop and NUM_STOPS+1 stop
+    // positions were printed on every board, which on a collector is nine lines
+    // of rack geometry for a board with no rack — and `Requested stop` was
+    // meaningless there too. Noise in a status dump is not harmless: it buries
+    // the two lines that matter and it implies the board has hardware it does
+    // not.
 #if HAS_LINEAR
+    Serial.print(F("  Requested stop:    ")); Serial.println(_requestedStop);
+    Serial.print(F("  Homing speed:      ")); Serial.print(HOMING_SPEED_STEPS_PER_SEC, 0); Serial.println(F(" steps/sec"));
     Serial.print(F("  Home endstop (GPIO")); Serial.print(PIN_ENDSTOP_HOME); Serial.print(F("): "));
     Serial.println(digitalRead(PIN_ENDSTOP_HOME) == HIGH ? F("TRIGGERED") : F("open"));
     Serial.print(F("  Far endstop (GPIO"));  Serial.print(PIN_ENDSTOP_MAX);  Serial.print(F("): "));
     Serial.println(digitalRead(PIN_ENDSTOP_MAX)  == HIGH ? F("TRIGGERED") : F("open"));
-#endif
     Serial.print(F("  Home datum endstop:")); Serial.print(F(" "));
     Serial.println(g_homeIsMaxEndstop ? F("MAX (the user's left)") : F("HOME (the user's left)"));
     Serial.println(F("  Stop positions (from g_stopPositionsMM[], Gate 1..N left→right):"));
@@ -983,35 +1035,101 @@ void SerialDebugControl::printStatus() {
         long steps = (long)(g_stopPositionsMM[i] * stepsPerMM()) * (-HOME_DIRECTION);
         Serial.print(steps); Serial.println(F(" steps"));
     }
+#endif
+
+#if HAS_SERVO
+    Serial.print(F("  Servo pins:        GPIO"));
+    { const int pins[SERVO_COUNT] = { SERVO_PWM_PIN_LIST };
+      for (int i = 0; i < SERVO_COUNT; i++) {
+          if (i) Serial.print('/');
+          Serial.print(pins[i]);
+      } }
+    Serial.println();
+#endif
+
+    // ── Collector inputs, RAW ────────────────────────────────────────────────
+    //
+    // The bin pin is read here WITHOUT debounce or inversion, which is the same
+    // deliberate choice as the loop's `[BIN]` logger: `status` answers "what is
+    // on the pin right now", and "is the bin full" is a different question that
+    // BinSensor and the layout answer further up. Both readings are printed so
+    // the inversion is visible rather than something to remember.
+#if HAS_BIN
+    Serial.print(F("  Bin pin (GPIO"));
+    Serial.print(PIN_BIN_SENSOR);
+    Serial.print(F("):  "));
+    const bool binLow = (digitalRead(PIN_BIN_SENSOR) == LOW);
+    Serial.print(binLow ? F("LOW") : F("HIGH"));
+    Serial.print(F("  → beam "));
+    Serial.print(binLow ? F("broken/covered") : F("clear"));
+    // An unwired pin sits HIGH on INPUT_PULLUP, which reads as "bin OK" — say so
+    // here, because a board with nothing attached otherwise looks healthy.
+    Serial.println(binLow ? F("  (raw; unwired reads HIGH)")
+                          : F("  (raw; an UNWIRED pin looks identical)"));
+#endif
+#if HAS_CT
+    Serial.print(F("  CT pin:            GPIO")); Serial.print(PIN_CT);
+    Serial.println(F("  — run 'ct' for a reading; a bare pin number proves nothing"));
+#endif
+#if HAS_RF
+    Serial.print(F("  RF transmit pin:   GPIO")); Serial.print(PIN_RF_TX);
+    Serial.println(F("  — 'press' to key it once"));
+#endif
     Serial.println(F("--------------"));
 }
 
+// ONLY WHAT THIS BUILD CAN ACTUALLY RUN.
+//
+// Rewritten 2026-09-13. Every command was listed on every board: `calibrate` and
+// nine stop positions on a collector with no rack, `press` and `rfscan` on a
+// slider with no transmitter, `gconf` on every board although the stepper was
+// deleted in August and its handler is still pin-guarded. A help list that names
+// commands the build cannot run is actively harmful — it is read as an inventory
+// of the hardware, so it sends someone chasing a dead servo, or a silent
+// transmitter, that was never fitted. Each line is now gated on the same
+// capability macro its HANDLER is gated on; when you add a command, gate both or
+// neither.
 void SerialDebugControl::printHelp() {
     Serial.println(F(""));
     Serial.println(F("=== Serial Debug Control ==="));
-    Serial.println(F("  0-7               Select position (0=home)"));
-    Serial.println(F("  estop             Immediate stop (latches until 'home')"));
+    printBuildIdentity();
+    Serial.println(F(""));
+
+#if HAS_LINEAR
+    Serial.print(F("  0-")); Serial.print(NUM_STOPS);
+    Serial.println(F("               Select position (0=home)"));
     Serial.println(F("  home              Re-trigger homing sequence"));
     Serial.println(F("  jog <mm>          Move relative: + = away from home, - = toward home"));
     Serial.println(F("  calibrate <m> <n> Dual-endstop reference sweep: model (rockler-2.5|rockler-4|custom) + gate count"));
     Serial.println(F("  homeside l|r      Report which side it homed to; 'right' re-homes to the left endstop"));
-#if defined(ENABLE_SERVO) && defined(SERVO_PWM_PIN_1)
-    Serial.println(F("  servo <1-4> <deg> Servo bring-up: move servo N to angle (or 'servo N detach')"));
-    Serial.println(F("  ct [n]            Read the CT clamp n times, one per second."));
-    Serial.println(F("                    Prints amps, the DC bias point and the sample"));
-    Serial.println(F("                    rate. A RAILED bias makes every amp figure"));
-    Serial.println(F("                    fiction — it says so when it sees one."));
-    Serial.println(F("  stroke <1-4> <from> <to> [reps] [dwellMs]"));
+    Serial.println(F("  endstops (e)      Print both endstop states, with their GPIO numbers"));
+    Serial.println(F("  clearcal          Erase EEPROM calibration (reload from config.h)"));
+#endif
+#if HAS_SERVO
+    Serial.print(F("  servo <1-")); Serial.print(SERVO_COUNT);
+    Serial.println(F("> <deg> Servo bring-up: move servo N to angle (or 'servo N detach')"));
+    Serial.print(F("  stroke <1-")); Serial.print(SERVO_COUNT);
+    Serial.println(F("> <from> <to> [reps] [dwellMs]"));
     Serial.println(F("                    Press and release, repeatably — for finding out"));
     Serial.println(F("                    whether a servo can throw a given switch."));
     Serial.println(F("                    Detaches at the end; a stalled servo cooks."));
 #endif
-    Serial.println(F("  clearcal          Erase EEPROM calibration (reload from config.h)"));
+#if HAS_CT
+    Serial.println(F("  ct [n]            Read the CT clamp n times, one per second."));
+    Serial.println(F("                    Prints amps, the DC bias point and the sample"));
+    Serial.println(F("                    rate. A RAILED bias makes every amp figure"));
+    Serial.println(F("                    fiction — it says so when it sees one."));
+#endif
+    // estop is not gated. It latches a flag every motion path checks, so it is
+    // meaningful on any board that can move anything — and on one that cannot,
+    // a command that does nothing is a safer surprise than a missing one.
+    Serial.println(F("  estop             Immediate stop (latches until 'home')"));
     Serial.println(F("  wifireset         Erase WiFi credentials, reboot into setup portal"));
+#if defined(PIN_TMC_EN) && defined(PIN_TMC_DIR)
     Serial.println(F("  gconf             Read GCONF + CHOPCONF from driver"));
-    Serial.println(F("  status            Print state, stop positions, both endstops"));
+#endif
+    Serial.println(F("  status            Print what this board is and what its pins read"));
     Serial.println(F("  reset (retry)     Retry the drive and clear latched boot faults (no reboot)"));
-    Serial.println(F("  endstops (e)      Print both endstop states, with their GPIO numbers"));
     Serial.println(F("  i2c [sda] [scl]   Scan the I2C bus — what is out there, and at what address ('force' to override refusals)"));
 #ifdef CONTROL_SMART_OUTLET
     Serial.println(F("  discover          Scan mDNS for Shelly outlets, print raw + filtered results"));
@@ -1030,15 +1148,19 @@ void SerialDebugControl::printHelp() {
     Serial.println(F("  plugtrace         Toggle: timestamp every frame a plug pushes — how fast does it report?"));
 #endif
     Serial.println(F("  provision <json>  Write WiFi+host to NVS: {\"ssid\":\"x\",\"pass\":\"y\",\"host\":\"dustgate\"}"));
+#if HAS_RF
     Serial.println(F("  press             Fire the collector's RF transmitter ONCE, now."));
     Serial.println(F("                    Bypasses the retry policy — no cooldown, no"));
     Serial.println(F("                    spin-up grace, no sensor needed. Needs a"));
     Serial.println(F("                    control.rf block on the layout's collector."));
+#if defined(CONTROL_SMART_OUTLET)
     Serial.println(F("  rfscan            Try the 4 ways a DIP can be copied wrong and"));
     Serial.println(F("                    keep the one the collector answers. Needs the"));
     Serial.println(F("                    collector's sensor plug paired. SETUP ONLY —"));
     Serial.println(F("                    an inverted address is a VALID address for"));
     Serial.println(F("                    someone else's receiver. Watch it run."));
+#endif
+#endif
     Serial.println(F("  help              Show this list"));
 #if defined(PIN_PIXEL) || defined(PIN_LED)
     // The pixel is the only diagnostic you get once the board is in a box and
