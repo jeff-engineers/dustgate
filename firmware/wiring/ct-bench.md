@@ -249,6 +249,89 @@ own internal burden (~60 Ω)**, not the divider — which puts a 200 Hz corner a
 order **10 µF**. Check that against the actual topology before buying; the
 direction is what is certain, not the value.
 
+### Measured loads, and the 240 V problem they expose (2026-09-13)
+
+Everything measured through the Tasmota unless noted; inrush from a handheld
+clamp meter. `rmsCounts` estimated at 0.99 mV/count, against the best floor this
+rig has produced (**79.7**, on the collector's line before the breadboard was
+disturbed).
+
+| Load | Current | est. `rmsCounts` | vs. floor |
+|---|---|---|---|
+| SawStop, **standby** | 0.043 A (2 W) | ~1.4 | invisible — and that is the RIGHT answer |
+| SawStop, running, not cutting | 4.99 A (455 W, PF 0.77) | ~168 | **2.3x** in quadrature |
+| Collector, running | 10.6 A (729 W, PF 0.60) | ~370 | **4.6x** |
+| Jointer, running, no load | 8.5 A | ~286 | **3.7x** |
+| SawStop, **inrush** | **78 A** | ~2600 | **8x past full scale** |
+| **Planer, 2 HP, 220 V, no load** | **7 A** | ~236 | **3.1x** — the CT's own use case |
+| Jointer, **inrush** | **90 A** | ~3000 | **9x past full scale** |
+| Planer, **inrush** | **90 A** | ~3000 | **9x past full scale** |
+| Collector, inrush | 45–50 A | ~1600 | 5x past full scale |
+
+Inrush against running current, per tool: collector **4.5x**, jointer **10.6x**,
+SawStop **15.6x**. Every tool in this shop passes 30 A on start, by 1.5x to 3x.
+
+**Standby being invisible is a feature, not a limitation.** The hazard a noisy
+CT creates is a FALSE POSITIVE — a tool that reads as running when it is not —
+and a standby draw 50x below the floor cannot produce one. §5.4a asks only for
+*running beyond standby*, and the bottom of that range is answered.
+
+**THE 240 V PATH IS FINE — measured, after an extrapolation said otherwise.**
+
+This paragraph briefly claimed the opposite, and the mistake is worth keeping
+because it is an easy one to make again. The reasoning was: a 1.75 HP saw draws
+5 A at 110 V, so the same horsepower at 240 V draws ~2.5 A, which is ~84 counts
+against a 79.7 floor — 1:1, indistinguishable, and therefore blocking for the
+one case a CT exists to serve.
+
+**Then a real 220 V tool was measured and drew 7 A**, nearly 3x the estimate.
+The extrapolation was wrong twice over: it is a *different motor*, not the same
+one rewound, and a motor's NO-LOAD current is mostly magnetizing current, which
+is a property of the winding rather than something that scales with supply
+voltage. **Do not scale no-load current by voltage.**
+
+So the CT's own use case has the most margin of any tool that needs it:
+
+| | Current | est. `rmsCounts` | vs. floor |
+|---|---|---|---|
+| Planer, 2 HP, 220 V, no load | **7 A** | ~236 | **3.1x** |
+
+The tightest real measurement is the SawStop at 2.3x — and that is a 110 V tool
+with a metering plug available, so the CT never has to carry it. **The noise
+floor is headroom, not a blocker**, which is where this file started before the
+extrapolation.
+
+**Inrush protection stops being optional too.** 90 A through a 30 A clamp is
+~3 V RMS, ~4.2 V peak on a 1.65 V bias — **comfortably over 5 V on a pin whose
+absolute maximum is ~3.6 V** — with the ESP32's ESD diodes clamping it on every
+start of every tool. See the inrush section above for why `isRailed()` cannot
+even tell you it happened.
+
+### ⚠️ SIZING: protect the 30 A clamp, do NOT upsize to a 100 A one
+
+The obvious response to 90 A of inrush is an SCT-013-**100**, and it is the
+wrong trade. Decided 2026-09-13 on the numbers above.
+
+A 100 A clamp puts out 1 V at 100 A, so a 240 V tool drawing 2.5 A gives **25 mV
+RMS** where the 30 A clamp gives 83 mV — a **3.3x loss of signal, in exactly the
+case that is already sitting at 1:1 with the noise floor.** Upsizing spends the
+only margin that matters to buy headroom in a region where **the reading is
+worthless regardless**: nothing measures current during inrush, it only has to
+survive it.
+
+So: keep the 30 A clamp, and add a **series resistor plus a Schottky clamp to
+the rails**. Full resolution at the low end, and the pin survives 90 A without
+the ESP32's ESD diodes being the thing that clamps it. Values unspecified —
+size the series R against the CT's ~60 Ω burden and the diodes' forward drop,
+and remember it forms an RC with whatever filter cap lands there (see the
+100 nF arithmetic above).
+
+**The pattern in the table is worth keeping too: it is the SAW that is the hard
+case, not the big machines.** A 1.75 HP saw idles at 5 A while a 1 HP collector
+pulls 10.6 A and a jointer 8.5 A, because the saw is spinning a blade in air and
+the collector is moving a column of it. Horsepower does not predict sensing
+difficulty; unloaded draw does.
+
 ### What to do next, in order
 
 1. **Rebuild on perfboard.** 1k/1k (already correct) and keep the analog node

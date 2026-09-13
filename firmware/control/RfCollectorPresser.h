@@ -75,6 +75,26 @@ public:
 
     const char* kind() const override { return "rf"; }
 
+    // BENCH ONLY — press with a one-off repeat count, leaving the configured
+    // default untouched. Added 2026-09-13 to sweep the repeat window after a
+    // fast TOGGLE was seen on the bench: on and straight back off is a receiver
+    // seeing TWO presses, and 24 repeats is ~473 ms of continuous frames where
+    // a human tap on the fob is more like 150-250 ms. The header records that
+    // 120 ms keyed this receiver only intermittently — if the reliable window
+    // has a ceiling as well as a floor, the default was picked above it.
+    //
+    // Non-virtual and deliberately NOT on the CollectorPresser interface: no
+    // runtime path should choose a repeat count. When the sweep finds the right
+    // number it becomes kDefaultRepeats, not an argument.
+    bool pressWithRepeats(uint16_t repeats) {
+        if (repeats == 0) return press();
+        const uint16_t saved = _repeats;
+        _repeats = repeats;
+        const bool ok = press();
+        _repeats = saved;
+        return ok;
+    }
+
     bool press() override {
         if (_pin < 0) return false;
         if (!ensureRmt()) return false;

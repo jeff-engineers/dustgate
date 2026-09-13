@@ -1992,7 +1992,8 @@ void loop() {
     // several situations that are right at runtime and useless at a bench (the
     // cooldown, the spin-up grace, an unreachable sensor), and someone standing
     // next to the collector wants the relay to click now.
-    if (_SC.consumePressRequest()) {
+    uint16_t pressRepeats = 0;
+    if (_SC.consumePressRequest(pressRepeats)) {
         // FALLS BACK TO THE BOARD'S DEFAULT PAD when no layout names one.
         //
         // A bench command that needs a valid layout cannot diagnose a bad
@@ -2016,7 +2017,7 @@ void loop() {
                              "default pad (a slider build uses D6 for the servo bus)."));
         } else {
             watchdog::pet();
-            const bool sent = p->press();
+            const bool sent = p->pressWithRepeats(pressRepeats);
             watchdog::pet();
             Serial.println(sent ? F("[RF] sent.") : F("[RF] TRANSMIT FAILED."));
         }

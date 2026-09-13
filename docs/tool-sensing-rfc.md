@@ -814,6 +814,26 @@ Two results that bear directly on the sections around this one:
   standby*, not enough to tell standby from idle. **§5.4a's threshold question
   stays open**, and §5.5's complaint stands undiminished.
 
+**Measured loads, 2026-09-13.** A 1.75 HP SawStop draws 0.043 A in standby —
+**invisible to the CT, which is the right answer**, since the hazard is a false
+POSITIVE and a standby 50x under the floor cannot produce one — and 4.99 A
+running, ~2.3x the best floor. The collector sits at 4.6x. A **2 HP 220 V
+planer, the one tool here that actually needs a CT, draws 7 A no-load: 3.1x.**
+
+That last number briefly looked like ~2.5 A, from scaling the saw's current by
+voltage at equal horsepower, which would have put it at 1:1 with the floor and
+made the noise work blocking. It is a different motor, and no-load current is
+magnetizing current — **it does not scale with supply voltage.** Measure, do not
+extrapolate. The floor is headroom, not a blocker.
+
+**Inrush is 4.5x to 15.6x run current** — 90 A on both the jointer and the
+planer, 78 A on the saw, 45–50 A on the collector — so every tool here passes a
+30 A clamp by 1.5x to 3x. **Sizing decided: protect the 30 A clamp, do not
+upsize to 100 A.** A 100 A clamp gives 25 mV for a 2.5 A load where the 30 A
+gives 83 mV, spending resolution at the low end to buy headroom in a region
+where the reading is worthless anyway — nothing measures current during inrush,
+it only has to survive it. Series R plus a Schottky clamp to the rails.
+
 **And inrush saturates the clamp.** The collector draws **45–50 A** starting,
 through a 30 A CT — clipping both ends and putting ~4 V on a 3.6 V-max pin.
 `isRailed()` tests the DC mean and clipping is symmetric, so **a saturated

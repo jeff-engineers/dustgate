@@ -83,9 +83,11 @@ bool SerialDebugControl::consumeEStop() {
     return false;
 }
 
-bool SerialDebugControl::consumePressRequest() {
+bool SerialDebugControl::consumePressRequest(uint16_t& repeats) {
     bool v = _pressRequest;
+    repeats = _pressRepeats;
     _pressRequest = false;
+    _pressRepeats = 0;
     return v;
 }
 
@@ -401,12 +403,33 @@ void SerialDebugControl::processLine(const String& line) {
 #endif
 
 #if defined(CONTROL_SMART_OUTLET) || defined(ENABLE_HTTP_API)
-    } else if (cmd == "press") {
+    } else if (cmd == "press" || cmd.startsWith("press ")) {
         // Fires on the main loop, where the transmitter lives — this only asks.
         // Same shape as consumeHomeRequest(): a debug command never touches
         // hardware from the serial task.
+        _pressRepeats = 0;
+        if (cmd.length() > 6) {
+            const long r = cmd.substring(6).toInt();
+            // Capped, because repeats is the BLOCKING duration: each frame is
+            // ~19.7 ms, so 200 is about 4 s inside loop(). The watchdog is at
+            // 10 s and press() pets either side, not during.
+            if (r < 1 || r > 200) {
+                Serial.println(F("[RF] repeats must be 1..200 (each is ~19.7 ms;"));
+                Serial.println(F("     the default 24 is ~473 ms)."));
+                return;
+            }
+            _pressRepeats = (uint16_t)r;
+        }
         _pressRequest = true;
-        Serial.println(F("[RF] press queued — watch the receiver."));
+        Serial.print(F("[RF] press queued"));
+        if (_pressRepeats) {
+            Serial.print(F(" — "));
+            Serial.print(_pressRepeats);
+            Serial.print(F(" repeats, ~"));
+            Serial.print((uint32_t)_pressRepeats * 197 / 10);
+            Serial.print(F(" ms"));
+        }
+        Serial.println(F(" — watch the receiver."));
     } else if (cmd == "rfscan") {
         _rfScanRequest = true;
         Serial.println(F("[RF] address scan queued."));
@@ -1149,10 +1172,15 @@ void SerialDebugControl::printHelp() {
 #endif
     Serial.println(F("  provision <json>  Write WiFi+host to NVS: {\"ssid\":\"x\",\"pass\":\"y\",\"host\":\"dustgate\"}"));
 #if HAS_RF
-    Serial.println(F("  press             Fire the collector's RF transmitter ONCE, now."));
+    Serial.println(F("  press [repeats]   Fire the collector's RF transmitter ONCE, now."));
     Serial.println(F("                    Bypasses the retry policy — no cooldown, no"));
     Serial.println(F("                    spin-up grace, no sensor needed. Needs a"));
     Serial.println(F("                    control.rf block on the layout's collector."));
+    Serial.println(F("                    [repeats] overrides the 24-frame default"));
+    Serial.println(F("                    (~473 ms) — each frame is ~19.7 ms. Sweep it"));
+    Serial.println(F("                    if you see the collector TOGGLE on and back"));
+    Serial.println(F("                    off: that is the receiver seeing two presses,"));
+    Serial.println(F("                    and we may be holding the button too long."));
 #if defined(CONTROL_SMART_OUTLET)
     Serial.println(F("  rfscan            Try the 4 ways a DIP can be copied wrong and"));
     Serial.println(F("                    keep the one the collector answers. Needs the"));

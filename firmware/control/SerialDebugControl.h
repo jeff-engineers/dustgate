@@ -48,7 +48,18 @@ public:
     // the cooldown, the spin-up grace, an unreachable sensor — and a person
     // standing next to the collector wants to see the relay click NOW. It is
     // the same escape hatch `dc` gives for a switchable plug.
-    bool consumePressRequest();
+    //
+    // TAKES AN OPTIONAL REPEAT COUNT — `press [repeats]` — added 2026-09-13
+    // because a fast TOGGLE was seen a couple of times on the bench: the
+    // collector went on and straight back off, which is what a receiver does
+    // when it sees two presses. The default 24 repeats is ~473 ms of continuous
+    // frames, and a human tap on the fob is more like 150-250 ms, so we may
+    // simply be holding the button long enough to re-trigger. RfCollectorPresser
+    // already records that 120 ms keyed the receiver only intermittently — if
+    // the reliable window has a CEILING as well as a floor, 500 ms was picked
+    // above it without anyone knowing there was one. This is the knob that finds
+    // out. 0 means "use the presser's own default".
+    bool consumePressRequest(uint16_t& repeats);
 
     // `rfscan` — try the four ways a DIP can be copied wrong, and keep the one
     // the collector answers. SETUP ONLY; see control/RfAddressGuess.h for why
@@ -103,7 +114,8 @@ public:
     bool consumeServoRequest(int& outIndex, int& outAngle, bool& outDetach);
 
 private:
-    bool _pressRequest = false;   // `press` — fire the collector's RF once
+    bool     _pressRequest = false;   // `press` — fire the collector's RF once
+    uint16_t _pressRepeats = 0;       // 0 = the presser's own default
     bool _rfScanRequest = false;  // `rfscan` — find the right address by trying
     int  _requestedStop;
     bool _eStopPending;
