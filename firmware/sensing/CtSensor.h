@@ -41,6 +41,18 @@ public:
         float    hz      = 0;   // dominant frequency, from zero crossings
         uint32_t dcMv    = 0;   // the bias point — see isRailed()
         float    dcCounts = 0;
+        // ⚠️ LOG THIS COLUMN, not just amps — added 2026-09-13.
+        //
+        // The RAW measurement, before any scaling: the RMS of the AC component
+        // in ADC counts. `amps` is this times a derived mV-per-count, so every
+        // scale error lands on `amps` and leaves `rmsCounts` untouched.
+        //
+        // That distinction is not theoretical. A one-sample scale bug (see
+        // read()) printed 13.100 A falling to 8.889 A on a steady load, while
+        // rmsCounts held 371-375 the whole way. Had this column been on screen
+        // the bug would have been obvious in one glance instead of surviving a
+        // datalogging session.
+        float    rmsCounts = 0;
         float    kSps    = 0;   // sample rate actually achieved
         bool     valid   = false;
     };
@@ -55,6 +67,20 @@ public:
     //
     // Healthy is ~1650 mV, the divider halving 3.3 V. Anything near either rail
     // means the bias network is not doing its job and every number is fiction.
+    //
+    // ⚠️ WHAT THIS CANNOT SEE: SATURATION. It tests the DC mean, and clipping a
+    // symmetric waveform leaves the mean exactly where it was — so a CT driven
+    // past full scale reads as perfectly healthy here.
+    //
+    // Not hypothetical. A 1 HP collector draws 45-50 A of inrush (measured
+    // 2026-09-13) through a 30 A clamp: ~2.36 V peak on a 1.61 V bias, which
+    // clips both ends and briefly puts ~4 V on a pin whose absolute maximum is
+    // ~3.6 V. This function passes it.
+    //
+    // Catching it needs a different test — counting samples that land at the
+    // ADC's extremes, which a clean signal never touches — and nothing does that
+    // yet. Until then: every reading taken within a few seconds of a motor start
+    // is worthless, whatever this says. See wiring/ct-bench.md.
     static bool isRailed(const Reading& r) {
         return r.dcMv < 200 || r.dcMv > 3100;
     }
@@ -82,11 +108,16 @@ public:
         double sum = 0, sumSq = 0;
         bool above = false, seeded = false;
 
+        // The mV scale is sampled INTERLEAVED, spread across the whole window —
+        // see the note at the accumulator below for why bunching them fails.
+        uint32_t mvSum = 0, mvN = 0;
+
         while (millis() - t0 < windowMs) {
             const uint32_t c = analogRead(_pin);
             sum   += c;
             sumSq += (double)c * (double)c;
             n++;
+            if ((n & 0x3F) == 0) { mvSum += analogReadMilliVolts(_pin); mvN++; }
             // Crossings are counted against the PREVIOUS window's mean, which is
             // stable, rather than this window's, which is not known yet.
             if (_prevMean > 1) {
@@ -102,7 +133,41 @@ public:
         const double var  = (sumSq / n) - (mean * mean);
         const double rmsCounts = (var > 0 ? sqrt(var) : 0);
 
-        const uint32_t meanMv = analogReadMilliVolts(_pin);
+        // ⚠️ THE SCALE MUST BE AVERAGED OVER A FULL WINDOW, AND THAT IS THE WHOLE
+        // BALLGAME. It multiplies every amp figure, so an error here is
+        // indistinguishable from a changing load.
+        //
+        // Two bugs, both found on 2026-09-13, and the second was the fix for the
+        // first:
+        //
+        // 1. ONE SAMPLE. A single analogReadMilliVolts() of a pin carrying
+        //    hundreds of counts RMS is not a bias measurement, it is a coin
+        //    flip. Ten reads of a steady collector printed 13.100 A down to
+        //    8.889 A while rmsCounts held 371-375 — a 1% spread. The
+        //    measurement never moved; dcMv wandered 1940 -> 1313 and dragged
+        //    the answer with it.
+        //
+        // 2. 64 SAMPLES, BUNCHED. The obvious fix, and not enough. 64 calls take
+        //    ~1 ms; a 60 Hz cycle is 16.7 ms. Every sample lands on the same
+        //    point of the waveform, so it averages out high-frequency hash and
+        //    does NOTHING about the fundamental. Measured after that change:
+        //    rmsCounts stable at 439-449 while dcMv still swung 1240 -> 2222.
+        //    Meanwhile the counts mean spans 6000 samples over 200 ms. Two means
+        //    of the same signal over wildly different spans cannot be divided.
+        //
+        // So they are INTERLEAVED — one mV read every 64 analogRead()s, which
+        // spreads them across the identical window the counts mean uses, over
+        // an integer-ish number of cycles. ~1% overhead.
+        //
+        // THE DEEPER POINT: mvPerCount is a per-chip ADC calibration constant.
+        // It should not vary between windows AT ALL. Any run where it does is
+        // reporting a sampling artefact, not a property of the chip — which is
+        // why dcMv sitting still is itself a health check on this function.
+        //
+        // dcMv is reported from the SAME average, so isRailed() judges the bias
+        // over a full window too. It was one sample, and could have cried rail
+        // on a glitch or missed a railed pin that happened to sample well.
+        const uint32_t meanMv = (mvN > 0) ? (mvSum / mvN) : analogReadMilliVolts(_pin);
         const double mvPerCount = (mean > 1) ? ((double)meanMv / mean) : 0.61;
 
         _prevMean   = (float)mean;
@@ -110,6 +175,7 @@ public:
         r.hz        = (crossings / 2.0f) * (1000.0f / (float)took);
         r.dcMv      = meanMv;
         r.dcCounts  = (float)mean;
+        r.rmsCounts = (float)rmsCounts;
         r.amps      = (float)(rmsCounts * mvPerCount / 1000.0 * kAmpsPerVolt);
         r.valid     = true;
         return r;

@@ -88,7 +88,281 @@ floor is the number every other reading gets judged against.
 Then walk: clamp a tool's hot leg, note the idle reading, switch it on, read the
 peak. `clear` between tools.
 
-## Where this stands — TABLED 2026-09-07, pending a better meter
+## The scale is CORRECT — three-way agreement, 2026-09-13
+
+**This is the result the whole file was waiting for, and it arrived from a
+direction nobody was looking: the clamp was never wrong, the SOFTWARE was.**
+
+A 1 HP collector, running, measured three ways at the same moment:
+
+| | Amps |
+|---|---|
+| Handheld clamp meter | 10–11 |
+| Tasmota metering plug (`Status 8`) | **10.610** |
+| This CT, scale corrected | **10.71** |
+
+Within ~1%. `kAmpsPerVolt = 30.0f`, the bias network, and the rectifier-free
+arithmetic RMS are all confirmed against two independent instruments.
+
+### The bug that hid it: a one-sample scale factor
+
+`read()` derived its mV-per-count from a **single** `analogReadMilliVolts()`,
+and that factor scales every amp figure linearly. Ten consecutive reads of a
+steady collector printed this:
+
+```
+[CT] 13.100 A  ...  DC 1940mV (1667 counts)
+[CT] 12.245 A  ...  DC 1831mV (1675 counts)
+[CT] 10.186 A  ...  DC 1518mV (1676 counts)
+[CT]  8.889 A  ...  DC 1313mV (1659 counts)
+```
+
+A 32% collapse that looks exactly like a motor spinning down. Back the raw
+`rmsCounts` out of those same rows and it is **371–375 — a 1% spread.** The
+measurement never moved. A second run on another day gave 368–373: the same
+number, reproducibly, while `amps` ranged 8.889 to 14.639 across the two.
+
+**Why it scaled with the signal, which is what made it convincing.** With ~370
+counts RMS of AC on the pin, the instantaneous value swings roughly ±500 counts
+around the 1667 bias, so one sample lands anywhere from ~1300 to ~2200 mV — the
+exact range observed. With the load OFF (76 counts RMS) the swing was small and
+`dcMv` only moved 1603–1805. A quiet input hid it; a real load exposed it.
+
+**That is the worst shape a bug can have here: it does not look like a fault, it
+looks like data.** Anyone logging the amps column would have written down a load
+that was not changing.
+
+Both fixes are in `sensing/CtSensor.h`:
+
+- **mV-per-count is averaged over 64 samples** (~1 ms). It is a per-chip ADC
+  calibration constant and should not vary between windows at all. `dcMv` comes
+  from the same average, so `isRailed()` now judges the bias from 64 samples
+  too — it was one, and could have cried rail on a glitch.
+- **`rmsCounts` is a printed column.** `amps` is a scaled view of it, so the two
+  disagreeing across consecutive reads is a *scale* fault rather than a changing
+  load. With this column on screen the bug is one glance instead of a session.
+
+**Log `rmsCounts`, not `amps`, for anything you intend to compare later.**
+
+### The noise floor is ELECTRONIC, and that answers the §5.4 pickup question
+
+The `Hz` column was added on 2026-09-07 to settle exactly this and had never
+been read. With the collector **off**, ten reads:
+
+```
+[CT]  2.194 A   1035.0 Hz   DC 1608mV (1667 counts)
+[CT]  2.198 A   1055.0 Hz   DC 1613mV (1667 counts)
+```
+
+**~1055 Hz. The rule this file wrote down says ~60 Hz is magnetic pickup and
+anything above ~500 Hz is electronics.** So the dominant noise is NOT the CT
+sitting in the ambient field — it is in the ESP32 path. Distance, orientation
+and shielding will not fix it; the front end is where to look.
+
+Two honest caveats:
+
+- The floor is **~76 counts RMS ≈ 2.2 A**, which is an order of magnitude worse
+  than the 0.253 A measured on 2026-09-07. That is a different location — on a
+  collector's input conductor inside its enclosure, not on a bench — so the two
+  are not comparable and the increase is **unexplained**.
+- The zero-crossing counter over-reports when noise dominates, since noise adds
+  spurious crossings. 1055 Hz is not a clean spectral line; it is "well above
+  60", which is all the test needed to decide.
+
+**IT IS NOT THE SCREEN, and that was assumed here for about an hour before Jeff
+said so.** Every reading above was taken with **no OLED connected at all**:
+
+| | Floor |
+|---|---|
+| Bench, 2026-09-06, OLED unplugged | **< 0.03 A** |
+| Here, 2026-09-13, OLED unplugged | **~2.2 A** |
+
+~70x worse with the panel absent in both cases, so whatever injects ~1 kHz
+arrived with the LOCATION or the SETUP, not the charge pump. §5.5 of the RFC is
+still right that the screen is a noise source; it is simply not the source of
+this. An A/B with the panel plugged back in is still worth taking, but it now
+measures an increment on top of an already-bad floor rather than explaining it.
+
+**~1 kHz is a switching supply's signature** — too high for 60 Hz magnetic
+pickup, too low for RF. So the question is which one, and one candidate is
+already eliminated: the board is USB-powered from a laptop **running on
+battery**, so there is no mains path into the ground through USB. Three left:
+
+- **The laptop's own DC-DC rails**, which run on battery as well.
+- **The 12 V supply for the bin sensor and lamps**, sitting beside the CT. That
+  one IS a mains-connected switching supply, just not reaching the board through
+  USB. On topology A it is isolated from the ESP32's ground — but isolation does
+  nothing about a coil sitting in its field.
+- **Our own front end.**
+
+Test 2 below separates the last from the first two, which is why it is the run
+worth taking next.
+
+### The queue was run, and it answered a different question (2026-09-13)
+
+Five conditions, collector OFF throughout, no firmware change between them —
+which is the reason the comparison survives at all, since `rmsCounts` is immune
+to the scale bug below while `amps` on that build is not.
+
+| Condition | `rmsCounts` | vs. best |
+|---|---|---|
+| **On the collector's input line, as built** | **79.7** — *flat to 0.8%* | — |
+| CT closed, carried well away | 201 → 254, *drifting* | 3x |
+| Carried back to the original position | 445 | 5.6x |
+| + shield grounded at the board end | 414 | 5.2x |
+| + screen plugged back in | 426 | 5.3x |
+
+**The floor never came back, and that is the finding.** Row 1 was taken before
+the board was picked up; every row after it is 5x worse in the same position
+with the same wiring. Two things moved together and neither has recovered:
+
+- `dcCounts` went **1671 → 1744 → 1778** and stayed there. Ambient field cannot
+  do that: magnetic pickup is AC and its mean is zero, so a shifted DC bias
+  means the CIRCUIT changed, not the environment.
+- The reading stopped being flat. Row 1 held 0.8% across ten reads; row 2 climbs
+  monotonically through the run.
+
+**It is a breadboard.** A spring contact on a high-impedance analog node is
+exactly the thing that changes value when the board is carried across a shop.
+Rebuilding on perfboard is the next step — note the direction, since soldered
+perf is the CLEANER platform here and breadboard the looser one.
+
+**Both interventions are real, and both are swamped.** Grounding the shield
+bought ~7%; the screen cost ~3%, which in quadrature is the screen contributing
+roughly 60–110 counts on its own — about the size of the ENTIRE original floor,
+and consistent with §5.5's 2026-09-06 result. But resolving a 100-count effect
+on top of a 400-count platform fault is not a measurement. **Nothing in this
+queue is worth re-running until row 1's 79.7 is back.**
+
+**The divider is already 1k/1k, which disproves half of the 2026-09-06 theory.**
+That change was proposed because 5 kΩ of source impedance was suspected of
+picking up the noise. It is 500 Ω now and the floor is still bad, so the divider
+was not the mechanism.
+
+**And the specified 100 nF is two orders of magnitude too small to matter.**
+Against 500 Ω it corners at ~3.2 kHz — the noise is at ~1 kHz, BELOW the corner,
+attenuated by about 4%. To cut 1 kHz meaningfully the corner wants to be a few
+hundred Hz: at 200 Hz, 1 kHz drops ~5x while 60 Hz loses only ~4%, and that 4%
+is a fixed scale error that calibrates straight out against the Tasmota. The
+sizing catch is that the impedance the cap works against is probably **the CT's
+own internal burden (~60 Ω)**, not the divider — which puts a 200 Hz corner at
+order **10 µF**. Check that against the actual topology before buying; the
+direction is what is certain, not the value.
+
+### What to do next, in order
+
+1. **Rebuild on perfboard.** 1k/1k (already correct) and keep the analog node
+   physically tiny — the junction of the two resistors, the cap and the CT lead
+   should be millimetres of copper, not a trace across the board. That node is
+   the antenna. Twist the CT leads and keep them short.
+2. **Re-baseline** — `ct 10`, collector off. If the floor drops to ~80 on the
+   rebuild alone, the platform was the whole story.
+3. **Then** the cap, sized against the measured impedance.
+4. **Then** shield and screen, which become measurable at their real size once
+   they are not hiding under a 5x fault.
+5. **Board off the laptop entirely** (a battery pack) stays open. The laptop is
+   already on battery, so the mains-through-USB path is ruled out; its internal
+   rails are not.
+
+**CT position, when you retest:** closed, never open. An open split core is a
+different sensor with different sensitivity and different pickup, so it compares
+against something that is not the CT in use. Move the whole assembly — a lead
+left draped along the supply picks up on its own.
+
+### ⚠️ What this means for the verdict — READ THIS BEFORE CHASING THE NOISE
+
+**The question is binary: is this big AC motor running, beyond standby?** Not
+how many amps, not to what accuracy. (The collector's motor is an AC induction
+motor — the 0.60 power factor and 966 VAR of reactive power measured through the
+Tasmota are its magnetizing current. "DC" in this project means *dust
+collector*.) Everything below is about HEADROOM, and it
+is easy to lose sight of that halfway through a noise hunt — this file did, for
+most of an afternoon.
+
+Against that target the CT already passes comfortably:
+
+| | `rmsCounts` | |
+|---|---|---|
+| Collector running | ~370 | |
+| Floor, as built | ~80 | **4.6x — trivially separable** |
+| Floor, on the degraded breadboard | ~426 | 1.3x — marginal |
+
+**The verdict was never in danger on the working platform.** A 2.2 A floor under
+a 10.4 A load is ~13 dB, which is a comfortable margin for a threshold that only
+has to sit somewhere between the two. So **the noise work below must not block
+the collector path** — it buys margin and it buys the ability to sense smaller
+tools, neither of which is on the critical path for a 1 HP blower.
+
+What the floor DOES cost, and why it is still worth fixing eventually: it cannot
+tell standby from idle, and it would swamp a small tool. §5.4a's threshold shape
+stays open for those.
+
+The floor is also a **fixed pedestal**, which is why the on-reading is stable to
+1%, and RMS adds in quadrature — so it subtracts: `√(370² − 76²)` = 362 counts,
+10.48 A, within 1.2% of the Tasmota the other way. That is the tare-style fix:
+a measured zero, stored once at install like a scale's, subtracted in
+quadrature. `ct_bench.cpp` had a `zero` command; `CtSensor` does not. If the
+noise turns out not to be designable away, that is the fallback that makes
+almost all of it irrelevant.
+
+### ⚠️ INRUSH SATURATES THE CLAMP — 45–50 A measured 2026-09-13
+
+The handheld meter reads **45–50 A inrush** when the 1 HP collector starts. The
+SCT-013-030 is a **30 A** clamp, so start-up is 60% past full scale:
+
+| | |
+|---|---|
+| 50 A out of the CT | ~1.67 V RMS, **2.36 V peak** |
+| riding on the bias | ~1.61 V |
+| so the pin swings | **−0.75 V to +3.97 V** |
+| C5 absolute max on a GPIO | VDD+0.3 ≈ **3.6 V** |
+
+Three things follow, and the second is the one that bites.
+
+**Readings during spin-up are fiction.** The peaks clip, so the RMS understates
+by an amount nothing can recover.
+
+**`isRailed()` cannot see it.** That check is this file's only safety net and it
+tests the DC *mean* — but clipping is symmetric, so the mean sits at ~1650 mV
+and the check passes. **A saturated reading looks healthy.** This is a genuine
+hole, not a caveat: the one guard that exists is blind to the one failure a
+motor start produces. Catching it needs a different test (count samples at the
+ADC's extremes, which a clean signal never touches), and nothing does that yet.
+
+**It explains the Shelly.** "The 1 HP collector tripped a Shelly Plus Plug US on
+2026-09-03" has been carried as a bare fact with no mechanism, and it is the
+origin of the whole sensing/switching split. A 16 A-rated relay meeting 45–50 A
+is the mechanism.
+
+**None of this touches the steady-state result above.** 10.4 A is a third of
+full scale, nowhere near clipping, and the running verdict is the only thing
+that reads the CT. `kCollectorSpinupGraceMs` (4 s) already waits out the window
+where the number is worthless — written for a different reason, but it covers
+this too.
+
+**Undecided:** whether to add a series resistor plus a Schottky clamp to the
+rails, or move to an SCT-013-100 and give up resolution at the low end. The
+ESP32's own ESD diodes are conducting on every start today, at roughly 28 mA of
+secondary current, which is more than they are meant to carry.
+
+### ⚠️ A line splitter does not work with an SCT-013-030
+
+The obvious workaround for "a CT cannot read an intact cord" — buy a line
+splitter, the accessory that separates hot from neutral for a clamp meter — is a
+**dead end with this CT**. Its jaw is too small for the splitter. Written down
+because it is the first thing a reader will try and it costs money to find out.
+
+What today's readings actually ran on is the collector's **input line**, a single
+conductor inside the enclosure. That makes the numbers valid — hot and neutral no
+longer cancel — but it is a hardwired install, not the shippable one, and it sits
+on the wrong side of *an install step the owner cannot perform is not a cheaper
+option, it is a different product*. For a 120 V tool a metering plug exists and
+wins. The CT's case is **240 V**, where there is no plug and the alternative is a
+panel-side CT and an electrician.
+
+---
+
+## Where this stood — TABLED 2026-09-07, superseded above
 
 **The sensor works. The front end does not, and the ADC path may not be the
 place to fix it.** Numbers from the last clean run (bias confirmed at
@@ -137,7 +411,8 @@ than reporting that as a clean negative.
 
 The `Hz` column added on 2026-09-07 exists to settle the pickup question from the
 board itself: ~60 Hz is magnetic pickup, anything above ~500 Hz is electronics.
-It has not been read yet.
+**Read 2026-09-13: ~1055 Hz with the load off — electronics, not ambient field.**
+See the top of this file.
 
 ## What to expect, so a surprise is informative
 

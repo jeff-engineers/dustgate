@@ -782,6 +782,49 @@ Note this does NOT excuse the noise in §5.5. A floor that moves with whether th
 screen is drawing makes even a ratio unreliable, because the baseline learned at
 pairing may be measured under different conditions than the trip.
 
+### 5.5a The SCALE is confirmed — the clamp was never the problem (2026-09-13)
+
+**Three instruments on a running 1 HP collector, same moment:** a handheld clamp
+meter at 10–11 A, a Tasmota metering plug at **10.610 A**, and this CT at
+**10.71 A**. Within ~1%. `kAmpsPerVolt = 30.0f`, the bias network and the
+rectifier-free RMS are all correct.
+
+What was wrong was software: `CtSensor::read()` derived its mV-per-count from a
+**single** ADC sample, which scales every amp figure linearly. On a steady load
+it printed 13.100 A falling to 8.889 A while the raw `rmsCounts` held 371–375.
+Fixed by averaging 64 samples, and `rmsCounts` is now a printed column so a
+scale fault is visibly distinct from a changing load. **Log that column.**
+
+Two results that bear directly on the sections around this one:
+
+- **The noise floor is ELECTRONIC.** The `Hz` column added on 2026-09-07 to
+  settle exactly this had never been read; with the load off it reads **~1055 Hz**,
+  and the rule already written down says >500 Hz is electronics, not ambient
+  magnetic pickup. So §5.5's line of attack is the right one and shielding is
+  not. **It is NOT the screen**, which was briefly assumed and is wrong: every
+  reading was taken with no OLED connected. A bench with no OLED measured under
+  0.03 A on 2026-09-06 and this is ~2.2 A, so the difference came with the
+  location or the setup. ~1 kHz is a **switching supply's** signature — too high
+  for 60 Hz magnetic pickup, too low for RF. The laptop feeding USB is on
+  battery, so there is no mains path through the ground; what is left is the
+  laptop's own rails, the 12 V supply sitting beside the CT, or our front end.
+- **The floor is a fixed pedestal** — ~76 counts RMS, ~2.2 A at this location —
+  which is why the on-reading is stable to 1%, and RMS adds in quadrature so it
+  subtracts. 2.2 A against 10.4 A is ~13 dB: enough for §5.4a's *running beyond
+  standby*, not enough to tell standby from idle. **§5.4a's threshold question
+  stays open**, and §5.5's complaint stands undiminished.
+
+**And inrush saturates the clamp.** The collector draws **45–50 A** starting,
+through a 30 A CT — clipping both ends and putting ~4 V on a 3.6 V-max pin.
+`isRailed()` tests the DC mean and clipping is symmetric, so **a saturated
+reading passes as healthy**; the only guard there is blind to the one failure a
+motor start produces. It also supplies the missing mechanism for the Shelly Plus
+Plug US trip on 2026-09-03: a 16 A relay meeting 45–50 A.
+
+Full write-up, including the line-splitter dead end and why today's numbers came
+off a hardwired install rather than a shippable one:
+[`firmware/wiring/ct-bench.md`](../firmware/wiring/ct-bench.md).
+
 ### 5.5 The screen is a noise source, and every board has one
 
 **Measured 2026-09-06, on the bench rig in `firmware/bench/ct_bench.cpp`:**

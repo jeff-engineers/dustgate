@@ -2040,8 +2040,13 @@ void loop() {
                 const CtSensor::Reading r = ct.read();
                 if (!r.valid) { Serial.println(F("[CT] too few samples — is D0 wired?")); break; }
 
-                Serial.printf("[CT] %6.3f A   %5.1f Hz   DC %4umV (%.0f counts)  %.0f kSPS",
-                              r.amps, r.hz, r.dcMv, r.dcCounts, r.kSps);
+                // rmsCounts is printed alongside amps deliberately: it is the
+                // raw measurement and amps is a scaled view of it, so the two
+                // disagreeing across consecutive reads is a scale fault rather
+                // than a changing load. That is exactly the failure that got
+                // through on 2026-09-13 and it was invisible without this column.
+                Serial.printf("[CT] %6.3f A  %6.1f rms   %5.1f Hz   DC %4umV (%.0f counts)  %.0f kSPS",
+                              r.amps, r.rmsCounts, r.hz, r.dcMv, r.dcCounts, r.kSps);
                 // THE ONLY CHECK THAT MATTERS. A railed input reads a constant,
                 // and the variance of a constant is zero — which looks exactly
                 // like a perfectly quiet sensor. Refusing to let 0.000 A pass
