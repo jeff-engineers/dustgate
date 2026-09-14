@@ -3,6 +3,7 @@ import { NgIf } from '@angular/common';
 import { RouterOutlet } from '@angular/router';
 import { BUILD_TIME_MS } from '../build-info';
 import { ApiService } from './services/api.service';
+import { IS_DEMO } from './services/demo-mode';
 import { formatBuildStamp, formatEpochStamp } from './build-stamp';
 
 /**
@@ -81,11 +82,50 @@ function buildToken(): string {
       user-select: text;
     }
     .build-stamp span { white-space: nowrap; }
+
+    /* ── Demo banner ──────────────────────────────────────────────────────
+       "Oh, am I controlling your shop?" — asked more than once by people shown
+       the public deployment. The app is indistinguishable from the real thing
+       by design, which is what makes it a good demo and exactly what makes the
+       question necessary. So it answers itself, before anyone taps anything.
+
+       STICKY AT THE TOP, not a dismissible toast: someone landing mid-scroll on
+       a shared link has to be able to see it, and a banner you can dismiss is a
+       banner that is dismissed once and never seen by the next person handed
+       the phone. It costs one line of height and it is never in the way of a
+       control, because every screen's own chrome starts below it.
+
+       Amber rather than red — nothing is WRONG, it is simply not connected to
+       anything. Red would read as a fault and send people looking for one. */
+    .demo-banner {
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      display: flex;
+      align-items: baseline;
+      justify-content: center;
+      flex-wrap: wrap;
+      gap: 0 6px;
+      padding: 7px 12px;
+      background: #2a2005;
+      border-bottom: 1px solid #4a3a0d;
+      font-size: 12px;
+      line-height: 1.45;
+      color: #e3c98a;
+      text-align: center;
+    }
+    .demo-banner b { color: var(--accent); font-weight: 600; }
+    .demo-banner .what { white-space: nowrap; }
     /* Highlighting it is how you read it, so make the selection legible. */
     .build-stamp::selection { background: var(--accent); color: #000; }
     .build-stamp span::selection { background: var(--accent); color: #000; }
   `],
   template: `
+    <div class="demo-banner" *ngIf="isDemo" role="status">
+      <span class="what"><b>Demo mode</b></span>
+      <span>Nothing here is wired to real hardware — it is a simulated shop, and
+            it is not anyone's dust collector.</span>
+    </div>
     <router-outlet />
     <div class="build-stamp">
       <span>build {{ build }}</span>
@@ -95,6 +135,10 @@ function buildToken(): string {
   `
 })
 export class AppComponent {
+  /** Simulated, not connected to a board. Read once at module load — see
+   *  services/demo-mode.ts for why it cannot change mid-session. */
+  readonly isDemo = IS_DEMO;
+
   readonly build = buildToken();
 
   /** When THIS BUNDLE was compiled — the app's own __DATE__/__TIME__, baked in by

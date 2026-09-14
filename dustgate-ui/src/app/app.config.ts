@@ -4,46 +4,9 @@ import { provideHttpClient } from '@angular/common/http';
 import { routes } from './app.routes';
 import { ApiService } from './services/api.service';
 import { DemoApiService } from './services/demo-api.service';
-
-// Demo mode: active on the public Vercel deployment, or when ?demo=true is
-// present (for local dev testing). NOT active for any way of reaching a real
-// device — localhost, its mDNS hostname (*.local), or a LAN IP — since the
-// UI is served directly from the device itself and real users reach it by
-// exactly those addresses. A plain "hostname !== localhost" check would
-// (and previously did) misclassify every real device as the demo, silently
-// swapping in the fully-simulated DemoApiService instead of talking to the
-// actual firmware — homing/moves would appear to succeed with zero physical
-// motion.
-function isLocalNetworkHost(hostname: string): boolean {
-  if (hostname === 'localhost' || hostname === '127.0.0.1') return true;
-  if (hostname.endsWith('.local')) return true; // mDNS, e.g. dustgate.local
-  if (/^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(hostname)) return true;
-  if (/^192\.168\.\d{1,3}\.\d{1,3}$/.test(hostname)) return true;
-  if (/^172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}$/.test(hostname)) return true;
-  return false;
-}
-
-// Demo can be forced with ?demo=true (and cleared with ?demo=false). Hash routing
-// rewrites the address bar to "/#/route" on navigation, dropping the pre-hash
-// query string — so a one-shot ?demo=true would be lost on the next navigate or
-// reload. Persist it in sessionStorage (per-tab) so it sticks once set.
-const DEMO_KEY = 'dustgate_demo';
-function readForcedDemo(): boolean {
-  try {
-    const params = new URLSearchParams(window.location.search);
-    if (params.has('demo')) {
-      if (params.get('demo') === 'false') sessionStorage.removeItem(DEMO_KEY);
-      else sessionStorage.setItem(DEMO_KEY, '1');
-    }
-    return sessionStorage.getItem(DEMO_KEY) === '1';
-  } catch {
-    // Private mode / storage disabled — fall back to the raw query param.
-    return new URLSearchParams(window.location.search).has('demo');
-  }
-}
-
-// The ONLY thing the host decides is whether the API is real or simulated.
-const isDemo = !isLocalNetworkHost(window.location.hostname) || readForcedDemo();
+// WHAT counts as demo mode lives in services/demo-mode.ts, because the answer is
+// now needed on screen (the banner) as well as here.
+import { IS_DEMO } from './services/demo-mode';
 
 export const appConfig: ApplicationConfig = {
   providers: [
@@ -59,6 +22,6 @@ export const appConfig: ApplicationConfig = {
     provideHttpClient(),
     // In demo mode, substitute DemoApiService everywhere ApiService is injected.
     // Every component injects ApiService — the override is transparent.
-    ...(isDemo ? [{ provide: ApiService, useClass: DemoApiService }] : []),
+    ...(IS_DEMO ? [{ provide: ApiService, useClass: DemoApiService }] : []),
   ]
 };
