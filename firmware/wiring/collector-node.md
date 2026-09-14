@@ -248,8 +248,8 @@ it does not.
 |---|---|---|
 | 1 kΩ | the `3V3` rail | **that row** |
 | 1 kΩ | **that row** | the `GND` rail |
-| 100 nF | **that row** | the `GND` rail |
-| 10 µF | **that row** (long leg / `+`) | the `GND` rail |
+| 100 nF ceramic | **that row** | the `GND` rail | 
+| 10 µF electrolytic| **that row** (long leg / `+`) | the `GND` rail |
 | CT wire 1 | the CT | **that row** |
 | CT wire 2 | the CT | **`D0`** |
 

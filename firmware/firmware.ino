@@ -905,11 +905,19 @@ static void adoptStoredTopology() {
 // individually unreasonable; the frame simply is not a place to keep
 // kilobytes.
 //
-// THE REAL FIX IS SMALLER FUNCTIONS, and the sweep block below is extracted for
-// exactly that reason. This macro is the belt: loop() will keep growing,
-// nobody notices a frame getting bigger, and the failure mode is a reboot loop
-// on a board in a shop rather than a compile error. 8 KB more RAM against 320
-// KB is not a trade worth agonising over.
+// THE REAL FIX IS SMALLER FUNCTIONS. The sweep block was extracted first, and
+// on 2026-09-14 the three deferred-reply handlers followed — ping, rename and
+// release, which between them kept a 512 and two 256s permanently on the frame
+// to serve requests that arrive a handful of times in a shop's life.
+//
+// This macro is the belt: loop() will keep growing, nobody notices a frame
+// getting bigger, and the failure mode is a reboot loop on a board in a shop
+// rather than a compile error. 8 KB more RAM against 320 KB is not a trade
+// worth agonising over.
+//
+// And the HIGH-WATER LINE at the end of setup() is the warning that did not
+// exist when this happened: a number that shrinks release over release is the
+// only early notice anyone gets.
 SET_LOOP_TASK_STACK_SIZE(16 * 1024);
 
 void setup() {
@@ -1163,6 +1171,34 @@ void setup() {
     // above (WiFi connect can block up to ~12s, calibration load, etc.), so none
     // of it trips a spurious reset. From here loop() must pet it each pass.
     watchdog::begin();   // watches this task (the Arduino loopTask)
+
+    // ── How close did that come to the edge? ─────────────────────────────
+    //
+    // The stack protection fault that raised this task's size to 16 KB gave no
+    // warning at all: it worked, and then a board would not boot. This is the
+    // warning. uxTaskGetStackHighWaterMark() reports the SMALLEST amount of
+    // free stack this task has ever had. ESP-IDF returns BYTES here, unlike
+    // vanilla FreeRTOS which returns words — confirmed on hardware rather than
+    // from the docs: the first run reported 8604 against a 16384-byte stack, and
+    // 8604 WORDS would be 34 KB of a 16 KB stack. Do not "fix" this by scaling.
+    // The number to watch is the one that keeps getting smaller between
+    // releases, long before it reaches zero and takes a board in a shop.
+    //
+    // ONCE, at the end of setup(), and that is the entire point of where it
+    // sits. The first cut of this landed at the tail of updateStatusLed() by
+    // matching the wrong closing brace, so a board printed it 115,754 times in
+    // one bench session — a diagnostic that buries the log it is meant to be
+    // found in. If this ever needs to be read again later, that is what a
+    // console command is for, not a line in a hot path.
+    //
+    // setup() is itself among the deepest things this task ever runs, so a
+    // figure taken here already accounts for it. It is a floor, not a live
+    // gauge: loop()'s own worst pass will push it lower.
+    DEBUG_PRINT(F("[STACK] loop task free after setup: "));
+    DEBUG_PRINT((unsigned)uxTaskGetStackHighWaterMark(NULL));
+    DEBUG_PRINT(F(" bytes of "));
+    DEBUG_PRINT((unsigned)(16 * 1024));
+    DEBUG_PRINTLN(F(" — watch this SHRINK across releases."));
 }
 
 // =============================================================================
@@ -1403,6 +1439,7 @@ static void updateStatusLed() {
     wakebutton::update();
     servoselftest::update();   // after the button, so a hold starts on this pass
     updateStatusScreen();
+
 }
 
 #ifdef CONTROL_SMART_OUTLET
@@ -1668,6 +1705,299 @@ static void runRfScan() {
     Serial.println(F("     it has an antenna, and that the receiver is powered."));
 }
 #endif
+
+#ifdef CONTROL_SMART_OUTLET
+// ── Deferred replies, each in its OWN FUNCTION ───────────────────────────────
+//
+// These three used to sit inline in loop(), and that is what put a half-built
+// status JSON on the stack when a collector board panicked at boot: loop() is a
+// single function, so every StaticJsonDocument declared anywhere inside it
+// reserves its bytes in the SAME frame whether or not that branch runs. Two
+// 256s and a 512 were living there permanently to serve requests that arrive
+// a few times in a shop's life. See the stack note above setup().
+//
+// Guarded the same way their call sites are: they speak to plugs, so there is
+// nothing for them to do on a build with no smart-outlet support.
+
+// Plug PING — the body of POST /api/outlets/ping, which adds a plug by hand.
+//
+// ⚠️ ITS OWN FRAME, for the reason in the stack note above setup().
+//
+// Outlet ping — probe ONE IP, typed by a person, on the main loop (see
+// consumePingRequest in HttpApiServer for why it's here rather than a
+// spawned task).
+//
+// THIS IS THE "ADD IT BY IP" PATH, and until 2026-09-09 it could not carry
+// its own name. It probed Shelly only and reported no ownership at all,
+// which made it useless for the one device that most needs it: a Tasmota
+// does not advertise over mDNS in a stock build, so discovery cannot see it
+// and typing the address is the ONLY way in. The empty-discovery message
+// below has been telling people to add plugs by IP for months, against a
+// field that did not exist and an endpoint that would have answered
+// "unreachable" if it had.
+//
+// It now answers with exactly the row discovery produces — same probe, same
+// claim, same shape — so a plug added by hand is indistinguishable in the
+// picker from one that was found. That sameness is the feature.
+static void handlePingRequest() {
+    char pingIp[40];
+    if (apiServer.consumePingRequest(pingIp, sizeof(pingIp))) {
+        DEBUG_PRINT(F("[PING] ")); DEBUG_PRINTLN(pingIp);
+        StaticJsonDocument<512> resp;
+        JsonObject o = resp.to<JsonObject>();
+        // No hostname and no kind: an address is all the user gave us, so
+        // describeOutletInto() tries both protocols and reports which
+        // answered.
+        describeOutletInto(o, pingIp, nullptr,
+                           /*kindKnown=*/false, OUTLET_SHELLY, /*mdnsGen=*/0);
+        String out; serializeJson(resp, out);
+        apiServer.respondPing(out);
+    }
+}
+
+// Plug RENAME — the body of POST /api/outlets/name.
+//
+// ⚠️ ITS OWN FRAME. Same reason as the two beside it — see the stack note above
+// setup(). This one is also simply long: the claim rules, both protocols and
+// the suffix policy are the bulk of it, and none of that reads any better
+// buried a hundred lines inside loop().
+//
+// ------------------------------------------------------------------
+// Plug RENAME — POST /api/outlets/name.
+//
+// On the main loop for the same reason ping is: Switch.SetConfig blocks on a
+// device that may not answer.
+//
+// The suffix rule is the interesting part. A plug that is already OURS gets
+// "<label> · <our mDNS name>", because in the Shelly app there is no DustGate
+// UI to explain why a plug is spoken for. A plug that is merely UNCLAIMED —
+// renamed from the tray before it is paired with any tool — gets the bare
+// label: stamping ownership on a plug we have not taken would be a claim we
+// have not earned, and pairing will add the suffix when it is true.
+// ------------------------------------------------------------------
+static void handleOutletRenameRequest() {
+    char nameIp[40], nameLabel[48];
+    bool nameTakeover = false;
+    if (apiServer.consumeOutletNameRequest(nameIp, sizeof(nameIp),
+                                           nameLabel, sizeof(nameLabel),
+                                           nameTakeover)) {
+        StaticJsonDocument<256> resp;
+
+        // BOTH PROTOCOLS, and an IP says nothing about which. This built a
+        // ShellyGen2Outlet unconditionally until 2026-09-09, so renaming a
+        // Tasmota answered "not responding" — the plug was fine, we were
+        // knocking on /rpc/Switch.GetStatus, which a Tasmota does not serve.
+        // Found on hardware the first time a swept plug was renamed.
+        //
+        // Shelly first, matching describeOutletInto() and the default kind
+        // everywhere else; a Tasmota costs one failed Shelly poll.
+        ShellyGen2Outlet shellyPlug(nameIp, "rename");
+        TasmotaOutlet    tasPlug(nameIp, "rename");
+        bool isTasmota = false;
+        bool alive = shellyPlug.poll();
+        if (!alive && tasPlug.poll()) { alive = true; isTasmota = true; }
+        SmartOutlet* plugP = isTasmota ? (SmartOutlet*)&tasPlug
+                                       : (SmartOutlet*)&shellyPlug;
+
+        if (!alive) {
+            resp["ok"]    = false;
+            resp["error"] = "not responding";
+            DEBUG_PRINT(F("[RENAME] ")); DEBUG_PRINT(nameIp);
+            DEBUG_PRINTLN(F(" is not answering on either protocol — name unchanged."));
+        } else {
+            String  devName;
+            bool    claimKnown = false;
+            plugclaim::Claim claim;
+
+            if (isTasmota) {
+                // Mem1, not a push config — the same weaker claim
+                // plugclaim::decideMarker() documents. A Tasmota's name is
+                // its DeviceName rather than anything mDNS advertises,
+                // which matters here because a swept plug has no hostname
+                // at all.
+                tasPlug.readName(devName);
+                String marker;
+                claimKnown = tasPlug.readOwner(marker);
+                if (claimKnown)
+                    claim = plugclaim::decideMarker(marker.c_str(), control.ourName());
+            } else {
+                String wsServer; bool wsEnabled = false;
+                devName    = fetchShellyDeviceName(nameIp, 2);
+                claimKnown = shellyPlug.readPushConfig(wsServer, wsEnabled);
+                if (claimKnown) {
+                    claim = plugclaim::decide(wsServer.c_str(), wsEnabled,
+                                              control.ourHost(), devName.c_str(),
+                                              control.ourName());
+                }
+            }
+
+            // Same rule that governs repointing, applied to the name: never
+            // write a plug someone else owns — UNLESS a human said to. That
+            // is what `nameTakeover` is, and mayRepoint()'s `confirmed`
+            // argument has always existed for exactly this shape of answer.
+            //
+            // A read we could not make is "we don't know", and stays a no in
+            // both cases: overriding a refusal is a decision about a KNOWN
+            // owner, and we cannot show the user whose plug it is if we could
+            // not ask. Confirming a question nobody was able to pose is not
+            // consent.
+            //
+            // Note this only ever writes the NAME. The plug keeps reporting to
+            // whoever owns it; nothing over there stops working. Repointing is
+            // a separate, louder act — POST /api/outlets/takeover.
+            if (!claimKnown || !plugclaim::mayRepoint(claim, nameTakeover)) {
+                // String(), not c_str(): ArduinoJson stores a bare const char*
+                // BY REFERENCE, and claim/full die at the end of this block
+                // while serializeJson runs after it.
+                String why = claimKnown ? String(claim.reason.c_str())
+                                        : String("could not read who owns this plug");
+                resp["ok"]    = false;
+                resp["error"] = why;
+                DEBUG_PRINT(F("[RENAME] Refused for ")); DEBUG_PRINT(nameIp);
+                DEBUG_PRINT(F(" — ")); DEBUG_PRINTLN(why);
+            } else {
+                // The suffix says "this plug is being USED by that brain", so
+                // it goes on only when that is true. A plug renamed under an
+                // override still belongs to whoever it reports to, and an
+                // unclaimed plug renamed before pairing is not ours yet
+                // either — both get the bare label, and pairing adds the
+                // suffix later, when it has become true.
+                const bool ours  = (claim.state == plugclaim::State::Ours);
+                std::string full = ours
+                    ? plugclaim::formatName(nameLabel, control.ourName())
+                    : std::string(nameLabel);
+                bool ok = plugP->setName(full.c_str());
+                resp["ok"]    = ok;
+                resp["name"]  = String(full.c_str());   // what landed, suffix and all
+                resp["label"] = String(nameLabel);
+                if (!ok) resp["error"] = "the plug refused the name";
+                DEBUG_PRINT(F("[RENAME] ")); DEBUG_PRINT(nameIp);
+                DEBUG_PRINT(F(" -> \"")); DEBUG_PRINT(full.c_str());
+                DEBUG_PRINT(F("\" ")); DEBUG_PRINTLN(ok ? F("ok") : F("FAILED"));
+
+                // Keep the in-memory outlet's label in step, so the next
+                // status push doesn't report the name we just replaced —
+                // AND write it to NVS, or the rename lives only until the
+                // next reboot. The slot's stored name is what begin() loads
+                // and what every later provisioning pass writes back to the
+                // plug, so an unsaved rename is a rename that un-happens.
+                int slot = control.outletSlotByIp(nameIp);
+                SmartOutlet* configured = (slot >= 0) ? control.outlet(slot) : nullptr;
+                if (ok && configured) {
+                    configured->setName(full.c_str());
+                    control.saveSlot(slot);
+                }
+            }
+        }
+        String out; serializeJson(resp, out);
+        apiServer.respondOutletName(out);
+    }
+}
+
+// Plug RELEASE — the body of POST /api/outlets/release.
+//
+// ⚠️ ITS OWN FUNCTION SO ITS StaticJsonDocument LIVES IN ITS OWN FRAME, not in
+// loop()'s. See the stack note above setup(): loop() is one function, so a
+// document declared in a branch that never runs still reserves its bytes on
+// every pass.
+//
+// ------------------------------------------------------------------
+// Plug RELEASE — POST /api/outlets/release. The device half of unpairing.
+//
+// Best-effort BY DESIGN: the layout half (deleting sensor.outlet) is a plain
+// topology write the UI does regardless, because a plug you have unplugged is
+// exactly when you want to detach it. So this reports what it managed and
+// never blocks the unpair — see the endpoint comment in HttpApiServer.cpp.
+// ------------------------------------------------------------------
+static void handleOutletReleaseRequest() {
+    char relIp[40];
+    if (apiServer.consumeOutletReleaseRequest(relIp, sizeof(relIp))) {
+        StaticJsonDocument<256> resp;
+        SmartOutlet* configured = control.outletByIp(relIp);
+
+        // A poll-only plug was never written to — no suffix of ours on its
+        // name, no Ws config we touched. Saying "released" would imply we
+        // reached into someone else's device, which we did not.
+        if (configured && configured->isPollOnly()) {
+            resp["ok"]       = true;
+            resp["released"] = false;
+            resp["note"]     = "polled only — nothing was written to this plug";
+            DEBUG_PRINT(F("[RELEASE] ")); DEBUG_PRINT(relIp);
+            DEBUG_PRINTLN(F(" was poll-only — nothing to hand back."));
+        } else {
+            // Both protocols, the same way rename does — and for the same
+            // bug: a Tasmota unpaired through a Shelly-only path answers
+            // "not responding" while sitting there perfectly healthy, and
+            // keeps its Mem1 claim and its PowerLock forever.
+            ShellyGen2Outlet shellyRel(relIp, "release");
+            TasmotaOutlet    tasRel(relIp, "release");
+            bool relIsTasmota = false;
+            bool relAlive = shellyRel.poll();
+            if (!relAlive && tasRel.poll()) { relAlive = true; relIsTasmota = true; }
+
+            if (!relAlive) {
+                resp["ok"]       = false;
+                resp["released"] = false;
+                resp["error"]    = "not responding";
+                DEBUG_PRINT(F("[RELEASE] ")); DEBUG_PRINT(relIp);
+                DEBUG_PRINTLN(F(" is not answering on either protocol — it keeps whatever we wrote."));
+            } else if (relIsTasmota) {
+                // TasmotaOutlet::release() already does this properly:
+                // PowerLock off BEFORE clearing Mem1, so a part-way failure
+                // leaves a plug that is still ours and still operable.
+                // Nothing to restore — a Tasmota has no push target we could
+                // have repointed, which is the same reason it has no
+                // `foreign` claim state.
+                String devName;
+                bool nameOk = true;
+                if (tasRel.readName(devName)) {
+                    std::string lbl, own;
+                    plugclaim::parseName(devName.c_str(), lbl, own);
+                    if (!own.empty() && own == control.ourName())
+                        nameOk = tasRel.setName(lbl.c_str());
+                }
+                const bool relOk = tasRel.release();
+                resp["ok"]       = nameOk && relOk;
+                resp["released"] = true;
+                resp["restored"] = false;
+                if (!relOk)       resp["error"] = "the plug kept our claim";
+                else if (!nameOk) resp["error"] = "the plug kept our name";
+                DEBUG_PRINT(F("[RELEASE] ")); DEBUG_PRINT(relIp);
+                DEBUG_PRINT(F(" (tasmota) name=")); DEBUG_PRINT(nameOk ? F("ok") : F("FAILED"));
+                DEBUG_PRINT(F(" claim=")); DEBUG_PRINTLN(relOk ? F("cleared") : F("FAILED"));
+            } else {
+                ShellyGen2Outlet& plug = shellyRel;
+                // Name first, then push — the same ordering pairing uses, and
+                // for the same reason: a Ws write makes the plug reopen its
+                // socket and a name write landing on top of that gets lost.
+                String devName = fetchShellyDeviceName(relIp, 2);
+                std::string lbl, own;
+                plugclaim::parseName(devName.c_str(), lbl, own);
+                bool nameOk = true;
+                if (!own.empty() && own == control.ourName()) {
+                    nameOk = plug.setName(lbl.c_str());
+                    delay(150);
+                }
+
+                const char* restore = configured ? configured->previousPushUrl() : "";
+                bool pushOk = plug.releasePush(restore);
+
+                resp["ok"]       = nameOk && pushOk;
+                resp["released"] = true;
+                resp["restored"] = (restore && *restore);
+                if (!nameOk) resp["error"] = "the plug kept our name";
+                else if (!pushOk) resp["error"] = "the plug kept pushing to us";
+                DEBUG_PRINT(F("[RELEASE] ")); DEBUG_PRINT(relIp);
+                DEBUG_PRINT(F(" name=")); DEBUG_PRINT(nameOk ? F("ok") : F("FAILED"));
+                DEBUG_PRINT(F(" push=")); DEBUG_PRINTLN(pushOk ? F("ok") : F("FAILED"));
+            }
+        }
+        String out; serializeJson(resp, out);
+        apiServer.respondOutletRelease(out);
+    }
+}
+
+#endif  // CONTROL_SMART_OUTLET
 
 void loop() {
     watchdog::pet();   // we're alive this iteration
@@ -2994,37 +3324,7 @@ void loop() {
         }
     }
 
-    // Outlet ping — probe ONE IP, typed by a person, on the main loop (see
-    // consumePingRequest in HttpApiServer for why it's here rather than a
-    // spawned task).
-    //
-    // THIS IS THE "ADD IT BY IP" PATH, and until 2026-09-09 it could not carry
-    // its own name. It probed Shelly only and reported no ownership at all,
-    // which made it useless for the one device that most needs it: a Tasmota
-    // does not advertise over mDNS in a stock build, so discovery cannot see it
-    // and typing the address is the ONLY way in. The empty-discovery message
-    // below has been telling people to add plugs by IP for months, against a
-    // field that did not exist and an endpoint that would have answered
-    // "unreachable" if it had.
-    //
-    // It now answers with exactly the row discovery produces — same probe, same
-    // claim, same shape — so a plug added by hand is indistinguishable in the
-    // picker from one that was found. That sameness is the feature.
-    {
-        char pingIp[40];
-        if (apiServer.consumePingRequest(pingIp, sizeof(pingIp))) {
-            DEBUG_PRINT(F("[PING] ")); DEBUG_PRINTLN(pingIp);
-            StaticJsonDocument<512> resp;
-            JsonObject o = resp.to<JsonObject>();
-            // No hostname and no kind: an address is all the user gave us, so
-            // describeOutletInto() tries both protocols and reports which
-            // answered.
-            describeOutletInto(o, pingIp, nullptr,
-                               /*kindKnown=*/false, OUTLET_SHELLY, /*mdnsGen=*/0);
-            String out; serializeJson(resp, out);
-            apiServer.respondPing(out);
-        }
-    }
+    handlePingRequest();
 
     // Subnet sweep — ONE ADDRESS PER PASS. See control/OutletSweep.h for why it
     // is sliced this way rather than run to completion: a miss costs a full
@@ -3104,233 +3404,8 @@ void loop() {
         }
     }
 
-    // ------------------------------------------------------------------
-    // Plug RENAME — POST /api/outlets/name.
-    //
-    // On the main loop for the same reason ping is: Switch.SetConfig blocks on a
-    // device that may not answer.
-    //
-    // The suffix rule is the interesting part. A plug that is already OURS gets
-    // "<label> · <our mDNS name>", because in the Shelly app there is no DustGate
-    // UI to explain why a plug is spoken for. A plug that is merely UNCLAIMED —
-    // renamed from the tray before it is paired with any tool — gets the bare
-    // label: stamping ownership on a plug we have not taken would be a claim we
-    // have not earned, and pairing will add the suffix when it is true.
-    // ------------------------------------------------------------------
-    {
-        char nameIp[40], nameLabel[48];
-        bool nameTakeover = false;
-        if (apiServer.consumeOutletNameRequest(nameIp, sizeof(nameIp),
-                                               nameLabel, sizeof(nameLabel),
-                                               nameTakeover)) {
-            StaticJsonDocument<256> resp;
-
-            // BOTH PROTOCOLS, and an IP says nothing about which. This built a
-            // ShellyGen2Outlet unconditionally until 2026-09-09, so renaming a
-            // Tasmota answered "not responding" — the plug was fine, we were
-            // knocking on /rpc/Switch.GetStatus, which a Tasmota does not serve.
-            // Found on hardware the first time a swept plug was renamed.
-            //
-            // Shelly first, matching describeOutletInto() and the default kind
-            // everywhere else; a Tasmota costs one failed Shelly poll.
-            ShellyGen2Outlet shellyPlug(nameIp, "rename");
-            TasmotaOutlet    tasPlug(nameIp, "rename");
-            bool isTasmota = false;
-            bool alive = shellyPlug.poll();
-            if (!alive && tasPlug.poll()) { alive = true; isTasmota = true; }
-            SmartOutlet* plugP = isTasmota ? (SmartOutlet*)&tasPlug
-                                           : (SmartOutlet*)&shellyPlug;
-
-            if (!alive) {
-                resp["ok"]    = false;
-                resp["error"] = "not responding";
-                DEBUG_PRINT(F("[RENAME] ")); DEBUG_PRINT(nameIp);
-                DEBUG_PRINTLN(F(" is not answering on either protocol — name unchanged."));
-            } else {
-                String  devName;
-                bool    claimKnown = false;
-                plugclaim::Claim claim;
-
-                if (isTasmota) {
-                    // Mem1, not a push config — the same weaker claim
-                    // plugclaim::decideMarker() documents. A Tasmota's name is
-                    // its DeviceName rather than anything mDNS advertises,
-                    // which matters here because a swept plug has no hostname
-                    // at all.
-                    tasPlug.readName(devName);
-                    String marker;
-                    claimKnown = tasPlug.readOwner(marker);
-                    if (claimKnown)
-                        claim = plugclaim::decideMarker(marker.c_str(), control.ourName());
-                } else {
-                    String wsServer; bool wsEnabled = false;
-                    devName    = fetchShellyDeviceName(nameIp, 2);
-                    claimKnown = shellyPlug.readPushConfig(wsServer, wsEnabled);
-                    if (claimKnown) {
-                        claim = plugclaim::decide(wsServer.c_str(), wsEnabled,
-                                                  control.ourHost(), devName.c_str(),
-                                                  control.ourName());
-                    }
-                }
-
-                // Same rule that governs repointing, applied to the name: never
-                // write a plug someone else owns — UNLESS a human said to. That
-                // is what `nameTakeover` is, and mayRepoint()'s `confirmed`
-                // argument has always existed for exactly this shape of answer.
-                //
-                // A read we could not make is "we don't know", and stays a no in
-                // both cases: overriding a refusal is a decision about a KNOWN
-                // owner, and we cannot show the user whose plug it is if we could
-                // not ask. Confirming a question nobody was able to pose is not
-                // consent.
-                //
-                // Note this only ever writes the NAME. The plug keeps reporting to
-                // whoever owns it; nothing over there stops working. Repointing is
-                // a separate, louder act — POST /api/outlets/takeover.
-                if (!claimKnown || !plugclaim::mayRepoint(claim, nameTakeover)) {
-                    // String(), not c_str(): ArduinoJson stores a bare const char*
-                    // BY REFERENCE, and claim/full die at the end of this block
-                    // while serializeJson runs after it.
-                    String why = claimKnown ? String(claim.reason.c_str())
-                                            : String("could not read who owns this plug");
-                    resp["ok"]    = false;
-                    resp["error"] = why;
-                    DEBUG_PRINT(F("[RENAME] Refused for ")); DEBUG_PRINT(nameIp);
-                    DEBUG_PRINT(F(" — ")); DEBUG_PRINTLN(why);
-                } else {
-                    // The suffix says "this plug is being USED by that brain", so
-                    // it goes on only when that is true. A plug renamed under an
-                    // override still belongs to whoever it reports to, and an
-                    // unclaimed plug renamed before pairing is not ours yet
-                    // either — both get the bare label, and pairing adds the
-                    // suffix later, when it has become true.
-                    const bool ours  = (claim.state == plugclaim::State::Ours);
-                    std::string full = ours
-                        ? plugclaim::formatName(nameLabel, control.ourName())
-                        : std::string(nameLabel);
-                    bool ok = plugP->setName(full.c_str());
-                    resp["ok"]    = ok;
-                    resp["name"]  = String(full.c_str());   // what landed, suffix and all
-                    resp["label"] = String(nameLabel);
-                    if (!ok) resp["error"] = "the plug refused the name";
-                    DEBUG_PRINT(F("[RENAME] ")); DEBUG_PRINT(nameIp);
-                    DEBUG_PRINT(F(" -> \"")); DEBUG_PRINT(full.c_str());
-                    DEBUG_PRINT(F("\" ")); DEBUG_PRINTLN(ok ? F("ok") : F("FAILED"));
-
-                    // Keep the in-memory outlet's label in step, so the next
-                    // status push doesn't report the name we just replaced —
-                    // AND write it to NVS, or the rename lives only until the
-                    // next reboot. The slot's stored name is what begin() loads
-                    // and what every later provisioning pass writes back to the
-                    // plug, so an unsaved rename is a rename that un-happens.
-                    int slot = control.outletSlotByIp(nameIp);
-                    SmartOutlet* configured = (slot >= 0) ? control.outlet(slot) : nullptr;
-                    if (ok && configured) {
-                        configured->setName(full.c_str());
-                        control.saveSlot(slot);
-                    }
-                }
-            }
-            String out; serializeJson(resp, out);
-            apiServer.respondOutletName(out);
-        }
-    }
-
-    // ------------------------------------------------------------------
-    // Plug RELEASE — POST /api/outlets/release. The device half of unpairing.
-    //
-    // Best-effort BY DESIGN: the layout half (deleting sensor.outlet) is a plain
-    // topology write the UI does regardless, because a plug you have unplugged is
-    // exactly when you want to detach it. So this reports what it managed and
-    // never blocks the unpair — see the endpoint comment in HttpApiServer.cpp.
-    // ------------------------------------------------------------------
-    {
-        char relIp[40];
-        if (apiServer.consumeOutletReleaseRequest(relIp, sizeof(relIp))) {
-            StaticJsonDocument<256> resp;
-            SmartOutlet* configured = control.outletByIp(relIp);
-
-            // A poll-only plug was never written to — no suffix of ours on its
-            // name, no Ws config we touched. Saying "released" would imply we
-            // reached into someone else's device, which we did not.
-            if (configured && configured->isPollOnly()) {
-                resp["ok"]       = true;
-                resp["released"] = false;
-                resp["note"]     = "polled only — nothing was written to this plug";
-                DEBUG_PRINT(F("[RELEASE] ")); DEBUG_PRINT(relIp);
-                DEBUG_PRINTLN(F(" was poll-only — nothing to hand back."));
-            } else {
-                // Both protocols, the same way rename does — and for the same
-                // bug: a Tasmota unpaired through a Shelly-only path answers
-                // "not responding" while sitting there perfectly healthy, and
-                // keeps its Mem1 claim and its PowerLock forever.
-                ShellyGen2Outlet shellyRel(relIp, "release");
-                TasmotaOutlet    tasRel(relIp, "release");
-                bool relIsTasmota = false;
-                bool relAlive = shellyRel.poll();
-                if (!relAlive && tasRel.poll()) { relAlive = true; relIsTasmota = true; }
-
-                if (!relAlive) {
-                    resp["ok"]       = false;
-                    resp["released"] = false;
-                    resp["error"]    = "not responding";
-                    DEBUG_PRINT(F("[RELEASE] ")); DEBUG_PRINT(relIp);
-                    DEBUG_PRINTLN(F(" is not answering on either protocol — it keeps whatever we wrote."));
-                } else if (relIsTasmota) {
-                    // TasmotaOutlet::release() already does this properly:
-                    // PowerLock off BEFORE clearing Mem1, so a part-way failure
-                    // leaves a plug that is still ours and still operable.
-                    // Nothing to restore — a Tasmota has no push target we could
-                    // have repointed, which is the same reason it has no
-                    // `foreign` claim state.
-                    String devName;
-                    bool nameOk = true;
-                    if (tasRel.readName(devName)) {
-                        std::string lbl, own;
-                        plugclaim::parseName(devName.c_str(), lbl, own);
-                        if (!own.empty() && own == control.ourName())
-                            nameOk = tasRel.setName(lbl.c_str());
-                    }
-                    const bool relOk = tasRel.release();
-                    resp["ok"]       = nameOk && relOk;
-                    resp["released"] = true;
-                    resp["restored"] = false;
-                    if (!relOk)       resp["error"] = "the plug kept our claim";
-                    else if (!nameOk) resp["error"] = "the plug kept our name";
-                    DEBUG_PRINT(F("[RELEASE] ")); DEBUG_PRINT(relIp);
-                    DEBUG_PRINT(F(" (tasmota) name=")); DEBUG_PRINT(nameOk ? F("ok") : F("FAILED"));
-                    DEBUG_PRINT(F(" claim=")); DEBUG_PRINTLN(relOk ? F("cleared") : F("FAILED"));
-                } else {
-                    ShellyGen2Outlet& plug = shellyRel;
-                    // Name first, then push — the same ordering pairing uses, and
-                    // for the same reason: a Ws write makes the plug reopen its
-                    // socket and a name write landing on top of that gets lost.
-                    String devName = fetchShellyDeviceName(relIp, 2);
-                    std::string lbl, own;
-                    plugclaim::parseName(devName.c_str(), lbl, own);
-                    bool nameOk = true;
-                    if (!own.empty() && own == control.ourName()) {
-                        nameOk = plug.setName(lbl.c_str());
-                        delay(150);
-                    }
-
-                    const char* restore = configured ? configured->previousPushUrl() : "";
-                    bool pushOk = plug.releasePush(restore);
-
-                    resp["ok"]       = nameOk && pushOk;
-                    resp["released"] = true;
-                    resp["restored"] = (restore && *restore);
-                    if (!nameOk) resp["error"] = "the plug kept our name";
-                    else if (!pushOk) resp["error"] = "the plug kept pushing to us";
-                    DEBUG_PRINT(F("[RELEASE] ")); DEBUG_PRINT(relIp);
-                    DEBUG_PRINT(F(" name=")); DEBUG_PRINT(nameOk ? F("ok") : F("FAILED"));
-                    DEBUG_PRINT(F(" push=")); DEBUG_PRINTLN(pushOk ? F("ok") : F("FAILED"));
-                }
-            }
-            String out; serializeJson(resp, out);
-            apiServer.respondOutletRelease(out);
-        }
-    }
+    handleOutletRenameRequest();
+    handleOutletReleaseRequest();
 #endif // CONTROL_SMART_OUTLET
 
     // ------------------------------------------------------------------

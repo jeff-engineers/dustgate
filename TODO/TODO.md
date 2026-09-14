@@ -10,33 +10,32 @@ reasoning was contested, or that a still-open item above leans on.
 
 ## Bugs
 
-- **loop() is one enormous frame, and that is now a crash waiting to happen
-  (2026-09-12).** A stack protection fault on a collector board at boot —
+- **loop() is still one enormous function — LANDED 2026-09-14, keep watching.**
+  A stack protection fault on a collector board at boot, 2026-09-12:
   `SP 0x4085d060` against bounds `0x4085d068`, canary `0xabba1234` on the
   pointer, a half-built status JSON in the stack dump.
 
-  The mechanism is worth knowing because it will recur: **loop() is a single
-  function, so every `StaticJsonDocument` declared anywhere inside it reserves
-  space in the SAME frame whether or not that branch runs.** Four live there
-  (2×512, 2×256) and nothing is individually unreasonable.
+  The mechanism is worth keeping even though this is fixed, because it will
+  recur: **loop() is a single function, so every `StaticJsonDocument` declared
+  anywhere inside it reserves space in the SAME frame whether or not that branch
+  runs.**
 
-  Patched two ways: `SET_LOOP_TASK_STACK_SIZE(16 * 1024)` (was 8 KB), and the
-  sweep's probe extracted into `sweepProbeOne()` so its document costs a frame
-  only while probing.
+  Done: `SET_LOOP_TASK_STACK_SIZE(16 * 1024)` (was 8 KB), `sweepProbeOne()`, and
+  then ping, rename and release pulled out into their own functions — a `<512>`
+  and two `<256>`s that had been resident on every pass to serve requests that
+  arrive a handful of times in a shop's life. **loop() now declares no
+  StaticJsonDocument at all**; the four remaining documents in it are
+  `DynamicJsonDocument`, which are heap.
 
-  **Neither is the fix.** loop() keeps growing, nobody notices a frame getting
-  bigger, and the failure mode is a reboot loop on a board in a shop rather
-  than a compile error. The real work is pulling the deferred-reply handlers —
-  ping, rename, release, discover — out of loop() into their own functions, the
-  way `sweepProbeOne` and `runRfScan` now are. Each is self-contained; it is
-  mechanical, just not free.
+  Also done, and the part that matters from here: the boot banner prints
+  `uxTaskGetStackHighWaterMark()`. **Baseline measured on hardware 2026-09-14:
+  13644 bytes free of 16384**, on a primary with a screen. A number that shrinks
+  release over release is the warning nobody used to get — that is the whole
+  reason it is printed, so compare it rather than glancing at it.
 
-  Worth adding a high-water check while it is fresh:
-  `uxTaskGetStackHighWaterMark(NULL)` on the loop task, printed with the boot
-  banner. A number that shrinks release over release is the warning nobody
-  currently gets.
-
-
+  What is NOT done: loop() is still ~1800 lines and will keep growing, and
+  nothing enforces any of this. The next thing to extract when it bites is
+  whatever has grown a document since.
 
 - **Can the collector node run on ONE brick? (2026-09-11, decides a purchase.)**
 
