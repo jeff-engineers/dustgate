@@ -65,92 +65,29 @@ reasoning was contested, or that a still-open item above leans on.
   C only with evidence.
 
 
-- **A multi-channel Tasmota meter reads 0 W, confidently (2026-09-10).**
-  `TasmotaOutlet::doPoll()` filters `StatusSNS.ENERGY.Power` and calls
-  `p.as<float>()`. On a multi-channel device — the Athom EM2/EM6, which
-  `docs/tool-sensing-rfc.md` §6.0 now recommends over building our own — Tasmota
-  reports `Power` as an ARRAY, and `as<float>()` on a JSON array yields 0.0.
+- **Pick a CHANNEL on a multi-channel Tasmota meter (2026-09-10; half done
+  2026-09-14).** `TasmotaOutlet::doPoll()` now DETECTS `Power` as an array and
+  refuses the plug loudly — unreachable, with a log line naming the EM2/EM6 and
+  saying it will not guess a channel — instead of `as<float>()`ing an array to
+  0.0 and reporting a working meter as a tool that is never on, forever.
 
-  That is a working meter reported as a tool that is never on, forever. The
-  guard directly beneath it catches a MISSING ENERGY block for exactly this
-  reason ("`| 0.0f` would make a tool never on, forever") and does not fire
-  here, because an array is present.
+  What is left is the actual feature: `sensor.outlet.channel` (absent = scalar),
+  a UI to choose it, and the model/firmware pair to carry it. §6.0 of
+  `docs/tool-sensing-rfc.md` lists what else it drags in.
 
-  **Refuse loudly first.** Detect `p.is<JsonArray>()` and report unreachable
-  with a distinct reason, before any attempt at channel support — a meter
-  silently watching the wrong channel is worse than one that says it cannot
-  cope. Channel selection (`sensor.outlet.channel`, absent = scalar) is the
-  follow-up, and §6.0 lists what else it drags in.
-
-  **This bites on the FIRST EM2, not on the first ganged pair.** The device has
-  two channels in hardware whether or not both have a clamp on them, so it
-  reports an array either way. There is no single-tool configuration that
-  avoids it — a lone tool on an EM2 reads 0 W just as thoroughly as two.
-
-  (The 100 cm CT leads mean both channels must reach from one box, so in
-  practice most installs are one tool per meter at ~$29 rather than two at
-  ~$15. That makes the array the normal case, not the edge one.)
-
+  Still true, and the reason this is not a nice-to-have: **it bites on the FIRST
+  EM2, not on the first ganged pair.** The device has two channels in hardware
+  whether or not both are clamped, so it answers with an array either way. Until
+  the channel work lands, an EM2 is a plug DustGate can see and cannot use — which
+  is now at least a visible refusal rather than a silent zero.
 
 - **Calibrate isn't reachable from the /gates page.** Opening a gate there
   (`http://dustgate.local/#/  gates`) offers no calibrate option, so the only way
   in is whatever other path still has one. Find where the entry point went and
   put it back on that page.
 
-- **`volatile int _nodeLinkClients` is deprecated, and the deprecation is
-  pointing at a real bug (2026-09-09, jeff).** The only two warnings in a clean
-  build, both in `firmware/api/HttpApiServer.cpp`:
-
-  ```
-  264: '++' expression of 'volatile'-qualified type is deprecated [-Wvolatile]
-  269: '--' expression of 'volatile'-qualified type is deprecated [-Wvolatile]
-  ```
-
-  Worth more than a silencing. `volatile` was never a threading primitive — it
-  stops the compiler caching the value and nothing else, so `_nodeLinkClients++`
-  is still a non-atomic read-modify-write. The counter is incremented and
-  decremented from AsyncWebServer's callbacks and read from `loop()`
-  (`nodeLinkConnected()`, and the guard at `.cpp:502`), so two events landing
-  together can lose one — leaving the primary believing a node is connected when
-  none is, or the reverse. C++20 deprecated exactly this construct because it
-  reads as atomic and is not.
-
-  The fix is `std::atomic<int>`, which is what the code has been pretending
-  `volatile` meant. Not urgent: NodeLink connections are rare and the window is
-  tiny, which is also why it would be miserable to find later.
-
-  The other three envs (`xiao_c5`, `xiao_c5_linear`, and the benches) build with
-  no warnings at all, so this is the whole list.
 
 ## UI
-
-- **/settings still asks for a gate count, and nothing should (jeff,
-  2026-09-11.)** `settings.component.ts` has a "Number of gates" field (1..16)
-  with its own Save button, calling `api.setNumGates()`. It predates sliders
-  being configured per-rack: **the count is a property of each slider now**, set
-  where the slider is, so a shop-wide number in Settings is at best redundant
-  and at worst a second answer to the same question.
-
-  Three things to check before pulling it, because it is not only a template
-  edit:
-
-  - **`max="16"` is already wrong.** `NUM_STOPS` dropped to 8 on 2026-09-05 and
-    this input never followed — so today it will happily offer a number the
-    firmware rejects. That alone makes it worth removing rather than leaving.
-  - **What still calls `setNumGates()`** and whether the endpoint retires with
-    the field, or is kept because the calibration path uses it. Check
-    `g_numActiveStops` and the `set_num_gates` route before deleting either.
-  - **The hint text says "Lowering this clears trained positions beyond the new
-    count"**, which means this field has a destructive side effect. Whatever
-    replaces it needs to keep that guarantee wherever the per-slider count is
-    now edited — silently orphaned stops are worse than a redundant field.
-
-
-
-- **Add a banner indicating demo mode, not driving real hardware** I've shown 
-  this off to people via the vercel app, and immediately been asked "Oh am I 
-  controlling your shop?" - need to make it clear when we're not actively
-  controlling hardwares
 
 - **Replace drag-to-branch on a duct with "move this run here" (2026-09-07,
   jeff).** Today, dragging a branch dot tees in a passive leg. The more useful
@@ -174,17 +111,6 @@ reasoning was contested, or that a still-open item above leans on.
   not critical. It is also the only route to the UPWARD case D-71 deliberately
   left out: a piece dragged up into the seam is itself what closes the gap, so
   reopening one means moving the system above.
-
-- **Expose the /boards page** the way tools and gates are exposed. The route
-  exists (`app.routes.ts`) and the screen is real, but nothing in the app's own
-  navigation points at it — the only way in is the canvas: right-click a board →
-  "Board setup…" (`goBoards()`), or type the URL.
-
-  Removing a node is no longer part of this: the canvas board menu offers
-  **"Unpair board…"** directly as of 2026-09-07 (D-64), confirmed rather than
-  undoable, greyed while gates still name the board. What is left here is the
-  navigation — /boards is still reachable only from the canvas or by typing the
-  URL, and it is the screen for channels, pairing and the board list.
 
 - **Move all the setup buttons on the bottom of /shop to a dropdown menu** on the top
   right of the page
