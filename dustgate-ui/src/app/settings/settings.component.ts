@@ -1,12 +1,7 @@
 import { Component, OnInit, ChangeDetectionStrategy, ChangeDetectorRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
 import { ApiService } from '../services/api.service';
-import { HardwareProfileService, PortSize } from '../services/hardware-profile.service';
-import type { Topology } from '@topology';
-import { DEFAULT_COLLECTOR_OFF_DELAY_MS } from '@topology-device';
-import { toShop, systemsOf, type ShopDoc, type RawEl } from '../services/shop-doc';
 
 /**
  * SettingsComponent — device configuration hub, reached via the gear icon.
@@ -16,7 +11,7 @@ import { toShop, systemsOf, type ShopDoc, type RawEl } from '../services/shop-do
 @Component({
   selector: 'app-settings',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule],
   changeDetection: ChangeDetectionStrategy.OnPush,
   styles: [`
     :host {
@@ -207,79 +202,15 @@ import { toShop, systemsOf, type ShopDoc, type RawEl } from '../services/shop-do
         </button>
       </div>
 
-      <!-- Dust collection -->
-      <!-- Per collector, because that is where the value lives: offDelayMs is a
-           field on the collector element, and a two-collector shop can legitimately
-           want a big cyclone to wind down slowly and a shopvac to cut straight
-           away. With one collector — nearly every shop — this renders as the single
-           control it reads like. -->
-      <div class="section">
-        <span class="section-title">Dust collection</span>
-
-        <div class="row">
-          <div>
-            <div class="row-label">Coast-down</div>
-            <div class="row-hint">
-              Seconds the collector keeps running after the last tool switches off.
-              Clears the duct instead of leaving it packed, and stops the blower
-              short-cycling between cuts. 0 = cut immediately.
-            </div>
-          </div>
-        </div>
-
-        <div class="row" *ngFor="let c of coasts">
-          <!-- The name only earns its place when there's more than one to tell
-               apart; on a one-collector shop it is noise above a single field. -->
-          <span class="row-label" *ngIf="coasts.length > 1">{{ c.name }}</span>
-          <input type="number" min="0" max="120" [(ngModel)]="c.seconds" (ngModelChange)="clearStatus()" />
-        </div>
-
-        <!-- Right-aligned like every other Save on this page. One button rather
-             than one per collector: the shop is written whole, so a partial save
-             isn't a thing the document can express. -->
-        <div class="row" *ngIf="coasts.length" style="justify-content: flex-end">
-          <button class="save-btn" [disabled]="savingCoast" (click)="saveCoast()">
-            {{ savingCoast ? 'Saving…' : 'Save' }}
-          </button>
-        </div>
-
-        <div class="row-hint" *ngIf="!coasts.length">
-          No dust collector yet — draw the shop layout first and this will follow it.
-        </div>
-      </div>
-
-      <!-- Hardware -->
-      <div class="section">
-        <span class="section-title">Hardware</span>
-
-        <!-- NO "Number of gates" HERE ANY MORE (removed 2026-09-14).
-             The count is a property of each SLIDER, set where the slider is
-             calibrated — so a shop-wide number in Settings was a second answer
-             to a question that already had one, and the two could disagree.
-             Its max was 16 and NUM_STOPS has been 8 since 2026-09-05, so it
-             cheerfully offered numbers the firmware rejects.
-
-             The destructive promise it carried — "lowering this clears trained
-             positions beyond the new count" — is not lost: the calibration
-             sweep clears EVERY stop before placing the new array
-             (firmware.ino, resetStopRoles() and the loop after it), which is
-             the stronger guarantee.
-
-             POST /api/config/gates stays. It is exercised by
-             shared/device-model/conformance.js and implemented by the mock and
-             the device; nothing was wrong with the endpoint, only with asking
-             the question twice. -->
-
-        <div class="row">
-          <span class="row-label">Port size</span>
-          <select [ngModel]="portSize" (ngModelChange)="setPortSize($event)">
-            <option value="2.5in">2.5"</option>
-            <!-- 4" disabled until real 4" hardware exists to measure its profile;
-                 logic (PortSize '4in', rockler-4) kept for later. -->
-            <option value="4in" disabled>4" (soon)</option>
-          </select>
-        </div>
-      </div>
+      <!-- NO "Hardware" SECTION ANY MORE (2026-09-14). It held one control,
+           "Port size", and that control was wrong twice over: the size is a
+           property of each RACK — the calibration screen asks for the manifold
+           by name before anything else, and a shop can hold a 2½" rack and a 4"
+           one — and the dropdown could not be changed regardless, because its
+           4" option was disabled. Its one consumer, the overlap guard in
+           ApiService.checkStopConflict(), now takes the pitch from the rack
+           being calibrated. Coast-down left with it: it lives on each collector,
+           edited where that collector is set up. -->
 
       <div class="status-msg" *ngIf="statusMsg">{{ statusMsg }}</div>
       <div class="error-msg" *ngIf="errorMsg">⚠ {{ errorMsg }}</div>
@@ -314,8 +245,6 @@ import { toShop, systemsOf, type ShopDoc, type RawEl } from '../services/shop-do
 })
 export class SettingsComponent implements OnInit {
 
-  portSize: PortSize = '2.5in';
-
   /** One action at a time on this page. It was called `savingNumGates` and was
    *  already the flag for every call by the time that field was removed — a
    *  name that outlived the only thing it described. */
@@ -324,89 +253,25 @@ export class SettingsComponent implements OnInit {
   confirmingReset      = false;
   confirmingWifiReset  = false;
 
-  /** One row per collector in the saved shop — see the template's note on why
-   *  this is per collector rather than one device-wide number. */
-  coasts: { systemId: string; name: string; seconds: number }[] = [];
-  savingCoast = false;
-  private doc: ShopDoc | null = null;
-
   statusMsg = '';
   errorMsg  = '';
 
   constructor(
     public api: ApiService,
     private router: Router,
-    private hardwareProfile: HardwareProfileService,
     private cd: ChangeDetectorRef
   ) {}
 
   ngOnInit() {
-    this.portSize = this.hardwareProfile.portSize;
     // Nothing here waits on deviceInfo any more: the only reader was the gate
     // count, and the wait went with it. (It was a whenReady() rather than a
     // subscribe() on purpose — this component has no ngOnDestroy, so a bare
     // subscribe on an app-lifetime BehaviorSubject leaked one destroyed
     // component per visit. Worth knowing before adding another.)
-    void this.loadCoasts();
   }
 
   /** A missing layout is normal, not an error — someone can open Settings on a
    *  device they have not drawn a shop on yet. */
-  private async loadCoasts(): Promise<void> {
-    try {
-      this.doc = toShop(await this.api.getTopology());
-    } catch {
-      this.doc = null;
-    }
-    this.coasts = [];
-    for (const sys of systemsOf(this.doc)) {
-      const c = (sys.elements || []).find(e => (e as RawEl)['type'] === 'collector') as RawEl | undefined;
-      if (!c) continue;
-      const control = (c['control'] ?? {}) as RawEl;
-      const ms = typeof control['offDelayMs'] === 'number'
-        ? control['offDelayMs'] as number
-        : DEFAULT_COLLECTOR_OFF_DELAY_MS;
-      this.coasts.push({
-        systemId: sys.id,
-        name: (c['name'] as string) || sys.name || 'Dust collector',
-        // Whole seconds in the UI: the field is milliseconds because firmware
-        // counts in them, but nobody sets a coast-down to 4.25 s.
-        seconds: Math.round(ms / 1000),
-      });
-    }
-    this.cd.markForCheck();
-  }
-
-  /** Writes every collector in one PUT — the document is saved whole, so a
-   *  per-collector endpoint would just be the same write with more steps. */
-  async saveCoast(): Promise<void> {
-    if (!this.doc) return;
-    this.savingCoast = true;
-    this.statusMsg = '';
-    this.errorMsg  = '';
-    this.cd.markForCheck();
-    try {
-      for (const row of this.coasts) {
-        const sys = systemsOf(this.doc).find(x => x.id === row.systemId);
-        const c = (sys?.elements || []).find(e => (e as RawEl)['type'] === 'collector') as RawEl | undefined;
-        if (!c) continue;
-        const secs = Math.max(0, Math.min(120, Math.round(row.seconds)));
-        row.seconds = secs;
-        // Merge, never replace: `control` also carries the collector's plug.
-        c['control'] = { ...((c['control'] ?? {}) as RawEl), offDelayMs: secs * 1000 };
-      }
-      await this.api.putTopology(this.doc as unknown as Topology);
-      this.statusMsg = 'Coast-down saved.';
-    } catch {
-      // The likeliest cause is a half-drawn shop the controller won't accept —
-      // saying "check connection" would send someone hunting the wrong fault.
-      this.errorMsg = 'Could not save. If the shop layout is unfinished, finish it first.';
-    } finally {
-      this.savingCoast = false;
-      this.cd.markForCheck();
-    }
-  }
-
   back()            { this.router.navigate(['/']); }
   goSetup()         { this.router.navigate(['/build']); }
 
@@ -426,14 +291,6 @@ export class SettingsComponent implements OnInit {
       this[busyFlag] = false;
       this.cd.markForCheck();
     }
-  }
-
-  setPortSize(size: PortSize) {
-    this.portSize = size;
-    this.hardwareProfile.set(size);
-    this.statusMsg = 'Port size saved.';
-    this.errorMsg = '';
-    this.cd.markForCheck();
   }
 
   confirmReset() {

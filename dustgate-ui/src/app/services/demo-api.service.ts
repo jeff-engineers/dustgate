@@ -12,7 +12,6 @@ import {
   OutletConfigCmd,
   SystemStatus,
 } from './api.service';
-import { HardwareProfileService } from './hardware-profile.service';
 import * as model from '@device-model';
 import { validateTopology, type Topology } from '@topology';
 import { isShop, systemsOf, validateShop } from '@shop';
@@ -56,8 +55,8 @@ export class DemoApiService extends ApiService {
   /** topology-native device (seeded with DEMO_TOPOLOGY, or with what you saved). */
   private td: TopologyDevice | null = createTopologyDevice(DEMO_TOPOLOGY);
 
-  constructor(http: HttpClient, hardwareProfile: HardwareProfileService) {
-    super(http, hardwareProfile);
+  constructor(http: HttpClient) {
+    super(http);
     // super() triggers init() via the parent ctor; our override runs instead.
     // The simulated brain's own capability follows the demo layout — see
     // syncHasLinear(). Without it the demo shipped a servo brain reporting a
@@ -300,11 +299,11 @@ export class DemoApiService extends ApiService {
 
   // ── Calibration ───────────────────────────────────────────────────────────────
 
-  override async saveStop(index: number): Promise<{ ok: boolean }> {
+  override async saveStop(index: number, expectedSpacingMm?: number): Promise<{ ok: boolean }> {
     // Client-side friendly pre-check (throws a helpful message) stays in the base
     // ApiService; the model then applies the device-level behaviour (an overlap
     // is silently skipped, matching firmware).
-    this.checkStopConflict(index, this.d.positionMM);
+    this.checkStopConflict(index, this.d.positionMM, expectedSpacingMm);
     model.saveStop(this.d, index);
     this.syncInfo();
     this.pushStatus();

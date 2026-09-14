@@ -347,7 +347,10 @@ export class LinearCalibrationComponent implements OnInit, OnDestroy {
     if (!st || this.busy) return;
     this.busy = true; this.error = '';
     try {
-      await this.api.saveStop(this.index + 1);
+      // The pitch of the rack being calibrated, not a shop-wide setting: the
+      // overlap guard is about THIS manifold, and a shop can hold both sizes.
+      await this.api.saveStop(this.index + 1,
+                              MANIFOLDS.find((x) => x.id === this.model)?.pitchMm ?? undefined);
       this.positions.set(st.id, this.liveMm);
     } catch (e: unknown) {
       // Two shapes reach here, and the local one used to be thrown away.

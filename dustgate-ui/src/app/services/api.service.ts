@@ -1,9 +1,9 @@
 import { Injectable } from '@angular/core';
 import { HttpClient, HttpErrorResponse, HttpHeaders } from '@angular/common/http';
 import { BehaviorSubject, Observable, Subject, filter, firstValueFrom, take } from 'rxjs';
-import { HardwareProfileService } from './hardware-profile.service';
 import type { Topology } from '@topology';
 import type { TopologyStatus } from '@topology-device';
+import { MANIFOLD_PROFILES } from '@device-model';
 
 // Re-export so components/services can import topology types from one place.
 export type { Topology } from '@topology';
@@ -224,7 +224,7 @@ export class ApiService {
   /** Current /api/info retry delay, doubled on each failure up to a minute. */
   private infoRetryMs = 3000;
 
-  constructor(protected http: HttpClient, protected hardwareProfile: HardwareProfileService) {
+  constructor(protected http: HttpClient) {
     // Deferred to a microtask so subclass field initializers (which run after
     // super() returns) are set before an overridden init() can read them.
     queueMicrotask(() => this.init());
@@ -570,7 +570,7 @@ export class ApiService {
    * Save current motor position as a numbered stop.
    * Call while the motor is stationary at the desired gate position.
    */
-  saveStop(index: number) {
+  saveStop(index: number, expectedSpacingMm?: number) {
     // NOT `?? 0`. positionMM is absent on firmware that doesn't publish it, and
     // defaulting to 0 made the guard compare every save against the datum — so a
     // gate legitimately saved near home tripped a conflict that wasn't one, and
@@ -578,7 +578,7 @@ export class ApiService {
     // where the carriage is means there is nothing to check, not that it is at
     // zero; the device does its own overlap check regardless.
     const mm = this.status$.value?.positionMM;
-    if (typeof mm === 'number') this.checkStopConflict(index, mm);
+    if (typeof mm === 'number') this.checkStopConflict(index, mm, expectedSpacingMm);
     return this.post('/api/setstop', { index });
   }
 
@@ -586,15 +586,29 @@ export class ApiService {
    * Guards against saving two gates on top of each other. Only compares
    * against other saved GATES — home (stop 0) is excluded, since a gate
    * legitimately being close to home isn't a conflict the same way two gates
-   * overlapping is. Minimum separation is half the expected gate spacing for
-   * the selected port size — loose enough to tolerate 3D-printed rack/pinion
-   * tolerance and non-uniform spacing, but tight enough to catch "forgot to
-   * jog" / accidental re-saves.
+   * overlapping is. Minimum separation is half the expected gate spacing —
+   * loose enough to tolerate 3D-printed rack/pinion tolerance and non-uniform
+   * spacing, but tight enough to catch "forgot to jog" / accidental re-saves.
+   *
+   * THE SPACING COMES FROM THE RACK BEING CALIBRATED, passed in by the caller
+   * (2026-09-14). It used to come from a shop-wide "port size" in Settings,
+   * which was wrong in two ways at once: a shop can hold a 2½" rack and a 4"
+   * rack, so one of them always got the other's guard — and the Settings
+   * control could not be changed anyway, since its 4" option was disabled. The
+   * calibration screen has always known the real answer, because choosing the
+   * manifold is the first thing it asks.
+   *
+   * Falls back to the 2½" pitch when the caller does not say — the only rack
+   * anyone has built, and a guard with a plausible number beats no guard; the
+   * device does its own overlap check regardless. Taken from MANIFOLD_PROFILES
+   * rather than typed here, so this cannot become a fourth copy of 82.9 that
+   * nobody knows to change.
    */
-  protected checkStopConflict(index: number, mm: number): void {
+  protected checkStopConflict(index: number, mm: number, expectedSpacingMm?: number): void {
     const stops = this.status$.value?.stops ?? [];
     const numGates = this.deviceInfo?.numStops ?? Infinity;
-    const minSpacingMm = this.hardwareProfile.expectedGateSpacingMm * 0.5;
+    const fallback = MANIFOLD_PROFILES['rockler-2.5']?.gatePitchMm ?? 82.9;
+    const minSpacingMm = (expectedSpacingMm ?? fallback) * 0.5;
     for (const s of stops) {
       if (s.index === index || s.index === 0) continue;
       if (s.index > numGates) continue; // beyond the currently configured gate count — stale, not a real gate
