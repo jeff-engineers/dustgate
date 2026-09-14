@@ -374,18 +374,22 @@ export class DemoApiService extends ApiService {
     };
   }
 
-  override async startOutletSweep(): Promise<SweepProgress> {
+  // Returns void, matching the real device: a start cannot report progress,
+  // because on hardware it only sets a flag the main loop picks up later. The
+  // demo still STARTS the sweep — it just refuses to hand back a status the real
+  // thing could not, so the polling path gets exercised here the same way.
+  override async startOutletSweep(): Promise<void> {
     await this.delay(200);
-    return this.sweep(model.startSweep(this.d));
+    model.startSweep(this.d);
   }
 
   override async outletSweepProgress(): Promise<SweepProgress> {
     return this.sweep(model.sweepProgress(this.d));
   }
 
-  override async cancelOutletSweep(): Promise<SweepProgress> {
+  override async cancelOutletSweep(): Promise<void> {
     await this.delay(150);
-    return this.sweep(model.cancelSweep(this.d));
+    model.cancelSweep(this.d);
   }
 
   override async discoverOutlets(): Promise<DiscoveredOutlet[]> {

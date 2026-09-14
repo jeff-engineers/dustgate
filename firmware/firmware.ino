@@ -1413,16 +1413,52 @@ static OutletSweep g_sweep;
 // protection fault: the StaticJsonDocument below reserved space in loop()'s
 // single enormous frame even on the passes where no sweep was running. Here it
 // costs a frame only while it is actually probing.
+// TWO PHASES, BECAUSE ONE TIMEOUT WAS SERVING TWO OPPOSITE JOBS (2026-09-13).
+//
+// This used to be a single full HTTP GET with a 250 ms budget, and that budget
+// is right for exactly one of the two things a sweep does:
+//
+//   - ~250 addresses have NOTHING at them. Each costs the whole timeout, and
+//     that product IS the sweep's runtime. The budget must be small.
+//   - ~1 address has the plug we are looking for, and answering takes a TCP
+//     handshake, a request, and a CHUNKED response. Tasmota ships with
+//     `Sleep 50`, so an ESP8285 can add up to 50 ms of latency PER ROUND TRIP —
+//     four to six of them here, which lands at 200-300 ms. Right at or past the
+//     budget. The budget must be generous.
+//
+// One number cannot be both, and the old code resolved it in favour of the 250
+// empty addresses — so a healthy, present plug could be missed while the sweep
+// reported a clean "found nothing", which is the worst answer available. The
+// header comment already named this as the first thing to suspect; it was right.
+//
+// So: phase 1 asks only "is anything listening on port 80" with the tight
+// budget, and phase 2 runs the real probe with a generous one on the handful
+// that said yes. Runtime barely moves — the expensive half now runs a few times
+// instead of 254 — and a slow plug stops being invisible.
+//
+// THE COST, stated plainly: every device on the subnet that serves HTTP and is
+// NOT a Tasmota (a router, a printer, another DustGate board) now costs the
+// phase-2 timeout instead of the phase-1 one. Ten of those adds ~12 s to a ~60 s
+// sweep. That is the right trade against silently missing the plug.
+static const uint32_t kSweepConnectMs = 250;   // phase 1 — is anything there?
+static const uint32_t kSweepProbeMs   = 1200;  // phase 2 — let a slow plug answer
+
 static void sweepProbeOne(const char* ip) {
-    // A SHORT timeout is the whole budget. An address with nothing at it never
-    // answers, so it costs the full timeout — and that is almost every address.
-    // 250ms keeps a pass near a minute; raising it makes the sweep unusable long
-    // before it finds anything new. (If a KNOWN plug is missed, suspect this
-    // first: Tasmota ships with `Sleep 50`, so an ESP8285 can be slower to
-    // answer than a Shelly. `Sleep 0` on the plug is cheaper than raising this
-    // for all 254.)
+    // PHASE 1 — a bare TCP connect, opened and dropped. No HTTP, no parse.
+    // An empty address fails this in well under the budget, which is what keeps
+    // the whole pass near a minute.
+    {
+        IPAddress addr;
+        if (!addr.fromString(ip)) return;      // cannot happen; cheap to prove
+        WiFiClient knock;
+        if (!knock.connect(addr, 80, kSweepConnectMs)) return;
+        knock.stop();
+    }
+
+    // PHASE 2 — the real thing, now that we know someone is home. The extra
+    // handshake this costs is paid only on addresses that already answered.
     TasmotaOutlet probe(ip, "sweep");
-    if (!probe.probe(250)) return;
+    if (!probe.probe(kSweepProbeMs)) return;
 
     StaticJsonDocument<512> row;
     JsonObject o = row.to<JsonObject>();

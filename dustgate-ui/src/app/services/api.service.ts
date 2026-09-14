@@ -439,8 +439,14 @@ export class ApiService {
    * a minute on the device and no HTTP request survives that. Poll
    * `outletSweepProgress()` while `running`.
    */
-  async startOutletSweep(): Promise<SweepProgress> {
-    return this.post<SweepProgress>('/api/outlets/sweep', {});
+  //
+  // RETURNS NOTHING USEFUL, AND SAYS SO. This was typed `Promise<SweepProgress>`
+  // until 2026-09-13, which was a lie: the device answers `{"ok":true}` because
+  // the sweep has not begun yet — OutletSweep is driven from the main loop task,
+  // so POST can only set a flag that the next loop() pass picks up. Callers must
+  // poll for the truth rather than trusting what start hands back.
+  async startOutletSweep(): Promise<void> {
+    await this.post<{ ok: boolean }>('/api/outlets/sweep', {});
   }
 
   async outletSweepProgress(): Promise<SweepProgress> {
@@ -449,8 +455,10 @@ export class ApiService {
 
   /** Stop early. What was found so far is KEPT — someone who stops because the
    *  plug they wanted appeared must not lose it. */
-  async cancelOutletSweep(): Promise<SweepProgress> {
-    return this.delete<SweepProgress>('/api/outlets/sweep');
+  async cancelOutletSweep(): Promise<void> {
+    // Same shape as start, and for the same reason: the cancel is a flag the
+    // main loop consumes. The next poll reports the truth.
+    await this.delete<{ ok: boolean }>('/api/outlets/sweep');
   }
 
   /**

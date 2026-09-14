@@ -1005,7 +1005,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   async startSweep(): Promise<void> {
     if (this.sweepRunning) return;
     try {
-      this.applySweep(await this.api.startOutletSweep());
+      await this.api.startOutletSweep();
     } catch {
       // A device that doesn't know this endpoint is running older firmware.
       // The mDNS results are still in the tray, so degrade quietly rather than
@@ -1016,16 +1016,32 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   async stopSweep(): Promise<void> {
-    try { this.applySweep(await this.api.cancelOutletSweep()); }
+    try { await this.api.cancelOutletSweep(); }
     catch { /* the next poll will report the truth */ }
   }
 
+  /** Poll until the sweep finishes.
+   *
+   *  ⚠️ THE FIRST POLL MAY LEGITIMATELY SAY `running: false`, and treating that
+   *  as "finished" is a race that silently kills the whole feature. POST only
+   *  sets a flag; the device starts the sweep on its NEXT loop() pass, because
+   *  OutletSweep has to be driven from the main task. Normally that is
+   *  milliseconds — but the loop can be mid-probe on something else, and the
+   *  old code called endPoll() the instant it saw a false, so a sweep that was
+   *  about to start would run to completion on the device with nobody watching.
+   *
+   *  So: wait for it to actually begin before believing an end. `graceLeft`
+   *  bounds that wait, for the case where the device refused to start at all
+   *  (no WiFi) and there is nothing coming. */
   private pollSweep(): void {
     if (this.sweepPoll) return;
+    let began = false;
+    let graceLeft = 5;
     this.sweepPoll = setInterval(async () => {
       try { this.applySweep(await this.api.outletSweepProgress()); }
-      catch { this.endPoll(); }
-      if (!this.sweepRunning) this.endPoll();
+      catch { this.endPoll(); return; }
+      if (this.sweepRunning) { began = true; return; }
+      if (began || --graceLeft <= 0) this.endPoll();
     }, 1000);
   }
 
