@@ -21,6 +21,7 @@
 #pragma once
 #include "../outlets/SmartOutlet.h"   // OutletKind
 #include <Arduino.h>
+#include <atomic>
 #include "../config.h"
 
 #ifdef ENABLE_HTTP_API
@@ -152,7 +153,7 @@ public:
 
     // True while some primary holds a NodeLink connection to this board. The
     // main loop uses it to know it's acting as a secondary right now.
-    bool nodeLinkConnected() const { return _nodeLinkClients > 0; }
+    bool nodeLinkConnected() const { return _nodeLinkClients.load() > 0; }
 
     // ------------------------------------------------------------------
     // Node discovery + link state (the primary side of Stage 4)
@@ -366,7 +367,23 @@ private:
 
     // NodeLink secondary endpoint (see consumeNodeSet / reportNodeState)
     AsyncWebSocket            _nodeWs;
-    volatile int              _nodeLinkClients = 0;
+    // ATOMIC, NOT `volatile`, AND THE DIFFERENCE IS A REAL BUG (fixed 2026-09-14).
+    //
+    // `volatile` was never a threading primitive: it stops the compiler caching
+    // the value and does nothing else, so `_nodeLinkClients++` stayed a
+    // non-atomic read-modify-write. This counter is written from
+    // AsyncWebServer's own task (the WS_EVT_CONNECT / WS_EVT_DISCONNECT
+    // callbacks) and read from loop(), so two events landing together could
+    // lose one — leaving the board believing a primary is connected when none
+    // is, or the reverse, until the next event happened to correct it.
+    //
+    // C++20 deprecates `volatile`'s increment for exactly this reason: it reads
+    // as atomic and is not, which is why the only two warnings in a clean build
+    // were pointing straight at it. std::atomic is what the code always meant.
+    //
+    // The window is tiny and NodeLink connections are rare, which is precisely
+    // what would have made this miserable to find on a bench.
+    std::atomic<int>          _nodeLinkClients{0};
     bool                      _nodeSetPending  = false;
     topo::nodelink::SetCommand _nodeSetCmd;
 

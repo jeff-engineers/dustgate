@@ -263,12 +263,16 @@ bool HttpApiServer::begin() {
     _nodeWs.onEvent([this](AsyncWebSocket*, AsyncWebSocketClient* client,
                            AwsEventType type, void* arg, uint8_t* data, size_t len) {
         if (type == WS_EVT_CONNECT) {
-            _nodeLinkClients++;
+            _nodeLinkClients.fetch_add(1);
             DEBUG_PRINTLN(F("[NODE] Primary connected."));
             return;
         }
         if (type == WS_EVT_DISCONNECT || type == WS_EVT_ERROR) {
-            if (_nodeLinkClients > 0) _nodeLinkClients--;
+            // Compare-exchange rather than `if (n > 0) n--`: that test-then-act
+            // is two operations, and a disconnect racing another disconnect
+            // could take the count below zero between them. Never drops under 0.
+            int cur = _nodeLinkClients.load();
+            while (cur > 0 && !_nodeLinkClients.compare_exchange_weak(cur, cur - 1)) { }
             // HOLD. Deliberately no servo movement here — see the fail-safe note.
             DEBUG_PRINTLN(F("[NODE] Primary disconnected — holding all gates."));
             return;
@@ -501,7 +505,7 @@ bool HttpApiServer::consumeNodeSet(topo::nodelink::SetCommand& out) {
 }
 
 void HttpApiServer::reportNodeState(const char* selectorId, const char* stateId, bool moving) {
-    if (_nodeLinkClients <= 0) return;
+    if (_nodeLinkClients.load() <= 0) return;
     StaticJsonDocument<192> doc;
     topo::nodelink::buildState(doc.to<JsonObject>(), selectorId, stateId, moving);
     String s; serializeJson(doc, s);
