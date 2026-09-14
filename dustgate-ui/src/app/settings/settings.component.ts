@@ -252,18 +252,23 @@ import { toShop, systemsOf, type ShopDoc, type RawEl } from '../services/shop-do
       <div class="section">
         <span class="section-title">Hardware</span>
 
-        <div class="row">
-          <div>
-            <div class="row-label">Number of gates</div>
-            <div class="row-hint">Not counting home. Lowering this clears trained positions beyond the new count.</div>
-          </div>
-        </div>
-        <div class="row">
-          <input type="number" min="1" max="16" [(ngModel)]="numGates" (ngModelChange)="clearStatus()" />
-          <button class="save-btn" [disabled]="savingNumGates" (click)="saveNumGates()">
-            {{ savingNumGates ? 'Saving…' : 'Save' }}
-          </button>
-        </div>
+        <!-- NO "Number of gates" HERE ANY MORE (removed 2026-09-14).
+             The count is a property of each SLIDER, set where the slider is
+             calibrated — so a shop-wide number in Settings was a second answer
+             to a question that already had one, and the two could disagree.
+             Its max was 16 and NUM_STOPS has been 8 since 2026-09-05, so it
+             cheerfully offered numbers the firmware rejects.
+
+             The destructive promise it carried — "lowering this clears trained
+             positions beyond the new count" — is not lost: the calibration
+             sweep clears EVERY stop before placing the new array
+             (firmware.ino, resetStopRoles() and the loop after it), which is
+             the stronger guarantee.
+
+             POST /api/config/gates stays. It is exercised by
+             shared/device-model/conformance.js and implemented by the mock and
+             the device; nothing was wrong with the endpoint, only with asking
+             the question twice. -->
 
         <div class="row">
           <span class="row-label">Port size</span>
@@ -309,10 +314,12 @@ import { toShop, systemsOf, type ShopDoc, type RawEl } from '../services/shop-do
 })
 export class SettingsComponent implements OnInit {
 
-  numGates = 1;
   portSize: PortSize = '2.5in';
 
-  savingNumGates    = false;
+  /** One action at a time on this page. It was called `savingNumGates` and was
+   *  already the flag for every call by the time that field was removed — a
+   *  name that outlived the only thing it described. */
+  busy = false;
 
   confirmingReset      = false;
   confirmingWifiReset  = false;
@@ -335,19 +342,11 @@ export class SettingsComponent implements OnInit {
 
   ngOnInit() {
     this.portSize = this.hardwareProfile.portSize;
-    // deviceInfo may not have loaded yet on a hard refresh straight into
-    // /settings, so wait for it — but wait ONCE.
-    //
-    // This used to be a bare subscribe() on ready$, which is a BehaviorSubject
-    // that lives as long as the app. The component has no ngOnDestroy, so every
-    // visit to /settings left another subscription behind, holding a destroyed
-    // component and calling markForCheck() on it. whenReady() is the same wait
-    // as a promise that resolves once and holds nothing afterwards — and it
-    // already existed for exactly this.
-    void this.api.whenReady().then(() => {
-      this.numGates = this.api.deviceInfo?.numStops || 1;
-      this.cd.markForCheck();
-    });
+    // Nothing here waits on deviceInfo any more: the only reader was the gate
+    // count, and the wait went with it. (It was a whenReady() rather than a
+    // subscribe() on purpose — this component has no ngOnDestroy, so a bare
+    // subscribe on an app-lifetime BehaviorSubject leaked one destroyed
+    // component per visit. Worth knowing before adding another.)
     void this.loadCoasts();
   }
 
@@ -413,7 +412,7 @@ export class SettingsComponent implements OnInit {
 
   clearStatus() { this.statusMsg = ''; this.errorMsg = ''; }
 
-  private async run(action: () => Promise<unknown>, busyFlag: 'savingNumGates', successMsg: string) {
+  private async run(action: () => Promise<unknown>, busyFlag: 'busy', successMsg: string) {
     this[busyFlag] = true;
     this.statusMsg = '';
     this.errorMsg  = '';
@@ -427,11 +426,6 @@ export class SettingsComponent implements OnInit {
       this[busyFlag] = false;
       this.cd.markForCheck();
     }
-  }
-
-  saveNumGates() {
-    const n = Math.max(1, Math.min(16, Math.round(this.numGates)));
-    this.run(() => this.api.setNumGates(n), 'savingNumGates', 'Gate count saved.');
   }
 
   setPortSize(size: PortSize) {
@@ -449,7 +443,7 @@ export class SettingsComponent implements OnInit {
       return;
     }
     this.confirmingReset = false;
-    this.run(() => this.api.resetSetup(), 'savingNumGates', 'Calibration reset. Run setup again when ready.');
+    this.run(() => this.api.resetSetup(), 'busy', 'Calibration reset. Run setup again when ready.');
   }
 
   confirmWifiReset() {
