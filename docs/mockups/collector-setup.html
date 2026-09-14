@@ -1,0 +1,580 @@
+<meta charset="utf-8">
+<title>Setting up the Collector</title>
+
+<style>
+  :root {
+    --bg: #111; --surface: #1e1e1e; --raised: #262626; --border: #2e2e2e;
+    --text: #e8e8e8; --muted: #8a8a86; --accent: #f0a500; --success: #3cbe6e;
+    --danger: #d94444; --radius: 14px;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); margin: 0; padding: 22px 18px 72px;
+         font-family: system-ui, -apple-system, sans-serif; font-size: 15px; line-height: 1.5; }
+  .wrap { max-width: 1080px; margin: 0 auto; display: flex; flex-direction: column; gap: 24px; }
+  h1 { font-size: 22px; font-weight: 600; margin: 6px 0 0; letter-spacing: -0.01em; }
+  h2 { font-size: 13.5px; font-weight: 600; margin: 0; }
+  h3 { font-size: 15px; font-weight: 600; margin: 0 0 2px; }
+  .lede { color: var(--muted); font-size: 13.5px; max-width: 68ch; margin: 6px 0 0; }
+  .eyebrow { font-size: 11px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--muted); }
+  p { margin: 0; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.92em; }
+  a { color: var(--accent); }
+  .rule { height: 1px; background: var(--border); border: 0; margin: 0; }
+  .sec { display: flex; flex-direction: column; gap: 12px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 15px 16px; }
+  .card p + p { margin-top: 9px; }
+  .note { font-size: 12.5px; color: var(--muted); line-height: 1.55; }
+  .note b { color: var(--text); font-weight: 600; }
+  .banner { background: #241c06; border: 1px solid #4a3a0d; border-radius: var(--radius);
+            padding: 13px 15px; font-size: 13px; line-height: 1.55; }
+  .banner b { color: var(--accent); }
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
+
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: 11.5px; text-transform: uppercase; letter-spacing: .06em; }
+  td code { color: var(--accent); }
+
+  /* ── the phone ───────────────────────────────────────────────────────── */
+  .phones { display: flex; gap: 20px; flex-wrap: wrap; align-items: flex-start; }
+  .phone { width: 375px; max-width: 100%; background: var(--bg); border: 1px solid #202225;
+           border-radius: 18px; padding: 14px 13px 18px; flex: none; }
+  .phone .cap { font-size: 12px; color: var(--muted); margin-bottom: 10px; }
+  .head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+  .back { background: var(--surface); border: 1px solid var(--border); border-radius: 50%;
+          width: 34px; height: 34px; display: flex; align-items: center; justify-content: center;
+          color: var(--muted); flex: none; }
+  .title { font-size: 17px; font-weight: 600; }
+  .sub { font-size: 12.5px; color: var(--muted); margin: 0 0 16px 44px; }
+
+  /* ── a question block ────────────────────────────────────────────────────
+     The heading says what DustGate will DO, the line under it says why we are
+     asking. Two questions, never fused: see the decisions below. */
+  .q { margin-bottom: 18px; }
+  .q > .lbl { font-size: 11px; letter-spacing: .085em; text-transform: uppercase;
+              color: var(--muted); font-weight: 600; }
+  .q > .why { font-size: 12.5px; color: var(--muted); line-height: 1.5; margin: 3px 0 9px; }
+
+  .opt { display: flex; align-items: flex-start; gap: 11px; width: 100%; text-align: left;
+         background: var(--surface); border: 1px solid var(--border); color: var(--text);
+         border-radius: 12px; padding: 11px 12px; margin-bottom: 7px; font: inherit; cursor: pointer; }
+  .opt:disabled { cursor: default; opacity: .55; }
+  .opt.on { border-color: var(--accent); background: #241c06; }
+  .radio { width: 17px; height: 17px; border-radius: 50%; border: 1.5px solid var(--muted);
+           flex: none; margin-top: 2px; position: relative; }
+  .opt.on .radio { border-color: var(--accent); }
+  .opt.on .radio::after { content: ''; position: absolute; inset: 3px; border-radius: 50%; background: var(--accent); }
+  .opt .body { flex: 1; min-width: 0; }
+  .opt .name { font-size: 14px; font-weight: 500; display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+  .opt .detail { font-size: 12px; color: var(--muted); margin-top: 2px; line-height: 1.45; }
+  .opt .detail code { color: var(--accent); }
+  .pill { font-size: 10px; letter-spacing: .05em; text-transform: uppercase; font-weight: 700;
+          padding: 2px 7px; border-radius: 20px; flex: none; }
+  .pill.soon { color: var(--muted); background: #2a2a2a; border: 1px solid var(--border); }
+  .pill.ok { color: var(--success); background: rgba(60,190,110,.12); }
+
+  /* The follow-on is part of the OPTION, not a block after the list.
+     Rendered after the list it read as belonging to whichever option happened to
+     be last, which is the opposite of what it says. So: the selected option
+     loses its bottom radius and the panel continues its accent border, making
+     one object that expands. Only the selected one has a body at all. */
+  .opt.open { margin-bottom: 0; border-bottom-left-radius: 0; border-bottom-right-radius: 0;
+              border-bottom-color: rgba(240,165,0,.22); }
+  .expand { border: 1px solid var(--accent); border-top: 0; background: #241c06;
+            border-radius: 0 0 12px 12px; padding: 10px 12px 11px; margin: 0 0 7px; }
+  .expand .row { display: flex; align-items: center; justify-content: space-between; gap: 8px;
+                 background: var(--bg); border: 1px solid var(--border); border-radius: 9px;
+                 padding: 8px 10px; font-size: 13px; }
+  .expand .row .ip { font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; color: var(--muted); }
+  .expand .note { margin-top: 7px; }
+  .expand a { font-size: 13px; white-space: nowrap; }
+
+  .slider { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 11px 12px; }
+  .slider .r { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 6px; }
+  .slider .r b { color: var(--accent); font-weight: 600; }
+  .slider input { width: 100%; accent-color: var(--accent); }
+
+  .save { width: 100%; padding: 12px; border-radius: 12px; border: none; background: var(--accent);
+          color: #1a1200; font-weight: 600; font-size: 14px; margin-top: 4px; }
+
+  /* ── the demo frame ──────────────────────────────────────────────────────
+     The output panel is not a sibling card — it is a READOUT of the sheet beside
+     it, and drawn as one. Two equal cards side by side said they were two
+     independent things, which is exactly the relationship this page is trying
+     to teach elsewhere. */
+  .demo { border: 1px solid var(--border); border-radius: var(--radius); background: #161616;
+          padding: 0; overflow: hidden; }
+  .demo > .bar { display: flex; align-items: center; gap: 9px; padding: 10px 14px;
+                 border-bottom: 1px solid var(--border); background: var(--surface);
+                 font-size: 12.5px; color: var(--muted); }
+  .demo > .bar b { color: var(--text); font-weight: 600; }
+  .demo > .cols { display: flex; gap: 0; align-items: stretch; flex-wrap: wrap; }
+  .demo .left { padding: 16px 14px 18px; flex: none; }
+  .demo .right { flex: 1; min-width: 300px; border-left: 1px solid var(--border);
+                 padding: 16px 16px 18px; display: flex; flex-direction: column; gap: 16px;
+                 background: #131313; }
+  .demo .right h3 { display: flex; align-items: center; gap: 7px; }
+  .demo .right h3 .arr { color: var(--accent); font-weight: 400; }
+  .demo .right .sub2 { font-size: 12px; color: var(--muted); margin-top: 3px; }
+  .demo pre { margin: 9px 0 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+              font-size: 11.5px; line-height: 1.6; color: var(--muted); white-space: pre-wrap;
+              background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 11px 12px; }
+
+  /* A DIP drawn small enough to sit in a summary row. Recognisable as the part
+     without asking anyone to read it. */
+  .dipmini { display: flex; gap: 2px; background: #d8452f; border-radius: 3px; padding: 3px; flex: none; }
+  .dipmini i { width: 5px; height: 15px; background: #2a2b2d; border-radius: 1px; position: relative; }
+  .dipmini i::after { content: ''; position: absolute; left: 1px; right: 1px; height: 6px;
+                      border-radius: 1px; background: #f2f2ef; top: 8px; }
+  .dipmini i.up::after { top: 1px; }
+
+  .switch { width: 40px; height: 23px; border-radius: 20px; background: #333; border: 1px solid var(--border);
+            flex: none; position: relative; cursor: pointer; }
+  .switch::after { content: ''; position: absolute; top: 2px; left: 2px; width: 17px; height: 17px;
+                   border-radius: 50%; background: var(--muted); transition: left .14s ease; }
+  .switch.on { background: rgba(60,190,110,.25); border-color: var(--success); }
+  .switch.on::after { left: 19px; background: var(--success); }
+</style>
+
+<div class="wrap">
+
+  <div>
+    <p class="eyebrow">exploration · collector setup · 2026-09-13</p>
+    <h1>Setting up the Collector</h1>
+    <p class="lede">
+      One sheet for the one machine DustGate is allowed to command. It replaces the
+      single-slot plug pairing the canvas opens today, which can only ever say
+      <i>this plug switches the cyclone</i> — and so cannot describe the collector actually
+      on the bench: switched by its remote, watched by a metering plug, with a beam
+      across the bin.
+    </p>
+  </div>
+
+  <div class="banner">
+    <b>Two questions, never one.</b> <i>How is it switched</i> and <i>how is it watched</i> are
+    independent, and fusing them is what the current screen got wrong. Every way we now
+    command a collector except a plug is <b>stateless</b> — a servo arm, an RF frame — so what
+    we sent proves nothing, and something else has to say whether the blower is actually
+    turning. The model has said this since the day <code>control</code> and <code>sensor</code>
+    were split apart; only the UI never caught up.
+  </div>
+
+  <hr class="rule">
+
+  <!-- ────────────────────────────────────────────────────────────────── -->
+  <div class="sec">
+    <h2>The screen</h2>
+    <div class="demo">
+      <div class="bar"><b>Live.</b> Tap the options — everything on the right is what those choices produce.</div>
+      <div class="cols">
+        <div class="left">
+
+      <div class="phone">
+        <p class="cap">Setup &rarr; Dust collector</p>
+        <div class="head">
+          <span class="back">&larr;</span>
+          <span class="title">Cyclone</span>
+        </div>
+        <p class="sub">Dust collector &middot; Main system</p>
+
+        <div class="q">
+          <div class="lbl">Switched by</div>
+          <p class="why">How DustGate turns it on when a tool starts.</p>
+          <div id="ctl"></div>
+        </div>
+
+        <div class="q">
+          <div class="lbl">Watched by</div>
+          <p class="why" id="sense-why">How DustGate knows it really started.</p>
+          <div id="sense"></div>
+        </div>
+
+        <div class="q">
+          <div class="lbl">Dust bin</div>
+          <p class="why">A beam across the bin, wired to the board at the collector.</p>
+          <div id="bin"></div>
+        </div>
+
+        <div class="q" style="margin-bottom:14px">
+          <div class="lbl">Coast-down</div>
+          <p class="why">How long it keeps pulling after the last tool stops.</p>
+          <div class="slider">
+            <div class="r"><span>Coast-down</span><b id="delay-val">8 s</b></div>
+            <input type="range" min="0" max="30" value="8" id="delay">
+          </div>
+        </div>
+
+        <button class="save">Save</button>
+      </div>
+
+        </div>
+        <div class="right">
+          <div>
+            <h3><span class="arr">&#8627;</span> What the sheet writes</h3>
+            <p class="sub2">The collector element, as the choices on the left leave it.</p>
+            <pre id="doc"></pre>
+          </div>
+          <div>
+            <h3><span class="arr">&#8627;</span> What it refuses</h3>
+            <p class="sub2">Combinations the model rejects, so the sheet never offers them.</p>
+            <p class="note" id="refuses" style="margin-top:9px"></p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <hr class="rule">
+
+  <!-- ────────────────────────────────────────────────────────────────── -->
+  <div class="sec">
+    <h2>Decisions</h2>
+    <div class="grid2">
+
+      <div class="card">
+        <h3>Switching and watching are separate questions</h3>
+        <p class="note">
+          The screen this replaces asked one: <i>which plug switches this?</i> That is only
+          answerable for a collector on a switchable Shelly, and the collector on the bench is
+          not one. Worse, the single gesture the canvas offers — drag a plug onto the cyclone —
+          writes <code>control.outlet</code> unconditionally, so dropping the shop's metering
+          plug there produces a document the model then <b>rejects</b>: a no-relay plug named as
+          a switch is a collector that can never start.
+        </p>
+      </div>
+
+      <div class="card">
+        <h3>A plug answers both questions, and the screen says so rather than asking twice</h3>
+        <p class="note">
+          Choose <b>Smart plug</b> and the watch question collapses to one locked row naming that
+          same plug. It is not a third state to configure — a Shelly reports its own power — and
+          offering a second plug there would invite someone to pair two plugs to one blower.
+          <b>This is the one case where the two questions have one answer</b>, which is exactly
+          why they must still be drawn as two: it is a property of that hardware, not of
+          collectors.
+        </p>
+        <p class="note">
+          The firmware already behaves this way — <code>TopologyRuntime::collectorSensorOutlet()</code>
+          falls back to the control plug when <code>sensor.outlet</code> is absent — so the collapsed
+          row is describing what happens, not deciding it.
+        </p>
+      </div>
+
+      <div class="card">
+        <h3>Open-loop is allowed, and says so where you can see it</h3>
+        <p class="note">
+          A press with nothing watching is a real configuration — a shop that has not bought a
+          plug yet — and the model permits it deliberately. But a press is an <b>edge against a
+          toggle</b>: get one wrong and the system's belief and the blower disagree until a
+          person notices. So it warns, in the sheet, at the moment the combination is chosen,
+          rather than at save time or in a log nobody opens.
+        </p>
+      </div>
+
+      <div class="card">
+        <h3>The unbuilt paths are drawn, greyed, and dated</h3>
+        <p class="note">
+          A servo on the collector's own paddle is the path the RFC now aims at (§4.2c), and the
+          CT clamp is the answer for a 240 V machine with no plug to pair. Neither exists. Showing
+          them as disabled rows with a reason beats hiding them: it tells the reader the sheet has
+          room for the case they are in, and it stops the next person designing a fourth screen
+          for the same question. <b>A greyed row must say what it is waiting for</b>, or it reads
+          as broken.
+        </p>
+      </div>
+
+      <div class="card">
+        <h3>The bin is a toggle plus a board, not a wizard</h3>
+        <p class="note">
+          A diffuse beam answers <i>dust at this height, y/n</i>. There is no range, no percent,
+          no calibration — so there is nothing to walk anyone through. The only real question is
+          <b>which board is it wired to</b>, the same question a gate asks, and the answer is the
+          board at the collector essentially always. <code>invert</code> is not asked: it is a
+          fact about how the sensor is wired, settled in the wiring doc, not a user preference.
+        </p>
+      </div>
+
+      <div class="card">
+        <h3>The remote row shows the switch, not the number</h3>
+        <p class="note">
+          <code>address: 94</code> is true and useless: a woodworker has no reason to know what
+          eight bits are, and a row that prints a number invites them to believe it is something
+          they should understand or change. So the summary row draws the <b>part</b> — the same
+          eight rockers they matched during setup — and says <i>matched to your remote</i>.
+          <a href="rf-address.html">rf-address.html</a> keeps the number, on purpose and for a
+          different reader: it is the one thing a support call can ask for over the phone. The
+          rule that reconciles them is that <b>the number is for someone helping you, the picture
+          is for you</b>.
+        </p>
+      </div>
+
+      <div class="card">
+        <h3>A full bin flashes every board on that system, in red</h3>
+        <p class="note">
+          The strobe on the cyclone can only mean <i>this sensor tripped</i>, and it is in one
+          place — which is no use at the far end of a shop with a tool running. So the alert fans
+          out to the pixel every board already carries, and the sheet says so at the moment you
+          switch the bin on, because "what does enabling this actually do" is otherwise invisible.
+        </p>
+        <p class="note">
+          <b>Red is right, and the blink is what keeps it honest.</b>
+          <code>StatusLed.h</code> reserves red for a fault the board cannot fix itself, which a
+          full bin exactly is — and its own rule says blink rate may be a second-order detail
+          <i>inside</i> a colour, never the signal. So: steady red still means this board is
+          broken, flashing red means the bin it serves is full. Without that split, five healthy
+          boards going red reads as five dead boards.
+        </p>
+        <p class="note">
+          <b>System, not shop.</b> The boards are derived — collector → system → elements →
+          selectors → controllerIds — so only the primary can resolve the set, and a second
+          collector's boards stay dark for a bin that isn't theirs. An alert that cries wolf gets
+          ignored, and this is the one alert that must not be.
+        </p>
+      </div>
+
+      <div class="card">
+        <h3>Coast-down is on BOTH screens, and that is fine</h3>
+        <p class="note">
+          This card used to say it should move here and leave Settings. Building it changed the
+          answer: Settings edits <b>every</b> collector's coast-down in one save, which is the
+          right shape for a two-blower shop, and this sheet edits the one in front of you, which
+          is the right shape for setting a collector up. Neither is a copy of the other —
+          both write <code>control.offDelayMs</code> on the element, so there is one value and
+          nothing to drift.
+        </p>
+        <p class="note">
+          The duplication worth fearing is two screens holding two <i>values</i>. Two doors onto
+          one value is just two doors. <b>Recorded as a reversal rather than quietly dropped</b>
+          — the original argument sounded right and was wrong about which thing was duplicated.
+        </p>
+      </div>
+
+    </div>
+  </div>
+
+  <hr class="rule">
+
+  <!-- ────────────────────────────────────────────────────────────────── -->
+  <div class="sec">
+    <h2>What it writes</h2>
+    <div class="card">
+      <table>
+        <tr><th>Field</th><th>From</th><th>State</th></tr>
+        <tr><td><code>control.outlet</code></td><td>Switched by → Smart plug</td>
+            <td>Built. Must be a <code>shelly</code>; the model rejects a no-relay plug here</td></tr>
+        <tr><td><code>control.rf</code></td><td>Switched by → Remote</td>
+            <td>Firmware and model built; <code>address</code> comes from
+                <a href="rf-address.html">rf-address.html</a>, <code>pin</code> and <code>data</code> are not asked</td></tr>
+        <tr><td><code>control.servo</code></td><td>Switched by → Servo</td>
+            <td><b>Does not exist.</b> No schema, no <code>CollectorPresser</code> implementation.
+                Needs a torque measurement first (RFC §4.2c)</td></tr>
+        <tr><td><code>control.offDelayMs</code></td><td>Coast-down</td><td>Built; moves here from Settings</td></tr>
+        <tr><td><code>sensor.outlet</code></td><td>Watched by → Metering plug</td>
+            <td>Model and firmware built — <code>CollectorPlugState</code> already judges it.
+                <b>No UI reaches it today</b></td></tr>
+        <tr><td><code>sensor.ct</code></td><td>Watched by → Current clamp</td>
+            <td><b>Does not exist</b>, and the RFC says not to invent it yet: a CT cannot honour a
+                threshold in watts, and the learned-baseline shape that replaces it is unsettled
+                (§5.4a)</td></tr>
+        <tr><td><code>bin.sensor</code></td><td>Dust bin</td>
+            <td>Model, firmware and hardware all proven 2026-09-13. <b>Nothing renders it</b></td></tr>
+        <tr><td><i>the red flash</i></td><td>follows from the bin being on</td>
+            <td><b>Not a field, and not built.</b> Behaviour, derived from the topology — there is
+                nothing for the user to configure, so there is nothing here to write</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <hr class="rule">
+
+  <div class="sec">
+    <h2>Open</h2>
+    <div class="card">
+      <p class="note" style="color:var(--success)">
+        <b>SETTLED while building, 2026-09-14 — the drag routes by the plug.</b> A dropped
+        Tasmota can only ever be a watcher, because naming a no-relay plug as the switch
+        describes a collector that can never start and the model rejects the document. A
+        dropped Shelly becomes the switch, which is the only thing it could have meant before
+        this sheet existed. Either way the collector's glyph opens this sheet on a tap — and it
+        does so now even with no plug at all, which an RF-pressed collector has, or the only
+        screen that can configure a remote would be unreachable from the canvas.
+        <code>setOutlet()</code> in shop-doc.ts, with the cases in its spec.
+      </p>
+      <p class="note" style="margin-top:9px">
+        <b>The red flash needs a frame that does not exist.</b> The primary reads its own bin pin
+        and can colour its own pixel today. Telling the OTHER boards on that system to flash is
+        primary→node, which is the direction NodeLink already runs — but there is no frame for an
+        alert, only for resolved moves. That is a smaller piece of work than the node→primary bin
+        report (which is a genuinely new direction), and it is the half that makes the sheet's
+        promise true.
+      </p>
+      <p class="note" style="margin-top:9px">
+        <b>The bin has nowhere to be seen.</b> This sheet configures it; no screen reports it.
+        <code>systems[].bin</code> has been on the wire since 2026-09-04 and the live page does not
+        read it. That is a second design, not this one — but it is the reason to build this one
+        carefully, because a bin you can configure and cannot see is worse than neither.
+      </p>
+      <p class="note" style="margin-top:9px">
+        <b>Two collectors.</b> A shop may have two systems, each with a collector, and this sheet
+        describes one. Nothing here breaks — but the bin's alert scope is per-system (RFC §7.3)
+        and a board serving two systems has one NeoPixel and two possible alert states, which is
+        still undecided.
+      </p>
+    </div>
+  </div>
+
+</div>
+
+<script>
+  // The state this page is exploring. Defaults are the collector actually on the
+  // bench: RF-switched, watched by the Athom, beam across the bin.
+  const S = { ctl: 'rf', sense: 'plug', bin: true, delay: 8 };
+
+  // The Rockler fob's own setting — rockers 1, 6 and 8 closed. Same constant as
+  // rf-address.html, and for the same reason: a real answer beats an invented one
+  // in a drawing someone will compare against the part in their hand.
+  const ROCKLER = [false, true, true, true, true, false, true, false]; // index i = rocker i+1 OPEN?
+
+  const CTL = [
+    { id: 'plug',  name: 'Smart plug',            detail: 'A switchable plug between wall and collector.', built: true },
+    { id: 'rf',    name: 'Remote',                detail: 'DustGate transmits the collector remote’s own frame.', built: true },
+    { id: 'servo', name: 'Servo on its switch',   detail: 'An arm on the collector’s own paddle or toggle. Not with a Rockler receiver in the cord — the collector’s own switch would have to stay on for the receiver to control anything.', built: false,
+      soon: 'needs a torque measurement' },
+    { id: 'none',  name: 'Nothing — I switch it myself', detail: 'DustGate moves the gates and leaves the blower alone.', built: true },
+  ];
+  const SENSE = [
+    { id: 'plug', name: 'Metering plug',  detail: 'A plug that reports power. It does not have to switch.', built: true },
+    { id: 'ct',   name: 'Current clamp',  detail: 'A clamp on the collector’s feed — for 240 V, where there is no plug to pair.', built: false,
+      soon: 'threshold shape undecided' },
+    { id: 'none', name: 'Nothing',        detail: 'DustGate assumes the press landed.', built: true },
+  ];
+
+  function optHtml(o, on, name, hasBody) {
+    const pill = o.built ? '' : '<span class="pill soon">' + o.soon + '</span>';
+    return '<button class="opt' + (on ? ' on' : '') + (on && hasBody ? ' open' : '') + '"' +
+           (o.built ? '' : ' disabled') +
+           ' data-g="' + name + '" data-id="' + o.id + '">' +
+           '<span class="radio"></span><span class="body">' +
+           '<span class="name">' + o.name + pill + '</span>' +
+           '<span class="detail">' + o.detail + '</span></span></button>';
+  }
+
+  // What a chosen option expands to show. '' means the option stands alone —
+  // which is the honest answer for "Nothing", and the reason this is per-option
+  // rather than one panel under the list.
+  function bodyFor(group, id) {
+    if (group === 'ctl') {
+      if (id === 'plug')
+        return '<div class="row"><span>Cyclone plug</span>' +
+               '<span class="ip">192.168.87.31 · shelly</span></div>';
+      if (id === 'rf') {
+        // The SWITCH, not the number it encodes. 94 means nothing to a woodworker,
+        // and a row that prints it invites them to think it should.
+        // `.up` is the nub at the ON legend, which is CLOSED, which is a ZERO —
+        // so it is drawn on the bits that are NOT open. Backwards, this is a
+        // picture of a different remote and nothing on screen says so.
+        const dip = ROCKLER.map(open => '<i' + (open ? '' : ' class="up"') + '></i>').join('');
+        return '<div class="row">' +
+               '<span style="display:flex;align-items:center;gap:9px">' +
+               '<span class="dipmini">' + dip + '</span>Matched to your remote</span>' +
+               '<a href="rf-address.html">Change ›</a></div>' +
+               '<p class="note">Set once, from the switches inside the fob.</p>';
+      }
+      return '';
+    }
+    if (group === 'sense') {
+      if (id === 'plug')
+        return '<div class="row"><span>Athom plug</span>' +
+               '<span class="ip">192.168.87.44 · tasmota</span></div>';
+      if (id === 'none' && S.ctl !== 'none')
+        return '<p class="note"><b>⚠ Nothing will notice a missed press.</b> DustGate can only ' +
+               'tell the collector to <i>change</i>, never to be on. If one press is lost, the ' +
+               'gates and the blower disagree until you spot it.</p>';
+      return '';
+    }
+    return '';
+  }
+
+  function group(host, items, sel, name) {
+    document.getElementById(host).innerHTML = items.map(o => {
+      const on = sel === o.id;
+      const body = on ? bodyFor(name, o.id) : '';
+      return optHtml(o, on, name, !!body) + (body ? '<div class="expand">' + body + '</div>' : '');
+    }).join('');
+  }
+
+  function render() {
+    group('ctl', CTL, S.ctl, 'ctl');
+
+    // A switchable plug answers both questions. Don't ask the second one.
+    const fused = (S.ctl === 'plug');
+    document.getElementById('sense-why').textContent = fused
+      ? 'Answered already — the plug that switches it also reports its power.'
+      : (S.ctl === 'none'
+          ? 'So the shop page can show whether it is running.'
+          : 'How DustGate knows it really started.');
+
+    if (fused) {
+      document.getElementById('sense').innerHTML =
+        '<button class="opt on open" disabled><span class="radio"></span><span class="body">' +
+        '<span class="name">Cyclone plug<span class="pill ok">in use</span></span>' +
+        '<span class="detail">The same plug, reporting power back.</span></span></button>' +
+        '<div class="expand"><div class="row"><span>Cyclone plug</span>' +
+        '<span class="ip">192.168.87.31 · shelly</span></div></div>';
+    } else {
+      group('sense', SENSE, S.sense, 'sense');
+    }
+
+    // ── bin ───────────────────────────────────────────────────────────────
+    document.getElementById('bin').innerHTML =
+      '<div class="opt' + (S.bin ? ' on open' : '') + '" style="cursor:default"><span class="body">' +
+      '<span class="name">Bin sensor</span>' +
+      '<span class="detail">' + (S.bin ? 'Wired to <code>Collector board</code>' : 'Off') +
+      '</span></span><span class="switch' + (S.bin ? ' on' : '') + '" id="bin-sw"></span></div>' +
+      (S.bin
+        ? '<div class="expand"><p class="note">When it trips, the strobe on the cyclone fires and ' +
+          '<b>every board on Main system flashes red</b> — not the whole shop, and not the other ' +
+          'collector\u2019s boards.</p></div>'
+        : '');
+
+    // ── the document ──────────────────────────────────────────────────────
+    // Built as a list of top-level entries so the trailing comma can never be
+    // wrong — the thing every hand-assembled JSON preview gets subtly wrong.
+    const F = ['"type": "collector"', '"name": "Cyclone"'];
+    const ctl = [];
+    if (S.ctl === 'plug')  ctl.push('    "outlet": { "ip": "192.168.87.31", "kind": "shelly" }');
+    if (S.ctl === 'rf')    ctl.push('    "rf": { "address": 94, "data": 14, "pin": 9 }');
+    if (S.ctl === 'servo') ctl.push('    "servo": { /* no schema yet */ }');
+    ctl.push('    "offDelayMs": ' + (S.delay * 1000));
+    F.push('"control": {\n' + ctl.join(',\n') + '\n  }');
+    if (!fused && S.sense === 'plug')
+      F.push('"sensor": { "outlet": { "ip": "192.168.87.44", "kind": "tasmota" } }');
+    if (!fused && S.sense === 'ct')
+      F.push('"sensor": { "ct": { /* no schema yet */ } }');
+    if (S.bin)
+      F.push('"bin": { "sensor": { "kind": "threshold", "controllerId": "collector" } }');
+    document.getElementById('doc').textContent =
+      '{\n  ' + F.join(',\n  ') + '\n}';
+
+    // ── what it refuses ───────────────────────────────────────────────────
+    const r = [];
+    r.push('A <b>Tasmota</b> under <code>control.outlet</code> — no relay, so it could never start the blower.');
+    r.push('<code>control.rf</code> <i>and</i> <code>control.outlet</code> together — two ways to command one blower fight each other.');
+    if (S.ctl !== 'none' && !fused && S.sense !== 'none')
+      r.push('The <b>same plug</b> as both switch and sensor of two different things — one plug, one claim.');
+    document.getElementById('refuses').innerHTML = r.map(x => '• ' + x).join('<br><br>');
+  }
+
+  document.addEventListener('click', (e) => {
+    const b = e.target.closest('.opt[data-g]');
+    if (b && !b.disabled) { S[b.dataset.g] = b.dataset.id; render(); return; }
+    if (e.target.closest('#bin-sw')) { S.bin = !S.bin; render(); }
+  });
+  document.getElementById('delay').addEventListener('input', (e) => {
+    S.delay = +e.target.value;
+    document.getElementById('delay-val').textContent = S.delay + ' s';
+    render();
+  });
+
+  render();
+</script>

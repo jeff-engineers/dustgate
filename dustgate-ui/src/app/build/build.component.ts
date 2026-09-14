@@ -10,6 +10,7 @@ import { COLLECTOR_RUNNING_W } from '@topology-device';
 import { validateShop, SHOP_SCHEMA_VERSION } from '@shop';
 import { SelectorConfigComponent } from '../gates/selector-config.component';
 import { ElementOutletConfigComponent } from '../tools/element-outlet-config.component';
+import { CollectorSetupComponent } from '../tools/collector-setup.component';
 import { matchAll } from '../tools/outlet-match';
 import {
   AnyElement, ConfigurableSelector, elementsOf,
@@ -304,7 +305,7 @@ const outletsFor = (kind: MenuKind): number => kind === 'linear' ? 4 : kind === 
 @Component({
   selector: 'app-build',
   standalone: true,
-  imports: [CommonModule, FormsModule, RouterLink, SelectorConfigComponent, ElementOutletConfigComponent],
+  imports: [CommonModule, FormsModule, RouterLink, SelectorConfigComponent, ElementOutletConfigComponent, CollectorSetupComponent],
   styleUrls: ['./build.component.css'],
   templateUrl: './build.component.html',
 })
@@ -333,6 +334,11 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   /** The tool whose smart plug is being paired, as an editable copy. */
   outletTool: RawEl | null = null;
   outletMode: 'sensor' | 'switch' = 'sensor';
+  /** Boards, for the collector sheet's bin row. */
+  controllerList: { id: string; name?: string }[] = [];
+  /** The system the collector being configured belongs to, named — the bin alert
+   *  says whose boards will flash. */
+  outletSysName = '';
   outletExcludeIps: string[] = [];
   outletExcludeReason: Record<string, string> = {};
   private past: string[] = [];
@@ -861,6 +867,15 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     const doc = this.topo as unknown as ShopDoc;
     const outlet = outletOf(doc, el);
     if (!outlet) {
+      // A collector switched by its remote has no plug and is not unconfigured —
+      // saying "no outlet" reads as a job left undone when the job is finished a
+      // different way. It still has nothing to REPORT, which is the honest thing
+      // to say, and the sheet is one tap away either way.
+      const rf = ((el?.['control'] as RawEl | undefined)?.['rf']) as RawEl | undefined;
+      if (rf) {
+        return { state: 'none', text: 'by remote',
+                 hint: `${n.name} is switched by its remote. Nothing is watching it, so the shop list cannot say whether it is running. Tap to set it up.` };
+      }
       return { state: 'none', text: 'no outlet',
                hint: `No smart outlet on ${n.name} — you switch it on yourself. Tap to pair one.` };
     }
@@ -1378,6 +1393,11 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   private dockAction(n: NodeVM): void {
     this.focus(n.id);
     const el = this.elem(n.id);
+    // A COLLECTOR ALWAYS OPENS ITS SHEET, plug or no plug. A plug is only one of
+    // the ways it can be switched now — an RF-pressed collector has none at all —
+    // so arming the tray for one would leave the only screen that can configure a
+    // remote, a bin or the coast-down unreachable from the canvas (2026-09-14).
+    if (el?.['type'] === 'collector') { this.configureOutlet(n.id); return; }
     if (outletOf(this.topo as unknown as ShopDoc, el)) { this.configureOutlet(n.id); return; }
     // No plug yet: arm the row and let the tray be the picker. Same gesture as the
     // drag, minus the drag, which is what a phone wants.
@@ -1610,6 +1630,15 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     const ex = outletExcludes(this.topo as unknown as ShopDoc, id);
     this.outletExcludeIps = ex.ips;
     this.outletExcludeReason = ex.reason;
+    if (el['type'] === 'collector') {
+      const doc = this.topo as unknown as ShopDoc;
+      this.controllerList = (doc.controllers ?? []).map(c => ({
+        id: c['id'] as string,
+        name: c['name'] as string | undefined,
+      }));
+      const sys = doc.systems.find(sy => sy.elements.some(e => e['id'] === id));
+      this.outletSysName = sys?.name ?? '';
+    }
   }
 
   /** Splice the paired tool back in. Shares onConfigured's path deliberately: a

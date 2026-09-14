@@ -294,8 +294,13 @@ export function outletExcludes(doc: ShopDoc | null, targetId: string):
     // …unless the collector IS what is being configured: its own outlet has to
     // stay pickable, or re-opening the sheet greys out the current choice.
     if (el['id'] === targetId) continue;
-    const ip = ((el['control'] as RawEl | undefined)?.['outlet'] as RawEl | undefined)?.['ip'] as string | undefined;
-    if (ip) { ips.push(ip); reason[ip] = 'reserved — dust collector'; }
+    // BOTH of a collector's slots. The watcher was missed until 2026-09-13, when
+    // there was no way to set one — a metering plug on a collector would have
+    // stayed offerable to every tool in the shop.
+    for (const f of ['control', 'sensor']) {
+      const ip = ((el[f] as RawEl | undefined)?.['outlet'] as RawEl | undefined)?.['ip'] as string | undefined;
+      if (ip) { ips.push(ip); reason[ip] = 'reserved — dust collector'; }
+    }
   }
   const mine = machineOfPort(doc, allElems(doc).find(e => e['id'] === targetId))?.id ?? targetId;
   for (const m of machinesOf(doc)) {
@@ -308,26 +313,60 @@ export function outletExcludes(doc: ShopDoc | null, targetId: string):
 
 // ── the plug ────────────────────────────────────────────────────────────────
 //
-// A collector still carries its own switch (`control.outlet`) on the element,
-// because a collector belongs to exactly one system and there is no machine to
-// lift it onto. A tool's SENSOR moved to its machine. These two helpers hide
-// that asymmetry so call sites keep saying "the plug for this thing".
+// A collector still carries its own plugs on the element, because a collector
+// belongs to exactly one system and there is no machine to lift it onto. A
+// tool's SENSOR moved to its machine. These two helpers hide that asymmetry so
+// call sites keep saying "the plug for this thing".
+//
+// A COLLECTOR HAS TWO SLOTS, and which one a plug lands in is decided by the
+// plug (2026-09-13). `control.outlet` is how we switch the blower;
+// `sensor.outlet` is how we watch one, and they are independent because every
+// other way of commanding a collector — an RF frame, a servo arm — is stateless
+// and proves nothing about whether the blower is turning.
+//
+// So a no-relay Tasmota can only ever be the SENSOR: naming one as the switch
+// describes a collector that can never start, and validateTopology() rejects
+// the document outright. Until this rule existed, dragging the shop's metering
+// plug onto the cyclone — the one gesture the canvas offers — produced exactly
+// that document.
 
-/** The smart plug attached to an element: a collector's switch, or a port's machine's sensor. */
+/** Is this plug able to switch? Absent `kind` means shelly (topology.js), and a
+ *  shelly is the only kind with contacts. */
+function canSwitch(outlet: RawEl | null | undefined): boolean {
+  return !outlet || (outlet['kind'] as string | undefined ?? 'shelly') === 'shelly';
+}
+
+/** The smart plug attached to an element: a collector's, or a port's machine's sensor.
+ *  For a collector, the SWITCH first — it is the one that makes the blower move —
+ *  falling back to the watcher, so a collector paired only with a metering plug
+ *  still reads as paired everywhere that asks this question. */
 export function outletOf(doc: ShopDoc | null, el: RawEl | null | undefined): RawEl | null {
   if (!el) return null;
   if (el['type'] === 'collector') {
-    return ((el['control'] as RawEl | undefined)?.['outlet'] as RawEl | undefined) ?? null;
+    return ((el['control'] as RawEl | undefined)?.['outlet'] as RawEl | undefined)
+        ?? ((el['sensor'] as RawEl | undefined)?.['outlet'] as RawEl | undefined)
+        ?? null;
   }
   const m = machineOfPort(doc, el);
   return ((m?.sensor as RawEl | undefined)?.['outlet'] as RawEl | undefined) ?? null;
 }
 
-/** Attach (or with null, detach) the plug for an element. */
+/** Attach (or with null, detach) the plug for an element. A collector routes by
+ *  what the plug can do; see the note above. Detaching clears BOTH slots, because
+ *  the gesture means "this collector has no plug" and leaving one behind would be
+ *  a pairing nothing on the canvas can see. */
 export function setOutlet(doc: ShopDoc | null, el: RawEl, outlet: RawEl | null): void {
   if (el['type'] === 'collector') {
-    if (outlet) el['control'] = { ...(el['control'] as RawEl ?? {}), outlet };
-    else if (el['control']) delete (el['control'] as RawEl)['outlet'];
+    const slot = canSwitch(outlet) ? 'control' : 'sensor';
+    if (outlet) el[slot] = { ...(el[slot] as RawEl ?? {}), outlet };
+    else for (const f of ['control', 'sensor']) {
+      // `control` also carries offDelayMs, so drop the plug and keep the branch
+      // if anything else is living in it.
+      const prev = el[f] as RawEl | undefined;
+      if (!prev) continue;
+      delete prev['outlet'];
+      if (!Object.keys(prev).length) delete el[f];
+    }
     return;
   }
   const m = machineOfPort(doc, el);

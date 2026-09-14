@@ -603,17 +603,33 @@
   </div>
 </div>
 
-<!-- Pairing a tool (or the collector) with its plug — same sheet as a gate. -->
+<!-- Pairing a tool with its plug — same sheet as a gate. A COLLECTOR gets its own
+     sheet below: it is switched and watched by two different things, which one
+     plug slot cannot say. -->
 <div class="sheet-bg" *ngIf="outletTool" (pointerdown)="outletTool = null"></div>
 <div class="sheet" *ngIf="outletTool as ot">
   <button type="button" class="sheet-close" (click)="outletTool = null" aria-label="Close without saving">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
   </button>
-  <app-element-outlet-config [element]="ot" [mode]="outletMode"
-                             [excludeIps]="outletExcludeIps"
-                             [excludeReason]="outletExcludeReason"
-                             [outlets]="outlets" [owner]="owner"
-                             (saved)="onOutletConfigured($event)" (cancelled)="outletTool = null"
-                             (note)="unpairNote = $event" (rescan)="scanOutlets()">
-  </app-element-outlet-config>
+
+  <app-collector-setup *ngIf="outletMode === 'switch'; else toolOutlet"
+                       [element]="ot"
+                       [controllers]="controllerList"
+                       [systemName]="outletSysName"
+                       [excludeIps]="outletExcludeIps"
+                       [excludeReason]="outletExcludeReason"
+                       [outlets]="outlets" [owner]="owner"
+                       (saved)="onOutletConfigured($event)" (cancelled)="outletTool = null"
+                       (note)="unpairNote = $event" (rescan)="scanOutlets()">
+  </app-collector-setup>
+
+  <ng-template #toolOutlet>
+    <app-element-outlet-config [element]="ot" [mode]="outletMode"
+                               [excludeIps]="outletExcludeIps"
+                               [excludeReason]="outletExcludeReason"
+                               [outlets]="outlets" [owner]="owner"
+                               (saved)="onOutletConfigured($event)" (cancelled)="outletTool = null"
+                               (note)="unpairNote = $event" (rescan)="scanOutlets()">
+    </app-element-outlet-config>
+  </ng-template>
 </div>

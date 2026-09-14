@@ -31,6 +31,11 @@ const OUT = path.join(ROOT, '.spec-test');
 const ALIASES = {
   '@topology': '../shared/device-model/topology.js',
   '@topology-device': '../shared/device-model/topology-device.js',
+  // Deliberately NOT in tsconfig's `paths`, which is the one exception to the
+  // rule above: the fixtures have no declaration file, so a path mapping would
+  // fail type resolution. collector-doc.spec.ts require()s this name and types
+  // the two exports it uses at the call site.
+  '@topology-fixtures': '../shared/device-model/topology.fixtures.js',
   '@shop': '../shared/device-model/shop.js',
   '@device-model': '../shared/device-model/device-model.js',
 };
@@ -50,6 +55,7 @@ const SUITES = [
   ['gates/selector-types.spec.js', 'selector-types'],
   ['tools/outlet-match.spec.js', 'outlet-match'],
   ['tools/deep-link.spec.js', 'deep-link'],
+  ['tools/collector-doc.spec.js', 'collector-doc'],
   ['build/plug-label.spec.js', 'plug-label'],
   ['boards/board-drives.spec.js', 'board-drives'],
   ['build-stamp.spec.js', 'build-stamp'],

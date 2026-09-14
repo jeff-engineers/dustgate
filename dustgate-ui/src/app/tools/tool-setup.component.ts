@@ -4,6 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router } from '@angular/router';
 import { ApiService, DiscoveredOutlet, Topology } from '../services/api.service';
 import { ElementOutletConfigComponent } from './element-outlet-config.component';
+import { CollectorSetupComponent } from './collector-setup.component';
 import { PairedOutletRowComponent } from './paired-outlet-row.component';
 import { resolveDeepLink } from './deep-link';
 import { elementsOf, ductsOf } from '../gates/selector-types';
@@ -86,7 +87,7 @@ const DEFAULT_THRESHOLD = 50;
 @Component({
   selector: 'app-tool-setup',
   standalone: true,
-  imports: [CommonModule, FormsModule, ElementOutletConfigComponent, PairedOutletRowComponent],
+  imports: [CommonModule, FormsModule, ElementOutletConfigComponent, CollectorSetupComponent, PairedOutletRowComponent],
   styles: [`
     :host { display: block; max-width: 460px; margin: 0 auto; padding: 16px 14px 40px; }
 
@@ -266,20 +267,23 @@ const DEFAULT_THRESHOLD = 50;
     </ng-container>
 
     <!-- ── One collector ────────────────────────────────────────────────────── -->
-    <!-- The same sheet the build canvas opens, in its 'switch' role — a collector's
-         outlet is commanded, never sensed, so there is no threshold on it. Reused
-         rather than rebuilt inline: two pairing panels for the same job is exactly
-         the drift this repo spends its comments on. -->
+    <!-- The same sheet the build canvas opens. It is NOT the tool sheet in another
+         role any more: a collector is switched and watched by two different
+         things, and one plug slot could not say that. Reused rather than rebuilt
+         inline, for the reason it always was — two panels for the same job is
+         exactly the drift this repo spends its comments on. -->
     <ng-container *ngIf="collectorEl as el">
-      <app-element-outlet-config [element]="el" mode="switch"
-                                 [excludeIps]="collectorExcludeIps"
-                                 [excludeReason]="collectorExcludeReason"
-                                 [outlets]="outlets" [owner]="owner"
-                                 (saved)="saveCollector($event)"
-                                 (cancelled)="cancelCollector()"
-                                 (note)="unpairNote = $event"
-                                 (rescan)="scan()">
-      </app-element-outlet-config>
+      <app-collector-setup [element]="el"
+                           [controllers]="controllerList"
+                           [systemName]="collectorSysName"
+                           [excludeIps]="collectorExcludeIps"
+                           [excludeReason]="collectorExcludeReason"
+                           [outlets]="outlets" [owner]="owner"
+                           (saved)="saveCollector($event)"
+                           (cancelled)="cancelCollector()"
+                           (note)="unpairNote = $event"
+                           (rescan)="scan()">
+      </app-collector-setup>
       <div class="hint" *ngIf="unpairNote" style="margin-top:12px">{{ unpairNote }}</div>
       <p class="err" *ngIf="error">{{ error }}</p>
     </ng-container>
@@ -411,6 +415,12 @@ export class ToolSetupComponent implements OnInit {
   collectorEl: DocEl | null = null;
   collectorExcludeIps: string[] = [];
   collectorExcludeReason: Record<string, string> = {};
+  /** Boards, for the bin sensor's "wired to". The sheet needs the list; which one
+   *  is right is the user's call, the same way a gate's board is. */
+  controllerList: { id: string; name?: string }[] = [];
+  /** Named in the bin alert's copy — "every board on Main system flashes red" —
+   *  so the scope of the alert is concrete rather than a word. */
+  collectorSysName = '';
   private collectorSysId = '';
   editingName = '';
   outlets: DiscoveredOutlet[] = [];
@@ -542,6 +552,11 @@ export class ToolSetupComponent implements OnInit {
     this.editing = null;
     this.editingName = c.name;
     this.collectorSysId = c.systemId;
+    this.collectorSysName = this.groups.find(g => g.id === c.systemId)?.name ?? '';
+    this.controllerList = ((doc.controllers ?? []) as DocEl[]).map(ct => ({
+      id: ct['id'] as string,
+      name: ct['name'] as string | undefined,
+    }));
     this.collectorEl = JSON.parse(JSON.stringify(el)) as DocEl;
     // Computed on open rather than from the template: a getter would hand the
     // sheet freshly-allocated arrays on every change-detection pass.

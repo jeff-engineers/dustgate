@@ -73,11 +73,29 @@ const v1 = () => JSON.parse(JSON.stringify({
   check('a collector with no switch reads null', outletOf(shop, dc) === null);
 
   // A collector belongs to exactly one system and has no machine to lift its
-  // switch onto, so it keeps carrying its own. The asymmetry is the reason these
+  // plugs onto, so it keeps carrying its own. The asymmetry is the reason these
   // helpers exist rather than call sites reaching in.
   setOutlet(shop, dc, { gen: 2, ip: '10.0.0.9' });
   eq('a collector switch is written to the element', (dc['control'] as RawEl)['outlet'], { gen: 2, ip: '10.0.0.9' });
   check('and NOT to any machine', !machinesOf(shop).some(m => m.id === 'dc'));
+
+  // WHICH SLOT IS DECIDED BY THE PLUG (2026-09-13). A no-relay Tasmota has no
+  // contacts, so naming it as the switch describes a collector that can never
+  // start — and validateTopology() rejects that document outright. Dragging one
+  // onto the cyclone is the single gesture the canvas offers, so the rule has to
+  // live here rather than in whichever screen happens to call this.
+  setOutlet(shop, dc, { ip: '10.0.0.11', kind: 'tasmota' });
+  eq('a sense-only plug lands on the WATCHER',
+     (dc['sensor'] as RawEl)['outlet'], { ip: '10.0.0.11', kind: 'tasmota' });
+  eq('and leaves the switch where it was',
+     ((dc['control'] as RawEl)['outlet'] as RawEl)['ip'], '10.0.0.9');
+  eq('outletOf prefers the switch — it is the one that makes the blower move',
+     outletOf(shop, dc)!['ip'], '10.0.0.9');
+
+  delete (dc['control'] as RawEl)['outlet'];
+  eq('...and falls back to the watcher, so a metering-only collector still reads as paired',
+     outletOf(shop, dc)!['ip'], '10.0.0.11');
+  (dc['control'] as RawEl)['outlet'] = { gen: 2, ip: '10.0.0.9' };
 
   setOutlet(shop, port, { gen: 2, ip: '10.0.0.7', thresholdW: 20 });
   eq('a port plug is written to its machine', (machineById(shop, 'saw')!.sensor!.outlet as RawEl)['ip'], '10.0.0.7');
@@ -86,9 +104,21 @@ const v1 = () => JSON.parse(JSON.stringify({
   setOutlet(shop, port, null);
   check('detaching clears the machine sensor', machineById(shop, 'saw')!.sensor === undefined);
 
+  // Detaching means "this collector has no plug", so it clears BOTH slots —
+  // leaving one behind would be a pairing nothing on the canvas can see.
+  (dc['control'] as RawEl)['offDelayMs'] = 8000;
   setOutlet(shop, dc, null);
-  check('detaching a collector switch leaves `control` behind',
-    (dc['control'] as RawEl | undefined) !== undefined && (dc['control'] as RawEl)['outlet'] === undefined);
+  check('detaching clears the switch', (dc['control'] as RawEl)['outlet'] === undefined);
+  check('...and the watcher with it', dc['sensor'] === undefined);
+  check('but keeps `control` while the coast-down still lives in it',
+    (dc['control'] as RawEl)['offDelayMs'] === 8000);
+
+  // Nothing left in the branch, so the branch goes too: an empty `control: {}`
+  // is a field that says nothing, written into every document that ever had a plug.
+  delete (dc['control'] as RawEl)['offDelayMs'];
+  setOutlet(shop, dc, { gen: 2, ip: '10.0.0.9' });
+  setOutlet(shop, dc, null);
+  check('an empty branch is dropped rather than left as {}', dc['control'] === undefined);
 }
 
 // ── add: a tool is a machine with one port ──────────────────────────────────

@@ -450,6 +450,32 @@ consistent with one brain. The unresolved part is a board that serves two
 systems and is in scope for one collector's alert but not the other's: it has
 one NeoPixel and may be asked for two states at once. Nothing decides that yet.
 
+**Reconciled with the pixel's own vocabulary (2026-09-13).** Jeff reconfirmed
+this alert as a requirement, which is a good moment to check it against
+`firmware/utils/StatusLed.h` — because that file already spends RED, and on
+something else: *a fault this board cannot fix itself*. Five healthy boards
+going red for a full bin would read as five dead boards.
+
+The two reconcile, and `binNearFull`'s `"pattern": "blink"` above is already the
+mechanism. StatusLed's own rule is that blink rate may be a second-order detail
+**inside** a colour and never the primary signal, so:
+
+| | |
+|---|---|
+| **Steady red** | this board has a fault |
+| **Blinking red** | the bin on this board's system is full |
+
+Both are "something needs a human", which is what red has always meant here, and
+the split is legible without timing anything. Write it down rather than
+rediscover it: an implementation that reached for solid red would be wrong for a
+reason neither file states on its own.
+
+**Neither half is built.** The primary reads its own bin pin and sets
+`systems[].bin` (2026-09-04), and nothing colours a pixel from it — not even its
+own, which needs no protocol at all. The fan-out to the other boards needs a
+NodeLink frame that does not exist; it is at least in the direction NodeLink
+already runs (primary → node), unlike a node REPORTING its bin upstream.
+
 Open before any of this is built: what distinguishes a clog from a full bin from
 a bag that needs shaking, whether a false strobe mid-cut is worse than a missed
 clog, and whether the rangefinder wants to be IR or ultrasonic in an environment
