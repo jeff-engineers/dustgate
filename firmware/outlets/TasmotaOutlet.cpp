@@ -121,6 +121,43 @@ bool TasmotaOutlet::doPoll(uint32_t timeoutMs) {
         return false;
     }
 
+    // A MULTI-CHANNEL METER REPORTS `Power` AS AN ARRAY, and `as<float>()` on a
+    // JSON array yields 0.0 — which is a working meter reported as a tool that
+    // is never on, forever. Exactly the failure the guard above exists to
+    // prevent, arriving by a different door: ENERGY is present, so that check
+    // does not fire.
+    //
+    // THIS BITES ON THE FIRST EM2, not on the first ganged pair. An Athom EM2
+    // has two channels in hardware whether or not both have a clamp on them, so
+    // it answers with an array either way. There is no single-tool wiring that
+    // avoids it — a lone tool on an EM2 reads 0 W just as thoroughly as two.
+    // And §6.0 of docs/tool-sensing-rfc.md now RECOMMENDS the EM2 over building
+    // our own sensor, so this is the normal case rather than the edge one.
+    //
+    // Refusing is deliberately the whole fix for now. Picking a channel here
+    // would mean guessing which one carries the tool, and a meter silently
+    // watching the wrong channel is worse than one that says it cannot cope.
+    // Channel selection (`sensor.outlet.channel`, absent = scalar) is the
+    // follow-up.
+    if (p.is<JsonArray>()) {
+        // Once per plug, not once per poll: this runs on the poll interval
+        // forever, and a line every second would bury the log it is trying to
+        // be found in. Cleared below, so a plug that is swapped or reconfigured
+        // says so again.
+        if (!_warnedMultiChannel) {
+            _warnedMultiChannel = true;
+            DEBUG_PRINT(F("[Outlets] Tasmota at ")); DEBUG_PRINT(_ip);
+            DEBUG_PRINTLN(F(" reports Power as an ARRAY — this is a multi-channel"));
+            DEBUG_PRINTLN(F("          meter (Athom EM2/EM6). DustGate cannot yet say WHICH"));
+            DEBUG_PRINTLN(F("          channel a tool is on, so it is refusing to guess."));
+            DEBUG_PRINTLN(F("          Treating it as unreachable rather than as 0 W."));
+        }
+        _reachable  = false;
+        _lastPowerW = 0.0f;
+        return false;
+    }
+
+    _warnedMultiChannel = false;
     _lastPowerW = p.as<float>();
     _reachable  = true;
     return true;

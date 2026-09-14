@@ -9,6 +9,12 @@
 // API endpoint: GET http://<ip>/cm?cmnd=Status%208
 // Power field:  response["StatusSNS"]["ENERGY"]["Power"]  (float, watts)
 //
+// ⚠️ ...OR AN ARRAY, on a multi-channel meter. An Athom EM2/EM6 reports one
+// entry per channel, and this class REFUSES such a plug rather than picking a
+// channel for you — see the JsonArray branch in doPoll() for why refusing is
+// the whole fix for now. It is not an edge case: §6.0 recommends the EM2, and
+// an EM2 answers with an array even when only one of its channels is clamped.
+//
 // BOTH VERIFIED against a real Athom plug on 2026-09-09 — Tasmota 14.3.0,
 // ESP8285H16. The reply carries more than we read:
 //
@@ -121,6 +127,9 @@ public:
 private:
     char _ip[16];
     char _name[32];
+    // Have we already said this plug is multi-channel? The complaint is worth
+    // making once per plug and miserable once per poll — see doPoll().
+    bool _warnedMultiChannel = false;
 
     bool doPoll(uint32_t timeoutMs = OUTLET_HTTP_TIMEOUT_MS);
     // NO reresolve(). Tasmota does not advertise over mDNS in a stock build, so
