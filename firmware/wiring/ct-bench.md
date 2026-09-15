@@ -12,36 +12,47 @@ well enough for DustGate's routing. Firmware:
 rig built with D0 at ground, which reads a beautiful and entirely fictional
 0.000 A.** So: as a build, not a drawing.
 
-**Pick one empty row on the breadboard.** Everything either goes into that row or
-it does not.
+**Pick one empty row on the breadboard and put CT wire 1 in it.** That row is now
+called **CT wire 1**, and everything below either lands in it or does not.
 
 | | Goes from | To |
 |---|---|---|
-| 10 kΩ | the `3V3` rail | **that row** |
-| 10 kΩ | **that row** | the `GND` rail |
-| 10 µF | **that row** (long leg / `+`) | the `GND` rail |
-| CT wire 1 | the CT | **that row** |
+| 1 kΩ — `brown black red gold` | the `3V3` rail | **CT wire 1** |
+| 1 kΩ — `brown black red gold` | **CT wire 1** | the `GND` rail |
+| bulk cap — `106` or `107` | **CT wire 1** | the `GND` rail |
+| 100 nF — `104` | **CT wire 1** | the `GND` rail |
 | CT wire 2 | the CT | **`D0`** |
 
 ```mermaid
 flowchart LR
-  V3(("3V3 rail")):::rail -- "10 kΩ" --> ROW
-  ROW -- "10 kΩ" --> G(("GND rail")):::rail
-  ROW -- "10 µF" --> G
-  ROW["<b>that row</b><br/>should sit at ~1.65 V"]:::node
-  ROW == "CT winding<br/>(a few Ω of copper)" ==> D0["<b>D0</b><br/>the other CT lead,<br/>and nothing else"]:::node
+  V3(("3V3 rail")):::rail -- "1 kΩ" --> ROW
+  ROW -- "1 kΩ" --> G(("GND rail")):::rail
+  ROW -- "bulk 106/107" --> G
+  ROW -- "100 nF (104)" --> G
+  ROW["<b>CT wire 1</b><br/>should sit at ~1.65 V"]:::node
+  ROW == "CT winding<br/>(a few Ω of copper)" ==> D0["<b>D0</b><br/>CT wire 2,<br/>and nothing else"]:::node
   classDef rail fill:#eee,stroke:#999
   classDef node fill:#fff,stroke:#333,stroke-width:2px
 ```
 
-That row ends up with four things in it: two resistor legs, the capacitor's `+`
-leg, and one CT wire. **`D0` ends up with exactly one thing in it** — the other CT
-wire — and that is the part that matters. D0 takes its DC level *through the CT
+CT wire 1's row ends up with five things in it: two resistor legs, two capacitor
+legs, and CT wire 1 itself. **`D0` ends up with exactly one thing in it** — CT
+wire 2 — and that is the part that matters. D0 takes its DC level *through the CT
 winding*, which is a few ohms of copper, so it rests halfway up the supply with
 the CT's signal on top. Anything else on D0, ground above all, swamps the two
-10 kΩ resistors and pins the input.
+resistors and pins the input.
 
-**The check, before believing any number.** Meter between that row and GND: it
+### Reading the markings
+
+Band colours and the `104`/`106`/`107` cap codes are in
+[`passives.md`](passives.md) — one page rather than a copy per rig. The two you
+need here: **1 kΩ is `brown black red gold`**, and **`104` is the 100 nF**.
+Ceramics are not polarised; only an electrolytic bulk cap has a `+` leg.
+
+**Use 1 kΩ, not the 10 kΩ this page specified until 2026-09-14** — see the
+divider note below.
+
+**The check, before believing any number.** Meter between CT wire 1 and GND: it
 should read **~1.65 V**, which is just the two resistors halving 3.3 V. The
 console also prints `DC ####mV` on every status line and it should say the same.
 `0mV` or `3300mV` means the input is railed, and every reading is meaningless —
@@ -59,14 +70,30 @@ exactly like a perfectly quiet sensor.
 | | |
 |---|---|
 | CT | **SCT-013-030** — 30 A → 1 V RMS, burden built in. Confirm the listing says **30A/1V**; the 30A/1A variants have no burden |
-| Bias | 2× 10 kΩ from 3V3 and GND, 10 µF from the midpoint to GND |
+| Bias | 2× 10 kΩ from 3V3 and GND, 10 µF from the midpoint to GND — **as measured, not as recommended; see below** |
+| | ⚠️ **STALE — the perfboard rigs were rebuilt to 1 kΩ/1 kΩ + 100 nF on 2026-09-14 (jeff).** This row still describes the hardware every number on this page was taken on, so it stays until there are replacement measurements to put beside it. **Retake the floor and the load table on the new divider, then rewrite this row and the measured-loads section together** — a parts table that has moved on from its own data is worse than one that is openly behind. |
 | ADC | **D0** (GPIO1) — the only analog pad on the edge |
 | Screen | SSD1306 on **D4/D5**, 0x3C. Optional; probed at boot like every other board |
 | Power | Any USB power bank |
 
-**The exact divider does not matter.** The firmware measures the mean and
-subtracts it, so a lazy midpoint and a drifting reference both come out in the
-wash. There is no trim.
+**The exact divider does not matter** *for scale*. The firmware measures the mean
+and subtracts it, so a lazy midpoint and a drifting reference both come out in
+the wash. There is no trim.
+
+**It matters enormously for the NOISE FLOOR, which is the opposite of what that
+sentence implies and cost weeks.** §5.5 below has the finding: 10 kΩ/10 kΩ puts
+5 kΩ at the pin, the SAR's sampling capacitor cannot settle against it, and the
+floor follows. The table above records **what this rig actually had while every
+number on this page was measured** — deliberately, since rewriting it would
+misrepresent the measurements. New builds should use **1 kΩ/1 kΩ plus a 100 nF
+ceramic at the pin** (RFC §5.2), starting with the tool node in RFC §5.6.
+
+One thing the divider also sets is how long the midpoint takes to arrive:
+tau = (R/2) x C, settle ~ 5 tau. 10k/10k with a 100 µF bulk cap is **2.5 s**;
+1k/1k with the same cap is 250 ms. Irrelevant to a human typing `ct`, and
+load-bearing for RFC §5.4b, which learns the board's floor at boot —
+`CtSensor::kBiasSettleMs` (3 s) and `Reading.settling` exist for exactly that,
+because `isRailed()` cannot see a midpoint that is still on its way up.
 
 **⚠️ Clamp ONE conductor.** Around a whole appliance cord, hot and neutral cancel
 and it reads about zero. Use a line splitter's **1X** loop, or clamp inside the

@@ -81,7 +81,7 @@ cannot exceed whatever *you* pull it up to.
 |---|---|---|
 | Brown | QS18 | **+12 V** |
 | Blue | QS18 | **12 V GND** |
-| 1 kΩ | **+12 V** | **4N35 pin 1** (LED anode) |
+| 1 kΩ — `brown black red gold` | **+12 V** | **4N35 pin 1** (LED anode) |
 | Black | QS18 (output) | **4N35 pin 2** (LED cathode) |
 
 *The ESP32 side — nothing here touches 12 V:*
@@ -90,7 +90,7 @@ cannot exceed whatever *you* pull it up to.
 |---|---|---|
 | Wire | **4N35 pin 4** (emitter) | **ESP32 GND** |
 | Wire | **4N35 pin 5** (collector) | **`D6`** |
-| 10 kΩ | **`D6`** | **3V3** |
+| 10 kΩ — `brown black orange gold` | **`D6`** | **3V3** |
 | — | **4N35 pin 3 and pin 6** | **nothing.** Leave both open |
 
 ```mermaid
@@ -241,31 +241,34 @@ from noise.
 Same rig as [`ct-bench.md`](ct-bench.md), and **read that file's warnings before
 trusting a number** — the noise floor is unresolved and the screen is part of it.
 
-**Pick one empty row on the perfboard.** Everything either goes into that row or
-it does not.
+**Pick one empty row on the perfboard and put CT wire 1 in it.** That row is now
+called **CT wire 1**, and everything below either lands in it or does not.
+
+Band colours and cap codes: [`passives.md`](passives.md).
 
 | | Goes from | To |
 |---|---|---|
-| 1 kΩ | the `3V3` rail | **that row** |
-| 1 kΩ | **that row** | the `GND` rail |
-| 100 nF ceramic | **that row** | the `GND` rail | 
-| 10 µF electrolytic| **that row** (long leg / `+`) | the `GND` rail |
-| CT wire 1 | the CT | **that row** |
+| 1 kΩ — `brown black red gold` | the `3V3` rail | **CT wire 1** |
+| 1 kΩ — `brown black red gold` | **CT wire 1** | the `GND` rail |
+| 100 nF ceramic — `104` | **CT wire 1** | the `GND` rail |
+| 10 µF bulk — `106`, or an electrolytic `+` leg | **CT wire 1** | the `GND` rail |
 | CT wire 2 | the CT | **`D0`** |
 
 ```mermaid
 flowchart LR
   V3(("3V3 rail")):::rail -- "1 kΩ" --> ROW
   ROW -- "1 kΩ" --> G(("GND rail")):::rail
-  ROW -- "100 nF" --> G
-  ROW -- "10 µF" --> G
-  ROW["<b>that row</b><br/>must sit at ~1.65 V"]:::node
-  ROW == "CT winding<br/>(a few Ω of copper)" ==> D0["<b>D0</b><br/>the other CT lead,<br/>and nothing else"]:::node
+  ROW -- "100 nF (104)" --> G
+  ROW -- "10 µF (106)" --> G
+  ROW["<b>CT wire 1</b><br/>must sit at ~1.65 V"]:::node
+  ROW == "CT winding<br/>(a few Ω of copper)" ==> D0["<b>D0</b><br/>CT wire 2,<br/>and nothing else"]:::node
   classDef rail fill:#eee,stroke:#999
   classDef node fill:#fff,stroke:#333,stroke-width:2px
 ```
 
-**`D0` ends up with exactly one thing in it** — the other CT wire. It takes its
+CT wire 1's row ends up with five things in it: two resistor legs, two capacitor
+legs, and CT wire 1 itself. **`D0` ends up with exactly one thing in it** — CT
+wire 2. It takes its
 DC level *through the CT winding*, a few ohms of copper, so it rests halfway up
 the supply with the signal on top. Anything else on `D0`, ground above all,
 swamps the divider and pins the input.
@@ -298,7 +301,7 @@ Three things that buys:
 **So the 10 µF and the 100 nF hold the BIAS POINT stiff — they do not smooth the
 signal.** Their job is to stop the CT's own current moving the reference it is
 being measured against. A cap across the *signal* would destroy the measurement
-rather than clean it up, which is why both go from that row to **GND** and
+rather than clean it up, which is why both go from CT wire 1 to **GND** and
 neither goes anywhere near `D0` alone.
 
 **1 kΩ, not the 10 kΩ of the original bench rig.** 10 k/10 k presents 5 kΩ to the
@@ -308,7 +311,7 @@ USB power. The 100 nF is there because the electrolytic does nothing above a few
 kHz, which is exactly where the screen's charge pump lives (`ct-bench.md` §5.5).
 **Both changes are unvalidated.**
 
-**Check before believing anything:** meter between that row and GND should read
+**Check before believing anything:** meter between CT wire 1 and GND should read
 **~1.65 V**. `0 mV` or `3300 mV` means the input is railed and every reading is
 fiction — the variance of a constant is zero, which looks exactly like a
 perfectly quiet sensor.
