@@ -678,6 +678,57 @@ int main(int argc, char** argv) {
     rt.setMachineManual("toolX", false);
   }
 
+  // ── a CLAMPED COLLECTOR feeds the plug path, not the machine path ───────
+  //
+  // A tool's reading answers "should the blower run"; a COLLECTOR's answers
+  // "did the press we sent actually land" — every way DustGate commands a
+  // blower is stateless, so this is the only thing that can say. Different
+  // question, different consumer: setMachinePower() would find no such machine
+  // and do nothing at all, silently.
+  {
+    DynamicJsonDocument tg(16384);
+    deserializeJson(tg, twoGatesJson);
+    for (JsonObject e : tg["elements"].as<JsonArray>())
+      if (topo::_eq(e["type"], "collector"))
+        e.createNestedObject("sensor").createNestedObject("ct")["channel"] = 0;
+    std::string j; serializeJson(tg, j);
+
+    StubBus local; topo::NodeBus nb; topo::TopologyRuntime rt;
+    nb.setLocal(&local, "primary");
+    rt.begin(&nb);
+    std::string err;
+    ok("adopt a clamped collector", rt.adopt(j.c_str(), j.size(), err), err);
+    ok("the collector's clamp is configured too", joined(local.sensorCfg) == "dc@0",
+       "cfg=[" + joined(local.sensorCfg) + "] calls=" + std::to_string(local.cfgCalls));
+
+    // Nothing reported: the blower's plug reads unreachable rather than "off",
+    // because never-heard-from is not the same as measured-at-zero.
+    rt.update(1000);
+    DynamicJsonDocument a(8192);
+    rt.writeStatus(a.to<JsonObject>());
+    // "system-1" is what the shop layer names a v1 document's single system.
+    ok("an unreported clamp leaves the blower plug unreachable",
+       a["systems"]["system-1"]["plug"]["reachable"] == false);
+
+    // Reporting ON must reach the PLUG state, which is what judges whether a
+    // stateless press landed.
+    local.senses["dc"] = { true, 1000 };
+    rt.update(1000);
+    DynamicJsonDocument b(8192);
+    rt.writeStatus(b.to<JsonObject>());
+    ok("a clamped collector reporting ON is seen as drawing",
+       (b["systems"]["system-1"]["plug"]["watts"] | 0.0f) > topo::kCollectorRunningW,
+       std::to_string(b["systems"]["system-1"]["plug"]["watts"] | 0.0f));
+
+    local.senses["dc"] = { false, 2000 };
+    rt.update(2000);
+    DynamicJsonDocument c(8192);
+    rt.writeStatus(c.to<JsonObject>());
+    ok("...and OFF is seen as not drawing",
+       (c["systems"]["system-1"]["plug"]["watts"] | -1.0f) == 0.0f,
+       std::to_string(c["systems"]["system-1"]["plug"]["watts"] | -1.0f));
+  }
+
   // ── a CT on ANOTHER board, and removing one ─────────────────────────────
   {
     DynamicJsonDocument tg(16384);
@@ -733,6 +784,22 @@ int main(int argc, char** argv) {
     // type they don't know, so every old/new combination degrades safely and a
     // bump would force a flash of every board in the shop to buy nothing.
     ok("protocol version unchanged by CONFIG/SENSE", kVersion == 1);
+
+    // caps.ct — the PAIR of nodelink.test.js's "a clamp is DECLARED" block.
+    {
+      // 384 for the same reason dustgate_node.cpp uses it: at 256 this document
+      // overflows and ArduinoJson drops `caps.ct` without a word.
+      StaticJsonDocument<384> w;
+      buildWelcome(w.to<JsonObject>(), "node-1", "xiao_c5", "1.0.0", 4, 0, nullptr, true, 1);
+      ok("a WELCOME may declare a clamp", (w["caps"]["ct"] | 0) == 1);
+
+      StaticJsonDocument<384> none;
+      buildWelcome(none.to<JsonObject>(), "node-1", "xiao_c5", "1.0.0", 4, 0);
+      // OMITTED, not zeroed: absent already means none, so writing it would add
+      // a field to every board's answer to repeat what silence said.
+      ok("a board with no clamp omits the field", !none["caps"].containsKey("ct"));
+      ok("...and reads back as none", (none["caps"]["ct"] | 0) == 0);
+    }
 
     SensorSpec specs[kMaxSensorsPerNode];
     size_t n = 99;

@@ -9,7 +9,7 @@
 // process.exitCode on failure. Run by spec-runner.js.
 
 import {
-  CollectorForm, RawEl, DEFAULT_COAST_SEC, DEFAULT_RF_PIN, ROCKLER_ADDRESS,
+  CollectorForm, RawEl, DEFAULT_COAST_SEC, DEFAULT_CT_CHANNEL, DEFAULT_RF_PIN, ROCKLER_ADDRESS,
   fused, readCollector, writeCollector,
 } from './collector-doc';
 import { validateTopology } from '@topology';
@@ -286,6 +286,81 @@ const plug = (ip: string, kind: 'shelly' | 'tasmota' = 'shelly') =>
   const i = t.elements.findIndex(e => e['id'] === 'dc');
   t.elements[i] = { ...t.elements[i], ...dc({ bin: true, binControllerId: 'nope' }) };
   check('a bin on a board that does not exist is refused', !validateTopology(t as never).ok);
+}
+
+// ── sensor.ct: a clamp, for a blower with no plug to meter ──────────────────
+//
+// It matters MORE here than on a tool. Every way DustGate commands a blower is
+// STATELESS — a servo pressing a fob, an RF frame — so what we sent proves
+// nothing, and `sensor` is the only thing that can say the press landed. A 240V
+// blower is exactly the case with no plug to pair.
+{
+  const bare = readCollector(collector({ sensor: { ct: { channel: 0 } } }));
+  eq('a clamped collector reads as watched by a clamp', bare.sense, 'ct');
+  eq('...on THIS board when no controllerId is written', bare.senseCtControllerId, '');
+
+  const named = readCollector(collector({
+    sensor: { ct: { controllerId: 'planer-node', channel: 0 } },
+  }));
+  eq('...or on the board it names', named.senseCtControllerId, 'planer-node');
+
+  // WRITING
+  sameDoc('a clamp on this board writes no controllerId',
+    writeCollector({ id: 'dc', type: 'collector' },
+                   form({ ctl: 'rf', sense: 'ct' }))['sensor'],
+    { ct: { channel: DEFAULT_CT_CHANNEL } });
+
+  sameDoc('...and names the board when one is chosen',
+    writeCollector({ id: 'dc', type: 'collector' },
+                   form({ ctl: 'rf', sense: 'ct', senseCtControllerId: 'planer-node' }))['sensor'],
+    { ct: { channel: DEFAULT_CT_CHANNEL, controllerId: 'planer-node' } });
+
+  // A clamp and a plug are ONE question — validateTopology() refuses both — so
+  // choosing the clamp must REMOVE the plug rather than leave it behind.
+  const wasPlug = writeCollector(
+    collector({ sensor: { outlet: shelly('10.0.0.11') } }),
+    form({ ctl: 'rf', sense: 'ct' }));
+  sameDoc('switching a plug to a clamp drops the plug',
+    wasPlug['sensor'], { ct: { channel: DEFAULT_CT_CHANNEL } });
+
+  // ...and back again.
+  const backToPlug = writeCollector(
+    collector({ sensor: { ct: { channel: 0 } } }),
+    form({ ctl: 'rf', sense: 'plug', sensePlug: plug('10.0.0.11', 'tasmota') }));
+  check('switching a clamp back to a plug drops the clamp',
+    (backToPlug['sensor'] as RawEl)['ct'] === undefined);
+
+  // A SWITCHABLE plug already reports its own power, so the sheet collapses the
+  // watch question entirely — and a clamp must not survive that collapse.
+  const fusedDoc = writeCollector({ id: 'dc', type: 'collector' },
+    form({ ctl: 'plug', ctlPlug: plug('10.0.0.9', 'shelly'), sense: 'ct' }));
+  check('a fused collector writes no sensor at all', fusedDoc['sensor'] === undefined);
+
+  // A field written by a newer UI survives a round trip through this one.
+  const kept = writeCollector(
+    collector({ sensor: { ct: { channel: 0, tuning: 'auto' } } }),
+    readCollector(collector({ sensor: { ct: { channel: 0, tuning: 'auto' } } })));
+  check('an unknown ct field survives a round trip',
+    ((kept['sensor'] as RawEl)['ct'] as RawEl)['tuning'] === 'auto');
+}
+
+// ── and the real validator agrees ───────────────────────────────────────────
+{
+  const t = clone(star) as { elements: RawEl[] };
+  const i = t.elements.findIndex(e => e['id'] === 'dc');
+  t.elements[i] = { ...t.elements[i],
+                    ...writeCollector({ id: 'dc', type: 'collector' },
+                                      form({ ctl: 'rf', sense: 'ct' })) };
+  check('a clamped collector validates', validateTopology(t as never).ok,
+        JSON.stringify(validateTopology(t as never).errors));
+
+  const bad = clone(star) as { elements: RawEl[] };
+  const j = bad.elements.findIndex(e => e['id'] === 'dc');
+  bad.elements[j] = { ...bad.elements[j],
+                      ...writeCollector({ id: 'dc', type: 'collector' },
+                        form({ ctl: 'rf', sense: 'ct', senseCtControllerId: 'nope' })) };
+  check('a clamp on a board that does not exist is refused',
+        !validateTopology(bad as never).ok);
 }
 
 console.log(`\n${pass}/${pass + fail} passed`);

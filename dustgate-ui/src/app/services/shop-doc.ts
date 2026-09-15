@@ -38,7 +38,15 @@ export interface ShopSystem {
 export interface ShopMachine {
   id: string;
   name?: string;
-  sensor?: { outlet?: RawEl };
+  /** How this thing is WATCHED. Exactly one of the two — validateTopology()
+   *  refuses a machine carrying both, because "is it running" is one question
+   *  and two answers that can disagree is a gate that opens or doesn't
+   *  depending which was read last.
+   *
+   *  `ct` is a clamp on a BOARD rather than a device at the machine, so it is a
+   *  sibling of `outlet` rather than a field on it: a plug is addressed by IP,
+   *  a clamp by controllerId. */
+  sensor?: { outlet?: RawEl; ct?: RawEl };
   [k: string]: unknown;
 }
 
@@ -349,6 +357,26 @@ export function outletOf(doc: ShopDoc | null, el: RawEl | null | undefined): Raw
   }
   const m = machineOfPort(doc, el);
   return ((m?.sensor as RawEl | undefined)?.['outlet'] as RawEl | undefined) ?? null;
+}
+
+/**
+ * The CT clamp watching this element, or null.
+ *
+ * Resolves through the machine exactly as outletOf() does, and for the same
+ * reason: "which device watches this" is a fact about the MACHINE, and a port is
+ * not the machine. Reading it off the element directly finds nothing for every
+ * tool in a v2 shop — which is a clamp that is configured, saved, obeyed by the
+ * firmware, and invisible on the canvas. (Found exactly that way, 2026-09-15.)
+ *
+ * A collector has no machine, so it carries its own.
+ */
+export function clampOf(doc: ShopDoc | null, el: RawEl | null | undefined): RawEl | null {
+  if (!el) return null;
+  if (el['type'] === 'collector') {
+    return ((el['sensor'] as RawEl | undefined)?.['ct'] as RawEl | undefined) ?? null;
+  }
+  const m = machineOfPort(doc, el);
+  return ((m?.sensor as RawEl | undefined)?.['ct'] as RawEl | undefined) ?? null;
 }
 
 /** Attach (or with null, detach) the plug for an element. A collector routes by

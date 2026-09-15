@@ -373,9 +373,11 @@
             <td>Model and firmware built — <code>CollectorPlugState</code> already judges it.
                 <b>No UI reaches it today</b></td></tr>
         <tr><td><code>sensor.ct</code></td><td>Watched by → Current clamp</td>
-            <td><b>Does not exist</b>, and the RFC says not to invent it yet: a CT cannot honour a
-                threshold in watts, and the learned-baseline shape that replaces it is unsettled
-                (§5.4a)</td></tr>
+            <td>Model, protocol and firmware built 2026-09-15 — the node decides one bit against
+                its own noise floor and reports it. <b>§5.4a's objection is gone</b>: §5.4b found
+                there is no threshold to shape, because a woodworking tool's standby sits under the
+                floor. <b>No UI reaches it yet</b>; see
+                <a href="ct-on-a-board.html">ct-on-a-board.html</a></td></tr>
         <tr><td><code>bin.sensor</code></td><td>Dust bin</td>
             <td>Model, firmware and hardware all proven 2026-09-13. <b>Nothing renders it</b></td></tr>
         <tr><td><i>the red flash</i></td><td>follows from the bin being on</td>

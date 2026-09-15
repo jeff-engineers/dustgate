@@ -1,7 +1,7 @@
 import { Component, EventEmitter, Input, OnInit, Output, QueryList, ViewChildren } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { DiscoveredOutlet } from '../services/api.service';
+import { ClampBoard, DiscoveredOutlet } from '../services/api.service';
 import { OutletPickerComponent } from './outlet-picker.component';
 import { PairedOutletRowComponent } from './paired-outlet-row.component';
 import { RfAddressComponent } from './rf-address.component';
@@ -295,14 +295,36 @@ import { CollectorForm, CtlKind, RawEl, SenseKind, fused, readCollector, writeCo
             </app-outlet-picker>
           </div>
 
-          <button type="button" class="opt" role="radio" aria-checked="false" disabled>
+          <!-- A clamp, for a blower with no plug to pair. Disabled only when
+               NO BOARD HAS ONE — a clamp cannot be discovered the way a plug
+               can, so the board has to declare it (caps.ct), and offering the
+               option with nothing behind it would be a dead end. -->
+          <button type="button" class="opt" role="radio" aria-labelledby="sense-lbl"
+                  [attr.aria-checked]="form.sense === 'ct'"
+                  [class.on]="form.sense === 'ct'"
+                  [class.open]="form.sense === 'ct'"
+                  [disabled]="!clampBoards.length"
+                  (click)="setSense('ct')">
             <span class="radio"></span>
             <span class="body">
-              <span class="name">Current clamp<span class="pill soon">not built yet</span></span>
-              <span class="detail">A clamp on the collector's feed — for 240 V, where there is
-                no plug to pair.</span>
+              <span class="name">Current clamp<span class="pill soon"
+                    *ngIf="!clampBoards.length">no board has one</span></span>
+              <span class="detail">A clamp on the collector's feed, wired to one of your
+                boards — for 240 V, where there is no plug to pair.</span>
             </span>
           </button>
+          <div class="expand" *ngIf="form.sense === 'ct'">
+            <div class="board">
+              <label for="ct-board">Wired to</label>
+              <select id="ct-board" [(ngModel)]="form.senseCtControllerId">
+                <option *ngFor="let b of clampBoards" [value]="b.id">
+                  {{ b.name }}{{ b.online ? '' : ' — not answering' }}
+                </option>
+              </select>
+            </div>
+            <p class="note">Only boards that have told DustGate they have a clamp appear here.
+              The lead runs from the blower's feed to that board.</p>
+          </div>
 
           <button type="button" class="opt" role="radio" aria-labelledby="sense-lbl"
                   [attr.aria-checked]="form.sense === 'none'"
@@ -383,6 +405,14 @@ export class CollectorSetupComponent implements OnInit {
   @Input({ required: true }) element!: RawEl;
   /** For the bin's "wired to" list, and only that. */
   @Input() controllers: { id: string; name?: string }[] = [];
+  /** Boards that DECLARED a clamp (caps.ct in their WELCOME).
+   *
+   *  Not the same list as `controllers`, and deliberately so: that one is the
+   *  LAYOUT's boards, which may include one nobody has ever plugged in. A clamp
+   *  is the one device that cannot be discovered — no address, somebody soldered
+   *  it on — so only a board that has actually said it has one can be offered,
+   *  or the sheet would happily write a layout that senses nothing. */
+  @Input() clampBoards: ClampBoard[] = [];
   /** Named in the bin alert's copy, so the scope is concrete rather than abstract. */
   @Input() systemName = '';
   /** Plugs already spoken for elsewhere in the shop, and why. */
@@ -476,7 +506,16 @@ export class CollectorSetupComponent implements OnInit {
   }
 
   setCtl(c: CtlKind): void { this.form.ctl = c; this.changingCtl = false; }
-  setSense(s: SenseKind): void { this.form.sense = s; this.changingSense = false; }
+  setSense(s: SenseKind): void {
+    this.form.sense = s;
+    this.changingSense = false;
+    // Default to the first board that has a clamp rather than leaving the
+    // select blank: with one clamp in the shop — the normal case — there is
+    // nothing to choose, and an empty select reads as an unfinished form.
+    if (s === 'ct' && !this.form.senseCtControllerId && this.clampBoards.length) {
+      this.form.senseCtControllerId = this.clampBoards[0].id;
+    }
+  }
 
   pickCtl(d: DiscoveredOutlet): void {
     // A no-relay plug has no contacts, so naming it here describes a collector

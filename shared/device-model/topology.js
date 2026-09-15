@@ -173,7 +173,7 @@ const MAX_SLIDE_BRANCHES = 8;
  *                                   frame; `outlet` commands a plug. Never both. Absent when the collector is
  *                                   commanded some other way: a servo pressing
  *                                   its remote, or RF. See tool-sensing-rfc §4.2.
- * @property {Object} [sensor]            (collector) { outlet } — how we SENSE it.
+ * @property {Object} [sensor]            (collector) { outlet } | { ct } — how we SENSE it.
  *                                   Independent of `control`, because a collector
  *                                   switched by a stateless press still has to be
  *                                   watched to know whether the press landed.
@@ -570,15 +570,26 @@ function validateTopology(t) {
   for (const e of t.elements) {
     const ct = (e.sensor || {}).ct;
     if (!ct) continue;
-    if (e.type !== 'tool') {
-      err('element', `only a tool can be sensed by a CT (${e.type})`, e.id);
+    // A TOOL or a COLLECTOR. Both are sensed by the same question — "is this
+    // motor drawing current" — and both hit the same wall when they are 240 V
+    // or hardwired, so offering a clamp on one and not the other would be an
+    // arbitrary split that the two setup sheets would then have to explain.
+    // Opened up 2026-09-15; it was tool-only for the day the shape existed.
+    //
+    // For a collector the clamp answers a sharper question than for a tool.
+    // Every way DustGate commands a blower is STATELESS — a servo pressing a
+    // fob, an RF frame — so what we sent proves nothing, and `sensor.*` is the
+    // only thing that can say whether it actually started (CollectorPlugState).
+    // A clamp does that for a blower with no plug to meter.
+    if (e.type !== 'tool' && e.type !== 'collector') {
+      err('element', `only a tool or the collector can be sensed by a CT (${e.type})`, e.id);
       continue;
     }
     // Two answers to one question. Which one wins would be an implementation
     // detail, and a tool that is on according to one and off according to the
     // other is a gate that opens or doesn't depending on which was read last.
     if ((e.sensor || {}).outlet)
-      err('element', `tool "${e.name || e.id}" is sensed by BOTH a plug and a CT — pick one`, e.id);
+      err('element', `"${e.name || e.id}" is sensed by BOTH a plug and a CT — pick one`, e.id);
     if (typeof ct !== 'object')
       err('element', 'sensor.ct must be an object', e.id);
     // controllerId is OPTIONAL and means "this board" when absent, matching the

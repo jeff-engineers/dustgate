@@ -289,7 +289,10 @@ bool HttpApiServer::begin() {
         const char* t = f["t"].as<const char*>();
         if (!t) return;
 
-        StaticJsonDocument<256> reply;
+        // 384 for the same reason dustgate_node.cpp uses it: a WELCOME with a
+        // three-member `caps` overflows 256, and ArduinoJson drops the last
+        // member added — `caps.ct` — without saying anything.
+        StaticJsonDocument<384> reply;
         if (strcmp(t, "HELLO") == 0) {
             if ((f["v"] | 0) != topo::nodelink::kVersion) {
                 // Refuse rather than half-speak an unknown protocol.
@@ -306,7 +309,14 @@ bool HttpApiServer::begin() {
             const int servoCaps = 0;
 #endif
             topo::nodelink::buildWelcome(reply.to<JsonObject>(), host.c_str(),
-                                         BOARD_NAME, "1.0.0", servoCaps, 1);
+                                         BOARD_NAME, "1.0.0", servoCaps, 1,
+                                         nullptr, true,
+#ifdef PIN_CT
+                                         1
+#else
+                                         0
+#endif
+                                         );
         } else if (strcmp(t, "PING") == 0) {
             topo::nodelink::buildPong(reply.to<JsonObject>());
         } else if (strcmp(t, "SET") == 0) {

@@ -1,0 +1,441 @@
+<meta charset="utf-8">
+<title>A Clamp on a Board</title>
+
+<style>
+  :root {
+    --bg: #111; --surface: #1e1e1e; --raised: #262626; --border: #2e2e2e;
+    --text: #e8e8e8; --muted: #8a8a86; --accent: #f0a500; --success: #3cbe6e;
+    --danger: #d94444; --signal: #59b0c8; --radius: 14px;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); margin: 0; padding: 22px 18px 72px;
+         font-family: system-ui, -apple-system, sans-serif; font-size: 15px; line-height: 1.5; }
+  .wrap { max-width: 1080px; margin: 0 auto; display: flex; flex-direction: column; gap: 24px; }
+  h1 { font-size: 22px; font-weight: 600; margin: 6px 0 0; letter-spacing: -0.01em; }
+  h2 { font-size: 13.5px; font-weight: 600; margin: 0; }
+  h3 { font-size: 15px; font-weight: 600; margin: 0 0 2px; }
+  .lede { color: var(--muted); font-size: 13.5px; max-width: 68ch; margin: 6px 0 0; }
+  .eyebrow { font-size: 11px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--muted); }
+  p { margin: 0; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.92em; }
+  a { color: var(--accent); }
+  .rule { height: 1px; background: var(--border); border: 0; margin: 0; }
+  .sec { display: flex; flex-direction: column; gap: 12px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 15px 16px; }
+  .card p + p { margin-top: 9px; }
+  .note { font-size: 12.5px; color: var(--muted); line-height: 1.55; }
+  .note b { color: var(--text); font-weight: 600; }
+  .banner { background: #241c06; border: 1px solid #4a3a0d; border-radius: var(--radius);
+            padding: 13px 15px; font-size: 13px; line-height: 1.55; }
+  .banner b { color: var(--accent); }
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
+
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: 11.5px; text-transform: uppercase; letter-spacing: .06em; }
+  td code { color: var(--accent); }
+
+  .ico { width: 24px; height: 24px; flex: none; color: var(--text); }
+  .ico svg { width: 100%; height: 100%; display: block; }
+
+  /* ── glyph candidates ─────────────────────────────────────────────────── */
+  .cands { display: flex; gap: 12px; flex-wrap: wrap; }
+  .cand { background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+          padding: 13px 14px; cursor: pointer; font: inherit; color: var(--text);
+          text-align: left; flex: 1 1 220px; }
+  .cand.on { border-color: var(--accent); background: var(--raised); }
+  .cand .big { color: var(--accent); }
+  .cand .big svg { width: 56px; height: 56px; display: block; }
+  .cand .row { display: flex; align-items: center; gap: 12px; margin-bottom: 9px; }
+  .cand .nm { font-size: 13.5px; font-weight: 600; }
+  .cand .why { font-size: 11.5px; color: var(--muted); line-height: 1.5; }
+
+  /* ── the tray ─────────────────────────────────────────────────────────── */
+  .tray { width: 340px; max-width: 100%; background: var(--bg); border: 1px solid #202225;
+          border-radius: 16px; padding: 13px 12px 15px; }
+  .tray h4 { margin: 0 0 3px; font-size: 14px; font-weight: 600; }
+  .tray .sub { font-size: 11.5px; color: var(--muted); margin: 0 0 11px; }
+  .dev { display: flex; align-items: center; gap: 11px; background: var(--surface);
+         border: 1px solid var(--border); border-radius: 11px; padding: 9px 11px; margin-bottom: 7px; }
+  .dev .nm { font-size: 13.5px; }
+  .dev .on-board { font-size: 11.5px; color: var(--muted); }
+  .dev .grip { margin-left: auto; color: #4a4a48; font-size: 15px; letter-spacing: 1px; }
+  .dev.ct .ico { color: var(--signal); }
+
+  /* ── canvas scene ─────────────────────────────────────────────────────── */
+  .scene { background: var(--bg); border: 1px solid #202225; border-radius: 16px; padding: 10px; }
+  .scene svg { width: 100%; height: auto; display: block; }
+  .picks { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+  .pick { background: var(--surface); border: 1px solid var(--border); color: var(--muted);
+          border-radius: 999px; padding: 6px 13px; font: inherit; font-size: 12.5px; cursor: pointer; }
+  .pick.on { border-color: var(--signal); color: var(--text); }
+  .cols { display: flex; gap: 20px; flex-wrap: wrap; align-items: flex-start; }
+</style>
+
+<div class="wrap">
+
+  <div>
+    <div class="eyebrow">Exploration · 2026-09-15</div>
+    <h1>A Clamp on a Board</h1>
+    <p class="lede">
+      Every sensing device DustGate has ever had sits AT the thing it watches, and is found by
+      searching the network for it. A current clamp is neither: it is soldered to a board that may
+      be across the shop, and no amount of searching will find it. This works out what that looks
+      like to a woodworker.
+    </p>
+  </div>
+
+  <div class="banner">
+    <b>The model and firmware are built; none of this is.</b> <code>sensor.ct</code> validates, the
+    primary pushes a CONFIG, a node decides the bit and reports it, and the routing brain acts on
+    it — but nothing has run on hardware and <b>the canvas has no way to create one</b>. Today the
+    only way to make a CT-sensed tool is to PUT a topology by hand.
+  </div>
+
+  <hr class="rule">
+
+  <!-- ── 1. THE GLYPH ─────────────────────────────────────────────────── -->
+  <div class="sec">
+    <div>
+      <h2 class="eyebrow">1 · The glyph</h2>
+      <p class="note" style="margin-top:5px">
+        It has to survive at <b>24&nbsp;px beside the outlet glyph</b>, in a 1.6-weight line
+        drawing with no fill — that is the whole vocabulary of this icon set, and a CT that needs
+        colour or detail to read is the wrong drawing. Pick one; they are shown large, at size, and
+        in a tray row below.
+      </p>
+    </div>
+
+    <div class="cands" id="cands"></div>
+
+    <div class="cols">
+      <div>
+        <p class="note" style="margin-bottom:8px"><b>At size, next to what it will sit beside.</b></p>
+        <div class="card" style="display:flex; gap:22px; align-items:center">
+          <div style="display:flex;align-items:center;gap:9px">
+            <span class="ico" id="atSize"></span><span class="note" style="color:var(--text)">CT clamp</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:9px">
+            <span class="ico" id="outletSize"></span><span class="note" style="color:var(--text)">Smart plug</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:9px">
+            <span class="ico" id="boardSize"></span><span class="note" style="color:var(--text)">Board</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <hr class="rule">
+
+  <!-- ── 2. THE TRAY ──────────────────────────────────────────────────── -->
+  <div class="sec">
+    <div>
+      <h2 class="eyebrow">2 · The tray is not an outlet tray any more</h2>
+      <p class="note" style="margin-top:5px">
+        It holds plugs DustGate found by sweeping, and now a clamp it did not find at all. The row
+        carries <b>which board</b> because that is the only thing distinguishing two identical
+        clamps — and because it is the fact that decides where a cable has to run.
+      </p>
+    </div>
+
+    <div class="cols">
+      <div class="tray">
+        <h4 id="trayName">Devices</h4>
+        <p class="sub" id="traySub">Drag one onto a machine to say what it watches.</p>
+
+        <div class="dev">
+          <span class="ico" id="dev1"></span>
+          <div><div class="nm">Shelly Plug S</div><div class="on-board">192.168.87.30 · 0 W</div></div>
+          <span class="grip">⋮⋮</span>
+        </div>
+        <div class="dev">
+          <span class="ico" id="dev2"></span>
+          <div><div class="nm">Athom metering plug</div><div class="on-board">192.168.87.27 · 0 W</div></div>
+          <span class="grip">⋮⋮</span>
+        </div>
+        <div class="dev ct">
+          <span class="ico" id="dev3"></span>
+          <div><div class="nm">Current clamp</div><div class="on-board">on Planer node</div></div>
+          <span class="grip">⋮⋮</span>
+        </div>
+        <div class="dev ct">
+          <span class="ico" id="dev4"></span>
+          <div><div class="nm">Current clamp</div><div class="on-board">on Shop brain</div></div>
+          <span class="grip">⋮⋮</span>
+        </div>
+      </div>
+
+      <div style="flex:1 1 300px; display:flex; flex-direction:column; gap:12px">
+        <div class="card">
+          <h3>Where the clamp rows come from</h3>
+          <p class="note">
+            <b>Not from a sweep — a clamp has no address to find.</b> The board says so in its
+            WELCOME, the same frame that already reports how many servos it can drive. That makes
+            the row a fact about hardware rather than something a person typed, and a board that
+            knows what it is soldered to cannot be wrong about it.
+          </p>
+          <p class="note">
+            It is also the smallest possible piece of the "capabilities" idea: one more number in
+            <code>caps</code>, not a refactor. A board with no clamp simply contributes no row, and
+            <b>a tray with no clamp rows is the correct empty state</b>, not a missing feature.
+          </p>
+        </div>
+        <div class="card">
+          <h3>What to call it</h3>
+          <p class="note">
+            Not "outlets" — one of these is not an outlet. Candidates, none settled:
+            <b>Devices</b> (accurate, bland), <b>Plugs &amp; clamps</b> (says exactly what is in
+            there, ages badly the moment a third kind arrives), <b>What DustGate can see</b>
+            (woodworker-plain, long). Leaning Devices.
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <hr class="rule">
+
+  <!-- ── 3. THE CANVAS ────────────────────────────────────────────────── -->
+  <div class="sec">
+    <div>
+      <h2 class="eyebrow">3 · On the canvas, it draws its own cable</h2>
+      <p class="note" style="margin-top:5px">
+        A plug needs no line: it sits at the tool and the association is obvious. A clamp's lead
+        physically runs from the tool to a board — so the line is not a diagram of a relationship,
+        it is <b>a drawing of a wire the woodworker will have to run across their floor</b>. Drawn
+        honestly, a long one is telling them to move the board.
+      </p>
+    </div>
+
+    <div class="picks" id="picks"></div>
+    <div class="scene" id="scene"></div>
+
+    <div class="grid2">
+      <div class="card">
+        <h3>Three lines already mean things here</h3>
+        <p class="note">
+          Duct runs are solid. A secondary port's cross-system run is <b>grey dashed and thinner</b>.
+          An unfinished run's stub is <b>accent orange</b>. CLAUDE.md records that the meaning of a
+          dashed line was re-litigated three times, so a fourth dashed vocabulary is the one thing
+          not to reach for by default. <b>Dotted in a cool signal colour</b> reads as "not air" at a
+          glance, which is the distinction that matters most.
+        </p>
+      </div>
+      <div class="card">
+        <h3>It routes like a cable, not like a duct</h3>
+        <p class="note">
+          Same orthogonal routing the board cables already use, because it <em>is</em> a board
+          cable — but it must be allowed to cross duct runs, which ducts may not do to each other.
+          Air cannot cross; a wire on the floor obviously can. <b>Unresolved:</b> whether it should
+          route around machine boxes or straight through them.
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <hr class="rule">
+
+  <!-- ── 4. DECISIONS ─────────────────────────────────────────────────── -->
+  <div class="sec">
+    <div><h2 class="eyebrow">4 · Open, with a position</h2></div>
+    <div class="grid2">
+      <div class="card">
+        <h3>A clamp is dragged, like a plug — onto either</h3>
+        <p class="note">
+          The gesture already exists and the mental model is identical: "this device watches that
+          thing". It drops on a machine <b>or the collector</b>, exactly as a plug does.
+        </p>
+        <p class="note">
+          <b>The collector was the harder call and it went the same way.</b> A clamp answers a
+          sharper question there than on a tool: every way DustGate commands a blower is
+          STATELESS — a servo on a fob, an RF frame — so <code>sensor</code> is the only thing that
+          can say the press landed, and a 240&nbsp;V blower has no plug to meter. Splitting it
+          would have left the two setup sheets explaining an arbitrary difference.
+        </p>
+      </div>
+      <div class="card">
+        <h3>The two sheets converge on one control</h3>
+        <p class="note">
+          <a href="collector-setup.html">The collector sheet</a> already asks <b>Watched by</b> as a
+          radiogroup — metering plug / current clamp / nothing. The tools screen does not: it pairs
+          a plug and asks for a threshold, a shape from before any of this existed. It gets the same
+          radiogroup, so the answer to "how does DustGate know this is running" looks identical
+          wherever you are standing.
+        </p>
+        <p class="note">
+          Its greyed reason — "threshold shape undecided" — dies with the change. RFC §5.4b settled
+          it: <b>there is no threshold</b>. The node compares against its own noise floor and sends
+          one bit, so a clamp has nothing to ask the user for except which board it is on.
+        </p>
+      </div>
+      <div class="card">
+        <h3>One clamp per board</h3>
+        <p class="note">
+          The C5 has exactly one analog pad on the edge (<code>D0</code>), so a board contributes at
+          most one row and the tray never shows two clamps on one board. That is a hardware fact,
+          not a rule — worth stating so nobody designs a picker for a second channel.
+        </p>
+      </div>
+      <div class="card">
+        <h3>What a clamped tool shows when its board is asleep</h3>
+        <p class="note">
+          The planer node is powered from the planer, so it vanishes whenever the machine is
+          switched off at the wall — normal, and marked <code>intermittent</code> in the layout.
+          The tool reads as off, correctly. <b>Unbuilt:</b> nothing reads that flag yet, so the
+          ordinary board-offline warning still fires every time. A clamped tool probably needs a
+          third state on the canvas — watched / running / <em>not reporting</em>.
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <hr class="rule">
+
+  <div class="sec">
+    <div><h2 class="eyebrow">5 · What exists behind this</h2></div>
+    <div class="card" style="padding:4px 6px">
+      <table>
+        <tr><th>Piece</th><th>State</th></tr>
+        <tr><td><code>sensor.ct</code> on a tool</td><td>Built + validated. Sibling of <code>sensor.outlet</code>, addressed by <code>controllerId</code></td></tr>
+        <tr><td><code>CONFIG</code> / <code>SENSE</code> frames</td><td>Built both sides, 46 conformance cases, no version bump</td></tr>
+        <tr><td>Primary pushes + consumes</td><td>Built. The bit becomes a synthetic wattage, as manual override does</td></tr>
+        <tr><td>Node decides the bit</td><td>Built. Floor learnt at boot; trip ratio is a <b>guess</b> until the rebuilt divider is measured</td></tr>
+        <tr><td><code>caps.ct</code> in WELCOME</td><td><b>Does not exist.</b> Needed before the tray can list a clamp</td></tr>
+        <tr><td><code>sensor.ct</code> on a COLLECTOR</td><td>Built + validated 2026-09-15. Feeds <code>CollectorPlugState</code>, not the machine path — a blower's reading answers a different question</td></tr>
+        <tr><td>Canvas glyph, drag, tie-line</td><td><b>Does not exist.</b> This page</td></tr>
+        <tr><td>"Watched by" on the tools screen</td><td><b>Does not exist.</b> The collector sheet has it; the tool sheet predates it</td></tr>
+        <tr><td>Anything on hardware</td><td><b>No board has ever sent a SENSE</b></td></tr>
+      </table>
+    </div>
+  </div>
+
+</div>
+
+<script>
+  const svg = (inner, w) =>
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="' + (w || 1.6) +
+    '" stroke-linecap="round" stroke-linejoin="round">' + inner + '</svg>';
+
+  // The existing vocabulary, copied from build.component.ts so the comparison is real.
+  const OUTLET = '<rect x="4" y="4" width="16" height="16" rx="3"/><circle cx="9.5" cy="11" r="1.1" fill="currentColor" stroke="none"/><circle cx="14.5" cy="11" r="1.1" fill="currentColor" stroke="none"/><path d="M9 16h6"/>';
+  const BOARD  = '<rect x="4" y="6" width="16" height="10" rx="2"/><path d="M8 16v2M12 16v2M16 16v2"/>';
+
+  const CANDS = [
+    { id: 'ring', nm: 'Split ring on a wire',
+      why: 'The concept, not the product: a jaw closed around a conductor. The gap on the right is the hinge. Reads at 24px because it is three strokes.',
+      d: '<path d="M12 2.5v19"/><path d="M15.4 7.3A6 6 0 1 0 15.4 16.7"/><path d="M6.4 16.6 3.5 19.4"/>' },
+    { id: 'body', nm: 'The clamp itself',
+      why: 'What an SCT-013 actually looks like — a body, a seam where the jaw opens, the hole, and a lead. Most literal, most strokes, the first to muddy when it shrinks.',
+      d: '<rect x="6" y="3.5" width="12" height="14" rx="3"/><path d="M6 10.5h3.4M14.6 10.5h3.4"/><circle cx="12" cy="10.5" r="2.4"/><path d="M12 17.5v3"/>' },
+    { id: 'jaws', nm: 'Two jaws, open',
+      why: 'The gesture rather than the object: two halves about to close on a wire. Most distinct from the outlet square at a glance; least obviously a product.',
+      d: '<path d="M12 3v18"/><path d="M8.8 7.6A5.2 5.2 0 0 0 8.8 16.4"/><path d="M15.2 7.6A5.2 5.2 0 0 1 15.2 16.4"/><path d="M15.6 16.6 18.6 19.2"/>' },
+  ];
+
+  const LINES = [
+    { id: 'dot',  nm: 'Dotted, signal blue',  stroke: '#59b0c8', dash: '1 4',  w: 1.6, op: 1 },
+    { id: 'dash', nm: 'Dashed, signal blue',  stroke: '#59b0c8', dash: '6 4',  w: 1.6, op: 1 },
+    { id: 'thin', nm: 'Thin solid, dimmed',   stroke: '#7d8f96', dash: '',     w: 1.2, op: .9 },
+  ];
+
+  let pickCand = 'body', pickLine = 'dot';
+
+  function renderCands() {
+    document.getElementById('cands').innerHTML = CANDS.map(c =>
+      '<button class="cand' + (c.id === pickCand ? ' on' : '') + '" data-id="' + c.id + '">' +
+        '<div class="row"><span class="big">' + svg(c.d, 1.35) + '</span>' +
+          '<span class="nm">' + c.nm + '</span></div>' +
+        '<div class="why">' + c.why + '</div>' +
+      '</button>').join('');
+    document.querySelectorAll('.cand').forEach(b =>
+      b.onclick = () => { pickCand = b.dataset.id; renderAll(); });
+  }
+
+  function glyph() { return CANDS.find(c => c.id === pickCand).d; }
+
+  function renderAll() {
+    renderCands();
+    document.getElementById('atSize').innerHTML     = svg(glyph());
+    document.getElementById('outletSize').innerHTML = svg(OUTLET);
+    document.getElementById('boardSize').innerHTML  = svg(BOARD);
+    document.getElementById('dev1').innerHTML = svg(OUTLET);
+    document.getElementById('dev2').innerHTML = svg(OUTLET);
+    document.getElementById('dev3').innerHTML = svg(glyph());
+    document.getElementById('dev4').innerHTML = svg(glyph());
+    renderPicks();
+    renderScene();
+  }
+
+  function renderPicks() {
+    document.getElementById('picks').innerHTML = LINES.map(l =>
+      '<button class="pick' + (l.id === pickLine ? ' on' : '') + '" data-id="' + l.id + '">' +
+      l.nm + '</button>').join('');
+    document.querySelectorAll('.pick').forEach(b =>
+      b.onclick = () => { pickLine = b.dataset.id; renderPicks(); renderScene(); });
+  }
+
+  // A small shop: the brain, a node at the planer, two machines, a collector.
+  function renderScene() {
+    const L = LINES.find(l => l.id === pickLine);
+    const box = (x, y, w, h, label, sub) =>
+      '<rect x="' + x + '" y="' + y + '" width="' + w + '" height="' + h + '" rx="6" ' +
+        'fill="#1e1e1e" stroke="#3a3a38"/>' +
+      '<text x="' + (x + w / 2) + '" y="' + (y + 20) + '" fill="#e8e8e8" font-size="12.5" ' +
+        'text-anchor="middle" font-family="system-ui">' + label + '</text>' +
+      (sub ? '<text x="' + (x + w / 2) + '" y="' + (y + 36) + '" fill="#8a8a86" font-size="10.5" ' +
+        'text-anchor="middle" font-family="system-ui">' + sub + '</text>' : '');
+
+    const brd = (x, y, label) =>
+      '<rect x="' + x + '" y="' + y + '" width="54" height="30" rx="5" fill="#262626" stroke="#4a4a48"/>' +
+      '<path d="M' + (x + 12) + ' ' + (y + 30) + 'v5M' + (x + 27) + ' ' + (y + 30) + 'v5M' +
+        (x + 42) + ' ' + (y + 30) + 'v5" stroke="#4a4a48" stroke-width="1.6"/>' +
+      '<text x="' + (x + 27) + '" y="' + (y + 19) + '" fill="#b9b9b5" font-size="10.5" ' +
+        'text-anchor="middle" font-family="system-ui">' + label + '</text>';
+
+    // The CT tie: planer (250,230) -> planer node (150,300). Orthogonal, like a cable.
+    const tie = 'M250 258 V276 H177 V292';
+
+    document.getElementById('scene').innerHTML =
+      '<svg viewBox="0 0 700 360" font-family="system-ui">' +
+        '<rect x="14" y="14" width="672" height="332" rx="10" fill="#161616" stroke="#242424"/>' +
+
+        // duct runs
+        '<path d="M560 120 H300" stroke="#6f6f6b" stroke-width="3" fill="none"/>' +
+        '<path d="M560 120 V230 H300" stroke="#6f6f6b" stroke-width="3" fill="none"/>' +
+
+        // collector
+        '<circle cx="590" cy="175" r="30" fill="#1e1e1e" stroke="#3a3a38"/>' +
+        '<text x="590" y="179" fill="#e8e8e8" font-size="11" text-anchor="middle">Collector</text>' +
+
+        // machines
+        box(180, 92, 120, 56, 'Table saw', 'Shelly plug') +
+        box(180, 202, 120, 56, 'Planer', '240 V · clamp') +
+
+        // boards
+        brd(520, 292, 'Shop brain') +
+        brd(150, 292, 'Planer node') +
+
+        // the CT tie line
+        '<path d="' + tie + '" fill="none" stroke="' + L.stroke + '" stroke-width="' + L.w + '"' +
+          (L.dash ? ' stroke-dasharray="' + L.dash + '"' : '') +
+          ' stroke-opacity="' + L.op + '" stroke-linecap="round"/>' +
+        '<circle cx="250" cy="258" r="3" fill="' + L.stroke + '"/>' +
+
+        // the clamp glyph, riding the machine it watches
+        '<g transform="translate(276 198) scale(0.95)" stroke="' + L.stroke +
+          '" stroke-width="1.7" fill="none" stroke-linecap="round" stroke-linejoin="round">' +
+          glyph() + '</g>' +
+
+        '<text x="262" y="272" fill="#6f7f86" font-size="10" font-family="system-ui">' +
+          'clamp lead — 2.4 m across the floor</text>' +
+
+        // legend
+        '<text x="330" y="330" fill="#8a8a86" font-size="10.5">solid grey = duct</text>' +
+        '<text x="434" y="330" fill="' + L.stroke + '" font-size="10.5">' +
+          (L.dash ? (L.id === 'dot' ? 'dotted' : 'dashed') : 'thin solid') + ' = clamp lead</text>' +
+      '</svg>';
+  }
+
+  renderAll();
+</script>

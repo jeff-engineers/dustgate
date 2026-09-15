@@ -8,6 +8,7 @@ import {
   SweepProgress,
   OutletNameResult,
   OutletReleaseResult,
+  ClampBoard,
   NodeLinkState,
   OutletConfigCmd,
   SystemStatus,
@@ -502,6 +503,18 @@ export class DemoApiService extends ApiService {
     return this.pairedNames.get(host) ?? seeded ?? '';
   }
 
+  /** The demo primary has a clamp too — it is the likeliest place for the first
+   *  one, and leaving it out would make the picker look like it only ever offers
+   *  nodes. `''` is its controllerId, the model's "this board" rule. */
+  override async getClampBoards(): Promise<ClampBoard[]> {
+    const out: ClampBoard[] = [{ id: '', name: 'Shop brain', online: true }];
+    for (const n of await this.getNodes()) {
+      if (!n.caps?.ct) continue;
+      out.push({ id: n.id, name: n.name || n.id, online: n.online });
+    }
+    return out;
+  }
+
   override async getNodes(): Promise<NodeLinkState[]> {
     // node-2 is simulated as UNREACHABLE — the interesting case, and the one that's
     // hard to stage on a bench with two working boards.
@@ -523,7 +536,12 @@ export class DemoApiService extends ApiService {
         name: this.nameForHost(host),
         board: known?.board ?? 'unknown',
         fw: online ? '1.0.0-demo' : '',
-        caps: linear ? { servos: 0, linear: 1 } : { servos: known?.servos ?? 0, linear: 0 },
+        // ct: the demo gives its SERVO node a clamp and the slider none, so the
+        // tray has something to drag and the "which board?" picker has a real
+        // choice to make. On hardware this comes from the pin map; there is
+        // nothing else to ask here, so it is staged like every other demo fact.
+        caps: linear ? { servos: 0, linear: 1 }
+                     : { servos: known?.servos ?? 0, linear: 0, ct: 1 },
       };
     });
   }
