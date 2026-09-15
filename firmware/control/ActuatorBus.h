@@ -48,6 +48,35 @@ public:
 
     // Pump any deferred work. Called every main-loop pass.
     virtual void update() {}
+
+    // ── SENSING, which most buses cannot do ────────────────────────────────
+    //
+    // A bus moves things. A board at the far end of one may ALSO watch a CT
+    // clamp (tool-sensing RFC §5.6), and the socket is already there — so
+    // sensing rides this seam rather than earning a second one, exactly as the
+    // comment at the top argues for actuation.
+    //
+    // Both default to "this bus senses nothing", so LocalActuatorBus, the
+    // stubs, and every future implementation are unaffected. Only
+    // RemoteActuatorBus overrides them.
+
+    // Tell the board what the LAYOUT says is wired to it. `sensors` is the WHOLE
+    // list, as CONFIG.sensors in nodelink.js — an empty array means "report
+    // nothing", which is the same state as never having been configured.
+    //
+    // JsonArrayConst rather than a struct so this header keeps its one include.
+    virtual void configureSensors(JsonArrayConst sensors) { (void)sensors; }
+
+    // The latest reading for a sensor on this bus.
+    //
+    // Returns FALSE when nothing has ever reported — which is not the same as
+    // reporting "off", and the caller must not conflate them. `atMs` is when the
+    // reading arrived, for the staleness check: a board that is still answering
+    // PINGs but has stopped reporting is a FAULT, where a board that has gone
+    // away entirely is the planer switched off at the wall (RFC §5.6a).
+    virtual bool senseOf(const char* sensorId, bool& on, uint32_t& atMs) const {
+        (void)sensorId; (void)on; (void)atMs; return false;
+    }
 };
 
 } // namespace topo

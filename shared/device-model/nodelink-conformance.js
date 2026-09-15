@@ -86,6 +86,14 @@ async function simServos() {
   } catch { return null; }
 }
 
+/** Stage a sensor reading on the node under test. */
+async function simSense(id, on) {
+  try {
+    const r = await fetch(`${HTTP_URL}/sim/sense?id=${encodeURIComponent(id)}&on=${on ? 1 : 0}`);
+    return { ok: r.ok, body: await r.json().catch(() => null) };
+  } catch { return { ok: false, body: null }; }
+}
+
 async function waitForNode({ timeoutMs = 15000 } = {}) {
   const t = Date.now();
   while (Date.now() - t < timeoutMs) {
@@ -281,6 +289,75 @@ async function run() {
     c.send(NL.hello('primary', 'node-under-test', true));
     await c.await((f) => f.t === 'WELCOME' && f.accepted !== false);
     intruder.ws.close();
+  }
+
+  // ── 6c. CONFIG / SENSE: reporting INWARD (RFC §5.6b) ────────────────────
+  //
+  // Everything above this point is the primary commanding a node. This is the
+  // other direction, which did not exist until 2026-09-14: a board that senses
+  // something and tells the brain. The tool node (RFC §5.6) has no actuators at
+  // all, so this exchange is the ENTIRE contract for it.
+  {
+    const SID = 'planer-ct';
+
+    c.send(NL.config(40, [{ sensorId: SID, kind: 'ct', channel: 0 }]));
+    const ack = await c.await((f) => f.t === 'ACK' && f.seq === 40);
+    check('config: a CONFIG is ACKed', !!ack && ack.ok === true, JSON.stringify(ack));
+
+    // Reported at once, not after a repeat interval: the primary has just said
+    // what it is watching and should not sit through SENSE_REPEAT_MS of not
+    // knowing whether a saw is already running.
+    const first = await c.await((f) => f.t === 'SENSE' && f.sensorId === SID);
+    check('config: the node reports without being asked', !!first);
+    check('config: ...and starts off', first?.on === false, JSON.stringify(first));
+    check('config: ...with a valid s2p frame',
+      first && NL.validateFrame(first, 's2p').length === 0,
+      first ? JSON.stringify(NL.validateFrame(first, 's2p')) : 'no SENSE');
+
+    // THE EVENT THAT MATTERS: a tool starts. This must arrive on the CHANGE,
+    // well inside SENSE_REPEAT_MS — a gate that opens one repeat interval after
+    // the saw spins up is a gate that opens too late to be worth having.
+    const before = Date.now();
+    const staged = await simSense(SID, true);
+    check('sense: the node accepts a staged reading', staged.ok, JSON.stringify(staged.body));
+    const on = await c.await((f) => f.t === 'SENSE' && f.sensorId === SID && f.on === true, 1500);
+    check('sense: a tool switching on is reported', !!on);
+    check('sense: ...on the CHANGE, not the repeat',
+      !!on && Date.now() - before < NL.SENSE_REPEAT_MS,
+      `${Date.now() - before}ms, repeat is ${NL.SENSE_REPEAT_MS}ms`);
+
+    // Off is a REPORT, not silence. Absent-is-off (RFC §5.6a) is what a node
+    // that has gone away means; a node that is present says so explicitly.
+    await simSense(SID, false);
+    const off = await c.await((f) => f.t === 'SENSE' && f.sensorId === SID && f.on === false
+                                     && f !== first, 1500);
+    check('sense: switching off is reported too, not just inferred', !!off);
+
+    // A malformed CONFIG is refused rather than half-applied.
+    c.send({ t: 'CONFIG', seq: 41, sensors: [{ sensorId: 'x', kind: 'bin', channel: 0 }] });
+    const bad = await c.await((f) => f.t === 'ACK' && f.seq === 41);
+    check('config: an unknown sensor kind is refused', bad?.ok === false, JSON.stringify(bad));
+    const stillThere = await simSense(SID, false);
+    check('config: ...and the refusal changed nothing', stillThere.ok);
+
+    // An EMPTY list means "report nothing" — the same state as never having
+    // been configured, which is why there is no third case to test.
+    c.send(NL.config(42, []));
+    const cleared = await c.await((f) => f.t === 'ACK' && f.seq === 42);
+    check('config: an empty list is accepted', cleared?.ok === true, JSON.stringify(cleared));
+    const gone = await simSense(SID, true);
+    check('config: ...and the sensor is genuinely gone', !gone.ok, JSON.stringify(gone.body));
+
+    // Same gate as SET: an accepted WELCOME earns the right to configure. A
+    // board any passer-by could re-point has no claim at all.
+    const intruder2 = await connect();
+    intruder2.send(NL.hello('dustgate-bench', 'node-under-test'));
+    await intruder2.await((f) => f.t === 'WELCOME');
+    intruder2.send(NL.config(43, [{ sensorId: 'theirs', kind: 'ct', channel: 1 }]));
+    const refused = await intruder2.await((f) => f.t === 'ACK' && f.seq === 43);
+    check('config: a non-owner cannot configure sensors', refused?.ok === false,
+      JSON.stringify(refused));
+    intruder2.ws.close();
   }
 
   // ── 7. A version mismatch is refused outright ───────────────────────────

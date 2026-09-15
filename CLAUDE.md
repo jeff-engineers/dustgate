@@ -35,7 +35,7 @@ behaviour as verified unless it is on that list.
 | Path | What |
 |---|---|
 | `shared/device-model/` | **Canonical device model** — pure JS, single source of truth |
-| `firmware/` | ESP32 C++ (Arduino/PlatformIO). Primary owns everything; nodes are dumb actuator banks |
+| `firmware/` | ESP32 C++ (Arduino/PlatformIO). The primary owns the schema; nodes own local loops and no interpretation |
 | `dustgate-ui/` | Angular app, served off the device's LittleFS |
 | `tools/` | `mock-api.js` (simulated device), `mock-node.js` (simulated secondary), conformance runners |
 | `dev.sh` | Thin bash wrapper over PlatformIO/esptool for every bench workflow |
@@ -71,10 +71,14 @@ drifted constantly. Now `shared/device-model/` is the spec:
   | `COLLECTOR_RUNNING_W` / `COLLECTOR_SPINUP_GRACE_MS` (topology-device.js) | `kCollectorRunningW` / `kCollectorSpinupGraceMs` (control/CollectorPlugState.h) | is the blower ACTUALLY running, vs what we commanded. **Became a pair 2026-09-10** — topology-device.js had carried a note saying it deliberately was not one, and naming the exact condition that would change that. This is it, and for a stronger reason than the OLED it predicted: every way we now command a collector is STATELESS (a servo pressing a fob, an RF frame), so what we sent proves nothing and a browser nobody has open cannot be the only thing that notices a failed start. `test_collector_plug.cpp` ↔ `collector-plug.test.js`, same cases, same order, and both numbers asserted literally so a one-sided edit fails at the test rather than on a bench |
   | `DEFAULT_RF_PIN` (dustgate-ui/.../tools/collector-doc.ts) | `PIN_RF_TX` (boards/xiao_c5.h) | which pad keys the 315 MHz transmitter. **Became a pair 2026-09-14**, when the collector sheet gained the ability to write `control.rf`. Awkward on purpose: `pin` is a fact about how the BOARD is built, so no screen asks for it — but topology.js requires it (`no pin → invalid`) and the firmware builds no presser at all without one, silently. So the UI has to supply the board's pad, and move the pad without moving this and every layout ever written names the old GPIO while the collector quietly never starts. The better fix is to make `pin` optional and let the firmware fall back to its own `PIN_RF_TX`, which would delete this row — it changes a decided validation rule, so it was not taken |
   | `NODELINK_VERSION`, `PING_INTERVAL_MS`, `PONG_TIMEOUT_MS`, `RECONNECT_MIN_MS`, `RECONNECT_MAX_MS` (nodelink.js) | `kVersion`, `kPingIntervalMs`, `kPongTimeoutMs`, `kReconnectMinMs`, `kReconnectMaxMs` (control/NodeLink.h) | NodeLink protocol timing |
+  | `SENSE_REPEAT_MS` / `SENSE_STALE_MS` (nodelink.js) | `kSenseRepeatMs` / `kSenseStaleMs` (control/NodeLink.h) | how often a node repeats a sensor reading, and when the primary calls it stale. **New 2026-09-14** with the SENSE frame. SENSE is sent on CHANGE — the repeat only stops one dropped frame leaving the primary permanently wrong. Stale is 3× the repeat, the same ratio as PING/PONG and asserted as a ratio on both sides, so moving one without the other fails at the test. Stale is NOT the same as off: a node still answering PINGs but no longer reporting is a fault, where a node that has gone away entirely is the planer switched off at the wall (`intermittent`, RFC §5.6a) |
+  | `MAX_SENSORS_PER_NODE` (nodelink.js) | `kMaxSensorsPerNode` (control/NodeLink.h) | sensors one node accepts in a CONFIG. **New 2026-09-14.** A pair because the firmware parses into a FIXED array: without the same cap in `validateFrame()` a primary could send eight specs to a board that keeps four and says nothing, leaving it silently deaf to half the tools. Both sides refuse the whole frame rather than truncating — a half-applied config is a state nobody should have to reason about |
 
   The reference pair has company now: `manual-blower.test.js` ↔
   `firmware/test/test_manual_blower.cpp` covers running a blower by hand, and the
-  two assert the same cases in the same order for the same reason.
+  two assert the same cases in the same order for the same reason. The reference
+  pair itself grew on 2026-09-14 to cover the CONFIG and SENSE frames — same
+  rules, same order, same literal numbers on both sides.
 
   **Not everything shared is a pair, and saying so is part of the job** — but a
   non-pair can BECOME one, and this table's job includes noticing when.
@@ -169,9 +173,10 @@ endstops (D8/D9) instead of the four PWM pads.
 **The slider is BOTH a primary and a node, and the node is the interesting one.**
 A one-slider shop is a whole shop, so `xiao_c5_linear_primary` is a complete
 brain that happens to drive a rack. `xiao_c5_linear` is the same actuator at the
-far end of a NodeLink socket — and it is **the first node in this design with a
+far end of a NodeLink socket — and it was **the first node in this design with a
 brain**, because a homing sweep is a closed loop between an endstop and a servo
-that cannot round-trip per step over WiFi. It owns a sweep state machine, ticked
+that cannot round-trip per step over WiFi. First, not only: the CT tool-sensing
+node is the second, for the same reason at a different time constant. It owns a sweep state machine, ticked
 from `loop()` (a blocking sweep outruns the 10s watchdog), homes itself at boot,
 and holds any move it is sent until the datum lands. Moves are still
 already-resolved numbers off the wire — only *calibration* is local. Read the
@@ -315,10 +320,22 @@ These are decided; don't relitigate them in code review or suggestions.
   shared machine reads as shared. It can be disconnected and re-routed to a primary
   on the second system. (Grey dashed is free: an unfinished run's stub is *accent
   orange*, `.open-stub`. Getting that backwards cost a round trip on 2026-08-20.)
-- A secondary node gets already-resolved angles/positions on the wire, never
-  state names. That's what lets a $5 board be a node and keeps a schema change
-  from needing a flash to every board in the shop.
-- One brain: the primary owns topology, routing, and Shelly polling.
+- **A node may own any control loop faster than a WiFi round trip, and no
+  interpretation of the document.** This is the node/primary boundary, and it is
+  about SCHEMA OWNERSHIP rather than intelligence — a distinction that matters
+  because "nodes are dumb actuator banks", the way it used to be written, has
+  been wrong twice now. The slider node owns a homing sweep and the CT
+  tool-sensing node owns a 60 Hz RMS loop; neither can round-trip per sample, and
+  neither reads the document. Both still take already-resolved angles/positions
+  off the wire, never state names — which is the part that lets a $5 board be a
+  node and keeps a schema change from needing a flash to every board in the shop.
+  Say it this way and the next sensor that needs a local loop is predicted rather
+  than argued about. The full statement is the header of
+  `shared/device-model/nodelink.js`.
+- One brain: the primary owns topology, routing, and Shelly polling. Not a
+  capability claim — an ARBITRATION one. Sticky enabled, never-steal-a-plug, the
+  shop-wide servo mutex and most-recent-tool-wins all assume a single decider,
+  and none of them get easier with two.
 
 ## UI work
 

@@ -34,7 +34,50 @@ public:
     // built in. Linear, so amps are volts times this.
     static constexpr float kAmpsPerVolt = 30.0f;
 
+    // ── THE BIAS HAS TO ARRIVE BEFORE ANY NUMBER MEANS ANYTHING ────────────
+    //
+    // The divider's midpoint comes up through an RC, and until it lands every
+    // sample is riding a moving reference. Reading through that is not a noisy
+    // measurement, it is a measurement of the charging curve.
+    //
+    // This was harmless while nothing but a console consumed a reading. It stops
+    // being harmless with RFC §5.4b, which makes the board's OWN FLOOR the thing
+    // a tool is judged against and learns it at boot — so a floor measured mid-
+    // charge is wrong for the whole session, in the direction that matters
+    // (high, so a running tool reads as idle).
+    //
+    // The arithmetic, for whichever divider is actually fitted:
+    //
+    //   R_thev = R/2  (two equal legs)   tau = R_thev * C   settle ~= 5*tau
+    //
+    //     10k/10k + 10uF   -> 5k0 * 10uF  = 50ms   -> 250ms
+    //     10k/10k + 100uF  -> 5k0 * 100uF = 500ms  -> 2.5s     <- the slow one
+    //      1k/1k  + 100uF  ->  500 * 100uF = 50ms  -> 250ms    <- what §5.5 asks for
+    //
+    // Sized for the SLOWEST combination anyone might build rather than the one
+    // in front of us, because the costs are wildly asymmetric: waiting too long
+    // costs three seconds once, at boot, on a board that is about to sit there
+    // for months. Waiting too little poisons every reading until the next power
+    // cycle, silently, with `isRailed()` none the wiser — a midpoint on its way
+    // up passes THROUGH the healthy band, so that check cannot catch this.
+    static constexpr uint32_t kBiasSettleMs = 3000;
+
     explicit CtSensor(int pin) : _pin(pin) {}
+
+    /** Start the settle clock. Call once, from setup(), after the pin is live.
+     *  Optional — a sensor that was never begun reports settled immediately,
+     *  which is the pre-2026-09-14 behaviour and keeps the bench console
+     *  working unchanged. */
+    void begin() { _settledAtMs = millis() + kBiasSettleMs; _begun = true; }
+
+    /** Has the bias network arrived? Anything LEARNING a baseline must check
+     *  this; anything merely displaying a number need not. */
+    bool settled() const {
+        if (!_begun) return true;
+        // Subtraction, not `millis() > _settledAtMs`, so a rollover at 49 days
+        // cannot park a board in permanent "settling".
+        return (int32_t)(millis() - _settledAtMs) >= 0;
+    }
 
     struct Reading {
         float    amps    = 0;   // RMS of the AC component
@@ -55,6 +98,13 @@ public:
         float    rmsCounts = 0;
         float    kSps    = 0;   // sample rate actually achieved
         bool     valid   = false;
+        // ⚠️ TAKEN BEFORE THE BIAS SETTLED — see kBiasSettleMs.
+        //
+        // `valid` is deliberately NOT cleared for these: the number is real, it
+        // is just measured against a reference that is still moving, and a bench
+        // console watching the rail come up is a legitimate thing to want. But
+        // NOTHING MAY LEARN A FLOOR FROM A READING WITH THIS SET.
+        bool     settling = false;
     };
 
     // ⚠️ THE ONLY CHECK THAT MATTERS BEFORE BELIEVING AN AMP READING.
@@ -103,6 +153,9 @@ public:
     // per-chip ADC calibration without paying for it thousands of times.
     Reading read(uint32_t windowMs = 200) {
         Reading r;
+        // Recorded BEFORE sampling: a window that straddles the settle point
+        // started on a moving reference, and that is the half that matters.
+        r.settling = !settled();
         const uint32_t t0 = millis();
         uint32_t n = 0, crossings = 0;
         double sum = 0, sumSq = 0;
@@ -182,6 +235,8 @@ public:
     }
 
 private:
-    int   _pin;
-    float _prevMean = 0;
+    int      _pin;
+    float    _prevMean    = 0;
+    uint32_t _settledAtMs = 0;
+    bool     _begun       = false;
 };

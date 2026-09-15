@@ -633,6 +633,15 @@ static topo::NodeBus          g_nodeBus;
 // board between them is a wiring problem before it is a schema one.
 static topo::BinDebounce       g_binDebounce;
 #endif
+#ifdef PIN_CT
+// File scope, not a function-local static in the console handler, and the reason
+// is the settle clock: CtSensor::begin() has to run at BOOT so the 3 s bias
+// window is measured from power-up. A static inside the `ct` command would start
+// it at the first time a human typed `ct`, which is always long after the bias
+// has arrived — the clock would be permanently, invisibly correct and would
+// never do its job on the path that needs it.
+static CtSensor g_ct(PIN_CT);
+#endif
 static topo::TopologyRuntime  g_topoRuntime;
 static topo::TopologyStore    g_topoStoreSketch;   // read-only view; the API server owns writes
 
@@ -704,6 +713,12 @@ static void syncControllerAliases() {
             DEBUG_PRINT(F("[NODE] Topology names an UNPAIRED board: ")); DEBUG_PRINTLN(host);
         }
     }
+    // Sensors are addressed by controllerId too, so they can only be pushed
+    // once the aliases above exist. adopt() pushes as well, but that runs before
+    // this — so without this line a CT on a NODE is configured on nothing and
+    // the tool is silent forever, while a CT on the primary works fine. Exactly
+    // the kind of asymmetry that reads as a flaky board.
+    g_topoRuntime.reconfigureSensors();
 }
 
 #ifdef CONTROL_SMART_OUTLET
@@ -1171,6 +1186,16 @@ void setup() {
     // above (WiFi connect can block up to ~12s, calibration load, etc.), so none
     // of it trips a spurious reset. From here loop() must pet it each pass.
     watchdog::begin();   // watches this task (the Arduino loopTask)
+
+#ifdef PIN_CT
+    // Start the CT's bias-settle clock. Placed HERE rather than earlier on
+    // purpose: it is measured from the moment the board is actually running, and
+    // everything above this line blocks (a WiFi connect alone can take ~12 s) —
+    // which means on a normal boot the 3 s has already elapsed by the time
+    // anything asks, and the check costs nothing. It only bites on the path it
+    // exists for: a fast boot that reaches a reading before the rail is up.
+    g_ct.begin();
+#endif
 
     // ── How close did that come to the edge? ─────────────────────────────
     //
@@ -2401,10 +2426,9 @@ void loop() {
         int ctReps = 0;
         if (_SC.consumeCtRequest(ctReps)) {
 #ifdef PIN_CT
-            static CtSensor ct(PIN_CT);
             for (int i = 0; i < ctReps; i++) {
                 watchdog::pet();
-                const CtSensor::Reading r = ct.read();
+                const CtSensor::Reading r = g_ct.read();
                 if (!r.valid) { Serial.println(F("[CT] too few samples — is D0 wired?")); break; }
 
                 // rmsCounts is printed alongside amps deliberately: it is the
@@ -2418,6 +2442,16 @@ void loop() {
                 // and the variance of a constant is zero — which looks exactly
                 // like a perfectly quiet sensor. Refusing to let 0.000 A pass
                 // unqualified is the whole reason this line exists.
+                // A midpoint still charging passes THROUGH the healthy band, so
+                // isRailed() below cannot catch this — it has to be said
+                // separately or a reading taken seconds after a reset looks
+                // perfectly well-behaved while riding a moving reference.
+                if (r.settling) {
+                    Serial.println();
+                    Serial.println(F("[CT] ⚠️ BIAS STILL SETTLING — this reference is moving."));
+                    Serial.println(F("     Fine to watch; do not learn a floor from it."));
+                    continue;
+                }
                 if (CtSensor::isRailed(r)) {
                     Serial.println();
                     Serial.println(F("[CT] ⚠️ BIAS IS RAILED — that amp figure is fiction."));

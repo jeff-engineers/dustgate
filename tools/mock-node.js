@@ -53,10 +53,45 @@ let holdAtRest = {};
 // change NOTHING about it.
 let inFlight = null;   // { channel, selectorId, stateId, timer }
 
+// ── sensors (nodelink.js CONFIG / SENSE) ───────────────────────────────────
+//
+// What the primary has told this board it is wired to, and what each sensor
+// currently reads. The real node decides the bit from an RMS loop it runs
+// itself; the mock STAGES it over HTTP, the same way it stages everything else
+// it has no hardware for. That is the honest simulation — the wire shape is
+// identical, and nothing here pretends to measure anything.
+let sensors = [];          // [{ sensorId, kind, channel }]
+const sensorOn = {};       // sensorId → boolean
+let senseTimer = null;
+
 const server = http.createServer((req, res) => {
   if (req.url === '/sim/servos') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ nodeId: NODE_ID, board: BOARD, angles: servoAngles, holdAtRest }));
+    return;
+  }
+  // STAGE a sensor reading: POST/GET /sim/sense?id=planer-ct&on=1
+  //
+  // The node is the only thing that can decide this bit for real (RFC §5.4b),
+  // so there is no way to "simulate a current" that would mean anything. Stage
+  // the decision itself and let the frame be exactly what a real board sends.
+  if (req.url && req.url.startsWith('/sim/sense')) {
+    const q = new URL(req.url, 'http://localhost').searchParams;
+    const id = q.get('id') || '';
+    const on = q.get('on') === '1' || q.get('on') === 'true';
+    if (!sensors.some((s) => s.sensorId === id)) {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, err: `no sensor "${id}" configured`, configured: sensors }));
+      return;
+    }
+    setSense(id, on);
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: true, sensorId: id, on }));
+    return;
+  }
+  if (req.url === '/sim/sensors') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ nodeId: NODE_ID, sensors, readings: sensorOn }));
     return;
   }
   res.writeHead(404); res.end();
@@ -118,6 +153,43 @@ wss.on('connection', (ws) => {
 
     if (f.t === 'PING') { send(ws, NL.pong()); return; }
 
+    if (f.t === 'CONFIG') {
+      // Same gate as SET: an accepted WELCOME earns the right to configure, not
+      // merely holding a socket. A board that anyone could re-point at a
+      // different sensor is a board with no claim at all.
+      if (ws !== ownerSocket) {
+        console.log(`[NODE] CONFIG REFUSED — not the owner (${owner}).`);
+        send(ws, NL.ack(f.seq ?? 0, false, 'not the owner of this node'));
+        return;
+      }
+      // Validate through the SHARED validator — the same rules the firmware's
+      // parseConfigFrame() enforces, which is what keeps the two from drifting.
+      const errs = NL.validateFrame(f, 'p2s');
+      if (errs.length) {
+        console.log(`[NODE] CONFIG MALFORMED — ${errs[0]}`);
+        send(ws, NL.ack(f.seq ?? 0, false, errs[0]));
+        return;
+      }
+      // ALL OR NOTHING, and a WHOLE new list. An empty array means "report
+      // nothing", which is the same state as never having been configured — so
+      // there is no third case, here or in the firmware.
+      sensors = f.sensors.map((sen) => ({ ...sen }));
+      for (const id of Object.keys(sensorOn)) {
+        if (!sensors.some((sen) => sen.sensorId === id)) delete sensorOn[id];
+      }
+      for (const sen of sensors) {
+        if (sensorOn[sen.sensorId] === undefined) sensorOn[sen.sensorId] = false;
+      }
+      console.log(`[NODE] CONFIG: ${sensors.length ? sensors.map((x) => `${x.sensorId}@ch${x.channel}`).join(', ') : '(nothing)'}`);
+      send(ws, NL.ack(f.seq, true));
+      // Report immediately rather than waiting out a repeat interval: the
+      // primary has just said what it is watching and should not have to sit
+      // through SENSE_REPEAT_MS of not knowing.
+      reportAll();
+      startSenseTimer();
+      return;
+    }
+
     if (f.t === 'SET') {
       // An accepted WELCOME is what earns the right to command — not merely
       // having a socket open. Checked per SET, since that is the frame that
@@ -176,8 +248,53 @@ function send(ws, frame) {
   if (ws.readyState === 1) ws.send(JSON.stringify(frame));
 }
 
+/**
+ * SENSE on CHANGE, and again every SENSE_REPEAT_MS.
+ *
+ * The change is what makes a tool switching on a sub-second event. The repeat
+ * only stops ONE dropped frame leaving the primary permanently wrong about a
+ * tool, which an edge-only protocol would — see the constants in nodelink.js.
+ *
+ * Sent to the OWNER only. A refused primary holds an open socket so it can read
+ * claimedBy, and feeding it another shop's tool states would be the same
+ * silent-theft shape the claim exists to prevent.
+ */
+function reportSense(sensorId) {
+  if (!ownerSocket) return;
+  // `level` is omitted: a multiple of the trip point is a real measurement on a
+  // real board, and inventing a plausible-looking one here is exactly the kind
+  // of fake number a mock should never emit.
+  send(ownerSocket, NL.sense(sensorId, !!sensorOn[sensorId]));
+}
+
+function reportAll() {
+  for (const sen of sensors) reportSense(sen.sensorId);
+}
+
+function setSense(sensorId, on) {
+  const was = !!sensorOn[sensorId];
+  sensorOn[sensorId] = !!on;
+  if (was !== !!on) {
+    console.log(`[NODE] SENSE ${sensorId}: ${on ? 'ON' : 'off'}`);
+    reportSense(sensorId);   // on CHANGE, immediately
+  }
+}
+
+function startSenseTimer() {
+  if (senseTimer) clearInterval(senseTimer);
+  senseTimer = null;
+  if (!sensors.length) return;
+  senseTimer = setInterval(reportAll, NL.SENSE_REPEAT_MS);
+  // Don't hold the process open on the repeat alone — the suite starts and
+  // stops this mock many times, and a live interval would keep node running
+  // after the server closes.
+  if (senseTimer.unref) senseTimer.unref();
+}
+
 server.listen(PORT, () => {
   console.log(`Mock DustGate node "${NODE_ID}" (${BOARD}) on ws://localhost:${PORT}/nodelink`);
   console.log(`  servo channels: ${SERVO_COUNT}, sim sweep: ${MOVE_MS}ms`);
   console.log(`  GET http://localhost:${PORT}/sim/servos — committed angles`);
+  console.log(`  GET http://localhost:${PORT}/sim/sensors — configured sensors + readings`);
+  console.log(`  GET http://localhost:${PORT}/sim/sense?id=<id>&on=1 — stage a tool on/off`);
 });

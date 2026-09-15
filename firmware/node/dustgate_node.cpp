@@ -103,6 +103,9 @@
 #include "../utils/StatusScreen.h"   // optional SSD1306; nothing on a board without one
 #include "../utils/WakeButton.h"     // the button that lights it; ditto
 #include "../motor/ServoSelfTest.h"   // and, held for a second, sweeps every servo
+#ifdef PIN_CT
+#include "../sensing/CtSensor.h"      // a clamp, on a board that watches a tool
+#endif
 
 #if HAS_LINEAR
   #include "../motor/st3215/ST3215LinearDriver.h"
@@ -282,6 +285,60 @@ static String g_owner;              // "" = unclaimed
 // not merely having a connection open.
 static volatile uint32_t g_ownerClientId = 0;
 static volatile bool     g_ownerLinked   = false;
+
+#ifdef PIN_CT
+// ── CT tool sensing (tool-sensing RFC §5.6) ─────────────────────────────────
+//
+// THIS BOARD DECIDES THE BIT. Not a shortcut — §5.4b: a CT measures current,
+// watts need a voltage and a power factor it cannot give, and a woodworking
+// tool's standby sits under the noise floor, so there is no threshold worth
+// putting on the wire. It is also the only arrangement with usable latency,
+// since mains-frequency RMS cannot round-trip per sample over WiFi.
+//
+// The primary tells us WHAT IS WIRED (CONFIG) and we tell it WHAT IT READS
+// (SENSE). Nothing here interprets the document — the invariant at the top of
+// nodelink.js — because `sensorId` is opaque and only ever echoed back.
+static CtSensor g_ct(PIN_CT);
+static topo::nodelink::SensorSpec g_sensors[topo::nodelink::kMaxSensorsPerNode];
+static size_t   g_sensorCount = 0;
+static bool     g_senseOn[topo::nodelink::kMaxSensorsPerNode] = { false };
+static bool     g_senseKnown = false;
+static uint32_t g_lastSenseMs = 0;
+static uint32_t g_lastSampleMs = 0;
+
+// How often the clamp is actually SAMPLED, as opposed to reported.
+//
+// Sampling is the expensive part: CtSensor::read() busy-waits for its whole
+// window, so reading every loop() pass would hand a quarter of this board's time
+// to the ADC and coarsen every servo sweep it also has to drive. 250 ms puts
+// worst-case detection at ~310 ms, comfortably inside the 500 ms the RFC asks of
+// a tool-on event and irrelevant beside the collector's 4 s spin-up grace.
+static constexpr uint32_t kSampleIntervalMs = 250;
+static constexpr uint32_t kSampleWindowMs   = 60;   // ~3.5 cycles at 60 Hz
+
+// The board's own floor, learned once the bias has settled, and the trip point
+// derived from it. RFC §5.4b: the baseline is OUR NOISE, not the tool's
+// standby, because standby is under the floor on every tool measured.
+static float    g_floorCounts = 0.0f;
+static bool     g_floorLearnt = false;
+
+// ⚠️ PROVISIONAL, BOTH OF THEM. The clamp's SCALE is confirmed to ~1%
+// (RFC §5.5a) but the FLOOR is not — the perfboard rigs were just rebuilt from
+// 10k/10k to 1k/1k and nothing has been re-measured on them yet (see TODO).
+// These are sized to be obviously safe rather than tight:
+//
+//   kTripRatio     4x the learned floor. The measured gap between a quiet board
+//                  and a running motor was ~80x, so 4 is not a close call.
+//   kMinTripCounts an absolute guard, because a ratio against a floor that
+//                  learns near zero trips on nothing. ~8 counts is roughly
+//                  0.24 A on this clamp — far below any real tool, far above
+//                  the quantisation floor.
+//
+// Re-derive both from the rebuilt divider before trusting this on a tool that
+// matters.
+static constexpr float kTripRatio     = 4.0f;
+static constexpr float kMinTripCounts = 8.0f;
+#endif
 
 static void loadClaim() {
     claimPrefs.begin(kClaimNs, /*readOnly=*/true);
@@ -554,6 +611,53 @@ static void onNodeWsEvent(AsyncWebSocket*, AsyncWebSocketClient* client,
                                      g_owner.c_str(), accepted);
     } else if (strcmp(t, "PING") == 0) {
         topo::nodelink::buildPong(reply.to<JsonObject>());
+    } else if (strcmp(t, "CONFIG") == 0) {
+#ifdef PIN_CT
+        // SAME GATE AS SET. An accepted WELCOME is what earns the right to
+        // configure, not merely holding a socket — a board anyone could
+        // re-point at a different sensor has no claim at all.
+        if (!g_ownerLinked || client->id() != g_ownerClientId) {
+            Serial.println(F("[CONFIG] REFUSED — not the owner."));
+            topo::nodelink::buildAck(reply.to<JsonObject>(), f["seq"] | 0, false,
+                                     "not the owner of this node");
+        } else {
+            const char* err = nullptr;
+            size_t n = 0;
+            topo::nodelink::SensorSpec parsed[topo::nodelink::kMaxSensorsPerNode];
+            if (!topo::nodelink::parseConfigFrame(f, parsed, topo::nodelink::kMaxSensorsPerNode, n, err)) {
+                Serial.print(F("[CONFIG] MALFORMED — ")); Serial.println(err ? err : "?");
+                topo::nodelink::buildAck(reply.to<JsonObject>(), f["seq"] | 0, false, err);
+            } else {
+                // ALL OR NOTHING, and a WHOLE new list — parseConfigFrame has
+                // already refused anything partial.
+                for (size_t i = 0; i < n; i++) g_sensors[i] = parsed[i];
+                g_sensorCount = n;
+                for (size_t i = 0; i < topo::nodelink::kMaxSensorsPerNode; i++) g_senseOn[i] = false;
+                // Force a report on the next tick rather than waiting out a
+                // repeat interval: the primary has just said what it is
+                // watching and should not sit through kSenseRepeatMs of not
+                // knowing whether a saw is already running.
+                g_senseKnown  = false;
+                g_lastSenseMs = 0;
+                Serial.print(F("[CONFIG] "));
+                if (!n) Serial.println(F("(nothing to watch)"));
+                else {
+                    for (size_t i = 0; i < n; i++) {
+                        Serial.print(g_sensors[i].sensorId);
+                        Serial.print(F("@ch")); Serial.print(g_sensors[i].channel);
+                        Serial.print(i + 1 < n ? F(", ") : F("\n"));
+                    }
+                }
+                topo::nodelink::buildAck(reply.to<JsonObject>(), f["seq"] | 0, true);
+            }
+        }
+#else
+        // Honest refusal beats silence: the layout believes this board watches
+        // something, and it physically cannot.
+        Serial.println(F("[CONFIG] REFUSED — no CT pad on this board."));
+        topo::nodelink::buildAck(reply.to<JsonObject>(), f["seq"] | 0, false,
+                                 "no sensor hardware on this node");
+#endif
     } else if (strcmp(t, "SET") == 0) {
         topo::nodelink::SetCommand cmd;
         const char* err = nullptr;
@@ -622,6 +726,81 @@ static void onNodeWsEvent(AsyncWebSocket*, AsyncWebSocketClient* client,
     String s; serializeJson(reply, s);
     client->text(s);
 }
+
+#ifdef PIN_CT
+// ── the sensing tick ────────────────────────────────────────────────────────
+//
+// Called every loop(); does real work only when there is something to watch.
+// Non-blocking in the way that matters: CtSensor::read() samples for a fixed
+// window (60 ms here, ~3.5 cycles at 60 Hz) and the watchdog is petted either
+// side of it.
+static void tickSensors() {
+    if (!g_sensorCount) return;
+
+    // NOTHING IS MEASURED BEFORE THE BIAS ARRIVES. A midpoint still charging
+    // makes every sample ride a moving reference, and the floor learnt from it
+    // would be wrong for the whole session — wrong HIGH, so a running tool
+    // reads as idle. isRailed() cannot catch it; a charging midpoint passes
+    // straight through the healthy band. See CtSensor::kBiasSettleMs.
+    if (!g_ct.settled()) return;
+
+    // NOT WHILE A GATE IS MOVING. A blocking sample in the middle of a sweep
+    // makes the sweep jerk, and the information is worthless anyway: if this
+    // board is moving a gate then the collector is already running. The tool is
+    // noticed a couple of seconds later, which nothing downstream can tell.
+    if (actuatorMoving()) return;
+
+    const uint32_t nowMs = millis();
+    if (g_lastSampleMs && (uint32_t)(nowMs - g_lastSampleMs) < kSampleIntervalMs) return;
+    g_lastSampleMs = nowMs;
+
+    watchdog::pet();
+    const CtSensor::Reading r = g_ct.read(kSampleWindowMs);
+    watchdog::pet();
+    if (!r.valid || r.settling || CtSensor::isRailed(r)) return;
+
+    // THE FLOOR IS THIS BOARD'S OWN NOISE, learnt once (RFC §5.4b). The wiring
+    // guarantees it is valid: the supply is tapped UPSTREAM of the tool's own
+    // switch and the clamp sits downstream, so at boot the motor is off by
+    // construction and there is nothing on the clamped conductor to measure.
+    if (!g_floorLearnt) {
+        g_floorCounts = r.rmsCounts;
+        g_floorLearnt = true;
+        Serial.print(F("[CT] floor learnt: ")); Serial.print(g_floorCounts, 1);
+        Serial.println(F(" counts — everything above this is a running tool."));
+    }
+
+    const float trip = (g_floorCounts * kTripRatio) > kMinTripCounts
+                     ? (g_floorCounts * kTripRatio) : kMinTripCounts;
+    const bool on = r.rmsCounts > trip;
+
+    const uint32_t now = millis();
+    // ON CHANGE, and again every kSenseRepeatMs. The change is what makes a tool
+    // switching on a sub-second event; the repeat only stops ONE dropped frame
+    // leaving the primary permanently wrong.
+    bool due = !g_senseKnown || (uint32_t)(now - g_lastSenseMs) >= topo::nodelink::kSenseRepeatMs;
+    for (size_t i = 0; i < g_sensorCount; i++) {
+        // One clamp, one pad: every configured sensor on this board reads the
+        // same ADC today. When a second pad exists this is where it branches.
+        const bool changed = (g_senseOn[i] != on) || !g_senseKnown;
+        if (!changed && !due) continue;
+        g_senseOn[i] = on;
+        StaticJsonDocument<192> doc;
+        topo::nodelink::buildSense(doc.to<JsonObject>(), g_sensors[i].sensorId, on,
+                                   trip > 0.0f ? r.rmsCounts / trip : -1.0f);
+        String s; serializeJson(doc, s);
+        nodeWs.textAll(s);
+        if (changed) {
+            Serial.print(F("[CT] ")); Serial.print(g_sensors[i].sensorId);
+            Serial.print(on ? F(" ON  ") : F(" off "));
+            Serial.print(r.rmsCounts, 1); Serial.print(F(" counts, trip "));
+            Serial.println(trip, 1);
+        }
+    }
+    if (due) g_lastSenseMs = now;
+    g_senseKnown = true;
+}
+#endif
 
 static void reportState(const char* selectorId, const char* stateId, bool moving) {
     StaticJsonDocument<192> doc;
@@ -800,6 +979,15 @@ void setup() {
     // Watchdog armed last, after the blocking WiFi connect — same discipline as
     // the primary sketch.
     watchdog::begin();
+
+#ifdef PIN_CT
+    // Start the CT's bias-settle clock from the moment the board is actually
+    // running. Everything above this blocks (a WiFi connect alone can take
+    // ~12 s), so on a normal boot the window has already elapsed by the time
+    // anything asks — it bites only on the path it exists for, a fast boot that
+    // reaches a reading before the rail is up.
+    g_ct.begin();
+#endif
     bootTrace("ready");
 }
 
@@ -888,6 +1076,10 @@ void loop() {
     }
     // Orange for the whole sweep, not just the instant the frame landed.
     statusled::setMoving(actuatorMoving());
+
+#ifdef PIN_CT
+    tickSensors();
+#endif
     statusled::update();
     wakebutton::update();   // before the screen decides whether to be lit
 #if HAS_SERVO
