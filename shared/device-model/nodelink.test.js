@@ -152,6 +152,28 @@ const eq = (name, got, want) =>
   eq('and still validates', NL.validateFrame(legacy, 's2p'), []);
 }
 
+// ── caps.ct: a clamp is DECLARED by its board, never discovered ────────────
+{
+  const w = NL.welcome('node-1', 'xiao_c5', '1.0.0', { servos: 4, linear: 0, ct: 1 });
+  eq('a WELCOME may declare a clamp', NL.validateFrame(w, 's2p'), []);
+  eq('and clampsOn reads it', NL.clampsOn(w), 1);
+
+  // Absent means NONE, which is what every board flashed before this reports by
+  // saying nothing. A tray with no clamp rows is then the correct empty state.
+  const legacy = NL.welcome('node-1', 'xiao_c5', '1.0.0', { servos: 4, linear: 0 });
+  eq('a board that says nothing has none', NL.clampsOn(legacy), 0);
+  eq('and still validates', NL.validateFrame(legacy, 's2p'), []);
+  eq('clampsOn survives a missing WELCOME', NL.clampsOn(null), 0);
+
+  // Bounded by the same cap CONFIG is: a board cannot claim more clamps than it
+  // could ever be configured for.
+  check('more clamps than MAX_SENSORS_PER_NODE is refused',
+        NL.validateFrame({ ...w, caps: { servos: 0, linear: 0, ct: NL.MAX_SENSORS_PER_NODE + 1 } },
+                         's2p').length === 1);
+  check('a non-numeric clamp count is refused',
+        NL.validateFrame({ ...w, caps: { servos: 0, linear: 0, ct: 'yes' } }, 's2p').length === 1);
+}
+
 // ── CONFIG: what a node is WIRED TO, and nothing it could interpret ────────
 {
   const one = [{ sensorId: 'planer-ct', kind: 'ct', channel: 0 }];

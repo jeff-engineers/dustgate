@@ -551,7 +551,14 @@ static void onNodeWsEvent(AsyncWebSocket*, AsyncWebSocketClient* client,
     const char* t = f["t"].as<const char*>();
     if (!t) return;
 
-    StaticJsonDocument<256> reply;
+    // 384, not 256, and the extra is not slack. A WELCOME carrying nodeId,
+    // board, fw, a claimedBy and a three-member `caps` lands right on 256 — and
+    // ArduinoJson does not fail an overflow, it SILENTLY DROPS the member being
+    // added. `caps.ct` is written last, so the symptom was a board that reported
+    // every capability except the clamp, and a tray that never offered one.
+    // Caught by test_nodebus.cpp, 2026-09-15; it would have read as a wiring
+    // fault on the bench.
+    StaticJsonDocument<384> reply;
 
     // Declared HERE, not inside the HELLO branch, and it matters: ArduinoJson
     // stores a `const char*` value BY POINTER without copying, and the document
@@ -604,11 +611,20 @@ static void onNodeWsEvent(AsyncWebSocket*, AsyncWebSocketClient* client,
         // Caps are what the board can PHYSICALLY drive, and the two are
         // mutually exclusive by design (PWM and serial never share a board), so
         // exactly one of these is non-zero.
+        // HAS_CT is a pin-map fact, like HAS_SERVO — so a board cannot claim a
+        // clamp it has no pad for, and the tray cannot offer one that is not
+        // there.
         topo::nodelink::buildWelcome(reply.to<JsonObject>(), host.c_str(),
                                      BOARD_NAME, "1.0.0",
                                      HAS_SERVO ? SERVO_COUNT : 0,
                                      HAS_LINEAR ? 1 : 0,
-                                     g_owner.c_str(), accepted);
+                                     g_owner.c_str(), accepted,
+#ifdef PIN_CT
+                                     1
+#else
+                                     0
+#endif
+                                     );
     } else if (strcmp(t, "PING") == 0) {
         topo::nodelink::buildPong(reply.to<JsonObject>());
     } else if (strcmp(t, "CONFIG") == 0) {

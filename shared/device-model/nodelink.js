@@ -114,7 +114,10 @@ const RECONNECT_MAX_MS = 15000;
  * @property {string}  nodeId       who this board actually is
  * @property {string}  board        build target ("devkitc", "qtpy_s3", …)
  * @property {string}  fw           firmware version string
- * @property {{servos:number, linear:number}} caps   actuator budget on this board
+ * @property {{servos:number, linear:number, ct?:number}} caps   what this board HAS:
+ *                                  its actuator budget, and how many current
+ *                                  clamps are wired to it. `ct` absent means 0 —
+ *                                  every board that answered before 2026-09-15.
  * @property {string} [claimedBy]   the primary this node belongs to
  * @property {boolean}[accepted]    false = you are NOT my owner; SETs will be
  *                                  refused. Absent means accepted (legacy).
@@ -264,6 +267,19 @@ function config(seq, sensors) {
  *   `claimedBy` to tell its user who has the board, and a closed socket would
  *   look identical to a node that is simply offline.
  */
+/**
+ * @param {{servos:number, linear:number, ct?:number}} caps
+ *
+ * `caps.ct` is the one field here that is not about moving something, and it is
+ * the reason a clamp can appear in the UI at all. A plug is DISCOVERED — a
+ * subnet sweep finds it at an IP — but a clamp has no address and never will;
+ * somebody soldered it to a board. So the board is the only thing that can say
+ * it exists, and it says so here, next to the servo count it already reports.
+ *
+ * REPORTED, NOT CHOSEN, exactly like `caps.servos`: it comes from the pin map,
+ * so it cannot disagree with the hardware, and a tray listing no clamps is then
+ * the correct empty state rather than a feature nobody turned on.
+ */
 function welcome(nodeId, board, fw, caps, claimedBy, accepted = true) {
   const f = { t: 'WELCOME', v: NODELINK_VERSION, nodeId, board, fw, caps };
   if (claimedBy) f.claimedBy = claimedBy;
@@ -280,6 +296,10 @@ function welcome(nodeId, board, fw, caps, claimedBy, accepted = true) {
  * asymmetry is deliberate: the safe reading is the default one.
  */
 const welcomeAccepted = (f) => !!f && f.accepted !== false;
+
+/** How many clamps a board says it has. Absent means none, which is what every
+ *  board flashed before 2026-09-15 reports by saying nothing. */
+const clampsOn = (w) => (w && w.caps && typeof w.caps.ct === 'number') ? w.caps.ct : 0;
 function ack(seq, ok, err) {
   const f = { t: 'ACK', seq, ok: !!ok };
   if (err) f.err = err;
@@ -360,6 +380,12 @@ function validateFrame(f, direction) {
       if (!f.caps || typeof f.caps.servos !== 'number' || typeof f.caps.linear !== 'number') {
         errs.push('WELCOME.caps must be {servos:number, linear:number}');
       }
+      // OPTIONAL, and absent means none — a board flashed before clamps existed
+      // answers exactly as it always did rather than being refused.
+      if (f.caps && f.caps.ct !== undefined &&
+          (typeof f.caps.ct !== 'number' || f.caps.ct < 0 || f.caps.ct > MAX_SENSORS_PER_NODE)) {
+        errs.push(`WELCOME.caps.ct must be a number 0..${MAX_SENSORS_PER_NODE}`);
+      }
       if (f.claimedBy !== undefined && typeof f.claimedBy !== 'string') {
         errs.push('WELCOME.claimedBy must be a string');
       }
@@ -439,6 +465,6 @@ module.exports = {
   NODELINK_VERSION, P2S, S2P,
   PING_INTERVAL_MS, PONG_TIMEOUT_MS, RECONNECT_MIN_MS, RECONNECT_MAX_MS,
   SENSE_REPEAT_MS, SENSE_STALE_MS, MAX_SENSORS_PER_NODE,
-  hello, welcome, set, config, ack, state, sense, ping, pong, welcomeAccepted,
+  hello, welcome, set, config, ack, state, sense, ping, pong, welcomeAccepted, clampsOn,
   validateFrame,
 };

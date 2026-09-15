@@ -277,6 +277,9 @@ void RemoteActuatorBus::handleFrame(const char* json, size_t len) {
         nodelink::strlcpy_(_fw,    f["fw"]    | "", sizeof(_fw));
         _capServos = f["caps"]["servos"] | 0;
         _capLinear = f["caps"]["linear"] | 0;
+        // Absent means none: a board flashed before clamps existed answers
+        // exactly as it always did rather than being read as broken.
+        _capClamps = f["caps"]["ct"] | 0;
 
         // Did it accept our claim? A refusal leaves us OFFLINE rather than
         // half-connected: every caller already treats offline as "don't command
@@ -488,7 +491,7 @@ RemoteActuatorBus::NodeInfo RemoteActuatorBus::info() const {
     NodeInfo n;
     if (!_mutex) {
         n.connected = false; n.lastSeenMs = 0;
-        n.board[0] = '\0'; n.fw[0] = '\0'; n.capServos = 0; n.capLinear = 0;
+        n.board[0] = '\0'; n.fw[0] = '\0'; n.capServos = 0; n.capLinear = 0; n.capClamps = 0;
         return n;
     }
     xSemaphoreTake(_mutex, portMAX_DELAY);
@@ -498,6 +501,7 @@ RemoteActuatorBus::NodeInfo RemoteActuatorBus::info() const {
     nodelink::strlcpy_(n.fw,    _fw,    sizeof(n.fw));
     n.capServos = _capServos;
     n.capLinear = _capLinear;
+    n.capClamps = _capClamps;
     xSemaphoreGive(_mutex);
     return n;
 }

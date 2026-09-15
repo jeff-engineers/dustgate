@@ -92,6 +92,7 @@ public:
         char     fw[24];
         int      capServos;
         int      capLinear;
+        int      capClamps;   // caps.ct — 0 for every board flashed before 2026-09-15
     };
     NodeInfo info() const;
 
@@ -161,6 +162,7 @@ private:
     char     _fw[24]       = "";
     int      _capServos    = 0;
     int      _capLinear    = 0;
+    int      _capClamps    = 0;   // caps.ct — how many CTs this board says it has
 };
 
 } // namespace topo

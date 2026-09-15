@@ -559,3 +559,20 @@ svg.canvas, svg.canvas text { -webkit-user-select: none; user-select: none; }
 .port-label { fill: #777; font-size: 7px; text-anchor: middle;
               font-family: ui-monospace, Menlo, monospace; }
 
+
+
+/* ── a CT clamp's lead ───────────────────────────────────────────────────────
+   The wire from a machine to the board watching it. Dotted rather than dashed
+   on purpose: dashed is a secondary port's cross-system duct run and orange is
+   an unfinished stub, and adding a fourth dashed vocabulary to this canvas is
+   the one thing not to do (D-72). Thinner than a cable, because it carries a
+   reading rather than a motor command — and because a long one should look like
+   what it is, a nuisance to run across a floor. */
+.clamp-lead { fill: none; stroke-width: 1.6; stroke-linecap: round;
+              stroke-dasharray: 1 5; opacity: .95; pointer-events: none; }
+
+/* A clamp chip in the device tray. Same body as a plug chip; the face is a line
+   drawing rather than a filled socket, so it takes currentColor. */
+.tray .chip.clamp { color: #59b0c8; }
+.tray .chip.clamp .face { color: inherit; }
+.chip.ghost.clamp { color: #59b0c8; }

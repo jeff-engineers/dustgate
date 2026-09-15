@@ -167,9 +167,17 @@ inline bool buildSetFrame(JsonObject out, uint32_t seq, const char* selectorId,
 // read `claimedBy` to tell its user who holds the board — and a closed socket
 // is indistinguishable from a node that is simply offline, which is the one
 // reading that sends someone hunting for a wiring fault.
+// `clamps` is the one capability here that does not move anything, and it is why
+// a CT can appear in the UI at all: a plug is DISCOVERED by a subnet sweep, but a
+// clamp has no address and never will — somebody soldered it to this board. So
+// the board is the only thing that can say it exists. Reported from the pin map,
+// not chosen, exactly like the servo count, so it cannot disagree with the
+// hardware. Defaulted to 0 so every existing call site is unchanged and a board
+// with no clamp says nothing rather than saying zero.
 inline void buildWelcome(JsonObject out, const char* nodeId, const char* board,
                          const char* fw, int servos, int linear,
-                         const char* claimedBy = nullptr, bool accepted = true) {
+                         const char* claimedBy = nullptr, bool accepted = true,
+                         int clamps = 0) {
     out["t"]      = "WELCOME";
     out["v"]      = kVersion;
     out["nodeId"] = nodeId;
@@ -178,6 +186,9 @@ inline void buildWelcome(JsonObject out, const char* nodeId, const char* board,
     JsonObject caps = out.createNestedObject("caps");
     caps["servos"] = servos;
     caps["linear"] = linear;
+    // OMITTED WHEN ZERO, on purpose: absent already means none, so writing it
+    // would add a field to every board's answer to repeat what silence said.
+    if (clamps > 0) caps["ct"] = clamps;
     if (claimedBy && *claimedBy) out["claimedBy"] = claimedBy;
     if (!accepted) out["accepted"] = false;
 }

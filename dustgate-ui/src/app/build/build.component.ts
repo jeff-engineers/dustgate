@@ -3,7 +3,7 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router as NgRouter, RouterLink } from '@angular/router';
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
-import { ApiService, DiscoveredOutlet, NodeLinkState, SweepProgress, Topology, TopologyStatus } from '../services/api.service';
+import { ApiService, ClampBoard, DiscoveredOutlet, NodeLinkState, SweepProgress, Topology, TopologyStatus } from '../services/api.service';
 import { takeoverWarning } from '@plug-claim';
 import { airflowIssues, redundantSelectors, type AirflowIssue } from '@topology';
 import { COLLECTOR_RUNNING_W } from '@topology-device';
@@ -19,7 +19,7 @@ import {
 } from '../gates/selector-types';
 import {
   type ShopDoc, type ShopSystem,
-  addMachineWithPort, addSupplementalPort, addSystem, isPortSupplemental, machineById, machineOfPort,
+  addMachineWithPort, addSupplementalPort, addSystem, clampOf, isPortSupplemental, machineById, machineOfPort,
   machinesOf, NEW_MACHINE_NAME, outletExcludes, outletOf, portsOf, primaryPortOf, setOutlet,
   removeMachine, removePort,
   renameMachine,
@@ -246,6 +246,31 @@ interface BoardVM {
 }
 /** One cable run, port → the gate's servo tab. */
 interface CableVM { id: string; gateId: string; boardId: string; channel: number; d: string; shade: string; }
+
+/**
+ * One CT clamp's lead: the machine it watches, and the board it is wired to.
+ *
+ * Drawn like a cable because it IS one — same orthogonal routing, same geometry
+ * helpers — but never in the CABLE_SHADES below. A cable carries a command to an
+ * actuator; a clamp lead carries a reading back, and a woodworker seeing four
+ * blues would reasonably read the fifth as a fifth gate.
+ *
+ * The reason to draw it at all is not that the association needs illustrating —
+ * a plug's doesn't. It is that this lead is a real wire someone has to run
+ * across a real floor, and a long one is telling them to move the board. The RFC
+ * flags exactly that hazard for a CT hung off a gate-driving board.
+ */
+interface ClampLeadVM { id: string; elId: string; boardId: string; d: string; }
+
+/** The clamp lead's colour: a cool signal blue, DOTTED.
+ *
+ *  Dotted rather than dashed on purpose. Dashed already means a secondary port's
+ *  cross-system duct run and accent orange already means an unfinished stub —
+ *  and the meaning of a dashed line on this canvas has been re-litigated three
+ *  times (CLAUDE.md). A fourth dashed vocabulary is the one thing not to reach
+ *  for. Dotted reads as "not air" at a glance, which is the distinction that
+ *  matters most here. */
+const CLAMP_LEAD = '#59b0c8';
 
 /** One shade per board, so a wire can be traced back to the brain it leaves without
  *  following it.
@@ -482,6 +507,11 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       // A wall socket, for the smart-plug row.
       outlet:        svg('<rect x="4" y="4" width="16" height="16" rx="3"/><circle cx="9.5" cy="11" r="1.1" fill="currentColor" stroke="none"/><circle cx="14.5" cy="11" r="1.1" fill="currentColor" stroke="none"/><path d="M9 16h6"/>'),
       findBoards:    svg('<circle cx="11" cy="11" r="6"/><path d="M15.5 15.5 20 20"/>'),
+      // A CURRENT CLAMP: the body, the seam where the jaw opens, the hole the
+      // conductor passes through, and the lead. The literal drawing rather than
+      // an abstracted ring-on-a-wire — at 24px beside a wall-socket square, the
+      // thing a woodworker actually recognises (D-72, ct-on-a-board.html).
+      clamp:         svg('<rect x="6" y="3.5" width="12" height="14" rx="3"/><path d="M6 10.5h3.4M14.6 10.5h3.4"/><circle cx="12" cy="10.5" r="2.4"/><path d="M12 17.5v3"/>'),
       // A controller: the module and its port strip, the same shape the canvas draws.
       boardSetup:    svg('<rect x="4" y="6" width="16" height="10" rx="2"/><path d="M8 16v2M12 16v2M16 16v2"/>'),
       // A pencil, for renaming in place.
@@ -948,7 +978,13 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   scanning = false;
   scanned = false;
   chipDrag: {
-    outlet: DiscoveredOutlet; x: number; y: number;
+    /** Exactly one of these. A clamp rides the SAME gesture as a plug because
+     *  the mental model is identical — "this device watches that thing" — and
+     *  inventing a second gesture would cost a woodworker a concept for
+     *  nothing. What differs is only what gets written on the drop. */
+    outlet: DiscoveredOutlet | null;
+    clamp: ClampBoard | null;
+    x: number; y: number;
     /** Where the press landed — a tap is measured from here. See chipMove. */
     x0: number; y0: number;
     moved: boolean; over: string | null;
@@ -956,7 +992,8 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
 
   /** The ghost only exists once the gesture IS a drag. Drawing it on pointerdown
    *  put a plug under the finger of someone who was only tapping. */
-  get ghostChip(): { outlet: DiscoveredOutlet; x: number; y: number } | null {
+  get ghostChip(): { outlet: DiscoveredOutlet | null; clamp: ClampBoard | null;
+                     x: number; y: number } | null {
     return this.chipDrag?.moved ? this.chipDrag : null;
   }
 
@@ -1213,11 +1250,54 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     return true;
   }
 
+  /**
+   * Drop a CLAMP on a tool or the collector.
+   *
+   * A clamp and a plug answer the SAME question — is this motor drawing — so
+   * they share one `sensor` slot and validateTopology() refuses both at once.
+   * Dropping a clamp therefore REPLACES a plug, which is exactly what dropping a
+   * plug on an already-paired machine already does.
+   *
+   * No threshold is written, and its absence is the point (RFC §5.4b): a CT
+   * measures current, watts need a voltage and a power factor it cannot give,
+   * and a woodworking tool's standby sits under the noise floor. The board
+   * compares against its own floor and sends one bit.
+   */
+  private pairClamp(b: ClampBoard, elementId: string): boolean {
+    const el = this.elem(elementId);
+    if (!el || (el['type'] !== 'tool' && el['type'] !== 'collector')) return false;
+    // `channel` means nothing to the firmware yet — one analog pad per board —
+    // but topology.js requires it, so 0 is written rather than omitted.
+    const ct: RawEl = { channel: 0 };
+    // OMITTED when empty: absent already says "this board", and writing '' would
+    // be a second spelling of the same thing for the validator to allow.
+    if (b.id) ct['controllerId'] = b.id;
+    // On the MACHINE, not the port — the routing brain only ever reads machines,
+    // the same reason setOutlet() goes there.
+    const doc = this.topo as unknown as ShopDoc;
+    const m = machineOfPort(doc, el as never) ?? el;
+    (m as RawEl)['sensor'] = { ct };
+    return true;
+  }
+
   // ── dragging a chip onto a tool ──────────────────────────────────────────────
+  /** A clamp chip, dragged exactly like a plug. Shares chipMove/chipUp so the
+   *  drag slop, the pointercancel handling and the hit-testing cannot drift. */
+  onClampDown(evt: PointerEvent, b: ClampBoard): void {
+    evt.preventDefault();
+    this.chipDrag = {
+      outlet: null, clamp: b, x: evt.clientX, y: evt.clientY,
+      x0: evt.clientX, y0: evt.clientY, moved: false, over: null,
+    };
+    window.addEventListener('pointermove', this.chipMove);
+    window.addEventListener('pointerup', this.chipUp);
+    window.addEventListener('pointercancel', this.chipUp);
+  }
+
   onChipDown(evt: PointerEvent, o: DiscoveredOutlet): void {
     evt.preventDefault();
     this.chipDrag = {
-      outlet: o, x: evt.clientX, y: evt.clientY,
+      outlet: o, clamp: null, x: evt.clientX, y: evt.clientY,
       x0: evt.clientX, y0: evt.clientY, moved: false, over: null,
     };
     window.addEventListener('pointermove', this.chipMove);
@@ -1262,13 +1342,17 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       // natural place to name the plug you are looking at, and it cannot collide
       // with the drag: this branch only runs when nothing moved and nothing is
       // waiting to be paired.
-      if (!d.moved) this.startChipRename(d.outlet);
+      //
+      // A CLAMP has nothing to rename — its name is the board's, and that is
+      // renamed from /boards — so a tap on one simply does nothing.
+      if (!d.moved && d.outlet) this.startChipRename(d.outlet);
       return;
     }
     // Aimed at something that takes no outlet — a gate, a junction. Leave the tool
     // armed rather than clearing it: the gesture missed, and the next tap should
     // still land.
-    if (!this.pairOutlet(d.outlet, target)) return;
+    if (d.clamp) { if (!this.pairClamp(d.clamp, target)) return; }
+    else if (!d.outlet || !this.pairOutlet(d.outlet, target)) return;
     this.armedTool = null; this.matchNote = '';
     this.afterMutation(null);
   };
@@ -3445,6 +3529,11 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     let links: NodeLinkState[] = [];
     try { links = await this.api.getNodes(); } catch { return; }   // older/offline device
     this.nodeLinks = links;
+    // Which boards carry a clamp — a separate read because it needs `self` too,
+    // and the primary is not in `nodes` (that array is the REMOTE links). A
+    // failure leaves the list empty, which is the same as a shop with no clamps
+    // and reads correctly on its own rather than as an error.
+    try { this.clampBoards = await this.api.getClampBoards(); } catch { this.clampBoards = []; }
     const controllers = this.controllersRaw();
     let added = false;
     for (const l of links) {
@@ -3881,6 +3970,75 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     const i = this.controllersRaw().findIndex(c => c['id'] === boardId);
     return CABLE_SHADES[Math.max(0, i) % CABLE_SHADES.length];
   }
+
+  /**
+   * Boards that say they carry a clamp. Loaded once, from /api/nodes.
+   *
+   * NOT the layout's controllers, and the difference is the whole point: a plug
+   * is DISCOVERED by a subnet sweep, and a clamp cannot be — it has no address,
+   * somebody soldered it on. So only a board that has actually declared one
+   * (caps.ct in its WELCOME) may be offered, or the tray would happily pair a
+   * clamp that does not exist.
+   */
+  clampBoards: ClampBoard[] = [];
+
+  /** The clamp chips in the tray: one per declared clamp not already paired.
+   *  Empty is the CORRECT state for a shop with no clamps, not a failure. */
+  freeClamps(): ClampBoard[] {
+    const doc = this.topo as unknown as ShopDoc | null;
+    if (!doc) return this.clampBoards;
+    const used = new Set<string>();
+    // clampOf(), not el.sensor.ct — the clamp is on the MACHINE, and a port is
+    // not the machine. Reading the element directly found nothing for every tool
+    // in a v2 shop, so a paired clamp stayed in the tray as if free.
+    for (const e of elementsOf(doc as never) as unknown as RawEl[]) {
+      const ct = clampOf(doc, e);
+      if (ct) used.add((ct['controllerId'] as string) ?? '');
+    }
+    return this.clampBoards.filter(b => !used.has(b.id));
+  }
+
+  /**
+   * Every clamp lead in the layout, routed like the board cables it belongs with.
+   *
+   * It is ALLOWED TO CROSS a duct run, which a duct may not do to another duct:
+   * air cannot cross, and a wire lying on the floor obviously can. So no
+   * crossing cost is passed and nothing is reserved against it.
+   */
+  clampLeads(): ClampLeadVM[] {
+    if (!this.topo) return [];
+    const out: ClampLeadVM[] = [];
+    const doc = this.topo as unknown as ShopDoc;
+    // One lead per MACHINE, not per port: a machine with two ports has one
+    // clamp, and drawing the same wire twice would double every line on a shop
+    // with overarm guards.
+    const drawnFor = new Set<string>();
+    for (const e of elementsOf(this.topo) as unknown as RawEl[]) {
+      const ct = clampOf(doc, e);
+      if (!ct) continue;
+      const machine = machineOfPort(doc, e as never);
+      const key = (machine?.id as string) ?? (e['id'] as string);
+      if (drawnFor.has(key)) continue;
+      drawnFor.add(key);
+      const elId = e['id'] as string;
+      const n = this.byId.get(elId);
+      if (!n) continue;
+      // Absent controllerId means THIS BOARD — the model's rule everywhere.
+      const boardId = (ct['controllerId'] as string) || this.defaultControllerId();
+      const b = this.boards().find(x => x.id === boardId);
+      // A board nobody placed on the canvas has nowhere to draw TO. Skipping is
+      // the honest answer: the pairing is real and the sheet still shows it, but
+      // an invented endpoint would be a line to a board that is not there.
+      if (!b) continue;
+      const from = portExit({ x: this.bx(b), y: this.by(b) }, 0);
+      const to = { x: this.tabX(n), y: this.tabY(n) };
+      out.push({ id: 'ct:' + elId, elId, boardId, d: cablePath(cableRun(from, to, 0)) });
+    }
+    return out;
+  }
+
+  /** The dotted signal blue every clamp lead is drawn in. */
+  get clampLeadShade(): string { return CLAMP_LEAD; }
 
   cables(): CableVM[] {
     if (!this.topo) return [];

@@ -3821,6 +3821,10 @@ void loop() {
                     JsonObject caps = o.createNestedObject("caps");
                     caps["servos"] = n.capServos;
                     caps["linear"] = n.capLinear;
+                    // Omitted when none, matching the wire: absent already means
+                    // "no clamp", so the UI's empty tray is the correct empty
+                    // state rather than a feature nobody switched on.
+                    if (n.capClamps > 0) caps["ct"] = n.capClamps;
                     // A node that belongs to ANOTHER primary is offline to us on
                     // purpose. Without naming its owner here, that is
                     // indistinguishable from a dead board — and the difference
@@ -3830,6 +3834,29 @@ void loop() {
                         o["claimedBy"] = g_remoteBuses[i].refusedBy();
                         o["takeable"]  = true;
                     }
+                }
+                // THIS BOARD IS A BOARD TOO, and it is not in `nodes` — that
+                // array is the REMOTE links, and the primary has no NodeLink
+                // entry for itself. Without this the UI could offer a clamp on
+                // every node in the shop and not the one it is talking to, which
+                // is the most likely place for the first clamp to be.
+                {
+                    JsonObject self = nodes.createNestedObject("self");
+                    self["id"]   = g_nodeBus.ownControllerId();
+                    // No registry entry exists for this board — it is not
+                    // paired with itself — so its hostname is the honest name,
+                    // and it is the one printed on every other screen.
+                    self["name"] = WiFiProvisioner::getHostname();
+                    JsonObject sc = self.createNestedObject("caps");
+#if defined(ENABLE_SERVO) && defined(SERVO_PWM_PIN_1)
+                    sc["servos"] = SERVO_COUNT;
+#else
+                    sc["servos"] = 0;
+#endif
+                    sc["linear"] = HAS_LINEAR ? 1 : 0;
+#ifdef PIN_CT
+                    sc["ct"] = 1;
+#endif
                 }
                 String nodeBody; serializeJson(nodes, nodeBody);
                 apiServer.publishNodeStatus(nodeBody);

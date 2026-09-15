@@ -39,6 +39,9 @@ const NODE_ID    = process.env.MOCK_NODE_ID || 'dustgate-node-1';
 const BOARD      = process.env.MOCK_NODE_BOARD || 'qtpy_s3';
 const FW         = '1.0.0-mock';
 const SERVO_COUNT = 4;
+// How many current clamps this simulated board claims. One by default: the
+// thing most worth exercising is a shop that HAS one.
+const MOCK_CT = Number(process.env.MOCK_NODE_CT ?? 1);
 
 // How long a simulated sweep takes. Short enough to keep the suite fast, long
 // enough that "moving" is observably a state and not an instant.
@@ -146,7 +149,11 @@ wss.on('connection', (ws) => {
       // The socket stays OPEN on a refusal: the refused primary has to read
       // claimedBy to tell its user who holds the board, and a closed socket is
       // indistinguishable from a node that is simply offline.
-      send(ws, NL.welcome(NODE_ID, BOARD, FW, { servos: SERVO_COUNT, linear: 0 },
+      // caps.ct: a clamp is DECLARED, never discovered — nothing on the network
+      // can find one — so the board saying so is the only way the UI learns it
+      // exists. MOCK_NODE_CT=0 turns it off, to see the empty tray.
+      send(ws, NL.welcome(NODE_ID, BOARD, FW,
+                          { servos: SERVO_COUNT, linear: 0, ct: MOCK_CT },
                           owner, accepted));
       return;
     }

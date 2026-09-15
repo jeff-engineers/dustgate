@@ -2,7 +2,7 @@ import { Component, OnInit, ViewChild } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router } from '@angular/router';
-import { ApiService, DiscoveredOutlet, Topology } from '../services/api.service';
+import { ApiService, ClampBoard, DiscoveredOutlet, Topology } from '../services/api.service';
 import { ElementOutletConfigComponent } from './element-outlet-config.component';
 import { CollectorSetupComponent } from './collector-setup.component';
 import { PairedOutletRowComponent } from './paired-outlet-row.component';
@@ -48,6 +48,16 @@ interface ToolCfg {
   primary: boolean;
   name: string;
   gateLabel: string;
+  /** How this tool is WATCHED — the same question, and the same three answers,
+   *  the collector sheet asks. It was a Yes/No ("smart outlet on this tool?")
+   *  until 2026-09-15, which could not express a clamp and made the two screens
+   *  disagree about what the question even was.
+   *
+   *  `hasPlug` survives as a derived convenience, because a dozen call sites and
+   *  the list pills read it and none of them care about clamps. */
+  sense: 'plug' | 'ct' | 'none';
+  /** Which BOARD carries the clamp. '' means "this board". */
+  ctControllerId: string;
   hasPlug: boolean;
   ip: string;
   gen: number;
@@ -144,7 +154,18 @@ const DEFAULT_THRESHOLD = 50;
     .gate { font-size: 11.5px; color: var(--accent); background: rgba(240,165,0,0.12); display: inline-block; padding: 2px 8px; border-radius: 20px; margin-top: 5px; }
 
     .q { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px; background: var(--bg); border: 1px solid var(--border); border-radius: 12px; margin-bottom: 12px; }
-    .q .yesno { display: flex; gap: 6px; }
+    .q .yesno.three button { flex: 1; font-size: 12.5px; padding-left: 4px; padding-right: 4px; }
+    .yesno.three button[disabled] { opacity: .45; }
+    /* STACKED, not the side-by-side .q above. That row was built for a Yes/No —
+       two short words — and three options plus a label do not fit a phone beside
+       each other: the question wrapped to five lines and "Nothing" ran off the
+       right edge. */
+    .q.watch { display: block; }
+    .q.watch > span { display: block; margin-bottom: 8px; }
+    .q.watch .yesno { width: 100%; }
+    .q.watch select { background: var(--bg); border: 1px solid var(--border); color: var(--text);
+                      border-radius: 8px; padding: 4px 7px; font: inherit; font-size: 12.5px; }
+    .yesno { display: flex; gap: 6px; }
     .q button { background: var(--surface); border: 1px solid var(--border); color: var(--muted); border-radius: 8px; padding: 6px 14px; font-size: 13px; }
     .q button.on { background: var(--success); border-color: var(--success); color: #05230f; font-weight: 600; }
 
@@ -250,7 +271,8 @@ const DEFAULT_THRESHOLD = 50;
               <div class="sub">{{ t.gateLabel }}</div>
               <span class="pill ok"    *ngIf="t.hasPlug && t.ip">{{ plugPill(t) }}</span>
               <span class="pill todo"  *ngIf="t.hasPlug && !t.ip">No outlet paired yet</span>
-              <span class="pill plain" *ngIf="!t.hasPlug">Switched on by hand</span>
+              <span class="pill ok"    *ngIf="t.sense === 'ct'">Current clamp</span>
+              <span class="pill plain" *ngIf="t.sense === 'none'">Switched on by hand</span>
             </div>
             <svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                  stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -275,6 +297,7 @@ const DEFAULT_THRESHOLD = 50;
     <ng-container *ngIf="collectorEl as el">
       <app-collector-setup [element]="el"
                            [controllers]="controllerList"
+                           [clampBoards]="clampBoards"
                            [systemName]="collectorSysName"
                            [excludeIps]="collectorExcludeIps"
                            [excludeReason]="collectorExcludeReason"
@@ -306,17 +329,48 @@ const DEFAULT_THRESHOLD = 50;
 
         <!-- Only while nothing is paired: once there is an outlet, Remove on the
              row below is how you say No. -->
-        <div class="q" *ngIf="!c.ip">
-          <span>Smart outlet on this tool?</span>
-          <div class="yesno">
-            <button [class.on]="c.hasPlug" (click)="c.hasPlug = true; touched = true"
-                    title="Pair a smart outlet, so DustGate knows when this tool is running">Yes</button>
-            <button [class.on]="!c.hasPlug" (click)="c.hasPlug = false; touched = true"
-                    title="No smart outlet — you switch this tool on yourself from the shop list">No</button>
+        <!-- THE SAME QUESTION THE COLLECTOR SHEET ASKS, in the same words and
+             the same order. It was a Yes/No here and a three-way there, so the
+             answer to "how does DustGate know this is running" depended on which
+             screen you happened to be standing on. -->
+        <div class="q watch" *ngIf="!c.ip">
+          <span>How does DustGate know it's running?</span>
+          <div class="yesno three">
+            <button [class.on]="c.sense === 'plug'" (click)="setToolSense(c, 'plug')"
+                    title="Pair a smart outlet, so DustGate knows when this tool is running">Metering plug</button>
+            <button [class.on]="c.sense === 'ct'" [disabled]="!clampBoards.length"
+                    (click)="setToolSense(c, 'ct')"
+                    title="A clamp on this tool's feed, wired to one of your boards — for 240 V, where there is no plug to pair">Current clamp</button>
+            <button [class.on]="c.sense === 'none'" (click)="setToolSense(c, 'none')"
+                    title="Nothing watches it — you switch this tool on yourself from the shop list">Nothing</button>
+          </div>
+          <div class="hint" *ngIf="c.sense === 'ct' && clampBoards.length" style="margin-top:8px">
+            <span>🔌</span>
+            <span>Wired to
+              <select [(ngModel)]="c.ctControllerId" (ngModelChange)="touched = true"
+                      aria-label="Which board the clamp is wired to">
+                <option *ngFor="let b of clampBoards" [value]="b.id">
+                  {{ b.name }}{{ b.online ? '' : ' — not answering' }}
+                </option>
+              </select>
+            </span>
+          </div>
+          <div class="hint" *ngIf="c.sense === 'ct' && clampBoards.length">
+            <span>💡</span>
+            <span>Only boards that have told DustGate they have a clamp appear here.</span>
+          </div>
+          <div class="hint" *ngIf="!clampBoards.length" style="margin-top:8px">
+            <span>💡</span><span><b>Current clamp</b> needs a board with a clamp wired to it.
+              None of your boards has reported one.</span>
           </div>
         </div>
 
-        <ng-container *ngIf="c.hasPlug; else manual">
+        <!-- sense === 'plug', not hasPlug: the branch below says
+             "you'll switch this one on yourself", which is TRUE for Nothing and
+             FALSE for a clamp — a clamped tool is sensed, it just isn't sensed
+             by a plug. Keying this off hasPlug put that sentence under every
+             clamp. -->
+        <ng-container *ngIf="c.sense === 'plug'; else notAPlug">
           <!-- Paired: the scan list collapses to the row, which is where the name
                and the way out live. -->
           <app-paired-outlet-row *ngIf="c.ip"
@@ -387,8 +441,11 @@ const DEFAULT_THRESHOLD = 50;
             <div class="why">Catches the motor, ignores standby draw.</div>
           </div>
         </ng-container>
-        <ng-template #manual>
-          <div class="empty">You'll switch this one on manually from the tool list.</div>
+        <ng-template #notAPlug>
+          <div class="empty" *ngIf="c.sense === 'none'">
+            You'll switch this one on manually from the tool list.</div>
+          <div class="empty" *ngIf="c.sense === 'ct'">
+            The board watches the current and tells DustGate when this is running.</div>
         </ng-template>
       </div>
 
@@ -418,6 +475,9 @@ export class ToolSetupComponent implements OnInit {
   /** Boards, for the bin sensor's "wired to". The sheet needs the list; which one
    *  is right is the user's call, the same way a gate's board is. */
   controllerList: { id: string; name?: string }[] = [];
+  /** Boards that DECLARED a clamp. Not the layout's controllers — a clamp cannot
+   *  be discovered, so only a board that has said it has one may be offered. */
+  clampBoards: ClampBoard[] = [];
   /** Named in the bin alert's copy — "every board on Main system flashes red" —
    *  so the scope of the alert is concrete rather than a word. */
   collectorSysName = '';
@@ -473,6 +533,10 @@ export class ToolSetupComponent implements OnInit {
       return;
     }
     this.rebuild();
+    // Which boards carry a clamp. Failure is not an error state: a device that
+    // cannot answer simply offers no clamp, which is the same as a shop that has
+    // none, and the option says so on its own.
+    try { this.clampBoards = await this.api.getClampBoards(); } catch { this.clampBoards = []; }
     // Up front, not on opening a tool: the list itself shows which plug each tool
     // is on, and a scan started here has finished by the time anyone taps a row.
     if (this.anythingToSetUp) void this.scan();
@@ -816,13 +880,24 @@ export class ToolSetupComponent implements OnInit {
       // each of its ports, which is what the canvas draws. Writing one copy is
       // what left the two screens disagreeing (2026-08-22).
       renameMachine(this.topo as unknown as ShopDoc, m.id as string, c.name);
-      if (c.hasPlug && c.ip) {
+      if (c.sense === 'plug' && c.ip) {
         const outlet: RawEl = { gen: c.gen || 2, ip: c.ip, thresholdW: c.thresholdW || DEFAULT_THRESHOLD };
         if (c.hostname) outlet['host'] = c.hostname;
         if (c.label) outlet['name'] = c.label;
         m.sensor = { outlet };
-      } else if (!c.hasPlug) {
-        // Said No, or used Remove. An explicit act, so honour it.
+      } else if (c.sense === 'ct') {
+        // NO THRESHOLD, and its absence is the point (RFC §5.4b): a CT measures
+        // current, watts need a voltage and a power factor it cannot give, and a
+        // woodworking tool's standby sits under the noise floor. The board
+        // compares against its own floor and sends one bit. `channel` means
+        // nothing to the firmware yet but topology.js requires it.
+        const ct: RawEl = { channel: 0 };
+        // OMITTED when empty — absent already says "this board", and writing ''
+        // would be a second spelling of the same thing.
+        if (c.ctControllerId) ct['controllerId'] = c.ctControllerId;
+        m.sensor = { ct };
+      } else if (c.sense === 'none') {
+        // Said Nothing, or used Remove. An explicit act, so honour it.
         delete m.sensor;
       }
       // The remaining case — wants an outlet, hasn't chosen one — is a swap left
@@ -855,6 +930,9 @@ export class ToolSetupComponent implements OnInit {
   private toCfg(e: RawEl): ToolCfg {
     const outlet = outletOf(this.topo as unknown as ShopDoc, e) ?? undefined;
     const machine = machineOfPort(this.topo as unknown as ShopDoc, e);
+    // On the MACHINE, like the plug — "which device watches this tool" is a fact
+    // about the machine, and the routing brain only ever reads machines.
+    const ct = (machine?.['sensor'] as RawEl | undefined)?.['ct'] as RawEl | undefined;
     return {
       id: e['id'] as string,
       machineId: (machine?.id as string) ?? '',
@@ -865,6 +943,8 @@ export class ToolSetupComponent implements OnInit {
       // deliberately set to manual re-opened showing "Yes" with no plug beside
       // it — a toggle stating the opposite of the truth. The cost is one extra
       // tap on a brand-new tool, which is the right trade.
+      sense: outlet ? 'plug' : ct ? 'ct' : 'none',
+      ctControllerId: (ct?.['controllerId'] as string) ?? '',
       hasPlug: !!outlet,
       ip: (outlet?.['ip'] as string) ?? '',
       gen: (outlet?.['gen'] as number) ?? 2,
@@ -872,6 +952,25 @@ export class ToolSetupComponent implements OnInit {
       label: (outlet?.['name'] as string) ?? '',
       thresholdW: (outlet?.['thresholdW'] as number) ?? DEFAULT_THRESHOLD,
     };
+  }
+
+  /**
+   * Pick how a tool is watched.
+   *
+   * `hasPlug` is kept in step rather than deleted: the list pills, the pairing
+   * row and the save path all read it, and none of them have any business
+   * knowing about clamps. A clamp is not a plug, so hasPlug is false for one —
+   * which is exactly right for every question those call sites are asking.
+   */
+  setToolSense(c: ToolCfg, s: 'plug' | 'ct' | 'none'): void {
+    c.sense = s;
+    c.hasPlug = s === 'plug';
+    this.touched = true;
+    // Default to the only clamp in the shop rather than leaving the select
+    // blank, which reads as an unfinished form.
+    if (s === 'ct' && !c.ctControllerId && this.clampBoards.length) {
+      c.ctControllerId = this.clampBoards[0].id;
+    }
   }
 
   private gateLabel(toolId: string): string {

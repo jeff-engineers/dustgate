@@ -72,6 +72,7 @@
 #include "NodeBus.h"
 #include "NodeLink.h"   // nodelink::kSenseStaleMs — how long a CT reading stays good
 #include <deque>
+#include <map>
 #include <set>
 #include <memory>
 #include <string>
@@ -942,20 +943,60 @@ private:
                 const char* cid = ct["controllerId"] | "";
 
                 bool on = false; uint32_t atMs = 0;
-                if (!_bus->senseOf(cid, id, on, atMs)) on = false;
+                bool reported = _bus->senseOf(cid, id, on, atMs);
+                if (!reported) on = false;
                 // STALE IS NOT THE SAME AS OFF, and this treats it as off on
                 // purpose while the distinction has nowhere to be shown: a board
                 // still answering PINGs but no longer reporting is a FAULT, and
                 // when there is a UI for it this is where it gets raised.
                 // Skipped entirely when nowMs is 0 — the test call sites pass a
                 // constant clock, and a zero "now" would age every reading out.
-                else if (_nowMs && (uint32_t)(_nowMs - atMs) > nodelink::kSenseStaleMs) on = false;
+                else if (_nowMs && (uint32_t)(_nowMs - atMs) > nodelink::kSenseStaleMs) {
+                    on = false; reported = false;
+                }
+
+                // How long it has been on, which only the collector path needs
+                // (a spin-up grace) but which is cheapest to track for both.
+                uint32_t& since = _ctSince[std::string(id)];
+                if (!on) since = 0;
+                else if (!since) since = _nowMs ? _nowMs : 1;
+
+                // ── A COLLECTOR IS NOT A MACHINE ───────────────────────────
+                //
+                // A tool's reading answers "should the collector run"; a
+                // COLLECTOR's answers "did the thing we commanded actually
+                // happen", which is a different question with a different
+                // consumer. Routing a blower through setMachinePower() would
+                // reach machineIndex(), find nothing, and do nothing at all —
+                // silently, which is the failure mode this whole path exists to
+                // avoid. CollectorPlugState is where a blower's own draw is
+                // judged, so a clamp feeds that instead.
+                //
+                // It matters MORE on a collector than on a tool: every way we
+                // command a blower is stateless (a servo on a fob, an RF frame),
+                // so `sensor` is the only thing that can say the press landed.
+                if (_eq(e["type"], "collector")) {
+                    const uint32_t onFor = (on && since && _nowMs) ? (_nowMs - since) : 0;
+                    // Synthetic watts, the same trick used for a manual machine:
+                    // the brain has ONE notion of a running blower and a clamp
+                    // that cannot give watts still has to speak it. Comfortably
+                    // over kCollectorRunningW rather than equal to it, so a
+                    // change to that threshold cannot silently strand a clamp.
+                    setCollectorPlug(std::string(sys.id ? sys.id : ""),
+                                     on ? kCollectorRunningW * 2.0f : 0.0f,
+                                     reported, onFor);
+                    continue;
+                }
 
                 setMachinePower(std::string(id),
                                 on ? manualWattsFor(_ctrl.machineThreshold(std::string(id))) : 0.0f);
             }
         }
     }
+
+    // When each clamped element's reading last went true, for the collector's
+    // spin-up grace. Keyed by element id; cleared to 0 the moment it reads off.
+    std::map<std::string, uint32_t>      _ctSince;
 
     NodeBus*                             _bus = nullptr;
     std::unique_ptr<DynamicJsonDocument> _doc;

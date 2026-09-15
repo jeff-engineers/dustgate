@@ -280,6 +280,18 @@
         <path *ngFor="let c of litCables()" class="cable-casing" [attr.d]="c.d"/>
         <path *ngFor="let c of cables()" class="cable" [attr.d]="c.d" [attr.stroke]="c.shade"
               [class.on-path]="cableOnPath(c)"/>
+        <!-- A CLAMP LEAD. Drawn here with the cables because it IS one, and
+             never in a board shade: a cable carries a command out to an
+             actuator, a lead carries a reading back, and four blues plus a
+             fifth reads as a fifth gate.
+
+             DOTTED, deliberately not dashed — dashed already means a secondary
+             port's cross-system run, accent orange already means an unfinished
+             stub, and what a dashed line means here has been re-litigated three
+             times. It is also the one line allowed to cross a duct: air cannot,
+             a wire on the floor obviously can. (D-72) -->
+        <path *ngFor="let l of clampLeads()" class="clamp-lead" [attr.d]="l.d"
+              [attr.stroke]="clampLeadShade"/>
       </g>
       <path *ngFor="let d of openDucts()" class="open-stub" [attr.d]="openStubD(d.childId)"/>
       <!-- ── wiring layer ────────────────────────────────────────────────
@@ -423,7 +435,10 @@
      and any name-match hint are in the tooltip. They were on the chip at first
      and turned a glanceable strip into three rows of prose. -->
 <div class="tray" *ngIf="showTray" [class.armed]="armedTool">
-  <span class="t">Outlets</span>
+  <!-- "Devices", not "Outlets": one of the things in here is not an outlet. A
+       clamp is the first sensing device DustGate cannot FIND — it has no address
+       — so it is listed because a board declared it, and the row says which. -->
+  <span class="t">Devices</span>
   <span class="n">{{ trayNote() }}</span>
   <div class="chips">
     <button *ngFor="let o of freeOutlets()" class="chip" [attr.data-level]="chipLevel(o)"
@@ -435,7 +450,23 @@
       <span class="nm">{{ o.name || o.hostname }}</span>
       <span class="w" *ngIf="chipLevel(o) !== 'idle'">{{ chipWatts(o) }}</span>
     </button>
-    <span class="tray-empty" *ngIf="!freeOutlets().length">
+    <!-- A clamp lives on a BOARD, so the chip names the board rather than the
+         clamp: two identical clamps are told apart by nothing else, and it is
+         also the fact that decides where a cable has to run. -->
+    <button *ngFor="let b of freeClamps()" class="chip clamp"
+            [title]="'Current clamp on ' + b.name + (armedTool
+                       ? ' — tap to pair it with the armed piece'
+                       : ' — drag it onto a tool or the collector')"
+            (pointerdown)="onClampDown($event, b)">
+      <svg class="face" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="6" y="3.5" width="12" height="14" rx="3"/>
+        <path d="M6 10.5h3.4M14.6 10.5h3.4"/><circle cx="12" cy="10.5" r="2.4"/>
+        <path d="M12 17.5v3"/>
+      </svg>
+      <span class="nm">Clamp · {{ b.name }}</span>
+    </button>
+    <span class="tray-empty" *ngIf="!freeOutlets().length && !freeClamps().length">
       {{ scanned ? 'all paired' : 'none found yet' }}
     </span>
   </div>
@@ -476,9 +507,17 @@
 <!-- The chip under the pointer while dragging one onto a machine. `ghostChip`,
      not `chipDrag`: the gesture is not a drag until it has travelled, and drawing
      this on pointerdown put a plug under the finger of someone who was tapping. -->
-<div class="chip ghost" *ngIf="ghostChip as cd" [style.left.px]="cd.x" [style.top.px]="cd.y">
-  <svg class="face" viewBox="0 0 24 24"><rect class="shell" x="3.5" y="3.5" width="17" height="17" rx="5"/><rect class="slot" x="8.4" y="7.6" width="2.1" height="5.6" rx="1"/><rect class="slot" x="13.5" y="7.6" width="2.1" height="5.6" rx="1"/><circle class="slot" cx="12" cy="16.4" r="1.5"/></svg>
-  <span>{{ cd.outlet.name || cd.outlet.hostname }}</span>
+<div class="chip ghost" *ngIf="ghostChip as cd" [class.clamp]="cd.clamp"
+     [style.left.px]="cd.x" [style.top.px]="cd.y">
+  <svg class="face" *ngIf="cd.outlet" viewBox="0 0 24 24"><rect class="shell" x="3.5" y="3.5" width="17" height="17" rx="5"/><rect class="slot" x="8.4" y="7.6" width="2.1" height="5.6" rx="1"/><rect class="slot" x="13.5" y="7.6" width="2.1" height="5.6" rx="1"/><circle class="slot" cx="12" cy="16.4" r="1.5"/></svg>
+  <svg class="face" *ngIf="cd.clamp" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+       stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="6" y="3.5" width="12" height="14" rx="3"/>
+    <path d="M6 10.5h3.4M14.6 10.5h3.4"/><circle cx="12" cy="10.5" r="2.4"/>
+    <path d="M12 17.5v3"/>
+  </svg>
+  <span *ngIf="cd.outlet">{{ cd.outlet.name || cd.outlet.hostname }}</span>
+  <span *ngIf="cd.clamp">Clamp · {{ cd.clamp.name }}</span>
 </div>
 
 <!-- Configuring one gate — a sheet over the canvas, so the layout stays put.

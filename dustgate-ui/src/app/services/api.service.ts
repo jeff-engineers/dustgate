@@ -178,7 +178,31 @@ export interface NodeLinkState {
   lastSeen: number;
   board: string;
   fw: string;
-  caps: { servos: number; linear: number };
+  /** What this board HAS.
+   *
+   *  `ct` is the odd one: everything else here describes what the board can
+   *  MOVE, and a clamp moves nothing. It is here because a clamp is the one
+   *  device DustGate cannot discover — a plug answers a subnet sweep at an IP,
+   *  a clamp was soldered on by a person and has no address — so the board
+   *  saying so is the only way the UI ever learns one exists.
+   *
+   *  ABSENT MEANS NONE, which is what every board flashed before 2026-09-15
+   *  reports by saying nothing. Read it through `clampsOn()` rather than
+   *  directly, so that default lives in one place. */
+  caps: { servos: number; linear: number; ct?: number };
+}
+
+/** How many current clamps a board says it has. Absent means none. */
+export const clampsOn = (n: { caps?: { ct?: number } } | null | undefined): number =>
+  typeof n?.caps?.ct === 'number' ? n.caps.ct : 0;
+
+/** A board the layout can attach a clamp to: the primary itself, or any paired
+ *  node that declared one. */
+export interface ClampBoard {
+  /** controllerId. '' for the primary, matching the model's "this board" rule. */
+  id: string;
+  name: string;
+  online: boolean;
 }
 
 export interface DeviceInfo {
@@ -736,6 +760,33 @@ export class ApiService {
   async getNodes(): Promise<NodeLinkState[]> {
     const r = await this.get<{ nodes: NodeLinkState[] }>('/api/nodes');
     return r?.nodes ?? [];
+  }
+
+  /**
+   * Every board that could carry a current clamp, the primary included.
+   *
+   * THE PRIMARY IS NOT IN `nodes` — that array is the REMOTE links, and the
+   * device has no NodeLink entry for itself — so it rides alongside as `self`.
+   * Leaving it out would offer a clamp on every board in the shop except the one
+   * the browser is talking to, which is the likeliest place for the first one.
+   *
+   * Returns [] when nothing declares a clamp, and that is the CORRECT EMPTY
+   * STATE rather than a failure: a shop with no clamps should be offered none.
+   */
+  async getClampBoards(): Promise<ClampBoard[]> {
+    const r = await this.get<{ nodes?: NodeLinkState[]; self?: NodeLinkState }>('/api/nodes');
+    const out: ClampBoard[] = [];
+    if (r?.self && clampsOn(r.self)) {
+      // '' rather than its real id: the model's "absent means this board" rule,
+      // so a layout written here does not hard-code the primary's name and then
+      // break when someone renames it.
+      out.push({ id: '', name: r.self.name || 'This board', online: true });
+    }
+    for (const n of r?.nodes ?? []) {
+      if (!clampsOn(n)) continue;
+      out.push({ id: n.id, name: n.name || n.id, online: n.online });
+    }
+    return out;
   }
 
   /**

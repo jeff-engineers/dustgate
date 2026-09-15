@@ -29,7 +29,7 @@ export type RawEl = Record<string, unknown>;
  *  option that the type system says cannot exist. It has no schema yet, so
  *  writing it is refused below rather than guessed at. */
 export type CtlKind   = 'plug' | 'rf' | 'servo' | 'none';
-/** How it is WATCHED. 'ct' is here for the same reason 'servo' is. */
+/** How it is WATCHED. 'ct' became real on 2026-09-15 — see CT_NOTE below. */
 export type SenseKind = 'plug' | 'ct' | 'none';
 
 export interface PlugForm {
@@ -53,6 +53,13 @@ export interface CollectorForm {
   rfRest: RawEl;
   sense: SenseKind;
   sensePlug: PlugForm;
+  /** Which BOARD carries the clamp. '' means "this board", matching the bin
+   *  sensor, every selector, and NodeBus's own rule. Only meaningful when
+   *  sense === 'ct'. */
+  senseCtControllerId: string;
+  /** Anything else already on `sensor.ct`, so a field written by a newer UI
+   *  survives a round trip through an older one. */
+  senseCtRest: RawEl;
   bin: boolean;
   /** '' means "this board", matching every selector and NodeBus's own rule. */
   binControllerId: string;
@@ -88,12 +95,35 @@ export const DEFAULT_COAST_SEC = 8;
  */
 export const DEFAULT_RF_PIN = 9;
 
+/**
+ * Which input on the board the clamp is on.
+ *
+ * NOT a JS↔C++ pair, and worth saying why so nobody adds a row for it: the
+ * firmware does not map this to a pad at all. A board has exactly one analog
+ * input on the edge (`PIN_CT`), so `channel` is reserved for the day one has
+ * two and means nothing today — `tickSensors()` reads the same ADC for every
+ * configured sensor. topology.js requires the field, so it has to be written;
+ * 0 is the only value that has ever been correct.
+ */
+export const DEFAULT_CT_CHANNEL = 0;
+
 /** The Rockler fob's own setting — rockers 1, 6 and 8 closed = 0b01011110.
  *  Matches RfCollectorPresser::kRocklerAddress, so a sheet that has never been
  *  opened and the firmware's fallback agree. */
 export const ROCKLER_ADDRESS = 94;
 
 const emptyPlug = (): PlugForm => ({ ip: '', host: '', label: '', gen: 2, kind: 'shelly' });
+
+/**
+ * A clamp answers the same question a metering plug does — is this motor
+ * drawing — so it sits in the same `sensor` slot and the two are mutually
+ * exclusive by construction here, as validateTopology() requires.
+ *
+ * WHY A COLLECTOR WANTS ONE AT ALL: every way DustGate commands a blower is
+ * STATELESS (a servo pressing a fob, an RF frame), so what we sent proves
+ * nothing and `sensor` is the only thing that can say the press landed. A 240V
+ * blower has no plug to meter, which is exactly where a clamp goes.
+ */
 
 function readPlug(outlet: RawEl | undefined): PlugForm {
   if (!outlet) return emptyPlug();
@@ -135,7 +165,9 @@ export function readCollector(el: RawEl): CollectorForm {
   const control = (el['control'] as RawEl | undefined) ?? {};
   const ctlOutlet = control['outlet'] as RawEl | undefined;
   const rf = control['rf'] as RawEl | undefined;
-  const senseOutlet = (el['sensor'] as RawEl | undefined)?.['outlet'] as RawEl | undefined;
+  const sensor = el['sensor'] as RawEl | undefined;
+  const senseOutlet = sensor?.['outlet'] as RawEl | undefined;
+  const senseCt = sensor?.['ct'] as RawEl | undefined;
   const binSensor = (el['bin'] as RawEl | undefined)?.['sensor'] as RawEl | undefined;
 
   const { address, ...rfRest } = rf ?? {};
@@ -148,8 +180,16 @@ export function readCollector(el: RawEl): CollectorForm {
     ctlPlug: readPlug(ctlOutlet),
     rfAddress: typeof address === 'number' ? address : ROCKLER_ADDRESS,
     rfRest: rfRest as RawEl,
-    sense: senseOutlet ? 'plug' : 'none',
+    // A plug wins if a document somehow carries both — validateTopology()
+    // refuses that combination, so this only decides what an already-invalid
+    // document looks like on screen rather than which one is obeyed.
+    sense: senseOutlet ? 'plug' : senseCt ? 'ct' : 'none',
     sensePlug: readPlug(senseOutlet),
+    senseCtControllerId: (senseCt?.['controllerId'] as string) ?? '',
+    senseCtRest: (() => {
+      const { controllerId: _c, channel: _ch, ...rest } = senseCt ?? {};
+      return rest as RawEl;
+    })(),
     bin: !!binSensor,
     binControllerId: (controllerId as string) ?? '',
     binRest: binRest as RawEl,
@@ -182,6 +222,14 @@ export function writeCollector(el: RawEl, form: CollectorForm): RawEl {
   // ── sensor ─────────────────────────────────────────────────────────────
   if (!fused(form) && form.sense === 'plug' && form.sensePlug.ip) {
     out['sensor'] = { outlet: writePlug(form.sensePlug) };
+  } else if (!fused(form) && form.sense === 'ct') {
+    // `channel` is required by topology.js and means nothing to the firmware
+    // yet — see DEFAULT_CT_CHANNEL. `controllerId` is OMITTED when empty,
+    // because absent already says "this board" and writing '' would be a third
+    // spelling of the same thing for the validator to allow.
+    const ct: RawEl = { ...form.senseCtRest, channel: DEFAULT_CT_CHANNEL };
+    if (form.senseCtControllerId) ct['controllerId'] = form.senseCtControllerId;
+    out['sensor'] = { ct };
   } else {
     delete out['sensor'];
   }

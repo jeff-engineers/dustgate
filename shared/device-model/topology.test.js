@@ -867,10 +867,24 @@ const idxOf = (plan, sel) => plan.moves.findIndex((m) => m.selectorId === sel);
   });
   check('a channel off the end of the board → invalid', !validateTopology(offBoard).ok);
 
-  // Only a tool is ever SENSED this way. A collector's feedback is its own
-  // draw, which is a plug; a CT under a collector would be a different feature.
+  // A COLLECTOR may be clamped too (2026-09-15). Same question — is this motor
+  // drawing current — and the same wall at 240 V, so splitting them would be
+  // arbitrary. It matters more here than on a tool: every way DustGate commands
+  // a blower is stateless, so `sensor` is the only thing that can say the press
+  // landed.
   const onDc = mut((t) => { elem(t, 'dc').sensor = { ct: { channel: 0 } }; });
-  check('a CT on something that is not a tool → invalid', !validateTopology(onDc).ok);
+  check('a CT on the collector → valid', validateTopology(onDc).ok,
+        JSON.stringify(validateTopology(onDc).errors));
+
+  // ...but not on a gate, a duct or a board. Those have no current to draw.
+  const onSel = mut((t) => { elem(t, 'lin').sensor = { ct: { channel: 0 } }; });
+  check('a CT on a selector → invalid', !validateTopology(onSel).ok);
+
+  // The pick-one rule holds on a collector as well as a tool.
+  const dcBoth = mut((t) => {
+    elem(t, 'dc').sensor = { outlet: { gen: 2, ip: '192.168.87.90' }, ct: { channel: 0 } };
+  });
+  check('a collector with both a plug and a clamp → invalid', !validateTopology(dcBoth).ok);
 
   // RFC §5.4b, enforced by SHAPE rather than by a rule anyone has to remember:
   // thresholdW lives on sensor.outlet, so a CT-sensed tool has nowhere to put
