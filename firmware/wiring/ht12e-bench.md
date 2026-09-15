@@ -49,10 +49,10 @@ for — four candidates, one of them switches the collector.
 | HT12E, DIP-18 | The encoder. Datasheet at `~/code/Datasheets/ht12e-holtek.pdf` |
 | 315 MHz TX module | **5 V on the bench, 12 V for a real install** — see below. Its data input takes 3.3 V logic either way |
 | 8-position SPST DIP switch | Address. DIP-16 body, 2.54 mm |
-| 1.0 MΩ resistor | Rosc. See §5 |
+| 1.0 MΩ resistor — `brown black green gold` | Rosc. See §5. Band colours: [`passives.md`](passives.md) |
 | XIAO ESP32C5 | Any spare one |
 
-Optional stage 2 (§6): HT12D + 315 MHz RX module + 33 kΩ.
+Optional stage 2 (§6): HT12D + 315 MHz RX module + 33 kΩ (`orange orange orange gold`).
 
 ## 3. HT12E pinout, and how little of it you need
 
@@ -272,7 +272,7 @@ cannot: *is my transmitter emitting the right code at all*, as distinct from
 *does the receiver like it*.
 
 HT12D + 315 MHz RX module, address DIP set **identically** (1, 6, 8 on), Rosc
-**33 kΩ** — roughly 50× the encoder, which measured ~3.5 kHz here. Wire the
+**33 kΩ** (`orange orange orange gold`) — roughly 50× the encoder, which measured ~3.5 kHz here. Wire the
 HT12D's **VT** (valid transmission, pin 17) to **D6**.
 
 VT goes high only on a valid, address-matched frame. `tx` reports it inline:

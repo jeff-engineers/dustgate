@@ -150,7 +150,7 @@ owes the net; where it says none, none is needed.
 | D1  | 0    | Wake button | none — internal pull-up | Momentary NO to GND, `INPUT_PULLUP`. Not a strap on the C5, so safe held down through reset. Verified 2026-08-22 |
 | D2  | 25   | Status pixel DIN | **330 Ω series** | External WS2812; the onboard LED is plain yellow. See §3 |
 | D3  | 7    | *free, but* | — | ⚠️ **GPIO7 is a strapping pin** (JTAG source). Fine as an output or as an input that idles HIGH; never for one that can be held LOW through reset. See §6 |
-| D4  | 23   | Screen SDA | none (module carries its own pull-ups) | XIAO-standard I²C. Verified 2026-08-22. If a bare panel with no pull-ups is ever used, 4.7 kΩ to 3V3 |
+| D4  | 23   | Screen SDA | none (module carries its own pull-ups) | XIAO-standard I²C. Verified 2026-08-22. If a bare panel with no pull-ups is ever used, 4.7 kΩ (`yellow violet red gold`) to 3V3 |
 | D5  | 24   | Screen SCL | none (as SDA) | ditto |
 | D6  | 11   | **Bin sensor in** (PWM builds) / ST3215 bus TX (slider builds) | **1 kΩ series** on the bus when fitted; none for the bin sensor | One pad, two mutually exclusive jobs — `config.h` `#error`s if a build claims both. Bin sensor: §7. Bus: hardware UART TX, half-duplex, see §2 |
 | D7  | 12   | Servo ch 1 — **and** ST3215 bus RX | none | The one genuinely contended pad: a serial-bus build gives up PWM channel 1 |
