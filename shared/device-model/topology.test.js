@@ -827,6 +827,105 @@ const idxOf = (plan, sel) => plan.moves.findIndex((m) => m.selectorId === sel);
         !validateTopology(onTool).ok);
 }
 
+// ── sensor.ct: a tool sensed by a clamp instead of a plug (RFC §5.6) ────────
+{
+  // A 240V tool has no plug to meter — a NEMA 6-20 has no neutral and consumer
+  // metering plugs for it barely exist — so the clamp goes on a board instead.
+  const onNode = mut((t) => {
+    elem(t, 'toolA').sensor = { ct: { controllerId: 'node1', channel: 0 } };
+  });
+  check('a tool sensed by a CT on a node → valid', validateTopology(onNode).ok,
+        JSON.stringify(validateTopology(onNode).errors));
+
+  // controllerId absent means "this board", matching the bin sensor, every
+  // selector, and NodeBus's own rule.
+  const here = mut((t) => { elem(t, 'toolA').sensor = { ct: { channel: 2 } }; });
+  check('an absent controllerId means this board', validateTopology(here).ok,
+        JSON.stringify(validateTopology(here).errors));
+
+  const unknown = mut((t) => {
+    elem(t, 'toolA').sensor = { ct: { controllerId: 'no-such-board', channel: 0 } };
+  });
+  check('a CT on a board that does not exist → invalid', !validateTopology(unknown).ok);
+
+  // Two answers to one question: which wins would be an implementation detail,
+  // and a tool on by one reading and off by the other is a gate that opens or
+  // doesn't depending which was read last.
+  const both = mut((t) => {
+    elem(t, 'toolA').sensor = { outlet: { gen: 2, ip: '192.168.87.27' },
+                                ct: { controllerId: 'node1', channel: 0 } };
+  });
+  check('a plug AND a clamp on one tool → invalid', !validateTopology(both).ok);
+
+  // The pad must be stated. Channel 0 is a real pad on every board, so a
+  // defaulted one reads as a tool that simply never runs.
+  const noCh = mut((t) => { elem(t, 'toolA').sensor = { ct: { controllerId: 'node1' } }; });
+  check('a CT with no channel → invalid', !validateTopology(noCh).ok);
+
+  const offBoard = mut((t) => {
+    elem(t, 'toolA').sensor = { ct: { controllerId: 'node1', channel: 99 } };
+  });
+  check('a channel off the end of the board → invalid', !validateTopology(offBoard).ok);
+
+  // Only a tool is ever SENSED this way. A collector's feedback is its own
+  // draw, which is a plug; a CT under a collector would be a different feature.
+  const onDc = mut((t) => { elem(t, 'dc').sensor = { ct: { channel: 0 } }; });
+  check('a CT on something that is not a tool → invalid', !validateTopology(onDc).ok);
+
+  // RFC §5.4b, enforced by SHAPE rather than by a rule anyone has to remember:
+  // thresholdW lives on sensor.outlet, so a CT-sensed tool has nowhere to put
+  // one. This asserts the shape has not quietly grown a home for it.
+  const ctTool = elem(onNode, 'toolA');
+  check('a CT-sensed tool carries no threshold anywhere',
+        ctTool.sensor.outlet === undefined && ctTool.sensor.ct.thresholdW === undefined);
+}
+
+// ── intermittent: a board that is EXPECTED to come and go (RFC §5.6a) ───────
+{
+  // A node powered from the tool it watches drops off whenever that tool is
+  // switched off at the wall. Absent-is-off already fails the right way; the
+  // flag is about whether anyone is TOLD, so the warning keeps meaning
+  // something on the boards that do not carry it.
+  const node = mut((t) => {
+    t.controllers.find((c) => c.id === 'node1').intermittent = true;
+  });
+  check('a secondary may be intermittent', validateTopology(node).ok,
+        JSON.stringify(validateTopology(node).errors));
+
+  // A brain that comes and goes is not an intermittent board, it is a shop that
+  // stops working — nothing routes while the primary is off.
+  const brain = mut((t) => {
+    t.controllers.find((c) => c.role === 'primary').intermittent = true;
+  });
+  check('the PRIMARY may not be intermittent', !validateTopology(brain).ok);
+
+  const notBool = mut((t) => {
+    t.controllers.find((c) => c.id === 'node1').intermittent = 'yes';
+  });
+  check('intermittent must be a boolean', !validateTopology(notBool).ok);
+
+  // Absent means false: every board written before this field is one that
+  // should still raise a fault when it vanishes.
+  check('absent is the safe default', validateTopology(clone(feedChain)).ok);
+}
+
+// ── a controller with no selectors at all (RFC §5.6b) ───────────────────────
+{
+  // The CT tool node drives nothing. Controllers are only referenced BY
+  // selectors and the per-host limits are counts, so this already worked — but
+  // "already worked" is a thing that stops being true silently, and the whole
+  // sensing-node design rests on it.
+  const idle = mut((t) => {
+    t.controllers.push({
+      id: 'planer-node', role: 'secondary', name: 'Planer',
+      intermittent: true, link: { transport: 'wifi-ws', host: 'planer.local' },
+    });
+    elem(t, 'toolA').sensor = { ct: { controllerId: 'planer-node', channel: 0 } };
+  });
+  check('a board that drives nothing and only senses → valid',
+        validateTopology(idle).ok, JSON.stringify(validateTopology(idle).errors));
+}
+
 // ── report ──────────────────────────────────────────────────────────────────
 let passed = 0;
 for (const r of results) {

@@ -83,10 +83,14 @@ public:
     }
     void clearAliases() { _aliases.clear(); }
 
-    // The bus that drives this selector, or nullptr if its controller isn't
-    // reachable from here (named a board that was never paired).
-    ActuatorBus* busFor(JsonObjectConst sel) const {
-        const char* cid = sel["controllerId"].as<const char*>();
+    // The bus for a controllerId, or nullptr if that controller isn't reachable
+    // from here (a board that was never paired).
+    //
+    // Split out of busFor() when sensors arrived: a CT is addressed by
+    // controllerId with no selector anywhere near it, and the alias/host
+    // resolution below is exactly the same problem. Two copies of that lookup is
+    // how a sensor ends up working on a board whose gates do not, or vice versa.
+    ActuatorBus* busForController(const char* cid) const {
         if (!cid || !*cid) return _local;
         const std::string id = bareHost(cid);
         if (bareHost(_ownId.c_str()) == id) return _local;
@@ -97,6 +101,29 @@ public:
         const std::string key = (a == _aliases.end()) ? id : a->second;
         auto it = _remotes.find(key);
         return it == _remotes.end() ? nullptr : it->second;
+    }
+
+    // The bus that drives this selector.
+    ActuatorBus* busFor(JsonObjectConst sel) const {
+        return busForController(sel["controllerId"].as<const char*>());
+    }
+
+    // Push a board the whole list of sensors the layout says it carries.
+    // Silently does nothing for a controller that is not reachable — the same
+    // treatment an un-driveable gate gets, and for the same reason: a layout may
+    // legitimately name a board that is switched off at the wall (RFC §5.6a).
+    void configureSensors(const char* controllerId, JsonArrayConst sensors) {
+        ActuatorBus* b = busForController(controllerId);
+        if (b) b->configureSensors(sensors);
+    }
+
+    // Latest reading for one sensor. False = nothing has ever reported, which
+    // includes "that board is not reachable" and must NOT be read as "off" by
+    // anything that cares about the difference.
+    bool senseOf(const char* controllerId, const char* sensorId,
+                 bool& on, uint32_t& atMs) const {
+        ActuatorBus* b = busForController(controllerId);
+        return b && b->senseOf(sensorId, on, atMs);
     }
 
     bool setState(const char* selectorId, JsonObjectConst sel, const char* stateId) {

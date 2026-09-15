@@ -35,6 +35,22 @@ static const unsigned long kPongTimeoutMs   = 6000;
 static const unsigned long kReconnectMinMs  = 1000;
 static const unsigned long kReconnectMaxMs  = 15000;
 
+// How often a node REPEATS its current sensor reading, and how long the primary
+// waits before calling that reading stale. SENSE_REPEAT_MS / SENSE_STALE_MS in
+// nodelink.js — asserted literally on both sides.
+//
+// SENSE is sent on every CHANGE; that is what makes a tool switching on a
+// sub-second event. The repeat only stops one dropped frame leaving the primary
+// permanently wrong, which an edge-only protocol would. Same 3x ratio as
+// PING/PONG, for the same reason.
+static const unsigned long kSenseRepeatMs   = 5000;
+static const unsigned long kSenseStaleMs    = 15000;
+
+// Sensors one node will accept in a CONFIG. MAX_SENSORS_PER_NODE in nodelink.js
+// — a PAIR, because this side parses into a fixed array and a primary that sent
+// more to a board that kept four would leave it silently deaf to the rest.
+static const size_t kMaxSensorsPerNode = 4;
+
 // A move that takes longer than this without a STATE(moving=false) is assumed
 // lost rather than left to wedge the move queue forever. Generously longer than
 // SERVO_SWEEP_MS + SERVO_HOLD_MS, and longer than a full-span rack traverse.
@@ -189,6 +205,29 @@ inline void buildState(JsonObject out, const char* selectorId, const char* state
 
 inline void buildPong(JsonObject out) { out["t"] = "PONG"; }
 
+// SENSE — "this sensor says on, or off". ONE BIT, AND THIS BOARD DECIDES IT.
+//
+// Not a shortcut: RFC §5.4b. A CT measures current, watts need a voltage and a
+// power factor it cannot give, and a woodworking tool's standby sits under the
+// noise floor anyway — so there is no threshold worth putting on the wire and
+// nothing for the primary to interpret. It is also the only arrangement with
+// usable latency, since mains-frequency RMS cannot round-trip per sample.
+//
+// `level` is a MULTIPLE OF THE TRIP POINT — not amps, not watts, not a raw
+// count. It exists so the board can be commissioned without a serial console at
+// the machine ("2.8" is comfortable, "1.05" says move the clamp), and its units
+// are self-evidently not a measurement so nothing can mistake it for one.
+// NOTHING MAY BRANCH ON IT. Pass a negative value to omit it, which is what a
+// board with no trip point to divide by should do rather than send a zero that
+// reads like a reading.
+inline void buildSense(JsonObject out, const char* sensorId, bool on,
+                       float level = -1.0f) {
+    out["t"]        = "SENSE";
+    out["sensorId"] = sensorId ? sensorId : "";
+    out["on"]       = on;
+    if (level >= 0.0f) out["level"] = level;
+}
+
 // -----------------------------------------------------------------------------
 // Decoding (secondary side)
 // -----------------------------------------------------------------------------
@@ -277,6 +316,64 @@ inline bool parseSetFrame(JsonObjectConst f, SetCommand& out, const char*& err) 
     }
     err = "drive must be servo|linear";
     return false;
+}
+
+// ── CONFIG ─────────────────────────────────────────────────────────────────
+//
+// What this board is WIRED TO — the one thing it cannot work out for itself.
+//
+// THIS IS NOT TOPOLOGY, and that is the only reason a node may hold it. It
+// carries no elements, no routing, no states and no thresholds: nothing whose
+// MEANING the primary could change under a board that was not reflashed.
+// `sensorId` is opaque and only ever echoed back, `channel` is a pad. The
+// invariant at the top of nodelink.js stays intact — a node owns loops, never
+// interpretation.
+struct SensorSpec {
+    char sensorId[48];   // OPAQUE. Echoed in SENSE, never parsed.
+    int  channel;        // which input on THIS board
+};
+
+// Parse + VALIDATE a CONFIG frame into a fixed array.
+//
+// ALL OR NOTHING. A malformed entry rejects the WHOLE frame rather than
+// applying the good ones, because the list is a whole new list and a
+// half-applied configuration is a state nobody should have to reason about —
+// the primary would believe it configured two sensors while the board reported
+// on one, forever, with no frame saying so. Refusing is loud; partial success
+// is silent.
+//
+// An EMPTY list is valid and means "report nothing" — the same state as a board
+// that has never been configured, so there is no third case to handle.
+inline bool parseConfigFrame(JsonObjectConst f, SensorSpec* out, size_t maxOut,
+                             size_t& countOut, const char*& err) {
+    if (!_eq(f["t"], "CONFIG"))    { err = "not a CONFIG frame"; return false; }
+    if (!f.containsKey("seq"))     { err = "missing seq";         return false; }
+    JsonArrayConst arr = f["sensors"];
+    if (arr.isNull())              { err = "sensors must be an array"; return false; }
+    if (arr.size() > maxOut)       { err = "too many sensors";    return false; }
+
+    size_t n = 0;
+    for (JsonObjectConst sen : arr) {
+        const char* id = sen["sensorId"].as<const char*>();
+        if (!id || !*id)           { err = "missing sensorId";    return false; }
+        // Two entries under one id would make SENSE ambiguous in the only
+        // direction that matters: which tool just started.
+        for (size_t i = 0; i < n; i++) {
+            if (strcmp(out[i].sensorId, id) == 0) { err = "duplicate sensorId"; return false; }
+        }
+        if (!_eq(sen["kind"], "ct")) { err = "sensor kind must be ct"; return false; }
+        if (!sen.containsKey("channel")) { err = "missing channel"; return false; }
+        // TYPE FIRST, for the reason spelled out on positionMm above:
+        // as<int>() on a string yields 0, which is a real pad on every board.
+        if (!sen["channel"].is<int>())   { err = "channel must be a number"; return false; }
+        const int ch = sen["channel"].as<int>();
+        if (ch < 0 || ch > 15)           { err = "channel out of range"; return false; }
+        strlcpy_(out[n].sensorId, id, sizeof(out[n].sensorId));
+        out[n].channel = ch;
+        n++;
+    }
+    countOut = n;
+    return true;
 }
 
 } // namespace nodelink

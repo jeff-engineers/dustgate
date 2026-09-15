@@ -70,6 +70,7 @@
 #include <ArduinoJson.h>
 #include "TopologyController.h"
 #include "NodeBus.h"
+#include "NodeLink.h"   // nodelink::kSenseStaleMs — how long a CT reading stays good
 #include <deque>
 #include <set>
 #include <memory>
@@ -197,6 +198,7 @@ public:
             // this cannot simply be `CollectorState c;`.
             _collectors[std::string(sys.id ? sys.id : "")] = CollectorState{};
         _loaded = true;
+        pushSensorConfig();
         return true;
     }
 
@@ -212,6 +214,16 @@ public:
     }
 
     bool loaded() const { return _loaded; }
+
+    // Re-push every board its sensor list.
+    //
+    // adopt() already does this, but it runs BEFORE the caller has had a chance
+    // to map controllerIds onto paired hosts — so on a primary the first push
+    // cannot resolve a remote board, and a CT on a node would never be
+    // configured. Call this again once the aliases are in place. Idempotent and
+    // cheap: a few small frames, and a node re-sent an identical CONFIG simply
+    // ACKs it.
+    void reconfigureSensors() { pushSensorConfig(); }
     JsonObjectConst topology() const {
         return _doc ? _doc->as<JsonObjectConst>() : JsonObjectConst();
     }
@@ -354,6 +366,7 @@ public:
         if (!_loaded || !_bus) return;
         _nowMs = nowMs;
         _bus->update();
+        pollSensors();
 
         // Coast expiry is checked here rather than in ingest(): at idle no power
         // events arrive, so ingest() isn't called again and nothing would ever
@@ -833,6 +846,115 @@ private:
         for (const FailedMove& f : _failed)
             if (!f.isBreak && f.systemId == systemId) return true;
         return false;
+    }
+
+    // ── CT-sensed tools (tool-sensing RFC §5.6) ────────────────────────────
+    //
+    // A tool with `sensor.ct` is watched by a clamp on some board rather than by
+    // a plug the primary polls over HTTP. The board decides the one bit (§5.4b —
+    // a CT cannot give watts, and a woodworking tool's standby is under the
+    // noise floor) and reports it unsolicited; this half turns that bit into the
+    // only currency the routing brain has.
+    //
+    // THE SENSOR ID IS THE ELEMENT ID. Deliberately, and it is the reason there
+    // is no lookup table anywhere: CONFIG carries it out, SENSE echoes it back,
+    // and the id that comes home is already the machine id to act on. Nothing
+    // can get out of step because nothing is mapped.
+
+    // Push every board the WHOLE list of sensors the layout gives it.
+    //
+    // Sent to every controller in the document, including the ones with no CT at
+    // all — an empty list is how a sensor gets REMOVED, and a board that simply
+    // stopped being mentioned would otherwise go on reporting a tool that the
+    // layout no longer believes in.
+    // THIS BOARD ANSWERS TO TWO NAMES — "" and its own controllerId — and that
+    // is not a detail. Bucketing naively by the id string configured the local
+    // bus TWICE on adopt: once for "" (carrying its clamps) and once for
+    // "primary" (empty, because no element spells it that way), and the second
+    // push silently erased the first. Found by the test below, 2026-09-15.
+    //
+    // bareHost() rather than ==, for NodeBus's own reason: the same board is
+    // legitimately "node-1" and "node-1.local".
+    bool sameBoard(const std::string& a, const std::string& b) const {
+        const std::string own = _bus ? _bus->ownControllerId() : std::string();
+        auto local = [&](const std::string& x) {
+            return x.empty() || bareHost(x.c_str()) == bareHost(own.c_str());
+        };
+        if (local(a) && local(b)) return true;
+        return bareHost(a.c_str()) == bareHost(b.c_str());
+    }
+
+    void pushSensorConfig() {
+        if (!_bus) return;
+        // One bucket per BOARD, not per id. "" is this board and is pushed
+        // first, so any controller id that also means this board is skipped
+        // rather than overwriting what "" just sent.
+        std::vector<std::string> ids;
+        ids.push_back(std::string());                     // "" = this board
+        for (const SystemView& sys : systemsOf(topology())) {
+            for (JsonObjectConst c : sys.controllers) {
+                const std::string cid = c["id"] | "";
+                if (cid.empty()) continue;
+                bool dup = false;
+                for (const std::string& seen : ids) if (sameBoard(seen, cid)) { dup = true; break; }
+                if (!dup) ids.push_back(cid);
+            }
+        }
+        for (const std::string& cid : ids) {
+            DynamicJsonDocument doc(512);
+            JsonArray arr = doc.to<JsonArray>();
+            for (const SystemView& sys : systemsOf(topology())) {
+                for (JsonObjectConst e : sys.elements) {
+                    JsonObjectConst ct = e["sensor"]["ct"];
+                    if (ct.isNull()) continue;
+                    // Absent controllerId means THIS BOARD — the same rule as
+                    // the bin sensor, every selector, and NodeBus itself.
+                    const std::string owner = ct["controllerId"] | "";
+                    if (!sameBoard(cid, owner)) continue;
+                    JsonObject sen = arr.createNestedObject();
+                    sen["sensorId"] = e["id"] | "";
+                    sen["kind"]     = "ct";
+                    sen["channel"]  = ct["channel"] | 0;
+                }
+            }
+            _bus->configureSensors(cid.c_str(), JsonArrayConst(arr));
+        }
+    }
+
+    // Turn each CT's bit into a power reading, once per update().
+    //
+    // Expressed as a SYNTHETIC WATTAGE rather than a new concept, exactly as
+    // setMachineManual() is, and for the identical reason: the routing brain has
+    // one notion of "active", and a second one would have to be taught
+    // most-recent-wins, coast-down and the dead-head rule all over again.
+    //
+    // ABSENT IS OFF (RFC §5.6a). A board that never reported, or has gone away
+    // with the tool it is powered from, reads as off — which fails toward a
+    // dusty shop rather than a collector that runs forever, and cannot
+    // dead-head anything because idle leaves the gate where it is.
+    void pollSensors() {
+        for (const SystemView& sys : systemsOf(topology())) {
+            for (JsonObjectConst e : sys.elements) {
+                JsonObjectConst ct = e["sensor"]["ct"];
+                if (ct.isNull()) continue;
+                const char* id = e["id"] | "";
+                if (!*id) continue;
+                const char* cid = ct["controllerId"] | "";
+
+                bool on = false; uint32_t atMs = 0;
+                if (!_bus->senseOf(cid, id, on, atMs)) on = false;
+                // STALE IS NOT THE SAME AS OFF, and this treats it as off on
+                // purpose while the distinction has nowhere to be shown: a board
+                // still answering PINGs but no longer reporting is a FAULT, and
+                // when there is a UI for it this is where it gets raised.
+                // Skipped entirely when nowMs is 0 — the test call sites pass a
+                // constant clock, and a zero "now" would age every reading out.
+                else if (_nowMs && (uint32_t)(_nowMs - atMs) > nodelink::kSenseStaleMs) on = false;
+
+                setMachinePower(std::string(id),
+                                on ? manualWattsFor(_ctrl.machineThreshold(std::string(id))) : 0.0f);
+            }
+        }
     }
 
     NodeBus*                             _bus = nullptr;

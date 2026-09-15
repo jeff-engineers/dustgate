@@ -64,6 +64,17 @@ reasoning was contested, or that a still-open item above leans on.
   C only with evidence.
 
 
+- **Re-measure the CT on the rebuilt divider (jeff, 2026-09-14).** The perfboard
+  rigs were rebuilt from 10 kΩ/10 kΩ + 10 µF to **1 kΩ/1 kΩ + 100 nF** — RFC
+  §5.5's fix, which has never been validated. Everything on `ct-bench.md` was
+  measured on the OLD divider and its parts table is now flagged stale.
+
+  Retake the noise floor and the measured-loads table on the new hardware, then
+  rewrite that page's parts row and load section TOGETHER. The specific question
+  §5.5 asks: does the floor still move with the screen on? The tool node has no
+  screen, so if the answer is "no longer", that is two variables resolved at
+  once and §5.5 can close.
+
 - **Pick a CHANNEL on a multi-channel Tasmota meter (2026-09-10; half done
   2026-09-14).** `TasmotaOutlet::doPoll()` now DETECTS `Power` as an array and
   refuses the plug loudly — unreachable, with a log line naming the EM2/EM6 and
@@ -223,6 +234,45 @@ reasoning was contested, or that a still-open item above leans on.
   can carry more than an identity — a serial number, a calibration constant, the
   carrier revision.
 
+  **DECIDED 2026-09-15 (jeff): buy nothing yet, and do this in two stages.**
+
+  The framing that settled it is his: separate **what a board HAS** (servo count,
+  bus servo, CT, RF, bin) from **what it IS** (primary or node). Those are
+  different questions with different lifetimes and they were tangled together in
+  nine `-D` flags.
+
+  - **Stage 1 — capabilities become a RUNTIME STRUCT**, populated from the board
+    header exactly as today. Nothing changes behaviourally; every `#if HAS_*`
+    consumer stops asking the preprocessor. This is the stage that does the
+    collapsing, it is pure software, and **it does not care where the data comes
+    from** — which is precisely why no part needs buying to start it.
+  - **Stage 2 — change the SOURCE**: NVS first, a chip later. One function.
+
+  **What collapses and what does not.** `ENABLE_SERVO`, `DUSTGATE_SERVO_BUS` and
+  `DUSTGATE_COLLECTOR` are pins and drivers, so they all go runtime.
+  `DUSTGATE_SECONDARY` does **not**, and should not: it inverts
+  `build_src_filter` into a different program with a different partition table,
+  and keeping role at flash time means a board cannot accidentally become a
+  second brain. One-brain is an ARBITRATION constraint (CLAUDE.md), not a size
+  one. Endgame is **2 shipping builds plus the bench consoles**, from 6 — not the
+  1 the "one firmware" phrasing above implies.
+
+  **NVS over a chip while this is perfboard.** Its one real weakness is that it
+  follows the MCU rather than the carrier, so a dead XIAO or a wipe means
+  re-tagging — a thirty-second serial command, on a bench holding one of each
+  board. The EEPROM's genuine advantage is that a carrier-mounted tag survives a
+  reflash AND an MCU swap, and what varies IS the carrier; that advantage is
+  worth paying for on a PCB and not on a crowded perfboard.
+
+  **If a physical tag does happen: DS2431 in TO-92, parasite-powered** — 2 holes
+  and a 4.7 kΩ pullup, one GPIO (D10 on the collector map, D0 on a node with no
+  CT). The 24C02 recommended above is right on pin budget and wrong on SIZE: the
+  DIP-8 does not fit the perfboards as they are built. Revisit at PCB layout,
+  where a SOIC-8 on the existing I²C bus costs nothing and the pin stays free.
+
+  **Do it AFTER the CT path works end to end**, so there is a running system to
+  regression-test the refactor against.
+
 - **A single-servo + CT board for 240 V tools (jeff, 2026-09-11).** Jeff has
   already built several single-servo nodes for testing, to save wiring time and
   cost. That is a fourth carrier: one gate, one CT, and the pin budget is easy
@@ -235,7 +285,18 @@ reasoning was contested, or that a still-open item above leans on.
   product than one without. A CT-only board sits at the tool and talks over
   WiFi, so the only wire is its own supply.
 
-  Nothing to decide until the CT is trusted at all (§5.4a, and the noise floor).
+  **The CT-only variant is now the live one (2026-09-14).** It has a name and a
+  build: §5.6, the planer node — RS-25-5 off the unswitched side of the tool's own
+  switch, clamp on the switched side, no actuators. What unblocked it was not the
+  noise floor being solved but the question getting smaller: §5.4b closes the
+  standby problem by finding there is nothing to measure, so a CT-sensed tool
+  carries no threshold field at all and the baseline is the board's own floor.
+
+  What it is waiting on is no longer measurement, it is PROTOCOL — NodeLink has
+  no inbound sensor direction and a node is handed no config to describe a CT
+  with. §5.6b has the three gaps.
+
+  The single-servo + CT carrier above is unaffected and still undecided.
 
 
 

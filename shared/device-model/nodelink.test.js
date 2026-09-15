@@ -152,10 +152,91 @@ const eq = (name, got, want) =>
   eq('and still validates', NL.validateFrame(legacy, 's2p'), []);
 }
 
+// ── CONFIG: what a node is WIRED TO, and nothing it could interpret ────────
+{
+  const one = [{ sensorId: 'planer-ct', kind: 'ct', channel: 0 }];
+  const f = NL.config(7, one);
+  eq('CONFIG is p2s', NL.validateFrame(f, 'p2s'), []);
+  check('and only p2s', NL.validateFrame(f, 's2p').length === 1);
+  eq('it echoes the seq', f.seq, 7);
+
+  // The frame must carry NOTHING whose meaning the primary could change under a
+  // node that was not reflashed — no states, no thresholds, no vocabulary. This
+  // asserts the shape exactly, so a field added without thinking fails here.
+  eq('the sensor spec is exactly id+kind+channel',
+     Object.keys(f.sensors[0]).sort(), ['channel', 'kind', 'sensorId']);
+  eq('and the frame itself carries nothing else',
+     Object.keys(f).sort(), ['sensors', 'seq', 't']);
+
+  // Extra properties on the caller's object are DROPPED rather than forwarded:
+  // the builder is the one place that decides what goes on the wire.
+  const smuggled = NL.config(1, [{ sensorId: 'a', kind: 'ct', channel: 0, thresholdW: 5 }]);
+  check('a threshold cannot be smuggled through the builder',
+        smuggled.sensors[0].thresholdW === undefined);
+
+  // An empty list is VALID and means "report nothing" — the same state as a
+  // node that has never been configured, so there is no third case.
+  eq('an empty sensor list is valid', NL.validateFrame(NL.config(2, []), 'p2s'), []);
+  eq('and is genuinely empty', NL.config(2, []).sensors, []);
+
+  // Two entries under one id would make SENSE ambiguous in the only direction
+  // that matters: which tool just started.
+  const dup = NL.config(3, [{ sensorId: 'a', kind: 'ct', channel: 0 },
+                            { sensorId: 'a', kind: 'ct', channel: 1 }]);
+  check('a duplicate sensorId is refused', NL.validateFrame(dup, 'p2s').length === 1,
+        JSON.stringify(NL.validateFrame(dup, 'p2s')));
+
+  check('an unknown sensor kind is refused',
+        NL.validateFrame({ t: 'CONFIG', seq: 1, sensors: [{ sensorId: 'a', kind: 'bin', channel: 0 }] },
+                         'p2s').length === 1);
+  check('a channel off the board is refused',
+        NL.validateFrame({ t: 'CONFIG', seq: 1, sensors: [{ sensorId: 'a', kind: 'ct', channel: 99 }] },
+                         'p2s').length === 1);
+  check('sensors must be an array',
+        NL.validateFrame({ t: 'CONFIG', seq: 1, sensors: {} }, 'p2s').length === 1);
+}
+
+// ── SENSE: one bit, decided on the node (RFC §5.4b) ────────────────────────
+{
+  const on = NL.sense('planer-ct', true, 2.8);
+  eq('SENSE is s2p', NL.validateFrame(on, 's2p'), []);
+  check('and only s2p', NL.validateFrame(on, 'p2s').length === 1);
+  check('it carries the bit', on.on === true);
+  eq('and echoes the id the primary chose', on.sensorId, 'planer-ct');
+
+  // level is DIAGNOSTIC: a multiple of the trip point, not amps or watts, and
+  // nothing may branch on it. A node with no trip point omits it rather than
+  // sending a zero that reads like a measurement.
+  const bare = NL.sense('planer-ct', false);
+  check('level is optional', bare.level === undefined);
+  eq('and the bare frame validates', NL.validateFrame(bare, 's2p'), []);
+  eq('an off frame is still a report, not silence', bare.on, false);
+
+  check('a non-boolean bit is refused',
+        NL.validateFrame({ t: 'SENSE', sensorId: 'a', on: 1 }, 's2p').length === 1);
+  check('a negative level is refused',
+        NL.validateFrame({ t: 'SENSE', sensorId: 'a', on: true, level: -1 }, 's2p').length === 1);
+}
+
+// ── adding frames did NOT bump the version, on purpose ─────────────────────
+{
+  // Both ends ignore a frame type they don't know, so all four old/new
+  // combinations degrade to something safe. A bump would force a flash of every
+  // board in the shop to buy nothing — the exact cost this protocol avoids.
+  eq('protocol version is unchanged by CONFIG/SENSE', NL.NODELINK_VERSION, 1);
+  check('CONFIG is p2s only', NL.P2S.includes('CONFIG') && !NL.S2P.includes('CONFIG'));
+  check('SENSE is s2p only', NL.S2P.includes('SENSE') && !NL.P2S.includes('SENSE'));
+}
+
 // ── timing constants match the firmware (control/NodeLink.h) ────────────────
 {
   eq('PING_INTERVAL_MS', NL.PING_INTERVAL_MS, 2000);
   eq('PONG_TIMEOUT_MS', NL.PONG_TIMEOUT_MS, 6000);
+  eq('SENSE_REPEAT_MS', NL.SENSE_REPEAT_MS, 5000);
+  eq('SENSE_STALE_MS', NL.SENSE_STALE_MS, 15000);
+  // Same 3x ratio as PING/PONG, and for the same reason: two reports may go
+  // missing before anything is declared.
+  eq('stale is 3x the repeat', NL.SENSE_STALE_MS / NL.SENSE_REPEAT_MS, 3);
   eq('protocol version', NL.NODELINK_VERSION, 1);
 }
 

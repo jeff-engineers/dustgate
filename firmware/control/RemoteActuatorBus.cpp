@@ -167,6 +167,14 @@ void RemoteActuatorBus::taskLoop() {
                 _ws.sendTXT(_txFrame);
                 _txPending = false;
             }
+            // CONFIG rides the same single-threaded send. Sent BEFORE nothing
+            // in particular — order against a SET does not matter, because a
+            // node ACKs each independently and neither depends on the other.
+            if (_cfgPending && _connected) {
+                _ws.sendTXT(_cfgFrame);
+                _cfgPending = false;
+                DEBUG_PRINT(F("[NODE→] CONFIG to ")); DEBUG_PRINTLN(_nodeId);
+            }
             // A move whose STATE report never arrived: give up rather than let
             // the primary's move queue block forever behind a lost frame.
             if (_moveOutstanding &&
@@ -206,6 +214,14 @@ void RemoteActuatorBus::onEvent(WStype_t type, uint8_t* payload, size_t len) {
                 // and holding busy() forever would stall every other gate.
                 _moveOutstanding = false;
                 _txPending = false;
+                // FORGET THE READINGS, KEEP THE CONFIG. A link that has dropped
+                // tells us nothing about the tool any more, and a stale "on"
+                // left lying here would keep a collector running for a machine
+                // nobody can see (RFC §5.6a: absent is OFF). The CONFIG is the
+                // opposite — it is ours, not the node's, and the node will have
+                // forgotten it across the reboot.
+                _senseCount = 0;
+                _cfgPending = _cfgValid;
                 xSemaphoreGive(_mutex);
             }
             DEBUG_PRINT(F("[NODE] Link lost: ")); DEBUG_PRINTLN(_nodeId);
@@ -277,6 +293,9 @@ void RemoteActuatorBus::handleFrame(const char* json, size_t len) {
         }
         _refusedBy[0] = '\0';
         _connected = true;
+        // Re-arm the CONFIG on every accepted handshake: this node may have just
+        // rebooted, and a node that has not been configured reports nothing.
+        if (_cfgValid) _cfgPending = true;
     } else if (strcmp(t, "ACK") == 0) {
         bool ok = f["ok"] | false;
         if (!ok) _moveOutstanding = false;                  // refused → stop waiting
@@ -285,6 +304,36 @@ void RemoteActuatorBus::handleFrame(const char* json, size_t len) {
         DEBUG_PRINT(ok ? F(" ok") : F(" REFUSED: "));
         if (!ok) DEBUG_PRINT(f["err"] | "(no reason given)");
         DEBUG_PRINTLN();
+        return;
+    } else if (strcmp(t, "SENSE") == 0) {
+        const char* sid = f["sensorId"].as<const char*>();
+        const bool  on  = f["on"] | false;
+        if (sid && *sid) {
+            size_t i = 0;
+            for (; i < _senseCount; i++) if (strcmp(_senses[i].sensorId, sid) == 0) break;
+            // A node reporting more sensors than it was configured for is a
+            // node out of step with us; keep the ones we know and drop the
+            // rest rather than growing past the array.
+            if (i == _senseCount && _senseCount < nodelink::kMaxSensorsPerNode) {
+                nodelink::strlcpy_(_senses[i].sensorId, sid, sizeof(_senses[i].sensorId));
+                _senseCount++;
+            }
+            if (i < nodelink::kMaxSensorsPerNode && i < _senseCount) {
+                const bool changed = (_senses[i].on != on) || _senses[i].atMs == 0;
+                _senses[i].on   = on;
+                _senses[i].atMs = millis();
+                xSemaphoreGive(_mutex);
+                // Logged on CHANGE only: this frame repeats every
+                // kSenseRepeatMs, and a line per repeat would bury everything
+                // else on the console within a minute.
+                if (changed) {
+                    DEBUG_PRINT(F("[NODE←] SENSE ")); DEBUG_PRINT(sid);
+                    DEBUG_PRINTLN(on ? F(" ON") : F(" off"));
+                }
+                return;
+            }
+        }
+        xSemaphoreGive(_mutex);
         return;
     } else if (strcmp(t, "STATE") == 0) {
         bool moving = f["moving"] | false;
@@ -380,6 +429,59 @@ bool RemoteActuatorBus::jog(int channel, int angle) {
     // gate someone is calibrating by hand.
     xSemaphoreGive(_mutex);
     return true;
+}
+
+void RemoteActuatorBus::configureSensors(JsonArrayConst sensors) {
+    // Built here rather than by the caller so the WIRE SHAPE lives in one place
+    // — nodelink.js's CONFIG, mirrored by parseConfigFrame() on the node.
+    // 512, not 320: kMaxSensorsPerNode is 4 and a sensorId may be 48 chars, so
+    // a legitimate full config is ~420 bytes. The old size would have refused
+    // one — loudly, but still refused.
+    StaticJsonDocument<512> doc;
+    JsonObject f = doc.to<JsonObject>();
+    f["t"] = "CONFIG";
+    JsonArray arr = f.createNestedArray("sensors");
+    for (JsonObjectConst sen : sensors) {
+        JsonObject o = arr.createNestedObject();
+        o["sensorId"] = sen["sensorId"] | "";
+        o["kind"]     = "ct";
+        o["channel"]  = sen["channel"] | 0;
+    }
+
+    if (!_mutex) return;
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    f["seq"] = ++_seq;
+    String s; serializeJson(doc, s);
+    if (s.length() >= sizeof(_cfgFrame)) {
+        xSemaphoreGive(_mutex);
+        DEBUG_PRINT(F("[NODE] CONFIG too large for ")); DEBUG_PRINTLN(_nodeId);
+        return;
+    }
+    nodelink::strlcpy_(_cfgFrame, s.c_str(), sizeof(_cfgFrame));
+    _cfgValid   = true;
+    _cfgPending = true;
+    // Readings from the OLD configuration are not readings under the new one:
+    // a sensorId that was just removed must stop answering immediately rather
+    // than keep a tool switched on until it ages out.
+    _senseCount = 0;
+    xSemaphoreGive(_mutex);
+}
+
+bool RemoteActuatorBus::senseOf(const char* sensorId, bool& on, uint32_t& atMs) const {
+    if (!sensorId || !*sensorId || !_mutex) return false;
+    // const_cast: the mutex is a lock, not part of the logical value, and every
+    // other const accessor on this class takes it the same way.
+    SemaphoreHandle_t m = _mutex;
+    xSemaphoreTake(m, portMAX_DELAY);
+    bool found = false;
+    for (size_t i = 0; i < _senseCount; i++) {
+        if (strcmp(_senses[i].sensorId, sensorId) != 0) continue;
+        // atMs == 0 means the slot exists but nothing has landed in it.
+        if (_senses[i].atMs) { on = _senses[i].on; atMs = _senses[i].atMs; found = true; }
+        break;
+    }
+    xSemaphoreGive(m);
+    return found;
 }
 
 RemoteActuatorBus::NodeInfo RemoteActuatorBus::info() const {

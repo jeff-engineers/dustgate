@@ -1,9 +1,8 @@
 // nodelink.js — the primary↔secondary node protocol.
 //
 // DustGate is a STAR: one primary owns the GUI, the topology, the Shelly
-// polling and the routing brain; secondaries are dumb actuator banks. This file
-// is the contract between them — the frames, their shapes, and the invariants
-// that make a secondary genuinely dumb.
+// polling and the routing brain. This file is the contract between them — the
+// frames, their shapes, and the invariant that makes the split work.
 //
 // THE LOAD-BEARING DESIGN DECISION: the primary resolves every state into a
 // CONCRETE REALIZATION before sending it. A SET frame carries `angle` (already
@@ -12,6 +11,23 @@
 // version, and no calibration data — it needs a PWM channel and a number. That
 // is what lets the cheap servo-only node exist at all, and it means a schema
 // change never has to be rolled out to every board in the shop.
+//
+// WHAT THAT DOES AND DOES NOT SAY (sharpened 2026-09-14). This header used to
+// call secondaries "dumb actuator banks", and that description has now been
+// wrong twice. The slider node owns a homing sweep; the CT tool-sensing node
+// owns a 60 Hz RMS loop. Each was read, at the time, as the boundary eroding.
+// Neither is. The invariant was never about intelligence — it is about SCHEMA
+// OWNERSHIP:
+//
+//   A node may own any control loop whose time constant is faster than a WiFi
+//   round trip. A node may own no interpretation of the document.
+//
+// Homing cannot round-trip per step; neither can mains-frequency sampling. Both
+// nodes still take resolved numbers off the wire, and report values whose
+// meaning does not change when the schema does — so both obey the rule that
+// actually earns its keep, which is that the primary can be reflashed alone.
+// Stated this way, the next sensor is PREDICTED rather than excused, which is
+// the same job CLAUDE.md's constant table does for shared numbers.
 //
 // Transport is one persistent WebSocket, primary → secondary (the primary dials
 // out; secondaries just listen). Framing is JSON, one frame per message.
@@ -27,9 +43,19 @@
 const NODELINK_VERSION = 1;
 
 /** Frame types, primary → secondary. */
-const P2S = ['HELLO', 'SET', 'PING'];
+const P2S = ['HELLO', 'SET', 'CONFIG', 'PING'];
 /** Frame types, secondary → primary. */
-const S2P = ['WELCOME', 'ACK', 'STATE', 'PONG'];
+const S2P = ['WELCOME', 'ACK', 'STATE', 'SENSE', 'PONG'];
+
+// CONFIG and SENSE were added 2026-09-14 WITHOUT bumping NODELINK_VERSION, and
+// that is deliberate rather than an oversight. Both ends ignore a frame type
+// they do not know (`dustgate_node.cpp`: "unknown frame — ignore rather than
+// guess"), so the four combinations all degrade to something safe: an old node
+// is never configured and never reports, which leaves it exactly the actuator
+// bank it already was; a new node talking to an old primary sends SENSE into a
+// void. Nothing silently misbehaves, so a version bump would only force a flash
+// of every board in the shop to buy nothing — the precise cost the header says
+// this protocol exists to avoid. Bump it when an EXISTING frame changes shape.
 
 /**
  * Liveness. The primary PINGs this often; a secondary that hasn't answered
@@ -39,6 +65,35 @@ const S2P = ['WELCOME', 'ACK', 'STATE', 'PONG'];
  */
 const PING_INTERVAL_MS = 2000;
 const PONG_TIMEOUT_MS = 6000;
+
+/**
+ * How often a node REPEATS its current sensor reading, and how long the primary
+ * waits before calling that reading stale.
+ *
+ * SENSE is sent on every change — that is what makes a tool switching on a
+ * sub-second event rather than a polling interval. The repeat exists only so a
+ * single dropped frame cannot leave the primary permanently wrong about a tool,
+ * which an edge-only protocol would. Same 3× ratio as PING/PONG, for the same
+ * reason: two may go missing before anything is declared.
+ *
+ * Stale is NOT the same as off, and the primary must not conflate them. A node
+ * that has stopped reporting while still answering PINGs is a fault; a node that
+ * has gone away entirely is the planer being switched off at the wall, which is
+ * normal and handled by `Controller.intermittent`. See RFC §5.6a.
+ */
+const SENSE_REPEAT_MS = 5000;
+const SENSE_STALE_MS = 15000;
+
+/**
+ * How many sensors one node will accept in a CONFIG.
+ *
+ * ⚠️ JS↔C++ PAIR — `kMaxSensorsPerNode` in firmware/control/NodeLink.h.
+ * The firmware parses into a fixed array, so without the same cap on this side
+ * a primary could send eight specs to a board that keeps four and says nothing
+ * — the node would report on some tools and be silently deaf to the rest. The
+ * refusal has to be symmetrical or it is not a refusal.
+ */
+const MAX_SENSORS_PER_NODE = 4;
 
 /** Reconnect backoff for a primary that can't reach a secondary. */
 const RECONNECT_MIN_MS = 1000;
@@ -86,6 +141,26 @@ const RECONNECT_MAX_MS = 15000;
  * @property {string}  selectorId
  * @property {string}  stateId
  * @property {boolean} moving
+ *
+ * @typedef {Object} SensorSpec     one entry in CONFIG.sensors.
+ * @property {string}  sensorId     OPAQUE TO THE NODE — echoed back in SENSE and
+ *                                  never interpreted, exactly as SET.selectorId
+ *                                  is. It is the primary's vocabulary.
+ * @property {'ct'}    kind         what is wired. 'ct' is the only one so far.
+ * @property {number}  channel      which input on THIS BOARD — a hardware fact,
+ *                                  the same shape as SET.channel.
+ *
+ * @typedef {Object} ConfigFrame    P→S, sent AFTER an accepted WELCOME.
+ * @property {'CONFIG'}  t
+ * @property {number}    seq        ACKed like a SET
+ * @property {SensorSpec[]} sensors WHOLE new list — an empty array means "report
+ *                                  nothing", which is how sensing is turned off.
+ *
+ * @typedef {Object} SenseFrame     S→P, on change and every SENSE_REPEAT_MS.
+ * @property {'SENSE'} t
+ * @property {string}  sensorId     echoed from CONFIG
+ * @property {boolean} on           THE ANSWER. One bit, decided on the node.
+ * @property {number} [level]       DIAGNOSTIC ONLY — see the builder.
  */
 
 /** Frames the primary sends. */
@@ -147,6 +222,40 @@ function set(seq, sel, stateId, realization) {
 }
 
 /**
+ * CONFIG — tell a node what it is WIRED TO, which is the one thing it cannot
+ * work out for itself.
+ *
+ * Sent after an accepted WELCOME, never before: an unclaimed or refused node has
+ * no business being configured, and the primary needs `caps` back before it can
+ * say anything sensible anyway.
+ *
+ * THIS IS NOT TOPOLOGY, and the distinction is the whole reason the frame can
+ * exist at all. It carries no elements, no routing, no states, and no threshold
+ * — nothing whose MEANING the primary could change underneath a node that was
+ * not reflashed. `sensorId` is opaque, `kind` names hardware, `channel` is a
+ * pad. A node still owns no interpretation of the document, which is the
+ * invariant at the top of this file.
+ *
+ * Why it had to exist: before it, every new node capability had to smuggle its
+ * configuration through SET or invent a bespoke frame. This one addition covers
+ * the CT tool sensor (RFC §5.6), a bin sensor on a node, and whatever is next.
+ *
+ * The list is WHOLE, not a delta. A primary that sends `[]` has said "report
+ * nothing", and a node that has never been sent a CONFIG reports nothing — so
+ * silence and an explicit empty list agree, which is what stops a half-applied
+ * configuration from being a state anyone has to reason about.
+ *
+ * @param {number} seq
+ * @param {SensorSpec[]} sensors
+ * @returns {ConfigFrame}
+ */
+function config(seq, sensors) {
+  return { t: 'CONFIG', seq, sensors: (sensors || []).map((s) => ({
+    sensorId: s.sensorId, kind: s.kind, channel: s.channel,
+  })) };
+}
+
+/**
  * Frames the secondary sends.
  *
  * @param {string} [claimedBy]  the primary that owns this node
@@ -178,6 +287,36 @@ function ack(seq, ok, err) {
 }
 function state(selectorId, stateId, moving) {
   return { t: 'STATE', selectorId, stateId, moving: !!moving };
+}
+
+/**
+ * SENSE — "this sensor says on, or off".
+ *
+ * ONE BIT, AND THE NODE DECIDES IT. That is not a shortcut, it is RFC §5.4b: a
+ * CT measures current, watts need voltage and power factor it cannot give, and
+ * a woodworking tool's standby sits below the noise floor anyway. There is no
+ * threshold worth sending and nothing for the primary to interpret. It is also
+ * the only arrangement with usable latency — mains-frequency RMS cannot
+ * round-trip per sample, so the loop lives where the ADC is.
+ *
+ * `level` is a MULTIPLE OF THE TRIP POINT, and deliberately not amps, watts or
+ * a raw count. Two reasons. It makes commissioning possible without a serial
+ * console at the machine — "2.8" says comfortable, "1.05" says move the clamp —
+ * and its units are self-evidently not a measurement, so nothing can mistake it
+ * for one. **Nothing may branch on it.** A primary that thresholds `level` has
+ * re-derived, worse and a network away, the bit already sitting next to it in
+ * `on` — and has quietly moved the decision back to the side of the wire that
+ * cannot see the waveform.
+ *
+ * @param {string} sensorId
+ * @param {boolean} on
+ * @param {number} [level]  multiple of trip; omitted when the node has none
+ * @returns {SenseFrame}
+ */
+function sense(sensorId, on, level) {
+  const f = { t: 'SENSE', sensorId, on: !!on };
+  if (typeof level === 'number') f.level = level;
+  return f;
 }
 function pong() {
   return { t: 'PONG' };
@@ -243,6 +382,44 @@ function validateFrame(f, direction) {
       if (f.drive === 'servo') num('angle', 0, 180);
       if (f.drive === 'linear') num('positionMm', -10000, 10000);
       break;
+    case 'CONFIG':
+      num('seq', 0, Number.MAX_SAFE_INTEGER);
+      if (!Array.isArray(f.sensors)) {
+        errs.push('CONFIG.sensors must be an array');
+      } else if (f.sensors.length > MAX_SENSORS_PER_NODE) {
+        errs.push(`CONFIG.sensors has ${f.sensors.length}, max ${MAX_SENSORS_PER_NODE}`);
+      } else {
+        // An EMPTY list is valid and meaningful — "report nothing".
+        const seen = new Set();
+        f.sensors.forEach((sen, i) => {
+          const at = `CONFIG.sensors[${i}]`;
+          if (!sen || typeof sen !== 'object') { errs.push(`${at} must be an object`); return; }
+          if (typeof sen.sensorId !== 'string' || !sen.sensorId) {
+            errs.push(`${at}.sensorId must be a non-empty string`);
+          } else if (seen.has(sen.sensorId)) {
+            // Two entries under one id would make SENSE ambiguous in the only
+            // direction that matters: the primary could not tell which tool
+            // just started.
+            errs.push(`${at}.sensorId "${sen.sensorId}" is duplicated`);
+          } else {
+            seen.add(sen.sensorId);
+          }
+          if (sen.kind !== 'ct') errs.push(`${at}.kind must be ct`);
+          if (typeof sen.channel !== 'number' || Number.isNaN(sen.channel)) {
+            errs.push(`${at}.channel must be a number`);
+          } else if (sen.channel < 0 || sen.channel > 15) {
+            errs.push(`${at}.channel out of range (0..15)`);
+          }
+        });
+      }
+      break;
+    case 'SENSE':
+      str('sensorId');
+      if (typeof f.on !== 'boolean') errs.push('SENSE.on must be a boolean');
+      // `level` is optional — a node with no trip point to divide by omits it
+      // rather than sending a zero that reads like a measurement.
+      if (f.level !== undefined) num('level', 0, 1000);
+      break;
     case 'ACK':
       num('seq', 0, Number.MAX_SAFE_INTEGER);
       if (typeof f.ok !== 'boolean') errs.push('ACK.ok must be a boolean');
@@ -261,6 +438,7 @@ function validateFrame(f, direction) {
 module.exports = {
   NODELINK_VERSION, P2S, S2P,
   PING_INTERVAL_MS, PONG_TIMEOUT_MS, RECONNECT_MIN_MS, RECONNECT_MAX_MS,
-  hello, welcome, set, ack, state, ping, pong, welcomeAccepted,
+  SENSE_REPEAT_MS, SENSE_STALE_MS, MAX_SENSORS_PER_NODE,
+  hello, welcome, set, config, ack, state, sense, ping, pong, welcomeAccepted,
   validateFrame,
 };

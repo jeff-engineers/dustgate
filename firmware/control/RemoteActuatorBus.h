@@ -95,6 +95,12 @@ public:
     };
     NodeInfo info() const;
 
+    // ── sensing (tool-sensing RFC §5.6) ────────────────────────────────────
+    // Tell the node what the layout says is wired to it, and read back what it
+    // has reported. See ActuatorBus.h for the contract.
+    void configureSensors(JsonArrayConst sensors) override;
+    bool senseOf(const char* sensorId, bool& on, uint32_t& atMs) const override;
+
 private:
     static void taskTrampoline(void* arg) { static_cast<RemoteActuatorBus*>(arg)->taskLoop(); }
     void taskLoop();
@@ -131,6 +137,26 @@ private:
     // can be told WHO has the board before being offered a takeover.
     char     _refusedBy[40] = "";
     bool     _takeover      = false;   // one-shot, user-confirmed
+    // ── sensors ────────────────────────────────────────────────────────────
+    //
+    // The CONFIG is CACHED, not just sent, and that is the load-bearing part:
+    // the board this was built for is powered from the tool it watches (RFC
+    // §5.6a), so it reboots every time someone switches the planer off at the
+    // wall. A configuration sent once at adopt would be forgotten on the first
+    // power cut and the tool would go quiet forever. Re-sent on every accepted
+    // WELCOME instead, which costs one small frame per reconnect.
+    char     _cfgFrame[512] = "";
+    bool     _cfgPending    = false;
+    bool     _cfgValid      = false;   // have we ever been given one?
+
+    struct SenseState {
+        char     sensorId[48] = "";
+        bool     on           = false;
+        uint32_t atMs         = 0;
+    };
+    SenseState _senses[nodelink::kMaxSensorsPerNode];
+    size_t     _senseCount = 0;
+
     char     _board[24]    = "";
     char     _fw[24]       = "";
     int      _capServos    = 0;

@@ -105,6 +105,32 @@ const MAX_SLIDE_BRANCHES = 8;
  * @property {'primary'|'secondary'} role
  * @property {string} [name]
  * @property {string} [board]
+ * @property {boolean} [intermittent]  this board is EXPECTED to come and go.
+ *                                   Absent means false — a board that vanishes
+ *                                   is a fault worth showing, which is right
+ *                                   for every board that existed before this.
+ *
+ *                                   Set for a board powered from the tool it
+ *                                   watches (RFC §5.6a): the planer is not
+ *                                   energised all the time, so its node drops
+ *                                   off whenever the machine is switched off at
+ *                                   the wall. That is normal, and the primary
+ *                                   already reads a missing sensor as "tool
+ *                                   off" — which fails the right way, since a
+ *                                   tool wrongly believed off means a dusty
+ *                                   shop where the opposite default runs the
+ *                                   collector forever.
+ *
+ *                                   The flag does not change that behaviour. It
+ *                                   changes whether anyone is TOLD. Without it
+ *                                   the node-offline warning fires every time
+ *                                   the planer is switched off, which is how a
+ *                                   real dead board gets trained away — the
+ *                                   flag is what keeps the warning meaning
+ *                                   something on the boards that don't carry
+ *                                   it. A CHOICE, unlike `drives`: nothing on
+ *                                   the board can know whether its own power is
+ *                                   supposed to be intermittent.
  * @property {'servo'|'linear'} [drives]  what this board is FLASHED to drive:
  *                                   'servo' = the four-channel PWM bank,
  *                                   'linear' = one serial-bus sliding gate.
@@ -141,7 +167,7 @@ const MAX_SLIDE_BRANCHES = 8;
  *                                        parallels servo.channel so >1 linear selector
  *                                        is a wiring question, not a model limit
  * @property {Object} [servo]             (selector servo kinds) { channel, moveMs, holdAtRest, ... }
- * @property {Object} [sensor]            (tool) { outlet }
+ * @property {Object} [sensor]            (tool) { outlet } | { ct }
  * @property {Object} [control]           (collector) { outlet | rf, offDelayMs } — how we
  *                                   SWITCH it. `rf` transmits the remote's own
  *                                   frame; `outlet` commands a plug. Never both. Absent when the collector is
@@ -296,6 +322,13 @@ function validateTopology(t) {
     if (!CONTROLLER_ROLES.includes(c.role)) err('controller', `bad role "${c.role}"`, c.id);
     if (c.drives !== undefined && !CONTROLLER_DRIVES.includes(c.drives))
       err('controller', `bad drives "${c.drives}" (servo|linear)`, c.id);
+    if (c.intermittent !== undefined && typeof c.intermittent !== 'boolean')
+      err('controller', 'intermittent must be a boolean', c.id);
+    // A primary that comes and goes is not an intermittent board, it is a shop
+    // that stops working — nothing routes while the brain is off. Refusing it
+    // here beats discovering it as a silent non-fault.
+    if (c.intermittent && c.role === 'primary')
+      err('controller', 'the primary cannot be intermittent', c.id);
     if (c.role === 'primary') primaries++;
     if (c.link !== undefined) {
       if (typeof c.link !== 'object' || c.link === null) err('controller', 'link must be an object', c.id);
@@ -518,6 +551,52 @@ function validateTopology(t) {
       if (o.kind !== 'shelly' && o.kind !== 'tasmota')
         err('element', `unknown outlet kind "${o.kind}" on ${where}`, e.id);
     }
+  }
+
+  // ── a tool sensed by a CT instead of a plug (RFC §5.6) ──────────────────
+  //
+  // `sensor.outlet` is a plug the primary POLLS over HTTP, addressed by IP.
+  // `sensor.ct` is a clamp on a board, addressed by controllerId — a different
+  // shape for a different thing, which is why it is a sibling rather than a
+  // field on the outlet. It exists because a 240V tool has no plug to meter:
+  // a NEMA 6-20 has no neutral, and consumer metering plugs for it barely exist.
+  //
+  // THERE IS NO THRESHOLD HERE, and the absence is the point. `thresholdW` lives
+  // on `sensor.outlet`, so a CT-sensed tool has nowhere to put one — the shape
+  // enforces RFC §5.4b structurally rather than by a rule someone has to
+  // remember. A CT measures current, watts need a voltage and a power factor it
+  // cannot give, and a woodworking tool's standby sits under the noise floor, so
+  // the trip is "current, above this board's own floor" and the node decides it.
+  for (const e of t.elements) {
+    const ct = (e.sensor || {}).ct;
+    if (!ct) continue;
+    if (e.type !== 'tool') {
+      err('element', `only a tool can be sensed by a CT (${e.type})`, e.id);
+      continue;
+    }
+    // Two answers to one question. Which one wins would be an implementation
+    // detail, and a tool that is on according to one and off according to the
+    // other is a gate that opens or doesn't depending on which was read last.
+    if ((e.sensor || {}).outlet)
+      err('element', `tool "${e.name || e.id}" is sensed by BOTH a plug and a CT — pick one`, e.id);
+    if (typeof ct !== 'object')
+      err('element', 'sensor.ct must be an object', e.id);
+    // controllerId is OPTIONAL and means "this board" when absent, matching the
+    // bin sensor, every selector, and NodeBus's own rule.
+    if (ct.controllerId !== undefined) {
+      if (typeof ct.controllerId !== 'string' || !ct.controllerId)
+        err('element', 'sensor.ct.controllerId must be a non-empty string', e.id);
+      else if (!ctrlIds.has(ct.controllerId))
+        err('element', `sensor.ct.controllerId "${ct.controllerId}" does not resolve`, e.id);
+    }
+    // The pad the clamp is wired to. A board fact, like a servo channel — but
+    // unlike a servo channel there is nothing to derive it from, so it must be
+    // present rather than defaulted: channel 0 is a real pad on every board, and
+    // silently sensing the wrong one reads as a tool that never runs.
+    if (typeof ct.channel !== 'number' || Number.isNaN(ct.channel))
+      err('element', 'sensor.ct.channel must be a number', e.id);
+    else if (ct.channel < 0 || ct.channel > 15)
+      err('element', `sensor.ct.channel ${ct.channel} out of range (0..15)`, e.id);
   }
 
   // ── collector RF press: the transmitter that replaces a switchable plug ──

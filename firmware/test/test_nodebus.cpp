@@ -22,6 +22,7 @@
 #include "../control/NodeLink.h"
 #include <cstdio>
 #include <fstream>
+#include <map>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -46,6 +47,30 @@ struct StubBus : public topo::ActuatorBus {
   bool                     moving  = false;
   bool                     accept  = true;
   std::vector<std::string> log;     // "selector->state", in issue order
+
+  // ── sensing (tool-sensing RFC §5.6) ──────────────────────────────────────
+  // What CONFIG this bus was last handed, flattened to "id@ch", plus how many
+  // times it was configured at all — an empty list is a meaningful CONFIG, so
+  // "was it called" and "what did it say" are different questions.
+  std::vector<std::string> sensorCfg;
+  int                      cfgCalls = 0;
+  // Staged readings: sensorId -> (on, arrivedAtMs). Absent = never reported.
+  std::map<std::string, std::pair<bool, uint32_t>> senses;
+
+  void configureSensors(JsonArrayConst sensors) override {
+    cfgCalls++;
+    sensorCfg.clear();
+    for (JsonObjectConst sen : sensors) {
+      sensorCfg.push_back(std::string(sen["sensorId"] | "?") + "@" +
+                          std::to_string((int)(sen["channel"] | -1)));
+    }
+  }
+  bool senseOf(const char* sensorId, bool& on, uint32_t& atMs) const override {
+    auto it = senses.find(std::string(sensorId ? sensorId : ""));
+    if (it == senses.end()) return false;
+    on = it->second.first; atMs = it->second.second;
+    return true;
+  }
 
   bool online() const override { return up; }
   bool busy()   const override { return moving; }
@@ -567,6 +592,227 @@ int main(int argc, char** argv) {
        std::string(st["machines"]["table-saw"]["status"] | ""));
     ok("status keys reachability by port", st["reachable"]["ts-cabinet"] == true &&
                                            st["reachable"]["ts-overarm"] == true);
+  }
+
+  // ── a CT-sensed tool drives the routing brain (RFC §5.6) ────────────────
+  //
+  // The half that was missing until 2026-09-15: the frames existed and nothing
+  // sent or consumed them. These assert the PRIMARY's side — that the layout
+  // becomes a CONFIG, and that a reported bit turns into a routed tool.
+  {
+    // twoGates with toolX watched by a clamp on channel 2 of this board.
+    DynamicJsonDocument tg(16384);
+    deserializeJson(tg, twoGatesJson);
+    for (JsonObject e : tg["elements"].as<JsonArray>()) {
+      if (topo::_eq(e["id"], "toolX")) {
+        JsonObject ct = e.createNestedObject("sensor").createNestedObject("ct");
+        ct["channel"] = 2;   // no controllerId — "this board"
+      }
+    }
+    std::string ctJson; serializeJson(tg, ctJson);
+
+    StubBus local; topo::NodeBus nb; topo::TopologyRuntime rt;
+    nb.setLocal(&local, "primary");
+    rt.begin(&nb);
+    std::string err;
+    ok("adopt a layout with a CT", rt.adopt(ctJson.c_str(), ctJson.size(), err), err);
+
+    // Adopting is what configures the boards — the layout is the only thing
+    // that knows a clamp exists.
+    ok("adopting pushes a CONFIG", local.cfgCalls > 0);
+    ok("...naming the tool and its pad", joined(local.sensorCfg) == "toolX@2",
+       joined(local.sensorCfg));
+
+    // Nothing has reported yet. ABSENT IS OFF (RFC §5.6a) — and it must not
+    // route, because a tool that has never been heard from is not running.
+    rt.update(1000);
+    drain(rt, { &local });
+    ok("a tool that has never reported does not route", local.log.empty(),
+       joined(local.log));
+
+    // THE EVENT: the clamp says the planer is running. One bit in, and the
+    // whole make-before-break machine downstream of it should engage.
+    local.log.clear();
+    local.senses["toolX"] = { true, 1000 };
+    rt.update(1000);
+    drain(rt, { &local });
+    ok("a CT reporting ON routes the tool", !local.log.empty(), joined(local.log));
+
+    // ...and off again.
+    local.log.clear();
+    local.senses["toolX"] = { false, 2000 };
+    rt.update(2000);
+    drain(rt, { &local });
+    DynamicJsonDocument st(8192);
+    rt.writeStatus(st.to<JsonObject>());
+    ok("a CT reporting OFF stops asking for the collector",
+       st["tools"]["toolX"]["active"] == false);
+
+    // STALE IS OFF TOO, for now. A reading older than kSenseStaleMs cannot be
+    // trusted, and the safe reading of "I do not know" is the one that leaves
+    // the shop dusty rather than the blower running.
+    local.senses["toolX"] = { true, 1000 };
+    rt.update(1000 + topo::nodelink::kSenseStaleMs + 1);
+    DynamicJsonDocument st2(8192);
+    rt.writeStatus(st2.to<JsonObject>());
+    ok("a reading older than kSenseStaleMs is not believed",
+       st2["tools"]["toolX"]["active"] == false);
+
+    // ...but a reading INSIDE the window still is, or the check above would be
+    // passing for the wrong reason.
+    local.senses["toolX"] = { true, 1000 };
+    rt.update(1000 + topo::nodelink::kSenseStaleMs - 1);
+    DynamicJsonDocument st3(8192);
+    rt.writeStatus(st3.to<JsonObject>());
+    ok("a reading inside the window is", st3["tools"]["toolX"]["active"] == true);
+
+    // MANUAL BEATS THE CLAMP, the same way it beats a plug: the override exists
+    // for "run it anyway", and a poll tick reporting off a second later would
+    // make the button look broken.
+    rt.setMachineManual("toolX", true);
+    local.senses["toolX"] = { false, 9000 };
+    rt.update(9000);
+    DynamicJsonDocument st4(8192);
+    rt.writeStatus(st4.to<JsonObject>());
+    ok("a manual override outranks an off CT", st4["tools"]["toolX"]["active"] == true);
+    rt.setMachineManual("toolX", false);
+  }
+
+  // ── a CT on ANOTHER board, and removing one ─────────────────────────────
+  {
+    DynamicJsonDocument tg(16384);
+    deserializeJson(tg, twoGatesJson);
+    tg["controllers"].as<JsonArray>().createNestedObject()["id"] = "planer-node";
+    for (JsonObject e : tg["elements"].as<JsonArray>()) {
+      if (topo::_eq(e["id"], "toolY")) {
+        JsonObject ct = e.createNestedObject("sensor").createNestedObject("ct");
+        ct["controllerId"] = "planer-node";
+        ct["channel"]      = 0;
+      }
+    }
+    std::string j; serializeJson(tg, j);
+
+    StubBus local, node; topo::NodeBus nb; topo::TopologyRuntime rt;
+    nb.setLocal(&local, "primary");
+    nb.registerRemote("planer-node", &node);
+    rt.begin(&nb);
+    std::string err;
+    rt.adopt(j.c_str(), j.size(), err);
+
+    ok("a CT on a node is configured on THAT board",
+       joined(node.sensorCfg) == "toolY@0", joined(node.sensorCfg));
+    // The local board carries no clamp in this layout, and must be told so
+    // explicitly — an empty list is how a sensor gets removed, so a board that
+    // simply stopped being mentioned would go on reporting a dead tool.
+    ok("...and the local board is told it has none",
+       local.cfgCalls > 0 && local.sensorCfg.empty(),
+       std::to_string(local.cfgCalls) + " / " + joined(local.sensorCfg));
+
+    // Re-adopting WITHOUT the clamp must clear it, not leave it behind.
+    DynamicJsonDocument plain(16384);
+    deserializeJson(plain, twoGatesJson);
+    plain["controllers"].as<JsonArray>().createNestedObject()["id"] = "planer-node";
+    std::string j2; serializeJson(plain, j2);
+    rt.adopt(j2.c_str(), j2.size(), err);
+    ok("re-adopting without the CT clears the board",
+       node.sensorCfg.empty(), joined(node.sensorCfg));
+  }
+
+  // ── CONFIG / SENSE — the PAIR of nodelink.test.js's cases ────────────────
+  //
+  // Same rules, same order, same literal numbers as the JS side. The firmware
+  // cannot import nodelink.js, so this file IS the agreement.
+  {
+    using namespace topo::nodelink;
+
+    ok("kSenseRepeatMs matches SENSE_REPEAT_MS", kSenseRepeatMs == 5000);
+    ok("kSenseStaleMs matches SENSE_STALE_MS", kSenseStaleMs == 15000);
+    ok("stale is 3x the repeat", kSenseStaleMs / kSenseRepeatMs == 3);
+    ok("kMaxSensorsPerNode matches MAX_SENSORS_PER_NODE", kMaxSensorsPerNode == 4);
+    // Adding CONFIG/SENSE did NOT bump the version: both ends ignore a frame
+    // type they don't know, so every old/new combination degrades safely and a
+    // bump would force a flash of every board in the shop to buy nothing.
+    ok("protocol version unchanged by CONFIG/SENSE", kVersion == 1);
+
+    SensorSpec specs[kMaxSensorsPerNode];
+    size_t n = 99;
+    const char* err = nullptr;
+
+    // A well-formed CONFIG.
+    {
+      StaticJsonDocument<512> d;
+      deserializeJson(d, R"({"t":"CONFIG","seq":7,"sensors":[{"sensorId":"planer-ct","kind":"ct","channel":0}]})");
+      ok("CONFIG parses", parseConfigFrame(d.as<JsonObjectConst>(), specs, kMaxSensorsPerNode, n, err),
+         err ? err : "");
+      ok("one sensor", n == 1);
+      ok("sensorId is carried verbatim", std::string(specs[0].sensorId) == "planer-ct");
+      ok("channel is carried", specs[0].channel == 0);
+    }
+
+    // An EMPTY list is valid and means "report nothing" — the same state as a
+    // board that has never been configured, so there is no third case.
+    {
+      StaticJsonDocument<256> d;
+      deserializeJson(d, R"({"t":"CONFIG","seq":8,"sensors":[]})");
+      ok("an empty sensor list parses", parseConfigFrame(d.as<JsonObjectConst>(), specs, kMaxSensorsPerNode, n, err));
+      ok("and configures nothing", n == 0);
+    }
+
+    // ALL OR NOTHING: a bad entry rejects the whole frame. A half-applied
+    // config would leave the primary believing in a sensor the board dropped.
+    {
+      StaticJsonDocument<512> d;
+      deserializeJson(d, R"({"t":"CONFIG","seq":9,"sensors":[{"sensorId":"a","kind":"ct","channel":0},{"sensorId":"b","kind":"bin","channel":1}]})");
+      n = 99;
+      ok("an unknown kind rejects the WHOLE frame",
+         !parseConfigFrame(d.as<JsonObjectConst>(), specs, kMaxSensorsPerNode, n, err));
+      ok("and applies none of it", n == 99);
+    }
+
+    {
+      StaticJsonDocument<512> d;
+      deserializeJson(d, R"({"t":"CONFIG","seq":10,"sensors":[{"sensorId":"a","kind":"ct","channel":0},{"sensorId":"a","kind":"ct","channel":1}]})");
+      ok("a duplicate sensorId is refused",
+         !parseConfigFrame(d.as<JsonObjectConst>(), specs, kMaxSensorsPerNode, n, err));
+    }
+
+    // TYPE FIRST: as<int>() on a string yields 0, which is a real pad on every
+    // board — the same trap positionMm fell into.
+    {
+      StaticJsonDocument<512> d;
+      deserializeJson(d, R"({"t":"CONFIG","seq":11,"sensors":[{"sensorId":"a","kind":"ct","channel":"zero"}]})");
+      ok("a non-numeric channel is refused, not read as pad 0",
+         !parseConfigFrame(d.as<JsonObjectConst>(), specs, kMaxSensorsPerNode, n, err));
+    }
+
+    {
+      StaticJsonDocument<768> d;
+      deserializeJson(d, R"({"t":"CONFIG","seq":12,"sensors":[
+        {"sensorId":"a","kind":"ct","channel":0},{"sensorId":"b","kind":"ct","channel":1},
+        {"sensorId":"c","kind":"ct","channel":2},{"sensorId":"d","kind":"ct","channel":3},
+        {"sensorId":"e","kind":"ct","channel":4}]})");
+      ok("more sensors than the board holds is refused, not truncated",
+         !parseConfigFrame(d.as<JsonObjectConst>(), specs, kMaxSensorsPerNode, n, err));
+    }
+
+    { StaticJsonDocument<256> d;
+      deserializeJson(d, R"({"t":"SET","seq":1})");
+      ok("a SET is not a CONFIG", !parseConfigFrame(d.as<JsonObjectConst>(), specs, kMaxSensorsPerNode, n, err)); }
+
+    // SENSE: one bit, and `level` is a multiple of the trip point — diagnostic
+    // only, omitted rather than zeroed when the board has no trip point.
+    {
+      StaticJsonDocument<256> d;
+      buildSense(d.to<JsonObject>(), "planer-ct", true, 2.8f);
+      ok("SENSE carries the bit", d["on"] == true);
+      ok("and echoes the primary's id", std::string(d["sensorId"] | "") == "planer-ct");
+      ok("and carries level when there is one", d.containsKey("level"));
+
+      StaticJsonDocument<256> e;
+      buildSense(e.to<JsonObject>(), "planer-ct", false);
+      ok("level is OMITTED, not zeroed, when absent", !e.containsKey("level"));
+      ok("an off frame is still a report, not silence", e["on"] == false);
+    }
   }
 
   printf("\n%d/%d passed%s\n", passed, passed + failed,

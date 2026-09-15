@@ -695,6 +695,14 @@ galvanically isolated by design, so the enclosure then holds a sensor lead, an
 ESP32, and 5V — **nothing we build touches mains at all.** That is a materially
 different object, for certification, for insurance, and for a user opening it.
 
+This stays the PRODUCT rule, and **§5.6 knowingly departs from it** for the bench
+build in Jeff's own shop — tapping the tool's own supply buys properties a USB
+brick cannot, and it is a listed supply doing what it is listed for. Read §5.6
+before citing this paragraph as settled for every case. One correction to the
+reasoning above, though, which stands on its own: the "no neutral" part is a
+non-problem. It constrains non-isolated droppers, which reference N; an isolated
+module wants two points 240 V apart, and L1–L2 is two points 240 V apart.
+
 ### 5.2 Parts
 
 - **SCT-013-030 specifically, not the SCT-013-000.** The -030 has its burden
@@ -707,8 +715,38 @@ different object, for certification, for insurance, and for a user opening it.
 - The jaw is 13 mm. Fine for a 12AWG conductor or a 14/3 cord, not for anything
   fatter.
 - It ships with a 3.5 mm plug. Cut it off and use the bare leads.
-- Bias network: 2× 10k from 3.3V/GND for a midpoint, 10µF to ground, CT across
-  the midpoint and the ADC pin.
+- Bias network: **2× 1k** from 3.3V/GND for a midpoint, a bulk cap to ground, a
+  **100nF ceramic at the ADC pin**, CT across the midpoint and the ADC pin.
+
+  **1k, not the 10k this said until 2026-09-14**, and that is §5.5's own
+  diagnosis finally applied: 10k/10k presents 5 kΩ at the pin, the SAR's
+  sampling capacitor does not settle against it, and that is the floor. 1k/1k
+  drops the source impedance to 500 Ω for 3.3 mA, which is nothing on a
+  mains-powered node. Still unvalidated — §5.6's node is the board to prove it
+  on, since it has no screen and so removes the other variable at the same time.
+
+  **The bulk value is not critical, but the SETTLING TIME is.** R_thev = R/2,
+  tau = R_thev x C, and the midpoint needs ~5 tau before any reading means
+  anything:
+
+  | | 10 µF | 100 µF |
+  |---|---|---|
+  | **10k/10k** (5 kΩ) | 250 ms | **2.5 s** |
+  | **1k/1k** (500 Ω) | 25 ms | 250 ms |
+
+  Nothing about 60 Hz cares — both caps are far above the corner, and more
+  capacitance holds the midpoint stiffer if anything. What cares is §5.4b, which
+  makes the board's own floor the thing a tool is judged against and learns it at
+  boot: a floor measured mid-charge is wrong for the whole session, and wrong
+  HIGH, so a running tool reads as idle. `CtSensor::kBiasSettleMs` is 3 s, sized
+  for the slowest combination anyone might build rather than the one in front of
+  us — and `isRailed()` cannot catch it, because a midpoint on its way up passes
+  straight through the healthy band.
+
+  A large Class II ceramic also derates hard with DC bias — a 100 µF X5R at 1.65 V
+  may deliver 40–60% of its marking — so treat the number on the part as an upper
+  bound, and remember those dielectrics are piezoelectric, which is a real
+  consideration for a board bolted near a running machine.
 
 ### 5.3 Do not fight the clipping
 
@@ -781,6 +819,48 @@ should be committed to the schema.
 Note this does NOT excuse the noise in §5.5. A floor that moves with whether the
 screen is drawing makes even a ratio unreliable, because the baseline learned at
 pairing may be measured under different conditions than the trip.
+
+**Superseded by §5.4b (2026-09-14)** — the survey above was never run, because
+the premise it rests on turned out to be false. Read §5.4b for the answer; this
+section is kept for the reasoning that got there.
+
+### 5.4b CLOSED — there is nothing to measure at standby (2026-09-14)
+
+§5.4a proposed a learned per-tool baseline: measure standby once at pairing,
+trip at some multiple of it. **That is dead, and the survey it was waiting on is
+not worth running.**
+
+**Jeff's result: on the only tool in the shop that HAS a standby mode, standby
+sits below the noise ceiling — and the same is expected of comparable tools.**
+A woodworking machine's standby is a contactor coil or a DRO, and it is not a
+motor. There is no ratio to learn against a quantity the instrument cannot see.
+
+That sounds like a loss and is the opposite. It means the baseline was never the
+tool's standby draw — it is **the board's own floor**, and the trip is "current,
+meaningfully above that floor". One number, in firmware, the same for every tool.
+
+The consequence for the schema is that there is no consequence: a CT-sensed tool
+carries **no threshold field at all**. `thresholdW` stays exactly as it is for
+plug-sensed tools, where a metering plug reports genuine watts and a user-typed
+number means something. §5.4a's open question does not get answered in the
+schema, it gets DELETED from it. If some future tool's standby ever does poke
+above the floor, that tool earns a per-tool override at that point and not
+before — speculative fields are how `thresholdW` came to be the wrong shape here
+in the first place.
+
+Two things about the planer node (§5.6) make its floor better than anything
+§5.5 measured, and both are accidents of the wiring rather than design:
+
+- **Its PSU sits upstream of the tool's own switch and its clamp downstream**, so
+  the board always boots with the motor off BY CONSTRUCTION. What it learns at
+  boot is its own floor, in place, at temperature, in the RF environment it will
+  actually trip in — which is the exact objection §5.4a raised against a baseline
+  learned at pairing. Re-learning on every power-up is a feature here.
+- **It has no screen**, so the one thing §5.5 observed moving the floor is not
+  present on the board that most needs a stable one.
+
+Neither of those retires §5.5. A primary with a screen still has the problem,
+and this section only says the CT-sensed TOOL path stopped depending on it.
 
 ### 5.5a The SCALE is confirmed — the clamp was never the problem (2026-09-13)
 
@@ -871,8 +951,15 @@ fine antenna besides. The fix, unvalidated:
 
 - **1 kΩ / 1 kΩ**, dropping the source impedance to 500 Ω. Costs 3.3 mA, which is
   nothing on USB power.
-- **100 nF ceramic** at the pin alongside the 10 µF. The electrolytic does
+- **100 nF ceramic** at the pin alongside the bulk cap. A big bulk cap does
   nothing above a few kHz, which is exactly where a charge pump lives.
+
+**Both are now written into §5.2 as the build, and §5.6's node is where they get
+validated (2026-09-14).** That board is the right place: it has no screen, so it
+removes the other half of the variable in the same change. Note that the bulk cap
+is NOT the lever here — swapping 10 µF for 100 µF changes neither the source
+impedance nor the floor, only the settling time (§5.2's table). The resistors are
+the fix.
 
 **Validate with the screen ON.** That is the condition that breaks it, so a quiet
 reading with the panel unplugged proves nothing about a shipping board.
@@ -892,6 +979,163 @@ floor was ~80× even on the noisy measurement — and **the low-end threshold is
 still unknown**. What it settles into decides whether a CT-sensed tool can share
 `DEFAULT_THRESHOLD_W` with a plug-sensed one or needs its own, which is a model
 question, not just a tuning one.
+
+### 5.6 The planer node — the first CT-sensed tool (2026-09-14; software BUILT 2026-09-15, hardware unproven)
+
+The concrete build §5 has been circling. **Nothing here has run.**
+
+A board at the planer with no actuators at all: a C5, one SCT-013-030 on one hot,
+an indicator LED, and a Mean Well **RS-25-5** (88–264 VAC, isolated, listed).
+The supply is tapped **upstream of the planer's own switch** and the clamp sits
+**downstream** of it, which is the whole design in one sentence and buys three
+things at once:
+
+- **Conductor separation for free.** §5.4 killed clamping an intact cord, so the
+  CT has to go where the conductors are already apart — and inside the switch
+  compartment they are. No line splitter, no adapter box.
+- **The node's presence tracks the tool's power.** The planer is not energised
+  all the time, so the board comes and goes with it. See below.
+- **A guaranteed-valid floor at boot** — §5.4b.
+
+No neutral is needed and never was: that only constrains non-isolated droppers,
+which reference N. An isolated module wants two points 240 V apart, and L1–L2 is
+two points 240 V apart.
+
+**This knowingly departs from §5.1, and §5.1 still stands as the PRODUCT rule.**
+§5.1 says keep mains out of the enclosure entirely and feed the board from a USB
+brick in a nearby 120 V outlet, because an object that does not touch mains is a
+materially different object for certification and insurance. That is still the
+right answer for anything shipped. This build takes the other road deliberately,
+in Jeff's own shop, with a listed supply doing exactly what it is listed for —
+and in exchange gets the tool-tracking and boot-floor properties above, which the
+USB-brick version cannot have at any price. A shipped version would either find a
+120 V outlet or pay for the certification; it would not pretend this is the same
+object.
+
+**One physical gotcha: RF.** A C5 inside a grounded steel switch enclosure bolted
+to a cast-iron planer is a Faraday cage. The board goes in a plastic box away
+from the motor, with mains and the CT lead run into it.
+
+Inrush is not readable — it saturates the 30 A clamp and `isRailed()` cannot see
+it. Irrelevant to a one-bit answer; do not build anything on starting current.
+
+#### 5.6a Absent means off
+
+The planer loses power regularly, so **a node that is not reporting means the
+tool is off.** That is the correct default because of which way it fails: a tool
+wrongly believed off means the gate does not open and the shop gets dusty, where
+the opposite default runs the collector forever. Nothing about it can dead-head
+anything either — idle leaves the gate where it is, so a vanished node simply
+stops participating in most-recent-tool-wins.
+
+The cost is that absent-is-off is **also what a crashed board, a dead PSU, a WiFi
+dropout and a router reboot look like**, and the symptom is the tool running with
+no collection and nothing saying why. The fix is not to change the default but to
+make the expectation explicit: a per-controller "comes and goes" flag in the
+topology. A board carrying it going quiet is normal and silent; a board without
+it going quiet is still a fault the UI shows. Without that flag the existing
+node-offline treatment fires every time the planer is switched off at the wall,
+which is how a real fault gets trained away.
+
+The one genuine edge: flipping the planer's switch within a couple of seconds of
+energising the circuit, before the node has joined, loses the first moments of
+collection. Known, accepted.
+
+#### 5.6c BUILT, and what is still not proven (2026-09-15)
+
+**Everything in §5.6b now exists**, on both sides, in software. What has NOT
+happened is any of it running on a board.
+
+Built and covered by tests:
+
+- **`CONFIG` (P->S) and `SENSE` (S->P)** in `nodelink.js` and
+  `control/NodeLink.h`, with no `NODELINK_VERSION` bump — both ends ignore a
+  frame type they do not know, so every old/new combination degrades safely and
+  a bump would force a flash of every board in the shop to buy nothing.
+- **`sensor.ct` on a tool** in topology.js, validated. It is a SIBLING of
+  `sensor.outlet` rather than a field on it, because a clamp is addressed by
+  `controllerId` and a plug by IP. §5.4b is enforced by SHAPE here:
+  `thresholdW` lives on `sensor.outlet`, so a CT-sensed tool has nowhere to put
+  one.
+- **The primary pushes and consumes.** `TopologyRuntime` builds a CONFIG per
+  board on adopt, and turns each reported bit into a SYNTHETIC WATTAGE — exactly
+  as `setMachineManual()` does, so the routing brain keeps one notion of
+  "active" and CT tools take part in most-recent-wins, coast-down and the
+  dead-head rule without any of it being taught twice.
+- **`RemoteActuatorBus` caches the CONFIG** and re-sends it on every accepted
+  WELCOME. Load-bearing for this board specifically: it is powered from the tool
+  it watches, so it reboots every time the planer is switched off at the wall,
+  and a config sent once at adopt would be forgotten on the first power cut.
+- **The node decides the bit** — floor learnt once the bias has settled, trip at
+  `max(floor x 4, 8 counts)`, reported on change and every `kSenseRepeatMs`.
+- **`mock-node.js` speaks both frames**, and the NodeLink conformance suite
+  drives a real socket through configure -> report -> clear -> refuse-a-non-owner.
+
+**THE SENSOR ID IS THE ELEMENT ID**, which is why there is no lookup table
+anywhere: CONFIG carries it out, SENSE echoes it back, and what comes home is
+already the machine id to act on.
+
+Two bugs the tests caught, both of the silent-failure kind this whole design is
+trying to avoid:
+
+- A board answers to BOTH `""` and its own controllerId, so the config push
+  configured the local bus twice and the empty second push erased the first.
+- `syncControllerAliases()` runs AFTER `adopt()`, so the first push could not
+  resolve a remote board. A CT on the primary would have worked and a CT on a
+  node would have been silent forever — exactly the asymmetry that reads as a
+  flaky board rather than a bug.
+
+**Not proven, and none of it is small:**
+
+- **Nothing has run on hardware.** No board has ever sent a SENSE.
+- **`kTripRatio` (4x) and `kMinTripCounts` (8) are guesses.** The clamp's SCALE
+  is confirmed to ~1% (§5.5a); its FLOOR is not, and the perfboard rigs were
+  just rebuilt from 10k/10k to 1k/1k with nothing re-measured on them. Re-derive
+  both before trusting this on a tool that matters.
+- **Stale is treated as off.** A board still answering PINGs but no longer
+  reporting is a FAULT, and there is nowhere to show it yet — see §5.6a.
+- **`intermittent` is validated and unused.** Nothing reads it, so a node
+  powered from its tool still raises the ordinary offline warning every time the
+  planer is switched off.
+
+One thing that did NOT happen, and is worth recording because the variant count
+is a live worry: **this added no build target.** `PIN_CT` is in the C5 board
+header, so the plain `xiao_c5` node compiles the sensing path too — which
+incidentally makes the "single-servo + CT board" in the TODO a layout choice
+rather than a tenth env.
+
+#### 5.6b What this needs that does not exist
+
+The hardware is the easy half. Three gaps, in the protocol and the model:
+
+1. **NodeLink has no inbound sensor direction.** The frames are HELLO / WELCOME /
+   SET / ACK / STATE / PING / PONG, and `STATE` means "a selector reached a
+   state". Nothing carries a reading or an event from node to primary. Bin
+   sensing never exposed this because it runs on the primary.
+2. **A node is given no topology, by design** (the header of `nodelink.js`), so
+   it has nowhere to be told it has a CT, on which pad, or what to do about it.
+   `WELCOME` needs a small **node-scoped config block** — explicitly not
+   topology: no elements, no routing, no vocabulary the primary could change
+   underneath it. That one addition absorbs this node, a bin sensor on a node,
+   and whatever the next sensor is, instead of each inventing a bespoke frame.
+3. **A tool's `sensor` is `{ outlet }` only**, IP-addressed and HTTP-polled. A CT
+   is addressed by `controllerId`, not an IP. The shape to copy already exists
+   and is already validated: `bin.sensor: { kind, controllerId, invert }`, where
+   an absent `controllerId` means "this board".
+
+(1) and (2) are one change and should be designed together, with the §5.6a flag
+folded in. Both sides get pairs — `nodelink.test.js` ↔ `test_nodebus.cpp`.
+
+A controller with zero selectors should already validate, since controllers are
+only referenced *by* selectors and the per-host limits are counts. Worth a spec
+case to pin it down rather than assuming it.
+
+**Where the decision happens matters.** If the node ships raw RMS, the primary
+pays a round trip per sample for a question that is one bit. If the node trips
+and sends an edge, the wire is cheap and the latency is good. Take the second —
+and note that this makes the CT node the **second node with a brain**, for the
+slider's reason at a different time constant. That is the rule in `nodelink.js`'s
+header working as intended, not an erosion of it.
 
 ## 6. One seam, not two: emulate Tasmota
 
