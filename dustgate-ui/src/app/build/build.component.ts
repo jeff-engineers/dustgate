@@ -1145,25 +1145,58 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   /** IPs already spoken for, anywhere in the shop — a machine's sensor or the
    *  collector's switch. One physical plug driving two things would make the brain
    *  believe two machines started at once. */
-  private claimedIps(): Set<string> {
-    const out = new Set<string>();
+  /**
+   * Every claimed plug, and WHAT CLAIMED IT.
+   *
+   * A Set until 2026-09-16, which was enough to hide a claimed plug and not
+   * enough to explain it — and hiding is what made a working sweep look like a
+   * failed one: the plug was found, filtered, and the tray said "all paired".
+   *
+   * A COLLECTOR'S SENSE-ONLY PLUG WAS NEVER COUNTED. This read only
+   * `control.outlet`, so a blower watched by a no-relay meter — which is the
+   * arrangement the RFC now prefers, since every way we command a collector is
+   * stateless — left its plug looking unclaimed. The tray offered it, and
+   * dropping it on another machine would have quietly re-pointed the one thing
+   * telling us whether the blower actually started. `outletOf()` in shop-doc
+   * has always read both slots; this did not.
+   */
+  private claimedBy(): Map<string, string> {
+    const out = new Map<string, string>();
     if (!this.topo) return out;
     const doc = this.topo as unknown as ShopDoc;
+    const put = (ip: unknown, name: string): void => {
+      if (typeof ip === 'string' && ip) out.set(ip, name);
+    };
     for (const m of machinesOf(doc)) {
-      const ip = ((m.sensor as RawEl | undefined)?.['outlet'] as RawEl | undefined)?.['ip'] as string | undefined;
-      if (ip) out.add(ip);
+      put(((m.sensor as RawEl | undefined)?.['outlet'] as RawEl | undefined)?.['ip'],
+          (m.name as string) || (m.id as string));
     }
     for (const e of this.allElems()) {
-      if ((e as RawEl)['type'] !== 'collector') continue;
-      const ip = (((e as RawEl)['control'] as RawEl | undefined)?.['outlet'] as RawEl | undefined)?.['ip'] as string | undefined;
-      if (ip) out.add(ip);
+      const el = e as RawEl;
+      if (el['type'] !== 'collector') continue;
+      const name = (el['name'] as string) || 'the collector';
+      // BOTH SLOTS. control is the plug we switch; sensor is the plug that
+      // tells us it worked. Either one claims the address.
+      put(((el['control'] as RawEl | undefined)?.['outlet'] as RawEl | undefined)?.['ip'], name);
+      put(((el['sensor']  as RawEl | undefined)?.['outlet'] as RawEl | undefined)?.['ip'], name);
     }
     return out;
   }
 
   freeOutlets(): DiscoveredOutlet[] {
-    const claimed = this.claimedIps();
+    const claimed = this.claimedBy();
     return this.outlets.filter(o => !claimed.has(o.ip));
+  }
+
+  /** Plugs the sweep found that are already on something, with the name of what
+   *  has them. Shown greyed rather than hidden: "we found it, it is spoken for"
+   *  answers the question a missing chip raises, and it is the answer that stops
+   *  someone sweeping again looking for a plug that was never lost. */
+  claimedOutlets(): Array<DiscoveredOutlet & { owner: string }> {
+    const claimed = this.claimedBy();
+    return this.outlets
+      .filter(o => claimed.has(o.ip))
+      .map(o => ({ ...o, owner: claimed.get(o.ip) as string }));
   }
 
   chipLevel(o: DiscoveredOutlet): 'idle' | 'standby' | 'live' {

@@ -470,15 +470,22 @@
       </svg>
       <span class="nm">Clamp · {{ b.name }}</span>
     </button>
-    <!-- "all paired" could not tell "the network is empty" from "we found your
-         plug and it is already on a machine" — and those send you to opposite
-         places. The second is the likelier one on a wired shop, and reading it
-         as the first is how a sweep that WORKED looks like a sweep that
-         failed. -->
-    <span class="tray-empty" *ngIf="!freeOutlets().length && !freeClamps().length">
-      {{ !scanned ? 'none found yet'
-         : outlets.length ? 'all ' + outlets.length + ' already on machines'
-         : 'nothing answered' }}
+    <!-- CLAIMED PLUGS, GREYED AND NAMED. Hidden entirely until 2026-09-16,
+         which made a working sweep look like a failed one: the plug was found,
+         filtered out, and the tray said "all paired" — so the obvious next move
+         was to sweep again for something that was never lost. Showing it with
+         the machine that has it answers the question instead.
+
+         Not draggable. It is already somewhere; moving it is a repairing, and
+         that belongs on the machine it is on, not on a chip in a tray. -->
+    <span *ngFor="let o of claimedOutlets()" class="chip taken"
+          [title]="(o.name || o.hostname) + ' · ' + o.ip + ' — already on ' + o.owner + '. Open that machine to change it.'">
+      <svg class="face" viewBox="0 0 24 24"><rect class="shell" x="3.5" y="3.5" width="17" height="17" rx="5"/><rect class="slot" x="8.4" y="7.6" width="2.1" height="5.6" rx="1"/><rect class="slot" x="13.5" y="7.6" width="2.1" height="5.6" rx="1"/><circle class="slot" cx="12" cy="16.4" r="1.5"/></svg>
+      <span class="nm">{{ o.name || o.hostname }}</span>
+      <span class="on-m">on {{ o.owner }}</span>
+    </span>
+    <span class="tray-empty" *ngIf="!freeOutlets().length && !freeClamps().length && !claimedOutlets().length">
+      {{ scanned ? 'nothing answered' : 'none found yet' }}
     </span>
   </div>
   <button class="act primary" [disabled]="!canMatch()" (click)="matchByName()">Match</button>
