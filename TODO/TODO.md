@@ -64,16 +64,64 @@ reasoning was contested, or that a still-open item above leans on.
   C only with evidence.
 
 
-- **Re-measure the CT on the rebuilt divider (jeff, 2026-09-14).** The perfboard
-  rigs were rebuilt from 10 kΩ/10 kΩ + 10 µF to **1 kΩ/1 kΩ + 100 nF** — RFC
-  §5.5's fix, which has never been validated. Everything on `ct-bench.md` was
-  measured on the OLD divider and its parts table is now flagged stale.
+- **A tool that idles LOUDLY needs a threshold, and the schema has nowhere to put
+  one (jeff's friend, via jeff, 2026-09-16).** §5.4b concluded there is nothing
+  to threshold, because every tool measured has a standby under the noise floor.
+  **A CNC router breaks that**: servos at stall current plus a PC, drawing real
+  continuous current while cutting nothing. The gate must not open for that, and
+  the signal of interest is the step UP when it starts cutting.
 
-  Retake the noise floor and the measured-loads table on the new hardware, then
-  rewrite that page's parts row and load section TOGETHER. The specific question
-  §5.5 asks: does the floor still move with the screen on? The tool node has no
-  screen, so if the answer is "no longer", that is two variables resolved at
-  once and §5.5 can close.
+  The shape, from §5.4d: **optional** `sensor.ct.thresholdA`, absent keeping
+  today's floor-relative trip, **in amps and never watts** (§5.4c measured a PF
+  of 0.66 on the collector — a watt threshold would be 34% out). It rides CONFIG
+  to the node as a resolved number, which does not breach `nodelink.js`'s
+  invariant: the node compares, it does not interpret.
+
+  Two open bits beyond the field itself. **Where the number comes from** — asking
+  a woodworker for amps is a poor screen, so a "learn while idling" button that
+  records the draw and trips above it is likelier. And **hysteresis**, since a cut
+  is not continuous; the collector's coast-down may already cover it.
+
+  The work this displaces: `collector-doc.spec.ts` currently ASSERTS a CT-sensed
+  element carries no threshold anywhere, and `test_nodebus.cpp` asserts the CONFIG
+  sensor spec is exactly id+kind+channel. Both were right for §5.4b and both have
+  to change.
+
+- **The GUI sweep did not find a Tasmota that was there (jeff, 2026-09-16).**
+  The plug answered fine at **192.168.87.44** — found from bash, confirmed by
+  `curl /cm?cmnd=Status%208` returning a full ENERGY block — and
+  `POST /api/outlets/sweep` did not turn it up.
+
+  **Not a range problem:** `OutletSweep.h` knocks on `<prefix>.1 .. .254`, so .44
+  is covered. That leaves the timeout, the knock/ask split, or the prefix — and
+  the prefix is worth checking first, since the collector was running
+  DISCONNECTED from the shop system at the time (see below) and a board on a
+  different /24 would sweep the wrong subnet entirely and report a clean miss.
+
+  **This is the first real test of the two-phase sweep** ("Knock first, then ask:
+  the sweep's one timeout was two jobs", 00d4676), which landed unverified
+  because the plug was off the network that day. It has now been exercised once
+  and failed once. A Tasmota has no mDNS to fall back on — the sweep is the ONLY
+  way to find one — so a sweep that misses is a plug the UI cannot reach at all.
+
+- **Bench context: the collector runs STANDALONE while the shop is replumbed
+  (jeff, 2026-09-16).** Disconnected from the shop system, which is the most
+  stable arrangement mid-replumb. Worth recording because it colours every
+  measurement taken now: no NodeLink traffic, no nodes, one board being its own
+  brain. The 0.195 A noise floor was measured in that state — so whatever is
+  making it, it is NOT node chatter, and the quieter radio makes the number a
+  floor-of-floors rather than a worst case.
+
+- **~~Re-measure the CT on the rebuilt divider~~ DONE 2026-09-16.** Scale held
+  (+1.50% vs the Tasmota, against +0.94% before), the screen's contribution fell
+  from ~80% of the floor to 11%, and the floor underneath is the C5 ADC's own
+  noise — shorting the CT out does not move it. **§5.5 is closed** (§5.5b), and
+  the `Hz` column was found to report a fraction of the sample rate when fed
+  noise, which wasted an hour. `ct-bench.md`'s parts table is no longer stale.
+
+  What is left is optional and deliberately unbuilt: a 60 Hz demodulator would
+  take the floor down 10-20x, and nothing needs it while a running collector
+  sits 63x above it.
 
 - **Pick a CHANNEL on a multi-channel Tasmota meter (2026-09-10; half done
   2026-09-14).** `TasmotaOutlet::doPoll()` now DETECTS `Power` as an array and
