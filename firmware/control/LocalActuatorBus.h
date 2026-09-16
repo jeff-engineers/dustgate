@@ -28,6 +28,7 @@
 #include <Arduino.h>
 #include "../config.h"
 #include "ActuatorBus.h"
+#include "NodeLink.h"       // kMaxSensorsPerNode / kMaxSensorIdLen — one cap, both sides of the seam
 #include "TopologyRouter.h"   // topo::servoCommandAngle, topo::_eq
 
 #if defined(ENABLE_SERVO) && defined(SERVO_PWM_PIN_1)
@@ -103,6 +104,75 @@ public:
 #endif
     }
 
+    // ── SENSORS ON THIS BOARD'S OWN PADS ────────────────────────────────
+    //
+    // A clamp wired to the BRAIN, which is the ordinary case for a collector:
+    // the board at the cyclone watches the blower it also commands. Before this
+    // existed, ActuatorBus's no-op stubs swallowed the whole path — the primary
+    // pushed its own specs to `""`, they landed nowhere, and pollSensors() read
+    // absent-therefore-off forever, silently. Only clamps on a REMOTE board
+    // worked.
+    //
+    // The sketch owns the ADC and ticks sensing::CtTrip (one copy, shared with
+    // the node — see sensing/CtTrip.h); this class only remembers which sensorIds
+    // the layout put on this board and what the last answer was. It deliberately
+    // does NOT touch CtSensor: this header is included by host tests that have no
+    // Arduino ADC, and the seam is the same one RemoteActuatorBus sits behind.
+    void configureSensors(JsonArrayConst sensors) override {
+        _senseCount = 0;
+        for (JsonObjectConst sen : sensors) {
+            if (_senseCount >= nodelink::kMaxSensorsPerNode) break;
+            const char* id = sen["sensorId"] | "";
+            if (!*id) continue;
+            strlcpy(_senseIds[_senseCount], id, sizeof(_senseIds[0]));
+            _senseOn[_senseCount] = false;
+            _senseCount++;
+        }
+        // atMs stays 0 until something is actually measured, so a configured but
+        // never-sampled sensor reads as NOT REPORTED rather than as off. The two
+        // are different: pollSensors() treats both as off today, and the day it
+        // stops it must not be lied to here.
+        _senseAtMs = 0;
+    }
+
+    bool senseOf(const char* sensorId, bool& on, uint32_t& atMs) const override {
+        if (!sensorId || !_senseAtMs) return false;
+        for (size_t i = 0; i < _senseCount; i++) {
+            if (strcmp(_senseIds[i], sensorId) != 0) continue;
+            on = _senseOn[i]; atMs = _senseAtMs;
+            return true;
+        }
+        return false;
+    }
+
+    // Called by the sketch after each CtTrip tick. ONE CLAMP, ONE PAD: every
+    // sensor configured onto this board reads the same ADC, exactly as on a
+    // node. When a second analog pad exists, this is where it branches.
+    void setSense(bool on, uint32_t atMs, float level = -1.0f) {
+        for (size_t i = 0; i < _senseCount; i++) _senseOn[i] = on;
+        _senseAtMs  = atMs ? atMs : 1;   // 0 means "never reported"
+        _senseLevel = level;
+    }
+
+    // Same enumeration RemoteActuatorBus offers, so GET /api/nodes can report
+    // the board it is running on exactly like any other. See senseAt() there.
+    size_t senseCount() const { return _senseCount; }
+    bool senseAt(size_t i, String& id, bool& reported, bool& on,
+                 uint32_t& ageMs, float& level) const {
+        if (i >= _senseCount) return false;
+        id       = _senseIds[i];
+        reported = _senseAtMs != 0;
+        on       = _senseOn[i];
+        ageMs    = reported ? (uint32_t)(millis() - _senseAtMs) : 0;
+        level    = _senseLevel;
+        return true;
+    }
+
+    // Is anything actually watching? The sketch skips the whole sampling window
+    // when nothing is configured — the read busy-waits, and a board with no
+    // clamp in the layout should not spend 60 ms in four times a second.
+    bool sensesAnything() const { return _senseCount > 0; }
+
 private:
     bool driveServo(JsonObjectConst sel, const char* stateId) {
 #if defined(ENABLE_SERVO) && defined(SERVO_PWM_PIN_1)
@@ -137,6 +207,14 @@ private:
     ServoActuator* _servos[SERVO_COUNT] = { nullptr };
 #endif
     LinearDrive* _linear = nullptr;
+
+    // Sized by the same cap the wire uses, so a layout that a NODE would refuse
+    // cannot be silently truncated here instead.
+    char     _senseIds[nodelink::kMaxSensorsPerNode][nodelink::kMaxSensorIdLen] = {};
+    bool     _senseOn[nodelink::kMaxSensorsPerNode] = { false };
+    size_t   _senseCount = 0;
+    uint32_t _senseAtMs  = 0;   // 0 = nothing measured yet
+    float    _senseLevel = -1.0f;   // multiple of the trip point; diagnostic only
 };
 
 } // namespace topo

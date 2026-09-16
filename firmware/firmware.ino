@@ -40,7 +40,8 @@
 #include "control/RfCollectorPresser.h"    // ...and the one presser that exists
 #include "control/RfAddressGuess.h"        // the four ways a DIP gets copied wrong
 #ifdef PIN_CT
-  #include "sensing/CtSensor.h"           // `ct` — the clamp, on a collector board
+  #include "sensing/CtSensor.h"     // `ct` — the clamp on this board's own pad
+  #include "sensing/CtTrip.h"       // ...and the one shared "is it running?"
 #endif   // the 254-address knock, one address per loop() pass
 #include "control/FaultPolicy.h"   // which begin() failure costs which capability
 #include "training/CalibrationStore.h"
@@ -600,6 +601,7 @@ static const float kFarConfirmMinTravelMm = 10.0f;
 // nothing above this line — that's the whole point of the seam.
 // =============================================================================
 #include "control/LocalActuatorBus.h"
+#include "control/SenseReport.h"   // addSenseArray() — why it is not in this file is in that one
 #include "control/NodeBus.h"
 #include "control/RemoteActuatorBus.h"
 #include "control/TopologyRuntime.h"
@@ -641,14 +643,29 @@ static topo::BinDebounce       g_binDebounce;
 // has arrived — the clock would be permanently, invisibly correct and would
 // never do its job on the path that needs it.
 static CtSensor g_ct(PIN_CT);
+
+// The decision on top of that measurement, and the SAME copy the node runs —
+// see sensing/CtTrip.h for why this is not a second implementation. A clamp on
+// the primary's own board is the ordinary collector case: the board at the
+// cyclone watches the blower it also commands.
+static sensing::CtTrip g_ctTrip;
 #endif
 static topo::TopologyRuntime  g_topoRuntime;
 static topo::TopologyStore    g_topoStoreSketch;   // read-only view; the API server owns writes
 
 // Secondary links. A fixed pool rather than dynamic allocation: each one owns a
-// FreeRTOS task and a socket, and the RFC caps the design at 2–4 nodes — so the
-// worst case is three secondaries plus this board.
-#define MAX_SECONDARY_NODES 3
+// FreeRTOS task and a socket.
+//
+// TEN since 2026-09-16, up from three. Three came from the RFC's "2–4 nodes",
+// which assumed a board per WALL driving four gates each. The shop that actually
+// got drawn puts a board on each MACHINE — six secondaries plus a sense-only
+// board on the planer — and the old cap did not complain: syncPairedNodes just
+// stopped at three and the rest of the shop reported un-commandable gates.
+// Whatever the ceiling is, it must be a number a real layout cannot quietly
+// exceed. Ten costs ~40 KB of task stack if every slot is filled
+// (kNodeLinkTaskStack, RemoteActuatorBus.cpp) plus a socket each; only slots
+// that DIAL cost anything, so an empty slot is the array entry alone.
+#define MAX_SECONDARY_NODES 10
 static topo::RemoteActuatorBus g_remoteBuses[MAX_SECONDARY_NODES];
 static int                     g_remoteCount = 0;
 
@@ -669,6 +686,7 @@ static topo::NodeRegistry      g_nodeRegistry;
 // against the socket, and losing it would silently drop the one thing the user
 // explicitly asked for.
 static String g_pendingTakeoverHost;
+
 
 static void syncPairedNodes(const char* primaryId) {
     g_nodeBus.clearRemotes();
@@ -832,7 +850,24 @@ static void syncTopologyOutlets() {
         // The transmitter that presses this blower's remote, if it has one.
         JsonObjectConst rf = g_topoRuntime.collectorRf(sysIds[i]);
         if (!rf.isNull()) {
+            // AN ABSENT `pin` MEANS THIS BOARD'S OWN PAD, since 2026-09-16, and
+            // that is now the normal case — no screen asks for a GPIO, because
+            // which pad keys the transmitter is a fact about how the BOARD is
+            // built, not about the shop.
+            //
+            // It used to be required, so the UI had to supply the number and
+            // every layout ever written baked it in. That made DEFAULT_RF_PIN
+            // (collector-doc.ts) a cross-language pair with PIN_RF_TX and meant
+            // moving the pad silently stranded every existing layout on the old
+            // GPIO — which is exactly what moving it from D9 to D10 would have
+            // done. Falling back here deletes the pair and the migration at once.
+            //
+            // An EXPLICIT pin still wins, for a board wired by hand.
+#if HAS_RF
+            const int pin = rf["pin"] | (int)PIN_RF_TX;
+#else
             const int pin = rf["pin"] | -1;
+#endif
             if (pin >= 0) {
                 g_pressers[i] = new RfCollectorPresser(
                     pin,
@@ -2039,6 +2074,36 @@ void loop() {
 #if defined(ENABLE_SERVO) && defined(SERVO_PWM_PIN_1)
     // Effect any deferred servo auto-detach (move-then-detach; see ServoActuator).
     for (int i = 0; i < SERVO_COUNT; i++) g_servos[i].update();
+#endif
+
+#ifdef PIN_CT
+    // ── A clamp on THIS board ───────────────────────────────────────────────
+    //
+    // The primary half of what a node does in tickSensors(), and deliberately
+    // the same shape: CtTrip owns the cadence, the settle gate, the floor and
+    // the trip point, and what is left here is only where the answer goes. On a
+    // node it becomes a SENSE frame; here it goes straight into the local bus,
+    // where TopologyRuntime::pollSensors() reads it through the same senseOf()
+    // seam it uses for a remote board.
+    //
+    // Skipped entirely when the layout put no clamp on this board — the read
+    // busy-waits for its whole 60 ms window, and a gate board with no clamp has
+    // no business spending that four times a second.
+    if (g_localBus.sensesAnything()) {
+        const sensing::CtTrip::Tick t =
+            g_ctTrip.update(g_ct, millis(), g_localBus.busy(), &watchdog::pet);
+        if (t.sampled) {
+            static bool known = false, last = false;
+            g_localBus.setSense(t.on, millis(), t.level);
+            if (!known || last != t.on) {
+                DEBUG_PRINT(F("[CT] local clamp "));
+                DEBUG_PRINT(t.on ? F("ON  ") : F("off "));
+                DEBUG_PRINT(t.rmsCounts); DEBUG_PRINT(F(" counts, trip "));
+                DEBUG_PRINTLN(t.trip);
+                known = true; last = t.on;
+            }
+        }
+    }
 #endif
 
 #if HAS_BIN
@@ -3804,7 +3869,17 @@ void loop() {
             static unsigned long lastNodePublishMs = 0;
             if (millis() - lastNodePublishMs >= V2_STATUS_PUBLISH_MS) {
                 lastNodePublishMs = millis();
-                DynamicJsonDocument nodes(1024);
+                // 4096, up from 1024 on 2026-09-16, for TWO reasons that
+                // compound. MAX_SECONDARY_NODES went 3 → 10 the same day, and
+                // each node now also carries a `sense` array. At 1024 a shop
+                // with six boards overflows — and ArduinoJson does not fail on
+                // overflow, it SILENTLY DROPS whatever did not fit, newest
+                // members first. That is exactly how `caps.ct` went missing on
+                // 2026-09-15: a 256-byte doc, a three-member caps object, and a
+                // board that reported no clamp while insisting it had one.
+                // The symptom here would be boards vanishing from the end of the
+                // Boards screen, which reads as a pairing fault.
+                DynamicJsonDocument nodes(4096);
                 JsonArray arr = nodes.createNestedArray("nodes");
                 for (int i = 0; i < g_remoteCount; i++) {
                     topo::RemoteActuatorBus::NodeInfo n = g_remoteBuses[i].info();
@@ -3825,6 +3900,7 @@ void loop() {
                     // "no clamp", so the UI's empty tray is the correct empty
                     // state rather than a feature nobody switched on.
                     if (n.capClamps > 0) caps["ct"] = n.capClamps;
+                    topo::addSenseArray(o, g_remoteBuses[i]);
                     // A node that belongs to ANOTHER primary is offline to us on
                     // purpose. Without naming its owner here, that is
                     // indistinguishable from a dead board — and the difference
@@ -3857,6 +3933,7 @@ void loop() {
 #ifdef PIN_CT
                     sc["ct"] = 1;
 #endif
+                    topo::addSenseArray(self, g_localBus);
                 }
                 String nodeBody; serializeJson(nodes, nodeBody);
                 apiServer.publishNodeStatus(nodeBody);

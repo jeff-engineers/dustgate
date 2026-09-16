@@ -105,6 +105,7 @@
 #include "../motor/ServoSelfTest.h"   // and, held for a second, sweeps every servo
 #ifdef PIN_CT
 #include "../sensing/CtSensor.h"      // a clamp, on a board that watches a tool
+#include "../sensing/CtTrip.h"        // ...and the one shared answer to "is it running?"
 #endif
 
 #if HAS_LINEAR
@@ -304,40 +305,13 @@ static size_t   g_sensorCount = 0;
 static bool     g_senseOn[topo::nodelink::kMaxSensorsPerNode] = { false };
 static bool     g_senseKnown = false;
 static uint32_t g_lastSenseMs = 0;
-static uint32_t g_lastSampleMs = 0;
 
-// How often the clamp is actually SAMPLED, as opposed to reported.
-//
-// Sampling is the expensive part: CtSensor::read() busy-waits for its whole
-// window, so reading every loop() pass would hand a quarter of this board's time
-// to the ADC and coarsen every servo sweep it also has to drive. 250 ms puts
-// worst-case detection at ~310 ms, comfortably inside the 500 ms the RFC asks of
-// a tool-on event and irrelevant beside the collector's 4 s spin-up grace.
-static constexpr uint32_t kSampleIntervalMs = 250;
-static constexpr uint32_t kSampleWindowMs   = 60;   // ~3.5 cycles at 60 Hz
-
-// The board's own floor, learned once the bias has settled, and the trip point
-// derived from it. RFC §5.4b: the baseline is OUR NOISE, not the tool's
-// standby, because standby is under the floor on every tool measured.
-static float    g_floorCounts = 0.0f;
-static bool     g_floorLearnt = false;
-
-// ⚠️ PROVISIONAL, BOTH OF THEM. The clamp's SCALE is confirmed to ~1%
-// (RFC §5.5a) but the FLOOR is not — the perfboard rigs were just rebuilt from
-// 10k/10k to 1k/1k and nothing has been re-measured on them yet (see TODO).
-// These are sized to be obviously safe rather than tight:
-//
-//   kTripRatio     4x the learned floor. The measured gap between a quiet board
-//                  and a running motor was ~80x, so 4 is not a close call.
-//   kMinTripCounts an absolute guard, because a ratio against a floor that
-//                  learns near zero trips on nothing. ~8 counts is roughly
-//                  0.24 A on this clamp — far below any real tool, far above
-//                  the quantisation floor.
-//
-// Re-derive both from the rebuilt divider before trusting this on a tool that
-// matters.
-static constexpr float kTripRatio     = 4.0f;
-static constexpr float kMinTripCounts = 8.0f;
+// The sampling cadence, the floor and the trip point all live in
+// sensing/CtTrip.h — ONE copy, shared with the primary, which needs the identical
+// decision for a clamp wired to the brain's own board. Read that file before
+// changing any of it; the two provisional numbers are in there with their
+// reasoning.
+static sensing::CtTrip g_ctTrip;
 #endif
 
 static void loadClaim() {
@@ -753,42 +727,12 @@ static void onNodeWsEvent(AsyncWebSocket*, AsyncWebSocketClient* client,
 static void tickSensors() {
     if (!g_sensorCount) return;
 
-    // NOTHING IS MEASURED BEFORE THE BIAS ARRIVES. A midpoint still charging
-    // makes every sample ride a moving reference, and the floor learnt from it
-    // would be wrong for the whole session — wrong HIGH, so a running tool
-    // reads as idle. isRailed() cannot catch it; a charging midpoint passes
-    // straight through the healthy band. See CtSensor::kBiasSettleMs.
-    if (!g_ct.settled()) return;
-
-    // NOT WHILE A GATE IS MOVING. A blocking sample in the middle of a sweep
-    // makes the sweep jerk, and the information is worthless anyway: if this
-    // board is moving a gate then the collector is already running. The tool is
-    // noticed a couple of seconds later, which nothing downstream can tell.
-    if (actuatorMoving()) return;
-
-    const uint32_t nowMs = millis();
-    if (g_lastSampleMs && (uint32_t)(nowMs - g_lastSampleMs) < kSampleIntervalMs) return;
-    g_lastSampleMs = nowMs;
-
-    watchdog::pet();
-    const CtSensor::Reading r = g_ct.read(kSampleWindowMs);
-    watchdog::pet();
-    if (!r.valid || r.settling || CtSensor::isRailed(r)) return;
-
-    // THE FLOOR IS THIS BOARD'S OWN NOISE, learnt once (RFC §5.4b). The wiring
-    // guarantees it is valid: the supply is tapped UPSTREAM of the tool's own
-    // switch and the clamp sits downstream, so at boot the motor is off by
-    // construction and there is nothing on the clamped conductor to measure.
-    if (!g_floorLearnt) {
-        g_floorCounts = r.rmsCounts;
-        g_floorLearnt = true;
-        Serial.print(F("[CT] floor learnt: ")); Serial.print(g_floorCounts, 1);
-        Serial.println(F(" counts — everything above this is a running tool."));
-    }
-
-    const float trip = (g_floorCounts * kTripRatio) > kMinTripCounts
-                     ? (g_floorCounts * kTripRatio) : kMinTripCounts;
-    const bool on = r.rmsCounts > trip;
+    // The settle gate, the moving-actuator hold, the cadence, the floor and the
+    // trip point are all CtTrip's — see sensing/CtTrip.h. What is left here is
+    // the only part that is a NODE's business: turning the bit into a frame.
+    const sensing::CtTrip::Tick t =
+        g_ctTrip.update(g_ct, millis(), actuatorMoving(), &watchdog::pet);
+    if (!t.sampled) return;
 
     const uint32_t now = millis();
     // ON CHANGE, and again every kSenseRepeatMs. The change is what makes a tool
@@ -798,19 +742,18 @@ static void tickSensors() {
     for (size_t i = 0; i < g_sensorCount; i++) {
         // One clamp, one pad: every configured sensor on this board reads the
         // same ADC today. When a second pad exists this is where it branches.
-        const bool changed = (g_senseOn[i] != on) || !g_senseKnown;
+        const bool changed = (g_senseOn[i] != t.on) || !g_senseKnown;
         if (!changed && !due) continue;
-        g_senseOn[i] = on;
+        g_senseOn[i] = t.on;
         StaticJsonDocument<192> doc;
-        topo::nodelink::buildSense(doc.to<JsonObject>(), g_sensors[i].sensorId, on,
-                                   trip > 0.0f ? r.rmsCounts / trip : -1.0f);
+        topo::nodelink::buildSense(doc.to<JsonObject>(), g_sensors[i].sensorId, t.on, t.level);
         String s; serializeJson(doc, s);
         nodeWs.textAll(s);
         if (changed) {
             Serial.print(F("[CT] ")); Serial.print(g_sensors[i].sensorId);
-            Serial.print(on ? F(" ON  ") : F(" off "));
-            Serial.print(r.rmsCounts, 1); Serial.print(F(" counts, trip "));
-            Serial.println(trip, 1);
+            Serial.print(t.on ? F(" ON  ") : F(" off "));
+            Serial.print(t.rmsCounts, 1); Serial.print(F(" counts, trip "));
+            Serial.println(t.trip, 1);
         }
     }
     if (due) g_lastSenseMs = now;
@@ -1073,6 +1016,12 @@ static void updateStatusScreen() {
 void loop() {
     watchdog::pet();
     WiFiProvisioner::maintain();
+
+    // `provision {...}` over the USB cable. A node has no console and needs
+    // none — this is the ONE command the flashing tool sends, and without it
+    // `dev.sh flash-node <name>` prompted for a hostname, said it was flashing
+    // as that name, and silently did not write it. See pollSerialProvision().
+    WiFiProvisioner::pollSerialProvision();
 
     // REQUIRED, not housekeeping. ESPAsyncWebServer never reaps disconnected
     // WebSocket clients on its own — without this call they accumulate until the

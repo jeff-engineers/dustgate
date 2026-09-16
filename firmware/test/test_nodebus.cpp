@@ -105,6 +105,7 @@ static int drain(topo::TopologyRuntime& rt, std::vector<StubBus*> buses, int max
 int main(int argc, char** argv) {
   std::string dir = argc > 1 ? argv[1] : "firmware/test/fixtures/";
   std::string twoGatesJson = slurp(dir + "twoGates.json");
+  std::string twoSystemShopJson = slurp(dir + "twoSystemShop.json");
   if (twoGatesJson.empty()) { printf("bad twoGates.json\n"); return 2; }
 
   // ── one move at a time, in sequencer order ───────────────────────────────
@@ -676,6 +677,56 @@ int main(int argc, char** argv) {
     rt.writeStatus(st4.to<JsonObject>());
     ok("a manual override outranks an off CT", st4["tools"]["toolX"]["active"] == true);
     rt.setMachineManual("toolX", false);
+  }
+
+  // ── A CLAMP LIVES ON THE MACHINE, NOT ON THE PORT ───────────────────────
+  //
+  // THE SHAPE THE CONFIGURATOR ACTUALLY WRITES, and it went untested until
+  // 2026-09-16 — which is exactly how the shipping path stayed broken while
+  // every assertion above passed. The CT block before this one uses twoGates,
+  // a **v1** document, where a tool element IS its own machine (Shop.h
+  // machineDoc) — so reading `element.sensor.ct` worked there and nowhere else.
+  //
+  // In a v2 shop the clamp is on `machines[]`, exactly like `sensor.outlet`,
+  // because a machine is ONE box however many ports it has. TopologyRuntime read
+  // the element, found null for every tool the UI writes, and pushed an empty
+  // CONFIG. The node then never sampled and nothing reported a fault anywhere:
+  // a clamp paired in the app was silently inert.
+  //
+  // Two assertions, and the second is the one a v1 fixture can never make:
+  //   • the spec is named for the MACHINE, because that id comes back in SENSE
+  //     and goes straight into setMachinePower(), which is keyed by machine
+  //   • a two-port machine yields ONE spec, not one per port
+  {
+    DynamicJsonDocument sh(24576);
+    deserializeJson(sh, twoSystemShopJson);
+    for (JsonObject m : sh["machines"].as<JsonArray>()) {
+      if (!topo::_eq(m["id"], "table-saw")) continue;
+      m.remove("sensor");   // a plug AND a clamp on one machine is refused upstream
+      m.createNestedObject("sensor").createNestedObject("ct")["channel"] = 1;
+    }
+    std::string j; serializeJson(sh, j);
+
+    StubBus local; topo::NodeBus nb; topo::TopologyRuntime rt;
+    nb.setLocal(&local, "primary");
+    rt.begin(&nb);
+    std::string err;
+    ok("adopt a v2 shop with a clamp on a machine", rt.adopt(j.c_str(), j.size(), err), err);
+    ok("the CONFIG names the MACHINE, not the port",
+       joined(local.sensorCfg) == "table-saw@1", joined(local.sensorCfg));
+
+    // table-saw has a port in EACH system (ts-cabinet, ts-overarm). One clamp.
+    ok("a two-port machine sends ONE spec", local.sensorCfg.size() == 1,
+       std::to_string(local.sensorCfg.size()));
+
+    // And the id round-trips: what the node echoes back is what routes.
+    local.log.clear();
+    local.senses["table-saw"] = { true, 1000 };
+    rt.update(1000);
+    DynamicJsonDocument st(8192);
+    rt.writeStatus(st.to<JsonObject>());
+    ok("a SENSE keyed by machine id routes the machine",
+       st["tools"]["table-saw"]["active"] == true);
   }
 
   // ── a CLAMPED COLLECTOR feeds the plug path, not the machine path ───────

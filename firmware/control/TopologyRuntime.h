@@ -902,18 +902,40 @@ private:
             }
         }
         for (const std::string& cid : ids) {
-            DynamicJsonDocument doc(512);
+            // 1024, not 512. kMaxSensorsPerNode is 4 and a sensorId may be 48
+            // chars (kMaxSensorIdLen), so a full frame is 4 x (48-char string +
+            // three members + object overhead) — comfortably past 512 once
+            // ArduinoJson's per-member cost is counted. Overflow here does not
+            // fail: it SILENTLY DROPS members, and a dropped sensorId is a board
+            // that is deaf to one tool while reporting nothing wrong. Same
+            // failure that ate caps.ct on 2026-09-15 and would have eaten the
+            // tail of the board list on 2026-09-16.
+            DynamicJsonDocument doc(1024);
             JsonArray arr = doc.to<JsonArray>();
+            std::vector<std::string> sent;   // one spec per MACHINE, not per port
             for (const SystemView& sys : systemsOf(topology())) {
                 for (JsonObjectConst e : sys.elements) {
-                    JsonObjectConst ct = e["sensor"]["ct"];
+                    // THROUGH THE MACHINE — see clampOf() in Shop.h. Reading
+                    // e["sensor"]["ct"] here is what kept every clamp paired in
+                    // the configurator from ever reaching its node.
+                    JsonObjectConst ct = clampOf(topology(), e);
                     if (ct.isNull()) continue;
                     // Absent controllerId means THIS BOARD — the same rule as
                     // the bin sensor, every selector, and NodeBus itself.
                     const std::string owner = ct["controllerId"] | "";
                     if (!sameBoard(cid, owner)) continue;
+                    // A machine is ONE box however many ports it has, so a saw
+                    // with an overarm must not send two specs for one clamp —
+                    // kMaxSensorsPerNode is small and the node would refuse the
+                    // whole frame rather than the duplicate.
+                    const std::string sid = sensedIdOf(e);
+                    if (sid.empty()) continue;
+                    bool dup = false;
+                    for (const std::string& seen : sent) if (seen == sid) { dup = true; break; }
+                    if (dup) continue;
+                    sent.push_back(sid);
                     JsonObject sen = arr.createNestedObject();
-                    sen["sensorId"] = e["id"] | "";
+                    sen["sensorId"] = sid;
                     sen["kind"]     = "ct";
                     sen["channel"]  = ct["channel"] | 0;
                 }
@@ -934,12 +956,20 @@ private:
     // dusty shop rather than a collector that runs forever, and cannot
     // dead-head anything because idle leaves the gate where it is.
     void pollSensors() {
+        std::vector<std::string> polled;   // one reading per MACHINE, not per port
         for (const SystemView& sys : systemsOf(topology())) {
             for (JsonObjectConst e : sys.elements) {
-                JsonObjectConst ct = e["sensor"]["ct"];
+                // Same resolution as pushSensorConfig, and it has to be: this
+                // looks up the reading by the id we SENT.
+                JsonObjectConst ct = clampOf(topology(), e);
                 if (ct.isNull()) continue;
-                const char* id = e["id"] | "";
-                if (!*id) continue;
+                const std::string sid = sensedIdOf(e);
+                if (sid.empty()) continue;
+                bool dup = false;
+                for (const std::string& seen : polled) if (seen == sid) { dup = true; break; }
+                if (dup) continue;
+                polled.push_back(sid);
+                const char* id = sid.c_str();
                 const char* cid = ct["controllerId"] | "";
 
                 bool on = false; uint32_t atMs = 0;

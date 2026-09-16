@@ -323,8 +323,9 @@ void RemoteActuatorBus::handleFrame(const char* json, size_t len) {
             }
             if (i < nodelink::kMaxSensorsPerNode && i < _senseCount) {
                 const bool changed = (_senses[i].on != on) || _senses[i].atMs == 0;
-                _senses[i].on   = on;
-                _senses[i].atMs = millis();
+                _senses[i].on    = on;
+                _senses[i].atMs  = millis();
+                _senses[i].level = f["level"] | -1.0f;
                 xSemaphoreGive(_mutex);
                 // Logged on CHANGE only: this frame repeats every
                 // kSenseRepeatMs, and a line per repeat would bury everything
@@ -485,6 +486,35 @@ bool RemoteActuatorBus::senseOf(const char* sensorId, bool& on, uint32_t& atMs) 
     }
     xSemaphoreGive(m);
     return found;
+}
+
+size_t RemoteActuatorBus::senseCount() const {
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    const size_t n = _senseCount;
+    xSemaphoreGive(_mutex);
+    return n;
+}
+
+bool RemoteActuatorBus::senseAt(size_t i, String& id, bool& reported, bool& on,
+                                uint32_t& ageMs, float& level) const {
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    const bool ok = i < _senseCount;
+    if (ok) {
+        id = _senses[i].sensorId;
+        // CONFIGURED BUT NEVER HEARD FROM is the state this endpoint exists to
+        // make visible, and it is NOT the same as "off". A clamp the layout
+        // names, on a board that is online, that has never sent a SENSE, means
+        // the chain is broken somewhere between CONFIG and the ADC — which is
+        // exactly the question being asked on a bench.
+        reported = _senses[i].atMs != 0;
+        on       = _senses[i].on;
+        // AGE, not the raw timestamp: this becomes a JSON body a phone reads,
+        // and millis() on this board means nothing at the other end.
+        ageMs    = reported ? (uint32_t)(millis() - _senses[i].atMs) : 0;
+        level    = _senses[i].level;
+    }
+    xSemaphoreGive(_mutex);
+    return ok;
 }
 
 RemoteActuatorBus::NodeInfo RemoteActuatorBus::info() const {
