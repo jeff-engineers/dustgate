@@ -108,10 +108,14 @@ check('validate twoGates ok', validateTopology(twoGates).ok, JSON.stringify(vali
     }
     return t;
   };
-  check('4 servos on one host → valid (at budget)', validateTopology(buildHost(4, 0)).ok,
-        JSON.stringify(validateTopology(buildHost(4, 0)).errors));
-  const r5 = validateTopology(buildHost(5, 0));
-  check('5 servos on one host → invalid (controller)', !r5.ok && hasCode(r5, 'controller') && hasMsg(r5, 'max 4'));
+  // THREE since 2026-09-16, matching SERVO_COUNT in firmware/config.h. The
+  // budget dropped when the transmitter moved to D10 so one pin map could serve
+  // every PWM board — see MAX_SERVOS_PER_HOST in topology.js. Asserted literally
+  // on both sides so a one-sided edit fails here rather than on a bench.
+  check('3 servos on one host → valid (at budget)', validateTopology(buildHost(3, 0)).ok,
+        JSON.stringify(validateTopology(buildHost(3, 0)).errors));
+  const r4 = validateTopology(buildHost(4, 0));
+  check('4 servos on one host → invalid (controller)', !r4.ok && hasCode(r4, 'controller') && hasMsg(r4, 'max 3'));
   check('1 linear on one host → valid (at budget)', validateTopology(buildHost(0, 1)).ok);
   const r2 = validateTopology(buildHost(0, 2));
   check('2 linears on one host → invalid (controller)', !r2.ok && hasCode(r2, 'controller') && hasMsg(r2, 'max 1'));
@@ -120,8 +124,8 @@ check('validate twoGates ok', validateTopology(twoGates).ok, JSON.stringify(vali
   // They are alternatives: a board is flashed to drive the PWM bank or the serial
   // bus, the pads overlap, and config.h #errors on a map that claims both. The
   // old reading is what put a fifth port on every board in the configurator.
-  const rMix = validateTopology(buildHost(4, 1));
-  check('4 servos + 1 linear on one host → invalid (controller)',
+  const rMix = validateTopology(buildHost(3, 1));
+  check('3 servos + 1 linear on one host → invalid (controller)',
         !rMix.ok && hasCode(rMix, 'controller') && hasMsg(rMix, 'one board does one or the other'));
   const rMix1 = validateTopology(buildHost(1, 1));
   check('even 1 servo + 1 linear → invalid (it is not about count)',
@@ -216,8 +220,8 @@ check('validate twoGates ok', validateTopology(twoGates).ok, JSON.stringify(vali
   }
 
   check('drives defaults to servo when absent',
-        validateTopology(buildHost(4, 0)).ok);
-  const rBadDrives = buildHost(4, 0);
+        validateTopology(buildHost(3, 0)).ok);
+  const rBadDrives = buildHost(3, 0);
   rBadDrives.controllers[0].drives = 'nonsense';
   check('bad drives value → invalid (controller)',
         !validateTopology(rBadDrives).ok && hasCode(validateTopology(rBadDrives), 'controller'));
@@ -817,8 +821,15 @@ const idxOf = (plan, sel) => plan.moves.findIndex((m) => m.selectorId === sel);
   check('an address past 8 bits → invalid', !validateTopology(badAddr).ok);
   const badData = mut((t) => { elem(t, 'dc').control = { rf: { pin: 4, data: 16 } }; });
   check('a data word past 4 bits → invalid', !validateTopology(badData).ok);
+  // OPTIONAL since 2026-09-16: absent means "the board's own pad", which the
+  // firmware fills from PIN_RF_TX. Requiring it forced the UI to write a GPIO
+  // into every document, and moving the pad then stranded every layout on the
+  // old number. A NEGATIVE or non-integer pin is still refused.
   const noPin = mut((t) => { elem(t, 'dc').control = { rf: { address: 94 } }; });
-  check('no pin → invalid', !validateTopology(noPin).ok);
+  check('no pin → valid, the firmware supplies the board pad', validateTopology(noPin).ok,
+        JSON.stringify(validateTopology(noPin).errors));
+  const badPin = mut((t) => { elem(t, 'dc').control = { rf: { pin: -1 } }; });
+  check('a negative pin → invalid', !validateTopology(badPin).ok);
 }
 {
   // A press is an edge against a toggle, so only a collector has one to press.

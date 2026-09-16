@@ -36,7 +36,11 @@ const LINK_TRANSPORTS  = ['wifi-ws', 'esp-now'];
 // Reading these as 4+1 is what put a fifth port on every board in the
 // configurator (corrected 2026-08-28). More than the budget on one host is a
 // hardware impossibility; spread selectors across secondary controllers.
-const MAX_SERVOS_PER_HOST = 4;
+// THREE since 2026-09-16, matching SERVO_COUNT in firmware/config.h — see the
+// pair table in CLAUDE.md. One unified pin map puts the transmitter on D10, so
+// D7/D8/D9 are all the PWM channels there are. A board drives one selector
+// (channel 0) and may also press a fob (channels 1 and 2).
+const MAX_SERVOS_PER_HOST = 3;
 const MAX_LINEAR_PER_HOST = 1;
 
 // How many outlets ONE sliding gate may serve.
@@ -629,8 +633,18 @@ function validateTopology(t) {
     if (!rf) continue;
     if (e.type !== 'collector')
       err('element', `only a collector can be pressed by RF`, e.id);
-    if (typeof rf.pin !== 'number' || !Number.isInteger(rf.pin) || rf.pin < 0)
-      err('element', `control.rf.pin must be a non-negative integer`, e.id);
+    // `pin` is OPTIONAL since 2026-09-16 — absent means "the board's own pad",
+    // which the firmware fills in from PIN_RF_TX.
+    //
+    // It used to be required, and requiring it was a mistake with a long tail:
+    // which GPIO keys a transmitter is a fact about how the BOARD is built, no
+    // screen has any business asking for it, and yet the rule forced the UI to
+    // write a number into every document. Moving the pad then stranded every
+    // layout ever saved on the old GPIO. Optional here, defaulted in firmware,
+    // and the number stops travelling in documents at all.
+    if (rf.pin !== undefined &&
+        (!Number.isInteger(rf.pin) || rf.pin < 0))
+      err('element', `control.rf.pin, when given, must be a non-negative integer`, e.id);
     if (rf.address !== undefined &&
         (!Number.isInteger(rf.address) || rf.address < 0 || rf.address > 255))
       err('element', `control.rf.address must be 0-255 (8 address bits)`, e.id);

@@ -62,14 +62,14 @@ drifted constantly. Now `shared/device-model/` is the spec:
   | `DEFAULT_COLLECTOR_OFF_DELAY_MS` (topology-device.js) | `kDefaultCollectorOffDelayMs` (control/TopologyRuntime.h) | collector coast-down default |
   | `DEFAULT_THRESHOLD_W` (topology-device.js) | `kDefaultThresholdW` (control/TopologyController.h) | machine-on wattage default |
   | the `* 3` in `setToolManual()` (dustgate-ui demo-api.service.ts) | the `* 3.0f` in `manualWattsFor()` (control/TopologyRuntime.h) | synthetic wattage for a manual switch-on |
-  | `MAX_SERVOS_PER_HOST` / `MAX_LINEAR_PER_HOST` (topology.js) | `SERVO_COUNT` (config.h) | servo bank size a controller can actually drive |
+  | `MAX_SERVOS_PER_HOST` / `MAX_LINEAR_PER_HOST` (topology.js) | `SERVO_COUNT` (config.h) | servo bank size a controller can actually drive. **3 since 2026-09-16**, lowered from 4 when the 315 MHz transmitter moved to D10 so ONE pin map could serve every PWM board — channel 0 is the board's gate, 1 and 2 are the fob servos, and no pad has two owners any more. The UI mirrors it in THREE further places (`SERVO_PORTS` in build/wiring/wire-geometry.ts, `SERVO_CHANNELS_PER_BOARD` in gates/selector-types.ts, and the `servoPortsPerBoard` passed into boards/board-drives.ts), so this is really a five-sided constant: the port strip drawn on the canvas IS the budget, and a one-sided edit puts a port there that no board has |
   | `NUM_STOPS` (device-model.js) | `NUM_STOPS` (config.h) | max stops on one sliding gate. **8 since 2026-09-05**, lowered from 16 so it matches `MAX_SLIDE_BRANCHES` (topology.js) and `SLIDE_MAX_OUTLETS` (dustgate-ui) — three numbers that all claim to be the same limit, and were not. Must stay EVEN (`static_assert` in config.h): Rockler ships gates in pairs, so an odd request rounds up. Changing it changes the persisted `CalibrationData` layout — bump `CALIB_VERSION` with it |
   | `MIN_STOP_SEPARATION_MM` (device-model.js) | `MIN_STOP_SEPARATION_MM` (config.h) | overlap backstop between stops |
   | `IDLE_TIMEOUT_SEC_DEFAULT` (device-model.js) | `IDLE_TIMEOUT_SEC_DEFAULT` (config.h) | idle power-off default |
   | `MANIFOLD_PROFILES` — `gatePitchMm` / `firstGateOffsetMm` / `endMarginMm` (device-model.js) | `MANIFOLD_2_5_GATE_PITCH_MM`, `MANIFOLD_4_GATE_PITCH_MM` and friends (config.h) | Rockler manifold geometry. **Found unregistered on 2026-08-28** — it had been a pair since the profiles were written, with nothing pointing either way, which is exactly the situation this table exists to prevent. `gatePitchMm` is the number the reference sweep trusts and centres the gate array on, so a change on one side alone mis-places every gate on real hardware while every test still passes. |
   | the **default** for an absent `kind` on `sensor.outlet` / `control.outlet` (topology.js) | the default in `outletKindFromName()` and `OutletConfig`'s `o<N>_kind` (outlets/OutletFactory.h, OutletConfig.h) | which protocol a plug speaks — `shelly` or `tasmota`. The VALUE rides the document and so isn't a pair; the **default when the document is silent** is, and it must be Shelly on both sides or every layout written before 2026-09-09 starts polling the wrong endpoint. An unknown string defaults the same way, so a document from a newer UI degrades to the old behaviour rather than to a plug that reads nothing |
   | `COLLECTOR_RUNNING_W` / `COLLECTOR_SPINUP_GRACE_MS` (topology-device.js) | `kCollectorRunningW` / `kCollectorSpinupGraceMs` (control/CollectorPlugState.h) | is the blower ACTUALLY running, vs what we commanded. **Became a pair 2026-09-10** — topology-device.js had carried a note saying it deliberately was not one, and naming the exact condition that would change that. This is it, and for a stronger reason than the OLED it predicted: every way we now command a collector is STATELESS (a servo pressing a fob, an RF frame), so what we sent proves nothing and a browser nobody has open cannot be the only thing that notices a failed start. `test_collector_plug.cpp` ↔ `collector-plug.test.js`, same cases, same order, and both numbers asserted literally so a one-sided edit fails at the test rather than on a bench |
-  | `DEFAULT_RF_PIN` (dustgate-ui/.../tools/collector-doc.ts) | `PIN_RF_TX` (boards/xiao_c5.h) | which pad keys the 315 MHz transmitter. **Became a pair 2026-09-14**, when the collector sheet gained the ability to write `control.rf`. Awkward on purpose: `pin` is a fact about how the BOARD is built, so no screen asks for it — but topology.js requires it (`no pin → invalid`) and the firmware builds no presser at all without one, silently. So the UI has to supply the board's pad, and move the pad without moving this and every layout ever written names the old GPIO while the collector quietly never starts. The better fix is to make `pin` optional and let the firmware fall back to its own `PIN_RF_TX`, which would delete this row — it changes a decided validation rule, so it was not taken |
+  | ~~`DEFAULT_RF_PIN`~~ (dustgate-ui/.../tools/collector-doc.ts) | ~~`PIN_RF_TX`~~ (boards/xiao_c5.h) | **DELETED 2026-09-16 — this row is kept only to say so, and to record that the note which replaced it called its own shot.** It was a pair for two days: topology.js required `control.rf.pin`, so the UI had to write a GPIO into every document, and the entry here already named the better fix — make `pin` optional and let the firmware fall back to its own `PIN_RF_TX` — while declining to take it because it changed a decided validation rule. Moving the pad from D9 to D10 forced it: every layout ever saved carried `pin: 9`, and each one would have gone on keying a servo channel while the collector silently never started. `pin` is now optional, the UI writes none, and an explicit one still wins for a hand-wired board |
   | `NODELINK_VERSION`, `PING_INTERVAL_MS`, `PONG_TIMEOUT_MS`, `RECONNECT_MIN_MS`, `RECONNECT_MAX_MS` (nodelink.js) | `kVersion`, `kPingIntervalMs`, `kPongTimeoutMs`, `kReconnectMinMs`, `kReconnectMaxMs` (control/NodeLink.h) | NodeLink protocol timing |
   | `SENSE_REPEAT_MS` / `SENSE_STALE_MS` (nodelink.js) | `kSenseRepeatMs` / `kSenseStaleMs` (control/NodeLink.h) | how often a node repeats a sensor reading, and when the primary calls it stale. **New 2026-09-14** with the SENSE frame. SENSE is sent on CHANGE — the repeat only stops one dropped frame leaving the primary permanently wrong. Stale is 3× the repeat, the same ratio as PING/PONG and asserted as a ratio on both sides, so moving one without the other fails at the test. Stale is NOT the same as off: a node still answering PINGs but no longer reporting is a fault, where a node that has gone away entirely is the planer switched off at the wall (`intermittent`, RFC §5.6a) |
   | `caps.ct` in WELCOME — the DEFAULT when absent (nodelink.js `clampsOn`) | the default in `buildWelcome`'s `clamps` parameter, and `_capClamps` (control/RemoteActuatorBus) | how many current clamps a board says it has. **New 2026-09-15.** The VALUE rides the wire and so isn't a pair; the **default when the frame is silent** is, and it must be 0 on both sides or every board flashed before clamps existed reads as having one. Reported from the pin map (`PIN_CT`), never chosen — a clamp is DECLARED by its board because, unlike a plug, nothing on the network can discover one |
@@ -90,6 +90,17 @@ drifted constantly. Now `shared/device-model/` is the spec:
   OLED ever needs to say *not starting* too" — and **it changed on 2026-09-10**,
   for a bigger reason than the OLED. It now has a row above and a C++ partner.
   Cite it as the example of a non-pair that earned promotion, not as a non-pair.
+
+  `sensing/CtTrip.h` is the shape this table exists to prevent, caught before it
+  landed. The floor, the trip ratio and the sampling cadence are firmware-only —
+  no JS models a clamp — so they are not a pair. What they were about to become
+  is a second COPY, which is worse: the logic was written inside the node, and
+  then the primary needed the identical decision because a clamp at the collector
+  is wired to the board that IS the brain. It lives in one file that both
+  include. `ct_bench.cpp` had already made exactly this mistake against
+  `CtSensor` — a divergent copy missing the one-sample scale fix and the settle
+  gate, reading plausibly wrong for weeks. **Not every duplication crosses a
+  language boundary, and the ones that don't are the easier ones to miss.**
 
   `kBinDebounceMs` (utils/BinSensor.h) is another: how long the dust-bin beam
   must hold a reading before the firmware believes it. No JS model simulates a
@@ -152,13 +163,25 @@ Firmware compiles — `pio run -e <env>`:
 
 | Env | Board | Role |
 |---|---|---|
-| `xiao_c5_primary` | XIAO ESP32C5 | **primary** — the routing brain, 4 PWM valves |
-| `xiao_c5` | XIAO ESP32C5 | secondary node, 4 PWM valves |
+| `xiao_c5_primary` | XIAO ESP32C5 | **primary** — the routing brain, 3 PWM valves, CT, bin, RF |
+| `xiao_c5` | XIAO ESP32C5 | secondary node, 3 PWM valves, CT |
 | `xiao_c5_linear_primary` | XIAO ESP32C5 | **primary** on the slider board (ST3215 rack) |
 | `xiao_c5_linear` | XIAO ESP32C5 | secondary node on the slider board |
 | `xiao_c5_bus_bench` | XIAO ESP32C5 | not a role — the bus-servo console |
 | `xiao_c5_ht12e_bench` | XIAO ESP32C5 | not a role — the HT12E/315MHz console, for keying the Rockler DC remote ([`wiring/ht12e-bench.md`](firmware/wiring/ht12e-bench.md)) |
 | `xiao_c5_ct_bench` | XIAO ESP32C5 | not a role — a walk-around CT current meter, for judging whether a 30A clamp can tell a running tool from an idle one ([`wiring/ct-bench.md`](firmware/wiring/ct-bench.md)) |
+
+**The collector envs are gone (2026-09-16), and nothing replaced them.** There
+used to be `xiao_c5_collector` and `xiao_c5_collector_node`: a third pin
+personality that existed only because a CT, a 315 MHz transmitter and two fob
+servos would not fit beside four servo channels. Dropping to THREE channels
+moves the transmitter to D10, gives every pad exactly one owner, and lets one
+pin map serve every PWM board — so a board at the collector is an ordinary
+primary or an ordinary node that a LAYOUT points at a bin, a clamp and a remote,
+which is what "a board is not a collector node, it is a board that happens to be
+near a bin" said before the pin budget overruled it. `dev.sh --collector` still
+parses and now only prints. The cost is the fourth gate channel, and the model
+that replaced it wants ONE SELECTOR PER BOARD anyway.
 
 **One board, two roles.** Same board, same carrier, same pin map; the difference
 is `build_src_filter` and `-DDUSTGATE_SECONDARY`. Both roles are proven on

@@ -88,12 +88,15 @@ export const DEFAULT_COAST_SEC = 8;
  * validates on the UI side, saves, and produces a collector that never runs.
  * Found by saving one, 2026-09-14.
  *
- * The alternative — make `pin` optional and let the firmware fall back to its
- * own PIN_RF_TX — is arguably better, since it puts the board's fact back on the
- * board and deletes this pair. It changes a decided validation rule, so it is
- * not taken here.
+ * ⚠️ RESOLVED 2026-09-16, AND THIS CONSTANT IS GONE. The alternative named below
+ * was taken: `pin` is optional in topology.js and the firmware falls back to its
+ * own PIN_RF_TX. What forced it was moving the pad from D9 to D10 — every layout
+ * ever saved carried `pin: 9` written by this file, and each one would have kept
+ * keying a servo channel while the collector silently never started.
+ *
+ * So the UI writes NO pin. A document that already carries one still wins, for a
+ * board wired by hand. The pair row in CLAUDE.md is deleted with it.
  */
-export const DEFAULT_RF_PIN = 9;
 
 /**
  * Which input on the board the clamp is on.
@@ -210,10 +213,11 @@ export function writeCollector(el: RawEl, form: CollectorForm): RawEl {
   if (form.ctl === 'plug' && form.ctlPlug.ip) {
     control['outlet'] = writePlug({ ...form.ctlPlug, kind: 'shelly' });
   } else if (form.ctl === 'rf') {
-    // `pin` FIRST so a document that already carries one keeps it: a board whose
-    // transmitter is on a different pad must not be rewritten to the default
-    // just because someone opened the sheet.
-    control['rf'] = { pin: DEFAULT_RF_PIN, ...form.rfRest, address: form.rfAddress };
+    // NO `pin`. Which pad keys the transmitter is a fact about how the board is
+    // built, so the firmware supplies it (PIN_RF_TX) and no screen asks. An
+    // explicit pin already in the document rides through on `rfRest`, which is
+    // how a hand-wired board keeps its own pad.
+    control['rf'] = { ...form.rfRest, address: form.rfAddress };
   }
   // 'servo' falls through to a bare control: there is no schema to write, and
   // inventing one now is what RFC §4.2c says not to do.

@@ -29,16 +29,26 @@ group('W1 the port strip is the hardware budget');
   // until 2026-08-16, in negative y with its own slot pitch — see
   // docs/boards-on-canvas-plan.md for why that came out.
   const c = { x: cellX(3), y: cellY(0) };
-  // FOUR, not five. The strip used to carry the PWM bank plus a stepper port,
-  // reading MAX_SERVOS_PER_HOST and MAX_LINEAR_PER_HOST as a sum. They are
-  // alternatives: a board drives the bank OR one serial-bus slider, on the same
-  // pads. No board has ever had five ports (corrected 2026-08-28).
-  const xs = [0, 1, 2, 3].map(ch => portPos(c, ch).x);
-  ok('four ports, evenly pitched', xs.every((x, i) => i === 0 || x - xs[i - 1] === 18), xs.join());
-  ok('strip is centred on the board', near((xs[0] + xs[3]) / 2, c.x));
+  // THREE since 2026-09-16, and never a sum. The strip used to carry the PWM
+  // bank plus a stepper port, reading MAX_SERVOS_PER_HOST and MAX_LINEAR_PER_HOST
+  // as a total — they are ALTERNATIVES: a board drives the bank OR one serial-bus
+  // slider, on the same pads (corrected 2026-08-28). The bank itself then went
+  // 4 → 3 when the 315 MHz transmitter moved to D10 so one pin map could serve
+  // every PWM board.
+  //
+  // Derived from SERVO_PORTS rather than spelled out, so the next change to the
+  // bank size moves this test with it instead of against it.
+  const chans = Array.from({ length: SERVO_PORTS }, (_, i) => i);
+  const xs = chans.map(ch => portPos(c, ch).x);
+  ok('every servo port, evenly pitched', xs.every((x, i) => i === 0 || x - xs[i - 1] === 18), xs.join());
+  ok('strip is centred on the board', near((xs[0] + xs[xs.length - 1]) / 2, c.x));
   ok('ports straddle the underside', portPos(c, 0).y > c.y && portPos(c, 0).y < c.y + BOARD_H / 2);
   ok('cable leaves the port underside', near(portExit(c, 0).y, portPos(c, 0).y + PORT_H / 2));
-  ok('channel 4 is the slider port, past the servo bank', SERVO_PORTS === 4);
+  // Asserted as a LITERAL, deliberately, the way both sides of every pair in
+  // CLAUDE.md's table are: SERVO_PORTS mirrors SERVO_COUNT (config.h) and
+  // MAX_SERVOS_PER_HOST (topology.js), and a number that only ever compares
+  // itself to another variable cannot catch a one-sided edit.
+  ok('the strip is three ports — SERVO_COUNT, mirrored', SERVO_PORTS === 3, String(SERVO_PORTS));
   // A slider board has ONE port, and it belongs in the middle — not at the right
   // hand end of a four-port strip it is not part of.
   ok('a slider board centres its single port', near(portPos(c, SERVO_PORTS, true).x, c.x));

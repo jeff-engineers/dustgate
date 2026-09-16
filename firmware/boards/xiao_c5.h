@@ -61,7 +61,14 @@
 // the topology schema's controllers[].board values (docs/topology-schema.md).
 #define BOARD_NAME "xiao_c5"
 
-// -- What this board drives: FOUR PWM SERVOS *OR* ONE SERIAL BUS --
+// -- What this board drives: THREE PWM SERVOS *OR* ONE SERIAL BUS --
+//
+// ONE PIN MAP PER PERSONALITY, AND THERE ARE ONLY TWO, since 2026-09-16. There
+// used to be three — gate, collector and slider — and the collector existed only
+// because a transmitter and a CT would not fit beside four servo channels. Three
+// channels and the transmitter on D10 makes that board unnecessary: primary or
+// node, gate or collector, every PWM build below has the same pads with the same
+// owners. What decides a board's job is the topology, as it always should have.
 //
 // PWM and serial never share a board (see config.h), and on this part they
 // physically can't anyway: D7 is PWM channel 1 and the UART's RX. So the flag
@@ -69,7 +76,7 @@
 // the backstop for a board header that tries to claim both.
 //
 // -DDUSTGATE_SERVO_BUS is the slider's build. Everything else — primary and
-// PWM node — gets the four-channel block and no bus.
+// PWM node, driving gates or sitting at the collector — gets the block below.
 #if defined(DUSTGATE_SERVO_BUS)
 
 // -- Serial-servo bus (Feetech ST3215 and friends) --
@@ -124,37 +131,34 @@
 #define PIN_ENDSTOP_HOME    8   // D8, NC to GND, INPUT_PULLUP
 #define PIN_ENDSTOP_MAX     9   // D9, ditto
 
-#elif defined(DUSTGATE_COLLECTOR)
-
-// -- COLLECTOR board: the PWM block, minus the two pads the collector needs --
-//
-// A collector board drives NO GATES (docs/tool-sensing-rfc.md §6.2), so the four
-// PWM pads are free to be spent on collector jobs instead. Two go to fob servos,
-// one to the transmitter, and one is spare:
-//
-//   D7  fob servo, ON button   \  still PWM channels 1 and 2, same driver
-//   D8  fob servo, OFF button  /   and the same move-then-detach
-//   D9  315 MHz transmitter        (PIN_RF_TX, below)
-//   D10 spare                      lamps, or a third fob button
-//
-// SERVO_COUNT IS 2 HERE, and that is the whole difference from the gate build.
-// The fob servos ARE channels 1 and 2 — same ServoActuator, same `servo` and
-// `stroke` bench commands — so nothing new drives them. What changes is that
-// channels 3 and 4 do not exist, because D9 is the transmitter.
-#define SERVO_PWM_PIN_1    12   // D7 — fob servo, ON (or the only button)
-#define SERVO_PWM_PIN_2     8   // D8 — fob servo, OFF, on a two-button fob
-
 #else
 
-// -- Servo PWM block --
-// D7..D10 — four adjacent pads on one edge, same physical-grouping rule as every
-// other board here, so a servo loom can be built once and moved between them.
-// Channel order matched the retired boards/qtpy_s3.h (channel 1 = first pad of
-// the block), so a topology's servo.channel means the same gate on any node.
-#define SERVO_PWM_PIN_1    12   // D7
-#define SERVO_PWM_PIN_2     8   // D8
-#define SERVO_PWM_PIN_3     9   // D9
-#define SERVO_PWM_PIN_4    10   // D10
+// -- Servo PWM block: THREE channels, and the fourth pad is the transmitter --
+//
+// D7/D8/D9 — three adjacent pads on one edge, same physical-grouping rule as
+// every other board here, so a servo loom can be built once and moved between
+// them. Channel order matched the retired boards/qtpy_s3.h (channel 0 = first
+// pad of the block), so a topology's servo.channel means the same gate on any
+// board.
+//
+// THREE, NOT FOUR, SINCE 2026-09-16, and the missing one is not a loss — it is
+// what buys a SINGLE PIN MAP for every PWM board in the shop.
+//
+// Until then there were two: a gate board with four servos and no room for a
+// transmitter, and a collector board with two servos, a CT and a transmitter.
+// That split cost an env pair, a second carrier, and one genuine bug — D9 was
+// SERVO_PWM_PIN_3 *and* PIN_RF_TX on the same build, defined deliberately so the
+// bench `press` command worked, and nothing checked that a layout had not put a
+// gate on channel 2 of a transmitting board.
+//
+// Moving the transmitter to D10 ends that: every pad below has exactly one
+// owner, on every build. What it costs is the fourth gate channel, and the model
+// that replaced it wants ONE SELECTOR PER BOARD anyway — a board drives one
+// valve (however many branches that valve has) and may additionally sense, watch
+// a bin and transmit. Three channels is one gate plus the two fob servos.
+#define SERVO_PWM_PIN_1    12   // D7  — channel 0, the gate
+#define SERVO_PWM_PIN_2     8   // D8  — channel 1, fob servo ON
+#define SERVO_PWM_PIN_3     9   // D9  — channel 2, fob servo OFF
 
 #endif
 
@@ -340,14 +344,14 @@
 //       line is 3.3V-tolerant as an input), GND -> GND, DATA -> D6.
 //       A 17 cm wire on the module's ANT pad is a quarter wave at 315 MHz and
 //       is worth more than anything else on this list.
-#if defined(DUSTGATE_COLLECTOR)
-#define PIN_RF_TX        9   // D9 — free here because SERVO_COUNT is 2
-#elif !defined(DUSTGATE_SERVO_BUS)
-// On a GATE board D9 is servo channel 3. Defined anyway so the bench `press`
-// command works on an ordinary primary with nothing on channel 3 — which is how
-// the transmitter was first proven — but a board actually driving four gates
-// must give control.rf an explicit pin, or it will fight channel 3.
-#define PIN_RF_TX        9   // D9 — ⚠️ also SERVO_PWM_PIN_3 on this build
+// D10 SINCE 2026-09-16, AND IT IS NOW THE ONLY THING ON THAT PAD. It used to be
+// D9, which was also SERVO_PWM_PIN_3 on a gate build — defined anyway so the
+// bench `press` command could be proven on an ordinary primary, with a comment
+// warning that a board driving four gates would fight channel 3 and that nothing
+// checked for it. Dropping to three servo channels frees D10 and retires the
+// whole hazard: no pad on this board has two owners any more.
+#if !defined(DUSTGATE_SERVO_BUS)
+#define PIN_RF_TX       10   // D10 — the transmitter, and nothing else
 #endif
 
 // -- CT clamp: the collector's own draw --
@@ -355,11 +359,22 @@
 // D0/GPIO1 is THE ONLY ANALOG PAD on this edge, which is why nothing else may
 // have it and why the wake button's note says D0 is deliberately left alone.
 //
-// Collector builds only. A gate board has no use for it and defining it there
-// would imply the bias network is fitted, which on a gate board it is not.
+// EVERY PWM BUILD SINCE 2026-09-16. It used to be collector-only, and the reason
+// given was honesty: defining the pad implies the bias network is fitted, and on
+// a hand-built gate board it is not — so `caps.ct` (which derives straight from
+// this #ifdef) would have had every board advertising a clamp it could not read.
+//
+// That reasoning inverts the moment there is ONE BOARD REVISION carrying the
+// divider on every unit. Then the pad IS always fitted, `caps.ct` is true because
+// it is true, and a board's capability list stops being something anyone has to
+// configure or discover. Until that revision exists, a hand-built board without
+// the divider will read noise on D0 and claim a clamp — which is the honest cost
+// of collapsing the pin maps early, and is why nothing may trust a clamp reading
+// that has not been calibrated against the tool it watches.
+//
 // See firmware/wiring/collector-node.md §3 for the divider — and its warnings,
 // because the noise floor is unresolved and the screen is part of it.
-#if defined(DUSTGATE_COLLECTOR)
+#if !defined(DUSTGATE_SERVO_BUS)
 #define PIN_CT              1   // D0, the only ADC pad on this edge
 #endif
 
@@ -389,11 +404,18 @@
 // four, which is the whole PWM block — possible on a collector board, and
 // exactly the point at which "one arm that travels between buttons" starts
 // looking cheaper than a servo per button.
-#if defined(DUSTGATE_COLLECTOR)
+//
+// CHANNELS 1 AND 2, NOT 0 AND 1, since 2026-09-16 — the top of the block rather
+// than the bottom. A board drives at most one selector and that gate lands on
+// channel 0 by default, so putting the fob servos anywhere near channel 0 turns
+// the unenforced overlap config.h warns about into one a DEFAULT can reach. At
+// the top of the block the two allocations cannot collide without someone going
+// out of their way.
+#if !defined(DUSTGATE_SERVO_BUS)
 // Aliases, not a second definition — these ARE servo channels 1 and 2. Named so
 // the intent is readable where a press is commanded rather than a gate move.
-#define PIN_FOB_SERVO_ON   SERVO_PWM_PIN_1   // D7
-#define PIN_FOB_SERVO_OFF  SERVO_PWM_PIN_2   // D8
+#define PIN_FOB_SERVO_ON   SERVO_PWM_PIN_2   // D8, channel 1
+#define PIN_FOB_SERVO_OFF  SERVO_PWM_PIN_3   // D9, channel 2
 #endif
 
 // -- The serial-servo bus moved UP --

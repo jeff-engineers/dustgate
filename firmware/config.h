@@ -267,22 +267,25 @@ inline int homeDirection() {
 // Size of the PWM servo bank on one board. Mirrors MAX_SERVOS_PER_HOST in
 // shared/device-model/topology.js — the schema refuses to place more servo gates on
 // a controller than it has channels.
-// TWO on a collector board, four everywhere else. A collector drives no gates
-// (docs/tool-sensing-rfc.md §6.2), so D9 and D10 go to the transmitter and a
-// spare instead of to channels 3 and 4 — and channels 1 and 2 become the fob
-// servos, same driver, same move-then-detach.
+// THREE, on every PWM board, since 2026-09-16 — there is no longer a collector
+// personality to have a different number.
 //
-// ⚠️ NOTHING VALIDATES THIS AGAINST A LAYOUT. MAX_SERVOS_PER_HOST (topology.js)
-// is 4, so a document can legally put a servo gate on channel 3 of a board
-// flashed as a collector, and it will silently do nothing. The fix is for a
-// collector controller to refuse gate selectors at all — which is really the
-// same missing check as "a board driving gates must not also transmit" in
-// boards/xiao_c5.h. Neither exists. See TODO.
-#if defined(DUSTGATE_COLLECTOR)
-  #define SERVO_COUNT              2
-#else
-  #define SERVO_COUNT              4
-#endif
+// It used to be two on a collector and four everywhere else, which is what made
+// the collector a separate pin map, a separate pair of envs and a separate
+// carrier. Three is what one unified map yields: D7/D8/D9 are servo channels
+// 0/1/2 and D10 is the transmitter, so no pad has two owners (boards/xiao_c5.h).
+//
+// The fourth gate channel is what it costs, and the model that replaced it wants
+// ONE SELECTOR PER BOARD anyway — a board drives one valve, however many branches
+// that valve has, and may additionally sense, watch a bin and transmit. Channel 0
+// is that gate; channels 1 and 2 are the fob servos when a board presses a fob.
+//
+// ⚠️ NOTHING STILL VALIDATES THE OVERLAP. MAX_SERVOS_PER_HOST (topology.js) is 3,
+// so a document can legally put a gate on channel 1 or 2 of a board that also
+// presses a fob, and one will silently fight the other. Moving the fob aliases to
+// the TOP of the block (boards/xiao_c5.h) means no DEFAULT can reach it — a gate
+// lands on channel 0 — but it is still a check that does not exist. See TODO.
+#define SERVO_COUNT              3
 
 // The pin list, as ONE initializer rather than four macros spelled out at each
 // use site. Three places built `{ PIN_1, PIN_2, PIN_3, PIN_4 }` by hand, which
@@ -290,6 +293,8 @@ inline int homeDirection() {
 // files at once with an error naming neither the count nor the reason.
 #if SERVO_COUNT == 2
   #define SERVO_PWM_PIN_LIST  SERVO_PWM_PIN_1, SERVO_PWM_PIN_2
+#elif SERVO_COUNT == 3
+  #define SERVO_PWM_PIN_LIST  SERVO_PWM_PIN_1, SERVO_PWM_PIN_2, SERVO_PWM_PIN_3
 #else
   #define SERVO_PWM_PIN_LIST  SERVO_PWM_PIN_1, SERVO_PWM_PIN_2, \
                               SERVO_PWM_PIN_3, SERVO_PWM_PIN_4
@@ -385,18 +390,23 @@ inline int homeDirection() {
 // A board is not a "collector node"; it is a board that happens to be near a
 // bin.
 //
-// ⚠️ SUPERSEDED 2026-09-11 — the paragraph above is kept because its reasoning
-// is right and its CONCLUSION stopped being. "Bin sensing is one input pin, so
-// it collides with nothing" was true while a bin sensor was all a collector
-// board did. It now wants a CT (D0), a 315 MHz transmitter (D9) and two fob
-// servos (D7/D8) as well, and those DO collide: D9 is servo channel 3 and
-// D7/D8 are channels 1 and 2 (tool-sensing-rfc §6.2). Four capabilities that
-// all want the same corner of the shop need more pads than a gate board can
-// spare, so there is now a -DDUSTGATE_COLLECTOR personality in both roles.
+// ⚠️ SUPERSEDED 2026-09-11, THEN RESTORED 2026-09-16 — and the round trip is
+// worth keeping, because the paragraph above was right both times.
 //
-// HAS_BIN itself is unchanged and still means only "the pin exists to be read".
-// What changed is that a collector board is a BUILD now, not just a topology
-// fact — while which jobs it actually does remains a topology fact.
+// On 2026-09-11 it stopped being true: "bin sensing collides with nothing" held
+// while a bin sensor was all a collector board did, and then that board also
+// wanted a CT (D0), a transmitter (D9) and two fob servos (D7/D8). Those DID
+// collide — D9 was servo channel 3 — so a -DDUSTGATE_COLLECTOR personality was
+// cut, and a collector became a BUILD rather than only a topology fact.
+//
+// On 2026-09-16 the collision was removed instead of worked around: three servo
+// channels rather than four puts the transmitter on D10, every pad gets exactly
+// one owner, and one pin map serves every PWM board. So -DDUSTGATE_COLLECTOR is
+// gone and the original conclusion stands again — a board is not a "collector
+// node", it is a board that happens to be near a bin.
+//
+// HAS_BIN itself never changed and still means only "the pin exists to be read".
+// Which jobs a board actually does is a topology fact, as it always was.
 //
 // Whether a given board is actually WATCHING one is a topology fact
 // (`bin.sensor.controllerId`) and the primary owns it, because there is no way
