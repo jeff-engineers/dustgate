@@ -576,3 +576,16 @@ svg.canvas, svg.canvas text { -webkit-user-select: none; user-select: none; }
 .tray .chip.clamp { color: #59b0c8; }
 .tray .chip.clamp .face { color: inherit; }
 .chip.ghost.clamp { color: #59b0c8; }
+
+
+/* ── a plug that is already on something ─────────────────────────────────────
+   Shown, not hidden. A sweep that finds your plug and then silently filters it
+   out looks exactly like a sweep that failed, and the obvious response is to
+   sweep again for something that was never lost.
+
+   Greyed and inert: it says "found, and spoken for". Re-pairing it belongs on
+   the machine that has it, not on a chip in a tray — so this deliberately takes
+   no pointer events and carries no grip. */
+.tray .chip.taken { opacity: .45; cursor: default; pointer-events: none; }
+.tray .chip.taken .on-m { font-size: 11px; opacity: .8; margin-left: 6px;
+                          white-space: nowrap; }
