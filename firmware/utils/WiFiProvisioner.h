@@ -111,6 +111,68 @@ inline void setPortalTick(void (*cb)()) { onPortalTick() = cb; }
 // Internal: start setup AP and block until the user submits credentials.
 // Saves to NVS and reboots — never returns.
 // ---------------------------------------------------------------------------
+// ── `provision {...}` over the USB cable, on ANY build ──────────────────────
+//
+// Reads one line at a time, non-blocking, and applies a provision payload.
+// Call it from loop(). Returns true if a command was handled.
+//
+// WHY THIS IS A FUNCTION AND NOT INLINE IN THE PORTAL LOOP, which is where it
+// lived until 2026-09-16: the portal only runs when there are NO WiFi
+// credentials. A board that already has them joins WiFi and never enters the
+// portal — so on a NODE, which compiles no SerialDebugControl, there was no
+// serial reader anywhere at all.
+//
+// The consequence was a silent, confident lie: `dev.sh flash-node <name>`
+// prompts for a hostname, prints "Flashing as: <name>", and then deploy.sh
+// sends `provision {"ssid":…,"host":"<name>"}` down the cable and waits for an
+// OK that could never come. The node kept its NVS from whenever it was last a
+// primary — SSID and password intact, hostname never written — and booted as
+// `dustgate.local`, fighting the brain for the name. The only clue was one
+// warning at the end of a 2000-line flash log.
+//
+// A node has no console to type into and does not need one. It needs exactly
+// this: the one command the flashing tool actually sends.
+inline bool pollSerialProvision() {
+    static String line;
+    bool handled = false;
+    while (Serial.available()) {
+        char c = Serial.read();
+        if (c == '\n') {
+            line.trim();
+            if (line.startsWith("provision ")) {
+                String json = line.substring(10);
+                json.trim();
+                String errMsg;
+                bool wifiSet = applyProvisionJson(json, &errMsg);
+                if (errMsg.length() > 0) {
+                    Serial.print(F("[PROVISION] JSON parse error: "));
+                    Serial.println(errMsg);
+                } else {
+                    // "OK provision" is what deploy.sh greps for — it is a
+                    // PROTOCOL string, not a log line. Both arms print it.
+                    Serial.println(F("OK provision"));
+                    handled = true;
+                    // A hostname-only payload needs the reboot just as much as a
+                    // WiFi one: mDNS takes its name at begin() and nothing
+                    // re-registers it later.
+                    Serial.println(wifiSet
+                        ? F("[PROVISION] WiFi saved — rebooting to connect...")
+                        : F("[PROVISION] Saved — rebooting to apply..."));
+                    delay(300);
+                    ESP.restart();
+                }
+            }
+            line = "";
+        } else if (c == 0x08 || c == 0x7F) {          // backspace / delete
+            if (line.length() > 0) line.remove(line.length() - 1);
+        } else if (c >= 0x20 && c <= 0x7E) {           // printable ASCII (covers JSON)
+            if (line.length() < 512) line += c;        // guard runaway buffer
+        }
+        // CR and other control bytes (tab, ESC/arrow-key sequences) are ignored.
+    }
+    return handled;
+}
+
 inline void _runPortal() {
     DEBUG_PRINT(F("[WiFi] Starting setup portal — connect to: "));
     DEBUG_PRINTLN(F(WIFI_PORTAL_SSID));
@@ -177,40 +239,13 @@ inline void _runPortal() {
     // reached by the "provision" command at all — this loop never returns
     // control to the main setup()/loop(), where SerialDebugControl normally
     // handles it.
-    String serialLine;
     while (true) {
         server.handleClient();
         if (onPortalTick()) onPortalTick();
 
-        while (Serial.available()) {
-            char c = Serial.read();
-            if (c == '\n') {
-                serialLine.trim();
-                if (serialLine.startsWith("provision ")) {
-                    String json = serialLine.substring(10);
-                    json.trim();
-                    String errMsg;
-                    bool wifiSet = applyProvisionJson(json, &errMsg);
-                    if (errMsg.length() > 0) {
-                        Serial.print(F("[PROVISION] JSON parse error: "));
-                        Serial.println(errMsg);
-                    } else if (wifiSet) {
-                        Serial.println(F("OK provision"));
-                        Serial.println(F("[PROVISION] WiFi saved — rebooting to connect..."));
-                        delay(300);
-                        ESP.restart();
-                    } else {
-                        Serial.println(F("OK provision"));
-                    }
-                }
-                serialLine = "";
-            } else if (c == 0x08 || c == 0x7F) {          // backspace / delete
-                if (serialLine.length() > 0) serialLine.remove(serialLine.length() - 1);
-            } else if (c >= 0x20 && c <= 0x7E) {           // printable ASCII (covers JSON)
-                if (serialLine.length() < 512) serialLine += c; // guard runaway buffer
-            }
-            // CR and other control bytes (tab, ESC/arrow-key sequences) are ignored.
-        }
+        // ONE implementation, shared with the node's loop() — see
+        // pollSerialProvision() above for why this stopped being inline here.
+        pollSerialProvision();
 
         delay(2);
     }
@@ -375,6 +410,35 @@ inline bool begin() {
         MDNS.addService("dustgate", "tcp", 80);
         MDNS.addServiceTxt("dustgate", "tcp", "role",  "primary");
         MDNS.addServiceTxt("dustgate", "tcp", "board", BOARD_NAME);
+#else
+        // ── AN UNPROVISIONED NODE STEALS THE BRAIN'S NAME ───────────────────
+        //
+        // getHostname() falls back to DEFAULT_HOSTNAME ("dustgate") when NVS
+        // holds none, and MDNS.begin() then claims `dustgate.local` — the name
+        // the whole shop uses for the PRIMARY. The service registration above is
+        // correctly skipped here, so the board stays out of the Boards picker
+        // while still fighting for the A record: invisible where it should be
+        // listed, and present where it should not be.
+        //
+        // That was found on a bench board on 2026-09-16, and the log it produced
+        // looked entirely healthy — "[WiFi] mDNS hostname: dustgate.local" is the
+        // same line a correctly-named board prints. So say it loudly here rather
+        // than leaving it to be noticed. A hostname is LOAD-BEARING on a node:
+        // it is what the primary dials (link.host) and what the Boards screen
+        // lists, and two nodes sharing one are reachable one at a time, at random.
+        if (hostname == String(DEFAULT_HOSTNAME)) {
+            Serial.println();
+            Serial.println(F("  ⚠️  ⚠️  ⚠️  THIS NODE HAS NO HOSTNAME OF ITS OWN."));
+            Serial.print  (F("      It is answering as '"));
+            Serial.print(hostname);
+            Serial.println(F(".local', which is the PRIMARY's name."));
+            Serial.println(F("      Nothing was provisioned into NVS, so the built-in"));
+            Serial.println(F("      default is being used. Re-flash it with a name:"));
+            Serial.println(F("          bash dev.sh flash-node dustgate-planer"));
+            Serial.println(F("      ...or provision the already-flashed board:"));
+            Serial.println(F("          DUSTGATE_PORT=/dev/cu.xxx bash dev.sh provision"));
+            Serial.println();
+        }
 #endif
         DEBUG_PRINT(F("[WiFi] mDNS hostname: "));
         Serial.print(hostname);
