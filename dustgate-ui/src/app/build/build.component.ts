@@ -901,10 +901,37 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       // saying "no outlet" reads as a job left undone when the job is finished a
       // different way. It still has nothing to REPORT, which is the honest thing
       // to say, and the sheet is one tap away either way.
+      const ct = clampOf(doc, el ?? undefined);
+      const boardOf = (spec: RawEl): string => {
+        const id = (spec['controllerId'] as string) || '';
+        const b = this.controllerList.find(c => c.id === id);
+        return b ? (b.name || b.id) : (id || 'this board');
+      };
+
+      // RF FIRST, AND ONLY ON A COLLECTOR, because the two facts are not equal
+      // in rank. How a blower is DRIVEN is the thing you need at a glance; the
+      // clamp says how it is watched, which matters but comes second. A tool has
+      // no drive at all, so for a tool the clamp IS the headline.
       const rf = ((el?.['control'] as RawEl | undefined)?.['rf']) as RawEl | undefined;
       if (rf) {
         return { state: 'none', text: 'by remote',
-                 hint: `${n.name} is switched by its remote. Nothing is watching it, so the shop list cannot say whether it is running. Tap to set it up.` };
+                 hint: ct
+                   ? `${n.name} is switched by its remote and watched by a current clamp on ${boardOf(ct)} — so a missed press gets noticed. No wattage: a clamp reports running or not.`
+                   : `${n.name} is switched by its remote. Nothing is watching it, so the shop list cannot say whether it is running. Tap to set it up.` };
+      }
+
+      // A CLAMP IS NOT AN ABSENT PLUG. Watched by a CT, this piece is fully set
+      // up and fully sensed — it simply is not sensed by an outlet, and saying
+      // "no outlet" reads as a job left undone. The 240 V planer is the whole
+      // reason clamps exist, so this is the normal case for exactly the machine
+      // most likely to have one.
+      //
+      // No live wattage, and that is the truth rather than a gap: a CT reports
+      // one bit (tool-sensing RFC §5.4b). What is running shows on the Live
+      // view; this badge says how the piece is WATCHED.
+      if (ct) {
+        return { state: 'none', text: 'current clamp',
+                 hint: `${n.name} is watched by a current clamp on ${boardOf(ct)}. It reports running or not, without a wattage — that is all a clamp can say.` };
       }
       return { state: 'none', text: 'no outlet',
                hint: `No smart outlet on ${n.name} — you switch it on yourself. Tap to pair one.` };
@@ -1558,8 +1585,23 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
    *  collector? Drives the one button's label for both. */
   /** Plug paired? Sensed for a tool, switched for the collector — one question,
    *  which is why the badge can be one badge. */
+  /**
+   * Is this piece SET UP — i.e. does DustGate know how to see or drive it?
+   *
+   * It asked "does it have an outlet" until 2026-09-16, which was the same
+   * question for as long as an outlet was the only answer. It no longer is: a
+   * 240 V tool is watched by a CLAMP and a collector is driven by its REMOTE,
+   * and both were drawn with the orange needs-setup dot while being completely
+   * configured. The dot is the canvas's one "you still have work here" signal,
+   * so a false one on a finished piece is worse than no dot at all.
+   */
   private hasPlugEl(el: RawEl): boolean {
-    return !!outletOf(this.topo as unknown as ShopDoc, el);
+    const doc = this.topo as unknown as ShopDoc;
+    if (outletOf(doc, el)) return true;
+    if (clampOf(doc, el)) return true;
+    // A collector switched by its own remote. Open-loop if nothing watches it,
+    // which the badge's hint says — but open-loop on purpose is still set up.
+    return !!((el['control'] as RawEl | undefined)?.['rf']);
   }
   /** A junction with no children and not capped = an unpopulated open duct end. */
   isOpenEnd(id: string): boolean { const e = this.elem(id); return e?.['type'] === 'junction' && !e['capped'] && this.childrenOf(id).length === 0; }
@@ -2702,8 +2744,8 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   /** What a tap on a placed piece offers. Gates: setup + the other kinds. Tools and
-   *  the collector: their smart outlet, which is the only thing about them that
-   *  isn't already said by where they sit. Everything but the collector also ends
+   *  the collector: HOW DUSTGATE SEES AND DRIVES THEM, which is the only thing
+   *  about them that isn't already said by where they sit. Everything but the collector also ends
    *  with Delete — this menu became the ONLY way to bin a placed piece when the red
    *  (−) badge came off on 2026-08-15, and a phone has no Delete key. */
   private convertOptions(id: string): MenuOption[] {
@@ -2715,7 +2757,11 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       const paired = n.setup === 'done';
       const opts: MenuOption[] = [{
         kind: 'outlet',
-        label: paired ? 'Smart outlet' : 'Set up smart outlet',
+        // "Smart outlet" until 2026-09-16, and it had stopped being true: this
+        // sheet now sets up a current clamp, a bin sensor and — on a collector —
+        // the remote that switches it, none of which are outlets. A label naming
+        // one of the options is a label that hides the others.
+        label: paired ? 'Device' : 'Set up this device',
         enabled: true,
         note: paired ? undefined : (n.glyph === 'collector' ? 'started by hand' : 'switched by hand'),
       }];

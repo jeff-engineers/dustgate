@@ -10,9 +10,12 @@ import {
   OutletReleaseResult,
   ClampBoard,
   NodeLinkState,
+  SenseReport,
   OutletConfigCmd,
   SystemStatus,
 } from './api.service';
+import { SERVO_CHANNELS_PER_BOARD } from '../gates/selector-types';
+import { clampOf } from './shop-doc';
 import * as model from '@device-model';
 import { validateTopology, type Topology } from '@topology';
 import { isShop, systemsOf, validateShop } from '@shop';
@@ -442,15 +445,35 @@ export class DemoApiService extends ApiService {
   // one, and the real layout that replaced the hand-built seed has it paired
   // (and driving nothing, which is its own thing worth being able to see). A
   // fourth board keeps every state on the screen.
+  /**
+   * The boards a demo user can actually pair — jeff's real shop, 2026-09-16.
+   *
+   * `ct` is declared here rather than derived, because a clamp is the one device
+   * that cannot be discovered: it has no address, somebody soldered it on, and
+   * the board saying so is the only way the UI learns it exists. Two boards have
+   * one — the brain at the collector, and the planer's sense-only board.
+   *
+   * THE SERVO BOARDS DECLARE NO CLAMP even though a real C5 has the pad, and
+   * that is deliberate: `caps.ct` today comes from `#ifdef PIN_CT`, so every C5
+   * claims a clamp whether or not one is wired to it (see the TODO on making the
+   * tag per-board rather than per-board-type). Staging it honestly here keeps
+   * the "Wired to" picker showing the two boards that really have one, which is
+   * what the picker is FOR.
+   */
   private readonly demoNodes: DiscoveredNode[] = [
-    { host: 'dustgate-node-1', ip: '192.168.87.61', board: 'qtpy_s3', servos: 4 },
-    // The slider board: no PWM channels at all, one rack. getNodes() turns
-    // `drives: linear` in the layout into caps {servos: 0, linear: 1}.
+    { host: 'dustgate-planer',   ip: '192.168.87.61', board: 'xiao_c5', servos: 3 },
+    { host: 'dustgate-tablesaw', ip: '192.168.87.62', board: 'xiao_c5', servos: 3 },
+    // CT only, no gate. A controller with no selectors is valid.
+    { host: 'dustgate-planer-sensor', ip: '192.168.87.63', board: 'xiao_c5', servos: 0, ct: 1 },
+    { host: 'dustgate-drum-sander', ip: '192.168.87.64', board: 'xiao_c5', servos: 3 },
+    { host: 'dustgate-miter-saw',   ip: '192.168.87.66', board: 'xiao_c5', servos: 3 },
+    { host: 'dustgate-routertable-jointer', ip: '192.168.87.67', board: 'xiao_c5', servos: 3 },
+    // The 2.5" system's slider, untouched: no PWM channels, one rack.
     { host: 'dustgate-slider-1', ip: '192.168.87.65', board: 'xiao_c5', servos: 0 },
-    { host: 'dustgate-node-2', ip: '192.168.87.62', board: 'devkitc', servos: 4 },
-    { host: 'dustgate-node-3', ip: '192.168.87.63', board: 'xiao_c5', servos: 4,
+    // One board that belongs to somebody else, kept so the takeover path still
+    // has something to exercise.
+    { host: 'dustgate-spare', ip: '192.168.87.68', board: 'xiao_c5', servos: 3,
       claimedBy: 'dustgate-garage', takeable: true },
-    { host: 'dustgate-node-4', ip: '192.168.87.64', board: 'xiao_c5', servos: 4 },
   ];
 
   override async discoverNodes(): Promise<DiscoveredNode[]> {
@@ -507,12 +530,100 @@ export class DemoApiService extends ApiService {
    *  one, and leaving it out would make the picker look like it only ever offers
    *  nodes. `''` is its controllerId, the model's "this board" rule. */
   override async getClampBoards(): Promise<ClampBoard[]> {
-    const out: ClampBoard[] = [{ id: '', name: 'Shop brain', online: true }];
+    // The primary's own name from the layout, not a hardcoded "Shop brain" — on
+    // jeff's shop that board is the Cyclone board, and a picker that calls it
+    // something else is a picker naming a board he cannot find.
+    const primary = (this.td?.topology as { controllers?: Array<{ role: string; name?: string; id: string }> })
+      ?.controllers?.find(c => c.role === 'primary');
+    const out: ClampBoard[] = [
+      { id: '', name: primary?.name || 'This board', online: true },
+    ];
     for (const n of await this.getNodes()) {
       if (!n.caps?.ct) continue;
       out.push({ id: n.id, name: n.name || n.id, online: n.online });
     }
     return out;
+  }
+
+  /** The clamps the LAYOUT has put on one board, with a live reading.
+   *
+   *  Derived rather than staged, for the reason the caps above are: in the demo
+   *  the layout IS the hardware, and a clamp that reports whatever a hardcoded
+   *  table says would drift away from the shop drawn on the canvas the moment
+   *  anyone edited it.
+   *
+   *  `reported` is true for any ONLINE board, which is the honest simulation: a
+   *  node that has a CONFIG and is answering does send SENSE. The never-reported
+   *  state — the one worth seeing on a bench — belongs to real hardware, and
+   *  staging it here permanently would tell a lie in the other direction.
+   *  Switching the tool on in the demo drives the clamp green, which is the
+   *  thing this exists to let you check without walking to the shop. */
+  private senseFor(controllerId: string, online: boolean): SenseReport[] | undefined {
+    const doc = this.td?.topology as unknown as Parameters<typeof clampOf>[0];
+    const out: SenseReport[] = [];
+    // WALK THE SYSTEMS, AND RESOLVE THROUGH THE MACHINE. Two homes, neither of
+    // them `topology.elements`: a TOOL's clamp lives on `machines[]` (it belongs
+    // to the machine, not to a port — the same rule as its plug), and a
+    // COLLECTOR's lives on the element inside `systems[].elements[]`. Reading
+    // `el.sensor.ct` finds only the collector's and silently misses every tool,
+    // which is exactly the bug clampLeads() shipped with on 2026-09-15.
+    // clampOf() is the one resolver that knows both — use it rather than a third
+    // copy of the rule.
+    for (const sys of systemsOf(this.td?.topology as unknown as Parameters<typeof systemsOf>[0])) {
+      const sysId = (sys as unknown as Record<string, unknown>)['id'];
+      for (const el of (sys.elements ?? []) as unknown as Array<Record<string, unknown>>) {
+        const ct = clampOf(doc, el as Parameters<typeof clampOf>[1]);
+        if (!ct) continue;
+        // Absent controllerId means THIS BOARD — the primary — exactly as the
+        // model reads it. A node only owns a clamp that names it.
+        if (String(ct['controllerId'] ?? '') !== controllerId) continue;
+        const id = String(el['id'] ?? '');
+        if (!id) continue;
+        if (!online) { out.push({ id, reported: false }); continue; }
+        // A COLLECTOR IS NOT A MACHINE, and reading it like one is the same
+        // mistake pollSensors() has a long comment about in TopologyRuntime.h.
+        // A tool's clamp answers "should the collector run", so it reads the
+        // machine's live wattage — the same number setToolManual() writes, which
+        // is what makes switching a tool on in the demo drive its clamp green.
+        // A blower has no `machines[]` entry at all, so `toolWatts` is
+        // permanently 0 for it: its clamp answers the OTHER question, "did the
+        // thing we commanded actually happen", and the device's own collector
+        // state is what knows. Reading it the machine way left the Cyclone's
+        // clamp stuck at idle with the blower running.
+        let on: boolean;
+        if (String(el['type'] ?? '') === 'collector') {
+          const sys = (topoStatus(this.td!) as
+            { systems?: Record<string, { collectorOn?: boolean }> })?.systems?.[String(sysId)];
+          on = !!sys?.collectorOn;
+        } else {
+          const watts = (this.td?.['toolWatts'] as Record<string, number> | undefined)?.[id] ?? 0;
+          on = watts > 0;
+        }
+        out.push({ id, reported: true, on, ageMs: 900 + Math.round(Math.random() * 600),
+                   level: on ? 3.2 : 0.3 });
+      }
+    }
+    return out.length ? out : undefined;
+  }
+
+  /** This board, as a board — the primary is not in `nodes`. In jeff's shop it
+   *  is the Cyclone board, and its clamp is the one most likely to matter. */
+  override async getSelfNode(): Promise<NodeLinkState | null> {
+    const primary = (this.td?.topology as
+        { controllers?: Array<{ role: string; name?: string; id: string; board?: string }> })
+      ?.controllers?.find(c => c.role === 'primary');
+    return {
+      id: primary?.id ?? 'primary',
+      host: '',
+      name: primary?.name || 'This board',
+      online: true,
+      lastSeen: Date.now(),
+      board: primary?.board ?? 'xiao_c5',
+      fw: '1.0.0-demo',
+      caps: { servos: SERVO_CHANNELS_PER_BOARD, linear: 0, ct: 1 },
+      // '' is how the model spells "this board", and it is what a layout writes.
+      sense: this.senseFor('', true),
+    };
   }
 
   override async getNodes(): Promise<NodeLinkState[]> {
@@ -540,8 +651,13 @@ export class DemoApiService extends ApiService {
         // tray has something to drag and the "which board?" picker has a real
         // choice to make. On hardware this comes from the pin map; there is
         // nothing else to ask here, so it is staged like every other demo fact.
-        caps: linear ? { servos: 0, linear: 1 }
-                     : { servos: known?.servos ?? 0, linear: 0, ct: 1 },
+        // ct comes from the board's own declaration, not from a blanket 1 —
+        // see demoNodes. Omitted when none, matching the wire.
+        caps: linear
+          ? { servos: 0, linear: 1 }
+          : { servos: known?.servos ?? 0, linear: 0,
+              ...(known?.ct ? { ct: known.ct } : {}) },
+        ...(known?.ct ? { sense: this.senseFor(host, online) } : {}),
       };
     });
   }

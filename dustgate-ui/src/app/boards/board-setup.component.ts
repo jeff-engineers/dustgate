@@ -3,8 +3,10 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
 import { Subscription } from 'rxjs';
-import { ApiService, DiscoveredNode, NodeLinkState } from '../services/api.service';
+import { ApiService, DiscoveredNode, NodeLinkState, SenseReport, clampsOn } from '../services/api.service';
 import type { Topology } from '@topology';
+import { systemsOf } from '@shop';
+import { machineOfPort } from '../services/shop-doc';
 import {
   type Drives, DEFAULT_DRIVES, applyDrivesCache, drivesFromCaps, drivesFromHasLinear, resolveDrives,
   unpairPrompt,
@@ -60,6 +62,18 @@ interface BoardRow {
     :host { display: block; max-width: 460px; margin: 0 auto; padding: 16px 14px 40px; }
     .head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
     .head .step { font-size: 12.5px; color: var(--muted); }
+
+    /* A clamp's live line. Muted by default because "idle" is the resting state
+       of a healthy shop; it earns colour only when it is reporting current, or
+       when it is silent and should not be. */
+    .clamp { display: flex; align-items: baseline; gap: 6px; margin-top: 3px;
+             font-size: 12px; color: var(--muted); line-height: 1.35; }
+    .clamp .cdot { width: 6px; height: 6px; border-radius: 50%; flex: none;
+                   background: var(--muted); opacity: .55; transform: translateY(-1px); }
+    .clamp.on { color: var(--text); }
+    .clamp.on .cdot { background: #3fb950; opacity: 1; }
+    .clamp.warn { color: var(--warn, #d29922); }
+    .clamp.warn .cdot { background: var(--warn, #d29922); opacity: 1; }
 
     /* The network name. It used to be captioned in the board rail above the
        canvas; the rail is gone, and this is the screen where the answer to
@@ -151,6 +165,12 @@ interface BoardRow {
               <span class="badge warn" *ngIf="isOffline(r)">Not answering</span>
             </div>
             <div class="sub">{{ subtitle(r) }}</div>
+            <!-- Shown at rest, never behind a tap: "is the clamp talking?" is
+                 the question this screen is opened to answer on a bench. -->
+            <div class="clamp" *ngFor="let c of clampLines(r)" [class.on]="c.state === 'ok'"
+                 [class.warn]="c.state === 'warn'">
+              <span class="cdot"></span>{{ c.text }}
+            </div>
           </ng-container>
           <ng-template #renameBox>
             <input class="rename" [(ngModel)]="renameText" (keyup.enter)="commitRename()"
@@ -230,6 +250,7 @@ export class BoardSetupComponent implements OnInit, OnDestroy {
   rows: BoardRow[] = [];
   found: DiscoveredNode[] = [];
   links: NodeLinkState[] = [];
+  self: NodeLinkState | null = null;
   scanning = false;
   scanned = false;
   error = '';
@@ -426,6 +447,76 @@ export class BoardSetupComponent implements OnInit, OnDestroy {
   isOnline(r: BoardRow): boolean { return r.primary || !!r.link?.online; }
   isOffline(r: BoardRow): boolean { return !r.primary && !r.link?.online; }
 
+  /** The clamp lines under a board row — the answer to "is this node talking
+   *  back?", which is otherwise only visible on a serial cable.
+   *
+   *  FOUR STATES, and three of them look identical if you only render `on`:
+   *
+   *    no clamp declared      → nothing at all (the common case)
+   *    declared, unassigned   → the layout has not put a tool on it yet. This is
+   *                             where a bench test lands after pairing a board
+   *                             and before drawing anything, and saying nothing
+   *                             here reads as "broken".
+   *    assigned, never heard  → CONFIG went out and no SENSE came back. The
+   *                             chain is broken between the primary and the ADC.
+   *    reporting              → the only state that proves the link works, and
+   *                             it proves it whether the tool is on or off. */
+  clampLines(r: BoardRow): { text: string; state: 'ok' | 'warn' | 'idle' }[] {
+    const link = r.link;
+    if (!link || !clampsOn(link)) return [];
+    const sense = link.sense ?? [];
+    if (!sense.length) {
+      return [{ state: 'idle',
+                text: 'Current clamp fitted — no tool assigned to it yet.' }];
+    }
+    return sense.map((s: SenseReport) => {
+      if (!s.reported) {
+        return { state: 'warn' as const,
+                 text: `${this.watches(s.id)} — configured, but this board has never reported.` };
+      }
+      const bits = [s.on ? 'drawing current' : 'idle'];
+      // The level is what makes a quiet clamp readable: 0.1x trip is a clamp
+      // watching a motionless tool, 0.9x is one about to chatter.
+      if (typeof s.level === 'number' && s.level >= 0) bits.push(`${s.level.toFixed(1)}x trip`);
+      bits.push(this.ago(s.ageMs));
+      return { state: (s.on ? 'ok' : 'idle') as 'ok' | 'idle',
+               text: `${this.watches(s.id)} — ${bits.join(', ')}` };
+    });
+  }
+
+  /** "Clamp on the Planer", not "Clamp on tool6".
+   *
+   *  `sensorId` is an ELEMENT id and is deliberately opaque on the wire — the
+   *  node never parses it, it only echoes it back (nodelink.js). That makes it
+   *  the right thing to send and the wrong thing to show: nobody standing in a
+   *  shop knows which box `tool6` is. Resolved through the layout, which is the
+   *  only place the name lives, and falls back to the id when there is no layout
+   *  at all — a board can be paired before any ductwork is drawn.
+   *
+   *  A TOOL's name is on its MACHINE, not on the port element, the same rule
+   *  that puts its plug and its clamp there. A collector carries its own. */
+  private watches(sensorId: string): string {
+    const doc = this.topo as unknown as Parameters<typeof machineOfPort>[0];
+    for (const sys of systemsOf(this.topo as unknown as Parameters<typeof systemsOf>[0])) {
+      for (const el of (sys.elements ?? []) as unknown as Array<Record<string, unknown>>) {
+        if (String(el['id'] ?? '') !== sensorId) continue;
+        const name = machineOfPort(doc, el as Parameters<typeof machineOfPort>[1])?.name
+                  ?? (el['name'] as string | undefined);
+        return name ? `Clamp on the ${name}` : `Clamp on ${sensorId}`;
+      }
+    }
+    return `Clamp on ${sensorId}`;
+  }
+
+  /** Age in the words a person uses. The device sends ms since its own boot-
+   *  relative clock, which means nothing here except as a duration. */
+  private ago(ms: number | undefined): string {
+    if (typeof ms !== 'number') return 'just now';
+    if (ms < 1500) return 'just now';
+    if (ms < 60000) return `${Math.round(ms / 1000)}s ago`;
+    return `${Math.round(ms / 60000)}m ago`;
+  }
+
   subtitle(r: BoardRow): string {
     const bits: string[] = [];
     // What it drives, in the words the canvas uses for its ports. Read-only: the
@@ -450,6 +541,10 @@ export class BoardSetupComponent implements OnInit, OnDestroy {
   // ── internals ─────────────────────────────────────────────────────────────
   private async refreshLinks(): Promise<void> {
     try { this.links = await this.api.getNodes(); } catch { /* leave the last known state */ }
+    // The primary is a board too, and it is NOT in `nodes` — a clamp at the
+    // collector is the likeliest first one in a shop, and without this it is the
+    // only one this screen could not show.
+    try { this.self = await this.api.getSelfNode(); } catch { /* keep the last */ }
   }
 
   /** Rows come from the device's pairing list, plus the primary (which is always
@@ -471,7 +566,7 @@ export class BoardSetupComponent implements OnInit, OnDestroy {
       board: primary?.board ?? '',
       primary: true,
       drives: resolveDrives(this.reportedDrives(primary?.id ?? 'primary'), primary?.drives),
-      link: null,
+      link: this.self,
       gates: this.gatesOn(primary?.id ?? 'primary'),
     }];
     for (const l of this.links) {
