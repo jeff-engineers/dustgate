@@ -1001,9 +1001,7 @@ static void printBuildIdentity() {
 #else
     Serial.print(F("PRIMARY"));
 #endif
-#ifdef DUSTGATE_COLLECTOR
-    Serial.print(F(" / collector"));
-#elif HAS_LINEAR
+#if HAS_LINEAR
     Serial.print(F(" / slider (serial bus)"));
 #elif HAS_SERVO
     Serial.print(F(" / PWM servo bank"));

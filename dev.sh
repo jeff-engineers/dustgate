@@ -30,27 +30,30 @@
 #       curl -H "X-Api-Key: <key>" http://<host>/api/topology > my-shop.json
 #       bash tools/restore-topology.sh my-shop.json
 #
-#   bash dev.sh flash-node [host]   # NODE: servo-only firmware + WiFi creds
-#     A node is a dumb actuator bank — four servo valves, no UI, no plug polling.
-#     Its hostname is load-bearing (mDNS, the Boards screen, link.host in the
-#     topology) and must be unique per node.
+#   bash dev.sh flash-node [host]   # NODE: node firmware + WiFi creds
+#     Three servo valves, a CT clamp, no UI, no plug polling. NOT "a dumb
+#     actuator bank" any more — a node owns any control loop faster than a WiFi
+#     round trip (a homing sweep, a 60 Hz RMS) and no interpretation of the
+#     document. Its hostname is load-bearing (mDNS, the Boards screen, link.host
+#     in the topology) and must be unique per node.
 #
-#   THE COLLECTOR BOARD — add --collector:
+#   THE COLLECTOR BOARD — no flag, and that is the point (2026-09-16):
 #
-#   bash dev.sh flash --collector collector       # a PRIMARY at the collector
-#   bash dev.sh flash-node --collector collector  # ...or a NODE, if the brain
-#                                                 #    is elsewhere
-#     Drives NO GATES: the PWM block goes to fob servos (D7/D8) and the 315 MHz
-#     transmitter (D9) instead, so SERVO_COUNT is 2. Bin sensor on D6, CT on D0.
-#     ⚠️ The NODE build compiles but has neither the bin sensor nor the RF
-#     transmitter — both still live in firmware.ino. Fob servos work on both.
+#   bash dev.sh flash collector       # a PRIMARY at the collector
+#   bash dev.sh flash-node collector  # ...or a NODE, if the brain is elsewhere
+#     There is no --collector any more, because there is no collector BUILD.
+#     One pin map serves every PWM board — CT on D0, bin on D6, servo channels
+#     0/1/2 on D7/D8/D9, transmitter on D10 — so what makes a board a collector
+#     is the LAYOUT pointing it at a bin, a clamp and a remote.
+#     ⚠️ A NODE still has neither the bin sensor nor the RF transmitter: both
+#     live in firmware.ino and were never moved. Clamps DO work on a node.
 #     firmware/wiring/collector-node.md has the table of what works where.
 #
 #   THE SLIDER BOARD — add --slider to either flash command:
 #
 #   bash dev.sh flash --slider        # a PRIMARY that drives the rack
 #   bash dev.sh flash-node --slider   # a NODE that drives the rack
-#     Same XIAO C5, same two roles. What changes is that the four PWM channels
+#     Same XIAO C5, same two roles. What changes is that the three PWM channels
 #     become one ST3215 serial bus servo on D6/D7 plus two endstops on D8/D9 —
 #     PWM and serial never share a board, so this is a different program, not a
 #     runtime option. config.h #errors if a pin map ever claims both.
@@ -65,9 +68,12 @@
 #
 #     press                   Fire the 315 MHz transmitter ONCE, now. Bypasses
 #                             the retry policy — no cooldown, no spin-up grace,
-#                             no sensor needed. Falls back to D9 and the measured
+#                             no sensor needed. Falls back to D10 (PIN_RF_TX,
+#                             moved from D9 on 2026-09-16) and the measured
 #                             Rockler address when no layout names one, so it
 #                             works before any control.rf block exists.
+#                             ⚠️ MOVE THE MODULE'S DATA WIRE if this board was
+#                             built before that date — D9 is servo channel 2 now.
 #                             ⚠️ Put a LAMP in the receiver's outlet, not the
 #                             collector: a blower cannot spin up and coast down
 #                             fast enough to read.
@@ -80,7 +86,7 @@
 #                             SETUP ONLY. An inverted address is a valid address
 #                             for someone else's receiver; watch it run.
 #
-#     stroke <1-4> <from> <to> [reps] [dwellMs]
+#     stroke <1-3> <from> <to> [reps] [dwellMs]
 #                             Press and release a servo, repeatably, then
 #                             DETACH. For finding out whether a 9g servo can
 #                             throw a given switch — there is no torque number
@@ -101,11 +107,14 @@
 #                             exactly like a perfectly quiet sensor. D0 should
 #                             sit at ~1650 mV.
 #
-#     servo <1-4> <deg>       Move one servo. `servo N detach` de-energises it.
+#     servo <1-3> <deg>       Move one servo. `servo N detach` de-energises it.
 #     mdnsprobe               What answers mDNS here, and how fast.
 #     sweep [from] [to]       Knock on every address looking for a Tasmota.
 #     probe <ip>              Why one address did not answer.
-#     help                    Everything, including the non-collector commands.
+#     help                    Everything. There is no longer a collector build
+#                             for these to be "the collector commands" of —
+#                             every PWM board has the CT, the bin pad and the
+#                             transmitter, and the layout decides who uses them.
 #
 #   bash dev.sh monitor             # serial monitor (primary)
 #   bash dev.sh monitor node        # ...a node instead
@@ -117,6 +126,11 @@
 #     DUSTGATE_PORT_NODE=…
 #   bash dev.sh erase               # full chip erase (fixes corrupted-partition weirdness)
 #   bash dev.sh provision           # (re)send WiFi/key/hostname without reflashing
+#   bash dev.sh provision node      # ...to the board pinned as the NODE
+#     Works on a node since 2026-09-16. Before that the node program had no
+#     serial reader outside the captive portal, so this command — and the
+#     hostname `flash-node` prompts for — were silently dropped on any node that
+#     already had WiFi credentials in NVS.
 #   bash dev.sh live [host]         # ng serve with hot reload, proxied to REAL hardware
 #                                   #   (default host: dustgate.local)
 #
@@ -140,19 +154,18 @@ PRIMARY_ENV="xiao_c5_primary"
 NODE_ENV="xiao_c5"
 
 # The SLIDER pair. Same board and the same two roles — what changes is that the
-# four PWM channels are traded for one ST3215 on a serial bus, because PWM and
+# three PWM channels are traded for one ST3215 on a serial bus, because PWM and
 # serial never share a board. A slider board is therefore a THIRD thing to flash
 # in each role, not a flag on the servo build, and `--slider` picks it.
 LINEAR_PRIMARY_ENV="xiao_c5_linear_primary"
 LINEAR_NODE_ENV="xiao_c5_linear"
 
-# The COLLECTOR pair, and a FOURTH thing to flash in each role for the same
-# reason the slider is a third: it drives different hardware off the same pads.
-# A collector board drives no gates, so the PWM block goes to fob servos (D7/D8)
-# and the 315 MHz transmitter (D9) instead — SERVO_COUNT is 2 there.
-# `--collector` picks it. See tool-sensing-rfc §6.2.
-COLLECTOR_PRIMARY_ENV="xiao_c5_collector"
-COLLECTOR_NODE_ENV="xiao_c5_collector_node"
+# THE COLLECTOR ENVS ARE GONE (2026-09-16). There used to be a pair here, a
+# fourth thing to flash in each role, because a CT and a transmitter would not
+# fit beside four servo channels. Three channels puts the transmitter on D10 and
+# every pad gets one owner, so a collector board is an ordinary primary or an
+# ordinary node. `--collector` is still ACCEPTED below and does nothing but
+# print, so muscle memory does not fail a flash.
 
 UI_DIR="$SCRIPT_DIR/dustgate-ui"
 TOOLS_DIR="$SCRIPT_DIR/tools"
@@ -465,13 +478,12 @@ parse_provision_overrides() {
       --ask)    OV_ASK=1; shift ;;
       --save)   OV_SAVE=1; shift ;;
       # The rack board: one ST3215 on a serial bus and two endstops, instead of
-      # four PWM channels. Consumed here rather than passed through, because the
+      # three PWM channels. Consumed here rather than passed through, because the
       # env it selects is handed to deploy.sh as --env= below.
       --slider|--linear|--rack) FLASH_ENV="$LINEAR_PRIMARY_ENV"; shift ;;
-      # The collector board: bin sensor, CT, RF transmitter, fob servos. NOT a
-      # separate env — it is the PRIMARY build, because that is where those
-      # capabilities actually live today. See the banner in run_flash().
-      --collector|--dc) FLASH_COLLECTOR=1; FLASH_ENV="$COLLECTOR_PRIMARY_ENV"; shift ;;
+      # No longer selects anything — kept so an old command line still works.
+      # The ordinary primary IS the collector build now; the banner says so.
+      --collector|--dc) FLASH_COLLECTOR=1; shift ;;
       # Two primary envs now, and --slider picks between them, so these say
       # nothing. Accepted and ignored rather than failing a flash on muscle memory.
       --env)    shift 2 ;;
@@ -639,23 +651,27 @@ run_flash() {
   set -- "${PROVISION_REST[@]+"${PROVISION_REST[@]}"}"
 
   if [[ "${FLASH_COLLECTOR:-0}" == "1" ]]; then
-    echo "▶ Real hardware — flashing a COLLECTOR board."
+    echo "▶ Real hardware — flashing a board for the COLLECTOR."
     echo "  Target: $(describe_env "$FLASH_ENV")"
     echo ""
-    echo "  Drives NO GATES. The PWM block is spent on collector jobs instead:"
+    echo "  THERE IS NO COLLECTOR BUILD ANY MORE (2026-09-16). This is the"
+    echo "  ordinary primary, and one pin map serves every PWM board:"
     echo ""
     echo "        D0  CT clamp         the only analog pad on the edge"
     echo "        D6  bin sensor       opto output, LOW = full"
-    echo "        D7  fob servo, ON    PWM channel 1"
-    echo "        D8  fob servo, OFF   PWM channel 2"
-    echo "        D9  315 MHz TX       where channel 3 would be"
-    echo "        D10 spare            lamps, or a third fob button"
+    echo "        D7  servo channel 0  the gate, if this board drives one"
+    echo "        D8  servo channel 1  fob servo, ON"
+    echo "        D9  servo channel 2  fob servo, OFF"
+    echo "        D10 315 MHz TX       and nothing else shares it"
+    echo ""
+    echo "  What makes this a collector is the LAYOUT — a bin, a clamp and a"
+    echo "  remote pointed at this board — not the firmware on it."
     echo ""
     echo "  ⚠️  WHAT ACTUALLY WORKS TODAY is less than that list implies:"
     echo "        fob servos    yes — ordinary servo channels (servo / stroke)"
-    echo "        RF TX         yes on this PRIMARY build; NOT on the node"
-    echo "        bin sensor    yes on this PRIMARY build; NOT on the node"
-    echo "        CT clamp      no — bench console only (xiao_c5_ct_bench)"
+    echo "        RF TX         yes on a PRIMARY; NOT on a node (still in .ino)"
+    echo "        bin sensor    yes on a PRIMARY; NOT on a node (still in .ino)"
+    echo "        CT clamp      code is in on both, NEVER RUN on either"
     echo "      firmware/wiring/collector-node.md has the table."
     echo ""
     echo "  ⚠️  THIS IS A COMPLETE PRIMARY — web UI, topology, plug polling."
@@ -667,7 +683,8 @@ run_flash() {
     echo "  Bench commands once it is up (bash dev.sh monitor):"
     echo "      press                       fire the RF transmitter once"
     echo "      rfscan                      find the fob's address by trying"
-    echo "      stroke <1-4> <from> <to> [n]  press a switch, repeatably"
+    echo "      stroke <1-3> <from> <to> [n]  press a switch, repeatably"
+    echo "      ct [n]                      read the clamp (serial only)"
     echo ""
   elif [[ "$FLASH_ENV" == "$LINEAR_PRIMARY_ENV" ]]; then
     echo "▶ Real hardware — flashing a SLIDER PRIMARY (XIAO C5 + ST3215)."
@@ -675,7 +692,7 @@ run_flash() {
     echo ""
     echo "  The routing brain, on the board that drives the rack. Everything a"
     echo "  primary has — topology, web UI, Shelly polling, NodeLink, the screen"
-    echo "  — with the four PWM channels traded for one bus servo on D6/D7 and"
+    echo "  — with the three PWM channels traded for one bus servo on D6/D7 and"
     echo "  two endstops on D8/D9."
     echo ""
     echo "  It HOMES BEFORE IT CAN MOVE: a step-counting servo has no datum of"
@@ -726,7 +743,8 @@ run_flash_node() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --slider|--linear|--rack) node_env="$LINEAR_NODE_ENV"; shift ;;
-      --collector|--dc) node_env="$COLLECTOR_NODE_ENV"; shift ;;
+      # Accepted and ignored: the ordinary node IS the collector node now.
+      --collector|--dc) shift ;;
       *) args+=("$1"); shift ;;
     esac
   done
@@ -751,12 +769,21 @@ run_flash_node() {
     echo "    the node accepts moves and holds them."
     echo ""
   else
-  echo "▶ Secondary NODE — flashing the servo-only firmware."
+  echo "▶ Secondary NODE — flashing the node firmware."
   echo "  Target: $(describe_env "$node_env")"
   echo ""
-  echo "  A node is a dumb actuator bank: it drives up to four servo valves and"
-  echo "  nothing else. No web UI, no plug polling — the primary does all the"
-  echo "  thinking and sends it already-resolved angles."
+  echo "  Up to THREE servo valves (D7/D8/D9) and a CT clamp (D0). No web UI, no"
+  echo "  plug polling: the primary owns the document and sends already-resolved"
+  echo "  angles, never state names."
+  echo ""
+  echo "  NOT \"a dumb actuator bank\" — that phrasing was wrong twice. A node"
+  echo "  owns any control loop FASTER THAN A WIFI ROUND TRIP and no"
+  echo "  interpretation of the document: a slider node owns its homing sweep,"
+  echo "  and this one owns a 60 Hz RMS loop, because neither can round-trip per"
+  echo "  sample. What it never owns is what the reading MEANS."
+  echo ""
+  echo "  ⚠️  A node still has NO bin sensor and NO RF transmitter — both live in"
+  echo "     firmware.ino and were never moved. The clamp does work here."
   echo ""
   echo "  + SSD1306 status screen and its wake button, compiled in and probed for"
   echo "    at boot — no panel, one line on serial, carry on. A node's screen"
@@ -792,10 +819,27 @@ run_flash_node() {
   echo ""
   read -rp "  Node hostname — must be unique per node [$suggested]: " HOSTNAME_CFG
   HOSTNAME_CFG="${HOSTNAME_CFG:-$suggested}"
-  if [[ "$HOSTNAME_CFG" == "${ENV_HOST:-dustgate}" ]]; then
+  # TWO names are refused, and the second one was learnt the hard way.
+  #
+  #   - whatever tools/.env calls the primary, which is the obvious collision
+  #   - the literal string "dustgate", ALWAYS, because that is
+  #     DEFAULT_HOSTNAME in firmware/utils/WiFiConfig.h — the name an
+  #     unprovisioned board answers to. A shop whose primary is called
+  #     `dustgate-shop` sails straight past the first check while the node
+  #     still ends up owning `dustgate.local`, which is what happened on
+  #     2026-09-16.
+  if [[ "$HOSTNAME_CFG" == "${ENV_HOST:-dustgate}" || "$HOSTNAME_CFG" == "dustgate" ]]; then
     echo ""
-    echo "  ✗ '$HOSTNAME_CFG' is the PRIMARY's hostname — a node needs its own."
-    echo "    Re-run and pick something like dustgate-node-1."
+    echo "  ✗ '$HOSTNAME_CFG' is not a name a NODE may have."
+    if [[ "$HOSTNAME_CFG" == "dustgate" ]]; then
+      echo "    It is the firmware's built-in default (DEFAULT_HOSTNAME), so an"
+      echo "    unprovisioned board already answers to it — a node taking it"
+      echo "    fights the brain for dustgate.local and wins about half the time."
+    else
+      echo "    It is the PRIMARY's hostname."
+    fi
+    echo "    Re-run and pick something like $(next_node_hostname), or name it"
+    echo "    after the machine it sits on: dustgate-planer, dustgate-tablesaw."
     exit 1
   fi
 
@@ -833,14 +877,21 @@ next_node_hostname() {
 }
 
 run_provision() {
+  # `provision node` targets the board pinned as the NODE, the same way
+  # `monitor node` does. Without it this command could only ever reach the
+  # primary-pinned port, which is the wrong half of the shop for the thing it is
+  # most often needed for: a node that came up on the wrong hostname.
+  local role=""
+  if [[ "${1:-}" == "node" || "${1:-}" == "n" ]]; then role="node"; shift; fi
+
   # Same overrides as flash. Here they're arguably more useful: this is the
   # command for moving an already-flashed board onto a different network or
   # renaming it, which is exactly what a flag spares you re-typing.
   parse_provision_overrides "$@"
 
-  echo "▶ (Re)send WiFi/key/hostname to an already-flashed board."
+  echo "▶ (Re)send WiFi/key/hostname to an already-flashed ${role:-primary} board."
   local port
-  port="$(require_port)" || exit 1
+  port="$(require_port $role)" || exit 1
   echo "  Using port: $port"
   # No flags given → prompt, which is what this command has always done. With
   # flags, take them as said and don't ask.
@@ -1045,20 +1096,22 @@ show_menu() {
   echo "  4) Flash a PRIMARY      — UI + firmware + filesystem + provision"
   echo "     4f = firmware only     4u = UI/filesystem only"
   echo "     4s = the SLIDER primary (ST3215 rack instead of PWM valves)"
-  echo "     4c = the COLLECTOR primary (bin + RF + fob servos, no gates)"
-  echo "  5) Flash a NODE         — servo-only firmware + WiFi creds"
+  echo "     4c = the same primary, with the collector wiring explained"
+  echo "  5) Flash a NODE         — node firmware + WiFi creds"
   echo "     5s = a SLIDER node (one rack, homes itself at boot)"
-  echo "     5c = a COLLECTOR node (fob servos; no bin/RF yet — see the banner)"
+  echo "     5c = the same node — there is no collector build any more"
   echo ""
   echo "  w) Set the WiFi credentials and hostname used by every flash above"
   echo ""
   echo "  6) Monitor the PRIMARY      (6n = monitor a NODE instead)"
-  echo "     collector bench commands, once connected:"
+  echo "     bench commands, once connected:"
   echo "       press   fire the RF transmitter once (lamp in the outlet, not the blower)"
   echo "       rfscan  find the fob's address by trying the 4 ways a DIP gets misread"
-  echo "       stroke <1-4> <from> <to> [reps]   press a switch repeatably, then detach"
+  echo "       ct [n]  read the clamp n times — serial only, see the note in the header"
+  echo "       stroke <1-3> <from> <to> [reps]   press a switch repeatably, then detach"
   echo "  7) Ports — list attached boards, and pin one to a role"
   echo "  8) (Re)send WiFi/key/hostname to an already-flashed board"
+  echo "     8n = ...to the board pinned as the NODE"
   echo "  9) Full chip erase (fixes corrupted-partition weirdness)"
   echo "  q) Quit"
   echo ""
@@ -1086,6 +1139,7 @@ show_menu() {
     6n|6N) run_monitor "$NODE_ENV" ;;
     7) run_ports ;;
     8) run_provision ;;
+    8n|8N) run_provision node ;;
     9) run_erase ;;
     q|Q) exit 0 ;;
     *) echo "Unknown choice."; show_menu ;;

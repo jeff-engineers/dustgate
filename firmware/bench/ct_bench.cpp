@@ -30,7 +30,11 @@
 #include "../config.h"
 #include "../sensing/CtSensor.h"
 
-static const int  PIN_CT    = 1;      // D0, the only analog pad on the edge
+// PIN_CT COMES FROM THE BOARD HEADER (via config.h) SINCE 2026-09-16, and this
+// file no longer names a pad of its own. It used to, back when PIN_CT was
+// collector-only and this bench had to supply it — and that is exactly the kind
+// of second copy that let ct_bench drift away from CtSensor for weeks. One
+// unified pin map means the board already knows where its clamp is.
 static const int  OLED_ADDR = 0x3C;
 
 // SCT-013-030: 30 A RMS through the jaw gives 1 V RMS out. Linear, so amps are

@@ -28,8 +28,11 @@ export { BOARD_H, BOARD_W };
  *  ALTERNATIVES, not a sum: a board is flashed to drive the PWM bank or one
  *  serial-bus slider, and the two contend for the same pads. Reading them as 4+1
  *  is what put a fifth port on every board on this canvas until 2026-08-28.
- *  The port strip IS the budget, drawn — four ports, or one. */
-export const SERVO_PORTS = 4;
+ *  The port strip IS the budget, drawn — three ports, or one.
+ *
+ *  THREE since 2026-09-16, down from four: one unified pin map puts the 315 MHz
+ *  transmitter on D10, so D7/D8/D9 are all the PWM channels a board has. */
+export const SERVO_PORTS = 3;
 export const PORT_PITCH = 18;
 export const PORT_W = 12;
 export const PORT_H = 7;

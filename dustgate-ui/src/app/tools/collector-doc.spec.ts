@@ -9,7 +9,7 @@
 // process.exitCode on failure. Run by spec-runner.js.
 
 import {
-  CollectorForm, RawEl, DEFAULT_COAST_SEC, DEFAULT_CT_CHANNEL, DEFAULT_RF_PIN, ROCKLER_ADDRESS,
+  CollectorForm, RawEl, DEFAULT_COAST_SEC, DEFAULT_CT_CHANNEL, ROCKLER_ADDRESS,
   fused, readCollector, writeCollector,
 } from './collector-doc';
 import { validateTopology } from '@topology';
@@ -155,7 +155,10 @@ const plug = (ip: string, kind: 'shelly' | 'tasmota' = 'shelly') =>
   // it. Saving an rf collector produced exactly that invalid document until
   // 2026-09-14.
   const rf = (writeCollector(collector(), form({ ctl: 'rf' }))['control'] as RawEl)['rf'] as RawEl;
-  eq('an rf press always carries a pin, asked for or not', rf['pin'], DEFAULT_RF_PIN);
+  // NO pin, since 2026-09-16 — the firmware supplies its own pad (PIN_RF_TX) and
+  // the UI has no business naming a GPIO. Writing one is what stranded every
+  // saved layout on D9 when the transmitter moved to D10.
+  eq('an rf press carries no pin — the board supplies its own pad', rf['pin'], undefined);
 
   // ...and never overwrites one the document already had: a board with its
   // transmitter on another pad must survive someone opening the sheet.
