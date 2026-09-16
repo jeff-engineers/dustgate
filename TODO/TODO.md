@@ -64,6 +64,14 @@ reasoning was contested, or that a still-open item above leans on.
   C only with evidence.
 
 
+- **DEFERRED 2026-09-16 (jeff): "we'll deal with CNC stuff when it comes down to
+  it. I want to deal with getting my shop online, and my CNC isn't part of that."**
+  Not a disagreement with anything below — the analysis stands and the design is
+  written. It is a priority call: no tool in THIS shop idles loudly, so nothing
+  here blocks a working shop, and it is the kind of feature that is better built
+  against a real machine than imagined. Leave §5.4d as the record and come back
+  when a CNC exists to test with.
+
 - **A tool that idles LOUDLY needs a threshold, and the schema has nowhere to put
   one (jeff's friend, via jeff, 2026-09-16).** §5.4b concluded there is nothing
   to threshold, because every tool measured has a standby under the noise floor.
