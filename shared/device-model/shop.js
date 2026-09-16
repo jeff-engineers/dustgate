@@ -180,6 +180,13 @@ function validateShop(shop) {
     }
   }
 
+  // Board ids, for anything that ADDRESSES a board. Built here rather than
+  // inside the machine loop because a clamp is not the only thing that will want
+  // it — the bin sensor and every selector already resolve the same way, they
+  // just do it in topology.js against the flattened element list.
+  const ctrlIds = new Set(
+    (shop.controllers || []).map((c) => c && c.id).filter(Boolean));
+
   // ── machines ──
   const machIds = new Set();
   for (const m of shop.machines) {
@@ -192,6 +199,41 @@ function validateShop(shop) {
       if (typeof m.sensor !== 'object' || m.sensor === null) err('machine', 'sensor must be an object', m.id);
       else if (m.sensor.outlet !== undefined && (typeof m.sensor.outlet !== 'object' || m.sensor.outlet === null)) {
         err('machine', 'sensor.outlet must be an object', m.id);
+      }
+      // ── a CLAMP on a machine, which is where the UI actually writes one ────
+      //
+      // UNVALIDATED UNTIL 2026-09-16, and the gap was invisible because
+      // topology.js checks `sensor.ct` on ELEMENTS, which is the v1 shape and
+      // the one every fixture uses. In a v2 shop a tool's clamp lives here —
+      // same rule as its plug, a machine is one box however many ports it has —
+      // so a configurator-written clamp went through with no checks at all: a
+      // controllerId naming a board nobody paired, a channel off the end of the
+      // pin map, or a plug and a clamp on one machine all validated clean and
+      // then did nothing on the device.
+      //
+      // Same rules as the element pass in topology.js, deliberately — see the
+      // long note there for why there is no thresholdW in this shape.
+      const ct = m.sensor && m.sensor.ct;
+      if (ct !== undefined) {
+        if (typeof ct !== 'object' || ct === null) {
+          err('machine', 'sensor.ct must be an object', m.id);
+        } else {
+          if (m.sensor.outlet)
+            err('machine',
+                `"${m.name || m.id}" is sensed by BOTH a plug and a CT — pick one`, m.id);
+          // controllerId is OPTIONAL and means "this board" when absent, matching
+          // the bin sensor, every selector, and NodeBus's own rule.
+          if (ct.controllerId !== undefined) {
+            if (typeof ct.controllerId !== 'string' || !ct.controllerId)
+              err('machine', 'sensor.ct.controllerId must be a non-empty string', m.id);
+            else if (!ctrlIds.has(ct.controllerId))
+              err('machine', `sensor.ct.controllerId "${ct.controllerId}" does not resolve`, m.id);
+          }
+          if (typeof ct.channel !== 'number' || !Number.isInteger(ct.channel))
+            err('machine', 'sensor.ct.channel must be a number', m.id);
+          else if (ct.channel < 0 || ct.channel > 15)
+            err('machine', `sensor.ct.channel ${ct.channel} out of range (0..15)`, m.id);
+        }
       }
     }
   }

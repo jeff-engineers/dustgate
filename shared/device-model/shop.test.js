@@ -87,6 +87,37 @@ check('two machines sharing one plug rejected',
     s.machines[1].sensor.outlet.ip = s.machines[0].sensor.outlet.ip;
   })), 'machine'));
 
+// ── a CLAMP on a machine, which is where the configurator writes one ────────
+//
+// UNCHECKED UNTIL 2026-09-16. topology.js validates `sensor.ct` on ELEMENTS,
+// which is the v1 shape and the one every fixture used — so a v2 shop, the only
+// thing the UI produces, carried a clamp through validation with no checks at
+// all. A controllerId naming a board nobody paired validated clean and then did
+// nothing on the device, which is the worst of both.
+//
+// Same rules as the element pass, asserted here against the MACHINE.
+const clamped = (s, ct) => {
+  delete s.machines[0].sensor.outlet;
+  s.machines[0].sensor = { ct };
+};
+check('a clamp on a machine is valid',
+  validateShop(mut((s) => { clamped(s, { channel: 0 }); })).ok);
+check('...and may name a board that exists',
+  validateShop(mut((s) => { clamped(s, { channel: 0, controllerId: s.controllers[0].id }); })).ok);
+check('a clamp naming a board that does not exist is rejected',
+  hasCode(validateShop(mut((s) => { clamped(s, { channel: 0, controllerId: 'ghost' }); })), 'machine'));
+check('a clamp with no channel is rejected',
+  hasCode(validateShop(mut((s) => { clamped(s, {}); })), 'machine'));
+check('a clamp channel off the end of the pin map is rejected',
+  hasCode(validateShop(mut((s) => { clamped(s, { channel: 99 }); })), 'machine'));
+check('a clamp that is not an object is rejected',
+  hasCode(validateShop(mut((s) => { s.machines[0].sensor = { ct: 'yes' }; })), 'machine'));
+// One machine, one answer to "is this drawing". Structurally the same rule the
+// element pass makes, and it has to exist on both sides or the UI can write a
+// document the firmware will read two ways.
+check('a plug AND a clamp on one machine is rejected',
+  hasCode(validateShop(mut((s) => { s.machines[0].sensor.ct = { channel: 0 }; })), 'machine'));
+
 // RFC §6.6: `enabled: false` is the hood-off-the-saw state, and that is a story
 // about a bonus pickup. THE PRIMARY IS ALWAYS ENABLED — switching it off means
 // "collect nothing from this tool", which is what deleting the machine is for.

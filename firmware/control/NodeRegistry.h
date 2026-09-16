@@ -33,9 +33,15 @@
 
 namespace topo {
 
-// Same ceiling as the link-slot array in the sketch. 2-4 boards is the design
-// target (docs/architecture-rfc.md §6); this is not a limit anyone will hit.
-static const int kMaxPairedNodes = 3;
+// Same ceiling as the link-slot array in the sketch (MAX_SECONDARY_NODES), and
+// it must STAY the same: a board this registry accepts but the sketch has no
+// slot for is paired, persisted, and never dialled.
+//
+// Ten since 2026-09-16, up from three — which was written as "not a limit anyone
+// will hit" and was hit by the first real shop layout, a board per machine
+// rather than per wall. add() returning false is the only symptom, and the UI
+// shows it as a pairing that did not take.
+static const int kMaxPairedNodes = 10;
 
 // Long enough for "dustgate-node-1.local" and then some. Hosts are stored as
 // entered — bare or qualified — and RemoteActuatorBus appends ".local" at dial

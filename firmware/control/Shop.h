@@ -118,6 +118,50 @@ inline JsonObjectConst machineDoc(JsonObjectConst doc, const std::string& machin
   return JsonObjectConst();
 }
 
+/**
+ * The CT clamp watching this element, resolved the way its PLUG already is.
+ *
+ * A TOOL's clamp lives on its MACHINE — one box, one clamp, however many ports
+ * it has — exactly like `sensor.outlet`, and for the same reason: the routing
+ * brain only ever senses machines. A COLLECTOR has no machine entry and carries
+ * its own.
+ *
+ * ⚠️ THIS DID NOT EXIST UNTIL 2026-09-16, and its absence is why no clamp paired
+ * in the UI ever reached a node. TopologyRuntime read `element.sensor.ct`
+ * directly, which is null for every tool the configurator writes — so CONFIG went
+ * out empty, the node never sampled, and the whole chain was silent with nothing
+ * anywhere reporting a fault. The conformance suite passed throughout because its
+ * fixtures put `sensor.ct` on the element by hand, which is a shape the UI cannot
+ * produce.
+ *
+ * The identical machine-vs-element mistake had already been made twice in the
+ * front end (clampLeads(), and the demo's sense report). Three times is a rule:
+ * anything reading `sensor.*` for a tool goes through the machine.
+ */
+inline JsonObjectConst clampOf(JsonObjectConst doc, JsonObjectConst el) {
+  if (_eq(el["type"], "collector")) return el["sensor"]["ct"].as<JsonObjectConst>();
+  if (!_eq(el["type"], "tool"))     return JsonObjectConst();
+  return machineDoc(doc, machineIdOf(el))["sensor"]["ct"].as<JsonObjectConst>();
+}
+
+/**
+ * What a clamp on this element is SENSING, as an id.
+ *
+ * The MACHINE for a tool, the element for a collector — which is what makes the
+ * id round-trip correctly: a node echoes `sensorId` back in its SENSE frame, and
+ * the primary feeds that straight into setMachinePower(), which is keyed by
+ * machine. Sending a port id instead reaches machineIndex(), finds nothing, and
+ * does nothing at all — silently. It also means a two-port machine yields ONE
+ * sensor, not one per port.
+ */
+inline std::string sensedIdOf(JsonObjectConst el) {
+  if (_eq(el["type"], "collector")) {
+    const char* id = el["id"].as<const char*>();
+    return id ? std::string(id) : std::string();
+  }
+  return machineIdOf(el);
+}
+
 /** Every machine id in the document, in document order. */
 inline std::vector<std::string> machineIds(JsonObjectConst doc) {
   std::vector<std::string> out;

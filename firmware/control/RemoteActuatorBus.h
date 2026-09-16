@@ -102,6 +102,13 @@ public:
     void configureSensors(JsonArrayConst sensors) override;
     bool senseOf(const char* sensorId, bool& on, uint32_t& atMs) const override;
 
+    // Enumerate what this node has reported, for GET /api/nodes. senseOf() asks
+    // about one KNOWN id; this is for a screen that has to show whatever turned
+    // up, including a clamp the layout does not mention.
+    size_t senseCount() const;
+    bool   senseAt(size_t i, String& id, bool& reported, bool& on,
+                   uint32_t& ageMs, float& level) const;
+
 private:
     static void taskTrampoline(void* arg) { static_cast<RemoteActuatorBus*>(arg)->taskLoop(); }
     void taskLoop();
@@ -151,9 +158,14 @@ private:
     bool     _cfgValid      = false;   // have we ever been given one?
 
     struct SenseState {
-        char     sensorId[48] = "";
+        char     sensorId[nodelink::kMaxSensorIdLen] = "";
         bool     on           = false;
         uint32_t atMs         = 0;
+        // Multiple of the node's trip point, straight off the wire. DIAGNOSTIC
+        // ONLY — nothing routes on it — and kept because it is the one number
+        // that answers "is this clamp nearly tripping, or nowhere near?" while
+        // the trip constants are still provisional (sensing/CtTrip.h).
+        float    level        = -1.0f;
     };
     SenseState _senses[nodelink::kMaxSensorsPerNode];
     size_t     _senseCount = 0;

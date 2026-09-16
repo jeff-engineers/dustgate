@@ -339,9 +339,15 @@ inline bool parseSetFrame(JsonObjectConst f, SetCommand& out, const char*& err) 
 // `sensorId` is opaque and only ever echoed back, `channel` is a pad. The
 // invariant at the top of nodelink.js stays intact — a node owns loops, never
 // interpretation.
+// How much of an element id a board stores. Named rather than spelled 48 in
+// each place that keeps one, because LocalActuatorBus keeps them too and a
+// silent truncation on one side only would look like a sensor that never
+// reports.
+static const size_t kMaxSensorIdLen = 48;
+
 struct SensorSpec {
-    char sensorId[48];   // OPAQUE. Echoed in SENSE, never parsed.
-    int  channel;        // which input on THIS board
+    char sensorId[kMaxSensorIdLen];   // OPAQUE. Echoed in SENSE, never parsed.
+    int  channel;                     // which input on THIS board
 };
 
 // Parse + VALIDATE a CONFIG frame into a fixed array.
