@@ -20,7 +20,14 @@ type ToolChip = 'collecting' | 'nosuction' | 'waiting' | 'nogate' | 'idle';
 interface ToolRow {
   id: string;
   name: string;
-  auto: boolean;          // has a smart outlet → senses its own power
+  /** Something senses this machine's power, so it starts collection on its own.
+   *
+   *  A PLUG **OR** A CLAMP. Both answer the same question — is this motor
+   *  drawing — and the model treats them as alternatives on one machine
+   *  (`sensor.outlet` xor `sensor.ct`; topology.js refuses both). Keying this on
+   *  the plug alone told every clamped tool it was manual and offered to pair an
+   *  outlet it must not have. */
+  auto: boolean;
   on: boolean;            // drawing / requested power
   collecting: boolean;    // won a clear path — the green one
   /** The device says a person threw this on, rather than a plug noticing it.
@@ -983,7 +990,7 @@ export class LiveViewComponent implements OnInit, OnDestroy {
     this.tools = machinesOf(doc).map(m => ({
       id: m.id,
       name: m.name || m.id,
-      auto: !!m.sensor?.outlet,
+      auto: !!(m.sensor?.outlet || m.sensor?.ct),
       on: false,
       collecting: false,
       manual: false,
@@ -1025,11 +1032,28 @@ export class LiveViewComponent implements OnInit, OnDestroy {
         name: (dc?.['name'] as string) || (s.name as string) || 'Dust collector',
         tools: [], on: false, coasting: false, manual: false, activeName: '',
         deadHead: false, plug: 'noplug', plugWatts: 0,
-        // A system with no plug means "I start that collector by hand" — a
+        // A system we cannot COMMAND means "I start that collector by hand" — a
         // legitimate shop the firmware explicitly supports (see the collector
         // slot loop in firmware.ino). The card must say so rather than offer a
         // switch that cannot do anything.
-        noPlug: !((dc?.['control'] as Record<string, unknown> | undefined)?.['outlet']),
+        //
+        // A PLUG **OR** AN RF PRESSER, and the second one is not an edge case —
+        // it is the shipping answer. A collector keyed by its own remote has NO
+        // `control.outlet` BY DESIGN: nothing in the control path may carry motor
+        // current (tool-sensing-rfc §4.2, and the 1HP blower that tripped a
+        // Shelly on 2026-09-03). Keying this on the plug alone therefore told
+        // every RF-commanded collector "No outlet · pair an outlet to automate" —
+        // advice for a part the design forbids it to have — and hid the switch
+        // that would actually have worked.
+        //
+        // The servo-press case still reads as noPlug, and that is honest rather
+        // than fixed: RFC §4.2c leaves a servo-pressed collector as a bare
+        // `control` with no schema of its own, so there is nothing here to
+        // detect. It becomes detectable the day that schema exists.
+        noPlug: !(() => {
+          const c = dc?.['control'] as Record<string, unknown> | undefined;
+          return c?.['outlet'] || c?.['rf'];
+        })(),
       });
     }
 

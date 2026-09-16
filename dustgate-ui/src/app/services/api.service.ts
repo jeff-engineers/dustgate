@@ -149,6 +149,9 @@ export interface DiscoveredNode {
   board: string;
   /** Servo channels it offers. */
   servos: number;
+  /** Current clamps wired to it. Absent means none — a clamp is DECLARED by its
+   *  board, never discovered, because it has no address of its own. */
+  ct?: number;
   /**
    * The primary that has already claimed this board, if any. Present only for
    * boards owned by SOMEONE ELSE — a board this device owns is just a board you
@@ -190,6 +193,31 @@ export interface NodeLinkState {
    *  reports by saying nothing. Read it through `clampsOn()` rather than
    *  directly, so that default lives in one place. */
   caps: { servos: number; linear: number; ct?: number };
+  /** What this board's clamps have actually REPORTED. Absent means the layout
+   *  has not put a clamp on this board — which is a different thing from a
+   *  clamp that is wired and silent, and the screen has to say which. */
+  sense?: SenseReport[];
+}
+
+/** One clamp's live state, from GET /api/nodes.
+ *
+ *  `reported` IS NOT `on`, and the distinction is the whole point. A clamp the
+ *  layout names, on a board that is online, that has never sent a SENSE, means
+ *  the chain is broken between CONFIG and the ADC. `on: false` looks identical
+ *  on a screen and just means the tool is idle. */
+export interface SenseReport {
+  /** The element id the clamp watches — opaque to the node, echoed back. */
+  id: string;
+  /** Has a SENSE frame ever arrived for this clamp? */
+  reported: boolean;
+  /** Only present once `reported`. */
+  on?: boolean;
+  /** How long ago the last frame arrived, in ms on the device. */
+  ageMs?: number;
+  /** Multiple of the node's trip point. DIAGNOSTIC ONLY — nothing routes on it,
+   *  and it is the number that answers "nearly tripping, or nowhere near?"
+   *  while the trip constants are still provisional. */
+  level?: number;
 }
 
 /** How many current clamps a board says it has. Absent means none. */
@@ -760,6 +788,14 @@ export class ApiService {
   async getNodes(): Promise<NodeLinkState[]> {
     const r = await this.get<{ nodes: NodeLinkState[] }>('/api/nodes');
     return r?.nodes ?? [];
+  }
+
+  /** This board, as a board. It is not in `nodes` — that array is the REMOTE
+   *  links, and a primary holds no NodeLink to itself — so anything that wants
+   *  to show every board in the shop has to ask for it separately. */
+  async getSelfNode(): Promise<NodeLinkState | null> {
+    const r = await this.get<{ self?: NodeLinkState }>('/api/nodes');
+    return r?.self ?? null;
   }
 
   /**

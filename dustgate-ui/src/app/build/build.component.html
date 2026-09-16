@@ -672,6 +672,7 @@
   <app-collector-setup *ngIf="outletMode === 'switch'; else toolOutlet"
                        [element]="ot"
                        [controllers]="controllerList"
+                       [clampBoards]="clampBoards"
                        [systemName]="outletSysName"
                        [excludeIps]="outletExcludeIps"
                        [excludeReason]="outletExcludeReason"

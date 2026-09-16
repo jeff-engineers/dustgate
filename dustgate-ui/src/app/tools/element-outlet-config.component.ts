@@ -73,7 +73,7 @@ const DEFAULT_THRESHOLD = 50;
 
       <div class="head">
         <span class="kind"><b>{{ isSwitch ? 'Collector' : 'Tool' }}:</b> {{ name || 'Unnamed' }}
-          <span class="sep">—</span> Smart outlet setup</span>
+          <span class="sep">—</span> Device setup</span>
         <span class="badge" [class.ok]="hasPlug && !!ip" [class.todo]="!hasPlug || !ip"
               [title]="hasPlug && ip
                  ? 'A smart outlet is paired, so DustGate switches this automatically.'
@@ -86,7 +86,15 @@ const DEFAULT_THRESHOLD = 50;
            below is how you say No — one verb instead of a toggle that silently
            throws the pairing away on Save. -->
       <div class="q" *ngIf="!ip || changing">
-        <span>{{ isSwitch ? 'Switch the collector automatically?' : 'Smart outlet on this tool?' }}</span>
+        <!-- DOUBLE quotes on the apostrophe string, and it is not a style choice.
+             This template is a TS backtick literal, so \' there emits a BARE
+             apostrophe into the HTML — which then closes the single-quoted string
+             inside the Angular expression. The parser gives up and renders the
+             whole {{ }} as literal text on screen, with no build error and no
+             console error to find it by. Shipped exactly that way for one flash,
+             2026-09-16. Any Angular expression containing an apostrophe has to be
+             double-quoted. -->
+        <span>{{ isSwitch ? 'Switch the collector automatically?' : "How does DustGate know it's running?" }}</span>
         <div class="yesno">
           <button [class.on]="hasPlug" (click)="hasPlug = true"
                   title="Pair a smart outlet, so DustGate knows when this is running">Yes</button>
