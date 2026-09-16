@@ -914,8 +914,11 @@ button that records the current draw and sets the trip above it is the likelier
 answer. And the CNC case wants hysteresis, since a cut is not continuous;
 whatever coast-down already exists on the collector may cover it, or may not.
 
-**Not built.** Recorded here so the next person does not read §5.4b as settled
-when it is settled only for the tools in this shop.
+**Not built, and DEFERRED 2026-09-16** — jeff's call, the same day it was raised:
+no tool in this shop idles loudly, so nothing here blocks getting the shop
+running, and a threshold is better built against a real machine than imagined.
+Recorded so the next person does not read §5.4b as settled when it is settled
+only for the tools in this shop.
 
 Two things about the planer node (§5.6) make its floor better than anything
 §5.5 measured, and both are accidents of the wiring rather than design:
