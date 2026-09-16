@@ -840,13 +840,82 @@ tool's standby draw — it is **the board's own floor**, and the trip is "curren
 meaningfully above that floor". One number, in firmware, the same for every tool.
 
 The consequence for the schema is that there is no consequence: a CT-sensed tool
-carries **no threshold field at all**. `thresholdW` stays exactly as it is for
+carries **no threshold field at all**.
+
+> **⚠️ NARROWED BY §5.4d (2026-09-16).** True for every tool measured, and NOT
+> general: a CNC router idles at stall current with a PC attached, so its "off"
+> is a substantial continuous draw rather than something under the floor. The
+> field comes back as an OPTIONAL `thresholdA` — absent keeping everything
+> below — rather than the mandatory `thresholdW` this section rightly killed. `thresholdW` stays exactly as it is for
 plug-sensed tools, where a metering plug reports genuine watts and a user-typed
 number means something. §5.4a's open question does not get answered in the
 schema, it gets DELETED from it. If some future tool's standby ever does poke
 above the floor, that tool earns a per-tool override at that point and not
 before — speculative fields are how `thresholdW` came to be the wrong shape here
 in the first place.
+
+#### 5.4c The scale REGRESSION passed, and power factor makes the case (2026-09-16)
+
+Re-measured on the rebuilt divider, same collector, same Tasmota:
+
+| | 2026-09-13 | 2026-09-16 |
+|---|---|---|
+| This CT | 10.71 A | **11.310 A** (mean of 20) |
+| Tasmota | 10.610 A | **11.143 A** |
+| CT reads high by | +0.94% | **+1.50%** |
+
+**The rebuild did not move the scale.** Same direction, half a percent apart,
+comfortably inside two ~1% instruments disagreeing. The collector genuinely drew
+more that day — the TASMOTA moved +5% too — which is exactly why a reference
+reading beside it was worth insisting on.
+
+`rms/amps` also held at **33.7 across all twenty reads**, and amps varied only
+±0.7%. That retires the one-sample scale bug ("13.100 A falling to 8.889 A on a
+steady load") as a live concern: it cannot hide behind a stable rms any more.
+
+**And the Tasmota handed over the strongest argument §5.4a has.** On that same
+running collector:
+
+    115 V · 11.143 A · 852 W active · 1286 VA apparent · PF 0.66
+
+11.143 A x 115 V is 1281 VA, and the real power is 852 W. **A threshold in watts
+against a CT-sensed motor would be 34% out on this load alone** — not as a
+matter of principle but as a measured fact on the shop's own collector. A CT
+reports current; watts need a voltage and a power factor it cannot give.
+
+### 5.4d REOPENED — a tool that idles LOUDLY needs a threshold (2026-09-16)
+
+§5.4b found that a woodworking tool's standby sits under the noise floor, so
+there is nothing to threshold and the trip is "current, above the board's own
+floor". **That holds for every tool measured and does not generalise.**
+
+The counterexample, from a friend of jeff's: **a CNC router.** It holds servos at
+stall current and may be powering a PC, so it draws real, continuous current
+while doing nothing at all. That is not standby beneath a noise floor — it is a
+substantial steady load, and a gate that opens for it leaves the collector
+running all day. **The interesting signal is the step UP when it starts cutting**,
+not the difference from zero.
+
+So the shape §5.4b deleted has to come back, in a narrower form:
+
+- **OPTIONAL, and absent stays the default.** Most tools are off or on, and the
+  floor-relative trip is right for them. A threshold that every tool must carry
+  would be the `thresholdW` mistake again.
+- **IN AMPS, never watts** — §5.4c measured why. `sensor.ct.thresholdA`.
+- **It rides CONFIG to the node**, because the node owns the decision and cannot
+  see the document. That does NOT breach the invariant in `nodelink.js`: a trip
+  current is a resolved NUMBER, the same kind of thing a SET's angle is, and the
+  node compares rather than interprets. What would breach it is sending a state
+  name or a rule.
+
+Two things this does not settle. A per-tool figure has to come from somewhere,
+and asking a woodworker for amps is a poor screen — a **learn-while-idling**
+button that records the current draw and sets the trip above it is the likelier
+answer. And the CNC case wants hysteresis, since a cut is not continuous;
+whatever coast-down already exists on the collector may cover it, or may not.
+
+**Not built.** Recorded here so the next person does not read §5.4b as settled
+when it is settled only for the tools in this shop.
 
 Two things about the planer node (§5.6) make its floor better than anything
 §5.5 measured, and both are accidents of the wiring rather than design:
@@ -861,6 +930,74 @@ Two things about the planer node (§5.6) make its floor better than anything
 
 Neither of those retires §5.5. A primary with a screen still has the problem,
 and this section only says the CT-sensed TOOL path stopped depending on it.
+
+### 5.5b CLOSED — the floor is the ADC, and 1k/1k was never the problem (2026-09-16)
+
+**§5.5 is answered, and the answer inverts how it looked at the start of the
+session.** Measured on the rebuilt soldered perfboard (1k/1k + 100uF + 100nF),
+collector build, laptop on battery throughout:
+
+| Condition | Floor, rmsCounts | Floor, A |
+|---|---|---|
+| Primary build, screen ON | 6.68 | 0.195 |
+| Primary build, screen OFF | 6.03 | 0.179 |
+| Bench build — **no WiFi at all** | 5.80 | 0.173 |
+| **CT shorted out** (jumper midpoint -> D0) | no discernible change | |
+
+**Every external suspect is excluded by measurement, not argument:**
+
+- **Mains earth** — the laptop had been on battery the whole time, so no reading
+  today ever had a mains reference in the chain.
+- **The radio** — the bench build has no WiFi, no web server, no mDNS, and
+  measures the same floor as the full primary.
+- **The screen** — 11%, where it used to be ~80% of the floor. **1k/1k DID fix
+  the charge-pump coupling**, which was §5.5's other prediction.
+- **The clamp, its cable and the braid** — shorting the CT out with a jumper,
+  leaving D0 biased from the midpoint directly, changed nothing.
+
+With the CT shorted, D0 sits on a hard-bypassed 500-ohm node. There is nothing
+left for ~6 counts to be but **the C5's SAR ADC measuring its own noise**, which
+is ordinary: effective resolution on these parts is 9-10 bits, so 4-8 LSB of RMS
+noise is what the datasheet's ENOB implies.
+
+**The 6.5 kHz "frequency" was an artifact and cost an hour of suspicion.** It
+tracked the SAMPLE RATE, not the room:
+
+| Build | Reported Hz | kSPS | Ratio |
+|---|---|---|---|
+| Primary, screen off | ~7250 | 29.0 | **0.250** |
+| Bench | ~6450 | 25.5 | **0.253** |
+
+A zero-crossing counter fed BROADBAND NOISE reports a fraction of Fs, not a
+tone — and Fs/4 rather than Fs/2 says adjacent samples are mildly correlated,
+exactly what wideband noise through the input RC looks like. There was never a
+switcher to find. **Anyone reading a suspicious `Hz` on this console should
+divide it by the sample rate before believing it.**
+
+**So the old 1.8-count floor was probably the artifact, not this one.** §5.5
+already half-suspected it, calling that reading "quantization-limited rather
+than measured". 1k/1k did not make anything worse — it removed the screen
+coupling and exposed the floor that was underneath all along.
+
+#### What this means for the product
+
+**No wiring change improves this**, so stop spending bench time on it. The
+remaining lever is signal processing: the signal is one frequency and the noise
+is spread over 12.75 kHz, so demodulating at 60 Hz (multiply by sin and cos,
+average, take the magnitude) with a ~5 Hz effective bandwidth is a theoretical
+50x and a realistic 10-20x after windowing and mains drift.
+
+**Deliberately NOT built (jeff, 2026-09-16): "if we can sense a desk fan we can
+sense anything cutting wood."** The numbers back that. A running 1 HP collector
+measured 380.7 counts against a 6.0 floor — **63x** — and §5.4b only ever needed
+one bit. The demodulator buys margin and small loads, not basic function, and it
+can be written the day something needs it.
+
+One consequence worth carrying: **a 0.5 A load is 17 counts, only 2.6x this
+floor**, which is under the 4x trip ratio. A desk fan as a standing bench load
+therefore needs its lead looped 3 turns through the jaw (N turns = N x apparent
+current) — which needs a separated conductor, since a molded cord's fields
+cancel (§5.4).
 
 ### 5.5a The SCALE is confirmed — the clamp was never the problem (2026-09-13)
 
@@ -926,6 +1063,12 @@ off a hardwired install rather than a shippable one:
 [`firmware/wiring/ct-bench.md`](../firmware/wiring/ct-bench.md).
 
 ### 5.5 The screen is a noise source, and every board has one
+
+> **⚠️ ANSWERED BY §5.5b (2026-09-16), and the answer is half a vindication.**
+> The 1k/1k fix below was right about the SCREEN — its share of the floor fell
+> from ~80% to 11%. It was wrong that the divider was the floor: underneath sits
+> the C5 ADC's own noise at ~6 counts, unchanged by shorting the CT out
+> entirely. Read §5.5b before acting on anything here.
 
 **Measured 2026-09-06, on the bench rig in `firmware/bench/ct_bench.cpp`:**
 

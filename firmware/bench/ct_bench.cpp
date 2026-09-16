@@ -28,6 +28,7 @@
 #include <Wire.h>
 #include <Adafruit_SSD1306.h>
 #include "../config.h"
+#include "../sensing/CtSensor.h"
 
 static const int  PIN_CT    = 1;      // D0, the only analog pad on the edge
 static const int  OLED_ADDR = 0x3C;
@@ -105,63 +106,46 @@ static float g_hz = 0;
 // -- One measurement ----------------------------------------------------------
 //
 // Sample flat out for a whole number of line cycles, subtract the mean, take the
-// RMS of what is left. Subtracting the MEASURED mean is what makes the bias
-// network's exact midpoint irrelevant — a lazy divider and a drifting reference
-// both come out in the wash, which is why there is no trim here.
+// ── THE CT ITSELF IS NOT IMPLEMENTED HERE ANY MORE (2026-09-15) ─────────────
 //
-// 200 ms is 12 cycles at 60 Hz. Long enough that a half-cycle error is noise,
-// short enough to feel live on the screen.
-// RAW COUNTS, NOT MILLIVOLTS — and that is a correction, not a preference.
+// Every line of sampling maths below used to live in this file, and CtSensor.h
+// was LIFTED from it — but the original was never replaced, so the bench console
+// and the product drifted apart in exactly the way CLAUDE.md's anti-drift rule
+// exists to prevent. That is worse here than anywhere else: this console is the
+// INSTRUMENT, the thing whose numbers get written into the RFC and compared
+// across months. An instrument running different code from the product is not a
+// reference, it is a second opinion.
 //
-// This used analogReadMilliVolts(), which returns WHOLE MILLIVOLTS. With the
-// screen off the input is quieter than that, so every sample came back the same
-// integer, the variance was exactly zero, and the meter printed 0.000 A for
-// minutes on end (2026-09-06). That is not a measurement, it is a floor made of
-// rounding: it hid everything below 1 mV RMS, which is 0.03 A on this CT.
+// Two real divergences had already opened by the time it was noticed, and both
+// were fixes this file never got:
 //
-// analogRead() is ~0.61 mV/LSB at 11 dB — 1.6x finer — and faster, so more
-// samples per window as well. The mV-per-count scale is derived once per window
-// from a single analogReadMilliVolts() of the same input, which keeps the
-// per-chip ADC calibration without paying for it 5000 times.
+//   • THE ONE-SAMPLE SCALE BUG. This took its mV-per-count from a SINGLE
+//     analogReadMilliVolts() after the window closed. CtSensor spreads those
+//     reads across the window instead, because bunching them fails — it printed
+//     13.100 A falling to 8.889 A on a steady load while rmsCounts held 371-375.
+//     Fixed in CtSensor 2026-09-13 ("The CT's scale was never wrong — the
+//     arithmetic was"), and left here. Any bench figure from between those dates
+//     may carry it.
+//   • THE BIAS SETTLE GATE. No reading means anything until the midpoint has
+//     arrived, and this file had no idea that was a question.
+//
+// So this is now a thin adapter: CtSensor does the measuring, and the globals
+// below exist only because six call sites and two renderers read them.
+static CtSensor  g_ct(PIN_CT);
+static float     g_rmsCounts = 0;   // the RAW measurement; see the note in CtSensor::Reading
+
 static float readAmps() {
-    static const uint32_t windowMs = 200;
-    const uint32_t t0 = millis();
-    uint32_t n = 0;
-    double sum = 0, sumSq = 0;
-
-    // Two passes would be tidier but the signal moves; accumulate both moments
-    // in one pass and do the algebra afterwards.
-    static float prevMean = 0;
-    uint32_t crossings = 0;
-    bool above = false, seeded = false;
-
-    while (millis() - t0 < windowMs) {
-        const uint32_t c = analogRead(PIN_CT);
-        sum   += c;
-        sumSq += (double)c * (double)c;
-        n++;
-        if (prevMean > 1) {
-            const bool nowAbove = ((float)c > prevMean);
-            if (!seeded) { above = nowAbove; seeded = true; }
-            else if (nowAbove != above) { crossings++; above = nowAbove; }
-        }
-    }
-    if (n < 100) return 0;
-    const uint32_t took = millis() - t0;
-    g_rateKs = (float)n / (float)took;                 // samples/ms == kSPS
-
-    const double mean = sum / n;
-    const double var  = (sumSq / n) - (mean * mean);   // RMS of the AC part
-    const double rmsCounts = (var > 0 ? sqrt(var) : 0);
-    // Two crossings per cycle.
-    g_hz = (crossings / 2.0f) * (1000.0f / (float)took);
-    prevMean = (float)mean;
-
-    // counts -> volts, using the chip's own calibration at the operating point.
-    const uint32_t meanMv = analogReadMilliVolts(PIN_CT);
-    g_dcMv = meanMv; g_dcCounts = (float)mean;
-    const double mvPerCount = (mean > 1) ? ((double)meanMv / mean) : 0.61;
-    return (float)(rmsCounts * mvPerCount / 1000.0 * AMPS_PER_VOLT);
+    const CtSensor::Reading r = g_ct.read();
+    if (!r.valid) return 0;
+    g_rateKs    = r.kSps;
+    g_hz        = r.hz;
+    g_dcMv      = r.dcMv;
+    g_dcCounts  = r.dcCounts;
+    g_rmsCounts = r.rmsCounts;
+    // A reading taken before the bias settled is real but rides a moving
+    // reference. Reported rather than suppressed — watching the rail come up is
+    // a legitimate thing to do with a bench meter — and report() flags it.
+    return r.amps;
 }
 
 // -- Output -------------------------------------------------------------------
@@ -192,11 +176,17 @@ static void drawScreen() {
 }
 
 static void report() {
-    Serial.printf("%7.3f A  %6d W   peak %6.3f A   floor %5.3f A   "
-                  "%5.0f Hz   DC %4lumV   %.1f kSPS%s\n",
-                  g_amps, (int)(g_amps * NOMINAL_VOLTS), g_hold, g_floor,
+    // rmsCounts is printed BESIDE amps deliberately: it is the raw measurement
+    // and amps is a scaled view of it, so the two disagreeing across consecutive
+    // reads is a SCALE fault rather than a changing load. That is exactly the
+    // failure that got through on 2026-09-13 and it was invisible without this
+    // column — which this file, being the instrument, needed most of all.
+    Serial.printf("%7.3f A  %6.1f rms  %6d W   peak %6.3f A   floor %5.3f A   "
+                  "%5.0f Hz   DC %4lumV   %.1f kSPS%s%s\n",
+                  g_amps, g_rmsCounts, (int)(g_amps * NOMINAL_VOLTS), g_hold, g_floor,
                   g_hz, (unsigned long)g_dcMv, g_rateKs,
-                  (g_dcMv < 300 || g_dcMv > 3000) ? "  <-- RAILED" : "");
+                  (g_dcMv < 300 || g_dcMv > 3000) ? "  <-- RAILED" : "",
+                  g_ct.settled() ? "" : "  <-- BIAS STILL SETTLING");
 }
 
 // -- Phases, and a suite built out of them ------------------------------------
@@ -537,6 +527,11 @@ void setup() {
 
     analogSetAttenuation(ADC_11db);          // full ~0-2.5V span; the CT swings
     analogReadResolution(12);                // around a mid-rail bias
+
+    // Start the bias-settle clock. Nothing below this line blocks for long, so
+    // unlike the product build the 3 s window is genuinely in play here — the
+    // first readings after a reset WILL be flagged, which is the point.
+    g_ct.begin();
 
     // Same probe StatusScreen.h uses: a board with the pins but no panel is the
     // ordinary case, not a mistake. Serial still works either way.

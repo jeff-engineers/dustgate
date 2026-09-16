@@ -70,8 +70,8 @@ exactly like a perfectly quiet sensor.
 | | |
 |---|---|
 | CT | **SCT-013-030** — 30 A → 1 V RMS, burden built in. Confirm the listing says **30A/1V**; the 30A/1A variants have no burden |
-| Bias | 2× 10 kΩ from 3V3 and GND, 10 µF from the midpoint to GND — **as measured, not as recommended; see below** |
-| | ⚠️ **STALE — the perfboard rigs were rebuilt to 1 kΩ/1 kΩ + 100 nF on 2026-09-14 (jeff).** This row still describes the hardware every number on this page was taken on, so it stays until there are replacement measurements to put beside it. **Retake the floor and the load table on the new divider, then rewrite this row and the measured-loads section together** — a parts table that has moved on from its own data is worse than one that is openly behind. |
+| Bias | **2× 1 kΩ** from 3V3 and GND, 100 µF + 100 nF from the midpoint to GND |
+| | Re-measured on this divider 2026-09-16 and the scale held: CT 11.310 A against a Tasmota's 11.143 A, +1.50%, where the 10 kΩ rig read +0.94%. The older figures further down this page were taken on 10 kΩ/10 kΩ + 10 µF and are kept as the record of what was measured then. RFC §5.4c. |
 | ADC | **D0** (GPIO1) — the only analog pad on the edge |
 | Screen | SSD1306 on **D4/D5**, 0x3C. Optional; probed at boot like every other board |
 | Power | Any USB power bank |
@@ -80,10 +80,20 @@ exactly like a perfectly quiet sensor.
 and subtracts it, so a lazy midpoint and a drifting reference both come out in
 the wash. There is no trim.
 
-**It matters enormously for the NOISE FLOOR, which is the opposite of what that
-sentence implies and cost weeks.** §5.5 below has the finding: 10 kΩ/10 kΩ puts
-5 kΩ at the pin, the SAR's sampling capacitor cannot settle against it, and the
-floor follows. The table above records **what this rig actually had while every
+**It matters for the NOISE FLOOR, though not in the way §5.5 predicted — and the
+answer, measured 2026-09-16, is that neither divider is the limit.** 1 kΩ/1 kΩ
+removed the SCREEN's contribution (from ~80% of the floor to 11%), and what was
+left underneath is **the C5 ADC's own noise, about 6 counts RMS**. Shorting the
+CT out entirely does not move it. RFC §5.5b has the elimination chain; the short
+version is that no wiring change improves this and the remaining lever is a 60 Hz
+demodulator, deliberately not built because a running collector sits 63× above
+the floor and one bit is all §5.4b ever needed.
+
+⚠️ **The `Hz` column lies when there is no signal.** Fed broadband noise, the
+zero-crossing counter reports a fraction of the SAMPLE RATE — measured at
+0.250×Fs and 0.253×Fs on two builds — not a tone in the room. An hour went into
+hunting a 6.5 kHz aggressor that did not exist. Divide by kSPS before believing
+it. The table above records **what this rig actually had while every
 number on this page was measured** — deliberately, since rewriting it would
 misrepresent the measurements. New builds should use **1 kΩ/1 kΩ plus a 100 nF
 ceramic at the pin** (RFC §5.2), starting with the tool node in RFC §5.6.
