@@ -33,6 +33,10 @@
          rather than on the toolbar. -->
     <button (click)="moreOpen = false; addSystem()" [disabled]="!hasShop">Add system</button>
     <button (click)="moreOpen = false; goBoards()">Find boards</button>
+    <!-- The twin of Find boards, and the ONLY way to sweep a fully-wired shop:
+         the tray's own button is inside the tray, which hides itself when
+         nothing is unpaired. -->
+    <button (click)="moreOpen = false; findPlugs()">Find plugs</button>
     <!-- Same reasoning as Find boards: an errand you run rarely. The canvas is
          where you actually spend time, so it needs a way in that doesn't route
          through the Live view. -->
@@ -466,8 +470,15 @@
       </svg>
       <span class="nm">Clamp · {{ b.name }}</span>
     </button>
+    <!-- "all paired" could not tell "the network is empty" from "we found your
+         plug and it is already on a machine" — and those send you to opposite
+         places. The second is the likelier one on a wired shop, and reading it
+         as the first is how a sweep that WORKED looks like a sweep that
+         failed. -->
     <span class="tray-empty" *ngIf="!freeOutlets().length && !freeClamps().length">
-      {{ scanned ? 'all paired' : 'none found yet' }}
+      {{ !scanned ? 'none found yet'
+         : outlets.length ? 'all ' + outlets.length + ' already on machines'
+         : 'nothing answered' }}
     </span>
   </div>
   <button class="act primary" [disabled]="!canMatch()" (click)="matchByName()">Match</button>

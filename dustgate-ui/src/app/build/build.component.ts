@@ -1000,10 +1000,28 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   /** Hidden until there is something to say — an empty strip under a fresh canvas
    *  is furniture. Appears while scanning, and afterwards for as long as there is
    *  either a free plug to place or a machine still missing one. */
+  /** The user asked to look for plugs. Survives a sweep that finds nothing, so
+   *  the tray can say "all paired" instead of vanishing and looking broken. */
+  trayPinned = false;
+
   get showTray(): boolean {
+    // ASKED FOR IT BEATS EVERY HEURISTIC BELOW. Without this the tray was
+    // hidden by exactly the condition that makes someone want it: a shop with
+    // nothing unpaired is a fully-wired shop, which is when you go and buy
+    // another plug — and the "Look for new" button lived INSIDE the tray, so
+    // there was no way to run a sweep at all. The device was never asked; a
+    // sweep from the CLI found the plug the GUI could not (jeff, 2026-09-16).
+    if (this.trayPinned) return true;
     if (this.scanning || this.sweepRunning) return true;
     if (!this.scanned) return false;
     return this.freeOutlets().length > 0 || this.unpairedTargets().length > 0;
+  }
+
+  /** "Find plugs" from the ⋯ menu — the twin of "Find boards", and the only
+   *  entry point that does not depend on the layout being unfinished. */
+  findPlugs(): void {
+    this.trayPinned = true;
+    void this.scanOutlets();
   }
 
   // ── Finding plugs: two questions with very different costs ────────────────

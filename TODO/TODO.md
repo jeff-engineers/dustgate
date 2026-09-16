@@ -95,7 +95,31 @@ reasoning was contested, or that a still-open item above leans on.
   sensor spec is exactly id+kind+channel. Both were right for §5.4b and both have
   to change.
 
-- **The GUI sweep did not find a Tasmota that was there (jeff, 2026-09-16).**
+- **~~The GUI sweep did not find a Tasmota~~ DIAGNOSED + HALF FIXED 2026-09-16.**
+  **The device was never asked.** jeff confirmed the same sweep from the CLI
+  found the plug, which exonerates the whole firmware side — prefix, the
+  two-phase timings, `TasmotaOutlet::probe()`. Curling the plug directly returns
+  a clean 200 with a scalar `StatusSNS.ENERGY.Power`, so it would have parsed.
+
+  The canvas started a sweep only when something was unpaired
+  (`if (this.unpairedTargets().length) void this.scanOutlets()`), and `showTray`
+  hid the tray under the SAME condition — with the "Look for new" button inside
+  it. So a fully-wired shop had no way to sweep at all, which is precisely the
+  shop where you have just bought another plug.
+
+  **Fixed:** a `Find plugs` item in the ⋯ menu, beside `Find boards`, which pins
+  the tray open and runs the sweep regardless of the layout. And the empty-tray
+  text now separates "nothing answered" from "all N already on machines" —
+  those send you to opposite places, and reading the second as the first is how
+  a sweep that WORKED looks like one that failed.
+
+  **STILL OPEN:** which of the two actually bit him is unknown, because a plug
+  already claimed in the layout is filtered out of the tray by design
+  (`freeOutlets()`), and that also reads as "not found". Worth confirming
+  against his real layout once the collector is back on WiFi — and worth asking
+  whether a claimed plug should be shown greyed with its machine's name rather
+  than hidden outright.
+
   The plug answered fine at **192.168.87.44** — found from bash, confirmed by
   `curl /cm?cmnd=Status%208` returning a full ENERGY block — and
   `POST /api/outlets/sweep` did not turn it up.
