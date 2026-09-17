@@ -451,7 +451,12 @@ bool RemoteActuatorBus::setState(const char* selectorId, JsonObjectConst sel,
     return true;
 }
 
-bool RemoteActuatorBus::jog(int channel, int angle) {
+bool RemoteActuatorBus::jog(int channel, int angle, bool detach) {
+    // A detach has no counterpart on the wire and needs none: holdAtRest is
+    // false on a jog, so the node's ServoActuator de-energises on its own once
+    // the sweep settles. Reported as HANDLED rather than refused — the caller
+    // asked for a de-energised servo and that is what it gets.
+    if (detach) return true;
     if (!online()) return false;
     if (channel < 0 || channel > 15 || angle < 0 || angle > 180) return false;
 

@@ -57,6 +57,15 @@ struct StubBus : public topo::ActuatorBus {
   // Staged readings: sensorId -> (on, arrivedAtMs). Absent = never reported.
   std::map<std::string, std::pair<bool, uint32_t>> senses;
 
+  // Setup-time jog, recorded the same way a move is.
+  std::vector<std::string> jogs;   // "ch@angle" or "ch@detach", in issue order
+  bool jog(int channel, int angle, bool detach) override {
+    if (!accept) return false;
+    jogs.push_back(std::to_string(channel) + "@" +
+                   (detach ? std::string("detach") : std::to_string(angle)));
+    return true;
+  }
+
   void configureSensors(JsonArrayConst sensors) override {
     cfgCalls++;
     sensorCfg.clear();
@@ -677,6 +686,52 @@ int main(int argc, char** argv) {
     rt.writeStatus(st4.to<JsonObject>());
     ok("a manual override outranks an off CT", st4["tools"]["toolX"]["active"] == true);
     rt.setMachineManual("toolX", false);
+  }
+
+  // ── A JOG RESOLVES THE BOARD THE SAME WAY A MOVE DOES ───────────────────
+  //
+  // The gate configurator's jog used to resolve its own board: a literal ==
+  // against each bus's nodeId(), in the sketch, beside a separate primary/remote
+  // branch. NodeBus::busForController() resolves a MOVE through the topology's
+  // alias map with bareHost() normalising ".local" and case — so the two agreed
+  // only while a controllerId was spelled exactly like its paired host.
+  //
+  // Rename a board and they diverge: gates keep moving and every jog lands on
+  // "[UI] Jog for unknown controller". From the shop that reads as "the
+  // configurator is broken on nodes", which is the wrong thing to go looking at.
+  //
+  // jog() is on the ActuatorBus seam now and the sketch just calls
+  // busForController(). These assert the three spellings that used to fail.
+  {
+    StubBus local, node;
+    topo::NodeBus nb;
+    nb.setLocal(&local, "primary");
+    nb.registerRemote("dustgate-planer", &node);
+    // The layout calls the board "Planer gate"; the pairing knows it as a host.
+    nb.setAlias("Planer gate", "dustgate-planer");
+
+    ok("a jog by ALIAS reaches the node",
+       nb.busForController("Planer gate") == &node);
+    ok("a jog by HOST still reaches the node",
+       nb.busForController("dustgate-planer") == &node);
+    ok("...and so does the fully-qualified name",
+       nb.busForController("dustgate-planer.local") == &node);
+    ok("...and a different case", nb.busForController("DustGate-Planer") == &node);
+    // An empty controllerId has always meant THIS BOARD; the sketch's own
+    // primary/remote branch is gone because this already says it.
+    ok("an empty controllerId is this board", nb.busForController("") == &local);
+    ok("so is the primary's own id", nb.busForController("primary") == &local);
+    ok("an unpaired board resolves to nothing",
+       nb.busForController("dustgate-ghost") == nullptr);
+
+    // And the call actually carries through, detach included.
+    topo::ActuatorBus* b = nb.busForController("Planer gate");
+    ok("the jog is delivered", b && b->jog(2, 137, false));
+    ok("...with the channel and angle intact", joined(node.jogs) == "2@137",
+       joined(node.jogs));
+    b->jog(2, 0, true);
+    ok("a detach is delivered too", joined(node.jogs) == "2@137|2@detach",
+       joined(node.jogs));
   }
 
   // ── A CLAMP LIVES ON THE MACHINE, NOT ON THE PORT ───────────────────────
