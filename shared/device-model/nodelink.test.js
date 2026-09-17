@@ -216,10 +216,100 @@ const eq = (name, got, want) =>
                          'p2s').length === 1);
   check('sensors must be an array',
         NL.validateFrame({ t: 'CONFIG', seq: 1, sensors: {} }, 'p2s').length === 1);
+
+  // ── CT TUNING (2026-09-17) — the numbers that used to force a node reflash.
+  //
+  // PAIRED with test_nodebus.cpp's parseConfigFrame cases: same fields, same
+  // bounds, same order. The point of carrying them is that retuning a shop is a
+  // primary reflash and nobody climbs to a node, so the rules have to agree on
+  // both sides or a primary sends a frame its own boards refuse.
+  const tuned = NL.config(9, [{ sensorId: 'planer-ct', kind: 'ct', channel: 0,
+                                tripRatio: 3.5, minCounts: 12, clearRatio: 0.8 }]);
+  eq('a tuned CONFIG is valid', NL.validateFrame(tuned, 'p2s'), []);
+  eq('and the tuning rides the spec',
+     Object.keys(tuned.sensors[0]).sort(),
+     ['channel', 'clearRatio', 'kind', 'minCounts', 'sensorId', 'tripRatio']);
+
+  // ABSENT, not null. An absent key is how a board is told to keep its own
+  // value; a present null is a number that fails validation and takes the WHOLE
+  // frame down, sensor list and all.
+  const partial = NL.config(10, [{ sensorId: 'a', kind: 'ct', channel: 0, tripRatio: 5 }]);
+  eq('tuning is omitted per field, not all or nothing',
+     Object.keys(partial.sensors[0]).sort(), ['channel', 'kind', 'sensorId', 'tripRatio']);
+  eq('and a partially tuned frame is valid', NL.validateFrame(partial, 'p2s'), []);
+
+  const badTune = (k, v) => NL.validateFrame(
+    { t: 'CONFIG', seq: 1, sensors: [{ sensorId: 'a', kind: 'ct', channel: 0, [k]: v }] }, 'p2s');
+  // A ratio of 1 trips on the floor itself; below it, on nothing at all.
+  check('tripRatio at 1 is refused', badTune('tripRatio', 1).length === 1);
+  check('tripRatio at 100 is refused', badTune('tripRatio', 100).length === 1);
+  eq('tripRatio between them is fine', badTune('tripRatio', 4), []);
+  // 4095 is full scale on a 12-bit ADC: a guard there can never be exceeded, so
+  // the board is deaf rather than merely insensitive.
+  check('minCounts at 0 is refused', badTune('minCounts', 0).length === 1);
+  check('minCounts at full scale is refused', badTune('minCounts', 4095).length === 1);
+  // 1 is no hysteresis at all, which is the defect this was added to fix; above
+  // 1 releases ABOVE the trip point, so a tool could never read as stopped.
+  check('clearRatio at 1 is refused', badTune('clearRatio', 1).length === 1);
+  check('clearRatio above 1 is refused', badTune('clearRatio', 1.2).length === 1);
+  eq('clearRatio inside the band is fine', badTune('clearRatio', 0.75), []);
+  check('a non-numeric tuning is refused', badTune('tripRatio', '4').length === 1);
+
+  // The sharpened stance: hardware tuning may ride this frame, a WATTAGE
+  // threshold still may not. Both are numbers the primary chose; only one of
+  // them names a machine, and that is the line.
+  check('thresholdW is still refused entry',
+        NL.config(11, [{ sensorId: 'a', kind: 'ct', channel: 0, thresholdW: 900 }])
+          .sensors[0].thresholdW === undefined);
 }
 
 // ── SENSE: one bit, decided on the node (RFC §5.4b) ────────────────────────
 {
+  // ── TELEMETRY (2026-09-17) — amps for a human, and nothing may branch on it.
+  //
+  // PAIRED with the SENSE cases in test_nodebus.cpp: same fields, same
+  // omitted-not-zeroed rule, same order.
+  {
+    const t = NL.sense('planer-ct', false, 0.26, 0.21, 0.20, 0.80);
+    eq('a SENSE with telemetry is valid', NL.validateFrame(t, 's2p'), []);
+    eq('and carries all of it',
+       Object.keys(t).sort(),
+       ['amps', 'floorA', 'level', 'on', 'sensorId', 't', 'tripA']);
+
+    // OMITTED, NOT ZEROED, and this is the case that matters: 0 A is a real
+    // reading from an idle tool, where "this board has no floor" is not a
+    // reading at all. Zeroing would make a faulted board and a quiet one
+    // identical on screen — the same lie `reported` exists to prevent.
+    const bare = NL.sense('planer-ct', false);
+    eq('a node with nothing to report omits every field',
+       Object.keys(bare).sort(), ['on', 'sensorId', 't']);
+    eq('...and is still valid', NL.validateFrame(bare, 's2p'), []);
+    const zero = NL.sense('planer-ct', false, 0, 0, 0, 0);
+    eq('but a genuine zero IS carried', Object.keys(zero).sort(),
+       ['amps', 'floorA', 'level', 'on', 'sensorId', 't', 'tripA']);
+    eq('and remains valid', NL.validateFrame(zero, 's2p'), []);
+
+    // A board that could not learn a floor. floorA/tripA are absent because
+    // there is no floor — the fault is the reason, not an extra flag beside one.
+    const faulted = NL.sense('planer-ct', false, undefined, 2.2, undefined, undefined, true);
+    eq('a faulted clamp reports the fault', faulted.fault, true);
+    eq('with what it reads but no baseline',
+       Object.keys(faulted).sort(), ['amps', 'fault', 'on', 'sensorId', 't']);
+    eq('and is valid', NL.validateFrame(faulted, 's2p'), []);
+    check('a non-boolean fault is refused',
+          NL.validateFrame({ t: 'SENSE', sensorId: 'a', on: false, fault: 'yes' },
+                           's2p').length === 1);
+
+    // Generous upper bound ON PURPOSE: a 30 A clamp sees 45-50 A of inrush, and
+    // refusing the whole frame for reporting that honestly would discard the
+    // `on` bit riding with it — the one thing that actually matters.
+    eq('an inrush-sized reading is accepted',
+       NL.validateFrame(NL.sense('a', true, 60, 48, 0.2, 0.8), 's2p'), []);
+    check('a negative reading is refused',
+          NL.validateFrame({ t: 'SENSE', sensorId: 'a', on: true, amps: -1 },
+                           's2p').length === 1);
+  }
+
   const on = NL.sense('planer-ct', true, 2.8);
   eq('SENSE is s2p', NL.validateFrame(on, 's2p'), []);
   check('and only s2p', NL.validateFrame(on, 'p2s').length === 1);

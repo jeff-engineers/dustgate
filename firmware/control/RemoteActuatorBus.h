@@ -113,8 +113,7 @@ public:
     void setLastIp(const char* ip) { if (ip && *ip) nodelink::strlcpy_(_lastIp, ip, sizeof(_lastIp)); }
 
     size_t senseCount() const;
-    bool   senseAt(size_t i, String& id, bool& reported, bool& on,
-                   uint32_t& ageMs, float& level) const;
+    bool   senseAt(size_t i, SenseView& v) const;
 
 private:
     static void taskTrampoline(void* arg) { static_cast<RemoteActuatorBus*>(arg)->taskLoop(); }
@@ -173,6 +172,12 @@ private:
         // that answers "is this clamp nearly tripping, or nowhere near?" while
         // the trip constants are still provisional (sensing/CtTrip.h).
         float    level        = -1.0f;
+        // Telemetry for a human, straight off the wire, in AMPS. Negative =
+        // the node omitted it. NOTHING BRANCHES ON THESE — see nodelink.js.
+        float    amps         = -1.0f;
+        float    floorA       = -1.0f;
+        float    tripA        = -1.0f;
+        bool     fault        = false;   // the node could not learn a floor
     };
     SenseState _senses[nodelink::kMaxSensorsPerNode];
     size_t     _senseCount = 0;

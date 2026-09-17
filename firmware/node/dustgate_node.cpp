@@ -304,6 +304,17 @@ static topo::nodelink::SensorSpec g_sensors[topo::nodelink::kMaxSensorsPerNode];
 static size_t   g_sensorCount = 0;
 static bool     g_senseOn[topo::nodelink::kMaxSensorsPerNode] = { false };
 static bool     g_senseKnown = false;
+
+// What this board was TOLD to squeeze by, as opposed to what it was built with.
+//
+// ONE CLAMP, ONE PAD — the same assumption tickSensors() already makes — so this
+// is per-BOARD rather than per-sensor, taken from the first spec in the CONFIG.
+// When a second pad exists it moves into g_sensors[] alongside the channel, and
+// this becomes an array; nothing else about the shape changes.
+//
+// Starts at the compiled-in defaults, which is what a board uses until a primary
+// tells it otherwise — including forever, if that primary predates 2026-09-17.
+static sensing::TripParams g_tripParams;
 static uint32_t g_lastSenseMs = 0;
 
 // The sampling cadence, the floor and the trip point all live in
@@ -622,6 +633,17 @@ static void onNodeWsEvent(AsyncWebSocket*, AsyncWebSocketClient* client,
                 // already refused anything partial.
                 for (size_t i = 0; i < n; i++) g_sensors[i] = parsed[i];
                 g_sensorCount = n;
+                // Fall back per FIELD, not per frame: a primary that sends two
+                // of the three is not an error, and substituting a whole default
+                // set for a partial one would quietly discard what it did send.
+                // Zero is the sentinel and parseConfigFrame has already refused
+                // any real value that could look like one.
+                g_tripParams = sensing::TripParams();
+                if (n) {
+                    if (parsed[0].tripRatio  != 0.0f) g_tripParams.tripRatio  = parsed[0].tripRatio;
+                    if (parsed[0].minCounts  != 0.0f) g_tripParams.minCounts  = parsed[0].minCounts;
+                    if (parsed[0].clearRatio != 0.0f) g_tripParams.clearRatio = parsed[0].clearRatio;
+                }
                 for (size_t i = 0; i < topo::nodelink::kMaxSensorsPerNode; i++) g_senseOn[i] = false;
                 // Force a report on the next tick rather than waiting out a
                 // repeat interval: the primary has just said what it is
@@ -637,6 +659,14 @@ static void onNodeWsEvent(AsyncWebSocket*, AsyncWebSocketClient* client,
                         Serial.print(F("@ch")); Serial.print(g_sensors[i].channel);
                         Serial.print(i + 1 < n ? F(", ") : F("\n"));
                     }
+                    // Print what is IN FORCE, not what arrived: a primary that
+                    // sent nothing and a primary that sent the same numbers this
+                    // board already had look identical on the wire and must not
+                    // look identical in the log.
+                    Serial.print(F("[CONFIG] trip ")); Serial.print(g_tripParams.tripRatio, 2);
+                    Serial.print(F("x floor, min ")); Serial.print(g_tripParams.minCounts, 1);
+                    Serial.print(F(" counts, release ")); Serial.print(g_tripParams.clearRatio, 2);
+                    Serial.println(F(" of trip"));
                 }
                 topo::nodelink::buildAck(reply.to<JsonObject>(), f["seq"] | 0, true);
             }
@@ -731,7 +761,7 @@ static void tickSensors() {
     // trip point are all CtTrip's — see sensing/CtTrip.h. What is left here is
     // the only part that is a NODE's business: turning the bit into a frame.
     const sensing::CtTrip::Tick t =
-        g_ctTrip.update(g_ct, millis(), actuatorMoving(), &watchdog::pet);
+        g_ctTrip.update(g_ct, millis(), actuatorMoving(), g_tripParams, &watchdog::pet);
     if (!t.sampled) return;
 
     const uint32_t now = millis();
@@ -745,15 +775,31 @@ static void tickSensors() {
         const bool changed = (g_senseOn[i] != t.on) || !g_senseKnown;
         if (!changed && !due) continue;
         g_senseOn[i] = t.on;
-        StaticJsonDocument<192> doc;
-        topo::nodelink::buildSense(doc.to<JsonObject>(), g_sensors[i].sensorId, t.on, t.level);
+        // Telemetry in AMPS, converted HERE because this is the only place that
+        // knows this board's measured amps-per-count. Everything CtTrip works in
+        // is counts; nothing downstream should have to own a scale factor.
+        // Negative stays negative — absent, not zero. See buildSense().
+        const float aPer   = t.aPerCount;
+        const float amps   = (aPer > 0.0f) ? t.rmsCounts * aPer : -1.0f;
+        const float floorA = (aPer > 0.0f && g_ctTrip.floorLearnt())
+                             ? g_ctTrip.floorCounts() * aPer : -1.0f;
+        const float tripA  = (aPer > 0.0f && t.trip > 0.0f) ? t.trip * aPer : -1.0f;
+        // 256, not 192: four optional floats and a bool were added on
+        // 2026-09-17. ArduinoJson drops members SILENTLY on overflow, and a
+        // dropped `on` would be a tool that never opens its gate.
+        StaticJsonDocument<256> doc;
+        topo::nodelink::buildSense(doc.to<JsonObject>(), g_sensors[i].sensorId,
+                                   t.on, t.level, amps, floorA, tripA, t.floorFault);
         String s; serializeJson(doc, s);
         nodeWs.textAll(s);
         if (changed) {
             Serial.print(F("[CT] ")); Serial.print(g_sensors[i].sensorId);
             Serial.print(t.on ? F(" ON  ") : F(" off "));
-            Serial.print(t.rmsCounts, 1); Serial.print(F(" counts, trip "));
-            Serial.println(t.trip, 1);
+            Serial.print(t.rmsCounts, 1);
+            // "trip 0.0" would read as a board with an absurdly low threshold,
+            // which is the opposite of what a refused floor means.
+            if (t.floorFault) Serial.println(F(" counts, NO FLOOR — clamp faulted"));
+            else { Serial.print(F(" counts, trip ")); Serial.println(t.trip, 1); }
         }
     }
     if (due) g_lastSenseMs = now;

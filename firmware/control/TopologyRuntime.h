@@ -225,6 +225,22 @@ public:
     // cheap: a few small frames, and a node re-sent an identical CONFIG simply
     // ACKs it.
     void reconfigureSensors() { pushSensorConfig(); }
+
+    // What every CT node should squeeze by. See sensing/CtTrip.h.
+    //
+    // PLAIN FLOATS, NOT A sensing::TripParams, and set from outside rather than
+    // included: this header compiles against g++ and ArduinoJson for the host
+    // tests, and CtTrip needs <Arduino.h>. The sketch hands its own compiled-in
+    // values down at boot, which keeps ONE set of numbers in the system — the
+    // primary's — and keeps this file testable.
+    //
+    // ZERO MEANS "SAY NOTHING" per field, so a runtime that was never told (every
+    // host test, and the mock) sends the same frames it always did and a node
+    // keeps its own values. Same sentinel the wire uses.
+    void setSensorTuning(float tripRatio, float minCounts, float clearRatio) {
+        _tripRatio = tripRatio; _minCounts = minCounts; _clearRatio = clearRatio;
+        if (_loaded) pushSensorConfig();   // a retune is not worth a reboot
+    }
     JsonObjectConst topology() const {
         return _doc ? _doc->as<JsonObjectConst>() : JsonObjectConst();
     }
@@ -885,6 +901,11 @@ private:
         return bareHost(a.c_str()) == bareHost(b.c_str());
     }
 
+    // The shop-wide CT tuning, 0 = unset. See setSensorTuning().
+    float _tripRatio  = 0.0f;
+    float _minCounts  = 0.0f;
+    float _clearRatio = 0.0f;
+
     void pushSensorConfig() {
         if (!_bus) return;
         // One bucket per BOARD, not per id. "" is this board and is pushed
@@ -902,15 +923,17 @@ private:
             }
         }
         for (const std::string& cid : ids) {
-            // 1024, not 512. kMaxSensorsPerNode is 4 and a sensorId may be 48
-            // chars (kMaxSensorIdLen), so a full frame is 4 x (48-char string +
-            // three members + object overhead) — comfortably past 512 once
-            // ArduinoJson's per-member cost is counted. Overflow here does not
+            // 1536, not 512, and RESIZED AGAIN on 2026-09-17 when the tuning
+            // fields landed. kMaxSensorsPerNode is 4 and a sensorId may be 48
+            // chars (kMaxSensorIdLen), so a full frame is now 4 x (48-char
+            // string + SIX members + object overhead) — it was three members
+            // when 1024 was chosen, and doubling the member count is exactly the
+            // kind of change that walks a doc off its own cliff in silence. Overflow here does not
             // fail: it SILENTLY DROPS members, and a dropped sensorId is a board
             // that is deaf to one tool while reporting nothing wrong. Same
             // failure that ate caps.ct on 2026-09-15 and would have eaten the
             // tail of the board list on 2026-09-16.
-            DynamicJsonDocument doc(1024);
+            DynamicJsonDocument doc(1536);
             JsonArray arr = doc.to<JsonArray>();
             std::vector<std::string> sent;   // one spec per MACHINE, not per port
             for (const SystemView& sys : systemsOf(topology())) {
@@ -938,6 +961,13 @@ private:
                     sen["sensorId"] = sid;
                     sen["kind"]     = "ct";
                     sen["channel"]  = ct["channel"] | 0;
+                    // OMITTED, not zeroed: an absent key means "keep your own",
+                    // where a present 0 is a value parseConfigFrame refuses —
+                    // and it refuses the WHOLE frame, so a board would end up
+                    // watching nothing rather than watching with old numbers.
+                    if (_tripRatio  != 0.0f) sen["tripRatio"]  = _tripRatio;
+                    if (_minCounts  != 0.0f) sen["minCounts"]  = _minCounts;
+                    if (_clearRatio != 0.0f) sen["clearRatio"] = _clearRatio;
                 }
             }
             _bus->configureSensors(cid.c_str(), JsonArrayConst(arr));

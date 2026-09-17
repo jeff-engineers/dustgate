@@ -383,6 +383,13 @@ void RemoteActuatorBus::handleFrame(const char* json, size_t len) {
                 _senses[i].on    = on;
                 _senses[i].atMs  = millis();
                 _senses[i].level = f["level"] | -1.0f;
+                // Telemetry for the UI. Absent stays NEGATIVE rather than
+                // becoming 0, because 0 A is a real reading from an idle tool
+                // and "the node did not say" is not. Nothing branches on these.
+                _senses[i].amps   = f["amps"]   | -1.0f;
+                _senses[i].floorA = f["floorA"] | -1.0f;
+                _senses[i].tripA  = f["tripA"]  | -1.0f;
+                _senses[i].fault  = f["fault"]  | false;
                 xSemaphoreGive(_mutex);
                 // Logged on CHANGE only: this frame repeats every
                 // kSenseRepeatMs, and a line per repeat would bury everything
@@ -557,23 +564,27 @@ size_t RemoteActuatorBus::senseCount() const {
     return n;
 }
 
-bool RemoteActuatorBus::senseAt(size_t i, String& id, bool& reported, bool& on,
-                                uint32_t& ageMs, float& level) const {
+bool RemoteActuatorBus::senseAt(size_t i, SenseView& v) const {
     xSemaphoreTake(_mutex, portMAX_DELAY);
     const bool ok = i < _senseCount;
     if (ok) {
-        id = _senses[i].sensorId;
+        // Points into _senses[], which outlives the call — see SenseView.
+        v.id = _senses[i].sensorId;
         // CONFIGURED BUT NEVER HEARD FROM is the state this endpoint exists to
         // make visible, and it is NOT the same as "off". A clamp the layout
         // names, on a board that is online, that has never sent a SENSE, means
         // the chain is broken somewhere between CONFIG and the ADC — which is
         // exactly the question being asked on a bench.
-        reported = _senses[i].atMs != 0;
-        on       = _senses[i].on;
+        v.reported = _senses[i].atMs != 0;
+        v.on       = _senses[i].on;
         // AGE, not the raw timestamp: this becomes a JSON body a phone reads,
         // and millis() on this board means nothing at the other end.
-        ageMs    = reported ? (uint32_t)(millis() - _senses[i].atMs) : 0;
-        level    = _senses[i].level;
+        v.ageMs    = v.reported ? (uint32_t)(millis() - _senses[i].atMs) : 0;
+        v.level    = _senses[i].level;
+        v.amps     = _senses[i].amps;
+        v.floorA   = _senses[i].floorA;
+        v.tripA    = _senses[i].tripA;
+        v.fault    = _senses[i].fault;
     }
     xSemaphoreGive(_mutex);
     return ok;
