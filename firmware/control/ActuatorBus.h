@@ -74,6 +74,29 @@ public:
     // reading arrived, for the staleness check: a board that is still answering
     // PINGs but has stopped reporting is a FAULT, where a board that has gone
     // away entirely is the planer switched off at the wall (RFC §5.6a).
+    // --- Setup-time jog ----------------------------------------------------
+    //
+    // Drive one channel to an absolute angle, outside any routing decision, so
+    // the gate configurator can calibrate a valve wherever it lives. `detach`
+    // de-energises instead of moving.
+    //
+    // ON THE SEAM SINCE 2026-09-17, and it belongs here for the reason
+    // busForController() already gives about sensors: a lookup written a second
+    // time is how one path works on a board whose other path does not. The jog
+    // WAS that second copy — the sketch matched a controllerId against
+    // RemoteActuatorBus::nodeId() with a literal ==, while every gate move went
+    // through NodeBus's alias map and bareHost() normalisation. A layout whose
+    // controllerId is not spelled exactly like the paired host therefore routed
+    // gates perfectly and dropped every jog, which reads as "the configurator
+    // is broken on nodes" and is impossible to guess at from the symptom.
+    //
+    // Default is a refusal rather than a no-op: a bus that cannot jog should say
+    // so, because "nothing moved" is the one answer a calibration screen must
+    // not silently accept.
+    virtual bool jog(int channel, int angle, bool detach) {
+        (void)channel; (void)angle; (void)detach; return false;
+    }
+
     virtual bool senseOf(const char* sensorId, bool& on, uint32_t& atMs) const {
         (void)sensorId; (void)on; (void)atMs; return false;
     }

@@ -104,6 +104,22 @@ public:
 #endif
     }
 
+    // The local half of the setup jog — see ActuatorBus::jog(). A detach is
+    // meaningful here in a way it is not over the wire: this owns the servo
+    // object, so it can de-energise it directly.
+    bool jog(int channel, int angle, bool detach) override {
+#if defined(ENABLE_SERVO) && defined(SERVO_PWM_PIN_1)
+        if (channel < 0 || channel >= SERVO_COUNT) return false;
+        if (!_servos[channel]) return false;
+        if (detach) _servos[channel]->detach();
+        else        _servos[channel]->moveTo(angle);
+        return true;
+#else
+        (void)channel; (void)angle; (void)detach;
+        return false;      // no PWM bank compiled in — say so, do not pretend
+#endif
+    }
+
     // ── SENSORS ON THIS BOARD'S OWN PADS ────────────────────────────────
     //
     // A clamp wired to the BRAIN, which is the ordinary case for a collector:

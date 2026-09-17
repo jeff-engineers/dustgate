@@ -3047,26 +3047,28 @@ void loop() {
     {
         int jogCh = 0, jogAngle = 0; bool jogDetach = false; String jogCtrl;
         if (apiServer.consumeServoJogRequest(jogCh, jogAngle, jogDetach, jogCtrl)) {
-            bool remote = jogCtrl.length() > 0 &&
-                          jogCtrl != g_nodeBus.ownControllerId().c_str();
-            if (remote) {
-                topo::RemoteActuatorBus* bus = nullptr;
-                for (int i = 0; i < g_remoteCount; i++) {
-                    if (jogCtrl == g_remoteBuses[i].nodeId()) { bus = &g_remoteBuses[i]; break; }
-                }
-                if (!bus) {
-                    DEBUG_PRINT(F("[UI] Jog for unknown controller: ")); DEBUG_PRINTLN(jogCtrl);
-                } else if (jogDetach) {
-                    // No detach over the wire — the node de-energizes on its own once
-                    // the sweep settles (holdAtRest is false on a jog). Nothing to do.
-                } else if (!bus->jog(jogCh, jogAngle)) {
-                    DEBUG_PRINT(F("[UI] Jog refused by ")); DEBUG_PRINTLN(jogCtrl);
-                }
+            // ONE LOOKUP, the same one a gate move uses. This block used to
+            // resolve the board itself — a literal == against each bus's
+            // nodeId(), plus its own primary/remote branch — while
+            // NodeBus::busForController() resolved a gate through the topology's
+            // ALIAS MAP with bareHost() normalising ".local" and case.
+            //
+            // So the two disagreed exactly when a layout's controllerId is not
+            // spelled like the paired host, which is the normal case the moment
+            // anyone renames a board: gates moved perfectly and every jog fell
+            // through to "[UI] Jog for unknown controller". From the shop floor
+            // that reads as "the gate configurator doesn't work on nodes", with
+            // nothing to connect it to a name.
+            //
+            // An empty controllerId still means THIS BOARD — busForController()
+            // has said so all along, which is why the primary branch went too.
+            topo::ActuatorBus* bus = g_nodeBus.busForController(jogCtrl.c_str());
+            if (!bus) {
+                DEBUG_PRINT(F("[UI] Jog for unknown controller: ")); DEBUG_PRINTLN(jogCtrl);
+            } else if (!bus->jog(jogCh, jogAngle, jogDetach)) {
+                DEBUG_PRINT(F("[UI] Jog refused by "));
+                DEBUG_PRINTLN(jogCtrl.length() ? jogCtrl : String("this board"));
             }
-#if defined(ENABLE_SERVO) && defined(SERVO_PWM_PIN_1)
-            else if (jogDetach) g_servos[jogCh].detach();
-            else                g_servos[jogCh].moveTo(jogAngle);
-#endif
         }
     }
 #endif

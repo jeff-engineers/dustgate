@@ -67,7 +67,7 @@ public:
     bool setState(const char* selectorId, JsonObjectConst sel, const char* stateId) override;
     void update() override {}   // all pumping happens on the WS task
 
-    // --- Setup-time jog (NOT part of ActuatorBus) -------------------------
+    // --- Setup-time jog ---------------------------------------------------
     // Drive one channel to an absolute angle, outside any routing decision, so
     // the gate configurator can calibrate a valve that lives on this node. The
     // wire frame is an ordinary SET: a secondary's whole job is "channel +
@@ -82,7 +82,7 @@ public:
     // field, and it doesn't need one. holdAtRest is false here, so the node's
     // ServoActuator de-energizes on its own once the sweep settles — which is
     // the behaviour the local detach call was asking for anyway.
-    bool jog(int channel, int angle);
+    bool jog(int channel, int angle, bool detach) override;
 
     // --- Reporting (for GET /api/nodes) --------------------------------
     struct NodeInfo {

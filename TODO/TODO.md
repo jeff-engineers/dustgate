@@ -71,7 +71,7 @@ reasoning was contested, or that a still-open item above leans on.
 
 - **Dust collector - deadheaded - running with nothing open, stop it** 
   this state shouldn't exist, when the last tool is turned off it's gate should remain open
-  there should be no way outside of manual user invervention to dead-head a system            
+  there should be no way outside of manual user invervention to dead-head a system                      
 
 - **loop() is still one enormous function — LANDED 2026-09-14, keep watching.**
   A stack protection fault on a collector board at boot, 2026-09-12:
