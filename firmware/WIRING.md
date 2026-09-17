@@ -173,17 +173,74 @@ Defining both "to keep the interface uniform" is not merely untidy — `config.h
 
 ## 2. Power
 
-| Rail            | Source                    | Notes                                     |
-|-----------------|---------------------------|-------------------------------------------|
-| Motor 12–24V    | Separate DC supply, ≥2A   | Connect to TMC2209 + and − terminals      |
-| ESP32 5V        | USB, or 5V/VIN header pin  | Onboard AMS1117 regulates it to 3.3V      |
-| ESP32 3V3       | Regulated output pin      | Powers GPIO logic + TMC2209 VDD           |
-| Common GND      | Shared across all rails   | Connect ESP32 GND to motor supply GND     |
+> Parts and quantities live in [`../docs/BOM.md`](../docs/BOM.md), including a
+> section on what was deliberately NOT bought and why. This file stays the
+> reasoning and the pin-level detail; when the two disagree, this one is right.
 
-Do **not** power the motor from the ESP32 3.3V or USB 5V rail.
-Always common the grounds.
+**REWRITTEN 2026-09-17.** What stood here was the DevKitC-era table, and it
+described a board we do not build and a driver that was deleted on 2026-08-28: it
+named TMC2209 terminals, and it said the 3V3 rail comes from an **AMS1117**. That
+second one is not merely stale, it actively misleads — an AMS1117 needs ~1.1 V of
+dropout, so anyone measuring 4.4 V on the `5V` pad would conclude the board was
+about to brown out. It is not: the XIAO C5 datasheet lists `Battery: 3.7 V` as a
+power input, and a board that runs from a LiPo sagging toward 3.4 V has a
+genuinely low-dropout regulator with over a volt of headroom at 4.4 V.
+
+| Rail | Source | Notes |
+|---|---|---|
+| 12 V | barrel jack (see the supersede note below) | the QS18 bin sensor, the pilot lamp, the strobe, an ST3215 at the gate |
+| ESP32 5 V | USB-C, **or** the `5V` pad from a buck off 12 V | fed to a low-dropout 3V3 regulator — **not** an AMS1117; 4.4 V at the pad is ample |
+| ESP32 3V3 | regulated output pin | GPIO logic only. Never a motor |
+| Common GND | one star point, **at the supply** | see §9's note: one NET is not one POINT |
+
+**The `5V` pad is raw bidirectional VBUS**, so a buck and an attached USB cable
+are simply paralleled and the higher one sources the board. Measured 2026-09-17:
+a buck reading 4.4 V after its diode lost outright to USB at ~4.95 V, which is
+why that session's readings say nothing about the converter's own ripple. See
+"Two 5V sources at once".
+
+⚠️ **A 0.6 V drop across that diode is a silicon part, not a Schottky.** A 1N5817
+or SS34 drops ~0.3 V at these currents. Worth caring about because the same 5 V
+rail feeds the servos, and the gate servos were characterised at 5.0 V — a 9 g fob
+servo will not notice 4.4 V, a 6 kg gate servo gives up real torque. Measure at
+the buck output BEFORE the diode: 5.0 V there means swap the diode; 4.4 V there
+means the converter itself is set low.
+
+Do **not** power a motor from the ESP32 3.3V or USB 5V rail. Always common the
+grounds.
 
 #### USB-PD instead of a DC brick — the intended supply
+
+> **SUPERSEDED 2026-09-17 (jeff): a plain 12 V barrel jack, no PD trigger.** Kept
+> because the reasoning below still explains the parts on every board built so
+> far, and because one line of it is the argument that killed it.
+>
+> That line is "prefer a 9V or 15V part over a 12V one" — chosen because **12 V
+> is optional in the PD spec**, so a PD design needing 12 V fails on some good
+> chargers. That objection lives entirely inside PD and dies with it. And 12 V is
+> what the hardware actually wants: the QS18 bin sensor, the green pilot and the
+> red strobe are 12 V parts, and the ST3215 is a 12 V part that 15 V is over-spec
+> for — so PD@15 wanted a second regulator on exactly the boards that matter,
+> where a 12 V rail is simply the rail. The HUSB238 and its board area go with it.
+>
+> What is genuinely given up is the reason PD was picked: a charger is a part
+> people already own. That argument was made about a **15 V 3 A** brick and is far
+> weaker for 12 V, which is the most commonly stocked barrel voltage there is —
+> and this is a fixed shop install, not something that travels.
+>
+> ⚠️ **It puts MAINS EARTH back in the CT's chain, and that is not a small
+> footnote.** The 6.68-count / 0.195 A floor was measured with the laptop on
+> battery, and §5.5b eliminates mains earth as a noise suspect *because* of that:
+> "no reading today ever had a mains reference in the chain". A 12 V wall adapter
+> has one. The 2026-09-13 suspect list also still contains "the 12 V supply
+> sitting beside the CT" — which this moves from beside the design to inside it.
+>
+> So the A→B comparison above now carries TWO changes, shared ground **and** a
+> mains reference, which is the multi-variable trap the topology section exists to
+> avoid. Split it: read the floor first off a **12 V battery or bench supply**
+> (shared ground, no mains reference — a true one-variable step from the USB
+> baseline), then off the real brick. Two readings, and a degradation tells you
+> which of the two caused it.
 
 The barrel-jack brick above is the legacy arrangement. The direction is **USB-PD
 for everything**: one USB-C charger, a PD trigger to negotiate the voltage, and a
@@ -281,6 +338,58 @@ Three topologies. Pick one deliberately.
 
 **DECIDED: A FIRST (Jeff, 2026-09-11), then B once it works.**
 
+> **ANSWERED 2026-09-17: BUILD B. A plain MPM3610 is fine; the isolated DC-DC is
+> not needed.** Measured on the bench, three conditions, same board and clamp:
+>
+> | | floor, counts | floor, A |
+> |---|---|---|
+> | A — separate supplies (USB + 12 V wart), the reference | 6.50 | 0.194 |
+> | B — one 12 V brick through the buck, lamps off | 6.24 | 0.186 |
+> | **B — same, with the 12 V lamps running** | **6.79** | **0.202** |
+> | B — lamps running, re-read after a rig fix | 7.00 | 0.207 |
+>
+> The last row is a CONFIRMATION, not a fourth condition: the first three were
+> taken on a rig that turned out to be miswired (an attempted 5 V feed into the
+> 3V3 rail), so they were re-run after the fix. The `DC` column had already argued
+> the rail was never actually compromised — 1623 mV is the 1k/1k divider halving
+> 3.25 V — and the re-read moved the midpoint by ONE COUNT, 1640 to 1641. Every
+> number above stands.
+>
+> **+4% from cleanly separated supplies to one brick with switching loads on the
+> shared rail.** Backed out in quadrature the lamps contribute ~2.7 counts on
+> their own — 0.08 A, about a tenth of the 27-count trip point. The bias sat at
+> 1621–1623 mV throughout, which is the measurement that caught the breadboard.
+>
+> ⚠️ **What this did NOT test, stated precisely.** USB was attached for serial
+> throughout, and with the Schottky fitted where "Two 5V sources at once"
+> prescribes — between the buck and the `5V` pad — the buck arrives ~0.3 V down
+> and VBUS wins outright. So the ESP32 ran on USB and **the converter's own ripple
+> was not in the measurement at all.**
+>
+> It is closed on physics rather than left open. The MPM3610 switches at ~2 MHz;
+> the reading is 29 kSPS integrated over a 60 ms window to get 60 Hz RMS, so
+> ripple three orders of magnitude above the sample rate cannot survive that
+> integration. What IS in band is the lamps — switching amps on the shared ground
+> at mains frequencies — and they are exactly what was measured, at 4%. The
+> untested variable is the one that cannot matter; the one that could was tested.
+>
+> To close it by measurement rather than argument you would have to read the floor
+> with USB unplugged, which means exposing the learned floor over WiFi. Worth doing
+> for its own sake one day — the floor-refusal guard in `sensing/CtTrip.h` makes
+> "what did this board learn" a question worth being able to ask — but not needed
+> for a shop.
+>
+> **THE BASELINE LANDED 2026-09-16 — B was a one-measurement question.**
+> Everything below argues that B tells you nothing without a reference, which was
+> true at the time. The reference now exists: the floor is **6.68 counts /
+> 0.195 A**, measured laptop-on-battery over USB, which IS topology A, and
+> unchanged with the CT shorted out. So run the board off the MPM3610 on 12 V and
+> re-read it: ~6.68 means build B and ship the plain buck; materially worse is
+> the shared-ground answer and C is the fix. Read it with the lamps and strobe
+> both idle AND active — they are a separate noise source from the buck, and a
+> degradation only in the active case is a filtering problem on the lamp rail
+> rather than an argument for an isolated converter.
+
 Not because A is better — it is the worse install, two bricks and two outlets
 at a machine that already has a cord and a remote and a duct. Because it is the
 **baseline**, and this board has too many unknowns to add an avoidable one.
@@ -319,6 +428,12 @@ either way.
 is in §3: a CT clamp, feet from an induction motor, on a board whose ADC noise
 floor is unresolved. If the CT proves unusable on a shared ground, an isolated
 DC-DC is the fix that keeps the single-brick install.
+
+> **IT DID NOT TURN OUT TO MATTER — measured 2026-09-17, see the banner above.**
+> B costs 4% of the floor with the lamps running. C is not being built, and the
+> part table below is kept only because the reasoning in it (regulated not
+> unregulated, and the servo budget that picks the 6 W part over the 3 W one) is
+> what anyone would have to re-derive if the answer ever changes.
 
 ##### If you build C: which part, and the budget that decides it
 
@@ -1127,6 +1242,17 @@ Two honest caveats:
   than the 0.253 A measured on 2026-09-07. That is a different location — on a
   collector's input conductor inside its enclosure, not on a bench — so the two
   are not comparable and the increase is **unexplained**.
+
+  > **RESOLVED 2026-09-16, and it was NOT the location — it was the breadboard.**
+  > Left in place because the wrong explanation outlived the measurement: "different
+  > location, unexplained" was still being cited a day later as evidence that the
+  > floor swings 10x with where a board boots, which would have made a fixed trip
+  > ratio the wrong shape. It does not swing. The rebuilt perfboard reads 0.195 A
+  > **at the collector** (jeff, 2026-09-17 — node on a workbench a couple of feet
+  > away), unchanged with the CT shorted out. See "It is a breadboard" below: the
+  > drifting DC bias in this same session was the tell, and it was already written
+  > down here.
+
 - The zero-crossing counter over-reports when noise dominates, since noise adds
   spurious crossings. 1055 Hz is not a clean spectral line; it is "well above
   60", which is all the test needed to decide.
@@ -1331,6 +1457,11 @@ Against that target the CT already passes comfortably:
 | Collector running | ~370 | |
 | Floor, as built | ~80 | **4.6x — trivially separable** |
 | Floor, on the degraded breadboard | ~426 | 1.3x — marginal |
+| **Floor, soldered perfboard (2026-09-16, at the collector)** | **~6.7** | **~55x — the platform this ships on** |
+
+The last row is why the breadboard rows are kept rather than deleted: the same
+clamp and the same firmware span 1.3x to 55x on the WIRING alone, so a marginal
+CT reading is a rig question before it is a sensing question.
 
 **The verdict was never in danger on the working platform.** A 2.2 A floor under
 a 10.4 A load is ~13 dB, which is a comfortable margin for a threshold that only
@@ -1465,6 +1596,28 @@ cannot exceed whatever *you* pull it up to.
 | Black | QS18 (output) | **4N35 pin 2** (LED cathode) |
 
 *The ESP32 side — nothing here touches 12 V:*
+
+> **On topology B (one 12 V brick + a plain buck), this table does not change —
+> and "which ground does the opto use?" has no answer because the part has none.**
+> Asked 2026-09-17, and worth writing down because it is the obvious question.
+>
+> The 4N35 has six pins and no ground: **3 and 6 stay open**, and pin 4 (the
+> emitter) IS the ESP32-side return. Nor do you choose to join the two grounds —
+> **a buck is non-isolated by definition**, one inductor and one shared return, so
+> its input GND and output GND are already the same node. That is the continuity
+> test above: isolated reads open, a plain buck reads ~0 Ω. On B there is ONE
+> ground, the wiring below is unchanged, and only the MEANING changes — the opto
+> level-shifts instead of isolating, which is the whole of §2's point.
+>
+> ⚠️ **One net is not one POINT, and on this board that distinction is the
+> measurement.** The strobe and the pilot lamp are the large currents here; if
+> their return shares copper with the ESP32's ground reference, that IR drop lands
+> on the ADC reference and the CT floor degrades for a reason that has nothing to
+> do with the converter. Bring the 12 V load returns (QS18 blue, lamp, strobe)
+> to the **supply's ground terminal** directly and take the buck's input ground
+> from that same point — one star, at the supply. Daisy-chaining them through the
+> ESP32's ground is what makes an A/B comparison measure the layout instead of
+> the buck.
 
 | | Goes from | To |
 |---|---|---|
