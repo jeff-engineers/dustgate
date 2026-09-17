@@ -330,6 +330,43 @@ active sections above them, which is how a parked item stops being read.
 
 ## Carried debt
 
+- **OTA for nodes, so the shop is flashed once — and the numbers say it is nearly
+  free. (jeff's goal, 2026-09-17.)** "I'd love to get to a point where the nodes
+  can all be flashed, and I only have to maintain the primary once this is in the
+  real shop." Measured today rather than estimated:
+
+  | | image | slot it has | what OTA needs |
+  |---|---|---|---|
+  | node (`huge_app.csv`) | 1.35 MB | ONE 3 MB `app0`, plus 896 KB of spiffs it never mounts | two 1.6 MB slots — **fits the same 4 MB with room to spare** |
+  | primary (`partitions-xiao-c5-primary.csv`) | 1.88 MB | one 2.62 MB `app0` + 1.44 MB `ffat` | 2×2.62 + 1.44 = 6.7 MB — needs the flash size raised to **8 MB, which the chip already has** |
+
+  So a NODE can have dual-slot OTA today for the cost of a partition CSV. The
+  table it has now spends its whole budget on one oversized slot and a filesystem
+  nothing mounts. The primary needs `board_upload.flash_size = 8MB` as well —
+  also free: `partitions-xiao-c5-primary.csv` fills 4 MB exactly and the board
+  reports 8.
+
+  `otadata` is already in BOTH tables, which is the rollback half and the reason
+  a bad push does not brick a board.
+
+  Delivery, in the order that costs least:
+  1. New partition tables. Nothing else changes; boards keep working.
+  2. The node PULLS over HTTP (`HTTPUpdate`) from the primary, rather than the
+     primary pushing over NodeLink. A pull is a plain GET the ESP32 core already
+     implements and can verify; a push means chunking a 1.35 MB image through a
+     WebSocket we would have to write and get right.
+  3. The primary serves it from its filesystem partition — the node image ships
+     alongside the Angular bundle, so `dev.sh flash` updates both.
+  4. Trigger over NodeLink, and only when it is needed: a node already reports
+     its `fw` in WELCOME, so the primary compares and stays quiet when they
+     match. That is what makes it "flashed once" rather than "reflashed on every
+     boot".
+
+  ⚠️ The node image must be built by the SAME commit as the primary serving it,
+  or a shop drifts into two firmwares that disagree about NodeLink. Whatever
+  ships the image should stamp it with the git sha the UI already reports.
+
+
 - **Delete the three bench envs? (jeff, 2026-09-17 — deferred, not rejected.)**
   `xiao_c5_bus_bench`, `xiao_c5_ht12e_bench`, `xiao_c5_ct_bench`. Jeff's point,
   and it is the decisive one: **they run the same physical hardware as the
