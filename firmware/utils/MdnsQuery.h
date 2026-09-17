@@ -23,6 +23,7 @@
 // =============================================================================
 
 #pragma once
+#include "MdnsLock.h"   // one mDNS search at a time, across every task
 #include <Arduino.h>
 #include <mdns.h>
 #include "Watchdog.h"   // the poll below outlives a loop() iteration
@@ -123,6 +124,12 @@ inline void mdnsParseHit(const mdns_result_t* r, MdnsHit& out) {
 // "200ms is plenty".
 inline int mdnsQueryService(const char* service, const char* proto,
                             uint32_t timeoutMs, MdnsHit hits[], int maxHits) {
+    // ONE QUERIER, SHOP-WIDE — see utils/MdnsLock.h. A scan started while a node
+    // task is mid-resolve returns empty for both, and "empty" is indistinguishable
+    // from "nothing on this network".
+    mdnslock::Guard lock(service);
+    if (!lock.held()) return 0;
+
     mdns_search_once_t* search = mdns_query_async_new(
         nullptr, service, proto, MDNS_TYPE_PTR, timeoutMs, (size_t)maxHits, nullptr);
     if (!search) {

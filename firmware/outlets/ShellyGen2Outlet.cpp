@@ -9,6 +9,7 @@
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <ESPmDNS.h>
+#include "../utils/MdnsLock.h"   // one mDNS search at a time, across every task
 
 ShellyGen2Outlet::ShellyGen2Outlet(const char* ip, const char* name) {
     strlcpy(_ip,   ip,   sizeof(_ip));
@@ -17,6 +18,10 @@ ShellyGen2Outlet::ShellyGen2Outlet(const char* ip, const char* name) {
 
 bool ShellyGen2Outlet::reresolve() {
     if (_host[0] == '\0') return false;
+    // Runs on the outlet poller's task, which is a THIRD thing querying the one
+    // mDNS searcher — see utils/MdnsLock.h.
+    mdnslock::Guard lock(_host);
+    if (!lock.held()) return false;
     IPAddress resolved = MDNS.queryHost(_host, 2000);
     if (resolved == IPAddress(0, 0, 0, 0)) return false;
     strlcpy(_ip, resolved.toString().c_str(), sizeof(_ip));
