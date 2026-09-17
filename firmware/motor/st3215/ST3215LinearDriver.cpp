@@ -129,7 +129,7 @@ bool ST3215LinearDriver::begin() {
         Serial.println(F("           nothing else, with every setting already correct."));
         Serial.println(F("         → Then: signal wiring, common ground, baud. Run the bench"));
         Serial.println(F("           console (pio run -e xiao_c5_bus_bench) and work §5.1 of"));
-        Serial.println(F("           firmware/wiring/st3215-bench.md — `selftest` splits a"));
+        Serial.println(F("           firmware/WIRING.md#7-the-slider--st3215-bus-and-endstops — `selftest` splits a"));
         Serial.println(F("           broken UART from a bus with nothing on it."));
         return false;
     }

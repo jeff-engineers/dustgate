@@ -24,7 +24,7 @@
 // We take Power alone because that is what thresholdW is in. The rest is not
 // waste: `Voltage` is MEASURED (115 V on that plug, not the 120 V nominal the CT
 // bench assumes) and `Current` and `Factor` are exactly what a CT cannot give —
-// see the note in firmware/wiring/ct-bench.md about a CT measuring current
+// see the note in firmware/WIRING.md#8-ct-clamp about a CT measuring current
 // rather than power.
 //
 // WHY THIS EXISTS. A 1HP dust collector trips the overpower protection on a

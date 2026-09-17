@@ -3,7 +3,7 @@
 //
 // Lifted from firmware/bench/ct_bench.cpp, which is where every decision in it
 // was made and where the failures that shaped it are recorded. Read
-// firmware/wiring/ct-bench.md §5.5 before trusting a number: **the noise floor
+// firmware/WIRING.md#8-ct-clamp §5.5 before trusting a number: **the noise floor
 // is unresolved and the screen is part of it.**
 //
 // THERE IS NO RECTIFIER. A CT puts out AC about zero; the bias network moves
@@ -11,7 +11,7 @@
 // sample flat out, subtract the MEASURED mean, take the RMS of what is left.
 // A diode would drop 0.7 V against a signal whose full scale is 1 V RMS, and
 // would delete the small end, which is the entire question. See
-// wiring/collector-node.md §3.
+// WIRING.md#9-bin-sensor §3.
 //
 // SUBTRACTING THE MEASURED MEAN is what makes the divider's exact midpoint
 // irrelevant — a lazy divider and a drifting reference both come out in the
@@ -113,7 +113,7 @@ public:
     // which looks exactly like a perfectly quiet sensor. 0.000 A from a railed
     // pin is indistinguishable from 0.000 A from a genuinely idle tool, and the
     // first version of the bench rig spent a whole session reporting the former
-    // as the latter (wiring/ct-bench.md).
+    // as the latter (WIRING.md#8-ct-clamp).
     //
     // Healthy is ~1650 mV, the divider halving 3.3 V. Anything near either rail
     // means the bias network is not doing its job and every number is fiction.
@@ -130,7 +130,7 @@ public:
     // Catching it needs a different test — counting samples that land at the
     // ADC's extremes, which a clean signal never touches — and nothing does that
     // yet. Until then: every reading taken within a few seconds of a motor start
-    // is worthless, whatever this says. See wiring/ct-bench.md.
+    // is worthless, whatever this says. See WIRING.md#8-ct-clamp.
     static bool isRailed(const Reading& r) {
         return r.dcMv < 200 || r.dcMv > 3100;
     }

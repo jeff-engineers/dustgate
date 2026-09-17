@@ -47,7 +47,7 @@
 #     is the LAYOUT pointing it at a bin, a clamp and a remote.
 #     ⚠️ A NODE still has neither the bin sensor nor the RF transmitter: both
 #     live in firmware.ino and were never moved. Clamps DO work on a node.
-#     firmware/wiring/collector-node.md has the table of what works where.
+#     firmware/WIRING.md#9-bin-sensor has the table of what works where.
 #
 #   THE SLIDER BOARD — add --slider to either flash command:
 #
@@ -672,7 +672,7 @@ run_flash() {
     echo "        RF TX         yes on a PRIMARY; NOT on a node (still in .ino)"
     echo "        bin sensor    yes on a PRIMARY; NOT on a node (still in .ino)"
     echo "        CT clamp      code is in on both, NEVER RUN on either"
-    echo "      firmware/wiring/collector-node.md has the table."
+    echo "      firmware/WIRING.md#9-bin-sensor has the table."
     echo ""
     echo "  ⚠️  THIS IS A COMPLETE PRIMARY — web UI, topology, plug polling."
     echo "      A one-collector shop is a whole shop, so that is right. In a shop"

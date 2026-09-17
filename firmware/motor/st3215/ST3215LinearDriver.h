@@ -9,7 +9,7 @@
 // whole reason this fits behind the existing seam rather than beside it.
 //
 // THREE FACTS ABOUT THIS SERVO SHAPE EVERYTHING BELOW. All three were learned
-// the hard way at the bench; wiring/st3215-bench.md §5.0.2 is the long version.
+// the hard way at the bench; WIRING.md#7-the-slider--st3215-bus-and-endstops §5.0.2 is the long version.
 //
 //   1. MODE 3 IS A STEP COUNTER, NOT A POSITION SERVO. Mode 0 clamps at one
 //      turn by design, and the slider needs five. So register 42 is written
@@ -188,7 +188,7 @@ private:
     // ARRIVAL IS "THE COUNT STOPPED FALLING", NOT "THE COUNT IS ZERO".
     // The step counter settles a few counts short — 3 and 4 across the two bench
     // runs — so a driver waiting for 0 waits forever. It is written in bold in
-    // wiring/st3215-bench.md §5.0.2 and this driver was written against `== 0`
+    // WIRING.md#7-the-slider--st3215-bus-and-endstops §5.0.2 and this driver was written against `== 0`
     // anyway (2026-08-28), which is why homing moved exactly one 2mm chunk and
     // then sat there: the chunk never "finished", so the next one never went out.
     long      _lastRemaining = -1;   // previous poll's reading, -1 = none yet

@@ -16,7 +16,7 @@ booting, joining NodeLink, and reporting itself correctly to the UI**.
 through a **discrete 4N35** (not the PC817 breakout the docs specified for weeks:
 it measured 4 V on its output, above a C5 GPIO's absolute maximum), with the
 existing 12 V green pilot and red strobe left wired to the sensor. That is the
-first collector-board capability proven on real hardware. `firmware/wiring/collector-node.md` §2.
+first collector-board capability proven on real hardware. `firmware/WIRING.md#9-bin-sensor` §2.
 
 **The slider node moves a gate, confirmed 2026-09-03** — it homes, finds its
 datum, takes a SET and drives the rack. That was the last unknown on the node
@@ -168,8 +168,8 @@ Firmware compiles — `pio run -e <env>`:
 | `xiao_c5_linear_primary` | XIAO ESP32C5 | **primary** on the slider board (ST3215 rack) |
 | `xiao_c5_linear` | XIAO ESP32C5 | secondary node on the slider board |
 | `xiao_c5_bus_bench` | XIAO ESP32C5 | not a role — the bus-servo console |
-| `xiao_c5_ht12e_bench` | XIAO ESP32C5 | not a role — the HT12E/315MHz console, for keying the Rockler DC remote ([`wiring/ht12e-bench.md`](firmware/wiring/ht12e-bench.md)) |
-| `xiao_c5_ct_bench` | XIAO ESP32C5 | not a role — a walk-around CT current meter, for judging whether a 30A clamp can tell a running tool from an idle one ([`wiring/ct-bench.md`](firmware/wiring/ct-bench.md)) |
+| `xiao_c5_ht12e_bench` | XIAO ESP32C5 | not a role — the HT12E/315MHz console, for keying the Rockler DC remote ([`WIRING.md#10-315-mhz-transmitter`](firmware/WIRING.md#10-315-mhz-transmitter)) |
+| `xiao_c5_ct_bench` | XIAO ESP32C5 | not a role — a walk-around CT current meter, for judging whether a 30A clamp can tell a running tool from an idle one ([`WIRING.md#8-ct-clamp`](firmware/WIRING.md#8-ct-clamp)) |
 
 **The collector envs are gone (2026-09-16), and nothing replaced them.** There
 used to be `xiao_c5_collector` and `xiao_c5_collector_node`: a third pin

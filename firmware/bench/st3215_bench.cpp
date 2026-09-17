@@ -24,7 +24,7 @@
 //     PLATFORMIO_CORE_DIR=~/.platformio-pioarduino pio run -e xiao_c5_bus_bench -t upload
 //     PLATFORMIO_CORE_DIR=~/.platformio-pioarduino pio device monitor -e xiao_c5_bus_bench
 //
-// ⚠️ Read firmware/wiring/st3215-bench.md before connecting the signal wire.
+// ⚠️ Read firmware/WIRING.md#7-the-slider--st3215-bus-and-endstops before connecting the signal wire.
 // The bus logic level is unconfirmed and this part is not 5V tolerant.
 // =============================================================================
 
@@ -253,7 +253,7 @@ static void doSweep(uint8_t hi) {
     bus.begin(busBaud, false);
     Serial.println(F("  nothing answered at any rate, either way round.\n"
                      "  That is now a wiring question, not a settings one — see\n"
-                     "  firmware/wiring/st3215-bench.md section 5."));
+                     "  firmware/WIRING.md#7-the-slider--st3215-bus-and-endstops section 5."));
 }
 
 /**
