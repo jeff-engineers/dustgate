@@ -29,6 +29,7 @@
 #include <Adafruit_SSD1306.h>
 #include "../config.h"
 #include "../sensing/CtSensor.h"
+#include "../sensing/CtTrip.h"    // kTripRatio — the bench must agree with the shop
 
 // PIN_CT COMES FROM THE BOARD HEADER (via config.h) SINCE 2026-09-16, and this
 // file no longer names a pad of its own. It used to, back when PIN_CT was
@@ -211,7 +212,18 @@ struct Phase {
 };
 
 static Phase runPhase(uint32_t secs, bool chatty) {
-    const float trip = (g_floor > 0) ? g_floor * 3.0f : 0.05f;
+    // sensing::kTripRatio, NOT a 3.0f written here. This was its own number
+    // until 2026-09-17 and the two had DIVERGED: the bench called a tool running
+    // at 3x the floor while the shipping firmware uses 4x (sensing/CtTrip.h).
+    // So a tool characterised at this bench would trip here and not in the shop,
+    // which is the one thing a measuring instrument must not do — and it is the
+    // second time this file drifted from the code it is meant to predict (the
+    // first was CtSensor, 2026-09-16).
+    //
+    // The absolute floor below stays local: it is in AMPS, where kMinTripCounts
+    // is in ADC counts, so they are the same idea in two domains rather than one
+    // number in two places.
+    const float trip = (g_floor > 0) ? g_floor * sensing::kTripRatio : 0.05f;
     uint32_t markMs[96]; float markA[96]; int nMarks = 0;
     float mn = 1e9f, mx = 0; double acc = 0; uint32_t n = 0;
 
