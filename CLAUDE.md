@@ -38,6 +38,7 @@ behaviour as verified unless it is on that list.
 | `firmware/` | ESP32 C++ (Arduino/PlatformIO). The primary owns the schema; nodes own local loops and no interpretation |
 | `dustgate-ui/` | Angular app, served off the device's LittleFS |
 | `tools/` | `mock-api.js` (simulated device), `mock-node.js` (simulated secondary), conformance runners |
+| `docs/BOM.md` | **Bill of materials** — boards, modules, sensors and the passives whose value matters, plus what was deliberately not bought |
 | `dev.sh` | Thin bash wrapper over PlatformIO/esptool for every bench workflow |
 
 ## The anti-drift rule
@@ -73,6 +74,7 @@ drifted constantly. Now `shared/device-model/` is the spec:
   | `NODELINK_VERSION`, `PING_INTERVAL_MS`, `PONG_TIMEOUT_MS`, `RECONNECT_MIN_MS`, `RECONNECT_MAX_MS` (nodelink.js) | `kVersion`, `kPingIntervalMs`, `kPongTimeoutMs`, `kReconnectMinMs`, `kReconnectMaxMs` (control/NodeLink.h) | NodeLink protocol timing |
   | `SENSE_REPEAT_MS` / `SENSE_STALE_MS` (nodelink.js) | `kSenseRepeatMs` / `kSenseStaleMs` (control/NodeLink.h) | how often a node repeats a sensor reading, and when the primary calls it stale. **New 2026-09-14** with the SENSE frame. SENSE is sent on CHANGE — the repeat only stops one dropped frame leaving the primary permanently wrong. Stale is 3× the repeat, the same ratio as PING/PONG and asserted as a ratio on both sides, so moving one without the other fails at the test. Stale is NOT the same as off: a node still answering PINGs but no longer reporting is a fault, where a node that has gone away entirely is the planer switched off at the wall (`intermittent`, RFC §5.6a) |
   | `caps.ct` in WELCOME — the DEFAULT when absent (nodelink.js `clampsOn`) | the default in `buildWelcome`'s `clamps` parameter, and `_capClamps` (control/RemoteActuatorBus) | how many current clamps a board says it has. **New 2026-09-15.** The VALUE rides the wire and so isn't a pair; the **default when the frame is silent** is, and it must be 0 on both sides or every board flashed before clamps existed reads as having one. Reported from the pin map (`PIN_CT`), never chosen — a clamp is DECLARED by its board because, unlike a plug, nothing on the network can discover one |
+  | the RANGES on `tripRatio` / `minCounts` / `clearRatio` in `validateFrame` (nodelink.js) | the same ranges in `parseConfigFrame` (control/NodeLink.h) | how hard a CT node squeezes. **New 2026-09-17**, and it is the BOUNDS that pair rather than the values: the numbers themselves ride the wire from the primary (`sensing::TripParams`), which is the whole point — retuning the shop is a primary reflash and nobody climbs to a node. The bounds must agree exactly or a primary sends a frame its own boards refuse, whole, taking the sensor list with it. Both sides validate on PRESENCE, not on being non-zero: zero is the sentinel for "not sent", so a value-based check waves an explicit `0` through as silence — the JS half had this right and the C++ half did not, and the pair is what caught it |
   | `MAX_SENSORS_PER_NODE` (nodelink.js) | `kMaxSensorsPerNode` (control/NodeLink.h) | sensors one node accepts in a CONFIG. **New 2026-09-14.** A pair because the firmware parses into a FIXED array: without the same cap in `validateFrame()` a primary could send eight specs to a board that keeps four and says nothing, leaving it silently deaf to half the tools. Both sides refuse the whole frame rather than truncating — a half-applied config is a state nobody should have to reason about |
 
   The reference pair has company now: `manual-blower.test.js` ↔
@@ -92,8 +94,11 @@ drifted constantly. Now `shared/device-model/` is the spec:
   Cite it as the example of a non-pair that earned promotion, not as a non-pair.
 
   `sensing/CtTrip.h` is the shape this table exists to prevent, caught before it
-  landed. The floor, the trip ratio and the sampling cadence are firmware-only —
-  no JS models a clamp — so they are not a pair. What they were about to become
+  landed. The sampling cadence and the learned floor are firmware-only — no JS
+  models a clamp — so they are not a pair. **The trip numbers stopped being
+  firmware-only on 2026-09-17** and now have a row above: they ride the CONFIG
+  frame so retuning a shop is a primary reflash rather than a ladder at every
+  node, which is what lets a node's firmware be called finished. What they were about to become
   is a second COPY, which is worse: the logic was written inside the node, and
   then the primary needed the identical decision because a clamp at the collector
   is wired to the board that IS the brain. It lives in one file that both
@@ -101,6 +106,19 @@ drifted constantly. Now `shared/device-model/` is the spec:
   `CtSensor` — a divergent copy missing the one-sample scale fix and the settle
   gate, reading plausibly wrong for weeks. **Not every duplication crosses a
   language boundary, and the ones that don't are the easier ones to miss.**
+
+  `sensing/CtTrip.h`'s own numbers are a third, and it is the one that needed a
+  SHIM to get tested at all. Every other decision-making header here is pure —
+  STL + ArduinoJson, no Arduino.h — precisely so the host tests can drive it, and
+  BinSensor.h says so at the top. CtTrip cannot be: it reads an ADC through
+  CtSensor, which busy-waits on `millis()`. So `firmware/test/shim/Arduino.h`
+  fakes a clock and an ADC, and `test_cttrip.cpp` covers the floor learn, the
+  floor REFUSAL, hysteresis and the primary-supplied params. **The shim must not
+  grow**: a header needing more Arduino than that wants splitting the way
+  BinSensor was, not accommodating. (Its clock advances on a 25-calls-per-ms
+  divider, because `read()` discards a window with under 100 samples — a
+  one-ms-per-call clock silently returns nothing and every test fails for a
+  reason unrelated to the code.)
 
   `kBinDebounceMs` (utils/BinSensor.h) is another: how long the dust-bin beam
   must hold a reading before the firmware believes it. No JS model simulates a
@@ -155,7 +173,7 @@ cd dustgate-ui && npm test        # spec-runner + routing + wiring geometry
 cd dustgate-ui && npm run bench:routing   # sample layouts, for tuning the routing costs
 cd dustgate-ui && ./routing-sweep.sh TURN 48 64   # ...the same, sweeping one constant
 cd tools && npm run model:test    # topology, shop, nodelink, plug-claim, adopt-outlets, manual-blower, collector-plug, bin-sensor (JS)
-cd tools && npm run firmware:test # the C++ host tests (router, controller, nodebus, shop, faults, plugclaim, screen, blower, binsensor)
+cd tools && npm run firmware:test # the C++ host tests (router, controller, nodebus, shop, faults, plugclaim, screen, blower, binsensor, cttrip)
 cd tools && npm run conformance:ci topology:conformance:ci nodelink:conformance:ci  # run separately
 ```
 

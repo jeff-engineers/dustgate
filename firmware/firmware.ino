@@ -39,10 +39,14 @@
 #include "control/CollectorPress.h"        // the retry policy for a stateless press
 #include "control/RfCollectorPresser.h"    // ...and the one presser that exists
 #include "control/RfAddressGuess.h"        // the four ways a DIP gets copied wrong
-#ifdef PIN_CT
-  #include "sensing/CtSensor.h"     // `ct` — the clamp on this board's own pad
-  #include "sensing/CtTrip.h"       // ...and the one shared "is it running?"
-#endif   // the 254-address knock, one address per loop() pass
+// UNCONDITIONAL since 2026-09-17, where these used to sit behind #ifdef PIN_CT.
+// A primary with no clamp of its own still has to TELL its nodes what tuning to
+// use, and sensing::TripParams is where those numbers live — gating the include
+// on this board's pin map would mean a gate brain could not name the constants
+// it ships to a collector node. Both are header-only and nothing here
+// instantiates a CtSensor without a pad; the clamp itself is still #ifdef'd.
+#include "sensing/CtSensor.h"     // `ct` — the clamp on this board's own pad
+#include "sensing/CtTrip.h"       // ...and the one shared "is it running?"   // the 254-address knock, one address per loop() pass
 #include "control/FaultPolicy.h"   // which begin() failure costs which capability
 #include "training/CalibrationStore.h"
 
@@ -1236,6 +1240,17 @@ void setup() {
     g_ct.begin();
 #endif
 
+    // Hand the runtime this board's CT tuning so every node gets the SAME
+    // numbers this board judges its own clamp by. Unconditional — not inside
+    // PIN_CT — because a primary with no clamp of its own still configures nodes
+    // that have one, and gating it on this board's pin map would make a gate
+    // brain silently ship stale numbers while a collector brain shipped fresh
+    // ones. Retuning the shop is sensing/CtTrip.h plus a reflash of THIS board.
+    {
+        const sensing::TripParams p;
+        g_topoRuntime.setSensorTuning(p.tripRatio, p.minCounts, p.clearRatio);
+    }
+
     // ── How close did that come to the edge? ─────────────────────────────
     //
     // The stack protection fault that raised this task's size to 16 KB gave no
@@ -2090,20 +2105,37 @@ void loop() {
     // where TopologyRuntime::pollSensors() reads it through the same senseOf()
     // seam it uses for a remote board.
     //
+    // The params are the DEFAULTS here and that is not an oversight: this board
+    // is the one that SENDS them to every node, so its own compiled-in values
+    // are the source those copies come from. Retuning the shop is a change to
+    // sensing/CtTrip.h and a reflash of this board alone.
+    //
     // Skipped entirely when the layout put no clamp on this board — the read
     // busy-waits for its whole 60 ms window, and a gate board with no clamp has
     // no business spending that four times a second.
     if (g_localBus.sensesAnything()) {
         const sensing::CtTrip::Tick t =
-            g_ctTrip.update(g_ct, millis(), g_localBus.busy(), &watchdog::pet);
+            g_ctTrip.update(g_ct, millis(), g_localBus.busy(),
+                            sensing::TripParams(), &watchdog::pet);
         if (t.sampled) {
             static bool known = false, last = false;
-            g_localBus.setSense(t.on, millis(), t.level);
+            // Same conversion as the node's tickSensors(), for the same reason:
+            // this is where the amps-per-count scale is known. The primary's own
+            // clamp must render through identical fields to a remote one — a
+            // clamp at the collector is the likeliest first one in any shop.
+            const float aPer   = t.aPerCount;
+            const float amps   = (aPer > 0.0f) ? t.rmsCounts * aPer : -1.0f;
+            const float floorA = (aPer > 0.0f && g_ctTrip.floorLearnt())
+                                 ? g_ctTrip.floorCounts() * aPer : -1.0f;
+            const float tripA  = (aPer > 0.0f && t.trip > 0.0f) ? t.trip * aPer : -1.0f;
+            g_localBus.setSense(t.on, millis(), t.level, amps, floorA, tripA,
+                                t.floorFault);
             if (!known || last != t.on) {
                 DEBUG_PRINT(F("[CT] local clamp "));
                 DEBUG_PRINT(t.on ? F("ON  ") : F("off "));
-                DEBUG_PRINT(t.rmsCounts); DEBUG_PRINT(F(" counts, trip "));
-                DEBUG_PRINTLN(t.trip);
+                DEBUG_PRINT(t.rmsCounts);
+                if (t.floorFault) DEBUG_PRINTLN(F(" counts, NO FLOOR — clamp faulted"));
+                else { DEBUG_PRINT(F(" counts, trip ")); DEBUG_PRINTLN(t.trip); }
                 known = true; last = t.on;
             }
         }

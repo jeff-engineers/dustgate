@@ -27,6 +27,42 @@
 
 namespace topo {
 
+// One clamp's reported state, as a board would render it.
+//
+// A STRUCT RATHER THAN OUT-PARAMETERS because senseAt() had six of them and the
+// amps telemetry added on 2026-09-17 would have made ten. Adding a field is then
+// a one-line change here instead of an edit to four matching signatures, one of
+// which would eventually be missed.
+//
+// `id` POINTS INTO THE BUS'S OWN STORAGE and is valid only until that bus is
+// next reconfigured. Every caller today renders it immediately, which is the
+// only use this is for; copy it if you ever need to keep one.
+//
+// NEGATIVE MEANS ABSENT for every float here, and that is load-bearing: 0 A is a
+// real reading from an idle tool, while "this board has not learnt a floor" is
+// not a reading at all. Zeroing them would make a faulted board and a quiet one
+// look identical, which is exactly the lie `reported` exists to prevent.
+//
+// NOTHING MAY BRANCH ON THE TELEMETRY. `on` is the decision; amps, floor, trip
+// and level are for a person to read. See shared/device-model/nodelink.js.
+struct SenseView {
+    const char* id        = "";
+    // Has this clamp EVER spoken? The load-bearing field, and not `on` — see
+    // SenseReport.h. A configured clamp that has never reported means the chain
+    // is broken; "off" means the tool is idle, and they must not look alike.
+    bool        reported  = false;
+    bool        on        = false;
+    uint32_t    ageMs     = 0;
+    float       level     = -1.0f;   // multiple of the trip point
+    float       amps      = -1.0f;   // what it reads now
+    float       floorA    = -1.0f;   // the board's learnt noise floor
+    float       tripA     = -1.0f;   // the point `amps` is judged against
+    // The board refused to learn a floor: the clamp reads far too much for a
+    // board at rest. floorA and tripA are absent when this is set, because there
+    // is no floor. See kMaxFloorCounts in sensing/CtTrip.h.
+    bool        fault     = false;
+};
+
 class ActuatorBus {
 public:
     virtual ~ActuatorBus() {}

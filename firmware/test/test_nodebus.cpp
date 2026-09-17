@@ -920,6 +920,70 @@ int main(int argc, char** argv) {
       ok("one sensor", n == 1);
       ok("sensorId is carried verbatim", std::string(specs[0].sensorId) == "planer-ct");
       ok("channel is carried", specs[0].channel == 0);
+      // ZERO IS THE SENTINEL for "the primary said nothing, keep your own".
+      // Asserted so that a future default of 0 on any of these — which would be
+      // indistinguishable from silence — fails here instead of on a bench.
+      ok("untuned reads as zero, meaning keep your own",
+         specs[0].tripRatio == 0.0f && specs[0].minCounts == 0.0f && specs[0].clearRatio == 0.0f);
+    }
+
+    // ── CT TUNING (2026-09-17) — the numbers that used to force a node reflash.
+    //
+    // PAIRED with the CONFIG tuning cases in nodelink.test.js: same fields, same
+    // bounds, same order. They have to agree or a primary sends frames its own
+    // boards refuse — the failure mode this whole pair exists to catch.
+    {
+      StaticJsonDocument<512> d;
+      deserializeJson(d, R"({"t":"CONFIG","seq":13,"sensors":[{"sensorId":"a","kind":"ct","channel":0,"tripRatio":3.5,"minCounts":12,"clearRatio":0.8}]})");
+      ok("a tuned CONFIG parses", parseConfigFrame(d.as<JsonObjectConst>(), specs, kMaxSensorsPerNode, n, err),
+         err ? err : "");
+      ok("tripRatio is carried",  specs[0].tripRatio  > 3.49f && specs[0].tripRatio  < 3.51f);
+      ok("minCounts is carried",  specs[0].minCounts  > 11.9f && specs[0].minCounts  < 12.1f);
+      ok("clearRatio is carried", specs[0].clearRatio > 0.79f && specs[0].clearRatio < 0.81f);
+    }
+
+    // PER FIELD, not all or nothing: a primary that sends two of three is not an
+    // error, and the untouched one must still read as "keep your own".
+    {
+      StaticJsonDocument<512> d;
+      deserializeJson(d, R"({"t":"CONFIG","seq":14,"sensors":[{"sensorId":"a","kind":"ct","channel":0,"tripRatio":5}]})");
+      ok("a partially tuned CONFIG parses",
+         parseConfigFrame(d.as<JsonObjectConst>(), specs, kMaxSensorsPerNode, n, err), err ? err : "");
+      ok("the sent field lands",       specs[0].tripRatio > 4.9f && specs[0].tripRatio < 5.1f);
+      ok("and the silent ones do not", specs[0].minCounts == 0.0f && specs[0].clearRatio == 0.0f);
+    }
+
+    // Out of range is REFUSED, not clamped — whole frame, same as a bad kind.
+    // Clamping would leave the primary believing it had retuned a board that
+    // quietly did something else.
+    {
+      auto refuses = [&](const char* json) {
+        StaticJsonDocument<512> d;
+        deserializeJson(d, json);
+        return !parseConfigFrame(d.as<JsonObjectConst>(), specs, kMaxSensorsPerNode, n, err);
+      };
+      // A ratio of 1 trips on the learned floor itself; below it, on nothing.
+      ok("tripRatio at 1 is refused",
+         refuses(R"({"t":"CONFIG","seq":1,"sensors":[{"sensorId":"a","kind":"ct","channel":0,"tripRatio":1}]})"));
+      ok("tripRatio at 100 is refused",
+         refuses(R"({"t":"CONFIG","seq":1,"sensors":[{"sensorId":"a","kind":"ct","channel":0,"tripRatio":100}]})"));
+      // 4095 is full scale on a 12-bit ADC: a guard there can never be exceeded,
+      // so the board goes deaf rather than merely insensitive.
+      ok("minCounts at 0 is refused",
+         refuses(R"({"t":"CONFIG","seq":1,"sensors":[{"sensorId":"a","kind":"ct","channel":0,"minCounts":0}]})"));
+      ok("minCounts at full scale is refused",
+         refuses(R"({"t":"CONFIG","seq":1,"sensors":[{"sensorId":"a","kind":"ct","channel":0,"minCounts":4095}]})"));
+      // 1 is no hysteresis, the defect this was added to fix; above 1 releases
+      // ABOVE the trip point, so a tool could never read as stopped.
+      ok("clearRatio at 1 is refused",
+         refuses(R"({"t":"CONFIG","seq":1,"sensors":[{"sensorId":"a","kind":"ct","channel":0,"clearRatio":1}]})"));
+      ok("clearRatio above 1 is refused",
+         refuses(R"({"t":"CONFIG","seq":1,"sensors":[{"sensorId":"a","kind":"ct","channel":0,"clearRatio":1.2}]})"));
+      // TYPE FIRST, the same trap channel and positionMm already carry:
+      // as<float>() on a string is 0, which here reads as "not sent" and would
+      // silently ignore a value the primary believed it had set.
+      ok("a non-numeric tuning is refused, not read as silence",
+         refuses(R"({"t":"CONFIG","seq":1,"sensors":[{"sensorId":"a","kind":"ct","channel":0,"tripRatio":"4"}]})"));
     }
 
     // An EMPTY list is valid and means "report nothing" — the same state as a
@@ -985,6 +1049,52 @@ int main(int argc, char** argv) {
       buildSense(e.to<JsonObject>(), "planer-ct", false);
       ok("level is OMITTED, not zeroed, when absent", !e.containsKey("level"));
       ok("an off frame is still a report, not silence", e["on"] == false);
+    }
+
+    // ── TELEMETRY (2026-09-17) — amps for a human to read.
+    //
+    // PAIRED with the SENSE telemetry cases in nodelink.test.js: same fields,
+    // same omitted-not-zeroed rule, same order.
+    {
+      StaticJsonDocument<256> d;
+      buildSense(d.to<JsonObject>(), "planer-ct", false, 0.26f, 0.21f, 0.20f, 0.80f);
+      ok("amps rides the frame",   d.containsKey("amps"));
+      ok("so does the baseline",   d.containsKey("floorA"));
+      ok("and the trip point",     d.containsKey("tripA"));
+      ok("a healthy board sends no fault", !d.containsKey("fault"));
+
+      // THE CASE THAT MATTERS. 0 A is a real reading from an idle tool; "this
+      // board has no floor" is not a reading at all. If absent were sent as
+      // zero, a faulted board and a quiet one would look identical on a screen
+      // — the same lie `reported` exists to prevent.
+      StaticJsonDocument<256> e;
+      buildSense(e.to<JsonObject>(), "planer-ct", false);
+      ok("absent telemetry is omitted entirely",
+         !e.containsKey("amps") && !e.containsKey("floorA") && !e.containsKey("tripA"));
+
+      StaticJsonDocument<256> z;
+      buildSense(z.to<JsonObject>(), "planer-ct", false, 0.0f, 0.0f, 0.0f, 0.0f);
+      ok("but a genuine zero IS carried",
+         z.containsKey("amps") && z.containsKey("floorA") && z.containsKey("tripA"));
+
+      // A board that refused its floor: it says what it reads and offers no
+      // baseline, because there is none. The fault IS the reason, not a flag
+      // sitting beside a number that would be fiction.
+      StaticJsonDocument<256> f2;
+      buildSense(f2.to<JsonObject>(), "planer-ct", false, -1.0f, 2.2f, -1.0f, -1.0f, true);
+      ok("a faulted clamp says so",        f2["fault"] == true);
+      ok("reports what it reads",          f2.containsKey("amps"));
+      ok("and offers no baseline at all",
+         !f2.containsKey("floorA") && !f2.containsKey("tripA"));
+
+      // The frame must still fit its buffer with everything present — the node
+      // builds it in a StaticJsonDocument, and ArduinoJson drops members
+      // SILENTLY on overflow. A dropped `on` is a tool that never opens a gate.
+      StaticJsonDocument<256> full;
+      buildSense(full.to<JsonObject>(), "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                 true, 6.25f, 4.99f, 0.20f, 0.80f, true);
+      ok("a full frame with a max-length id still fits 256",
+         !full.overflowed() && full["on"] == true && full.containsKey("tripA"));
     }
   }
 

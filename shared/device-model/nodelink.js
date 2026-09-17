@@ -152,6 +152,20 @@ const RECONNECT_MAX_MS = 15000;
  * @property {'ct'}    kind         what is wired. 'ct' is the only one so far.
  * @property {number}  channel      which input on THIS BOARD — a hardware fact,
  *                                  the same shape as SET.channel.
+ * @property {number} [tripRatio]   OPTIONAL TUNING, all three. Multiple of the
+ *                                  board's OWN learned noise floor at which a
+ *                                  clamp reads as a running motor.
+ * @property {number} [minCounts]   absolute guard in that board's ADC counts,
+ *                                  because a ratio against a floor that learns
+ *                                  near zero trips on nothing.
+ * @property {number} [clearRatio]  hysteresis: the fraction of the trip point it
+ *                                  must fall back BELOW before reading off.
+ *
+ *   Omitting them is normal and means "use whatever you were built with" — the
+ *   only thing a primary older than 2026-09-17 can say. They exist so that
+ *   retuning a shop is a PRIMARY reflash instead of a ladder and a USB cable at
+ *   every node, which is the whole reason a node's firmware can be called
+ *   finished. See sensing/CtTrip.h.
  *
  * @typedef {Object} ConfigFrame    P→S, sent AFTER an accepted WELCOME.
  * @property {'CONFIG'}  t
@@ -164,6 +178,10 @@ const RECONNECT_MAX_MS = 15000;
  * @property {string}  sensorId     echoed from CONFIG
  * @property {boolean} on           THE ANSWER. One bit, decided on the node.
  * @property {number} [level]       DIAGNOSTIC ONLY — see the builder.
+ * @property {number} [amps]        what the clamp reads now. DIAGNOSTIC ONLY.
+ * @property {number} [floorA]      the board's learned noise floor, in amps.
+ * @property {number} [tripA]       the point `amps` is judged against, in amps.
+ * @property {boolean} [fault]      no floor could be learnt; floorA/tripA absent.
  */
 
 /** Frames the primary sends. */
@@ -233,11 +251,23 @@ function set(seq, sel, stateId, realization) {
  * say anything sensible anyway.
  *
  * THIS IS NOT TOPOLOGY, and the distinction is the whole reason the frame can
- * exist at all. It carries no elements, no routing, no states, and no threshold
- * — nothing whose MEANING the primary could change underneath a node that was
- * not reflashed. `sensorId` is opaque, `kind` names hardware, `channel` is a
- * pad. A node still owns no interpretation of the document, which is the
- * invariant at the top of this file.
+ * exist at all. It carries no elements, no routing and no states — nothing whose
+ * MEANING the primary could change underneath a node that was not reflashed.
+ * `sensorId` is opaque, `kind` names hardware, `channel` is a pad.
+ *
+ * THE THRESHOLD SENTENCE, SHARPENED (2026-09-17). This used to read "and no
+ * threshold", written when the only threshold in the system was `thresholdW` —
+ * and that one is still barred, permanently: watts name a MACHINE, they come out
+ * of the document, and a node that acted on one would be interpreting the
+ * schema. What the frame now also carries is `tripRatio` / `minCounts` /
+ * `clearRatio`, and those are a different animal despite the word: a multiple of
+ * THIS BOARD's own learned noise floor, and a guard in THIS BOARD's own ADC
+ * counts. They mean nothing off the board they describe, no document supplies
+ * them, and they sit in exactly the same class as `channel`. The test to apply
+ * to the next field that wants in here is not "is it a number the primary
+ * chose" but "could a node act on it without reading the document" — and a
+ * node still owns no interpretation of the document, which is the invariant at
+ * the top of this file.
  *
  * Why it had to exist: before it, every new node capability had to smuggle its
  * configuration through SET or invent a bespoke frame. This one addition covers
@@ -253,9 +283,17 @@ function set(seq, sel, stateId, realization) {
  * @returns {ConfigFrame}
  */
 function config(seq, sensors) {
-  return { t: 'CONFIG', seq, sensors: (sensors || []).map((s) => ({
-    sensorId: s.sensorId, kind: s.kind, channel: s.channel,
-  })) };
+  return { t: 'CONFIG', seq, sensors: (sensors || []).map((s) => {
+    const out = { sensorId: s.sensorId, kind: s.kind, channel: s.channel };
+    // OMITTED RATHER THAN NULLED when a caller has nothing to say. An absent key
+    // is what tells a board to keep its own value, and writing `tripRatio: null`
+    // would be a present key carrying a number that fails validation — a frame
+    // the node refuses WHOLE, taking the sensor list down with it.
+    for (const k of ['tripRatio', 'minCounts', 'clearRatio']) {
+      if (typeof s[k] === 'number') out[k] = s[k];
+    }
+    return out;
+  }) };
 }
 
 /**
@@ -328,14 +366,43 @@ function state(selectorId, stateId, moving) {
  * `on` — and has quietly moved the decision back to the side of the wire that
  * cannot see the waveform.
  *
+ * TELEMETRY (2026-09-17) rides alongside, IN AMPS, and weakens none of the
+ * above. `amps` / `floorA` / `tripA` exist so a person can see what a clamp is
+ * doing from the Boards page instead of a serial cable — is it fitted, is it
+ * reading, how close is it — which is the question you ask standing at a
+ * machine. Jeff's framing decided the units: *nobody but you and I care about
+ * counts*. The bench rule that says log rmsCounts rather than amps is about the
+ * CONSOLE, where counts are the measurement and amps an interpretation that has
+ * been wrong before; it does not extend to a screen a woodworker reads.
+ *
+ * The NODE converts, from its own board's measured amps-per-count, so nothing
+ * downstream owns a hardware constant. **The no-branching rule covers these
+ * exactly as it covers `level`** — they are strictly for a human. A primary that
+ * thresholds `amps` has moved the decision back to the side of the wire that
+ * cannot see the waveform, which is the whole point of `on`.
+ *
+ * `fault` is the one that is not a number: the board refused to learn a floor
+ * because the clamp reads far too much for a board at rest (sensing/CtTrip.h).
+ * Omitted when false, so a healthy board says nothing and a faulted one is
+ * legible. When it IS set, `floorA` and `tripA` are absent — there is no floor.
+ *
  * @param {string} sensorId
  * @param {boolean} on
  * @param {number} [level]  multiple of trip; omitted when the node has none
+ * @param {number} [amps]   what the clamp reads right now
+ * @param {number} [floorA] the board's learned noise floor
+ * @param {number} [tripA]  the point `amps` is judged against
+ * @param {boolean} [fault] no floor could be learnt — see above
  * @returns {SenseFrame}
  */
-function sense(sensorId, on, level) {
+function sense(sensorId, on, level, amps, floorA, tripA, fault) {
   const f = { t: 'SENSE', sensorId, on: !!on };
   if (typeof level === 'number') f.level = level;
+  // OMITTED, never zeroed: 0 A is a real reading and "no floor yet" is not.
+  if (typeof amps   === 'number') f.amps   = amps;
+  if (typeof floorA === 'number') f.floorA = floorA;
+  if (typeof tripA  === 'number') f.tripA  = tripA;
+  if (fault) f.fault = true;
   return f;
 }
 function pong() {
@@ -436,6 +503,27 @@ function validateFrame(f, direction) {
           } else if (sen.channel < 0 || sen.channel > 15) {
             errs.push(`${at}.channel out of range (0..15)`);
           }
+          // TUNING — optional, but nonsense is refused rather than clamped, and
+          // refusing takes the WHOLE frame with it. Clamping would leave the
+          // primary believing it had retuned a board that quietly did something
+          // else, which is the same silent disagreement a half-applied sensor
+          // list would be. Ranges mirror parseConfigFrame in control/NodeLink.h.
+          //
+          //   tripRatio  <= 1 trips on the floor itself, or on nothing at all
+          //   minCounts  >= 4095 is past full scale on a 12-bit ADC: deaf, not
+          //              merely insensitive
+          //   clearRatio 1 is no hysteresis (the defect this fixed); above 1
+          //              releases ABOVE the trip point, so a tool never stops
+          const tune = [['tripRatio', 1, 100], ['minCounts', 0, 4095],
+                        ['clearRatio', 0, 1]];
+          for (const [key, lo, hi] of tune) {
+            if (sen[key] === undefined) continue;
+            if (typeof sen[key] !== 'number' || Number.isNaN(sen[key])) {
+              errs.push(`${at}.${key} must be a number`);
+            } else if (sen[key] <= lo || sen[key] >= hi) {
+              errs.push(`${at}.${key} out of range (${lo} exclusive .. ${hi} exclusive)`);
+            }
+          }
         });
       }
       break;
@@ -445,6 +533,16 @@ function validateFrame(f, direction) {
       // `level` is optional — a node with no trip point to divide by omits it
       // rather than sending a zero that reads like a measurement.
       if (f.level !== undefined) num('level', 0, 1000);
+      // Telemetry, all optional, all for a human to read. The upper bound is
+      // generous on purpose — a 30 A clamp saturates at 45-50 A of inrush
+      // (RFC §5.5a) and refusing the whole frame for reporting that honestly
+      // would lose the `on` bit riding with it, which is the part that matters.
+      if (f.amps   !== undefined) num('amps',   0, 1000);
+      if (f.floorA !== undefined) num('floorA', 0, 1000);
+      if (f.tripA  !== undefined) num('tripA',  0, 1000);
+      if (f.fault !== undefined && typeof f.fault !== 'boolean') {
+        errs.push('SENSE.fault must be a boolean');
+      }
       break;
     case 'ACK':
       num('seq', 0, Number.MAX_SAFE_INTEGER);

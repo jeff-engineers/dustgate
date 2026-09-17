@@ -180,6 +180,12 @@ wss.on('connection', (ws) => {
       // ALL OR NOTHING, and a WHOLE new list. An empty array means "report
       // nothing", which is the same state as never having been configured — so
       // there is no third case, here or in the firmware.
+      // Spread, so the CT tuning (tripRatio / minCounts / clearRatio) is KEPT
+      // and visible on /sim/servos rather than silently dropped. The mock does
+      // not act on it and honestly cannot: it stages the bit instead of running
+      // an RMS loop, so there is no floor to take a ratio against. Carrying it
+      // still earns its keep — it is how you check from a browser that a primary
+      // actually sent what it thinks it sent.
       sensors = f.sensors.map((sen) => ({ ...sen }));
       for (const id of Object.keys(sensorOn)) {
         if (!sensors.some((sen) => sen.sensorId === id)) delete sensorOn[id];
@@ -271,7 +277,15 @@ function reportSense(sensorId) {
   // `level` is omitted: a multiple of the trip point is a real measurement on a
   // real board, and inventing a plausible-looking one here is exactly the kind
   // of fake number a mock should never emit.
-  send(ownerSocket, NL.sense(sensorId, !!sensorOn[sensorId]));
+  // TELEMETRY IS SYNTHESISED, and honestly so. The mock has no ADC, so there is
+  // nothing to measure — but a frame with no amps in it would make the Boards
+  // page look broken against the mock while working against a board, which is
+  // exactly the kind of difference that wastes an afternoon. The numbers track
+  // the staged bit and are deliberately round: a real clamp never reads 5.00.
+  const on = !!sensorOn[sensorId];
+  const FLOOR_A = 0.20, TRIP_A = 0.80;
+  send(ownerSocket, NL.sense(sensorId, on, on ? 6.2 : 0.26,
+                             on ? 5.0 : FLOOR_A, FLOOR_A, TRIP_A));
 }
 
 function reportAll() {

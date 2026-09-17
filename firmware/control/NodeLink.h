@@ -231,12 +231,30 @@ inline void buildPong(JsonObject out) { out["t"] = "PONG"; }
 // NOTHING MAY BRANCH ON IT. Pass a negative value to omit it, which is what a
 // board with no trip point to divide by should do rather than send a zero that
 // reads like a reading.
+// TELEMETRY RIDES IN AMPS, NOT COUNTS (2026-09-17, jeff: "nobody but you and I
+// care about counts"). The bench rule — log rmsCounts, not amps — is about the
+// SERIAL CONSOLE, where counts are the raw measurement and amps are an
+// interpretation that has been wrong before. It does not extend to a screen a
+// woodworker reads. The node converts, using its own board's measured
+// amps-per-count (CtTrip::Tick::aPerCount), which is exactly where a hardware
+// constant belongs: nothing downstream owns a scale factor.
+//
+// All three are OPTIONAL and omitted rather than zeroed. Zero amps is a real
+// reading; "this board has no floor yet" is not, and the two must not look alike.
 inline void buildSense(JsonObject out, const char* sensorId, bool on,
-                       float level = -1.0f) {
+                       float level = -1.0f, float amps = -1.0f,
+                       float floorA = -1.0f, float tripA = -1.0f,
+                       bool fault = false) {
     out["t"]        = "SENSE";
     out["sensorId"] = sensorId ? sensorId : "";
     out["on"]       = on;
-    if (level >= 0.0f) out["level"] = level;
+    if (level  >= 0.0f) out["level"]  = level;
+    if (amps   >= 0.0f) out["amps"]   = amps;
+    if (floorA >= 0.0f) out["floorA"] = floorA;
+    if (tripA  >= 0.0f) out["tripA"]  = tripA;
+    // Omitted when false: a board that is fine says nothing, which keeps the
+    // common frame small and makes the fault legible when it does appear.
+    if (fault)          out["fault"]  = true;
 }
 
 // -----------------------------------------------------------------------------
@@ -348,6 +366,23 @@ static const size_t kMaxSensorIdLen = 48;
 struct SensorSpec {
     char sensorId[kMaxSensorIdLen];   // OPAQUE. Echoed in SENSE, never parsed.
     int  channel;                     // which input on THIS board
+
+    // HOW HARD TO SQUEEZE, sent by the primary since 2026-09-17 so that retuning
+    // a shop is a primary reflash and nobody climbs to a node. See TripParams in
+    // sensing/CtTrip.h for what each one means.
+    //
+    // ZERO MEANS "NOT SENT" and the board falls back to its own compiled-in
+    // value. Zero is safe as a sentinel because it is illegal for all three —
+    // parseConfigFrame refuses a ratio at or below 1, a guard at or below 0, and
+    // a release ratio outside (0,1) — so a real value can never look absent.
+    //
+    // They are FLOATS HERE rather than a sensing::TripParams because this header
+    // compiles against g++ and ArduinoJson alone for the host tests, and CtTrip
+    // needs <Arduino.h>. The node does the conversion, which is also the only
+    // place that knows its own fallbacks.
+    float tripRatio;                  // 0 = use the board's own
+    float minCounts;                  // 0 = use the board's own
+    float clearRatio;                 // 0 = use the board's own
 };
 
 // Parse + VALIDATE a CONFIG frame into a fixed array.
@@ -385,8 +420,53 @@ inline bool parseConfigFrame(JsonObjectConst f, SensorSpec* out, size_t maxOut,
         if (!sen["channel"].is<int>())   { err = "channel must be a number"; return false; }
         const int ch = sen["channel"].as<int>();
         if (ch < 0 || ch > 15)           { err = "channel out of range"; return false; }
+
+        // TUNING — all three OPTIONAL, and each validated only if present.
+        //
+        // Absent is the normal case for a primary older than 2026-09-17, so it
+        // cannot be an error. A PRESENT but nonsense value must be, and loudly:
+        // silently clamping a bad ratio would leave the primary believing it had
+        // retuned a board that ignored it, which is the same class of failure as
+        // a half-applied sensor list and is refused the same way — whole frame.
+        // Bounds are EXCLUSIVE at both ends and mirror the `tune` table in
+        // nodelink.js validateFrame(), value for value.
+        //
+        //   tripRatio  at or below 1 trips on the learned floor itself, or on
+        //              nothing at all; 100x a real floor is not a tuning, it is
+        //              a typo
+        //   minCounts  4095 is full scale on a 12-bit ADC — a guard there can
+        //              never be exceeded, so the board goes DEAF rather than
+        //              merely insensitive
+        //   clearRatio 1 is no hysteresis, the defect this was added to fix;
+        //              above 1 releases ABOVE the trip point, so a tool could
+        //              never read as stopped
+        struct TuneRule { const char* key; float lo; float hi; };
+        static const TuneRule kTune[3] = {
+            {"tripRatio", 1.0f, 100.0f}, {"minCounts", 0.0f, 4095.0f},
+            {"clearRatio", 0.0f, 1.0f},
+        };
+        float tune[3] = {0.0f, 0.0f, 0.0f};
+        for (int k = 0; k < 3; k++) {
+            // VALIDATED ON PRESENCE, not on being non-zero. The two differ in
+            // exactly one case and it is the one that matters: an explicit 0.
+            // Zero is the sentinel for "not sent", so a value-based check would
+            // wave `"minCounts":0` through as silence and leave the primary
+            // believing it had set a guard the board never applied. Caught by
+            // the JS half of this pair, which had it right.
+            if (!sen.containsKey(kTune[k].key)) continue;
+            // TYPE FIRST, same reason as channel: as<float>() on a string is 0,
+            // which here would read as "not sent" and quietly ignore the value.
+            if (!sen[kTune[k].key].is<float>()) { err = "tuning must be a number"; return false; }
+            const float v = sen[kTune[k].key].as<float>();
+            if (v <= kTune[k].lo || v >= kTune[k].hi) { err = "tuning out of range"; return false; }
+            tune[k] = v;
+        }
+
         strlcpy_(out[n].sensorId, id, sizeof(out[n].sensorId));
-        out[n].channel = ch;
+        out[n].channel    = ch;
+        out[n].tripRatio  = tune[0];
+        out[n].minCounts  = tune[1];
+        out[n].clearRatio = tune[2];
         n++;
     }
     countOut = n;

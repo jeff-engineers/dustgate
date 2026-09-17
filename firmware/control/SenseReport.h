@@ -20,6 +20,7 @@
 // =============================================================================
 #pragma once
 #include <ArduinoJson.h>
+#include "ActuatorBus.h"   // SenseView — the shape both buses hand back
 
 namespace topo {
 
@@ -29,18 +30,28 @@ inline void addSenseArray(JsonObject o, const BusT& bus) {
     if (!n) return;                       // absent means "no clamp configured here"
     JsonArray arr = o.createNestedArray("sense");
     for (size_t i = 0; i < n; i++) {
-        String id; bool reported = false, on = false;
-        uint32_t ageMs = 0; float level = -1.0f;
-        if (!bus.senseAt(i, id, reported, on, ageMs, level)) continue;
+        SenseView v;
+        if (!bus.senseAt(i, v)) continue;
         JsonObject e = arr.createNestedObject();
-        e["id"]       = id;
-        e["reported"] = reported;
+        e["id"]       = v.id;
+        e["reported"] = v.reported;
         // Only meaningful once something has actually arrived. Emitting on:false
         // for a clamp that has never spoken is precisely the lie above.
-        if (reported) {
-            e["on"]    = on;
-            e["ageMs"] = ageMs;
-            if (level >= 0.0f) e["level"] = level;
+        if (v.reported) {
+            e["on"]    = v.on;
+            e["ageMs"] = v.ageMs;
+            // AMPS, not counts: this is what a person reads on the Boards page,
+            // and counts are a bench unit (jeff, 2026-09-17). Each is OMITTED
+            // when absent rather than zeroed — 0 A is a real reading from an
+            // idle tool, "no floor learnt" is not, and the two must not look
+            // alike. Same rule as `level`, for the same reason.
+            if (v.level  >= 0.0f) e["level"]  = v.level;
+            if (v.amps   >= 0.0f) e["amps"]   = v.amps;
+            if (v.floorA >= 0.0f) e["floorA"] = v.floorA;
+            if (v.tripA  >= 0.0f) e["tripA"]  = v.tripA;
+            // A healthy board says nothing, so the fault is legible when it
+            // appears. floorA/tripA are absent alongside it: there is no floor.
+            if (v.fault)          e["fault"]  = true;
         }
     }
 }

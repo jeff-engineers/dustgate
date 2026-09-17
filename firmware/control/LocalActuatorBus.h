@@ -164,8 +164,14 @@ public:
     // Called by the sketch after each CtTrip tick. ONE CLAMP, ONE PAD: every
     // sensor configured onto this board reads the same ADC, exactly as on a
     // node. When a second analog pad exists, this is where it branches.
-    void setSense(bool on, uint32_t atMs, float level = -1.0f) {
+    void setSense(bool on, uint32_t atMs, float level = -1.0f,
+                  float amps = -1.0f, float floorA = -1.0f, float tripA = -1.0f,
+                  bool fault = false) {
         for (size_t i = 0; i < _senseCount; i++) _senseOn[i] = on;
+        _senseAmps  = amps;
+        _senseFloorA = floorA;
+        _senseTripA = tripA;
+        _senseFault = fault;
         _senseAtMs  = atMs ? atMs : 1;   // 0 means "never reported"
         _senseLevel = level;
     }
@@ -173,14 +179,17 @@ public:
     // Same enumeration RemoteActuatorBus offers, so GET /api/nodes can report
     // the board it is running on exactly like any other. See senseAt() there.
     size_t senseCount() const { return _senseCount; }
-    bool senseAt(size_t i, String& id, bool& reported, bool& on,
-                 uint32_t& ageMs, float& level) const {
+    bool senseAt(size_t i, SenseView& v) const {
         if (i >= _senseCount) return false;
-        id       = _senseIds[i];
-        reported = _senseAtMs != 0;
-        on       = _senseOn[i];
-        ageMs    = reported ? (uint32_t)(millis() - _senseAtMs) : 0;
-        level    = _senseLevel;
+        v.id       = _senseIds[i];
+        v.reported = _senseAtMs != 0;
+        v.on       = _senseOn[i];
+        v.ageMs    = v.reported ? (uint32_t)(millis() - _senseAtMs) : 0;
+        v.level    = _senseLevel;
+        v.amps     = _senseAmps;
+        v.floorA   = _senseFloorA;
+        v.tripA    = _senseTripA;
+        v.fault    = _senseFault;
         return true;
     }
 
@@ -230,6 +239,12 @@ private:
     bool     _senseOn[nodelink::kMaxSensorsPerNode] = { false };
     size_t   _senseCount = 0;
     uint32_t _senseAtMs  = 0;   // 0 = nothing measured yet
+    // Telemetry for the UI, in AMPS. Negative = absent, never zero: 0 A is a
+    // real reading and "no floor learnt" is not. See SenseView in ActuatorBus.h.
+    float    _senseAmps   = -1.0f;
+    float    _senseFloorA = -1.0f;
+    float    _senseTripA  = -1.0f;
+    bool     _senseFault  = false;
     float    _senseLevel = -1.0f;   // multiple of the trip point; diagnostic only
 };
 
