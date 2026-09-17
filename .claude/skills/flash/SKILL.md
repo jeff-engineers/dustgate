@@ -91,7 +91,7 @@ bash dev.sh flash-node dustgate-node-1    # ...or give it up front
 Builds go against `PLATFORMIO_CORE_DIR=~/.platformio-pioarduino`, which `dev.sh`
 sets. A first build there downloads ~7.6 GB — warn the user before starting one.
 
-`firmware/wiring/xiao-c5.md` is confirmed by working signals for everything the
+`firmware/WIRING.md#1-the-board-and-its-one-pin-map` is confirmed by working signals for everything the
 build drives (servos D7-D10, I²C D4/D5, button D1, pixel D2). Still
 drawing-only: D0/D3, and D6 (reserved for the ST3215 bus).
 

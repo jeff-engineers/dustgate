@@ -17,7 +17,7 @@
 // then the intact cord, back to back.)
 //
 // SENSOR: SCT-013-030, 30 A → 1 V RMS, burden resistor built in. Cut the 3.5 mm
-// plug off and use the bare leads. Wiring: firmware/wiring/ct-bench.md.
+// plug off and use the bare leads. Wiring: firmware/WIRING.md#8-ct-clamp.
 //
 // Build and flash:
 //     PLATFORMIO_CORE_DIR=~/.platformio-pioarduino pio run -e xiao_c5_ct_bench -t upload

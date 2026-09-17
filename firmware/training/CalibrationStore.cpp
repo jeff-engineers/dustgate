@@ -131,6 +131,6 @@ void CalibrationStore::printConfigSnippet(const CalibrationData& data) {
     Serial.print(F("// Nominal is "));
     Serial.print(stepsPerMM(), 3);
     Serial.println(F(" — if the measured value disagrees, check the pinion tooth"));
-    Serial.println(F("//   count and the rack pitch against wiring/st3215-bench.md §5.0.3."));
+    Serial.println(F("//   count and the rack pitch against WIRING.md#7-the-slider--st3215-bus-and-endstops §5.0.3."));
     Serial.println(F("// ============================"));
 }

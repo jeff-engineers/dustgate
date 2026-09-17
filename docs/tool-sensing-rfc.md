@@ -275,7 +275,7 @@ that a fob button is a light spring and a press is not a stall. A collector's
 paddle is not a fob button: it is a real mechanical switch with a detent, and a
 magnetic starter's button is deliberately firm. **That is metal-gear territory,
 the same servo class the gates use** — which changes the current budget in
-`firmware/wiring/collector-node.md` §6 and may change which isolated converter
+`firmware/WIRING.md#9-bin-sensor` §6 and may change which isolated converter
 that section recommends. **Unmeasured.** Measure the switch before choosing a
 servo, not after.
 
@@ -1063,7 +1063,7 @@ Plug US trip on 2026-09-03: a 16 A relay meeting 45–50 A.
 
 Full write-up, including the line-splitter dead end and why today's numbers came
 off a hardwired install rather than a shippable one:
-[`firmware/wiring/ct-bench.md`](../firmware/wiring/ct-bench.md).
+[`firmware/WIRING.md#8-ct-clamp`](../firmware/WIRING.md#8-ct-clamp).
 
 ### 5.5 The screen is a noise source, and every board has one
 

@@ -409,7 +409,7 @@ behind you.
 
 Every node carries a NeoPixel — not planned, *present*: `StatusLed.h` ships on
 every env, and a WS2812 on D2 was lit and showing the right colours on a C5 on
-2026-08-23 ([`wiring/xiao-c5.md`](../firmware/wiring/xiao-c5.md)). It is an
+2026-08-23 ([`WIRING.md#1-the-board-and-its-one-pin-map`](../firmware/WIRING.md#1-the-board-and-its-one-pin-map)). It is an
 external pixel with a 330 Ω series resistor today and is part of the PCB design
 for the eventual printed system, so the surface this section needs is already
 there on every board. That makes an indicator a **shop-level output with many

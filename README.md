@@ -18,7 +18,7 @@ Each tool plugs into a [Shelly smart outlet](https://us.shelly.com). When a tool
 | Feetech/Waveshare ST3215 serial bus servo | Waveshare | Sliding gate — **not built yet** |
 | Rack & pinion | 3d Printed | 20T rack, 15T pinion, 4.145mm pitch |
 | Mechanical Assembly | 3d printed | Integrates with COTS dust gate |
-| NC mechanical limit switch ×2 | Various | Two endstops — both required. On the XIAO C5 slider build they are D8/D9 (GPIO8/9); see `firmware/wiring/xiao-c5.md` |
+| NC mechanical limit switch ×2 | Various | Two endstops — both required. On the XIAO C5 slider build they are D8/D9 (GPIO8/9); see `firmware/WIRING.md#1-the-board-and-its-one-pin-map` |
 | Shelly Plug US (one per tool) | [us.shelly.com](https://us.shelly.com) | ~$21 each, Gen 4 recommended |
 | Shelly Plug US (dust collector) | [us.shelly.com](https://us.shelly.com) | One more to switch the dust collector on/off |
 | 12–24V DC power supply (≥2A) | Various | Motor power |
@@ -26,8 +26,8 @@ Each tool plugs into a [Shelly smart outlet](https://us.shelly.com). When a tool
 The reference build is a 2.5" dust port system, with adjacent gates spaced about 82.9mm apart (these measured numbers feed the dual-endstop self-calibration — see [`docs/dual-endstop-calibration.md`](docs/dual-endstop-calibration.md)). A 4" variant is planned but not yet built or measured, so it's **disabled in the UI** until real hardware exists to measure its manifold profile (the logic is kept in place for when it does).
 
 For wiring details see [`firmware/WIRING.md`](firmware/WIRING.md) (shop-wide) and
-the board file it links: [XIAO ESP32C5](firmware/wiring/xiao-c5.md). The retired
-rack wiring is in [`firmware/wiring/st3215-bench.md`](firmware/wiring/st3215-bench.md).
+the board file it links: [XIAO ESP32C5](firmware/WIRING.md#1-the-board-and-its-one-pin-map). The retired
+rack wiring is in [`firmware/WIRING.md#7-the-slider--st3215-bus-and-endstops`](firmware/WIRING.md#7-the-slider--st3215-bus-and-endstops).
 
 ---
 
@@ -152,7 +152,7 @@ web UI. The primary does all the routing and sends it already-resolved angles.
 ./dev.sh flash-node
 ```
 
-A node is the same [XIAO ESP32C5](firmware/wiring/xiao-c5.md) as the primary —
+A node is the same [XIAO ESP32C5](firmware/WIRING.md#1-the-board-and-its-one-pin-map) as the primary —
 only the program differs. Give it a hostname, unique per node since that is what
 the primary finds it by: `./dev.sh flash-node dustgate-node-1`.
 
@@ -273,7 +273,7 @@ firmware/         Firmware (Arduino / PlatformIO)
   utils/                 WiFi provisioning, motion math, mDNS queries
   data/                  LittleFS filesystem image (generated — don't edit)
   WIRING.md              Wiring reference (shop-wide)
-  wiring/xiao-c5.md      Pin map for the XIAO ESP32C5 — primary or node
+  WIRING.md#1-the-board-and-its-one-pin-map      Pin map for the XIAO ESP32C5 — primary or node
 
 dustgate-ui/             Web UI (Angular 17) — see dustgate-ui/README.md for
                          local dev instructions and a full breakdown

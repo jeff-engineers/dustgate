@@ -26,7 +26,7 @@
 //     buttons   one              → exactly one of AD8..AD11 is asserted; which
 //                                  one is the ONLY unknown, and `scan` finds it
 //
-// ⚠️ Read firmware/wiring/ht12e-bench.md before wiring anything.
+// ⚠️ Read firmware/WIRING.md#10-315-mhz-transmitter before wiring anything.
 //
 // Build and flash:
 //     PLATFORMIO_CORE_DIR=~/.platformio-pioarduino pio run -e xiao_c5_ht12e_bench -t upload

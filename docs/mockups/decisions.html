@@ -426,12 +426,12 @@ const DECISIONS = [
   { id: 'D-06', date: '2026-08-19', area: 'hardware', status: 'standing',
     what: 'XIAO C5 GPIO8/GPIO9 are ordinary IO — the servo block is safe',
     why: 'Confirmed against the ESP32-C5 datasheet (Table 3-1) and then on the bench: the board boots with a servo wired to the block. The strapping worry was C3 muscle memory.',
-    where: 'firmware/wiring/xiao-c5.md §5' },
+    where: 'firmware/WIRING.md §14 (if it looks dead)' },
 
   { id: 'D-05', date: '2026-08-14', area: 'hardware', status: 'standing',
     what: 'The C5 gets its own PLATFORMIO_CORE_DIR',
     why: 'It rides pioarduino, not espressif32, and the two publish packages under the same names — sharing one core directory broke both, twice, in ways PlatformIO neither detects nor repairs. Isolation beats fixing collisions one at a time.',
-    where: 'tools/boardinfo.sh · firmware/wiring/xiao-c5.md' },
+    where: 'tools/boardinfo.sh · firmware/WIRING.md#1-the-board-and-its-one-pin-map' },
 
   { id: 'D-04', date: '2026-08-14', area: 'hardware', status: 'standing',
     what: 'The QT Py ESP32-C3 is dropped; nodes are the QT Py S3 and the XIAO C5',

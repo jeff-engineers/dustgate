@@ -166,7 +166,7 @@ static_assert(NUM_STOPS % 2 == 0,
 // was wanted. It implied module 1.3193, which is not a standard module and not a
 // rack anyone can buy: the tell that it had never been measured. The rack that
 // replaced it, and the derivation that keeps this from happening again, is
-// §5.0.3 of firmware/wiring/st3215-bench.md.
+// §5.0.3 of firmware/WIRING.md#7-the-slider--st3215-bus-and-endstops.
 //
 // Speeds and the homing backoff still live here, and the ST3215 block overrides
 // them on a board that has a rack.
@@ -467,7 +467,7 @@ inline int homeDirection() {
 // rather than one per driver.
 //
 // The rack itself: 15 teeth per 82.9mm Rockler gate pitch, module 1.7592, 30T
-// pinion. §5.0.3 of wiring/st3215-bench.md carries the derivation, the seam
+// pinion. §5.0.3 of WIRING.md#7-the-slider--st3215-bus-and-endstops carries the derivation, the seam
 // rules for printing it in chainable segments, and the warning about the
 // artifact pitch the stepper block still holds. DO NOT re-derive it from
 // RACK_PITCH_MM up there.

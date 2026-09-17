@@ -2488,7 +2488,7 @@ void loop() {
     // SERIAL AND ONLY SERIAL, on purpose. The screen is a NOISE SOURCE for this
     // very measurement — SSD1306_SWITCHCAPVCC runs a charge pump on the rail the
     // ADC's bias divider shares, and it put ~0.4 A of apparent current on a DEAD
-    // wire (wiring/ct-bench.md §5.5). A reading you can only see by lighting the
+    // wire (WIRING.md#8-ct-clamp §5.5). A reading you can only see by lighting the
     // thing that corrupts it is not much of a reading, so this one does not care
     // whether a panel is fitted.
     {
