@@ -218,6 +218,25 @@ export interface SenseReport {
    *  and it is the number that answers "nearly tripping, or nowhere near?"
    *  while the trip constants are still provisional. */
   level?: number;
+  /** What the clamp reads right now, in AMPS.
+   *
+   *  AMPS RATHER THAN ADC COUNTS is a deliberate call (jeff, 2026-09-17):
+   *  "nobody but you and I care about counts". The firmware works in counts
+   *  because the trip is a ratio and because the amps scale has been wrong
+   *  before — but the node converts before sending, so nothing up here owns a
+   *  hardware constant. DIAGNOSTIC ONLY, exactly like `level`. */
+  amps?: number;
+  /** The board's learnt noise floor, in amps — what it reads with nothing
+   *  running. Absent until a floor has been learnt, and absent entirely when
+   *  `fault` is set. */
+  floorA?: number;
+  /** The point `amps` is judged against, in amps. Derived on the board from its
+   *  own floor, so two boards in different places do not share it. */
+  tripA?: number;
+  /** The board REFUSED to learn a floor: the clamp reads far too much for a
+   *  board at rest, which means a wiring fault rather than a high threshold.
+   *  Sensing is off until it clears, and the board keeps retrying. */
+  fault?: boolean;
 }
 
 /** How many current clamps a board says it has. Absent means none. */
