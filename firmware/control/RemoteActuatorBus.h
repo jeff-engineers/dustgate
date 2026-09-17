@@ -105,6 +105,13 @@ public:
     // Enumerate what this node has reported, for GET /api/nodes. senseOf() asks
     // about one KNOWN id; this is for a screen that has to show whatever turned
     // up, including a clamp the layout does not mention.
+    /** The address this node last answered on, or "" if it never has. Read by
+     *  the sketch so a resolved address can outlive a power cut — mDNS being
+     *  quiet at boot is the common case, not the exception. */
+    const char* lastIp() const { return _lastIp; }
+    /** Seed the fallback from storage, before the first resolve. */
+    void setLastIp(const char* ip) { if (ip && *ip) nodelink::strlcpy_(_lastIp, ip, sizeof(_lastIp)); }
+
     size_t senseCount() const;
     bool   senseAt(size_t i, String& id, bool& reported, bool& on,
                    uint32_t& ageMs, float& level) const;
@@ -169,6 +176,12 @@ private:
     };
     SenseState _senses[nodelink::kMaxSensorsPerNode];
     size_t     _senseCount = 0;
+
+    // The address this node last actually answered on, and a stable per-host
+    // offset so N tasks do not re-resolve on the same tick. Both derived, never
+    // configured — see resolveAndDial().
+    char     _lastIp[20]   = "";
+    uint32_t _hostHash     = 0;
 
     char     _board[24]    = "";
     char     _fw[24]       = "";

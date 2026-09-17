@@ -702,6 +702,10 @@ static void syncPairedNodes(const char* primaryId) {
             g_pendingTakeoverHost = "";
             DEBUG_PRINT(F("[NODE] TAKEOVER armed for ")); DEBUG_PRINTLN(host);
         }
+        // Seed the fallback BEFORE begin(), because begin() resolves
+        // synchronously — at boot, with a querier that has often only just come
+        // up, the cached address is frequently the only thing that answers.
+        bus->setLastIp(g_nodeRegistry.lastIp(i));
         bus->begin(host, primaryId, host, 80);
         g_nodeBus.registerRemote(std::string(host), bus);
     }
@@ -3935,6 +3939,13 @@ void loop() {
 #endif
                     topo::addSenseArray(self, g_localBus);
                 }
+                // Persist any address a bus has learned since the last tick.
+                // setLastIp() writes only on CHANGE, so this is free in the
+                // steady state and NVS is not being worn down by a poll loop.
+                for (int i = 0; i < g_remoteCount; i++)
+                    g_nodeRegistry.setLastIp(g_remoteBuses[i].host(),
+                                             g_remoteBuses[i].lastIp());
+
                 String nodeBody; serializeJson(nodes, nodeBody);
                 apiServer.publishNodeStatus(nodeBody);
             }

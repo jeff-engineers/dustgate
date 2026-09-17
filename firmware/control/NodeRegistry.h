@@ -51,6 +51,9 @@ static const size_t kMaxHostLen = 64;
 // Friendly name, e.g. "Back wall".
 static const size_t kMaxNameLen = 32;
 
+// "255.255.255.255" and a terminator.
+static const size_t kMaxIpLen = 16;
+
 class NodeRegistry {
 public:
     // NVS namespace is shared with the API server's config on purpose: one
@@ -59,6 +62,37 @@ public:
 
     int      count() const { return _count; }
     const char* host(int i) const { return (i >= 0 && i < _count) ? _hosts[i] : ""; }
+
+    // ── the address this board last answered on ──────────────────────────────
+    //
+    // NOT the pairing. The HOST is what a person chose and what the layout
+    // names; this is a cache of where it was, kept so a silent mDNS querier at
+    // boot does not cost us the board entirely. Stored here rather than in the
+    // bus because this is the file that already owns per-board persistence.
+    //
+    // A stale entry is harmless: RemoteActuatorBus re-resolves on its own
+    // cadence whenever the link is down and overwrites this the moment mDNS
+    // answers, so DHCP moving a board costs a reconnect rather than a reboot.
+    const char* lastIp(int i) const { return (i >= 0 && i < _count) ? _ips[i] : ""; }
+
+    /** Remember where a paired board answered. No-op for an unknown host, and
+     *  writes only on CHANGE — this is called from the main loop and NVS has a
+     *  finite number of erase cycles. */
+    void setLastIp(const char* h, const char* ip) {
+        if (!h || !*h || !ip || !*ip) return;
+        const std::string want = bareHost(h);
+        for (int i = 0; i < _count; i++) {
+            if (bareHost(_hosts[i]) != want) continue;
+            if (strcmp(_ips[i], ip) == 0) return;      // unchanged — no write
+            strlcpy(_ips[i], ip, kMaxIpLen);
+            Preferences p;
+            p.begin("api_cfg", false);
+            char key[12]; snprintf(key, sizeof(key), "node_i%d", i);
+            p.putString(key, _ips[i]);
+            p.end();
+            return;
+        }
+    }
     // Friendly name ("Back wall"). Lives HERE rather than in the topology's
     // controllers[] so the boards screen needs no layout at all — you can pair and
     // name every board before drawing a single duct. Falls back to the host.
@@ -90,6 +124,7 @@ public:
         if (_count >= kMaxPairedNodes) return false;
         strlcpy(_hosts[_count], h, kMaxHostLen);
         strlcpy(_names[_count], (n && *n) ? n : "", kMaxNameLen);
+        _ips[_count][0] = '\0';          // nothing known yet; the first resolve fills it
         _count++;
         save();
         return true;
@@ -102,6 +137,7 @@ public:
             for (int j = i; j + 1 < _count; j++) {
                 strlcpy(_hosts[j], _hosts[j + 1], kMaxHostLen);
                 strlcpy(_names[j], _names[j + 1], kMaxNameLen);
+                strlcpy(_ips[j],   _ips[j + 1],   kMaxIpLen);
             }
             _count--;
             save();
@@ -124,6 +160,8 @@ private:
             strlcpy(_hosts[i], p.getString(key, "").c_str(), kMaxHostLen);
             snprintf(key, sizeof(key), "node_n%d", i);
             strlcpy(_names[i], p.getString(key, "").c_str(), kMaxNameLen);
+            snprintf(key, sizeof(key), "node_i%d", i);
+            strlcpy(_ips[i], p.getString(key, "").c_str(), kMaxIpLen);
         }
         p.end();
         // Drop any slot that came back empty, so a half-written registry can't
@@ -132,7 +170,8 @@ private:
         for (int i = 0; i < _count; i++) {
             if (!_hosts[i][0]) continue;
             if (w != i) { strlcpy(_hosts[w], _hosts[i], kMaxHostLen);
-                          strlcpy(_names[w], _names[i], kMaxNameLen); }
+                          strlcpy(_names[w], _names[i], kMaxNameLen);
+                          strlcpy(_ips[w],   _ips[i],   kMaxIpLen); }
             w++;
         }
         _count = w;
@@ -148,12 +187,15 @@ private:
             p.putString(key, _hosts[i]);
             snprintf(key, sizeof(key), "node_n%d", i);
             p.putString(key, _names[i]);
+            snprintf(key, sizeof(key), "node_i%d", i);
+            p.putString(key, _ips[i]);
         }
         p.end();
     }
 
     char _hosts[kMaxPairedNodes][kMaxHostLen] = {};
     char _names[kMaxPairedNodes][kMaxNameLen] = {};
+    char _ips[kMaxPairedNodes][kMaxIpLen]     = {};
     int  _count = 0;
 };
 

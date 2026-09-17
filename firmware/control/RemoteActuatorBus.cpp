@@ -4,6 +4,7 @@
 
 #include "RemoteActuatorBus.h"
 #include <ESPmDNS.h>
+#include "../utils/MdnsLock.h"   // one mDNS search at a time, across every task
 
 #ifndef DEBUG_PRINT
   #define DEBUG_PRINT(x)   Serial.print(x)
@@ -33,6 +34,12 @@ void RemoteActuatorBus::begin(const char* nodeId, const char* primaryId,
 
     // Is this already a literal address? Then skip name resolution entirely.
     { IPAddress probe; _hostIsIp = probe.fromString(_host); }
+
+    // A stable offset per board, so the re-resolve cadences interleave rather
+    // than lock-stepping. Any cheap spread does; this one needs no state and is
+    // the same across reboots, which keeps the log readable.
+    _hostHash = 0;
+    for (const char* p = _host; *p; ++p) _hostHash = _hostHash * 31u + (unsigned char)*p;
 
     // Resolve the name OURSELVES rather than handing "<name>.local" to the socket
     // and hoping.
@@ -97,12 +104,49 @@ bool RemoteActuatorBus::resolveAndDial() {
     size_t n = strlen(label);
     if (n > 6 && strcasecmp(label + n - 6, ".local") == 0) label[n - 6] = '\0';
 
-    IPAddress ip = MDNS.queryHost(label, 1500);
-    if (ip == IPAddress((uint32_t)0)) return false;
+    // SERIALISED — see utils/MdnsLock.h. Each node re-resolves from its own
+    // task on the same cadence, so with more than one board these collide
+    // constantly and every one of them reads the empty result as "gone".
+    IPAddress ip((uint32_t)0);
+    {
+        mdnslock::Guard lock(label);
+        if (lock.held()) ip = MDNS.queryHost(label, 1500);
+    }
+    if (ip == IPAddress((uint32_t)0)) {
+        // ── MDNS WENT QUIET; WE STILL KNOW WHERE IT WAS ────────────────────
+        //
+        // Falling through to the `.local` name hands lwIP a name it will ask a
+        // DNS server about, which correctly refuses it — the "DNS Failed for
+        // 'x.local' with error -54" line in every one of these logs. That is a
+        // guaranteed-failed lookup, and losing the board for it is worse than
+        // trying the address it answered on five seconds ago.
+        //
+        // CLAUDE.md flags this exact path as one that "degrades to nothing",
+        // which is the failure that turns up months later on a router reboot.
+        // It degrades to the last known address now. The NAME stays the source
+        // of truth — a re-resolve keeps running on its own cadence and replaces
+        // this the moment mDNS answers — so DHCP moving a board still recovers,
+        // it just takes a reconnect rather than a reboot.
+        if (_lastIp[0]) {
+            if (strcmp(_dialing, _lastIp) != 0) {
+                DEBUG_PRINT(F("[NODE] ")); DEBUG_PRINT(label);
+                DEBUG_PRINT(F(" — mDNS quiet, falling back to last known "));
+                DEBUG_PRINTLN(_lastIp);
+            }
+            nodelink::strlcpy_(_dialing, _lastIp, sizeof(_dialing));
+            _ws.begin(_dialing, _port, "/nodelink");
+            return true;
+        }
+        return false;
+    }
 
     String s = ip.toString();
     if (s.length() >= sizeof(_dialing)) return false;
     nodelink::strlcpy_(_dialing, s.c_str(), sizeof(_dialing));
+    // Remembered for the fallback above, and readable by the sketch so it can be
+    // persisted — a board that has resolved once should survive a power cut with
+    // a silent querier.
+    nodelink::strlcpy_(_lastIp, s.c_str(), sizeof(_lastIp));
     DEBUG_PRINT(F("[NODE] ")); DEBUG_PRINT(label);
     DEBUG_PRINT(F(" resolved to ")); DEBUG_PRINTLN(_dialing);
     _ws.begin(_dialing, _port, "/nodelink");
@@ -143,6 +187,13 @@ void RemoteActuatorBus::taskLoop() {
         if (!_connected && !_hostIsIp) {
             unsigned long since = millis() - _lastResolveMs;
             unsigned long every = (millis() < 60000UL) ? 3000UL : 15000UL;
+            // STAGGERED, so N boards do not queue on the same tick forever. The
+            // lock (utils/MdnsLock.h) makes a collision harmless, but without an
+            // offset every task still wakes together, and the ones at the back
+            // of the queue spend their whole interval waiting rather than
+            // resolving. Derived from the host so it is stable across reboots
+            // and needs nothing passed in.
+            every += (unsigned long)(_hostHash % 7) * 400UL;
             if (since > every) {
                 char prev[64];
                 nodelink::strlcpy_(prev, _dialing, sizeof(prev));
