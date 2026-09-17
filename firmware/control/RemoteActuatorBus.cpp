@@ -3,6 +3,7 @@
 // =============================================================================
 
 #include "RemoteActuatorBus.h"
+#include "NodeBus.h"          // bareHost() — ONE spelling of a host, everywhere
 #include <ESPmDNS.h>
 #include "../utils/MdnsLock.h"   // one mDNS search at a time, across every task
 
@@ -99,10 +100,15 @@ bool RemoteActuatorBus::resolveAndDial() {
 
     // MDNS.queryHost() wants the BARE label — ESP-IDF resolves "<label>.local"
     // internally and rejects a name that already carries the suffix.
+    //
+    // bareHost(), NOT a suffix strip written here. This was its own copy until
+    // 2026-09-17, and the copy was the weaker one: it missed the trailing dot on
+    // a fully-qualified "host.local." and did not lower-case the result, so a
+    // board entered with either would resolve here and then fail to match in
+    // NodeBus, which normalises properly. Two spellings of one rule is how a
+    // board gets dialled but never routed.
     char label[64];
-    nodelink::strlcpy_(label, _host, sizeof(label));
-    size_t n = strlen(label);
-    if (n > 6 && strcasecmp(label + n - 6, ".local") == 0) label[n - 6] = '\0';
+    nodelink::strlcpy_(label, bareHost(_host).c_str(), sizeof(label));
 
     // SERIALISED — see utils/MdnsLock.h. Each node re-resolves from its own
     // task on the same cadence, so with more than one board these collide
