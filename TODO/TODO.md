@@ -330,6 +330,156 @@ active sections above them, which is how a parked item stops being read.
 
 ## Carried debt
 
+- **What would still force a node reflash — the audit, 2026-09-17. LANDED, see
+  DONE.md.** The sweep found exactly one gap and it is closed: the CT trip
+  numbers now ride the CONFIG frame. What remains on a node is honest —
+  protocol changes move both sides together, and pin maps / rack geometry change
+  when a board is rewired. Left open deliberately:
+
+  - **~~The trip numbers are provisional~~ SETTLED 2026-09-17.** Each of the
+    three reasons for doubting `kTripRatio` 4.0 / `kMinTripCounts` 8.0 was
+    checked and none survived. Recorded so it is not re-derived a fourth time:
+
+    | doubt | outcome |
+    |---|---|
+    | the rebuilt divider was never re-measured | done 2026-09-16, scale held +1.50%, §5.5 closed |
+    | the floor swings 10x with location | it does not — the ~2.2 A was a BREADBOARD fault (drifting DC bias, a spring contact on the analog node), diagnosed in `WIRING.md` in the same session |
+    | a 0.78 A trip is too sensitive | nothing else is on the conductor: the clamp goes inside the tool's own switch/motor enclosure (jeff) |
+    | lead length untested | the SCT-013 lead is fixed ~1 m and every measurement used full length — the worst case IS the measured case (jeff) |
+
+    Floor ~0.195 A (6.68 counts) at the collector, unchanged with the CT shorted
+    out, so it is the C5's own ADC noise. Trip lands ~0.78 A; SawStop running
+    6.4x, planer no-load 9x, collector 13.6x, SawStop standby invisible. And the
+    numbers now ride CONFIG, so if they ever DO need moving it is an edit to
+    `sensing/CtTrip.h` plus a primary reflash — a bench session, not a ladder.
+  - **~~Isolated 12→5 DC-DC, or a plain MPM3610?~~ ANSWERED 2026-09-17: PLAIN
+    BUCK.** Measured, three conditions, same board and clamp:
+
+    | | floor, counts | floor, A |
+    |---|---|---|
+    | A — separate supplies, the reference | 6.50 | 0.194 |
+    | B — one 12 V brick through the buck, lamps off | 6.24 | 0.186 |
+    | **B — same, lamps running** | **6.79** | **0.202** |
+
+    +4% end to end; the lamps' own contribution backs out in quadrature to ~2.7
+    counts, a tenth of the trip point. Bias flat at 1621–1623 mV throughout. **The
+    Traco TMR 6-1211 is not being bought**, and `WIRING.md` keeps its part table
+    only for the reasoning inside it.
+
+    Not tested, and closed on physics instead: the buck's own ripple. USB was
+    attached for serial and the Schottky sits buck-side, so VBUS sourced the board.
+    The MPM3610 switches at ~2 MHz against a 29 kSPS / 60 ms / 60 Hz measurement —
+    it cannot survive the integration. The in-band load, the lamps on the shared
+    ground, is the one that was measured.
+
+  - **12 V barrel jack, USB-PD dropped (jeff, 2026-09-17).** `WIRING.md`'s
+    "USB-PD instead of a DC brick" section is superseded in place with the full
+    reasoning. Short version: PD chose 15 V *because* 12 V is optional in the PD
+    spec, an objection that dies with PD — and 12 V is what the hardware wants
+    anyway (QS18, pilot, strobe, and an ST3215 that 15 V over-drives), so PD
+    needed a second regulator on exactly the boards that matter. Minus the
+    HUSB238. Cost is the "a charger is a part people already own" argument, which
+    was made about a 15 V 3 A brick and is much weaker for 12 V.
+
+    **The consequence that is not free is mains earth in the CT's chain** — see
+    the two-step test above, and do not let it get conflated with the shared-
+    ground question.
+
+  - **CT connects via a 3.5 mm JACK on the PCB (jeff, 2026-09-17) — and it wants
+    the SWITCHED contact wired to a GPIO.** The SCT-013 already terminates in a
+    3.5 mm plug, so a jack makes the install "plug it in", which is the
+    owner-installable rule satisfied with no wiring step.
+
+    It also retires lead length as a worry permanently, and for a better reason
+    than "nobody will shorten it": a shorter lead picks up LESS, so it moves the
+    floor down, and since the floor is learned at boot and the trip is a ratio
+    against it, the whole thing tracks. It varies in the safe direction.
+
+    **The one thing that is free now and impossible later:** pick a jack with the
+    normally-closed switched contact and run it to a GPIO. Without it an
+    unplugged CT reads the bias midpoint, which is indistinguishable from a clamp
+    on an idle tool — so a forgotten or knocked-out plug looks exactly like "the
+    tool is off", and that gate silently never opens. With it the board knows
+    whether a clamp is present and can report it, the same way a board reports
+    `caps.ct` today.
+
+    Hot-plugging after boot is NOT a problem, and that is measured rather than
+    assumed: shorting the CT out left the floor unchanged, so a floor learned
+    with nothing attached is the same floor.
+
+  - **A floor that learns too HIGH is now refused, not applied.** `kMaxFloorCounts`
+    34 (~1 A). `kMinTripCounts` only ever guarded the other direction, and the
+    unguarded one is the failure that actually happened: the breadboard's 76-count
+    floor computes a trip of ~8.8 A, which leaves a board that notices the dust
+    collector and is blind to the SawStop, the planer and the jointer — silently,
+    with a plausible number in the log.
+
+    A ceiling on the TRIP point would have been the obvious fix and is wrong: it
+    leaves a bad board reading permanently ON, trading a silent deaf board for a
+    stuck-on one. Refusing the floor keeps it honest both ways, and it RETRIES
+    rather than latching — which in passing fixes a second bug, a tool that
+    happens to be running at boot poisoning the floor for the whole session.
+
+    Untested on hardware, like everything else here, but no longer untested at
+    all: `firmware/test/test_cttrip.cpp`, 34 assertions.
+
+  - **`kClearRatio` 0.75 has no bench evidence at all.** It is new and it was
+    picked to be obviously safe against a ~80x quiet-to-running gap, not
+    measured. The case it exists for is the marginal load — the back massager
+    that would not trip on 2026-09-16 — which is exactly the case where 0.75
+    might be wrong in either direction.
+  - **Hysteresis is untested on hardware.** The host tests cover the frame, not
+    the loop. What to watch for on the bench: a tool that used to chatter near
+    its trip point should now latch, and a tool genuinely switched off should
+    still read off within one sample (~250 ms), because off is a fall to the
+    floor rather than a fall to 74%.
+  - **Tuning is per BOARD, not per sensor**, taken from the first spec in the
+    CONFIG — the same "one clamp, one pad" assumption `tickSensors()` already
+    makes. When a board gets a second clamp this moves into `g_sensors[]`
+    alongside the channel. Nothing else about the shape changes.
+  - **No GUI for it, and that is deliberate for now.** The primary sends its own
+    compiled-in values. Making them per-machine document fields is the next step
+    if the numbers ever need to differ between a dust collector and a planer —
+    but that is a schema change plus UI, and nothing yet says they do.
+
+- **Should a node stream RAW clamp readings and let the primary decide?
+  (jeff asked 2026-09-17 — answered NO for now, with the reasoning, because it
+  will be asked again.)** *"Can we have the nodes send raw data back to the
+  primary, and let it figure out the threshold? Or is that too much
+  communication?"*
+
+  **Bandwidth was never the objection, and it is worth saying so plainly so the
+  idea is not dismissed for the wrong reason.** One float at the 4 Hz sample
+  cadence is ~100 bytes of JSON per clamp per report: ~400 B/s per sensor, ~4 KB/s
+  for a ten-board shop with a clamp on every one. That is nothing on WiFi, and it
+  is nowhere near the PING traffic already flowing.
+
+  The real reasons it stayed on the node:
+
+  - **The 60 Hz RMS window cannot move.** It is a busy-wait over ~3.5 mains
+    cycles and it is the part that genuinely cannot round-trip — CLAUDE.md's node
+    rule ("any control loop faster than a WiFi round trip") puts it on the board
+    and that does not change under any of these designs.
+  - **So the only thing actually in question is the COMPARISON**, which runs at
+    4 Hz — slower than a WiFi round trip, and therefore legitimately the
+    primary's by that same rule. The idea is *sound*; it is just that sending the
+    three numbers DOWN buys most of the same benefit for a fraction of the
+    change, and that is what landed instead.
+  - What raw streaming buys over that is real but narrower: the primary could
+    change the RULE, not just the numbers — add a debounce, go adaptive — without
+    touching a node. Worth revisiting **if the trip rule itself turns out to be
+    wrong**, as opposed to its constants.
+  - What it costs: the SENSE frame stops being "one bit decided on the node"
+    (RFC §5.4b), the floor-learning still has to stay on the board anyway, and
+    the primary grows per-sensor state it does not have today.
+
+  **A cheap middle step exists and is probably the right next move if this comes
+  back:** SENSE already carries `level` (the reading as a multiple of the trip
+  point, diagnostic only). Surfacing that in the GUI gives a live number to tune
+  against — which is what was actually missing on 2026-09-16, when there was no
+  way to see how close the back massager came — without changing the protocol at
+  all.
+
 - **OTA for nodes, so the shop is flashed once — and the numbers say it is nearly
   free. (jeff's goal, 2026-09-17.)** "I'd love to get to a point where the nodes
   can all be flashed, and I only have to maintain the primary once this is in the
@@ -534,7 +684,10 @@ active sections above them, which is how a parked item stops being read.
   The bootloader already knows: the board JSON declares `flash_size: 8MB`, so
   only our CSVs are holding the line at 4.
 
-- **OTA updates for our own boards — tabled 2026-09-09, jeff.** Feasible and
+- **OTA updates for our own boards — tabled 2026-09-09, jeff.** (The NODE half
+  of this was measured on 2026-09-17 and has its own entry above; this one is
+  the PRIMARY's, where the 8 MB claim and the upload UI live. Kept separate
+  because the node's is nearly free and the primary's is not.) Feasible and
   roomy once the 8 MB above is claimed: dual OTA slots at the *current* app0
   size (2.62 MB each, 64% used) plus the 1.44 MB bundle is ~6.7 MB of 8, with no
   shrinking and no trimming the Angular bundle.
@@ -816,3 +969,4 @@ board list is simulated.
 **5. Live view against real hardware.** `bash dev.sh live` (hot reload proxied to
 the real device) and confirm the tool list, manual override, and gate state track
 what the hardware is doing.
+  

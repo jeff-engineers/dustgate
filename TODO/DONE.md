@@ -16,6 +16,68 @@ Newest first.
 
 ### Firmware — control and comms (2026-09-17)
 
+- **A node's firmware is finished — the CT trip numbers were the last thing that
+  wasn't.** LANDED 2026-09-17. Jeff's goal, stated plainly: *"I want to make sure
+  the firmware for the nodes is finalized, so we don't have to keep updating it
+  unless we add new features."*
+
+  Swept the whole node program and everything it includes for compile-time policy
+  that a primary might want to change. Almost all of it was honest — protocol
+  constants move on both sides together, pin maps and rack geometry change when a
+  board is rewired, and hostname / WiFi creds / owner claim / `caps` / what a
+  board is wired to already arrive at runtime. **A schema change has never
+  reached a node**, which is the CONFIG frame doing its job.
+
+  One row was not honest: `kTripRatio` and `kMinTripCounts` in `sensing/CtTrip.h`
+  were labelled PROVISIONAL, are known to need re-deriving against the rebuilt
+  1k/1k dividers, and had nothing to do with how any particular board is wired.
+  They now ride the CONFIG frame's `SensorSpec`; the primary sends its own
+  compiled-in values and a node that is told nothing keeps what it was built
+  with. Retuning a shop is a primary reflash.
+
+  **Why this is not a breach of the node/primary boundary, since that will be
+  asked again.** `nodelink.js` used to say CONFIG carries "no threshold". That
+  sentence was written when the only threshold in the system was `thresholdW`,
+  and THAT one is still barred permanently: watts name a MACHINE, they come out
+  of the document, and a node acting on one would be interpreting the schema. A
+  multiple of a board's OWN learned noise floor, and a guard in that board's OWN
+  ADC counts, mean nothing off the board they describe. The test for the next
+  field that wants in is not "is it a number the primary chose" but **"could a
+  node act on it without reading the document"**. The comment in nodelink.js was
+  rewritten to say that rather than the shorter thing it used to say.
+
+  Two things fell out of the work that were not the point of it:
+
+  - **There was no hysteresis at all.** The decision was a bare
+    `rmsCounts > trip`, so a tool sitting near its trip point did not report a
+    state, it reported a stream of them — and every flip is a SENSE frame, which
+    the primary reads as a tool starting or stopping, which is a gate move. The
+    ~80x quiet-to-running gap means this never bites a table saw; it bites the
+    marginal load nobody is sure about, which is the exact case Jeff hit on
+    2026-09-16. `kClearRatio` 0.75 is the release point. **Provisional and
+    unmeasured** — see TODO.
+  - **The C++ and JS validators disagreed, and the pair caught it.** C++
+    validated the tuning fields only when non-zero; zero is the sentinel for "not
+    sent", so an explicit `"minCounts":0` was waved through as silence, leaving
+    the primary believing it had set a guard the board never applied. JS had it
+    right (validate on PRESENCE). Fixed in C++. This is the second time in two
+    days that writing both halves of a pair found a real defect rather than
+    merely confirming agreement.
+
+  Rejected alternative: **measure the numbers once and freeze them.** Cheaper —
+  no protocol change at all — and genuinely tempting, since `ct_bench` exists for
+  exactly that. Declined for the reason the partition-table entry already argues:
+  the shop is not in service, so a retune costs nothing today and costs a ladder
+  per node once the boards are mounted. Freezing assumes the first measurement is
+  right.
+
+  Jeff also asked whether nodes could just stream RAW readings and let the
+  primary decide. Not implemented, and bandwidth was never the objection — 4 Hz
+  of one float per clamp is nothing. The reason it stayed on the node is written
+  up in TODO under the OTA entry's neighbours; the short version is that the
+  60 Hz RMS window cannot round-trip, and moving only the COMPARISON buys less
+  than sending the numbers down does.
+
 - **No control from the GUI of servo movement on nodes.** LANDED 2026-09-17
   (`ae5d3e4`). Jeff's note, found at the bench. The cause was a THIRD copy of a
   lookup that already had one home: the sketch resolved the jog's board with a
