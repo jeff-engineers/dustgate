@@ -469,19 +469,56 @@ export class BoardSetupComponent implements OnInit, OnDestroy {
       return [{ state: 'idle',
                 text: 'Current clamp fitted — no tool assigned to it yet.' }];
     }
-    return sense.map((s: SenseReport) => {
+    const out: { text: string; state: 'ok' | 'warn' | 'idle' }[] = [];
+    for (const s of sense as SenseReport[]) {
+      const name = this.watches(s.id);
       if (!s.reported) {
-        return { state: 'warn' as const,
-                 text: `${this.watches(s.id)} — configured, but this board has never reported.` };
+        out.push({ state: 'warn',
+                   text: `${name} — configured, but this board has never reported.` });
+        continue;
       }
-      const bits = [s.on ? 'drawing current' : 'idle'];
+      // A FIFTH STATE, added with the floor guard: the board refused to learn a
+      // baseline because the clamp reads far too much at rest. That is a wiring
+      // fault, not a high threshold, and it is worth saying in those words —
+      // "idle" would be a lie and "never reported" would be the wrong lie.
+      if (s.fault) {
+        const reads = typeof s.amps === 'number' ? ` It reads ${this.amp(s.amps)}` : '';
+        out.push({ state: 'warn',
+                   text: `${name} — CLAMP FAULT: no baseline could be measured.${reads}` +
+                         ' with nothing running. Check the clamp, its plug and its lead.' });
+        continue;
+      }
+      const bits: string[] = [];
+      // Lead with the AMPS, because that is the number a person can act on.
+      if (typeof s.amps === 'number') {
+        bits.push(s.on ? `drawing ${this.amp(s.amps)}` : `idle at ${this.amp(s.amps)}`);
+      } else {
+        bits.push(s.on ? 'drawing current' : 'idle');
+      }
       // The level is what makes a quiet clamp readable: 0.1x trip is a clamp
       // watching a motionless tool, 0.9x is one about to chatter.
       if (typeof s.level === 'number' && s.level >= 0) bits.push(`${s.level.toFixed(1)}x trip`);
       bits.push(this.ago(s.ageMs));
-      return { state: (s.on ? 'ok' : 'idle') as 'ok' | 'idle',
-               text: `${this.watches(s.id)} — ${bits.join(', ')}` };
-    });
+      out.push({ state: (s.on ? 'ok' : 'idle') as 'ok' | 'idle',
+                 text: `${name} — ${bits.join(', ')}` });
+
+      // The calibration, on its own muted line. It changes only at boot, so
+      // putting it beside a number that moves four times a second would make the
+      // live reading harder to find rather than easier.
+      const cal: string[] = [];
+      if (typeof s.floorA === 'number') cal.push(`baseline ${this.amp(s.floorA)}`);
+      if (typeof s.tripA  === 'number') cal.push(`trips above ${this.amp(s.tripA)}`);
+      if (cal.length) out.push({ state: 'idle', text: cal.join(' · ') });
+    }
+    return out;
+  }
+
+  /** Amps for a person: two decimals below 10 A, one above.
+   *
+   *  A 30 A clamp resolves about 0.03 A, so a third decimal is noise dressed up
+   *  as precision — and at 10 A nobody cares about hundredths. */
+  private amp(a: number): string {
+    return a < 10 ? `${a.toFixed(2)} A` : `${a.toFixed(1)} A`;
   }
 
   /** "Clamp on the Planer", not "Clamp on tool6".
