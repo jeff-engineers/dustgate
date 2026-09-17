@@ -10,6 +10,69 @@ reasoning was contested, or that a still-open item above leans on.
 
 ## Bugs
 
+- **"How does DustGate know it's running?" is not a yes/no question, but the
+  control under it is Yes/No.** element-outlet-config.component.ts. The label
+  used to read "Smart outlet on this tool?", which a Yes/No answers honestly; it
+  was reworded on 2026-09-16 to cover clamps without touching the control
+  beneath it, so the sheet now asks an open question and offers two answers that
+  do not fit it. The tool sheet (tool-setup.component.ts) already asks this
+  properly as a three-way — Metering plug / Current clamp / Nothing — so the fix
+  is probably to make these one component rather than to reword this one back.
+
+- **The outlet sheet shows "Scanning..." twice while a scan runs.**
+  outlet-picker.component.ts says it in the empty-state line (:87) and again on
+  the rescan button (:93), and both render together. One of them should go —
+  probably the empty-state line, since the button is where the action is.
+
+- **UI AUDIT 2026-09-17 — the same question is asked by two components, in two
+  vocabularies.** Scanned every component for this; the findings are below,
+  worst first. The pattern to copy is `selector-config`, which the canvas AND
+  gate-list both open — one sheet, two entry points, no second copy.
+
+  1. **A TOOL'S SENSING IS CONFIGURED IN TWO SHEETS, and only one of them knows
+     clamps exist.** `tool-setup.component.ts` (Tools screen) asks it properly as
+     a three-way — Metering plug / Current clamp / Nothing — with a board picker.
+     `element-outlet-config.component.ts` (from the build canvas) asks Yes/No and
+     can only ever write a plug. Both write the same `machine.sensor`. That is
+     the root of the unanswerable-question bug above: the canvas sheet was
+     reworded to cover clamps it structurally cannot offer. Merging these two is
+     the single highest-value cleanup in the UI.
+
+  2. **HALF OF `element-outlet-config` IS UNREACHABLE.** Its `mode` input takes
+     'sensor' | 'switch', but build.component.html routes `outletMode ===
+     'switch'` to `app-collector-setup` — so `isSwitch` is permanently false and
+     every collector branch in that component is dead, the broken label
+     included. Deleting the switch role would shrink it by roughly half before
+     anyone tries to merge it with anything.
+
+  3. **`tool-setup` REIMPLEMENTS the outlet picker** instead of using
+     `app-outlet-picker`, which `element-outlet-config` and `collector-setup`
+     both share. Its own scan button, empty state and "Scanning…" strings
+     (:401, :406) are a hand-rolled second copy — and it owns a second set of
+     scan flags to drive them.
+
+  4. **`thresholdW` is edited in two sheets** (`element-outlet-config`,
+     `tool-setup`) — the same split as (1), and it disappears with it.
+
+  5. **A clamp can be paired from three surfaces**: dragged on the canvas
+     (build.component), the Tools sheet, and the collector sheet. The canvas
+     drag is the one the boards-dock rework is expected to retire; worth
+     deciding that before adding a fourth.
+
+  Not duplicated, and worth keeping that way: `paired-outlet-row` (shared by
+  four), `outlet-picker` (two), `selector-config` (two), `servo-calibration` /
+  `linear-calibration` (both owned solely by selector-config).
+
+- **Wake on button push isn't working on nodes**
+
+- **Brains seem to be keeping the screen alive full time.**
+
+- **I don't seem to have control from the gui of servo movement, at least on nodes, not sure about brains.**
+
+- **Dust collector - deadheaded - running with nothing open, stop it** 
+  this state shouldn't exist, when the last tool is turned off it's gate should remain open
+  there should be no way outside of manual user invervention to dead-head a system            
+
 - **loop() is still one enormous function — LANDED 2026-09-14, keep watching.**
   A stack protection fault on a collector board at boot, 2026-09-12:
   `SP 0x4085d060` against bounds `0x4085d068`, canary `0xabba1234` on the
@@ -40,7 +103,7 @@ reasoning was contested, or that a still-open item above leans on.
 - **Can the collector node run on ONE brick? (2026-09-11, decides a purchase.)**
 
   The collector node is being built as power topology **A** first —
-  `firmware/wiring/collector-node.md` §6 — two supplies, grounds genuinely
+  `firmware/WIRING.md#9-bin-sensor` §6 — two supplies, grounds genuinely
   separate. Not because A is better (it is two bricks at one machine, the worse
   install) but because it is the **baseline**: that board already carries three
   unvalidated changes in its CT section, and a shared ground underneath them
@@ -264,6 +327,29 @@ reasoning was contested, or that a still-open item above leans on.
   only way in (see the mockup rules), so whatever this becomes needs a tap path too.
 
 ## Carried debt
+
+- **Delete the three bench envs? (jeff, 2026-09-17 — deferred, not rejected.)**
+  `xiao_c5_bus_bench`, `xiao_c5_ht12e_bench`, `xiao_c5_ct_bench`. Jeff's point,
+  and it is the decisive one: **they run the same physical hardware as the
+  normal builds.** They are not a different rig — they are a different *program*
+  on the same board, and the thing that justified them was that the ordinary
+  build could not reach the pad. That stopped being true on 2026-09-16: one pin
+  map means every build has `PIN_CT` and `PIN_RF_TX`, and the serial console
+  already carries `ct`, `press`, `rfscan`, `stroke` and `servo`.
+
+  So the remaining argument for keeping them is narrow but real: `ct_bench` runs
+  with **no WiFi**, which is how the noise floor was measured on 2026-09-15
+  (5.80 counts against 6.03 with the radio up — see WIRING.md §8). A bench build
+  that removes a known noise source is a measuring instrument, not a duplicate.
+  `st3215_bench` sets servo IDs on a new ST3215, which is a real setup task with
+  no other home.
+
+  Deferred rather than done because the shop is half-commissioned and the node
+  CT path is still unproven; deleting the instrument you would use to debug it
+  is the wrong order. Revisit once a clamp has been trusted on hardware. Three
+  envs, three `bench/*.cpp` files, and nothing else depends on them — the wiring
+  docs were already merged (2026-09-17) without touching the code.
+
 
 - **Six builds and counting — is the primary/node split worth it? (jeff,
   2026-09-11.)** There are now three primaries and three nodes (servo, slider,
@@ -821,7 +907,7 @@ history is still the record.
 ### Bench
 
 **1. A node drives a real servo — no primary needed.** ✅ **DONE** — all four PWM
-channels drive real servos (`firmware/wiring/xiao-c5.md` §6).
+channels drive real servos (`firmware/WIRING.md#1-the-board-and-its-one-pin-map` §6).
 
 Kept for the technique, which the ST3215 slider node will want again: a node has
 **no serial console** — it only acts on HELLO/PING/SET over its `/nodelink`
