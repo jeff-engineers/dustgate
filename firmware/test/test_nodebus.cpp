@@ -186,22 +186,7 @@ int main(int argc, char** argv) {
   {
     // gate1 on the primary, gate2 on secondary "node2".
     DynamicJsonDocument d(4096);
-    deserializeJson(d, R"({"schemaVersion":1,
-      "controllers":[{"id":"primary","role":"primary"},{"id":"node2","role":"secondary"}],
-      "elements":[
-        {"id":"dc","type":"collector"},
-        {"id":"gate1","type":"selector","controllerId":"primary","kind":"servoGate",
-         "states":[{"id":"open","isClosed":false,"offsetDeg":0},{"id":"closed","isClosed":true,"offsetDeg":90}],
-         "branches":[{"id":"g1","opensState":"open","role":"tool"}],
-         "servo":{"channel":0,"referenceAngle":10}},
-        {"id":"gate2","type":"selector","controllerId":"node2","kind":"servoGate",
-         "states":[{"id":"open","isClosed":false,"offsetDeg":0},{"id":"closed","isClosed":true,"offsetDeg":90}],
-         "branches":[{"id":"g2","opensState":"open","role":"tool"}],
-         "servo":{"channel":0,"referenceAngle":10}},
-        {"id":"toolX","type":"tool"},{"id":"toolY","type":"tool"}],
-      "ducts":[{"child":"gate1","parent":"dc"},{"child":"gate2","parent":"dc"},
-        {"child":"toolX","parent":"gate1","parentBranch":"g1"},
-        {"child":"toolY","parent":"gate2","parentBranch":"g2"}]})");
+    deserializeJson(d, R"({"schemaVersion":2,"controllers":[{"id":"primary","role":"primary"},{"id":"node2","role":"secondary"}],"systems":[{"id":"system-1","name":"Dust collection","elements":[{"id":"dc","type":"collector"},{"id":"gate1","type":"selector","controllerId":"primary","kind":"servoGate","states":[{"id":"open","isClosed":false,"offsetDeg":0},{"id":"closed","isClosed":true,"offsetDeg":90}],"branches":[{"id":"g1","opensState":"open","role":"tool"}],"servo":{"channel":0,"referenceAngle":10}},{"id":"gate2","type":"selector","controllerId":"node2","kind":"servoGate","states":[{"id":"open","isClosed":false,"offsetDeg":0},{"id":"closed","isClosed":true,"offsetDeg":90}],"branches":[{"id":"g2","opensState":"open","role":"tool"}],"servo":{"channel":0,"referenceAngle":10}},{"id":"toolX","type":"tool","machineId":"toolX"},{"id":"toolY","type":"tool","machineId":"toolY"}],"ducts":[{"child":"gate1","parent":"dc"},{"child":"gate2","parent":"dc"},{"child":"toolX","parent":"gate1","parentBranch":"g1"},{"child":"toolY","parent":"gate2","parentBranch":"g2"}]}],"machines":[{"id":"toolX","name":"toolX"},{"id":"toolY","name":"toolY"}]})");
     std::string js; serializeJson(d, js);
 
     StubBus local, node2;
@@ -252,16 +237,7 @@ int main(int argc, char** argv) {
   // ── offline and unregistered controllers fail loudly ─────────────────────
   {
     DynamicJsonDocument d(4096);
-    deserializeJson(d, R"({"schemaVersion":1,
-      "controllers":[{"id":"primary","role":"primary"},{"id":"ghost","role":"secondary"}],
-      "elements":[
-        {"id":"dc","type":"collector"},
-        {"id":"gate1","type":"selector","controllerId":"ghost","kind":"servoGate",
-         "states":[{"id":"open","isClosed":false,"offsetDeg":0},{"id":"closed","isClosed":true,"offsetDeg":90}],
-         "branches":[{"id":"g1","opensState":"open","role":"tool"}],
-         "servo":{"channel":0,"referenceAngle":10}},
-        {"id":"toolX","type":"tool"}],
-      "ducts":[{"child":"gate1","parent":"dc"},{"child":"toolX","parent":"gate1","parentBranch":"g1"}]})");
+    deserializeJson(d, R"({"schemaVersion":2,"controllers":[{"id":"primary","role":"primary"},{"id":"ghost","role":"secondary"}],"systems":[{"id":"system-1","name":"Dust collection","elements":[{"id":"dc","type":"collector"},{"id":"gate1","type":"selector","controllerId":"ghost","kind":"servoGate","states":[{"id":"open","isClosed":false,"offsetDeg":0},{"id":"closed","isClosed":true,"offsetDeg":90}],"branches":[{"id":"g1","opensState":"open","role":"tool"}],"servo":{"channel":0,"referenceAngle":10}},{"id":"toolX","type":"tool","machineId":"toolX"}],"ducts":[{"child":"gate1","parent":"dc"},{"child":"toolX","parent":"gate1","parentBranch":"g1"}]}],"machines":[{"id":"toolX","name":"toolX"}]})");
     std::string js; serializeJson(d, js);
 
     // (a) controller never registered at all
@@ -300,15 +276,7 @@ int main(int argc, char** argv) {
   // ── a selector with no controllerId is local (single-board shops) ─────────
   {
     DynamicJsonDocument d(4096);
-    deserializeJson(d, R"({"schemaVersion":1,"controllers":[{"id":"primary","role":"primary"}],
-      "elements":[
-        {"id":"dc","type":"collector"},
-        {"id":"gate1","type":"selector","kind":"servoGate",
-         "states":[{"id":"open","isClosed":false,"offsetDeg":0},{"id":"closed","isClosed":true,"offsetDeg":90}],
-         "branches":[{"id":"g1","opensState":"open","role":"tool"}],
-         "servo":{"channel":0,"referenceAngle":10}},
-        {"id":"toolX","type":"tool"}],
-      "ducts":[{"child":"gate1","parent":"dc"},{"child":"toolX","parent":"gate1","parentBranch":"g1"}]})");
+    deserializeJson(d, R"({"schemaVersion":2,"controllers":[{"id":"primary","role":"primary"}],"systems":[{"id":"system-1","name":"Dust collection","elements":[{"id":"dc","type":"collector"},{"id":"gate1","type":"selector","kind":"servoGate","states":[{"id":"open","isClosed":false,"offsetDeg":0},{"id":"closed","isClosed":true,"offsetDeg":90}],"branches":[{"id":"g1","opensState":"open","role":"tool"}],"servo":{"channel":0,"referenceAngle":10}},{"id":"toolX","type":"tool","machineId":"toolX"}],"ducts":[{"child":"gate1","parent":"dc"},{"child":"toolX","parent":"gate1","parentBranch":"g1"}]}],"machines":[{"id":"toolX","name":"toolX"}]})");
     std::string js; serializeJson(d, js);
 
     StubBus local; topo::NodeBus nb; topo::TopologyRuntime rt;
@@ -427,7 +395,7 @@ int main(int argc, char** argv) {
     DynamicJsonDocument tg(16384);
     deserializeJson(tg, twoGatesJson);
     JsonObjectConst gate1;
-    for (JsonObjectConst e : tg["elements"].as<JsonArrayConst>())
+    for (JsonObjectConst e : tg["systems"][0]["elements"].as<JsonArrayConst>())
       if (topo::_eq(e["id"], "gate1")) gate1 = e;
 
     // A SET must carry a resolved ANGLE, never a state name to interpret.
@@ -611,11 +579,18 @@ int main(int argc, char** argv) {
   // becomes a CONFIG, and that a reported bit turns into a routed tool.
   {
     // twoGates with toolX watched by a clamp on channel 2 of this board.
+    //
+    // ON THE MACHINE, NOT THE ELEMENT, and that is the whole point of the fixture
+    // being v2 now. A tool's clamp lives where its plug does; writing it on the
+    // port element is what the shipping code did until 2026-09-15, and the v1
+    // fixture that used to be here AGREED with the bug — in v1 a tool element is
+    // its own machine, so the wrong read returned the right answer and the suite
+    // stayed green while no clamp in the app ever reached a node.
     DynamicJsonDocument tg(16384);
     deserializeJson(tg, twoGatesJson);
-    for (JsonObject e : tg["elements"].as<JsonArray>()) {
-      if (topo::_eq(e["id"], "toolX")) {
-        JsonObject ct = e.createNestedObject("sensor").createNestedObject("ct");
+    for (JsonObject m : tg["machines"].as<JsonArray>()) {
+      if (topo::_eq(m["id"], "toolX")) {
+        JsonObject ct = m.createNestedObject("sensor").createNestedObject("ct");
         ct["channel"] = 2;   // no controllerId — "this board"
       }
     }
@@ -794,7 +769,9 @@ int main(int argc, char** argv) {
   {
     DynamicJsonDocument tg(16384);
     deserializeJson(tg, twoGatesJson);
-    for (JsonObject e : tg["elements"].as<JsonArray>())
+    // STILL ON THE ELEMENT, deliberately: a collector has no machine behind it,
+    // which is exactly the asymmetry clampOf() exists to express.
+    for (JsonObject e : tg["systems"][0]["elements"].as<JsonArray>())
       if (topo::_eq(e["type"], "collector"))
         e.createNestedObject("sensor").createNestedObject("ct")["channel"] = 0;
     std::string j; serializeJson(tg, j);
@@ -840,9 +817,9 @@ int main(int argc, char** argv) {
     DynamicJsonDocument tg(16384);
     deserializeJson(tg, twoGatesJson);
     tg["controllers"].as<JsonArray>().createNestedObject()["id"] = "planer-node";
-    for (JsonObject e : tg["elements"].as<JsonArray>()) {
-      if (topo::_eq(e["id"], "toolY")) {
-        JsonObject ct = e.createNestedObject("sensor").createNestedObject("ct");
+    for (JsonObject m : tg["machines"].as<JsonArray>()) {
+      if (topo::_eq(m["id"], "toolY")) {
+        JsonObject ct = m.createNestedObject("sensor").createNestedObject("ct");
         ct["controllerId"] = "planer-node";
         ct["channel"]      = 0;
       }
