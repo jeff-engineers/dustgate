@@ -3,6 +3,7 @@
 // =============================================================================
 
 #include "RemoteActuatorBus.h"
+#include "esp_heap_caps.h"   // internal-DRAM reporting in the dialling nag
 #include "NodeBus.h"          // bareHost() — ONE spelling of a host, everywhere
 #include <ESPmDNS.h>
 #include "../utils/MdnsLock.h"   // one mDNS search at a time, across every task
@@ -69,7 +70,10 @@ void RemoteActuatorBus::begin(const char* nodeId, const char* primaryId,
     _ws.onEvent([this](WStype_t t, uint8_t* p, size_t l) { onEvent(t, p, l); });
     // Library-level auto-reconnect handles the common case; the backoff bounds
     // come from the shared contract so the mock secondary can expect the same.
-    _ws.setReconnectInterval(nodelink::kReconnectMinMs);
+    // START AT THE MINIMUM AND BACK OFF FROM THERE — see _backoff() below.
+    // This used to be the whole story, and kReconnectMaxMs was never read.
+    _retryMs = nodelink::kReconnectMinMs;
+    _ws.setReconnectInterval(_retryMs);
     _ws.enableHeartbeat(nodelink::kPingIntervalMs, nodelink::kPongTimeoutMs, 2);
 
     _running = true;
@@ -87,6 +91,38 @@ void RemoteActuatorBus::begin(const char* nodeId, const char* primaryId,
     }
     DEBUG_PRINT(F("[NODE] Linking to ")); DEBUG_PRINT(_nodeId);
     DEBUG_PRINT(F(" at ws://")); DEBUG_PRINT(_dialing); DEBUG_PRINTLN(F("/nodelink"));
+}
+
+// GROW THE RETRY INTERVAL, up to kReconnectMaxMs.
+//
+// THIS DID NOT EXIST UNTIL 2026-09-18, and its absence is a bug that took down a
+// bench shop. setReconnectInterval() was called once with kReconnectMinMs and
+// never again, so the library retried every SECOND forever — kReconnectMaxMs was
+// declared, documented in nodelink.js as "reconnect backoff", mirrored in the
+// pair table, and read by nothing.
+//
+// What that costs is not politeness, it is the shop. ESPAsyncWebServer on the
+// node does not reap dead WebSocket clients on its own; a connection per second
+// burns its client slots faster than cleanupClients() frees them, and a node with
+// no slots left RESETS every incoming connection. The primary then retries a
+// second later, forever. Observed on a real board as an endless "Link lost" loop
+// with errno 104 (connection reset by peer), recoverable only by power-cycling
+// the NODE — the primary could not fix it because the primary was causing it.
+//
+// The node's own loop() comment predicted the symptom exactly: "a node that
+// answers a laptop fine while refusing the primary indefinitely."
+//
+// Doubling from 1s reaches the 15s ceiling after four failures, so a node that is
+// briefly busy is still picked up quickly while one that is genuinely gone is
+// polled four times a minute instead of sixty.
+void RemoteActuatorBus::_backoff() {
+    if (_retryMs >= nodelink::kReconnectMaxMs) return;   // already at the ceiling
+    _retryMs *= 2;
+    if (_retryMs > nodelink::kReconnectMaxMs) _retryMs = nodelink::kReconnectMaxMs;
+    _ws.setReconnectInterval(_retryMs);
+    DEBUG_PRINT(F("[NODE] backing off ")); DEBUG_PRINT(_nodeId);
+    DEBUG_PRINT(F(" — retrying every ")); DEBUG_PRINT(_retryMs);
+    DEBUG_PRINTLN(F(" ms"));
 }
 
 bool RemoteActuatorBus::resolveAndDial() {
@@ -214,7 +250,22 @@ void RemoteActuatorBus::taskLoop() {
             lastNagMs = millis();
             DEBUG_PRINT(F("[NODE] Still dialling ")); DEBUG_PRINT(_dialing);
             DEBUG_PRINT(F(" (")); DEBUG_PRINT(_host); DEBUG_PRINT(F(")"));
-            DEBUG_PRINT(F(" — heap ")); DEBUG_PRINTLN(ESP.getFreeHeap());
+            // INTERNAL DRAM, NOT ESP.getFreeHeap(). This printed the total,
+            // which on a PSRAM board counts PSRAM — and PSRAM cannot back a
+            // task stack, a DMA descriptor or a WiFi buffer. Every per-node cost
+            // that scales here (a 4 KB nodelink task stack, the socket's
+            // buffers) and every mDNS search comes out of INTERNAL, so the
+            // number that was being watched could look healthy while the one
+            // that matters fell off a cliff. bootTrace() in firmware.ino already
+            // made this distinction; this line had not caught up.
+            //
+            // `largest` is printed too because early allocation failures are
+            // usually FRAGMENTATION rather than exhaustion, and the two look
+            // identical if you only watch the free total.
+            DEBUG_PRINT(F(" — internal "));
+            DEBUG_PRINT((unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+            DEBUG_PRINT(F(" largest "));
+            DEBUG_PRINTLN((unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
         }
 
         // Drain a pending SET. Sending from HERE (not from setState()) is what
@@ -250,6 +301,11 @@ void RemoteActuatorBus::taskLoop() {
 void RemoteActuatorBus::onEvent(WStype_t type, uint8_t* payload, size_t len) {
     switch (type) {
         case WStype_CONNECTED: {
+            // A SOCKET IS ENOUGH TO RESET THE BACKOFF. Not WELCOME: a node that
+            // accepts the connection is a node that is answering, and holding the
+            // retry slow while it identifies itself would just delay the link.
+            _retryMs = nodelink::kReconnectMinMs;
+            _ws.setReconnectInterval(_retryMs);
             // Socket is up but the node hasn't identified itself yet — stay
             // offline until WELCOME lands so we never command an unknown board.
             StaticJsonDocument<192> doc;
@@ -282,6 +338,7 @@ void RemoteActuatorBus::onEvent(WStype_t type, uint8_t* payload, size_t len) {
                 xSemaphoreGive(_mutex);
             }
             DEBUG_PRINT(F("[NODE] Link lost: ")); DEBUG_PRINTLN(_nodeId);
+            _backoff();
             break;
         case WStype_TEXT:
             handleFrame(reinterpret_cast<const char*>(payload), len);

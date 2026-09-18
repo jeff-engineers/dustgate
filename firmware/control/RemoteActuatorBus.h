@@ -121,6 +121,9 @@ private:
     void onEvent(WStype_t type, uint8_t* payload, size_t len);
     void handleFrame(const char* json, size_t len);
     void sendJson(const JsonDocument& doc);
+    // Grow the reconnect interval toward kReconnectMaxMs. See the definition —
+    // its absence is what let a retry storm exhaust a node's WebSocket slots.
+    void _backoff();
 
     WebSocketsClient _ws;
     SemaphoreHandle_t _mutex   = nullptr;
@@ -181,6 +184,8 @@ private:
     };
     SenseState _senses[nodelink::kMaxSensorsPerNode];
     size_t     _senseCount = 0;
+    // Current reconnect interval, between kReconnectMinMs and kReconnectMaxMs.
+    unsigned long _retryMs = nodelink::kReconnectMinMs;
 
     // The address this node last actually answered on, and a stable per-host
     // offset so N tasks do not re-resolve on the same tick. Both derived, never
