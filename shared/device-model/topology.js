@@ -36,11 +36,14 @@ const LINK_TRANSPORTS  = ['wifi-ws', 'esp-now'];
 // Reading these as 4+1 is what put a fifth port on every board in the
 // configurator (corrected 2026-08-28). More than the budget on one host is a
 // hardware impossibility; spread selectors across secondary controllers.
-// THREE since 2026-09-16, matching SERVO_COUNT in firmware/config.h — see the
-// pair table in CLAUDE.md. One unified pin map puts the transmitter on D10, so
-// D7/D8/D9 are all the PWM channels there are. A board drives one selector
-// (channel 0) and may also press a fob (channels 1 and 2).
-const MAX_SERVOS_PER_HOST = 3;
+// TWO since 2026-09-17, matching SERVO_COUNT in firmware/config.h — see the pair
+// table in CLAUDE.md, where this is a FIVE-sided constant. It was three for a
+// day: the unified pin map put the transmitter on D10, leaving D7/D8/D9, and
+// channels 1 and 2 were an arm per fob button. The OFF arm was never built, so
+// D9 was given up for a second BUTTON — manual control at the machine, which had
+// no gesture left on the wake button. A board drives one selector (channel 0) and
+// may also press a fob (channel 1).
+const MAX_SERVOS_PER_HOST = 2;
 const MAX_LINEAR_PER_HOST = 1;
 
 // How many outlets ONE sliding gate may serve.

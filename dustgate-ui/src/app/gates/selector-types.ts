@@ -114,7 +114,7 @@ export interface Controller {
 
 /** Servo channels one board can drive — SERVO_COUNT in config.h,
  *  MAX_SERVOS_PER_HOST in topology.js. THREE since 2026-09-16. */
-export const SERVO_CHANNELS_PER_BOARD = 3;
+export const SERVO_CHANNELS_PER_BOARD = 2;
 
 /** Outlets ONE sliding gate may serve — MAX_SLIDE_BRANCHES in topology.js.
  *

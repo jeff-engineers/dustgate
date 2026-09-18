@@ -48,9 +48,9 @@ group('W1 the port strip is the hardware budget');
   // CLAUDE.md's table are: SERVO_PORTS mirrors SERVO_COUNT (config.h) and
   // MAX_SERVOS_PER_HOST (topology.js), and a number that only ever compares
   // itself to another variable cannot catch a one-sided edit.
-  ok('the strip is three ports — SERVO_COUNT, mirrored', SERVO_PORTS === 3, String(SERVO_PORTS));
+  ok('the strip is two ports — SERVO_COUNT, mirrored', SERVO_PORTS === 2, String(SERVO_PORTS));
   // A slider board has ONE port, and it belongs in the middle — not at the right
-  // hand end of a four-port strip it is not part of.
+  // hand end of a strip it is not part of.
   ok('a slider board centres its single port', near(portPos(c, SERVO_PORTS, true).x, c.x));
 }
 
@@ -106,11 +106,21 @@ group('W2 a cable is a two-bend run through its own lane, run HIGH');
 // ── W3 · nesting ─────────────────────────────────────────────────────────────
 group('W3 lanes nest, so cables do not cross each other');
 {
-  // The real five-gate shop: three gates on the primary at (1,0).
+  // THREE LEGS FROM ONE BOARD IS NOW SYNTHETIC, and saying so is the point.
+  // SERVO_PORTS went 5 → 4 → 3 → 2, and this fixture has been broken by two of
+  // those because it encoded the port count as channel indices (`chans` used to
+  // be [0, 1, 3], which since 2026-09-17 is the SLIDER port). At a two-port
+  // budget the component never ranks more than two legs in one group, so the
+  // three-way nesting below cannot arise in a real shop.
+  //
+  // It is kept anyway, and deliberately NOT tied to channels: rankByTravel and
+  // cableRun are pure geometry that know nothing about boards, the rule they
+  // implement is about distance, and the budget has already moved three times.
+  // W6 is where the real per-board arrangement is asserted.
   const c = P(172, 64);
   const targets = [P(94, 280), P(202, 280), P(310, 280)];     // g1, g2, g3 tabs
-  const chans = [0, 1, 3];
-  const legs = targets.map((t, i) => ({ from: portExit(c, chans[i]), to: t }));
+  const origins = [P(c.x - 44, c.y + 20), P(c.x, c.y + 20), P(c.x + 44, c.y + 20)];
+  const legs = targets.map((t, i) => ({ from: origins[i], to: t }));
   const rank = rankByTravel(legs, l => Math.abs(l.to.x - l.from.x));
 
   // Asserted by TRAVEL, not by index. These used to name legs[0] and legs[2]
@@ -196,17 +206,24 @@ group('W5 corners are rounded, and only cable-over-cable hops');
 // ── W6 · the real shop, end to end ───────────────────────────────────────────
 group('W6 the five-gate shop draws without a single cable-over-cable hop');
 {
+  // FIVE GATES IS THREE BOARDS AT A TWO-PORT BUDGET (2+2+1), not two boards at
+  // 3+2. Rewritten 2026-09-17 when SERVO_PORTS went to 2 — the old fixture put a
+  // third cable on `portExit(primary, 3)`, which is the SLIDER port now and used
+  // to be a PWM channel. That is the same way this file broke on 2026-08-28, and
+  // the lesson is the one W3 states: do not encode the port budget in a fixture.
   const primary = P(172, 64);
-  const back = P(604, 172);
+  const back    = P(604, 172);
+  const third   = P(388, 172);
   const legs = [
     { from: portExit(primary, 0), to: P(94, 280) },
     { from: portExit(primary, 1), to: P(202, 280) },
-    { from: portExit(primary, 3), to: P(310, 280) },
-    { from: portExit(back, 0), to: P(418, 280) },
-    { from: portExit(back, 1), to: P(526, 280) },
+    { from: portExit(third,   0), to: P(310, 280) },
+    { from: portExit(back,    0), to: P(418, 280) },
+    { from: portExit(back,    1), to: P(526, 280) },
   ];
-  // Ranked per board, which is how the component does it.
-  const byBoard = [legs.slice(0, 3), legs.slice(3)];
+  // Ranked per board, which is how the component does it — and at a two-port
+  // budget that is never more than two legs in a group.
+  const byBoard = [legs.slice(0, 2), legs.slice(2, 3), legs.slice(3)];
   const runs: Pt[][] = [];
   for (const grp of byBoard) {
     const rank = rankByTravel(grp, l => Math.abs(l.to.x - l.from.x));

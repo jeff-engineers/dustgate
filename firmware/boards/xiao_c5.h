@@ -155,10 +155,25 @@
 // owner, on every build. What it costs is the fourth gate channel, and the model
 // that replaced it wants ONE SELECTOR PER BOARD anyway — a board drives one
 // valve (however many branches that valve has) and may additionally sense, watch
-// a bin and transmit. Three channels is one gate plus the two fob servos.
+// a bin and transmit.
+//
+// TWO CHANNELS SINCE 2026-09-17, down from three (jeff). The third was the fob
+// servo's OFF arm and it was never built — "we haven't touched the third servo at
+// all". Giving it up frees D9 for a SECOND BUTTON, which is worth more than a
+// channel nothing drives: manual control at the machine ("give me suction here")
+// has no gesture left on the wake button, whose short press works the screen and
+// whose one-second hold is already spoken for. See TODO.
+//
+// WHAT IT COSTS is a fob presser with an arm per button. A two-button fob now
+// wants ONE arm that travels between them, or the RF path on D10 — which was
+// always the alternative and is already proven on the bench. The note further
+// down already predicted this was "exactly the point at which one arm that
+// travels between buttons starts looking cheaper than a servo per button".
 #define SERVO_PWM_PIN_1    12   // D7  — channel 0, the gate
-#define SERVO_PWM_PIN_2     8   // D8  — channel 1, fob servo ON
-#define SERVO_PWM_PIN_3     9   // D9  — channel 2, fob servo OFF
+#define SERVO_PWM_PIN_2     8   // D8  — channel 1, the fob servo
+// D9 is FREE on a PWM build as of 2026-09-17 — see the second-button note above.
+// It is still an endstop on a -DDUSTGATE_SERVO_BUS build, which is why nothing
+// here claims it: a pad with one owner per personality is the whole point.
 
 #endif
 
@@ -412,10 +427,14 @@
 // the top of the block the two allocations cannot collide without someone going
 // out of their way.
 #if !defined(DUSTGATE_SERVO_BUS)
-// Aliases, not a second definition — these ARE servo channels 1 and 2. Named so
-// the intent is readable where a press is commanded rather than a gate move.
-#define PIN_FOB_SERVO_ON   SERVO_PWM_PIN_2   // D8, channel 1
-#define PIN_FOB_SERVO_OFF  SERVO_PWM_PIN_3   // D9, channel 2
+// An alias, not a second definition — this IS servo channel 1. Named so the
+// intent is readable where a press is commanded rather than a gate move.
+//
+// ONE ARM SINCE 2026-09-17, not two. PIN_FOB_SERVO_OFF was channel 2 on D9 and
+// is gone with it. Neither alias was ever read by any code — a fob press is an
+// ordinary servo selector in the layout — so this block is documentation of
+// intent, and the intent changed.
+#define PIN_FOB_SERVO      SERVO_PWM_PIN_2   // D8, channel 1
 #endif
 
 // -- The serial-servo bus moved UP --

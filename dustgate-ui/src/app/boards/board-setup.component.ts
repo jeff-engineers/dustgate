@@ -564,7 +564,7 @@ export class BoardSetupComponent implements OnInit, OnDestroy {
     // A slider board's whole capacity is one rack, so "of 4" would be a lie on it.
     bits.push(r.drives === 'linear'
       ? `${r.gates} of 1 sliding gate`
-      : `${r.gates} of ${SERVO_CHANNELS_PER_BOARD} gates`);   // plural follows the 4, not the count
+      : `${r.gates} of ${SERVO_CHANNELS_PER_BOARD} gates`);   // plural follows the ceiling, not the count
     if (r.link?.fw) bits.push(`fw ${r.link.fw}`);
     return bits.join(' · ');
   }

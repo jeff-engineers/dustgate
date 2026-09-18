@@ -285,7 +285,7 @@ inline int homeDirection() {
 // presses a fob, and one will silently fight the other. Moving the fob aliases to
 // the TOP of the block (boards/xiao_c5.h) means no DEFAULT can reach it — a gate
 // lands on channel 0 — but it is still a check that does not exist. See TODO.
-#define SERVO_COUNT              3
+#define SERVO_COUNT              2
 
 // The pin list, as ONE initializer rather than four macros spelled out at each
 // use site. Three places built `{ PIN_1, PIN_2, PIN_3, PIN_4 }` by hand, which
@@ -691,6 +691,41 @@ inline int homeDirection() {
 // Setup portal SSID: shown when no WiFi credentials are stored.
 // Connect to this hotspot and visit http://192.168.4.1 to enter your network credentials.
 #define WIFI_PORTAL_SSID    "DustGate-Setup"
+
+// -----------------------------------------------------------------------------
+// WIFI BAND — every board on the SAME radio, deliberately.
+// -----------------------------------------------------------------------------
+//
+// The C5 is dual-band, and letting each board choose for itself is how a shop
+// ends up with a primary on 5 GHz and its nodes on 2.4. That is not a throughput
+// question, it is a REACHABILITY one: the two share an SSID and a subnet and
+// still may not be able to open a TCP connection to each other, because plenty
+// of consumer APs — and most guest networks — bridge between bands and between
+// mesh radios inconsistently.
+//
+// Observed on GenericGuest, 2026-09-18: `probe` from the primary to the same
+// node address returned "connected (10ms)" and "NO ROUTE (3002ms)" minutes
+// apart, with both boards up at -30 dBm. Nothing in the firmware can make a TCP
+// connect intermittently unroutable.
+//
+// 2.4 GHz, NOT 5, and this reverses the reasoning in boards/xiao_c5.h, which
+// picked dual-band so the controller could "leave a 2.4 GHz band that a shop
+// full of motors and Shelly plugs has already crowded". That is a real
+// advantage and it is the wrong trade here:
+//
+//   - RANGE AND MATERIALS. 2.4 GHz carries further and through more metal and
+//     dust ducting than 5 GHz, and these boards are mounted on machinery in a
+//     workshop, not on a desk.
+//   - UNIVERSALITY. Every AP has 2.4 GHz. A shop whose guest network is 2.4-only
+//     would leave a 5 GHz-forced board with nothing to join at all.
+//   - THE TRAFFIC IS TINY. A SET frame is ~100 bytes a few times an hour.
+//     Congestion on 2.4 costs us nothing worth measuring; an unreachable node
+//     costs the whole shop.
+//   - THE SHELLY PLUGS ARE 2.4-ONLY ANYWAY, so the brain shares a band with the
+//     things it polls no matter what it does.
+//
+// Set to 0 to restore dual-band auto-selection.
+#define WIFI_FORCE_24GHZ  1
 
 // -----------------------------------------------------------------------------
 // HTTP API (ENABLE_HTTP_API)
