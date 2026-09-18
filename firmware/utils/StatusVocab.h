@@ -26,6 +26,14 @@ enum Status {
     BOOTING,      // orange — pre-WiFi
     PORTAL,       // white — blinking; captive portal waiting for credentials
     NO_WIFI,      // orange — was connected, isn't now (or never joined)
+    LAYOUT_BAD,   // blue, BLINKING — a stored layout was refused at adopt.
+                  //        Its own state since 2026-09-17, because solid blue
+                  //        already meant "no layout drawn yet" and the two send
+                  //        a person to opposite places: one is normal on a fresh
+                  //        board, the other means something already built is
+                  //        broken and the shop will not route until it is fixed.
+                  //        Blue rather than red — nothing is wrong with the
+                  //        HARDWARE — blinking because it needs a human.
     ONLINE,       // blue — on WiFi, not ready to work (node: unlinked;
                   //        primary: no topology stored, or a paired board is dark)
     READY         // green — node: primary linked.

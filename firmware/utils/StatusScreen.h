@@ -86,6 +86,9 @@ inline bool&     _lit()        { static bool b = false; return b; }
 inline uint32_t& _lastEvent()  { static uint32_t t = 0; return t; }
 inline uint32_t& _lastDraw()   { static uint32_t t = 0; return t; }
 inline uint32_t& _lastHash()   { static uint32_t h = 0; return h; }
+// The hash BEFORE last. Two are kept so an A→B→A oscillation can be told from a
+// sequence of genuine changes — see the flap check in update().
+inline uint32_t& _prevHash()   { static uint32_t h = 0; return h; }
 
 /**
  * Wake the screen. Call it for anything worth looking up at that the rendered
@@ -115,6 +118,10 @@ inline void toggle() {
 
 /** Whether a panel actually answered at begin(). False on every other board. */
 inline bool present() { return _present(); }
+
+/** Whether the glass is currently ON. For the button's log line, which has to
+ *  tell "the press did nothing" apart from "the press blanked a lit panel". */
+inline bool lit() { return _lit(); }
 
 /**
  * Does anything answer at the screen's address? One zero-length write; an ACK
@@ -230,26 +237,91 @@ inline void _draw(const Screen& s, uint32_t now) {
  * So: the state, the motion, what is running, and how much of the shop is
  * answering. Those are the things that mean something happened.
  */
-inline uint32_t _stateHash(const Facts& f) {
-    uint32_t h = 2166136261u;
-    auto mix = [&h](uint32_t v) { h = (h ^ v) * 16777619u; };
-    auto mixStr = [&](const char* s) {
-        mix(s ? 1u : 0u);
-        for (const char* p = s; p && *p; p++) mix((uint8_t)*p);
+// THE FIELDS THAT KEEP THE PANEL AWAKE, one sub-hash each.
+//
+// Split out of a single rolled-up hash on 2026-09-17 to answer a question that
+// reading the code could not: "brains seem to be keeping the screen alive full
+// time", and nothing in here is obviously time-varying. A change in ANY of these
+// bumps _lastEvent(), so exactly one of them must be flapping — and a single
+// hash can say THAT something changed while being useless about WHICH.
+//
+// The names are here so the log can say it out loud. Cheap: twelve uint32 and a
+// static table of literals, computed on a path that already hashes all of this.
+enum { kPartCount = 14 };
+inline const char* const* _partNames() {
+    static const char* n[kPartCount] = {
+        "status", "motion", "role", "gates", "nodes", "collectorOn",
+        "toolName", "openGate", "openingGate", "closingGate", "darkNode",
+        "primaryHost", "layoutError", "bootFault",
     };
-    mix((uint32_t)f.status);
-    mix((uint32_t)f.motion);
-    mix((uint32_t)f.role);
-    mix((uint32_t)(f.gatesReady + 1) * 31 + (uint32_t)(f.gatesTotal + 1));
-    mix((uint32_t)(f.nodesLinked + 1) * 31 + (uint32_t)(f.nodesTotal + 1));
-    mix(f.collectorOn ? 1u : 0u);
-    mixStr(f.toolName);
-    mixStr(f.openGate);
-    mixStr(f.openingGate);
-    mixStr(f.closingGate);
-    mixStr(f.darkNode);
-    mixStr(f.primaryHost);
+    return n;
+}
+
+inline void _stateParts(const Facts& f, uint32_t out[kPartCount]) {
+    auto one = [](uint32_t v) { return (2166136261u ^ v) * 16777619u; };
+    auto str = [&](const char* s) {
+        uint32_t h = one(s ? 1u : 0u);
+        for (const char* p = s; p && *p; p++) h = (h ^ (uint8_t)*p) * 16777619u;
+        return h;
+    };
+    out[0]  = one((uint32_t)f.status);
+    out[1]  = one((uint32_t)f.motion);
+    out[2]  = one((uint32_t)f.role);
+    out[3]  = one((uint32_t)(f.gatesReady + 1) * 31 + (uint32_t)(f.gatesTotal + 1));
+    out[4]  = one((uint32_t)(f.nodesLinked + 1) * 31 + (uint32_t)(f.nodesTotal + 1));
+    out[5]  = one(f.collectorOn ? 1u : 0u);
+    out[6]  = str(f.toolName);
+    out[7]  = str(f.openGate);
+    out[8]  = str(f.openingGate);
+    out[9]  = str(f.closingGate);
+    out[10] = str(f.darkNode);
+    out[11] = str(f.primaryHost);
+    out[12] = str(f.layoutError);
+    out[13] = str(f.bootFault);
+}
+
+inline uint32_t _stateHash(const Facts& f) {
+    uint32_t parts[kPartCount];
+    _stateParts(f, parts);
+    uint32_t h = 2166136261u;
+    for (int i = 0; i < kPartCount; i++) h = (h ^ parts[i]) * 16777619u;
     return h;
+}
+
+inline uint32_t* _lastParts() { static uint32_t p[kPartCount] = {0}; return p; }
+
+/**
+ * Say WHICH fact just re-lit the panel.
+ *
+ * Rate-limited to one line every two seconds, because the failure being chased
+ * is a fact changing on every loop pass and an unthrottled line would be the
+ * same bug in a different output. The throttle is per-BOARD, not per-field: the
+ * question is "what is flapping", and one named field every two seconds answers
+ * it in about ten.
+ */
+inline void _logWake(const Facts& f, bool flap) {
+    uint32_t parts[kPartCount];
+    _stateParts(f, parts);
+    uint32_t* prev = _lastParts();
+    static uint32_t lastLogMs = 0;
+    static bool     seeded    = false;
+    const uint32_t now = millis();
+
+    if (seeded && (uint32_t)(now - lastLogMs) >= 2000) {
+        bool any = false;
+        for (int i = 0; i < kPartCount; i++) {
+            if (parts[i] == prev[i]) continue;
+            if (!any) {
+                Serial.print(flap ? F("[SCREEN] rattling (not re-lit) —")
+                                  : F("[SCREEN] awake — changed:"));
+                any = true;
+            }
+            Serial.print(' '); Serial.print(_partNames()[i]);
+        }
+        if (any) { Serial.println(); lastLogMs = now; }
+    }
+    for (int i = 0; i < kPartCount; i++) prev[i] = parts[i];
+    seeded = true;
 }
 
 /**
@@ -284,7 +356,32 @@ inline void update(const Facts& in) {
     const uint32_t now = millis();
 
     const uint32_t h = _stateHash(f);
-    if (h != _lastHash()) { _lastHash() = h; _lastEvent() = now; }
+    if (h != _lastHash()) {
+        // AN OSCILLATION IS ONE CONDITION, NOT A STREAM OF EVENTS (2026-09-17).
+        //
+        // The panel is meant to light on a change and sleep two minutes later.
+        // It was instead staying lit indefinitely on a shop where something
+        // flaps — a node that connects and drops, a clamp hovering at its trip
+        // point — because every flip counted as a fresh event and pushed the
+        // timer out again. Nobody chose that: it falls out of "any hash change
+        // bumps the clock", which is right for a sequence of real changes and
+        // wrong for a state machine rattling between two values.
+        //
+        // Returning to the hash we held BEFORE the last one is exactly what an
+        // A→B→A rattle looks like, and nothing else does. The first transition
+        // still lights the panel — that is the report, and it is worth seeing —
+        // and the rattle after it no longer keeps the glass on all night.
+        const bool flap = (h == _prevHash());
+        _prevHash() = _lastHash();
+        _lastHash() = h;
+        if (!flap) _lastEvent() = now;
+        // Which fact did it? See _logWake.
+        _logWake(f, flap);
+    } else {
+        // Keep the per-field snapshot current even when nothing changed, so the
+        // first real change reports only the field that actually moved.
+        _logWake(f, false);
+    }
 
     // The sleep decision is statusscreen::awake() in the model — pure, and
     // host-tested, including the millis() rollover. It looks only at the clock:
@@ -319,6 +416,7 @@ inline void update(const Facts& in) {
 namespace statusscreen {
 inline bool begin()   { return false; }
 inline bool present() { return false; }
+inline bool lit()     { return false; }
 inline void note()    {}
 inline void toggle()  {}
 inline void update(const Facts&) {}

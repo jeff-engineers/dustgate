@@ -910,15 +910,50 @@ static void syncTopologyOutlets() {
 }
 #endif
 
+// WHY THE STORED LAYOUT WAS REFUSED, or empty when it was not.
+//
+// A rejected topology used to be visible ONLY as one serial line at boot and a
+// blue LED afterwards — and blue already meant "no layout drawn yet", which is
+// the normal state of a fresh board. So a shop whose saved layout had become
+// invalid (a budget lowered under it, an element the validator now refuses) was
+// indistinguishable from a shop nobody had drawn yet, to anyone without a USB
+// cable. Held here so the LED, the screen and /api/status can all say it.
+static std::string g_topoRejectReason;
+
+// THE ONE SENTENCE about why this board cannot do its job, when the cause is a
+// startup failure rather than a layout. Surfaced on the screen (Facts::bootFault)
+// because a shop board has no serial cable attached and a colour alone cannot
+// say which subsystem is missing.
+//
+// FIRST ONE WINS. A failed drive takes the endstops with it, and a person needs
+// the most upstream cause plus a next action, not an inventory — the panel is 21
+// columns wide.
+//
+// ONLY FOR FAILURES THAT WILL NOT RECOVER ON THEIR OWN. WiFi is the counterexample
+// and the reason this rule is written down: it drops and returns constantly, it
+// already has its own colour and its own screen, and a sticky "wifi failed" note
+// from boot would still be there an hour after it came back.
+static std::string g_bootFault;
+static void noteBootFault(const char* what) {
+    if (g_bootFault.empty() && what && *what) g_bootFault = what;
+}
+
 static void adoptStoredTopology() {
     // NOTE: no topology no longer means no links. Pairing is persisted separately
     // (NodeRegistry.h) precisely so a wiped or absent layout can't silently
     // un-pair the shop — only the controllerId→host aliases go away, which is all
     // a layout ever owned.
-    if (!g_topoStoreSketch.exists()) { g_nodeBus.clearAliases(); g_topoRuntime.clear(); return; }
+    if (!g_topoStoreSketch.exists()) {
+        // NO layout is not a refused layout — leave the reason empty so the
+        // board reports "NO SHOP" rather than accusing a document that does not
+        // exist.
+        g_topoRejectReason.clear();
+        g_nodeBus.clearAliases(); g_topoRuntime.clear(); return;
+    }
     String raw = g_topoStoreSketch.load();
     std::string err;
     if (g_topoRuntime.adopt(raw.c_str(), raw.length(), err)) {
+        g_topoRejectReason.clear();
         // Learn which controller id this board answers to. Stage 1 is
         // single-board, so that's the topology's primary by definition
         // (validateMinimal guarantees exactly one). When secondary builds land,
@@ -937,6 +972,9 @@ static void adoptStoredTopology() {
 #endif
     } else {
         DEBUG_PRINT(F("[V2] Topology REJECTED: ")); DEBUG_PRINTLN(err.c_str());
+        // Kept, not just printed. This is the only description of the fault that
+        // exists, and the board is about to sit there showing a colour.
+        g_topoRejectReason = err.empty() ? std::string("unreadable layout") : err;
         g_nodeBus.clearAliases();
         g_topoRuntime.clear();
     }
@@ -1108,6 +1146,13 @@ void setup() {
     g_faultEndstops = stages.endstops;
     g_faultOutlets  = stages.outlets;
 
+    // ON THE GLASS, not just the console. These were recorded, weighed by
+    // FaultPolicy and used to refuse motion, and then reported to a person as the
+    // bare word "FAULT". Outlets are deliberately NOT here: that stage is WiFi
+    // and plugs, which recover on their own and have their own indicator.
+    if (stages.motor)    noteBootFault("drive did not start");
+    if (stages.endstops) noteBootFault("endstops not found");
+
     const bool ok = !stages.motor && !stages.endstops && !stages.outlets;
     if (!ok) {
         DEBUG_PRINT(F("[INIT] motor="));      Serial.print(okMotor    ? "ok" : "FAIL");
@@ -1198,6 +1243,12 @@ void setup() {
 #ifdef ENABLE_HTTP_API
     if (!apiServer.begin()) {
         DEBUG_PRINTLN(F("[API] HTTP server failed to start."));
+        // THE SCREEN IS THE ONLY CHANNEL LEFT when this fails — the app, the
+        // Boards page and every diagnostic endpoint are served by this server,
+        // so its failure is exactly the one that cannot report itself any other
+        // way. It does not stop gates routing, so it is a note rather than a
+        // FAULT colour.
+        noteBootFault("web UI is down");
     } else {
         DEBUG_PRINT(F("[API] Listening on port 80.  Key: "));
         Serial.println(apiServer.apiKey());
@@ -1381,6 +1432,8 @@ static void updateStatusScreen() {
     if (!servoselftest::active()) f.selfTestRefused = servoselftest::refusal();
     f.status = statusled::state();
     f.motion = statusled::motion();
+    if (!g_topoRejectReason.empty()) f.layoutError = g_topoRejectReason.c_str();
+    if (!g_bootFault.empty())        f.bootFault  = g_bootFault.c_str();
 
 #if defined(CONTROL_SMART_OUTLET) || defined(ENABLE_HTTP_API)
     static String host;
@@ -1506,6 +1559,12 @@ static void updateStatusLed() {
         statusled::set(statusled::NO_WIFI);
     }
 #endif
+    // A REFUSED LAYOUT IS ITS OWN STATE, ahead of ONLINE: the board is healthy
+    // and on the network, but it will never start routing on its own, and solid
+    // blue would say "nothing drawn yet" about a shop that IS drawn.
+    else if (!g_topoRejectReason.empty()) {
+        statusled::set(statusled::LAYOUT_BAD);
+    }
     else if (!g_topoRuntime.loaded() || !allNodesLinked()) {
         statusled::set(statusled::ONLINE);
     } else {
@@ -3895,6 +3954,24 @@ void loop() {
                 apiServer.publishTopologyStatus(body);
 
             }
+        } else if (!g_topoRejectReason.empty()) {
+            // A REFUSED LAYOUT MUST REACH THE APP, and it could not before: the
+            // publish above is gated on loaded(), so a board that threw its
+            // document away served the idle stub — which looks exactly like a
+            // shop nobody has drawn. The one case where the user most needs a
+            // sentence was the one case that produced none.
+            //
+            // Published once rather than on the throttle: the reason cannot
+            // change without a re-adopt, and a re-adopt runs this again.
+            static bool published = false;
+            if (!published) {
+                published = true;
+                DynamicJsonDocument out(512);
+                JsonObject o = out.to<JsonObject>();
+                o["layoutError"] = g_topoRejectReason.c_str();
+                String body; serializeJson(out, body);
+                apiServer.publishTopologyStatus(body);
+            }
         }
 
         // Per-node link state for GET /api/nodes. Published OUTSIDE the
@@ -3907,17 +3984,27 @@ void loop() {
             static unsigned long lastNodePublishMs = 0;
             if (millis() - lastNodePublishMs >= V2_STATUS_PUBLISH_MS) {
                 lastNodePublishMs = millis();
-                // 4096, up from 1024 on 2026-09-16, for TWO reasons that
-                // compound. MAX_SECONDARY_NODES went 3 → 10 the same day, and
-                // each node now also carries a `sense` array. At 1024 a shop
-                // with six boards overflows — and ArduinoJson does not fail on
-                // overflow, it SILENTLY DROPS whatever did not fit, newest
-                // members first. That is exactly how `caps.ct` went missing on
-                // 2026-09-15: a 256-byte doc, a three-member caps object, and a
-                // board that reported no clamp while insisting it had one.
-                // The symptom here would be boards vanishing from the end of the
-                // Boards screen, which reads as a pairing fault.
-                DynamicJsonDocument nodes(4096);
+                // DERIVED FROM THE NODE CAP, not a literal — changed 2026-09-17.
+                //
+                // This was 1024, then 4096 when MAX_SECONDARY_NODES went 3 → 10
+                // and each node gained a `sense` array. Both were hand-picked
+                // numbers sitting a long way from the constant they depend on,
+                // which is the same shape as the five-sided servo budget: raise
+                // the cap and this silently stops fitting.
+                //
+                // AND IT FAILS SILENTLY. ArduinoJson does not error on overflow,
+                // it DROPS whatever did not fit, newest members first — exactly
+                // how `caps.ct` went missing on 2026-09-15 (a 256-byte doc and a
+                // board that reported no clamp while insisting it had one). Here
+                // the symptom is boards vanishing off the end of the Boards
+                // screen, which reads as a pairing fault and sends you to the
+                // wrong problem entirely.
+                //
+                // 512 B/node covers the widest case: three 64-char strings that
+                // ArduinoJson COPIES (id/host/name), eight scalars, a caps
+                // object and a sense entry — about 21 slots plus the text.
+                static const size_t kNodeStatusBytes = 512;
+                DynamicJsonDocument nodes(1024 + MAX_SECONDARY_NODES * kNodeStatusBytes);
                 JsonArray arr = nodes.createNestedArray("nodes");
                 for (int i = 0; i < g_remoteCount; i++) {
                     topo::RemoteActuatorBus::NodeInfo n = g_remoteBuses[i].info();
@@ -3980,6 +4067,20 @@ void loop() {
                     g_nodeRegistry.setLastIp(g_remoteBuses[i].host(),
                                              g_remoteBuses[i].lastIp());
 
+                // LOUD, because the whole class of bug above is silence. If the
+                // estimate ever stops covering a real fleet, this says so
+                // instead of quietly shortening the board list. Once per boot:
+                // it would otherwise repeat four times a second.
+                if (nodes.overflowed()) {
+                    static bool warned = false;
+                    if (!warned) {
+                        warned = true;
+                        DEBUG_PRINT(F("[API] node status OVERFLOWED its buffer at "));
+                        DEBUG_PRINT(g_remoteCount);
+                        DEBUG_PRINTLN(F(" boards — the list is being TRUNCATED."));
+                        DEBUG_PRINTLN(F("[API]   Raise kNodeStatusBytes; boards are missing from /api/nodes."));
+                    }
+                }
                 String nodeBody; serializeJson(nodes, nodeBody);
                 apiServer.publishNodeStatus(nodeBody);
             }
