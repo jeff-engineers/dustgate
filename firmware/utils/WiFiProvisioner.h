@@ -262,6 +262,24 @@ inline void _runPortal() {
 // Blocks until connected. On failure, launches the portal and never returns
 // (portal reboots the device after saving credentials).
 // ---------------------------------------------------------------------------
+// ONE BAND, EVERY BOARD — see WIFI_FORCE_24GHZ in config.h for why.
+//
+// Called immediately before every WiFi.begin(), not once at boot: the mode has
+// to be set while the radio is idle, and a board that reconnects or re-provisions
+// goes through begin() again. Setting it in one place and hoping is how half a
+// shop ends up on the other band after a reconnect.
+inline void _applyBandMode() {
+#if WIFI_FORCE_24GHZ
+    if (!WiFi.setBandMode(WIFI_BAND_MODE_2G_ONLY)) {
+        // Not fatal: a board that cannot restrict its band still joins, it just
+        // joins wherever it likes. Worth a line, because if this ever prints the
+        // "same band everywhere" guarantee is gone and reachability is a lottery
+        // again.
+        DEBUG_PRINTLN(F("[WiFi] WARNING: could not force 2.4 GHz — band is AUTO."));
+    }
+#endif
+}
+
 inline bool begin() {
     // Recover the link unattended: keep credentials in the driver's NVS and let
     // the core auto-reconnect on a dropped connection (maintain() below is the
@@ -290,6 +308,7 @@ inline bool begin() {
     // Developer mode: hardcoded credentials take priority over NVS
     DEBUG_PRINT(F("[WiFi] Connecting to ")); DEBUG_PRINTLN(F(WIFI_STA_SSID));
     WiFi.mode(WIFI_STA);
+    _applyBandMode();
     WiFi.begin(WIFI_STA_SSID, WIFI_STA_PASS);
 #else
     // End-user mode: load credentials from NVS
@@ -306,6 +325,7 @@ inline bool begin() {
 
     DEBUG_PRINT(F("[WiFi] Connecting to ")); Serial.println(ssid);
     WiFi.mode(WIFI_STA);
+    _applyBandMode();
     WiFi.begin(ssid.c_str(), pass.c_str());
 #endif
 
@@ -387,6 +407,27 @@ inline bool begin() {
     DEBUG_PRINT(F("  RSSI "));
     DEBUG_PRINT(WiFi.RSSI());
     DEBUG_PRINTLN(F(" dBm"));
+
+    // WHICH RADIO, AND WHICH ACCESS POINT — added 2026-09-18, because "same
+    // SSID" is not the same thing as "same network path".
+    //
+    // These boards are DUAL-BAND. A primary that associates on 5 GHz and a node
+    // that lands on 2.4 GHz share an SSID and a subnet and still may not be able
+    // to reach each other: plenty of consumer APs, and most guest networks,
+    // bridge between bands and between mesh radios inconsistently or not at all.
+    // The symptom is a TCP connect that succeeds in 10 ms sometimes and times out
+    // at 3 s otherwise, between two boards that are both plainly up — observed on
+    // GenericGuest on 2026-09-18, and unexplainable from either board's own logs.
+    //
+    // The BSSID is the answer: it names the actual radio this board is talking
+    // to. Compare it across boards. Two different BSSIDs on one SSID means they
+    // are on different APs or different bands, and the network — not the
+    // firmware — decides whether they can talk.
+    DEBUG_PRINT(F("  channel "));
+    DEBUG_PRINT(WiFi.channel());
+    DEBUG_PRINT(F("  BSSID "));
+    DEBUG_PRINT(WiFi.BSSIDstr());
+    DEBUG_PRINTLN(WiFi.channel() > 14 ? F("  (5 GHz)") : F("  (2.4 GHz)"));
 
     String hostname = getHostname();
     if (MDNS.begin(hostname.c_str())) {
