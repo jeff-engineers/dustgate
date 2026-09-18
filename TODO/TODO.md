@@ -14,6 +14,49 @@ active sections above them, which is how a parked item stops being read.
 
 ## Bugs
 
+- **Manual control at the machine — "give me suction here and turn it on".
+  (jeff, 2026-09-17. Designed, not built.)** The BEHAVIOUR already exists:
+  `setMachineManual(machineId, on)` synthesises watts, joins most-recent-wins,
+  opens the path before starting the blower and obeys never-dead-head. It is only
+  reachable from the Live view. This is a control-surface question.
+
+  **Not a switch**, and jeff's reason is the right one: a switch's position is a
+  claim about the world that the world can contradict — manual tool A, then go use
+  tool B, and the switch still says A. A button has the opposite problem, no state
+  at all, and what resolves that is the WS2812 already on every board: the
+  indicator sits on the same object as the control, which is what a wall switch
+  structurally cannot do.
+
+  **One rule, not two.** The button cycles through what this board can offer, plus
+  off — one gate is two presses, a two-way manifold is three (left / right / off),
+  an eight-stop slider is nine, which is absurd. So it is one rule with a cap, and
+  "sliders just don't have that" falls out rather than being a special case.
+
+  **The node must report the EVENT, not the meaning.** A `BUTTON` frame carrying
+  *pressed* or *held* and nothing else; the primary owns the cycle, because only
+  the primary knows what that board drives. That keeps a node free of document
+  interpretation — the invariant — and makes the slider opt-out a primary-side
+  decision with no node code at all.
+
+  ⚠️ **The real gap is the OFF-RAMP, and it is there today whatever the control
+  surface.** `_manual` is a set that nothing clears except an explicit off, and a
+  manually-run machine ignores its plug while it is in there. So manual claims
+  accumulate silently: tool B takes the gate on most-recent-wins, but A never
+  releases. Needs a timeout or an auto-clear. **Fix this before adding any new way
+  to set it.**
+
+  **D9 is free for a second button as of 2026-09-17** (see the pin table). Jeff:
+  "I'm not convinced we need a second button, but it's trivial to add on
+  perfboard, so we can try it and see." The wake button's gestures are already
+  full — short press works the screen, one-second hold runs the servo self-test —
+  and `oled-status.html`'s log records that the SECOND gesture was already
+  contentious. A dedicated button also survives gloves and sawdust.
+
+  Precedent worth copying: that existing hold **refuses outright while the
+  collector is running**, because sweeping gates shut against a pulling collector
+  is the dead-head. A manual gesture wants the same kind of refusal.
+
+
 - **"How does DustGate know it's running?" is not a yes/no question, but the
   control under it is Yes/No.** element-outlet-config.component.ts. The label
   used to read "Smart outlet on this tool?", which a Yes/No answers honestly; it
@@ -329,6 +372,170 @@ active sections above them, which is how a parked item stops being read.
   only way in (see the mockup rules), so whatever this becomes needs a tap path too.
 
 ## Carried debt
+
+- **Take NodeLink off the customer's network entirely (jeff, 2026-09-18). "Do we
+  need to look at bluetooth or something else that we control, isolated from the
+  user's network? this is getting absurd."**
+
+  **THE EVIDENCE IS IN AND IT IS NOT OUR FIRMWARE.** `probe` from the primary to
+  the same two node addresses, minutes apart:
+
+  ```
+  1. TCP :80   NO ROUTE / refused  (3002ms)
+  1. TCP :80   connected  (10ms)     ← then HTTP 404, which is CORRECT:
+                                        a node serves only /nodelink
+  ```
+
+  Two boards that are up, listening, at -30 dBm, on one subnet. A TCP connect
+  cannot become intermittently unroutable because of anything we wrote.
+
+  **THIS IS CLAUDE.md's OWN RULE COLLECTING ITS DEBT.** "Never require anything a
+  network is allowed to block." That was written about mDNS and applied to
+  DISCOVERY, which degrades to a typed IP. NodeLink itself was never held to it —
+  and NodeLink is the part that must work for a gate to open. A guest network is
+  allowed to block client-to-client unicast, and this one apparently does so
+  sometimes.
+
+  **NOT BLUETOOTH.** BLE is connection-oriented (the same class of state that
+  gave us client slots and reconnect storms), short-range in a shop full of
+  metal, and coexisting BLE with WiFi on one C5 radio is a known headache. It
+  solves the ownership problem and keeps every other problem.
+
+  **ESP-NOW is the candidate.** Connectionless, MAC-addressed, no IP, no DHCP, no
+  mDNS, no AP in the path, no client slots to exhaust, no reconnect storm
+  possible. NodeLink frames are ~100 bytes of JSON a few times a minute, which is
+  exactly what it is for. Everything that failed tonight is a consequence of
+  running a connection-oriented IP stack over someone else's network to deliver a
+  command smaller than this paragraph.
+
+  What it buys beyond reliability, and this is the part that makes it worth the
+  work: **nodes stop joining WiFi at all.** No credentials on a node, no
+  provisioning chicken-and-egg, no hostname collisions, no DHCP lease that moves,
+  no `_lastIp` cache to go stale, no per-node mDNS resolve taking a shop-wide
+  lock. Only the primary is on the customer's network, which is where jeff wanted
+  to end up anyway: "I only have to maintain the primary once this is in the real
+  shop."
+
+  ⚠️ **The catch, and it is real:** ESP-NOW peers must share a WiFi CHANNEL, and a
+  primary joined to an AP has its channel chosen by that AP. So the primary has
+  to tell its nodes which channel it is on, and they have to follow when the AP
+  moves. That is the whole design problem — everything else is plumbing.
+
+  ⚠️ **And it makes node OTA worse, not better.** 250-byte frames is the wrong
+  shape for a 1.35 MB image. Either node OTA stays a WiFi/USB operation, or a
+  node briefly joins WiFi to take an update. Decide this BEFORE building, because
+  "flash once, maintain the primary" is the other half of the same goal.
+
+  **THE ALTERNATIVE THAT KEEPS THE PROTOCOL: the primary runs softAP+STA and the
+  nodes join the PRIMARY's access point.** NodeLink is unchanged — still
+  WebSocket, still TCP, still the same frames and tests — and the network is ours
+  end to end. Cost is one radio doing two jobs on one channel, which halves
+  throughput and puts the UI and the nodes on the same airtime. Cheaper to build,
+  more load on the primary, and it keeps the connection-oriented failure modes we
+  just spent a night on.
+
+  ⚠️ **BEFORE ANY OF THIS, ONE CHEAP TEST.** Both boards log `channel` and `BSSID`
+  at boot as of 2026-09-18. If the primary and a node are on DIFFERENT BSSIDs —
+  different bands on a dual-band board, or different mesh radios — then "same
+  SSID" was never "same network path", and forcing one band may fix the whole
+  thing for the cost of a config line. Isolation normally blocks CONSISTENTLY;
+  intermittent points at a path that changes.
+
+
+- **Stop making serial the primary way to see what a board is doing (jeff,
+  2026-09-18).** "It's clunky." It is worse than clunky: roles are pinned one per
+  name, so a bench with two nodes cannot even address the second one, and
+  watching a primary and a node at once needs two terminals and two USB cables to
+  boards that are supposed to be mounted on machinery. A shop board will have no
+  cable at all.
+
+  **THE ONE HOOK IS ALREADY THERE.** `DEBUG_PRINT`/`DEBUG_PRINTLN` in config.h are
+  macros that currently expand to `Serial.print`. Everything in the tree logs
+  through them, so a ring buffer costs one macro change rather than an audit of
+  every call site.
+
+  Shape, and the order matters because each step is useful alone:
+
+  1. **A ring buffer on every board**, fed by the macros. Even with no transport
+     this is worth having — it is the difference between "what did it say before
+     it rebooted" and nothing.
+  2. **The primary serves its own** at `/api/logs`, rendered in the app. That
+     alone removes the cable for the board that is hardest to reach.
+  3. **Nodes ship theirs to the primary**, as an opaque LOG frame on NodeLink.
+     Strings only, never interpreted — the node/primary boundary is untouched,
+     the same way `sensorId` rides SENSE without meaning anything to the node.
+     **Flushed on RECONNECT, not just live**, which is the part that makes it
+     replace serial rather than supplement it.
+
+  ⚠️ **THE CASE IT CANNOT COVER IS THE ONE THAT COST AN ENTIRE NIGHT.** When the
+  link is down is exactly when a node's log matters, and exactly when it cannot
+  reach the primary to send it. 2026-09-17/18 was precisely that bug. So:
+
+  - the ring buffer + flush-on-reconnect is not a nicety, it is the whole point:
+    you get the history of WHY the link dropped once it comes back
+  - and a second, connectionless path is worth considering — a UDP syslog
+    broadcast has no connection state, no client slots to exhaust, and keeps
+    working while the WebSocket does not. It is also the only thing that would
+    have helped while the node was refusing connections.
+
+  **SERIAL DOES NOT GO AWAY, and pretending otherwise is how this gets built
+  wrong.** Provisioning is the chicken-and-egg: a board with no WiFi credentials
+  cannot be reached over WiFi, so `pollSerialProvision()` stays permanently. The
+  goal is that serial becomes the BOOTSTRAP path and the last resort, not the
+  daily one.
+
+  Related and already done: `dev.sh monitor --port /dev/cu.X` (2026-09-18) works
+  around the two-role ceiling for now.
+
+
+- **Delete schemaVersion-1 entirely (jeff, 2026-09-17). ADOPT NOW REFUSES IT;
+  the rest is cleanup.** A v1 document is rejected at `TopologyRuntime::adopt()`
+  with "layout is from an older version (v1) — re-save it", which rides
+  `g_topoRejectReason` to the BAD LAYOUT light, the screen and `/api/status`.
+  Detected by SHAPE as well as version, since an export that lost its
+  `schemaVersion` is still unreadable.
+
+  `twoGates.json` is a v2 shop now, and converting it did exactly what this entry
+  predicted it would: the clamp assertions had to move onto the MACHINE, which is
+  the read the shipping code gets wrong and the v1 fixture used to excuse. The
+  collector's clamp stayed on the element, which is the asymmetry `clampOf()`
+  exists for. `test_nodebus` 158/158.
+
+  STILL TO DO: "We can ditch the v1
+  stuff entirely." Nothing the UI can produce is v1 — it writes v2 shops with
+  `systems[]` and machines — so every v1 path is carrying documents no one can
+  create any more.
+
+  **The argument is stronger than tidiness, and it already cost a bench session.**
+  Three of the four firmware fixtures are v1, and in a v1 topology a tool element
+  IS its own machine. That is exactly why the conformance suite stayed green
+  while the shipping path was broken on 2026-09-15: `TopologyRuntime` read
+  `element.sensor.ct`, which is correct for v1 and null for every document the
+  configurator writes, so a clamp paired in the app never reached its node and
+  every test agreed it was fine. **v1 fixtures do not just test a dead shape —
+  they actively hide bugs in the live one**, because they satisfy reads that v2
+  cannot.
+
+  What has to go, roughly in dependency order:
+
+  | | |
+  |---|---|
+  | `firmware/test/fixtures/` | `feedChain.json` and `star.json` are still v1 (`twoGates.json` and `twoSystemShop.json` are v2). Only `test_topology_router` / `test_topology_controller` load them, and they bypass `adopt()` — so the refusal above does not touch them. Converting the two is the remaining fixture work |
+  | `viewOf(JsonObjectConst)` in control/TopologyRouter.h | THE v1 SHIM, and the thing that actually broke when twoGates was converted: it reads top-level `elements`/`ducts`. Delete it with the last v1 fixture, and every caller goes through `systemsOf()` |
+  | `shared/device-model/topology.js` | `validateTopology()` and the v1 half of the schema. `validateShop()` in shop.js is what the device actually applies to a real document |
+  | `firmware/control/Shop.h` | the flattening layer whose header says "V1 COMPATIBILITY IS NOT A SEPARATE PATH" — once v1 is gone, `machineDoc()`/`systemsOf()` stop needing the v1 branch and get simpler |
+  | `topology.fixtures.js`, `topology.test.js`, `topology-conformance.js` | the JS side of the same |
+  | `schemaVersion` reads in `firmware.ino`, `HttpApiServer.cpp`, `TopologyRouter.h`, `TopologySequencer.h` | the version checks themselves |
+
+  ~~One thing to settle before deleting~~ — DONE, and it was worth doing first:
+  a v1 document presented to a board is refused with a sentence rather than
+  silently, because a board with a rejected layout is otherwise indistinguishable
+  from one with no layout, and both are a single blue LED. That cost an evening on
+  2026-09-17.
+
+  Not urgent from here. The part that actively misled — a v1 fixture satisfying a
+  read that no real document can — is gone from the suite that covers clamps.
+
 
 - **What would still force a node reflash — the audit, 2026-09-17. LANDED, see
   DONE.md.** The sweep found exactly one gap and it is closed: the CT trip
@@ -969,4 +1176,4 @@ board list is simulated.
 **5. Live view against real hardware.** `bash dev.sh live` (hot reload proxied to
 the real device) and confirm the tool list, manual override, and gate state track
 what the hardware is doing.
-  
+    

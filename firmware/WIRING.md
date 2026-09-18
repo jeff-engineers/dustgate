@@ -138,8 +138,8 @@ owes the net; where it says none, none is needed.
 | D5  | 24   | Screen SCL | none (as SDA) | ditto |
 | D6  | 11   | **Bin sensor in** (PWM builds) / ST3215 bus TX (slider builds) | **1 kΩ series** on the bus when fitted; none for the bin sensor | One pad, two mutually exclusive jobs — `config.h` `#error`s if a build claims both. Bin sensor: §7. Bus: hardware UART TX, half-duplex, see §2 |
 | D7  | 12   | Servo ch 1 — **and** ST3215 bus RX | none | The one genuinely contended pad: a serial-bus build gives up PWM channel 1 |
-| D8  | 8    | Servo ch 2 | none | Ordinary GPIO, not strapping (bench-confirmed 2026-08-19). Alt: SDIO_DATA0 |
-| D9  | 9    | Servo ch 3 | none | Ordinary GPIO, not strapping (same). Alt: SDIO_CLK |
+| D8  | 8    | Servo ch 2 — the fob presser | none | Ordinary GPIO, not strapping (bench-confirmed 2026-08-19). Alt: SDIO_DATA0 |
+| D9  | 9    | **FREE on a PWM build** (endstop 2 on a slider build) | none | Was servo ch 3 until 2026-09-17 — the fob's OFF arm, never built. Now the only spare pad on the board, earmarked for a **second button**: manual control at the machine. Ordinary GPIO, not strapping. Alt: SDIO_CLK |
 | D10 | 10   | Servo ch 4 | none | Alt: SDIO_CMD |
 | 5V  | —    | Carrier 5 V in | **Schottky in series** | Bidirectional VBUS. Without the diode, carrier power and a plugged-in USB cable short two supplies together |
 | GND | —    | Common ground | — | Servo, pixel and screen grounds all common here. Mandatory, not optional |
