@@ -99,9 +99,32 @@ topo_host() { echo "${DUSTGATE_HOST:-${HOSTNAME_CFG}.local}"; }
 # would fail the restore at the very end when it is most expensive to notice.
 topo_api_key() { host_api_key "$(topo_host)"; }
 
+# Read a board's API key from its unauthenticated bootstrap endpoint.
+#
+# TWO FIXES ON 2026-09-17, both found the same way — this reported "couldn't
+# reach the board" for a host that answered a hand-typed curl seconds earlier.
+#
+#   --max-time 5 WAS TOO SHORT. A cold .local lookup on macOS regularly takes
+#   longer than that, and the board this runs against has just been power-cycled
+#   or is about to be. The 5 was sized for an HTTP round trip and forgot the
+#   name resolution in front of it.
+#
+#   THE FAILURE WAS UNDIAGNOSABLE. Both stderr streams went to /dev/null and the
+#   caller saw an empty string, so "mDNS did not resolve", "connection refused"
+#   and "the JSON had no apiKey" were one symptom. For a step that decides
+#   whether to erase someone's layout, silence is the wrong default — so the
+#   reason is kept and printed by the caller when it gives up.
+HOST_KEY_ERR=""
 host_api_key() {
-  curl -fsS --max-time 5 "http://$1/api/info" 2>/dev/null \
-    | python3 -c 'import json,sys; print(json.load(sys.stdin).get("apiKey",""))' 2>/dev/null || true
+  local body
+  HOST_KEY_ERR=""
+  if ! body="$(curl -fsS --max-time 15 "http://$1/api/info" 2>&1)"; then
+    HOST_KEY_ERR="$body"
+    return 0
+  fi
+  printf '%s' "$body" \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin).get("apiKey",""))' 2>/dev/null \
+    || { HOST_KEY_ERR="answered, but not with a JSON document carrying apiKey"; true; }
 }
 
 # Where the device lives RIGHT NOW, which is not the same question.
@@ -144,20 +167,19 @@ backup_topology() {
   done
 
   if [[ -z "$key" ]]; then
-    echo "  (a filesystem flash erases it)"
+    # WARN, DO NOT ABORT — changed 2026-09-17, and this is the whole reason the
+    # step was switched off in August. A board is flashed over USB, so being
+    # unreachable on the NETWORK is the ordinary bench state, not evidence of
+    # anything. Aborting every such deploy to protect a layout that usually does
+    # not exist is what made the safety net cost more than it saved, and the net
+    # then got removed and a real layout was lost on 2026-09-17.
+    #
+    # So: say plainly what is about to happen, and get out of the way.
     echo "  ⚠  Couldn't reach the board to read its API key. Tried: $tried"
-    echo "     If this board has a shop saved on it, THIS DEPLOY WILL ERASE IT."
-    echo "     Options: fix the connection and re-run, point DUSTGATE_HOST at its"
-    echo "     IP, or pass --no-topology-backup to say you don't need it."
-    # Interactive: let the operator decide. Non-interactive (CI, a script): stop,
-    # because destroying the only copy of someone's layout is not a default.
-    if [[ -t 0 ]]; then
-      read -rp "    Continue anyway and lose any saved layout? [y/N] " reply
-      [[ "$reply" =~ ^[Yy]$ ]] || { echo "  Aborted."; exit 1; }
-    else
-      echo "  Aborted (not a terminal, so nothing to ask). Pass --no-topology-backup to override."
-      exit 1
-    fi
+    [[ -n "$HOST_KEY_ERR" ]] && echo "     curl said: $HOST_KEY_ERR"
+    echo "     If this board has a shop saved on it, THIS DEPLOY WILL ERASE IT"
+    echo "     and there will be no backup. To be safe, first run:"
+    echo "       curl -H \"X-Api-Key: <key>\" http://<host>/api/topology > my-shop.json"
     return 0
   fi
 
@@ -248,6 +270,10 @@ PIO_ENV=""
 for arg in "$@"; do
   case $arg in
     --ui) DO_FW=false ;;
+    # Rebuild the bundle even when the fingerprint says it is current — for a
+    # cache that has gone wrong, or a dependency the fingerprint does not cover
+    # (a node_modules change, a different Angular version).
+    --force-ui) rm -f "$SCRIPT_DIR/.dustgate-ui-build.sha" ;;
     --fw) DO_UI=false; DO_FS=false ;;
     --no-provision) DO_PROVISION=false ;;
     --provision-only) DO_UI=false; DO_FW=false; DO_FS=false; FORCE_PROVISION=true ;;
@@ -317,43 +343,80 @@ echo "║        DustGate Deploy           ║"
 echo "╚══════════════════════════════════╝"
 echo ""
 
-# ── 0. Save the shop layout ── DISABLED 2026-08-22, TO REVISIT ─────────────
+# ── 0. Save the shop layout ── BACK ON 2026-09-17 ──────────────────────────
 # Before anything is built or flashed, so a board we can't reach stops the
 # deploy while it is still cheap to stop. Only when the filesystem is going to
 # be rewritten — that is the step that erases it.
 #
-# TURNED OFF FOR NOW, at the call site only: backup_topology() and
-# restore_topology() above are untouched and still correct, so switching this
-# back on is uncommenting these three lines and the matching pair in step 5.
+# ⚠️ BACK ON 2026-09-17, AND NEVER PROVEN. Jeff: "it's never actually worked."
+# It was written in August, disabled the same month, and the first deploy that
+# runs it is its first real test. Treat a clean run as evidence, not as a
+# guarantee, until a layout has actually survived a flash.
 #
-# WHAT THIS COSTS, and it is not small — **a filesystem flash now silently
-# erases whatever shop is saved on the device.** No backup, no prompt, no abort.
-# There is still a manual path, and it is the whole safety net until this comes
-# back:
+# WHY IT WENT OFF, and what changed so it can come back. The step aborted the
+# whole deploy whenever it could not confirm the board's state — right for a shop
+# in service, wrong for a bench where boards are flashed constantly with no
+# topology on them, so every deploy paid a round trip and a possible abort to
+# preserve nothing. It got switched off, and the note left here predicted the
+# consequence exactly: "a filesystem flash now silently erases whatever shop is
+# saved on the device. No backup, no prompt, no abort."
+#
+# THAT PREDICTION CAME TRUE ON 2026-09-17 and cost a real layout.
+#
+# The fix is the one the old note specified: 404 from /api/topology is the
+# ORDINARY bench case and skips quietly, and an unreachable board now WARNS
+# rather than aborting — a board is flashed over USB, so being off the network
+# proves nothing about whether it holds a shop. Nothing aborts a deploy any more.
+#
+# The manual path still works and is the belt-and-braces:
 #
 #     curl -H "X-Api-Key: <key>" http://<host>/api/topology > my-shop.json
 #     bash tools/restore-topology.sh my-shop.json
 #
-# WHY IT IS OFF. The step assumes a board that is up, on the network and holding
-# a shop worth keeping, and refuses to proceed when it can't confirm that —
-# aborting outright when stdin isn't a terminal. That is the right instinct for a
-# shop in service and the wrong one for the current bench, where boards are
-# being flashed repeatedly with no topology on them at all (a fresh C5 primary
-# answers `topology stored: no`), and every deploy pays a network round trip and
-# a possible abort to preserve nothing.
-#
-# WHAT TO DECIDE WHEN REVISITING — the flag already exists
-# (--no-topology-backup), so "let the operator opt out" is not the answer; the
-# operator has to remember, and the failure is silent and permanent. Likelier:
-# only run it when the device actually has a document (ask /api/topology first
-# and skip quietly on 404, which is the ordinary bench case), and never abort a
-# deploy over a board that has nothing to lose.
-#if $DO_FS && $DO_TOPO_BACKUP; then
-#  backup_topology
-#  echo ""
-#fi
+if $DO_FS && $DO_TOPO_BACKUP; then
+  backup_topology
+  echo ""
+fi
 
 # ── 1. Build Angular UI ────────────────────────────────────────────────────
+#
+# SKIPPED WHEN NOTHING IT DEPENDS ON HAS CHANGED (2026-09-17). A production
+# Angular build ran on EVERY primary flash, and it is the slow step — the
+# firmware itself is cached per-env by PlatformIO and rebuilds in seconds when
+# untouched. Reflashing a board to change one line of C++ paid for a full UI
+# rebuild that produced byte-identical output.
+#
+# The fingerprint covers path + size + mtime for the UI sources AND
+# shared/device-model, because the app imports the model directly — a change
+# there with no change under src/ still needs a rebuild, and hashing only the
+# obvious directory is how that goes wrong silently. Config files are in it too:
+# angular.json and the lockfile change what the build produces.
+#
+# mtime, not content, is the deliberate cheap choice: it costs one stat per file
+# instead of reading every byte, and a false MISS only wastes a build. A false
+# HIT would be the bad direction, which is why the output directory has to exist
+# and be non-empty as well.
+ui_fingerprint() {
+  { find "$UI_DIR/src" "$SCRIPT_DIR/shared/device-model" -type f \
+         \( -name '*.ts' -o -name '*.html' -o -name '*.css' -o -name '*.js' -o -name '*.json' \) \
+         -exec stat -f '%N %z %m' {} + 2>/dev/null
+    stat -f '%N %z %m' "$UI_DIR/angular.json" "$UI_DIR/package-lock.json" \
+                       "$UI_DIR/tsconfig.json" 2>/dev/null
+  } | sort | shasum | awk '{print $1}'
+}
+UI_STAMP="$SCRIPT_DIR/.dustgate-ui-build.sha"
+
+if $DO_UI; then
+  ui_now="$(ui_fingerprint)"
+  ui_was="$(cat "$UI_STAMP" 2>/dev/null || true)"
+  if [[ -n "$ui_now" && "$ui_now" == "$ui_was" ]] && [[ -n "$(ls -A "$DATA_DIR" 2>/dev/null)" ]]; then
+    echo "▶ Angular UI unchanged — skipping the build."
+    echo "  ($(du -sh "$DATA_DIR" | awk '{print $1}') already staged in firmware/data/; --force-ui rebuilds)"
+    echo ""
+    DO_UI=false
+  fi
+fi
+
 if $DO_UI; then
   echo "▶ Building Angular UI…"
   cd "$UI_DIR"
@@ -371,6 +434,9 @@ if $DO_UI; then
   echo "  Files in data/:"
   ls -lh "$DATA_DIR"
   cd "$SCRIPT_DIR"
+  # Stamped only after the copy SUCCEEDS, so an interrupted build cannot leave a
+  # fingerprint claiming firmware/data/ matches sources it was never built from.
+  ui_fingerprint > "$UI_STAMP"
   echo ""
 fi
 
@@ -576,15 +642,17 @@ PY
   echo ""
 fi
 
-# ── 5. Put the shop layout back ── DISABLED 2026-08-22, TO REVISIT ─────────
+# ── 5. Put the shop layout back ── BACK ON 2026-09-17 ──────────────────────
 # After provisioning, not before: a freshly-flashed board may not rejoin WiFi
 # until its credentials land, and this restore travels over the network.
 #
-# Off with step 0 — see the note there. This half is inert on its own anyway:
-# restore_topology() returns immediately unless step 0 actually saved a document.
-#if $DO_FS && $DO_TOPO_BACKUP; then
-#  restore_topology
-#  echo ""
-#fi
+# Back on with step 0 — see the note there, including that neither half has ever
+# been proven. This one is inert on its own anyway: restore_topology() returns
+# immediately unless step 0 actually saved a document, so a bench board with no
+# shop on it never reaches the network round trip.
+if $DO_FS && $DO_TOPO_BACKUP; then
+  restore_topology
+  echo ""
+fi
 
 echo "✓ Deploy complete."
