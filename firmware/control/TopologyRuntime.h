@@ -180,6 +180,35 @@ public:
         if (e) { err = e.c_str(); return false; }
         if (!doc->is<JsonObject>()) { err = "topology must be an object"; return false; }
 
+        // ── schemaVersion 1 IS REFUSED, and says so (2026-09-17, jeff) ───────
+        //
+        // Nothing has been able to PRODUCE a v1 document for a long time: the
+        // configurator writes v2 shops with systems[] and machines[]. What kept
+        // v1 alive was the test fixtures, and they did active harm — in v1 a tool
+        // element IS its own machine, so `element.sensor.ct` reads correctly
+        // there and is null for every real document. That is precisely how the
+        // suite stayed green on 2026-09-15 while no clamp paired in the app ever
+        // reached its node.
+        //
+        // REFUSED WITH A SENTENCE, not ignored, because the alternative is the
+        // failure that cost an evening on 2026-09-17: a board with a rejected
+        // layout is indistinguishable from a board with no layout, and both are
+        // one blue LED. The message rides g_topoRejectReason to the BAD LAYOUT
+        // light, the screen, and /api/status.
+        //
+        // Detected by SHAPE as well as by the version field, since an export
+        // that lost its schemaVersion is still a v1 document and still cannot be
+        // read correctly. systems[] is what a v2 shop always has.
+        {
+            JsonObjectConst o = doc->as<JsonObjectConst>();
+            const int ver = o["schemaVersion"] | 0;
+            const bool hasSystems = o["systems"].is<JsonArrayConst>();
+            if (ver == 1 || (!hasSystems && o["elements"].is<JsonArrayConst>())) {
+                err = "layout is from an older version (v1) — re-save it";
+                return false;
+            }
+        }
+
         _doc = std::move(doc);
         _ctrl.setTopology(_doc->as<JsonObjectConst>());
         _queue.clear();

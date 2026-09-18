@@ -11,6 +11,7 @@
 
 #include <ArduinoJson.h>
 #include "../control/TopologyRouter.h"
+#include "../control/Shop.h"   // systemsOf() — twoGates.json is a v2 shop now
 #include <cstdio>
 #include <fstream>
 #include <sstream>
@@ -60,7 +61,13 @@ int main(int argc, char** argv) {
   }
   // ── twoGates [toolX,toolY] independent → both open, both reach ────────────
   {
-    auto r = topo::computeRouting(twoGates.as<JsonObjectConst>(), {"toolX", "toolY"});
+    // THROUGH systemsOf(), because twoGates.json is a v2 shop since 2026-09-17.
+    // The JsonObjectConst overload of computeRouting() is the V1 one — viewOf()
+    // reads top-level elements/ducts, which a v2 document does not have. star
+    // and feedChain below are still v1 and still use it; both go when the v1
+    // fixtures do (see TODO), and viewOf(JsonObjectConst) goes with them.
+    auto r = topo::computeRouting(topo::systemsOf(twoGates.as<JsonObjectConst>())[0],
+                                  {"toolX", "toolY"});
     ok("twoGates: gate1=open", state(r, "gate1") == "open");
     ok("twoGates: gate2=open", state(r, "gate2") == "open");
     ok("twoGates: both reach", reach(r, "toolX") && reach(r, "toolY"));
@@ -79,7 +86,11 @@ int main(int argc, char** argv) {
   // ── servoCommandAngle: twoGates gate1 open=ref+0, closed=ref+90 ───────────
   {
     JsonObjectConst g1;
-    for (JsonObjectConst e : twoGates["elements"].as<JsonArrayConst>()) if (topo::_eq(e["id"], "gate1")) g1 = e;
+    // twoGates.json became a v2 shop on 2026-09-17, so elements live under a
+    // system rather than at the top level. computeRouting() reads it through
+    // Shop.h and never noticed; only this direct index did.
+    for (JsonObjectConst e : twoGates["systems"][0]["elements"].as<JsonArrayConst>())
+      if (topo::_eq(e["id"], "gate1")) g1 = e;
     ok("servo angle: gate1 open = 10",   topo::servoCommandAngle(g1, "open") == 10, std::to_string(topo::servoCommandAngle(g1, "open")));
     ok("servo angle: gate1 closed = 100", topo::servoCommandAngle(g1, "closed") == 100, std::to_string(topo::servoCommandAngle(g1, "closed")));
   }
