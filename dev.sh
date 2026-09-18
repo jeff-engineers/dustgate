@@ -202,6 +202,48 @@ fi
 
 PORTS_FILE="$(dirname "${BASH_SOURCE[0]}")/.dustgate-ports"
 
+# What each physical NODE was last flashed as, keyed by its USB serial.
+#
+# WHY NODES AND NOT THE PRIMARY. The primary's name is a convenience and is
+# already remembered in tools/.env when you pass --save. A node's name is
+# LOAD-BEARING and is not remembered at all, which is exactly backwards: it is
+# what the board advertises over mDNS, what the Boards screen lists, and what the
+# topology stores as link.host. Reflash a node and type a different name — or
+# accept the suggestion, which is a generic dustgate-node-N — and three things
+# break at once, all silently:
+#
+#   - the primary's NodeRegistry still holds the OLD name, paired and persisted,
+#     and re-resolves it over mDNS forever. That is a ghost entry taking the
+#     shop-wide querier lock every 15s for a board that no longer exists.
+#   - the layout's link.host points at the old name, so its gates stop moving.
+#   - allNodesLinked() can never be true again, so the primary sits on ONLINE
+#     rather than READY and the status light never goes green.
+#
+# The serial is the right key because it is the board, not the port: the C5's
+# USB comes off the MCU, so the /dev path moves around and the serial does not.
+# Same identifier PORTS_FILE already pins roles by.
+NODE_NAMES_FILE="$(dirname "${BASH_SOURCE[0]}")/.dustgate-node-names"
+
+# The serial of the board currently on $1, or empty.
+serial_for_port() {
+  local want="$1"
+  list_boards | awk -F'|' -v p="$want" '$1 == p { print $3; exit }'
+}
+
+node_name_for_serial() {
+  [[ -f "$NODE_NAMES_FILE" && -n "${1:-}" ]] || return 0
+  awk -F'=' -v s="$1" '$1 == s { print $2; exit }' "$NODE_NAMES_FILE"
+}
+
+remember_node_name() {
+  local ser="${1:-}" name="${2:-}"
+  [[ -n "$ser" && -n "$name" ]] || return 0
+  local tmp; tmp="$(mktemp)"
+  [[ -f "$NODE_NAMES_FILE" ]] && grep -v "^${ser}=" "$NODE_NAMES_FILE" > "$tmp" 2>/dev/null
+  echo "${ser}=${name}" >> "$tmp"
+  mv "$tmp" "$NODE_NAMES_FILE"
+}
+
 # Emits one "port|vid|serial|description" line per attached board. PlatformIO
 # already knows how to enumerate with hwid, and shells out to nothing we'd
 # otherwise have to write per-platform.
@@ -799,26 +841,71 @@ run_flash_node() {
   # WiFi creds first. The primary CANNOT provision a node over the network — the
   # node isn't on the network yet, which is the whole chicken-and-egg. So we push
   # credentials over this USB cable now, the same way the primary gets them.
+  # STORED CREDENTIALS ARE USED WITHOUT ASKING, the same as the primary — jeff,
+  # 2026-09-17. This prompted every time even with tools/.env fully populated,
+  # which is two questions per node whose only right answer is Enter; and a shop
+  # is flashed one node at a time, so the prompts scale with the boards.
+  #
+  # The flags behave exactly as they do on a primary, because they go through the
+  # same parser: --ask forces the questions, --ssid/--pass override for this flash,
+  # --save writes them back. Only a genuinely empty tools/.env still prompts,
+  # which is the first-run case that must not be silent.
+  parse_provision_overrides "$@"
+  set -- "${PROVISION_REST[@]+"${PROVISION_REST[@]}"}"
   load_env_defaults
-  echo ""
-  echo "  WiFi credentials (a node needs these to reach the primary):"
-  read -rp "  WiFi SSID${ENV_SSID:+ [$ENV_SSID]}: " WIFI_SSID
-  WIFI_SSID="${WIFI_SSID:-$ENV_SSID}"
-  read -rsp "  WiFi Password${ENV_PASS:+ [unchanged, hidden]}: " WIFI_PASS; echo
-  WIFI_PASS="${WIFI_PASS:-$ENV_PASS}"
+  if (( OV_ASK )) || [[ -z "$ENV_SSID" ]]; then
+    [[ -z "$ENV_SSID" ]] && echo "  No WiFi credentials found in tools/.env yet — let's set them up."
+    echo ""
+    echo "  WiFi credentials (a node needs these to reach the primary):"
+    read -rp "  WiFi SSID${ENV_SSID:+ [$ENV_SSID]}: " WIFI_SSID
+    WIFI_SSID="${WIFI_SSID:-$ENV_SSID}"
+    read -rsp "  WiFi Password${ENV_PASS:+ [unchanged, hidden]}: " WIFI_PASS; echo
+    WIFI_PASS="${WIFI_PASS:-$ENV_PASS}"
+  else
+    WIFI_SSID="${OV_SSID:-$ENV_SSID}"
+    WIFI_PASS="${OV_PASS:-$ENV_PASS}"
+    echo ""
+    echo "  WiFi: '$WIFI_SSID' (from tools/.env — --ask to change)"
+  fi
 
   # The hostname is LOAD-BEARING here, unlike on the primary. It's what the node
   # advertises over mDNS, what the Boards screen lists, and what gets written
   # into the topology as link.host. Two nodes sharing a hostname collide on the
   # network and the primary can only ever reach one of them — so this is a
   # required, distinct value, not a nicety.
-  local suggested="${1:-}"
-  if [[ -z "$suggested" ]]; then
-    suggested="$(next_node_hostname)"
-  fi
+  # SUGGEST THE NAME THIS BOARD ALREADY HAD, keyed by its USB serial — added
+  # 2026-09-17. Reflashing a node is the common case, and the common case should
+  # not be the one that silently renames a board (see NODE_NAMES_FILE for what
+  # that costs). An explicit argument still wins; the remembered name beats the
+  # generic dustgate-node-N, which is only right for a board being named for the
+  # first time.
+  local node_ser; node_ser="$(serial_for_port "$port")"
+  local remembered; remembered="$(node_name_for_serial "$node_ser")"
+  # AN EXPLICIT NAME IS AN ANSWER, NOT A SUGGESTION — and it arrives two ways.
+  # `flash-node <name>` leaves it in $1, while `--host <name>` lands in OV_HOST;
+  # parse_provision_overrides also folds a BARE word into OV_HOST (see its `*)`
+  # case), which is why $1 can be empty even though a name was typed. That swallow
+  # is what made this prompt appear anyway on 2026-09-18.
+  local explicit="${1:-${OV_HOST:-}}"
+  local suggested="${explicit:-${remembered:-$(next_node_hostname)}}"
+
   echo ""
-  read -rp "  Node hostname — must be unique per node [$suggested]: " HOSTNAME_CFG
-  HOSTNAME_CFG="${HOSTNAME_CFG:-$suggested}"
+  if [[ -n "$remembered" && "$remembered" != "$explicit" ]]; then
+    echo "  This board was last flashed as '$remembered'."
+    echo "  KEEP THAT NAME unless you mean to re-identify it: the primary still has"
+    echo "  the old one paired, and the layout points its gates at it."
+    echo ""
+  fi
+
+  if [[ -n "$explicit" ]]; then
+    # Same rule the primary follows: a name given on the command line is not
+    # re-asked. Printed, so it is never silent about which name it is using.
+    HOSTNAME_CFG="$explicit"
+    echo "  Node hostname: $HOSTNAME_CFG  (given on the command line)"
+  else
+    read -rp "  Node hostname — must be unique per node [$suggested]: " HOSTNAME_CFG
+    HOSTNAME_CFG="${HOSTNAME_CFG:-$suggested}"
+  fi
   # TWO names are refused, and the second one was learnt the hard way.
   #
   #   - whatever tools/.env calls the primary, which is the obvious collision
@@ -847,9 +934,20 @@ run_flash_node() {
 
   echo ""
   echo "  Flashing as: $HOSTNAME_CFG  (will appear at $HOSTNAME_CFG.local)"
+  if [[ -n "$remembered" && "$remembered" != "$HOSTNAME_CFG" ]]; then
+    echo ""
+    echo "  ⚠  RENAMING this board: '$remembered' → '$HOSTNAME_CFG'."
+    echo "     The primary still has '$remembered' paired and will keep dialling it."
+    echo "     After this: unpair '$remembered' in the app, add '$HOSTNAME_CFG',"
+    echo "     and re-point any gates the layout gave it."
+  fi
   echo ""
   cd "$SCRIPT_DIR"
   PLATFORMIO_UPLOAD_PORT="$port" bash deploy.sh "--node=$node_env"
+
+  # Recorded AFTER the flash, so a failed upload does not claim a name the board
+  # is not actually running.
+  remember_node_name "$node_ser" "$HOSTNAME_CFG"
 
   echo ""
   echo "  ✓ Node flashed. Next:"
@@ -949,12 +1047,19 @@ EOF
 # NOT optional dressing — see the -e note below. Defaults to the primary.
 run_monitor() {
   echo "▶ Serial monitor (Ctrl+C to exit)."
-  local scan_boot=false env="$PRIMARY_ENV"
+  local scan_boot=false env="$PRIMARY_ENV" explicit_port=""
   local a
-  for a in "$@"; do
-    case "$a" in
-      --scan-boot) scan_boot=true ;;
-      *)           env="$a" ;;
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --scan-boot) scan_boot=true; shift ;;
+      # AN EXPLICIT PORT, because roles only go two deep and a shop does not.
+      # Roles are pinned one per name (primary, node), so a bench with TWO nodes
+      # has no way to say WHICH node — and watching the primary and a node at the
+      # same time is exactly what diagnosing a link needs. `dev.sh ports` lists
+      # what is attached with serials; paste one here.
+      --port)      explicit_port="$2"; shift 2 ;;
+      --port=*)    explicit_port="${1#--port=}"; shift ;;
+      *)           env="$1"; shift ;;
     esac
   done
 
@@ -965,7 +1070,16 @@ run_monitor() {
   [[ "$env" == "$NODE_ENV" || "$env" == "$LINEAR_NODE_ENV" ]] && role=node
 
   local port
-  port="$(require_port "$role")" || exit 1
+  if [[ -n "$explicit_port" ]]; then
+    if [[ ! -e "$explicit_port" ]]; then
+      echo "  ✗ No such port: $explicit_port"
+      echo "    Attached boards:"; run_ports | sed -n '2,20p'
+      exit 1
+    fi
+    port="$explicit_port"
+  else
+    port="$(require_port "$role")" || exit 1
+  fi
   local what; what="$(describe_port "$port")"
   echo "  Using port: $port${what:+  ($what)}"
 
@@ -1156,8 +1270,13 @@ case "${1:-}" in
   monitor)
     shift || true
     case "${1:-}" in
-      node|n)     run_monitor "$NODE_ENV" ;;
-      *)          run_monitor ;;
+      # FORWARD THE REST. Both arms used to stop at the role word and drop
+      # everything after it, so `monitor node --port /dev/cu.X` silently lost the
+      # port and opened whichever board the role was pinned to — which is the
+      # failure the flag exists to work around.
+      node|n)     shift; run_monitor "$NODE_ENV" "$@" ;;
+      slider|linear) shift; run_monitor "$LINEAR_NODE_ENV" "$@" ;;
+      *)          run_monitor "$@" ;;
     esac
     ;;
   erase)     run_erase ;;
@@ -1170,7 +1289,7 @@ case "${1:-}" in
     echo "Usage: dev.sh [demo|mock|live [host]"
     echo "              |flash [--fw|--ui|--slider|--no-provision] [--host N] [--ssid N] [--pass S] [--ask] [--save]"
     echo "              |flash-node [--slider] [hostname]"
-    echo "              |monitor [node]|ports [--pin primary|node]|erase|provision [--host N] [--ssid N]]"
+    echo "              |monitor [node] [--port /dev/cu.X]|ports [--pin primary|node]|erase|provision [--host N] [--ssid N]]"
     exit 1
     ;;
 esac
