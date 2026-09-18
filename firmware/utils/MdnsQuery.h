@@ -25,6 +25,7 @@
 #pragma once
 #include "MdnsLock.h"   // one mDNS search at a time, across every task
 #include <Arduino.h>
+#include "esp_heap_caps.h"   // internal-DRAM reporting when a search cannot start
 #include <mdns.h>
 #include "Watchdog.h"   // the poll below outlives a loop() iteration
 
@@ -133,8 +134,18 @@ inline int mdnsQueryService(const char* service, const char* proto,
     mdns_search_once_t* search = mdns_query_async_new(
         nullptr, service, proto, MDNS_TYPE_PTR, timeoutMs, (size_t)maxHits, nullptr);
     if (!search) {
+        // THE LINE THAT SETTLES "is this contention or is this memory". A failed
+        // search start is an allocation failure, and it is silent to the caller:
+        // zero hits is indistinguishable from an empty network. Print what
+        // INTERNAL DRAM looked like, because that is what mdns allocates from
+        // and what each online node's 4 KB task stack eats into — the suspected
+        // mechanism behind a shop that discovers fine with one node and
+        // intermittently with two.
         Serial.print(F("[MDNS] ")); Serial.print(service);
-        Serial.println(F(": could not start the search (out of memory?)"));
+        Serial.print(F(": could not start the search — internal "));
+        Serial.print((unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+        Serial.print(F(" largest "));
+        Serial.println((unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
         return 0;
     }
 
