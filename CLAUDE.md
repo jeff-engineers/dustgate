@@ -18,6 +18,21 @@ it measured 4 V on its output, above a C5 GPIO's absolute maximum), with the
 existing 12 V green pilot and red strobe left wired to the sensor. That is the
 first collector-board capability proven on real hardware. `firmware/WIRING.md#9-bin-sensor` §2.
 
+**A CT starts the collector and moves a gate, confirmed 2026-09-18 — the whole
+sensing chain, end to end, on real hardware.** A clamp on a node reads a running
+tool, the node decides the bit from its own 60 Hz RMS loop, SENSE reaches the
+primary, the routing brain treats it as a machine drawing power, and the gate
+moves. This is what the CT work since 2026-09-13 was for, and it is the first
+time any part of the shop has been driven by something other than a smart plug.
+
+⚠️ **IT TAKES TWO GATES TO SEE IT, and that is not a bug** (jeff, 2026-09-18 —
+"otherwise the system would never try to toggle gates with only 1 connected").
+With a single gate there is nothing to route *away from*: most-recent-tool-wins
+has one candidate, and "idle leaves the gate where it is — the system rests open"
+means the correct behaviour is to do nothing at all. A one-gate bench therefore
+looks identical to a broken one. Add a second gate before concluding the CT path
+does not work.
+
 **The slider node moves a gate, confirmed 2026-09-03** — it homes, finds its
 datum, takes a SET and drives the rack. That was the last unknown on the node
 path.
@@ -63,7 +78,7 @@ drifted constantly. Now `shared/device-model/` is the spec:
   | `DEFAULT_COLLECTOR_OFF_DELAY_MS` (topology-device.js) | `kDefaultCollectorOffDelayMs` (control/TopologyRuntime.h) | collector coast-down default |
   | `DEFAULT_THRESHOLD_W` (topology-device.js) | `kDefaultThresholdW` (control/TopologyController.h) | machine-on wattage default |
   | the `* 3` in `setToolManual()` (dustgate-ui demo-api.service.ts) | the `* 3.0f` in `manualWattsFor()` (control/TopologyRuntime.h) | synthetic wattage for a manual switch-on |
-  | `MAX_SERVOS_PER_HOST` / `MAX_LINEAR_PER_HOST` (topology.js) | `SERVO_COUNT` (config.h) | servo bank size a controller can actually drive. **3 since 2026-09-16**, lowered from 4 when the 315 MHz transmitter moved to D10 so ONE pin map could serve every PWM board — channel 0 is the board's gate, 1 and 2 are the fob servos, and no pad has two owners any more. The UI mirrors it in THREE further places (`SERVO_PORTS` in build/wiring/wire-geometry.ts, `SERVO_CHANNELS_PER_BOARD` in gates/selector-types.ts, and the `servoPortsPerBoard` passed into boards/board-drives.ts), so this is really a five-sided constant: the port strip drawn on the canvas IS the budget, and a one-sided edit puts a port there that no board has |
+  | `MAX_SERVOS_PER_HOST` / `MAX_LINEAR_PER_HOST` (topology.js) | `SERVO_COUNT` (config.h) | servo bank size a controller can actually drive. **2 since 2026-09-17**, and it has moved three times: 4 → 3 when the 315 MHz transmitter went to D10 so ONE pin map could serve every PWM board, then 3 → 2 when the third channel — the fob servo's OFF arm, never built — was given up so D9 could be a second BUTTON for manual control at the machine. Channel 0 is the board's gate, channel 1 presses a fob. A two-button fob now wants one arm that travels, or the RF path. The UI mirrors it in THREE further places (`SERVO_PORTS` in build/wiring/wire-geometry.ts, `SERVO_CHANNELS_PER_BOARD` in gates/selector-types.ts, and the `servoPortsPerBoard` passed into boards/board-drives.ts), so this is really a five-sided constant: the port strip drawn on the canvas IS the budget, and a one-sided edit puts a port there that no board has. **A sixth place bites every time and is not a constant at all** — the wiring FIXTURES in wire-geometry.spec.ts encoded the budget as channel indices (`portExit(c, 3)`), so each drop silently turned a PWM channel into the slider port and failed a rule that had not changed. Broken that way on 2026-08-28 and again on 2026-09-17; the fixtures no longer name channels they do not need |
   | `NUM_STOPS` (device-model.js) | `NUM_STOPS` (config.h) | max stops on one sliding gate. **8 since 2026-09-05**, lowered from 16 so it matches `MAX_SLIDE_BRANCHES` (topology.js) and `SLIDE_MAX_OUTLETS` (dustgate-ui) — three numbers that all claim to be the same limit, and were not. Must stay EVEN (`static_assert` in config.h): Rockler ships gates in pairs, so an odd request rounds up. Changing it changes the persisted `CalibrationData` layout — bump `CALIB_VERSION` with it |
   | `MIN_STOP_SEPARATION_MM` (device-model.js) | `MIN_STOP_SEPARATION_MM` (config.h) | overlap backstop between stops |
   | `IDLE_TIMEOUT_SEC_DEFAULT` (device-model.js) | `IDLE_TIMEOUT_SEC_DEFAULT` (config.h) | idle power-off default |

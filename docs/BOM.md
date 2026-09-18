@@ -67,11 +67,19 @@ a clamp and a remote. No separate firmware, no separate pin map.
 | 1 kΩ resistor | 1 | 4N35 LED series, off 12 V. ≈10.8 mA, the part's rated test point |
 | 12 V green pilot lamp | 1 | Existing shop part, stays on 12 V |
 | 12 V red strobe | 1 | ditto. Measured contribution to the CT floor: ~2.7 counts, a tenth of the trip point |
-| **315 MHz TX module** | 1 | Keys the collector's own remote. Data input takes 3.3 V logic; module runs 5 V on the bench, 12 V for a real install. D10 |
-| **HT12E** encoder | 1 | 12-bit, 8 address + 4 data |
-| 8-position SPST DIP switch | 1 | Address. DIP-16 body, 2.54 mm |
-| 1.0 MΩ resistor | 1 | HT12E Rosc |
+| **315 MHz TX module** | 1 | Keys the collector's own remote, and **the only part the RF path needs** — see below. Data input takes 3.3 V logic; module runs 5 V on the bench, 12 V for a real install. D10 |
 | 9 g servo (SG90 class) | 1–2 | ALTERNATIVE to the RF path: an arm on a printed fixture pressing the fob's own buttons. This is the SHIPPING answer — it needs no soldering inside a certified remote. Plastic gear is fine; a button press is not a stall |
+
+**No HT12E, no DIP switch, no Rosc resistor.** `control/RfCollectorPresser.h`
+generates the 12-bit frame itself and clocks it out of the **RMT peripheral** in
+hardware — deliberately, because the primary runs WiFi and FreeRTOS would stretch
+a bit-banged pulse. The fob's address is a constructor argument (`0b01011110` for
+the Rockler remote measured on 2026-09-16), not a DIP setting, precisely because
+a different remote is a different address. Those three parts were the ORIGINAL
+bench rig that proved the encoding before the RMT reimplementation existed; they
+are historical and buying them now would be buying a chip to do what the ESP32
+already does better. Characterising a NEW remote means sweeping with the
+transmitter, not fitting an encoder.
 
 **RF and servo-on-fob are alternatives, not both.** RF is proven on the bench
 and is the only route for a collector with no fob; the servo is what ships,
@@ -100,6 +108,7 @@ Recorded so nobody re-buys something that was reasoned away.
 | **PC817 optocoupler breakout** | See §4. Measured 4 V out, above the C5's absolute maximum |
 | **SCT-013-100** (100 A clamp) | Rejected 2026-09-13. It would spend the only margin that matters — 25 mV vs 83 mV for a small 240 V tool — to buy headroom during inrush, when nothing is measuring anyway |
 | **TMC2209, stepper, 24 V supply** | Stepper deleted 2026-08-28. The ST3215 owes it nothing but the `MotorDriver` contract |
+| **HT12E encoder, 8-way DIP switch, 1.0 MΩ Rosc** | The firmware IS the encoder — `RfCollectorPresser` clocks the frame out of RMT in hardware, with the address as a constructor argument. These were the bench rig that proved the protocol; `WIRING.md` §10 still describes that rig because it is how the numbers were derived, not because a board needs one |
 | **Panel-side CTs** | Need an electrician and void insurance. An install step the owner cannot perform is not a cheaper option, it is a different product |
 | **Shelly Plus Plug US on a collector** | A 16 A relay met 45–50 A of inrush and tripped, 2026-09-03. Nothing in the control path carries motor current now |
 
