@@ -65,8 +65,10 @@
 //
 // So the sweep starts on either of:
 //   * the first SET that needs a datum (the primary routing a tool here), or
-//   * the wake button held for a second, which is the deliberate "home yourself
-//     now" gesture at the board itself (see wakebutton::setHoldAction).
+//   * (REMOVED 2026-09-17) the wake button held for a second. A gesture nobody
+//     knew about, that moved a carriage the length of a rail. Its one real job —
+//     clearing HOME_FAILED, which nothing else did — moved to the SET path, so a
+//     failed sweep is retried when a gate is actually asked for.
 //
 // The cost, stated plainly: the FIRST gate selection after a reboot pays for a
 // full sweep before the gate moves, which is seconds, not milliseconds. That is
@@ -120,6 +122,39 @@
 
 static AsyncWebServer server(API_PORT);
 static AsyncWebSocket nodeWs("/nodelink");
+
+// ONE PRIMARY, SO ONE CLIENT SLOT'S WORTH OF PATIENCE — capped 2026-09-18.
+//
+// A node belongs to exactly one primary (the claim, below), so it has no use for
+// the library's default client pool. Leaving it at the default is what turned a
+// misbehaving client into an unrecoverable board: the primary's reconnect had no
+// backoff and arrived once a second, ESPAsyncWebServer does not reap dead clients
+// on its own, and once the pool filled the node RESET every incoming connection
+// — errno 104 at the other end — while still answering mDNS and HTTP perfectly.
+// Only power-cycling the NODE cleared it, because the primary was the thing
+// filling it.
+//
+// The primary's backoff (control/RemoteActuatorBus.cpp) is the real fix. This is
+// the defensive half: a node should survive ANY client that reconnects too fast,
+// including a laptop with a WebSocket console open, not just our own.
+//
+// ⚠️ NOT USED AS A CLEANUP LIMIT — and the reason is worth keeping.
+//
+// The first version of this passed the cap to cleanupClients(), which was a bug
+// I nearly shipped. That function closes the OLDEST client when the count
+// exceeds the limit, and during an ordinary reconnect a node briefly holds two:
+// the dead socket not yet reaped, and the new one. At a cap of 2 a third arrival
+// evicts the oldest — which can be the ESTABLISHED LINK. Tightening the pool to
+// stop disconnects would have caused them.
+//
+// The library default (8) has the slack this needs, and the real fix is on the
+// other side anyway: the primary now backs off instead of reconnecting once a
+// second (control/RemoteActuatorBus.cpp, _backoff), so the pool never fills.
+//
+// Kept as the threshold for the WARNING below, which costs nothing and names the
+// condition if it ever recurs: a node has ONE primary, so more than a couple of
+// sockets on /nodelink means something is reconnecting in a loop.
+static const size_t kMaxLinkClients = 2;
 
 #if HAS_SERVO
 static ServoActuator servos[SERVO_COUNT];
@@ -504,6 +539,15 @@ static void onNodeWsEvent(AsyncWebSocket*, AsyncWebSocketClient* client,
         Serial.print(client->id());
         Serial.print(F(" from ")); Serial.print(client->remoteIP());
         Serial.print(F(", ")); Serial.print(nodeWs.count()); Serial.println(F(" open"));
+        // LOUD WHEN THE POOL IS CROWDED. A node at its limit refuses connections
+        // at the TCP layer, which is invisible here and reads as a network fault
+        // from the other end. If this line ever appears, something is
+        // reconnecting far faster than it should — see kMaxLinkClients.
+        if (nodeWs.count() > kMaxLinkClients) {
+            Serial.print(F("[NODE] ⚠ too many link clients ("));
+            Serial.print(nodeWs.count());
+            Serial.println(F(") — something is reconnecting in a loop."));
+        }
         g_linkedClientId = client->id();
         g_primaryLinked  = true;
         return;
@@ -869,30 +913,20 @@ void setup() {
     servoselftest::begin(servos, SERVO_COUNT);
 #endif
 #if HAS_LINEAR
-    // A slider has no servo bank to sweep, so the hold means "home yourself now"
-    // — the deliberate, at-the-board half of the on-demand rule at the top of
-    // this file. It only ASKS: loop() owns the sweep, and a hold while one is
-    // already running or finished is a no-op rather than a restart.
-    wakebutton::setHoldAction([]() {
-        if (g_homing == HOME_DONE || g_homing == HOME_RUNNING) {
-            Serial.println(F("[HOME] button held — already homed or homing; ignored."));
-            return;
-        }
-        // A HOLD CLEARS A FAILED HOME, and this is the only thing that does.
-        // The automatic retry deliberately no longer does (see
-        // retryDriveIfNeeded), so without this a node that failed its sweep
-        // could not be re-homed without a power cycle — loop() only starts a
-        // sweep from HOME_NEEDED. Someone holding the button at the board IS
-        // the person the fault was waiting for, and the sweep re-reads the
-        // endstops from scratch, so if they have fixed the wiring it now works
-        // and if they have not it fails the same way and says so again.
-        if (g_homing == HOME_FAILED) {
-            Serial.println(F("[HOME] button held — clearing the earlier failure and trying again."));
-            g_homing = HOME_NEEDED;
-        }
-        g_homeAsked = true;
-        Serial.println(F("[HOME] button held — homing on request."));
-    });
+    // NO HOLD ACTION ON A SLIDER, as of 2026-09-17 (jeff: "we can ditch that long
+    // press to calibrate sliders, I didn't even realise that was there").
+    //
+    // A gesture nobody knows about is not a feature, and this one moved a
+    // CARRIAGE the length of a rail. The on-demand rule at the top of this file
+    // is unchanged and is the path that actually gets used: the first SET that
+    // needs a datum asks for the sweep.
+    //
+    // ITS ONE REAL JOB HAS MOVED RATHER THAN GONE. The hold was the only thing
+    // that cleared HOME_FAILED, so without a replacement a node that failed its
+    // sweep could not be re-homed without a power cycle. A SET now clears it —
+    // see the HOME_FAILED branch in the move handler. That is a better trigger
+    // anyway: it retries when someone actually asks for a gate, instead of
+    // requiring a person to be standing at the board.
 #endif
 
     Serial.println(F("=== DustGate node (secondary) ==="));
@@ -1075,6 +1109,8 @@ void loop() {
     // second forever (kReconnectMinMs), so a node left running beside a failing
     // link burns through client slots fast, and the symptom is the confusing one:
     // a node that answers a laptop fine while refusing the primary indefinitely.
+    // BARE, i.e. the library default of 8 — see kMaxLinkClients for why passing a
+    // tight limit here is a trap rather than a safeguard.
     nodeWs.cleanupClients();
 
     // Status pixel — the node's only UI. Derived fresh each loop rather than
@@ -1145,11 +1181,24 @@ void loop() {
                 Serial.println(F("mm"));
                 commanded = true;
             } else if (g_homing == HOME_FAILED) {
-                // Nothing to defer it to. Say so every time rather than dropping
-                // it silently: a gate that never moves and never complains is
-                // the worst thing this node could do.
-                Serial.print(F("[MOVE] REFUSED — no datum (homing failed). "));
-                Serial.print(cmd.positionMm, 1); Serial.println(F("mm discarded."));
+                // A SET CLEARS A FAILED HOME AND TRIES AGAIN — this took over from
+                // the wake-button hold on 2026-09-17, and it is the better
+                // trigger: it retries when someone actually asks for a gate,
+                // rather than requiring a person at the board. The sweep re-reads
+                // the endstops from scratch, so if the wiring has been fixed it
+                // now works, and if it has not it fails the same way and says so.
+                //
+                // Still LOUD, for the reason the old refusal was: a gate that
+                // never moves and never complains is the worst thing this node
+                // could do. The difference is that this one is trying.
+                Serial.print(F("[MOVE] no datum (homing failed) — retrying the sweep for "));
+                Serial.print(cmd.positionMm, 1); Serial.println(F("mm"));
+                g_homing = HOME_NEEDED;
+                g_homeAsked    = true;
+                g_deferredMove = true;
+                g_deferredMm   = cmd.positionMm;
+                topo::nodelink::strlcpy_(g_deferredSel,   cmd.selectorId, sizeof(g_deferredSel));
+                topo::nodelink::strlcpy_(g_deferredState, cmd.stateId,    sizeof(g_deferredState));
             } else {
                 // HOME_NEEDED or HOME_RUNNING. Either way the move is held until
                 // there is a datum to measure it from; the difference is that

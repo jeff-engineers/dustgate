@@ -32,7 +32,7 @@ export { BOARD_H, BOARD_W };
  *
  *  THREE since 2026-09-16, down from four: one unified pin map puts the 315 MHz
  *  transmitter on D10, so D7/D8/D9 are all the PWM channels a board has. */
-export const SERVO_PORTS = 3;
+export const SERVO_PORTS = 2;
 export const PORT_PITCH = 18;
 export const PORT_W = 12;
 export const PORT_H = 7;
@@ -80,7 +80,7 @@ export interface Cell { col: number; row: number; }
 export function portPos(c: Pt, ch: number, linear = false): Pt {
   // One port, and it belongs in the middle of the board.
   if (linear) return { x: c.x, y: c.y + PORT_DY };
-  const first = -((SERVO_PORTS - 1) * PORT_PITCH) / 2;     // centre the 4-port strip
+  const first = -((SERVO_PORTS - 1) * PORT_PITCH) / 2;     // centre the port strip
   return { x: c.x + first + ch * PORT_PITCH, y: c.y + PORT_DY };
 }
 export function portWidth(ch: number): number { return ch >= SERVO_PORTS ? STEPPER_W : PORT_W; }

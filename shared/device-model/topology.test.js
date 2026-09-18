@@ -108,14 +108,16 @@ check('validate twoGates ok', validateTopology(twoGates).ok, JSON.stringify(vali
     }
     return t;
   };
-  // THREE since 2026-09-16, matching SERVO_COUNT in firmware/config.h. The
-  // budget dropped when the transmitter moved to D10 so one pin map could serve
-  // every PWM board — see MAX_SERVOS_PER_HOST in topology.js. Asserted literally
-  // on both sides so a one-sided edit fails here rather than on a bench.
-  check('3 servos on one host → valid (at budget)', validateTopology(buildHost(3, 0)).ok,
-        JSON.stringify(validateTopology(buildHost(3, 0)).errors));
-  const r4 = validateTopology(buildHost(4, 0));
-  check('4 servos on one host → invalid (controller)', !r4.ok && hasCode(r4, 'controller') && hasMsg(r4, 'max 3'));
+  // TWO since 2026-09-17, matching SERVO_COUNT in firmware/config.h. It was four,
+  // then three when the transmitter moved to D10 so one pin map could serve every
+  // PWM board, and now two: the third channel was the fob servo's OFF arm, was
+  // never built, and D9 was worth more as a second button. See
+  // MAX_SERVOS_PER_HOST in topology.js. Asserted literally on both sides so a
+  // one-sided edit fails here rather than on a bench.
+  check('2 servos on one host → valid (at budget)', validateTopology(buildHost(2, 0)).ok,
+        JSON.stringify(validateTopology(buildHost(2, 0)).errors));
+  const r4 = validateTopology(buildHost(3, 0));
+  check('3 servos on one host → invalid (controller)', !r4.ok && hasCode(r4, 'controller') && hasMsg(r4, 'max 2'));
   check('1 linear on one host → valid (at budget)', validateTopology(buildHost(0, 1)).ok);
   const r2 = validateTopology(buildHost(0, 2));
   check('2 linears on one host → invalid (controller)', !r2.ok && hasCode(r2, 'controller') && hasMsg(r2, 'max 1'));
@@ -124,8 +126,8 @@ check('validate twoGates ok', validateTopology(twoGates).ok, JSON.stringify(vali
   // They are alternatives: a board is flashed to drive the PWM bank or the serial
   // bus, the pads overlap, and config.h #errors on a map that claims both. The
   // old reading is what put a fifth port on every board in the configurator.
-  const rMix = validateTopology(buildHost(3, 1));
-  check('3 servos + 1 linear on one host → invalid (controller)',
+  const rMix = validateTopology(buildHost(2, 1));
+  check('2 servos + 1 linear on one host → invalid (controller)',
         !rMix.ok && hasCode(rMix, 'controller') && hasMsg(rMix, 'one board does one or the other'));
   const rMix1 = validateTopology(buildHost(1, 1));
   check('even 1 servo + 1 linear → invalid (it is not about count)',
@@ -220,8 +222,8 @@ check('validate twoGates ok', validateTopology(twoGates).ok, JSON.stringify(vali
   }
 
   check('drives defaults to servo when absent',
-        validateTopology(buildHost(3, 0)).ok);
-  const rBadDrives = buildHost(3, 0);
+        validateTopology(buildHost(2, 0)).ok);
+  const rBadDrives = buildHost(2, 0);
   rBadDrives.controllers[0].drives = 'nonsense';
   check('bad drives value → invalid (controller)',
         !validateTopology(rBadDrives).ok && hasCode(validateTopology(rBadDrives), 'controller'));
