@@ -125,6 +125,24 @@ struct Facts {
     const char* selfTestRefused = nullptr;  // why it wouldn't start, if it didn't
 
     // -- faults ---------------------------------------------------------------
+    // WHY the stored layout was refused, when it was. Shown verbatim: the
+    // validator's message names the element, and a person standing at the board
+    // with no serial cable has no other way to find out. Null when the layout
+    // adopted, or when there is none.
+    const char* layoutError = nullptr;
+    // A SUBSYSTEM THAT FAILED AT STARTUP AND WILL NOT RECOVER ON ITS OWN.
+    //
+    // Added 2026-09-17 after an audit asked the obvious question: which failures
+    // can a person standing at this board actually SEE? The begin() stages were
+    // recorded in g_faultMotor / g_faultEndstops, weighed by FaultPolicy, used to
+    // refuse motion — and then shown as the word "FAULT" with no reason, on a
+    // screen that had room to say which one. Everything else lived on a serial
+    // cable nobody has attached in a shop.
+    //
+    // Deliberately ONE string and not a set of booleans: the screen has 21
+    // columns, the first failure is usually the cause of the rest, and a person
+    // needs a next action rather than an inventory.
+    const char* bootFault = nullptr;
     const char* darkNode  = nullptr;  // a board that stopped answering
     int  darkForSec = -1;
     const char* ssid      = nullptr;  // the network being looked for. Half of
@@ -286,6 +304,7 @@ inline const char* stateWord(const Facts& f) {
         case statusled::BOOTING: return "STARTING";
         case statusled::PORTAL:  return "JOIN WIFI";
         case statusled::NO_WIFI: return "NO WIFI";
+        case statusled::LAYOUT_BAD: return "BAD LAYOUT";
         case statusled::ONLINE:
             // A node on WiFi with no brain is UNLINKED. A primary shows blue for
             // two different reasons and they are not the same news: no topology
@@ -380,6 +399,29 @@ inline Screen _renderBody(const Facts& f) {
     if (f.selfTestRefused) {
         _add(s, "servo self-test");
         _add(s, f.selfTestRefused);
+        return s;
+    }
+
+    // A REFUSED LAYOUT OUTRANKS EVERYTHING BELOW, and returns early like the
+    // self-test refusal above. Nothing else on this screen matters while the
+    // shop cannot route: gate counts, the running tool and the collector are all
+    // reported from a document the board has thrown away.
+    //
+    // The validator's own message is shown verbatim rather than summarised — it
+    // names the element, and the whole point of putting this on glass is that
+    // someone at the board has no serial cable to read it from.
+    if (f.layoutError) {
+        _add(s, "layout refused:");
+        _add(s, f.layoutError);
+        return s;
+    }
+
+    // A STARTUP FAILURE OUTRANKS THE LAYOUT, because a board whose drive did not
+    // come up cannot act on a perfectly good one. Same early return: nothing
+    // below is trustworthy while a subsystem is missing.
+    if (f.bootFault) {
+        _add(s, "startup fault:");
+        _add(s, f.bootFault);
         return s;
     }
 

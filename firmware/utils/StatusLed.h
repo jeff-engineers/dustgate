@@ -209,6 +209,14 @@ inline void update() {
             _raw(w, w, w);
             break;
         }
+        case LAYOUT_BAD: {
+            // Blue, blinking. Same family as ONLINE because the board is fine
+            // and on the network; blinking because, unlike ONLINE, this will
+            // never clear on its own — someone has to fix the layout.
+            const uint8_t b = (now / 400) % 2 ? kBright : 0;
+            _raw(0, 0, b);
+            break;
+        }
         case ONLINE:   _raw(0, 0, kBright); break;                     // blue
         case READY:    _raw(0, kBright, 0); break;                     // green
     }
@@ -241,6 +249,7 @@ inline void update() {
                 case FAULT:   on = (now / 100) % 2;     break;  // rapid = bad
                 case PORTAL:  on = (now / 400) % 2;     break;
                 case NO_WIFI: on = (now / 700) % 2;     break;
+                case LAYOUT_BAD: on = (now / 400) % 2;  break;
                 case BOOTING: on = false;               break;
                 case ONLINE:  on = (now / 1500) % 2;    break;  // slow heartbeat
                 case READY:   on = true;                break;

@@ -166,11 +166,30 @@ inline void update() {
     if (raw == LOW) {                 // pressed
         _pressedAt() = now;
         _longFired() = false;
+        // LOGGED BECAUSE "the button doesn't work" IS THREE DIFFERENT BUGS and
+        // they are indistinguishable from the outside: the pin never reads LOW
+        // (wiring, or the wrong pad), the press is seen but the screen is not
+        // present so toggle() returns immediately, or the panel is present and
+        // the draw is the thing failing. One press now says which.
+        Serial.println(F("[BTN] pressed"));
         return;                       // the short action waits for the release
     }
 
     // released
-    if (!_longFired()) statusscreen::toggle();
+    if (!_longFired()) {
+        Serial.print(F("[BTN] released — screen "));
+        if (!statusscreen::present()) {
+            // The case that looks exactly like a dead button: the press is read
+            // perfectly and there is nothing to toggle.
+            Serial.println(F("NOT PRESENT, nothing to toggle"));
+        } else {
+            Serial.println(statusscreen::lit() ? F("lit -> blanking")
+                                               : F("dark -> waking"));
+        }
+        statusscreen::toggle();
+    } else {
+        Serial.println(F("[BTN] released after a hold — short action skipped"));
+    }
 }
 
 /**
