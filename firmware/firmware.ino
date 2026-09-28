@@ -3158,12 +3158,23 @@ void loop() {
             //
             // An empty controllerId still means THIS BOARD — busForController()
             // has said so all along, which is why the primary branch went too.
+            //
+            // EVERY branch answers the request (respondServoJog), and in words for
+            // the person at the valve — the three failures here have three
+            // different fixes, which a bare "failed" would hide.
             topo::ActuatorBus* bus = g_nodeBus.busForController(jogCtrl.c_str());
+            const String who = jogCtrl.length() ? ("'" + jogCtrl + "'") : String("this board");
             if (!bus) {
                 DEBUG_PRINT(F("[UI] Jog for unknown controller: ")); DEBUG_PRINTLN(jogCtrl);
+                apiServer.respondServoJog((who + " isn't paired with this shop — add it on the Boards page").c_str());
+            } else if (!bus->online()) {
+                DEBUG_PRINT(F("[UI] Jog for a board that isn't answering: ")); DEBUG_PRINTLN(who);
+                apiServer.respondServoJog((who + " isn't answering — check it's powered and on WiFi").c_str());
             } else if (!bus->jog(jogCh, jogAngle, jogDetach)) {
-                DEBUG_PRINT(F("[UI] Jog refused by "));
-                DEBUG_PRINTLN(jogCtrl.length() ? jogCtrl : String("this board"));
+                DEBUG_PRINT(F("[UI] Jog refused by ")); DEBUG_PRINTLN(who);
+                apiServer.respondServoJog((who + " refused the move — check the gate's channel").c_str());
+            } else {
+                apiServer.respondServoJog(nullptr);
             }
         }
     }

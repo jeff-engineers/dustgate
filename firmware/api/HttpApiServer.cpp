@@ -596,6 +596,14 @@ void HttpApiServer::respondNodeDiscover(const String& json) {
     finishDeferred(_nodeDiscoverReply, json);
 }
 
+void HttpApiServer::respondServoJog(const char* error) {
+    if (!error || !*error) { finishDeferred(_servoJogReply, String(F("{\"ok\":true}"))); return; }
+    StaticJsonDocument<256> doc;
+    doc["error"] = error;
+    String s; serializeJson(doc, s);
+    finishDeferred(_servoJogReply, s);
+}
+
 bool HttpApiServer::consumeToolManualRequest(String& outToolId, bool& outOn) {
     xSemaphoreTake(_mutex, portMAX_DELAY);
     bool v = _toolManualPending;
@@ -1271,6 +1279,15 @@ void HttpApiServer::registerRoutes() {
     //
     // Deliberately NOT guarded by "is the collector off" — the whole point is to move a
     // gate while nothing is running. Whoever is calling this is standing at the valve.
+    //
+    // ANSWERED ONLY ONCE THE MAIN LOOP HAS TRIED IT (a Deferred reply), with
+    // {"ok":true} or {"error":"<reason>"}. It used to say `ok` right here, before
+    // anything was attempted — so an unpaired board, a node that isn't answering
+    // and a refused channel all read as a gate that moved, and the configurator's
+    // "Couldn't reach the gate" could never fire for any of them. Which board a
+    // controllerId means is a question only the main loop can answer (NodeBus is
+    // main-loop-owned), hence deferred rather than decided here. Validation that
+    // needs no board — JSON, ranges — is still refused immediately, as HTTP 4xx.
     // ------------------------------------------------------------------
     _server.on("/api/servo/jog", HTTP_POST,
         [](AsyncWebServerRequest* req) {},
@@ -1314,11 +1331,20 @@ void HttpApiServer::registerRoutes() {
             DEBUG_PRINTLN();
 
             xSemaphoreTake(_mutex, portMAX_DELAY);
+            // One jog in flight. The configurator waits for each answer before
+            // sending the next, so a second one arriving means another client —
+            // and replacing the first would leave its request answered with the
+            // second's result.
+            if (_servoJogPending || _servoJogReply.busy()) {
+                xSemaphoreGive(_mutex);
+                sendError(req, 429, "a jog is already in flight");
+                return;
+            }
             _servoJogPending = true;
             _servoJogChannel = ch; _servoJogAngle = angle; _servoJogDetach = detach;
             _servoJogController = controller;
             xSemaphoreGive(_mutex);
-            sendOk(req);
+            beginDeferred(req, _servoJogReply);
         }
     );
 
