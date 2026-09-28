@@ -509,7 +509,9 @@
      denominator is an implementation detail (that we knock on every address on
      the subnet), and showing it invites the question "254 what?" at the exact
      moment the answer does not matter. -->
-<div class="sweep" *ngIf="showTray && (sweepRunning || sweepEverRan)">
+<!-- Shown whenever the tray is, not only once a sweep has run: the sweep no
+     longer starts by itself (see scanOutlets()), so this button is the way in. -->
+<div class="sweep" *ngIf="showTray">
   <ng-container *ngIf="sweepRunning; else sweepDone">
     <div class="bar"><i [style.width.%]="(sweepScanned / sweepTotal) * 100"></i></div>
     <span class="lbl">Looking for plugs… {{ sweepPct() }}%</span>
@@ -517,8 +519,8 @@
   </ng-container>
   <ng-template #sweepDone>
     <span class="lbl">{{ sweepAge() }}</span>
-    <button class="act" (click)="startSweep()" title="Knock on every address again — about a minute">
-      Look for new
+    <button class="act" (click)="startSweep()" title="Knock on every address on the network — about a minute">
+      {{ sweepEverRan ? 'Look for new' : 'Look for Tasmota plugs' }}
     </button>
   </ng-template>
 </div>
