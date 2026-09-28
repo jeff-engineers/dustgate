@@ -375,6 +375,48 @@ const idxOf = (plan, sel) => plan.moves.findIndex((m) => m.selectorId === sel);
   check('seq linear move: only the linear moves', p.moves.length === 1);
 }
 
+// ── sequencer: RE-ASSERT on a machine switching on (2026-09-28) ─────────────
+// PAIR: test_topology_controller.cpp's "re-assert" block — same cases, same order.
+{
+  // We believe both gates are where routing wants them — gate2 closed — but a
+  // person opened gate2 by hand. Without re-assert, nothing is sent.
+  const cur = { gate1: 'open', gate2: 'closed' }, want = { gate1: 'open', gate2: 'closed' };
+  eq('reassert: without it, a believed-closed gate gets no move', planTransition(twoGates, cur, want).moves, []);
+
+  const p = planTransition(twoGates, cur, want, { reassert: ['gate1', 'gate2'] });
+  check('reassert: both gates are commanded anyway', p.moves.length === 2);
+  eq('reassert: the open is a make', phaseOf(p, 'gate1'), 'make');
+  eq('reassert: the close is a break', phaseOf(p, 'gate2'), 'break');
+  check('reassert: still make-before-break', idxOf(p, 'gate1') < idxOf(p, 'gate2'));
+
+  // Only the named selectors, and never a slider — it cannot be turned by hand.
+  const one = planTransition(twoGates, cur, want, { reassert: ['gate2'] });
+  check('reassert: only the named selectors', one.moves.length === 1 && one.moves[0].selectorId === 'gate2');
+  const lin = planTransition(feedChain, { lin: 's1', man: 'closed' }, { lin: 's1', man: 'closed' },
+                             { reassert: ['lin', 'man'] });
+  check('reassert: a slider is never re-sent', lin.moves.every((m) => m.selectorId !== 'lin'));
+}
+
+// ── device sim: a machine SWITCHING ON re-asserts every gate (2026-09-28) ────
+// The scenario that asked for it: X runs, stops (idle HOLDS the gates), someone
+// opens gate2 by hand, X starts again. The routing decision is identical to last
+// time, so only the rising edge can catch the hand-opened gate.
+{
+  const d = createTopologyDevice(clone(twoGates));
+  setToolPower(d, 'toolX', 10);
+  setToolPower(d, 'toolX', 0);                 // idle: gates held where they are
+  const again = setToolPower(d, 'toolX', 10);  // X on again — gate2 "believed" closed
+  const moves = again.plans.flatMap((p) => p.moves);
+  check('dev reassert: X switching on re-sends gate2 closed',
+    moves.some((m) => m.selectorId === 'gate2' && m.toState === 'closed' && m.phase === 'break'));
+  check('dev reassert: and re-sends its own gate1 open, as a make first',
+    moves.findIndex((m) => m.selectorId === 'gate1') < moves.findIndex((m) => m.selectorId === 'gate2'));
+
+  // An ordinary reading while X keeps running is NOT an edge: nothing moves.
+  const tick = setToolPower(d, 'toolX', 11);
+  eq('dev reassert: a repeat reading moves nothing', tick.plans.flatMap((p) => p.moves), []);
+}
+
 // ── device sim: tool power → routing → actuators + collector ────────────────
 {
   const d = createTopologyDevice(clone(twoGates));

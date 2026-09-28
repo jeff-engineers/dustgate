@@ -452,7 +452,8 @@ inline std::vector<SystemPlan> planShopTransition(
     JsonObjectConst doc,
     const std::map<std::string, std::string>& currentStates,
     const std::map<std::string, std::string>& desiredStates,
-    const std::map<std::string, bool>& collectorRunning) {
+    const std::map<std::string, bool>& collectorRunning,
+    const std::set<std::string>* reassert = nullptr) {   // see planTransition()
   std::vector<SystemPlan> out;
   for (const SystemView& sys : systemsOf(doc)) {
     const std::string sysId = sys.id ? sys.id : "";
@@ -473,7 +474,8 @@ inline std::vector<SystemPlan> planShopTransition(
 
     auto rit = collectorRunning.find(sysId);
     TransitionPlan plan = planTransition(sys, cur, des,
-                                         rit != collectorRunning.end() && rit->second);
+                                         rit != collectorRunning.end() && rit->second,
+                                         reassert);
     // Reported even with NO moves when the blower is at risk — an empty plan is
     // exactly how a system arrives at "everything shut while the fan runs".
     if (!plan.moves.empty() || plan.deadHeadRisk)

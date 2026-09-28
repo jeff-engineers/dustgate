@@ -45,8 +45,10 @@
 //   and its gates HELD, so no path can close underneath a coasting blower.
 //   OFF from dead-head risk is IMMEDIATE and cancels any coast — that off is a
 //   safety stop, not an idle.
-//   ON is deferred until that system's moves have drained, so a blower only ever
-//   starts against an already-open path. A tool starting mid-coast just keeps it
+//   ON is deferred until that system's OPENING moves have drained, so a blower
+//   only ever starts against an already-open path. (Until 2026-09-28 it waited
+//   for every queued move; a switch-on now re-closes every gate — see
+//   markReassert — and the closes cannot seal a path that is already open.) A tool starting mid-coast just keeps it
 //   on. A failed MAKE in that system also holds it off: if the gate that was
 //   supposed to open didn't (dead node, uncalibrated servo), running the blower
 //   would pull against a closed system. A failed break only leaks suction, so it
@@ -217,6 +219,8 @@ public:
         // the brain does (every selector at its closed state) so the two agree.
         _hwStates = _ctrl.actuatorStates();
         _inFlightSystem.clear();
+        _inFlightIsMake = false;
+        _reassert.clear();
         _collectors.clear();
         for (const SystemView& sys : systemsOf(topology()))
             // Value-initialised rather than listed positionally. The struct
@@ -240,6 +244,8 @@ public:
         _hwStates.clear();
         _collectors.clear();
         _inFlightSystem.clear();
+        _inFlightIsMake = false;
+        _reassert.clear();
         _loaded = false;
     }
 
@@ -425,32 +431,44 @@ public:
             }
         }
 
-        if (_bus->busy()) return;          // a move is still in flight
-        _inFlightSystem.clear();
-
-        if (!_queue.empty()) {
-            QueuedMove q = _queue.front();
-            _queue.pop_front();
-            const Move& m = q.move;
-            JsonObjectConst sel = selectorById(m.selectorId);
-            if (sel.isNull()) {
-                _failed.push_back({q.systemId, m.selectorId, m.toState, "unknown selector", m.isBreak});
-            } else if (!_bus->onlineFor(sel)) {
-                _failed.push_back({q.systemId, m.selectorId, m.toState, "controller offline", m.isBreak});
-            } else if (!_bus->setState(m.selectorId.c_str(), sel, m.toState.c_str())) {
-                _failed.push_back({q.systemId, m.selectorId, m.toState, "actuator rejected move", m.isBreak});
-            } else {
-                _hwStates[m.selectorId] = m.toState;   // commanded → hardware truth
-                _inFlightSystem = q.systemId;
+        // At most one move per pass, and never while the bus is busy — that IS
+        // the current mutex.
+        if (!_bus->busy()) {
+            _inFlightSystem.clear();
+            _inFlightIsMake = false;
+            if (!_queue.empty()) {
+                QueuedMove q = _queue.front();
+                _queue.pop_front();
+                const Move& m = q.move;
+                // Issued (or failed) — either way it is no longer owed. A failed
+                // re-assert is recorded like any failed move, not retried forever.
+                _reassert.erase(m.selectorId);
+                JsonObjectConst sel = selectorById(m.selectorId);
+                if (sel.isNull()) {
+                    _failed.push_back({q.systemId, m.selectorId, m.toState, "unknown selector", m.isBreak});
+                } else if (!_bus->onlineFor(sel)) {
+                    _failed.push_back({q.systemId, m.selectorId, m.toState, "controller offline", m.isBreak});
+                } else if (!_bus->setState(m.selectorId.c_str(), sel, m.toState.c_str())) {
+                    _failed.push_back({q.systemId, m.selectorId, m.toState, "actuator rejected move", m.isBreak});
+                } else {
+                    _hwStates[m.selectorId] = m.toState;   // commanded → hardware truth
+                    _inFlightSystem = q.systemId;
+                    _inFlightIsMake = !m.isBreak;
+                }
             }
-            return;                         // one move per pass, busy() gates the next
         }
 
-        // Nothing queued and nothing moving — safe to start any blower the brain
-        // wants that isn't blocked. Checked per system: a 2.5" system with a
-        // pending move must not hold the 4" blower shut, and vice versa.
+        // START A BLOWER ONCE ITS SYSTEM'S OPENS HAVE LANDED — not once the whole
+        // queue is empty (changed 2026-09-28). The make is what guarantees air has
+        // somewhere to go; a break still queued only closes some OTHER gate, and
+        // cannot seal a path that is already open (make-before-break). Waiting for
+        // every break was harmless while a switch-on moved one or two gates, but a
+        // switch-on now re-asserts every servo gate in the system, and holding the
+        // blower off while five gates re-close one at a time would leave the tool
+        // cutting without extraction for no reason. Checked per system, as before.
         for (auto& kv : _collectors) {
             CollectorState& c = kv.second;
+            if (makePending(kv.first)) continue;
             if (!c.desired || c.deadHeadRisk || anyMakeFailed(kv.first)) continue;
             // A blower started BY HAND has no routing plan behind it to guarantee
             // an open path, so the guarantee is checked here instead, at the
@@ -731,6 +749,8 @@ private:
     void ingest(const ReconcileResult& r) {
         _failed.clear();
         _queue.clear();
+        // A machine SWITCHING ON re-asserts every servo gate in its systems.
+        for (const std::string& mid : r.switchedOn) markReassert(mid);
 
         // What each blower is doing RIGHT NOW, which is what the dead-head
         // question is asked against.
@@ -738,7 +758,7 @@ private:
         for (auto& kv : _collectors) running[kv.first] = kv.second.running;
 
         std::vector<SystemPlan> plans =
-            planShopTransition(topology(), _hwStates, r.routing.states, running);
+            planShopTransition(topology(), _hwStates, r.routing.states, running, &_reassert);
 
         for (auto& kv : _collectors) {
             const std::string& sysId = kv.first;
@@ -783,6 +803,10 @@ private:
                 // "all closed", which is the one destination that can dead-head).
                 // Its moves are simply not queued — see the queue rebuild below.
                 c.deadHeadRisk = plan && plan->deadHeadRisk;
+                // Idle HOLDS its gates, so a re-assert still pending here is
+                // dropped with the rest of its moves — the next switch-on marks
+                // them again.
+                forgetReassert(sysId);
                 // Coast rather than cut. Only from a RUNNING blower: if it was
                 // already off there's nothing to coast, and starting a timer would
                 // just delay the next honest decision.
@@ -808,6 +832,40 @@ private:
             // held, which is what makes coasting safe.
             if (plan)
                 for (const Move& m : plan->moves) _queue.push_back(QueuedMove{sysId, m});
+        }
+    }
+
+    // Is an OPENING move for this system still queued or moving? The collector
+    // waits for these, and only these — see update().
+    bool makePending(const std::string& systemId) const {
+        if (_inFlightIsMake && _inFlightSystem == systemId) return true;
+        for (const QueuedMove& q : _queue)
+            if (q.systemId == systemId && !q.move.isBreak) return true;
+        return false;
+    }
+
+    // Every servo selector in the systems this machine feeds, marked to be
+    // commanded on the next plan whether or not we believe it is already right.
+    // Mirrors reassertFor() in topology-device.js. Sliders are skipped later, by
+    // planTransition, so this can stay "every selector".
+    void markReassert(const std::string& machineId) {
+        auto ports = portsByMachine(topology());
+        auto pit = ports.find(machineId);
+        if (pit == ports.end()) return;
+        std::set<std::string> systems;
+        for (const PortRef& pr : pit->second) if (portEnabled(pr.port)) systems.insert(pr.systemId);
+        for (const SystemView& sys : systemsOf(topology())) {
+            if (!systems.count(sys.id ? sys.id : "")) continue;
+            for (JsonObjectConst e : sys.elements)
+                if (_eq(e["type"], "selector")) _reassert.insert(_str(e["id"]));
+        }
+    }
+
+    void forgetReassert(const std::string& systemId) {
+        for (const SystemView& sys : systemsOf(topology())) {
+            if (systemId != (sys.id ? sys.id : "")) continue;
+            for (JsonObjectConst e : sys.elements)
+                if (_eq(e["type"], "selector")) _reassert.erase(_str(e["id"]));
         }
     }
 
@@ -1104,6 +1162,13 @@ private:
     // Which system owns the move currently in flight ("" = none). Only that
     // system's blower is held back by it.
     std::string                          _inFlightSystem;
+    bool                                 _inFlightIsMake = false;   // an OPEN is moving — see makePending()
+    // Servo selectors to command on the next plan even if we BELIEVE they are
+    // already right — filled on a machine's rising edge (markReassert), emptied
+    // as each one's move is issued. Kept HERE rather than in one plan because
+    // ingest() rebuilds the queue on every poll tick: a re-assert living only in
+    // the plan that made it would be dropped by the next tick before it ran.
+    std::set<std::string>                _reassert;
     bool     _loaded = false;
     uint32_t _nowMs  = 0;
 };

@@ -275,7 +275,7 @@ const activeTools = activeMachines;
  * winners and close the rest (focus suction), collector on.
  * @returns {{routing: object, plan: object}}
  */
-function reconcile(d, nowMs) {
+function reconcile(d, nowMs, reassert = null) {
   const shop = d.topology;
   const active = activeMachines(d);
   const routing = S.routeShop(shop, active);
@@ -296,7 +296,7 @@ function reconcile(d, nowMs) {
   const running = {};
   for (const [sysId, c] of Object.entries(d.collectors)) running[sysId] = c.on;
   const plans = S.planShopTransition(shop, d.actuatorStates, routing.states,
-                                     { collectorRunning: running });
+                                     { collectorRunning: running, reassert: reassert || [] });
 
   for (const sys of S.systemsOf(shop)) {
     const c = d.collectors[sys.id];
@@ -425,7 +425,26 @@ function setMachinePower(d, machineId, watts, nowMs = Date.now()) {
   const nowActive = watts >= th;
   if (nowActive && !wasActive) d.activationSeq[machineId] = ++d.seqCounter; // rising edge → newest
   if (!nowActive) delete d.activationSeq[machineId];
-  return reconcile(d, nowMs);
+  // A machine SWITCHING ON re-asserts every servo gate in its systems — see
+  // reassertFor(). Only on the edge: an ordinary reading changes nothing.
+  return reconcile(d, nowMs, (nowActive && !wasActive) ? reassertFor(d, machineId) : null);
+}
+
+/**
+ * Every servo selector in the systems this machine feeds — the gates to command
+ * on its rising edge whether or not we believe they are already right. Mirrors
+ * TopologyRuntime::markReassert(). Sliders are skipped by planTransition itself.
+ */
+function reassertFor(d, machineId) {
+  const out = new Set();
+  const shop = d.topology;
+  const systems = new Set((S.portsByMachine(shop).get(machineId) || [])
+    .filter(({ port }) => S.portEnabled(port)).map(({ systemId }) => systemId));
+  for (const sys of S.systemsOf(shop)) {
+    if (!systems.has(sys.id)) continue;
+    for (const sel of T.selectorsOf(S.systemView(shop, sys))) out.add(sel.id);
+  }
+  return out;
 }
 const setToolPower = setMachinePower;
 

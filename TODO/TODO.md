@@ -39,24 +39,11 @@ active sections above them, which is how a parked item stops being read.
     channel follow, an hour's delivery count, one deliberate sweep. Keep
     `wifi-ws` as the fallback transport.
 
-- **A tool switching on must close EVERY gate it doesn't need, not just the ones
-  we think are open. (jeff, 2026-09-27.)** Today `planTransition()`
-  (`shared/device-model/sequencer.js`, mirrored in firmware) skips any selector
-  whose BELIEVED state already matches (`if (cur === desired) continue`) and
-  leaves alone any selector the router didn't address. So a gate someone opened
-  by hand is still "closed" as far as we know, is never re-closed, and the
-  collector now pulls through two tools. Servos are open-loop — nothing reads a
-  valve's real position — so belief is all we have, and it must not be trusted
-  for a break.
-
-  Wanted, in order, on every tool-on: (1) MAKE — open the new tool's path, as now;
-  (2) BREAK — then command CLOSED on every other gate in that system, whether or
-  not we believe it already is. Still make-before-break, so never a dead-head. The
-  re-assert costs a servo pulse on a gate that is already shut, which is nothing.
-  Idle still leaves gates where they are (unchanged, CLAUDE.md design constraint).
-  Change `sequencer.js` and its C++ twin together, with the paired tests.
-
-  **And drop the one-servo-at-a-time rule** (`NodeBus::busy()` as the shop-wide
+- **Drop the shop-wide one-servo-at-a-time rule; serialise per BOARD. (jeff,
+  2026-09-27.)** The gate-closing half of this item LANDED 2026-09-28 — see
+  DONE.md; a switch-on now re-closes every servo gate in the system, which makes
+  this half matter more: those closes still run one at a time shop-wide.
+  (`NodeBus::busy()` as the shop-wide
   current mutex, TopologyRuntime.h's move queue). It came from boards driving four
   servos off one supply; a board now drives ONE gate, so the current budget is
   per board and there is nothing shared to protect. **One exception to check

@@ -14,6 +14,34 @@ of this file is being able to answer "did we already decide this, and why".
 
 Newest first.
 
+### Routing — close every gate a tool doesn't need (2026-09-28)
+
+- **A machine switching on re-asserts every servo gate in its system.** LANDED
+  2026-09-28. Asked by jeff: a gate opened by hand stayed "closed" in our books,
+  was never closed again, and the collector pulled through two tools.
+
+  Routing already asked for CLOSED on every off-path gate; the gap was
+  `planTransition()` skipping any gate BELIEVED to be at its target. Servos are
+  open-loop, so belief is all there is. Decisions that are easy to relitigate:
+
+  - **Only on a machine's RISING EDGE**, never per tick — `ingest()` runs every
+    poll, and re-asserting there would move every gate several times a second.
+    Not "when the decision changes" either: tool on → off (idle holds) → hand-open
+    another gate → same tool on again is the SAME decision, and only the edge
+    catches it.
+  - **Servos only.** A slider cannot be turned by hand, and re-sending its stop
+    could start a homing sweep nobody asked for.
+  - **Pending in the runtime (`_reassert`), not in one plan** — the queue is
+    rebuilt every tick, so a re-assert living only in its plan was dropped before
+    it ran. Cleared as each move issues, and for a system that goes idle.
+  - **The blower starts once its system's OPENS have landed**, not once the whole
+    queue is empty. A queued close cannot seal a path that is already open
+    (make-before-break), and waiting for five re-closes one servo at a time would
+    leave the tool cutting without extraction.
+
+  JS `sequencer.js` / `topology-device.js` ↔ C++ `TopologySequencer.h` /
+  `TopologyRuntime.h`; paired cases in topology.test.js ↔ test_topology_controller.cpp.
+
 ### Firmware — control and comms (2026-09-17)
 
 - **A node's firmware is finished — the CT trip numbers were the last thing that
