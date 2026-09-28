@@ -1263,6 +1263,26 @@ void HttpApiServer::registerRoutes() {
     });
 
     // ------------------------------------------------------------------
+    // GET /api/linklog         the link log (utils/LinkLog.h), JSON Lines
+    // GET /api/linklog?old=1   the file it last rotated out
+    //
+    // For a shop running with no laptop on any board: every node link up/down,
+    // WiFi join/drop, rejoin and boot, pulled over WiFi by `bash dev.sh linklog`.
+    // Served straight off LittleFS — the main loop is the only writer and only
+    // ever appends, so a read racing an append sees a shorter file, not a torn one.
+    // ------------------------------------------------------------------
+    _server.on("/api/linklog", HTTP_GET, [this](AsyncWebServerRequest* req) {
+        if (!checkAuth(req)) return;
+        const bool old = req->hasParam("old");
+        const char* path = old ? "/linklog.1.txt" : "/linklog.txt";
+        if (!LittleFS.exists(path)) {
+            sendError(req, 404, old ? "no rotated link log yet" : "no link log yet");
+            return;
+        }
+        req->send(LittleFS, path, "application/x-ndjson");
+    });
+
+    // ------------------------------------------------------------------
     // POST /api/servo/jog  { channel: 0-3, angle: 0-180, controllerId?: "..." }
     //                         { channel: 0-3, detach: true }
     //

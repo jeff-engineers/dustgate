@@ -55,6 +55,10 @@
 #if defined(CONTROL_SMART_OUTLET) || defined(ENABLE_HTTP_API)
   #include "utils/WiFiProvisioner.h"
 #endif
+// The link log — every node link up/down, WiFi join/drop, rejoin and boot, kept on
+// flash so a shop can run for days with no laptop attached. See utils/LinkLog.h.
+#include "utils/LinkLog.h"
+#include "esp_heap_caps.h"   // internal DRAM in the hourly link-log line
 
 // HTTP API server — runs alongside any control mode when ENABLE_HTTP_API is set.
 #ifdef ENABLE_HTTP_API
@@ -772,9 +776,39 @@ static void rejoinWifiIfNetworkBlocksNodes() {
         if (mdnsAlive && hollowAlive) DEBUG_PRINT(F(", "));
         if (hollowAlive) { DEBUG_PRINT(h.hollowDrops); DEBUG_PRINT(F(" hollow connections")); }
         DEBUG_PRINTLN(F(") — the network is likely isolating us."));
+        {
+            char extra[96];
+            snprintf(extra, sizeof(extra), "\"n\":%lu,\"downMs\":%lu,\"mdnsAgeMs\":%ld,\"hollow\":%u",
+                     (unsigned long)rejoins, (unsigned long)h.downForMs,
+                     h.mdnsAgeMs == UINT32_MAX ? -1L : (long)h.mdnsAgeMs, (unsigned)h.hollowDrops);
+            linklog::event("rejoin", g_remoteBuses[i].host(), extra);
+        }
         WiFi.reconnect();
         return;                                    // one rejoin covers every node
     }
+}
+
+// The link log's main-loop half: write what the other tasks queued, and once an
+// hour say "still here" with every node's state — so a quiet stretch in the log
+// reads as a quiet shop, not as a board that stopped writing.
+static void linkLogTick() {
+    linklog::flush();
+    static uint32_t lastHourlyMs = 0;          // first one an hour after boot
+    const uint32_t now = millis();
+    if (now - lastHourlyMs < 3600000UL) return;
+    lastHourlyMs = now;
+    char nodes[120] = "";
+    size_t n = 0;
+    for (int i = 0; i < g_remoteCount && n < sizeof(nodes) - 24; i++) {
+        const topo::RemoteActuatorBus::LinkHealth h = g_remoteBuses[i].health();
+        n += snprintf(nodes + n, sizeof(nodes) - n, "%s%s:%s", i ? " " : "",
+                      g_remoteBuses[i].host(), h.linked ? "up" : "down");
+    }
+    char extra[200];
+    snprintf(extra, sizeof(extra), "\"rssi\":%d,\"bssid\":\"%s\",\"heap\":%u,\"nodes\":\"%s\"",
+             (int)WiFi.RSSI(), WiFi.BSSIDstr().c_str(),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL), nodes);
+    linklog::event("hourly", nullptr, extra);
 }
 
 // Map the topology's controllerIds onto paired hosts. This is ALL a layout now
@@ -1151,8 +1185,28 @@ void setup() {
         f.portalIp = "192.168.4.1";
         statusscreen::update(f);
     });
+    // WiFi joins and drops go in the link log, WITH the access point: on
+    // 2026-09-27 which mesh radio each board was on was the first question every
+    // time, and the answer existed only on a serial cable. Registered before
+    // begin() so the first join is caught; lines queue until the log is ready.
+    WiFi.onEvent([](arduino_event_id_t e, arduino_event_info_t info) {
+        if (e == ARDUINO_EVENT_WIFI_STA_GOT_IP) {
+            char extra[96];
+            snprintf(extra, sizeof(extra), "\"bssid\":\"%s\",\"ch\":%d,\"rssi\":%d",
+                     WiFi.BSSIDstr().c_str(), (int)WiFi.channel(), (int)WiFi.RSSI());
+            linklog::event("wifi_up", nullptr, extra);
+        } else if (e == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) {
+            char extra[40];
+            snprintf(extra, sizeof(extra), "\"reason\":%d",
+                     (int)info.wifi_sta_disconnected.reason);
+            linklog::event("wifi_down", nullptr, extra);
+        }
+    });
     WiFiProvisioner::begin();
     WiFiProvisioner::setPortalTick(nullptr);
+    // Wall-clock time for the link log, if the network lets NTP out. Harmless if
+    // it does not: lines then carry ts:0 and read by boot + uptime instead.
+    configTime(0, 0, "pool.ntp.org", "time.google.com");
 #endif
 
     // Load calibration before feedback system initialises
@@ -1314,6 +1368,8 @@ void setup() {
         DEBUG_PRINT(F("[API] Listening on port 80.  Key: "));
         Serial.println(apiServer.apiKey());
     }
+    // LittleFS is mounted by apiServer.begin() — the log can write from here on.
+    linklog::begin();
 #endif
 
     // -- routing runtime -------------------------------------------
@@ -2206,6 +2262,7 @@ void loop() {
 #if defined(CONTROL_SMART_OUTLET) || defined(ENABLE_HTTP_API)
     WiFiProvisioner::maintain();
     rejoinWifiIfNetworkBlocksNodes();
+    linkLogTick();
 #endif
 
     // Run background processing for control input (HTTP server, etc.)

@@ -185,6 +185,15 @@ backup_topology() {
 
   echo "  (a filesystem flash erases it — reading from $host)"
 
+  # THE LINK LOG LIVES ON THE SAME PARTITION (firmware/utils/LinkLog.h), and a
+  # shop soak is exactly when it matters. Best effort, and saved beside the layout
+  # backups; `python3 tools/linklog-summary.py <file>` summarises a saved copy.
+  mkdir -p "$BACKUP_DIR"
+  local ll="$BACKUP_DIR/linklog-$(date +%Y%m%d-%H%M%S).jsonl"
+  curl -fsS --max-time 20 -H "X-Api-Key: $key" "http://$host/api/linklog?old=1" >  "$ll" 2>/dev/null || true
+  curl -fsS --max-time 20 -H "X-Api-Key: $key" "http://$host/api/linklog"       >> "$ll" 2>/dev/null || true
+  if [[ -s "$ll" ]]; then echo "  ✓ Link log saved → ${ll#$SCRIPT_DIR/}"; else rm -f "$ll"; fi
+
   mkdir -p "$BACKUP_DIR"
   out="$BACKUP_DIR/topology-$(date +%Y%m%d-%H%M%S).json"
   # Ask for the status code separately from the body: 404 is the ORDINARY case
