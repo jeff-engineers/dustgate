@@ -366,6 +366,19 @@ done
 PIO_ENV_ARGS=()
 [[ -n "$PIO_ENV" ]] && PIO_ENV_ARGS=(-e "$PIO_ENV")
 
+# THE PORT GOES ON THE UPLOAD COMMAND, NEVER IN THE ENVIRONMENT (2026-09-28).
+# PlatformIO folds PLATFORMIO_UPLOAD_PORT into its project config, and the config
+# is hashed into .pio.nosync/build/project.checksum — so a flash to a different
+# port than the last build (primary vs node, another USB socket, or any build
+# with no port at all) wiped the build folder for EVERY env and recompiled the
+# framework and every library. `--upload-port` is a build variable instead and
+# leaves the checksum alone. An old caller's PLATFORMIO_UPLOAD_PORT is still
+# honoured — moved across, then unset so it cannot reach the checksum.
+DUSTGATE_UPLOAD_PORT="${DUSTGATE_UPLOAD_PORT:-${PLATFORMIO_UPLOAD_PORT:-}}"
+unset PLATFORMIO_UPLOAD_PORT
+UPLOAD_PORT_ARGS=()
+[[ -n "$DUSTGATE_UPLOAD_PORT" ]] && UPLOAD_PORT_ARGS=(--upload-port "$DUSTGATE_UPLOAD_PORT")
+
 # Every env rides the pioarduino fork, which keeps its own core directory. Point
 # this shell at it before anything builds; exported here so every pio call this
 # script makes agrees. See tools/boardinfo.sh.
@@ -515,7 +528,7 @@ if $DO_FW; then
     echo "  ⚠  Parallel build failed — retrying single-threaded (the old -j 1 path)."
     pio run ${PIO_ENV_ARGS[@]+"${PIO_ENV_ARGS[@]}"} -j 1
   fi
-  run_pio run ${PIO_ENV_ARGS[@]+"${PIO_ENV_ARGS[@]}"} --target upload -j 1
+  run_pio run ${PIO_ENV_ARGS[@]+"${PIO_ENV_ARGS[@]}"} ${UPLOAD_PORT_ARGS[@]+"${UPLOAD_PORT_ARGS[@]}"} --target upload -j 1
   echo ""
 fi
 
@@ -523,7 +536,7 @@ fi
 if $DO_FS; then
   echo "▶ Flashing filesystem (LittleFS)…"
   cd "$SCRIPT_DIR"
-  run_pio run ${PIO_ENV_ARGS[@]+"${PIO_ENV_ARGS[@]}"} --target uploadfs -j 1
+  run_pio run ${PIO_ENV_ARGS[@]+"${PIO_ENV_ARGS[@]}"} ${UPLOAD_PORT_ARGS[@]+"${UPLOAD_PORT_ARGS[@]}"} --target uploadfs -j 1
   echo ""
 fi
 
@@ -575,10 +588,10 @@ print(json.dumps(d))
     # PRIMARY flash wrote the primary's WiFi and hostname into the NODE — renaming
     # it `dustgate`, the brain's own name — and reported "✓ credentials saved".
     # Found 2026-09-27. dev.sh already resolves the board by pinned serial and
-    # passes it as PLATFORMIO_UPLOAD_PORT (which the flash itself honours), so wait
+    # passes it as DUSTGATE_UPLOAD_PORT (which the flash uses too), so wait
     # for THAT node to reappear after the reset. The glob is only for a bare
     # `bash deploy.sh` run with nothing chosen.
-    PINNED_PORT="${PLATFORMIO_UPLOAD_PORT:-}"
+    PINNED_PORT="${DUSTGATE_UPLOAD_PORT:-}"
     PORT=""
     for _ in $(seq 1 15); do
       sleep 1
