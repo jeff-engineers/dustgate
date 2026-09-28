@@ -670,7 +670,10 @@ apply_provision_overrides() {
     local reply=""
     # `|| true`: read returns non-zero on EOF, and under `set -e` a Ctrl-D at this
     # prompt would abort the flash rather than fall through to the stored password.
-    read -rsp "  WiFi Password for '$WIFI_SSID' [Enter keeps the stored one]: " reply || true
+    # Says WHERE the kept password comes from: "the stored one" read as the
+    # DEVICE's password, and it never was — it is tools/.env's, which is paired
+    # here with a NEW SSID, so the difference matters (asked 2026-09-28).
+    read -rsp "  WiFi Password for '$WIFI_SSID' [Enter keeps the one in tools/.env]: " reply || true
     echo
     [[ -n "$reply" ]] && WIFI_PASS="$reply"
   fi
@@ -1145,7 +1148,11 @@ run_provision() {
   fi
   echo ""
   cd "$SCRIPT_DIR"
-  DUSTGATE_UPLOAD_PORT="$port" bash deploy.sh --provision-only
+  # --env names the NODE build for a node, so the provision step describes the
+  # right target. Without it deploy.sh fell back to the primary env and printed
+  # "Target: xiao_c5_primary" while provisioning a node — the same C5 part, so it
+  # wrote correctly, but the log claimed the planer was a brain (2026-09-28).
+  DUSTGATE_UPLOAD_PORT="$port" bash deploy.sh --provision-only ${role:+"--env=$NODE_ENV"}
 }
 
 run_live() {
