@@ -49,6 +49,11 @@ struct ReconcileResult {
   // which blowers are being asked for and which are simply at rest.
   std::map<std::string, bool> systemActive;
 
+  // Machines that SWITCHED ON in this call — their OFF→ON edge. The runtime
+  // re-asserts every servo gate in their systems from it (TopologyRuntime.h);
+  // an ordinary reading leaves this empty, so a poll tick moves nothing.
+  std::vector<std::string> switchedOn;
+
   // The plan for one system. planShopTransition omits systems with nothing to
   // do, so "no entry" and "no moves, no risk" are the same answer and this
   // returns an empty plan for both.
@@ -111,7 +116,9 @@ public:
     bool nowActive = watts >= th;
     if (nowActive && !wasActive) _activationSeq[machineId] = ++_seqCounter;  // rising edge → newest
     if (!nowActive) _activationSeq.erase(machineId);
-    return reconcile();
+    ReconcileResult r = reconcile();
+    if (nowActive && !wasActive) r.switchedOn.push_back(machineId);
+    return r;
   }
 
   // Machines currently active (watts >= threshold), most-recently-activated FIRST.

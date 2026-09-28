@@ -22,6 +22,7 @@
 #include <ArduinoJson.h>
 #include "TopologyRouter.h"   // reuses topo::_eq, _closedState
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -47,10 +48,16 @@ struct TransitionPlan {
 // narrows the maps (see planShopTransition in Shop.h) so `anyOpen` — and
 // therefore deadHeadRisk — is judged against this blower's ducts only, but a
 // stray foreign selector can't manufacture a move either way.
+//
+// reassert: selector ids to command even when we BELIEVE they are already at their
+// target — planTransition()'s `opts.reassert` in sequencer.js, which says why.
+// The caller fills it only on a machine's rising edge (TopologyRuntime.h), never
+// on an ordinary tick. Servos only; a slider is never re-sent.
 inline TransitionPlan planTransition(const SystemView& topology,
                                      const std::map<std::string, std::string>& currentStates,
                                      const std::map<std::string, std::string>& desiredStates,
-                                     bool collectorRunning) {
+                                     bool collectorRunning,
+                                     const std::set<std::string>* reassert = nullptr) {
   TransitionPlan out;
   std::vector<Move> makes, breaks;
   bool anyOpen = false;
@@ -67,11 +74,13 @@ inline TransitionPlan planTransition(const SystemView& topology,
     bool desiredIsClosed = closed && desired == closed;
     if (!desiredIsClosed) anyOpen = true;          // something ends up routing air
 
-    auto cit = currentStates.find(id);
-    if (cit != currentStates.end() && cit->second == desired) continue;  // already there
-
     const char* kind = sel["kind"].as<const char*>();
     bool isLinear = kind && strcmp(kind, "linear") == 0;
+    const bool forced = reassert && reassert->count(id) && !isLinear;
+
+    auto cit = currentStates.find(id);
+    if (cit != currentStates.end() && cit->second == desired && !forced) continue;  // already there
+
     // Linear maintains flow through any move → never a break. A servo settling to
     // its closed state is the only "break" (it seals that path).
     bool isBreak = desiredIsClosed && !isLinear;
@@ -91,8 +100,9 @@ inline TransitionPlan planTransition(const SystemView& topology,
 inline TransitionPlan planTransition(JsonObjectConst topology,
                                      const std::map<std::string, std::string>& currentStates,
                                      const std::map<std::string, std::string>& desiredStates,
-                                     bool collectorRunning) {
-  return planTransition(viewOf(topology), currentStates, desiredStates, collectorRunning);
+                                     bool collectorRunning,
+                                     const std::set<std::string>* reassert = nullptr) {
+  return planTransition(viewOf(topology), currentStates, desiredStates, collectorRunning, reassert);
 }
 
 } // namespace topo
