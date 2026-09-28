@@ -558,9 +558,10 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     // KEEP it live. This used to be a single fetch at load, so the duct highlighting
     // was a snapshot from whenever the page opened — and the plug row, which shows a
     // wattage, would have been worse: a number that looks live and isn't.
-    // Sweep for plugs ONCE, and only when there's a job for them: a machine on the
+    // Look for plugs ONCE, and only when there's a job for them: a machine on the
     // canvas with nothing paired to it. A shop that's fully wired opens without an
-    // mDNS sweep and without a tray.
+    // mDNS scan and without a tray. The quick mDNS half ONLY — never the subnet
+    // sweep; see scanOutlets().
     if (this.unpairedTargets().length) void this.scanOutlets();
     this.livePoll = setInterval(() => {
       void this.api.getStatus().then(st => this.applyLive(st)).catch(() => { /* offline */ });
@@ -1048,7 +1049,8 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
    *  entry point that does not depend on the layout being unfinished. */
   findPlugs(): void {
     this.trayPinned = true;
-    void this.scanOutlets();
+    // Asked for by name, so the slow half runs too — see scanOutlets().
+    void this.scanOutlets(true);
   }
 
   // ── Finding plugs: two questions with very different costs ────────────────
@@ -1073,14 +1075,26 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   sweepFinishedAgoMs = 0;
   private sweepPoll: ReturnType<typeof setInterval> | null = null;
 
-  async scanOutlets(): Promise<void> {
+  /**
+   * The quick mDNS scan, and the 254-address sweep only when `sweep` is asked for.
+   *
+   * THE SWEEP IS NEVER AUTOMATIC, since 2026-09-27. It used to follow every scan,
+   * and a scan runs whenever the canvas opens on an unfinished layout — so every
+   * visit knocked on the whole subnet. On the shop's guest network that is the
+   * prime suspect for the AP cutting the PRIMARY off from its node (probe:
+   * `TCP :80 NO ROUTE` to the node while a laptop reached it in 10 ms; the link
+   * died the moment a sweep started, and only a reboot brought it back). Not
+   * proven — but a sweep nobody asked for is not worth a shop, so it now runs
+   * only from "Find plugs" or the tray's "Look for Tasmota plugs".
+   */
+  async scanOutlets(sweep = false): Promise<void> {
     this.owner = this.api.deviceInfo?.owner ?? this.owner;
     if (this.scanning) return;
     this.scanning = true;
     try { this.outlets = await this.api.discoverOutlets(); }
     catch { /* leave the last known list rather than blanking the tray */ }
     finally { this.scanning = false; this.scanned = true; }
-    void this.startSweep();
+    if (sweep) void this.startSweep();
   }
 
   /** Kick off the slow half and start polling it. */
@@ -1163,7 +1177,10 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   /** "Checked 4 minutes ago" — the bar's own words. Empty while running or
    *  before anything has ever finished, because both have their own line. */
   sweepAge(): string {
-    if (this.sweepRunning || !this.sweepFinishedAgoMs) return '';
+    if (this.sweepRunning) return '';
+    // Never run: say what the button is FOR, because nothing else on the screen
+    // does now that it no longer starts by itself.
+    if (!this.sweepFinishedAgoMs) return 'Tasmota plugs don\'t announce themselves.';
     const min = Math.floor(this.sweepFinishedAgoMs / 60000);
     if (min < 1) return 'Checked just now.';
     return `Checked ${min} minute${min === 1 ? '' : 's'} ago.`;
@@ -1248,7 +1265,15 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     const doc = this.topo as unknown as ShopDoc;
     const out: { id: string; name: string }[] = [];
     for (const m of machinesOf(doc)) {
-      if ((m.sensor as RawEl | undefined)?.['outlet']) continue;
+      // A CLAMP IS A SENSOR TOO. A machine watched by a CT (sensor.ct) needs no
+      // plug, and counting it here did more than clutter the tray: this list
+      // decides whether opening the canvas starts a scan, and the scan starts the
+      // 254-address sweep — so every visit swept the subnet for a machine that
+      // was already sensed. A sweep is also the prime suspect for a guest network
+      // cutting the primary off from its nodes (2026-09-27), so it must not run
+      // for nothing.
+      const sensor = m.sensor as RawEl | undefined;
+      if (sensor?.['outlet'] || sensor?.['ct']) continue;
       const port = primaryPortOf(doc, m.id as string);
       if (port) out.push({ id: port['id'] as string, name: (m.name as string) || (m.id as string) });
     }
