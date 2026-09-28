@@ -335,8 +335,12 @@ function handler(req, res) {
       // prevent, so the mock refuses it rather than quietly accepting.
       const ctrl = String(data.controllerId || '').trim();
       const remote = ctrl && ctrl !== 'primary';
+      // A 200 carrying `error`, not a 404 — the firmware's shape since 2026-09-27:
+      // it answers a jog only after the main loop has tried it (a deferred reply),
+      // by which point the status line is already sent. ApiService.jogServo()
+      // turns this into a JogRefusedError.
       if (remote && !findPaired(ctrl))
-        return json(res, { error: `no paired board '${ctrl}'` }, 404);
+        return json(res, { error: `'${ctrl}' isn't paired with this shop — add it on the Boards page` });
       const key = `${remote ? bareHost(ctrl) : 'primary'}:${ch}`;
       if (data.detach === true) { return json(res, { ok: true }); }
       const angle = Number(data.angle);

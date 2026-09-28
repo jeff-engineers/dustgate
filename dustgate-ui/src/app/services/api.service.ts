@@ -273,6 +273,12 @@ export interface DeviceInfo {
 
 // ── Service ────────────────────────────────────────────────────────────────────
 
+/** A servo jog the board tried and could not do. `message` is the board's own
+ *  reason, written to be shown to the person holding the phone. */
+export class JogRefusedError extends Error {
+  constructor(reason: string) { super(reason); this.name = 'JogRefusedError'; }
+}
+
 @Injectable({ providedIn: 'root' })
 export class ApiService {
 
@@ -852,12 +858,28 @@ export class ApiService {
    * numbers its channels 0-3, so omitting it silently jogs the primary's servo on
    * the same channel, which is a different valve entirely.
    */
-  jogServo(channel: number, angle: number, controllerId?: string): Promise<unknown> {
-    return this.post('/api/servo/jog', { channel, angle, ...(controllerId ? { controllerId } : {}) });
+  /**
+   * Drive one servo to an absolute angle, outside routing — the gate configurator.
+   *
+   * REJECTS when the board could not do it, with the board's own reason. The
+   * firmware answers only once the main loop has tried (a deferred reply), so a
+   * refusal — an unpaired board, a node that isn't answering — arrives as a 200
+   * whose body carries `error`, not as an HTTP error. Until 2026-09-27 the route
+   * said `ok` before anything was attempted, and every one of those failures
+   * looked, from the dialog, like a gate that moved.
+   */
+  async jogServo(channel: number, angle: number, controllerId?: string): Promise<unknown> {
+    return this.checkJog(await this.post<{ ok?: boolean; error?: string }>(
+      '/api/servo/jog', { channel, angle, ...(controllerId ? { controllerId } : {}) }));
+  }
+  private checkJog(res: { ok?: boolean; error?: string } | null): unknown {
+    if (res && typeof res.error === 'string') throw new JogRefusedError(res.error);
+    return res;
   }
   /** De-energize a servo — the valve holds by friction/detent. */
-  detachServo(channel: number, controllerId?: string): Promise<unknown> {
-    return this.post('/api/servo/jog', { channel, detach: true, ...(controllerId ? { controllerId } : {}) });
+  async detachServo(channel: number, controllerId?: string): Promise<unknown> {
+    return this.checkJog(await this.post<{ ok?: boolean; error?: string }>(
+      '/api/servo/jog', { channel, detach: true, ...(controllerId ? { controllerId } : {}) }));
   }
 
   /**
