@@ -152,6 +152,28 @@ const eq = (name, got, want) =>
   eq('and still validates', NL.validateFrame(legacy, 's2p'), []);
 }
 
+// ── boot info: a node says why it last reset (withBootInfo) ──────────────────
+// PAIR: test_nodebus.cpp's "boot info" block — same cases, same order.
+{
+  const w = NL.withBootInfo(NL.welcome('node-1', 'xiao_c5', '1.0.0', { servos: 2, linear: 0, ct: 1 },
+                                       'dustgate-shop'), 12, 'brownout');
+  eq('a WELCOME may carry boot info', NL.validateFrame(w, 's2p'), []);
+  check('upS is whole seconds', w.upS === 12);
+  check('rst is carried', w.rst === 'brownout');
+  check('boot info does not displace the clamp', NL.clampsOn(w) === 1);
+
+  const none = NL.welcome('node-1', 'xiao_c5', '1.0.0', { servos: 2, linear: 0 });
+  check('absent means unknown — nothing is written', none.upS === undefined && none.rst === undefined);
+  eq('and a WELCOME without it still validates', NL.validateFrame(none, 's2p'), []);
+
+  check('rst is capped at MAX_RST_LEN', NL.MAX_RST_LEN === 16 &&
+        NL.withBootInfo({}, 1, 'x'.repeat(40)).rst.length === 16);
+  check('a negative upS is refused',
+        NL.validateFrame({ ...none, upS: -1 }, 's2p').length > 0);
+  check('a non-string rst is refused',
+        NL.validateFrame({ ...none, rst: 7 }, 's2p').length > 0);
+}
+
 // ── caps.ct: a clamp is DECLARED by its board, never discovered ────────────
 {
   const w = NL.welcome('node-1', 'xiao_c5', '1.0.0', { servos: 4, linear: 0, ct: 1 });

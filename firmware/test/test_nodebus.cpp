@@ -868,6 +868,32 @@ int main(int argc, char** argv) {
     // bump would force a flash of every board in the shop to buy nothing.
     ok("protocol version unchanged by CONFIG/SENSE", kVersion == 1);
 
+    // boot info — the PAIR of nodelink.test.js's "boot info" block, same order.
+    {
+      // 512, matching dustgate_node.cpp's reply document. At 384 — the size
+      // that was enough before boot info — this FULLEST WELCOME (owner, clamp
+      // and boot info together) overflowed and ArduinoJson dropped `rst`, the
+      // last member, without a word. This test caught it on 2026-09-27.
+      StaticJsonDocument<512> w;
+      buildWelcome(w.to<JsonObject>(), "node-1", "xiao_c5", "1.0.0", 2, 0, "dustgate-shop", true, 1);
+      addBootInfo(w.as<JsonObject>(), 12, "brownout");
+      ok("a WELCOME may carry boot info", w.containsKey("upS") && w.containsKey("rst"));
+      ok("upS is whole seconds", (w["upS"] | 0) == 12);
+      ok("rst is carried", std::string(w["rst"] | "") == "brownout");
+      ok("boot info does not displace the clamp", (w["caps"]["ct"] | 0) == 1);
+
+      StaticJsonDocument<384> none;
+      buildWelcome(none.to<JsonObject>(), "node-1", "xiao_c5", "1.0.0", 2, 0);
+      ok("absent means unknown — nothing is written",
+         !none.containsKey("upS") && !none.containsKey("rst"));
+
+      StaticJsonDocument<384> longer;
+      buildWelcome(longer.to<JsonObject>(), "node-1", "xiao_c5", "1.0.0", 2, 0);
+      addBootInfo(longer.as<JsonObject>(), 1, "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
+      ok("rst is capped at kMaxRstLen", kMaxRstLen == 16 &&
+         std::string(longer["rst"] | "").size() == 16);
+    }
+
     // caps.ct — the PAIR of nodelink.test.js's "a clamp is DECLARED" block.
     {
       // 384 for the same reason dustgate_node.cpp uses it: at 256 this document
