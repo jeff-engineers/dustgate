@@ -2,6 +2,7 @@
 // HttpApiServer.cpp
 // =============================================================================
 
+#include "../utils/BuildStamp.h"   // `built`/`build` in /api/info, `fw` in a WELCOME
 #include "HttpApiServer.h"
 #include "../outlets/OutletFactory.h"   // outletKindFromName()
 
@@ -309,7 +310,7 @@ bool HttpApiServer::begin() {
             const int servoCaps = 0;
 #endif
             topo::nodelink::buildWelcome(reply.to<JsonObject>(), host.c_str(),
-                                         BOARD_NAME, "1.0.0", servoCaps, 1,
+                                         BOARD_NAME, buildstamp::fw(), servoCaps, 1,
                                          nullptr, true,
 #ifdef PIN_CT
                                          1
@@ -802,7 +803,10 @@ void HttpApiServer::registerRoutes() {
     // Security: only reachable on the local network (same as the device).
     // ------------------------------------------------------------------
     _server.on("/api/info", HTTP_GET, [this](AsyncWebServerRequest* req) {
-        StaticJsonDocument<320> doc;
+        // 512, not 320: `built` is now a copied String and `build` is new, and
+        // ArduinoJson drops an overflowing member SILENTLY (the WELCOME lost
+        // `rst` exactly that way on 2026-09-27).
+        StaticJsonDocument<512> doc;
         doc["apiKey"]        = _apiKey;
         doc["numStops"]      = _cachedNumActiveStops;   // runtime; not compile-time NUM_STOPS
         doc["version"]       = "1.0.0";
@@ -810,7 +814,13 @@ void HttpApiServer::registerRoutes() {
         // request instead of guesswork. "version" is hand-maintained and stayed
         // 1.0.0 across every change this bring-up, which made it useless for
         // exactly the question that kept coming up during hardware debugging.
-        doc["built"]         = __DATE__ " " __TIME__;
+        // The BUILD's time (utils/BuildStamp.h), in __DATE__ " " __TIME__'s exact
+        // shape because the app's footer parses it. It used to BE __DATE__/__TIME__
+        // of this one file — stale whenever another file was what changed.
+        doc["built"]         = String(buildstamp::date()) + " " + buildstamp::time();
+        // Which commit, "+" when built with uncommitted firmware changes — the
+        // answer to "what did I flash last?" (2026-09-28).
+        doc["build"]         = buildstamp::fw();
         doc["uptimeSec"]     = (uint32_t)(millis() / 1000);
         // motorInverted is GONE (2026-08-28). There is no runtime direction to
         // report: it is derived from which endstop is the datum. A serial bus

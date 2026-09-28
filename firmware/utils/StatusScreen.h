@@ -35,6 +35,7 @@
 // timeout on every pass of loop().
 // =============================================================================
 
+#include "BuildStamp.h"
 #include <Arduino.h>
 #include "../config.h"
 #include "StatusScreenModel.h"
@@ -336,7 +337,8 @@ inline void _logWake(const Facts& f, bool flap) {
 inline const char* buildStamp() {
     static char s[24] = {0};
     static bool done = false;
-    if (!done) { formatBuild(__DATE__, __TIME__, s, sizeof(s)); done = true; }
+    // The BUILD's date, not this header's compile date — see utils/BuildStamp.h.
+    if (!done) { formatBuild(buildstamp::date(), buildstamp::time(), s, sizeof(s)); done = true; }
     return s;
 }
 
