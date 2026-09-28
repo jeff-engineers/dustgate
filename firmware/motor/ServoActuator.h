@@ -139,6 +139,15 @@ private:
     // confirmed on hardware the same day, on a primary and a node, by the wake
     // button's self-test sweeping all four channels repeatedly.
     //
+    // ⚠️ THE SAME TWO LINES ALSO PRINT, HARMLESSLY, ON THE FIRST MOVE OF EVERY
+    // BOOT (seen on a node 2026-09-27). ESP32Servo's attachPin(pin, freq, bits)
+    // calls setup(), which on core 3.x already does ledcAttachChannel(pin, ...),
+    // and then attachPin(pin), which does it again — the core refuses the second
+    // one, but the pin IS attached (channel 0, 10-bit, exactly what the error
+    // names) and attachedState was set before the attempt. So the servo moves.
+    // Tell the two apart by WHEN: once, on a boot's first move, is this; on a
+    // move AFTER the servo has de-energised, with the gate then dead, is the bug.
+    //
     // So on core 3.x we attach once and never let go: duty 0 is a constant LOW,
     // which is the same "no pulses" the servo needs, and the next write() picks
     // the channel straight back up. On core 2.0.x — the DevKitC, the QT Py node —
