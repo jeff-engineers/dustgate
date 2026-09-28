@@ -505,9 +505,16 @@ fi
 if $DO_FW; then
   echo "▶ Flashing firmware…"
   cd "$SCRIPT_DIR"
-  # -j 1: see extra_script.py — this project's build has a Mkdir/compile race
-  # under parallel jobs that env.SetOption couldn't reliably suppress; the
-  # CLI flag does.
+  # BUILD IN PARALLEL, THEN UPLOAD — split 2026-09-28. This was one step at -j 1,
+  # which made every real rebuild ~2.5 min instead of ~45 s: the -j 1 dates from
+  # July, for a Mkdir/compile race under parallel jobs (see extra_script.py).
+  # Parallel builds of every env ran clean on 2026-09-28, so build at full speed
+  # and keep -j 1 as the FALLBACK if that race ever resurfaces. The upload step
+  # then has nothing left to compile, so its -j 1 costs nothing.
+  if ! pio run ${PIO_ENV_ARGS[@]+"${PIO_ENV_ARGS[@]}"}; then
+    echo "  ⚠  Parallel build failed — retrying single-threaded (the old -j 1 path)."
+    pio run ${PIO_ENV_ARGS[@]+"${PIO_ENV_ARGS[@]}"} -j 1
+  fi
   run_pio run ${PIO_ENV_ARGS[@]+"${PIO_ENV_ARGS[@]}"} --target upload -j 1
   echo ""
 fi
