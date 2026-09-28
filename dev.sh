@@ -845,7 +845,7 @@ run_flash() {
   # chip's replies — on 2026-09-27 that killed a filesystem flash at 14% ("The
   # chip stopped responding") and left the board without its UI or layout. A
   # monitor is exactly what is usually running at the bench, so refuse up front.
-  port_is_free "$port" false || exit 1
+  port_is_free "$port" false flash || exit 1
   echo "  Using port: $port"
   echo ""
 
@@ -943,7 +943,7 @@ run_flash_node() {
   # chip's replies — on 2026-09-27 that killed a filesystem flash at 14% ("The
   # chip stopped responding") and left the board without its UI or layout. A
   # monitor is exactly what is usually running at the bench, so refuse up front.
-  port_is_free "$port" false || exit 1
+  port_is_free "$port" false flash || exit 1
   { what="$(describe_port "$port")"; echo "  Using port: $port${what:+  ($what)}"; }
 
   # WiFi creds first. The primary CANNOT provision a node over the network — the
@@ -1149,7 +1149,7 @@ EOF
 # PID and its command line, from lsof on the device itself — and either stops it
 # (take=true, i.e. --take) or says how to, and returns false.
 port_is_free() {
-  local port="$1" take="${2:-false}" pids pid
+  local port="$1" take="${2:-false}" for_flash="${3:-}" pids pid
   pids="$(lsof -t "$port" 2>/dev/null | sort -u || true)"
   [[ -z "$pids" ]] && return 0
   echo ""
@@ -1168,9 +1168,17 @@ port_is_free() {
     echo "     It did not let go. Stop it by hand:  kill -9 $pids"
     return 1
   fi
-  echo "     Only one program can have a serial port open. If that is a monitor you"
-  echo "     still want, use it; otherwise close it, or rerun with --take."
-  echo "     (A monitor on a DIFFERENT board is fine — only this port matters.)"
+  if [[ -n "$for_flash" ]]; then
+    # --take is a MONITOR option; a flash says how to free the port instead of
+    # offering a flag it does not have. Usually this is the monitor the previous
+    # flash opened at its end, still running in its terminal window.
+    echo "     A flash needs the port to itself. Press Ctrl+C in that program's window"
+    echo "     (usually the monitor the last flash opened), or:  kill $(echo $pids)"
+  else
+    echo "     Only one program can have a serial port open. If that is a monitor you"
+    echo "     still want, use it; otherwise close it, or rerun with --take."
+    echo "     (A monitor on a DIFFERENT board is fine — only this port matters.)"
+  fi
   return 1
 }
 
