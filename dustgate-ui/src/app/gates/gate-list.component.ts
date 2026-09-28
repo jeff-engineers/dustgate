@@ -1,7 +1,7 @@
 import { Component, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { Router } from '@angular/router';
-import { ApiService, type NodeLinkState } from '../services/api.service';
+import { ApiService, JogRefusedError, type NodeLinkState } from '../services/api.service';
 import { SelectorConfigComponent } from './selector-config.component';
 import type { Topology } from '@topology';
 import {
@@ -282,8 +282,11 @@ export class GateListComponent implements OnInit {
         await this.driveTo(r.sel, stateId);
         await new Promise((res) => setTimeout(res, 900));
       }
-    } catch {
-      this.error = "Couldn't drive that gate — is its board still answering?";
+    } catch (e: unknown) {
+      // The board's reason when it gave one — see JogRefusedError.
+      this.error = e instanceof JogRefusedError
+        ? `Couldn't drive that gate: ${e.message}.`
+        : "Couldn't drive that gate — is its board still answering?";
     } finally {
       this.testing = '';
     }

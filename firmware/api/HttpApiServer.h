@@ -120,6 +120,10 @@ public:
     // looked like it did nothing (or worse, twitched an unrelated valve).
     bool consumeServoJogRequest(int& outChannel, int& outAngle, bool& outDetach,
                                 String& outController);
+    // Answer the jog consumed above — EXACTLY ONCE per consumed request.
+    // `error` null/empty = it happened; otherwise the reason, in words for the
+    // person holding the phone. See the route for why this is deferred.
+    void respondServoJog(const char* error);
 
     // True once after PUT /api/topology stores a new document. The main loop
     // re-adopts it into the TopologyRuntime — the handler can't, since parsing
@@ -438,6 +442,7 @@ private:
     // Node discovery + link state (see consumeNodeDiscoverRequest / publishNodeStatus)
     bool                   _nodeDiscoverPending = false;
     Deferred               _nodeDiscoverReply;
+    Deferred               _servoJogReply;
     String                 _nodeStatusJson;
     bool                   _nodePairPending = false;
     String                 _nodePairHost;
