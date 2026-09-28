@@ -152,9 +152,13 @@ wss.on('connection', (ws) => {
       // caps.ct: a clamp is DECLARED, never discovered — nothing on the network
       // can find one — so the board saying so is the only way the UI learns it
       // exists. MOCK_NODE_CT=0 turns it off, to see the empty tray.
-      send(ws, NL.welcome(NODE_ID, BOARD, FW,
-                          { servos: SERVO_COUNT, linear: 0, ct: MOCK_CT },
-                          owner, accepted));
+      // Boot info (withBootInfo): a mock that "booted" when the process did, from
+      // power-on — so a primary's link log has the same shape to parse here as
+      // it gets from a real node.
+      send(ws, NL.withBootInfo(NL.welcome(NODE_ID, BOARD, FW,
+                                          { servos: SERVO_COUNT, linear: 0, ct: MOCK_CT },
+                                          owner, accepted),
+                               process.uptime(), 'poweron'));
       return;
     }
 

@@ -326,6 +326,28 @@ function welcome(nodeId, board, fw, caps, claimedBy, accepted = true) {
 }
 
 /**
+ * A node's own account of its last boot, added to a WELCOME. (2026-09-27)
+ *
+ * `upS` — whole seconds since the node booted. `rst` — why it last reset, as a
+ * short word (`poweron`, `brownout`, `panic`, `wdt`, `sw`, …; free text, never
+ * branched on). BOTH OPTIONAL, and absent means UNKNOWN — every board flashed
+ * before this answers as it always did.
+ *
+ * WHY IT RIDES THE WELCOME. A primary sees a node vanish and come back and cannot
+ * tell "the planer was switched off at the wall" (normal: a CT node is powered by
+ * its tool) from "the node crashed" (a bug) — both are a dropped socket and a new
+ * one. The node knows which, and the WELCOME is the one frame it sends on every
+ * (re)connect, so the primary's link log can say "rebooted 12 s ago: brownout"
+ * instead of "reconnected". Diagnostic only: NOTHING routes on these.
+ */
+function withBootInfo(frame, upS, rst) {
+  if (typeof upS === 'number') frame.upS = Math.max(0, Math.floor(upS));
+  if (typeof rst === 'string' && rst) frame.rst = rst.slice(0, MAX_RST_LEN);
+  return frame;
+}
+const MAX_RST_LEN = 16;
+
+/**
  * Does this WELCOME say we may drive the node?
  *
  * Absent `accepted` means yes — a node built before claims answers exactly as
@@ -464,6 +486,13 @@ function validateFrame(f, direction) {
       if (f.accepted === false && !f.claimedBy) {
         errs.push('WELCOME.accepted=false requires claimedBy');
       }
+      // Boot info (withBootInfo) — optional, diagnostic only.
+      if (f.upS !== undefined && (typeof f.upS !== 'number' || f.upS < 0)) {
+        errs.push('WELCOME.upS must be a non-negative number');
+      }
+      if (f.rst !== undefined && (typeof f.rst !== 'string' || f.rst.length > MAX_RST_LEN)) {
+        errs.push(`WELCOME.rst must be a string of at most ${MAX_RST_LEN} chars`);
+      }
       break;
     case 'SET':
       num('seq', 0, Number.MAX_SAFE_INTEGER);
@@ -563,6 +592,7 @@ module.exports = {
   NODELINK_VERSION, P2S, S2P,
   PING_INTERVAL_MS, PONG_TIMEOUT_MS, RECONNECT_MIN_MS, RECONNECT_MAX_MS,
   SENSE_REPEAT_MS, SENSE_STALE_MS, MAX_SENSORS_PER_NODE,
-  hello, welcome, set, config, ack, state, sense, ping, pong, welcomeAccepted, clampsOn,
+  MAX_RST_LEN,
+  hello, welcome, withBootInfo, set, config, ack, state, sense, ping, pong, welcomeAccepted, clampsOn,
   validateFrame,
 };
