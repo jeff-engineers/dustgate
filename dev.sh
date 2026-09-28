@@ -118,6 +118,9 @@
 #
 #   bash dev.sh monitor             # serial monitor (primary)
 #   bash dev.sh monitor node        # ...a node instead
+#   bash dev.sh monitor both        # primary + node interleaved, one clock, logged
+#                                   #   to .monitor-logs/; type `p: cmd` / `n: cmd`
+#   bash dev.sh monitor … --take    # stop whatever already holds that board's port
 #   bash dev.sh ports               # list attached boards + which role each is pinned to
 #   bash dev.sh ports --pin primary # pin the attached board to a role (do this once)
 #   bash dev.sh ports --pin node
@@ -296,19 +299,49 @@ detect_port() {
     local hit
     hit="$(awk -F'|' -v s="$want" '$3 == s { print $1; exit }' <<<"$boards")"
     [[ -n "$hit" ]] && { echo "$hit"; return; }
+    # PINNED BUT NOT ATTACHED IS AN ANSWER, not a reason to guess. This used to
+    # fall through to "first board enumerated", so a stale pin (a board since
+    # swapped out) quietly sent BOTH roles to the same port — `monitor` and
+    # `monitor node` then fought over one board and the second died on a port
+    # lock, which read as a monitoring bug rather than a pinning one
+    # (2026-09-27). Empty output here; require_port explains why.
+    return 0
   fi
 
-  # Nothing pinned: take the board the OTHER role isn't pinned to, then fall back
-  # to the first enumerated. Two unpinned boards is a guess — report_port_choice
-  # says so.
-  local other_role other_want candidate
+  # Nothing pinned for this role: take a board the OTHER role isn't pinned to.
+  # NEVER the other role's board — with the primary pinned and plugged in alone,
+  # `monitor node` used to fall back to "first enumerated", which was the primary.
+  local other_role other_want
   [[ "$role" == "primary" ]] && other_role="node" || other_role="primary"
   other_want="$(pinned_serial "$other_role")"
-  if [[ -n "$other_want" ]]; then
-    candidate="$(awk -F'|' -v s="$other_want" '$3 != s { print $1; exit }' <<<"$boards")"
-    [[ -n "$candidate" ]] && { echo "$candidate"; return; }
+  # Two unpinned boards is still a guess — report_port_choice says so.
+  awk -F'|' -v s="$other_want" 's == "" || $3 != s { print $1; exit }' <<<"$boards"
+}
+
+# Why detect_port came back empty, for a role — so a failure names the fix
+# instead of waiting a minute for a board that is already plugged in.
+explain_no_port() {
+  local role="$1" boards want other_role other_want
+  boards="$(list_boards)"
+  [[ -z "$boards" ]] && return 1          # genuinely nothing attached: caller's text
+  want="$(pinned_serial "$role")"
+  [[ "$role" == "primary" ]] && other_role="node" || other_role="primary"
+  other_want="$(pinned_serial "$other_role")"
+  echo "  ✗ No board for '$role' is attached." >&2
+  if [[ -n "$want" ]]; then
+    echo "    '$role' is pinned to serial $want, and no attached board has it." >&2
+  else
+    echo "    Every attached board is pinned as '$other_role'." >&2
   fi
-  awk -F'|' '{ print $1; exit }' <<<"$boards"
+  echo "    Attached:" >&2
+  local port vid ser desc tag
+  while IFS='|' read -r port vid ser desc; do
+    [[ -z "$port" ]] && continue
+    tag=""; [[ -n "$other_want" && "$ser" == "$other_want" ]] && tag="  (pinned: $other_role)"
+    printf "      %-24s %s%s\n" "$port" "$ser" "$tag" >&2
+  done <<<"$boards"
+  echo "    Plug that board in, or re-pin:  bash dev.sh ports --pin $role" >&2
+  return 0
 }
 
 # Warn when the choice was actually ambiguous, so a wrong guess is visible before
@@ -330,7 +363,7 @@ report_port_choice() {
   while IFS='|' read -r port vid ser desc; do
     [[ -z "$port" ]] && continue
     mark="  "; [[ "$port" == "$chosen" ]] && mark="→ "
-    printf "     %s%-24s %-14s %s\n" "$mark" "$port" "${ser:0:12}" "${desc:-$vid}"
+    printf "     %s%-24s %-20s %s\n" "$mark" "$port" "$ser" "${desc:-$vid}"
   done <<<"$boards"
   if [[ -n "$(pinned_serial "$role")" ]]; then
     echo "     Chose the board pinned as '$role' in .dustgate-ports."
@@ -344,7 +377,7 @@ report_port_choice() {
 # path nobody can tell apart at a glance.
 describe_port() {
   local port="$1"
-  awk -F'|' -v p="$port" '$1 == p { printf "%s, serial %s", $4, substr($3,1,12); exit }' <<<"$(list_boards)"
+  awk -F'|' -v p="$port" '$1 == p { printf "%s, serial %s", $4, $3; exit }' <<<"$(list_boards)"
 }
 
 # `dev.sh ports` — show what's attached; `--pin ROLE` records a board's SERIAL
@@ -353,17 +386,74 @@ describe_port() {
 # One role at a time, because the boards are indistinguishable: the honest
 # workflow is to plug in the one you mean and say which it is. With more than one
 # attached it asks rather than guessing.
+# board_network_names — one "mac|hostname|ip" line per DustGate board on the LAN.
+#
+# WHICH USB CABLE IS WHICH BOARD. Every board is the same part with the same VID,
+# so the port list alone cannot say which one is the primary — the question
+# `ports --pin` asks and nobody could answer without walking to the OLED. But the
+# USB serial of a C5's USB-JTAG unit IS the chip's base MAC, and the WiFi station
+# uses that same MAC (checked 2026-09-27: 10:BD:A3:C8:4B:0C is dustgate.local,
+# 38:44:BE:BE:92:28 is dustgate-planer.local). So: browse _dustgate._tcp, resolve
+# each name, ping once to fill the ARP cache, and read the MAC back from it.
+#
+# A CONVENIENCE, NEVER A REQUIREMENT — CLAUDE.md's rule about multicast applies to
+# the bench tools too. Boards with WiFi off, unprovisioned, or on a network that
+# blocks mDNS simply come back without a name; nothing here fails because of it.
+# DUSTGATE_PORTS_NO_NET=1 skips the lookup entirely (~2s).
+board_network_names() {
+  [[ "${DUSTGATE_PORTS_NO_NET:-0}" == "1" ]] && return 0
+  command -v dns-sd >/dev/null 2>&1 || return 0
+  local names name ip mac
+  # dns-sd -B never exits on its own; perl's alarm is the portable timeout (macOS
+  # has no `timeout`). Column 7 onward is the instance name, which is the hostname
+  # DustGate registers (the same string MDNS.begin() was given).
+  names="$(perl -e 'alarm 2; exec @ARGV' dns-sd -B _dustgate._tcp local. 2>/dev/null \
+            | awk '$2 == "Add" { n=$7; for (i=8; i<=NF; i++) n=n" "$i; print n }' | sort -u)"
+  # One board per background job, so a shop of N boards costs ~1s, not N.
+  while IFS= read -r name; do
+    [[ -z "$name" ]] && continue
+    (
+      # dns-sd -G, NOT dscacheutil: dscacheutil holds its IPv4 answer for ~5s
+      # waiting on an AAAA the ESP32 never sends. dns-sd prints the A record the
+      # moment it lands; the alarm only bounds a board that does not answer.
+      ip="$(perl -e 'alarm 1; exec @ARGV' dns-sd -G v4 "$name.local" 2>/dev/null \
+              | awk '$2 == "Add" && $6 ~ /^[0-9.]+$/ { print $6; exit }')"
+      [[ -z "$ip" ]] && exit 0
+      ping -c1 -t1 "$ip" >/dev/null 2>&1 || true
+      # arp drops leading zeros ("4b:c"); pad each octet so it compares to the serial.
+      mac="$(arp -n "$ip" 2>/dev/null | awk '{ print $4 }' \
+              | awk -F: 'NF == 6 { for (i=1; i<=6; i++) printf "%s%02s", (i>1?":":""), toupper($i); print "" }' \
+              | tr ' ' '0')"
+      [[ -n "$mac" ]] && echo "$mac|$name|$ip"
+    ) &
+  done <<<"$names"
+  wait
+}
+
+# "hostname (ip)" for a USB serial, from board_network_names output, or "".
+name_for_serial() {
+  local ser="$1" names="$2"
+  awk -F'|' -v s="$(tr '[:lower:]' '[:upper:]' <<<"$ser")" \
+      '$1 == s { printf "%s.local (%s)", $2, $3; exit }' <<<"$names"
+}
+
 run_ports() {
   local boards; boards="$(list_boards)"
   if [[ -z "$boards" ]]; then
     echo "No ESP32 boards found. Use a DATA cable, and check 'pio device list'."
     return 1
   fi
+  local names; names="$(board_network_names)"
   echo "Attached boards:"
-  local port vid ser desc
+  local port vid ser desc net role pinned_as
   while IFS='|' read -r port vid ser desc; do
     [[ -z "$port" ]] && continue
-    printf "  %-24s %-14s %s\n" "$port" "${ser:0:12}" "${desc:-$vid}"
+    net="$(name_for_serial "$ser" "$names")"
+    pinned_as=""
+    for role in primary node; do
+      [[ "$(pinned_serial "$role")" == "$ser" ]] && pinned_as="  [pinned: $role]"
+    done
+    printf "  %-24s %-20s %s%s\n" "$port" "$ser" "${net:-(not seen on the network)}" "$pinned_as"
   done <<<"$boards"
 
   if [[ "${1:-}" != "--pin" ]]; then
@@ -390,7 +480,7 @@ run_ports() {
     local i=1
     while IFS='|' read -r port vid ser desc; do
       [[ -z "$port" ]] && continue
-      printf "  %d) %-24s %s\n" "$i" "$port" "${ser:0:12}"
+      printf "  %d) %-24s %-20s %s\n" "$i" "$port" "$ser" "$(name_for_serial "$ser" "$names")"
       i=$((i+1))
     done <<<"$boards"
     local pick; read -rp "  Number: " pick
@@ -404,7 +494,7 @@ run_ports() {
   echo "${role}=${chosen_ser}" >> "$tmp"
   mv "$tmp" "$PORTS_FILE"
   echo
-  echo "Pinned $role to $chosen_port (serial ${chosen_ser:0:12}) — survives replugging"
+  echo "Pinned $role to $chosen_port (serial ${chosen_ser}) — survives replugging"
   echo "and renamed /dev paths."
   sed 's/^/  /' "$PORTS_FILE"
   return 0
@@ -422,6 +512,8 @@ require_port() {
     echo "$port"
     return 0
   fi
+  # Boards ARE attached, just not this role's — waiting a minute will not help.
+  explain_no_port "$role" && return 1
 
   echo "  No ESP32 serial port detected (looked for a usbmodem under /dev/cu.*)." >&2
   echo "  Checks: use a DATA USB cable (not charge-only); confirm the board shows up" >&2
@@ -745,6 +837,13 @@ run_flash() {
   fi
   local port
   port="$(require_port primary)" || exit 1
+
+  # NOTHING ELSE MAY HAVE THE PORT OPEN WHILE WE FLASH. macOS lets two programs
+  # open one serial device, and a monitor reading alongside esptool steals the
+  # chip's replies — on 2026-09-27 that killed a filesystem flash at 14% ("The
+  # chip stopped responding") and left the board without its UI or layout. A
+  # monitor is exactly what is usually running at the bench, so refuse up front.
+  port_is_free "$port" false || exit 1
   echo "  Using port: $port"
   echo ""
 
@@ -836,6 +935,13 @@ run_flash_node() {
 
   local port
   port="$(require_port node)" || exit 1
+
+  # NOTHING ELSE MAY HAVE THE PORT OPEN WHILE WE FLASH. macOS lets two programs
+  # open one serial device, and a monitor reading alongside esptool steals the
+  # chip's replies — on 2026-09-27 that killed a filesystem flash at 14% ("The
+  # chip stopped responding") and left the board without its UI or layout. A
+  # monitor is exactly what is usually running at the bench, so refuse up front.
+  port_is_free "$port" false || exit 1
   { what="$(describe_port "$port")"; echo "  Using port: $port${what:+  ($what)}"; }
 
   # WiFi creds first. The primary CANNOT provision a node over the network — the
@@ -1036,7 +1142,67 @@ EOF
   npx ng serve --configuration development --proxy-config "$proxy_file"
 }
 
-# run_monitor [--scan-boot] [env]
+# port_is_free <port> <take:true|false>
+# True when nothing holds the serial device. Otherwise names the holder — the
+# PID and its command line, from lsof on the device itself — and either stops it
+# (take=true, i.e. --take) or says how to, and returns false.
+port_is_free() {
+  local port="$1" take="${2:-false}" pids pid
+  pids="$(lsof -t "$port" 2>/dev/null | sort -u || true)"
+  [[ -z "$pids" ]] && return 0
+  echo ""
+  echo "  ⚠  $port is already open in another program:"
+  for pid in $pids; do
+    printf "       %s  %s\n" "$pid" "$(ps -o command= -p "$pid" 2>/dev/null | cut -c1-110)"
+  done
+  if [[ "$take" == "true" ]]; then
+    echo "     --take: stopping it."
+    # shellcheck disable=SC2086
+    kill $pids 2>/dev/null || true
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+      [[ -z "$(lsof -t "$port" 2>/dev/null)" ]] && { echo ""; return 0; }
+      sleep 0.3
+    done
+    echo "     It did not let go. Stop it by hand:  kill -9 $pids"
+    return 1
+  fi
+  echo "     Only one program can have a serial port open. If that is a monitor you"
+  echo "     still want, use it; otherwise close it, or rerun with --take."
+  echo "     (A monitor on a DIFFERENT board is fine — only this port matters.)"
+  return 1
+}
+
+# run_monitor_both [--take]
+# The primary and the node interleaved on one screen with one clock, and logged
+# to .monitor-logs/ — see tools/monitor-both.py for why order is the point.
+run_monitor_both() {
+  local take=false
+  [[ "${1:-}" == "--take" ]] && take=true
+  echo "▶ Serial monitor — primary AND node (Ctrl+C to exit)."
+  local p_port n_port
+  p_port="$(require_port primary)" || exit 1
+  n_port="$(require_port node)"    || exit 1
+  if [[ "$p_port" == "$n_port" ]]; then
+    # Both roles resolved to one device: at most one role is pinned and only
+    # one board is attached. Watching it twice would only hide that.
+    echo "  ✗ Primary and node both resolve to $p_port — only one of them is attached,"
+    echo "    or they are not pinned. See:  bash dev.sh ports"
+    exit 1
+  fi
+  echo "  Primary: $p_port  ($(describe_port "$p_port"))"
+  echo "  Node:    $n_port  ($(describe_port "$n_port"))"
+  port_is_free "$p_port" "$take" || exit 1
+  port_is_free "$n_port" "$take" || exit 1
+
+  # PlatformIO's own interpreter: it already carries pyserial, which a stock
+  # macOS python3 does not.
+  local py; py="$(dirname "$(command -v "$PIO")")/python"
+  [[ -x "$py" ]] || py="python3"
+  local log="$SCRIPT_DIR/.monitor-logs/$(date +%Y%m%d-%H%M%S).log"
+  "$py" "$SCRIPT_DIR/tools/monitor-both.py" "$p_port" "$n_port" "$log"
+}
+
+# run_monitor [--scan-boot] [--take] [--port P] [env]
 # --scan-boot: briefly scan output for known problem signatures (failed
 # LittleFS mount, failed WiFi connect) before handing off to the interactive
 # monitor. Only used right after a flash, where there's fresh boot output
@@ -1047,11 +1213,13 @@ EOF
 # NOT optional dressing — see the -e note below. Defaults to the primary.
 run_monitor() {
   echo "▶ Serial monitor (Ctrl+C to exit)."
-  local scan_boot=false env="$PRIMARY_ENV" explicit_port=""
+  local scan_boot=false env="$PRIMARY_ENV" explicit_port="" take=false
   local a
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --scan-boot) scan_boot=true; shift ;;
+      # Stop whatever already holds this board's port, then open it.
+      --take)      take=true; shift ;;
       # AN EXPLICIT PORT, because roles only go two deep and a shop does not.
       # Roles are pinned one per name (primary, node), so a bench with TWO nodes
       # has no way to say WHICH node — and watching the primary and a node at the
@@ -1088,16 +1256,14 @@ run_monitor() {
   # bookkeeping one. Worse, an old monitor may be sitting on the OTHER board —
   # the mismatch this whole port-pinning exercise exists to prevent, and easy to
   # hit when the two boards look identical.
-  local stale
-  stale="$(pgrep -fl "device monitor" 2>/dev/null | grep -v "^$$ " || true)"
-  if [[ -n "$stale" ]]; then
-    echo ""
-    echo "  ⚠  A serial monitor is ALREADY running:"
-    sed 's/^/       /' <<<"$stale"
-    echo "     It holds the port; this one may fail or show nothing."
-    echo "     Close it, or:  pkill -f 'device monitor'"
-    echo ""
-  fi
+  #
+  # ASK THE PORT, NOT THE PROCESS LIST. This used to warn about ANY running
+  # `device monitor` — so watching the primary and a node at once, which is
+  # exactly what a link needs, printed a scary warning for a monitor on the
+  # OTHER board, and then carried on into pio's "Could not exclusively lock
+  # port" when the port really was taken. lsof names the one process that
+  # actually holds THIS device, whatever it is (a stray pio, screen, an IDE).
+  if ! port_is_free "$port" "$take"; then exit 1; fi
   echo ""
   cd "$SCRIPT_DIR"
 
@@ -1275,6 +1441,7 @@ case "${1:-}" in
       # port and opened whichever board the role was pinned to — which is the
       # failure the flag exists to work around.
       node|n)     shift; run_monitor "$NODE_ENV" "$@" ;;
+      both|b)     shift; run_monitor_both "$@" ;;
       slider|linear) shift; run_monitor "$LINEAR_NODE_ENV" "$@" ;;
       *)          run_monitor "$@" ;;
     esac
@@ -1289,7 +1456,7 @@ case "${1:-}" in
     echo "Usage: dev.sh [demo|mock|live [host]"
     echo "              |flash [--fw|--ui|--slider|--no-provision] [--host N] [--ssid N] [--pass S] [--ask] [--save]"
     echo "              |flash-node [--slider] [hostname]"
-    echo "              |monitor [node] [--port /dev/cu.X]|ports [--pin primary|node]|erase|provision [--host N] [--ssid N]]"
+    echo "              |monitor [node|both] [--port /dev/cu.X] [--take]|ports [--pin primary|node]|erase|provision [--host N] [--ssid N]]"
     exit 1
     ;;
 esac
