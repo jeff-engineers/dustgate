@@ -552,13 +552,28 @@ print(json.dumps(d))
     # (usbserial / SLAB_USBtoUART / wchusbserial) and the Feather's native USB
     # (usbmodem) — keep this in sync with detect_port() in dev.sh.
     echo "  Waiting for device to boot…"
+    # THE PORT dev.sh CHOSE, when it chose one — never "the first one ls lists".
+    #
+    # With a primary and a node both plugged in, the glob below sorted
+    # /dev/cu.usbmodem1101 (the node) ahead of usbmodem1401 (the primary), so every
+    # PRIMARY flash wrote the primary's WiFi and hostname into the NODE — renaming
+    # it `dustgate`, the brain's own name — and reported "✓ credentials saved".
+    # Found 2026-09-27. dev.sh already resolves the board by pinned serial and
+    # passes it as PLATFORMIO_UPLOAD_PORT (which the flash itself honours), so wait
+    # for THAT node to reappear after the reset. The glob is only for a bare
+    # `bash deploy.sh` run with nothing chosen.
+    PINNED_PORT="${PLATFORMIO_UPLOAD_PORT:-}"
     PORT=""
     for _ in $(seq 1 15); do
       sleep 1
-      # `|| true`: when the globs match nothing, `ls` exits nonzero and this
-      # bare assignment would otherwise silently kill the script under `set -e`.
-      PORT="$(ls /dev/cu.usbserial* /dev/cu.SLAB_USBtoUART* /dev/cu.wchusbserial* \
-                 /dev/cu.usbmodem* 2>/dev/null | head -1 || true)"
+      if [[ -n "$PINNED_PORT" ]]; then
+        [[ -e "$PINNED_PORT" ]] && PORT="$PINNED_PORT"
+      else
+        # `|| true`: when the globs match nothing, `ls` exits nonzero and this
+        # bare assignment would otherwise silently kill the script under `set -e`.
+        PORT="$(ls /dev/cu.usbserial* /dev/cu.SLAB_USBtoUART* /dev/cu.wchusbserial* \
+                   /dev/cu.usbmodem* 2>/dev/null | head -1 || true)"
+      fi
       if [[ -n "$PORT" ]]; then
         break
       fi
@@ -579,7 +594,7 @@ print(json.dumps(d))
       # the command entirely (the reason .env auto-provision "did nothing" on
       # the DevKitC). pyserial drives the lines explicitly and resends until the
       # firmware acks, covering a board still booting after a fresh flash.
-      RESPONSE="$(PROVISION_PAYLOAD="$PAYLOAD" "$PROV_PY" - "$PORT" "$NATIVE_USB" <<'PY'
+      RESPONSE="$(PROVISION_PAYLOAD="$PAYLOAD" PROVISION_PORT_STRICT="${PINNED_PORT:+1}" "$PROV_PY" - "$PORT" "$NATIVE_USB" <<'PY'
 import glob, os, sys, time, serial
 
 port_hint  = sys.argv[1]
@@ -615,6 +630,12 @@ def find_port():
     OSError 6, 'Device not configured') or renamed outright."""
     if os.path.exists(port_hint):
         return port_hint
+    # A port dev.sh chose by serial is the ONLY acceptable one: while it is
+    # re-enumerating after the reset, wait for it, never fall back to whatever
+    # else is plugged in — that fallback is how the primary credentials landed
+    # on the node (see the Waiting-for-device note above).
+    if os.environ.get("PROVISION_PORT_STRICT") == "1":
+        return None
     for pat in ("/dev/cu.usbmodem*", "/dev/cu.usbserial*",
                 "/dev/cu.SLAB_USBtoUART*", "/dev/cu.wchusbserial*"):
         hits = sorted(glob.glob(pat))
