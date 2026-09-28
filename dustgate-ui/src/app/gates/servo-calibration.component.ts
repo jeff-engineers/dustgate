@@ -1,6 +1,6 @@
 import { Component, EventEmitter, Input, OnInit, Output } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { ApiService } from '../services/api.service';
+import { ApiService, JogRefusedError } from '../services/api.service';
 import type { Topology } from '@topology';
 import {
   ServoSelector, ServoState,
@@ -41,8 +41,19 @@ const SERVO_HANDED_REVERSED = false;
 
 const COARSE_DEG = 15;
 const FINE_DEG = 3;
-/** How close to 0°/180° counts as "running out of travel" — worth warning about. */
+/** How close to the end of the servo's travel counts as "running out" — worth warning about. */
 const RAIL_WARN_DEG = 10;
+/**
+ * Where an UNCALIBRATED gate starts: the middle of the servo's travel.
+ *
+ * A new gate's seeds are offsets from a referenceAngle nobody has measured, which
+ * the model defaults to 0 — so the dial used to open at 0°, the very end of the
+ * servo's range, and the first tap commanded 3° or 15° ABSOLUTE, slamming the
+ * valve from wherever it really was to one end of its travel. That is the hard
+ * stop the SEAT instruction below asks people to stay away from. The middle is
+ * where a horn is normally fitted, and the one place with room on both sides.
+ */
+const START_DEG = 90;
 
 type Phase = 'capture' | 'review';
 
@@ -140,7 +151,7 @@ type Phase = 'capture' | 'review';
           <span class="tick">✓</span>
           <span class="pn">{{ label(s) }}</span>
           <span class="pd">{{ detail(s) }}</span>
-          <button (click)="test(s)" [disabled]="busy || !!jogError">Test</button>
+          <button (click)="test(s)" [disabled]="busy">Test</button>
         </div>
         <p class="err" *ngIf="saveError">{{ saveError }}</p>
         <p class="err" *ngIf="jogError">{{ jogError }}</p>
@@ -170,18 +181,36 @@ export class ServoCalibrationComponent implements OnInit {
   private angles = new Map<string, number>();
   private labels = new Map<string, string>();
   private reversed = false;
+  /** The servo's own limits for this gate — the same bounds the save checks, so a
+   *  jog can never capture an angle that Save would then refuse. */
+  private lo = 0;
+  private hi = 180;
 
   constructor(private api: ApiService) {}
 
   ngOnInit(): void {
     this.labels = positionLabels(this.topo, this.sel);
-    this.angles = absoluteAngles(this.sel);
+    const sv = this.sel.servo;
+    this.lo = typeof sv?.minAngle === 'number' ? sv.minAngle : 0;
+    this.hi = typeof sv?.maxAngle === 'number' ? sv.maxAngle : 180;
     // A value saved by an older build still wins; otherwise the build-wide default.
-    this.reversed = this.sel.servo?.reversed ?? SERVO_HANDED_REVERSED;
+    this.reversed = sv?.reversed ?? SERVO_HANDED_REVERSED;
+    // A CALIBRATED gate starts from what it was taught — every one of those angles
+    // is known to be reachable. An UNCALIBRATED one starts with nothing but the
+    // middle of travel for its first position; the rest are filled in as the user
+    // reaches them (capture()), never from the seeds. See START_DEG.
+    if (isCalibrated(this.sel)) {
+      this.angles = absoluteAngles(this.sel);
+    } else {
+      const first = this.sel.states[0];
+      this.angles = new Map(first ? [[first.id, this.clamp(START_DEG)]] : []);
+    }
     // Move the valve to where the dial claims it is, so the two agree from the
     // first tap rather than after the first nudge.
-    if (isCalibrated(this.sel)) void this.drive(this.angle());
+    void this.drive(this.angle());
   }
+
+  private clamp(a: number): number { return Math.min(this.hi, Math.max(this.lo, a)); }
 
   // ── step 2: capture ───────────────────────────────────────────────────────
   current(): ServoState | null { return this.sel.states[this.index] ?? null; }
@@ -215,25 +244,43 @@ export class ServoCalibrationComponent implements OnInit {
     return (this.reversed ? -dir : dir) * step;
   }
 
+  /** NOT blocked by a jog error, deliberately: an arrow IS the retry. Blocking it
+   *  latched the dialog — the only thing that cleared the error was a successful
+   *  jog, and every control that could make one was disabled by the error. */
   canJog(dir: number): boolean {
-    if (this.busy || this.jogError) return false;
+    if (this.busy) return false;
     const to = this.angle() + this.servoDelta(dir, false);
-    return to >= 0 && to <= 180;
+    return to >= this.lo && to <= this.hi;
   }
 
   async jog(dir: number, coarse: boolean): Promise<void> {
-    const to = this.angle() + this.servoDelta(dir, coarse);
-    const clamped = Math.min(180, Math.max(0, to));
-    if (clamped === this.angle()) return;
+    const clamped = this.clamp(this.angle() + this.servoDelta(dir, coarse));
+    // A failed LAST jog is retried in place even when the target is unchanged —
+    // the valve may not be where the dial says.
+    if (clamped === this.angle() && !this.jogError) return;
     if (await this.drive(clamped)) this.setAngle(clamped);
   }
 
   async capture(): Promise<void> {
     if (!this.current()) return;
     if (this.index >= this.sel.states.length - 1) { this.phase = 'review'; return; }
+    const here = this.angle();
     this.index++;
-    // Take the valve TOWARD the next position rather than leaving it parked at the one
-    // just captured — otherwise the dial would show a position the ball isn't at.
+    const next = this.current();
+    if (next && !this.angles.has(next.id)) {
+      // Nothing known about this position yet — start it where the valve IS.
+      //
+      // This used to drive to the seed's ABSOLUTE angle (0°, 90°, 161° on a new
+      // manifold), which ignored the position just captured: capture Left at 60°
+      // and Right was then sent to 161° regardless, possibly into the stop. A
+      // guess is never a safe place to drive a clutchless servo; the user walks it
+      // from here instead, which is the thing they are standing there to do.
+      this.angles.set(next.id, here);
+      return;
+    }
+    // A position this session (or a saved calibration) already knows is a known-
+    // reachable angle, so take the valve there — otherwise the dial would show a
+    // position the ball isn't at.
     await this.drive(this.angle());
   }
 
@@ -244,7 +291,7 @@ export class ServoCalibrationComponent implements OnInit {
 
   nearRail(): boolean {
     const a = this.angle();
-    return a <= RAIL_WARN_DEG || a >= 180 - RAIL_WARN_DEG;
+    return a <= this.lo + RAIL_WARN_DEG || a >= this.hi - RAIL_WARN_DEG;
   }
 
   // ── the dial: servo angle → what the user sees ────────────────────────────
@@ -278,7 +325,8 @@ export class ServoCalibrationComponent implements OnInit {
 
   // ── driving the servo ─────────────────────────────────────────────────────
   private angle(): number {
-    return this.angles.get(this.current()?.id ?? this.sel.states[0]?.id ?? '') ?? 0;
+    // START_DEG, not 0, for a position with no angle yet: 0 is an end of travel.
+    return this.angles.get(this.current()?.id ?? this.sel.states[0]?.id ?? '') ?? this.clamp(START_DEG);
   }
 
   private setAngle(a: number): void {
@@ -301,11 +349,16 @@ export class ServoCalibrationComponent implements OnInit {
       return true;
     } catch (e: unknown) {
       const status = (e as { status?: number })?.status;
-      this.jogError = status === 501
-        ? 'This board was built without servo support, so nothing will move. Reflash with servos enabled to calibrate.'
-        : status === 404
-          ? 'This device doesn\'t have the servo jog endpoint yet — update its firmware to calibrate.'
-          : 'Couldn\'t reach the gate. Check it\'s powered and on the network.';
+      // The board's own reason when it gave one: "isn't paired", "isn't answering"
+      // and "no such channel" have three different fixes, and a generic line
+      // could only ever point at one of them.
+      this.jogError = e instanceof JogRefusedError
+        ? `Couldn't move the gate: ${e.message}. Tap an arrow to try again.`
+        : status === 501
+          ? 'This board was built without servo support, so nothing will move. Reflash with servos enabled to calibrate.'
+          : status === 404
+            ? 'This device doesn\'t have the servo jog endpoint yet — update its firmware to calibrate.'
+            : 'Couldn\'t reach the shop brain. Check it\'s powered and on the network, then tap an arrow to try again.';
       return false;
     } finally {
       this.busy = false;
