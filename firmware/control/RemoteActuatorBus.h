@@ -34,6 +34,19 @@
 
 namespace topo {
 
+// The library, with ONE thing made visible: when it last failed to connect.
+//
+// A failed TCP connect fires NO event — connectFailedCb() only logs — so an
+// onEvent() handler cannot see it, and the backoff that hung off
+// WStype_DISCONNECTED never engaged for the one case it most needed: a node that
+// is switched off, dialled every second forever with a blocking connect each
+// time. _lastConnectionFail is protected rather than private, so a subclass can
+// read it without patching the library.
+class NodeLinkClient : public WebSocketsClient {
+public:
+    unsigned long lastConnectFailMs() const { return _lastConnectionFail; }
+};
+
 class RemoteActuatorBus : public ActuatorBus {
 public:
     // `nodeId` is the controllerId from the topology; `host` is link.host
@@ -41,7 +54,14 @@ public:
     void begin(const char* nodeId, const char* primaryId, const char* host, uint16_t port = 80);
 
     // Tear the link down (topology re-upload removed or re-pointed this node).
+    // Waits for the link task to leave ON ITS OWN — see the definition for why
+    // it is never deleted from outside.
     void end();
+
+    // end() in two halves, so a caller tearing down N links pays for the
+    // slowest one rather than the sum: ask every task to stop, then end() each.
+    // requestStop() alone is harmless — end() still has to follow.
+    void requestStop() { _running = false; }
 
     const char* nodeId() const { return _nodeId; }
     const char* host()   const { return _host; }
@@ -125,14 +145,32 @@ private:
     // its absence is what let a retry storm exhaust a node's WebSocket slots.
     void _backoff();
 
-    WebSocketsClient _ws;
+    NodeLinkClient    _ws;
     SemaphoreHandle_t _mutex   = nullptr;
     TaskHandle_t      _task    = nullptr;
     volatile bool     _running = false;
+    // True from task start until the task's LAST statement. end() waits on this
+    // rather than on _task, which xTaskCreate writes through a pointer and so
+    // cannot be volatile.
+    volatile bool     _taskAlive = false;
 
     // Resolve a bare/.local host to an IP via ESP-IDF mDNS, and (re)point the
-    // socket at it. Returns false when the name doesn't answer.
+    // socket at it. Returns false when the name doesn't answer. Link task only.
     bool resolveAndDial();
+    // Point the socket at `target` — and do NOTHING if it already is. See the
+    // definition: WebSocketsClient::begin() on a live socket leaks it.
+    void dialTo(const char* target);
+    bool _dialedOnce = false;
+
+    // Socket state as the LIBRARY sees it: up from WStype_CONNECTED to
+    // WStype_DISCONNECTED, whether or not a WELCOME has been accepted. The
+    // re-resolve must not run while this is true — a refused or not-yet-welcomed
+    // link is still an open socket, and re-pointing it orphans the connection.
+    // Touched only on the link task.
+    bool _sockUp = false;
+    // The last _lastConnectionFail the task has acted on, so each failure backs
+    // off exactly once.
+    unsigned long _seenFailMs = 0;
 
     char     _nodeId[40]    = "";
     char     _primaryId[40] = "";

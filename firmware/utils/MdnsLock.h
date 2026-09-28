@@ -19,9 +19,12 @@
 // on a reboot.
 //
 // The asymmetry is the tell, and it is not a coincidence. At boot,
-// syncPairedNodes() calls begin() for each node in a loop and begin() resolves
-// SYNCHRONOUSLY before it creates the task — so the boot-time resolves are
-// serialised by construction and all succeed. Every resolve after that happens
+// syncPairedNodes() called begin() for each node in a loop and begin() resolved
+// SYNCHRONOUSLY before it created the task — so the boot-time resolves were
+// serialised by construction and all succeeded. (Since 2026-09-27 begin() no
+// longer resolves at all — the first resolve runs on the link task, so a Pair
+// tap does not block the main loop for a query per node — which makes this
+// lock the ONLY thing serialising them, at boot as well.) Every resolve after that happens
 // on N parallel tasks on the same cadence, in lockstep, and they collide.
 //
 // So: take this lock around every mDNS search. It restores at runtime the
@@ -53,9 +56,13 @@ inline SemaphoreHandle_t handle() {
  *  other search that is evidently still in flight. */
 class Guard {
 public:
-    explicit Guard(const char* who) : _who(who) {
+    // `waitMs` is shorter for a NodeLink task than for the main loop: a link task
+    // that queues 8 s for the lock is 8 s that RemoteActuatorBus::end() has to
+    // wait out before it may re-dial, and a link that misses one resolve simply
+    // tries again on its own cadence.
+    explicit Guard(const char* who, uint32_t waitMs = kWaitMs) : _who(who) {
         SemaphoreHandle_t h = handle();
-        _held = h && xSemaphoreTake(h, pdMS_TO_TICKS(kWaitMs)) == pdTRUE;
+        _held = h && xSemaphoreTake(h, pdMS_TO_TICKS(waitMs)) == pdTRUE;
         if (!_held) {
             Serial.print(F("[mDNS] busy — skipped a query for "));
             Serial.println(_who ? _who : "?");
