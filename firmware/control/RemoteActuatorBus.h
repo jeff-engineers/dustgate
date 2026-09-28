@@ -135,6 +135,35 @@ public:
     size_t senseCount() const;
     bool   senseAt(size_t i, SenseView& v) const;
 
+    // --- link health, for the WiFi rejoin (firmware.ino) -------------------
+    //
+    // WHY THIS EXISTS (2026-09-27). Twice in one evening the primary lost a node
+    // that was powered, advertising and answering a laptop in 10 ms, while the
+    // primary's own TCP to it timed out (`probe`: NO ROUTE). Only rejoining WiFi
+    // — a RESET — brought it back; the guest network had stopped forwarding
+    // between the two boards. The primary can do that rejoin itself, but ONLY
+    // when the node is evidently alive: a node powered from its tool goes dark
+    // every time the tool is switched off at the wall (RFC §5.6a), and rejoining
+    // WiFi for that would be pointless churn. Two independent signs of life:
+    //
+    //   mdnsAgeMs   — its name answered an mDNS query this long ago
+    //                 (UINT32_MAX = never since this link began)
+    //   hollowDrops — sockets that OPENED and then died before the WebSocket
+    //                 upgrade, since the last good WELCOME. A switched-off node
+    //                 makes the connect FAIL, which is silent; something that
+    //                 accepts the SYN and then never answers is the network
+    //                 standing in for a node that is there. Both incidents showed
+    //                 exactly this: "Link lost" repeating on the primary, nothing
+    //                 at all on the node.
+    struct LinkHealth {
+        bool     linked;        // accepted WELCOME, link up
+        bool     refused;       // the node said no — a claim question, not a path one
+        uint32_t downForMs;     // 0 while linked
+        uint32_t mdnsAgeMs;
+        uint16_t hollowDrops;
+    };
+    LinkHealth health() const;
+
 private:
     static void taskTrampoline(void* arg) { static_cast<RemoteActuatorBus*>(arg)->taskLoop(); }
     void taskLoop();
@@ -230,6 +259,13 @@ private:
     // configured — see resolveAndDial().
     char     _lastIp[20]   = "";
     uint32_t _hostHash     = 0;
+
+    // Link health (see LinkHealth). Written on the link task, read by the main
+    // loop through health() under _mutex — except _lastMdnsOkMs, a lone aligned
+    // word written in one place.
+    uint32_t          _downSinceMs  = 0;
+    volatile uint32_t _lastMdnsOkMs = 0;   // 0 = never
+    uint16_t          _hollowDrops  = 0;
 
     char     _board[24]    = "";
     char     _fw[24]       = "";

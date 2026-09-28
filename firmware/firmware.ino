@@ -721,6 +721,62 @@ static void syncPairedNodes(const char* primaryId) {
     DEBUG_PRINT(F("[NODE] Paired nodes dialling: ")); DEBUG_PRINTLN(g_remoteCount);
 }
 
+// ── REJOIN WIFI WHEN THE NETWORK, NOT THE NODE, IS THE PROBLEM ──────────────
+//
+// A STOPGAP FOR A NETWORK WE DO NOT CONTROL, added 2026-09-27 and not yet seen
+// firing on hardware. Twice that evening the shop's guest network stopped
+// forwarding from the primary to a node that was plainly alive (a laptop reached
+// it in 10 ms; the primary's TCP timed out), and only a RESET — the primary
+// rejoining WiFi — cleared it. This does the rejoin without the RESET.
+//
+// Only when the node is EVIDENTLY ALIVE (RemoteActuatorBus::LinkHealth): down a
+// full minute, and either its mDNS name answered in that minute or sockets to it
+// keep opening and dying before the upgrade. A node that is merely switched off
+// with its tool shows neither, and is left alone — rejoining for it would drop
+// every plug's connection for nothing, every few minutes, all day.
+//
+// Rate-limited shop-wide, because a rejoin is a few seconds with no network for
+// ANYTHING on this board, and because if it does not help, doing it faster will
+// not either. If a rejoin turns out not to clear it, the next step is a restart
+// — deliberately not taken here: a restart drops routing state mid-run, and
+// nobody has yet seen whether the cheaper fix works.
+static const uint32_t kRejoinAfterDownMs   = 60000;
+static const uint32_t kRejoinMdnsFreshMs   = 60000;
+static const uint16_t kRejoinHollowDrops   = 3;
+static const uint32_t kRejoinMinIntervalMs = 300000;
+
+static void rejoinWifiIfNetworkBlocksNodes() {
+    static uint32_t lastRejoinMs = 0;
+    static uint32_t rejoins      = 0;
+    static uint32_t lastCheckMs  = 0;
+    const uint32_t now = millis();
+    if (now - lastCheckMs < 2000) return;          // cheap, but no need every pass
+    lastCheckMs = now;
+    if (WiFi.status() != WL_CONNECTED) return;     // maintain() owns a real outage
+    if (lastRejoinMs && (now - lastRejoinMs) < kRejoinMinIntervalMs) return;
+
+    for (int i = 0; i < g_remoteCount; i++) {
+        const topo::RemoteActuatorBus::LinkHealth h = g_remoteBuses[i].health();
+        if (h.linked || h.refused || h.downForMs < kRejoinAfterDownMs) continue;
+        const bool mdnsAlive   = h.mdnsAgeMs  <= kRejoinMdnsFreshMs;
+        const bool hollowAlive = h.hollowDrops >= kRejoinHollowDrops;
+        if (!mdnsAlive && !hollowAlive) continue;  // most likely just switched off
+
+        lastRejoinMs = now;
+        rejoins++;
+        DEBUG_PRINT(F("[WiFi] REJOINING (#")); DEBUG_PRINT(rejoins);
+        DEBUG_PRINT(F(") — ")); DEBUG_PRINT(g_remoteBuses[i].host());
+        DEBUG_PRINT(F(" has been unreachable ")); DEBUG_PRINT(h.downForMs / 1000);
+        DEBUG_PRINT(F("s but is alive ("));
+        if (mdnsAlive) { DEBUG_PRINT(F("mDNS answered ")); DEBUG_PRINT(h.mdnsAgeMs / 1000); DEBUG_PRINT(F("s ago")); }
+        if (mdnsAlive && hollowAlive) DEBUG_PRINT(F(", "));
+        if (hollowAlive) { DEBUG_PRINT(h.hollowDrops); DEBUG_PRINT(F(" hollow connections")); }
+        DEBUG_PRINTLN(F(") — the network is likely isolating us."));
+        WiFi.reconnect();
+        return;                                    // one rejoin covers every node
+    }
+}
+
 // Map the topology's controllerIds onto paired hosts. This is ALL a layout now
 // contributes to off-board routing: which board drives which gate. A controller
 // naming a host nobody paired stays unresolved, and NodeBus reports its gates as
@@ -2149,6 +2205,7 @@ void loop() {
     // and the core's auto-reconnect hasn't brought it back (e.g. AP rebooted).
 #if defined(CONTROL_SMART_OUTLET) || defined(ENABLE_HTTP_API)
     WiFiProvisioner::maintain();
+    rejoinWifiIfNetworkBlocksNodes();
 #endif
 
     // Run background processing for control input (HTTP server, etc.)
