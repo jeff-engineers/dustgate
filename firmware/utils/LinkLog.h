@@ -42,6 +42,7 @@
 #include <Preferences.h>
 #include <time.h>
 #include "ResetReason.h"
+#include "BuildStamp.h"   // each boot line says which build booted
 
 namespace linklog {
 
@@ -160,8 +161,8 @@ inline void start() {
 inline void begin() {
     start();          // harmless if setup() already called it
     S().ready = true;
-    char extra[64];
-    snprintf(extra, sizeof(extra), "\"rst\":\"%s\"", resetreason::now());
+    char extra[96];
+    snprintf(extra, sizeof(extra), "\"rst\":\"%s\",\"build\":\"%s\"", resetreason::now(), buildstamp::fw());
     event("boot", nullptr, extra);
 }
 

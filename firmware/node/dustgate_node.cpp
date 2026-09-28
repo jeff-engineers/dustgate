@@ -96,6 +96,7 @@
 #include <ArduinoJson.h>
 #include <Preferences.h>          // the persisted owner claim — see THE CLAIM below
 #include "../utils/ResetReason.h" // `rst` in the WELCOME — why this node last booted
+#include "../utils/BuildStamp.h"  // `fw` in the WELCOME, and the boot banner
 #include <ESPmDNS.h>
 #include <esp_heap_caps.h>        // bootTrace() — internal-DRAM headroom at each stage
 #include "../utils/Watchdog.h"
@@ -647,7 +648,7 @@ static void onNodeWsEvent(AsyncWebSocket*, AsyncWebSocketClient* client,
         // clamp it has no pad for, and the tray cannot offer one that is not
         // there.
         topo::nodelink::buildWelcome(reply.to<JsonObject>(), host.c_str(),
-                                     BOARD_NAME, "1.0.0",
+                                     BOARD_NAME, buildstamp::fw(),   // the Boards page shows it
                                      HAS_SERVO ? SERVO_COUNT : 0,
                                      HAS_LINEAR ? 1 : 0,
                                      g_owner.c_str(), accepted,
@@ -938,6 +939,9 @@ void setup() {
 #endif
 
     Serial.println(F("=== DustGate node (secondary) ==="));
+    Serial.print(F("Build: ")); Serial.print(buildstamp::fw());
+    Serial.print(F("  (")); Serial.print(buildstamp::date()); Serial.print(F(" "));
+    Serial.print(buildstamp::time()); Serial.println(F(")"));
     Serial.print(F("Board: ")); Serial.println(BOARD_NAME);
 
     // Same provisioning path as the primary: hardcoded creds, then NVS, then a
