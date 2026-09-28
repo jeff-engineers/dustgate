@@ -1110,6 +1110,28 @@ run_provision() {
   # renaming it, which is exactly what a flag spares you re-typing.
   parse_provision_overrides "$@"
 
+  # A NODE MUST BE NAMED, AND NOT AFTER THE PRIMARY (2026-09-28). The hostname
+  # defaults to the saved one — which is the PRIMARY's (`dustgate`) — so
+  # `provision node --ssid X` quietly renamed a node to the brain's own name,
+  # and the two then fight over dustgate.local while the primary dials neither
+  # reliably. The same default is what the port mix-up wrote into a node on
+  # 2026-09-27. Asking for the name costs one flag; guessing it costs a node.
+  if [[ "$role" == "node" ]]; then
+    local primary_name="${ENV_HOST:-dustgate}"
+    if [[ -z "$OV_HOST" ]]; then
+      echo "  ✗ A node needs its own name. Say which:"
+      echo "      bash dev.sh provision node --host dustgate-<name> [--ssid …]"
+      echo "    (The saved default, '$primary_name', is the PRIMARY's name.)"
+      echo "    Names on the network now:  bash dev.sh ports"
+      exit 1
+    fi
+    if [[ "${OV_HOST%.local}" == "${primary_name%.local}" || "${OV_HOST%.local}" == "dustgate" ]]; then
+      echo "  ✗ '$OV_HOST' is the primary's name — a node given it fights the primary for it."
+      echo "    Pick the node's own name, e.g. --host dustgate-planer"
+      exit 1
+    fi
+  fi
+
   echo "▶ (Re)send WiFi/key/hostname to an already-flashed ${role:-primary} board."
   local port
   port="$(require_port $role)" || exit 1
