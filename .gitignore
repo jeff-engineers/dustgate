@@ -102,3 +102,6 @@ dustgate-ui/.spec-test/
 # the compile at src/firmware.ino.cpp.o (2026-09-09).
 firmware/firmware.ino.cpp
 .dustgate-node-names
+
+# dev.sh monitor both — per-session serial logs
+.monitor-logs/
