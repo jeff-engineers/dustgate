@@ -58,6 +58,7 @@
 // The link log — every node link up/down, WiFi join/drop, rejoin and boot, kept on
 // flash so a shop can run for days with no laptop attached. See utils/LinkLog.h.
 #include "utils/LinkLog.h"
+#include "utils/BuildStamp.h"   // what this board is running — banner, /api/info, link log
 #include "esp_heap_caps.h"   // internal DRAM in the hourly link-log line
 
 // HTTP API server — runs alongside any control mode when ENABLE_HTTP_API is set.
@@ -1122,6 +1123,7 @@ void setup() {
 #endif
     delay(100); // brief settle after connection
     DEBUG_PRINTLN(F("=== DustGate ==="));
+    DEBUG_PRINT(F("Build: ")); DEBUG_PRINTLN(buildstamp::fw());
     // Name the build, not the wiring diagram. This said "ESP32 + TMC2209" on
     // every target — including boards with no stepper — so the first line of
     // every boot log was wrong about what you were looking at.
