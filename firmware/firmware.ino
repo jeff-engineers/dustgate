@@ -694,6 +694,11 @@ static String g_pendingTakeoverHost;
 
 static void syncPairedNodes(const char* primaryId) {
     g_nodeBus.clearRemotes();
+    // ASK ALL, THEN WAIT FOR EACH. end() waits for its link task to leave on its
+    // own (see RemoteActuatorBus::end), which can be seconds for a node that is
+    // dark; asking every task first means those seconds overlap instead of
+    // adding up across the shop.
+    for (int i = 0; i < g_remoteCount; i++) g_remoteBuses[i].requestStop();
     for (int i = 0; i < g_remoteCount; i++) g_remoteBuses[i].end();
     g_remoteCount = 0;
 
@@ -706,9 +711,9 @@ static void syncPairedNodes(const char* primaryId) {
             g_pendingTakeoverHost = "";
             DEBUG_PRINT(F("[NODE] TAKEOVER armed for ")); DEBUG_PRINTLN(host);
         }
-        // Seed the fallback BEFORE begin(), because begin() resolves
-        // synchronously — at boot, with a querier that has often only just come
-        // up, the cached address is frequently the only thing that answers.
+        // Seed the fallback BEFORE begin(): the link task's first resolve reads
+        // it, and at boot, with a querier that has often only just come up, the
+        // cached address is frequently the only thing that answers.
         bus->setLastIp(g_nodeRegistry.lastIp(i));
         bus->begin(host, primaryId, host, 80);
         g_nodeBus.registerRemote(std::string(host), bus);
