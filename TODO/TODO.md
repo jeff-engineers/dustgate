@@ -14,6 +14,56 @@ active sections above them, which is how a parked item stops being read.
 
 ## Bugs
 
+- **ESP-NOW for primary↔node? (jeff, 2026-09-27 — THINKING, not decided.)**
+  Every link failure so far is the same shape: two boards talking TCP *through
+  the AP*, and the AP being allowed to break that — band split (09-18), flaky
+  mDNS, and on 09-27 the primary cut off from the node (probe: `TCP :80 NO ROUTE
+  (3002ms)` while a laptop reached the node in 10 ms), cleared only by the
+  primary rejoining WiFi, and starting the moment a 254-address plug sweep ran
+  (suspected: the guest network penalising a scanning client — UNCONFIRMED).
+  That is CLAUDE.md's "never require anything a network is allowed to block",
+  broken by the node link itself. ESP-NOW goes radio to radio; the AP only sets
+  the channel.
+  - Fits the existing seams: `link.transport: "esp-now"` is already valid in the
+    schema, and routing only sees `ActuatorBus` — a new bus beside
+    `RemoteActuatorBus`, not a rewrite. NodeLink's seq/ACK/STATE/PING carry over.
+  - Costs: one shared channel (keep nodes associated to the AP so they follow its
+    channel changes — also keeps HTTP OTA); 250-byte ESP-NOW v1 frames vs a
+    ~420-byte CONFIG (ESP-NOW v2, ~1470 B, should be on IDF 5.5 — CHECK on the
+    C5); discovery by broadcast beacon instead of mDNS (a gain).
+  - Plugs stay on WiFi for now: custom ESP-NOW firmware via Tasmota's OTA is
+    possible, but means per-model metering calibration and an unrecoverable
+    brick on a sealed mains plug if an OTA goes wrong. CT-sensed tools are
+    already on our boards and would ride ESP-NOW for free.
+  - First step if we go: a one-day spike on two C5s on GenericGuest — v2 frames,
+    channel follow, an hour's delivery count, one deliberate sweep. Keep
+    `wifi-ws` as the fallback transport.
+
+- **A tool switching on must close EVERY gate it doesn't need, not just the ones
+  we think are open. (jeff, 2026-09-27.)** Today `planTransition()`
+  (`shared/device-model/sequencer.js`, mirrored in firmware) skips any selector
+  whose BELIEVED state already matches (`if (cur === desired) continue`) and
+  leaves alone any selector the router didn't address. So a gate someone opened
+  by hand is still "closed" as far as we know, is never re-closed, and the
+  collector now pulls through two tools. Servos are open-loop — nothing reads a
+  valve's real position — so belief is all we have, and it must not be trusted
+  for a break.
+
+  Wanted, in order, on every tool-on: (1) MAKE — open the new tool's path, as now;
+  (2) BREAK — then command CLOSED on every other gate in that system, whether or
+  not we believe it already is. Still make-before-break, so never a dead-head. The
+  re-assert costs a servo pulse on a gate that is already shut, which is nothing.
+  Idle still leaves gates where they are (unchanged, CLAUDE.md design constraint).
+  Change `sequencer.js` and its C++ twin together, with the paired tests.
+
+  **And drop the one-servo-at-a-time rule** (`NodeBus::busy()` as the shop-wide
+  current mutex, TopologyRuntime.h's move queue). It came from boards driving four
+  servos off one supply; a board now drives ONE gate, so the current budget is
+  per board and there is nothing shared to protect. **One exception to check
+  first:** channel 1 on a PWM board may carry the collector-fob servo (CLAUDE.md,
+  `SERVO_COUNT`), so a gate move and a fob press can still land on the same
+  supply at the same moment. Serialise per BOARD, not per shop.
+
 - **Manual control at the machine — "give me suction here and turn it on".
   (jeff, 2026-09-17. Designed, not built.)** The BEHAVIOUR already exists:
   `setMachineManual(machineId, on)` synthesises watts, joins most-recent-wins,
