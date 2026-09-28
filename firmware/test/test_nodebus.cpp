@@ -136,6 +136,12 @@ int main(int argc, char** argv) {
     rt.update(); rt.update(); rt.update();
     ok("no second move while busy", local.log.size() == 1, joined(local.log));
 
+    // Then gate2 is re-closed: a machine switching on re-asserts every servo
+    // gate in its system (2026-09-28), believed-closed or not. Still one at a
+    // time, still after the make.
+    local.settle();
+    rt.update();
+    ok("then the re-asserted close goes out", joined(local.log) == "gate1->open|gate2->closed", joined(local.log));
     local.settle();
     rt.update();
     ok("queue drained after the move settles", !rt.transitioning());
@@ -200,12 +206,15 @@ int main(int argc, char** argv) {
     rt.setToolPower("toolY", 200);
     drain(rt, {&local, &node2});
     ok("gate2 dispatched to node2", joined(node2.log) == "gate2->open", joined(node2.log));
-    ok("nothing sent to the local bus", local.log.empty(), joined(local.log));
+    // Only the RE-ASSERTED close of gate1 (2026-09-28) — never gate2's open,
+    // which belongs to node2. Dispatch is what this block is about.
+    ok("the local bus gets only its own gate's re-close", joined(local.log) == "gate1->closed", joined(local.log));
 
     // ONE MACHINE PER SYSTEM, so starting toolX does not just open gate1 — it
     // takes the air from toolY and shuts gate2 as well, on the other board. The
     // switchover spans two controllers and is still make-before-break.
     node2.log.clear();
+    local.log.clear();
     rt.setToolPower("toolX", 200);
     drain(rt, {&local, &node2});
     ok("gate1 dispatched to the local bus", joined(local.log) == "gate1->open", joined(local.log));
@@ -520,7 +529,9 @@ int main(int argc, char** argv) {
     for (int i = 0; i < 10; i++) { rt.update(t0); local.settle(); }
     ok("jointer runs the 4\" blower",       rt.collectorOn("big"));
     ok("and leaves the 2.5\" one alone",    !rt.collectorOn("small"));
-    ok("its own valve was opened",          joined(local.log) == "bv-jnt->open", joined(local.log));
+    // Opened, then the other 4" gate re-closed (re-assert, 2026-09-28) — and
+    // nothing on the 2.5" system, which this machine does not feed.
+    ok("its own valve was opened",          joined(local.log) == "bv-jnt->open|bv-cab->closed", joined(local.log));
     local.log.clear();
 
     // The drill press lives only on the 2.5" system. Both blowers now run, which

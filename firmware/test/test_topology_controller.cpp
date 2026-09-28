@@ -12,6 +12,9 @@
 
 #include <ArduinoJson.h>
 #include "../control/TopologyController.h"
+#include "../control/TopologyRuntime.h"   // the re-assert queue lives here
+#include <set>
+#include <vector>
 #include <cstdio>
 #include <fstream>
 #include <sstream>
@@ -38,6 +41,30 @@ static std::string movesStr(const topo::TransitionPlan& p) {
   }
   return s;
 }
+// A bus that records what it was told and moves only when the test says so.
+struct StubBus : public topo::ActuatorBus {
+  bool moving = false;
+  std::vector<std::string> log;
+  bool online() const override { return true; }
+  bool busy()   const override { return moving; }
+  bool setState(const char* selectorId, JsonObjectConst, const char* stateId) override {
+    log.push_back(std::string(selectorId) + "->" + stateId);
+    moving = true;
+    return true;
+  }
+};
+static void drainRt(topo::TopologyRuntime& rt, StubBus& bus) {
+  for (int i = 0; i < 50; i++) {
+    rt.update(0);
+    if (bus.moving) { bus.moving = false; continue; }
+    if (!rt.transitioning()) { rt.update(0); break; }
+  }
+}
+static bool logged(const StubBus& b, const std::string& m, size_t from = 0) {
+  for (size_t i = from; i < b.log.size(); i++) if (b.log[i] == m) return true;
+  return false;
+}
+
 static std::string stateOf(const topo::Controller& c, const std::string& sel) {
   auto& m = c.actuatorStates(); auto it = m.find(sel);
   return it == m.end() ? "<none>" : it->second;
@@ -127,6 +154,84 @@ int main(int argc, char** argv) {
     ok("outlet map: host match", c.toolForOutlet("shelly-saw", "0.0.0.0") == "saw");
     ok("outlet map: ip fallback", c.toolForOutlet("", "10.0.0.5") == "saw");
     ok("outlet map: no match → empty", c.toolForOutlet("nope", "1.2.3.4").empty());
+  }
+
+  // ── sequencer: RE-ASSERT on a machine switching on (2026-09-28) ─────────
+  // PAIR: topology.test.js's "re-assert" block — same cases, same order.
+  {
+    DynamicJsonDocument feed(16384);
+    if (deserializeJson(feed, slurp(dir + "feedChain.json"))) { printf("bad feedChain.json\n"); return 2; }
+    // Plan against the SYSTEM VIEW: both fixtures are v2 shops, and the
+    // whole-document overload finds no selectors in one — which made the first
+    // version of this block pass its "no move" case for the wrong reason.
+    const topo::SystemView tg = topo::systemsOf(twoGates.as<JsonObjectConst>())[0];
+    const topo::SystemView fc = topo::systemsOf(feed.as<JsonObjectConst>())[0];
+    std::map<std::string, std::string> cur{{"gate1", "open"}, {"gate2", "closed"}};
+    std::map<std::string, std::string> want = cur;
+    ok("reassert: without it, a believed-closed gate gets no move",
+       topo::planTransition(tg, cur, want, false).moves.empty());
+
+    std::set<std::string> both{"gate1", "gate2"};
+    topo::TransitionPlan p = topo::planTransition(tg, cur, want, false, &both);
+    ok("reassert: both gates are commanded anyway", p.moves.size() == 2, movesStr(p));
+    ok("reassert: the open is a make",  movesStr(p).find("gate1->open(make)") != std::string::npos);
+    ok("reassert: the close is a break", movesStr(p).find("gate2->closed(break)") != std::string::npos);
+    ok("reassert: still make-before-break", movesStr(p) == "gate1->open(make)|gate2->closed(break)", movesStr(p));
+
+    std::set<std::string> one{"gate2"};
+    topo::TransitionPlan q = topo::planTransition(tg, cur, want, false, &one);
+    ok("reassert: only the named selectors", movesStr(q) == "gate2->closed(break)", movesStr(q));
+
+    std::map<std::string, std::string> fcur{{"lin", "s1"}, {"man", "closed"}};
+    std::set<std::string> fall{"lin", "man"};
+    topo::TransitionPlan l = topo::planTransition(fc, fcur, fcur, false, &fall);
+    ok("reassert: a slider is never re-sent", movesStr(l).find("lin->") == std::string::npos, movesStr(l));
+  }
+
+  // ── runtime: the re-assert QUEUE (C++ only — the JS sim has no queue) ───
+  // The scenario that asked for it: the jointer runs, stops (idle HOLDS the
+  // gates), someone opens the table-saw gate by hand, the jointer starts again.
+  {
+    std::string shopJson = slurp(dir + "twoSystemShop.json");
+    StubBus local; topo::NodeBus nb; topo::TopologyRuntime rt;
+    nb.setLocal(&local, "primary");
+    rt.begin(&nb);
+    std::string err;
+    ok("runtime reassert: adopt twoSystemShop", rt.adopt(shopJson.c_str(), shopJson.size(), err), err);
+
+    rt.setMachinePower("jointer", 500); drainRt(rt, local);
+    rt.setMachinePower("jointer", 0);   drainRt(rt, local);     // idle: held
+    size_t mark = local.log.size();
+    rt.setMachinePower("jointer", 500);                        // on again
+    // A second, ordinary reading before anything has run — ingest() REBUILDS
+    // the queue on every tick, and the re-asserts must survive that.
+    rt.setMachinePower("jointer", 510);
+    drainRt(rt, local);
+    ok("runtime reassert: the table-saw gate is re-closed on switch-on",
+       logged(local, "bv-cab->closed", mark));
+    ok("runtime reassert: the jointer's own gate is re-sent open",
+       logged(local, "bv-jnt->open", mark));
+
+    size_t mark2 = local.log.size();
+    rt.setMachinePower("jointer", 520); drainRt(rt, local);    // not an edge
+    ok("runtime reassert: a repeat reading moves nothing", local.log.size() == mark2);
+
+  }
+  // THE BLOWER STARTS ONCE THE OPENS HAVE LANDED, not once every close has.
+  // A FRESH runtime: after a run the blower is coasting and reads as on.
+  {
+    std::string shopJson = slurp(dir + "twoSystemShop.json");
+    StubBus local; topo::NodeBus nb; topo::TopologyRuntime rt;
+    nb.setLocal(&local, "primary");
+    rt.begin(&nb);
+    std::string err;
+    rt.adopt(shopJson.c_str(), shopJson.size(), err);
+    rt.setMachinePower("jointer", 500);
+    rt.update(0);                                  // issues the make (bv-jnt open)
+    ok("runtime reassert: blower waits while the open is moving", !rt.collectorOn("big"));
+    local.moving = false; rt.update(0);            // make landed; the break is issued
+    ok("runtime reassert: blower starts with a close still in flight",
+       rt.collectorOn("big") && rt.transitioning());
   }
 
   printf("\n%d/%d passed%s\n", passed, passed + failed,

@@ -37,6 +37,16 @@ const T = require('./topology');
 function planTransition(topology, currentStates, desiredStates, opts = {}) {
   const collectorRunning = !!opts.collectorRunning;
   const current = currentStates || {};
+  // RE-ASSERT (2026-09-28): selector ids to command even when we BELIEVE they are
+  // already at their target. Servos are open-loop — nothing reads a valve's real
+  // position — so a gate somebody opened by hand stays "closed" in our books and
+  // was never closed again, leaving the collector pulling through two tools. The
+  // caller fills this when a machine SWITCHES ON (never on an ordinary tick, or
+  // every poll would move every gate); see TopologyRuntime.h / topology-device.js.
+  // Servos only: a slider cannot be turned by hand, and re-sending its stop could
+  // start an unwanted homing sweep. Make-before-break is unchanged — a re-asserted
+  // open is still a make, a re-asserted close still a break.
+  const reassert = opts.reassert instanceof Set ? opts.reassert : new Set(opts.reassert || []);
 
   const makes = [];
   const breaks = [];
@@ -51,7 +61,8 @@ function planTransition(topology, currentStates, desiredStates, opts = {}) {
     if (!desiredIsClosed) anyOpen = true;      // something ends up routing air
 
     const cur = current[sel.id];
-    if (cur === desired) continue;             // already there → no move
+    const forced = reassert.has(sel.id) && sel.kind !== 'linear';
+    if (cur === desired && !forced) continue;  // already there → no move
 
     // Linear maintains flow through any move → never a break. A servo settling to
     // its closed state is the only "break" (it seals that path).
