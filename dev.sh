@@ -121,6 +121,8 @@
 #   bash dev.sh monitor both        # primary + node interleaved, one clock, logged
 #                                   #   to .monitor-logs/; type `p: cmd` / `n: cmd`
 #   bash dev.sh monitor … --take    # stop whatever already holds that board's port
+#   bash dev.sh linklog [host]      # the primary's link log over WiFi, saved + summarised
+#                                   #   (drops, outages, node reboots, rejoins) — no USB needed
 #   bash dev.sh ports               # list attached boards + which role each is pinned to
 #   bash dev.sh ports --pin primary # pin the attached board to a role (do this once)
 #   bash dev.sh ports --pin node
@@ -1172,6 +1174,36 @@ port_is_free() {
   return 1
 }
 
+# run_linklog [host]
+# Pull the primary's link log over WiFi, save it, and summarise it — the way to
+# watch a shop with no laptop on any board. See firmware/utils/LinkLog.h and
+# tools/linklog-summary.py. The API key comes from the board's own /api/info.
+run_linklog() {
+  local host="${1:-${DUSTGATE_HOST:-dustgate.local}}"
+  echo "▶ Link log from $host"
+  local key
+  key="$(curl -fsS --max-time 10 "http://$host/api/info" 2>/dev/null \
+          | python3 -c 'import json,sys; print(json.load(sys.stdin).get("apiKey",""))' 2>/dev/null || true)"
+  if [[ -z "$key" ]]; then
+    echo "  ✗ $host did not answer /api/info. Is the primary on the network? Try its IP:"
+    echo "      bash dev.sh linklog 192.168.x.y"
+    exit 1
+  fi
+  local dir="$SCRIPT_DIR/.monitor-logs"; mkdir -p "$dir"
+  local out="$dir/linklog-$(date +%Y%m%d-%H%M%S).jsonl"
+  # The rotated file first, so the saved copy reads oldest to newest.
+  curl -fsS --max-time 20 -H "X-Api-Key: $key" "http://$host/api/linklog?old=1" >  "$out" 2>/dev/null || true
+  curl -fsS --max-time 20 -H "X-Api-Key: $key" "http://$host/api/linklog"       >> "$out" 2>/dev/null || true
+  if [[ ! -s "$out" ]]; then
+    rm -f "$out"
+    echo "  The board has no link log yet (firmware older than 2026-09-27, or just flashed)."
+    exit 0
+  fi
+  echo "  Saved → ${out#$SCRIPT_DIR/}"
+  echo ""
+  python3 "$SCRIPT_DIR/tools/linklog-summary.py" "$out"
+}
+
 # run_monitor_both [--take]
 # The primary and the node interleaved on one screen with one clock, and logged
 # to .monitor-logs/ — see tools/monitor-both.py for why order is the point.
@@ -1433,6 +1465,7 @@ case "${1:-}" in
   flash)     shift; run_flash "$@" ;;
   # "monitor node" targets a secondary: picks the board pinned as the node, and
   # applies the node env's monitor settings.
+  linklog)   shift; run_linklog "$@" ;;
   monitor)
     shift || true
     case "${1:-}" in

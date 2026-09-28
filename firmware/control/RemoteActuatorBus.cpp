@@ -8,6 +8,7 @@
 #include <ESPmDNS.h>
 #include "../utils/MdnsLock.h"   // one mDNS search at a time, across every task
 #include "../utils/Watchdog.h"   // end() waits on the main loop
+#include "../utils/LinkLog.h"    // every link up/down/refusal, kept on flash for a shop soak
 
 #ifndef DEBUG_PRINT
   #define DEBUG_PRINT(x)   Serial.print(x)
@@ -16,9 +17,13 @@
 
 namespace topo {
 
-// Small stack: this task only parses ≤320-byte frames and calls into the WS
-// library. Matches the sizing style of the Shelly poll task.
-static const uint32_t kNodeLinkTaskStack = 4096;
+// This task parses ≤384-byte frames, calls into the WS library, and since
+// 2026-09-27 formats link-log lines (utils/LinkLog.h — a 240-byte line plus
+// snprintf) from inside handleFrame, where a 384-byte JSON document is already on
+// the stack. 4096 left too little margin for that, so 6144 — which costs 2 KB of
+// internal DRAM per DIALLING node (10 max: +20 KB). The "Still dialling" nag
+// prints the high-water mark; trim this from real numbers, not guesses.
+static const uint32_t kNodeLinkTaskStack = 6144;
 static const UBaseType_t kNodeLinkTaskPrio = 1;
 
 void RemoteActuatorBus::begin(const char* nodeId, const char* primaryId,
@@ -55,6 +60,7 @@ void RemoteActuatorBus::begin(const char* nodeId, const char* primaryId,
     _downSinceMs   = millis();   // down until a WELCOME says otherwise
     _lastMdnsOkMs  = 0;
     _hollowDrops   = 0;
+    _everLinked    = false;
     _sockUp        = false;
     _seenFailMs    = 0;
     _lastResolveMs = 0;
@@ -359,7 +365,10 @@ void RemoteActuatorBus::taskLoop() {
             DEBUG_PRINT(F("       signs of life: mDNS "));
             if (h.mdnsAgeMs == UINT32_MAX) DEBUG_PRINT(F("never"));
             else { DEBUG_PRINT(h.mdnsAgeMs / 1000); DEBUG_PRINT(F("s ago")); }
-            DEBUG_PRINT(F(", hollow drops ")); DEBUG_PRINTLN(h.hollowDrops);
+            DEBUG_PRINT(F(", hollow drops ")); DEBUG_PRINT(h.hollowDrops);
+            DEBUG_PRINT(F("; task stack never below "));
+            DEBUG_PRINT((unsigned)uxTaskGetStackHighWaterMark(NULL));
+            DEBUG_PRINTLN(F(" B free"));
         }
 
         // Drain a pending SET. Sending from HERE (not from setState()) is what
@@ -420,10 +429,13 @@ void RemoteActuatorBus::onEvent(WStype_t type, uint8_t* payload, size_t len) {
             // HOLLOW: the socket never reached WStype_CONNECTED — TCP was
             // accepted and then nothing answered the upgrade. See LinkHealth.
             const bool hollow = !_sockUp;
+            // Logged only for a link that was UP. A retry that fails again is
+            // not news, and at one line per retry it would bury the log.
+            bool logDown = false;
             _sockUp = false;
             if (_mutex) {
                 xSemaphoreTake(_mutex, portMAX_DELAY);
-                if (_connected) _downSinceMs = millis();
+                if (_connected) { _downSinceMs = millis(); logDown = true; }
                 if (hollow && _hollowDrops < 0xFFFF) _hollowDrops++;
                 _connected = false;
                 // Drop any outstanding move: we can't know whether it landed,
@@ -441,6 +453,7 @@ void RemoteActuatorBus::onEvent(WStype_t type, uint8_t* payload, size_t len) {
                 xSemaphoreGive(_mutex);
             }
             DEBUG_PRINT(F("[NODE] Link lost: ")); DEBUG_PRINTLN(_nodeId);
+            if (logDown) linklog::event("link_down", _host);
             // No _backoff() here: the drop stamped _lastConnectionFail, and the
             // task loop backs off once per stamp. Calling it here as well would
             // count every drop twice.
@@ -481,6 +494,10 @@ void RemoteActuatorBus::handleFrame(const char* json, size_t len) {
     const char* t = f["t"].as<const char*>();
     if (!t) return;
 
+    // Filled in the WELCOME branch under the lock, logged after it is released.
+    bool logUp = false;
+    char upExtra[160] = "";
+
     xSemaphoreTake(_mutex, portMAX_DELAY);
     _lastRxMs = millis();
 
@@ -509,15 +526,37 @@ void RemoteActuatorBus::handleFrame(const char* json, size_t len) {
             nodelink::strlcpy_(_refusedBy, f["claimedBy"] | "another primary", sizeof(_refusedBy));
             _connected = false;
             xSemaphoreGive(_mutex);
+            {
+                char safe[40], extra[80];
+                linklog::safeCopy(safe, sizeof(safe), _refusedBy);
+                snprintf(extra, sizeof(extra), "\"owner\":\"%s\"", safe);
+                linklog::event("refused", _host, extra);
+            }
             DEBUG_PRINT(F("[NODE] ")); DEBUG_PRINT(_nodeId);
             DEBUG_PRINT(F(" REFUSED us — it belongs to ")); DEBUG_PRINTLN(_refusedBy);
             DEBUG_PRINTLN(F("       Take it over from the boards screen if that is what you want."));
             return;
         }
         _refusedBy[0] = '\0';
+        // LINK LOG: how long it was down and how it looked while it was, taken
+        // BEFORE the reset below, plus the node's own account of its boot
+        // (withBootInfo) — an upS shorter than the outage means the NODE
+        // rebooted, and `rst` says whether that was power or a crash.
+        const uint32_t upDownMs  = _downSinceMs ? (millis() - _downSinceMs) : 0;
+        const uint16_t upHollow  = _hollowDrops;
+        const bool     upFirst   = !_everLinked;
+        const long     upNodeUpS = f.containsKey("upS") ? (long)(f["upS"] | 0UL) : -1L;
+        char upRst[nodelink::kMaxRstLen + 1];
+        linklog::safeCopy(upRst, sizeof(upRst), f["rst"] | "");
+        _everLinked = true;
+        logUp = true;
         _connected = true;
         _downSinceMs = 0;
         _hollowDrops = 0;
+        snprintf(upExtra, sizeof(upExtra),
+                 "\"downMs\":%lu,\"hollow\":%u,\"first\":%s,\"nodeUpS\":%ld,\"nodeRst\":\"%s\"",
+                 (unsigned long)upDownMs, (unsigned)upHollow, upFirst ? "true" : "false",
+                 upNodeUpS, upRst);
         // A HEALTHY LINK RESETS THE BACKOFF, and an accepted WELCOME is the
         // first moment we know it is one. (This task is the only caller of
         // setReconnectInterval, and handleFrame runs on it.)
@@ -583,6 +622,7 @@ void RemoteActuatorBus::handleFrame(const char* json, size_t len) {
         return;
     }
     xSemaphoreGive(_mutex);
+    if (logUp) linklog::event("link_up", _host, upExtra);
 }
 
 bool RemoteActuatorBus::online() const {

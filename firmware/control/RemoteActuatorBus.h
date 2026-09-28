@@ -266,6 +266,7 @@ private:
     uint32_t          _downSinceMs  = 0;
     volatile uint32_t _lastMdnsOkMs = 0;   // 0 = never
     uint16_t          _hollowDrops  = 0;
+    bool              _everLinked   = false;   // first link_up of this begin() is marked "first"
 
     char     _board[24]    = "";
     char     _fw[24]       = "";
