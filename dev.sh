@@ -301,6 +301,18 @@ detect_port() {
     local hit
     hit="$(awk -F'|' -v s="$want" '$3 == s { print $1; exit }' <<<"$boards")"
     [[ -n "$hit" ]] && { echo "$hit"; return; }
+    # …EXCEPT for a node, when exactly one OTHER board is attached. A shop has
+    # many nodes and one pin, so "the pinned node is not here" is the ordinary
+    # state while adding boards — refusing it sent a perfectly good new board to
+    # "no board for node is attached" (2026-09-28). Safe because it is exactly
+    # one board and never the pinned primary; two or more is a guess and still
+    # refuses, which is the case the strict rule below exists for.
+    if [[ "$role" == "node" ]]; then
+      local prim cands
+      prim="$(pinned_serial primary)"
+      cands="$(awk -F'|' -v p="$prim" 'NF && (p == "" || $3 != p) { print $1 }' <<<"$boards")"
+      if [[ "$(grep -c . <<<"$cands")" -eq 1 ]]; then echo "$cands"; return; fi
+    fi
     # PINNED BUT NOT ATTACHED IS AN ANSWER, not a reason to guess. This used to
     # fall through to "first board enumerated", so a stale pin (a board since
     # swapped out) quietly sent BOTH roles to the same port — `monitor` and
