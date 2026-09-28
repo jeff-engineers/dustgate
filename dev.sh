@@ -879,9 +879,12 @@ run_flash() {
   # with --save that file has already been rewritten to the NEW name by now, and
   # the old one would be gone.
   export DUSTGATE_PREV_HOST="${ENV_HOST:-}"
-  # deploy.sh's internal `pio run` calls pick this up automatically —
-  # PlatformIO honors PLATFORMIO_UPLOAD_PORT as an override for upload_port.
-  PLATFORMIO_UPLOAD_PORT="$port" bash deploy.sh "--env=$FLASH_ENV" "$@"
+  # The board's port, under OUR name — deploy.sh passes it to PlatformIO as
+  # --upload-port on the upload steps only. NOT as PLATFORMIO_UPLOAD_PORT: that
+  # variable folds into PlatformIO's project config, which is hashed into the
+  # build-folder checksum, so every flash to a different port (primary 1401 vs
+  # node 1101) wiped and rebuilt every env from scratch (found 2026-09-28).
+  DUSTGATE_UPLOAD_PORT="$port" bash deploy.sh "--env=$FLASH_ENV" "$@"
 
   echo ""
   echo "  If the device doesn't respond below (no boot log, WiFi not connecting,"
@@ -1063,7 +1066,7 @@ run_flash_node() {
   fi
   echo ""
   cd "$SCRIPT_DIR"
-  PLATFORMIO_UPLOAD_PORT="$port" bash deploy.sh "--node=$node_env"
+  DUSTGATE_UPLOAD_PORT="$port" bash deploy.sh "--node=$node_env"
 
   # Recorded AFTER the flash, so a failed upload does not claim a name the board
   # is not actually running.
@@ -1120,7 +1123,7 @@ run_provision() {
   fi
   echo ""
   cd "$SCRIPT_DIR"
-  PLATFORMIO_UPLOAD_PORT="$port" bash deploy.sh --provision-only
+  DUSTGATE_UPLOAD_PORT="$port" bash deploy.sh --provision-only
 }
 
 run_live() {
