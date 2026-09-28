@@ -197,16 +197,68 @@ backup_topology() {
       # were a shop: it has to parse, and it has to be an object.
       if python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if isinstance(d,dict) else 1)' "$out" 2>/dev/null; then
         TOPO_BACKUP="$out"; TOPO_BACKUP_HAD_DOC=true
+        # Which board this came from, beside it — so a later deploy can tell this
+        # board's backup from another shop's. See recover_recent_backup().
+        printf '%s\n' "$host" > "${out%.json}.host"
         echo "  ✓ Saved $(wc -c < "$out" | tr -d ' ') bytes → ${out#$SCRIPT_DIR/}"
       else
         rm -f "$out"
         echo "  ⚠  The device returned something that isn't a topology document — not restoring it."
       fi
       ;;
-    404) rm -f "$out"; echo "  ℹ  No shop saved on the device yet — nothing to preserve." ;;
+    404) rm -f "$out"; echo "  ℹ  No shop saved on the device yet — nothing to preserve."
+         recover_recent_backup "$host" ;;
     401) rm -f "$out"; echo "  ⚠  API key rejected. Not backing up; a saved layout would be lost." ;;
     *)   rm -f "$out"; echo "  ⚠  Couldn't read the topology (HTTP $http). A saved layout would be lost." ;;
   esac
+}
+
+# A BOARD WITH NO LAYOUT RIGHT AFTER A FAILED FLASH IS NOT A FRESH BOARD.
+#
+# The gap this closes (bit twice on 2026-09-27): a filesystem flash that dies
+# part-way has already erased the layout, having backed it up first. The RETRY
+# then finds the board empty — 404, the ordinary "never set up" case — takes no
+# backup, and so restores nothing at the end. The layout survives only in
+# .dustgate-backups/, and only if someone remembers to put it back by hand.
+#
+# So, on a 404, look for a backup of THIS board (by the host recorded beside it
+# at backup time) taken in the last two hours — long enough to cover a retry,
+# short enough that a board wiped on purpose last week does not get its old shop
+# back. Asked, never assumed: a board cleared deliberately a minute ago looks the
+# same, and only the person at the bench knows which it was. Backups taken before
+# the .host sidecar existed are never offered — no way to know whose they are.
+RECOVER_WINDOW_SEC=7200
+
+recover_recent_backup() {
+  local host="$1" f side age now newest=""
+  now="$(date +%s)"
+  for f in $(ls -t "$BACKUP_DIR"/topology-*.json 2>/dev/null); do
+    side="${f%.json}.host"
+    [[ -f "$side" && "$(cat "$side")" == "$host" ]] || continue
+    age=$(( now - $(stat -f %m "$f") ))
+    (( age <= RECOVER_WINDOW_SEC )) && newest="$f"
+    break      # only ever the NEWEST backup of this board — never an older one
+  done
+  [[ -n "$newest" ]] || return 0
+
+  echo ""
+  echo "  ⚠  But this board had a layout $(( age / 60 )) min ago — probably erased by a flash"
+  echo "     that did not finish:  ${newest#$SCRIPT_DIR/}"
+  local reply=""
+  if [[ -t 0 ]]; then
+    read -rp "     Put it back at the end of this deploy? [Y/n] " reply || true
+  else
+    # No one to ask. Leave it — restoring a layout nobody confirmed is the one
+    # thing worse than not restoring one — and say how to do it by hand.
+    reply="n"
+    echo "     (no terminal to ask on — not restoring; do it by hand if you want it)"
+  fi
+  if [[ "$reply" =~ ^[Nn] ]]; then
+    echo "     Left alone. To restore later:  bash tools/restore-topology.sh ${newest#$SCRIPT_DIR/}"
+    return 0
+  fi
+  TOPO_BACKUP="$newest"; TOPO_BACKUP_HAD_DOC=true
+  echo "  ✓ Will restore it once the flash is done."
 }
 
 restore_topology() {
