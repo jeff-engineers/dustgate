@@ -7,6 +7,7 @@
 #include "NodeBus.h"          // bareHost() — ONE spelling of a host, everywhere
 #include <ESPmDNS.h>
 #include "../utils/MdnsLock.h"   // one mDNS search at a time, across every task
+#include "../utils/Watchdog.h"   // end() waits on the main loop
 
 #ifndef DEBUG_PRINT
   #define DEBUG_PRINT(x)   Serial.print(x)
@@ -43,30 +44,18 @@ void RemoteActuatorBus::begin(const char* nodeId, const char* primaryId,
     _hostHash = 0;
     for (const char* p = _host; *p; ++p) _hostHash = _hostHash * 31u + (unsigned char)*p;
 
-    // Resolve the name OURSELVES rather than handing "<name>.local" to the socket
-    // and hoping.
-    //
-    // WebSocketsClient resolves through lwIP's hostByName(), whose mDNS fallback
-    // for ".local" names is unreliable in practice: on this bench it failed twice
-    // during boot and succeeded a minute later, with the node advertising
-    // perfectly the whole time and a laptop resolving it instantly. Each failure
-    // costs a reconnect cycle, and at boot it means the shop comes up with its
-    // gates unreachable for no visible reason.
-    //
-    // ESP-IDF's mDNS querier is the same machinery that already finds Shelly
-    // plugs and DustGate nodes reliably, so use that and dial the resulting IP.
-    // The NAME stays the source of truth (DHCP can move the board); the IP is
-    // just this attempt's answer, re-resolved whenever the link is down.
-    if (!resolveAndDial()) {
-        // Fall back to letting the socket try the name — sometimes lwIP does
-        // manage it, and a dead link retries on its own from taskLoop().
-        snprintf(_dialing, sizeof(_dialing), "%s%s", _host,
-                 (_hostIsIp || strchr(_host, '.')) ? "" : ".local");
-        DEBUG_PRINT(F("[NODE] mDNS didn't answer for ")); DEBUG_PRINT(_host);
-        DEBUG_PRINT(F(" — dialling ")); DEBUG_PRINT(_dialing);
-        DEBUG_PRINTLN(F(" and will retry"));
-        _ws.begin(_dialing, _port, "/nodelink");
-    }
+    // NOTHING IS RESOLVED OR DIALLED HERE — the task's first act is to do both
+    // (taskLoop). This used to resolve synchronously, on the CALLER: a Pair tap
+    // runs syncPairedNodes() on the main loop, which re-begins EVERY paired
+    // node, so it paid one mDNS query (up to 1.5 s, plus up to 8 s queueing for
+    // the lock) per node — past the 10 s loop watchdog with a few boards dark,
+    // which reset the primary for pressing a button.
+    _dialing[0]    = '\0';
+    _dialedOnce    = false;
+    _sockUp        = false;
+    _seenFailMs    = 0;
+    _lastResolveMs = 0;
+
     _ws.onEvent([this](WStype_t t, uint8_t* p, size_t l) { onEvent(t, p, l); });
     // Library-level auto-reconnect handles the common case; the backoff bounds
     // come from the shared contract so the mock secondary can expect the same.
@@ -76,21 +65,21 @@ void RemoteActuatorBus::begin(const char* nodeId, const char* primaryId,
     _ws.setReconnectInterval(_retryMs);
     _ws.enableHeartbeat(nodelink::kPingIntervalMs, nodelink::kPongTimeoutMs, 2);
 
-    _running = true;
+    _running   = true;
+    _taskAlive = true;
     // Checked, because the failure is otherwise completely silent: no task means
     // nothing ever pumps _ws.loop(), so the socket never opens and the node sits
     // at "paired but offline" forever — indistinguishable from a dead board.
     BaseType_t ok = xTaskCreatePinnedToCore(taskTrampoline, "nodelink", kNodeLinkTaskStack,
                                             this, kNodeLinkTaskPrio, &_task, 0);
     if (ok != pdPASS) {
-        _running = false;
-        _task    = nullptr;
+        _running   = false;
+        _taskAlive = false;
+        _task      = nullptr;
         DEBUG_PRINT(F("[NODE] FAILED to start link task for ")); DEBUG_PRINT(_nodeId);
         DEBUG_PRINT(F(" — free heap ")); DEBUG_PRINTLN(ESP.getFreeHeap());
         return;
     }
-    DEBUG_PRINT(F("[NODE] Linking to ")); DEBUG_PRINT(_nodeId);
-    DEBUG_PRINT(F(" at ws://")); DEBUG_PRINT(_dialing); DEBUG_PRINTLN(F("/nodelink"));
 }
 
 // GROW THE RETRY INTERVAL, up to kReconnectMaxMs.
@@ -125,12 +114,22 @@ void RemoteActuatorBus::_backoff() {
     DEBUG_PRINTLN(F(" ms"));
 }
 
+// Resolve the name OURSELVES rather than handing "<name>.local" to the socket
+// and hoping.
+//
+// WebSocketsClient resolves through lwIP's hostByName(), whose mDNS fallback for
+// ".local" names is unreliable in practice: on this bench it failed twice during
+// boot and succeeded a minute later, with the node advertising perfectly the
+// whole time and a laptop resolving it instantly. ESP-IDF's mDNS querier is the
+// same machinery that already finds Shelly plugs and DustGate nodes reliably, so
+// use that and dial the resulting IP. The NAME stays the source of truth (DHCP
+// can move the board); the IP is just this attempt's answer, re-resolved
+// whenever the link is down. LINK TASK ONLY — it can block for seconds.
 bool RemoteActuatorBus::resolveAndDial() {
     _lastResolveMs = millis();
 
     if (_hostIsIp) {
-        nodelink::strlcpy_(_dialing, _host, sizeof(_dialing));
-        _ws.begin(_dialing, _port, "/nodelink");
+        dialTo(_host);
         return true;
     }
 
@@ -149,9 +148,12 @@ bool RemoteActuatorBus::resolveAndDial() {
     // SERIALISED — see utils/MdnsLock.h. Each node re-resolves from its own
     // task on the same cadence, so with more than one board these collide
     // constantly and every one of them reads the empty result as "gone".
+    // A SHORT wait for the lock: see mdnslock::Guard. Worst case on this task
+    // is then ~2 s queueing + 1.5 s querying + WEBSOCKETS_TCP_TIMEOUT dialling,
+    // which is what end() has to be prepared to wait out.
     IPAddress ip((uint32_t)0);
     {
-        mdnslock::Guard lock(label);
+        mdnslock::Guard lock(label, 2000);
         if (lock.held()) ip = MDNS.queryHost(label, 1500);
     }
     if (ip == IPAddress((uint32_t)0)) {
@@ -175,8 +177,7 @@ bool RemoteActuatorBus::resolveAndDial() {
                 DEBUG_PRINT(F(" — mDNS quiet, falling back to last known "));
                 DEBUG_PRINTLN(_lastIp);
             }
-            nodelink::strlcpy_(_dialing, _lastIp, sizeof(_dialing));
-            _ws.begin(_dialing, _port, "/nodelink");
+            dialTo(_lastIp);
             return true;
         }
         return false;
@@ -184,26 +185,79 @@ bool RemoteActuatorBus::resolveAndDial() {
 
     String s = ip.toString();
     if (s.length() >= sizeof(_dialing)) return false;
-    nodelink::strlcpy_(_dialing, s.c_str(), sizeof(_dialing));
     // Remembered for the fallback above, and readable by the sketch so it can be
     // persisted — a board that has resolved once should survive a power cut with
     // a silent querier.
     nodelink::strlcpy_(_lastIp, s.c_str(), sizeof(_lastIp));
-    DEBUG_PRINT(F("[NODE] ")); DEBUG_PRINT(label);
-    DEBUG_PRINT(F(" resolved to ")); DEBUG_PRINTLN(_dialing);
-    _ws.begin(_dialing, _port, "/nodelink");
+    if (strcmp(_dialing, s.c_str()) != 0) {
+        DEBUG_PRINT(F("[NODE] ")); DEBUG_PRINT(label);
+        DEBUG_PRINT(F(" resolved to ")); DEBUG_PRINTLN(s);
+    }
+    dialTo(s.c_str());
     return true;
 }
 
-void RemoteActuatorBus::end() {
-    _running = false;
-    if (_task) {
-        // Let the task observe _running and exit on its own rather than
-        // vTaskDelete-ing it mid-send with the socket half-written.
-        for (int i = 0; i < 50 && _task; i++) delay(10);
-        if (_task) { vTaskDelete(_task); _task = nullptr; }
+// RE-POINT THE SOCKET ONLY WHEN THE ADDRESS ACTUALLY CHANGED.
+//
+// WebSocketsClient::begin() is a constructor in disguise: it sets
+// `_client.tcp = NULL` without closing or deleting what was there, and zeroes
+// the reconnect timer. Called on an open socket it LEAKS the connection — the
+// WiFiClient object and its lwIP socket on this board, and a live WebSocket
+// client slot on the node that cleanupClients() never reaps, because to the
+// node it is still established. The re-resolve used to call it every 3-15 s
+// for as long as a link was not WELCOMEd, which includes a node that REFUSED
+// our claim and keeps its socket open: one orphan per cycle, forever, until the
+// node's pool filled and it reset every connection (errno 104) and this board
+// ran short of sockets for its plugs.
+//
+// So: the same address is a no-op (the library's own reconnect keeps trying it,
+// on the backed-off interval begin() would otherwise have reset), and a new one
+// closes the old socket first.
+void RemoteActuatorBus::dialTo(const char* target) {
+    if (_dialedOnce && strcmp(target, _dialing) == 0) return;
+    if (_dialedOnce) _ws.disconnect();   // a no-op unless something is open
+    nodelink::strlcpy_(_dialing, target, sizeof(_dialing));
+    _ws.begin(_dialing, _port, "/nodelink");
+    if (!_dialedOnce) {
+        DEBUG_PRINT(F("[NODE] Linking to ")); DEBUG_PRINT(_nodeId);
+        DEBUG_PRINT(F(" at ws://")); DEBUG_PRINT(_dialing); DEBUG_PRINTLN(F("/nodelink"));
     }
+    _dialedOnce = true;
+}
+
+// WAIT FOR THE TASK TO LEAVE; DO NOT KILL IT.
+//
+// This used to give the task 500 ms and then vTaskDelete() it. The task spends
+// most of an unreachable node's life inside a blocking call — an mDNS query
+// holding the shop-wide mdnslock, or a TCP connect — and a task deleted there
+// never runs the code after it: the lock is never given back (every later mDNS
+// search on this board then waits 8 s and gives up, "[mDNS] busy — skipped"),
+// or the socket is never closed. Deleting a task cannot release what it holds.
+//
+// The bound comes from the task's own worst case (resolveAndDial()'s comment):
+// ~2 s for the lock, 1.5 s for the query, WEBSOCKETS_TCP_TIMEOUT to dial. Pet the
+// loop watchdog while waiting, since this runs on the main loop during a Pair.
+static const uint32_t kStopWaitMs = 8000;
+
+void RemoteActuatorBus::end() {
+    requestStop();
+    const uint32_t t0 = millis();
+    while (_taskAlive && (millis() - t0) < kStopWaitMs) {
+        watchdog::pet();
+        delay(10);
+    }
+    if (_taskAlive) {
+        // Should not happen given the bounds above. If it does, the task is
+        // wedged somewhere unbounded, and deleting it is the lesser evil — but
+        // say so, because whatever it held is now held forever.
+        DEBUG_PRINT(F("[NODE] ⚠ link task for ")); DEBUG_PRINT(_nodeId);
+        DEBUG_PRINTLN(F(" did not stop — deleting it; mDNS or a socket may now be leaked"));
+        if (_task) vTaskDelete(_task);
+        _taskAlive = false;
+    }
+    _task = nullptr;
     _ws.disconnect();
+    _sockUp = false;
     if (_mutex) {
         xSemaphoreTake(_mutex, portMAX_DELAY);
         _connected = false; _moveOutstanding = false; _txPending = false;
@@ -212,6 +266,18 @@ void RemoteActuatorBus::end() {
 }
 
 void RemoteActuatorBus::taskLoop() {
+    // FIRST DIAL, here rather than in begin() — see begin() for why.
+    if (!resolveAndDial()) {
+        // Fall back to letting the socket try the name — sometimes lwIP does
+        // manage it — and let the re-resolve below replace it when mDNS answers.
+        char name[64];
+        snprintf(name, sizeof(name), "%s%s", _host, strchr(_host, '.') ? "" : ".local");
+        DEBUG_PRINT(F("[NODE] mDNS didn't answer for ")); DEBUG_PRINT(_host);
+        DEBUG_PRINT(F(" — dialling ")); DEBUG_PRINT(name);
+        DEBUG_PRINTLN(F(" and will retry"));
+        dialTo(name);
+    }
+
     unsigned long lastNagMs = millis();
     while (_running) {
         _ws.loop();
@@ -226,7 +292,20 @@ void RemoteActuatorBus::taskLoop() {
         // the first attempt — and waiting a full nag interval to try again left
         // the shop unreachable for no reason. Fast while it's fresh, backing off
         // once it's clearly not a startup race.
-        if (!_connected && !_hostIsIp) {
+        // Back off on EVERY failure the library records — a connect that did not
+        // happen (no event at all, see NodeLinkClient) as well as a link that
+        // dropped (whose clientDisconnect() stamps the same field). Zero means
+        // "connected" or "freshly begun", neither of which is a failure.
+        {
+            const unsigned long f = _ws.lastConnectFailMs();
+            if (f != _seenFailMs) {
+                _seenFailMs = f;
+                if (f) _backoff();
+            }
+        }
+
+        // Only while the SOCKET is down, not merely un-WELCOMEd: see dialTo().
+        if (!_sockUp && !_connected && !_hostIsIp) {
             unsigned long since = millis() - _lastResolveMs;
             unsigned long every = (millis() < 60000UL) ? 3000UL : 15000UL;
             // STAGGERED, so N boards do not queue on the same tick forever. The
@@ -239,7 +318,7 @@ void RemoteActuatorBus::taskLoop() {
             if (since > every) {
                 char prev[64];
                 nodelink::strlcpy_(prev, _dialing, sizeof(prev));
-                if (resolveAndDial() && strcmp(prev, _dialing) != 0) {
+                if (resolveAndDial() && prev[0] && strcmp(prev, _dialing) != 0) {
                     DEBUG_PRINT(F("[NODE] Now dialling ")); DEBUG_PRINT(_dialing);
                     DEBUG_PRINT(F(" (was ")); DEBUG_PRINT(prev); DEBUG_PRINTLN(F(")"));
                 }
@@ -294,18 +373,21 @@ void RemoteActuatorBus::taskLoop() {
         }
         delay(5);
     }
-    _task = nullptr;
+    // LAST, and only here: end() reads this to know the task has let go of
+    // everything it might have been holding.
+    _taskAlive = false;
     vTaskDelete(NULL);
 }
 
 void RemoteActuatorBus::onEvent(WStype_t type, uint8_t* payload, size_t len) {
     switch (type) {
         case WStype_CONNECTED: {
-            // A SOCKET IS ENOUGH TO RESET THE BACKOFF. Not WELCOME: a node that
-            // accepts the connection is a node that is answering, and holding the
-            // retry slow while it identifies itself would just delay the link.
-            _retryMs = nodelink::kReconnectMinMs;
-            _ws.setReconnectInterval(_retryMs);
+            _sockUp = true;
+            // The backoff is NOT reset here any more — see the WELCOME branch of
+            // handleFrame(). Resetting on a bare socket kept the storm it was
+            // written for at 1-2 s: connect (reset to 1 s), drop (double to
+            // 2 s), connect again.
+            //
             // Socket is up but the node hasn't identified itself yet — stay
             // offline until WELCOME lands so we never command an unknown board.
             StaticJsonDocument<192> doc;
@@ -320,6 +402,7 @@ void RemoteActuatorBus::onEvent(WStype_t type, uint8_t* payload, size_t len) {
             break;
         }
         case WStype_DISCONNECTED:
+            _sockUp = false;
             if (_mutex) {
                 xSemaphoreTake(_mutex, portMAX_DELAY);
                 _connected = false;
@@ -338,7 +421,9 @@ void RemoteActuatorBus::onEvent(WStype_t type, uint8_t* payload, size_t len) {
                 xSemaphoreGive(_mutex);
             }
             DEBUG_PRINT(F("[NODE] Link lost: ")); DEBUG_PRINTLN(_nodeId);
-            _backoff();
+            // No _backoff() here: the drop stamped _lastConnectionFail, and the
+            // task loop backs off once per stamp. Calling it here as well would
+            // count every drop twice.
             break;
         case WStype_TEXT:
             handleFrame(reinterpret_cast<const char*>(payload), len);
@@ -410,6 +495,11 @@ void RemoteActuatorBus::handleFrame(const char* json, size_t len) {
         }
         _refusedBy[0] = '\0';
         _connected = true;
+        // A HEALTHY LINK RESETS THE BACKOFF, and an accepted WELCOME is the
+        // first moment we know it is one. (This task is the only caller of
+        // setReconnectInterval, and handleFrame runs on it.)
+        _retryMs = nodelink::kReconnectMinMs;
+        _ws.setReconnectInterval(_retryMs);
         // Re-arm the CONFIG on every accepted handshake: this node may have just
         // rebooted, and a node that has not been configured reports nothing.
         if (_cfgValid) _cfgPending = true;
