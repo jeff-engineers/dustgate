@@ -145,12 +145,20 @@ inline void flush() {
 // Call once LittleFS is mounted. Bumps the boot counter and records WHY this
 // boot happened — "panic"/"task_wdt" here is a crash worth chasing; "usb" is a
 // flash or a monitor on the bench.
-inline void begin() {
+// FIRST THING IN setup(), before WiFi: stamps the boot number, so the lines that
+// queue before the filesystem is up (the first wifi_up, above all) carry this
+// boot's number rather than 0. Seen on the first hardware run, 2026-09-28.
+inline void start() {
+    if (S().boot) return;
     Preferences p;
     p.begin("linklog", false);
     S().boot = p.getUInt("boots", 0) + 1;
     p.putUInt("boots", S().boot);
     p.end();
+}
+
+inline void begin() {
+    start();          // harmless if setup() already called it
     S().ready = true;
     char extra[64];
     snprintf(extra, sizeof(extra), "\"rst\":\"%s\"", resetreason::now());
