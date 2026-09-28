@@ -193,6 +193,23 @@ inline void buildWelcome(JsonObject out, const char* nodeId, const char* board,
     if (!accepted) out["accepted"] = false;
 }
 
+// A node's own account of its last boot, added to a WELCOME — withBootInfo() in
+// nodelink.js, which says why it exists. `upS` whole seconds since boot, `rst`
+// a short reset-reason word. Optional both ways; absent means UNKNOWN, and
+// nothing routes on either. kMaxRstLen is MAX_RST_LEN in nodelink.js (a pair —
+// see CLAUDE.md): the JS validator refuses a longer `rst`, so a node writing one
+// would have its whole WELCOME refused by a JS-certified primary.
+static const size_t kMaxRstLen = 16;
+
+inline void addBootInfo(JsonObject w, uint32_t upS, const char* rst) {
+    w["upS"] = upS;
+    if (rst && *rst) {
+        // std::string's own length cap, not strlcpy_ — that helper is defined
+        // further down this header.
+        w["rst"] = std::string(rst).substr(0, kMaxRstLen);   // COPIED (std::string, not a pointer): the caller's buffer need not outlive serialize
+    }
+}
+
 // Does this WELCOME say we may drive the node? Absent means yes, so a node
 // built before claims answers exactly as it always did. The safe reading is the
 // default one: only an explicit `accepted:false` refuses.

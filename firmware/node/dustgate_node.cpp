@@ -95,6 +95,7 @@
 #include <ESPAsyncWebServer.h>
 #include <ArduinoJson.h>
 #include <Preferences.h>          // the persisted owner claim — see THE CLAIM below
+#include "../utils/ResetReason.h" // `rst` in the WELCOME — why this node last booted
 #include <ESPmDNS.h>
 #include <esp_heap_caps.h>        // bootTrace() — internal-DRAM headroom at each stage
 #include "../utils/Watchdog.h"
@@ -580,14 +581,16 @@ static void onNodeWsEvent(AsyncWebSocket*, AsyncWebSocketClient* client,
     const char* t = f["t"].as<const char*>();
     if (!t) return;
 
-    // 384, not 256, and the extra is not slack. A WELCOME carrying nodeId,
+    // 512, not 256, and the extra is not slack. A WELCOME carrying nodeId,
     // board, fw, a claimedBy and a three-member `caps` lands right on 256 — and
     // ArduinoJson does not fail an overflow, it SILENTLY DROPS the member being
     // added. `caps.ct` is written last, so the symptom was a board that reported
     // every capability except the clamp, and a tray that never offered one.
     // Caught by test_nodebus.cpp, 2026-09-15; it would have read as a wiring
-    // fault on the bench.
-    StaticJsonDocument<384> reply;
+    // fault on the bench. 384 → 512 on 2026-09-27 when boot info (upS, rst)
+    // joined the WELCOME: at 384 the fullest one dropped `rst`, and the same
+    // test caught that too.
+    StaticJsonDocument<512> reply;
 
     // Declared HERE, not inside the HELLO branch, and it matters: ArduinoJson
     // stores a `const char*` value BY POINTER without copying, and the document
@@ -654,6 +657,11 @@ static void onNodeWsEvent(AsyncWebSocket*, AsyncWebSocketClient* client,
                                      0
 #endif
                                      );
+        // Why this node last booted, so the primary's link log can tell a tool
+        // switched off at the wall ("poweron"/"brownout") from a crash
+        // ("panic"/"task_wdt"). See withBootInfo() in nodelink.js.
+        topo::nodelink::addBootInfo(reply.as<JsonObject>(), millis() / 1000UL,
+                                    resetreason::now());
     } else if (strcmp(t, "PING") == 0) {
         topo::nodelink::buildPong(reply.to<JsonObject>());
     } else if (strcmp(t, "CONFIG") == 0) {
