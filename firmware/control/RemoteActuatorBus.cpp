@@ -52,6 +52,9 @@ void RemoteActuatorBus::begin(const char* nodeId, const char* primaryId,
     // which reset the primary for pressing a button.
     _dialing[0]    = '\0';
     _dialedOnce    = false;
+    _downSinceMs   = millis();   // down until a WELCOME says otherwise
+    _lastMdnsOkMs  = 0;
+    _hollowDrops   = 0;
     _sockUp        = false;
     _seenFailMs    = 0;
     _lastResolveMs = 0;
@@ -182,6 +185,10 @@ bool RemoteActuatorBus::resolveAndDial() {
         }
         return false;
     }
+
+    // A SIGN OF LIFE for the WiFi rejoin — see LinkHealth. Stamped whenever the
+    // name answers, even when the address is unchanged and nothing is logged.
+    _lastMdnsOkMs = millis() ? millis() : 1;
 
     String s = ip.toString();
     if (s.length() >= sizeof(_dialing)) return false;
@@ -345,6 +352,14 @@ void RemoteActuatorBus::taskLoop() {
             DEBUG_PRINT((unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
             DEBUG_PRINT(F(" largest "));
             DEBUG_PRINTLN((unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+            // The two signs of life the WiFi rejoin weighs, on the line people
+            // already read — so a capture says which one fired, or that neither
+            // did and the node is simply off.
+            const LinkHealth h = health();
+            DEBUG_PRINT(F("       signs of life: mDNS "));
+            if (h.mdnsAgeMs == UINT32_MAX) DEBUG_PRINT(F("never"));
+            else { DEBUG_PRINT(h.mdnsAgeMs / 1000); DEBUG_PRINT(F("s ago")); }
+            DEBUG_PRINT(F(", hollow drops ")); DEBUG_PRINTLN(h.hollowDrops);
         }
 
         // Drain a pending SET. Sending from HERE (not from setState()) is what
@@ -401,10 +416,15 @@ void RemoteActuatorBus::onEvent(WStype_t type, uint8_t* payload, size_t len) {
             _ws.sendTXT(s);
             break;
         }
-        case WStype_DISCONNECTED:
+        case WStype_DISCONNECTED: {
+            // HOLLOW: the socket never reached WStype_CONNECTED — TCP was
+            // accepted and then nothing answered the upgrade. See LinkHealth.
+            const bool hollow = !_sockUp;
             _sockUp = false;
             if (_mutex) {
                 xSemaphoreTake(_mutex, portMAX_DELAY);
+                if (_connected) _downSinceMs = millis();
+                if (hollow && _hollowDrops < 0xFFFF) _hollowDrops++;
                 _connected = false;
                 // Drop any outstanding move: we can't know whether it landed,
                 // and holding busy() forever would stall every other gate.
@@ -425,6 +445,7 @@ void RemoteActuatorBus::onEvent(WStype_t type, uint8_t* payload, size_t len) {
             // task loop backs off once per stamp. Calling it here as well would
             // count every drop twice.
             break;
+        }
         case WStype_TEXT:
             handleFrame(reinterpret_cast<const char*>(payload), len);
             break;
@@ -495,6 +516,8 @@ void RemoteActuatorBus::handleFrame(const char* json, size_t len) {
         }
         _refusedBy[0] = '\0';
         _connected = true;
+        _downSinceMs = 0;
+        _hollowDrops = 0;
         // A HEALTHY LINK RESETS THE BACKOFF, and an accepted WELCOME is the
         // first moment we know it is one. (This task is the only caller of
         // setReconnectInterval, and handleFrame runs on it.)
@@ -735,6 +758,21 @@ bool RemoteActuatorBus::senseAt(size_t i, SenseView& v) const {
     }
     xSemaphoreGive(_mutex);
     return ok;
+}
+
+RemoteActuatorBus::LinkHealth RemoteActuatorBus::health() const {
+    LinkHealth h{false, false, 0, UINT32_MAX, 0};
+    if (!_mutex) return h;
+    const uint32_t now = millis();
+    const uint32_t mdns = _lastMdnsOkMs;
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    h.linked      = _connected && (now - _lastRxMs) < nodelink::kPongTimeoutMs;
+    h.refused     = _refusedBy[0] != '\0';
+    h.downForMs   = (h.linked || !_downSinceMs) ? 0 : (now - _downSinceMs);
+    h.hollowDrops = _hollowDrops;
+    xSemaphoreGive(_mutex);
+    h.mdnsAgeMs   = mdns ? (now - mdns) : UINT32_MAX;
+    return h;
 }
 
 RemoteActuatorBus::NodeInfo RemoteActuatorBus::info() const {
