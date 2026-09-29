@@ -38,7 +38,7 @@ def fmt_ms(ms):
 
 # A reset reason that means the NODE's power went away, which on a CT node is the
 # tool being switched off at the wall — normal. Anything else is worth a look.
-POWER = {"poweron", "brownout"}
+POWER = {"poweron", "brownout", "pwr_glitch"}
 
 
 def main(paths):
@@ -93,13 +93,32 @@ def main(paths):
         if ups:
             durs = sorted(e.get("downMs", 0) for e in ups)
             print(f"    outage: typical {fmt_ms(durs[(len(durs) - 1) // 2])}, longest {fmt_ms(durs[-1])}")
+        # DID THE NODE REBOOT? Compare its uptime with how long ago the link was
+        # last GOOD (the previous link_up, same primary boot) — not with downMs.
+        # The primary only notices a dead link after the heartbeat times out, so
+        # downMs (~2 s) badly under-states how long a node has really been gone:
+        # a node that rebooted 10 s ago reads "down 2 s", and comparing against
+        # that labelled every brownout "the network dropped it" (2026-09-29).
+        prev_ok = {}
+        for e in sorted(mine, key=lambda x: (x.get("boot", 0), x.get("up", 0))):
+            if e.get("ev") == "link_up":
+                b = e.get("boot")
+                e["_since_ok_s"] = (e.get("up", 0) - prev_ok[b]) / 1000 if b in prev_ok else None
+                prev_ok[b] = e.get("up", 0)
         for e in ups:
             down_s = e.get("downMs", 0) / 1000
+            since_ok = e.get("_since_ok_s")
+            gone_s = since_ok if since_ok is not None else down_s
             node_up = e.get("nodeUpS", -1)
             rst = e.get("nodeRst", "")
-            if node_up is not None and node_up >= 0 and node_up < down_s:
+            if node_up is not None and node_up >= 0 and node_up < gone_s:
                 why = "node REBOOTED" + (f" ({rst})" if rst else "")
-                if rst and rst not in POWER:
+                if rst == "unknown":
+                    # Node firmware before 2026-09-29 reported the C5's power-glitch
+                    # reset as "unknown" (utils/ResetReason.h) — so on those nodes
+                    # this is most likely POWER, not a crash.
+                    why += "   ← cause not named (older node firmware: likely a power glitch)"
+                elif rst and rst not in POWER:
                     why += "   ← a crash, not a power cut"
             elif node_up is not None and node_up >= 0:
                 why = "node stayed up — the NETWORK dropped it"
