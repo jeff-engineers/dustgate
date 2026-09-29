@@ -32,6 +32,13 @@ inline const char* word(esp_reset_reason_t r) {
         // toggling the lines, which on a bench is by far the most common reason.
         case ESP_RST_USB:       return "usb";
         case ESP_RST_JTAG:      return "jtag";
+        // The C5's list is longer than the classic ESP32's, and these three were
+        // missing until 2026-09-29 — so a node resetting on a POWER GLITCH (a
+        // servo dragging its supply down) reported "unknown" and read as a
+        // mystery rather than as the power fault it is.
+        case ESP_RST_EFUSE:      return "efuse";
+        case ESP_RST_PWR_GLITCH: return "pwr_glitch";
+        case ESP_RST_CPU_LOCKUP: return "cpu_lockup";
         default:                return "unknown";
     }
 }
