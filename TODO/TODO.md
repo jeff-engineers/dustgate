@@ -51,6 +51,23 @@ active sections above them, which is how a parked item stops being read.
   `SERVO_COUNT`), so a gate move and a fob press can still land on the same
   supply at the same moment. Serialise per BOARD, not per shop.
 
+- **Ramp servo moves instead of jumping to the target. (jeff, 2026-09-30.)**
+  A PWM servo told to jump draws its full start-up current at once, and on a
+  board powering the servo and the XIAO from one supply that spike is enough to
+  reset the chip. Seen on the drum-sander board 2026-09-30 with the new link log:
+  a forced stall at the gate reset the node with `nodeRst: pwr_glitch`, 6 V/2 A
+  supply, servo straight off it, an Adafruit MPM3610 feeding the XIAO. The
+  MPM3610 is the weak link there, not the servo: its 85 % max duty cycle (80 %
+  guaranteed) means 5 V out needs ~5.9–6.25 V in, so on a 6 V rail every servo
+  sag goes straight through to the XIAO. Stepping the angle in
+  `ServoActuator` over a few hundred ms shrinks every normal move's spike. It
+  does NOT help a jam — that is a supply problem, and jeff's plan is caps first
+  (470–1000 µF at the servo), then a second cheap buck for the servo off 12 V
+  with the MPM3610 also on 12 V. Keep the ramp short enough that a routing
+  transition (make-before-break) doesn't visibly slow down, and mind
+  move-then-detach: the detach timer must start after the LAST step, not the
+  first.
+
 - **Manual control at the machine — "give me suction here and turn it on".
   (jeff, 2026-09-17. Designed, not built.)** The BEHAVIOUR already exists:
   `setMachineManual(machineId, on)` synthesises watts, joins most-recent-wins,
