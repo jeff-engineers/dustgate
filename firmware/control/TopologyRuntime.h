@@ -401,6 +401,17 @@ public:
                it->second.plugWatts >= topo::kCollectorRunningW;
     }
 
+    // What the press policy should believe the blower is doing. Differs from
+    // collectorPlugStateFor() in one way: collectorPlugState() answers "off"
+    // whenever we are not asking, whatever the wire says — right for the app
+    // (nothing is wrong) and wrong for a press, which is a toggle and so must know
+    // whether the blower is really still drawing before it decides an OFF landed.
+    topo::PlugState pressObservation(const std::string& systemId) const {
+        topo::PlugState st = collectorPlugStateFor(systemId);
+        if (st == topo::PlugState::Off && collectorDrawing(systemId)) return topo::PlugState::Running;
+        return st;
+    }
+
     // How long this blower has been COMMANDED on. The runtime's own timer wins
     // whenever it has one; the feed's number is the fallback for a caller that
     // passes no clock (the host tests).
@@ -921,7 +932,13 @@ private:
                 // they are rather than driving it closed (routing.states would say
                 // "all closed", which is the one destination that can dead-head).
                 // Its moves are simply not queued — see the queue rebuild below.
-                c.deadHeadRisk = plan && plan->deadHeadRisk;
+                //
+                // Judged against the gates AS THEY STAND, not the plan: the plan's
+                // destination for an idle system is "all closed", which would
+                // dead-head — and is exactly the destination being dropped. Reading
+                // plan->deadHeadRisk here reported a dead-head after every tool
+                // turned off while the gates were in fact left open (2026-10-03).
+                c.deadHeadRisk = c.running && !systemHasOpenPath(sysId);
                 // Idle HOLDS its gates, so a re-assert still pending here is
                 // dropped with the rest of its moves — the next switch-on marks
                 // them again.

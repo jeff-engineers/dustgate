@@ -394,12 +394,21 @@ void SmartOutletControl::reconcileCollectors() {
     // exists to cover. A blower pressed by a servo has no _collectors[i] at all
     // and would otherwise never be read.
     for (int i = 0; i < COLLECTOR_COUNT; i++) {
-        if (_collectorSensors[i] && strlen(_collectorSensors[i]->ip()) > 0)
-            _collectorSensors[i]->poll();
+        // ONE read of the slot: the main loop can null it between a check and a
+        // use (removeCollectorSensor), and retire() keeps the object alive.
+        SmartOutlet* sensor = _collectorSensors[i];
+        if (sensor && strlen(sensor->ip()) > 0) sensor->poll();
     }
 
     for (int i = 0; i < COLLECTOR_COUNT; i++) {
-        if (!_collectors[i]) continue;
+        // ONE read of the slot, used for everything below. This re-read the array
+        // at every use, and removeCollector() — called from the main loop right
+        // after a layout is adopted — nulls it: checked here, nulled, then
+        // dereferenced for setSwitch = a Load access fault on the poll task
+        // (boot 87, 2026-10-03, decoded from the crash record). retire() keeps the
+        // object alive, so a local copy is safe to use for the rest of the pass.
+        SmartOutlet* coll = _collectors[i];
+        if (!coll) continue;
 
         // Read the plug back before deciding anything with it. A collector plug
         // is switched, not sensed — but it reports its own power regardless, and
@@ -410,7 +419,7 @@ void SmartOutletControl::reconcileCollectors() {
         // Push doesn't apply to these: we never provision a collector plug's
         // outbound WebSocket (it is ours to command, not to subscribe to), so
         // there is no isPushConnected() shortcut to take.
-        if (strlen(_collectors[i]->ip()) > 0) _collectors[i]->poll();
+        if (strlen(coll->ip()) > 0) coll->poll();
 
         // Desired: while an override is active, follow the forced state.
         // Otherwise fall back to the legacy stop-index automation — ON whenever a
@@ -431,7 +440,7 @@ void SmartOutletControl::reconcileCollectors() {
         if (!needsSwitch) continue;
 
         // Blocking HTTP — safe here (poll task, Core 0), never on the motor loop.
-        if (_collectors[i]->setSwitch(desired)) {
+        if (coll->setSwitch(desired)) {
             xSemaphoreTake(_mutex, portMAX_DELAY);
             // Stamp the spin-up clock at the COMMAND, and only on a real
             // off→on edge: re-asserting an already-running blower must not

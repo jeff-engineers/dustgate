@@ -107,6 +107,24 @@ int main() {
            nextPressAction(st, true, PlugState::Unknown, 1000) == PressAction::Nothing);
     }
 
+    printf("\nR3c a changed want does not press a blower that already agrees\n");
+    {
+        // A press is a TOGGLE. ON, OFF, ON in quick succession left the clamp
+        // reading the old run; pressing "ON" then stopped it (2026-10-03).
+        PressState st;
+        notePress(st, false, 1000);                       // last intent: OFF
+        ok("want ON, reading says running -> do NOT press",
+           nextPressAction(st, true, PlugState::Running, 1100) == PressAction::Nothing);
+        PressState on;
+        notePress(on, true, 1000);                        // last intent: ON
+        ok("want OFF, reading says off -> do NOT press",
+           nextPressAction(on, false, PlugState::Off, 1100) == PressAction::Nothing);
+        ok("want OFF, reading says still running -> press",
+           nextPressAction(on, false, PlugState::Running, 1100) == PressAction::Press);
+        ok("want ON, reading says not starting -> press",
+           nextPressAction(st, true, PlugState::NotStarting, 1100) == PressAction::Press);
+    }
+
     printf("\nR4 going blind is not disagreement either\n");
     {
         // A WiFi dropout must never switch a running collector off.
