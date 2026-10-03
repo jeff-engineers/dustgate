@@ -798,6 +798,31 @@ static void rejoinWifiIfNetworkBlocksNodes() {
 static const uint32_t kBoardOfflineAfterMs = 20000;
 static const uint32_t kPlugDownAfterMs     = 120000;
 
+// Memory watch. The internal heap is the board's scarce resource: it ran down to
+// 3.5 KB while a browser loaded the app and the board then aborted creating a
+// lock (2026-10-03). Sampled fast, because the dip lasts a second or two — the
+// 15 s provisioning line saw it only by luck. The LOWEST value since the last
+// report is what is logged, with the largest free block, because a heap can be
+// 20 KB free and still unable to give 2 KB.
+static void watchHeap() {
+    static uint32_t lastSample = 0, lastReport = 0;
+    static size_t   lowFree = SIZE_MAX, lowBlock = SIZE_MAX;
+    const uint32_t now = millis();
+    if (now - lastSample < 250) return;
+    lastSample = now;
+    const size_t f = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    const size_t b = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+    if (f < lowFree)  lowFree  = f;
+    if (b < lowBlock) lowBlock = b;
+    if (lowFree < 20000 && now - lastReport >= 2000) {
+        lastReport = now;
+        DEBUG_PRINT(F("[HEAP] LOW — free ")); DEBUG_PRINT((unsigned long)lowFree);
+        DEBUG_PRINT(F(" B, largest block ")); DEBUG_PRINT((unsigned long)lowBlock);
+        DEBUG_PRINT(F(" B (now ")); DEBUG_PRINT((unsigned long)f); DEBUG_PRINTLN(F(")"));
+        lowFree = SIZE_MAX; lowBlock = SIZE_MAX;
+    }
+}
+
 static void raiseDeviceProblems() {
     static uint32_t lastMs = 0;
     const uint32_t now = millis();
@@ -2658,6 +2683,7 @@ void loop() {
         // (host-testable, no Arduino.h). It drives the collector coast-down.
         g_topoRuntime.update(millis());
         raiseDeviceProblems();
+        watchHeap();
 #ifdef CONTROL_SMART_OUTLET
         relocateTasmotas();
 #endif
