@@ -122,6 +122,7 @@
 #                                   #   to .monitor-logs/; type `p: cmd` / `n: cmd`
 #   bash dev.sh monitor … --take    # stop whatever already holds that board's port
 #   bash dev.sh linklog [host]      # the primary's link log over WiFi, saved + summarised
+#   bash dev.sh log [host] [--once] # follow the brain's serial output over WiFi, no cable
 #                                   #   (drops, outages, node reboots, rejoins) — no USB needed
 #   bash dev.sh ports               # list attached boards + which role each is pinned to
 #   bash dev.sh ports --pin primary # pin the attached board to a role (do this once)
@@ -1256,6 +1257,38 @@ run_linklog() {
   python3 "$SCRIPT_DIR/tools/linklog-summary.py" "$out"
 }
 
+# run_log [host] [--once]
+# Follow the brain's serial output over WiFi (GET /api/serial, utils/SerialLog.h),
+# saved to .monitor-logs/brainlog-*.log as it arrives. The same text the USB
+# monitor shows, for a board in the shop or a test run without a cable. Needs
+# primary firmware from 2026-10-03 or later. Key from /api/info, like linklog.
+run_log() {
+  local host="" once=""
+  for a in "$@"; do
+    case "$a" in
+      --once) once="--once" ;;
+      *)      host="$a" ;;
+    esac
+  done
+  host="${host:-${DUSTGATE_HOST:-dustgate.local}}"
+  local key
+  key="$(curl -fsS --max-time 10 "http://$host/api/info" 2>/dev/null \
+          | python3 -c 'import json,sys; print(json.load(sys.stdin).get("apiKey",""))' 2>/dev/null || true)"
+  if [[ -z "$key" ]]; then
+    echo "  ✗ $host did not answer /api/info. Is the primary on the network? Try its IP:"
+    echo "      bash dev.sh log 192.168.x.y"
+    exit 1
+  fi
+  if ! curl -fsS --max-time 5 -o /dev/null -H "X-Api-Key: $key" "http://$host/api/serial?from=0" 2>/dev/null; then
+    echo "  ✗ $host has no /api/serial — its firmware is older than 2026-10-03. Reflash the primary."
+    exit 1
+  fi
+  local dir="$SCRIPT_DIR/.monitor-logs"; mkdir -p "$dir"
+  local out="$dir/brainlog-$(date +%Y%m%d-%H%M%S).log"
+  echo "▶ Brain log from $host over WiFi → ${out#$SCRIPT_DIR/}  (Ctrl+C to stop)"
+  python3 "$SCRIPT_DIR/tools/brain-log.py" "$host" "$key" "$out" $once
+}
+
 # run_monitor_both [--take]
 # The primary and the node interleaved on one screen with one clock, and logged
 # to .monitor-logs/ — see tools/monitor-both.py for why order is the point.
@@ -1518,6 +1551,7 @@ case "${1:-}" in
   # "monitor node" targets a secondary: picks the board pinned as the node, and
   # applies the node env's monitor settings.
   linklog)   shift; run_linklog "$@" ;;
+  log)       shift; run_log "$@" ;;
   monitor)
     shift || true
     case "${1:-}" in

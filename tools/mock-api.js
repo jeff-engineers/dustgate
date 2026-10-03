@@ -101,6 +101,28 @@ function nodeLinkState(entry) {
 
 function statusJson() { return JSON.stringify(M.statusView(d)); }
 
+// ── Serial log (GET /api/serial) ──────────────────────────────────────────
+// The mock's own console output stands in for the board's serial: every
+// console.log below also lands in a 32 KB ring, served with the same cursor
+// headers as firmware/utils/SerialLog.h + HttpApiServer.cpp, so the Brain log
+// screen and tools/brain-log.py can be exercised with no board.
+const SERIAL_CAP = 32 * 1024;
+let serialBuf = '', serialTotal = 0;
+const serialBoot = String(Math.floor(Math.random() * 0xffffffff));
+const consoleLog = console.log.bind(console);
+console.log = (...args) => {
+  consoleLog(...args);
+  const line = args.map(a => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ') + '\r\n';
+  serialBuf += line; serialTotal += line.length;
+  if (serialBuf.length > SERIAL_CAP) serialBuf = serialBuf.slice(serialBuf.length - SERIAL_CAP);
+};
+function serialRead(from) {
+  const oldest = serialTotal - serialBuf.length;
+  const at = (from > serialTotal || from < oldest) ? oldest : from;
+  const text = serialBuf.slice(at - oldest, at - oldest + 8 * 1024);
+  return { text, start: at, next: at + text.length };
+}
+
 // ── WebSocket server ──────────────────────────────────────────────────────
 const server = http.createServer(handler);
 const wss    = new WebSocketServer({ server, path: '/ws' });
@@ -125,10 +147,12 @@ function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin',  '*');
   res.setHeader('Access-Control-Allow-Headers', 'X-Api-Key, Content-Type');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Expose-Headers', 'X-Serial-Start, X-Serial-Next, X-Serial-Boot');
 
   if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
 
-  console.log(`${req.method} ${pathname}`);
+  // Not the log poller itself: one line a second of it would bury everything else.
+  if (pathname !== '/api/serial') console.log(`${req.method} ${pathname}`);
 
   // ── Unauthenticated ──
   if (pathname === '/api/info' && req.method === 'GET') {
@@ -140,6 +164,14 @@ function handler(req, res) {
   if (key !== API_KEY) return json(res, { error: 'unauthorized' }, 401);
 
   // ── Routes (thin: parse → model call → respond) ────────────────────────────
+
+  if (pathname === '/api/serial' && req.method === 'GET') {
+    const from = Number(new URL(req.url, 'http://x').searchParams.get('from') || 0);
+    const r = serialRead(from);
+    res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store',
+      'X-Serial-Start': r.start, 'X-Serial-Next': r.next, 'X-Serial-Boot': serialBoot });
+    return res.end(r.text);
+  }
 
   if (pathname === '/api/motion' && req.method === 'GET') return json(res, M.statusView(d));
   if (pathname === '/api/stops'  && req.method === 'GET') return json(res, { stops: d.stops });

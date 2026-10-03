@@ -19,6 +19,8 @@
 #include "../utils/WiFiConfig.h"
 #include "../training/CalibrationStore.h"
 #include "../control/TopologyStore.h"
+#include "../utils/SerialLog.h"
+#include <memory>
 
 #ifdef CONTROL_SMART_OUTLET
   #include "../control/SmartOutletControl.h"
@@ -350,6 +352,9 @@ bool HttpApiServer::begin() {
     DefaultHeaders::Instance().addHeader("Access-Control-Allow-Origin",  "*");
     DefaultHeaders::Instance().addHeader("Access-Control-Allow-Headers", "X-Api-Key, Content-Type");
     DefaultHeaders::Instance().addHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+    // GET /api/serial answers in headers; a browser hides them cross-origin
+    // (the dev UI on localhost) unless they are named here.
+    DefaultHeaders::Instance().addHeader("Access-Control-Expose-Headers", "X-Serial-Start, X-Serial-Next, X-Serial-Boot");
 
     _server.begin();
     DEBUG_PRINT(F("[API] Server running on port ")); Serial.println(API_PORT);
@@ -1290,6 +1295,45 @@ void HttpApiServer::registerRoutes() {
             return;
         }
         req->send(LittleFS, path, "application/x-ndjson");
+    });
+
+    // ------------------------------------------------------------------
+    // GET /api/serial?from=N   the board's serial output since byte N (utils/SerialLog.h)
+    //
+    // What the USB monitor would show, read over WiFi — by the app's Brain log
+    // screen, `bash dev.sh log`, or anyone debugging without a cable. Plain text,
+    // at most kSerialChunk bytes per call; the client polls with the cursor it
+    // was handed. The cursor rides in headers so the body stays exactly what the
+    // board printed:
+    //   X-Serial-Start  first byte returned. Greater than `from` means the 32 KB
+    //                   ring wrapped before the client caught up — bytes missed.
+    //   X-Serial-Next   pass this as `from` next time.
+    //   X-Serial-Boot   random per boot; a change means the board restarted and
+    //                   the cursor starts over.
+    // Copied out under the ring's lock into a PSRAM buffer the response owns, so a
+    // print landing mid-send can't tear what is being sent.
+    // ------------------------------------------------------------------
+    _server.on("/api/serial", HTTP_GET, [this](AsyncWebServerRequest* req) {
+        if (!checkAuth(req)) return;
+        static constexpr size_t kSerialChunk = 8 * 1024;
+        uint32_t from = 0;
+        if (req->hasParam("from")) from = (uint32_t)strtoul(req->getParam("from")->value().c_str(), nullptr, 10);
+        std::shared_ptr<char> buf((char*)heap_caps_malloc(kSerialChunk, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT), free);
+        if (!buf) { sendError(req, 503, "no memory for the serial log"); return; }
+        uint32_t start = 0, next = 0;
+        const size_t n = seriallog::read(from, buf.get(), kSerialChunk, &start, &next);
+        AsyncWebServerResponse* res = req->beginResponse("text/plain; charset=utf-8", n,
+            [buf, n](uint8_t* out, size_t maxLen, size_t index) -> size_t {
+                if (index >= n) return 0;
+                const size_t k = (n - index < maxLen) ? n - index : maxLen;
+                memcpy(out, buf.get() + index, k);
+                return k;
+            });
+        res->addHeader("X-Serial-Start", String(start));
+        res->addHeader("X-Serial-Next",  String(next));
+        res->addHeader("X-Serial-Boot",  String(seriallog::bootId()));
+        res->addHeader("Cache-Control",  "no-store");
+        req->send(res);
     });
 
     // ------------------------------------------------------------------
