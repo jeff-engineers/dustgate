@@ -1,5 +1,6 @@
 import { Injectable } from '@angular/core';
 import { HttpClient, HttpErrorResponse, HttpHeaders } from '@angular/common/http';
+import type { SerialChunk } from '../boards/serial-log';
 import { BehaviorSubject, Observable, Subject, filter, firstValueFrom, take } from 'rxjs';
 import type { Topology } from '@topology';
 import type { TopologyStatus } from '@topology-device';
@@ -736,6 +737,33 @@ export class ApiService {
   // ── topology API (additive; DemoApiService overrides these in-process) ──
   /** Fetch the configured topology, or throws/404 if none is set. */
   getTopology(): Promise<Topology> { return this.get<Topology>('/api/topology'); }
+
+  /** The brain's serial output from byte `from` on — GET /api/serial, read by the
+   *  Brain log screen (boards/brain-log.component.ts). Plain text in the body, the
+   *  cursor in headers; see firmware/utils/SerialLog.h. */
+  /** Run a serial command on the brain, as if typed at the USB monitor —
+   *  POST /api/serial. Its output arrives through readSerial(). Throws with the
+   *  board's reason when it refuses the line. */
+  async sendSerial(line: string): Promise<void> {
+    try {
+      await this.post('/api/serial', { line });
+    } catch (e) {
+      const msg = e instanceof HttpErrorResponse ? (e.error?.error as string | undefined) : undefined;
+      throw new Error(msg || "The brain didn't take that command.");
+    }
+  }
+
+  async readSerial(from: number): Promise<SerialChunk> {
+    const res = await firstValueFrom(this.http.get(`${this.baseUrl}/api/serial?from=${from}`,
+      { headers: this.headers(), observe: 'response', responseType: 'text' }));
+    const h = res.headers;
+    return {
+      text:  res.body ?? '',
+      start: Number(h.get('X-Serial-Start') ?? from),
+      next:  Number(h.get('X-Serial-Next') ?? from),
+      boot:  h.get('X-Serial-Boot') ?? '',
+    };
+  }
   /** Replace the topology (validated device-side; 400 on invalid). */
   putTopology(topology: Topology): Promise<{ ok: boolean }> { return this.put('/api/topology', topology); }
   /** Live status: actuator states, tool activity, collector, conflicts, reachability. */

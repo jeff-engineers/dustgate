@@ -56,4 +56,16 @@ uint32_t bootId();
 // value to pass as `from` next time. Returns the number of bytes copied.
 size_t read(uint32_t from, char* out, size_t cap, uint32_t* start, uint32_t* next);
 
+// ── input: commands typed into the Brain log screen ──────────────────────────
+// POST /api/serial queues a line here; the tee's available()/read() hand these
+// bytes out BEFORE anything from USB, so SerialDebugControl reads a command
+// from the app exactly as if it had been typed at the monitor. 256 bytes —
+// a line is capped at 128 by the reader anyway.
+
+// Queue one command line (a newline is added). False if it doesn't fit.
+bool inject(const char* line, size_t len);
+int  injectedAvailable();
+int  injectedRead();     // -1 when empty
+int  injectedPeek();
+
 } // namespace seriallog

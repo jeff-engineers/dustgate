@@ -181,6 +181,10 @@ interface BoardRow {
         <div class="actions">
           <ng-container *ngIf="renaming !== r.id; else renameActions">
             <button class="act" (click)="startRename(r)">Rename</button>
+            <!-- The brain only: it serves its own serial output. A node's would
+                 have to come through the brain over NodeLink, which isn't built. -->
+            <button class="act" *ngIf="r.primary" (click)="openLog()"
+                    title="What the brain is printing right now, as the USB serial monitor would show it">Log</button>
             <!-- UNPAIR, not "Remove". The word is the guard: removing a board means
                  forgetting hardware, and next to a Rename it reads like tidying a
                  list. Same word as the canvas board menu. -->
@@ -308,6 +312,8 @@ export class BoardSetupComponent implements OnInit, OnDestroy {
     // screen is already long-lived.
     this.statusSub = this.api.status$.subscribe(s => { this.ssid = s?.ssid ?? ''; });
   }
+
+  openLog(): void { void this.router.navigate(['/boards/log']); }
 
   ngOnDestroy(): void {
     if (this.poll) clearInterval(this.poll);
