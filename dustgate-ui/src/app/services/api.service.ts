@@ -487,7 +487,7 @@ export class ApiService {
    */
   async pingOutlet(ip: string): Promise<DiscoveredOutlet> {
     const raw = await this.post<{ ip: string; hostname: string; name: string; reachable: boolean;
-                                  powerW: number; gen: number; kind?: string;
+                                  powerW: number; gen: number; kind?: string; mac?: string;
                                   claim?: string; holder?: string;
                                   pickable?: boolean; takeable?: boolean; claimReason?: string }>(
       '/api/outlets/ping', { ip }
@@ -501,6 +501,7 @@ export class ApiService {
       // Unknown strings fall back to 'shelly', matching outletKindFromName() in
       // the firmware and the mapping in discoverOutlets() below.
       kind: raw.kind === 'tasmota' ? 'tasmota' : 'shelly',
+      mac: raw.mac,
       generation: raw.gen,
       claim: raw.claim,
       holder: raw.holder,
@@ -557,7 +558,7 @@ export class ApiService {
    */
   async discoverOutlets(): Promise<DiscoveredOutlet[]> {
     const raw = await this.get<Array<{ ip: string; hostname: string; name: string; reachable: boolean;
-                                       powerW: number; gen: number; kind?: string;
+                                       powerW: number; gen: number; kind?: string; mac?: string;
                                        claim?: string; holder?: string;
                                        takeable?: boolean; claimReason?: string }>>(
       '/api/outlets/discover'
@@ -573,6 +574,7 @@ export class ApiService {
       // never heard of degrades to the old behaviour rather than to a plug that
       // reads nothing.
       kind: r.kind === 'tasmota' ? 'tasmota' : 'shelly',
+      mac: r.mac,
       generation: r.gen,
       claim: r.claim,
       holder: r.holder,
