@@ -161,6 +161,9 @@ public:
         uint32_t downForMs;     // 0 while linked
         uint32_t mdnsAgeMs;
         uint16_t hollowDrops;
+        // Why the LAST move did not finish cleanly, or nullptr. Cleared by the next
+        // STATE(moving=false). Surfaced as a problem in the app (raiseDeviceProblems).
+        const char* moveFault;
     };
     LinkHealth health() const;
 
@@ -214,6 +217,7 @@ private:
     uint32_t _lastRxMs     = 0;       // any frame; drives the PONG timeout
     uint32_t _seq          = 0;
     bool     _moveOutstanding = false;
+    const char* _moveFault    = nullptr;   // static string; see LinkHealth::moveFault
     uint32_t _moveStartedMs   = 0;
     char     _txFrame[320]    = "";   // one pending SET, main loop → WS task
     bool     _txPending       = false;

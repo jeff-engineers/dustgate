@@ -130,7 +130,13 @@ inline PressAction nextPressAction(const PressState& st, bool want,
 
     // Still starting is not yet a disagreement — the grace exists precisely so
     // a slow blower is not accused. (Reachable here, so this is a real reading.)
-    if (want && observed == PlugState::Starting) return PressAction::Nothing;
+    //
+    // BUT ONLY ONCE WE HAVE PRESSED. A stateless remote has done nothing until
+    // we press it, so "starting" before the first press of this intent is just
+    // "off, commanded" — waiting there is waiting for a button nobody pushed.
+    // That wait was unbounded for a clamp-fed collector (its age is how long the
+    // CLAMP has read on), so the very first press after a boot never came.
+    if (want && observed == PlugState::Starting && st.attempts > 0) return PressAction::Nothing;
 
     if (st.attempts >= kMaxPressAttempts) return PressAction::GiveUp;
     return PressAction::Press;

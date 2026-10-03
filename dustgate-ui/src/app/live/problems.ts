@@ -30,6 +30,7 @@ export function headline(p: Problem, name: string): string {
   switch (p.code) {
     case 'collector-no-start': return name + " isn't starting";
     case 'collector-blind':    return "Can't see " + name;
+    case 'collector-wont-stop': return name + " won't stop";
     case 'rf-gave-up':         return name + ' did not respond';
     case 'rf-send-failed':     return "Couldn't send " + name + "'s remote press";
     case 'board-offline':      return 'Board ' + name + ' is offline';

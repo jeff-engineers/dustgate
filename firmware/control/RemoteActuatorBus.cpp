@@ -391,6 +391,7 @@ void RemoteActuatorBus::taskLoop() {
             if (_moveOutstanding &&
                 (millis() - _moveStartedMs) > nodelink::kMoveTimeoutMs) {
                 _moveOutstanding = false;
+                _moveFault = "The board never reported its move finished (timed out).";
                 DEBUG_PRINT(F("[NODE] Move timed out on ")); DEBUG_PRINTLN(_nodeId);
             }
             xSemaphoreGive(_mutex);
@@ -440,6 +441,7 @@ void RemoteActuatorBus::onEvent(WStype_t type, uint8_t* payload, size_t len) {
                 _connected = false;
                 // Drop any outstanding move: we can't know whether it landed,
                 // and holding busy() forever would stall every other gate.
+                if (_moveOutstanding) _moveFault = "The link dropped mid-move \xE2\x80\x94 the gate may not have finished moving.";
                 _moveOutstanding = false;
                 _txPending = false;
                 // FORGET THE READINGS, KEEP THE CONFIG. A link that has dropped
@@ -567,7 +569,10 @@ void RemoteActuatorBus::handleFrame(const char* json, size_t len) {
         if (_cfgValid) _cfgPending = true;
     } else if (strcmp(t, "ACK") == 0) {
         bool ok = f["ok"] | false;
-        if (!ok) _moveOutstanding = false;                  // refused → stop waiting
+        if (!ok) {
+            if (_moveOutstanding) _moveFault = "The board refused the move.";
+            _moveOutstanding = false;                       // refused → stop waiting
+        }
         xSemaphoreGive(_mutex);
         DEBUG_PRINT(F("[NODE←] ACK seq=")); DEBUG_PRINT(f["seq"] | 0);
         DEBUG_PRINT(ok ? F(" ok") : F(" REFUSED: "));
@@ -614,7 +619,7 @@ void RemoteActuatorBus::handleFrame(const char* json, size_t len) {
         return;
     } else if (strcmp(t, "STATE") == 0) {
         bool moving = f["moving"] | false;
-        if (!moving) _moveOutstanding = false;
+        if (!moving) { _moveOutstanding = false; _moveFault = nullptr; }
         xSemaphoreGive(_mutex);
         DEBUG_PRINT(F("[NODE←] STATE ")); DEBUG_PRINT(f["selectorId"] | "?");
         DEBUG_PRINT(F(" -> ")); DEBUG_PRINT(f["stateId"] | "?");
@@ -801,7 +806,7 @@ bool RemoteActuatorBus::senseAt(size_t i, SenseView& v) const {
 }
 
 RemoteActuatorBus::LinkHealth RemoteActuatorBus::health() const {
-    LinkHealth h{false, false, 0, UINT32_MAX, 0};
+    LinkHealth h{false, false, 0, UINT32_MAX, 0, nullptr};
     if (!_mutex) return h;
     const uint32_t now = millis();
     const uint32_t mdns = _lastMdnsOkMs;
@@ -810,6 +815,7 @@ RemoteActuatorBus::LinkHealth RemoteActuatorBus::health() const {
     h.refused     = _refusedBy[0] != '\0';
     h.downForMs   = (h.linked || !_downSinceMs) ? 0 : (now - _downSinceMs);
     h.hollowDrops = _hollowDrops;
+    h.moveFault   = _moveFault;
     xSemaphoreGive(_mutex);
     h.mdnsAgeMs   = mdns ? (now - mdns) : UINT32_MAX;
     return h;
