@@ -260,6 +260,14 @@ export class ElementOutletConfigComponent implements OnInit {
     await this.outletRow?.flush();
     const el: RawEl = { ...this.element };
     if (this.hasPlug && this.ip) {
+      // Same as the Tools list: a plug paired at this address never goes through
+      // pick() again, so refresh kind and MAC from the latest probe of it.
+      const seen = this.seenOutlet();
+      if (seen && seen.reachable) {
+        this.kind = seen.kind === 'tasmota' ? 'tasmota' : 'shelly';
+        if (this.kind === 'tasmota') this.gen = 0;
+        if (seen.mac) this.mac = seen.mac;
+      }
       const outlet: RawEl = { gen: this.gen, ip: this.ip };
       // OMITTED WHEN SHELLY, on purpose. Absent means shelly on both sides
       // (topology.js, outletKindFromName()), so writing it would add a field to

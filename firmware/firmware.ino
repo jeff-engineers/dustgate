@@ -1996,7 +1996,7 @@ static void relocateTasmotas() {
 
     // The plugs the layout names, in the same order syncTopologyOutlets() gave
     // them slots — slot i is the i-th machine with an address.
-    struct Slot { std::string id; relocate::Outlet o; bool tasmotaOrUnsaid; };   // 'worth a sweep'
+    struct Slot { std::string id; relocate::Outlet o; bool tasmotaOrUnsaid; bool kindUnsaid; };   // 'worth a sweep'
     std::vector<Slot> slots;
     for (const std::string& mid : topo::machineIds(g_topoRuntime.topology())) {
         JsonObjectConst o = topo::machineDoc(g_topoRuntime.topology(), mid)["sensor"]["outlet"];
@@ -2007,7 +2007,8 @@ static void relocateTasmotas() {
                          // Only a plug KNOWN to be a Tasmota is worth a sweep: an unsaid
                          // kind is a Shelly that may simply be switched off, and
                          // sweeping a network every 15 minutes for it is not free.
-                         strcmp(kind, "tasmota") == 0 || !relocate::normMac(o["mac"] | "").empty()});
+                         strcmp(kind, "tasmota") == 0 || !relocate::normMac(o["mac"] | "").empty(),
+                         !*kind});
     }
     for (size_t i = 0; i < slots.size() && i < (size_t)SMART_OUTLET_COUNT; i++) {
         SmartOutlet* so = control.outlet((int)i);
@@ -2048,6 +2049,26 @@ static void relocateTasmotas() {
         return;
     }
     if (g_sweep.running()) return;
+
+    // 0. A plug the layout calls a Shelly (no `kind`) that has not answered for a
+    //    minute may be a Tasmota the layout was saved wrong about — three screens
+    //    used to drop `kind` (2026-10-03), and a Shelly poll of a Tasmota never
+    //    answers. Ask the same address as a Tasmota; if it does, correct the layout.
+    if (now - lastBackfillMs >= kBackfillGapMs) {
+        for (size_t i = 0; i < slots.size() && i < (size_t)SMART_OUTLET_COUNT; i++) {
+            if (!slots[i].kindUnsaid || !downSince[i] || now - downSince[i] < 60000) continue;
+            lastBackfillMs = now;
+            TasmotaOutlet t(slots[i].o.ip.c_str(), "kind");
+            if (!t.probe(1200)) break;
+            String mac; t.readMac(mac, 1200);
+            const std::string n = relocate::normMac(mac.c_str());
+            DEBUG_PRINT(F("[RELOCATE] ")); DEBUG_PRINT(slots[i].id.c_str());
+            DEBUG_PRINT(F(" at ")); DEBUG_PRINT(slots[i].o.ip.c_str());
+            DEBUG_PRINTLN(F(" answers as a Tasmota — the layout had it as a Shelly; correcting it."));
+            apiServer.setMachineOutlet(slots[i].id.c_str(), slots[i].o.ip.c_str(), "tasmota", n.c_str());
+            return;
+        }
+    }
 
     // 1. backfill one MAC
     if (now - lastBackfillMs >= kBackfillGapMs) {
@@ -4308,7 +4329,16 @@ void loop() {
                 // 8 KB since 2026-10-03: the `problems` list carries a sentence per
                 // entry, and ArduinoJson DROPS what does not fit rather than
                 // failing — the first thing lost would be the problem you needed.
-                DynamicJsonDocument out(8192);
+                // In PSRAM, not internal RAM: the board's internal heap is the
+                // tight one (a browser loading the app drove it to 3.5 KB on
+                // 2026-10-03, and the page would not load), and this document is
+                // built every publish interval then thrown away.
+                struct PsramAlloc {
+                    void* allocate(size_t n) { return heap_caps_malloc(n, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT); }
+                    void  deallocate(void* p) { heap_caps_free(p); }
+                    void* reallocate(void* p, size_t n) { return heap_caps_realloc(p, n, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT); }
+                };
+                BasicJsonDocument<PsramAlloc> out(8192);
                 g_topoRuntime.writeStatus(out.to<JsonObject>());
                 if (out.overflowed()) {
                     static uint32_t lastWarn = 0;
