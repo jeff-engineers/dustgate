@@ -733,6 +733,7 @@ static void syncPairedNodes(const char* primaryId) {
         g_remoteBuses[i].end();
     }
 
+    uint32_t startOffsetMs = 0;
     for (const std::string& host : plan.start) {
         int slot = -1;
         for (int j = 0; j < MAX_SECONDARY_NODES; j++) if (!remoteLive(j)) { slot = j; break; }
@@ -749,6 +750,9 @@ static void syncPairedNodes(const char* primaryId) {
         // cached address is frequently the only thing that answers.
         for (int i = 0; i < g_nodeRegistry.count(); i++)
             if (host == g_nodeRegistry.host(i)) { bus->setLastIp(g_nodeRegistry.lastIp(i)); break; }
+        // One link every 1.2 s: all of them at once peaked the heap at 3.7 KB.
+        bus->setStartDelay(startOffsetMs);
+        startOffsetMs += 1200;
         bus->begin(host.c_str(), primaryId, host.c_str(), 80);
     }
 
