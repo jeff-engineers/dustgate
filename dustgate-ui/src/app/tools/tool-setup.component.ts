@@ -61,6 +61,12 @@ interface ToolCfg {
   hasPlug: boolean;
   ip: string;
   gen: number;
+  /** Which protocol the plug speaks. This screen dropped it until 2026-10-03, so a
+   *  Tasmota paired here was saved as a Shelly Gen2 and polled with the wrong
+   *  endpoint for ever — "Miter Saw" sat unread for a day. Absent = 'shelly'. */
+  kind: 'shelly' | 'tasmota';
+  /** A Tasmota's MAC, so the brain can find it again when its address changes. */
+  mac: string;
   hostname: string;
   /** Cached display name for the plug — see PairedOutletRowComponent. */
   label: string;
@@ -741,7 +747,7 @@ export class ToolSetupComponent implements OnInit {
    * thing that deletes it.
    */
   unpair(c: ToolCfg, note: string, intent: 'change' | 'remove' = 'change'): void {
-    c.ip = ''; c.hostname = ''; c.label = '';
+    c.ip = ''; c.hostname = ''; c.mac = ''; c.label = '';
     if (intent === 'remove') c.hasPlug = false;
     this.unpairNote = note;
     this.touched = true;
@@ -750,7 +756,11 @@ export class ToolSetupComponent implements OnInit {
 
   pick(d: DiscoveredOutlet, c: ToolCfg): void {
     if (this.isAssignedElsewhere(d.ip, c)) return;
-    c.ip = d.ip; c.gen = d.generation || 2; c.hostname = d.hostname;
+    c.ip = d.ip; c.hostname = d.hostname;
+    c.kind = d.kind === 'tasmota' ? 'tasmota' : 'shelly';
+    // `|| 2` only for a Shelly: a Tasmota has no generation, and 0 is the truth.
+    c.gen = c.kind === 'tasmota' ? 0 : (d.generation || 2);
+    c.mac = d.mac ?? '';
     c.label = d.name || '';
     this.touched = true;
     if (d.powerW >= 5 && (c.thresholdW === DEFAULT_THRESHOLD)) {
@@ -881,7 +891,10 @@ export class ToolSetupComponent implements OnInit {
       // what left the two screens disagreeing (2026-08-22).
       renameMachine(this.topo as unknown as ShopDoc, m.id as string, c.name);
       if (c.sense === 'plug' && c.ip) {
-        const outlet: RawEl = { gen: c.gen || 2, ip: c.ip, thresholdW: c.thresholdW || DEFAULT_THRESHOLD };
+        const outlet: RawEl = { gen: c.kind === 'tasmota' ? 0 : (c.gen || 2), ip: c.ip, thresholdW: c.thresholdW || DEFAULT_THRESHOLD };
+        // Omitted when Shelly: absent already says so on both sides (topology.js).
+        if (c.kind === 'tasmota') outlet['kind'] = 'tasmota';
+        if (c.mac) outlet['mac'] = c.mac;
         if (c.hostname) outlet['host'] = c.hostname;
         if (c.label) outlet['name'] = c.label;
         m.sensor = { outlet };
@@ -948,6 +961,8 @@ export class ToolSetupComponent implements OnInit {
       hasPlug: !!outlet,
       ip: (outlet?.['ip'] as string) ?? '',
       gen: (outlet?.['gen'] as number) ?? 2,
+      kind: (outlet?.['kind'] as string) === 'tasmota' ? 'tasmota' : 'shelly',
+      mac: (outlet?.['mac'] as string) ?? '',
       hostname: (outlet?.['host'] as string) ?? '',
       label: (outlet?.['name'] as string) ?? '',
       thresholdW: (outlet?.['thresholdW'] as number) ?? DEFAULT_THRESHOLD,
