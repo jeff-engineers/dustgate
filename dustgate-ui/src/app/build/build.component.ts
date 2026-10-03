@@ -1338,7 +1338,12 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     const doc = this.topo as unknown as ShopDoc;
     const el = this.elem(elementId);
     if (!el || (el['type'] !== 'tool' && el['type'] !== 'collector')) return false;
-    const outlet: RawEl = { gen: o.generation || 2, ip: o.ip };
+    const tasmota = o.kind === 'tasmota';
+    const outlet: RawEl = { gen: tasmota ? 0 : (o.generation || 2), ip: o.ip };
+    // Kind and MAC were dropped here, so a Tasmota paired from the canvas was
+    // stored as a Shelly (found 2026-10-03). Omitted when Shelly: absent says so.
+    if (tasmota) outlet['kind'] = 'tasmota';
+    if (o.mac) outlet['mac'] = o.mac;
     if (o.hostname) outlet['host'] = o.hostname;
     // Cached beside the pairing, as both the sheet and the tools list already do —
     // it is what keeps a name on screen for an outlet that is switched off or
