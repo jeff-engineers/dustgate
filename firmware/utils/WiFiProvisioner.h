@@ -382,6 +382,19 @@ inline bool begin() {
                 DEBUG_PRINTLN(F("       A slow or busy AP. Raising kConnectTimeoutMs is"));
                 DEBUG_PRINTLN(F("       the honest fix if this is repeatable."));
                 break;
+            // Easy to misread as "never started": core 3.x sets IDLE on
+            // STA_CONNECTED (STA.cpp), i.e. AFTER association and the password
+            // check — and only GOT_IP moves it on. So the radio, the SSID and
+            // the password are all fine; DHCP is what failed. Seen 2026-10-02 on
+            // a bare XIAO that reported exactly this and nothing else.
+            case WL_IDLE_STATUS:
+                DEBUG_PRINTLN(F(" (NO IP) — joined the network, password accepted,"));
+                DEBUG_PRINTLN(F("       but DHCP never handed out an address. Look at the"));
+                DEBUG_PRINTLN(F("       ROUTER: a full lease pool, a blocked/paused device,"));
+                DEBUG_PRINTLN(F("       or a signal too weak for DHCP to get through."));
+                DEBUG_PRINT(F("       RSSI ")); DEBUG_PRINT(WiFi.RSSI());
+                DEBUG_PRINT(F(" dBm, AP ")); Serial.println(WiFi.BSSIDstr());
+                break;
             default:
                 DEBUG_PRINTLN(F(" — see wl_status_t in WiFiType.h."));
                 break;
