@@ -21,6 +21,7 @@ import { validateTopology, type Topology } from '@topology';
 import { isShop, systemsOf, validateShop } from '@shop';
 import { createTopologyDevice, setCollectorManual, setToolPower, statusView as topoStatus, toolThreshold, type TopologyDevice, type TopologyStatus } from '@topology-device';
 import { DEMO_TOPOLOGY } from './demo-topology';
+import type { SerialChunk } from '../boards/serial-log';
 
 // ── Service ────────────────────────────────────────────────────────────────────
 
@@ -152,6 +153,39 @@ export class DemoApiService extends ApiService {
   }
 
   // ── topology API (in-process, mirrors the mock's /api/* + real firmware) ──
+  /** There is no board in the demo, so its log says so, then a line a few
+   *  seconds about what the demo shop is doing — enough to try the screen. */
+  private demoSerial = '';
+  private demoSerialLast = 0;
+  private readonly demoSerialBoot = String(Math.floor(Math.random() * 1e9));
+  override async sendSerial(line: string): Promise<void> {
+    void this.readSerial(0);   // make sure the banner exists first
+    this.demoSerial += `> ${line}\r\n[DEMO] no board here — "${line}" was not run.\r\n`;
+  }
+
+  override async readSerial(from: number): Promise<SerialChunk> {
+    const now = Date.now();
+    if (!this.demoSerial) {
+      this.demoSerial = [
+        '=== DustGate primary (browser demo) ===',
+        '[DEMO] There is no board here, so this log is simulated.',
+        '[DEMO] On a real brain this is the same text as the USB serial monitor.',
+        '[WiFi] Connected in 1250ms. IP: 192.168.86.46  RSSI -41 dBm',
+        '[NODE] all paired boards linked (1)',
+      ].join('\r\n') + '\r\n';
+      this.demoSerialLast = now;
+    } else if (now - this.demoSerialLast > 4000) {
+      const st = this.td ? topoStatus(this.td) : null;
+      const running = st ? Object.entries(st.tools).filter(([, t]) => t.active).map(([id]) => id) : [];
+      this.demoSerial += `[DEMO] ${running.length ? `running: ${running.join(', ')}, collector ${st?.collectorOn ? 'on' : 'off'}`
+                                                  : 'idle — nothing drawing power'}\r\n`;
+      this.demoSerialLast = now;
+    }
+    const total = this.demoSerial.length;
+    const at = Math.min(Math.max(from, 0), total);
+    return { text: this.demoSerial.slice(at), start: at, next: total, boot: this.demoSerialBoot };
+  }
+
   override async getTopology(): Promise<Topology> {
     if (!this.td) throw new Error('no topology configured');
     return this.td.topology;

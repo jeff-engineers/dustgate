@@ -13,6 +13,9 @@ export const routes: Routes = [
   { path: 'build',        loadComponent: () => import('./build/build.component').then(m => m.BuildComponent) },
   { path: 'tools',        loadComponent: () => import('./tools/tool-setup.component').then(m => m.ToolSetupComponent) },
   { path: 'boards',       loadComponent: () => import('./boards/board-setup.component').then(m => m.BoardSetupComponent) },
+  // The brain's serial output over WiFi — a bench and support screen, reached
+  // only from the brain's row in Your boards. docs/mockups/brain-log.html.
+  { path: 'boards/log',   loadComponent: () => import('./boards/brain-log.component').then(m => m.BrainLogComponent) },
   { path: 'settings',     component: SettingsComponent },
 
   // /gates is BACK, and not as the screen that was retired. That one was a "set up

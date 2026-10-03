@@ -1337,6 +1337,39 @@ void HttpApiServer::registerRoutes() {
     });
 
     // ------------------------------------------------------------------
+    // POST /api/serial  { "line": "status" }
+    //
+    // Run a serial command from the app: the line is queued into the input the
+    // tee hands out before USB (utils/SerialLog.h), so SerialDebugControl reads
+    // it exactly as if it were typed at the monitor — every command, no second
+    // parser to keep in step. Echoed into the log as "> status" so the output
+    // that follows has its question above it. Same password as everything else,
+    // and nothing more: these are the commands anyone at the USB port can type,
+    // `wifireset` and `clearcal` included.
+    // ------------------------------------------------------------------
+    _server.on("/api/serial", HTTP_POST,
+        [](AsyncWebServerRequest* req) {},
+        nullptr,
+        [this](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t index, size_t total) {
+            if (!checkAuth(req)) return;
+            if (index != 0 || len != total) { sendError(req, 413, "command too long"); return; }
+            StaticJsonDocument<256> doc;
+            if (deserializeJson(doc, data, len)) { sendError(req, 400, "expected {\"line\": \"...\"}"); return; }
+            const char* line = doc["line"] | "";
+            const size_t n = strlen(line);
+            if (n == 0 || n > 120) { sendError(req, 400, "a command is 1 to 120 characters"); return; }
+            for (size_t i = 0; i < n; i++) {
+                if ((uint8_t)line[i] < 0x20 || (uint8_t)line[i] > 0x7E) {
+                    sendError(req, 400, "plain text only — one line, printable characters");
+                    return;
+                }
+            }
+            if (!seriallog::inject(line, n)) { sendError(req, 429, "the brain hasn't read the last command yet"); return; }
+            Serial.printf("> %s\n", line);
+            req->send(200, "application/json", "{\"ok\":true}");
+        });
+
+    // ------------------------------------------------------------------
     // POST /api/servo/jog  { channel: 0-3, angle: 0-180, controllerId?: "..." }
     //                         { channel: 0-3, detach: true }
     //

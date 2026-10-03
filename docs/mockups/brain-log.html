@@ -65,6 +65,11 @@
           font-weight: 600; cursor: pointer; font-family: var(--sans); }
 
   .down { font-size: 12.5px; color: var(--danger); background: rgba(217,68,68,.1); border-radius: 10px; padding: 8px 12px; }
+  .cmd { display: flex; gap: 8px; }
+  .cmd input { flex: 1; min-width: 0; background: var(--bg); border: 1px solid var(--border); color: var(--text);
+               border-radius: 8px; padding: 9px 10px; font-size: 13px; font-family: var(--mono); }
+  .cmd button { border-radius: 8px; padding: 9px 16px; font-size: 13px; border: none; cursor: pointer;
+                background: var(--accent); color: #1a1200; font-weight: 600; }
   .foot { display: flex; gap: 8px; }
   .foot button { flex: 1; border-radius: 8px; padding: 10px 12px; font-size: 13px; cursor: pointer;
                  background: var(--surface); border: 1px solid var(--border); color: var(--text); }
@@ -83,7 +88,7 @@
 </style>
 
 <div class="wrap">
-  <div class="banner"><b>Mockup, 2026-10-03.</b> A proposal for viewing the brain's serial output from the app. The log below is replayed from a real bench session (2026-09-30), not live. Nothing here is built yet.</div>
+  <div class="banner"><b>Built 2026-10-03</b> (decision D-73). The brain's serial output and commands, from the app. The log below is replayed from a real bench session (2026-09-30), not live.</div>
 
   <section class="screen" aria-label="Brain log screen">
     <div class="head">
@@ -107,6 +112,11 @@
     <div class="down" id="down" hidden>Can't reach the brain. Retrying every 3 s. The lines above are what arrived before it went quiet.</div>
 
     <div class="log" id="log" tabindex="0" aria-label="Log output"></div>
+
+    <form class="cmd" id="cmdForm">
+      <input type="text" id="cmd" placeholder="Run a command, e.g. help" aria-label="Serial command" autocomplete="off" spellcheck="false">
+      <button type="submit">Run</button>
+    </form>
 
     <div class="foot">
       <button type="button" id="pause">Pause</button>
@@ -134,6 +144,8 @@
       <p>The same login as the rest of the API. Nothing printed today includes a WiFi or device password; that gets checked before this ships.</p></div>
     <div class="q"><b>6. The same lines, without the app</b>
       <p><code>GET /api/serial?from=N</code> is what this screen polls, and it is a plain endpoint, so <code>bash dev.sh log</code> can follow it from a laptop with no USB cable. That is how Claude reads the brain while you run a test at the bench.</p></div>
+    <div class="q"><b>7. Commands (added on review)</b>
+      <p>A command line under the log. A line posted to <code>/api/serial</code> is queued into the same input the USB monitor feeds, so every serial command works unchanged, <code>wifireset</code> and <code>clearcal</code> included, and the screen says so. Echoed as <code>&gt; status</code> so the output has its question above it. Up and down arrows walk this visit's history.</p></div>
   </section>
 </div>
 
@@ -273,6 +285,11 @@
     setTimeout(() => btn.textContent = 'Copy shown lines', 1600);
   };
 
+  document.getElementById('cmdForm').onsubmit = e => {
+    e.preventDefault();
+    const inp = document.getElementById('cmd'); const v = inp.value.trim(); if (!v) return;
+    push('> ' + v); push('[DEBUG] (mockup) the brain\u2019s reply would appear here'); inp.value = '';
+  };
   document.getElementById('simGap').onclick = () => { lines.push({ kind: 'gap', text: '1,240 characters missed here. The brain’s buffer wrapped before this phone caught up.' }); render(); };
   document.getElementById('simBoot').onclick = () => {
     lines.push({ kind: 'boot', text: 'Brain restarted (reset: pwr_glitch). Lines above are from before the restart.' });
