@@ -37,6 +37,7 @@
 #include "control/ControlInput.h"
 #include "control/OutletSweep.h"
 #include "control/OutletRelocate.h"
+#include "control/NodeLinkPlan.h"
 #include "control/CollectorPress.h"        // the retry policy for a stateless press
 #include "control/RfCollectorPresser.h"    // ...and the one presser that exists
 #include "control/RfAddressGuess.h"        // the four ways a DIP gets copied wrong
@@ -678,7 +679,11 @@ static topo::TopologyStore    g_topoStoreSketch;   // read-only view; the API se
 // that DIAL cost anything, so an empty slot is the array entry alone.
 #define MAX_SECONDARY_NODES 10
 static topo::RemoteActuatorBus g_remoteBuses[MAX_SECONDARY_NODES];
+// HIGH-WATER MARK of the pool, not a count: a node removed from the middle leaves a
+// free slot (see syncPairedNodes). Anything walking the pool asks remoteLive(i).
 static int                     g_remoteCount = 0;
+static inline bool remoteLive(int i) { return g_remoteBuses[i].live(); }
+static int remoteLiveCount() { int n = 0; for (int i = 0; i < g_remoteCount; i++) if (remoteLive(i)) n++; return n; }
 
 // Which boards this primary is paired with. Persisted in NVS, independent of any
 // topology — see NodeRegistry.h.
@@ -700,32 +705,63 @@ static String g_pendingTakeoverHost;
 
 
 static void syncPairedNodes(const char* primaryId) {
-    g_nodeBus.clearRemotes();
-    // ASK ALL, THEN WAIT FOR EACH. end() waits for its link task to leave on its
-    // own (see RemoteActuatorBus::end), which can be seconds for a node that is
-    // dark; asking every task first means those seconds overlap instead of
-    // adding up across the shop.
-    for (int i = 0; i < g_remoteCount; i++) g_remoteBuses[i].requestStop();
-    for (int i = 0; i < g_remoteCount; i++) g_remoteBuses[i].end();
-    g_remoteCount = 0;
-
-    for (int i = 0; i < g_nodeRegistry.count() && g_remoteCount < MAX_SECONDARY_NODES; i++) {
+    // INCREMENTAL, since 2026-10-03. This used to stop every link and dial them all
+    // again on any change to pairing: adding a 3rd and 4th node dropped every linked
+    // node each time, took the heap to ~2 KB while tasks and sockets were rebuilt,
+    // and left no gate commandable meanwhile. Now only the link that changed moves
+    // (control/NodeLinkPlan.h). A link task is never moved in memory — it holds a
+    // pointer to its bus — so removal leaves a FREE SLOT that the next pairing reuses.
+    std::vector<std::string> live, wanted;
+    for (int i = 0; i < g_remoteCount; i++) if (remoteLive(i)) live.push_back(g_remoteBuses[i].host());
+    for (int i = 0; i < g_nodeRegistry.count(); i++) {
         const char* host = g_nodeRegistry.host(i);
-        if (!host || !*host) continue;
-        topo::RemoteActuatorBus* bus = &g_remoteBuses[g_remoteCount++];
-        if (g_pendingTakeoverHost.length() && g_pendingTakeoverHost == host) {
+        if (host && *host) wanted.push_back(host);
+    }
+    const nodelinks::Plan plan = nodelinks::plan(live, wanted, std::string(g_pendingTakeoverHost.c_str()));
+
+    // ASK ALL, THEN WAIT FOR EACH. end() waits for its link task to leave on its
+    // own, which can be seconds for a node that is dark; asking every task first
+    // means those seconds overlap instead of adding up.
+    std::vector<int> stopping;
+    for (int i = 0; i < g_remoteCount; i++) {
+        if (!remoteLive(i) || !nodelinks::has(plan.stop, g_remoteBuses[i].host())) continue;
+        g_remoteBuses[i].requestStop();
+        stopping.push_back(i);
+    }
+    for (int i : stopping) {
+        DEBUG_PRINT(F("[NODE] Unlinking ")); DEBUG_PRINTLN(g_remoteBuses[i].host());
+        g_remoteBuses[i].end();
+    }
+
+    for (const std::string& host : plan.start) {
+        int slot = -1;
+        for (int j = 0; j < MAX_SECONDARY_NODES; j++) if (!remoteLive(j)) { slot = j; break; }
+        if (slot < 0) { DEBUG_PRINT(F("[NODE] No free link slot for ")); DEBUG_PRINTLN(host.c_str()); continue; }
+        if (slot >= g_remoteCount) g_remoteCount = slot + 1;
+        topo::RemoteActuatorBus* bus = &g_remoteBuses[slot];
+        if (g_pendingTakeoverHost.length() && g_pendingTakeoverHost == host.c_str()) {
             bus->requestTakeover();          // one-shot; cleared as the HELLO is built
             g_pendingTakeoverHost = "";
-            DEBUG_PRINT(F("[NODE] TAKEOVER armed for ")); DEBUG_PRINTLN(host);
+            DEBUG_PRINT(F("[NODE] TAKEOVER armed for ")); DEBUG_PRINTLN(host.c_str());
         }
         // Seed the fallback BEFORE begin(): the link task's first resolve reads
         // it, and at boot, with a querier that has often only just come up, the
         // cached address is frequently the only thing that answers.
-        bus->setLastIp(g_nodeRegistry.lastIp(i));
-        bus->begin(host, primaryId, host, 80);
-        g_nodeBus.registerRemote(std::string(host), bus);
+        for (int i = 0; i < g_nodeRegistry.count(); i++)
+            if (host == g_nodeRegistry.host(i)) { bus->setLastIp(g_nodeRegistry.lastIp(i)); break; }
+        bus->begin(host.c_str(), primaryId, host.c_str(), 80);
     }
-    DEBUG_PRINT(F("[NODE] Paired nodes dialling: ")); DEBUG_PRINTLN(g_remoteCount);
+
+    // The NodeBus map is rebuilt from the live set: plain bookkeeping, no link is
+    // touched by it.
+    g_nodeBus.clearRemotes();
+    for (int i = 0; i < g_remoteCount; i++)
+        if (remoteLive(i)) g_nodeBus.registerRemote(std::string(g_remoteBuses[i].host()), &g_remoteBuses[i]);
+
+    DEBUG_PRINT(F("[NODE] Paired nodes: ")); DEBUG_PRINT(remoteLiveCount());
+    DEBUG_PRINT(F(" linked-or-dialling (kept ")); DEBUG_PRINT((int)plan.keep.size());
+    DEBUG_PRINT(F(", started ")); DEBUG_PRINT((int)plan.start.size());
+    DEBUG_PRINT(F(", stopped ")); DEBUG_PRINT((int)plan.stop.size()); DEBUG_PRINTLN(F(")"));
 }
 
 // ── REJOIN WIFI WHEN THE NETWORK, NOT THE NODE, IS THE PROBLEM ──────────────
@@ -763,6 +799,7 @@ static void rejoinWifiIfNetworkBlocksNodes() {
     if (lastRejoinMs && (now - lastRejoinMs) < kRejoinMinIntervalMs) return;
 
     for (int i = 0; i < g_remoteCount; i++) {
+        if (!remoteLive(i)) continue;
         const topo::RemoteActuatorBus::LinkHealth h = g_remoteBuses[i].health();
         if (h.linked || h.refused || h.downForMs < kRejoinAfterDownMs) continue;
         const bool mdnsAlive   = h.mdnsAgeMs  <= kRejoinMdnsFreshMs;
@@ -830,6 +867,7 @@ static void raiseDeviceProblems() {
     lastMs = now;
 
     for (int i = 0; i < g_remoteCount; i++) {
+        if (!remoteLive(i)) continue;
         const topo::RemoteActuatorBus::LinkHealth h = g_remoteBuses[i].health();
         const std::string key = std::string("board:") + g_remoteBuses[i].host();
         if (!h.linked && !h.refused && h.downForMs >= kBoardOfflineAfterMs) {
@@ -880,8 +918,9 @@ static void linkLogTick() {
     char nodes[120] = "";
     size_t n = 0;
     for (int i = 0; i < g_remoteCount && n < sizeof(nodes) - 24; i++) {
+        if (!remoteLive(i)) continue;
         const topo::RemoteActuatorBus::LinkHealth h = g_remoteBuses[i].health();
-        n += snprintf(nodes + n, sizeof(nodes) - n, "%s%s:%s", i ? " " : "",
+        n += snprintf(nodes + n, sizeof(nodes) - n, "%s%s:%s", n ? " " : "",
                       g_remoteBuses[i].host(), h.linked ? "up" : "down");
     }
     char extra[200];
@@ -1594,7 +1633,7 @@ static bool allNodesLinked() {
 
     int dark = -1;
     for (int i = 0; i < g_remoteCount; i++) {
-        if (!g_remoteBuses[i].info().connected) { dark = i; break; }
+        if (remoteLive(i) && !g_remoteBuses[i].info().connected) { dark = i; break; }
     }
 
     // Log the TRANSITION, both directions. A node dropping out is otherwise
@@ -1607,7 +1646,7 @@ static bool allNodesLinked() {
             DEBUG_PRINTLN(F(" — indicator holds blue until it answers"));
         } else {
             DEBUG_PRINT(F("[NODE] all paired boards linked ("));
-            DEBUG_PRINT(g_remoteCount);
+            DEBUG_PRINT(remoteLiveCount());
             DEBUG_PRINTLN(F(")"));
         }
         lastDarkId = dark;
@@ -1700,16 +1739,17 @@ static void updateStatusScreen() {
     // Nodes: linked / paired. Zero paired nodes leaves the line off entirely
     // rather than printing "nodes 0/0", which reads like a fault on a shop that
     // simply has one board.
-    if (g_remoteCount > 0) {
+    if (remoteLiveCount() > 0) {
         int linked = 0;
         for (int i = 0; i < g_remoteCount; i++)
-            if (g_remoteBuses[i].info().connected) linked++;
-        f.nodesTotal  = g_remoteCount;
+            if (remoteLive(i) && g_remoteBuses[i].info().connected) linked++;
+        f.nodesTotal  = remoteLiveCount();
         f.nodesLinked = linked;
 
         // A dark board is the fault worth naming: which one, and for how long.
         static std::string darkHost;
         for (int i = 0; i < g_remoteCount; i++) {
+            if (!remoteLive(i)) continue;
             topo::RemoteActuatorBus::NodeInfo n = g_remoteBuses[i].info();
             if (n.connected) continue;
             darkHost = g_remoteBuses[i].host();
@@ -4430,6 +4470,7 @@ void loop() {
                 DynamicJsonDocument nodes(1024 + MAX_SECONDARY_NODES * kNodeStatusBytes);
                 JsonArray arr = nodes.createNestedArray("nodes");
                 for (int i = 0; i < g_remoteCount; i++) {
+                    if (!remoteLive(i)) continue;
                     topo::RemoteActuatorBus::NodeInfo n = g_remoteBuses[i].info();
                     JsonObject o = arr.createNestedObject();
                     o["id"]        = g_remoteBuses[i].nodeId();
