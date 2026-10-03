@@ -165,7 +165,14 @@ struct CollectorState {
     bool     plugKnown;     // false = nothing has reported; omit `plug` entirely
     bool     plugReachable;
     float    plugWatts;
-    uint32_t plugOnForMs;   // how long it has been commanded on
+    uint32_t plugOnForMs;   // how long it has been commanded on, AS THE FEED SAID
+    // When `running` last went true, by the runtime's own clock (0 = not running,
+    // or no clock). The feed's age cannot be trusted for this: a clamp's is how
+    // long the clamp has read ON — 0 for a blower that never started — and a
+    // pressed remote has no switch to time. Either way the state read "starting"
+    // for ever, so a collector that never started was never judged not-starting
+    // and never pressed a second time (found 2026-10-03). See commandedForMs().
+    uint32_t runningSinceMs;
 
     // ── Dust bin, fed in from whatever is watching the sensor ────────────────
     //
@@ -230,6 +237,7 @@ public:
         _ctrl.setTopology(_doc->as<JsonObjectConst>());
         _queue.clear();
         _failed.clear();
+        _stuck.clear();
         _raised.clear();
         // Physical position is unknown after a config change; seed the same way
         // the brain does (every selector at its closed state) so the two agree.
@@ -256,6 +264,7 @@ public:
         _doc.reset();
         _queue.clear();
         _failed.clear();
+        _stuck.clear();
         _raised.clear();
         _manual.clear();
         _hwStates.clear();
@@ -383,6 +392,23 @@ public:
     // What this system's blower is ACTUALLY doing, as opposed to what we asked.
     // The judgement itself is pure and lives in CollectorPlugState.h; this only
     // supplies the state to judge.
+    // Is a reading in hand that says this blower is drawing running current?
+    // Independent of what we commanded — that is the point: collectorPlugState()
+    // answers "off" whenever we are not asking, whatever the wire says.
+    bool collectorDrawing(const std::string& systemId) const {
+        auto it = _collectors.find(systemId);
+        return it != _collectors.end() && it->second.plugKnown && it->second.plugReachable &&
+               it->second.plugWatts >= topo::kCollectorRunningW;
+    }
+
+    // How long this blower has been COMMANDED on. The runtime's own timer wins
+    // whenever it has one; the feed's number is the fallback for a caller that
+    // passes no clock (the host tests).
+    uint32_t commandedForMs(const CollectorState& c) const {
+        if (c.running && c.runningSinceMs && _nowMs) return (uint32_t)(_nowMs - c.runningSinceMs);
+        return c.plugOnForMs;
+    }
+
     topo::PlugState collectorPlugStateFor(const std::string& systemId) const {
         auto it = _collectors.find(systemId);
         if (it == _collectors.end())
@@ -393,7 +419,7 @@ public:
         // has no age to report, and passing haveOnFor=true there would make an
         // idle system look like one that just started.
         return topo::collectorPlugState(c.plugKnown, c.plugReachable, c.plugWatts,
-                                        c.plugOnForMs, /*haveOnFor=*/c.running,
+                                        commandedForMs(c), /*haveOnFor=*/c.running,
                                         /*commandedOn=*/c.running);
     }
 
@@ -442,6 +468,8 @@ public:
         // switch the blower off.
         for (auto& kv : _collectors) {
             CollectorState& c = kv.second;
+            if (!c.running) c.runningSinceMs = 0;
+            else if (!c.runningSinceMs && nowMs) c.runningSinceMs = nowMs;
             if (c.coasting && (int32_t)(nowMs - c.coastUntilMs) >= 0) {
                 c.coasting = false;
                 c.running  = false;
@@ -461,13 +489,22 @@ public:
                 // re-assert is recorded like any failed move, not retried forever.
                 _reassert.erase(m.selectorId);
                 JsonObjectConst sel = selectorById(m.selectorId);
+                // `_failed` is wiped by every re-decision (ingest), which is every
+                // poll tick — so on its own a failure was on the status for a few
+                // hundred ms. `_stuck` keeps it until that selector next moves.
+                auto fail = [&](const char* why) {
+                    FailedMove f{q.systemId, m.selectorId, m.toState, why, m.isBreak};
+                    _failed.push_back(f);
+                    _stuck[m.selectorId] = f;
+                };
                 if (sel.isNull()) {
-                    _failed.push_back({q.systemId, m.selectorId, m.toState, "unknown selector", m.isBreak});
+                    fail("unknown selector");
                 } else if (!_bus->onlineFor(sel)) {
-                    _failed.push_back({q.systemId, m.selectorId, m.toState, "controller offline", m.isBreak});
+                    fail("controller offline");
                 } else if (!_bus->setState(m.selectorId.c_str(), sel, m.toState.c_str())) {
-                    _failed.push_back({q.systemId, m.selectorId, m.toState, "actuator rejected move", m.isBreak});
+                    fail("actuator rejected move");
                 } else {
+                    _stuck.erase(m.selectorId);
                     _hwStates[m.selectorId] = m.toState;   // commanded → hardware truth
                     _inFlightSystem = q.systemId;
                     _inFlightIsMake = !m.isBreak;
@@ -729,7 +766,7 @@ public:
                 JsonObject p = s.createNestedObject("plug");
                 p["watts"]     = kv.second.plugWatts;
                 p["reachable"] = kv.second.plugReachable;
-                p["onForMs"]   = kv.second.plugOnForMs;
+                p["onForMs"]   = commandedForMs(kv.second);
                 // The verdict, alongside the facts it came from. Both are sent:
                 // the facts because a client may want to render the number, and
                 // the state because the device now has an opinion of its own and
@@ -780,9 +817,11 @@ public:
                      (kv.second.plugKnown || collectorHasOutlet(kv.first) || collectorHasClamp(kv.first)))
                 add("collector-blind", "bad", "system", kv.first, kProblemBlind, false, 0);
         }
-        for (const FailedMove& f : _failed)
+        for (auto& kv : _stuck) {
+            const FailedMove& f = kv.second;
             add("move-failed", f.isBreak ? "warn" : "bad", "selector", f.selectorId,
                 std::string("Move to ") + f.toState + " failed: " + f.reason, false, 0);
+        }
         for (auto& kv : _raised)
             add(kv.second.code.c_str(), kv.second.severity.c_str(), kv.second.subjectType.c_str(),
                 kv.second.subjectId, kv.second.text, true, kv.second.sinceMs);
@@ -1231,6 +1270,7 @@ private:
     std::deque<QueuedMove>               _queue;
     std::map<std::string, Problem>       _raised;
     std::vector<FailedMove>              _failed;
+    std::map<std::string, FailedMove>    _stuck;      // selectorId → its last failed move, until it next moves
     // What has actually been COMMANDED to hardware, as opposed to what the brain
     // has decided. Diverges from Controller::actuatorStates() whenever a plan is
     // superseded mid-flight; that divergence is exactly what makes re-planning
