@@ -279,8 +279,12 @@ void RemoteActuatorBus::end() {
 }
 
 void RemoteActuatorBus::taskLoop() {
+    // Staggered start — see setStartDelay(). Re-checks _running so end() is not kept
+    // waiting by a link that has not started yet.
+    for (uint32_t waited = 0; _running && waited < _startDelayMs; waited += 50) delay(50);
+
     // FIRST DIAL, here rather than in begin() — see begin() for why.
-    if (!resolveAndDial()) {
+    if (_running && !resolveAndDial()) {
         // Fall back to letting the socket try the name — sometimes lwIP does
         // manage it — and let the re-resolve below replace it when mDNS answers.
         char name[64];

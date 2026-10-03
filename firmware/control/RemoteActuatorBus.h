@@ -53,6 +53,12 @@ public:
     // (mDNS name or IP, resolved by the WS client).
     void begin(const char* nodeId, const char* primaryId, const char* host, uint16_t port = 80);
 
+    // Wait this long before the first dial. Call BEFORE begin(). Starting every link
+    // task together at boot made each one resolve, connect and allocate at once —
+    // the internal heap fell to 3.7 KB with four nodes (2026-10-03). Spread over a
+    // few seconds the same work peaks far lower, and no node waits long.
+    void setStartDelay(uint32_t ms) { _startDelayMs = ms; }
+
     // Tear the link down (topology re-upload removed or re-pointed this node).
     // Waits for the link task to leave ON ITS OWN — see the definition for why
     // it is never deleted from outside.
@@ -222,6 +228,7 @@ private:
     uint32_t _lastRxMs     = 0;       // any frame; drives the PONG timeout
     uint32_t _seq          = 0;
     bool     _moveOutstanding = false;
+    uint32_t _startDelayMs    = 0;
     const char* _moveFault    = nullptr;   // static string; see LinkHealth::moveFault
     uint32_t _moveStartedMs   = 0;
     char     _txFrame[320]    = "";   // one pending SET, main loop → WS task
