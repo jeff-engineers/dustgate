@@ -106,6 +106,10 @@ export interface DiscoveredOutlet {
    *  A 'tasmota' plug is SENSE-ONLY: no relay, which is the point of it, so it
    *  can never be a collector's switch. */
   kind?: 'shelly' | 'tasmota';
+  /** A Tasmota's MAC, normalised ("AA:BB:CC:DD:EE:FF"). Stored in the layout beside
+   *  the address so the brain can find the plug again when the address changes
+   *  (firmware control/OutletRelocate.h). Absent on a Shelly, or if it would not say. */
+  mac?: string;
   /** Who owns it (RFC §8): ours | unclaimed | dustgate | foreign | unknown.
    *  Absent when the device couldn't ask. Decides whether renaming is offered
    *  unprompted — we never write a plug someone else owns without being told to. */

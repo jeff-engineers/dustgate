@@ -131,6 +131,13 @@ public:
     // while the loop is mid-transition.
     bool consumeTopologyChanged();
 
+    // Rewrite one machine's plug in the STORED layout — its address, kind and MAC —
+    // and flag the runtime to re-adopt. The one way the device edits a layout
+    // itself, used when a plug is found at a new address (control/OutletRelocate.h).
+    // Empty `kind`/`mac` leave those fields as they are. False if the machine or
+    // its plug is not there, or the result would not save.
+    bool setMachineOutlet(const char* machineId, const char* ip, const char* kind, const char* mac);
+
     // Live routing status, published by the main loop each pass and served verbatim
     // by GET /api/status. Same reason as _lastStatusJson: the routing state
     // lives in main-loop-owned std::maps, and an async handler must never walk

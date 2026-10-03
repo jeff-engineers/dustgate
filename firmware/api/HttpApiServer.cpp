@@ -504,6 +504,42 @@ bool HttpApiServer::consumeTakeoverRequest(char* outIp, size_t ipLen) {
     return v;
 }
 
+bool HttpApiServer::setMachineOutlet(const char* machineId, const char* ip, const char* kind, const char* mac) {
+    if (!machineId || !*machineId || !ip || !*ip) return false;
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    bool ok = false;
+    do {
+        if (!g_topoStore.exists()) break;
+        String raw = g_topoStore.load();
+        DynamicJsonDocument doc(raw.length() * 2 + 2048);
+        if (deserializeJson(doc, raw)) break;
+        JsonObject outlet;
+        for (JsonObject m : doc["machines"].as<JsonArray>()) {
+            if (strcmp(m["id"] | "", machineId) != 0) continue;
+            outlet = m["sensor"]["outlet"];
+            break;
+        }
+        if (outlet.isNull()) break;
+        outlet["ip"] = ip;
+        if (kind && *kind) outlet["kind"] = kind;
+        if (mac  && *mac)  outlet["mac"]  = mac;
+        // `gen` is a Shelly generation. A Tasmota has none, and the entry that
+        // started this carried gen 2 beside host "Tasmota" — a Shelly's shape
+        // describing a plug that has never heard of one.
+        if (kind && strcmp(kind, "tasmota") == 0) outlet["gen"] = 0;
+        String out; serializeJson(doc, out);
+        String err;
+        if (!g_topoStore.save(reinterpret_cast<const uint8_t*>(out.c_str()), out.length(), err)) {
+            DEBUG_PRINT(F("[API] outlet rewrite rejected: ")); DEBUG_PRINTLN(err);
+            break;
+        }
+        _topoChangedPending = true;
+        ok = true;
+    } while (false);
+    xSemaphoreGive(_mutex);
+    return ok;
+}
+
 bool HttpApiServer::consumeTopologyChanged() {
     xSemaphoreTake(_mutex, portMAX_DELAY);
     bool v = _topoChangedPending;
