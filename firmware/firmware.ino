@@ -931,10 +931,18 @@ static void syncTopologyOutlets() {
     // One blower switch per system, in the same order systemIds() reports, so
     // slot i belongs to system i throughout (see the collector assert in loop()).
     //
-    // A system with no plug means "I start that collector by hand" — a legitimate
-    // shop. For slot 0 that means leaving whatever plug is already stored alone
-    // rather than silently un-configuring a working blower; the other slots hold
-    // nothing persistent, so there is nothing to preserve.
+    // A system with no plug means "I start that collector by hand" — or, now, by
+    // RF or a servo on the fob, watched by a clamp. Either way the LAYOUT is the
+    // answer, and slot 0 is cleared like every other slot.
+    //
+    // It used to keep whatever plug slot 0 had stored "rather than silently
+    // un-configuring a working blower" — a rule from before layouts, when the
+    // stored plug WAS the configuration. Under a layout it is a stale IP with
+    // authority: on 2026-10-03 a brain kept polling a collector plug at
+    // 192.168.86.57 (a plug that had since moved), fed its "unreachable" into the
+    // collector's reading over the top of the clamp the layout actually names,
+    // and the press policy — which rightly never presses blind — then refused to
+    // press the RF remote at all. The blower simply never started.
     std::vector<std::string> sysIds = g_topoRuntime.systemIds();
     for (size_t i = 0; i < sysIds.size(); i++) {
         if (i >= COLLECTOR_COUNT) {
@@ -946,9 +954,9 @@ static void syncTopologyOutlets() {
         if (ip && *ip) {
             if (!control.collectorIs((int)i, ip))
                 control.configureCollector((int)i, o["gen"] | 2, ip, o["host"] | "");
-        } else if (i == 0) {
-            DEBUG_PRINTLN(F("[Outlets] Layout names no collector plug — keeping the stored one."));
         } else {
+            if (control.collectorConfigured((int)i))
+                Serial.printf("[Outlets] Collector %d: the layout names no plug — dropping the stored one.\n", (int)i);
             control.removeCollector((int)i);
         }
 
@@ -2537,8 +2545,15 @@ void loop() {
                 // plug either — a blower pressed by a servo — the sensor is the
                 // ONLY reading there has ever been, and is the whole reason this
                 // branch exists.
+                //
+                // A CLAMP OUTRANKS BOTH, and it is not fed here at all:
+                // TopologyRuntime::pollSensors() writes it every update(). Writing
+                // a plug's reading over it handed the press policy whichever
+                // sensor wrote last (2026-10-03, see the collector sync above).
                 const bool haveSensor = control.collectorSensorConfigured((int)i);
-                if (haveSensor || control.collectorConfigured((int)i)) {
+                if (g_topoRuntime.collectorHasClamp(sysIds[i])) {
+                    // the clamp's reading stands
+                } else if (haveSensor || control.collectorConfigured((int)i)) {
                     uint32_t since = control.collectorOnSinceMs((int)i);
                     // millis() is read HERE and handed over as an age: the runtime
                     // owns no clock, which is what keeps it host-testable.
