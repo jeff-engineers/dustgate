@@ -1193,6 +1193,7 @@ void setup() {
     // 2026-09-27 which mesh radio each board was on was the first question every
     // time, and the answer existed only on a serial cable. Registered before
     // begin() so the first join is caught; lines queue until the log is ready.
+    seriallog::reportCrash();   // [CRASH] lines, if the last boot panicked — readable over WiFi
     linklog::start();   // boot number first, so the lines below are stamped with it
     WiFi.onEvent([](arduino_event_id_t e, arduino_event_info_t info) {
         if (e == ARDUINO_EVENT_WIFI_STA_GOT_IP) {

@@ -4,6 +4,8 @@
 #include <esp_rom_sys.h>
 #include <esp_random.h>
 #include <freertos/FreeRTOS.h>
+#include <esp_attr.h>
+#include <esp_system.h>
 #include "SerialLog.h"
 #include "SerialCapture.h"
 
@@ -18,30 +20,31 @@ uint32_t     s_total = 0;
 uint32_t     s_boot  = 0;
 portMUX_TYPE s_mux   = portMUX_INITIALIZER_UNLOCKED;
 
-// Called by esp_rom_printf, one character at a time, from wherever log_e() ran.
-// That can be an ISR, and an ISR may run while flash is being written — when
-// the cache is off and PSRAM cannot be touched at all. Task context is safe even
-// then: on this single-core chip a flash write suspends every other task. So
-// drop what an ISR prints rather than risk the one read that crashes the board.
-void romPutc(char c) {
-    if (xPortInIsrContext()) return;
-    const uint8_t b = (uint8_t)c;
-    write(&b, 1);
+// ── ROM output (log_e and friends) ───────────────────────────────────────────
+// esp_rom_printf calls this one character at a time, from wherever the print
+// happened — a task, an ISR, or code running while flash is being written and
+// the cache is OFF. In that last state any instruction or data fetched from
+// flash or PSRAM crashes the chip on the spot. So this runs from IRAM and only
+// touches a small buffer in internal RAM; the PSRAM ring is filled from it later,
+// by the next ordinary write, from a task where that is always safe.
+//
+// It used to write straight into the PSRAM ring from flash-resident code, and
+// the first build to carry it panicked once on a bench (2026-10-03, ~107 s into
+// a boot, cause not captured). That is exactly the shape of crash this rules out.
+constexpr size_t kStageCap = 1024;
+DRAM_ATTR char         s_stage[kStageCap];
+DRAM_ATTR size_t       s_stageLen = 0;
+DRAM_ATTR uint32_t     s_stageLost = 0;
+DRAM_ATTR portMUX_TYPE s_stageMux = portMUX_INITIALIZER_UNLOCKED;
+
+void IRAM_ATTR romPutc(char c) {
+    portENTER_CRITICAL_SAFE(&s_stageMux);
+    if (s_stageLen < kStageCap) s_stage[s_stageLen++] = c;
+    else s_stageLost++;
+    portEXIT_CRITICAL_SAFE(&s_stageMux);
 }
 
-} // namespace
-
-void begin() {
-    if (s_buf) return;
-    s_buf = (char*)heap_caps_malloc(kCap, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!s_buf) return;            // no PSRAM: the tee still prints, nothing is kept
-    s_cap  = kCap;
-    s_boot = esp_random();
-    esp_rom_install_channel_putc(1, romPutc);
-}
-
-void write(const uint8_t* data, size_t len) {
-    if (!s_buf || !len) return;
+void ringWrite(const uint8_t* data, size_t len) {
     portENTER_CRITICAL_SAFE(&s_mux);
     if (len > s_cap) { data += len - s_cap; s_total += len - s_cap; len = s_cap; }
     size_t pos = s_total % s_cap;
@@ -50,6 +53,81 @@ void write(const uint8_t* data, size_t len) {
     if (len > first) memcpy(s_buf, data + first, len - first);
     s_total += len;
     portEXIT_CRITICAL_SAFE(&s_mux);
+}
+
+// Move whatever the ROM printed into the ring. Task context only.
+void drainStage() {
+    if (!s_stageLen || xPortInIsrContext()) return;
+    static char local[kStageCap];
+    static portMUX_TYPE drainMux = portMUX_INITIALIZER_UNLOCKED;   // two tasks draining at once
+    portENTER_CRITICAL(&drainMux);
+    portENTER_CRITICAL(&s_stageMux);
+    const size_t n = s_stageLen;
+    memcpy(local, s_stage, n);
+    s_stageLen = 0;
+    portEXIT_CRITICAL(&s_stageMux);
+    ringWrite((const uint8_t*)local, n);
+    portEXIT_CRITICAL(&drainMux);
+}
+
+// ── crash record ─────────────────────────────────────────────────────────────
+// A panic prints its reason and backtrace to USB and reboots — and in the shop
+// nothing is on USB, so all that survived was the link log's "rst":"panic". The
+// core's panic hook (needs -Wl,--wrap=esp_panic_handler, platformio.ini) hands
+// us the reason, the PC and the code addresses on the stack; they go into
+// .noinit RAM, which a panic reset does not clear, and reportCrash() prints them
+// on the next boot — into this log, so GET /api/serial carries them.
+// Decode on a laptop with the same build's ELF:
+//   riscv32-esp-elf-addr2line -pfiaC -e .pio.nosync/build/xiao_c5_primary/firmware.elf <addrs>
+constexpr uint32_t kCrashMagic = 0xC2A5B007;
+constexpr size_t   kCrashAddrs = 24;
+struct CrashRecord {
+    uint32_t magic;
+    uint32_t pc;
+    uint32_t n;
+    uint32_t addrs[kCrashAddrs];
+    char     reason[64];
+};
+__NOINIT_ATTR CrashRecord s_crash;
+
+void IRAM_ATTR onPanic(arduino_panic_info_t* info, void*) {
+    s_crash.pc = (uint32_t)info->pc;
+    // backtrace[0] is the stack pointer on RISC-V (esp32-hal-misc.c); skip it.
+    uint32_t n = 0;
+    for (unsigned i = 1; i < info->backtrace_len && n < kCrashAddrs; i++) s_crash.addrs[n++] = info->backtrace[i];
+    s_crash.n = n;
+    size_t k = 0;
+    if (info->reason) for (; k < sizeof(s_crash.reason) - 1 && info->reason[k]; k++) s_crash.reason[k] = info->reason[k];
+    s_crash.reason[k] = 0;
+    s_crash.magic = kCrashMagic;
+}
+
+} // namespace
+
+void reportCrash() {
+    if (s_crash.magic != kCrashMagic) return;
+    s_crash.magic = 0;                         // say it once
+    if (esp_reset_reason() != ESP_RST_PANIC) return;   // stale: a power cut since
+    g_serialTee.printf("[CRASH] the last boot panicked: %s\n", s_crash.reason);
+    g_serialTee.printf("[CRASH] PC 0x%08lx  stack:", (unsigned long)s_crash.pc);
+    for (uint32_t i = 0; i < s_crash.n && i < kCrashAddrs; i++) g_serialTee.printf(" 0x%08lx", (unsigned long)s_crash.addrs[i]);
+    g_serialTee.printf("\n[CRASH] decode with this build's ELF: riscv32-esp-elf-addr2line -pfiaC -e firmware.elf <addresses>\n");
+}
+
+void begin() {
+    if (s_buf) return;
+    s_buf = (char*)heap_caps_malloc(kCap, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!s_buf) return;            // no PSRAM: the tee still prints, nothing is kept
+    s_cap  = kCap;
+    s_boot = esp_random();
+    esp_rom_install_channel_putc(1, romPutc);
+    set_arduino_panic_handler(onPanic, nullptr);
+}
+
+void write(const uint8_t* data, size_t len) {
+    if (!s_buf) return;
+    drainStage();
+    if (len) ringWrite(data, len);
 }
 
 // Input queue. Writer: the web server's task. Reader: loop(). Same lock idea.
@@ -91,6 +169,7 @@ uint32_t total()  { return s_total; }
 uint32_t bootId() { return s_boot; }
 
 size_t read(uint32_t from, char* out, size_t cap, uint32_t* start, uint32_t* next) {
+    if (s_buf) drainStage();
     size_t n = 0;
     portENTER_CRITICAL_SAFE(&s_mux);
     const uint32_t end    = s_total;
