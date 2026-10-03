@@ -63,6 +63,11 @@ public:
     // requestStop() alone is harmless — end() still has to follow.
     void requestStop() { _running = false; }
 
+    // Does this slot hold a link that is running (or starting)? A pool slot is reused
+    // when a node is unpaired and another paired, so an old host name in `_host` says
+    // nothing — this is the question. false before begin() and after end().
+    bool live() const { return _running; }
+
     const char* nodeId() const { return _nodeId; }
     const char* host()   const { return _host; }
 
