@@ -372,6 +372,8 @@ inline bool begin() {
                 DEBUG_PRINTLN(F(" (NO SSID) — that network was not seen at all."));
                 DEBUG_PRINTLN(F("       Check the name, and that it is on a band this"));
                 DEBUG_PRINTLN(F("       board can reach. Hidden SSIDs also land here."));
+                DEBUG_PRINTLN(F("       ANTENNA: is it plugged into the U.FL connector and seated?"));
+                DEBUG_PRINTLN(F("       Without one a board sees nothing, even next to the router."));
                 break;
             case WL_CONNECT_FAILED:
                 DEBUG_PRINTLN(F(" (AUTH FAILED) — the network is there and rejected us."));
@@ -381,6 +383,11 @@ inline bool begin() {
                 DEBUG_PRINTLN(F(" (STILL TRYING) — found it, never finished associating."));
                 DEBUG_PRINTLN(F("       A slow or busy AP. Raising kConnectTimeoutMs is"));
                 DEBUG_PRINTLN(F("       the honest fix if this is repeatable."));
+                // Status 6 is also what a board with NO ANTENNA reports (the
+                // link log then shows wifi_down reason 201, no AP found, on every
+                // attempt). Seen 2026-10-03: it fell off a node.
+                DEBUG_PRINTLN(F("       If the link log shows reason 201 every time, check the"));
+                DEBUG_PRINTLN(F("       ANTENNA first — plugged into the U.FL connector and seated?"));
                 break;
             // Easy to misread as "never started": core 3.x sets IDLE on
             // STA_CONNECTED (STA.cpp), i.e. AFTER association and the password
