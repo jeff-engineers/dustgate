@@ -678,7 +678,22 @@ static topo::TopologyStore    g_topoStoreSketch;   // read-only view; the API se
 // (kNodeLinkTaskStack, RemoteActuatorBus.cpp) plus a socket each; only slots
 // that DIAL cost anything, so an empty slot is the array entry alone.
 #define MAX_SECONDARY_NODES 10
-static topo::RemoteActuatorBus g_remoteBuses[MAX_SECONDARY_NODES];
+// The pool is ALLOCATED, in PSRAM, on first use — it was a static array of ten, 18.8 KB
+// of the board's scarce internal RAM held whether or not ten nodes exist. A link task
+// reaches its bus only by pointer, and the object holds a mutex handle and a socket
+// client, nothing a task needs in internal RAM (its stack still is). Falls back to
+// internal RAM if there is no PSRAM; if even that fails there are simply no links.
+static topo::RemoteActuatorBus* g_remoteBuses = nullptr;
+static bool ensureRemotePool() {
+    if (g_remoteBuses) return true;
+    const size_t bytes = sizeof(topo::RemoteActuatorBus) * MAX_SECONDARY_NODES;
+    void* mem = heap_caps_aligned_alloc(16, bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!mem) mem = heap_caps_aligned_alloc(16, bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (!mem) { DEBUG_PRINTLN(F("[NODE] No memory for the link pool — no node will link.")); return false; }
+    g_remoteBuses = static_cast<topo::RemoteActuatorBus*>(mem);
+    for (int i = 0; i < MAX_SECONDARY_NODES; i++) new (&g_remoteBuses[i]) topo::RemoteActuatorBus();
+    return true;
+}
 // HIGH-WATER MARK of the pool, not a count: a node removed from the middle leaves a
 // free slot (see syncPairedNodes). Anything walking the pool asks remoteLive(i).
 static int                     g_remoteCount = 0;
@@ -705,6 +720,7 @@ static String g_pendingTakeoverHost;
 
 
 static void syncPairedNodes(const char* primaryId) {
+    if (!ensureRemotePool()) return;
     // INCREMENTAL, since 2026-10-03. This used to stop every link and dial them all
     // again on any change to pairing: adding a 3rd and 4th node dropped every linked
     // node each time, took the heap to ~2 KB while tasks and sockets were rebuilt,

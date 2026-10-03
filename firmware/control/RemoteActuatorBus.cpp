@@ -23,7 +23,11 @@ namespace topo {
 // the stack. 4096 left too little margin for that, so 6144 — which costs 2 KB of
 // internal DRAM per DIALLING node (10 max: +20 KB). The "Still dialling" nag
 // prints the high-water mark; trim this from real numbers, not guesses.
-static const uint32_t kNodeLinkTaskStack = 6144;
+// 5120, down from 6144 (2026-10-03): the nag below measured 2496 B never used at 6144
+// on a bench with four nodes, so 1 KB per node comes back to the heap and ~1.4 KB of
+// margin stays. Not lower: the figure is a high-water mark under the frames seen so
+// far, and a CONFIG or SENSE burst is the worst case it has not met.
+static const uint32_t kNodeLinkTaskStack = 5120;
 static const UBaseType_t kNodeLinkTaskPrio = 1;
 
 void RemoteActuatorBus::begin(const char* nodeId, const char* primaryId,
