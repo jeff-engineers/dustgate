@@ -2537,7 +2537,7 @@ void loop() {
                     // refusal in there is a case where pressing would have
                     // turned a healthy blower OFF.
                     const uint32_t now = millis();
-                    const topo::PlugState seen = g_topoRuntime.collectorPlugStateFor(sysIds[i]);
+                    const topo::PlugState seen = g_topoRuntime.pressObservation(sysIds[i]);
                     switch (topo::nextPressAction(g_pressState[i], want, seen, now)) {
                         case topo::PressAction::Press: {
                             // ~500 ms of RMT. Acceptable on the main loop only

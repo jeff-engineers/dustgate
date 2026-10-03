@@ -185,7 +185,11 @@ int main(int argc, char** argv) {
     // the timing); what matters here is that the brain has decided "no tools".
     rt.setToolPower("toolX", 0);
     ok("idle → collector coasting, not cut", rt.collectorCoasting());
-    ok("all-off flags dead-head risk", rt.deadHeadRisk());
+    // Idle HOLDS the gates where they are, so the blower coasts against an OPEN
+    // path. This asserted the opposite until 2026-10-03 — it read the plan's
+    // "all closed" destination, which is exactly the move being dropped — and the
+    // app told the owner the collector was dead-headed after every tool stopped.
+    ok("idle holds the gates → no dead-head risk", !rt.deadHeadRisk());
   }
 
   // ── controllerId dispatch across two boards ──────────────────────────────
