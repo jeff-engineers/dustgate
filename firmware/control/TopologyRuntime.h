@@ -556,6 +556,18 @@ public:
     // The RF transmitter that presses this collector's remote ("" if none).
     // A collector with this has no control.outlet — validateTopology() refuses
     // both, because two ways to command one blower fight each other.
+    // Does a CLAMP watch this system's blower? Then pollSensors() owns its
+    // reading, and nothing else may write one: a plug's watts landing on top of
+    // the clamp's (firmware.ino's collector feed) is two sensors taking turns, and
+    // the one the layout chose loses half the time. Same lookup pollSensors uses.
+    bool collectorHasClamp(const std::string& systemId) const {
+        for (const SystemView& sys : systemsOf(topology())) {
+            if (std::string(sys.id ? sys.id : "") != systemId) continue;
+            return !clampOf(topology(), collectorOf(sys)).isNull();
+        }
+        return false;
+    }
+
     JsonObjectConst collectorRf(const std::string& systemId) const {
         for (const SystemView& sys : systemsOf(topology())) {
             if (std::string(sys.id ? sys.id : "") != systemId) continue;
