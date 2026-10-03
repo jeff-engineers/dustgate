@@ -58,6 +58,7 @@
 // The link log — every node link up/down, WiFi join/drop, rejoin and boot, kept on
 // flash so a shop can run for days with no laptop attached. See utils/LinkLog.h.
 #include "utils/LinkLog.h"
+#include "utils/SerialLog.h"
 #include "utils/BuildStamp.h"   // what this board is running — banner, /api/info, link log
 #include "esp_heap_caps.h"   // internal DRAM in the hourly link-log line
 
@@ -1113,6 +1114,7 @@ static void adoptStoredTopology() {
 SET_LOOP_TASK_STACK_SIZE(16 * 1024);
 
 void setup() {
+    seriallog::begin();   // before the first print, so GET /api/serial has the whole boot
     Serial.begin(SERIAL_BAUD);
 #if BOARD_HAS_NATIVE_USB
     // Native USB-CDC (S2/S3): Serial isn't ready until the host enumerates it —
