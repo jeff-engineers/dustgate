@@ -108,6 +108,51 @@ function portsByMachine(shop) {
 }
 
 /**
+ * Which BOARD should poll a machine's plug: machineId → controllerId, '' = the
+ * brain. Decided 2026-10-03 (jeff): the brain polls a plug until its tool has a
+ * board of its own, and after that the board that CONTROLS the tool — the one
+ * driving the selector its port hangs from — polls it. A manifold or slider node
+ * therefore handles every tool behind it.
+ *
+ * MATCHED PAIR with plugOwnerOf() in firmware/control/Shop.h, driven from the same
+ * fixture (firmware/test/fixtures/plugOwners.json): plug-owner.test.js ↔
+ * test_plugowner.cpp, same cases in the same order.
+ *
+ * Rules, because "the board that controls the tool" needs a definition:
+ *   • the port's IMMEDIATE parent in the ducts, and only if it is a selector — a
+ *     tool plumbed straight to a junction has no board of its own → brain;
+ *   • that selector's controller must be a SECONDARY; the primary IS the brain;
+ *   • a machine with several ports takes the first port (document order) that
+ *     qualifies, so a saw whose cabinet is on the primary and whose overarm is on a
+ *     node is polled by the node;
+ *   • a selector with no controllerId means "this board" everywhere else in the
+ *     model, which is the primary → brain.
+ *
+ * @param {Shop} shop
+ * @returns {Map<string,string>}
+ */
+function plugOwners(shop) {
+  const secondary = new Set((shop.controllers || [])
+    .filter((c) => c && c.role !== 'primary').map((c) => c.id));
+  const out = new Map();
+  for (const [machineId, ports] of portsByMachine(shop)) {
+    let owner = '';
+    for (const { systemId, port } of ports) {
+      const sys = systemsOf(shop).find((s) => s.id === systemId);
+      if (!sys) continue;
+      const duct = (sys.ducts || []).find((d) => d.child === port.id);
+      const parent = duct && (sys.elements || []).find((e) => e.id === duct.parent);
+      if (parent && parent.type === 'selector' && parent.controllerId && secondary.has(parent.controllerId)) {
+        owner = parent.controllerId;
+        break;
+      }
+    }
+    out.set(machineId, owner);
+  }
+  return out;
+}
+
+/**
  * A port counts for routing unless it is explicitly disabled.
  *
  * `enabled` is absent on the overwhelming majority of ports and means true —
@@ -679,7 +724,7 @@ const asShop = (doc, opts) => (isShop(doc) ? doc : migrateToShop(doc, opts));
 
 module.exports = {
   SHOP_SCHEMA_VERSION, MAX_SUPPLEMENTAL_PORTS,
-  systemView, systemsOf, machinesOf, machineIndex, portsByMachine, portEnabled,
+  systemView, systemsOf, machinesOf, machineIndex, portsByMachine, plugOwners, portEnabled,
   validateShop, routeShop, planShopTransition,
   migrateToShop, isShop, asShop,
 };

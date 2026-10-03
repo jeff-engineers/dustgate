@@ -205,6 +205,42 @@ inline std::map<std::string, std::vector<PortRef>> portsByMachine(JsonObjectCons
   return out;
 }
 
+/**
+ * Which BOARD should poll this machine's plug: its controllerId, or "" for the
+ * brain. See plugOwners() in shared/device-model/shop.js for the rules and the
+ * reason — MATCHED PAIR, same fixture (test/fixtures/plugOwners.json).
+ */
+inline std::string plugOwnerOf(JsonObjectConst doc, const std::string& machineId) {
+  std::vector<std::string> secondary;
+  for (JsonObjectConst c : doc["controllers"].as<JsonArrayConst>())
+    if (!_eq(c["role"], "primary")) secondary.push_back(std::string(c["id"] | ""));
+  auto isSecondary = [&](const char* id) {
+    if (!id || !*id) return false;
+    for (const std::string& s : secondary) if (s == id) return true;
+    return false;
+  };
+  auto ports = portsByMachine(doc);
+  auto it = ports.find(machineId);
+  if (it == ports.end()) return "";
+  for (const PortRef& pr : it->second) {
+    for (const SystemView& sys : systemsOf(doc)) {
+      if (std::string(sys.id ? sys.id : "") != pr.systemId) continue;
+      const char* portId = pr.port["id"] | "";
+      const char* parentId = nullptr;
+      for (JsonObjectConst d : sys.ducts)
+        if (_eq(d["child"], portId)) { parentId = d["parent"] | ""; break; }
+      if (!parentId) break;
+      for (JsonObjectConst e : sys.elements)
+        if (_eq(e["id"], parentId)) {
+          if (_eq(e["type"], "selector") && isSecondary(e["controllerId"] | "")) return std::string(e["controllerId"] | "");
+          break;
+        }
+      break;
+    }
+  }
+  return "";
+}
+
 /** The collector element of a system (null object if the system has none). */
 inline JsonObjectConst collectorOf(const SystemView& sys) {
   for (JsonObjectConst e : sys.elements)
