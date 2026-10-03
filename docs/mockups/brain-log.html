@@ -1,0 +1,283 @@
+<title>Brain Log Screen</title>
+<style>
+  /* Layout: the app's own 460px phone column — the log screen as it would ship —
+     with the open questions for review underneath. Single dark theme, because the
+     app is dark-only (dustgate-ui/src/styles.css); these are its tokens. */
+  :root {
+    --bg: #111; --surface: #1e1e1e; --raised: #262626; --border: #2e2e2e;
+    --text: #e8e8e8; --muted: #8a8a86; --accent: #f0a500; --success: #3cbe6e;
+    --danger: #d94444; --warn: #d29922; --node: #6cb6ff; --wifi: #b392f0;
+    --radius: 14px;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); font-family: var(--sans);
+         font-size: 15px; line-height: 1.5; margin: 0; padding-inline: 16px; padding-block: 20px 48px; }
+  .wrap { max-width: 460px; margin: 0 auto; display: flex; flex-direction: column; gap: 22px; }
+
+  .banner { font-size: 12.5px; color: var(--muted); border: 1px dashed var(--border);
+            border-radius: 10px; padding: 9px 12px; line-height: 1.55; }
+  .banner b { color: var(--text); }
+
+  /* ── the screen ─────────────────────────────────────────── */
+  .screen { display: flex; flex-direction: column; gap: 12px; }
+  .head { display: flex; align-items: center; gap: 10px; }
+  .back { background: none; border: none; color: var(--muted); font-size: 13px; padding: 4px 0; cursor: pointer; }
+  .head h1 { font-size: 17px; font-weight: 600; margin: 0; flex: 1; text-wrap: balance; }
+  .head h1 small { display: block; font-size: 12px; font-weight: 400; color: var(--muted); }
+
+  .status { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--muted); flex-wrap: wrap; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--success); flex: none; }
+  .dot.live { box-shadow: 0 0 0 0 rgba(60,190,110,.6); animation: pulse 2s infinite; }
+  .dot.paused { background: var(--muted); }
+  .dot.down { background: var(--danger); }
+  @keyframes pulse { 70% { box-shadow: 0 0 0 6px rgba(60,190,110,0); } 100% { box-shadow: 0 0 0 0 rgba(60,190,110,0); } }
+  @media (prefers-reduced-motion: reduce) { .dot.live { animation: none; } }
+  .status .sep { opacity: .5; }
+
+  .tools { display: flex; gap: 8px; flex-wrap: wrap; }
+  .chip { border-radius: 20px; padding: 5px 12px; font-size: 12.5px; cursor: pointer;
+          background: var(--bg); border: 1px solid var(--border); color: var(--text); }
+  .chip[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #1a1200; font-weight: 600; }
+  .chip:focus-visible, button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .find { flex: 1 1 140px; min-width: 0; background: var(--bg); border: 1px solid var(--border); color: var(--text);
+          border-radius: 8px; padding: 6px 10px; font-size: 13px; }
+
+  .log { background: #0a0a0a; border: 1px solid var(--border); border-radius: var(--radius);
+         height: 420px; overflow-y: auto; overflow-x: hidden; padding: 10px 12px;
+         font-family: var(--mono); font-size: 11.5px; line-height: 1.55; position: relative; }
+  .ln { display: grid; grid-template-columns: 4.6em 1fr; gap: 8px; white-space: pre-wrap; word-break: break-word; }
+  .ln .t { color: #555; font-variant-numeric: tabular-nums; text-align: right; }
+  .ln.err .m { color: var(--danger); }
+  .ln.warnl .m { color: var(--warn); }
+  .tag { font-weight: 600; }
+  .tag.node { color: var(--node); } .tag.wifi { color: var(--wifi); } .tag.ui { color: var(--accent); }
+  .tag.other { color: var(--muted); }
+  .gap { margin: 8px 0; text-align: center; font-family: var(--sans); font-size: 11.5px; color: var(--warn);
+         border-top: 1px dashed rgba(210,153,34,.5); border-bottom: 1px dashed rgba(210,153,34,.5); padding: 4px 0; }
+  .boot { margin: 8px 0; text-align: center; font-family: var(--sans); font-size: 11.5px; color: var(--accent);
+          border-top: 1px solid rgba(240,165,0,.4); padding-top: 4px; }
+
+  .jump { position: sticky; bottom: 0; margin: 6px auto 0; display: block; border-radius: 20px;
+          padding: 6px 14px; font-size: 12.5px; background: var(--accent); border: none; color: #1a1200;
+          font-weight: 600; cursor: pointer; font-family: var(--sans); }
+
+  .down { font-size: 12.5px; color: var(--danger); background: rgba(217,68,68,.1); border-radius: 10px; padding: 8px 12px; }
+  .foot { display: flex; gap: 8px; }
+  .foot button { flex: 1; border-radius: 8px; padding: 10px 12px; font-size: 13px; cursor: pointer;
+                 background: var(--surface); border: 1px solid var(--border); color: var(--text); }
+  .note { font-size: 12px; color: var(--muted); line-height: 1.55; }
+
+  /* ── review notes ────────────────────────────────────────── */
+  .review { border-top: 1px solid var(--border); padding-top: 18px; display: flex; flex-direction: column; gap: 14px; }
+  .review h2 { font-size: 15px; margin: 0; }
+  .q { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; font-size: 13.5px; }
+  .q b { display: block; margin-bottom: 4px; }
+  .q p { margin: 0; color: var(--muted); line-height: 1.55; }
+  .q p + p { margin-top: 6px; }
+  .sim { display: flex; gap: 8px; flex-wrap: wrap; }
+  .sim button { border-radius: 8px; padding: 6px 10px; font-size: 12px; cursor: pointer;
+                background: transparent; border: 1px dashed var(--muted); color: var(--muted); }
+</style>
+
+<div class="wrap">
+  <div class="banner"><b>Mockup, 2026-10-03.</b> A proposal for viewing the brain's serial output from the app. The log below is replayed from a real bench session (2026-09-30), not live. Nothing here is built yet.</div>
+
+  <section class="screen" aria-label="Brain log screen">
+    <div class="head">
+      <button class="back" type="button" title="Back to Your boards">‹ Boards</button>
+      <h1>Brain log<small>dustgate · same text as the USB serial monitor</small></h1>
+    </div>
+
+    <div class="status" id="status" aria-live="polite">
+      <span class="dot live" id="dot"></span><span id="stateText">Live</span>
+      <span class="sep">·</span><span id="span" title="The brain keeps about 32 KB of recent output in memory. Older lines roll off, and a restart clears it.">last ~400 lines since boot</span>
+    </div>
+
+    <div class="tools" role="group" aria-label="Show">
+      <button class="chip" type="button" data-f="all" aria-pressed="true">All</button>
+      <button class="chip" type="button" data-f="node" aria-pressed="false" title="Lines about the other boards: links, moves, acknowledgements">Boards</button>
+      <button class="chip" type="button" data-f="wifi" aria-pressed="false" title="WiFi, mDNS and plug discovery">Network</button>
+      <button class="chip" type="button" data-f="err" aria-pressed="false" title="Errors and warnings only">Problems</button>
+      <input class="find" id="find" type="search" placeholder="Find text…" aria-label="Find text in the log">
+    </div>
+
+    <div class="down" id="down" hidden>Can't reach the brain. Retrying every 3 s. The lines above are what arrived before it went quiet.</div>
+
+    <div class="log" id="log" tabindex="0" aria-label="Log output"></div>
+
+    <div class="foot">
+      <button type="button" id="pause">Pause</button>
+      <button type="button" id="copy" title="Copies every line currently shown, with its time">Copy shown lines</button>
+    </div>
+    <p class="note">Times are when each line reached this phone, not when the brain printed it. Pausing stops the screen scrolling; lines keep arriving underneath and appear when you resume.</p>
+  </section>
+
+  <section class="review">
+    <h2>For review</h2>
+    <div class="sim" role="group" aria-label="Simulate">
+      <button type="button" id="simGap">Simulate missed lines</button>
+      <button type="button" id="simBoot">Simulate brain restart</button>
+      <button type="button" id="simDown">Simulate lost connection</button>
+    </div>
+    <div class="q"><b>1. Where it opens from</b>
+      <p>A <i>Log</i> button on the brain's row in Your boards, opening this full screen. It is a bench and support tool, so it stays off the Shop and Build screens.</p></div>
+    <div class="q"><b>2. Brain only, for now</b>
+      <p>The brain serves the app, so it can serve its own log. A node's log would need the brain to fetch it over NodeLink. That is possible later, and the Boards chip already covers most of what a node says, from the brain's side.</p></div>
+    <div class="q"><b>3. What it can and can't show</b>
+      <p>Everything the board prints, including library errors like <code>Connection reset by peer</code>, from about 32 KB kept in spare PSRAM. Not the first second of boot, and nothing from before the last restart. A restart is marked in the log. For history across restarts, the link log already exists.</p></div>
+    <div class="q"><b>4. Updates by polling, once a second</b>
+      <p>The app asks for new lines every second and gets only what it hasn't seen. If the phone falls behind and the brain's buffer wraps, the gap is marked rather than hidden. Polling costs nothing while the screen is closed.</p></div>
+    <div class="q"><b>5. Password-protected</b>
+      <p>The same login as the rest of the API. Nothing printed today includes a WiFi or device password; that gets checked before this ships.</p></div>
+    <div class="q"><b>6. The same lines, without the app</b>
+      <p><code>GET /api/serial?from=N</code> is what this screen polls, and it is a plain endpoint, so <code>bash dev.sh log</code> can follow it from a laptop with no USB cable. That is how Claude reads the brain while you run a test at the bench.</p></div>
+  </section>
+</div>
+
+<script>
+(() => {
+  // Replayed from .monitor-logs/20260930-175210.log (primary side), lightly trimmed.
+  const SCRIPT = [
+    "[NODE] Link lost: dustgate-drum-sander",
+    "[NODE] backing off dustgate-drum-sander — retrying every 2000 ms",
+    "[NODE] Still dialling 192.168.86.43 (dustgate-drum-sander) — internal 65560 largest 34804",
+    "       signs of life: mDNS 0s ago, hollow drops 0; task stack never below 2496 B free",
+    "[LINKLOG] {\"ev\":\"link_up\",\"node\":\"dustgate-drum-sander\",\"downMs\":27981,\"nodeUpS\":23,\"nodeRst\":\"usb\"}",
+    "[NODE→] CONFIG to dustgate-drum-sander",
+    "[NODE←] ACK seq=5 ok",
+    "[NODE] all paired boards linked (1)",
+    "[UI] Servo jog: ch=0 on dustgate-drum-sander angle=36",
+    "[MDNS] _shelly._tcp -> 0 in 3117/3000ms",
+    "[DISCOVER] attempt 1/1: mDNS _shelly._tcp query returned 0 host(s):",
+    "[MDNS] _http._tcp -> 1 in 3093/3000ms",
+    "[DISCOVER] _http._tcp attempt 1: 1 responder(s), 0 with devicetype=tasmota",
+    "[NODE←] ACK seq=47 ok",
+    "[NODE←] STATE __jog -> __jog (moving)",
+    "[NODE←] STATE __jog -> __jog (arrived)",
+    "[UI] Servo jog: ch=0 on dustgate-drum-sander angle=51",
+    "[NODE←] ACK seq=48 ok",
+    "[NODE←] STATE __jog -> __jog (moving)",
+    "[NODE←] STATE __jog -> __jog (arrived)",
+    "[UI] Servo jog: ch=0 on dustgate-drum-sander angle=66",
+    "[NODE←] ACK seq=49 ok",
+    "[NODE←] STATE __jog -> __jog (moving)",
+    "[NODE←] STATE __jog -> __jog (arrived)",
+    "[UI] Servo jog: ch=0 on dustgate-drum-sander angle=75",
+    "[NODE] dark: dustgate-drum-sander — indicator holds blue until it answers",
+    "[839711][E][NetworkClient.cpp:435] write(): fail on fd 48, errno: 104, \"Connection reset by peer\"",
+    "[NODE] Link lost: dustgate-drum-sander",
+    "[LINKLOG] {\"ev\":\"link_down\",\"node\":\"dustgate-drum-sander\"}",
+    "[NODE] backing off dustgate-drum-sander — retrying every 2000 ms",
+    "[LINKLOG] {\"ev\":\"link_up\",\"node\":\"dustgate-drum-sander\",\"downMs\":2063,\"nodeUpS\":16,\"nodeRst\":\"pwr_glitch\"}",
+    "[NODE→] CONFIG to dustgate-drum-sander",
+    "[NODE←] ACK seq=5 ok",
+    "[NODE] all paired boards linked (1)",
+    "[BTN] pressed",
+    "[BTN] released — screen NOT PRESENT, nothing to toggle",
+  ];
+
+  const logEl = document.getElementById('log');
+  const lines = [];          // {t, text} | {kind:'gap'|'boot', text}
+  let filter = 'all', find = '', paused = false, down = false, i = 0, unseen = 0;
+  let clock = 0;
+
+  const kindOf = s => {
+    if (/\[E\]|error|fail|lost|reset by peer/i.test(s)) return 'err';
+    if (/\[W\]|warn|dark:|backing off/i.test(s)) return 'warnl';
+    return '';
+  };
+  const groupOf = s => {
+    if (/^\s*\[(NODE|LINKLOG)/.test(s) || /^\s{4,}/.test(s)) return 'node';
+    if (/^\[(WiFi|MDNS|DISCOVER)/.test(s)) return 'wifi';
+    return 'other';
+  };
+  const tagClass = s => {
+    const m = s.match(/^\[([A-Za-z]+)/); if (!m) return null;
+    const g = m[1];
+    if (/^(NODE|LINKLOG)/.test(g)) return 'node';
+    if (/^(WiFi|MDNS|DISCOVER)$/.test(g)) return 'wifi';
+    if (g === 'UI') return 'ui';
+    return 'other';
+  };
+  const fmt = ms => { const s = Math.floor(ms / 1000); return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`; };
+  const esc = s => s.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+
+  const shown = l => {
+    if (l.kind) return true;
+    if (filter === 'err' && !kindOf(l.text)) return false;
+    if (filter === 'node' && groupOf(l.text) !== 'node') return false;
+    if (filter === 'wifi' && groupOf(l.text) !== 'wifi') return false;
+    if (find && !l.text.toLowerCase().includes(find)) return false;
+    return true;
+  };
+
+  function render() {
+    const atBottom = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 30;
+    const html = lines.filter(shown).map(l => {
+      if (l.kind) return `<div class="${l.kind}">${esc(l.text)}</div>`;
+      const tc = tagClass(l.text);
+      let body = esc(l.text);
+      if (tc) body = body.replace(/^(\[[^\]]+\])/, `<span class="tag ${tc}">$1</span>`);
+      return `<div class="ln ${kindOf(l.text)}"><span class="t">${fmt(l.t)}</span><span class="m">${body}</span></div>`;
+    }).join('');
+    logEl.innerHTML = html + (paused && unseen ? `<button class="jump" type="button" id="jump">${unseen} new line${unseen === 1 ? '' : 's'} · Resume</button>` : '');
+    const j = document.getElementById('jump'); if (j) j.onclick = togglePause;
+    if (!paused && (atBottom || true)) logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  function push(text) {
+    lines.push({ t: clock, text });
+    if (lines.length > 400) lines.shift();
+    if (paused) unseen++;
+    render();
+  }
+
+  function tick() {
+    if (down) return;
+    clock += 900 + Math.random() * 900;
+    push(SCRIPT[i % SCRIPT.length]); i++;
+  }
+  // Open in a realistic working state: a screenful already there.
+  for (let k = 0; k < 22; k++) { clock += 700; lines.push({ t: clock, text: SCRIPT[i++ % SCRIPT.length] }); }
+  render();
+  setInterval(tick, 1200);
+
+  function setStatus() {
+    const dot = document.getElementById('dot'), st = document.getElementById('stateText');
+    dot.className = 'dot ' + (down ? 'down' : paused ? 'paused' : 'live');
+    st.textContent = down ? 'Not reachable' : paused ? 'Paused' : 'Live';
+    document.getElementById('down').hidden = !down;
+  }
+  function togglePause() {
+    paused = !paused; if (!paused) unseen = 0;
+    document.getElementById('pause').textContent = paused ? 'Resume' : 'Pause';
+    setStatus(); render();
+  }
+  document.getElementById('pause').onclick = togglePause;
+
+  document.querySelectorAll('.chip').forEach(b => b.onclick = () => {
+    filter = b.dataset.f;
+    document.querySelectorAll('.chip').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+    render();
+  });
+  document.getElementById('find').oninput = e => { find = e.target.value.trim().toLowerCase(); render(); };
+
+  document.getElementById('copy').onclick = async e => {
+    const txt = lines.filter(shown).map(l => l.kind ? `--- ${l.text} ---` : `${fmt(l.t)}  ${l.text}`).join('\n');
+    const btn = e.currentTarget;
+    try { await navigator.clipboard.writeText(txt); btn.textContent = 'Copied'; }
+    catch { btn.textContent = 'Copy blocked here'; }
+    setTimeout(() => btn.textContent = 'Copy shown lines', 1600);
+  };
+
+  document.getElementById('simGap').onclick = () => { lines.push({ kind: 'gap', text: '1,240 characters missed here. The brain’s buffer wrapped before this phone caught up.' }); render(); };
+  document.getElementById('simBoot').onclick = () => {
+    lines.push({ kind: 'boot', text: 'Brain restarted (reset: pwr_glitch). Lines above are from before the restart.' });
+    ['=== DustGate primary ===', 'Build: 2c57b1b 1002-2130  (Oct  2 2026 21:30:02)', '[WiFi] Connecting to Generic', '[WiFi] Connected in 1290ms. IP: 192.168.86.46  RSSI -41 dBm'].forEach(push);
+  };
+  document.getElementById('simDown').onclick = () => { down = !down; setStatus(); };
+})();
+</script>
