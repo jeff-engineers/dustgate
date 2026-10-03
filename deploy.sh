@@ -505,6 +505,13 @@ if $DO_UI; then
   mkdir -p "$DATA_DIR"
   rm -rf "$DATA_DIR"/*
   cp -r "$BROWSER_DIR"/* "$DATA_DIR/"
+  # GZIP THE SCRIPTS. The web server hands <file>.gz to any browser that accepts
+  # it, so the app goes over WiFi at about a quarter of its size and the filesystem
+  # holds less. index.html stays plain: it is tiny and is the file revalidated.
+  for f in "$DATA_DIR"/*.js "$DATA_DIR"/*.css; do
+    [ -f "$f" ] || continue
+    gzip -9 -n -c "$f" > "$f.gz" && rm "$f"
+  done
   echo "  Files in data/:"
   ls -lh "$DATA_DIR"
   cd "$SCRIPT_DIR"
