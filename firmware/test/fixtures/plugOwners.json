@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 2,
+  "name": "plug owners",
+  "controllers": [
+    { "id": "primary", "role": "primary" },
+    { "id": "nodeA", "role": "secondary" },
+    { "id": "nodeB", "role": "secondary" }
+  ],
+  "systems": [
+    {
+      "id": "s1",
+      "name": "one system",
+      "elements": [
+        { "id": "dc", "type": "collector" },
+        { "id": "wye", "type": "junction" },
+        { "id": "gA",  "type": "selector", "controllerId": "nodeA",   "kind": "servoGate" },
+        { "id": "man", "type": "selector", "controllerId": "nodeB",   "kind": "servoManifold" },
+        { "id": "gP",  "type": "selector", "controllerId": "primary", "kind": "servoGate" },
+        { "id": "tA",  "type": "tool", "machineId": "mA" },
+        { "id": "tB1", "type": "tool", "machineId": "mB1" },
+        { "id": "tB2", "type": "tool", "machineId": "mB2" },
+        { "id": "tP",  "type": "tool", "machineId": "mP" },
+        { "id": "tD",  "type": "tool", "machineId": "mD" },
+        { "id": "tT1", "type": "tool", "machineId": "mTwo" },
+        { "id": "tT2", "type": "tool", "machineId": "mTwo" }
+      ],
+      "ducts": [
+        { "child": "wye", "parent": "dc" },
+        { "child": "gA",  "parent": "wye" },
+        { "child": "man", "parent": "wye" },
+        { "child": "gP",  "parent": "wye" },
+        { "child": "tA",  "parent": "gA",  "parentBranch": "b1" },
+        { "child": "tB1", "parent": "man", "parentBranch": "m1" },
+        { "child": "tB2", "parent": "man", "parentBranch": "m2" },
+        { "child": "tP",  "parent": "gP",  "parentBranch": "b1" },
+        { "child": "tD",  "parent": "wye" },
+        { "child": "tT1", "parent": "gP",  "parentBranch": "b2" },
+        { "child": "tT2", "parent": "gA",  "parentBranch": "b2" }
+      ]
+    }
+  ],
+  "machines": [
+    { "id": "mA" }, { "id": "mB1" }, { "id": "mB2" }, { "id": "mP" }, { "id": "mD" }, { "id": "mTwo" }
+  ]
+}
