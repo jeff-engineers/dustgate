@@ -4399,12 +4399,7 @@ void loop() {
                 // tight one (a browser loading the app drove it to 3.5 KB on
                 // 2026-10-03, and the page would not load), and this document is
                 // built every publish interval then thrown away.
-                struct PsramAlloc {
-                    void* allocate(size_t n) { return heap_caps_malloc(n, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT); }
-                    void  deallocate(void* p) { heap_caps_free(p); }
-                    void* reallocate(void* p, size_t n) { return heap_caps_realloc(p, n, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT); }
-                };
-                BasicJsonDocument<PsramAlloc> out(8192);
+                BigJsonDocument out(8192);
                 g_topoRuntime.writeStatus(out.to<JsonObject>());
                 if (out.overflowed()) {
                     static uint32_t lastWarn = 0;

@@ -512,7 +512,7 @@ bool HttpApiServer::setMachineOutlet(const char* machineId, const char* ip, cons
     do {
         if (!g_topoStore.exists()) break;
         String raw = g_topoStore.load();
-        DynamicJsonDocument doc(raw.length() * 2 + 2048);
+        BigJsonDocument doc(raw.length() * 2 + 2048);
         if (deserializeJson(doc, raw)) break;
         JsonObject outlet;
         for (JsonObject m : doc["machines"].as<JsonArray>()) {
