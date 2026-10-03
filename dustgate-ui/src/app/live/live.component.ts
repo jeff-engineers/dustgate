@@ -2,6 +2,7 @@ import { Component, OnInit, OnDestroy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { RouterLink } from '@angular/router';
 import { ApiService, Topology, TopologyStatus } from '../services/api.service';
+import { problemRows, whyFailed, type ProblemRow } from './problems';
 import { airflowIssues } from '@topology';
 import { collectorPlugState } from '@topology-device';
 import { validateShop } from '@shop';
@@ -294,6 +295,24 @@ const POLL_MS = 2000;
     }
     .setup svg { width: 15px; height: 15px; }
 
+    .attn { margin: 0 0 12px; border: 1px solid var(--danger); border-radius: 12px; overflow: hidden;
+            background: var(--surface); }
+    .attn.warnonly { border-color: var(--accent); }
+    .attn-h { display: flex; justify-content: space-between; padding: 8px 12px; font-size: 11px;
+              font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+              background: rgba(217,68,68,.14); color: #ff8a8a; }
+    .attn.warnonly .attn-h { background: rgba(240,165,0,.12); color: var(--accent); }
+    .prob { display: grid; grid-template-columns: 10px 1fr; gap: 10px; padding: 10px 12px;
+            border-top: 1px solid var(--border, #333); }
+    .sev { width: 10px; height: 10px; border-radius: 50%; background: var(--danger); margin-top: 5px; }
+    .prob.warn .sev { background: var(--accent); }
+    .p-what { font-weight: 600; }
+    .p-why { color: var(--muted); font-size: 13px; margin-top: 2px; line-height: 1.4; }
+    .p-meta { display: flex; gap: 12px; margin-top: 6px; font-size: 12px; color: var(--muted); }
+    .p-meta a { color: var(--accent); text-decoration: none; }
+    .conn { margin: 0 0 12px; padding: 10px 12px; border: 1px solid var(--danger); border-radius: 12px;
+            background: rgba(217,68,68,.1); font-size: 13px; line-height: 1.45; }
+    .conn b { color: #ff8a8a; }
     .ctlerr {
       font-size: 13px; color: var(--danger); margin: 0 8px 10px; line-height: 1.5;
     }
@@ -354,7 +373,35 @@ const POLL_MS = 2000;
         <a [routerLink]="fixLink">Finish setup →</a>
       </div>
 
-      <p class="ctlerr" *ngIf="error">{{ error }}</p>
+      <p class="ctlerr" *ngIf="error" role="alert">{{ error }}</p>
+
+      <!-- The brain itself not answering is the first problem, and the only one
+           that can be shown when it is the cause: everything below is then the
+           last thing seen, not the current state. -->
+      <div class="conn" *ngIf="unreachable" role="alert">
+        <b>Can't reach the controller.</b> What's below is the last thing it said
+        ({{ lastSeenAgo }}) and may be wrong. Tools run on their own if it has
+        power; check its power and WiFi.
+      </div>
+
+      <!-- Anything asked for that is not happening, worded by the device. Never
+           dismissible: it leaves when its cause does (docs/mockups/problems.html). -->
+      <div class="attn" *ngIf="problems.length" [class.warnonly]="!hasBad" role="alert">
+        <div class="attn-h"><span>Needs attention</span><span>{{ problems.length }}</span></div>
+        <div class="prob" *ngFor="let p of problems" [class.warn]="p.severity === 'warn'">
+          <span class="sev"></span>
+          <div>
+            <div class="p-what">{{ p.what }}</div>
+            <div class="p-why">{{ p.why }}</div>
+            <div class="p-meta">
+              <span *ngIf="p.duration">{{ p.duration }}</span>
+              <a routerLink="/boards/log">Brain log →</a>
+              <a *ngIf="p.code === 'plug-unreachable'" routerLink="/tools">Find the plug →</a>
+              <a *ngIf="p.code === 'board-offline'" routerLink="/boards">Boards →</a>
+            </div>
+          </div>
+        </div>
+      </div>
 
       <!-- One block per airflow system, in the order the shop layout draws them
            top to bottom. A blower and the tools that breathe through it belong
@@ -549,6 +596,14 @@ export class LiveViewComponent implements OnInit, OnDestroy {
   /** Last control failure, shown inline. A tap that silently does nothing is the
    *  exact failure mode this view just had. */
   error = '';
+  /** The device's own list of what is wrong, as rows. */
+  problems: ProblemRow[] = [];
+  hasBad = false;
+  /** Two polls in a row failed — the brain isn't answering. */
+  unreachable = false;
+  lastSeenAgo = '';
+  private failedPolls = 0;
+  private lastOkMs = 0;
   /** Where "Finish setup" goes — the gate pass when that's what's missing, the canvas
    *  otherwise. Sending someone to the layout to fix a calibration would just confuse. */
   fixLink = '/build';
@@ -664,14 +719,15 @@ export class LiveViewComponent implements OnInit, OnDestroy {
         if (g.manual) { await this.api.setCollectorManual(false, g.id); switched++; }
       }
       await this.refresh(true);
-    } catch {
+    } catch (e) {
       // "Nothing was switched" is only true if nothing was. This is a LOOP over
       // several tools, so a failure partway through leaves the earlier ones
       // already off — and telling someone the shop is as they left it when it
       // is not is the wrong way round to be wrong.
+      const why = whyFailed(e);
       this.error = switched
-        ? 'Only some of it switched before the controller stopped answering — check the shop.'
-        : "Couldn't reach the controller — nothing was switched.";
+        ? 'Only some of it switched — ' + why + '. Check the shop.'
+        : "Couldn't switch it — " + why + '. Nothing was switched.';
     } finally {
       this.busy = false;
     }
@@ -875,8 +931,8 @@ export class LiveViewComponent implements OnInit, OnDestroy {
       // loop has routed, so the authoritative state comes from the refresh.
       t.on = !t.on;
       await this.refresh(true);
-    } catch {
-      this.error = 'Couldn\'t reach the controller — nothing was switched.';
+    } catch (e) {
+      this.error = "Couldn't run " + t.name + ' — ' + whyFailed(e) + '. Nothing was switched.';
     } finally {
       this.busy = false;
     }
@@ -886,7 +942,18 @@ export class LiveViewComponent implements OnInit, OnDestroy {
     if (this.busy && !force) return;
     try {
       this.applyStatus(await this.api.getStatus());
-    } catch { /* transient — keep last known state */ }
+      this.failedPolls = 0;
+      this.unreachable = false;
+      this.lastOkMs = Date.now();
+    } catch {
+      // Keep the last known state on screen, but SAY it is the last known state
+      // once it isn't a blip: a quiet board and a dead one look the same otherwise.
+      if (++this.failedPolls >= 2) {
+        this.unreachable = true;
+        const s = Math.round((Date.now() - this.lastOkMs) / 1000);
+        this.lastSeenAgo = this.lastOkMs ? (s < 90 ? s + 's ago' : Math.round(s / 60) + 'm ago') : 'never';
+      }
+    }
   }
 
   private applyStatus(status: TopologyStatus): void {
@@ -915,6 +982,9 @@ export class LiveViewComponent implements OnInit, OnDestroy {
       }
     }
     this.collectorOn = !!status.collectorOn;
+    this.problems = problemRows(status.problems, (type, id) =>
+      type === 'system' ? (this.groups.find(g => g.id === id)?.name ?? id) : id);
+    this.hasBad = this.problems.some(p => p.severity === 'bad');
     this.collectorCoasting = !!status.collectorCoasting;
     this.activeName = this.tools.find(t => t.collecting)?.name ?? '';
 

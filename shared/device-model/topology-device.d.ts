@@ -53,7 +53,20 @@ export interface MachineStatus {
   blocked: string[];
 }
 
+/** Something asked for that is not happening. See "Problems" in topology-device.js. */
+export interface Problem {
+  code: string;                       // move-failed, board-offline, collector-no-start, ...
+  severity: 'bad' | 'warn';
+  subject: { type: string; id: string };
+  /** The device's own words. The UI draws it and invents nothing. */
+  text: string;
+  /** How long it has been going on. Absent for derived ones, which have no start. */
+  forMs?: number;
+}
+
 export interface TopologyStatus {
+  /** Absent on a device older than the field. */
+  problems?: Problem[];
   actuators: Record<string, string | null>;
   /**
    * Keyed by MACHINE, not by port — this answers "what is running", and what

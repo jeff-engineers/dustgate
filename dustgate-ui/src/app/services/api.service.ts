@@ -8,7 +8,7 @@ import { MANIFOLD_PROFILES } from '@device-model';
 
 // Re-export so components/services can import topology types from one place.
 export type { Topology } from '@topology';
-export type { TopologyStatus } from '@topology-device';
+export type { TopologyStatus, Problem } from "@topology-device";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 

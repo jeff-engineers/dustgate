@@ -137,6 +137,10 @@ function createTopologyDevice(doc) {
     seqCounter: 0,
     collectors,               // systemId → { on, coasting, coastUntilMs }
     lastRouting: { states: {}, conflicts: [], reachable: {}, machines: {} },
+    // Faults the simulated device was TOLD about (setProblem), keyed so the same
+    // one is not listed twice. The real device raises these from things the model
+    // does not simulate — a node dropping, an RF press giving up, a stale IP.
+    staged: {},
   };
 }
 
@@ -448,6 +452,44 @@ function reassertFor(d, machineId) {
 }
 const setToolPower = setMachinePower;
 
+// ── Problems: anything that was asked for and is not happening ────────────────
+//
+// One list in the status, because the Live view used to read `failed` nowhere
+// and had no way to say that an RF press gave up, that a collector could not be
+// seen, or that a plug had stopped answering (docs/mockups/problems.html,
+// 2026-10-03: "if an action fails, we need to know it — regardless of the
+// cause"). The DEVICE words the reason; the UI draws it and invents nothing.
+//
+//   { code, severity: 'bad'|'warn', subject: {type, id}, text, forMs? }
+//
+// Codes: move-failed, board-offline, collector-no-start, collector-blind,
+// rf-gave-up, rf-send-failed, plug-unreachable, board-fault.
+//
+// MATCHED PAIR with TopologyRuntime::writeStatus for the two codes DERIVED from
+// the plug reading — collector-no-start and collector-blind — text included,
+// asserted in problems.test.js ↔ test_problems.cpp. The rest are RAISED by
+// firmware that has something the model lacks (a link, a transmitter), and the
+// mock/demo stage them with setProblem().
+const PROBLEM_TEXT = {
+  noStart: "Commanded on but drawing nothing — check the breaker, the cord and the remote.",
+  blind: "Commanded on, but its plug isn't answering — can't tell whether it is running.",
+};
+
+function setProblem(d, key, problem) { d.staged[key] = problem; }
+function clearProblem(d, key) { delete d.staged[key]; }
+
+function problemsView(d, systems) {
+  const out = [];
+  for (const [sysId, c] of Object.entries(d.collectors)) {
+    const st = collectorPlugState(systems[sysId] && systems[sysId].plug, c.on);
+    if (st === 'notStarting') out.push({ code: 'collector-no-start', severity: 'bad', subject: { type: 'system', id: sysId }, text: PROBLEM_TEXT.noStart });
+    // A collector nobody asked to run is allowed to be unreadable; one we did is not.
+    else if (st === 'unknown' && c.on && collectorOutlet(d.topology, sysId)) out.push({ code: 'collector-blind', severity: 'bad', subject: { type: 'system', id: sysId }, text: PROBLEM_TEXT.blind });
+  }
+  for (const key of Object.keys(d.staged)) out.push(d.staged[key]);
+  return out;
+}
+
 /** Projected status for consumers (mock / demo / UI). */
 function statusView(d, nowMs = Date.now()) {
   tickCollector(d, nowMs);
@@ -488,6 +530,7 @@ function statusView(d, nowMs = Date.now()) {
     // The rolled-up verdict per machine: routed / partial / stripped.
     machines: d.lastRouting.machines || {},
     systems,
+    problems: problemsView(d, systems),
   };
 }
 
@@ -499,6 +542,7 @@ module.exports = {
   createTopologyDevice, activeMachines, reconcile, setMachinePower, statusView,
   tickCollector, anyCollectorOn, anyCollectorCoasting,
   setCollectorManual, collectorIsManual, setCollectorPlugFault,
+  PROBLEM_TEXT, setProblem, clearProblem, problemsView,
   // v1 spellings — a tool WAS the machine before ports existed.
   toolThreshold, activeTools, setToolPower,
 };

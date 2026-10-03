@@ -351,6 +351,38 @@ int main(int argc, char** argv) {
     ok("no topology → no moves", local.log.empty());
   }
 
+  // ── a schemaVersion-1 layout is refused, with a sentence ─────────────────
+  // a9bab46 made adopt() refuse v1 and nothing asserted it. The sentence is the
+  // point: it is what tells BAD LAYOUT apart from NO LAYOUT, which otherwise
+  // both read as one blue LED. Detected by SHAPE too, because an export that
+  // lost its schemaVersion is still unreadable — so the second case strips it.
+  {
+    const std::string wantErr = "layout is from an older version (v1) — re-save it";
+    std::string v1 = slurp(dir + "star.json");
+    {
+      StubBus local; topo::NodeBus nb; topo::TopologyRuntime rt;
+      nb.setLocal(&local, "primary");
+      rt.begin(&nb);
+      std::string err;
+      ok("v1 layout refused", !rt.adopt(v1.c_str(), v1.size(), err) && !rt.loaded());
+      ok("v1 refusal says why", err == wantErr, err);
+    }
+    {
+      std::string bare = v1;
+      const std::string tag = "\"schemaVersion\":1,";
+      size_t at = bare.find(tag);
+      ok("fixture carries schemaVersion 1", at != std::string::npos);
+      if (at != std::string::npos) bare.erase(at, tag.size());
+      StubBus local; topo::NodeBus nb; topo::TopologyRuntime rt;
+      nb.setLocal(&local, "primary");
+      rt.begin(&nb);
+      std::string err;
+      ok("v1 shape refused without its version",
+         !rt.adopt(bare.c_str(), bare.size(), err) && !rt.loaded());
+      ok("unversioned v1 refusal says why", err == wantErr, err);
+    }
+  }
+
   // ── the CLAIM frames (nodelink.js hello/welcome) ─────────────────────────
   //
   // A node belongs to ONE primary. These pin the frame halves the sketch relies
@@ -560,6 +592,49 @@ int main(int argc, char** argv) {
     rt.setMachinePower("table-saw", 200);
     for (int i = 0; i < 10; i++) { rt.update(t0 + topo::kDefaultCollectorOffDelayMs * 2); local.settle(); }
     ok("one machine starts both blowers", rt.collectorOn("big") && rt.collectorOn("small"));
+
+    // ── problems — the pair of problems.test.js, same cases, same order ──────
+    {
+      auto probs = [&](size_t& n) {
+        static DynamicJsonDocument pd(8192);
+        pd.clear();
+        rt.writeStatus(pd.to<JsonObject>());
+        n = pd["problems"].size();
+        return pd["problems"].as<JsonArrayConst>();
+      };
+      size_t n = 0;
+      probs(n);
+      ok("problems: no plug configured, running → nothing to say", n == 0);
+
+      // A reading that is up and drawing is not a problem.
+      rt.setCollectorPlug("big", 1200.0f, true, 60000);
+      probs(n);
+      ok("problems: a healthy blower lists none", n == 0);
+
+      rt.setCollectorPlug("big", 0.0f, true, topo::kCollectorSpinupGraceMs);
+      auto a = probs(n);
+      ok("problems: a dead blower past the grace is one problem", n == 1);
+      ok("problems: coded collector-no-start",
+         std::string(a[0]["code"] | "") == "collector-no-start" &&
+         std::string(a[0]["severity"] | "") == "bad" &&
+         std::string(a[0]["subject"]["id"] | "") == "big");
+      ok("problems: the device words the reason",
+         std::string(a[0]["text"] | "") == "Commanded on but drawing nothing \xE2\x80\x94 check the breaker, the cord and the remote.",
+         std::string(a[0]["text"] | ""));
+
+      rt.setCollectorPlug("big", 0.0f, false, 0);
+      auto b = probs(n);
+      ok("problems: an unreachable plug while on is blind, not accused",
+         n == 1 && std::string(b[0]["code"] | "") == "collector-blind");
+
+      rt.raiseProblem("rf:big", "rf-gave-up", "bad", "system", "big", "Pressed 3 times.", 5);
+      rt.raiseProblem("rf:big", "rf-gave-up", "bad", "system", "big", "Pressed 3 times.", 99);
+      probs(n);
+      ok("problems: a raised problem is listed once however often it is raised", n == 2);
+      rt.clearProblem("rf:big");
+      probs(n);
+      ok("problems: and clears when the cause does", n == 1);
+    }
     // Concatenated per system in document order, never interleaved. The jointer
     // valve is still open here (idle-HOLD left it where it was), so the big
     // system contributes a make AND a break — and the small system's move lands

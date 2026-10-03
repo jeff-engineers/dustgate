@@ -59,6 +59,7 @@ const SUITES = [
   ['build/plug-label.spec.js', 'plug-label'],
   ['boards/board-drives.spec.js', 'board-drives'],
   ['boards/serial-log.spec.js', 'serial-log'],
+  ['live/problems.spec.js', 'live-problems'],
   ['build-stamp.spec.js', 'build-stamp'],
 ];
 
