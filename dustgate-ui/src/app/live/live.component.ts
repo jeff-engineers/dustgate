@@ -270,23 +270,11 @@ const POLL_MS = 2000;
     .chip.off  { color: var(--muted); background: transparent; border: 1px solid var(--border); }
     .chip.off::before { background: transparent; border: 1px solid var(--muted); }
 
-    /* The card keeps its switch — unlike a tool row it is a real button that does
-       what it looks like — so the chip stacks above it. */
+    /* The card has no switch any more (2026-10-03); the chip sits alone. Was: it was a real button that did
+       what it looked like, so the chip stacked above it. */
     .ccol { display: flex; flex-direction: column; align-items: flex-end; gap: 7px; flex-shrink: 0; }
 
     /* toggle */
-    .sw {
-      width: 46px; height: 28px; border-radius: 999px; flex-shrink: 0;
-      background: var(--bg); border: 1px solid var(--border); position: relative;
-      transition: background 0.14s, border-color 0.14s;
-    }
-    .sw::after {
-      content: ''; position: absolute; top: 3px; left: 3px;
-      width: 20px; height: 20px; border-radius: 50%; background: var(--muted);
-      transition: transform 0.14s, background 0.14s;
-    }
-    .sw.on { background: var(--success); border-color: var(--success); }
-    .sw.on::after { transform: translateX(18px); background: #fff; }
 
     .setup {
       display: flex; align-items: center; justify-content: center; gap: 6px;
@@ -437,17 +425,10 @@ const POLL_MS = 2000;
                  air? Note there is no "Waiting" here — a blower is never
                  out-voted, it runs or it doesn't, so orange goes to Blocked. -->
             <span class="chip" [class]="'chip ' + collectorChipTone(g)">{{ collectorChipText(g) }}</span>
-            <!-- Starts and stops THIS system's blower. Stop-only until 2026-08-22,
-                 which made an idle card's switch a control that did nothing. Off
-                 still stops this system's TOOLS — it used to stop every tool in the
-                 shop, which on a two-system layout reached across and switched off
-                 a machine in the other half of the building.
-                 Hidden with no outlet paired: there is genuinely nothing to switch,
-                 and a dead control is what this whole change is about removing. -->
-            <button class="sw" *ngIf="!g.noPlug" [class.on]="g.on" [class.locked]="!ready"
-                    [attr.aria-label]="(g.on ? 'Stop ' : 'Run ') + g.name"
-                    [title]="collectorSwitchTitle(g)"
-                    (click)="toggleCollector(g)"></button>
+            <!-- No switch here (jeff, 2026-10-03). The blower follows the tools:
+                 tap a tool's row to run it by hand and the blower comes with it.
+                 A second control on the card fought that one — a hand-run blower
+                 and a tool each had their own idea of what "off" meant. -->
           </div>
         </div>
 
@@ -692,48 +673,6 @@ export class LiveViewComponent implements OnInit, OnDestroy {
   }
 
   /**
-   * The collector card's switch, which is a SWITCH now.
-   *
-   * It was stop-only: tapping an idle blower did nothing at all, while looking
-   * exactly like a control that would start it (reported 2026-08-22). Running the
-   * blower on its own is a real errand — clear a clog, sweep up, prove a run —
-   * and the routing brain has always been built to allow it: idle-hold keeps a
-   * path open precisely so a hand start can't dead-head.
-   *
-   * OFF still means "stop what is running here". With tools running that is the
-   * tools, because a blower switched off under a running saw would just come back
-   * on the next poll; with only a hand-run to stop, it is the hand-run.
-   */
-  async toggleCollector(g: SystemGroup): Promise<void> {
-    if (this.busy || !this.ready) return;
-    this.busy = true;
-    this.error = '';
-    let switched = 0;   // how much actually landed, for the failure message
-    try {
-      if (!g.on) {
-        await this.api.setCollectorManual(true, g.id);
-      } else {
-        // Tools first: stopping them is what "off" means while any are running,
-        // and clearing the hand-run as well leaves nothing behind holding it on.
-        for (const t of g.tools) if (t.on) { await this.api.setToolManual(t.id, false); switched++; }
-        if (g.manual) { await this.api.setCollectorManual(false, g.id); switched++; }
-      }
-      await this.refresh(true);
-    } catch (e) {
-      // "Nothing was switched" is only true if nothing was. This is a LOOP over
-      // several tools, so a failure partway through leaves the earlier ones
-      // already off — and telling someone the shop is as they left it when it
-      // is not is the wrong way round to be wrong.
-      const why = whyFailed(e);
-      this.error = switched
-        ? 'Only some of it switched — ' + why + '. Check the shop.'
-        : "Couldn't switch it — " + why + '. Nothing was switched.';
-    } finally {
-      this.busy = false;
-    }
-  }
-
-  /**
    * The collector card's state, same axis rephrased for a blower: is it moving
    * air?
    *
@@ -794,12 +733,6 @@ export class LiveViewComponent implements OnInit, OnDestroy {
       case 'collecting':        return 'go';
       default:                  return 'off';
     }
-  }
-
-  collectorSwitchTitle(g: SystemGroup): string {
-    if (!g.on) return `Run ${g.name} by hand — opens a gate first, then starts the blower`;
-    if (g.manual && !g.activeName) return `Stop ${g.name}`;
-    return `Switch off every tool running on ${g.name}`;
   }
 
   // ── chips ────────────────────────────────────────────────────────────────

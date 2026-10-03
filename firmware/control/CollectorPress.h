@@ -103,7 +103,19 @@ inline PressAction nextPressAction(const PressState& st, bool want,
     // A WANT THAT CHANGED RESTARTS EVERYTHING, including a given-up attempt.
     // Someone switching the blower off after we failed to start it must not
     // inherit that failure — the new intent has not been tried yet.
-    if (st.everPressed && st.wanted != want) return PressAction::Press;
+    //
+    // ...UNLESS THE BLOWER ALREADY IS WHAT WE WANT. A press is a TOGGLE: sent to a
+    // blower that is already running it switches it OFF. Pressing on a changed
+    // want regardless of the reading did exactly that on the bench (2026-10-03):
+    // ON, OFF, ON in quick succession found the clamp still reading the old
+    // run, "wanting ON (saw running)" pressed, and the blower stopped — then the
+    // retries chased it, toggling on and off several times. Only a READING that
+    // says so counts (Running/Off); blind or unmeasured still presses once.
+    if (st.everPressed && st.wanted != want) {
+        if (want  && observed == PlugState::Running) return PressAction::Nothing;
+        if (!want && observed == PlugState::Off)     return PressAction::Nothing;
+        return PressAction::Press;
+    }
 
     if (st.gaveUp) return PressAction::GiveUp;
 
