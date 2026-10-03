@@ -847,7 +847,7 @@ void HttpApiServer::registerRoutes() {
         // 512, not 320: `built` is now a copied String and `build` is new, and
         // ArduinoJson drops an overflowing member SILENTLY (the WELCOME lost
         // `rst` exactly that way on 2026-09-27).
-        StaticJsonDocument<512> doc;
+        StaticJsonDocument<640> doc;
         doc["apiKey"]        = _apiKey;
         doc["numStops"]      = _cachedNumActiveStops;   // runtime; not compile-time NUM_STOPS
         doc["version"]       = "1.0.0";
@@ -863,6 +863,13 @@ void HttpApiServer::registerRoutes() {
         // answer to "what did I flash last?" (2026-09-28).
         doc["build"]         = buildstamp::fw();
         doc["uptimeSec"]     = (uint32_t)(millis() / 1000);
+        // Internal heap, and the largest block in it. The board has crashed on a
+        // failed lock allocation (2026-10-03) with the heap at a few KB while a
+        // browser loaded the app, so "how close to the edge are we" has to be one
+        // request, not a serial cable.
+        doc["heapFree"]      = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+        doc["heapMin"]       = (uint32_t)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL);
+        doc["heapBlock"]     = (uint32_t)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
         // motorInverted is GONE (2026-08-28). There is no runtime direction to
         // report: it is derived from which endstop is the datum. A serial bus
         // servo cannot be wired backwards, which is the only thing the flip ever
