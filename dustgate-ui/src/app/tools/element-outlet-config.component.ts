@@ -173,6 +173,8 @@ export class ElementOutletConfigComponent implements OnInit {
   changing = false;
   ip = '';
   host = '';
+  /** Kept so a re-save does not drop it, and set on pick — see DiscoveredOutlet.mac. */
+  mac = '';
   /** Cached display name for the plug. NOT the source of truth — the Shelly holds
    *  that, and a live scan overrides this — but it keeps a name on screen for a
    *  plug that is switched off or wasn't in the last sweep. */
@@ -193,6 +195,7 @@ export class ElementOutletConfigComponent implements OnInit {
     this.name       = (this.element['name'] as string) || (this.element['id'] as string) || '';
     this.ip         = (outlet?.['ip'] as string) ?? '';
     this.host       = (outlet?.['host'] as string) ?? '';
+    this.mac        = (outlet?.['mac'] as string) ?? '';
     this.gen        = (outlet?.['gen'] as number) ?? 2;
     this.kind       = (outlet?.['kind'] as string) === 'tasmota' ? 'tasmota' : 'shelly';
     this.label      = (outlet?.['name'] as string) ?? '';
@@ -213,14 +216,14 @@ export class ElementOutletConfigComponent implements OnInit {
    *  the plug has already been let go, so leaving the layout claiming it until
    *  someone presses Save would be the two halves disagreeing. */
   unpair(note: string): void {
-    this.ip = ''; this.host = ''; this.label = '';
+    this.ip = ''; this.host = ''; this.mac = ''; this.label = '';
     this.hasPlug = false; this.changing = false;
     if (note) this.note.emit(note);
     void this.save();
   }
 
   pick(d: DiscoveredOutlet): void {
-    this.ip = d.ip; this.host = d.hostname;
+    this.ip = d.ip; this.host = d.hostname; this.mac = d.mac ?? '';
     this.kind = d.kind ?? 'shelly';
     // `|| 2` only for a Shelly. A Tasmota reports generation 0 because it HAS no
     // generation, and coercing that to 2 would write a Shelly generation into a
@@ -264,6 +267,7 @@ export class ElementOutletConfigComponent implements OnInit {
       if (this.kind === 'tasmota') outlet['kind'] = 'tasmota';
       if (!this.isSwitch) outlet['thresholdW'] = this.thresholdW;
       if (this.host) outlet['host'] = this.host;
+      if (this.mac) outlet['mac'] = this.mac;
       if (this.label) outlet['name'] = this.label;
       // The collector's `control` carries offDelayMs alongside the plug — keep
       // whatever's there rather than dropping it on a re-pair.

@@ -105,6 +105,11 @@ public:
     bool setName(const char* name) override;
     bool readName(String& out, uint32_t timeoutMs = OUTLET_RPC_WRITE_TIMEOUT_MS);
 
+    // The plug's MAC ("AA:BB:CC:DD:EE:FF", from Status 5). What identifies it when
+    // its address changes — see control/OutletRelocate.h. False if it did not
+    // answer or did not say.
+    bool readMac(String& out, uint32_t timeoutMs = OUTLET_RPC_WRITE_TIMEOUT_MS);
+
     // Claim the plug AND make it behave like the pass-through it is meant to be.
     //
     // The Athom no-relay plug still ships firmware for its relay sibling: the web

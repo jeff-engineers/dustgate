@@ -1633,6 +1633,20 @@ actually matters rather than the Mac's.
 
 ### 12.2 Tasmota recovery: re-sweep, identify by Mem1
 
+> **BUILT 2026-10-03, with one change to the plan below: the identifier is the
+> plug's MAC, not Mem1.** `Mem1` holds OUR name, so it says "ours" and cannot say
+> *which* plug — two plugs of ours look identical. The MAC is unique, survives a
+> new lease, is on the label, and Status 5 reports it. It is stored as
+> `sensor.outlet.mac` when a plug is paired, and backfilled by the brain for plugs
+> paired before that. A plug silent for 5 minutes triggers one background sweep
+> (at most every 15 minutes), matched by MAC, and the layout's address is rewritten
+> and logged `[RELOCATE]`. With no MAC on file a plug is paired by ELIMINATION only
+> when exactly one unclaimed plug and one lost plug exist; anything less certain is
+> left alone. `firmware/control/OutletRelocate.h` has the rules and the tests.
+> **Not built: the mDNS tier.** If Tasmotas are flashed to advertise, resolving the
+> plug's own name becomes the fast path and the sweep the fallback; the MAC check
+> stays, to confirm the answer. Limits: the sweep covers the brain's own /24 only.
+
 `TasmotaOutlet::reresolve()` was a verbatim copy of the Shelly one and could
 never have worked: Tasmota does not advertise over mDNS in a stock build, and
 `_host` is never populated for a Tasmota because the sweep finds these by

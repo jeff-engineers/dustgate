@@ -320,6 +320,34 @@ bool TasmotaOutlet::readName(String& out, uint32_t timeoutMs) {
     return true;
 }
 
+bool TasmotaOutlet::readMac(String& out, uint32_t timeoutMs) {
+    if (_ip[0] == '\0') return false;
+
+    char url[64];
+    snprintf(url, sizeof(url), "http://%s/cm?cmnd=Status%%205", _ip);
+
+    HTTPClient http;
+    http.begin(url);
+    http.setConnectTimeout(timeoutMs);
+    http.setTimeout(timeoutMs);
+    if (http.GET() != 200) { http.end(); return false; }
+
+    // Status 5 is the network block: {"StatusNET":{"Hostname":..,"IPAddress":..,"Mac":".."}}.
+    // A filter keeps the parse small — the full reply carries gateway, DNS, WiFi
+    // power and more.
+    StaticJsonDocument<64> filter;
+    filter["StatusNET"]["Mac"] = true;
+    StaticJsonDocument<128> doc;
+    const String body = http.getString();
+    http.end();
+    if (deserializeJson(doc, body, DeserializationOption::Filter(filter))) return false;
+
+    JsonVariant v = doc["StatusNET"]["Mac"];
+    if (v.isNull()) return false;
+    out = v.as<const char*>();
+    return out.length() > 0;
+}
+
 bool TasmotaOutlet::provision(const char* owner) {
     if (_ip[0] == '\0') return false;
 

@@ -36,6 +36,7 @@
 #include "feedback/FeedbackSystem.h"
 #include "control/ControlInput.h"
 #include "control/OutletSweep.h"
+#include "control/OutletRelocate.h"
 #include "control/CollectorPress.h"        // the retry policy for a stateless press
 #include "control/RfCollectorPresser.h"    // ...and the one presser that exists
 #include "control/RfAddressGuess.h"        // the four ways a DIP gets copied wrong
@@ -1922,6 +1923,17 @@ static void describeOutletInto(JsonObject o, const char* ip, const char* mdnsHos
                                       control.ourName());
     }
 
+    // A Tasmota's MAC, so a layout can find the plug again when its address
+    // changes (control/OutletRelocate.h). Normalised on the way out, so the app
+    // and the brain compare like with like.
+    if (isTasmota && ok) {
+        String mac;
+        if (tasProbe.readMac(mac, 1200)) {
+            const std::string n = relocate::normMac(mac.c_str());
+            if (!n.empty()) o["mac"] = n.c_str();
+        }
+    }
+
     o["ip"]        = String(ip);
     o["hostname"]  = host;
     // The name with any "· owner" suffix stripped: the suffix is our bookkeeping
@@ -1954,6 +1966,121 @@ static void describeOutletInto(JsonObject o, const char* ip, const char* mdnsHos
 }
 
 #endif  // CONTROL_SMART_OUTLET
+
+// -----------------------------------------------------------------------------
+// relocateTasmotas — find a tool's plug again after its address changed.
+// The reasoning, and the matching rules, are in control/OutletRelocate.h.
+//
+// Runs on the main loop, like the sweep it borrows (blocking HTTP, one address
+// per pass). Three jobs, in order, one per call at most:
+//   1. BACKFILL a plug's MAC into the layout while it is still answering, so a
+//      layout paired before MACs were stored can still be found later.
+//   2. START a sweep when a plug has been silent long enough and none has run
+//      lately. Rate-limited: a sweep is a minute of probing on a network that
+//      once seemed to object to it (TODO, ESP-NOW).
+//   3. APPLY a finished sweep: rewrite the layout for every plug it located.
+// -----------------------------------------------------------------------------
+#ifdef CONTROL_SMART_OUTLET
+static const uint32_t kRelocateAfterMs    = 300000;    // silent this long before we go looking
+static const uint32_t kRelocateMinGapMs   = 900000;    // and never sweep more often than this
+static const uint32_t kBackfillGapMs      = 30000;
+
+static void relocateTasmotas() {
+    static uint32_t lastTick = 0, lastSweepMs = 0, lastBackfillMs = 0;
+    static bool     ownSweep = false;
+    static uint32_t downSince[SMART_OUTLET_COUNT] = {0};
+    const uint32_t now = millis();
+    if (now - lastTick < 5000) return;
+    lastTick = now;
+    if (WiFi.status() != WL_CONNECTED || !g_topoRuntime.loaded()) return;
+
+    // The plugs the layout names, in the same order syncTopologyOutlets() gave
+    // them slots — slot i is the i-th machine with an address.
+    struct Slot { std::string id; relocate::Outlet o; bool tasmotaOrUnsaid; };   // 'worth a sweep'
+    std::vector<Slot> slots;
+    for (const std::string& mid : topo::machineIds(g_topoRuntime.topology())) {
+        JsonObjectConst o = topo::machineDoc(g_topoRuntime.topology(), mid)["sensor"]["outlet"];
+        const char* ip = o["ip"].as<const char*>();
+        if (!ip || !*ip) continue;
+        const char* kind = o["kind"] | "";
+        slots.push_back({mid, {mid, ip, relocate::normMac(o["mac"] | "")},
+                         // Only a plug KNOWN to be a Tasmota is worth a sweep: an unsaid
+                         // kind is a Shelly that may simply be switched off, and
+                         // sweeping a network every 15 minutes for it is not free.
+                         strcmp(kind, "tasmota") == 0 || !relocate::normMac(o["mac"] | "").empty()});
+    }
+    for (size_t i = 0; i < slots.size() && i < (size_t)SMART_OUTLET_COUNT; i++) {
+        SmartOutlet* so = control.outlet((int)i);
+        if (!so || so->isReachable()) { downSince[i] = 0; continue; }
+        if (!downSince[i]) downSince[i] = now ? now : 1;
+    }
+
+    // 3. a finished sweep of ours
+    if (ownSweep && !g_sweep.running()) {
+        ownSweep = false;
+        std::vector<relocate::Outlet> lost, all;
+        for (size_t i = 0; i < slots.size(); i++) {
+            all.push_back(slots[i].o);
+            if (i < (size_t)SMART_OUTLET_COUNT && downSince[i] && now - downSince[i] >= kRelocateAfterMs &&
+                slots[i].tasmotaOrUnsaid)
+                lost.push_back(slots[i].o);
+        }
+        std::vector<relocate::Found> found;
+        for (const String& row : g_sweep.rows()) {
+            StaticJsonDocument<768> d;
+            if (deserializeJson(d, row)) continue;
+            found.push_back({d["ip"] | "", relocate::normMac(d["mac"] | ""), d["pickable"] | false});
+        }
+        const std::vector<relocate::Result> res = relocate::match(lost, all, found);
+        for (const relocate::Result& r : res) {
+            DEBUG_PRINT(F("[RELOCATE] ")); DEBUG_PRINT(r.id.c_str());
+            DEBUG_PRINT(F(" found at ")); DEBUG_PRINT(r.ip.c_str());
+            DEBUG_PRINT(F(" (MAC ")); DEBUG_PRINT(r.mac.c_str());
+            DEBUG_PRINTLN(r.byElimination ? F(") — the only unclaimed plug, so it must be this one; layout updated.")
+                                          : F(") — matched by MAC; layout updated."));
+            linklog::event("relocate", r.id.c_str(), "");
+            apiServer.setMachineOutlet(r.id.c_str(), r.ip.c_str(), "tasmota", r.mac.c_str());
+        }
+        if (res.empty() && !lost.empty()) {
+            DEBUG_PRINT(F("[RELOCATE] swept the subnet, found ")); DEBUG_PRINT((int)found.size());
+            DEBUG_PRINTLN(F(" plug(s) and could not tell which is the lost one — leaving the layout alone."));
+        }
+        return;
+    }
+    if (g_sweep.running()) return;
+
+    // 1. backfill one MAC
+    if (now - lastBackfillMs >= kBackfillGapMs) {
+        lastBackfillMs = now;
+        for (size_t i = 0; i < slots.size() && i < (size_t)SMART_OUTLET_COUNT; i++) {
+            SmartOutlet* so = control.outlet((int)i);
+            if (!so || !so->isReachable() || !slots[i].o.mac.empty() || so->kind() != OUTLET_TASMOTA) continue;
+            TasmotaOutlet t(so->ip(), "mac");
+            String mac;
+            if (!t.readMac(mac, 1200)) continue;
+            const std::string n = relocate::normMac(mac.c_str());
+            if (n.empty()) continue;
+            DEBUG_PRINT(F("[RELOCATE] recording the MAC of ")); DEBUG_PRINT(slots[i].id.c_str());
+            DEBUG_PRINT(F(" (")); DEBUG_PRINT(n.c_str()); DEBUG_PRINTLN(F(") so it can be found if its address changes."));
+            apiServer.setMachineOutlet(slots[i].id.c_str(), so->ip(), "", n.c_str());
+            return;
+        }
+    }
+
+    // 2. start a sweep
+    if (lastSweepMs && now - lastSweepMs < kRelocateMinGapMs) return;
+    for (size_t i = 0; i < slots.size() && i < (size_t)SMART_OUTLET_COUNT; i++) {
+        if (!slots[i].tasmotaOrUnsaid || !downSince[i] || now - downSince[i] < kRelocateAfterMs) continue;
+        if (g_sweep.begin(WiFi.localIP())) {
+            ownSweep = true; lastSweepMs = now;
+            DEBUG_PRINT(F("[RELOCATE] ")); DEBUG_PRINT(slots[i].id.c_str());
+            DEBUG_PRINT(F(" at ")); DEBUG_PRINT(slots[i].o.ip.c_str());
+            DEBUG_PRINTLN(F(" has not answered for 5 min — sweeping the subnet for it."));
+        }
+        return;
+    }
+}
+#endif
 
 #if defined(CONTROL_SMART_OUTLET) && defined(PIN_RF_TX)
 // Try each way a DIP can be copied wrong, and keep the one the collector
@@ -2510,6 +2637,9 @@ void loop() {
         // (host-testable, no Arduino.h). It drives the collector coast-down.
         g_topoRuntime.update(millis());
         raiseDeviceProblems();
+#ifdef CONTROL_SMART_OUTLET
+        relocateTasmotas();
+#endif
 
 #ifdef CONTROL_SMART_OUTLET
         // Assert each system's collector through the manual-override path: while
