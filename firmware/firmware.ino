@@ -817,6 +817,11 @@ static void raiseDeviceProblems() {
         } else {
             g_topoRuntime.clearProblem(key);
         }
+        // A move that did not finish: the link may be fine again by now, which is
+        // exactly why this is its own entry — the gate is still in an unknown place.
+        const std::string mkey = std::string("move:") + g_remoteBuses[i].host();
+        if (h.moveFault) g_topoRuntime.raiseProblem(mkey, "move-failed", "bad", "board", g_remoteBuses[i].host(), h.moveFault, now);
+        else             g_topoRuntime.clearProblem(mkey);
     }
 
 #ifdef CONTROL_SMART_OUTLET
@@ -2570,6 +2575,21 @@ void loop() {
                             }
                             break;
                         case topo::PressAction::Nothing:
+                            // OFF that did not take. The policy cannot see it —
+                            // the plug state reads "off" whenever we are not asking,
+                            // whatever the wire says — so it never presses again,
+                            // and the blower runs on after the last tool. We do not
+                            // press blind here (a person may have started it at the
+                            // fob), but we do SAY so.
+                            if (!want && g_pressState[i].everPressed &&
+                                (now - g_pressState[i].lastPressMs) > topo::kPressCooldownMs * 2 &&
+                                g_topoRuntime.collectorDrawing(sysIds[i])) {
+                                g_topoRuntime.raiseProblem("rf-wont-stop:" + sysIds[i], "collector-wont-stop", "bad",
+                                    "system", sysIds[i],
+                                    "Told it to stop, but it is still drawing power \xE2\x80\x94 the remote may have missed the press, or someone started it by hand.", now);
+                            } else {
+                                g_topoRuntime.clearProblem("rf-wont-stop:" + sysIds[i]);
+                            }
                             // Settled: clear the budget so the next disagreement
                             // gets a full one rather than the tail of this one.
                             if (seen == (want ? topo::PlugState::Running
@@ -4155,8 +4175,18 @@ void loop() {
             static unsigned long lastPublishMs = 0;
             if (millis() - lastPublishMs >= V2_STATUS_PUBLISH_MS) {
                 lastPublishMs = millis();
-                DynamicJsonDocument out(4096);
+                // 8 KB since 2026-10-03: the `problems` list carries a sentence per
+                // entry, and ArduinoJson DROPS what does not fit rather than
+                // failing — the first thing lost would be the problem you needed.
+                DynamicJsonDocument out(8192);
                 g_topoRuntime.writeStatus(out.to<JsonObject>());
+                if (out.overflowed()) {
+                    static uint32_t lastWarn = 0;
+                    if (!lastWarn || millis() - lastWarn > 60000) {
+                        lastWarn = millis();
+                        DEBUG_PRINTLN(F("[API] status document overflowed 8 KB \xE2\x80\x94 the status is truncated."));
+                    }
+                }
                 String body; serializeJson(out, body);
                 apiServer.publishTopologyStatus(body);
 

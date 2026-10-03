@@ -92,6 +92,21 @@ int main() {
            nextPressAction(st, true, PlugState::Starting, 1000 + COOL * 9) == PressAction::Nothing);
     }
 
+    printf("\nR3b before the first press, starting means nobody has pressed\n");
+    {
+        // A clamp reads "starting" for a blower that was never started, because
+        // its age is how long the CLAMP has read on. Waiting here waited for a
+        // button nobody had pushed, for ever (found 2026-10-03).
+        PressState st;
+        ok("never pressed, wanted on, reading starting -> PRESS",
+           nextPressAction(st, true, PlugState::Starting, 1000) == PressAction::Press,
+           actName(nextPressAction(st, true, PlugState::Starting, 1000)));
+        ok("but never pressed and already running -> leave it",
+           nextPressAction(st, true, PlugState::Running, 1000) == PressAction::Nothing);
+        ok("and going blind still waits",
+           nextPressAction(st, true, PlugState::Unknown, 1000) == PressAction::Nothing);
+    }
+
     printf("\nR4 going blind is not disagreement either\n");
     {
         // A WiFi dropout must never switch a running collector off.

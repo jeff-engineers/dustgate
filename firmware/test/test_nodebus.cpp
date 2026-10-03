@@ -279,6 +279,25 @@ int main(int argc, char** argv) {
          rt.failedMoves().size() == 1 && rt.failedMoves()[0].reason == "controller offline",
          rt.failedMoves().empty() ? "<none>" : rt.failedMoves()[0].reason);
       ok("offline node → no command issued", ghost.log.empty());
+
+      // A failure must OUTLIVE the next re-decision: every poll tick rebuilds
+      // `failedMoves()`, so without a sticky record the status carried it for a
+      // few hundred ms and the app could never show it (2026-10-03).
+      auto stuckProblems = [&]() {
+        DynamicJsonDocument st(4096);
+        rt.writeStatus(st.to<JsonObject>());
+        size_t n = 0;
+        for (JsonObjectConst p : st["problems"].as<JsonArrayConst>())
+          if (std::string(p["code"] | "") == "move-failed" && std::string(p["subject"]["id"] | "") == "gate1") n++;
+        return n;
+      };
+      ok("failed move is a problem", stuckProblems() == 1);
+      for (int i = 0; i < 20; i++) { rt.update(0); ghost.settle(); }
+      ok("and is still one after many re-decisions", stuckProblems() == 1);
+      ghost.up = true;
+      rt.setToolPower("toolX", 200);   // the sketch feeds watts every pass; that re-decides
+      drain(rt, {&local, &ghost});
+      ok("until the gate next moves", stuckProblems() == 0);
     }
   }
 
@@ -611,6 +630,17 @@ int main(int argc, char** argv) {
       probs(n);
       ok("problems: a healthy blower lists none", n == 0);
 
+      // A blower that never started is judged by the RUNTIME's clock for how long
+      // it has been commanded on, not by the feed's age. A clamp's age is 0 for a
+      // blower that is not drawing, which read "starting" for ever (2026-10-03).
+      {
+        const uint32_t t1 = t0 + topo::kDefaultCollectorOffDelayMs * 2 + 1000;
+        rt.setCollectorPlug("big", 0.0f, true, 0);        // feed says: age 0
+        rt.update(t1 + topo::kCollectorSpinupGraceMs * 3);
+        ok("problems: a never-started blower is not-starting on the runtime's own clock",
+           rt.collectorPlugStateFor("big") == topo::PlugState::NotStarting,
+           topo::plugStateName(rt.collectorPlugStateFor("big")));
+      }
       rt.setCollectorPlug("big", 0.0f, true, topo::kCollectorSpinupGraceMs);
       auto a = probs(n);
       ok("problems: a dead blower past the grace is one problem", n == 1);

@@ -14,6 +14,23 @@ active sections above them, which is how a parked item stops being read.
 
 ## Bugs
 
+- **A plug that changes address is lost for good (jeff, 2026-10-03).** The layout
+  stores an IP and nothing else; Tasmota has no mDNS. Plan: store the plug's MAC
+  at pairing (Mem2 holds the tool id), and have the brain re-find an unreachable
+  plug by MAC in a background sweep, update the layout IP, and say so in the log.
+  The app now SAYS a plug is unreachable (`plug-unreachable` in `problems`), which
+  is the half that was missing. The sweep only covers the brain's own /24, so a
+  plug on another network is not found. Also: an outlet saved with no `kind`
+  defaults to Shelly and polls a Tasmota wrongly forever — the sweep should set it.
+- **A collector OFF press that doesn't land is reported, not retried
+  (2026-10-03).** `collectorPlugState` answers "off" whenever we aren't asking, so
+  the press policy can't see a blower still drawing. It now raises
+  `collector-wont-stop`; retrying would also fight a person who started it at the
+  fob. Decide which is wanted.
+- **Tools with no sensor are manual-only.** The live layout's Router Table and
+  Jointer have neither a plug nor a CT, so nothing starts the collector for them
+  except tapping them in the app.
+
 - **ESP-NOW for primary↔node? (jeff, 2026-09-27 — THINKING, not decided.)**
   Every link failure so far is the same shape: two boards talking TCP *through
   the AP*, and the AP being allowed to break that — band split (09-18), flaky
