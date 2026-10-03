@@ -10,6 +10,25 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="DustGate">
+  <script>
+    // The controller refuses a script (503) when it is short of memory rather than
+    // open the file and fall over. A refused script is a blank page, so reload a few
+    // times: files already fetched are cached, so each pass needs fewer. Counted per
+    // tab and cleared once the page has stood for a few seconds.
+    (function () {
+      var n = 0;
+      try { n = +(sessionStorage.getItem('dgRetry') || 0); } catch (e) {}
+      window.addEventListener('error', function (e) {
+        var t = e.target;
+        if (!t || t.tagName !== 'SCRIPT' || n >= 6) return;
+        try { sessionStorage.setItem('dgRetry', String(n + 1)); } catch (x) {}
+        setTimeout(function () { location.reload(); }, 1200 + n * 600);
+      }, true);
+      window.addEventListener('load', function () {
+        setTimeout(function () { try { sessionStorage.removeItem('dgRetry'); } catch (e) {} }, 4000);
+      });
+    })();
+  </script>
 </head>
 <body>
   <app-root></app-root>

@@ -35,6 +35,7 @@ static const char* NVS_KEY = "api_key";
 // Topology persistence (LittleFS). One instance for the device; the
 // routes below are its only users. Stage 3's controller will read it back.
 static topo::TopologyStore g_topoStore;
+static int s_staticInFlight = 0;   // static files being served right now (MemoryGuard); AsyncTCP task only
 
 // Minimum interval between position-drift-triggered pushes (see update()).
 static const unsigned long POSITION_PUSH_MIN_MS = 150;
@@ -1505,7 +1506,43 @@ void HttpApiServer::registerRoutes() {
     // The Angular app uses hash routing (/#/route) so the server only
     // ever needs to serve index.html for the root — no catch-all needed.
     // ------------------------------------------------------------------
-    _server.serveStatic("/", LittleFS, "/").setDefaultFile("index.html");
+    //
+    // THE BUILD'S FILES ARE NAMED BY CONTENT HASH, so they can be cached for good:
+    // a browser that already has chunk-ABC123.js never asks for it again, and a
+    // changed file arrives under a new name. index.html is the one file whose name
+    // never changes, so it alone is revalidated. This is not only speed — a cold
+    // load asks for six files at once, and each open file costs the board ~10 KB of
+    // internal RAM, which it does not have: that burst aborted the board in a
+    // crash loop on 2026-10-03 (lock creation failing inside fopen()).
+    for (const char* prefix : {"/chunk-", "/main-", "/polyfills-", "/styles-"})
+        _server.serveStatic(prefix, LittleFS, prefix, "max-age=31536000, immutable");
+    _server.serveStatic("/", LittleFS, "/", "no-cache").setDefaultFile("index.html");
+
+    // Never let a request take the board down. Short of internal RAM, a static file
+    // is refused with 503 + Retry-After instead of being opened (the app's index.html
+    // reloads itself a few times when a script is refused), and at most three are
+    // served at once. The API keeps a lower floor: a status poll is small, and the
+    // app must still be able to say the controller is struggling.
+    class MemoryGuard : public AsyncMiddleware {
+    public:
+        void run(AsyncWebServerRequest* req, ArMiddlewareNext next) override {
+            const bool api = req->url().startsWith("/api/") || req->url().startsWith("/shelly-rpc");
+            const size_t freeH = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+            if (api ? (freeH < 12000) : (freeH < 28000 || s_staticInFlight >= 3)) {
+                AsyncWebServerResponse* r = req->beginResponse(503, "text/plain", "busy, retry");
+                r->addHeader("Retry-After", "1");
+                req->send(r);
+                return;
+            }
+            if (!api) {
+                s_staticInFlight++;
+                req->onDisconnect([]() { if (s_staticInFlight > 0) s_staticInFlight--; });
+            }
+            next();
+        }
+    };
+    static MemoryGuard s_guard;
+    _server.addMiddleware(&s_guard);
 
     // OPTIONS preflight for CORS
     _server.onNotFound([](AsyncWebServerRequest* req) {
