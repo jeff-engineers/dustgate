@@ -52,6 +52,41 @@ void write(const uint8_t* data, size_t len) {
     portEXIT_CRITICAL_SAFE(&s_mux);
 }
 
+// Input queue. Writer: the web server's task. Reader: loop(). Same lock idea.
+namespace {
+constexpr size_t kInCap = 256;
+char         s_in[kInCap];
+size_t       s_inHead = 0, s_inLen = 0;
+portMUX_TYPE s_inMux = portMUX_INITIALIZER_UNLOCKED;
+}
+
+bool inject(const char* line, size_t len) {
+    bool ok = false;
+    portENTER_CRITICAL(&s_inMux);
+    if (s_inLen + len + 1 <= kInCap) {
+        for (size_t i = 0; i < len; i++) s_in[(s_inHead + s_inLen++) % kInCap] = line[i];
+        s_in[(s_inHead + s_inLen++) % kInCap] = '\n';
+        ok = true;
+    }
+    portEXIT_CRITICAL(&s_inMux);
+    return ok;
+}
+int injectedAvailable() { return (int)s_inLen; }
+int injectedPeek() {
+    int c = -1;
+    portENTER_CRITICAL(&s_inMux);
+    if (s_inLen) c = (uint8_t)s_in[s_inHead];
+    portEXIT_CRITICAL(&s_inMux);
+    return c;
+}
+int injectedRead() {
+    int c = -1;
+    portENTER_CRITICAL(&s_inMux);
+    if (s_inLen) { c = (uint8_t)s_in[s_inHead]; s_inHead = (s_inHead + 1) % kInCap; s_inLen--; }
+    portEXIT_CRITICAL(&s_inMux);
+    return c;
+}
+
 uint32_t total()  { return s_total; }
 uint32_t bootId() { return s_boot; }
 
@@ -91,9 +126,10 @@ size_t SerialTee::write(const uint8_t* buf, size_t len) {
     return HWCDCSerial.write(buf, len);
 }
 void SerialTee::begin(unsigned long baud) { HWCDCSerial.begin(baud); }
-int  SerialTee::available()                { return HWCDCSerial.available(); }
-int  SerialTee::read()                     { return HWCDCSerial.read(); }
-int  SerialTee::peek()                     { return HWCDCSerial.peek(); }
+// A command from the app goes first: it was sent on purpose, a moment ago.
+int  SerialTee::available()                { return seriallog::injectedAvailable() + HWCDCSerial.available(); }
+int  SerialTee::read()                     { int c = seriallog::injectedRead(); return c >= 0 ? c : HWCDCSerial.read(); }
+int  SerialTee::peek()                     { int c = seriallog::injectedPeek(); return c >= 0 ? c : HWCDCSerial.peek(); }
 void SerialTee::flush()                    { HWCDCSerial.flush(); }
 int  SerialTee::availableForWrite()        { return HWCDCSerial.availableForWrite(); }
 SerialTee::operator bool() const           { return (bool)HWCDCSerial; }

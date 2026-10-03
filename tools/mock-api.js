@@ -165,6 +165,20 @@ function handler(req, res) {
 
   // ── Routes (thin: parse → model call → respond) ────────────────────────────
 
+  // A command from the Brain log screen. The firmware queues it into the serial
+  // reader (POST /api/serial in HttpApiServer.cpp); the mock has no serial
+  // commands, so it echoes the line the same way and says it did nothing.
+  if (pathname === '/api/serial' && req.method === 'POST') {
+    return body(req, b => {
+      const line = typeof b.line === 'string' ? b.line : '';
+      if (!line || line.length > 120 || /[^\x20-\x7e]/.test(line)) {
+        return json(res, { error: 'a command is 1 to 120 plain characters' }, 400);
+      }
+      console.log(`> ${line}`);
+      console.log(`[MOCK] no serial commands in the mock — "${line}" was not run.`);
+      json(res, { ok: true });
+    });
+  }
   if (pathname === '/api/serial' && req.method === 'GET') {
     const from = Number(new URL(req.url, 'http://x').searchParams.get('from') || 0);
     const r = serialRead(from);

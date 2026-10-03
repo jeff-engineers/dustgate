@@ -43,6 +43,7 @@
     "src/app/tools/collector-doc.spec.ts",
     "src/app/build/plug-label.spec.ts",
     "src/app/boards/board-drives.spec.ts",
+    "src/app/boards/serial-log.spec.ts",
     "src/app/build-stamp.spec.ts"
   ]
 }
