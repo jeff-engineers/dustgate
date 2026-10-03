@@ -891,6 +891,16 @@ export class ToolSetupComponent implements OnInit {
       // what left the two screens disagreeing (2026-08-22).
       renameMachine(this.topo as unknown as ShopDoc, m.id as string, c.name);
       if (c.sense === 'plug' && c.ip) {
+        // A plug already paired at this address is shown as selected, so tapping
+        // it again never calls pick() — and a layout saved with the wrong kind
+        // (a Tasmota stored as a Shelly) kept it, even after the plug was probed
+        // and answered as a Tasmota (2026-10-03). Trust what the device just said.
+        const seen = this.outlets.find(o => o.ip === c.ip && o.reachable);
+        if (seen) {
+          c.kind = seen.kind === 'tasmota' ? 'tasmota' : 'shelly';
+          if (c.kind === 'tasmota') c.gen = 0;
+          if (seen.mac) c.mac = seen.mac;
+        }
         const outlet: RawEl = { gen: c.kind === 'tasmota' ? 0 : (c.gen || 2), ip: c.ip, thresholdW: c.thresholdW || DEFAULT_THRESHOLD };
         // Omitted when Shelly: absent already says so on both sides (topology.js).
         if (c.kind === 'tasmota') outlet['kind'] = 'tasmota';
