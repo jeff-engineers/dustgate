@@ -21,6 +21,7 @@
 // =============================================================================
 
 #pragma once
+#include "../utils/JsonAlloc.h"
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <LittleFS.h>
@@ -64,7 +65,9 @@ public:
         if (len == 0)                 { err = "empty body"; return false; }
         if (len > kMaxTopologyBytes)  { err = "topology too large"; return false; }
 
-        DynamicJsonDocument doc(kMaxTopologyBytes);
+        // Sized to the body, in PSRAM — this was a fixed 24 KB of internal RAM per
+        // save, for a layout of ~3 KB (utils/JsonAlloc.h).
+        BigJsonDocument doc(len * 2 + 1024);
         DeserializationError je = deserializeJson(doc, data, len);
         if (je) { err = String("invalid JSON: ") + je.c_str(); return false; }
 

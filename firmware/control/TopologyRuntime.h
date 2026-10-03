@@ -68,6 +68,7 @@
 // =============================================================================
 
 #pragma once
+#include "../utils/JsonAlloc.h"
 #include "CollectorPlugState.h"
 #include <ArduinoJson.h>
 #include "TopologyController.h"
@@ -199,7 +200,7 @@ public:
         // 2x + slack covers the key/value overhead of these documents; a bad
         // guess surfaces as NoMemory rather than silent truncation.
         size_t cap = len * 2 + 2048;
-        std::unique_ptr<DynamicJsonDocument> doc(new DynamicJsonDocument(cap));
+        std::unique_ptr<BigJsonDocument> doc(new BigJsonDocument(cap));
         DeserializationError e = deserializeJson(*doc, json, len);
         if (e) { err = e.c_str(); return false; }
         if (!doc->is<JsonObject>()) { err = "topology must be an object"; return false; }
@@ -1282,7 +1283,7 @@ private:
     std::map<std::string, uint32_t>      _ctSince;
 
     NodeBus*                             _bus = nullptr;
-    std::unique_ptr<DynamicJsonDocument> _doc;
+    std::unique_ptr<BigJsonDocument> _doc;
     Controller                           _ctrl;
     std::deque<QueuedMove>               _queue;
     std::map<std::string, Problem>       _raised;
