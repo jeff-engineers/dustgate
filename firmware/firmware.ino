@@ -790,6 +790,53 @@ static void rejoinWifiIfNetworkBlocksNodes() {
     }
 }
 
+// Problems the status reports (control/TopologyRuntime.h raiseProblem). Raised
+// every pass and refreshed in place, cleared the moment the cause is gone — a
+// problem that outlives its cause is as bad as one that never appeared.
+// Boards and plugs only: the RF press raises its own where it happens.
+static const uint32_t kBoardOfflineAfterMs = 20000;
+static const uint32_t kPlugDownAfterMs     = 120000;
+
+static void raiseDeviceProblems() {
+    static uint32_t lastMs = 0;
+    const uint32_t now = millis();
+    if (now - lastMs < 2000) return;
+    lastMs = now;
+
+    for (int i = 0; i < g_remoteCount; i++) {
+        const topo::RemoteActuatorBus::LinkHealth h = g_remoteBuses[i].health();
+        const std::string key = std::string("board:") + g_remoteBuses[i].host();
+        if (!h.linked && !h.refused && h.downForMs >= kBoardOfflineAfterMs) {
+            char t[160];
+            snprintf(t, sizeof(t), "Not linked for %lus. Its gates stay where they were; tools on it cannot open a gate.",
+                     (unsigned long)(h.downForMs / 1000));
+            g_topoRuntime.raiseProblem(key, "board-offline", "bad", "board", g_remoteBuses[i].host(), t, now - h.downForMs);
+        } else if (h.refused) {
+            g_topoRuntime.raiseProblem(key, "board-offline", "bad", "board", g_remoteBuses[i].host(),
+                                       "The board refused this controller \xE2\x80\x94 it is paired to another one.", now);
+        } else {
+            g_topoRuntime.clearProblem(key);
+        }
+    }
+
+#ifdef CONTROL_SMART_OUTLET
+    // A paired plug that stops answering is usually a new address (DHCP), not a
+    // dead plug. The tool it senses is silently never "on" meanwhile.
+    static uint32_t downSince[SMART_OUTLET_COUNT] = {0};
+    for (int i = 0; i < control.outletCount() && i < SMART_OUTLET_COUNT; i++) {
+        SmartOutlet* o = control.outlet(i);
+        const std::string key = "plug:" + std::to_string(i);
+        if (!o || o->isReachable()) { downSince[i] = 0; g_topoRuntime.clearProblem(key); continue; }
+        if (!downSince[i]) downSince[i] = now ? now : 1;
+        if (now - downSince[i] < kPlugDownAfterMs) continue;
+        char t[160];
+        snprintf(t, sizeof(t), "No answer from %s for %lus. It may have a new address \xE2\x80\x94 a tool on it is not being sensed.",
+                 o->ip(), (unsigned long)((now - downSince[i]) / 1000));
+        g_topoRuntime.raiseProblem(key, "plug-unreachable", "warn", "plug", o->name(), t, downSince[i]);
+    }
+#endif
+}
+
 // The link log's main-loop half: write what the other tasks queued, and once an
 // hour say "still here" with every node's state — so a quiet stretch in the log
 // reads as a quiet shop, not as a board that stopped writing.
@@ -2457,6 +2504,7 @@ void loop() {
         // millis() is passed in rather than read inside: the runtime is pure
         // (host-testable, no Arduino.h). It drives the collector coast-down.
         g_topoRuntime.update(millis());
+        raiseDeviceProblems();
 
 #ifdef CONTROL_SMART_OUTLET
         // Assert each system's collector through the manual-override path: while
@@ -2500,10 +2548,16 @@ void loop() {
                             DEBUG_PRINT(F(" (saw "));
                             DEBUG_PRINT(topo::plugStateName(seen));
                             DEBUG_PRINTLN(sent ? F(") -> sent") : F(") -> TRANSMIT FAILED"));
+                            if (sent) g_topoRuntime.clearProblem("rf-send:" + sysIds[i]);
+                            else g_topoRuntime.raiseProblem("rf-send:" + sysIds[i], "rf-send-failed", "bad", "system", sysIds[i],
+                                     "The remote's transmitter could not send the press.", now);
+                            g_topoRuntime.clearProblem("rf-gave-up:" + sysIds[i]);
                             watchdog::pet();
                             break;
                         }
                         case topo::PressAction::GiveUp:
+                            g_topoRuntime.raiseProblem("rf-gave-up:" + sysIds[i], "rf-gave-up", "bad", "system", sysIds[i],
+                                "Pressed the remote 3 times and the blower never agreed \xE2\x80\x94 check the breaker, the cord and the fob's battery.", now);
                             if (!g_pressState[i].gaveUp) {
                                 topo::noteGaveUp(g_pressState[i]);
                                 // Said ONCE. The state latches, so this does not
@@ -2519,8 +2573,10 @@ void loop() {
                             // Settled: clear the budget so the next disagreement
                             // gets a full one rather than the tail of this one.
                             if (seen == (want ? topo::PlugState::Running
-                                              : topo::PlugState::Off))
+                                              : topo::PlugState::Off)) {
                                 topo::noteSettled(g_pressState[i]);
+                                g_topoRuntime.clearProblem("rf-gave-up:" + sysIds[i]);
+                            }
                             break;
                     }
                     g_dcAsserted[i] = want; g_dcHave[i] = true;

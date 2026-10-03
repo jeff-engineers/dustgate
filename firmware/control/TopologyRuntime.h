@@ -111,6 +111,21 @@ static const uint32_t kDefaultCollectorOffDelayMs = 5000;
 // calibration). Surfaced through /api/status so the UI can say which gate.
 // No default member initializers: the ESP32 toolchain builds at gnu++11, where
 // that would make this a non-aggregate and break the brace-init call sites.
+// Something that was asked for and is not happening. Shape and codes are in
+// shared/device-model/topology-device.js ("Problems"); the two collector codes
+// are derived below, the rest are RAISED by firmware.ino, which sees the links,
+// the transmitter and the plugs.
+struct Problem {
+    std::string code;
+    std::string severity;   // "bad" | "warn"
+    std::string subjectType;
+    std::string subjectId;
+    std::string text;
+    uint32_t    sinceMs;
+};
+static const char* const kProblemNoStart = "Commanded on but drawing nothing \xE2\x80\x94 check the breaker, the cord and the remote.";
+static const char* const kProblemBlind   = "Commanded on, but its plug isn't answering \xE2\x80\x94 can't tell whether it is running.";
+
 struct FailedMove {
     std::string systemId;
     std::string selectorId;
@@ -215,6 +230,7 @@ public:
         _ctrl.setTopology(_doc->as<JsonObjectConst>());
         _queue.clear();
         _failed.clear();
+        _raised.clear();
         // Physical position is unknown after a config change; seed the same way
         // the brain does (every selector at its closed state) so the two agree.
         _hwStates = _ctrl.actuatorStates();
@@ -240,6 +256,7 @@ public:
         _doc.reset();
         _queue.clear();
         _failed.clear();
+        _raised.clear();
         _manual.clear();
         _hwStates.clear();
         _collectors.clear();
@@ -596,6 +613,27 @@ public:
     }
     const std::vector<FailedMove>& failedMoves() const { return _failed; }
 
+    // Raise or refresh a problem under `key` (idempotent: call it every pass and
+    // it keeps its original sinceMs). Clear it when the cause is gone.
+    void raiseProblem(const std::string& key, const char* code, const char* severity,
+                      const char* subjectType, const std::string& subjectId,
+                      const std::string& text, uint32_t nowMs) {
+        auto it = _raised.find(key);
+        if (it != _raised.end()) { it->second.text = text; return; }
+        _raised[key] = Problem{code, severity, subjectType, subjectId, text, nowMs};
+    }
+    void clearProblem(const std::string& key) { _raised.erase(key); }
+    bool hasProblem(const std::string& key) const { return _raised.count(key) > 0; }
+
+    // Does this system's collector name a switchable outlet?
+    bool collectorHasOutlet(const std::string& systemId) const {
+        for (const SystemView& sys : systemsOf(topology())) {
+            if (std::string(sys.id ? sys.id : "") != systemId) continue;
+            return !collectorOf(sys)["control"]["outlet"].isNull();
+        }
+        return false;
+    }
+
     // Serialize the live view into `out`, matching statusView() in
     // shared/device-model/topology-device.js field-for-field so the Live view and
     // the conformance suite see the same shape from firmware and mock:
@@ -710,6 +748,7 @@ public:
         }
 
         out["transitioning"] = transitioning();
+        writeProblems(out);
         JsonArray failed = out.createNestedArray("failed");
         for (const FailedMove& f : _failed) {
             JsonObject o = failed.createNestedObject();
@@ -718,6 +757,35 @@ public:
             o["toState"]    = f.toState;
             o["reason"]     = f.reason;
         }
+    }
+
+    // `problems`: derived collector verdicts, failed moves, then whatever
+    // firmware raised. Mirrors problemsView() in topology-device.js.
+    void writeProblems(JsonObject out) const {
+        JsonArray arr = out.createNestedArray("problems");
+        auto add = [&](const char* code, const char* sev, const char* st, const std::string& id,
+                       const std::string& text, bool hasSince, uint32_t since) {
+            JsonObject o = arr.createNestedObject();
+            o["code"] = code; o["severity"] = sev;
+            JsonObject sub = o.createNestedObject("subject");
+            sub["type"] = st; sub["id"] = id;
+            o["text"] = text;
+            if (hasSince) o["forMs"] = (uint32_t)(_nowMs - since);
+        };
+        for (auto& kv : _collectors) {
+            const topo::PlugState st = collectorPlugStateFor(kv.first);
+            if (st == topo::PlugState::NotStarting)
+                add("collector-no-start", "bad", "system", kv.first, kProblemNoStart, false, 0);
+            else if (st == topo::PlugState::Unknown && kv.second.running &&
+                     (kv.second.plugKnown || collectorHasOutlet(kv.first) || collectorHasClamp(kv.first)))
+                add("collector-blind", "bad", "system", kv.first, kProblemBlind, false, 0);
+        }
+        for (const FailedMove& f : _failed)
+            add("move-failed", f.isBreak ? "warn" : "bad", "selector", f.selectorId,
+                std::string("Move to ") + f.toState + " failed: " + f.reason, false, 0);
+        for (auto& kv : _raised)
+            add(kv.second.code.c_str(), kv.second.severity.c_str(), kv.second.subjectType.c_str(),
+                kv.second.subjectId, kv.second.text, true, kv.second.sinceMs);
     }
 
     // Feed in what the bin sensor says. The CALLER owns the pin, the debounce
@@ -1161,6 +1229,7 @@ private:
     std::unique_ptr<DynamicJsonDocument> _doc;
     Controller                           _ctrl;
     std::deque<QueuedMove>               _queue;
+    std::map<std::string, Problem>       _raised;
     std::vector<FailedMove>              _failed;
     // What has actually been COMMANDED to hardware, as opposed to what the brain
     // has decided. Diverges from Controller::actuatorStates() whenever a plan is

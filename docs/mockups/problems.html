@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Live view problems</title>
+<style>
+  :root {
+    --bg:#111; --surface:#1e1e1e; --surface2:#262626; --line:#333; --fg:#eee; --muted:#9a9a9a;
+    --accent:#f0a500; --danger:#d94444; --success:#3fae5a;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.4 -apple-system, system-ui, sans-serif; }
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 20px 16px 60px; display:grid; gap:24px;
+          grid-template-columns: minmax(0,380px) minmax(0,1fr); align-items:start; }
+  @media (max-width: 820px) { .wrap { grid-template-columns: minmax(0,1fr); } }
+  h1 { font-size:18px; margin:0 0 4px; } h2 { font-size:12px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); margin:0 0 8px; }
+  p { margin:0 0 10px; color:var(--muted); } .note b { color:var(--fg); }
+  .panel { background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:14px; margin-bottom:14px; }
+  .scn button { display:block; width:100%; text-align:left; background:var(--surface2); color:var(--fg); border:1px solid var(--line);
+                border-radius:8px; padding:9px 11px; margin-bottom:6px; font:inherit; cursor:pointer; }
+  .scn button[aria-pressed=true] { border-color:var(--accent); }
+  .scn small { display:block; color:var(--muted); }
+
+  /* the phone */
+  .phone { width:100%; max-width:380px; background:var(--bg); border:1px solid var(--line); border-radius:22px; padding:14px; position:relative; min-height:520px; }
+  .top { display:flex; align-items:center; gap:8px; margin-bottom:10px; }
+  .top .shop { font-weight:600; flex:1; }
+  .pill { font-size:12px; padding:3px 9px; border-radius:99px; background:var(--danger); color:#fff; border:0; cursor:pointer; font-weight:600; }
+  .pill.warn { background:var(--accent); color:#111; }
+  .pill[hidden] { display:none; }
+
+  .attn { background:var(--surface); border:1px solid var(--danger); border-radius:10px; margin-bottom:12px; overflow:hidden; }
+  .attn.warnonly { border-color:var(--accent); }
+  .attn-h { padding:8px 12px; font-size:12px; letter-spacing:.06em; text-transform:uppercase; font-weight:700; background:rgba(217,68,68,.14); color:#ff8a8a; display:flex; justify-content:space-between; }
+  .attn.warnonly .attn-h { background:rgba(240,165,0,.12); color:var(--accent); }
+  .prob { padding:10px 12px; border-top:1px solid var(--line); display:grid; grid-template-columns: 10px 1fr; gap:10px; }
+  .prob:first-of-type { border-top:0; }
+  .sev { width:10px; height:10px; border-radius:50%; background:var(--danger); margin-top:5px; }
+  .prob.warn .sev { background:var(--accent); }
+  .p-what { font-weight:600; } .p-why { color:var(--muted); font-size:13px; margin-top:2px; }
+  .p-meta { display:flex; gap:12px; margin-top:6px; font-size:12px; color:var(--muted); flex-wrap:wrap; }
+  .p-meta a { color:var(--accent); text-decoration:none; cursor:pointer; }
+
+  .sys .collector { background:var(--surface); border-radius:10px; padding:10px 12px; display:flex; gap:10px; align-items:center; margin-bottom:6px; border:1px solid var(--line); }
+  .sys .collector.bad { border-color:var(--danger); }
+  .grow { flex:1; } .sub { color:var(--muted); font-size:12px; }
+  .chip { font-size:11px; font-weight:700; padding:3px 8px; border-radius:6px; background:#333; }
+  .chip.bad { background:rgba(217,68,68,.2); color:#ff8a8a; } .chip.go { background:rgba(63,174,90,.2); color:#7fd994; } .chip.off { color:var(--muted); }
+  .row { background:var(--surface); border-radius:8px; padding:9px 12px; display:flex; gap:10px; align-items:center; margin-bottom:5px; cursor:pointer; border:1px solid transparent; }
+  .row.hasprob { border-color:var(--danger); }
+  .row:hover { background:var(--surface2); }
+
+  .toast { position:absolute; left:14px; right:14px; bottom:14px; background:#2a1515; border:1px solid var(--danger); border-radius:10px; padding:10px 12px; }
+  .toast[hidden] { display:none; }
+  .toast b { color:#ff8a8a; } .toast .x { float:right; background:none; border:0; color:var(--muted); cursor:pointer; font-size:16px; }
+  .conn { background:#2a1515; border:1px solid var(--danger); border-radius:10px; padding:10px 12px; margin-bottom:12px; }
+  .conn[hidden] { display:none; }
+  .stale { opacity:.45; }
+  table { width:100%; border-collapse:collapse; font-size:13px; } td,th { text-align:left; padding:6px 8px; border-top:1px solid var(--line); vertical-align:top; }
+  th { color:var(--muted); font-weight:600; border-top:0; } code { color:var(--accent); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div>
+    <h1>Live view — problems</h1>
+    <p class="note">Jeff, 2026-10-03: <b>“if an action fails, we need to know it — regardless of the cause.”</b>
+      Today the Live view reads <code>status.failed</code> nowhere, and has nothing for an RF press that gave up,
+      a collector it can’t see, a plug that stopped answering, or a node that dropped mid-move.</p>
+    <div class="panel scn">
+      <h2>Try a scenario</h2>
+      <div id="scn"></div>
+    </div>
+    <div class="panel">
+      <h2>What the brain reports</h2>
+      <p>One list, <code>problems</code>, in <code>/api/status</code>. Each entry says what, why, since when, and which part of the shop. The UI draws it and invents nothing — the device words the reason.</p>
+      <table>
+        <tr><th>code</th><th>when it appears</th><th>clears when</th></tr>
+        <tr><td><code>move-failed</code></td><td>a gate move was refused or timed out</td><td>the next move of that gate lands</td></tr>
+        <tr><td><code>board-offline</code></td><td>a board that owns gates is not linked</td><td>it links again</td></tr>
+        <tr><td><code>collector-blind</code></td><td>collector wanted ON, plug/clamp unreadable → <b>we will not press</b></td><td>a reading returns</td></tr>
+        <tr><td><code>collector-no-start</code></td><td>commanded on, past spin-up, drawing nothing</td><td>it draws power</td></tr>
+        <tr><td><code>rf-gave-up</code></td><td>3 presses, blower never agreed</td><td>want changes or it settles</td></tr>
+        <tr><td><code>rf-send-failed</code></td><td>the transmitter could not send at all</td><td>next press sends</td></tr>
+        <tr><td><code>plug-unreachable</code></td><td>a paired plug hasn’t answered ~2 min (stale IP is the usual cause)</td><td>it answers</td></tr>
+        <tr><td><code>board-fault</code></td><td>a stage failed at boot (drive, WiFi, …)</td><td>reboot clears it</td></tr>
+      </table>
+    </div>
+    <div class="panel">
+      <h2>Rules</h2>
+      <p>1. <b>Never dismissible</b> — it goes away when the cause does; hiding it is how it gets forgotten.</p>
+      <p>2. <b>Red = something you asked for isn’t happening. Amber = it’s degraded but working.</b></p>
+      <p>3. A tap that fails says so <b>at the tap</b> (toast), with the device’s reason — and the same fault then stays in the list.</p>
+      <p>4. If the app can’t reach the brain at all, that is the first and only problem shown, and everything below greys out.</p>
+      <p>5. Each entry links to the <b>Brain log</b> (opens on the Problems chip) and, where there is one, to the fix.</p>
+    </div>
+  </div>
+
+  <div>
+    <div class="phone" id="phone"></div>
+  </div>
+</div>
+
+<script>
+const S = {
+  quiet: { name:'All quiet', hint:'nothing wrong', problems:[] },
+  blind: { name:'Collector won’t start (blind)', hint:'the failure from tonight', problems:[
+    { sev:'bad', what:'Dust Collector isn’t starting', why:'Miter Saw is drawing power, but I can’t read the collector’s plug (192.168.86.57 isn’t answering), so I’m not pressing the remote — pressing blind could switch a running collector off.', since:'1m 40s', tool:'Miter Saw', sys:true, fix:'Find the plug →' },
+    { sev:'warn', what:'Plug unreachable: Miter Saw outlet', why:'No answer from 192.168.86.57 for 11 min. It may have a new address.', since:'11m', fix:'Re-scan for it →' } ] },
+  rf: { name:'RF gave up', hint:'3 presses, nothing', problems:[
+    { sev:'bad', what:'Dust Collector did not respond', why:'Pressed the remote 3 times; the clamp still reads 0 W. Check the breaker, the cord and the fob battery.', since:'18s', sys:true } ] },
+  move: { name:'Gate move failed', hint:'node dropped mid-move', problems:[
+    { sev:'bad', what:'Drum Sander gate didn’t open', why:'Board “dustgate-drum-sander” dropped off WiFi during the move (brown-out reset). The collector is being held off so it can’t dead-head.', since:'42s', tool:'Drum Sander', fix:'Board status →' } ] },
+  offline: { name:'Board offline', hint:'router table node gone', problems:[
+    { sev:'bad', what:'Router Table board is offline', why:'Last seen 4 min ago. Its gate stays where it was; tools on it will not open a gate.', since:'4m', tool:'Router Table', fix:'Board status →' } ] },
+  down: { name:'Brain unreachable', hint:'the app can’t talk to it', conn:true, problems:[] },
+};
+let cur = 'blind', toast = null;
+const scn = document.getElementById('scn');
+for (const k in S) { const b=document.createElement('button'); b.innerHTML = S[k].name+'<small>'+S[k].hint+'</small>'; b.onclick=()=>{cur=k; toast=null; draw();}; b.dataset.k=k; scn.appendChild(b); }
+
+function draw() {
+  scn.querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed', b.dataset.k===cur));
+  const sc = S[cur], bad = sc.problems.filter(p=>p.sev==='bad').length, warn = sc.problems.length-bad;
+  const el = document.getElementById('phone');
+  const hasTool = n => sc.problems.some(p=>p.tool===n);
+  el.innerHTML = `
+    <div class="top"><span class="shop">Jeff’s shop</span>
+      <button class="pill" ${bad?'':'hidden'}>${bad} problem${bad>1?'s':''}</button>
+      <button class="pill warn" ${!bad&&warn?'':'hidden'}>${warn} to check</button></div>
+    <div class="conn" ${sc.conn?'':'hidden'}><b>Can’t reach the controller.</b>
+      <div class="sub">dustgate.local isn’t answering. What’s below is the last thing I saw, ${'2m ago'} — it may be wrong. Tools still run on their own if the brain is powered; check its power and WiFi.</div>
+      <div class="p-meta"><a>Retry now</a><a>Try 192.168.86.46</a></div></div>
+    ${sc.problems.length ? `<div class="attn ${bad?'':'warnonly'}"><div class="attn-h"><span>Needs attention</span><span>${sc.problems.length}</span></div>
+      ${sc.problems.map(p=>`<div class="prob ${p.sev}"><span class="sev"></span><div>
+        <div class="p-what">${p.what}</div><div class="p-why">${p.why}</div>
+        <div class="p-meta"><span>for ${p.since}</span><a>Brain log →</a>${p.fix?`<a>${p.fix}</a>`:''}</div></div></div>`).join('')}</div>`:''}
+    <div class="${sc.conn?'stale':''}">
+    <div class="sys">
+      <div class="collector ${sc.problems.some(p=>p.sys)?'bad':''}"><div class="grow"><b>Dust Collector</b><div class="sub">${sc.problems.some(p=>p.sys)?'Not collecting':'Ready'}</div></div>
+        <span class="chip ${sc.problems.some(p=>p.sys)?'bad':'off'}">${sc.problems.some(p=>p.sys)?'Not starting':'Off'}</span></div>
+      ${['Miter Saw','Drum Sander','Router Table'].map(n=>`<div class="row ${hasTool(n)?'hasprob':''}" data-t="${n}"><div class="grow"><b>${n}</b><div class="sub">${hasTool(n)?'See above':'Idle'}</div></div><span class="chip ${hasTool(n)?'bad':'off'}">${hasTool(n)?'Blocked':'Idle'}</span></div>`).join('')}
+    </div></div>
+    <div class="toast" ${toast?'':'hidden'}><button class="x" onclick="toast=null;draw()">×</button><b>Couldn’t run ${toast||''}.</b>
+      <div class="sub">${cur==='down'?'The controller didn’t answer. Nothing was sent.':'Gate move refused: “controller offline”. Nothing was started.'}</div></div>`;
+  el.querySelectorAll('.row').forEach(r => r.onclick = () => { toast = r.dataset.t; draw(); });
+}
+draw();
+</script>
+</body>
+</html>
