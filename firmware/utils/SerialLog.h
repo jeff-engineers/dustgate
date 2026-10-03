@@ -40,6 +40,11 @@ namespace seriallog {
 // Serial.begin(); anything printed before it is forwarded to USB but not kept.
 void begin();
 
+// If the last boot ended in a panic, print what it recorded — reason, PC and
+// the code addresses on its stack — as [CRASH] lines. Call once, after
+// Serial.begin(). Silent on any other boot.
+void reportCrash();
+
 // Append bytes. Safe from any task; a no-op until begin().
 void write(const uint8_t* data, size_t len);
 
