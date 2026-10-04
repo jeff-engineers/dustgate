@@ -39,6 +39,11 @@ void RemoteActuatorBus::begin(const char* nodeId, const char* primaryId,
     if (_running) end();
 
     if (!_mutex) _mutex = xSemaphoreCreateMutex();
+    // What this slot learned about its node survives a restart of the SAME node (a
+    // pause and resume, a takeover) — in particular `caps.join`, which is what lets
+    // the primary give a node that dials in the first move instead of racing it. A slot
+    // reused for a DIFFERENT node must not inherit any of it.
+    if (strcmp(_nodeId, nodeId ? nodeId : "") != 0) { _capJoin = 0; _capPlugs = 0; _capClamps = 0; _capServos = 0; _capLinear = 0; _board[0] = _fw[0] = '\0'; }
     nodelink::strlcpy_(_nodeId,    nodeId    ? nodeId    : "", sizeof(_nodeId));
     nodelink::strlcpy_(_primaryId, primaryId ? primaryId : "", sizeof(_primaryId));
     nodelink::strlcpy_(_host,      host      ? host      : "", sizeof(_host));
@@ -72,6 +77,8 @@ void RemoteActuatorBus::begin(const char* nodeId, const char* primaryId,
     _sockUp        = false;
     _seenFailMs    = 0;
     _lastResolveMs = 0;
+    _inClient      = nullptr;
+    _inId          = 0;
 
     _ws.onEvent([this](WStype_t t, uint8_t* p, size_t l) { onEvent(t, p, l); });
     // Library-level auto-reconnect handles the common case; the backoff bounds
@@ -279,6 +286,18 @@ void RemoteActuatorBus::end() {
     _task = nullptr;
     _ws.disconnect();
     _sockUp = false;
+    // A node-initiated link belongs to this bus too: close the node's socket and forget
+    // it. Left set (as it was until 2026-10-04), the bus restarted after a pause or an
+    // unpair still believed it owned that socket — so it never dialled, and never
+    // re-sent the HELLO the node was waiting for — while the node, whose socket was
+    // still open, thought it was linked. Both ends were wrong, for as long as the
+    // socket stayed open.
+    {
+        AsyncWebSocketClient* c = _inClient;
+        _inClient = nullptr;
+        _inId = 0;
+        if (c && c->status() == WS_CONNECTED) c->close();
+    }
     if (_mutex) {
         xSemaphoreTake(_mutex, portMAX_DELAY);
         _connected = false; _moveOutstanding = false; _txPending = false;
