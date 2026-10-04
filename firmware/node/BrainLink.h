@@ -49,7 +49,8 @@ static const uint32_t kBackoffMinMs   = 1500;
 static const uint32_t kBackoffMaxMs   = 20000;
 static const uint32_t kHeldMs         = 10000;   // a link that lasts this long counts as having worked
 static const uint32_t kProbeMs        = 400;     // is anything listening at this address?
-static const uint32_t kConnectMs      = 4000;    // from begin() to an open, upgraded socket
+static const uint32_t kConnectMs      = 2500;    // from begin() to an open, upgraded socket
+static const uint32_t kHelloWaitMs    = 3000;    // from an upgraded socket to the primary's HELLO
 static const uint32_t kSweepEveryMs   = 120000;  // the floor is slow on purpose
 static const uint8_t  kRoundsBeforeSweep = 4;    // ...and only after the fast paths have failed this often
 static const size_t   kQueueLen       = 6;
@@ -80,7 +81,8 @@ struct State {
     SemaphoreHandle_t qMutex  = nullptr;
     char           q[kQueueLen][kFrameMax]   = {};
     size_t         qHead = 0, qCount = 0;
-    volatile bool  up         = false;       // an upgraded socket to the primary is open
+    volatile bool  up         = false;       // an upgraded socket is open
+    volatile bool  joined     = false;       // ...and the primary has answered it with a HELLO — only THEN is it a link
     IPAddress      remote;
     char           cachedIp[16]  = "";
     // leads
@@ -147,7 +149,12 @@ inline String statusJson() {
     return o;
 }
 
-inline bool connected() { return S().up; }
+inline bool connected() { return S().up && S().joined; }
+// The node's frame handler calls this when the primary's HELLO has been accepted over our
+// socket. A socket that merely UPGRADED proves nothing: the sweep dials every web server
+// on the subnet, including other DustGate nodes, whose /nodelink listener will happily
+// accept a WebSocket and ignore the JOIN (found on hardware, 2026-10-04).
+inline void markJoined() { S().joined = true; }
 inline IPAddress remote() { return S().remote; }
 
 // Queue one frame for the link task to write. Safe from any task. Drops the OLDEST
@@ -207,10 +214,15 @@ inline void pollBeacon(const String& owner) {
         char* ip = strchr(id, '|');   if (!ip) continue;  *ip++ = 0;
         char* pt = strchr(ip, '|');   if (!pt) continue;  *pt++ = 0;
         if (!owner.equalsIgnoreCase(id)) continue;
+        const bool fresh = !s.beaconAtMs || millis() - s.beaconAtMs > kBeaconStaleMs;
         strlcpy(s.beaconIp, ip, sizeof(s.beaconIp));
         s.beaconPort = (uint16_t)atoi(pt);
         if (!s.beaconPort) s.beaconPort = 80;
         s.beaconAtMs = millis() ? millis() : 1;
+        // The primary just said it is here. A node waiting out a long backoff has no reason
+        // to wait any longer — this is what lets a primary that was off for a minute be
+        // found within seconds of coming back instead of up to 20 s later.
+        if (fresh) { s.nextTryMs = 0; s.backoffMs = kBackoffMinMs; }
     }
 }
 
@@ -236,6 +248,7 @@ inline bool tryAddress(const char* ipStr, uint16_t port, const char* how) {
         return false;
     }
     s.remote = ip;
+    s.joined = false;
     s.up = true;
     s.joinedAtMs = millis();
     return true;
@@ -300,9 +313,17 @@ inline void taskFn(void*) {
                 xSemaphoreGive(s.qMutex);
                 s.ws.sendTXT(f);
             }
+            // An upgraded socket that never gets a HELLO is not the primary — close it and
+            // count the attempt as failed, so the sweep carries on to the next address.
+            if (s.ws.isConnected() && !s.joined && millis() - s.joinedAtMs > kHelloWaitMs) {
+                note("%u.%u.%u.%u upgraded but never answered with a HELLO - not the primary",
+                     s.remote[0], s.remote[1], s.remote[2], s.remote[3]);
+                s.ws.disconnect();
+            }
             if (!s.ws.isConnected()) {
                 s.ws.disconnect();   // stop the library redialling the same address on its own
                 s.up = false;
+                s.joined = false;
                 if (s.onState) s.onState(false);
                 note("link to the primary lost after %lu s", (unsigned long)((millis() - s.joinedAtMs) / 1000UL));
                 // A link that held is a healthy one that dropped: heal fast. A link that
