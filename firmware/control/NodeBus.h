@@ -137,6 +137,21 @@ public:
         return b && b->plugReading(sensorId, watts, fault, atMs);
     }
 
+    // The collector's jobs on a node — see ActuatorBus::canPressRf / pressRf.
+    bool canPressRf(const char* controllerId) const {
+        ActuatorBus* b = busForController(controllerId);
+        return b && b->online() && b->canPressRf();
+    }
+    bool watchesBin(const char* controllerId) const {
+        ActuatorBus* b = busForController(controllerId);
+        return b && b->watchesBin();
+    }
+    bool pressRf(const char* controllerId, uint8_t address, uint8_t data,
+                 uint32_t tickUs, uint32_t repeats) {
+        ActuatorBus* b = busForController(controllerId);
+        return b && b->online() && b->canPressRf() && b->pressRf(address, data, tickUs, repeats);
+    }
+
     bool setState(const char* selectorId, JsonObjectConst sel, const char* stateId) {
         ActuatorBus* b = busFor(sel);
         if (!b || !b->online()) return false;

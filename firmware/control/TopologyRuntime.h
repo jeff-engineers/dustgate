@@ -1195,6 +1195,27 @@ private:
                     if (_clearRatio != 0.0f) sen["clearRatio"] = _clearRatio;
                 }
             }
+            // ── the DUST-BIN beam on a node (2026-10-04) ───────────────────
+            //
+            // Only for a board that SAID it has the pad (WELCOME caps.bin): a node that
+            // predates it would refuse the whole CONFIG, clamp and all. An absent
+            // controllerId means THIS board, whose pin the sketch reads itself, so it is
+            // never sent. One spec per collector — id "bin:<system>" is how pollSensors()
+            // finds the reading again.
+            if (!sameBoard(cid, std::string()) && _bus->watchesBin(cid.c_str())) {
+                for (const SystemView& sys : systemsOf(topology())) {
+                    if (arr.size() >= nodelink::kMaxSensorsPerNode) break;
+                    const std::string sysId = sys.id ? sys.id : "";
+                    JsonObjectConst bs = binSensorFor(sysId);
+                    if (bs.isNull()) continue;
+                    const std::string owner = bs["controllerId"] | "";
+                    if (owner.empty() || !sameBoard(cid, owner)) continue;
+                    JsonObject sen = arr.createNestedObject();
+                    sen["sensorId"] = std::string("bin:") + sysId;   // std::string: ArduinoJson copies it
+                    sen["kind"]     = "bin";
+                    sen["invert"]   = bs["invert"] | true;
+                }
+            }
             // ── PLUGS this board polls for the brain (2026-10-03) ──────────
             //
             // The board that controls a tool handles its plug — the owner rule is
@@ -1248,6 +1269,7 @@ private:
                 const std::string cid = c["id"] | "";
                 if (cid.empty() || sameBoard(cid, std::string())) continue;
                 if (_bus->pollsPlugs(cid.c_str())) { sig += cid; sig += ';'; }
+                if (_bus->watchesBin(cid.c_str()))  { sig += cid; sig += ":bin;"; }
             }
         }
         return sig;
@@ -1335,6 +1357,23 @@ private:
                 setMachinePower(std::string(id),
                                 on ? manualWattsFor(_ctrl.machineThreshold(std::string(id))) : 0.0f);
             }
+        }
+
+        // ── BINS a node watches (see pushSensorConfig) ──────────────────────
+        // A reading only counts while it is fresh; a bin whose board has gone quiet keeps
+        // its LAST verdict rather than flipping to "not full", and one that never reported
+        // stays unknown (the status omits `bin`), because an unwatched bin and an empty
+        // bin are different claims.
+        for (const SystemView& sys : systemsOf(topology())) {
+            const std::string sysId = sys.id ? sys.id : "";
+            JsonObjectConst bs = binSensorFor(sysId);
+            if (bs.isNull()) continue;
+            const std::string owner = bs["controllerId"] | "";
+            if (owner.empty() || sameBoard(owner, std::string())) continue;   // this board's own pin: the sketch feeds it
+            bool full = false; uint32_t atMs = 0;
+            if (!_bus->senseOf(owner.c_str(), (std::string("bin:") + sysId).c_str(), full, atMs)) continue;
+            if (_nowMs && (uint32_t)(_nowMs - atMs) > nodelink::kSenseStaleMs) continue;
+            setBinFull(sysId, full);
         }
 
         // ── PLUGS a node polls (see pushSensorConfig) ──────────────────────

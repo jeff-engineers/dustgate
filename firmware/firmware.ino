@@ -40,7 +40,8 @@
 #include "control/OutletRelocate.h"
 #include "control/NodeLinkPlan.h"
 #include "control/CollectorPress.h"        // the retry policy for a stateless press
-#include "control/RfCollectorPresser.h"    // ...and the one presser that exists
+#include "control/RfCollectorPresser.h"    // ...the presser that keys THIS board's pad
+#include "control/RemoteRfPresser.h"        // ...and the one that asks a NODE to key its own
 #include "control/RfAddressGuess.h"        // the four ways a DIP gets copied wrong
 // UNCONDITIONAL since 2026-09-17, where these used to sit behind #ifdef PIN_CT.
 // A primary with no clamp of its own still has to TELL its nodes what tuning to
@@ -1148,13 +1149,17 @@ static void syncControllerAliases() {
 // Rebuilt on every adopt rather than reconfigured: a layout may move the
 // transmitter to another pin or name a different fob's address, and there is no
 // state in a presser worth preserving across that.
-static RfCollectorPresser* g_pressers[COLLECTOR_COUNT] = {nullptr};
+static topo::CollectorPresser* g_pressers[COLLECTOR_COUNT] = {nullptr};
+// The same objects, when they are THIS board's own transmitter — the bench console wants
+// pressWithRepeats(), which a presser on a node does not have. Not owning: g_pressers is.
+static RfCollectorPresser*     g_localRf[COLLECTOR_COUNT]  = {nullptr};
 static topo::PressState    g_pressState[COLLECTOR_COUNT];
 
 static void clearPressers() {
     for (int i = 0; i < COLLECTOR_COUNT; i++) {
         delete g_pressers[i];
         g_pressers[i]   = nullptr;
+        g_localRf[i]    = nullptr;
         g_pressState[i] = topo::PressState();
     }
 }
@@ -1254,13 +1259,23 @@ static void syncTopologyOutlets() {
 #else
             const int pin = rf["pin"] | -1;
 #endif
-            if (pin >= 0) {
-                g_pressers[i] = new RfCollectorPresser(
-                    pin,
-                    (uint8_t)(rf["address"] | (int)RfCollectorPresser::kRocklerAddress),
-                    (uint8_t)(rf["data"]    | (int)RfCollectorPresser::kRocklerData),
-                    (uint32_t)(rf["tickUs"] | (int)RfCollectorPresser::kDefaultTickUs),
-                    (uint16_t)(rf["repeats"]| (int)RfCollectorPresser::kDefaultRepeats));
+            const uint8_t  rfAddr = (uint8_t)(rf["address"] | (int)topo::rf::kRocklerAddress);
+            const uint8_t  rfData = (uint8_t)(rf["data"]    | (int)topo::rf::kRocklerData);
+            const uint32_t rfTick = (uint32_t)(rf["tickUs"] | (int)topo::rf::kDefaultTickUs);
+            const uint32_t rfReps = (uint32_t)(rf["repeats"]| (int)topo::rf::kDefaultRepeats);
+            // WHICH BOARD KEYS THE TRANSMITTER (2026-10-04). Absent, or this board's own id,
+            // means this board's pad as it always was. A paired node's id means ask THAT
+            // board to key ITS pad (PRESS) — which is what lets the board at the collector be
+            // an ordinary node. The policy stays here either way.
+            const std::string rfBoard = rf["controllerId"] | "";
+            if (!rfBoard.empty() && rfBoard != g_nodeBus.ownControllerId()) {
+                g_pressers[i] = new topo::RemoteRfPresser(&g_nodeBus, rfBoard, rfAddr, rfData, rfTick, rfReps);
+                DEBUG_PRINT(F("[RF] Collector ")); DEBUG_PRINT((int)i);
+                DEBUG_PRINT(F(" pressed by RF through board ")); DEBUG_PRINTLN(rfBoard.c_str());
+            } else if (pin >= 0) {
+                RfCollectorPresser* local = new RfCollectorPresser(pin, rfAddr, rfData, rfTick, (uint16_t)rfReps);
+                g_pressers[i] = local;
+                g_localRf[i]  = local;
                 DEBUG_PRINT(F("[RF] Collector ")); DEBUG_PRINT((int)i);
                 DEBUG_PRINT(F(" pressed by RF on pin ")); DEBUG_PRINTLN(pin);
             }
@@ -3191,7 +3206,7 @@ void loop() {
         // BEFORE writing a control.rf block. So an unconfigured `press` uses
         // PIN_RF_TX with the measured Rockler address and data word — which is
         // exactly the wiring someone testing this for the first time will have.
-        RfCollectorPresser* p = g_pressers[0];
+        RfCollectorPresser* p = g_localRf[0];
 #ifdef PIN_RF_TX
         static RfCollectorPresser* benchPresser = nullptr;
         if (!p) {

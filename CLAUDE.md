@@ -101,6 +101,9 @@ drifted constantly. Now `shared/device-model/` is the spec:
   | `MAX_WHERE_IP_LEN` / `REFUSE_REASONS` / `BEACON_PORT` (nodelink.js) | `kMaxWhereIpLen` / `kRefuseReasons` / `kBeaconPort` (control/NodeLink.h) | node-initiated links: a node that has lost its primary dials it (JOIN), the primary declines with a REFUSE reason, tells a down node where it is with a WHERE, and broadcasts "DGB1\|<id>\|<ip>\|<port>" on `BEACON_PORT`. **New 2026-10-04.** A node drops a WHERE it cannot parse WHOLE, which reads as a node that never comes looking, so the bounds must agree. `nodelink.test.js` "node-initiated links" ↔ the "join" block of `test_nodebus.cpp`, same cases, same order |
   | `caps.join` in WELCOME — the DEFAULT when absent (nodelink.js `dialsIn`) | the default in `buildWelcome`'s `dialsIn` parameter, and `_capJoin` (control/RemoteActuatorBus) | whether a board dials its primary itself. **New 2026-10-04.** Must be NO on both sides: a node that predates it is dialled by the primary, which is the link that already worked. NOT a version bump — every frame here is new, and an old end ignores a type it does not know |
 
+  | `MIN_RF_TICK_US` / `MAX_RF_TICK_US` / `MAX_RF_REPEATS` (nodelink.js) | `kMinRfTickUs` / `kMaxRfTickUs` / `kMaxRfRepeats` (control/NodeLink.h) | the bounds on a PRESS frame, which tells a node to key its transmitter once. **New 2026-10-04**, with the collector's jobs on a node. A node refuses an out-of-range PRESS WHOLE, and a refused press reads as a collector that never starts, so the bounds must agree exactly (address 0-255 and data 0-15 are the HT12E's own widths). The measured Rockler numbers behind the defaults live once, in `control/RfDefaults.h`. `nodelink.test.js` "the collector's jobs on a node" ↔ the "collector node" block of `test_nodebus.cpp`, same cases, same order, literals asserted |
+  | `caps.rf` / `caps.bin` in WELCOME — the DEFAULT when absent (nodelink.js `pressesRf`, `watchesBin`) | the defaults in `buildWelcome`'s `hasRf` / `hasBin` parameters, and `_capRf` / `_capBin` (control/RemoteActuatorBus) | whether a board has a transmitter for the collector's remote / a dust-bin pad. **New 2026-10-04.** Must be NO on both sides: a node that predates them would be sent a `bin` sensor in a CONFIG it refuses whole (clamp and all), or a PRESS it ignores. Reported from the pin map (`PIN_RF_TX`, `PIN_BIN_SENSOR`), never chosen |
+
   | `PROBLEM_TEXT` (topology-device.js) | `kProblemNoStart` / `kProblemBlind` (control/TopologyRuntime.h) | the device's own words for the two `problems` entries DERIVED from the plug reading (`collector-no-start`, `collector-blind`). **New 2026-10-03.** Asserted literally in `problems.test.js` ↔ the "problems —" block of `test_nodebus.cpp`. The other codes (rf-gave-up, board-offline, plug-unreachable, ...) are raised by firmware.ino and only the shape is shared |
 
   The reference pair has company now: `manual-blower.test.js` ↔
@@ -222,8 +225,7 @@ servos would not fit beside four servo channels. Dropping to THREE channels
 moves the transmitter to D10, gives every pad exactly one owner, and lets one
 pin map serve every PWM board — so a board at the collector is an ordinary
 primary or an ordinary node that a LAYOUT points at a bin, a clamp and a remote —
-**in intent: today only a primary can carry the bin sensor and the RF remote, a node
-only the clamp** — which is what "a board is not a collector node, it is a board that
+**now a node can carry the bin sensor, the RF remote (PRESS) and the clamp (2026-10-04, hardware-UNTESTED)** — which is what "a board is not a collector node, it is a board that
 happens to be near a bin" said before the pin budget overruled it. `dev.sh --collector` still
 parses and now only prints. The cost is the fourth gate channel, and the model
 that replaced it wants ONE SELECTOR PER BOARD anyway.
@@ -231,8 +233,9 @@ that replaced it wants ONE SELECTOR PER BOARD anyway.
 **One board, two roles.** Same board, same carrier, same pin map; the difference
 is `build_src_filter` and `-DDUSTGATE_SECONDARY`. Both roles are proven on
 hardware, including NodeLink between them and a real tool opening its gate.
-The roles are not symmetrical in what they can carry: the bin sensor and the RF
-transmitter are primary-only (see "The collector gets its own board" below).
+The roles are no longer asymmetrical in what they can carry: since 2026-10-04 a node
+can also watch the bin and key the RF transmitter (PRESS), but **neither has run on
+hardware** (see "The collector gets its own board" below).
 
 **PWM servos and a serial bus never share a board.** The slider gets dedicated
 hardware that rides along with it. `config.h` `#error`s if a pin map claims both,
@@ -382,12 +385,16 @@ These are decided; don't relitigate them in code review or suggestions.
   both wanting to sit three feet from each other. A board driving no gates has
   the whole PWM block free. `docs/tool-sensing-rfc.md` §6.2.
 
-  ⚠️ **THAT IS THE DESIGN, NOT YET THE FACT (corrected 2026-10-04).** Today the RF
-  transmitter and the bin sensor work only on a PRIMARY: both live in `firmware.ino`,
-  `node/dustgate_node.cpp` has neither, and NodeLink has no frame to press the remote
-  or to report bin state. Only the clamp works on a node. A board at the collector is
-  therefore a primary until those two move out and get frames (TODO.md, "A collector
-  cannot run as a node yet"). Do not describe the collector as node-capable.
+  ⚠️ **BUILT 2026-10-04, NOT YET RUN ON A BOARD.** A node can now carry all three of the
+  collector's jobs: the clamp (proven), the dust-bin beam (a `bin` sensor in CONFIG, reported
+  as a SENSE bit) and the RF transmitter (a `PRESS` frame). The retry policy stays on the
+  primary (`control/CollectorPress.h`), because only the primary can read the plug that says
+  whether the blower agreed; a node only keys the pad. A layout points the collector at a
+  board with `control.rf.controllerId` and `bin.sensor.controllerId`; absent means the
+  primary's own, exactly as before. Everything here compiles and passes the paired host
+  tests (`nodelink.test.js` ↔ `test_nodebus.cpp`), and **a PRESS has never keyed a real
+  receiver from a node**. The UI's collector configurator does not offer a board for the
+  transmitter yet. Do not describe it as verified until a bench says so.
 
 - **A machine is ONE box, however many ports it has.** A second pickup — an
   overarm guard, a hood — is a differently-shaped inlet on that same box (square =

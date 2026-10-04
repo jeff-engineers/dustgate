@@ -876,6 +876,19 @@ const idxOf = (plan, sel) => plan.moves.findIndex((m) => m.selectorId === sel);
   check('a negative pin → invalid', !validateTopology(badPin).ok);
 }
 {
+  // WHICH BOARD KEYS THE TRANSMITTER (2026-10-04): absent = this board, a named one must resolve.
+  const onNode = mut((t) => {
+    t.controllers = (t.controllers || []).concat([{ id: 'collNode', role: 'secondary', link: { transport: 'wifi-ws', host: 'dustgate-collector' } }]);
+    elem(t, 'dc').control = { rf: { controllerId: 'collNode', address: 94 } };
+  });
+  check('an RF presser on a named board that exists → valid', validateTopology(onNode).ok,
+        JSON.stringify(validateTopology(onNode).errors));
+  const ghost = mut((t) => { elem(t, 'dc').control = { rf: { controllerId: 'nobody' } }; });
+  check('an RF presser on a board nobody paired → invalid', !validateTopology(ghost).ok);
+  const blank = mut((t) => { elem(t, 'dc').control = { rf: { controllerId: '' } }; });
+  check('an empty controllerId is refused rather than meaning "this board"', !validateTopology(blank).ok);
+}
+{
   // A press is an edge against a toggle, so only a collector has one to press.
   const onTool = mut((t) => { elem(t, 'man').control = { rf: { pin: 4 } }; });
   check('RF on something that is not a collector → invalid',

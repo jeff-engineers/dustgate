@@ -43,7 +43,7 @@
 const NODELINK_VERSION = 1;
 
 /** Frame types, primary → secondary. */
-const P2S = ['HELLO', 'SET', 'CONFIG', 'PING', 'OTA', 'REFUSE', 'WHERE'];
+const P2S = ['HELLO', 'SET', 'CONFIG', 'PING', 'OTA', 'REFUSE', 'WHERE', 'PRESS'];
 /** Frame types, secondary → primary. */
 const S2P = ['WELCOME', 'ACK', 'STATE', 'SENSE', 'PONG', 'OTASTATE', 'JOIN'];
 
@@ -153,6 +153,34 @@ const MAX_WHERE_IP_LEN = 15;
 /** The UDP port a primary broadcasts "DGB1|<primaryId>|<ip>|<port>" on. ⚠️ JS↔C++ PAIR — `kBeaconPort`. */
 const BEACON_PORT = 41234;
 const REFUSE_REASONS = ['not-paired', 'duplicate', 'busy'];
+
+/**
+ * THE COLLECTOR'S JOBS ON A NODE (2026-10-04) — PRESS, a `bin` sensor, `caps.rf`, `caps.bin`.
+ *
+ * Until now the RF transmitter that presses the collector's remote and the dust-bin
+ * level sensor worked only on a PRIMARY, so a board at the collector had to BE the
+ * brain. These are the two frames that let it be an ordinary node:
+ *
+ *   PRESS {seq, address, data, tickUs, repeats}   primary → node. Key the transmitter ONCE.
+ *       The node answers ACK{seq, ok} when the frame has gone out. It is a PRIMITIVE and
+ *       nothing else: WHEN to press, whether it worked and when to try again is the
+ *       primary's policy (control/CollectorPress.h) because only the primary can read
+ *       the plug that says whether the blower agreed. The address and data ride the
+ *       frame so a node stays stateless about which fob it is pressing.
+ *   CONFIG sensor {sensorId, kind:'bin', invert?}   report the bin beam as a SENSE bit
+ *       (`on` = the bin is FULL), debounced on the node (utils/BinSensor.h).
+ *   WELCOME caps.rf / caps.bin   the board has a transmitter / a bin pad. Absent means NO.
+ *
+ * Not a version bump, same reasoning as every frame added since CONFIG: an old node
+ * ignores a PRESS (and the primary sees that in `caps.rf` being absent, so it never
+ * sends one), and refuses a CONFIG it cannot parse WHOLE — which is why the primary
+ * only sends a `bin` sensor to a board that said `caps.bin`.
+ *
+ * ⚠️ JS↔C++ PAIR — `kMinRfTickUs`, `kMaxRfTickUs`, `kMaxRfRepeats` in firmware/control/NodeLink.h.
+ */
+const MIN_RF_TICK_US = 50;
+const MAX_RF_TICK_US = 1000;
+const MAX_RF_REPEATS = 60;
 
 /** Reconnect backoff for a primary that can't reach a secondary. */
 const RECONNECT_MIN_MS = 1000;
@@ -299,6 +327,10 @@ function refuse(reason) {
 function where(primaryId, ip, port = 80) {
   return { t: 'WHERE', primaryId, ip, port };
 }
+/** Key the node's transmitter once. See the block at MIN_RF_TICK_US. */
+function press(seq, address, data, tickUs, repeats) {
+  return { t: 'PRESS', seq, address, data, tickUs, repeats };
+}
 
 /**
  * Tell a node to update itself (2026-10-03). The node PULLS the image over plain
@@ -396,6 +428,11 @@ function config(seq, sensors) {
     if (s.kind === 'plug') {
       return { sensorId: s.sensorId, kind: 'plug', ip: s.ip, plug: s.plug, thresholdW: s.thresholdW };
     }
+    if (s.kind === 'bin') {
+      const b = { sensorId: s.sensorId, kind: 'bin' };
+      if (typeof s.invert === 'boolean') b.invert = s.invert;
+      return b;
+    }
     const out = { sensorId: s.sensorId, kind: s.kind, channel: s.channel };
     // OMITTED RATHER THAN NULLED when a caller has nothing to say. An absent key
     // is what tells a board to keep its own value, and writing `tripRatio: null`
@@ -481,6 +518,11 @@ const pollsPlugs = (w) => !!(w && w.caps && w.caps.plug === 1);
 /** Will this board dial its primary itself? Absent means NO — every board flashed
  *  before 2026-10-04 is still dialled, which is the link that already worked. */
 const dialsIn = (w) => !!(w && w.caps && w.caps.join === 1);
+
+/** Does this board have a transmitter for the collector's remote? Absent means NO. */
+const pressesRf = (w) => !!(w && w.caps && w.caps.rf === 1);
+/** Does this board have a dust-bin sensor pad? Absent means NO. */
+const watchesBin = (w) => !!(w && w.caps && w.caps.bin === 1);
 function ack(seq, ok, err) {
   const f = { t: 'ACK', seq, ok: !!ok };
   if (err) f.err = err;
@@ -619,6 +661,11 @@ function validateFrame(f, direction) {
       if (f.caps && f.caps.join !== undefined && f.caps.join !== 0 && f.caps.join !== 1) {
         errs.push('WELCOME.caps.join must be 0 or 1');
       }
+      for (const k of ['rf', 'bin']) {
+        if (f.caps && f.caps[k] !== undefined && f.caps[k] !== 0 && f.caps[k] !== 1) {
+          errs.push(`WELCOME.caps.${k} must be 0 or 1`);
+        }
+      }
       if (f.claimedBy !== undefined && typeof f.claimedBy !== 'string') {
         errs.push('WELCOME.claimedBy must be a string');
       }
@@ -641,6 +688,12 @@ function validateFrame(f, direction) {
     case 'JOIN':
       if (f.v !== NODELINK_VERSION) errs.push(`JOIN.v ${f.v} != ${NODELINK_VERSION}`);
       str('nodeId');
+      break;
+    case 'PRESS':
+      num('seq', 0, Number.MAX_SAFE_INTEGER);
+      num('address', 0, 255); num('data', 0, 15);
+      num('tickUs', MIN_RF_TICK_US, MAX_RF_TICK_US);
+      num('repeats', 1, MAX_RF_REPEATS);
       break;
     case 'REFUSE':
       if (!REFUSE_REASONS.includes(f.reason)) errs.push(`REFUSE.reason must be one of ${REFUSE_REASONS.join('|')}`);
@@ -695,7 +748,13 @@ function validateFrame(f, direction) {
             }
             return;   // none of the clamp's fields apply to a plug
           }
-          if (sen.kind !== 'ct') errs.push(`${at}.kind must be ct or plug`);
+          if (sen.kind === 'bin') {
+            // The bin beam. Its pad is the board's own, so there is no channel, and the
+            // only thing the layout says is which way it reads.
+            if (sen.invert !== undefined && typeof sen.invert !== 'boolean') errs.push(`${at}.invert must be a boolean`);
+            return;
+          }
+          if (sen.kind !== 'ct') errs.push(`${at}.kind must be ct, plug or bin`);
           if (typeof sen.channel !== 'number' || Number.isNaN(sen.channel)) {
             errs.push(`${at}.channel must be a number`);
           } else if (sen.channel < 0 || sen.channel > 15) {
@@ -782,6 +841,7 @@ module.exports = {
   MAX_PLUG_THRESHOLD_W, MAX_PLUG_WATTS, MAX_PLUG_IP_LEN, PLUG_KINDS, pollsPlugs,
   MAX_RST_LEN, MAX_OTA_PATH, MIN_OTA_BYTES, MAX_OTA_BYTES, OTA_STATES,
   MAX_WHERE_IP_LEN, BEACON_PORT, REFUSE_REASONS, dialsIn, join, refuse, where,
+  MIN_RF_TICK_US, MAX_RF_TICK_US, MAX_RF_REPEATS, pressesRf, watchesBin, press,
   hello, welcome, withBootInfo, set, config, ack, state, sense, ping, pong, ota, otaState, welcomeAccepted, clampsOn,
   validateFrame,
 };

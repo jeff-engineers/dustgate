@@ -182,6 +182,12 @@ public:
     void configureSensors(JsonArrayConst sensors) override;
     bool senseOf(const char* sensorId, bool& on, uint32_t& atMs) const override;
     bool pollsPlugs() const override { return _capPlugs > 0; }
+    bool canPressRf() const override { return _capRf > 0; }
+    bool watchesBin() const override { return _capBin > 0; }
+    bool pressRf(uint8_t address, uint8_t data, uint32_t tickUs, uint32_t repeats) override;
+    // Why the board's last PRESS did not go out ("" = it did, or none was sent). Read by
+    // the sketch so a transmitter that refuses shows up as a problem, not as silence.
+    const char* pressFault() const { return _pressFault; }
     bool plugReading(const char* sensorId, float& watts, bool& fault, uint32_t& atMs) const override;
 
     // Enumerate what this node has reported, for GET /api/nodes. senseOf() asks
@@ -365,6 +371,13 @@ private:
     int      _capClamps    = 0;   // caps.ct — how many CTs this board says it has
     int      _capPlugs     = 0;   // caps.plug — 1 if it polls plugs for us; absent = 0
     int      _capJoin      = 0;   // caps.join — 1 if it dials us itself; absent = 0
+    int      _capRf        = 0;   // caps.rf   — 1 if it has a transmitter for the collector's remote
+    int      _capBin       = 0;   // caps.bin  — 1 if it has a dust-bin pad
+    // One pending PRESS, written by the main loop and sent like a SET.
+    char     _pressFrame[160] = "";
+    bool     _pressPending    = false;
+    uint32_t _pressSeq        = 0;
+    char     _pressFault[64]  = "";
 
     // The socket a node-initiated link arrived on. Set on the async_tcp task by the
     // JOIN, read by the main loop; the id is the handle, the pointer only used while

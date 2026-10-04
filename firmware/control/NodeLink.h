@@ -78,6 +78,14 @@ static const size_t kMaxWhereIpLen = 15;
 // has lost it. BEACON_PORT in nodelink.js — a pair. Nothing but this number and the
 // "DGB1" prefix has to agree, which is exactly why it is written down twice.
 static const unsigned short kBeaconPort = 41234;
+
+// The collector's jobs on a node (PRESS, a `bin` sensor, caps.rf, caps.bin).
+// MIN_RF_TICK_US / MAX_RF_TICK_US / MAX_RF_REPEATS in nodelink.js — a PAIR, asserted
+// literally on both sides. parsePressFrame refuses outside them WHOLE, and a refused
+// PRESS reads as a collector that never starts, so the bounds must agree exactly.
+static const uint32_t kMinRfTickUs = 50;
+static const uint32_t kMaxRfTickUs = 1000;
+static const uint32_t kMaxRfRepeats = 60;
 static const char* const kRefuseReasons[] = { "not-paired", "duplicate", "busy" };
 static const size_t kRefuseReasonCount = 3;
 
@@ -144,6 +152,18 @@ inline void buildPing(JsonObject out) { out["t"] = "PING"; }
 inline void buildRefuse(JsonObject out, const char* reason) {
     out["t"]      = "REFUSE";
     out["reason"] = reason;
+}
+
+// PRESS — key the node's transmitter ONCE (nodelink.js press()). A primitive: when to
+// press and whether it worked are the primary's policy (control/CollectorPress.h).
+inline void buildPress(JsonObject out, uint32_t seq, uint8_t address, uint8_t data,
+                       uint32_t tickUs, uint32_t repeats) {
+    out["t"]       = "PRESS";
+    out["seq"]     = seq;
+    out["address"] = address;
+    out["data"]    = data;
+    out["tickUs"]  = tickUs;
+    out["repeats"] = repeats;
 }
 
 // WHERE — "the primary <primaryId> is at <ip>:<port> now". Sent on a short-lived
@@ -228,7 +248,8 @@ inline bool buildSetFrame(JsonObject out, uint32_t seq, const char* selectorId,
 inline void buildWelcome(JsonObject out, const char* nodeId, const char* board,
                          const char* fw, int servos, int linear,
                          const char* claimedBy = nullptr, bool accepted = true,
-                         int clamps = 0, bool pollsPlugs = false, bool dialsIn = false) {
+                         int clamps = 0, bool pollsPlugs = false, bool dialsIn = false,
+                         bool hasRf = false, bool hasBin = false) {
     out["t"]      = "WELCOME";
     out["v"]      = kVersion;
     out["nodeId"] = nodeId;
@@ -244,6 +265,11 @@ inline void buildWelcome(JsonObject out, const char* nodeId, const char* board,
     // `join`: this board dials its primary itself (JOIN). Absent means NO, on both
     // sides, so a board flashed before 2026-10-04 keeps being dialled.
     if (dialsIn) caps["join"] = 1;
+    // `rf` / `bin`: this board has a transmitter for the collector's remote / a dust-bin
+    // pad (2026-10-04). Absent means NO, on both sides, so a board that predates them
+    // is never sent a PRESS or a `bin` sensor it would refuse.
+    if (hasRf)  caps["rf"]  = 1;
+    if (hasBin) caps["bin"] = 1;
     if (claimedBy && *claimedBy) out["claimedBy"] = claimedBy;
     if (!accepted) out["accepted"] = false;
 }
@@ -475,6 +501,11 @@ struct SensorSpec {
     // for the primary (2026-10-03); it uses ip/plugTasmota/thresholdW and NOT
     // channel, tripRatio, minCounts or clearRatio, which are a clamp's.
     bool  isPlug = false;
+    // The dust-bin beam (2026-10-04): its pad is the board's own, so there is no channel,
+    // and the only thing the layout says is which way it reads. The node reports it as a
+    // SENSE bit — `on` means the bin is FULL — after debouncing (utils/BinSensor.h).
+    bool  isBin = false;
+    bool  binInvert = true;           // bin: true = the pin reads LOW when full (the optocoupler's sense)
     int   channel;                    // which input on THIS board (ct)
     char  ip[kMaxPlugIpLen + 1] = {0};   // plug
     bool  plugTasmota = false;        // plug: false = Shelly Gen2, true = Tasmota
@@ -554,8 +585,25 @@ inline bool parseConfigFrame(JsonObjectConst f, SensorSpec* out, size_t maxOut,
             continue;
         }
         out[n].isPlug = false;
+        out[n].isBin = false;
         out[n].ip[0] = '\0';
-        if (!_eq(sen["kind"], "ct")) { err = "sensor kind must be ct or plug"; return false; }
+        if (_eq(sen["kind"], "bin")) {
+            // The bin beam: no channel, no tuning. `invert` is optional and must be a
+            // boolean when present — TYPE FIRST, like every field here.
+            bool inv = true;
+            if (sen.containsKey("invert")) {
+                if (!sen["invert"].is<bool>()) { err = "bin invert must be a boolean"; return false; }
+                inv = sen["invert"].as<bool>();
+            }
+            strlcpy_(out[n].sensorId, id, sizeof(out[n].sensorId));
+            out[n].isBin = true;
+            out[n].binInvert = inv;
+            out[n].channel = 0;
+            out[n].tripRatio = out[n].minCounts = out[n].clearRatio = 0.0f;
+            n++;
+            continue;
+        }
+        if (!_eq(sen["kind"], "ct")) { err = "sensor kind must be ct, plug or bin"; return false; }
         if (!sen.containsKey("channel")) { err = "missing channel"; return false; }
         // TYPE FIRST, for the reason spelled out on positionMm above:
         // as<int>() on a string yields 0, which is a real pad on every board.
@@ -683,6 +731,36 @@ inline bool parseWhereFrame(JsonObjectConst f, WhereOrder& out, const char*& err
     strlcpy_(out.primaryId, pid, sizeof(out.primaryId));
     strlcpy_(out.ip, ip, sizeof(out.ip));
     out.port = port;
+    return true;
+}
+
+// A PRESS, decoded. Refuses WHOLE with a reason a log can print, and mirrors
+// validateFrame's `PRESS` case in nodelink.js check for check. TYPE FIRST on every
+// field: as<int>() on a string is 0, which for `address` is a real address.
+struct PressOrder {
+    uint32_t seq = 0;
+    uint8_t  address = 0;
+    uint8_t  data = 0;
+    uint32_t tickUs = 0;
+    uint32_t repeats = 0;
+};
+
+inline bool parsePressFrame(JsonObjectConst f, PressOrder& out, const char*& err) {
+    if (!_eq(f["t"], "PRESS"))               { err = "not a PRESS frame"; return false; }
+    if (!f["seq"].is<uint32_t>())            { err = "missing seq"; return false; }
+    if (!f["address"].is<int>() || f["address"].as<int>() < 0 || f["address"].as<int>() > 255)
+                                              { err = "address must be 0-255"; return false; }
+    if (!f["data"].is<int>() || f["data"].as<int>() < 0 || f["data"].as<int>() > 15)
+                                              { err = "data must be 0-15"; return false; }
+    if (!f["tickUs"].is<uint32_t>() || f["tickUs"].as<uint32_t>() < kMinRfTickUs || f["tickUs"].as<uint32_t>() > kMaxRfTickUs)
+                                              { err = "tickUs out of range"; return false; }
+    if (!f["repeats"].is<uint32_t>() || f["repeats"].as<uint32_t>() < 1 || f["repeats"].as<uint32_t>() > kMaxRfRepeats)
+                                              { err = "repeats out of range"; return false; }
+    out.seq     = f["seq"].as<uint32_t>();
+    out.address = (uint8_t)f["address"].as<int>();
+    out.data    = (uint8_t)f["data"].as<int>();
+    out.tickUs  = f["tickUs"].as<uint32_t>();
+    out.repeats = f["repeats"].as<uint32_t>();
     return true;
 }
 

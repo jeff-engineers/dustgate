@@ -231,7 +231,7 @@ const eq = (name, got, want) =>
         JSON.stringify(NL.validateFrame(dup, 'p2s')));
 
   check('an unknown sensor kind is refused',
-        NL.validateFrame({ t: 'CONFIG', seq: 1, sensors: [{ sensorId: 'a', kind: 'bin', channel: 0 }] },
+        NL.validateFrame({ t: 'CONFIG', seq: 1, sensors: [{ sensorId: 'a', kind: 'laser', channel: 0 }] },
                          'p2s').length === 1);
   check('a channel off the board is refused',
         NL.validateFrame({ t: 'CONFIG', seq: 1, sensors: [{ sensorId: 'a', kind: 'ct', channel: 99 }] },
@@ -462,6 +462,41 @@ const eq = (name, got, want) =>
   eq('caps.join 1 validates', NL.validateFrame(NL.welcome('n', 'b', 'f', { servos: 2, linear: 0, join: 1 }), 's2p'), []);
   check('caps.join 2 is refused', NL.validateFrame(NL.welcome('n', 'b', 'f', { servos: 2, linear: 0, join: 2 }), 's2p').length === 1);
   eq('JOIN did not bump the version', NL.NODELINK_VERSION, 1);
+}
+
+// ── the collector's jobs on a node: PRESS, a bin sensor, caps.rf, caps.bin ───
+// PAIR: test_nodebus.cpp's "collector node" block — same cases, same order, same literals.
+{
+  eq('a PRESS validates', NL.validateFrame(NL.press(7, 94, 14, 270, 24), 'p2s'), []);
+  check('PRESS is p2s only', NL.P2S.includes('PRESS') && !NL.S2P.includes('PRESS'));
+  eq('the smallest tick', NL.MIN_RF_TICK_US, 50);
+  eq('the largest tick', NL.MAX_RF_TICK_US, 1000);
+  eq('the most repeats', NL.MAX_RF_REPEATS, 60);
+  check('an address past 8 bits is refused', NL.validateFrame(NL.press(1, 256, 14, 270, 24), 'p2s').length === 1);
+  check('data past 4 bits is refused', NL.validateFrame(NL.press(1, 94, 16, 270, 24), 'p2s').length === 1);
+  check('a tick under the floor is refused', NL.validateFrame(NL.press(1, 94, 14, 49, 24), 'p2s').length === 1);
+  check('a tick over the ceiling is refused', NL.validateFrame(NL.press(1, 94, 14, 1001, 24), 'p2s').length === 1);
+  check('a tick AT the floor is fine', NL.validateFrame(NL.press(1, 94, 14, 50, 24), 'p2s').length === 0);
+  check('zero repeats is refused', NL.validateFrame(NL.press(1, 94, 14, 270, 0), 'p2s').length === 1);
+  check('more repeats than the bound is refused', NL.validateFrame(NL.press(1, 94, 14, 270, 61), 'p2s').length === 1);
+  check('repeats AT the bound is fine', NL.validateFrame(NL.press(1, 94, 14, 270, 60), 'p2s').length === 0);
+
+  eq('a bin sensor validates', NL.validateFrame(NL.config(1, [{ sensorId: 'bin:sys', kind: 'bin', invert: true }]), 'p2s'), []);
+  eq('a bin sensor needs no invert', NL.validateFrame(NL.config(1, [{ sensorId: 'bin:sys', kind: 'bin' }]), 'p2s'), []);
+  check('invert must be a boolean',
+        NL.validateFrame({ t: 'CONFIG', seq: 1, sensors: [{ sensorId: 'b', kind: 'bin', invert: 1 }] }, 'p2s').length === 1);
+  eq('a bin sensor keeps its invert on the wire', NL.config(1, [{ sensorId: 'bin:sys', kind: 'bin', invert: false }]).sensors[0].invert, false);
+  eq('a bin sensor is not given a channel', 'channel' in NL.config(1, [{ sensorId: 'bin:sys', kind: 'bin' }]).sensors[0], false);
+
+  const w0 = NL.welcome('n', 'b', 'f', { servos: 2, linear: 0 });
+  check('a board that says nothing has no transmitter', NL.pressesRf(w0) === false);
+  check('and no bin pad', NL.watchesBin(w0) === false);
+  const w1 = NL.welcome('n', 'b', 'f', { servos: 2, linear: 0, rf: 1, bin: 1 });
+  check('caps.rf 1 means a transmitter', NL.pressesRf(w1) === true);
+  check('caps.bin 1 means a bin pad', NL.watchesBin(w1) === true);
+  eq('both caps validate', NL.validateFrame(w1, 's2p'), []);
+  check('caps.rf 2 is refused', NL.validateFrame(NL.welcome('n', 'b', 'f', { servos: 2, linear: 0, rf: 2 }), 's2p').length === 1);
+  eq('PRESS did not bump the version', NL.NODELINK_VERSION, 1);
 }
 
 // ── timing constants match the firmware (control/NodeLink.h) ────────────────

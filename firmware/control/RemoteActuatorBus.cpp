@@ -43,7 +43,7 @@ void RemoteActuatorBus::begin(const char* nodeId, const char* primaryId,
     // pause and resume, a takeover) — in particular `caps.join`, which is what lets
     // the primary give a node that dials in the first move instead of racing it. A slot
     // reused for a DIFFERENT node must not inherit any of it.
-    if (strcmp(_nodeId, nodeId ? nodeId : "") != 0) { _capJoin = 0; _capPlugs = 0; _capClamps = 0; _capServos = 0; _capLinear = 0; _board[0] = _fw[0] = '\0'; }
+    if (strcmp(_nodeId, nodeId ? nodeId : "") != 0) { _capJoin = 0; _capRf = 0; _capBin = 0; _capPlugs = 0; _capClamps = 0; _capServos = 0; _capLinear = 0; _board[0] = _fw[0] = '\0'; }
     nodelink::strlcpy_(_nodeId,    nodeId    ? nodeId    : "", sizeof(_nodeId));
     nodelink::strlcpy_(_primaryId, primaryId ? primaryId : "", sizeof(_primaryId));
     nodelink::strlcpy_(_host,      host      ? host      : "", sizeof(_host));
@@ -308,7 +308,7 @@ void RemoteActuatorBus::end() {
     }
     if (_mutex) {
         xSemaphoreTake(_mutex, portMAX_DELAY);
-        _connected = false; _moveOutstanding = false; _txPending = false;
+        _connected = false; _moveOutstanding = false; _txPending = false; _pressPending = false; _pressSeq = 0;
         xSemaphoreGive(_mutex);
     }
 }
@@ -456,6 +456,10 @@ void RemoteActuatorBus::taskLoop() {
                 _otaPending = false;
                 DEBUG_PRINT(F("[NODE→] OTA to ")); DEBUG_PRINTLN(_nodeId);
             }
+            if (_pressPending && _connected) {
+                _ws.sendTXT(_pressFrame);
+                _pressPending = false;
+            }
             // A move whose STATE report never arrived: give up rather than let
             // the primary's move queue block forever behind a lost frame.
             if (_moveOutstanding &&
@@ -499,6 +503,9 @@ void RemoteActuatorBus::markDown(bool wasUp) {
         if (_moveOutstanding) _moveFault = "The link dropped mid-move \xE2\x80\x94 the gate may not have finished moving.";
         _moveOutstanding = false;
         _txPending = false;
+        // A PRESS is an EDGE against a TOGGLE: one queued during an outage and sent on
+        // reconnect would switch the blower the wrong way. Never replayed.
+        _pressPending = false; _pressSeq = 0;
         // FORGET THE READINGS, KEEP THE CONFIG. A link that has dropped tells us
         // nothing about the tool any more, and a stale "on" left lying here would
         // keep a collector running for a machine nobody can see (RFC §5.6a: absent
@@ -526,6 +533,7 @@ bool RemoteActuatorBus::attachInbound(AsyncWebSocketClient* c, String& helloOut)
     // Whatever was half-open on the dial-out side is stale now.
     _connected  = false;
     _txPending  = false;
+    _pressPending = false; _pressSeq = 0;   // a PRESS is an EDGE: never replay one across a reconnect
     xSemaphoreGive(_mutex);
     buildHelloString(helloOut);
     DEBUG_PRINT(F("[NODE] ")); DEBUG_PRINT(_nodeId); DEBUG_PRINTLN(F(" dialled in"));
@@ -551,11 +559,13 @@ void RemoteActuatorBus::pumpInbound() {
     if (!c || !_inId) return;
     if (c->status() != WS_CONNECTED) return;
     char tx[sizeof(_txFrame)] = ""; char cfg[sizeof(_cfgFrame)] = ""; char ota[sizeof(_otaFrame)] = "";
-    bool haveTx = false, haveCfg = false, haveOta = false;
+    char prs[sizeof(_pressFrame)] = "";
+    bool haveTx = false, haveCfg = false, haveOta = false, havePress = false;
     if (xSemaphoreTake(_mutex, 0) != pdTRUE) return;      // try again next loop
     if (_txPending && _connected)  { strlcpy(tx,  _txFrame,  sizeof(tx));  _txPending  = false; haveTx  = true; }
     if (_cfgPending && _connected) { strlcpy(cfg, _cfgFrame, sizeof(cfg)); _cfgPending = false; haveCfg = true; }
     if (_otaPending && _connected) { strlcpy(ota, _otaFrame, sizeof(ota)); _otaPending = false; haveOta = true; }
+    if (_pressPending && _connected) { strlcpy(prs, _pressFrame, sizeof(prs)); _pressPending = false; havePress = true; }
     if (_moveOutstanding && (millis() - _moveStartedMs) > nodelink::kMoveTimeoutMs) {
         _moveOutstanding = false;
         _moveFault = "The board never reported its move finished (timed out).";
@@ -565,6 +575,7 @@ void RemoteActuatorBus::pumpInbound() {
     if (haveTx)  c->text(tx);
     if (haveCfg) { c->text(cfg); DEBUG_PRINT(F("[NODE→] CONFIG to ")); DEBUG_PRINTLN(_nodeId); }
     if (haveOta) { c->text(ota); DEBUG_PRINT(F("[NODE→] OTA to "));    DEBUG_PRINTLN(_nodeId); }
+    if (havePress) c->text(prs);
 }
 
 void RemoteActuatorBus::update() {
@@ -685,6 +696,9 @@ void RemoteActuatorBus::handleFrame(const char* json, size_t len) {
         _capPlugs  = f["caps"]["plug"] | 0;
         // Absent means NO: a board that predates node-initiated links is dialled.
         _capJoin   = f["caps"]["join"] | 0;
+        // Absent means NO: never send a PRESS or a `bin` sensor to a board that did not say it has one.
+        _capRf     = f["caps"]["rf"]  | 0;
+        _capBin    = f["caps"]["bin"] | 0;
 
         // Did it accept our claim? A refusal leaves us OFFLINE rather than
         // half-connected: every caller already treats offline as "don't command
@@ -739,6 +753,15 @@ void RemoteActuatorBus::handleFrame(const char* json, size_t len) {
         if (_cfgValid) _cfgPending = true;
     } else if (strcmp(t, "ACK") == 0) {
         bool ok = f["ok"] | false;
+        // A PRESS is answered with an ACK on the same seq. It is not a move: it must not
+        // touch the move bookkeeping below, and its failure is its own fault string.
+        if (_pressSeq && (f["seq"] | 0u) == _pressSeq) {
+            nodelink::strlcpy_(_pressFault, ok ? "" : (f["err"] | "the board refused the press"), sizeof(_pressFault));
+            _pressSeq = 0;
+            xSemaphoreGive(_mutex);
+            DEBUG_PRINT(F("[NODE←] PRESS ")); DEBUG_PRINTLN(ok ? F("ok") : F("REFUSED"));
+            return;
+        }
         if (!ok) {
             if (_moveOutstanding) _moveFault = "The board refused the move.";
             _moveOutstanding = false;                       // refused → stop waiting
@@ -907,6 +930,24 @@ bool RemoteActuatorBus::jog(int channel, int angle, bool detach) {
     return true;
 }
 
+bool RemoteActuatorBus::pressRf(uint8_t address, uint8_t data, uint32_t tickUs, uint32_t repeats) {
+    if (!online() || _capRf <= 0) return false;
+    StaticJsonDocument<192> doc;
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    const uint32_t seq = ++_seq;
+    xSemaphoreGive(_mutex);
+    nodelink::buildPress(doc.to<JsonObject>(), seq, address, data, tickUs, repeats);
+    char buf[sizeof(_pressFrame)];
+    if (serializeJson(doc, buf, sizeof(buf)) >= sizeof(buf)) return false;
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    nodelink::strlcpy_(_pressFrame, buf, sizeof(_pressFrame));
+    _pressSeq     = seq;
+    _pressPending = true;
+    xSemaphoreGive(_mutex);
+    DEBUG_PRINT(F("[NODE→] PRESS to ")); DEBUG_PRINTLN(_nodeId);
+    return true;
+}
+
 void RemoteActuatorBus::configureSensors(JsonArrayConst sensors) {
     // Built here rather than by the caller so the WIRE SHAPE lives in one place
     // — nodelink.js's CONFIG, mirrored by parseConfigFrame() on the node.
@@ -927,6 +968,9 @@ void RemoteActuatorBus::configureSensors(JsonArrayConst sensors) {
             o["ip"]         = sen["ip"] | "";
             o["plug"]       = sen["plug"] | "shelly";
             o["thresholdW"] = sen["thresholdW"] | 0.0f;
+        } else if (strcmp(sen["kind"] | "ct", "bin") == 0) {
+            o["kind"]   = "bin";
+            if (sen.containsKey("invert")) o["invert"] = sen["invert"] | true;
         } else {
             o["kind"]     = "ct";
             o["channel"]  = sen["channel"] | 0;

@@ -152,6 +152,19 @@ public:
     virtual bool senseOf(const char* sensorId, bool& on, uint32_t& atMs) const {
         (void)sensorId; (void)on; (void)atMs; return false;
     }
+
+    // ── the collector's jobs on a board at the far end (2026-10-04) ──────────
+    // Can this board key a transmitter for the collector's remote / watch a dust
+    // bin? WELCOME caps.rf / caps.bin; false for a local bus (the sketch drives its
+    // OWN transmitter and bin pin directly) and for every node that predates them.
+    virtual bool canPressRf() const { return false; }
+    virtual bool watchesBin() const { return false; }
+    // Ask the board to key its transmitter ONCE. Queued like a SET: true means the
+    // frame was handed over (the board is linked and has a transmitter), NOT that the
+    // blower changed state — only the plug reading says that. False = could not be sent.
+    virtual bool pressRf(uint8_t address, uint8_t data, uint32_t tickUs, uint32_t repeats) {
+        (void)address; (void)data; (void)tickUs; (void)repeats; return false;
+    }
 };
 
 } // namespace topo

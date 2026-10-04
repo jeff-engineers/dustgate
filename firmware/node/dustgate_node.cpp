@@ -106,8 +106,14 @@
 #include "../outlets/TasmotaOutlet.h"      // plugs this board polls for the primary
 #include "../outlets/ShellyGen2Outlet.h"
 
+#ifndef DEBUG_PRINT
+  #define DEBUG_PRINT(x)   Serial.print(x)     // RfCollectorPresser.h reports an RMT failure with it
+  #define DEBUG_PRINTLN(x) Serial.println(x)
+#endif
+#include "../control/RfCollectorPresser.h"     // the collector's remote, keyed on this board's pad (PRESS)
 #include "../motor/ServoActuator.h"
 #include "../control/NodeLink.h"
+#include "../utils/BinSensor.h"           // the dust-bin beam's debounce (pure)
 #include "BrainLink.h"           // this node dialling its own primary
 #include "../utils/StatusLed.h"
 #include "../utils/StatusScreen.h"   // optional SSD1306; nothing on a board without one
@@ -705,6 +711,87 @@ static void tickPlugs() {
 }
 
 // -----------------------------------------------------------------------------
+// The collector's jobs on a node (2026-10-04): a dust-bin beam and the remote's
+// transmitter. Both were primary-only, which is why a board at the collector had to be
+// the brain. The node does the PRIMITIVE and nothing more: it reads the beam and
+// reports a debounced bit (SENSE, `on` = FULL), and it keys the transmitter when told
+// (PRESS). When to press, whether it worked and when to try again stay the primary's
+// policy, because only the primary reads the plug that says whether the blower agreed.
+// -----------------------------------------------------------------------------
+#if HAS_BIN
+static char                  g_binId[topo::nodelink::kMaxSensorIdLen] = "";
+static bool                  g_binInvert = true;
+static bool                  g_binActive = false;
+static topo::BinDebounce     g_binDeb;
+static bool                  g_binSentKnown = false;
+static bool                  g_binSentOn    = false;
+static uint32_t              g_binSentAt    = 0;
+#endif
+
+static void binApplyConfig(const topo::nodelink::SensorSpec* bins, size_t n) {
+#if HAS_BIN
+    if (n) {
+        topo::nodelink::strlcpy_(g_binId, bins[0].sensorId, sizeof(g_binId));
+        g_binInvert = bins[0].binInvert;
+    }
+    g_binActive    = n > 0;
+    g_binSentKnown = false;           // say it again now: the primary just asked
+    Serial.printf("[BIN] %s\n", n ? g_binId : "(not watching)");
+#else
+    (void)bins; (void)n;
+#endif
+}
+
+static void tickBin() {
+#if HAS_BIN
+    if (!g_binActive) return;
+    const uint32_t now = millis();
+    const bool raw = (digitalRead(PIN_BIN_SENSOR) == LOW);       // LOW = the optocoupler's "full"
+    const bool wasFull = g_binDeb.full();
+    g_binDeb.sample(g_binInvert ? raw : !raw, now);
+    const bool full = g_binDeb.full();
+    if (full != wasFull) Serial.printf("[BIN] %s\n", full ? "FULL" : "ok");
+    const bool changed = !g_binSentKnown || full != g_binSentOn;
+    const bool due     = (uint32_t)(now - g_binSentAt) >= topo::nodelink::kSenseRepeatMs;
+    if (!changed && !due) return;
+    StaticJsonDocument<192> doc;
+    topo::nodelink::buildSense(doc.to<JsonObject>(), g_binId, full);
+    String s; serializeJson(doc, s);
+    sendToOwner(s);
+    g_binSentKnown = true; g_binSentOn = full; g_binSentAt = now;
+#endif
+}
+
+#if HAS_RF
+static topo::nodelink::PressOrder g_pressOrder;
+static volatile bool              g_pressPending = false;
+static RfCollectorPresser*        g_rfPresser    = nullptr;   // ONE for the pad's lifetime — see configure()
+#endif
+
+// loop(): key the transmitter for a pending PRESS and say how it went. The handler only
+// records the order — it runs on a network task, and the press blocks ~0.5 s of RMT, which
+// is acceptable here for the reason it is on the primary: it happens on a state change,
+// never on a tick, and the watchdog is petted either side.
+static void runPress() {
+#if HAS_RF
+    if (!g_pressPending) return;
+    const topo::nodelink::PressOrder o = g_pressOrder;
+    g_pressPending = false;
+    if (!g_rfPresser) g_rfPresser = new RfCollectorPresser(PIN_RF_TX);
+    g_rfPresser->configure(o.address, o.data, o.tickUs, (uint16_t)o.repeats);
+    watchdog::pet();
+    const bool ok = g_rfPresser->press();
+    watchdog::pet();
+    Serial.printf("[RF] press addr=%u data=%u tick=%luus x%lu -> %s\n", (unsigned)o.address, (unsigned)o.data,
+                  (unsigned long)o.tickUs, (unsigned long)o.repeats, ok ? "sent" : "TRANSMIT FAILED");
+    StaticJsonDocument<128> d;
+    topo::nodelink::buildAck(d.to<JsonObject>(), o.seq, ok, ok ? nullptr : "the transmitter could not send");
+    String s; serializeJson(d, s);
+    sendToOwner(s);
+#endif
+}
+
+// -----------------------------------------------------------------------------
 // OTA — the primary tells this node to pull a new image (2026-10-03).
 //
 // The frame handler only RECORDS the order (it runs on the AsyncTCP task, which
@@ -921,7 +1008,9 @@ static void handleNodeFrame(const Conn& conn, const uint8_t* data, size_t len) {
                                      0,
 #endif
                                      /*pollsPlugs=*/true,
-                                     /*dialsIn=*/true);
+                                     /*dialsIn=*/true,
+                                     /*hasRf=*/HAS_RF != 0,
+                                     /*hasBin=*/HAS_BIN != 0);
         // Why this node last booted, so the primary's link log can tell a tool
         // switched off at the wall ("poweron"/"brownout") from a crash
         // ("panic"/"task_wdt"). See withBootInfo() in nodelink.js.
@@ -950,11 +1039,20 @@ static void handleNodeFrame(const Conn& conn, const uint8_t* data, size_t len) {
                 // polls for the primary — 2026-10-03). Split them once.
                 topo::nodelink::SensorSpec cts[topo::nodelink::kMaxSensorsPerNode];
                 topo::nodelink::SensorSpec plugs[topo::nodelink::kMaxSensorsPerNode];
-                size_t ctN = 0, plugN = 0;
+                topo::nodelink::SensorSpec bins[topo::nodelink::kMaxSensorsPerNode];
+                size_t ctN = 0, plugN = 0, binN = 0;
                 for (size_t i = 0; i < n; i++) {
-                    if (parsed[i].isPlug) plugs[plugN++] = parsed[i];
-                    else                  cts[ctN++]     = parsed[i];
+                    if (parsed[i].isPlug)     plugs[plugN++] = parsed[i];
+                    else if (parsed[i].isBin) bins[binN++]   = parsed[i];
+                    else                      cts[ctN++]     = parsed[i];
                 }
+#if !HAS_BIN
+                if (binN) {
+                    Serial.println(F("[CONFIG] REFUSED — no bin pad on this board."));
+                    topo::nodelink::buildAck(reply.to<JsonObject>(), f["seq"] | 0, false,
+                                             "no bin pad on this node");
+                } else
+#endif
 #ifndef PIN_CT
                 if (ctN) {
                     // Honest refusal beats silence: the layout believes this board
@@ -1007,6 +1105,7 @@ static void handleNodeFrame(const Conn& conn, const uint8_t* data, size_t len) {
                     }
 #endif
                     plugApplyConfig(plugs, plugN);
+                    binApplyConfig(bins, binN);
                     topo::nodelink::buildAck(reply.to<JsonObject>(), f["seq"] | 0, true);
                 }
             }
@@ -1098,6 +1197,29 @@ static void handleNodeFrame(const Conn& conn, const uint8_t* data, size_t len) {
             g_otaPending = true;        // loop() takes it from here
             return;                     // runOta() reports; no reply from this task
         }
+    } else if (strcmp(t, "PRESS") == 0) {
+        // OWNER ONLY, like SET: this operates a motor's contactor through a remote.
+        topo::nodelink::PressOrder po;
+        const char* err = nullptr;
+        if (!g_ownerLinked || conn.id != g_ownerClientId) {
+            Serial.println(F("[PRESS] REFUSED — not the owner."));
+            topo::nodelink::buildAck(reply.to<JsonObject>(), f["seq"] | 0, false, "not the owner of this node");
+        } else if (!topo::nodelink::parsePressFrame(f, po, err)) {
+            Serial.print(F("[PRESS] MALFORMED — ")); Serial.println(err ? err : "?");
+            topo::nodelink::buildAck(reply.to<JsonObject>(), f["seq"] | 0, false, err);
+#if HAS_RF
+        } else if (g_pressPending) {
+            topo::nodelink::buildAck(reply.to<JsonObject>(), po.seq, false, "a press is already waiting");
+        } else {
+            g_pressOrder   = po;
+            g_pressPending = true;      // loop() keys it and ACKs
+            return;
+        }
+#else
+        } else {
+            topo::nodelink::buildAck(reply.to<JsonObject>(), po.seq, false, "no transmitter on this board");
+        }
+#endif
     } else if (strcmp(t, "REFUSE") == 0) {
         // The primary declined a socket we dialled. Nothing to answer: brainlink goes
         // back to seeking, on its own backoff.
@@ -1433,6 +1555,9 @@ void setup() {
     // reaches a reading before the rail is up.
     g_ct.begin();
 #endif
+#if HAS_BIN
+    pinMode(PIN_BIN_SENSOR, INPUT_PULLUP);   // the optocoupler's output; LOW = the bin is full
+#endif
     bootTrace("ready");
 }
 
@@ -1528,6 +1653,8 @@ void loop() {
     if (g_otaPending && !g_otaRunning) runOta();
     otaguard::tick(WiFi.status() == WL_CONNECTED && g_ownerLinked);
     tickPlugs();
+    runPress();
+    tickBin();
 
     // Status pixel — the node's only UI. Derived fresh each loop rather than
     // set at transitions, so it can never latch a stale colour after a silent
