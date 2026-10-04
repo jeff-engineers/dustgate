@@ -1231,6 +1231,16 @@ port_is_free() {
   return 1
 }
 
+# ota_build ENV — one build, retried once. A build that changes flags (--bad) or
+# follows a long gap can lose PlatformIO's directory-creation race ("can't create
+# ...o: No such file or directory", see extra_script.py), and the second pass finds
+# the directory already there. A real compile error fails both times.
+ota_build() {
+  "$PIO" run -j 1 -e "$1" >/dev/null 2>&1 && return 0
+  echo "  (build hit a transient error — retrying once)"
+  "$PIO" run -j 1 -e "$1" >/dev/null
+}
+
 # run_ota [--slider] [--no-nodes | --nodes-only] [host]
 # Update over WiFi — no cable, no filesystem wipe, the saved layout is untouched.
 #
@@ -1308,7 +1318,7 @@ run_ota() {
   if [[ $do_primary == 1 ]]; then
     use_core_for_env "$env" >/dev/null
     echo "▶ Building the primary ($(describe_env "$env"))…"
-    "$PIO" run -j 1 -e "$env" >/dev/null || { echo "  ✗ Build failed — run: pio run -e $env"; exit 1; }
+    ota_build "$env" || { echo "  ✗ Build failed — run: pio run -e $env"; exit 1; }
     penv_bin="$SCRIPT_DIR/.pio.nosync/build/$env/firmware.bin"
     [[ -f "$penv_bin" ]] || { echo "  ✗ No $penv_bin"; exit 1; }
   fi
@@ -1317,7 +1327,7 @@ run_ota() {
     for ne in "$NODE_ENV" "$LINEAR_NODE_ENV"; do
       use_core_for_env "$ne" >/dev/null
       echo "▶ Building the node image ($(describe_env "$ne"))…"
-      "$PIO" run -j 1 -e "$ne" >/dev/null || { echo "  ✗ Build failed — run: pio run -e $ne"; exit 1; }
+      ota_build "$ne" || { echo "  ✗ Build failed — run: pio run -e $ne"; exit 1; }
     done
   fi
 
