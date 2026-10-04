@@ -10,7 +10,11 @@
 // from /api/info after each one.
 //
 //   node tools/ws-spike.js [--brain 192.168.86.46] [--count 9] [--settle-ms 1500]
-//                          [--hold-ms 10000]
+//                          [--hold-ms 10000] [--pause-links]
+//
+//   --pause-links   stop every node link first (POST /api/nodes/pause; pairings are kept)
+//                   and bring them back at the end. Without it, nodes still dialling
+//                   move the heap by several KB on their own and swamp a 2–3 KB delta.
 //
 // Prints: the baseline (and its noise), the free-heap delta per connection, the total,
 // the per-connection mean, and what comes back after they all close (a leak shows
@@ -39,7 +43,19 @@ const COUNT  = +arg('count', 9);
 const SETTLE = +arg('settle-ms', 1500);
 const HOLD   = +arg('hold-ms', 10000);
 
+const PAUSE = process.argv.includes('--pause-links');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function setPaused(paused) {
+  const key = (await info()).apiKey;
+  await new Promise((resolve, reject) => {
+    const body = JSON.stringify({ paused });
+    const req = http.request({ host: BRAIN, port: 80, path: '/api/nodes/pause', method: 'POST', agent: false,
+      headers: { 'X-Api-Key': key, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+      insecureHTTPParser: true }, (res) => { res.resume(); res.on('end', () => (res.statusCode === 200 ? resolve() : reject(new Error('pause refused: HTTP ' + res.statusCode)))); });
+    req.on('error', reject); req.end(body);
+  });
+}
 
 function info() {
   return new Promise((resolve, reject) => {
@@ -61,6 +77,8 @@ async function sample() { await sleep(SETTLE); const d = await info(); return { 
 
 (async () => {
   console.log(`brain ${BRAIN}: ${COUNT} WebSocket clients to /ws, ${SETTLE} ms settle between each\n`);
+
+  if (PAUSE) { await setPaused(true); console.log('node links paused — waiting 8 s for sockets and tasks to wind down…'); await sleep(8000); }
 
   const base = [];
   for (let i = 0; i < 5; i++) { base.push((await sample()).free); }
@@ -99,6 +117,7 @@ async function sample() { await sleep(SETTLE); const d = await info(); return { 
   for (const ws of socks) ws.close();
   await sleep(4000);
   const after = await sample();
+  if (PAUSE) { await setPaused(false); console.log('\nnode links resumed.'); }
   console.log(`\nafter closing all: free ${kb(after.free)}   (${after.free - baseline >= 0 ? '+' : ''}${after.free - baseline} B vs baseline — a large negative number is a leak)\n`);
 
   if (socks.length) {

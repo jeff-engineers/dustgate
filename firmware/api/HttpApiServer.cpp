@@ -1843,6 +1843,25 @@ void HttpApiServer::registerRoutes() {
         }
     );
 
+    // POST /api/nodes/pause   body: {"paused": true|false}
+    // Stop every node link (or bring them back) without forgetting a pairing — so a
+    // measurement can be taken on a brain that is not dialling anything. Not persisted.
+    _server.on("/api/nodes/pause", HTTP_POST,
+        [](AsyncWebServerRequest* req) {},
+        nullptr,
+        [this](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t index, size_t total) {
+            if (!checkAuth(req)) return;
+            if (index != 0 || len != total) { sendError(req, 400, "body too large"); return; }
+            StaticJsonDocument<64> doc;
+            if (deserializeJson(doc, data, len) || !doc["paused"].is<bool>()) { sendError(req, 400, "need {\"paused\": true|false}"); return; }
+            xSemaphoreTake(_mutex, portMAX_DELAY);
+            _linksPausedWanted = doc["paused"].as<bool>();
+            _linksPausePending = true;
+            xSemaphoreGive(_mutex);
+            sendOk(req);
+        }
+    );
+
     // POST /api/nodes/update   body: {"id": "<node id or host>"}
     // Ask one node to update itself from the stored image. Manual and ONE at a
     // time, on purpose (jeff, 2026-10-03): the loop refuses while a tool is
@@ -2419,6 +2438,15 @@ bool HttpApiServer::otaRebootDue() {
 }
 
 bool HttpApiServer::otaInProgress() { return s_otaBusy; }
+
+bool HttpApiServer::consumeLinksPause(bool& paused) {
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    const bool any = _linksPausePending;
+    paused = _linksPausedWanted;
+    _linksPausePending = false;
+    xSemaphoreGive(_mutex);
+    return any;
+}
 
 bool HttpApiServer::consumeResetAll() {
     xSemaphoreTake(_mutex, portMAX_DELAY);
