@@ -4577,6 +4577,11 @@ void loop() {
                     // paired with itself — so its hostname is the honest name,
                     // and it is the one printed on every other screen.
                     self["name"] = WiFiProvisioner::getHostname();
+                    // What this board is running, so the Boards page can say it for
+                    // the brain as it does for every node (and a primary that is
+                    // behind its nodes is visible at a glance).
+                    self["fw"]    = buildstamp::fw();
+                    self["board"] = BOARD_NAME;
                     JsonObject sc = self.createNestedObject("caps");
 #if defined(ENABLE_SERVO) && defined(SERVO_PWM_PIN_1)
                     sc["servos"] = SERVO_COUNT;
