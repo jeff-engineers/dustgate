@@ -1372,12 +1372,23 @@ run_ota() {
   fi
 }
 
+# resolve_host HOST — print HOST's IP if it answers, else HOST unchanged.
+# A .local name goes through mDNS, which on a busy network answers some lookups and
+# times out on others; every command that makes several requests should resolve ONCE
+# and then use the address, or a flaky lookup reads as a dead board (2026-10-04).
+resolve_host() {
+  local h="$1" ip
+  ip="$(curl -sS --max-time 10 -o /dev/null -w '%{remote_ip}' "http://$h/api/info" 2>/dev/null || true)"
+  if [[ -n "$ip" && "$ip" != "0.0.0.0" ]]; then echo "$ip"; else echo "$h"; fi
+}
+
 # run_linklog [host]
 # Pull the primary's link log over WiFi, save it, and summarise it — the way to
 # watch a shop with no laptop on any board. See firmware/utils/LinkLog.h and
 # tools/linklog-summary.py. The API key comes from the board's own /api/info.
 run_linklog() {
   local host="${1:-${DUSTGATE_HOST:-dustgate.local}}"
+  host="$(resolve_host "$host")"
   echo "▶ Link log from $host"
   local key
   key="$(curl -fsS --max-time 10 "http://$host/api/info" 2>/dev/null \
@@ -1416,6 +1427,7 @@ run_log() {
     esac
   done
   host="${host:-${DUSTGATE_HOST:-dustgate.local}}"
+  host="$(resolve_host "$host")"
   local key
   key="$(curl -fsS --max-time 10 "http://$host/api/info" 2>/dev/null \
           | python3 -c 'import json,sys; print(json.load(sys.stdin).get("apiKey",""))' 2>/dev/null || true)"
@@ -1424,8 +1436,13 @@ run_log() {
     echo "      bash dev.sh log 192.168.x.y"
     exit 1
   fi
-  if ! curl -fsS --max-time 5 -o /dev/null -H "X-Api-Key: $key" "http://$host/api/serial?from=0" 2>/dev/null; then
+  local code
+  code="$(curl -sS --max-time 15 -o /dev/null -w '%{http_code}' -H "X-Api-Key: $key" "http://$host/api/serial?from=0" 2>/dev/null || echo 000)"
+  if [[ "$code" == "404" ]]; then
     echo "  ✗ $host has no /api/serial — its firmware is older than 2026-10-03. Reflash the primary."
+    exit 1
+  elif [[ "$code" != "200" ]]; then
+    echo "  ✗ $host answered /api/info but /api/serial gave HTTP $code (000 = no answer in 15 s). Try again."
     exit 1
   fi
   local dir="$SCRIPT_DIR/.monitor-logs"; mkdir -p "$dir"
