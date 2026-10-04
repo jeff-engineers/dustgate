@@ -1276,6 +1276,15 @@ void setup() {
     delay(100); // brief settle after connection
     DEBUG_PRINTLN(F("=== DustGate ==="));
     DEBUG_PRINT(F("Build: ")); DEBUG_PRINTLN(buildstamp::fw());
+#ifdef DUSTGATE_EXTMEM_MALLOC_LIMIT
+    // EXPERIMENT (dev.sh ota --extmem N): send every ordinary malloc/new above N bytes to
+    // PSRAM. The SDK already does it above 4096 (CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL), so
+    // this only moves the small-to-medium buffers: Strings, vectors, JSON documents, the
+    // WebSocket client's. WiFi and lwIP ask for internal RAM explicitly and are unaffected.
+    // Not a default: PSRAM is slower and stalls while flash is written (OTA, NVS).
+    heap_caps_malloc_extmem_enable(DUSTGATE_EXTMEM_MALLOC_LIMIT);
+    DEBUG_PRINT(F("[HEAP] extmem malloc limit = ")); DEBUG_PRINTLN((int)DUSTGATE_EXTMEM_MALLOC_LIMIT);
+#endif
     // Name the build, not the wiring diagram. This said "ESP32 + TMC2209" on
     // every target — including boards with no stepper — so the first line of
     // every boot log was wrong about what you were looking at.

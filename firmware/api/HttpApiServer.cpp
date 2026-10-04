@@ -25,6 +25,7 @@
 #include <MD5Builder.h>
 #include "../control/NodeLink.h"   // kMinOtaBytes / kMaxOtaBytes
 #include "../utils/OtaGuard.h"
+#include "../utils/Diag.h"
 
 static bool          s_otaBusy       = false;
 static unsigned long s_otaRebootAtMs = 0;
@@ -910,7 +911,7 @@ void HttpApiServer::registerRoutes() {
         // 512, not 320: `built` is now a copied String and `build` is new, and
         // ArduinoJson drops an overflowing member SILENTLY (the WELCOME lost
         // `rst` exactly that way on 2026-09-27).
-        StaticJsonDocument<768> doc;   // 768: the OTA and fill fields below took it past 640
+        StaticJsonDocument<1024> doc;   // 1024: the OTA, fill and heap-breakdown fields below took it past 640
         doc["apiKey"]        = _apiKey;
         doc["numStops"]      = _cachedNumActiveStops;   // runtime; not compile-time NUM_STOPS
         doc["version"]       = "1.0.0";
@@ -941,6 +942,7 @@ void HttpApiServer::registerRoutes() {
         doc["slotBytes"]     = (uint32_t)ESP.getFreeSketchSpace();   // the OTHER slot, same size
         doc["fsBytes"]       = (uint32_t)LittleFS.totalBytes();
         doc["fsUsed"]        = (uint32_t)LittleFS.usedBytes();
+        diag::writeHeap(doc.createNestedObject("heap"));   // internal + PSRAM: total/free/min/largest
         doc["slot"]          = otaguard::slot();
         doc["ota"]           = otaguard::state();
         doc["heapFree"]      = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
@@ -1422,6 +1424,17 @@ void HttpApiServer::registerRoutes() {
         xSemaphoreGive(_mutex);
         if (body.length() == 0) body = "{\"nodes\":[]}";   // no topology adopted yet
         req->send(200, "application/json", body);
+    });
+
+    // GET /api/tasks — every FreeRTOS task: stack headroom (bytes) and CPU share
+    // since boot, tightest stack first (utils/Diag.h). For the question "what is the
+    // internal RAM going to", asked on a fully loaded shop.
+    _server.on("/api/tasks", HTTP_GET, [this](AsyncWebServerRequest* req) {
+        if (!checkAuth(req)) return;
+        BigJsonDocument doc(6144);
+        diag::writeTasks(doc.to<JsonArray>());
+        String out; serializeJson(doc, out);
+        req->send(200, "application/json", out);
     });
 
     // ------------------------------------------------------------------

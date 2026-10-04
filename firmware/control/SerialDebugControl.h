@@ -15,6 +15,8 @@
 //   gconf            Read GCONF + CHOPCONF registers from driver
 //   clearcal         Erase EEPROM calibration
 //   provision <json> Write WiFi credentials + hostname to NVS
+//   heap             Internal RAM and PSRAM: total / free / lowest-ever / largest block
+//   tasks            Every task: stack headroom and CPU share, tightest stack first
 //   wifireset        Erase WiFi credentials, reboot into setup portal
 //   status           Print current state and position
 //   discover         Scan mDNS for Shelly outlets (CONTROL_SMART_OUTLET builds only)
