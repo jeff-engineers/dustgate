@@ -29,6 +29,10 @@ namespace topo {
 // far, and a CONFIG or SENSE burst is the worst case it has not met.
 static const uint32_t kNodeLinkTaskStack = 5120;
 static const UBaseType_t kNodeLinkTaskPrio = 1;
+// How long a node that dials in is left to do it before this side dials too. Longer
+// than a node takes to boot and find us (a few seconds, beacon every 5 s while it is
+// down), shorter than anyone waits for a gate.
+static const uint32_t kDialInGraceMs = 10000;
 
 void RemoteActuatorBus::begin(const char* nodeId, const char* primaryId,
                               const char* host, uint16_t port) {
@@ -307,6 +311,19 @@ void RemoteActuatorBus::taskLoop() {
         if (_inId) {
             if (_sockUp || _ws.isConnected()) { _ws.disconnect(); _sockUp = false; }
             lastNagMs = millis();
+            delay(50);
+            continue;
+        }
+        // A node that dials in gets the first move. Dialling it back at the same
+        // instant only makes two sockets race for one link (the loser is closed, but
+        // both cost the node a connection slot), and the node's own attempt — which
+        // works whichever direction the network drops — is the one meant to carry
+        // the shop. After the grace we dial as well: this is the fallback, and it
+        // is what keeps a node whose beacon, name and cached address all fail
+        // reachable. `_capJoin` is only known once the node has WELCOMEd us, so the
+        // first link after a primary boot is dialled at once, as it always was.
+        if (_capJoin && !_connected && !_inId && _downSinceMs &&
+            (millis() - _downSinceMs) < kDialInGraceMs) {
             delay(50);
             continue;
         }

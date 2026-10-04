@@ -34,6 +34,7 @@
 // =============================================================================
 #pragma once
 #include <Arduino.h>
+#include <stdarg.h>
 #include <WiFi.h>
 #include <WiFiUdp.h>
 #include <ESPmDNS.h>
@@ -95,8 +96,55 @@ struct State {
     uint32_t       joinedAtMs    = 0;
     // for the log
     uint32_t       attempts      = 0;
+    TaskHandle_t   task          = nullptr;
+    // The last few things this task did, newest last, for GET /api/brainlink — a node
+    // has no screen and its serial is usually not attached, so "why has it not found
+    // the primary?" has to be answerable over the network.
+    static const size_t kNotes = 8;
+    char           notes[kNotes][96] = {};
+    uint8_t        noteN         = 0;
 };
 inline State& S() { static State s; return s; }
+
+// Remember a line AND print it. printf-style; kept short.
+inline void note(const char* fmt, ...) {
+    State& s = S();
+    char line[96];
+    va_list ap; va_start(ap, fmt);
+    vsnprintf(line, sizeof(line), fmt, ap);
+    va_end(ap);
+    Serial.print(F("[BRAIN] ")); Serial.println(line);
+    snprintf(s.notes[s.noteN % State::kNotes], sizeof(s.notes[0]), "%lus %s", (unsigned long)(millis() / 1000UL), line);
+    s.noteN++;
+}
+
+// The state as JSON, for the node's own /api/brainlink.
+inline String statusJson() {
+    State& s = S();
+    String o = "{";
+    o += "\"owner\":\"" + (s.owner ? s.owner() : String()) + "\"";
+    o += ",\"up\":" + String(s.up ? "true" : "false");
+    o += ",\"cachedIp\":\"" + String(s.cachedIp) + "\"";
+    o += ",\"beaconIp\":\"" + String(s.beaconIp) + "\"";
+    o += ",\"beaconAgeS\":" + String(s.beaconAtMs ? (long)((millis() - s.beaconAtMs) / 1000UL) : -1L);
+    o += ",\"attempts\":" + String((unsigned long)s.attempts);
+    o += ",\"rounds\":" + String((unsigned)s.rounds);
+    o += ",\"backoffMs\":" + String((unsigned long)s.backoffMs);
+    o += ",\"nextTryInS\":" + String(s.nextTryMs > millis() ? (long)((s.nextTryMs - millis()) / 1000UL) : 0L);
+    o += ",\"stackFree\":" + String(s.task ? (unsigned)uxTaskGetStackHighWaterMark(s.task) : 0u);
+    o += ",\"uptimeS\":" + String((unsigned long)(millis() / 1000UL));
+    o += ",\"freeHeap\":" + String((unsigned long)ESP.getFreeHeap());
+    o += ",\"notes\":[";
+    const size_t n = s.noteN < State::kNotes ? s.noteN : State::kNotes;
+    for (size_t i = 0; i < n; i++) {
+        const size_t idx = (s.noteN - n + i) % State::kNotes;
+        String t = s.notes[idx];
+        t.replace("\"", "'");
+        o += (i ? ",\"" : "\"") + t + "\"";
+    }
+    o += "]}";
+    return o;
+}
 
 inline bool connected() { return S().up; }
 inline IPAddress remote() { return S().remote; }
@@ -171,9 +219,9 @@ inline bool tryAddress(const char* ipStr, uint16_t port, const char* how) {
     State& s = S();
     IPAddress ip;
     if (!parseIp(ipStr, ip)) return false;
-    if (!tcpProbe(ip, port, kProbeMs)) return false;
+    if (!tcpProbe(ip, port, kProbeMs)) { note("%s:%u (%s): nothing listening", ipStr, (unsigned)port, how); return false; }
     s.attempts++;
-    Serial.printf("[BRAIN] dialling %s:%u (%s)\n", ipStr, (unsigned)port, how);
+    note("dialling %s:%u (%s)", ipStr, (unsigned)port, how);
     s.ws.disconnect();
     s.ws.begin(ip, port, "/nodelink");
     const uint32_t t0 = millis();
@@ -183,6 +231,7 @@ inline bool tryAddress(const char* ipStr, uint16_t port, const char* how) {
     }
     if (!s.ws.isConnected()) {
         s.ws.disconnect();
+        note("%s:%u did not upgrade within %lu ms", ipStr, (unsigned)port, (unsigned long)kConnectMs);
         return false;
     }
     s.remote = ip;
@@ -227,7 +276,11 @@ inline void taskFn(void*) {
 
         // Unclaimed: never dial. Pairing is the primary's move; a node that dialled
         // whoever it found would be adopted by the first stranger on the network.
-        if (!owner.length()) { detail::closeUdp(); delay(500); continue; }
+        if (!owner.length()) {
+            static bool said = false;
+            if (!said) { said = true; note("unclaimed - not dialling anyone"); }
+            detail::closeUdp(); delay(500); continue;
+        }
 
         // The primary has dialled US and is linked: that link is the one link.
         if (s.inboundUp && s.inboundUp() && !s.up) { detail::closeUdp(); delay(250); continue; }
@@ -247,10 +300,10 @@ inline void taskFn(void*) {
                 s.ws.sendTXT(f);
             }
             if (!s.ws.isConnected()) {
+                s.ws.disconnect();   // stop the library redialling the same address on its own
                 s.up = false;
                 if (s.onState) s.onState(false);
-                Serial.printf("[BRAIN] link to the primary lost after %lu s\n",
-                              (unsigned long)((millis() - s.joinedAtMs) / 1000UL));
+                note("link to the primary lost after %lu s", (unsigned long)((millis() - s.joinedAtMs) / 1000UL));
                 s.nextTryMs = millis() + 600 + (s.jitter % 900);   // a short drop should heal fast
                 s.backoffMs = kBackoffMinMs;
                 s.rounds = 0;
@@ -281,6 +334,7 @@ inline void taskFn(void*) {
         // 4. the name.
         if (!linked) {
             IPAddress ip = MDNS.queryHost(owner.c_str(), 900);
+            if (!(uint32_t)ip) note("mDNS: %s.local did not answer", owner.c_str());
             if ((uint32_t)ip) {
                 char str[16]; snprintf(str, sizeof(str), "%u.%u.%u.%u", ip[0], ip[1], ip[2], ip[3]);
                 if (strcmp(str, s.cachedIp) != 0 && strcmp(str, s.beaconIp) != 0)
@@ -294,6 +348,7 @@ inline void taskFn(void*) {
         }
 
         if (linked) {
+            note("linked at %u.%u.%u.%u", s.remote[0], s.remote[1], s.remote[2], s.remote[3]);
             detail::closeUdp();
             s.backoffMs = kBackoffMinMs;
             s.rounds = 0;
@@ -312,10 +367,8 @@ inline void taskFn(void*) {
         // asked four times a minute at most, and nine nodes do not queue up together.
         s.nextTryMs = millis() + s.backoffMs + (s.jitter % (s.backoffMs / 4 + 1));
         if (s.backoffMs < kBackoffMaxMs) s.backoffMs = s.backoffMs * 2 > kBackoffMaxMs ? kBackoffMaxMs : s.backoffMs * 2;
-        if (s.attempts % 5 == 1 || s.backoffMs >= kBackoffMaxMs) {
-            Serial.printf("[BRAIN] no primary yet (round %u) — next try in %lu s\n",
-                          (unsigned)s.rounds, (unsigned long)((s.nextTryMs - millis()) / 1000UL));
-        }
+        note("no primary yet (round %u) - next try in %lu s", (unsigned)s.rounds,
+             (unsigned long)((s.nextTryMs - millis()) / 1000UL));
     }
 }
 
@@ -338,15 +391,23 @@ inline void begin(const char* nodeId, FrameFn onFrame, StateFn onState, OwnerFn 
             if (st.onFrame) st.onFrame(payload, len);
         }
     });
-    // OURS to retry: the library would redial the same address forever on its own,
-    // and the address may be exactly what is wrong. A huge interval parks it.
-    s.ws.setReconnectInterval(3600000UL);
+    // OURS to retry — but NOT parked with a huge interval, which is what this said
+    // first and what stopped the node ever connecting: loop() refuses to dial until
+    // `millis() - _lastConnectionFail >= _reconnectInterval`, begin() zeroes that
+    // timestamp, and so an interval of an hour meant "no first connection until the
+    // board has been up an hour" (found on the first hardware run, 2026-10-04).
+    // 1 ms makes the first dial immediate. The library would then redial the same
+    // address after a drop, so taskFn() calls disconnect() the moment it sees one.
+    s.ws.setReconnectInterval(1);
     // The node watches the primary, as the primary has always watched its nodes: two
     // missed pongs and the socket is declared dead, which hands control back to the
     // seeking above. (The primary's AsyncWebSocket answers a ping on its own.)
     s.ws.enableHeartbeat(topo::nodelink::kPingIntervalMs, topo::nodelink::kPongTimeoutMs, 2);
 
-    xTaskCreate(taskFn, "brainlink", 8192, nullptr, 1, nullptr);
+    // 10 KB: the frame handler runs on this task and a CONFIG with four sensors left only
+    // 2.4 KB free of 8 KB on the first hardware run (2026-10-04).
+    xTaskCreate(taskFn, "brainlink", 10240, nullptr, 1, &s.task);
+    note("started; owner '%s', cached address '%s'", owner ? owner().c_str() : "", s.cachedIp);
 }
 
 } // namespace brainlink
