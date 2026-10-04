@@ -217,15 +217,18 @@ personality that existed only because a CT, a 315 MHz transmitter and two fob
 servos would not fit beside four servo channels. Dropping to THREE channels
 moves the transmitter to D10, gives every pad exactly one owner, and lets one
 pin map serve every PWM board — so a board at the collector is an ordinary
-primary or an ordinary node that a LAYOUT points at a bin, a clamp and a remote,
-which is what "a board is not a collector node, it is a board that happens to be
-near a bin" said before the pin budget overruled it. `dev.sh --collector` still
+primary or an ordinary node that a LAYOUT points at a bin, a clamp and a remote —
+**in intent: today only a primary can carry the bin sensor and the RF remote, a node
+only the clamp** — which is what "a board is not a collector node, it is a board that
+happens to be near a bin" said before the pin budget overruled it. `dev.sh --collector` still
 parses and now only prints. The cost is the fourth gate channel, and the model
 that replaced it wants ONE SELECTOR PER BOARD anyway.
 
 **One board, two roles.** Same board, same carrier, same pin map; the difference
 is `build_src_filter` and `-DDUSTGATE_SECONDARY`. Both roles are proven on
 hardware, including NodeLink between them and a real tool opening its gate.
+The roles are not symmetrical in what they can carry: the bin sensor and the RF
+transmitter are primary-only (see "The collector gets its own board" below).
 
 **PWM servos and a serial bus never share a board.** The slider gets dedicated
 hardware that rides along with it. `config.h` `#error`s if a pin map claims both,
@@ -374,6 +377,13 @@ These are decided; don't relitigate them in code review or suggestions.
   analog pad a CT wants), so bin-level and RF-transmit could not coexist while
   both wanting to sit three feet from each other. A board driving no gates has
   the whole PWM block free. `docs/tool-sensing-rfc.md` §6.2.
+
+  ⚠️ **THAT IS THE DESIGN, NOT YET THE FACT (corrected 2026-10-04).** Today the RF
+  transmitter and the bin sensor work only on a PRIMARY: both live in `firmware.ino`,
+  `node/dustgate_node.cpp` has neither, and NodeLink has no frame to press the remote
+  or to report bin state. Only the clamp works on a node. A board at the collector is
+  therefore a primary until those two move out and get frames (TODO.md, "A collector
+  cannot run as a node yet"). Do not describe the collector as node-capable.
 
 - **A machine is ONE box, however many ports it has.** A second pickup — an
   overarm guard, a hood — is a differently-shaped inlet on that same box (square =
