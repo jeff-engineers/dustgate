@@ -329,6 +329,11 @@ bool HttpApiServer::begin() {
     // ---------------------------------------------------------------------
     _nodeWs.onEvent([this](AsyncWebSocket*, AsyncWebSocketClient* client,
                            AwsEventType type, void* arg, uint8_t* data, size_t len) {
+        // A node that dialled US, or a pong to our ping of one — see setNodeEventHook().
+        if (_nodeHook) {
+            const bool mine = _nodeHook(client, type, arg, data, len);
+            if (mine && type != WS_EVT_CONNECT) return;
+        }
         if (type == WS_EVT_CONNECT) {
             _nodeLinkClients.fetch_add(1);
             DEBUG_PRINTLN(F("[NODE] Primary connected."));

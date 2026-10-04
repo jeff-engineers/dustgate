@@ -192,6 +192,19 @@ public:
     // main loop uses it to know it's acting as a secondary right now.
     bool nodeLinkConnected() const { return _nodeLinkClients.load() > 0; }
 
+    // Node-initiated links (2026-10-04): a node that DIALS this primary arrives on the
+    // same /nodelink listener a primary-as-node uses. The sketch owns what a JOIN
+    // means (which bus it binds to), so the listener offers it every event first.
+    // Return true to say "mine — do not run the primary-as-node handling". For
+    // CONNECT it is ignored (nobody knows yet whose socket it is); for DISCONNECT/ERROR
+    // true means the socket was a node's, so it must not be subtracted from the
+    // primary-as-node client count it was never added to (see adjustNodeLinkClients).
+    using NodeEventHook = bool (*)(AsyncWebSocketClient*, AwsEventType, void*, uint8_t*, size_t);
+    void setNodeEventHook(NodeEventHook h) { _nodeHook = h; }
+    AsyncWebSocket* nodeSocket() { return &_nodeWs; }
+    // A JOIN claims a socket that CONNECT already counted as a primary connecting.
+    void adjustNodeLinkClients(int d) { _nodeLinkClients.fetch_add(d); }
+
     // ------------------------------------------------------------------
     // Node discovery + link state (the primary side of Stage 4)
     // ------------------------------------------------------------------
@@ -425,6 +438,7 @@ private:
     // The window is tiny and NodeLink connections are rare, which is precisely
     // what would have made this miserable to find on a bench.
     std::atomic<int>          _nodeLinkClients{0};
+    NodeEventHook             _nodeHook = nullptr;
     bool                      _nodeSetPending  = false;
     topo::nodelink::SetCommand _nodeSetCmd;
 

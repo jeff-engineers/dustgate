@@ -150,6 +150,8 @@ const OTA_STATES = ['start', 'progress', 'done', 'fail'];
  * ⚠️ JS↔C++ PAIR — `kMaxWhereIpLen`, `kRefuseReasons` in firmware/control/NodeLink.h.
  */
 const MAX_WHERE_IP_LEN = 15;
+/** The UDP port a primary broadcasts "DGB1|<primaryId>|<ip>|<port>" on. ⚠️ JS↔C++ PAIR — `kBeaconPort`. */
+const BEACON_PORT = 41234;
 const REFUSE_REASONS = ['not-paired', 'duplicate', 'busy'];
 
 /** Reconnect backoff for a primary that can't reach a secondary. */
@@ -779,7 +781,7 @@ module.exports = {
   SENSE_REPEAT_MS, SENSE_STALE_MS, MAX_SENSORS_PER_NODE,
   MAX_PLUG_THRESHOLD_W, MAX_PLUG_WATTS, MAX_PLUG_IP_LEN, PLUG_KINDS, pollsPlugs,
   MAX_RST_LEN, MAX_OTA_PATH, MIN_OTA_BYTES, MAX_OTA_BYTES, OTA_STATES,
-  MAX_WHERE_IP_LEN, REFUSE_REASONS, dialsIn, join, refuse, where,
+  MAX_WHERE_IP_LEN, BEACON_PORT, REFUSE_REASONS, dialsIn, join, refuse, where,
   hello, welcome, withBootInfo, set, config, ack, state, sense, ping, pong, ota, otaState, welcomeAccepted, clampsOn,
   validateFrame,
 };

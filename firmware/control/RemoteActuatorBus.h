@@ -31,6 +31,7 @@
 #include "ActuatorBus.h"
 #include "NodeLink.h"
 #include <WebSocketsClient.h>
+#include <ESPAsyncWebServer.h>   // the socket a node-initiated link arrives on
 
 namespace topo {
 
@@ -92,11 +93,33 @@ public:
     // asks twice". Takes effect on the next connect and is cleared once used.
     void requestTakeover() { _takeover = true; }
 
+    // --- node-initiated links (2026-10-04) ----------------------------------
+    // The node dialled US (a JOIN on the primary's /nodelink listener). Bind that
+    // socket as this bus's transport and let the legacy dial stand down. False
+    // when a link is already up and fresh — the node is refused as a DUPLICATE
+    // rather than allowed to replace a healthy one. On true, `helloOut` holds the
+    // HELLO to send: it carries our claim, built the way the dial-out path builds it.
+    bool attachInbound(AsyncWebSocketClient* c, String& helloOut);
+    // The socket closed. A no-op if it was not this bus's.
+    void detachInbound(uint32_t clientId);
+    bool ownsInbound(uint32_t clientId) const { return _inId != 0 && _inId == clientId; }
+    // A frame from the node on that socket — the same frames the dial-out path
+    // receives, handled by the same code.
+    void onInboundFrame(const char* json, size_t len) { handleFrame(json, len); }
+    // The node answered our WebSocket ping: liveness, as PONG is on the dial-out path.
+    void onInboundPong();
+    // Does this node say it dials in (WELCOME caps.join)? Read by the sketch to
+    // decide whether the dial-out path still has a job.
+    bool dialsIn() const { return _capJoin > 0; }
+    bool inboundUp() const { return _inId != 0; }
+
     // --- ActuatorBus ------------------------------------------------------
     bool online() const override;
     bool busy()   const override;
     bool setState(const char* selectorId, JsonObjectConst sel, const char* stateId) override;
-    void update() override {}   // all pumping happens on the WS task
+    // Dial-out links are pumped on their own task; a node-initiated link has no task,
+    // so its frames go out from here, on the main loop, and its ping with them.
+    void update() override;
 
     // --- Setup-time jog ---------------------------------------------------
     // Drive one channel to an absolute angle, outside any routing decision, so
@@ -202,6 +225,12 @@ private:
     void onEvent(WStype_t type, uint8_t* payload, size_t len);
     void handleFrame(const char* json, size_t len);
     void sendJson(const JsonDocument& doc);
+    // The "socket went away" bookkeeping, shared by both transports.
+    void markDown(bool wasUp);
+    // Build the HELLO (our claim) — one-shot takeover consumed here.
+    void buildHelloString(String& out);
+    // Write any pending SET / CONFIG / OTA to the INBOUND socket. Main loop only.
+    void pumpInbound();
     // Grow the reconnect interval toward kReconnectMaxMs. See the definition —
     // its absence is what let a retry storm exhaust a node's WebSocket slots.
     void _backoff();
@@ -318,6 +347,14 @@ private:
     int      _capLinear    = 0;
     int      _capClamps    = 0;   // caps.ct — how many CTs this board says it has
     int      _capPlugs     = 0;   // caps.plug — 1 if it polls plugs for us; absent = 0
+    int      _capJoin      = 0;   // caps.join — 1 if it dials us itself; absent = 0
+
+    // The socket a node-initiated link arrived on. Set on the async_tcp task by the
+    // JOIN, read by the main loop; the id is the handle, the pointer only used while
+    // the id still matches.
+    AsyncWebSocketClient* volatile _inClient = nullptr;
+    volatile uint32_t     _inId       = 0;
+    uint32_t              _lastPingMs = 0;
 };
 
 } // namespace topo
