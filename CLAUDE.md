@@ -16,7 +16,8 @@ booting, joining NodeLink, and reporting itself correctly to the UI**.
 through a **discrete 4N35** (not the PC817 breakout the docs specified for weeks:
 it measured 4 V on its output, above a C5 GPIO's absolute maximum), with the
 existing 12 V green pilot and red strobe left wired to the sensor. That is the
-first collector-board capability proven on real hardware. `firmware/WIRING.md#9-bin-sensor` §2.
+first collector-board capability proven on real hardware — **on a PRIMARY**: the
+bin read lives in `firmware.ino`, and a node has no bin sensor yet. `firmware/WIRING.md#9-bin-sensor` §2.
 
 **A CT starts the collector and moves a gate, confirmed 2026-09-18 — the whole
 sensing chain, end to end, on real hardware.** A clamp on a node reads a running
