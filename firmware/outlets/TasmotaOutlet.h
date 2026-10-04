@@ -92,6 +92,9 @@ public:
     // caller must not turn that into permission to take the plug. Same rule
     // readPushConfig() states for Shelly, and for the same reason.
     bool readOwner(String& out, uint32_t timeoutMs = OUTLET_RPC_WRITE_TIMEOUT_MS);
+    // Mem1, not a push config — the weaker, advisory claim plugclaim::decideMarker() documents.
+    bool readClaim(const char* ourHost, const char* deviceName, const char* ourName,
+                   plugclaim::Claim& out, String* pushUrl = nullptr) override;
 
     // Write Mem1. Pass "" to release — Tasmota clears a Mem to empty when given
     // the literal `"` (an empty quoted string), which is what release() sends.

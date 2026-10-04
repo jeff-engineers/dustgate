@@ -2149,25 +2149,13 @@ static void describeOutletInto(JsonObject o, const char* ip, const char* mdnsHos
     // someone picks from — a plug that belongs to another brain has to arrive
     // already labelled, not fail mysteriously after being chosen.
     plugclaim::Claim claim;
-    bool claimKnown = false;
-    if (isTasmota) {
-        // Mem1, not a push config — see plugclaim::decideMarker(). WEAKER than
-        // the Shelly claim in two ways that are written down there: it is
-        // advisory rather than enforced, and no `foreign` state is reachable
-        // because a system that merely POLLS this plug leaves no trace for us
-        // to find.
-        String marker;
-        claimKnown = ok && tasProbe.readOwner(marker);
-        if (claimKnown)
-            claim = plugclaim::decideMarker(marker.c_str(), control.ourName());
-    } else {
-        String wsServer; bool wsEnabled = false;
-        claimKnown = ok && shellyProbe.readPushConfig(wsServer, wsEnabled);
-        if (claimKnown)
-            claim = plugclaim::decide(wsServer.c_str(), wsEnabled,
-                                      control.ourHost(), devName.c_str(),
-                                      control.ourName());
-    }
+    // One call for both protocols — SmartOutlet::readClaim(). A Tasmota's claim is Mem1, WEAKER
+    // than a Shelly's in two ways written down at plugclaim::decideMarker(): advisory rather than
+    // enforced, and no `foreign` state is reachable because a system that merely POLLS this plug
+    // leaves no trace for us to find.
+    const bool claimKnown = ok && (isTasmota
+        ? tasProbe.readClaim(control.ourHost(), devName.c_str(), control.ourName(), claim)
+        : shellyProbe.readClaim(control.ourHost(), devName.c_str(), control.ourName(), claim));
 
     // A Tasmota's MAC, so a layout can find the plug again when its address
     // changes (control/OutletRelocate.h). Normalised on the way out, so the app
@@ -2521,29 +2509,17 @@ static void handleOutletRenameRequest() {
             DEBUG_PRINTLN(F(" is not answering on either protocol — name unchanged."));
         } else {
             String  devName;
-            bool    claimKnown = false;
             plugclaim::Claim claim;
+            bool    claimKnown = false;
 
             if (isTasmota) {
-                // Mem1, not a push config — the same weaker claim
-                // plugclaim::decideMarker() documents. A Tasmota's name is
-                // its DeviceName rather than anything mDNS advertises,
-                // which matters here because a swept plug has no hostname
-                // at all.
+                // A Tasmota's name is its DeviceName rather than anything mDNS advertises, which
+                // matters here because a swept plug has no hostname at all.
                 tasPlug.readName(devName);
-                String marker;
-                claimKnown = tasPlug.readOwner(marker);
-                if (claimKnown)
-                    claim = plugclaim::decideMarker(marker.c_str(), control.ourName());
+                claimKnown = tasPlug.readClaim(control.ourHost(), devName.c_str(), control.ourName(), claim);
             } else {
-                String wsServer; bool wsEnabled = false;
                 devName    = fetchShellyDeviceName(nameIp, 2);
-                claimKnown = shellyPlug.readPushConfig(wsServer, wsEnabled);
-                if (claimKnown) {
-                    claim = plugclaim::decide(wsServer.c_str(), wsEnabled,
-                                              control.ourHost(), devName.c_str(),
-                                              control.ourName());
-                }
+                claimKnown = shellyPlug.readClaim(control.ourHost(), devName.c_str(), control.ourName(), claim);
             }
 
             // Same rule that governs repointing, applied to the name: never

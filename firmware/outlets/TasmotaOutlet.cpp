@@ -382,3 +382,13 @@ bool TasmotaOutlet::release() {
 }
 
 #endif  // CONTROL_SMART_OUTLET
+
+
+bool TasmotaOutlet::readClaim(const char* /*ourHost*/, const char* /*deviceName*/, const char* ourName,
+                              plugclaim::Claim& out, String* pushUrl) {
+    String marker;
+    if (!readOwner(marker)) return false;
+    out = plugclaim::decideMarker(marker.c_str(), ourName ? ourName : "");
+    if (pushUrl) *pushUrl = "";
+    return true;
+}

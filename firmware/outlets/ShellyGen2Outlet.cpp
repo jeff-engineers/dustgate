@@ -182,6 +182,17 @@ bool ShellyGen2Outlet::readPushConfig(String& outServer, bool& outEnabled, uint3
     return true;
 }
 
+// The claim, read and decided in one call — SmartOutlet::readClaim().
+bool ShellyGen2Outlet::readClaim(const char* ourHost, const char* deviceName, const char* ourName,
+                                 plugclaim::Claim& out, String* pushUrl) {
+    String server; bool enabled = false;
+    if (!readPushConfig(server, enabled)) return false;
+    out = plugclaim::decide(server.c_str(), enabled, ourHost ? ourHost : "", deviceName ? deviceName : "",
+                            ourName ? ourName : "");
+    if (pushUrl) *pushUrl = server;
+    return true;
+}
+
 // Ws.SetConfig — tell the plug to open (and keep) an outbound WebSocket to us,
 // so it pushes status changes instead of us polling it.
 //

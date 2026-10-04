@@ -40,6 +40,8 @@ public:
     // Returns false if the plug didn't answer or the response didn't parse —
     // which is NOT "unclaimed". A read failure means we don't know, and the
     // caller must not turn that into permission to steal.
+    bool        readClaim(const char* ourHost, const char* deviceName, const char* ourName,
+                          plugclaim::Claim& out, String* pushUrl = nullptr) override;
     bool        readPushConfig(String& outServer, bool& outEnabled,
                                uint32_t timeoutMs = OUTLET_RPC_WRITE_TIMEOUT_MS);
 
