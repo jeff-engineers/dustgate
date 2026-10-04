@@ -1180,6 +1180,34 @@ void HttpApiServer::registerRoutes() {
         }
     );
 
+    // DELETE /api/topology — reset the layout (Settings -> Danger zone). Removes the
+    // stored document and tells the loop to re-adopt, which with no layout clears
+    // the runtime ("NO SHOP"). Pairing and plugs' claims are NOT touched: boards stay
+    // linked, and the same layout can be drawn again or restored from a saved copy.
+    _server.on("/api/topology", HTTP_DELETE, [this](AsyncWebServerRequest* req) {
+        if (!checkAuth(req)) return;
+        if (!g_topoStore.clear()) { sendError(req, 500, "could not remove the layout"); return; }
+        DEBUG_PRINTLN(F("[API] topology reset"));
+        xSemaphoreTake(_mutex, portMAX_DELAY);
+        _topoChangedPending = true;
+        xSemaphoreGive(_mutex);
+        sendOk(req);
+    });
+
+    // POST /api/reset-all — forget the layout AND every paired board and plug
+    // (Settings -> Danger zone). Keeps what makes the board reachable and safe to
+    // use: WiFi credentials, the API key, and servo/slider calibration. The boards
+    // themselves still remember who owns them, so re-pairing the same brain needs
+    // no takeover.
+    _server.on("/api/reset-all", HTTP_POST, [this](AsyncWebServerRequest* req) {
+        if (!checkAuth(req)) return;
+        DEBUG_PRINTLN(F("[API] reset everything requested"));
+        xSemaphoreTake(_mutex, portMAX_DELAY);
+        _resetAllPending = true;
+        xSemaphoreGive(_mutex);
+        sendOk(req);
+    });
+
     // Mirrors statusView() in shared/device-model/topology-device.js so the Live
     // view's getStatus() gets the shape it already consumes:
     //   { actuators, tools, collectorOn, conflicts, reachable }
@@ -2353,6 +2381,14 @@ bool HttpApiServer::otaRebootDue() {
 }
 
 bool HttpApiServer::otaInProgress() { return s_otaBusy; }
+
+bool HttpApiServer::consumeResetAll() {
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    const bool any = _resetAllPending;
+    _resetAllPending = false;
+    xSemaphoreGive(_mutex);
+    return any;
+}
 
 bool HttpApiServer::consumeNodeUpdate(String& id) {
     xSemaphoreTake(_mutex, portMAX_DELAY);

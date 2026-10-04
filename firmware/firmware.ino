@@ -565,6 +565,7 @@ static const bool kRackPresent = (HAS_LINEAR != 0);
 void startHoming();
 #ifdef ENABLE_HTTP_API
 static void startNodeUpdate(const char* id);
+static void resetEverything();
 #endif
 void setHomedLeft(bool homedLeft);
 
@@ -2698,6 +2699,7 @@ void loop() {
         String want;
         if (apiServer.consumeNodeUpdate(want)) startNodeUpdate(want.c_str());
     }
+    if (apiServer.consumeResetAll()) resetEverything();
 #endif
     if (g_topoRuntime.loaded()) {
 #ifdef CONTROL_SMART_OUTLET
@@ -4619,6 +4621,23 @@ void loop() {
     // finished settling, not the one it started with.
     updateStatusLed();
 }
+
+// Settings -> Danger zone -> "Reset everything". The layout, every paired board
+// and every paired plug and collector plug go; WiFi, the API key and calibration
+// stay. Runs on the main loop because it owns the registry, the links and the
+// outlet list.
+#ifdef ENABLE_HTTP_API
+static void resetEverything() {
+    Serial.println(F("[RESET] forgetting the layout, every paired board and every plug"));
+    g_topoStoreSketch.clear();
+    while (g_nodeRegistry.count() > 0) g_nodeRegistry.remove(g_nodeRegistry.host(0));
+#ifdef CONTROL_SMART_OUTLET
+    control.clearAllOutlets();
+#endif
+    adoptStoredTopology();                 // no layout: clears the runtime and aliases
+    syncPairedNodes(WiFiProvisioner::getHostname().c_str());   // no pairings: stops every link
+}
+#endif
 
 // =============================================================================
 // startNodeUpdate — the user tapped "update" on a board (POST /api/nodes/update).
