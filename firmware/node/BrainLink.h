@@ -47,6 +47,7 @@ namespace brainlink {
 static const uint32_t kBeaconStaleMs  = 40000;   // a beacon older than this is not a lead
 static const uint32_t kBackoffMinMs   = 1500;
 static const uint32_t kBackoffMaxMs   = 20000;
+static const uint32_t kHeldMs         = 10000;   // a link that lasts this long counts as having worked
 static const uint32_t kProbeMs        = 400;     // is anything listening at this address?
 static const uint32_t kConnectMs      = 4000;    // from begin() to an open, upgraded socket
 static const uint32_t kSweepEveryMs   = 120000;  // the floor is slow on purpose
@@ -304,9 +305,19 @@ inline void taskFn(void*) {
                 s.up = false;
                 if (s.onState) s.onState(false);
                 note("link to the primary lost after %lu s", (unsigned long)((millis() - s.joinedAtMs) / 1000UL));
-                s.nextTryMs = millis() + 600 + (s.jitter % 900);   // a short drop should heal fast
-                s.backoffMs = kBackoffMinMs;
-                s.rounds = 0;
+                // A link that held is a healthy one that dropped: heal fast. A link that
+                // was refused (REFUSE closes at once) or did not survive its handshake is
+                // a FAILED attempt, and treating it as success is how a refused node
+                // redialled every 1.5 s for as long as the primary kept refusing it.
+                if (millis() - s.joinedAtMs >= kHeldMs) {
+                    s.nextTryMs = millis() + 600 + (s.jitter % 900);
+                    s.backoffMs = kBackoffMinMs;
+                    s.rounds = 0;
+                } else {
+                    s.nextTryMs = millis() + s.backoffMs + (s.jitter % (s.backoffMs / 4 + 1));
+                    s.backoffMs = s.backoffMs * 2 > kBackoffMaxMs ? kBackoffMaxMs : s.backoffMs * 2;
+                    if (s.rounds < 250) s.rounds++;
+                }
             }
             delay(5);
             continue;
@@ -350,8 +361,8 @@ inline void taskFn(void*) {
         if (linked) {
             note("linked at %u.%u.%u.%u", s.remote[0], s.remote[1], s.remote[2], s.remote[3]);
             detail::closeUdp();
-            s.backoffMs = kBackoffMinMs;
-            s.rounds = 0;
+            // NOT reset here: the backoff only resets once the link has HELD (above) — a
+            // socket that upgrades and is then refused is not yet a success.
             // The address that WORKED is the one worth keeping.
             char str[16]; snprintf(str, sizeof(str), "%u.%u.%u.%u", s.remote[0], s.remote[1], s.remote[2], s.remote[3]);
             if (strcmp(str, s.cachedIp) != 0) {
