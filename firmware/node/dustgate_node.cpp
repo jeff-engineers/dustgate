@@ -1408,6 +1408,10 @@ void setup() {
     nodeWs.onEvent(onNodeWsEvent);
     server.addHandler(&nodeWs);
     server.begin();
+    // What the link task is doing, over the network — a node's serial is rarely attached.
+    server.on("/api/brainlink", HTTP_GET, [](AsyncWebServerRequest* req) {
+        req->send(200, "application/json", brainlink::statusJson());
+    });
     // After the listener: a node that is owned dials its primary from here on.
     brainlink::begin(WiFiProvisioner::getHostname().c_str(), onBrainFrame, onBrainState,
                      ownerNow, inboundOwnerUp);
