@@ -43,9 +43,9 @@
 const NODELINK_VERSION = 1;
 
 /** Frame types, primary → secondary. */
-const P2S = ['HELLO', 'SET', 'CONFIG', 'PING', 'OTA'];
+const P2S = ['HELLO', 'SET', 'CONFIG', 'PING', 'OTA', 'REFUSE', 'WHERE'];
 /** Frame types, secondary → primary. */
-const S2P = ['WELCOME', 'ACK', 'STATE', 'SENSE', 'PONG', 'OTASTATE'];
+const S2P = ['WELCOME', 'ACK', 'STATE', 'SENSE', 'PONG', 'OTASTATE', 'JOIN'];
 
 // CONFIG and SENSE were added 2026-09-14 WITHOUT bumping NODELINK_VERSION, and
 // that is deliberate rather than an oversight. Both ends ignore a frame type
@@ -123,6 +123,34 @@ const MAX_OTA_PATH = 48;
 const MIN_OTA_BYTES = 100 * 1024;
 const MAX_OTA_BYTES = 0x1E0000;
 const OTA_STATES = ['start', 'progress', 'done', 'fail'];
+
+/**
+ * NODE-INITIATED LINKS (2026-10-04) — JOIN, REFUSE, WHERE and `caps.join`.
+ *
+ * Until now the primary dialled every node, which cost it one task and ~7-10 KB
+ * per node and failed whenever the path worked in one direction only. Now the
+ * NODE dials the primary and the primary just listens:
+ *
+ *   node → JOIN {nodeId}            first frame on a node-initiated socket
+ *   primary → HELLO (as always)     if it has that node paired, else
+ *   primary → REFUSE {reason}       and closes
+ *   node → WELCOME (as always)      the claim is still decided ON THE NODE
+ *
+ * and everything after the WELCOME is the frames it always was. A primary that
+ * wants a node that is down sends WHERE on a short-lived connection to the node's
+ * own listener — "I am at <ip>:<port>, come and find me" — and hangs up, so
+ * seeking costs it a transient rather than a resident socket per node.
+ *
+ * NOT A VERSION BUMP, same reasoning as CONFIG and SENSE above: every frame here
+ * is new and an old end ignores a type it does not know, so the four pairings of
+ * old and new all degrade to the link that already worked (the primary dials).
+ * `caps.join` is how a primary learns that a node will dial in, so it can stop
+ * dialling it; absent means NO, so a board that predates it is dialled as before.
+ *
+ * ⚠️ JS↔C++ PAIR — `kMaxWhereIpLen`, `kRefuseReasons` in firmware/control/NodeLink.h.
+ */
+const MAX_WHERE_IP_LEN = 15;
+const REFUSE_REASONS = ['not-paired', 'duplicate', 'busy'];
 
 /** Reconnect backoff for a primary that can't reach a secondary. */
 const RECONNECT_MIN_MS = 1000;
@@ -254,6 +282,20 @@ function hello(primaryId, nodeId, takeover = false) {
 }
 function ping() {
   return { t: 'PING' };
+}
+
+/** A node dialling its primary. The only thing the primary needs is who is knocking. */
+function join(nodeId) {
+  return { t: 'JOIN', v: NODELINK_VERSION, nodeId };
+}
+/** The primary declining a node-initiated socket, then closing it. */
+function refuse(reason) {
+  return { t: 'REFUSE', reason };
+}
+/** "The primary <primaryId> is at <ip>:<port> now" — a node acts on it only if
+ *  `primaryId` is its OWNER; the claim check still decides every command. */
+function where(primaryId, ip, port = 80) {
+  return { t: 'WHERE', primaryId, ip, port };
 }
 
 /**
@@ -433,6 +475,10 @@ const clampsOn = (w) => (w && w.caps && typeof w.caps.ct === 'number') ? w.caps.
  *  flashed before 2026-10-03 stays brain-polled rather than being handed a CONFIG
  *  it would refuse whole (and its clamp with it). */
 const pollsPlugs = (w) => !!(w && w.caps && w.caps.plug === 1);
+
+/** Will this board dial its primary itself? Absent means NO — every board flashed
+ *  before 2026-10-04 is still dialled, which is the link that already worked. */
+const dialsIn = (w) => !!(w && w.caps && w.caps.join === 1);
 function ack(seq, ok, err) {
   const f = { t: 'ACK', seq, ok: !!ok };
   if (err) f.err = err;
@@ -568,6 +614,9 @@ function validateFrame(f, direction) {
       if (f.caps && f.caps.plug !== undefined && f.caps.plug !== 0 && f.caps.plug !== 1) {
         errs.push('WELCOME.caps.plug must be 0 or 1');
       }
+      if (f.caps && f.caps.join !== undefined && f.caps.join !== 0 && f.caps.join !== 1) {
+        errs.push('WELCOME.caps.join must be 0 or 1');
+      }
       if (f.claimedBy !== undefined && typeof f.claimedBy !== 'string') {
         errs.push('WELCOME.claimedBy must be a string');
       }
@@ -586,6 +635,20 @@ function validateFrame(f, direction) {
       if (f.rst !== undefined && (typeof f.rst !== 'string' || f.rst.length > MAX_RST_LEN)) {
         errs.push(`WELCOME.rst must be a string of at most ${MAX_RST_LEN} chars`);
       }
+      break;
+    case 'JOIN':
+      if (f.v !== NODELINK_VERSION) errs.push(`JOIN.v ${f.v} != ${NODELINK_VERSION}`);
+      str('nodeId');
+      break;
+    case 'REFUSE':
+      if (!REFUSE_REASONS.includes(f.reason)) errs.push(`REFUSE.reason must be one of ${REFUSE_REASONS.join('|')}`);
+      break;
+    case 'WHERE':
+      str('primaryId');
+      if (typeof f.ip !== 'string' || !/^\d{1,3}(\.\d{1,3}){3}$/.test(f.ip) || f.ip.length > MAX_WHERE_IP_LEN) {
+        errs.push('WHERE.ip must be a dotted quad');
+      }
+      num('port', 1, 65535);
       break;
     case 'SET':
       num('seq', 0, Number.MAX_SAFE_INTEGER);
@@ -716,6 +779,7 @@ module.exports = {
   SENSE_REPEAT_MS, SENSE_STALE_MS, MAX_SENSORS_PER_NODE,
   MAX_PLUG_THRESHOLD_W, MAX_PLUG_WATTS, MAX_PLUG_IP_LEN, PLUG_KINDS, pollsPlugs,
   MAX_RST_LEN, MAX_OTA_PATH, MIN_OTA_BYTES, MAX_OTA_BYTES, OTA_STATES,
+  MAX_WHERE_IP_LEN, REFUSE_REASONS, dialsIn, join, refuse, where,
   hello, welcome, withBootInfo, set, config, ack, state, sense, ping, pong, ota, otaState, welcomeAccepted, clampsOn,
   validateFrame,
 };

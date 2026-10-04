@@ -1399,6 +1399,41 @@ int main(int argc, char** argv) {
       ok("a long reason is cut to 64", std::string(st4["err"] | "").size() == 64);
     }
 
+    // ── join: a node dials its primary (JOIN, REFUSE, WHERE, caps.join) ───────
+    // PAIR: nodelink.test.js's "node-initiated links" block — same cases, same order.
+    {
+      using namespace topo::nodelink;
+      StaticJsonDocument<128> j;
+      buildJoin(j.to<JsonObject>(), "dustgate-planer");
+      ok("a JOIN carries the node and the version",
+         std::string(j["t"] | "") == "JOIN" && std::string(j["nodeId"] | "") == "dustgate-planer" && (j["v"] | 0) == 1);
+      ok("the address bound", kMaxWhereIpLen == 15);
+      ok("REFUSE not-paired is a reason",  isRefuseReason("not-paired"));
+      ok("REFUSE duplicate is a reason",   isRefuseReason("duplicate"));
+      ok("REFUSE busy is a reason",        isRefuseReason("busy"));
+      ok("a reason nobody defined is refused", !isRefuseReason("go-away"));
+
+      auto whereOk = [&](const char* ip, int port, const char* pid = "dustgate") {
+        StaticJsonDocument<192> w;
+        buildWhere(w.to<JsonObject>(), pid, ip, port);
+        WhereOrder o; const char* e = nullptr;
+        return parseWhereFrame(w.as<JsonObjectConst>(), o, e);
+      };
+      ok("a WHERE parses",                          whereOk("192.168.86.46", 80));
+      ok("a name where an address belongs is refused", !whereOk("dustgate.local", 80));
+      ok("a port of 0 is refused",                  !whereOk("192.168.86.46", 0));
+      ok("a port past 65535 is refused",            !whereOk("192.168.86.46", 65536));
+      ok("a WHERE with no primary is refused",      !whereOk("192.168.86.46", 80, ""));
+
+      StaticJsonDocument<512> w0;
+      buildWelcome(w0.to<JsonObject>(), "n", "b", "f", 2, 0);
+      ok("a board that says nothing is not dialling in", !w0["caps"].containsKey("join"));
+      StaticJsonDocument<512> w1;
+      buildWelcome(w1.to<JsonObject>(), "n", "b", "f", 2, 0, nullptr, true, 0, false, true);
+      ok("caps.join 1 means it dials in", (w1["caps"]["join"] | 0) == 1);
+      ok("JOIN did not bump the version", kVersion == 1);
+    }
+
   printf("\n%d/%d passed%s\n", passed, passed + failed,
          failed ? (", " + std::to_string(failed) + " FAILED").c_str() : "");
   return failed ? 1 : 0;

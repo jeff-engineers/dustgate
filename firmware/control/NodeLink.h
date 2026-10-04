@@ -69,6 +69,14 @@ static const size_t   kMaxOtaPath  = 48;
 static const uint32_t kMinOtaBytes = 100u * 1024u;
 static const uint32_t kMaxOtaBytes = 0x1E0000u;
 
+// Node-initiated links (JOIN / REFUSE / WHERE). MAX_WHERE_IP_LEN and REFUSE_REASONS in
+// nodelink.js — a PAIR, asserted literally on both sides. parseWhereFrame refuses a
+// bad frame WHOLE, and a node that dropped a WHERE it should have acted on would
+// read as a node that never comes looking for its primary.
+static const size_t kMaxWhereIpLen = 15;
+static const char* const kRefuseReasons[] = { "not-paired", "duplicate", "busy" };
+static const size_t kRefuseReasonCount = 3;
+
 // A move that takes longer than this without a STATE(moving=false) is assumed
 // lost rather than left to wedge the move queue forever. Generously longer than
 // SERVO_SWEEP_MS + SERVO_HOLD_MS, and longer than a full-span rack traverse.
@@ -126,6 +134,22 @@ inline void buildHello(JsonObject out, const char* primaryId, const char* nodeId
 }
 
 inline void buildPing(JsonObject out) { out["t"] = "PING"; }
+
+// REFUSE — the primary declining a node-initiated socket. It closes right after, so
+// the node reads the reason and goes back to waiting rather than hammering.
+inline void buildRefuse(JsonObject out, const char* reason) {
+    out["t"]      = "REFUSE";
+    out["reason"] = reason;
+}
+
+// WHERE — "the primary <primaryId> is at <ip>:<port> now". Sent on a short-lived
+// connection to a node's own listener (nodelink.js where()).
+inline void buildWhere(JsonObject out, const char* primaryId, const char* ip, int port = 80) {
+    out["t"]         = "WHERE";
+    out["primaryId"] = primaryId;
+    out["ip"]        = ip;
+    out["port"]      = port;
+}
 
 // Resolve `sel` + `stateId` into a wire-ready SET. Returns false when the
 // selector CANNOT be resolved — an uncalibrated servo (no referenceAngle) or a
@@ -200,7 +224,7 @@ inline bool buildSetFrame(JsonObject out, uint32_t seq, const char* selectorId,
 inline void buildWelcome(JsonObject out, const char* nodeId, const char* board,
                          const char* fw, int servos, int linear,
                          const char* claimedBy = nullptr, bool accepted = true,
-                         int clamps = 0, bool pollsPlugs = false) {
+                         int clamps = 0, bool pollsPlugs = false, bool dialsIn = false) {
     out["t"]      = "WELCOME";
     out["v"]      = kVersion;
     out["nodeId"] = nodeId;
@@ -213,8 +237,18 @@ inline void buildWelcome(JsonObject out, const char* nodeId, const char* board,
     // would add a field to every board's answer to repeat what silence said.
     if (clamps > 0) caps["ct"] = clamps;
     if (pollsPlugs) caps["plug"] = 1;
+    // `join`: this board dials its primary itself (JOIN). Absent means NO, on both
+    // sides, so a board flashed before 2026-10-04 keeps being dialled.
+    if (dialsIn) caps["join"] = 1;
     if (claimedBy && *claimedBy) out["claimedBy"] = claimedBy;
     if (!accepted) out["accepted"] = false;
+}
+
+// JOIN — a node dialling its primary. The primary needs only to know who is knocking.
+inline void buildJoin(JsonObject out, const char* nodeId) {
+    out["t"]      = "JOIN";
+    out["v"]      = kVersion;
+    out["nodeId"] = nodeId;
 }
 
 // A node's own account of its last boot, added to a WELCOME — withBootInfo() in
@@ -614,6 +648,44 @@ inline bool parseOtaFrame(JsonObjectConst f, OtaOrder& out, const char*& err) {
     strlcpy_(out.md5, md5, sizeof(out.md5));
     strlcpy_(out.fw, fw, sizeof(out.fw));
     return true;
+}
+
+// WHERE, parsed. Refuses WHOLE like every frame here, and mirrors validateFrame's
+// `WHERE` case in nodelink.js check for check. The address is checked as a dotted
+// quad of digits only: it is about to be dialled, and a hostname here would be a
+// lookup a network is allowed to block.
+struct WhereOrder {
+    char primaryId[40] = {0};
+    char ip[kMaxWhereIpLen + 1] = {0};
+    int  port = 80;
+};
+
+inline bool parseWhereFrame(JsonObjectConst f, WhereOrder& out, const char*& err) {
+    if (!_eq(f["t"], "WHERE"))             { err = "not a WHERE frame"; return false; }
+    const char* pid = f["primaryId"].as<const char*>();
+    if (!pid || !*pid)                     { err = "missing primaryId"; return false; }
+    const char* ip = f["ip"].as<const char*>();
+    if (!ip || strlen(ip) > kMaxWhereIpLen || !*ip) { err = "bad ip"; return false; }
+    int dots = 0, digits = 0;
+    for (const char* c = ip; *c; ++c) {
+        if (*c == '.') { if (!digits) { err = "bad ip"; return false; } dots++; digits = 0; }
+        else if (*c >= '0' && *c <= '9') { if (++digits > 3) { err = "bad ip"; return false; } }
+        else { err = "bad ip"; return false; }
+    }
+    if (dots != 3 || !digits)              { err = "bad ip"; return false; }
+    if (!f["port"].is<int>())              { err = "port must be a number"; return false; }
+    const int port = f["port"].as<int>();
+    if (port < 1 || port > 65535)          { err = "port out of range"; return false; }
+    strlcpy_(out.primaryId, pid, sizeof(out.primaryId));
+    strlcpy_(out.ip, ip, sizeof(out.ip));
+    out.port = port;
+    return true;
+}
+
+inline bool isRefuseReason(const char* r) {
+    if (!r) return false;
+    for (size_t i = 0; i < kRefuseReasonCount; i++) if (strcmp(r, kRefuseReasons[i]) == 0) return true;
+    return false;
 }
 
 } // namespace nodelink
