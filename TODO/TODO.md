@@ -14,6 +14,20 @@ active sections above them, which is how a parked item stops being read.
 
 ## Bugs
 
+- **Prove node-owned plug polling under a real load (jeff, 2026-10-04 — deferred).**
+  Verified on the bench so far: a Tasmota paired to a tool whose gate is on
+  dustgate-node-1 is handed to that node once the layout is SAVED (the node logs
+  `[PLUG] polling 1 plug(s) for the primary`; before the save its CONFIG said
+  "nothing to watch"), the plug answers (`Power 0`, 117 V), and the brain reads the
+  tool as `watts 0, active false` with no problem raised. NOT yet seen: a load.
+  To do: plug something over the tool's threshold (50 W) into the Tasmota — a
+  hair dryer or heater — and check the node logs `[PLUG] <tool> ON <W>`, the brain's
+  `/api/status` shows the watts and `active: true` (and the node's servo opens the
+  gate), and it goes back to off when the load goes. Then pull the plug from the
+  wall: `plug-unreachable` should reach "Needs attention" after about a minute and
+  the node should log `UNREACHABLE`. Also still to watch: the node's poll cadence
+  with 3-4 plugs and whether the CT's sampling suffers (see the entry below).
+
 - **A tool switched on and then off by hand stays green for several seconds
   (jeff, 2026-10-04).** Suspected to be the collector's coast-down (the blower is
   held on for `offDelayMs` after the last tool stops, so the system treats it as
