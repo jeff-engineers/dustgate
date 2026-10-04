@@ -202,6 +202,16 @@ export interface NodeLinkState {
    *  has not put a clamp on this board — which is a different thing from a
    *  clamp that is wired and silent, and the screen has to say which. */
   sense?: SenseReport[];
+  /** The firmware stamp of the image the primary would install on this board, when
+   *  it holds one for this kind of board. `update` is true only when this board is
+   *  up AND runs something else. Both absent = nothing staged (`dev.sh ota`). */
+  image?: string;
+  update?: boolean;
+  /** An update in progress or just finished, as the board reports it:
+   *  start | progress | done | fail. `otaErr` is a sentence for a person. */
+  ota?: 'start' | 'progress' | 'done' | 'fail';
+  otaPct?: number;
+  otaErr?: string;
 }
 
 /** One clamp's live state, from GET /api/nodes.
@@ -838,6 +848,13 @@ export class ApiService {
       ...(name ? { name } : {}),
       ...(takeover ? { takeover: true } : {}),
     });
+  }
+  /** Tell one board to install the firmware image the primary holds. The refusal,
+   *  if any, comes back through getNodes() as `ota: 'fail'` + `otaErr`, because the
+   *  answer depends on the shop (a tool running, a gate moving) at the moment the
+   *  device acts, not at the moment this request lands. */
+  updateNode(id: string): Promise<unknown> {
+    return this.post('/api/nodes/update', { id });
   }
   unpairNode(host: string): Promise<unknown> {
     return this.post('/api/nodes/pair', { host, remove: true });

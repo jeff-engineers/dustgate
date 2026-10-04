@@ -563,6 +563,9 @@ void issueMove(int stop);
 // hasn't got, once per outlet event. Seen on a XIAO C5 primary, 2026-08-22.
 static const bool kRackPresent = (HAS_LINEAR != 0);
 void startHoming();
+#ifdef ENABLE_HTTP_API
+static void startNodeUpdate(const char* id);
+#endif
 void setHomedLeft(bool homedLeft);
 
 // Was the FAR switch already triggered when this sweep began?
@@ -2691,6 +2694,10 @@ void loop() {
     // one-servo-at-a-time current budget (docs/architecture-rfc.md §7).
 #ifdef ENABLE_HTTP_API
     if (apiServer.consumeTopologyChanged()) adoptStoredTopology();
+    {
+        String want;
+        if (apiServer.consumeNodeUpdate(want)) startNodeUpdate(want.c_str());
+    }
 #endif
     if (g_topoRuntime.loaded()) {
 #ifdef CONTROL_SMART_OUTLET
@@ -4490,8 +4497,11 @@ void loop() {
                 // 512 B/node covers the widest case: three 64-char strings that
                 // ArduinoJson COPIES (id/host/name), eight scalars, a caps
                 // object and a sense entry — about 21 slots plus the text.
-                static const size_t kNodeStatusBytes = 512;
-                DynamicJsonDocument nodes(1024 + MAX_SECONDARY_NODES * kNodeStatusBytes);
+                // 768 since the OTA fields (image stamp, ota state, a 64-char reason that
+                // ArduinoJson copies). In PSRAM, not internal heap: at 10 nodes this is
+                // ~9 KB, built four times a second, on a board with ~30 KB to spare.
+                static const size_t kNodeStatusBytes = 768;
+                BigJsonDocument nodes(1024 + MAX_SECONDARY_NODES * kNodeStatusBytes);
                 JsonArray arr = nodes.createNestedArray("nodes");
                 for (int i = 0; i < g_remoteCount; i++) {
                     if (!remoteLive(i)) continue;
@@ -4514,6 +4524,23 @@ void loop() {
                     // state rather than a feature nobody switched on.
                     if (n.capClamps > 0) caps["ct"] = n.capClamps;
                     topo::addSenseArray(o, g_remoteBuses[i]);
+                    // OTA: which image this primary would install, whether the node
+                    // already has it, and how an update in progress is going. The
+                    // image is picked by what the board DRIVES (a slider is a
+                    // different program from a PWM bank), and `update` is only ever
+                    // true for a board that is up to be told.
+                    {
+                        const HttpApiServer::NodeImage img = HttpApiServer::nodeImage(n.capLinear > 0 ? 1 : 0);
+                        if (img.present) {
+                            o["image"]  = img.fw;
+                            o["update"] = n.connected && strcmp(n.fw, img.fw) != 0;
+                        }
+                        if (n.ota[0]) {
+                            o["ota"] = n.ota;
+                            if (n.otaPct >= 0) o["otaPct"] = n.otaPct;
+                            if (n.otaErr[0])   o["otaErr"] = n.otaErr;
+                        }
+                    }
                     // A node that belongs to ANOTHER primary is offline to us on
                     // purpose. Without naming its owner here, that is
                     // indistinguishable from a dead board — and the difference
@@ -4580,6 +4607,40 @@ void loop() {
     // finished settling, not the one it started with.
     updateStatusLed();
 }
+
+// =============================================================================
+// startNodeUpdate — the user tapped "update" on a board (POST /api/nodes/update).
+//
+// MANUAL, ONE NODE AT A TIME, AND ONLY WHEN THE SHOP IS QUIET (jeff, 2026-10-03:
+// "manual is fine"). A node being updated holds every gate it owns for the ~20 s
+// it is away, and the shop must not be asking it for one: a blower running with a
+// gate stuck half-way is the one thing this system exists to prevent. So: refused
+// while any collector is on or a move is in flight. Every refusal is written into
+// the node's own OTA state, so the Boards screen has ONE place to read "why not".
+// =============================================================================
+#ifdef ENABLE_HTTP_API
+static void startNodeUpdate(const char* id) {
+    int idx = -1;
+    for (int i = 0; i < g_remoteCount; i++) {
+        if (!remoteLive(i)) continue;
+        if (strcmp(g_remoteBuses[i].nodeId(), id) == 0 || strcmp(g_remoteBuses[i].host(), id) == 0) { idx = i; break; }
+    }
+    if (idx < 0) { Serial.printf("[OTA] no such board: %s\n", id); return; }
+    topo::RemoteActuatorBus& bus = g_remoteBuses[idx];
+    const topo::RemoteActuatorBus::NodeInfo n = bus.info();
+    const HttpApiServer::NodeImage img = HttpApiServer::nodeImage(n.capLinear > 0 ? 1 : 0);
+    const char* why = nullptr;
+    if (!img.present)                                    why = "no image staged on the primary (bash dev.sh ota)";
+    else if (strcmp(n.fw, img.fw) == 0)                  why = "already running that image";
+    else if (g_topoRuntime.collectorOn() || g_nodeBus.busy()) why = "a tool is running - wait until the shop is quiet";
+    if (why || !bus.requestOta(HttpApiServer::nodeImagePath(n.capLinear > 0 ? 1 : 0), img.size, img.md5, img.fw, why)) {
+        Serial.printf("[OTA] %s refused: %s\n", id, why ? why : "?");
+        bus.noteOtaRefused(why);
+        return;
+    }
+    Serial.printf("[OTA] %s told to pull %s (%u bytes)\n", id, img.fw, (unsigned)img.size);
+}
+#endif
 
 // =============================================================================
 // startHoming() — begin the homing sweep toward the near endstop.

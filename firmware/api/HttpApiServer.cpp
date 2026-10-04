@@ -22,10 +22,44 @@
 #include "../utils/SerialLog.h"
 #include <memory>
 #include <Update.h>
+#include <MD5Builder.h>
+#include "../control/NodeLink.h"   // kMinOtaBytes / kMaxOtaBytes
 #include "../utils/OtaGuard.h"
 
 static bool          s_otaBusy       = false;
 static unsigned long s_otaRebootAtMs = 0;
+
+// Node images (see HttpApiServer::NodeImage). Written by the AsyncTCP task, read
+// by the loop: a torn read costs one wrong "update available" for one publish.
+static HttpApiServer::NodeImage s_nodeImage[2];
+static const char* const kNodeImgBin[2]  = {"/node-pwm.bin",  "/node-linear.bin"};
+static const char* const kNodeImgJson[2] = {"/node-pwm.json", "/node-linear.json"};
+static const char* const kNodeImgPart[2] = {"/node-pwm.part", "/node-linear.part"};
+static const char* const kNodeKindName[2] = {"pwm", "linear"};
+static File       s_imgFile;
+static MD5Builder s_imgMd5;
+static bool       s_imgBusy = false;
+
+static void loadNodeManifest(int k) {
+    s_nodeImage[k] = HttpApiServer::NodeImage();
+    File f = LittleFS.open(kNodeImgJson[k], "r");
+    if (!f) return;
+    StaticJsonDocument<256> d;
+    const bool bad = (bool)deserializeJson(d, f);
+    f.close();
+    if (bad || !LittleFS.exists(kNodeImgBin[k])) return;
+    const char* fw = d["fw"] | ""; const char* md5 = d["md5"] | "";
+    if (!*fw || strlen(md5) != 32) return;
+    strlcpy(s_nodeImage[k].fw, fw, sizeof(s_nodeImage[k].fw));
+    strlcpy(s_nodeImage[k].md5, md5, sizeof(s_nodeImage[k].md5));
+    s_nodeImage[k].size = d["size"] | 0;
+    s_nodeImage[k].present = s_nodeImage[k].size > 0;
+}
+
+HttpApiServer::NodeImage HttpApiServer::nodeImage(int kind) {
+    return (kind == 0 || kind == 1) ? s_nodeImage[kind] : NodeImage();
+}
+const char* HttpApiServer::nodeImagePath(int kind) { return kNodeImgBin[kind == 1 ? 1 : 0]; }
 
 #ifdef CONTROL_SMART_OUTLET
   #include "../control/SmartOutletControl.h"
@@ -182,6 +216,11 @@ bool HttpApiServer::begin() {
     } else {
         DEBUG_PRINTLN(F("[API] LittleFS mounted."));
         g_topoStore.begin();
+        loadNodeManifest(0); loadNodeManifest(1);
+        DEBUG_PRINT(F("[API] node images: pwm "));
+        DEBUG_PRINT(s_nodeImage[0].present ? s_nodeImage[0].fw : "none");
+        DEBUG_PRINT(F(", linear "));
+        DEBUG_PRINTLN(s_nodeImage[1].present ? s_nodeImage[1].fw : "none");
         DEBUG_PRINT(F("[API] topology stored: "));
         DEBUG_PRINTLN(g_topoStore.exists() ? F("yes") : F("no"));
     }
@@ -1653,6 +1692,114 @@ void HttpApiServer::registerRoutes() {
     });
 
     // ------------------------------------------------------------------
+    // POST /api/node-image?kind=pwm|linear   body: the node firmware .bin
+    //   headers: X-Fw (the build stamp inside it), X-Md5 (of the whole body)
+    //
+    // Stores the image the nodes will PULL (control/NodeLink.h OTA). Streamed into
+    // a .part file and only renamed over the old image once its MD5 matches, so a
+    // dropped upload leaves no half-image a node could be told to install. The old
+    // image goes first, because the filesystem has room for one of each kind, not
+    // two of one.
+    // ------------------------------------------------------------------
+    _server.on("/api/node-image", HTTP_POST,
+        [](AsyncWebServerRequest* req) {},
+        nullptr,
+        [this](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t index, size_t total) {
+            static bool s_abort = false;
+            static int  s_kind  = 0;
+            if (index == 0) {
+                s_abort = false;
+                if (s_imgFile) s_imgFile.close();
+                s_imgBusy = false;
+                if (!checkAuth(req)) { s_abort = true; return; }
+                const AsyncWebParameter* kp = req->getParam("kind");
+                const String kind = kp ? kp->value() : String();
+                if (kind == "pwm") s_kind = 0; else if (kind == "linear") s_kind = 1;
+                else { sendError(req, 400, "kind must be pwm or linear"); s_abort = true; return; }
+                if (!req->hasHeader("X-Fw") || !req->hasHeader("X-Md5") ||
+                    req->getHeader("X-Md5")->value().length() != 32 ||
+                    req->getHeader("X-Fw")->value().length() >= sizeof(s_nodeImage[0].fw)) {
+                    sendError(req, 400, "X-Fw and X-Md5 (32 hex) are required");
+                    s_abort = true; return;
+                }
+                if (total < topo::nodelink::kMinOtaBytes || total > topo::nodelink::kMaxOtaBytes) {
+                    sendError(req, 413, "not a node image (size outside what a node accepts)");
+                    s_abort = true; return;
+                }
+                // Make room: this kind's old image goes, whatever happens next.
+                LittleFS.remove(kNodeImgBin[s_kind]);
+                LittleFS.remove(kNodeImgJson[s_kind]);
+                LittleFS.remove(kNodeImgPart[s_kind]);
+                s_nodeImage[s_kind] = NodeImage();
+                const size_t freeB = LittleFS.totalBytes() - LittleFS.usedBytes();
+                if (freeB < total + 16 * 1024) {
+                    sendError(req, 507, "the filesystem has no room for that image");
+                    s_abort = true; return;
+                }
+                s_imgFile = LittleFS.open(kNodeImgPart[s_kind], "w");
+                if (!s_imgFile) { sendError(req, 500, "could not create the image file"); s_abort = true; return; }
+                s_imgMd5.begin();
+                s_imgBusy = true;
+                Serial.printf("[NODEIMG] receiving the %s node image, %u bytes\n", kNodeKindName[s_kind], (unsigned)total);
+            }
+            if (s_abort || !s_imgBusy) return;
+            if (s_imgFile.write(data, len) != len) {
+                s_imgFile.close(); LittleFS.remove(kNodeImgPart[s_kind]); s_imgBusy = false; s_abort = true;
+                sendError(req, 507, "write failed (filesystem full?)");
+                return;
+            }
+            s_imgMd5.add(data, len);
+            if (index + len < total) return;
+            s_imgFile.close();
+            s_imgBusy = false;
+            s_imgMd5.calculate();
+            const String got = s_imgMd5.toString();
+            const String want = req->getHeader("X-Md5")->value();
+            if (!got.equalsIgnoreCase(want)) {
+                LittleFS.remove(kNodeImgPart[s_kind]);
+                Serial.printf("[NODEIMG] md5 mismatch: got %s, header said %s\n", got.c_str(), want.c_str());
+                sendError(req, 400, "md5 does not match the bytes received");
+                return;
+            }
+            LittleFS.rename(kNodeImgPart[s_kind], kNodeImgBin[s_kind]);
+            File m = LittleFS.open(kNodeImgJson[s_kind], "w");
+            if (m) {
+                StaticJsonDocument<192> d;
+                d["fw"] = req->getHeader("X-Fw")->value();
+                d["md5"] = got;
+                d["size"] = (uint32_t)total;
+                serializeJson(d, m);
+                m.close();
+            }
+            loadNodeManifest(s_kind);
+            Serial.printf("[NODEIMG] %s node image stored: %s\n", kNodeKindName[s_kind], s_nodeImage[s_kind].fw);
+            sendOk(req);
+        }
+    );
+
+    // POST /api/nodes/update   body: {"id": "<node id or host>"}
+    // Ask one node to update itself from the stored image. Manual and ONE at a
+    // time, on purpose (jeff, 2026-10-03): the loop refuses while a tool is
+    // running, and the node refuses while a gate moves. The outcome — started,
+    // refused and why — is read back from GET /api/nodes (`ota`, `otaErr`).
+    _server.on("/api/nodes/update", HTTP_POST,
+        [](AsyncWebServerRequest* req) {},
+        nullptr,
+        [this](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t index, size_t total) {
+            if (!checkAuth(req)) return;
+            if (index != 0 || len != total) { sendError(req, 400, "body too large"); return; }
+            StaticJsonDocument<192> doc;
+            if (deserializeJson(doc, data, len) || !(doc["id"] | (const char*)nullptr)) {
+                sendError(req, 400, "need {\"id\": ...}"); return;
+            }
+            xSemaphoreTake(_mutex, portMAX_DELAY);
+            _nodeUpdateWanted = doc["id"].as<const char*>();
+            xSemaphoreGive(_mutex);
+            sendOk(req);
+        }
+    );
+
+    // ------------------------------------------------------------------
     // POST /api/ota   body: the raw firmware .bin (application/octet-stream)
     //
     // The primary updating ITSELF (2026-10-03): `bash dev.sh ota` builds and posts
@@ -2206,6 +2353,14 @@ bool HttpApiServer::otaRebootDue() {
 }
 
 bool HttpApiServer::otaInProgress() { return s_otaBusy; }
+
+bool HttpApiServer::consumeNodeUpdate(String& id) {
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    const bool any = _nodeUpdateWanted.length() > 0;
+    if (any) { id = _nodeUpdateWanted; _nodeUpdateWanted = ""; }
+    xSemaphoreGive(_mutex);
+    return any;
+}
 
 bool HttpApiServer::checkAuth(AsyncWebServerRequest* req) {
     if (!req->hasHeader("X-Api-Key") ||

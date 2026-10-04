@@ -362,6 +362,42 @@ const eq = (name, got, want) =>
   check('SENSE is s2p only', NL.S2P.includes('SENSE') && !NL.P2S.includes('SENSE'));
 }
 
+// ── OTA: a node is told to pull an image, and reports how it went ───────────
+// PAIR: test_nodebus.cpp's "ota" block — same cases, same order, same literals.
+{
+  const md5 = '0123456789abcdef0123456789abcdef';
+  const f = NL.ota(7, '/node-pwm.bin', 1302295, md5, '3b738a5 1003-1200');
+  eq('a well-formed OTA validates', NL.validateFrame(f, 'p2s'), []);
+  check('OTA is p2s only', NL.P2S.includes('OTA') && !NL.S2P.includes('OTA'));
+  check('OTASTATE is s2p only', NL.S2P.includes('OTASTATE') && !NL.P2S.includes('OTASTATE'));
+  eq('the path bound', NL.MAX_OTA_PATH, 48);
+  eq('the smallest image', NL.MIN_OTA_BYTES, 102400);
+  eq('the largest image is the slot', NL.MAX_OTA_BYTES, 0x1E0000);
+  check('a relative path is refused',
+        NL.validateFrame(NL.ota(1, 'node.bin', 1302295, md5, 'x'), 'p2s').length === 1);
+  check('a path past the bound is refused',
+        NL.validateFrame(NL.ota(1, '/' + 'a'.repeat(48), 1302295, md5, 'x'), 'p2s').length === 1);
+  check('a path AT the bound is fine',
+        NL.validateFrame(NL.ota(1, '/' + 'a'.repeat(47), 1302295, md5, 'x'), 'p2s').length === 0);
+  check('an image that is not an image (a 404 page) is refused',
+        NL.validateFrame(NL.ota(1, '/n.bin', 102399, md5, 'x'), 'p2s').length === 1);
+  check('an image bigger than the slot is refused',
+        NL.validateFrame(NL.ota(1, '/n.bin', 0x1E0001, md5, 'x'), 'p2s').length === 1);
+  check('a short md5 is refused',
+        NL.validateFrame(NL.ota(1, '/n.bin', 1302295, md5.slice(1), 'x'), 'p2s').length === 1);
+  check('an upper-case md5 is refused (one spelling on the wire)',
+        NL.validateFrame(NL.ota(1, '/n.bin', 1302295, md5.toUpperCase(), 'x'), 'p2s').length === 1);
+
+  eq('start validates', NL.validateFrame(NL.otaState('start'), 's2p'), []);
+  eq('progress carries a percentage', NL.otaState('progress', 41.6).pct, 42);
+  eq('a percentage is clamped', NL.otaState('progress', 140).pct, 100);
+  eq('fail carries a sentence', NL.otaState('fail', undefined, 'no room').err, 'no room');
+  eq('a long reason is cut to 64', NL.otaState('fail', undefined, 'x'.repeat(100)).err.length, 64);
+  check('an unknown state is refused',
+        NL.validateFrame({ t: 'OTASTATE', state: 'maybe' }, 's2p').length === 1);
+  eq('OTA did not bump the version', NL.NODELINK_VERSION, 1);
+}
+
 // ── timing constants match the firmware (control/NodeLink.h) ────────────────
 {
   eq('PING_INTERVAL_MS', NL.PING_INTERVAL_MS, 2000);

@@ -71,6 +71,17 @@ def _dustgate_stamp():
 _DG_COMMIT, _DG_DATE, _DG_TIME, _DG_FW = _dustgate_stamp()
 print("DustGate build stamp: %s  (%s %s)" % (_DG_FW, _DG_DATE, _DG_TIME))
 
+# The stamp, in a file beside the binary, so `dev.sh ota` can say which fw an image
+# carries without parsing the .bin. Written every run, and every run recompiles
+# BuildStamp.cpp (its defines change), so this file always describes the .bin the
+# same invocation produced. A node is judged "up to date" by comparing THIS string
+# with the `fw` in its WELCOME.
+try:
+    with open(os.path.join(build_dir, "fw.stamp"), "w") as _f:
+        _f.write(_DG_FW)
+except OSError:
+    pass
+
 def _dustgate_stamp_middleware(env, node):
     # list(): SCons keeps CPPDEFINES as a deque here, which does not support +.
     return env.Object(node, CPPDEFINES=list(env.get("CPPDEFINES", [])) + [

@@ -394,6 +394,11 @@ void RemoteActuatorBus::taskLoop() {
                 _cfgPending = false;
                 DEBUG_PRINT(F("[NODE→] CONFIG to ")); DEBUG_PRINTLN(_nodeId);
             }
+            if (_otaPending && _connected) {
+                _ws.sendTXT(_otaFrame);
+                _otaPending = false;
+                DEBUG_PRINT(F("[NODE→] OTA to ")); DEBUG_PRINTLN(_nodeId);
+            }
             // A move whose STATE report never arrived: give up rather than let
             // the primary's move queue block forever behind a lost frame.
             if (_moveOutstanding &&
@@ -548,6 +553,10 @@ void RemoteActuatorBus::handleFrame(const char* json, size_t len) {
             return;
         }
         _refusedBy[0] = '\0';
+        // A node that has come back has, by definition, finished (or abandoned)
+        // whatever update it was running — the fw in this WELCOME is the verdict.
+        // A refusal ("fail") is kept: nothing about the node changed.
+        if (strcmp(_otaState, "fail") != 0) { _otaState[0] = '\0'; _otaPct = -1; _otaErr[0] = '\0'; }
         // LINK LOG: how long it was down and how it looked while it was, taken
         // BEFORE the reset below, plus the node's own account of its boot
         // (withBootInfo) — an upS shorter than the outage means the NODE
@@ -624,6 +633,22 @@ void RemoteActuatorBus::handleFrame(const char* json, size_t len) {
             }
         }
         xSemaphoreGive(_mutex);
+        return;
+    } else if (strcmp(t, "OTASTATE") == 0) {
+        const char* st = f["state"] | "";
+        nodelink::strlcpy_(_otaState, st, sizeof(_otaState));
+        _otaTouchedMs = millis();
+        _otaPct = f.containsKey("pct") ? (int)(f["pct"] | 0) : _otaPct;
+        nodelink::strlcpy_(_otaErr, f["err"] | "", sizeof(_otaErr));
+        char extra[120];
+        char safe[48];
+        linklog::safeCopy(safe, sizeof(safe), _otaErr);
+        snprintf(extra, sizeof(extra), "\"state\":\"%s\",\"pct\":%d,\"err\":\"%s\"", _otaState, _otaPct, safe);
+        const bool log = strcmp(st, "progress") != 0;   // a start/done/fail is an event; progress is noise
+        xSemaphoreGive(_mutex);
+        DEBUG_PRINT(F("[NODE←] OTA ")); DEBUG_PRINT(_nodeId); DEBUG_PRINT(' '); DEBUG_PRINT(st);
+        DEBUG_PRINT(' '); DEBUG_PRINTLN(_otaPct);
+        if (log) linklog::event("ota", _host, extra);
         return;
     } else if (strcmp(t, "STATE") == 0) {
         bool moving = f["moving"] | false;
@@ -834,6 +859,7 @@ RemoteActuatorBus::NodeInfo RemoteActuatorBus::info() const {
     if (!_mutex) {
         n.connected = false; n.lastSeenMs = 0;
         n.board[0] = '\0'; n.fw[0] = '\0'; n.capServos = 0; n.capLinear = 0; n.capClamps = 0;
+        n.ota[0] = '\0'; n.otaPct = -1; n.otaErr[0] = '\0';
         return n;
     }
     xSemaphoreTake(_mutex, portMAX_DELAY);
@@ -844,8 +870,52 @@ RemoteActuatorBus::NodeInfo RemoteActuatorBus::info() const {
     n.capServos = _capServos;
     n.capLinear = _capLinear;
     n.capClamps = _capClamps;
+    nodelink::strlcpy_(n.ota,    _otaState, sizeof(n.ota));
+    n.otaPct = _otaPct;
+    nodelink::strlcpy_(n.otaErr, _otaErr,   sizeof(n.otaErr));
+    // An update that stopped reporting is a failure, not a progress bar that never
+    // moves — most likely a node whose firmware predates OTA, which ignores the
+    // frame (an unknown frame is ignored, not refused; see nodelink.js).
+    if ((strcmp(_otaState, "start") == 0 || strcmp(_otaState, "progress") == 0) &&
+        millis() - _otaTouchedMs > 30000UL) {
+        nodelink::strlcpy_(n.ota, "fail", sizeof(n.ota));
+        nodelink::strlcpy_(n.otaErr, "no answer - this board's firmware predates updates", sizeof(n.otaErr));
+        n.otaPct = -1;
+    }
     xSemaphoreGive(_mutex);
     return n;
+}
+
+bool RemoteActuatorBus::requestOta(const char* path, uint32_t size, const char* md5,
+                                   const char* fw, const char*& why) {
+    if (!_mutex) { why = "not started"; return false; }
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    const bool up = _connected && (millis() - _lastRxMs) < nodelink::kPongTimeoutMs;
+    const bool busy = ((strcmp(_otaState, "start") == 0 || strcmp(_otaState, "progress") == 0) &&
+                       millis() - _otaTouchedMs < 30000UL) || _otaPending;
+    if (!up)   { xSemaphoreGive(_mutex); why = "the board is offline"; return false; }
+    if (busy)  { xSemaphoreGive(_mutex); why = "an update is already running"; return false; }
+    StaticJsonDocument<384> d;
+    nodelink::buildOta(d.to<JsonObject>(), ++_otaSeq, path, size, md5, fw);
+    if (serializeJson(d, _otaFrame, sizeof(_otaFrame)) >= sizeof(_otaFrame)) {
+        xSemaphoreGive(_mutex); why = "frame too long"; return false;
+    }
+    _otaPending = true;
+    _otaTouchedMs = millis();
+    nodelink::strlcpy_(_otaState, "start", sizeof(_otaState));
+    _otaPct = 0;
+    _otaErr[0] = '\0';
+    xSemaphoreGive(_mutex);
+    return true;
+}
+
+void RemoteActuatorBus::noteOtaRefused(const char* why) {
+    if (!_mutex) return;
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    nodelink::strlcpy_(_otaState, "fail", sizeof(_otaState));
+    _otaPct = -1;
+    nodelink::strlcpy_(_otaErr, why ? why : "refused", sizeof(_otaErr));
+    xSemaphoreGive(_mutex);
 }
 
 } // namespace topo

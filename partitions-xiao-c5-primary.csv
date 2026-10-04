@@ -6,10 +6,12 @@
 # node image has to live somewhere the nodes can pull it from (utils/OtaGuard.h,
 # `dev.sh ota`), so the extra 4 MB pays for both:
 #
-#   app0  2.5 MiB — 1.83 MB used at 2026-10-03, ~30% headroom
-#   app1  2.5 MiB — the slot an update is written into; the roles swap each time
-#   ffat  2.94 MiB — LittleFS: the Angular bundle (~0.23 MB gzipped), the saved
-#                    layout, and the NODE image the primary serves (~1.4 MB)
+#   app0  2.25 MiB — 1.83 MB used at 2026-10-03, ~29% headroom
+#   app1  2.25 MiB — the slot an update is written into; the roles swap each time
+#   ffat  3.44 MiB — LittleFS: the Angular bundle (~0.23 MB gzipped), the saved
+#                    layout, and TWO node images the primary serves (PWM and
+#                    slider, ~1.3 MB each) — ~80% full, so a third kind of node
+#                    image, or fat growth, means revisiting this split
 #
 # The filesystem partition MUST be labeled "ffat": HttpApiServer mounts it with
 # LittleFS.begin(true, "/littlefs", 10, "ffat"). (LittleFS mounts by label
@@ -29,6 +31,6 @@
 # Name,   Type, SubType, Offset,   Size,      Flags
 nvs,      data, nvs,     0x9000,   0x5000,
 otadata,  data, ota,     0xe000,   0x2000,
-app0,     app,  ota_0,   0x10000,  0x280000,
-app1,     app,  ota_1,   0x290000, 0x280000,
-ffat,     data, fat,     0x510000, 0x2F0000,
+app0,     app,  ota_0,   0x10000,  0x240000,
+app1,     app,  ota_1,   0x250000, 0x240000,
+ffat,     data, fat,     0x490000, 0x370000,

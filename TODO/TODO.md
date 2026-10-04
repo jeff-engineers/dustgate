@@ -790,6 +790,23 @@ active sections above them, which is how a parked item stops being read.
   or a shop drifts into two firmwares that disagree about NodeLink. Whatever
   ships the image should stamp it with the git sha the UI already reports.
 
+  **BUILT 2026-10-03, NOT RUN ON ANY BOARD.** What exists: both partition tables
+  with a second slot (primary 2×2.25 MiB + 3.44 MiB ffat on the 8 MB the chip has;
+  node 2×1.9 MiB inside 4 MB); `POST /api/ota` + `dev.sh ota` for the primary,
+  with probation/rollback (`utils/OtaGuard`: valid after 30 s healthy, rolled back
+  at 3 min if never healthy); `POST /api/node-image` stages node images in ffat;
+  the OTA / OTASTATE NodeLink frames (paired, tested); the node pulls with
+  `HTTPClient`+`Update` (not `HTTPUpdate`, so the MD5 comes from the frame, not a
+  header the static file handler would never set); `POST /api/nodes/update` and an
+  Update button on the Boards screen. Manual and one node at a time by decision —
+  refused while any collector runs.
+  **To prove on hardware:** the one cable pass per board (new partition tables —
+  the primary's layout is lost with it, restore from a saved copy); an OTA of the
+  primary; a node update; and the unproven rollback paths — flash a deliberately
+  bad image and confirm the primary AND a node come back. **Known gap:** an image
+  that boots, reaches the primary and then misbehaves is not rolled back (needs the
+  cable). Automatic update-when-idle is deliberately not built.
+
 
 - **Delete the three bench envs? (jeff, 2026-09-17 — deferred, not rejected.)**
   `xiao_c5_bus_bench`, `xiao_c5_ht12e_bench`, `xiao_c5_ct_bench`. Jeff's point,

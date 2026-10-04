@@ -100,6 +100,9 @@
 #include <ESPmDNS.h>
 #include <esp_heap_caps.h>        // bootTrace() — internal-DRAM headroom at each stage
 #include "../utils/Watchdog.h"
+#include "../utils/OtaGuard.h"        // a fresh OTA image is on probation until it has proved itself
+#include <HTTPClient.h>
+#include <Update.h>
 
 #include "../motor/ServoActuator.h"
 #include "../control/NodeLink.h"
@@ -532,6 +535,87 @@ static void updateSweep() {
 #endif // HAS_LINEAR
 
 // -----------------------------------------------------------------------------
+// OTA — the primary tells this node to pull a new image (2026-10-03).
+//
+// The frame handler only RECORDS the order (it runs on the AsyncTCP task, which
+// must stay free to answer PINGs and which has a small stack); loop() does the
+// download. loop() therefore blocks for the ~15 s a 1.3 MB image takes — safe
+// here because a node holds every gate while it is away (the same fail-safe as a
+// dropped link), and because the order is REFUSED while anything is moving. The
+// watchdog is petted from the progress callback so the wait is not mistaken for
+// a hang.
+//
+// A bad image cannot strand the board: the new slot only becomes bootable after
+// its MD5 checks out, and it then runs on probation (utils/OtaGuard.h) — rolled
+// back by the bootloader if it resets, and by tick() if it never reaches the
+// primary. What it CANNOT recover is an image that boots, reaches the primary and
+// then misbehaves; that one needs the cable, which is why updates are manual.
+// -----------------------------------------------------------------------------
+static topo::nodelink::OtaOrder g_otaOrder;
+static IPAddress                g_otaFrom;
+static volatile bool            g_otaPending = false;
+static bool                     g_otaRunning = false;
+
+static void sendOtaState(const char* state, int pct = -1, const char* err = nullptr) {
+    StaticJsonDocument<256> d;
+    topo::nodelink::buildOtaState(d.to<JsonObject>(), state, pct, err);
+    String s; serializeJson(d, s);
+    nodeWs.textAll(s);
+}
+
+static void failOta(const char* why) {
+    Serial.print(F("[OTA] FAILED — ")); Serial.println(why);
+    sendOtaState("fail", -1, why);
+    g_otaRunning = false;
+}
+
+static void runOta() {
+    g_otaPending = false;
+    g_otaRunning = true;
+    const String url = String("http://") + g_otaFrom.toString() + g_otaOrder.path;
+    Serial.print(F("[OTA] pulling ")); Serial.print(url);
+    Serial.print(F(" (")); Serial.print(g_otaOrder.size); Serial.println(F(" bytes)"));
+    sendOtaState("start", 0);
+
+    WiFiClient client;
+    HTTPClient http;
+    http.setTimeout(15000);
+    if (!http.begin(client, url)) { failOta("could not open the download"); return; }
+    const int code = http.GET();
+    if (code != 200) {
+        static char why[40];
+        snprintf(why, sizeof(why), "primary answered %d", code);
+        http.end(); failOta(why); return;
+    }
+    if ((uint32_t)http.getSize() != g_otaOrder.size) {
+        http.end(); failOta("image is not the size the primary announced"); return;
+    }
+    if (!Update.begin(g_otaOrder.size, U_FLASH)) {
+        http.end(); failOta("no room in the update slot"); return;
+    }
+    Update.setMD5(g_otaOrder.md5);
+    static int lastPct = -10;
+    lastPct = -10;
+    Update.onProgress([](size_t done, size_t total) {
+        watchdog::pet();
+        const int pct = total ? (int)((uint64_t)done * 100 / total) : 0;
+        if (pct >= lastPct + 10) { lastPct = pct; sendOtaState("progress", pct); }
+    });
+    const size_t wrote = Update.writeStream(*http.getStreamPtr());
+    http.end();
+    if (wrote != g_otaOrder.size) { Update.abort(); failOta("download ended early"); return; }
+    if (!Update.end(true)) {
+        failOta("image rejected (checksum or format)"); return;
+    }
+    Serial.println(F("[OTA] image written and verified — rebooting into it"));
+    sendOtaState("done", 100);
+    // Let the frame leave before the radio goes away.
+    const unsigned long until = millis() + 600;
+    while (millis() < until) { watchdog::pet(); delay(20); }
+    ESP.restart();
+}
+
+// -----------------------------------------------------------------------------
 // NodeLink frame handling (AsyncTCP task — never touches a servo directly)
 // -----------------------------------------------------------------------------
 static void onNodeWsEvent(AsyncWebSocket*, AsyncWebSocketClient* client,
@@ -791,6 +875,32 @@ static void onNodeWsEvent(AsyncWebSocket*, AsyncWebSocketClient* client,
             // alternative, a NACK, would make the primary mark a working gate
             // broken for the minute it takes to find the datum.
             topo::nodelink::buildAck(reply.to<JsonObject>(), cmd.seq, true);
+        }
+    } else if (strcmp(t, "OTA") == 0) {
+        // OWNER ONLY, like SET: replacing this board's firmware is the most
+        // consequential thing a socket can ask for.
+        topo::nodelink::OtaOrder order;
+        const char* err = nullptr;
+        if (!g_ownerLinked || client->id() != g_ownerClientId) {
+            Serial.println(F("[OTA] REFUSED — not the owner"));
+            topo::nodelink::buildOtaState(reply.to<JsonObject>(), "fail", -1, "not the owner of this node");
+        } else if (!topo::nodelink::parseOtaFrame(f, order, err)) {
+            Serial.print(F("[OTA] MALFORMED — ")); Serial.println(err ? err : "?");
+            topo::nodelink::buildOtaState(reply.to<JsonObject>(), "fail", -1, err);
+        } else if (!otaguard::hasSlots()) {
+            Serial.println(F("[OTA] REFUSED — one app slot; flash this board once by cable"));
+            topo::nodelink::buildOtaState(reply.to<JsonObject>(), "fail", -1, "one app slot - flash by cable once");
+        } else if (otaguard::onProbation()) {
+            topo::nodelink::buildOtaState(reply.to<JsonObject>(), "fail", -1, "running image not yet proven");
+        } else if (g_otaPending || g_otaRunning) {
+            topo::nodelink::buildOtaState(reply.to<JsonObject>(), "fail", -1, "an update is already running");
+        } else if (actuatorMoving()) {
+            topo::nodelink::buildOtaState(reply.to<JsonObject>(), "fail", -1, "a gate is moving");
+        } else {
+            g_otaOrder   = order;
+            g_otaFrom    = client->remoteIP();
+            g_otaPending = true;        // loop() takes it from here
+            return;                     // runOta() reports; no reply from this task
         }
     } else {
         return;   // unknown frame — ignore rather than guess
@@ -1124,6 +1234,11 @@ void loop() {
     // BARE, i.e. the library default of 8 — see kMaxLinkClients for why passing a
     // tight limit here is a trap rather than a safeguard.
     nodeWs.cleanupClients();
+
+    // OTA: a pending order runs here (see runOta), and a fresh image is judged
+    // by whether this node is on WiFi AND has been adopted by its primary.
+    if (g_otaPending && !g_otaRunning) runOta();
+    otaguard::tick(WiFi.status() == WL_CONNECTED && g_ownerLinked);
 
     // Status pixel — the node's only UI. Derived fresh each loop rather than
     // set at transitions, so it can never latch a stale colour after a silent
