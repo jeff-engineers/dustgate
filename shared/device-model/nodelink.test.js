@@ -432,6 +432,37 @@ const eq = (name, got, want) =>
   eq('OTA did not bump the version', NL.NODELINK_VERSION, 1);
 }
 
+// ── node-initiated links: JOIN, REFUSE, WHERE, caps.join ────────────────────
+// PAIR: test_nodebus.cpp's "join" block — same cases, same order, same literals.
+{
+  eq('a JOIN validates', NL.validateFrame(NL.join('dustgate-planer'), 's2p'), []);
+  check('JOIN is s2p only', NL.S2P.includes('JOIN') && !NL.P2S.includes('JOIN'));
+  check('a JOIN with no node id is refused', NL.validateFrame(NL.join(''), 's2p').length === 1);
+  check('a JOIN from another protocol version is refused',
+        NL.validateFrame({ t: 'JOIN', v: 2, nodeId: 'x' }, 's2p').length === 1);
+
+  eq('REFUSE not-paired validates', NL.validateFrame(NL.refuse('not-paired'), 'p2s'), []);
+  eq('REFUSE duplicate validates', NL.validateFrame(NL.refuse('duplicate'), 'p2s'), []);
+  eq('REFUSE busy validates', NL.validateFrame(NL.refuse('busy'), 'p2s'), []);
+  check('REFUSE is p2s only', NL.P2S.includes('REFUSE') && !NL.S2P.includes('REFUSE'));
+  check('a reason nobody defined is refused', NL.validateFrame(NL.refuse('go-away'), 'p2s').length === 1);
+
+  eq('a WHERE validates', NL.validateFrame(NL.where('dustgate', '192.168.86.46', 80), 'p2s'), []);
+  check('WHERE is p2s only', NL.P2S.includes('WHERE') && !NL.S2P.includes('WHERE'));
+  eq('the address bound', NL.MAX_WHERE_IP_LEN, 15);
+  check('a name where an address belongs is refused',
+        NL.validateFrame(NL.where('dustgate', 'dustgate.local', 80), 'p2s').length === 1);
+  check('a port of 0 is refused', NL.validateFrame(NL.where('dustgate', '192.168.86.46', 0), 'p2s').length === 1);
+  check('a port past 65535 is refused', NL.validateFrame(NL.where('dustgate', '192.168.86.46', 65536), 'p2s').length === 1);
+  check('a WHERE with no primary is refused', NL.validateFrame(NL.where('', '192.168.86.46', 80), 'p2s').length === 1);
+
+  check('a board that says nothing is not dialling in', NL.dialsIn(NL.welcome('n', 'b', 'f', { servos: 2, linear: 0 })) === false);
+  check('caps.join 1 means it dials in', NL.dialsIn(NL.welcome('n', 'b', 'f', { servos: 2, linear: 0, join: 1 })) === true);
+  eq('caps.join 1 validates', NL.validateFrame(NL.welcome('n', 'b', 'f', { servos: 2, linear: 0, join: 1 }), 's2p'), []);
+  check('caps.join 2 is refused', NL.validateFrame(NL.welcome('n', 'b', 'f', { servos: 2, linear: 0, join: 2 }), 's2p').length === 1);
+  eq('JOIN did not bump the version', NL.NODELINK_VERSION, 1);
+}
+
 // ── timing constants match the firmware (control/NodeLink.h) ────────────────
 {
   eq('PING_INTERVAL_MS', NL.PING_INTERVAL_MS, 2000);
