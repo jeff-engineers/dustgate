@@ -34,22 +34,25 @@ static const UBaseType_t kNodeLinkTaskPrio = 1;
 // down), shorter than anyone waits for a gate.
 static const uint32_t kDialInGraceMs = 10000;
 
+// The session is given its clock rather than reading one.
+static uint32_t clockMs() { return (uint32_t)millis(); }
+
 void RemoteActuatorBus::begin(const char* nodeId, const char* primaryId,
                               const char* host, uint16_t port) {
     if (_running) end();
 
     if (!_mutex) _mutex = xSemaphoreCreateMutex();
-    // What this slot learned about its node survives a restart of the SAME node (a
-    // pause and resume, a takeover) — in particular `caps.join`, which is what lets
-    // the primary give a node that dials in the first move instead of racing it. A slot
-    // reused for a DIFFERENT node must not inherit any of it.
-    if (strcmp(_nodeId, nodeId ? nodeId : "") != 0) { _capJoin = 0; _capRf = 0; _capBin = 0; _capPlugs = 0; _capClamps = 0; _capServos = 0; _capLinear = 0; _board[0] = _fw[0] = '\0'; }
-    nodelink::strlcpy_(_nodeId,    nodeId    ? nodeId    : "", sizeof(_nodeId));
-    nodelink::strlcpy_(_primaryId, primaryId ? primaryId : "", sizeof(_primaryId));
+    // What the session learned about its node survives a restart of the SAME node (a pause and a
+    // resume, a takeover) — in particular `caps.join`, which is what lets the primary give a node
+    // that dials in the first move instead of racing it. A slot reused for a DIFFERENT node must
+    // not inherit any of it; NodeSession::configure() knows the difference.
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    _s.configure(nodeId, primaryId);
+    xSemaphoreGive(_mutex);
     nodelink::strlcpy_(_host,      host      ? host      : "", sizeof(_host));
     _port = port;
     if (_host[0] == '\0') {
-        DEBUG_PRINT(F("[NODE] No link.host for node ")); DEBUG_PRINTLN(_nodeId);
+        DEBUG_PRINT(F("[NODE] No link.host for node ")); DEBUG_PRINTLN(_s.nodeId());
         return;                        // nothing to dial; stays permanently offline
     }
 
@@ -70,10 +73,7 @@ void RemoteActuatorBus::begin(const char* nodeId, const char* primaryId,
     // which reset the primary for pressing a button.
     _dialing[0]    = '\0';
     _dialedOnce    = false;
-    _downSinceMs   = millis();   // down until a WELCOME says otherwise
     _lastMdnsOkMs  = 0;
-    _hollowDrops   = 0;
-    _everLinked    = false;
     _sockUp        = false;
     _seenFailMs    = 0;
     _lastResolveMs = 0;
@@ -92,7 +92,7 @@ void RemoteActuatorBus::begin(const char* nodeId, const char* primaryId,
     _running   = true;
     // A node that dials in gets no task until the grace has passed (update() starts it);
     // anything else is dialled at once, as it always was.
-    if (!_capJoin && millis() >= _bootGraceUntilMs) ensureTask();
+    if (!_s.dialsIn() && millis() >= _bootGraceUntilMs) ensureTask();
 }
 
 bool RemoteActuatorBus::ensureTask() {
@@ -107,7 +107,7 @@ bool RemoteActuatorBus::ensureTask() {
     if (ok != pdPASS) {
         _taskAlive = false;
         _task      = nullptr;
-        DEBUG_PRINT(F("[NODE] FAILED to start link task for ")); DEBUG_PRINT(_nodeId);
+        DEBUG_PRINT(F("[NODE] FAILED to start link task for ")); DEBUG_PRINT(_s.nodeId());
         DEBUG_PRINT(F(" — free heap ")); DEBUG_PRINTLN(ESP.getFreeHeap());
         return false;
     }
@@ -141,7 +141,7 @@ void RemoteActuatorBus::_backoff() {
     _retryMs *= 2;
     if (_retryMs > nodelink::kReconnectMaxMs) _retryMs = nodelink::kReconnectMaxMs;
     _ws.setReconnectInterval(_retryMs);
-    DEBUG_PRINT(F("[NODE] backing off ")); DEBUG_PRINT(_nodeId);
+    DEBUG_PRINT(F("[NODE] backing off ")); DEBUG_PRINT(_s.nodeId());
     DEBUG_PRINT(F(" — retrying every ")); DEBUG_PRINT(_retryMs);
     DEBUG_PRINTLN(F(" ms"));
 }
@@ -255,7 +255,7 @@ void RemoteActuatorBus::dialTo(const char* target) {
     nodelink::strlcpy_(_dialing, target, sizeof(_dialing));
     _ws.begin(_dialing, _port, "/nodelink");
     if (!_dialedOnce) {
-        DEBUG_PRINT(F("[NODE] Linking to ")); DEBUG_PRINT(_nodeId);
+        DEBUG_PRINT(F("[NODE] Linking to ")); DEBUG_PRINT(_s.nodeId());
         DEBUG_PRINT(F(" at ws://")); DEBUG_PRINT(_dialing); DEBUG_PRINTLN(F("/nodelink"));
     }
     _dialedOnce = true;
@@ -286,7 +286,7 @@ void RemoteActuatorBus::end() {
         // Should not happen given the bounds above. If it does, the task is
         // wedged somewhere unbounded, and deleting it is the lesser evil — but
         // say so, because whatever it held is now held forever.
-        DEBUG_PRINT(F("[NODE] ⚠ link task for ")); DEBUG_PRINT(_nodeId);
+        DEBUG_PRINT(F("[NODE] ⚠ link task for ")); DEBUG_PRINT(_s.nodeId());
         DEBUG_PRINTLN(F(" did not stop — deleting it; mDNS or a socket may now be leaked"));
         if (_task) vTaskDelete(_task);
         _taskAlive = false;
@@ -308,7 +308,7 @@ void RemoteActuatorBus::end() {
     }
     if (_mutex) {
         xSemaphoreTake(_mutex, portMAX_DELAY);
-        _connected = false; _moveOutstanding = false; _txPending = false; _pressPending = false; _pressSeq = 0;
+        _s.clearLink();      // silent: there is nothing to report about a link we ended on purpose
         xSemaphoreGive(_mutex);
     }
 }
@@ -341,7 +341,7 @@ void RemoteActuatorBus::taskLoop() {
             // Held for a few seconds: the node's own link is the link, and this task has
             // nothing left to do. Leave — the stack goes back to the heap — and let
             // update() start another if the node ever drops.
-            if (_capJoin && (millis() - _inSinceMs) > 3000) { _retire = true; continue; }
+            if (_s.dialsIn() && (millis() - _inSinceMs) > 3000) { _retire = true; continue; }
             delay(50);
             continue;
         }
@@ -351,10 +351,10 @@ void RemoteActuatorBus::taskLoop() {
         // works whichever direction the network drops — is the one meant to carry
         // the shop. After the grace we dial as well: this is the fallback, and it
         // is what keeps a node whose beacon, name and cached address all fail
-        // reachable. `_capJoin` is only known once the node has WELCOMEd us, so the
+        // reachable. `caps.join` is only known once the node has WELCOMEd us, so the
         // first link after a primary boot is dialled at once, as it always was.
-        if (_capJoin && !_connected && !_inId && _downSinceMs &&
-            (millis() - _downSinceMs) < kDialInGraceMs) {
+        if (_s.dialsIn() && !_s.connected() && !_inId && _s.downSinceMs() &&
+            (millis() - _s.downSinceMs()) < kDialInGraceMs) {
             delay(50);
             continue;
         }
@@ -383,7 +383,7 @@ void RemoteActuatorBus::taskLoop() {
         }
 
         // Only while the SOCKET is down, not merely un-WELCOMEd: see dialTo().
-        if (!_sockUp && !_connected && !_hostIsIp) {
+        if (!_sockUp && !_s.connected() && !_hostIsIp) {
             unsigned long since = millis() - _lastResolveMs;
             unsigned long every = (millis() < 60000UL) ? 3000UL : 15000UL;
             // STAGGERED, so N boards do not queue on the same tick forever. The
@@ -403,7 +403,7 @@ void RemoteActuatorBus::taskLoop() {
             }
         }
 
-        if (!_connected && (millis() - lastNagMs) > 10000) {
+        if (!_s.connected() && (millis() - lastNagMs) > 10000) {
             lastNagMs = millis();
             DEBUG_PRINT(F("[NODE] Still dialling ")); DEBUG_PRINT(_dialing);
             DEBUG_PRINT(F(" (")); DEBUG_PRINT(_host); DEBUG_PRINT(F(")"));
@@ -436,39 +436,17 @@ void RemoteActuatorBus::taskLoop() {
             DEBUG_PRINTLN(F(" B free"));
         }
 
-        // Drain a pending SET. Sending from HERE (not from setState()) is what
+        // Drain whatever the session wants sent (a SET, a CONFIG, an OTA order, a PRESS), and let it
+        // time out a move whose STATE never arrived. Sending from HERE (not from setState()) is what
         // keeps the socket single-threaded.
-        if (_mutex && xSemaphoreTake(_mutex, 0) == pdTRUE) {
-            if (_txPending && _connected) {
-                _ws.sendTXT(_txFrame);
-                _txPending = false;
+        if (_mutex) {
+            for (int i = 0; i < 4; i++) {
+                std::string frame;
+                bool got = false;
+                if (xSemaphoreTake(_mutex, 0) == pdTRUE) { got = _s.nextFrame(frame); xSemaphoreGive(_mutex); flushSink(); }
+                if (!got) break;
+                _ws.sendTXT(frame.c_str());
             }
-            // CONFIG rides the same single-threaded send. Sent BEFORE nothing
-            // in particular — order against a SET does not matter, because a
-            // node ACKs each independently and neither depends on the other.
-            if (_cfgPending && _connected) {
-                _ws.sendTXT(_cfgFrame);
-                _cfgPending = false;
-                DEBUG_PRINT(F("[NODE→] CONFIG to ")); DEBUG_PRINTLN(_nodeId);
-            }
-            if (_otaPending && _connected) {
-                _ws.sendTXT(_otaFrame);
-                _otaPending = false;
-                DEBUG_PRINT(F("[NODE→] OTA to ")); DEBUG_PRINTLN(_nodeId);
-            }
-            if (_pressPending && _connected) {
-                _ws.sendTXT(_pressFrame);
-                _pressPending = false;
-            }
-            // A move whose STATE report never arrived: give up rather than let
-            // the primary's move queue block forever behind a lost frame.
-            if (_moveOutstanding &&
-                (millis() - _moveStartedMs) > nodelink::kMoveTimeoutMs) {
-                _moveOutstanding = false;
-                _moveFault = "The board never reported its move finished (timed out).";
-                DEBUG_PRINT(F("[NODE] Move timed out on ")); DEBUG_PRINTLN(_nodeId);
-            }
-            xSemaphoreGive(_mutex);
         }
         delay(5);
     }
@@ -478,65 +456,21 @@ void RemoteActuatorBus::taskLoop() {
     vTaskDelete(NULL);
 }
 
-// The HELLO. `_takeover` is one-shot and only ever set by an explicit user action
-// (see requestTakeover), so a reconnect loop can never escalate itself into a theft.
-void RemoteActuatorBus::buildHelloString(String& out) {
-    StaticJsonDocument<192> doc;
-    const bool takeover = _takeover;
-    _takeover = false;
-    nodelink::buildHello(doc.to<JsonObject>(), _primaryId, _nodeId, takeover);
-    serializeJson(doc, out);
-}
-
-// What the link going away means, whichever way it was dialled.
-void RemoteActuatorBus::markDown(bool wasUp) {
-    (void)wasUp;
-    // Logged only for a link that was UP. A retry that fails again is not news, and
-    // at one line per retry it would bury the log.
-    bool logDown = false;
-    if (_mutex) {
-        xSemaphoreTake(_mutex, portMAX_DELAY);
-        if (_connected) { _downSinceMs = millis(); logDown = true; }
-        _connected = false;
-        // Drop any outstanding move: we can't know whether it landed, and holding
-        // busy() forever would stall every other gate.
-        if (_moveOutstanding) _moveFault = "The link dropped mid-move \xE2\x80\x94 the gate may not have finished moving.";
-        _moveOutstanding = false;
-        _txPending = false;
-        // A PRESS is an EDGE against a TOGGLE: one queued during an outage and sent on
-        // reconnect would switch the blower the wrong way. Never replayed.
-        _pressPending = false; _pressSeq = 0;
-        // FORGET THE READINGS, KEEP THE CONFIG. A link that has dropped tells us
-        // nothing about the tool any more, and a stale "on" left lying here would
-        // keep a collector running for a machine nobody can see (RFC §5.6a: absent
-        // is OFF). The CONFIG is the opposite — it is ours, not the node's, and the
-        // node will have forgotten it across the reboot.
-        _senseCount = 0;
-        _cfgPending = _cfgValid;
-        xSemaphoreGive(_mutex);
-    }
-    DEBUG_PRINT(F("[NODE] Link lost: ")); DEBUG_PRINTLN(_nodeId);
-    if (logDown) linklog::event("link_down", _host);
-}
-
 // ── node-initiated links ─────────────────────────────────────────────────────
 bool RemoteActuatorBus::attachInbound(AsyncWebSocketClient* c, String& helloOut) {
     if (!_mutex || !c) return false;
     xSemaphoreTake(_mutex, portMAX_DELAY);
-    const bool fresh = _connected && (millis() - _lastRxMs) < nodelink::kPongTimeoutMs;
-    if (fresh) { xSemaphoreGive(_mutex); return false; }   // one healthy link only
+    // One healthy link only: a node is refused as a DUPLICATE rather than allowed to replace one.
+    if (!_s.onAttach()) { xSemaphoreGive(_mutex); return false; }
     _inClient   = c;
     _inId       = c->id();
     _inSinceMs  = millis();
-    _lastRxMs   = millis();         // the node just spoke; do not call it overdue before the WELCOME
     _lastPingMs = millis();
-    // Whatever was half-open on the dial-out side is stale now.
-    _connected  = false;
-    _txPending  = false;
-    _pressPending = false; _pressSeq = 0;   // a PRESS is an EDGE: never replay one across a reconnect
+    const std::string hello = _s.helloFrame();
     xSemaphoreGive(_mutex);
-    buildHelloString(helloOut);
-    DEBUG_PRINT(F("[NODE] ")); DEBUG_PRINT(_nodeId); DEBUG_PRINTLN(F(" dialled in"));
+    flushSink();
+    helloOut = hello.c_str();
+    DEBUG_PRINT(F("[NODE] ")); DEBUG_PRINT(_s.nodeId()); DEBUG_PRINTLN(F(" dialled in"));
     return true;
 }
 
@@ -544,13 +478,17 @@ void RemoteActuatorBus::detachInbound(uint32_t clientId) {
     if (!_inId || _inId != clientId) return;
     _inClient = nullptr;
     _inId     = 0;
-    markDown(true);
+    if (!_mutex) return;
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    _s.onDown();
+    xSemaphoreGive(_mutex);
+    flushSink();
 }
 
 void RemoteActuatorBus::onInboundPong() {
     if (!_mutex) return;
     xSemaphoreTake(_mutex, portMAX_DELAY);
-    _lastRxMs = millis();
+    _s.onPong();
     xSemaphoreGive(_mutex);
 }
 
@@ -558,24 +496,16 @@ void RemoteActuatorBus::pumpInbound() {
     AsyncWebSocketClient* c = _inClient;
     if (!c || !_inId) return;
     if (c->status() != WS_CONNECTED) return;
-    char tx[sizeof(_txFrame)] = ""; char cfg[sizeof(_cfgFrame)] = ""; char ota[sizeof(_otaFrame)] = "";
-    char prs[sizeof(_pressFrame)] = "";
-    bool haveTx = false, haveCfg = false, haveOta = false, havePress = false;
-    if (xSemaphoreTake(_mutex, 0) != pdTRUE) return;      // try again next loop
-    if (_txPending && _connected)  { strlcpy(tx,  _txFrame,  sizeof(tx));  _txPending  = false; haveTx  = true; }
-    if (_cfgPending && _connected) { strlcpy(cfg, _cfgFrame, sizeof(cfg)); _cfgPending = false; haveCfg = true; }
-    if (_otaPending && _connected) { strlcpy(ota, _otaFrame, sizeof(ota)); _otaPending = false; haveOta = true; }
-    if (_pressPending && _connected) { strlcpy(prs, _pressFrame, sizeof(prs)); _pressPending = false; havePress = true; }
-    if (_moveOutstanding && (millis() - _moveStartedMs) > nodelink::kMoveTimeoutMs) {
-        _moveOutstanding = false;
-        _moveFault = "The board never reported its move finished (timed out).";
-        DEBUG_PRINT(F("[NODE] Move timed out on ")); DEBUG_PRINTLN(_nodeId);
+    // The same drain as the dial-out task's, to the other transport.
+    for (int i = 0; i < 4; i++) {
+        std::string frame;
+        if (xSemaphoreTake(_mutex, 0) != pdTRUE) return;      // try again next loop
+        const bool got = _s.nextFrame(frame);
+        xSemaphoreGive(_mutex);
+        flushSink();
+        if (!got) break;
+        c->text(frame.c_str());
     }
-    xSemaphoreGive(_mutex);
-    if (haveTx)  c->text(tx);
-    if (haveCfg) { c->text(cfg); DEBUG_PRINT(F("[NODE→] CONFIG to ")); DEBUG_PRINTLN(_nodeId); }
-    if (haveOta) { c->text(ota); DEBUG_PRINT(F("[NODE→] OTA to "));    DEBUG_PRINTLN(_nodeId); }
-    if (havePress) c->text(prs);
 }
 
 void RemoteActuatorBus::update() {
@@ -584,7 +514,7 @@ void RemoteActuatorBus::update() {
     // somebody else's job). When the link is down and the node has had its grace to
     // dial in, start one: this is the fallback that dials it back.
     if (_running && !_taskAlive && !_inId) {
-        const bool inGrace = (_capJoin && _downSinceMs && (millis() - _downSinceMs) < kDialInGraceMs) ||
+        const bool inGrace = (_s.dialsIn() && _s.downSinceMs() && (millis() - _s.downSinceMs()) < kDialInGraceMs) ||
                              (int32_t)(_bootGraceUntilMs - millis()) > 0;
         if (!inGrace) ensureTask();
     }
@@ -613,8 +543,9 @@ void RemoteActuatorBus::onEvent(WStype_t type, uint8_t* payload, size_t len) {
             //
             // Socket is up but the node hasn't identified itself yet — stay
             // offline until WELCOME lands so we never command an unknown board.
-            String s; buildHelloString(s);
-            _ws.sendTXT(s);
+            std::string hello;
+            if (_mutex) { xSemaphoreTake(_mutex, portMAX_DELAY); hello = _s.helloFrame(); xSemaphoreGive(_mutex); }
+            _ws.sendTXT(hello.c_str());
             break;
         }
         case WStype_DISCONNECTED: {
@@ -625,8 +556,13 @@ void RemoteActuatorBus::onEvent(WStype_t type, uint8_t* payload, size_t len) {
             // Not this bus's link any more — the socket that carries it is the node's
             // own. Marking the bus down for the death of a spare would drop a good link.
             if (_inId) break;
-            if (hollow && _hollowDrops < 0xFFFF) _hollowDrops++;
-            markDown(!hollow);
+            if (_mutex) {
+                xSemaphoreTake(_mutex, portMAX_DELAY);
+                if (hollow) _s.noteHollow();
+                _s.onDown();
+                xSemaphoreGive(_mutex);
+                flushSink();
+            }
             // No _backoff() here: the drop stamped _lastConnectionFail, and the
             // task loop backs off once per stamp. Calling it here as well would
             // count every drop twice.
@@ -651,7 +587,7 @@ void RemoteActuatorBus::onEvent(WStype_t type, uint8_t* payload, size_t len) {
         case WStype_PONG:
             if (_mutex) {
                 xSemaphoreTake(_mutex, portMAX_DELAY);
-                _lastRxMs = millis();
+                _s.onPong();
                 xSemaphoreGive(_mutex);
             }
             break;
@@ -662,422 +598,116 @@ void RemoteActuatorBus::onEvent(WStype_t type, uint8_t* payload, size_t len) {
 }
 
 void RemoteActuatorBus::handleFrame(const char* json, size_t len) {
-    StaticJsonDocument<384> doc;
-    if (deserializeJson(doc, json, len)) return;   // malformed → ignore
-    JsonObjectConst f = doc.as<JsonObjectConst>();
-    const char* t = f["t"].as<const char*>();
-    if (!t) return;
-
-    // Filled in the WELCOME branch under the lock, logged after it is released.
-    bool logUp = false;
-    char upExtra[160] = "";
-
+    if (!_mutex) return;
     xSemaphoreTake(_mutex, portMAX_DELAY);
-    _lastRxMs = millis();
-
-    if (strcmp(t, "WELCOME") == 0) {
-        // Refuse a node speaking a different protocol version rather than
-        // half-understanding it. It stays offline and its gates unreachable.
-        if ((f["v"] | 0) != nodelink::kVersion) {
-            _connected = false;
-            xSemaphoreGive(_mutex);
-            DEBUG_PRINT(F("[NODE] Version mismatch from ")); DEBUG_PRINTLN(_nodeId);
-            return;
-        }
-        nodelink::strlcpy_(_board, f["board"] | "", sizeof(_board));
-        nodelink::strlcpy_(_fw,    f["fw"]    | "", sizeof(_fw));
-        _capServos = f["caps"]["servos"] | 0;
-        _capLinear = f["caps"]["linear"] | 0;
-        // Absent means none: a board flashed before clamps existed answers
-        // exactly as it always did rather than being read as broken.
-        _capClamps = f["caps"]["ct"] | 0;
-        // Absent means NO: a node that predates plug polling must stay
-        // brain-polled, or it is handed a CONFIG it refuses whole — clamp and all.
-        _capPlugs  = f["caps"]["plug"] | 0;
-        // Absent means NO: a board that predates node-initiated links is dialled.
-        _capJoin   = f["caps"]["join"] | 0;
-        // Absent means NO: never send a PRESS or a `bin` sensor to a board that did not say it has one.
-        _capRf     = f["caps"]["rf"]  | 0;
-        _capBin    = f["caps"]["bin"] | 0;
-
-        // Did it accept our claim? A refusal leaves us OFFLINE rather than
-        // half-connected: every caller already treats offline as "don't command
-        // this board", which is exactly the required behaviour, and the socket
-        // stays open so the user can be told who owns it.
-        if (!nodelink::welcomeAccepted(f)) {
-            nodelink::strlcpy_(_refusedBy, f["claimedBy"] | "another primary", sizeof(_refusedBy));
-            _connected = false;
-            xSemaphoreGive(_mutex);
-            {
-                char safe[40], extra[80];
-                linklog::safeCopy(safe, sizeof(safe), _refusedBy);
-                snprintf(extra, sizeof(extra), "\"owner\":\"%s\"", safe);
-                linklog::event("refused", _host, extra);
-            }
-            DEBUG_PRINT(F("[NODE] ")); DEBUG_PRINT(_nodeId);
-            DEBUG_PRINT(F(" REFUSED us — it belongs to ")); DEBUG_PRINTLN(_refusedBy);
-            DEBUG_PRINTLN(F("       Take it over from the boards screen if that is what you want."));
-            return;
-        }
-        _refusedBy[0] = '\0';
-        // A node that has come back has, by definition, finished (or abandoned)
-        // whatever update it was running — the fw in this WELCOME is the verdict.
-        // A refusal ("fail") is kept: nothing about the node changed.
-        if (strcmp(_otaState, "fail") != 0) { _otaState[0] = '\0'; _otaPct = -1; _otaErr[0] = '\0'; }
-        // LINK LOG: how long it was down and how it looked while it was, taken
-        // BEFORE the reset below, plus the node's own account of its boot
-        // (withBootInfo) — an upS shorter than the outage means the NODE
-        // rebooted, and `rst` says whether that was power or a crash.
-        const uint32_t upDownMs  = _downSinceMs ? (millis() - _downSinceMs) : 0;
-        const uint16_t upHollow  = _hollowDrops;
-        const bool     upFirst   = !_everLinked;
-        const long     upNodeUpS = f.containsKey("upS") ? (long)(f["upS"] | 0UL) : -1L;
-        char upRst[nodelink::kMaxRstLen + 1];
-        linklog::safeCopy(upRst, sizeof(upRst), f["rst"] | "");
-        _everLinked = true;
-        logUp = true;
-        _connected = true;
-        _downSinceMs = 0;
-        _hollowDrops = 0;
-        snprintf(upExtra, sizeof(upExtra),
-                 "\"downMs\":%lu,\"hollow\":%u,\"first\":%s,\"nodeUpS\":%ld,\"nodeRst\":\"%s\"",
-                 (unsigned long)upDownMs, (unsigned)upHollow, upFirst ? "true" : "false",
-                 upNodeUpS, upRst);
-        // A HEALTHY LINK RESETS THE BACKOFF, and an accepted WELCOME is the
-        // first moment we know it is one. (This task is the only caller of
-        // setReconnectInterval, and handleFrame runs on it.)
+    const bool linkedNow = _s.onFrame(json, len);
+    xSemaphoreGive(_mutex);
+    flushSink();
+    // A HEALTHY LINK RESETS THE BACKOFF, and an accepted WELCOME is the first moment we know it is
+    // one — which is a transport matter, so it is done here and not in the session.
+    if (linkedNow) {
         _retryMs = nodelink::kReconnectMinMs;
         _ws.setReconnectInterval(_retryMs);
-        // Re-arm the CONFIG on every accepted handshake: this node may have just
-        // rebooted, and a node that has not been configured reports nothing.
-        if (_cfgValid) _cfgPending = true;
-    } else if (strcmp(t, "ACK") == 0) {
-        bool ok = f["ok"] | false;
-        // A PRESS is answered with an ACK on the same seq. It is not a move: it must not
-        // touch the move bookkeeping below, and its failure is its own fault string.
-        if (_pressSeq && (f["seq"] | 0u) == _pressSeq) {
-            nodelink::strlcpy_(_pressFault, ok ? "" : (f["err"] | "the board refused the press"), sizeof(_pressFault));
-            _pressSeq = 0;
-            xSemaphoreGive(_mutex);
-            DEBUG_PRINT(F("[NODE←] PRESS ")); DEBUG_PRINTLN(ok ? F("ok") : F("REFUSED"));
-            return;
-        }
-        if (!ok) {
-            if (_moveOutstanding) _moveFault = "The board refused the move.";
-            _moveOutstanding = false;                       // refused → stop waiting
-        }
-        xSemaphoreGive(_mutex);
-        DEBUG_PRINT(F("[NODE←] ACK seq=")); DEBUG_PRINT(f["seq"] | 0);
-        DEBUG_PRINT(ok ? F(" ok") : F(" REFUSED: "));
-        if (!ok) DEBUG_PRINT(f["err"] | "(no reason given)");
-        DEBUG_PRINTLN();
-        return;
-    } else if (strcmp(t, "SENSE") == 0) {
-        const char* sid = f["sensorId"].as<const char*>();
-        const bool  on  = f["on"] | false;
-        if (sid && *sid) {
-            size_t i = 0;
-            for (; i < _senseCount; i++) if (strcmp(_senses[i].sensorId, sid) == 0) break;
-            // A node reporting more sensors than it was configured for is a
-            // node out of step with us; keep the ones we know and drop the
-            // rest rather than growing past the array.
-            if (i == _senseCount && _senseCount < nodelink::kMaxSensorsPerNode) {
-                nodelink::strlcpy_(_senses[i].sensorId, sid, sizeof(_senses[i].sensorId));
-                _senseCount++;
-            }
-            if (i < nodelink::kMaxSensorsPerNode && i < _senseCount) {
-                const bool changed = (_senses[i].on != on) || _senses[i].atMs == 0;
-                _senses[i].on    = on;
-                _senses[i].atMs  = millis();
-                _senses[i].level = f["level"] | -1.0f;
-                // Telemetry for the UI. Absent stays NEGATIVE rather than
-                // becoming 0, because 0 A is a real reading from an idle tool
-                // and "the node did not say" is not. Nothing branches on these.
-                _senses[i].amps   = f["amps"]   | -1.0f;
-                _senses[i].floorA = f["floorA"] | -1.0f;
-                _senses[i].tripA  = f["tripA"]  | -1.0f;
-                _senses[i].fault  = f["fault"]  | false;
-                _senses[i].isPlug = f["plug"]   | false;
-                _senses[i].watts  = f["watts"]  | -1.0f;
-                xSemaphoreGive(_mutex);
-                // Logged on CHANGE only: this frame repeats every
-                // kSenseRepeatMs, and a line per repeat would bury everything
-                // else on the console within a minute.
-                if (changed) {
-                    DEBUG_PRINT(F("[NODE←] SENSE ")); DEBUG_PRINT(sid);
-                    DEBUG_PRINTLN(on ? F(" ON") : F(" off"));
-                }
-                return;
-            }
-        }
-        xSemaphoreGive(_mutex);
-        return;
-    } else if (strcmp(t, "OTASTATE") == 0) {
-        const char* st = f["state"] | "";
-        nodelink::strlcpy_(_otaState, st, sizeof(_otaState));
-        _otaTouchedMs = millis();
-        _otaPct = f.containsKey("pct") ? (int)(f["pct"] | 0) : _otaPct;
-        nodelink::strlcpy_(_otaErr, f["err"] | "", sizeof(_otaErr));
-        char extra[120];
-        char safe[48];
-        linklog::safeCopy(safe, sizeof(safe), _otaErr);
-        snprintf(extra, sizeof(extra), "\"state\":\"%s\",\"pct\":%d,\"err\":\"%s\"", _otaState, _otaPct, safe);
-        const bool log = strcmp(st, "progress") != 0;   // a start/done/fail is an event; progress is noise
-        xSemaphoreGive(_mutex);
-        DEBUG_PRINT(F("[NODE←] OTA ")); DEBUG_PRINT(_nodeId); DEBUG_PRINT(' '); DEBUG_PRINT(st);
-        DEBUG_PRINT(' '); DEBUG_PRINTLN(_otaPct);
-        if (log) linklog::event("ota", _host, extra);
-        return;
-    } else if (strcmp(t, "STATE") == 0) {
-        bool moving = f["moving"] | false;
-        if (!moving) { _moveOutstanding = false; _moveFault = nullptr; }
-        xSemaphoreGive(_mutex);
-        DEBUG_PRINT(F("[NODE←] STATE ")); DEBUG_PRINT(f["selectorId"] | "?");
-        DEBUG_PRINT(F(" -> ")); DEBUG_PRINT(f["stateId"] | "?");
-        DEBUG_PRINTLN(moving ? F(" (moving)") : F(" (arrived)"));
-        return;
     }
-    xSemaphoreGive(_mutex);
-    if (logUp) linklog::event("link_up", _host, upExtra);
 }
 
+// ── the ActuatorBus seam: thin delegates, each under the lock ────────────────
+// The mutex is created in begin(); before that every question has the answer "nothing".
 bool RemoteActuatorBus::online() const {
     if (!_mutex) return false;
     xSemaphoreTake(_mutex, portMAX_DELAY);
-    bool up = _connected && (millis() - _lastRxMs) < nodelink::kPongTimeoutMs;
+    const bool r = _s.online();
     xSemaphoreGive(_mutex);
-    return up;
+    flushSink();
+    return r;
 }
-
 bool RemoteActuatorBus::busy() const {
     if (!_mutex) return false;
     xSemaphoreTake(_mutex, portMAX_DELAY);
-    bool b = _moveOutstanding || _txPending;
+    const bool r = _s.busy();
     xSemaphoreGive(_mutex);
-    return b;
+    flushSink();
+    return r;
 }
-
-bool RemoteActuatorBus::setState(const char* selectorId, JsonObjectConst sel,
-                                 const char* stateId) {
-    if (!online()) return false;
-
-    // Resolve to a concrete angle / mm HERE, on the primary. The secondary gets
-    // a number, never a state name it would have to interpret — see NodeLink.h.
-    StaticJsonDocument<320> doc;
+bool RemoteActuatorBus::setState(const char* selectorId, JsonObjectConst sel, const char* stateId) {
+    if (!_mutex) return false;
     xSemaphoreTake(_mutex, portMAX_DELAY);
-    uint32_t seq = ++_seq;
+    const bool r = _s.setState(selectorId, sel, stateId);
     xSemaphoreGive(_mutex);
-
-    if (!nodelink::buildSetFrame(doc.to<JsonObject>(), seq, selectorId, sel, stateId)) {
-        return false;   // uncalibrated — refuse rather than send a guess
-    }
-
-    String s; serializeJson(doc, s);
-    if (s.length() >= sizeof(_txFrame)) return false;
-
-    xSemaphoreTake(_mutex, portMAX_DELAY);
-    nodelink::strlcpy_(_txFrame, s.c_str(), sizeof(_txFrame));
-    _txPending       = true;
-    _moveOutstanding = true;
-    _moveStartedMs   = millis();
-    xSemaphoreGive(_mutex);
-
-    // The whole frame, not a summary. When a gate doesn't move, the question is
-    // always "which of us dropped it" — this line and the node's matching one
-    // answer it in one comparison.
-    DEBUG_PRINT(F("[NODE→] ")); DEBUG_PRINT(_nodeId);
-    DEBUG_PRINT(F(" ")); DEBUG_PRINTLN(s);
-    return true;
+    flushSink();
+    return r;
 }
-
 bool RemoteActuatorBus::jog(int channel, int angle, bool detach) {
-    // A detach has no counterpart on the wire and needs none: holdAtRest is
-    // false on a jog, so the node's ServoActuator de-energises on its own once
-    // the sweep settles. Reported as HANDLED rather than refused — the caller
-    // asked for a de-energised servo and that is what it gets.
-    if (detach) return true;
-    if (!online()) return false;
-    if (channel < 0 || channel > 15 || angle < 0 || angle > 180) return false;
-
-    // Hand-built rather than routed through buildSetFrame(): that resolves a
-    // stateId against a selector's calibration, and a jog is what you do BEFORE
-    // there is any calibration to resolve against.
-    StaticJsonDocument<256> doc;
-    JsonObject o = doc.to<JsonObject>();
+    if (!_mutex) return false;
     xSemaphoreTake(_mutex, portMAX_DELAY);
-    uint32_t seq = ++_seq;
+    const bool r = _s.jog(channel, angle, detach);
     xSemaphoreGive(_mutex);
-
-    o["t"]          = "SET";
-    o["seq"]        = seq;
-    o["selectorId"] = "__jog";
-    o["stateId"]    = "__jog";
-    o["drive"]      = "servo";
-    o["channel"]    = channel;
-    o["angle"]      = angle;
-    o["holdAtRest"] = false;
-
-    String s; serializeJson(doc, s);
-    if (s.length() >= sizeof(_txFrame)) return false;
-
-    xSemaphoreTake(_mutex, portMAX_DELAY);
-    nodelink::strlcpy_(_txFrame, s.c_str(), sizeof(_txFrame));
-    _txPending = true;
-    // Deliberately NOT setting _moveOutstanding: a jog is a setup-time nudge, not
-    // a routed move. Marking the bus busy() would stall the move queue behind a
-    // gate someone is calibrating by hand.
-    xSemaphoreGive(_mutex);
-    return true;
+    flushSink();
+    return r;
 }
-
 bool RemoteActuatorBus::pressRf(uint8_t address, uint8_t data, uint32_t tickUs, uint32_t repeats) {
-    if (!online() || _capRf <= 0) return false;
-    StaticJsonDocument<192> doc;
+    if (!_mutex) return false;
     xSemaphoreTake(_mutex, portMAX_DELAY);
-    const uint32_t seq = ++_seq;
+    const bool r = _s.pressRf(address, data, tickUs, repeats);
     xSemaphoreGive(_mutex);
-    nodelink::buildPress(doc.to<JsonObject>(), seq, address, data, tickUs, repeats);
-    char buf[sizeof(_pressFrame)];
-    if (serializeJson(doc, buf, sizeof(buf)) >= sizeof(buf)) return false;
-    xSemaphoreTake(_mutex, portMAX_DELAY);
-    nodelink::strlcpy_(_pressFrame, buf, sizeof(_pressFrame));
-    _pressSeq     = seq;
-    _pressPending = true;
-    xSemaphoreGive(_mutex);
-    DEBUG_PRINT(F("[NODE→] PRESS to ")); DEBUG_PRINTLN(_nodeId);
-    return true;
+    flushSink();
+    return r;
 }
-
 void RemoteActuatorBus::configureSensors(JsonArrayConst sensors) {
-    // Built here rather than by the caller so the WIRE SHAPE lives in one place
-    // — nodelink.js's CONFIG, mirrored by parseConfigFrame() on the node.
-    // 512, not 320: kMaxSensorsPerNode is 4 and a sensorId may be 48 chars, so
-    // a legitimate full config is ~420 bytes. The old size would have refused
-    // one — loudly, but still refused.
-    // 1024 since plug sensors (2026-10-03): four of them are four objects of
-    // five members, and overflow DROPS members silently.
-    StaticJsonDocument<1024> doc;
-    JsonObject f = doc.to<JsonObject>();
-    f["t"] = "CONFIG";
-    JsonArray arr = f.createNestedArray("sensors");
-    for (JsonObjectConst sen : sensors) {
-        JsonObject o = arr.createNestedObject();
-        o["sensorId"] = sen["sensorId"] | "";
-        if (strcmp(sen["kind"] | "ct", "plug") == 0) {
-            o["kind"]       = "plug";
-            o["ip"]         = sen["ip"] | "";
-            o["plug"]       = sen["plug"] | "shelly";
-            o["thresholdW"] = sen["thresholdW"] | 0.0f;
-        } else if (strcmp(sen["kind"] | "ct", "bin") == 0) {
-            o["kind"]   = "bin";
-            if (sen.containsKey("invert")) o["invert"] = sen["invert"] | true;
-        } else {
-            o["kind"]     = "ct";
-            o["channel"]  = sen["channel"] | 0;
-        }
-    }
-
     if (!_mutex) return;
     xSemaphoreTake(_mutex, portMAX_DELAY);
-    f["seq"] = ++_seq;
-    String s; serializeJson(doc, s);
-    if (s.length() >= sizeof(_cfgFrame)) {
-        xSemaphoreGive(_mutex);
-        DEBUG_PRINT(F("[NODE] CONFIG too large for ")); DEBUG_PRINTLN(_nodeId);
-        return;
-    }
-    nodelink::strlcpy_(_cfgFrame, s.c_str(), sizeof(_cfgFrame));
-    _cfgValid   = true;
-    _cfgPending = true;
-    // Readings from the OLD configuration are not readings under the new one:
-    // a sensorId that was just removed must stop answering immediately rather
-    // than keep a tool switched on until it ages out.
-    _senseCount = 0;
+    _s.configureSensors(sensors);
     xSemaphoreGive(_mutex);
+    flushSink();
 }
-
+bool RemoteActuatorBus::pollsPlugs() const { return _s.pollsPlugs(); }   // a caps flag: a lone int, written once per WELCOME
+bool RemoteActuatorBus::canPressRf() const { return _s.canPressRf(); }
+bool RemoteActuatorBus::watchesBin() const { return _s.watchesBin(); }
 bool RemoteActuatorBus::plugReading(const char* sensorId, float& watts, bool& fault, uint32_t& atMs) const {
-    if (!sensorId || !*sensorId || !_mutex) return false;
+    if (!_mutex) return false;
     xSemaphoreTake(_mutex, portMAX_DELAY);
-    bool found = false;
-    for (size_t i = 0; i < _senseCount; i++) {
-        if (strcmp(_senses[i].sensorId, sensorId) != 0) continue;
-        if (_senses[i].atMs && _senses[i].isPlug) {
-            watts = _senses[i].watts < 0.0f ? 0.0f : _senses[i].watts;
-            fault = _senses[i].fault;
-            atMs  = _senses[i].atMs;
-            found = true;
-        }
-        break;
-    }
+    const bool r = _s.plugReading(sensorId, watts, fault, atMs);
     xSemaphoreGive(_mutex);
-    return found;
+    flushSink();
+    return r;
 }
-
 bool RemoteActuatorBus::senseOf(const char* sensorId, bool& on, uint32_t& atMs) const {
-    if (!sensorId || !*sensorId || !_mutex) return false;
-    // const_cast: the mutex is a lock, not part of the logical value, and every
-    // other const accessor on this class takes it the same way.
-    SemaphoreHandle_t m = _mutex;
-    xSemaphoreTake(m, portMAX_DELAY);
-    bool found = false;
-    for (size_t i = 0; i < _senseCount; i++) {
-        if (strcmp(_senses[i].sensorId, sensorId) != 0) continue;
-        // atMs == 0 means the slot exists but nothing has landed in it.
-        if (_senses[i].atMs) { on = _senses[i].on; atMs = _senses[i].atMs; found = true; }
-        break;
-    }
-    xSemaphoreGive(m);
-    return found;
-}
-
-size_t RemoteActuatorBus::senseCount() const {
+    if (!_mutex) return false;
     xSemaphoreTake(_mutex, portMAX_DELAY);
-    const size_t n = _senseCount;
+    const bool r = _s.senseOf(sensorId, on, atMs);
+    xSemaphoreGive(_mutex);
+    flushSink();
+    return r;
+}
+size_t RemoteActuatorBus::senseCount() const {
+    if (!_mutex) return 0;
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    const size_t n = _s.senseCount();
     xSemaphoreGive(_mutex);
     return n;
 }
-
 bool RemoteActuatorBus::senseAt(size_t i, SenseView& v) const {
+    if (!_mutex) return false;
     xSemaphoreTake(_mutex, portMAX_DELAY);
-    const bool ok = i < _senseCount;
-    if (ok) {
-        // Points into _senses[], which outlives the call — see SenseView.
-        v.id = _senses[i].sensorId;
-        // CONFIGURED BUT NEVER HEARD FROM is the state this endpoint exists to
-        // make visible, and it is NOT the same as "off". A clamp the layout
-        // names, on a board that is online, that has never sent a SENSE, means
-        // the chain is broken somewhere between CONFIG and the ADC — which is
-        // exactly the question being asked on a bench.
-        v.reported = _senses[i].atMs != 0;
-        v.on       = _senses[i].on;
-        // AGE, not the raw timestamp: this becomes a JSON body a phone reads,
-        // and millis() on this board means nothing at the other end.
-        v.ageMs    = v.reported ? (uint32_t)(millis() - _senses[i].atMs) : 0;
-        v.level    = _senses[i].level;
-        v.amps     = _senses[i].amps;
-        v.floorA   = _senses[i].floorA;
-        v.tripA    = _senses[i].tripA;
-        v.fault    = _senses[i].fault;
-        v.isPlug   = _senses[i].isPlug;
-        v.watts    = _senses[i].watts;
-    }
+    const bool r = _s.senseAt(i, v);
     xSemaphoreGive(_mutex);
-    return ok;
+    flushSink();
+    return r;
 }
 
 RemoteActuatorBus::LinkHealth RemoteActuatorBus::health() const {
     LinkHealth h{false, false, 0, UINT32_MAX, 0, nullptr};
     if (!_mutex) return h;
-    const uint32_t now = millis();
+    const uint32_t now  = millis();
     const uint32_t mdns = _lastMdnsOkMs;
     xSemaphoreTake(_mutex, portMAX_DELAY);
-    h.linked      = _connected && (now - _lastRxMs) < nodelink::kPongTimeoutMs;
-    h.refused     = _refusedBy[0] != '\0';
-    h.downForMs   = (h.linked || !_downSinceMs) ? 0 : (now - _downSinceMs);
-    h.hollowDrops = _hollowDrops;
-    h.moveFault   = _moveFault;
+    const NodeSession::Health sh = _s.health();
     xSemaphoreGive(_mutex);
+    h.linked      = sh.linked;
+    h.refused     = sh.refused;
+    h.downForMs   = sh.downForMs;
+    h.hollowDrops = sh.hollowDrops;
+    h.moveFault   = sh.moveFault;
     h.mdnsAgeMs   = mdns ? (now - mdns) : UINT32_MAX;
     return h;
 }
@@ -1091,59 +721,78 @@ RemoteActuatorBus::NodeInfo RemoteActuatorBus::info() const {
         return n;
     }
     xSemaphoreTake(_mutex, portMAX_DELAY);
-    n.connected  = _connected && (millis() - _lastRxMs) < nodelink::kPongTimeoutMs;
-    n.lastSeenMs = _lastRxMs;
-    nodelink::strlcpy_(n.board, _board, sizeof(n.board));
-    nodelink::strlcpy_(n.fw,    _fw,    sizeof(n.fw));
-    n.capServos = _capServos;
-    n.capLinear = _capLinear;
-    n.capClamps = _capClamps;
-    nodelink::strlcpy_(n.ota,    _otaState, sizeof(n.ota));
-    n.otaPct = _otaPct;
-    nodelink::strlcpy_(n.otaErr, _otaErr,   sizeof(n.otaErr));
-    // An update that stopped reporting is a failure, not a progress bar that never
-    // moves — most likely a node whose firmware predates OTA, which ignores the
-    // frame (an unknown frame is ignored, not refused; see nodelink.js).
-    if ((strcmp(_otaState, "start") == 0 || strcmp(_otaState, "progress") == 0) &&
-        millis() - _otaTouchedMs > 30000UL) {
-        nodelink::strlcpy_(n.ota, "fail", sizeof(n.ota));
-        nodelink::strlcpy_(n.otaErr, "no answer - this board's firmware predates updates", sizeof(n.otaErr));
-        n.otaPct = -1;
-    }
+    n = _s.info();
     xSemaphoreGive(_mutex);
     return n;
 }
 
-bool RemoteActuatorBus::requestOta(const char* path, uint32_t size, const char* md5,
-                                   const char* fw, const char*& why) {
+bool RemoteActuatorBus::requestOta(const char* path, uint32_t size, const char* md5, const char* fw, const char*& why) {
     if (!_mutex) { why = "not started"; return false; }
     xSemaphoreTake(_mutex, portMAX_DELAY);
-    const bool up = _connected && (millis() - _lastRxMs) < nodelink::kPongTimeoutMs;
-    const bool busy = ((strcmp(_otaState, "start") == 0 || strcmp(_otaState, "progress") == 0) &&
-                       millis() - _otaTouchedMs < 30000UL) || _otaPending;
-    if (!up)   { xSemaphoreGive(_mutex); why = "the board is offline"; return false; }
-    if (busy)  { xSemaphoreGive(_mutex); why = "an update is already running"; return false; }
-    StaticJsonDocument<384> d;
-    nodelink::buildOta(d.to<JsonObject>(), ++_otaSeq, path, size, md5, fw);
-    if (serializeJson(d, _otaFrame, sizeof(_otaFrame)) >= sizeof(_otaFrame)) {
-        xSemaphoreGive(_mutex); why = "frame too long"; return false;
-    }
-    _otaPending = true;
-    _otaTouchedMs = millis();
-    nodelink::strlcpy_(_otaState, "start", sizeof(_otaState));
-    _otaPct = 0;
-    _otaErr[0] = '\0';
+    const bool r = _s.requestOta(path, size, md5, fw, why);
     xSemaphoreGive(_mutex);
-    return true;
+    flushSink();
+    return r;
 }
 
 void RemoteActuatorBus::noteOtaRefused(const char* why) {
     if (!_mutex) return;
     xSemaphoreTake(_mutex, portMAX_DELAY);
-    nodelink::strlcpy_(_otaState, "fail", sizeof(_otaState));
-    _otaPct = -1;
-    nodelink::strlcpy_(_otaErr, why ? why : "refused", sizeof(_otaErr));
+    _s.noteOtaRefused(why);
     xSemaphoreGive(_mutex);
+    flushSink();
+}
+
+// ── the session's voice: console and link log ────────────────────────────────
+RemoteActuatorBus::RemoteActuatorBus() : _s(clockMs, &_sink) { _sink.bus = this; }
+
+void RemoteActuatorBus::Sink::say(const char* l) {
+    if (nLine < kLines) { nodelink::strlcpy_(line[nLine++], l ? l : "", kLineLen); }
+    else if (dropped < 255) dropped++;
+}
+
+void RemoteActuatorBus::Sink::linkEvent(const char* event, const char* extraJson) {
+    if (nEv < kEvents) {
+        nodelink::strlcpy_(evName[nEv],  event ? event : "", sizeof(evName[0]));
+        nodelink::strlcpy_(evExtra[nEv], extraJson ? extraJson : "", sizeof(evExtra[0]));
+        nEv++;
+    } else if (dropped < 255) dropped++;
+}
+
+void RemoteActuatorBus::flushSink() const {
+    if (!_mutex) return;
+    for (;;) {
+        char buf[Sink::kLineLen];
+        bool got = false;
+        xSemaphoreTake(_mutex, portMAX_DELAY);
+        if (_sink.nLine) {
+            nodelink::strlcpy_(buf, _sink.line[0], sizeof(buf));
+            for (int i = 1; i < _sink.nLine; i++) memcpy(_sink.line[i - 1], _sink.line[i], Sink::kLineLen);
+            _sink.nLine--;
+            got = true;
+        }
+        xSemaphoreGive(_mutex);
+        if (!got) break;
+        DEBUG_PRINTLN(buf);
+    }
+    for (;;) {
+        char name[16], extra[Sink::kExtraLen];
+        bool got = false;
+        xSemaphoreTake(_mutex, portMAX_DELAY);
+        if (_sink.nEv) {
+            nodelink::strlcpy_(name,  _sink.evName[0],  sizeof(name));
+            nodelink::strlcpy_(extra, _sink.evExtra[0], sizeof(extra));
+            for (int i = 1; i < _sink.nEv; i++) {
+                memcpy(_sink.evName[i - 1],  _sink.evName[i],  sizeof(name));
+                memcpy(_sink.evExtra[i - 1], _sink.evExtra[i], sizeof(extra));
+            }
+            _sink.nEv--;
+            got = true;
+        }
+        xSemaphoreGive(_mutex);
+        if (!got) break;
+        linklog::event(name, _host, extra[0] ? extra : nullptr);
+    }
 }
 
 } // namespace topo
