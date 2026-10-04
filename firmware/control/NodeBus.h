@@ -126,6 +126,17 @@ public:
         return b && b->senseOf(sensorId, on, atMs);
     }
 
+    // Plugs polled by a node (see ActuatorBus::pollsPlugs / plugReading).
+    bool pollsPlugs(const char* controllerId) const {
+        ActuatorBus* b = busForController(controllerId);
+        return b && b->pollsPlugs();
+    }
+    bool plugReading(const char* controllerId, const char* sensorId,
+                     float& watts, bool& fault, uint32_t& atMs) const {
+        ActuatorBus* b = busForController(controllerId);
+        return b && b->plugReading(sensorId, watts, fault, atMs);
+    }
+
     bool setState(const char* selectorId, JsonObjectConst sel, const char* stateId) {
         ActuatorBus* b = busFor(sel);
         if (!b || !b->online()) return false;

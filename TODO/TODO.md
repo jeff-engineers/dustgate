@@ -1261,3 +1261,23 @@ board list is simulated.
 the real device) and confirm the tool list, manual override, and gate state track
 what the hardware is doing.
     
+
+- **Node-owned plug polling: BUILT 2026-10-03, NOT RUN ON ANY BOARD.** The board
+  that controls a tool polls that tool's plug (rule: `plugOwners`, jeff: "the brain
+  polls boards until they're assigned to a tool"). CONFIG sensors gain kind `plug`
+  (ip, shelly|tasmota, thresholdW); SENSE gains `watts` and `plug`; WELCOME gains
+  `caps.plug`. The node runs a poll task on its own (`TasmotaOutlet` /
+  `ShellyGen2Outlet` compiled into the node under `DUSTGATE_NODE_PLUG_POLL`) and
+  reports on change + every 5 s; the brain stops polling those outlets, takes the
+  watts through the same `setMachinePower`, and a node that is stale or cannot reach
+  the plug reads as off + unreachable. Plugs beyond a node's 4 sensor slots, and any
+  plug on a node that lacks `caps.plug`, stay brain-polled.
+  **Unmeasured / to check on hardware:** the node's HTTP poll cadence with 3-4 plugs
+  (one task, sequential, 400 ms timeout each — a dead plug delays the others by that
+  much); whether the CT's 60 Hz window suffers (separate task, WiFi on the same
+  core); the brain's heap saving; reachability text when the NODE is the one that
+  is down (it says the plug is unreachable, and board-offline is raised beside it).
+  **Gaps:** Shelly push-provisioning still runs from the brain for node-polled
+  Shellys; `RemoteActuatorBus::configureSensors` copies only channel for a clamp
+  (the CT tuning ratios are built by the runtime but never reach the wire — worth
+  checking before anyone believes retuning from the primary works).

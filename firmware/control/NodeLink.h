@@ -51,6 +51,14 @@ static const unsigned long kSenseStaleMs    = 15000;
 // more to a board that kept four would leave it silently deaf to the rest.
 static const size_t kMaxSensorsPerNode = 4;
 
+// Bounds on a PLUG sensor — kMaxPlugThresholdW / kMaxPlugWatts / kMaxPlugIpLen are
+// MAX_PLUG_THRESHOLD_W / MAX_PLUG_WATTS / MAX_PLUG_IP_LEN in nodelink.js, a PAIR
+// asserted literally on both sides. A node refuses an out-of-range CONFIG WHOLE
+// (its clamp with it), so the bounds must agree exactly.
+static const float  kMaxPlugThresholdW = 10000.0f;
+static const float  kMaxPlugWatts      = 20000.0f;
+static const size_t kMaxPlugIpLen      = 15;
+
 // The bounds on an OTA frame. MAX_OTA_PATH / MIN_OTA_BYTES / MAX_OTA_BYTES in
 // nodelink.js — a PAIR, asserted literally on both sides. parseOtaFrame refuses
 // outside them WHOLE: a primary sending a longer path than a node would parse
@@ -184,10 +192,15 @@ inline bool buildSetFrame(JsonObject out, uint32_t seq, const char* selectorId,
 // not chosen, exactly like the servo count, so it cannot disagree with the
 // hardware. Defaulted to 0 so every existing call site is unchanged and a board
 // with no clamp says nothing rather than saying zero.
+//
+// `pollsPlugs` says this board can poll smart plugs on the primary's behalf
+// (CONFIG sensors of kind "plug"). Absent means NO, on both sides — it must, or
+// every board flashed before 2026-10-03 is handed a CONFIG it refuses whole,
+// clamp and all. Omitted when false, like `ct`.
 inline void buildWelcome(JsonObject out, const char* nodeId, const char* board,
                          const char* fw, int servos, int linear,
                          const char* claimedBy = nullptr, bool accepted = true,
-                         int clamps = 0) {
+                         int clamps = 0, bool pollsPlugs = false) {
     out["t"]      = "WELCOME";
     out["v"]      = kVersion;
     out["nodeId"] = nodeId;
@@ -199,6 +212,7 @@ inline void buildWelcome(JsonObject out, const char* nodeId, const char* board,
     // OMITTED WHEN ZERO, on purpose: absent already means none, so writing it
     // would add a field to every board's answer to repeat what silence said.
     if (clamps > 0) caps["ct"] = clamps;
+    if (pollsPlugs) caps["plug"] = 1;
     if (claimedBy && *claimedBy) out["claimedBy"] = claimedBy;
     if (!accepted) out["accepted"] = false;
 }
@@ -293,7 +307,7 @@ inline void buildOtaState(JsonObject out, const char* state, int pct = -1, const
 inline void buildSense(JsonObject out, const char* sensorId, bool on,
                        float level = -1.0f, float amps = -1.0f,
                        float floorA = -1.0f, float tripA = -1.0f,
-                       bool fault = false) {
+                       bool fault = false, float watts = -1.0f, bool plug = false) {
     out["t"]        = "SENSE";
     out["sensorId"] = sensorId ? sensorId : "";
     out["on"]       = on;
@@ -301,6 +315,11 @@ inline void buildSense(JsonObject out, const char* sensorId, bool on,
     if (amps   >= 0.0f) out["amps"]   = amps;
     if (floorA >= 0.0f) out["floorA"] = floorA;
     if (tripA  >= 0.0f) out["tripA"]  = tripA;
+    // A PLUG's reading. Negative omits it, as with every other telemetry field:
+    // 0 W is a real reading (the tool is off) and "no reading" is not.
+    if (watts  >= 0.0f) out["watts"]  = watts;
+    // Says WHAT reported — see sense() in nodelink.js. Omitted for a clamp.
+    if (plug)           out["plug"]   = true;
     // Omitted when false: a board that is fine says nothing, which keeps the
     // common frame small and makes the fault legible when it does appear.
     if (fault)          out["fault"]  = true;
@@ -414,7 +433,14 @@ static const size_t kMaxSensorIdLen = 48;
 
 struct SensorSpec {
     char sensorId[kMaxSensorIdLen];   // OPAQUE. Echoed in SENSE, never parsed.
-    int  channel;                     // which input on THIS board
+    // What is watched. A PLUG is a smart plug on the network that this board polls
+    // for the primary (2026-10-03); it uses ip/plugTasmota/thresholdW and NOT
+    // channel, tripRatio, minCounts or clearRatio, which are a clamp's.
+    bool  isPlug = false;
+    int   channel;                    // which input on THIS board (ct)
+    char  ip[kMaxPlugIpLen + 1] = {0};   // plug
+    bool  plugTasmota = false;        // plug: false = Shelly Gen2, true = Tasmota
+    float thresholdW = 0.0f;          // plug: watts at or above which the tool is ON
 
     // HOW HARD TO SQUEEZE, sent by the primary since 2026-09-17 so that retuning
     // a shop is a primary reflash and nobody climbs to a node. See TripParams in
@@ -462,7 +488,36 @@ inline bool parseConfigFrame(JsonObjectConst f, SensorSpec* out, size_t maxOut,
         for (size_t i = 0; i < n; i++) {
             if (strcmp(out[i].sensorId, id) == 0) { err = "duplicate sensorId"; return false; }
         }
-        if (!_eq(sen["kind"], "ct")) { err = "sensor kind must be ct"; return false; }
+        if (_eq(sen["kind"], "plug")) {
+            // A plug has an address and a protocol and a threshold, and none of a
+            // clamp's fields. TYPE FIRST on each, as everywhere in this parser.
+            const char* ip = sen["ip"].as<const char*>();
+            if (!ip || !*ip || strlen(ip) > kMaxPlugIpLen) { err = "plug ip must be a dotted quad"; return false; }
+            int dots = 0;
+            for (const char* c = ip; *c; c++) {
+                if (*c == '.') dots++;
+                else if (*c < '0' || *c > '9') { err = "plug ip must be a dotted quad"; return false; }
+            }
+            if (dots != 3) { err = "plug ip must be a dotted quad"; return false; }
+            const char* pk = sen["plug"].as<const char*>();
+            const bool tas = pk && strcmp(pk, "tasmota") == 0;
+            if (!tas && !(pk && strcmp(pk, "shelly") == 0)) { err = "plug must be shelly or tasmota"; return false; }
+            if (!sen["thresholdW"].is<float>()) { err = "plug thresholdW must be a number"; return false; }
+            const float th = sen["thresholdW"].as<float>();
+            if (th <= 0.0f || th > kMaxPlugThresholdW) { err = "plug thresholdW out of range"; return false; }
+            strlcpy_(out[n].sensorId, id, sizeof(out[n].sensorId));
+            out[n].isPlug = true;
+            out[n].channel = 0;
+            strlcpy_(out[n].ip, ip, sizeof(out[n].ip));
+            out[n].plugTasmota = tas;
+            out[n].thresholdW = th;
+            out[n].tripRatio = out[n].minCounts = out[n].clearRatio = 0.0f;
+            n++;
+            continue;
+        }
+        out[n].isPlug = false;
+        out[n].ip[0] = '\0';
+        if (!_eq(sen["kind"], "ct")) { err = "sensor kind must be ct or plug"; return false; }
         if (!sen.containsKey("channel")) { err = "missing channel"; return false; }
         // TYPE FIRST, for the reason spelled out on positionMm above:
         // as<int>() on a string yields 0, which is a real pad on every board.

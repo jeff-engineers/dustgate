@@ -2708,6 +2708,18 @@ void loop() {
             SmartOutlet* o = control.outlet(i);
             if (!o) continue;
             std::string machineId = g_topoRuntime.machineForOutlet(o->host(), o->ip());
+            // A plug the board controlling its tool polls (CONFIG kind "plug"): the
+            // runtime has already taken the node's watts in pollSensors(), so what
+            // is left here is only making THIS outlet agree — its reading, and its
+            // reachability (which raises the plug-unreachable problem), and telling
+            // the poll task to leave it alone.
+            topo::TopologyRuntime::NodePlugReading np;
+            if (!machineId.empty() && g_topoRuntime.nodePlug(machineId, np)) {
+                o->setExternallyPolled(true);
+                o->setReported(np.watts, np.reachable);
+                continue;
+            }
+            o->setExternallyPolled(false);
             if (!machineId.empty()) g_topoRuntime.setMachinePower(machineId, o->getPowerW());
         }
 #endif

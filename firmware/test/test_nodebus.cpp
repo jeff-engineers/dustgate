@@ -66,10 +66,27 @@ struct StubBus : public topo::ActuatorBus {
     return true;
   }
 
+  // Plugs (2026-10-03): can this board poll them, and what it has reported.
+  bool canPollPlugs = false;
+  struct PlugRead { float watts; bool fault; uint32_t atMs; };
+  std::map<std::string, PlugRead> plugReads;
+  bool pollsPlugs() const override { return canPollPlugs; }
+  bool plugReading(const char* id, float& w, bool& fault, uint32_t& at) const override {
+    auto it = plugReads.find(std::string(id ? id : ""));
+    if (it == plugReads.end()) return false;
+    w = it->second.watts; fault = it->second.fault; at = it->second.atMs;
+    return true;
+  }
+
   void configureSensors(JsonArrayConst sensors) override {
     cfgCalls++;
     sensorCfg.clear();
     for (JsonObjectConst sen : sensors) {
+      if (topo::_eq(sen["kind"], "plug")) {
+        sensorCfg.push_back(std::string(sen["sensorId"] | "?") + "=" + (sen["plug"] | "?") + "@" +
+                            (sen["ip"] | "?") + ">=" + std::to_string((int)(sen["thresholdW"] | 0.0f)));
+        continue;
+      }
       sensorCfg.push_back(std::string(sen["sensorId"] | "?") + "@" +
                           std::to_string((int)(sen["channel"] | -1)));
     }
@@ -1221,6 +1238,122 @@ int main(int argc, char** argv) {
     }
   }
 
+
+
+    // ── plug: a node polls a smart plug on the primary's behalf ───────────────
+    // PAIR: nodelink.test.js's "plugs" block — same cases, same order, same literals.
+    {
+      using namespace topo::nodelink;
+      auto parse = [&](const char* json, size_t* nOut = nullptr, SensorSpec* specs = nullptr) {
+        StaticJsonDocument<1024> d;
+        if (deserializeJson(d, json)) return false;
+        SensorSpec local[kMaxSensorsPerNode]; size_t n = 0; const char* e = nullptr;
+        SensorSpec* dst = specs ? specs : local;
+        const bool r = parseConfigFrame(d.as<JsonObjectConst>(), dst, kMaxSensorsPerNode, n, e);
+        if (nOut) *nOut = n;
+        return r;
+      };
+      const char* plugJ = "{\"sensorId\":\"saw\",\"kind\":\"plug\",\"ip\":\"192.168.86.40\",\"plug\":\"tasmota\",\"thresholdW\":25}";
+      auto cfg = [&](const std::string& sensors) { return "{\"t\":\"CONFIG\",\"seq\":1,\"sensors\":[" + sensors + "]}"; };
+      SensorSpec sp[kMaxSensorsPerNode]; size_t n = 0;
+      ok("a plug sensor parses", parse(cfg(plugJ).c_str(), &n, sp) && n == 1 && sp[0].isPlug &&
+         std::string(sp[0].ip) == "192.168.86.40" && sp[0].plugTasmota && sp[0].thresholdW == 25.0f);
+      const std::string ctJ = "{\"sensorId\":\"planer\",\"kind\":\"ct\",\"channel\":0}";
+      ok("a plug and a clamp share one CONFIG",
+         parse(cfg(ctJ + "," + plugJ).c_str(), &n, sp) && n == 2 && !sp[0].isPlug && sp[1].isPlug);
+      ok("the bounds", kMaxPlugThresholdW == 10000.0f && kMaxPlugWatts == 20000.0f && kMaxPlugIpLen == 15);
+      auto badPlug = [&](const std::string& ip, const std::string& kind, const std::string& th) {
+        return !parse(cfg("{\"sensorId\":\"saw\",\"kind\":\"plug\",\"ip\":\"" + ip + "\",\"plug\":\"" + kind +
+                          "\",\"thresholdW\":" + th + "}").c_str());
+      };
+      ok("a hostname is not an ip",           badPlug("saw.local", "tasmota", "25"));
+      ok("an unknown protocol is refused",    badPlug("192.168.86.40", "kasa", "25"));
+      ok("a zero threshold is refused",       badPlug("192.168.86.40", "tasmota", "0"));
+      ok("a threshold past the bound is refused", badPlug("192.168.86.40", "tasmota", "10001"));
+      ok("a threshold AT the bound is fine",  !badPlug("192.168.86.40", "tasmota", "10000"));
+      StaticJsonDocument<256> w;
+      buildSense(w.to<JsonObject>(), "saw", true, -1, -1, -1, -1, false, 412.5f, true);
+      ok("a plug reading carries watts", (w["watts"] | -1.0f) == 412.5f);
+      ok("and says it is a plug", w["plug"] == true);
+      StaticJsonDocument<256> c2;
+      buildSense(c2.to<JsonObject>(), "planer", true, 2.1f);
+      ok("a clamp reading carries none", !c2.containsKey("watts"));
+      ok("a clamp report is not marked", !c2.containsKey("plug"));
+      StaticJsonDocument<256> un;
+      buildSense(un.to<JsonObject>(), "saw", false, -1, -1, -1, -1, true, -1.0f, true);
+      ok("an unreachable plug is a fault, still marked a plug", un["fault"] == true && un["plug"] == true && !un.containsKey("watts"));
+      StaticJsonDocument<512> wl;
+      buildWelcome(wl.to<JsonObject>(), "n1", "xiao_c5", "x", 1, 0, nullptr, true, 0, true);
+      ok("a WELCOME may say the board polls plugs", (wl["caps"]["plug"] | 0) == 1);
+      StaticJsonDocument<512> wl2;
+      buildWelcome(wl2.to<JsonObject>(), "n1", "xiao_c5", "x", 1, 0);
+      ok("absent means no - an old board stays brain-polled", !wl2["caps"].containsKey("plug"));
+    }
+
+
+    // ── a plug polled by the NODE that controls its tool (2026-10-03) ─────────
+    // The primary half: the layout becomes plug specs for the owning board only
+    // when that board SAID it can, the reading becomes the machine's watts, and
+    // absent / stale / faulted reads as off and unreachable.
+    {
+      const char* plugDoc = R"({"schemaVersion":2,"name":"p",
+        "controllers":[{"id":"primary","role":"primary"},{"id":"nodeA","role":"secondary"}],
+        "systems":[{"id":"s1","name":"s","elements":[
+          {"id":"dc","type":"collector"},{"id":"gA","type":"selector","controllerId":"nodeA","kind":"servoGate"},
+          {"id":"gP","type":"selector","controllerId":"primary","kind":"servoGate"},
+          {"id":"tA","type":"tool","machineId":"mA"},{"id":"tP","type":"tool","machineId":"mP"}],
+          "ducts":[{"child":"gA","parent":"dc"},{"child":"gP","parent":"dc"},
+                   {"child":"tA","parent":"gA","parentBranch":"b1"},{"child":"tP","parent":"gP","parentBranch":"b1"}]}],
+        "machines":[{"id":"mA","sensor":{"outlet":{"ip":"192.168.86.40","kind":"tasmota","thresholdW":25}}},
+                    {"id":"mP","sensor":{"outlet":{"ip":"192.168.86.41","kind":"shelly","thresholdW":10}}}]})";
+      {
+        StubBus local, node; node.canPollPlugs = true;
+        topo::NodeBus nb; topo::TopologyRuntime rt;
+        nb.setLocal(&local, "primary"); nb.registerRemote("nodeA", &node);
+        rt.begin(&nb);
+        std::string err;
+        ok("adopt a layout with a node-owned plug", rt.adopt(plugDoc, strlen(plugDoc), err), err);
+        ok("the owning board that can poll is handed the plug",
+           joined(node.sensorCfg) == "mA=tasmota@192.168.86.40>=25", joined(node.sensorCfg));
+        ok("the brain's own plug is NOT sent to anyone", joined(local.sensorCfg).empty(), joined(local.sensorCfg));
+        topo::TopologyRuntime::NodePlugReading r;
+        ok("the runtime knows mA is node-polled and mP is not",
+           rt.nodePlug("mA", r) && !rt.nodePlug("mP", r));
+        rt.update(1000);
+        ok("nothing reported yet: unreachable, 0 W", rt.nodePlug("mA", r) && !r.reachable && r.watts == 0.0f);
+        node.plugReads["mA"] = { 412.5f, false, 1000 };
+        rt.update(1500);
+        ok("a report becomes the reading", rt.nodePlug("mA", r) && r.reachable && r.watts == 412.5f);
+        DynamicJsonDocument st(8192);
+        rt.writeStatus(st.to<JsonObject>());
+        ok("...and drives the tool active", st["tools"]["mA"]["active"] == true);
+        node.plugReads["mA"] = { 0.0f, true, 2000 };
+        rt.update(2500);
+        ok("a plug the node cannot reach reads unreachable", rt.nodePlug("mA", r) && !r.reachable && r.watts == 0.0f);
+        node.plugReads["mA"] = { 90.0f, false, 3000 };
+        rt.update(3000 + topo::nodelink::kSenseStaleMs + 1);
+        ok("a stale report reads unreachable too", rt.nodePlug("mA", r) && !r.reachable);
+      }
+      {
+        // An older node: it never said it can, so its plug stays with the brain
+        // rather than a CONFIG it would refuse whole.
+        StubBus local, node; node.canPollPlugs = false;
+        topo::NodeBus nb; topo::TopologyRuntime rt;
+        nb.setLocal(&local, "primary"); nb.registerRemote("nodeA", &node);
+        rt.begin(&nb);
+        std::string err;
+        rt.adopt(plugDoc, strlen(plugDoc), err);
+        topo::TopologyRuntime::NodePlugReading r;
+        ok("a board that cannot poll plugs is sent none", joined(node.sensorCfg).empty(), joined(node.sensorCfg));
+        ok("and its plug stays brain-polled", !rt.nodePlug("mA", r));
+        // ...until it comes up and says it can: the layout is re-pushed.
+        node.canPollPlugs = true;
+        rt.update(1000);
+        ok("capability arriving later re-pushes the config",
+           joined(node.sensorCfg) == "mA=tasmota@192.168.86.40>=25", joined(node.sensorCfg));
+        ok("and the plug is now node-polled", rt.nodePlug("mA", r));
+      }
+    }
 
     // ── ota: a node is told to pull an image, and reports how it went ─────────
     // PAIR: nodelink.test.js's "ota" block — same cases, same order, same literals.

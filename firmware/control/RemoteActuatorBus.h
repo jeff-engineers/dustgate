@@ -148,6 +148,8 @@ public:
     // has reported. See ActuatorBus.h for the contract.
     void configureSensors(JsonArrayConst sensors) override;
     bool senseOf(const char* sensorId, bool& on, uint32_t& atMs) const override;
+    bool pollsPlugs() const override { return _capPlugs > 0; }
+    bool plugReading(const char* sensorId, float& watts, bool& fault, uint32_t& atMs) const override;
 
     // Enumerate what this node has reported, for GET /api/nodes. senseOf() asks
     // about one KNOWN id; this is for a screen that has to show whatever turned
@@ -261,7 +263,7 @@ private:
     // wall. A configuration sent once at adopt would be forgotten on the first
     // power cut and the tool would go quiet forever. Re-sent on every accepted
     // WELCOME instead, which costs one small frame per reconnect.
-    char     _cfgFrame[512] = "";
+    char     _cfgFrame[768] = "";   // 4 plug specs are ~120 B each, plus the header
     bool     _cfgPending    = false;
     // OTA order, sent by the link task. See requestOta().
     bool     _otaPending    = false;
@@ -287,7 +289,9 @@ private:
         float    amps         = -1.0f;
         float    floorA       = -1.0f;
         float    tripA        = -1.0f;
-        bool     fault        = false;   // the node could not learn a floor
+        bool     fault        = false;   // the node could not learn a floor (a plug: did not answer)
+        bool     isPlug       = false;   // reported by a plug sensor, not a clamp
+        float    watts        = -1.0f;   // a plug's reading; negative = none
     };
     SenseState _senses[nodelink::kMaxSensorsPerNode];
     size_t     _senseCount = 0;
@@ -313,6 +317,7 @@ private:
     int      _capServos    = 0;
     int      _capLinear    = 0;
     int      _capClamps    = 0;   // caps.ct — how many CTs this board says it has
+    int      _capPlugs     = 0;   // caps.plug — 1 if it polls plugs for us; absent = 0
 };
 
 } // namespace topo

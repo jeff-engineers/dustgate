@@ -96,6 +96,19 @@ const SENSE_STALE_MS = 15000;
 const MAX_SENSORS_PER_NODE = 4;
 
 /**
+ * Bounds on a PLUG sensor — what a node will poll on the primary's behalf.
+ *
+ * ⚠️ JS↔C++ PAIR — `kMaxPlugThresholdW`, `kMaxPlugWatts`, `kMaxPlugIpLen` in
+ * firmware/control/NodeLink.h. A node refuses an out-of-range CONFIG WHOLE, taking
+ * its clamp with it, so the bounds must agree exactly. `watts` bounds a REPORT:
+ * refusing a SENSE for being too large would lose the `on` bit riding with it.
+ */
+const MAX_PLUG_THRESHOLD_W = 10000;
+const MAX_PLUG_WATTS = 20000;
+const MAX_PLUG_IP_LEN = 15;
+const PLUG_KINDS = ['shelly', 'tasmota'];
+
+/**
  * The bounds on an OTA frame — the image a node is told to pull.
  *
  * ⚠️ JS↔C++ PAIR — `kMaxOtaPath`, `kMinOtaBytes`, `kMaxOtaBytes` in
@@ -165,9 +178,21 @@ const RECONNECT_MAX_MS = 15000;
  * @property {string}  sensorId     OPAQUE TO THE NODE — echoed back in SENSE and
  *                                  never interpreted, exactly as SET.selectorId
  *                                  is. It is the primary's vocabulary.
- * @property {'ct'}    kind         what is wired. 'ct' is the only one so far.
- * @property {number}  channel      which input on THIS BOARD — a hardware fact,
- *                                  the same shape as SET.channel.
+ * @property {'ct'|'plug'} kind     what is watched. 'ct' is wired to this board; a
+ *                                  'plug' is a smart plug on the network that THIS
+ *                                  BOARD polls on the primary's behalf (2026-10-03):
+ *                                  the board that controls a tool handles its plug,
+ *                                  so the brain's poll load stops growing with the
+ *                                  shop. A plug sensor carries `ip`, `plug` and
+ *                                  `thresholdW` INSTEAD of `channel`.
+ * @property {number} [channel]     'ct' only: which input on THIS BOARD — a
+ *                                  hardware fact, the same shape as SET.channel.
+ * @property {string} [ip]          'plug' only: dotted quad.
+ * @property {'shelly'|'tasmota'} [plug]  'plug' only: which protocol it speaks.
+ * @property {number} [thresholdW]  'plug' only: the watts at or above which the
+ *                                  tool is ON. The primary owns the NUMBER (it is a
+ *                                  layout fact the user edits); the node applies it
+ *                                  so it can send on CHANGE instead of every poll.
  * @property {number} [tripRatio]   OPTIONAL TUNING, all three. Multiple of the
  *                                  board's OWN learned noise floor at which a
  *                                  clamp reads as a running motor.
@@ -197,7 +222,11 @@ const RECONNECT_MAX_MS = 15000;
  * @property {number} [amps]        what the clamp reads now. DIAGNOSTIC ONLY.
  * @property {number} [floorA]      the board's learned noise floor, in amps.
  * @property {number} [tripA]       the point `amps` is judged against, in amps.
- * @property {boolean} [fault]      no floor could be learnt; floorA/tripA absent.
+ * @property {boolean} [fault]      CT: no floor could be learnt; floorA/tripA absent.
+ *                                  PLUG: the plug did not answer.
+ * @property {boolean} [plug]        true on every report from a PLUG sensor.
+ * @property {number} [watts]       PLUG only: what it reads now. The primary hands
+ *                                  this to the same place a polled wattage goes.
  */
 
 /** Frames the primary sends. */
@@ -320,6 +349,9 @@ function set(seq, sel, stateId, realization) {
  */
 function config(seq, sensors) {
   return { t: 'CONFIG', seq, sensors: (sensors || []).map((s) => {
+    if (s.kind === 'plug') {
+      return { sensorId: s.sensorId, kind: 'plug', ip: s.ip, plug: s.plug, thresholdW: s.thresholdW };
+    }
     const out = { sensorId: s.sensorId, kind: s.kind, channel: s.channel };
     // OMITTED RATHER THAN NULLED when a caller has nothing to say. An absent key
     // is what tells a board to keep its own value, and writing `tripRatio: null`
@@ -396,6 +428,11 @@ const welcomeAccepted = (f) => !!f && f.accepted !== false;
 /** How many clamps a board says it has. Absent means none, which is what every
  *  board flashed before 2026-09-15 reports by saying nothing. */
 const clampsOn = (w) => (w && w.caps && typeof w.caps.ct === 'number') ? w.caps.ct : 0;
+
+/** Can this board poll plugs for the primary? Absent means NO — every board
+ *  flashed before 2026-10-03 stays brain-polled rather than being handed a CONFIG
+ *  it would refuse whole (and its clamp with it). */
+const pollsPlugs = (w) => !!(w && w.caps && w.caps.plug === 1);
 function ack(seq, ok, err) {
   const f = { t: 'ACK', seq, ok: !!ok };
   if (err) f.err = err;
@@ -453,8 +490,13 @@ function state(selectorId, stateId, moving) {
  * @param {boolean} [fault] no floor could be learnt — see above
  * @returns {SenseFrame}
  */
-function sense(sensorId, on, level, amps, floorA, tripA, fault) {
+function sense(sensorId, on, level, amps, floorA, tripA, fault, watts, plug) {
   const f = { t: 'SENSE', sensorId, on: !!on };
+  if (typeof watts === 'number') f.watts = watts;   // a PLUG's reading; absent for a clamp
+  // Says WHAT reported. An unreachable plug has no watts to give it away, and its
+  // `fault` would otherwise read as a clamp that could not learn a floor — which
+  // the Boards screen would then draw as a clamp that does not exist.
+  if (plug) f.plug = true;
   if (typeof level === 'number') f.level = level;
   // OMITTED, never zeroed: 0 A is a real reading and "no floor yet" is not.
   if (typeof amps   === 'number') f.amps   = amps;
@@ -523,6 +565,9 @@ function validateFrame(f, direction) {
           (typeof f.caps.ct !== 'number' || f.caps.ct < 0 || f.caps.ct > MAX_SENSORS_PER_NODE)) {
         errs.push(`WELCOME.caps.ct must be a number 0..${MAX_SENSORS_PER_NODE}`);
       }
+      if (f.caps && f.caps.plug !== undefined && f.caps.plug !== 0 && f.caps.plug !== 1) {
+        errs.push('WELCOME.caps.plug must be 0 or 1');
+      }
       if (f.claimedBy !== undefined && typeof f.claimedBy !== 'string') {
         errs.push('WELCOME.claimedBy must be a string');
       }
@@ -574,7 +619,18 @@ function validateFrame(f, direction) {
           } else {
             seen.add(sen.sensorId);
           }
-          if (sen.kind !== 'ct') errs.push(`${at}.kind must be ct`);
+          if (sen.kind === 'plug') {
+            if (typeof sen.ip !== 'string' || !/^\d{1,3}(\.\d{1,3}){3}$/.test(sen.ip) || sen.ip.length > MAX_PLUG_IP_LEN) {
+              errs.push(`${at}.ip must be a dotted quad`);
+            }
+            if (!PLUG_KINDS.includes(sen.plug)) errs.push(`${at}.plug must be one of ${PLUG_KINDS.join('|')}`);
+            if (typeof sen.thresholdW !== 'number' || Number.isNaN(sen.thresholdW) ||
+                sen.thresholdW <= 0 || sen.thresholdW > MAX_PLUG_THRESHOLD_W) {
+              errs.push(`${at}.thresholdW out of range (0 exclusive .. ${MAX_PLUG_THRESHOLD_W})`);
+            }
+            return;   // none of the clamp's fields apply to a plug
+          }
+          if (sen.kind !== 'ct') errs.push(`${at}.kind must be ct or plug`);
           if (typeof sen.channel !== 'number' || Number.isNaN(sen.channel)) {
             errs.push(`${at}.channel must be a number`);
           } else if (sen.channel < 0 || sen.channel > 15) {
@@ -617,6 +673,8 @@ function validateFrame(f, direction) {
       if (f.amps   !== undefined) num('amps',   0, 1000);
       if (f.floorA !== undefined) num('floorA', 0, 1000);
       if (f.tripA  !== undefined) num('tripA',  0, 1000);
+      if (f.watts !== undefined) num('watts', 0, MAX_PLUG_WATTS);
+      if (f.plug !== undefined && typeof f.plug !== 'boolean') errs.push('SENSE.plug must be a boolean');
       if (f.fault !== undefined && typeof f.fault !== 'boolean') {
         errs.push('SENSE.fault must be a boolean');
       }
@@ -656,6 +714,7 @@ module.exports = {
   NODELINK_VERSION, P2S, S2P,
   PING_INTERVAL_MS, PONG_TIMEOUT_MS, RECONNECT_MIN_MS, RECONNECT_MAX_MS,
   SENSE_REPEAT_MS, SENSE_STALE_MS, MAX_SENSORS_PER_NODE,
+  MAX_PLUG_THRESHOLD_W, MAX_PLUG_WATTS, MAX_PLUG_IP_LEN, PLUG_KINDS, pollsPlugs,
   MAX_RST_LEN, MAX_OTA_PATH, MIN_OTA_BYTES, MAX_OTA_BYTES, OTA_STATES,
   hello, welcome, withBootInfo, set, config, ack, state, sense, ping, pong, ota, otaState, welcomeAccepted, clampsOn,
   validateFrame,

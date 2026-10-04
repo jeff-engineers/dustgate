@@ -4,7 +4,7 @@
 
 #include "TasmotaOutlet.h"
 
-#ifdef CONTROL_SMART_OUTLET
+#if defined(CONTROL_SMART_OUTLET) || defined(DUSTGATE_NODE_PLUG_POLL)   // a node polls plugs for the primary
 
 #include <HTTPClient.h>
 #include <ArduinoJson.h>

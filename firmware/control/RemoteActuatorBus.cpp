@@ -532,6 +532,9 @@ void RemoteActuatorBus::handleFrame(const char* json, size_t len) {
         // Absent means none: a board flashed before clamps existed answers
         // exactly as it always did rather than being read as broken.
         _capClamps = f["caps"]["ct"] | 0;
+        // Absent means NO: a node that predates plug polling must stay
+        // brain-polled, or it is handed a CONFIG it refuses whole — clamp and all.
+        _capPlugs  = f["caps"]["plug"] | 0;
 
         // Did it accept our claim? A refusal leaves us OFFLINE rather than
         // half-connected: every caller already treats offline as "don't command
@@ -621,6 +624,8 @@ void RemoteActuatorBus::handleFrame(const char* json, size_t len) {
                 _senses[i].floorA = f["floorA"] | -1.0f;
                 _senses[i].tripA  = f["tripA"]  | -1.0f;
                 _senses[i].fault  = f["fault"]  | false;
+                _senses[i].isPlug = f["plug"]   | false;
+                _senses[i].watts  = f["watts"]  | -1.0f;
                 xSemaphoreGive(_mutex);
                 // Logged on CHANGE only: this frame repeats every
                 // kSenseRepeatMs, and a line per repeat would bury everything
@@ -758,15 +763,24 @@ void RemoteActuatorBus::configureSensors(JsonArrayConst sensors) {
     // 512, not 320: kMaxSensorsPerNode is 4 and a sensorId may be 48 chars, so
     // a legitimate full config is ~420 bytes. The old size would have refused
     // one — loudly, but still refused.
-    StaticJsonDocument<512> doc;
+    // 1024 since plug sensors (2026-10-03): four of them are four objects of
+    // five members, and overflow DROPS members silently.
+    StaticJsonDocument<1024> doc;
     JsonObject f = doc.to<JsonObject>();
     f["t"] = "CONFIG";
     JsonArray arr = f.createNestedArray("sensors");
     for (JsonObjectConst sen : sensors) {
         JsonObject o = arr.createNestedObject();
         o["sensorId"] = sen["sensorId"] | "";
-        o["kind"]     = "ct";
-        o["channel"]  = sen["channel"] | 0;
+        if (strcmp(sen["kind"] | "ct", "plug") == 0) {
+            o["kind"]       = "plug";
+            o["ip"]         = sen["ip"] | "";
+            o["plug"]       = sen["plug"] | "shelly";
+            o["thresholdW"] = sen["thresholdW"] | 0.0f;
+        } else {
+            o["kind"]     = "ct";
+            o["channel"]  = sen["channel"] | 0;
+        }
     }
 
     if (!_mutex) return;
@@ -786,6 +800,24 @@ void RemoteActuatorBus::configureSensors(JsonArrayConst sensors) {
     // than keep a tool switched on until it ages out.
     _senseCount = 0;
     xSemaphoreGive(_mutex);
+}
+
+bool RemoteActuatorBus::plugReading(const char* sensorId, float& watts, bool& fault, uint32_t& atMs) const {
+    if (!sensorId || !*sensorId || !_mutex) return false;
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    bool found = false;
+    for (size_t i = 0; i < _senseCount; i++) {
+        if (strcmp(_senses[i].sensorId, sensorId) != 0) continue;
+        if (_senses[i].atMs && _senses[i].isPlug) {
+            watts = _senses[i].watts < 0.0f ? 0.0f : _senses[i].watts;
+            fault = _senses[i].fault;
+            atMs  = _senses[i].atMs;
+            found = true;
+        }
+        break;
+    }
+    xSemaphoreGive(_mutex);
+    return found;
 }
 
 bool RemoteActuatorBus::senseOf(const char* sensorId, bool& on, uint32_t& atMs) const {
@@ -833,6 +865,8 @@ bool RemoteActuatorBus::senseAt(size_t i, SenseView& v) const {
         v.floorA   = _senses[i].floorA;
         v.tripA    = _senses[i].tripA;
         v.fault    = _senses[i].fault;
+        v.isPlug   = _senses[i].isPlug;
+        v.watts    = _senses[i].watts;
     }
     xSemaphoreGive(_mutex);
     return ok;
