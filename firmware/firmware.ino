@@ -823,6 +823,19 @@ static void rejoinWifiIfNetworkBlocksNodes() {
     if (WiFi.status() != WL_CONNECTED) return;     // maintain() owns a real outage
     if (lastRejoinMs && (now - lastRejoinMs) < kRejoinMinIntervalMs) return;
 
+    // A LINKED NODE IS PROOF THE NETWORK PATH WORKS. This rule exists for a network
+    // that stops forwarding between boards — and such a network stops forwarding to
+    // EVERY board, so one healthy link says the problem is the dark node, not the
+    // network. Without this, any shop with a node switched off or flashing on a
+    // bench (its cached address answering as "alive" through hollow connections)
+    // rejoined WiFi every minute and tore down every healthy link with it —
+    // seen 2026-10-04 with nine nodes paired and three linked (wifi_down reason 8
+    // at 63 s, then link_down on all three). Only when NOTHING is linked is "the
+    // network is isolating us" a live hypothesis.
+    for (int i = 0; i < g_remoteCount; i++) {
+        if (remoteLive(i) && g_remoteBuses[i].health().linked) return;
+    }
+
     for (int i = 0; i < g_remoteCount; i++) {
         if (!remoteLive(i)) continue;
         const topo::RemoteActuatorBus::LinkHealth h = g_remoteBuses[i].health();
