@@ -798,6 +798,10 @@ static void syncPairedNodes(const char* primaryId) {
 // is bound to the bus that pairs it. No task and no per-node address on this side:
 // it is one socket on the async_tcp task. See RemoteActuatorBus::attachInbound and
 // docs/nodes-dial-the-brain-plan.md.
+// Below this much free INTERNAL RAM a JOIN is answered 'busy'. The app floor is 28 KB (the page guard);
+// a node costs ~3.5 KB, so leave room for that plus the page.
+static const size_t kJoinMinFreeBytes = 24000;
+
 static topo::RemoteActuatorBus* busForNode(const char* nodeId) {
     if (!g_remoteBuses || !nodeId || !*nodeId) return nullptr;
     const std::string want = topo::bareHost(nodeId);
@@ -844,6 +848,16 @@ static bool nodeEventHook(AsyncWebSocketClient* c, AwsEventType type, void* arg,
     if (deserializeJson(d, data, len)) return false;
     if (strcmp(d["t"] | "", "JOIN") != 0) return false;
     if ((d["v"] | 0) != topo::nodelink::kVersion) { sendRefuse(c, "busy"); return true; }
+    // A CAP ON HANDSHAKES WE WILL TAKE WHEN MEMORY IS SHORT. After a primary reboot every
+    // node redials within a second or two; if the heap is already thin, taking the whole
+    // herd at once is what turns a reboot into a 503 page. Turning one away costs it
+    // nothing — it backs off and tries again — and "busy" says why.
+    if (heap_caps_get_free_size(MALLOC_CAP_INTERNAL) < kJoinMinFreeBytes) {
+        DEBUG_PRINT(F("[NODE] JOIN from ")); DEBUG_PRINT(d["nodeId"] | "?"); DEBUG_PRINTLN(F(" — low on memory, told to retry"));
+        apiServer.adjustNodeLinkClients(-1);
+        sendRefuse(c, "busy");
+        return true;
+    }
     topo::RemoteActuatorBus* bus = busForNode(d["nodeId"] | "");
     if (!bus) {
         DEBUG_PRINT(F("[NODE] JOIN from ")); DEBUG_PRINT(d["nodeId"] | "?"); DEBUG_PRINTLN(F(" — not paired, refused"));
