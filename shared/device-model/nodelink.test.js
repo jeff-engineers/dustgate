@@ -450,6 +450,7 @@ const eq = (name, got, want) =>
   eq('a WHERE validates', NL.validateFrame(NL.where('dustgate', '192.168.86.46', 80), 'p2s'), []);
   check('WHERE is p2s only', NL.P2S.includes('WHERE') && !NL.S2P.includes('WHERE'));
   eq('the address bound', NL.MAX_WHERE_IP_LEN, 15);
+  eq('the beacon port', NL.BEACON_PORT, 41234);
   check('a name where an address belongs is refused',
         NL.validateFrame(NL.where('dustgate', 'dustgate.local', 80), 'p2s').length === 1);
   check('a port of 0 is refused', NL.validateFrame(NL.where('dustgate', '192.168.86.46', 0), 'p2s').length === 1);

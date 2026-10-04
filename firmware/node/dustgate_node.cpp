@@ -108,6 +108,7 @@
 
 #include "../motor/ServoActuator.h"
 #include "../control/NodeLink.h"
+#include "BrainLink.h"           // this node dialling its own primary
 #include "../utils/StatusLed.h"
 #include "../utils/StatusScreen.h"   // optional SSD1306; nothing on a board without one
 #include "../utils/WakeButton.h"     // the button that lights it; ditto
@@ -328,6 +329,34 @@ static String g_owner;              // "" = unclaimed
 // not merely having a connection open.
 static volatile uint32_t g_ownerClientId = 0;
 static volatile bool     g_ownerLinked   = false;
+// Did the owner reach us over a socket WE dialled (brainlink) or one it dialled
+// (nodeWs)? Decides where unsolicited frames go, and which side keeps a link up.
+static volatile bool     g_ownerOutbound = false;
+static const uint32_t    kOutboundId     = 0x7FFF0001u;   // never a real AsyncWebSocket client id
+
+// Where a frame the node starts on its own (SENSE, STATE, OTASTATE) is sent: the
+// owner. On our own outbound socket that is the queue brainlink writes from; on an
+// inbound one it is the listener's sockets, as it always was.
+static void sendToOwner(const String& s) {
+    if (g_ownerOutbound) brainlink::send(s.c_str());
+    else                 nodeWs.textAll(s);
+}
+
+// One link, whichever way it was dialled. The frame handler is written against this
+// so it does not care who opened the socket.
+struct Conn {
+    uint32_t               id;
+    IPAddress              remote;
+    bool                   outbound;
+    AsyncWebSocketClient*  c;      // null when outbound
+};
+static void connSend(const Conn& conn, const String& s) {
+    if (conn.outbound) brainlink::send(s.c_str());
+    else if (conn.c)   conn.c->text(s);
+}
+static void connClose(const Conn& conn) {
+    if (!conn.outbound && conn.c) conn.c->close();   // an outbound socket is closed by brainlink when it drops
+}
 
 #ifdef PIN_CT
 // ── CT tool sensing (tool-sensing RFC §5.6) ─────────────────────────────────
@@ -667,7 +696,7 @@ static void tickPlugs() {
         topo::nodelink::buildSense(doc.to<JsonObject>(), p.id, on, -1.0f, -1.0f, -1.0f, -1.0f,
                                    fault, fault ? -1.0f : w, /*plug=*/true);
         String s; serializeJson(doc, s);
-        nodeWs.textAll(s);
+        sendToOwner(s);
         if (!p.sentKnown || on != p.sentOn || fault != p.sentFault) {
             Serial.printf("[PLUG] %s %s %.1f W\n", p.id, fault ? "UNREACHABLE" : (on ? "ON " : "off"), w);
         }
@@ -701,7 +730,7 @@ static void sendOtaState(const char* state, int pct = -1, const char* err = null
     StaticJsonDocument<256> d;
     topo::nodelink::buildOtaState(d.to<JsonObject>(), state, pct, err);
     String s; serializeJson(d, s);
-    nodeWs.textAll(s);
+    sendToOwner(s);
 }
 
 static void failOta(const char* why) {
@@ -786,48 +815,7 @@ static void runOta() {
 // -----------------------------------------------------------------------------
 // NodeLink frame handling (AsyncTCP task — never touches a servo directly)
 // -----------------------------------------------------------------------------
-static void onNodeWsEvent(AsyncWebSocket*, AsyncWebSocketClient* client,
-                          AwsEventType type, void* arg, uint8_t* data, size_t len) {
-    if (type == WS_EVT_CONNECT) {
-        Serial.print(F("[NODE] Primary connected — client #"));
-        Serial.print(client->id());
-        Serial.print(F(" from ")); Serial.print(client->remoteIP());
-        Serial.print(F(", ")); Serial.print(nodeWs.count()); Serial.println(F(" open"));
-        // LOUD WHEN THE POOL IS CROWDED. A node at its limit refuses connections
-        // at the TCP layer, which is invisible here and reads as a network fault
-        // from the other end. If this line ever appears, something is
-        // reconnecting far faster than it should — see kMaxLinkClients.
-        if (nodeWs.count() > kMaxLinkClients) {
-            Serial.print(F("[NODE] ⚠ too many link clients ("));
-            Serial.print(nodeWs.count());
-            Serial.println(F(") — something is reconnecting in a loop."));
-        }
-        g_linkedClientId = client->id();
-        g_primaryLinked  = true;
-        return;
-    }
-    if (type == WS_EVT_DISCONNECT || type == WS_EVT_ERROR) {
-        // HOLD. No servo command here, by design — see the fail-safe note above.
-        Serial.print(F("[NODE] Primary disconnected — client #"));
-        Serial.print(client->id());
-        Serial.println(F(" — holding all gates."));
-        // Track the ONE linked client by id rather than inferring from count().
-        // count() includes the client currently being torn down, which is why this
-        // used to read `> 1`; that guess also went wrong the other way, reporting
-        // linked when all that remained was a zombie the server hadn't reaped.
-        if (client->id() == g_linkedClientId) g_primaryLinked = false;
-        // The OWNER's socket closing means "no owner is connected", not "the
-        // node is unowned" — the claim itself survives, so a rebooting primary
-        // gets its node back rather than losing it to whoever dials in first.
-        if (client->id() == g_ownerClientId) g_ownerLinked = false;
-        return;
-    }
-    if (type != WS_EVT_DATA) return;
-
-    AwsFrameInfo* info = (AwsFrameInfo*)arg;
-    if (!(info->final && info->index == 0 && info->len == len)) return;
-    if (info->opcode != WS_TEXT) return;
-
+static void handleNodeFrame(const Conn& conn, const uint8_t* data, size_t len) {
     // 1024: a CONFIG with four sensors is ~35 members, and this document is the
     // WHOLE frame. ArduinoJson fails a deserialize that does not fit (NoMemory),
     // so a 384 here would have made a full CONFIG read as "no frame" — silence.
@@ -862,7 +850,7 @@ static void onNodeWsEvent(AsyncWebSocket*, AsyncWebSocketClient* client,
     if (strcmp(t, "HELLO") == 0) {
         if ((f["v"] | 0) != topo::nodelink::kVersion) {
             Serial.println(F("[NODE] HELLO version mismatch — refusing."));
-            client->close();
+            connClose(conn);
             return;
         }
         // Identify by mDNS hostname: stable across reboots and DHCP, and the
@@ -892,9 +880,28 @@ static void onNodeWsEvent(AsyncWebSocket*, AsyncWebSocketClient* client,
             Serial.print(F(" — this node belongs to ")); Serial.println(g_owner);
         }
 
+        // ONE LINK. A second socket from the owner while the first is healthy is
+        // refused by closing it — it used to REPLACE the owner, so any second
+        // connection (a seeker, a probe, a primary that reconnected before its old
+        // socket timed out) silently knocked the real link out of ownership and every
+        // SET after it read "not the owner". Only ever the OUTBOUND socket is
+        // protected this way: an inbound owner has no liveness signal here, so it
+        // keeps the old rule that the newest handshake wins.
+        if (accepted && !conn.outbound && g_ownerOutbound && g_ownerLinked && brainlink::connected()) {
+            Serial.println(F("[NODE] HELLO on a second socket while the link we dialled is healthy — closing it."));
+            connClose(conn);
+            return;
+        }
         if (accepted) {
-            g_ownerClientId = client->id();
+            g_ownerClientId = conn.id;
             g_ownerLinked   = true;
+            g_ownerOutbound = conn.outbound;
+            if (conn.outbound) {
+                // A socket we dialled never fires WS_EVT_CONNECT, so "linked" is
+                // decided here, by the handshake the owner just passed.
+                g_linkedClientId = conn.id;
+                g_primaryLinked  = true;
+            }
         }
         // Caps are what the board can PHYSICALLY drive, and the two are
         // mutually exclusive by design (PWM and serial never share a board), so
@@ -912,7 +919,8 @@ static void onNodeWsEvent(AsyncWebSocket*, AsyncWebSocketClient* client,
 #else
                                      0,
 #endif
-                                     /*pollsPlugs=*/true);
+                                     /*pollsPlugs=*/true,
+                                     /*dialsIn=*/true);
         // Why this node last booted, so the primary's link log can tell a tool
         // switched off at the wall ("poweron"/"brownout") from a crash
         // ("panic"/"task_wdt"). See withBootInfo() in nodelink.js.
@@ -924,7 +932,7 @@ static void onNodeWsEvent(AsyncWebSocket*, AsyncWebSocketClient* client,
         // SAME GATE AS SET. An accepted WELCOME is what earns the right to
         // configure, not merely holding a socket — a board anyone could
         // re-point at a different sensor has no claim at all.
-        if (!g_ownerLinked || client->id() != g_ownerClientId) {
+        if (!g_ownerLinked || conn.id != g_ownerClientId) {
             Serial.println(F("[CONFIG] REFUSED — not the owner."));
             topo::nodelink::buildAck(reply.to<JsonObject>(), f["seq"] | 0, false,
                                      "not the owner of this node");
@@ -1009,8 +1017,8 @@ static void onNodeWsEvent(AsyncWebSocket*, AsyncWebSocketClient* client,
         // to command; merely holding a socket does not. Checked on every SET
         // rather than once at connect, because that is the frame that moves a
         // real valve — and because a client id can be reused after a reconnect.
-        if (!g_ownerLinked || client->id() != g_ownerClientId) {
-            Serial.print(F("[SET] REFUSED — client #")); Serial.print(client->id());
+        if (!g_ownerLinked || conn.id != g_ownerClientId) {
+            Serial.print(F("[SET] REFUSED — client #")); Serial.print(conn.id);
             Serial.print(F(" is not the owner (")); Serial.print(g_owner);
             Serial.println(F(")"));
             topo::nodelink::buildAck(reply.to<JsonObject>(), f["seq"] | 0, false,
@@ -1068,7 +1076,7 @@ static void onNodeWsEvent(AsyncWebSocket*, AsyncWebSocketClient* client,
         // consequential thing a socket can ask for.
         topo::nodelink::OtaOrder order;
         const char* err = nullptr;
-        if (!g_ownerLinked || client->id() != g_ownerClientId) {
+        if (!g_ownerLinked || conn.id != g_ownerClientId) {
             Serial.println(F("[OTA] REFUSED — not the owner"));
             topo::nodelink::buildOtaState(reply.to<JsonObject>(), "fail", -1, "not the owner of this node");
         } else if (!topo::nodelink::parseOtaFrame(f, order, err)) {
@@ -1085,16 +1093,83 @@ static void onNodeWsEvent(AsyncWebSocket*, AsyncWebSocketClient* client,
             topo::nodelink::buildOtaState(reply.to<JsonObject>(), "fail", -1, "a gate is moving");
         } else {
             g_otaOrder   = order;
-            g_otaFrom    = client->remoteIP();
+            g_otaFrom    = conn.remote;
             g_otaPending = true;        // loop() takes it from here
             return;                     // runOta() reports; no reply from this task
+        }
+    } else if (strcmp(t, "REFUSE") == 0) {
+        // The primary declined a socket we dialled. Nothing to answer: brainlink goes
+        // back to seeking, on its own backoff.
+        Serial.print(F("[NODE] primary refused the link: ")); Serial.println(f["reason"] | "?");
+        return;
+    } else if (strcmp(t, "WHERE") == 0) {
+        // The primary says where it is. Acted on ONLY for our owner: a WHERE from
+        // anyone else is a stranger telling us where to knock, and while a refused
+        // JOIN could not hurt, there is no reason to spend a socket on it.
+        topo::nodelink::WhereOrder w; const char* err = nullptr;
+        if (!topo::nodelink::parseWhereFrame(f, w, err)) {
+            Serial.print(F("[WHERE] MALFORMED — ")); Serial.println(err ? err : "?");
+        } else if (g_owner.length() && g_owner.equalsIgnoreCase(w.primaryId)) {
+            Serial.print(F("[WHERE] the primary is at ")); Serial.print(w.ip); Serial.print(':'); Serial.println(w.port);
+            brainlink::hint(w.ip, (uint16_t)w.port);
+            topo::nodelink::buildAck(reply.to<JsonObject>(), 0, true);
+        } else {
+            Serial.print(F("[WHERE] ignored — from ")); Serial.print(w.primaryId);
+            Serial.print(F(", this node belongs to ")); Serial.println(g_owner);
+            return;
         }
     } else {
         return;   // unknown frame — ignore rather than guess
     }
 
     String s; serializeJson(reply, s);
-    client->text(s);
+    connSend(conn, s);
+}
+
+static void onNodeWsEvent(AsyncWebSocket*, AsyncWebSocketClient* client,
+                          AwsEventType type, void* arg, uint8_t* data, size_t len) {
+    if (type == WS_EVT_CONNECT) {
+        Serial.print(F("[NODE] Primary connected — client #"));
+        Serial.print(client->id());
+        Serial.print(F(" from ")); Serial.print(client->remoteIP());
+        Serial.print(F(", ")); Serial.print(nodeWs.count()); Serial.println(F(" open"));
+        // LOUD WHEN THE POOL IS CROWDED. A node at its limit refuses connections
+        // at the TCP layer, which is invisible here and reads as a network fault
+        // from the other end. If this line ever appears, something is
+        // reconnecting far faster than it should — see kMaxLinkClients.
+        if (nodeWs.count() > kMaxLinkClients) {
+            Serial.print(F("[NODE] ⚠ too many link clients ("));
+            Serial.print(nodeWs.count());
+            Serial.println(F(") — something is reconnecting in a loop."));
+        }
+        g_linkedClientId = client->id();
+        g_primaryLinked  = true;
+        return;
+    }
+    if (type == WS_EVT_DISCONNECT || type == WS_EVT_ERROR) {
+        // HOLD. No servo command here, by design — see the fail-safe note above.
+        Serial.print(F("[NODE] Primary disconnected — client #"));
+        Serial.print(client->id());
+        Serial.println(F(" — holding all gates."));
+        // Track the ONE linked client by id rather than inferring from count().
+        // count() includes the client currently being torn down, which is why this
+        // used to read `> 1`; that guess also went wrong the other way, reporting
+        // linked when all that remained was a zombie the server hadn't reaped.
+        if (client->id() == g_linkedClientId) g_primaryLinked = false;
+        // The OWNER's socket closing means "no owner is connected", not "the
+        // node is unowned" — the claim itself survives, so a rebooting primary
+        // gets its node back rather than losing it to whoever dials in first.
+        if (client->id() == g_ownerClientId) g_ownerLinked = false;
+        return;
+    }
+    if (type != WS_EVT_DATA) return;
+
+    AwsFrameInfo* info = (AwsFrameInfo*)arg;
+    if (!(info->final && info->index == 0 && info->len == len)) return;
+    if (info->opcode != WS_TEXT) return;
+
+    const Conn conn{client->id(), client->remoteIP(), false, client};
+    handleNodeFrame(conn, data, len);
 }
 
 #ifdef PIN_CT
@@ -1141,7 +1216,7 @@ static void tickSensors() {
         topo::nodelink::buildSense(doc.to<JsonObject>(), g_sensors[i].sensorId,
                                    t.on, t.level, amps, floorA, tripA, t.floorFault);
         String s; serializeJson(doc, s);
-        nodeWs.textAll(s);
+        sendToOwner(s);
         if (changed) {
             Serial.print(F("[CT] ")); Serial.print(g_sensors[i].sensorId);
             Serial.print(t.on ? F(" ON  ") : F(" off "));
@@ -1161,7 +1236,7 @@ static void reportState(const char* selectorId, const char* stateId, bool moving
     StaticJsonDocument<192> doc;
     topo::nodelink::buildState(doc.to<JsonObject>(), selectorId, stateId, moving);
     String s; serializeJson(doc, s);
-    nodeWs.textAll(s);
+    sendToOwner(s);
 }
 
 // -----------------------------------------------------------------------------
@@ -1186,6 +1261,20 @@ static void bootTrace(const char* stage) {
                   (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
                   (unsigned)ESP.getPsramSize());
     Serial.flush();
+}
+
+// ── this node dialling its primary (BrainLink.h) ────────────────────────────
+static String ownerNow() { return g_owner; }
+static bool   inboundOwnerUp() { return g_ownerLinked && !g_ownerOutbound; }
+static void onBrainFrame(const uint8_t* d, size_t n) {
+    const Conn conn{kOutboundId, brainlink::remote(), true, nullptr};
+    handleNodeFrame(conn, d, n);
+}
+static void onBrainState(bool up) {
+    if (up) return;                      // the HELLO that follows decides "linked"
+    if (g_ownerOutbound) g_ownerLinked = false;
+    if (g_linkedClientId == kOutboundId) g_primaryLinked = false;
+    Serial.println(F("[NODE] Primary disconnected (our socket) — holding all gates."));
 }
 
 void setup() {
@@ -1319,6 +1408,9 @@ void setup() {
     nodeWs.onEvent(onNodeWsEvent);
     server.addHandler(&nodeWs);
     server.begin();
+    // After the listener: a node that is owned dials its primary from here on.
+    brainlink::begin(WiFiProvisioner::getHostname().c_str(), onBrainFrame, onBrainState,
+                     ownerNow, inboundOwnerUp);
     bootTrace("server");
     Serial.print(F("[NODE] Listening on ws://"));
     Serial.print(WiFiProvisioner::getHostname());

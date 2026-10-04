@@ -74,6 +74,10 @@ static const uint32_t kMaxOtaBytes = 0x1E0000u;
 // bad frame WHOLE, and a node that dropped a WHERE it should have acted on would
 // read as a node that never comes looking for its primary.
 static const size_t kMaxWhereIpLen = 15;
+// The UDP port a primary broadcasts "DGB1|<primaryId>|<ip>|<port>" on, for a node that
+// has lost it. BEACON_PORT in nodelink.js — a pair. Nothing but this number and the
+// "DGB1" prefix has to agree, which is exactly why it is written down twice.
+static const unsigned short kBeaconPort = 41234;
 static const char* const kRefuseReasons[] = { "not-paired", "duplicate", "busy" };
 static const size_t kRefuseReasonCount = 3;
 

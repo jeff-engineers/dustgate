@@ -1408,6 +1408,7 @@ int main(int argc, char** argv) {
       ok("a JOIN carries the node and the version",
          std::string(j["t"] | "") == "JOIN" && std::string(j["nodeId"] | "") == "dustgate-planer" && (j["v"] | 0) == 1);
       ok("the address bound", kMaxWhereIpLen == 15);
+      ok("the beacon port", kBeaconPort == 41234);
       ok("REFUSE not-paired is a reason",  isRefuseReason("not-paired"));
       ok("REFUSE duplicate is a reason",   isRefuseReason("duplicate"));
       ok("REFUSE busy is a reason",        isRefuseReason("busy"));

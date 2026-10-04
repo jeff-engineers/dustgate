@@ -301,6 +301,15 @@ void RemoteActuatorBus::taskLoop() {
 
     unsigned long lastNagMs = millis();
     while (_running) {
+        // A node that dialled us IS the link. Leave the dial-out socket closed: a
+        // second one to the same node only teaches it that "another link" exists, and
+        // that is exactly the churn that fills a node's connection slots.
+        if (_inId) {
+            if (_sockUp || _ws.isConnected()) { _ws.disconnect(); _sockUp = false; }
+            lastNagMs = millis();
+            delay(50);
+            continue;
+        }
         _ws.loop();
 
         // Say something while a link is stuck DOWN. Every other message here fires
@@ -417,10 +426,117 @@ void RemoteActuatorBus::taskLoop() {
     vTaskDelete(NULL);
 }
 
+// The HELLO. `_takeover` is one-shot and only ever set by an explicit user action
+// (see requestTakeover), so a reconnect loop can never escalate itself into a theft.
+void RemoteActuatorBus::buildHelloString(String& out) {
+    StaticJsonDocument<192> doc;
+    const bool takeover = _takeover;
+    _takeover = false;
+    nodelink::buildHello(doc.to<JsonObject>(), _primaryId, _nodeId, takeover);
+    serializeJson(doc, out);
+}
+
+// What the link going away means, whichever way it was dialled.
+void RemoteActuatorBus::markDown(bool wasUp) {
+    (void)wasUp;
+    // Logged only for a link that was UP. A retry that fails again is not news, and
+    // at one line per retry it would bury the log.
+    bool logDown = false;
+    if (_mutex) {
+        xSemaphoreTake(_mutex, portMAX_DELAY);
+        if (_connected) { _downSinceMs = millis(); logDown = true; }
+        _connected = false;
+        // Drop any outstanding move: we can't know whether it landed, and holding
+        // busy() forever would stall every other gate.
+        if (_moveOutstanding) _moveFault = "The link dropped mid-move \xE2\x80\x94 the gate may not have finished moving.";
+        _moveOutstanding = false;
+        _txPending = false;
+        // FORGET THE READINGS, KEEP THE CONFIG. A link that has dropped tells us
+        // nothing about the tool any more, and a stale "on" left lying here would
+        // keep a collector running for a machine nobody can see (RFC §5.6a: absent
+        // is OFF). The CONFIG is the opposite — it is ours, not the node's, and the
+        // node will have forgotten it across the reboot.
+        _senseCount = 0;
+        _cfgPending = _cfgValid;
+        xSemaphoreGive(_mutex);
+    }
+    DEBUG_PRINT(F("[NODE] Link lost: ")); DEBUG_PRINTLN(_nodeId);
+    if (logDown) linklog::event("link_down", _host);
+}
+
+// ── node-initiated links ─────────────────────────────────────────────────────
+bool RemoteActuatorBus::attachInbound(AsyncWebSocketClient* c, String& helloOut) {
+    if (!_mutex || !c) return false;
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    const bool fresh = _connected && (millis() - _lastRxMs) < nodelink::kPongTimeoutMs;
+    if (fresh) { xSemaphoreGive(_mutex); return false; }   // one healthy link only
+    _inClient   = c;
+    _inId       = c->id();
+    _lastRxMs   = millis();         // the node just spoke; do not call it overdue before the WELCOME
+    _lastPingMs = millis();
+    // Whatever was half-open on the dial-out side is stale now.
+    _connected  = false;
+    _txPending  = false;
+    xSemaphoreGive(_mutex);
+    buildHelloString(helloOut);
+    DEBUG_PRINT(F("[NODE] ")); DEBUG_PRINT(_nodeId); DEBUG_PRINTLN(F(" dialled in"));
+    return true;
+}
+
+void RemoteActuatorBus::detachInbound(uint32_t clientId) {
+    if (!_inId || _inId != clientId) return;
+    _inClient = nullptr;
+    _inId     = 0;
+    markDown(true);
+}
+
+void RemoteActuatorBus::onInboundPong() {
+    if (!_mutex) return;
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    _lastRxMs = millis();
+    xSemaphoreGive(_mutex);
+}
+
+void RemoteActuatorBus::pumpInbound() {
+    AsyncWebSocketClient* c = _inClient;
+    if (!c || !_inId) return;
+    if (c->status() != WS_CONNECTED) return;
+    char tx[sizeof(_txFrame)] = ""; char cfg[sizeof(_cfgFrame)] = ""; char ota[sizeof(_otaFrame)] = "";
+    bool haveTx = false, haveCfg = false, haveOta = false;
+    if (xSemaphoreTake(_mutex, 0) != pdTRUE) return;      // try again next loop
+    if (_txPending && _connected)  { strlcpy(tx,  _txFrame,  sizeof(tx));  _txPending  = false; haveTx  = true; }
+    if (_cfgPending && _connected) { strlcpy(cfg, _cfgFrame, sizeof(cfg)); _cfgPending = false; haveCfg = true; }
+    if (_otaPending && _connected) { strlcpy(ota, _otaFrame, sizeof(ota)); _otaPending = false; haveOta = true; }
+    if (_moveOutstanding && (millis() - _moveStartedMs) > nodelink::kMoveTimeoutMs) {
+        _moveOutstanding = false;
+        _moveFault = "The board never reported its move finished (timed out).";
+        DEBUG_PRINT(F("[NODE] Move timed out on ")); DEBUG_PRINTLN(_nodeId);
+    }
+    xSemaphoreGive(_mutex);
+    if (haveTx)  c->text(tx);
+    if (haveCfg) { c->text(cfg); DEBUG_PRINT(F("[NODE→] CONFIG to ")); DEBUG_PRINTLN(_nodeId); }
+    if (haveOta) { c->text(ota); DEBUG_PRINT(F("[NODE→] OTA to "));    DEBUG_PRINTLN(_nodeId); }
+}
+
+void RemoteActuatorBus::update() {
+    if (!_inId) return;
+    pumpInbound();
+    // The primary pings a node it dialled the way the dial-out path always did — at
+    // the shared interval — and a PONG (onInboundPong) is what keeps online() true.
+    if (millis() - _lastPingMs >= nodelink::kPingIntervalMs) {
+        _lastPingMs = millis();
+        AsyncWebSocketClient* c = _inClient;
+        if (c && c->status() == WS_CONNECTED) c->ping();
+    }
+}
+
 void RemoteActuatorBus::onEvent(WStype_t type, uint8_t* payload, size_t len) {
     switch (type) {
         case WStype_CONNECTED: {
             _sockUp = true;
+            // The node dialled us in the meantime and that socket is THE link: say
+            // nothing on this one and let the stand-down in taskLoop close it.
+            if (_inId) break;
             // The backoff is NOT reset here any more — see the WELCOME branch of
             // handleFrame(). Resetting on a bare socket kept the storm it was
             // written for at 1-2 s: connect (reset to 1 s), drop (double to
@@ -428,14 +544,7 @@ void RemoteActuatorBus::onEvent(WStype_t type, uint8_t* payload, size_t len) {
             //
             // Socket is up but the node hasn't identified itself yet — stay
             // offline until WELCOME lands so we never command an unknown board.
-            StaticJsonDocument<192> doc;
-            // The HELLO carries our claim. `_takeover` is one-shot and only ever
-            // set by an explicit user action (see requestTakeover), so a
-            // reconnect loop can never escalate itself into a theft.
-            bool takeover = _takeover;
-            _takeover = false;
-            nodelink::buildHello(doc.to<JsonObject>(), _primaryId, _nodeId, takeover);
-            String s; serializeJson(doc, s);
+            String s; buildHelloString(s);
             _ws.sendTXT(s);
             break;
         }
@@ -443,38 +552,19 @@ void RemoteActuatorBus::onEvent(WStype_t type, uint8_t* payload, size_t len) {
             // HOLLOW: the socket never reached WStype_CONNECTED — TCP was
             // accepted and then nothing answered the upgrade. See LinkHealth.
             const bool hollow = !_sockUp;
-            // Logged only for a link that was UP. A retry that fails again is
-            // not news, and at one line per retry it would bury the log.
-            bool logDown = false;
             _sockUp = false;
-            if (_mutex) {
-                xSemaphoreTake(_mutex, portMAX_DELAY);
-                if (_connected) { _downSinceMs = millis(); logDown = true; }
-                if (hollow && _hollowDrops < 0xFFFF) _hollowDrops++;
-                _connected = false;
-                // Drop any outstanding move: we can't know whether it landed,
-                // and holding busy() forever would stall every other gate.
-                if (_moveOutstanding) _moveFault = "The link dropped mid-move \xE2\x80\x94 the gate may not have finished moving.";
-                _moveOutstanding = false;
-                _txPending = false;
-                // FORGET THE READINGS, KEEP THE CONFIG. A link that has dropped
-                // tells us nothing about the tool any more, and a stale "on"
-                // left lying here would keep a collector running for a machine
-                // nobody can see (RFC §5.6a: absent is OFF). The CONFIG is the
-                // opposite — it is ours, not the node's, and the node will have
-                // forgotten it across the reboot.
-                _senseCount = 0;
-                _cfgPending = _cfgValid;
-                xSemaphoreGive(_mutex);
-            }
-            DEBUG_PRINT(F("[NODE] Link lost: ")); DEBUG_PRINTLN(_nodeId);
-            if (logDown) linklog::event("link_down", _host);
+            // Not this bus's link any more — the socket that carries it is the node's
+            // own. Marking the bus down for the death of a spare would drop a good link.
+            if (_inId) break;
+            if (hollow && _hollowDrops < 0xFFFF) _hollowDrops++;
+            markDown(!hollow);
             // No _backoff() here: the drop stamped _lastConnectionFail, and the
             // task loop backs off once per stamp. Calling it here as well would
             // count every drop twice.
             break;
         }
         case WStype_TEXT:
+            if (_inId) break;     // a spare socket's frames are not the link's
             handleFrame(reinterpret_cast<const char*>(payload), len);
             break;
 
@@ -535,6 +625,8 @@ void RemoteActuatorBus::handleFrame(const char* json, size_t len) {
         // Absent means NO: a node that predates plug polling must stay
         // brain-polled, or it is handed a CONFIG it refuses whole — clamp and all.
         _capPlugs  = f["caps"]["plug"] | 0;
+        // Absent means NO: a board that predates node-initiated links is dialled.
+        _capJoin   = f["caps"]["join"] | 0;
 
         // Did it accept our claim? A refusal leaves us OFFLINE rather than
         // half-connected: every caller already treats offline as "don't command

@@ -793,6 +793,103 @@ static void syncPairedNodes(const char* primaryId) {
     DEBUG_PRINT(F(", stopped ")); DEBUG_PRINT((int)plan.stop.size()); DEBUG_PRINTLN(F(")"));
 }
 
+// ── NODE-INITIATED LINKS (2026-10-04) ───────────────────────────────────────
+// A node that has lost us dials this primary's /nodelink listener, says JOIN, and
+// is bound to the bus that pairs it. No task and no per-node address on this side:
+// it is one socket on the async_tcp task. See RemoteActuatorBus::attachInbound and
+// docs/nodes-dial-the-brain-plan.md.
+static topo::RemoteActuatorBus* busForNode(const char* nodeId) {
+    if (!g_remoteBuses || !nodeId || !*nodeId) return nullptr;
+    const std::string want = topo::bareHost(nodeId);
+    for (int i = 0; i < g_remoteCount; i++)
+        if (remoteLive(i) && topo::bareHost(g_remoteBuses[i].host()) == want) return &g_remoteBuses[i];
+    return nullptr;
+}
+
+static void sendRefuse(AsyncWebSocketClient* c, const char* reason) {
+    StaticJsonDocument<64> d;
+    topo::nodelink::buildRefuse(d.to<JsonObject>(), reason);
+    String s; serializeJson(d, s);
+    c->text(s);
+    c->close();
+}
+
+static bool nodeEventHook(AsyncWebSocketClient* c, AwsEventType type, void* arg, uint8_t* data, size_t len) {
+    if (!g_remoteBuses || !c) return false;
+    if (type == WS_EVT_DISCONNECT || type == WS_EVT_ERROR) {
+        for (int i = 0; i < g_remoteCount; i++)
+            if (g_remoteBuses[i].ownsInbound(c->id())) { g_remoteBuses[i].detachInbound(c->id()); return true; }
+        return false;
+    }
+    if (type == WS_EVT_PONG) {
+        for (int i = 0; i < g_remoteCount; i++)
+            if (g_remoteBuses[i].ownsInbound(c->id())) { g_remoteBuses[i].onInboundPong(); return true; }
+        return false;
+    }
+    if (type != WS_EVT_DATA) return false;
+
+    // Already a node's socket: every frame on it belongs to its bus.
+    for (int i = 0; i < g_remoteCount; i++) {
+        if (!g_remoteBuses[i].ownsInbound(c->id())) continue;
+        AwsFrameInfo* info = (AwsFrameInfo*)arg;
+        if (info->final && info->index == 0 && info->len == len && info->opcode == WS_TEXT)
+            g_remoteBuses[i].onInboundFrame(reinterpret_cast<const char*>(data), len);
+        return true;
+    }
+
+    // Not yet: is this a JOIN?
+    AwsFrameInfo* info = (AwsFrameInfo*)arg;
+    if (!(info->final && info->index == 0 && info->len == len) || info->opcode != WS_TEXT) return false;
+    StaticJsonDocument<192> d;
+    if (deserializeJson(d, data, len)) return false;
+    if (strcmp(d["t"] | "", "JOIN") != 0) return false;
+    if ((d["v"] | 0) != topo::nodelink::kVersion) { sendRefuse(c, "busy"); return true; }
+    topo::RemoteActuatorBus* bus = busForNode(d["nodeId"] | "");
+    if (!bus) {
+        DEBUG_PRINT(F("[NODE] JOIN from ")); DEBUG_PRINT(d["nodeId"] | "?"); DEBUG_PRINTLN(F(" — not paired, refused"));
+        apiServer.adjustNodeLinkClients(-1);
+        sendRefuse(c, "not-paired");
+        return true;
+    }
+    String hello;
+    if (!bus->attachInbound(c, hello)) {
+        DEBUG_PRINT(F("[NODE] JOIN from ")); DEBUG_PRINT(bus->nodeId()); DEBUG_PRINTLN(F(" — already linked, refused as a duplicate"));
+        apiServer.adjustNodeLinkClients(-1);
+        sendRefuse(c, "duplicate");
+        return true;
+    }
+    apiServer.adjustNodeLinkClients(-1);   // CONNECT counted this as a primary connecting; it is a node
+    c->text(hello);
+    return true;
+}
+
+// The beacon: "DGB1|<primaryId>|<ip>|<port>" to the subnet's broadcast address, so a
+// node that has lost us can find us without mDNS, a cached address, or anyone's
+// router settings. Quick while any paired node is down, a slow heartbeat otherwise
+// (a node that joins the network later, or reboots, still learns where we are).
+static WiFiUDP  g_beaconUdp;
+static uint32_t g_beaconAtMs = 0;
+static void tickBeacon() {
+    if (!g_remoteBuses || WiFi.status() != WL_CONNECTED) return;
+    bool any = false, anyDown = false;
+    for (int i = 0; i < g_remoteCount; i++) {
+        if (!remoteLive(i)) continue;
+        any = true;
+        if (!g_remoteBuses[i].health().linked) anyDown = true;
+    }
+    if (!any) return;
+    const uint32_t now = millis();
+    if (now - g_beaconAtMs < (anyDown ? 5000UL : 60000UL)) return;
+    g_beaconAtMs = now;
+    char buf[96];
+    const IPAddress ip = WiFi.localIP();
+    snprintf(buf, sizeof(buf), "DGB1|%s|%u.%u.%u.%u|80", WiFiProvisioner::getHostname().c_str(), ip[0], ip[1], ip[2], ip[3]);
+    if (g_beaconUdp.beginPacket(WiFi.broadcastIP(), topo::nodelink::kBeaconPort)) {
+        g_beaconUdp.write((const uint8_t*)buf, strlen(buf));
+        g_beaconUdp.endPacket();
+    }
+}
+
 // ── REJOIN WIFI WHEN THE NETWORK, NOT THE NODE, IS THE PROBLEM ──────────────
 //
 // A STOPGAP FOR A NETWORK WE DO NOT CONTROL, added 2026-09-27 and not yet seen
@@ -1552,6 +1649,7 @@ void setup() {
     }
     // LittleFS is mounted by apiServer.begin() — the log can write from here on.
     linklog::begin();
+    apiServer.setNodeEventHook(nodeEventHook);
 #endif
 
     // -- routing runtime -------------------------------------------
@@ -2602,6 +2700,8 @@ void loop() {
     if (HttpApiServer::otaRebootDue()) { Serial.println(F("[OTA] restarting")); Serial.flush(); ESP.restart(); }
 #endif
     otaguard::tick(WiFi.status() == WL_CONNECTED);
+
+    tickBeacon();
 
     // Run background processing for control input (HTTP server, etc.)
     control.update();
