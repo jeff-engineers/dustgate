@@ -14,6 +14,25 @@ active sections above them, which is how a parked item stops being read.
 
 ## Bugs
 
+- **A collector cannot run as a node yet: its RF transmitter and bin sensor only
+  work on a PRIMARY (jeff, 2026-10-04).** Asked whether the collector has to be
+  powered by the brain. It does, for two of its three jobs. Checked in the code:
+  the RF press (`PIN_RF_TX`, D10) and the bin-level read (`HAS_BIN`, D6) live in
+  `firmware.ino` only — `node/dustgate_node.cpp` has neither, and NodeLink has no
+  frame to ask a node to press the remote or to report bin state. The clamp (CT) DOES
+  work on a node. A fob servo is an ordinary servo channel, but whether the collector
+  press logic reaches one over NodeLink is UNCHECKED. This contradicts the design
+  rule in CLAUDE.md ("the collector gets its own board … same node build, same
+  NodeLink"), which is the intent and not the fact; dev.sh's header is the only place
+  that says so. It matters when the brain is not at the collector — in a big shop that
+  is the likely case.
+  To do: (1) read the collector-press path to see what already goes over NodeLink;
+  (2) a NodeLink frame for "press" (and the retry/confirm policy stays on the primary —
+  CollectorPress.h is already pure) and one for bin state; (3) move the RF transmit
+  and the bin read out of `firmware.ino` into headers the node includes; (4) paired JS/C++
+  frames and tests per the usual rule, and a row in the CLAUDE.md constants table for
+  whatever bounds they carry. Until then: wire RF and the bin sensor to a primary.
+
 - **Prove node-owned plug polling under a real load (jeff, 2026-10-04 — deferred).**
   Verified on the bench so far: a Tasmota paired to a tool whose gate is on
   dustgate-node-1 is handed to that node once the layout is SAVED (the node logs
