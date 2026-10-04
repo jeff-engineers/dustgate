@@ -1249,10 +1249,12 @@ port_is_free() {
 # `flash --ui`. The API key comes off the board's own /api/info, as linklog does.
 #   --no-nodes     primary firmware only (skips the two node builds)
 #   --nodes-only   stage the node images, leave the primary alone
+#   --bad          ROLLBACK TEST: images that never become healthy (see below)
 run_ota() {
-  local host="" env="$PRIMARY_ENV" do_primary=1 do_nodes=1
+  local host="" env="$PRIMARY_ENV" do_primary=1 do_nodes=1 bad=0
   for a in "$@"; do
     case "$a" in
+      --bad)        bad=1 ;;
       --slider|--linear|--rack) env="$LINEAR_PRIMARY_ENV" ;;
       --no-nodes)   do_nodes=0 ;;
       --nodes-only) do_primary=0 ;;
@@ -1287,6 +1289,18 @@ run_ota() {
       none) echo "  ✗ Firmware older than the OTA feature — it cannot take this. Flash by cable once."
             exit 1 ;;
     esac
+  fi
+
+  # --bad: build images that NEVER report healthy, to prove rollback on hardware.
+  # PlatformIO reads this from the environment, so the flag is on for these builds
+  # only and the next ordinary run recompiles without it. After the test, run
+  # `bash dev.sh ota` (no --bad) to put good images back — the brain will otherwise
+  # keep offering the bad node image.
+  if [[ $bad == 1 ]]; then
+    export PLATFORMIO_BUILD_FLAGS="-DDUSTGATE_OTA_TEST_BAD"
+    echo "⚠ --bad: these images will refuse to become healthy and must ROLL BACK by themselves (~3 min)."
+  else
+    unset PLATFORMIO_BUILD_FLAGS
   fi
 
   # Build everything first: a failure here must not leave the shop half-updated.

@@ -34,6 +34,18 @@ const char* slot() {
 }
 
 void tick(bool healthy) {
+#ifdef DUSTGATE_OTA_TEST_BAD
+    // ROLLBACK TEST BUILD (dev.sh ota --bad). This image never believes it is
+    // healthy, so it must be abandoned by kProbationMaxMs and the board must come
+    // back on the previous slot. NEVER ship it: it is the one build that is
+    // designed to fail.
+    static bool announced = false;
+    if (!announced && onProbation()) {
+        announced = true;
+        Serial.println(F("[OTA] *** TEST-BAD BUILD: will never mark itself valid; expect a rollback in 3 minutes ***"));
+    }
+    healthy = false;
+#endif
     static bool decided = false;          // valid, or rolled back: nothing more to do
     static unsigned long healthySince = 0;
     static bool wasHealthy = false;
