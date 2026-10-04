@@ -1,6 +1,16 @@
 # Nodes find the brain — scope (2026-10-04, rewritten the same day)
 
-**Status: a plan, nothing built.** Written after the first full-shop test (nine nodes
+**Status (2026-10-04, later): phase 1 is BUILT and compiled, NOT yet run on hardware.** Nodes dial
+their own primary (`node/BrainLink.h`: WHERE, UDP beacon, cached address, mDNS, subnet sweep),
+the primary accepts a JOIN on its `/nodelink` listener and binds it to the pairing's bus
+(`RemoteActuatorBus::attachInbound`), and the dial-out path stands down while a node-initiated
+link is up. **It is additive and the version stays 1** (the plan below said 2; an old end ignores
+a frame it does not know, so there was nothing to bump for — see `nodelink.js`). Legacy dial-out
+tasks are still there (phase 2 removes them, and with them the per-node memory cost); the
+brain-side one-shot WHERE seeker is phase 2 too, since until the tasks go the dial-out path IS
+the seeker. Original text follows.
+
+**Original status: a plan, nothing built.** Written after the first full-shop test (nine nodes
 paired, brain at 22 KB free internal RAM, 14 KB at the low-water mark, the app refusing
 to load), and reshaped by jeff's suggestion the same evening: *pair from the brain, keep
 the steady-state link node-initiated, and when a link drops let both ends seek each
