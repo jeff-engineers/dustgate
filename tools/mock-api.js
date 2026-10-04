@@ -362,6 +362,14 @@ function handler(req, res) {
       json(res, { ok: true });
     });
   }
+  if (pathname === '/api/reset-all' && req.method === 'POST') {
+    td = null; rawTopology = null; pairedNodes.length = 0;
+    return json(res, { ok: true });
+  }
+  if (pathname === '/api/topology' && req.method === 'DELETE') {
+    td = null; rawTopology = null;
+    return json(res, { ok: true });
+  }
   if (pathname === '/api/topology' && req.method === 'GET') {
     return td ? json(res, rawTopology) : json(res, { error: 'no topology configured' }, 404);
   }

@@ -231,6 +231,26 @@ import { ApiService } from '../services/api.service';
 
         <div class="row">
           <div>
+            <div class="row-label">Reset shop layout</div>
+            <div class="row-hint">Erases the saved layout — ducts, gates, tools, plugs. Boards stay paired. Save a copy first if you want it back.</div>
+          </div>
+          <button class="danger-btn" [class.confirming]="confirmingLayoutReset" (click)="confirmLayoutReset()">
+            {{ confirmingLayoutReset ? 'Tap again to confirm' : 'Reset layout' }}
+          </button>
+        </div>
+
+        <div class="row">
+          <div>
+            <div class="row-label">Reset everything</div>
+            <div class="row-hint">Erases the layout, <b>forgets every paired board and every plug</b> (tools, collector), and starts the shop from scratch. Keeps WiFi, the app key and gate calibration. Boards will need pairing again.</div>
+          </div>
+          <button class="danger-btn" [class.confirming]="confirmingEverything" (click)="confirmEverything()">
+            {{ confirmingEverything ? 'Tap again to confirm' : 'Reset everything' }}
+          </button>
+        </div>
+
+        <div class="row">
+          <div>
             <div class="row-label">Forget WiFi</div>
             <div class="row-hint">Erases saved network credentials and reboots into the setup portal.</div>
           </div>
@@ -252,6 +272,8 @@ export class SettingsComponent implements OnInit {
 
   confirmingReset      = false;
   confirmingWifiReset  = false;
+  confirmingLayoutReset = false;
+  confirmingEverything  = false;
 
   statusMsg = '';
   errorMsg  = '';
@@ -301,6 +323,26 @@ export class SettingsComponent implements OnInit {
     }
     this.confirmingReset = false;
     this.run(() => this.api.resetSetup(), 'busy', 'Calibration reset. Run setup again when ready.');
+  }
+
+  confirmLayoutReset() {
+    if (!this.confirmingLayoutReset) {
+      this.confirmingLayoutReset = true;
+      this.cd.markForCheck();
+      return;
+    }
+    this.confirmingLayoutReset = false;
+    this.run(() => this.api.deleteTopology(), 'busy', 'Layout erased. Draw a new one under Shop Layout.');
+  }
+
+  confirmEverything() {
+    if (!this.confirmingEverything) {
+      this.confirmingEverything = true;
+      this.cd.markForCheck();
+      return;
+    }
+    this.confirmingEverything = false;
+    this.run(() => this.api.resetEverything(), 'busy', 'Everything erased. Pair your boards again from Boards.');
   }
 
   confirmWifiReset() {

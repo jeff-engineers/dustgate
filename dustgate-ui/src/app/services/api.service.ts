@@ -782,6 +782,11 @@ export class ApiService {
   }
   /** Replace the topology (validated device-side; 400 on invalid). */
   putTopology(topology: Topology): Promise<{ ok: boolean }> { return this.put('/api/topology', topology); }
+  /** Forget the stored layout. Boards stay paired. */
+  deleteTopology(): Promise<{ ok: boolean }> { return this.delete('/api/topology'); }
+  /** Forget the layout, every paired board and every paired plug. WiFi, the key and
+   *  calibration stay. */
+  resetEverything(): Promise<{ ok: boolean }> { return this.post('/api/reset-all', {}) as Promise<{ ok: boolean }>; }
   /** Live status: actuator states, tool activity, collector, conflicts, reachability. */
   getStatus(): Promise<TopologyStatus> { return this.get<TopologyStatus>('/api/status'); }
   /** Sim/demo only: inject a tool's power reading to drive routing (real firmware senses plugs). */

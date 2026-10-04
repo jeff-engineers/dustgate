@@ -191,6 +191,17 @@ export class DemoApiService extends ApiService {
     return this.td.topology;
   }
 
+  override async resetEverything(): Promise<{ ok: boolean }> {
+    this.td = null as unknown as typeof this.td;
+    this.pairedHosts().clear();
+    return { ok: true };
+  }
+
+  override async deleteTopology(): Promise<{ ok: boolean }> {
+    this.td = null as unknown as typeof this.td;
+    return { ok: true };
+  }
+
   override async putTopology(topology: Topology): Promise<{ ok: boolean }> {
     // Both shapes, like the mock and the firmware: a shop validates as a shop.
     const v = isShop(topology) ? validateShop(topology) : validateTopology(topology);

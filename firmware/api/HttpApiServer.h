@@ -149,6 +149,10 @@ public:
     // loop acts on it (the link objects belong to the loop, not the AsyncTCP task).
     bool consumeNodeUpdate(String& id);
 
+    // True once after POST /api/reset-all: forget the layout, every paired board and
+    // every paired plug. The loop does it (it owns the registry and the outlets).
+    bool consumeResetAll();
+
     // Rewrite one machine's plug in the STORED layout — its address, kind and MAC —
     // and flag the runtime to re-adopt. The one way the device edits a layout
     // itself, used when a plug is found at a new address (control/OutletRelocate.h).
@@ -393,6 +397,7 @@ private:
     // topology runtime hand-off (see consumeTopologyChanged / publishTopologyStatus)
     bool   _topoChangedPending = false;
     String _nodeUpdateWanted;
+    bool   _resetAllPending = false;
     String _topoStatusJson;
 
     // NodeLink secondary endpoint (see consumeNodeSet / reportNodeState)

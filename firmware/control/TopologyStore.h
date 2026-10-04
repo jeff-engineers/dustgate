@@ -49,6 +49,15 @@ public:
 
     bool exists() const { return LittleFS.exists(kTopologyPath); }
 
+    // Forget the stored layout (Settings -> Danger zone). Only the layout file:
+    // pairing lives in NodeRegistry and survives, so the boards stay linked.
+    bool clear() {
+        LittleFS.remove(kTopologyTmp);
+        const bool ok = !LittleFS.exists(kTopologyPath) || LittleFS.remove(kTopologyPath);
+        if (ok) _present = false;
+        return ok;
+    }
+
     // Read the stored JSON verbatim (empty String if none / read error).
     String load() const {
         File f = LittleFS.open(kTopologyPath, "r");
