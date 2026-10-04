@@ -74,7 +74,25 @@ static const char* NVS_KEY = "api_key";
 // Topology persistence (LittleFS). One instance for the device; the
 // routes below are its only users. Stage 3's controller will read it back.
 static topo::TopologyStore g_topoStore;
-static int s_staticInFlight = 0;   // static files being served right now (MemoryGuard); AsyncTCP task only
+// Static files being served right now (MemoryGuard); AsyncTCP task only. THREE SLOTS,
+// each holding the millis() a file request was admitted (0 = free) and EXPIRING after
+// kStaticSlotMaxMs. It was a bare counter decremented in onDisconnect, and it leaked:
+// some requests end without that callback, the count crept to 3, and the board then
+// answered 503 to every page load for ever while 80 KB of heap sat free (2026-10-04).
+// A slot that is never released is merely reclaimed.
+static const int           kStaticSlots = 3;
+static const unsigned long kStaticSlotMaxMs = 10000;
+static unsigned long       s_staticSlot[kStaticSlots] = {0, 0, 0};
+static int staticSlotTake() {
+    const unsigned long now = millis();
+    for (int i = 0; i < kStaticSlots; i++) {
+        if (s_staticSlot[i] == 0 || (now - s_staticSlot[i]) > kStaticSlotMaxMs) {
+            s_staticSlot[i] = now ? now : 1;
+            return i;
+        }
+    }
+    return -1;
+}
 
 // Minimum interval between position-drift-triggered pushes (see update()).
 static const unsigned long POSITION_PUSH_MIN_MS = 150;
@@ -1605,16 +1623,15 @@ void HttpApiServer::registerRoutes() {
         void run(AsyncWebServerRequest* req, ArMiddlewareNext next) override {
             const bool api = req->url().startsWith("/api/") || req->url().startsWith("/shelly-rpc");
             const size_t freeH = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
-            if (api ? (freeH < 12000) : (freeH < 28000 || s_staticInFlight >= 3)) {
+            int slot = -1;
+            if (!api && freeH >= 28000) slot = staticSlotTake();
+            if (api ? (freeH < 12000) : (slot < 0)) {
                 AsyncWebServerResponse* r = req->beginResponse(503, "text/plain", "busy, retry");
                 r->addHeader("Retry-After", "1");
                 req->send(r);
                 return;
             }
-            if (!api) {
-                s_staticInFlight++;
-                req->onDisconnect([]() { if (s_staticInFlight > 0) s_staticInFlight--; });
-            }
+            if (!api) req->onDisconnect([slot]() { s_staticSlot[slot] = 0; });
             next();
         }
     };
