@@ -858,25 +858,21 @@ static bool nodeEventHook(AsyncWebSocketClient* c, AwsEventType type, void* arg,
     // nothing — it backs off and tries again — and "busy" says why.
     if (heap_caps_get_free_size(MALLOC_CAP_INTERNAL) < kJoinMinFreeBytes) {
         DEBUG_PRINT(F("[NODE] JOIN from ")); DEBUG_PRINT(d["nodeId"] | "?"); DEBUG_PRINTLN(F(" — low on memory, told to retry"));
-        apiServer.adjustNodeLinkClients(-1);
         sendRefuse(c, "busy");
         return true;
     }
     topo::RemoteActuatorBus* bus = busForNode(d["nodeId"] | "");
     if (!bus) {
         DEBUG_PRINT(F("[NODE] JOIN from ")); DEBUG_PRINT(d["nodeId"] | "?"); DEBUG_PRINTLN(F(" — not paired, refused"));
-        apiServer.adjustNodeLinkClients(-1);
         sendRefuse(c, "not-paired");
         return true;
     }
     String hello;
     if (!bus->attachInbound(c, hello)) {
         DEBUG_PRINT(F("[NODE] JOIN from ")); DEBUG_PRINT(bus->nodeId()); DEBUG_PRINTLN(F(" — already linked, refused as a duplicate"));
-        apiServer.adjustNodeLinkClients(-1);
         sendRefuse(c, "duplicate");
         return true;
     }
-    apiServer.adjustNodeLinkClients(-1);   // CONNECT counted this as a primary connecting; it is a node
     c->text(hello);
     return true;
 }
@@ -3936,57 +3932,6 @@ void loop() {
         apiServer.respondNodeDiscover(body);
     }
 #endif
-
-    // -- NodeLink SECONDARY execution -------------------------------------------
-    // This board acting as a dumb actuator bank for someone else's primary. The
-    // frame already carries a channel and an absolute angle/mm — there is no
-    // routing, no topology and no state lookup to do here, which is exactly the
-    // asymmetry that lets a cheap servo-only board be a node.
-    //
-    // A board configured as a primary (topology loaded) shouldn't also be
-    // receiving SETs; if it somehow is, both would command the same servos, so
-    // the primary's own routing wins and remote SETs are refused.
-    {
-        static char pendingSel[48]   = "";
-        static char pendingState[32] = "";
-        static bool awaitingSettle   = false;
-
-        topo::nodelink::SetCommand cmd;
-        if (apiServer.consumeNodeSet(cmd)) {
-            bool driven = false;
-            if (g_topoRuntime.loaded()) {
-                DEBUG_PRINTLN(F("[NODE] Refusing SET — this board is a primary."));
-            } else if (cmd.isServo) {
-#if defined(ENABLE_SERVO) && defined(SERVO_PWM_PIN_1)
-                if (cmd.channel >= 0 && cmd.channel < SERVO_COUNT) {
-                    g_servos[cmd.channel].setHoldAtRest(cmd.holdAtRest);
-                    g_servos[cmd.channel].moveTo(cmd.angle);
-                    driven = true;
-                }
-#endif
-            } else {
-                driven = g_linearDrive.moveToMm(cmd.positionMm);
-            }
-
-            if (driven) {
-                strlcpy(pendingSel,   cmd.selectorId, sizeof(pendingSel));
-                strlcpy(pendingState, cmd.stateId,    sizeof(pendingState));
-                awaitingSettle = true;
-                apiServer.reportNodeState(pendingSel, pendingState, true);
-            } else {
-                // Nothing moved, so report arrival immediately — otherwise the
-                // primary would sit on a busy() bus until its move timeout.
-                apiServer.reportNodeState(cmd.selectorId, cmd.stateId, false);
-            }
-        }
-
-        // Report arrival once the actuator settles, so the primary's move queue
-        // advances on real completion rather than on a fixed guess.
-        if (awaitingSettle && !g_localBus.busy()) {
-            awaitingSettle = false;
-            apiServer.reportNodeState(pendingSel, pendingState, false);
-        }
-    }
 
     // Enable / disable — TODO: add ControlInput::setEnabled() to the base class
     // so this works for all modes, not just serial debug.

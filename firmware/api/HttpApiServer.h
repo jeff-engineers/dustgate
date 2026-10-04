@@ -171,39 +171,18 @@ public:
     void publishTopologyStatus(const String& json);
 
     // ------------------------------------------------------------------
-    // NodeLink (ws://<us>/nodelink) — the SECONDARY side of the star. A primary
-    // dials in and sends already-resolved SET frames; this board just moves the
-    // channel to the number it was given. See control/NodeLink.h.
+    // NodeLink (ws://<us>/nodelink) — where a NODE dials this primary (2026-10-04). This
+    // listener was also the SECONDARY side of the star once (a primary could answer SETs
+    // here); that second copy of the node program's handler is gone — the PWM bank and the
+    // slider are nodes now, and a primary is a brain. What is left is the JOIN: the sketch
+    // owns what it means (which pairing's bus the socket binds to), so the listener offers it
+    // every event. See control/NodeLink.h and docs/nodes-dial-the-brain-plan.md.
     //
-    // Every board exposes this, not just servo-only builds: it's what lets a
-    // second DevKitC act as an actuator bank on the bench without a special
-    // firmware, and it costs one WS route when nobody connects.
+    // The hook's return value is not used: it handles what it recognises and the rest is ignored.
     // ------------------------------------------------------------------
-
-    // Pending SET from a linked primary — one slot, since the primary serializes
-    // moves anyway (a newer SET supersedes an unread one rather than queueing).
-    bool consumeNodeSet(topo::nodelink::SetCommand& out);
-
-    // Report progress back to the primary. Called from the main loop once the
-    // actuator has been commanded (moving=true) and again when it settles.
-    void reportNodeState(const char* selectorId, const char* stateId, bool moving);
-
-    // True while some primary holds a NodeLink connection to this board. The
-    // main loop uses it to know it's acting as a secondary right now.
-    bool nodeLinkConnected() const { return _nodeLinkClients.load() > 0; }
-
-    // Node-initiated links (2026-10-04): a node that DIALS this primary arrives on the
-    // same /nodelink listener a primary-as-node uses. The sketch owns what a JOIN
-    // means (which bus it binds to), so the listener offers it every event first.
-    // Return true to say "mine — do not run the primary-as-node handling". For
-    // CONNECT it is ignored (nobody knows yet whose socket it is); for DISCONNECT/ERROR
-    // true means the socket was a node's, so it must not be subtracted from the
-    // primary-as-node client count it was never added to (see adjustNodeLinkClients).
     using NodeEventHook = bool (*)(AsyncWebSocketClient*, AwsEventType, void*, uint8_t*, size_t);
     void setNodeEventHook(NodeEventHook h) { _nodeHook = h; }
     AsyncWebSocket* nodeSocket() { return &_nodeWs; }
-    // A JOIN claims a socket that CONNECT already counted as a primary connecting.
-    void adjustNodeLinkClients(int d) { _nodeLinkClients.fetch_add(d); }
 
     // ------------------------------------------------------------------
     // Node discovery + link state (the primary side of Stage 4)
@@ -419,28 +398,9 @@ private:
     bool   _linksPausedWanted = false;
     String _topoStatusJson;
 
-    // NodeLink secondary endpoint (see consumeNodeSet / reportNodeState)
+    // NodeLink: where a node dials this primary (see setNodeEventHook)
     AsyncWebSocket            _nodeWs;
-    // ATOMIC, NOT `volatile`, AND THE DIFFERENCE IS A REAL BUG (fixed 2026-09-14).
-    //
-    // `volatile` was never a threading primitive: it stops the compiler caching
-    // the value and does nothing else, so `_nodeLinkClients++` stayed a
-    // non-atomic read-modify-write. This counter is written from
-    // AsyncWebServer's own task (the WS_EVT_CONNECT / WS_EVT_DISCONNECT
-    // callbacks) and read from loop(), so two events landing together could
-    // lose one — leaving the board believing a primary is connected when none
-    // is, or the reverse, until the next event happened to correct it.
-    //
-    // C++20 deprecates `volatile`'s increment for exactly this reason: it reads
-    // as atomic and is not, which is why the only two warnings in a clean build
-    // were pointing straight at it. std::atomic is what the code always meant.
-    //
-    // The window is tiny and NodeLink connections are rare, which is precisely
-    // what would have made this miserable to find on a bench.
-    std::atomic<int>          _nodeLinkClients{0};
     NodeEventHook             _nodeHook = nullptr;
-    bool                      _nodeSetPending  = false;
-    topo::nodelink::SetCommand _nodeSetCmd;
 
     // ------------------------------------------------------------------
     // Replies the MAIN LOOP produces, for work that blocks (an mDNS sweep, an
