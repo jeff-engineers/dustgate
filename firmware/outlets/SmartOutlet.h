@@ -151,7 +151,8 @@ public:
     // authority of RFC §8. Base returns false, meaning "don't know", which
     // callers must treat as "don't touch it".
     virtual bool readPushConfig(String& /*outServer*/, bool& /*outEnabled*/,
-                                uint32_t /*timeoutMs*/ = 0) { return false; }
+                                uint32_t /*timeoutMs*/ = 0) { return false; }   // 0 = the implementation's own default; a default
+                                                                              // here is what callers through this type get, NOT the override's
 
     // POLL-ONLY: this plug belongs to someone else (Home Assistant, another
     // brain), so we read its wattage and never rewrite its Ws config. Set from

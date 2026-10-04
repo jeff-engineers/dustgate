@@ -12,11 +12,12 @@ Usage: brain-log.py <host> <api-key> <logfile> [--once]
 Two things it says out loud rather than hide: a GAP (the board's 32 KB ring
 wrapped before we caught up) and a RESTART (X-Serial-Boot changed).
 """
+import re
 import sys
 import time
 import urllib.request
 import urllib.error
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 
 def fetch(host, key, cursor):
@@ -27,6 +28,27 @@ def fetch(host, key, cursor):
         return (r.read().decode("utf-8", errors="replace"),
                 int(h.get("X-Serial-Start", "0")), int(h.get("X-Serial-Next", "0")),
                 h.get("X-Serial-Boot", ""))
+
+
+# The board stamps each line itself (utils/SerialLog.cpp): "15:35:45.123Z " in UTC
+# once it has NTP, "+63.512s " (uptime) before that. Show the first in THIS
+# machine's local time, and leave an uptime stamp alone, since it has no date to
+# convert. A line with no stamp (library errors through the ROM channel, or an
+# older firmware) gets when it reached us, as before.
+_STAMP = re.compile(r"^(\d\d):(\d\d):(\d\d)\.(\d{3})Z (.*)$", re.S)
+
+def stamped(line):
+    m = _STAMP.match(line)
+    if m:
+        h, mi, se, ms, rest = int(m[1]), int(m[2]), int(m[3]), int(m[4]), m[5]
+        now = datetime.now(timezone.utc)
+        t = now.replace(hour=h, minute=mi, second=se, microsecond=ms * 1000)
+        if t - now > timedelta(hours=12): t -= timedelta(days=1)     # just past UTC midnight
+        elif now - t > timedelta(hours=12): t += timedelta(days=1)
+        return f"{t.astimezone():%H:%M:%S}.{ms:03d} {rest}\n"
+    if line.startswith("+") and re.match(r"^\+\d+\.\d{3}s ", line):
+        return f"{line}\n"
+    return f"{datetime.now():%H:%M:%S}     {line}\n"
 
 
 def main():
@@ -78,7 +100,7 @@ def main():
                 pending += text
                 *lines, pending = pending.split("\n")
                 for ln in lines:
-                    out(f"{datetime.now():%H:%M:%S} {ln.rstrip(chr(13))}\n")
+                    out(stamped(ln.rstrip(chr(13))))
             # --once means "everything the board still holds", and the board hands out
             # 8 KB at a time: stop only when a fetch comes back short. It used to stop
             # after the first chunk, so `--once` showed the OLDEST 8 KB and never the
@@ -87,7 +109,7 @@ def main():
                 continue
             if once:
                 if pending:
-                    out(f"{datetime.now():%H:%M:%S} {pending}\n")
+                    out(stamped(pending))
                 return 0
             # Drain a backlog at full speed; idle at one poll a second.
             time.sleep(0.05 if len(text) >= 8000 else 1.0)

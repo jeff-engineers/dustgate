@@ -145,6 +145,13 @@ bool ShellyGen2Outlet::readPushConfig(String& outServer, bool& outEnabled, uint3
     outEnabled = false;
     if (_ip[0] == '\0' && !reresolve()) return false;
 
+    // A default argument binds to the STATIC type of the call, and the caller holds
+    // a SmartOutlet*, whose default is 0 — so this arrived as 0 ms and HTTPClient
+    // gave up on its first 10 ms poll: "HTTP -11" in ~25 ms, from a plug that
+    // answers in 35 ms. Every Gen4 plug failed this way (found 2026-10-04), which
+    // blocked takeover, rename and pairing, since a failed read is never permission.
+    if (timeoutMs == 0) timeoutMs = OUTLET_RPC_WRITE_TIMEOUT_MS;
+
     char url[80];
     snprintf(url, sizeof(url), "http://%s/rpc/Ws.GetConfig", _ip);
 
