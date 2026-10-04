@@ -735,16 +735,43 @@ static void runOta() {
         http.end(); failOta("no room in the update slot"); return;
     }
     Update.setMD5(g_otaOrder.md5);
-    static int lastPct = -10;
-    lastPct = -10;
-    Update.onProgress([](size_t done, size_t total) {
+    // OUR OWN READ LOOP, not Update.writeStream(). That call blocks inside the
+    // library whenever the data stops, so loop() cannot feed the watchdog and a
+    // brain that vanishes mid-download resets the whole node (seen on hardware
+    // 2026-10-04: task_wdt 35 s after the pull began). Here the watchdog is fed on
+    // every pass, and a transfer that makes no progress for kStallMs is simply a
+    // failed update — the node stays on its current image, never reboots, and the
+    // half-written slot is abandoned (it is never marked bootable until end()).
+    static const uint32_t kStallMs = 8000;
+    WiFiClient* stream = http.getStreamPtr();
+    uint8_t buf[1024];
+    uint32_t got = 0, lastDataMs = millis();
+    int lastPct = -10;
+    while (got < g_otaOrder.size) {
         watchdog::pet();
-        const int pct = total ? (int)((uint64_t)done * 100 / total) : 0;
-        if (pct >= lastPct + 10) { lastPct = pct; sendOtaState("progress", pct); }
-    });
-    const size_t wrote = Update.writeStream(*http.getStreamPtr());
+        const int avail = stream->available();
+        if (avail > 0) {
+            const int want = avail < (int)sizeof(buf) ? avail : (int)sizeof(buf);
+            const int n = stream->readBytes(buf, want);
+            if (n > 0) {
+                if (Update.write(buf, n) != (size_t)n) { Update.abort(); http.end(); failOta("flash write failed"); return; }
+                got += n;
+                lastDataMs = millis();
+                const int pct = (int)((uint64_t)got * 100 / g_otaOrder.size);
+                if (pct >= lastPct + 10) { lastPct = pct; sendOtaState("progress", pct); }
+                continue;
+            }
+        }
+        if (!stream->connected() && stream->available() == 0) break;      // the far end closed on us
+        if (millis() - lastDataMs > kStallMs) break;                       // nothing for 8 s
+        delay(5);
+    }
     http.end();
-    if (wrote != g_otaOrder.size) { Update.abort(); failOta("download ended early"); return; }
+    if (got != g_otaOrder.size) {
+        Update.abort();
+        failOta(got ? "download stalled or was cut off" : "primary sent nothing");
+        return;
+    }
     if (!Update.end(true)) {
         failOta("image rejected (checksum or format)"); return;
     }
