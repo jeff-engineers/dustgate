@@ -125,6 +125,7 @@
 #                                   # update over WiFi: the primary (rolls back if it cannot stay on
 #                                   #   WiFi) and the node images it serves; tap "update" per board in
 #                                   #   the app. Needs the OTA partition tables, one cable flash each.
+#   bash dev.sh tasks [host]        # heap (internal vs PSRAM) and every task's stack headroom + CPU
 #   bash dev.sh linklog [host]      # the primary's link log over WiFi, saved + summarised
 #   bash dev.sh log [host] [--once] # follow the brain's serial output over WiFi, no cable
 #                                   #   (drops, outages, node reboots, rejoins) — no USB needed
@@ -1260,11 +1261,14 @@ ota_build() {
 #   --no-nodes     primary firmware only (skips the two node builds)
 #   --nodes-only   stage the node images, leave the primary alone
 #   --bad          ROLLBACK TEST: images that never become healthy (see below)
+#   --extmem N     EXPERIMENT: every malloc above N bytes goes to PSRAM (brain build)
 run_ota() {
-  local host="" env="$PRIMARY_ENV" do_primary=1 do_nodes=1 bad=0
+  local host="" env="$PRIMARY_ENV" do_primary=1 do_nodes=1 bad=0 extmem="" want_extmem=0
   for a in "$@"; do
+    if [[ $want_extmem == 1 ]]; then extmem="$a"; want_extmem=0; continue; fi
     case "$a" in
       --bad)        bad=1 ;;
+      --extmem)     want_extmem=1 ;;
       --slider|--linear|--rack) env="$LINEAR_PRIMARY_ENV" ;;
       --no-nodes)   do_nodes=0 ;;
       --nodes-only) do_primary=0 ;;
@@ -1306,12 +1310,18 @@ run_ota() {
   # only and the next ordinary run recompiles without it. After the test, run
   # `bash dev.sh ota` (no --bad) to put good images back — the brain will otherwise
   # keep offering the bad node image.
+  # --extmem N: EXPERIMENT — send every malloc above N bytes to PSRAM (brain only).
+  # Compare `bash dev.sh tasks` / heapFree before and after. See firmware.ino.
+  local flags=""
   if [[ $bad == 1 ]]; then
-    export PLATFORMIO_BUILD_FLAGS="-DDUSTGATE_OTA_TEST_BAD"
+    flags="$flags -DDUSTGATE_OTA_TEST_BAD"
     echo "⚠ --bad: these images will refuse to become healthy and must ROLL BACK by themselves (~3 min)."
-  else
-    unset PLATFORMIO_BUILD_FLAGS
   fi
+  if [[ -n "$extmem" ]]; then
+    flags="$flags -DDUSTGATE_EXTMEM_MALLOC_LIMIT=$extmem"
+    echo "⚠ --extmem $extmem: every malloc above $extmem bytes goes to PSRAM in the brain build (experiment)."
+  fi
+  if [[ -n "$flags" ]]; then export PLATFORMIO_BUILD_FLAGS="$flags"; else unset PLATFORMIO_BUILD_FLAGS; fi
 
   # Build everything first: a failure here must not leave the shop half-updated.
   local penv_bin nbins=()
@@ -1398,6 +1408,32 @@ resolve_host() {
   local h="$1" ip
   ip="$(curl -sS --max-time 10 -o /dev/null -w '%{remote_ip}' "http://$h/api/info" 2>/dev/null || true)"
   if [[ -n "$ip" && "$ip" != "0.0.0.0" ]]; then echo "$ip"; else echo "$h"; fi
+}
+
+# run_tasks [host] — what the brain's memory and CPU are going to: the heap by
+# capability (internal vs PSRAM) and every FreeRTOS task, tightest stack first.
+# Read it on a fully loaded shop (utils/Diag.h says how to read the columns).
+run_tasks() {
+  local host="${1:-${DUSTGATE_HOST:-dustgate.local}}"
+  host="$(resolve_host "$host")"
+  local key
+  key="$(curl -fsS --max-time 10 "http://$host/api/info" 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin).get("apiKey",""))' 2>/dev/null || true)"
+  [[ -n "$key" ]] || { echo "  ✗ $host did not answer /api/info."; exit 1; }
+  curl -fsS --max-time 10 "http://$host/api/info" | python3 -c '
+import json,sys
+d=json.load(sys.stdin); h=d.get("heap")
+if not h: print("  (firmware has no heap breakdown — flash a build from 2026-10-04 or later)"); sys.exit(0)
+print("heap (bytes)        total      free       min   largest")
+for k in ("internal","psram"):
+    r=h[k]; print("  %-9s %10d %9d %9d %9d" % (k, r["total"], r["free"], r["min"], r["largest"]))
+print("  uptime %ss, build %s" % (d.get("uptimeSec"), d.get("build")))'
+  echo ""
+  curl -fsS --max-time 10 -H "X-Api-Key: $key" "http://$host/api/tasks" | python3 -c '
+import json,sys
+rows=json.load(sys.stdin)
+print("tasks, tightest stack first (stackFreeMin in bytes; cpu% since boot)")
+print("  %-17s %s %4s %4s %12s %6s" % ("name","st","prio","core","stackFreeMin","cpu%"))
+for r in rows: print("  %-17s %s %4d %4d %12d %6.1f" % (r["name"], r["state"], r["prio"], r["core"], r["stackFreeMin"], r["cpuPct"]))'
 }
 
 # run_linklog [host]
@@ -1732,6 +1768,7 @@ case "${1:-}" in
   # applies the node env's monitor settings.
   linklog)   shift; run_linklog "$@" ;;
   ota)       shift; run_ota "$@" ;;
+  tasks|heap) shift; run_tasks "$@" ;;
   log)       shift; run_log "$@" ;;
   monitor)
     shift || true

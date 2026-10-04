@@ -3,6 +3,7 @@
 // =============================================================================
 
 #include "SerialDebugControl.h"
+#include "../utils/Diag.h"
 #include <Wire.h>                  // the `i2c` bring-up scan
 #include "../utils/MotionMath.h"
 #include "../utils/WiFiConfig.h"   // NVS constants + applyProvisionJson() — safe to include always
@@ -377,6 +378,12 @@ void SerialDebugControl::processLine(const String& line) {
             Serial.println(F("[PROVISION] WiFi credentials saved."));
         }
         Serial.println(F("OK provision"));
+
+    } else if (cmd == "heap") {
+        diag::printHeap(Serial);
+
+    } else if (cmd == "tasks") {
+        diag::printTasks(Serial);
 
     } else if (cmd == "wifireset") {
 #if defined(CONTROL_SMART_OUTLET)
@@ -1145,6 +1152,8 @@ void SerialDebugControl::printHelp() {
     // meaningful on any board that can move anything — and on one that cannot,
     // a command that does nothing is a safer surprise than a missing one.
     Serial.println(F("  estop             Immediate stop (latches until 'home')"));
+    Serial.println(F("  heap              Internal RAM and PSRAM: total / free / lowest-ever / largest block"));
+    Serial.println(F("  tasks             Every task: stack headroom and CPU share (tightest stack first)"));
     Serial.println(F("  wifireset         Erase WiFi credentials, reboot into setup portal"));
 #if defined(PIN_TMC_EN) && defined(PIN_TMC_DIR)
     Serial.println(F("  gconf             Read GCONF + CHOPCONF from driver"));
