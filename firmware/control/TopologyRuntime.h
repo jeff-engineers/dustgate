@@ -73,6 +73,7 @@
 #include <ArduinoJson.h>
 #include "TopologyController.h"
 #include "NodeBus.h"
+#include "SensorPlan.h"   // what the layout wants watched, resolved once
 #include "NodeLink.h"   // nodelink::kSenseStaleMs — how long a CT reading stays good
 #include <deque>
 #include <map>
@@ -1125,9 +1126,16 @@ private:
     float _minCounts  = 0.0f;
     float _clearRatio = 0.0f;
 
+    // The layout's sensors, resolved once — see SensorPlan.h. The push serialises them per board;
+    // pollSensors() reads them back by the same ids.
+    std::vector<PlannedSensor> sensorPlan() const {
+        return planSensors(topology(), [this](const std::string& mid) { return _ctrl.machineThreshold(mid); });
+    }
+
     void pushSensorConfig() {
         if (!_bus) return;
         _nodePlugs.clear();
+        const std::vector<PlannedSensor> plan = sensorPlan();
         // One bucket per BOARD, not per id. "" is this board and is pushed
         // first, so any controller id that also means this board is skipped
         // rather than overwriting what "" just sent.
@@ -1155,97 +1163,56 @@ private:
             // tail of the board list on 2026-09-16.
             DynamicJsonDocument doc(1536);
             JsonArray arr = doc.to<JsonArray>();
-            std::vector<std::string> sent;   // one spec per MACHINE, not per port
-            for (const SystemView& sys : systemsOf(topology())) {
-                for (JsonObjectConst e : sys.elements) {
-                    // THROUGH THE MACHINE — see clampOf() in Shop.h. Reading
-                    // e["sensor"]["ct"] here is what kept every clamp paired in
-                    // the configurator from ever reaching its node.
-                    JsonObjectConst ct = clampOf(topology(), e);
-                    if (ct.isNull()) continue;
-                    // Absent controllerId means THIS BOARD — the same rule as
-                    // the bin sensor, every selector, and NodeBus itself.
-                    const std::string owner = ct["controllerId"] | "";
-                    if (!sameBoard(cid, owner)) continue;
-                    // A machine is ONE box however many ports it has, so a saw
-                    // with an overarm must not send two specs for one clamp —
-                    // kMaxSensorsPerNode is small and the node would refuse the
-                    // whole frame rather than the duplicate.
-                    const std::string sid = sensedIdOf(e);
-                    if (sid.empty()) continue;
-                    bool dup = false;
-                    for (const std::string& seen : sent) if (seen == sid) { dup = true; break; }
-                    if (dup) continue;
-                    sent.push_back(sid);
-                    JsonObject sen = arr.createNestedObject();
-                    sen["sensorId"] = sid;
-                    sen["kind"]     = "ct";
-                    sen["channel"]  = ct["channel"] | 0;
-                    // OMITTED, not zeroed: an absent key means "keep your own",
-                    // where a present 0 is a value parseConfigFrame refuses —
-                    // and it refuses the WHOLE frame, so a board would end up
-                    // watching nothing rather than watching with old numbers.
-                    if (_tripRatio  != 0.0f) sen["tripRatio"]  = _tripRatio;
-                    if (_minCounts  != 0.0f) sen["minCounts"]  = _minCounts;
-                    if (_clearRatio != 0.0f) sen["clearRatio"] = _clearRatio;
-                }
+            const bool thisBoard = sameBoard(cid, std::string());
+
+            // CLAMPS — this board's own ADC. Absent controllerId means THIS board, the same rule
+            // as the bin sensor, every selector, and NodeBus itself.
+            for (const PlannedSensor& p : plan) {
+                if (p.kind != PlannedSensor::Kind::Clamp || !sameBoard(cid, p.board)) continue;
+                JsonObject sen = arr.createNestedObject();
+                sen["sensorId"] = p.id;
+                sen["kind"]     = "ct";
+                sen["channel"]  = p.channel;
+                // OMITTED, not zeroed: an absent key means "keep your own",
+                // where a present 0 is a value parseConfigFrame refuses —
+                // and it refuses the WHOLE frame, so a board would end up
+                // watching nothing rather than watching with old numbers.
+                if (_tripRatio  != 0.0f) sen["tripRatio"]  = _tripRatio;
+                if (_minCounts  != 0.0f) sen["minCounts"]  = _minCounts;
+                if (_clearRatio != 0.0f) sen["clearRatio"] = _clearRatio;
             }
-            // ── the DUST-BIN beam on a node (2026-10-04) ───────────────────
-            //
-            // Only for a board that SAID it has the pad (WELCOME caps.bin): a node that
-            // predates it would refuse the whole CONFIG, clamp and all. An absent
-            // controllerId means THIS board, whose pin the sketch reads itself, so it is
-            // never sent. One spec per collector — id "bin:<system>" is how pollSensors()
-            // finds the reading again.
-            if (!sameBoard(cid, std::string()) && _bus->watchesBin(cid.c_str())) {
-                for (const SystemView& sys : systemsOf(topology())) {
+            // BINS on a node (2026-10-04). Only for a board that SAID it has the pad (WELCOME
+            // caps.bin): a node that predates it would refuse the whole CONFIG, clamp and all. An
+            // absent controllerId means THIS board, whose pin the sketch reads itself, so it is
+            // never sent.
+            if (!thisBoard && _bus->watchesBin(cid.c_str())) {
+                for (const PlannedSensor& p : plan) {
+                    if (p.kind != PlannedSensor::Kind::Bin || p.board.empty() || !sameBoard(cid, p.board)) continue;
                     if (arr.size() >= nodelink::kMaxSensorsPerNode) break;
-                    const std::string sysId = sys.id ? sys.id : "";
-                    JsonObjectConst bs = binSensorFor(sysId);
-                    if (bs.isNull()) continue;
-                    const std::string owner = bs["controllerId"] | "";
-                    if (owner.empty() || !sameBoard(cid, owner)) continue;
                     JsonObject sen = arr.createNestedObject();
-                    sen["sensorId"] = std::string("bin:") + sysId;   // std::string: ArduinoJson copies it
+                    sen["sensorId"] = p.id;
                     sen["kind"]     = "bin";
-                    sen["invert"]   = bs["invert"] | true;
+                    sen["invert"]   = p.invert;
                 }
             }
-            // ── PLUGS this board polls for the brain (2026-10-03) ──────────
-            //
-            // The board that controls a tool handles its plug — the owner rule is
-            // plugOwnerOf() in Shop.h, a matched pair with shop.js's plugOwners().
-            // Only for a board that SAID it can (WELCOME caps.plug): an older node
-            // would refuse the whole CONFIG, clamp and all, so its plugs stay with
-            // the brain. A machine with a clamp is sensed by the clamp, not its
-            // plug, exactly as pollSensors() already reads them. And the board is
-            // never THIS one — the brain polls its own plugs through
+            // PLUGS this board polls for the brain (2026-10-03). The board that controls a tool
+            // handles its plug — the owner rule is plugOwnerOf() in Shop.h, a matched pair with
+            // shop.js's plugOwners(). Only for a board that SAID it can (WELCOME caps.plug): an
+            // older node would refuse the whole CONFIG, clamp and all, so its plugs stay with the
+            // brain. A machine with a clamp is sensed by the clamp (the plan leaves it out). And
+            // the board is never THIS one — the brain polls its own plugs through
             // SmartOutletControl.
-            if (!sameBoard(cid, std::string()) && _bus->pollsPlugs(cid.c_str())) {
-                std::vector<std::string> sentPlugs;
-                for (const SystemView& sys : systemsOf(topology())) {
-                    for (JsonObjectConst e : sys.elements) {
-                        if (!_eq(e["type"], "tool")) continue;
-                        if (arr.size() >= nodelink::kMaxSensorsPerNode) break;   // the rest stay with the brain
-                        const std::string mid = machineIdOf(e);
-                        if (mid.empty()) continue;
-                        bool dup = false;
-                        for (const std::string& seen : sentPlugs) if (seen == mid) { dup = true; break; }
-                        if (dup) continue;
-                        if (!clampOf(topology(), e).isNull()) continue;
-                        JsonObjectConst outlet = machineDoc(topology(), mid)["sensor"]["outlet"];
-                        const char* ip = outlet["ip"].as<const char*>();
-                        if (!ip || !*ip) continue;
-                        if (!sameBoard(cid, plugOwnerOf(topology(), mid))) continue;
-                        sentPlugs.push_back(mid);
-                        JsonObject sen = arr.createNestedObject();
-                        sen["sensorId"]   = sentPlugs.back();   // COPIED: the vector reallocates, and a c_str() into it would dangle
-                        sen["kind"]       = "plug";
-                        sen["ip"]         = ip;
-                        sen["plug"]       = _eq(outlet["kind"], "tasmota") ? "tasmota" : "shelly";
-                        sen["thresholdW"] = _ctrl.machineThreshold(mid);
-                        _nodePlugs[mid]   = cid;
-                    }
+            if (!thisBoard && _bus->pollsPlugs(cid.c_str())) {
+                for (const PlannedSensor& p : plan) {
+                    if (p.kind != PlannedSensor::Kind::Plug || !sameBoard(cid, p.board)) continue;
+                    if (arr.size() >= nodelink::kMaxSensorsPerNode) break;   // the rest stay with the brain
+                    JsonObject sen = arr.createNestedObject();
+                    sen["sensorId"]   = p.id;
+                    sen["kind"]       = "plug";
+                    sen["ip"]         = p.ip;
+                    sen["plug"]       = p.tasmota ? "tasmota" : "shelly";
+                    sen["thresholdW"] = p.thresholdW;
+                    _nodePlugs[p.id]  = cid;
                 }
             }
             _bus->configureSensors(cid.c_str(), JsonArrayConst(arr));
@@ -1287,88 +1254,63 @@ private:
     // dusty shop rather than a collector that runs forever, and cannot
     // dead-head anything because idle leaves the gate where it is.
     void pollSensors() {
-        std::vector<std::string> polled;   // one reading per MACHINE, not per port
-        for (const SystemView& sys : systemsOf(topology())) {
-            for (JsonObjectConst e : sys.elements) {
-                // Same resolution as pushSensorConfig, and it has to be: this
-                // looks up the reading by the id we SENT.
-                JsonObjectConst ct = clampOf(topology(), e);
-                if (ct.isNull()) continue;
-                const std::string sid = sensedIdOf(e);
-                if (sid.empty()) continue;
-                bool dup = false;
-                for (const std::string& seen : polled) if (seen == sid) { dup = true; break; }
-                if (dup) continue;
-                polled.push_back(sid);
-                const char* id = sid.c_str();
-                const char* cid = ct["controllerId"] | "";
-
+        // The same plan the push serialised, so a reading is looked up by the id we SENT.
+        const std::vector<PlannedSensor> plan = sensorPlan();
+        for (const PlannedSensor& p : plan) {
+            if (p.kind == PlannedSensor::Kind::Clamp) {
+                const char* id  = p.id.c_str();
                 bool on = false; uint32_t atMs = 0;
-                bool reported = _bus->senseOf(cid, id, on, atMs);
+                bool reported = _bus->senseOf(p.board.c_str(), id, on, atMs);
                 if (!reported) on = false;
-                // STALE IS NOT THE SAME AS OFF, and this treats it as off on
-                // purpose while the distinction has nowhere to be shown: a board
-                // still answering PINGs but no longer reporting is a FAULT, and
-                // when there is a UI for it this is where it gets raised.
-                // Skipped entirely when nowMs is 0 — the test call sites pass a
-                // constant clock, and a zero "now" would age every reading out.
+                // STALE IS NOT THE SAME AS OFF, and this treats it as off on purpose while the
+                // distinction has nowhere to be shown: a board still answering PINGs but no longer
+                // reporting is a FAULT, and when there is a UI for it this is where it gets raised.
+                // Skipped entirely when nowMs is 0 — the test call sites pass a constant clock, and
+                // a zero "now" would age every reading out.
                 else if (_nowMs && (uint32_t)(_nowMs - atMs) > nodelink::kSenseStaleMs) {
                     on = false; reported = false;
                 }
 
-                // How long it has been on, which only the collector path needs
-                // (a spin-up grace) but which is cheapest to track for both.
-                uint32_t& since = _ctSince[std::string(id)];
+                // How long it has been on, which only the collector path needs (a spin-up grace)
+                // but which is cheapest to track for both.
+                uint32_t& since = _ctSince[p.id];
                 if (!on) since = 0;
                 else if (!since) since = _nowMs ? _nowMs : 1;
 
                 // ── A COLLECTOR IS NOT A MACHINE ───────────────────────────
                 //
-                // A tool's reading answers "should the collector run"; a
-                // COLLECTOR's answers "did the thing we commanded actually
-                // happen", which is a different question with a different
-                // consumer. Routing a blower through setMachinePower() would
-                // reach machineIndex(), find nothing, and do nothing at all —
-                // silently, which is the failure mode this whole path exists to
-                // avoid. CollectorPlugState is where a blower's own draw is
-                // judged, so a clamp feeds that instead.
+                // A tool's reading answers "should the collector run"; a COLLECTOR's answers "did
+                // the thing we commanded actually happen", which is a different question with a
+                // different consumer. Routing a blower through setMachinePower() would reach
+                // machineIndex(), find nothing, and do nothing at all — silently, which is the
+                // failure mode this whole path exists to avoid. CollectorPlugState is where a
+                // blower's own draw is judged, so a clamp feeds that instead.
                 //
-                // It matters MORE on a collector than on a tool: every way we
-                // command a blower is stateless (a servo on a fob, an RF frame),
-                // so `sensor` is the only thing that can say the press landed.
-                if (_eq(e["type"], "collector")) {
+                // It matters MORE on a collector than on a tool: every way we command a blower is
+                // stateless (a servo on a fob, an RF frame), so `sensor` is the only thing that can
+                // say the press landed.
+                if (p.onCollector) {
                     const uint32_t onFor = (on && since && _nowMs) ? (_nowMs - since) : 0;
-                    // Synthetic watts, the same trick used for a manual machine:
-                    // the brain has ONE notion of a running blower and a clamp
-                    // that cannot give watts still has to speak it. Comfortably
-                    // over kCollectorRunningW rather than equal to it, so a
+                    // Synthetic watts, the same trick used for a manual machine: the brain has ONE
+                    // notion of a running blower and a clamp that cannot give watts still has to
+                    // speak it. Comfortably over kCollectorRunningW rather than equal to it, so a
                     // change to that threshold cannot silently strand a clamp.
-                    setCollectorPlug(std::string(sys.id ? sys.id : ""),
-                                     on ? kCollectorRunningW * 2.0f : 0.0f,
-                                     reported, onFor);
+                    setCollectorPlug(p.systemId, on ? kCollectorRunningW * 2.0f : 0.0f, reported, onFor);
                     continue;
                 }
-
-                setMachinePower(std::string(id),
-                                on ? manualWattsFor(_ctrl.machineThreshold(std::string(id))) : 0.0f);
+                setMachinePower(p.id, on ? manualWattsFor(_ctrl.machineThreshold(p.id)) : 0.0f);
+            } else if (p.kind == PlannedSensor::Kind::Bin) {
+                // BINS a node watches. A reading only counts while it is fresh; a bin whose board
+                // has gone quiet keeps its LAST verdict rather than flipping to "not full", and one
+                // that never reported stays unknown (the status omits `bin`), because an unwatched
+                // bin and an empty bin are different claims. An absent board is THIS board's own
+                // pin: the sketch feeds it.
+                if (p.board.empty() || sameBoard(p.board, std::string())) continue;
+                bool full = false; uint32_t atMs = 0;
+                if (!_bus->senseOf(p.board.c_str(), p.id.c_str(), full, atMs)) continue;
+                if (_nowMs && (uint32_t)(_nowMs - atMs) > nodelink::kSenseStaleMs) continue;
+                setBinFull(p.systemId, full);
             }
-        }
-
-        // ── BINS a node watches (see pushSensorConfig) ──────────────────────
-        // A reading only counts while it is fresh; a bin whose board has gone quiet keeps
-        // its LAST verdict rather than flipping to "not full", and one that never reported
-        // stays unknown (the status omits `bin`), because an unwatched bin and an empty
-        // bin are different claims.
-        for (const SystemView& sys : systemsOf(topology())) {
-            const std::string sysId = sys.id ? sys.id : "";
-            JsonObjectConst bs = binSensorFor(sysId);
-            if (bs.isNull()) continue;
-            const std::string owner = bs["controllerId"] | "";
-            if (owner.empty() || sameBoard(owner, std::string())) continue;   // this board's own pin: the sketch feeds it
-            bool full = false; uint32_t atMs = 0;
-            if (!_bus->senseOf(owner.c_str(), (std::string("bin:") + sysId).c_str(), full, atMs)) continue;
-            if (_nowMs && (uint32_t)(_nowMs - atMs) > nodelink::kSenseStaleMs) continue;
-            setBinFull(sysId, full);
         }
 
         // ── PLUGS a node polls (see pushSensorConfig) ──────────────────────
