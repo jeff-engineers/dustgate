@@ -25,24 +25,20 @@ active sections above them, which is how a parked item stops being read.
   Full plan, memory table and open questions:
   [`docs/nodes-dial-the-brain-plan.md`](../docs/nodes-dial-the-brain-plan.md).
 
-- **A collector cannot run as a node yet: its RF transmitter and bin sensor only
-  work on a PRIMARY (jeff, 2026-10-04).** Asked whether the collector has to be
-  powered by the brain. It does, for two of its three jobs. Checked in the code:
-  the RF press (`PIN_RF_TX`, D10) and the bin-level read (`HAS_BIN`, D6) live in
-  `firmware.ino` only — `node/dustgate_node.cpp` has neither, and NodeLink has no
-  frame to ask a node to press the remote or to report bin state. The clamp (CT) DOES
-  work on a node. A fob servo is an ordinary servo channel, but whether the collector
-  press logic reaches one over NodeLink is UNCHECKED. This contradicts the design
-  rule in CLAUDE.md ("the collector gets its own board … same node build, same
-  NodeLink"), which is the intent and not the fact; dev.sh's header is the only place
-  that says so. It matters when the brain is not at the collector — in a big shop that
-  is the likely case.
-  To do: (1) read the collector-press path to see what already goes over NodeLink;
-  (2) a NodeLink frame for "press" (and the retry/confirm policy stays on the primary —
-  CollectorPress.h is already pure) and one for bin state; (3) move the RF transmit
-  and the bin read out of `firmware.ino` into headers the node includes; (4) paired JS/C++
-  frames and tests per the usual rule, and a row in the CLAUDE.md constants table for
-  whatever bounds they carry. Until then: wire RF and the bin sensor to a primary.
+- **Bench the collector's jobs on a node (built 2026-10-04, never run on a board).** A
+  node can now key the RF transmitter (a `PRESS` frame) and watch the dust-bin beam (a
+  `bin` sensor in CONFIG, reported as a SENSE bit); the retry policy stays on the primary.
+  Host-tested only. To do on a bench with a collector board flashed as a NODE: (1) pair it,
+  point the layout's `control.rf.controllerId` and `bin.sensor.controllerId` at it, and
+  check the board's WELCOME says `caps.rf`/`caps.bin`; (2) `[RF] press ... sent` on the
+  node's console when the brain presses, and the real Rockler receiver actually keyed from
+  a node (the timing is the same RMT code, but it has never run beside NodeLink's tasks);
+  (3) cover the beam and check `[BIN] FULL` after ~2 s and `systems[].bin.full` in
+  `/api/status`, then uncover it; (4) pull the node's power mid-press and check no press
+  is replayed on reconnect (a PRESS is an edge against a toggle — the bus drops a queued
+  one on a link drop, and a test says so, but nobody has watched it); (5) the UI's collector
+  configurator has no way to choose the board for the transmitter or the bin yet — today a
+  layout needs `controllerId` added by hand.
 
 - **Prove node-owned plug polling under a real load (jeff, 2026-10-04 — deferred).**
   Verified on the bench so far: a Tasmota paired to a tool whose gate is on
