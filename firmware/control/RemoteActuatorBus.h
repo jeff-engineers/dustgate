@@ -112,6 +112,9 @@ public:
     // decide whether the dial-out path still has a job.
     bool dialsIn() const { return _capJoin > 0; }
     bool inboundUp() const { return _inId != 0; }
+    // Does this bus have a dial-out task running right now? A node that dials in does
+    // not need one while it is linked — see update().
+    bool hasTask() const { return _taskAlive; }
 
     // --- ActuatorBus ------------------------------------------------------
     bool online() const override;
@@ -222,6 +225,12 @@ public:
 private:
     static void taskTrampoline(void* arg) { static_cast<RemoteActuatorBus*>(arg)->taskLoop(); }
     void taskLoop();
+    // Start the dial-out task if there is none. A pool slot costs a ~5 KB stack while its
+    // task lives, so a node that dials in is given NO task while it is linked, and one is
+    // started only when the link is down and its grace has run out.
+    bool ensureTask();
+    volatile bool _retire    = false;   // set by the task itself when an inbound link has taken over
+    uint32_t      _inSinceMs = 0;       // when the inbound link attached
     void onEvent(WStype_t type, uint8_t* payload, size_t len);
     void handleFrame(const char* json, size_t len);
     void sendJson(const JsonDocument& doc);

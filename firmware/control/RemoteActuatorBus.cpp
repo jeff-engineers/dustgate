@@ -90,6 +90,14 @@ void RemoteActuatorBus::begin(const char* nodeId, const char* primaryId,
     _ws.enableHeartbeat(nodelink::kPingIntervalMs, nodelink::kPongTimeoutMs, 2);
 
     _running   = true;
+    // A node that dials in gets no task until the grace has passed (update() starts it);
+    // anything else is dialled at once, as it always was.
+    if (!_capJoin) ensureTask();
+}
+
+bool RemoteActuatorBus::ensureTask() {
+    if (_taskAlive) return true;
+    _retire    = false;
     _taskAlive = true;
     // Checked, because the failure is otherwise completely silent: no task means
     // nothing ever pumps _ws.loop(), so the socket never opens and the node sits
@@ -97,13 +105,13 @@ void RemoteActuatorBus::begin(const char* nodeId, const char* primaryId,
     BaseType_t ok = xTaskCreatePinnedToCore(taskTrampoline, "nodelink", kNodeLinkTaskStack,
                                             this, kNodeLinkTaskPrio, &_task, 0);
     if (ok != pdPASS) {
-        _running   = false;
         _taskAlive = false;
         _task      = nullptr;
         DEBUG_PRINT(F("[NODE] FAILED to start link task for ")); DEBUG_PRINT(_nodeId);
         DEBUG_PRINT(F(" — free heap ")); DEBUG_PRINTLN(ESP.getFreeHeap());
-        return;
+        return false;
     }
+    return true;
 }
 
 // GROW THE RETRY INTERVAL, up to kReconnectMaxMs.
@@ -323,13 +331,17 @@ void RemoteActuatorBus::taskLoop() {
     }
 
     unsigned long lastNagMs = millis();
-    while (_running) {
+    while (_running && !_retire) {
         // A node that dialled us IS the link. Leave the dial-out socket closed: a
         // second one to the same node only teaches it that "another link" exists, and
         // that is exactly the churn that fills a node's connection slots.
         if (_inId) {
             if (_sockUp || _ws.isConnected()) { _ws.disconnect(); _sockUp = false; }
             lastNagMs = millis();
+            // Held for a few seconds: the node's own link is the link, and this task has
+            // nothing left to do. Leave — the stack goes back to the heap — and let
+            // update() start another if the node ever drops.
+            if (_capJoin && (millis() - _inSinceMs) > 3000) { _retire = true; continue; }
             delay(50);
             continue;
         }
@@ -508,6 +520,7 @@ bool RemoteActuatorBus::attachInbound(AsyncWebSocketClient* c, String& helloOut)
     if (fresh) { xSemaphoreGive(_mutex); return false; }   // one healthy link only
     _inClient   = c;
     _inId       = c->id();
+    _inSinceMs  = millis();
     _lastRxMs   = millis();         // the node just spoke; do not call it overdue before the WELCOME
     _lastPingMs = millis();
     // Whatever was half-open on the dial-out side is stale now.
@@ -555,6 +568,14 @@ void RemoteActuatorBus::pumpInbound() {
 }
 
 void RemoteActuatorBus::update() {
+    // THE SUPERVISOR for the dial-out task. A node that dials in is not given one while
+    // it is linked (it was ~5 KB of stack per node, resident, for a link that is
+    // somebody else's job). When the link is down and the node has had its grace to
+    // dial in, start one: this is the fallback that dials it back.
+    if (_running && !_taskAlive && !_inId) {
+        const bool inGrace = _capJoin && _downSinceMs && (millis() - _downSinceMs) < kDialInGraceMs;
+        if (!inGrace) ensureTask();
+    }
     if (!_inId) return;
     pumpInbound();
     // The primary pings a node it dialled the way the dial-out path always did — at
