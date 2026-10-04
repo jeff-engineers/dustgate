@@ -14,6 +14,16 @@ active sections above them, which is how a parked item stops being read.
 
 ## Bugs
 
+- **A tool switched on and then off by hand stays green for several seconds
+  (jeff, 2026-10-04).** Suspected to be the collector's coast-down (the blower is
+  held on for `offDelayMs` after the last tool stops, so the system treats it as
+  still running), but the screen says nothing about it — the tool just looks
+  stuck on. It should be reflected to the user: the tool's own state goes off
+  immediately, and what is still running (the collector, coasting for N more
+  seconds) is shown as such. Check first that it IS coast-down and not a status
+  push or poll lag: `collectorCoasting` / `coastUntilMs` are already in the status
+  document, so the data may be there and only the Live view missing it.
+
 - **A plug that changes address is lost for good (jeff, 2026-10-03).** The layout
   stores an IP and nothing else; Tasmota has no mDNS. Plan: store the plug's MAC
   at pairing (Mem2 holds the tool id), and have the brain re-find an unreachable
@@ -24,7 +34,7 @@ active sections above them, which is how a parked item stops being read.
   defaults to Shelly and polls a Tasmota wrongly forever — the sweep should set it.
 - **Tools with no sensor are manual-only.** The live layout's Router Table and
   Jointer have neither a plug nor a CT, so nothing starts the collector for them
-  except tapping them in the app.
+  except tapping them in the app. -This isn't a bug - Jeff
 
 - **ESP-NOW for primary↔node? (jeff, 2026-09-27 — THINKING, not decided.)**
   Every link failure so far is the same shape: two boards talking TCP *through
