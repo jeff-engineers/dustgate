@@ -24,6 +24,7 @@
 // =============================================================================
 
 #include <EEPROM.h>
+#include "utils/OtaGuard.h"  // OTA probation + rollback
 #include "utils/Watchdog.h"  // main-loop task watchdog (unattended-hang recovery)
 #include "config.h"
 #include "utils/MotionMath.h"
@@ -2563,6 +2564,14 @@ void loop() {
     rejoinWifiIfNetworkBlocksNodes();
     linkLogTick();
 #endif
+
+    // OTA: reboot into a freshly written image once the reply has left, and run
+    // the probation clock for one that just arrived. "Healthy" for the brain is
+    // WiFi associated with its server up — see utils/OtaGuard.h.
+#ifdef ENABLE_HTTP_API
+    if (HttpApiServer::otaRebootDue()) { Serial.println(F("[OTA] restarting")); Serial.flush(); ESP.restart(); }
+#endif
+    otaguard::tick(WiFi.status() == WL_CONNECTED);
 
     // Run background processing for control input (HTTP server, etc.)
     control.update();

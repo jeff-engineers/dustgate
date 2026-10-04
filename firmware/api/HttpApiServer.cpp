@@ -21,6 +21,11 @@
 #include "../control/TopologyStore.h"
 #include "../utils/SerialLog.h"
 #include <memory>
+#include <Update.h>
+#include "../utils/OtaGuard.h"
+
+static bool          s_otaBusy       = false;
+static unsigned long s_otaRebootAtMs = 0;
 
 #ifdef CONTROL_SMART_OUTLET
   #include "../control/SmartOutletControl.h"
@@ -868,6 +873,11 @@ void HttpApiServer::registerRoutes() {
         // failed lock allocation (2026-10-03) with the heap at a few KB while a
         // browser loaded the app, so "how close to the edge are we" has to be one
         // request, not a serial cable.
+        // OTA: which slot runs, and whether this image has earned its place yet
+        // (utils/OtaGuard.h). "nogo" = a one-slot partition table, i.e. a board
+        // that has not had the cable pass that installs OTA.
+        doc["slot"]          = otaguard::slot();
+        doc["ota"]           = otaguard::state();
         doc["heapFree"]      = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
         doc["heapMin"]       = (uint32_t)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL);
         doc["heapBlock"]     = (uint32_t)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
@@ -1643,6 +1653,65 @@ void HttpApiServer::registerRoutes() {
     });
 
     // ------------------------------------------------------------------
+    // POST /api/ota   body: the raw firmware .bin (application/octet-stream)
+    //
+    // The primary updating ITSELF (2026-10-03): `bash dev.sh ota` builds and posts
+    // here. Written to the OTHER app slot; the board reboots into it only once the
+    // whole image has been written and its checksum verified, and the new image is
+    // on probation until it proves itself (utils/OtaGuard.h) — so a bad push
+    // costs a minute, not a cable. Header X-Md5 (optional) is checked against the
+    // bytes received, which is what catches a truncated upload.
+    //
+    // ONE at a time, and refused while the board has no second slot — the one-time
+    // cable pass that installs the OTA partition table is the price of admission,
+    // and the error says so.
+    // ------------------------------------------------------------------
+    _server.on("/api/ota", HTTP_POST,
+        [](AsyncWebServerRequest* req) {},
+        nullptr,
+        [this](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t index, size_t total) {
+            static bool s_otaAbort = false;
+            if (index == 0) {
+                s_otaAbort = false;
+                if (!checkAuth(req)) { s_otaAbort = true; return; }
+                if (!otaguard::hasSlots()) {
+                    sendError(req, 409, "this board has no second app slot - flash it once by cable to install the OTA partition table");
+                    s_otaAbort = true; return;
+                }
+                if (s_otaBusy) { sendError(req, 409, "an update is already in progress"); s_otaAbort = true; return; }
+                if (total < 100 * 1024) { sendError(req, 400, "not a firmware image (too small)"); s_otaAbort = true; return; }
+                if (!Update.begin(total, U_FLASH)) {
+                    DEBUG_PRINT(F("[OTA] begin failed: ")); DEBUG_PRINTLN(Update.errorString());
+                    sendError(req, 413, "image does not fit the update slot");
+                    s_otaAbort = true; return;
+                }
+                if (req->hasHeader("X-Md5")) Update.setMD5(req->getHeader("X-Md5")->value().c_str());
+                s_otaBusy = true;
+                Serial.printf("[OTA] receiving %u bytes into the other slot\n", (unsigned)total);
+            }
+            if (s_otaAbort) return;
+            if (Update.write(data, len) != len) {
+                DEBUG_PRINT(F("[OTA] write failed: ")); DEBUG_PRINTLN(Update.errorString());
+                Update.abort(); s_otaBusy = false; s_otaAbort = true;
+                sendError(req, 500, "flash write failed");
+                return;
+            }
+            if (index + len < total) return;   // more chunks coming
+            const bool ok = Update.end(true);
+            s_otaBusy = false;
+            if (!ok) {
+                DEBUG_PRINT(F("[OTA] rejected: ")); DEBUG_PRINTLN(Update.errorString());
+                sendError(req, 400, "image rejected (checksum or format)");
+                return;
+            }
+            DEBUG_PRINTLN(F("[OTA] image written and verified - rebooting into it"));
+            s_otaRebootAtMs = millis() + 1500;
+            if (s_otaRebootAtMs == 0) s_otaRebootAtMs = 1;
+            req->send(200, "application/json", "{\"ok\":true,\"rebooting\":true}");
+        }
+    );
+
+    // ------------------------------------------------------------------
     // POST /api/move   body: {"stop": 2}
     // POST /api/jog    body: {"mm": -5.0}
     // ------------------------------------------------------------------
@@ -2131,6 +2200,12 @@ bool HttpApiServer::loadOrGenerateKey() {
     DEBUG_PRINTLN(F("[API] Generated new API key (stored in NVS)."));
     return true;
 }
+
+bool HttpApiServer::otaRebootDue() {
+    return s_otaRebootAtMs != 0 && (long)(millis() - s_otaRebootAtMs) >= 0;
+}
+
+bool HttpApiServer::otaInProgress() { return s_otaBusy; }
 
 bool HttpApiServer::checkAuth(AsyncWebServerRequest* req) {
     if (!req->hasHeader("X-Api-Key") ||

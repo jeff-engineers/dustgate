@@ -131,6 +131,12 @@ public:
     // while the loop is mid-transition.
     bool consumeTopologyChanged();
 
+    // POST /api/ota has written and verified a new image: true once the reply has
+    // had time to leave and the loop should ESP.restart(). otaInProgress() is true
+    // while an image is arriving — the loop should not start other heavy work.
+    static bool otaRebootDue();
+    static bool otaInProgress();
+
     // Rewrite one machine's plug in the STORED layout — its address, kind and MAC —
     // and flag the runtime to re-adopt. The one way the device edits a layout
     // itself, used when a plug is found at a new address (control/OutletRelocate.h).

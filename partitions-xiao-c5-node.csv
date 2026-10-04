@@ -1,0 +1,21 @@
+# DustGate — XIAO ESP32C5 running as a NODE, with TWO app slots (OTA)
+#
+# Replaces huge_app.csv, which spent its whole 4 MB on one 3 MB app slot and an
+# 896 KB spiffs a node never mounts. A node's image is ~1.4 MB, so two slots of
+# 1.9 MiB leave ~35% headroom each and the whole table still fits a 4 MB part —
+# deliberately NOT using the 8 MB the board has, so a node needs nothing the
+# smallest C5 module would not give it.
+#
+# A node is updated by PULLING the image from the primary (HTTPUpdate), told to by
+# a NodeLink frame; see utils/OtaGuard.h for what keeps a bad image from
+# bricking it. otadata is the rollback record — do not drop it.
+#
+# ⚠️ CHANGING THIS TABLE NEEDS A CABLE FLASH, once per node. After that nodes are
+# updated over WiFi from the Boards screen.
+#
+# Name,   Type, SubType, Offset,   Size,      Flags
+nvs,      data, nvs,     0x9000,   0x5000,
+otadata,  data, ota,     0xe000,   0x2000,
+app0,     app,  ota_0,   0x10000,  0x1E0000,
+app1,     app,  ota_1,   0x1F0000, 0x1E0000,
+coredump, data, coredump,0x3D0000, 0x10000,

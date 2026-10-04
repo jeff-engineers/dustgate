@@ -121,6 +121,9 @@
 #   bash dev.sh monitor both        # primary + node interleaved, one clock, logged
 #                                   #   to .monitor-logs/; type `p: cmd` / `n: cmd`
 #   bash dev.sh monitor … --take    # stop whatever already holds that board's port
+#   bash dev.sh ota [host] [--slider] # update the PRIMARY over WiFi: build, post to /api/ota, wait
+#                                   #   for it to prove itself or roll back. Needs the OTA partition
+#                                   #   table, which one cable flash installs.
 #   bash dev.sh linklog [host]      # the primary's link log over WiFi, saved + summarised
 #   bash dev.sh log [host] [--once] # follow the brain's serial output over WiFi, no cable
 #                                   #   (drops, outages, node reboots, rejoins) — no USB needed
@@ -1227,6 +1230,82 @@ port_is_free() {
   return 1
 }
 
+# run_ota [--slider] [host]
+# Update the PRIMARY over WiFi — no cable, no filesystem wipe, the saved layout is
+# untouched (only the app slot changes). Builds the firmware, posts it to
+# POST /api/ota, then waits for the board to come back and says which commit it
+# is running. The new image is on probation (firmware/utils/OtaGuard.h): the board
+# rolls back by itself if it cannot stay on WiFi, so a bad push costs a minute.
+#
+# Needs a board whose partition table already has two app slots — ONE cable flash
+# (`bash dev.sh flash`) installs that; /api/info says "ota":"nogo" until then.
+# Does NOT touch the filesystem, so a UI change still wants `flash --ui`.
+# The API key comes off the board's own /api/info, as linklog and log do.
+run_ota() {
+  local host="" env="$PRIMARY_ENV"
+  for a in "$@"; do
+    case "$a" in
+      --slider|--linear|--rack) env="$LINEAR_PRIMARY_ENV" ;;
+      *) host="$a" ;;
+    esac
+  done
+  host="${host:-${DUSTGATE_HOST:-dustgate.local}}"
+  local info key ota
+  info="$(curl -fsS --max-time 10 "http://$host/api/info" 2>/dev/null || true)"
+  key="$(printf '%s' "$info" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("apiKey",""))' 2>/dev/null || true)"
+  if [[ -z "$key" ]]; then
+    echo "  ✗ $host did not answer /api/info. Is the primary on the network? Try its IP:"
+    echo "      bash dev.sh ota 192.168.x.y"
+    exit 1
+  fi
+  ota="$(printf '%s' "$info" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("ota","none"))' 2>/dev/null || echo none)"
+  local was; was="$(printf '%s' "$info" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("build","?"), d.get("slot","?"))' 2>/dev/null)"
+  echo "▶ OTA to $host — running: $was  (ota: $ota)"
+  case "$ota" in
+    nogo) echo "  ✗ This board's partition table has one app slot. Flash it ONCE by cable"
+          echo "    (bash dev.sh flash) to install the OTA table; every update after that is this command."
+          exit 1 ;;
+    probation) echo "  ✗ The running image is still on probation (not yet marked valid). Wait a minute and retry."
+               exit 1 ;;
+    none) echo "  ⚠ Firmware older than the OTA feature — it cannot take this. Flash by cable once."
+          exit 1 ;;
+  esac
+
+  use_core_for_env "$env" >/dev/null
+  echo "▶ Building $(describe_env "$env")…"
+  "$PIO" run -j 1 -e "$env" >/dev/null || { echo "  ✗ Build failed — run: pio run -e $env"; exit 1; }
+  local bin="$SCRIPT_DIR/.pio.nosync/build/$env/firmware.bin"
+  [[ -f "$bin" ]] || { echo "  ✗ No $bin"; exit 1; }
+  local md5 size; md5="$(md5 -q "$bin" 2>/dev/null || md5sum "$bin" | cut -d' ' -f1)"
+  size="$(wc -c < "$bin" | tr -d ' ')"
+  echo "▶ Uploading $size bytes (md5 ${md5:0:8}…)"
+  local reply
+  reply="$(curl -sS --max-time 180 -X POST -H "X-Api-Key: $key" -H "X-Md5: $md5" -H 'Expect:' \
+            -H 'Content-Type: application/octet-stream' --data-binary "@$bin" "http://$host/api/ota" 2>&1)" || true
+  if ! printf '%s' "$reply" | grep -q '"rebooting":true'; then
+    echo "  ✗ The board refused it: $reply"
+    exit 1
+  fi
+  echo "  Accepted — the board is rebooting into the new slot."
+  echo "▶ Waiting for it to come back (and to prove itself — ~30 s on WiFi)…"
+  sleep 6
+  local i now
+  for i in $(seq 1 45); do
+    now="$(curl -fsS --max-time 3 "http://$host/api/info" 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("build","?"), d.get("slot","?"), d.get("ota","?"))' 2>/dev/null || true)"
+    if [[ -n "$now" ]]; then
+      echo "  now running: $now"
+      case "$now" in
+        *valid) echo "  ✓ Marked valid — the update is permanent."; return 0 ;;
+        *probation) : ;;   # up, but not yet believed
+      esac
+    fi
+    sleep 4
+  done
+  echo "  ⚠ It answered but has not been marked valid yet — or it rolled back."
+  echo "    Check:  curl http://$host/api/info    (slot/ota)   and   bash dev.sh log $host"
+  exit 1
+}
+
 # run_linklog [host]
 # Pull the primary's link log over WiFi, save it, and summarise it — the way to
 # watch a shop with no laptop on any board. See firmware/utils/LinkLog.h and
@@ -1551,6 +1630,7 @@ case "${1:-}" in
   # "monitor node" targets a secondary: picks the board pinned as the node, and
   # applies the node env's monitor settings.
   linklog)   shift; run_linklog "$@" ;;
+  ota)       shift; run_ota "$@" ;;
   log)       shift; run_log "$@" ;;
   monitor)
     shift || true

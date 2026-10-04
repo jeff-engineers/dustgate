@@ -1,27 +1,34 @@
-# DustGate — XIAO ESP32C5 (4 MB) running as a PRIMARY
+# DustGate — XIAO ESP32C5 (8 MB) running as a PRIMARY, with TWO app slots (OTA)
 #
-# Same 4 MB and the same no-OTA reasoning as partitions-devkitc-noota.csv, with
-# the split moved. That table gives the app 1.75 MB, which is right for the
-# DevKitC (74.5% used) and NOT right here: the same firmware built against the
-# pioarduino fork's Arduino core 3.x / IDF 5.x comes out ~350 KB larger and
-# lands at 93.5% — a 119 KB margin, which is not enough to add a feature to.
+# Was a 4 MB table with one oversized app slot (see git history). The chip has
+# always been 8 MB — the board definition says so — and the 4 MB table simply
+# never used the rest. OTA needs a second slot the size of the first, and the
+# node image has to live somewhere the nodes can pull it from (utils/OtaGuard.h,
+# `dev.sh ota`), so the extra 4 MB pays for both:
 #
-#   app0  2.62 MB  — 1.72 MB used at 2026-08-22, so ~35% headroom
-#   ffat  1.44 MB  — LittleFS for the Angular bundle; ~0.44 MB used, ~3x headroom
-#
-# The bundle is the thing that can be measured and is not growing fast; the
-# firmware is the thing that surprised us. So the slack goes to the app.
+#   app0  2.5 MiB — 1.83 MB used at 2026-10-03, ~30% headroom
+#   app1  2.5 MiB — the slot an update is written into; the roles swap each time
+#   ffat  2.94 MiB — LittleFS: the Angular bundle (~0.23 MB gzipped), the saved
+#                    layout, and the NODE image the primary serves (~1.4 MB)
 #
 # The filesystem partition MUST be labeled "ffat": HttpApiServer mounts it with
 # LittleFS.begin(true, "/littlefs", 10, "ffat"). (LittleFS mounts by label
 # regardless of the "fat" subtype.)
 #
-# A C5 NODE uses huge_app.csv instead — no web UI, so no filesystem to size.
+# otadata (below) is what makes rollback work — it records which slot boots and
+# whether the new image has been confirmed. Do not drop it.
 #
-# Fills 4 MB exactly (0x400000).
+# ⚠️ CHANGING THIS TABLE NEEDS A CABLE FLASH, once. Offsets move, so the saved
+# layout in ffat is lost with it (deploy.sh already notes this for any filesystem
+# flash). After that one flash, every firmware update is `bash dev.sh ota`.
+#
+# A C5 NODE uses partitions-xiao-c5-node.csv — no web UI, so no filesystem.
+#
+# Fills 8 MB exactly (0x800000).
 #
 # Name,   Type, SubType, Offset,   Size,      Flags
 nvs,      data, nvs,     0x9000,   0x5000,
 otadata,  data, ota,     0xe000,   0x2000,
 app0,     app,  ota_0,   0x10000,  0x280000,
-ffat,     data, fat,     0x290000, 0x170000,
+app1,     app,  ota_1,   0x290000, 0x280000,
+ffat,     data, fat,     0x510000, 0x2F0000,
