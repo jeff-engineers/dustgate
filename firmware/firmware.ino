@@ -2702,6 +2702,11 @@ void loop() {
     otaguard::tick(WiFi.status() == WL_CONNECTED);
 
     tickBeacon();
+    // Pump every node-initiated link (its ping and its pending frames) from here, not
+    // via the routing runtime: that returns early until a layout is loaded, which on a
+    // freshly paired shop is exactly when nobody is pinging anything and every node
+    // reads "offline" six seconds after it joined.
+    if (g_remoteBuses) for (int i = 0; i < g_remoteCount; i++) if (remoteLive(i)) g_remoteBuses[i].update();
 
     // Run background processing for control input (HTTP server, etc.)
     control.update();
