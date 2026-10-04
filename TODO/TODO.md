@@ -14,13 +14,16 @@ active sections above them, which is how a parked item stops being read.
 
 ## Bugs
 
-- **Nodes dial the brain, so a link stops costing the brain a task (jeff, 2026-10-04 —
+- **Nodes find the brain, so a link stops costing the brain a task (jeff, 2026-10-04 —
   scoped, not started).** The full-shop test put nine paired nodes at 22 KB free internal
-  RAM and a UI that refused to load; the nine link tasks alone are ~45 KB of stacks. The plan
-  — the handshake, how a node finds the brain without mDNS, unpaired-board discovery, the
-  OTA migration, an estimate of ~60 KB saved and the one-hour spike that checks it — is in
-  [`docs/nodes-dial-the-brain-plan.md`](../docs/nodes-dial-the-brain-plan.md). Four open
-  questions for jeff are at the bottom of it.
+  RAM and a UI that refused to load; the nine link tasks alone are ~45 KB of stacks. The
+  design (jeff's shape): pair from the brain as now, the steady-state link is
+  node-initiated (an inbound socket on the brain, measured at 2.4–2.8 KB), and when a link
+  drops both ends seek, with the brain's seeker limited to two attempts in flight. No router
+  settings asked of anyone. Headroom estimate: ~9 nodes with the app on the brain, ~14–15 with
+  it hosted off-board; `SMART_OUTLET_COUNT` (7) must rise to ~16 before the shop can pair.
+  Full plan, memory table and open questions:
+  [`docs/nodes-dial-the-brain-plan.md`](../docs/nodes-dial-the-brain-plan.md).
 
 - **A collector cannot run as a node yet: its RF transmitter and bin sensor only
   work on a PRIMARY (jeff, 2026-10-04).** Asked whether the collector has to be
