@@ -722,6 +722,9 @@ static topo::NodeRegistry      g_nodeRegistry;
 // against the socket, and losing it would silently drop the one thing the user
 // explicitly asked for.
 static String g_pendingTakeoverHost;
+// Links paused from the API (POST /api/nodes/pause): syncPairedNodes() then wants NO
+// links, so every one is stopped while the pairings stay in the registry. Resets on boot.
+static bool g_linksPaused = false;
 
 
 static void syncPairedNodes(const char* primaryId) {
@@ -738,6 +741,7 @@ static void syncPairedNodes(const char* primaryId) {
         const char* host = g_nodeRegistry.host(i);
         if (host && *host) wanted.push_back(host);
     }
+    if (g_linksPaused) wanted.clear();
     const nodelinks::Plan plan = nodelinks::plan(live, wanted, std::string(g_pendingTakeoverHost.c_str()));
 
     // ASK ALL, THEN WAIT FOR EACH. end() waits for its link task to leave on its
@@ -2722,6 +2726,14 @@ void loop() {
         if (apiServer.consumeNodeUpdate(want)) startNodeUpdate(want.c_str());
     }
     if (apiServer.consumeResetAll()) resetEverything();
+    {
+        bool pause = false;
+        if (apiServer.consumeLinksPause(pause) && pause != g_linksPaused) {
+            g_linksPaused = pause;
+            Serial.println(pause ? F("[NODE] Links PAUSED — every link stopped, pairings kept") : F("[NODE] Links resumed"));
+            syncPairedNodes(WiFiProvisioner::getHostname().c_str());
+        }
+    }
 #endif
     if (g_topoRuntime.loaded()) {
 #ifdef CONTROL_SMART_OUTLET

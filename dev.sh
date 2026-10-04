@@ -125,6 +125,7 @@
 #                                   # update over WiFi: the primary (rolls back if it cannot stay on
 #                                   #   WiFi) and the node images it serves; tap "update" per board in
 #                                   #   the app. Needs the OTA partition tables, one cable flash each.
+#   bash dev.sh links pause|resume  # stop every node link without unpairing (measurements)
 #   bash dev.sh tasks [host]        # heap (internal vs PSRAM) and every task's stack headroom + CPU
 #   bash dev.sh linklog [host]      # the primary's link log over WiFi, saved + summarised
 #   bash dev.sh log [host] [--once] # follow the brain's serial output over WiFi, no cable
@@ -1436,6 +1437,21 @@ print("  %-17s %s %4s %4s %12s %6s" % ("name","st","prio","core","stackFreeMin",
 for r in rows: print("  %-17s %s %4d %4d %12d %6.1f" % (r["name"], r["state"], r["prio"], r["core"], r["stackFreeMin"], r["cpuPct"]))'
 }
 
+# run_links pause|resume [host] — stop every node link (or bring them back) without
+# forgetting a pairing. For measurements on a brain that is not dialling anything.
+# Not persisted: a reboot resumes. Needs firmware from 2026-10-04 or later.
+run_links() {
+  local what="${1:-}" host="${2:-${DUSTGATE_HOST:-dustgate.local}}"
+  [[ "$what" == "pause" || "$what" == "resume" ]] || { echo "Usage: bash dev.sh links pause|resume [host]"; exit 1; }
+  host="$(resolve_host "$host")"
+  local key
+  key="$(curl -fsS --max-time 10 "http://$host/api/info" 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin).get("apiKey",""))' 2>/dev/null || true)"
+  [[ -n "$key" ]] || { echo "  ✗ $host did not answer /api/info."; exit 1; }
+  local body='{"paused":false}'; [[ "$what" == "pause" ]] && body='{"paused":true}'
+  curl -fsS --max-time 10 -X POST -H "X-Api-Key: $key" -H 'Content-Type: application/json' -d "$body" "http://$host/api/nodes/pause" >/dev/null \
+    && echo "  ✓ links ${what}d on $host" || echo "  ✗ the brain refused it — is its firmware older than 2026-10-04?"
+}
+
 # run_linklog [host]
 # Pull the primary's link log over WiFi, save it, and summarise it — the way to
 # watch a shop with no laptop on any board. See firmware/utils/LinkLog.h and
@@ -1769,6 +1785,7 @@ case "${1:-}" in
   linklog)   shift; run_linklog "$@" ;;
   ota)       shift; run_ota "$@" ;;
   tasks|heap) shift; run_tasks "$@" ;;
+  links)     shift; run_links "$@" ;;
   log)       shift; run_log "$@" ;;
   monitor)
     shift || true

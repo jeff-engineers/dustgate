@@ -153,6 +153,10 @@ public:
     // every paired plug. The loop does it (it owns the registry and the outlets).
     bool consumeResetAll();
 
+    // POST /api/nodes/pause {paused:true|false}: stop (or resume) every node link WITHOUT
+    // touching the pairings. Not persisted — a reboot resumes. For clean measurements.
+    bool consumeLinksPause(bool& paused);
+
     // Rewrite one machine's plug in the STORED layout — its address, kind and MAC —
     // and flag the runtime to re-adopt. The one way the device edits a layout
     // itself, used when a plug is found at a new address (control/OutletRelocate.h).
@@ -398,6 +402,8 @@ private:
     bool   _topoChangedPending = false;
     String _nodeUpdateWanted;
     bool   _resetAllPending = false;
+    bool   _linksPausePending = false;
+    bool   _linksPausedWanted = false;
     String _topoStatusJson;
 
     // NodeLink secondary endpoint (see consumeNodeSet / reportNodeState)
