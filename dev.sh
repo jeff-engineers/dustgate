@@ -1261,6 +1261,12 @@ run_ota() {
   done
   host="${host:-${DUSTGATE_HOST:-dustgate.local}}"
   local info key ota
+  # RESOLVE ONCE, then talk to the address. The .local name goes through mDNS, which
+  # on a busy network answers some lookups and times out on others; a wait loop that
+  # re-resolves every poll can miss a board that is up and proven (2026-10-04).
+  local ip
+  ip="$(curl -sS --max-time 10 -o /dev/null -w '%{remote_ip}' "http://$host/api/info" 2>/dev/null || true)"
+  [[ -n "$ip" && "$ip" != "0.0.0.0" ]] && host="$ip"
   info="$(curl -fsS --max-time 10 "http://$host/api/info" 2>/dev/null || true)"
   key="$(printf '%s' "$info" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("apiKey",""))' 2>/dev/null || true)"
   if [[ -z "$key" ]]; then
