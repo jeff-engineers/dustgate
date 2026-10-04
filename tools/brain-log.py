@@ -79,6 +79,12 @@ def main():
                 *lines, pending = pending.split("\n")
                 for ln in lines:
                     out(f"{datetime.now():%H:%M:%S} {ln.rstrip(chr(13))}\n")
+            # --once means "everything the board still holds", and the board hands out
+            # 8 KB at a time: stop only when a fetch comes back short. It used to stop
+            # after the first chunk, so `--once` showed the OLDEST 8 KB and never the
+            # recent lines it was run to read (2026-10-04).
+            if once and len(text) >= 8000:
+                continue
             if once:
                 if pending:
                     out(f"{datetime.now():%H:%M:%S} {pending}\n")
