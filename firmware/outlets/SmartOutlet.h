@@ -177,7 +177,17 @@ public:
     void setPreviousPushUrl(const char* url) { strlcpy(_prevPushUrl, url ? url : "", sizeof(_prevPushUrl)); }
     const char* previousPushUrl() const      { return _prevPushUrl; }
 
+    // A NODE polls this plug instead (2026-10-03): the board that controls the tool
+    // handles its plug, and the brain only reflects what that board reports. While
+    // set, the poll task skips this outlet entirely — no HTTP, no reachability
+    // churn — and setReported() is the only thing that moves its reading. Still a
+    // fully valid outlet for identity, claiming and relocation.
+    void setExternallyPolled(bool e) { _externallyPolled = e; }
+    bool isExternallyPolled() const  { return _externallyPolled; }
+    void setReported(float w, bool reachable) { _lastPowerW = reachable ? w : 0.0f; _reachable = reachable; }
+
 protected:
+    bool  _externallyPolled = false;
     float _lastPowerW   = 0.0f;
     float _thresholdW   = 5.0f;
     int   _stopIndex    = 0;

@@ -61,6 +61,12 @@ struct SenseView {
     // board at rest. floorA and tripA are absent when this is set, because there
     // is no floor. See kMaxFloorCounts in sensing/CtTrip.h.
     bool        fault     = false;
+    // A PLUG reported this, not a clamp (SENSE `plug`). Kept out of the clamp list
+    // the Boards screen draws — a plug is not a thing wired to this board — but
+    // present here so the runtime can read its wattage. `watts` is negative when
+    // the plug did not answer.
+    bool        isPlug    = false;
+    float       watts     = -1.0f;
 };
 
 class ActuatorBus {
@@ -131,6 +137,16 @@ public:
     // not silently accept.
     virtual bool jog(int channel, int angle, bool detach) {
         (void)channel; (void)angle; (void)detach; return false;
+    }
+
+    // Can this board poll smart plugs on the primary's behalf? A property of the
+    // firmware it runs (WELCOME caps.plug), so false for a local bus and for every
+    // node that predates it — which is exactly what keeps those plugs brain-polled.
+    virtual bool pollsPlugs() const { return false; }
+    // Latest report from a PLUG sensor: its watts, whether it answered, and when.
+    // False = nothing has ever arrived for that id.
+    virtual bool plugReading(const char* sensorId, float& watts, bool& fault, uint32_t& atMs) const {
+        (void)sensorId; (void)watts; (void)fault; (void)atMs; return false;
     }
 
     virtual bool senseOf(const char* sensorId, bool& on, uint32_t& atMs) const {

@@ -103,6 +103,8 @@
 #include "../utils/OtaGuard.h"        // a fresh OTA image is on probation until it has proved itself
 #include <HTTPClient.h>
 #include <Update.h>
+#include "../outlets/TasmotaOutlet.h"      // plugs this board polls for the primary
+#include "../outlets/ShellyGen2Outlet.h"
 
 #include "../motor/ServoActuator.h"
 #include "../control/NodeLink.h"
@@ -535,6 +537,145 @@ static void updateSweep() {
 #endif // HAS_LINEAR
 
 // -----------------------------------------------------------------------------
+// PLUG POLLING — this board polls the smart plugs of the tools it controls, on the
+// primary's behalf (2026-10-03). The primary stops carrying a poll load that grew
+// with the shop; a plug is read by the board that already owns the tool's gate.
+//
+// WHO POLLS WHAT is decided by the primary (plugOwnerOf in control/Shop.h), sent as
+// CONFIG sensors of kind "plug". This board interprets nothing: it holds an address,
+// a protocol and a threshold, and reports watts. The threshold is applied here only
+// so SENSE can go out on CHANGE instead of on every poll.
+//
+// A poll blocks for up to OUTLET_HTTP_TIMEOUT_MS, so it runs on its OWN task —
+// loop() must keep ticking servos and the clamp's 60 Hz window. The task owns the
+// outlet objects; the AsyncTCP task only hands it a new list (and a generation
+// number to notice it by); loop() only reads results and sends frames.
+// -----------------------------------------------------------------------------
+struct PlugWatch {
+    char  id[topo::nodelink::kMaxSensorIdLen] = {0};
+    char  ip[topo::nodelink::kMaxPlugIpLen + 1] = {0};
+    bool  tasmota = false;
+    float thresholdW = 0.0f;
+    // Written by the poll task, read by loop(). A torn read of a float costs one
+    // slightly wrong reading, repeated within a poll interval — not worth a lock.
+    volatile float    watts = 0.0f;
+    volatile bool     reachable = false;
+    volatile uint32_t atMs = 0;
+    // loop()'s own bookkeeping of what it last SAID.
+    bool  sentOn = false, sentFault = false, sentKnown = false;
+    float sentWatts = 0.0f;
+    uint32_t sentAtMs = 0;
+};
+static PlugWatch        g_plugs[topo::nodelink::kMaxSensorsPerNode];
+static volatile size_t  g_plugCount = 0;
+static volatile uint32_t g_plugCfgGen = 0;
+static portMUX_TYPE     g_plugMux = portMUX_INITIALIZER_UNLOCKED;
+static TaskHandle_t     g_plugTask = nullptr;
+
+// Called from the AsyncTCP task with a validated list. The poll task rebuilds its
+// outlets on its next pass; results for a plug that survives the change are kept
+// so a re-sent identical CONFIG (every reconnect) does not blank the readings.
+static void plugApplyConfig(const topo::nodelink::SensorSpec* specs, size_t n) {
+    portENTER_CRITICAL(&g_plugMux);
+    PlugWatch next[topo::nodelink::kMaxSensorsPerNode];
+    for (size_t i = 0; i < n; i++) {
+        topo::nodelink::strlcpy_(next[i].id, specs[i].sensorId, sizeof(next[i].id));
+        topo::nodelink::strlcpy_(next[i].ip, specs[i].ip, sizeof(next[i].ip));
+        next[i].tasmota = specs[i].plugTasmota;
+        next[i].thresholdW = specs[i].thresholdW;
+        for (size_t j = 0; j < g_plugCount; j++) {
+            if (strcmp(g_plugs[j].id, next[i].id) == 0 && strcmp(g_plugs[j].ip, next[i].ip) == 0) {
+                next[i].watts = g_plugs[j].watts; next[i].reachable = g_plugs[j].reachable; next[i].atMs = g_plugs[j].atMs;
+                break;
+            }
+        }
+        // sent* stay false: the primary has just re-said what it wants, so tell
+        // it what is true now rather than waiting out a repeat interval.
+    }
+    for (size_t i = 0; i < n; i++) {
+        g_plugs[i].~PlugWatch();
+        new (&g_plugs[i]) PlugWatch();
+        topo::nodelink::strlcpy_(g_plugs[i].id, next[i].id, sizeof(g_plugs[i].id));
+        topo::nodelink::strlcpy_(g_plugs[i].ip, next[i].ip, sizeof(g_plugs[i].ip));
+        g_plugs[i].tasmota = next[i].tasmota;
+        g_plugs[i].thresholdW = next[i].thresholdW;
+        g_plugs[i].watts = next[i].watts; g_plugs[i].reachable = next[i].reachable; g_plugs[i].atMs = next[i].atMs;
+    }
+    g_plugCount = n;
+    g_plugCfgGen = g_plugCfgGen + 1;
+    portEXIT_CRITICAL(&g_plugMux);
+    if (n) Serial.printf("[PLUG] polling %u plug(s) for the primary\n", (unsigned)n);
+    else   Serial.println(F("[PLUG] nothing to poll"));
+}
+
+static void plugTaskFn(void*) {
+    SmartOutlet* outlets[topo::nodelink::kMaxSensorsPerNode] = {nullptr};
+    uint32_t seenGen = 0xFFFFFFFFu;
+    for (;;) {
+        if (seenGen != g_plugCfgGen) {
+            seenGen = g_plugCfgGen;
+            for (auto& o : outlets) { delete o; o = nullptr; }
+            // Copy the list out under the lock, allocate OUTSIDE it: a malloc in a
+            // critical section can block on the heap lock with interrupts off.
+            char ips[topo::nodelink::kMaxSensorsPerNode][topo::nodelink::kMaxPlugIpLen + 1];
+            char ids[topo::nodelink::kMaxSensorsPerNode][topo::nodelink::kMaxSensorIdLen];
+            bool tas[topo::nodelink::kMaxSensorsPerNode];
+            size_t cnt;
+            portENTER_CRITICAL(&g_plugMux);
+            cnt = g_plugCount;
+            for (size_t i = 0; i < cnt; i++) {
+                memcpy(ips[i], g_plugs[i].ip, sizeof(ips[i]));
+                memcpy(ids[i], g_plugs[i].id, sizeof(ids[i]));
+                tas[i] = g_plugs[i].tasmota;
+            }
+            portEXIT_CRITICAL(&g_plugMux);
+            for (size_t i = 0; i < cnt; i++) {
+                outlets[i] = tas[i]
+                    ? static_cast<SmartOutlet*>(new TasmotaOutlet(ips[i], ids[i]))
+                    : static_cast<SmartOutlet*>(new ShellyGen2Outlet(ips[i], ids[i]));
+            }
+        }
+        for (size_t i = 0; i < topo::nodelink::kMaxSensorsPerNode; i++) {
+            if (!outlets[i] || seenGen != g_plugCfgGen) continue;
+            const bool ok = outlets[i]->poll();
+            g_plugs[i].reachable = ok;
+            g_plugs[i].watts = ok ? outlets[i]->getPowerW() : 0.0f;
+            g_plugs[i].atMs = millis();
+        }
+        vTaskDelay(pdMS_TO_TICKS(OUTLET_POLL_INTERVAL_MS));
+    }
+}
+
+// loop(): turn readings into SENSE frames — on CHANGE (the on bit, reachability, or
+// a real swing in watts) and again every kSenseRepeatMs, so one dropped frame cannot
+// leave the primary wrong and so a plug's wattage is never stale to the UI for long.
+static void tickPlugs() {
+    const size_t n = g_plugCount;
+    const uint32_t now = millis();
+    for (size_t i = 0; i < n; i++) {
+        PlugWatch& p = g_plugs[i];
+        if (!p.atMs) continue;                       // not polled yet
+        const bool fault = !p.reachable;
+        const float w = p.watts;
+        const bool on = !fault && w >= p.thresholdW;
+        const float swing = fabsf(w - p.sentWatts);
+        const bool changed = !p.sentKnown || on != p.sentOn || fault != p.sentFault ||
+                             swing >= (p.sentWatts > 50.0f ? p.sentWatts * 0.2f : 10.0f);
+        const bool due = (uint32_t)(now - p.sentAtMs) >= topo::nodelink::kSenseRepeatMs;
+        if (!changed && !due) continue;
+        StaticJsonDocument<256> doc;
+        topo::nodelink::buildSense(doc.to<JsonObject>(), p.id, on, -1.0f, -1.0f, -1.0f, -1.0f,
+                                   fault, fault ? -1.0f : w, /*plug=*/true);
+        String s; serializeJson(doc, s);
+        nodeWs.textAll(s);
+        if (!p.sentKnown || on != p.sentOn || fault != p.sentFault) {
+            Serial.printf("[PLUG] %s %s %.1f W\n", p.id, fault ? "UNREACHABLE" : (on ? "ON " : "off"), w);
+        }
+        p.sentOn = on; p.sentFault = fault; p.sentKnown = true; p.sentWatts = w; p.sentAtMs = now;
+    }
+}
+
+// -----------------------------------------------------------------------------
 // OTA — the primary tells this node to pull a new image (2026-10-03).
 //
 // The frame handler only RECORDS the order (it runs on the AsyncTCP task, which
@@ -660,7 +801,10 @@ static void onNodeWsEvent(AsyncWebSocket*, AsyncWebSocketClient* client,
     if (!(info->final && info->index == 0 && info->len == len)) return;
     if (info->opcode != WS_TEXT) return;
 
-    StaticJsonDocument<384> doc;
+    // 1024: a CONFIG with four sensors is ~35 members, and this document is the
+    // WHOLE frame. ArduinoJson fails a deserialize that does not fit (NoMemory),
+    // so a 384 here would have made a full CONFIG read as "no frame" — silence.
+    StaticJsonDocument<1024> doc;
     if (deserializeJson(doc, data, len)) return;
     JsonObjectConst f = doc.as<JsonObjectConst>();
     const char* t = f["t"].as<const char*>();
@@ -737,11 +881,11 @@ static void onNodeWsEvent(AsyncWebSocket*, AsyncWebSocketClient* client,
                                      HAS_LINEAR ? 1 : 0,
                                      g_owner.c_str(), accepted,
 #ifdef PIN_CT
-                                     1
+                                     1,
 #else
-                                     0
+                                     0,
 #endif
-                                     );
+                                     /*pollsPlugs=*/true);
         // Why this node last booted, so the primary's link log can tell a tool
         // switched off at the wall ("poweron"/"brownout") from a crash
         // ("panic"/"task_wdt"). See withBootInfo() in nodelink.js.
@@ -750,7 +894,6 @@ static void onNodeWsEvent(AsyncWebSocket*, AsyncWebSocketClient* client,
     } else if (strcmp(t, "PING") == 0) {
         topo::nodelink::buildPong(reply.to<JsonObject>());
     } else if (strcmp(t, "CONFIG") == 0) {
-#ifdef PIN_CT
         // SAME GATE AS SET. An accepted WELCOME is what earns the right to
         // configure, not merely holding a socket — a board anyone could
         // re-point at a different sensor has no claim at all.
@@ -766,55 +909,72 @@ static void onNodeWsEvent(AsyncWebSocket*, AsyncWebSocketClient* client,
                 Serial.print(F("[CONFIG] MALFORMED — ")); Serial.println(err ? err : "?");
                 topo::nodelink::buildAck(reply.to<JsonObject>(), f["seq"] | 0, false, err);
             } else {
-                // ALL OR NOTHING, and a WHOLE new list — parseConfigFrame has
-                // already refused anything partial.
-                for (size_t i = 0; i < n; i++) g_sensors[i] = parsed[i];
-                g_sensorCount = n;
-                // Fall back per FIELD, not per frame: a primary that sends two
-                // of the three is not an error, and substituting a whole default
-                // set for a partial one would quietly discard what it did send.
-                // Zero is the sentinel and parseConfigFrame has already refused
-                // any real value that could look like one.
-                g_tripParams = sensing::TripParams();
-                if (n) {
-                    if (parsed[0].tripRatio  != 0.0f) g_tripParams.tripRatio  = parsed[0].tripRatio;
-                    if (parsed[0].minCounts  != 0.0f) g_tripParams.minCounts  = parsed[0].minCounts;
-                    if (parsed[0].clearRatio != 0.0f) g_tripParams.clearRatio = parsed[0].clearRatio;
+                // One list on the wire, two consumers here: clamps (this board's
+                // own ADC) and plugs (smart plugs on the network that this board
+                // polls for the primary — 2026-10-03). Split them once.
+                topo::nodelink::SensorSpec cts[topo::nodelink::kMaxSensorsPerNode];
+                topo::nodelink::SensorSpec plugs[topo::nodelink::kMaxSensorsPerNode];
+                size_t ctN = 0, plugN = 0;
+                for (size_t i = 0; i < n; i++) {
+                    if (parsed[i].isPlug) plugs[plugN++] = parsed[i];
+                    else                  cts[ctN++]     = parsed[i];
                 }
-                for (size_t i = 0; i < topo::nodelink::kMaxSensorsPerNode; i++) g_senseOn[i] = false;
-                // Force a report on the next tick rather than waiting out a
-                // repeat interval: the primary has just said what it is
-                // watching and should not sit through kSenseRepeatMs of not
-                // knowing whether a saw is already running.
-                g_senseKnown  = false;
-                g_lastSenseMs = 0;
-                Serial.print(F("[CONFIG] "));
-                if (!n) Serial.println(F("(nothing to watch)"));
-                else {
-                    for (size_t i = 0; i < n; i++) {
-                        Serial.print(g_sensors[i].sensorId);
-                        Serial.print(F("@ch")); Serial.print(g_sensors[i].channel);
-                        Serial.print(i + 1 < n ? F(", ") : F("\n"));
+#ifndef PIN_CT
+                if (ctN) {
+                    // Honest refusal beats silence: the layout believes this board
+                    // watches a clamp, and it physically cannot.
+                    Serial.println(F("[CONFIG] REFUSED — no CT pad on this board."));
+                    topo::nodelink::buildAck(reply.to<JsonObject>(), f["seq"] | 0, false,
+                                             "no sensor hardware on this node");
+                } else
+#endif
+                {
+#ifdef PIN_CT
+                    // ALL OR NOTHING, and a WHOLE new list — parseConfigFrame has
+                    // already refused anything partial.
+                    for (size_t i = 0; i < ctN; i++) g_sensors[i] = cts[i];
+                    g_sensorCount = ctN;
+                    // Fall back per FIELD, not per frame: a primary that sends two
+                    // of the three is not an error, and substituting a whole default
+                    // set for a partial one would quietly discard what it did send.
+                    // Zero is the sentinel and parseConfigFrame has already refused
+                    // any real value that could look like one.
+                    g_tripParams = sensing::TripParams();
+                    if (ctN) {
+                        if (cts[0].tripRatio  != 0.0f) g_tripParams.tripRatio  = cts[0].tripRatio;
+                        if (cts[0].minCounts  != 0.0f) g_tripParams.minCounts  = cts[0].minCounts;
+                        if (cts[0].clearRatio != 0.0f) g_tripParams.clearRatio = cts[0].clearRatio;
                     }
-                    // Print what is IN FORCE, not what arrived: a primary that
-                    // sent nothing and a primary that sent the same numbers this
-                    // board already had look identical on the wire and must not
-                    // look identical in the log.
-                    Serial.print(F("[CONFIG] trip ")); Serial.print(g_tripParams.tripRatio, 2);
-                    Serial.print(F("x floor, min ")); Serial.print(g_tripParams.minCounts, 1);
-                    Serial.print(F(" counts, release ")); Serial.print(g_tripParams.clearRatio, 2);
-                    Serial.println(F(" of trip"));
+                    for (size_t i = 0; i < topo::nodelink::kMaxSensorsPerNode; i++) g_senseOn[i] = false;
+                    // Force a report on the next tick rather than waiting out a
+                    // repeat interval: the primary has just said what it is
+                    // watching and should not sit through kSenseRepeatMs of not
+                    // knowing whether a saw is already running.
+                    g_senseKnown  = false;
+                    g_lastSenseMs = 0;
+                    Serial.print(F("[CONFIG] "));
+                    if (!ctN) Serial.println(F("(nothing to watch)"));
+                    else {
+                        for (size_t i = 0; i < ctN; i++) {
+                            Serial.print(g_sensors[i].sensorId);
+                            Serial.print(F("@ch")); Serial.print(g_sensors[i].channel);
+                            Serial.print(i + 1 < ctN ? F(", ") : F("\n"));
+                        }
+                        // Print what is IN FORCE, not what arrived: a primary that
+                        // sent nothing and a primary that sent the same numbers this
+                        // board already had look identical on the wire and must not
+                        // look identical in the log.
+                        Serial.print(F("[CONFIG] trip ")); Serial.print(g_tripParams.tripRatio, 2);
+                        Serial.print(F("x floor, min ")); Serial.print(g_tripParams.minCounts, 1);
+                        Serial.print(F(" counts, release ")); Serial.print(g_tripParams.clearRatio, 2);
+                        Serial.println(F(" of trip"));
+                    }
+#endif
+                    plugApplyConfig(plugs, plugN);
+                    topo::nodelink::buildAck(reply.to<JsonObject>(), f["seq"] | 0, true);
                 }
-                topo::nodelink::buildAck(reply.to<JsonObject>(), f["seq"] | 0, true);
             }
         }
-#else
-        // Honest refusal beats silence: the layout believes this board watches
-        // something, and it physically cannot.
-        Serial.println(F("[CONFIG] REFUSED — no CT pad on this board."));
-        topo::nodelink::buildAck(reply.to<JsonObject>(), f["seq"] | 0, false,
-                                 "no sensor hardware on this node");
-#endif
     } else if (strcmp(t, "SET") == 0) {
         topo::nodelink::SetCommand cmd;
         const char* err = nullptr;
@@ -1213,6 +1373,10 @@ static void updateStatusScreen() {
     if (g_lastCmdMs) f.lastCmdSec = (int)((millis() - g_lastCmdMs) / 1000);
 
     statusscreen::update(f);
+
+    // The plug poller idles until a CONFIG gives it something to read. 6 KB: an
+    // HTTPClient and a parsed Status reply live on this stack.
+    xTaskCreate(plugTaskFn, "plugpoll", 6144, nullptr, 1, &g_plugTask);
 }
 
 void loop() {
@@ -1239,6 +1403,7 @@ void loop() {
     // by whether this node is on WiFi AND has been adopted by its primary.
     if (g_otaPending && !g_otaRunning) runOta();
     otaguard::tick(WiFi.status() == WL_CONNECTED && g_ownerLinked);
+    tickPlugs();
 
     // Status pixel — the node's only UI. Derived fresh each loop rather than
     // set at transitions, so it can never latch a stale colour after a silent

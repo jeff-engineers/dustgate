@@ -1132,6 +1132,7 @@ private:
 
     void pushSensorConfig() {
         if (!_bus) return;
+        _nodePlugs.clear();
         // One bucket per BOARD, not per id. "" is this board and is pushed
         // first, so any controller id that also means this board is skipped
         // rather than overwriting what "" just sent.
@@ -1194,9 +1195,68 @@ private:
                     if (_clearRatio != 0.0f) sen["clearRatio"] = _clearRatio;
                 }
             }
+            // ── PLUGS this board polls for the brain (2026-10-03) ──────────
+            //
+            // The board that controls a tool handles its plug — the owner rule is
+            // plugOwnerOf() in Shop.h, a matched pair with shop.js's plugOwners().
+            // Only for a board that SAID it can (WELCOME caps.plug): an older node
+            // would refuse the whole CONFIG, clamp and all, so its plugs stay with
+            // the brain. A machine with a clamp is sensed by the clamp, not its
+            // plug, exactly as pollSensors() already reads them. And the board is
+            // never THIS one — the brain polls its own plugs through
+            // SmartOutletControl.
+            if (!sameBoard(cid, std::string()) && _bus->pollsPlugs(cid.c_str())) {
+                std::vector<std::string> sentPlugs;
+                for (const SystemView& sys : systemsOf(topology())) {
+                    for (JsonObjectConst e : sys.elements) {
+                        if (!_eq(e["type"], "tool")) continue;
+                        if (arr.size() >= nodelink::kMaxSensorsPerNode) break;   // the rest stay with the brain
+                        const std::string mid = machineIdOf(e);
+                        if (mid.empty()) continue;
+                        bool dup = false;
+                        for (const std::string& seen : sentPlugs) if (seen == mid) { dup = true; break; }
+                        if (dup) continue;
+                        if (!clampOf(topology(), e).isNull()) continue;
+                        JsonObjectConst outlet = machineDoc(topology(), mid)["sensor"]["outlet"];
+                        const char* ip = outlet["ip"].as<const char*>();
+                        if (!ip || !*ip) continue;
+                        if (!sameBoard(cid, plugOwnerOf(topology(), mid))) continue;
+                        sentPlugs.push_back(mid);
+                        JsonObject sen = arr.createNestedObject();
+                        sen["sensorId"]   = sentPlugs.back();   // COPIED: the vector reallocates, and a c_str() into it would dangle
+                        sen["kind"]       = "plug";
+                        sen["ip"]         = ip;
+                        sen["plug"]       = _eq(outlet["kind"], "tasmota") ? "tasmota" : "shelly";
+                        sen["thresholdW"] = _ctrl.machineThreshold(mid);
+                        _nodePlugs[mid]   = cid;
+                    }
+                }
+            }
             _bus->configureSensors(cid.c_str(), JsonArrayConst(arr));
         }
+        _plugSig = plugCapSignature();
     }
+
+    // Which boards can poll plugs right now, as one string. A node's capability
+    // arrives in its WELCOME, which is AFTER the layout was adopted, so a push made
+    // at adopt time did not know it — update() compares this against the one the
+    // last push saw and pushes again when a board has joined or left.
+    std::string plugCapSignature() const {
+        std::string sig;
+        for (const SystemView& sys : systemsOf(topology())) {
+            for (JsonObjectConst c : sys.controllers) {
+                const std::string cid = c["id"] | "";
+                if (cid.empty() || sameBoard(cid, std::string())) continue;
+                if (_bus->pollsPlugs(cid.c_str())) { sig += cid; sig += ';'; }
+            }
+        }
+        return sig;
+    }
+    std::string _plugSig;
+    // machineId -> the controllerId polling its plug, as of the last push. The
+    // single source for "is this plug node-polled?" — pollSensors and the sketch
+    // both ask it, so they cannot disagree with what was actually sent.
+    std::map<std::string, std::string> _nodePlugs;
 
     // Turn each CT's bit into a power reading, once per update().
     //
@@ -1276,7 +1336,39 @@ private:
                                 on ? manualWattsFor(_ctrl.machineThreshold(std::string(id))) : 0.0f);
             }
         }
+
+        // ── PLUGS a node polls (see pushSensorConfig) ──────────────────────
+        // Real watts, not a synthetic one: a plug HAS them, and the same reading
+        // feeds the brain's threshold, the Live view and the plug's own
+        // reachability. ABSENT IS OFF for the same reason as a clamp — a node that
+        // stopped reporting reads as an idle tool, never a running one.
+        for (const auto& kv : _nodePlugs) {
+            float w = 0.0f; bool fault = false; uint32_t atMs = 0;
+            bool reported = _bus->plugReading(kv.second.c_str(), kv.first.c_str(), w, fault, atMs);
+            if (reported && _nowMs && (uint32_t)(_nowMs - atMs) > nodelink::kSenseStaleMs) reported = false;
+            const bool reachable = reported && !fault;
+            _nodePlugReading[kv.first] = NodePlugReading{ reachable, reachable ? w : 0.0f };
+            setMachinePower(kv.first, reachable ? w : 0.0f);
+        }
+        // A board that joined, or left, since the last push changes who can be
+        // handed a plug. Checked here because every pass already runs this.
+        if (_loaded && plugCapSignature() != _plugSig) pushSensorConfig();
     }
+
+public:
+    // Is this machine's plug polled by a NODE, and what did it last say? Read by
+    // the sketch so the brain stops polling that plug itself and reports the node's
+    // answer as the plug's reading (and its reachability — a plug nobody can reach
+    // raises a problem either way).
+    struct NodePlugReading { bool reachable; float watts; };
+    bool nodePlug(const std::string& machineId, NodePlugReading& out) const {
+        if (_nodePlugs.find(machineId) == _nodePlugs.end()) return false;
+        auto it = _nodePlugReading.find(machineId);
+        out = (it == _nodePlugReading.end()) ? NodePlugReading{ false, 0.0f } : it->second;
+        return true;
+    }
+private:
+    std::map<std::string, NodePlugReading> _nodePlugReading;
 
     // When each clamped element's reading last went true, for the collector's
     // spin-up grace. Keyed by element id; cleared to 0 the moment it reads off.

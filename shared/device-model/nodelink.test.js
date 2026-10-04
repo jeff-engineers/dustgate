@@ -362,6 +362,40 @@ const eq = (name, got, want) =>
   check('SENSE is s2p only', NL.S2P.includes('SENSE') && !NL.P2S.includes('SENSE'));
 }
 
+// ── plugs: a node polls a smart plug on the primary's behalf ────────────────
+// PAIR: test_nodebus.cpp's "plug" block — same cases, same order, same literals.
+{
+  const plug = { sensorId: 'saw', kind: 'plug', ip: '192.168.86.40', plug: 'tasmota', thresholdW: 25 };
+  const ct = { sensorId: 'planer', kind: 'ct', channel: 0 };
+  eq('a plug sensor validates', NL.validateFrame(NL.config(1, [plug]), 'p2s'), []);
+  eq('a plug and a clamp share one CONFIG', NL.validateFrame(NL.config(1, [ct, plug]), 'p2s'), []);
+  eq('a plug carries no channel on the wire', NL.config(1, [plug]).sensors[0].channel, undefined);
+  eq('the bounds', [NL.MAX_PLUG_THRESHOLD_W, NL.MAX_PLUG_WATTS, NL.MAX_PLUG_IP_LEN], [10000, 20000, 15]);
+  const bad = (patch) => NL.validateFrame(NL.config(1, [{ ...plug, ...patch }]), 'p2s').length === 1;
+  check('a hostname is not an ip', bad({ ip: 'saw.local' }));
+  check('an unknown protocol is refused', bad({ plug: 'kasa' }));
+  check('a zero threshold is refused', bad({ thresholdW: 0 }));
+  check('a threshold past the bound is refused', bad({ thresholdW: 10001 }));
+  check('a threshold AT the bound is fine', !bad({ thresholdW: 10000 }));
+  const w = NL.sense('saw', true, undefined, undefined, undefined, undefined, false, 412.5, true);
+  eq('a plug reading carries watts', w.watts, 412.5);
+  eq('and says it is a plug', w.plug, true);
+  eq('and validates', NL.validateFrame(w, 's2p'), []);
+  eq('a clamp reading carries none', 'watts' in NL.sense('planer', true, 2.1), false);
+  check('watts past the bound is refused',
+        NL.validateFrame({ t: 'SENSE', sensorId: 'a', on: true, watts: 20001 }, 's2p').length === 1);
+  const un = NL.sense('saw', false, undefined, undefined, undefined, undefined, true, undefined, true);
+  check('an unreachable plug is a fault, still marked a plug', un.fault === true && un.plug === true && !('watts' in un));
+  eq('a clamp report is not marked', 'plug' in NL.sense('planer', true, 2.1), false);
+  const wl = NL.welcome('n1', 'xiao_c5', 'x', { servos: 1, linear: 0, plug: 1 });
+  eq('a WELCOME may say the board polls plugs', NL.validateFrame(wl, 's2p'), []);
+  check('and it is read back', NL.pollsPlugs(wl));
+  check('absent means no — an old board stays brain-polled',
+        !NL.pollsPlugs(NL.welcome('n1', 'xiao_c5', 'x', { servos: 1, linear: 0 })));
+  check('a plug cap of 2 is refused',
+        NL.validateFrame(NL.welcome('n1', 'b', 'x', { servos: 1, linear: 0, plug: 2 }), 's2p').length === 1);
+}
+
 // ── OTA: a node is told to pull an image, and reports how it went ───────────
 // PAIR: test_nodebus.cpp's "ota" block — same cases, same order, same literals.
 {

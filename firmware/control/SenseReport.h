@@ -28,10 +28,17 @@ template <typename BusT>
 inline void addSenseArray(JsonObject o, const BusT& bus) {
     const size_t n = bus.senseCount();
     if (!n) return;                       // absent means "no clamp configured here"
+    // Plugs share the list with clamps on the wire; count only the clamps, or a
+    // board that polls plugs but has no clamp would show an empty `sense` — which
+    // reads as "a clamp is configured and has never spoken".
+    size_t clamps = 0;
+    for (size_t i = 0; i < n; i++) { SenseView v; if (bus.senseAt(i, v) && !v.isPlug) clamps++; }
+    if (!clamps) return;
     JsonArray arr = o.createNestedArray("sense");
     for (size_t i = 0; i < n; i++) {
         SenseView v;
         if (!bus.senseAt(i, v)) continue;
+        if (v.isPlug) continue;   // a plug is not a clamp wired to this board
         JsonObject e = arr.createNestedObject();
         e["id"]       = v.id;
         e["reported"] = v.reported;

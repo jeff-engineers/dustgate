@@ -302,7 +302,9 @@ void SmartOutletControl::doPoll() {
         // Push-connected plugs stream their power over the WebSocket, so skip
         // the HTTP poll entirely (this is what removes the polling storm).
         // Only fall back to an HTTP poll for a plug whose push isn't up.
-        if (!o->isPushConnected()) o->poll();
+        // A plug a NODE polls is not ours to read: the main loop feeds it the node's
+        // report (setReported), and an HTTP poll here would only fight that.
+        if (!o->isPushConnected() && !o->isExternallyPolled()) o->poll();
 
         bool active = o->isActive();
         if (active && !_prevActive[i]) risingEdge = true;
