@@ -20,6 +20,7 @@
 #include <ArduinoJson.h>
 #include <cstdint>
 #include <string>
+#include "../control/BoardId.h"
 
 namespace topo {
 
@@ -78,12 +79,10 @@ private:
 // Which system's collector has its bin sensor wired to THIS board, if any.
 // Returns an empty string for "none of them".
 //
-// The controllerId rule MIRRORS NodeBus's, deliberately — absent, or equal to
-// this board's own id, means local — because "which board is this thing on" is
-// one question and answering it two ways is how a link goes green while nothing
-// on it works (see the bareHost note in NodeBus.h). The comparison is exact
-// here rather than host-normalised: a controllerId is a name the UI chose, and
-// unlike a link's host it never arrives with a `.local` suffix.
+// "Is it mine" is control/BoardId.h's isOwnBoard(), the same rule NodeBus, the sensor push and
+// the RF transmitter use — host-normalised, so "node-1" and "node-1.local" are one board. It
+// was an EXACT comparison here until 2026-10-04, which said it mirrored NodeBus and was the one
+// place that did not.
 //
 // A collector with no `bin` at all is not local, not remote, just absent — the
 // caller reports nothing rather than reporting "not full", because an unwatched
@@ -101,16 +100,10 @@ inline std::string localBinSystemId(JsonObjectConst topology, const char* ownId)
             JsonObjectConst sensor = e["bin"]["sensor"];
             if (sensor.isNull()) continue;
             const char* cid = sensor["controllerId"];
-            // ABSENT, OR EQUAL TO OUR OWN ID. Nothing else.
-            //
-            // There used to be an `own.empty()` clause here as well, which meant
-            // a board that does not yet know its own controllerId claimed the
-            // FIRST bin sensor in the document — whoever it was actually wired
-            // to. Not knowing who you are is a reason to claim nothing, not a
-            // reason to claim everything; a sensor that names a board is owned
-            // by that board and by nobody else. Matches NodeBus's rule exactly,
-            // which is the point of the comment above.
-            if (!cid || own == cid) return std::string(sys["id"] | "");
+            // ABSENT, OR THIS BOARD'S OWN ID (in either spelling). Nothing else: a sensor that
+            // names a board is owned by that board and by nobody else, and a board that does
+            // not yet know its own id claims no named sensor at all.
+            if (topo::isOwnBoard(cid ? cid : "", own)) return std::string(sys["id"] | "");
         }
     }
     return std::string();

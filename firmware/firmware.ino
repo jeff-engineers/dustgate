@@ -1268,7 +1268,7 @@ static void syncTopologyOutlets() {
             // board to key ITS pad (PRESS) — which is what lets the board at the collector be
             // an ordinary node. The policy stays here either way.
             const std::string rfBoard = rf["controllerId"] | "";
-            if (!rfBoard.empty() && rfBoard != g_nodeBus.ownControllerId()) {
+            if (!topo::isOwnBoard(rfBoard, g_nodeBus.ownControllerId())) {
                 g_pressers[i] = new topo::RemoteRfPresser(&g_nodeBus, rfBoard, rfAddr, rfData, rfTick, rfReps);
                 DEBUG_PRINT(F("[RF] Collector ")); DEBUG_PRINT((int)i);
                 DEBUG_PRINT(F(" pressed by RF through board ")); DEBUG_PRINTLN(rfBoard.c_str());

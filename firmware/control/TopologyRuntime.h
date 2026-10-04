@@ -1117,12 +1117,7 @@ private:
     // bareHost() rather than ==, for NodeBus's own reason: the same board is
     // legitimately "node-1" and "node-1.local".
     bool sameBoard(const std::string& a, const std::string& b) const {
-        const std::string own = _bus ? _bus->ownControllerId() : std::string();
-        auto local = [&](const std::string& x) {
-            return x.empty() || bareHost(x.c_str()) == bareHost(own.c_str());
-        };
-        if (local(a) && local(b)) return true;
-        return bareHost(a.c_str()) == bareHost(b.c_str());
+        return topo::sameBoard(a, b, _bus ? _bus->ownControllerId() : std::string());
     }
 
     // The shop-wide CT tuning, 0 = unset. See setSensorTuning().

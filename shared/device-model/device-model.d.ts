@@ -9,6 +9,8 @@ export const IDLE_TIMEOUT_SEC_DEFAULT: number;
 export const HOME_MS: number;
 export const CALIBRATE_MS: number;
 export const PORT_ROLES: PortRole[];
+/** The canonical spelling of a board's address: case-folded, no trailing dot, no ".local". board-id.js. */
+export function bareHost(h: string | null | undefined): string;
 export const MANIFOLD_PROFILES: Record<string, { firstGateOffsetMm: number; gatePitchMm: number; endMarginMm: number }>;
 
 export type PortRole = 'tool' | 'unassigned' | 'blocked' | 'feed' | 'home';

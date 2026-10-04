@@ -871,7 +871,10 @@ function ensureSweepable(d) {
   return d._sweepable;
 }
 
+const { bareHost } = require('./board-id');
+
 module.exports = {
+  bareHost,
 
   // constants
   NUM_STOPS, STEPS_PER_MM, MIN_STOP_SEPARATION_MM, IDLE_TIMEOUT_SEC_DEFAULT, HOME_MS,

@@ -102,6 +102,9 @@ int main() {
         ok("the board named on the sensor owns it",
            localBinSystemId(t, "node-dc") == "sysA",
            localBinSystemId(t, "node-dc"));
+        // The same board in either spelling: this was an EXACT compare until 2026-10-04.
+        ok("the node's .local spelling is the same board",
+           localBinSystemId(t, "NODE-DC.local") == "sysA", localBinSystemId(t, "NODE-DC.local"));
         ok("another board owns nothing",
            localBinSystemId(t, "primary").empty(),
            localBinSystemId(t, "primary"));

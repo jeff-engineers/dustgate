@@ -80,7 +80,7 @@ const NETWORK_BOARDS = [
 ];
 const OFFLINE_HOSTS = ['dustgate-node-2'];
 
-const bareHost = (h) => String(h || '').toLowerCase().replace(/\.local\.?$/, '');
+const { bareHost } = require('../shared/device-model/board-id.js');   // the ONE rule for a board's name
 const findPaired = (h) => pairedNodes.find(n => bareHost(n.host) === bareHost(h));
 
 /** Link state for GET /api/nodes — the shape RemoteActuatorBus::info() feeds. */
