@@ -1358,6 +1358,14 @@ run_ota() {
       echo "    Check:  curl http://$host/api/info    (slot/ota)   and   bash dev.sh log $host"
       exit 1
     fi
+    # How full the two things that are zero-sum on this chip are (see /api/info).
+    curl -fsS --max-time 5 "http://$host/api/info" 2>/dev/null | python3 -c '
+import json,sys
+d=json.load(sys.stdin)
+if d.get("slotBytes") and d.get("fsBytes"):
+    print("  image  %.2f of %.2f MB slot (%d%%)   filesystem %.2f of %.2f MB (%d%%)" % (
+        d["sketchBytes"]/1e6, d["slotBytes"]/1e6, 100*d["sketchBytes"]/d["slotBytes"],
+        d["fsUsed"]/1e6, d["fsBytes"]/1e6, 100*d["fsUsed"]/d["fsBytes"]))' 2>/dev/null || true
     # The key survives the reboot (NVS), but take it fresh in case it was regenerated.
     key="$(curl -fsS --max-time 5 "http://$host/api/info" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("apiKey",""))')"
   fi

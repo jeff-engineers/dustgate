@@ -910,7 +910,7 @@ void HttpApiServer::registerRoutes() {
         // 512, not 320: `built` is now a copied String and `build` is new, and
         // ArduinoJson drops an overflowing member SILENTLY (the WELCOME lost
         // `rst` exactly that way on 2026-09-27).
-        StaticJsonDocument<640> doc;
+        StaticJsonDocument<768> doc;   // 768: the OTA and fill fields below took it past 640
         doc["apiKey"]        = _apiKey;
         doc["numStops"]      = _cachedNumActiveStops;   // runtime; not compile-time NUM_STOPS
         doc["version"]       = "1.0.0";
@@ -933,6 +933,14 @@ void HttpApiServer::registerRoutes() {
         // OTA: which slot runs, and whether this image has earned its place yet
         // (utils/OtaGuard.h). "nogo" = a one-slot partition table, i.e. a board
         // that has not had the cable pass that installs OTA.
+        // HOW FULL THINGS ARE, because the 8 MB is fully allocated and every byte is a
+        // trade (partitions-xiao-c5-primary.csv): the running image against its slot,
+        // and the filesystem — which holds the app AND both node images — against its
+        // partition. Watch these before an update, not after a "no room".
+        doc["sketchBytes"]   = (uint32_t)ESP.getSketchSize();
+        doc["slotBytes"]     = (uint32_t)ESP.getFreeSketchSpace();   // the OTHER slot, same size
+        doc["fsBytes"]       = (uint32_t)LittleFS.totalBytes();
+        doc["fsUsed"]        = (uint32_t)LittleFS.usedBytes();
         doc["slot"]          = otaguard::slot();
         doc["ota"]           = otaguard::state();
         doc["heapFree"]      = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
