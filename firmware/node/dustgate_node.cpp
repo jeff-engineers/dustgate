@@ -897,6 +897,7 @@ static void handleNodeFrame(const Conn& conn, const uint8_t* data, size_t len) {
             g_ownerLinked   = true;
             g_ownerOutbound = conn.outbound;
             if (conn.outbound) {
+                brainlink::markJoined();
                 // A socket we dialled never fires WS_EVT_CONNECT, so "linked" is
                 // decided here, by the handshake the owner just passed.
                 g_linkedClientId = conn.id;

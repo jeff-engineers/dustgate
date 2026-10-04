@@ -778,9 +778,9 @@ static void syncPairedNodes(const char* primaryId) {
         // One link every 1.2 s: all of them at once peaked the heap at 3.7 KB.
         bus->setStartDelay(startOffsetMs);
         startOffsetMs += 1200;
-        // Just after boot, give every node 6 s to dial in before dialling it ourselves — see
+        // Just after boot, give every node 10 s to dial in before dialling it ourselves — see
         // setBootGrace. A board the user pairs later is dialled at once.
-        if (millis() < 30000UL) bus->setBootGrace(6000);
+        if (millis() < 30000UL) bus->setBootGrace(10000);
         bus->begin(host.c_str(), primaryId, host.c_str(), 80);
     }
 
