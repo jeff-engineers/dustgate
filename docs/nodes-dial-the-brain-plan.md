@@ -79,19 +79,27 @@ Bounds on anything new go in the `CLAUDE.md` constants table.
 
 ## The two hard problems
 
-### 1. How does a node find the brain, without requiring mDNS?
-The design constraint (CLAUDE.md): nothing may *require* multicast. In order:
-1. **the address it last connected to** (NVS) — works on every network, survives a reboot;
-2. **`<owner>.local`** by mDNS (the owner name the node already stores) — a fast path;
-3. **the brain's hostname/IP given at flash time** — `dev.sh provision` already sends the
-   WiFi and hostname; add the brain's name;
-4. *optional:* a UDP **broadcast** beacon from the brain every ~10 s on a fixed port.
-   Broadcast is not multicast and passes most guest networks; it covers the brain's
-   address changing while a node is running.
+### 1. How does a node find the brain, with NO router changes and no mDNS requirement?
+Two constraints from CLAUDE.md bind this: nothing may *require* multicast, and **an install
+step the owner cannot perform is a different product** — so a DHCP reservation is NOT an
+answer (decided 2026-10-04, jeff: "that doesn't seem like something a woodworker is going
+to be able to do"). Nodes find the brain themselves, in order, and stop at the first hit:
+1. **the address it last connected to** (NVS) — free, works on every network;
+2. **`<owner>.local`** by mDNS (the owner name the node already stores) — a fast path
+   only, never relied on;
+3. **a UDP broadcast beacon** from the brain, every ~10 s on a fixed port — a node that
+   has lost the brain listens for it. Broadcast is not multicast and passes most guest
+   networks; it is the main recovery path when the brain's address changes;
+4. **a subnet sweep** — probe the local /24 for `GET /api/info` on port 80 and match the
+   owner name, the way the brain already finds Tasmota plugs (`/api/outlets/sweep`).
+   Slow (tens of seconds, jittered so nodes do not all sweep at once) and needs nothing
+   from the network at all; it is the floor under everything above.
 
-A brain whose DHCP address changes is the case this adds that does not exist today (today
-the node's address changing is the problem). A DHCP reservation for the brain is the
-real fix and should be in the install notes; steps 2–4 are the safety net.
+A brain whose address changes after a reboot therefore costs its nodes a few seconds, not
+a visit: they drop, fail on the old address, and find it again by 2, 3 or 4. (Today the
+reverse problem — a NODE's address changing — is what leaves a dark link on a stale cached
+IP.) A reservation is still good practice for someone who can set one, and the install
+notes may say so, but nothing depends on it.
 
 ### 2. Unpaired and unclaimed nodes (the "Add another board" screen)
 Today the brain finds new boards by an mDNS scan (multicast). Inverted, an unpaired node
@@ -159,8 +167,9 @@ reboot (jitter); node-side code to be debugged on nine boards at once.
 
 ## Open questions for Jeff
 
-1. **Brain address:** is a DHCP reservation for the brain acceptable as the recommended
-   install (and the beacon as the optional safety net), or should broadcast be built first?
+1. ~~**Brain address:** DHCP reservation?~~ **Settled 2026-10-04: no.** Nodes find the
+   brain by cached address → mDNS → UDP broadcast beacon → subnet sweep (above). Still
+   open: the beacon's port and interval, and how patient the sweep should be.
 2. **Fresh nodes:** dial every brain found by mDNS (the person pairs from the right one),
    or require the brain's name at flash time and refuse to dial anything else?
 3. **Dual mode:** one release of both-mode, as above — or take the risk and cable every
