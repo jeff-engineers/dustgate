@@ -3,7 +3,7 @@
  *  Plain TypeScript, no Angular, no browser — run by spec-runner.js.
  */
 
-import { SerialLog, classify, copyText, matches, type LogEntry, type LogLine } from './serial-log';
+import { SerialLog, unstamp, classify, copyText, matches, type LogEntry, type LogLine } from './serial-log';
 
 let failures = 0, checks = 0;
 function ok(name: string, cond: boolean, detail?: string): void {
@@ -94,6 +94,22 @@ group('S7 the list is capped');
   const l = new SerialLog(3);
   l.apply({ text: 'a\nb\nc\nd\ne\n', start: 0, next: 10, boot: 'a' }, 0);
   ok('oldest lines roll off', JSON.stringify(lines(l)) === '["c","d","e"]', JSON.stringify(lines(l)));
+}
+
+// ── the board's own stamps ───────────────────────────────────────────────────
+{
+  const now = Date.UTC(2026, 9, 4, 15, 35, 50, 0);
+  const a = unstamp('15:35:45.123Z [NODE] linked', now);
+  ok('a UTC stamp becomes the line time and leaves the text', a.at === Date.UTC(2026, 9, 4, 15, 35, 45, 123) && a.text === '[NODE] linked', JSON.stringify(a));
+  const b = unstamp('23:59:58.000Z [x] y', Date.UTC(2026, 9, 5, 0, 0, 1, 0));
+  ok('a stamp from just before UTC midnight lands on the day before', b.at === Date.UTC(2026, 9, 4, 23, 59, 58, 0), String(b.at));
+  const c = unstamp('+63.512s [WiFi] up', now);
+  ok('an uptime stamp is stripped, arrival time kept', c.at === now && c.text === '[WiFi] up');
+  ok('an unstamped line is left alone', unstamp('[E] lib', now).text === '[E] lib' && unstamp('[E] lib', now).at === now);
+  const l = new SerialLog();
+  l.apply({ text: '15:35:45.123Z [NODE] Link lost: x\n', start: 0, next: 36, boot: 'a' }, now);
+  const e = l.entries[0] as LogLine;
+  ok('a stamped line still sorts by its tag', e.group === 'boards' && e.level === 'err' && e.tag === '[NODE]', JSON.stringify(e));
 }
 
 console.log(`\n${checks - failures}/${checks} checks passed`);

@@ -24,7 +24,7 @@ export type LogFilter = 'all' | 'boards' | 'network' | 'problems';
 export interface LogLine {
   kind: 'line';
   seq: number;
-  /** When it reached this screen — the board's serial has no clock of its own. */
+  /** When the board printed it, when the board stamped it; otherwise when it reached this screen. */
   at: number;
   text: string;
   /** The leading [TAG], when there is one; drawn in its group's colour. */
@@ -67,6 +67,28 @@ export function classify(text: string, prev?: LogLine): Pick<LogLine, 'tag' | 'r
   const name = m ? m[1] : '';
   const group: LogGroup = BOARD_TAGS.test(name) ? 'boards' : NETWORK_TAGS.test(name) ? 'network' : 'other';
   return { tag, rest: text.slice(tag.length), group, level };
+}
+
+// The board stamps each line it prints (firmware/utils/SerialLog.cpp): "15:35:45.123Z "
+// in UTC once it has NTP, "+63.512s " (uptime) before that. Lines from the core's
+// own log_e() carry none. The stamp is taken off the text, so the [TAG] after it
+// still sorts the line, and a UTC one becomes the line's real time; `now` is when
+// the reply reached us, which only decides which UTC day the clock means.
+const STAMP_WALL = /^(\d\d):(\d\d):(\d\d)\.(\d{3})Z /;
+const STAMP_UP = /^\+\d+\.\d{3}s /;
+
+export function unstamp(text: string, now: number): { at: number; text: string } {
+  const m = text.match(STAMP_WALL);
+  if (m) {
+    const d = new Date(now);
+    let at = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), +m[1], +m[2], +m[3], +m[4]);
+    const half = 12 * 3600 * 1000;
+    if (at - now > half) at -= 2 * half;          // just past UTC midnight
+    else if (now - at > half) at += 2 * half;
+    return { at, text: text.slice(m[0].length) };
+  }
+  const u = text.match(STAMP_UP);
+  return u ? { at: now, text: text.slice(u[0].length) } : { at: now, text };
 }
 
 export function matches(e: LogEntry, filter: LogFilter, find: string): boolean {
@@ -139,7 +161,8 @@ export class SerialLog {
   }
 
   private line(text: string, now: number): void {
-    const l: LogLine = { kind: 'line', seq: ++this.seq, at: now, text, ...classify(text, this.lastLine) };
+    const u = unstamp(text, now);
+    const l: LogLine = { kind: 'line', seq: ++this.seq, at: u.at, text: u.text, ...classify(u.text, this.lastLine) };
     this.lastLine = l;
     this.push(l);
   }

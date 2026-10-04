@@ -2,6 +2,8 @@
 // utils/SerialCapture.h swaps in for `Serial`.
 #include <Arduino.h>
 #include <esp_rom_sys.h>
+#include <sys/time.h>
+#include <time.h>
 #include <esp_random.h>
 #include <freertos/FreeRTOS.h>
 #include <esp_attr.h>
@@ -196,14 +198,52 @@ size_t read(uint32_t from, char* out, size_t cap, uint32_t* start, uint32_t* nex
 // HWCDCSerial by name: in this file `Serial` means the tee itself.
 SerialTee g_serialTee;
 
-size_t SerialTee::write(uint8_t c) {
-    seriallog::write(&c, 1);
-    return HWCDCSerial.write(c);
+// ── line stamps ──────────────────────────────────────────────────────────────
+// Every line the tee carries starts with when it was printed, so a log read over
+// WiFi, or off a monitor, says WHEN without help from the reader. The clock is
+// the one the link log uses: NTP, in UTC ("15:35:45.123Z"), once the network has
+// answered; before that, uptime ("+63.512s"). Library lines that arrive through
+// the ROM channel (log_e) are not stamped — they are copied into the ring later,
+// from a task, and a stamp taken then would be wrong by however long that took.
+//
+// Two tasks printing at once can still interleave mid-line, as they always could;
+// the flag below is not locked, so the worst case is a stamp missing or doubled
+// on one of those interleaved lines.
+static bool s_lineStart = true;
+
+static size_t stampPrefix(char* out, size_t cap) {
+    struct timeval tv;
+    gettimeofday(&tv, nullptr);
+    if (tv.tv_sec > 1700000000) {
+        struct tm t;
+        gmtime_r(&tv.tv_sec, &t);
+        return snprintf(out, cap, "%02d:%02d:%02d.%03dZ ", t.tm_hour, t.tm_min, t.tm_sec, (int)(tv.tv_usec / 1000));
+    }
+    const unsigned long ms = millis();
+    return snprintf(out, cap, "+%lu.%03lus ", ms / 1000, ms % 1000);
 }
+
 size_t SerialTee::write(const uint8_t* buf, size_t len) {
-    seriallog::write(buf, len);
-    return HWCDCSerial.write(buf, len);
+    size_t i = 0;
+    while (i < len) {
+        if (s_lineStart && buf[i] != '\n' && buf[i] != '\r') {
+            char p[24];
+            const size_t n = stampPrefix(p, sizeof(p));
+            seriallog::write((const uint8_t*)p, n);
+            HWCDCSerial.write((const uint8_t*)p, n);
+            s_lineStart = false;
+        }
+        size_t j = i;
+        while (j < len && buf[j] != '\n') j++;
+        if (j < len) j++;                              // keep the newline with its line
+        seriallog::write(buf + i, j - i);
+        HWCDCSerial.write(buf + i, j - i);
+        if (buf[j - 1] == '\n') s_lineStart = true;
+        i = j;
+    }
+    return len;
 }
+size_t SerialTee::write(uint8_t c) { return write(&c, 1); }
 void SerialTee::begin(unsigned long baud) { HWCDCSerial.begin(baud); }
 // A command from the app goes first: it was sent on purpose, a moment ago.
 int  SerialTee::available()                { return seriallog::injectedAvailable() + HWCDCSerial.available(); }
