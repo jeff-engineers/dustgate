@@ -92,7 +92,7 @@ void RemoteActuatorBus::begin(const char* nodeId, const char* primaryId,
     _running   = true;
     // A node that dials in gets no task until the grace has passed (update() starts it);
     // anything else is dialled at once, as it always was.
-    if (!_capJoin) ensureTask();
+    if (!_capJoin && millis() >= _bootGraceUntilMs) ensureTask();
 }
 
 bool RemoteActuatorBus::ensureTask() {
@@ -573,7 +573,8 @@ void RemoteActuatorBus::update() {
     // somebody else's job). When the link is down and the node has had its grace to
     // dial in, start one: this is the fallback that dials it back.
     if (_running && !_taskAlive && !_inId) {
-        const bool inGrace = _capJoin && _downSinceMs && (millis() - _downSinceMs) < kDialInGraceMs;
+        const bool inGrace = (_capJoin && _downSinceMs && (millis() - _downSinceMs) < kDialInGraceMs) ||
+                             (int32_t)(_bootGraceUntilMs - millis()) > 0;
         if (!inGrace) ensureTask();
     }
     if (!_inId) return;

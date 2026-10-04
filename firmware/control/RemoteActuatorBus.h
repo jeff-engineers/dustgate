@@ -60,6 +60,13 @@ public:
     // few seconds the same work peaks far lower, and no node waits long.
     void setStartDelay(uint32_t ms) { _startDelayMs = ms; }
 
+    // At BOOT every node is assumed to dial in until proven otherwise: for this long no
+    // dial-out task is started, so a node that dials in (almost all of them, within a few
+    // seconds of the primary coming up) never costs a task at all, and only a node that has
+    // not appeared by then is dialled the old way. Call BEFORE begin(). Not used when the
+    // user pairs a board — an unowned node does not dial anyone, so that dial is immediate.
+    void setBootGrace(uint32_t ms) { _bootGraceUntilMs = millis() + ms; }
+
     // Tear the link down (topology re-upload removed or re-pointed this node).
     // Waits for the link task to leave ON ITS OWN — see the definition for why
     // it is never deleted from outside.
@@ -229,6 +236,7 @@ private:
     // task lives, so a node that dials in is given NO task while it is linked, and one is
     // started only when the link is down and its grace has run out.
     bool ensureTask();
+    uint32_t      _bootGraceUntilMs = 0;
     volatile bool _retire    = false;   // set by the task itself when an inbound link has taken over
     uint32_t      _inSinceMs = 0;       // when the inbound link attached
     void onEvent(WStype_t type, uint8_t* payload, size_t len);
