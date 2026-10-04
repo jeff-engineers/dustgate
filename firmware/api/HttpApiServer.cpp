@@ -1642,7 +1642,15 @@ void HttpApiServer::registerRoutes() {
     class MemoryGuard : public AsyncMiddleware {
     public:
         void run(AsyncWebServerRequest* req, ArMiddlewareNext next) override {
-            const bool api = req->url().startsWith("/api/") || req->url().startsWith("/shelly-rpc");
+            // WEBSOCKET UPGRADES ARE NOT STATIC FILES. "/ws" (the app), "/nodelink" and
+            // "/shelly-rpc" stay OPEN for as long as their client does, so a slot taken for
+            // one is never freed by the request ending — which is the leak that wedged the
+            // page-load guard on 2026-10-04 (a browser's long-lived /ws counted as a file
+            // in flight), and the cause of a spike client being refused as the 4th
+            // WebSocket in six seconds. They keep the API's lower heap floor and take no slot.
+            const String& u = req->url();
+            const bool api = u.startsWith("/api/") || u.startsWith("/shelly-rpc") ||
+                             u == "/ws" || u.startsWith("/nodelink");
             const size_t freeH = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
             int slot = -1;
             if (!api && freeH >= 28000) slot = staticSlotTake();
