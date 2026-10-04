@@ -1221,6 +1221,51 @@ int main(int argc, char** argv) {
     }
   }
 
+
+    // ── ota: a node is told to pull an image, and reports how it went ─────────
+    // PAIR: nodelink.test.js's "ota" block — same cases, same order, same literals.
+    {
+      using namespace topo::nodelink;
+      const char* md5 = "0123456789abcdef0123456789abcdef";
+      StaticJsonDocument<256> d;
+      buildOta(d.to<JsonObject>(), 7, "/node-pwm.bin", 1302295, md5, "3b738a5 1003-1200");
+      OtaOrder o; const char* err = nullptr;
+      ok("a well-formed OTA parses", parseOtaFrame(d.as<JsonObjectConst>(), o, err));
+      ok("and keeps what it was told", o.seq == 7 && o.size == 1302295 &&
+         std::string(o.path) == "/node-pwm.bin" && std::string(o.md5) == md5);
+      ok("the path bound",             kMaxOtaPath == 48);
+      ok("the smallest image",         kMinOtaBytes == 102400);
+      ok("the largest image is the slot", kMaxOtaBytes == 0x1E0000);
+
+      auto refused = [&](uint32_t seq, const std::string& path, uint32_t size, const std::string& m) {
+        StaticJsonDocument<256> x;
+        buildOta(x.to<JsonObject>(), seq, path.c_str(), size, m.c_str(), "x");
+        OtaOrder oo; const char* e = nullptr;
+        return !parseOtaFrame(x.as<JsonObjectConst>(), oo, e);
+      };
+      ok("a relative path is refused",        refused(1, "node.bin", 1302295, md5));
+      ok("a path past the bound is refused",  refused(1, "/" + std::string(48, 'a'), 1302295, md5));
+      ok("a path AT the bound is fine",       !refused(1, "/" + std::string(47, 'a'), 1302295, md5));
+      ok("an image that is not an image (a 404 page) is refused", refused(1, "/n.bin", 102399, md5));
+      ok("an image bigger than the slot is refused",               refused(1, "/n.bin", 0x1E0001, md5));
+      ok("a short md5 is refused",            refused(1, "/n.bin", 1302295, std::string(md5).substr(1)));
+      ok("an upper-case md5 is refused (one spelling on the wire)",
+         refused(1, "/n.bin", 1302295, "0123456789ABCDEF0123456789ABCDEF"));
+
+      StaticJsonDocument<96> st;
+      buildOtaState(st.to<JsonObject>(), "progress", 42);
+      ok("progress carries a percentage", (st["pct"] | -1) == 42);
+      StaticJsonDocument<96> st2;
+      buildOtaState(st2.to<JsonObject>(), "progress", 140);
+      ok("a percentage is clamped", (st2["pct"] | -1) == 100);
+      StaticJsonDocument<256> st3;
+      buildOtaState(st3.to<JsonObject>(), "fail", -1, "no room");
+      ok("fail carries a sentence", std::string(st3["err"] | "") == "no room" && !st3.containsKey("pct"));
+      StaticJsonDocument<320> st4;
+      buildOtaState(st4.to<JsonObject>(), "fail", -1, std::string(100, 'x').c_str());
+      ok("a long reason is cut to 64", std::string(st4["err"] | "").size() == 64);
+    }
+
   printf("\n%d/%d passed%s\n", passed, passed + failed,
          failed ? (", " + std::to_string(failed) + " FAILED").c_str() : "");
   return failed ? 1 : 0;

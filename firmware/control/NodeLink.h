@@ -51,6 +51,16 @@ static const unsigned long kSenseStaleMs    = 15000;
 // more to a board that kept four would leave it silently deaf to the rest.
 static const size_t kMaxSensorsPerNode = 4;
 
+// The bounds on an OTA frame. MAX_OTA_PATH / MIN_OTA_BYTES / MAX_OTA_BYTES in
+// nodelink.js — a PAIR, asserted literally on both sides. parseOtaFrame refuses
+// outside them WHOLE: a primary sending a longer path than a node would parse
+// would read as a node that never starts updating, with nothing on the wire to
+// say why. MIN is "not a 404 page"; MAX is the node's app slot (1.9 MiB, see
+// partitions-xiao-c5-node.csv), so a node says no before it has erased anything.
+static const size_t   kMaxOtaPath  = 48;
+static const uint32_t kMinOtaBytes = 100u * 1024u;
+static const uint32_t kMaxOtaBytes = 0x1E0000u;
+
 // A move that takes longer than this without a STATE(moving=false) is assumed
 // lost rather than left to wedge the move queue forever. Generously longer than
 // SERVO_SWEEP_MS + SERVO_HOLD_MS, and longer than a full-span rack traverse.
@@ -232,6 +242,28 @@ inline void buildState(JsonObject out, const char* selectorId, const char* state
 }
 
 inline void buildPong(JsonObject out) { out["t"] = "PONG"; }
+
+// OTA — "pull this image and install it". See ota() in nodelink.js for why it is
+// a pull rather than a push. `md5` is 32 LOWERCASE hex chars; one spelling on the
+// wire, so neither side has to normalise.
+inline void buildOta(JsonObject out, uint32_t seq, const char* path, uint32_t size,
+                     const char* md5, const char* fw) {
+    out["t"]    = "OTA";
+    out["seq"]  = seq;
+    out["path"] = path;
+    out["size"] = size;
+    out["md5"]  = md5;
+    out["fw"]   = fw;
+}
+
+// OTASTATE — a node's account of an update it was told to run. pct < 0 omits it,
+// err null omits it (the same omit-don't-zero rule as SENSE).
+inline void buildOtaState(JsonObject out, const char* state, int pct = -1, const char* err = nullptr) {
+    out["t"]     = "OTASTATE";
+    out["state"] = state;
+    if (pct >= 0) out["pct"] = pct > 100 ? 100 : pct;
+    if (err && *err) out["err"] = std::string(err).substr(0, 64);
+}
 
 // SENSE — "this sensor says on, or off". ONE BIT, AND THIS BOARD DECIDES IT.
 //
@@ -487,6 +519,45 @@ inline bool parseConfigFrame(JsonObjectConst f, SensorSpec* out, size_t maxOut,
         n++;
     }
     countOut = n;
+    return true;
+}
+
+// An OTA order, decoded. Fixed buffers — a node has no business allocating to
+// receive an instruction to replace itself.
+struct OtaOrder {
+    uint32_t seq  = 0;
+    char     path[kMaxOtaPath + 1] = {0};
+    uint32_t size = 0;
+    char     md5[33] = {0};
+    char     fw[24]  = {0};
+};
+
+// Refuses WHOLE, with a reason a log can print, and mirrors validateFrame's `OTA`
+// case in nodelink.js check for check. TYPE FIRST on every field, for the reason
+// positionMm explains above: as<int>() on a string is 0, which here would read as
+// a size that fails the bound — right answer, wrong reason, and a log that blames
+// the wrong thing.
+inline bool parseOtaFrame(JsonObjectConst f, OtaOrder& out, const char*& err) {
+    if (!_eq(f["t"], "OTA"))               { err = "not an OTA frame"; return false; }
+    if (!f.containsKey("seq") || !f["seq"].is<uint32_t>()) { err = "missing seq"; return false; }
+    const char* path = f["path"].as<const char*>();
+    if (!path || path[0] != '/' || strlen(path) > kMaxOtaPath) { err = "bad path"; return false; }
+    if (!f["size"].is<uint32_t>())         { err = "size must be a number"; return false; }
+    const uint32_t size = f["size"].as<uint32_t>();
+    if (size < kMinOtaBytes || size > kMaxOtaBytes) { err = "size out of range"; return false; }
+    const char* md5 = f["md5"].as<const char*>();
+    if (!md5 || strlen(md5) != 32)         { err = "md5 must be 32 hex chars"; return false; }
+    for (int i = 0; i < 32; i++) {
+        const char c = md5[i];
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) { err = "md5 must be lowercase hex"; return false; }
+    }
+    const char* fw = f["fw"].as<const char*>();
+    if (!fw || !*fw)                       { err = "missing fw"; return false; }
+    out.seq  = f["seq"].as<uint32_t>();
+    strlcpy_(out.path, path, sizeof(out.path));
+    out.size = size;
+    strlcpy_(out.md5, md5, sizeof(out.md5));
+    strlcpy_(out.fw, fw, sizeof(out.fw));
     return true;
 }
 

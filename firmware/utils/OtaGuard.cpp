@@ -5,7 +5,7 @@
 
 // The Arduino core marks an image valid inside initArduino() unless this says
 // otherwise. Ours says: not yet — tick() decides.
-bool verifyRollbackLater() { return true; }
+extern "C" bool verifyRollbackLater() { return true; }   // C linkage: the core's is a weak C symbol
 
 namespace otaguard {
 

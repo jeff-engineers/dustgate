@@ -43,9 +43,9 @@
 const NODELINK_VERSION = 1;
 
 /** Frame types, primary → secondary. */
-const P2S = ['HELLO', 'SET', 'CONFIG', 'PING'];
+const P2S = ['HELLO', 'SET', 'CONFIG', 'PING', 'OTA'];
 /** Frame types, secondary → primary. */
-const S2P = ['WELCOME', 'ACK', 'STATE', 'SENSE', 'PONG'];
+const S2P = ['WELCOME', 'ACK', 'STATE', 'SENSE', 'PONG', 'OTASTATE'];
 
 // CONFIG and SENSE were added 2026-09-14 WITHOUT bumping NODELINK_VERSION, and
 // that is deliberate rather than an oversight. Both ends ignore a frame type
@@ -94,6 +94,22 @@ const SENSE_STALE_MS = 15000;
  * refusal has to be symmetrical or it is not a refusal.
  */
 const MAX_SENSORS_PER_NODE = 4;
+
+/**
+ * The bounds on an OTA frame — the image a node is told to pull.
+ *
+ * ⚠️ JS↔C++ PAIR — `kMaxOtaPath`, `kMinOtaBytes`, `kMaxOtaBytes` in
+ * firmware/control/NodeLink.h. The node refuses a frame outside them WHOLE, so a
+ * primary that sent a longer path than a node would parse would read as a node
+ * that never starts updating, with nothing on the wire to say why. Size is
+ * bounded below because anything smaller than 100 KB is not a firmware image
+ * (it is the 404 page), and above by the node's app slot (1.9 MiB) so the node
+ * says no before it has erased anything.
+ */
+const MAX_OTA_PATH = 48;
+const MIN_OTA_BYTES = 100 * 1024;
+const MAX_OTA_BYTES = 0x1E0000;
+const OTA_STATES = ['start', 'progress', 'done', 'fail'];
 
 /** Reconnect backoff for a primary that can't reach a secondary. */
 const RECONNECT_MIN_MS = 1000;
@@ -209,6 +225,26 @@ function hello(primaryId, nodeId, takeover = false) {
 }
 function ping() {
   return { t: 'PING' };
+}
+
+/**
+ * Tell a node to update itself (2026-10-03). The node PULLS the image over plain
+ * HTTP from whoever is on the other end of this socket — a 1.4 MB image through a
+ * WebSocket frame would be a protocol to write and get right, where a GET is one
+ * the ESP32 core already ships. This frame carries only what the node needs to
+ * fetch and to check what it fetched:
+ *
+ * @param {number} seq
+ * @param {string} path   absolute URL path on the primary, e.g. "/node-pwm.bin"
+ * @param {number} size   bytes — the node refuses to start unless this fits its
+ *                        spare slot, and refuses the download if it is not this long
+ * @param {string} md5    32 hex chars of the whole image, verified before the
+ *                        slot is made bootable
+ * @param {string} fw     the build stamp the image carries — echoed back in
+ *                        OTASTATE so a progress report names what it is installing
+ */
+function ota(seq, path, size, md5, fw) {
+  return { t: 'OTA', seq, path, size, md5, fw };
 }
 
 /**
@@ -427,6 +463,18 @@ function sense(sensorId, on, level, amps, floorA, tripA, fault) {
   if (fault) f.fault = true;
   return f;
 }
+/**
+ * A node's account of an update it was told to run. `pct` (0..100) rides
+ * 'progress'; `err` (a short sentence for a person) rides 'fail'. 'done' means the
+ * image is written and verified and the node is ABOUT to reboot — the next thing
+ * the primary sees is a WELCOME carrying the new `fw`, which is the real proof.
+ */
+function otaState(state, pct, err) {
+  const f = { t: 'OTASTATE', state };
+  if (typeof pct === 'number') f.pct = Math.max(0, Math.min(100, Math.round(pct)));
+  if (err) f.err = String(err).slice(0, 64);
+  return f;
+}
 function pong() {
   return { t: 'PONG' };
 }
@@ -581,6 +629,22 @@ function validateFrame(f, direction) {
       str('selectorId'); str('stateId');
       if (typeof f.moving !== 'boolean') errs.push('STATE.moving must be a boolean');
       break;
+    case 'OTA':
+      num('seq', 0, Number.MAX_SAFE_INTEGER);
+      if (typeof f.path !== 'string' || !f.path.startsWith('/') || f.path.length > MAX_OTA_PATH) {
+        errs.push(`OTA.path must be an absolute path of at most ${MAX_OTA_PATH} chars`);
+      }
+      num('size', MIN_OTA_BYTES, MAX_OTA_BYTES);
+      if (typeof f.md5 !== 'string' || !/^[0-9a-f]{32}$/.test(f.md5)) {
+        errs.push('OTA.md5 must be 32 lowercase hex chars');
+      }
+      str('fw');
+      break;
+    case 'OTASTATE':
+      if (!OTA_STATES.includes(f.state)) errs.push(`OTASTATE.state must be one of ${OTA_STATES.join('|')}`);
+      if (f.pct !== undefined) num('pct', 0, 100);
+      if (f.err !== undefined && typeof f.err !== 'string') errs.push('OTASTATE.err must be a string');
+      break;
     case 'PING':
     case 'PONG':
       break;
@@ -592,7 +656,7 @@ module.exports = {
   NODELINK_VERSION, P2S, S2P,
   PING_INTERVAL_MS, PONG_TIMEOUT_MS, RECONNECT_MIN_MS, RECONNECT_MAX_MS,
   SENSE_REPEAT_MS, SENSE_STALE_MS, MAX_SENSORS_PER_NODE,
-  MAX_RST_LEN,
-  hello, welcome, withBootInfo, set, config, ack, state, sense, ping, pong, welcomeAccepted, clampsOn,
+  MAX_RST_LEN, MAX_OTA_PATH, MIN_OTA_BYTES, MAX_OTA_BYTES, OTA_STATES,
+  hello, welcome, withBootInfo, set, config, ack, state, sense, ping, pong, ota, otaState, welcomeAccepted, clampsOn,
   validateFrame,
 };

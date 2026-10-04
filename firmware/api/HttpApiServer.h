@@ -137,6 +137,18 @@ public:
     static bool otaRebootDue();
     static bool otaInProgress();
 
+    // The NODE firmware images this primary serves (POST /api/node-image stores
+    // them in the filesystem; nodes pull them with a plain GET). Kind 0 is the PWM
+    // node, 1 the slider node. `fw` is the build stamp the image carries, so the
+    // Boards screen can compare it with what a node reports in its WELCOME.
+    struct NodeImage { bool present = false; char fw[24] = {0}; char md5[33] = {0}; uint32_t size = 0; };
+    static NodeImage nodeImage(int kind);
+    static const char* nodeImagePath(int kind);   // "/node-pwm.bin" | "/node-linear.bin"
+
+    // True once after POST /api/nodes/update; `id` is the node's id or host. The
+    // loop acts on it (the link objects belong to the loop, not the AsyncTCP task).
+    bool consumeNodeUpdate(String& id);
+
     // Rewrite one machine's plug in the STORED layout — its address, kind and MAC —
     // and flag the runtime to re-adopt. The one way the device edits a layout
     // itself, used when a plug is found at a new address (control/OutletRelocate.h).
@@ -380,6 +392,7 @@ private:
 
     // topology runtime hand-off (see consumeTopologyChanged / publishTopologyStatus)
     bool   _topoChangedPending = false;
+    String _nodeUpdateWanted;
     String _topoStatusJson;
 
     // NodeLink secondary endpoint (see consumeNodeSet / reportNodeState)

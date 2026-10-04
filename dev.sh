@@ -121,9 +121,10 @@
 #   bash dev.sh monitor both        # primary + node interleaved, one clock, logged
 #                                   #   to .monitor-logs/; type `p: cmd` / `n: cmd`
 #   bash dev.sh monitor … --take    # stop whatever already holds that board's port
-#   bash dev.sh ota [host] [--slider] # update the PRIMARY over WiFi: build, post to /api/ota, wait
-#                                   #   for it to prove itself or roll back. Needs the OTA partition
-#                                   #   table, which one cable flash installs.
+#   bash dev.sh ota [host] [--slider] [--no-nodes|--nodes-only]
+#                                   # update over WiFi: the primary (rolls back if it cannot stay on
+#                                   #   WiFi) and the node images it serves; tap "update" per board in
+#                                   #   the app. Needs the OTA partition tables, one cable flash each.
 #   bash dev.sh linklog [host]      # the primary's link log over WiFi, saved + summarised
 #   bash dev.sh log [host] [--once] # follow the brain's serial output over WiFi, no cable
 #                                   #   (drops, outages, node reboots, rejoins) — no USB needed
@@ -1230,22 +1231,31 @@ port_is_free() {
   return 1
 }
 
-# run_ota [--slider] [host]
-# Update the PRIMARY over WiFi — no cable, no filesystem wipe, the saved layout is
-# untouched (only the app slot changes). Builds the firmware, posts it to
-# POST /api/ota, then waits for the board to come back and says which commit it
-# is running. The new image is on probation (firmware/utils/OtaGuard.h): the board
-# rolls back by itself if it cannot stay on WiFi, so a bad push costs a minute.
+# run_ota [--slider] [--no-nodes | --nodes-only] [host]
+# Update over WiFi — no cable, no filesystem wipe, the saved layout is untouched.
+#
+#   1. builds the primary AND both node programs, so all three come from one commit
+#      (a shop whose boards disagree about NodeLink is the failure this prevents);
+#   2. posts the primary firmware to POST /api/ota and waits for the board to come
+#      back and prove itself — the new image is on probation (firmware/utils/
+#      OtaGuard.h) and the board rolls back by itself if it cannot stay on WiFi;
+#   3. stages the node images on the primary (POST /api/node-image). It does NOT
+#      push them to the nodes: the Boards screen shows "update available" per
+#      board and YOU tap it, one at a time, when the shop is quiet.
 #
 # Needs a board whose partition table already has two app slots — ONE cable flash
 # (`bash dev.sh flash`) installs that; /api/info says "ota":"nogo" until then.
-# Does NOT touch the filesystem, so a UI change still wants `flash --ui`.
-# The API key comes off the board's own /api/info, as linklog and log do.
+# Does NOT touch the filesystem partition's contents, so a UI change still wants
+# `flash --ui`. The API key comes off the board's own /api/info, as linklog does.
+#   --no-nodes     primary firmware only (skips the two node builds)
+#   --nodes-only   stage the node images, leave the primary alone
 run_ota() {
-  local host="" env="$PRIMARY_ENV"
+  local host="" env="$PRIMARY_ENV" do_primary=1 do_nodes=1
   for a in "$@"; do
     case "$a" in
       --slider|--linear|--rack) env="$LINEAR_PRIMARY_ENV" ;;
+      --no-nodes)   do_nodes=0 ;;
+      --nodes-only) do_primary=0 ;;
       *) host="$a" ;;
     esac
   done
@@ -1261,49 +1271,85 @@ run_ota() {
   ota="$(printf '%s' "$info" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("ota","none"))' 2>/dev/null || echo none)"
   local was; was="$(printf '%s' "$info" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("build","?"), d.get("slot","?"))' 2>/dev/null)"
   echo "▶ OTA to $host — running: $was  (ota: $ota)"
-  case "$ota" in
-    nogo) echo "  ✗ This board's partition table has one app slot. Flash it ONCE by cable"
-          echo "    (bash dev.sh flash) to install the OTA table; every update after that is this command."
-          exit 1 ;;
-    probation) echo "  ✗ The running image is still on probation (not yet marked valid). Wait a minute and retry."
-               exit 1 ;;
-    none) echo "  ⚠ Firmware older than the OTA feature — it cannot take this. Flash by cable once."
-          exit 1 ;;
-  esac
-
-  use_core_for_env "$env" >/dev/null
-  echo "▶ Building $(describe_env "$env")…"
-  "$PIO" run -j 1 -e "$env" >/dev/null || { echo "  ✗ Build failed — run: pio run -e $env"; exit 1; }
-  local bin="$SCRIPT_DIR/.pio.nosync/build/$env/firmware.bin"
-  [[ -f "$bin" ]] || { echo "  ✗ No $bin"; exit 1; }
-  local md5 size; md5="$(md5 -q "$bin" 2>/dev/null || md5sum "$bin" | cut -d' ' -f1)"
-  size="$(wc -c < "$bin" | tr -d ' ')"
-  echo "▶ Uploading $size bytes (md5 ${md5:0:8}…)"
-  local reply
-  reply="$(curl -sS --max-time 180 -X POST -H "X-Api-Key: $key" -H "X-Md5: $md5" -H 'Expect:' \
-            -H 'Content-Type: application/octet-stream' --data-binary "@$bin" "http://$host/api/ota" 2>&1)" || true
-  if ! printf '%s' "$reply" | grep -q '"rebooting":true'; then
-    echo "  ✗ The board refused it: $reply"
-    exit 1
+  if [[ $do_primary == 1 ]]; then
+    case "$ota" in
+      nogo) echo "  ✗ This board's partition table has one app slot. Flash it ONCE by cable"
+            echo "    (bash dev.sh flash) to install the OTA table; every update after that is this command."
+            exit 1 ;;
+      probation) echo "  ✗ The running image is still on probation (not yet marked valid). Wait a minute and retry."
+                 exit 1 ;;
+      none) echo "  ✗ Firmware older than the OTA feature — it cannot take this. Flash by cable once."
+            exit 1 ;;
+    esac
   fi
-  echo "  Accepted — the board is rebooting into the new slot."
-  echo "▶ Waiting for it to come back (and to prove itself — ~30 s on WiFi)…"
-  sleep 6
-  local i now
-  for i in $(seq 1 45); do
-    now="$(curl -fsS --max-time 3 "http://$host/api/info" 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("build","?"), d.get("slot","?"), d.get("ota","?"))' 2>/dev/null || true)"
-    if [[ -n "$now" ]]; then
-      echo "  now running: $now"
-      case "$now" in
-        *valid) echo "  ✓ Marked valid — the update is permanent."; return 0 ;;
-        *probation) : ;;   # up, but not yet believed
-      esac
+
+  # Build everything first: a failure here must not leave the shop half-updated.
+  local penv_bin nbins=()
+  if [[ $do_primary == 1 ]]; then
+    use_core_for_env "$env" >/dev/null
+    echo "▶ Building the primary ($(describe_env "$env"))…"
+    "$PIO" run -j 1 -e "$env" >/dev/null || { echo "  ✗ Build failed — run: pio run -e $env"; exit 1; }
+    penv_bin="$SCRIPT_DIR/.pio.nosync/build/$env/firmware.bin"
+    [[ -f "$penv_bin" ]] || { echo "  ✗ No $penv_bin"; exit 1; }
+  fi
+  if [[ $do_nodes == 1 ]]; then
+    local ne
+    for ne in "$NODE_ENV" "$LINEAR_NODE_ENV"; do
+      use_core_for_env "$ne" >/dev/null
+      echo "▶ Building the node image ($(describe_env "$ne"))…"
+      "$PIO" run -j 1 -e "$ne" >/dev/null || { echo "  ✗ Build failed — run: pio run -e $ne"; exit 1; }
+    done
+  fi
+
+  if [[ $do_primary == 1 ]]; then
+    local md5 size; md5="$(md5 -q "$penv_bin" 2>/dev/null || md5sum "$penv_bin" | cut -d' ' -f1)"
+    size="$(wc -c < "$penv_bin" | tr -d ' ')"
+    echo "▶ Uploading the primary: $size bytes (md5 ${md5:0:8}…)"
+    local reply
+    reply="$(curl -sS --max-time 180 -X POST -H "X-Api-Key: $key" -H "X-Md5: $md5" -H 'Expect:' \
+              -H 'Content-Type: application/octet-stream' --data-binary "@$penv_bin" "http://$host/api/ota" 2>&1)" || true
+    if ! printf '%s' "$reply" | grep -q '"rebooting":true'; then
+      echo "  ✗ The board refused it: $reply"
+      exit 1
     fi
-    sleep 4
-  done
-  echo "  ⚠ It answered but has not been marked valid yet — or it rolled back."
-  echo "    Check:  curl http://$host/api/info    (slot/ota)   and   bash dev.sh log $host"
-  exit 1
+    echo "  Accepted — the board is rebooting into the new slot."
+    echo "▶ Waiting for it to come back and prove itself (~30 s on WiFi)…"
+    sleep 6
+    local i now proven=0
+    for i in $(seq 1 45); do
+      now="$(curl -fsS --max-time 3 "http://$host/api/info" 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("build","?"), d.get("slot","?"), d.get("ota","?"))' 2>/dev/null || true)"
+      if [[ -n "$now" ]]; then
+        case "$now" in *valid) echo "  now running: $now"; echo "  ✓ Marked valid — the update is permanent."; proven=1; break ;; esac
+      fi
+      sleep 4
+    done
+    if [[ $proven == 0 ]]; then
+      echo "  ⚠ It has not been marked valid — it may have rolled back, or is still on probation."
+      echo "    Check:  curl http://$host/api/info    (slot/ota)   and   bash dev.sh log $host"
+      exit 1
+    fi
+    # The key survives the reboot (NVS), but take it fresh in case it was regenerated.
+    key="$(curl -fsS --max-time 5 "http://$host/api/info" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("apiKey",""))')"
+  fi
+
+  if [[ $do_nodes == 1 ]]; then
+    local kind ne2 bin fw nmd5 nsize
+    for kind in pwm linear; do
+      [[ $kind == pwm ]] && ne2="$NODE_ENV" || ne2="$LINEAR_NODE_ENV"
+      bin="$SCRIPT_DIR/.pio.nosync/build/$ne2/firmware.bin"
+      fw="$(cat "$SCRIPT_DIR/.pio.nosync/build/$ne2/fw.stamp" 2>/dev/null || true)"
+      [[ -f "$bin" && -n "$fw" ]] || { echo "  ✗ No node image / stamp for $ne2"; exit 1; }
+      nmd5="$(md5 -q "$bin" 2>/dev/null || md5sum "$bin" | cut -d' ' -f1)"
+      nsize="$(wc -c < "$bin" | tr -d ' ')"
+      echo "▶ Staging the $kind node image on the primary ($nsize bytes, $fw)…"
+      local r
+      r="$(curl -sS --max-time 120 -X POST -H "X-Api-Key: $key" -H "X-Fw: $fw" -H "X-Md5: $nmd5" -H 'Expect:' \
+            -H 'Content-Type: application/octet-stream' --data-binary "@$bin" "http://$host/api/node-image?kind=$kind" 2>&1)" || true
+      printf '%s' "$r" | grep -q '"ok":true' || { echo "  ✗ The primary refused it: $r"; exit 1; }
+    done
+    echo "  ✓ Node images staged. Open the Boards screen — a board whose firmware differs"
+    echo "    shows \"update available\". Tap it for one board at a time, with the shop quiet."
+  fi
 }
 
 # run_linklog [host]

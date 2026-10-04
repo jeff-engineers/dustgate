@@ -124,8 +124,24 @@ public:
         int      capServos;
         int      capLinear;
         int      capClamps;   // caps.ct — 0 for every board flashed before 2026-09-15
+        // An update this node was told to run (OTA / OTASTATE): "" when none,
+        // else start | progress | done | fail. `otaPct` is -1 until reported.
+        char     ota[9];
+        int      otaPct;
+        char     otaErr[65];
     };
     NodeInfo info() const;
+
+    // Tell this node to pull and install an image from the primary. Called from
+    // the main loop; the frame itself goes out on the link task like CONFIG.
+    // Returns false (and says why through `why`) when the node is not linked or
+    // is already updating. The node does its own refusing for everything it
+    // alone can know (a gate moving, no second slot) and answers in OTASTATE.
+    bool requestOta(const char* path, uint32_t size, const char* md5, const char* fw,
+                    const char*& why);
+    // Record a refusal made on the PRIMARY's side (a tool running, no image
+    // staged) so the Boards screen has one place to read "why not" from.
+    void noteOtaRefused(const char* why);
 
     // ── sensing (tool-sensing RFC §5.6) ────────────────────────────────────
     // Tell the node what the layout says is wired to it, and read back what it
@@ -247,6 +263,14 @@ private:
     // WELCOME instead, which costs one small frame per reconnect.
     char     _cfgFrame[512] = "";
     bool     _cfgPending    = false;
+    // OTA order, sent by the link task. See requestOta().
+    bool     _otaPending    = false;
+    char     _otaFrame[256] = "";
+    uint32_t _otaSeq        = 0;
+    char     _otaState[9]   = "";
+    int      _otaPct        = -1;
+    char     _otaErr[65]    = "";
+    uint32_t _otaTouchedMs  = 0;   // last time the order or a report moved the state — a silent node is not 'updating' for ever
     bool     _cfgValid      = false;   // have we ever been given one?
 
     struct SenseState {

@@ -660,12 +660,37 @@ export class DemoApiService extends ApiService {
     };
   }
 
+  /** The demo's staged update: the FIRST paired board that is up is "behind", and
+   *  tapping Update plays out ~6 s of progress, after which it reports the new
+   *  stamp. It exists so the Boards screen's update states can be looked at without
+   *  hardware; there is no image and nothing is installed. */
+  private readonly demoUpdated = new Set<string>();
+  private readonly demoUpdating = new Map<string, number>();
+  override async updateNode(id: string): Promise<unknown> {
+    this.demoUpdating.set(id, Date.now());
+    return { ok: true };
+  }
+  private demoOta(id: string, firstUp: boolean): Partial<NodeLinkState> {
+    const IMAGE = '1.0.1-demo';
+    const t = this.demoUpdating.get(id);
+    if (t !== undefined) {
+      const pct = Math.min(100, Math.round(((Date.now() - t) / 6000) * 100));
+      if (pct >= 100) { this.demoUpdating.delete(id); this.demoUpdated.add(id); }
+      else return { image: IMAGE, update: false, ota: 'progress', otaPct: pct };
+    }
+    if (this.demoUpdated.has(id)) return { image: IMAGE, update: false, fw: IMAGE };
+    return firstUp ? { image: IMAGE, update: true } : {};
+  }
+
   override async getNodes(): Promise<NodeLinkState[]> {
     // node-2 is simulated as UNREACHABLE — the interesting case, and the one that's
     // hard to stage on a bench with two working boards.
+    let firstUpSeen = false;
     return [...this.pairedHosts()].map(host => {
       const known = this.demoNodes.find(n => n.host === host);
       const online = host !== 'dustgate-node-2';
+      const firstUp = online && !firstUpSeen;
+      if (online) firstUpSeen = true;
       // CAPS FOLLOW THE LAYOUT, because in the demo the layout IS the hardware.
       // They were hardcoded to `linear: 0`, so the demo's slider node reported
       // itself as a four-channel servo board and drew four ports under a rack.
@@ -692,6 +717,7 @@ export class DemoApiService extends ApiService {
           : { servos: known?.servos ?? 0, linear: 0,
               ...(known?.ct ? { ct: known.ct } : {}) },
         ...(known?.ct ? { sense: this.senseFor(host, online) } : {}),
+        ...this.demoOta(host, firstUp),
       };
     });
   }

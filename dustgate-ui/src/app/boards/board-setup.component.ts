@@ -171,6 +171,12 @@ interface BoardRow {
                  [class.warn]="c.state === 'warn'">
               <span class="cdot"></span>{{ c.text }}
             </div>
+            <!-- An update is a state of the board, so it is shown at rest like the
+                 clamp is, and it names what will happen before anyone taps. -->
+            <div class="clamp" *ngIf="updateLine(r) as u" [class.on]="u.state === 'ok'"
+                 [class.warn]="u.state === 'warn'">
+              <span class="cdot"></span>{{ u.text }}
+            </div>
           </ng-container>
           <ng-template #renameBox>
             <input class="rename" [(ngModel)]="renameText" (keyup.enter)="commitRename()"
@@ -188,6 +194,9 @@ interface BoardRow {
             <!-- UNPAIR, not "Remove". The word is the guard: removing a board means
                  forgetting hardware, and next to a Rename it reads like tidying a
                  list. Same word as the canvas board menu. -->
+            <button class="act" *ngIf="!r.primary && r.link?.update && !updating(r)"
+                    (click)="update(r)"
+                    title="The board pulls the new firmware from this primary, restarts, and holds its gates for about half a minute">Update</button>
             <button class="act" *ngIf="!r.primary"
                     [disabled]="r.gates > 0" (click)="remove(r)">Unpair</button>
           </ng-container>
@@ -558,6 +567,39 @@ export class BoardSetupComponent implements OnInit, OnDestroy {
     if (ms < 1500) return 'just now';
     if (ms < 60000) return `${Math.round(ms / 1000)}s ago`;
     return `${Math.round(ms / 60000)}m ago`;
+  }
+
+  /** Is this board part-way through taking an update? The buttons hide for it. */
+  updating(r: BoardRow): boolean {
+    return r.link?.ota === 'start' || r.link?.ota === 'progress';
+  }
+
+  /** The line under a board's name about its firmware, or null when there is
+   *  nothing to say. Only ever about a board that is up to be updated or has
+   *  just been; an out-of-date board that is OFF says nothing here, because
+   *  "Not answering" already is the problem. */
+  updateLine(r: BoardRow): { text: string; state: 'ok' | 'warn' | '' } | null {
+    const l = r.link;
+    if (!l || r.primary) return null;
+    if (l.ota === 'start') return { text: 'Updating — asking the board to fetch it…', state: '' };
+    if (l.ota === 'progress') return { text: `Updating — ${l.otaPct ?? 0}%. Gates on this board hold until it is back.`, state: '' };
+    if (l.ota === 'done') return { text: 'Updated — restarting…', state: 'ok' };
+    if (l.ota === 'fail') return { text: `Update did not run: ${l.otaErr || 'the board gave no reason'}`, state: 'warn' };
+    if (l.update) return { text: `Update available (${l.fw || 'unknown'} → ${l.image})`, state: '' };
+    return null;
+  }
+
+  async update(r: BoardRow): Promise<void> {
+    if (!window.confirm(`Update ${r.name}? It restarts and holds its gates for about half a minute. ` +
+                        `Do it with the shop quiet.`)) return;
+    try {
+      await this.api.updateNode(r.id);
+    } catch (e: unknown) {
+      this.error = this.message(e);
+      return;
+    }
+    await this.refreshLinks();
+    this.rebuild();
   }
 
   subtitle(r: BoardRow): string {
