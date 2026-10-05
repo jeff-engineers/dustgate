@@ -19,8 +19,18 @@ int main(int argc, char** argv) {
             if (t.rfind("/rpc/Switch.GetStatus", 0) == 0) {
                 double w = 0; std::ifstream f(file); f >> w;
                 body = "{\"id\":0,\"source\":\"test\",\"output\":true,\"apower\":" + std::to_string(w) + ",\"voltage\":120.0}";
-            } else if (t.rfind("/rpc/Switch.Set", 0) == 0) {
+            } else if (t.rfind("/rpc/Switch.Set", 0) == 0 && t.rfind("/rpc/Switch.SetConfig", 0) != 0) {
                 std::ofstream(file + ".sw") << t; body = "{\"was_on\":true}";
+            } else if (t.rfind("/rpc/Switch.GetConfig", 0) == 0) {
+                std::string n; std::ifstream f(file + ".name"); std::getline(f, n);
+                body = "{\"id\":0,\"name\":" + (n.empty() ? std::string("null") : "\"" + n + "\"") + "}";
+            } else if (t.rfind("/rpc/Ws.GetConfig", 0) == 0) {
+                body = "{\"server\":\"\",\"enable\":false,\"ssl_ca\":\"*\"}";           // nobody's: an unclaimed plug
+            } else if (req.method() == http::verb::post && t == "/rpc") {
+                // Switch.SetConfig {"name":"..."}: remember it, the way a plug would.
+                const std::string b = req.body(); const size_t at = b.find("\"name\":\"");
+                if (at != std::string::npos) { const size_t e = b.find('"', at + 8); std::ofstream(file + ".name") << b.substr(at + 8, e - at - 8); }
+                body = "{\"result\":{\"restart_required\":false}}";
             } else body = "{}";
             http::response<http::string_body> res{http::status::ok, req.version()};
             res.set(http::field::content_type, "application/json"); res.body() = body; res.prepare_payload(); res.keep_alive(false);

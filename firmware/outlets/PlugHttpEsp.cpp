@@ -53,6 +53,8 @@ bool resolveHost(const char* host, std::string& ipOut, uint32_t timeoutMs) {
 
 void log(const std::string& line) { DEBUG_PRINTLN(line.c_str()); }
 
+void sleepMs(uint32_t ms) { delay(ms); }
+
 }  // namespace plughttp
 
 #endif

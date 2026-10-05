@@ -44,4 +44,7 @@ bool resolveHost(const char* host, std::string& ipOut, uint32_t timeoutMs);
 // One console line, no trailing newline.
 void log(const std::string& line);
 
+// Wait, off the network thread (delay() on the ESP32). Used between two writes to one plug.
+void sleepMs(uint32_t ms);
+
 }  // namespace plughttp

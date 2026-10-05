@@ -21,8 +21,9 @@ test: all
 	bash test/e2e.sh
 	bash test/e2e_plugs.sh
 	bash test/e2e_api.sh
+	bash test/e2e_outlets.sh
 OUTLETS := ../firmware/outlets/ShellyGen2Outlet.cpp ../firmware/outlets/TasmotaOutlet.cpp
-$(BIN): src/main.cpp src/PlugHttpNative.cpp src/PlugPoller.h src/NodeHub.h src/SessionBus.h $(OUTLETS) $(wildcard ../firmware/control/*.h) $(wildcard ../firmware/outlets/*.h) $(wildcard src/*.h) ../firmware/api/ApiCore.h
+$(BIN): src/main.cpp src/PlugHttpNative.cpp src/PlugPoller.h src/Sweep.h src/NodeHub.h src/SessionBus.h $(OUTLETS) $(wildcard ../firmware/control/*.h) $(wildcard ../firmware/outlets/*.h) $(wildcard src/*.h) ../firmware/api/ApiCore.h
 	@mkdir -p build
 	$(CXX) $(CXXFLAGS) -DDUSTGATE_NATIVE $(INC) src/main.cpp src/PlugHttpNative.cpp $(OUTLETS) -o $@ -L$(BOOST)/lib -pthread
 clean:

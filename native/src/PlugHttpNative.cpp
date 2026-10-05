@@ -5,7 +5,9 @@
 #include <boost/beast.hpp>
 #include <netdb.h>
 #include <arpa/inet.h>
+#include <chrono>
 #include <cstdio>
+#include <thread>
 #include "PlugHttp.h"
 #include "Log.h"
 
@@ -31,25 +33,31 @@ static Reply request(http::verb verb, const std::string& url, const std::string&
     std::string host = hostport, port = g_port;
     const size_t colon = hostport.find(':');
     if (colon != std::string::npos) { host = hostport.substr(0, colon); port = hostport.substr(colon + 1); }
+    // ASYNC operations driven to completion one at a time: beast::tcp_stream deadlines only apply to async calls, and a
+    // blocking connect to a dead address would otherwise wait out the OS's own timeout (over a minute) per plug.
     try {
         net::io_context io;
         tcp::resolver rs(io);
         beast::tcp_stream s(io);
+        beast::error_code ec;
+        const auto results = rs.resolve(host, port, ec);
+        if (ec) return r;
+        auto step = [&](auto&& start) { ec = {}; start(); io.restart(); io.run(); return !ec; };
         s.expires_after(std::chrono::milliseconds(connectMs ? connectMs : 5000));
-        s.connect(rs.resolve(host, port));
+        if (!step([&] { s.async_connect(results, [&](beast::error_code e, const tcp::endpoint&) { ec = e; }); })) return r;
         s.expires_after(std::chrono::milliseconds(readMs ? readMs : 5000));
         http::request<http::string_body> req{verb, target, 11};
         req.set(http::field::host, host);
         req.set(http::field::user_agent, "dustgate");
         if (verb == http::verb::post) { if (contentType && *contentType) req.set(http::field::content_type, contentType); req.body() = body; req.prepare_payload(); }
-        http::write(s, req);
+        if (!step([&] { http::async_write(s, req, [&](beast::error_code e, size_t) { ec = e; }); })) return r;
         beast::flat_buffer buf;
         http::response<http::string_body> res;
-        http::read(s, buf, res);   // decodes chunked bodies, which Tasmota sends
+        if (!step([&] { http::async_read(s, buf, res, [&](beast::error_code e, size_t) { ec = e; }); })) return r;   // decodes chunked bodies, which Tasmota sends
         r.code = (int)res.result_int();
         // The contract: a GET's body only on a 200, a POST's on any answer.
         if (verb == http::verb::post || r.code == 200) r.body = res.body();
-        beast::error_code ec; s.socket().shutdown(tcp::socket::shutdown_both, ec);
+        beast::error_code e2; s.socket().shutdown(tcp::socket::shutdown_both, e2);
     } catch (const std::exception&) {
         r.code = -1;
     }
@@ -72,5 +80,7 @@ bool resolveHost(const char* host, std::string& ipOut, uint32_t) {
 }
 
 void log(const std::string& line) { dglog::line(line); }
+
+void sleepMs(uint32_t ms) { std::this_thread::sleep_for(std::chrono::milliseconds(ms)); }
 
 }  // namespace plughttp

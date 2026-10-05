@@ -24,6 +24,7 @@
 #include "CollectorDriver.h"
 #include "NodeStatus.h"
 #include "PlugPoller.h"
+#include "Sweep.h"
 #include "RemoteRfPresser.h"
 #include "TopologyRuntime.h"
 
@@ -45,6 +46,9 @@ static std::string g_topoJson, g_topoPath, g_topoErr, g_stateDir;
 // WHICH plugs and hands each reading to the runtime the way the sketch's loop does.
 namespace plughttp { void setPort(const std::string&); }
 static dgbrain::PlugPoller g_poller;
+static dgbrain::Sweep g_sweep;
+static std::string g_localIp, g_plugPort = "80";
+static outletops::Self selfIdentity();
 static uint32_t g_plugSyncAtMs = 0;
 static std::map<std::string, int> g_swAsserted;       // "s:<system>" -> 0/1 last asked of the plug
 static std::map<std::string, uint32_t> g_onSince;     // system -> when it was commanded on
@@ -320,6 +324,8 @@ static bool readStatic(std::string path, std::string& body, std::string& mime) {
 // A node dials its brain, so a board nobody has paired yet announces itself with a JOIN and is turned away
 // ("not-paired"). Remembering who knocked recently IS discovery — it needs no multicast, which a shop network may block.
 // ── what the shared API (api/ApiCore.h) asks of this brain ────────────────────────────────────────────
+static outletops::Self selfIdentity() { return outletops::Self{g_hub->primaryId(), g_hub->primaryId()}; }
+
 class NativeBackend : public api::Backend {
 public:
     bool setToolManual(const std::string& id, bool on) override { return g_rt.setMachineManual(id, on); }
@@ -421,13 +427,51 @@ private:
         api::Response r;
         if (api::handle(ar, g_backend, r)) { o.st = (http::status)r.status; o.body = r.body; o.mime = r.type; send(o); return; }
         route(ar, req, o);
-        send(o);
+        if (!_deferred) send(o);
     }
 
     // The routes only this shell has: they read this process's own state.
     void route(const api::Request& ar, http::request<http::string_body>& req, Out& o) {
         const std::string& t = ar.path; const std::string& m = ar.method;
         auto err = [&](http::status s, const std::string& msg) { o.st = s; o.body = "{\"error\":\"" + msg + "\"}"; };
+        // ── smart plugs: blocking HTTP to a device that may not answer, so each runs off the network thread ──
+        if (t == "/api/outlets/ping" && m == "POST") {
+            StaticJsonDocument<128> d; const std::string ip = deserializeJson(d, ar.body) ? "" : std::string(d["ip"] | "");
+            if (ip.empty()) { err(http::status::bad_request, "missing 'ip'"); return; }
+            defer([ip] { Out r; r.body = outletops::describeJson(ip.c_str(), selfIdentity()); return r; });
+            return;
+        }
+        if (t == "/api/outlets/name" && m == "POST") {
+            StaticJsonDocument<192> d;
+            if (deserializeJson(d, ar.body)) { err(http::status::bad_request, "invalid JSON"); return; }
+            const std::string ip = d["ip"] | "", label = d["label"] | "";
+            const bool take = d["takeover"] | false;
+            if (ip.empty()) { err(http::status::bad_request, "missing 'ip'"); return; }
+            defer([ip, label, take] { Out r; r.body = outletops::rename(ip.c_str(), label.substr(0, 47).c_str(), take, selfIdentity()); return r; });
+            return;
+        }
+        if (t == "/api/outlets/release" && m == "POST") {
+            StaticJsonDocument<128> d; const std::string ip = deserializeJson(d, ar.body) ? "" : std::string(d["ip"] | "");
+            if (ip.empty()) { err(http::status::bad_request, "missing 'ip'"); return; }
+            // This brain never wrote to a plug on its own (it polls them), so there is no push target to restore.
+            defer([ip] { Out r; r.body = outletops::release(ip.c_str(), selfIdentity(), false, ""); return r; });
+            return;
+        }
+        // Taking a plug means repointing ITS push target at this brain. This brain polls its plugs and has no push endpoint
+        // to point one at, so there is nothing to take: a plug someone else owns can still be sensed by polling it.
+        if (t == "/api/outlets/takeover" && m == "POST") { err(http::status::not_implemented, "this brain polls its plugs; it does not repoint a plug's push target"); return; }
+        if (t == "/api/outlets/save" && m == "POST") { o.body = "{\"ok\":true}"; return; }   // nothing to persist: plugs live in the layout
+        if (t == "/api/outlets/sweep" && m == "POST") { g_sweep.start(g_localIp, g_plugPort, selfIdentity()); o.body = "{\"ok\":true}"; return; }
+        if (t == "/api/outlets/sweep" && m == "DELETE") { g_sweep.cancel(); o.body = "{\"ok\":true}"; return; }
+        if (t == "/api/outlets/sweep" && m == "GET") { o.body = g_sweep.progressJson(); return; }
+        // No mDNS browser here, so "discover" is what the last sweep found; the sweep is the way to look.
+        if (t == "/api/outlets/discover" && m == "GET") {
+            DynamicJsonDocument d(16384); JsonArray a = d.to<JsonArray>();
+            for (auto& r : g_sweep.rows()) { DynamicJsonDocument one(1024); if (!deserializeJson(one, r)) a.add(one.as<JsonObject>()); }
+            serializeJson(d, o.body); return;
+        }
+        if (t == "/api/outlets" && m == "GET") { o.body = "{\"outlets\":[]}"; return; }
+        if (t.rfind("/api/outlets", 0) == 0 && (m == "PUT" || m == "DELETE")) { o.body = "{\"ok\":true}"; return; }
         if (t == "/api/nodes") o.body = nodesJson();
         else if (t == "/api/topology" && m == "GET") { if (g_topoJson.empty()) err(http::status::not_found, "no topology configured"); else o.body = g_topoJson; }
         else if (t == "/api/topology" && m == "PUT") { if (adoptLayout(ar.body)) o.body = "{\"ok\":true}"; else err(http::status::bad_request, g_topoErr); }
@@ -496,6 +540,14 @@ private:
         else err(http::status::not_found, "not found");
     }
 
+    // Run `work` on its own thread and answer when it is done. The connection is kept alive by the closure.
+    void defer(std::function<Out()> work) {
+        _deferred = true;
+        auto self = shared_from_this();
+        auto ex = _stream.get_executor();
+        std::thread([self, ex, work] { Out r = work(); net::post(ex, [self, r] { self->send(r); }); }).detach();
+    }
+
     void send(const Out& o) {
         auto res = std::make_shared<http::response<http::string_body>>(o.st, _parser.get().version());
         res->set(http::field::content_type, o.mime);
@@ -508,6 +560,7 @@ private:
     beast::tcp_stream _stream;
     beast::flat_buffer _buf;
     http::request_parser<http::string_body> _parser;
+    bool _deferred = false;   // an operation is running on its own thread and will answer
 };
 
 class Listener : public std::enable_shared_from_this<Listener> {
@@ -555,7 +608,7 @@ int main(int argc, char** argv) {
         std::string a = argv[i];
         auto val = [&]() { return i + 1 < argc ? std::string(argv[++i]) : std::string(); };
         if (a == "--id") id = val(); else if (a == "--pair") pair = val(); else if (a == "--port") port = (unsigned)std::stoi(val());
-        else if (a == "--ip") ip = val(); else if (a == "--state") stateDir = val(); else if (a == "--trace") g_trace = true; else if (a == "--www") g_www = val(); else if (a == "--plug-port") plughttp::setPort(val()); else if (a == "--key") g_apiKey = val(); else if (a == "--broadcast") bcast = val();
+        else if (a == "--ip") ip = val(); else if (a == "--state") stateDir = val(); else if (a == "--trace") g_trace = true; else if (a == "--www") g_www = val(); else if (a == "--plug-port") { g_plugPort = val(); plughttp::setPort(g_plugPort); } else if (a == "--key") g_apiKey = val(); else if (a == "--broadcast") bcast = val();
         else { dglog::linef("usage: dustgate-brain [--id dustgate] [--pair nodeId,nodeId,...] [--port 8080] [--state dir] [--www dir] [--plug-port 80] [--key k] [--ip a.b.c.d] [--broadcast a.b.c.255]\n"); return a == "--help" ? 0 : 2; }
     }
     std::vector<std::string> ids; std::stringstream ss(pair); std::string x;
@@ -577,6 +630,7 @@ int main(int argc, char** argv) {
         if (f) { std::stringstream b; b << f.rdbuf(); if (!adoptLayout(b.str())) dglog::linef("[TOPO] stored layout refused: %s\n", g_topoErr.c_str()); }
     }
     if (ip.empty()) ip = guessIp();
+    g_localIp = ip;
     if (g_apiKey.empty()) {   // persisted with the state, so a restart does not log every browser out
         const std::string kp = stateDir.empty() ? "" : stateDir + "/apikey";
         std::ifstream kf(kp); if (!kp.empty() && kf) std::getline(kf, g_apiKey);
