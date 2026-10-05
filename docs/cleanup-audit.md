@@ -1,6 +1,6 @@
 # Cleanup audit before the shared-core work (2026-10-04)
 
-**Status: a ranked list, nothing changed.** Read-only pass over the firmware, the node
+**Status (updated 2026-10-05): items 1-5 and 7 are DONE** (BoardId, readClaim, SensorPlan, NodeSession split, primary-as-node deleted, and the plug HTTP seam as outlets/PlugHttp.h with ESP32 and native implementations). Item 6, the API handlers out of HttpApiServer.cpp, remains and is the next structural step. Original text follows: **a ranked list, nothing changed.** Read-only pass over the firmware, the node
 program, the shared model and the UI, looking for **duplicated paths and duplicated rules**
 that the shared-core plan (`docs/brain-options.md`, "One codebase") would otherwise have to
 move, port or fix twice. Line numbers are as of branch `brain-core-shared` and will drift.

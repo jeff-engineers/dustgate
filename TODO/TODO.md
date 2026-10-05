@@ -25,6 +25,8 @@ active sections above them, which is how a parked item stops being read.
   Full plan, memory table and open questions:
   [`docs/nodes-dial-the-brain-plan.md`](../docs/nodes-dial-the-brain-plan.md).
 
+- **Native brain: what is left before a Pi is a product (2026-10-05).** Done and tested against fakes: node links, layout routing, the collector press loop, plug polling with the ESP32's drivers, serving the app. Not done: (1) a real bench run that MOVES a gate and presses the RF remote from the Mac brain (links and CONFIG have been proven against the five nodes; nothing has been commanded); (2) the rest of the API the app calls — outlet discovery/pairing/takeover, calibration and jog routes, `/api/outlets`, OTA staging and `/api/nodes/update` from the native side (which would also end the brain's full-filesystem problem), settings; (3) mDNS advertising of `<id>.local`; (4) raised problems (`plug-unreachable`, `board-offline`) that the sketch raises in firmware.ino and the runtime does not; (5) packaging — image, first-boot WiFi, read-only root, watchdog. The structural step under (2) is moving the HttpApiServer.cpp handlers behind a request/response interface (cleanup-audit item 6).
+
 - **A node-owned plug's on/off threshold is compared twice.** The node polls the plug, compares
   watts to the `thresholdW` it was sent and sets SENSE `on`; the brain ignores that bit and
   compares the watts itself (`TopologyRuntime::pollSensors` → `setMachinePower`). Harmless, but two
