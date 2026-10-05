@@ -531,7 +531,7 @@ bool SmartOutletControl::provisionPushOutlets() {
         // next pass — "I couldn't tell" must never collapse into "so I took it".
         const bool isTasmota = o->kind() == OUTLET_TASMOTA;
         plugclaim::Claim claim;
-        String pushUrl;
+        std::string pushUrl;
         if (!o->readClaim(_ourHost, o->name() ? o->name() : "", _ourName, claim, &pushUrl)) {
             DEBUG_PRINT(F("[Outlets] ")); DEBUG_PRINT(o->ip());
             DEBUG_PRINTLN(isTasmota ? F(" — couldn't read Mem1; leaving it alone, will retry.")
@@ -579,7 +579,7 @@ bool SmartOutletControl::provisionPushOutlets() {
             // machine will end up looking.
             DEBUG_PRINT(F("[Outlets] TAKEOVER (user-confirmed) of ")); DEBUG_PRINT(o->ip());
             DEBUG_PRINT(F(" from ")); DEBUG_PRINT(claim.holder.c_str());
-            DEBUG_PRINT(F(" — previous push target: ")); DEBUG_PRINTLN(pushUrl);
+            DEBUG_PRINT(F(" — previous push target: ")); DEBUG_PRINTLN(pushUrl.c_str());
             o->setPreviousPushUrl(pushUrl.c_str());   // so unpairing can hand it back
         }
         o->setPollOnly(false);

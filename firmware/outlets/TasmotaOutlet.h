@@ -61,7 +61,7 @@
 
 #pragma once
 #include "SmartOutlet.h"
-#include "../config.h"
+#include "OutletTimeouts.h"
 
 class TasmotaOutlet : public SmartOutlet {
 public:
@@ -91,10 +91,10 @@ public:
     // which is NOT "unclaimed": a read failure means we do not know, and the
     // caller must not turn that into permission to take the plug. Same rule
     // readPushConfig() states for Shelly, and for the same reason.
-    bool readOwner(String& out, uint32_t timeoutMs = OUTLET_RPC_WRITE_TIMEOUT_MS);
+    bool readOwner(std::string& out, uint32_t timeoutMs = OUTLET_RPC_WRITE_TIMEOUT_MS);
     // Mem1, not a push config — the weaker, advisory claim plugclaim::decideMarker() documents.
     bool readClaim(const char* ourHost, const char* deviceName, const char* ourName,
-                   plugclaim::Claim& out, String* pushUrl = nullptr) override;
+                   plugclaim::Claim& out, std::string* pushUrl = nullptr) override;
 
     // Write Mem1. Pass "" to release — Tasmota clears a Mem to empty when given
     // the literal `"` (an empty quoted string), which is what release() sends.
@@ -106,12 +106,12 @@ public:
     // 2026-09-09: the rename path built a ShellyGen2Outlet regardless of kind
     // and failed at its first poll).
     bool setName(const char* name) override;
-    bool readName(String& out, uint32_t timeoutMs = OUTLET_RPC_WRITE_TIMEOUT_MS);
+    bool readName(std::string& out, uint32_t timeoutMs = OUTLET_RPC_WRITE_TIMEOUT_MS);
 
     // The plug's MAC ("AA:BB:CC:DD:EE:FF", from Status 5). What identifies it when
     // its address changes — see control/OutletRelocate.h. False if it did not
     // answer or did not say.
-    bool readMac(String& out, uint32_t timeoutMs = OUTLET_RPC_WRITE_TIMEOUT_MS);
+    bool readMac(std::string& out, uint32_t timeoutMs = OUTLET_RPC_WRITE_TIMEOUT_MS);
 
     // Claim the plug AND make it behave like the pass-through it is meant to be.
     //

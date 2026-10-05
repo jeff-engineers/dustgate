@@ -14,7 +14,12 @@
 #pragma once
 #include "../sensing/PowerSensor.h"
 #include "PlugClaim.h"   // the claim a plug reports about itself (pure)
-#include <Arduino.h>
+#include <cstdint>
+#include <string>
+#include "PlugHttp.h"   // strlcpy on a platform without it; plughttp for the drivers
+#ifdef ARDUINO
+#include <Arduino.h>     // the sketch relies on this arriving transitively
+#endif
 
 // WHICH PROTOCOL a plug speaks, and the thing dispatch happens on.
 //
@@ -149,7 +154,7 @@ public:
     // `deviceName` is what the plug calls ITSELF (a Shelly's name, which carries our owner
     // suffix); callers that already fetched it pass it, so it is not fetched twice.
     virtual bool readClaim(const char* /*ourHost*/, const char* /*deviceName*/, const char* /*ourName*/,
-                           plugclaim::Claim& /*out*/, String* /*pushUrl*/ = nullptr) { return false; }
+                           plugclaim::Claim& /*out*/, std::string* /*pushUrl*/ = nullptr) { return false; }
 
     virtual bool configureOutboundWs(const char* /*wsUrl*/) { return false; }
     virtual bool setName(const char* /*name*/)              { return false; }
@@ -165,7 +170,7 @@ public:
     // Read the plug's current push target (Ws.GetConfig) — the ownership
     // authority of RFC §8. Base returns false, meaning "don't know", which
     // callers must treat as "don't touch it".
-    virtual bool readPushConfig(String& /*outServer*/, bool& /*outEnabled*/,
+    virtual bool readPushConfig(std::string& /*outServer*/, bool& /*outEnabled*/,
                                 uint32_t /*timeoutMs*/ = 0) { return false; }   // 0 = the implementation's own default; a default
                                                                               // here is what callers through this type get, NOT the override's
 

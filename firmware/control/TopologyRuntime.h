@@ -1136,9 +1136,11 @@ private:
 
     // The layout's sensors, resolved once — see SensorPlan.h. The push serialises them per board;
     // pollSensors() reads them back by the same ids.
+public:
     std::vector<PlannedSensor> sensorPlan() const {
         return planSensors(topology(), [this](const std::string& mid) { return _ctrl.machineThreshold(mid); });
     }
+private:
 
     void pushSensorConfig() {
         if (!_bus) return;

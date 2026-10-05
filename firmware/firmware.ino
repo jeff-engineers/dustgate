@@ -2125,17 +2125,17 @@ static void describeOutletInto(JsonObject o, const char* ip, const char* mdnsHos
     // no hostname either, and the row falls back to the address, which is the
     // only thing the person typing it actually knows.
     String host = mdnsHost ? String(mdnsHost) : String();
-    String devName;
+    std::string devName;
     if (isTasmota) {
         // A Tasmota's DeviceName, NOT its hostname. Discovery used to pass the
         // mDNS name through here — fine when a hit came from mDNS, and useless
         // for a SWEPT plug, which has no hostname at all and so showed up in the
         // picker labelled with its own IP address twice over.
-        if (!ok || !tasProbe.readName(devName)) devName = String();
+        if (!ok || !tasProbe.readName(devName)) devName.clear();
     } else if (ok) {
         devName = fetchShellyDeviceName(ip, apiGen);
     }
-    if (host.length() == 0) host = devName.length() ? devName : String(ip);
+    if (host.length() == 0) host = devName.length() ? String(devName.c_str()) : String(ip);
 
     DEBUG_PRINT(F("  - ")); DEBUG_PRINT(host); DEBUG_PRINT(F("  "));
     DEBUG_PRINT(ip);
@@ -2146,7 +2146,7 @@ static void describeOutletInto(JsonObject o, const char* ip, const char* mdnsHos
     DEBUG_PRINT(F(" gen="));
     DEBUG_PRINT(ok ? apiGen : 0);
     DEBUG_PRINT(F(" name="));
-    DEBUG_PRINTLN(devName.length() ? devName : String("(none set)"));
+    DEBUG_PRINTLN(devName.length() ? devName.c_str() : "(none set)");
 
     // WHO OWNS IT (RFC §8). Asked here, at discovery, because this is the list
     // someone picks from — a plug that belongs to another brain has to arrive
@@ -2164,7 +2164,7 @@ static void describeOutletInto(JsonObject o, const char* ip, const char* mdnsHos
     // changes (control/OutletRelocate.h). Normalised on the way out, so the app
     // and the brain compare like with like.
     if (isTasmota && ok) {
-        String mac;
+        std::string mac;
         if (tasProbe.readMac(mac, 1200)) {
             const std::string n = relocate::normMac(mac.c_str());
             if (!n.empty()) o["mac"] = n.c_str();
@@ -2176,7 +2176,7 @@ static void describeOutletInto(JsonObject o, const char* ip, const char* mdnsHos
     // The name with any "· owner" suffix stripped: the suffix is our bookkeeping
     // and would otherwise show up in the picker as part of the tool's name, then
     // get saved back and doubled.
-    o["name"]      = claimKnown ? String(claim.label.c_str()) : devName;
+    o["name"]      = claimKnown ? String(claim.label.c_str()) : String(devName.c_str());
     o["reachable"] = ok;
     o["powerW"]    = pw;
     o["gen"]       = ok ? apiGen : 0;
@@ -2297,7 +2297,7 @@ static void relocateTasmotas() {
             lastBackfillMs = now;
             TasmotaOutlet t(slots[i].o.ip.c_str(), "kind");
             if (!t.probe(1200)) break;
-            String mac; t.readMac(mac, 1200);
+            std::string mac; t.readMac(mac, 1200);
             const std::string n = relocate::normMac(mac.c_str());
             DEBUG_PRINT(F("[RELOCATE] ")); DEBUG_PRINT(slots[i].id.c_str());
             DEBUG_PRINT(F(" at ")); DEBUG_PRINT(slots[i].o.ip.c_str());
@@ -2314,7 +2314,7 @@ static void relocateTasmotas() {
             SmartOutlet* so = control.outlet((int)i);
             if (!so || !so->isReachable() || !slots[i].o.mac.empty() || so->kind() != OUTLET_TASMOTA) continue;
             TasmotaOutlet t(so->ip(), "mac");
-            String mac;
+            std::string mac;
             if (!t.readMac(mac, 1200)) continue;
             const std::string n = relocate::normMac(mac.c_str());
             if (n.empty()) continue;
@@ -2511,7 +2511,7 @@ static void handleOutletRenameRequest() {
             DEBUG_PRINT(F("[RENAME] ")); DEBUG_PRINT(nameIp);
             DEBUG_PRINTLN(F(" is not answering on either protocol — name unchanged."));
         } else {
-            String  devName;
+            std::string devName;
             plugclaim::Claim claim;
             bool    claimKnown = false;
 
@@ -2642,7 +2642,7 @@ static void handleOutletReleaseRequest() {
                 // Nothing to restore — a Tasmota has no push target we could
                 // have repointed, which is the same reason it has no
                 // `foreign` claim state.
-                String devName;
+                std::string devName;
                 bool nameOk = true;
                 if (tasRel.readName(devName)) {
                     std::string lbl, own;
@@ -2664,7 +2664,7 @@ static void handleOutletReleaseRequest() {
                 // Name first, then push — the same ordering pairing uses, and
                 // for the same reason: a Ws write makes the plug reopen its
                 // socket and a name write landing on top of that gets lost.
-                String devName = fetchShellyDeviceName(relIp, 2);
+                std::string devName = fetchShellyDeviceName(relIp, 2);
                 std::string lbl, own;
                 plugclaim::parseName(devName.c_str(), lbl, own);
                 bool nameOk = true;

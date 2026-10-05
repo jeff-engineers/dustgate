@@ -20,6 +20,7 @@
 #include "NodeHub.h"
 #include "CollectorDriver.h"
 #include "NodeStatus.h"
+#include "PlugPoller.h"
 #include "RemoteRfPresser.h"
 #include "TopologyRuntime.h"
 
@@ -35,6 +36,54 @@ namespace nl = topo::nodelink;
 static NodeHub* g_hub = nullptr;
 static topo::TopologyRuntime g_rt;
 static std::string g_topoJson, g_topoPath, g_topoErr;
+
+// ── the plugs the brain polls itself ──────────────────────────────────────────────────────────────
+// Tools whose plug no node polls, and the collector's own plugs. The drivers are the ESP32's; this only decides
+// WHICH plugs and hands each reading to the runtime the way the sketch's loop does.
+namespace plughttp { void setPort(const std::string&); }
+static dgbrain::PlugPoller g_poller;
+static uint32_t g_plugSyncAtMs = 0;
+static std::map<std::string, int> g_swAsserted;       // "s:<system>" -> 0/1 last asked of the plug
+static std::map<std::string, uint32_t> g_onSince;     // system -> when it was commanded on
+
+static void syncPlugs() {
+    std::vector<dgbrain::PlugPoller::Target> t;
+    for (const topo::PlannedSensor& p : g_rt.sensorPlan()) {
+        if (p.kind != topo::PlannedSensor::Kind::Plug) continue;
+        topo::TopologyRuntime::NodePlugReading np;
+        if (g_rt.nodePlug(p.id, np)) continue;             // a node polls this one
+        t.push_back({"m:" + p.id, p.ip, p.tasmota});
+    }
+    for (const std::string& sys : g_rt.systemIds()) {
+        JsonObjectConst so = g_rt.collectorSensorOutlet(sys), co = g_rt.collectorOutlet(sys);
+        if (const char* ip = so["ip"].as<const char*>()) if (*ip) t.push_back({"c:" + sys, ip, std::string(so["kind"] | "") == "tasmota"});
+        if (const char* ip = co["ip"].as<const char*>()) if (*ip) t.push_back({"s:" + sys, ip, false});
+    }
+    g_poller.sync(t);
+    g_plugSyncAtMs = dgbrain::nowMs();
+}
+
+static void feedPlugs(uint32_t now) {
+    if (now - g_plugSyncAtMs > 5000) syncPlugs();          // a node joining or leaving changes who polls what
+    for (const topo::PlannedSensor& p : g_rt.sensorPlan()) {
+        if (p.kind != topo::PlannedSensor::Kind::Plug) continue;
+        const auto r = g_poller.read("m:" + p.id);
+        if (r.have) g_rt.setMachinePower(p.id, r.reachable ? r.watts : 0.0f);
+    }
+    for (const std::string& sys : g_rt.systemIds()) {
+        const bool want = g_rt.collectorOn(sys);
+        if (!want) g_onSince[sys] = 0; else if (!g_onSince[sys]) g_onSince[sys] = now;
+        if (g_rt.collectorHasOutlet(sys)) {                 // switched by a plug of ours: a plain on/off
+            const std::string key = "s:" + sys;
+            auto it = g_swAsserted.find(key);
+            if (it == g_swAsserted.end() || it->second != (want ? 1 : 0)) { g_poller.setSwitch(key, want); g_swAsserted[key] = want ? 1 : 0; }
+        }
+        if (g_rt.collectorHasClamp(sys)) continue;          // the clamp's reading stands (pollSensors writes it)
+        const bool haveSensor = !g_rt.collectorSensorOutlet(sys)["ip"].isNull();
+        const auto r = g_poller.read((haveSensor ? "c:" : "s:") + sys);
+        if (r.have) g_rt.setCollectorPlug(sys, r.watts, r.reachable, g_onSince[sys] ? now - g_onSince[sys] : 0);
+    }
+}
 
 // ── the collector: one presser and one press-state per system that has a remote ──────────────────
 struct CollectorSlot { std::string sys; std::unique_ptr<topo::RemoteRfPresser> presser; topo::PressState ps; };
@@ -77,6 +126,7 @@ static bool adoptLayout(const std::string& json) {
     if (!g_rt.adopt(json.data(), json.size(), err)) { g_topoErr = err; return false; }
     g_topoErr.clear(); g_topoJson = json;
     rebuildPressers();
+    syncPlugs();
     if (!g_topoPath.empty()) { std::ofstream f(g_topoPath, std::ios::binary | std::ios::trunc); f << json; }
     std::printf("[TOPO] layout adopted (%zu bytes)\n", json.size());
     return true;
@@ -367,8 +417,8 @@ int main(int argc, char** argv) {
         std::string a = argv[i];
         auto val = [&]() { return i + 1 < argc ? std::string(argv[++i]) : std::string(); };
         if (a == "--id") id = val(); else if (a == "--pair") pair = val(); else if (a == "--port") port = (unsigned)std::stoi(val());
-        else if (a == "--ip") ip = val(); else if (a == "--state") stateDir = val(); else if (a == "--www") g_www = val(); else if (a == "--key") g_apiKey = val(); else if (a == "--broadcast") bcast = val();
-        else { std::printf("usage: dustgate-brain [--id dustgate] [--pair nodeId,nodeId,...] [--port 8080] [--state dir] [--www dir] [--key k] [--ip a.b.c.d] [--broadcast a.b.c.255]\n"); return a == "--help" ? 0 : 2; }
+        else if (a == "--ip") ip = val(); else if (a == "--state") stateDir = val(); else if (a == "--www") g_www = val(); else if (a == "--plug-port") plughttp::setPort(val()); else if (a == "--key") g_apiKey = val(); else if (a == "--broadcast") bcast = val();
+        else { std::printf("usage: dustgate-brain [--id dustgate] [--pair nodeId,nodeId,...] [--port 8080] [--state dir] [--www dir] [--plug-port 80] [--key k] [--ip a.b.c.d] [--broadcast a.b.c.255]\n"); return a == "--help" ? 0 : 2; }
     }
     std::vector<std::string> ids; std::stringstream ss(pair); std::string x;
     while (std::getline(ss, x, ',')) if (!x.empty()) ids.push_back(x);
@@ -402,11 +452,13 @@ int main(int argc, char** argv) {
     net::steady_timer rtTimer(io);
     std::function<void()> rtTick = [&]() {
         rtTimer.expires_after(std::chrono::milliseconds(100));
-        rtTimer.async_wait([&](beast::error_code ec) { if (ec) return; g_rt.update(nowMs()); driveCollectors(nowMs()); rtTick(); });
+        rtTimer.async_wait([&](beast::error_code ec) { if (ec) return; g_rt.update(nowMs()); feedPlugs(nowMs()); driveCollectors(nowMs()); rtTick(); });
     };
     rtTick();
     net::signal_set sig(io, SIGINT, SIGTERM); sig.async_wait([&](beast::error_code, int) { io.stop(); });
     std::printf("dustgate-brain %s on %s:%u, %zu paired node(s)\n", id.c_str(), ip.c_str(), port, ids.size());
+    g_poller.start();
     io.run();
+    g_poller.stop();
     return 0;
 }

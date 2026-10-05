@@ -3,13 +3,15 @@
 // =============================================================================
 
 #include "ShellyGen2Outlet.h"
+#ifdef ARDUINO
+#include "../config.h"   // where CONTROL_SMART_OUTLET is defined — the headers no longer drag it in
+#endif
 
-#if defined(CONTROL_SMART_OUTLET) || defined(DUSTGATE_NODE_PLUG_POLL)   // a node polls plugs for the primary
+#if defined(CONTROL_SMART_OUTLET) || defined(DUSTGATE_NODE_PLUG_POLL) || defined(DUSTGATE_NATIVE)   // a node polls plugs for the primary
 
-#include <HTTPClient.h>
+#include <cstdio>
 #include <ArduinoJson.h>
-#include <ESPmDNS.h>
-#include "../utils/MdnsLock.h"   // one mDNS search at a time, across every task
+#include "PlugHttp.h"
 
 ShellyGen2Outlet::ShellyGen2Outlet(const char* ip, const char* name) {
     strlcpy(_ip,   ip,   sizeof(_ip));
@@ -18,13 +20,10 @@ ShellyGen2Outlet::ShellyGen2Outlet(const char* ip, const char* name) {
 
 bool ShellyGen2Outlet::reresolve() {
     if (_host[0] == '\0') return false;
-    // Runs on the outlet poller's task, which is a THIRD thing querying the one
-    // mDNS searcher — see utils/MdnsLock.h.
-    mdnslock::Guard lock(_host);
-    if (!lock.held()) return false;
-    IPAddress resolved = MDNS.queryHost(_host, 2000);
-    if (resolved == IPAddress(0, 0, 0, 0)) return false;
-    strlcpy(_ip, resolved.toString().c_str(), sizeof(_ip));
+    // Serialised across tasks by the platform (the ESP's one mDNS querier, utils/MdnsLock.h).
+    std::string resolved;
+    if (!plughttp::resolveHost(_host, resolved, 2000)) return false;
+    strlcpy(_ip, resolved.c_str(), sizeof(_ip));
     return true;
 }
 
@@ -59,13 +58,8 @@ bool ShellyGen2Outlet::doPoll(uint32_t timeoutMs) {
     char url[64];
     snprintf(url, sizeof(url), "http://%s/rpc/Switch.GetStatus?id=0", _ip);
 
-    HTTPClient http;
-    http.begin(url);
-    http.setTimeout(timeoutMs);
-
-    int code = http.GET();
-    if (code != 200) {
-        http.end();
+    const plughttp::Reply r = plughttp::get(url, timeoutMs);
+    if (r.code != 200) {
         _reachable  = false;
         _lastPowerW = 0.0f;
         return false;
@@ -75,9 +69,8 @@ bool ShellyGen2Outlet::doPoll(uint32_t timeoutMs) {
     filter["apower"] = true;
 
     StaticJsonDocument<128> doc;
-    DeserializationError err = deserializeJson(doc, http.getStream(),
+    DeserializationError err = deserializeJson(doc, r.body,
                                                DeserializationOption::Filter(filter));
-    http.end();
 
     if (err) {
         _reachable  = false;
@@ -101,15 +94,11 @@ bool ShellyGen2Outlet::rpcPost(const char* jsonBody) {
         char url[48];
         snprintf(url, sizeof(url), "http://%s/rpc", _ip);
 
-        HTTPClient http;
-        http.begin(url);
-        http.addHeader("Content-Type", "application/json");
         // Config writes hit flash — give them a generous window, not the fast-poll
         // timeout. (This runs only at provisioning time, never on the poll path.)
-        http.setTimeout(OUTLET_RPC_WRITE_TIMEOUT_MS);
-        int code = http.POST((uint8_t*)jsonBody, strlen(jsonBody));
-        String body = (code > 0) ? http.getString() : String();
-        http.end();
+        const plughttp::Reply r = plughttp::post(url, jsonBody, "application/json", OUTLET_RPC_WRITE_TIMEOUT_MS);
+        const int code = r.code;
+        const std::string& body = r.body;
 
         if (code == 200) {
             // CAUTION: Shelly RPC returns HTTP 200 even for RPC-level failures —
@@ -117,15 +106,13 @@ bool ShellyGen2Outlet::rpcPost(const char* jsonBody) {
             // while success carries {"result":...}. So HTTP 200 alone is NOT
             // success; only the absence of an error object is. (This is why the
             // Ws/name writes reported "ok" yet nothing actually stored.)
-            if (body.indexOf("\"error\"") < 0) return true;
-            DEBUG_PRINT(F("[Outlets] rpc ")); DEBUG_PRINT(_ip);
-            DEBUG_PRINT(F(" RPC error: ")); DEBUG_PRINTLN(body);
+            if (body.find("\"error\"") == std::string::npos) return true;
+            plughttp::log(std::string("[Outlets] rpc ") + _ip + " RPC error: " + body);
             return false;   // rejected params — retrying the same body won't help
         }
 
-        DEBUG_PRINT(F("[Outlets] rpc POST ")); DEBUG_PRINT(_ip);
-        DEBUG_PRINT(F(" HTTP ")); DEBUG_PRINT(code);
-        DEBUG_PRINT(F("  body: ")); DEBUG_PRINTLN(body.length() ? body : String("(empty)"));
+        plughttp::log(std::string("[Outlets] rpc POST ") + _ip + " HTTP " + std::to_string(code) +
+                      "  body: " + (body.empty() ? std::string("(empty)") : body));
 
         // Connection-level failure (code < 0) → the IP may be stale; re-resolve
         // and retry once.
@@ -140,7 +127,7 @@ bool ShellyGen2Outlet::rpcPost(const char* jsonBody) {
 // The ownership authority (RFC §8). Read before any Ws.SetConfig: repointing a
 // plug that belongs to another controller is silent theft, and the previous
 // owner just stops hearing that its tool started.
-bool ShellyGen2Outlet::readPushConfig(String& outServer, bool& outEnabled, uint32_t timeoutMs) {
+bool ShellyGen2Outlet::readPushConfig(std::string& outServer, bool& outEnabled, uint32_t timeoutMs) {
     outServer = "";
     outEnabled = false;
     if (_ip[0] == '\0' && !reresolve()) return false;
@@ -155,16 +142,12 @@ bool ShellyGen2Outlet::readPushConfig(String& outServer, bool& outEnabled, uint3
     char url[80];
     snprintf(url, sizeof(url), "http://%s/rpc/Ws.GetConfig", _ip);
 
-    HTTPClient http;
-    http.begin(url);
-    http.setTimeout(timeoutMs);
-    const int code = http.GET();
-    const String body = (code > 0) ? http.getString() : String();
-    http.end();
+    const plughttp::Reply r = plughttp::get(url, timeoutMs);
+    const int code = r.code;
+    const std::string& body = r.body;
 
     if (code != 200) {
-        DEBUG_PRINT(F("[Outlets] Ws.GetConfig ")); DEBUG_PRINT(_ip);
-        DEBUG_PRINT(F(" -> HTTP ")); DEBUG_PRINTLN(code);
+        plughttp::log(std::string("[Outlets] Ws.GetConfig ") + _ip + " -> HTTP " + std::to_string(code));
         return false;
     }
 
@@ -173,8 +156,7 @@ bool ShellyGen2Outlet::readPushConfig(String& outServer, bool& outEnabled, uint3
     filter["enable"] = true;
     StaticJsonDocument<192> doc;
     if (deserializeJson(doc, body, DeserializationOption::Filter(filter))) {
-        DEBUG_PRINT(F("[Outlets] Ws.GetConfig ")); DEBUG_PRINT(_ip);
-        DEBUG_PRINT(F(" -> unparseable: ")); DEBUG_PRINTLN(body);
+        plughttp::log(std::string("[Outlets] Ws.GetConfig ") + _ip + " -> unparseable: " + body);
         return false;
     }
     outServer  = doc["server"] | "";
@@ -184,8 +166,8 @@ bool ShellyGen2Outlet::readPushConfig(String& outServer, bool& outEnabled, uint3
 
 // The claim, read and decided in one call — SmartOutlet::readClaim().
 bool ShellyGen2Outlet::readClaim(const char* ourHost, const char* deviceName, const char* ourName,
-                                 plugclaim::Claim& out, String* pushUrl) {
-    String server; bool enabled = false;
+                                 plugclaim::Claim& out, std::string* pushUrl) {
+    std::string server; bool enabled = false;
     if (!readPushConfig(server, enabled)) return false;
     out = plugclaim::decide(server.c_str(), enabled, ourHost ? ourHost : "", deviceName ? deviceName : "",
                             ourName ? ourName : "");
@@ -205,8 +187,7 @@ bool ShellyGen2Outlet::configureOutboundWs(const char* wsUrl) {
              "{\"enable\":true,\"server\":\"%s\"}}}",
              wsUrl);
     bool ok = rpcPost(body);
-    DEBUG_PRINT(F("[Outlets] Ws.SetConfig ")); DEBUG_PRINT(_ip);
-    DEBUG_PRINT(F(" -> ")); DEBUG_PRINTLN(ok ? F("ok") : F("FAILED"));
+    plughttp::log(std::string("[Outlets] Ws.SetConfig ") + _ip + " -> " + (ok ? "ok" : "FAILED"));
     return ok;
 }
 
@@ -232,10 +213,8 @@ bool ShellyGen2Outlet::releasePush(const char* restoreUrl) {
                  "{\"enable\":false,\"server\":\"\"}}}");
     }
     bool ok = rpcPost(body);
-    DEBUG_PRINT(F("[Outlets] Ws release ")); DEBUG_PRINT(_ip);
-    DEBUG_PRINT(restore ? F(" -> restored to ") : F(" -> push disabled"));
-    if (restore) DEBUG_PRINT(restoreUrl);
-    DEBUG_PRINT(F(" ")); DEBUG_PRINTLN(ok ? F("ok") : F("FAILED"));
+    plughttp::log(std::string("[Outlets] Ws release ") + _ip + (restore ? " -> restored to " : " -> push disabled") +
+                  (restore ? restoreUrl : "") + " " + (ok ? "ok" : "FAILED"));
     return ok;
 }
 
@@ -261,8 +240,7 @@ bool ShellyGen2Outlet::setName(const char* name) {
              "{\"id\":0,\"config\":{\"name\":\"%s\"}}}",
              esc);
     if (rpcPost(body)) {
-        DEBUG_PRINT(F("[Outlets] Switch.SetConfig name=")); DEBUG_PRINT(esc);
-        DEBUG_PRINT(F(" @ ")); DEBUG_PRINT(_ip); DEBUG_PRINTLN(F(" -> ok"));
+        plughttp::log(std::string("[Outlets] Switch.SetConfig name=") + esc + " @ " + _ip + " -> ok");
         return true;
     }
 
@@ -273,9 +251,8 @@ bool ShellyGen2Outlet::setName(const char* name) {
              "{\"config\":{\"device\":{\"name\":\"%s\"}}}}",
              esc);
     bool ok = rpcPost(body);
-    DEBUG_PRINT(F("[Outlets] Sys.SetConfig device.name=")); DEBUG_PRINT(esc);
-    DEBUG_PRINT(F(" @ ")); DEBUG_PRINT(_ip);
-    DEBUG_PRINT(F(" -> ")); DEBUG_PRINTLN(ok ? F("ok (Switch failed, Sys ok)") : F("FAILED (both)"));
+    plughttp::log(std::string("[Outlets] Sys.SetConfig device.name=") + esc + " @ " + _ip + " -> " +
+                  (ok ? "ok (Switch failed, Sys ok)" : "FAILED (both)"));
     return ok;
 }
 
@@ -285,13 +262,7 @@ bool ShellyGen2Outlet::setSwitch(bool on) {
     snprintf(url, sizeof(url), "http://%s/rpc/Switch.Set?id=0&on=%s",
              _ip, on ? "true" : "false");
 
-    HTTPClient http;
-    http.begin(url);
-    http.setTimeout(OUTLET_HTTP_TIMEOUT_MS);
-    int code = http.GET();
-    http.end();
-
-    return code == 200;
+    return plughttp::get(url, OUTLET_HTTP_TIMEOUT_MS).code == 200;
 }
 
-#endif // CONTROL_SMART_OUTLET
+#endif // CONTROL_SMART_OUTLET || DUSTGATE_NODE_PLUG_POLL || DUSTGATE_NATIVE

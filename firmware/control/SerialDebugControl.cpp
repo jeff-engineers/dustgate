@@ -5,6 +5,7 @@
 #include "SerialDebugControl.h"
 #include "../utils/Diag.h"
 #include <Wire.h>                  // the `i2c` bring-up scan
+#include <HTTPClient.h>            // the raw `probe` below (it used to arrive via ShellyDeviceName.h)
 #include "../utils/MotionMath.h"
 #include "../utils/WiFiConfig.h"   // NVS constants + applyProvisionJson() — safe to include always
 #if defined(CONTROL_SMART_OUTLET) || defined(ENABLE_HTTP_API)
@@ -702,7 +703,7 @@ void SerialDebugControl::runProbe(const String& ipArg) {
     }
 
     // Step 4: the claim substrate.
-    String marker;
+    std::string marker;
     if (t.readOwner(marker)) {
         plugclaim::Claim c = plugclaim::decideMarker(marker.c_str(), "");
         Serial.printf("  4. Mem1             \"%s\"  -> %s\n",
@@ -788,7 +789,7 @@ void SerialDebugControl::runSweep(int from, int to) {
         // Who owns it, asked here for the same reason discovery asks: this is
         // the list someone picks from, so a plug belonging to another brain has
         // to arrive already labelled rather than fail mysteriously later.
-        String marker;
+        std::string marker;
         if (probe.readOwner(marker)) {
             plugclaim::Claim c = plugclaim::decideMarker(marker.c_str(), "");
             Serial.printf("   claim=%s", plugclaim::stateName(c.state));
@@ -880,7 +881,7 @@ void SerialDebugControl::runDiscover() {
         bool  ok  = gen2.poll();
         float pw  = gen2.getPowerW();
         int   gen = 2;
-        String devName = ok ? fetchShellyDeviceName(ip.c_str(), gen) : String();
+        std::string devName = ok ? fetchShellyDeviceName(ip.c_str(), gen) : std::string();
         Serial.print(F("  - ")); Serial.print(host); Serial.print(F("  ")); Serial.print(ip);
         Serial.print(F("  probe -> reachable="));
         Serial.print(ok ? F("yes") : F("no"));
@@ -889,7 +890,7 @@ void SerialDebugControl::runDiscover() {
         Serial.print(F(" powerW="));
         Serial.print(pw, 1);
         Serial.print(F(" name="));
-        Serial.println(devName.length() ? devName : String("(none set)"));
+        Serial.println(devName.length() ? devName.c_str() : "(none set)");
     }
     Serial.print(F("[DISCOVER] "));
     Serial.print(hitCount);
