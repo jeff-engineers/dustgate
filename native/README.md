@@ -11,7 +11,7 @@ nodes and a fake plug (`make -C native test`) and, for linking, against the five
 ```bash
 brew install boost            # or: apt install libboost-dev
 make -C native
-native/build/dustgate-brain --pair dustgate-planer,dustgate-tablesaw --broadcast 192.168.86.255
+sudo native/build/dustgate-brain --pair dustgate-planer,dustgate-tablesaw   # port 80 (nodes pull firmware from it); --port 8080 needs no sudo
 curl localhost:8080/api/nodes
 ```
 

@@ -838,7 +838,9 @@ export class LiveViewComponent implements OnInit, OnDestroy {
     if (t.collecting) {
       // Its gate is open and the blower is not turning: the fault is upstairs,
       // so say so here rather than leaving someone to check this tool.
-      if (g?.plug === 'notStarting') return ' · ' + g.name + " isn't running";
+      // A blower DustGate cannot switch is run by hand: nobody commanded it, so "isn't running" reads as a fault.
+      // Say what to do instead (the device raises the same ask as `collector-needs-start`).
+      if (g?.plug === 'notStarting') return g.noPlug ? ' · turn on ' + g.name : ' · ' + g.name + " isn't running";
       // A machine is ONE box however many ports it has, so a lost overarm does
       // not get its own row or its own chip — but it is still worth saying.
       return t.partial ? ' · second port is shut' : '';

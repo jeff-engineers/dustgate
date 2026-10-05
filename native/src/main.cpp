@@ -11,7 +11,11 @@
 #include <boost/beast.hpp>
 #include <boost/beast/websocket.hpp>
 #include <csignal>
+#include <algorithm>
 #include <deque>
+#include <netdb.h>
+#include <arpa/inet.h>
+#include <set>
 #include <functional>
 #include <random>
 #include <iostream>
@@ -352,6 +356,91 @@ static bool readStatic(std::string path, std::string& body, std::string& mime) {
 // ── what the shared API (api/ApiCore.h) asks of this brain ────────────────────────────────────────────
 static outletops::Self selfIdentity() { return outletops::Self{g_hub->primaryId(), g_hub->primaryId()}; }
 
+// ── finding boards by mDNS ───────────────────────────────────────────────────────────────────────
+// "Scan for boards": a node advertises _dustgate._tcp with TXT (owner, board, servos, linear, role). Unlike a node that already
+// belongs to us, a FRESH board never dials anyone, so knocks alone can never show it. The OS's own tools do the browsing
+// (dns-sd on macOS, avahi-browse on Linux) because a second mDNS stack in this process would be one more thing to keep working.
+// mDNS is a fast path, never a requirement: with no tool, or a network that blocks it, the answer is just the knock list,
+// and pairing by typing a host name still works.
+static std::string shellOut(const std::string& cmd) {
+    std::string out; FILE* f = popen(cmd.c_str(), "r");
+    if (!f) return out;
+    char b[512]; while (std::fgets(b, sizeof(b), f)) out += b;
+    pclose(f); return out;
+}
+static std::vector<std::string> splitWs(const std::string& s) {
+    std::vector<std::string> v; std::stringstream ss(s); std::string x; while (ss >> x) v.push_back(x); return v;
+}
+static std::string resolveIp(const std::string& host) {
+    addrinfo hints{}; hints.ai_family = AF_INET; hints.ai_socktype = SOCK_STREAM; addrinfo* res = nullptr;
+    if (getaddrinfo((host + ".local").c_str(), nullptr, &hints, &res) != 0 || !res) return "";
+    char ip[INET_ADDRSTRLEN] = {0}; inet_ntop(AF_INET, &((sockaddr_in*)res->ai_addr)->sin_addr, ip, sizeof(ip)); freeaddrinfo(res); return ip;
+}
+struct Found { std::string host, ip, board, owner; int servos = 0, linear = 0; };
+static std::vector<Found> mdnsBoards() {
+    std::vector<Found> out;
+    if (std::system("command -v dns-sd >/dev/null 2>&1") == 0) {
+        const std::string b = shellOut("sh -c 'dns-sd -B _dustgate._tcp local & p=$!; sleep 2.5; kill $p' 2>/dev/null");
+        std::vector<std::string> names;
+        std::stringstream ss(b); std::string line;
+        while (std::getline(ss, line)) {
+            if (line.find(" Add ") == std::string::npos) continue;
+            auto w = splitWs(line); if (w.size() >= 7) { const std::string n = w.back(); if (std::find(names.begin(), names.end(), n) == names.end()) names.push_back(n); }
+        }
+        for (const std::string& n : names) {
+            // TXT: "owner=x linear=0 servos=2 board=xiao_c5 role=secondary" — an empty owner prints as a bare word.
+            const std::string l = shellOut("sh -c 'dns-sd -L " + n + " _dustgate._tcp local & p=$!; sleep 1.5; kill $p' 2>/dev/null");
+            Found f; f.host = n;
+            for (const std::string& t : splitWs(l)) {
+                const size_t eq = t.find('=');
+                if (eq == std::string::npos) continue;
+                const std::string k = t.substr(0, eq), v = t.substr(eq + 1);
+                if (k == "owner") f.owner = v; else if (k == "board") f.board = v;
+                else if (k == "servos") f.servos = std::atoi(v.c_str()); else if (k == "linear") f.linear = std::atoi(v.c_str());
+            }
+            // a bare "owner" word (empty value) means unclaimed: f.owner stays "".
+            f.ip = resolveIp(n); out.push_back(f);
+        }
+    } else if (std::system("command -v avahi-browse >/dev/null 2>&1") == 0) {
+        // =;eth0;IPv4;name;_dustgate._tcp;local;host.local;192.168.1.5;80;"owner=x" "board=y" ...
+        const std::string b = shellOut("avahi-browse -rpt _dustgate._tcp 2>/dev/null");
+        std::stringstream ss(b); std::string line;
+        while (std::getline(ss, line)) {
+            if (line.rfind("=;", 0) != 0) continue;
+            std::vector<std::string> c; std::stringstream ls(line); std::string x; while (std::getline(ls, x, ';')) c.push_back(x);
+            if (c.size() < 10 || c[2] != "IPv4") continue;
+            Found f; f.host = c[3]; f.ip = c[7];
+            for (const std::string& t : splitWs(c[9])) {
+                std::string u = t; u.erase(std::remove(u.begin(), u.end(), '"'), u.end());
+                const size_t eq = u.find('='); if (eq == std::string::npos) continue;
+                const std::string k = u.substr(0, eq), v = u.substr(eq + 1);
+                if (k == "owner") f.owner = v; else if (k == "board") f.board = v;
+                else if (k == "servos") f.servos = std::atoi(v.c_str()); else if (k == "linear") f.linear = std::atoi(v.c_str());
+            }
+            out.push_back(f);
+        }
+    }
+    return out;
+}
+// The rows the Boards screen reads (DiscoveredNode): boards found by mDNS, then any that only knocked.
+static std::string discoverBoards() {
+    DynamicJsonDocument d(8192); JsonArray a = d.to<JsonArray>();
+    std::set<std::string> seen;
+    for (const Found& f : mdnsBoards()) {
+        if (f.host == g_hub->primaryId() || seen.count(f.host)) continue;
+        seen.insert(f.host);
+        JsonObject o = a.createNestedObject();
+        o["host"] = f.host; o["ip"] = f.ip; o["board"] = f.board.empty() ? "unknown" : f.board; o["servos"] = f.servos;
+        if (!f.owner.empty() && f.owner != g_hub->primaryId()) { o["claimedBy"] = f.owner; o["takeable"] = true; }
+    }
+    const uint32_t now = dgbrain::nowMs();
+    for (auto& kv : g_knocks) {
+        if (now - kv.second.atMs > 120000 || seen.count(kv.first)) continue;
+        JsonObject o = a.createNestedObject(); o["host"] = kv.first; o["ip"] = kv.second.ip; o["board"] = "unknown"; o["servos"] = 0;
+    }
+    std::string out; serializeJson(d, out); return out;
+}
+
 // ── claiming a node that has no owner yet ───────────────────────────────────────────────────────────
 // A node dials the brain that owns it, but a FRESH node has no owner and dials nobody: it waits for a brain to say HELLO.
 // So pairing a new board is the one time this brain dials out — once, to hand over the claim (the HELLO carries our id), after
@@ -446,6 +535,47 @@ public:
 };
 static NativeBackend g_backend;
 
+// ── the app's push socket ────────────────────────────────────────────────────────────────────────────
+// The app opens /ws for the device's legacy status (the slider's position and stops, the Wi-Fi name, whether the primary has a
+// rack). This brain has no slider and no radio of its own, so it says so; without the socket the app logged a failed
+// connection every 3 s for as long as the page was open.
+static std::string legacyStatusJson() {
+    DynamicJsonDocument d(1024);
+    d["state"] = "IDLE"; d["currentStop"] = -1; d["targetStop"] = 0; d["positionSteps"] = 0; d["positionMM"] = 0;
+    d["homed"] = false; d["hasLinear"] = false; d["enabled"] = true; d["endstopHome"] = false; d["farEndstop"] = false;
+    d["manifoldModel"] = "custom"; d["measuredSpanSteps"] = 0; d["stepsPerMm"] = 1.0; d["ssid"] = ""; d.createNestedArray("stops");
+    d["manualOverride"] = false; d["dcConfigured"] = false; d["dcOn"] = false; d.createNestedArray("outlets");
+    std::string o; serializeJson(d, o); return o;
+}
+class StatusWs : public std::enable_shared_from_this<StatusWs> {
+public:
+    explicit StatusWs(beast::tcp_stream&& s) : _ws(std::move(s)), _timer(_ws.get_executor()) {}
+    void run(http::request<http::string_body> req) {
+        _ws.async_accept(req, [self = shared_from_this()](beast::error_code ec) {
+            if (ec) return;
+            beast::get_lowest_layer(self->_ws).expires_never();
+            self->read(); self->push();
+        });
+    }
+private:
+    void read() {
+        _ws.async_read(_buf, [self = shared_from_this()](beast::error_code ec, size_t) {
+            if (ec) { self->_closed = true; self->_timer.cancel(); return; }
+            self->_buf.consume(self->_buf.size()); self->read();
+        });
+    }
+    void push() {
+        if (_closed) return;
+        _msg = legacyStatusJson(); _ws.text(true);
+        _ws.async_write(net::buffer(_msg), [self = shared_from_this()](beast::error_code ec, size_t) {
+            if (ec) { self->_closed = true; return; }
+            self->_timer.expires_after(std::chrono::seconds(1));
+            self->_timer.async_wait([self](beast::error_code e) { if (!e) self->push(); });
+        });
+    }
+    ws::stream<beast::tcp_stream> _ws; net::steady_timer _timer; beast::flat_buffer _buf; std::string _msg; bool _closed = false;
+};
+
 class HttpConn : public std::enable_shared_from_this<HttpConn> {
 public:
     explicit HttpConn(tcp::socket&& s) : _stream(std::move(s)) { _parser.body_limit(4u * 1024 * 1024); }   // a node image is ~1.6 MB
@@ -466,6 +596,7 @@ private:
             std::make_shared<NodeWs>(std::move(_stream), remote)->run(_parser.release());
             return;
         }
+        if (ws::is_upgrade(req) && req.target() == "/ws") { std::make_shared<StatusWs>(std::move(_stream))->run(_parser.release()); return; }
         const std::string target = std::string(req.target());
         api::Request ar; ar.method = std::string(req.method_string());
         const size_t q = target.find('?');
@@ -492,6 +623,8 @@ private:
             auto k = req.find("X-Api-Key");
             if (k == req.end() || std::string(k->value()) != g_apiKey) { o.st = http::status::unauthorized; o.body = "{\"error\":\"unauthorized\"}"; send(o); return; }
         }
+        // A scan takes seconds (it asks the network): off the network thread, so no node link stalls behind it.
+        if (ar.method == "GET" && ar.path == "/api/nodes/discover") { defer([] { Out r; r.body = discoverBoards(); return r; }); return; }
         api::Response r;
         if (api::handle(ar, g_backend, r)) { o.st = (http::status)r.status; o.body = r.body; o.mime = r.type; send(o); return; }
         route(ar, req, o);
@@ -673,14 +806,14 @@ static void beaconLoop(net::io_context& io, std::shared_ptr<udp::socket> sock, s
 
 int main(int argc, char** argv) {
     setvbuf(stdout, nullptr, _IOLBF, 0);
-    std::string id = "dustgate", pair, ip, bcast = "255.255.255.255", stateDir;
-    unsigned port = 8080, alsoPort = 0;
+    std::string id = "dustgate", pair, ip, bcast, stateDir;
+    unsigned port = 80, alsoPort = 0;   // 80: a node pulls its firmware from http://<brain ip><path>, with no port
     for (int i = 1; i < argc; i++) {
         std::string a = argv[i];
         auto val = [&]() { return i + 1 < argc ? std::string(argv[++i]) : std::string(); };
         if (a == "--id") id = val(); else if (a == "--pair") pair = val(); else if (a == "--port") port = (unsigned)std::stoi(val());
         else if (a == "--ip") ip = val(); else if (a == "--state") stateDir = val(); else if (a == "--also-port") alsoPort = (unsigned)std::stoi(val()); else if (a == "--trace") g_trace = true; else if (a == "--www") g_www = val(); else if (a == "--plug-port") { g_plugPort = val(); plughttp::setPort(g_plugPort); } else if (a == "--key") g_apiKey = val(); else if (a == "--broadcast") bcast = val();
-        else { dglog::linef("usage: dustgate-brain [--id dustgate] [--pair nodeId,nodeId,...] [--port 8080] [--also-port 80] [--state dir] [--www dir] [--plug-port 80] [--key k] [--ip a.b.c.d] [--broadcast a.b.c.255]\n"); return a == "--help" ? 0 : 2; }
+        else { dglog::linef("usage: dustgate-brain [--id dustgate] [--pair nodeId,nodeId,...] [--port 80] [--also-port 80] [--state dir] [--www dir] [--plug-port 80] [--key k] [--ip a.b.c.d] [--broadcast a.b.c.255]\n"); return a == "--help" ? 0 : 2; }
     }
     std::vector<std::string> ids; std::stringstream ss(pair); std::string x;
     while (std::getline(ss, x, ',')) if (!x.empty()) ids.push_back(x);
@@ -702,6 +835,9 @@ int main(int argc, char** argv) {
     }
     if (ip.empty()) ip = guessIp();
     g_localIp = ip;
+    // The subnet's own broadcast address: the all-ones one is dropped or mis-routed by some stacks (macOS often), and the beacon
+    // is what lets a node find a brain whose address changed.
+    if (bcast.empty()) { const size_t dot = ip.rfind('.'); bcast = dot == std::string::npos ? "255.255.255.255" : ip.substr(0, dot) + ".255"; }
     if (g_apiKey.empty()) {   // persisted with the state, so a restart does not log every browser out
         const std::string kp = stateDir.empty() ? "" : stateDir + "/apikey";
         std::ifstream kf(kp); if (!kp.empty() && kf) std::getline(kf, g_apiKey);
@@ -712,7 +848,12 @@ int main(int argc, char** argv) {
     }
 
     net::io_context io(1);
-    std::make_shared<Listener>(io, tcp::endpoint(tcp::v4(), (unsigned short)port))->run();
+    try { std::make_shared<Listener>(io, tcp::endpoint(tcp::v4(), (unsigned short)port))->run(); }
+    catch (const std::exception& e) {
+        if (port == 8080) throw;
+        dglog::linef("[HTTP] cannot listen on port %u (%s) - using 8080. Nodes pull firmware from port 80, so updating them will not work.", port, e.what());
+        port = 8080; std::make_shared<Listener>(io, tcp::endpoint(tcp::v4(), (unsigned short)port))->run();
+    }
     // Nodes pull firmware from http://<brain ip><path> with no port, so a brain on another port also listens on 80.
     if (alsoPort) std::make_shared<Listener>(io, tcp::endpoint(tcp::v4(), (unsigned short)alsoPort))->run();
     auto sock = std::make_shared<udp::socket>(io, udp::v4()); sock->set_option(net::socket_base::broadcast(true));
