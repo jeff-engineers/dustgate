@@ -623,6 +623,7 @@ static const float kFarConfirmMinTravelMm = 10.0f;
 #include "control/NodeBus.h"
 #include "control/RemoteActuatorBus.h"
 #include "control/NodeStatus.h"
+#include "control/DeviceProblems.h"
 #include "control/CollectorDriver.h"
 #include "outlets/OutletOps.h"
 #include "control/TopologyRuntime.h"
@@ -988,8 +989,6 @@ static void rejoinWifiIfNetworkBlocksNodes() {
 // every pass and refreshed in place, cleared the moment the cause is gone — a
 // problem that outlives its cause is as bad as one that never appeared.
 // Boards and plugs only: the RF press raises its own where it happens.
-static const uint32_t kBoardOfflineAfterMs = 20000;
-static const uint32_t kPlugDownAfterMs     = 120000;
 
 // Memory watch. The internal heap is the board's scarce resource: it ran down to
 // 3.5 KB while a browser loaded the app and the board then aborted creating a
@@ -1018,48 +1017,31 @@ static void watchHeap() {
 
 static void raiseDeviceProblems() {
     static uint32_t lastMs = 0;
+    static topo::DeviceProblems problems;     // control/DeviceProblems.h: the rules, shared with the native brain
     const uint32_t now = millis();
     if (now - lastMs < 2000) return;
     lastMs = now;
 
+    std::vector<topo::BoardView> boards;
     for (int i = 0; i < g_remoteCount; i++) {
         if (!remoteLive(i)) continue;
         const topo::RemoteActuatorBus::LinkHealth h = g_remoteBuses[i].health();
-        const std::string key = std::string("board:") + g_remoteBuses[i].host();
-        if (!h.linked && !h.refused && h.downForMs >= kBoardOfflineAfterMs) {
-            char t[160];
-            snprintf(t, sizeof(t), "Not linked for %lus. Its gates stay where they were; tools on it cannot open a gate.",
-                     (unsigned long)(h.downForMs / 1000));
-            g_topoRuntime.raiseProblem(key, "board-offline", "bad", "board", g_remoteBuses[i].host(), t, now - h.downForMs);
-        } else if (h.refused) {
-            g_topoRuntime.raiseProblem(key, "board-offline", "bad", "board", g_remoteBuses[i].host(),
-                                       "The board refused this controller \xE2\x80\x94 it is paired to another one.", now);
-        } else {
-            g_topoRuntime.clearProblem(key);
-        }
-        // A move that did not finish: the link may be fine again by now, which is
-        // exactly why this is its own entry — the gate is still in an unknown place.
-        const std::string mkey = std::string("move:") + g_remoteBuses[i].host();
-        if (h.moveFault) g_topoRuntime.raiseProblem(mkey, "move-failed", "bad", "board", g_remoteBuses[i].host(), h.moveFault, now);
-        else             g_topoRuntime.clearProblem(mkey);
+        topo::BoardView b;
+        b.host = g_remoteBuses[i].host(); b.linked = h.linked; b.refused = h.refused;
+        b.downForMs = h.downForMs; b.moveFault = h.moveFault;
+        boards.push_back(b);
     }
-
+    std::vector<topo::PlugView> plugs;
 #ifdef CONTROL_SMART_OUTLET
-    // A paired plug that stops answering is usually a new address (DHCP), not a
-    // dead plug. The tool it senses is silently never "on" meanwhile.
-    static uint32_t downSince[SMART_OUTLET_COUNT] = {0};
     for (int i = 0; i < control.outletCount() && i < SMART_OUTLET_COUNT; i++) {
         SmartOutlet* o = control.outlet(i);
-        const std::string key = "plug:" + std::to_string(i);
-        if (!o || o->isReachable()) { downSince[i] = 0; g_topoRuntime.clearProblem(key); continue; }
-        if (!downSince[i]) downSince[i] = now ? now : 1;
-        if (now - downSince[i] < kPlugDownAfterMs) continue;
-        char t[160];
-        snprintf(t, sizeof(t), "No answer from %s for %lus. It may have a new address \xE2\x80\x94 a tool on it is not being sensed.",
-                 o->ip(), (unsigned long)((now - downSince[i]) / 1000));
-        g_topoRuntime.raiseProblem(key, "plug-unreachable", "warn", "plug", o->name(), t, downSince[i]);
+        if (!o) continue;
+        topo::PlugView p;
+        p.key = "plug:" + std::to_string(i); p.name = o->name() ? o->name() : ""; p.ip = o->ip(); p.reachable = o->isReachable();
+        plugs.push_back(p);
     }
 #endif
+    problems.update(g_topoRuntime, boards, plugs, now);
 }
 
 // The link log's main-loop half: write what the other tasks queued, and once an

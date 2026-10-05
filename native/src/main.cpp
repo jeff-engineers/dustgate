@@ -22,6 +22,7 @@
 #include "Md5.h"
 #include "NodeHub.h"
 #include "CollectorDriver.h"
+#include "DeviceProblems.h"
 #include "NodeStatus.h"
 #include "PlugPoller.h"
 #include "Sweep.h"
@@ -68,6 +69,31 @@ static void syncPlugs() {
     }
     g_poller.sync(t);
     g_plugSyncAtMs = dgbrain::nowMs();
+}
+
+// The problems a person must see about boards and plugs: the rules are control/DeviceProblems.h, shared with the ESP32.
+static void raiseDeviceProblems(uint32_t now) {
+    static topo::DeviceProblems problems;
+    static uint32_t lastMs = 0;
+    if (now - lastMs < 2000) return;
+    lastMs = now;
+    std::vector<topo::BoardView> boards;
+    for (auto& kv : g_hub->nodes()) {
+        const auto h = kv.second->session.health();
+        topo::BoardView b; b.host = kv.first; b.linked = h.linked; b.refused = h.refused; b.downForMs = h.downForMs; b.moveFault = h.moveFault;
+        boards.push_back(b);
+    }
+    std::vector<topo::PlugView> plugs;
+    for (const topo::PlannedSensor& p : g_rt.sensorPlan()) {
+        if (p.kind != topo::PlannedSensor::Kind::Plug) continue;
+        topo::PlugView v; v.key = "plug:" + p.id; v.ip = p.ip;
+        const char* nm = topo::machineDoc(g_rt.topology(), p.id)["sensor"]["outlet"]["name"].as<const char*>();
+        v.name = (nm && *nm) ? nm : p.id;
+        topo::TopologyRuntime::NodePlugReading np;
+        v.reachable = g_rt.nodePlug(p.id, np) ? np.reachable : g_poller.read("m:" + p.id).reachable;
+        plugs.push_back(v);
+    }
+    problems.update(g_rt, boards, plugs, now);
 }
 
 static void feedPlugs(uint32_t now) {
@@ -647,7 +673,7 @@ int main(int argc, char** argv) {
     net::steady_timer rtTimer(io);
     std::function<void()> rtTick = [&]() {
         rtTimer.expires_after(std::chrono::milliseconds(100));
-        rtTimer.async_wait([&](beast::error_code ec) { if (ec) return; g_rt.update(nowMs()); feedPlugs(nowMs()); driveCollectors(nowMs()); rtTick(); });
+        rtTimer.async_wait([&](beast::error_code ec) { if (ec) return; g_rt.update(nowMs()); feedPlugs(nowMs()); if (g_rt.loaded()) raiseDeviceProblems(nowMs()); driveCollectors(nowMs()); rtTick(); });
     };
     rtTick();
     net::signal_set sig(io, SIGINT, SIGTERM); sig.async_wait([&](beast::error_code, int) { io.stop(); });

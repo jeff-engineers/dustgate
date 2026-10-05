@@ -70,6 +70,12 @@ check "telling a node to update sends it the OTA order with the image's path, si
 body '{"id":"ghost"}'
 check "an update for a board that is not paired is a 409" '[ "$(code -X POST --data @$T/body.json localhost:$P/api/nodes/update)" = 409 ]'
 
+# a board that goes dark is a problem the app shows, after the grace
+api -X PUT --data-binary @$T/layout.json localhost:$P/api/topology >/dev/null
+pkill -f "build/fakenode 127.0.0.1 $P fake1" 2>/dev/null
+for i in $(seq 1 70); do api localhost:$P/api/status | grep -q '"board-offline"' && break; sleep 0.5; done
+check "a board that is down for 20 s becomes a board-offline problem" 'api localhost:$P/api/status | grep -q "\"board-offline\""'
+
 # the slider and reset
 check "the slider routes say this brain has no rack" '[ "$(code -X POST localhost:$P/api/home)" = 501 ]'
 api -X POST localhost:$P/api/reset-all >/dev/null
