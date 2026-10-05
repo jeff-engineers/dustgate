@@ -13,10 +13,12 @@
 #include <csignal>
 #include <deque>
 #include <functional>
+#include <random>
 #include <iostream>
 #include <fstream>
 #include <sstream>
 #include "NodeHub.h"
+#include "NodeStatus.h"
 #include "TopologyRuntime.h"
 
 namespace beast = boost::beast;
@@ -31,6 +33,14 @@ namespace nl = topo::nodelink;
 static NodeHub* g_hub = nullptr;
 static topo::TopologyRuntime g_rt;
 static std::string g_topoJson, g_topoPath, g_topoErr;
+
+static std::string g_pairPath;
+static void savePairs() {
+    if (g_pairPath.empty()) return;
+    DynamicJsonDocument d(4096); JsonArray a = d.to<JsonArray>();
+    for (auto& kv : g_hub->nodes()) { JsonObject o = a.createNestedObject(); o["host"] = kv.first; o["name"] = kv.second->name; }
+    std::ofstream f(g_pairPath, std::ios::binary | std::ios::trunc); serializeJson(d, f);
+}
 
 static bool adoptLayout(const std::string& json) {
     std::string err;
@@ -84,7 +94,8 @@ private:
         if (deserializeJson(d, m) || std::strcmp(d["t"] | "", "JOIN") != 0) return;
         const std::string id = d["nodeId"] | "";
         if ((d["v"] | 0) != nl::kVersion) { enqueue({false, refuseFrame("busy"), true}); return; }
-        Node* n = g_hub->find(id);
+        std::shared_ptr<Node> n = g_hub->find(id);
+        if (g_hub->paused) { enqueue({false, refuseFrame("busy"), true}); return; }
         if (!n) {
             std::printf("[NODE] JOIN from %s (%s) - not paired, refused\n", id.c_str(), _remote.c_str());
             enqueue({false, refuseFrame("not-paired"), true}); return;
@@ -103,7 +114,8 @@ private:
         _timer.expires_after(std::chrono::milliseconds(200));
         _timer.async_wait([self = shared_from_this()](beast::error_code ec) {
             if (ec || self->_closing) return;
-            if (self->_node) {
+            if (self->_node && (self->_node->removed || g_hub->paused)) { self->enqueue({false, "", true}); self->_node->session.onDown(); }
+            else if (self->_node) {
                 for (int i = 0; i < 4; i++) { std::string f; if (!self->_node->session.nextFrame(f)) break; self->enqueue({false, f, false}); }
                 const uint32_t now = nowMs();
                 if (now - self->_lastPingMs >= nl::kPingIntervalMs) { self->_lastPingMs = now; self->enqueue({true, "", false}); }
@@ -142,7 +154,7 @@ private:
             _node->linkId = 0; _node->session.onDown();
             std::printf("[NODE] %s link closed\n", _node->id.c_str());
         }
-        _node = nullptr;
+        _node.reset();
     }
 
     ws::stream<beast::tcp_stream> _ws;
@@ -151,23 +163,46 @@ private:
     std::deque<Item> _q;
     std::string _hold, _remote;
     bool _writing = false, _closing = false;
-    Node* _node = nullptr;
+    std::shared_ptr<Node> _node;
     unsigned _linkId = 0;
     uint32_t _attachedMs = 0, _lastOnlineMs = 0, _lastPingMs = 0;
 };
 
 // ── plain HTTP (the API's first two routes) ─────────────────────────────────
 static std::string nodesJson() {
-    DynamicJsonDocument d(4096);
+    DynamicJsonDocument d(8192);
     JsonArray a = d.createNestedArray("nodes");
-    for (auto& kv : g_hub->nodes()) {
-        auto& s = kv.second->session; auto i = s.info();
-        JsonObject o = a.createNestedObject();
-        o["id"] = kv.first; o["online"] = i.connected; o["board"] = i.board; o["fw"] = i.fw;
-        o["servos"] = i.capServos; o["linear"] = i.capLinear; o["clamps"] = i.capClamps;
-        o["join"] = s.dialsIn(); o["rf"] = s.canPressRf(); o["bin"] = s.watchesBin();
-    }
+    for (auto& kv : g_hub->nodes()) topo::writeNodeEntry(a, kv.second->session, kv.first.c_str(), kv.first.c_str(), kv.second->name.c_str(), topo::NodeImageView());
+    // This board is a board too, and has no hardware of its own: the same shape the ESP32 reports.
+    JsonObject self = d.createNestedObject("self");
+    self["id"] = g_hub->primaryId(); self["name"] = g_hub->primaryId(); self["fw"] = "native"; self["board"] = "native";
+    JsonObject sc = self.createNestedObject("caps"); sc["servos"] = 0; sc["linear"] = 0;
     std::string o; serializeJson(d, o); return o;
+}
+
+static std::string g_www, g_apiKey;
+
+static const char* mimeOf(const std::string& p) {
+    auto ends = [&](const char* e) { size_t n = std::strlen(e); return p.size() >= n && p.compare(p.size() - n, n, e) == 0; };
+    if (ends(".html")) return "text/html"; if (ends(".js")) return "text/javascript"; if (ends(".css")) return "text/css";
+    if (ends(".json")) return "application/json"; if (ends(".svg")) return "image/svg+xml"; if (ends(".png")) return "image/png";
+    if (ends(".ico")) return "image/x-icon"; if (ends(".woff2")) return "font/woff2"; if (ends(".txt")) return "text/plain";
+    return "application/octet-stream";
+}
+
+// A file under --www, or index.html for any path with no file (the app routes in the browser).
+static bool readStatic(std::string path, std::string& body, std::string& mime) {
+    if (g_www.empty()) return false;
+    const size_t q = path.find('?'); if (q != std::string::npos) path.resize(q);
+    if (path.find("..") != std::string::npos) return false;
+    if (path == "/") path = "/index.html";
+    for (int pass = 0; pass < 2; pass++) {
+        std::string full = g_www + (pass ? "/index.html" : path);
+        std::ifstream f(full, std::ios::binary);
+        if (f) { std::stringstream b; b << f.rdbuf(); body = b.str(); mime = mimeOf(pass ? "/index.html" : path); return true; }
+        if (path.rfind("/api/", 0) == 0) return false;
+    }
+    return false;
 }
 
 class HttpConn : public std::enable_shared_from_this<HttpConn> {
@@ -189,6 +224,17 @@ private:
         }
         http::status st = http::status::ok; std::string body;
         const std::string t = std::string(_req.target());
+        const bool isApi = t.rfind("/api/", 0) == 0;
+        if (isApi && t != "/api/info") {
+            auto k = _req.find("X-Api-Key");
+            if (k == _req.end() || std::string(k->value()) != g_apiKey) { respond(http::status::unauthorized, "{\"error\":\"unauthorized\"}", "application/json"); return; }
+        }
+        if (!isApi) {
+            std::string fb, mime;
+            if (_req.method() == http::verb::get && readStatic(t, fb, mime)) respond(http::status::ok, fb, mime);
+            else respond(http::status::not_found, "not found", "text/plain");
+            return;
+        }
         if (t == "/api/nodes") body = nodesJson();
         else if (t == "/api/topology" && _req.method() == http::verb::get) {
             if (g_topoJson.empty()) { st = http::status::not_found; body = "{\"error\":\"no topology configured\"}"; } else body = g_topoJson;
@@ -196,6 +242,26 @@ private:
         else if (t == "/api/topology" && _req.method() == http::verb::put) {
             if (adoptLayout(_req.body())) body = "{\"ok\":true}";
             else { st = http::status::bad_request; body = "{\"error\":\"" + g_topoErr + "\"}"; }
+        }
+        else if (t == "/api/topology" && _req.method() == http::verb::delete_) {
+            g_rt.clear(); g_topoJson.clear(); if (!g_topoPath.empty()) std::remove(g_topoPath.c_str()); body = "{\"ok\":true}";
+        }
+        else if (t == "/api/nodes/pair" && _req.method() == http::verb::post) {
+            StaticJsonDocument<256> d;
+            const char* host = nullptr;
+            if (!deserializeJson(d, _req.body())) host = d["host"] | (const char*)nullptr;
+            if (!host || !*host) { st = http::status::bad_request; body = "{\"error\":\"missing 'host'\"}"; }
+            else {
+                const std::string h = host;
+                if (d["remove"] | false) g_hub->remove(h);
+                else { auto n = g_hub->add(h, d["name"] | ""); if (d["takeover"] | false) n->session.requestTakeover(); }
+                savePairs(); body = "{\"ok\":true}";
+            }
+        }
+        else if (t == "/api/nodes/pause" && _req.method() == http::verb::post) {
+            StaticJsonDocument<64> d;
+            if (deserializeJson(d, _req.body()) || !d["paused"].is<bool>()) { st = http::status::bad_request; body = "{\"error\":\"need {\\\"paused\\\": true|false}\"}"; }
+            else { g_hub->paused = d["paused"].as<bool>(); body = "{\"ok\":true}"; }
         }
         else if (t == "/api/status") {
             if (g_topoJson.empty()) { st = http::status::not_found; body = "{\"error\":\"no topology configured\"}"; }
@@ -208,10 +274,13 @@ private:
             if (deserializeJson(d, _req.body()) || !d["machineId"].is<const char*>()) { st = http::status::bad_request; body = "{\"error\":\"machineId, watts\"}"; }
             else { g_rt.setMachinePower(d["machineId"].as<std::string>(), d["watts"] | 0.0f); body = "{\"ok\":true}"; }
         }
-        else if (t == "/api/info") body = "{\"role\":\"native\",\"id\":\"" + g_hub->primaryId() + "\"}";
+        else if (t == "/api/info") body = "{\"role\":\"native\",\"id\":\"" + g_hub->primaryId() + "\",\"apiKey\":\"" + g_apiKey + "\",\"build\":\"native\"}";
         else { st = http::status::not_found; body = "{\"error\":\"not found\"}"; }
+        respond(st, body, "application/json");
+    }
+    void respond(http::status st, const std::string& body, const std::string& mime) {
         auto res = std::make_shared<http::response<http::string_body>>(st, _req.version());
-        res->set(http::field::content_type, "application/json");
+        res->set(http::field::content_type, mime);
         res->body() = body; res->prepare_payload(); res->keep_alive(false);
         http::async_write(_stream, *res, [self = shared_from_this(), res](beast::error_code ec, size_t) {
             self->_stream.socket().shutdown(tcp::socket::shutdown_send, ec);
@@ -267,12 +336,18 @@ int main(int argc, char** argv) {
         std::string a = argv[i];
         auto val = [&]() { return i + 1 < argc ? std::string(argv[++i]) : std::string(); };
         if (a == "--id") id = val(); else if (a == "--pair") pair = val(); else if (a == "--port") port = (unsigned)std::stoi(val());
-        else if (a == "--ip") ip = val(); else if (a == "--state") stateDir = val(); else if (a == "--broadcast") bcast = val();
-        else { std::printf("usage: dustgate-brain [--id dustgate] [--pair nodeId,nodeId,...] [--port 8080] [--state dir] [--ip a.b.c.d] [--broadcast a.b.c.255]\n"); return a == "--help" ? 0 : 2; }
+        else if (a == "--ip") ip = val(); else if (a == "--state") stateDir = val(); else if (a == "--www") g_www = val(); else if (a == "--key") g_apiKey = val(); else if (a == "--broadcast") bcast = val();
+        else { std::printf("usage: dustgate-brain [--id dustgate] [--pair nodeId,nodeId,...] [--port 8080] [--state dir] [--www dir] [--key k] [--ip a.b.c.d] [--broadcast a.b.c.255]\n"); return a == "--help" ? 0 : 2; }
     }
     std::vector<std::string> ids; std::stringstream ss(pair); std::string x;
     while (std::getline(ss, x, ',')) if (!x.empty()) ids.push_back(x);
-    NodeHub hub(id, ids); g_hub = &hub;
+    NodeHub hub(id); g_hub = &hub;
+    if (!stateDir.empty()) {
+        g_pairPath = stateDir + "/nodes.json";
+        std::ifstream pf(g_pairPath, std::ios::binary);
+        if (pf) { DynamicJsonDocument d(4096); if (!deserializeJson(d, pf)) for (JsonObject o : d.as<JsonArray>()) hub.add(o["host"] | "", o["name"] | ""); }
+    }
+    for (auto& nid : ids) hub.add(nid, "");
     g_rt.begin(&hub.bus());
     if (!stateDir.empty()) {
         g_topoPath = stateDir + "/topology.json";
@@ -280,6 +355,14 @@ int main(int argc, char** argv) {
         if (f) { std::stringstream b; b << f.rdbuf(); if (!adoptLayout(b.str())) std::printf("[TOPO] stored layout refused: %s\n", g_topoErr.c_str()); }
     }
     if (ip.empty()) ip = guessIp();
+    if (g_apiKey.empty()) {   // persisted with the state, so a restart does not log every browser out
+        const std::string kp = stateDir.empty() ? "" : stateDir + "/apikey";
+        std::ifstream kf(kp); if (!kp.empty() && kf) std::getline(kf, g_apiKey);
+        if (g_apiKey.empty()) {
+            std::random_device rd; char b[33]; for (int i = 0; i < 32; i++) b[i] = "0123456789abcdef"[rd() % 16]; b[32] = 0; g_apiKey = b;
+            if (!kp.empty()) { std::ofstream o(kp); o << g_apiKey; }
+        }
+    }
 
     net::io_context io(1);
     std::make_shared<Listener>(io, tcp::endpoint(tcp::v4(), (unsigned short)port))->run();

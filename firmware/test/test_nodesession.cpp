@@ -2,6 +2,7 @@
 // with no socket in it. This logic used to live inside RemoteActuatorBus and had NO host tests at all
 // (only a hardware soak); every case here was a thing that had to be learnt on a bench.
 #include "../control/NodeSession.h"
+#include "../control/NodeStatus.h"
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -53,6 +54,21 @@ int main() {
     NodeSession::NodeInfo i = f.s.info();
     ok("the board and firmware are recorded", std::string(i.board) == "xiao_c5" && std::string(i.fw) == "abc 1004-1200");
     ok("every capability is read", i.capServos == 2 && i.capClamps == 1 && f.s.pollsPlugs() && f.s.dialsIn() && f.s.canPressRf() && f.s.watchesBin());
+  }
+
+  printf("\nS1b the /api/nodes entry\n");
+  {
+    Fx f; f.up();
+    DynamicJsonDocument d(2048);
+    // Built in its own scope and serialised AFTER the builder's locals are gone: a char[] copied by
+    // pointer instead of by value reads fine inside the call and is garbage here.
+    topo::NodeImageView iv; iv.present = true; iv.fw = "other 1";
+    topo::writeNodeEntry(d.createNestedArray("nodes"), f.s, "n1", "n1.local", "Back wall", iv);
+    std::string out; serializeJson(d, out);
+    ok("the board and firmware survive the builder", out.find("\"board\":\"xiao_c5\"") != std::string::npos && out.find("\"fw\":\"abc 1004-1200\"") != std::string::npos);
+    ok("a clamp is reported only when the board has one", out.find("\"ct\":1") != std::string::npos);
+    ok("a different image on offer says an update is due", out.find("\"update\":true") != std::string::npos);
+    ok("no OTA fields while nothing is updating", out.find("\"ota\"") == std::string::npos);
   }
 
   printf("\nS2 capabilities absent mean NO\n");

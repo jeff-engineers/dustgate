@@ -622,6 +622,7 @@ static const float kFarConfirmMinTravelMm = 10.0f;
 #include "control/SenseReport.h"   // addSenseArray() — why it is not in this file is in that one
 #include "control/NodeBus.h"
 #include "control/RemoteActuatorBus.h"
+#include "control/NodeStatus.h"
 #include "control/TopologyRuntime.h"
 #include "control/NodeRegistry.h"
 #include "control/TopologyStore.h"
@@ -4611,51 +4612,13 @@ void loop() {
                 JsonArray arr = nodes.createNestedArray("nodes");
                 for (int i = 0; i < g_remoteCount; i++) {
                     if (!remoteLive(i)) continue;
-                    topo::RemoteActuatorBus::NodeInfo n = g_remoteBuses[i].info();
-                    JsonObject o = arr.createNestedObject();
-                    o["id"]        = g_remoteBuses[i].nodeId();
-                    o["host"]      = g_remoteBuses[i].host();
-                    // From the registry, not the topology: the boards screen has to
-                    // render names with no layout loaded at all.
-                    o["name"]      = g_nodeRegistry.name(i);
-                    o["online"]    = n.connected;
-                    o["lastSeen"]  = n.lastSeenMs;
-                    o["board"]     = n.board;
-                    o["fw"]        = n.fw;
-                    JsonObject caps = o.createNestedObject("caps");
-                    caps["servos"] = n.capServos;
-                    caps["linear"] = n.capLinear;
-                    // Omitted when none, matching the wire: absent already means
-                    // "no clamp", so the UI's empty tray is the correct empty
-                    // state rather than a feature nobody switched on.
-                    if (n.capClamps > 0) caps["ct"] = n.capClamps;
-                    topo::addSenseArray(o, g_remoteBuses[i]);
-                    // OTA: which image this primary would install, whether the node
-                    // already has it, and how an update in progress is going. The
-                    // image is picked by what the board DRIVES (a slider is a
-                    // different program from a PWM bank), and `update` is only ever
-                    // true for a board that is up to be told.
-                    {
-                        const HttpApiServer::NodeImage img = HttpApiServer::nodeImage(n.capLinear > 0 ? 1 : 0);
-                        if (img.present) {
-                            o["image"]  = img.fw;
-                            o["update"] = n.connected && strcmp(n.fw, img.fw) != 0;
-                        }
-                        if (n.ota[0]) {
-                            o["ota"] = n.ota;
-                            if (n.otaPct >= 0) o["otaPct"] = n.otaPct;
-                            if (n.otaErr[0])   o["otaErr"] = n.otaErr;
-                        }
-                    }
-                    // A node that belongs to ANOTHER primary is offline to us on
-                    // purpose. Without naming its owner here, that is
-                    // indistinguishable from a dead board — and the difference
-                    // decides whether you go looking for a wiring fault or press
-                    // "take it over".
-                    if (g_remoteBuses[i].wasRefused()) {
-                        o["claimedBy"] = g_remoteBuses[i].refusedBy();
-                        o["takeable"]  = true;
-                    }
+                    const topo::RemoteActuatorBus::NodeInfo ni = g_remoteBuses[i].info();
+                    // The image is picked by what the board DRIVES (a slider is a different program from
+                    // a PWM bank).
+                    const HttpApiServer::NodeImage img = HttpApiServer::nodeImage(ni.capLinear > 0 ? 1 : 0);
+                    topo::NodeImageView iv; iv.present = img.present; iv.fw = img.fw;
+                    topo::writeNodeEntry(arr, g_remoteBuses[i], g_remoteBuses[i].nodeId(), g_remoteBuses[i].host(),
+                                         g_nodeRegistry.name(i), iv);
                 }
                 // THIS BOARD IS A BOARD TOO, and it is not in `nodes` — that
                 // array is the REMOTE links, and the primary has no NodeLink

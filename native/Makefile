@@ -10,12 +10,12 @@ BIN        := build/dustgate-brain
 
 FAKE := build/fakenode
 all: $(BIN) $(FAKE)
-$(FAKE): src/fakenode.cpp ../firmware/control/NodeLink.h
+$(FAKE): src/fakenode.cpp $(wildcard ../firmware/control/*.h)
 	@mkdir -p build
 	$(CXX) $(CXXFLAGS) $(INC) src/fakenode.cpp -o $@ -L$(BOOST)/lib -pthread
 test: all
 	bash test/e2e.sh
-$(BIN): src/main.cpp src/NodeHub.h src/SessionBus.h ../firmware/control/NodeSession.h
+$(BIN): src/main.cpp src/NodeHub.h src/SessionBus.h $(wildcard ../firmware/control/*.h)
 	@mkdir -p build
 	$(CXX) $(CXXFLAGS) $(INC) src/main.cpp -o $@ -L$(BOOST)/lib -pthread
 clean:
