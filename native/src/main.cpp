@@ -675,7 +675,7 @@ private:
         if (t.rfind("/api/outlets", 0) == 0 && (m == "PUT" || m == "DELETE")) { o.body = "{\"ok\":true}"; return; }
         if (t == "/api/nodes") o.body = nodesJson();
         else if (t == "/api/topology" && m == "GET") { if (g_topoJson.empty()) err(http::status::not_found, "no topology configured"); else o.body = g_topoJson; }
-        else if (t == "/api/topology" && m == "PUT") { if (adoptLayout(ar.body)) o.body = "{\"ok\":true}"; else err(http::status::bad_request, g_topoErr); }
+        else if (t == "/api/topology" && m == "PUT") { if (adoptLayout(ar.body)) o.body = "{\"ok\":true}"; else { std::string e; for (char c : g_topoErr) { if (c == '"' || c == '\\') e += '\\'; if ((unsigned char)c >= 32) e += c; } err(http::status::bad_request, e); } }
         else if (t == "/api/topology" && m == "DELETE") { g_rt.clear(); g_topoJson.clear(); g_collectors.clear(); g_poller.sync({}); if (!g_topoPath.empty()) std::remove(g_topoPath.c_str()); o.body = "{\"ok\":true}"; }
         else if (t == "/api/status") {
             if (g_topoJson.empty()) err(http::status::not_found, "no topology configured");
@@ -817,6 +817,14 @@ int main(int argc, char** argv) {
     }
     std::vector<std::string> ids; std::stringstream ss(pair); std::string x;
     while (std::getline(ss, x, ',')) if (!x.empty()) ids.push_back(x);
+    // Everything that must survive a restart (the layout, the pairings, the API key, staged firmware) lives here. With no
+    // directory the layout vanished at every restart, so the default is a real one.
+    if (stateDir.empty()) {
+        const char* env = std::getenv("DUSTGATE_STATE"); const char* home = std::getenv("HOME");
+        stateDir = env ? env : (home ? std::string(home) + "/.dustgate" : "");
+        if (!stateDir.empty()) { std::string mk = "mkdir -p '" + stateDir + "'"; (void)std::system(mk.c_str()); }
+    }
+    if (g_www.empty()) dglog::line("[HTTP] no --www: the API is served but there is no app. Point --www at dustgate-ui/dist/dustgate-ui/browser.");
     g_stateDir = stateDir;
     { std::random_device rd; dglog::R().bootId = rd(); }
     if (!stateDir.empty()) { dglog::R().linkLogPath = stateDir + "/linklog.txt"; loadImages(); }

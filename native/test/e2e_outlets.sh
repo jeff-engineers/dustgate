@@ -2,6 +2,7 @@
 # The plug screens: probe an address, rename a plug, hand it back, and sweep the subnet for plugs — against a fake Shelly.
 cd "$(dirname "$0")/.." || exit 2
 B=build/dustgate-brain; PL=build/fakeplug; P=18084; PP=18085; T=$(mktemp -d); fail=0; K=testkey
+export DUSTGATE_STATE="$T/state"   # never the real ~/.dustgate: a test brain must not inherit a layout or pairings
 trap 'kill $(jobs -p) 2>/dev/null; wait 2>/dev/null; rm -rf "$T"' EXIT
 ok()  { echo "  ok   $1"; }
 bad() { echo "  FAIL $1"; fail=1; }

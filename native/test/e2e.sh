@@ -4,6 +4,7 @@
 # all in the loop). No hardware, no network beyond loopback.
 cd "$(dirname "$0")/.." || exit 2
 B=build/dustgate-brain; F=build/fakenode; P=18080; T=$(mktemp -d); fail=0
+export DUSTGATE_STATE="$T/state"   # never the real ~/.dustgate: a test brain must not inherit a layout or pairings
 trap 'kill $(jobs -p) 2>/dev/null; rm -rf "$T"' EXIT
 ok()  { echo "  ok   $1"; }
 bad() { echo "  FAIL $1"; fail=1; }

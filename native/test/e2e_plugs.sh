@@ -3,6 +3,7 @@
 # One fake node owns the gate; a fake Shelly on loopback stands in for the tool's plug. Writing watts to a file runs the tool.
 cd "$(dirname "$0")/.." || exit 2
 B=build/dustgate-brain; F=build/fakenode; PL=build/fakeplug; P=18081; PP=18082; T=$(mktemp -d); fail=0
+export DUSTGATE_STATE="$T/state"   # never the real ~/.dustgate: a test brain must not inherit a layout or pairings
 trap 'kill $(jobs -p) 2>/dev/null; rm -rf "$T"' EXIT
 ok()  { echo "  ok   $1"; }
 bad() { echo "  FAIL $1"; fail=1; }
