@@ -462,7 +462,7 @@ const setToolPower = setMachinePower;
 //
 //   { code, severity: 'bad'|'warn', subject: {type, id}, text, forMs? }
 //
-// Codes: move-failed, board-offline, collector-no-start, collector-blind,
+// Codes: move-failed, board-offline, collector-no-start, collector-needs-start, collector-blind,
 // rf-gave-up, rf-send-failed, plug-unreachable, board-fault.
 //
 // MATCHED PAIR with TopologyRuntime::writeStatus for the two codes DERIVED from
@@ -473,18 +473,33 @@ const setToolPower = setMachinePower;
 const PROBLEM_TEXT = {
   noStart: "Commanded on but drawing nothing — check the breaker, the cord and the remote.",
   blind: "Commanded on, but its plug isn't answering — can't tell whether it is running.",
+  // A collector DustGate has no way to switch (no control.outlet, no control.rf) is run by hand, so "commanded on" is
+  // false and "check the breaker and the remote" accuses a machine nobody asked. The person is asked instead, and only
+  // when something (a plug or a clamp) is watching the blower — with nothing watching, the woodworker is trusted to know.
+  needsStart: "A tool is running and the dust collector isn't — please turn it on.",
 };
 
 function setProblem(d, key, problem) { d.staged[key] = problem; }
 function clearProblem(d, key) { delete d.staged[key]; }
 
+// Can DustGate itself switch this blower? A plug it controls, or a transmitter that presses its remote.
+function collectorCommandable(doc, systemId) {
+  const shop = S.asShop(doc);
+  const sys = S.systemsOf(shop).find((x) => x.id === systemId);
+  const c = sys && (sys.elements || []).find((e) => e.type === 'collector');
+  return !!(c && c.control && (c.control.outlet || c.control.rf));
+}
+
 function problemsView(d, systems) {
   const out = [];
   for (const [sysId, c] of Object.entries(d.collectors)) {
     const st = collectorPlugState(systems[sysId] && systems[sysId].plug, c.on);
-    if (st === 'notStarting') out.push({ code: 'collector-no-start', severity: 'bad', subject: { type: 'system', id: sysId }, text: PROBLEM_TEXT.noStart });
-    // A collector nobody asked to run is allowed to be unreadable; one we did is not.
-    else if (st === 'unknown' && c.on && collectorOutlet(d.topology, sysId)) out.push({ code: 'collector-blind', severity: 'bad', subject: { type: 'system', id: sysId }, text: PROBLEM_TEXT.blind });
+    const commandable = collectorCommandable(d.topology, sysId);
+    if (st === 'notStarting') out.push(commandable
+      ? { code: 'collector-no-start', severity: 'bad', subject: { type: 'system', id: sysId }, text: PROBLEM_TEXT.noStart }
+      : { code: 'collector-needs-start', severity: 'warn', subject: { type: 'system', id: sysId }, text: PROBLEM_TEXT.needsStart });
+    // A collector nobody asked to run is allowed to be unreadable; one we did is not. (A hand-run one was not asked.)
+    else if (st === 'unknown' && c.on && commandable && collectorOutlet(d.topology, sysId)) out.push({ code: 'collector-blind', severity: 'bad', subject: { type: 'system', id: sysId }, text: PROBLEM_TEXT.blind });
   }
   for (const key of Object.keys(d.staged)) out.push(d.staged[key]);
   return out;

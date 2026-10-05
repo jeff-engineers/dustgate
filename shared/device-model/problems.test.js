@@ -53,6 +53,18 @@ const plugged = () => {
   TD.clearProblem(d, 'rf:big');
   check('and clears when the cause does', probs(d, 1000 + GRACE).length === 1);
 }
+{
+  // A blower DustGate cannot switch is run by hand: watched and not drawing, the person is ASKED, never accused.
+  // The model simulates a plug only for a collector it can switch, so the reading is handed to problemsView directly.
+  const d = TD.createTopologyDevice(clone(twoSystemShop));
+  d.collectors.big.on = true;
+  const watching = (reachable) => ({ big: { plug: { watts: 0, reachable, onForMs: GRACE } } });
+  const p = TD.problemsView(d, watching(true));
+  check('a hand-run blower that is not drawing is asked for, not accused', p.length === 1 && p[0].code === 'collector-needs-start' && p[0].severity === 'warn' && p[0].subject.id === 'big');
+  check('the device words the request',
+    p[0].text === "A tool is running and the dust collector isn't — please turn it on.", p[0].text);
+  check('a hand-run blower whose plug is silent says nothing (the plug has its own problem)', TD.problemsView(d, watching(false)).length === 0);
+}
 
 let failed = 0;
 for (const r of results) {

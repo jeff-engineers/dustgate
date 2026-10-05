@@ -21,6 +21,7 @@ console.log('\nL1 rows');
   ok('duration is spoken', rows[0].duration === 'for 2m', rows[0].duration);
   ok('no duration, no claim', rows[1].duration === '');
   ok('absent list is empty', problemRows(undefined, nameOf).length === 0);
+  ok('a hand-run blower is asked for', headline(P('collector-needs-start', 'warn', 'big'), 'Cyclone') === 'Turn on Cyclone');
   ok('an unknown code still reads', headline(P('board-fault', 'bad', 'x'), 'x') === 'board fault');
   ok('seconds', duration(30000) === 'for 30s');
   ok('hours', duration(3 * 3600000) === 'for 3h');

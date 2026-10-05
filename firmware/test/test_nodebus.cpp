@@ -603,6 +603,13 @@ int main(int argc, char** argv) {
   {
     std::string shopJson = slurp(dir + "twoSystemShop.json");
     if (shopJson.empty()) { printf("bad twoSystemShop.json\n"); return 2; }
+    // The 4" blower is switched by a plug of ours, like problems.test.js's plugged(); the 2.5" one is run by hand.
+    {
+      const std::string dc = "\"id\": \"dc-big\",\n          \"type\": \"collector\",";
+      const size_t at = shopJson.find(dc);
+      if (at == std::string::npos) { printf("fixture changed: no dc-big\n"); return 2; }
+      shopJson.insert(at + dc.size(), "\n          \"control\": {\"outlet\": {\"gen\": 2, \"ip\": \"10.0.0.50\"}},");
+    }
 
     StubBus local; topo::NodeBus nb; topo::TopologyRuntime rt;
     nb.setLocal(&local, "primary");
@@ -660,8 +667,12 @@ int main(int argc, char** argv) {
         return pd["problems"].as<JsonArrayConst>();
       };
       size_t n = 0;
-      probs(n);
-      ok("problems: no plug configured, running → nothing to say", n == 0);
+      // The 4" blower has a plug of ours here but no reading has ever arrived (that is a different state from
+      // problems.test.js's unplugged one), so "nothing to say" is asserted for the blower that has no plug at all.
+      auto first = probs(n);
+      size_t aboutSmall = 0; for (JsonObjectConst o : first) if (std::string(o["subject"]["id"] | "") == "small") aboutSmall++;
+      ok("problems: no plug configured, running → nothing to say", aboutSmall == 0);
+      rt.setCollectorPlug("big", 1200.0f, true, 60000);   // the 4" plug starts answering: its "blind" cleared
 
       // A reading that is up and drawing is not a problem.
       rt.setCollectorPlug("big", 1200.0f, true, 60000);
@@ -702,6 +713,19 @@ int main(int argc, char** argv) {
       rt.clearProblem("rf:big");
       probs(n);
       ok("problems: and clears when the cause does", n == 1);
+
+      // A blower DustGate cannot switch (no control.outlet, no control.rf) is run by hand. Watched and not drawing, the
+      // person is ASKED to turn it on; it is never accused of failing to start something nobody commanded.
+      rt.setCollectorPlug("small", 0.0f, true, topo::kCollectorSpinupGraceMs);
+      auto c = probs(n);
+      std::string manualCode, manualText;
+      for (JsonObjectConst o : c) if (std::string(o["subject"]["id"] | "") == "small") { manualCode = o["code"] | ""; manualText = o["text"] | ""; }
+      ok("problems: a hand-run blower that is not drawing is asked for, not accused", manualCode == "collector-needs-start", manualCode);
+      ok("problems: the device words the request",
+         manualText == "A tool is running and the dust collector isn't \xE2\x80\x94 please turn it on.", manualText);
+      rt.setCollectorPlug("small", 0.0f, false, 0);
+      probs(n);
+      ok("problems: a hand-run blower whose plug is silent says nothing (the plug has its own problem)", n == 1);
     }
     // Concatenated per system in document order, never interleaved. The jointer
     // valve is still open here (idle-HOLD left it where it was), so the big

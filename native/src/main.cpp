@@ -352,6 +352,45 @@ static bool readStatic(std::string path, std::string& body, std::string& mime) {
 // ── what the shared API (api/ApiCore.h) asks of this brain ────────────────────────────────────────────
 static outletops::Self selfIdentity() { return outletops::Self{g_hub->primaryId(), g_hub->primaryId()}; }
 
+// ── claiming a node that has no owner yet ───────────────────────────────────────────────────────────
+// A node dials the brain that owns it, but a FRESH node has no owner and dials nobody: it waits for a brain to say HELLO.
+// So pairing a new board is the one time this brain dials out — once, to hand over the claim (the HELLO carries our id), after
+// which the node persists it and finds us itself (beacon, cached address, <id>.local). Run on a worker thread: it blocks.
+static void claimNode(const std::string& hostIn, bool takeover) {
+    std::string host = hostIn;
+    if (host.find('.') == std::string::npos) host += ".local";
+    namespace websocket = boost::beast::websocket;
+    try {
+        net::io_context io;
+        tcp::resolver rs(io);
+        beast::error_code ec;
+        const auto results = rs.resolve(host, "80", ec);
+        if (ec) { dglog::linef("[CLAIM] %s: cannot resolve (%s)", host.c_str(), ec.message().c_str()); return; }
+        websocket::stream<beast::tcp_stream> w(io);
+        auto step = [&](auto&& start) { ec = {}; start(); io.restart(); io.run(); return !ec; };
+        beast::get_lowest_layer(w).expires_after(std::chrono::seconds(5));
+        if (!step([&] { beast::get_lowest_layer(w).async_connect(results, [&](beast::error_code e, const tcp::endpoint&) { ec = e; }); }))
+            { dglog::linef("[CLAIM] %s: cannot connect (%s)", host.c_str(), ec.message().c_str()); return; }
+        beast::get_lowest_layer(w).expires_after(std::chrono::seconds(5));
+        if (!step([&] { w.async_handshake(host, "/nodelink", [&](beast::error_code e) { ec = e; }); }))
+            { dglog::linef("[CLAIM] %s: not a node (%s)", host.c_str(), ec.message().c_str()); return; }
+        StaticJsonDocument<192> d;
+        topo::nodelink::buildHello(d.to<JsonObject>(), g_hub->primaryId().c_str(), hostIn.c_str(), takeover);
+        std::string hello; serializeJson(d, hello);
+        w.text(true);
+        beast::get_lowest_layer(w).expires_after(std::chrono::seconds(5));
+        if (!step([&] { w.async_write(net::buffer(hello), [&](beast::error_code e, size_t) { ec = e; }); })) { dglog::linef("[CLAIM] %s: write failed", host.c_str()); return; }
+        beast::flat_buffer buf;
+        beast::get_lowest_layer(w).expires_after(std::chrono::seconds(8));
+        if (!step([&] { w.async_read(buf, [&](beast::error_code e, size_t) { ec = e; }); })) { dglog::linef("[CLAIM] %s: no WELCOME (%s)", host.c_str(), ec.message().c_str()); return; }
+        StaticJsonDocument<768> r; deserializeJson(r, beast::buffers_to_string(buf.data()));
+        const bool accepted = r["accepted"] | true;
+        if (accepted) dglog::linef("[CLAIM] %s is ours (%s, %s) - it will dial us now", host.c_str(), (const char*)(r["board"] | "?"), (const char*)(r["fw"] | "?"));
+        else dglog::linef("[CLAIM] %s belongs to '%s' - pair it again with takeover to take it", host.c_str(), (const char*)(r["claimedBy"] | "someone else"));
+        beast::error_code e2; w.next_layer().socket().shutdown(tcp::socket::shutdown_both, e2);
+    } catch (const std::exception& e) { dglog::linef("[CLAIM] %s: %s", host.c_str(), e.what()); }
+}
+
 class NativeBackend : public api::Backend {
 public:
     bool setToolManual(const std::string& id, bool on) override { return g_rt.setMachineManual(id, on); }
@@ -377,7 +416,10 @@ public:
     }
     void pairNode(const std::string& host, const std::string& name, bool remove, bool takeover) override {
         if (remove) g_hub->remove(host);
-        else { auto n = g_hub->add(host, name); if (takeover) n->session.requestTakeover(); g_knocks.erase(host); }
+        else {
+            auto n = g_hub->add(host, name); if (takeover) n->session.requestTakeover(); g_knocks.erase(host);
+            std::thread([host, takeover] { claimNode(host, takeover); }).detach();   // a fresh node has no owner and dials nobody
+        }
         savePairs();
     }
     void pauseLinks(bool p) override { g_hub->paused = p; dglog::line(p ? "[NODE] Links PAUSED \xE2\x80\x94 every link stopped, pairings kept" : "[NODE] Links resumed"); }
@@ -632,13 +674,13 @@ static void beaconLoop(net::io_context& io, std::shared_ptr<udp::socket> sock, s
 int main(int argc, char** argv) {
     setvbuf(stdout, nullptr, _IOLBF, 0);
     std::string id = "dustgate", pair, ip, bcast = "255.255.255.255", stateDir;
-    unsigned port = 8080;
+    unsigned port = 8080, alsoPort = 0;
     for (int i = 1; i < argc; i++) {
         std::string a = argv[i];
         auto val = [&]() { return i + 1 < argc ? std::string(argv[++i]) : std::string(); };
         if (a == "--id") id = val(); else if (a == "--pair") pair = val(); else if (a == "--port") port = (unsigned)std::stoi(val());
-        else if (a == "--ip") ip = val(); else if (a == "--state") stateDir = val(); else if (a == "--trace") g_trace = true; else if (a == "--www") g_www = val(); else if (a == "--plug-port") { g_plugPort = val(); plughttp::setPort(g_plugPort); } else if (a == "--key") g_apiKey = val(); else if (a == "--broadcast") bcast = val();
-        else { dglog::linef("usage: dustgate-brain [--id dustgate] [--pair nodeId,nodeId,...] [--port 8080] [--state dir] [--www dir] [--plug-port 80] [--key k] [--ip a.b.c.d] [--broadcast a.b.c.255]\n"); return a == "--help" ? 0 : 2; }
+        else if (a == "--ip") ip = val(); else if (a == "--state") stateDir = val(); else if (a == "--also-port") alsoPort = (unsigned)std::stoi(val()); else if (a == "--trace") g_trace = true; else if (a == "--www") g_www = val(); else if (a == "--plug-port") { g_plugPort = val(); plughttp::setPort(g_plugPort); } else if (a == "--key") g_apiKey = val(); else if (a == "--broadcast") bcast = val();
+        else { dglog::linef("usage: dustgate-brain [--id dustgate] [--pair nodeId,nodeId,...] [--port 8080] [--also-port 80] [--state dir] [--www dir] [--plug-port 80] [--key k] [--ip a.b.c.d] [--broadcast a.b.c.255]\n"); return a == "--help" ? 0 : 2; }
     }
     std::vector<std::string> ids; std::stringstream ss(pair); std::string x;
     while (std::getline(ss, x, ',')) if (!x.empty()) ids.push_back(x);
@@ -671,6 +713,8 @@ int main(int argc, char** argv) {
 
     net::io_context io(1);
     std::make_shared<Listener>(io, tcp::endpoint(tcp::v4(), (unsigned short)port))->run();
+    // Nodes pull firmware from http://<brain ip><path> with no port, so a brain on another port also listens on 80.
+    if (alsoPort) std::make_shared<Listener>(io, tcp::endpoint(tcp::v4(), (unsigned short)alsoPort))->run();
     auto sock = std::make_shared<udp::socket>(io, udp::v4()); sock->set_option(net::socket_base::broadcast(true));
     beaconLoop(io, sock, std::make_shared<net::steady_timer>(io), ip, port, bcast);
     net::steady_timer rtTimer(io);

@@ -29,6 +29,7 @@ export function duration(ms: number | undefined): string {
 export function headline(p: Problem, name: string): string {
   switch (p.code) {
     case 'collector-no-start': return name + " isn't starting";
+    case 'collector-needs-start': return 'Turn on ' + name;
     case 'collector-blind':    return "Can't see " + name;
     case 'collector-wont-stop': return name + " won't stop";
     case 'rf-gave-up':         return name + ' did not respond';

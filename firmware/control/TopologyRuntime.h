@@ -127,6 +127,10 @@ struct Problem {
 };
 static const char* const kProblemNoStart = "Commanded on but drawing nothing \xE2\x80\x94 check the breaker, the cord and the remote.";
 static const char* const kProblemBlind   = "Commanded on, but its plug isn't answering \xE2\x80\x94 can't tell whether it is running.";
+// A collector DustGate cannot switch (no control.outlet, no control.rf) is run by hand, so "commanded on" is false and
+// "check the breaker and the remote" accuses a machine nobody asked. The person is asked instead, and only when something
+// watches the blower: with nothing watching, the woodworker is trusted to know. PROBLEM_TEXT.needsStart in topology-device.js.
+static const char* const kProblemNeedsStart = "A tool is running and the dust collector isn't \xE2\x80\x94 please turn it on.";
 
 struct FailedMove {
     std::string systemId;
@@ -832,9 +836,13 @@ public:
         };
         for (auto& kv : _collectors) {
             const topo::PlugState st = collectorPlugStateFor(kv.first);
-            if (st == topo::PlugState::NotStarting)
-                add("collector-no-start", "bad", "system", kv.first, kProblemNoStart, false, 0);
-            else if (st == topo::PlugState::Unknown && kv.second.running &&
+            const bool commandable = collectorHasOutlet(kv.first) || !collectorRf(kv.first).isNull();
+            if (st == topo::PlugState::NotStarting) {
+                if (commandable) add("collector-no-start", "bad", "system", kv.first, kProblemNoStart, false, 0);
+                else             add("collector-needs-start", "warn", "system", kv.first, kProblemNeedsStart, false, 0);
+            }
+            // A blower nobody asked to run (one run by hand) is allowed to be unreadable; its plug has its own problem.
+            else if (st == topo::PlugState::Unknown && kv.second.running && commandable &&
                      (kv.second.plugKnown || collectorHasOutlet(kv.first) || collectorHasClamp(kv.first)))
                 add("collector-blind", "bad", "system", kv.first, kProblemBlind, false, 0);
         }

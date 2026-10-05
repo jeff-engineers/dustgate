@@ -160,6 +160,26 @@ int main() {
     ok("the node forgets its CONFIG across a reboot, so every accepted WELCOME re-sends it", f.drain(frame) && frame.find("\"t\":\"CONFIG\"") != std::string::npos);
   }
 
+  printf("\nS6b a CONFIG nobody acknowledges is sent again\n");
+  {
+    Fx f; f.up();
+    DynamicJsonDocument d(512); deserializeJson(d, R"([{"sensorId":"tool1","kind":"plug","ip":"10.0.0.5","plug":"shelly","thresholdW":50}])");
+    f.s.configureSensors(d.as<JsonArrayConst>());
+    std::string frame; f.drain(frame);
+    ok("the first CONFIG goes out", frame.find("\"t\":\"CONFIG\"") != std::string::npos);
+    ok("nothing more while we wait", !f.drain(frame));
+    g_now += 3100; f.s.onPong();
+    ok("with no ACK inside 3 s it is sent again", f.drain(frame) && frame.find("\"t\":\"CONFIG\"") != std::string::npos && f.sink.saw("again, no ACK"));
+    f.feed(R"({"t":"ACK","seq":1,"ok":true})");
+    int seq = 0; { DynamicJsonDocument q(512); deserializeJson(q, frame); seq = q["seq"] | 0; }
+    char ack[64]; std::snprintf(ack, sizeof(ack), R"({"t":"ACK","seq":%d,"ok":true})", seq); f.feed(ack);
+    g_now += 10000; f.s.onPong();
+    ok("once acknowledged it is never sent again", !f.drain(frame));
+    Fx h; h.up(); h.s.configureSensors(d.as<JsonArrayConst>()); h.drain(frame);
+    int sent = 1; for (int i = 0; i < 8; i++) { g_now += 3100; h.s.onPong(); if (h.drain(frame)) sent++; }
+    ok("it gives up after a few tries rather than shouting forever", sent == 5 && h.sink.saw("never acknowledged"));
+  }
+
   printf("\nS7 readings: SENSE in, forgotten when the link drops\n");
   {
     Fx f; f.up();

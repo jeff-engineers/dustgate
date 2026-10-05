@@ -147,7 +147,7 @@ public:
         // machine nobody can see (RFC §5.6a: absent is OFF). The CONFIG is the opposite — it is
         // ours, not the node's, and the node will have forgotten it across the reboot.
         _senseCount = 0;
-        _cfgPending = _cfgValid;
+        _cfgPending = _cfgValid; _cfgAwaitAck = false; _cfgTries = 0;
         char line[96];
         std::snprintf(line, sizeof(line), "[NODE] Link lost: %s", _nodeId);
         say(line);
@@ -197,7 +197,12 @@ public:
         tick();
         if (!_connected) return false;
         if (_txPending)    { out = _txFrame;    _txPending    = false; return true; }
-        if (_cfgPending)   { out = _cfgFrame;   _cfgPending   = false; say(label("[NODE→] CONFIG to ")); return true; }
+        if (_cfgPending)   {
+            out = _cfgFrame; _cfgPending = false;
+            _cfgAwaitAck = true; _cfgSentMs = now();
+            say(label(_cfgTries ? "[NODE→] CONFIG (again, no ACK) to " : "[NODE→] CONFIG to "));
+            return true;
+        }
         if (_otaPending)   { out = _otaFrame;   _otaPending   = false; say(label("[NODE→] OTA to "));    return true; }
         if (_pressPending) { out = _pressFrame; _pressPending = false; return true; }
         return false;
@@ -205,6 +210,15 @@ public:
     // A move whose STATE report never arrived: give up rather than let the primary's move queue
     // block forever behind a lost frame.
     void tick() {
+        // A CONFIG that was never ACKed is sent again. One handed to a node in its first moments after a
+        // reboot (an OTA lands, the node rejoins, the brain answers within 100 ms) was dropped, the node
+        // sat with no sensors for good and its plug read "unreachable" — found on the bench 2026-10-05.
+        // CONFIG is a whole list, never a delta, so sending it twice is harmless.
+        if (_cfgAwaitAck && _connected && (uint32_t)(now() - _cfgSentMs) > kCfgAckWaitMs) {
+            _cfgAwaitAck = false;
+            if (_cfgTries < kCfgMaxTries) { _cfgTries++; _cfgPending = true; }
+            else say(label("[NODE] CONFIG never acknowledged by "));
+        }
         if (_moveOutstanding && (now() - _moveStartedMs) > nodelink::kMoveTimeoutMs) {
             _moveOutstanding = false;
             _moveFault = "The board never reported its move finished (timed out).";
@@ -316,7 +330,7 @@ public:
                     if (sen.containsKey(k)) o[k] = sen[k].as<float>();
             }
         }
-        f["seq"] = ++_seq;
+        f["seq"] = _cfgSeq = ++_seq;
         std::string s; serializeJson(doc, s);
         if (s.size() >= sizeof(_cfgFrame)) {
             say(label("[NODE] CONFIG too large for "));
@@ -325,6 +339,7 @@ public:
         nodelink::strlcpy_(_cfgFrame, s.c_str(), sizeof(_cfgFrame));
         _cfgValid   = true;
         _cfgPending = true;
+        _cfgAwaitAck = false; _cfgTries = 0;
         // Readings from the OLD configuration are not readings under the new one: a sensorId that
         // was just removed must stop answering immediately rather than keep a tool switched on
         // until it ages out.
@@ -513,7 +528,7 @@ private:
         _hollowDrops = 0;
         // Re-arm the CONFIG on every accepted handshake: this node may have just rebooted, and a node
         // that has not been configured reports nothing.
-        if (_cfgValid) _cfgPending = true;
+        if (_cfgValid) { _cfgPending = true; _cfgAwaitAck = false; _cfgTries = 0; }
         if (_sink) {
             char extra[160];
             std::snprintf(extra, sizeof(extra),
@@ -526,6 +541,9 @@ private:
 
     void onAck(JsonObjectConst f) {
         const bool ok = f["ok"] | false;
+        if (_cfgAwaitAck && (f["seq"] | 0u) == _cfgSeq) {
+            _cfgAwaitAck = false; _cfgTries = 0;      // answered, whichever way: a refusal is logged below, not retried
+        }
         // A PRESS is answered with an ACK on the same seq. It is not a move: it must not touch the
         // move bookkeeping below, and its failure is its own fault string.
         if (_pressSeq && (f["seq"] | 0u) == _pressSeq) {
@@ -639,6 +657,12 @@ private:
     // power cut. Re-sent on every accepted WELCOME instead, which costs one small frame per reconnect.
     char     _cfgFrame[768]   = "";
     bool     _cfgPending      = false;
+    bool     _cfgAwaitAck     = false;   // sent, no ACK yet
+    uint8_t  _cfgTries        = 0;       // resends so far
+    uint32_t _cfgSeq          = 0;
+    uint32_t _cfgSentMs       = 0;
+    static constexpr uint32_t kCfgAckWaitMs = 3000;
+    static constexpr uint8_t  kCfgMaxTries  = 4;
     bool     _cfgValid        = false;   // have we ever been given one?
     // OTA order. See requestOta().
     bool     _otaPending      = false;
