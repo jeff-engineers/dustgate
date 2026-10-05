@@ -132,6 +132,7 @@ static bool adoptLayout(const std::string& json) {
     return true;
 }
 static unsigned g_nextLinkId = 1;
+static bool g_trace = false;   // --trace: print every frame a node sends
 
 static std::string refuseFrame(const char* reason) {
     StaticJsonDocument<96> d; nl::buildRefuse(d.to<JsonObject>(), reason);
@@ -170,7 +171,7 @@ private:
     }
 
     void onText(const std::string& m) {
-        if (_node) { _node->session.onFrame(m.data(), m.size()); return; }
+        if (_node) { if (g_trace) std::printf("[TRACE] %s <- %s\n", _node->id.c_str(), m.c_str()); _node->session.onFrame(m.data(), m.size()); return; }
         StaticJsonDocument<192> d;
         if (deserializeJson(d, m) || std::strcmp(d["t"] | "", "JOIN") != 0) return;
         const std::string id = d["nodeId"] | "";
@@ -197,7 +198,7 @@ private:
             if (ec || self->_closing) return;
             if (self->_node && (self->_node->removed || g_hub->paused)) { self->enqueue({false, "", true}); self->_node->session.onDown(); }
             else if (self->_node) {
-                for (int i = 0; i < 4; i++) { std::string f; if (!self->_node->session.nextFrame(f)) break; self->enqueue({false, f, false}); }
+                for (int i = 0; i < 4; i++) { std::string f; if (!self->_node->session.nextFrame(f)) break; if (g_trace) std::printf("[TRACE] %s -> %s\n", self->_node->id.c_str(), f.c_str()); self->enqueue({false, f, false}); }
                 const uint32_t now = nowMs();
                 if (now - self->_lastPingMs >= nl::kPingIntervalMs) { self->_lastPingMs = now; self->enqueue({true, "", false}); }
                 if (self->_node->session.online()) self->_lastOnlineMs = now;
@@ -348,6 +349,22 @@ private:
             if (g_topoJson.empty()) { st = http::status::not_found; body = "{\"error\":\"no topology configured\"}"; }
             else { DynamicJsonDocument d(32768); g_rt.writeStatus(d.to<JsonObject>()); serializeJson(d, body); }
         }
+        // What the layout wants watched, and what each board last said: the plan, then the reading it is judged by.
+        else if (t == "/api/sensors") {
+            DynamicJsonDocument d(8192); JsonArray a = d.to<JsonArray>();
+            for (const topo::PlannedSensor& p : g_rt.sensorPlan()) {
+                JsonObject o = a.createNestedObject();
+                o["id"] = p.id; o["kind"] = p.kind == topo::PlannedSensor::Kind::Clamp ? "ct" : p.kind == topo::PlannedSensor::Kind::Plug ? "plug" : "bin";
+                o["board"] = p.board;
+                if (p.kind == topo::PlannedSensor::Kind::Plug) {
+                    o["ip"] = p.ip; o["tasmota"] = p.tasmota;
+                    topo::TopologyRuntime::NodePlugReading np;
+                    if (g_rt.nodePlug(p.id, np)) { o["polledBy"] = "node"; o["reachable"] = np.reachable; o["watts"] = np.watts; }
+                    else { const auto r = g_poller.read("m:" + p.id); o["polledBy"] = "brain"; o["reachable"] = r.reachable; o["watts"] = r.watts; }
+                }
+            }
+            serializeJson(d, body);
+        }
         else if (t == "/api/problems") { DynamicJsonDocument d(4096); g_rt.writeProblems(d.to<JsonObject>()); serializeJson(d, body); }
         // DEV ONLY: stand in for a plug reporting watts, so routing can be driven with no tool running.
         else if (t == "/api/dev/power" && _req.method() == http::verb::post) {
@@ -417,7 +434,7 @@ int main(int argc, char** argv) {
         std::string a = argv[i];
         auto val = [&]() { return i + 1 < argc ? std::string(argv[++i]) : std::string(); };
         if (a == "--id") id = val(); else if (a == "--pair") pair = val(); else if (a == "--port") port = (unsigned)std::stoi(val());
-        else if (a == "--ip") ip = val(); else if (a == "--state") stateDir = val(); else if (a == "--www") g_www = val(); else if (a == "--plug-port") plughttp::setPort(val()); else if (a == "--key") g_apiKey = val(); else if (a == "--broadcast") bcast = val();
+        else if (a == "--ip") ip = val(); else if (a == "--state") stateDir = val(); else if (a == "--trace") g_trace = true; else if (a == "--www") g_www = val(); else if (a == "--plug-port") plughttp::setPort(val()); else if (a == "--key") g_apiKey = val(); else if (a == "--broadcast") bcast = val();
         else { std::printf("usage: dustgate-brain [--id dustgate] [--pair nodeId,nodeId,...] [--port 8080] [--state dir] [--www dir] [--plug-port 80] [--key k] [--ip a.b.c.d] [--broadcast a.b.c.255]\n"); return a == "--help" ? 0 : 2; }
     }
     std::vector<std::string> ids; std::stringstream ss(pair); std::string x;

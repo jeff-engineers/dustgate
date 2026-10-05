@@ -1713,7 +1713,15 @@ void HttpApiServer::registerRoutes() {
                 LittleFS.remove(kNodeImgJson[s_kind]);
                 LittleFS.remove(kNodeImgPart[s_kind]);
                 s_nodeImage[s_kind] = NodeImage();
-                const size_t freeB = LittleFS.totalBytes() - LittleFS.usedBytes();
+                size_t freeB = LittleFS.totalBytes() - LittleFS.usedBytes();
+                // A firmware image outranks the link log's rotated-out half: that file is history, the
+                // filesystem is otherwise fully allocated (a build that grew ~14 KB stopped fitting on
+                // 2026-10-05 for want of it), and the live log keeps writing either way.
+                if (freeB < total + 16 * 1024 && LittleFS.exists("/linklog.1.txt")) {
+                    LittleFS.remove("/linklog.1.txt");
+                    Serial.println("[NODEIMG] removed the rotated link log to make room for the image");
+                    freeB = LittleFS.totalBytes() - LittleFS.usedBytes();
+                }
                 if (freeB < total + 16 * 1024) {
                     sendError(req, 507, "the filesystem has no room for that image");
                     s_abort = true; return;

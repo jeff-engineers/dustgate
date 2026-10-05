@@ -643,6 +643,18 @@ static void plugApplyConfig(const topo::nodelink::SensorSpec* specs, size_t n) {
     else   Serial.println(F("[PLUG] nothing to poll"));
 }
 
+static void plugTaskFn(void*);
+static BaseType_t g_plugTaskRc = 0;       // what xTaskCreate answered, for /api/plugs
+// Created from setup() and retried from loop(): it needs one contiguous 10 KB block, and a node that
+// boots with its heap already fragmented (a fresh OTA, WiFi up, the brainlink task holding its own 10 KB)
+// would otherwise have NO plug poller for the whole of its uptime, silently — a plug nobody polls reads
+// as unreachable and nothing says the poller never started.
+static void startPlugTask() {
+    if (g_plugTask) return;
+    g_plugTaskRc = xTaskCreate(plugTaskFn, "plugpoll", 10240, nullptr, 1, &g_plugTask);
+    if (g_plugTaskRc != pdPASS) { g_plugTask = nullptr; Serial.println(F("[PLUG] could not start the plug poller (no memory) - will retry")); }
+}
+
 static void plugTaskFn(void*) {
     SmartOutlet* outlets[topo::nodelink::kMaxSensorsPerNode] = {nullptr};
     uint32_t seenGen = 0xFFFFFFFFu;
@@ -1532,6 +1544,22 @@ void setup() {
     server.addHandler(&nodeWs);
     server.begin();
     // What the link task is doing, over the network — a node's serial is rarely attached.
+    // What the plug poller is doing, for the question "why does the brain say this plug is unreachable":
+    // is the task alive (stack headroom), what was configured, and how old is each answer.
+    server.on("/api/plugs", HTTP_GET, [](AsyncWebServerRequest* req) {
+        String o = "{\"started\":" + String(g_plugTask ? "true" : "false") + ",\"rc\":" + String((int)g_plugTaskRc) +
+                   ",\"largestBlock\":" + String((unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL)) +
+                   ",\"stackFree\":" + String(g_plugTask ? (unsigned)uxTaskGetStackHighWaterMark(g_plugTask) : 0u);
+        o += ",\"gen\":" + String((unsigned long)g_plugCfgGen) + ",\"count\":" + String((unsigned)g_plugCount) + ",\"plugs\":[";
+        for (size_t i = 0; i < g_plugCount; i++) {
+            const PlugWatch& p = g_plugs[i];
+            o += String(i ? "," : "") + "{\"id\":\"" + p.id + "\",\"ip\":\"" + p.ip + "\",\"tasmota\":" + (p.tasmota ? "true" : "false") +
+                 ",\"ageMs\":" + String(p.atMs ? (long)(millis() - p.atMs) : -1L) + ",\"reachable\":" + (p.reachable ? "true" : "false") +
+                 ",\"watts\":" + String((float)p.watts, 1) + "}";
+        }
+        o += "]}";
+        req->send(200, "application/json", o);
+    });
     server.on("/api/brainlink", HTTP_GET, [](AsyncWebServerRequest* req) {
         req->send(200, "application/json", brainlink::statusJson());
     });
@@ -1623,13 +1651,16 @@ static void updateStatusScreen() {
 
     statusscreen::update(f);
 
-    // The plug poller idles until a CONFIG gives it something to read. 6 KB: an
-    // HTTPClient and a parsed Status reply live on this stack.
-    xTaskCreate(plugTaskFn, "plugpoll", 6144, nullptr, 1, &g_plugTask);
+    // The plug poller idles until a CONFIG gives it something to read. 10 KB: an HTTPClient and a
+    // parsed Status reply live on this stack, and the plughttp seam (2026-10-05) put a few hundred
+    // bytes more on it than the direct HTTPClient calls did — 6 KB overflowed on the first poll
+    // (GET /api/plugs reported stackFree 0 and no plug ever answered). Check /api/plugs for headroom.
+    startPlugTask();
 }
 
 void loop() {
     watchdog::pet();
+    { static uint32_t lastTry = 0; if (!g_plugTask && millis() - lastTry > 5000) { lastTry = millis(); startPlugTask(); } }
     WiFiProvisioner::maintain();
 
     // `provision {...}` over the USB cable. A node has no console and needs
