@@ -25,6 +25,14 @@ active sections above them, which is how a parked item stops being read.
   Full plan, memory table and open questions:
   [`docs/nodes-dial-the-brain-plan.md`](../docs/nodes-dial-the-brain-plan.md).
 
+- **A node-owned plug's on/off threshold is compared twice.** The node polls the plug, compares
+  watts to the `thresholdW` it was sent and sets SENSE `on`; the brain ignores that bit and
+  compares the watts itself (`TopologyRuntime::pollSensors` → `setMachinePower`). Harmless, but two
+  copies of one rule. Fix: drop `thresholdW` from the `plug` sensor in CONFIG (and `on` from plug
+  SENSE) so the node only reports watts — a protocol change, so `nodelink.js` ↔ `NodeLink.h` ↔
+  `test_nodebus.cpp` and the CLAUDE.md pair-table row move together, and it needs a node flash.
+  Deferred 2026-10-04 so it does not ride along with the native build.
+
 - **Bench the collector's jobs on a node (built 2026-10-04, never run on a board).** A
   node can now key the RF transmitter (a `PRESS` frame) and watch the dust-bin beam (a
   `bin` sensor in CONFIG, reported as a SENSE bit); the retry policy stays on the primary.
