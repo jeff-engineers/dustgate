@@ -577,6 +577,9 @@ private:
     void send(const Out& o) {
         auto res = std::make_shared<http::response<http::string_body>>(o.st, _parser.get().version());
         res->set(http::field::content_type, o.mime);
+        // The API answers a question about NOW. With no cache header a browser (Safari most of all) may keep serving an
+        // earlier answer, which showed a layout error that had already been fixed on the brain.
+        res->set(http::field::cache_control, "no-store");
         for (auto& h : o.headers) res->set(h.first, h.second);
         res->body() = o.body; res->prepare_payload(); res->keep_alive(false);
         http::async_write(_stream, *res, [self = shared_from_this(), res](beast::error_code ec, size_t) {
