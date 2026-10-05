@@ -25,7 +25,7 @@ check "...and the plug now carries it" '[ "$(cat $T/power.name)" = "Router saw" 
 check "releasing a plug we never claimed reports it honestly" 'api -X POST --data @$T/ping.json localhost:$P/api/outlets/release | grep -q "\"ok\":true"'
 echo '{"ip":"127.0.0.2"}' > "$T/ping2.json"
 check "an address with no plug is reported unreachable, not an error" 'api -X POST --data @$T/ping2.json localhost:$P/api/outlets/ping | grep -q "\"reachable\":false"'
-check "taking a plug over is refused: this brain polls" '[ "$(curl -s -m 5 -o /dev/null -w %{http_code} -H "X-Api-Key: $K" -X POST --data @$T/ping.json localhost:$P/api/outlets/takeover)" = 501 ]'
+check "a takeover is accepted (the write itself is in e2e_push.sh)" 'api -X POST --data @$T/ping.json localhost:$P/api/outlets/takeover | grep -q "\"ok\":true"'
 # the sweep: 127.0.0.1-254 knocked, the one plug found
 api -X POST localhost:$P/api/outlets/sweep >/dev/null
 for i in $(seq 1 60); do api localhost:$P/api/outlets/sweep | grep -q '"running":false' && break; sleep 0.5; done

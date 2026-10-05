@@ -355,7 +355,9 @@ static bool readStatic(std::string path, std::string& body, std::string& mime) {
 // A node dials its brain, so a board nobody has paired yet announces itself with a JOIN and is turned away
 // ("not-paired"). Remembering who knocked recently IS discovery — it needs no multicast, which a shop network may block.
 // ── what the shared API (api/ApiCore.h) asks of this brain ────────────────────────────────────────────
-static outletops::Self selfIdentity() { return outletops::Self{g_hub->primaryId(), g_hub->primaryId()}; }
+// host: where a plug's push target points (our address, which is what decides "ours"); name: the owner suffix a plug carries
+// and what recognises our own plug at a stale address after the brain moves.
+static outletops::Self selfIdentity() { return outletops::Self{g_localIp, g_hub->primaryId()}; }
 
 // ── finding boards by mDNS ───────────────────────────────────────────────────────────────────────
 // "Scan for boards": a node advertises _dustgate._tcp with TXT (owner, board, servos, linear, role). Unlike a node that already
@@ -577,6 +579,39 @@ private:
     ws::stream<beast::tcp_stream> _ws; net::steady_timer _timer; beast::flat_buffer _buf; std::string _msg; bool _closed = false;
 };
 
+// A Gen2 plug's Outbound WebSocket: it dials us (we pointed it here with Ws.SetConfig) and streams JSON-RPC NotifyStatus /
+// NotifyFullStatus frames carrying switch:0.apower. TRUST MODEL as on the ESP32: unauthenticated because a plug cannot present a
+// key; a frame is matched to a plug we are polling ONLY by its TCP source address, so it can at most move a plug already paired.
+class PlugWs : public std::enable_shared_from_this<PlugWs> {
+public:
+    PlugWs(beast::tcp_stream&& s, std::string remote) : _ws(std::move(s)), _remote(std::move(remote)) {}
+    void run(http::request<http::string_body> req) {
+        _ws.async_accept(req, [self = shared_from_this()](beast::error_code ec) {
+            if (ec) return;
+            beast::get_lowest_layer(self->_ws).expires_never();
+            g_poller.pushConnect(self->_remote);
+            dglog::linef("[PLUGS] %s connected its push socket\n", self->_remote.c_str());
+            self->read();
+        });
+    }
+private:
+    void read() {
+        _ws.async_read(_buf, [self = shared_from_this()](beast::error_code ec, size_t) {
+            if (ec) { g_poller.pushDisconnect(self->_remote); dglog::linef("[PLUGS] %s push socket closed\n", self->_remote.c_str()); return; }
+            const std::string m = beast::buffers_to_string(self->_buf.data());
+            self->_buf.consume(self->_buf.size());
+            StaticJsonDocument<128> filter; filter["params"]["switch:0"]["apower"] = true;
+            StaticJsonDocument<256> d;
+            if (!deserializeJson(d, m, DeserializationOption::Filter(filter))) {
+                JsonVariant ap = d["params"]["switch:0"]["apower"];
+                if (!ap.isNull()) g_poller.pushPower(self->_remote, ap.as<float>());
+            }
+            self->read();
+        });
+    }
+    ws::stream<beast::tcp_stream> _ws; beast::flat_buffer _buf; std::string _remote;
+};
+
 class HttpConn : public std::enable_shared_from_this<HttpConn> {
 public:
     explicit HttpConn(tcp::socket&& s) : _stream(std::move(s)) { _parser.body_limit(4u * 1024 * 1024); }   // a node image is ~1.6 MB
@@ -595,6 +630,11 @@ private:
         if (ws::is_upgrade(req) && req.target() == "/nodelink") {
             std::string remote = beast::get_lowest_layer(_stream).socket().remote_endpoint().address().to_string();
             std::make_shared<NodeWs>(std::move(_stream), remote)->run(_parser.release());
+            return;
+        }
+        if (ws::is_upgrade(req) && req.target() == "/shelly-rpc") {
+            std::string remote = beast::get_lowest_layer(_stream).socket().remote_endpoint().address().to_string();
+            std::make_shared<PlugWs>(std::move(_stream), remote)->run(_parser.release());
             return;
         }
         if (ws::is_upgrade(req) && req.target() == "/ws") { std::make_shared<StatusWs>(std::move(_stream))->run(_parser.release()); return; }
@@ -655,13 +695,28 @@ private:
         if (t == "/api/outlets/release" && m == "POST") {
             StaticJsonDocument<128> d; const std::string ip = deserializeJson(d, ar.body) ? "" : std::string(d["ip"] | "");
             if (ip.empty()) { err(http::status::bad_request, "missing 'ip'"); return; }
-            // This brain never wrote to a plug on its own (it polls them), so there is no push target to restore.
-            defer([ip] { Out r; r.body = outletops::release(ip.c_str(), selfIdentity(), false, ""); return r; });
+            defer([ip] {
+                Out r;
+                // Only a plug that reads as OURS is ever written to on the way out: one we merely polled (someone else owns it, or
+                // we never got to claim it) has nothing of ours on it, and "disable its push" would silence its real owner.
+                StaticJsonDocument<1024> row; deserializeJson(row, outletops::describeJson(ip.c_str(), selfIdentity()));
+                const bool ours = std::string(row["claim"] | "") == "ours";
+                const dgbrain::PlugPoller::Claim c = g_poller.claimOf(ip);
+                r.body = outletops::release(ip.c_str(), selfIdentity(), c.pollOnly || !ours, c.restoreUrl.c_str());
+                g_poller.forget(ip);
+                return r;
+            });
             return;
         }
-        // Taking a plug means repointing ITS push target at this brain. This brain polls its plugs and has no push endpoint
-        // to point one at, so there is nothing to take: a plug someone else owns can still be sensed by polling it.
-        if (t == "/api/outlets/takeover" && m == "POST") { err(http::status::not_implemented, "this brain polls its plugs; it does not repoint a plug's push target"); return; }
+        // A person was shown what stops working on the other controller (plug-claim.js takeoverWarning) and said yes: the
+        // one way a plug somebody else owns is repointed at this brain. The next provisioning pass does the write.
+        if (t == "/api/outlets/takeover" && m == "POST") {
+            StaticJsonDocument<128> d; const std::string ip = deserializeJson(d, ar.body) ? "" : std::string(d["ip"] | "");
+            if (ip.empty()) { err(http::status::bad_request, "missing 'ip'"); return; }
+            g_poller.approveTakeover(ip);
+            dglog::linef("[PLUGS] takeover approved for %s\n", ip.c_str());
+            o.body = "{\"ok\":true}"; return;
+        }
         if (t == "/api/outlets/save" && m == "POST") { o.body = "{\"ok\":true}"; return; }   // nothing to persist: plugs live in the layout
         if (t == "/api/outlets/sweep" && m == "POST") { g_sweep.start(g_localIp, g_plugPort, selfIdentity()); o.body = "{\"ok\":true}"; return; }
         if (t == "/api/outlets/sweep" && m == "DELETE") { g_sweep.cancel(); o.body = "{\"ok\":true}"; return; }
@@ -880,6 +935,9 @@ int main(int argc, char** argv) {
     rtTick();
     net::signal_set sig(io, SIGINT, SIGTERM); sig.async_wait([&](beast::error_code, int) { io.stop(); });
     dglog::linef("dustgate-brain %s on %s:%u, %zu paired node(s)\n", id.c_str(), ip.c_str(), port, ids.size());
+    // Plugs are pointed at the port the app is served on (port 80 needs no number in the URL).
+    g_poller.setPushTarget(selfIdentity(), "ws://" + ip + (port == 80 ? "" : ":" + std::to_string(port)) + "/shelly-rpc",
+                           stateDir.empty() ? "" : stateDir + "/plugs.json");
     g_poller.start();
     io.run();
     g_poller.stop();
