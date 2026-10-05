@@ -8,10 +8,16 @@ CXXFLAGS   ?= -std=c++17 -O2 -Wall -Wextra -Wno-unused-parameter
 INC        := -I$(BOOST)/include -I$(ARDUINOJSON) -I../firmware/control -Isrc
 BIN        := build/dustgate-brain
 
-all: $(BIN)
-$(BIN): src/main.cpp src/NodeHub.h ../firmware/control/NodeSession.h
+FAKE := build/fakenode
+all: $(BIN) $(FAKE)
+$(FAKE): src/fakenode.cpp ../firmware/control/NodeLink.h
+	@mkdir -p build
+	$(CXX) $(CXXFLAGS) $(INC) src/fakenode.cpp -o $@ -L$(BOOST)/lib -pthread
+test: all
+	bash test/e2e.sh
+$(BIN): src/main.cpp src/NodeHub.h src/SessionBus.h ../firmware/control/NodeSession.h
 	@mkdir -p build
 	$(CXX) $(CXXFLAGS) $(INC) src/main.cpp -o $@ -L$(BOOST)/lib -pthread
 clean:
 	rm -rf build
-.PHONY: all clean
+.PHONY: all clean test

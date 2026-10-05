@@ -12,9 +12,12 @@
 #include <boost/beast/websocket.hpp>
 #include <csignal>
 #include <deque>
+#include <functional>
 #include <iostream>
+#include <fstream>
 #include <sstream>
 #include "NodeHub.h"
+#include "TopologyRuntime.h"
 
 namespace beast = boost::beast;
 namespace http = beast::http;
@@ -26,6 +29,17 @@ using namespace dgbrain;
 namespace nl = topo::nodelink;
 
 static NodeHub* g_hub = nullptr;
+static topo::TopologyRuntime g_rt;
+static std::string g_topoJson, g_topoPath, g_topoErr;
+
+static bool adoptLayout(const std::string& json) {
+    std::string err;
+    if (!g_rt.adopt(json.data(), json.size(), err)) { g_topoErr = err; return false; }
+    g_topoErr.clear(); g_topoJson = json;
+    if (!g_topoPath.empty()) { std::ofstream f(g_topoPath, std::ios::binary | std::ios::trunc); f << json; }
+    std::printf("[TOPO] layout adopted (%zu bytes)\n", json.size());
+    return true;
+}
 static unsigned g_nextLinkId = 1;
 
 static std::string refuseFrame(const char* reason) {
@@ -176,6 +190,24 @@ private:
         http::status st = http::status::ok; std::string body;
         const std::string t = std::string(_req.target());
         if (t == "/api/nodes") body = nodesJson();
+        else if (t == "/api/topology" && _req.method() == http::verb::get) {
+            if (g_topoJson.empty()) { st = http::status::not_found; body = "{\"error\":\"no topology configured\"}"; } else body = g_topoJson;
+        }
+        else if (t == "/api/topology" && _req.method() == http::verb::put) {
+            if (adoptLayout(_req.body())) body = "{\"ok\":true}";
+            else { st = http::status::bad_request; body = "{\"error\":\"" + g_topoErr + "\"}"; }
+        }
+        else if (t == "/api/status") {
+            if (g_topoJson.empty()) { st = http::status::not_found; body = "{\"error\":\"no topology configured\"}"; }
+            else { DynamicJsonDocument d(32768); g_rt.writeStatus(d.to<JsonObject>()); serializeJson(d, body); }
+        }
+        else if (t == "/api/problems") { DynamicJsonDocument d(4096); g_rt.writeProblems(d.to<JsonObject>()); serializeJson(d, body); }
+        // DEV ONLY: stand in for a plug reporting watts, so routing can be driven with no tool running.
+        else if (t == "/api/dev/power" && _req.method() == http::verb::post) {
+            StaticJsonDocument<192> d;
+            if (deserializeJson(d, _req.body()) || !d["machineId"].is<const char*>()) { st = http::status::bad_request; body = "{\"error\":\"machineId, watts\"}"; }
+            else { g_rt.setMachinePower(d["machineId"].as<std::string>(), d["watts"] | 0.0f); body = "{\"ok\":true}"; }
+        }
         else if (t == "/api/info") body = "{\"role\":\"native\",\"id\":\"" + g_hub->primaryId() + "\"}";
         else { st = http::status::not_found; body = "{\"error\":\"not found\"}"; }
         auto res = std::make_shared<http::response<http::string_body>>(st, _req.version());
@@ -229,24 +261,36 @@ static void beaconLoop(net::io_context& io, std::shared_ptr<udp::socket> sock, s
 
 int main(int argc, char** argv) {
     setvbuf(stdout, nullptr, _IOLBF, 0);
-    std::string id = "dustgate", pair, ip, bcast = "255.255.255.255";
+    std::string id = "dustgate", pair, ip, bcast = "255.255.255.255", stateDir;
     unsigned port = 8080;
     for (int i = 1; i < argc; i++) {
         std::string a = argv[i];
         auto val = [&]() { return i + 1 < argc ? std::string(argv[++i]) : std::string(); };
         if (a == "--id") id = val(); else if (a == "--pair") pair = val(); else if (a == "--port") port = (unsigned)std::stoi(val());
-        else if (a == "--ip") ip = val(); else if (a == "--broadcast") bcast = val();
-        else { std::printf("usage: dustgate-brain [--id dustgate] [--pair nodeId,nodeId,...] [--port 8080] [--ip a.b.c.d] [--broadcast a.b.c.255]\n"); return a == "--help" ? 0 : 2; }
+        else if (a == "--ip") ip = val(); else if (a == "--state") stateDir = val(); else if (a == "--broadcast") bcast = val();
+        else { std::printf("usage: dustgate-brain [--id dustgate] [--pair nodeId,nodeId,...] [--port 8080] [--state dir] [--ip a.b.c.d] [--broadcast a.b.c.255]\n"); return a == "--help" ? 0 : 2; }
     }
     std::vector<std::string> ids; std::stringstream ss(pair); std::string x;
     while (std::getline(ss, x, ',')) if (!x.empty()) ids.push_back(x);
     NodeHub hub(id, ids); g_hub = &hub;
+    g_rt.begin(&hub.bus());
+    if (!stateDir.empty()) {
+        g_topoPath = stateDir + "/topology.json";
+        std::ifstream f(g_topoPath, std::ios::binary);
+        if (f) { std::stringstream b; b << f.rdbuf(); if (!adoptLayout(b.str())) std::printf("[TOPO] stored layout refused: %s\n", g_topoErr.c_str()); }
+    }
     if (ip.empty()) ip = guessIp();
 
     net::io_context io(1);
     std::make_shared<Listener>(io, tcp::endpoint(tcp::v4(), (unsigned short)port))->run();
     auto sock = std::make_shared<udp::socket>(io, udp::v4()); sock->set_option(net::socket_base::broadcast(true));
     beaconLoop(io, sock, std::make_shared<net::steady_timer>(io), ip, port, bcast);
+    net::steady_timer rtTimer(io);
+    std::function<void()> rtTick = [&]() {
+        rtTimer.expires_after(std::chrono::milliseconds(100));
+        rtTimer.async_wait([&](beast::error_code ec) { if (ec) return; g_rt.update(nowMs()); rtTick(); });
+    };
+    rtTick();
     net::signal_set sig(io, SIGINT, SIGTERM); sig.async_wait([&](beast::error_code, int) { io.stop(); });
     std::printf("dustgate-brain %s on %s:%u, %zu paired node(s)\n", id.c_str(), ip.c_str(), port, ids.size());
     io.run();
