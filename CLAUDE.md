@@ -396,7 +396,7 @@ These are decided; don't relitigate them in code review or suggestions.
   primary's own, exactly as before. Everything here compiles and passes the paired host
   tests (`nodelink.test.js` ↔ `test_nodebus.cpp`), and **a PRESS has never keyed a real
   receiver from a node**. The UI's collector configurator does not offer a board for the
-  transmitter yet. Do not describe it as verified until a bench says so.
+  transmitter yet. **Bench 2026-10-05 (nodes on a desk with USB only: no servos, no receiver, no collector, no beam): PRESS and the bin pad now HAVE run on a real node.** A brain commanded a collector through `dustgate-mitersaw`; the node answered every PRESS `ok` (it keyed its transmitter pin), and the press policy retried at its 5 s cooldown and gave up after 3 against a plug that never drew, exactly as designed. A `bin` sensor in CONFIG came back as `SENSE bin:<system> on:false` and showed in `systems[].bin`. Not proven: that a real receiver is keyed (nothing was listening), the beam seeing FULL, and a press never replaying across a link drop (unit-tested only). Do not describe those as verified until a bench says so.
 
 - **A machine is ONE box, however many ports it has.** A second pickup — an
   overarm guard, a hood — is a differently-shaped inlet on that same box (square =
