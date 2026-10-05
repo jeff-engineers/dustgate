@@ -18,7 +18,7 @@ import { SERVO_CHANNELS_PER_BOARD } from '../gates/selector-types';
 import { clampOf } from './shop-doc';
 import * as model from '@device-model';
 import { validateTopology, type Topology } from '@topology';
-import { isShop, systemsOf, validateShop } from '@shop';
+import { isShop, portEnabled, portsByMachine, systemsOf, validateShop, type Shop } from '@shop';
 import { createTopologyDevice, setCollectorManual, setToolPower, statusView as topoStatus, toolThreshold, type TopologyDevice, type TopologyStatus } from '@topology-device';
 import { DEMO_TOPOLOGY } from './demo-topology';
 import type { SerialChunk } from '../boards/serial-log';
@@ -247,6 +247,17 @@ export class DemoApiService extends ApiService {
     // tool at 0 W and nothing routed. Both twins have had the floor all along
     // (manualWattsFor() in TopologyRuntime.h, and mock-api.js); this was the one
     // of the three that did not. See the twin-pair table in CLAUDE.md.
+    // Using another tool ends a hand-switched one in the same system (mirrors releaseManualsFor() in
+    // TopologyRuntime.h). The demo has no sensors, so every running tool IS a hand-switched one.
+    if (on) {
+      const ports = portsByMachine(this.td.topology as unknown as Shop);
+      const mine = new Set((ports.get(toolId) ?? []).filter(p => portEnabled(p.port)).map(p => p.systemId));
+      const watts = (this.td['toolWatts'] as Record<string, number> | undefined) ?? {};
+      for (const other of Object.keys(watts)) {
+        if (other === toolId || !(watts[other] > 0)) continue;
+        if ((ports.get(other) ?? []).some(p => portEnabled(p.port) && mine.has(p.systemId))) setToolPower(this.td, other, 0);
+      }
+    }
     setToolPower(this.td, toolId, on ? Math.round(trip > 0 ? trip * 3 : 15) : 0);
     return { ok: true };
   }

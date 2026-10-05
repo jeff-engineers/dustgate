@@ -462,6 +462,15 @@ function handler(req, res) {
       // on the tool, and 100 kW is 833 A at 120 V. Matches the firmware's
       // manualWattsFor() and the demo service.
       const trip = TD.toolThreshold(td.topology, data.toolId) || 0;
+      // Using another tool ends a hand-switched one in the same system (releaseManualsFor() in TopologyRuntime.h).
+      if (data.on) {
+        const ports = SHOP.portsByMachine(td.topology);
+        const mine = new Set((ports.get(data.toolId) || []).filter(p => SHOP.portEnabled(p.port)).map(p => p.systemId));
+        for (const other of Object.keys(td.toolWatts || {})) {
+          if (other === data.toolId || !(td.toolWatts[other] > 0)) continue;
+          if ((ports.get(other) || []).some(p => SHOP.portEnabled(p.port) && mine.has(p.systemId))) TD.setToolPower(td, other, 0);
+        }
+      }
       TD.setToolPower(td, data.toolId, data.on ? Math.round((trip > 0 ? trip * 3 : 15)) : 0);
       json(res, { ok: true });
     });

@@ -839,6 +839,28 @@ int main(int argc, char** argv) {
     rt.writeStatus(st4.to<JsonObject>());
     ok("a manual override outranks an off CT", st4["tools"]["toolX"]["active"] == true);
     rt.setMachineManual("toolX", false);
+
+    // USING ANOTHER TOOL ENDS A HAND-SWITCHED ONE (jeff, 2026-10-06): switching a second tool on by hand releases the
+    // first, so switching the second off leaves the system idle instead of swinging back to a tool nobody is using.
+    rt.setMachineManual("toolX", true);
+    rt.setMachineManual("toolY", true);
+    ok("switching a second tool on releases the first", !rt.machineIsManual("toolX") && rt.machineIsManual("toolY"));
+    rt.setMachineManual("toolY", false);
+    DynamicJsonDocument st5(8192);
+    rt.writeStatus(st5.to<JsonObject>());
+    ok("...so switching it off leaves nothing running", st5["tools"]["toolX"]["active"] == false && st5["tools"]["toolY"]["active"] == false);
+    // A tool that STARTS by itself (a plug, a clamp) is the same signal.
+    rt.setMachineManual("toolX", true);
+    rt.setMachinePower("toolY", 500.0f);
+    ok("a tool that starts on its own releases a hand-switched one", !rt.machineIsManual("toolX"));
+    rt.setMachinePower("toolY", 0.0f);
+    // ...and a level is not an edge: a tool already running does not keep clearing manual claims every poll.
+    rt.setMachinePower("toolY", 500.0f);
+    rt.setMachineManual("toolX", true);
+    rt.setMachinePower("toolY", 500.0f);
+    ok("a tool that was already running does not release one switched on after it", rt.machineIsManual("toolX"));
+    rt.setMachineManual("toolX", false);
+    rt.setMachinePower("toolY", 0.0f);
   }
 
   // ── A JOG RESOLVES THE BOARD THE SAME WAY A MOVE DOES ───────────────────

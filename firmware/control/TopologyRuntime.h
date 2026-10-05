@@ -323,7 +323,37 @@ public:
     void setMachinePower(const std::string& machineId, float watts) {
         if (!_loaded) return;
         if (_manual.count(machineId)) return;
+        const bool wasActive = _ctrl.machineWatts(machineId) >= _ctrl.machineThreshold(machineId);
+        // A tool STARTING (an edge, not a level) ends any hand-switched claim in its systems — see releaseManualsFor().
+        if (!wasActive && watts >= _ctrl.machineThreshold(machineId)) releaseManualsFor(machineId);
         ingest(_ctrl.setMachinePower(machineId, watts));
+    }
+
+    // USING ANOTHER TOOL ENDS A HAND-SWITCHED ONE (jeff, 2026-10-06). A manual claim is a person saying "run this", and
+    // nothing but a person tapping it off cleared it — so tap the saw on, walk to the planer, tap that on and off, and the
+    // gate swung back to a saw nobody was using with the blower still running. Starting any tool that shares a system
+    // with it is the signal that the person has moved on. Only the machines that share a SYSTEM: another airflow system
+    // has its own blower and nobody there moved anywhere. The released machine's synthetic watts go to 0, so it also
+    // leaves the most-recent-wins contest at once; the caller's own reading is applied right after.
+    void releaseManualsFor(const std::string& machineId) {
+        if (_manual.empty()) return;
+        auto ports = portsByMachine(topology());
+        auto systemsOfMachine = [&](const std::string& m) {
+            std::set<std::string> out;
+            auto it = ports.find(m);
+            if (it != ports.end()) for (const PortRef& pr : it->second) if (portEnabled(pr.port)) out.insert(pr.systemId);
+            return out;
+        };
+        const std::set<std::string> mine = systemsOfMachine(machineId);
+        const std::vector<std::string> held(_manual.begin(), _manual.end());
+        for (const std::string& other : held) {
+            if (other == machineId) continue;
+            bool shares = false;
+            for (const std::string& sid : systemsOfMachine(other)) if (mine.count(sid)) shares = true;
+            if (!shares) continue;
+            _manual.erase(other);
+            _ctrl.setMachinePower(other, 0.0f);
+        }
     }
 
     // Switch a machine on/off by hand, from the Live view. Every machine is
@@ -339,7 +369,7 @@ public:
     bool setMachineManual(const std::string& machineId, bool on) {
         if (!_loaded) return false;
         if (!hasMachine(machineId)) return false;
-        if (on) _manual.insert(machineId);
+        if (on) { releaseManualsFor(machineId); _manual.insert(machineId); }
         else    _manual.erase(machineId);
         // Comfortably over any plausible thresholdW; off returns it to 0 W, which
         // is also what a plug reports for a machine at rest.
