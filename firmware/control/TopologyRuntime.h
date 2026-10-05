@@ -409,6 +409,14 @@ public:
     // (nothing is wrong) and wrong for a press, which is a toggle and so must know
     // whether the blower is really still drawing before it decides an OFF landed.
     topo::PlugState pressObservation(const std::string& systemId) const {
+        // NO FEEDBACK SOURCE AT ALL means NoPlug (open loop), not Unknown. collectorPlugState() says
+        // Unknown for a blower we have commanded on that nothing has reported on — right for the app
+        // ("the plug is not answering") and wrong for a press: the policy WAITS on Unknown, so a
+        // collector with no plug, sensor or clamp was never pressed on at all (found by the native
+        // brain's end-to-end test). A layout that names a source and has not heard from it yet is
+        // still Unknown: that one genuinely is blind.
+        if (!collectorHasOutlet(systemId) && collectorSensorOutlet(systemId).isNull() && !collectorHasClamp(systemId))
+            return topo::PlugState::NoPlug;
         topo::PlugState st = collectorPlugStateFor(systemId);
         if (st == topo::PlugState::Off && collectorDrawing(systemId)) return topo::PlugState::Running;
         return st;

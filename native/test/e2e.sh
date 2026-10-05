@@ -19,6 +19,7 @@ d=json.load(open('../firmware/test/fixtures/twoGates.json'))
 for e in d['systems'][0]['elements']:
     if e['id']=='gate1': e['controllerId']='fake1'
     if e['id']=='gate2': e['controllerId']='fake2'
+    if e['id']=='dc': e['control']={'rf':{'controllerId':'fake1'}}
 json.dump(d,open(sys.argv[1],'w'))
 PY
 online() { curl -s -m 2 -H "X-Api-Key: testkey" localhost:$P/api/nodes | python3 -c "import sys,json;print(sum(1 for n in json.load(sys.stdin)['nodes'] if n['online']))" 2>/dev/null; }
@@ -31,6 +32,9 @@ for i in $(seq 1 30); do grep -q '"t":"SET"' "$T/f1.log" && break; sleep 0.3; do
 check "toolX drawing power sends a SET to the node that owns its gate" 'grep -q "\"selectorId\":\"gate1\".*\"stateId\":\"open\"" "$T/f1.log"'
 check "...and the OTHER node is only ever told to close its gate" '! grep -q "\"stateId\":\"open\"" "$T/f2.log"'
 sleep 1
+for i in $(seq 1 30); do grep -q '"t":"PRESS"' "$T/f1.log" && break; sleep 0.3; done
+sleep 1
+check "the collector is pressed ONCE, by the node that has its transmitter" '[ "$(grep -c "\"t\":\"PRESS\"" "$T/f1.log")" = 1 ] && ! grep -q "\"t\":\"PRESS\"" "$T/f2.log"'
 check "the arrival is in the status" '[ "$(curl -s -m 3 -H "X-Api-Key: testkey" localhost:$P/api/status | python3 -c "import sys,json;print(json.load(sys.stdin)[\"actuators\"][\"gate1\"])")" = open ]'
 curl -s -m 3 -H "X-Api-Key: testkey" -X POST -d '{"machineId":"toolY","watts":100}' localhost:$P/api/dev/power >/dev/null
 for i in $(seq 1 40); do grep -q '"stateId":"open"' "$T/f2.log" && break; sleep 0.3; done

@@ -127,7 +127,14 @@ inline PressAction nextPressAction(const PressState& st, bool want,
     // NoPlug: no feedback configured at all, so there is nothing to reconcile
     // against and retrying would be guessing. One press on a change of want
     // (handled above) is all an open-loop collector ever gets.
+    //
+    // NEVER PRESS AN OFF WE HAVE NO REASON TO BELIEVE IN. A press is a toggle, so "OFF" sent to a blower
+    // we never turned on switches an idle one ON (or stops one a person started by hand). With no
+    // feedback there is no evidence either way, and a brain that has just booted or adopted a layout
+    // wants OFF for every collector — found by the native brain's end-to-end test, which pressed OFF
+    // at startup. The first press an open-loop collector gets is therefore an ON.
     if (observed == PlugState::NoPlug) {
+        if (!st.everPressed && !want) return PressAction::Nothing;
         return st.everPressed ? PressAction::Nothing : PressAction::Press;
     }
 

@@ -623,6 +623,7 @@ static const float kFarConfirmMinTravelMm = 10.0f;
 #include "control/NodeBus.h"
 #include "control/RemoteActuatorBus.h"
 #include "control/NodeStatus.h"
+#include "control/CollectorDriver.h"
 #include "control/TopologyRuntime.h"
 #include "control/NodeRegistry.h"
 #include "control/TopologyStore.h"
@@ -1146,6 +1147,11 @@ static void syncControllerAliases() {
 // Rebuilt on every adopt rather than reconfigured: a layout may move the
 // transmitter to another pin or name a different fob's address, and there is no
 // state in a presser worth preserving across that.
+// What the shared collector loop is lent: the serial console and the watchdog.
+struct SketchDriverHooks : topo::DriverHooks {
+    void say(const std::string& l) override { DEBUG_PRINTLN(l.c_str()); }
+    void pet() override { watchdog::pet(); }
+};
 static topo::CollectorPresser* g_pressers[COLLECTOR_COUNT] = {nullptr};
 // The same objects, when they are THIS board's own transmitter — the bench console wants
 // pressWithRepeats(), which a presser on a node does not have. Not owning: g_pressers is.
@@ -2947,69 +2953,9 @@ void loop() {
                     // blower disagrees. See control/CollectorPress.h — every
                     // refusal in there is a case where pressing would have
                     // turned a healthy blower OFF.
-                    const uint32_t now = millis();
-                    const topo::PlugState seen = g_topoRuntime.pressObservation(sysIds[i]);
-                    switch (topo::nextPressAction(g_pressState[i], want, seen, now)) {
-                        case topo::PressAction::Press: {
-                            // ~500 ms of RMT. Acceptable on the main loop only
-                            // because it happens on a state change, not a tick —
-                            // and the watchdog runs at 10 s.
-                            watchdog::pet();
-                            const bool sent = g_pressers[i]->press();
-                            topo::notePress(g_pressState[i], want, now);
-                            DEBUG_PRINT(F("[RF] press #"));
-                            DEBUG_PRINT(g_pressState[i].attempts);
-                            DEBUG_PRINT(F(" wanting "));
-                            DEBUG_PRINT(want ? F("ON") : F("OFF"));
-                            DEBUG_PRINT(F(" (saw "));
-                            DEBUG_PRINT(topo::plugStateName(seen));
-                            DEBUG_PRINTLN(sent ? F(") -> sent") : F(") -> TRANSMIT FAILED"));
-                            if (sent) g_topoRuntime.clearProblem("rf-send:" + sysIds[i]);
-                            else g_topoRuntime.raiseProblem("rf-send:" + sysIds[i], "rf-send-failed", "bad", "system", sysIds[i],
-                                     "The remote's transmitter could not send the press.", now);
-                            g_topoRuntime.clearProblem("rf-gave-up:" + sysIds[i]);
-                            watchdog::pet();
-                            break;
-                        }
-                        case topo::PressAction::GiveUp:
-                            g_topoRuntime.raiseProblem("rf-gave-up:" + sysIds[i], "rf-gave-up", "bad", "system", sysIds[i],
-                                "Pressed the remote 3 times and the blower never agreed \xE2\x80\x94 check the breaker, the cord and the fob's battery.", now);
-                            if (!g_pressState[i].gaveUp) {
-                                topo::noteGaveUp(g_pressState[i]);
-                                // Said ONCE. The state latches, so this does not
-                                // become a line per loop for the rest of the day.
-                                DEBUG_PRINT(F("[RF] Collector ")); DEBUG_PRINT((int)i);
-                                DEBUG_PRINT(F(" did not respond after "));
-                                DEBUG_PRINT(topo::kMaxPressAttempts);
-                                DEBUG_PRINTLN(F(" presses — check the breaker, the cord, "
-                                                "and the fob's battery."));
-                            }
-                            break;
-                        case topo::PressAction::Nothing:
-                            // OFF that did not take. The policy cannot see it —
-                            // the plug state reads "off" whenever we are not asking,
-                            // whatever the wire says — so it never presses again,
-                            // and the blower runs on after the last tool. We do not
-                            // press blind here (a person may have started it at the
-                            // fob), but we do SAY so.
-                            if (!want && g_pressState[i].everPressed &&
-                                (now - g_pressState[i].lastPressMs) > topo::kPressCooldownMs * 2 &&
-                                g_topoRuntime.collectorDrawing(sysIds[i])) {
-                                g_topoRuntime.raiseProblem("rf-wont-stop:" + sysIds[i], "collector-wont-stop", "bad",
-                                    "system", sysIds[i],
-                                    "Told it to stop, but it is still drawing power \xE2\x80\x94 the remote may have missed the press, or someone started it by hand.", now);
-                            } else {
-                                g_topoRuntime.clearProblem("rf-wont-stop:" + sysIds[i]);
-                            }
-                            // Settled: clear the budget so the next disagreement
-                            // gets a full one rather than the tail of this one.
-                            if (seen == (want ? topo::PlugState::Running
-                                              : topo::PlugState::Off)) {
-                                topo::noteSettled(g_pressState[i]);
-                                g_topoRuntime.clearProblem("rf-gave-up:" + sysIds[i]);
-                            }
-                            break;
-                    }
+                    // The loop itself is control/CollectorDriver.h, shared with the native brain.
+                    static SketchDriverHooks hooks;
+                    topo::driveCollectorPress(g_topoRuntime, sysIds[i], *g_pressers[i], g_pressState[i], want, millis(), hooks);
                     g_dcAsserted[i] = want; g_dcHave[i] = true;
                 } else if (!g_dcHave[i] || want != g_dcAsserted[i]) {
                     control.setCollectorManual((int)i, want);

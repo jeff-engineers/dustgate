@@ -18,7 +18,9 @@
 #include <fstream>
 #include <sstream>
 #include "NodeHub.h"
+#include "CollectorDriver.h"
 #include "NodeStatus.h"
+#include "RemoteRfPresser.h"
 #include "TopologyRuntime.h"
 
 namespace beast = boost::beast;
@@ -34,6 +36,34 @@ static NodeHub* g_hub = nullptr;
 static topo::TopologyRuntime g_rt;
 static std::string g_topoJson, g_topoPath, g_topoErr;
 
+// ── the collector: one presser and one press-state per system that has a remote ──────────────────
+struct CollectorSlot { std::string sys; std::unique_ptr<topo::RemoteRfPresser> presser; topo::PressState ps; };
+static std::vector<CollectorSlot> g_collectors;
+static std::vector<topo::PressState> g_oldPress;
+
+static void rebuildPressers() {
+    g_collectors.clear();
+    for (const std::string& sys : g_rt.systemIds()) {
+        JsonObjectConst rf = g_rt.collectorRf(sys);
+        if (rf.isNull()) continue;
+        // There is no pad on this machine: the transmitter is always a paired node's, named by controllerId.
+        const std::string board = rf["controllerId"] | "";
+        if (board.empty() || topo::isOwnBoard(board, "")) { std::printf("[RF] collector %s: the layout names no board for its transmitter\n", sys.c_str()); continue; }
+        CollectorSlot c; c.sys = sys;
+        c.presser.reset(new topo::RemoteRfPresser(&g_hub->bus(), board,
+            (uint8_t)(rf["address"] | (int)topo::rf::kRocklerAddress), (uint8_t)(rf["data"] | (int)topo::rf::kRocklerData),
+            (uint32_t)(rf["tickUs"] | (int)topo::rf::kDefaultTickUs), (uint32_t)(rf["repeats"] | (int)topo::rf::kDefaultRepeats)));
+        std::printf("[RF] collector %s pressed by RF through board %s\n", sys.c_str(), board.c_str());
+        g_collectors.push_back(std::move(c));
+    }
+}
+
+struct StdoutHooks : topo::DriverHooks { void say(const std::string& l) override { std::printf("%s\n", l.c_str()); } };
+static void driveCollectors(uint32_t now) {
+    static StdoutHooks hooks;
+    for (auto& c : g_collectors) topo::driveCollectorPress(g_rt, c.sys, *c.presser, c.ps, g_rt.collectorOn(c.sys), now, hooks);
+}
+
 static std::string g_pairPath;
 static void savePairs() {
     if (g_pairPath.empty()) return;
@@ -46,6 +76,7 @@ static bool adoptLayout(const std::string& json) {
     std::string err;
     if (!g_rt.adopt(json.data(), json.size(), err)) { g_topoErr = err; return false; }
     g_topoErr.clear(); g_topoJson = json;
+    rebuildPressers();
     if (!g_topoPath.empty()) { std::ofstream f(g_topoPath, std::ios::binary | std::ios::trunc); f << json; }
     std::printf("[TOPO] layout adopted (%zu bytes)\n", json.size());
     return true;
@@ -244,7 +275,7 @@ private:
             else { st = http::status::bad_request; body = "{\"error\":\"" + g_topoErr + "\"}"; }
         }
         else if (t == "/api/topology" && _req.method() == http::verb::delete_) {
-            g_rt.clear(); g_topoJson.clear(); if (!g_topoPath.empty()) std::remove(g_topoPath.c_str()); body = "{\"ok\":true}";
+            g_rt.clear(); g_topoJson.clear(); g_collectors.clear(); if (!g_topoPath.empty()) std::remove(g_topoPath.c_str()); body = "{\"ok\":true}";
         }
         else if (t == "/api/nodes/pair" && _req.method() == http::verb::post) {
             StaticJsonDocument<256> d;
@@ -371,7 +402,7 @@ int main(int argc, char** argv) {
     net::steady_timer rtTimer(io);
     std::function<void()> rtTick = [&]() {
         rtTimer.expires_after(std::chrono::milliseconds(100));
-        rtTimer.async_wait([&](beast::error_code ec) { if (ec) return; g_rt.update(nowMs()); rtTick(); });
+        rtTimer.async_wait([&](beast::error_code ec) { if (ec) return; g_rt.update(nowMs()); driveCollectors(nowMs()); rtTick(); });
     };
     rtTick();
     net::signal_set sig(io, SIGINT, SIGTERM); sig.async_wait([&](beast::error_code, int) { io.stop(); });

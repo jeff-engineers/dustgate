@@ -36,8 +36,10 @@ int main(int argc, char** argv) {
         std::printf("<- %s\n", beast::buffers_to_string(b.data()).c_str());
         if (t == "HELLO") {
             StaticJsonDocument<384> d;
-            topo::nodelink::buildWelcome(d.to<JsonObject>(), id.c_str(), "fake", "fake 0", 2, 0, nullptr, true, 0, false, true);
+            topo::nodelink::buildWelcome(d.to<JsonObject>(), id.c_str(), "fake", "fake 0", 2, 0, nullptr, true, 0, false, true, true, true);
             send(d);
+        } else if (t == "PRESS") {
+            StaticJsonDocument<96> d; topo::nodelink::buildAck(d.to<JsonObject>(), f["seq"] | 0, true); send(d);
         } else if (t == "SET") {
             { StaticJsonDocument<96> d; topo::nodelink::buildAck(d.to<JsonObject>(), f["seq"] | 0, true); send(d); }
             { StaticJsonDocument<128> d; topo::nodelink::buildState(d.to<JsonObject>(), f["selectorId"] | "", f["stateId"] | "", false); send(d); }

@@ -215,6 +215,13 @@ int main() {
            nextPressAction(st, false, PlugState::NoPlug, 1000 + COOL) == PressAction::Press);
     }
 
+    printf("\nR8b an open-loop collector is never pressed OFF before it was pressed ON\n");
+    {
+        PressState st;
+        ok("wanting OFF with no feedback and no history is nothing (a toggle would START an idle blower)",
+           nextPressAction(st, false, PlugState::NoPlug, 1000) == PressAction::Nothing);
+    }
+
     printf("\nR9 settling clears the budget\n");
     {
         PressState st;
