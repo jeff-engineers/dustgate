@@ -8,6 +8,8 @@ ok()  { echo "  ok   $1"; }
 bad() { echo "  FAIL $1"; fail=1; }
 check() { if eval "$2"; then ok "$1"; else bad "$1"; fi; }
 api() { curl -s -m 5 -H "X-Api-Key: $K" "$@"; }
+# a board scan asks mDNS first (seconds), then adds boards that only knocked
+scan() { curl -s -m 30 -H "X-Api-Key: $K" localhost:$P/api/nodes/discover; }
 code() { curl -s -m 5 -o /dev/null -w "%{http_code}" -H "X-Api-Key: $K" "$@"; }
 body() { echo "$1" > "$T/body.json"; }
 mkdir -p "$T/state"
@@ -46,9 +48,9 @@ check "a jog to a board that is not paired is a 502" '[ "$(code -X POST --data @
 # a board nobody paired knocks, and shows up in discovery
 $F 127.0.0.1 $P stranger 3 > "$T/s.log" 2>&1 &
 sleep 2
-check "an unpaired board that dials in is listed by discovery" 'api localhost:$P/api/nodes/discover | grep -q "\"host\":\"stranger\""'
+check "an unpaired board that dials in is listed by discovery" 'scan | grep -q "\"host\":\"stranger\""'
 api -X POST -d '{"host":"stranger","name":"New board"}' localhost:$P/api/nodes/pair >/dev/null
-check "...and is no longer offered once paired" '! api localhost:$P/api/nodes/discover | grep -q "\"host\":\"stranger\""'
+check "...and is no longer offered once paired" '! scan | grep -q "\"host\":\"stranger\""'
 api -X POST -d '{"host":"stranger","remove":true}' localhost:$P/api/nodes/pair >/dev/null
 
 # the console and the link log
