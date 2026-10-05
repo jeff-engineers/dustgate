@@ -17,6 +17,9 @@
 #include <iostream>
 #include <fstream>
 #include <sstream>
+#include "ApiCore.h"
+#include "Log.h"
+#include "Md5.h"
 #include "NodeHub.h"
 #include "CollectorDriver.h"
 #include "NodeStatus.h"
@@ -35,7 +38,7 @@ namespace nl = topo::nodelink;
 
 static NodeHub* g_hub = nullptr;
 static topo::TopologyRuntime g_rt;
-static std::string g_topoJson, g_topoPath, g_topoErr;
+static std::string g_topoJson, g_topoPath, g_topoErr, g_stateDir;
 
 // ── the plugs the brain polls itself ──────────────────────────────────────────────────────────────
 // Tools whose plug no node polls, and the collector's own plugs. The drivers are the ESP32's; this only decides
@@ -97,17 +100,17 @@ static void rebuildPressers() {
         if (rf.isNull()) continue;
         // There is no pad on this machine: the transmitter is always a paired node's, named by controllerId.
         const std::string board = rf["controllerId"] | "";
-        if (board.empty() || topo::isOwnBoard(board, "")) { std::printf("[RF] collector %s: the layout names no board for its transmitter\n", sys.c_str()); continue; }
+        if (board.empty() || topo::isOwnBoard(board, "")) { dglog::linef("[RF] collector %s: the layout names no board for its transmitter\n", sys.c_str()); continue; }
         CollectorSlot c; c.sys = sys;
         c.presser.reset(new topo::RemoteRfPresser(&g_hub->bus(), board,
             (uint8_t)(rf["address"] | (int)topo::rf::kRocklerAddress), (uint8_t)(rf["data"] | (int)topo::rf::kRocklerData),
             (uint32_t)(rf["tickUs"] | (int)topo::rf::kDefaultTickUs), (uint32_t)(rf["repeats"] | (int)topo::rf::kDefaultRepeats)));
-        std::printf("[RF] collector %s pressed by RF through board %s\n", sys.c_str(), board.c_str());
+        dglog::linef("[RF] collector %s pressed by RF through board %s\n", sys.c_str(), board.c_str());
         g_collectors.push_back(std::move(c));
     }
 }
 
-struct StdoutHooks : topo::DriverHooks { void say(const std::string& l) override { std::printf("%s\n", l.c_str()); } };
+struct StdoutHooks : topo::DriverHooks { void say(const std::string& l) override { dglog::line(l); } };
 static void driveCollectors(uint32_t now) {
     static StdoutHooks hooks;
     for (auto& c : g_collectors) topo::driveCollectorPress(g_rt, c.sys, *c.presser, c.ps, g_rt.collectorOn(c.sys), now, hooks);
@@ -128,10 +131,12 @@ static bool adoptLayout(const std::string& json) {
     rebuildPressers();
     syncPlugs();
     if (!g_topoPath.empty()) { std::ofstream f(g_topoPath, std::ios::binary | std::ios::trunc); f << json; }
-    std::printf("[TOPO] layout adopted (%zu bytes)\n", json.size());
+    dglog::linef("[TOPO] layout adopted (%zu bytes)\n", json.size());
     return true;
 }
 static unsigned g_nextLinkId = 1;
+struct Knock { std::string ip; uint32_t atMs; };
+static std::map<std::string, Knock> g_knocks;   // unpaired nodes that dialled in lately: GET /api/nodes/discover
 static bool g_trace = false;   // --trace: print every frame a node sends
 
 static std::string refuseFrame(const char* reason) {
@@ -171,7 +176,7 @@ private:
     }
 
     void onText(const std::string& m) {
-        if (_node) { if (g_trace) std::printf("[TRACE] %s <- %s\n", _node->id.c_str(), m.c_str()); _node->session.onFrame(m.data(), m.size()); return; }
+        if (_node) { if (g_trace) dglog::linef("[TRACE] %s <- %s\n", _node->id.c_str(), m.c_str()); _node->session.onFrame(m.data(), m.size()); return; }
         StaticJsonDocument<192> d;
         if (deserializeJson(d, m) || std::strcmp(d["t"] | "", "JOIN") != 0) return;
         const std::string id = d["nodeId"] | "";
@@ -179,16 +184,17 @@ private:
         std::shared_ptr<Node> n = g_hub->find(id);
         if (g_hub->paused) { enqueue({false, refuseFrame("busy"), true}); return; }
         if (!n) {
-            std::printf("[NODE] JOIN from %s (%s) - not paired, refused\n", id.c_str(), _remote.c_str());
+            dglog::linef("[NODE] JOIN from %s (%s) - not paired, refused", id.c_str(), _remote.c_str());
+            g_knocks[id] = Knock{_remote, nowMs()};
             enqueue({false, refuseFrame("not-paired"), true}); return;
         }
         if (!n->session.onAttach()) {
-            std::printf("[NODE] JOIN from %s - already linked, refused as a duplicate\n", id.c_str());
+            dglog::linef("[NODE] JOIN from %s - already linked, refused as a duplicate\n", id.c_str());
             enqueue({false, refuseFrame("duplicate"), true}); return;
         }
         _node = n; _linkId = g_nextLinkId++; n->linkId = _linkId;
         _attachedMs = _lastOnlineMs = nowMs(); _lastPingMs = nowMs();
-        std::printf("[NODE] %s dialled in from %s\n", id.c_str(), _remote.c_str());
+        dglog::linef("[NODE] %s dialled in from %s\n", id.c_str(), _remote.c_str());
         enqueue({false, n->session.helloFrame(), false});
     }
 
@@ -198,12 +204,12 @@ private:
             if (ec || self->_closing) return;
             if (self->_node && (self->_node->removed || g_hub->paused)) { self->enqueue({false, "", true}); self->_node->session.onDown(); }
             else if (self->_node) {
-                for (int i = 0; i < 4; i++) { std::string f; if (!self->_node->session.nextFrame(f)) break; if (g_trace) std::printf("[TRACE] %s -> %s\n", self->_node->id.c_str(), f.c_str()); self->enqueue({false, f, false}); }
+                for (int i = 0; i < 4; i++) { std::string f; if (!self->_node->session.nextFrame(f)) break; if (g_trace) dglog::linef("[TRACE] %s -> %s\n", self->_node->id.c_str(), f.c_str()); self->enqueue({false, f, false}); }
                 const uint32_t now = nowMs();
                 if (now - self->_lastPingMs >= nl::kPingIntervalMs) { self->_lastPingMs = now; self->enqueue({true, "", false}); }
                 if (self->_node->session.online()) self->_lastOnlineMs = now;
                 else if (now - self->_lastOnlineMs > 2 * nl::kPongTimeoutMs) {
-                    std::printf("[NODE] %s silent - closing its socket\n", self->_node->id.c_str());
+                    dglog::linef("[NODE] %s silent - closing its socket\n", self->_node->id.c_str());
                     self->enqueue({false, "", true});
                 }
             }
@@ -234,7 +240,7 @@ private:
         _timer.cancel();
         if (_node && _node->linkId == _linkId) {
             _node->linkId = 0; _node->session.onDown();
-            std::printf("[NODE] %s link closed\n", _node->id.c_str());
+            dglog::linef("[NODE] %s link closed\n", _node->id.c_str());
         }
         _node.reset();
     }
@@ -251,10 +257,33 @@ private:
 };
 
 // ── plain HTTP (the API's first two routes) ─────────────────────────────────
+// ── staged node firmware (what nodes pull on an OTA) ─────────────────────────────────────────────────
+// Stored in the state directory, so the brain has no flash budget to fight: a 1.6 MB image is nothing to a disk.
+struct NodeImage { bool present = false; std::string fw, md5; uint32_t size = 0; };
+static NodeImage g_images[2];                                   // 0 = pwm, 1 = linear
+static const char* const kImgName[2] = {"pwm", "linear"};
+static std::string imgFile(int k, const char* ext) { return g_stateDir + "/node-" + kImgName[k] + ext; }
+static std::string imgUrlPath(int k) { return std::string("/node-") + kImgName[k] + ".bin"; }
+
+static void loadImages() {
+    for (int k = 0; k < 2; k++) {
+        std::ifstream j(imgFile(k, ".json")); if (!j) continue;
+        StaticJsonDocument<256> d; if (deserializeJson(d, j)) continue;
+        std::ifstream b(imgFile(k, ".bin"), std::ios::binary | std::ios::ate); if (!b) continue;
+        g_images[k].fw = d["fw"] | ""; g_images[k].md5 = d["md5"] | ""; g_images[k].size = (uint32_t)b.tellg(); g_images[k].present = true;
+    }
+}
+
+static topo::NodeImageView imageViewFor(dgbrain::Node& n) {
+    const int k = n.session.info().capLinear > 0 ? 1 : 0;
+    topo::NodeImageView v; v.present = g_images[k].present; v.fw = g_images[k].fw.c_str();
+    return v;
+}
+
 static std::string nodesJson() {
     DynamicJsonDocument d(8192);
     JsonArray a = d.createNestedArray("nodes");
-    for (auto& kv : g_hub->nodes()) topo::writeNodeEntry(a, kv.second->session, kv.first.c_str(), kv.first.c_str(), kv.second->name.c_str(), topo::NodeImageView());
+    for (auto& kv : g_hub->nodes()) topo::writeNodeEntry(a, kv.second->session, kv.first.c_str(), kv.first.c_str(), kv.second->name.c_str(), imageViewFor(*kv.second));
     // This board is a board too, and has no hardware of its own: the same shape the ESP32 reports.
     JsonObject self = d.createNestedObject("self");
     self["id"] = g_hub->primaryId(); self["name"] = g_hub->primaryId(); self["fw"] = "native"; self["board"] = "native";
@@ -287,106 +316,198 @@ static bool readStatic(std::string path, std::string& body, std::string& mime) {
     return false;
 }
 
+// ── unpaired nodes that knocked: what GET /api/nodes/discover lists ──────────────────────────────────────
+// A node dials its brain, so a board nobody has paired yet announces itself with a JOIN and is turned away
+// ("not-paired"). Remembering who knocked recently IS discovery — it needs no multicast, which a shop network may block.
+// ── what the shared API (api/ApiCore.h) asks of this brain ────────────────────────────────────────────
+class NativeBackend : public api::Backend {
+public:
+    bool setToolManual(const std::string& id, bool on) override { return g_rt.setMachineManual(id, on); }
+    bool setCollectorManual(const std::string& sys, bool on) override {
+        std::string s = sys;
+        if (s.empty()) { auto ids = g_rt.systemIds(); if (ids.empty()) return false; s = ids[0]; }
+        return g_rt.setCollectorManual(s, on);
+    }
+    bool jog(const std::string& cid, int ch, int angle, bool detach, std::string& why) override {
+        if (cid.empty() || topo::isOwnBoard(cid, "")) { why = "no servo support on this brain"; return false; }
+        topo::ActuatorBus* b = g_hub->bus().busForController(cid.c_str());
+        if (!b || !b->online()) { why = "that board is not linked"; return false; }
+        if (!b->jog(ch, angle, detach)) { why = "the board refused the jog"; return false; }
+        return true;
+    }
+    void resetAll() override {
+        g_rt.clear(); g_topoJson.clear(); g_collectors.clear(); g_poller.sync({});
+        if (!g_topoPath.empty()) std::remove(g_topoPath.c_str());
+        std::vector<std::string> ids; for (auto& kv : g_hub->nodes()) ids.push_back(kv.first);
+        for (auto& id : ids) g_hub->remove(id);
+        savePairs();
+        dglog::line("[API] reset everything requested");
+    }
+    void pairNode(const std::string& host, const std::string& name, bool remove, bool takeover) override {
+        if (remove) g_hub->remove(host);
+        else { auto n = g_hub->add(host, name); if (takeover) n->session.requestTakeover(); g_knocks.erase(host); }
+        savePairs();
+    }
+    void pauseLinks(bool p) override { g_hub->paused = p; dglog::line(p ? "[NODE] Links PAUSED \xE2\x80\x94 every link stopped, pairings kept" : "[NODE] Links resumed"); }
+    std::string discoverNodes() override {
+        DynamicJsonDocument d(4096); JsonArray a = d.to<JsonArray>();
+        const uint32_t now = dgbrain::nowMs();
+        for (auto& kv : g_knocks) {
+            if (now - kv.second.atMs > 120000 || g_hub->find(kv.first)) continue;
+            JsonObject o = a.createNestedObject();
+            o["host"] = kv.first; o["ip"] = kv.second.ip; o["board"] = "unknown"; o["servos"] = 0;   // a JOIN carries only the id
+        }
+        std::string out; serializeJson(d, out); return out;
+    }
+    bool updateNode(const std::string& id, std::string& why) override {
+        auto n = g_hub->find(id);
+        if (!n) { why = "that board is not paired"; return false; }
+        const int k = n->session.info().capLinear > 0 ? 1 : 0;
+        if (!g_images[k].present) { why = "no firmware image is staged for that kind of board"; return false; }
+        if (g_rt.collectorOn() || g_hub->bus().busy()) { why = "a tool is running - wait until the shop is quiet"; return false; }
+        const char* w = "";
+        if (!n->session.requestOta(imgUrlPath(k).c_str(), g_images[k].size, g_images[k].md5.c_str(), g_images[k].fw.c_str(), w)) { why = w; return false; }
+        return true;
+    }
+};
+static NativeBackend g_backend;
+
 class HttpConn : public std::enable_shared_from_this<HttpConn> {
 public:
-    explicit HttpConn(tcp::socket&& s) : _stream(std::move(s)) {}
+    explicit HttpConn(tcp::socket&& s) : _stream(std::move(s)) { _parser.body_limit(4u * 1024 * 1024); }   // a node image is ~1.6 MB
     void run() {
-        _stream.expires_after(std::chrono::seconds(30));
-        http::async_read(_stream, _buf, _req, [self = shared_from_this()](beast::error_code ec, size_t) {
+        _stream.expires_after(std::chrono::seconds(60));
+        http::async_read(_stream, _buf, _parser, [self = shared_from_this()](beast::error_code ec, size_t) {
             if (ec) return;
             self->handle();
         });
     }
 private:
+    struct Out { http::status st = http::status::ok; std::string body, mime = "application/json"; std::vector<std::pair<std::string, std::string>> headers; };
+
     void handle() {
-        if (ws::is_upgrade(_req) && _req.target() == "/nodelink") {
+        auto& req = _parser.get();
+        if (ws::is_upgrade(req) && req.target() == "/nodelink") {
             std::string remote = beast::get_lowest_layer(_stream).socket().remote_endpoint().address().to_string();
-            std::make_shared<NodeWs>(std::move(_stream), remote)->run(std::move(_req));
+            std::make_shared<NodeWs>(std::move(_stream), remote)->run(_parser.release());
             return;
         }
-        http::status st = http::status::ok; std::string body;
-        const std::string t = std::string(_req.target());
-        const bool isApi = t.rfind("/api/", 0) == 0;
-        if (isApi && t != "/api/info") {
-            auto k = _req.find("X-Api-Key");
-            if (k == _req.end() || std::string(k->value()) != g_apiKey) { respond(http::status::unauthorized, "{\"error\":\"unauthorized\"}", "application/json"); return; }
+        const std::string target = std::string(req.target());
+        api::Request ar; ar.method = std::string(req.method_string());
+        const size_t q = target.find('?');
+        ar.path = target.substr(0, q); if (q != std::string::npos) ar.query = target.substr(q + 1);
+        ar.body = req.body();
+        Out o;
+        const bool isApi = ar.path.rfind("/api/", 0) == 0;
+
+        // A node image is pulled by a node, with no key (it has none to send): it is public the way the app is.
+        if (ar.method == "GET" && (ar.path == "/node-pwm.bin" || ar.path == "/node-linear.bin")) {
+            const int k = ar.path == "/node-linear.bin" ? 1 : 0;
+            std::ifstream f(imgFile(k, ".bin"), std::ios::binary);
+            if (!g_images[k].present || !f) { o.st = http::status::not_found; o.body = "no image"; o.mime = "text/plain"; }
+            else { std::stringstream b; b << f.rdbuf(); o.body = b.str(); o.mime = "application/octet-stream"; }
+            send(o); return;
         }
         if (!isApi) {
             std::string fb, mime;
-            if (_req.method() == http::verb::get && readStatic(t, fb, mime)) respond(http::status::ok, fb, mime);
-            else respond(http::status::not_found, "not found", "text/plain");
-            return;
+            if (ar.method == "GET" && readStatic(ar.path, fb, mime)) { o.body = fb; o.mime = mime; }
+            else { o.st = http::status::not_found; o.body = "not found"; o.mime = "text/plain"; }
+            send(o); return;
         }
-        if (t == "/api/nodes") body = nodesJson();
-        else if (t == "/api/topology" && _req.method() == http::verb::get) {
-            if (g_topoJson.empty()) { st = http::status::not_found; body = "{\"error\":\"no topology configured\"}"; } else body = g_topoJson;
+        if (ar.path != "/api/info") {
+            auto k = req.find("X-Api-Key");
+            if (k == req.end() || std::string(k->value()) != g_apiKey) { o.st = http::status::unauthorized; o.body = "{\"error\":\"unauthorized\"}"; send(o); return; }
         }
-        else if (t == "/api/topology" && _req.method() == http::verb::put) {
-            if (adoptLayout(_req.body())) body = "{\"ok\":true}";
-            else { st = http::status::bad_request; body = "{\"error\":\"" + g_topoErr + "\"}"; }
-        }
-        else if (t == "/api/topology" && _req.method() == http::verb::delete_) {
-            g_rt.clear(); g_topoJson.clear(); g_collectors.clear(); if (!g_topoPath.empty()) std::remove(g_topoPath.c_str()); body = "{\"ok\":true}";
-        }
-        else if (t == "/api/nodes/pair" && _req.method() == http::verb::post) {
-            StaticJsonDocument<256> d;
-            const char* host = nullptr;
-            if (!deserializeJson(d, _req.body())) host = d["host"] | (const char*)nullptr;
-            if (!host || !*host) { st = http::status::bad_request; body = "{\"error\":\"missing 'host'\"}"; }
-            else {
-                const std::string h = host;
-                if (d["remove"] | false) g_hub->remove(h);
-                else { auto n = g_hub->add(h, d["name"] | ""); if (d["takeover"] | false) n->session.requestTakeover(); }
-                savePairs(); body = "{\"ok\":true}";
-            }
-        }
-        else if (t == "/api/nodes/pause" && _req.method() == http::verb::post) {
-            StaticJsonDocument<64> d;
-            if (deserializeJson(d, _req.body()) || !d["paused"].is<bool>()) { st = http::status::bad_request; body = "{\"error\":\"need {\\\"paused\\\": true|false}\"}"; }
-            else { g_hub->paused = d["paused"].as<bool>(); body = "{\"ok\":true}"; }
-        }
+        api::Response r;
+        if (api::handle(ar, g_backend, r)) { o.st = (http::status)r.status; o.body = r.body; o.mime = r.type; send(o); return; }
+        route(ar, req, o);
+        send(o);
+    }
+
+    // The routes only this shell has: they read this process's own state.
+    void route(const api::Request& ar, http::request<http::string_body>& req, Out& o) {
+        const std::string& t = ar.path; const std::string& m = ar.method;
+        auto err = [&](http::status s, const std::string& msg) { o.st = s; o.body = "{\"error\":\"" + msg + "\"}"; };
+        if (t == "/api/nodes") o.body = nodesJson();
+        else if (t == "/api/topology" && m == "GET") { if (g_topoJson.empty()) err(http::status::not_found, "no topology configured"); else o.body = g_topoJson; }
+        else if (t == "/api/topology" && m == "PUT") { if (adoptLayout(ar.body)) o.body = "{\"ok\":true}"; else err(http::status::bad_request, g_topoErr); }
+        else if (t == "/api/topology" && m == "DELETE") { g_rt.clear(); g_topoJson.clear(); g_collectors.clear(); g_poller.sync({}); if (!g_topoPath.empty()) std::remove(g_topoPath.c_str()); o.body = "{\"ok\":true}"; }
         else if (t == "/api/status") {
-            if (g_topoJson.empty()) { st = http::status::not_found; body = "{\"error\":\"no topology configured\"}"; }
-            else { DynamicJsonDocument d(32768); g_rt.writeStatus(d.to<JsonObject>()); serializeJson(d, body); }
+            if (g_topoJson.empty()) err(http::status::not_found, "no topology configured");
+            else { DynamicJsonDocument d(32768); g_rt.writeStatus(d.to<JsonObject>()); serializeJson(d, o.body); }
         }
         // What the layout wants watched, and what each board last said: the plan, then the reading it is judged by.
         else if (t == "/api/sensors") {
             DynamicJsonDocument d(8192); JsonArray a = d.to<JsonArray>();
             for (const topo::PlannedSensor& p : g_rt.sensorPlan()) {
-                JsonObject o = a.createNestedObject();
-                o["id"] = p.id; o["kind"] = p.kind == topo::PlannedSensor::Kind::Clamp ? "ct" : p.kind == topo::PlannedSensor::Kind::Plug ? "plug" : "bin";
-                o["board"] = p.board;
+                JsonObject so = a.createNestedObject();
+                so["id"] = p.id; so["kind"] = p.kind == topo::PlannedSensor::Kind::Clamp ? "ct" : p.kind == topo::PlannedSensor::Kind::Plug ? "plug" : "bin";
+                so["board"] = p.board;
                 if (p.kind == topo::PlannedSensor::Kind::Plug) {
-                    o["ip"] = p.ip; o["tasmota"] = p.tasmota;
+                    so["ip"] = p.ip; so["tasmota"] = p.tasmota;
                     topo::TopologyRuntime::NodePlugReading np;
-                    if (g_rt.nodePlug(p.id, np)) { o["polledBy"] = "node"; o["reachable"] = np.reachable; o["watts"] = np.watts; }
-                    else { const auto r = g_poller.read("m:" + p.id); o["polledBy"] = "brain"; o["reachable"] = r.reachable; o["watts"] = r.watts; }
+                    if (g_rt.nodePlug(p.id, np)) { so["polledBy"] = "node"; so["reachable"] = np.reachable; so["watts"] = np.watts; }
+                    else { const auto r = g_poller.read("m:" + p.id); so["polledBy"] = "brain"; so["reachable"] = r.reachable; so["watts"] = r.watts; }
                 }
             }
-            serializeJson(d, body);
+            serializeJson(d, o.body);
         }
-        else if (t == "/api/problems") { DynamicJsonDocument d(4096); g_rt.writeProblems(d.to<JsonObject>()); serializeJson(d, body); }
+        else if (t == "/api/problems") { DynamicJsonDocument d(4096); g_rt.writeProblems(d.to<JsonObject>()); serializeJson(d, o.body); }
+        // The brain's console since byte N, as the app's Brain log screen reads it.
+        else if (t == "/api/serial" && m == "GET") {
+            size_t start = 0, next = 0;
+            o.body = dglog::readFrom((size_t)std::strtoull(ar.param("from").c_str(), nullptr, 10), start, next);
+            o.mime = "text/plain; charset=utf-8";
+            o.headers = {{"X-Serial-Start", std::to_string(start)}, {"X-Serial-Next", std::to_string(next)}, {"X-Serial-Boot", std::to_string(dglog::R().bootId)},
+                         {"Cache-Control", "no-store"}, {"Access-Control-Expose-Headers", "X-Serial-Start, X-Serial-Next, X-Serial-Boot"}};
+        }
+        else if (t == "/api/serial" && m == "POST") err(http::status::not_implemented, "this brain has no serial console to type into");
+        else if (t == "/api/linklog" && m == "GET") {
+            const std::string path = dglog::R().linkLogPath + (ar.param("old").empty() ? "" : ".1");
+            std::ifstream f(path, std::ios::binary);
+            if (path.empty() || !f) err(http::status::not_found, ar.param("old").empty() ? "no link log yet" : "no rotated link log yet");
+            else { std::stringstream b; b << f.rdbuf(); o.body = b.str(); o.mime = "application/x-ndjson"; }
+        }
+        // Stage the image nodes will pull: raw body, X-Fw and X-Md5 headers, checked against the same size window a node enforces.
+        else if (t == "/api/node-image" && m == "POST") {
+            const std::string kind = ar.param("kind");
+            const int k = kind == "pwm" ? 0 : kind == "linear" ? 1 : -1;
+            auto fw = req.find("X-Fw"); auto md = req.find("X-Md5");
+            if (k < 0) err(http::status::bad_request, "kind must be pwm or linear");
+            else if (fw == req.end() || md == req.end() || md->value().size() != 32) err(http::status::bad_request, "X-Fw and X-Md5 (32 hex) are required");
+            else if (ar.body.size() < topo::nodelink::kMinOtaBytes || ar.body.size() > topo::nodelink::kMaxOtaBytes) err(http::status::payload_too_large, "not a node image (size outside what a node accepts)");
+            else if (md5::hex(ar.body) != std::string(md->value())) err(http::status::bad_request, "the upload does not match X-Md5");
+            else if (g_stateDir.empty()) err(http::status::service_unavailable, "this brain has no state directory to keep an image in");
+            else {
+                { std::ofstream b(imgFile(k, ".bin"), std::ios::binary | std::ios::trunc); b << ar.body; }
+                { std::ofstream j(imgFile(k, ".json"), std::ios::trunc); j << "{\"fw\":\"" << std::string(fw->value()) << "\",\"md5\":\"" << std::string(md->value()) << "\"}"; }
+                g_images[k].present = true; g_images[k].fw = std::string(fw->value()); g_images[k].md5 = std::string(md->value()); g_images[k].size = (uint32_t)ar.body.size();
+                dglog::linef("[NODEIMG] the %s node image is %s (%u bytes)", kImgName[k], g_images[k].fw.c_str(), (unsigned)g_images[k].size);
+                o.body = "{\"ok\":true}";
+            }
+        }
         // DEV ONLY: stand in for a plug reporting watts, so routing can be driven with no tool running.
-        else if (t == "/api/dev/power" && _req.method() == http::verb::post) {
+        else if (t == "/api/dev/power" && m == "POST") {
             StaticJsonDocument<192> d;
-            if (deserializeJson(d, _req.body()) || !d["machineId"].is<const char*>()) { st = http::status::bad_request; body = "{\"error\":\"machineId, watts\"}"; }
-            else { g_rt.setMachinePower(d["machineId"].as<std::string>(), d["watts"] | 0.0f); body = "{\"ok\":true}"; }
+            if (deserializeJson(d, ar.body) || !d["machineId"].is<const char*>()) err(http::status::bad_request, "machineId, watts");
+            else { g_rt.setMachinePower(d["machineId"].as<std::string>(), d["watts"] | 0.0f); o.body = "{\"ok\":true}"; }
         }
-        else if (t == "/api/info") body = "{\"role\":\"native\",\"id\":\"" + g_hub->primaryId() + "\",\"apiKey\":\"" + g_apiKey + "\",\"build\":\"native\"}";
-        else { st = http::status::not_found; body = "{\"error\":\"not found\"}"; }
-        respond(st, body, "application/json");
+        else if (t == "/api/info") o.body = "{\"role\":\"native\",\"id\":\"" + g_hub->primaryId() + "\",\"apiKey\":\"" + g_apiKey + "\",\"build\":\"native\",\"uptimeSec\":" + std::to_string(dglog::upMs() / 1000) + "}";
+        else err(http::status::not_found, "not found");
     }
-    void respond(http::status st, const std::string& body, const std::string& mime) {
-        auto res = std::make_shared<http::response<http::string_body>>(st, _req.version());
-        res->set(http::field::content_type, mime);
-        res->body() = body; res->prepare_payload(); res->keep_alive(false);
+
+    void send(const Out& o) {
+        auto res = std::make_shared<http::response<http::string_body>>(o.st, _parser.get().version());
+        res->set(http::field::content_type, o.mime);
+        for (auto& h : o.headers) res->set(h.first, h.second);
+        res->body() = o.body; res->prepare_payload(); res->keep_alive(false);
         http::async_write(_stream, *res, [self = shared_from_this(), res](beast::error_code ec, size_t) {
             self->_stream.socket().shutdown(tcp::socket::shutdown_send, ec);
         });
     }
     beast::tcp_stream _stream;
     beast::flat_buffer _buf;
-    http::request<http::string_body> _req;
+    http::request_parser<http::string_body> _parser;
 };
 
 class Listener : public std::enable_shared_from_this<Listener> {
@@ -435,10 +556,13 @@ int main(int argc, char** argv) {
         auto val = [&]() { return i + 1 < argc ? std::string(argv[++i]) : std::string(); };
         if (a == "--id") id = val(); else if (a == "--pair") pair = val(); else if (a == "--port") port = (unsigned)std::stoi(val());
         else if (a == "--ip") ip = val(); else if (a == "--state") stateDir = val(); else if (a == "--trace") g_trace = true; else if (a == "--www") g_www = val(); else if (a == "--plug-port") plughttp::setPort(val()); else if (a == "--key") g_apiKey = val(); else if (a == "--broadcast") bcast = val();
-        else { std::printf("usage: dustgate-brain [--id dustgate] [--pair nodeId,nodeId,...] [--port 8080] [--state dir] [--www dir] [--plug-port 80] [--key k] [--ip a.b.c.d] [--broadcast a.b.c.255]\n"); return a == "--help" ? 0 : 2; }
+        else { dglog::linef("usage: dustgate-brain [--id dustgate] [--pair nodeId,nodeId,...] [--port 8080] [--state dir] [--www dir] [--plug-port 80] [--key k] [--ip a.b.c.d] [--broadcast a.b.c.255]\n"); return a == "--help" ? 0 : 2; }
     }
     std::vector<std::string> ids; std::stringstream ss(pair); std::string x;
     while (std::getline(ss, x, ',')) if (!x.empty()) ids.push_back(x);
+    g_stateDir = stateDir;
+    { std::random_device rd; dglog::R().bootId = rd(); }
+    if (!stateDir.empty()) { dglog::R().linkLogPath = stateDir + "/linklog.txt"; loadImages(); }
     NodeHub hub(id); g_hub = &hub;
     if (!stateDir.empty()) {
         g_pairPath = stateDir + "/nodes.json";
@@ -450,7 +574,7 @@ int main(int argc, char** argv) {
     if (!stateDir.empty()) {
         g_topoPath = stateDir + "/topology.json";
         std::ifstream f(g_topoPath, std::ios::binary);
-        if (f) { std::stringstream b; b << f.rdbuf(); if (!adoptLayout(b.str())) std::printf("[TOPO] stored layout refused: %s\n", g_topoErr.c_str()); }
+        if (f) { std::stringstream b; b << f.rdbuf(); if (!adoptLayout(b.str())) dglog::linef("[TOPO] stored layout refused: %s\n", g_topoErr.c_str()); }
     }
     if (ip.empty()) ip = guessIp();
     if (g_apiKey.empty()) {   // persisted with the state, so a restart does not log every browser out
@@ -473,7 +597,7 @@ int main(int argc, char** argv) {
     };
     rtTick();
     net::signal_set sig(io, SIGINT, SIGTERM); sig.async_wait([&](beast::error_code, int) { io.stop(); });
-    std::printf("dustgate-brain %s on %s:%u, %zu paired node(s)\n", id.c_str(), ip.c_str(), port, ids.size());
+    dglog::linef("dustgate-brain %s on %s:%u, %zu paired node(s)\n", id.c_str(), ip.c_str(), port, ids.size());
     g_poller.start();
     io.run();
     g_poller.stop();

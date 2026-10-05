@@ -11,6 +11,7 @@
 #include "NodeSession.h"
 #include "NodeBus.h"
 #include "SessionBus.h"
+#include "Log.h"
 
 namespace dgbrain {
 
@@ -19,19 +20,24 @@ inline uint32_t nowMs() {
     return (uint32_t)duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
 }
 
-struct StdoutSink : topo::SessionSink {
-    void say(const char* l) override { std::printf("%s\n", l); std::fflush(stdout); }
+// A node's session reports through here: console lines into the ring, link events into the link log.
+struct NodeSink : topo::SessionSink {
+    std::string id;
+    explicit NodeSink(std::string n) : id(std::move(n)) {}
+    void say(const char* l) override { dglog::line(l); }
+    void linkEvent(const char* ev, const char* extra) override { dglog::linkEvent(ev, id.c_str(), extra); }
 };
 
 struct Node {
     std::string id;
+    NodeSink sink;
     topo::NodeSession session;
     unsigned linkId = 0;       // which connection owns the link; 0 = none
     std::string name;
     bool removed = false;      // unpaired: its socket closes itself on the next tick
     SessionBus bus{session};
-    Node(const std::string& nid, const std::string& primaryId, topo::SessionSink* sink)
-        : id(nid), session(nowMs, sink) { session.configure(nid.c_str(), primaryId.c_str()); }
+    Node(const std::string& nid, const std::string& primaryId)
+        : id(nid), sink(nid), session(nowMs, &sink) { session.configure(nid.c_str(), primaryId.c_str()); }
 };
 
 class NodeHub {
@@ -42,7 +48,7 @@ public:
     std::shared_ptr<Node> add(const std::string& id, const std::string& name) {
         auto it = _nodes.find(id);
         if (it != _nodes.end()) { if (!name.empty()) it->second->name = name; return it->second; }
-        auto n = std::make_shared<Node>(id, _primaryId, &_sink);
+        auto n = std::make_shared<Node>(id, _primaryId);
         n->name = name.empty() ? id : name;
         _nodes[id] = n; rebind();
         return n;
@@ -62,7 +68,6 @@ public:
 private:
     void rebind() { _bus.clearRemotes(); for (auto& kv : _nodes) _bus.registerRemote(kv.first, &kv.second->bus); }
     std::string _primaryId;
-    StdoutSink _sink;
     topo::NodeBus _bus;
     std::map<std::string, std::shared_ptr<Node>> _nodes;
 };

@@ -7,6 +7,7 @@
 #include <arpa/inet.h>
 #include <cstdio>
 #include "PlugHttp.h"
+#include "Log.h"
 
 namespace beast = boost::beast;
 namespace http = beast::http;
@@ -70,6 +71,6 @@ bool resolveHost(const char* host, std::string& ipOut, uint32_t) {
     return true;
 }
 
-void log(const std::string& line) { std::printf("%s\n", line.c_str()); std::fflush(stdout); }
+void log(const std::string& line) { dglog::line(line); }
 
 }  // namespace plughttp
