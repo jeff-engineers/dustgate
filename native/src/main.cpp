@@ -11,6 +11,7 @@
 #include <boost/beast.hpp>
 #include <boost/beast/websocket.hpp>
 #include <csignal>
+#include <unistd.h>
 #include <algorithm>
 #include <deque>
 #include <netdb.h>
@@ -846,6 +847,11 @@ int main(int argc, char** argv) {
     // The subnet's own broadcast address: the all-ones one is dropped or mis-routed by some stacks (macOS often), and the beacon
     // is what lets a node find a brain whose address changed.
     if (bcast.empty()) { const size_t dot = ip.rfind('.'); bcast = dot == std::string::npos ? "255.255.255.255" : ip.substr(0, dot) + ".255"; }
+#ifdef __APPLE__
+    // A sleeping Mac is a brain that has gone away: nodes drop, nothing switches. Hold idle sleep off
+    // for as long as this process lives (caffeinate exits when its -w pid does). Best effort.
+    { const std::string cmd = "caffeinate -i -w " + std::to_string((long)getpid()) + " >/dev/null 2>&1 &"; if (std::system(cmd.c_str()) != 0) {} }
+#endif
     if (g_apiKey.empty()) {   // persisted with the state, so a restart does not log every browser out
         const std::string kp = stateDir.empty() ? "" : stateDir + "/apikey";
         std::ifstream kf(kp); if (!kp.empty() && kf) std::getline(kf, g_apiKey);

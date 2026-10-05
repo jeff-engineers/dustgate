@@ -25,7 +25,7 @@ active sections above them, which is how a parked item stops being read.
   Full plan, memory table and open questions:
   [`docs/nodes-dial-the-brain-plan.md`](../docs/nodes-dial-the-brain-plan.md).
 
-- **Native brain: what is left before a Pi is a product (2026-10-05).** Built and tested against fakes (`make -C native test`): node links, layout routing, the collector press loop, plug polling with the ESP32's own drivers, the app, and — since the API step — manual tool/collector switches, servo jog, pairing/pausing/discovery (a board nobody paired announces itself with a JOIN), node image staging and `/api/nodes/update` (images live on disk, so the full-filesystem problem does not exist here), the console and link log, the plug screens (ping, rename, release, sweep) and the board/plug problems. The app loads against it and its Boards and Shop screens render a real layout. **Not done:** (1) DONE 2026-10-05 against the five real nodes (no servos attached): gate moves (SET → ACK → STATE moving/arrived), the RF press and a bin sensor all work from the Mac brain; a firmware update pulled from the Mac brain's own disk installed on a real node (needs the brain on port 80); 10 restarts of the Mac brain brought all five nodes back in 1–20 s with no flaps; (2) Shelly push (`/shelly-rpc`) and therefore plug *takeover* — this brain polls its plugs, which works, and answers takeover with a 501; (3) a node OTA from the native brain needs the brain on port 80 (the node builds `http://<ip><path>`, no port) — works, verified on a real node 2026-10-05; (4) mDNS advertising — on a Pi, set the hostname to `dustgate` and avahi does it; on a Mac use `dns-sd -P`; (5) packaging — image, first-boot WiFi, read-only root, watchdog; (6) the ESP32 still has its own copies of the routes in `api/ApiCore.h` (manual switches, jog, pairing, pause, discover, update), to move over one at a time with a bench run each — plug ping/rename/release and the board/plug problems already are shared.
+- **Native brain: what is left before a Pi is a product (2026-10-05).** Built and tested against fakes (`make -C native test`): node links, layout routing, the collector press loop, plug polling with the ESP32's own drivers, the app, and — since the API step — manual tool/collector switches, servo jog, pairing/pausing/discovery (a board nobody paired announces itself with a JOIN), node image staging and `/api/nodes/update` (images live on disk, so the full-filesystem problem does not exist here), the console and link log, the plug screens (ping, rename, release, sweep) and the board/plug problems. The app loads against it and its Boards and Shop screens render a real layout. **Not done:** (1) DONE 2026-10-05 against the five real nodes (no servos attached): gate moves (SET → ACK → STATE moving/arrived), the RF press and a bin sensor all work from the Mac brain; a firmware update pulled from the Mac brain's own disk installed on a real node (needs the brain on port 80); 10 restarts of the Mac brain brought all five nodes back in 1–20 s with no flaps; (2) Shelly push (`/shelly-rpc`) and therefore plug *takeover* — this brain polls its plugs, which works, and answers takeover with a 501; (3) the brain must listen on port 80 for node OTA (the node builds `http://<ip><path>`, no port) — done and verified; the Mac brain also holds idle sleep off with `caffeinate`; (4) mDNS advertising — on a Pi, set the hostname to `dustgate` and avahi does it; on a Mac use `dns-sd -P`; (5) packaging — image, first-boot WiFi, read-only root, watchdog; (6) the ESP32 still has its own copies of the routes in `api/ApiCore.h` (manual switches, jog, pairing, pause, discover, update), to move over one at a time with a bench run each — plug ping/rename/release and the board/plug problems already are shared.
 
 - **A node-owned plug's on/off threshold is compared twice.** The node polls the plug, compares
   watts to the `thresholdW` it was sent and sets SENSE `on`; the brain ignores that bit and
@@ -46,9 +46,7 @@ active sections above them, which is how a parked item stops being read.
   (3) cover the beam and check `[BIN] FULL` after ~2 s and `systems[].bin.full` in
   `/api/status`, then uncover it; (4) pull the node's power mid-press and check no press
   is replayed on reconnect (a PRESS is an edge against a toggle — the bus drops a queued
-  one on a link drop, and a test says so, but nobody has watched it); (5) the UI's collector
-  configurator has no way to choose the board for the transmitter or the bin yet — today a
-  layout needs `controllerId` added by hand.
+  one on a link drop, and a test says so, but nobody has watched it); (5) DONE 2026-10-05: the collector sheet now offers a board for the transmitter (the bin and clamp already had one).
 
 - **Prove node-owned plug polling under a real load (jeff, 2026-10-04 — deferred).**
   Verified on the bench so far: a Tasmota paired to a tool whose gate is on
@@ -245,33 +243,6 @@ active sections above them, which is how a parked item stops being read.
   this state shouldn't exist, when the last tool is turned off it's gate should remain open
   there should be no way outside of manual user invervention to dead-head a system                      
 
-- **loop() is still one enormous function — LANDED 2026-09-14, keep watching.**
-  A stack protection fault on a collector board at boot, 2026-09-12:
-  `SP 0x4085d060` against bounds `0x4085d068`, canary `0xabba1234` on the
-  pointer, a half-built status JSON in the stack dump.
-
-  The mechanism is worth keeping even though this is fixed, because it will
-  recur: **loop() is a single function, so every `StaticJsonDocument` declared
-  anywhere inside it reserves space in the SAME frame whether or not that branch
-  runs.**
-
-  Done: `SET_LOOP_TASK_STACK_SIZE(16 * 1024)` (was 8 KB), `sweepProbeOne()`, and
-  then ping, rename and release pulled out into their own functions — a `<512>`
-  and two `<256>`s that had been resident on every pass to serve requests that
-  arrive a handful of times in a shop's life. **loop() now declares no
-  StaticJsonDocument at all**; the four remaining documents in it are
-  `DynamicJsonDocument`, which are heap.
-
-  Also done, and the part that matters from here: the boot banner prints
-  `uxTaskGetStackHighWaterMark()`. **Baseline measured on hardware 2026-09-14:
-  13644 bytes free of 16384**, on a primary with a screen. A number that shrinks
-  release over release is the warning nobody used to get — that is the whole
-  reason it is printed, so compare it rather than glancing at it.
-
-  What is NOT done: loop() is still ~1800 lines and will keep growing, and
-  nothing enforces any of this. The next thing to extract when it bites is
-  whatever has grown a document since.
-
 - **Can the collector node run on ONE brick? (2026-09-11, decides a purchase.)**
 
   The collector node is being built as power topology **A** first —
@@ -378,17 +349,6 @@ active sections above them, which is how a parked item stops being read.
   brain. The 0.195 A noise floor was measured in that state — so whatever is
   making it, it is NOT node chatter, and the quieter radio makes the number a
   floor-of-floors rather than a worst case.
-
-- **~~Re-measure the CT on the rebuilt divider~~ DONE 2026-09-16.** Scale held
-  (+1.50% vs the Tasmota, against +0.94% before), the screen's contribution fell
-  from ~80% of the floor to 11%, and the floor underneath is the C5 ADC's own
-  noise — shorting the CT out does not move it. **§5.5 is closed** (§5.5b), and
-  the `Hz` column was found to report a fraction of the sample rate when fed
-  noise, which wasted an hour. `ct-bench.md`'s parts table is no longer stale.
-
-  What is left is optional and deliberately unbuilt: a 60 Hz demodulator would
-  take the floor down 10-20x, and nothing needs it while a running collector
-  sits 63x above it.
 
 - **Pick a CHANNEL on a multi-channel Tasmota meter (2026-09-10; half done
   2026-09-14).** `TasmotaOutlet::doPoll()` now DETECTS `Power` as an array and
@@ -1005,18 +965,6 @@ active sections above them, which is how a parked item stops being read.
   The single-servo + CT carrier above is unaffected and still undecided.
 
 
-
-- **`POST /api/dustcollector/switch` is dead under a shop.** It drives collector
-  slot 0 directly (`SmartOutletControl::setDcManual`), and with a topology loaded
-  the main loop re-asserts every slot from `g_topoRuntime.collectorOn(systemId)`
-  on every pass — so the switch is undone microseconds after it lands. It reports
-  success the whole time, which is the worst way for an endpoint to be broken.
-  `POST /api/collector {systemId?, on}` replaced it (D-59) and goes through the
-  routing runtime, where the decision survives. Deleting the old route is
-  phase-1 cleanup: the route, `_dcSwitchPending`/`consumeDustCollectorSwitchRequest`,
-  its consumer in `firmware.ino`, and `ApiService.setDustCollector()` +
-  `DemoApiService`'s override. `setDcManual`/`setCollectorManual` themselves STAY —
-  the runtime is what calls them.
 
 - **Every C5 partition table assumes 4 MB. The chip is 8 MB (2026-09-09).**
   `esptool flash_id` on the bench primary: `Detected flash size: 8MB`, on an

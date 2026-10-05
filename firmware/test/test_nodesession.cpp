@@ -68,6 +68,10 @@ int main() {
     ok("the board and firmware survive the builder", out.find("\"board\":\"xiao_c5\"") != std::string::npos && out.find("\"fw\":\"abc 1004-1200\"") != std::string::npos);
     ok("a clamp is reported only when the board has one", out.find("\"ct\":1") != std::string::npos);
     ok("a different image on offer says an update is due", out.find("\"update\":true") != std::string::npos);
+    ok("a newer node is not offered the older image", !topo::updateDue("cd9f45e+ 1005-1802", "8772c43 1004-2108"));
+    ok("an older node is offered the newer image", topo::updateDue("8772c43 1004-2108", "cd9f45e+ 1005-1802"));
+    ok("the same stamp is no update", !topo::updateDue("8772c43 1004-2108", "8772c43 1004-2108"));
+    ok("an unparseable stamp falls back to differs", topo::updateDue("nogit", "8772c43 1004-2108"));
     ok("no OTA fields while nothing is updating", out.find("\"ota\"") == std::string::npos);
   }
 

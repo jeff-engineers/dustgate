@@ -603,7 +603,7 @@ export class BoardSetupComponent implements OnInit, OnDestroy {
     // board reported this, nobody chose it.
     bits.push(r.drives === 'linear' ? 'sliding gate' : 'servo valves');
     bits.push(r.primary ? 'primary — runs the app' : (r.host || 'no address'));
-    if (r.board) bits.push(r.board);
+    // The build target is a developer's word ("xiao_c5"); the shop sees what it drives.
     // A slider board's whole capacity is one rack, so "of 4" would be a lie on it.
     bits.push(r.drives === 'linear'
       ? `${r.gates} of 1 sliding gate`

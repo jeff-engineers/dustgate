@@ -3626,7 +3626,10 @@ void loop() {
         }
         bool dcSwitchOn = false;
         if (apiServer.consumeDustCollectorSwitchRequest(dcSwitchOn)) {
-            control.setDcManual(dcSwitchOn);
+            // Through the routing runtime, like /api/collector: slot 0 driven directly is re-asserted from
+            // collectorOn() on the next pass, so the switch reported success and was undone at once.
+            std::vector<std::string> ids = g_topoRuntime.systemIds();
+            if (!ids.empty()) g_topoRuntime.setCollectorManual(ids.front(), dcSwitchOn);
         }
 
         // Outlet discovery — runs synchronously here (main loop task) rather

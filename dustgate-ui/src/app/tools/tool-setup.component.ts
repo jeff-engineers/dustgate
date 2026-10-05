@@ -88,6 +88,8 @@ interface CollectorCfg {
   hostname: string;
   /** Cached display name for the outlet — see PairedOutletRowComponent. */
   label: string;
+  /** Pressed by an RF remote (control.rf) — switched without an outlet, so "no outlet" is not a to-do. */
+  rf: boolean;
 }
 
 /** One airflow system: its blower, then the tools that breathe through it. */
@@ -263,7 +265,8 @@ const DEFAULT_THRESHOLD = 50;
                    list, which works. A blower with no outlet is one nothing on
                    that page can switch on at all. The shop card says the same in
                    the same colour. -->
-              <span class="pill todo" *ngIf="!dc.ip">No outlet paired</span>
+              <span class="pill plain" *ngIf="!dc.ip && dc.rf">Switched by its remote</span>
+              <span class="pill todo" *ngIf="!dc.ip && !dc.rf">No outlet paired</span>
             </div>
             <svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                  stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -598,6 +601,7 @@ export class ToolSetupComponent implements OnInit {
       ip: (outlet?.['ip'] as string) ?? '',
       hostname: (outlet?.['host'] as string) ?? '',
       label: (outlet?.['name'] as string) ?? '',
+      rf: !!(el['control'] as DocEl | undefined)?.['rf'],
     };
   }
 

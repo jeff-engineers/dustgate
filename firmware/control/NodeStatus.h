@@ -16,6 +16,23 @@
 
 namespace topo {
 
+// Is the staged image worth offering to a node running `have`? Different is not enough: a node
+// flashed from the bench after the staged image was built would be offered a DOWNGRADE. The fw
+// stamp ends in "MMDD-HHMM" (BuildStamp::fw), which sorts as text within a year, so a node whose
+// stamp is newer than the image's is left alone. A stamp that does not parse falls back to "differs".
+inline bool updateDue(const char* have, const char* image) {
+    if (std::strcmp(have, image) == 0) return false;
+    auto stamp = [](const char* f) -> const char* {
+        const char* sp = std::strrchr(f, ' ');
+        const char* t = sp ? sp + 1 : f;
+        return (std::strlen(t) == 9 && t[4] == '-') ? t : nullptr;
+    };
+    const char* a = stamp(have);
+    const char* b = stamp(image);
+    if (a && b) return std::strcmp(a, b) < 0;
+    return true;
+}
+
 // The firmware image this brain would install on a node of this kind, if it holds one.
 struct NodeImageView {
     bool        present = false;
@@ -47,7 +64,7 @@ inline void writeNodeEntry(JsonArray arr, const S& s, const char* id, const char
     // in progress is going. `update` is only ever true for a board that is up to be told.
     if (img.present) {
         o["image"]  = img.fw;
-        o["update"] = n.connected && std::strcmp(n.fw, img.fw) != 0;
+        o["update"] = n.connected && updateDue(n.fw, img.fw);
     }
     if (n.ota[0]) {
         o["ota"] = n.ota;
