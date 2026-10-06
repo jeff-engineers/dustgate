@@ -62,6 +62,8 @@ jobs:
       - name: Build (also type-checks the shared @device-model import)
         run: npm run build
         working-directory: dustgate-ui
+      - name: The built app carries the current model (not a stale bundle)
+        run: node tools/check-ui-fresh.js
       # Plain-node suites: no browser, no headless Chrome to install. See
       # dustgate-ui/tsconfig.spec.json for why it's built this way.
       - name: UI unit tests (shop seam, readiness, geometry)

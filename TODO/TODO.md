@@ -14,13 +14,6 @@ active sections above them, which is how a parked item stops being read.
 
 ## Bugs
 
-- **Legacy single-system API surface is still carried end to end (found 2026-10-06 cleanup).** `/api/estop`, `/api/motion`,
-  `/api/dustcollector` (PUT/DELETE config), `/api/numgates`, `/api/portrole`, idle-timeout and `/api/outlets/:slot` exist in
-  `firmware/api/HttpApiServer.cpp`, `tools/mock-api.js` and `shared/device-model/device-model.js` (`estop`, `setNumGates`,
-  `setPortRole`, `setIdleTimeout`, `deleteOutlet`, `configureDustCollector`, `deleteDustCollector`), but nothing in the app calls them
-  any more (the thirteen UI methods were deleted 2026-10-06). Delete them layer by layer — firmware routes, mock routes, model
-  functions, `conformance.js` cases — running `conformance:ci` and the firmware tests after each layer. Pairs with deleting
-  schemaVersion-1 below.
 - **Move the ESP32's plug provisioning loop onto `outlets/Provision.h` (2026-10-06).** `SmartOutletControl::provisionPushOutlets()` and
   `outletops::provisionPlug()` are the same rule written twice (probe, read the claim, refuse a plug someone else owns unless a
   takeover was approved, name first, then the push target). The native brain uses the shared one; the ESP still has its own. Move it
@@ -75,17 +68,6 @@ active sections above them, which is how a parked item stops being read.
   for that selector (or mark it for re-assert, `TopologyRuntime::_reassert`), and add a paired host test. Seen on the
   bench with the router-table/jointer manifold, probably the 1 W adapter browning out under a lever arm holding the
   servo's weight.
-
-- **Audit every shared constant: pair it, or test that it agrees (jeff, 2026-10-06).** A constant that two builds both
-  need must be PAIRED where it can be — one definition, or a pair-table row in `CLAUDE.md` with a JS test and a C++ test
-  asserting the same literal — and where it cannot be (a value baked into a compiled app, a number a node holds, a
-  copy in a different toolchain), there must be a unit test that fails when the copies disagree. Found the hard way
-  2026-10-06: the app has its own compiled copy of `COLLECTOR_RUNNING_W`, so changing it in the brain alone left the Live
-  screen saying "Not starting" for a fan the brain called running. Do: (1) grep for bare numbers duplicated across
-  `shared/device-model`, `firmware/`, `native/` and `dustgate-ui/` (the UI imports the model at build time, so its copy is
-  silently STALE until a rebuild — a test that compares the built bundle's value to the model's would catch it); (2) for
-  each, either add the pair-table row and paired tests or a one-sided test and say why it cannot be paired; (3) have
-  `make test` / `npm test` fail on a stale UI bundle.
 
 - **PUT THE COLLECTOR "RUNNING" THRESHOLD BACK TO 50 W (jeff, 2026-10-06 — TEMPORARY).** The bench collector is a desk fan
   that draws ~38 W, so `kCollectorRunningW` (control/CollectorPlugState.h) and `COLLECTOR_RUNNING_W`
@@ -264,11 +246,6 @@ active sections above them, which is how a parked item stops being read.
   do not fit it. The tool sheet (tool-setup.component.ts) already asks this
   properly as a three-way — Metering plug / Current clamp / Nothing — so the fix
   is probably to make these one component rather than to reword this one back.
-
-- **The outlet sheet shows "Scanning..." twice while a scan runs.**
-  outlet-picker.component.ts says it in the empty-state line (:87) and again on
-  the rescan button (:93), and both render together. One of them should go —
-  probably the empty-state line, since the button is where the action is.
 
 - **UI AUDIT 2026-09-17 — the same question is asked by two components, in two
   vocabularies.** Scanned every component for this; the findings are below,
@@ -647,55 +624,6 @@ active sections above them, which is how a parked item stops being read.
 
   Related and already done: `dev.sh monitor --port /dev/cu.X` (2026-09-18) works
   around the two-role ceiling for now.
-
-
-- **Delete schemaVersion-1 entirely (jeff, 2026-09-17). ADOPT NOW REFUSES IT;
-  the rest is cleanup.** A v1 document is rejected at `TopologyRuntime::adopt()`
-  with "layout is from an older version (v1) — re-save it", which rides
-  `g_topoRejectReason` to the BAD LAYOUT light, the screen and `/api/status`.
-  Detected by SHAPE as well as version, since an export that lost its
-  `schemaVersion` is still unreadable.
-
-  `twoGates.json` is a v2 shop now, and converting it did exactly what this entry
-  predicted it would: the clamp assertions had to move onto the MACHINE, which is
-  the read the shipping code gets wrong and the v1 fixture used to excuse. The
-  collector's clamp stayed on the element, which is the asymmetry `clampOf()`
-  exists for. `test_nodebus` 158/158.
-
-  STILL TO DO: "We can ditch the v1
-  stuff entirely." Nothing the UI can produce is v1 — it writes v2 shops with
-  `systems[]` and machines — so every v1 path is carrying documents no one can
-  create any more.
-
-  **The argument is stronger than tidiness, and it already cost a bench session.**
-  Three of the four firmware fixtures are v1, and in a v1 topology a tool element
-  IS its own machine. That is exactly why the conformance suite stayed green
-  while the shipping path was broken on 2026-09-15: `TopologyRuntime` read
-  `element.sensor.ct`, which is correct for v1 and null for every document the
-  configurator writes, so a clamp paired in the app never reached its node and
-  every test agreed it was fine. **v1 fixtures do not just test a dead shape —
-  they actively hide bugs in the live one**, because they satisfy reads that v2
-  cannot.
-
-  What has to go, roughly in dependency order:
-
-  | | |
-  |---|---|
-  | `firmware/test/fixtures/` | `feedChain.json` and `star.json` are still v1 (`twoGates.json` and `twoSystemShop.json` are v2). Only `test_topology_router` / `test_topology_controller` load them, and they bypass `adopt()` — so the refusal above does not touch them. Converting the two is the remaining fixture work |
-  | `viewOf(JsonObjectConst)` in control/TopologyRouter.h | THE v1 SHIM, and the thing that actually broke when twoGates was converted: it reads top-level `elements`/`ducts`. Delete it with the last v1 fixture, and every caller goes through `systemsOf()` |
-  | `shared/device-model/topology.js` | `validateTopology()` and the v1 half of the schema. `validateShop()` in shop.js is what the device actually applies to a real document |
-  | `firmware/control/Shop.h` | the flattening layer whose header says "V1 COMPATIBILITY IS NOT A SEPARATE PATH" — once v1 is gone, `machineDoc()`/`systemsOf()` stop needing the v1 branch and get simpler |
-  | `topology.fixtures.js`, `topology.test.js`, `topology-conformance.js` | the JS side of the same |
-  | `schemaVersion` reads in `firmware.ino`, `HttpApiServer.cpp`, `TopologyRouter.h`, `TopologySequencer.h` | the version checks themselves |
-
-  ~~One thing to settle before deleting~~ — DONE, and it was worth doing first:
-  a v1 document presented to a board is refused with a sentence rather than
-  silently, because a board with a rejected layout is otherwise indistinguishable
-  from one with no layout, and both are a single blue LED. That cost an evening on
-  2026-09-17.
-
-  Not urgent from here. The part that actively misled — a v1 fixture satisfying a
-  read that no real document can — is gone from the suite that covers clamps.
 
 
 - **What would still force a node reflash — the audit, 2026-09-17. LANDED, see

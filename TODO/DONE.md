@@ -14,6 +14,32 @@ of this file is being able to answer "did we already decide this, and why".
 
 Newest first.
 
+### Cleanup 2026-10-06 — legacy API, schemaVersion 1, shared constants
+
+- **The legacy single-system API is gone, and so is schemaVersion 1.** LANDED 2026-10-06 (branch `cleanup-2026-10-06`).
+  Deleted layer by layer, with the suites run after each: the firmware routes and consumers (`/api/estop`, `/api/config/gates`,
+  `/api/config/port-role`, `/api/config/idle-timeout`, `PUT/DELETE /api/outlets/:slot`, `PUT/DELETE /api/dustcollector`), the
+  mock routes, the model functions, the conformance cases that drove them, and the app's `configureOutlet`. **Kept on purpose:**
+  `/api/motion` (the conformance suites' status view, and the slider's), the slider routes the app still calls
+  (`home`, `move`, `jog`, `setstop`, `calibrate`, `config/orientation`), `/api/dustcollector/switch`, and the serial `estop`.
+  Not removed: the saved idle-timeout NVS value, which `/api/info` still reports, though nothing can set it any more.
+
+  schemaVersion 1: `validateShop()` and the firmware's `validateMinimal()` now refuse it with the sentence the runtime already used
+  ("layout is from an older version (v1) — re-save it"), so a PUT of one answers 400 rather than being stored and rejected on load.
+  `asShop`/`migrateToShop`/`isShop` are gone from the model, the UI's `toShop()` no longer migrates (it returns null for a non-shop),
+  and `Shop.h` has no v1 branches. **What looks like v1 and is not:** `systemView()`/`viewOf()` hand the router ONE system's body
+  (`controllers`, `elements`, `ducts`), which is how the per-system validator and the router/sequencer tests take a system. That
+  shape stays. The single-system JS and firmware fixtures survive as compact ways to write one system; `shopFromV1()` (in
+  `topology.fixtures.js`, test-only) lifts one into a shop, and `starShop.json` / `feedChainShop.json` are those lifted.
+  `topology-conformance.js` now pushes shops and asserts a v1 document is a 400.
+
+- **Every shared constant is paired or checked.** LANDED 2026-10-06. `shared/device-model/constant-pairs.json` lists each plain
+  number that two builds hold; `tools/check-constant-pairs.js` (`npm run model:test`) reads each out of its source and fails when
+  a group disagrees. The compiled-into-the-app copies are covered by the model hash baked into the bundle at build time
+  (`tools/check-ui-fresh.js`, a CI step after the UI build). A new pair goes in BOTH the CLAUDE.md table and the JSON.
+
+- **The outlet sheet's doubled "Scanning…"** LANDED 2026-10-06: the empty-state line went; the rescan button carries it.
+
 ### Routing — close every gate a tool doesn't need (2026-09-28)
 
 - **A machine switching on re-asserts every servo gate in its system.** LANDED
