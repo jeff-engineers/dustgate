@@ -51,14 +51,12 @@ active sections above them, which is how a parked item stops being read.
   (the native brain applies none), the servo move on a weak supply, the RF transmit, the receiver's relay and the plug seeing
   the blower draw. Not yet measured: the hardware half. A timestamped run on the bench (plug sample -> SET -> STATE -> PRESS ->
   plug confirms) would say which of those is the big one.
-- **"Find plugs" does not load (jeff, 2026-10-06).** The Build canvas loads fine against the native brain (checked in the
-  browser pane 2026-10-06); the failure is behind the menu item — `build.component.ts findPlugs()` -> `scanOutlets(true)` ->
-  `/api/outlets/discover` then `startSweep()` / `/api/outlets/sweep`. Reproduce with the console and network tabs open and see
-  which request fails or never answers. **Tried 2026-10-06 against a scratch native brain with a fake plug on loopback
-  (`--broadcast 127.255.255.255`, scratch state): it works** — `/api/outlets/discover` answers, the sweep starts, the plug is
-  found and the progress bar runs; the only 404s were `/api/topology` and `/api/status` on a brain with no layout. So it is
-  something about the real shop: his actual layout, or a real /24 (a sweep that outlives a request timeout, a proxy, or the
-  page being opened by IP rather than `.local`). Still wants his console and network tab on the real brain.
+- **A Plugs page, laid out like /boards (jeff, 2026-10-06).** "Find plugs" was expected to open a page of plugs; today it is a
+  menu item on the Build canvas that refreshes the plugs tray (and the earlier "does not load" report was this
+  misunderstanding — the tray itself works, checked against a scratch brain 2026-10-06). Build a `/plugs` page with the same
+  basic layout as `/boards`: one row per plug (name, kind, address, live draw, who owns it, which tool it is paired to), the
+  scan and sweep controls, add-by-address, rename, release and take over. Mockup first. It is also the natural single home for
+  the outlet picker, which exists twice (see "The outlet picker exists TWICE"), and for the plug-name uniqueness question.
 - **Bench test 20: rename a plug and release it (jeff, 2026-10-06).** Rename a Shelly from the app and confirm the new name in the
   Shelly app; release one and confirm it stops pushing and the previous push target comes back. Not run yet.
 - **Bench: the collector's CT option (jeff, 2026-10-06).** The collector can be sensed by a current clamp on the cyclone board
