@@ -57,17 +57,6 @@ export interface SystemStatus {
   outlets: OutletStatus[];
 }
 
-export interface OutletConfigCmd {
-  slot: number;
-  generation: number;     // 1 or 2
-  ip: string;
-  /** mDNS hostname (no ".local"), if this outlet was picked from a scan rather than typed in. Lets the device re-resolve its IP after a DHCP change. */
-  host?: string;
-  name: string;
-  stop: number;
-  threshold_w?: number;
-}
-
 // PingResult is GONE (2026-09-09). /api/outlets/ping now answers with a full
 // DiscoveredOutlet row — same probe, same ownership check, same shape as a
 // scanned hit — because a plug added by hand must be indistinguishable from one
@@ -454,17 +443,6 @@ export class ApiService {
   jog(mm: number)           { return this.post('/api/jog', { mm }); }
 
   // ── Outlet commands ───────────────────────────────────────────────────────────
-
-  configureOutlet(cmd: OutletConfigCmd) {
-    return this.put(`/api/outlets/${cmd.slot}`, {
-      gen:       cmd.generation,
-      ip:        cmd.ip,
-      host:      cmd.host ?? '',
-      name:      cmd.name,
-      stop:      cmd.stop,
-      threshold: cmd.threshold_w ?? 5.0
-    });
-  }
 
   /** Pings a Shelly outlet — the device speaks the Shelly Gen2+ local API (Gen1 is not supported). */
   /**

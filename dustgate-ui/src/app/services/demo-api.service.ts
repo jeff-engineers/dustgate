@@ -11,7 +11,6 @@ import {
   ClampBoard,
   NodeLinkState,
   SenseReport,
-  OutletConfigCmd,
   SystemStatus,
 } from './api.service';
 import { SERVO_CHANNELS_PER_BOARD } from '../gates/selector-types';
@@ -340,20 +339,6 @@ export class DemoApiService extends ApiService {
   }
 
   // ── Outlets ───────────────────────────────────────────────────────────────────
-
-  override async configureOutlet(cmd: OutletConfigCmd): Promise<{ ok: boolean }> {
-    model.configureOutlet(this.d, {
-      slot:      cmd.slot,
-      name:      cmd.name,
-      stop:      cmd.stop,
-      ip:        cmd.ip,
-      host:      cmd.host,
-      gen:       cmd.generation,
-      threshold: cmd.threshold_w,
-    });
-    this.pushStatus();
-    return { ok: true };
-  }
 
   override async pingOutlet(ip: string): Promise<DiscoveredOutlet> {
     await this.delay(400);

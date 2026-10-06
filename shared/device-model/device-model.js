@@ -39,10 +39,6 @@ const HOME_MS = 1500;              // simulated homing duration
 const CALIBRATE_MS = 4000;         // simulated reference-sweep duration
 const TOOL_NAMES = ['Table Saw', 'Drill Press', 'Router Table'];
 
-// Per-port role — what a linear-actuator port/gate is used for. Lets the
-// actuator act as a node in the larger topology graph (see architecture-rfc.md §5.2).
-const PORT_ROLES = ['tool', 'unassigned', 'blocked', 'feed'];
-
 // Manifold geometry profiles: (model, gateCount) → mm positions referenced to the
 // near endstop trigger. Used for reference-sweep auto-placement (see
 // docs/dual-endstop-calibration.md). NUMBERS ARE PLACEHOLDERS — measure the real
@@ -312,9 +308,6 @@ function saveStop(d, index) {
   return { ok: true, skipped: false };
 }
 
-/** Software e-stop — firmware maps this to STATE_ERROR ("ERROR"). */
-function estop(d) { d.state = 'ERROR'; return { ok: true }; }
-
 /** Vestigial enable/disable (firmware's isEnabled() is hardcoded true). */
 // setEnabled went with /api/enable and /api/disable on 2026-08-28 — nothing
 // called them, and the firmware's flags were never consumed, so the endpoints
@@ -325,23 +318,6 @@ function estop(d) { d.state = 'ERROR'; return { ok: true }; }
 // and gates are numbered 1..N left→right from it, so there's nothing to reorder in
 // the sim — the firmware handles the physical datum/direction. No-op for the model.
 function setHomedLeft(_d, _homedLeft) {
-  return { ok: true };
-}
-
-function setNumGates(d, n) {
-  if (Number.isInteger(n) && n >= 1 && n <= NUM_STOPS) {
-    d.numActiveStops = n;
-    // Clear stale saved positions/roles beyond the new count so they don't
-    // reappear as phantom overlap conflicts if the count is later raised again.
-    for (const s of d.stops) if (s.index > n) { s.mm = null; s.role = 'unassigned'; }
-  }
-  return { ok: true };
-}
-
-function setIdleTimeout(d, seconds) {
-  if (typeof seconds === 'number' && seconds >= 0 && seconds <= 86400) {
-    d.idleTimeoutSec = seconds;
-  }
   return { ok: true };
 }
 
@@ -377,34 +353,6 @@ function clearCal(d) {
  * Configure/replace an outlet in a slot. name required, stop must be >= 1;
  * ip optional (empty = name-only gate). Throws { status:400 } like firmware.
  */
-function configureOutlet(d, cmd) {
-  const slot = cmd.slot;
-  if (!Number.isInteger(slot) || slot < 0 || slot >= NUM_STOPS) throw badRequest('slot out of range');
-  if (typeof cmd.name !== 'string' || cmd.name.trim().length === 0) throw badRequest("missing 'name'");
-  if (typeof cmd.stop !== 'number' || cmd.stop <= 0) throw badRequest("missing 'stop'");
-
-  const ip = cmd.ip ?? '';
-  const record = {
-    slot,
-    name:       cmd.name,
-    stop:       cmd.stop,
-    powerW:     0,
-    active:     false,
-    reachable:  ip.trim().length > 0 ? false : false,
-    thresholdW: cmd.threshold ?? 5.0,
-    gen:        cmd.gen ?? 2,
-    ip,
-    host:       cmd.host ?? '',
-    hasSwitch:  ip.trim().length > 0, // empty ip = name-only gate
-  };
-  const existing = d.outlets.findIndex(o => o.slot === slot);
-  if (existing >= 0) d.outlets[existing] = record; else d.outlets.push(record);
-  // Assigning a tool marks that gate's role as 'tool' (unless deliberately blocked).
-  const gate = d.stops[cmd.stop];
-  if (gate && gate.role !== 'blocked') gate.role = 'tool';
-  return { ok: true };
-}
-
 // ── Calibration sweep + port roles (dual-endstop) ───────────────────────────
 
 /**
@@ -462,36 +410,6 @@ function completeCalibrate(d) {
   d.positionSteps = 0;
   d.farEndstop   = false;
   d._calGateCount = undefined;
-}
-
-/** Set a port's role: tool | unassigned | blocked | feed (home/0 excluded). */
-function setPortRole(d, index, role) {
-  if (!Number.isInteger(index) || index < 1 || index > NUM_STOPS) throw badRequest('index out of range');
-  if (!PORT_ROLES.includes(role)) throw badRequest(`invalid role: ${role}`);
-  d.stops[index].role = role;
-  return { ok: true };
-}
-
-function deleteOutlet(d, slot) {
-  d.outlets = d.outlets.filter(o => o.slot !== slot);
-  return { ok: true };
-}
-
-function configureDustCollector(d, cmd) {
-  const ip = cmd.ip ?? '';
-  if (ip.trim().length === 0) throw badRequest("missing 'ip'");
-  d.dcConfigured = true;
-  d.dcIp   = ip;
-  d.dcHost = cmd.host ?? '';
-  return { ok: true };
-}
-
-function deleteDustCollector(d) {
-  d.dcConfigured = false;
-  d.dcOn = false;
-  d.dcIp = null;
-  d.dcHost = '';
-  return { ok: true };
 }
 
 function switchDustCollector(d, on) { d.dcOn = !!on; return { ok: true }; }
@@ -878,18 +796,18 @@ module.exports = {
 
   // constants
   NUM_STOPS, STEPS_PER_MM, MIN_STOP_SEPARATION_MM, IDLE_TIMEOUT_SEC_DEFAULT, HOME_MS,
-  CALIBRATE_MS, PORT_ROLES, MANIFOLD_PROFILES,
+  CALIBRATE_MS, MANIFOLD_PROFILES,
   // lifecycle
   createDevice, statusView, infoView,
   // motion
-  beginHome, completeHome, beginMove, completeMove, beginJog, completeJog, estop,
+  beginHome, completeHome, beginMove, completeMove, beginJog, completeJog,
   // calibration / config
-  saveStop, setHomedLeft, setNumGates, setIdleTimeout, clearCal,
+  saveStop, setHomedLeft, clearCal,
   // dual-endstop calibration + port roles
-  manifoldProfile, beginCalibrate, completeCalibrate, setPortRole,
+  manifoldProfile, beginCalibrate, completeCalibrate,
   isRocklerModel, roundUpEven, physicalGateCount,
   // outlets
-  configureOutlet, deleteOutlet, configureDustCollector, deleteDustCollector, switchDustCollector,
+  switchDustCollector,
   ensureDiscovered, discoverOutlets, adoptOutlets, pingOutlet, nameForIp,
   startSweep, cancelSweep, sweepProgress,
   nameOutlet, releaseOutlet, takeoverOutlet,

@@ -199,7 +199,6 @@ function handler(req, res) {
     return json(res, { ok: true });
   }
 
-  if (pathname === '/api/estop'   && req.method === 'POST') { M.estop(d); broadcast(); return json(res, { ok: true }); }
 
   if (pathname === '/api/move' && req.method === 'POST') {
     return body(req, data => runModel(res, () => {
@@ -260,39 +259,7 @@ function handler(req, res) {
 
   if (pathname === '/api/outlets/save' && req.method === 'POST') return json(res, { ok: true });
 
-  // PUT /api/outlets/:slot — configure/update a single outlet
-  const outletPut = pathname.match(/^\/api\/outlets\/(\d+)$/);
-  if (outletPut && req.method === 'PUT') {
-    return body(req, data => runModel(res, () => {
-      M.configureOutlet(d, {
-        slot: parseInt(outletPut[1], 10),
-        name: data.name, stop: data.stop, ip: data.ip,
-        host: data.host, gen: data.gen, threshold: data.threshold,
-      });
-      broadcast();
-      json(res, { ok: true });
-    }));
-  }
-
-  // DELETE /api/outlets/:slot
-  const outletDel = pathname.match(/^\/api\/outlets\/(\d+)$/);
-  if (outletDel && req.method === 'DELETE') {
-    M.deleteOutlet(d, parseInt(outletDel[1], 10));
-    broadcast();
-    return json(res, { ok: true });
-  }
-
   // ── Dust collector plug ──
-  if (pathname === '/api/dustcollector' && req.method === 'PUT') {
-    return body(req, data => runModel(res, () => {
-      M.configureDustCollector(d, { gen: data.gen, ip: data.ip, host: data.host });
-      broadcast();
-      json(res, { ok: true });
-    }));
-  }
-  if (pathname === '/api/dustcollector' && req.method === 'DELETE') {
-    M.deleteDustCollector(d); broadcast(); return json(res, { ok: true });
-  }
   if (pathname === '/api/dustcollector/switch' && req.method === 'POST') {
     return body(req, data => { M.switchDustCollector(d, data.on); broadcast(); json(res, { ok: true }); });
   }
@@ -308,9 +275,6 @@ function handler(req, res) {
   if (pathname === '/api/config/orientation' && req.method === 'POST') {
     return body(req, data => { M.setHomedLeft(d, data.homedLeft); json(res, { ok: true }); });
   }
-  if (pathname === '/api/config/gates' && req.method === 'POST') {
-    return body(req, data => { M.setNumGates(d, data.numGates); json(res, { ok: true }); });
-  }
   if (pathname === '/api/calibrate' && req.method === 'POST') {
     return body(req, data => runModel(res, () => {
       const durMs = M.beginCalibrate(d, data.model, data.gateCount);
@@ -319,17 +283,6 @@ function handler(req, res) {
       json(res, { ok: true });
     }));
   }
-  if (pathname === '/api/config/port-role' && req.method === 'POST') {
-    return body(req, data => runModel(res, () => {
-      M.setPortRole(d, data.index, data.role);
-      broadcast();
-      json(res, { ok: true });
-    }));
-  }
-  if (pathname === '/api/config/idle-timeout' && req.method === 'POST') {
-    return body(req, data => { M.setIdleTimeout(d, data.seconds); json(res, { ok: true }); });
-  }
-
   if (pathname === '/api/wifi/reset' && req.method === 'POST') {
     console.log('[MOCK] WiFi reset requested — ignoring (no real WiFi to forget)');
     return json(res, { ok: true });

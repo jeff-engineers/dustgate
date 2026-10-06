@@ -8,7 +8,6 @@ export const MIN_STOP_SEPARATION_MM: number;
 export const IDLE_TIMEOUT_SEC_DEFAULT: number;
 export const HOME_MS: number;
 export const CALIBRATE_MS: number;
-export const PORT_ROLES: PortRole[];
 /** The canonical spelling of a board's address: case-folded, no trailing dot, no ".local". board-id.js. */
 export function bareHost(h: string | null | undefined): string;
 export const MANIFOLD_PROFILES: Record<string, { firstGateOffsetMm: number; gatePitchMm: number; endMarginMm: number }>;
@@ -112,22 +111,6 @@ export interface InfoView {
   owner: string;
 }
 
-export interface OutletConfigInput {
-  slot: number;
-  name: string;
-  stop: number;
-  ip?: string;
-  host?: string;
-  gen?: number;
-  threshold?: number;
-}
-
-export interface DustCollectorInput {
-  gen?: number;
-  ip?: string;
-  host?: string;
-}
-
 export interface DiscoveredOutlet {
   ip: string;
   hostname: string;
@@ -187,19 +170,12 @@ export function beginMove(d: Device, stop: number): number;
 export function completeMove(d: Device, stop: number): void;
 export function beginJog(d: Device, mm: number): number;
 export function completeJog(d: Device): void;
-export function estop(d: Device): { ok: boolean };
 export function setEnabled(d: Device, on: boolean): { ok: boolean };
 
 export function saveStop(d: Device, index: number): SaveStopResult;
 export function setHomedLeft(d: Device, homedLeft: boolean): { ok: boolean };
-export function setNumGates(d: Device, n: number): { ok: boolean };
-export function setIdleTimeout(d: Device, seconds: number): { ok: boolean };
 export function clearCal(d: Device): { ok: boolean };
 
-export function configureOutlet(d: Device, cmd: OutletConfigInput): { ok: boolean };
-export function deleteOutlet(d: Device, slot: number): { ok: boolean };
-export function configureDustCollector(d: Device, cmd: DustCollectorInput): { ok: boolean };
-export function deleteDustCollector(d: Device): { ok: boolean };
 export function switchDustCollector(d: Device, on: boolean): { ok: boolean };
 
 export function manifoldProfile(model: string, gateCount: number): ManifoldGeometry | null;
@@ -208,7 +184,6 @@ export function roundUpEven(n: number): number;
 export function physicalGateCount(model: string, n: number): number;
 export function beginCalibrate(d: Device, model: string, gateCount: number): number;
 export function completeCalibrate(d: Device): void;
-export function setPortRole(d: Device, index: number, role: PortRole): { ok: boolean };
 
 export function ensureDiscovered(d: Device): DiscoveredOutlet[];
 export function discoverOutlets(d: Device): DiscoveredOutlet[];
