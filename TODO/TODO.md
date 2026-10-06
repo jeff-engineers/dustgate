@@ -14,6 +14,13 @@ active sections above them, which is how a parked item stops being read.
 
 ## Bugs
 
+- **The Live screen has no way to switch the collector by hand (found 2026-10-06, bench test 16).** `POST /api/collector` works
+  (both brains, `ApiService.setCollectorManual()`), but nothing in the app calls it: the collector card shows state and has no
+  button, so the only way to start a blower from the app is to switch a tool on. My test list said "tap the collector" and
+  there is nothing to tap. A control on the card ("Run it" / "Stop it"), with the wording a hand-started blower needs, wants
+  a mockup first (docs/mockups, the standing UI rule) — and it should say plainly when the brain will NOT turn it off for you
+  (a blower started by hand stays on).
+
 - **Collector slow to start for a tool used for seconds (jeff, 2026-10-06, bench test 10).** The miter saw was "a bit slow" to
   bring the collector on, which matters: a miter saw runs for a few seconds at a time, so a collector that arrives late
   never helps. Find where the time goes before changing anything — add timestamps for the whole chain and read them off a
