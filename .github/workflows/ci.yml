@@ -4,6 +4,7 @@ name: CI
 #   conformance — certifies the device API contract against the Node mock
 #   ui-build    — builds the Angular app and runs its unit suites
 #   firmware    — compiles the ESP32 firmware with PlatformIO
+#   native      — builds the hosted brain with GCC on Linux (what a Raspberry Pi runs) and runs its end-to-end tests
 #
 # The conformance job is the load-bearing one for the mock/demo/firmware sync
 # story: it runs shared/device-model/conformance.js against tools/mock-api.js.
@@ -66,6 +67,24 @@ jobs:
       - name: UI unit tests (shop seam, readiness, geometry)
         run: npm test
         working-directory: dustgate-ui
+
+  native:
+    name: Native brain (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The brain is Boost.Beast plus the same firmware/control headers the ESP32 builds. Boost 1.83 and GCC 13 here, 1.74 and
+      # GCC 12 on Raspberry Pi OS Bookworm: not the same, but the same compiler family, which is what the Mac (clang) is not.
+      - name: Install Boost and ArduinoJson
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y libboost-dev curl
+          mkdir -p native/vendor
+          curl -fsSL https://github.com/bblanchon/ArduinoJson/releases/download/v6.21.5/ArduinoJson-v6.21.5.h -o native/vendor/ArduinoJson.h
+      - name: Build the brain
+        run: make -C native
+      - name: End-to-end tests (fake nodes, fake plugs)
+        run: make -C native test
 
   firmware:
     name: Firmware compile
