@@ -52,7 +52,7 @@ behaviour as verified unless it is on that list.
 |---|---|
 | `shared/device-model/` | **Canonical device model** — pure JS, single source of truth |
 | `firmware/` | ESP32 C++ (Arduino/PlatformIO). The primary owns the schema; nodes own local loops and no interpretation |
-| `native/` | **The brain as a Linux/macOS program** (Boost.Beast shell around the same `firmware/control` + `firmware/outlets` code the ESP32 runs). Started 2026-10-04; links nodes, routes, drives the collector and polls plugs, serves the app. `make -C native test`. See `native/README.md` and `docs/brain-options.md` |
+| `native/` | **The brain as a Linux/macOS program** (Boost.Beast shell around the same `firmware/control` + `firmware/outlets` code the ESP32 runs). Started 2026-10-04; links nodes, routes, drives the collector and polls plugs, serves the app. `make -C native test`. See `native/README.md` and `docs/brain-options.md`. **`native/pi/`** is the Raspberry Pi path (setup, deploy-from-the-Mac, update-with-rollback, systemd unit); written 2026-10-06, **never run on a Pi** |
 | `dustgate-ui/` | Angular app, served off the device's LittleFS |
 | `tools/` | `mock-api.js` (simulated device), `mock-node.js` (simulated secondary), conformance runners |
 | `docs/BOM.md` | **Bill of materials** — boards, modules, sensors and the passives whose value matters, plus what was deliberately not bought |
