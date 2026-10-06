@@ -4,6 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { DiscoveredOutlet } from '../services/api.service';
 import { OutletPickerComponent } from './outlet-picker.component';
 import { PairedOutletRowComponent } from './paired-outlet-row.component';
+import { DEFAULT_THRESHOLD } from './outlet-defaults';
 
 // ── Pairing one element with its smart plug ──────────────────────────────────
 // Opened from the build canvas, alongside the gate config sheet, because a plug is
@@ -26,7 +27,6 @@ import { PairedOutletRowComponent } from './paired-outlet-row.component';
 
 interface RawEl { [k: string]: unknown; }
 
-const DEFAULT_THRESHOLD = 50;
 
 @Component({
   selector: 'app-element-outlet-config',

@@ -11,6 +11,7 @@ import { elementsOf, ductsOf } from '../gates/selector-types';
 import { type ShopDoc, type RawEl as DocEl, collectorOf, isPortSupplemental, machineOfPort,
          outletExcludes, outletOf, outletTakenByAnotherMachine, renameMachine, systemLabel,
          systemsInLayoutOrder, systemsOf, toShop } from '../services/shop-doc';
+import { DEFAULT_THRESHOLD } from './outlet-defaults';
 
 // ── The tools screen ─────────────────────────────────────────────────────────
 // Every tool in the shop in one list, each tappable into its own tagging page:
@@ -100,7 +101,6 @@ interface SysGroup {
   tools: ToolCfg[];
 }
 
-const DEFAULT_THRESHOLD = 50;
 
 @Component({
   selector: 'app-tool-setup',

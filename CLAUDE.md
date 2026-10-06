@@ -181,6 +181,13 @@ drifted constantly. Now `shared/device-model/` is the spec:
   891mm 8-gate 4" rack — and the symptom would have been a healthy home failing
   on the biggest rack in the shop.
 
+  **The checked half of this table is `shared/device-model/constant-pairs.json`** (2026-10-06): every pair below that is a plain number
+  (and the servo-bank and sliding-stop budgets across the JS model, `config.h` and the UI) is listed there as a group that must be
+  equal, and `tools/check-constant-pairs.js` (run by `npm run model:test`) reads each number out of its source and fails when a
+  group disagrees, or when a listed constant can no longer be found. **A new pair goes in BOTH places** — a row here for why, a group
+  there for the check. A number that cannot be paired (compiled into the UI bundle, held by a node) still needs a test that fails
+  when the copies differ: the UI bundle has `tools/check-ui-fresh.js` (the model's hash is baked into the app at build time).
+
   **This table is a cache, not the source of truth — keep it honest or delete
   rows rather than let them go stale.** Touching either side of a pair: update
   the other side's value AND this table's "What it is" cell if the meaning
