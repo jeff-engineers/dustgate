@@ -14,6 +14,15 @@ active sections above them, which is how a parked item stops being read.
 
 ## Bugs
 
+- **Nodes should be able to have their CT clamp disabled; default to none (jeff, 2026-10-06).** Today every C5 node reports
+  `caps.ct = 1` from its pin map (`PIN_CT`) whether or not a clamp is plugged in, so an unclamped board reads as having one
+  and the layout can point a tool at a clamp that is not there. Two routes, in order of preference: (1) when the clamp moves to a
+  headphone-style jack, use the jack's switch contact to detect a plug (a GPIO reads the jack's normally-closed pin) and report
+  `caps.ct` only while one is inserted, which needs no setting at all; (2) until then, default nodes to NO clamp and add an
+  enable (a CONFIG field or a per-board setting in the app, kept by the primary so a reflash does not lose it). A clamp is declared
+  by its board because nothing on the network can discover one, so the enable has to be something a person can set. Pair rule:
+  `caps.ct` default and any new field go in `nodelink.js` ↔ `NodeLink.h`, same cases, same order.
+
 - **The Live screen has no way to switch the collector by hand (found 2026-10-06, bench test 16).** `POST /api/collector` works
   (both brains, `ApiService.setCollectorManual()`), but nothing in the app calls it: the collector card shows state and has no
   button, so the only way to start a blower from the app is to switch a tool on. My test list said "tap the collector" and

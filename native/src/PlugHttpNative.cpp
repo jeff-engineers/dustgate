@@ -1,6 +1,9 @@
 // native/src/PlugHttpNative.cpp — plughttp (outlets/PlugHttp.h) on Linux and macOS: a blocking Boost.Beast client
 // with real connect and read deadlines, and the system resolver for mDNS names. Called from the plug poller's own
 // thread, never from the network thread — a dead plug costs its timeout and must not stall a node link.
+// Spelled out, not left to whatever Boost happens to pull in: GCC (the Pi) is stricter than the Mac's clang.
+#include <cstdint>
+#include <string>
 #include <boost/asio.hpp>
 #include <boost/beast.hpp>
 #include <netdb.h>

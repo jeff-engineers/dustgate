@@ -7,6 +7,8 @@
 // Push: whenever the stored Ws server is enabled it dials it and streams NotifyFullStatus / NotifyStatus (switch:0.apower)
 // whenever the number in the file changes — what a real plug's Outbound WebSocket does. <powerfile>.polls counts GetStatus
 // requests, so a test can see that a pushing plug is not being polled.
+// Spelled out, not left to whatever Boost happens to pull in: GCC (the Pi) is stricter than the Mac's clang.
+#include <cstdlib>
 #include <boost/asio.hpp>
 #include <boost/beast.hpp>
 #include <atomic>

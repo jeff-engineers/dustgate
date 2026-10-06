@@ -2,6 +2,10 @@
 // answers as a smart plug. The ESP32 does this for Tasmotas (they advertise nothing); a brain with no mDNS browser
 // needs it for Shelly too, so each hit is probed as either (outlets/OutletOps.h tries both). Runs on its own threads.
 #pragma once
+// Spelled out, not left to whatever Boost happens to pull in: GCC (the Pi) is stricter than the Mac's clang.
+#include <chrono>
+#include <cstdlib>
+#include <cstdint>
 #include <atomic>
 #include <boost/asio.hpp>
 #include <boost/beast.hpp>

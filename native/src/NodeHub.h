@@ -3,6 +3,9 @@
 // Single-threaded by design: everything runs on the io_context's one thread, so a session needs
 // no mutex (the session's header says the shell serialises access; here that is the thread).
 #pragma once
+// Spelled out, not left to whatever Boost happens to pull in: GCC (the Pi) is stricter than the Mac's clang.
+#include <cstdint>
+#include <utility>
 #include <chrono>
 #include <map>
 #include <memory>

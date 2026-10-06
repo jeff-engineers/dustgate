@@ -1,6 +1,8 @@
 // native/src/Md5.h — MD5 of a buffer, lowercase hex. The node protocol checks a staged image by MD5 (X-Md5, the
 // OTA frame), and a dependency on a crypto library for one 80-line function is not worth having on a Pi image.
 #pragma once
+// Spelled out, not left to whatever Boost happens to pull in: GCC (the Pi) is stricter than the Mac's clang.
+#include <cstdio>
 #include <cstdint>
 #include <cstring>
 #include <string>

@@ -7,9 +7,23 @@
 //
 // ONE THREAD. Everything runs on the io_context's thread, which is what makes NodeSession's "the shell
 // serialises access" a non-issue here.
+// Spelled out, not left to whatever Boost happens to pull in: GCC (the Pi) is stricter than the Mac's clang.
+#include <chrono>
+#include <cstdint>
+#include <cstdlib>
+#include <cstring>
+#include <map>
+#include <memory>
+#include <string>
+#include <thread>
+#include <utility>
+#include <vector>
 #include <boost/asio.hpp>
 #include <boost/beast.hpp>
 #include <boost/beast/websocket.hpp>
+#ifndef DG_COMMIT
+#define DG_COMMIT "unknown"
+#endif
 #include <csignal>
 #include <unistd.h>
 #include <algorithm>
@@ -793,7 +807,7 @@ private:
             if (deserializeJson(d, ar.body) || !d["machineId"].is<const char*>()) err(http::status::bad_request, "machineId, watts");
             else { g_rt.setMachinePower(d["machineId"].as<std::string>(), d["watts"] | 0.0f); o.body = "{\"ok\":true}"; }
         }
-        else if (t == "/api/info") o.body = "{\"role\":\"native\",\"id\":\"" + g_hub->primaryId() + "\",\"apiKey\":\"" + g_apiKey + "\",\"build\":\"native\",\"uptimeSec\":" + std::to_string(dglog::upMs() / 1000) + "}";
+        else if (t == "/api/info") o.body = "{\"role\":\"native\",\"id\":\"" + g_hub->primaryId() + "\",\"apiKey\":\"" + g_apiKey + "\",\"build\":\"native " + std::string(DG_COMMIT) + "\",\"uptimeSec\":" + std::to_string(dglog::upMs() / 1000) + "}";
         else err(http::status::not_found, "not found");
     }
 
@@ -897,7 +911,13 @@ int main(int argc, char** argv) {
         std::ifstream f(g_topoPath, std::ios::binary);
         if (f) { std::stringstream b; b << f.rdbuf(); if (!adoptLayout(b.str())) dglog::linef("[TOPO] stored layout refused: %s\n", g_topoErr.c_str()); }
     }
-    if (ip.empty()) ip = guessIp();
+    if (ip.empty()) {
+        // At boot a Pi starts this before its WiFi has an address; "127.0.0.1" would be beaconed and pushed to plugs for the
+        // life of the process. Wait (up to a minute) for a real one.
+        ip = guessIp();
+        for (int i = 0; i < 60 && ip == "127.0.0.1"; i++) { std::this_thread::sleep_for(std::chrono::seconds(1)); ip = guessIp(); }
+        if (ip == "127.0.0.1") dglog::line("[NET] no network address after 60 s - nodes cannot find this brain. Check the Pi's WiFi.");
+    }
     g_localIp = ip;
     // The subnet's own broadcast address: the all-ones one is dropped or mis-routed by some stacks (macOS often), and the beacon
     // is what lets a node find a brain whose address changed.
@@ -934,7 +954,7 @@ int main(int argc, char** argv) {
     };
     rtTick();
     net::signal_set sig(io, SIGINT, SIGTERM); sig.async_wait([&](beast::error_code, int) { io.stop(); });
-    dglog::linef("dustgate-brain %s on %s:%u, %zu paired node(s)\n", id.c_str(), ip.c_str(), port, ids.size());
+    dglog::linef("dustgate-brain %s (%s) on %s:%u, %zu paired node(s)\n", id.c_str(), DG_COMMIT, ip.c_str(), port, ids.size());
     // Plugs are pointed at the port the app is served on (port 80 needs no number in the URL).
     g_poller.setPushTarget(selfIdentity(), "ws://" + ip + (port == 80 ? "" : ":" + std::to_string(port)) + "/shelly-rpc",
                            stateDir.empty() ? "" : stateDir + "/plugs.json");

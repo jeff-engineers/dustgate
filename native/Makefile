@@ -2,7 +2,10 @@
 # only this directory is the Linux/macOS shell. Needs Boost (brew install boost | apt install libboost-dev)
 # and the ArduinoJson headers (found under the PlatformIO libdeps, or set ARDUINOJSON=<dir containing ArduinoJson.h>).
 BOOST      ?= $(shell brew --prefix boost 2>/dev/null || echo /usr)
-ARDUINOJSON?= $(shell dirname "$$(find ../.pio.nosync/libdeps -path '*/ArduinoJson/src/ArduinoJson.h' 2>/dev/null | head -1)")
+# ArduinoJson: an explicit ARDUINOJSON=<dir>, else a vendored copy (pi/setup.sh downloads one), else PlatformIO's.
+ARDUINOJSON?= $(shell for d in vendor /opt/dustgate/vendor; do [ -f $$d/ArduinoJson.h ] && echo $$d && exit; done; dirname "$$(find ../.pio.nosync/libdeps -path '*/ArduinoJson/src/ArduinoJson.h' 2>/dev/null | head -1)")
+# Which commit this is, for /api/info and the log: COMMIT=<sha> (the deploy script writes ../COMMIT when it ships source without .git).
+COMMIT     ?= $(shell cat ../COMMIT 2>/dev/null || git rev-parse --short HEAD 2>/dev/null || echo unknown)
 CXX        ?= c++
 CXXFLAGS   ?= -std=c++17 -O2 -Wall -Wextra -Wno-unused-parameter
 INC        := -I$(BOOST)/include -I$(ARDUINOJSON) -I../firmware/control -I../firmware/outlets -I../firmware/sensing -I../firmware/api -Isrc
@@ -11,6 +14,8 @@ BIN        := build/dustgate-brain
 FAKE := build/fakenode
 FAKEPLUG := build/fakeplug
 all: $(BIN) $(FAKE) $(FAKEPLUG)
+# Just the brain: what a Pi builds (the fakes are for the tests).
+brain: $(BIN)
 $(FAKEPLUG): src/fakeplug.cpp
 	@mkdir -p build
 	$(CXX) $(CXXFLAGS) $(INC) src/fakeplug.cpp -o $@ -L$(BOOST)/lib -pthread
@@ -26,7 +31,7 @@ test: all
 OUTLETS := ../firmware/outlets/ShellyGen2Outlet.cpp ../firmware/outlets/TasmotaOutlet.cpp
 $(BIN): src/main.cpp src/PlugHttpNative.cpp src/PlugPoller.h src/Sweep.h src/NodeHub.h src/SessionBus.h $(OUTLETS) $(wildcard ../firmware/control/*.h) $(wildcard ../firmware/outlets/*.h) $(wildcard src/*.h) ../firmware/api/ApiCore.h
 	@mkdir -p build
-	$(CXX) $(CXXFLAGS) -DDUSTGATE_NATIVE $(INC) src/main.cpp src/PlugHttpNative.cpp $(OUTLETS) -o $@ -L$(BOOST)/lib -pthread
+	$(CXX) $(CXXFLAGS) -DDUSTGATE_NATIVE -DDG_COMMIT=\"$(COMMIT)\" $(INC) src/main.cpp src/PlugHttpNative.cpp $(OUTLETS) -o $@ -L$(BOOST)/lib -pthread
 clean:
 	rm -rf build
-.PHONY: all clean test
+.PHONY: all brain clean test

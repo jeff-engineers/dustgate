@@ -2,6 +2,8 @@
 // RemoteActuatorBus, wrapped in a mutex because its transport runs on another task; here every call
 // is on the io_context's one thread, so it is a straight delegation.
 #pragma once
+// Spelled out, not left to whatever Boost happens to pull in: GCC (the Pi) is stricter than the Mac's clang.
+#include <cstdint>
 #include "NodeSession.h"
 
 namespace dgbrain {

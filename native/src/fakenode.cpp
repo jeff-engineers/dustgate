@@ -1,6 +1,9 @@
 // native/src/fakenode.cpp — a node that is only a socket: dials a brain, answers HELLO with a WELCOME, ACKs
 // and "arrives" every SET, and says what it received. For testing the brain without a bench:
 //   fakenode <host> <port> <nodeId> [seconds]
+// Spelled out, not left to whatever Boost happens to pull in: GCC (the Pi) is stricter than the Mac's clang.
+#include <cstdlib>
+#include <string>
 #include <boost/asio.hpp>
 #include <boost/beast.hpp>
 #include <boost/beast/websocket.hpp>

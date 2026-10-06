@@ -4,6 +4,9 @@
 // up to their timeout on a dead plug, so they live on a thread of their own and the network thread only ever
 // reads the latest answer. That is the ESP's arrangement too (its outlet poll task).
 #pragma once
+// Spelled out, not left to whatever Boost happens to pull in: GCC (the Pi) is stricter than the Mac's clang.
+#include <cstdint>
+#include <utility>
 #include <atomic>
 #include <chrono>
 #include <map>

@@ -1,6 +1,8 @@
 // native/src/Log.h — the brain's console: stdout, plus a ring the app reads at GET /api/serial (the ESP32 keeps the
 // same, utils/SerialLog.h), plus the link log (utils/LinkLog.h) as JSON Lines in the state directory.
 #pragma once
+// Spelled out, not left to whatever Boost happens to pull in: GCC (the Pi) is stricter than the Mac's clang.
+#include <cstdint>
 #include <chrono>
 #include <cstdarg>
 #include <cstdio>
