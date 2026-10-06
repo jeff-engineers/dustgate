@@ -4,8 +4,8 @@
 // TopologyController.h calls this "a thin device layer (the main sketch)". This
 // is it, factored out of the sketch so it stays host-testable. It owns:
 //
-//   • the parsed document (adopted at boot and on PUT /api/topology) — either a
-//     schemaVersion-1 topology or a v2 shop; Shop.h flattens the difference
+//   • the parsed document (adopted at boot and on PUT /api/topology): a shop,
+//     since a schemaVersion-1 topology is refused
 //   • a topo::Controller (the brain: machine power in, routed states + per-system
 //     plans out)
 //   • a MOVE QUEUE, drained one move at a time through NodeBus
@@ -255,6 +255,7 @@ public:
         _inFlightSystem.clear();
         _inFlightIsMake = false;
         _reassert.clear();
+        _lastMoveOnBoard.clear();
         _collectors.clear();
         for (const SystemView& sys : systemsOf(topology()))
             // Value-initialised rather than listed positionally. The struct
@@ -282,6 +283,7 @@ public:
         _inFlightSystem.clear();
         _inFlightIsMake = false;
         _reassert.clear();
+        _lastMoveOnBoard.clear();
         _loaded = false;
     }
 
@@ -412,6 +414,21 @@ public:
         it->second.plugReachable = reachable;
         it->second.plugWatts     = watts;
         it->second.plugOnForMs   = onForMs;
+    }
+
+    // A board's move did not finish — it reset or lost its link mid-move. `_hwStates` is set when a move is COMMANDED, so the
+    // brain believes the gate got where it was sent; the board knows better, and nothing else would correct the belief until
+    // the next tool switch-on re-asserts every gate. Owe that one selector a fresh command and replan. Only the selector last
+    // commanded on that board: the others were not in flight, and re-sending them would move gates for no reason.
+    // Called once per fault EDGE by DeviceProblems (the fault stays up until the next move, so level would loop).
+    void reassertBoard(const std::string& host) {
+        if (!_loaded) return;
+        bool any = false;
+        for (auto it = _lastMoveOnBoard.begin(); it != _lastMoveOnBoard.end();) {
+            if (sameBoard(it->first, host)) { _reassert.insert(it->second); it = _lastMoveOnBoard.erase(it); any = true; }
+            else ++it;
+        }
+        if (any) ingest(_ctrl.reconcile());
     }
 
     bool setCollectorManual(const std::string& systemId, bool on) {
@@ -565,6 +582,7 @@ public:
                 } else {
                     _stuck.erase(m.selectorId);
                     _hwStates[m.selectorId] = m.toState;   // commanded → hardware truth
+                    _lastMoveOnBoard[_str(sel["controllerId"])] = m.selectorId;
                     _inFlightSystem = q.systemId;
                     _inFlightIsMake = !m.isBreak;
                 }
@@ -1428,6 +1446,7 @@ private:
     // ingest() rebuilds the queue on every poll tick: a re-assert living only in
     // the plan that made it would be dropped by the next tick before it ran.
     std::set<std::string>                _reassert;
+    std::map<std::string, std::string>   _lastMoveOnBoard;   // controllerId -> the selector last COMMANDED there (see reassertBoard)
     bool     _loaded = false;
     uint32_t _nowMs  = 0;
 };

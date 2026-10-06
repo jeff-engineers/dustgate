@@ -17,8 +17,11 @@ import { shopReadiness } from './shop-ready';
 
 const { check, eq, report } = suite();
 
-/** A complete, calibrated, one-system v1 shop: the "ready" baseline. */
-const ready = () => JSON.parse(JSON.stringify({
+// Single-system fixture lifted into a shop (the device refuses schemaVersion 1; this is test-only).
+const { shopFromV1 } = require('@topology-fixtures') as { shopFromV1: (t: unknown) => unknown };
+
+/** A complete, calibrated, one-system layout in the single-system fixture shape. */
+const readyV1 = () => JSON.parse(JSON.stringify({
   schemaVersion: 1,
   name: 'Shop',
   controllers: [{ id: 'primary', role: 'primary', name: 'Brain', board: 'devkitc' }],
@@ -35,17 +38,21 @@ const ready = () => JSON.parse(JSON.stringify({
   ducts: [{ child: 'gate', parent: 'dc' }, { child: 'saw', parent: 'gate', parentBranch: 'b1' }],
 })) as Topology;
 
-const mut = (fn: (t: Record<string, unknown>) => void): Topology => {
-  const t = ready() as unknown as Record<string, unknown>;
+/** The "ready" baseline: that layout as a shop. */
+const ready = () => shopFromV1(readyV1()) as Topology;
+// The one system's body: mutations below edit it in place.
+const sys0 = (t: Topology) => (t as unknown as { systems: { elements: Record<string, unknown>[]; ducts: Record<string, unknown>[] }[] }).systems[0];
+const mut = (fn: (t: Topology) => void): Topology => {
+  const t = ready();
   fn(t);
-  return t as unknown as Topology;
+  return t;
 };
-const els = (t: Topology) => (t as unknown as { elements: Record<string, unknown>[] }).elements;
+const els = (t: Topology) => sys0(t).elements;
 
 // ── the ready case ──────────────────────────────────────────────────────────
 {
   const r = shopReadiness(ready());
-  check('a complete calibrated v1 shop is ready', r.ready, r.reason);
+  check('a complete calibrated shop is ready', r.ready, r.reason);
   eq('and says nothing', r.reason, '');
 }
 
@@ -56,9 +63,10 @@ const els = (t: Topology) => (t as unknown as { elements: Record<string, unknown
 
   // Machines, not ports: "no tools yet" is about things you can switch on.
   const noTools = mut(t => {
-    (t['elements'] as Record<string, unknown>[]) = els(t as Topology).filter(e => e['type'] !== 'tool');
-    (t['ducts'] as Record<string, unknown>[]) = [{ child: 'gate', parent: 'dc' }];
-    (els(t as Topology).find(e => e['id'] === 'gate')!['branches'] as Record<string, unknown>[])[0]['role'] = 'blocked';
+    sys0(t).elements = els(t).filter(e => e['type'] !== 'tool');
+    (t as unknown as { machines: unknown[] }).machines = [];
+    sys0(t).ducts = [{ child: 'gate', parent: 'dc' }];
+    (els(t).find(e => e['id'] === 'gate')!['branches'] as Record<string, unknown>[])[0]['role'] = 'blocked';
   });
   const r = shopReadiness(noTools);
   check('a shop with no tools is not ready', !r.ready);
@@ -69,7 +77,7 @@ const els = (t: Topology) => (t as unknown as { elements: Record<string, unknown
   // though the document is fine. This is the common "almost done" case, and the
   // one a validity-only check would wave through.
   const uncalibrated = mut(t => {
-    delete (els(t as Topology).find(e => e['id'] === 'gate')!['servo'] as Record<string, unknown>)['referenceAngle'];
+    delete (els(t).find(e => e['id'] === 'gate')!['servo'] as Record<string, unknown>)['referenceAngle'];
   });
   const r = shopReadiness(uncalibrated);
   check('an unmeasured gate blocks readiness', !r.ready);
@@ -79,45 +87,29 @@ const els = (t: Topology) => (t as unknown as { elements: Record<string, unknown
   // A tool with no gate between it and the collector leaks suction: it can never
   // be selected on its own.
   const leaky = mut(t => {
-    els(t as Topology).push({ id: 'loose', type: 'tool', name: 'Loose tool' });
-    (t['ducts'] as Record<string, unknown>[]).push({ child: 'loose', parent: 'dc' });
+    els(t).push({ id: 'loose', type: 'tool', name: 'Loose tool', machineId: 'loose' });
+    (t as unknown as { machines: unknown[] }).machines.push({ id: 'loose', name: 'Loose tool' });
+    sys0(t).ducts.push({ child: 'loose', parent: 'dc' });
   });
   const r = shopReadiness(leaky);
   check('an ungated tool blocks readiness', !r.ready);
   check('...and the message names it', r.reason.includes('Loose tool'), r.reason);
 }
 {
-  const broken = mut(t => { (t['elements'] as unknown[]) = []; (t['ducts'] as unknown[]) = []; });
+  const broken = mut(t => { sys0(t).elements = []; sys0(t).ducts = []; });
   const r = shopReadiness(broken);
   check('a structurally invalid layout is not ready', !r.ready);
   check('...and leads with "the layout has a problem"',
     r.reason.startsWith('The layout has a problem'), r.reason);
 }
 
-// ── it migrates too ─────────────────────────────────────────────────────────
+// ── a schemaVersion-1 layout ────────────────────────────────────────────────
 //
-// This runs on the entry redirect, which may see a document straight off a board
-// that has never been resaved. Before the migration was added here, a v1 layout
-// validated as a shop, failed, and bounced a finished shop into the builder on
-// every open.
+// The device refuses one and the app no longer reads one, so a v1 document is NOT ready; it must not throw on the way to
+// saying so (this runs on the entry redirect, on whatever a board hands back).
 {
-  const shop = {
-    schemaVersion: 2,
-    name: 'Shop',
-    controllers: [{ id: 'primary', role: 'primary', name: 'Brain', board: 'devkitc' }],
-    systems: [{
-      id: 'system-1',
-      elements: els(ready()).map(e => (e['type'] === 'tool' ? { ...e, machineId: 'saw' } : e)),
-      ducts: [{ child: 'gate', parent: 'dc' }, { child: 'saw', parent: 'gate', parentBranch: 'b1' }],
-    }],
-    machines: [{ id: 'saw', name: 'Table saw' }],
-  } as unknown as Topology;
-
-  const r = shopReadiness(shop);
-  check('a native v2 shop is ready', r.ready, r.reason);
-
-  const v1r = shopReadiness(ready());
-  eq('and a v1 layout gives the SAME answer as its v2 form', v1r.ready, r.ready);
+  const r = shopReadiness(readyV1());
+  check('a v1 layout is not ready', !r.ready);
 }
 
 report();

@@ -124,15 +124,10 @@ async function run() {
       JSON.stringify(s).slice(0, 140));
   }
 
-  // 5. Config writes are reflected in /api/info.
+  // 5. Config writes are accepted.
   {
-    await req('POST', '/api/config/gates', { numGates: 4 });
     await req('POST', '/api/config/orientation', { homedLeft: true });   // home-side answer → ok
-    await req('POST', '/api/config/idle-timeout', { seconds: 1800 });
-    const i = (await req('GET', '/api/info')).json;
-    check('config: numGates=4 → info.numStops', i && i.numStops === 4, `numStops=${i?.numStops}`);
     check('config: orientation accepted', (await req('POST', '/api/config/orientation', { homedLeft: false })).status === 200);
-    check('config: idle-timeout → info.idleTimeoutSec', i && i.idleTimeoutSec === 1800, `got ${i?.idleTimeoutSec}`);
     // /api/config/motor is GONE (2026-08-28). Homing direction is derived from
     // which endstop is the datum — a serial bus servo cannot be wired backwards,
     // so there was nothing left for an inversion switch to correct.
@@ -183,17 +178,6 @@ async function run() {
     check('move: out-of-range stop → 400', (await req('POST', '/api/move', { stop: 99 })).status === 400);
   }
 
-  // 10. configureOutlet validation + happy path.
-  {
-    check('outlet: empty name → 400', (await req('PUT', '/api/outlets/2', { name: '', stop: 2 })).status === 400);
-    check('outlet: missing stop → 400', (await req('PUT', '/api/outlets/2', { name: 'X', stop: 0 })).status === 400);
-    const r = await req('PUT', '/api/outlets/2', { name: 'TestTool', stop: 2, ip: '192.168.1.250', gen: 2, threshold: 600 });
-    check('outlet: valid config → ok', r.status === 200);
-    const s = (await req('GET', '/api/motion')).json;
-    const o = (s.outlets || []).find(x => x.slot === 2);
-    check('outlet: appears in status with name', o && o.name === 'TestTool', JSON.stringify(o));
-  }
-
   // 11. Discover shape (count/power/names vary on real hardware — shape only).
   {
     const r = await req('GET', '/api/outlets/discover');
@@ -215,23 +199,6 @@ async function run() {
     const p = r.json;
     check('ping: shape', r.status === 200 && p && isBool(p.reachable) && isNum(p.powerW) && isNum(p.gen) && isStr(p.name),
       JSON.stringify(p));
-  }
-
-  // 13. Dust collector config/switch/delete.
-  {
-    await req('PUT', '/api/dustcollector', { gen: 2, ip: '192.168.1.251' });
-    let s = (await req('GET', '/api/motion')).json;
-    check('dc: config → dcConfigured=true', s && s.dcConfigured === true, `dcConfigured=${s?.dcConfigured}`);
-    check('dc: missing ip → 400', (await req('PUT', '/api/dustcollector', { gen: 2 })).status === 400);
-    const sw = await req('POST', '/api/dustcollector/switch', { on: true });
-    check('dc: switch → ok', sw.status === 200);
-    if (isLocal) {
-      s = (await req('GET', '/api/motion')).json;
-      check('dc [local]: switch on → dcOn=true', s && s.dcOn === true);
-    }
-    await req('DELETE', '/api/dustcollector');
-    s = (await req('GET', '/api/motion')).json;
-    check('dc: delete → dcConfigured=false', s && s.dcConfigured === false);
   }
 
   // 14. Dual-endstop reference sweep auto-calibrates + auto-places gates.
@@ -278,15 +245,6 @@ async function run() {
     await req('POST', '/api/config/orientation', { homedLeft: false });
     const stopsR = (await req('GET', '/api/stops')).json.stops;
     check('home-side answer does not reorder gates', stopsR[1].mm === stopsL[1].mm && stopsR[4].mm === stopsL[4].mm);
-  }
-
-  // 15. Port roles.
-  {
-    const ok = await req('POST', '/api/config/port-role', { index: 2, role: 'blocked' });
-    check('port-role → ok', ok.status === 200);
-    const s = (await req('GET', '/api/motion')).json;
-    check('port-role: gate 2 blocked', s && s.stops[2] && s.stops[2].role === 'blocked', `role=${s?.stops?.[2]?.role}`);
-    check('port-role: invalid role → 400', (await req('POST', '/api/config/port-role', { index: 2, role: 'bogus' })).status === 400);
   }
 
   // 16. Final clearcal leaves the device clean.

@@ -4,6 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { DiscoveredOutlet } from '../services/api.service';
 import { OutletPickerComponent } from './outlet-picker.component';
 import { PairedOutletRowComponent } from './paired-outlet-row.component';
+import { DEFAULT_THRESHOLD } from './outlet-defaults';
 
 // ── Pairing one element with its smart plug ──────────────────────────────────
 // Opened from the build canvas, alongside the gate config sheet, because a plug is
@@ -26,7 +27,6 @@ import { PairedOutletRowComponent } from './paired-outlet-row.component';
 
 interface RawEl { [k: string]: unknown; }
 
-const DEFAULT_THRESHOLD = 50;
 
 @Component({
   selector: 'app-element-outlet-config',
@@ -72,7 +72,7 @@ const DEFAULT_THRESHOLD = 50;
            and left the tool's name looking like a heading rather than a subject. -->
 
       <div class="head">
-        <span class="kind"><b>{{ isSwitch ? 'Collector' : 'Tool' }}:</b> {{ name || 'Unnamed' }}
+        <span class="kind"><b>Tool:</b> {{ name || 'Unnamed' }}
           <span class="sep">—</span> Device setup</span>
         <span class="badge" [class.ok]="hasPlug && !!ip" [class.todo]="!hasPlug || !ip"
               [title]="hasPlug && ip
@@ -94,7 +94,7 @@ const DEFAULT_THRESHOLD = 50;
              console error to find it by. Shipped exactly that way for one flash,
              2026-09-16. Any Angular expression containing an apostrophe has to be
              double-quoted. -->
-        <span>{{ isSwitch ? 'Switch the collector automatically?' : "How does DustGate know it's running?" }}</span>
+        <span>How does DustGate know it's running?</span>
         <div class="yesno">
           <button [class.on]="hasPlug" (click)="hasPlug = true"
                   title="Pair a smart outlet, so DustGate knows when this is running">Yes</button>
@@ -108,7 +108,7 @@ const DEFAULT_THRESHOLD = 50;
              making someone re-identify a plug they've already found. -->
         <app-paired-outlet-row *ngIf="ip && !changing"
                                [toolName]="name" [ip]="ip" [host]="host" [label]="label"
-                               [seen]="seenOutlet()" [owner]="owner" [isSwitch]="isSwitch"
+                               [seen]="seenOutlet()" [owner]="owner"
                                fieldId="sheet-outlet-name"
                                (renamed)="label = $event"
                                (rescan)="rescan.emit()"
@@ -122,20 +122,14 @@ const DEFAULT_THRESHOLD = 50;
                            (picked)="pick($event)">
         </app-outlet-picker>
 
-        <!-- Sensor role only. The collector's plug is commanded, never read, so a
-             threshold would be a setting that does nothing. -->
-        <div class="thresh" *ngIf="ip && !changing && !isSwitch">
+        <div class="thresh" *ngIf="ip && !changing">
           <div class="r"><span>Start collection above</span><b>{{ thresholdW }} W</b></div>
           <input type="range" min="0" max="1500" step="10" [(ngModel)]="thresholdW"/>
           <p class="why">Catches the motor, ignores standby draw.</p>
         </div>
       </ng-container>
       <ng-template #noPlug>
-        <p class="manual">
-          {{ isSwitch
-             ? 'You\\'ll start the collector yourself. Gates still route to whatever tool is running.'
-             : 'You\\'ll switch this one on yourself from the shop list.' }}
-        </p>
+        <p class="manual">You'll switch this one on yourself from the shop list.</p>
       </ng-template>
 
       <div class="nav">
@@ -149,8 +143,6 @@ export class ElementOutletConfigComponent implements OnInit {
   /** The element from the topology — a tool, or the collector. Edited on a COPY:
    *  the caller splices the result back in, matching how the gate sheet works. */
   @Input({ required: true }) element!: RawEl;
-  /** 'sensor' watches a tool's draw; 'switch' commands the collector. */
-  @Input() mode: 'sensor' | 'switch' = 'sensor';
   /** Plugs already spoken for: other tools' sensors and the collector's own switch. */
   @Input() excludeIps: string[] = [];
   @Input() excludeReason: Record<string, string> = {};
@@ -186,9 +178,9 @@ export class ElementOutletConfigComponent implements OnInit {
   kind: 'shelly' | 'tasmota' = 'shelly';
   thresholdW = DEFAULT_THRESHOLD;
 
-  get isSwitch(): boolean { return this.mode === 'switch'; }
-  /** Where the plug lives on the element, per role. */
-  private get field(): string { return this.isSwitch ? 'control' : 'sensor'; }
+  /** Where the plug lives on the element. This sheet is for TOOLS only: the collector has its own sheet (collector-setup), which
+   *  is where the switch role went, so everything here reads and writes `sensor`. */
+  private readonly field = 'sensor';
 
   ngOnInit(): void {
     const outlet = (this.element[this.field] as RawEl | undefined)?.['outlet'] as RawEl | undefined;
@@ -234,7 +226,7 @@ export class ElementOutletConfigComponent implements OnInit {
     // Seed the threshold from what the tool is drawing right now, ~10% under so it
     // clears standby but still trips. Only when it's still the untouched default —
     // a number someone chose on the bench outranks a guess.
-    if (!this.isSwitch && d.powerW >= 5 && this.thresholdW === DEFAULT_THRESHOLD) {
+    if (d.powerW >= 5 && this.thresholdW === DEFAULT_THRESHOLD) {
       this.thresholdW = Math.max(10, Math.round(d.powerW * 0.9 / 10) * 10);
     }
   }
@@ -273,17 +265,15 @@ export class ElementOutletConfigComponent implements OnInit {
       // (topology.js, outletKindFromName()), so writing it would add a field to
       // every existing document to say what silence already said.
       if (this.kind === 'tasmota') outlet['kind'] = 'tasmota';
-      if (!this.isSwitch) outlet['thresholdW'] = this.thresholdW;
+      outlet['thresholdW'] = this.thresholdW;
       if (this.host) outlet['host'] = this.host;
       if (this.mac) outlet['mac'] = this.mac;
       if (this.label) outlet['name'] = this.label;
-      // The collector's `control` carries offDelayMs alongside the plug — keep
-      // whatever's there rather than dropping it on a re-pair.
+      // Keep whatever else the branch carries rather than dropping it on a re-pair.
       const prev = (this.element[this.field] as RawEl | undefined) ?? {};
       el[this.field] = { ...prev, outlet };
     } else {
-      // Only the plug goes; a collector with an offDelayMs but no plug is still a
-      // valid element, so don't delete the whole branch.
+      // Only the plug goes; keep anything else on the branch.
       const prev = { ...((this.element[this.field] as RawEl | undefined) ?? {}) };
       delete prev['outlet'];
       if (Object.keys(prev).length) el[this.field] = prev;

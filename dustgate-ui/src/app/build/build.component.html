@@ -33,13 +33,15 @@
          rather than on the toolbar. -->
     <button (click)="moreOpen = false; addSystem()" [disabled]="!hasShop">Add system</button>
     <button (click)="moreOpen = false; goBoards()">Find boards</button>
-    <!-- The twin of Find boards, and the ONLY way to sweep a fully-wired shop:
-         the tray's own button is inside the tray, which hides itself when
-         nothing is unpaired. -->
-    <button (click)="moreOpen = false; findPlugs()">Find plugs</button>
+    <!-- The twin of Boards: a page of plugs, with the scan and the sweep on it. Replaces "Find plugs", which only
+         refreshed the tray and read as a page that failed to open. -->
+    <button (click)="moreOpen = false; goPlugs()">Plugs</button>
     <!-- Same reasoning as Find boards: an errand you run rarely. The canvas is
          where you actually spend time, so it needs a way in that doesn't route
          through the Live view. -->
+    <!-- The blunt version of deleting a system: back to the first collector alone. Last, set apart, and a confirm
+         sheet behind it. -->
+    <button class="danger" (click)="moreOpen = false; askClearShop()" [disabled]="!hasShop">Clear shop…</button>
     <button (click)="moreOpen = false; goSettings()">Settings</button>
   </div>
 </div>
@@ -581,6 +583,28 @@
   </div>
 </div>
 
+
+<!-- Delete a system / Clear shop: one sheet, saying what goes and what stays before anything happens. -->
+<div class="sheet-bg" *ngIf="removalAsk" (pointerdown)="removalAsk = null"></div>
+<div class="sheet narrow" *ngIf="removalAsk as ra">
+  <div class="card removal" role="dialog" aria-labelledby="removal-title">
+    <div class="head"><span class="kind" id="removal-title">{{ ra.kind === 'clear' ? 'Clear the shop?' : 'Delete “' + ra.name + '”?' }}</span></div>
+    <ul class="removal-list">
+      <li *ngFor="let g of removalLines().goes"><b>Goes:</b> {{ g }}</li>
+      <li *ngFor="let g of removalLines().stays"><b>Stays:</b> {{ g }}</li>
+    </ul>
+    <p class="q-sub" *ngIf="ra.plan.plugIps.length">
+      {{ ra.plan.plugIps.length === 1 ? 'Its plug is' : 'Their plugs are' }} released when you save, so another brain can claim
+      {{ ra.plan.plugIps.length === 1 ? 'it' : 'them' }}.
+    </p>
+    <p class="q-sub" *ngIf="ra.kind === 'clear'">Export first if you may want this layout back.</p>
+    <div class="actions">
+      <button type="button" (click)="removalAsk = null">Cancel</button>
+      <button type="button" class="primary danger" (click)="confirmRemoval()">{{ ra.kind === 'clear' ? 'Clear shop' : 'Delete system' }}</button>
+    </div>
+  </div>
+</div>
+
 <!-- The tray plug's own dialog: name it, say which tool it's for, and take it off
      whoever owns it — all three in one place.
      Four identical "shellyplug-s-…" on one shelf is exactly when a name earns its
@@ -684,7 +708,7 @@
   </app-collector-setup>
 
   <ng-template #toolOutlet>
-    <app-element-outlet-config [element]="ot" [mode]="outletMode"
+    <app-element-outlet-config [element]="ot"
                                [excludeIps]="outletExcludeIps"
                                [excludeReason]="outletExcludeReason"
                                [outlets]="outlets" [owner]="owner"

@@ -205,17 +205,6 @@ export function segBoxHit(a: Pt, b: Pt, box: Box): boolean {
   return y > box.y0 && y < box.y1 && hi > box.x0 && lo < box.x1;
 }
 
-export function firstHitBox(a: Pt, b: Pt, boxes: Box[]): Box | null {
-  let best: Box | null = null, bestD = Infinity;
-  for (const box of boxes) {
-    if (!segBoxHit(a, b, box)) continue;
-    const cx = (box.x0 + box.x1) / 2, cy = (box.y0 + box.y1) / 2;
-    const d = Math.hypot(cx - a.x, cy - a.y);
-    if (d < bestD) { bestD = d; best = box; }
-  }
-  return best;
-}
-
 export function ptInBox(p: Pt, box: Box): boolean {
   return p.x > box.x0 && p.x < box.x1 && p.y > box.y0 && p.y < box.y1;
 }

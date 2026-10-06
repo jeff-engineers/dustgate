@@ -109,10 +109,9 @@ public:
     // truncation so the device never persists something the controller can't
     // parse. The UI's validateShop()/validateTopology() remains authoritative.
     //
-    // Accepts BOTH shapes: a schemaVersion-1 topology (elements/ducts at the top
-    // level) and a v2 shop (systems[], each with its own). The device never
-    // rewrites what it is given — Shop.h reads either — so this has to say yes to
-    // both or a v1 board would reject the first shop the UI sends it.
+    // A SHOP only (systems[], each with its own elements). A schemaVersion-1 topology (elements/ducts at the top level) is
+    // refused here, at the door, with the same sentence TopologyRuntime gives it, so a PUT of one answers 400 instead of
+    // being stored and then rejected on load.
     static bool validateMinimal(JsonVariantConst t, String& err) {
         if (!t.is<JsonObjectConst>())               { err = "not an object"; return false; }
         if (!t["controllers"].is<JsonArrayConst>()) { err = "controllers not an array"; return false; }
@@ -125,7 +124,12 @@ public:
         }
         if (primaries != 1) { err = "exactly one primary controller required"; return false; }
 
-        if (t["systems"].is<JsonArrayConst>()) {
+        if (!t["systems"].is<JsonArrayConst>()) {
+            err = t["elements"].is<JsonArrayConst>() ? "layout is from an older version (v1) — re-save it"
+                                                     : "systems not an array";
+            return false;
+        }
+        {
             JsonArrayConst systems = t["systems"].as<JsonArrayConst>();
             if (systems.size() == 0) { err = "a shop needs at least one system"; return false; }
             if (!t["machines"].is<JsonArrayConst>()) { err = "machines not an array"; return false; }
@@ -145,11 +149,6 @@ public:
             return true;
         }
 
-        if (!t["elements"].is<JsonArrayConst>()) { err = "elements not an array"; return false; }
-        if (!oneCollector(t["elements"].as<JsonArrayConst>())) {
-            err = "exactly one collector required"; return false;
-        }
-        return true;
     }
 
 private:

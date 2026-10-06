@@ -1,0 +1,463 @@
+{
+  "_about": "Every constant that lives in more than one place, as groups that must all be EQUAL. tools/check-constant-pairs.js reads the number out of each source file and fails if a group disagrees, so a one-sided edit fails here instead of on a bench. CLAUDE.md's pair table says WHY each is a pair; this is the part that is checked. A new pair goes in both places. Paths are relative to the repo root.",
+  "groups": [
+    {
+      "name": "collector coast-down default",
+      "refs": [
+        [
+          "shared/device-model/topology-device.js",
+          "DEFAULT_COLLECTOR_OFF_DELAY_MS"
+        ],
+        [
+          "firmware/control/TopologyRuntime.h",
+          "kDefaultCollectorOffDelayMs"
+        ]
+      ]
+    },
+    {
+      "name": "machine-on wattage default",
+      "refs": [
+        [
+          "shared/device-model/topology-device.js",
+          "DEFAULT_THRESHOLD_W"
+        ],
+        [
+          "firmware/control/TopologyController.h",
+          "kDefaultThresholdW"
+        ]
+      ]
+    },
+    {
+      "name": "servo bank per board",
+      "refs": [
+        [
+          "shared/device-model/topology.js",
+          "MAX_SERVOS_PER_HOST"
+        ],
+        [
+          "firmware/config.h",
+          "SERVO_COUNT"
+        ],
+        [
+          "dustgate-ui/src/app/gates/selector-types.ts",
+          "SERVO_CHANNELS_PER_BOARD"
+        ],
+        [
+          "dustgate-ui/src/app/build/wiring/wire-geometry.ts",
+          "SERVO_PORTS"
+        ]
+      ]
+    },
+    {
+      "name": "stops on one sliding gate",
+      "refs": [
+        [
+          "shared/device-model/device-model.js",
+          "NUM_STOPS"
+        ],
+        [
+          "firmware/config.h",
+          "NUM_STOPS"
+        ],
+        [
+          "shared/device-model/topology.js",
+          "MAX_SLIDE_BRANCHES"
+        ],
+        [
+          "dustgate-ui/src/app/gates/selector-types.ts",
+          "SLIDE_MAX_OUTLETS"
+        ]
+      ]
+    },
+    {
+      "name": "minimum stop separation",
+      "refs": [
+        [
+          "shared/device-model/device-model.js",
+          "MIN_STOP_SEPARATION_MM"
+        ],
+        [
+          "firmware/config.h",
+          "MIN_STOP_SEPARATION_MM"
+        ]
+      ]
+    },
+    {
+      "name": "idle power-off default",
+      "refs": [
+        [
+          "shared/device-model/device-model.js",
+          "IDLE_TIMEOUT_SEC_DEFAULT"
+        ],
+        [
+          "firmware/config.h",
+          "IDLE_TIMEOUT_SEC_DEFAULT"
+        ]
+      ]
+    },
+    {
+      "name": "blower counts as running above (W)",
+      "refs": [
+        [
+          "shared/device-model/topology-device.js",
+          "COLLECTOR_RUNNING_W"
+        ],
+        [
+          "firmware/control/CollectorPlugState.h",
+          "kCollectorRunningW"
+        ]
+      ]
+    },
+    {
+      "name": "blower spin-up grace (ms)",
+      "refs": [
+        [
+          "shared/device-model/topology-device.js",
+          "COLLECTOR_SPINUP_GRACE_MS"
+        ],
+        [
+          "firmware/control/CollectorPlugState.h",
+          "kCollectorSpinupGraceMs"
+        ]
+      ]
+    },
+    {
+      "name": "NodeLink version",
+      "refs": [
+        [
+          "shared/device-model/nodelink.js",
+          "NODELINK_VERSION"
+        ],
+        [
+          "firmware/control/NodeLink.h",
+          "kVersion"
+        ]
+      ]
+    },
+    {
+      "name": "NodeLink ping interval",
+      "refs": [
+        [
+          "shared/device-model/nodelink.js",
+          "PING_INTERVAL_MS"
+        ],
+        [
+          "firmware/control/NodeLink.h",
+          "kPingIntervalMs"
+        ]
+      ]
+    },
+    {
+      "name": "NodeLink pong timeout",
+      "refs": [
+        [
+          "shared/device-model/nodelink.js",
+          "PONG_TIMEOUT_MS"
+        ],
+        [
+          "firmware/control/NodeLink.h",
+          "kPongTimeoutMs"
+        ]
+      ]
+    },
+    {
+      "name": "NodeLink reconnect min",
+      "refs": [
+        [
+          "shared/device-model/nodelink.js",
+          "RECONNECT_MIN_MS"
+        ],
+        [
+          "firmware/control/NodeLink.h",
+          "kReconnectMinMs"
+        ]
+      ]
+    },
+    {
+      "name": "NodeLink reconnect max",
+      "refs": [
+        [
+          "shared/device-model/nodelink.js",
+          "RECONNECT_MAX_MS"
+        ],
+        [
+          "firmware/control/NodeLink.h",
+          "kReconnectMaxMs"
+        ]
+      ]
+    },
+    {
+      "name": "SENSE repeat",
+      "refs": [
+        [
+          "shared/device-model/nodelink.js",
+          "SENSE_REPEAT_MS"
+        ],
+        [
+          "firmware/control/NodeLink.h",
+          "kSenseRepeatMs"
+        ]
+      ]
+    },
+    {
+      "name": "SENSE stale",
+      "refs": [
+        [
+          "shared/device-model/nodelink.js",
+          "SENSE_STALE_MS"
+        ],
+        [
+          "firmware/control/NodeLink.h",
+          "kSenseStaleMs"
+        ]
+      ]
+    },
+    {
+      "name": "reset-reason word length",
+      "refs": [
+        [
+          "shared/device-model/nodelink.js",
+          "MAX_RST_LEN"
+        ],
+        [
+          "firmware/control/NodeLink.h",
+          "kMaxRstLen"
+        ]
+      ]
+    },
+    {
+      "name": "sensors per node",
+      "refs": [
+        [
+          "shared/device-model/nodelink.js",
+          "MAX_SENSORS_PER_NODE"
+        ],
+        [
+          "firmware/control/NodeLink.h",
+          "kMaxSensorsPerNode"
+        ]
+      ]
+    },
+    {
+      "name": "plug threshold bound",
+      "refs": [
+        [
+          "shared/device-model/nodelink.js",
+          "MAX_PLUG_THRESHOLD_W"
+        ],
+        [
+          "firmware/control/NodeLink.h",
+          "kMaxPlugThresholdW"
+        ]
+      ]
+    },
+    {
+      "name": "plug watts bound",
+      "refs": [
+        [
+          "shared/device-model/nodelink.js",
+          "MAX_PLUG_WATTS"
+        ],
+        [
+          "firmware/control/NodeLink.h",
+          "kMaxPlugWatts"
+        ]
+      ]
+    },
+    {
+      "name": "plug IP length",
+      "refs": [
+        [
+          "shared/device-model/nodelink.js",
+          "MAX_PLUG_IP_LEN"
+        ],
+        [
+          "firmware/control/NodeLink.h",
+          "kMaxPlugIpLen"
+        ]
+      ]
+    },
+    {
+      "name": "OTA path length",
+      "refs": [
+        [
+          "shared/device-model/nodelink.js",
+          "MAX_OTA_PATH"
+        ],
+        [
+          "firmware/control/NodeLink.h",
+          "kMaxOtaPath"
+        ]
+      ]
+    },
+    {
+      "name": "OTA image minimum bytes",
+      "refs": [
+        [
+          "shared/device-model/nodelink.js",
+          "MIN_OTA_BYTES"
+        ],
+        [
+          "firmware/control/NodeLink.h",
+          "kMinOtaBytes"
+        ]
+      ]
+    },
+    {
+      "name": "OTA image maximum bytes",
+      "refs": [
+        [
+          "shared/device-model/nodelink.js",
+          "MAX_OTA_BYTES"
+        ],
+        [
+          "firmware/control/NodeLink.h",
+          "kMaxOtaBytes"
+        ]
+      ]
+    },
+    {
+      "name": "WHERE address length",
+      "refs": [
+        [
+          "shared/device-model/nodelink.js",
+          "MAX_WHERE_IP_LEN"
+        ],
+        [
+          "firmware/control/NodeLink.h",
+          "kMaxWhereIpLen"
+        ]
+      ]
+    },
+    {
+      "name": "beacon port",
+      "refs": [
+        [
+          "shared/device-model/nodelink.js",
+          "BEACON_PORT"
+        ],
+        [
+          "firmware/control/NodeLink.h",
+          "kBeaconPort"
+        ]
+      ]
+    },
+    {
+      "name": "RF tick minimum (us)",
+      "refs": [
+        [
+          "shared/device-model/nodelink.js",
+          "MIN_RF_TICK_US"
+        ],
+        [
+          "firmware/control/NodeLink.h",
+          "kMinRfTickUs"
+        ]
+      ]
+    },
+    {
+      "name": "RF tick maximum (us)",
+      "refs": [
+        [
+          "shared/device-model/nodelink.js",
+          "MAX_RF_TICK_US"
+        ],
+        [
+          "firmware/control/NodeLink.h",
+          "kMaxRfTickUs"
+        ]
+      ]
+    },
+    {
+      "name": "RF repeats maximum",
+      "refs": [
+        [
+          "shared/device-model/nodelink.js",
+          "MAX_RF_REPEATS"
+        ],
+        [
+          "firmware/control/NodeLink.h",
+          "kMaxRfRepeats"
+        ]
+      ]
+    },
+    {
+      "name": "Rockler 2.5\" first gate offset",
+      "refs": [
+        [
+          "shared/device-model/device-model.js",
+          "rockler-2.5::firstGateOffsetMm"
+        ],
+        [
+          "firmware/config.h",
+          "MANIFOLD_2_5_FIRST_GATE_OFFSET_MM"
+        ]
+      ]
+    },
+    {
+      "name": "Rockler 2.5\" gate pitch",
+      "refs": [
+        [
+          "shared/device-model/device-model.js",
+          "rockler-2.5::gatePitchMm"
+        ],
+        [
+          "firmware/config.h",
+          "MANIFOLD_2_5_GATE_PITCH_MM"
+        ]
+      ]
+    },
+    {
+      "name": "Rockler 2.5\" end margin",
+      "refs": [
+        [
+          "shared/device-model/device-model.js",
+          "rockler-2.5::endMarginMm"
+        ],
+        [
+          "firmware/config.h",
+          "MANIFOLD_2_5_END_MARGIN_MM"
+        ]
+      ]
+    },
+    {
+      "name": "Rockler 4\" first gate offset",
+      "refs": [
+        [
+          "shared/device-model/device-model.js",
+          "rockler-4::firstGateOffsetMm"
+        ],
+        [
+          "firmware/config.h",
+          "MANIFOLD_4_FIRST_GATE_OFFSET_MM"
+        ]
+      ]
+    },
+    {
+      "name": "Rockler 4\" gate pitch",
+      "refs": [
+        [
+          "shared/device-model/device-model.js",
+          "rockler-4::gatePitchMm"
+        ],
+        [
+          "firmware/config.h",
+          "MANIFOLD_4_GATE_PITCH_MM"
+        ]
+      ]
+    },
+    {
+      "name": "Rockler 4\" end margin",
+      "refs": [
+        [
+          "shared/device-model/device-model.js",
+          "rockler-4::endMarginMm"
+        ],
+        [
+          "firmware/config.h",
+          "MANIFOLD_4_END_MARGIN_MM"
+        ]
+      ]
+    }
+  ]
+}

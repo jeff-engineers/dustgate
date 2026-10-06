@@ -65,7 +65,6 @@ using BusyFn  = bool (*)();
 // fires no event, so the library's own record of it is the only way to see one.
 class Client : public WebSocketsClient {
 public:
-    unsigned long lastFailMs() const { return _lastConnectionFail; }
 };
 
 struct State {

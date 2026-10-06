@@ -181,6 +181,13 @@ drifted constantly. Now `shared/device-model/` is the spec:
   891mm 8-gate 4" rack — and the symptom would have been a healthy home failing
   on the biggest rack in the shop.
 
+  **The checked half of this table is `shared/device-model/constant-pairs.json`** (2026-10-06): every pair below that is a plain number
+  (and the servo-bank and sliding-stop budgets across the JS model, `config.h` and the UI) is listed there as a group that must be
+  equal, and `tools/check-constant-pairs.js` (run by `npm run model:test`) reads each number out of its source and fails when a
+  group disagrees, or when a listed constant can no longer be found. **A new pair goes in BOTH places** — a row here for why, a group
+  there for the check. A number that cannot be paired (compiled into the UI bundle, held by a node) still needs a test that fails
+  when the copies differ: the UI bundle has `tools/check-ui-fresh.js` (the model's hash is baked into the app at build time).
+
   **This table is a cache, not the source of truth — keep it honest or delete
   rows rather than let them go stale.** Touching either side of a pair: update
   the other side's value AND this table's "What it is" cell if the meaning
@@ -396,7 +403,7 @@ These are decided; don't relitigate them in code review or suggestions.
   primary's own, exactly as before. Everything here compiles and passes the paired host
   tests (`nodelink.test.js` ↔ `test_nodebus.cpp`), and **a PRESS has never keyed a real
   receiver from a node**. The UI's collector configurator does not offer a board for the
-  transmitter yet. **Bench 2026-10-05 (nodes on a desk with USB only: no servos, no receiver, no collector, no beam): PRESS and the bin pad now HAVE run on a real node.** A brain commanded a collector through `dustgate-mitersaw`; the node answered every PRESS `ok` (it keyed its transmitter pin), and the press policy retried at its 5 s cooldown and gave up after 3 against a plug that never drew, exactly as designed. A `bin` sensor in CONFIG came back as `SENSE bin:<system> on:false` and showed in `systems[].bin`. Not proven: that a real receiver is keyed (nothing was listening), the beam seeing FULL, and a press never replaying across a link drop (unit-tested only). Do not describe those as verified until a bench says so.
+  transmitter yet. **Bench 2026-10-05 (nodes on a desk with USB only: no servos, no receiver, no collector, no beam): PRESS and the bin pad now HAVE run on a real node.** A brain commanded a collector through `dustgate-mitersaw`; the node answered every PRESS `ok` (it keyed its transmitter pin), and the press policy retried at its 5 s cooldown and gave up after 3 against a plug that never drew, exactly as designed. A `bin` sensor in CONFIG came back as `SENSE bin:<system> on:false` and showed in `systems[].bin`. **Bench 2026-10-06 (the shop: six PWM boards with servos on some, Shelly and Tasmota plugs, a desk fan on the Rockler receiver): a PRESS from a node DID key a real receiver** — the cyclone board's transmitter switched the fan on and off through the Rockler switch. Whole-shop routing through the native brain also ran: gate moves across five boards, tool switch-on opening the right gate and starting the collector, the press policy correcting an inverted belief in two presses, and a board browning out mid-move (fixed: it froze every gate). Still not proven: the beam seeing FULL, a press never replaying across a link drop (unit-tested only), the collector sensed by a CT clamp, the slider node through the native brain, and anything on a Raspberry Pi. Do not describe those as verified until a bench says so.
 
 - **A machine is ONE box, however many ports it has.** A second pickup — an
   overarm guard, a hood — is a differently-shaped inlet on that same box (square =

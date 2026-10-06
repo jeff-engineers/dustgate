@@ -14,14 +14,17 @@ active sections above them, which is how a parked item stops being read.
 
 ## Bugs
 
-- **Nodes should be able to have their CT clamp disabled; default to none (jeff, 2026-10-06).** Today every C5 node reports
-  `caps.ct = 1` from its pin map (`PIN_CT`) whether or not a clamp is plugged in, so an unclamped board reads as having one
-  and the layout can point a tool at a clamp that is not there. Two routes, in order of preference: (1) when the clamp moves to a
-  headphone-style jack, use the jack's switch contact to detect a plug (a GPIO reads the jack's normally-closed pin) and report
-  `caps.ct` only while one is inserted, which needs no setting at all; (2) until then, default nodes to NO clamp and add an
-  enable (a CONFIG field or a per-board setting in the app, kept by the primary so a reflash does not lose it). A clamp is declared
-  by its board because nothing on the network can discover one, so the enable has to be something a person can set. Pair rule:
-  `caps.ct` default and any new field go in `nodelink.js` ↔ `NodeLink.h`, same cases, same order.
+- **Clamp switch: the node still reports `caps.ct` from its pin map, and the jack idea is open (2026-10-06).** The per-board switch
+  landed (D-76), kept in the layout as `clamp: true`, so a layout cannot name a clamp the person has not switched on. What it
+  does not do is stop a node CLAIMING one. If the clamp moves to a headphone-style jack, its switch contact could report
+  `caps.ct` only while a plug is inserted, and the switch would then be a confirmation rather than the source. Also open: the
+  model validators do not reject a `sensor.ct` naming a board with no `clamp: true` (the UI pickers and the heal-on-read cover it;
+  a validator rule would churn the CT fixtures).
+
+- **Move the ESP32's plug provisioning loop onto `outlets/Provision.h` (2026-10-06).** `SmartOutletControl::provisionPushOutlets()` and
+  `outletops::provisionPlug()` are the same rule written twice (probe, read the claim, refuse a plug someone else owns unless a
+  takeover was approved, name first, then the push target). The native brain uses the shared one; the ESP still has its own. Move it
+  with a bench run (a Shelly paired, a foreign plug left alone, a takeover) because it writes to real plugs.
 
 - **The Live screen has no way to switch the collector by hand (found 2026-10-06, bench test 16).** `POST /api/collector` works
   (both brains, `ApiService.setCollectorManual()`), but nothing in the app calls it: the collector card shows state and has no
@@ -39,10 +42,13 @@ active sections above them, which is how a parked item stops being read.
   power reading, the debounce, the gate move, and a first-switch-on re-assert of all five gates running ahead of the
   collector's press (it should not: the blower waits only for MAKES, but confirm). Also decide whether a short tool
   should leave the collector running for its coast-down so the next cut finds it already on.
-- **"Find plugs" does not load (jeff, 2026-10-06).** The Build canvas loads fine against the native brain (checked in the
-  browser pane 2026-10-06); the failure is behind the menu item — `build.component.ts findPlugs()` -> `scanOutlets(true)` ->
-  `/api/outlets/discover` then `startSweep()` / `/api/outlets/sweep`. Reproduce with the console and network tabs open and see
-  which request fails or never answers. Not tried yet because a sweep knocks on the whole subnet.
+  **Software part measured 2026-10-06** (native brain, two fake nodes, `/api/dev/power` standing in for the plug): power in ->
+  the gate's SET reaches its node in ~0.12 s, and the collector's PRESS in ~0.32 s. So the brain's own share is a third of a
+  second; the "bit slow" is everything outside it. Known contributions, in the order the chain meets them: the plug reading
+  (Tasmota polled every 500 ms, ~1.5 s to show a rising draw; a Shelly pushes), `OUTLET_ON_DEBOUNCE_MS` = 1000 on the ESP32
+  (the native brain applies none), the servo move on a weak supply, the RF transmit, the receiver's relay and the plug seeing
+  the blower draw. Not yet measured: the hardware half. A timestamped run on the bench (plug sample -> SET -> STATE -> PRESS ->
+  plug confirms) would say which of those is the big one.
 - **Bench test 20: rename a plug and release it (jeff, 2026-10-06).** Rename a Shelly from the app and confirm the new name in the
   Shelly app; release one and confirm it stops pushing and the previous push target comes back. Not run yet.
 - **Bench: the collector's CT option (jeff, 2026-10-06).** The collector can be sensed by a current clamp on the cyclone board
@@ -55,25 +61,6 @@ active sections above them, which is how a parked item stops being read.
 - **Bench: the slider node (jeff, 2026-10-06).** Out of 12 V supplies tonight, so it was not tested with the shop. Run it:
   boot, join, home (on the first SET or the one-second button hold), take a SET, move to each stop, and do it through the Mac
   brain (the native brain has only run PWM nodes). Needs a 12 V supply for the ST3215.
-
-- **Re-send an interrupted gate move after a board resets mid-move (jeff, 2026-10-06).** When a node browns out or reboots
-  during a move, the brain now frees the servo mutex (`NodeSession::onAttach` drops the dead board's move and sets a
-  `moveFault`), but it does not re-send the gate it was moving: the gate's real position is unknown and the brain's
-  belief is stale until the next tool switch-on re-asserts every gate. After the relink and CONFIG, re-issue the move
-  for that selector (or mark it for re-assert, `TopologyRuntime::_reassert`), and add a paired host test. Seen on the
-  bench with the router-table/jointer manifold, probably the 1 W adapter browning out under a lever arm holding the
-  servo's weight.
-
-- **Audit every shared constant: pair it, or test that it agrees (jeff, 2026-10-06).** A constant that two builds both
-  need must be PAIRED where it can be — one definition, or a pair-table row in `CLAUDE.md` with a JS test and a C++ test
-  asserting the same literal — and where it cannot be (a value baked into a compiled app, a number a node holds, a
-  copy in a different toolchain), there must be a unit test that fails when the copies disagree. Found the hard way
-  2026-10-06: the app has its own compiled copy of `COLLECTOR_RUNNING_W`, so changing it in the brain alone left the Live
-  screen saying "Not starting" for a fan the brain called running. Do: (1) grep for bare numbers duplicated across
-  `shared/device-model`, `firmware/`, `native/` and `dustgate-ui/` (the UI imports the model at build time, so its copy is
-  silently STALE until a rebuild — a test that compares the built bundle's value to the model's would catch it); (2) for
-  each, either add the pair-table row and paired tests or a one-sided test and say why it cannot be paired; (3) have
-  `make test` / `npm test` fail on a stale UI bundle.
 
 - **PUT THE COLLECTOR "RUNNING" THRESHOLD BACK TO 50 W (jeff, 2026-10-06 — TEMPORARY).** The bench collector is a desk fan
   that draws ~38 W, so `kCollectorRunningW` (control/CollectorPlugState.h) and `COLLECTOR_RUNNING_W`
@@ -101,7 +88,7 @@ active sections above them, which is how a parked item stops being read.
   `test_nodebus.cpp` and the CLAUDE.md pair-table row move together, and it needs a node flash.
   Deferred 2026-10-04 so it does not ride along with the native build.
 
-- **Bench the collector's jobs on a node (built 2026-10-04; PRESS and the bin pad first run on a real node 2026-10-05 — see CLAUDE.md for what that did and did not prove; items (2) key a real receiver, (3) cover the beam and (4) the no-replay drop remain).** A
+- **Bench the collector's jobs on a node (built 2026-10-04; PRESS and the bin pad first run on a real node 2026-10-05 — see CLAUDE.md for what that did and did not prove; (2) a real receiver keyed from a node was PROVEN 2026-10-06; (3) cover the beam and (4) the no-replay drop remain).** A
   node can now key the RF transmitter (a `PRESS` frame) and watch the dust-bin beam (a
   `bin` sensor in CONFIG, reported as a SENSE bit); the retry policy stays on the primary.
   Host-tested only. To do on a bench with a collector board flashed as a NODE: (1) pair it,
@@ -146,10 +133,6 @@ active sections above them, which is how a parked item stops being read.
   is the half that was missing. The sweep only covers the brain's own /24, so a
   plug on another network is not found. Also: an outlet saved with no `kind`
   defaults to Shelly and polls a Tasmota wrongly forever — the sweep should set it.
-- **Tools with no sensor are manual-only.** The live layout's Router Table and
-  Jointer have neither a plug nor a CT, so nothing starts the collector for them
-  except tapping them in the app. -This isn't a bug - Jeff
-
 - **ESP-NOW for primary↔node? (jeff, 2026-09-27 — THINKING, not decided.)**
   Every link failure so far is the same shape: two boards talking TCP *through
   the AP*, and the AP being allowed to break that — band split (09-18), flaky
@@ -256,11 +239,6 @@ active sections above them, which is how a parked item stops being read.
   do not fit it. The tool sheet (tool-setup.component.ts) already asks this
   properly as a three-way — Metering plug / Current clamp / Nothing — so the fix
   is probably to make these one component rather than to reword this one back.
-
-- **The outlet sheet shows "Scanning..." twice while a scan runs.**
-  outlet-picker.component.ts says it in the empty-state line (:87) and again on
-  the rescan button (:93), and both render together. One of them should go —
-  probably the empty-state line, since the button is where the action is.
 
 - **UI AUDIT 2026-09-17 — the same question is asked by two components, in two
   vocabularies.** Scanned every component for this; the findings are below,
@@ -435,7 +413,9 @@ active sections above them, which is how a parked item stops being read.
 - **Calibrate isn't reachable from the /gates page.** Opening a gate there
   (`http://dustgate.local/#/  gates`) offers no calibrate option, so the only way
   in is whatever other path still has one. Find where the entry point went and
-  put it back on that page.
+  put it back on that page. **Checked 2026-10-06: the row has one** —
+  `gate-list.component.ts` renders a "Calibrate" / "Recalibrate" button per gate (and "Run setup again" for a slider) that opens
+  the editor. So this looks stale; ask what was tapped (the row's name, rather than its button?) before touching it.
 
 
 ## UI
@@ -491,18 +471,6 @@ active sections above them, which is how a parked item stops being read.
   NodeLink before anything moves) is the ambitious version, and has an ordering
   problem — the primary can only reach the nodes on the OLD network, so anything
   that misses the message needs a defined fallback.
-
-- **No way to delete a system, or a collector.** You can add both and never
-  remove either. A collector delete has one obvious guard — at least one must
-  remain, since a shop with no collector is not a shop — and deleting a SYSTEM is
-  the harder half: it owns a contiguous row band, and everything standing in that
-  band has to go somewhere or go away. Decide what happens to the machines and
-  gates inside it (delete with the system? move to the surviving system's band?
-  refuse while it is non-empty?) before writing any of it. Related to the 'Clear
-  shop' button below, which is the blunt version of the same need.
-
-- **Add a 'Clear shop' button** Add this to the shop dropdown menu, go back to a single
-  dust collector with no connections.
 
 - **Finish the collector barrel (2026-08-25).** The glyph itself LANDED — the
   canvas draws a 76x76 violet barrel carrying its own name and its own plug row,
@@ -639,55 +607,6 @@ active sections above them, which is how a parked item stops being read.
 
   Related and already done: `dev.sh monitor --port /dev/cu.X` (2026-09-18) works
   around the two-role ceiling for now.
-
-
-- **Delete schemaVersion-1 entirely (jeff, 2026-09-17). ADOPT NOW REFUSES IT;
-  the rest is cleanup.** A v1 document is rejected at `TopologyRuntime::adopt()`
-  with "layout is from an older version (v1) — re-save it", which rides
-  `g_topoRejectReason` to the BAD LAYOUT light, the screen and `/api/status`.
-  Detected by SHAPE as well as version, since an export that lost its
-  `schemaVersion` is still unreadable.
-
-  `twoGates.json` is a v2 shop now, and converting it did exactly what this entry
-  predicted it would: the clamp assertions had to move onto the MACHINE, which is
-  the read the shipping code gets wrong and the v1 fixture used to excuse. The
-  collector's clamp stayed on the element, which is the asymmetry `clampOf()`
-  exists for. `test_nodebus` 158/158.
-
-  STILL TO DO: "We can ditch the v1
-  stuff entirely." Nothing the UI can produce is v1 — it writes v2 shops with
-  `systems[]` and machines — so every v1 path is carrying documents no one can
-  create any more.
-
-  **The argument is stronger than tidiness, and it already cost a bench session.**
-  Three of the four firmware fixtures are v1, and in a v1 topology a tool element
-  IS its own machine. That is exactly why the conformance suite stayed green
-  while the shipping path was broken on 2026-09-15: `TopologyRuntime` read
-  `element.sensor.ct`, which is correct for v1 and null for every document the
-  configurator writes, so a clamp paired in the app never reached its node and
-  every test agreed it was fine. **v1 fixtures do not just test a dead shape —
-  they actively hide bugs in the live one**, because they satisfy reads that v2
-  cannot.
-
-  What has to go, roughly in dependency order:
-
-  | | |
-  |---|---|
-  | `firmware/test/fixtures/` | `feedChain.json` and `star.json` are still v1 (`twoGates.json` and `twoSystemShop.json` are v2). Only `test_topology_router` / `test_topology_controller` load them, and they bypass `adopt()` — so the refusal above does not touch them. Converting the two is the remaining fixture work |
-  | `viewOf(JsonObjectConst)` in control/TopologyRouter.h | THE v1 SHIM, and the thing that actually broke when twoGates was converted: it reads top-level `elements`/`ducts`. Delete it with the last v1 fixture, and every caller goes through `systemsOf()` |
-  | `shared/device-model/topology.js` | `validateTopology()` and the v1 half of the schema. `validateShop()` in shop.js is what the device actually applies to a real document |
-  | `firmware/control/Shop.h` | the flattening layer whose header says "V1 COMPATIBILITY IS NOT A SEPARATE PATH" — once v1 is gone, `machineDoc()`/`systemsOf()` stop needing the v1 branch and get simpler |
-  | `topology.fixtures.js`, `topology.test.js`, `topology-conformance.js` | the JS side of the same |
-  | `schemaVersion` reads in `firmware.ino`, `HttpApiServer.cpp`, `TopologyRouter.h`, `TopologySequencer.h` | the version checks themselves |
-
-  ~~One thing to settle before deleting~~ — DONE, and it was worth doing first:
-  a v1 document presented to a board is refused with a sentence rather than
-  silently, because a board with a rejected layout is otherwise indistinguishable
-  from one with no layout, and both are a single blue LED. That cost an evening on
-  2026-09-17.
-
-  Not urgent from here. The part that actively misled — a v1 fixture satisfying a
-  read that no real document can — is gone from the suite that covers clamps.
 
 
 - **What would still force a node reflash — the audit, 2026-09-17. LANDED, see
@@ -1105,7 +1024,9 @@ active sections above them, which is how a parked item stops being read.
   change to either one will hit the same wall, and there is no reason left for
   two — the inline version predates the extracted component.
 
-  Fold `tool-setup`'s inline picker onto `OutletPickerComponent`. The extracted
+  **2026-10-06: the /plugs page exists now** and is the intended single home ("Pair to…"); the work left is to replace `tool-setup`'s
+  inline picker with a link to it, and then the extracted `OutletPickerComponent` can go too if the canvas tray no longer needs it.
+  (Older plan, kept for the wording:) Fold `tool-setup`'s inline picker onto `OutletPickerComponent`. The extracted
   one is the keeper (it already has the `excludeIps`/`excludeReason` inputs);
   what needs porting into it is the plug-row styling and the "already assigned
   to another tool" wording that /tools uses.
@@ -1156,7 +1077,41 @@ running a blower BY HAND (D-59) opens a path through the ordinary move queue
 before it starts the collector, so it exercises exactly the code a bench session
 would reach first — and no gate has ever moved for it.
 
-### Bench Testing
+### Needs the shop (the real tools, real plugs and the real network)
+
+Things that cannot be settled at a desk: they need the actual machines, the actual plugs on the shop's network, or the whole shop
+running at once. Added 2026-10-06 from the cleanup and the features built after the bench session. Delete an item once it has run.
+
+- **Clear shop and Delete system release real plugs.** Build a second system with a tool on a real Shelly, delete the system, SAVE,
+  and confirm the plug stops pushing to the brain and its old push address is back (D-77). Also that Undo before Save leaves the
+  plug alone.
+- **The Plugs page against the real network.** `/plugs` with the shop's plugs: live draw matches the plug, a Tasmota that stops
+  answering shows "Not answering", **Sweep network** finds a Tasmota on the real /24, add-by-address, rename a Shelly and read the
+  new name in the Shelly app (this is also bench test 20), release one, and take over a plug another brain owns.
+- **The per-board clamp switch with a real clamp.** Switch a board's clamp on, pair a tool to it, confirm SENSE arrives; switch it
+  off with the tool paired (the confirm appears) and confirm the tool stops being sensed and the layout no longer names the clamp.
+- **An interrupted gate move is sent again.** Brown out or reset a node mid-move (pull its power while the servo travels), let it
+  relink, and confirm the gate is commanded again and ends where the layout says. Host-tested only (`test_deviceproblems.cpp`).
+- **The ESP32 primary with the cleanup branch.** Flash it (`./dev.sh flash --fw`, layout backup first) and confirm: the app loads,
+  a layout saves and reads back, a **v1 document is refused with a 400**, tool switch-on still opens the gate and starts the
+  collector, and the legacy routes are gone without anything the app uses going with them. Only the compile and the host tests have
+  seen the firmware changes.
+- **The slider node through the native brain**, and **the collector sensed by a CT clamp**, and **the beam seeing FULL** — all still
+  unproven (see `CLAUDE.md`).
+- **Find plugs on a real /24 takes how long, and does a request time out?** The sweep is about a minute; nothing has timed a whole
+  run in the app against real hardware.
+
+### Bench Testing (at a desk, USB and a few boards)
+
+**Bench items from the 2026-10-06 cleanup** (before the older list below):
+- **Conformance against a real ESP32 primary.** `node shared/device-model/conformance.js http://<primary> <key> --force` and
+  `topology-conformance.js http://<primary>`: the cases that drove the deleted legacy routes are gone, and a schemaVersion-1 PUT
+  must answer 400.
+- **A node's move fault edge.** On a node with a servo, reset it mid-move and watch the brain log: one `move-failed` problem, one
+  re-send, then it clears. A second reset after it cleared should re-send again.
+- **A clamp board with the switch off.** Flash a node with a CT lead, leave the switch off, and confirm no clamp line shows and the
+  clamp is not offered to a tool.
+- **Pad D3 / D9.** If either is ever wired (a status LED on D3, the second button on D9), check boot with the line held both ways.
 
 **2. NodeLink — the happy path passes, THE FAIL-SAFE HAS NEVER BEEN TRIED.**
 

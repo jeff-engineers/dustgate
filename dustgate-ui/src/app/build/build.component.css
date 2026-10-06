@@ -589,3 +589,17 @@ svg.canvas, svg.canvas text { -webkit-user-select: none; user-select: none; }
 .tray .chip.taken { opacity: .45; cursor: default; pointer-events: none; }
 .tray .chip.taken .on-m { font-size: 11px; opacity: .8; margin-left: 6px;
                           white-space: nowrap; }
+
+.more button.danger { color: var(--danger); }
+.more button.danger:disabled { color: var(--muted); }
+/* Delete a system / Clear shop: the same sheet object as the second-port card, with a list of what goes and stays. */
+.sheet .card.removal { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 18px 16px;
+                       display: flex; flex-direction: column; gap: 12px; }
+.sheet .card.removal .head .kind { font-size: 15px; font-weight: 600; color: var(--text); }
+.sheet .card.removal .q-sub { font-size: 12.5px; color: var(--muted); margin: 0; line-height: 1.5; }
+.removal-list { margin: 0; padding-left: 18px; font-size: 13px; color: var(--muted); line-height: 1.7; }
+.removal-list b { color: var(--text); font-weight: 600; }
+.sheet .card.removal .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.sheet .card.removal .actions button { border-radius: 8px; padding: 10px 12px; font-size: 14px;
+                                       border: 1px solid var(--border); background: var(--bg); color: var(--text); }
+.sheet .card.removal .actions button.primary.danger { background: var(--danger); border-color: var(--danger); color: #fff; font-weight: 600; }

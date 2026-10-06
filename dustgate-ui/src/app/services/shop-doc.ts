@@ -19,12 +19,12 @@
 //   plug behind two gates (RFC §6.3), which is exactly why the plug can't live on
 //   the port any more.
 //
-// A v1 document is migrated on read (asShop), so nothing below ever has to
-// branch on the version — that is the whole point of doing it at the seam.
+// A schemaVersion-1 document is NOT read any more (2026-10-06): the device refuses one, so nothing can have saved
+// one, and toShop() hands back null for it rather than guessing a shape.
 
 import type { Topology } from '@topology';
 import type { Shop } from '@shop';
-import { asShop, isShop, portsByMachine, portEnabled, systemView } from '@shop';
+import { portsByMachine, portEnabled, systemView } from '@shop';
 
 export type RawEl = Record<string, unknown>;
 
@@ -60,17 +60,14 @@ export interface ShopDoc extends Record<string, unknown> {
 }
 
 /**
- * Accept whatever the device or a file gave us and return a shop.
- *
- * Migration happens HERE, on read, and never on the device — the firmware reads
- * both shapes (Shop.h) so an older board keeps working, and a UI that migrated
- * lazily would write back a half-converted document the first time someone
- * saved. One conversion, at the boundary.
+ * Read what the device or a file gave us as a shop, with machine names healed.
+ * Null for nothing, and for anything that is not a shop (a schemaVersion-1 layout has no systems[]).
  */
 export function toShop(doc: Topology | null | undefined): ShopDoc | null {
-  if (!doc) return null;
-  const shop = asShop(doc) as unknown as ShopDoc;
+  if (!isShopDoc(doc)) return null;
+  const shop = doc as unknown as ShopDoc;
   healMachineNames(shop);
+  healClampFlags(shop);
   return shop;
 }
 
@@ -105,7 +102,8 @@ export function healMachineNames(doc: ShopDoc | null): void {
   }
 }
 
-export const isShopDoc = (doc: unknown): boolean => isShop(doc);
+export const isShopDoc = (doc: unknown): boolean =>
+  !!doc && typeof doc === 'object' && Array.isArray((doc as { systems?: unknown }).systems);
 
 export function systemsOf(doc: ShopDoc | null): ShopSystem[] {
   return doc && Array.isArray(doc.systems) ? doc.systems : [];
@@ -379,6 +377,64 @@ export function clampOf(doc: ShopDoc | null, el: RawEl | null | undefined): RawE
   return ((m?.sensor as RawEl | undefined)?.['ct'] as RawEl | undefined) ?? null;
 }
 
+// ── A board's current clamp is something you switch ON ─────────────────────────
+//
+// A node reports `caps.ct` from its pin map, which is true of every C5 whether or not a clamp is plugged in. The layout is
+// where a person says "this board has one", as `clamp: true` on the board's controllers[] entry (absent = off). It lives
+// in the layout, on the brain, so reflashing a node does not lose it.
+
+/** The controllers[] entry for a board id. '' and the primary's own id both mean the primary, the rule everywhere else. */
+function controllerFor(doc: ShopDoc | null, controllerId: string): RawEl | null {
+  const list = (doc?.controllers ?? []) as RawEl[];
+  if (!controllerId) return list.find(c => c['role'] === 'primary') ?? null;
+  return list.find(c => c['id'] === controllerId) ?? null;
+}
+
+/** Is this board's clamp switched on in the layout? */
+export function clampEnabled(doc: ShopDoc | null, controllerId: string): boolean {
+  return controllerFor(doc, controllerId)?.['clamp'] === true;
+}
+
+export function setClampEnabled(doc: ShopDoc | null, controllerId: string, on: boolean): void {
+  const c = controllerFor(doc, controllerId);
+  if (!c) return;
+  if (on) c['clamp'] = true; else delete c['clamp'];
+}
+
+/** Names of what this board's clamp senses: machines (tools) and collectors, by display name. */
+export function clampUsers(doc: ShopDoc | null, controllerId: string): string[] {
+  if (!doc) return [];
+  const same = (id: unknown) => controllerFor(doc, (id as string) ?? '') === controllerFor(doc, controllerId);
+  const out: string[] = [];
+  for (const m of machinesOf(doc)) {
+    const ct = (m.sensor as RawEl | undefined)?.['ct'] as RawEl | undefined;
+    if (ct && same(ct['controllerId'])) out.push(((m.name as string) || (m.id as string)));
+  }
+  for (const sys of systemsOf(doc)) {
+    const dc = collectorOf(sys);
+    const ct = ((dc?.['sensor'] as RawEl | undefined)?.['ct']) as RawEl | undefined;
+    if (dc && ct && same(ct['controllerId'])) out.push((dc['name'] as string) || 'Collector');
+  }
+  return out;
+}
+
+/**
+ * A layout saved before the switch existed may already sense a tool with a clamp. Switch that board's clamp on, so
+ * nothing that worked stops working the day the switch appears. Returns whether anything changed.
+ */
+export function healClampFlags(doc: ShopDoc | null): boolean {
+  if (!doc) return false;
+  let changed = false;
+  const mark = (ct: RawEl | undefined) => {
+    if (!ct) return;
+    const c = controllerFor(doc, (ct['controllerId'] as string) ?? '');
+    if (c && c['clamp'] !== true) { c['clamp'] = true; changed = true; }
+  };
+  for (const m of machinesOf(doc)) mark((m.sensor as RawEl | undefined)?.['ct'] as RawEl | undefined);
+  for (const sys of systemsOf(doc)) mark(((collectorOf(sys)?.['sensor'] as RawEl | undefined)?.['ct']) as RawEl | undefined);
+  return changed;
+}
+
 /** Attach (or with null, detach) the plug for an element. A collector routes by
  *  what the plug can do; see the note above. Detaching clears BOTH slots, because
  *  the gesture means "this collector has no plug" and leaving one behind would be
@@ -517,6 +573,102 @@ export function renameMachine(doc: ShopDoc, machineId: string, name: string): vo
 /** How many supplemental ports this machine already has, across every system. */
 export function supplementalCount(doc: ShopDoc | null, machineId: string): number {
   return portsOf(doc, machineId).filter(({ port }) => isPortSupplemental(port)).length;
+}
+
+// ── Deleting a system, and clearing the shop ──────────────────────────────────
+//
+// A system IS its collector, so deleting a collector means deleting its system: the collector, the gates, the ducts and any
+// machine whose ONLY ports were in it. A machine with a port in another system keeps that port (the cabinet saw with an
+// overarm elsewhere). The FIRST system is never deleted: a shop with no collector is not a shop. "Clear shop" is the same
+// removal applied to everything, leaving the first collector on its own with nothing connected. Boards stay paired.
+
+export interface SystemRemoval {
+  systemIds: string[];          // systems that go
+  elementIds: string[];         // every element dropped, so the canvas can forget their cells
+  gates: number;
+  ducts: number;
+  goneMachines: string[];       // names
+  keptMachines: string[];       // names — they have a port in a system that stays
+  plugIps: string[];            // plugs of the machines that go, to release once the removal is saved
+}
+
+/** Every smart plug the layout names: a machine's, and a collector's. */
+export function plugIpsOf(doc: ShopDoc | null): string[] {
+  const out = new Set<string>();
+  for (const m of machinesOf(doc)) {
+    const ip = ((m.sensor as RawEl | undefined)?.['outlet'] as RawEl | undefined)?.['ip'] as string | undefined;
+    if (ip) out.add(ip);
+  }
+  for (const sys of systemsOf(doc)) {
+    const ip = (outletOf(doc, collectorOf(sys)) as RawEl | null)?.['ip'] as string | undefined;
+    if (ip) out.add(ip);
+  }
+  return [...out];
+}
+
+function planRemoval(doc: ShopDoc, goneSystemIds: Set<string>, keepFirstCollector: boolean): SystemRemoval {
+  const systems = systemsOf(doc);
+  const first = systems[0];
+  const goneEls = new Set<string>();
+  let gates = 0, ducts = 0;
+  for (const sys of systems) {
+    const whole = goneSystemIds.has(sys.id as string);
+    if (!whole && !(keepFirstCollector && sys === first)) continue;
+    for (const e of sys.elements) {
+      if (keepFirstCollector && sys === first && e === collectorOf(sys)) continue;
+      goneEls.add(e['id'] as string);
+      if (e['type'] === 'selector') gates++;
+    }
+    ducts += sys.ducts.length;
+  }
+  const goneMachines: string[] = [], keptMachines: string[] = [], plugIps: string[] = [];
+  for (const m of machinesOf(doc)) {
+    const ports = portsOf(doc, m.id as string);
+    const stays = ports.some(p => !goneEls.has(p.port['id'] as string));
+    const name = (m.name as string) || (m.id as string);
+    if (stays) { if (ports.some(p => goneEls.has(p.port['id'] as string))) keptMachines.push(name); continue; }
+    goneMachines.push(name);
+    const ip = ((m.sensor as RawEl | undefined)?.['outlet'] as RawEl | undefined)?.['ip'] as string | undefined;
+    if (ip) plugIps.push(ip);
+  }
+  return { systemIds: [...goneSystemIds], elementIds: [...goneEls], gates, ducts, goneMachines, keptMachines, plugIps };
+}
+
+/** What deleting this system would remove, or null when it may not be deleted (the first system, or unknown). */
+export function planSystemRemoval(doc: ShopDoc | null, systemId: string): SystemRemoval | null {
+  const systems = systemsOf(doc);
+  if (!doc || systems.length < 2 || systems[0].id === systemId || !systems.some(s => s.id === systemId)) return null;
+  return planRemoval(doc, new Set([systemId]), false);
+}
+
+/** Delete a system that is not the first. Returns what went, or null when refused. */
+export function removeSystem(doc: ShopDoc, systemId: string): SystemRemoval | null {
+  const plan = planSystemRemoval(doc, systemId);
+  if (!plan) return null;
+  const gone = new Set(plan.elementIds);
+  doc.machines = doc.machines.filter(m => !portsOf(doc, m.id as string).every(p => gone.has(p.port['id'] as string)));
+  doc.systems = systemsOf(doc).filter(s => s.id !== systemId);
+  dropElements(doc, gone);
+  return plan;
+}
+
+/** What Clear shop would remove: everything but the first system's collector. */
+export function planClearShop(doc: ShopDoc | null): SystemRemoval | null {
+  const systems = systemsOf(doc);
+  if (!doc || !systems.length || !collectorOf(systems[0])) return null;
+  return planRemoval(doc, new Set(systems.slice(1).map(s => s.id as string)), true);
+}
+
+/** Back to one collector with nothing connected. Boards stay in controllers[]; machines and every other system go. */
+export function clearShop(doc: ShopDoc): SystemRemoval | null {
+  const plan = planClearShop(doc);
+  if (!plan) return null;
+  const gone = new Set(plan.elementIds);
+  doc.machines = [];
+  doc.systems = systemsOf(doc).slice(0, 1);
+  dropElements(doc, gone);
+  doc.systems[0].ducts = [];
+  return plan;
 }
 
 /** Drop these element ids and any duct touching them, across every system. */

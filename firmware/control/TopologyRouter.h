@@ -90,8 +90,7 @@ inline std::string _str(JsonVariantConst v) {
 //
 // `controllers` is shop-level, not system-level: a board is mounted where the
 // cable reaches and may drive selectors in any number of systems, so each view
-// carries the same array (RFC §14). `id` is "" for a schemaVersion-1 document,
-// which has exactly one implicit system.
+// carries the same array (RFC §14).
 struct SystemView {
   JsonArrayConst controllers;
   JsonArrayConst elements;
@@ -99,9 +98,8 @@ struct SystemView {
   const char*    id;
 };
 
-// A v1 topology, viewed as the single system it always was. The shop layer
-// (Shop.h) produces these for a v2 document; this overload is what keeps every
-// existing call site, fixture and conformance test working untouched.
+// One system's body (controllers, elements, ducts) viewed as a SystemView. The shop layer (Shop.h) produces these for a
+// shop; this overload is for the router and sequencer tests, which write a single system out as a plain document.
 inline SystemView viewOf(JsonObjectConst t) {
   return SystemView{ t["controllers"].as<JsonArrayConst>(),
                      t["elements"].as<JsonArrayConst>(),
@@ -238,7 +236,7 @@ inline Routing computeRouting(const SystemView& topology, const std::vector<std:
   return out;
 }
 
-// Convenience for a plain (schemaVersion 1) topology document.
+// Convenience for a plain single-system document.
 inline Routing computeRouting(JsonObjectConst topology, const std::vector<std::string>& active) {
   return computeRouting(viewOf(topology), active);
 }

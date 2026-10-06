@@ -71,15 +71,13 @@ static std::string stateOf(const topo::Controller& c, const std::string& sel) {
 }
 
 int main(int argc, char** argv) {
-  // These fixtures are schemaVersion-1 documents, so the shop layer sees one
-  // implicit system under this id (Shop.h::kImplicitSystemId). The vectors below
-  // are unchanged from the single-system era on purpose: v1 behaviour is the
-  // contract the container must not have altered.
-  const std::string kSys = topo::kImplicitSystemId;
+  // The fixtures are shops whose one system is called this. The vectors below are unchanged from the single-system era on
+  // purpose: that behaviour is the contract the container must not have altered.
+  const std::string kSys = "system-1";
   std::string dir = argc > 1 ? argv[1] : "firmware/test/fixtures/";
   DynamicJsonDocument twoGates(16384), star(16384);
   if (deserializeJson(twoGates, slurp(dir + "twoGates.json"))) { printf("bad twoGates.json\n"); return 2; }
-  if (deserializeJson(star,     slurp(dir + "star.json")))     { printf("bad star.json\n");     return 2; }
+  if (deserializeJson(star,     slurp(dir + "starShop.json"))) { printf("bad starShop.json\n"); return 2; }
 
   // ── twoGates: two independent servo gates ────────────────────────────────
   {
@@ -146,10 +144,11 @@ int main(int argc, char** argv) {
   {
     // twoGates fixtures have no outlet sensors; craft a tiny topology inline.
     DynamicJsonDocument d(2048);
-    deserializeJson(d, R"({"schemaVersion":1,"controllers":[{"id":"p","role":"primary"}],
-      "elements":[{"id":"dc","type":"collector"},
-        {"id":"saw","type":"tool","sensor":{"outlet":{"host":"shelly-saw","ip":"10.0.0.5"}}}],
-      "ducts":[{"child":"saw","parent":"dc"}]})");
+    deserializeJson(d, R"({"schemaVersion":2,"controllers":[{"id":"p","role":"primary"}],
+      "systems":[{"id":"system-1","elements":[{"id":"dc","type":"collector"},
+        {"id":"saw","type":"tool","machineId":"saw"}],
+      "ducts":[{"child":"saw","parent":"dc"}]}],
+      "machines":[{"id":"saw","name":"Saw","sensor":{"outlet":{"host":"shelly-saw","ip":"10.0.0.5"}}}]})");
     topo::Controller c; c.setTopology(d.as<JsonObjectConst>());
     ok("outlet map: host match", c.toolForOutlet("shelly-saw", "0.0.0.0") == "saw");
     ok("outlet map: ip fallback", c.toolForOutlet("", "10.0.0.5") == "saw");
@@ -160,7 +159,7 @@ int main(int argc, char** argv) {
   // PAIR: topology.test.js's "re-assert" block — same cases, same order.
   {
     DynamicJsonDocument feed(16384);
-    if (deserializeJson(feed, slurp(dir + "feedChain.json"))) { printf("bad feedChain.json\n"); return 2; }
+    if (deserializeJson(feed, slurp(dir + "feedChainShop.json"))) { printf("bad feedChainShop.json\n"); return 2; }
     // Plan against the SYSTEM VIEW: both fixtures are v2 shops, and the
     // whole-document overload finds no selectors in one — which made the first
     // version of this block pass its "no move" case for the wrong reason.

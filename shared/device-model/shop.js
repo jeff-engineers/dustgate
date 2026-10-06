@@ -186,6 +186,12 @@ function validateShop(shop) {
     return { ok: false, errors };
   }
   if (typeof shop.schemaVersion !== 'number') err('shape', 'schemaVersion must be a number');
+  // Same refusal, same sentence, as the firmware (TopologyRuntime.h): a v1 document is detected by its version OR by its
+  // shape, since an export that lost its schemaVersion is still a v1 document.
+  if (shop.schemaVersion === 1 || (!Array.isArray(shop.systems) && Array.isArray(shop.elements))) {
+    err('shape', 'layout is from an older version (v1) — re-save it');
+    return { ok: false, errors };
+  }
   for (const k of ['controllers', 'systems', 'machines']) {
     if (!Array.isArray(shop[k])) err('shape', `${k} must be an array`);
   }
@@ -657,74 +663,9 @@ function planShopTransition(shop, currentStates, desiredStates, opts = {}) {
   return out;
 }
 
-// ---------------------------------------------------------------------------
-// Migration
-// ---------------------------------------------------------------------------
-
-/**
- * Lift a schemaVersion-1 topology into a schemaVersion-2 shop.
- *
- * Every existing install is one system with one collector, so the container is
- * pure gain and nobody loses a layout. The only real work is machines: a v1
- * `tool` element carried its own name and plug, and v2 moves both onto a machine
- * (RFC §6.3). One machine is auto-created per tool, keeping the tool's id as the
- * machine id so anything holding an id — `ui.layout`, a firmware status blob, a
- * bug report — still resolves (RFC §12).
- *
- * The port keeps the display name too. That is not redundancy: on a multi-port
- * machine the port name becomes "Cabinet · 4\"" while the machine stays "Table
- * Saw", and starting them equal is the honest single-port case.
- *
- * @param {import('./topology').Topology} topology
- * @param {{systemId?:string, systemName?:string}} [opts]
- * @returns {Shop}
- */
-function migrateToShop(topology, opts = {}) {
-  const t = topology || {};
-  const systemId   = opts.systemId   || 'system-1';
-  const systemName = opts.systemName || t.name || 'Dust collection';
-
-  const machines = [];
-  const elements = (t.elements || []).map((el) => {
-    if (el.type !== 'tool') return { ...el };
-    const machine = { id: el.id, name: el.name || el.id };
-    if (el.sensor) machine.sensor = el.sensor;
-    machines.push(machine);
-    // sensor moves to the machine; everything else about the port stays put.
-    const { sensor, ...port } = el;
-    return { ...port, machineId: el.id };
-  });
-
-  const shop = {
-    schemaVersion: SHOP_SCHEMA_VERSION,
-    name:          t.name || 'My Shop',
-    controllers:   (t.controllers || []).map((c) => ({ ...c })),
-    systems: [{
-      id:       systemId,
-      name:     systemName,
-      elements,
-      ducts:    (t.ducts || []).map((d) => ({ ...d })),
-    }],
-    machines,
-    devices: [],
-  };
-  if (t.ui) shop.ui = t.ui;
-  return shop;
-}
-
-/**
- * True for a document already in shop shape. Used at the seams (store, adopt,
- * PUT) so a v1 doc can be migrated on read rather than rejected.
- */
-const isShop = (doc) =>
-  !!doc && typeof doc === 'object' && Array.isArray(doc.systems);
-
-/** Accept either shape, return a shop. */
-const asShop = (doc, opts) => (isShop(doc) ? doc : migrateToShop(doc, opts));
 
 module.exports = {
   SHOP_SCHEMA_VERSION, MAX_SUPPLEMENTAL_PORTS,
   systemView, systemsOf, machinesOf, machineIndex, portsByMachine, plugOwners, portEnabled,
   validateShop, routeShop, planShopTransition,
-  migrateToShop, isShop, asShop,
 };

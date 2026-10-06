@@ -12,6 +12,9 @@
 
 const baseUrl  = (process.argv[2] || 'http://localhost:3000').replace(/\/$/, '');
 const fixtures = require('./topology.fixtures.js');
+// The device takes SHOPS; a schemaVersion-1 document is refused (checked in 1). These are the single-system fixtures lifted.
+const twoGatesShop = fixtures.shopFromV1(fixtures.twoGates);
+const starShop = fixtures.shopFromV1(fixtures.star);
 
 const results = [];
 const check = (name, cond, detail = '') => results.push({ name, ok: !!cond, detail });
@@ -56,12 +59,15 @@ async function run() {
     const bad = { schemaVersion: 1, controllers: [], elements: [], ducts: [] }; // no collector, no primary
     const r = await req('PUT', '/api/topology', bad);
     check('invalid topology → 400 + errors', r.status === 400 && Array.isArray(r.json?.errors));
+    // A VALID schemaVersion-1 document is refused too, not migrated: nothing writes one any more.
+    const v1 = await req('PUT', '/api/topology', fixtures.twoGates);
+    check('a schemaVersion-1 document → 400', v1.status === 400, `status=${v1.status}`);
   }
 
   // 1b. Two servo gates on one board can't share a PWM channel — they'd move together.
   {
-    const dup = fixtures.clone(fixtures.twoGates);
-    dup.elements.find((e) => e.id === 'gate2').servo.channel = 0;   // gate1 already holds 0
+    const dup = fixtures.clone(twoGatesShop);
+    dup.systems[0].elements.find((e) => e.id === 'gate2').servo.channel = 0;   // gate1 already holds 0
     const r = await req('PUT', '/api/topology', dup);
     check('duplicate servo channel on one host → 400', r.status === 400,
       `status=${r.status}`);
@@ -69,10 +75,10 @@ async function run() {
 
   // 2. PUT/GET roundtrip + initial status.
   {
-    const r = await req('PUT', '/api/topology', fixtures.twoGates);
+    const r = await req('PUT', '/api/topology', twoGatesShop);
     check('PUT twoGates → ok', r.status === 200 && r.json?.ok === true, `status=${r.status}`);
     const g = await req('GET', '/api/topology');
-    check('GET topology roundtrip', g.json?.name === 'twoGates' && Array.isArray(g.json?.elements));
+    check('GET topology roundtrip', g.json?.name === 'twoGates' && Array.isArray(g.json?.systems));
     const s = await req('GET', '/api/status');
     check('initial status all closed, collector off',
       s.json?.actuators?.gate1 === 'closed' && s.json?.actuators?.gate2 === 'closed' && s.json?.collectorOn === false);
@@ -138,7 +144,7 @@ async function run() {
   // pass, so a switch made anywhere else is undone microseconds later and would
   // pass a unit test while doing nothing on a board.
   {
-    await req('PUT', '/api/topology', fixtures.twoGates);
+    await req('PUT', '/api/topology', twoGatesShop);
     let r = await req('POST', '/api/collector', { on: true });
     check('collector switch accepted', r.status === 200, `status=${r.status}`);
 
@@ -180,7 +186,7 @@ async function run() {
 
   // 4. Most-recent-wins on a single shared selector.
   {
-    await req('PUT', '/api/topology', fixtures.star);
+    await req('PUT', '/api/topology', starShop);
     let r = await req('POST', '/api/sim/tool', { toolId: 'toolA', watts: 10 });
     check('star: A on → selector s1', r.json?.actuators?.sel === 's1');
     r = await req('POST', '/api/sim/tool', { toolId: 'toolB', watts: 10 });

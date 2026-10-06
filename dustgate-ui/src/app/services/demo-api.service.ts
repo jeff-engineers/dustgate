@@ -11,14 +11,13 @@ import {
   ClampBoard,
   NodeLinkState,
   SenseReport,
-  OutletConfigCmd,
   SystemStatus,
 } from './api.service';
 import { SERVO_CHANNELS_PER_BOARD } from '../gates/selector-types';
 import { clampOf } from './shop-doc';
 import * as model from '@device-model';
-import { validateTopology, type Topology } from '@topology';
-import { isShop, portEnabled, portsByMachine, systemsOf, validateShop, type Shop } from '@shop';
+import type { Topology } from '@topology';
+import { portEnabled, portsByMachine, systemsOf, validateShop, type Shop } from '@shop';
 import { createTopologyDevice, setCollectorManual, setToolPower, statusView as topoStatus, toolThreshold, type TopologyDevice, type TopologyStatus } from '@topology-device';
 import { DEMO_TOPOLOGY } from './demo-topology';
 import type { SerialChunk } from '../boards/serial-log';
@@ -203,8 +202,8 @@ export class DemoApiService extends ApiService {
   }
 
   override async putTopology(topology: Topology): Promise<{ ok: boolean }> {
-    // Both shapes, like the mock and the firmware: a shop validates as a shop.
-    const v = isShop(topology) ? validateShop(topology) : validateTopology(topology);
+    // A shop only, like the mock and the firmware: validateShop refuses a schemaVersion-1 document.
+    const v = validateShop(topology);
     if (!v.ok) throw new Error('invalid topology: ' + JSON.stringify(v.errors));
     this.td = createTopologyDevice(topology);
     this.syncHasLinear();
@@ -279,9 +278,6 @@ export class DemoApiService extends ApiService {
     this.servoAngles.set(`${controllerId ?? ''}:${channel}`, angle);
     return { ok: true };
   }
-  override async detachServo(_channel: number, _controllerId?: string): Promise<unknown> {
-    return { ok: true };
-  }
   private servoAngles = new Map<string, number>();
 
   private delay(ms: number): Promise<void> {
@@ -296,10 +292,6 @@ export class DemoApiService extends ApiService {
   }
 
   // ── Read ──────────────────────────────────────────────────────────────────────
-
-  override getMotionStatus(): Promise<SystemStatus> {
-    return Promise.resolve(this.buildStatus());
-  }
 
   // ── Motion (model owns state, we own the delay between begin/complete) ──────────
 
@@ -330,32 +322,8 @@ export class DemoApiService extends ApiService {
     return { ok: true };
   }
 
-  override estop(): Promise<{ ok: boolean }> {
-    model.estop(this.d);
-    this.pushStatus();
-    return Promise.resolve({ ok: true });
-  }
-
 
   // ── Dust collector ──────────────────────────────────────────────────────────────
-
-  override setDustCollector(on: boolean): Promise<{ ok: boolean }> {
-    model.switchDustCollector(this.d, on);
-    this.pushStatus();
-    return Promise.resolve({ ok: true });
-  }
-
-  override configureDustCollector(generation: number, ip: string): Promise<{ ok: boolean }> {
-    model.configureDustCollector(this.d, { gen: generation, ip });
-    this.pushStatus();
-    return Promise.resolve({ ok: true });
-  }
-
-  override deleteDustCollector(): Promise<{ ok: boolean }> {
-    model.deleteDustCollector(this.d);
-    this.pushStatus();
-    return Promise.resolve({ ok: true });
-  }
 
   // ── Calibration ───────────────────────────────────────────────────────────────
 
@@ -370,28 +338,7 @@ export class DemoApiService extends ApiService {
     return { ok: true };
   }
 
-  override clearCal(): Promise<{ ok: boolean }> {
-    model.clearCal(this.d);
-    this.syncInfo();
-    this.pushStatus();
-    return Promise.resolve({ ok: true });
-  }
-
   // ── Outlets ───────────────────────────────────────────────────────────────────
-
-  override async configureOutlet(cmd: OutletConfigCmd): Promise<{ ok: boolean }> {
-    model.configureOutlet(this.d, {
-      slot:      cmd.slot,
-      name:      cmd.name,
-      stop:      cmd.stop,
-      ip:        cmd.ip,
-      host:      cmd.host,
-      gen:       cmd.generation,
-      threshold: cmd.threshold_w,
-    });
-    this.pushStatus();
-    return { ok: true };
-  }
 
   override async pingOutlet(ip: string): Promise<DiscoveredOutlet> {
     await this.delay(400);
@@ -762,27 +709,10 @@ export class DemoApiService extends ApiService {
     this.d.hasLinear = primary ? primary.drives === 'linear' : true;
   }
 
-  override saveOutletConfig(): Promise<{ ok: boolean }> {
-    return Promise.resolve({ ok: true }); // state is already in-memory
-  }
-
-  override deleteOutlet(slot: number): Promise<{ ok: boolean }> {
-    model.deleteOutlet(this.d, slot);
-    this.pushStatus();
-    return Promise.resolve({ ok: true });
-  }
-
   // ── Config ────────────────────────────────────────────────────────────────────
 
   override setHomedLeft(homedLeft: boolean): Promise<{ ok: boolean }> {
     model.setHomedLeft(this.d, homedLeft);
-    this.syncInfo();
-    this.pushStatus();
-    return Promise.resolve({ ok: true });
-  }
-
-  override setNumGates(n: number): Promise<{ ok: boolean }> {
-    model.setNumGates(this.d, n);
     this.syncInfo();
     this.pushStatus();
     return Promise.resolve({ ok: true });
@@ -798,27 +728,15 @@ export class DemoApiService extends ApiService {
     return { ok: true };
   }
 
-  override setPortRole(index: number, role: string): Promise<{ ok: boolean }> {
-    model.setPortRole(this.d, index, role as model.PortRole);
+  override resetSetup(): Promise<{ ok: boolean }> {
+    model.clearCal(this.d);
+    this.syncInfo();
     this.pushStatus();
     return Promise.resolve({ ok: true });
-  }
-
-  override setIdleTimeout(seconds: number): Promise<{ ok: boolean }> {
-    model.setIdleTimeout(this.d, seconds);
-    this.syncInfo();
-    return Promise.resolve({ ok: true });
-  }
-
-  override resetSetup(): Promise<{ ok: boolean }> {
-    return this.clearCal();
   }
 
   override forgetWifi(): Promise<{ ok: boolean }> {
     return Promise.resolve({ ok: true }); // no real WiFi to forget
   }
 
-  override async refreshInfo(): Promise<void> {
-    // Already in sync — nothing to fetch
-  }
 }

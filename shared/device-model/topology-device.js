@@ -20,9 +20,8 @@
 // everything that used to be one answer is now one answer PER SYSTEM — the
 // collector, the idle-hold decision, the coast timer. Actuator states stay one
 // flat map because selector ids are unique shop-wide. What you switch on is a
-// MACHINE; a `tool` element is a port. A v1 document is normalised on the way in
-// (asShop), so a v1 tool simply is its own machine and nothing here branches on
-// the version. Mirrors TopologyController.h / TopologyRuntime.h field-for-field.
+// MACHINE; a `tool` element is a port. This takes a SHOP: a v1 document is refused
+// at the door (validateShop) and never reaches here. Mirrors TopologyController.h / TopologyRuntime.h field-for-field.
 //
 // PURE + synchronous: reconcile() jumps selectors to their target state. The
 // ORDERED make-before-break moves (for a real actuator's timing) are returned via
@@ -103,12 +102,11 @@ function machineThreshold(shop, machineId) {
   const w = m && m.sensor && m.sensor.outlet && m.sensor.outlet.thresholdW;
   return typeof w === 'number' ? w : DEFAULT_THRESHOLD_W;
 }
-/** v1 spelling — a tool WAS the machine before ports existed. */
-const toolThreshold = (shop, id) => machineThreshold(S.asShop(shop), id);
+const toolThreshold = (shop, id) => machineThreshold(shop, id);
 
 /** Create a device from a topology or shop: every selector closed, every blower idle. */
 function createTopologyDevice(doc) {
-  const shop = S.asShop(doc);
+  const shop = doc;
   const actuatorStates = {};
   const collectors = {};
   for (const sys of S.systemsOf(shop)) {
@@ -152,7 +150,7 @@ function createTopologyDevice(doc) {
  * does disable it. Mirrors kDefaultCollectorOffDelayMs in TopologyRuntime.h.
  */
 function collectorOffDelayMs(doc, systemId) {
-  const shop = S.asShop(doc);
+  const shop = doc;
   const sys = S.systemsOf(shop).find((x) => x.id === systemId) || S.systemsOf(shop)[0];
   const c = sys && (sys.elements || []).find((e) => e.type === 'collector');
   const v = c && c.control && c.control.offDelayMs;
@@ -176,7 +174,7 @@ function tickCollector(d, nowMs) {
 
 /** The collector element's switchable plug, or undefined if it has none. */
 function collectorOutlet(doc, systemId) {
-  const shop = S.asShop(doc);
+  const shop = doc;
   const sys = S.systemsOf(shop).find((x) => x.id === systemId);
   const c = sys && (sys.elements || []).find((e) => e.type === 'collector');
   return c && c.control && c.control.outlet;
@@ -215,7 +213,7 @@ function setCollectorPlugFault(d, systemId, fault) {
  * are the ones nobody can produce on demand.
  */
 function collectorBinSensor(doc, systemId) {
-  const shop = S.asShop(doc);
+  const shop = doc;
   const sys = S.systemsOf(shop).find((x) => x.id === systemId);
   const c = sys && (sys.elements || []).find((e) => e.type === 'collector');
   return c && c.bin && c.bin.sensor;
@@ -272,7 +270,6 @@ function activeMachines(d) {
   active.sort((a, b) => (d.activationSeq[b] || 0) - (d.activationSeq[a] || 0));
   return active;
 }
-const activeTools = activeMachines;
 
 /**
  * Recompute desired actuator states from the active tools and apply them.
@@ -485,7 +482,7 @@ function clearProblem(d, key) { delete d.staged[key]; }
 
 // Can DustGate itself switch this blower? A plug it controls, or a transmitter that presses its remote.
 function collectorCommandable(doc, systemId) {
-  const shop = S.asShop(doc);
+  const shop = doc;
   const sys = S.systemsOf(shop).find((x) => x.id === systemId);
   const c = sys && (sys.elements || []).find((e) => e.type === 'collector');
   return !!(c && c.control && (c.control.outlet || c.control.rf));
@@ -560,5 +557,5 @@ module.exports = {
   setCollectorManual, collectorIsManual, setCollectorPlugFault,
   PROBLEM_TEXT, setProblem, clearProblem, problemsView,
   // v1 spellings — a tool WAS the machine before ports existed.
-  toolThreshold, activeTools, setToolPower,
+  toolThreshold, setToolPower,
 };

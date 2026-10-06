@@ -9,11 +9,11 @@
 
 const {
   validateShop, routeShop, planShopTransition,
-  migrateToShop, isShop, asShop, portsByMachine, portEnabled, systemView,
+  portsByMachine, portEnabled, systemView,
   SHOP_SCHEMA_VERSION,
 } = require('./shop');
 const { validateTopology } = require('./topology');
-const { clone, star, twoGates, twoSystemShop } = require('./topology.fixtures');
+const { shopFromV1, clone, star, twoGates, twoSystemShop } = require('./topology.fixtures');
 
 // ── tiny harness ────────────────────────────────────────────────────────────
 const results = [];
@@ -180,15 +180,15 @@ check('a duct spanning two systems is rejected',
     sys(s, 'small').ducts.push({ child: 'ts-cabinet', parent: 'man', parentBranch: 'p1' });
   })), 'duct'));
 
-// migrateToShop reuses a v1 tool's id for its machine ON PURPOSE, so the reuse
+// shopFromV1 reuses a v1 tool's id for its machine ON PURPOSE, so the reuse
 // itself must stay legal — only a collision with a DIFFERENT element is wrong.
 check('a machine id colliding with an unrelated element is rejected',
   hasCode(validateShop(mut((s) => { s.machines[0].id = 'bv-cab';
     for (const x of sys(s, 'big').elements) if (x.machineId === 'table-saw') x.machineId = 'bv-cab';
     for (const x of sys(s, 'small').elements) if (x.machineId === 'table-saw') x.machineId = 'bv-cab';
   })), 'machine'));
-check('a migrated shop, where machine ids ARE their port ids, stays valid',
-  validateShop(migrateToShop(twoGates)).ok);
+check('a lifted shop, where machine ids ARE their port ids, stays valid',
+  validateShop(shopFromV1(twoGates)).ok);
 
 // ── port helpers ────────────────────────────────────────────────────────────
 {
@@ -361,36 +361,18 @@ check('swapping which port is primary leaves a valid shop', validateShop(mut(swa
     plans.length === 2 && plans.every((p) => p.deadHeadRisk === true), JSON.stringify(plans));
 }
 
-// ── migration v1 → v2 ───────────────────────────────────────────────────────
+// ── schemaVersion 1 is refused ──────────────────────────────────────────────
 {
-  const shop = migrateToShop(star);
-  check('migrated shop validates', validateShop(shop).ok, JSON.stringify(validateShop(shop).errors));
-  eq('schemaVersion bumped', shop.schemaVersion, SHOP_SCHEMA_VERSION);
-  eq('one system', shop.systems.length, 1);
-  eq('controllers stay shop-level', shop.controllers.map((c) => c.id), ['primary']);
+  const r = validateShop(star);
+  check('a v1 document is refused with the firmware\'s sentence',
+    !r.ok && r.errors[0].message === 'layout is from an older version (v1) — re-save it', JSON.stringify(r.errors));
+  const { schemaVersion, ...lost } = star;
+  check('...even when an export lost its schemaVersion', !validateShop(lost).ok);
+  const shop = shopFromV1(star);
+  check('a shop lifted from the v1 fixtures validates', validateShop(shop).ok, JSON.stringify(validateShop(shop).errors));
   eq('one machine per v1 tool', shop.machines.map((m) => m.id), ['toolA', 'toolB']);
-  eq('machine keeps the tool id so existing references resolve',
-    shop.machines[0].id, 'toolA');
-  eq('machine takes the plug', shop.machines[0].sensor.outlet.ip, '192.168.87.27');
   const port = shop.systems[0].elements.find((e) => e.id === 'toolA');
-  eq('port points at its machine', port.machineId, 'toolA');
-  check('plug moved OFF the port', port.sensor === undefined);
-  eq('port keeps its display name', port.name, 'Bandsaw');
-}
-{
-  // Behaviour has to survive the migration, or the container was not free.
-  const shop = migrateToShop(twoGates);
-  const before = require('./routing').computeRouting(twoGates, ['toolX']);
-  const after  = routeShop(shop, ['toolX']);
-  eq('migrated routing matches v1', after.states, before.states);
-  eq('migrated reachability matches v1', after.reachable, before.reachable);
-}
-{
-  check('isShop distinguishes the shapes', isShop(twoSystemShop) && !isShop(star));
-  check('asShop passes a shop through unchanged', asShop(twoSystemShop) === twoSystemShop);
-  check('asShop migrates a v1 doc', isShop(asShop(star)));
-  eq('migration is not destructive', star.elements.find((e) => e.id === 'toolA').sensor.outlet.ip,
-    '192.168.87.27');
+  eq('the plug moved onto the machine', [shop.machines[0].sensor.outlet.ip, port.sensor], ['192.168.87.27', undefined]);
 }
 
 // ── report ──────────────────────────────────────────────────────────────────

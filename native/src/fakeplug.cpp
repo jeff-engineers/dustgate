@@ -7,6 +7,8 @@
 // Push: whenever the stored Ws server is enabled it dials it and streams NotifyFullStatus / NotifyStatus (switch:0.apower)
 // whenever the number in the file changes — what a real plug's Outbound WebSocket does. <powerfile>.polls counts GetStatus
 // requests, so a test can see that a pushing plug is not being polled.
+// Bound to 127.0.0.1 alone: Linux answers on all of 127/8, so a plug listening on every address made each "no plug here"
+// address in the sweep test a plug (macOS only answers on .1, which hid it).
 // Spelled out, not left to whatever Boost happens to pull in: GCC (the Pi) is stricter than the Mac's clang.
 #include <cstdlib>
 #include <boost/asio.hpp>
@@ -73,7 +75,7 @@ int main(int argc, char** argv) {
     if (argc > 3 && *argv[3]) std::ofstream(g_file + ".ws") << "1 " << argv[3];
     if (argc > 4) std::ofstream(g_file + ".name") << argv[4];
     std::thread(pusher).detach();
-    net::io_context io; tcp::acceptor acc(io, tcp::endpoint(tcp::v4(), (unsigned short)std::atoi(argv[1])));
+    net::io_context io; tcp::acceptor acc(io, tcp::endpoint(net::ip::make_address("127.0.0.1"), (unsigned short)std::atoi(argv[1])));
     for (;;) {
         tcp::socket s(io); acc.accept(s);
         try {

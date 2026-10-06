@@ -48,11 +48,13 @@ const shop = {
   machines: [{ id: 'saw' }, { id: 'drill' }],
 } as unknown as Topology;
 
-// ── v1 still reads exactly as it did ────────────────────────────────────────
+// ── a schemaVersion-1 document reads as empty ───────────────────────────────
+// The device refuses one and the app does not read one, so root-level elements are NOT seen: better empty (and the shop
+// reported not ready) than half-read.
 {
-  eq('v1 elements read from the root', elementsOf(v1).map(e => e.id), ['dc', 'g1', 't1']);
-  eq('v1 ducts read from the root', ductsOf(v1).length, 2);
-  eq('v1 controllers', controllersOf(v1).map(c => c.id), ['primary']);
+  eq('v1 elements are not read from the root', elementsOf(v1).length, 0);
+  eq('v1 ducts are not read from the root', ductsOf(v1).length, 0);
+  eq('controllers are shop-level either way', controllersOf(v1).map(c => c.id), ['primary']);
 }
 
 // ── a shop flattens ─────────────────────────────────────────────────────────
@@ -84,8 +86,8 @@ const shop = {
   eq('null in → [] for ducts', ductsOf(null as unknown as Topology), []);
   // `systems` that isn't an array must not be treated as one — a truncated or
   // hand-edited file shouldn't crash the canvas on load.
-  check('a non-array `systems` falls back to root reading',
-    elementsOf({ systems: 'nope', elements: [{ id: 'x', type: 'tool' }] } as unknown as Topology).length === 1);
+  check('a non-array `systems` reads as empty',
+    elementsOf({ systems: 'nope', elements: [{ id: 'x', type: 'tool' }] } as unknown as Topology).length === 0);
 }
 
 

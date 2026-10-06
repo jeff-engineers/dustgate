@@ -1,3 +1,4 @@
+import { PlugsComponent } from './plugs/plugs.component';
 import { Routes } from '@angular/router';
 import { LandingComponent } from './landing/landing.component';
 import { SettingsComponent } from './settings/settings.component';
@@ -26,6 +27,8 @@ export const routes: Routes = [
   { path: 'build',        component: BuildComponent },
   { path: 'tools',        component: ToolSetupComponent },
   { path: 'boards',       component: BoardSetupComponent },
+  // The twin of /boards for plugs: find, pair, rename, release, take over. docs/mockups/plugs-clamp-delete.html.
+  { path: 'plugs',        component: PlugsComponent },
   // The brain's serial output over WiFi — a bench and support screen, reached
   // only from the brain's row in Your boards. docs/mockups/brain-log.html.
   { path: 'boards/log',   component: BrainLogComponent },

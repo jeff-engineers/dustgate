@@ -44,6 +44,7 @@
 #include "DeviceProblems.h"
 #include "NodeStatus.h"
 #include "PlugPoller.h"
+#include "AtomicFile.h"
 #include "Sweep.h"
 #include "RemoteRfPresser.h"
 #include "TopologyRuntime.h"
@@ -170,16 +171,21 @@ static void savePairs() {
     if (g_pairPath.empty()) return;
     DynamicJsonDocument d(4096); JsonArray a = d.to<JsonArray>();
     for (auto& kv : g_hub->nodes()) { JsonObject o = a.createNestedObject(); o["host"] = kv.first; o["name"] = kv.second->name; }
-    std::ofstream f(g_pairPath, std::ios::binary | std::ios::trunc); serializeJson(d, f);
+    std::string out; serializeJson(d, out);
+    if (!dgbrain::writeFileAtomic(g_pairPath, out, true)) dglog::linef("[STATE] could not save %s: %s\n", g_pairPath.c_str(), std::strerror(errno));
 }
 
-static bool adoptLayout(const std::string& json) {
+// persist: 0 = do not touch the file (a layout read FROM the file), 1 = save it and keep the previous copy as .bak (a person saved),
+// 2 = save it WITHOUT rotating .bak (restoring from .bak: the copy beside it is the good one and must not be replaced by the damaged file).
+static bool adoptLayout(const std::string& json, int persist = 1) {
     std::string err;
     if (!g_rt.adopt(json.data(), json.size(), err)) { g_topoErr = err; return false; }
     g_topoErr.clear(); g_topoJson = json;
     rebuildPressers();
     syncPlugs();
-    if (!g_topoPath.empty()) { std::ofstream f(g_topoPath, std::ios::binary | std::ios::trunc); f << json; }
+    // Atomically, keeping the last good copy beside it: a power cut mid-save must not cost the shop its layout.
+    if (persist && !g_topoPath.empty() && !dgbrain::writeFileAtomic(g_topoPath, json, persist == 1))
+        dglog::linef("[TOPO] could not save the layout to %s: %s - it is adopted but will be lost at a restart\n", g_topoPath.c_str(), std::strerror(errno));
     dglog::linef("[TOPO] layout adopted (%zu bytes)\n", json.size());
     return true;
 }
@@ -318,8 +324,12 @@ static void loadImages() {
     for (int k = 0; k < 2; k++) {
         std::ifstream j(imgFile(k, ".json")); if (!j) continue;
         StaticJsonDocument<256> d; if (deserializeJson(d, j)) continue;
-        std::ifstream b(imgFile(k, ".bin"), std::ios::binary | std::ios::ate); if (!b) continue;
-        g_images[k].fw = d["fw"] | ""; g_images[k].md5 = d["md5"] | ""; g_images[k].size = (uint32_t)b.tellg(); g_images[k].present = true;
+        std::ifstream b(imgFile(k, ".bin"), std::ios::binary); if (!b) continue;
+        std::stringstream body; body << b.rdbuf(); const std::string bin = body.str();
+        // The image and its description are written one after the other: refuse a pair that disagrees (a cut between the two
+        // writes) rather than serve a node an image whose checksum it will reject.
+        if (md5::hex(bin) != std::string(d["md5"] | "")) { dglog::linef("[NODEIMG] the stored %s image does not match its checksum - ignored, upload it again\n", kImgName[k]); continue; }
+        g_images[k].fw = d["fw"] | ""; g_images[k].md5 = d["md5"] | ""; g_images[k].size = (uint32_t)bin.size(); g_images[k].present = true;
     }
 }
 
@@ -794,8 +804,10 @@ private:
             else if (md5::hex(ar.body) != std::string(md->value())) err(http::status::bad_request, "the upload does not match X-Md5");
             else if (g_stateDir.empty()) err(http::status::service_unavailable, "this brain has no state directory to keep an image in");
             else {
-                { std::ofstream b(imgFile(k, ".bin"), std::ios::binary | std::ios::trunc); b << ar.body; }
-                { std::ofstream j(imgFile(k, ".json"), std::ios::trunc); j << "{\"fw\":\"" << std::string(fw->value()) << "\",\"md5\":\"" << std::string(md->value()) << "\"}"; }
+                // The image first, its description second: loadImages() checks they agree, so a cut between the two is a refused image, not a wrong one.
+                const bool wrote = dgbrain::writeFileAtomic(imgFile(k, ".bin"), ar.body) &&
+                    dgbrain::writeFileAtomic(imgFile(k, ".json"), "{\"fw\":\"" + std::string(fw->value()) + "\",\"md5\":\"" + std::string(md->value()) + "\"}");
+                if (!wrote) { err(http::status::internal_server_error, "could not store the image"); return; }
                 g_images[k].present = true; g_images[k].fw = std::string(fw->value()); g_images[k].md5 = std::string(md->value()); g_images[k].size = (uint32_t)ar.body.size();
                 dglog::linef("[NODEIMG] the %s node image is %s (%u bytes)", kImgName[k], g_images[k].fw.c_str(), (unsigned)g_images[k].size);
                 o.body = "{\"ok\":true}";
@@ -901,15 +913,30 @@ int main(int argc, char** argv) {
     NodeHub hub(id); g_hub = &hub;
     if (!stateDir.empty()) {
         g_pairPath = stateDir + "/nodes.json";
-        std::ifstream pf(g_pairPath, std::ios::binary);
-        if (pf) { DynamicJsonDocument d(4096); if (!deserializeJson(d, pf)) for (JsonObject o : d.as<JsonArray>()) hub.add(o["host"] | "", o["name"] | ""); }
+        // The pairings, from the file or, if that is unreadable (a cut mid-save on an older build), the copy kept beside it.
+        for (const std::string& path : {g_pairPath, g_pairPath + ".bak"}) {
+            std::ifstream pf(path, std::ios::binary);
+            DynamicJsonDocument d(4096);
+            if (pf && !deserializeJson(d, pf) && d.is<JsonArray>()) {
+                for (JsonObject o : d.as<JsonArray>()) hub.add(o["host"] | "", o["name"] | "");
+                if (path != g_pairPath) dglog::linef("[STATE] %s was unreadable - pairings restored from the previous copy\n", g_pairPath.c_str());
+                break;
+            }
+        }
     }
     for (auto& nid : ids) hub.add(nid, "");
     g_rt.begin(&hub.bus());
     if (!stateDir.empty()) {
         g_topoPath = stateDir + "/topology.json";
-        std::ifstream f(g_topoPath, std::ios::binary);
-        if (f) { std::stringstream b; b << f.rdbuf(); if (!adoptLayout(b.str())) dglog::linef("[TOPO] stored layout refused: %s\n", g_topoErr.c_str()); }
+        // The layout, from the file or, if it will not load (truncated by a power cut under an older build, or damaged), from the
+        // last good copy kept beside it. adoptLayout() then rewrites the main file from the copy, so the damage heals.
+        for (const std::string& path : {g_topoPath, g_topoPath + ".bak"}) {
+            std::ifstream f(path, std::ios::binary);
+            if (!f) continue;
+            std::stringstream b; b << f.rdbuf();
+            if (adoptLayout(b.str(), path == g_topoPath ? 0 : 2)) { if (path != g_topoPath) dglog::linef("[TOPO] %s was unreadable - restored the previous layout from %s\n", g_topoPath.c_str(), path.c_str()); break; }
+            dglog::linef("[TOPO] stored layout %s refused: %s\n", path.c_str(), g_topoErr.c_str());
+        }
     }
     if (ip.empty()) {
         // At boot a Pi starts this before its WiFi has an address; "127.0.0.1" would be beaconed and pushed to plugs for the
@@ -932,7 +959,7 @@ int main(int argc, char** argv) {
         std::ifstream kf(kp); if (!kp.empty() && kf) std::getline(kf, g_apiKey);
         if (g_apiKey.empty()) {
             std::random_device rd; char b[33]; for (int i = 0; i < 32; i++) b[i] = "0123456789abcdef"[rd() % 16]; b[32] = 0; g_apiKey = b;
-            if (!kp.empty()) { std::ofstream o(kp); o << g_apiKey; }
+            if (!kp.empty()) dgbrain::writeFileAtomic(kp, g_apiKey);
         }
     }
 

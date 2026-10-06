@@ -120,9 +120,6 @@ public:
     // decide whether the dial-out path still has a job.
     bool dialsIn() const { return _s.dialsIn(); }
     bool inboundUp() const { return _inId != 0; }
-    // Does this bus have a dial-out task running right now? A node that dials in does
-    // not need one while it is linked — see update().
-    bool hasTask() const { return _taskAlive; }
 
     // --- ActuatorBus ------------------------------------------------------
     bool online() const override;

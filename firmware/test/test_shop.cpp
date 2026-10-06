@@ -94,7 +94,7 @@ int main(int argc, char** argv) {
   // star.json is a genuine v1 document, so the negative below still means
   // something — and it is the same pair shop.test.js checks.
   {
-    ok("isShop distinguishes the shapes", topo::isShop(shop) && !topo::isShop(star));
+    ok("a schemaVersion-1 document has no systems: it is not read", topo::systemsOf(shop).size() == 2 && topo::systemsOf(star).empty());
 
     auto sysShop = topo::systemsOf(shop);
     ok("shop has two systems", sysShop.size() == 2);

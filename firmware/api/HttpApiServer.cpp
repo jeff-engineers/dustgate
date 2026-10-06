@@ -157,25 +157,19 @@ HttpApiServer::HttpApiServer()
       _statusHashValid(false),
       _lastPushedPositionSteps(0),
       _lastPositionPushMs(0),
-      _estopPending(false),
       _homePending(false),
       _movePending(false),  _moveStop(0),
       _jogPending(false),   _jogMM(0.0f),
       _clearCalPending(false),
       _setStopPending(false),      _setStopIndex(0),
-      _setNumGatesPending(false),  _newNumGates(0),
       _calibratePending(false),    _calGateCount(0),
-      _portRolePending(false),     _portRoleIndex(0), _portRoleValue(0),
       _orientationPending(false),  _orientationValue(false),
       _servoJogPending(false),     _servoJogChannel(0), _servoJogAngle(0), _servoJogDetach(false),
       _cachedNumActiveStops(0),
       _idleTimeoutSec(IDLE_TIMEOUT_SEC_DEFAULT)
 #ifdef CONTROL_SMART_OUTLET
-    , _outletConfigPending(false),
-      _outletDeletePending(false), _outletDeleteSlot(0),
+    ,
       _outletSavePending(false),
-      _dcConfigPending(false),
-      _dcDeletePending(false),
       _dcSwitchPending(false), _dcSwitchOn(false),
       _discoverPending(false),
       _pingPending(false),
@@ -418,7 +412,6 @@ void HttpApiServer::update(const ApiStatus& status
     xSemaphoreGive(_mutex); \
     return v;
 
-bool HttpApiServer::consumeEStopRequest()   { CONSUME(_estopPending)   }
 bool HttpApiServer::consumeHomeRequest()    { CONSUME(_homePending)    }
 bool HttpApiServer::consumeClearCalRequest(){ CONSUME(_clearCalPending)}
 
@@ -439,13 +432,6 @@ bool HttpApiServer::consumeSetStopRequest(int& outIndex) {
 }
 
 
-bool HttpApiServer::consumeSetNumGatesRequest(int& outN) {
-    xSemaphoreTake(_mutex, portMAX_DELAY);
-    bool v = _setNumGatesPending;
-    if (v) { outN = _newNumGates; _setNumGatesPending = false; }
-    xSemaphoreGive(_mutex);
-    return v;
-}
 
 bool HttpApiServer::consumeCalibrateRequest(char* outModel, size_t modelLen, int& outGateCount) {
     xSemaphoreTake(_mutex, portMAX_DELAY);
@@ -455,13 +441,6 @@ bool HttpApiServer::consumeCalibrateRequest(char* outModel, size_t modelLen, int
     return v;
 }
 
-bool HttpApiServer::consumePortRoleRequest(int& outIndex, int& outRole) {
-    xSemaphoreTake(_mutex, portMAX_DELAY);
-    bool v = _portRolePending;
-    if (v) { outIndex = _portRoleIndex; outRole = _portRoleValue; _portRolePending = false; }
-    xSemaphoreGive(_mutex);
-    return v;
-}
 
 bool HttpApiServer::consumeOrientationRequest(bool& outHomedLeft) {
     xSemaphoreTake(_mutex, portMAX_DELAY);
@@ -679,30 +658,8 @@ bool HttpApiServer::consumeJogRequest(float& outMM) {
 }
 
 #ifdef CONTROL_SMART_OUTLET
-bool HttpApiServer::consumeOutletConfigRequest(OutletConfigCmd& out) {
-    xSemaphoreTake(_mutex, portMAX_DELAY);
-    bool v = _outletConfigPending;
-    if (v) { out = _outletConfigCmd; _outletConfigPending = false; }
-    xSemaphoreGive(_mutex);
-    return v;
-}
-bool HttpApiServer::consumeOutletDeleteRequest(int& outSlot) {
-    xSemaphoreTake(_mutex, portMAX_DELAY);
-    bool v = _outletDeletePending;
-    if (v) { outSlot = _outletDeleteSlot; _outletDeletePending = false; }
-    xSemaphoreGive(_mutex);
-    return v;
-}
 bool HttpApiServer::consumeOutletSaveRequest() { CONSUME(_outletSavePending) }
 
-bool HttpApiServer::consumeDustCollectorConfigRequest(DustCollectorCmd& out) {
-    xSemaphoreTake(_mutex, portMAX_DELAY);
-    bool v = _dcConfigPending;
-    if (v) { out = _dcConfigCmd; _dcConfigPending = false; }
-    xSemaphoreGive(_mutex);
-    return v;
-}
-bool HttpApiServer::consumeDustCollectorDeleteRequest() { CONSUME(_dcDeletePending) }
 bool HttpApiServer::consumeDustCollectorSwitchRequest(bool& outOn) {
     xSemaphoreTake(_mutex, portMAX_DELAY);
     bool v = _dcSwitchPending;
@@ -923,37 +880,6 @@ void HttpApiServer::registerRoutes() {
     );
 
     // ------------------------------------------------------------------
-    // POST /api/config/gates   body: {"numGates": N}
-    // Sets the runtime active gate count (1–NUM_STOPS).
-    // Persists to NVS and takes effect immediately.
-    // ------------------------------------------------------------------
-    _server.on("/api/config/gates", HTTP_POST,
-        [](AsyncWebServerRequest* req) {},
-        nullptr,
-        [this](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t, size_t) {
-            if (!checkAuth(req)) return;
-            StaticJsonDocument<64> doc;
-            if (deserializeJson(doc, data, len)) { sendError(req, 400, "invalid JSON"); return; }
-            int n = doc["numGates"] | -1;
-            if (n < 1 || n > NUM_STOPS) {
-                sendError(req, 400, ("numGates out of range (1-" + String(NUM_STOPS) + ")").c_str());
-                return;
-            }
-            xSemaphoreTake(_mutex, portMAX_DELAY);
-            _cachedNumActiveStops = n;
-            _setNumGatesPending   = true;
-            _newNumGates          = n;
-            xSemaphoreGive(_mutex);
-            Preferences prefs;
-            prefs.begin(NVS_NS, false);
-            prefs.putInt("num_gates", n);
-            prefs.end();
-            DEBUG_PRINT(F("[API] Active gates: ")); Serial.println(n);
-            sendOk(req);
-        }
-    );
-
-    // ------------------------------------------------------------------
     // POST /api/calibrate   body: {"model": "rockler-2.5", "gateCount": N}
     // Runs the dual-endstop reference sweep on the main loop (see the consume
     // handler in firmware.ino) — measures the span, derives steps/mm, and
@@ -985,68 +911,6 @@ void HttpApiServer::registerRoutes() {
             xSemaphoreGive(_mutex);
             DEBUG_PRINT(F("[API] Calibrate: ")); DEBUG_PRINT(model);
             DEBUG_PRINT(F(" x")); DEBUG_PRINTLN(n);
-            sendOk(req);
-        }
-    );
-
-    // ------------------------------------------------------------------
-    // POST /api/config/port-role   body: {"index": N, "role": "blocked"}
-    // Sets a gate's role (tool|unassigned|blocked|feed). Persisted to
-    // CalibrationData by the main loop; blocked ports are never move targets.
-    // ------------------------------------------------------------------
-    _server.on("/api/config/port-role", HTTP_POST,
-        [](AsyncWebServerRequest* req) {},
-        nullptr,
-        [this](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t, size_t) {
-            if (!checkAuth(req)) return;
-            StaticJsonDocument<96> doc;
-            if (deserializeJson(doc, data, len)) { sendError(req, 400, "invalid JSON"); return; }
-            int idx = doc["index"] | -1;
-            if (idx < 1 || idx > NUM_STOPS) { sendError(req, 400, "index out of range"); return; }
-            const char* r = doc["role"] | "";
-            int role;
-            if      (strcmp(r, "tool") == 0)       role = ROLE_TOOL;
-            else if (strcmp(r, "unassigned") == 0) role = ROLE_UNASSIGNED;
-            else if (strcmp(r, "blocked") == 0)    role = ROLE_BLOCKED;
-            else if (strcmp(r, "feed") == 0)       role = ROLE_FEED;
-            else { sendError(req, 400, "invalid role"); return; }
-            xSemaphoreTake(_mutex, portMAX_DELAY);
-            _portRoleIndex   = idx;
-            _portRoleValue   = role;
-            _portRolePending = true;
-            xSemaphoreGive(_mutex);
-            DEBUG_PRINT(F("[API] Port role: gate ")); DEBUG_PRINT(idx);
-            DEBUG_PRINT(F(" -> ")); DEBUG_PRINTLN(r);
-            sendOk(req);
-        }
-    );
-
-    // ------------------------------------------------------------------
-    // POST /api/config/idle-timeout   body: {"seconds": N}
-    // Seconds of no move/home activity before the driver is powered off
-    // (0 = never sleep). Persists to NVS; the main loop polls idleTimeoutSec()
-    // directly each iteration, so this takes effect immediately with no
-    // pending-command plumbing needed.
-    // ------------------------------------------------------------------
-    _server.on("/api/config/idle-timeout", HTTP_POST,
-        [](AsyncWebServerRequest* req) {},
-        nullptr,
-        [this](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t, size_t) {
-            if (!checkAuth(req)) return;
-            StaticJsonDocument<64> doc;
-            if (deserializeJson(doc, data, len)) { sendError(req, 400, "invalid JSON"); return; }
-            if (!doc.containsKey("seconds")) { sendError(req, 400, "missing seconds"); return; }
-            int sec = doc["seconds"] | -1;
-            if (sec < 0 || sec > 86400) { sendError(req, 400, "seconds out of range (0-86400)"); return; }
-
-            _idleTimeoutSec = sec;
-            Preferences prefs;
-            prefs.begin(NVS_NS, false);
-            prefs.putInt("idle_to", sec);
-            prefs.end();
-            DEBUG_PRINT(F("[API] Idle timeout: "));
-            if (sec == 0) DEBUG_PRINTLN(F("disabled"));
-            else { Serial.print(sec); DEBUG_PRINTLN(F("s")); }
             sendOk(req);
         }
     );
@@ -1634,16 +1498,6 @@ void HttpApiServer::registerRoutes() {
         sendOk(req);
     });
 
-    // POST /api/estop
-    _server.on("/api/estop", HTTP_POST, [this](AsyncWebServerRequest* req) {
-        if (!checkAuth(req)) return;
-        DEBUG_PRINTLN(F("[UI] E-STOP requested."));
-        xSemaphoreTake(_mutex, portMAX_DELAY);
-        _estopPending = true;
-        xSemaphoreGive(_mutex);
-        sendOk(req);
-    });
-
     // POST /api/clearcal
     // Erases calibration EEPROM and resets the runtime gate count so the
     // device returns to an unconfigured state (setup wizard can restart).
@@ -2125,96 +1979,6 @@ void HttpApiServer::registerRoutes() {
         DEBUG_PRINTLN(F("[UI] Save all outlet config to NVS."));
         xSemaphoreTake(_mutex, portMAX_DELAY);
         _outletSavePending = true;
-        xSemaphoreGive(_mutex);
-        sendOk(req);
-    });
-
-    // PUT /api/outlets/:slot   body: {"gen":1,"ip":"...","name":"...","stop":2,"threshold":5.0}
-    _server.on("/api/outlets", HTTP_PUT,
-        [](AsyncWebServerRequest* req) {},
-        nullptr,
-        [this](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t, size_t) {
-            if (!checkAuth(req)) return;
-            // Extract slot from URL: /api/outlets/0
-            String url = req->url();
-            int slot = url.substring(url.lastIndexOf('/') + 1).toInt();
-            if (slot < 0 || slot >= SMART_OUTLET_COUNT) { sendError(req, 400, "slot out of range"); return; }
-
-            StaticJsonDocument<320> doc;
-            if (deserializeJson(doc, data, len)) { sendError(req, 400, "invalid JSON"); return; }
-
-            OutletConfigCmd cmd;
-            cmd.slot       = slot;
-            cmd.generation = doc["gen"]       | 1;
-            // Absent means Shelly — see outletKindFromName().
-            cmd.kind       = outletKindFromName(doc["kind"] | "shelly");
-            cmd.stopIndex  = doc["stop"]      | 0;
-            cmd.thresholdW = doc["threshold"] | OUTLET_DEFAULT_THRESHOLD_W;
-            strlcpy(cmd.ip,   doc["ip"]   | "",  sizeof(cmd.ip));
-            strlcpy(cmd.host, doc["host"] | "",  sizeof(cmd.host));
-            strlcpy(cmd.name, doc["name"] | "",  sizeof(cmd.name));
-
-            // ip is optional: an empty ip is a name-only gate (no smart plug —
-            // labelled, but not power-polled). name is always required.
-            if (strlen(cmd.name) == 0) { sendError(req, 400, "missing 'name'"); return; }
-            if (cmd.stopIndex <= 0)    { sendError(req, 400, "missing 'stop'"); return; }
-
-            DEBUG_PRINT(F("[UI] Configure outlet slot ")); DEBUG_PRINT(slot);
-            DEBUG_PRINT(F(": ")); DEBUG_PRINT(cmd.name);
-            DEBUG_PRINT(F(" -> stop ")); DEBUG_PRINTLN(cmd.stopIndex);
-            xSemaphoreTake(_mutex, portMAX_DELAY);
-            _outletConfigPending = true;
-            _outletConfigCmd     = cmd;
-            xSemaphoreGive(_mutex);
-            sendOk(req);
-        }
-    );
-
-    // DELETE /api/outlets/:slot
-    _server.on("/api/outlets", HTTP_DELETE, [this](AsyncWebServerRequest* req) {
-        if (!checkAuth(req)) return;
-        String url = req->url();
-        int slot = url.substring(url.lastIndexOf('/') + 1).toInt();
-        if (slot < 0 || slot >= SMART_OUTLET_COUNT) { sendError(req, 400, "slot out of range"); return; }
-        DEBUG_PRINT(F("[UI] Delete outlet slot: ")); DEBUG_PRINTLN(slot);
-        xSemaphoreTake(_mutex, portMAX_DELAY);
-        _outletDeletePending = true; _outletDeleteSlot = slot;
-        xSemaphoreGive(_mutex);
-        sendOk(req);
-    });
-
-    // PUT /api/dustcollector   body: {"gen":2,"ip":"192.168.1.x"}
-    // Assigns the switchable Shelly plug that powers the dust collector.
-    _server.on("/api/dustcollector", HTTP_PUT,
-        [](AsyncWebServerRequest* req) {},
-        nullptr,
-        [this](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t, size_t) {
-            if (!checkAuth(req)) return;
-
-            StaticJsonDocument<192> doc;
-            if (deserializeJson(doc, data, len)) { sendError(req, 400, "invalid JSON"); return; }
-
-            DustCollectorCmd cmd;
-            cmd.generation = doc["gen"] | 2;
-            strlcpy(cmd.ip,   doc["ip"]   | "", sizeof(cmd.ip));
-            strlcpy(cmd.host, doc["host"] | "", sizeof(cmd.host));
-            if (strlen(cmd.ip) == 0) { sendError(req, 400, "missing 'ip'"); return; }
-
-            DEBUG_PRINT(F("[UI] Configure dust collector: ")); DEBUG_PRINTLN(cmd.ip);
-            xSemaphoreTake(_mutex, portMAX_DELAY);
-            _dcConfigPending = true;
-            _dcConfigCmd     = cmd;
-            xSemaphoreGive(_mutex);
-            sendOk(req);
-        }
-    );
-
-    // DELETE /api/dustcollector — unassign the dust collector plug
-    _server.on("/api/dustcollector", HTTP_DELETE, [this](AsyncWebServerRequest* req) {
-        if (!checkAuth(req)) return;
-        DEBUG_PRINTLN(F("[UI] Remove dust collector."));
-        xSemaphoreTake(_mutex, portMAX_DELAY);
-        _dcDeletePending = true;
         xSemaphoreGive(_mutex);
         sendOk(req);
     });

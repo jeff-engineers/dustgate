@@ -82,10 +82,9 @@ import { ApiService, DiscoveredOutlet } from '../services/api.service';
       </button>
     </div>
     <ng-template #none>
-      <div class="empty">
-        {{ scanning
-           ? 'Scanning…'
-           : 'No outlets announced themselves. Check it\\'s powered and on this WiFi — or add it by address below.' }}
+      <!-- Says nothing while a scan runs: the button below already reads "Scanning…", and both rendering together was the bug. -->
+      <div class="empty" *ngIf="!scanning">
+        No outlets announced themselves. Check it's powered and on this WiFi — or add it by address below.
       </div>
     </ng-template>
 

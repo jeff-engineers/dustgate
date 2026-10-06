@@ -88,7 +88,6 @@ public:
     // Pending command consumers — call these from the main loop in order
     // of priority. Each returns true once, then clears the flag.
     // ------------------------------------------------------------------
-    bool consumeEStopRequest();
     bool consumeHomeRequest();
     bool consumeMoveRequest(int& outStop);      // outStop: 0 = home, 1-N = gate
     bool consumeJogRequest(float& outMM);      // outMM: + = away from home
@@ -98,16 +97,9 @@ public:
     bool consumeSetStopRequest(int& outIndex); // outIndex: 1-N
 
 
-    // Active gate count (runtime; bounded by compile-time NUM_STOPS).
-    // Written to NVS by the handler; consumed by main loop to update g_numActiveStops.
-    bool consumeSetNumGatesRequest(int& outN);
-
     // Reference-sweep calibration request (POST /api/calibrate). The main loop
     // runs the sweep + placement and persists to CalibrationData.
     bool consumeCalibrateRequest(char* outModel, size_t modelLen, int& outGateCount);
-
-    // Port-role change (POST /api/config/port-role). outRole is a PortRole value.
-    bool consumePortRoleRequest(int& outIndex, int& outRole);
 
     // Servo jog (POST /api/servo/jog). Setup-only: the gate configurator drives a
     // servo directly so the user can watch the valve and capture where it lands. One
@@ -182,7 +174,6 @@ public:
     // ------------------------------------------------------------------
     using NodeEventHook = bool (*)(AsyncWebSocketClient*, AwsEventType, void*, uint8_t*, size_t);
     void setNodeEventHook(NodeEventHook h) { _nodeHook = h; }
-    AsyncWebSocket* nodeSocket() { return &_nodeWs; }
 
     // ------------------------------------------------------------------
     // Node discovery + link state (the primary side of Stage 4)
@@ -224,31 +215,8 @@ public:
     int idleTimeoutSec() const { return _idleTimeoutSec; }
 
 #ifdef CONTROL_SMART_OUTLET
-    // Outlet configuration commands — consumed by main loop, forwarded to
-    // SmartOutletControl.
-    struct OutletConfigCmd {
-        int   slot;
-        OutletKind kind;          // which protocol — absent in the body means Shelly
-        int   generation;
-        char  ip[16];
-        char  host[40];   // mDNS hostname, if known — empty for manual IP entry
-        char  name[32];
-        int   stopIndex;
-        float thresholdW;
-    };
-    bool consumeOutletConfigRequest(OutletConfigCmd& out);
-    bool consumeOutletDeleteRequest(int& outSlot);
     bool consumeOutletSaveRequest();
 
-    // Dust collector plug config — consumed by main loop, forwarded to
-    // SmartOutletControl.configureDustCollector() / removeDustCollector().
-    struct DustCollectorCmd {
-        int  generation;
-        char ip[16];
-        char host[40];   // mDNS hostname, if known — empty for manual IP entry
-    };
-    bool consumeDustCollectorConfigRequest(DustCollectorCmd& out);
-    bool consumeDustCollectorDeleteRequest();
     // Manual dashboard on/off. outOn = requested state.
     bool consumeDustCollectorSwitchRequest(bool& outOn);
 
@@ -369,15 +337,12 @@ private:
     volatile bool     _statusPushForced = false;
 
     // Pending commands (written by request handlers, read by main loop)
-    bool  _estopPending;
     bool  _homePending;
     bool  _movePending;    int   _moveStop;
     bool  _jogPending;     float _jogMM;
     bool  _clearCalPending;
     bool  _setStopPending;         int  _setStopIndex;
-    bool  _setNumGatesPending;     int  _newNumGates;
     bool  _calibratePending;       char _calModel[16];  int _calGateCount;
-    bool  _portRolePending;        int  _portRoleIndex; int _portRoleValue;
     bool  _orientationPending;     bool _orientationValue;    // POST /api/config/orientation {homedLeft}
     bool  _servoJogPending;        int  _servoJogChannel; int _servoJogAngle; bool _servoJogDetach;
     String _servoJogController;    // "" = this board; else a secondary's controllerId
@@ -469,13 +434,7 @@ private:
     bool                   _nodePairTakeover = false;
 
 #ifdef CONTROL_SMART_OUTLET
-    bool            _outletConfigPending;
-    OutletConfigCmd _outletConfigCmd;
-    bool            _outletDeletePending;  int _outletDeleteSlot;
     bool            _outletSavePending;
-    bool            _dcConfigPending;
-    DustCollectorCmd _dcConfigCmd;
-    bool            _dcDeletePending;
     bool            _dcSwitchPending;  bool _dcSwitchOn;
     bool            _discoverPending;
     Deferred        _discoverReply;

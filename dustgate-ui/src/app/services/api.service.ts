@@ -57,17 +57,6 @@ export interface SystemStatus {
   outlets: OutletStatus[];
 }
 
-export interface OutletConfigCmd {
-  slot: number;
-  generation: number;     // 1 or 2
-  ip: string;
-  /** mDNS hostname (no ".local"), if this outlet was picked from a scan rather than typed in. Lets the device re-resolve its IP after a DHCP change. */
-  host?: string;
-  name: string;
-  stop: number;
-  threshold_w?: number;
-}
-
 // PingResult is GONE (2026-09-09). /api/outlets/ping now answers with a full
 // DiscoveredOutlet row — same probe, same ownership check, same shape as a
 // scanned hit — because a plug added by hand must be indistinguishable from one
@@ -447,33 +436,13 @@ export class ApiService {
     );
   }
 
-  /** Motion-hardware view: stepper state, position, endstops, outlet readings. */
-  getMotionStatus(): Promise<SystemStatus> {
-    return firstValueFrom(
-      this.http.get<SystemStatus>(`${this.baseUrl}/api/motion`, { headers: this.headers() })
-    );
-  }
-
   // ── Motion commands ───────────────────────────────────────────────────────────
 
   home()                    { return this.post('/api/home'); }
   moveToStop(stop: number)  { return this.post('/api/move', { stop }); }
   jog(mm: number)           { return this.post('/api/jog', { mm }); }
-  estop()                   { return this.post('/api/estop'); }
-  clearCal()                { return this.post('/api/clearcal'); }
 
   // ── Outlet commands ───────────────────────────────────────────────────────────
-
-  configureOutlet(cmd: OutletConfigCmd) {
-    return this.put(`/api/outlets/${cmd.slot}`, {
-      gen:       cmd.generation,
-      ip:        cmd.ip,
-      host:      cmd.host ?? '',
-      name:      cmd.name,
-      stop:      cmd.stop,
-      threshold: cmd.threshold_w ?? 5.0
-    });
-  }
 
   /** Pings a Shelly outlet — the device speaks the Shelly Gen2+ local API (Gen1 is not supported). */
   /**
@@ -645,21 +614,6 @@ export class ApiService {
     catch { return { ok: false, released: false, error: 'the device could not be reached' }; }
   }
 
-  saveOutletConfig() { return this.post('/api/outlets/save'); }
-
-  deleteOutlet(slot: number) { return this.delete(`/api/outlets/${slot}`); }
-
-  /** Manually switch the dust collector on/off (holds until the next auto event). */
-  setDustCollector(on: boolean) { return this.post('/api/dustcollector/switch', { on }); }
-
-  /** Assign a Shelly outlet as the dust collector's switchable plug. */
-  configureDustCollector(generation: number, ip: string, host: string = '') {
-    return this.put('/api/dustcollector', { gen: generation, ip, host });
-  }
-
-  /** Unassign the dust collector's plug. */
-  deleteDustCollector() { return this.delete('/api/dustcollector'); }
-
   /**
    * Save current motor position as a numbered stop.
    * Call while the motor is stationary at the desired gate position.
@@ -728,26 +682,12 @@ export class ApiService {
 
 
   /**
-   * Set the number of active blast gates.
-   * Updates /api/info and the visualizer gate count without recompiling.
-   */
-  setNumGates(n: number) {
-    if (this.deviceInfo) this.deviceInfo.numStops = n;
-    return this.post('/api/config/gates', { numGates: n });
-  }
-
-  /**
    * Run the dual-endstop reference sweep: auto-direction, home, sweep to the far
    * endstop, calibrate steps/mm, and (for a known manifold) auto-place every gate.
    * `model` is a manifold profile id ('rockler-2.5' | 'rockler-4' | 'custom').
    */
   calibrate(model: string, gateCount: number) {
     return this.post('/api/calibrate', { model, gateCount });
-  }
-
-  /** Set a port's role: 'tool' | 'unassigned' | 'blocked' | 'feed'. */
-  setPortRole(index: number, role: string) {
-    return this.post('/api/config/port-role', { index, role });
   }
 
   // ── topology API (additive; DemoApiService overrides these in-process) ──
@@ -932,11 +872,6 @@ export class ApiService {
     if (res && typeof res.error === 'string') throw new JogRefusedError(res.error);
     return res;
   }
-  /** De-energize a servo — the valve holds by friction/detent. */
-  async detachServo(channel: number, controllerId?: string): Promise<unknown> {
-    return this.checkJog(await this.post<{ ok?: boolean; error?: string }>(
-      '/api/servo/jog', { channel, detach: true, ...(controllerId ? { controllerId } : {}) }));
-  }
 
   /**
    * Reset calibration and gate count — returns the device to unconfigured state
@@ -948,15 +883,6 @@ export class ApiService {
   }
 
   /**
-   * Set how many seconds of no move/home activity before the driver powers
-   * off (0 = never). Waking it back up always requires a rehome.
-   */
-  setIdleTimeout(seconds: number) {
-    if (this.deviceInfo) this.deviceInfo.idleTimeoutSec = seconds;
-    return this.post('/api/config/idle-timeout', { seconds });
-  }
-
-  /**
    * Erases stored WiFi credentials and reboots the device into its captive
    * setup portal. The device disappears from the network almost immediately,
    * so callers should assume the response may not arrive.
@@ -965,20 +891,4 @@ export class ApiService {
     return this.post('/api/wifi/reset', {});
   }
 
-  /**
-   * Re-fetch /api/info and update deviceInfo in place.
-   * Call after any operation that changes the device's configuration state
-   * (e.g. start-over) so the visualizer reflects reality immediately.
-   */
-  async refreshInfo(): Promise<void> {
-    try {
-      const info = await firstValueFrom(
-        this.http.get<DeviceInfo>(`${this.baseUrl}/api/info`)
-      );
-      this.apiKey    = info.apiKey;
-      this.deviceInfo = info;
-    } catch {
-      // Non-fatal — optimistic update from resetSetup() already set numStops = 0
-    }
-  }
 }
