@@ -1,7 +1,7 @@
 import { Component } from '@angular/core';
 import { NgIf } from '@angular/common';
 import { RouterOutlet } from '@angular/router';
-import { BUILD_TIME_MS } from '../build-info';
+import { BUILD_TIME_MS, MODEL_HASH } from '../build-info';
 import { ApiService } from './services/api.service';
 import { IS_DEMO } from './services/demo-mode';
 import { formatBuildStamp, formatEpochStamp } from './build-stamp';
@@ -129,7 +129,7 @@ function buildToken(): string {
     <router-outlet />
     <div class="build-stamp">
       <span>build {{ build }}</span>
-      <span *ngIf="app">· app {{ app }}</span>
+      <span *ngIf="app" [title]="'model ' + modelHash">· app {{ app }}</span>
       <span *ngIf="device">· device {{ device }}</span>
     </div>
   `
@@ -145,6 +145,9 @@ export class AppComponent {
    *  gen-build-info.js. Answers "is the ng build I just made the one I'm looking
    *  at", which the hash token identifies but cannot date. */
   readonly app = formatEpochStamp(BUILD_TIME_MS);
+
+  /** Which shared/device-model this bundle was built from (tools/check-ui-fresh.js compares it to the one on disk). */
+  readonly modelHash = MODEL_HASH;
 
   /** When the DEVICE's firmware was compiled, exactly as the OLED shows it.
    *
