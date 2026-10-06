@@ -57,6 +57,16 @@ namespace topo {
 // the grace rather than one straddling it.
 static const uint32_t kPressCooldownMs = kCollectorSpinupGraceMs + 1000;
 
+// AFTER AN OFF PRESS THE WAIT IS LONGER, because a plug's POWER reading is slow to fall. Bench 2026-10-06, a Tasmota on a ~35 W
+// fan: the plug's own current dropped to idle within two seconds of the fan stopping, but its power reading held the old
+// value for 13 s before reaching zero (an energy chip that counts pulses reports nothing until a pulse timeout expires,
+// and pulses are seconds apart at low power). A retry inside that window "saw running", pressed again and turned the fan
+// back ON, and the third press turned it off again: three OFF presses, three toggles, and the verdict landed on luck. ON
+// is not slow (power read 1.1 s after the press, "running" at 1.6 s), so ON keeps the short wait. A real blower draws
+// hundreds of watts and pulses fast, so this mostly protects small loads — but it costs nothing real: a failed OFF is
+// reported a little later.
+static const uint32_t kPressCooldownOffMs = 20000;
+
 static_assert(kPressCooldownMs > kCollectorSpinupGraceMs,
               "A press inside the spin-up grace turns a starting blower OFF, and "
               "the system then oscillates. See CollectorPress.h.");
@@ -149,7 +159,7 @@ inline PressAction nextPressAction(const PressState& st, bool want,
 
     // Inside the cooldown, the previous press has not had time to show its
     // result. Judging now is exactly the oscillation the cooldown prevents.
-    if (st.everPressed && (nowMs - st.lastPressMs) < kPressCooldownMs)
+    if (st.everPressed && (nowMs - st.lastPressMs) < (st.wanted ? kPressCooldownMs : kPressCooldownOffMs))
         return PressAction::Nothing;
 
     const bool agrees = want ? (observed == PlugState::Running)

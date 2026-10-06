@@ -94,8 +94,8 @@ int main() {
     uint32_t t = 100000;
     ok("a blower still drawing after we want it OFF is pressed", driveCollectorPress(*rt, sys, p, ps, false, t, h) && p.presses == 1);
     ok("...saying OFF, and that it saw it running", h.saw("wanting OFF (saw running"));
-    for (int i = 0; i < 2; i++) { t += kPressCooldownMs + 10; driveCollectorPress(*rt, sys, p, ps, false, t, h); }
-    t += kPressCooldownMs + 10;
+    for (int i = 0; i < 2; i++) { t += kPressCooldownOffMs + 10; driveCollectorPress(*rt, sys, p, ps, false, t, h); }
+    t += kPressCooldownOffMs + 10;
     ok("three presses and no more", !driveCollectorPress(*rt, sys, p, ps, false, t, h) && p.presses == 3);
     ok("...and it is reported, not retried forever", rt->hasProblem("rf-gave-up:" + sys));
   }

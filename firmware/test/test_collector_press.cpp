@@ -50,6 +50,7 @@ int main() {
         // A press inside the grace turns a starting blower OFF. The
         // static_assert in the header catches this at compile time; this catches
         // anyone who deletes the static_assert.
+        ok("an off press waits longer than an on press (a plug's power reading falls slowly)", kPressCooldownOffMs > COOL);
         ok("the cooldown outlasts the spin-up grace", COOL > GRACE,
            std::to_string(COOL) + " vs " + std::to_string(GRACE));
         ok("three presses in total, so two retries",
@@ -193,8 +194,10 @@ int main() {
         ok("...so wanting it off while it still runs presses", nextPressAction(st, false, PlugState::Running, t) == PressAction::Press);
         notePress(st, false, t);
         ok("an OFF press alone does not: it must still be pressed again if the draw says it did not stop", st.weStarted);
-        t += COOL;
-        ok("...so it IS pressed again", nextPressAction(st, false, PlugState::Running, t) == PressAction::Press);
+        ok("...but not inside the plug's slow power reading (it re-toggles the blower)",
+           nextPressAction(st, false, PlugState::Running, t + kPressCooldownOffMs - 1) == PressAction::Nothing);
+        t += kPressCooldownOffMs;
+        ok("...so it IS pressed again, after the longer off wait", nextPressAction(st, false, PlugState::Running, t) == PressAction::Press);
         noteSettled(st);
         ok("seeing it off hands it back", !st.weStarted);
         // After our OFF, a person starts it by hand: left alone again.
