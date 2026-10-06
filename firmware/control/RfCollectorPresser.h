@@ -53,16 +53,17 @@
 #pragma once
 #include <Arduino.h>
 #include "CollectorPress.h"
+#include "RfDefaults.h"   // the measured numbers, shared with RemoteRfPresser
 
 class RfCollectorPresser : public topo::CollectorPresser {
 public:
     // Measured against the Rockler receiver; see the header. Defaults are that
     // remote's values, and every one of them is overridable because a different
     // fob is a different address and possibly a different data rule.
-    static const uint8_t  kRocklerAddress = 0b01011110;
-    static const uint8_t  kRocklerData    = 0b1110;
-    static const uint32_t kDefaultTickUs  = 270;
-    static const uint16_t kDefaultRepeats = 24;
+    static const uint8_t  kRocklerAddress = topo::rf::kRocklerAddress;
+    static const uint8_t  kRocklerData    = topo::rf::kRocklerData;
+    static const uint32_t kDefaultTickUs  = topo::rf::kDefaultTickUs;
+    static const uint16_t kDefaultRepeats = topo::rf::kDefaultRepeats;
 
     RfCollectorPresser(int pin,
                        uint8_t  address = kRocklerAddress,
@@ -74,6 +75,14 @@ public:
           _tickUs(tickUs), _repeats(repeats), _inv(inverted) {}
 
     const char* kind() const override { return "rf"; }
+
+    // Change what the next press sends, keeping the RMT channel it already owns. A node
+    // gets the address and timing in every PRESS frame and keeps ONE presser for its
+    // pad's lifetime: rmtInit() on a pin that is already initialised is not something to
+    // rely on, so it must not be made again for each press.
+    void configure(uint8_t address, uint8_t data, uint32_t tickUs, uint16_t repeats) {
+        _addr = address; _data = data; _tickUs = tickUs; _repeats = repeats;
+    }
 
     // BENCH ONLY — press with a one-off repeat count, leaving the configured
     // default untouched. Added 2026-09-13 to sweep the repeat window after a

@@ -258,3 +258,57 @@ node shared/device-model/nodelink-conformance.js ws://dustgate-node.local/nodeli
 Pass: the suite is green AND servos physically move. Green with nothing moving
 means the link works and the actuator doesn't — exactly the split this test
 exists to make visible.
+
+## Moved from TODO 2026-10-05
+
+- **loop() is still one enormous function — LANDED 2026-09-14, keep watching.**
+  A stack protection fault on a collector board at boot, 2026-09-12:
+  `SP 0x4085d060` against bounds `0x4085d068`, canary `0xabba1234` on the
+  pointer, a half-built status JSON in the stack dump.
+
+  The mechanism is worth keeping even though this is fixed, because it will
+  recur: **loop() is a single function, so every `StaticJsonDocument` declared
+  anywhere inside it reserves space in the SAME frame whether or not that branch
+  runs.**
+
+  Done: `SET_LOOP_TASK_STACK_SIZE(16 * 1024)` (was 8 KB), `sweepProbeOne()`, and
+  then ping, rename and release pulled out into their own functions — a `<512>`
+  and two `<256>`s that had been resident on every pass to serve requests that
+  arrive a handful of times in a shop's life. **loop() now declares no
+  StaticJsonDocument at all**; the four remaining documents in it are
+  `DynamicJsonDocument`, which are heap.
+
+  Also done, and the part that matters from here: the boot banner prints
+  `uxTaskGetStackHighWaterMark()`. **Baseline measured on hardware 2026-09-14:
+  13644 bytes free of 16384**, on a primary with a screen. A number that shrinks
+  release over release is the warning nobody used to get — that is the whole
+  reason it is printed, so compare it rather than glancing at it.
+
+  What is NOT done: loop() is still ~1800 lines and will keep growing, and
+  nothing enforces any of this. The next thing to extract when it bites is
+  whatever has grown a document since.
+
+- **~~Re-measure the CT on the rebuilt divider~~ DONE 2026-09-16.** Scale held
+  (+1.50% vs the Tasmota, against +0.94% before), the screen's contribution fell
+  from ~80% of the floor to 11%, and the floor underneath is the C5 ADC's own
+  noise — shorting the CT out does not move it. **§5.5 is closed** (§5.5b), and
+  the `Hz` column was found to report a fraction of the sample rate when fed
+  noise, which wasted an hour. `ct-bench.md`'s parts table is no longer stale.
+
+  What is left is optional and deliberately unbuilt: a 60 Hz demodulator would
+  take the floor down 10-20x, and nothing needs it while a running collector
+  sits 63x above it.
+
+- **`POST /api/dustcollector/switch` is dead under a shop.** It drives collector
+  slot 0 directly (`SmartOutletControl::setDcManual`), and with a topology loaded
+  the main loop re-asserts every slot from `g_topoRuntime.collectorOn(systemId)`
+  on every pass — so the switch is undone microseconds after it lands. It reports
+  success the whole time, which is the worst way for an endpoint to be broken.
+  `POST /api/collector {systemId?, on}` replaced it (D-59) and goes through the
+  routing runtime, where the decision survives. Deleting the old route is
+  phase-1 cleanup: the route, `_dcSwitchPending`/`consumeDustCollectorSwitchRequest`,
+  its consumer in `firmware.ino`, and `ApiService.setDustCollector()` +
+  `DemoApiService`'s override. `setDcManual`/`setCollectorManual` themselves STAY —
+  the runtime is what calls them.
+
+- **`/api/dustcollector/switch` on the ESP now goes through the routing runtime (2026-10-05)**, so it is no longer undone on the next loop pass; the native brain and `ApiCore` already did. The old slot-0 plumbing can still be deleted.

@@ -13,7 +13,13 @@
 
 #pragma once
 #include "../sensing/PowerSensor.h"
-#include <Arduino.h>
+#include "PlugClaim.h"   // the claim a plug reports about itself (pure)
+#include <cstdint>
+#include <string>
+#include "PlugHttp.h"   // strlcpy on a platform without it; plughttp for the drivers
+#ifdef ARDUINO
+#include <Arduino.h>     // the sketch relies on this arriving transitively
+#endif
 
 // WHICH PROTOCOL a plug speaks, and the thing dispatch happens on.
 //
@@ -136,6 +142,20 @@ public:
     // Configure the plug to push to us (Ws.SetConfig) and, optionally, set its
     // friendly name (Switch.SetConfig). Blocking HTTP — poll task only. Base
     // no-ops; ShellyGen2Outlet implements them.
+    // WHO OWNS THIS PLUG? Read the plug's own marker (a Shelly's push target, a Tasmota's Mem1)
+    // and decide — the ONE place that is written. It used to be spelled out three times, each
+    // branching Tasmota against Shelly: provisioning, the discovery probe and the rename.
+    //
+    // FALSE means "could not tell", and a caller must treat it as exactly that: a failed read is
+    // never permission (RFC §8). On true, `out` is the verdict and `pushUrl`, when given, holds
+    // the push target a Shelly is pointed at now ("" for a Tasmota, which has none) — what a
+    // takeover will hand back on unpair. Blocking HTTP: poll task / main loop only.
+    //
+    // `deviceName` is what the plug calls ITSELF (a Shelly's name, which carries our owner
+    // suffix); callers that already fetched it pass it, so it is not fetched twice.
+    virtual bool readClaim(const char* /*ourHost*/, const char* /*deviceName*/, const char* /*ourName*/,
+                           plugclaim::Claim& /*out*/, std::string* /*pushUrl*/ = nullptr) { return false; }
+
     virtual bool configureOutboundWs(const char* /*wsUrl*/) { return false; }
     virtual bool setName(const char* /*name*/)              { return false; }
 
@@ -150,7 +170,7 @@ public:
     // Read the plug's current push target (Ws.GetConfig) — the ownership
     // authority of RFC §8. Base returns false, meaning "don't know", which
     // callers must treat as "don't touch it".
-    virtual bool readPushConfig(String& /*outServer*/, bool& /*outEnabled*/,
+    virtual bool readPushConfig(std::string& /*outServer*/, bool& /*outEnabled*/,
                                 uint32_t /*timeoutMs*/ = 0) { return false; }   // 0 = the implementation's own default; a default
                                                                               // here is what callers through this type get, NOT the override's
 

@@ -3,11 +3,16 @@
 // =============================================================================
 
 #include "TasmotaOutlet.h"
+#ifdef ARDUINO
+#include "../config.h"   // where CONTROL_SMART_OUTLET is defined — the headers no longer drag it in
+#endif
 
-#if defined(CONTROL_SMART_OUTLET) || defined(DUSTGATE_NODE_PLUG_POLL)   // a node polls plugs for the primary
+#if defined(CONTROL_SMART_OUTLET) || defined(DUSTGATE_NODE_PLUG_POLL) || defined(DUSTGATE_NATIVE)   // a node polls plugs for the primary
 
-#include <HTTPClient.h>
+#include <cctype>
+#include <cstdio>
 #include <ArduinoJson.h>
+#include "PlugHttp.h"
 
 TasmotaOutlet::TasmotaOutlet(const char* ip, const char* name) {
     strlcpy(_ip,   ip,   sizeof(_ip));
@@ -56,20 +61,13 @@ bool TasmotaOutlet::doPoll(uint32_t timeoutMs) {
     char url[64];
     snprintf(url, sizeof(url), "http://%s/cm?cmnd=Status%%208", _ip);
 
-    HTTPClient http;
-    http.begin(url);
-    // CONNECT TIMEOUT TOO, and it is the one that matters here. setTimeout()
-    // bounds the socket READ; establishing the connection has its own budget,
-    // and without this it defaults to seconds. A sweep spends almost all its
-    // time on addresses with nothing at them, where connect is the entire cost
-    // — 10 addresses took 45s before this line existed, against a 250ms
-    // timeout that was doing nothing at all.
-    http.setConnectTimeout(timeoutMs);
-    http.setTimeout(timeoutMs);
-
-    int code = http.GET();
-    if (code != 200) {
-        http.end();
+    // CONNECT TIMEOUT TOO, and it is the one that matters here. The read timeout bounds the socket
+    // READ; establishing the connection has its own budget, and without this it defaults to seconds.
+    // A sweep spends almost all its time on addresses with nothing at them, where connect is the
+    // entire cost — 10 addresses took 45s before this was passed, against a 250ms timeout that was
+    // doing nothing at all.
+    const plughttp::Reply reply = plughttp::get(url, timeoutMs, timeoutMs);
+    if (reply.code != 200) {
         _reachable  = false;
         _lastPowerW = 0.0f;
         return false;
@@ -84,22 +82,18 @@ bool TasmotaOutlet::doPoll(uint32_t timeoutMs) {
     StaticJsonDocument<128> filter;
     filter["StatusSNS"]["ENERGY"]["Power"] = true;
 
-    // getString(), NOT getStream(). Tasmota answers `Transfer-Encoding: chunked`
-    // and getStream() hands back the raw socket WITH the chunk framing still in
-    // it — hex length lines and CRLFs — so ArduinoJson chokes on the first chunk
-    // header before it ever reaches the JSON. getString() decodes the framing.
+    // The WHOLE body, not a stream. Tasmota answers `Transfer-Encoding: chunked` and a raw stream
+    // hands back the chunk framing — hex length lines and CRLFs — so ArduinoJson chokes on the first
+    // chunk header before it ever reaches the JSON. plughttp::get() decodes the framing.
     //
-    // ShellyGen2Outlet streams the same way and is fine because a Shelly sends
-    // Content-Length. That difference cost a bench session: the parse failed on
-    // hardware while curl showed a perfectly good reply, because curl decodes
-    // chunking and getStream() does not.
+    // (Shelly used to stream and was fine because it sends Content-Length. That difference cost a
+    // bench session: the parse failed on hardware while curl showed a perfectly good reply, because
+    // curl decodes chunking and a raw stream does not.)
     //
     // Safe to buffer: Status 8 is a few hundred bytes. Do not copy this to an
     // endpoint that can answer with kilobytes.
     StaticJsonDocument<192> doc;
-    const String body = http.getString();
-    http.end();
-    DeserializationError err = deserializeJson(doc, body,
+    DeserializationError err = deserializeJson(doc, reply.body,
                                                DeserializationOption::Filter(filter));
 
     if (err) {
@@ -146,11 +140,10 @@ bool TasmotaOutlet::doPoll(uint32_t timeoutMs) {
         // says so again.
         if (!_warnedMultiChannel) {
             _warnedMultiChannel = true;
-            DEBUG_PRINT(F("[Outlets] Tasmota at ")); DEBUG_PRINT(_ip);
-            DEBUG_PRINTLN(F(" reports Power as an ARRAY — this is a multi-channel"));
-            DEBUG_PRINTLN(F("          meter (Athom EM2/EM6). DustGate cannot yet say WHICH"));
-            DEBUG_PRINTLN(F("          channel a tool is on, so it is refusing to guess."));
-            DEBUG_PRINTLN(F("          Treating it as unreachable rather than as 0 W."));
+            plughttp::log(std::string("[Outlets] Tasmota at ") + _ip + " reports Power as an ARRAY \xE2\x80\x94 this is a multi-channel");
+            plughttp::log("          meter (Athom EM2/EM6). DustGate cannot yet say WHICH");
+            plughttp::log("          channel a tool is on, so it is refusing to guess.");
+            plughttp::log("          Treating it as unreachable rather than as 0 W.");
         }
         _reachable  = false;
         _lastPowerW = 0.0f;
@@ -170,30 +163,19 @@ bool TasmotaOutlet::doPoll(uint32_t timeoutMs) {
 // with one. Both answer with the same shape: {"Mem1":"<value>"}.
 // -----------------------------------------------------------------------------
 
-bool TasmotaOutlet::readOwner(String& out, uint32_t timeoutMs) {
+bool TasmotaOutlet::readOwner(std::string& out, uint32_t timeoutMs) {
     if (_ip[0] == '\0') return false;
 
     char url[64];
     snprintf(url, sizeof(url), "http://%s/cm?cmnd=Mem1", _ip);
 
-    HTTPClient http;
-    http.begin(url);
-    // CONNECT TIMEOUT TOO, and it is the one that matters here. setTimeout()
-    // bounds the socket READ; establishing the connection has its own budget,
-    // and without this it defaults to seconds. A sweep spends almost all its
-    // time on addresses with nothing at them, where connect is the entire cost
-    // — 10 addresses took 45s before this line existed, against a 250ms
-    // timeout that was doing nothing at all.
-    http.setConnectTimeout(timeoutMs);
-    http.setTimeout(timeoutMs);
-    if (http.GET() != 200) { http.end(); return false; }
+    // The connect timeout too, for the reason given in doPoll().
+    const plughttp::Reply reply = plughttp::get(url, timeoutMs, timeoutMs);
+    if (reply.code != 200) return false;
 
-    // getString() for the same reason doPoll() uses it — Tasmota chunks its
-    // replies and getStream() would deliver the framing along with them.
+    // The whole decoded body, for the same reason doPoll() reads it so.
     StaticJsonDocument<128> doc;
-    const String body = http.getString();
-    http.end();
-    DeserializationError err = deserializeJson(doc, body);
+    DeserializationError err = deserializeJson(doc, reply.body);
     if (err) return false;
 
     // A plug that answers without a Mem1 key is not "unclaimed" — it is a plug
@@ -204,6 +186,15 @@ bool TasmotaOutlet::readOwner(String& out, uint32_t timeoutMs) {
 
     out = v.as<const char*>();
     return true;
+}
+
+// Fire-and-check one Tasmota command. Returns whether it answered 200; the body
+// is not parsed, because every one of these answers with the value it just set
+// and there is nothing to learn from reading it back that a 200 does not say.
+static bool sendCmd(const char* ip, const char* cmd) {
+    char url[96];
+    snprintf(url, sizeof(url), "http://%s/cm?cmnd=%s", ip, cmd);
+    return plughttp::get(url, OUTLET_RPC_WRITE_TIMEOUT_MS, OUTLET_RPC_WRITE_TIMEOUT_MS).code == 200;
 }
 
 bool TasmotaOutlet::writeOwner(const char* owner) {
@@ -223,37 +214,11 @@ bool TasmotaOutlet::writeOwner(const char* owner) {
         snprintf(url, sizeof(url), "http://%s/cm?cmnd=Mem1%%20%s", _ip, owner);
     }
 
-    HTTPClient http;
-    http.begin(url);
-    http.setConnectTimeout(OUTLET_RPC_WRITE_TIMEOUT_MS);
-    http.setTimeout(OUTLET_RPC_WRITE_TIMEOUT_MS);
-    const bool ok = (http.GET() == 200);
-    http.end();
+    const bool ok = plughttp::get(url, OUTLET_RPC_WRITE_TIMEOUT_MS, OUTLET_RPC_WRITE_TIMEOUT_MS).code == 200;
 
-    if (ok) {
-        DEBUG_PRINT(F("[Outlets] Tasmota Mem1 "));
-        DEBUG_PRINT(clearing ? "cleared" : owner);
-        DEBUG_PRINT(F(" on ")); DEBUG_PRINTLN(_ip);
-    }
+    if (ok) plughttp::log(std::string("[Outlets] Tasmota Mem1 ") + (clearing ? "cleared" : owner) + " on " + _ip);
     return ok;
 }
-
-// Fire-and-check one Tasmota command. Returns whether it answered 200; the body
-// is not parsed, because every one of these answers with the value it just set
-// and there is nothing to learn from reading it back that a 200 does not say.
-static bool sendCmd(const char* ip, const char* cmd) {
-    char url[96];
-    snprintf(url, sizeof(url), "http://%s/cm?cmnd=%s", ip, cmd);
-    HTTPClient http;
-    http.begin(url);
-    http.setConnectTimeout(OUTLET_RPC_WRITE_TIMEOUT_MS);
-    http.setTimeout(OUTLET_RPC_WRITE_TIMEOUT_MS);
-    const bool ok = (http.GET() == 200);
-    http.end();
-    return ok;
-}
-
-static bool sendCmd(const char* ip, const char* cmd);
 
 // Percent-encode a value for the /cm?cmnd= query string.
 //
@@ -290,29 +255,22 @@ bool TasmotaOutlet::setName(const char* name) {
     char cmd[160];
     snprintf(cmd, sizeof(cmd), "DeviceName%%20%s", enc);
     const bool ok = sendCmd(_ip, cmd);
-    DEBUG_PRINT(F("[Outlets] Tasmota DeviceName=")); DEBUG_PRINT(name);
-    DEBUG_PRINT(F(" @ ")); DEBUG_PRINT(_ip);
-    DEBUG_PRINT(F(" -> ")); DEBUG_PRINTLN(ok ? F("ok") : F("FAILED"));
+    plughttp::log(std::string("[Outlets] Tasmota DeviceName=") + name + " @ " + _ip + " -> " + (ok ? "ok" : "FAILED"));
     return ok;
 }
 
 // Read it back. Same query-with-no-argument shape as Mem1.
-bool TasmotaOutlet::readName(String& out, uint32_t timeoutMs) {
+bool TasmotaOutlet::readName(std::string& out, uint32_t timeoutMs) {
     if (_ip[0] == '\0') return false;
 
     char url[64];
     snprintf(url, sizeof(url), "http://%s/cm?cmnd=DeviceName", _ip);
 
-    HTTPClient http;
-    http.begin(url);
-    http.setConnectTimeout(timeoutMs);
-    http.setTimeout(timeoutMs);
-    if (http.GET() != 200) { http.end(); return false; }
+    const plughttp::Reply reply = plughttp::get(url, timeoutMs, timeoutMs);
+    if (reply.code != 200) return false;
 
     StaticJsonDocument<192> doc;
-    const String body = http.getString();
-    http.end();
-    if (deserializeJson(doc, body)) return false;
+    if (deserializeJson(doc, reply.body)) return false;
 
     JsonVariant v = doc["DeviceName"];
     if (v.isNull()) return false;
@@ -320,17 +278,14 @@ bool TasmotaOutlet::readName(String& out, uint32_t timeoutMs) {
     return true;
 }
 
-bool TasmotaOutlet::readMac(String& out, uint32_t timeoutMs) {
+bool TasmotaOutlet::readMac(std::string& out, uint32_t timeoutMs) {
     if (_ip[0] == '\0') return false;
 
     char url[64];
     snprintf(url, sizeof(url), "http://%s/cm?cmnd=Status%%205", _ip);
 
-    HTTPClient http;
-    http.begin(url);
-    http.setConnectTimeout(timeoutMs);
-    http.setTimeout(timeoutMs);
-    if (http.GET() != 200) { http.end(); return false; }
+    const plughttp::Reply reply = plughttp::get(url, timeoutMs, timeoutMs);
+    if (reply.code != 200) return false;
 
     // Status 5 is the network block: {"StatusNET":{"Hostname":..,"IPAddress":..,"Mac":".."}}.
     // A filter keeps the parse small — the full reply carries gateway, DNS, WiFi
@@ -338,14 +293,12 @@ bool TasmotaOutlet::readMac(String& out, uint32_t timeoutMs) {
     StaticJsonDocument<64> filter;
     filter["StatusNET"]["Mac"] = true;
     StaticJsonDocument<128> doc;
-    const String body = http.getString();
-    http.end();
-    if (deserializeJson(doc, body, DeserializationOption::Filter(filter))) return false;
+    if (deserializeJson(doc, reply.body, DeserializationOption::Filter(filter))) return false;
 
     JsonVariant v = doc["StatusNET"]["Mac"];
     if (v.isNull()) return false;
     out = v.as<const char*>();
-    return out.length() > 0;
+    return !out.empty();
 }
 
 bool TasmotaOutlet::provision(const char* owner) {
@@ -360,14 +313,12 @@ bool TasmotaOutlet::provision(const char* owner) {
     const bool locked  = sendCmd(_ip, "PowerLock%201");
 
     if (onState && locked) {
-        DEBUG_PRINT(F("[Outlets] Tasmota ")); DEBUG_PRINT(_ip);
-        DEBUG_PRINTLN(F(" locked on — its Toggle button is now inert."));
+        plughttp::log(std::string("[Outlets] Tasmota ") + _ip + " locked on \xE2\x80\x94 its Toggle button is now inert.");
     } else {
         // The claim landed and the lock did not. Say so rather than failing the
         // whole pairing: a claimed plug that can still be toggled is a working
         // sensor with a confusing web page, not a broken one.
-        DEBUG_PRINT(F("[Outlets] Tasmota ")); DEBUG_PRINT(_ip);
-        DEBUG_PRINTLN(F(" claimed, but PowerOnState/PowerLock did not take."));
+        plughttp::log(std::string("[Outlets] Tasmota ") + _ip + " claimed, but PowerOnState/PowerLock did not take.");
     }
     return true;
 }
@@ -381,4 +332,13 @@ bool TasmotaOutlet::release() {
     return writeOwner("");
 }
 
-#endif  // CONTROL_SMART_OUTLET
+bool TasmotaOutlet::readClaim(const char* /*ourHost*/, const char* /*deviceName*/, const char* ourName,
+                              plugclaim::Claim& out, std::string* pushUrl) {
+    std::string marker;
+    if (!readOwner(marker)) return false;
+    out = plugclaim::decideMarker(marker.c_str(), ourName ? ourName : "");
+    if (pushUrl) *pushUrl = "";
+    return true;
+}
+
+#endif  // CONTROL_SMART_OUTLET || DUSTGATE_NODE_PLUG_POLL || DUSTGATE_NATIVE

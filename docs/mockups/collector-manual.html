@@ -1,0 +1,245 @@
+<meta charset="utf-8">
+<title>Collector Manual Switch</title>
+
+<style>
+  /* Layout: a short argument up top, one live phone to poke at, then every state side by side, then the questions.
+     Tokens are the app's own (shop-status-chips.html / live.component.ts) so this can be judged as the screen it becomes. */
+  :root {
+    --bg: #111; --surface: #1e1e1e; --raised: #262626; --border: #2e2e2e;
+    --text: #e8e8e8; --muted: #8a8a86; --accent: #f0a500; --success: #3cbe6e; --danger: #d94444;
+    --warn-bg: #2a2209; --ok-bg: #12261a; --bad-bg: #2a1414; --radius: 14px;
+    color-scheme: dark;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); margin: 0; padding: 22px 18px 72px;
+         font-family: system-ui, -apple-system, sans-serif; font-size: 15px; line-height: 1.5; }
+  .wrap { max-width: 1080px; margin: 0 auto; display: flex; flex-direction: column; gap: 26px; }
+  h1 { font-size: 22px; font-weight: 600; margin: 6px 0 0; letter-spacing: -0.01em; text-wrap: balance; }
+  h2 { font-size: 15px; font-weight: 600; margin: 0; }
+  .lede { color: var(--muted); font-size: 13.5px; max-width: 68ch; margin: 6px 0 0; }
+  .eyebrow { font-size: 11px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--muted); }
+  p { margin: 0; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.92em; }
+  .sec { display: flex; flex-direction: column; gap: 12px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 15px 16px; }
+  .note { font-size: 12.5px; color: var(--muted); line-height: 1.55; }
+  .note b { color: var(--text); font-weight: 600; }
+  .banner { background: #241c06; border: 1px solid #4a3a0d; border-radius: var(--radius); padding: 13px 15px; font-size: 13px; line-height: 1.55; }
+  .banner b { color: var(--accent); }
+  .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+
+  /* ── the phone ─────────────────────────────────────────────── */
+  .phones { display: flex; gap: 20px; flex-wrap: wrap; align-items: flex-start; }
+  .phone { width: 375px; max-width: 100%; background: var(--bg); border: 1px solid #202225; border-radius: 18px;
+           padding: 14px 13px 18px; flex: none; }
+  .phone .cap { font-size: 12px; color: var(--muted); margin-bottom: 10px; line-height: 1.5; }
+  .phone .cap b { color: var(--text); font-weight: 600; }
+  .label { font-size: 11px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--muted); margin: 6px 4px 8px; }
+
+  /* the collector card — same bones as the tool rows: a transparent hit area under the text, a chip on the right */
+  .collector { position: relative; display: flex; align-items: center; gap: 12px; background: var(--surface);
+               border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; margin-bottom: 14px; }
+  .collector.running { border-color: var(--success); }
+  .collector.hold    { border-color: var(--success); }
+  .collector.bad     { border-color: var(--danger); }
+  .collector.inert   { opacity: 0.9; }
+  .hit { position: absolute; inset: 0; width: 100%; height: 100%; background: transparent; border: 0; border-radius: var(--radius);
+         cursor: pointer; }
+  .hit:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .hit:disabled { cursor: default; }
+  .cyc { width: 40px; height: 40px; border-radius: 50%; flex: none; display: flex; align-items: center; justify-content: center;
+         background: var(--bg); color: var(--muted); }
+  .collector.running .cyc, .collector.hold .cyc { color: var(--success); }
+  .collector.bad .cyc { color: var(--danger); }
+  .cyc svg { width: 22px; height: 22px; }
+  .c-body { flex: 1; min-width: 0; }
+  .c-name { font-size: 15.5px; font-weight: 600; }
+  .c-sub { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+  .collector.running .c-sub, .collector.hold .c-sub { color: var(--success); }
+  .collector.bad .c-sub { color: var(--danger); }
+  .chip { flex: none; display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; padding: 6px 12px;
+          font-size: 13px; font-weight: 500; border: 1px solid var(--border); color: var(--muted); background: transparent; white-space: nowrap; }
+  .chip::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: currentColor; opacity: 0.85; }
+  .chip.idle::before { background: transparent; border: 1.5px solid currentColor; }
+  .chip.go   { color: var(--success); background: var(--ok-bg); border-color: #1d4a2c; }
+  .chip.wait { color: var(--accent); background: var(--warn-bg); border-color: #4a3a0d; }
+  .chip.bad  { color: var(--danger); background: var(--bad-bg); border-color: #5a2020; }
+  .pairlink { color: var(--accent); text-decoration: underline; }
+
+  .rows { display: flex; flex-direction: column; gap: 10px; }
+  .rowwrap { position: relative; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
+  .rowwrap.collecting { border-color: var(--success); }
+  .row { display: flex; align-items: center; gap: 12px; padding: 14px; }
+  .r-body { flex: 1; min-width: 0; }
+  .r-name { font-size: 15.5px; font-weight: 600; }
+  .r-src { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+  .touch { font-size: 11.5px; color: var(--muted); margin-top: 9px; }
+  .touch b { color: var(--text); font-weight: 600; }
+
+  /* state table */
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+  .scroll { overflow-x: auto; }
+  .q { display: flex; flex-direction: column; gap: 6px; }
+  .q .rec { font-size: 12.5px; color: var(--success); }
+  button.reset { background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 7px 14px; font-size: 13px; cursor: pointer; }
+  button.reset:focus-visible { outline: 2px solid var(--accent); }
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">Live screen · mockup · 2026-10-06</div>
+    <h1>A switch for the dust collector</h1>
+    <p class="lede">The collector card has no control. Starting a blower from the app means switching a tool on, and there is nothing to press when you
+      only want suction, to clear a clog or to run the collector with no tool. This draws one back in the same style as the tool rows: tap the card.</p>
+  </header>
+
+  <div class="banner">
+    <b>Why it is not simply the old switch.</b> A switch on the card was removed on 2026-10-03 because the blower and the tools each had their own idea of
+    what "off" meant: run a tool, tap the switch off, and the tool kept asking for the blower. Two things have changed since, and this design leans on both:
+    <b>a blower started by hand now stays on</b> until someone stops it (the brain never presses OFF for a run it did not start), and
+    <b>using another tool ends a hand-switched one</b> in the same system. So a hand run has one owner, the person, and a clear end.
+  </div>
+
+  <section class="sec">
+    <h2>Try it</h2>
+    <p class="note">Everything on the left phone is live. Tap the collector card, then a tool, then the card again. The captions on the right say what the brain is doing.</p>
+    <div class="phones">
+      <div class="phone" id="live">
+        <div class="cap"><b>Live screen</b> — one system, two tools</div>
+        <div id="collector" class="collector"></div>
+        <div class="label">Tools</div>
+        <div class="rows" id="rows"></div>
+        <div class="touch" id="narr"></div>
+        <p style="margin-top:12px"><button class="reset" id="reset" type="button">Reset</button></p>
+      </div>
+      <div class="card" style="flex:1; min-width:260px">
+        <h2 style="margin-bottom:8px">What each tap does</h2>
+        <div class="scroll"><table>
+          <tr><th>Card shows</th><th>Tap on the card</th></tr>
+          <tr><td><span class="chip idle" style="padding:3px 9px">Off</span></td><td>Run it. Starts the blower (opens a path first if a gate needs it). It stays on until you stop it.</td></tr>
+          <tr><td><span class="chip go" style="padding:3px 9px">Running · by hand</span></td><td>Stop it. Sends the OFF. A tool still running keeps asking for it, so the card then reads <i>Collecting</i>, not Off.</td></tr>
+          <tr><td><span class="chip go" style="padding:3px 9px">Collecting</span></td><td>Keep it on. The blower is following a tool; tapping makes it yours, so it stays after the tool stops.</td></tr>
+          <tr><td><span class="chip bad" style="padding:3px 9px">Not starting</span></td><td>Try again. Presses once more, with a fresh budget of three.</td></tr>
+          <tr><td><span class="chip idle" style="padding:3px 9px">Manual</span></td><td>Nothing: no outlet or remote is paired, so the app cannot switch it. The line under it is the link that fixes that.</td></tr>
+        </table></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="sec">
+    <h2>Every state</h2>
+    <div class="phones" id="states"></div>
+  </section>
+
+  <section class="sec">
+    <h2>Questions for jeff</h2>
+    <div class="cols">
+      <div class="card q"><b>Tap while a tool is running</b>
+        <p class="note">The blower is wanted by the tool, so "Stop it" cannot mean stop. Drawn as <b>Keep it on</b> (hand the run to the person). The alternative is to ignore the tap.</p>
+        <p class="rec">Drawn: Keep it on.</p></div>
+      <div class="card q"><b>Stopping while a tool still asks</b>
+        <p class="note">After you stop a hand-run blower with a tool running, the blower stays on for that tool. The card says <i>Collecting</i> with no extra message.</p>
+        <p class="rec">Drawn: no message.</p></div>
+      <div class="card q"><b>Where does "stays on" get said</b>
+        <p class="note">Under the name, as the card's one line: "Running by hand — stays on until you stop it". It is the sentence that stops someone walking away from a blower they started.</p>
+        <p class="rec">Drawn as the sub-line, not a toast.</p></div>
+      <div class="card q"><b>A collector with nothing to press</b>
+        <p class="note">Not tappable, no chevron, the existing pairing link underneath. The card must not look pressable when it is not.</p>
+        <p class="rec">Drawn: inert.</p></div>
+    </div>
+  </section>
+</div>
+
+<script>
+  const CYC = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M13 5a7 7 0 1 0 6 7"/><path d="M12 8a4 4 0 1 1-4 4"/><circle cx="12" cy="12" r="1.2" fill="currentColor" stroke="none"/></svg>';
+
+  /* One tiny model of the screen. byHand: the person's run. tools: which tools are on. */
+  const S = { byHand: false, tools: { saw: false, jointer: false } };
+  const NAMES = { saw: 'Table Saw', jointer: 'Jointer' };
+  const anyTool = () => S.tools.saw || S.tools.jointer;
+  const running = () => S.byHand || anyTool();
+
+  function chip(cls, text) { return '<span class="chip ' + cls + '">' + text + '</span>'; }
+
+  /* A card for any scenario: kind picks the look; `live` wires the tap. */
+  function card(kind, live) {
+    const m = {
+      off:      { cls: '',        sub: 'Switch it on from here, or switch a tool on', chip: chip('idle', 'Off'),                tap: 'Run the dust collector' },
+      hand:     { cls: 'running', sub: 'Running by hand — stays on until you stop it', chip: chip('go', 'Running'),     tap: 'Stop the dust collector' },
+      handtool: { cls: 'running', sub: 'Running by hand · Table Saw has the air', chip: chip('go', 'Running'),             tap: 'Stop holding the dust collector on' },
+      tools:    { cls: 'running', sub: 'Table Saw has the air · tap to keep it on after', chip: chip('go', 'Collecting'),   tap: 'Keep the dust collector on' },
+      stopping: { cls: 'hold',    sub: 'Stopping…', chip: chip('wait', 'Stopping'),                                          tap: '' },
+      fail:     { cls: 'bad',     sub: 'Pressed the remote 3 times and it never started — tap to try again', chip: chip('bad', 'Not starting'), tap: 'Try starting the dust collector again' },
+      inert:    { cls: 'inert',   sub: 'Manual · <span class="pairlink">pair an outlet to automate</span>', chip: chip('idle', 'Manual'), tap: '' }
+    }[kind];
+    const hit = m.tap ? '<button class="hit" type="button" ' + (live ? 'id="chit" ' : 'tabindex="-1" ') + 'aria-label="' + m.tap + '"></button>' : '';
+    return { cls: 'collector ' + m.cls,
+      html: hit + '<span class="cyc">' + CYC + '</span><div class="c-body"><div class="c-name">Dust collector</div><div class="c-sub">' + m.sub + '</div></div>' + m.chip };
+  }
+
+  function liveKind() {
+    if (S.byHand && anyTool()) return 'handtool';
+    if (S.byHand) return 'hand';
+    if (anyTool()) return 'tools';
+    return 'off';
+  }
+
+  function toolRow(id) {
+    const on = S.tools[id];
+    const src = on ? 'Switched on by hand · has the air' : 'Switched on by hand';
+    return '<div class="rowwrap ' + (on ? 'collecting' : '') + '"><div class="row"><button class="hit" type="button" data-tool="' + id +
+      '" aria-pressed="' + on + '" aria-label="' + (on ? 'Stop ' : 'Run ') + NAMES[id] + '"></button>' +
+      '<div class="r-body"><div class="r-name">' + NAMES[id] + '</div><div class="r-src">' + src + '</div></div>' +
+      chip(on ? 'go' : 'idle', on ? 'Collecting' : 'Idle') + '</div></div>';
+  }
+
+  function narrate() {
+    if (!running()) return 'Nothing is running. The brain asks for no blower.';
+    if (S.byHand && !anyTool()) return 'You started it: the brain pressed ON once and will never press OFF for you. Nothing but a tap here, or the fob, stops it.';
+    if (S.byHand && anyTool()) return 'Your run and a tool overlap. The blower stays on after the tool stops, because the run is yours.';
+    if (S.tools.saw && S.tools.jointer) return 'Two tools. The newest holds the gate. Tapping the card now would keep the blower on after both stop.';
+    return 'Following the tool: the blower starts with it and stops, after the coast-down, when it stops.';
+  }
+
+  function render() {
+    const c = card(liveKind(), true);
+    const el = document.getElementById('collector');
+    el.className = c.cls; el.innerHTML = c.html;
+    document.getElementById('rows').innerHTML = toolRow('saw') + toolRow('jointer');
+    document.getElementById('narr').innerHTML = '<b>Brain:</b> ' + narrate();
+    const hit = document.getElementById('chit');
+    if (hit) hit.onclick = function () {
+      if (S.byHand) S.byHand = false;            // stop (or hand the run back to the tools)
+      else S.byHand = true;                      // run it, or keep it on after the tools stop
+      render();
+    };
+    document.querySelectorAll('[data-tool]').forEach(function (b) {
+      b.onclick = function () {
+        const id = b.getAttribute('data-tool');
+        const turningOn = !S.tools[id];
+        // Using another tool ends a hand-switched one (releaseManualsFor); a hand-run COLLECTOR is not a tool and stays.
+        if (turningOn) { const other = id === 'saw' ? 'jointer' : 'saw'; S.tools[other] = false; }
+        S.tools[id] = turningOn;
+        render();
+      };
+    });
+  }
+  document.getElementById('reset').onclick = function () { S.byHand = false; S.tools.saw = false; S.tools.jointer = false; render(); };
+  render();
+
+  /* The static strip: every state, as the screen would draw it. */
+  const SHOW = [
+    ['off',      'Off — idle. Tap to run it.'],
+    ['hand',     'Started from the card. Stays on.'],
+    ['handtool', 'Started by hand, a tool also running.'],
+    ['tools',    'Following a tool. Tap to keep it on.'],
+    ['fail',     'Pressed three times, never started.'],
+    ['inert',    'No outlet or remote paired. Not tappable.']
+  ];
+  document.getElementById('states').innerHTML = SHOW.map(function (s) {
+    const c = card(s[0], false);
+    return '<div class="phone" style="width:330px"><div class="cap"><b>' + s[1] + '</b></div><div class="' + c.cls + '" style="margin-bottom:0">' + c.html + '</div></div>';
+  }).join('');
+</script>

@@ -12,7 +12,7 @@
 
 #pragma once
 #include "SmartOutlet.h"
-#include "../config.h"
+#include "OutletTimeouts.h"
 
 class ShellyGen2Outlet : public SmartOutlet {
 public:
@@ -40,7 +40,9 @@ public:
     // Returns false if the plug didn't answer or the response didn't parse —
     // which is NOT "unclaimed". A read failure means we don't know, and the
     // caller must not turn that into permission to steal.
-    bool        readPushConfig(String& outServer, bool& outEnabled,
+    bool        readClaim(const char* ourHost, const char* deviceName, const char* ourName,
+                          plugclaim::Claim& out, std::string* pushUrl = nullptr) override;
+    bool        readPushConfig(std::string& outServer, bool& outEnabled,
                                uint32_t timeoutMs = OUTLET_RPC_WRITE_TIMEOUT_MS);
 
 private:

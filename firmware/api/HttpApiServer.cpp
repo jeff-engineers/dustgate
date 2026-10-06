@@ -309,109 +309,28 @@ bool HttpApiServer::begin() {
 #endif
 
     // ---------------------------------------------------------------------
-    // NodeLink — the SECONDARY side of the star (control/NodeLink.h).
+    // /nodelink — where a NODE dials this primary (2026-10-04).
     //
-    // A primary dials in here and sends SET frames that are already resolved to
-    // a channel + an angle/mm. This board doesn't parse a topology, doesn't
-    // route, and doesn't know what a "gate" is — it moves the channel to the
-    // number it was given. That asymmetry is the whole design: it's what lets a
-    // $5 servo-only board be a node, and what keeps a schema change from having
-    // to be flashed to every board in the shop.
+    // This listener USED to be the SECONDARY side of the star as well: a primary could answer
+    // HELLO, PING and SET here as if it were a node, so another primary could drive its servos.
+    // That was a second copy of the node program's frame handler (WELCOME construction, SET
+    // parsing, the arrival report), kept alive after the real node program existed, and it was
+    // the reason this socket needed a hook at all. It is gone: the slider and the PWM bank are
+    // nodes (`xiao_c5_linear`, `xiao_c5`), and a primary is a brain.
     //
-    // FAIL-SAFE: on disconnect we do NOTHING. Every servo holds exactly where it
-    // is. A secondary never moves on its own initiative — losing the link
-    // mid-cut must not slam a gate shut on a running tool (RFC §6).
+    // What is left is the one job a primary's /nodelink has: accept a node's JOIN and bind the
+    // socket to that node's pairing. The sketch owns what that means (which bus), so every event
+    // is handed to the hook; anything it does not claim — a stranger, a frame before a JOIN —
+    // is ignored, and the socket is cleaned up with the others.
     //
-    // TRUST MODEL: same LAN assumption as /shelly-rpc above — unauthenticated,
-    // because the link is machine-to-machine on a workshop network. The blast
-    // radius is bounded by what a SET can do: move a gate. Revisit alongside the
-    // Shelly endpoint if this ever faces a less trusted network.
+    // TRUST MODEL: same LAN assumption as /shelly-rpc above — unauthenticated, because the link
+    // is machine-to-machine on a workshop network. A JOIN is refused unless that host is paired
+    // (REFUSE not-paired), and a bound node's every command is still gated on the NODE by its own
+    // claim, so the worst a stranger can do here is take up a socket.
     // ---------------------------------------------------------------------
     _nodeWs.onEvent([this](AsyncWebSocket*, AsyncWebSocketClient* client,
                            AwsEventType type, void* arg, uint8_t* data, size_t len) {
-        // A node that dialled US, or a pong to our ping of one — see setNodeEventHook().
-        if (_nodeHook) {
-            const bool mine = _nodeHook(client, type, arg, data, len);
-            if (mine && type != WS_EVT_CONNECT) return;
-        }
-        if (type == WS_EVT_CONNECT) {
-            _nodeLinkClients.fetch_add(1);
-            DEBUG_PRINTLN(F("[NODE] Primary connected."));
-            return;
-        }
-        if (type == WS_EVT_DISCONNECT || type == WS_EVT_ERROR) {
-            // Compare-exchange rather than `if (n > 0) n--`: that test-then-act
-            // is two operations, and a disconnect racing another disconnect
-            // could take the count below zero between them. Never drops under 0.
-            int cur = _nodeLinkClients.load();
-            while (cur > 0 && !_nodeLinkClients.compare_exchange_weak(cur, cur - 1)) { }
-            // HOLD. Deliberately no servo movement here — see the fail-safe note.
-            DEBUG_PRINTLN(F("[NODE] Primary disconnected — holding all gates."));
-            return;
-        }
-        if (type != WS_EVT_DATA) return;
-
-        AwsFrameInfo* info = (AwsFrameInfo*)arg;
-        if (!(info->final && info->index == 0 && info->len == len)) return;
-        if (info->opcode != WS_TEXT) return;
-
-        StaticJsonDocument<384> doc;
-        if (deserializeJson(doc, data, len)) return;
-        JsonObjectConst f = doc.as<JsonObjectConst>();
-        const char* t = f["t"].as<const char*>();
-        if (!t) return;
-
-        // 384 for the same reason dustgate_node.cpp uses it: a WELCOME with a
-        // three-member `caps` overflows 256, and ArduinoJson drops the last
-        // member added — `caps.ct` — without saying anything.
-        StaticJsonDocument<384> reply;
-        if (strcmp(t, "HELLO") == 0) {
-            if ((f["v"] | 0) != topo::nodelink::kVersion) {
-                // Refuse rather than half-speak an unknown protocol.
-                DEBUG_PRINTLN(F("[NODE] HELLO version mismatch — refusing."));
-                client->close();
-                return;
-            }
-            // Identify by mDNS hostname: stable across reboots and DHCP, and the
-            // same string the UI's board picker binds link.host to.
-            String host = WiFiProvisioner::getHostname();
-#if defined(ENABLE_SERVO) && defined(SERVO_PWM_PIN_1)
-            const int servoCaps = SERVO_COUNT;
-#else
-            const int servoCaps = 0;
-#endif
-            topo::nodelink::buildWelcome(reply.to<JsonObject>(), host.c_str(),
-                                         BOARD_NAME, buildstamp::fw(), servoCaps, 1,
-                                         nullptr, true,
-#ifdef PIN_CT
-                                         1
-#else
-                                         0
-#endif
-                                         );
-        } else if (strcmp(t, "PING") == 0) {
-            topo::nodelink::buildPong(reply.to<JsonObject>());
-        } else if (strcmp(t, "SET") == 0) {
-            topo::nodelink::SetCommand cmd;
-            const char* err = nullptr;
-            if (!topo::nodelink::parseSetFrame(f, cmd, err)) {
-                topo::nodelink::buildAck(reply.to<JsonObject>(), f["seq"] | 0, false, err);
-            } else {
-                // Hand to the main loop; actuators are never touched from the
-                // AsyncTCP task. ACK means "accepted", not "arrived" — arrival
-                // is reported separately by reportNodeState().
-                xSemaphoreTake(_mutex, portMAX_DELAY);
-                _nodeSetCmd     = cmd;
-                _nodeSetPending = true;
-                xSemaphoreGive(_mutex);
-                topo::nodelink::buildAck(reply.to<JsonObject>(), cmd.seq, true);
-            }
-        } else {
-            return;   // unknown frame type — ignore, don't guess
-        }
-
-        String s; serializeJson(reply, s);
-        client->text(s);
+        if (_nodeHook) _nodeHook(client, type, arg, data, len);
     });
     _server.addHandler(&_nodeWs);
 
@@ -615,22 +534,6 @@ bool HttpApiServer::consumeTopologyChanged() {
     _topoChangedPending = false;
     xSemaphoreGive(_mutex);
     return v;
-}
-
-bool HttpApiServer::consumeNodeSet(topo::nodelink::SetCommand& out) {
-    xSemaphoreTake(_mutex, portMAX_DELAY);
-    bool v = _nodeSetPending;
-    if (v) { out = _nodeSetCmd; _nodeSetPending = false; }
-    xSemaphoreGive(_mutex);
-    return v;
-}
-
-void HttpApiServer::reportNodeState(const char* selectorId, const char* stateId, bool moving) {
-    if (_nodeLinkClients.load() <= 0) return;
-    StaticJsonDocument<192> doc;
-    topo::nodelink::buildState(doc.to<JsonObject>(), selectorId, stateId, moving);
-    String s; serializeJson(doc, s);
-    _nodeWs.textAll(s);      // same main-loop→textAll pattern as the status push
 }
 
 // ---------------------------------------------------------------------------
@@ -1810,7 +1713,15 @@ void HttpApiServer::registerRoutes() {
                 LittleFS.remove(kNodeImgJson[s_kind]);
                 LittleFS.remove(kNodeImgPart[s_kind]);
                 s_nodeImage[s_kind] = NodeImage();
-                const size_t freeB = LittleFS.totalBytes() - LittleFS.usedBytes();
+                size_t freeB = LittleFS.totalBytes() - LittleFS.usedBytes();
+                // A firmware image outranks the link log's rotated-out half: that file is history, the
+                // filesystem is otherwise fully allocated (a build that grew ~14 KB stopped fitting on
+                // 2026-10-05 for want of it), and the live log keeps writing either way.
+                if (freeB < total + 16 * 1024 && LittleFS.exists("/linklog.1.txt")) {
+                    LittleFS.remove("/linklog.1.txt");
+                    Serial.println("[NODEIMG] removed the rotated link log to make room for the image");
+                    freeB = LittleFS.totalBytes() - LittleFS.usedBytes();
+                }
                 if (freeB < total + 16 * 1024) {
                     sendError(req, 507, "the filesystem has no room for that image");
                     s_abort = true; return;

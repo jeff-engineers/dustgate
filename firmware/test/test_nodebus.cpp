@@ -19,6 +19,7 @@
 
 #include <ArduinoJson.h>
 #include "../control/TopologyRuntime.h"
+#include "../control/RemoteRfPresser.h"
 #include "../control/NodeLink.h"
 #include <cstdio>
 #include <fstream>
@@ -66,6 +67,18 @@ struct StubBus : public topo::ActuatorBus {
     return true;
   }
 
+  // The collector's jobs on a node (2026-10-04).
+  bool canRf = false, canBin = false;
+  struct Press { int address, data; uint32_t tickUs, repeats; };
+  std::vector<Press> presses;
+  bool canPressRf() const override { return canRf; }
+  bool watchesBin() const override { return canBin; }
+  bool pressRf(uint8_t a, uint8_t d, uint32_t t, uint32_t r) override {
+    if (!up || !canRf) return false;
+    presses.push_back({a, d, t, r});
+    return true;
+  }
+
   // Plugs (2026-10-03): can this board poll them, and what it has reported.
   bool canPollPlugs = false;
   struct PlugRead { float watts; bool fault; uint32_t atMs; };
@@ -82,6 +95,10 @@ struct StubBus : public topo::ActuatorBus {
     cfgCalls++;
     sensorCfg.clear();
     for (JsonObjectConst sen : sensors) {
+      if (topo::_eq(sen["kind"], "bin")) {
+        sensorCfg.push_back(std::string(sen["sensorId"] | "?") + "=bin/inv" + std::to_string((int)(sen["invert"] | true)));
+        continue;
+      }
       if (topo::_eq(sen["kind"], "plug")) {
         sensorCfg.push_back(std::string(sen["sensorId"] | "?") + "=" + (sen["plug"] | "?") + "@" +
                             (sen["ip"] | "?") + ">=" + std::to_string((int)(sen["thresholdW"] | 0.0f)));
@@ -133,6 +150,17 @@ int main(int argc, char** argv) {
   std::string twoGatesJson = slurp(dir + "twoGates.json");
   std::string twoSystemShopJson = slurp(dir + "twoSystemShop.json");
   if (twoGatesJson.empty()) { printf("bad twoGates.json\n"); return 2; }
+
+  // ── a real shop layout, as the app writes it (compact, no whitespace) must fit the parse pool ──
+  // The pool was sized for the ESP32's 4-byte pointers; on a 64-bit host the same tree needs half again as much, and a
+  // 5.6 KB layout answered NoMemory — the native brain refused a perfectly good save (2026-10-06).
+  {
+    std::string shop = slurp(dir + "benchShop.json");
+    topo::NodeBus nb; topo::TopologyRuntime rt; StubBus local;
+    nb.setLocal(&local, "primary"); rt.begin(&nb);
+    std::string err;
+    ok("a real six-board shop layout is adopted", !shop.empty() && rt.adopt(shop.c_str(), shop.size(), err), err);
+  }
 
   // ── one move at a time, in sequencer order ───────────────────────────────
   {
@@ -586,6 +614,13 @@ int main(int argc, char** argv) {
   {
     std::string shopJson = slurp(dir + "twoSystemShop.json");
     if (shopJson.empty()) { printf("bad twoSystemShop.json\n"); return 2; }
+    // The 4" blower is switched by a plug of ours, like problems.test.js's plugged(); the 2.5" one is run by hand.
+    {
+      const std::string dc = "\"id\": \"dc-big\",\n          \"type\": \"collector\",";
+      const size_t at = shopJson.find(dc);
+      if (at == std::string::npos) { printf("fixture changed: no dc-big\n"); return 2; }
+      shopJson.insert(at + dc.size(), "\n          \"control\": {\"outlet\": {\"gen\": 2, \"ip\": \"10.0.0.50\"}},");
+    }
 
     StubBus local; topo::NodeBus nb; topo::TopologyRuntime rt;
     nb.setLocal(&local, "primary");
@@ -643,8 +678,12 @@ int main(int argc, char** argv) {
         return pd["problems"].as<JsonArrayConst>();
       };
       size_t n = 0;
-      probs(n);
-      ok("problems: no plug configured, running → nothing to say", n == 0);
+      // The 4" blower has a plug of ours here but no reading has ever arrived (that is a different state from
+      // problems.test.js's unplugged one), so "nothing to say" is asserted for the blower that has no plug at all.
+      auto first = probs(n);
+      size_t aboutSmall = 0; for (JsonObjectConst o : first) if (std::string(o["subject"]["id"] | "") == "small") aboutSmall++;
+      ok("problems: no plug configured, running → nothing to say", aboutSmall == 0);
+      rt.setCollectorPlug("big", 1200.0f, true, 60000);   // the 4" plug starts answering: its "blind" cleared
 
       // A reading that is up and drawing is not a problem.
       rt.setCollectorPlug("big", 1200.0f, true, 60000);
@@ -685,6 +724,19 @@ int main(int argc, char** argv) {
       rt.clearProblem("rf:big");
       probs(n);
       ok("problems: and clears when the cause does", n == 1);
+
+      // A blower DustGate cannot switch (no control.outlet, no control.rf) is run by hand. Watched and not drawing, the
+      // person is ASKED to turn it on; it is never accused of failing to start something nobody commanded.
+      rt.setCollectorPlug("small", 0.0f, true, topo::kCollectorSpinupGraceMs);
+      auto c = probs(n);
+      std::string manualCode, manualText;
+      for (JsonObjectConst o : c) if (std::string(o["subject"]["id"] | "") == "small") { manualCode = o["code"] | ""; manualText = o["text"] | ""; }
+      ok("problems: a hand-run blower that is not drawing is asked for, not accused", manualCode == "collector-needs-start", manualCode);
+      ok("problems: the device words the request",
+         manualText == "A tool is running and the dust collector isn't \xE2\x80\x94 please turn it on.", manualText);
+      rt.setCollectorPlug("small", 0.0f, false, 0);
+      probs(n);
+      ok("problems: a hand-run blower whose plug is silent says nothing (the plug has its own problem)", n == 1);
     }
     // Concatenated per system in document order, never interleaved. The jointer
     // valve is still open here (idle-HOLD left it where it was), so the big
@@ -798,6 +850,28 @@ int main(int argc, char** argv) {
     rt.writeStatus(st4.to<JsonObject>());
     ok("a manual override outranks an off CT", st4["tools"]["toolX"]["active"] == true);
     rt.setMachineManual("toolX", false);
+
+    // USING ANOTHER TOOL ENDS A HAND-SWITCHED ONE (jeff, 2026-10-06): switching a second tool on by hand releases the
+    // first, so switching the second off leaves the system idle instead of swinging back to a tool nobody is using.
+    rt.setMachineManual("toolX", true);
+    rt.setMachineManual("toolY", true);
+    ok("switching a second tool on releases the first", !rt.machineIsManual("toolX") && rt.machineIsManual("toolY"));
+    rt.setMachineManual("toolY", false);
+    DynamicJsonDocument st5(8192);
+    rt.writeStatus(st5.to<JsonObject>());
+    ok("...so switching it off leaves nothing running", st5["tools"]["toolX"]["active"] == false && st5["tools"]["toolY"]["active"] == false);
+    // A tool that STARTS by itself (a plug, a clamp) is the same signal.
+    rt.setMachineManual("toolX", true);
+    rt.setMachinePower("toolY", 500.0f);
+    ok("a tool that starts on its own releases a hand-switched one", !rt.machineIsManual("toolX"));
+    rt.setMachinePower("toolY", 0.0f);
+    // ...and a level is not an edge: a tool already running does not keep clearing manual claims every poll.
+    rt.setMachinePower("toolY", 500.0f);
+    rt.setMachineManual("toolX", true);
+    rt.setMachinePower("toolY", 500.0f);
+    ok("a tool that was already running does not release one switched on after it", rt.machineIsManual("toolX"));
+    rt.setMachineManual("toolX", false);
+    rt.setMachinePower("toolY", 0.0f);
   }
 
   // ── A JOG RESOLVES THE BOARD THE SAME WAY A MOVE DOES ───────────────────
@@ -1139,7 +1213,7 @@ int main(int argc, char** argv) {
     // config would leave the primary believing in a sensor the board dropped.
     {
       StaticJsonDocument<512> d;
-      deserializeJson(d, R"({"t":"CONFIG","seq":9,"sensors":[{"sensorId":"a","kind":"ct","channel":0},{"sensorId":"b","kind":"bin","channel":1}]})");
+      deserializeJson(d, R"({"t":"CONFIG","seq":9,"sensors":[{"sensorId":"a","kind":"ct","channel":0},{"sensorId":"b","kind":"laser","channel":1}]})");
       n = 99;
       ok("an unknown kind rejects the WHOLE frame",
          !parseConfigFrame(d.as<JsonObjectConst>(), specs, kMaxSensorsPerNode, n, err));
@@ -1433,6 +1507,145 @@ int main(int argc, char** argv) {
       buildWelcome(w1.to<JsonObject>(), "n", "b", "f", 2, 0, nullptr, true, 0, false, true);
       ok("caps.join 1 means it dials in", (w1["caps"]["join"] | 0) == 1);
       ok("JOIN did not bump the version", kVersion == 1);
+    }
+
+    // ── collector node: PRESS, a bin sensor, caps.rf, caps.bin ────────────────
+    // PAIR: nodelink.test.js's "the collector's jobs on a node" block — same cases, same order.
+    {
+      using namespace topo::nodelink;
+      StaticJsonDocument<192> pd;
+      buildPress(pd.to<JsonObject>(), 7, 94, 14, 270, 24);
+      PressOrder po; const char* pe = nullptr;
+      ok("a PRESS parses", parsePressFrame(pd.as<JsonObjectConst>(), po, pe));
+      ok("and keeps what it was told", po.seq == 7 && po.address == 94 && po.data == 14 && po.tickUs == 270 && po.repeats == 24);
+      ok("the smallest tick",   kMinRfTickUs == 50);
+      ok("the largest tick",    kMaxRfTickUs == 1000);
+      ok("the most repeats",    kMaxRfRepeats == 60);
+      auto pressOk = [&](uint32_t a, uint32_t d, uint32_t t, uint32_t r) {
+        StaticJsonDocument<192> x;
+        buildPress(x.to<JsonObject>(), 1, 0, 0, t, r);
+        x["address"] = a; x["data"] = d;     // set raw, so an out-of-range value is not truncated by the builder
+        PressOrder o; const char* e = nullptr;
+        return parsePressFrame(x.as<JsonObjectConst>(), o, e);
+      };
+      ok("an address past 8 bits is refused",        !pressOk(256, 14, 270, 24));
+      ok("data past 4 bits is refused",              !pressOk(94, 16, 270, 24));
+      ok("a tick under the floor is refused",        !pressOk(94, 14, 49, 24));
+      ok("a tick over the ceiling is refused",       !pressOk(94, 14, 1001, 24));
+      ok("a tick AT the floor is fine",               pressOk(94, 14, 50, 24));
+      ok("zero repeats is refused",                  !pressOk(94, 14, 270, 0));
+      ok("more repeats than the bound is refused",   !pressOk(94, 14, 270, 61));
+      ok("repeats AT the bound is fine",              pressOk(94, 14, 270, 60));
+
+      SensorSpec bs[kMaxSensorsPerNode]; size_t bn = 0; const char* be = nullptr;
+      {
+        StaticJsonDocument<512> d;
+        deserializeJson(d, R"({"t":"CONFIG","seq":1,"sensors":[{"sensorId":"bin:sys","kind":"bin","invert":true}]})");
+        ok("a bin sensor parses", parseConfigFrame(d.as<JsonObjectConst>(), bs, kMaxSensorsPerNode, bn, be) && bn == 1 && bs[0].isBin && bs[0].binInvert);
+      }
+      {
+        StaticJsonDocument<512> d;
+        deserializeJson(d, R"({"t":"CONFIG","seq":1,"sensors":[{"sensorId":"bin:sys","kind":"bin"}]})");
+        ok("a bin sensor needs no invert (and defaults to the optocoupler's sense)",
+           parseConfigFrame(d.as<JsonObjectConst>(), bs, kMaxSensorsPerNode, bn, be) && bs[0].isBin && bs[0].binInvert);
+      }
+      {
+        StaticJsonDocument<512> d;
+        deserializeJson(d, R"({"t":"CONFIG","seq":1,"sensors":[{"sensorId":"b","kind":"bin","invert":1}]})");
+        ok("invert must be a boolean", !parseConfigFrame(d.as<JsonObjectConst>(), bs, kMaxSensorsPerNode, bn, be));
+      }
+      {
+        StaticJsonDocument<512> d;
+        deserializeJson(d, R"({"t":"CONFIG","seq":1,"sensors":[{"sensorId":"bin:sys","kind":"bin","invert":false}]})");
+        parseConfigFrame(d.as<JsonObjectConst>(), bs, kMaxSensorsPerNode, bn, be);
+        ok("a bin sensor keeps its invert", bs[0].isBin && !bs[0].binInvert);
+      }
+
+      StaticJsonDocument<512> w0;
+      buildWelcome(w0.to<JsonObject>(), "n", "b", "f", 2, 0);
+      ok("a board that says nothing has no transmitter", !w0["caps"].containsKey("rf"));
+      ok("and no bin pad", !w0["caps"].containsKey("bin"));
+      StaticJsonDocument<512> w1;
+      buildWelcome(w1.to<JsonObject>(), "n", "b", "f", 2, 0, nullptr, true, 0, false, false, true, true);
+      ok("caps.rf 1 means a transmitter", (w1["caps"]["rf"] | 0) == 1);
+      ok("caps.bin 1 means a bin pad",    (w1["caps"]["bin"] | 0) == 1);
+      ok("PRESS did not bump the version", kVersion == 1);
+    }
+
+    // ── collector node: the runtime sends a bin sensor to a board that has the pad,
+    // reads it back, and a RemoteRfPresser keys a node's transmitter ──────────────
+    {
+      const char* binDoc = R"({"schemaVersion":2,
+        "controllers":[{"id":"primary","role":"primary"},{"id":"nodeC","role":"secondary"}],
+        "systems":[{"id":"s1","name":"s","elements":[
+          {"id":"dc","type":"collector","bin":{"sensor":{"kind":"threshold","controllerId":"nodeC","invert":false}}},
+          {"id":"g","type":"selector","controllerId":"primary","kind":"servoGate"},
+          {"id":"t","type":"tool","machineId":"m"}],
+          "ducts":[{"child":"g","parent":"dc"},{"child":"t","parent":"g","parentBranch":"b1"}]}],
+        "machines":[{"id":"m"}]})";
+      {
+        StubBus local, node; node.canBin = true;
+        topo::NodeBus nb; topo::TopologyRuntime rt;
+        nb.setLocal(&local, "primary"); nb.registerRemote("nodeC", &node);
+        rt.begin(&nb);
+        std::string err;
+        ok("adopt a layout whose bin sensor names a node", rt.adopt(binDoc, strlen(binDoc), err), err);
+        ok("a board that has the pad is sent the bin sensor, with its own invert",
+           joined(node.sensorCfg) == "bin:s1=bin/inv0", joined(node.sensorCfg));
+        ok("the primary's own pin is never sent to anyone", joined(local.sensorCfg).empty(), joined(local.sensorCfg));
+        DynamicJsonDocument st0(4096);
+        rt.update(1000);
+        rt.writeStatus(st0.to<JsonObject>());
+        ok("nothing reported yet: the status says nothing about the bin", !st0["systems"]["s1"].containsKey("bin"));
+        node.senses["bin:s1"] = { true, 1000 };
+        rt.update(1500);
+        DynamicJsonDocument st1(4096);
+        rt.writeStatus(st1.to<JsonObject>());
+        ok("a report becomes the bin verdict", st1["systems"]["s1"]["bin"]["full"] == true);
+        node.senses["bin:s1"] = { false, 2000 };
+        rt.update(2500);
+        DynamicJsonDocument st2(4096);
+        rt.writeStatus(st2.to<JsonObject>());
+        ok("and follows it back down", st2["systems"]["s1"]["bin"]["full"] == false);
+        // A report that has gone stale does not move the verdict.
+        node.senses["bin:s1"] = { true, 2000 };
+        rt.update(2000 + topo::nodelink::kSenseStaleMs + 1000);
+        DynamicJsonDocument st3(4096);
+        rt.writeStatus(st3.to<JsonObject>());
+        ok("a stale report leaves the last verdict alone", st3["systems"]["s1"]["bin"]["full"] == false);
+      }
+      {
+        StubBus local, node;   // canBin false: a board that predates the pad
+        topo::NodeBus nb; topo::TopologyRuntime rt;
+        nb.setLocal(&local, "primary"); nb.registerRemote("nodeC", &node);
+        rt.begin(&nb);
+        std::string err;
+        rt.adopt(binDoc, strlen(binDoc), err);
+        ok("a board that did not say it has the pad is not sent a bin sensor", joined(node.sensorCfg).empty(), joined(node.sensorCfg));
+      }
+      {
+        StubBus local, node; node.canRf = true;
+        topo::NodeBus nb;
+        nb.setLocal(&local, "primary"); nb.registerRemote("nodeC", &node);
+        topo::RemoteRfPresser p(&nb, "nodeC", 94, 14, 270, 24);
+        ok("a remote presser says it is RF", std::string(p.kind()) == "rf");
+        ok("press hands the frame to a linked board with a transmitter", p.press());
+        ok("and carries the address, data, tick and repeats it was built with",
+           node.presses.size() == 1 && node.presses[0].address == 94 && node.presses[0].data == 14 &&
+           node.presses[0].tickUs == 270 && node.presses[0].repeats == 24);
+        node.up = false;
+        ok("an offline board cannot be pressed", !p.press() && node.presses.size() == 1);
+        node.up = true; node.canRf = false;
+        ok("a board with no transmitter cannot be pressed", !p.press());
+        topo::RemoteRfPresser unknown(&nb, "nodeNobody");
+        ok("a board nobody paired cannot be pressed", !unknown.press());
+        topo::RemoteRfPresser dflt(&nb, "nodeC");
+        node.canRf = true;
+        dflt.press();
+        ok("the defaults are the measured Rockler numbers",
+           node.presses.size() == 2 && node.presses[1].address == 0b01011110 && node.presses[1].data == 0b1110 &&
+           node.presses[1].tickUs == 270 && node.presses[1].repeats == 24);
+      }
     }
 
   printf("\n%d/%d passed%s\n", passed, passed + failed,

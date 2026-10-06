@@ -1,0 +1,23 @@
+[Unit]
+Description=DustGate brain
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+User=dustgate
+Group=dustgate
+Environment=DUSTGATE_STATE=/var/lib/dustgate
+# A Pi starts this before its WiFi has an address; the brain also waits for one itself, this just avoids a noisy first second.
+ExecStartPre=/bin/sh -c 'for i in $(seq 1 60); do ip route get 8.8.8.8 >/dev/null 2>&1 && exit 0; sleep 1; done; exit 0'
+# Port 80, not 8080: a node pulls its firmware from http://<brain ip><path> with no port.
+ExecStart=/opt/dustgate/bin/dustgate-brain --id dustgate --port 80 --www /opt/dustgate/www
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+Restart=always
+RestartSec=3
+# The brain has no external dependencies to wait on, so a crash loop is a bug to see, not to back off from.
+StartLimitIntervalSec=0
+
+[Install]
+WantedBy=multi-user.target

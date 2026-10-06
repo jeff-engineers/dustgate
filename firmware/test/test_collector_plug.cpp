@@ -51,7 +51,7 @@ int main() {
         // Written out rather than derived, so a change on one side of the pair
         // fails HERE. Deriving them from the header would make this test agree
         // with any value at all, which is the opposite of the point.
-        ok("kCollectorRunningW is 50", RUN == 50.0f,
+        ok("kCollectorRunningW is 25 (TEMPORARY, a bench desk fan; was 50)", RUN == 25.0f,
            std::to_string(RUN));
         ok("kCollectorSpinupGraceMs is 4000", GRACE == 4000u,
            std::to_string(GRACE));

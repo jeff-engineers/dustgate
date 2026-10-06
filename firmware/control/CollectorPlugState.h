@@ -31,7 +31,8 @@ namespace topo {
 
 // Watts above which a blower counts as actually running.
 // COLLECTOR_RUNNING_W in topology-device.js — keep equal.
-static const float kCollectorRunningW = 50.0f;
+// TEMPORARY 25 (was 50), 2026-10-06: the bench "collector" is a desk fan drawing ~38 W. Put it back — TODO.md.
+static const float kCollectorRunningW = 25.0f;
 
 // How long a blower gets to reach running draw before we call it a failure.
 // An induction motor takes a second or three to spin up, and a lightly-loaded

@@ -24,37 +24,13 @@
 #pragma once
 #include <ArduinoJson.h>
 #include "ActuatorBus.h"
+#include "BoardId.h"       // bareHost, isOwnBoard: the one rule for "which board is this id"
 #include <cctype>
 #include <map>
 #include <string>
 #include <vector>
 
 namespace topo {
-
-// ONE canonical spelling for a board's address.
-//
-// The same node legitimately appears as "dustgate-node-1" (what you paired, what
-// mDNS advertises) and "dustgate-node-1.local" (what you must actually dial, and
-// so what /api/nodes reports and the UI writes back into link.host). Comparing
-// those with == silently produced a shop where the link was up and green while
-// every gate on it was un-commandable: the remotes map was keyed on one spelling
-// and the topology's alias pointed at the other.
-//
-// Case-insensitive too, since mDNS names are.
-inline std::string bareHost(const char* h) {
-    if (!h) return std::string();
-    std::string s(h);
-    // Trailing dot first: a fully-qualified mDNS name is "host.local."
-    if (!s.empty() && s.back() == '.') s.pop_back();
-    const std::string suffix = ".local";
-    if (s.size() > suffix.size()) {
-        std::string tail = s.substr(s.size() - suffix.size());
-        for (char& c : tail) c = (char)tolower((unsigned char)c);
-        if (tail == suffix) s.erase(s.size() - suffix.size());
-    }
-    for (char& c : s) c = (char)tolower((unsigned char)c);
-    return s;
-}
 
 class NodeBus {
 public:
@@ -91,9 +67,8 @@ public:
     // resolution below is exactly the same problem. Two copies of that lookup is
     // how a sensor ends up working on a board whose gates do not, or vice versa.
     ActuatorBus* busForController(const char* cid) const {
-        if (!cid || !*cid) return _local;
+        if (isOwnBoard(cid ? cid : "", _ownId)) return _local;
         const std::string id = bareHost(cid);
-        if (bareHost(_ownId.c_str()) == id) return _local;
         // controllerId → host, then host → link. A controllerId that IS a host
         // (the natural case when the picker writes what discovery found) resolves
         // without an alias, so a topology saved before aliases existed still works.
@@ -135,6 +110,21 @@ public:
                      float& watts, bool& fault, uint32_t& atMs) const {
         ActuatorBus* b = busForController(controllerId);
         return b && b->plugReading(sensorId, watts, fault, atMs);
+    }
+
+    // The collector's jobs on a node — see ActuatorBus::canPressRf / pressRf.
+    bool canPressRf(const char* controllerId) const {
+        ActuatorBus* b = busForController(controllerId);
+        return b && b->online() && b->canPressRf();
+    }
+    bool watchesBin(const char* controllerId) const {
+        ActuatorBus* b = busForController(controllerId);
+        return b && b->watchesBin();
+    }
+    bool pressRf(const char* controllerId, uint8_t address, uint8_t data,
+                 uint32_t tickUs, uint32_t repeats) {
+        ActuatorBus* b = busForController(controllerId);
+        return b && b->online() && b->canPressRf() && b->pressRf(address, data, tickUs, repeats);
     }
 
     bool setState(const char* selectorId, JsonObjectConst sel, const char* stateId) {

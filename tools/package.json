@@ -6,7 +6,7 @@
     "mock": "node mock-api.js",
     "conformance": "node ../shared/device-model/conformance.js",
     "conformance:ci": "node mock-api.js & MOCK_PID=$!; sleep 2; node ../shared/device-model/conformance.js; RC=$?; kill $MOCK_PID; exit $RC",
-    "model:test": "node ../shared/device-model/topology.test.js && node ../shared/device-model/shop.test.js && node ../shared/device-model/nodelink.test.js && node ../shared/device-model/plug-claim.test.js && node ../shared/device-model/adopt-outlets.test.js && node ../shared/device-model/manual-blower.test.js && node ../shared/device-model/collector-plug.test.js && node ../shared/device-model/bin-sensor.test.js && node ../shared/device-model/problems.test.js && node ../shared/device-model/plug-owner.test.js",
+    "model:test": "node ../shared/device-model/topology.test.js && node ../shared/device-model/shop.test.js && node ../shared/device-model/nodelink.test.js && node ../shared/device-model/plug-claim.test.js && node ../shared/device-model/adopt-outlets.test.js && node ../shared/device-model/manual-blower.test.js && node ../shared/device-model/collector-plug.test.js && node ../shared/device-model/bin-sensor.test.js && node ../shared/device-model/problems.test.js && node ../shared/device-model/plug-owner.test.js && node ../shared/device-model/board-id.test.js",
     "blower:test": "node ../shared/device-model/manual-blower.test.js && node ../shared/device-model/collector-plug.test.js",
     "adopt:test": "node ../shared/device-model/adopt-outlets.test.js",
     "shop:test": "node ../shared/device-model/shop.test.js",
@@ -23,7 +23,7 @@
     "firmware:shop:test": "cd .. && c++ -std=c++17 -I \"$(dirname \"$(find .pio.nosync/libdeps -path '*/ArduinoJson/src/ArduinoJson.h' | head -1)\")\" firmware/test/test_shop.cpp -o /tmp/dustgate-shoptest && /tmp/dustgate-shoptest firmware/test/fixtures/",
     "firmware:faults:test": "cd .. && c++ -std=c++17 firmware/test/test_faults.cpp -o /tmp/dustgate-faulttest && /tmp/dustgate-faulttest",
     "firmware:screen:test": "cd .. && c++ -std=c++17 firmware/test/test_statusscreen.cpp -o /tmp/dustgate-screentest && /tmp/dustgate-screentest",
-    "firmware:test": "fail=\"\"; for t in router controller nodebus shop faults plugclaim screen blower bin cttrip collectorplug collectorpress rfaddr relocate nodelinkplan plugowner; do npm run \"firmware:${t}:test\" || fail=\"$fail $t\"; done; if [ -n \"$fail\" ]; then echo \"FAILED suites:$fail\"; exit 1; fi",
+    "firmware:test": "fail=\"\"; for t in router controller nodebus shop faults plugclaim screen blower bin cttrip collectorplug collectorpress rfaddr relocate nodelinkplan plugowner boardid sensorplan nodesession collectordriver apicore deviceproblems; do npm run \"firmware:${t}:test\" || fail=\"$fail $t\"; done; if [ -n \"$fail\" ]; then echo \"FAILED suites:$fail\"; exit 1; fi",
     "plugclaim:test": "node ../shared/device-model/plug-claim.test.js",
     "bin:test": "node ../shared/device-model/bin-sensor.test.js",
     "firmware:cttrip:test": "cd .. && c++ -std=c++17 -I firmware/test/shim firmware/test/test_cttrip.cpp -o /tmp/dustgate-cttrip && /tmp/dustgate-cttrip",
@@ -34,7 +34,13 @@
     "firmware:nodelinkplan:test": "cd .. && c++ -std=c++17 firmware/test/test_nodelinkplan.cpp -o /tmp/dustgate-nlptest && /tmp/dustgate-nlptest",
     "firmware:plugowner:test": "cd .. && c++ -std=c++17 -I \"$(dirname \"$(find .pio.nosync/libdeps -path '*/ArduinoJson/src/ArduinoJson.h' | head -1)\")\" firmware/test/test_plugowner.cpp -o /tmp/dustgate-potest && /tmp/dustgate-potest firmware/test/fixtures/",
     "firmware:collectorpress:test": "cd .. && c++ -std=c++17 firmware/test/test_collector_press.cpp -o /tmp/dustgate-cpresstest && /tmp/dustgate-cpresstest",
-    "firmware:rfaddr:test": "cd .. && c++ -std=c++17 firmware/test/test_rf_address.cpp -o /tmp/dustgate-rfatest && /tmp/dustgate-rfatest"
+    "firmware:boardid:test": "cd .. && c++ -std=c++17 firmware/test/test_boardid.cpp -o /tmp/dustgate-bidtest && /tmp/dustgate-bidtest",
+    "firmware:sensorplan:test": "cd .. && c++ -std=c++17 -I \"$(dirname \"$(find .pio.nosync/libdeps -path '*/ArduinoJson/src/ArduinoJson.h' | head -1)\")\" firmware/test/test_sensorplan.cpp -o /tmp/dustgate-sptest && /tmp/dustgate-sptest",
+    "firmware:nodesession:test": "cd .. && c++ -std=c++17 -I \"$(dirname \"$(find .pio.nosync/libdeps -path '*/ArduinoJson/src/ArduinoJson.h' | head -1)\")\" firmware/test/test_nodesession.cpp -o /tmp/dustgate-nstest && /tmp/dustgate-nstest",
+    "firmware:rfaddr:test": "cd .. && c++ -std=c++17 firmware/test/test_rf_address.cpp -o /tmp/dustgate-rfatest && /tmp/dustgate-rfatest",
+    "firmware:collectordriver:test": "cd .. && c++ -std=c++17 -I \"$(dirname \"$(find .pio.nosync/libdeps -path '*/ArduinoJson/src/ArduinoJson.h' | head -1)\")\" firmware/test/test_collector_driver.cpp -o /tmp/dustgate-cdtest && /tmp/dustgate-cdtest",
+    "firmware:apicore:test": "cd .. && c++ -std=c++17 -I \"$(dirname \"$(find .pio.nosync/libdeps -path '*/ArduinoJson/src/ArduinoJson.h' | head -1)\")\" firmware/test/test_apicore.cpp -o /tmp/dustgate-actest && /tmp/dustgate-actest",
+    "firmware:deviceproblems:test": "cd .. && c++ -std=c++17 -I \"$(dirname \"$(find .pio.nosync/libdeps -path '*/ArduinoJson/src/ArduinoJson.h' | head -1)\")\" firmware/test/test_deviceproblems.cpp -o /tmp/dustgate-dptest && /tmp/dustgate-dptest"
   },
   "dependencies": {
     "dotenv": "^16.4.5",

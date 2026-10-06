@@ -520,43 +520,49 @@ bool SmartOutletControl::provisionPushOutlets() {
         DEBUG_PRINTLN(reachable ? F("yes") : F("no"));
         if (!reachable) { pending = true; continue; }
 
-        // ── TASMOTA TAKES A DIFFERENT ROUTE ─────────────────────────────────
+        // ── WHO OWNS THIS PLUG? (RFC §8) ────────────────────────────────────
+        // Ask before writing. Ws.SetConfig is silent theft when the answer is "someone else":
+        // the previous owner stops hearing that its tool started, with no error on either side.
+        // A Tasmota's claim is Mem1 rather than a push config — weaker, advisory, and
+        // documented at plugclaim::decideMarker() — but the RULE is identical and deliberately
+        // so, which is why one call answers it for both: SmartOutlet::readClaim().
         //
-        // Same shape, different verbs: the claim is Mem1 rather than a push
-        // config, and there is no name to suffix — a Tasmota has no readable
-        // friendly name the way a Shelly does, so the owner lives only in Mem1.
-        //
-        // The RULE is identical and deliberately so: ask before writing, and a
-        // failed read is never permission. See plugclaim::decideMarker() for
-        // what this claim does NOT buy — it is advisory, not enforced.
-        if (o->kind() == OUTLET_TASMOTA) {
-            // Safe without RTTI: kind() is exactly the discriminator, which is
-            // why it exists (see OutletFactory.h).
+        // A FAILED READ IS NOT PERMISSION. If the plug won't answer we leave it alone and retry
+        // next pass — "I couldn't tell" must never collapse into "so I took it".
+        const bool isTasmota = o->kind() == OUTLET_TASMOTA;
+        plugclaim::Claim claim;
+        std::string pushUrl;
+        if (!o->readClaim(_ourHost, o->name() ? o->name() : "", _ourName, claim, &pushUrl)) {
+            DEBUG_PRINT(F("[Outlets] ")); DEBUG_PRINT(o->ip());
+            DEBUG_PRINTLN(isTasmota ? F(" — couldn't read Mem1; leaving it alone, will retry.")
+                                    : F(" — couldn't read Ws config; leaving it alone, will retry."));
+            pending = true;
+            continue;
+        }
+
+        // The `confirmed` argument is the user's explicit takeover approval and comes from
+        // exactly one place: POST /api/outlets/takeover. This is a background pass, so it can
+        // only ever pass what the user already said.
+        if (!plugclaim::mayRepoint(claim, o->takeoverApproved())) {
+            // Paired READ-ONLY. Polling gets us the wattage, which is the whole job of a sensor
+            // plug, so this is a working pairing and not a failure — hence no `pending`, and no
+            // retry.
+            o->setPollOnly(true);
+            DEBUG_PRINT(F("[Outlets] ")); DEBUG_PRINT(o->ip());
+            DEBUG_PRINT(F(" is ")); DEBUG_PRINT(plugclaim::stateName(claim.state));
+            DEBUG_PRINT(F(" (")); DEBUG_PRINT(claim.reason.c_str());
+            DEBUG_PRINTLN(isTasmota ? F(") — polling it, NOT claiming it.")
+                                    : F(") — polling it, NOT repointing its push target."));
+            continue;
+        }
+
+        // A Tasmota takes a different route to being claimed (a Mem1 marker, no push, no name
+        // to suffix — it has no readable friendly name the way a Shelly does).
+        if (isTasmota) {
+            // Safe without RTTI: kind() is exactly the discriminator, which is why it exists
+            // (see OutletFactory.h).
             TasmotaOutlet* t = static_cast<TasmotaOutlet*>(o);
-
-            String marker;
-            if (!t->readOwner(marker)) {
-                DEBUG_PRINT(F("[Outlets] ")); DEBUG_PRINT(o->ip());
-                DEBUG_PRINTLN(F(" — couldn't read Mem1; leaving it alone, will retry."));
-                pending = true;
-                continue;
-            }
-
-            const plugclaim::Claim tclaim =
-                plugclaim::decideMarker(marker.c_str(), _ourName);
-
-            if (!plugclaim::mayRepoint(tclaim, o->takeoverApproved())) {
-                // Polling still works and is the whole job of a sensor plug, so
-                // this is a working pairing rather than a failure — no retry.
-                o->setPollOnly(true);
-                DEBUG_PRINT(F("[Outlets] ")); DEBUG_PRINT(o->ip());
-                DEBUG_PRINT(F(" is ")); DEBUG_PRINT(plugclaim::stateName(tclaim.state));
-                DEBUG_PRINT(F(" (")); DEBUG_PRINT(tclaim.reason.c_str());
-                DEBUG_PRINTLN(F(") — polling it, NOT claiming it."));
-                continue;
-            }
             o->setPollOnly(false);
-
             if (t->provision(_ourName)) {
                 o->setProvisioned(true);
                 clearTakeoverApproval(o->ip());
@@ -567,47 +573,14 @@ bool SmartOutletControl::provisionPushOutlets() {
             continue;
         }
 
-        // ── WHO OWNS THIS PLUG? (RFC §8) ────────────────────────────────────
-        // Ask before writing. Ws.SetConfig is silent theft when the answer is
-        // "someone else": the previous owner stops hearing that its tool
-        // started, with no error on either side.
-        //
-        // A FAILED READ IS NOT PERMISSION. If the plug won't answer Ws.GetConfig
-        // we leave it alone and retry next pass — "I couldn't tell" must never
-        // collapse into "so I took it".
-        String server; bool wsEnabled = false;
-        if (!o->readPushConfig(server, wsEnabled)) {
-            DEBUG_PRINT(F("[Outlets] ")); DEBUG_PRINT(o->ip());
-            DEBUG_PRINTLN(F(" — couldn't read Ws config; leaving it alone, will retry."));
-            pending = true;
-            continue;
-        }
-
-        const plugclaim::Claim claim = plugclaim::decide(
-            server.c_str(), wsEnabled, _ourHost, o->name() ? o->name() : "", _ourName);
-
-        // The `confirmed` argument is the user's explicit takeover approval and
-        // comes from exactly one place: POST /api/outlets/takeover. This is a
-        // background pass, so it can only ever pass what the user already said.
-        if (!plugclaim::mayRepoint(claim, o->takeoverApproved())) {
-            // Paired READ-ONLY. Polling gets us the wattage, which is the whole
-            // job of a sensor plug, so this is a working pairing and not a
-            // failure — hence no `pending`, and no retry.
-            o->setPollOnly(true);
-            DEBUG_PRINT(F("[Outlets] ")); DEBUG_PRINT(o->ip());
-            DEBUG_PRINT(F(" is ")); DEBUG_PRINT(plugclaim::stateName(claim.state));
-            DEBUG_PRINT(F(" (")); DEBUG_PRINT(claim.reason.c_str());
-            DEBUG_PRINTLN(F(") — polling it, NOT repointing its push target."));
-            continue;
-        }
         if (o->takeoverApproved() && claim.takeable) {
-            // Say it in the log, loudly and once. A takeover is the one thing
-            // here that breaks something on another machine, and the serial log
-            // is where anyone debugging THAT machine will end up looking.
+            // Say it in the log, loudly and once. A takeover is the one thing here that breaks
+            // something on another machine, and the serial log is where anyone debugging THAT
+            // machine will end up looking.
             DEBUG_PRINT(F("[Outlets] TAKEOVER (user-confirmed) of ")); DEBUG_PRINT(o->ip());
             DEBUG_PRINT(F(" from ")); DEBUG_PRINT(claim.holder.c_str());
-            DEBUG_PRINT(F(" — previous push target: ")); DEBUG_PRINTLN(server);
-            o->setPreviousPushUrl(server.c_str());   // so unpairing can hand it back
+            DEBUG_PRINT(F(" — previous push target: ")); DEBUG_PRINTLN(pushUrl.c_str());
+            o->setPreviousPushUrl(pushUrl.c_str());   // so unpairing can hand it back
         }
         o->setPollOnly(false);
 

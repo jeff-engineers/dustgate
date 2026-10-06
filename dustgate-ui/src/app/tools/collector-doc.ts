@@ -51,6 +51,8 @@ export interface CollectorForm {
   /** Everything else that was in `control.rf` — `pin` above all, which is a
    *  property of how the board is built and never something a screen asks. */
   rfRest: RawEl;
+  /** Which board keys the transmitter. '' = the primary's own, matching an absent controllerId. */
+  rfControllerId: string;
   sense: SenseKind;
   sensePlug: PlugForm;
   /** Which BOARD carries the clamp. '' means "this board", matching the bin
@@ -173,7 +175,7 @@ export function readCollector(el: RawEl): CollectorForm {
   const senseCt = sensor?.['ct'] as RawEl | undefined;
   const binSensor = (el['bin'] as RawEl | undefined)?.['sensor'] as RawEl | undefined;
 
-  const { address, ...rfRest } = rf ?? {};
+  const { address, controllerId: rfControllerId, ...rfRest } = rf ?? {};
   const { kind: _binKind, controllerId, ...binRest } = binSensor ?? {};
   const ms = control['offDelayMs'];
 
@@ -183,6 +185,7 @@ export function readCollector(el: RawEl): CollectorForm {
     ctlPlug: readPlug(ctlOutlet),
     rfAddress: typeof address === 'number' ? address : ROCKLER_ADDRESS,
     rfRest: rfRest as RawEl,
+    rfControllerId: (rfControllerId as string) ?? '',
     // A plug wins if a document somehow carries both — validateTopology()
     // refuses that combination, so this only decides what an already-invalid
     // document looks like on screen rather than which one is obeyed.
@@ -217,7 +220,8 @@ export function writeCollector(el: RawEl, form: CollectorForm): RawEl {
     // built, so the firmware supplies it (PIN_RF_TX) and no screen asks. An
     // explicit pin already in the document rides through on `rfRest`, which is
     // how a hand-wired board keeps its own pad.
-    control['rf'] = { ...form.rfRest, address: form.rfAddress };
+    control['rf'] = { ...form.rfRest, address: form.rfAddress,
+                      ...(form.rfControllerId ? { controllerId: form.rfControllerId } : {}) };
   }
   // 'servo' falls through to a bare control: there is no schema to write, and
   // inventing one now is what RFC §4.2c says not to do.

@@ -30,6 +30,7 @@
 #include "../config.h"
 #include "ActuatorBus.h"
 #include "NodeLink.h"
+#include "NodeSession.h"   // the protocol half of a link, with no socket in it
 #include <WebSocketsClient.h>
 #include <ESPAsyncWebServer.h>   // the socket a node-initiated link arrives on
 
@@ -82,7 +83,7 @@ public:
     // nothing — this is the question. false before begin() and after end().
     bool live() const { return _running; }
 
-    const char* nodeId() const { return _nodeId; }
+    const char* nodeId() const { return _s.nodeId(); }
     const char* host()   const { return _host; }
 
     // --- claim (RFC §8 applied to boards) ---------------------------------
@@ -92,13 +93,13 @@ public:
     //
     // refusedBy() is "" until a WELCOME actually refuses us, so a node that is
     // merely unreachable never reads as someone else's property.
-    const char* refusedBy() const { return _refusedBy; }
-    bool wasRefused() const       { return _refusedBy[0] != '\0'; }
+    const char* refusedBy() const { return _s.refusedBy(); }
+    bool wasRefused() const       { return _s.wasRefused(); }
 
     // Ask for the node even though another primary owns it. USER-CONFIRMED
     // ONLY — never call this on a refusal, or the claim degrades into "whoever
     // asks twice". Takes effect on the next connect and is cleared once used.
-    void requestTakeover() { _takeover = true; }
+    void requestTakeover() { _s.requestTakeover(); }
 
     // --- node-initiated links (2026-10-04) ----------------------------------
     // The node dialled US (a JOIN on the primary's /nodelink listener). Bind that
@@ -117,7 +118,7 @@ public:
     void onInboundPong();
     // Does this node say it dials in (WELCOME caps.join)? Read by the sketch to
     // decide whether the dial-out path still has a job.
-    bool dialsIn() const { return _capJoin > 0; }
+    bool dialsIn() const { return _s.dialsIn(); }
     bool inboundUp() const { return _inId != 0; }
     // Does this bus have a dial-out task running right now? A node that dials in does
     // not need one while it is linked — see update().
@@ -149,20 +150,7 @@ public:
     bool jog(int channel, int angle, bool detach) override;
 
     // --- Reporting (for GET /api/nodes) --------------------------------
-    struct NodeInfo {
-        bool     connected;
-        uint32_t lastSeenMs;    // millis() of the last frame from this node
-        char     board[24];
-        char     fw[24];
-        int      capServos;
-        int      capLinear;
-        int      capClamps;   // caps.ct — 0 for every board flashed before 2026-09-15
-        // An update this node was told to run (OTA / OTASTATE): "" when none,
-        // else start | progress | done | fail. `otaPct` is -1 until reported.
-        char     ota[9];
-        int      otaPct;
-        char     otaErr[65];
-    };
+    using NodeInfo = NodeSession::NodeInfo;
     NodeInfo info() const;
 
     // Tell this node to pull and install an image from the primary. Called from
@@ -181,7 +169,13 @@ public:
     // has reported. See ActuatorBus.h for the contract.
     void configureSensors(JsonArrayConst sensors) override;
     bool senseOf(const char* sensorId, bool& on, uint32_t& atMs) const override;
-    bool pollsPlugs() const override { return _capPlugs > 0; }
+    bool pollsPlugs() const override;
+    bool canPressRf() const override;
+    bool watchesBin() const override;
+    bool pressRf(uint8_t address, uint8_t data, uint32_t tickUs, uint32_t repeats) override;
+    // Why the board's last PRESS did not go out ("" = it did, or none was sent). Read by
+    // the sketch so a transmitter that refuses shows up as a problem, not as silence.
+    const char* pressFault() const { return _s.pressFault(); }
     bool plugReading(const char* sensorId, float& watts, bool& fault, uint32_t& atMs) const override;
 
     // Enumerate what this node has reported, for GET /api/nodes. senseOf() asks
@@ -228,6 +222,8 @@ public:
         const char* moveFault;
     };
     LinkHealth health() const;
+
+    RemoteActuatorBus();
 
 private:
     static void taskTrampoline(void* arg) { static_cast<RemoteActuatorBus*>(arg)->taskLoop(); }
@@ -279,68 +275,40 @@ private:
     // off exactly once.
     unsigned long _seenFailMs = 0;
 
-    char     _nodeId[40]    = "";
-    char     _primaryId[40] = "";
+    // THE PROTOCOL HALF of this link — frame handling, move/CONFIG/OTA/PRESS bookkeeping, link health
+    // — lives in NodeSession (control/NodeSession.h), which has no socket, no task and no mutex.
+    // This class is the ESP32 SHELL around it: the transport (a WebSocketsClient on its own task, or
+    // a node's own socket), finding the node, backing off, and the lock that serialises the session
+    // between the main loop and that task. Every call into `_s` is made under `_mutex`.
+    NodeSession _s;
+    // The session reports what it would print or log through this sink — but it is called UNDER
+    // `_mutex`, and printing while holding the lock that the main loop's online() waits on would let
+    // a slow USB console stall the loop. So the sink only QUEUES (a few short lines; overflow is
+    // dropped and counted), and flushSink() prints them after the lock is released.
+    struct Sink : public SessionSink {
+        static const int kLines = 6, kLineLen = 160, kEvents = 3, kExtraLen = 168;
+        RemoteActuatorBus* bus = nullptr;
+        char    line[kLines][kLineLen];
+        uint8_t nLine = 0;
+        char    evName[kEvents][16];
+        char    evExtra[kEvents][kExtraLen];
+        uint8_t nEv = 0;
+        uint8_t dropped = 0;
+        void say(const char* l) override;
+        void linkEvent(const char* event, const char* extraJson) override;
+    };
+    mutable Sink _sink;
+    // Print what the session queued. Takes `_mutex` only to pop one entry at a time, never while
+    // printing. Call with the lock RELEASED.
+    void flushSink() const;
+
     char     _host[64]      = "";   // as configured: bare name, .local, or an IP
     char     _dialing[64]   = "";   // what the socket is actually pointed at
     bool     _hostIsIp      = false;
     uint32_t _lastResolveMs = 0;
     uint16_t _port          = 80;
+    uint32_t _startDelayMs  = 0;
 
-    // --- shared state (guarded by _mutex) ---------------------------------
-    bool     _connected    = false;   // socket up AND WELCOME received
-    uint32_t _lastRxMs     = 0;       // any frame; drives the PONG timeout
-    uint32_t _seq          = 0;
-    bool     _moveOutstanding = false;
-    uint32_t _startDelayMs    = 0;
-    const char* _moveFault    = nullptr;   // static string; see LinkHealth::moveFault
-    uint32_t _moveStartedMs   = 0;
-    char     _txFrame[320]    = "";   // one pending SET, main loop → WS task
-    bool     _txPending       = false;
-    // Set from a WELCOME carrying accepted:false. Read by the API/UI so the user
-    // can be told WHO has the board before being offered a takeover.
-    char     _refusedBy[40] = "";
-    bool     _takeover      = false;   // one-shot, user-confirmed
-    // ── sensors ────────────────────────────────────────────────────────────
-    //
-    // The CONFIG is CACHED, not just sent, and that is the load-bearing part:
-    // the board this was built for is powered from the tool it watches (RFC
-    // §5.6a), so it reboots every time someone switches the planer off at the
-    // wall. A configuration sent once at adopt would be forgotten on the first
-    // power cut and the tool would go quiet forever. Re-sent on every accepted
-    // WELCOME instead, which costs one small frame per reconnect.
-    char     _cfgFrame[768] = "";   // 4 plug specs are ~120 B each, plus the header
-    bool     _cfgPending    = false;
-    // OTA order, sent by the link task. See requestOta().
-    bool     _otaPending    = false;
-    char     _otaFrame[256] = "";
-    uint32_t _otaSeq        = 0;
-    char     _otaState[9]   = "";
-    int      _otaPct        = -1;
-    char     _otaErr[65]    = "";
-    uint32_t _otaTouchedMs  = 0;   // last time the order or a report moved the state — a silent node is not 'updating' for ever
-    bool     _cfgValid      = false;   // have we ever been given one?
-
-    struct SenseState {
-        char     sensorId[nodelink::kMaxSensorIdLen] = "";
-        bool     on           = false;
-        uint32_t atMs         = 0;
-        // Multiple of the node's trip point, straight off the wire. DIAGNOSTIC
-        // ONLY — nothing routes on it — and kept because it is the one number
-        // that answers "is this clamp nearly tripping, or nowhere near?" while
-        // the trip constants are still provisional (sensing/CtTrip.h).
-        float    level        = -1.0f;
-        // Telemetry for a human, straight off the wire, in AMPS. Negative =
-        // the node omitted it. NOTHING BRANCHES ON THESE — see nodelink.js.
-        float    amps         = -1.0f;
-        float    floorA       = -1.0f;
-        float    tripA        = -1.0f;
-        bool     fault        = false;   // the node could not learn a floor (a plug: did not answer)
-        bool     isPlug       = false;   // reported by a plug sensor, not a clamp
-        float    watts        = -1.0f;   // a plug's reading; negative = none
-    };
-    SenseState _senses[nodelink::kMaxSensorsPerNode];
-    size_t     _senseCount = 0;
     // Current reconnect interval, between kReconnectMinMs and kReconnectMaxMs.
     unsigned long _retryMs = nodelink::kReconnectMinMs;
 
@@ -350,21 +318,9 @@ private:
     char     _lastIp[20]   = "";
     uint32_t _hostHash     = 0;
 
-    // Link health (see LinkHealth). Written on the link task, read by the main
-    // loop through health() under _mutex — except _lastMdnsOkMs, a lone aligned
-    // word written in one place.
-    uint32_t          _downSinceMs  = 0;
+    // How recently the node's NAME answered mDNS — a sign of life for the WiFi rejoin (see
+    // LinkHealth). A lone aligned word written in one place, so it needs no lock.
     volatile uint32_t _lastMdnsOkMs = 0;   // 0 = never
-    uint16_t          _hollowDrops  = 0;
-    bool              _everLinked   = false;   // first link_up of this begin() is marked "first"
-
-    char     _board[24]    = "";
-    char     _fw[24]       = "";
-    int      _capServos    = 0;
-    int      _capLinear    = 0;
-    int      _capClamps    = 0;   // caps.ct — how many CTs this board says it has
-    int      _capPlugs     = 0;   // caps.plug — 1 if it polls plugs for us; absent = 0
-    int      _capJoin      = 0;   // caps.join — 1 if it dials us itself; absent = 0
 
     // The socket a node-initiated link arrived on. Set on the async_tcp task by the
     // JOIN, read by the main loop; the id is the handle, the pointer only used while

@@ -14,6 +14,72 @@ active sections above them, which is how a parked item stops being read.
 
 ## Bugs
 
+- **Nodes should be able to have their CT clamp disabled; default to none (jeff, 2026-10-06).** Today every C5 node reports
+  `caps.ct = 1` from its pin map (`PIN_CT`) whether or not a clamp is plugged in, so an unclamped board reads as having one
+  and the layout can point a tool at a clamp that is not there. Two routes, in order of preference: (1) when the clamp moves to a
+  headphone-style jack, use the jack's switch contact to detect a plug (a GPIO reads the jack's normally-closed pin) and report
+  `caps.ct` only while one is inserted, which needs no setting at all; (2) until then, default nodes to NO clamp and add an
+  enable (a CONFIG field or a per-board setting in the app, kept by the primary so a reflash does not lose it). A clamp is declared
+  by its board because nothing on the network can discover one, so the enable has to be something a person can set. Pair rule:
+  `caps.ct` default and any new field go in `nodelink.js` ↔ `NodeLink.h`, same cases, same order.
+
+- **The Live screen has no way to switch the collector by hand (found 2026-10-06, bench test 16).** `POST /api/collector` works
+  (both brains, `ApiService.setCollectorManual()`), but nothing in the app calls it: the collector card shows state and has no
+  button, so the only way to start a blower from the app is to switch a tool on. My test list said "tap the collector" and
+  there is nothing to tap. A control on the card ("Run it" / "Stop it"), with the wording a hand-started blower needs, wants
+  a mockup first (docs/mockups, the standing UI rule) — and it should say plainly when the brain will NOT turn it off for you
+  (a blower started by hand stays on).
+
+- **Collector slow to start for a tool used for seconds (jeff, 2026-10-06, bench test 10).** The miter saw was "a bit slow" to
+  bring the collector on, which matters: a miter saw runs for a few seconds at a time, so a collector that arrives late
+  never helps. Find where the time goes before changing anything — add timestamps for the whole chain and read them off a
+  run: plug reading crosses the threshold (a Tasmota is POLLED every 500 ms, no push; a Shelly pushes) -> the tool is
+  active -> the 1 s ON debounce -> the make-before-break move (a servo on a 1 W adapter is slow) -> the PRESS goes out ->
+  the RF transmit (several frames) -> the receiver relay -> the plug sees the draw. Candidates: Tasmota polling and its slow
+  power reading, the debounce, the gate move, and a first-switch-on re-assert of all five gates running ahead of the
+  collector's press (it should not: the blower waits only for MAKES, but confirm). Also decide whether a short tool
+  should leave the collector running for its coast-down so the next cut finds it already on.
+- **"Find plugs" does not load (jeff, 2026-10-06).** The Build canvas loads fine against the native brain (checked in the
+  browser pane 2026-10-06); the failure is behind the menu item — `build.component.ts findPlugs()` -> `scanOutlets(true)` ->
+  `/api/outlets/discover` then `startSweep()` / `/api/outlets/sweep`. Reproduce with the console and network tabs open and see
+  which request fails or never answers. Not tried yet because a sweep knocks on the whole subnet.
+- **Bench test 20: rename a plug and release it (jeff, 2026-10-06).** Rename a Shelly from the app and confirm the new name in the
+  Shelly app; release one and confirm it stops pushing and the previous push target comes back. Not run yet.
+- **Bench: the collector's CT option (jeff, 2026-10-06).** The collector can be sensed by a current clamp on the cyclone board
+  instead of the Tasmota (`sensor.ct` on the collector). Wire one, point the layout at it, and check that a blower started by
+  the RF remote reads as running from the clamp alone, and that the press policy sees the same Running/Off the plug gave it.
+  Compare its response time with the Tasmota's, which lags ~13 s falling to zero on a small load.
+- **Bench: a dedicated optional node for the planer's sensor (jeff, 2026-10-06).** A board whose only job is to sense the planer
+  (its clamp, or a plug the board polls) with no gates, optional in the layout. Check it pairs, reports SENSE, drives the planer's
+  gate on another board, and that the layout needs no gate on it. The extra unpaired `dustgate-sensor` (192.168.86.60) may be this.
+- **Bench: the slider node (jeff, 2026-10-06).** Out of 12 V supplies tonight, so it was not tested with the shop. Run it:
+  boot, join, home (on the first SET or the one-second button hold), take a SET, move to each stop, and do it through the Mac
+  brain (the native brain has only run PWM nodes). Needs a 12 V supply for the ST3215.
+
+- **Re-send an interrupted gate move after a board resets mid-move (jeff, 2026-10-06).** When a node browns out or reboots
+  during a move, the brain now frees the servo mutex (`NodeSession::onAttach` drops the dead board's move and sets a
+  `moveFault`), but it does not re-send the gate it was moving: the gate's real position is unknown and the brain's
+  belief is stale until the next tool switch-on re-asserts every gate. After the relink and CONFIG, re-issue the move
+  for that selector (or mark it for re-assert, `TopologyRuntime::_reassert`), and add a paired host test. Seen on the
+  bench with the router-table/jointer manifold, probably the 1 W adapter browning out under a lever arm holding the
+  servo's weight.
+
+- **Audit every shared constant: pair it, or test that it agrees (jeff, 2026-10-06).** A constant that two builds both
+  need must be PAIRED where it can be — one definition, or a pair-table row in `CLAUDE.md` with a JS test and a C++ test
+  asserting the same literal — and where it cannot be (a value baked into a compiled app, a number a node holds, a
+  copy in a different toolchain), there must be a unit test that fails when the copies disagree. Found the hard way
+  2026-10-06: the app has its own compiled copy of `COLLECTOR_RUNNING_W`, so changing it in the brain alone left the Live
+  screen saying "Not starting" for a fan the brain called running. Do: (1) grep for bare numbers duplicated across
+  `shared/device-model`, `firmware/`, `native/` and `dustgate-ui/` (the UI imports the model at build time, so its copy is
+  silently STALE until a rebuild — a test that compares the built bundle's value to the model's would catch it); (2) for
+  each, either add the pair-table row and paired tests or a one-sided test and say why it cannot be paired; (3) have
+  `make test` / `npm test` fail on a stale UI bundle.
+
+- **PUT THE COLLECTOR "RUNNING" THRESHOLD BACK TO 50 W (jeff, 2026-10-06 — TEMPORARY).** The bench collector is a desk fan
+  that draws ~38 W, so `kCollectorRunningW` (control/CollectorPlugState.h) and `COLLECTOR_RUNNING_W`
+  (topology-device.js) are 25 for now. Restore both to 50, and the literal in `test_collector_plug.cpp` ("kCollectorRunningW is
+  ..."), and REBUILD THE APP (`npm run build` in dustgate-ui) — the Live screen judges the draw itself from the same constant, compiled in, so a brain-only change leaves it saying "Not starting" (found 2026-10-06) — the moment a real blower is on that plug — at 25 W a blower that is merely plugged in and idling could read as running.
+
 - **Nodes find the brain, so a link stops costing the brain a task (jeff, 2026-10-04 —
   scoped, not started).** The full-shop test put nine paired nodes at 22 KB free internal
   RAM and a UI that refused to load; the nine link tasks alone are ~45 KB of stacks. The
@@ -25,24 +91,28 @@ active sections above them, which is how a parked item stops being read.
   Full plan, memory table and open questions:
   [`docs/nodes-dial-the-brain-plan.md`](../docs/nodes-dial-the-brain-plan.md).
 
-- **A collector cannot run as a node yet: its RF transmitter and bin sensor only
-  work on a PRIMARY (jeff, 2026-10-04).** Asked whether the collector has to be
-  powered by the brain. It does, for two of its three jobs. Checked in the code:
-  the RF press (`PIN_RF_TX`, D10) and the bin-level read (`HAS_BIN`, D6) live in
-  `firmware.ino` only — `node/dustgate_node.cpp` has neither, and NodeLink has no
-  frame to ask a node to press the remote or to report bin state. The clamp (CT) DOES
-  work on a node. A fob servo is an ordinary servo channel, but whether the collector
-  press logic reaches one over NodeLink is UNCHECKED. This contradicts the design
-  rule in CLAUDE.md ("the collector gets its own board … same node build, same
-  NodeLink"), which is the intent and not the fact; dev.sh's header is the only place
-  that says so. It matters when the brain is not at the collector — in a big shop that
-  is the likely case.
-  To do: (1) read the collector-press path to see what already goes over NodeLink;
-  (2) a NodeLink frame for "press" (and the retry/confirm policy stays on the primary —
-  CollectorPress.h is already pure) and one for bin state; (3) move the RF transmit
-  and the bin read out of `firmware.ino` into headers the node includes; (4) paired JS/C++
-  frames and tests per the usual rule, and a row in the CLAUDE.md constants table for
-  whatever bounds they carry. Until then: wire RF and the bin sensor to a primary.
+- **Native brain: what is left before a Pi is a product (2026-10-05).** Built and tested against fakes (`make -C native test`): node links, layout routing, the collector press loop, plug polling with the ESP32's own drivers, the app, and — since the API step — manual tool/collector switches, servo jog, pairing/pausing/discovery (a board nobody paired announces itself with a JOIN), node image staging and `/api/nodes/update` (images live on disk, so the full-filesystem problem does not exist here), the console and link log, the plug screens (ping, rename, release, sweep) and the board/plug problems. The app loads against it and its Boards and Shop screens render a real layout. **Not done:** (1) DONE 2026-10-05 against the five real nodes (no servos attached): gate moves (SET → ACK → STATE moving/arrived), the RF press and a bin sensor all work from the Mac brain; a firmware update pulled from the Mac brain's own disk installed on a real node (needs the brain on port 80); 10 restarts of the Mac brain brought all five nodes back in 1–20 s with no flaps; (2) DONE 2026-10-06: Shelly push (`/shelly-rpc`), claim/provisioning and takeover (`outlets/Provision.h`, `e2e_push.sh`) — against a fake Shelly only; not yet against a real plug, and the ESP32 still has its own copy of the provisioning loop; (3) the brain must listen on port 80 for node OTA (the node builds `http://<ip><path>`, no port) — done and verified; the Mac brain also holds idle sleep off with `caffeinate`; (4) mDNS advertising — on a Pi, set the hostname to `dustgate` and avahi does it; on a Mac use `dns-sd -P`; (5) packaging — image, first-boot WiFi, read-only root, watchdog; (6) the ESP32 still has its own copies of the routes in `api/ApiCore.h` (manual switches, jog, pairing, pause, discover, update), to move over one at a time with a bench run each — plug ping/rename/release and the board/plug problems already are shared.
+
+- **A node-owned plug's on/off threshold is compared twice.** The node polls the plug, compares
+  watts to the `thresholdW` it was sent and sets SENSE `on`; the brain ignores that bit and
+  compares the watts itself (`TopologyRuntime::pollSensors` → `setMachinePower`). Harmless, but two
+  copies of one rule. Fix: drop `thresholdW` from the `plug` sensor in CONFIG (and `on` from plug
+  SENSE) so the node only reports watts — a protocol change, so `nodelink.js` ↔ `NodeLink.h` ↔
+  `test_nodebus.cpp` and the CLAUDE.md pair-table row move together, and it needs a node flash.
+  Deferred 2026-10-04 so it does not ride along with the native build.
+
+- **Bench the collector's jobs on a node (built 2026-10-04; PRESS and the bin pad first run on a real node 2026-10-05 — see CLAUDE.md for what that did and did not prove; items (2) key a real receiver, (3) cover the beam and (4) the no-replay drop remain).** A
+  node can now key the RF transmitter (a `PRESS` frame) and watch the dust-bin beam (a
+  `bin` sensor in CONFIG, reported as a SENSE bit); the retry policy stays on the primary.
+  Host-tested only. To do on a bench with a collector board flashed as a NODE: (1) pair it,
+  point the layout's `control.rf.controllerId` and `bin.sensor.controllerId` at it, and
+  check the board's WELCOME says `caps.rf`/`caps.bin`; (2) `[RF] press ... sent` on the
+  node's console when the brain presses, and the real Rockler receiver actually keyed from
+  a node (the timing is the same RMT code, but it has never run beside NodeLink's tasks);
+  (3) cover the beam and check `[BIN] FULL` after ~2 s and `systems[].bin.full` in
+  `/api/status`, then uncover it; (4) pull the node's power mid-press and check no press
+  is replayed on reconnect (a PRESS is an edge against a toggle — the bus drops a queued
+  one on a link drop, and a test says so, but nobody has watched it); (5) DONE 2026-10-05: the collector sheet now offers a board for the transmitter (the bin and clamp already had one).
 
 - **Prove node-owned plug polling under a real load (jeff, 2026-10-04 — deferred).**
   Verified on the bench so far: a Tasmota paired to a tool whose gate is on
@@ -239,33 +309,6 @@ active sections above them, which is how a parked item stops being read.
   this state shouldn't exist, when the last tool is turned off it's gate should remain open
   there should be no way outside of manual user invervention to dead-head a system                      
 
-- **loop() is still one enormous function — LANDED 2026-09-14, keep watching.**
-  A stack protection fault on a collector board at boot, 2026-09-12:
-  `SP 0x4085d060` against bounds `0x4085d068`, canary `0xabba1234` on the
-  pointer, a half-built status JSON in the stack dump.
-
-  The mechanism is worth keeping even though this is fixed, because it will
-  recur: **loop() is a single function, so every `StaticJsonDocument` declared
-  anywhere inside it reserves space in the SAME frame whether or not that branch
-  runs.**
-
-  Done: `SET_LOOP_TASK_STACK_SIZE(16 * 1024)` (was 8 KB), `sweepProbeOne()`, and
-  then ping, rename and release pulled out into their own functions — a `<512>`
-  and two `<256>`s that had been resident on every pass to serve requests that
-  arrive a handful of times in a shop's life. **loop() now declares no
-  StaticJsonDocument at all**; the four remaining documents in it are
-  `DynamicJsonDocument`, which are heap.
-
-  Also done, and the part that matters from here: the boot banner prints
-  `uxTaskGetStackHighWaterMark()`. **Baseline measured on hardware 2026-09-14:
-  13644 bytes free of 16384**, on a primary with a screen. A number that shrinks
-  release over release is the warning nobody used to get — that is the whole
-  reason it is printed, so compare it rather than glancing at it.
-
-  What is NOT done: loop() is still ~1800 lines and will keep growing, and
-  nothing enforces any of this. The next thing to extract when it bites is
-  whatever has grown a document since.
-
 - **Can the collector node run on ONE brick? (2026-09-11, decides a purchase.)**
 
   The collector node is being built as power topology **A** first —
@@ -372,17 +415,6 @@ active sections above them, which is how a parked item stops being read.
   brain. The 0.195 A noise floor was measured in that state — so whatever is
   making it, it is NOT node chatter, and the quieter radio makes the number a
   floor-of-floors rather than a worst case.
-
-- **~~Re-measure the CT on the rebuilt divider~~ DONE 2026-09-16.** Scale held
-  (+1.50% vs the Tasmota, against +0.94% before), the screen's contribution fell
-  from ~80% of the floor to 11%, and the floor underneath is the C5 ADC's own
-  noise — shorting the CT out does not move it. **§5.5 is closed** (§5.5b), and
-  the `Hz` column was found to report a fraction of the sample rate when fed
-  noise, which wasted an hour. `ct-bench.md`'s parts table is no longer stale.
-
-  What is left is optional and deliberately unbuilt: a 60 Hz demodulator would
-  take the floor down 10-20x, and nothing needs it while a running collector
-  sits 63x above it.
 
 - **Pick a CHANNEL on a multi-channel Tasmota meter (2026-09-10; half done
   2026-09-14).** `TasmotaOutlet::doPoll()` now DETECTS `Power` as an array and
@@ -999,18 +1031,6 @@ active sections above them, which is how a parked item stops being read.
   The single-servo + CT carrier above is unaffected and still undecided.
 
 
-
-- **`POST /api/dustcollector/switch` is dead under a shop.** It drives collector
-  slot 0 directly (`SmartOutletControl::setDcManual`), and with a topology loaded
-  the main loop re-asserts every slot from `g_topoRuntime.collectorOn(systemId)`
-  on every pass — so the switch is undone microseconds after it lands. It reports
-  success the whole time, which is the worst way for an endpoint to be broken.
-  `POST /api/collector {systemId?, on}` replaced it (D-59) and goes through the
-  routing runtime, where the decision survives. Deleting the old route is
-  phase-1 cleanup: the route, `_dcSwitchPending`/`consumeDustCollectorSwitchRequest`,
-  its consumer in `firmware.ino`, and `ApiService.setDustCollector()` +
-  `DemoApiService`'s override. `setDcManual`/`setCollectorManual` themselves STAY —
-  the runtime is what calls them.
 
 - **Every C5 partition table assumes 4 MB. The chip is 8 MB (2026-09-09).**
   `esptool flash_id` on the bench primary: `Detected flash size: 8MB`, on an

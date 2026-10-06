@@ -57,6 +57,16 @@ namespace topo {
 // the grace rather than one straddling it.
 static const uint32_t kPressCooldownMs = kCollectorSpinupGraceMs + 1000;
 
+// AFTER AN OFF PRESS THE WAIT IS LONGER, because a plug's POWER reading is slow to fall. Bench 2026-10-06, a Tasmota on a ~35 W
+// fan: the plug's own current dropped to idle within two seconds of the fan stopping, but its power reading held the old
+// value for 13 s before reaching zero (an energy chip that counts pulses reports nothing until a pulse timeout expires,
+// and pulses are seconds apart at low power). A retry inside that window "saw running", pressed again and turned the fan
+// back ON, and the third press turned it off again: three OFF presses, three toggles, and the verdict landed on luck. ON
+// is not slow (power read 1.1 s after the press, "running" at 1.6 s), so ON keeps the short wait. A real blower draws
+// hundreds of watts and pulses fast, so this mostly protects small loads — but it costs nothing real: a failed OFF is
+// reported a little later.
+static const uint32_t kPressCooldownOffMs = 20000;
+
 static_assert(kPressCooldownMs > kCollectorSpinupGraceMs,
               "A press inside the spin-up grace turns a starting blower OFF, and "
               "the system then oscillates. See CollectorPress.h.");
@@ -88,6 +98,9 @@ struct PressState {
     bool     everPressed = false;
     bool     wanted      = false;   // the state the attempts are working toward
     bool     gaveUp      = false;
+    // We turned it on (an ON press went out and no OFF press has since). Only a blower WE started is ours to stop:
+    // one that is running and was never started by us was started by a person, and stays on (jeff, 2026-10-06).
+    bool     weStarted   = false;
 };
 
 /**
@@ -100,6 +113,12 @@ struct PressState {
  */
 inline PressAction nextPressAction(const PressState& st, bool want,
                                    PlugState observed, uint32_t nowMs) {
+    // A BLOWER SOMEBODY STARTED BY HAND STAYS ON (jeff, 2026-10-06). We never pressed it on, so there is no OFF of ours
+    // to send: pressing one would stop a machine a person is standing at, and a bench desk fan read as "running" got
+    // three OFF presses for it. They turn it off themselves, the way they turned it on. Checked first so it also
+    // covers a changed want and a give-up.
+    if (!want && observed == PlugState::Running && !st.weStarted) return PressAction::Nothing;
+
     // A WANT THAT CHANGED RESTARTS EVERYTHING, including a given-up attempt.
     // Someone switching the blower off after we failed to start it must not
     // inherit that failure — the new intent has not been tried yet.
@@ -127,13 +146,20 @@ inline PressAction nextPressAction(const PressState& st, bool want,
     // NoPlug: no feedback configured at all, so there is nothing to reconcile
     // against and retrying would be guessing. One press on a change of want
     // (handled above) is all an open-loop collector ever gets.
+    //
+    // NEVER PRESS AN OFF WE HAVE NO REASON TO BELIEVE IN. A press is a toggle, so "OFF" sent to a blower
+    // we never turned on switches an idle one ON (or stops one a person started by hand). With no
+    // feedback there is no evidence either way, and a brain that has just booted or adopted a layout
+    // wants OFF for every collector — found by the native brain's end-to-end test, which pressed OFF
+    // at startup. The first press an open-loop collector gets is therefore an ON.
     if (observed == PlugState::NoPlug) {
+        if (!st.everPressed && !want) return PressAction::Nothing;
         return st.everPressed ? PressAction::Nothing : PressAction::Press;
     }
 
     // Inside the cooldown, the previous press has not had time to show its
     // result. Judging now is exactly the oscillation the cooldown prevents.
-    if (st.everPressed && (nowMs - st.lastPressMs) < kPressCooldownMs)
+    if (st.everPressed && (nowMs - st.lastPressMs) < (st.wanted ? kPressCooldownMs : kPressCooldownOffMs))
         return PressAction::Nothing;
 
     const bool agrees = want ? (observed == PlugState::Running)
@@ -162,6 +188,7 @@ inline void notePress(PressState& st, bool want, uint32_t nowMs) {
         st.gaveUp   = false;
     }
     st.wanted      = want;
+    if (want) st.weStarted = true;  // an ON press makes the run ours; it is handed back only once it is seen OFF
     st.lastPressMs = nowMs;
     st.everPressed = true;
     if (st.attempts < 255) st.attempts++;
@@ -171,6 +198,7 @@ inline void notePress(PressState& st, bool want, uint32_t nowMs) {
 inline void noteSettled(PressState& st) {
     st.attempts = 0;
     st.gaveUp   = false;
+    if (!st.wanted) st.weStarted = false;   // it is off and we wanted it off: the next run is nobody's until we press it
 }
 
 /** Latch the surrender, so GiveUp is reported once and stays reported. */

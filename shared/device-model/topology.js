@@ -654,6 +654,16 @@ function validateTopology(t) {
     if (rf.data !== undefined &&
         (!Number.isInteger(rf.data) || rf.data < 0 || rf.data > 15))
       err('element', `control.rf.data must be 0-15 (4 data bits)`, e.id);
+    // WHICH BOARD KEYS THE TRANSMITTER (2026-10-04). Optional, and absent means THIS board —
+    // the rule every selector and the bin sensor already follow. A named board must resolve,
+    // for the same reason: a typo that silently means "this board" is a shop whose collector
+    // never starts while every screen says the press was sent.
+    if (rf.controllerId !== undefined) {
+      if (typeof rf.controllerId !== 'string' || !rf.controllerId)
+        err('element', 'control.rf.controllerId must be a non-empty string', e.id);
+      else if (!ctrlIds.has(rf.controllerId))
+        err('element', `control.rf.controllerId "${rf.controllerId}" does not resolve`, e.id);
+    }
     if ((e.control || {}).outlet)
       err('element',
           `collector "${e.name || e.id}" has both a switchable plug and an RF ` +

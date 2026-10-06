@@ -6,6 +6,7 @@ import { Subscription } from 'rxjs';
 import { ApiService, DiscoveredNode, NodeLinkState, SenseReport, clampsOn } from '../services/api.service';
 import type { Topology } from '@topology';
 import { systemsOf } from '@shop';
+import { bareHost } from '@device-model';
 import { machineOfPort } from '../services/shop-doc';
 import {
   type Drives, DEFAULT_DRIVES, applyDrivesCache, drivesFromCaps, drivesFromHasLinear, resolveDrives,
@@ -349,14 +350,8 @@ export class BoardSetupComponent implements OnInit, OnDestroy {
    *  pairing list rather than the layout — a board can be paired with no layout at
    *  all, and offering to add it again would just be confusing. */
   unadded(): DiscoveredNode[] {
-    const paired = new Set(this.links.map((l) => this.bareHost(l.host)));
-    return this.found.filter((n) => !paired.has(this.bareHost(n.host)));
-  }
-
-  /** Hosts round-trip as either "node-1" or "node-1.local" depending on whether
-   *  the device has qualified them yet; compare on the bare label. */
-  private bareHost(h: string): string {
-    return (h || '').toLowerCase().replace(/\.local\.?$/, '');
+    const paired = new Set(this.links.map((l) => bareHost(l.host)));
+    return this.found.filter((n) => !paired.has(bareHost(n.host)));
   }
 
   /** Bind a discovered board into the layout by its STABLE mDNS host.
@@ -608,7 +603,7 @@ export class BoardSetupComponent implements OnInit, OnDestroy {
     // board reported this, nobody chose it.
     bits.push(r.drives === 'linear' ? 'sliding gate' : 'servo valves');
     bits.push(r.primary ? 'primary — runs the app' : (r.host || 'no address'));
-    if (r.board) bits.push(r.board);
+    // The build target is a developer's word ("xiao_c5"); the shop sees what it drives.
     // A slider board's whole capacity is one rack, so "of 4" would be a lie on it.
     bits.push(r.drives === 'linear'
       ? `${r.gates} of 1 sliding gate`

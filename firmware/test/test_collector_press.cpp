@@ -50,6 +50,7 @@ int main() {
         // A press inside the grace turns a starting blower OFF. The
         // static_assert in the header catches this at compile time; this catches
         // anyone who deletes the static_assert.
+        ok("an off press waits longer than an on press (a plug's power reading falls slowly)", kPressCooldownOffMs > COOL);
         ok("the cooldown outlasts the spin-up grace", COOL > GRACE,
            std::to_string(COOL) + " vs " + std::to_string(GRACE));
         ok("three presses in total, so two retries",
@@ -178,6 +179,32 @@ int main() {
            nextPressAction(st, true, PlugState::Running, t) == PressAction::Nothing);
     }
 
+    printf("\nR6b a blower a person started stays on\n");
+    {
+        // jeff, 2026-10-06. A blower running that we never pressed on is a person's, and nothing of ours turns it off.
+        PressState st;
+        uint32_t t = 1000;
+        ok("running, never pressed by us, nothing wanted -> leave it",
+           nextPressAction(st, false, PlugState::Running, t) == PressAction::Nothing);
+        ok("...still, a minute later", nextPressAction(st, false, PlugState::Running, t + 60000) == PressAction::Nothing);
+        // One we started IS ours to stop.
+        notePress(st, true, t);
+        ok("a press of ours made it ours", st.weStarted);
+        t += COOL;
+        ok("...so wanting it off while it still runs presses", nextPressAction(st, false, PlugState::Running, t) == PressAction::Press);
+        notePress(st, false, t);
+        ok("an OFF press alone does not: it must still be pressed again if the draw says it did not stop", st.weStarted);
+        ok("...but not inside the plug's slow power reading (it re-toggles the blower)",
+           nextPressAction(st, false, PlugState::Running, t + kPressCooldownOffMs - 1) == PressAction::Nothing);
+        t += kPressCooldownOffMs;
+        ok("...so it IS pressed again, after the longer off wait", nextPressAction(st, false, PlugState::Running, t) == PressAction::Press);
+        noteSettled(st);
+        ok("seeing it off hands it back", !st.weStarted);
+        // After our OFF, a person starts it by hand: left alone again.
+        t += COOL;
+        ok("...a hand start after that is theirs", nextPressAction(st, false, PlugState::Running, t) == PressAction::Nothing);
+    }
+
     printf("\nR7 a change of intent gets a fresh start\n");
     {
         // Someone switching the blower off after we failed to start it must not
@@ -213,6 +240,13 @@ int main() {
            actName(nextPressAction(st, true, PlugState::NoPlug, 1000 + COOL * 20)));
         ok("a change of intent still presses",
            nextPressAction(st, false, PlugState::NoPlug, 1000 + COOL) == PressAction::Press);
+    }
+
+    printf("\nR8b an open-loop collector is never pressed OFF before it was pressed ON\n");
+    {
+        PressState st;
+        ok("wanting OFF with no feedback and no history is nothing (a toggle would START an idle blower)",
+           nextPressAction(st, false, PlugState::NoPlug, 1000) == PressAction::Nothing);
     }
 
     printf("\nR9 settling clears the budget\n");

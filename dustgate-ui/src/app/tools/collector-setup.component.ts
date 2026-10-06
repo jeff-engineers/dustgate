@@ -223,6 +223,13 @@ import { CollectorForm, CtlKind, RawEl, SenseKind, fused, readCollector, writeCo
             </span>
             <button type="button" class="change" (click)="matchingRemote = true">Change ›</button>
           </div>
+          <div class="board">
+            <label for="rf-board">Transmitter on</label>
+            <select id="rf-board" [(ngModel)]="form.rfControllerId">
+              <option value="">This board</option>
+              <option *ngFor="let c of controllers" [value]="c.id">{{ c.name || c.id }}</option>
+            </select>
+          </div>
           <p class="note" style="margin-top:7px">Set once, from the switches inside the fob.</p>
         </div>
 

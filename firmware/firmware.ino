@@ -40,7 +40,8 @@
 #include "control/OutletRelocate.h"
 #include "control/NodeLinkPlan.h"
 #include "control/CollectorPress.h"        // the retry policy for a stateless press
-#include "control/RfCollectorPresser.h"    // ...and the one presser that exists
+#include "control/RfCollectorPresser.h"    // ...the presser that keys THIS board's pad
+#include "control/RemoteRfPresser.h"        // ...and the one that asks a NODE to key its own
 #include "control/RfAddressGuess.h"        // the four ways a DIP gets copied wrong
 // UNCONDITIONAL since 2026-09-17, where these used to sit behind #ifdef PIN_CT.
 // A primary with no clamp of its own still has to TELL its nodes what tuning to
@@ -621,6 +622,10 @@ static const float kFarConfirmMinTravelMm = 10.0f;
 #include "control/SenseReport.h"   // addSenseArray() — why it is not in this file is in that one
 #include "control/NodeBus.h"
 #include "control/RemoteActuatorBus.h"
+#include "control/NodeStatus.h"
+#include "control/DeviceProblems.h"
+#include "control/CollectorDriver.h"
+#include "outlets/OutletOps.h"
 #include "control/TopologyRuntime.h"
 #include "control/NodeRegistry.h"
 #include "control/TopologyStore.h"
@@ -857,25 +862,21 @@ static bool nodeEventHook(AsyncWebSocketClient* c, AwsEventType type, void* arg,
     // nothing — it backs off and tries again — and "busy" says why.
     if (heap_caps_get_free_size(MALLOC_CAP_INTERNAL) < kJoinMinFreeBytes) {
         DEBUG_PRINT(F("[NODE] JOIN from ")); DEBUG_PRINT(d["nodeId"] | "?"); DEBUG_PRINTLN(F(" — low on memory, told to retry"));
-        apiServer.adjustNodeLinkClients(-1);
         sendRefuse(c, "busy");
         return true;
     }
     topo::RemoteActuatorBus* bus = busForNode(d["nodeId"] | "");
     if (!bus) {
         DEBUG_PRINT(F("[NODE] JOIN from ")); DEBUG_PRINT(d["nodeId"] | "?"); DEBUG_PRINTLN(F(" — not paired, refused"));
-        apiServer.adjustNodeLinkClients(-1);
         sendRefuse(c, "not-paired");
         return true;
     }
     String hello;
     if (!bus->attachInbound(c, hello)) {
         DEBUG_PRINT(F("[NODE] JOIN from ")); DEBUG_PRINT(bus->nodeId()); DEBUG_PRINTLN(F(" — already linked, refused as a duplicate"));
-        apiServer.adjustNodeLinkClients(-1);
         sendRefuse(c, "duplicate");
         return true;
     }
-    apiServer.adjustNodeLinkClients(-1);   // CONNECT counted this as a primary connecting; it is a node
     c->text(hello);
     return true;
 }
@@ -988,8 +989,6 @@ static void rejoinWifiIfNetworkBlocksNodes() {
 // every pass and refreshed in place, cleared the moment the cause is gone — a
 // problem that outlives its cause is as bad as one that never appeared.
 // Boards and plugs only: the RF press raises its own where it happens.
-static const uint32_t kBoardOfflineAfterMs = 20000;
-static const uint32_t kPlugDownAfterMs     = 120000;
 
 // Memory watch. The internal heap is the board's scarce resource: it ran down to
 // 3.5 KB while a browser loaded the app and the board then aborted creating a
@@ -1018,48 +1017,31 @@ static void watchHeap() {
 
 static void raiseDeviceProblems() {
     static uint32_t lastMs = 0;
+    static topo::DeviceProblems problems;     // control/DeviceProblems.h: the rules, shared with the native brain
     const uint32_t now = millis();
     if (now - lastMs < 2000) return;
     lastMs = now;
 
+    std::vector<topo::BoardView> boards;
     for (int i = 0; i < g_remoteCount; i++) {
         if (!remoteLive(i)) continue;
         const topo::RemoteActuatorBus::LinkHealth h = g_remoteBuses[i].health();
-        const std::string key = std::string("board:") + g_remoteBuses[i].host();
-        if (!h.linked && !h.refused && h.downForMs >= kBoardOfflineAfterMs) {
-            char t[160];
-            snprintf(t, sizeof(t), "Not linked for %lus. Its gates stay where they were; tools on it cannot open a gate.",
-                     (unsigned long)(h.downForMs / 1000));
-            g_topoRuntime.raiseProblem(key, "board-offline", "bad", "board", g_remoteBuses[i].host(), t, now - h.downForMs);
-        } else if (h.refused) {
-            g_topoRuntime.raiseProblem(key, "board-offline", "bad", "board", g_remoteBuses[i].host(),
-                                       "The board refused this controller \xE2\x80\x94 it is paired to another one.", now);
-        } else {
-            g_topoRuntime.clearProblem(key);
-        }
-        // A move that did not finish: the link may be fine again by now, which is
-        // exactly why this is its own entry — the gate is still in an unknown place.
-        const std::string mkey = std::string("move:") + g_remoteBuses[i].host();
-        if (h.moveFault) g_topoRuntime.raiseProblem(mkey, "move-failed", "bad", "board", g_remoteBuses[i].host(), h.moveFault, now);
-        else             g_topoRuntime.clearProblem(mkey);
+        topo::BoardView b;
+        b.host = g_remoteBuses[i].host(); b.linked = h.linked; b.refused = h.refused;
+        b.downForMs = h.downForMs; b.moveFault = h.moveFault;
+        boards.push_back(b);
     }
-
+    std::vector<topo::PlugView> plugs;
 #ifdef CONTROL_SMART_OUTLET
-    // A paired plug that stops answering is usually a new address (DHCP), not a
-    // dead plug. The tool it senses is silently never "on" meanwhile.
-    static uint32_t downSince[SMART_OUTLET_COUNT] = {0};
     for (int i = 0; i < control.outletCount() && i < SMART_OUTLET_COUNT; i++) {
         SmartOutlet* o = control.outlet(i);
-        const std::string key = "plug:" + std::to_string(i);
-        if (!o || o->isReachable()) { downSince[i] = 0; g_topoRuntime.clearProblem(key); continue; }
-        if (!downSince[i]) downSince[i] = now ? now : 1;
-        if (now - downSince[i] < kPlugDownAfterMs) continue;
-        char t[160];
-        snprintf(t, sizeof(t), "No answer from %s for %lus. It may have a new address \xE2\x80\x94 a tool on it is not being sensed.",
-                 o->ip(), (unsigned long)((now - downSince[i]) / 1000));
-        g_topoRuntime.raiseProblem(key, "plug-unreachable", "warn", "plug", o->name(), t, downSince[i]);
+        if (!o) continue;
+        topo::PlugView p;
+        p.key = "plug:" + std::to_string(i); p.name = o->name() ? o->name() : ""; p.ip = o->ip(); p.reachable = o->isReachable();
+        plugs.push_back(p);
     }
 #endif
+    problems.update(g_topoRuntime, boards, plugs, now);
 }
 
 // The link log's main-loop half: write what the other tasks queued, and once an
@@ -1148,13 +1130,22 @@ static void syncControllerAliases() {
 // Rebuilt on every adopt rather than reconfigured: a layout may move the
 // transmitter to another pin or name a different fob's address, and there is no
 // state in a presser worth preserving across that.
-static RfCollectorPresser* g_pressers[COLLECTOR_COUNT] = {nullptr};
+// What the shared collector loop is lent: the serial console and the watchdog.
+struct SketchDriverHooks : topo::DriverHooks {
+    void say(const std::string& l) override { DEBUG_PRINTLN(l.c_str()); }
+    void pet() override { watchdog::pet(); }
+};
+static topo::CollectorPresser* g_pressers[COLLECTOR_COUNT] = {nullptr};
+// The same objects, when they are THIS board's own transmitter — the bench console wants
+// pressWithRepeats(), which a presser on a node does not have. Not owning: g_pressers is.
+static RfCollectorPresser*     g_localRf[COLLECTOR_COUNT]  = {nullptr};
 static topo::PressState    g_pressState[COLLECTOR_COUNT];
 
 static void clearPressers() {
     for (int i = 0; i < COLLECTOR_COUNT; i++) {
         delete g_pressers[i];
         g_pressers[i]   = nullptr;
+        g_localRf[i]    = nullptr;
         g_pressState[i] = topo::PressState();
     }
 }
@@ -1254,13 +1245,23 @@ static void syncTopologyOutlets() {
 #else
             const int pin = rf["pin"] | -1;
 #endif
-            if (pin >= 0) {
-                g_pressers[i] = new RfCollectorPresser(
-                    pin,
-                    (uint8_t)(rf["address"] | (int)RfCollectorPresser::kRocklerAddress),
-                    (uint8_t)(rf["data"]    | (int)RfCollectorPresser::kRocklerData),
-                    (uint32_t)(rf["tickUs"] | (int)RfCollectorPresser::kDefaultTickUs),
-                    (uint16_t)(rf["repeats"]| (int)RfCollectorPresser::kDefaultRepeats));
+            const uint8_t  rfAddr = (uint8_t)(rf["address"] | (int)topo::rf::kRocklerAddress);
+            const uint8_t  rfData = (uint8_t)(rf["data"]    | (int)topo::rf::kRocklerData);
+            const uint32_t rfTick = (uint32_t)(rf["tickUs"] | (int)topo::rf::kDefaultTickUs);
+            const uint32_t rfReps = (uint32_t)(rf["repeats"]| (int)topo::rf::kDefaultRepeats);
+            // WHICH BOARD KEYS THE TRANSMITTER (2026-10-04). Absent, or this board's own id,
+            // means this board's pad as it always was. A paired node's id means ask THAT
+            // board to key ITS pad (PRESS) — which is what lets the board at the collector be
+            // an ordinary node. The policy stays here either way.
+            const std::string rfBoard = rf["controllerId"] | "";
+            if (!topo::isOwnBoard(rfBoard, g_nodeBus.ownControllerId())) {
+                g_pressers[i] = new topo::RemoteRfPresser(&g_nodeBus, rfBoard, rfAddr, rfData, rfTick, rfReps);
+                DEBUG_PRINT(F("[RF] Collector ")); DEBUG_PRINT((int)i);
+                DEBUG_PRINT(F(" pressed by RF through board ")); DEBUG_PRINTLN(rfBoard.c_str());
+            } else if (pin >= 0) {
+                RfCollectorPresser* local = new RfCollectorPresser(pin, rfAddr, rfData, rfTick, (uint16_t)rfReps);
+                g_pressers[i] = local;
+                g_localRf[i]  = local;
                 DEBUG_PRINT(F("[RF] Collector ")); DEBUG_PRINT((int)i);
                 DEBUG_PRINT(F(" pressed by RF on pin ")); DEBUG_PRINTLN(pin);
             }
@@ -2050,7 +2051,7 @@ static void sweepProbeOne(const char* ip) {
     TasmotaOutlet probe(ip, "sweep");
     if (!probe.probe(kSweepProbeMs)) return;
 
-    StaticJsonDocument<512> row;
+    StaticJsonDocument<768> row;
     JsonObject o = row.to<JsonObject>();
     describeOutletInto(o, ip, nullptr,
                        /*kindKnown=*/true, OUTLET_TASMOTA, /*mdnsGen=*/0);
@@ -2079,121 +2080,9 @@ static void sweepProbeOne(const char* ip) {
 // is waiting on but the person who typed the address.
 static void describeOutletInto(JsonObject o, const char* ip, const char* mdnsHost,
                                bool kindKnown, OutletKind knownKind, int mdnsGen) {
-    ShellyGen2Outlet shellyProbe(ip, "discover");
-    TasmotaOutlet    tasProbe(ip, "discover");
-
-    bool isTasmota = kindKnown && (knownKind == OUTLET_TASMOTA);
-    bool ok        = false;
-
-    if (kindKnown) {
-        SmartOutlet* probeP = isTasmota ? (SmartOutlet*)&tasProbe
-                                        : (SmartOutlet*)&shellyProbe;
-        ok = probeP->poll();
-    } else {
-        ok = shellyProbe.poll();
-        if (!ok && tasProbe.poll()) { ok = true; isTasmota = true; }
-    }
-
-    // Gen2+ only (Gen1 dropped); Gen3 shares the Gen2 RPC dialect, so a single
-    // Gen2 probe covers every supported device. A Tasmota has no generation at
-    // all — 0, matching TasmotaOutlet::generation(). A hand-typed Shelly has no
-    // advertised gen either, so it assumes 2, the dialect Gen3 also speaks.
-    const int apiGen = isTasmota ? 0 : ((mdnsGen >= 3) ? 3 : 2);
-    const float pw   = isTasmota ? tasProbe.getPowerW() : shellyProbe.getPowerW();
-
-    // A Tasmota has no friendly name we can read the way a Shelly does, so the
-    // picker gets its mDNS hostname — the name the user set in Tasmota's own web
-    // UI, so a different source rather than a worse one. Added by hand there is
-    // no hostname either, and the row falls back to the address, which is the
-    // only thing the person typing it actually knows.
-    String host = mdnsHost ? String(mdnsHost) : String();
-    String devName;
-    if (isTasmota) {
-        // A Tasmota's DeviceName, NOT its hostname. Discovery used to pass the
-        // mDNS name through here — fine when a hit came from mDNS, and useless
-        // for a SWEPT plug, which has no hostname at all and so showed up in the
-        // picker labelled with its own IP address twice over.
-        if (!ok || !tasProbe.readName(devName)) devName = String();
-    } else if (ok) {
-        devName = fetchShellyDeviceName(ip, apiGen);
-    }
-    if (host.length() == 0) host = devName.length() ? devName : String(ip);
-
-    DEBUG_PRINT(F("  - ")); DEBUG_PRINT(host); DEBUG_PRINT(F("  "));
-    DEBUG_PRINT(ip);
-    DEBUG_PRINT(F("  probe -> reachable="));
-    DEBUG_PRINT(ok ? F("yes") : F("no"));
-    DEBUG_PRINT(F(" kind="));
-    DEBUG_PRINT(outletKindName(isTasmota ? OUTLET_TASMOTA : OUTLET_SHELLY));
-    DEBUG_PRINT(F(" gen="));
-    DEBUG_PRINT(ok ? apiGen : 0);
-    DEBUG_PRINT(F(" name="));
-    DEBUG_PRINTLN(devName.length() ? devName : String("(none set)"));
-
-    // WHO OWNS IT (RFC §8). Asked here, at discovery, because this is the list
-    // someone picks from — a plug that belongs to another brain has to arrive
-    // already labelled, not fail mysteriously after being chosen.
-    plugclaim::Claim claim;
-    bool claimKnown = false;
-    if (isTasmota) {
-        // Mem1, not a push config — see plugclaim::decideMarker(). WEAKER than
-        // the Shelly claim in two ways that are written down there: it is
-        // advisory rather than enforced, and no `foreign` state is reachable
-        // because a system that merely POLLS this plug leaves no trace for us
-        // to find.
-        String marker;
-        claimKnown = ok && tasProbe.readOwner(marker);
-        if (claimKnown)
-            claim = plugclaim::decideMarker(marker.c_str(), control.ourName());
-    } else {
-        String wsServer; bool wsEnabled = false;
-        claimKnown = ok && shellyProbe.readPushConfig(wsServer, wsEnabled);
-        if (claimKnown)
-            claim = plugclaim::decide(wsServer.c_str(), wsEnabled,
-                                      control.ourHost(), devName.c_str(),
-                                      control.ourName());
-    }
-
-    // A Tasmota's MAC, so a layout can find the plug again when its address
-    // changes (control/OutletRelocate.h). Normalised on the way out, so the app
-    // and the brain compare like with like.
-    if (isTasmota && ok) {
-        String mac;
-        if (tasProbe.readMac(mac, 1200)) {
-            const std::string n = relocate::normMac(mac.c_str());
-            if (!n.empty()) o["mac"] = n.c_str();
-        }
-    }
-
-    o["ip"]        = String(ip);
-    o["hostname"]  = host;
-    // The name with any "· owner" suffix stripped: the suffix is our bookkeeping
-    // and would otherwise show up in the picker as part of the tool's name, then
-    // get saved back and doubled.
-    o["name"]      = claimKnown ? String(claim.label.c_str()) : devName;
-    o["reachable"] = ok;
-    o["powerW"]    = pw;
-    o["gen"]       = ok ? apiGen : 0;
-    o["kind"]      = outletKindName(isTasmota ? OUTLET_TASMOTA : OUTLET_SHELLY);
-    if (claimKnown) {
-        o["claim"]    = plugclaim::stateName(claim.state);
-        o["owner"]    = claim.owner;
-        o["holder"]   = claim.holder;
-        o["pickable"] = claim.pickable;
-        o["takeable"] = claim.takeable;
-        if (!claim.reason.empty()) o["claimReason"] = claim.reason;
-    } else {
-        // "We couldn't ask" is its own answer, and must not read as "nobody owns
-        // it" — that reading is how a plug gets taken.
-        o["claim"]    = "unknown";
-        o["pickable"] = false;
-        o["takeable"] = false;
-        // An unreachable plug is a different problem from one that answered but
-        // would not say who owns it, and the picker shows this string verbatim.
-        o["claimReason"] = !ok ? "didn't answer on either protocol"
-                               : (isTasmota ? "couldn't read its Mem1 marker"
-                                            : "couldn't read its push config");
-    }
+    // The probe and the row are outlets/OutletOps.h, shared with the native brain.
+    outletops::Self self{control.ourHost() ? control.ourHost() : "", control.ourName() ? control.ourName() : ""};
+    outletops::describe(o, ip, mdnsHost, kindKnown, knownKind, mdnsGen, self);
 }
 
 #endif  // CONTROL_SMART_OUTLET
@@ -2291,7 +2180,7 @@ static void relocateTasmotas() {
             lastBackfillMs = now;
             TasmotaOutlet t(slots[i].o.ip.c_str(), "kind");
             if (!t.probe(1200)) break;
-            String mac; t.readMac(mac, 1200);
+            std::string mac; t.readMac(mac, 1200);
             const std::string n = relocate::normMac(mac.c_str());
             DEBUG_PRINT(F("[RELOCATE] ")); DEBUG_PRINT(slots[i].id.c_str());
             DEBUG_PRINT(F(" at ")); DEBUG_PRINT(slots[i].o.ip.c_str());
@@ -2308,7 +2197,7 @@ static void relocateTasmotas() {
             SmartOutlet* so = control.outlet((int)i);
             if (!so || !so->isReachable() || !slots[i].o.mac.empty() || so->kind() != OUTLET_TASMOTA) continue;
             TasmotaOutlet t(so->ip(), "mac");
-            String mac;
+            std::string mac;
             if (!t.readMac(mac, 1200)) continue;
             const std::string n = relocate::normMac(mac.c_str());
             if (n.empty()) continue;
@@ -2443,7 +2332,7 @@ static void handlePingRequest() {
     char pingIp[40];
     if (apiServer.consumePingRequest(pingIp, sizeof(pingIp))) {
         DEBUG_PRINT(F("[PING] ")); DEBUG_PRINTLN(pingIp);
-        StaticJsonDocument<512> resp;
+        StaticJsonDocument<768> resp;
         JsonObject o = resp.to<JsonObject>();
         // No hostname and no kind: an address is all the user gave us, so
         // describeOutletInto() tries both protocols and reports which
@@ -2478,119 +2367,19 @@ static void handlePingRequest() {
 static void handleOutletRenameRequest() {
     char nameIp[40], nameLabel[48];
     bool nameTakeover = false;
-    if (apiServer.consumeOutletNameRequest(nameIp, sizeof(nameIp),
-                                           nameLabel, sizeof(nameLabel),
-                                           nameTakeover)) {
-        StaticJsonDocument<256> resp;
-
-        // BOTH PROTOCOLS, and an IP says nothing about which. This built a
-        // ShellyGen2Outlet unconditionally until 2026-09-09, so renaming a
-        // Tasmota answered "not responding" — the plug was fine, we were
-        // knocking on /rpc/Switch.GetStatus, which a Tasmota does not serve.
-        // Found on hardware the first time a swept plug was renamed.
-        //
-        // Shelly first, matching describeOutletInto() and the default kind
-        // everywhere else; a Tasmota costs one failed Shelly poll.
-        ShellyGen2Outlet shellyPlug(nameIp, "rename");
-        TasmotaOutlet    tasPlug(nameIp, "rename");
-        bool isTasmota = false;
-        bool alive = shellyPlug.poll();
-        if (!alive && tasPlug.poll()) { alive = true; isTasmota = true; }
-        SmartOutlet* plugP = isTasmota ? (SmartOutlet*)&tasPlug
-                                       : (SmartOutlet*)&shellyPlug;
-
-        if (!alive) {
-            resp["ok"]    = false;
-            resp["error"] = "not responding";
-            DEBUG_PRINT(F("[RENAME] ")); DEBUG_PRINT(nameIp);
-            DEBUG_PRINTLN(F(" is not answering on either protocol — name unchanged."));
-        } else {
-            String  devName;
-            bool    claimKnown = false;
-            plugclaim::Claim claim;
-
-            if (isTasmota) {
-                // Mem1, not a push config — the same weaker claim
-                // plugclaim::decideMarker() documents. A Tasmota's name is
-                // its DeviceName rather than anything mDNS advertises,
-                // which matters here because a swept plug has no hostname
-                // at all.
-                tasPlug.readName(devName);
-                String marker;
-                claimKnown = tasPlug.readOwner(marker);
-                if (claimKnown)
-                    claim = plugclaim::decideMarker(marker.c_str(), control.ourName());
-            } else {
-                String wsServer; bool wsEnabled = false;
-                devName    = fetchShellyDeviceName(nameIp, 2);
-                claimKnown = shellyPlug.readPushConfig(wsServer, wsEnabled);
-                if (claimKnown) {
-                    claim = plugclaim::decide(wsServer.c_str(), wsEnabled,
-                                              control.ourHost(), devName.c_str(),
-                                              control.ourName());
-                }
-            }
-
-            // Same rule that governs repointing, applied to the name: never
-            // write a plug someone else owns — UNLESS a human said to. That
-            // is what `nameTakeover` is, and mayRepoint()'s `confirmed`
-            // argument has always existed for exactly this shape of answer.
-            //
-            // A read we could not make is "we don't know", and stays a no in
-            // both cases: overriding a refusal is a decision about a KNOWN
-            // owner, and we cannot show the user whose plug it is if we could
-            // not ask. Confirming a question nobody was able to pose is not
-            // consent.
-            //
-            // Note this only ever writes the NAME. The plug keeps reporting to
-            // whoever owns it; nothing over there stops working. Repointing is
-            // a separate, louder act — POST /api/outlets/takeover.
-            if (!claimKnown || !plugclaim::mayRepoint(claim, nameTakeover)) {
-                // String(), not c_str(): ArduinoJson stores a bare const char*
-                // BY REFERENCE, and claim/full die at the end of this block
-                // while serializeJson runs after it.
-                String why = claimKnown ? String(claim.reason.c_str())
-                                        : String("could not read who owns this plug");
-                resp["ok"]    = false;
-                resp["error"] = why;
-                DEBUG_PRINT(F("[RENAME] Refused for ")); DEBUG_PRINT(nameIp);
-                DEBUG_PRINT(F(" — ")); DEBUG_PRINTLN(why);
-            } else {
-                // The suffix says "this plug is being USED by that brain", so
-                // it goes on only when that is true. A plug renamed under an
-                // override still belongs to whoever it reports to, and an
-                // unclaimed plug renamed before pairing is not ours yet
-                // either — both get the bare label, and pairing adds the
-                // suffix later, when it has become true.
-                const bool ours  = (claim.state == plugclaim::State::Ours);
-                std::string full = ours
-                    ? plugclaim::formatName(nameLabel, control.ourName())
-                    : std::string(nameLabel);
-                bool ok = plugP->setName(full.c_str());
-                resp["ok"]    = ok;
-                resp["name"]  = String(full.c_str());   // what landed, suffix and all
-                resp["label"] = String(nameLabel);
-                if (!ok) resp["error"] = "the plug refused the name";
-                DEBUG_PRINT(F("[RENAME] ")); DEBUG_PRINT(nameIp);
-                DEBUG_PRINT(F(" -> \"")); DEBUG_PRINT(full.c_str());
-                DEBUG_PRINT(F("\" ")); DEBUG_PRINTLN(ok ? F("ok") : F("FAILED"));
-
-                // Keep the in-memory outlet's label in step, so the next
-                // status push doesn't report the name we just replaced —
-                // AND write it to NVS, or the rename lives only until the
-                // next reboot. The slot's stored name is what begin() loads
-                // and what every later provisioning pass writes back to the
-                // plug, so an unsaved rename is a rename that un-happens.
-                int slot = control.outletSlotByIp(nameIp);
-                SmartOutlet* configured = (slot >= 0) ? control.outlet(slot) : nullptr;
-                if (ok && configured) {
-                    configured->setName(full.c_str());
-                    control.saveSlot(slot);
-                }
-            }
+    if (apiServer.consumeOutletNameRequest(nameIp, sizeof(nameIp), nameLabel, sizeof(nameLabel), nameTakeover)) {
+        // The decision and the writes are outlets/OutletOps.h. What stays here is the NVS slot: keep the in-memory
+        // label in step so the next status push does not report the name we just replaced, AND save it, or the rename
+        // lives only until the next reboot (the slot's stored name is what every provisioning pass writes back).
+        outletops::Self self{control.ourHost() ? control.ourHost() : "", control.ourName() ? control.ourName() : ""};
+        std::string landed;
+        const std::string out = outletops::rename(nameIp, nameLabel, nameTakeover, self, &landed);
+        if (!landed.empty()) {
+            int slot = control.outletSlotByIp(nameIp);
+            SmartOutlet* configured = (slot >= 0) ? control.outlet(slot) : nullptr;
+            if (configured) { configured->setName(landed.c_str()); control.saveSlot(slot); }
         }
-        String out; serializeJson(resp, out);
-        apiServer.respondOutletName(out);
+        apiServer.respondOutletName(String(out.c_str()));
     }
 }
 
@@ -2612,88 +2401,11 @@ static void handleOutletRenameRequest() {
 static void handleOutletReleaseRequest() {
     char relIp[40];
     if (apiServer.consumeOutletReleaseRequest(relIp, sizeof(relIp))) {
-        StaticJsonDocument<256> resp;
         SmartOutlet* configured = control.outletByIp(relIp);
-
-        // A poll-only plug was never written to — no suffix of ours on its
-        // name, no Ws config we touched. Saying "released" would imply we
-        // reached into someone else's device, which we did not.
-        if (configured && configured->isPollOnly()) {
-            resp["ok"]       = true;
-            resp["released"] = false;
-            resp["note"]     = "polled only — nothing was written to this plug";
-            DEBUG_PRINT(F("[RELEASE] ")); DEBUG_PRINT(relIp);
-            DEBUG_PRINTLN(F(" was poll-only — nothing to hand back."));
-        } else {
-            // Both protocols, the same way rename does — and for the same
-            // bug: a Tasmota unpaired through a Shelly-only path answers
-            // "not responding" while sitting there perfectly healthy, and
-            // keeps its Mem1 claim and its PowerLock forever.
-            ShellyGen2Outlet shellyRel(relIp, "release");
-            TasmotaOutlet    tasRel(relIp, "release");
-            bool relIsTasmota = false;
-            bool relAlive = shellyRel.poll();
-            if (!relAlive && tasRel.poll()) { relAlive = true; relIsTasmota = true; }
-
-            if (!relAlive) {
-                resp["ok"]       = false;
-                resp["released"] = false;
-                resp["error"]    = "not responding";
-                DEBUG_PRINT(F("[RELEASE] ")); DEBUG_PRINT(relIp);
-                DEBUG_PRINTLN(F(" is not answering on either protocol — it keeps whatever we wrote."));
-            } else if (relIsTasmota) {
-                // TasmotaOutlet::release() already does this properly:
-                // PowerLock off BEFORE clearing Mem1, so a part-way failure
-                // leaves a plug that is still ours and still operable.
-                // Nothing to restore — a Tasmota has no push target we could
-                // have repointed, which is the same reason it has no
-                // `foreign` claim state.
-                String devName;
-                bool nameOk = true;
-                if (tasRel.readName(devName)) {
-                    std::string lbl, own;
-                    plugclaim::parseName(devName.c_str(), lbl, own);
-                    if (!own.empty() && own == control.ourName())
-                        nameOk = tasRel.setName(lbl.c_str());
-                }
-                const bool relOk = tasRel.release();
-                resp["ok"]       = nameOk && relOk;
-                resp["released"] = true;
-                resp["restored"] = false;
-                if (!relOk)       resp["error"] = "the plug kept our claim";
-                else if (!nameOk) resp["error"] = "the plug kept our name";
-                DEBUG_PRINT(F("[RELEASE] ")); DEBUG_PRINT(relIp);
-                DEBUG_PRINT(F(" (tasmota) name=")); DEBUG_PRINT(nameOk ? F("ok") : F("FAILED"));
-                DEBUG_PRINT(F(" claim=")); DEBUG_PRINTLN(relOk ? F("cleared") : F("FAILED"));
-            } else {
-                ShellyGen2Outlet& plug = shellyRel;
-                // Name first, then push — the same ordering pairing uses, and
-                // for the same reason: a Ws write makes the plug reopen its
-                // socket and a name write landing on top of that gets lost.
-                String devName = fetchShellyDeviceName(relIp, 2);
-                std::string lbl, own;
-                plugclaim::parseName(devName.c_str(), lbl, own);
-                bool nameOk = true;
-                if (!own.empty() && own == control.ourName()) {
-                    nameOk = plug.setName(lbl.c_str());
-                    delay(150);
-                }
-
-                const char* restore = configured ? configured->previousPushUrl() : "";
-                bool pushOk = plug.releasePush(restore);
-
-                resp["ok"]       = nameOk && pushOk;
-                resp["released"] = true;
-                resp["restored"] = (restore && *restore);
-                if (!nameOk) resp["error"] = "the plug kept our name";
-                else if (!pushOk) resp["error"] = "the plug kept pushing to us";
-                DEBUG_PRINT(F("[RELEASE] ")); DEBUG_PRINT(relIp);
-                DEBUG_PRINT(F(" name=")); DEBUG_PRINT(nameOk ? F("ok") : F("FAILED"));
-                DEBUG_PRINT(F(" push=")); DEBUG_PRINTLN(pushOk ? F("ok") : F("FAILED"));
-            }
-        }
-        String out; serializeJson(resp, out);
-        apiServer.respondOutletRelease(out);
+        outletops::Self self{control.ourHost() ? control.ourHost() : "", control.ourName() ? control.ourName() : ""};
+        const std::string out = outletops::release(relIp, self, configured && configured->isPollOnly(),
+                                                   configured ? configured->previousPushUrl() : "");
+        apiServer.respondOutletRelease(String(out.c_str()));
     }
 }
 
@@ -2959,69 +2671,9 @@ void loop() {
                     // blower disagrees. See control/CollectorPress.h — every
                     // refusal in there is a case where pressing would have
                     // turned a healthy blower OFF.
-                    const uint32_t now = millis();
-                    const topo::PlugState seen = g_topoRuntime.pressObservation(sysIds[i]);
-                    switch (topo::nextPressAction(g_pressState[i], want, seen, now)) {
-                        case topo::PressAction::Press: {
-                            // ~500 ms of RMT. Acceptable on the main loop only
-                            // because it happens on a state change, not a tick —
-                            // and the watchdog runs at 10 s.
-                            watchdog::pet();
-                            const bool sent = g_pressers[i]->press();
-                            topo::notePress(g_pressState[i], want, now);
-                            DEBUG_PRINT(F("[RF] press #"));
-                            DEBUG_PRINT(g_pressState[i].attempts);
-                            DEBUG_PRINT(F(" wanting "));
-                            DEBUG_PRINT(want ? F("ON") : F("OFF"));
-                            DEBUG_PRINT(F(" (saw "));
-                            DEBUG_PRINT(topo::plugStateName(seen));
-                            DEBUG_PRINTLN(sent ? F(") -> sent") : F(") -> TRANSMIT FAILED"));
-                            if (sent) g_topoRuntime.clearProblem("rf-send:" + sysIds[i]);
-                            else g_topoRuntime.raiseProblem("rf-send:" + sysIds[i], "rf-send-failed", "bad", "system", sysIds[i],
-                                     "The remote's transmitter could not send the press.", now);
-                            g_topoRuntime.clearProblem("rf-gave-up:" + sysIds[i]);
-                            watchdog::pet();
-                            break;
-                        }
-                        case topo::PressAction::GiveUp:
-                            g_topoRuntime.raiseProblem("rf-gave-up:" + sysIds[i], "rf-gave-up", "bad", "system", sysIds[i],
-                                "Pressed the remote 3 times and the blower never agreed \xE2\x80\x94 check the breaker, the cord and the fob's battery.", now);
-                            if (!g_pressState[i].gaveUp) {
-                                topo::noteGaveUp(g_pressState[i]);
-                                // Said ONCE. The state latches, so this does not
-                                // become a line per loop for the rest of the day.
-                                DEBUG_PRINT(F("[RF] Collector ")); DEBUG_PRINT((int)i);
-                                DEBUG_PRINT(F(" did not respond after "));
-                                DEBUG_PRINT(topo::kMaxPressAttempts);
-                                DEBUG_PRINTLN(F(" presses — check the breaker, the cord, "
-                                                "and the fob's battery."));
-                            }
-                            break;
-                        case topo::PressAction::Nothing:
-                            // OFF that did not take. The policy cannot see it —
-                            // the plug state reads "off" whenever we are not asking,
-                            // whatever the wire says — so it never presses again,
-                            // and the blower runs on after the last tool. We do not
-                            // press blind here (a person may have started it at the
-                            // fob), but we do SAY so.
-                            if (!want && g_pressState[i].everPressed &&
-                                (now - g_pressState[i].lastPressMs) > topo::kPressCooldownMs * 2 &&
-                                g_topoRuntime.collectorDrawing(sysIds[i])) {
-                                g_topoRuntime.raiseProblem("rf-wont-stop:" + sysIds[i], "collector-wont-stop", "bad",
-                                    "system", sysIds[i],
-                                    "Told it to stop, but it is still drawing power \xE2\x80\x94 the remote may have missed the press, or someone started it by hand.", now);
-                            } else {
-                                g_topoRuntime.clearProblem("rf-wont-stop:" + sysIds[i]);
-                            }
-                            // Settled: clear the budget so the next disagreement
-                            // gets a full one rather than the tail of this one.
-                            if (seen == (want ? topo::PlugState::Running
-                                              : topo::PlugState::Off)) {
-                                topo::noteSettled(g_pressState[i]);
-                                g_topoRuntime.clearProblem("rf-gave-up:" + sysIds[i]);
-                            }
-                            break;
-                    }
+                    // The loop itself is control/CollectorDriver.h, shared with the native brain.
+                    static SketchDriverHooks hooks;
+                    topo::driveCollectorPress(g_topoRuntime, sysIds[i], *g_pressers[i], g_pressState[i], want, millis(), hooks);
                     g_dcAsserted[i] = want; g_dcHave[i] = true;
                 } else if (!g_dcHave[i] || want != g_dcAsserted[i]) {
                     control.setCollectorManual((int)i, want);
@@ -3191,7 +2843,7 @@ void loop() {
         // BEFORE writing a control.rf block. So an unconfigured `press` uses
         // PIN_RF_TX with the measured Rockler address and data word — which is
         // exactly the wiring someone testing this for the first time will have.
-        RfCollectorPresser* p = g_pressers[0];
+        RfCollectorPresser* p = g_localRf[0];
 #ifdef PIN_RF_TX
         static RfCollectorPresser* benchPresser = nullptr;
         if (!p) {
@@ -3946,57 +3598,6 @@ void loop() {
     }
 #endif
 
-    // -- NodeLink SECONDARY execution -------------------------------------------
-    // This board acting as a dumb actuator bank for someone else's primary. The
-    // frame already carries a channel and an absolute angle/mm — there is no
-    // routing, no topology and no state lookup to do here, which is exactly the
-    // asymmetry that lets a cheap servo-only board be a node.
-    //
-    // A board configured as a primary (topology loaded) shouldn't also be
-    // receiving SETs; if it somehow is, both would command the same servos, so
-    // the primary's own routing wins and remote SETs are refused.
-    {
-        static char pendingSel[48]   = "";
-        static char pendingState[32] = "";
-        static bool awaitingSettle   = false;
-
-        topo::nodelink::SetCommand cmd;
-        if (apiServer.consumeNodeSet(cmd)) {
-            bool driven = false;
-            if (g_topoRuntime.loaded()) {
-                DEBUG_PRINTLN(F("[NODE] Refusing SET — this board is a primary."));
-            } else if (cmd.isServo) {
-#if defined(ENABLE_SERVO) && defined(SERVO_PWM_PIN_1)
-                if (cmd.channel >= 0 && cmd.channel < SERVO_COUNT) {
-                    g_servos[cmd.channel].setHoldAtRest(cmd.holdAtRest);
-                    g_servos[cmd.channel].moveTo(cmd.angle);
-                    driven = true;
-                }
-#endif
-            } else {
-                driven = g_linearDrive.moveToMm(cmd.positionMm);
-            }
-
-            if (driven) {
-                strlcpy(pendingSel,   cmd.selectorId, sizeof(pendingSel));
-                strlcpy(pendingState, cmd.stateId,    sizeof(pendingState));
-                awaitingSettle = true;
-                apiServer.reportNodeState(pendingSel, pendingState, true);
-            } else {
-                // Nothing moved, so report arrival immediately — otherwise the
-                // primary would sit on a busy() bus until its move timeout.
-                apiServer.reportNodeState(cmd.selectorId, cmd.stateId, false);
-            }
-        }
-
-        // Report arrival once the actuator settles, so the primary's move queue
-        // advances on real completion rather than on a fixed guess.
-        if (awaitingSettle && !g_localBus.busy()) {
-            awaitingSettle = false;
-            apiServer.reportNodeState(pendingSel, pendingState, false);
-        }
-    }
-
     // Enable / disable — TODO: add ControlInput::setEnabled() to the base class
     // so this works for all modes, not just serial debug.
 
@@ -4025,7 +3626,10 @@ void loop() {
         }
         bool dcSwitchOn = false;
         if (apiServer.consumeDustCollectorSwitchRequest(dcSwitchOn)) {
-            control.setDcManual(dcSwitchOn);
+            // Through the routing runtime, like /api/collector: slot 0 driven directly is re-asserted from
+            // collectorOn() on the next pass, so the switch reported success and was undone at once.
+            std::vector<std::string> ids = g_topoRuntime.systemIds();
+            if (!ids.empty()) g_topoRuntime.setCollectorManual(ids.front(), dcSwitchOn);
         }
 
         // Outlet discovery — runs synchronously here (main loop task) rather
@@ -4675,51 +4279,13 @@ void loop() {
                 JsonArray arr = nodes.createNestedArray("nodes");
                 for (int i = 0; i < g_remoteCount; i++) {
                     if (!remoteLive(i)) continue;
-                    topo::RemoteActuatorBus::NodeInfo n = g_remoteBuses[i].info();
-                    JsonObject o = arr.createNestedObject();
-                    o["id"]        = g_remoteBuses[i].nodeId();
-                    o["host"]      = g_remoteBuses[i].host();
-                    // From the registry, not the topology: the boards screen has to
-                    // render names with no layout loaded at all.
-                    o["name"]      = g_nodeRegistry.name(i);
-                    o["online"]    = n.connected;
-                    o["lastSeen"]  = n.lastSeenMs;
-                    o["board"]     = n.board;
-                    o["fw"]        = n.fw;
-                    JsonObject caps = o.createNestedObject("caps");
-                    caps["servos"] = n.capServos;
-                    caps["linear"] = n.capLinear;
-                    // Omitted when none, matching the wire: absent already means
-                    // "no clamp", so the UI's empty tray is the correct empty
-                    // state rather than a feature nobody switched on.
-                    if (n.capClamps > 0) caps["ct"] = n.capClamps;
-                    topo::addSenseArray(o, g_remoteBuses[i]);
-                    // OTA: which image this primary would install, whether the node
-                    // already has it, and how an update in progress is going. The
-                    // image is picked by what the board DRIVES (a slider is a
-                    // different program from a PWM bank), and `update` is only ever
-                    // true for a board that is up to be told.
-                    {
-                        const HttpApiServer::NodeImage img = HttpApiServer::nodeImage(n.capLinear > 0 ? 1 : 0);
-                        if (img.present) {
-                            o["image"]  = img.fw;
-                            o["update"] = n.connected && strcmp(n.fw, img.fw) != 0;
-                        }
-                        if (n.ota[0]) {
-                            o["ota"] = n.ota;
-                            if (n.otaPct >= 0) o["otaPct"] = n.otaPct;
-                            if (n.otaErr[0])   o["otaErr"] = n.otaErr;
-                        }
-                    }
-                    // A node that belongs to ANOTHER primary is offline to us on
-                    // purpose. Without naming its owner here, that is
-                    // indistinguishable from a dead board — and the difference
-                    // decides whether you go looking for a wiring fault or press
-                    // "take it over".
-                    if (g_remoteBuses[i].wasRefused()) {
-                        o["claimedBy"] = g_remoteBuses[i].refusedBy();
-                        o["takeable"]  = true;
-                    }
+                    const topo::RemoteActuatorBus::NodeInfo ni = g_remoteBuses[i].info();
+                    // The image is picked by what the board DRIVES (a slider is a different program from
+                    // a PWM bank).
+                    const HttpApiServer::NodeImage img = HttpApiServer::nodeImage(ni.capLinear > 0 ? 1 : 0);
+                    topo::NodeImageView iv; iv.present = img.present; iv.fw = img.fw;
+                    topo::writeNodeEntry(arr, g_remoteBuses[i], g_remoteBuses[i].nodeId(), g_remoteBuses[i].host(),
+                                         g_nodeRegistry.name(i), iv);
                 }
                 // THIS BOARD IS A BOARD TOO, and it is not in `nodes` — that
                 // array is the REMOTE links, and the primary has no NodeLink
