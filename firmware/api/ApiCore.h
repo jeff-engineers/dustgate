@@ -132,12 +132,12 @@ inline bool handle(const Request& req, Backend& be, Response& out) {
 
     // ── the linear slider: nothing here has one unless a shell says so ─────
     // A brain without a rack answers these as the ESP32 does when built without one.
-    // Settings' "reset gate calibration" and the idle-timeout box press these on every build. With no rack there is nothing
-    // to clear and nothing to power down, which is a successful no-op, not an error toast.
-    if (post && (p == "/api/clearcal" || p == "/api/config/idle-timeout")) { out = ok(); return true; }
+    // Settings' "reset gate calibration" presses this on every build. With no rack there is nothing to clear, which is a
+    // successful no-op, not an error toast.
+    if (post && p == "/api/clearcal") { out = ok(); return true; }
     if (post && p == "/api/wifi/reset") { out = error(501, "this brain is not on Wi-Fi of its own"); return true; }
     if (p == "/api/jog" || p == "/api/home" || p == "/api/calibrate" || p == "/api/clearcal" ||
-        p == "/api/move" || p == "/api/setstop" || p == "/api/estop" || p == "/api/motion" || p == "/api/stops" ||
+        p == "/api/move" || p == "/api/setstop" || p == "/api/motion" || p == "/api/stops" ||
         p.rfind("/api/config/", 0) == 0) {
         out = error(501, "this brain has no slider of its own"); return true;
     }

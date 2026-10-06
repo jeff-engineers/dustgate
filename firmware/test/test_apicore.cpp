@@ -57,7 +57,7 @@ int main() {
     ok_("discovery with nothing found is an empty list", run(f, "GET", "/api/nodes/discover").body == "[]");
     ok_("an update the backend does not offer is a 409 with the reason", run(f, "POST", "/api/nodes/update", R"({"id":"n1"})").status == 409);
     ok_("slider routes are a 501 on a brain with no rack", run(f, "POST", "/api/home").status == 501 && run(f, "GET", "/api/motion").status == 501);
-    ok_("...but Settings' reset-calibration and idle-timeout are a harmless no-op, not an error toast", run(f, "POST", "/api/clearcal").status == 200 && run(f, "POST", "/api/config/idle-timeout", "{\"seconds\":0}").status == 200);
+    ok_("...but Settings' reset-calibration is a harmless no-op, not an error toast", run(f, "POST", "/api/clearcal").status == 200);
     ok_("forgetting Wi-Fi is refused: there is none to forget", run(f, "POST", "/api/wifi/reset").status == 501);
     bool mine = true; run(f, "GET", "/api/topology", "", &mine);
     ok_("a route it does not own is left to the shell", !mine);

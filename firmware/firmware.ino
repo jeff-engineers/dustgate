@@ -3178,13 +3178,6 @@ void loop() {
 
     // -- HTTP API commands ----------------------------------------------------
 #ifdef ENABLE_HTTP_API
-    if (apiServer.consumeEStopRequest()) {
-        if (!g_eStopTriggered) {
-            DEBUG_PRINTLN(F("!!! E-STOP (HTTP API)."));
-        }
-        g_eStopTriggered = true;
-    }
-
     if (apiServer.consumeHomeRequest() && currentState != STATE_HOMING) {
         if (g_hardwareFault) {
             DEBUG_PRINT(F("[API] Hardware fault at boot — failed: "));
@@ -3325,35 +3318,6 @@ void loop() {
     }
 
 
-    // Active gate count (runtime NVS override)
-    {
-        int newGates = 0;
-        if (apiServer.consumeSetNumGatesRequest(newGates)) {
-            // Clear saved positions beyond the new count so a stale gate can't
-            // reappear as a phantom proximity conflict if the count is later
-            // raised again (positions live in RAM here; the EEPROM copy is
-            // cleaned up below).
-            for (int i = newGates + 1; i <= NUM_STOPS; i++) {
-                g_stopPositionsMM[i] = 0.0f;
-            }
-            g_numActiveStops = newGates;
-
-            // Trim the persisted calibration to match, so a reboot doesn't
-            // restore the old (higher) gate count from cal.numStops.
-            CalibrationData cal;
-            if (CalibrationStore::load(cal) && (int)cal.numStops > newGates) {
-                cal.numStops = (uint8_t)newGates;
-                for (int i = newGates + 1; i <= NUM_STOPS; i++) {
-                    cal.stopMM[i] = 0.0f;
-                }
-                CalibrationStore::save(cal);
-            }
-
-            DEBUG_PRINT(F("[API] Active gates: "));
-            DEBUG_PRINTLN(g_numActiveStops);
-        }
-    }
-
     // Reference-sweep calibration (dual endstop). Kicks off a home → sweep flow:
     // this just records the request + re-homes; the sweep motion runs in
     // STATE_HOMING → STATE_CALIBRATING. See docs/dual-endstop-calibration.md.
@@ -3392,22 +3356,6 @@ void loop() {
         }
     }
 
-    // Port-role change (dual endstop / topology).
-    {
-        int roleIdx = -1, roleVal = 0;
-        if (apiServer.consumePortRoleRequest(roleIdx, roleVal)) {
-            if (roleIdx >= 1 && roleIdx <= NUM_STOPS) {
-                g_stopRoles[roleIdx] = (uint8_t)roleVal;
-                CalibrationData cal;
-                if (CalibrationStore::load(cal)) {
-                    cal.stopRole[roleIdx] = (uint8_t)roleVal;
-                    CalibrationStore::save(cal);
-                }
-                DEBUG_PRINT(F("[API] Port role: gate ")); DEBUG_PRINT(roleIdx);
-                DEBUG_PRINT(F(" = ")); DEBUG_PRINTLN(roleVal);
-            }
-        }
-    }
 
     // Home-side answer (POST /api/config/orientation {homedLeft}). Ensures the home
     // datum is the user's LEFT endstop, re-homing if the carriage came up on the right.
@@ -3605,26 +3553,8 @@ void loop() {
 
 #ifdef CONTROL_SMART_OUTLET
     {
-        HttpApiServer::OutletConfigCmd cmd;
-        if (apiServer.consumeOutletConfigRequest(cmd)) {
-            control.configureOutlet(cmd.slot, cmd.kind, cmd.generation,
-                                    cmd.ip, cmd.name,
-                                    cmd.stopIndex, cmd.thresholdW, cmd.host);
-        }
-        int delSlot = -1;
-        if (apiServer.consumeOutletDeleteRequest(delSlot)) {
-            control.removeOutlet(delSlot);
-        }
         if (apiServer.consumeOutletSaveRequest()) {
             control.saveAll();
-        }
-
-        HttpApiServer::DustCollectorCmd dcCmd;
-        if (apiServer.consumeDustCollectorConfigRequest(dcCmd)) {
-            control.configureDustCollector(dcCmd.generation, dcCmd.ip, dcCmd.host);
-        }
-        if (apiServer.consumeDustCollectorDeleteRequest()) {
-            control.removeDustCollector();
         }
         bool dcSwitchOn = false;
         if (apiServer.consumeDustCollectorSwitchRequest(dcSwitchOn)) {

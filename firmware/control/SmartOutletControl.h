@@ -191,10 +191,6 @@ public:
     void setCollectorManual(int idx, bool on);
 
     // ---- slot-0 spellings, for the pre-systems call sites ----
-    void configureDustCollector(int generation, const char* ip, const char* host = "") {
-        configureCollector(0, generation, ip, host);
-    }
-    void removeDustCollector()        { removeCollector(0); }
     bool dcConfigured() const         { return collectorConfigured(0); }
     bool dcOn()                       { return collectorOn(0); }
     void setDcManual(bool on)         { setCollectorManual(0, on); }
