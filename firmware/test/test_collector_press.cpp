@@ -192,7 +192,11 @@ int main() {
         t += COOL;
         ok("...so wanting it off while it still runs presses", nextPressAction(st, false, PlugState::Running, t) == PressAction::Press);
         notePress(st, false, t);
-        ok("an OFF press hands it back", !st.weStarted);
+        ok("an OFF press alone does not: it must still be pressed again if the draw says it did not stop", st.weStarted);
+        t += COOL;
+        ok("...so it IS pressed again", nextPressAction(st, false, PlugState::Running, t) == PressAction::Press);
+        noteSettled(st);
+        ok("seeing it off hands it back", !st.weStarted);
         // After our OFF, a person starts it by hand: left alone again.
         t += COOL;
         ok("...a hand start after that is theirs", nextPressAction(st, false, PlugState::Running, t) == PressAction::Nothing);

@@ -178,7 +178,7 @@ inline void notePress(PressState& st, bool want, uint32_t nowMs) {
         st.gaveUp   = false;
     }
     st.wanted      = want;
-    st.weStarted   = want;          // an ON press makes the run ours; an OFF press hands it back
+    if (want) st.weStarted = true;  // an ON press makes the run ours; it is handed back only once it is seen OFF
     st.lastPressMs = nowMs;
     st.everPressed = true;
     if (st.attempts < 255) st.attempts++;
@@ -188,6 +188,7 @@ inline void notePress(PressState& st, bool want, uint32_t nowMs) {
 inline void noteSettled(PressState& st) {
     st.attempts = 0;
     st.gaveUp   = false;
+    if (!st.wanted) st.weStarted = false;   // it is off and we wanted it off: the next run is nobody's until we press it
 }
 
 /** Latch the surrender, so GiveUp is reported once and stays reported. */
