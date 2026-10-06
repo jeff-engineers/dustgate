@@ -334,7 +334,7 @@ async function run() {
     check('sense: switching off is reported too, not just inferred', !!off);
 
     // A malformed CONFIG is refused rather than half-applied.
-    c.send({ t: 'CONFIG', seq: 41, sensors: [{ sensorId: 'x', kind: 'bin', channel: 0 }] });
+    c.send({ t: 'CONFIG', seq: 41, sensors: [{ sensorId: 'x', kind: 'nonsense', channel: 0 }] });   // 'bin' is a real kind since 2026-10-04
     const bad = await c.await((f) => f.t === 'ACK' && f.seq === 41);
     check('config: an unknown sensor kind is refused', bad?.ok === false, JSON.stringify(bad));
     const stillThere = await simSense(SID, false);
