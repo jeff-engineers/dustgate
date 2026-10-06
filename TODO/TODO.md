@@ -17,7 +17,7 @@ active sections above them, which is how a parked item stops being read.
 - **PUT THE COLLECTOR "RUNNING" THRESHOLD BACK TO 50 W (jeff, 2026-10-06 — TEMPORARY).** The bench collector is a desk fan
   that draws ~38 W, so `kCollectorRunningW` (control/CollectorPlugState.h) and `COLLECTOR_RUNNING_W`
   (topology-device.js) are 25 for now. Restore both to 50, and the literal in `test_collector_plug.cpp` ("kCollectorRunningW is
-  ..."), the moment a real blower is on that plug — at 25 W a blower that is merely plugged in and idling could read as running.
+  ..."), and REBUILD THE APP (`npm run build` in dustgate-ui) — the Live screen judges the draw itself from the same constant, compiled in, so a brain-only change leaves it saying "Not starting" (found 2026-10-06) — the moment a real blower is on that plug — at 25 W a blower that is merely plugged in and idling could read as running.
 
 - **Nodes find the brain, so a link stops costing the brain a task (jeff, 2026-10-04 —
   scoped, not started).** The full-shop test put nine paired nodes at 22 KB free internal
