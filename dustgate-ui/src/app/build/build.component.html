@@ -33,10 +33,9 @@
          rather than on the toolbar. -->
     <button (click)="moreOpen = false; addSystem()" [disabled]="!hasShop">Add system</button>
     <button (click)="moreOpen = false; goBoards()">Find boards</button>
-    <!-- The twin of Find boards, and the ONLY way to sweep a fully-wired shop:
-         the tray's own button is inside the tray, which hides itself when
-         nothing is unpaired. -->
-    <button (click)="moreOpen = false; findPlugs()">Find plugs</button>
+    <!-- The twin of Boards: a page of plugs, with the scan and the sweep on it. Replaces "Find plugs", which only
+         refreshed the tray and read as a page that failed to open. -->
+    <button (click)="moreOpen = false; goPlugs()">Plugs</button>
     <!-- Same reasoning as Find boards: an errand you run rarely. The canvas is
          where you actually spend time, so it needs a way in that doesn't route
          through the Live view. -->

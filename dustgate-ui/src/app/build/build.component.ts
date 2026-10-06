@@ -1046,14 +1046,6 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     return this.freeOutlets().length > 0 || this.unpairedTargets().length > 0;
   }
 
-  /** "Find plugs" from the ⋯ menu — the twin of "Find boards", and the only
-   *  entry point that does not depend on the layout being unfinished. */
-  findPlugs(): void {
-    this.trayPinned = true;
-    // Asked for by name, so the slow half runs too — see scanOutlets().
-    void this.scanOutlets(true);
-  }
-
   // ── Finding plugs: two questions with very different costs ────────────────
   //
   // mDNS answers "which Shelly plugs exist" in about three seconds. It will
@@ -1086,7 +1078,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
    * `TCP :80 NO ROUTE` to the node while a laptop reached it in 10 ms; the link
    * died the moment a sweep started, and only a reboot brought it back). Not
    * proven — but a sweep nobody asked for is not worth a shop, so it now runs
-   * only from "Find plugs" or the tray's "Look for Tasmota plugs".
+   * only from the Plugs page or the tray's "Look for Tasmota plugs".
    */
   async scanOutlets(sweep = false): Promise<void> {
     this.owner = this.api.deviceInfo?.owner ?? this.owner;
@@ -3837,6 +3829,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   }
   private boardDragPt: Pt | null = null;
   goBoards(): void { void this.nav.navigate(['/boards']); }
+  goPlugs(): void { void this.nav.navigate(['/plugs']); }
   goSettings(): void { void this.nav.navigate(['/settings']); }
   /** The one funnel every part of a board goes through — its glyph, its ports, the
    *  cable that leaves them, and the hit-testing for a drop. A board mid-drag tracks
