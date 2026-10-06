@@ -1077,7 +1077,41 @@ running a blower BY HAND (D-59) opens a path through the ordinary move queue
 before it starts the collector, so it exercises exactly the code a bench session
 would reach first — and no gate has ever moved for it.
 
-### Bench Testing
+### Needs the shop (the real tools, real plugs and the real network)
+
+Things that cannot be settled at a desk: they need the actual machines, the actual plugs on the shop's network, or the whole shop
+running at once. Added 2026-10-06 from the cleanup and the features built after the bench session. Delete an item once it has run.
+
+- **Clear shop and Delete system release real plugs.** Build a second system with a tool on a real Shelly, delete the system, SAVE,
+  and confirm the plug stops pushing to the brain and its old push address is back (D-77). Also that Undo before Save leaves the
+  plug alone.
+- **The Plugs page against the real network.** `/plugs` with the shop's plugs: live draw matches the plug, a Tasmota that stops
+  answering shows "Not answering", **Sweep network** finds a Tasmota on the real /24, add-by-address, rename a Shelly and read the
+  new name in the Shelly app (this is also bench test 20), release one, and take over a plug another brain owns.
+- **The per-board clamp switch with a real clamp.** Switch a board's clamp on, pair a tool to it, confirm SENSE arrives; switch it
+  off with the tool paired (the confirm appears) and confirm the tool stops being sensed and the layout no longer names the clamp.
+- **An interrupted gate move is sent again.** Brown out or reset a node mid-move (pull its power while the servo travels), let it
+  relink, and confirm the gate is commanded again and ends where the layout says. Host-tested only (`test_deviceproblems.cpp`).
+- **The ESP32 primary with the cleanup branch.** Flash it (`./dev.sh flash --fw`, layout backup first) and confirm: the app loads,
+  a layout saves and reads back, a **v1 document is refused with a 400**, tool switch-on still opens the gate and starts the
+  collector, and the legacy routes are gone without anything the app uses going with them. Only the compile and the host tests have
+  seen the firmware changes.
+- **The slider node through the native brain**, and **the collector sensed by a CT clamp**, and **the beam seeing FULL** — all still
+  unproven (see `CLAUDE.md`).
+- **Find plugs on a real /24 takes how long, and does a request time out?** The sweep is about a minute; nothing has timed a whole
+  run in the app against real hardware.
+
+### Bench Testing (at a desk, USB and a few boards)
+
+**Bench items from the 2026-10-06 cleanup** (before the older list below):
+- **Conformance against a real ESP32 primary.** `node shared/device-model/conformance.js http://<primary> <key> --force` and
+  `topology-conformance.js http://<primary>`: the cases that drove the deleted legacy routes are gone, and a schemaVersion-1 PUT
+  must answer 400.
+- **A node's move fault edge.** On a node with a servo, reset it mid-move and watch the brain log: one `move-failed` problem, one
+  re-send, then it clears. A second reset after it cleared should re-send again.
+- **A clamp board with the switch off.** Flash a node with a CT lead, leave the switch off, and confirm no clamp line shows and the
+  clamp is not offered to a tool.
+- **Pad D3 / D9.** If either is ever wired (a status LED on D3, the second button on D9), check boot with the line held both ways.
 
 **2. NodeLink — the happy path passes, THE FAIL-SAFE HAS NEVER BEEN TRIED.**
 
