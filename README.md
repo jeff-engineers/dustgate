@@ -1,342 +1,230 @@
 # DustGate
 
-This project is a work in progress and is not considered complete or ready for use. Use at your own risk.
+This project is a work in progress and is not ready for use by anyone but its author. Use at your own risk.
 
-Automated dust collection manifold for a woodworking shop. A motorized rack-and-pinion linear actuator selects which blast gate is open based on which tool is running — no switches, no manual intervention.
+Automated dust collection for a woodworking shop. When a tool starts drawing power, DustGate opens that tool's blast gate, closes the others, and starts the dust collector. When the last tool stops it leaves the gate where it is and lets the collector coast down. You lay the shop out once on a canvas in a phone browser (collector, ducts, gates, tools) and the brain routes from that picture.
 
-Each tool plugs into a [Shelly smart outlet](https://us.shelly.com). When a tool draws power above a configurable wattage threshold, the actuator moves to that tool's blast gate automatically. When all tools are off, it returns to the home (closed) position. You lay the shop out once on a canvas in a phone browser — collector, ducts, gates, tools — and the controller routes from that.
+**What has run on real hardware, and what has not.** The honest list lives at the top of [`CLAUDE.md`](CLAUDE.md) and is updated after each bench session. In short: a brain and PWM gate boards linked over WiFi and moved real gates; plugs (Shelly and Tasmota) sensed tools; a current clamp on a board started the collector and moved a gate; a board keyed the collector's RF remote and switched a real receiver; and the brain ran on a Mac for a whole bench shop on 2026-10-06. **Not yet run:** the brain on a Raspberry Pi, the 4" manifold, anything under production load, and several bench checks listed in [`TODO/TODO.md`](TODO/TODO.md). Treat everything else as compiled and host-tested only.
+
+---
+
+## How it works
+
+```
+ tool plug (Shelly / Tasmota)  ─┐
+ current clamp on a board      ─┼─►  the BRAIN  ─►  gate boards (a servo on each ball valve, or a slider rack)
+ dust-bin beam on a board      ─┘   (routing,       ─►  the collector's RF remote, pressed by a board
+                                     plugs, UI)        ─►  the app, in your phone's browser
+```
+
+- **Boards.** One part, the [Seeed XIAO ESP32C5](https://www.seeedstudio.com), does every job; what it does is chosen by which program it is flashed with and by the layout. A **primary** is the brain. A **node** is any other board: it drives gates, and can also read a current clamp, a dust-bin sensor, poll plugs for the brain, or key the collector's remote. Nodes dial the brain themselves and find it again by a UDP beacon if it moves, so no node needs a fixed address.
+- **The layout** is one document the brain stores: collectors (one per airflow system), ducts, gates, machines and their ports, and which board drives what. The app edits it; every other part reads it. Nothing on a node interprets it: a node is only ever sent resolved angles or positions.
+- **Sensing is not switching.** A tool is only ever *sensed*. The collector is the one thing DustGate commands, and it does it by pressing the RF remote already in the shop, never by carrying motor current. The reasoning is in [`CLAUDE.md`](CLAUDE.md) and [`docs/tool-sensing-rfc.md`](docs/tool-sensing-rfc.md).
+- **One rule set, one codebase for decisions.** Routing, sequencing and the node protocol are plain C++ (`firmware/control/`), host-tested, and the same files run in the ESP32 and in the native brain below. The behaviour is specified once in JavaScript ([`shared/device-model/`](shared/device-model/README.md)) and both the simulators and the firmware are held to it by paired tests.
+
+### Where the brain runs
+
+| | Status | Notes |
+|---|---|---|
+| **On an ESP32-C5** | The shipping design. Compiles, host-tested, and run on the bench. | One cheap board does everything, but RAM is the ceiling (see [how big a shop](#how-big-a-shop-can-a-c5-run)). |
+| **On a Mac or Linux box** (`native/`) | Run on the bench for a whole shop, 2026-10-06. | The same brain core with a Boost.Beast shell: links nodes, routes gates, presses the collector, polls and claims plugs, serves the app. `make -C native test`. See [`native/README.md`](native/README.md). |
+| **On a Raspberry Pi** (`native/pi/`) | **Planned as an option, never run on a Pi.** | The scripts (setup, deploy from the Mac, update with rollback, a systemd unit) are written, and CI builds the brain with GCC on Linux. The first goal is only "run the shop without the Mac". See [`native/pi/README.md`](native/pi/README.md). |
+
+The plan is that a shop can **optionally move its brain from the C5 to a Raspberry Pi** when it outgrows the C5, without changing anything else: the nodes, the plugs, the layout and the app stay as they are, because the Pi runs the same brain code. The C5 stays a complete brain for a small shop, and the reasoning for the split is in [`docs/brain-options.md`](docs/brain-options.md). A Pi brain has no pins of its own, so the collector's remote and the dust-bin sensor sit on a node (which is already how a node can be set up). What a Pi would need before anyone but the author could install it (first-boot WiFi, a read-only root, a hardware watchdog) is not built.
+
+---
+
+## How big a shop can a C5 run?
+
+These are approximations from the code's hard caps and from bench measurements, so treat them as planning numbers rather than guarantees. They describe **one C5 as the brain**; a Pi brain removes most of them.
+
+| Limit | Number | Where it comes from |
+|---|---|---|
+| Gate boards (nodes) paired to one brain | **10** hard cap; **about 8** comfortable | `kMaxPairedNodes`; each linked node costs the brain roughly 3.5 KB of RAM |
+| Gates per ball-valve board | **1** (a board has 2 PWM channels: one gate, one to press a remote fob) | `SERVO_COUNT` |
+| Gates on a slider rack | **up to 8**, always an even number | `NUM_STOPS`, manifolds ship in pairs |
+| Smart plugs the brain polls itself | **7** (every 500 ms) | `SMART_OUTLET_COUNT` |
+| Sensors one node can carry for the brain | **4**, across plugs, a clamp and a bin sensor | `kMaxSensorsPerNode`. A node that polls plugs takes that load off the brain |
+| Size of the saved layout | **24 KB**, which is about 60 to 70 pieces (a tool, a gate, a fitting each count) or roughly **20 to 25 tools with their gates** | `kMaxTopologyBytes`; a measured 16-piece shop is 5.6 KB |
+| Airflow systems (collectors) | as many as fit the layout, one collector each | |
+| Gate moves at once | **1, shop-wide** | so a switchover is never two servos drawing current together |
+| Browsers using the app at once | **a few**; the app refuses a page load when memory is low | the brain keeps a ~28 KB guard for serving a page |
+
+A realistic **small shop** on a C5 brain: 8 to 12 tools, 6 to 8 gate boards, 1 or 2 collectors, 7 or so plugs on the brain and the rest on nodes. Measured on the bench: a brain with **five nodes and four plugs idles at about 40 KB of free RAM**, a network scan briefly took it to 1.5 KB, and a layout save in the same few seconds can fail an allocation, so the margin is thin by 8 nodes. A shop with **12 to 15 plugs and 8 or more nodes** is where to move the brain to a Pi.
 
 ---
 
 ## Hardware
 
-![Actuator assembly](docs/images/actuator-assembly.png)
+| Part | Notes |
+|------|-------|
+| Seeed XIAO ESP32C5 | The one board: primary or node, flashed per role. Pin map in [`firmware/WIRING.md`](firmware/WIRING.md#1-the-board-and-its-one-pin-map) |
+| Servo on each ball valve (or a printed gate) | A PWM board drives one gate |
+| ST3215 bus servo on a rack and pinion with two endstops | The sliding-gate option, up to 8 gates over a Rockler manifold. A **slider board** drives only this; PWM servos and the serial bus never share a board |
+| Shelly Plug (US) per tool | Senses a tool, ~$21. A Gen 2 device (the `/rpc/` API) |
+| Tasmota plug with power metering | Sense-only, with no relay, so it can never switch a tool on. Found by address or a network sweep, because stock Tasmota does not announce itself |
+| 30 A current clamp on a board | The other way to sense a tool, and the right one for 240 V tools, which a plug-in outlet cannot meter. Switched on per board in the app |
+| Dust-bin beam sensor | Optional; reports a full bin |
+| 315 MHz transmitter, or a servo that presses the fob | Presses the collector's existing RF remote |
+| 12 to 24 V supply | For the slider's servo; ball-valve boards run from USB or their own supply |
 
-| Part | Source | Notes |
-|------|--------|-------|
-| Seeed XIAO ESP32C5 | [Seeed](https://www.seeedstudio.com) | Controller — the same board is the primary or a node |
-| Feetech/Waveshare ST3215 serial bus servo | Waveshare | Sliding gate — **not built yet** |
-| Rack & pinion | 3d Printed | 20T rack, 15T pinion, 4.145mm pitch |
-| Mechanical Assembly | 3d printed | Integrates with COTS dust gate |
-| NC mechanical limit switch ×2 | Various | Two endstops — both required. On the XIAO C5 slider build they are D8/D9 (GPIO8/9); see `firmware/WIRING.md#1-the-board-and-its-one-pin-map` |
-| Shelly Plug US (one per tool) | [us.shelly.com](https://us.shelly.com) | ~$21 each, Gen 4 recommended |
-| Shelly Plug US (dust collector) | [us.shelly.com](https://us.shelly.com) | One more to switch the dust collector on/off |
-| 12–24V DC power supply (≥2A) | Various | Motor power |
-
-The reference build is a 2.5" dust port system, with adjacent gates spaced about 82.9mm apart (these measured numbers feed the dual-endstop self-calibration — see [`docs/dual-endstop-calibration.md`](docs/dual-endstop-calibration.md)). A 4" variant is planned but not yet built or measured, so it's **disabled in the UI** until real hardware exists to measure its manifold profile (the logic is kept in place for when it does).
-
-For wiring details see [`firmware/WIRING.md`](firmware/WIRING.md) (shop-wide) and
-the board file it links: [XIAO ESP32C5](firmware/WIRING.md#1-the-board-and-its-one-pin-map). The retired
-rack wiring is in [`firmware/WIRING.md#7-the-slider--st3215-bus-and-endstops`](firmware/WIRING.md#7-the-slider--st3215-bus-and-endstops).
+Bill of materials, with the passives whose values matter: [`docs/BOM.md`](docs/BOM.md). Wiring: [`firmware/WIRING.md`](firmware/WIRING.md). The 2.5" Rockler manifold is measured (gates about 82.9 mm apart; see [`docs/dual-endstop-calibration.md`](docs/dual-endstop-calibration.md)). The 4" variant is not, and is disabled in the UI until it is.
 
 ---
 
-## Shelly Smart Plug Setup
+## Smart plug setup
 
-Do this before first boot of DustGate.
+Do this before first boot.
 
-**1. Add each plug to your WiFi network**
+**Shelly.** Add each plug to your WiFi with the Shelly app, then give it a fixed address in your router's DHCP reservations (the brain polls or is pushed to by address, and a changed lease breaks the pairing). Local control must be on (it is by default; the cloud is not needed). Check it answers at `http://<plug-ip>/rpc/Switch.GetStatus?id=0`, which should include `"apower": 0.0`. When asked for the generation, answer **2**.
 
-Download the Shelly app (iOS / Android) and follow the in-app pairing flow for each plug. You only need to do this once per plug.
+**Tasmota.** Flash or buy a metering plug, give it a fixed address, and add it by that address on the **Plugs** page. It is polled every half second.
 
-**2. Assign static IP addresses**
+**Ownership.** DustGate asks a plug who owns it before writing anything to it. A plug that belongs to another controller is only polled, and is taken over only when you approve it on the Plugs page. Releasing a plug hands back whatever push address it had before.
 
-This is important — DustGate polls outlets by IP. If a plug gets a new IP from DHCP the mapping breaks.
-
-In your router's admin panel, find the "DHCP reservations" or "static leases" section. Locate each Shelly by its MAC address (shown in the Shelly app under Device Info) and pin it to a fixed address, e.g.:
-
-```
-Bandsaw      → 192.168.1.101
-Router Table → 192.168.1.102
-Drill Press  → 192.168.1.103
-```
-
-**3. Confirm local control is enabled**
-
-In the Shelly app go to each device → Settings → make sure "Local control" is on. It's on by default. Cloud access is not required.
-
-**4. Verify reachability**
-
-From any browser on your home network, visit:
-
-```
-http://<plug-ip>/rpc/Switch.GetStatus?id=0
-```
-
-You should get a JSON response containing `"apower": 0.0` (watts currently drawn). If you see that, the plug is ready.
-
-> **Generation note:** Shelly Plug US Gen 4 is a Gen 2 device (uses the `/rpc/` API). When asked for the generation, answer **2**.
-
-> **240V tools:** Plug-in Shelly outlets are 120V/15A only. Large table saws, planers, etc. cannot use this method — assign them a fixed gate or detect them separately.
+**240 V tools** cannot use a plug-in outlet (they are 120 V / 15 A). Use a current clamp on a node.
 
 ---
 
-## Software Prerequisites
+## Software prerequisites
 
-- [PlatformIO](https://platformio.org/) (VS Code extension or CLI)
-- [Node.js](https://nodejs.org/) 18+ and npm (for the web UI)
+- [PlatformIO](https://platformio.org/) (CLI or the VS Code extension). The C5 builds use the pioarduino platform, which `dev.sh` points at for you
+- [Node.js](https://nodejs.org/) 18 or newer and npm, for the web app and the tests
+- For the native brain: a C++17 compiler and Boost (`brew install boost`, or `apt install libboost-dev`)
 
 ---
 
-## Build & Flash
+## Build and flash
 
-### 1. Clone / open the project
-
-Open the project folder in VS Code with the PlatformIO extension installed.
-
-### 2. Configure `config.h`
-
-Open `firmware/config.h`. At minimum:
-
-```cpp
-// Set the number of blast gates in your shop (1–7)
-#define NUM_STOPS  4
-
-// Enable smart outlet control and the HTTP API
-#define CONTROL_SMART_OUTLET
-#define ENABLE_HTTP_API
-```
-
-For developer / fixed-network builds you can hardcode WiFi credentials:
-
-```cpp
-#define WIFI_STA_SSID  "your-network-name"
-#define WIFI_STA_PASS  "your-password"
-```
-
-Leave those commented out for end-user deployments (the setup portal handles it).
-
-### 3. Flash the firmware
+Everything on the bench goes through [`dev.sh`](dev.sh); its header comment is the reference. It handles the board identification and the layout backup that raw `pio` commands do not, so prefer it.
 
 ```bash
-pio run --target upload
+./dev.sh ports                 # which boards are attached, and which is pinned as primary / node
+./dev.sh ports --pin primary   # pin a board by its USB serial (primary and node are the same part)
+./dev.sh flash                 # app + firmware + filesystem + WiFi/hostname, for the primary
+./dev.sh flash --fw            # firmware only: skips the filesystem, so the saved layout is safe
+./dev.sh flash-node dustgate-node-1
 ```
 
-### 4. Build and upload the web UI
+WiFi and the hostname come from `tools/.env`; override them for one flash with `--host`, `--ssid` (it prompts for the password, hidden) or `--ask`, and write them back with `--save`. **Confirm which board you are flashing**: primary and node are the same hardware, and flashing the filesystem erases the saved layout (`dev.sh` backs it up first).
 
-```bash
-cd dustgate-ui
-npm install          # first time only
-bash deploy.sh       # builds Angular app, gzips assets, copies to firmware/data/
-cd ..
-pio run --target uploadfs
-```
+A node needs a hostname unique among your nodes, because that is what the brain finds it by. After the first cable flash, nodes can be updated over WiFi from the Boards screen (**Update**) or with `./dev.sh ota`.
 
-Or do steps 3 and 4 in one command, which also pushes WiFi credentials and the
-mDNS hostname over the cable:
+Then in the app: **Boards → Scan for boards → Add**.
 
-```bash
-./dev.sh flash
-```
+### First boot
 
-Those come from `tools/.env`. To use different ones for a single flash — a second
-board, a different network, a rename — override them on the command line:
-
-```bash
-./dev.sh flash --host shop --ssid Shop-WiFi
-```
-
-A bare word is the hostname (`./dev.sh flash shop`), `--ask` prompts for all
-three prefilled from `.env`, and `--save` writes what you used back to `.env`
-instead of applying it just this once. Giving `--ssid` without `--pass` asks for
-the password hidden, which keeps it out of your shell history. The same flags
-work on `./dev.sh provision`, which resends them without reflashing.
-
-### 5. (Optional) Flash a secondary node
-
-A shop with more gates than one board can drive spreads them across extra ESP32s.
-A **secondary node** is a dumb servo bank — up to four ball valves, no stepper, no
-web UI. The primary does all the routing and sends it already-resolved angles.
-
-```bash
-./dev.sh flash-node
-```
-
-A node is the same [XIAO ESP32C5](firmware/WIRING.md#1-the-board-and-its-one-pin-map) as the primary —
-only the program differs. Give it a hostname, unique per node since that is what
-the primary finds it by: `./dev.sh flash-node dustgate-node-1`.
-
-This flashes the servo-only firmware and pushes WiFi credentials over the USB
-cable. The credentials have to go over serial: the primary reaches a node over
-WiFi, but a fresh node isn't on WiFi yet — so there's no network path until this
-step has happened.
-
-The **hostname it asks for must be unique per node**. It's what the node
-advertises over mDNS, what the Boards screen lists, and what gets written into
-the topology as `link.host`; two nodes sharing one collide on the network.
-
-Then, in the app: **Build → Boards → Scan for boards → Add**, and assign gates to
-it under **Gates**.
+1. Power the board. With no WiFi stored it makes a hotspot, `DustGate-Setup`, no password.
+2. Join it and open **http://192.168.4.1**, enter your WiFi, and save. It reboots onto your network and prints its address on serial (`./dev.sh monitor`).
+3. Open the app at that address (or `http://<hostname>.local`). `/` sends you to the layout tool if the shop is unfinished and to the Live list if it is.
 
 ---
 
-## First Boot
+## Setting up your shop
 
-1. **Power on the device.** Open a serial monitor (`pio device monitor`) to see boot output.
+| Page | For |
+|---|---|
+| **Shop** (`/shop`) | The daily screen: your tools, which one is collecting, and the collector's state |
+| **Build** (`/build`) | The canvas: place the collector, run duct, add gates and tools, and tap a piece for its setup |
+| **Boards** (`/boards`) | Find and pair boards, rename, update, unpair, and switch a board's current clamp on |
+| **Plugs** (`/plugs`) | Find, pair, rename, release and take over plugs, with each one's live draw and owner |
+| **Tools** (`/tools`) | Per tool: its plug or clamp, and the wattage at which it counts as running |
+| **Gates** (`/gates`) | Recalibrate a valve that got knocked |
+| **Settings** | Resets and Forget WiFi |
 
-2. **Connect to the setup network.** If no WiFi credentials are stored, the ESP32 creates a hotspot:
+1. **Draw the plumbing** on Build, the same shape as the pipe overhead. Add a second collector for a second airflow system; delete one beyond the first (its whole system goes with it), or use **⋯ → Clear shop** to return to the first collector alone.
+2. **Pair your boards** and assign gates to them. A board with a current clamp has its switch on **Boards**; it defaults to off.
+3. **Calibrate each gate** from its badge. A ball valve is nudged to its open and closed angles; a slider homes, sweeps its two endstops and lets you place each outlet.
+4. **Pair a plug or a clamp to each tool.** On **Plugs**, switch the tool on and watch for the plug that jumps, then **Pair to…**. A tool with neither is manual-only.
+5. **Set up the collector**: the remote that switches it, the plug or clamp that tells DustGate whether it is really running, and the dust-bin sensor if there is one.
 
-   ```
-   SSID:     DustGate-Setup
-   Password: (none)
-   ```
-
-   Connect your phone or laptop to this network, then open **http://192.168.4.1** in a browser.
-
-3. **Fill in the setup form** with your home WiFi SSID and password.
-
-4. **Save & Connect.** The device reboots and joins your home network. The IP address is printed to serial:
-
-   ```
-   [WiFi] Connected. IP: 192.168.1.42
-   [WiFi] Web UI:       http://192.168.1.42
-   ```
-
-5. **Open the web UI** at the IP shown. `/` looks at what the controller has stored and sends you to the right place — the layout tool if the shop isn't finished, the Live tool list if it is.
+The layout is saved to the brain as you go, so you can stop and come back.
 
 ---
 
-## Setting Up Your Shop
+## Daily use
 
-Setup is one thing: **draw your plumbing**. On the Build canvas you place the dust collector, run duct from it, and attach gates and tools — the same shape as the pipe overhead. The controller reads that layout and works out which gates to open for any tool.
-
-1. **Place the collector**, then attach components to it in any of four directions. Runs stay orthogonal, like real duct.
-2. **Add gates** — a sliding gate over a manifold, or individual ball valves. Each gate carries a badge showing whether it's been calibrated.
-3. **Calibrate each gate** by tapping its badge. A sliding gate homes, sweeps the rail between its two endstops, and lets you place each outlet; a ball valve is nudged to its open and closed angles and captured.
-4. **Attach tools** to gate outlets and name them ("Bandsaw", "Router Table" — whatever you call them).
-5. **Tag tools with outlets** under **Tools**: switch a tool on and watch which Shelly jumps to green. The scan finds plugs over mDNS and shows each one's Shelly-app name; a tool with no plug simply becomes manual-only.
-6. **Add extra boards** under **Boards** if you have more gates than one controller can drive (see step 5 of Build & Flash).
-
-The layout is saved to the controller as you go, so you can stop and come back.
-
----
-
-## Daily Use
-
-- **Live view** (`/shop`) is the daily driver: a list of your tools, with the one that's actually collecting highlighted. It's the screen `/` lands on once the shop is set up.
-- **Automatic mode:** just turn on a tool. DustGate detects power draw within ~1 second and moves the gates. Turn the tool off and the system returns home after a 3-second coast-down delay.
-- **Manual override:** tap any tool in the Live view to route to it by hand — including tools with no smart plug. Most-recent-tool-wins: this holds until another tool is genuinely switched on (an edge, not just "still running").
-- **Dust collector:** driven by a dedicated switchable Shelly smart plug. It turns on automatically whenever a tool is collecting and off when the system returns home, and can also be toggled manually.
-- **Idle power-off:** if nothing moves for an hour (configurable in Settings, 0 = never), the motor driver powers off automatically. The next move re-homes first — this is invisible in normal use, just a brief extra step if the system has been sitting idle.
+- **Automatic.** Turn a tool on. Within about a second DustGate opens its gate, closes the others (open the new gate before closing the old one, so the collector is never dead-headed) and starts the collector if it is not running. Most recent tool wins.
+- **When the last tool stops** the gate stays where it is and the collector coasts for a few seconds before it is switched off.
+- **By hand.** Tap a tool on **Shop** to route to it without running it, and tap the collector card to run it by hand. A hand-switched tool is released when another tool starts.
+- **When something is asked for and not happening** (a gate that did not move, a collector that did not start, a board or plug that stopped answering) it is listed on the Shop screen, worded by the device, and does not go away until it is fixed.
 
 ---
 
 ## Settings
 
-Tap the **⚙ gear icon** to reach Settings, which covers:
+- **Reset gate calibration**: clears trained positions.
+- **Reset shop layout**: erases ducts, gates, tools and plugs; boards stay paired.
+- **Reset everything**: also forgets every paired board and plug. Keeps WiFi, the app key and calibration.
+- **Forget WiFi**: erases the credentials and reboots into the setup hotspot.
 
-- A link back to the **Shop Layout** canvas any time, not just on first run
-- Idle power-off timeout
-- Home endstop side, number of gates, port size
-- **Forget WiFi** — erases stored credentials and reboots into the setup portal (same effect as the serial `wifireset` command, no serial access needed)
-- **Reset gate calibration** ("Start Over") — clears trained positions and outlet mappings
+---
 
-Changes take effect immediately and are saved to flash.
+## Running the brain somewhere other than the ESP32 (optional)
+
+```bash
+make -C native                    # builds native/build/dustgate-brain
+make -C native test               # end to end, against fake nodes and fake plugs
+native/build/dustgate-brain --port 8080 --www dustgate-ui/dist/dustgate-ui/browser --pair dustgate-planer,dustgate-tablesaw
+```
+
+A node dials the brain it is paired to by name, so run this only while the ESP32 brain with the same id is paused (`POST /api/nodes/pause`) or give it a different `--id`. On a **Raspberry Pi** (a Zero 2 W is the intended board, with Raspberry Pi OS Lite) use the scripts in [`native/pi/`](native/pi/README.md): `setup.sh` once, then `deploy.sh` from the Mac. They have never been run on a Pi.
 
 ---
 
 ## Development
 
-To work on the web UI against a live device:
+Work on the app against a live brain, or with no hardware at all:
 
-1. Set the ESP32's IP in `dustgate-ui/proxy.conf.json` (change the `target` values).
-2. Run the dev server:
-   ```bash
-   cd dustgate-ui
-   npm start
-   ```
-3. Open http://localhost:4200 — API calls proxy to the real device.
-
----
-
-## Project Structure
-
-```
-firmware/         Firmware (Arduino / PlatformIO)
-  config.h               All compile-time settings
-  firmware.ino    Main sketch + state machine
-  api/                   HTTP REST + WebSocket server
-  motor/st3215/          ST3215 serial bus servo: the wire protocol and the rack driver
-                         for the ST3215 slider — NOT compiled (see its README)
-  boards/                Per-board pin maps (xiao_c5)
-  control/               Control input modes + the v2 routing brain:
-                           TopologyRouter/Sequencer/Controller (pure, host-tested)
-                           ActuatorBus/NodeBus/TopologyRuntime (the dispatch seam)
-                           RemoteActuatorBus + NodeLink (multi-node transport)
-  feedback/              The FeedbackSystem seam (position/homing; null today)
-  motor/                 ServoActuator (ball valves) + the MotorDriver seam
-  node/                  SECONDARY node firmware — a separate ~200-line program
-                         (env: xiao_c5), not a flavour of the main sketch
-  outlets/               Shelly outlet polling
-  test/                  Host (g++) conformance tests for the pure C++ control layer
-  training/              Calibration storage
-  utils/                 WiFi provisioning, motion math, mDNS queries
-  data/                  LittleFS filesystem image (generated — don't edit)
-  WIRING.md              Wiring reference (shop-wide)
-  WIRING.md#1-the-board-and-its-one-pin-map      Pin map for the XIAO ESP32C5 — primary or node
-
-dustgate-ui/             Web UI (Angular 17) — see dustgate-ui/README.md for
-                         local dev instructions and a full breakdown
-
-shared/device-model/     Canonical device model + conformance suite — the single
-                         source of truth for device behaviour that drives both
-                         simulators (see shared/device-model/README.md)
-
-tools/                   Dev tools — mock-api.js (local firmware stand-in),
-                         mock-node.js (simulated secondary board),
-                         provisioning utilities
-
-.github/workflows/       CI (conformance suite, UI build, firmware compile)
-docs/                    Design notes and reference images
-
-platformio.ini           PlatformIO build config
-REQUIREMENTS.md          Architecture decisions and spec
-vercel.json              Vercel deployment config (demo site)
+```bash
+./dev.sh demo      # the app in a browser with a simulated shop, no device
+./dev.sh mock      # the local Node stand-in for the device API
+./dev.sh live      # hot-reload against the real device (default host dustgate.local)
 ```
 
----
+or by hand: point `dustgate-ui/proxy.conf.json` at the device and run `npm start` in `dustgate-ui/`.
 
-## Testing & CI
+## Project structure
 
-Device behaviour is defined once in a **canonical model**
-([`shared/device-model/`](shared/device-model/README.md)) that drives both the
-local Node mock (`tools/mock-api.js`) and the in-browser demo
-(`dustgate-ui/.../demo-api.service.ts`), so the two can't drift. The C++ firmware
-can't share that JS, so it's kept in sync by **executable contracts** that run
-over HTTP/WebSocket against any target, plus host (g++) tests for the pure C++
-control layer.
+```
+firmware/                ESP32 C++ (Arduino / PlatformIO)
+  firmware.ino           the primary's sketch
+  node/                  the node program (a separate small program, not a flavour of the sketch)
+  control/               the brain: router, sequencer, controller, runtime, node protocol and sessions.
+                         Pure C++, host-tested, and shared with native/
+  outlets/               Shelly and Tasmota drivers, plug claiming and provisioning (shared with native/)
+  api/                   the HTTP and WebSocket server; api/ApiCore.h holds the routes both brains share
+  sensing/               the current-clamp trip logic
+  boards/                pin maps
+  test/                  host (g++) tests and fixtures
+  WIRING.md              wiring reference
 
-Run everything locally from `tools/`:
+native/                  the brain as a Linux / macOS program, and native/pi/ for the Raspberry Pi
+dustgate-ui/             the Angular app, served from the brain (see its README)
+shared/device-model/     the canonical device model, constants manifest and conformance suites
+tools/                   mock-api.js, mock-node.js and the checks run in CI
+docs/                    design notes, RFCs, mockups and the bill of materials
+TODO/                    TODO.md (open items) and DONE.md (decisions worth keeping)
+.github/workflows/       CI
+```
 
-| Command | What it checks |
-|---|---|
-| `npm run model:test` | pure JS model — topology, routing, sequencer, NodeLink frames |
-| `npm run firmware:test` | host C++ — router, controller, NodeBus/NodeLink |
-| `npm run conformance:ci` | v1 device API against the mock |
-| `npm run topology:conformance:ci` | v2 topology API against the mock |
-| `npm run nodelink:conformance:ci` | primary↔secondary protocol against `mock-node.js` |
+## Testing and CI
 
-And from `dustgate-ui/`:
+Device behaviour is defined once in [`shared/device-model/`](shared/device-model/README.md), which drives both the local mock and the in-browser demo, so they cannot drift. C++ cannot share that JavaScript, so it is held to the same behaviour by executable contracts that run against any target, plus host tests for the pure C++ layer. Numbers that two builds both need are listed in `shared/device-model/constant-pairs.json` and checked.
 
-| Command | What it checks |
-|---|---|
-| `npm test` | every UI suite below, in one run |
-| `npm run test:spec` | the shop seam (`shop-doc`), readiness, the flattening readers |
-| `npm run test:routing` / `test:wiring` | duct and cable geometry |
+```bash
+cd tools
+npm run model:test                 # the JS model, the paired constants, NodeLink frames
+npm run firmware:test              # host C++: router, controller, NodeBus, sessions, sensing, API core
+npm run conformance:ci             # the slider device API against the mock
+npm run topology:conformance:ci    # the layout API against the mock
+npm run nodelink:conformance:ci    # primary to node protocol against mock-node.js
+npm run ui:fresh                   # the built app carries the current model
+cd ../dustgate-ui && npm test      # every UI suite (plain TypeScript under node, no browser)
+make -C native test                # the native brain end to end
+```
 
-The UI suites are **plain TypeScript compiled with `tsc` and run under `node`** —
-no Karma, no Vitest, no headless Chrome in CI. Everything they reach has to be
-Angular-free, which is deliberate pressure rather than a limitation: logic worth
-testing shouldn't need a TestBed to reach it. Component behaviour is covered by
-driving the app in a browser. See
-[`dustgate-ui/tsconfig.spec.json`](dustgate-ui/tsconfig.spec.json).
-
-[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs all of the above on
-every push / PR, across three jobs (**conformance**, **ui-build**, **firmware** —
-the last compiling all three targets including the servo-only node).
-
-To certify **real hardware** against the same contracts (the v1 suite is
-DESTRUCTIVE — it homes, moves, and wipes calibration):
+[CI](.github/workflows/ci.yml) runs these on every push in four jobs: conformance, UI build and tests, firmware compile (the primary, the slider primary and both nodes), and the native brain built with GCC on Linux. To certify real hardware against the same contracts (the slider suite is destructive: it homes, moves and wipes calibration):
 
 ```bash
 node shared/device-model/conformance.js http://<device-ip> <api-key> --force
@@ -346,14 +234,11 @@ node shared/device-model/nodelink-conformance.js ws://<node>.local/nodelink
 
 ---
 
-## Limitations & Known Issues
+## Limitations and known issues
 
-- **Nothing in this project has been validated on hardware yet.**
-  Everything is verified by compile, host test and simulation. See
-  [`TODO.md`](TODO.md) for the bench plan and the current backlog.
-- A **sliding gate on a secondary board** can't be calibrated: the calibration
-  flow drives the motion endpoints, which only the primary exposes.
-- Routing **conflicts** are computed and reported by the firmware but not yet
-  surfaced in the Live view, so it can say a tool isn't pulling but not why.
-- The dust collector is controlled by a switchable Shelly plug (configured via `PUT /api/dustcollector` with `{"gen":2,"ip":"192.168.1.x"}`). It follows gate state automatically and can be toggled manually. A setup step to enter the plug's IP is not yet wired up (configure it via the API for now).
-- 240V tools cannot use Shelly plug-in outlets.
+- Validation on hardware is partial (see the top of this file). The open bench checks are in [`TODO/TODO.md`](TODO/TODO.md).
+- The Raspberry Pi path is untested and is not a product: it needs first-boot WiFi, a read-only root and a watchdog before anyone else could install it.
+- One servo moves at a time across the whole shop, and an interrupted move is re-sent once per fault, not retried indefinitely.
+- A collector started for a few seconds of tool use can be slow to arrive; where the time goes is still to be measured on a bench.
+- 240 V tools need a current clamp; plug-in outlets are 120 V only.
+- A brain on a C5 is bounded by RAM, as above.
