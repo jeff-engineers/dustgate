@@ -69,6 +69,14 @@ namespace plughttp { void setPort(const std::string&); }
 static dgbrain::PlugPoller g_poller;
 static dgbrain::Sweep g_sweep;
 static std::string g_localIp, g_plugPort = "80";
+// This brain's own address is NOT fixed: a Pi takes whatever its router gives it, and the router may give it another. g_localIp is
+// read from the plug workers, the beacon and the sweep, so it is only touched through localIp() / setLocalIp().
+static std::mutex g_ipMu;
+static std::string localIp() { std::lock_guard<std::mutex> g(g_ipMu); return g_localIp; }
+static void setLocalIp(const std::string& ip) { std::lock_guard<std::mutex> g(g_ipMu); g_localIp = ip; }
+static std::string g_bcast, g_ipFile;          // the beacon's address; a file to read the address from (tests: nothing else moves an address)
+static bool g_ipFixed = false, g_bcastFixed = false;
+static unsigned g_port = 80;
 static outletops::Self selfIdentity();
 static uint32_t g_plugSyncAtMs = 0;
 static std::map<std::string, int> g_swAsserted;       // "s:<system>" -> 0/1 last asked of the plug
@@ -381,7 +389,7 @@ static bool readStatic(std::string path, std::string& body, std::string& mime) {
 // ── what the shared API (api/ApiCore.h) asks of this brain ────────────────────────────────────────────
 // host: where a plug's push target points (our address, which is what decides "ours"); name: the owner suffix a plug carries
 // and what recognises our own plug at a stale address after the brain moves.
-static outletops::Self selfIdentity() { return outletops::Self{g_localIp, g_hub->primaryId()}; }
+static outletops::Self selfIdentity() { return outletops::Self{localIp(), g_hub->primaryId()}; }
 
 // ── finding boards by mDNS ───────────────────────────────────────────────────────────────────────
 // "Scan for boards": a node advertises _dustgate._tcp with TXT (owner, board, servos, linear, role). Unlike a node that already
@@ -742,7 +750,7 @@ private:
             o.body = "{\"ok\":true}"; return;
         }
         if (t == "/api/outlets/save" && m == "POST") { o.body = "{\"ok\":true}"; return; }   // nothing to persist: plugs live in the layout
-        if (t == "/api/outlets/sweep" && m == "POST") { g_sweep.start(g_localIp, g_plugPort, selfIdentity()); o.body = "{\"ok\":true}"; return; }
+        if (t == "/api/outlets/sweep" && m == "POST") { g_sweep.start(localIp(), g_plugPort, selfIdentity()); o.body = "{\"ok\":true}"; return; }
         if (t == "/api/outlets/sweep" && m == "DELETE") { g_sweep.cancel(); o.body = "{\"ok\":true}"; return; }
         if (t == "/api/outlets/sweep" && m == "GET") { o.body = g_sweep.progressJson(); return; }
         // No mDNS browser here, so "discover" is what the last sweep found; the sweep is the way to look.
@@ -867,24 +875,30 @@ private:
 
 // ── the UDP beacon: "DGB1|<id>|<ip>|<port>", fast while a node is down, slow otherwise ──
 static std::string guessIp() {
+    if (!g_ipFile.empty()) { std::ifstream f(g_ipFile); std::string l; if (f && std::getline(f, l) && !l.empty()) return l; return "127.0.0.1"; }
     try {
         net::io_context io; udp::socket s(io); s.connect(udp::endpoint(net::ip::make_address("8.8.8.8"), 53));
         return s.local_endpoint().address().to_string();
     } catch (...) { return "127.0.0.1"; }
 }
 
-static void beaconLoop(net::io_context& io, std::shared_ptr<udp::socket> sock, std::shared_ptr<net::steady_timer> t,
-                       std::string ip, unsigned port, std::string bcast) {
+// The address and the broadcast are read at each send, not captured: the beacon is how a node finds a brain that MOVED.
+static void beaconLoop(net::io_context& io, std::shared_ptr<udp::socket> sock, std::shared_ptr<net::steady_timer> t) {
     const uint32_t every = g_hub->anyDown() ? 5000 : 60000;
     t->expires_after(std::chrono::milliseconds(every));
-    t->async_wait([&io, sock, t, ip, port, bcast](beast::error_code ec) {
+    t->async_wait([&io, sock, t](beast::error_code ec) {
         if (ec) return;
-        std::string msg = "DGB1|" + g_hub->primaryId() + "|" + ip + "|" + std::to_string(port);
+        std::string msg = "DGB1|" + g_hub->primaryId() + "|" + localIp() + "|" + std::to_string(g_port);
         beast::error_code e2;
-        sock->send_to(net::buffer(msg), udp::endpoint(net::ip::make_address(bcast), nl::kBeaconPort), 0, e2);
-        beaconLoop(io, sock, t, ip, port, bcast);
+        sock->send_to(net::buffer(msg), udp::endpoint(net::ip::make_address(g_bcast), nl::kBeaconPort), 0, e2);
+        beaconLoop(io, sock, t);
     });
 }
+
+// "ws://<our address>[:port]/shelly-rpc": where a plug is told to push. Port 80 needs no number.
+static std::string pushUrl() { return "ws://" + localIp() + (g_port == 80 ? "" : ":" + std::to_string(g_port)) + "/shelly-rpc"; }
+// The subnet's own broadcast address: the all-ones one is dropped or mis-routed by some stacks (macOS often).
+static std::string broadcastFor(const std::string& ip) { const size_t dot = ip.rfind('.'); return dot == std::string::npos ? "255.255.255.255" : ip.substr(0, dot) + ".255"; }
 
 int main(int argc, char** argv) {
     setvbuf(stdout, nullptr, _IOLBF, 0);
@@ -894,7 +908,7 @@ int main(int argc, char** argv) {
         std::string a = argv[i];
         auto val = [&]() { return i + 1 < argc ? std::string(argv[++i]) : std::string(); };
         if (a == "--id") id = val(); else if (a == "--pair") pair = val(); else if (a == "--port") port = (unsigned)std::stoi(val());
-        else if (a == "--ip") ip = val(); else if (a == "--state") stateDir = val(); else if (a == "--also-port") alsoPort = (unsigned)std::stoi(val()); else if (a == "--trace") g_trace = true; else if (a == "--www") g_www = val(); else if (a == "--plug-port") { g_plugPort = val(); plughttp::setPort(g_plugPort); } else if (a == "--key") g_apiKey = val(); else if (a == "--broadcast") bcast = val();
+        else if (a == "--ip") ip = val(); else if (a == "--ip-from-file") g_ipFile = val(); else if (a == "--state") stateDir = val(); else if (a == "--also-port") alsoPort = (unsigned)std::stoi(val()); else if (a == "--trace") g_trace = true; else if (a == "--www") g_www = val(); else if (a == "--plug-port") { g_plugPort = val(); plughttp::setPort(g_plugPort); } else if (a == "--key") g_apiKey = val(); else if (a == "--broadcast") { bcast = val(); g_bcastFixed = true; }
         else { dglog::linef("usage: dustgate-brain [--id dustgate] [--pair nodeId,nodeId,...] [--port 80] [--also-port 80] [--state dir] [--www dir] [--plug-port 80] [--key k] [--ip a.b.c.d] [--broadcast a.b.c.255]\n"); return a == "--help" ? 0 : 2; }
     }
     std::vector<std::string> ids; std::stringstream ss(pair); std::string x;
@@ -938,6 +952,7 @@ int main(int argc, char** argv) {
             dglog::linef("[TOPO] stored layout %s refused: %s\n", path.c_str(), g_topoErr.c_str());
         }
     }
+    g_ipFixed = !ip.empty();   // --ip says where this brain IS; without it the address is followed
     if (ip.empty()) {
         // At boot a Pi starts this before its WiFi has an address; "127.0.0.1" would be beaconed and pushed to plugs for the
         // life of the process. Wait (up to a minute) for a real one.
@@ -945,10 +960,11 @@ int main(int argc, char** argv) {
         for (int i = 0; i < 60 && ip == "127.0.0.1"; i++) { std::this_thread::sleep_for(std::chrono::seconds(1)); ip = guessIp(); }
         if (ip == "127.0.0.1") dglog::line("[NET] no network address after 60 s - nodes cannot find this brain. Check the Pi's WiFi.");
     }
-    g_localIp = ip;
+    setLocalIp(ip);
     // The subnet's own broadcast address: the all-ones one is dropped or mis-routed by some stacks (macOS often), and the beacon
     // is what lets a node find a brain whose address changed.
-    if (bcast.empty()) { const size_t dot = ip.rfind('.'); bcast = dot == std::string::npos ? "255.255.255.255" : ip.substr(0, dot) + ".255"; }
+    if (bcast.empty()) bcast = broadcastFor(ip);
+    g_bcast = bcast;
 #ifdef __APPLE__
     // A sleeping Mac is a brain that has gone away: nodes drop, nothing switches. Hold idle sleep off
     // for as long as this process lives (caffeinate exits when its -w pid does). Best effort.
@@ -973,7 +989,8 @@ int main(int argc, char** argv) {
     // Nodes pull firmware from http://<brain ip><path> with no port, so a brain on another port also listens on 80.
     if (alsoPort) std::make_shared<Listener>(io, tcp::endpoint(tcp::v4(), (unsigned short)alsoPort))->run();
     auto sock = std::make_shared<udp::socket>(io, udp::v4()); sock->set_option(net::socket_base::broadcast(true));
-    beaconLoop(io, sock, std::make_shared<net::steady_timer>(io), ip, port, bcast);
+    g_port = port;   // after the listeners: the port may have fallen back to 8080
+    beaconLoop(io, sock, std::make_shared<net::steady_timer>(io));
     net::steady_timer rtTimer(io);
     std::function<void()> rtTick = [&]() {
         rtTimer.expires_after(std::chrono::milliseconds(100));
@@ -983,9 +1000,32 @@ int main(int argc, char** argv) {
     net::signal_set sig(io, SIGINT, SIGTERM); sig.async_wait([&](beast::error_code, int) { io.stop(); });
     dglog::linef("dustgate-brain %s (%s) on %s:%u, %zu paired node(s)\n", id.c_str(), DG_COMMIT, ip.c_str(), port, ids.size());
     // Plugs are pointed at the port the app is served on (port 80 needs no number in the URL).
-    g_poller.setPushTarget(selfIdentity(), "ws://" + ip + (port == 80 ? "" : ":" + std::to_string(port)) + "/shelly-rpc",
-                           stateDir.empty() ? "" : stateDir + "/plugs.json");
+    g_poller.setPushTarget(selfIdentity(), pushUrl(), stateDir.empty() ? "" : stateDir + "/plugs.json");
     g_poller.start();
+    // FOLLOW THIS BRAIN'S OWN ADDRESS. A Pi is given an address by the router and the router may give it another (a lease
+    // renewal, a reboot, a new access point). The brain is told nothing, so it looks: when the address moves it beacons the
+    // new one (a node redials by the beacon), points every plug it owns at the new address (a plug keeps pushing to the old
+    // one until told), and says so in the log. No fixed address, and no DHCP reservation, is needed. The ESP32 does the same
+    // (SmartOutletControl::checkLocalIpChange). Skipped when --ip was given, which is a statement of where the brain is.
+    net::steady_timer ipTimer(io);
+    std::function<void()> ipTick = [&]() {
+        ipTimer.expires_after(std::chrono::seconds(5));
+        ipTimer.async_wait([&](beast::error_code ec) {
+            if (ec) return;
+            if (!g_ipFixed) {
+                const std::string now = guessIp();
+                // 127.0.0.1 is "no network right now" (a WiFi drop), not an address: keep the last good one until a real one is back.
+                if (now != "127.0.0.1" && now != localIp()) {
+                    dglog::linef("[NET] address changed %s -> %s; nodes will find it by the beacon and plugs are being repointed\n", localIp().c_str(), now.c_str());
+                    setLocalIp(now);
+                    if (!g_bcastFixed) g_bcast = broadcastFor(now);
+                    g_poller.retarget(selfIdentity(), pushUrl());
+                }
+            }
+            ipTick();
+        });
+    };
+    ipTick();
     io.run();
     g_poller.stop();
     return 0;

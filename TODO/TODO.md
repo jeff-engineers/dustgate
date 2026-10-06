@@ -12,6 +12,28 @@ reasoning was contested, or that a still-open item above leans on.
 here until 2026-09-17 and had grown to 144 lines — longer than most of the
 active sections above them, which is how a parked item stops being read.
 
+## Pi bring-up (branch `pi-brain-bringup`, started 2026-10-06)
+
+Goal for now: **run the shop without the Mac**, with no fixed address anywhere. Nothing on a Pi has run yet. Steps, in order; each says
+what to report back. Full commands are in [`native/pi/README.md`](../native/pi/README.md).
+
+1. **Flash the Pi** (Pi Zero 2 W, or any 64-bit Pi) with Raspberry Pi OS Lite (64-bit) in the Imager: hostname (not `dustgate` while an
+   ESP32 brain with that name is on), your user, SSH with your Mac's public key, the shop WiFi and country. **No DHCP reservation.**
+   Report: can you `ssh <user>@<hostname>.local`? If not, what address does the router show?
+2. **Run `setup.sh` on it** (compiler, Boost, the `dustgate` service user, WiFi power-save off, hardware watchdog, persistent journal,
+   the systemd unit). Report: any step that fails, and its output.
+3. **Deploy from the Mac** with `deploy.sh`. The first build on a Zero 2 W takes minutes. This is the first GCC-on-ARM build, so it may
+   need a fix or two: paste the compiler output. Report: does it build, does the service start, does `/api/info` answer?
+4. **Stop the Mac brain, bring the state over** (`--state`), start the Pi's. Report: do the nodes find it (Boards screen) without anyone
+   touching them? They should, by the beacon.
+5. **Move the address.** Force the Pi onto a different address (`sudo ip addr`, or restart its WiFi/router lease) with a tool running.
+   Pass: the log shows `[NET] address changed`, the nodes relink, and the plugs read again (by polling for a few seconds, then pushing).
+6. **Pull the power** on the Pi mid-save and boot it. Pass: it comes back with its layout (the state files are written atomically).
+7. **Run a normal shop day on it**; keep the journal (`journalctl -u dustgate-brain`).
+
+Open design work behind this, in the order it will be needed: mDNS advertising from the brain itself (the Pi relies on avahi today),
+first-boot WiFi setup for a customer, a read-only root, and the `--git` update path. None of it blocks the steps above.
+
 ## Bugs
 
 - **Clamp switch: the node still reports `caps.ct` from its pin map, and the jack idea is open (2026-10-06).** The per-board switch

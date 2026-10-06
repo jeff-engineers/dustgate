@@ -9,14 +9,19 @@ In Raspberry Pi Imager choose **Raspberry Pi OS Lite (64-bit)** and, under the O
 
 | Setting | Value | Why |
 |---|---|---|
-| Hostname | `dustgate` | the app is then at `http://dustgate.local`. (Nothing REQUIRES mDNS: it is only how you find the Pi; use its IP if your network blocks it.) |
+| Hostname | `dustgate` | the app is then at `http://dustgate.local`. (Nothing REQUIRES mDNS: it is only how you find the Pi; use its IP if your network blocks it.) **Two boards answering to `dustgate.local` collide**, so while an ESP32 brain with that name is still powered, name the Pi something else (`dustgate-pi`). The brain's pairing id (`--id`) is separate from the hostname. |
 | Username / password | yours | the deploy script SSHes in as this user and uses `sudo` |
 | SSH | enable, **allow public-key authentication** and paste your Mac's public key (`cat ~/.ssh/id_ed25519.pub`) | `deploy.sh` runs non-interactively |
 | WiFi | the shop's network, correct country | |
 | Locale / time zone | yours | logs carry times |
 
-Then, **in your router, give the Pi a DHCP reservation (a fixed address)**. The brain tells plugs and nodes its address; a lease that
-changes under them breaks the links until they find it again. (Nodes find a moved brain by its beacon; plugs do not.)
+**The Pi does NOT need a fixed address, and you should not give it one.** The brain follows its own address: it checks every 5 seconds,
+and when the router gives it a new one it beacons the new address (nodes find a moved brain by the beacon and redial) and points every
+plug it owns at the new address (a plug keeps pushing to the old one until told; a plug whose push goes quiet is polled meanwhile). It
+logs `[NET] address changed <old> -> <new>`. Plugs have to be re-told, so expect the shop's plugs to read by polling for a few seconds
+after a change. The ESP32 brain has always done the same. What you do need is a way to FIND the Pi: Raspberry Pi OS advertises its
+hostname over mDNS, so `http://dustgate.local` works on a network that allows multicast. mDNS is a fast path, not a requirement: if your
+network blocks it, read the Pi's address from the router's client list (nodes never need it, they use the beacon).
 
 Boot it, wait a minute, and from your Mac: `ssh <user>@dustgate.local`.
 
