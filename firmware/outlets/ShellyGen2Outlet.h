@@ -43,7 +43,7 @@ public:
     bool        readClaim(const char* ourHost, const char* deviceName, const char* ourName,
                           plugclaim::Claim& out, std::string* pushUrl = nullptr) override;
     bool        readPushConfig(std::string& outServer, bool& outEnabled,
-                               uint32_t timeoutMs = OUTLET_RPC_WRITE_TIMEOUT_MS);
+                               uint32_t timeoutMs = OUTLET_RPC_WRITE_TIMEOUT_MS) override;
 
 private:
     char _ip[16];

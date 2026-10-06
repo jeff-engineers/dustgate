@@ -732,7 +732,9 @@ static String g_pendingTakeoverHost;
 static bool g_linksPaused = false;
 
 
-static void syncPairedNodes(const char* primaryId) {
+static void syncPairedNodes() {
+    const String ownId = WiFiProvisioner::getHostname();   // the brain's own id: what every node is paired to
+    const char* primaryId = ownId.c_str();
     if (!ensureRemotePool()) return;
     // INCREMENTAL, since 2026-10-03. This used to stop every link and dial them all
     // again on any change to pairing: adding a 3rd and 4th node dropped every linked
@@ -1687,7 +1689,7 @@ void setup() {
     // told what the shop looks like. That ordering is the whole point of the
     // split — see NodeRegistry.h.
     g_nodeRegistry.begin();
-    syncPairedNodes(WiFiProvisioner::getHostname().c_str());
+    syncPairedNodes();
 
     adoptStoredTopology();
 
@@ -2565,7 +2567,7 @@ void loop() {
         if (apiServer.consumeLinksPause(pause) && pause != g_linksPaused) {
             g_linksPaused = pause;
             Serial.println(pause ? F("[NODE] Links PAUSED — every link stopped, pairings kept") : F("[NODE] Links resumed"));
-            syncPairedNodes(WiFiProvisioner::getHostname().c_str());
+            syncPairedNodes();
         }
     }
 #endif
@@ -3524,7 +3526,7 @@ void loop() {
             // confirmation buys exactly one attempt.
             if (changed && pairTakeover && !pairRemove) g_pendingTakeoverHost = pairHost;
             if (changed) {
-                syncPairedNodes(WiFiProvisioner::getHostname().c_str());
+                syncPairedNodes();
                 // Re-resolve controllerId→host: a topology naming this board was
                 // unresolvable while it was unpaired, and should start working now.
                 if (g_topoRuntime.loaded()) syncControllerAliases();
@@ -4362,7 +4364,7 @@ static void resetEverything() {
     control.clearAllOutlets();
 #endif
     adoptStoredTopology();                 // no layout: clears the runtime and aliases
-    syncPairedNodes(WiFiProvisioner::getHostname().c_str());   // no pairings: stops every link
+    syncPairedNodes();   // no pairings: stops every link
 }
 #endif
 
