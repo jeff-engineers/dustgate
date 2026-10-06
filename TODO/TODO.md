@@ -14,6 +14,17 @@ active sections above them, which is how a parked item stops being read.
 
 ## Bugs
 
+- **Audit every shared constant: pair it, or test that it agrees (jeff, 2026-10-06).** A constant that two builds both
+  need must be PAIRED where it can be — one definition, or a pair-table row in `CLAUDE.md` with a JS test and a C++ test
+  asserting the same literal — and where it cannot be (a value baked into a compiled app, a number a node holds, a
+  copy in a different toolchain), there must be a unit test that fails when the copies disagree. Found the hard way
+  2026-10-06: the app has its own compiled copy of `COLLECTOR_RUNNING_W`, so changing it in the brain alone left the Live
+  screen saying "Not starting" for a fan the brain called running. Do: (1) grep for bare numbers duplicated across
+  `shared/device-model`, `firmware/`, `native/` and `dustgate-ui/` (the UI imports the model at build time, so its copy is
+  silently STALE until a rebuild — a test that compares the built bundle's value to the model's would catch it); (2) for
+  each, either add the pair-table row and paired tests or a one-sided test and say why it cannot be paired; (3) have
+  `make test` / `npm test` fail on a stale UI bundle.
+
 - **PUT THE COLLECTOR "RUNNING" THRESHOLD BACK TO 50 W (jeff, 2026-10-06 — TEMPORARY).** The bench collector is a desk fan
   that draws ~38 W, so `kCollectorRunningW` (control/CollectorPlugState.h) and `COLLECTOR_RUNNING_W`
   (topology-device.js) are 25 for now. Restore both to 50, and the literal in `test_collector_plug.cpp` ("kCollectorRunningW is
