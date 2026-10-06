@@ -13,6 +13,7 @@
 #pragma once
 #include <cstdint>
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 #include "TopologyRuntime.h"
@@ -56,8 +57,15 @@ public:
             // A move that did not finish: the link may be fine again by now, which is exactly why this is its own entry —
             // the gate is still in an unknown place.
             const std::string mkey = "move:" + b.host;
-            if (b.moveFault) rt.raiseProblem(mkey, "move-failed", "bad", "board", b.host, b.moveFault, now);
-            else             rt.clearProblem(mkey);
+            if (b.moveFault) {
+                rt.raiseProblem(mkey, "move-failed", "bad", "board", b.host, b.moveFault, now);
+                // ...and the gate it was moving gets sent again, ONCE per fault: the fault stays up until the next move
+                // finishes, so acting on the level would re-send for as long as it did.
+                if (_faulted.insert(b.host).second) rt.reassertBoard(b.host);
+            } else {
+                rt.clearProblem(mkey);
+                _faulted.erase(b.host);
+            }
         }
         // A paired plug that stops answering is usually a new address (DHCP), not a dead plug. The tool it senses is
         // silently never "on" meanwhile.
@@ -80,6 +88,7 @@ public:
 
 private:
     std::map<std::string, uint32_t> _since;
+    std::set<std::string> _faulted;   // boards whose current moveFault has already been acted on
 };
 
 }  // namespace topo

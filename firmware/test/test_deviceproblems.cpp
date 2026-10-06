@@ -9,6 +9,11 @@ static int passed = 0, failed = 0;
 static void ok(const char* what, bool c) { if (c) { printf("  ok   %s\n", what); passed++; } else { printf("  FAIL %s\n", what); failed++; } }
 struct NullBus : ActuatorBus { bool online() const override { return true; } bool busy() const override { return false; }
   bool setState(const char*, JsonObjectConst, const char*) override { return true; } };
+// Records every command it is given, so a test can see a gate being sent again.
+struct RecBus : ActuatorBus { std::vector<std::string> log;
+  bool online() const override { return true; } bool busy() const override { return false; }
+  bool setState(const char* id, JsonObjectConst, const char* st) override { log.push_back(std::string(id) + "->" + st); return true; } };
+static int count(const RecBus& b, const std::string& m) { int n = 0; for (auto& l : b.log) if (l == m) n++; return n; }
 static TopologyRuntime* load(NodeBus& nb) {
   static NullBus nul; nb.setLocal(&nul, "primary");
   std::ifstream f("firmware/test/fixtures/twoGates.json"); std::stringstream b; b << f.rdbuf();
@@ -38,6 +43,31 @@ int main() {
     dp.update(*rt, {m}, {}, 108000);
     ok("...cleared by the next move", !rt->hasProblem("move:n3"));
     delete rt; }
+  printf("\nP1b an interrupted move is sent again\n");
+  { NodeBus nb; RecBus bus; nb.setLocal(&bus, "primary");
+    std::ifstream f("firmware/test/fixtures/twoGates.json"); std::stringstream b; b << f.rdbuf();
+    TopologyRuntime rt; rt.begin(&nb);
+    std::string err; if (!rt.adopt(b.str().data(), b.str().size(), err)) { printf("fixture: %s\n", err.c_str()); return 2; }
+    DeviceProblems dp;
+    rt.setMachinePower("toolX", 200);
+    for (int i = 0; i < 5; i++) rt.update(1000 * (i + 1));
+    ok("toolX switching on opens gate1, then closes gate2 (the last move issued)",
+       count(bus, "gate1->open") == 1 && count(bus, "gate2->closed") == 1);
+
+    BoardView m; m.host = "primary"; m.linked = true; m.moveFault = "The board restarted mid-move";
+    dp.update(rt, {m}, {}, 10000);
+    for (int i = 0; i < 5; i++) rt.update(10000 + 1000 * (i + 1));
+    ok("a move that did not finish: the gate it was moving is commanded again", count(bus, "gate2->closed") == 2);
+    ok("...and only that gate", count(bus, "gate1->open") == 1);
+
+    dp.update(rt, {m}, {}, 20000);
+    for (int i = 0; i < 5; i++) rt.update(20000 + 1000 * (i + 1));
+    ok("the same fault, still up, is NOT sent again (one fault, one re-send)", count(bus, "gate2->closed") == 2);
+
+    m.moveFault = nullptr; dp.update(rt, {m}, {}, 30000);
+    m.moveFault = "The link dropped mid-move"; dp.update(rt, {m}, {}, 31000);
+    for (int i = 0; i < 5; i++) rt.update(31000 + 1000 * (i + 1));
+    ok("a NEW fault after it cleared is sent again", count(bus, "gate2->closed") == 3); }
   printf("\nP2 plugs\n");
   { NodeBus nb; TopologyRuntime* rt = load(nb); DeviceProblems dp;
     PlugView p; p.key = "plug:saw"; p.name = "Table Saw"; p.ip = "10.0.0.5"; p.reachable = false;

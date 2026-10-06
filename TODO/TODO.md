@@ -61,14 +61,6 @@ active sections above them, which is how a parked item stops being read.
   boot, join, home (on the first SET or the one-second button hold), take a SET, move to each stop, and do it through the Mac
   brain (the native brain has only run PWM nodes). Needs a 12 V supply for the ST3215.
 
-- **Re-send an interrupted gate move after a board resets mid-move (jeff, 2026-10-06).** When a node browns out or reboots
-  during a move, the brain now frees the servo mutex (`NodeSession::onAttach` drops the dead board's move and sets a
-  `moveFault`), but it does not re-send the gate it was moving: the gate's real position is unknown and the brain's
-  belief is stale until the next tool switch-on re-asserts every gate. After the relink and CONFIG, re-issue the move
-  for that selector (or mark it for re-assert, `TopologyRuntime::_reassert`), and add a paired host test. Seen on the
-  bench with the router-table/jointer manifold, probably the 1 W adapter browning out under a lever arm holding the
-  servo's weight.
-
 - **PUT THE COLLECTOR "RUNNING" THRESHOLD BACK TO 50 W (jeff, 2026-10-06 — TEMPORARY).** The bench collector is a desk fan
   that draws ~38 W, so `kCollectorRunningW` (control/CollectorPlugState.h) and `COLLECTOR_RUNNING_W`
   (topology-device.js) are 25 for now. Restore both to 50, and the literal in `test_collector_plug.cpp` ("kCollectorRunningW is

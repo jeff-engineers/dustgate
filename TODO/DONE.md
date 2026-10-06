@@ -16,6 +16,13 @@ Newest first.
 
 ### Cleanup 2026-10-06 — legacy API, schemaVersion 1, shared constants
 
+- **An interrupted gate move is sent again.** LANDED 2026-10-06, host-tested only (`test_deviceproblems.cpp` "an interrupted move
+  is sent again"); not run on a board. When a node reset or lost its link mid-move, the brain believed the gate had got where it was
+  sent (`_hwStates` is set when a move is COMMANDED) and left it. Now `DeviceProblems` acts on each board's `moveFault` EDGE (not the
+  level — the fault stays up until the next move, so the level would loop) and calls `TopologyRuntime::reassertBoard()`, which owes
+  the selector LAST commanded on that board a fresh command and replans. Only that one selector: the others were not in flight.
+  A re-send that is itself interrupted raises a new edge and goes again, bounded by the move timeout, not a tight loop.
+
 - **The legacy single-system API is gone, and so is schemaVersion 1.** LANDED 2026-10-06 (branch `cleanup-2026-10-06`).
   Deleted layer by layer, with the suites run after each: the firmware routes and consumers (`/api/estop`, `/api/config/gates`,
   `/api/config/port-role`, `/api/config/idle-timeout`, `PUT/DELETE /api/outlets/:slot`, `PUT/DELETE /api/dustcollector`), the
