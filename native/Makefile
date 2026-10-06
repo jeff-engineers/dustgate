@@ -28,6 +28,7 @@ test: all
 	bash test/e2e_api.sh
 	bash test/e2e_outlets.sh
 	bash test/e2e_push.sh
+	bash test/e2e_state.sh
 OUTLETS := ../firmware/outlets/ShellyGen2Outlet.cpp ../firmware/outlets/TasmotaOutlet.cpp
 $(BIN): src/main.cpp src/PlugHttpNative.cpp src/PlugPoller.h src/Sweep.h src/NodeHub.h src/SessionBus.h $(OUTLETS) $(wildcard ../firmware/control/*.h) $(wildcard ../firmware/outlets/*.h) $(wildcard src/*.h) ../firmware/api/ApiCore.h
 	@mkdir -p build

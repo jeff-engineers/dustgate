@@ -21,6 +21,7 @@
 #include "ShellyGen2Outlet.h"
 #include "TasmotaOutlet.h"
 #include "Provision.h"
+#include "AtomicFile.h"
 
 namespace dgbrain {
 
@@ -177,7 +178,8 @@ private:
         if (_statePath.empty()) return;
         DynamicJsonDocument d(2048); JsonObject o = d.to<JsonObject>();
         for (auto& kv : _prevUrl) o[kv.first] = kv.second;
-        std::ofstream f(_statePath, std::ios::binary | std::ios::trunc); serializeJson(d, f);
+        std::string out; serializeJson(d, out);
+        writeFileAtomic(_statePath, out, true);
     }
     outletops::Self _self; std::string _wsUrl, _statePath;
     std::map<std::string, std::string> _prevUrl;   // plug address -> the push target a takeover displaced
