@@ -16,7 +16,7 @@ import {
   collectorOf, machineIdOfPort, machineOfPort, machinesOf, outletExcludes, outletOf,
   outletTakenByAnotherMachine,
   portsOf, primaryPortOf, removeMachine, removePort,
-  healMachineNames, renameMachine, setOutlet,
+  healMachineNames, renameMachine, setOutlet, clampEnabled, setClampEnabled, clampUsers, healClampFlags,
   systemById, systemLabel, systemViews, systemsInLayoutOrder, systemsOf, toShop,
 } from './shop-doc';
 
@@ -61,6 +61,32 @@ const v1 = () => JSON.parse(JSON.stringify({
   check('a shop passes through untouched', toShop(shop as never) === shop);
   check('null in, null out', toShop(null) === null);
   check('a schemaVersion-1 document is not read: null, not a guess', toShop(v1()) === null);
+}
+
+// ── a board's clamp is switched on in the layout ───────────────────────────
+{
+  const mk = () => {
+    const shop = toShop(shopFromV1(v1()) as never)!;
+    shop.controllers.push({ id: 'planer', role: 'secondary', name: 'Planer board' });
+    return shop;
+  };
+  const shop = mk();
+  check('a board starts with its clamp off', !clampEnabled(shop, 'planer') && !clampEnabled(shop, ''));
+  setClampEnabled(shop, 'planer', true);
+  check('switching it on writes clamp:true on that board', clampEnabled(shop, 'planer') &&
+        (shop.controllers.find(c => c['id'] === 'planer') as RawEl)['clamp'] === true);
+  setClampEnabled(shop, 'planer', false);
+  check('...and switching it off removes the field, not writes false', !('clamp' in (shop.controllers.find(c => c['id'] === 'planer') as RawEl)));
+  check('"" and the primary id are the same board', (() => { setClampEnabled(shop, '', true); return clampEnabled(shop, 'primary'); })());
+
+  const s2 = mk();
+  const saw = machineById(s2, 'saw')!;
+  (saw.sensor as RawEl)['ct'] = { controllerId: 'planer', channel: 0 };
+  eq('a clamp names what it senses', clampUsers(s2, 'planer'), ['Table saw']);
+  eq('another board senses nothing', clampUsers(s2, 'primary'), []);
+  check('healing switches on a board a tool already points at', healClampFlags(s2) && clampEnabled(s2, 'planer'));
+  check('...and is a no-op the second time', !healClampFlags(s2));
+  check('reading a saved layout heals it', clampEnabled(toShop(s2 as never)!, 'planer'));
 }
 
 // ── the plug lives on the machine ───────────────────────────────────────────

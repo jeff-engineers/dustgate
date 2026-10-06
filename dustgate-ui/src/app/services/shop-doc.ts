@@ -67,6 +67,7 @@ export function toShop(doc: Topology | null | undefined): ShopDoc | null {
   if (!isShopDoc(doc)) return null;
   const shop = doc as unknown as ShopDoc;
   healMachineNames(shop);
+  healClampFlags(shop);
   return shop;
 }
 
@@ -374,6 +375,64 @@ export function clampOf(doc: ShopDoc | null, el: RawEl | null | undefined): RawE
   }
   const m = machineOfPort(doc, el);
   return ((m?.sensor as RawEl | undefined)?.['ct'] as RawEl | undefined) ?? null;
+}
+
+// ── A board's current clamp is something you switch ON ─────────────────────────
+//
+// A node reports `caps.ct` from its pin map, which is true of every C5 whether or not a clamp is plugged in. The layout is
+// where a person says "this board has one", as `clamp: true` on the board's controllers[] entry (absent = off). It lives
+// in the layout, on the brain, so reflashing a node does not lose it.
+
+/** The controllers[] entry for a board id. '' and the primary's own id both mean the primary, the rule everywhere else. */
+function controllerFor(doc: ShopDoc | null, controllerId: string): RawEl | null {
+  const list = (doc?.controllers ?? []) as RawEl[];
+  if (!controllerId) return list.find(c => c['role'] === 'primary') ?? null;
+  return list.find(c => c['id'] === controllerId) ?? null;
+}
+
+/** Is this board's clamp switched on in the layout? */
+export function clampEnabled(doc: ShopDoc | null, controllerId: string): boolean {
+  return controllerFor(doc, controllerId)?.['clamp'] === true;
+}
+
+export function setClampEnabled(doc: ShopDoc | null, controllerId: string, on: boolean): void {
+  const c = controllerFor(doc, controllerId);
+  if (!c) return;
+  if (on) c['clamp'] = true; else delete c['clamp'];
+}
+
+/** Names of what this board's clamp senses: machines (tools) and collectors, by display name. */
+export function clampUsers(doc: ShopDoc | null, controllerId: string): string[] {
+  if (!doc) return [];
+  const same = (id: unknown) => controllerFor(doc, (id as string) ?? '') === controllerFor(doc, controllerId);
+  const out: string[] = [];
+  for (const m of machinesOf(doc)) {
+    const ct = (m.sensor as RawEl | undefined)?.['ct'] as RawEl | undefined;
+    if (ct && same(ct['controllerId'])) out.push(((m.name as string) || (m.id as string)));
+  }
+  for (const sys of systemsOf(doc)) {
+    const dc = collectorOf(sys);
+    const ct = ((dc?.['sensor'] as RawEl | undefined)?.['ct']) as RawEl | undefined;
+    if (dc && ct && same(ct['controllerId'])) out.push((dc['name'] as string) || 'Collector');
+  }
+  return out;
+}
+
+/**
+ * A layout saved before the switch existed may already sense a tool with a clamp. Switch that board's clamp on, so
+ * nothing that worked stops working the day the switch appears. Returns whether anything changed.
+ */
+export function healClampFlags(doc: ShopDoc | null): boolean {
+  if (!doc) return false;
+  let changed = false;
+  const mark = (ct: RawEl | undefined) => {
+    if (!ct) return;
+    const c = controllerFor(doc, (ct['controllerId'] as string) ?? '');
+    if (c && c['clamp'] !== true) { c['clamp'] = true; changed = true; }
+  };
+  for (const m of machinesOf(doc)) mark((m.sensor as RawEl | undefined)?.['ct'] as RawEl | undefined);
+  for (const sys of systemsOf(doc)) mark(((collectorOf(sys)?.['sensor'] as RawEl | undefined)?.['ct']) as RawEl | undefined);
+  return changed;
 }
 
 /** Attach (or with null, detach) the plug for an element. A collector routes by

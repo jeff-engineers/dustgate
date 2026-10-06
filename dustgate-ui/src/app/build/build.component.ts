@@ -24,7 +24,7 @@ import {
   removeMachine, removePort,
   renameMachine,
   supplementalCount,
-  systemById, systemsOf, systemViews, toShop,
+  systemById, systemsOf, systemViews, toShop, clampEnabled,
 } from '../services/shop-doc';
 import { wipSummary } from '../services/wip-message';
 import {
@@ -3660,7 +3660,9 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     // and the primary is not in `nodes` (that array is the REMOTE links). A
     // failure leaves the list empty, which is the same as a shop with no clamps
     // and reads correctly on its own rather than as an error.
-    try { this.clampBoards = await this.api.getClampBoards(); } catch { this.clampBoards = []; }
+    // Only boards a person has switched a clamp ON for (Boards screen) may be pointed at.
+    try { this.clampBoards = (await this.api.getClampBoards()).filter(b => clampEnabled(this.topo as unknown as ShopDoc, b.id)); }
+    catch { this.clampBoards = []; }
     const controllers = this.controllersRaw();
     let added = false;
     for (const l of links) {
