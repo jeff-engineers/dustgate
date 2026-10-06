@@ -1,5 +1,12 @@
 # Cleanup audit before the shared-core work (2026-10-04)
 
+**Update 2026-10-06 (branch `cleanup-2026-10-06`):** UI constants are now a CHECKED manifest (`shared/device-model/constant-pairs.json`,
+`tools/check-constant-pairs.js`: the servo-bank and stop budgets across JS, `config.h` and the UI are one group, with the rack
+geometry and every NodeLink bound); the "three call sites of syncPairedNodes" are one helper; the native brain's state files are written
+atomically. New outstanding items are in `TODO/TODO.md` (the legacy single-system API surface, the ESP32's provisioning loop onto
+`outlets/Provision.h`). Item 6 (handlers out of `HttpApiServer.cpp`) is still the big one: `api/ApiCore.h` holds the shared routes and
+the ESP32 keeps its own copies of the rest.
+
 **Status (updated 2026-10-05): items 1-5 and 7 are DONE** (BoardId, readClaim, SensorPlan, NodeSession split, primary-as-node deleted, and the plug HTTP seam as outlets/PlugHttp.h with ESP32 and native implementations). Item 6, the API handlers out of HttpApiServer.cpp, remains and is the next structural step. Original text follows: **a ranked list, nothing changed.** Read-only pass over the firmware, the node
 program, the shared model and the UI, looking for **duplicated paths and duplicated rules**
 that the shared-core plan (`docs/brain-options.md`, "One codebase") would otherwise have to

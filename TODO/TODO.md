@@ -14,6 +14,18 @@ active sections above them, which is how a parked item stops being read.
 
 ## Bugs
 
+- **Legacy single-system API surface is still carried end to end (found 2026-10-06 cleanup).** `/api/estop`, `/api/motion`,
+  `/api/dustcollector` (PUT/DELETE config), `/api/numgates`, `/api/portrole`, idle-timeout and `/api/outlets/:slot` exist in
+  `firmware/api/HttpApiServer.cpp`, `tools/mock-api.js` and `shared/device-model/device-model.js` (`estop`, `setNumGates`,
+  `setPortRole`, `setIdleTimeout`, `deleteOutlet`, `configureDustCollector`, `deleteDustCollector`), but nothing in the app calls them
+  any more (the thirteen UI methods were deleted 2026-10-06). Delete them layer by layer — firmware routes, mock routes, model
+  functions, `conformance.js` cases — running `conformance:ci` and the firmware tests after each layer. Pairs with deleting
+  schemaVersion-1 below.
+- **Move the ESP32's plug provisioning loop onto `outlets/Provision.h` (2026-10-06).** `SmartOutletControl::provisionPushOutlets()` and
+  `outletops::provisionPlug()` are the same rule written twice (probe, read the claim, refuse a plug someone else owns unless a
+  takeover was approved, name first, then the push target). The native brain uses the shared one; the ESP still has its own. Move it
+  with a bench run (a Shelly paired, a foreign plug left alone, a takeover) because it writes to real plugs.
+
 - **Nodes should be able to have their CT clamp disabled; default to none (jeff, 2026-10-06).** Today every C5 node reports
   `caps.ct = 1` from its pin map (`PIN_CT`) whether or not a clamp is plugged in, so an unclamped board reads as having one
   and the layout can point a tool at a clamp that is not there. Two routes, in order of preference: (1) when the clamp moves to a
@@ -101,7 +113,7 @@ active sections above them, which is how a parked item stops being read.
   `test_nodebus.cpp` and the CLAUDE.md pair-table row move together, and it needs a node flash.
   Deferred 2026-10-04 so it does not ride along with the native build.
 
-- **Bench the collector's jobs on a node (built 2026-10-04; PRESS and the bin pad first run on a real node 2026-10-05 — see CLAUDE.md for what that did and did not prove; items (2) key a real receiver, (3) cover the beam and (4) the no-replay drop remain).** A
+- **Bench the collector's jobs on a node (built 2026-10-04; PRESS and the bin pad first run on a real node 2026-10-05 — see CLAUDE.md for what that did and did not prove; (2) a real receiver keyed from a node was PROVEN 2026-10-06; (3) cover the beam and (4) the no-replay drop remain).** A
   node can now key the RF transmitter (a `PRESS` frame) and watch the dust-bin beam (a
   `bin` sensor in CONFIG, reported as a SENSE bit); the retry policy stays on the primary.
   Host-tested only. To do on a bench with a collector board flashed as a NODE: (1) pair it,
