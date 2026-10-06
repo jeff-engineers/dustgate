@@ -40,6 +40,9 @@
     <!-- Same reasoning as Find boards: an errand you run rarely. The canvas is
          where you actually spend time, so it needs a way in that doesn't route
          through the Live view. -->
+    <!-- The blunt version of deleting a system: back to the first collector alone. Last, set apart, and a confirm
+         sheet behind it. -->
+    <button class="danger" (click)="moreOpen = false; askClearShop()" [disabled]="!hasShop">Clear shop…</button>
     <button (click)="moreOpen = false; goSettings()">Settings</button>
   </div>
 </div>
@@ -577,6 +580,28 @@
     <div class="actions">
       <button type="button" (click)="secondaryPortAsk = null">Cancel</button>
       <button type="button" class="primary" (click)="commitSecondaryPort()">Add port</button>
+    </div>
+  </div>
+</div>
+
+
+<!-- Delete a system / Clear shop: one sheet, saying what goes and what stays before anything happens. -->
+<div class="sheet-bg" *ngIf="removalAsk" (pointerdown)="removalAsk = null"></div>
+<div class="sheet narrow" *ngIf="removalAsk as ra">
+  <div class="card removal" role="dialog" aria-labelledby="removal-title">
+    <div class="head"><span class="kind" id="removal-title">{{ ra.kind === 'clear' ? 'Clear the shop?' : 'Delete “' + ra.name + '”?' }}</span></div>
+    <ul class="removal-list">
+      <li *ngFor="let g of removalLines().goes"><b>Goes:</b> {{ g }}</li>
+      <li *ngFor="let g of removalLines().stays"><b>Stays:</b> {{ g }}</li>
+    </ul>
+    <p class="q-sub" *ngIf="ra.plan.plugIps.length">
+      {{ ra.plan.plugIps.length === 1 ? 'Its plug is' : 'Their plugs are' }} released when you save, so another brain can claim
+      {{ ra.plan.plugIps.length === 1 ? 'it' : 'them' }}.
+    </p>
+    <p class="q-sub" *ngIf="ra.kind === 'clear'">Export first if you may want this layout back.</p>
+    <div class="actions">
+      <button type="button" (click)="removalAsk = null">Cancel</button>
+      <button type="button" class="primary danger" (click)="confirmRemoval()">{{ ra.kind === 'clear' ? 'Clear shop' : 'Delete system' }}</button>
     </div>
   </div>
 </div>

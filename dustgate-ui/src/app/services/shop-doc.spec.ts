@@ -16,7 +16,7 @@ import {
   collectorOf, machineIdOfPort, machineOfPort, machinesOf, outletExcludes, outletOf,
   outletTakenByAnotherMachine,
   portsOf, primaryPortOf, removeMachine, removePort,
-  healMachineNames, renameMachine, setOutlet, clampEnabled, setClampEnabled, clampUsers, healClampFlags,
+  healMachineNames, renameMachine, setOutlet, clampEnabled, setClampEnabled, clampUsers, healClampFlags, planSystemRemoval, removeSystem, planClearShop, clearShop, plugIpsOf,
   systemById, systemLabel, systemViews, systemsInLayoutOrder, systemsOf, toShop,
 } from './shop-doc';
 
@@ -87,6 +87,47 @@ const v1 = () => JSON.parse(JSON.stringify({
   check('healing switches on a board a tool already points at', healClampFlags(s2) && clampEnabled(s2, 'planer'));
   check('...and is a no-op the second time', !healClampFlags(s2));
   check('reading a saved layout heals it', clampEnabled(toShop(s2 as never)!, 'planer'));
+}
+
+// ── deleting a system, and clearing the shop ───────────────────────────────
+{
+  const mk = () => {
+    const shop = toShop(shopFromV1(v1()) as never)!;
+    // A second system: its own collector and gate, a tool only it has, and a port on the saw (a machine that spans both).
+    addSystem(shop, { system: 'sys2', collector: 'dc2' });
+    const s2 = systemById(shop, 'sys2')!;
+    s2.elements.push({ id: 'gate2', type: 'selector', kind: 'servoGate', name: 'G2', controllerId: 'primary',
+                       states: [], branches: [{ id: 'b1', opensState: 'open', role: 'tool' }] });
+    addMachineWithPort(shop, s2, 'router', 'Router table');
+    addSupplementalPort(shop, s2, 'saw', 'saw-over', 'overarm');
+    return shop;
+  };
+  const shop = mk();
+  eq('the first system cannot be deleted', planSystemRemoval(shop, systemsOf(shop)[0].id as string), null);
+  eq('an unknown system cannot be deleted', planSystemRemoval(shop, 'nope'), null);
+  const plan = planSystemRemoval(shop, 'sys2')!;
+  check('deleting the second reports what goes', plan.gates === 1 && plan.goneMachines.includes('Router table'));
+  eq('the saw keeps its port on system 1', plan.keptMachines, ['Table saw']);
+  const dropped = removeSystem(shop, 'sys2')!;
+  check('the system is gone', systemsOf(shop).length === 1 && !!dropped);
+  check('the router table went with it, the saw stayed', !machineById(shop, 'router') && !!machineById(shop, 'saw'));
+  check('the saw lost only its overarm port', portsOf(shop, 'saw').length === 1);
+  check('and the shop still validates', validateShop(shop).ok, JSON.stringify(validateShop(shop).errors));
+  eq('a lone system cannot be deleted', removeSystem(shop, systemsOf(shop)[0].id as string), null);
+
+  const big = mk();
+  (machineById(big, 'router')!.sensor = { outlet: { gen: 2, ip: '10.0.0.9', thresholdW: 50 } });
+  check('the plugs a layout names are listed', plugIpsOf(big).includes('10.0.0.5') && plugIpsOf(big).includes('10.0.0.9'));
+  const cp = planClearShop(big)!;
+  check('Clear shop would remove every machine and gate but keep one collector',
+        cp.goneMachines.length === 2 && cp.gates === 2 && !cp.elementIds.includes('dc'));
+  eq('...and releases both plugs', cp.plugIps.sort(), ['10.0.0.5', '10.0.0.9']);
+  clearShop(big);
+  check('after it: one system, one collector, nothing else', systemsOf(big).length === 1 &&
+        systemsOf(big)[0].elements.length === 1 && systemsOf(big)[0].elements[0]['type'] === 'collector' && systemsOf(big)[0].ducts.length === 0);
+  eq('...no machines', machinesOf(big).length, 0);
+  eq('...boards stay paired', big.controllers.length, 1);
+  check('...and it validates', validateShop(big).ok, JSON.stringify(validateShop(big).errors));
 }
 
 // ── the plug lives on the machine ───────────────────────────────────────────

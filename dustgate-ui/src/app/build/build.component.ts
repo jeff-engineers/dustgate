@@ -25,6 +25,7 @@ import {
   renameMachine,
   supplementalCount,
   systemById, systemsOf, systemViews, toShop, clampEnabled,
+  planSystemRemoval, removeSystem, planClearShop, clearShop, plugIpsOf, collectorOf, type SystemRemoval,
 } from '../services/shop-doc';
 import { wipSummary } from '../services/wip-message';
 import {
@@ -290,7 +291,7 @@ const CABLE_SHADES = ['#38b6f0', '#45cfd8', '#6f9df2', '#2f9fd0'];
 type Fitting = SelKind | 'tool' | 'duct';
 type MenuKind = Fitting | 'cap' | 'uncap' | 'delete' | 'board' | 'travel' | 'outlet' | 'secondaryPort'
               | 'addSystem' | 'findBoards' | 'rename' | 'moveSystem' | 'system' | 'boardSetup'
-              | 'unpairBoard';
+              | 'unpairBoard' | 'deleteSystem';
 
 const FITTINGS: Array<{ kind: Fitting; label: string }> = [
   { kind: 'duct',          label: 'Duct' },          // lay bare pipe; populate the open end later
@@ -2804,6 +2805,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       // The collector is the one piece with nothing above it, so there's no run to
       // heal — it stays, and offering a dead Delete would only invite the tap.
       if (n.glyph !== 'collector') opts.push(this.deleteOption(n));
+      else opts.push(this.deleteSystemOption(n));
       return opts;
     }
     // Tapping a gate is how you get at it, so its setup lives here alongside the
@@ -2822,6 +2824,16 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       kind: t.kind, label: t.current ? `${t.label} (current)` : t.label,
       enabled: t.enabled, note: t.note,
     })), [{ kind: 'rename', label: 'Rename', enabled: true }, this.deleteOption(n)]);
+  }
+
+  /** A collector's delete takes its whole system. Greyed for the first collector: a shop with no collector is not a shop. */
+  private deleteSystemOption(n: NodeVM): MenuOption {
+    const ok = !!planSystemRemoval(this.topo as unknown as ShopDoc, this.systemOfCollector(n.id) ?? '');
+    return { kind: 'deleteSystem', label: 'Delete system…', enabled: ok, note: ok ? 'and everything in it' : 'a shop needs one' };
+  }
+  private systemOfCollector(collectorId: string): string | null {
+    const sys = systemsOf(this.topo as unknown as ShopDoc).find(s => collectorOf(s)?.['id'] === collectorId);
+    return (sys?.id as string | undefined) ?? null;
   }
 
   /** Delete, with the reason it's greyed out when a fork can't go yet. Last row of
@@ -2875,6 +2887,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       else if (kind === 'outlet') this.configureOutlet(id);
       else if (kind === 'rename') this.startRename(id);
       else if (kind === 'delete') { this.selectedId = id; this.deleteSelected(); }
+      else if (kind === 'deleteSystem') this.askDeleteSystem(id);
       else this.convertKind(id, kind as SelKind);
       return;
     }
@@ -5183,6 +5196,13 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       }
       await this.api.putTopology(doc as Topology);
       this.dirty = false;
+      // Plugs of machines a system delete / Clear shop removed, now that the removal is saved. Best effort: a plug that
+      // does not answer stays paired on its own side, which is the same as it was.
+      const stillNamed = new Set(plugIpsOf(doc as unknown as ShopDoc));
+      for (const ip of [...this.releaseOnSave]) {
+        this.releaseOnSave.delete(ip);
+        if (!stillNamed.has(ip)) void this.api.releaseOutlet(ip).catch(() => undefined);
+      }
       this.airflowErrors = this.liveLeaks();
       // An unpair that couldn't fully release the plug says so HERE rather than in
       // the sheet, which closes on the way out. It replaces "Saved." exactly once
@@ -5279,6 +5299,57 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
    *
    *  The collector goes unnamed on purpose. Pairing its smart outlet names it, the
    *  same way the first one got its name, so adding a system asks nothing. */
+  // ── Deleting a system, and Clear shop ───────────────────────────────────────
+  /** The confirmation sheet's subject. Both go through it: neither is an edit anyone should make by accident. */
+  removalAsk: { kind: 'system' | 'clear'; systemId: string; name: string; plan: SystemRemoval } | null = null;
+  /** Plugs of machines removed this session. Released only once the removal is SAVED, and only if the layout no longer
+   *  names them — so an Undo before saving costs the plug nothing. */
+  private releaseOnSave = new Set<string>();
+
+  askDeleteSystem(collectorId: string): void {
+    const doc = this.topo as unknown as ShopDoc | null; if (!doc) return;
+    const systemId = this.systemOfCollector(collectorId); if (!systemId) return;
+    const plan = planSystemRemoval(doc, systemId); if (!plan) return;
+    const name = (this.elem(collectorId)?.['name'] as string) || 'Dust collector';
+    this.removalAsk = { kind: 'system', systemId, name, plan };
+  }
+  askClearShop(): void {
+    const doc = this.topo as unknown as ShopDoc | null; if (!doc) return;
+    const plan = planClearShop(doc); if (!plan) return;
+    const first = collectorOf(systemsOf(doc)[0]);
+    this.removalAsk = { kind: 'clear', systemId: '', name: (first?.['name'] as string) || 'Dust collector', plan };
+  }
+  /** One sentence per fact, shown in the sheet. */
+  removalLines(): { goes: string[]; stays: string[] } {
+    const a = this.removalAsk; if (!a) return { goes: [], stays: [] };
+    const p = a.plan, plural = (n: number, w: string) => `${n} ${w}${n === 1 ? '' : 's'}`;
+    const goes: string[] = [];
+    if (a.kind === 'system') goes.push(`its collector, ${plural(p.gates, 'gate')}, ${plural(p.ducts, 'piece')} of duct`);
+    else goes.push(`${plural(p.systemIds.length, 'other system')}, ${plural(p.gates, 'gate')}, every duct`);
+    if (p.goneMachines.length) goes.push(`${p.goneMachines.join(', ')} (no other port)`);
+    const stays: string[] = [];
+    if (a.kind === 'clear') stays.push(`“${a.name}”, the first collector, with no connections`);
+    if (p.keptMachines.length) stays.push(`${p.keptMachines.join(', ')}, which also ${p.keptMachines.length === 1 ? 'has a port' : 'have ports'} on a system that stays`);
+    stays.push('every board stays paired');
+    return { goes, stays };
+  }
+  confirmRemoval(): void {
+    const a = this.removalAsk; const doc = this.topo as unknown as ShopDoc | null;
+    this.removalAsk = null;
+    if (!a || !doc) return;
+    this.pushHistory(null);
+    const plan = a.kind === 'system' ? removeSystem(doc, a.systemId) : clearShop(doc);
+    if (!plan) return;
+    for (const ip of plan.plugIps) this.releaseOnSave.add(ip);
+    for (const id of plan.elementIds) this.cells.delete(id);
+    if (!systemsOf(doc).some(s => s.id === this.activeSystemId)) this.activeSystemId = (systemsOf(doc)[0]?.id as string | undefined) ?? null;
+    this.selectedId = null;
+    this.buildGraph(this.topo!);
+    this.dirty = true; this.saveError = '';
+    this.syncNodes(); this.refreshHandles(); this.recomputeExtent();
+    this.saveNote = a.kind === 'clear' ? 'Cleared. Save to keep it.' : 'System deleted. Save to keep it.';
+  }
+
   addSystem(): void {
     if (!this.topo) return;
     this.pushHistory(null);

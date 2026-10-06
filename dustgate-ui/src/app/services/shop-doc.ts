@@ -575,6 +575,102 @@ export function supplementalCount(doc: ShopDoc | null, machineId: string): numbe
   return portsOf(doc, machineId).filter(({ port }) => isPortSupplemental(port)).length;
 }
 
+// ── Deleting a system, and clearing the shop ──────────────────────────────────
+//
+// A system IS its collector, so deleting a collector means deleting its system: the collector, the gates, the ducts and any
+// machine whose ONLY ports were in it. A machine with a port in another system keeps that port (the cabinet saw with an
+// overarm elsewhere). The FIRST system is never deleted: a shop with no collector is not a shop. "Clear shop" is the same
+// removal applied to everything, leaving the first collector on its own with nothing connected. Boards stay paired.
+
+export interface SystemRemoval {
+  systemIds: string[];          // systems that go
+  elementIds: string[];         // every element dropped, so the canvas can forget their cells
+  gates: number;
+  ducts: number;
+  goneMachines: string[];       // names
+  keptMachines: string[];       // names — they have a port in a system that stays
+  plugIps: string[];            // plugs of the machines that go, to release once the removal is saved
+}
+
+/** Every smart plug the layout names: a machine's, and a collector's. */
+export function plugIpsOf(doc: ShopDoc | null): string[] {
+  const out = new Set<string>();
+  for (const m of machinesOf(doc)) {
+    const ip = ((m.sensor as RawEl | undefined)?.['outlet'] as RawEl | undefined)?.['ip'] as string | undefined;
+    if (ip) out.add(ip);
+  }
+  for (const sys of systemsOf(doc)) {
+    const ip = (outletOf(doc, collectorOf(sys)) as RawEl | null)?.['ip'] as string | undefined;
+    if (ip) out.add(ip);
+  }
+  return [...out];
+}
+
+function planRemoval(doc: ShopDoc, goneSystemIds: Set<string>, keepFirstCollector: boolean): SystemRemoval {
+  const systems = systemsOf(doc);
+  const first = systems[0];
+  const goneEls = new Set<string>();
+  let gates = 0, ducts = 0;
+  for (const sys of systems) {
+    const whole = goneSystemIds.has(sys.id as string);
+    if (!whole && !(keepFirstCollector && sys === first)) continue;
+    for (const e of sys.elements) {
+      if (keepFirstCollector && sys === first && e === collectorOf(sys)) continue;
+      goneEls.add(e['id'] as string);
+      if (e['type'] === 'selector') gates++;
+    }
+    ducts += sys.ducts.length;
+  }
+  const goneMachines: string[] = [], keptMachines: string[] = [], plugIps: string[] = [];
+  for (const m of machinesOf(doc)) {
+    const ports = portsOf(doc, m.id as string);
+    const stays = ports.some(p => !goneEls.has(p.port['id'] as string));
+    const name = (m.name as string) || (m.id as string);
+    if (stays) { if (ports.some(p => goneEls.has(p.port['id'] as string))) keptMachines.push(name); continue; }
+    goneMachines.push(name);
+    const ip = ((m.sensor as RawEl | undefined)?.['outlet'] as RawEl | undefined)?.['ip'] as string | undefined;
+    if (ip) plugIps.push(ip);
+  }
+  return { systemIds: [...goneSystemIds], elementIds: [...goneEls], gates, ducts, goneMachines, keptMachines, plugIps };
+}
+
+/** What deleting this system would remove, or null when it may not be deleted (the first system, or unknown). */
+export function planSystemRemoval(doc: ShopDoc | null, systemId: string): SystemRemoval | null {
+  const systems = systemsOf(doc);
+  if (!doc || systems.length < 2 || systems[0].id === systemId || !systems.some(s => s.id === systemId)) return null;
+  return planRemoval(doc, new Set([systemId]), false);
+}
+
+/** Delete a system that is not the first. Returns what went, or null when refused. */
+export function removeSystem(doc: ShopDoc, systemId: string): SystemRemoval | null {
+  const plan = planSystemRemoval(doc, systemId);
+  if (!plan) return null;
+  const gone = new Set(plan.elementIds);
+  doc.machines = doc.machines.filter(m => !portsOf(doc, m.id as string).every(p => gone.has(p.port['id'] as string)));
+  doc.systems = systemsOf(doc).filter(s => s.id !== systemId);
+  dropElements(doc, gone);
+  return plan;
+}
+
+/** What Clear shop would remove: everything but the first system's collector. */
+export function planClearShop(doc: ShopDoc | null): SystemRemoval | null {
+  const systems = systemsOf(doc);
+  if (!doc || !systems.length || !collectorOf(systems[0])) return null;
+  return planRemoval(doc, new Set(systems.slice(1).map(s => s.id as string)), true);
+}
+
+/** Back to one collector with nothing connected. Boards stay in controllers[]; machines and every other system go. */
+export function clearShop(doc: ShopDoc): SystemRemoval | null {
+  const plan = planClearShop(doc);
+  if (!plan) return null;
+  const gone = new Set(plan.elementIds);
+  doc.machines = [];
+  doc.systems = systemsOf(doc).slice(0, 1);
+  dropElements(doc, gone);
+  doc.systems[0].ducts = [];
+  return plan;
+}
+
 /** Drop these element ids and any duct touching them, across every system. */
 function dropElements(doc: ShopDoc, ids: Set<string>): void {
   for (const s of systemsOf(doc)) {
