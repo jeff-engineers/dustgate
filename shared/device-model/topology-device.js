@@ -58,7 +58,8 @@ const DEFAULT_COLLECTOR_OFF_DELAY_MS = 5000;  // ↔ kDefaultCollectorOffDelayMs
 // kCollectorSpinupGraceMs, and keep collector-plug.test.js in step with
 // firmware/test/test_collector_plug.cpp — same cases, same order. CLAUDE.md has
 // the row.
-const COLLECTOR_RUNNING_W = 50;
+// TEMPORARY 25 (was 50), 2026-10-06: the bench "collector" is a desk fan drawing ~38 W. Put it back — TODO.md.
+const COLLECTOR_RUNNING_W = 25;
 
 // How long a blower gets to reach running draw before we call it a failure.
 // An induction motor takes a second or three to spin up, and a lightly-loaded
