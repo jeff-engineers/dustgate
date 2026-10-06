@@ -89,6 +89,7 @@ int main() {
   printf("\nD4 told to stop, still drawing: pressed again within the budget, then given up on\n");
   {
     NodeBus nb; TopologyRuntime* rt = load(nb); FakePresser p; Hooks h; PressState ps;
+    ps.weStarted = true;   // a blower WE pressed on: only those are ours to press off
     rt->setCollectorPlug(sys, 600.0f, true, 6000);
     uint32_t t = 100000;
     ok("a blower still drawing after we want it OFF is pressed", driveCollectorPress(*rt, sys, p, ps, false, t, h) && p.presses == 1);
@@ -97,6 +98,15 @@ int main() {
     t += kPressCooldownMs + 10;
     ok("three presses and no more", !driveCollectorPress(*rt, sys, p, ps, false, t, h) && p.presses == 3);
     ok("...and it is reported, not retried forever", rt->hasProblem("rf-gave-up:" + sys));
+  }
+  printf("\nD4b a blower a person started is left running\n");
+  {
+    NodeBus nb; TopologyRuntime* rt = load(nb); FakePresser p; Hooks h; PressState ps;
+    rt->setCollectorPlug(sys, 600.0f, true, 6000);
+    uint32_t t = 100000;
+    ok("drawing power with nothing wanted and never pressed by us: no press", !driveCollectorPress(*rt, sys, p, ps, false, t, h) && p.presses == 0);
+    ok("...not now, and not later", !driveCollectorPress(*rt, sys, p, ps, false, t + 60000, h) && p.presses == 0);
+    ok("...and no fault is raised for it", !rt->hasProblem("rf-gave-up:" + sys));
   }
   printf("\nD5 an open-loop collector (no plug, sensor or clamp): ON once, OFF once, nothing at boot\n");
   {
