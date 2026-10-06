@@ -279,9 +279,6 @@ export class DemoApiService extends ApiService {
     this.servoAngles.set(`${controllerId ?? ''}:${channel}`, angle);
     return { ok: true };
   }
-  override async detachServo(_channel: number, _controllerId?: string): Promise<unknown> {
-    return { ok: true };
-  }
   private servoAngles = new Map<string, number>();
 
   private delay(ms: number): Promise<void> {
@@ -296,10 +293,6 @@ export class DemoApiService extends ApiService {
   }
 
   // ── Read ──────────────────────────────────────────────────────────────────────
-
-  override getMotionStatus(): Promise<SystemStatus> {
-    return Promise.resolve(this.buildStatus());
-  }
 
   // ── Motion (model owns state, we own the delay between begin/complete) ──────────
 
@@ -330,32 +323,8 @@ export class DemoApiService extends ApiService {
     return { ok: true };
   }
 
-  override estop(): Promise<{ ok: boolean }> {
-    model.estop(this.d);
-    this.pushStatus();
-    return Promise.resolve({ ok: true });
-  }
-
 
   // ── Dust collector ──────────────────────────────────────────────────────────────
-
-  override setDustCollector(on: boolean): Promise<{ ok: boolean }> {
-    model.switchDustCollector(this.d, on);
-    this.pushStatus();
-    return Promise.resolve({ ok: true });
-  }
-
-  override configureDustCollector(generation: number, ip: string): Promise<{ ok: boolean }> {
-    model.configureDustCollector(this.d, { gen: generation, ip });
-    this.pushStatus();
-    return Promise.resolve({ ok: true });
-  }
-
-  override deleteDustCollector(): Promise<{ ok: boolean }> {
-    model.deleteDustCollector(this.d);
-    this.pushStatus();
-    return Promise.resolve({ ok: true });
-  }
 
   // ── Calibration ───────────────────────────────────────────────────────────────
 
@@ -368,13 +337,6 @@ export class DemoApiService extends ApiService {
     this.syncInfo();
     this.pushStatus();
     return { ok: true };
-  }
-
-  override clearCal(): Promise<{ ok: boolean }> {
-    model.clearCal(this.d);
-    this.syncInfo();
-    this.pushStatus();
-    return Promise.resolve({ ok: true });
   }
 
   // ── Outlets ───────────────────────────────────────────────────────────────────
@@ -762,27 +724,10 @@ export class DemoApiService extends ApiService {
     this.d.hasLinear = primary ? primary.drives === 'linear' : true;
   }
 
-  override saveOutletConfig(): Promise<{ ok: boolean }> {
-    return Promise.resolve({ ok: true }); // state is already in-memory
-  }
-
-  override deleteOutlet(slot: number): Promise<{ ok: boolean }> {
-    model.deleteOutlet(this.d, slot);
-    this.pushStatus();
-    return Promise.resolve({ ok: true });
-  }
-
   // ── Config ────────────────────────────────────────────────────────────────────
 
   override setHomedLeft(homedLeft: boolean): Promise<{ ok: boolean }> {
     model.setHomedLeft(this.d, homedLeft);
-    this.syncInfo();
-    this.pushStatus();
-    return Promise.resolve({ ok: true });
-  }
-
-  override setNumGates(n: number): Promise<{ ok: boolean }> {
-    model.setNumGates(this.d, n);
     this.syncInfo();
     this.pushStatus();
     return Promise.resolve({ ok: true });
@@ -798,27 +743,15 @@ export class DemoApiService extends ApiService {
     return { ok: true };
   }
 
-  override setPortRole(index: number, role: string): Promise<{ ok: boolean }> {
-    model.setPortRole(this.d, index, role as model.PortRole);
+  override resetSetup(): Promise<{ ok: boolean }> {
+    model.clearCal(this.d);
+    this.syncInfo();
     this.pushStatus();
     return Promise.resolve({ ok: true });
-  }
-
-  override setIdleTimeout(seconds: number): Promise<{ ok: boolean }> {
-    model.setIdleTimeout(this.d, seconds);
-    this.syncInfo();
-    return Promise.resolve({ ok: true });
-  }
-
-  override resetSetup(): Promise<{ ok: boolean }> {
-    return this.clearCal();
   }
 
   override forgetWifi(): Promise<{ ok: boolean }> {
     return Promise.resolve({ ok: true }); // no real WiFi to forget
   }
 
-  override async refreshInfo(): Promise<void> {
-    // Already in sync — nothing to fetch
-  }
 }
