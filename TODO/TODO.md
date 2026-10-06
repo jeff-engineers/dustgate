@@ -14,6 +14,14 @@ active sections above them, which is how a parked item stops being read.
 
 ## Bugs
 
+- **Re-send an interrupted gate move after a board resets mid-move (jeff, 2026-10-06).** When a node browns out or reboots
+  during a move, the brain now frees the servo mutex (`NodeSession::onAttach` drops the dead board's move and sets a
+  `moveFault`), but it does not re-send the gate it was moving: the gate's real position is unknown and the brain's
+  belief is stale until the next tool switch-on re-asserts every gate. After the relink and CONFIG, re-issue the move
+  for that selector (or mark it for re-assert, `TopologyRuntime::_reassert`), and add a paired host test. Seen on the
+  bench with the router-table/jointer manifold, probably the 1 W adapter browning out under a lever arm holding the
+  servo's weight.
+
 - **Audit every shared constant: pair it, or test that it agrees (jeff, 2026-10-06).** A constant that two builds both
   need must be PAIRED where it can be — one definition, or a pair-table row in `CLAUDE.md` with a JS test and a C++ test
   asserting the same literal — and where it cannot be (a value baked into a compiled app, a number a node holds, a
