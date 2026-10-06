@@ -272,7 +272,6 @@ function activeMachines(d) {
   active.sort((a, b) => (d.activationSeq[b] || 0) - (d.activationSeq[a] || 0));
   return active;
 }
-const activeTools = activeMachines;
 
 /**
  * Recompute desired actuator states from the active tools and apply them.
@@ -560,5 +559,5 @@ module.exports = {
   setCollectorManual, collectorIsManual, setCollectorPlugFault,
   PROBLEM_TEXT, setProblem, clearProblem, problemsView,
   // v1 spellings — a tool WAS the machine before ports existed.
-  toolThreshold, activeTools, setToolPower,
+  toolThreshold, setToolPower,
 };
