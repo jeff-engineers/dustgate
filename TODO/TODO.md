@@ -158,10 +158,6 @@ active sections above them, which is how a parked item stops being read.
   is the half that was missing. The sweep only covers the brain's own /24, so a
   plug on another network is not found. Also: an outlet saved with no `kind`
   defaults to Shelly and polls a Tasmota wrongly forever — the sweep should set it.
-- **Tools with no sensor are manual-only.** The live layout's Router Table and
-  Jointer have neither a plug nor a CT, so nothing starts the collector for them
-  except tapping them in the app. -This isn't a bug - Jeff
-
 - **ESP-NOW for primary↔node? (jeff, 2026-09-27 — THINKING, not decided.)**
   Every link failure so far is the same shape: two boards talking TCP *through
   the AP*, and the AP being allowed to break that — band split (09-18), flaky
