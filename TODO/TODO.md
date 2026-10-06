@@ -44,6 +44,13 @@ active sections above them, which is how a parked item stops being read.
   power reading, the debounce, the gate move, and a first-switch-on re-assert of all five gates running ahead of the
   collector's press (it should not: the blower waits only for MAKES, but confirm). Also decide whether a short tool
   should leave the collector running for its coast-down so the next cut finds it already on.
+  **Software part measured 2026-10-06** (native brain, two fake nodes, `/api/dev/power` standing in for the plug): power in ->
+  the gate's SET reaches its node in ~0.12 s, and the collector's PRESS in ~0.32 s. So the brain's own share is a third of a
+  second; the "bit slow" is everything outside it. Known contributions, in the order the chain meets them: the plug reading
+  (Tasmota polled every 500 ms, ~1.5 s to show a rising draw; a Shelly pushes), `OUTLET_ON_DEBOUNCE_MS` = 1000 on the ESP32
+  (the native brain applies none), the servo move on a weak supply, the RF transmit, the receiver's relay and the plug seeing
+  the blower draw. Not yet measured: the hardware half. A timestamped run on the bench (plug sample -> SET -> STATE -> PRESS ->
+  plug confirms) would say which of those is the big one.
 - **"Find plugs" does not load (jeff, 2026-10-06).** The Build canvas loads fine against the native brain (checked in the
   browser pane 2026-10-06); the failure is behind the menu item — `build.component.ts findPlugs()` -> `scanOutlets(true)` ->
   `/api/outlets/discover` then `startSweep()` / `/api/outlets/sweep`. Reproduce with the console and network tabs open and see
@@ -416,7 +423,9 @@ active sections above them, which is how a parked item stops being read.
 - **Calibrate isn't reachable from the /gates page.** Opening a gate there
   (`http://dustgate.local/#/  gates`) offers no calibrate option, so the only way
   in is whatever other path still has one. Find where the entry point went and
-  put it back on that page.
+  put it back on that page. **Checked 2026-10-06: the row has one** —
+  `gate-list.component.ts` renders a "Calibrate" / "Recalibrate" button per gate (and "Run setup again" for a slider) that opens
+  the editor. So this looks stale; ask what was tapped (the row's name, rather than its button?) before touching it.
 
 
 ## UI
