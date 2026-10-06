@@ -170,8 +170,7 @@ export interface AnyElement {
 
 // ── Reading a topology without asserting the whole graph ─────────────────────
 
-// A schemaVersion-2 shop keeps elements and ducts inside `systems[]`; a v1
-// topology keeps them at the root. These readers FLATTEN across systems, because
+// A shop keeps elements and ducts inside `systems[]`. These readers FLATTEN across systems, because
 // every one of their callers is asking a shop-wide question — "every gate that
 // needs calibrating", "every tool to list", "is this id taken". Element ids are
 // unique shop-wide (validateShop enforces it) precisely so that flattening is
@@ -183,7 +182,7 @@ export interface AnyElement {
 // other seam.
 function systemsOfDoc(t: Topology): { elements?: unknown; ducts?: unknown }[] {
   const systems = (t as { systems?: unknown }).systems;
-  return Array.isArray(systems) ? systems as { elements?: unknown; ducts?: unknown }[] : [t];
+  return Array.isArray(systems) ? systems as { elements?: unknown; ducts?: unknown }[] : [];
 }
 
 export function elementsOf(t: Topology): AnyElement[] {
@@ -191,7 +190,7 @@ export function elementsOf(t: Topology): AnyElement[] {
   return systemsOfDoc(t).flatMap(s => (s.elements as AnyElement[]) ?? []);
 }
 
-/** Controllers are shop-level in both shapes — a board isn't owned by a system. */
+/** Controllers are shop-level — a board isn't owned by a system. */
 export function controllersOf(t: Topology): Controller[] {
   return ((t as { controllers?: unknown }).controllers as Controller[]) ?? [];
 }

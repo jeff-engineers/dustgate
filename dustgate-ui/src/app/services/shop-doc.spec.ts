@@ -21,6 +21,8 @@ import {
 } from './shop-doc';
 
 const { check, eq, report } = suite();
+// Single-system fixture lifted into a shop (the device refuses schemaVersion 1; this is test-only).
+const { shopFromV1 } = require('@topology-fixtures') as { shopFromV1: (t: unknown) => unknown };
 
 // A v1 topology, the shape every existing install is saved in.
 const v1 = () => JSON.parse(JSON.stringify({
@@ -40,16 +42,13 @@ const v1 = () => JSON.parse(JSON.stringify({
   ducts: [{ child: 'gate', parent: 'dc' }, { child: 'saw', parent: 'gate', parentBranch: 'b1' }],
 }));
 
-// ── migration on read ───────────────────────────────────────────────────────
+// ── reading a shop ──────────────────────────────────────────────────────────
 {
-  const shop = toShop(v1())!;
-  check('a v1 topology migrates to a shop', isShopDoc(shop));
-  check('the migrated shop is valid', validateShop(shop).ok,
-    JSON.stringify(validateShop(shop).errors));
+  const shop = toShop(shopFromV1(v1()) as never)!;
+  check('a shop is read as a shop', isShopDoc(shop));
+  check('the shop is valid', validateShop(shop).ok, JSON.stringify(validateShop(shop).errors));
   eq('its elements land in one system', systemsOf(shop).length, 1);
 
-  // The id is REUSED on purpose (RFC §12): anything already holding it — a saved
-  // ui.layout, a status blob, a bug report — has to keep resolving.
   const m = machineById(shop, 'saw');
   check('the tool became a machine with the same id', !!m);
   eq('the machine took the display name', m!.name, 'Table saw');
@@ -59,13 +58,14 @@ const v1 = () => JSON.parse(JSON.stringify({
   eq('the port points back at the machine', port['machineId'], 'saw');
   check('and the port no longer carries the plug', port['sensor'] === undefined);
 
-  check('an already-migrated shop passes through untouched', toShop(shop as never) === shop);
+  check('a shop passes through untouched', toShop(shop as never) === shop);
   check('null in, null out', toShop(null) === null);
+  check('a schemaVersion-1 document is not read: null, not a guess', toShop(v1()) === null);
 }
 
 // ── the plug lives on the machine ───────────────────────────────────────────
 {
-  const shop = toShop(v1())!;
+  const shop = toShop(shopFromV1(v1()) as never)!;
   const port = systemsOf(shop)[0].elements.find(e => e['id'] === 'saw')!;
   const dc = systemsOf(shop)[0].elements.find(e => e['id'] === 'dc')!;
 
@@ -123,7 +123,7 @@ const v1 = () => JSON.parse(JSON.stringify({
 
 // ── add: a tool is a machine with one port ──────────────────────────────────
 {
-  const shop = toShop(v1())!;
+  const shop = toShop(shopFromV1(v1()) as never)!;
   const sys = systemsOf(shop)[0];
   const before = machinesOf(shop).length;
   const port = addMachineWithPort(shop, sys, 'lathe', 'Lathe');
@@ -144,7 +144,7 @@ const v1 = () => JSON.parse(JSON.stringify({
 // no ports — or a port with no machine — is a document validateShop rejects, not
 // a draft the canvas can leave behind.
 {
-  const shop = toShop(v1())!;
+  const shop = toShop(shopFromV1(v1()) as never)!;
   const sys = systemsOf(shop)[0];
   addMachineWithPort(shop, sys, 'lathe', 'Lathe');
   sys.ducts.push({ child: 'lathe', parent: 'gate', parentBranch: 'b1' });
@@ -160,7 +160,7 @@ const v1 = () => JSON.parse(JSON.stringify({
   // A machine survives losing a SUPPLEMENTAL port. That is the bonus secondary port
   // coming off, and it is a non-event: the machine keeps its plug, its name and
   // its primary connection.
-  const shop = toShop(v1())!;
+  const shop = toShop(shopFromV1(v1()) as never)!;
   const sys = systemsOf(shop)[0];
   sys.elements.push({ id: 'saw-overarm', type: 'tool', name: 'Overarm', machineId: 'saw', supplemental: true });
   sys.ducts.push({ child: 'saw-overarm', parent: 'gate', parentBranch: 'b1' });
@@ -174,7 +174,7 @@ const v1 = () => JSON.parse(JSON.stringify({
   // The other half of the rule, and the one worth a backstop in the model: a
   // PRIMARY port cannot be deleted. removePort refuses and changes nothing —
   // the way to get rid of it is to get rid of the machine.
-  const shop = toShop(v1())!;
+  const shop = toShop(shopFromV1(v1()) as never)!;
   const sys = systemsOf(shop)[0];
   sys.elements.push({ id: 'saw-overarm', type: 'tool', name: 'Overarm', machineId: 'saw', supplemental: true });
   sys.ducts.push({ child: 'saw-overarm', parent: 'gate', parentBranch: 'b1' });
@@ -194,7 +194,7 @@ const v1 = () => JSON.parse(JSON.stringify({
 
 // ── naming ──────────────────────────────────────────────────────────────────
 {
-  const shop = toShop(v1())!;
+  const shop = toShop(shopFromV1(v1()) as never)!;
   const sys = systemsOf(shop)[0];
   const cabinet = sys.elements.find(e => e['id'] === 'saw')!;
   // One port: the machine's name IS the answer. "Table saw", not "Table saw · port 1".
@@ -224,7 +224,7 @@ const v1 = () => JSON.parse(JSON.stringify({
 
 // ── system lookup and views ─────────────────────────────────────────────────
 {
-  const shop = toShop(v1())!;
+  const shop = toShop(shopFromV1(v1()) as never)!;
   const sys = systemsOf(shop)[0];
   eq('systemById finds by id', systemById(shop, sys.id)!.id, sys.id);
   // Every caller is mid-edit and has nothing sensible to do with "no system",
@@ -251,7 +251,7 @@ const v1 = () => JSON.parse(JSON.stringify({
 // other as a different tool, so its OWN outlet read as taken, the picker refused
 // to re-select it, and the save that followed deleted the pairing outright.
 {
-  const shop = toShop(v1())!;
+  const shop = toShop(shopFromV1(v1()) as never)!;
   const sys = systemsOf(shop)[0];
   addSupplementalPort(shop, sys, 'saw', 'saw-oa', 'overarm');
   const primary = primaryPortOf(shop, 'saw')!['id'] as string;
@@ -289,7 +289,7 @@ const v1 = () => JSON.parse(JSON.stringify({
 // reader is holding in their head — the canvas stripes its systems by the topmost
 // row any of their pieces stands on.
 {
-  const shop = toShop(v1())!;
+  const shop = toShop(shopFromV1(v1()) as never)!;
   const sys = systemsOf(shop)[0];
 
   // Migration hands the one system the shop's own name, so that is what shows.
@@ -332,7 +332,7 @@ const v1 = () => JSON.parse(JSON.stringify({
 // collector's own switch staying pickable when it is the thing being configured —
 // are the cases that matter.
 {
-  const shop = toShop(v1())!;
+  const shop = toShop(shopFromV1(v1()) as never)!;
   const sys = systemsOf(shop)[0];
   const dc = collectorOf(sys)!;
   eq('a system knows its collector', dc['id'], 'dc');
@@ -368,7 +368,7 @@ const v1 = () => JSON.parse(JSON.stringify({
 
 // ── renaming a machine reaches every copy of its name ───────────────────────
 {
-  const shop = toShop(v1())!;
+  const shop = toShop(shopFromV1(v1()) as never)!;
   const sys = systemsOf(shop)[0];
   addSupplementalPort(shop, sys, 'saw', 'saw-oa', 'overarm');
 

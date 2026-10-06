@@ -13,7 +13,7 @@ const { computeRouting } = require('./routing');
 const { planTransition } = require('./sequencer');
 const { createTopologyDevice, setToolPower, statusView,
         DEFAULT_COLLECTOR_OFF_DELAY_MS: COAST_MS } = require('./topology-device');
-const { clone, star, feedChain, twoGates } = require('./topology.fixtures');
+const { shopFromV1, clone, star, feedChain, twoGates } = require('./topology.fixtures');
 
 // ── tiny harness (same style as conformance.js) ─────────────────────────────
 const results = [];
@@ -402,7 +402,7 @@ const idxOf = (plan, sel) => plan.moves.findIndex((m) => m.selectorId === sel);
 // opens gate2 by hand, X starts again. The routing decision is identical to last
 // time, so only the rising edge can catch the hand-opened gate.
 {
-  const d = createTopologyDevice(clone(twoGates));
+  const d = createTopologyDevice(shopFromV1(clone(twoGates)));
   setToolPower(d, 'toolX', 10);
   setToolPower(d, 'toolX', 0);                 // idle: gates held where they are
   const again = setToolPower(d, 'toolX', 10);  // X on again — gate2 "believed" closed
@@ -419,7 +419,7 @@ const idxOf = (plan, sel) => plan.moves.findIndex((m) => m.selectorId === sel);
 
 // ── device sim: tool power → routing → actuators + collector ────────────────
 {
-  const d = createTopologyDevice(clone(twoGates));
+  const d = createTopologyDevice(shopFromV1(clone(twoGates)));
   let s = statusView(d);
   check('dev init: both gates closed, collector off',
     s.actuators.gate1 === 'closed' && s.actuators.gate2 === 'closed' && s.collectorOn === false);
@@ -466,7 +466,7 @@ const idxOf = (plan, sel) => plan.moves.findIndex((m) => m.selectorId === sel);
 
   // A tool starting mid-coast keeps the blower on and cancels the countdown —
   // the case that would otherwise switch it off two seconds into the next cut.
-  const d2 = createTopologyDevice(clone(twoGates));
+  const d2 = createTopologyDevice(shopFromV1(clone(twoGates)));
   setToolPower(d2, 'toolX', 10, t0);
   setToolPower(d2, 'toolX', 0,  t0);
   setToolPower(d2, 'toolX', 10, t0 + 1000);
@@ -477,14 +477,14 @@ const idxOf = (plan, sel) => plan.moves.findIndex((m) => m.selectorId === sel);
   // An explicit 0 disables it — the escape hatch for anyone who wants the old cut.
   const noCoast = clone(twoGates);
   noCoast.elements.find((e) => e.type === 'collector').control = { offDelayMs: 0 };
-  const d3 = createTopologyDevice(noCoast);
+  const d3 = createTopologyDevice(shopFromV1(noCoast));
   setToolPower(d3, 'toolX', 10, t0);
   setToolPower(d3, 'toolX', 0,  t0);
   check('dev offDelayMs:0 cuts immediately', statusView(d3, t0).collectorOn === false);
 }
 {
   // Single linear actuator: most-recently-powered-on tool wins the shared selector.
-  const d = createTopologyDevice(clone(star));
+  const d = createTopologyDevice(shopFromV1(clone(star)));
   setToolPower(d, 'toolA', 10);
   check('dev star A on: selector → s1', statusView(d).actuators.sel === 's1');
 

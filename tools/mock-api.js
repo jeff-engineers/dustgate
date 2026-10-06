@@ -35,12 +35,8 @@ const d = M.createDevice();
 let td = null;
 // The document EXACTLY as it was PUT, served back verbatim by GET.
 //
-// The device sim normalises a v1 topology into a shop on the way in (asShop), so
-// td.topology is no longer necessarily what the caller sent. The firmware has the
-// same split — TopologyStore keeps the raw bytes it was handed, TopologyRuntime
-// parses them — and it matters for the same reason: a GET that silently returned
-// a migrated document would make an older board look like it had rewritten a
-// layout nobody asked it to touch.
+// The firmware has the same split — TopologyStore keeps the raw bytes it was handed, TopologyRuntime parses
+// them — so GET returns what was PUT, byte for byte, never a re-serialised copy.
 let rawTopology = null;
 
 // Last angle commanded to each servo channel by the setup jog, keyed
@@ -302,9 +298,8 @@ function handler(req, res) {
   // it wouldn't implement /sim/tool — the demo/mock use it to drive routing).
   if (pathname === '/api/topology' && req.method === 'PUT') {
     return body(req, data => {
-      // Accepts both shapes, like the firmware: a shop is validated as a shop, a
-      // schemaVersion-1 topology as a topology.
-      const v = SHOP.isShop(data) ? SHOP.validateShop(data) : TOPO.validateTopology(data);
+      // A shop only: validateShop refuses a schemaVersion-1 document, as the firmware does.
+      const v = SHOP.validateShop(data);
       if (!v.ok) return json(res, { error: 'invalid topology', errors: v.errors }, 400);
       td = TD.createTopologyDevice(data);
       rawTopology = data;

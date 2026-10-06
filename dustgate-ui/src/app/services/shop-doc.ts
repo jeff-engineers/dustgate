@@ -19,12 +19,12 @@
 //   plug behind two gates (RFC §6.3), which is exactly why the plug can't live on
 //   the port any more.
 //
-// A v1 document is migrated on read (asShop), so nothing below ever has to
-// branch on the version — that is the whole point of doing it at the seam.
+// A schemaVersion-1 document is NOT read any more (2026-10-06): the device refuses one, so nothing can have saved
+// one, and toShop() hands back null for it rather than guessing a shape.
 
 import type { Topology } from '@topology';
 import type { Shop } from '@shop';
-import { asShop, isShop, portsByMachine, portEnabled, systemView } from '@shop';
+import { portsByMachine, portEnabled, systemView } from '@shop';
 
 export type RawEl = Record<string, unknown>;
 
@@ -60,16 +60,12 @@ export interface ShopDoc extends Record<string, unknown> {
 }
 
 /**
- * Accept whatever the device or a file gave us and return a shop.
- *
- * Migration happens HERE, on read, and never on the device — the firmware reads
- * both shapes (Shop.h) so an older board keeps working, and a UI that migrated
- * lazily would write back a half-converted document the first time someone
- * saved. One conversion, at the boundary.
+ * Read what the device or a file gave us as a shop, with machine names healed.
+ * Null for nothing, and for anything that is not a shop (a schemaVersion-1 layout has no systems[]).
  */
 export function toShop(doc: Topology | null | undefined): ShopDoc | null {
-  if (!doc) return null;
-  const shop = asShop(doc) as unknown as ShopDoc;
+  if (!isShopDoc(doc)) return null;
+  const shop = doc as unknown as ShopDoc;
   healMachineNames(shop);
   return shop;
 }
@@ -105,7 +101,8 @@ export function healMachineNames(doc: ShopDoc | null): void {
   }
 }
 
-export const isShopDoc = (doc: unknown): boolean => isShop(doc);
+export const isShopDoc = (doc: unknown): boolean =>
+  !!doc && typeof doc === 'object' && Array.isArray((doc as { systems?: unknown }).systems);
 
 export function systemsOf(doc: ShopDoc | null): ShopSystem[] {
   return doc && Array.isArray(doc.systems) ? doc.systems : [];

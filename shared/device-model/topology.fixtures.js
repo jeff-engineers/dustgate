@@ -153,7 +153,7 @@ const twoGates = {
 // A 4" system on ball valves and a 2.5" system on a Rockler manifold, sharing a
 // room, a network and ONE brain — but no duct. Built by migrating the two
 // single-system fixtures above and merging them, which is also a live check that
-// migrateToShop produces something the shop validator accepts.
+// shopFromV1 produces something the shop validator accepts.
 //
 // The table saw is the case the RFC exists for: ONE machine with a cabinet port
 // on the 4" system and an overarm port on the 2.5" one. Its overarm is marked
@@ -233,4 +233,43 @@ const twoSystemShop = {
   devices: [],
 };
 
-module.exports = { clone, star, primary, sliderPrimary, servoNode, sliderNode, feedChain, twoGates, twoSystemShop };
+// ── shopFromV1: build a shop from one of the single-system fixtures above ─────
+// TEST-ONLY since 2026-10-06. Nothing in the product reads or writes a schemaVersion-1 document any more (the device and
+// validateShop refuse it); the single-system fixtures survive because they are a compact way to write one system, and this
+// lifts one into a shop. A v1 tool carried its own name and plug, so one machine is made per tool, keeping the tool's id as
+// the machine id.
+const { SHOP_SCHEMA_VERSION } = require('./shop');
+function shopFromV1(topology, opts = {}) {
+  const t = topology || {};
+  const systemId   = opts.systemId   || 'system-1';
+  const systemName = opts.systemName || t.name || 'Dust collection';
+
+  const machines = [];
+  const elements = (t.elements || []).map((el) => {
+    if (el.type !== 'tool') return { ...el };
+    const machine = { id: el.id, name: el.name || el.id };
+    if (el.sensor) machine.sensor = el.sensor;
+    machines.push(machine);
+    // sensor moves to the machine; everything else about the port stays put.
+    const { sensor, ...port } = el;
+    return { ...port, machineId: el.id };
+  });
+
+  const shop = {
+    schemaVersion: SHOP_SCHEMA_VERSION,
+    name:          t.name || 'My Shop',
+    controllers:   (t.controllers || []).map((c) => ({ ...c })),
+    systems: [{
+      id:       systemId,
+      name:     systemName,
+      elements,
+      ducts:    (t.ducts || []).map((d) => ({ ...d })),
+    }],
+    machines,
+    devices: [],
+  };
+  if (t.ui) shop.ui = t.ui;
+  return shop;
+}
+
+module.exports = { shopFromV1, clone, star, primary, sliderPrimary, servoNode, sliderNode, feedChain, twoGates, twoSystemShop };

@@ -16,8 +16,8 @@ import {
 import { SERVO_CHANNELS_PER_BOARD } from '../gates/selector-types';
 import { clampOf } from './shop-doc';
 import * as model from '@device-model';
-import { validateTopology, type Topology } from '@topology';
-import { isShop, portEnabled, portsByMachine, systemsOf, validateShop, type Shop } from '@shop';
+import type { Topology } from '@topology';
+import { portEnabled, portsByMachine, systemsOf, validateShop, type Shop } from '@shop';
 import { createTopologyDevice, setCollectorManual, setToolPower, statusView as topoStatus, toolThreshold, type TopologyDevice, type TopologyStatus } from '@topology-device';
 import { DEMO_TOPOLOGY } from './demo-topology';
 import type { SerialChunk } from '../boards/serial-log';
@@ -202,8 +202,8 @@ export class DemoApiService extends ApiService {
   }
 
   override async putTopology(topology: Topology): Promise<{ ok: boolean }> {
-    // Both shapes, like the mock and the firmware: a shop validates as a shop.
-    const v = isShop(topology) ? validateShop(topology) : validateTopology(topology);
+    // A shop only, like the mock and the firmware: validateShop refuses a schemaVersion-1 document.
+    const v = validateShop(topology);
     if (!v.ok) throw new Error('invalid topology: ' + JSON.stringify(v.errors));
     this.td = createTopologyDevice(topology);
     this.syncHasLinear();
