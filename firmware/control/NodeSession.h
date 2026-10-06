@@ -78,7 +78,6 @@ public:
 
     NodeSession(Clock clock = nullptr, SessionSink* sink = nullptr) : _clock(clock), _sink(sink) {}
     void setClock(Clock c)         { _clock = c; }
-    void setSink(SessionSink* s)   { _sink = s; }
 
     // Who this session is for. Resets the link-health counters but NOT what the node told us
     // about itself, when it is the same node (a pause and a resume): `caps.join` in particular is

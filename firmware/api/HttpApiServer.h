@@ -182,7 +182,6 @@ public:
     // ------------------------------------------------------------------
     using NodeEventHook = bool (*)(AsyncWebSocketClient*, AwsEventType, void*, uint8_t*, size_t);
     void setNodeEventHook(NodeEventHook h) { _nodeHook = h; }
-    AsyncWebSocket* nodeSocket() { return &_nodeWs; }
 
     // ------------------------------------------------------------------
     // Node discovery + link state (the primary side of Stage 4)

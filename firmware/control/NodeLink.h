@@ -145,7 +145,6 @@ inline void buildHello(JsonObject out, const char* primaryId, const char* nodeId
     if (takeover) out["takeover"] = true;
 }
 
-inline void buildPing(JsonObject out) { out["t"] = "PING"; }
 
 // REFUSE — the primary declining a node-initiated socket. It closes right after, so
 // the node reads the reason and goes back to waiting rather than hammering.

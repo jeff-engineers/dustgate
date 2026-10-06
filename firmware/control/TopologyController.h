@@ -207,8 +207,6 @@ public:
   // existing conformance vectors keep cross-checking against topology-device.js
   // without being rewritten into a vocabulary the JS sim doesn't use yet.
   ReconcileResult setToolPower(const std::string& id, float w) { return setMachinePower(id, w); }
-  float toolThreshold(const std::string& id) const { return machineThreshold(id); }
-  float toolWatts(const std::string& id) const     { return machineWatts(id); }
   std::string toolForOutlet(const char* h, const char* i) const { return machineForOutlet(h, i); }
 
 private:

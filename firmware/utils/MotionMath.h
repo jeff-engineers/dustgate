@@ -75,10 +75,6 @@ inline long mmToSteps(float mm) {
     return (long)(mm * stepsPerMM());
 }
 
-inline float stepsToMM(long steps) {
-    return (float)steps / stepsPerMM();
-}
-
 // Canonical step position for a given stop index, using runtime calibration
 inline long stepsForStop(int stopIndex) {
     return mmToSteps(g_stopPositionsMM[stopIndex]);

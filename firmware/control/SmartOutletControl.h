@@ -196,7 +196,6 @@ public:
     }
     void removeDustCollector()        { removeCollector(0); }
     bool dcConfigured() const         { return collectorConfigured(0); }
-    bool dcIs(const char* ip) const   { return collectorIs(0, ip); }
     bool dcOn()                       { return collectorOn(0); }
     void setDcManual(bool on)         { setCollectorManual(0, on); }
 
