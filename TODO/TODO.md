@@ -14,6 +14,32 @@ active sections above them, which is how a parked item stops being read.
 
 ## Bugs
 
+- **Collector slow to start for a tool used for seconds (jeff, 2026-10-06, bench test 10).** The miter saw was "a bit slow" to
+  bring the collector on, which matters: a miter saw runs for a few seconds at a time, so a collector that arrives late
+  never helps. Find where the time goes before changing anything — add timestamps for the whole chain and read them off a
+  run: plug reading crosses the threshold (a Tasmota is POLLED every 500 ms, no push; a Shelly pushes) -> the tool is
+  active -> the 1 s ON debounce -> the make-before-break move (a servo on a 1 W adapter is slow) -> the PRESS goes out ->
+  the RF transmit (several frames) -> the receiver relay -> the plug sees the draw. Candidates: Tasmota polling and its slow
+  power reading, the debounce, the gate move, and a first-switch-on re-assert of all five gates running ahead of the
+  collector's press (it should not: the blower waits only for MAKES, but confirm). Also decide whether a short tool
+  should leave the collector running for its coast-down so the next cut finds it already on.
+- **"Find plugs" does not load (jeff, 2026-10-06).** The Build canvas loads fine against the native brain (checked in the
+  browser pane 2026-10-06); the failure is behind the menu item — `build.component.ts findPlugs()` -> `scanOutlets(true)` ->
+  `/api/outlets/discover` then `startSweep()` / `/api/outlets/sweep`. Reproduce with the console and network tabs open and see
+  which request fails or never answers. Not tried yet because a sweep knocks on the whole subnet.
+- **Bench test 20: rename a plug and release it (jeff, 2026-10-06).** Rename a Shelly from the app and confirm the new name in the
+  Shelly app; release one and confirm it stops pushing and the previous push target comes back. Not run yet.
+- **Bench: the collector's CT option (jeff, 2026-10-06).** The collector can be sensed by a current clamp on the cyclone board
+  instead of the Tasmota (`sensor.ct` on the collector). Wire one, point the layout at it, and check that a blower started by
+  the RF remote reads as running from the clamp alone, and that the press policy sees the same Running/Off the plug gave it.
+  Compare its response time with the Tasmota's, which lags ~13 s falling to zero on a small load.
+- **Bench: a dedicated optional node for the planer's sensor (jeff, 2026-10-06).** A board whose only job is to sense the planer
+  (its clamp, or a plug the board polls) with no gates, optional in the layout. Check it pairs, reports SENSE, drives the planer's
+  gate on another board, and that the layout needs no gate on it. The extra unpaired `dustgate-sensor` (192.168.86.60) may be this.
+- **Bench: the slider node (jeff, 2026-10-06).** Out of 12 V supplies tonight, so it was not tested with the shop. Run it:
+  boot, join, home (on the first SET or the one-second button hold), take a SET, move to each stop, and do it through the Mac
+  brain (the native brain has only run PWM nodes). Needs a 12 V supply for the ST3215.
+
 - **Re-send an interrupted gate move after a board resets mid-move (jeff, 2026-10-06).** When a node browns out or reboots
   during a move, the brain now frees the servo mutex (`NodeSession::onAttach` drops the dead board's move and sets a
   `moveFault`), but it does not re-send the gate it was moving: the gate's real position is unknown and the brain's

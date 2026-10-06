@@ -107,6 +107,11 @@ int main() {
     ok("drawing power with nothing wanted and never pressed by us: no press", !driveCollectorPress(*rt, sys, p, ps, false, t, h) && p.presses == 0);
     ok("...not now, and not later", !driveCollectorPress(*rt, sys, p, ps, false, t + 60000, h) && p.presses == 0);
     ok("...and no fault is raised for it", !rt->hasProblem("rf-gave-up:" + sys));
+    // It once pressed this collector, which is not the same as having started THIS run: a person's hand start
+    // after our own OFF settled must not be reported as a blower that will not stop.
+    PressState later; later.everPressed = true; later.wanted = false; later.lastPressMs = 1000; later.weStarted = false;
+    driveCollectorPress(*rt, sys, p, later, false, t + 120000, h);
+    ok("...and not accused of refusing to stop", !rt->hasProblem("rf-wont-stop:" + sys));
   }
   printf("\nD5 an open-loop collector (no plug, sensor or clamp): ON once, OFF once, nothing at boot\n");
   {

@@ -529,6 +529,11 @@ private:
         const long     upNodeUpS = f.containsKey("upS") ? (long)(f["upS"] | 0UL) : -1L;
         char upRst[nodelink::kMaxRstLen + 1];
         safeCopy(upRst, sizeof(upRst), f["rst"] | "");
+        // THE LINK IS BACK, SO "A GATE DIDN'T MOVE" HAS SAID ITS PIECE (jeff, 2026-10-06): the warning is about a move
+        // lost to an outage, and re-establishing the link is what the person was waiting for. Left standing it
+        // stayed on the Live screen after a brownout until the next successful move. A fault on a LIVE link (a refused
+        // or timed-out move) is untouched: only a handshake clears it.
+        _moveFault   = nullptr;
         _everLinked  = true;
         _connected   = true;
         _downSinceMs = 0;

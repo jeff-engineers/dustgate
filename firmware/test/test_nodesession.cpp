@@ -141,6 +141,8 @@ int main() {
       ok("a silent node still holds the servo mutex", r.s.busy());
       ok("it re-dials: the attach is accepted", r.s.onAttach());
       ok("...and the dead board's move no longer blocks the shop", !r.s.busy() && r.s.health().moveFault != nullptr);
+      r.feed(kWelcome);
+      ok("a completed handshake clears 'a gate did not move': the link is back", r.s.health().moveFault == nullptr);
     }
     DynamicJsonDocument d2(1024);
     deserializeJson(d2, R"({"id":"g2","kind":"servoGate","controllerId":"n1","servo":{"channel":0},"states":[{"id":"open"}]})");

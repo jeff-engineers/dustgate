@@ -59,9 +59,10 @@ inline bool driveCollectorPress(TopologyRuntime& rt, const std::string& sys, Col
         case PressAction::Nothing:
             // OFF that did not take. The policy cannot see it (the plug state reads "off" whenever we are
             // not asking, whatever the wire says), so it never presses again and the blower runs on after
-            // the last tool. We do not press blind here (a person may have started it at the fob), but we
-            // do SAY so.
-            if (!want && ps.everPressed && (now - ps.lastPressMs) > kPressCooldownMs * 2 && rt.collectorDrawing(sys)) {
+            // the last tool. We do not press blind here, but we do SAY so — and only for a blower WE started: one
+            // a person started by hand is theirs, and "won't stop" accused the fan on the bench of a fault it
+            // did not have (2026-10-06), then held the collector's switch against a manual start.
+            if (!want && ps.weStarted && (now - ps.lastPressMs) > kPressCooldownOffMs + kPressCooldownMs && rt.collectorDrawing(sys)) {
                 rt.raiseProblem("rf-wont-stop:" + sys, "collector-wont-stop", "bad", "system", sys,
                     "Told it to stop, but it is still drawing power \xE2\x80\x94 the remote may have missed the press, or someone started it by hand.", now);
             } else {
