@@ -96,7 +96,7 @@ inline TransitionPlan planTransition(const SystemView& topology,
   return out;
 }
 
-// Convenience for a plain (schemaVersion 1) topology document.
+// Convenience for a plain single-system document.
 inline TransitionPlan planTransition(JsonObjectConst topology,
                                      const std::map<std::string, std::string>& currentStates,
                                      const std::map<std::string, std::string>& desiredStates,

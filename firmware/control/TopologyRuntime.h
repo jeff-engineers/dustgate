@@ -4,8 +4,8 @@
 // TopologyController.h calls this "a thin device layer (the main sketch)". This
 // is it, factored out of the sketch so it stays host-testable. It owns:
 //
-//   • the parsed document (adopted at boot and on PUT /api/topology) — either a
-//     schemaVersion-1 topology or a v2 shop; Shop.h flattens the difference
+//   • the parsed document (adopted at boot and on PUT /api/topology): a shop,
+//     since a schemaVersion-1 topology is refused
 //   • a topo::Controller (the brain: machine power in, routed states + per-system
 //     plans out)
 //   • a MOVE QUEUE, drained one move at a time through NodeBus

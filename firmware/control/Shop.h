@@ -18,13 +18,9 @@
 // the 2.5" manifold. Lifting the container above them leaves all three correct
 // exactly as written.
 //
-// V1 COMPATIBILITY IS NOT A SEPARATE PATH. A schemaVersion-1 document is simply
-// a shop with one anonymous system whose machines are its tool elements: a tool
-// carried its own `name` and `sensor.outlet`, which is precisely what a machine
-// carries now, so machineDoc() hands back the tool element itself and every
-// reader above works unchanged. That is why there is no migrateToShop() here —
-// the firmware never rewrites the stored document, it just reads both shapes.
-// (The UI does migrate on save; see shop.js.)
+// SCHEMAVERSION 1 IS NOT READ (2026-10-06). It used to be a shop with one anonymous system whose machines were its tool
+// elements; nothing can produce one now and TopologyRuntime refuses it with a sentence, so a document without a systems[]
+// array reads as having no systems rather than as a guess.
 //
 // PURE — ArduinoJson + STL only, NO Arduino.h, so it host-compiles for the
 // conformance test alongside the router and sequencer.
@@ -41,32 +37,12 @@
 
 namespace topo {
 
-// Synthetic id for the single implicit system of a v1 document. Matches the
-// default migrateToShop() uses in shop.js, so a layout that gets migrated by the
-// UI keeps the same system id the firmware had already been reporting.
-static const char* kImplicitSystemId = "system-1";
-
-/** True for a document already in shop shape (has a systems[] array). */
-inline bool isShop(JsonObjectConst doc) {
-  return doc["systems"].is<JsonArrayConst>();
-}
-
 /**
- * Every system in the document, as views into it.
- *
- * A v1 topology yields exactly one view over its own elements/ducts — the
- * whole of the version handling, in one branch.
+ * Every system in the document, as views into it. A document with no systems[] has none.
  */
 inline std::vector<SystemView> systemsOf(JsonObjectConst doc) {
   std::vector<SystemView> out;
   JsonArrayConst controllers = doc["controllers"].as<JsonArrayConst>();
-  if (!isShop(doc)) {
-    out.push_back(SystemView{ controllers,
-                              doc["elements"].as<JsonArrayConst>(),
-                              doc["ducts"].as<JsonArrayConst>(),
-                              kImplicitSystemId });
-    return out;
-  }
   for (JsonObjectConst sys : doc["systems"].as<JsonArrayConst>()) {
     out.push_back(SystemView{ controllers,
                               sys["elements"].as<JsonArrayConst>(),
@@ -79,9 +55,7 @@ inline std::vector<SystemView> systemsOf(JsonObjectConst doc) {
 /**
  * Which machine a port belongs to.
  *
- * v2 ports say so explicitly. A v1 tool element IS its own machine, so it
- * answers with its own id — which is also the id migrateToShop() gives the
- * machine it creates, so ids stay stable across the migration either way.
+ * A port says so explicitly (`machineId`); one that does not is its own machine and answers with its own id.
  */
 inline std::string machineIdOf(JsonObjectConst port) {
   const char* m = port["machineId"].as<const char*>();
@@ -93,8 +67,7 @@ inline std::string machineIdOf(JsonObjectConst port) {
 /**
  * A port counts for routing unless it is EXPLICITLY disabled.
  *
- * Opt-out, not opt-in, so a v1 document — where no port carries the field at
- * all — routes exactly as it did before.
+ * Opt-out, not opt-in: a port that does not carry the field routes.
  */
 inline bool portEnabled(JsonObjectConst port) {
   JsonVariantConst e = port["enabled"];
@@ -104,17 +77,11 @@ inline bool portEnabled(JsonObjectConst port) {
 /**
  * The object carrying a machine's identity: its name, and its `sensor.outlet`.
  *
- * v2: the entry in machines[]. v1: the tool element itself. Returns a null
- * object for an unknown id.
+ * The entry in machines[]. Returns a null object for an unknown id.
  */
 inline JsonObjectConst machineDoc(JsonObjectConst doc, const std::string& machineId) {
-  if (isShop(doc)) {
-    for (JsonObjectConst m : doc["machines"].as<JsonArrayConst>())
-      if (_eq(m["id"], machineId.c_str())) return m;
-    return JsonObjectConst();
-  }
-  for (JsonObjectConst e : doc["elements"].as<JsonArrayConst>())
-    if (_eq(e["type"], "tool") && _eq(e["id"], machineId.c_str())) return e;
+  for (JsonObjectConst m : doc["machines"].as<JsonArrayConst>())
+    if (_eq(m["id"], machineId.c_str())) return m;
   return JsonObjectConst();
 }
 
@@ -166,16 +133,8 @@ inline std::string sensedIdOf(JsonObjectConst el) {
 inline std::vector<std::string> machineIds(JsonObjectConst doc) {
   std::vector<std::string> out;
   std::set<std::string> seen;
-  if (isShop(doc)) {
-    for (JsonObjectConst m : doc["machines"].as<JsonArrayConst>()) {
-      const char* id = m["id"].as<const char*>();
-      if (id && *id && seen.insert(id).second) out.push_back(id);
-    }
-    return out;
-  }
-  for (JsonObjectConst e : doc["elements"].as<JsonArrayConst>()) {
-    if (!_eq(e["type"], "tool")) continue;
-    const char* id = e["id"].as<const char*>();
+  for (JsonObjectConst m : doc["machines"].as<JsonArrayConst>()) {
+    const char* id = m["id"].as<const char*>();
     if (id && *id && seen.insert(id).second) out.push_back(id);
   }
   return out;

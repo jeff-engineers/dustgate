@@ -1164,8 +1164,7 @@ static void syncTopologyOutlets() {
     // Walk MACHINES, not tool elements. A machine owns the plug, and a machine
     // with two ports (cabinet + overarm on a table saw) is still one plug — so
     // iterating ports here would try to register the same outlet twice and burn
-    // a slot doing it. For a schemaVersion-1 document machineIds() yields the
-    // tool elements, so this is exactly what it always was.
+    // a slot doing it.
     int slot = 0;
     for (const std::string& mid : topo::machineIds(doc)) {
         JsonObjectConst m = topo::machineDoc(doc, mid);

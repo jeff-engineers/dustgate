@@ -22,9 +22,7 @@
 // unique shop-wide, which is exactly why validateShop enforces that.
 //
 // A machine is what you switch on; a `tool` element is now a PORT. For a
-// schemaVersion-1 document the two coincide (Shop.h::machineIdOf), so the
-// existing conformance vectors still hold value-for-value against
-// topology-device.js.
+// port with no `machineId` the two coincide (Shop.h::machineIdOf), which is how the conformance vectors read.
 //
 // PURE — ArduinoJson + STL, NO Arduino.h.
 // =============================================================================
@@ -71,7 +69,7 @@ struct ReconcileResult {
 
 class Controller {
 public:
-  // Adopt a parsed document (v1 topology or v2 shop). Seeds every selector's
+  // Adopt a parsed shop. Seeds every selector's
   // current state to its closed (idle) state, matching createTopologyDevice().
   // Clears power history.
   void setTopology(JsonObjectConst doc) {
