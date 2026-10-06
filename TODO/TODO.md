@@ -14,19 +14,17 @@ active sections above them, which is how a parked item stops being read.
 
 ## Bugs
 
+- **Clamp switch: the node still reports `caps.ct` from its pin map, and the jack idea is open (2026-10-06).** The per-board switch
+  landed (D-76), kept in the layout as `clamp: true`, so a layout cannot name a clamp the person has not switched on. What it
+  does not do is stop a node CLAIMING one. If the clamp moves to a headphone-style jack, its switch contact could report
+  `caps.ct` only while a plug is inserted, and the switch would then be a confirmation rather than the source. Also open: the
+  model validators do not reject a `sensor.ct` naming a board with no `clamp: true` (the UI pickers and the heal-on-read cover it;
+  a validator rule would churn the CT fixtures).
+
 - **Move the ESP32's plug provisioning loop onto `outlets/Provision.h` (2026-10-06).** `SmartOutletControl::provisionPushOutlets()` and
   `outletops::provisionPlug()` are the same rule written twice (probe, read the claim, refuse a plug someone else owns unless a
   takeover was approved, name first, then the push target). The native brain uses the shared one; the ESP still has its own. Move it
   with a bench run (a Shelly paired, a foreign plug left alone, a takeover) because it writes to real plugs.
-
-- **Nodes should be able to have their CT clamp disabled; default to none (jeff, 2026-10-06).** Today every C5 node reports
-  `caps.ct = 1` from its pin map (`PIN_CT`) whether or not a clamp is plugged in, so an unclamped board reads as having one
-  and the layout can point a tool at a clamp that is not there. Two routes, in order of preference: (1) when the clamp moves to a
-  headphone-style jack, use the jack's switch contact to detect a plug (a GPIO reads the jack's normally-closed pin) and report
-  `caps.ct` only while one is inserted, which needs no setting at all; (2) until then, default nodes to NO clamp and add an
-  enable (a CONFIG field or a per-board setting in the app, kept by the primary so a reflash does not lose it). A clamp is declared
-  by its board because nothing on the network can discover one, so the enable has to be something a person can set. Pair rule:
-  `caps.ct` default and any new field go in `nodelink.js` ↔ `NodeLink.h`, same cases, same order.
 
 - **The Live screen has no way to switch the collector by hand (found 2026-10-06, bench test 16).** `POST /api/collector` works
   (both brains, `ApiService.setCollectorManual()`), but nothing in the app calls it: the collector card shows state and has no
@@ -51,12 +49,6 @@ active sections above them, which is how a parked item stops being read.
   (the native brain applies none), the servo move on a weak supply, the RF transmit, the receiver's relay and the plug seeing
   the blower draw. Not yet measured: the hardware half. A timestamped run on the bench (plug sample -> SET -> STATE -> PRESS ->
   plug confirms) would say which of those is the big one.
-- **A Plugs page, laid out like /boards (jeff, 2026-10-06).** "Find plugs" was expected to open a page of plugs; today it is a
-  menu item on the Build canvas that refreshes the plugs tray (and the earlier "does not load" report was this
-  misunderstanding — the tray itself works, checked against a scratch brain 2026-10-06). Build a `/plugs` page with the same
-  basic layout as `/boards`: one row per plug (name, kind, address, live draw, who owns it, which tool it is paired to), the
-  scan and sweep controls, add-by-address, rename, release and take over. Mockup first. It is also the natural single home for
-  the outlet picker, which exists twice (see "The outlet picker exists TWICE"), and for the plug-name uniqueness question.
 - **Bench test 20: rename a plug and release it (jeff, 2026-10-06).** Rename a Shelly from the app and confirm the new name in the
   Shelly app; release one and confirm it stops pushing and the previous push target comes back. Not run yet.
 - **Bench: the collector's CT option (jeff, 2026-10-06).** The collector can be sensed by a current clamp on the cyclone board
@@ -479,18 +471,6 @@ active sections above them, which is how a parked item stops being read.
   NodeLink before anything moves) is the ambitious version, and has an ordering
   problem — the primary can only reach the nodes on the OLD network, so anything
   that misses the message needs a defined fallback.
-
-- **No way to delete a system, or a collector.** You can add both and never
-  remove either. A collector delete has one obvious guard — at least one must
-  remain, since a shop with no collector is not a shop — and deleting a SYSTEM is
-  the harder half: it owns a contiguous row band, and everything standing in that
-  band has to go somewhere or go away. Decide what happens to the machines and
-  gates inside it (delete with the system? move to the surviving system's band?
-  refuse while it is non-empty?) before writing any of it. Related to the 'Clear
-  shop' button below, which is the blunt version of the same need.
-
-- **Add a 'Clear shop' button** Add this to the shop dropdown menu, go back to a single
-  dust collector with no connections.
 
 - **Finish the collector barrel (2026-08-25).** The glyph itself LANDED — the
   canvas draws a 76x76 violet barrel carrying its own name and its own plug row,
@@ -1044,7 +1024,9 @@ active sections above them, which is how a parked item stops being read.
   change to either one will hit the same wall, and there is no reason left for
   two — the inline version predates the extracted component.
 
-  Fold `tool-setup`'s inline picker onto `OutletPickerComponent`. The extracted
+  **2026-10-06: the /plugs page exists now** and is the intended single home ("Pair to…"); the work left is to replace `tool-setup`'s
+  inline picker with a link to it, and then the extracted `OutletPickerComponent` can go too if the canvas tray no longer needs it.
+  (Older plan, kept for the wording:) Fold `tool-setup`'s inline picker onto `OutletPickerComponent`. The extracted
   one is the keeper (it already has the `excludeIps`/`excludeReason` inputs);
   what needs porting into it is the plug-row styling and the "already assigned
   to another tool" wording that /tools uses.

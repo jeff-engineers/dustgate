@@ -16,6 +16,10 @@ Newest first.
 
 ### Cleanup 2026-10-06 — legacy API, schemaVersion 1, shared constants
 
+- **Clamp switch, delete a system, Clear shop, and the Plugs page.** LANDED 2026-10-06 from the mockup
+  `docs/mockups/plugs-clamp-delete.html` (decisions D-76 to D-78). Checked against a scratch native brain in the browser pane,
+  not on a board. Clear shop and system delete release the plugs of the machines they remove once the layout is SAVED.
+
 - **An interrupted gate move is sent again.** LANDED 2026-10-06, host-tested only (`test_deviceproblems.cpp` "an interrupted move
   is sent again"); not run on a board. When a node reset or lost its link mid-move, the brain believed the gate had got where it was
   sent (`_hwStates` is set when a move is COMMANDED) and left it. Now `DeviceProblems` acts on each board's `moveFault` EDGE (not the

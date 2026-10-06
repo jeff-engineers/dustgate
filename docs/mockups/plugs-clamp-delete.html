@@ -1,0 +1,450 @@
+<title>Plugs, Clamp, Delete System</title>
+<style>
+  /* Layout: three phone-width frames side by side (they wrap), each one screen, with the decisions that need a yes below. */
+  :root {
+    --bg: #111; --surface: #1e1e1e; --raised: #262626; --border: #2e2e2e;
+    --text: #e8e8e8; --muted: #8a8a86; --accent: #f0a500; --success: #3cbe6e;
+    --danger: #d94444; --signal: #59b0c8; --radius: 14px; --scrim: rgba(0,0,0,.55);
+    color-scheme: dark;
+  }
+  @media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) {
+    --bg: #f3f1ec; --surface: #ffffff; --raised: #ece9e2; --border: #d9d5cb;
+    --text: #1d1c19; --muted: #6d6a62; --accent: #b87800; --success: #1f8a4c;
+    --danger: #b92f2f; --signal: #1c7790; --scrim: rgba(20,20,20,.35); color-scheme: light; } }
+  :root[data-theme="light"] {
+    --bg: #f3f1ec; --surface: #ffffff; --raised: #ece9e2; --border: #d9d5cb;
+    --text: #1d1c19; --muted: #6d6a62; --accent: #b87800; --success: #1f8a4c;
+    --danger: #b92f2f; --signal: #1c7790; --scrim: rgba(20,20,20,.35); color-scheme: light; }
+
+  *, *::before, *::after { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); margin: 0; padding-block: 22px 72px; padding-inline: 18px;
+         font-family: system-ui, -apple-system, sans-serif; font-size: 15px; line-height: 1.5; }
+  .wrap { max-width: 1240px; margin: 0 auto; display: flex; flex-direction: column; gap: 26px; }
+  h1 { font-size: 22px; font-weight: 600; margin: 4px 0 0; letter-spacing: -0.01em; text-wrap: balance; }
+  h2 { font-size: 15px; font-weight: 600; margin: 0; }
+  p { margin: 0; }
+  .lede { color: var(--muted); font-size: 13.5px; max-width: 70ch; margin-top: 6px; }
+  .eyebrow { font-size: 11px; letter-spacing: .09em; text-transform: uppercase; color: var(--muted); }
+  code { font-family: ui-monospace, Menlo, monospace; font-size: .92em; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 26px 22px; align-items: start; }
+  .col { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+  .col .why { font-size: 12.5px; color: var(--muted); line-height: 1.55; }
+  .col .why b { color: var(--text); font-weight: 600; }
+
+  /* The screen. Same tokens and row anatomy as the app's /boards. */
+  .phone { position: relative; width: 100%; max-width: 390px; margin: 0 auto; min-height: 640px; overflow: hidden;
+           background: var(--bg); border: 1px solid var(--border); border-radius: 26px; padding: 16px 14px 18px; }
+  .bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
+  .bar .t { font-size: 13px; color: var(--muted); }
+  .head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 10px; }
+  .step { font-size: 11.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+  .net { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); margin-bottom: 10px; }
+  .net b { color: var(--text); font-weight: 500; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 4px 14px; margin-bottom: 12px; }
+  .row { display: flex; gap: 10px; align-items: flex-start; justify-content: space-between; padding: 12px 0; border-top: 1px solid var(--border); }
+  .row:first-child { border-top: 0; }
+  .info { min-width: 0; flex: 1; }
+  .nm { font-size: 14.5px; font-weight: 500; display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+  .sub { font-size: 12px; color: var(--muted); margin-top: 2px; line-height: 1.5; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--border); flex: none; }
+  .dot.on { background: var(--success); } .dot.off { background: var(--danger); } .dot.idle { background: var(--muted); }
+  .badge { font-size: 10.5px; padding: 1px 7px; border-radius: 99px; border: 1px solid var(--border); color: var(--muted); }
+  .badge.warn { color: var(--accent); border-color: var(--accent); }
+  .clamp { display: flex; align-items: baseline; gap: 6px; margin-top: 3px; font-size: 12px; color: var(--muted); }
+  .clamp .cdot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); flex: none; }
+  .clamp.on { color: var(--text); } .clamp.on .cdot { background: var(--success); }
+  .actions { display: flex; flex-direction: column; gap: 6px; flex: none; align-items: stretch; }
+  .act { font: inherit; font-size: 12.5px; padding: 6px 11px; border-radius: 9px; background: var(--raised); border: 1px solid var(--border);
+         color: var(--text); cursor: pointer; text-align: center; }
+  .act:hover { border-color: var(--muted); }
+  .act:focus-visible, .sw:focus-visible, .mi:focus-visible, .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .act.add { background: var(--accent); border-color: var(--accent); color: #1a1200; font-weight: 600; }
+  .act.danger { color: var(--danger); }
+  .draw { font-variant-numeric: tabular-nums; font-size: 13px; text-align: right; color: var(--success); font-weight: 500; white-space: nowrap; }
+  .draw.idle { color: var(--muted); font-weight: 400; }
+  .btn { font: inherit; font-size: 13.5px; padding: 10px 14px; border-radius: 11px; background: var(--surface); border: 1px solid var(--border);
+         color: var(--text); cursor: pointer; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #1a1200; font-weight: 600; }
+  .btn.danger { background: var(--danger); border-color: var(--danger); color: #fff; font-weight: 600; }
+  .btnrow { display: flex; gap: 8px; }
+  .btnrow .btn { flex: 1; }
+  .hint { font-size: 12px; color: var(--muted); line-height: 1.55; }
+
+  /* clamp switch */
+  .swrow { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 8px; padding: 8px 10px;
+           background: var(--bg); border: 1px solid var(--border); border-radius: 10px; }
+  .swrow .l { font-size: 12.5px; } .swrow .l small { display: block; color: var(--muted); font-size: 11.5px; margin-top: 1px; }
+  .sw { width: 40px; height: 23px; border-radius: 99px; background: var(--border); border: 0; position: relative; cursor: pointer; flex: none; padding: 0; }
+  .sw::after { content: ""; position: absolute; top: 3px; left: 3px; width: 17px; height: 17px; border-radius: 50%; background: var(--text); transition: transform .15s; }
+  .sw[aria-checked="true"] { background: var(--success); }
+  .sw[aria-checked="true"]::after { transform: translateX(17px); }
+  .inline-confirm { margin-top: 8px; padding: 10px 11px; border: 1px solid var(--accent); border-radius: 10px; font-size: 12.5px; line-height: 1.5; }
+  .inline-confirm .btnrow { margin-top: 8px; }
+
+  /* canvas */
+  .canvas { position: relative; height: 330px; border: 1px dashed var(--border); border-radius: 12px; margin-top: 4px;
+            background-image: radial-gradient(var(--border) 1px, transparent 1px); background-size: 22px 22px; }
+  .barrel { position: absolute; width: 74px; height: 74px; border-radius: 16px; background: #3a2a55; border: 1px solid #6b4ea0; color: #eadcff;
+            display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 11.5px; text-align: center; padding: 4px; cursor: pointer; }
+  .barrel small { font-size: 10px; opacity: .75; }
+  .gatebox { position: absolute; padding: 5px 9px; border-radius: 8px; background: var(--surface); border: 1px solid var(--border); font-size: 11.5px; }
+  .duct { position: absolute; background: var(--muted); opacity: .7; }
+  .seam { position: absolute; left: 0; right: 0; border-top: 1px dashed var(--border); }
+  .seam span { position: absolute; right: 8px; top: -9px; font-size: 10.5px; background: var(--bg); color: var(--muted); padding: 0 5px; }
+
+  /* menus and sheets */
+  .menu { position: absolute; right: 12px; top: 54px; z-index: 5; width: 232px; background: var(--raised); border: 1px solid var(--border);
+          border-radius: 12px; padding: 5px; box-shadow: 0 10px 30px rgba(0,0,0,.35); }
+  .mi { display: flex; justify-content: space-between; gap: 8px; width: 100%; text-align: left; font: inherit; font-size: 13.5px; padding: 9px 10px;
+        border: 0; background: none; color: var(--text); border-radius: 8px; cursor: pointer; }
+  .mi:hover { background: var(--surface); }
+  .mi small { color: var(--muted); font-size: 11.5px; }
+  .mi[disabled] { opacity: .45; cursor: default; } .mi[disabled]:hover { background: none; }
+  .mi.danger { color: var(--danger); }
+  .msep { height: 1px; background: var(--border); margin: 4px 6px; }
+  .scrim { position: absolute; inset: 0; background: var(--scrim); z-index: 6; display: flex; align-items: flex-end; }
+  .sheet { width: 100%; background: var(--surface); border-top: 1px solid var(--border); border-radius: 20px 20px 0 0; padding: 18px 16px 18px; display: flex; flex-direction: column; gap: 10px; }
+  .sheet h3 { margin: 0; font-size: 16px; font-weight: 600; }
+  .sheet ul { margin: 0; padding-left: 18px; font-size: 13px; color: var(--muted); line-height: 1.7; }
+  .sheet ul b { color: var(--text); font-weight: 600; }
+  .gonelist { display: flex; flex-direction: column; gap: 3px; }
+  .state-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+  .state-tabs .btn { padding: 5px 10px; font-size: 12px; border-radius: 99px; }
+  .state-tabs .btn[aria-pressed="true"] { background: var(--raised); border-color: var(--accent); }
+  .field { display: flex; gap: 7px; margin-top: 4px; }
+  .field input { flex: 1; min-width: 0; padding: 9px 11px; border-radius: 10px; background: var(--bg); border: 1px solid var(--border); color: var(--text); font: inherit; font-size: 14px; }
+  .sect { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 14px 2px 6px; }
+  .decide { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 15px 17px; }
+  .decide ul { margin: 8px 0 0; padding-left: 18px; font-size: 13.5px; line-height: 1.65; }
+  .decide li b { font-weight: 600; }
+  [hidden] { display: none !important; }
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">Mockup · for review before any code</div>
+    <h1>The clamp switch, deleting a system, and a Plugs page</h1>
+    <p class="lede">Three screens, all clickable. Everything shown is example data. The Boards row follows <code>/boards</code>; the canvas menu is the existing ⋯ menu with one new item; the Plugs page is laid out like <code>/boards</code> so the two read as siblings.</p>
+  </header>
+
+  <div class="grid">
+
+    <!-- ───────────────────────────── 1 · Boards: the clamp switch ───────────────────────────── -->
+    <section class="col" aria-labelledby="a-h">
+      <h2 id="a-h">Boards · a current clamp is something you switch on</h2>
+      <p class="why">Today every node says it has a clamp, fitted or not. Now a node starts with <b>no clamp</b>, and you turn one on for the board it is plugged into. The setting is kept in the layout on the brain, so reflashing a node does not lose it.</p>
+      <div class="phone" id="boards">
+        <div class="head"><span class="step">Your boards</span><span class="step">3 boards</span></div>
+        <div class="net"><span>◉</span><span>Everything here is on <b>GenericGuest</b></span></div>
+        <div class="card">
+          <div class="row">
+            <div class="info">
+              <div class="nm"><span class="dot on"></span>Shop brain</div>
+              <div class="sub">This board · Mac bench brain · 2 gates</div>
+            </div>
+            <div class="actions"><button class="act">Rename</button><button class="act">Log</button></div>
+          </div>
+          <div class="row">
+            <div class="info">
+              <div class="nm"><span class="dot on"></span>Planer board</div>
+              <div class="sub">dustgate-planer · 192.168.86.41 · 1 gate</div>
+              <div class="clamp on" id="planerClamp"><span class="cdot"></span>Clamp on the Planer · idle, 0.02 A</div>
+              <div class="swrow">
+                <div class="l">Current clamp<small id="planerHint">A clamp is plugged into this board.</small></div>
+                <button class="sw" id="planerSw" role="switch" aria-checked="true" aria-label="Current clamp on the Planer board"></button>
+              </div>
+              <div class="inline-confirm" id="planerConfirm" hidden>
+                The <b>Planer</b> is sensed by this clamp. Turning it off leaves the Planer with no way to tell DustGate it is running.
+                <div class="btnrow"><button class="btn danger" id="planerOff">Turn off</button><button class="btn" id="planerKeep">Keep on</button></div>
+              </div>
+            </div>
+            <div class="actions"><button class="act">Rename</button><button class="act">Update</button><button class="act" disabled>Unpair</button></div>
+          </div>
+          <div class="row">
+            <div class="info">
+              <div class="nm"><span class="dot on"></span>Router board</div>
+              <div class="sub">dustgate-router · 192.168.86.44 · 2 gates</div>
+              <div class="swrow">
+                <div class="l">Current clamp<small id="routerHint">Off. Nothing is plugged into this board.</small></div>
+                <button class="sw" id="routerSw" role="switch" aria-checked="false" aria-label="Current clamp on the Router board"></button>
+              </div>
+              <div class="clamp" id="routerClamp" hidden><span class="cdot"></span>Clamp fitted. No tool assigned to it yet.</div>
+            </div>
+            <div class="actions"><button class="act">Rename</button><button class="act">Update</button><button class="act" disabled>Unpair</button></div>
+          </div>
+        </div>
+        <p class="hint">Off is the default for every board. With it off, a tool cannot be pointed at that board's clamp, so a layout never names a clamp that is not there.</p>
+      </div>
+    </section>
+
+    <!-- ───────────────────────────── 2 · Canvas: delete system / clear shop ───────────────────────────── -->
+    <section class="col" aria-labelledby="b-h">
+      <h2 id="b-h">Canvas · delete a second collector, or clear the shop</h2>
+      <p class="why">A collector after the first can be deleted, and its whole system goes with it. The first collector has no delete (a shop needs one). <b>Clear shop</b> sits at the bottom of the ⋯ menu and does the same to everything except the first collector.</p>
+      <div class="state-tabs" role="group" aria-label="Show">
+        <button class="btn" aria-pressed="true" data-b="menu">⋯ menu</button>
+        <button class="btn" aria-pressed="false" data-b="first">First collector</button>
+        <button class="btn" aria-pressed="false" data-b="second">Second collector</button>
+      </div>
+      <div class="phone" id="canvasPhone">
+        <div class="bar"><span class="t">Shop layout</span><button class="act" id="dots" aria-label="More actions" aria-haspopup="menu">⋯</button></div>
+        <div class="canvas" aria-label="Canvas">
+          <div class="barrel" style="left:20px;top:20px" id="c1" tabindex="0" role="button" aria-label="Cyclone, first collector">Cyclone<small>System 1</small></div>
+          <div class="gatebox" style="left:30px;top:130px">Gate · Saw</div>
+          <div class="gatebox" style="left:130px;top:130px">Gate · Jointer</div>
+          <div class="duct" style="left:56px;top:94px;width:3px;height:36px"></div>
+          <div class="seam" style="top:196px"><span>system 2</span></div>
+          <div class="barrel" style="left:20px;top:214px;background:#2c3f5c;border-color:#4b6fa3;color:#d9e8ff" id="c2" tabindex="0" role="button" aria-label="Router system collector, second collector">Router<small>System 2</small></div>
+          <div class="gatebox" style="left:130px;top:240px">Gate · Router table</div>
+          <div class="duct" style="left:94px;top:252px;width:36px;height:3px"></div>
+        </div>
+        <p class="hint" style="margin-top:10px">Tap a collector for its menu.</p>
+
+        <div class="menu" id="menu" role="menu">
+          <button class="mi" role="menuitem">Import<small>a layout file</small></button>
+          <button class="mi" role="menuitem">Export<small>this layout</small></button>
+          <div class="msep"></div>
+          <button class="mi" role="menuitem">Add system<small>a second collector</small></button>
+          <button class="mi" role="menuitem">Find boards…<small>pair another brain</small></button>
+          <button class="mi" role="menuitem" id="gotoPlugs">Plugs<small>open the page</small></button>
+          <div class="msep"></div>
+          <button class="mi danger" role="menuitem" id="clearBtn">Clear shop…<small>keeps one collector</small></button>
+          <button class="mi" role="menuitem">Settings</button>
+        </div>
+
+        <div class="menu" id="cmenu1" role="menu" hidden style="top:100px;left:14px;right:auto">
+          <button class="mi" role="menuitem">Rename</button>
+          <button class="mi" role="menuitem">Set up the collector</button>
+          <div class="msep"></div>
+          <button class="mi" role="menuitem" disabled>Delete system<small>a shop needs one</small></button>
+        </div>
+        <div class="menu" id="cmenu2" role="menu" hidden style="top:290px;left:14px;right:auto">
+          <button class="mi" role="menuitem">Rename</button>
+          <button class="mi" role="menuitem">Set up the collector</button>
+          <div class="msep"></div>
+          <button class="mi danger" role="menuitem" id="delSys">Delete system…<small>and everything in it</small></button>
+        </div>
+
+        <div class="scrim" id="delSheet" hidden>
+          <div class="sheet" role="dialog" aria-labelledby="delT">
+            <h3 id="delT">Delete “Router system”?</h3>
+            <div class="gonelist">
+              <ul>
+                <li><b>Goes:</b> its collector, 1 gate, 2 pieces of duct</li>
+                <li><b>Goes:</b> the Router table (it has no other port)</li>
+                <li><b>Stays:</b> the Table saw, which also has a port on System 1</li>
+                <li><b>Stays:</b> every board and plug stays paired</li>
+              </ul>
+            </div>
+            <p class="hint">The Router table's plug is released, so another brain can claim it.</p>
+            <div class="btnrow"><button class="btn danger" id="delGo">Delete system</button><button class="btn" id="delNo">Cancel</button></div>
+          </div>
+        </div>
+
+        <div class="scrim" id="clearSheet" hidden>
+          <div class="sheet" role="dialog" aria-labelledby="clrT">
+            <h3 id="clrT">Clear the shop?</h3>
+            <div class="gonelist">
+              <ul>
+                <li><b>Stays:</b> “Cyclone”, the first collector, with no connections</li>
+                <li><b>Goes:</b> 1 other system, 3 gates, 4 tools, every duct</li>
+                <li><b>Stays:</b> every board stays paired (they show as unplaced)</li>
+              </ul>
+            </div>
+            <p class="hint">Plugs paired to the removed tools are released. Export first if you may want this layout back.</p>
+            <div class="btnrow"><button class="btn danger" id="clrGo">Clear shop</button><button class="btn" id="clrNo">Cancel</button></div>
+          </div>
+        </div>
+        <p class="hint" id="clearedNote" hidden style="margin-top:10px"><b>Cleared.</b> One collector, nothing connected. Add pieces from the canvas.</p>
+      </div>
+    </section>
+
+    <!-- ───────────────────────────── 3 · Plugs page ───────────────────────────── -->
+    <section class="col" aria-labelledby="c-h">
+      <h2 id="c-h">Plugs · its own page, laid out like Boards</h2>
+      <p class="why">One row per plug with its live draw and who owns it. Scanning, sweeping and adding by address live here too, and this becomes the one place a plug is picked from, so the picker in tool setup can go.</p>
+      <div class="state-tabs" role="group" aria-label="State">
+        <button class="btn" aria-pressed="true" data-p="rest">At rest</button>
+        <button class="btn" aria-pressed="false" data-p="scan">Sweeping</button>
+        <button class="btn" aria-pressed="false" data-p="other">Takeover</button>
+      </div>
+      <div class="phone" id="plugs">
+        <div class="head"><span class="step">Your plugs</span><span class="step" id="pcount">4 plugs</span></div>
+        <div class="net"><span>◉</span><span>Everything here is on <b>GenericGuest</b></span></div>
+
+        <div class="card">
+          <div class="row">
+            <div class="info">
+              <div class="nm"><span class="dot on"></span>Table saw</div>
+              <div class="sub">Shelly Plus Plug US · 192.168.86.27 · pushes to this brain</div>
+              <div class="sub">Paired to the <b style="color:var(--text);font-weight:500">Table saw</b> · starts collection above 100 W</div>
+            </div>
+            <div class="actions"><div class="draw">182 W</div><button class="act">Rename</button><button class="act">Release</button></div>
+          </div>
+          <div class="row">
+            <div class="info">
+              <div class="nm"><span class="dot idle"></span>Jointer</div>
+              <div class="sub">Tasmota · 192.168.86.40 · polled every half second</div>
+              <div class="sub">Paired to the <b style="color:var(--text);font-weight:500">Jointer</b> · starts collection above 40 W</div>
+            </div>
+            <div class="actions"><div class="draw idle">0 W</div><button class="act">Rename</button><button class="act">Release</button></div>
+          </div>
+          <div class="row">
+            <div class="info">
+              <div class="nm"><span class="dot off"></span>Miter saw <span class="badge warn">Not answering</span></div>
+              <div class="sub">Tasmota · 192.168.86.52 · last seen 3 min ago</div>
+              <div class="sub">It may have a new address. Sweep to find it.</div>
+            </div>
+            <div class="actions"><button class="act add">Sweep</button><button class="act">Release</button></div>
+          </div>
+          <div class="row" id="otherRow">
+            <div class="info">
+              <div class="nm"><span class="dot on"></span>Dust collector plug <span class="badge">Read only</span></div>
+              <div class="sub">Shelly · 192.168.86.60 · belongs to another brain (<code>dustgate-lab</code>)</div>
+              <div class="sub">Polled, never written. Taking it over repoints its push address to this brain.</div>
+            </div>
+            <div class="actions"><div class="draw">0 W</div><button class="act" id="takeBtn">Take over…</button></div>
+          </div>
+        </div>
+
+        <div class="inline-confirm" id="takeConfirm" hidden>
+          Take over <b>Dust collector plug</b> from <code>dustgate-lab</code>? Its push address is saved so releasing it later puts it back. That brain stops hearing this plug.
+          <div class="btnrow"><button class="btn danger" id="takeGo">Take over</button><button class="btn" id="takeNo">Cancel</button></div>
+        </div>
+        <p class="hint" id="takeDone" hidden style="margin-bottom:12px"><b>Taken over.</b> The plug now pushes to this brain.</p>
+
+        <div class="sect">Found, not paired</div>
+        <div class="card" id="foundCard">
+          <div class="row" id="foundRow">
+            <div class="info">
+              <div class="nm"><span class="dot idle"></span>shellyplus1pm-a8032a</div>
+              <div class="sub">Shelly Plus 1PM · 192.168.86.71 · unclaimed · 0 W</div>
+              <div class="sub">Switch a tool on and watch for the plug that jumps.</div>
+            </div>
+            <div class="actions"><button class="act add" id="pairBtn">Pair to…</button></div>
+          </div>
+        </div>
+        <div class="inline-confirm" id="pairPick" hidden style="margin-bottom:12px">
+          Pair <b>shellyplus1pm-a8032a</b> to which tool?
+          <div class="btnrow" style="flex-wrap:wrap"><button class="btn" data-pair="Planer">Planer</button><button class="btn" data-pair="Band saw">Band saw</button><button class="btn" data-pair="Drill press">Drill press</button></div>
+          <p class="hint" style="margin-top:8px">Tools that already have a plug are not listed.</p>
+        </div>
+        <p class="hint" id="pairDone" hidden style="margin-bottom:12px"><b>Paired.</b> <span id="pairName"></span> now has a plug. It is named for the tool on the plug itself.</p>
+
+        <div class="sect">Look for plugs</div>
+        <div class="btnrow">
+          <button class="btn" id="scanBtn">↻ Scan again</button>
+          <button class="btn" id="sweepBtn" title="Knock on every address on the network. About a minute.">Sweep network</button>
+        </div>
+        <div id="sweepBar" hidden style="margin-top:10px">
+          <div class="hint" id="sweepTxt">Knocking on every address… 38%</div>
+          <div style="height:6px;border-radius:99px;background:var(--border);margin-top:6px;overflow:hidden"><div style="width:38%;height:100%;background:var(--accent)"></div></div>
+          <div class="hint" style="margin-top:6px">Found so far: 192.168.86.71 · 0 W</div>
+        </div>
+        <div class="field">
+          <input id="ipIn" inputmode="decimal" placeholder="Or type its address — 192.168.1.42" aria-label="Plug IP address">
+          <button class="btn" id="ipAdd">Add</button>
+        </div>
+        <p class="hint" style="margin-top:6px">Some plugs, a Tasmota above all, never announce themselves, so typing the address is the only way in.</p>
+      </div>
+    </section>
+  </div>
+
+  <section class="decide" aria-labelledby="d-h">
+    <h2 id="d-h">What I chose that you may want different</h2>
+    <ul>
+      <li><b>The clamp setting lives in the layout</b>, on the board's entry, not in the node. A reflash cannot lose it, and the brain stops trusting “I have a clamp” from the node alone.</li>
+      <li><b>Turning a clamp off asks first</b> only when a tool is sensed by it. Otherwise the switch just flips.</li>
+      <li><b>Deleting a collector deletes its whole system.</b> A machine with a port on another system keeps that port; one with no other port goes.</li>
+      <li><b>Clear shop keeps boards and pairings</b>, so you do not re-pair six boards. It releases plugs paired to removed tools. Tell me if you would rather it leave plugs alone.</li>
+      <li><b>Plugs is a page in its own right</b>, reachable from the ⋯ menu where “Find plugs” is now. The Build canvas tray stays for placing a plug, and the picker in tool setup is replaced by “Pair to…” here.</li>
+    </ul>
+  </section>
+</div>
+
+<script>
+  var $ = function (id) { return document.getElementById(id); };
+  var on = function (id, ev, fn) { var el = $(id); if (el) el.addEventListener(ev, fn); };
+  function show(id, v) { $(id).hidden = !v; }
+
+  /* 1 · clamp switches */
+  function setSw(id, v) { $(id).setAttribute('aria-checked', v ? 'true' : 'false'); }
+  on('planerSw', 'click', function () {
+    if ($('planerSw').getAttribute('aria-checked') === 'true') { show('planerConfirm', true); }
+    else { setSw('planerSw', true); show('planerClamp', true); $('planerHint').textContent = 'A clamp is plugged into this board.'; }
+  });
+  on('planerKeep', 'click', function () { show('planerConfirm', false); });
+  on('planerOff', 'click', function () {
+    setSw('planerSw', false); show('planerConfirm', false); show('planerClamp', false);
+    $('planerHint').textContent = 'Off. The Planer now has no sensor.';
+  });
+  on('routerSw', 'click', function () {
+    var v = $('routerSw').getAttribute('aria-checked') !== 'true';
+    setSw('routerSw', v); show('routerClamp', v);
+    $('routerHint').textContent = v ? 'A clamp is plugged into this board.' : 'Off. Nothing is plugged into this board.';
+  });
+
+  /* 2 · canvas */
+  function closeMenus() { ['menu', 'cmenu1', 'cmenu2'].forEach(function (m) { show(m, false); }); }
+  function pressTabs(sel, attr, val) {
+    document.querySelectorAll(sel).forEach(function (b) { b.setAttribute('aria-pressed', b.getAttribute(attr) === val ? 'true' : 'false'); });
+  }
+  function canvasState(s) {
+    pressTabs('[data-b]', 'data-b', s); closeMenus();
+    show('delSheet', false); show('clearSheet', false);
+    if (s === 'menu') show('menu', true);
+    if (s === 'first') show('cmenu1', true);
+    if (s === 'second') show('cmenu2', true);
+  }
+  document.querySelectorAll('[data-b]').forEach(function (b) { b.addEventListener('click', function () { canvasState(b.getAttribute('data-b')); }); });
+  on('dots', 'click', function () { canvasState('menu'); });
+  on('c1', 'click', function () { canvasState('first'); });
+  on('c2', 'click', function () { canvasState('second'); });
+  on('delSys', 'click', function () { closeMenus(); show('delSheet', true); });
+  on('delNo', 'click', function () { show('delSheet', false); });
+  on('delGo', 'click', function () {
+    show('delSheet', false);
+    $('c2').hidden = true; document.querySelectorAll('#canvasPhone .gatebox, #canvasPhone .duct').forEach(function (e) {
+      if (parseInt(e.style.top, 10) > 200) e.hidden = true; });
+    $('clearedNote').innerHTML = '<b>Deleted.</b> The Router system is gone; the Table saw kept its port on System 1.'; show('clearedNote', true);
+  });
+  on('clearBtn', 'click', function () { closeMenus(); show('clearSheet', true); });
+  on('clrNo', 'click', function () { show('clearSheet', false); });
+  on('clrGo', 'click', function () {
+    show('clearSheet', false);
+    document.querySelectorAll('#canvasPhone .gatebox, #canvasPhone .duct, #canvasPhone .seam, #c2').forEach(function (e) { e.hidden = true; });
+    $('clearedNote').innerHTML = '<b>Cleared.</b> One collector, nothing connected. Add pieces from the canvas.'; show('clearedNote', true);
+  });
+  on('gotoPlugs', 'click', function () { closeMenus(); $('plugs').scrollIntoView({ behavior: 'smooth', block: 'center' }); });
+  canvasState('menu');
+
+  /* 3 · plugs */
+  function plugState(s) {
+    pressTabs('[data-p]', 'data-p', s);
+    show('sweepBar', s === 'scan');
+    $('sweepBtn').disabled = s === 'scan'; $('sweepBtn').textContent = s === 'scan' ? 'Sweeping…' : 'Sweep network';
+    show('takeConfirm', s === 'other');
+    if (s === 'other') $('otherRow').scrollIntoView({ block: 'nearest' });
+  }
+  document.querySelectorAll('[data-p]').forEach(function (b) { b.addEventListener('click', function () { plugState(b.getAttribute('data-p')); }); });
+  on('sweepBtn', 'click', function () { plugState('scan'); });
+  on('scanBtn', 'click', function () { $('scanBtn').textContent = '↻ Scanning…'; setTimeout(function () { $('scanBtn').textContent = '↻ Scan again'; }, 900); });
+  on('takeBtn', 'click', function () { plugState('other'); });
+  on('takeNo', 'click', function () { plugState('rest'); });
+  on('takeGo', 'click', function () {
+    show('takeConfirm', false); pressTabs('[data-p]', 'data-p', 'rest'); show('takeDone', true);
+    var r = $('otherRow'); r.querySelector('.badge').textContent = 'Yours'; $('takeBtn').hidden = true;
+    r.querySelectorAll('.sub')[1].textContent = 'Pushes to this brain. Release puts its old push address back.';
+  });
+  on('pairBtn', 'click', function () { show('pairPick', true); });
+  document.querySelectorAll('[data-pair]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      show('pairPick', false); show('foundCard', false); document.querySelector('#plugs .sect').hidden = true;
+      $('pairName').textContent = 'The ' + b.getAttribute('data-pair'); show('pairDone', true); $('pcount').textContent = '5 plugs';
+    });
+  });
+  on('ipAdd', 'click', function () {
+    var v = $('ipIn').value.trim(); if (!v) return;
+    $('ipAdd').textContent = 'Checking…'; setTimeout(function () { $('ipAdd').textContent = 'Add'; $('ipIn').value = ''; }, 800);
+  });
+</script>
