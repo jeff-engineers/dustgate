@@ -133,11 +133,21 @@ const POLL_MS = 2000;
 
     /* collector card */
     .collector {
+      position: relative;
       display: flex; align-items: center; gap: 12px;
       background: var(--surface); border: 1px solid var(--border);
       border-radius: var(--radius); padding: 16px; margin-bottom: 18px;
     }
     .collector.running { border-color: var(--success); }
+    /* The card is a button, the way a tool row is: a transparent hit area under the text. Drawn only when the brain can
+       actually switch this blower (docs/mockups/collector-manual.html, approved 2026-10-06). */
+    .collector .chit {
+      position: absolute; inset: 0; width: 100%; height: 100%;
+      background: none; border: 0; border-radius: var(--radius); padding: 0; cursor: pointer;
+    }
+    .collector .chit:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
+    .collector.locked .chit { pointer-events: none; }
+    .collector a.c-sub { position: relative; z-index: 1; }
     .collector.warn { border-color: rgba(240,165,0,0.55); }
     .collector.warn .cyc { color: var(--accent); }
     .collector.warn .c-sub { color: var(--accent); }
@@ -397,9 +407,14 @@ const POLL_MS = 2000;
            this page knows about it, and a flat list threw it away. -->
       <div class="sys" *ngFor="let g of groups">
         <div class="collector" *ngIf="g.id"
+             [class.locked]="!ready"
              [class.running]="collectorChipTone(g) === 'go'"
              [class.warn]="collectorChipTone(g) === 'wait'"
              [class.bad]="collectorChipTone(g) === 'bad'">
+          <button class="chit" type="button" *ngIf="canSwitch(g)"
+                  (click)="toggleCollector(g)"
+                  [attr.aria-pressed]="g.manual"
+                  [attr.aria-label]="collectorTapLabel(g)"></button>
           <span class="cyc">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
                  stroke-linecap="round" stroke-linejoin="round">
@@ -425,10 +440,11 @@ const POLL_MS = 2000;
                  air? Note there is no "Waiting" here — a blower is never
                  out-voted, it runs or it doesn't, so orange goes to Blocked. -->
             <span class="chip" [class]="'chip ' + collectorChipTone(g)">{{ collectorChipText(g) }}</span>
-            <!-- No switch here (jeff, 2026-10-03). The blower follows the tools:
-                 tap a tool's row to run it by hand and the blower comes with it.
-                 A second control on the card fought that one — a hand-run blower
-                 and a tool each had their own idea of what "off" meant. -->
+            <!-- No SWITCH here: the card is a button like a tool row (the whole card is the tap), with this chip for state.
+                 (jeff, 2026-10-03 removed a switch because a hand-run blower and a tool each had their own idea of what "off"
+                 meant. Since then a hand-started blower stays on until a person stops it, and using another tool releases
+                 a hand-switched one, so a hand run has one owner and a clear end. Approved 2026-10-06,
+                 docs/mockups/collector-manual.html.) -->
           </div>
         </div>
 
@@ -663,12 +679,16 @@ export class LiveViewComponent implements OnInit, OnDestroy {
       const asking = g.tools.find(t => t.on)?.name ?? 'A tool';
       return asking + ' is asking — the layout isn\'t finished';
     }
-    if (!g.on) return 'Nothing is asking for it';
+    if (!g.on) return this.canSwitch(g) ? 'Tap to run it, or switch a tool on' : 'Nothing is asking for it';
     // Both of these are said out loud because a blower running with every tool
     // off otherwise reads as a stuck relay, and someone goes looking for a fault
     // instead of waiting the few seconds out.
     if (g.coasting) return 'Every tool is off — clearing the ducts';
-    if (g.manual && !g.activeName) return 'No tool is asking — you started it';
+    // A hand run says how it ends, because it is the one thing here that does NOT end on its own: the brain never
+    // presses OFF for a blower it did not start, and a tool stopping does not stop it either.
+    if (g.manual && !g.activeName) return 'Running by hand — stays on until you stop it';
+    if (g.manual) return 'Running by hand · ' + g.activeName + ' has the air';
+    if (this.canSwitch(g) && g.activeName) return g.activeName + ' has the air · tap to keep it on after';
     return g.activeName || 'Running';
   }
 
@@ -705,7 +725,7 @@ export class LiveViewComponent implements OnInit, OnDestroy {
     if (!this.ready && g.tools.some(t => t.on)) return 'blocked';
     if (g.coasting) return 'coasting';
     if (!g.on)      return 'idle';
-    return (g.manual && !g.activeName) ? 'byhand' : 'collecting';
+    return g.manual ? 'byhand' : 'collecting';
   }
 
   collectorChipText(g: SystemGroup): string {
@@ -852,6 +872,32 @@ export class LiveViewComponent implements OnInit, OnDestroy {
     // On, not collecting, and nothing else won either: the blower for this
     // system isn't running yet, or the layout won't let it.
     return ' · no clear path to the collector';
+  }
+
+  /** Can the brain switch this blower at all? An outlet or an RF remote (`noPlug` is the negation, worked out from the
+   *  layout). Not every state of the card is a control: no controls where nothing could be pressed. */
+  canSwitch(g: SystemGroup): boolean { return !!g.id && !g.noPlug; }
+
+  collectorTapLabel(g: SystemGroup): string {
+    return g.manual ? 'Stop ' + g.name : (g.on ? 'Keep ' + g.name + ' on after the tools stop' : 'Run ' + g.name);
+  }
+
+  /** Tap the card. A hand run is the person's: tapping again ends it. With only tools running the same tap hands the
+   *  run to the person (keep it on after they stop). Stopping a hand run while a tool still asks leaves the blower
+   *  on for that tool — the brain only drops the person's claim. */
+  async toggleCollector(g: SystemGroup): Promise<void> {
+    if (this.busy || !this.ready || !this.canSwitch(g)) return;
+    this.busy = true;
+    this.error = '';
+    try {
+      await this.api.setCollectorManual(!g.manual, g.id);
+      g.manual = !g.manual;
+      await this.refresh(true);
+    } catch (e) {
+      this.error = "Couldn't switch " + g.name + ' — ' + whyFailed(e) + '. Nothing was changed.';
+    } finally {
+      this.busy = false;
+    }
   }
 
   async toggle(t: ToolRow): Promise<void> {
