@@ -204,7 +204,11 @@ public:
         // ArduinoJson v6 needs a heap doc sized for the parse tree, not the text.
         // 2x + slack covers the key/value overhead of these documents; a bad
         // guess surfaces as NoMemory rather than silent truncation.
-        size_t cap = len * 2 + 2048;
+        //
+        // 3x on a 64-bit host: ArduinoJson's nodes are pointer-sized, so the same tree needs half again the pool on the
+        // native brain as on the ESP32 — 2x was enough for the ESP32 and a real shop layout (6.4 KB, edited in the app)
+        // answered NoMemory on the Mac, refusing a perfectly good save (2026-10-06).
+        size_t cap = len * (sizeof(void*) > 4 ? 4 : 2) + 2048;
         std::unique_ptr<BigJsonDocument> doc(new BigJsonDocument(cap));
         DeserializationError e = deserializeJson(*doc, json, len);
         if (e) { err = e.c_str(); return false; }

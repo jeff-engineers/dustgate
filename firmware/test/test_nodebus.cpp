@@ -151,6 +151,17 @@ int main(int argc, char** argv) {
   std::string twoSystemShopJson = slurp(dir + "twoSystemShop.json");
   if (twoGatesJson.empty()) { printf("bad twoGates.json\n"); return 2; }
 
+  // ── a real shop layout, as the app writes it (compact, no whitespace) must fit the parse pool ──
+  // The pool was sized for the ESP32's 4-byte pointers; on a 64-bit host the same tree needs half again as much, and a
+  // 5.6 KB layout answered NoMemory — the native brain refused a perfectly good save (2026-10-06).
+  {
+    std::string shop = slurp(dir + "benchShop.json");
+    topo::NodeBus nb; topo::TopologyRuntime rt; StubBus local;
+    nb.setLocal(&local, "primary"); rt.begin(&nb);
+    std::string err;
+    ok("a real six-board shop layout is adopted", !shop.empty() && rt.adopt(shop.c_str(), shop.size(), err), err);
+  }
+
   // ── one move at a time, in sequencer order ───────────────────────────────
   {
     StubBus local; topo::NodeBus nb; topo::TopologyRuntime rt;
