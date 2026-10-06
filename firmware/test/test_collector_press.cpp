@@ -178,6 +178,26 @@ int main() {
            nextPressAction(st, true, PlugState::Running, t) == PressAction::Nothing);
     }
 
+    printf("\nR6b a blower a person started stays on\n");
+    {
+        // jeff, 2026-10-06. A blower running that we never pressed on is a person's, and nothing of ours turns it off.
+        PressState st;
+        uint32_t t = 1000;
+        ok("running, never pressed by us, nothing wanted -> leave it",
+           nextPressAction(st, false, PlugState::Running, t) == PressAction::Nothing);
+        ok("...still, a minute later", nextPressAction(st, false, PlugState::Running, t + 60000) == PressAction::Nothing);
+        // One we started IS ours to stop.
+        notePress(st, true, t);
+        ok("a press of ours made it ours", st.weStarted);
+        t += COOL;
+        ok("...so wanting it off while it still runs presses", nextPressAction(st, false, PlugState::Running, t) == PressAction::Press);
+        notePress(st, false, t);
+        ok("an OFF press hands it back", !st.weStarted);
+        // After our OFF, a person starts it by hand: left alone again.
+        t += COOL;
+        ok("...a hand start after that is theirs", nextPressAction(st, false, PlugState::Running, t) == PressAction::Nothing);
+    }
+
     printf("\nR7 a change of intent gets a fresh start\n");
     {
         // Someone switching the blower off after we failed to start it must not

@@ -88,6 +88,9 @@ struct PressState {
     bool     everPressed = false;
     bool     wanted      = false;   // the state the attempts are working toward
     bool     gaveUp      = false;
+    // We turned it on (an ON press went out and no OFF press has since). Only a blower WE started is ours to stop:
+    // one that is running and was never started by us was started by a person, and stays on (jeff, 2026-10-06).
+    bool     weStarted   = false;
 };
 
 /**
@@ -100,6 +103,12 @@ struct PressState {
  */
 inline PressAction nextPressAction(const PressState& st, bool want,
                                    PlugState observed, uint32_t nowMs) {
+    // A BLOWER SOMEBODY STARTED BY HAND STAYS ON (jeff, 2026-10-06). We never pressed it on, so there is no OFF of ours
+    // to send: pressing one would stop a machine a person is standing at, and a bench desk fan read as "running" got
+    // three OFF presses for it. They turn it off themselves, the way they turned it on. Checked first so it also
+    // covers a changed want and a give-up.
+    if (!want && observed == PlugState::Running && !st.weStarted) return PressAction::Nothing;
+
     // A WANT THAT CHANGED RESTARTS EVERYTHING, including a given-up attempt.
     // Someone switching the blower off after we failed to start it must not
     // inherit that failure — the new intent has not been tried yet.
@@ -169,6 +178,7 @@ inline void notePress(PressState& st, bool want, uint32_t nowMs) {
         st.gaveUp   = false;
     }
     st.wanted      = want;
+    st.weStarted   = want;          // an ON press makes the run ours; an OFF press hands it back
     st.lastPressMs = nowMs;
     st.everPressed = true;
     if (st.attempts < 255) st.attempts++;
