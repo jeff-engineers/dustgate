@@ -131,6 +131,17 @@ int main() {
     f.s.setState("g1", sel(d), "closed"); f.drain(frame);
     f.s.onDown();
     ok("a dropped link mid-move frees the bus and says the gate may not have finished", !f.s.busy() && f.s.health().moveFault != nullptr);
+    {
+      // The node reset mid-move and re-dialled before anyone noticed its old socket was dead: onDown() never ran, and
+      // the new attach must not inherit the dead board's move (it froze every gate in the shop, 2026-10-06).
+      Fx r; r.up();
+      DynamicJsonDocument dr(1024);
+      r.s.setState("g1", sel(dr), "open"); std::string fr; r.drain(fr);
+      g_now += nodelink::kPongTimeoutMs + 100;     // silent: no longer online, and nobody called onDown()
+      ok("a silent node still holds the servo mutex", r.s.busy());
+      ok("it re-dials: the attach is accepted", r.s.onAttach());
+      ok("...and the dead board's move no longer blocks the shop", !r.s.busy() && r.s.health().moveFault != nullptr);
+    }
     DynamicJsonDocument d2(1024);
     deserializeJson(d2, R"({"id":"g2","kind":"servoGate","controllerId":"n1","servo":{"channel":0},"states":[{"id":"open"}]})");
     Fx u; u.up();

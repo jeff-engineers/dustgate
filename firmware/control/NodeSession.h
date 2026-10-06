@@ -121,6 +121,13 @@ public:
     // before this moment must never be replayed after it.
     bool onAttach() {
         if (online()) return false;
+        // A NEW SOCKET IS A NODE THAT STARTED OVER. If the old link died without anyone calling onDown() (the node
+        // reset mid-move and re-dialled before its dead socket was noticed), a move is still marked outstanding for a
+        // gate whose board has since forgotten it — and busy() is the shop-wide servo mutex, so EVERY gate stopped
+        // moving until kMoveTimeoutMs (210 s). Bench 2026-10-06: the router-table node browned out mid-move and the
+        // whole shop's gates froze behind it.
+        if (_moveOutstanding) _moveFault = "The board restarted mid-move \xE2\x80\x94 the gate may not have finished moving.";
+        _moveOutstanding = false;
         _lastRxMs     = now();    // the node just spoke; do not call it overdue before the WELCOME
         _connected    = false;
         _txPending    = false;
