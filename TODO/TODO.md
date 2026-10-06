@@ -47,7 +47,11 @@ active sections above them, which is how a parked item stops being read.
 - **"Find plugs" does not load (jeff, 2026-10-06).** The Build canvas loads fine against the native brain (checked in the
   browser pane 2026-10-06); the failure is behind the menu item — `build.component.ts findPlugs()` -> `scanOutlets(true)` ->
   `/api/outlets/discover` then `startSweep()` / `/api/outlets/sweep`. Reproduce with the console and network tabs open and see
-  which request fails or never answers. Not tried yet because a sweep knocks on the whole subnet.
+  which request fails or never answers. **Tried 2026-10-06 against a scratch native brain with a fake plug on loopback
+  (`--broadcast 127.255.255.255`, scratch state): it works** — `/api/outlets/discover` answers, the sweep starts, the plug is
+  found and the progress bar runs; the only 404s were `/api/topology` and `/api/status` on a brain with no layout. So it is
+  something about the real shop: his actual layout, or a real /24 (a sweep that outlives a request timeout, a proxy, or the
+  page being opened by IP rather than `.local`). Still wants his console and network tab on the real brain.
 - **Bench test 20: rename a plug and release it (jeff, 2026-10-06).** Rename a Shelly from the app and confirm the new name in the
   Shelly app; release one and confirm it stops pushing and the previous push target comes back. Not run yet.
 - **Bench: the collector's CT option (jeff, 2026-10-06).** The collector can be sensed by a current clamp on the cyclone board
