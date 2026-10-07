@@ -45,7 +45,7 @@ native/pi/deploy.sh <user>@dustgate.local --state /tmp/dgbench  # the FIRST time
 `--state` copies a state directory (`topology.json`, `nodes.json`, `apikey`, staged node firmware, `plugs.json`) so the Pi comes up as
 the same brain. **Stop the Mac brain first** (`pkill -f dustgate-brain`): two brains with the id `dustgate` fight over the nodes.
 
-The first build on a Pi Zero 2 W takes several minutes and needs the swap `setup.sh` adds; later builds recompile only what changed.
+`deploy.sh` cross-builds the brain on the Mac with zig (`brew install zig`; `make -C native arm64`, about a minute) and installs only the 4 MB binary. A Pi Zero 2 W cannot compile `main.cpp`: the compiler is killed at 415 MB, and a swapfile on the SD card thrashes until the watchdog reboots the Pi. `--on-pi` builds there anyway (`update.sh` adds a swapfile for it); use a Pi 3 or later for that. `sudo` asks for the Pi user's password once per deploy (cached ~15 minutes).
 The update **rolls back** to the previous binary if the new one does not answer on port 80 within 30 s.
 
 ## Day to day
@@ -60,6 +60,6 @@ sudo /opt/dustgate/update.sh --git       # later: pull from git on the Pi instea
 
 ## What this has NOT been through
 
-Nothing here has been run on a Pi yet: the code is written to build with GCC on Debian (Boost 1.74, no `.git` needed) and the
-Mac build is green, but the first Pi build may need a fix or two. Paste the compiler output and it will be quick.
+Run on a Pi Zero 2 W (Raspberry Pi OS Trixie) on 2026-10-06: the cross-built brain started, took the shop's layout and state, re-pointed three plugs
+at itself, and all six nodes dialled in by themselves. Not yet run: an address change under load, a power pull, a full shop day.
 Not built: a git deploy key on the Pi (the `--git` path), mDNS advertising of the brain, a read-only root, first-boot WiFi setup.

@@ -14,7 +14,7 @@ active sections above them, which is how a parked item stops being read.
 
 ## Pi bring-up (branch `pi-brain-bringup`, started 2026-10-06)
 
-Goal for now: **run the shop without the Mac**, with no fixed address anywhere. Nothing on a Pi has run yet. Steps, in order; each says
+Goal for now: **run the shop without the Mac**, with no fixed address anywhere. **Steps 1-4 done 2026-10-06** (Pi Zero 2 W, Trixie, `dustgate.local`): the brain runs on the Pi with the shop's layout and plugs, and all six nodes found it by beacon with nobody touching them. Steps 5-7 need someone in the shop. Steps, in order; each says
 what to report back. Full commands are in [`native/pi/README.md`](../native/pi/README.md).
 
 1. **Flash the Pi** (Pi Zero 2 W, or any 64-bit Pi) with Raspberry Pi OS Lite (64-bit) in the Imager: hostname (not `dustgate` while an
@@ -22,8 +22,7 @@ what to report back. Full commands are in [`native/pi/README.md`](../native/pi/R
    Report: can you `ssh <user>@<hostname>.local`? If not, what address does the router show?
 2. **Run `setup.sh` on it** (compiler, Boost, the `dustgate` service user, WiFi power-save off, hardware watchdog, persistent journal,
    the systemd unit). Report: any step that fails, and its output.
-3. **Deploy from the Mac** with `deploy.sh`. The first build on a Zero 2 W takes minutes. This is the first GCC-on-ARM build, so it may
-   need a fix or two: paste the compiler output. Report: does it build, does the service start, does `/api/info` answer?
+3. **Deploy from the Mac** with `deploy.sh`. **A Zero 2 W cannot compile `main.cpp`** (cc1plus killed at 415 MB, and a swapfile on the SD card thrashed it until the watchdog rebooted the Pi), so the brain is CROSS-BUILT on the Mac with zig (`brew install zig`, `make -C native arm64`, ~1 min, 4 MB stripped) and only the binary is installed. `--on-pi` still builds there. Done.
 4. **Stop the Mac brain, bring the state over** (`--state`), start the Pi's. Report: do the nodes find it (Boards screen) without anyone
    touching them? They should, by the beacon.
 5. **Move the address.** Force the Pi onto a different address (`sudo ip addr`, or restart its WiFi/router lease) with a tool running.

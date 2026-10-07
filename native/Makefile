@@ -35,4 +35,12 @@ $(BIN): src/main.cpp src/PlugHttpNative.cpp src/PlugPoller.h src/Sweep.h src/Nod
 	$(CXX) $(CXXFLAGS) -DDUSTGATE_NATIVE -DDG_COMMIT=\"$(COMMIT)\" $(INC) src/main.cpp src/PlugHttpNative.cpp $(OUTLETS) -o $@ -L$(BOOST)/lib -pthread
 clean:
 	rm -rf build
-.PHONY: all brain clean test
+# The Raspberry Pi binary, cross-built on a Mac with zig (brew install zig): a Pi Zero's 512 MB cannot compile main.cpp in any
+# reasonable time, and a customer's Pi should not carry a compiler. Dynamically linked against glibc 2.36 (Raspberry Pi OS Bookworm
+# and later); stripped, since the debug info alone is ~85 MB.
+ARM64 := build/arm64/dustgate-brain
+arm64: $(ARM64)
+$(ARM64): $(BIN:build/dustgate-brain=src/main.cpp) src/PlugHttpNative.cpp src/PlugPoller.h src/Sweep.h src/NodeHub.h src/SessionBus.h $(OUTLETS) $(wildcard ../firmware/control/*.h) $(wildcard ../firmware/outlets/*.h) $(wildcard src/*.h) ../firmware/api/ApiCore.h
+	@mkdir -p build/arm64
+	zig c++ -target aarch64-linux-gnu.2.36 -std=c++17 -O2 -s -DDUSTGATE_NATIVE -DDG_COMMIT=\"$(COMMIT)\" $(INC) src/main.cpp src/PlugHttpNative.cpp $(OUTLETS) -o $@ -pthread
+.PHONY: all brain clean test arm64
