@@ -8,6 +8,7 @@ import type { Topology } from '@topology';
 import { systemsOf } from '@shop';
 import { bareHost } from '@device-model';
 import { clampEnabled, clampUsers, healClampFlags, machineOfPort, setClampEnabled, type ShopDoc } from '../services/shop-doc';
+import { isOptionalBoard } from '@shop';
 import {
   type Drives, DEFAULT_DRIVES, applyDrivesCache, drivesFromCaps, drivesFromHasLinear, resolveDrives,
   unpairPrompt,
@@ -118,6 +119,7 @@ interface BoardRow {
     .badge { font-size: 11.5px; padding: 3px 10px; border-radius: 20px; flex-shrink: 0; }
     .badge.ok   { color: var(--success); background: rgba(60,190,110,0.12); }
     .badge.warn { color: var(--danger);  background: rgba(220,70,70,0.12); }
+    .badge.idle { color: var(--muted);   background: var(--border); }
 
     button.act { border-radius: 8px; padding: 7px 12px; font-size: 12.5px; flex-shrink: 0;
                  background: var(--bg); border: 1px solid var(--border); color: var(--text); }
@@ -173,11 +175,15 @@ interface BoardRow {
         <div class="info">
           <ng-container *ngIf="renaming !== r.id; else renameBox">
             <div class="nm">
-              <span class="dot" [class.on]="isOnline(r)" [class.off]="isOffline(r)"></span>
+              <span class="dot" [class.on]="isOnline(r)" [class.off]="isOffline(r) && !isOptional(r)"></span>
               {{ r.name }}
               <!-- Inside the name line, not a flex sibling: as a sibling it stole
                    width and wrapped the subtitle one word per line at 375px. -->
-              <span class="badge warn" *ngIf="isOffline(r)">Not answering</span>
+              <span class="badge warn" *ngIf="isOffline(r) && !isOptional(r)">Not answering</span>
+              <!-- An OPTIONAL board that is off is not a fault (docs/optional-nodes-plan.md): it only senses, so the shop
+                   loses a reading, never a gate or the blower. Grey, and says so, rather than red. -->
+              <span class="badge idle" *ngIf="isOffline(r) && isOptional(r)"
+                    title="Nothing in the shop depends on this board: it only senses. While it is off, its tools read as off.">Off · optional</span>
             </div>
             <div class="sub">{{ subtitle(r) }}</div>
             <!-- Shown at rest, never behind a tap: "is the clamp talking?" is
@@ -530,6 +536,8 @@ export class BoardSetupComponent implements OnInit, OnDestroy {
   // ── display ───────────────────────────────────────────────────────────────
   isOnline(r: BoardRow): boolean { return r.primary || !!r.link?.online; }
   isOffline(r: BoardRow): boolean { return !r.primary && !r.link?.online; }
+  /** Can the shop lose this board without losing a gate or a collector's job? The rule is the model's (shop.js). */
+  isOptional(r: BoardRow): boolean { return !r.primary && !!this.topo && isOptionalBoard(this.topo, r.id); }
 
   /** The clamp lines under a board row — the answer to "is this node talking
    *  back?", which is otherwise only visible on a serial cable.

@@ -35,6 +35,15 @@ first-boot WiFi setup for a customer, a read-only root, and the `--git` update p
 
 ## Bugs
 
+- **Optional boards (jeff, 2026-10-07 — BUILT 2026-10-08 on `servo-range`, host-tested, not seen in the shop).** A board with no
+  gate and none of a collector's jobs is optional: when it is off, no problem is raised, the beacon is not hurried, and Boards shows
+  it grey ("Off · optional"). Shop check: unplug the planer with the shop running. [`docs/optional-nodes-plan.md`](../docs/optional-nodes-plan.md).
+
+- **The servo pulse range is a Setting (2026-10-07, branch `servo-range` — built, host-tested, NOT run on a servo).** Settings →
+  Servos sets the pulse at 0° and 180° for every PWM servo (default 400–2600 µs, was a fixed 500–2500 the library clamped to). Kept
+  in the layout's `servo` block; the brain sends it on every servo SET and jog. Needs every PWM board reflashed (`dev.sh flash-node`
+  each) and every gate recalibrated — the same angle now lands somewhere new.
+
 - **A slider node fails silently: a failed home, both endstops triggered, or a jam never reach the brain (jeff, 2026-10-07).**
   In the shop the slider page sat on "finding home" while the node's serial said `[HOME] FAILED — reached the FAR endstop`
   (both switches read TRIGGERED after a jam, cleared only by power-cycling the whole slider — a latched supply on the driver
@@ -156,6 +165,11 @@ the app, the Pi's plug picker shows live draw (and not itself), and a board too 
   (the native brain applies none), the servo move on a weak supply, the RF transmit, the receiver's relay and the plug seeing
   the blower draw. Not yet measured: the hardware half. A timestamped run on the bench (plug sample -> SET -> STATE -> PRESS ->
   plug confirms) would say which of those is the big one.
+  **2026-10-08 (branch `servo-range`, host-tested, not seen in the shop):** the biggest software wait is gone — the blower used
+  to wait for the new gate to LAND (a 90° sweep is 2 s, then a 1 s hold before the board reports arrival); it now starts at once
+  when its system already has an open gate, and every system settles with one gate open at boot so it usually does. Gates on
+  different boards now move together. And a `[TOOL] <name> on (812 W)` line marks the start of the chain in the brain's log, so
+  one miter-saw cut on the Pi now times the rest: `[TOOL]` → `[NODE→] … SET` → `[NODE←] PRESS ok`. Next: read one off the shop.
 - **Bench test 20: rename a plug and release it (jeff, 2026-10-06).** Rename a Shelly from the app and confirm the new name in the
   Shelly app; release one and confirm it stops pushing and the previous push target comes back. Not run yet.
 - **Bench: the collector's CT option (jeff, 2026-10-06).** The collector can be sensed by a current clamp on the cyclone board
@@ -264,18 +278,6 @@ the app, the Pi's plug picker shows live draw (and not itself), and a board too 
   - First step if we go: a one-day spike on two C5s on GenericGuest — v2 frames,
     channel follow, an hour's delivery count, one deliberate sweep. Keep
     `wifi-ws` as the fallback transport.
-
-- **Drop the shop-wide one-servo-at-a-time rule; serialise per BOARD. (jeff,
-  2026-09-27.)** The gate-closing half of this item LANDED 2026-09-28 — see
-  DONE.md; a switch-on now re-closes every servo gate in the system, which makes
-  this half matter more: those closes still run one at a time shop-wide.
-  (`NodeBus::busy()` as the shop-wide
-  current mutex, TopologyRuntime.h's move queue). It came from boards driving four
-  servos off one supply; a board now drives ONE gate, so the current budget is
-  per board and there is nothing shared to protect. **One exception to check
-  first:** channel 1 on a PWM board may carry the collector-fob servo (CLAUDE.md,
-  `SERVO_COUNT`), so a gate move and a fob press can still land on the same
-  supply at the same moment. Serialise per BOARD, not per shop.
 
 - **The first servo move after every boot snaps; everything else is already
   ramped. (jeff, 2026-09-30; corrected 2026-10-02.)** This entry first asked for
@@ -458,6 +460,16 @@ the app, the Pi's plug picker shows live draw (and not itself), and a board too 
   whether or not both are clamped, so it answers with an array either way. Until
   the channel work lands, an EM2 is a plug DustGate can see and cannot use — which
   is now at least a visible refusal rather than a silent zero.
+
+- **Documentation: how to set up and use DustGate (jeff, 2026-10-08).** At some point the system needs a guide a woodworker can
+  follow — choosing parts, wiring a board, pairing, laying out the shop, calibrating gates, tuning trip points. Start a running
+  list of what it must say, as things are learnt. So far:
+  - **Choosing a sensor per tool.** A Tasmota (no relay, sense-only) is the slow sensor: it is polled, and its energy chip takes
+    over a second to show a rising draw. For a tool used in short bursts (a miter saw), use a Shelly, which pushes its reading on
+    change, or a current clamp on the board. Keep Tasmotas for tools that run for minutes (planer, drum sander, table saw).
+  - **Servo range is shop-wide** (Settings → Servos): buy the gate servos as one multipack, and recalibrate every gate after
+    changing the range.
+  - **Optional boards**: a board that only senses a tool can be powered with that tool; the shop does not complain when it is off.
 
 ## UI
 

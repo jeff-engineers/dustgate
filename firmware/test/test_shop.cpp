@@ -280,6 +280,35 @@ int main(int argc, char** argv) {
        status(r4, "drill-press"));
   }
 
+
+  // ── optional boards (2026-10-07, docs/optional-nodes-plan.md) ──────────────
+  // Same layout text and cases as the "optional boards" block of shop.test.js, same order.
+  {
+    DynamicJsonDocument d(4096);
+    deserializeJson(d, R"({"schemaVersion":2,"controllers":[{"id":"primary","role":"primary"},{"id":"dustgate-gate","role":"secondary"},{"id":"dustgate-planer","role":"secondary"},{"id":"dustgate-spare","role":"secondary"},{"id":"dustgate-cyclone","role":"secondary"},{"id":"dustgate-dcamp","role":"secondary"},{"id":"dustgate-bin","role":"secondary"}],"systems":[{"id":"s1","elements":[{"id":"dc","type":"collector","control":{"rf":{"controllerId":"dustgate-cyclone"}},"sensor":{"ct":{"controllerId":"dustgate-dcamp","channel":0}},"bin":{"sensor":{"controllerId":"dustgate-bin"}}},{"id":"g1","type":"selector","kind":"servoGate","controllerId":"dustgate-gate","states":[],"branches":[]}],"ducts":[]}],"machines":[{"id":"planer","sensor":{"ct":{"controllerId":"dustgate-planer","channel":0}}}]})");
+    JsonObjectConst shop = d.as<JsonObjectConst>();
+    ok("a board with a gate is required", topo::isOptionalBoard(shop, "dustgate-gate") == false);
+    ok("a board that only senses a tool is optional", topo::isOptionalBoard(shop, "dustgate-planer") == true);
+    ok("a board the layout does not use is optional", topo::isOptionalBoard(shop, "dustgate-spare") == true);
+    ok("the collector's transmitter board is required", topo::isOptionalBoard(shop, "dustgate-cyclone") == false);
+    ok("the collector's clamp board is required", topo::isOptionalBoard(shop, "dustgate-dcamp") == false);
+    ok("the collector's bin board is required", topo::isOptionalBoard(shop, "dustgate-bin") == false);
+    ok("the primary is never optional", topo::isOptionalBoard(shop, "primary") == false);
+    ok("any spelling of a board's id is the same board", topo::isOptionalBoard(shop, "Dustgate-Gate.local") == false);
+  }
+  {
+    // A board the layout names differently and points at by link.host: its gates still count (C++ only — only a brain
+    // knows its boards by host).
+    DynamicJsonDocument d(1024);
+    deserializeJson(d, R"({"controllers":[{"id":"primary","role":"primary"},{"id":"back-wall","role":"secondary","link":{"host":"dustgate-7"}}],
+      "systems":[{"id":"s1","elements":[{"id":"g1","type":"selector","controllerId":"back-wall"}],"ducts":[]}],"machines":[]})");
+    JsonObjectConst shop = d.as<JsonObjectConst>();
+    ok("a paired host is found by its link.host", topo::controllerIdForHost(shop, "dustgate-7.local") == "back-wall");
+    ok("...so a board with gates under another name is still required",
+       !topo::isOptionalBoard(shop, topo::controllerIdForHost(shop, "dustgate-7")));
+    ok("an unknown host is itself", topo::controllerIdForHost(shop, "dustgate-9") == "dustgate-9");
+  }
+
   printf("\n%d/%d passed\n", passed, passed + failed);
   return failed ? 1 : 0;
 }

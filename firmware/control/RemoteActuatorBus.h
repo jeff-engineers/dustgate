@@ -145,6 +145,7 @@ public:
     // ServoActuator de-energizes on its own once the sweep settles — which is
     // the behaviour the local detach call was asking for anyway.
     bool jog(int channel, int angle, bool detach) override;
+    void setServoPulseRange(int minUs, int maxUs) override;
 
     // --- Reporting (for GET /api/nodes) --------------------------------
     using NodeInfo = NodeSession::NodeInfo;

@@ -30,6 +30,7 @@
 #include <ArduinoJson.h>
 #include "TopologyRouter.h"
 #include "TopologySequencer.h"
+#include "BoardId.h"
 #include <map>
 #include <set>
 #include <string>
@@ -437,9 +438,10 @@ struct SystemPlan {
  * per system — but they come back as an ordered LIST OF PLANS that the caller
  * executes back-to-back, never interleaved. Interleaving would let system B's
  * break land between system A's make and A's break, which is exactly the
- * dead-head the sequencer exists to prevent. Execution stays shop-wide serial
- * anyway: the one-servo-at-a-time current budget is a property of the power
- * supply, not of a duct run (RFC §10.2).
+ * dead-head the sequencer exists to prevent. Execution is one move per BOARD
+ * (TopologyRuntime::update, since 2026-10-08): the current budget belongs to a
+ * board's supply, not to a duct run or to the shop, and a closing move still
+ * waits for every opening move of its system (RFC §10.2).
  *
  * @param collectorRunning systemId → is that blower turning right now.
  */
@@ -477,6 +479,41 @@ inline std::vector<SystemPlan> planShopTransition(
       out.push_back(SystemPlan{ sysId, plan.moves, plan.deadHeadRisk });
   }
   return out;
+}
+
+// IS THIS BOARD OPTIONAL — can the shop lose it without losing anything but a reading (2026-10-07, jeff;
+// docs/optional-nodes-plan.md)? REQUIRED when the layout gives it any gate, or any of a collector's jobs (transmitter,
+// clamp, bin beam); OPTIONAL otherwise, which is a board that only senses tools or one the layout does not use. An optional
+// board that is off raises no problem: "off" is its normal state (the planer's board is powered with the planer), and its
+// tools read as off meanwhile, the safe way round (RFC §5.6a). Derived, never chosen. The primary is never optional.
+// MIRRORS isOptionalBoard() in shop.js — test_shop.cpp ↔ shop.test.js "optional boards", same cases.
+// The layout's id for a PAIRED host: the controller whose id is that host, or whose link.host is. A brain knows its boards
+// by host; a layout may name one differently and point at it, and missing that would call a board with gates optional.
+inline std::string controllerIdForHost(JsonObjectConst doc, const std::string& host) {
+  for (JsonObjectConst c : doc["controllers"].as<JsonArrayConst>()) {
+    const char* id = c["id"] | "";
+    const char* lh = c["link"]["host"] | "";
+    if ((*id && sameBoard(id, host, "")) || (*lh && sameBoard(lh, host, ""))) return id;
+  }
+  return host;
+}
+
+inline bool isOptionalBoard(JsonObjectConst doc, const std::string& controllerId) {
+  if (controllerId.empty()) return false;
+  auto same = [&](JsonVariantConst v) {
+    const char* id = v.as<const char*>();
+    return id && *id && sameBoard(id, controllerId, "");
+  };
+  for (JsonObjectConst c : doc["controllers"].as<JsonArrayConst>())
+    if (same(c["id"]) && _eq(c["role"], "primary")) return false;
+  for (const SystemView& sys : systemsOf(doc))
+    for (JsonObjectConst e : sys.elements) {
+      if (_eq(e["type"], "selector") && same(e["controllerId"])) return false;
+      if (!_eq(e["type"], "collector")) continue;
+      if (same(e["control"]["rf"]["controllerId"]) || same(e["sensor"]["ct"]["controllerId"]) ||
+          same(e["bin"]["sensor"]["controllerId"])) return false;
+    }
+  return true;
 }
 
 } // namespace topo

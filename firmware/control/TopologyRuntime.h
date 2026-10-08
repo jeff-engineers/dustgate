@@ -75,6 +75,7 @@
 #include "NodeBus.h"
 #include "SensorPlan.h"   // what the layout wants watched, resolved once
 #include "NodeLink.h"   // nodelink::kSenseStaleMs — how long a CT reading stays good
+#include <cstdio>
 #include <cstring>
 #include <deque>
 #include <map>
@@ -299,13 +300,12 @@ public:
         std::map<std::string, std::string> hwWas, lastMoveWas;
         std::map<std::string, CollectorState> collectorsWas;
         std::set<std::string> reassertWas;
-        std::string inFlightWas;
-        bool inFlightMakeWas = false;
+        std::map<std::string, InFlightMove> inFlightWas;
         if (carrying) {
             sameGates = unchangedGates(_doc->as<JsonObjectConst>(), doc->as<JsonObjectConst>());
             ctrlWas = _ctrl.memory();
             hwWas = _hwStates; lastMoveWas = _lastMoveOnBoard; collectorsWas = _collectors; reassertWas = _reassert;
-            inFlightWas = _inFlightSystem; inFlightMakeWas = _inFlightIsMake;
+            inFlightWas = _inFlight;
         }
 
         _doc = std::move(doc);
@@ -317,8 +317,9 @@ public:
         // Physical position is unknown after a config change; seed the same way
         // the brain does (every selector at its closed state) so the two agree.
         _hwStates = _ctrl.actuatorStates();
-        _inFlightSystem.clear();
-        _inFlightIsMake = false;
+        _inFlight.clear();
+        _settle.clear();
+        _settleQueue.clear();
         _reassert.clear();
         _lastMoveOnBoard.clear();
         _collectors.clear();
@@ -345,15 +346,27 @@ public:
             }
             for (auto& kv : lastMoveWas) if (sameGates.count(kv.second)) _lastMoveOnBoard.insert(kv);
             for (const std::string& s : reassertWas) if (sameGates.count(s)) _reassert.insert(s);
-            // A move still on the bus belongs to a blower that is still here: keep holding it until the move lands.
-            if (_collectors.count(inFlightWas)) { _inFlightSystem = inFlightWas; _inFlightIsMake = inFlightMakeWas; }
+            // A move still on a bus belongs to a blower that is still here: keep holding it until the move lands.
+            for (auto& kv : inFlightWas) if (_collectors.count(kv.second.systemId)) _inFlight.insert(kv);
         }
         _loaded = true;
         pushSensorConfig();
+        pushServoPulseRange();
         // Re-decide at once against the new layout (a new trip point, a tool moved to another gate, a machine removed),
         // rather than at the next reading — a clamp-sensed tool may not report again until it changes.
         if (carrying) ingest(_ctrl.reconcile());
         return true;
+    }
+
+    // The shop's PWM servo pulse range, from the layout's `servo` block (the Settings page), to every board: the brain's own
+    // servos and every node link, which puts it on each servo SET. Absent or out of bounds is the default
+    // (kDefaultServoMinUs in NodeLink.h) — a range that cannot be right must not reach a servo.
+    void pushServoPulseRange() {
+        if (!_bus || !_doc) return;
+        JsonObjectConst sv = topology()["servo"];
+        int lo = sv["minUs"] | nodelink::kDefaultServoMinUs, hi = sv["maxUs"] | nodelink::kDefaultServoMaxUs;
+        if (!nodelink::servoRangeOk(lo, hi)) { lo = nodelink::kDefaultServoMinUs; hi = nodelink::kDefaultServoMaxUs; }
+        _bus->setServoPulseRange(lo, hi);
     }
 
     // Selectors present in both layouts as the same physical gate (sameHardware()). Ids are unique across the shop.
@@ -380,8 +393,9 @@ public:
         _manual.clear();
         _hwStates.clear();
         _collectors.clear();
-        _inFlightSystem.clear();
-        _inFlightIsMake = false;
+        _inFlight.clear();
+        _settle.clear();
+        _settleQueue.clear();
         _reassert.clear();
         _lastMoveOnBoard.clear();
         _loaded = false;
@@ -426,13 +440,31 @@ public:
     // point ("just run the collector so I can clear a clog"), and letting a poll
     // tick reporting 0 W switch it back off a second later would make the button
     // look broken.
-    void setMachinePower(const std::string& machineId, float watts) {
+    // `via` names what read it, for the [TOOL] line: null is a plug (its watts are shown), "clamp" a current clamp.
+    void setMachinePower(const std::string& machineId, float watts, const char* via = nullptr) {
         if (!_loaded) return;
         if (_manual.count(machineId)) return;
         const bool wasActive = _ctrl.machineWatts(machineId) >= _ctrl.machineThreshold(machineId);
+        const bool nowActive = watts >= _ctrl.machineThreshold(machineId);
         // A tool STARTING (an edge, not a level) ends any hand-switched claim in its systems — see releaseManualsFor().
-        if (!wasActive && watts >= _ctrl.machineThreshold(machineId)) releaseManualsFor(machineId);
+        if (!wasActive && nowActive) releaseManualsFor(machineId);
+        if (wasActive != nowActive) sayTool(machineId, nowActive, via, watts);
         ingest(_ctrl.setMachinePower(machineId, watts));
+    }
+
+    // ── THE [TOOL] LINE (2026-10-08) ──────────────────────────────────────────
+    // One line when a tool crosses its trip point, either way: "[TOOL] Miter saw on (812 W)". With the move and press
+    // lines already in the log, it is what lets one start be timed end to end — tool on → SET → STATE → PRESS — without
+    // guessing where the time went ("collector slow to start", TODO.md). The shells hand in their console.
+    void setSay(void (*say)(const std::string&)) { _say = say; }
+    void sayTool(const std::string& machineId, bool on, const char* via, float watts) {
+        if (!_say) return;
+        const char* nm = machineDoc(topology(), machineId)["name"] | "";
+        char how[32];
+        if (via) std::snprintf(how, sizeof(how), " (%s)", via);
+        else if (on) std::snprintf(how, sizeof(how), " (%.0f W)", watts);
+        else how[0] = '\0';
+        _say(std::string("[TOOL] ") + (*nm ? nm : machineId.c_str()) + (on ? " on" : " off") + how);
     }
 
     // USING ANOTHER TOOL ENDS A HAND-SWITCHED ONE (jeff, 2026-10-06). A manual claim is a person saying "run this", and
@@ -509,8 +541,10 @@ public:
     bool setMachineManual(const std::string& machineId, bool on) {
         if (!_loaded) return false;
         if (!hasMachine(machineId)) return false;
+        const bool wasActive = _ctrl.machineWatts(machineId) >= _ctrl.machineThreshold(machineId);
         if (on) { releaseManualsFor(machineId); _manual.insert(machineId); }
         else    _manual.erase(machineId);
+        if (wasActive != on) sayTool(machineId, on, "by hand", 0.0f);
         // Comfortably over any plausible thresholdW; off returns it to 0 W, which
         // is also what a plug reports for a machine at rest.
         ingest(_ctrl.setMachinePower(machineId, on ? manualWattsFor(_ctrl.machineThreshold(machineId)) : 0.0f));
@@ -686,55 +720,32 @@ public:
             }
         }
 
-        // At most one move per pass, and never while the bus is busy — that IS
-        // the current mutex.
-        if (!_bus->busy()) {
-            _inFlightSystem.clear();
-            _inFlightIsMake = false;
-            if (!_queue.empty()) {
-                QueuedMove q = _queue.front();
-                _queue.pop_front();
-                const Move& m = q.move;
-                // Issued (or failed) — either way it is no longer owed. A failed
-                // re-assert is recorded like any failed move, not retried forever.
-                _reassert.erase(m.selectorId);
-                JsonObjectConst sel = selectorById(m.selectorId);
-                // `_failed` is wiped by every re-decision (ingest), which is every
-                // poll tick — so on its own a failure was on the status for a few
-                // hundred ms. `_stuck` keeps it until that selector next moves.
-                auto fail = [&](const char* why) {
-                    FailedMove f{q.systemId, m.selectorId, m.toState, why, m.isBreak};
-                    _failed.push_back(f);
-                    _stuck[m.selectorId] = f;
-                };
-                if (sel.isNull()) {
-                    fail("unknown selector");
-                } else if (!_bus->onlineFor(sel)) {
-                    fail("controller offline");
-                } else if (!_bus->setState(m.selectorId.c_str(), sel, m.toState.c_str())) {
-                    fail("actuator rejected move");
-                } else {
-                    _stuck.erase(m.selectorId);
-                    _hwStates[m.selectorId] = m.toState;   // commanded → hardware truth
-                    _lastMoveOnBoard[_str(sel["controllerId"])] = m.selectorId;
-                    _inFlightSystem = q.systemId;
-                    _inFlightIsMake = !m.isBreak;
-                }
-            }
+        // ONE MOVE PER BOARD, NOT PER SHOP (2026-10-08, jeff). The servo mutex is about a SUPPLY, and every board has its
+        // own: a second servo starting on the same 5 V rail is what browns a board out, a servo on another board is not.
+        // So each board runs one move at a time and different boards move together. MAKE-BEFORE-BREAK still binds across
+        // boards: a closing move waits until every opening move of its system has LANDED, wherever it is, or a gate could
+        // close before the one replacing it is open. A board busy with anything (a setup jog too) takes nothing new.
+        // Moves of one board keep their queue order: once one waits, the board's later ones wait behind it.
+        for (auto it = _inFlight.begin(); it != _inFlight.end();) {
+            ActuatorBus* b = _bus->busForController(it->second.controllerId.c_str());
+            if (!b || !b->busy()) it = _inFlight.erase(it); else ++it;
         }
+        runSettle();
+        std::set<std::string> taken;   // boards that start nothing this pass
+        for (auto& kv : _inFlight) taken.insert(bareHost(kv.second.controllerId.c_str()));
+        issueFrom(_queue, taken);
+        issueFrom(_settleQueue, taken);
 
-        // START A BLOWER ONCE ITS SYSTEM'S OPENS HAVE LANDED — not once the whole
-        // queue is empty (changed 2026-09-28). The make is what guarantees air has
-        // somewhere to go; a break still queued only closes some OTHER gate, and
-        // cannot seal a path that is already open (make-before-break). Waiting for
-        // every break was harmless while a switch-on moved one or two gates, but a
-        // switch-on now re-asserts every servo gate in the system, and holding the
-        // blower off while five gates re-close one at a time would leave the tool
-        // cutting without extraction for no reason. Checked per system, as before.
+        // START A BLOWER ONCE ITS SYSTEM HAS SOMEWHERE FOR THE AIR TO GO. It used to wait for this system's opening
+        // moves to land every time — 1-3 s on every start (a 90° sweep is 2 s, then the board holds 1 s before it reports
+        // arrival), and that is most of "the collector is slow to start". But the shop RESTS OPEN: idle leaves the last
+        // tool's gate where it was, and make-before-break keeps it open until the new one has landed. So when a gate is
+        // already open — not moving, believed open — the blower starts at once; only a SEALED system (a fresh boot with
+        // every gate believed closed, or after a dead-head stop) waits for its make. Never dead-head is unchanged.
         for (auto& kv : _collectors) {
             CollectorState& c = kv.second;
-            if (makePending(kv.first)) continue;
             if (!c.desired || c.deadHeadRisk || anyMakeFailed(kv.first)) continue;
+            if (makePending(kv.first) && !openPathNow(kv.first)) continue;
             // A blower started BY HAND has no routing plan behind it to guarantee
             // an open path, so the guarantee is checked here instead, at the
             // moment of starting and after its opening moves have drained.
@@ -743,13 +754,148 @@ public:
         }
     }
 
+    // Issue what may start this pass from one queue (see update()). Erases what it issues or fails.
+    void issueFrom(std::deque<QueuedMove>& q, std::set<std::string>& taken) {
+        for (auto it = q.begin(); it != q.end();) {
+            const Move& m = it->move;
+            JsonObjectConst sel = selectorById(m.selectorId);
+            const std::string cid = sel.isNull() ? std::string() : _str(sel["controllerId"]);
+            const std::string key = bareHost(cid.c_str());
+            if (taken.count(key)) { ++it; continue; }
+            ActuatorBus* b = sel.isNull() ? nullptr : _bus->busFor(sel);
+            if (b && b->busy()) { taken.insert(key); ++it; continue; }            // still moving something of its own
+            if (m.isBreak && makeOwed(it->systemId)) { taken.insert(key); ++it; continue; }
+            taken.insert(key);
+            // Issued (or failed) — either way it is no longer owed. A failed
+            // re-assert is recorded like any failed move, not retried forever.
+            _reassert.erase(m.selectorId);
+            // `_failed` is wiped by every re-decision (ingest), which is every
+            // poll tick — so on its own a failure was on the status for a few
+            // hundred ms. `_stuck` keeps it until that selector next moves.
+            const std::string sysId = it->systemId;
+            auto fail = [&](const char* why) {
+                FailedMove f{sysId, m.selectorId, m.toState, why, m.isBreak};
+                _failed.push_back(f);
+                _stuck[m.selectorId] = f;
+            };
+            if (sel.isNull()) {
+                fail("unknown selector");
+            } else if (!_bus->onlineFor(sel)) {
+                fail("controller offline");
+            } else if (!_bus->setState(m.selectorId.c_str(), sel, m.toState.c_str())) {
+                fail("actuator rejected move");
+            } else {
+                _stuck.erase(m.selectorId);
+                _hwStates[m.selectorId] = m.toState;   // commanded → hardware truth
+                _lastMoveOnBoard[cid] = m.selectorId;
+                _inFlight[m.selectorId] = InFlightMove{sysId, cid, !m.isBreak};
+            }
+            it = q.erase(it);
+        }
+    }
+
+    // Is an opening move of this system queued (routing or settle) or under way? A close waits for these.
+    bool makeOwed(const std::string& systemId) const {
+        if (makePending(systemId)) return true;
+        for (const QueuedMove& q : _settleQueue) if (q.systemId == systemId && !q.move.isBreak) return true;
+        return false;
+    }
+
+    // Is a gate of this system open RIGHT NOW: not moving, and believed open? An unknown position is not open.
+    bool openPathNow(const std::string& systemId) const {
+        for (const SystemView& sys : systemsOf(topology())) {
+            if (std::string(sys.id ? sys.id : "") != systemId) continue;
+            for (JsonObjectConst e : sys.elements) {
+                if (!_eq(e["type"], "selector")) continue;
+                const std::string id = _str(e["id"]);
+                if (_inFlight.count(id)) continue;
+                auto it = _hwStates.find(id);
+                const char* closed = _closedState(e);
+                if (it == _hwStates.end() || it->second.empty()) continue;
+                if (!closed || it->second != std::string(closed)) return true;
+            }
+        }
+        return false;
+    }
+
+    // ── SETTLE AT BOOT (2026-10-08, jeff) ─────────────────────────────────────
+    // After a layout loads from nothing — the brain starting, or a first layout — each system opens ONE gate and
+    // closes the rest, so the shop never sits sealed: a person may switch a collector on by hand before any tool runs,
+    // and an open gate is also what lets the first tool's blower start at once (see update()). Which gate does not
+    // matter; it is the path to the system's first machine, as a hand-started blower uses. Waits until every board of
+    // the system is linked (a board that is not cannot move), and a tool or a hand start taking the system first ends
+    // it: routing re-asserts every gate then anyway. The shells call this; adopt() does not, so a save never moves a gate.
+    void settleAtBoot() {
+        if (!_loaded) return;
+        for (const SystemView& sys : systemsOf(topology())) _settle.insert(sys.id ? sys.id : "");
+    }
+
+    void runSettle() {
+        for (auto it = _settle.begin(); it != _settle.end();) {
+            const std::string sysId = *it;
+            auto cit = _collectors.find(sysId);
+            if (cit == _collectors.end() || cit->second.desired || cit->second.running || cit->second.manualRun) {
+                dropSettle(sysId); it = _settle.erase(it); continue;     // a tool or a person has this system now
+            }
+            if (!systemBoardsOnline(sysId)) { ++it; continue; }
+            queueSettle(sysId);
+            it = _settle.erase(it);
+        }
+    }
+    void dropSettle(const std::string& systemId) {
+        for (auto it = _settleQueue.begin(); it != _settleQueue.end();)
+            if (it->systemId == systemId) it = _settleQueue.erase(it); else ++it;
+    }
+    bool systemBoardsOnline(const std::string& systemId) const {
+        for (const SystemView& sys : systemsOf(topology())) {
+            if (std::string(sys.id ? sys.id : "") != systemId) continue;
+            for (JsonObjectConst e : sys.elements)
+                if (_eq(e["type"], "selector") && !_bus->onlineFor(e)) return false;
+        }
+        return true;
+    }
+    void queueSettle(const std::string& systemId) {
+        // The system's first machine in document order with an enabled port here.
+        auto ports = portsByMachine(topology());
+        std::string target;
+        for (const std::string& mid : machineIds(topology())) {
+            auto pit = ports.find(mid);
+            if (pit == ports.end()) continue;
+            for (const PortRef& pr : pit->second) if (pr.systemId == systemId && portEnabled(pr.port)) { target = mid; break; }
+            if (!target.empty()) break;
+        }
+        if (target.empty()) return;   // nothing to open toward
+        const ShopRouting r = routeShop(topology(), std::vector<std::string>{target});
+        std::map<std::string, std::string> want = _hwStates;
+        std::set<std::string> every;
+        for (const SystemView& sys : systemsOf(topology())) {
+            if (std::string(sys.id ? sys.id : "") != systemId) continue;
+            for (JsonObjectConst e : sys.elements) {
+                if (!_eq(e["type"], "selector")) continue;
+                const std::string id = _str(e["id"]);
+                every.insert(id);                              // each gate is COMMANDED, whatever we believe
+                auto st = r.states.find(id);
+                if (st != r.states.end()) want[id] = st->second;
+            }
+        }
+        std::map<std::string, bool> running;
+        for (auto& kv : _collectors) running[kv.first] = kv.second.running;
+        for (const SystemPlan& p : planShopTransition(topology(), _hwStates, want, running, &every))
+            if (p.systemId == systemId)
+                for (const Move& m : p.moves) {
+                    _settleQueue.push_back(QueuedMove{systemId, m});
+                    _ctrl.noteState(m.selectorId, m.toState);   // what the status shows, as routing's moves do
+                }
+    }
+
     // True while there are moves queued or one in flight (anywhere in the shop).
-    bool transitioning() const { return !_inFlightSystem.empty() || !_queue.empty(); }
+    bool transitioning() const { return !_inFlight.empty() || !_queue.empty() || !_settleQueue.empty(); }
 
     // True while THIS system still has moves pending or in flight.
     bool transitioning(const std::string& systemId) const {
-        if (_inFlightSystem == systemId) return true;
+        for (auto& kv : _inFlight) if (kv.second.systemId == systemId) return true;
         for (const QueuedMove& q : _queue) if (q.systemId == systemId) return true;
+        for (const QueuedMove& q : _settleQueue) if (q.systemId == systemId) return true;
         return false;
     }
 
@@ -1104,6 +1250,9 @@ private:
             const SystemPlan* plan = nullptr;
             for (const SystemPlan& p : plans) if (p.systemId == sysId) { plan = &p; break; }
 
+            // A system a tool or a person has taken is routing's now: a boot settle still waiting for it is moot.
+            if (c.desired || c.manualRun) { dropSettle(sysId); _settle.erase(sysId); }
+
             if (!c.desired && c.manualRun) {
                 // Running by hand. Held exactly like an idle system — its gates
                 // stay where they are and its moves are not queued — but the
@@ -1178,7 +1327,7 @@ private:
     // Is an OPENING move for this system still queued or moving? The collector
     // waits for these, and only these — see update().
     bool makePending(const std::string& systemId) const {
-        if (_inFlightIsMake && _inFlightSystem == systemId) return true;
+        for (auto& kv : _inFlight) if (kv.second.isMake && kv.second.systemId == systemId) return true;
         for (const QueuedMove& q : _queue)
             if (q.systemId == systemId && !q.move.isBreak) return true;
         return false;
@@ -1225,7 +1374,8 @@ private:
                 // Unknown position counts as CLOSED. Nothing has been commanded,
                 // so the honest answer is "we don't know", and guessing "open"
                 // here is the guess that starts a blower into a sealed system.
-                if (it == _hwStates.end()) continue;
+                // "" is unknown too (a slider moved for setup, TopologyRuntime::driveLinearTo).
+                if (it == _hwStates.end() || it->second.empty()) continue;
                 if (!closed || it->second != std::string(closed)) return true;
             }
         }
@@ -1502,7 +1652,7 @@ private:
                     setCollectorPlug(p.systemId, on ? kCollectorRunningW * 2.0f : 0.0f, reported, onFor);
                     continue;
                 }
-                setMachinePower(p.id, on ? manualWattsFor(_ctrl.machineThreshold(p.id)) : 0.0f);
+                setMachinePower(p.id, on ? manualWattsFor(_ctrl.machineThreshold(p.id)) : 0.0f, "clamp");
             } else if (p.kind == PlannedSensor::Kind::Bin) {
                 // BINS a node watches. A reading only counts while it is fresh; a bin whose board
                 // has gone quiet keeps its LAST verdict rather than flipping to "not full", and one
@@ -1572,8 +1722,14 @@ private:
     std::map<std::string, CollectorState> _collectors;   // systemId → blower
     // Which system owns the move currently in flight ("" = none). Only that
     // system's blower is held back by it.
-    std::string                          _inFlightSystem;
-    bool                                 _inFlightIsMake = false;   // an OPEN is moving — see makePending()
+    // The moves under way, one per board at most: selectorId → its system, its board, and whether it OPENS (see update()).
+    struct InFlightMove { std::string systemId, controllerId; bool isMake; };
+    std::map<std::string, InFlightMove>  _inFlight;
+    void (*_say)(const std::string&) = nullptr;   // the shell's console, for the [TOOL] line (setSay)
+    // Settling a layout loaded from nothing (settleAtBoot): systems still to settle, and their moves. Kept apart from
+    // _queue because ingest() rebuilds that from scratch on every reading.
+    std::set<std::string>                _settle;
+    std::deque<QueuedMove>               _settleQueue;
     // Servo selectors to command on the next plan even if we BELIEVE they are
     // already right — filled on a machine's rising edge (markReassert), emptied
     // as each one's move is issued. Kept HERE rather than in one plan because

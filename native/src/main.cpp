@@ -114,6 +114,7 @@ static void raiseDeviceProblems(uint32_t now) {
     for (auto& kv : g_hub->nodes()) {
         const auto h = kv.second->session.health();
         topo::BoardView b; b.host = kv.first; b.linked = h.linked; b.refused = h.refused; b.downForMs = h.downForMs; b.moveFault = h.moveFault;
+        b.optional = g_rt.loaded() && topo::isOptionalBoard(g_rt.topology(), topo::controllerIdForHost(g_rt.topology(), kv.first));
         boards.push_back(b);
     }
     std::vector<topo::PlugView> plugs;
@@ -210,7 +211,9 @@ static void savePairs() {
 // 2 = save it WITHOUT rotating .bak (restoring from .bak: the copy beside it is the good one and must not be replaced by the damaged file).
 static bool adoptLayout(const std::string& json, int persist = 1) {
     std::string err;
+    const bool fromNothing = !g_rt.loaded();   // boot, or a first layout: settle it (TopologyRuntime::settleAtBoot)
     if (!g_rt.adopt(json.data(), json.size(), err)) { g_topoErr = err; return false; }
+    if (fromNothing) g_rt.settleAtBoot();
     g_topoErr.clear(); g_topoJson = json;
     rebuildPressers();
     syncPlugs();
@@ -948,8 +951,19 @@ static std::string guessIp() {
 }
 
 // The address and the broadcast are read at each send, not captured: the beacon is how a node finds a brain that MOVED.
+// Is a board the shop NEEDS down? Only those hurry the beacon: an optional board (a planer's sensor board, powered with the
+// planer) is off for days at a time and would otherwise keep it at 5 s forever (docs/optional-nodes-plan.md).
+static bool requiredBoardDown() {
+    for (auto& kv : g_hub->nodes()) {
+        if (kv.second->session.online()) continue;
+        if (g_rt.loaded() && topo::isOptionalBoard(g_rt.topology(), topo::controllerIdForHost(g_rt.topology(), kv.first))) continue;
+        return true;
+    }
+    return false;
+}
+
 static void beaconLoop(net::io_context& io, std::shared_ptr<udp::socket> sock, std::shared_ptr<net::steady_timer> t) {
-    const uint32_t every = g_hub->anyDown() ? 5000 : 60000;
+    const uint32_t every = requiredBoardDown() ? 5000 : 60000;
     t->expires_after(std::chrono::milliseconds(every));
     t->async_wait([&io, sock, t](beast::error_code ec) {
         if (ec) return;
@@ -1005,6 +1019,7 @@ int main(int argc, char** argv) {
     }
     for (auto& nid : ids) hub.add(nid, "");
     g_rt.begin(&hub.bus());
+    g_rt.setSay([](const std::string& l) { dglog::line(l); });   // the [TOOL] line
     if (!stateDir.empty()) {
         g_topoPath = stateDir + "/topology.json";
         // The layout, from the file or, if it will not load (truncated by a power cut under an older build, or damaged), from the

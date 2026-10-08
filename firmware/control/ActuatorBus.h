@@ -91,6 +91,10 @@ public:
     // Pump any deferred work. Called every main-loop pass.
     virtual void update() {}
 
+    // The shop's PWM servo pulse range (NodeLink.h, kDefaultServoMinUs): what angle 0 and 180 map to. A local bus applies
+    // it to its own servos; a node link sends it on every servo SET. Default: a bus with no PWM servos ignores it.
+    virtual void setServoPulseRange(int minUs, int maxUs) { (void)minUs; (void)maxUs; }
+
     // ── SENSING, which most buses cannot do ────────────────────────────────
     //
     // A bus moves things. A board at the far end of one may ALSO watch a CT

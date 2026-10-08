@@ -15,6 +15,7 @@ public:
     bool busy() const override { return _s.busy(); }
     bool setState(const char* id, JsonObjectConst sel, const char* st) override { return _s.setState(id, sel, st); }
     bool jog(int ch, int angle, bool detach) override { return _s.jog(ch, angle, detach); }
+    void setServoPulseRange(int minUs, int maxUs) override { _s.setServoPulseRange(minUs, maxUs); }
     void configureSensors(JsonArrayConst a) override { _s.configureSensors(a); }
     bool senseOf(const char* id, bool& on, uint32_t& at) const override { return _s.senseOf(id, on, at); }
     bool pollsPlugs() const override { return _s.pollsPlugs(); }

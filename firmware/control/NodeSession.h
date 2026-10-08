@@ -249,6 +249,7 @@ public:
         if (!nodelink::buildSetFrame(doc.to<JsonObject>(), ++_seq, selectorId, sel, stateId)) {
             return false;   // uncalibrated — refuse rather than send a guess
         }
+        if (_servoMinUs && _eq(doc["drive"], "servo")) { doc["minUs"] = _servoMinUs; doc["maxUs"] = _servoMaxUs; }
         std::string s; serializeJson(doc, s);
         if (s.size() >= sizeof(_txFrame)) return false;
         nodelink::strlcpy_(_txFrame, s.c_str(), sizeof(_txFrame));
@@ -261,6 +262,11 @@ public:
         return true;
     }
 
+    // The shop's servo pulse range, put on every servo SET and jog from here on (NodeLink.h, kDefaultServoMinUs).
+    void setServoPulseRange(int minUs, int maxUs) {
+        if (nodelink::servoRangeOk(minUs, maxUs)) { _servoMinUs = minUs; _servoMaxUs = maxUs; }
+    }
+
     bool jog(int channel, int angle, bool detach) {
         // A detach has no counterpart on the wire and needs none: holdAtRest is false on a jog, so
         // the node's ServoActuator de-energises on its own once the sweep settles. Reported as
@@ -271,7 +277,8 @@ public:
         if (channel < 0 || channel > 15 || angle < 0 || angle > 180) return false;
         // Hand-built rather than routed through buildSetFrame(): that resolves a stateId against a
         // selector's calibration, and a jog is what you do BEFORE there is any calibration.
-        StaticJsonDocument<256> doc;
+        // 384, not 256: ArduinoJson drops an overflowing member SILENTLY, and the pulse range was exactly that (2026-10-07).
+        StaticJsonDocument<384> doc;
         JsonObject o = doc.to<JsonObject>();
         o["t"]          = "SET";
         o["seq"]        = ++_seq;
@@ -281,6 +288,7 @@ public:
         o["channel"]    = channel;
         o["angle"]      = angle;
         o["holdAtRest"] = false;
+        if (_servoMinUs) { o["minUs"] = _servoMinUs; o["maxUs"] = _servoMaxUs; }
         std::string s; serializeJson(doc, s);
         if (s.size() >= sizeof(_txFrame)) return false;
         nodelink::strlcpy_(_txFrame, s.c_str(), sizeof(_txFrame));
@@ -654,6 +662,7 @@ private:
     bool     _connected    = false;   // an accepted WELCOME, until the transport drops
     uint32_t _lastRxMs     = 0;       // any frame or pong; drives the PONG timeout
     uint32_t _seq          = 0;
+    int      _servoMinUs   = 0, _servoMaxUs = 0;   // the shop's servo pulse range; 0 = not set (SETs go without one)
     bool     _moveOutstanding = false;
     const char* _moveFault    = nullptr;   // static string; see Health::moveFault
     uint32_t _moveStartedMs   = 0;

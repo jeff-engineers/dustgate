@@ -96,3 +96,10 @@ export function migrateToShop(topology: Topology, opts?: { systemId?: string; sy
 export function isShop(doc: unknown): boolean;
 /** Accept either shape, return a shop. */
 export function asShop(doc: unknown, opts?: { systemId?: string; systemName?: string }): Shop;
+
+/** The shop's PWM servo pulse range (the layout's `servo` block, or the default). */
+export function servoPulseRange(shop: unknown): { minUs: number; maxUs: number };
+/** What a servo pulse range may be: each end within min..max µs, at least `span` apart. */
+export const SERVO_PULSE_BOUNDS: { min: number; max: number; span: number };
+/** Can the shop lose this board without losing anything but a reading? See shop.js. */
+export function isOptionalBoard(shop: unknown, controllerId: string): boolean;

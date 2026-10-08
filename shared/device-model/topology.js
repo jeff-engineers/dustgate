@@ -112,32 +112,6 @@ const MAX_SLIDE_BRANCHES = 8;
  * @property {'primary'|'secondary'} role
  * @property {string} [name]
  * @property {string} [board]
- * @property {boolean} [intermittent]  this board is EXPECTED to come and go.
- *                                   Absent means false — a board that vanishes
- *                                   is a fault worth showing, which is right
- *                                   for every board that existed before this.
- *
- *                                   Set for a board powered from the tool it
- *                                   watches (RFC §5.6a): the planer is not
- *                                   energised all the time, so its node drops
- *                                   off whenever the machine is switched off at
- *                                   the wall. That is normal, and the primary
- *                                   already reads a missing sensor as "tool
- *                                   off" — which fails the right way, since a
- *                                   tool wrongly believed off means a dusty
- *                                   shop where the opposite default runs the
- *                                   collector forever.
- *
- *                                   The flag does not change that behaviour. It
- *                                   changes whether anyone is TOLD. Without it
- *                                   the node-offline warning fires every time
- *                                   the planer is switched off, which is how a
- *                                   real dead board gets trained away — the
- *                                   flag is what keeps the warning meaning
- *                                   something on the boards that don't carry
- *                                   it. A CHOICE, unlike `drives`: nothing on
- *                                   the board can know whether its own power is
- *                                   supposed to be intermittent.
  * @property {'servo'|'linear'} [drives]  what this board is FLASHED to drive:
  *                                   'servo' = the four-channel PWM bank,
  *                                   'linear' = one serial-bus sliding gate.
@@ -329,13 +303,6 @@ function validateTopology(t) {
     if (!CONTROLLER_ROLES.includes(c.role)) err('controller', `bad role "${c.role}"`, c.id);
     if (c.drives !== undefined && !CONTROLLER_DRIVES.includes(c.drives))
       err('controller', `bad drives "${c.drives}" (servo|linear)`, c.id);
-    if (c.intermittent !== undefined && typeof c.intermittent !== 'boolean')
-      err('controller', 'intermittent must be a boolean', c.id);
-    // A primary that comes and goes is not an intermittent board, it is a shop
-    // that stops working — nothing routes while the brain is off. Refusing it
-    // here beats discovering it as a silent non-fault.
-    if (c.intermittent && c.role === 'primary')
-      err('controller', 'the primary cannot be intermittent', c.id);
     if (c.role === 'primary') primaries++;
     if (c.link !== undefined) {
       if (typeof c.link !== 'object' || c.link === null) err('controller', 'link must be an object', c.id);

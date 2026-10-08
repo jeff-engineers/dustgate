@@ -229,6 +229,11 @@ public:
     }
   }
 
+  // Where a gate has been sent OUTSIDE routing (the boot settle, TopologyRuntime::queueSettle), so the status reports it.
+  void noteState(const std::string& selectorId, const std::string& stateId) {
+    if (_actuatorStates.count(selectorId)) _actuatorStates[selectorId] = stateId;
+  }
+
   const ShopRouting& lastRouting() const { return _lastRouting; }
   const std::map<std::string, bool>& collectorOn() const { return _collectorOn; }
   bool collectorOn(const std::string& systemId) const {

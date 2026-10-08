@@ -30,6 +30,21 @@ namespace nodelink {
 
 static const int kVersion = 1;   // NODELINK_VERSION in nodelink.js
 
+// THE PWM SERVO PULSE RANGE (2026-10-07): the pulse widths that angle 0 and angle 180 map to, for every PWM servo in the
+// shop. Shop-wide because a shop buys its servos as one multipack (jeff), set on the Settings page and kept in the layout
+// (`servo: {minUs, maxUs}`), and carried on every servo SET so a node uses the brain's number, not its own. The DEFAULT
+// is what applies when the layout says nothing — 400–2600, wider than the 500–2500 it replaced, because the MG995s in the
+// shop turn further than 500–2500 reaches. The BOUNDS refuse a frame whole on both sides. PAIR: DEFAULT_SERVO_MIN_US /
+// DEFAULT_SERVO_MAX_US / MIN_SERVO_US / MAX_SERVO_US / MIN_SERVO_SPAN_US in nodelink.js — see CLAUDE.md.
+static const int kDefaultServoMinUs = 400;
+static const int kDefaultServoMaxUs = 2600;
+static const int kMinServoUs        = 300;    // the shortest pulse either end may ask for
+static const int kMaxServoUs        = 2800;   // ...and the longest
+static const int kMinServoSpanUs    = 500;    // maxUs - minUs at least this: a narrower range is a typo, not a servo
+inline bool servoRangeOk(int minUs, int maxUs) {
+    return minUs >= kMinServoUs && maxUs <= kMaxServoUs && maxUs - minUs >= kMinServoSpanUs;
+}
+
 static const unsigned long kPingIntervalMs  = 2000;
 static const unsigned long kPongTimeoutMs   = 6000;
 static const unsigned long kReconnectMinMs  = 1000;
@@ -413,6 +428,7 @@ struct SetCommand {
     float    positionMm;   // !isServo
     bool     holdAtRest;
     bool     home;         // !isServo: find the datum again before this move (SetFrame.home in nodelink.js)
+    int      minUs, maxUs; // isServo: the pulse range to map the angle over; 0 = not sent (keep what the node has)
 };
 
 // Parse + VALIDATE a SET frame. A secondary must never act on a malformed
@@ -441,6 +457,14 @@ inline bool parseSetFrame(JsonObjectConst f, SetCommand& out, const char*& err) 
         out.angle = f["angle"].as<int>();
         if (out.angle < 0 || out.angle > 180) { err = "angle out of range"; return false; }
         if (f.containsKey("home") && (f["home"] | false)) { err = "home is for a linear drive"; return false; }
+        // The pulse range, optional and both-or-neither (a brain from before 2026-10-07 sends neither). Typed and bounded
+        // like every other number here: a garbled range would drive every servo on the board somewhere unasked.
+        out.minUs = out.maxUs = 0;
+        if (f.containsKey("minUs") || f.containsKey("maxUs")) {
+            if (!f["minUs"].is<int>() || !f["maxUs"].is<int>()) { err = "minUs and maxUs must both be whole numbers"; return false; }
+            out.minUs = f["minUs"].as<int>(); out.maxUs = f["maxUs"].as<int>();
+            if (!servoRangeOk(out.minUs, out.maxUs))       { err = "servo pulse range out of bounds"; return false; }
+        }
         out.isServo    = true;
         out.holdAtRest = f["holdAtRest"] | false;
         out.positionMm = 0.0f;
@@ -481,6 +505,7 @@ inline bool parseSetFrame(JsonObjectConst f, SetCommand& out, const char*& err) 
         out.angle      = 0;
         out.holdAtRest = false;
         out.home       = f["home"] | false;
+        out.minUs = out.maxUs = 0;
         return true;
     }
     err = "drive must be servo|linear";

@@ -461,6 +461,29 @@ function setCollectorManual(d, systemId, on, nowMs = Date.now()) {
   return reconcile(d, nowMs);
 }
 
+/**
+ * SETTLE AT BOOT (2026-10-08): after a layout loads from nothing, each system with nothing running opens ONE gate — the
+ * path to its first machine — and closes the rest, so the shop never sits sealed (a person may start a collector by hand
+ * before any tool runs). Mirrors TopologyRuntime::settleAtBoot(), which also waits for a system's boards to link; the
+ * model has no boards, so it settles at once. layout-save.test.js ↔ test_layout_save.cpp "a first layout settles".
+ */
+function settleAtBoot(d) {
+  const shop = d.topology;
+  const ports = S.portsByMachine(shop);
+  for (const sys of S.systemsOf(shop)) {
+    const c = d.collectors[sys.id];
+    if (!c || c.on || c.manual) continue;
+    const target = (shop.machines || []).map((m) => m.id)
+      .find((mid) => (ports.get(mid) || []).some((pp) => pp.systemId === sys.id && S.portEnabled(pp.port)));
+    if (!target) continue;
+    const routing = S.routeShop(shop, [target]);
+    for (const sel of T.selectorsOf(S.systemView(shop, sys))) {
+      if (sel.id in routing.states) d.actuatorStates[sel.id] = routing.states[sel.id];
+    }
+  }
+  return d;
+}
+
 /** Is this system's blower running because a person switched it on? */
 const collectorIsManual = (d, systemId) => !!(d.collectors[systemId] || {}).manual;
 
@@ -598,7 +621,7 @@ module.exports = {
   setBinFull, collectorBinView,
   COLLECTOR_RUNNING_W, COLLECTOR_SPINUP_GRACE_MS, collectorPlugState,
   machineThreshold, collectorOffDelayMs,
-  createTopologyDevice, sameHardware, activeMachines, reconcile, setMachinePower, statusView,
+  createTopologyDevice, sameHardware, settleAtBoot, activeMachines, reconcile, setMachinePower, statusView,
   tickCollector, anyCollectorOn, anyCollectorCoasting,
   setCollectorManual, collectorIsManual, setCollectorPlugFault,
   PROBLEM_TEXT, setProblem, clearProblem, problemsView,

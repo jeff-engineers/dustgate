@@ -270,25 +270,23 @@ int main(int argc, char** argv) {
     ok("and the loser's gate is shut on the OTHER board",
        joined(node2.log) == "gate2->closed", joined(node2.log));
 
-    // The current mutex is global: a busy local bus stalls a remote move too.
-    // Switching back to toolY is what needs the remote gate opened again — and
-    // it has to be a rising EDGE to count as newest, so it stops first. Setting
-    // an already-active tool to the same watts is not a restart and does not
-    // reorder anything (see activationSeq).
+    // ONE MOVE PER BOARD, NOT PER SHOP (2026-10-08): the mutex is about a board's own supply, so a busy local bus no
+    // longer stalls a move on another board — but make-before-break still binds ACROSS boards: the local close waits
+    // until the remote open has landed. Switching back to toolY is what needs the remote gate opened again — and it has
+    // to be a rising EDGE to count as newest, so it stops first (see activationSeq).
     rt.setToolPower("toolY", 0);
     drain(rt, {&local, &node2});
     local.log.clear(); node2.log.clear();
     local.moving = true;
-    rt.setToolPower("toolY", 200);        // newest again → wants gate2->open
+    rt.setToolPower("toolY", 200);        // newest again → wants gate2->open, then gate1->closed
     rt.update(); rt.update();
-    ok("busy local bus blocks a remote move", node2.log.empty(), joined(node2.log));
-    local.settle();
+    ok("a busy board does not hold up a move on another board", joined(node2.log) == "gate2->open", joined(node2.log));
+    local.settle();                       // the local board is free; node2's open is still moving
+    rt.update(); rt.update();
+    ok("...but the local close still waits for that open to land", local.log.empty(), joined(local.log));
+    node2.settle();
     drain(rt, {&local, &node2});
-    ok("remote move proceeds once the local bus frees up",
-       joined(node2.log) == "gate2->open", joined(node2.log));
-    // Make-before-break held across the boards: the remote gate opened, and only
-    // then did the local one close.
-    ok("and the local gate closes only after it", joined(local.log) == "gate1->closed",
+    ok("and goes once it has (make-before-break across boards)", joined(local.log) == "gate1->closed",
        joined(local.log));
   }
 
@@ -627,6 +625,22 @@ int main(int argc, char** argv) {
         ok("the builder sets it only when asked", (f1["home"] | false) && !f2.containsKey("home"));
       }
       ok("absent means no", parse(R"({"t":"SET","seq":1,"selectorId":"g","stateId":"s","drive":"linear","channel":0,"positionMm":10})", c4) && !c4.home);
+
+      // THE SERVO PULSE RANGE (2026-10-07). Same cases as nodelink.test.js, same order, literals asserted.
+      ok("the default range is 400-2600", topo::nodelink::kDefaultServoMinUs == 400 && topo::nodelink::kDefaultServoMaxUs == 2600);
+      ok("the bounds are 300-2800, at least 500 wide",
+         topo::nodelink::kMinServoUs == 300 && topo::nodelink::kMaxServoUs == 2800 && topo::nodelink::kMinServoSpanUs == 500);
+      const char* base = R"({"t":"SET","seq":1,"selectorId":"g","stateId":"open","drive":"servo","channel":0,"angle":90)";
+      auto with = [&](const char* tail) { return std::string(base) + tail; };
+      topo::nodelink::SetCommand r1, r2, r3, r4, r5, r6, r7;
+      ok("a servo SET may carry the range", parse(with(R"(,"minUs":400,"maxUs":2600})").c_str(), r1));
+      ok("...and it rides the frame", r1.minUs == 400 && r1.maxUs == 2600);
+      ok("a SET without one is still valid", parse(with("}").c_str(), r2) && r2.minUs == 0 && r2.maxUs == 0);
+      ok("half a range is rejected", !parse(with(R"(,"minUs":400})").c_str(), r3));
+      ok("a pulse below 300 is rejected", !parse(with(R"(,"minUs":299,"maxUs":2600})").c_str(), r4));
+      ok("a pulse above 2800 is rejected", !parse(with(R"(,"minUs":400,"maxUs":2801})").c_str(), r5));
+      ok("a range narrower than 500 is rejected", !parse(with(R"(,"minUs":1200,"maxUs":1600})").c_str(), r6));
+      ok("a fractional pulse is rejected", !parse(with(R"(,"minUs":400.5,"maxUs":2600})").c_str(), r7));
     }
   }
 

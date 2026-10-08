@@ -13,6 +13,7 @@
 //   • a gate the save changed is forgotten (seeded closed); one it only renamed is kept
 //   • a new trip point takes effect at once, and a tool now under it coasts down like one switched off
 //   • a FIRST layout, or one after a reset, still starts from nothing
+//   • ...and a first layout settles: one gate open per system, the rest closed, blowers off
 //   • sameHardware(): everything but the name, with key order and 90 vs 90.0 not counting as changes
 //
 // Build + run via tools/ script `firmware:layoutsave:test`.
@@ -182,6 +183,17 @@ int main(int argc, char** argv) {
     ok("a layout after a reset has the blower off", !r.rt.collectorOn("big"));
     ok("...and the gate closed", r.gate("bv-jnt") == "closed");
     ok("...and no tool running", r.rt.activeMachines().empty());
+  }
+
+  // ── a first layout settles (2026-10-08) ────────────────────────────────────
+  {
+    Rig r; r.adopt(shopJson);
+    r.rt.settleAtBoot();
+    for (int i = 0; i < 20; i++) { r.rt.update(1000); r.local.settle(); }
+    ok("a first layout settles: the path to the first machine opens", r.gate("bv-cab") == "open", r.gate("bv-cab"));
+    ok("...every other gate closed", r.gate("bv-jnt") == "closed", r.gate("bv-jnt"));
+    ok("...and the other system settles too", r.gate("man") != "home", r.gate("man"));
+    ok("...with every blower off", !r.rt.collectorOn("big") && !r.rt.collectorOn("small"));
   }
 
   // ── sameHardware ───────────────────────────────────────────────────────────
