@@ -76,7 +76,7 @@ interface RawEl { [k: string]: unknown; }
           <span class="sep">—</span> Device setup</span>
         <span class="badge" [class.ok]="hasPlug && !!ip" [class.todo]="!hasPlug || !ip"
               [title]="hasPlug && ip
-                 ? 'A smart outlet is paired, so DustGate switches this automatically.'
+                 ? 'A smart outlet is paired, so DustGate sees when this runs.'
                  : 'No smart outlet — you switch this on yourself.'">
           {{ hasPlug && ip ? 'Paired' : 'No outlet' }}
         </span>
@@ -94,12 +94,14 @@ interface RawEl { [k: string]: unknown; }
              console error to find it by. Shipped exactly that way for one flash,
              2026-09-16. Any Angular expression containing an apostrophe has to be
              double-quoted. -->
-        <span>How does DustGate know it's running?</span>
+        <!-- A yes/no question with yes/no answers. It asked "How does DustGate know it's running?" and offered Yes and
+             No (jeff, 2026-10-07). The three-way form of the question, plug / clamp / nothing, is on the Tools screen. -->
+        <span>Is it on a smart plug?</span>
         <div class="yesno">
           <button [class.on]="hasPlug" (click)="hasPlug = true"
-                  title="Pair a smart outlet, so DustGate knows when this is running">Yes</button>
+                  title="Pair the metering plug it is on, so DustGate sees when it runs">Yes, a metering plug</button>
           <button [class.on]="!hasPlug" (click)="hasPlug = false"
-                  title="No smart outlet — you switch this on yourself from the shop list">No</button>
+                  title="No plug: you switch it on yourself from the shop list">No, I switch it on myself</button>
         </div>
       </div>
 

@@ -67,6 +67,14 @@ public:
         DynamicJsonDocument d(2048);
         if (f && !deserializeJson(d, f)) for (JsonPair kv : d.as<JsonObject>()) _prevUrl[kv.key().c_str()] = kv.value().as<std::string>();
     }
+    // This brain's address moved. Every plug it owns is still pushing to the old one, so each is claimed again with the new URL:
+    // the ownership rule reads a plug pointed at a stale DustGate address that carries OUR name as ours, and repairs it. Until
+    // the repair lands a plug's reading goes quiet and the poller falls back to asking it (kPushQuietMs).
+    void retarget(const outletops::Self& self, const std::string& wsUrl) {
+        std::lock_guard<std::mutex> g(_m);
+        _self = self; _wsUrl = wsUrl;
+        for (auto& kv : _slots) { kv.second->provisioned = false; kv.second->pushed = false; kv.second->provisionAtMs = 0; }
+    }
     // A plug's outbound WebSocket arrived, spoke, or went away (the /shelly-rpc endpoint calls these from the network thread).
     void pushConnect(const std::string& ip) {
         std::lock_guard<std::mutex> g(_m);

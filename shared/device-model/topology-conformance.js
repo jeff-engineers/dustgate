@@ -75,6 +75,9 @@ async function run() {
 
   // 2. PUT/GET roundtrip + initial status.
   {
+    // From NOTHING: a layout that replaces one carries over what is still true (a save is not a reboot, 2026-10-07), so
+    // "initial" only means initial on a brain with no layout. Against a real device that has one, clear it first.
+    await req('DELETE', '/api/topology');
     const r = await req('PUT', '/api/topology', twoGatesShop);
     check('PUT twoGates → ok', r.status === 200 && r.json?.ok === true, `status=${r.status}`);
     const g = await req('GET', '/api/topology');

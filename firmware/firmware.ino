@@ -1142,6 +1142,9 @@ static topo::CollectorPresser* g_pressers[COLLECTOR_COUNT] = {nullptr};
 // pressWithRepeats(), which a presser on a node does not have. Not owning: g_pressers is.
 static RfCollectorPresser*     g_localRf[COLLECTOR_COUNT]  = {nullptr};
 static topo::PressState    g_pressState[COLLECTOR_COUNT];
+// Which blower and which transmitter each slot's press state belongs to ("<system>|<board or pin>|<address>|<data>"), so
+// a layout save can keep it for the same remote — see syncTopologyOutlets().
+static std::string         g_pressKey[COLLECTOR_COUNT];
 
 static void clearPressers() {
     for (int i = 0; i < COLLECTOR_COUNT; i++) {
@@ -1149,6 +1152,7 @@ static void clearPressers() {
         g_pressers[i]   = nullptr;
         g_localRf[i]    = nullptr;
         g_pressState[i] = topo::PressState();
+        g_pressKey[i].clear();
     }
 }
 
@@ -1158,7 +1162,11 @@ static bool g_dcHave[COLLECTOR_COUNT]     = {false};
 static void syncTopologyOutlets() {
     JsonObjectConst doc = g_topoRuntime.topology();
     for (int i = 0; i < COLLECTOR_COUNT; i++) g_dcHave[i] = false;
-    // Pressers are rebuilt below from whatever the new layout names.
+    // Pressers are rebuilt below from whatever the new layout names. A SAVE IS NOT A REBOOT (TopologyRuntime::adopt): the
+    // press bookkeeping says whether WE started a blower, and a fresh one reads every running blower as started by a
+    // person, which nothing then presses off. It is kept for the same system pressed by the same transmitter.
+    std::map<std::string, topo::PressState> keptPress;
+    for (int i = 0; i < COLLECTOR_COUNT; i++) if (!g_pressKey[i].empty()) keptPress[g_pressKey[i]] = g_pressState[i];
     clearPressers();
 
     // Walk MACHINES, not tool elements. A machine owns the plug, and a machine
@@ -1255,17 +1263,23 @@ static void syncTopologyOutlets() {
             // board to key ITS pad (PRESS) — which is what lets the board at the collector be
             // an ordinary node. The policy stays here either way.
             const std::string rfBoard = rf["controllerId"] | "";
+            const std::string tail = "|" + std::to_string((int)rfAddr) + "|" + std::to_string((int)rfData);
+            // Said when a layout loads, so it must not read like an event: nothing is pressed here.
             if (!topo::isOwnBoard(rfBoard, g_nodeBus.ownControllerId())) {
                 g_pressers[i] = new topo::RemoteRfPresser(&g_nodeBus, rfBoard, rfAddr, rfData, rfTick, rfReps);
+                g_pressKey[i] = sysIds[i] + "|" + rfBoard + tail;
                 DEBUG_PRINT(F("[RF] Collector ")); DEBUG_PRINT((int)i);
-                DEBUG_PRINT(F(" pressed by RF through board ")); DEBUG_PRINTLN(rfBoard.c_str());
+                DEBUG_PRINT(F(": its remote is keyed through board ")); DEBUG_PRINTLN(rfBoard.c_str());
             } else if (pin >= 0) {
                 RfCollectorPresser* local = new RfCollectorPresser(pin, rfAddr, rfData, rfTick, (uint16_t)rfReps);
                 g_pressers[i] = local;
                 g_localRf[i]  = local;
+                g_pressKey[i] = sysIds[i] + "|pin" + std::to_string(pin) + tail;
                 DEBUG_PRINT(F("[RF] Collector ")); DEBUG_PRINT((int)i);
-                DEBUG_PRINT(F(" pressed by RF on pin ")); DEBUG_PRINTLN(pin);
+                DEBUG_PRINT(F(": its remote is keyed on pin ")); DEBUG_PRINTLN(pin);
             }
+            auto kept = keptPress.find(g_pressKey[i]);
+            if (!g_pressKey[i].empty() && kept != keptPress.end()) g_pressState[i] = kept->second;
         }
 
         // The SENSE-ONLY plug watching this blower, which is a different device

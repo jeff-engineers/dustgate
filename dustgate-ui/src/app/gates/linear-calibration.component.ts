@@ -2,20 +2,25 @@ import { Component, EventEmitter, Input, OnDestroy, OnInit, Output } from '@angu
 import { CommonModule } from '@angular/common';
 import { Subscription } from 'rxjs';
 import { ApiService, SystemStatus } from '../services/api.service';
+import { MANIFOLD_PROFILES } from '@device-model';
 import type { Topology } from '@topology';
-import { LinearSelector, positionLabels } from './selector-types';
+import { LinearSelector, controllersOf, positionLabels } from './selector-types';
 
 // ── Sliding gate calibration ─────────────────────────────────────────────────
 // Same physical procedure a slider has always needed — home, confirm which end that
 // was, sweep the rail, then place each outlet — writing into the TOPOLOGY element
 // (linear.calibration + states[].positionMm).
 //
-// It drives the hardware over the motion endpoints (/api/home, /api/calibrate,
-// /api/jog, /api/setstop), which address the stepper directly rather than by
-// selector id. That's unambiguous today: the schema allows at most ONE linear
-// selector per controller (MAX_LINEAR_PER_HOST), and only the primary board has a
-// stepper wired. A slider hosted on a SECONDARY board would need selector-addressed
-// endpoints first — see the firmware staging notes in docs/ui-design.md.
+// The BRAIN'S OWN rack is driven over the motion endpoints (/api/home, /api/calibrate,
+// /api/jog, /api/setstop), which address it directly rather than by selector id.
+//
+// A slider on a NODE (2026-10-07) is driven by selector id instead (/api/linear/goto):
+// a SET already carries a distance in mm, and a node with no datum homes itself before
+// its first move. Its own sweep is local and reports nothing back, so the home, side
+// and measure steps are skipped: each outlet starts where the manifold's spacing puts
+// it and is nudged and captured as usual. The first move homes the gate, so it says so.
+// Before this, the page drove only the brain's own rack, and on a Pi (which has none)
+// every step said "Couldn't reach the gate" while the board showed green.
 //
 // Unlike the servo widget, millimetres ARE shown: a distance along a rail is
 // something a woodworker can measure and sanity-check, where a servo angle is an
@@ -27,12 +32,15 @@ import { LinearSelector, positionLabels } from './selector-types';
 const COARSE_MM = 10;
 const FINE_MM = 1;
 
-/** Manifold profiles offered during calibration. Mirrors MANIFOLD_PROFILES in device-model.js;
- *  a Rockler ships in 2-gate units, so its outlet count must be even. */
-const MANIFOLDS: Array<{ id: string; label: string; pitchMm: number | null; evenOnly: boolean }> = [
-  { id: 'rockler-2.5', label: 'Rockler 2½" manifold', pitchMm: 82.9, evenOnly: true },
-  { id: 'rockler-4',   label: 'Rockler 4" manifold',  pitchMm: 127,  evenOnly: true },
-  { id: 'custom',      label: 'Something else',       pitchMm: null, evenOnly: false },
+/** Manifold profiles offered during calibration, with the geometry READ from MANIFOLD_PROFILES in device-model.js. It
+ *  used to be copied here and had drifted (82.9 mm against the 83.57 the 2.5" rack was corrected to on hardware).
+ *  A Rockler ships in 2-gate units, so its outlet count must be even. */
+const MANIFOLDS: Array<{ id: string; label: string; pitchMm: number | null; firstMm: number; evenOnly: boolean }> = [
+  { id: 'rockler-2.5', label: 'Rockler 2½" manifold', pitchMm: MANIFOLD_PROFILES['rockler-2.5'].gatePitchMm,
+    firstMm: MANIFOLD_PROFILES['rockler-2.5'].firstGateOffsetMm, evenOnly: true },
+  { id: 'rockler-4',   label: 'Rockler 4" manifold',  pitchMm: MANIFOLD_PROFILES['rockler-4'].gatePitchMm,
+    firstMm: MANIFOLD_PROFILES['rockler-4'].firstGateOffsetMm, evenOnly: true },
+  { id: 'custom',      label: 'Something else',       pitchMm: null, firstMm: 1, evenOnly: false },
 ];
 
 type Phase = 'manifold' | 'home' | 'side' | 'sweep' | 'positions' | 'review';
@@ -103,7 +111,8 @@ type Phase = 'manifold' | 'home' | 'side' | 'sweep' | 'positions' | 'review';
       <!-- ── 1. which manifold ────────────────────────────────────────────── -->
       <ng-container *ngIf="phase === 'manifold'">
         <h3>What's the gate built on?</h3>
-        <p class="sub">This sets the spacing the sweep uses to place your {{ outletCount }} outlets.</p>
+        <p class="sub" *ngIf="!nodeMode">This sets the spacing the sweep uses to place your {{ outletCount }} outlets.</p>
+        <p class="sub" *ngIf="nodeMode">This sets where your {{ outletCount }} outlets start. You'll line each one up next.</p>
         <button class="opt" *ngFor="let m of manifolds" [class.sel]="m.id === model" (click)="model = m.id">
           <div style="flex:1">
             {{ m.label }}
@@ -112,7 +121,7 @@ type Phase = 'manifold' | 'home' | 'side' | 'sweep' | 'positions' | 'review';
           <span *ngIf="m.id === model">✓</span>
         </button>
         <p class="warn" *ngIf="oddWarning">{{ oddWarning }}</p>
-        <div class="nav"><button class="next" (click)="phase = 'home'">Next →</button></div>
+        <div class="nav"><button class="next" (click)="nodeMode ? startOnNode() : (phase = 'home')">Next →</button></div>
       </ng-container>
 
       <!-- ── 2. home ──────────────────────────────────────────────────────── -->
@@ -164,9 +173,16 @@ type Phase = 'manifold' | 'home' | 'side' | 'sweep' | 'positions' | 'review';
         </div>
 
         <h3>Outlet {{ index + 1 }}<span *ngIf="detail(st)" style="font-weight:400"> — {{ detail(st) }}</span></h3>
-        <p class="sub">
+        <p class="sub" *ngIf="!nodeMode">
           The sweep already put it about here. Nudge until the opening lines up with the
           port, then capture it.
+        </p>
+        <p class="sub" *ngIf="nodeMode">
+          The manifold's spacing puts it about here. Nudge until the opening lines up with the
+          port, then capture it.
+        </p>
+        <p class="warn" *ngIf="nodeMode && moving">
+          Moving{{ firstMove ? ' — finding home first: it runs to the end of the rail, then out to the outlet. Keep clear.' : '…' }}
         </p>
 
         <div class="readout">{{ liveMm.toFixed(1) }} mm</div>
@@ -236,6 +252,12 @@ export class LinearCalibrationComponent implements OnInit, OnDestroy {
   /** stateId → millimetres from home, as captured. */
   positions = new Map<string, number>();
 
+  /** The slider lives on a node, not on the brain: driven by selector id (see the header). */
+  nodeMode = false;
+  /** A setup move is under way on the node (homing included). */
+  moving = false;
+  /** No move has been sent yet this visit: the first one may home the gate. */
+  firstMove = true;
   private labels = new Map<string, string>();
   private cal: { stepsPerMm: number; measuredSpanSteps: number; homeIsMaxEndstop: boolean } | null = null;
   private sub = new Subscription();
@@ -248,7 +270,10 @@ export class LinearCalibrationComponent implements OnInit, OnDestroy {
     this.model = this.sel.linear?.calibration?.manifoldModel ?? 'rockler-2.5';
     for (const s of this.movable) if (typeof s.positionMm === 'number') this.positions.set(s.id, s.positionMm);
     this.spanMm = this.estimateSpan();
-    this.sub.add(this.api.status$.subscribe((s) => this.onStatus(s)));
+    const primaryId = controllersOf(this.topo).find((c) => c.role === 'primary')?.id;
+    this.nodeMode = !!this.sel.controllerId && this.sel.controllerId !== primaryId;
+    // The brain's own rack reports where it is in the status; a node's does not, so node mode keeps its own reading.
+    if (!this.nodeMode) this.sub.add(this.api.status$.subscribe((s) => this.onStatus(s)));
   }
 
   ngOnDestroy(): void { this.sub.unsubscribe(); }
@@ -331,9 +356,42 @@ export class LinearCalibrationComponent implements OnInit, OnDestroy {
     void this.driveTo(0);
   }
 
+  // ── a slider on a node: straight to placing the outlets ────────────────────
+  /** Seed each outlet from the manifold's geometry — outlet 1 next to the home end, then one pitch apart — then send the
+   *  gate home and on to the first. Positions are KEPT only when they were captured by hand on a node before: anything
+   *  else in the layout is a default, and the canvas's old one put every outlet a whole gate too far out (outlet 4 past
+   *  the end of a 4-gate rack, which jammed it, 2026-10-07). */
+  startOnNode(): void {
+    const m = MANIFOLDS.find((x) => x.id === this.model);
+    const pitch = m?.pitchMm ?? 80, first = m?.firstMm ?? 1;
+    const keep = this.sel.linear?.calibration?.setUpOn === 'node';
+    this.movable.forEach((st, i) => { if (!keep || !this.positions.has(st.id)) this.positions.set(st.id, first + i * pitch); });
+    this.spanMm = Math.max(this.spanMm, ...[...this.positions.values()].map((mm) => mm + pitch));
+    this.index = 0; this.error = ''; this.phase = 'positions';
+    this.firstMove = true;   // the first move finds home again: a datum from before a jam is not one to calibrate against
+    void this.driveTo(0);
+  }
+
+  /** One setup move on the node, and the wait for it to land (the first may home the gate: minutes on a long rack). */
+  private async goOnNode(mm: number): Promise<boolean> {
+    const target = Math.max(0, Math.round(mm * 10) / 10);
+    try { await this.api.linearGoto(this.sel.id, target, this.firstMove); }
+    catch (e: unknown) {
+      this.error = (e as { error?: { error?: string } })?.error?.error ?? this.reach;
+      return false;
+    }
+    this.liveMm = target; this.moving = true;
+    try {
+      for (let i = 0; i < 1500 && await this.api.gateMoving(); i++) await new Promise((r) => setTimeout(r, 200));
+    } catch { /* the move was sent; a missed poll only means we stop waiting */ }
+    this.moving = false; this.firstMove = false;
+    return true;
+  }
+
   // ── phase 5: place each outlet ────────────────────────────────────────────
   async jog(mm: number): Promise<void> {
     if (this.busy) return;
+    if (this.nodeMode) { this.busy = true; this.error = ''; await this.goOnNode(this.liveMm + mm); this.busy = false; return; }
     this.busy = true; this.error = '';
     try { await this.api.jog(mm); }
     catch { this.error = this.reach; }
@@ -345,6 +403,14 @@ export class LinearCalibrationComponent implements OnInit, OnDestroy {
   async capture(): Promise<void> {
     const st = this.current();
     if (!st || this.busy) return;
+    if (this.nodeMode) {
+      // Nothing to save on the node: its positions live in the layout, and the next SET carries them.
+      this.positions.set(st.id, this.liveMm);
+      if (this.index >= this.movable.length - 1) { this.phase = 'review'; return; }
+      this.index++;
+      await this.driveTo(this.index);
+      return;
+    }
     this.busy = true; this.error = '';
     try {
       // The pitch of the rack being calibrated, not a shop-wide setting: the
@@ -375,7 +441,7 @@ export class LinearCalibrationComponent implements OnInit, OnDestroy {
 
   async stepBack(): Promise<void> {
     if (this.index > 0) { this.index--; await this.driveTo(this.index); return; }
-    this.phase = 'sweep';
+    this.phase = this.nodeMode ? 'manifold' : 'sweep';
   }
 
   // ── phase 6: review ───────────────────────────────────────────────────────
@@ -384,6 +450,16 @@ export class LinearCalibrationComponent implements OnInit, OnDestroy {
   redo(): void { this.index = 0; this.error = ''; this.phase = 'positions'; void this.driveTo(0); }
 
   finish(): void {
+    if (this.nodeMode) {
+      const states = this.sel.states.map((s) =>
+        s.isClosed ? s : { ...s, positionMm: Math.round((this.positions.get(s.id) ?? 0) * 10) / 10 });
+      this.saved.emit({
+        ...this.sel, states,
+        linear: { ...this.sel.linear,
+          calibration: { stepsPerMm: 0, measuredSpanSteps: 0, homeIsMaxEndstop: false, manifoldModel: this.model, setUpOn: 'node' } },
+      });
+      return;
+    }
     const cal = this.cal ?? this.sel.linear?.calibration;
     if (!cal || !cal.measuredSpanSteps) {
       this.error = 'Measure the rail before saving — that\'s what tells us how far it can travel.';
@@ -409,6 +485,13 @@ export class LinearCalibrationComponent implements OnInit, OnDestroy {
   // ── helpers ───────────────────────────────────────────────────────────────
   private async driveTo(i: number): Promise<void> {
     if (this.busy) return;
+    if (this.nodeMode) {
+      const st = this.movable[i];
+      this.busy = true; this.error = '';
+      if (st) await this.goOnNode(this.positions.get(st.id) ?? 0);
+      this.busy = false;
+      return;
+    }
     this.busy = true;
     try { await this.api.moveToStop(i + 1); } catch { /* non-fatal: the user can jog */ }
     finally { this.busy = false; }

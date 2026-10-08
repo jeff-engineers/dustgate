@@ -1749,6 +1749,13 @@ void loop() {
 #endif
 #if HAS_LINEAR
         if (!cmd.isServo) {
+            // ASKED TO FIND HOME AGAIN (SET.home, 2026-10-07): setting the slider up from the app starts here, because a
+            // datum left over from before a jam or a slipped pinion is a count nobody should calibrate against. Drop it
+            // and take the ordinary home-then-move path below. A sweep already running is left alone: it IS a fresh home.
+            if (cmd.home && g_homing != HOME_RUNNING) {
+                Serial.println(F("[MOVE] asked to find home again before this move"));
+                g_homing = HOME_NEEDED;
+            }
             if (g_homing == HOME_DONE) {
                 motor.moveTo((long)(cmd.positionMm * ST3215_COUNTS_PER_MM * -HOME_DIRECTION));
                 Serial.print(F("[MOVE] Slider -> ")); Serial.print(cmd.positionMm, 1);

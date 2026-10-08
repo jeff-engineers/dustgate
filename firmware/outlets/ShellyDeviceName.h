@@ -13,7 +13,7 @@
 #include <ArduinoJson.h>
 
 inline std::string fetchShellyName(const char* url, const char* jsonPath) {
-    const plughttp::Reply r = plughttp::get(url, OUTLET_HTTP_TIMEOUT_MS);
+    const plughttp::Reply r = plughttp::get(url, OUTLET_HTTP_TIMEOUT_MS, OUTLET_HTTP_TIMEOUT_MS);   // connect too: see ShellyGen2Outlet::doPoll()
 
     std::string name;
     if (r.code == 200) {

@@ -75,6 +75,15 @@ const eq = (name, got, want) =>
         NL.validateFrame(linear, 'p2s').length > 0);
   eq('linear SET with positionMm passes',
      NL.validateFrame({ ...linear, positionMm: 120.5 }, 'p2s'), []);
+
+  // HOME FIRST (2026-10-07): setting a slider up starts from a fresh datum. Same cases as the "home first" block of
+  // test_nodebus.cpp, same order.
+  eq('a linear SET may ask to find home first', NL.validateFrame({ ...linear, positionMm: 10, home: true }, 'p2s'), []);
+  check('a home that is not true|false is rejected', NL.validateFrame({ ...linear, positionMm: 10, home: 'yes' }, 'p2s').length > 0);
+  check('home on a servo SET is rejected', NL.validateFrame({ ...good, home: true }, 'p2s').length > 0);
+  const sel = star.elements.find((e) => e.id === 'sel');
+  check('the builder sets it only when asked', NL.set(1, sel, 'a', 10, { home: true }).home === true && NL.set(1, sel, 'a', 10).home === undefined);
+  check('absent means no', NL.validateFrame({ ...linear, positionMm: 10 }, 'p2s').length === 0 && !('home' in { ...linear, positionMm: 10 }));
 }
 
 // ── direction is enforced: a secondary can't send a SET ─────────────────────

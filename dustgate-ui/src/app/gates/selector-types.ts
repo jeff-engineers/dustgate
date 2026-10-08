@@ -59,6 +59,9 @@ export interface LinearCalibration {
   measuredSpanSteps: number;
   homeIsMaxEndstop: boolean;
   manifoldModel: string;
+  /** 'node': set up on a slider that lives on a NODE (2026-10-07). The node homes itself and measures nothing the brain
+   *  can read, so stepsPerMm/measuredSpanSteps are 0 ("not measured") and the outlets' captured positions ARE the setup. */
+  setUpOn?: 'node';
 }
 
 export interface LinearState {
@@ -236,8 +239,12 @@ export function isConfigurableSelector(
  */
 export function isCalibrated(sel: ConfigurableSelector): boolean {
   if (isServoKind(sel)) return typeof sel.servo?.referenceAngle === 'number';
-  const span = (sel as LinearSelector).linear?.calibration?.measuredSpanSteps;
-  return typeof span === 'number' && span > 0;
+  const lin = sel as LinearSelector;
+  const span = lin.linear?.calibration?.measuredSpanSteps;
+  if (typeof span === 'number' && span > 0) return true;
+  // A slider on a node: every outlet placed by hand, which is all a SET to a node carries.
+  return lin.linear?.calibration?.setUpOn === 'node'
+    && lin.states.filter((s) => !s.isClosed).every((s) => typeof s.positionMm === 'number');
 }
 
 /**

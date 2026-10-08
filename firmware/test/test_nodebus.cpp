@@ -604,6 +604,29 @@ int main(int argc, char** argv) {
         ok("...and keeps its position", okParse && !cmd.isServo &&
            cmd.positionMm > 95.3f && cmd.positionMm < 95.5f);
       }
+
+      // HOME FIRST (2026-10-07). Same cases as nodelink.test.js, same order.
+      auto parse = [](const char* j, topo::nodelink::SetCommand& c) {
+        DynamicJsonDocument in(512); deserializeJson(in, j); const char* e = nullptr;
+        return topo::nodelink::parseSetFrame(in.as<JsonObjectConst>(), c, e);
+      };
+      topo::nodelink::SetCommand c1, c2, c3, c4;
+      ok("a linear SET may ask to find home first",
+         parse(R"({"t":"SET","seq":1,"selectorId":"g","stateId":"s","drive":"linear","channel":0,"positionMm":10,"home":true})", c1) && c1.home);
+      ok("a home that is not true|false is rejected",
+         !parse(R"({"t":"SET","seq":1,"selectorId":"g","stateId":"s","drive":"linear","channel":0,"positionMm":10,"home":"yes"})", c2));
+      ok("home on a servo SET is rejected",
+         !parse(R"({"t":"SET","seq":1,"selectorId":"g","stateId":"open","drive":"servo","channel":0,"angle":10,"home":true})", c3));
+      {
+        DynamicJsonDocument sel(512);
+        deserializeJson(sel, R"({"kind":"linear","states":[{"id":"a","positionMm":10}],"homeFirst":true})");
+        DynamicJsonDocument f1(512), f2(512);
+        topo::nodelink::buildSetFrame(f1.to<JsonObject>(), 1, "g", sel.as<JsonObjectConst>(), "a");
+        sel.remove("homeFirst");
+        topo::nodelink::buildSetFrame(f2.to<JsonObject>(), 1, "g", sel.as<JsonObjectConst>(), "a");
+        ok("the builder sets it only when asked", (f1["home"] | false) && !f2.containsKey("home"));
+      }
+      ok("absent means no", parse(R"({"t":"SET","seq":1,"selectorId":"g","stateId":"s","drive":"linear","channel":0,"positionMm":10})", c4) && !c4.home);
     }
   }
 

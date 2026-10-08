@@ -110,7 +110,10 @@ drifted constantly. Now `shared/device-model/` is the spec:
 
   The reference pair has company now: `manual-blower.test.js` ↔
   `firmware/test/test_manual_blower.cpp` covers running a blower by hand, and the
-  two assert the same cases in the same order for the same reason. The reference
+  two assert the same cases in the same order for the same reason. So does
+  `layout-save.test.js` ↔ `test_layout_save.cpp` (2026-10-07): a layout save is not
+  a reboot — what the new layout leaves standing (readings, blowers, and a gate's
+  position when `sameHardware()` says it is the same gate) carries over. The reference
   pair itself grew on 2026-09-14 to cover the CONFIG and SENSE frames — same
   rules, same order, same literal numbers on both sides.
 

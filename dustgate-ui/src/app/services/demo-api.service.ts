@@ -205,7 +205,8 @@ export class DemoApiService extends ApiService {
     // A shop only, like the mock and the firmware: validateShop refuses a schemaVersion-1 document.
     const v = validateShop(topology);
     if (!v.ok) throw new Error('invalid topology: ' + JSON.stringify(v.errors));
-    this.td = createTopologyDevice(topology);
+    // A save is not a reboot: the running tools, the blowers and the gates the save left alone carry over, as on the brains.
+    this.td = createTopologyDevice(topology, this.td);
     this.syncHasLinear();
     // Whatever this shop is paired to is on the simulated network from here on,
     // the same as the mock does on PUT. See adoptOutlets().
@@ -303,6 +304,10 @@ export class DemoApiService extends ApiService {
     this.pushStatus();
     return { ok: true };
   }
+
+  // The demo has no node: a setup move lands at once.
+  override async linearGoto(_selectorId: string, _mm: number, _home = false): Promise<{ ok: boolean }> { return { ok: true }; }
+  override async gateMoving(): Promise<boolean> { return false; }
 
   override async moveToStop(stop: number): Promise<{ ok: boolean }> {
     const durMs = model.beginMove(this.d, stop);

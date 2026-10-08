@@ -14,6 +14,65 @@ of this file is being able to answer "did we already decide this, and why".
 
 Newest first.
 
+### Pi bring-up and the bug search, 2026-10-06 / 07 (branch `pi-brain-bringup`)
+
+- **A layout save is not a reboot.** LANDED 2026-10-07, host- and e2e-tested, not yet seen in the shop. Every adopt used to start
+  the brain from nothing, on both brains and in the JS model: the blower the brain had started then read as one a PERSON had
+  started (its press bookkeeping reset), so nothing ever pressed it off; a hand-switched tool kept its "manual" flag and lost its
+  watts; every running tool read as switching on again. Now `TopologyRuntime::adopt` carries what the new layout leaves standing —
+  readings and switch-on order by machine, each blower's state by system, the press bookkeeping for the same remote (both shells),
+  and a gate's position only when it is the same physical gate (`sameHardware()`: everything but its name). A gate the save
+  changed is seeded closed, as before, so a blower whose open gate was edited mid-cut still gets the dead-head stop. Mirrored in
+  `createTopologyDevice(doc, prev)`; `layout-save.test.js` ↔ `test_layout_save.cpp` are a new pair, and `e2e.sh` saves mid-run
+  and expects the OFF press (it fails on the old brain). This reverses a deliberate earlier rule ("physical position is unknown
+  after a config change") for the gates a change did NOT touch — that is the contested part.
+
+- **The ESP32 no longer lets any web page read its API key.** LANDED 2026-10-06. `GET /api/info` hands out the key by design (the
+  app bootstraps from it), and every response said `Access-Control-Allow-Origin: *`, so any page open on a phone on the shop WiFi
+  could read the key and drive the shop. The CORS headers (and the preflight answer) are gone from the ESP32, the native brain and
+  the mock: the app is same-origin and `dev.sh live` proxies, so nothing needed them. Do not add them back for a dev convenience.
+  DNS rebinding is still open (TODO.md).
+
+- **Plug requests one at a time.** LANDED 2026-10-06. The Plugs page pinged every paired plug at once; the ESP32 serves those from
+  ONE pending slot and ONE reply, so all but one row read "not answering" (built against the native brain, which did not mind).
+  The page now asks one plug at a time, the ESP32 answers a second concurrent ping / rename / release / plug scan with a 429
+  instead of a wrong or cut body (as node discovery and the servo jog already did), and the canvas releases removed plugs one at
+  a time. The page also stopped leaking its 2 s poll when left before it finished loading.
+
+- **A dead Shelly no longer stalls every other plug.** LANDED 2026-10-06. Shelly GETs passed no connect timeout, so an unplugged
+  one cost the platform's whole budget (5 s on the native brain) on every poll pass, delaying every other polled plug's reading.
+  `plughttp::get()` now has no default for the connect timeout — every call names one — and the Shelly calls pass their read
+  timeout as both, as Tasmota always did. A candidate for "collector slow to start", still open in TODO.md.
+
+- **A slider on a node can be set up from the app.** LANDED 2026-10-07, host-tested, NOT yet run on a slider. The slider page and
+  the Gates list's Test drove only the brain's own rack (`/api/home`, `/api/jog`...), so on the Pi every step said "Couldn't
+  reach the gate". `POST /api/linear/goto` / `GET /api/linear/state` (api/ApiCore.h) drive a slider by selector id with an
+  ordinary SET carrying the distance (`TopologyRuntime::driveLinearTo`); the node homes itself on the first move. The page skips
+  home / side / measure for a node, seeds each outlet from the manifold spacing, and saves `calibration.setUpOn: 'node'`.
+  Afterwards routing treats that gate's position as unknown, so the next tool moves it.
+
+- **The Pi's plug picker shows live draw, and not the Pi.** LANDED 2026-10-07. On the native brain `discover` returned the last
+  sweep's rows, frozen, so "switch it on and look" could not work; it now re-asks each found plug in parallel, and sweeps first if
+  nothing has been swept since boot. The sweep no longer knocks on the brain's own address and port (it answered every path with
+  the app and was listed as an unclaimed plug).
+
+- **A board too old to dial in says so.** LANDED 2026-10-07. Found with `dustgate-planer-sensor` (`8d58d3c`): it takes the claim and
+  then waits to be dialled, which the native brain never does, so it "paired and lost connection". The claim reads `caps.join`,
+  logs "too old to dial a brain … Reflash it by USB" and raises a `board-fault` until it links.
+
+- **The canvas's tool sheet asks a yes/no question.** LANDED 2026-10-07. It asked "How does DustGate know it's running?" and offered
+  Yes / No; it now asks "Is it on a smart plug?" (Yes, a metering plug / No, I switch it on myself), and its badge no longer says
+  DustGate "switches" the tool. The three-way question (plug / clamp / nothing) stays on the Tools screen; making the two one
+  component is still the outlet-picker duplication item in TODO.md.
+
+- **The GUI sweep that "did not find a Tasmota" (2026-09-16).** Settled by `Find plugs` (since 2026-10-06 the Plugs page), which
+  sweeps regardless of the layout and shows claimed plugs with their owner rather than hiding them — the open question in that
+  entry. Sweeps on the Pi have since found both shop Tasmotas.
+
+- **Smaller:** the `[RF] collector … pressed by RF through board …` line printed at every layout load now says "its remote is keyed
+  through board …" (it read as a press at the Pi's first boot); the Gates list's save error no longer claims the setup was "saved on
+  the gate".
+
 ### Cleanup 2026-10-06 — legacy API, schemaVersion 1, shared constants
 
 - **Clamp switch, delete a system, Clear shop, and the Plugs page.** LANDED 2026-10-06 from the mockup

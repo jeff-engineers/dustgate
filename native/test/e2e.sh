@@ -46,6 +46,18 @@ check "pairing adds a node live" '[ "$(nodeids)" = fake1,fake2,fake3 ]'
 curl -s -m 3 -H "X-Api-Key: testkey" -X POST -d '{"host":"fake3","remove":true}' localhost:$P/api/nodes/pair >/dev/null
 check "unpairing removes it" '[ "$(nodeids)" = fake1,fake2 ]'
 check "a request without the key is refused" '[ "$(curl -s -m 2 -o /dev/null -w %{http_code} localhost:$P/api/nodes)" = 401 ]'
+# A SAVE IS NOT A REBOOT (TopologyRuntime::adopt). Saving the layout while tools run used to reset the brain: the blower it
+# had started read as a stranger's, and this open-loop collector (no plug watches it) was pressed AGAIN — a toggle, so OFF,
+# mid-cut. Now nothing is pressed by a save, and the blower is still the brain's to stop once the tools do.
+presses() { grep -c '"t":"PRESS"' "$T/f1.log"; }
+before=$(presses)
+check "the layout is saved again while tools run" '[ "$(curl -s -m 3 -H "X-Api-Key: testkey" -X PUT --data-binary @$T/layout.json localhost:$P/api/topology)" = "{\"ok\":true}" ]'
+sleep 2
+check "...and the save presses nothing" '[ "$(presses)" = "$before" ]'
+curl -s -m 3 -H "X-Api-Key: testkey" -X POST -d '{"machineId":"toolX","watts":0}' localhost:$P/api/dev/power >/dev/null
+curl -s -m 3 -H "X-Api-Key: testkey" -X POST -d '{"machineId":"toolY","watts":0}' localhost:$P/api/dev/power >/dev/null
+for i in $(seq 1 40); do [ "$(presses)" -gt "$before" ] && break; sleep 0.3; done
+check "when the tools stop after the save, the brain presses its blower OFF" '[ "$(presses)" = $((before + 1)) ]'
 curl -s -m 3 -H "X-Api-Key: testkey" -X POST -d '{"paused":true}' localhost:$P/api/nodes/pause >/dev/null
 for i in $(seq 1 30); do [ "$(online)" = 0 ] && break; sleep 0.3; done
 check "pausing closes every link" '[ "$(online)" = 0 ]'

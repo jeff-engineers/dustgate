@@ -217,15 +217,21 @@ export class PlugsComponent implements OnInit, OnDestroy {
   async ngOnInit(): Promise<void> {
     await this.api.whenReady();
     await this.loadLayout();
+    // Every await is a chance to have been left: starting the poll after that leaked it for the life of the app, one more
+    // each time, polling the status and probing every plug with nobody looking.
+    if (this.destroyed) return;
     this.statusSub = this.api.status$.subscribe(s => { this.ssid = s?.ssid ?? ''; });
     await this.scan();
+    if (this.destroyed) return;
     this.loaded = true;
     // Live draw: the brain already publishes every tool's watts, so this asks for that rather than re-probing plugs.
     this.poll = setInterval(() => { void this.refreshWatts(); if (++this.tick % 5 === 0) void this.probePaired(); }, 2000);
     void this.refreshWatts();
   }
 
+  private destroyed = false;
   ngOnDestroy(): void {
+    this.destroyed = true;
     if (this.poll) clearInterval(this.poll);
     if (this.sweepTimer) clearInterval(this.sweepTimer);
     this.statusSub?.unsubscribe();
@@ -303,21 +309,32 @@ export class PlugsComponent implements OnInit, OnDestroy {
     try { this.outlets = await this.api.discoverOutlets(); }
     catch { this.outlets = []; this.error = "Couldn't reach the controller to look for plugs."; }
     finally { this.scanning = false; this.rebuild(); }
-    await this.probePaired();
+    // Not awaited: asked one at a time, a shop's worth of plugs takes a while on an ESP32, and the page should not wait on
+    // the slowest plug to appear. Each row fills in as its own answer arrives.
+    void this.probePaired();
   }
 
   /** Ask every PAIRED plug for itself. A scan only knows what announces itself (and on the native brain, nothing does), so
-   *  "is the Table saw's plug answering" has to be asked of the plug. Kept alone, one in flight at a time. */
+   *  "is the Table saw's plug answering" has to be asked of the plug.
+   *
+   *  ONE PLUG AT A TIME. An ESP32 brain answers these from a single slot: asked for all of them at once, each request
+   *  overwrote the last one's address and every reply carried the same plug (or a cut body), so all but one row read
+   *  "not answering" (found 2026-10-06; it now turns a second request away instead). The native brain did not mind, which
+   *  is why it went unseen. Each row updates as its answer arrives. */
   private probing = false;
   private probedOnce = false;
   private async probePaired(): Promise<void> {
     if (this.probing || !this.rows.length) return;
     this.probing = true;
     try {
-      const got = await Promise.allSettled(this.rows.map(r => this.api.pingOutlet(r.ip)));
-      for (const g of got) if (g.status === 'fulfilled') {
-        const at = this.outlets.findIndex(o => o.ip === g.value.ip);
-        if (at >= 0) this.outlets[at] = g.value; else this.outlets = [...this.outlets, g.value];
+      for (const ip of this.rows.map(r => r.ip)) {
+        if (this.destroyed) return;
+        try {
+          const got = await this.api.pingOutlet(ip);
+          const at = this.outlets.findIndex(o => o.ip === got.ip);
+          if (at >= 0) this.outlets[at] = got; else this.outlets = [...this.outlets, got];
+          this.rebuild();
+        } catch { /* that plug did not answer this time; the rest are still asked */ }
       }
     } finally { this.probing = false; this.probedOnce = true; this.rebuild(); }
   }

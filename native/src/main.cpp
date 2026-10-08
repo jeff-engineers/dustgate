@@ -13,6 +13,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <map>
+#include <mutex>
 #include <memory>
 #include <string>
 #include <thread>
@@ -59,6 +60,10 @@ using namespace dgbrain;
 namespace nl = topo::nodelink;
 
 static NodeHub* g_hub = nullptr;
+// Boards that took our claim but are too old to dial a brain themselves (no caps.join in their WELCOME): this brain never
+// dials a node, so they pair and then never link. Filled by claimNode() on its own thread, read by raiseDeviceProblems().
+static std::mutex g_tooOldMu;
+static std::set<std::string> g_tooOld;
 static topo::TopologyRuntime g_rt;
 static std::string g_topoJson, g_topoPath, g_topoErr, g_stateDir;
 
@@ -69,6 +74,14 @@ namespace plughttp { void setPort(const std::string&); }
 static dgbrain::PlugPoller g_poller;
 static dgbrain::Sweep g_sweep;
 static std::string g_localIp, g_plugPort = "80";
+// This brain's own address is NOT fixed: a Pi takes whatever its router gives it, and the router may give it another. g_localIp is
+// read from the plug workers, the beacon and the sweep, so it is only touched through localIp() / setLocalIp().
+static std::mutex g_ipMu;
+static std::string localIp() { std::lock_guard<std::mutex> g(g_ipMu); return g_localIp; }
+static void setLocalIp(const std::string& ip) { std::lock_guard<std::mutex> g(g_ipMu); g_localIp = ip; }
+static std::string g_bcast, g_ipFile;          // the beacon's address; a file to read the address from (tests: nothing else moves an address)
+static bool g_ipFixed = false, g_bcastFixed = false;
+static unsigned g_port = 80;
 static outletops::Self selfIdentity();
 static uint32_t g_plugSyncAtMs = 0;
 static std::map<std::string, int> g_swAsserted;       // "s:<system>" -> 0/1 last asked of the plug
@@ -114,6 +127,14 @@ static void raiseDeviceProblems(uint32_t now) {
         plugs.push_back(v);
     }
     problems.update(g_rt, boards, plugs, now);
+    std::set<std::string> old; { std::lock_guard<std::mutex> g(g_tooOldMu); old = g_tooOld; }
+    for (auto& kv : g_hub->nodes()) {
+        const std::string key = "old:" + kv.first;
+        if (old.count(kv.first) && !kv.second->session.health().linked)
+            g_rt.raiseProblem(key, "board-fault", "bad", "board", kv.first,
+                              "Its firmware is too old to link to this brain (it waits to be dialled). Reflash it by USB.", now);
+        else g_rt.clearProblem(key);
+    }
 }
 
 static void feedPlugs(uint32_t now) {
@@ -139,11 +160,16 @@ static void feedPlugs(uint32_t now) {
 }
 
 // ── the collector: one presser and one press-state per system that has a remote ──────────────────
-struct CollectorSlot { std::string sys; std::unique_ptr<topo::RemoteRfPresser> presser; topo::PressState ps; };
+// `key` names the blower and the transmitter that presses it, so a layout save can tell "the same remote" from a new one.
+struct CollectorSlot { std::string sys, key; std::unique_ptr<topo::RemoteRfPresser> presser; topo::PressState ps; };
 static std::vector<CollectorSlot> g_collectors;
-static std::vector<topo::PressState> g_oldPress;
 
 static void rebuildPressers() {
+    // A SAVE IS NOT A REBOOT (see TopologyRuntime::adopt). The press bookkeeping says whether WE started a blower, and a
+    // fresh one reads every running blower as started by a person, which nothing then presses off. It is kept for the same
+    // system pressed by the same transmitter (board, address, data); a different remote is a different blower.
+    std::map<std::string, topo::PressState> kept;
+    for (CollectorSlot& c : g_collectors) kept[c.key] = c.ps;
     g_collectors.clear();
     for (const std::string& sys : g_rt.systemIds()) {
         JsonObjectConst rf = g_rt.collectorRf(sys);
@@ -151,11 +177,16 @@ static void rebuildPressers() {
         // There is no pad on this machine: the transmitter is always a paired node's, named by controllerId.
         const std::string board = rf["controllerId"] | "";
         if (board.empty() || topo::isOwnBoard(board, "")) { dglog::linef("[RF] collector %s: the layout names no board for its transmitter\n", sys.c_str()); continue; }
+        const uint8_t addr = (uint8_t)(rf["address"] | (int)topo::rf::kRocklerAddress), data = (uint8_t)(rf["data"] | (int)topo::rf::kRocklerData);
         CollectorSlot c; c.sys = sys;
-        c.presser.reset(new topo::RemoteRfPresser(&g_hub->bus(), board,
-            (uint8_t)(rf["address"] | (int)topo::rf::kRocklerAddress), (uint8_t)(rf["data"] | (int)topo::rf::kRocklerData),
+        c.key = sys + "|" + board + "|" + std::to_string(addr) + "|" + std::to_string(data);
+        auto k = kept.find(c.key);
+        if (k != kept.end()) c.ps = k->second;
+        c.presser.reset(new topo::RemoteRfPresser(&g_hub->bus(), board, addr, data,
             (uint32_t)(rf["tickUs"] | (int)topo::rf::kDefaultTickUs), (uint32_t)(rf["repeats"] | (int)topo::rf::kDefaultRepeats)));
-        dglog::linef("[RF] collector %s pressed by RF through board %s\n", sys.c_str(), board.c_str());
+        // Said when a layout loads, so it must not read like an event: nothing is pressed here.
+        dglog::linef("[RF] collector %s: its remote is keyed through board %s%s\n", sys.c_str(), board.c_str(),
+                     k != kept.end() ? " (press state kept across the save)" : "");
         g_collectors.push_back(std::move(c));
     }
 }
@@ -381,7 +412,10 @@ static bool readStatic(std::string path, std::string& body, std::string& mime) {
 // ── what the shared API (api/ApiCore.h) asks of this brain ────────────────────────────────────────────
 // host: where a plug's push target points (our address, which is what decides "ours"); name: the owner suffix a plug carries
 // and what recognises our own plug at a stale address after the brain moves.
-static outletops::Self selfIdentity() { return outletops::Self{g_localIp, g_hub->primaryId()}; }
+static outletops::Self selfIdentity() { return outletops::Self{localIp(), g_hub->primaryId()}; }
+// What the sweep must not knock on: our own address, but only when it is knocking on the port we serve (a test runs a fake
+// plug beside the brain on 127.0.0.1, on another port). The sweep's subnet comes from the same address.
+static std::string sweepSelf() { return localIp() + (g_plugPort == std::to_string(g_port) ? "" : "|other-port"); }
 
 // ── finding boards by mDNS ───────────────────────────────────────────────────────────────────────
 // "Scan for boards": a node advertises _dustgate._tcp with TXT (owner, board, servos, linear, role). Unlike a node that already
@@ -501,7 +535,17 @@ static void claimNode(const std::string& hostIn, bool takeover) {
         if (!step([&] { w.async_read(buf, [&](beast::error_code e, size_t) { ec = e; }); })) { dglog::linef("[CLAIM] %s: no WELCOME (%s)", host.c_str(), ec.message().c_str()); return; }
         StaticJsonDocument<768> r; deserializeJson(r, beast::buffers_to_string(buf.data()));
         const bool accepted = r["accepted"] | true;
-        if (accepted) dglog::linef("[CLAIM] %s is ours (%s, %s) - it will dial us now", host.c_str(), (const char*)(r["board"] | "?"), (const char*)(r["fw"] | "?"));
+        // A board from before node-initiated links (2026-10-04) says nothing of caps.join and waits to be dialled, which this
+        // brain never does: it would pair and then sit unlinked with no word as to why (found 2026-10-07, a planer sensor).
+        const bool dials = (r["caps"]["join"] | 0) != 0;   // sent as 1 (NodeLink.h buildWelcome), and `| false` reads an int as absent
+        if (accepted && !dials) {
+            dglog::linef("[CLAIM] %s is ours, but its firmware (%s) is too old to dial a brain - it will never link. Reflash it by USB.",
+                         host.c_str(), (const char*)(r["fw"] | "?"));
+            std::lock_guard<std::mutex> g(g_tooOldMu); g_tooOld.insert(hostIn);
+        } else if (accepted) {
+            dglog::linef("[CLAIM] %s is ours (%s, %s) - it will dial us now", host.c_str(), (const char*)(r["board"] | "?"), (const char*)(r["fw"] | "?"));
+            std::lock_guard<std::mutex> g(g_tooOldMu); g_tooOld.erase(hostIn);
+        }
         else dglog::linef("[CLAIM] %s belongs to '%s' - pair it again with takeover to take it", host.c_str(), (const char*)(r["claimedBy"] | "someone else"));
         beast::error_code e2; w.next_layer().socket().shutdown(tcp::socket::shutdown_both, e2);
     } catch (const std::exception& e) { dglog::linef("[CLAIM] %s: %s", host.c_str(), e.what()); }
@@ -549,6 +593,8 @@ public:
         }
         std::string out; serializeJson(d, out); return out;
     }
+    bool linearGoto(const std::string& id, float mm, bool home, std::string& why) override { return g_rt.driveLinearTo(id, mm, why, home); }
+    bool gateMoving() override { return g_rt.anyGateMoving(); }
     bool updateNode(const std::string& id, std::string& why) override {
         auto n = g_hub->find(id);
         if (!n) { why = "that board is not paired"; return false; }
@@ -742,14 +788,41 @@ private:
             o.body = "{\"ok\":true}"; return;
         }
         if (t == "/api/outlets/save" && m == "POST") { o.body = "{\"ok\":true}"; return; }   // nothing to persist: plugs live in the layout
-        if (t == "/api/outlets/sweep" && m == "POST") { g_sweep.start(g_localIp, g_plugPort, selfIdentity()); o.body = "{\"ok\":true}"; return; }
+        if (t == "/api/outlets/sweep" && m == "POST") { g_sweep.start(sweepSelf(), g_plugPort, selfIdentity()); o.body = "{\"ok\":true}"; return; }
         if (t == "/api/outlets/sweep" && m == "DELETE") { g_sweep.cancel(); o.body = "{\"ok\":true}"; return; }
         if (t == "/api/outlets/sweep" && m == "GET") { o.body = g_sweep.progressJson(); return; }
-        // No mDNS browser here, so "discover" is what the last sweep found; the sweep is the way to look.
+        // No mDNS browser here, so "discover" is the plugs the last sweep FOUND — asked again, now. The picker finds a tool's
+        // plug by its draw ("switch it on and tap Scan again"), and it used to be handed the sweep's own rows, frozen at
+        // whatever each plug drew when the sweep passed it: the draw never moved, so nothing could be found that way
+        // (found 2026-10-07, pairing a second collector's plug on the Pi). Each address is described in parallel, off the
+        // network thread; the sweep is still how a NEW plug is found.
         if (t == "/api/outlets/discover" && m == "GET") {
-            DynamicJsonDocument d(16384); JsonArray a = d.to<JsonArray>();
-            for (auto& r : g_sweep.rows()) { DynamicJsonDocument one(1024); if (!deserializeJson(one, r)) a.add(one.as<JsonObject>()); }
-            serializeJson(d, o.body); return;
+            // Nothing swept since this brain started (a restart forgets the rows): sweep first, so the picker is never
+            // handed an empty list for want of a button nobody knew to press. A few seconds on a /24.
+            if (!g_sweep.everRan() && !g_sweep.running()) g_sweep.start(sweepSelf(), g_plugPort, selfIdentity());
+            if (g_sweep.running()) {
+                defer([] {
+                    for (int i = 0; i < 600 && g_sweep.running(); i++) std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                    std::vector<std::string> rows = g_sweep.rows();
+                    DynamicJsonDocument d(16384); JsonArray a = d.to<JsonArray>();
+                    for (const std::string& r : rows) { DynamicJsonDocument one(1024); if (!deserializeJson(one, r)) a.add(one.as<JsonObject>()); }
+                    Out out; serializeJson(d, out.body); return out;   // just swept: these readings are fresh
+                });
+                return;
+            }
+            std::vector<std::string> ips;
+            for (auto& r : g_sweep.rows()) { StaticJsonDocument<1024> one; if (!deserializeJson(one, r) && one["ip"].is<const char*>()) ips.push_back(one["ip"].as<std::string>()); }
+            defer([ips] {
+                std::vector<std::string> rows(ips.size());
+                std::vector<std::thread> asks;
+                const outletops::Self self = selfIdentity();
+                for (size_t i = 0; i < ips.size(); i++) asks.emplace_back([&rows, &ips, i, self] { rows[i] = outletops::describeJson(ips[i].c_str(), self); });
+                for (auto& th : asks) th.join();
+                DynamicJsonDocument d(16384); JsonArray a = d.to<JsonArray>();
+                for (const std::string& r : rows) { DynamicJsonDocument one(1024); if (!deserializeJson(one, r)) a.add(one.as<JsonObject>()); }
+                Out out; serializeJson(d, out.body); return out;
+            });
+            return;
         }
         if (t == "/api/outlets" && m == "GET") { o.body = "{\"outlets\":[]}"; return; }
         if (t.rfind("/api/outlets", 0) == 0 && (m == "PUT" || m == "DELETE")) { o.body = "{\"ok\":true}"; return; }
@@ -784,7 +857,7 @@ private:
             o.body = dglog::readFrom((size_t)std::strtoull(ar.param("from").c_str(), nullptr, 10), start, next);
             o.mime = "text/plain; charset=utf-8";
             o.headers = {{"X-Serial-Start", std::to_string(start)}, {"X-Serial-Next", std::to_string(next)}, {"X-Serial-Boot", std::to_string(dglog::R().bootId)},
-                         {"Cache-Control", "no-store"}, {"Access-Control-Expose-Headers", "X-Serial-Start, X-Serial-Next, X-Serial-Boot"}};
+                         {"Cache-Control", "no-store"}};   // no CORS headers: same origin only, as on the ESP32
         }
         else if (t == "/api/serial" && m == "POST") err(http::status::not_implemented, "this brain has no serial console to type into");
         else if (t == "/api/linklog" && m == "GET") {
@@ -867,24 +940,30 @@ private:
 
 // ── the UDP beacon: "DGB1|<id>|<ip>|<port>", fast while a node is down, slow otherwise ──
 static std::string guessIp() {
+    if (!g_ipFile.empty()) { std::ifstream f(g_ipFile); std::string l; if (f && std::getline(f, l) && !l.empty()) return l; return "127.0.0.1"; }
     try {
         net::io_context io; udp::socket s(io); s.connect(udp::endpoint(net::ip::make_address("8.8.8.8"), 53));
         return s.local_endpoint().address().to_string();
     } catch (...) { return "127.0.0.1"; }
 }
 
-static void beaconLoop(net::io_context& io, std::shared_ptr<udp::socket> sock, std::shared_ptr<net::steady_timer> t,
-                       std::string ip, unsigned port, std::string bcast) {
+// The address and the broadcast are read at each send, not captured: the beacon is how a node finds a brain that MOVED.
+static void beaconLoop(net::io_context& io, std::shared_ptr<udp::socket> sock, std::shared_ptr<net::steady_timer> t) {
     const uint32_t every = g_hub->anyDown() ? 5000 : 60000;
     t->expires_after(std::chrono::milliseconds(every));
-    t->async_wait([&io, sock, t, ip, port, bcast](beast::error_code ec) {
+    t->async_wait([&io, sock, t](beast::error_code ec) {
         if (ec) return;
-        std::string msg = "DGB1|" + g_hub->primaryId() + "|" + ip + "|" + std::to_string(port);
+        std::string msg = "DGB1|" + g_hub->primaryId() + "|" + localIp() + "|" + std::to_string(g_port);
         beast::error_code e2;
-        sock->send_to(net::buffer(msg), udp::endpoint(net::ip::make_address(bcast), nl::kBeaconPort), 0, e2);
-        beaconLoop(io, sock, t, ip, port, bcast);
+        sock->send_to(net::buffer(msg), udp::endpoint(net::ip::make_address(g_bcast), nl::kBeaconPort), 0, e2);
+        beaconLoop(io, sock, t);
     });
 }
+
+// "ws://<our address>[:port]/shelly-rpc": where a plug is told to push. Port 80 needs no number.
+static std::string pushUrl() { return "ws://" + localIp() + (g_port == 80 ? "" : ":" + std::to_string(g_port)) + "/shelly-rpc"; }
+// The subnet's own broadcast address: the all-ones one is dropped or mis-routed by some stacks (macOS often).
+static std::string broadcastFor(const std::string& ip) { const size_t dot = ip.rfind('.'); return dot == std::string::npos ? "255.255.255.255" : ip.substr(0, dot) + ".255"; }
 
 int main(int argc, char** argv) {
     setvbuf(stdout, nullptr, _IOLBF, 0);
@@ -894,7 +973,7 @@ int main(int argc, char** argv) {
         std::string a = argv[i];
         auto val = [&]() { return i + 1 < argc ? std::string(argv[++i]) : std::string(); };
         if (a == "--id") id = val(); else if (a == "--pair") pair = val(); else if (a == "--port") port = (unsigned)std::stoi(val());
-        else if (a == "--ip") ip = val(); else if (a == "--state") stateDir = val(); else if (a == "--also-port") alsoPort = (unsigned)std::stoi(val()); else if (a == "--trace") g_trace = true; else if (a == "--www") g_www = val(); else if (a == "--plug-port") { g_plugPort = val(); plughttp::setPort(g_plugPort); } else if (a == "--key") g_apiKey = val(); else if (a == "--broadcast") bcast = val();
+        else if (a == "--ip") ip = val(); else if (a == "--ip-from-file") g_ipFile = val(); else if (a == "--state") stateDir = val(); else if (a == "--also-port") alsoPort = (unsigned)std::stoi(val()); else if (a == "--trace") g_trace = true; else if (a == "--www") g_www = val(); else if (a == "--plug-port") { g_plugPort = val(); plughttp::setPort(g_plugPort); } else if (a == "--key") g_apiKey = val(); else if (a == "--broadcast") { bcast = val(); g_bcastFixed = true; }
         else { dglog::linef("usage: dustgate-brain [--id dustgate] [--pair nodeId,nodeId,...] [--port 80] [--also-port 80] [--state dir] [--www dir] [--plug-port 80] [--key k] [--ip a.b.c.d] [--broadcast a.b.c.255]\n"); return a == "--help" ? 0 : 2; }
     }
     std::vector<std::string> ids; std::stringstream ss(pair); std::string x;
@@ -938,6 +1017,7 @@ int main(int argc, char** argv) {
             dglog::linef("[TOPO] stored layout %s refused: %s\n", path.c_str(), g_topoErr.c_str());
         }
     }
+    g_ipFixed = !ip.empty();   // --ip says where this brain IS; without it the address is followed
     if (ip.empty()) {
         // At boot a Pi starts this before its WiFi has an address; "127.0.0.1" would be beaconed and pushed to plugs for the
         // life of the process. Wait (up to a minute) for a real one.
@@ -945,10 +1025,11 @@ int main(int argc, char** argv) {
         for (int i = 0; i < 60 && ip == "127.0.0.1"; i++) { std::this_thread::sleep_for(std::chrono::seconds(1)); ip = guessIp(); }
         if (ip == "127.0.0.1") dglog::line("[NET] no network address after 60 s - nodes cannot find this brain. Check the Pi's WiFi.");
     }
-    g_localIp = ip;
+    setLocalIp(ip);
     // The subnet's own broadcast address: the all-ones one is dropped or mis-routed by some stacks (macOS often), and the beacon
     // is what lets a node find a brain whose address changed.
-    if (bcast.empty()) { const size_t dot = ip.rfind('.'); bcast = dot == std::string::npos ? "255.255.255.255" : ip.substr(0, dot) + ".255"; }
+    if (bcast.empty()) bcast = broadcastFor(ip);
+    g_bcast = bcast;
 #ifdef __APPLE__
     // A sleeping Mac is a brain that has gone away: nodes drop, nothing switches. Hold idle sleep off
     // for as long as this process lives (caffeinate exits when its -w pid does). Best effort.
@@ -973,7 +1054,8 @@ int main(int argc, char** argv) {
     // Nodes pull firmware from http://<brain ip><path> with no port, so a brain on another port also listens on 80.
     if (alsoPort) std::make_shared<Listener>(io, tcp::endpoint(tcp::v4(), (unsigned short)alsoPort))->run();
     auto sock = std::make_shared<udp::socket>(io, udp::v4()); sock->set_option(net::socket_base::broadcast(true));
-    beaconLoop(io, sock, std::make_shared<net::steady_timer>(io), ip, port, bcast);
+    g_port = port;   // after the listeners: the port may have fallen back to 8080
+    beaconLoop(io, sock, std::make_shared<net::steady_timer>(io));
     net::steady_timer rtTimer(io);
     std::function<void()> rtTick = [&]() {
         rtTimer.expires_after(std::chrono::milliseconds(100));
@@ -983,9 +1065,32 @@ int main(int argc, char** argv) {
     net::signal_set sig(io, SIGINT, SIGTERM); sig.async_wait([&](beast::error_code, int) { io.stop(); });
     dglog::linef("dustgate-brain %s (%s) on %s:%u, %zu paired node(s)\n", id.c_str(), DG_COMMIT, ip.c_str(), port, ids.size());
     // Plugs are pointed at the port the app is served on (port 80 needs no number in the URL).
-    g_poller.setPushTarget(selfIdentity(), "ws://" + ip + (port == 80 ? "" : ":" + std::to_string(port)) + "/shelly-rpc",
-                           stateDir.empty() ? "" : stateDir + "/plugs.json");
+    g_poller.setPushTarget(selfIdentity(), pushUrl(), stateDir.empty() ? "" : stateDir + "/plugs.json");
     g_poller.start();
+    // FOLLOW THIS BRAIN'S OWN ADDRESS. A Pi is given an address by the router and the router may give it another (a lease
+    // renewal, a reboot, a new access point). The brain is told nothing, so it looks: when the address moves it beacons the
+    // new one (a node redials by the beacon), points every plug it owns at the new address (a plug keeps pushing to the old
+    // one until told), and says so in the log. No fixed address, and no DHCP reservation, is needed. The ESP32 does the same
+    // (SmartOutletControl::checkLocalIpChange). Skipped when --ip was given, which is a statement of where the brain is.
+    net::steady_timer ipTimer(io);
+    std::function<void()> ipTick = [&]() {
+        ipTimer.expires_after(std::chrono::seconds(5));
+        ipTimer.async_wait([&](beast::error_code ec) {
+            if (ec) return;
+            if (!g_ipFixed) {
+                const std::string now = guessIp();
+                // 127.0.0.1 is "no network right now" (a WiFi drop), not an address: keep the last good one until a real one is back.
+                if (now != "127.0.0.1" && now != localIp()) {
+                    dglog::linef("[NET] address changed %s -> %s; nodes will find it by the beacon and plugs are being repointed\n", localIp().c_str(), now.c_str());
+                    setLocalIp(now);
+                    if (!g_bcastFixed) g_bcast = broadcastFor(now);
+                    g_poller.retarget(selfIdentity(), pushUrl());
+                }
+            }
+            ipTick();
+        });
+    };
+    ipTick();
     io.run();
     g_poller.stop();
     return 0;
