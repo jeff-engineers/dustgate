@@ -32,6 +32,7 @@
 #include "Shop.h"
 #include <algorithm>
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -192,6 +193,42 @@ public:
   }
 
   const std::map<std::string, std::string>& actuatorStates() const { return _actuatorStates; }
+  // What the controller knows about the WORLD rather than the layout: the plug readings, who switched on in which order,
+  // where each gate was sent and which blowers it wants running. A layout save must not erase it (TopologyRuntime::adopt,
+  // "a save is not a reboot"), so it is copied out before setTopology() and handed back after.
+  struct Memory {
+    std::map<std::string, float>       watts;
+    std::map<std::string, long>        activationSeq;
+    long                               seqCounter = 0;
+    std::map<std::string, std::string> actuatorStates;
+    std::map<std::string, bool>        collectorOn;
+  };
+  Memory memory() const {
+    Memory m;
+    m.watts = _watts; m.activationSeq = _activationSeq; m.seqCounter = _seqCounter;
+    m.actuatorStates = _actuatorStates; m.collectorOn = _collectorOn;
+    return m;
+  }
+  // Take back, after setTopology(), whatever the new layout still names: machines and systems by id, and a gate only if
+  // it is in `sameGates` (the same physical gate, see sameHardware() in TopologyRuntime.h). A gate the save changed keeps
+  // the closed state setTopology() seeded — its position is unknown, as it always was after a change.
+  void restore(const Memory& m, const std::set<std::string>& sameGates) {
+    for (const std::string& id : machineIds(_doc)) {
+      auto w = m.watts.find(id);         if (w != m.watts.end()) _watts[id] = w->second;
+      auto s = m.activationSeq.find(id); if (s != m.activationSeq.end()) _activationSeq[id] = s->second;
+    }
+    _seqCounter = m.seqCounter;
+    for (auto& kv : _collectorOn) {
+      auto c = m.collectorOn.find(kv.first);
+      if (c != m.collectorOn.end()) kv.second = c->second;
+    }
+    for (auto& kv : _actuatorStates) {
+      if (!sameGates.count(kv.first)) continue;
+      auto a = m.actuatorStates.find(kv.first);
+      if (a != m.actuatorStates.end()) kv.second = a->second;
+    }
+  }
+
   const ShopRouting& lastRouting() const { return _lastRouting; }
   const std::map<std::string, bool>& collectorOn() const { return _collectorOn; }
   bool collectorOn(const std::string& systemId) const {

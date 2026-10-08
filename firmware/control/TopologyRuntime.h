@@ -75,6 +75,7 @@
 #include "NodeBus.h"
 #include "SensorPlan.h"   // what the layout wants watched, resolved once
 #include "NodeLink.h"   // nodelink::kSenseStaleMs — how long a CT reading stays good
+#include <cstring>
 #include <deque>
 #include <map>
 #include <set>
@@ -108,6 +109,42 @@ static inline float manualWattsFor(float threshold) {
 // CHANGE THIS AND CHANGE DEFAULT_COLLECTOR_OFF_DELAY_MS in
 // shared/device-model/topology-device.js — the conformance suite compares them.
 static const uint32_t kDefaultCollectorOffDelayMs = 5000;
+
+// Equal JSON, ignoring the key `skip` at the TOP level only. Objects compare by key (order does not matter), arrays by
+// position, numbers by value (90 equals 90.0).
+inline bool sameJson(JsonVariantConst a, JsonVariantConst b, const char* skip = nullptr) {
+    if (a.is<JsonObjectConst>() || b.is<JsonObjectConst>()) {
+        if (!a.is<JsonObjectConst>() || !b.is<JsonObjectConst>()) return false;
+        JsonObjectConst oa = a.as<JsonObjectConst>(), ob = b.as<JsonObjectConst>();
+        size_t na = 0, nb = 0;
+        for (JsonPairConst kv : oa) {
+            if (skip && std::strcmp(kv.key().c_str(), skip) == 0) continue;
+            na++;
+            if (!ob.containsKey(kv.key().c_str()) || !sameJson(kv.value(), ob[kv.key().c_str()])) return false;
+        }
+        for (JsonPairConst kv : ob) if (!(skip && std::strcmp(kv.key().c_str(), skip) == 0)) nb++;
+        return na == nb;
+    }
+    if (a.is<JsonArrayConst>() || b.is<JsonArrayConst>()) {
+        if (!a.is<JsonArrayConst>() || !b.is<JsonArrayConst>()) return false;
+        JsonArrayConst xa = a.as<JsonArrayConst>(), xb = b.as<JsonArrayConst>();
+        if (xa.size() != xb.size()) return false;
+        for (size_t i = 0; i < xa.size(); i++) if (!sameJson(xa[i], xb[i])) return false;
+        return true;
+    }
+    if (a.isNull() || b.isNull()) return a.isNull() && b.isNull();
+    if (a.is<const char*>() || b.is<const char*>()) {
+        const char* sa = a.as<const char*>(); const char* sb = b.as<const char*>();
+        return sa && sb && std::strcmp(sa, sb) == 0;
+    }
+    if (a.is<bool>() || b.is<bool>()) return a.is<bool>() && b.is<bool>() && a.as<bool>() == b.as<bool>();
+    return a.as<double>() == b.as<double>();
+}
+
+// THE SAME PHYSICAL GATE, before and after a layout save: everything about a selector but its name. A gate whose board,
+// channel, angles, stops or states changed may now sit somewhere else, so what the brain believed about it no longer
+// holds. Mirrors sameHardware() in shared/device-model/topology-device.js — layout-save.test.js ↔ test_layout_save.cpp.
+inline bool sameHardware(JsonObjectConst a, JsonObjectConst b) { return sameJson(a, b, "name"); }
 
 // A move that has been issued but whose bus rejected it (offline node, missing
 // calibration). Surfaced through /api/status so the UI can say which gate.
@@ -197,9 +234,9 @@ class TopologyRuntime {
 public:
     void begin(NodeBus* bus) { _bus = bus; }
 
-    // Parse and adopt a document. Replaces any current one and resets the brain
-    // (machine power history, actuator states seeded to closed). Returns false
-    // with `err` set if the JSON won't parse.
+    // Parse and adopt a document. Replaces any current one. The FIRST layout starts the brain from nothing (no readings,
+    // every gate seeded closed); a layout that replaces one carries over what is still true — see "a save is not a reboot"
+    // below. Returns false with `err` set if the JSON won't parse; clear() first for a true reset.
     bool adopt(const char* json, size_t len, std::string& err) {
         // ArduinoJson v6 needs a heap doc sized for the parse tree, not the text.
         // 2x + slack covers the key/value overhead of these documents; a bad
@@ -243,6 +280,34 @@ public:
             }
         }
 
+        // ── A SAVE IS NOT A REBOOT (2026-10-06) ──────────────────────────────
+        //
+        // Every adopt used to start the brain from nothing: readings, who switched on when, where each gate was sent and
+        // whether each blower was running. A layout is saved while the shop RUNS — a trip point tuned from the phone with the
+        // saw going, a plug paired, the clamp heal on the Boards screen — and that reset did damage: the blower the brain had
+        // started read as one a PERSON had started (its press bookkeeping went with it), so nothing ever pressed it off; a
+        // hand-switched tool kept its "manual" flag but lost its watts, so its gate and blower quietly let go; and every
+        // running tool read as switching on again.
+        //
+        // So what the new layout leaves standing carries over: machines and blowers by id, and a gate only when it is the
+        // same physical gate (sameHardware(): everything but its name). A gate the save changed is seeded closed, which is
+        // what "unknown" has always meant here, so a blower whose open gate was edited mid-cut gets the dead-head stop that
+        // case deserves. The shells keep their press bookkeeping the same way (rebuildPressers, syncTopologyOutlets).
+        const bool carrying = _loaded && _doc;
+        std::set<std::string> sameGates;
+        Controller::Memory ctrlWas;
+        std::map<std::string, std::string> hwWas, lastMoveWas;
+        std::map<std::string, CollectorState> collectorsWas;
+        std::set<std::string> reassertWas;
+        std::string inFlightWas;
+        bool inFlightMakeWas = false;
+        if (carrying) {
+            sameGates = unchangedGates(_doc->as<JsonObjectConst>(), doc->as<JsonObjectConst>());
+            ctrlWas = _ctrl.memory();
+            hwWas = _hwStates; lastMoveWas = _lastMoveOnBoard; collectorsWas = _collectors; reassertWas = _reassert;
+            inFlightWas = _inFlightSystem; inFlightMakeWas = _inFlightIsMake;
+        }
+
         _doc = std::move(doc);
         _ctrl.setTopology(_doc->as<JsonObjectConst>());
         _queue.clear();
@@ -266,9 +331,44 @@ public:
             // initializers (gnu++11 aggregate rules), which is the same reason
             // this cannot simply be `CollectorState c;`.
             _collectors[std::string(sys.id ? sys.id : "")] = CollectorState{};
+
+        if (carrying) {
+            _ctrl.restore(ctrlWas, sameGates);
+            for (auto& kv : _hwStates) {
+                if (!sameGates.count(kv.first)) continue;
+                auto w = hwWas.find(kv.first);
+                if (w != hwWas.end()) kv.second = w->second;
+            }
+            for (auto& kv : _collectors) {
+                auto c = collectorsWas.find(kv.first);
+                if (c != collectorsWas.end()) kv.second = c->second;
+            }
+            for (auto& kv : lastMoveWas) if (sameGates.count(kv.second)) _lastMoveOnBoard.insert(kv);
+            for (const std::string& s : reassertWas) if (sameGates.count(s)) _reassert.insert(s);
+            // A move still on the bus belongs to a blower that is still here: keep holding it until the move lands.
+            if (_collectors.count(inFlightWas)) { _inFlightSystem = inFlightWas; _inFlightIsMake = inFlightMakeWas; }
+        }
         _loaded = true;
         pushSensorConfig();
+        // Re-decide at once against the new layout (a new trip point, a tool moved to another gate, a machine removed),
+        // rather than at the next reading — a clamp-sensed tool may not report again until it changes.
+        if (carrying) ingest(_ctrl.reconcile());
         return true;
+    }
+
+    // Selectors present in both layouts as the same physical gate (sameHardware()). Ids are unique across the shop.
+    static std::set<std::string> unchangedGates(JsonObjectConst was, JsonObjectConst now) {
+        std::map<std::string, JsonObjectConst> before;
+        for (const SystemView& sys : systemsOf(was))
+            for (JsonObjectConst e : sys.elements) if (_eq(e["type"], "selector")) before[_str(e["id"])] = e;
+        std::set<std::string> same;
+        for (const SystemView& sys : systemsOf(now))
+            for (JsonObjectConst e : sys.elements) {
+                if (!_eq(e["type"], "selector")) continue;
+                auto it = before.find(_str(e["id"]));
+                if (it != before.end() && sameHardware(it->second, e)) same.insert(it->first);
+            }
+        return same;
     }
 
     void clear() {
@@ -361,6 +461,40 @@ public:
             _ctrl.setMachinePower(other, 0.0f);
         }
     }
+
+    // ── SETTING UP A SLIDER THAT LIVES ON A NODE (2026-10-07) ─────────────────
+    //
+    // Drive a sliding gate to `mm` from its home end, outside any routing decision, so the slider page can place each
+    // outlet. The slider page used to drive only the BRAIN'S OWN rack (/api/home, /api/jog...), which a Pi does not have,
+    // so a slider node could not be set up at all ("Couldn't reach the gate" with the board showing green). No new frame:
+    // a SET already carries a position in mm, and a node that has no datum homes itself first (dustgate_node.cpp,
+    // CALIBRATION), so the first move of a setup is also its home.
+    //
+    // Refused while anything is running or moving: this is setup, and the shop-wide servo mutex still holds. Afterwards
+    // routing must not trust where it last sent this gate, so its position becomes unknown ("") and the next plan moves it.
+    // `homeFirst`: the node finds its datum again before moving (SET.home) — the first move of a setup asks for it.
+    bool driveLinearTo(const std::string& selectorId, float mm, std::string& why, bool homeFirst = false) {
+        if (!_loaded || !_bus) { why = "no layout yet"; return false; }
+        JsonObjectConst sel = selectorById(selectorId);
+        if (sel.isNull() || !_eq(sel["kind"], "linear")) { why = "that is not a sliding gate"; return false; }
+        if (!(mm >= 0.0f && mm <= 3000.0f)) { why = "that position is off the end of the rail"; return false; }
+        if (!activeMachines().empty() || collectorOn()) { why = "a tool is running - wait until the shop is quiet"; return false; }
+        if (_bus->busy() || transitioning()) { why = "a gate is still moving - try again in a moment"; return false; }
+        if (!_bus->onlineFor(sel)) { why = "that board is not linked"; return false; }
+        // The selector as the bus needs it, with one made-up state at the asked position.
+        DynamicJsonDocument d(1024);
+        d["kind"] = "linear";
+        d["controllerId"] = sel["controllerId"];
+        d["linear"] = sel["linear"];
+        if (homeFirst) d["homeFirst"] = true;
+        JsonObject st = d.createNestedArray("states").createNestedObject();
+        st["id"] = "setup"; st["positionMm"] = mm;
+        if (!_bus->setState(selectorId.c_str(), d.as<JsonObjectConst>(), "setup")) { why = "the board refused the move"; return false; }
+        _hwStates[selectorId] = "";
+        return true;
+    }
+    // Is any gate moving (a setup move included). Shop-wide, like the servo mutex it reads.
+    bool anyGateMoving() const { return _bus && _bus->busy(); }
 
     // Switch a machine on/off by hand, from the Live view. Every machine is
     // overridable, not just the ones without a plug — a sensed tool sometimes

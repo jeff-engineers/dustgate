@@ -139,13 +139,8 @@ setInterval(() => {
 function handler(req, res) {
   const { pathname } = url.parse(req.url);
 
-  // CORS
-  res.setHeader('Access-Control-Allow-Origin',  '*');
-  res.setHeader('Access-Control-Allow-Headers', 'X-Api-Key, Content-Type');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Expose-Headers', 'X-Serial-Start, X-Serial-Next, X-Serial-Boot');
-
-  if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
+  // No CORS headers, as on both brains (HttpApiServer::begin explains why): the app reaches this through the dev
+  // server's proxy, same origin, and the conformance scripts are not browsers.
 
   // Not the log poller itself: one line a second of it would bury everything else.
   if (pathname !== '/api/serial') console.log(`${req.method} ${pathname}`);
@@ -301,7 +296,8 @@ function handler(req, res) {
       // A shop only: validateShop refuses a schemaVersion-1 document, as the firmware does.
       const v = SHOP.validateShop(data);
       if (!v.ok) return json(res, { error: 'invalid topology', errors: v.errors }, 400);
-      td = TD.createTopologyDevice(data);
+      // A save is not a reboot: the running tools, the blowers and the gates the save left alone carry over, as on the brains.
+      td = TD.createTopologyDevice(data, td);
       rawTopology = data;
       // The plugs this shop is paired to are on the simulated network from here
       // on — otherwise every paired plug reads as not responding and the rename

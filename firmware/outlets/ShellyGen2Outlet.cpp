@@ -58,7 +58,10 @@ bool ShellyGen2Outlet::doPoll(uint32_t timeoutMs) {
     char url[64];
     snprintf(url, sizeof(url), "http://%s/rpc/Switch.GetStatus?id=0", _ip);
 
-    const plughttp::Reply r = plughttp::get(url, timeoutMs);
+    // The CONNECT timeout too, as TasmotaOutlet::doPoll() has always passed. Without it a plug with nothing at its address
+    // (unplugged at the wall) cost the platform's whole connect budget — 5 s on the native brain — and plugs are polled one
+    // after another, so one dead Shelly made every other plug's reading 5 s late, every pass (found 2026-10-06).
+    const plughttp::Reply r = plughttp::get(url, timeoutMs, timeoutMs);
     if (r.code != 200) {
         _reachable  = false;
         _lastPowerW = 0.0f;
@@ -142,7 +145,7 @@ bool ShellyGen2Outlet::readPushConfig(std::string& outServer, bool& outEnabled, 
     char url[80];
     snprintf(url, sizeof(url), "http://%s/rpc/Ws.GetConfig", _ip);
 
-    const plughttp::Reply r = plughttp::get(url, timeoutMs);
+    const plughttp::Reply r = plughttp::get(url, timeoutMs, timeoutMs);   // connect too: see doPoll()
     const int code = r.code;
     const std::string& body = r.body;
 
@@ -262,7 +265,7 @@ bool ShellyGen2Outlet::setSwitch(bool on) {
     snprintf(url, sizeof(url), "http://%s/rpc/Switch.Set?id=0&on=%s",
              _ip, on ? "true" : "false");
 
-    return plughttp::get(url, OUTLET_HTTP_TIMEOUT_MS).code == 200;
+    return plughttp::get(url, OUTLET_HTTP_TIMEOUT_MS, OUTLET_HTTP_TIMEOUT_MS).code == 200;   // connect too: see doPoll()
 }
 
 #endif // CONTROL_SMART_OUTLET || DUSTGATE_NODE_PLUG_POLL || DUSTGATE_NATIVE

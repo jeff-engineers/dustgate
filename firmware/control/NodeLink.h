@@ -206,6 +206,8 @@ inline bool buildSetFrame(JsonObject out, uint32_t seq, const char* selectorId,
         if (!found) return false;
         out["drive"]   = "linear";
         out["channel"] = sel["linear"]["channel"] | 0;
+        // Set only by a setup move (TopologyRuntime::driveLinearTo), never by routing: find the datum again first.
+        if (sel["homeFirst"] | false) out["home"] = true;
     }
 
     out["t"]          = "SET";
@@ -410,6 +412,7 @@ struct SetCommand {
     int      angle;        // isServo
     float    positionMm;   // !isServo
     bool     holdAtRest;
+    bool     home;         // !isServo: find the datum again before this move (SetFrame.home in nodelink.js)
 };
 
 // Parse + VALIDATE a SET frame. A secondary must never act on a malformed
@@ -437,9 +440,11 @@ inline bool parseSetFrame(JsonObjectConst f, SetCommand& out, const char*& err) 
         if (!f.containsKey("angle"))          { err = "missing angle";      return false; }
         out.angle = f["angle"].as<int>();
         if (out.angle < 0 || out.angle > 180) { err = "angle out of range"; return false; }
+        if (f.containsKey("home") && (f["home"] | false)) { err = "home is for a linear drive"; return false; }
         out.isServo    = true;
         out.holdAtRest = f["holdAtRest"] | false;
         out.positionMm = 0.0f;
+        out.home       = false;
         return true;
     }
     if (strcmp(drive, "linear") == 0) {
@@ -468,10 +473,14 @@ inline bool parseSetFrame(JsonObjectConst f, SetCommand& out, const char*& err) 
         // and the ESP32.
         if (mm != mm)                         { err = "positionMm is not a number"; return false; }
         if (mm < -10000.0f || mm > 10000.0f)  { err = "positionMm out of range";    return false; }
+        // HOME FIRST (2026-10-07), additive: absent is no. Typed like everything else here — a string "yes" would read
+        // as false through `| false` and silently skip the home the asker wanted.
+        if (f.containsKey("home") && !f["home"].is<bool>()) { err = "home must be true|false"; return false; }
         out.isServo    = false;
         out.positionMm = mm;
         out.angle      = 0;
         out.holdAtRest = false;
+        out.home       = f["home"] | false;
         return true;
     }
     err = "drive must be servo|linear";

@@ -442,6 +442,14 @@ export class ApiService {
   moveToStop(stop: number)  { return this.post('/api/move', { stop }); }
   jog(mm: number)           { return this.post('/api/jog', { mm }); }
 
+  /** A sliding gate that lives on a NODE, by its selector id: drive it to `mm` from its home end. The routes above drive
+   *  only the brain's own rack. The first move after the node boots homes it first, which takes a while — poll
+   *  gateMoving(). A refusal (a tool running, a gate still moving, the board down) rejects with the brain's reason. */
+  linearGoto(selectorId: string, mm: number, home = false) {
+    return this.post('/api/linear/goto', { selectorId, mm, ...(home ? { home: true } : {}) });
+  }
+  async gateMoving(): Promise<boolean> { return (await this.get<{ moving: boolean }>('/api/linear/state')).moving; }
+
   // ── Outlet commands ───────────────────────────────────────────────────────────
 
   /** Pings a Shelly outlet — the device speaks the Shelly Gen2+ local API (Gen1 is not supported). */

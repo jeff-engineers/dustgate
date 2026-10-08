@@ -32,9 +32,11 @@ struct Reply {
     std::string body;        // only read on a 200 for get(); on any answered request for post()
 };
 
-// A GET. `connectTimeoutMs` 0 leaves the platform's own connect budget alone — a sweep over addresses with
-// nothing at them spends all its time connecting, so it must be able to bound that too.
-Reply get(const std::string& url, uint32_t readTimeoutMs, uint32_t connectTimeoutMs = 0);
+// A GET. BOTH budgets are required, with no default: an address with nothing at it spends all its time CONNECTING, so the
+// read timeout alone bounds nothing. The default used to be 0 (the platform's own connect budget, 5 s on the native brain),
+// and the Shelly driver took it: one unplugged Shelly made every other polled plug's reading 5 s late, every pass (found
+// 2026-10-06). 0 still means "the platform's own", but now it has to be written.
+Reply get(const std::string& url, uint32_t readTimeoutMs, uint32_t connectTimeoutMs);
 Reply post(const std::string& url, const std::string& body, const char* contentType, uint32_t timeoutMs);
 
 // An mDNS host name ("shellyplugus-abc123", no ".local") to a dotted address. False when nothing answered.

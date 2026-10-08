@@ -5,7 +5,7 @@ import { ApiService, JogRefusedError, type NodeLinkState } from '../services/api
 import { SelectorConfigComponent } from './selector-config.component';
 import type { Topology } from '@topology';
 import {
-  AnyElement, ConfigurableSelector, commandAngle, elementsOf,
+  AnyElement, ConfigurableSelector, commandAngle, controllersOf, elementsOf,
   isCalibrated, isConfigurableSelector, isServoKind, kindLabel, swingSequence,
 } from './selector-types';
 import { type ShopDoc, systemLabel, systemsInLayoutOrder, toShop } from '../services/shop-doc';
@@ -306,6 +306,16 @@ export class GateListComponent implements OnInit {
     // same numbering the linear calibrator saved them with.
     const stop = sel.states.findIndex((s) => s.id === stateId);
     if (stop < 0) throw new Error('no saved stop');
+    // A slider on a NODE is driven by its selector id and the saved distance: /api/home and /api/move reach only the
+    // brain's own rack, which a Pi does not have (found 2026-10-07).
+    const primaryId = controllersOf(this.topo!).find((c) => c.role === 'primary')?.id;
+    if (sel.controllerId && sel.controllerId !== primaryId) {
+      const st = sel.states[stop] as { isClosed?: boolean; positionMm?: number };
+      const mm = st.isClosed ? 0 : st.positionMm;
+      if (typeof mm !== 'number') throw new Error('no saved stop');
+      await this.api.linearGoto(sel.id, mm);
+      return;
+    }
     if (stop === 0) await this.api.home();
     else await this.api.moveToStop(stop);
   }
@@ -318,7 +328,9 @@ export class GateListComponent implements OnInit {
     if (i >= 0) els[i] = updated as unknown as (typeof els)[number];
     this.editing = null;
     try { await this.api.putTopology(this.topo); }
-    catch { this.error = "Calibration saved on the gate, but writing the layout failed."; }
+    // A gate's setup lives in the layout, so a failed write is a setup that did not save — said plainly, rather than
+    // claiming it was "saved on the gate", which only ever held for the brain's own rack.
+    catch { this.error = "Couldn't save the setup — is the brain still answering? Try Save again."; }
     this.rebuild();
   }
 

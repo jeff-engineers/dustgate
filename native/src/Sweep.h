@@ -21,14 +21,18 @@ class Sweep {
 public:
     ~Sweep() { cancel(); join(); }
     bool running() const { return _running; }
+    bool everRan() const { return _everRan; }
     void start(const std::string& localIp, const std::string& port, outletops::Self self) {
         if (_running) return;
         join();
         { std::lock_guard<std::mutex> g(_m); _rows.clear(); }
         _scanned = 0; _cancel = false; _running = true; _everRan = true;
-        const size_t dot = localIp.rfind('.');
-        const std::string prefix = dot == std::string::npos ? "192.168.1." : localIp.substr(0, dot + 1);
-        _th = std::thread([this, prefix, port, self] { run(prefix, port, self); });
+        // `localIp` may carry "|other-port": the subnet is still ours, but our own address is then not ourselves to skip.
+        const std::string ownIp = localIp.find('|') == std::string::npos ? localIp : "";
+        const std::string addr = localIp.substr(0, localIp.find('|'));
+        const size_t dot = addr.rfind('.');
+        const std::string prefix = dot == std::string::npos ? "192.168.1." : addr.substr(0, dot + 1);
+        _th = std::thread([this, prefix, port, self, ownIp] { run(prefix, port, self, ownIp); });
     }
     void cancel() { _cancel = true; }
     std::string progressJson() {
@@ -60,14 +64,16 @@ private:
             return !ec;
         } catch (...) { return false; }
     }
-    void run(const std::string& prefix, const std::string& port, outletops::Self self) {
+    void run(const std::string& prefix, const std::string& port, outletops::Self self, const std::string& ownIp) {
         std::atomic<int> next{1};
         auto worker = [&] {
             for (;;) {
                 const int n = next++;
                 if (n > 254 || _cancel) return;
                 const std::string ip = prefix + std::to_string(n);
-                if (knock(ip, port)) {
+                // Not ourselves: this brain answers every path with the app's page, which a probe took for a plug and the
+                // picker listed as "unclaimed" (found 2026-10-07).
+                if (ip != ownIp && knock(ip, port)) {
                     // Phase 2, now that someone is home: the real probe, with its own generous timeouts.
                     DynamicJsonDocument d(1024);
                     outletops::describe(d.to<JsonObject>(), ip.c_str(), nullptr, false, OUTLET_SHELLY, 0, self);

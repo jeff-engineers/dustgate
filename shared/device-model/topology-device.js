@@ -104,8 +104,33 @@ function machineThreshold(shop, machineId) {
 }
 const toolThreshold = (shop, id) => machineThreshold(shop, id);
 
-/** Create a device from a topology or shop: every selector closed, every blower idle. */
-function createTopologyDevice(doc) {
+/** Equal JSON with every object's keys in a fixed order, so key order never counts as a change. */
+function canonical(v) {
+  if (Array.isArray(v)) return `[${v.map(canonical).join(',')}]`;
+  if (v && typeof v === 'object') return `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${canonical(v[k])}`).join(',')}}`;
+  return JSON.stringify(v);
+}
+
+/**
+ * THE SAME PHYSICAL GATE, before and after a layout save: everything about a selector but its name. A gate whose board,
+ * channel, angles, stops or states changed may now sit somewhere else, so what the device believed about it no longer
+ * holds. Mirrors sameHardware() in TopologyRuntime.h — layout-save.test.js ↔ test_layout_save.cpp.
+ */
+function sameHardware(a, b) {
+  const { name: _an, ...ra } = a || {};
+  const { name: _bn, ...rb } = b || {};
+  return canonical(ra) === canonical(rb);
+}
+
+/**
+ * Create a device from a topology or shop: every selector closed, every blower idle.
+ *
+ * With `prev` — the device this layout REPLACES — a save is not a reboot: what the new layout leaves standing carries
+ * over. Readings and switch-on order by machine id, each blower's state by system id, and a gate's position only when it
+ * is the same physical gate (sameHardware); a gate the save changed starts closed, as every gate does on a first layout.
+ * Then it re-decides at once against the new layout. Mirrors TopologyRuntime::adopt(), which explains why.
+ */
+function createTopologyDevice(doc, prev = null, nowMs = Date.now()) {
   const shop = doc;
   const actuatorStates = {};
   const collectors = {};
@@ -126,7 +151,7 @@ function createTopologyDevice(doc) {
       actuatorStates[sel.id] = cs ? cs.id : null;
     }
   }
-  return {
+  const d = {
     // Kept under `topology` so every existing consumer (mock GET, demo service,
     // the conformance suites) keeps reading the same field. It is a shop now.
     topology: shop,
@@ -141,6 +166,27 @@ function createTopologyDevice(doc) {
     // does not simulate — a node dropping, an RF press giving up, a stale IP.
     staged: {},
   };
+  if (!prev) return d;
+
+  const gatesBefore = new Map();
+  for (const sys of S.systemsOf(prev.topology)) {
+    for (const sel of T.selectorsOf(S.systemView(prev.topology, sys))) gatesBefore.set(sel.id, sel);
+  }
+  for (const sys of S.systemsOf(shop)) {
+    for (const sel of T.selectorsOf(S.systemView(shop, sys))) {
+      const was = gatesBefore.get(sel.id);
+      if (was && sameHardware(was, sel) && sel.id in prev.actuatorStates) d.actuatorStates[sel.id] = prev.actuatorStates[sel.id];
+    }
+    if (prev.collectors[sys.id]) d.collectors[sys.id] = { ...prev.collectors[sys.id] };
+  }
+  for (const m of S.machinesOf(shop)) {
+    if (m.id in prev.toolWatts) d.toolWatts[m.id] = prev.toolWatts[m.id];
+    if (m.id in prev.activationSeq) d.activationSeq[m.id] = prev.activationSeq[m.id];
+  }
+  d.seqCounter = prev.seqCounter;
+  d.staged = { ...prev.staged };
+  reconcile(d, nowMs);
+  return d;
 }
 
 /**
@@ -552,7 +598,7 @@ module.exports = {
   setBinFull, collectorBinView,
   COLLECTOR_RUNNING_W, COLLECTOR_SPINUP_GRACE_MS, collectorPlugState,
   machineThreshold, collectorOffDelayMs,
-  createTopologyDevice, activeMachines, reconcile, setMachinePower, statusView,
+  createTopologyDevice, sameHardware, activeMachines, reconcile, setMachinePower, statusView,
   tickCollector, anyCollectorOn, anyCollectorCoasting,
   setCollectorManual, collectorIsManual, setCollectorPlugFault,
   PROBLEM_TEXT, setProblem, clearProblem, problemsView,

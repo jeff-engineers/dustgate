@@ -330,13 +330,12 @@ bool HttpApiServer::begin() {
 
     registerRoutes();
 
-    // CORS headers for Angular dev server (localhost:4200)
-    DefaultHeaders::Instance().addHeader("Access-Control-Allow-Origin",  "*");
-    DefaultHeaders::Instance().addHeader("Access-Control-Allow-Headers", "X-Api-Key, Content-Type");
-    DefaultHeaders::Instance().addHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
-    // GET /api/serial answers in headers; a browser hides them cross-origin
-    // (the dev UI on localhost) unless they are named here.
-    DefaultHeaders::Instance().addHeader("Access-Control-Expose-Headers", "X-Serial-Start, X-Serial-Next, X-Serial-Boot");
+    // NO CORS HEADERS, ON PURPOSE (2026-10-06). They were added for the Angular dev server calling the board from
+    // localhost:4200, and they said "*": any web page could read any answer. With GET /api/info handing out the API key
+    // unauthenticated, that let any page open on a phone on the shop WiFi read the key and then drive the shop — start the
+    // collector, move gates, push node firmware, reset everything. Nothing needs them: the app is served from this board
+    // (same origin) and `dev.sh live` proxies /api and /ws, so the browser only ever talks to localhost. Still open: DNS
+    // rebinding (a hostile name re-pointed at this address is same-origin) — see TODO.md.
 
     _server.begin();
     DEBUG_PRINT(F("[API] Server running on port ")); Serial.println(API_PORT);
@@ -1439,10 +1438,9 @@ void HttpApiServer::registerRoutes() {
     static MemoryGuard s_guard;
     _server.addMiddleware(&s_guard);
 
-    // OPTIONS preflight for CORS
+    // No CORS preflight answer: nothing here is meant to be called from another origin (see begin()).
     _server.onNotFound([](AsyncWebServerRequest* req) {
-        if (req->method() == HTTP_OPTIONS) req->send(204);
-        else req->send(404, "application/json", "{\"error\":\"not found\"}");
+        req->send(404, "application/json", "{\"error\":\"not found\"}");
     });
 
     // ------------------------------------------------------------------
@@ -1787,6 +1785,8 @@ void HttpApiServer::registerRoutes() {
     // JSON shape — which is why the wizard's scan silently found nothing.
     _server.on("/api/outlets/discover", HTTP_GET, [this](AsyncWebServerRequest* req) {
         if (!checkAuth(req)) return;
+        // One scan at a time: one pending flag and one reply slot (see /api/outlets/ping).
+        if (_discoverPending || _discoverReply.busy()) { sendError(req, 429, "a scan for plugs is already running"); return; }
         xSemaphoreTake(_mutex, portMAX_DELAY);
         _discoverPending = true;
         xSemaphoreGive(_mutex);
@@ -1861,6 +1861,10 @@ void HttpApiServer::registerRoutes() {
             if (deserializeJson(doc, data, len)) { sendError(req, 400, "invalid JSON"); return; }
             const char* ip = doc["ip"] | "";
             if (strlen(ip) == 0) { sendError(req, 400, "missing 'ip'"); return; }
+            // ONE AT A TIME, as node discovery and the servo jog already are: this route has ONE pending address and ONE reply
+            // slot, so a second request overwrote the first's address and every open response then streamed the same body —
+            // the Plugs page asked for every paired plug at once and all but one read "not answering" (found 2026-10-06).
+            if (_pingPending || _pingReply.busy()) { sendError(req, 429, "another plug is being asked - try again in a moment"); return; }
 
             xSemaphoreTake(_mutex, portMAX_DELAY);
             _pingPending = true;
@@ -1927,6 +1931,8 @@ void HttpApiServer::registerRoutes() {
             // have said whose it is first; this only says a human answered.
             const bool  take  = doc["takeover"] | false;
             if (strlen(ip) == 0) { sendError(req, 400, "missing 'ip'"); return; }
+            // One at a time: one pending address and one reply slot (see /api/outlets/ping).
+            if (_outletNamePending || _outletNameReply.busy()) { sendError(req, 429, "another plug is being renamed - try again in a moment"); return; }
 
             xSemaphoreTake(_mutex, portMAX_DELAY);
             _outletNamePending  = true;
@@ -1963,6 +1969,8 @@ void HttpApiServer::registerRoutes() {
             if (deserializeJson(doc, data, len)) { sendError(req, 400, "invalid JSON"); return; }
             const char* ip = doc["ip"] | "";
             if (strlen(ip) == 0) { sendError(req, 400, "missing 'ip'"); return; }
+            // One at a time: one pending address and one reply slot (see /api/outlets/ping).
+            if (_outletReleasePending || _outletReleaseReply.busy()) { sendError(req, 429, "another plug is being released - try again in a moment"); return; }
 
             xSemaphoreTake(_mutex, portMAX_DELAY);
             _outletReleasePending = true;

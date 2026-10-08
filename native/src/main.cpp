@@ -13,6 +13,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <map>
+#include <mutex>
 #include <memory>
 #include <string>
 #include <thread>
@@ -59,6 +60,10 @@ using namespace dgbrain;
 namespace nl = topo::nodelink;
 
 static NodeHub* g_hub = nullptr;
+// Boards that took our claim but are too old to dial a brain themselves (no caps.join in their WELCOME): this brain never
+// dials a node, so they pair and then never link. Filled by claimNode() on its own thread, read by raiseDeviceProblems().
+static std::mutex g_tooOldMu;
+static std::set<std::string> g_tooOld;
 static topo::TopologyRuntime g_rt;
 static std::string g_topoJson, g_topoPath, g_topoErr, g_stateDir;
 
@@ -122,6 +127,14 @@ static void raiseDeviceProblems(uint32_t now) {
         plugs.push_back(v);
     }
     problems.update(g_rt, boards, plugs, now);
+    std::set<std::string> old; { std::lock_guard<std::mutex> g(g_tooOldMu); old = g_tooOld; }
+    for (auto& kv : g_hub->nodes()) {
+        const std::string key = "old:" + kv.first;
+        if (old.count(kv.first) && !kv.second->session.health().linked)
+            g_rt.raiseProblem(key, "board-fault", "bad", "board", kv.first,
+                              "Its firmware is too old to link to this brain (it waits to be dialled). Reflash it by USB.", now);
+        else g_rt.clearProblem(key);
+    }
 }
 
 static void feedPlugs(uint32_t now) {
@@ -147,11 +160,16 @@ static void feedPlugs(uint32_t now) {
 }
 
 // ── the collector: one presser and one press-state per system that has a remote ──────────────────
-struct CollectorSlot { std::string sys; std::unique_ptr<topo::RemoteRfPresser> presser; topo::PressState ps; };
+// `key` names the blower and the transmitter that presses it, so a layout save can tell "the same remote" from a new one.
+struct CollectorSlot { std::string sys, key; std::unique_ptr<topo::RemoteRfPresser> presser; topo::PressState ps; };
 static std::vector<CollectorSlot> g_collectors;
-static std::vector<topo::PressState> g_oldPress;
 
 static void rebuildPressers() {
+    // A SAVE IS NOT A REBOOT (see TopologyRuntime::adopt). The press bookkeeping says whether WE started a blower, and a
+    // fresh one reads every running blower as started by a person, which nothing then presses off. It is kept for the same
+    // system pressed by the same transmitter (board, address, data); a different remote is a different blower.
+    std::map<std::string, topo::PressState> kept;
+    for (CollectorSlot& c : g_collectors) kept[c.key] = c.ps;
     g_collectors.clear();
     for (const std::string& sys : g_rt.systemIds()) {
         JsonObjectConst rf = g_rt.collectorRf(sys);
@@ -159,11 +177,16 @@ static void rebuildPressers() {
         // There is no pad on this machine: the transmitter is always a paired node's, named by controllerId.
         const std::string board = rf["controllerId"] | "";
         if (board.empty() || topo::isOwnBoard(board, "")) { dglog::linef("[RF] collector %s: the layout names no board for its transmitter\n", sys.c_str()); continue; }
+        const uint8_t addr = (uint8_t)(rf["address"] | (int)topo::rf::kRocklerAddress), data = (uint8_t)(rf["data"] | (int)topo::rf::kRocklerData);
         CollectorSlot c; c.sys = sys;
-        c.presser.reset(new topo::RemoteRfPresser(&g_hub->bus(), board,
-            (uint8_t)(rf["address"] | (int)topo::rf::kRocklerAddress), (uint8_t)(rf["data"] | (int)topo::rf::kRocklerData),
+        c.key = sys + "|" + board + "|" + std::to_string(addr) + "|" + std::to_string(data);
+        auto k = kept.find(c.key);
+        if (k != kept.end()) c.ps = k->second;
+        c.presser.reset(new topo::RemoteRfPresser(&g_hub->bus(), board, addr, data,
             (uint32_t)(rf["tickUs"] | (int)topo::rf::kDefaultTickUs), (uint32_t)(rf["repeats"] | (int)topo::rf::kDefaultRepeats)));
-        dglog::linef("[RF] collector %s pressed by RF through board %s\n", sys.c_str(), board.c_str());
+        // Said when a layout loads, so it must not read like an event: nothing is pressed here.
+        dglog::linef("[RF] collector %s: its remote is keyed through board %s%s\n", sys.c_str(), board.c_str(),
+                     k != kept.end() ? " (press state kept across the save)" : "");
         g_collectors.push_back(std::move(c));
     }
 }
@@ -390,6 +413,9 @@ static bool readStatic(std::string path, std::string& body, std::string& mime) {
 // host: where a plug's push target points (our address, which is what decides "ours"); name: the owner suffix a plug carries
 // and what recognises our own plug at a stale address after the brain moves.
 static outletops::Self selfIdentity() { return outletops::Self{localIp(), g_hub->primaryId()}; }
+// What the sweep must not knock on: our own address, but only when it is knocking on the port we serve (a test runs a fake
+// plug beside the brain on 127.0.0.1, on another port). The sweep's subnet comes from the same address.
+static std::string sweepSelf() { return localIp() + (g_plugPort == std::to_string(g_port) ? "" : "|other-port"); }
 
 // ── finding boards by mDNS ───────────────────────────────────────────────────────────────────────
 // "Scan for boards": a node advertises _dustgate._tcp with TXT (owner, board, servos, linear, role). Unlike a node that already
@@ -509,7 +535,17 @@ static void claimNode(const std::string& hostIn, bool takeover) {
         if (!step([&] { w.async_read(buf, [&](beast::error_code e, size_t) { ec = e; }); })) { dglog::linef("[CLAIM] %s: no WELCOME (%s)", host.c_str(), ec.message().c_str()); return; }
         StaticJsonDocument<768> r; deserializeJson(r, beast::buffers_to_string(buf.data()));
         const bool accepted = r["accepted"] | true;
-        if (accepted) dglog::linef("[CLAIM] %s is ours (%s, %s) - it will dial us now", host.c_str(), (const char*)(r["board"] | "?"), (const char*)(r["fw"] | "?"));
+        // A board from before node-initiated links (2026-10-04) says nothing of caps.join and waits to be dialled, which this
+        // brain never does: it would pair and then sit unlinked with no word as to why (found 2026-10-07, a planer sensor).
+        const bool dials = (r["caps"]["join"] | 0) != 0;   // sent as 1 (NodeLink.h buildWelcome), and `| false` reads an int as absent
+        if (accepted && !dials) {
+            dglog::linef("[CLAIM] %s is ours, but its firmware (%s) is too old to dial a brain - it will never link. Reflash it by USB.",
+                         host.c_str(), (const char*)(r["fw"] | "?"));
+            std::lock_guard<std::mutex> g(g_tooOldMu); g_tooOld.insert(hostIn);
+        } else if (accepted) {
+            dglog::linef("[CLAIM] %s is ours (%s, %s) - it will dial us now", host.c_str(), (const char*)(r["board"] | "?"), (const char*)(r["fw"] | "?"));
+            std::lock_guard<std::mutex> g(g_tooOldMu); g_tooOld.erase(hostIn);
+        }
         else dglog::linef("[CLAIM] %s belongs to '%s' - pair it again with takeover to take it", host.c_str(), (const char*)(r["claimedBy"] | "someone else"));
         beast::error_code e2; w.next_layer().socket().shutdown(tcp::socket::shutdown_both, e2);
     } catch (const std::exception& e) { dglog::linef("[CLAIM] %s: %s", host.c_str(), e.what()); }
@@ -557,6 +593,8 @@ public:
         }
         std::string out; serializeJson(d, out); return out;
     }
+    bool linearGoto(const std::string& id, float mm, bool home, std::string& why) override { return g_rt.driveLinearTo(id, mm, why, home); }
+    bool gateMoving() override { return g_rt.anyGateMoving(); }
     bool updateNode(const std::string& id, std::string& why) override {
         auto n = g_hub->find(id);
         if (!n) { why = "that board is not paired"; return false; }
@@ -750,14 +788,41 @@ private:
             o.body = "{\"ok\":true}"; return;
         }
         if (t == "/api/outlets/save" && m == "POST") { o.body = "{\"ok\":true}"; return; }   // nothing to persist: plugs live in the layout
-        if (t == "/api/outlets/sweep" && m == "POST") { g_sweep.start(localIp(), g_plugPort, selfIdentity()); o.body = "{\"ok\":true}"; return; }
+        if (t == "/api/outlets/sweep" && m == "POST") { g_sweep.start(sweepSelf(), g_plugPort, selfIdentity()); o.body = "{\"ok\":true}"; return; }
         if (t == "/api/outlets/sweep" && m == "DELETE") { g_sweep.cancel(); o.body = "{\"ok\":true}"; return; }
         if (t == "/api/outlets/sweep" && m == "GET") { o.body = g_sweep.progressJson(); return; }
-        // No mDNS browser here, so "discover" is what the last sweep found; the sweep is the way to look.
+        // No mDNS browser here, so "discover" is the plugs the last sweep FOUND — asked again, now. The picker finds a tool's
+        // plug by its draw ("switch it on and tap Scan again"), and it used to be handed the sweep's own rows, frozen at
+        // whatever each plug drew when the sweep passed it: the draw never moved, so nothing could be found that way
+        // (found 2026-10-07, pairing a second collector's plug on the Pi). Each address is described in parallel, off the
+        // network thread; the sweep is still how a NEW plug is found.
         if (t == "/api/outlets/discover" && m == "GET") {
-            DynamicJsonDocument d(16384); JsonArray a = d.to<JsonArray>();
-            for (auto& r : g_sweep.rows()) { DynamicJsonDocument one(1024); if (!deserializeJson(one, r)) a.add(one.as<JsonObject>()); }
-            serializeJson(d, o.body); return;
+            // Nothing swept since this brain started (a restart forgets the rows): sweep first, so the picker is never
+            // handed an empty list for want of a button nobody knew to press. A few seconds on a /24.
+            if (!g_sweep.everRan() && !g_sweep.running()) g_sweep.start(sweepSelf(), g_plugPort, selfIdentity());
+            if (g_sweep.running()) {
+                defer([] {
+                    for (int i = 0; i < 600 && g_sweep.running(); i++) std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                    std::vector<std::string> rows = g_sweep.rows();
+                    DynamicJsonDocument d(16384); JsonArray a = d.to<JsonArray>();
+                    for (const std::string& r : rows) { DynamicJsonDocument one(1024); if (!deserializeJson(one, r)) a.add(one.as<JsonObject>()); }
+                    Out out; serializeJson(d, out.body); return out;   // just swept: these readings are fresh
+                });
+                return;
+            }
+            std::vector<std::string> ips;
+            for (auto& r : g_sweep.rows()) { StaticJsonDocument<1024> one; if (!deserializeJson(one, r) && one["ip"].is<const char*>()) ips.push_back(one["ip"].as<std::string>()); }
+            defer([ips] {
+                std::vector<std::string> rows(ips.size());
+                std::vector<std::thread> asks;
+                const outletops::Self self = selfIdentity();
+                for (size_t i = 0; i < ips.size(); i++) asks.emplace_back([&rows, &ips, i, self] { rows[i] = outletops::describeJson(ips[i].c_str(), self); });
+                for (auto& th : asks) th.join();
+                DynamicJsonDocument d(16384); JsonArray a = d.to<JsonArray>();
+                for (const std::string& r : rows) { DynamicJsonDocument one(1024); if (!deserializeJson(one, r)) a.add(one.as<JsonObject>()); }
+                Out out; serializeJson(d, out.body); return out;
+            });
+            return;
         }
         if (t == "/api/outlets" && m == "GET") { o.body = "{\"outlets\":[]}"; return; }
         if (t.rfind("/api/outlets", 0) == 0 && (m == "PUT" || m == "DELETE")) { o.body = "{\"ok\":true}"; return; }
@@ -792,7 +857,7 @@ private:
             o.body = dglog::readFrom((size_t)std::strtoull(ar.param("from").c_str(), nullptr, 10), start, next);
             o.mime = "text/plain; charset=utf-8";
             o.headers = {{"X-Serial-Start", std::to_string(start)}, {"X-Serial-Next", std::to_string(next)}, {"X-Serial-Boot", std::to_string(dglog::R().bootId)},
-                         {"Cache-Control", "no-store"}, {"Access-Control-Expose-Headers", "X-Serial-Start, X-Serial-Next, X-Serial-Boot"}};
+                         {"Cache-Control", "no-store"}};   // no CORS headers: same origin only, as on the ESP32
         }
         else if (t == "/api/serial" && m == "POST") err(http::status::not_implemented, "this brain has no serial console to type into");
         else if (t == "/api/linklog" && m == "GET") {

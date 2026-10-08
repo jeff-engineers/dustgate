@@ -1,3 +1,4 @@
+import { MANIFOLD_PROFILES } from '@device-model';
 import { AfterViewInit, Component, ElementRef, HostListener, NgZone, OnDestroy, OnInit, ViewChild } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
@@ -4723,7 +4724,10 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     count = Math.min(count, SLIDE_MAX_OUTLETS - start);
     if (count <= 0) return;
     for (let i = start + 1; i <= start + count; i++) {
-      states.push({ id: 's' + i, isClosed: false, positionMm: Math.round(i * 82.9 * 10) / 10 });
+      // Where a Rockler 2½" rack actually puts outlet i: the first next to the home end, then one pitch apart (the shared
+      // profile). It was i × 82.9, which put every outlet a whole gate too far out — outlet 4 past the end of a 4-gate rack.
+      const prof = MANIFOLD_PROFILES['rockler-2.5'];
+      states.push({ id: 's' + i, isClosed: false, positionMm: Math.round((prof.firstGateOffsetMm + (i - 1) * prof.gatePitchMm) * 10) / 10 });
       branches.push({ id: 'b' + i, opensState: 's' + i, role: 'blocked' });
     }
   }
@@ -5191,11 +5195,14 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       this.dirty = false;
       // Plugs of machines a system delete / Clear shop removed, now that the removal is saved. Best effort: a plug that
       // does not answer stays paired on its own side, which is the same as it was.
+      // ONE AT A TIME: an ESP32 brain releases plugs through a single slot and turns a second request away while one is
+      // in flight, so firing them all at once released one plug and dropped the rest.
       const stillNamed = new Set(plugIpsOf(doc as unknown as ShopDoc));
-      for (const ip of [...this.releaseOnSave]) {
-        this.releaseOnSave.delete(ip);
-        if (!stillNamed.has(ip)) void this.api.releaseOutlet(ip).catch(() => undefined);
-      }
+      const release = [...this.releaseOnSave].filter(ip => !stillNamed.has(ip));
+      this.releaseOnSave.clear();
+      void (async () => {
+        for (const ip of release) { try { await this.api.releaseOutlet(ip); } catch { /* best effort, as before */ } }
+      })();
       this.airflowErrors = this.liveLeaks();
       // An unpair that couldn't fully release the plug says so HERE rather than in
       // the sheet, which closes on the way out. It replaces "Saved." exactly once

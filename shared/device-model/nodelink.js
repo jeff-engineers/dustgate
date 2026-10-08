@@ -218,6 +218,10 @@ const RECONNECT_MAX_MS = 15000;
  * @property {'servo'|'linear'} drive
  * @property {number} [angle]       drive==='servo': absolute degrees, 0–180
  * @property {number} [positionMm]  drive==='linear': absolute mm from the datum
+ * @property {boolean}[home]        drive==='linear' only: find the datum AGAIN before this move, even if the node has one.
+ *                                  Absent means no. Setting a slider up from the app starts this way (2026-10-07): a datum
+ *                                  left from before a jam is a count nobody should calibrate against. Additive — a node
+ *                                  that predates it ignores the field and moves from the datum it has.
  * @property {boolean}[holdAtRest]  servo only; default false (move then detach)
  *
  * @typedef {Object} AckFrame       S→P, the SET was accepted or refused.
@@ -361,9 +365,10 @@ function ota(seq, path, size, md5, fw) {
  * @param {import('./topology').Selector} sel
  * @param {string} stateId
  * @param {number|null} realization  resolved angle (servo) or mm (linear)
+ * @param {{home?: boolean}} [opts]  linear only: find the datum again first (see SetFrame.home)
  * @returns {SetFrame}
  */
-function set(seq, sel, stateId, realization) {
+function set(seq, sel, stateId, realization, opts = {}) {
   const isServo = sel.kind === 'servoGate' || sel.kind === 'servoManifold';
   const f = {
     t: 'SET',
@@ -379,6 +384,7 @@ function set(seq, sel, stateId, realization) {
     f.holdAtRest = !!(sel.servo && sel.servo.holdAtRest);
   } else {
     f.positionMm = realization;
+    if (opts.home) f.home = true;
   }
   return f;
 }
@@ -714,6 +720,8 @@ function validateFrame(f, direction) {
       // prevent: it would leave the secondary guessing where to point a valve.
       if (f.drive === 'servo') num('angle', 0, 180);
       if (f.drive === 'linear') num('positionMm', -10000, 10000);
+      if ('home' in f && typeof f.home !== 'boolean') errs.push('SET.home must be true|false');
+      if (f.home === true && f.drive !== 'linear') errs.push('SET.home is for a linear drive');
       break;
     case 'CONFIG':
       num('seq', 0, Number.MAX_SAFE_INTEGER);

@@ -15,6 +15,10 @@ struct Fake : Backend {
   void resetAll() override { calls.push_back("reset"); }
   void pairNode(const std::string& h, const std::string& n, bool r, bool t) override { calls.push_back("pair:" + h + ":" + n + (r ? ":remove" : "") + (t ? ":takeover" : "")); }
   void pauseLinks(bool p) override { calls.push_back(p ? "pause" : "resume"); }
+  bool linOk = true; bool moving = false;
+  bool linearGoto(const std::string& id, float mm, bool home, std::string& why) override {
+    calls.push_back("lin:" + id + ":" + std::to_string((int)(mm * 10)) + (home ? ":home" : "")); why = "a tool is running"; return linOk; }
+  bool gateMoving() override { return moving; }
 };
 static Response run(Fake& f, const char* m, const char* path, const char* body = "", bool* mine = nullptr) {
   Request r; r.method = m; r.path = path; r.body = body; Response out; const bool h = handle(r, f, out); if (mine) *mine = h; return out;
@@ -62,7 +66,22 @@ int main() {
     bool mine = true; run(f, "GET", "/api/topology", "", &mine);
     ok_("a route it does not own is left to the shell", !mine);
   }
-  printf("\nA4 query parameters\n");
+  printf("\nA4 a slider on a node, set up by hand\n");
+  { Fake f;
+    ok_("a goto carries the gate and the distance", run(f, "POST", "/api/linear/goto", R"({"selectorId":"man","mm":83.5})").status == 200 && f.calls.back() == "lin:man:835");
+    ok_("a whole number of mm is fine", run(f, "POST", "/api/linear/goto", R"({"selectorId":"man","mm":0})").status == 200 && f.calls.back() == "lin:man:0");
+    ok_("home first is passed on", run(f, "POST", "/api/linear/goto", R"({"selectorId":"man","mm":1,"home":true})").status == 200 && f.calls.back() == "lin:man:10:home");
+    ok_("a goto needs a gate", run(f, "POST", "/api/linear/goto", R"({"mm":10})").status == 400);
+    ok_("...and a distance", run(f, "POST", "/api/linear/goto", R"({"selectorId":"man"})").status == 400);
+    f.linOk = false;
+    { Response r = run(f, "POST", "/api/linear/goto", R"({"selectorId":"man","mm":10})");
+      ok_("a refusal is a 409 that says why", r.status == 409 && r.body.find("a tool is running") != std::string::npos); }
+    ok_("still moving reads true", (f.moving = true, run(f, "GET", "/api/linear/state").body == R"({"moving":true})"));
+    ok_("...and done reads false", (f.moving = false, run(f, "GET", "/api/linear/state").body == R"({"moving":false})"));
+    Backend plain; Request r; r.method = "POST"; r.path = "/api/linear/goto"; r.body = R"({"selectorId":"man","mm":10})"; Response out;
+    ok_("a brain that cannot drive one refuses rather than pretends", handle(r, plain, out) && out.status == 409);
+  }
+  printf("\nA5 query parameters\n");
   { Request r; r.query = "kind=pwm&from=12";
     ok_("a parameter is found", r.param("kind") == "pwm" && r.param("from") == "12");
     ok_("an absent one is empty", r.param("old").empty());

@@ -35,6 +35,92 @@ first-boot WiFi setup for a customer, a read-only root, and the `--git` update p
 
 ## Bugs
 
+- **A slider node fails silently: a failed home, both endstops triggered, or a jam never reach the brain (jeff, 2026-10-07).**
+  In the shop the slider page sat on "finding home" while the node's serial said `[HOME] FAILED — reached the FAR endstop`
+  (both switches read TRIGGERED after a jam, cleared only by power-cycling the whole slider — a latched supply on the driver
+  side is the guess, unconfirmed), and earlier `two commands retired without moving the carriage. Jammed…`. The brain sees an
+  ACK and then nothing until the move timeout. Report it: a STATE with an error, or a SENSE-like fault frame, so the page says
+  what the slider says. Protocol change (nodelink.js ↔ NodeLink.h) plus a slider reflash. Also check the jam detector: it fired
+  at 165.8 and 248.7 mm, inside the rail, on long moves that may have completed.
+
+### From the bug search of 2026-10-06 (after the Pi bring-up)
+
+Read-only pass over the native brain, the Pi scripts, the shared control/outlet code and this week's app work (the Plugs page,
+system removal, the clamp switch). Most serious first. None of it has been seen to fail on hardware: each was found by reading,
+and each says why it is believed. Line numbers are as of `13e7cff`. **Fixed since, on `pi-brain-bringup` (see DONE.md):** a layout
+save resetting the collector, the ESP32's CORS header, the Plugs page asking every plug at once (and leaking its poll), the
+dead-Shelly stall, and the RF log line that read like a press. **Since, 2026-10-07:** a slider on a node can be set up from
+the app, the Pi's plug picker shows live draw (and not itself), and a board too old to dial in says so.
+
+- **SECURITY: DNS rebinding reaches both brains.** `GET /api/info` hands out the API key unauthenticated, by design (the app
+  bootstraps from it). The CORS header that let ANY page read it is gone (fixed 2026-10-06), but a hostile page can still
+  re-point its own name at 192.168.x.x and then be same-origin with the brain. A `Host` check closes it: accept an IP
+  literal, a single-label name and the local suffixes (`.local`, `.lan`, `.home.arpa`...), refuse a public domain. Needs a
+  decision on which local names a router may hand out (Google Wifi gives `.lan`), so not done blind. Matters little in
+  Jeff's shop today; it is a must before anyone else runs one.
+
+- **Native: a collector on a CONTROL plug that misses its one switch command stays wrong.** `feedPlugs()` records the state
+  as asserted when it queues it (`g_swAsserted`, `main.cpp:140`), and `PlugPoller` sends it once and discards it whether or
+  not the plug answered (`switchWanted = -1`, result of `setSwitch()` ignored). A plug that was unreachable for that moment,
+  or a slot recreated by `sync()` (a layout save that changes its address), never gets it again until the wanted state flips.
+  The ESP32 keeps the wanted state and retries every poll until the plug takes it (`SmartOutletControl.cpp:437-459`). Jeff's
+  shop presses by RF, so this path has not run there. Fix: keep `switchWanted` until a `setSwitch()` succeeds, as the ESP32 does.
+
+- **Native: one exception in a network handler restarts the brain.** `io.run()` (`main.cpp:1029`) is not guarded, and several
+  calls inside handlers throw: `socket().remote_endpoint()` (`:663`, `:668`) throws when the peer reset between the upgrade
+  and the call, `make_address(g_bcast)` throws on a bad `--broadcast`. An uncaught throw ends the process; systemd brings it
+  back in about 3 s and the nodes relink, which reads as a flap nobody can explain. Fix: the `remote_endpoint(ec)` overloads,
+  and a `try { io.run(); } catch` loop that logs and carries on.
+
+- **Native: a data race on the knock list.** `GET /api/nodes/discover` runs `discoverBoards()` on a worker thread (`defer`,
+  `main.cpp:700`), and it iterates `g_knocks` while the network thread inserts into it on every unpaired JOIN (`:251`). A
+  scan from the Boards screen while an unpaired board keeps knocking can crash the brain. Fix: copy the knocks on the network
+  thread before deferring (the mDNS half is the only slow part). `g_knocks` is also never pruned (old entries are only
+  skipped), so a LAN client sending JOINs with made-up ids grows it without bound.
+
+- **`deploy.sh` can install an OLD binary and call it the new one.** The cross-build's failure is swallowed
+  (`make ... | grep ... || true`) and the check after it is only "does `native/build/arm64/dustgate-brain` exist", which a
+  previous build satisfies; the Pi then logs "installing the prebuilt <new commit>". The Makefile makes it likelier:
+  `DG_COMMIT` is not a prerequisite (a new commit with no source change keeps the old id in `/api/info`), and the
+  prerequisite lists miss headers the brain includes (`utils/JsonAlloc.h`, `sensing/PowerSensor.h`). Fix: check make's own
+  status, delete the old binary first, and generate dependencies (`-MMD -MP`) instead of listing them. Also tidy the
+  `$(BIN:build/dustgate-brain=src/main.cpp)` substitution in the `arm64` rule, which is just `src/main.cpp` written obscurely.
+
+- **The Plugs page writes back the layout it loaded, not the current one.** It reads the layout ONCE and puts the whole
+  document back on pair or release (`plugs.component.ts:403`, `:430`), so an edit made elsewhere since it loaded is
+  silently undone. Read the layout again just before changing it. (Its leaked poll is fixed, 2026-10-06.)
+
+- **Native: a latent use-after-free in `NodeWs::write()`.** The write is started on `net::buffer(it.text)` (`main.cpp:297`),
+  where `it` is a local, and only THEN is the text moved into `_hold` to keep it alive. That works only because moving a long
+  string keeps its buffer; a frame short enough for the small-string optimisation (≤15 bytes on libstdc++, ≤22 on libc++) is
+  copied instead, and the socket sends from a dead stack frame. No frame is that short today. Fix: move into `_hold` first
+  and write from `_hold`.
+
+- **macOS native brain: a board's mDNS name is pasted into a shell command.** `mdnsBoards()` runs
+  `sh -c 'dns-sd -L <name> ...'` with `<name>` taken from whatever answers `_dustgate._tcp` (`main.cpp:427`), so a device on
+  the network advertising a name with a quote and a command in it runs that command as the brain's user. The Linux path
+  (avahi-browse) does not interpolate. Fix: run `dns-sd` with `posix_spawn`/`execvp` and an argument list, no shell.
+
+- **Smaller ones, one line each:**
+  - A node on another NodeLink version is refused as `busy` with nothing in the log (`main.cpp:246`). There is no
+    `version` refuse reason (`kRefuseReasons`), so it retries forever and looks like a dead board. At least log
+    "reflash it".
+  - `NativeBackend::discoverNodes()` (`main.cpp:550`) is dead: the shell answers `GET /api/nodes/discover` itself before
+    `api::handle()` sees it. `DELETE /api/topology` (`:767`) repeats the first half of `resetAll()`. Fold both.
+  - Renaming a plug cuts the label at 47 bytes (`main.cpp:724`), which can split a multi-byte character (an accent, an
+    emoji) and send the plug an invalid name. Cut on a character boundary, or cap the field in the app.
+  - `deploy.sh --state` runs `sudo` over `ssh` WITHOUT `-t`, so it fails with "a terminal is required" whenever the Pi's sudo
+    credential is not cached; it worked on 2026-10-06 only because the previous deploy had just asked.
+  - `setup.sh` ends by suggesting `deploy.sh root@<host>.local`: `whoami` under sudo is root. Use `$SUDO_USER`. (Its
+    `dphys-swapfile` block also does nothing on Trixie, and the compiler it installs is only for `--on-pi` now.)
+  - The native link log (`linklog.txt`) is appended to forever: nothing rotates it, though `/api/linklog?old=1` reads a `.1`
+    that only the ESP32 writes. Small per event, but it is a Pi's SD card.
+  - `AtomicFile.h`'s header names a `readWithBackup()` that does not exist (the fallback is inline in `main()`).
+  - The native beacon goes to `x.y.z.255` (it assumes a /24, as the sweep does), and `guessIp()` needs a default route (it
+    "connects" to 8.8.8.8): a shop network with no gateway leaves the brain announcing 127.0.0.1.
+
+### Earlier
+
 - **Clamp switch: the node still reports `caps.ct` from its pin map, and the jack idea is open (2026-10-06).** The per-board switch
   landed (D-76), kept in the layout as `clamp: true`, so a layout cannot name a clamp the person has not switched on. What it
   does not do is stop a node CLAIMING one. If the clamp moves to a headphone-style jack, its switch contact could report
@@ -252,15 +338,6 @@ first-boot WiFi setup for a customer, a read-only root, and the `--git` update p
   is the dead-head. A manual gesture wants the same kind of refusal.
 
 
-- **"How does DustGate know it's running?" is not a yes/no question, but the
-  control under it is Yes/No.** element-outlet-config.component.ts. The label
-  used to read "Smart outlet on this tool?", which a Yes/No answers honestly; it
-  was reworded on 2026-09-16 to cover clamps without touching the control
-  beneath it, so the sheet now asks an open question and offers two answers that
-  do not fit it. The tool sheet (tool-setup.component.ts) already asks this
-  properly as a three-way — Metering plug / Current clamp / Nothing — so the fix
-  is probably to make these one component rather than to reword this one back.
-
 - **UI AUDIT 2026-09-17 — the same question is asked by two components, in two
   vocabularies.** Scanned every component for this; the findings are below,
   worst first. The pattern to copy is `selector-config`, which the canvas AND
@@ -366,55 +443,6 @@ first-boot WiFi setup for a customer, a read-only root, and the `--git` update p
   sensor spec is exactly id+kind+channel. Both were right for §5.4b and both have
   to change.
 
-- **~~The GUI sweep did not find a Tasmota~~ DIAGNOSED + HALF FIXED 2026-09-16.**
-  **The device was never asked.** jeff confirmed the same sweep from the CLI
-  found the plug, which exonerates the whole firmware side — prefix, the
-  two-phase timings, `TasmotaOutlet::probe()`. Curling the plug directly returns
-  a clean 200 with a scalar `StatusSNS.ENERGY.Power`, so it would have parsed.
-
-  The canvas started a sweep only when something was unpaired
-  (`if (this.unpairedTargets().length) void this.scanOutlets()`), and `showTray`
-  hid the tray under the SAME condition — with the "Look for new" button inside
-  it. So a fully-wired shop had no way to sweep at all, which is precisely the
-  shop where you have just bought another plug.
-
-  **Fixed:** a `Find plugs` item in the ⋯ menu, beside `Find boards`, which pins
-  the tray open and runs the sweep regardless of the layout. And the empty-tray
-  text now separates "nothing answered" from "all N already on machines" —
-  those send you to opposite places, and reading the second as the first is how
-  a sweep that WORKED looks like one that failed.
-
-  **STILL OPEN:** which of the two actually bit him is unknown, because a plug
-  already claimed in the layout is filtered out of the tray by design
-  (`freeOutlets()`), and that also reads as "not found". Worth confirming
-  against his real layout once the collector is back on WiFi — and worth asking
-  whether a claimed plug should be shown greyed with its machine's name rather
-  than hidden outright.
-
-  The plug answered fine at **192.168.87.44** — found from bash, confirmed by
-  `curl /cm?cmnd=Status%208` returning a full ENERGY block — and
-  `POST /api/outlets/sweep` did not turn it up.
-
-  **Not a range problem:** `OutletSweep.h` knocks on `<prefix>.1 .. .254`, so .44
-  is covered. That leaves the timeout, the knock/ask split, or the prefix — and
-  the prefix is worth checking first, since the collector was running
-  DISCONNECTED from the shop system at the time (see below) and a board on a
-  different /24 would sweep the wrong subnet entirely and report a clean miss.
-
-  **This is the first real test of the two-phase sweep** ("Knock first, then ask:
-  the sweep's one timeout was two jobs", 00d4676), which landed unverified
-  because the plug was off the network that day. It has now been exercised once
-  and failed once. A Tasmota has no mDNS to fall back on — the sweep is the ONLY
-  way to find one — so a sweep that misses is a plug the UI cannot reach at all.
-
-- **Bench context: the collector runs STANDALONE while the shop is replumbed
-  (jeff, 2026-09-16).** Disconnected from the shop system, which is the most
-  stable arrangement mid-replumb. Worth recording because it colours every
-  measurement taken now: no NodeLink traffic, no nodes, one board being its own
-  brain. The 0.195 A noise floor was measured in that state — so whatever is
-  making it, it is NOT node chatter, and the quieter radio makes the number a
-  floor-of-floors rather than a worst case.
-
 - **Pick a CHANNEL on a multi-channel Tasmota meter (2026-09-10; half done
   2026-09-14).** `TasmotaOutlet::doPoll()` now DETECTS `Power` as an array and
   refuses the plug loudly — unreachable, with a log line naming the EM2/EM6 and
@@ -430,14 +458,6 @@ first-boot WiFi setup for a customer, a read-only root, and the `--git` update p
   whether or not both are clamped, so it answers with an array either way. Until
   the channel work lands, an EM2 is a plug DustGate can see and cannot use — which
   is now at least a visible refusal rather than a silent zero.
-
-- **Calibrate isn't reachable from the /gates page.** Opening a gate there
-  (`http://dustgate.local/#/  gates`) offers no calibrate option, so the only way
-  in is whatever other path still has one. Find where the entry point went and
-  put it back on that page. **Checked 2026-10-06: the row has one** —
-  `gate-list.component.ts` renders a "Calibrate" / "Recalibrate" button per gate (and "Run setup again" for a slider) that opens
-  the editor. So this looks stale; ask what was tapped (the row's name, rather than its button?) before touching it.
-
 
 ## UI
 
@@ -1103,6 +1123,13 @@ would reach first — and no gate has ever moved for it.
 Things that cannot be settled at a desk: they need the actual machines, the actual plugs on the shop's network, or the whole shop
 running at once. Added 2026-10-06 from the cleanup and the features built after the bench session. Delete an item once it has run.
 
+- **Set up the slider on its node from the app (2026-10-07).** `/gates` → the slider → pick the manifold → each outlet: the
+  first move homes the gate (it runs to the end and back), then jog, capture, Test from the review and from the Gates list.
+  Then switch on a tool on that slider and confirm the gate goes to its captured outlet. Host-tested only (`test_slider_setup.cpp`).
+- **Save the layout while a tool runs (2026-10-07).** Change a trip point in Tools with the saw going: the blower stays on, no
+  gate moves, and when the saw stops the blower coasts and the brain presses it OFF. Host- and e2e-tested only.
+- **Pick the second collector's plug by its draw (2026-10-07).** Switch it on, tap Scan again in the collector sheet: its plug's
+  watts should rise, and the Pi itself should not be in the list.
 - **Clear shop and Delete system release real plugs.** Build a second system with a tool on a real Shelly, delete the system, SAVE,
   and confirm the plug stops pushing to the brain and its old push address is back (D-77). Also that Undo before Save leaves the
   plug alone.

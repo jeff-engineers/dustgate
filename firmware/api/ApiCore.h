@@ -72,6 +72,12 @@ public:
     virtual void pauseLinks(bool /*paused*/) {}
     virtual std::string discoverNodes() { return "[]"; }
     virtual bool updateNode(const std::string& /*id*/, std::string& why) { why = "node updates are not available on this brain"; return false; }
+    // Setting up a slider on a node: drive it to `mm` from its home end (TopologyRuntime::driveLinearTo), and whether
+    // anything is still moving. `why` is set on a refusal.
+    virtual bool linearGoto(const std::string& /*selectorId*/, float /*mm*/, bool /*homeFirst*/, std::string& why) {
+        why = "this brain cannot drive a slider on a node"; return false;
+    }
+    virtual bool gateMoving() { return false; }
     // POST /api/node-image: the shell hands over the raw body and the headers it parsed. Not part of handle().
 };
 
@@ -140,6 +146,25 @@ inline bool handle(const Request& req, Backend& be, Response& out) {
         p == "/api/move" || p == "/api/setstop" || p == "/api/motion" || p == "/api/stops" ||
         p.rfind("/api/config/", 0) == 0) {
         out = error(501, "this brain has no slider of its own"); return true;
+    }
+
+    // ── a slider on a NODE, set up by hand ─────────────────────────────────
+    // The single-board routes below address the brain's own rack; these address a sliding gate by its selector id,
+    // wherever it lives. POST {selectorId, mm, home?}; GET answers {"moving": bool} (a home takes a while).
+    if (post && p == "/api/linear/goto") {
+        StaticJsonDocument<160> d;
+        if (deserializeJson(d, req.body)) { out = error(400, "invalid JSON"); return true; }
+        const char* id = d["selectorId"].as<const char*>();
+        if (!id || !*id) { out = error(400, "missing 'selectorId'"); return true; }
+        if (!d["mm"].is<float>() && !d["mm"].is<int>()) { out = error(400, "missing 'mm'"); return true; }
+        std::string why;
+        // `home`: find the datum again first (the first move of a setup) — SET.home on the wire.
+        out = be.linearGoto(id, d["mm"].as<float>(), d["home"] | false, why) ? ok() : error(409, why.c_str());
+        return true;
+    }
+    if (req.method == "GET" && p == "/api/linear/state") {
+        out = json(be.gateMoving() ? "{\"moving\":true}" : "{\"moving\":false}");
+        return true;
     }
 
     // ── the shop ───────────────────────────────────────────────────────────

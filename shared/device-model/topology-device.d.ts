@@ -108,7 +108,10 @@ export interface TopologyStatus {
   machines?: Record<string, MachineStatus>;
 }
 
-export function createTopologyDevice(t: Topology): TopologyDevice;
+/** With `prev` (the device this layout replaces), what the new layout leaves standing carries over. */
+export function createTopologyDevice(t: Topology, prev?: TopologyDevice | null, nowMs?: number): TopologyDevice;
+/** The same physical gate before and after a save: every field but its name. */
+export function sameHardware(a: unknown, b: unknown): boolean;
 export function setToolPower(d: TopologyDevice, toolId: string, watts: number, nowMs?: number): unknown;
 export function statusView(d: TopologyDevice, nowMs?: number): TopologyStatus;
 /** Run ONE system's blower by hand, or stop it. Holds until switched off; opens a
