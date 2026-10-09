@@ -43,6 +43,21 @@ int main() {
     dp.update(*rt, {m}, {}, 108000);
     ok("...cleared by the next move", !rt->hasProblem("move:n3"));
     delete rt; }
+  printf("\nP1a an OPTIONAL board that is off is not a problem (docs/optional-nodes-plan.md)\n");
+  { NodeBus nb; TopologyRuntime* rt = load(nb); DeviceProblems dp;
+    BoardView b; b.host = "planer"; b.linked = false; b.downForMs = 10 * kBoardOfflineAfterMs; b.optional = true;
+    dp.update(*rt, {b}, {}, 100000);
+    ok("an optional board down for minutes raises nothing", !rt->hasProblem("board:planer"));
+    b.optional = false;
+    dp.update(*rt, {b}, {}, 102000);
+    ok("the same board, required, is board-offline", rt->hasProblem("board:planer"));
+    b.optional = true;
+    dp.update(*rt, {b}, {}, 104000);
+    ok("...and the problem goes when the layout makes it optional", !rt->hasProblem("board:planer"));
+    BoardView r; r.host = "planer2"; r.refused = true; r.optional = true;
+    dp.update(*rt, {r}, {}, 106000);
+    ok("an optional board that REFUSED us is still a problem: it answered", rt->hasProblem("board:planer2"));
+    delete rt; }
   printf("\nP1b an interrupted move is sent again\n");
   { NodeBus nb; RecBus bus; nb.setLocal(&bus, "primary");
     std::ifstream f("firmware/test/fixtures/twoGates.json"); std::stringstream b; b << f.rdbuf();

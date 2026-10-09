@@ -87,6 +87,28 @@ int main(int argc, char** argv) {
   for (size_t i = before; i < local.log.size(); i++) if (local.log[i] == "man->" + routedTo) resent = true;
   ok("the next switch-on drives the slider back to its stop", resent);
 
+  // ── the shop's servo pulse range reaches every board (2026-10-07) ─────────
+  {
+    struct RangeBus : StubBus { int lo = 0, hi = 0; void setServoPulseRange(int a, int b) override { lo = a; hi = b; } };
+    RangeBus own, far; topo::NodeBus nb2; topo::TopologyRuntime rt2;
+    nb2.setLocal(&own, "primary"); rt2.begin(&nb2);
+    std::string e2;
+    rt2.adopt(shop.c_str(), shop.size(), e2);
+    ok("a layout that says nothing gets the default, 400-2600", own.lo == 400 && own.hi == 2600, std::to_string(own.lo) + "-" + std::to_string(own.hi));
+    DynamicJsonDocument d(shop.size() * 4 + 2048); deserializeJson(d, shop);
+    d["servo"]["minUs"] = 450; d["servo"]["maxUs"] = 2550;
+    std::string withRange; serializeJson(d, withRange);
+    rt2.adopt(withRange.c_str(), withRange.size(), e2);
+    ok("the layout's range reaches this board's servos", own.lo == 450 && own.hi == 2550);
+    nb2.registerRemote("dustgate-node", &far);
+    ok("...and a board paired afterwards gets it too", far.lo == 450 && far.hi == 2550);
+    d["servo"]["minUs"] = 2200;                                // 350 wide, under the 500 minimum: the default, never this
+    std::string bad; serializeJson(d, bad);
+    rt2.adopt(bad.c_str(), bad.size(), e2);
+    ok("a range out of bounds falls back to the default", own.lo == 400 && own.hi == 2600 && far.lo == 400,
+       std::to_string(own.lo) + "-" + std::to_string(own.hi) + " far " + std::to_string(far.lo) + " err " + e2);
+  }
+
   printf("%d/%d passed\n", passed, passed + failed);
   return failed ? 1 : 0;
 }

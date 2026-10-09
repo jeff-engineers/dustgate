@@ -248,7 +248,7 @@ export class ServoCalibrationComponent implements OnInit {
    *  latched the dialog — the only thing that cleared the error was a successful
    *  jog, and every control that could make one was disabled by the error. */
   canJog(dir: number): boolean {
-    if (this.busy) return false;
+    // Not refused while a move is under way: a tap then only updates the target (see drive()).
     const to = this.angle() + this.servoDelta(dir, false);
     return to >= this.lo && to <= this.hi;
   }
@@ -258,7 +258,9 @@ export class ServoCalibrationComponent implements OnInit {
     // A failed LAST jog is retried in place even when the target is unchanged —
     // the valve may not be where the dial says.
     if (clamped === this.angle() && !this.jogError) return;
-    if (await this.drive(clamped)) this.setAngle(clamped);
+    // The dial moves at the TAP, so the next tap adds to where you are heading rather than where the servo has got to.
+    this.setAngle(clamped);
+    await this.drive(clamped);
   }
 
   async capture(): Promise<void> {
@@ -337,8 +339,45 @@ export class ServoCalibrationComponent implements OnInit {
   /** Send one absolute angle. Returns false (and latches a message) if the device
    *  can't do it — better a stuck control with an explanation than arrows that look
    *  like they're working while nothing moves. */
+  // ── ONE MOVE AT A TIME (2026-10-07) ─────────────────────────────────────
+  // `busy` used to cover only the HTTP request (~200 ms); the servo's eased sweep runs on after it, so taps a few hundred ms
+  // apart each started a new move mid-swing — ten moves in four seconds with one arrival, reversing a loaded MG995 under
+  // way, and the board browning out ("poweron" resets) in the shop. Now a tap made while the servo is moving only updates
+  // the target, and the LATEST target is sent once the servo has landed. Fast tapping moves it once, to where you ended up.
+  private target: number | null = null;
+  private pumping = false;
+  private confirmed: number | null = null;   // the last angle the board accepted
   private async drive(angle: number): Promise<boolean> {
-    if (this.busy) return false;
+    this.target = angle;
+    if (this.pumping) return true;          // the move under way is followed by this one
+    this.pumping = true;
+    let ok = true;
+    try {
+      while (this.target !== null) {
+        const a = this.target; this.target = null;
+        if (!(await this.send(a))) {
+          // The dial ran ahead of the servo; put it back where the servo was last told to be.
+          ok = false; this.target = null;
+          if (this.confirmed !== null) this.setAngle(this.confirmed);
+          break;
+        }
+        this.confirmed = a;
+        await this.landed();
+      }
+    } finally { this.pumping = false; }
+    return ok;
+  }
+
+  /** Until the board says the move has finished (/api/linear/state reads the shop's moving flag). A brain without that
+   *  route (the ESP32) gets a fixed pause that covers a jog-sized sweep. */
+  private async landed(): Promise<void> {
+    const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    try {
+      for (let i = 0; i < 40; i++) { await pause(i ? 150 : 100); if (!(await this.api.gateMoving())) return; }
+    } catch { await pause(700); }
+  }
+
+  private async send(angle: number): Promise<boolean> {
     this.busy = true;
     try {
       // controllerId comes from the selector being edited, which the board picker

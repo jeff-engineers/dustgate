@@ -29,6 +29,9 @@ struct BoardView {
     bool        refused = false;       // the board answered, and belongs to another controller
     uint32_t    downForMs = 0;
     const char* moveFault = nullptr;   // why its last move did not finish cleanly, or null
+    // Nothing the shop does depends on it being on (isOptionalBoard() in Shop.h): its being off is normal, so no
+    // board-offline. A refusal is still raised — that is a board that answered and belongs to someone else.
+    bool        optional  = false;
 };
 
 struct PlugView {
@@ -43,7 +46,9 @@ public:
     void update(TopologyRuntime& rt, const std::vector<BoardView>& boards, const std::vector<PlugView>& plugs, uint32_t now) {
         for (const BoardView& b : boards) {
             const std::string key = "board:" + b.host;
-            if (!b.linked && !b.refused && b.downForMs >= kBoardOfflineAfterMs) {
+            if (!b.linked && !b.refused && b.optional) {
+                rt.clearProblem(key);                   // off is its normal state (docs/optional-nodes-plan.md)
+            } else if (!b.linked && !b.refused && b.downForMs >= kBoardOfflineAfterMs) {
                 char t[160];
                 std::snprintf(t, sizeof(t), "Not linked for %lus. Its gates stay where they were; tools on it cannot open a gate.",
                               (unsigned long)(b.downForMs / 1000));

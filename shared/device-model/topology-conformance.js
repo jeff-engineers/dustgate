@@ -83,8 +83,14 @@ async function run() {
     const g = await req('GET', '/api/topology');
     check('GET topology roundtrip', g.json?.name === 'twoGates' && Array.isArray(g.json?.systems));
     const s = await req('GET', '/api/status');
-    check('initial status all closed, collector off',
-      s.json?.actuators?.gate1 === 'closed' && s.json?.actuators?.gate2 === 'closed' && s.json?.collectorOn === false);
+    // A layout loaded from nothing SETTLES (2026-10-08): one gate open per system — the path to its first machine, toolX's
+    // gate1 here — and the rest closed, so the shop never sits sealed. A real brain does it once that system's boards
+    // are linked, so give it a moment.
+    let st = s;
+    for (let i = 0; i < 10 && st.json?.actuators?.gate1 !== 'open'; i++) { await new Promise((r) => setTimeout(r, 300)); st = await req('GET', '/api/status'); }
+    check('a first layout settles: gate1 open, gate2 closed, collector off',
+      st.json?.actuators?.gate1 === 'open' && st.json?.actuators?.gate2 === 'closed' && st.json?.collectorOn === false,
+      JSON.stringify(st.json?.actuators));
   }
 
   // 2b. Setup-only servo jog. A build without servo support answers 501 to all of

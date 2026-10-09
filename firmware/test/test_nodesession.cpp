@@ -293,6 +293,24 @@ int main() {
     ok("a slot reused for a DIFFERENT node starts empty", !f.s.dialsIn() && !f.s.canPressRf() && std::string(f.s.info().board).empty());
   }
 
+  printf("\nS9 the shop's servo pulse range rides every servo move (2026-10-07)\n");
+  {
+    Fx f; f.up(); std::string out;
+    while (f.drain(out)) {}                                   // whatever the handshake queued
+    DynamicJsonDocument d(1024);
+    ok("before a layout says, a SET carries no range", f.s.setState("g1", sel(d), "open") && f.drain(out) && out.find("minUs") == std::string::npos);
+    f.feed(R"({"t":"STATE","selectorId":"g1","stateId":"open","moving":false})");
+    f.s.setServoPulseRange(400, 2600);
+    ok("after, the SET carries it", f.s.setState("g1", sel(d), "closed") && f.drain(out) &&
+       out.find("\"minUs\":400") != std::string::npos && out.find("\"maxUs\":2600") != std::string::npos);
+    f.feed(R"({"t":"STATE","selectorId":"g1","stateId":"closed","moving":false})");
+    { const bool j = f.s.jog(0, 45, false); const bool dr = f.drain(out);
+      if (!(j && dr && out.find("\"minUs\":400") != std::string::npos)) printf("    jog=%d drain=%d out=%s\n", j, dr, out.c_str());
+      ok("...and so does a jog", j && dr && out.find("\"minUs\":400") != std::string::npos); }
+    f.s.setServoPulseRange(1200, 1500);                       // narrower than any servo: refused, the last good one stays
+    ok("a range out of bounds is ignored", f.s.jog(0, 50, false) && f.drain(out) && out.find("\"minUs\":400") != std::string::npos);
+  }
+
   printf("\n%d/%d passed%s\n", passed, passed + failed, failed ? " — FAILED" : "");
   return failed ? 1 : 0;
 }

@@ -962,35 +962,6 @@ const idxOf = (plan, sel) => plan.moves.findIndex((m) => m.selectorId === sel);
         ctTool.sensor.outlet === undefined && ctTool.sensor.ct.thresholdW === undefined);
 }
 
-// ── intermittent: a board that is EXPECTED to come and go (RFC §5.6a) ───────
-{
-  // A node powered from the tool it watches drops off whenever that tool is
-  // switched off at the wall. Absent-is-off already fails the right way; the
-  // flag is about whether anyone is TOLD, so the warning keeps meaning
-  // something on the boards that do not carry it.
-  const node = mut((t) => {
-    t.controllers.find((c) => c.id === 'node1').intermittent = true;
-  });
-  check('a secondary may be intermittent', validateTopology(node).ok,
-        JSON.stringify(validateTopology(node).errors));
-
-  // A brain that comes and goes is not an intermittent board, it is a shop that
-  // stops working — nothing routes while the primary is off.
-  const brain = mut((t) => {
-    t.controllers.find((c) => c.role === 'primary').intermittent = true;
-  });
-  check('the PRIMARY may not be intermittent', !validateTopology(brain).ok);
-
-  const notBool = mut((t) => {
-    t.controllers.find((c) => c.id === 'node1').intermittent = 'yes';
-  });
-  check('intermittent must be a boolean', !validateTopology(notBool).ok);
-
-  // Absent means false: every board written before this field is one that
-  // should still raise a fault when it vanishes.
-  check('absent is the safe default', validateTopology(clone(feedChain)).ok);
-}
-
 // ── a controller with no selectors at all (RFC §5.6b) ───────────────────────
 {
   // The CT tool node drives nothing. Controllers are only referenced BY
@@ -1000,7 +971,7 @@ const idxOf = (plan, sel) => plan.moves.findIndex((m) => m.selectorId === sel);
   const idle = mut((t) => {
     t.controllers.push({
       id: 'planer-node', role: 'secondary', name: 'Planer',
-      intermittent: true, link: { transport: 'wifi-ws', host: 'planer.local' },
+      link: { transport: 'wifi-ws', host: 'planer.local' },
     });
     elem(t, 'toolA').sensor = { ct: { controllerId: 'planer-node', channel: 0 } };
   });

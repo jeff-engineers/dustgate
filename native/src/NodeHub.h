@@ -66,7 +66,6 @@ public:
     std::shared_ptr<Node> find(const std::string& id) { auto it = _nodes.find(id); return it == _nodes.end() ? nullptr : it->second; }
     std::map<std::string, std::shared_ptr<Node>>& nodes() { return _nodes; }
     topo::NodeBus& bus() { return _bus; }
-    bool anyDown() { for (auto& kv : _nodes) if (!kv.second->session.online()) return true; return false; }
     bool paused = false;    // POST /api/nodes/pause: every link closes and new JOINs are refused
 private:
     void rebind() { _bus.clearRemotes(); for (auto& kv : _nodes) _bus.registerRemote(kv.first, &kv.second->bus); }

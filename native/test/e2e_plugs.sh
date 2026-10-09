@@ -28,10 +28,17 @@ echo "native plug polling"
 for i in $(seq 1 30); do curl -s -m 2 -H "X-Api-Key: $K" localhost:$P/api/nodes | grep -q '"online":true' && break; sleep 0.3; done
 curl -s -m 3 -H "X-Api-Key: $K" -X PUT --data-binary @$T/layout.json localhost:$P/api/topology >/dev/null
 sleep 2
-check "an idle plug moves nothing" '! grep -q "\"t\":\"SET\"" "$T/f1.log"'
+# A layout loaded from nothing SETTLES (TopologyRuntime::settleAtBoot): the path to the first machine opens, the rest close.
+check "a first layout settles: gate1 opened, gate2 commanded closed" 'grep -q "\"selectorId\":\"gate1\".*\"stateId\":\"open\"" "$T/f1.log" && grep -q "\"selectorId\":\"gate2\".*\"stateId\":\"closed\"" "$T/f1.log"'
+sets() { grep -c '"t":"SET"' "$T/f1.log"; }
+settled=$(sets)
+sleep 2
+check "an idle plug moves nothing more" '[ "$(sets)" = "$settled" ]'
 echo 300 > "$T/power"
-for i in $(seq 1 40); do grep -q '"stateId":"open"' "$T/f1.log" && break; sleep 0.3; done
-check "a tool whose plug reads 300 W opens its gate" 'grep -q "\"selectorId\":\"gate1\".*\"stateId\":\"open\"" "$T/f1.log"'
-check "...and the reading is in the status" '[ "$(curl -s -m 3 -H "X-Api-Key: $K" localhost:$P/api/status | python3 -c "import sys,json;print(int(json.load(sys.stdin)[\"tools\"][\"toolX\"][\"watts\"]))")" -ge 250 ]'
+for i in $(seq 1 40); do [ "$(sets)" -gt "$settled" ] && break; sleep 0.3; done
+check "a tool whose plug reads 300 W commands its gate" 'tail -n +1 "$T/f1.log" | grep "\"t\":\"SET\"" | tail -n +$((settled + 1)) | grep -q "\"selectorId\":\"gate1\".*\"stateId\":\"open\""'
+watts() { curl -s -m 3 -H "X-Api-Key: $K" localhost:$P/api/status | python3 -c "import sys,json;print(int(json.load(sys.stdin)['tools']['toolX']['watts']))" 2>/dev/null || echo 0; }
+for i in $(seq 1 20); do [ "$(watts)" -ge 250 ] && break; sleep 0.3; done
+check "...and the reading is in the status" '[ "$(watts)" -ge 250 ]'
 [ $fail = 0 ] && echo "all native plug checks passed" || { echo "--- brain log"; cat "$T/brain.log"; echo "--- f1"; cat "$T/f1.log"; }
 exit $fail

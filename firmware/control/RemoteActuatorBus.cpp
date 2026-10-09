@@ -645,6 +645,12 @@ bool RemoteActuatorBus::jog(int channel, int angle, bool detach) {
     flushSink();
     return r;
 }
+void RemoteActuatorBus::setServoPulseRange(int minUs, int maxUs) {
+    if (!_mutex) return;
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    _s.setServoPulseRange(minUs, maxUs);
+    xSemaphoreGive(_mutex);
+}
 bool RemoteActuatorBus::pressRf(uint8_t address, uint8_t data, uint32_t tickUs, uint32_t repeats) {
     if (!_mutex) return false;
     xSemaphoreTake(_mutex, portMAX_DELAY);

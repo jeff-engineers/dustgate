@@ -44,6 +44,20 @@ const NODELINK_VERSION = 1;
 
 /** Frame types, primary → secondary. */
 const P2S = ['HELLO', 'SET', 'CONFIG', 'PING', 'OTA', 'REFUSE', 'WHERE', 'PRESS'];
+
+// THE PWM SERVO PULSE RANGE (2026-10-07): what angle 0 and angle 180 map to, shop-wide (the layout's `servo` block, set on
+// the Settings page), carried on every servo SET. The DEFAULT applies when the layout says nothing; the BOUNDS refuse a SET
+// whole. PAIR: kDefaultServoMinUs / kDefaultServoMaxUs / kMinServoUs / kMaxServoUs / kMinServoSpanUs in NodeLink.h.
+const DEFAULT_SERVO_MIN_US = 400;
+const DEFAULT_SERVO_MAX_US = 2600;
+const MIN_SERVO_US = 300;
+const MAX_SERVO_US = 2800;
+const MIN_SERVO_SPAN_US = 500;
+/** Is this a pulse range a servo may be driven over? */
+function servoRangeOk(minUs, maxUs) {
+  return Number.isInteger(minUs) && Number.isInteger(maxUs) &&
+         minUs >= MIN_SERVO_US && maxUs <= MAX_SERVO_US && maxUs - minUs >= MIN_SERVO_SPAN_US;
+}
 /** Frame types, secondary → primary. */
 const S2P = ['WELCOME', 'ACK', 'STATE', 'SENSE', 'PONG', 'OTASTATE', 'JOIN'];
 
@@ -79,7 +93,7 @@ const PONG_TIMEOUT_MS = 6000;
  * Stale is NOT the same as off, and the primary must not conflate them. A node
  * that has stopped reporting while still answering PINGs is a fault; a node that
  * has gone away entirely is the planer being switched off at the wall, which is
- * normal and handled by `Controller.intermittent`. See RFC §5.6a.
+ * normal: such a board is OPTIONAL (shop.js isOptionalBoard, docs/optional-nodes-plan.md). See RFC §5.6a.
  */
 const SENSE_REPEAT_MS = 5000;
 const SENSE_STALE_MS = 15000;
@@ -223,6 +237,8 @@ const RECONNECT_MAX_MS = 15000;
  *                                  left from before a jam is a count nobody should calibrate against. Additive — a node
  *                                  that predates it ignores the field and moves from the datum it has.
  * @property {boolean}[holdAtRest]  servo only; default false (move then detach)
+ * @property {number} [minUs]       servo only, with maxUs: the shop's pulse range (DEFAULT_SERVO_MIN_US..). Absent = keep
+ *                                  what the node has; a node from before 2026-10-07 ignores both
  *
  * @typedef {Object} AckFrame       S→P, the SET was accepted or refused.
  * @property {'ACK'}   t
@@ -365,7 +381,8 @@ function ota(seq, path, size, md5, fw) {
  * @param {import('./topology').Selector} sel
  * @param {string} stateId
  * @param {number|null} realization  resolved angle (servo) or mm (linear)
- * @param {{home?: boolean}} [opts]  linear only: find the datum again first (see SetFrame.home)
+ * @param {{home?: boolean, minUs?: number, maxUs?: number}} [opts]  linear: find the datum again first (SetFrame.home);
+ *                                  servo: the shop's pulse range
  * @returns {SetFrame}
  */
 function set(seq, sel, stateId, realization, opts = {}) {
@@ -382,6 +399,7 @@ function set(seq, sel, stateId, realization, opts = {}) {
   if (isServo) {
     f.angle = realization;
     f.holdAtRest = !!(sel.servo && sel.servo.holdAtRest);
+    if (opts.minUs !== undefined && opts.maxUs !== undefined) { f.minUs = opts.minUs; f.maxUs = opts.maxUs; }
   } else {
     f.positionMm = realization;
     if (opts.home) f.home = true;
@@ -722,6 +740,9 @@ function validateFrame(f, direction) {
       if (f.drive === 'linear') num('positionMm', -10000, 10000);
       if ('home' in f && typeof f.home !== 'boolean') errs.push('SET.home must be true|false');
       if (f.home === true && f.drive !== 'linear') errs.push('SET.home is for a linear drive');
+      if ('minUs' in f || 'maxUs' in f) {
+        if (!servoRangeOk(f.minUs, f.maxUs)) errs.push('SET.minUs/maxUs must be a servo pulse range within bounds');
+      }
       break;
     case 'CONFIG':
       num('seq', 0, Number.MAX_SAFE_INTEGER);
@@ -844,6 +865,7 @@ function validateFrame(f, direction) {
 
 module.exports = {
   NODELINK_VERSION, P2S, S2P,
+  DEFAULT_SERVO_MIN_US, DEFAULT_SERVO_MAX_US, MIN_SERVO_US, MAX_SERVO_US, MIN_SERVO_SPAN_US, servoRangeOk,
   PING_INTERVAL_MS, PONG_TIMEOUT_MS, RECONNECT_MIN_MS, RECONNECT_MAX_MS,
   SENSE_REPEAT_MS, SENSE_STALE_MS, MAX_SENSORS_PER_NODE,
   MAX_PLUG_THRESHOLD_W, MAX_PLUG_WATTS, MAX_PLUG_IP_LEN, PLUG_KINDS, pollsPlugs,

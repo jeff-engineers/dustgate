@@ -895,7 +895,12 @@ static void tickBeacon() {
     for (int i = 0; i < g_remoteCount; i++) {
         if (!remoteLive(i)) continue;
         any = true;
-        if (!g_remoteBuses[i].health().linked) anyDown = true;
+        // Only a REQUIRED board hurries the beacon: an optional one (a planer's sensor board, powered with the planer) is
+        // off for days at a time, and would otherwise keep it at 5 s forever (docs/optional-nodes-plan.md).
+        if (!g_remoteBuses[i].health().linked &&
+            !(g_topoRuntime.loaded() &&
+              topo::isOptionalBoard(g_topoRuntime.topology(), topo::controllerIdForHost(g_topoRuntime.topology(), g_remoteBuses[i].host()))))
+            anyDown = true;
     }
     if (!any) return;
     const uint32_t now = millis();
@@ -1031,6 +1036,8 @@ static void raiseDeviceProblems() {
         topo::BoardView b;
         b.host = g_remoteBuses[i].host(); b.linked = h.linked; b.refused = h.refused;
         b.downForMs = h.downForMs; b.moveFault = h.moveFault;
+        b.optional = g_topoRuntime.loaded() &&
+            topo::isOptionalBoard(g_topoRuntime.topology(), topo::controllerIdForHost(g_topoRuntime.topology(), b.host));
         boards.push_back(b);
     }
     std::vector<topo::PlugView> plugs;
@@ -1346,8 +1353,10 @@ static void adoptStoredTopology() {
     }
     String raw = g_topoStoreSketch.load();
     std::string err;
+    const bool fromNothing = !g_topoRuntime.loaded();   // boot, or a first layout: settle it (TopologyRuntime::settleAtBoot)
     if (g_topoRuntime.adopt(raw.c_str(), raw.length(), err)) {
         g_topoRejectReason.clear();
+        if (fromNothing) g_topoRuntime.settleAtBoot();
         // Learn which controller id this board answers to. Stage 1 is
         // single-board, so that's the topology's primary by definition
         // (validateMinimal guarantees exactly one). When secondary builds land,
@@ -1695,6 +1704,7 @@ void setup() {
     // controllerId (every single-board topology) also land here.
     g_nodeBus.setLocal(&g_localBus, "primary");
     g_topoRuntime.begin(&g_nodeBus);
+    g_topoRuntime.setSay([](const std::string& l) { Serial.println(l.c_str()); });   // the [TOOL] line
     g_topoStoreSketch.begin();
 
     // Pairing FIRST, and independent of whether a layout exists: a paired board
@@ -2553,7 +2563,7 @@ void loop() {
 
         if (shown != cand && settled) {
             shown = cand;
-            DEBUG_PRINT(F("[BIN] D"));
+            DEBUG_PRINT(F("[BIN] GPIO"));
             DEBUG_PRINT(PIN_BIN_SENSOR);
             DEBUG_PRINT(cand ? F(" LOW  (beam broken / covered)")
                              : F(" HIGH (beam clear)"));

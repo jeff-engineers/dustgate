@@ -18,7 +18,7 @@ import { clampOf } from './shop-doc';
 import * as model from '@device-model';
 import type { Topology } from '@topology';
 import { portEnabled, portsByMachine, systemsOf, validateShop, type Shop } from '@shop';
-import { createTopologyDevice, setCollectorManual, setToolPower, statusView as topoStatus, toolThreshold, type TopologyDevice, type TopologyStatus } from '@topology-device';
+import { createTopologyDevice, settleAtBoot, setCollectorManual, setToolPower, statusView as topoStatus, toolThreshold, type TopologyDevice, type TopologyStatus } from '@topology-device';
 import { DEMO_TOPOLOGY } from './demo-topology';
 import type { SerialChunk } from '../boards/serial-log';
 
@@ -206,7 +206,8 @@ export class DemoApiService extends ApiService {
     const v = validateShop(topology);
     if (!v.ok) throw new Error('invalid topology: ' + JSON.stringify(v.errors));
     // A save is not a reboot: the running tools, the blowers and the gates the save left alone carry over, as on the brains.
-    this.td = createTopologyDevice(topology, this.td);
+    // From nothing (no layout before): settle it, one gate open per system, as both brains do.
+    this.td = this.td ? createTopologyDevice(topology, this.td) : settleAtBoot(createTopologyDevice(topology));
     this.syncHasLinear();
     // Whatever this shop is paired to is on the simulated network from here on,
     // the same as the mock does on PUT. See adoptOutlets().

@@ -31,7 +31,13 @@
 
 #if defined(ENABLE_SERVO) && defined(SERVO_PWM_PIN_1)
 
+#if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
+#define DG_SERVO_LEDC 1             // core 3.x: the channel is ours, no library (see _attach())
+#else
+#define DG_SERVO_LEDC 0
 #include <ESP32Servo.h>
+#endif
+#include "../control/NodeLink.h"   // the shop's default pulse range and its bounds (kDefaultServoMinUs)
 
 class ServoActuator {
 public:
@@ -41,19 +47,29 @@ public:
     // Keep the servo energized after moving (default false = move-then-detach).
     void setHoldAtRest(bool hold) { _holdAtRest = hold; }
 
+    // THE PULSE RANGE angle 0..180 maps to, for EVERY servo on this board (2026-10-07). It was a fixed 500–2500 µs, and
+    // ESP32Servo clamps to exactly that whatever it is asked, so the MG995s in the shop never reached their full swing.
+    // Now the shop sets it (Settings, the layout's `servo` block, kDefaultServoMinUs in NodeLink.h) and the pulse is
+    // written to the PWM channel directly — and on core 3.x the channel is attached directly too (_attach()).
+    // A range wider than a servo can turn drives it into its own stop on the way to an end: harmless only because
+    // calibration finds the ends and nothing afterwards asks for more than it saved.
+    static void setPulseRange(int minUs, int maxUs) {
+        if (!topo::nodelink::servoRangeOk(minUs, maxUs)) return;
+        minRef() = minUs; maxRef() = maxUs;
+    }
+    static int  pulseMinUs() { return minRef(); }
+    static int  pulseMaxUs() { return maxRef(); }
+
     // Move to an angle (0–180°). Attaches on demand and starts a smooth eased
     // sweep from the current angle over SERVO_SWEEP_MS; update() drives it. The
-    // very first move (position unknown) goes directly. Pulse bounds 500–2500µs.
-    void moveTo(int angleDeg, int minUs = 500, int maxUs = 2500) {
+    // very first move (position unknown) goes directly. Pulse range: setPulseRange().
+    void moveTo(int angleDeg) {
         if (_pin < 0) return;
         angleDeg = constrain(angleDeg, 0, 180);
-        if (!_servo.attached()) {
-            _servo.setPeriodHertz(50);          // standard 50Hz servo frame
-            _servo.attach(_pin, minUs, maxUs);
-        }
+        if (!attached()) _attach();
         if (_curAngle < 0) {                     // first move: unknown start → snap
             _curAngle = angleDeg;
-            _servo.write(angleDeg);
+            _write(angleDeg);
             _sweeping    = false;
             _detachAtMs  = millis() + SERVO_HOLD_MS;
             _detachArmed = !_holdAtRest;
@@ -79,7 +95,7 @@ public:
             const unsigned long el = now - _sweepStartMs;
             if (el >= _sweepMs) {
                 _curAngle    = _toAngle;
-                _servo.write(_toAngle);
+                _write(_toAngle);
                 _sweeping    = false;
                 _detachAtMs  = now + SERVO_HOLD_MS;   // hold powered so it can catch up
                 _detachArmed = !_holdAtRest;
@@ -87,11 +103,11 @@ public:
                 float t = (float)el / (float)_sweepMs;        // 0..1
                 t = t * t * (3.0f - 2.0f * t);                // smoothstep ease-in-out
                 _curAngle = _fromAngle + (int)lroundf((_toAngle - _fromAngle) * t);
-                _servo.write(_curAngle);
+                _write(_curAngle);
             }
             return;                                  // never detach mid-sweep
         }
-        if (_detachArmed && _servo.attached() && (long)(now - _detachAtMs) >= 0) {
+        if (_detachArmed && attached() && (long)(now - _detachAtMs) >= 0) {
             _deenergize();
             _detachArmed = false;
         }
@@ -100,7 +116,11 @@ public:
     // Immediately de-energize (stop pulses; ball holds by friction/detent).
     void detach() { _deenergize(); _detachArmed = false; _sweeping = false; }
 
+#if DG_SERVO_LEDC
+    bool attached() const { return _attached; }
+#else
     bool attached() { return _servo.attached(); }
+#endif
     int  pin() const { return _pin; }
 
     // True while this servo is drawing move current: the eased sweep is running,
@@ -116,7 +136,30 @@ public:
     }
 
 private:
-    // Stop driving the servo, WITHOUT giving up the LEDC channel.
+    // Take the pin's PWM channel: 50 Hz, 10-bit.
+    //
+    // ON CORE 3.x THIS NO LONGER GOES THROUGH ESP32Servo (2026-10-08). The library's attachPin(pin, freq, bits) calls
+    // setup(), which already does ledcAttachChannel(pin, ...), then attachPin(pin), which does it again — so the core
+    // refused the second one and printed, on the first move of every boot,
+    //
+    //   ledcAttachChannel(): Pin 12 is already attached to LEDC (channel 0, resolution 10)
+    //   attachPin(): [ESP32PWM] ERROR PWM channel failed to configure on pin 12!
+    //
+    // harmlessly (the first attach had worked), but indistinguishable on sight from the real failure below. Once the
+    // pulse was being written straight to the channel (_write()), the library was doing nothing but that double attach,
+    // so it went. A failure to attach now says so once, in our own words.
+    void _attach() {
+#if DG_SERVO_LEDC
+        _attached = ledcAttach(_pin, 50, kLedcBits);
+        if (!_attached) { Serial.print(F("[SERVO] could not take a PWM channel for pin ")); Serial.println(_pin); }
+#else
+        _servo.setPeriodHertz(50);
+        _servo.attach(_pin, 500, 2500);      // the library's own bounds; core 2.x writes through it, clamped
+#endif
+    }
+
+    // Stop driving the servo, WITHOUT giving up the LEDC channel. (The history below is ESP32Servo's; on core 3.x the
+    // library is gone (_attach()), but the rule stands: ledcDetach and re-attach is exactly the path that failed.)
     //
     // What we want physically is "no pulse train", so an analog servo goes limp
     // instead of hunting and groaning against its hard stop. Servo::detach() is
@@ -155,8 +198,8 @@ private:
     // keeps the behaviour it has been running with.
     void _deenergize() {
         if (_pin < 0) return;
-#if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
-        if (_servo.attached()) ledcWrite(_pin, 0);
+#if DG_SERVO_LEDC
+        if (_attached) ledcWrite(_pin, 0);
 #else
         _servo.detach();
 #endif
@@ -172,7 +215,28 @@ private:
         return want;
     }
 
+    // Angle → this board's pulse range → PWM ticks, written straight to the channel: Servo::write() would clamp to
+    // 500–2500 µs. Core 2.x (no pin-addressed ledcWrite) keeps the library's clamped write.
+    void _write(int angleDeg) {
+        if (_pin < 0 || !attached()) return;
+        const long us = minRef() + (long)(maxRef() - minRef()) * angleDeg / 180;
+#if DG_SERVO_LEDC
+        const uint32_t ticks = (uint32_t)((us * (1UL << kLedcBits) + 10000) / 20000);   // 50 Hz frame = 20000 µs
+        ledcWrite(_pin, ticks);
+#else
+        _servo.writeMicroseconds((int)us);
+#endif
+    }
+
+    // One range per board, shared by every servo on it; the default until a layout or a SET says otherwise.
+    static int& minRef() { static int v = topo::nodelink::kDefaultServoMinUs; return v; }
+    static int& maxRef() { static int v = topo::nodelink::kDefaultServoMaxUs; return v; }
+#if DG_SERVO_LEDC
+    static const uint8_t kLedcBits = 10;   // 1024 ticks a frame: ~19.5 µs a tick, ~0.2° on a 2200 µs range
+    bool          _attached    = false;
+#else
     Servo         _servo;
+#endif
     int           _pin         = -1;
     bool          _holdAtRest  = false;   // default: move then detach (analog-friendly)
     int           _curAngle    = -1;      // last commanded angle (-1 = unknown until first move)

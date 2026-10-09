@@ -40,6 +40,8 @@
 const T   = require('./topology');
 const RTG = require('./routing');
 const SEQ = require('./sequencer');
+const NL  = require('./nodelink');
+const BID = require('./board-id');
 
 const SHOP_SCHEMA_VERSION = 2;
 
@@ -197,6 +199,13 @@ function validateShop(shop) {
   }
   if (shop.devices !== undefined && !Array.isArray(shop.devices)) {
     err('shape', 'devices must be an array when present');
+  }
+  // The shop's PWM servo pulse range (Settings): optional; absent is the default in nodelink.js. Same bounds the wire uses.
+  if (shop.servo !== undefined) {
+    const sv = shop.servo;
+    if (!sv || typeof sv !== 'object' || !NL.servoRangeOk(sv.minUs, sv.maxUs)) {
+      err('shape', `servo pulse range must be whole microseconds, ${NL.MIN_SERVO_US}–${NL.MAX_SERVO_US}, at least ${NL.MIN_SERVO_SPAN_US} apart`);
+    }
   }
   if (errors.length) return { ok: false, errors };
 
@@ -664,8 +673,50 @@ function planShopTransition(shop, currentStates, desiredStates, opts = {}) {
 }
 
 
+/**
+ * The shop's PWM servo pulse range — what angle 0 and 180 are driven as on every PWM servo (Settings). The layout's
+ * `servo` block, or the default (nodelink.js DEFAULT_SERVO_MIN_US) when it is absent or out of bounds, which is what
+ * TopologyRuntime::pushServoPulseRange() does with it too.
+ */
+function servoPulseRange(shop) {
+  const sv = shop && shop.servo;
+  return sv && NL.servoRangeOk(sv.minUs, sv.maxUs)
+    ? { minUs: sv.minUs, maxUs: sv.maxUs }
+    : { minUs: NL.DEFAULT_SERVO_MIN_US, maxUs: NL.DEFAULT_SERVO_MAX_US };
+}
+const SERVO_PULSE_BOUNDS = { min: NL.MIN_SERVO_US, max: NL.MAX_SERVO_US, span: NL.MIN_SERVO_SPAN_US };
+
+/**
+ * IS THIS BOARD OPTIONAL — can the shop lose it without losing anything but a reading (2026-10-07, jeff;
+ * docs/optional-nodes-plan.md)? A board is REQUIRED when the layout gives it any gate (a selector on it), or any of a
+ * collector's jobs: its transmitter (control.rf), its clamp (sensor.ct) or its bin beam (bin.sensor) — without those a
+ * blower does not start, is not watched, or its bin goes unwatched, and each of those is worth a warning. Everything else
+ * (a board that only senses tools, or one the layout does not use at all) is OPTIONAL: when it is off, nobody is told,
+ * because "off" is its normal state — the planer's board is powered only while the planer is plugged in. Its tools read
+ * as off meanwhile, which is the safe way round (RFC §5.6a).
+ *
+ * Derived from the layout, never chosen: it cannot go stale when a gate moves to another board. The primary is never
+ * optional. MIRRORS isOptionalBoard() in control/Shop.h — shop.test.js ↔ test_shop.cpp "optional boards", same cases.
+ */
+function isOptionalBoard(shop, controllerId) {
+  if (!shop || !controllerId) return false;
+  const same = (id) => !!id && BID.sameBoard(id, controllerId);
+  const c = (shop.controllers || []).find((x) => same(x.id));
+  if (c && c.role === 'primary') return false;
+  for (const sys of systemsOf(shop)) {
+    for (const e of sys.elements || []) {
+      if (e.type === 'selector' && same(e.controllerId)) return false;
+      if (e.type !== 'collector') continue;
+      if (same(e.control && e.control.rf && e.control.rf.controllerId)) return false;
+      if (same(e.sensor && e.sensor.ct && e.sensor.ct.controllerId)) return false;
+      if (same(e.bin && e.bin.sensor && e.bin.sensor.controllerId)) return false;
+    }
+  }
+  return true;
+}
+
 module.exports = {
-  SHOP_SCHEMA_VERSION, MAX_SUPPLEMENTAL_PORTS,
+  SHOP_SCHEMA_VERSION, MAX_SUPPLEMENTAL_PORTS, servoPulseRange, SERVO_PULSE_BOUNDS, isOptionalBoard,
   systemView, systemsOf, machinesOf, machineIndex, portsByMachine, plugOwners, portEnabled,
   validateShop, routeShop, planShopTransition,
 };

@@ -1737,6 +1737,8 @@ void loop() {
 #if HAS_SERVO
         if (cmd.isServo) {
             servos[cmd.channel].setHoldAtRest(cmd.holdAtRest);
+            // The shop's pulse range rides every servo SET (NodeLink.h, kDefaultServoMinUs); one range for the board.
+            if (cmd.minUs) ServoActuator::setPulseRange(cmd.minUs, cmd.maxUs);
             servos[cmd.channel].moveTo(cmd.angle);
             // Distinct from the [SET] line above: that one says a frame ARRIVED,
             // this says the PWM was actually commanded. If you see [SET] and

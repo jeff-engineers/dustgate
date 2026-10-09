@@ -12,6 +12,7 @@
 //   • a gate the save changed is forgotten (seeded closed); one it only renamed is kept
 //   • a new trip point takes effect at once, and a tool now under it coasts down like one switched off
 //   • a FIRST layout, or one after a reset, still starts from nothing
+//   • ...and a first layout settles: one gate open per system, the rest closed, blowers off
 //   • sameHardware(): everything but the name, with key order and 90 vs 90.0 not counting as changes
 //
 // Run: `node layout-save.test.js` (also part of `npm run model:test` in tools/).
@@ -103,6 +104,15 @@ const machine = (shop, id) => shop.machines.find((m) => m.id === id);
   check('a layout after a reset has the blower off', !on(fresh, 'big', 2000));
   check('...and the gate closed', fresh.actuatorStates['bv-jnt'] === 'closed');
   check('...and no tool running', TD.activeMachines(fresh).length === 0);
+}
+
+// ── a first layout settles (2026-10-08) ─────────────────────────────────────
+{
+  const d = TD.settleAtBoot(TD.createTopologyDevice(clone(twoSystemShop)));
+  check('a first layout settles: the path to the first machine opens', d.actuatorStates['bv-cab'] === 'open');
+  check('...every other gate closed', d.actuatorStates['bv-jnt'] === 'closed');
+  check('...and the other system settles too', d.actuatorStates['man'] !== 'home');
+  check('...with every blower off', !on(d, 'big', 0) && !on(d, 'small', 0));
 }
 
 // ── sameHardware ─────────────────────────────────────────────────────────────

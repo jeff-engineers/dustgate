@@ -297,7 +297,8 @@ function handler(req, res) {
       const v = SHOP.validateShop(data);
       if (!v.ok) return json(res, { error: 'invalid topology', errors: v.errors }, 400);
       // A save is not a reboot: the running tools, the blowers and the gates the save left alone carry over, as on the brains.
-      td = TD.createTopologyDevice(data, td);
+      // From nothing (no layout before): settle it, one gate open per system, as both brains do.
+      td = td ? TD.createTopologyDevice(data, td) : TD.settleAtBoot(TD.createTopologyDevice(data));
       rawTopology = data;
       // The plugs this shop is paired to are on the simulated network from here
       // on — otherwise every paired plug reads as not responding and the rename

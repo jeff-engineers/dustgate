@@ -58,6 +58,8 @@ public:
         if (channel < 0 || channel >= SERVO_COUNT) return;
         _servos[channel] = servo;
     }
+    // This board's own servos follow the shop's pulse range (one range for the board: they are one multipack).
+    void setServoPulseRange(int minUs, int maxUs) override { ServoActuator::setPulseRange(minUs, maxUs); }
 #endif
 
     void bindLinear(LinearDrive* drive) { _linear = drive; }

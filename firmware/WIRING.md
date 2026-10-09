@@ -59,26 +59,33 @@ symmetrical, and it is easy to count a servo lead onto the wrong row.
                                            USB-C
                                          ┌───────┐
                              ┌─────┬─────┴───────┴─────┬─────┐
-     analog in ── D0  GPIO1  │  o  │                   │  o  │  5V          ←  do NOT power servos from this pad
-   wake button ── D1  GPIO0  │  o  │                   │  o  │  GND         ←  servo / pixel / screen ground
-  status pixel ── D2  GPIO25 │  o  │       XIAO        │  o  │  3V3         ←  screen VCC  (never 5V)
-          free ── D3  GPIO7  │  o  │      ESP32C5      │  o  │  D10  GPIO10 ── servo ch 4
-    screen SDA ── D4  GPIO23 │  o  │                   │  o  │  D9   GPIO9  ── servo ch 3
-    screen SCL ── D5  GPIO24 │  o  │    (top view)     │  o  │  D8   GPIO8  ── servo ch 2
-ST3215 TX rsvd ── D6  GPIO11 │  o  │                   │  o  │  D7   GPIO12 ── servo ch 1  /  ST3215 RX rsvd
-                             └─────┴───────────────────┴─────┘
+      CT clamp ── D0  GPIO1  │  o  │                   │  o  │  5V          ←  in, through the Schottky. Never servos
+   wake button ── D1  GPIO0  │  o  │                   │  o  │  GND         ←  common: servo, pixel, screen, 12 V
+  status pixel ── D2  GPIO25 │  o  │       XIAO        │  o  │  3V3         ←  screen VCC, CT bias divider
+          free ── D3  GPIO7  │  o  │      ESP32C5      │  o  │  D10  GPIO10 ── 315 MHz transmitter DATA
+    screen SDA ── D4  GPIO23 │  o  │                   │  o  │  D9   GPIO9  ── free (2nd button)  /  endstop 2
+    screen SCL ── D5  GPIO24 │  o  │    (top view)     │  o  │  D8   GPIO8  ── servo ch 1, fob    /  endstop 1
+    bin sensor ── D6  GPIO11 │  o  │                   │  o  │  D7   GPIO12 ── servo ch 0, gate   /  ST3215 RX
+ / ST3215 TX                 └─────┴───────────────────┴─────┘
 ```
+
+**Two personalities, one header** (`-DDUSTGATE_SERVO_BUS` picks): the label BEFORE
+a `/` is the PWM build (`xiao_c5_primary`, `xiao_c5`), the label after it is the
+slider build (`xiao_c5_linear*`). A slider build has no CT, bin sensor or
+transmitter. **Corrected 2026-10-08** against `boards/xiao_c5.h`: this drawing
+still showed four servo channels on D7–D10 and D0/D6 unused, from before the
+2026-09-17 pin budget.
 
 **Every function is on the side its pad is on** (changed 2026-08-22, for PCB
 work): left-column pads carry their label to the left, right-column pads to the
 right, so a row reads straight across from net to pin without a callout arrow
-crossing the board. `rsvd` marks a pad the firmware does not use today but that
-`boards/xiao_c5.h` names in a commented-out block — do not spend it on the
-carrier.
+crossing the board. `free` marks a pad no build uses; D9 is earmarked for a second button (manual
+control at the machine) and D3 is a strapping pin, so treat both as spoken for on
+a carrier.
 
 The screen and its button are one fitting: the board header defines all three pads
 at once, so D1, D4 and D5 are spoken for on every C5 build whether or not a panel
-is plugged in. What's left is D0 and D3, plus D6/D7 until the ST3215 arrives.
+is plugged in. What's left on a PWM build is D3 and D9.
 
 **D8 and D9 used to carry a ⚠ here and no longer do.** It marked a suspected
 strapping-pin problem — an NC endstop or an idling servo signal holding a strap
@@ -102,10 +109,13 @@ alone on a hung board gets you nothing, which is easy to mistake for a dead boar
 >
 > | Confirmed by a working signal | Still drawing-only |
 > |---|---|
-> | D7, D8, D9, D10 — servos moved (2026-08-21) | D0, D3 — never connected to anything |
+> | D7, D8, D9, D10 — servos moved (2026-08-21) | D3 — never connected to anything |
 > | D4, D5 — panel answered at 0x3C (2026-08-22) | |
-> | D1 — button press lit the screen (2026-08-22) | D6 — reserved for the ST3215 bus, nothing on the bench to talk to |
+> | D1 — button press lit the screen (2026-08-22) | |
 > | D2 — a WS2812 lit and showed the right colours (2026-08-23) | |
+> | D0 — the CT read a running tool (2026-09-13) | |
+> | D6 — the bin beam through the 4N35 (2026-09-13); the ST3215 bus on a slider board (2026-08-26) | |
+> | D10 — the transmitter keyed a real receiver (2026-10-06) | |
 >
 > **Every pad this firmware actually uses is now confirmed by a working signal.**
 > The servo block, the I²C pair, the button and the pixel are all as good as
@@ -130,26 +140,27 @@ owes the net; where it says none, none is needed.
 
 | Pad | GPIO | Net | Passive the carrier owes it | Notes |
 |-----|------|-----|------------------------------|-------|
-| D0  | 1    | *free* | — | **The only ADC pad on the edge.** Keep it free for a current sense; don't spend it on a digital function that fits elsewhere |
+| D0  | 1    | **CT clamp** (PWM builds) | the bias divider on the clamp's other wire (§8); 1 kΩ series + Schottky clamp reserved | **The only ADC pad on the edge.** The clamp's signal wire and nothing else. `PIN_CT` |
 | D1  | 0    | Wake button | none — internal pull-up | Momentary NO to GND, `INPUT_PULLUP`. Not a strap on the C5, so safe held down through reset. Verified 2026-08-22 |
 | D2  | 25   | Status pixel DIN | **330 Ω series** | External WS2812; the onboard LED is plain yellow. See §3 |
 | D3  | 7    | *free, but* | — | ⚠️ **GPIO7 is a strapping pin** (JTAG source). Fine as an output or as an input that idles HIGH; never for one that can be held LOW through reset. See §6 |
 | D4  | 23   | Screen SDA | none (module carries its own pull-ups) | XIAO-standard I²C. Verified 2026-08-22. If a bare panel with no pull-ups is ever used, 4.7 kΩ (`yellow violet red gold`) to 3V3 |
 | D5  | 24   | Screen SCL | none (as SDA) | ditto |
-| D6  | 11   | **Bin sensor in** (PWM builds) / ST3215 bus TX (slider builds) | **1 kΩ series** on the bus when fitted; none for the bin sensor | One pad, two mutually exclusive jobs — `config.h` `#error`s if a build claims both. Bin sensor: §7. Bus: hardware UART TX, half-duplex, see §2 |
-| D7  | 12   | Servo ch 1 — **and** ST3215 bus RX | none | The one genuinely contended pad: a serial-bus build gives up PWM channel 1 |
-| D8  | 8    | Servo ch 2 — the fob presser | none | Ordinary GPIO, not strapping (bench-confirmed 2026-08-19). Alt: SDIO_DATA0 |
+| D6  | 11   | **Bin sensor in** (PWM builds) / ST3215 bus TX (slider builds) | **1 kΩ series** on the bus when fitted; none for the bin sensor | One pad, two mutually exclusive jobs — `config.h` `#error`s if a build claims both. Bin sensor: §9. Bus: hardware UART TX, half-duplex, see §7 |
+| D7  | 12   | Servo **channel 0, the gate** — **or** ST3215 bus RX | none | The one genuinely contended pad: a serial-bus build gives up the PWM block |
+| D8  | 8    | Servo **channel 1, the fob presser** (endstop 1 on a slider build) | none | Ordinary GPIO, not strapping (bench-confirmed 2026-08-19). Alt: SDIO_DATA0 |
 | D9  | 9    | **FREE on a PWM build** (endstop 2 on a slider build) | none | Was servo ch 3 until 2026-09-17 — the fob's OFF arm, never built. Now the only spare pad on the board, earmarked for a **second button**: manual control at the machine. Ordinary GPIO, not strapping. Alt: SDIO_CLK |
-| D10 | 10   | Servo ch 4 | none | Alt: SDIO_CMD |
+| D10 | 10   | **315 MHz transmitter DATA** (PWM builds) | none | Was servo ch 4 until 2026-09-17. The RMT output that keys the collector's remote (§10). `PIN_RF_TX`. Alt: SDIO_CMD |
 | 5V  | —    | Carrier 5 V in | **Schottky in series** | Bidirectional VBUS. Without the diode, carrier power and a plugged-in USB cable short two supplies together |
 | GND | —    | Common ground | — | Servo, pixel and screen grounds all common here. Mandatory, not optional |
 | 3V3 | —    | Screen VCC | — | Regulator output. **Never feed the screen 5 V**; never draw servos from it |
 | —   | 27   | Onboard user LED | — | Not on the edge. Green, single colour, strapping but latched at reset (§6). Fallback only — see §3 |
 
-**Servos are not powered from this board.** Every servo V+ comes off the buck
-directly, with the bulk and bypass caps at the servo terminals (§2) — the pads
+**Servos are not powered from this board.** Every servo V+ comes off its OWN
+converter — the servo rail, a second buck set to ~6 V (§2) — with the bulk and
+bypass caps at the servo terminals — the pads
 above carry signal and ground only. The most expensive mistake available on this
-carrier is running four servos' current through the XIAO's 5V pad.
+carrier is running servo current through the XIAO's 5V pad.
 
 **Absent from the PWM build, present in the slider build.** `config.h` derives
 `HAS_LINEAR` from whether the board header defines `PIN_SERVO_BUS_TX` — not from
@@ -157,8 +168,9 @@ carrier is running four servos' current through the XIAO's 5V pad.
 the stepper went to the attic on 2026-08-23. So the same header presents two pin
 maps and `-DDUSTGATE_SERVO_BUS` chooses:
 
-- **without it** (`xiao_c5_primary`, `xiao_c5`): four PWM pads, no bus, no
-  endstops, `HAS_LINEAR` 0. The driver, the feedback system and the endstop
+- **without it** (`xiao_c5_primary`, `xiao_c5`): two PWM pads (D7, D8), the CT
+  on D0, the bin sensor on D6, the transmitter on D10, no bus, no endstops,
+  `HAS_LINEAR` 0. The driver, the feedback system and the endstop
   supervisor all compile out.
 - **with it** (`xiao_c5_linear_primary`, `xiao_c5_linear`, `xiao_c5_bus_bench`):
   the bus on D6/D7 and the endstops on D8/D9, `HAS_LINEAR` 1, no PWM block at
@@ -188,8 +200,9 @@ genuinely low-dropout regulator with over a volt of headroom at 4.4 V.
 
 | Rail | Source | Notes |
 |---|---|---|
-| 12 V | barrel jack (see the supersede note below) | the QS18 bin sensor, the pilot lamp, the strobe, an ST3215 at the gate |
-| ESP32 5 V | USB-C, **or** the `5V` pad from a buck off 12 V | fed to a low-dropout 3V3 regulator — **not** an AMS1117; 4.4 V at the pad is ample |
+| 12 V | barrel jack (see the supersede note below) | the QS18 bin sensor, the pilot lamp, the strobe, an ST3215 at the gate, and the input of both bucks |
+| ESP32 5 V | USB-C, **or** the `5V` pad from the 5 V buck (MPM3610) off 12 V, through the Schottky | fed to a low-dropout 3V3 regulator — **not** an AMS1117; 4.4 V at the pad is ample. The status pixel hangs off it too, on the XIAO side of the diode |
+| Servo rail, ~6 V | a SECOND buck off 12 V — a DROK mini adjustable on the perfboard, a Pololu D24V22F6 on the PCB | **every PWM servo and nothing else.** Split from the 5 V rail after a stalling servo reset the XIAO on a shared supply. Never through the XIAO, never through the Schottky |
 | ESP32 3V3 | regulated output pin | GPIO logic only. Never a motor |
 | Common GND | one star point, **at the supply** | see §9's note: one NET is not one POINT |
 
@@ -200,9 +213,9 @@ why that session's readings say nothing about the converter's own ripple. See
 "Two 5V sources at once".
 
 ⚠️ **A 0.6 V drop across that diode is a silicon part, not a Schottky.** A 1N5817
-or SS34 drops ~0.3 V at these currents. Worth caring about because the same 5 V
-rail feeds the servos, and the gate servos were characterised at 5.0 V — a 9 g fob
-servo will not notice 4.4 V, a 6 kg gate servo gives up real torque. Measure at
+or SS34 drops ~0.3 V at these currents. (This mattered more when the same 5 V rail
+fed the servos; they have their own rail now, so a low pad costs the pixel some
+brightness and nothing else.) Measure at
 the buck output BEFORE the diode: 5.0 V there means swap the diode; 4.4 V there
 means the converter itself is set low.
 
@@ -272,7 +285,7 @@ Read that result carefully before copying it:
   **current-limiting** rather than the servo being satisfied. Both look identical
   from outside. It is a real data point about the ESP32 surviving, not proof the
   supply has headroom.
-- It held with **one** servo. The design is **four per node**. What makes that
+- It held with **one** servo. The design was then **four per node** (two since 2026-09-17, on their own servo rail). What made that
   plausible on a small buck is that `holdAtRest` defaults **false** (servos move
   then detach, so idle channels draw nothing) and only one servo is ever commanded
   at a time — see the mutex note in [§3](#3-decoupling). Both have to stay true for the budget to.
@@ -513,23 +526,19 @@ hardware.
 > to cite a 100µF at the stepper's VMOT as the one measured value; that document
 > went with the stepper on 2026-08-28.)
 
-The WROOM-32's brownout detector resets the chip when 3V3 sags past **~2.8V**.
-Nothing on the ESP32 side causes that. The loads sharing the rail do:
+The ESP32's brownout detector resets the chip when 3V3 sags too far. Nothing on
+the ESP32 side causes that. The loads sharing its supply do — which is why the
+servos no longer share it (§2, the servo rail):
 
 - **Servo inrush and stall** — a hobby servo pulls 0.5–1A+ for tens of milliseconds
-  when it starts moving and when the gate hits its stop. On the v2 servo nodes this
-  is the main offender. **Budget for ONE moving servo, not two:** the firmware holds
-  a hard mutex — only one servo is ever commanded at a time — and the move queue is
-  shop-wide and serial, so even a make-before-break transition across two systems
-  concatenates its moves rather than overlapping them. (Corrected 2026-08-12; this
-  previously said two could move at once, which doubled the budget for no reason.
-  The invariant is in [architecture-rfc.md](../docs/architecture-rfc.md).)
+  when it starts moving and when the gate hits its stop. **Budget for ONE moving
+  servo PER BOARD:** a board takes one move at a time. Since 2026-10-08 two
+  DIFFERENT boards may move at once, which is why each board has its own servo
+  rail rather than a shop-wide supply.
 - **Idle servos draw nothing.** `holdAtRest` defaults false — a servo moves, then
   detaches, and the valve holds by friction. So a four-gate node's steady draw is
   the ESP32 alone. Set `holdAtRest` true on a build that back-drives when
   de-energized and that stops being true, which changes the supply sizing.
-- **Stepper coil energizing** — the TMC2209 slams current into the coils on enable
-  and on the first steps after idle.
 - **Long thin wire** — ~0.3Ω in 10ft of 22AWG turns a 1A transient into a 0.3V drop
   before any capacitor gets to see it.
 
@@ -541,12 +550,11 @@ the rail is sagging steadily rather than dipping.
 
 | Location                       | Value          | Type                    |
 |--------------------------------|----------------|-------------------------|
-| TMC2209 VMOT ↔ GND             | 100–220µF      | electrolytic            |
-| Servo power rail, per node     | 470–1000µF     | low-ESR electrolytic    |
+| Servo rail, at the servo       | 470–1000µF     | low-ESR electrolytic    |
 | ESP32 VIN/5V ↔ GND             | 100–220µF      | electrolytic            |
 | ESP32 3V3 ↔ GND                | 10µF + 0.1µF   | ceramic (X5R/X7R)       |
 
-Rate every electrolytic at **≥2× its rail** (so ≥50V on a 24V motor supply), and put
+Rate every electrolytic at **≥2× its rail** (so ≥25V on the 12 V input), and put
 a 0.1µF ceramic in parallel with each one: the electrolytic carries the bulk energy,
 the ceramic handles the fast edge its ESR can't.
 
@@ -559,14 +567,14 @@ the servo is the thing you're compensating for.
 ```
 Servo node — the one that matters:
 
-  5V/6V supply ──┬────────────┬───── servo V+   (red)
+  servo rail ~6V ┬────────────┬───── servo V+   (red)
                  │            │
             [470-1000µF]   [0.1µF]      <-- AT the servo terminals,
                  │            │              not back at the supply
   GND ───────────┴────────────┴───── servo GND (brown/black)
 
-  GPIO25/26/27/14 ─────────────────── servo signal (orange/yellow)
-  ESP32 GND ───────────────────────── common with servo GND   (REQUIRED)
+  D7 (gate) / D8 (fob) ────────────── servo signal (orange/yellow)
+  XIAO GND ────────────────────────── common with servo GND   (REQUIRED)
 ```
 
 ```
@@ -591,11 +599,11 @@ vent.
 
 1. **Don't power servos from the board's 5V pin.** That routes servo current through
    the board's traces and its USB/regulator path, which is the fastest way to brown
-   out. Feed servos from the buck converter directly; the ESP32 gets its own leg off
-   the same buck.
-2. **Star ground.** Servo GND, TMC2209 GND and ESP32 GND each return to one point at
-   the supply. Daisy-chaining them puts the stepper's return current across the
-   ESP32's ground reference.
+   out. Servos get their own buck (the servo rail); the ESP32 gets the 5 V buck.
+2. **Star ground.** The servo rail's return, the 5 V buck's return and the 12 V
+   loads' returns each go back to one point at the supply. Daisy-chaining them puts
+   a stalling servo's return current across the ESP32's ground reference — and the
+   CT's (§9, Grounds).
 3. **Fat wire on the power legs** — 18–20AWG for servo and motor power, short runs to
    the node. 22AWG and up is fine for signal.
 4. **Common ground is mandatory** — for every servo, and for the ST3215 bus
@@ -665,6 +673,13 @@ as an intermittent wrong colour, not a clean failure. Two reliable fixes:
   that the regulator won't notice, and 3.3V logic into a 3.3V pixel is in spec.
   This is the recommended option here.
 - Or keep 5V and add a level shifter on DIN.
+
+**What the builds actually do (2026-10-08):** the perfboard runs a NeoPixel
+breakout from the `5V` pad side of the Schottky, with the 330 Ω on DIN, and it has
+shown the right colours since 2026-08-23. The diode is what makes that close to
+in spec: ~4.7 V after a Schottky puts 0.7×VDD at ~3.3 V, right where the ESP32
+drives. The PCB keeps the same arrangement with a 5050 WS2812B (GRB, the firmware's
+default order) — so the screen and pixel still work on USB alone, with no 12 V.
 
 Use a **WS2812B-family** pixel (Adafruit NeoPixel breakouts, or a single pixel cut
 from a strip). The firmware drives it with the Arduino core's own RMT-based
@@ -863,28 +878,29 @@ a servo-only build, which is exactly what an unfitted board declines to pay.
 
 ## 6. Servos
 
-D7–D10 are four **adjacent pads on one edge**, chosen so a servo loom can be
-built once and moved between boards. Channel order matches
-[`boards/qtpy_s3.h`](../boards/qtpy_s3.h)
-— channel 1 is the first pad of the block — so a topology's `servo.channel`
-means the same gate on any node.
+**Two channels since 2026-09-17**, on adjacent pads: **channel 0 = D7, the gate;
+channel 1 = D8, the fob presser.** A topology's `servo.channel` means the same pad
+on any board. (D9 and D10 were channels 3 and 4 before the pin budget gave D10 to
+the transmitter and D9 to a second button.)
 
 ```
-  5V/6V supply ──┬────────────┬───── servo V+   (red)
+  servo rail ~6V ┬────────────┬───── servo V+   (red)
                  │            │
             [470-1000µF]   [0.1µF]      <-- AT the servo terminals
                  │            │
   GND ───────────┴────────────┴───── servo GND (brown/black)
 
-  D7/D8/D9/D10 ──────────────────────  servo signal (orange/yellow)
-  (GPIO12/8/9/10)                       one pad per channel, ch1 = D7
+  D7 (GPIO12) ───────────────────────  gate servo signal (orange/yellow)
+  D8 (GPIO8)  ───────────────────────  fob servo signal, if fitted
   XIAO GND ──────────────────────────  common with servo GND   (REQUIRED)
 ```
 
-**Never power servos from the XIAO's 5V pad.** Same rule as every other board
-here, and it matters more on a part this small: feed servos from the buck
-directly, and give the board its own leg off the same buck. See
-[§3](#3-decoupling).
+**Never power servos from the XIAO's 5V pad.** They get their own buck — the
+servo rail (§2), ~6 V for an MG995-class gate servo; check each servo's maximum
+before going higher. See [§3](#3-decoupling).
+
+**The pulse range is a shop setting, not wiring** (Settings → Servos, since
+2026-10-07): what angle 0 and 180 mean in µs, 400–2600 by default.
 
 #### The serial-servo bus, and the endstops that come with it
 
@@ -893,10 +909,9 @@ directly, and give the board its own leg off the same buck. See
 > ran the reference sweep, and moved to every gate. The endstops below are proven
 > on that rail too. What has NOT run is the same actuator as a NodeLink *node*.
 
-D6/D7 (GPIO11/GPIO12) are the hardware UART. **D7 doubles as servo channel 1**,
-so a build driving a serial-bus servo gives up PWM channel 1 — the right trade,
-since one bus replaces the whole four-channel block and lifts the `SERVO_COUNT`
-ceiling with it.
+D6/D7 (GPIO11/GPIO12) are the hardware UART. **D7 doubles as servo channel 0**,
+so a build driving a serial-bus servo gives up the PWM block — the right trade,
+since one bus servo drives a whole rack.
 
 ```
 D6 (GPIO11, TX) ──┐
@@ -1094,7 +1109,7 @@ Band colours and cap codes: [`passives.md`](passives.md).
 | 1 kΩ — `brown black red gold` | the `3V3` rail | **CT wire 1** |
 | 1 kΩ — `brown black red gold` | **CT wire 1** | the `GND` rail |
 | 100 nF ceramic — `104` | **CT wire 1** | the `GND` rail |
-| 10 µF bulk — `106`, or an electrolytic `+` leg | **CT wire 1** | the `GND` rail |
+| 10 µF bulk — `106`, or an electrolytic `+` leg ⚠️ **value unclear** — `docs/BOM.md` says 100 µF; read it off the planer-sensor node | **CT wire 1** | the `GND` rail |
 | CT wire 2 | the CT | **`D0`** |
 
 ```mermaid
@@ -1162,6 +1177,56 @@ perfectly quiet sensor.
 **Clamp ONE conductor.** Hot or neutral, never the whole cord: an intact cord's
 fields cancel, tested and closed 2026-09-09 (§5.4). A line splitter, or one
 conductor exposed.
+
+### The jack, plug-detect and inrush protection (2026-10-08)
+
+**PROPOSED, NOT BUILT.** Everything above is what has run. This adds three things
+around it, from the sourcing guide (`docs/BOM.md`), and none of them has been on a
+board yet: a switched jack so the clamp plugs in, a pull-up through the jack's
+switch so an unplugged clamp reads as a fault rather than an idle tool, and a
+series resistor with two Schottkys so a 45–50 A motor start cannot put ~4 V on D0.
+Drawn for both builds in [`../docs/carrier-wiring.html`](../docs/carrier-wiring.html).
+
+| | Perfboard — Adafruit TRRS breakout #5764 | PCB — CUI SJ1-3525N |
+|---|---|---|
+| Clamp signal (plug TIP) | `Left` → **1 kΩ** → `D0` | pin 2 (tip) → **1 kΩ** → `D0` |
+| Clamp return (plug SLEEVE) | `Sleeve` → **CT wire 1**, the bias node | pin 1 (sleeve) → **CT wire 1** |
+| Plug-detect | `LSw` → **10 kΩ** → `3V3` | pin 10 (tip switch) → **10 kΩ** → `3V3` |
+| Unused | `Right`, `Ring`, `RSw` | pin 3 (ring), pin 11 (ring switch) |
+| Clamp at D0 | 1N5817 anode `D0` → cathode `3V3`; 1N5817 anode `GND` → cathode `D0` | the same, or one BAT54S |
+
+The bias node itself (1 kΩ / 1 kΩ, 100 nF, bulk cap) is unchanged from the table
+above — only what the clamp's two wires land on moves.
+
+**The cable's shield is not grounded on a jack build, deliberately (jeff, 2026-10-09).** The
+SCT-013-030's shield does not reach any contact of its 3.5 mm plug (metered), so a jack cannot
+ground it. The perfboard had grounded it through a screw terminal, but the only measurement of
+what that bought was ~7%, taken on the breadboard after it had gone 5x noisy (the 2026-09-13
+table below), and the floor turned out to be electronic rather than pickup. Left off.
+
+**Plug-detect, and what it does today.** With no plug in, the jack's switch joins
+the tip contact to the 10 kΩ, so D0 sits at 3.3 V. `CtSensor::isRailed()` already
+refuses a reading above 3100 mV, so an unplugged clamp is **ignored** rather than
+read as a quiet tool. Nothing yet SAYS so — the board does not report "clamp
+unplugged" anywhere a person would see it. That is firmware work, not wiring.
+
+**Meter before soldering, both builds:**
+
+1. Nothing inserted: the tip contact (`Left` / pin 2) to the switch (`LSw` /
+   pin 10) should beep. Insert a plug: it should open.
+2. The SCT-013-030's plug: tip to sleeve should read the clamp's internal burden,
+   tens of ohms. If it reads open and tip to RING reads it instead, this clamp is
+   wired tip-ring: move the bias node to the ring contact (`Ring` / pin 3).
+3. A 3-pole plug in the 4-pole Adafruit jack shorts its two inner contacts to
+   the sleeve, which is harmless here — only `Sleeve` is wired.
+
+**The clamp diodes are thin margin.** A Schottky drops ~0.2–0.4 V at small
+currents, so D0 clips at roughly 3.5–3.7 V against a 3.6 V absolute maximum. They
+turn a certain overvoltage into a marginal one; the 1 kΩ is what limits the
+current. Confirm with a worst-case motor start on a scope before trusting it, and
+**re-measure the noise floor with all three parts fitted** — they add source
+impedance (1 kΩ more in front of the ADC) and a little leakage on the bias node.
+The floor to beat is ~6.7 counts (0.195 A).
 
 ---
 
@@ -1703,8 +1768,8 @@ polarity; that should not need a reflash.
 **What you should see on the console**, with no layout loaded at all:
 
 ```
-[BIN] D11 HIGH (beam clear) — initial
-[BIN] D11 LOW  (beam broken / covered) — CHANGED
+[BIN] GPIO11 HIGH (beam clear) — initial
+[BIN] GPIO11 LOW  (beam broken / covered) — CHANGED
 ```
 
 The first line is where the board started, not an event. If nothing prints at
@@ -1777,14 +1842,14 @@ frame, so its receiver cannot tell the difference
 |---|---|---|
 | Wire | module `VCC` | **5 V** |
 | Wire | module `GND` | **ESP32 GND** |
-| Wire | module `DATA` | **`D9`** |
+| Wire | module `DATA` | **`D10`** |
 | Wire | module `ANT` | **17 cm of wire, and nothing else** |
 
 ```mermaid
 flowchart LR
   V5(("5 V")):::rail --> TX
   GE(("ESP32 GND")):::rail --> TX
-  D9["<b>D9</b><br/>RMT output"]:::node -- "DATA" --> TX["<b>315 MHz OOK module</b>"]:::node
+  D10["<b>D10</b><br/>RMT output"]:::node -- "DATA" --> TX["<b>315 MHz OOK module</b>"]:::node
   TX -- "ANT" --> ANT["17 cm wire<br/>¼ wave at 315 MHz"]:::node
   classDef rail fill:#eee,stroke:#999
   classDef node fill:#fff,stroke:#333,stroke-width:2px
@@ -1800,6 +1865,11 @@ bench and nowhere else.
 
 **Nothing transmits until the layout says so** — `control.rf` — or until someone
 types `press` at the serial console.
+
+**D10, not D9** — corrected 2026-10-08. This table said D9 while
+`boards/xiao_c5.h` has said `PIN_RF_TX 10` since 2026-09-16; D9 is the spare pad
+earmarked for a second button. The 2026-10-06 shop bench that keyed a real
+receiver ran on D10.
 
 ---
 
@@ -2089,21 +2159,22 @@ engineering, and the fob stays an unmodified certified device (§4.2a). Standard
 
 | | Goes from | To |
 |---|---|---|
-| Servo 1 signal | ON button servo | **`D7`** |
-| Servo 2 signal | OFF button servo | **`D8`** |
-| Servo `+` (both) | | **5 V** |
-| Servo `−` (both) | | **ESP32 GND** |
+| Servo signal | the fob servo | **`D8`** — servo channel 1, `PIN_FOB_SERVO` |
+| Servo `+` | | **the servo rail** (§2), never the XIAO's 5 V pad |
+| Servo `−` | | **GND**, common with the XIAO |
+
+**ONE fob servo since 2026-09-17.** This section described two — ON on D7, OFF on
+D8 — and that is no longer buildable: D7 is the gate (channel 0) and the pad that
+was the OFF arm's went to the transmitter. A two-button fob now wants one arm
+that travels between the buttons, or the RF path (§10). The two-servo reasoning
+below is kept because it is why a two-button fob is still the better fob.
 
 ```mermaid
 flowchart LR
-  D7["<b>D7</b>"]:::node -- "signal" --> S1["servo — ON button"]:::node
-  D8["<b>D8</b>"]:::node -- "signal" --> S2["servo — OFF button"]:::node
-  V5(("5 V")):::rail --> S1
-  V5 --> S2
+  D8["<b>D8</b>"]:::node -- "signal" --> S1["fob servo"]:::node
+  VS(("servo rail")):::rail --> S1
   S1 --> GE(("GND")):::rail
-  S2 --> GE
   S1 -.-> FOB["<b>the fob</b><br/>held in a printed fixture"]:::fob
-  S2 -.-> FOB
   classDef rail fill:#eee,stroke:#999
   classDef node fill:#fff,stroke:#333,stroke-width:2px
   classDef fob fill:#f5f0e0,stroke:#8a7a3a,stroke-width:2px
@@ -2142,12 +2213,13 @@ on 12 mm. Try that before concluding you need metal gears.
 Worth walking the shop with — there are several switch types down there, and the
 answer is probably not the same for all of them.
 
-**Two servos, and the second is not a spare.** One servo presses one button, and
-a single-button fob is a **toggle** — stateless, so a missed or doubled press
-inverts what the system believes. A fob with **separate ON and OFF buttons** is
-momentary to press but **idempotent in meaning**: pressing ON twice leaves it on.
-One extra pad buys a control that cannot invert (§4.2b). A single-button fob uses
-`D7` and leaves `D8` unwired.
+**Why a two-button fob is still worth an arm that travels.** One servo pressing
+one button of a single-button fob is a **toggle** — stateless, so a missed or
+doubled press inverts what the system believes. A fob with **separate ON and OFF
+buttons** is momentary to press but **idempotent in meaning**: pressing ON twice
+leaves it on (§4.2b). This used to buy a second servo on its own pad; since
+2026-09-17 there is one fob channel (`D8`), so the same property needs one arm
+reaching both buttons.
 
 **The fixture is the safety-critical part.** An arm that drifts, or a fob that
 shifts under a shop's vibration, misses the press — and on a toggle that inverts

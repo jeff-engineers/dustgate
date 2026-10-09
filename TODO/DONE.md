@@ -14,6 +14,21 @@ of this file is being able to answer "did we already decide this, and why".
 
 Newest first.
 
+### Servo range, optional boards and faster collector starts, 2026-10-08 (branch `servo-range`)
+
+- **One gate move per BOARD, not per shop.** LANDED 2026-10-08, host-tested, not yet in the shop. The shop-wide mutex
+  (`NodeBus::busy()` gating the whole queue) came from boards that drove several servos off one supply; a board's supply is its
+  own, so each board now runs one move at a time and different boards move together (`TopologyRuntime::update`, `issueFrom`).
+  MAKE-BEFORE-BREAK still binds across boards: a closing move waits until every opening move of its system has landed,
+  wherever it is (`makeOwed`). The old nodebus test "busy local bus blocks a remote move" now pins the new rule instead.
+
+- **The blower starts at once when its system already has an open gate; every system settles with one open at boot.** LANDED
+  2026-10-08, host-tested. The blower used to wait for the new gate to land on every start (2 s sweep + 1 s hold). The shop
+  rests open and make-before-break keeps the old gate open meanwhile, so only a SEALED system waits now. `settleAtBoot()` (called
+  by both brains, the mock and the demo when a layout loads from nothing) opens the path to each system's first machine and
+  commands every other gate closed, once that system's boards are linked; a tool or a hand start taking the system first ends it.
+  Never dead-head is unchanged. `test_moves.cpp`; the layout-save pair; topology conformance now expects the settle.
+
 ### Pi bring-up and the bug search, 2026-10-06 / 07 (branch `pi-brain-bringup`)
 
 - **A layout save is not a reboot.** LANDED 2026-10-07, host- and e2e-tested, not yet seen in the shop. Every adopt used to start

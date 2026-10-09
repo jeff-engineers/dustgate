@@ -86,6 +86,23 @@ const eq = (name, got, want) =>
   check('absent means no', NL.validateFrame({ ...linear, positionMm: 10 }, 'p2s').length === 0 && !('home' in { ...linear, positionMm: 10 }));
 }
 
+// ── the servo pulse range (2026-10-07) ──────────────────────────────────────
+// Same cases as the "servo pulse range" block of test_nodebus.cpp, same order, literals asserted.
+{
+  eq('the default range is 400-2600', [NL.DEFAULT_SERVO_MIN_US, NL.DEFAULT_SERVO_MAX_US], [400, 2600]);
+  eq('the bounds are 300-2800, at least 500 wide', [NL.MIN_SERVO_US, NL.MAX_SERVO_US, NL.MIN_SERVO_SPAN_US], [300, 2800, 500]);
+  const gate = twoGates.elements.find((e) => e.id === 'gate1');
+  const withRange = NL.set(1, gate, 'open', 90, { minUs: 400, maxUs: 2600 });
+  eq('a servo SET may carry the range', NL.validateFrame(withRange, 'p2s'), []);
+  check('...and it rides the frame', withRange.minUs === 400 && withRange.maxUs === 2600);
+  check('a SET without one is still valid', NL.validateFrame(NL.set(1, gate, 'open', 90), 'p2s').length === 0);
+  check('half a range is rejected', NL.validateFrame({ ...withRange, maxUs: undefined }, 'p2s').length > 0);
+  check('a pulse below 300 is rejected', NL.validateFrame({ ...withRange, minUs: 299 }, 'p2s').length > 0);
+  check('a pulse above 2800 is rejected', NL.validateFrame({ ...withRange, maxUs: 2801 }, 'p2s').length > 0);
+  check('a range narrower than 500 is rejected', NL.validateFrame({ ...withRange, minUs: 1200, maxUs: 1600 }, 'p2s').length > 0);
+  check('a fractional pulse is rejected', NL.validateFrame({ ...withRange, minUs: 400.5 }, 'p2s').length > 0);
+}
+
 // ── direction is enforced: a secondary can't send a SET ─────────────────────
 {
   const gate = twoGates.elements.find((e) => e.id === 'gate1');

@@ -1,7 +1,9 @@
 import { Component, OnInit, ChangeDetectionStrategy, ChangeDetectorRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
-import { ApiService } from '../services/api.service';
+import { ApiService, Topology } from '../services/api.service';
+import { SERVO_PULSE_BOUNDS, servoPulseRange } from '@shop';
 
 /**
  * SettingsComponent — device configuration hub, reached via the gear icon.
@@ -11,7 +13,7 @@ import { ApiService } from '../services/api.service';
 @Component({
   selector: 'app-settings',
   standalone: true,
-  imports: [CommonModule],
+  imports: [CommonModule, FormsModule],
   changeDetection: ChangeDetectionStrategy.OnPush,
   styles: [`
     :host {
@@ -200,6 +202,10 @@ import { ApiService } from '../services/api.service';
           <span class="name">Shop Layout →</span>
           <span class="desc">Lay out the collector, ducts, gates and tools</span>
         </button>
+        <button type="button" class="setup-link" (click)="goLog()">
+          <span class="name">Brain log →</span>
+          <span class="desc">What the brain is doing right now: tools switching on, gate moves, collector presses</span>
+        </button>
       </div>
 
       <!-- NO "Hardware" SECTION ANY MORE (2026-09-14). It held one control,
@@ -211,6 +217,28 @@ import { ApiService } from '../services/api.service';
            ApiService.checkStopConflict(), now takes the pitch from the rack
            being calibrated. Coast-down left with it: it lives on each collector,
            edited where that collector is set up. -->
+
+      <!-- SERVOS (2026-10-07): the pulse range every PWM gate is driven over. One number pair for the shop, because a
+           shop buys its servos as one multipack (jeff). Kept in the layout, so it reaches every board on the next move. -->
+      <div class="section">
+        <span class="section-title">Servos</span>
+        <div class="row-hint">
+          The pulse each gate servo gets at the two ends of its swing. Wider lets a servo turn further; too wide drives it
+          into its own stop at the ends. Recalibrate your gates after changing it — the same angle lands somewhere new.
+        </div>
+        <div class="row">
+          <label class="row-label" for="servo-min">Pulse at 0°</label>
+          <span><input id="servo-min" type="number" [min]="bounds.min" [max]="bounds.max" step="10" [(ngModel)]="servoMin"> µs</span>
+        </div>
+        <div class="row">
+          <label class="row-label" for="servo-max">Pulse at 180°</label>
+          <span><input id="servo-max" type="number" [min]="bounds.min" [max]="bounds.max" step="10" [(ngModel)]="servoMax"> µs</span>
+        </div>
+        <div class="row">
+          <div class="row-hint">{{ servoNote() }}</div>
+          <button class="save-btn" (click)="saveServo()" [disabled]="busy || !servoValid() || !servoChanged()">Save</button>
+        </div>
+      </div>
 
       <div class="status-msg" *ngIf="statusMsg">{{ statusMsg }}</div>
       <div class="error-msg" *ngIf="errorMsg">⚠ {{ errorMsg }}</div>
@@ -284,7 +312,38 @@ export class SettingsComponent implements OnInit {
     private cd: ChangeDetectorRef
   ) {}
 
+  // ── servo pulse range ──────────────────────────────────────────────────
+  readonly bounds = SERVO_PULSE_BOUNDS;
+  servoMin = 400; servoMax = 2600;
+  private savedServo = { minUs: 400, maxUs: 2600 };
+  servoValid(): boolean {
+    const a = Number(this.servoMin), b = Number(this.servoMax);
+    return Number.isInteger(a) && Number.isInteger(b) && a >= this.bounds.min && b <= this.bounds.max && b - a >= this.bounds.span;
+  }
+  servoChanged(): boolean { return Number(this.servoMin) !== this.savedServo.minUs || Number(this.servoMax) !== this.savedServo.maxUs; }
+  servoNote(): string {
+    return this.servoValid()
+      ? `${this.savedServo.minUs}–${this.savedServo.maxUs} µs now`
+      : `Whole µs, ${this.bounds.min}–${this.bounds.max}, at least ${this.bounds.span} apart`;
+  }
+  async saveServo(): Promise<void> {
+    if (!this.servoValid()) return;
+    const minUs = Number(this.servoMin), maxUs = Number(this.servoMax);
+    await this.run(async () => {
+      // Read the layout NOW rather than when the page opened: whatever else changed since is kept.
+      const doc = JSON.parse(JSON.stringify(await this.api.getTopology())) as Topology & { servo?: unknown };
+      doc.servo = { minUs, maxUs };
+      await this.api.putTopology(doc as Topology);
+      this.savedServo = { minUs, maxUs };
+    }, 'busy', `Servos now run ${minUs}–${maxUs} µs. Recalibrate your gates.`);
+  }
+
   ngOnInit() {
+    void this.api.getTopology().then((t) => {
+      this.savedServo = servoPulseRange(t);
+      this.servoMin = this.savedServo.minUs; this.servoMax = this.savedServo.maxUs;
+      this.cd.markForCheck();
+    }).catch(() => { /* no layout yet: the defaults stand, and Save says why it cannot */ });
     // Nothing here waits on deviceInfo any more: the only reader was the gate
     // count, and the wait went with it. (It was a whenReady() rather than a
     // subscribe() on purpose — this component has no ngOnDestroy, so a bare
@@ -296,6 +355,7 @@ export class SettingsComponent implements OnInit {
    *  device they have not drawn a shop on yet. */
   back()            { this.router.navigate(['/']); }
   goSetup()         { this.router.navigate(['/build']); }
+  goLog()           { this.router.navigate(['/boards/log']); }
 
   clearStatus() { this.statusMsg = ''; this.errorMsg = ''; }
 

@@ -138,3 +138,5 @@ export function tickCollector(d: TopologyDevice, nowMs: number): void;
 export const DEFAULT_COLLECTOR_OFF_DELAY_MS: number;
 export function collectorOffDelayMs(topology: Topology, systemId?: string): number;
 export function toolThreshold(topology: Topology, toolId: string): number;
+/** After a layout loads from nothing: one gate open per idle system, the rest closed. */
+export function settleAtBoot(d: TopologyDevice): TopologyDevice;

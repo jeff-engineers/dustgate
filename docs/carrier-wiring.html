@@ -1,0 +1,580 @@
+<meta charset="utf-8">
+<title>DustGate Carrier Wiring</title>
+<meta name="description" content="Wiring for the DustGate PWM carrier board: the perfboard build as it runs today, and the next PCB round with the sourced parts.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<style>
+:root {
+  --bg: #f4f3ee; --paper: #fbfaf6; --ink: #1f2328; --muted: #5f6670; --rule: #d9d6cc; --card: #ffffff;
+  --accent: #b35f17; --accent-soft: #f6e7d6;
+  --n12: #c0392b; --n5: #c46a00; --nsrv: #7b4bb5; --n33: #1f6fb2; --ngnd: #4a4f57; --nbias: #138074; --nsig: #2c7a3a; --nnc: #9aa0a8;
+  --warn-bg: #fff4d6; --warn-ink: #7a5300;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #15171b; --paper: #1b1e23; --ink: #e6e3dc; --muted: #9ba1aa; --rule: #30343b; --card: #20242a;
+  --accent: #e08a3c; --accent-soft: #3a2a1b;
+  --n12: #ef6a5b; --n5: #f0a040; --nsrv: #b48ae6; --n33: #63a8e6; --ngnd: #a6acb5; --nbias: #3cc0b0; --nsig: #6cc47a; --nnc: #6d737c;
+  --warn-bg: #3a3016; --warn-ink: #f2cf7a; color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --bg: #15171b; --paper: #1b1e23; --ink: #e6e3dc; --muted: #9ba1aa; --rule: #30343b; --card: #20242a;
+  --accent: #e08a3c; --accent-soft: #3a2a1b;
+  --n12: #ef6a5b; --n5: #f0a040; --nsrv: #b48ae6; --n33: #63a8e6; --ngnd: #a6acb5; --nbias: #3cc0b0; --nsig: #6cc47a; --nnc: #6d737c;
+  --warn-bg: #3a3016; --warn-ink: #f2cf7a; color-scheme: dark; }
+body { background: var(--bg); color: var(--ink); font: 15px/1.55 "IBM Plex Sans", system-ui, sans-serif; margin: 0; }
+.wrap { max-width: 1240px; margin: 0 auto; padding-inline: 20px; padding-block: 28px 64px; }
+h1 { font-size: 28px; margin: 0 0 6px; text-wrap: balance; letter-spacing: -0.01em; }
+h2 { font-size: 20px; margin: 36px 0 10px; text-wrap: balance; }
+h3 { font-size: 15px; margin: 22px 0 8px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+p, li { max-width: 72ch; }
+.lede { color: var(--muted); margin: 0 0 18px; }
+code, .mono { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: .92em; }
+.tabs { display: inline-flex; gap: 0; border: 1px solid var(--rule); border-radius: 10px; overflow: hidden; background: var(--paper); position: sticky; top: env(safe-area-inset-top, 0px); z-index: 2; }
+.tabs button { font: 600 14px "IBM Plex Sans", sans-serif; padding: 9px 16px; border: 0; background: transparent; color: var(--muted); cursor: pointer; }
+.tabs button[aria-selected="true"] { background: var(--accent); color: #fff; }
+.status { display: inline-block; font: 600 11px "IBM Plex Mono", monospace; letter-spacing: .05em; text-transform: uppercase; padding: 2px 8px; border-radius: 999px; margin-left: 8px; vertical-align: middle; }
+.status.built { background: color-mix(in srgb, var(--nsig) 18%, transparent); color: var(--nsig); }
+.status.plan { background: var(--accent-soft); color: var(--accent); }
+.legend { display: flex; flex-wrap: wrap; gap: 8px 14px; margin: 14px 0 6px; font-size: 13px; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { width: 22px; height: 4px; border-radius: 2px; display: inline-block; }
+.sheet { background: var(--paper); border: 1px solid var(--rule); border-radius: 12px; overflow-x: auto; margin-top: 10px; }
+.sheet svg { display: block; }
+.warn { background: var(--warn-bg); color: var(--warn-ink); border-radius: 10px; padding: 12px 14px; margin: 14px 0; max-width: 80ch; }
+.warn b { color: inherit; }
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+.tablewrap { overflow-x: auto; border: 1px solid var(--rule); border-radius: 10px; background: var(--paper); }
+th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+th { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); font-weight: 600; background: var(--card); }
+tr:last-child td { border-bottom: 0; }
+td.mono { white-space: nowrap; }
+.pill { display: inline-block; font: 600 12px "IBM Plex Mono", monospace; padding: 1px 7px; border-radius: 6px; color: #fff; white-space: nowrap; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
+.grid2 > div { min-width: 0; background: var(--paper); border: 1px solid var(--rule); border-radius: 10px; padding: 12px 14px; }
+.grid2 h4 { margin: 0 0 6px; font-size: 14px; }
+.grid2 ul { margin: 0; padding-left: 18px; }
+.foot { color: var(--muted); font-size: 13px; margin-top: 40px; }
+</style>
+
+<div class="wrap">
+  <h1>DustGate carrier wiring</h1>
+  <p class="lede">The one PWM board — gate, CT-sensing node or collector by what's fitted — drawn twice: the <b>perfboard</b> as it runs in the shop today with the new CT network added, and the <b>PCB</b> for the next prototype round with the sourced parts. Pad numbers come from <code>firmware/boards/xiao_c5.h</code>; the reasoning lives in <code>firmware/WIRING.md</code>, the part numbers in <code>docs/BOM.md</code>.</p>
+
+  <div class="tabs" role="tablist" aria-label="Build">
+    <button role="tab" id="tab-perf" aria-selected="true" data-build="perf">Perfboard</button>
+    <button role="tab" id="tab-pcb" aria-selected="false" data-build="pcb">PCB</button>
+  </div>
+
+  <section id="view"></section>
+
+  <h2>Before soldering — check these on the bench</h2>
+  <div class="grid2">
+    <div><h4>The jack and the clamp</h4><ul>
+      <li>Nothing inserted: tip contact (<code>Left</code> / pin 2) to the switch (<code>LSw</code> / pin 10) beeps; insert a plug and it opens.</li>
+      <li>SCT-013-030 plug: tip to sleeve reads tens of ohms. If tip to <i>ring</i> reads it instead, move the bias wire to <code>Ring</code> / pin 3.</li>
+    </ul></div>
+    <div><h4>The rails</h4><ul>
+      <li>Trim the servo buck to ~6 V <b>before</b> a servo is plugged in. Check each servo's maximum before going higher.</li>
+      <li>USB unplugged, 12 V on: the USB-C connector's VBUS reads 0 V (the Schottky is doing its job).</li>
+      <li>CT bias node to GND reads ~1.65 V.</li>
+    </ul></div>
+    <div><h4>The modules</h4><ul>
+      <li>OLED: VCC/GND order differs between modules — read yours. It runs from <b>3V3</b>; at 5 V its pull-ups put 5 V on D4/D5.</li>
+      <li>The MPM3610 breakout's pins follow the LM1117 TO-220 order plus EN — go by the silkscreen.</li>
+    </ul></div>
+    <div><h4>After it's built</h4><ul>
+      <li>Read the CT floor with servos idle and moving: ~6.7 counts (0.195 A) is the number to beat with the new parts fitted.</li>
+      <li>Unplug the clamp: the node should stop reading it (D0 railed high), not read zero.</li>
+    </ul></div>
+  </div>
+
+  <p class="foot">Drawn 2026-10-08. Not to scale: the XIAO's pads are spaced to fit what hangs off them. The perfboard column is the reference — it works — and nothing in the PCB column or the new CT parts has been on a board yet.</p>
+</div>
+
+<script>
+// ── One description per build. Every drawn wire and every table row comes from here. ──
+const NETS = {
+  '12V':   { c: '--n12',  label: '12 V' },
+  '5V':    { c: '--n5',   label: '5 V (XIAO side)' },
+  '5VB':   { c: '--n5',   label: '5 V buck out' },
+  'SERVO': { c: '--nsrv', label: 'servo rail ~6 V' },
+  '3V3':   { c: '--n33',  label: '3V3' },
+  'GND':   { c: '--ngnd', label: 'GND' },
+  'BIAS':  { c: '--nbias',label: 'CT bias ~1.65 V' },
+  'BAN':   { c: '--n12',  label: 'Banner black' },
+  'NC':    { c: '--nnc',  label: 'not connected' },
+};
+const sig = (pad, via) => ({ sig: pad, via });
+
+// A card hangs off one or more XIAO pads. pins: [printed label, net key | sig(pad, via), note]
+function build(kind) {
+  const P = kind === 'pcb';
+  const left = [
+    { pads: ['D0'], title: 'CT clamp jack', part: P ? 'CUI SJ1-3525N' : 'Adafruit TRRS breakout #5764',
+      pins: P ? [
+        ['2 · tip', sig('D0', '1 kΩ'), 'clamp signal'],
+        ['1 · sleeve', 'BIAS', 'clamp return'],
+        ['10 · tip sw', '3V3', 'through 10 kΩ: plug-detect'],
+        ['3, 11', 'NC', 'ring, ring switch'],
+      ] : [
+        ['Left', sig('D0', '1 kΩ'), 'clamp signal (plug tip)'],
+        ['Sleeve', 'BIAS', 'clamp return'],
+        ['LSw', '3V3', 'through 10 kΩ: plug-detect'],
+        ['Right Ring RSw', 'NC', ''],
+      ],
+      notes: [
+        'Bias node: 1 kΩ to 3V3 · 1 kΩ to GND · 100 nF + bulk to GND',
+        'At D0: 1N5817 D0→3V3 and GND→D0' + (P ? ' (or one BAT54S)' : ' — new'),
+        P ? 'Keep the bias node millimetres long, away from both bucks' : '10 kΩ, 1 kΩ series and the diodes are new',
+      ] },
+    { pads: ['D1'], title: 'Wake button', part: P ? 'Omron B3F-1000' : 'momentary, NO',
+      pins: [['A', sig('D1', ''), 'INPUT_PULLUP'], ['B', 'GND', '']] },
+    { pads: ['D2'], title: 'Status pixel', part: P ? 'WS2812B 5050 · SparkFun COM-16347' : 'Adafruit NeoPixel breakout',
+      pins: P ? [
+        ['4 · DIN', sig('D2', '330 Ω'), ''],
+        ['1 · VDD', '5V', '+ 0.1 µF to GND'],
+        ['3 · VSS', 'GND', ''],
+        ['2 · DOUT', 'NC', ''],
+      ] : [
+        ['DIN / IN', sig('D2', '330 Ω'), ''],
+        ['5V / VIN', '5V', 'XIAO side of the Schottky'],
+        ['GND', 'GND', ''],
+        ['DOUT / OUT', 'NC', ''],
+      ] },
+    { pads: ['D3'], title: 'D3 — leave free', part: 'GPIO7 is a strapping pin', pins: [], notes: ['Nothing that can hold it LOW through reset'] },
+    { pads: ['D4', 'D5'], title: 'Status screen', part: 'SSD1306 0.96″ I²C, 0x3C',
+      pins: [['SDA', sig('D4', ''), ''], ['SCL', sig('D5', ''), ''], ['VCC', '3V3', 'never 5 V'], ['GND', 'GND', 'order varies — read yours']] },
+    { pads: ['D6'], title: 'Bin sensor — 4N35', part: 'discrete DIP-6 (collector board)',
+      pins: [
+        ['5 · collector', sig('D6', ''), '+ 10 kΩ to 3V3'],
+        ['4 · emitter', 'GND', ''],
+        ['1 · LED anode', '12V', 'through 1 kΩ'],
+        ['2 · LED cathode', 'BAN', 'the sensor\'s NPN output'],
+        ['3, 6', 'NC', ''],
+      ],
+      notes: [
+        'Banner brown → 12 V · blue → GND' + (P ? ' (screw terminal)' : ''),
+        (P ? '' : 'Recommended: ') + '1N4148 across pins 1–2, cathode to pin 1',
+        (P ? '' : 'Recommended: ') + 'TVS 12 V → GND at the Banner\'s terminal',
+      ] },
+  ];
+  const right = [
+    { pads: ['5V'], title: '5 V in', part: 'from the power chain above',
+      pins: [['5V pad', '5V', 'Schottky cathode']], notes: ['220 µF + 0.1 µF to GND, at the pad', 'Pixel VDD hangs here too'] },
+    { pads: ['GND'], title: 'Common ground', part: 'one net, starred at the supply',
+      pins: [['GND pad', 'GND', '']], notes: ['Servo and 12 V load returns go to the supply, not through here'] },
+    { pads: ['3V3'], title: '3V3 out', part: 'XIAO regulator',
+      pins: [['3V3 pad', '3V3', '']], notes: ['10 µF + 0.1 µF to GND', 'Feeds: OLED, CT divider, plug-detect + bin pull-ups'] },
+    { pads: ['D10'], title: '315 MHz transmitter', part: P ? 'SparkFun 10535 (collector board)' : '315 MHz OOK module (collector board)',
+      pins: [['DATA', sig('D10', ''), 'RMT output'], ['VCC', P ? '5V' : '5V', P ? 'jumper: 5 V or 12 V' : '5 V on the bench'], ['GND', 'GND', ''], ['ANT', 'NC', '17 cm wire']] },
+    { pads: ['D9'], title: 'Second button', part: P ? 'B3F-1000 — footprint only' : 'spare pad',
+      pins: [['A', sig('D9', ''), 'no firmware yet'], ['B', 'GND', '']] },
+    { pads: ['D8'], title: 'Fob servo', part: '9 g · channel 1 (collector board)',
+      pins: [['signal', sig('D8', ''), ''], ['V+', 'SERVO', ''], ['GND', 'GND', '']] },
+    { pads: ['D7'], title: 'Gate servo', part: 'MG995 · channel 0',
+      pins: [['signal', sig('D7', ''), 'orange'], ['V+', 'SERVO', 'red'], ['GND', 'GND', 'brown']], notes: ['470–1000 µF + 0.1 µF across V+/GND at the connector'] },
+  ];
+  const chain = P ? [
+    { t: 'Barrel jack', s: 'CUI PJ-063AH', pins: [['+', '12 V in'], ['−', 'GND']] },
+    { t: 'PTC fuse', s: '~2.5 A hold', pins: [['in → out', 'series']] },
+    { t: 'TVS', s: '15 V standoff', pins: [['K', '12V'], ['A', 'GND']] },
+    { t: '5 V buck', s: 'MPM3610 breakout, socketed', pins: [['VIN', '12V'], ['GND', 'GND'], ['5V', '5VB'], ['EN', 'NC']] },
+    { t: 'Schottky', s: '1N5817-TP', pins: [['A', '5VB'], ['K', '5V']] },
+    { t: 'Servo buck', s: 'Pololu D24V22F6, socketed', pins: [['VIN', '12V'], ['GND', 'GND'], ['VOUT', 'SERVO'], ['EN · PG', 'NC']] },
+  ] : [
+    { t: 'Barrel jack', s: '2.1 × 5.5 mm, 12 V', pins: [['+', '12V'], ['−', 'GND']] },
+    { t: '5 V buck', s: 'Adafruit MPM3610 #4739', pins: [['VIN', '12V'], ['GND', 'GND'], ['5V', '5VB'], ['EN', 'NC']] },
+    { t: 'Schottky', s: '1N5817', pins: [['A', '5VB'], ['K', '5V']] },
+    { t: 'Servo buck', s: 'DROK mini adjustable, ~6 V', pins: [['IN+', '12V'], ['IN−', 'GND'], ['OUT+', 'SERVO'], ['OUT−', 'GND']] },
+  ];
+  return { left, right, chain };
+}
+
+const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+const netColor = (k) => css(NETS[k]?.c || '--nsig');
+
+function drawSheet(b) {
+  const W = 1330, cardW = 400, xiaoW = 150, gap = 70;
+  const xiaoX = (W - xiaoW) / 2, leftX = xiaoX - gap - cardW, rightX = xiaoX + xiaoW + gap;
+  const PIN = 22, HEAD = 46, NOTE = 18, PADY = 10, SEP = 16;
+  const out = [];
+  const text = (x, y, s, o = {}) => `<text x="${x}" y="${y}" font-family="${o.mono ? 'IBM Plex Mono, monospace' : 'IBM Plex Sans, sans-serif'}" font-size="${o.size || 13}" font-weight="${o.w || 400}" fill="${o.fill || css('--ink')}" text-anchor="${o.anchor || 'start'}">${esc(s)}</text>`;
+
+  // power chain across the top
+  const chainTop = 20, chainH = 132, n = b.chain.length, cw = Math.min(180, (W - 40 - (n - 1) * 14) / n);
+  const chainX0 = (W - (n * cw + (n - 1) * 14)) / 2;
+  out.push(text(20, chainTop + 4, 'POWER', { size: 11, w: 600, fill: css('--muted') }));
+  b.chain.forEach((c, i) => {
+    const x = chainX0 + i * (cw + 14), y = chainTop + 14;
+    out.push(`<rect x="${x}" y="${y}" width="${cw}" height="${chainH - 20}" rx="8" fill="${css('--card')}" stroke="${css('--rule')}"/>`);
+    out.push(text(x + 10, y + 20, c.t, { w: 600 }));
+    out.push(text(x + 10, y + 36, c.s, { size: 11, fill: css('--muted') }));
+    c.pins.forEach(([lab, net], j) => {
+      const py = y + 56 + j * 15;
+      out.push(text(x + 10, py, lab, { mono: true, size: 11 }));
+      const known = NETS[net];
+      out.push(`<rect x="${x + cw - 74}" y="${py - 10}" width="64" height="13" rx="3" fill="${known ? netColor(net) : 'none'}" ${known ? '' : `stroke="${css('--rule')}"`}/>`);
+      out.push(text(x + cw - 42, py, known ? (net === '5VB' ? '5V buck' : net === 'SERVO' ? 'servo' : net === '5V' ? '5V pad' : net) : net, { mono: true, size: 10, anchor: 'middle', fill: known ? '#fff' : css('--muted') }));
+    });
+    if (i < n - 1) out.push(`<path d="M${x + cw + 2} ${y + 50} l10 0" stroke="${css('--muted')}" stroke-width="1.5" marker-end="url(#arr)"/>`);
+  });
+
+  // cards down each side; a pad's y is the y of the pin it lands on
+  const top = chainTop + chainH + 96;   // room for the XIAO's name above its first pad
+  const padY = {};
+  function column(cards, x, side) {
+    let y = top;
+    cards.forEach((c) => {
+      const notes = c.notes || [];
+      const h = HEAD + c.pins.length * PIN + notes.length * NOTE + PADY + (c.pins.length ? 4 : 0);
+      out.push(`<rect x="${x}" y="${y}" width="${cardW}" height="${h}" rx="9" fill="${css('--card')}" stroke="${css('--rule')}"/>`);
+      out.push(text(x + 12, y + 20, c.title, { w: 600, size: 14 }));
+      out.push(text(x + 12, y + 36, c.part, { size: 11.5, fill: css('--muted') }));
+      c.pins.forEach(([lab, net, note], j) => {
+        const py = y + HEAD + j * PIN + 14;
+        const isSig = typeof net === 'object';
+        const edgeX = side === 'L' ? x + cardW : x;
+        // label column on the outer side, net/note on the inner side
+        out.push(text(x + 12, py + 4, lab, { mono: true, size: 12, w: 600 }));
+        const col2 = x + 150;
+        if (isSig) {
+          padY[net.sig] = py;
+          out.push(`<circle cx="${edgeX}" cy="${py}" r="3.5" fill="${netColor('SIG') || css('--nsig')}"/>`);
+          if (note) out.push(text(col2, py + 4, note, { size: 11.5, fill: css('--muted') }));
+        } else {
+          const col = netColor(net);
+          out.push(`<rect x="${col2}" y="${py - 8}" width="${Math.max(44, NETS[net].label.length * 6.6 + 12)}" height="16" rx="4" fill="${col}"/>`);
+          out.push(text(col2 + 6, py + 4, NETS[net].label, { mono: true, size: 10.5, fill: '#fff', w: 600 }));
+          if (note) out.push(text(col2 + 8 + Math.max(44, NETS[net].label.length * 6.6 + 12), py + 4, note, { size: 11, fill: css('--muted') }));
+        }
+      });
+      notes.forEach((t, k) => out.push(text(x + 12, y + HEAD + c.pins.length * PIN + 12 + k * NOTE, '· ' + t, { size: 11.5, fill: css('--muted') })));
+      if (!c.pins.length) padY[c.pads[0]] = y + 30;
+      // a power card's pad lands on its first pin
+      if (c.pins.length && !c.pins.some((p) => typeof p[1] === 'object')) padY[c.pads[0]] = y + HEAD + 14;
+      c._y = y; c._h = h;
+      y += h + SEP;
+    });
+    return y;
+  }
+  const yL = column(b.left, leftX, 'L'), yR = column(b.right, rightX, 'R');
+  const bottom = Math.max(yL, yR);
+
+  // the XIAO, tall enough for both columns, USB-C at the top
+  const xTop = top - 82, xH = bottom - xTop - 4;
+  out.push(`<rect x="${xiaoX}" y="${xTop}" width="${xiaoW}" height="${xH}" rx="12" fill="${css('--accent-soft')}" stroke="${css('--accent')}" stroke-width="1.5"/>`);
+  out.push(`<rect x="${xiaoX + xiaoW / 2 - 26}" y="${xTop - 12}" width="52" height="16" rx="4" fill="${css('--paper')}" stroke="${css('--accent')}"/>`);
+  out.push(text(xiaoX + xiaoW / 2, xTop + 1, 'USB-C', { size: 10, anchor: 'middle', mono: true, fill: css('--accent') }));
+  out.push(text(xiaoX + xiaoW / 2, xTop + 30, 'XIAO', { size: 16, w: 700, anchor: 'middle' }));
+  out.push(text(xiaoX + xiaoW / 2, xTop + 48, 'ESP32C5', { size: 12, anchor: 'middle', fill: css('--muted') }));
+  out.push(text(xiaoX + xiaoW / 2, xTop + 64, 'top view', { size: 11, anchor: 'middle', fill: css('--muted') }));
+  const GPIO = { D0: 1, D1: 0, D2: 25, D3: 7, D4: 23, D5: 24, D6: 11, D7: 12, D8: 8, D9: 9, D10: 10 };
+  const drawPad = (pad, side) => {
+    const y = padY[pad]; if (y === undefined) return;
+    const px = side === 'L' ? xiaoX : xiaoX + xiaoW;
+    out.push(`<rect x="${px - 7}" y="${y - 7}" width="14" height="14" rx="3" fill="${css('--paper')}" stroke="${css('--accent')}" stroke-width="1.5"/>`);
+    const ix = side === 'L' ? xiaoX + 14 : xiaoX + xiaoW - 14;
+    out.push(text(ix, y + 4, pad, { mono: true, size: 12, w: 600, anchor: side === 'L' ? 'start' : 'end' }));
+    if (GPIO[pad] !== undefined) out.push(text(side === 'L' ? ix + 34 : ix - 34, y + 4, 'GPIO' + GPIO[pad], { mono: true, size: 10, fill: css('--muted'), anchor: side === 'L' ? 'start' : 'end' }));
+  };
+  ['D0','D1','D2','D3','D4','D5','D6'].forEach((p) => drawPad(p, 'L'));
+  ['5V','GND','3V3','D10','D9','D8','D7'].forEach((p) => drawPad(p, 'R'));
+
+  // wires: signal pads straight across, with any series part on the line; power pads tagged
+  const wire = (x1, x2, y, color, via, dashed) => {
+    out.push(`<line x1="${x1}" y1="${y}" x2="${x2}" y2="${y}" stroke="${color}" stroke-width="2.5" ${dashed ? 'stroke-dasharray="5 4"' : ''}/>`);
+    if (via) {
+      const mx = (x1 + x2) / 2;
+      out.push(`<rect x="${mx - 22}" y="${y - 8}" width="44" height="16" rx="3" fill="${css('--paper')}" stroke="${color}" stroke-width="1.5"/>`);
+      out.push(text(mx, y + 4, via, { mono: true, size: 10.5, anchor: 'middle', w: 600 }));
+    }
+  };
+  const sigCol = css('--nsig');
+  b.left.forEach((c) => c.pins.forEach(([, net]) => { if (typeof net === 'object') wire(leftX + cardW, xiaoX - 7, padY[net.sig], sigCol, net.via); }));
+  b.right.forEach((c) => c.pins.forEach(([, net]) => { if (typeof net === 'object') wire(xiaoX + xiaoW + 7, rightX, padY[net.sig], sigCol, net.via); }));
+  b.right.filter((c) => c.pins.length && !c.pins.some((p) => typeof p[1] === 'object')).forEach((c) => {
+    wire(xiaoX + xiaoW + 7, rightX, padY[c.pads[0]], netColor(c.pins[0][1]));
+  });
+  if (padY.D3 !== undefined) wire(leftX + cardW, xiaoX - 7, padY.D3, css('--nnc'), '', true);
+
+  const H = bottom + 10;
+  return `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="Wiring diagram">
+    <defs><marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="${css('--muted')}"/></marker></defs>
+    ${out.join('\n')}</svg>`;
+}
+
+function wireTable(b) {
+  const rows = [];
+  const pill = (k) => `<span class="pill" style="background:var(${NETS[k].c})">${esc(NETS[k].label)}</span>`;
+  for (const c of [...b.left, ...b.right]) for (const [lab, net, note] of c.pins) {
+    if (net === 'NC') continue;
+    const to = typeof net === 'object' ? `<b class="mono">${net.sig}</b>` : pill(net);
+    rows.push(`<tr><td>${esc(c.title)}</td><td class="mono">${esc(lab)}</td><td>${typeof net === 'object' && net.via ? `<span class="mono">${esc(net.via)}</span>` : '—'}</td><td>${to}</td><td>${esc(note || '')}</td></tr>`);
+  }
+  return `<div class="tablewrap"><table><thead><tr><th>Part</th><th>Pin (as printed)</th><th>Through</th><th>To</th><th>Note</th></tr></thead><tbody>${rows.join('')}</tbody></table></div>`;
+}
+
+// The schematic kit both close-ups draw with: wires, dots, ground and supply flags, R, C, D, notes.
+function sch() {
+  const ink = css('--ink'), mut = css('--muted'), bias = css('--nbias'), sig = css('--nsig'), v33 = css('--n33'), gnd = css('--ngnd'), card = css('--card'), rule = css('--rule'), nc = css('--nnc');
+  const o = [];
+  const T = (x, y, s, a = {}) => `<text x="${x}" y="${y}" font-family="${a.mono ? 'IBM Plex Mono, monospace' : 'IBM Plex Sans, sans-serif'}" font-size="${a.size || 13}" font-weight="${a.w || 400}" fill="${a.fill || ink}" text-anchor="${a.anchor || 'start'}">${esc(s)}</text>`;
+  const W = (pts, c) => o.push(`<polyline points="${pts.map((p) => p.join(',')).join(' ')}" fill="none" stroke="${c}" stroke-width="2.5" stroke-linejoin="round"/>`);
+  const dot = (x, y, c) => o.push(`<circle cx="${x}" cy="${y}" r="4.5" fill="${c}"/>`);
+  const gndSym = (x, y) => { o.push(`<path d="M${x} ${y}v10M${x - 12} ${y + 10}h24M${x - 7} ${y + 15}h14M${x - 3} ${y + 20}h6" stroke="${gnd}" stroke-width="2" fill="none"/>`); };
+  const rail = (x, y, label, col, dir = 'up') => {
+    if (dir === 'up') { o.push(`<path d="M${x} ${y}v-10M${x - 11} ${y - 10}h22" stroke="${col}" stroke-width="2.5" fill="none"/>`); o.push(T(x, y - 16, label, { mono: true, size: 12, w: 600, fill: col, anchor: 'middle' })); }
+    else { o.push(`<path d="M${x} ${y}h10M${x + 10} ${y - 11}v22" stroke="${col}" stroke-width="2.5" fill="none"/>`); o.push(T(x + 16, y + 4, label, { mono: true, size: 12, w: 600, fill: col })); }
+  };
+  const v33Sym = (x, y, dir = 'up') => rail(x, y, '3V3', v33, dir);
+  // a resistor between two points on a straight line, its label beside it
+  const R = (x1, y1, x2, y2, name, val, side = 1) => {
+    const v = x1 === x2, mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
+    o.push(v ? `<rect x="${mx - 8}" y="${my - 22}" width="16" height="44" rx="2" fill="${card}" stroke="${ink}" stroke-width="2"/>` : `<rect x="${mx - 22}" y="${my - 8}" width="44" height="16" rx="2" fill="${card}" stroke="${ink}" stroke-width="2"/>`);
+    if (v) { o.push(T(mx + 16 * side, my - 2, name, { w: 700, anchor: side > 0 ? 'start' : 'end' })); o.push(T(mx + 16 * side, my + 14, val, { mono: true, size: 12, anchor: side > 0 ? 'start' : 'end' })); }
+    else { o.push(T(mx, my - 16, name + '  ' + val, { size: 12.5, w: 600, anchor: 'middle' })); }
+  };
+  // a capacitor, vertical, plates at y; polarized gets a curved plate and a +
+  const C = (x, y, name, val, pol) => {
+    o.push(`<path d="M${x - 16} ${y - 5}h32" stroke="${ink}" stroke-width="2.5"/>`);
+    o.push(pol ? `<path d="M${x - 16} ${y + 8}q16 -8 32 0" stroke="${ink}" stroke-width="2.5" fill="none"/>` : `<path d="M${x - 16} ${y + 5}h32" stroke="${ink}" stroke-width="2.5"/>`);
+    if (pol) o.push(T(x - 22, y - 8, '+', { size: 13, w: 700, anchor: 'middle' }));
+    o.push(T(x + 22, y - 2, name, { w: 700 })); o.push(T(x + 22, y + 14, val, { mono: true, size: 12 }));
+  };
+  // a diode, vertical, cathode toward cy (the bar)
+  const D = (x, ay, ky, name, val, labelSide = 1) => {
+    const up = ky < ay, my = (ay + ky) / 2, h = 13;
+    const tip = up ? my - h : my + h, base = up ? my + h : my - h;
+    o.push(`<path d="M${x - 13} ${base}L${x + 13} ${base}L${x} ${tip}Z" fill="${card}" stroke="${ink}" stroke-width="2"/>`);
+    o.push(`<path d="M${x - 13} ${tip}h26" stroke="${ink}" stroke-width="2.5"/>`);
+    o.push(T(x + 20 * labelSide, my - 2, name, { w: 700, anchor: labelSide > 0 ? 'start' : 'end' })); o.push(T(x + 20 * labelSide, my + 14, val, { mono: true, size: 12, anchor: labelSide > 0 ? 'start' : 'end' }));
+  };
+  const note = (x, y, lines, anchor = 'start') => lines.forEach((l, i) => o.push(T(x, y + i * 16, l, { size: 12, fill: mut, anchor })));
+  return { o, T, W, dot, gndSym, rail, v33Sym, R, C, D, note, ink, mut, bias, sig, v33, gnd, card, rule, nc };
+}
+
+// ── The CT front end, close up: every part, drawn as a schematic. ──
+function drawCT(kind) {
+  const P = kind === 'pcb';
+  const { o, T, W, dot, gndSym, v33Sym, R, C, D, note, mut, bias, sig, v33, card, rule, nc } = sch();
+
+  // ── the clamp's plug, and the jack
+  const jx = 190, jw = 190, jy = 150, jh = 330;
+  const rows = P
+    ? [['1 · sleeve', 'sleeve'], ['3 · ring', 'nc'], ['11 · ring sw', 'nc'], ['10 · tip sw', 'sw'], ['2 · tip', 'tip']]
+    : [['Sleeve', 'sleeve'], ['Right', 'nc'], ['RSw', 'nc'], ['LSw', 'sw'], ['Left', 'tip'], ['Ring', 'nc']];
+  o.push(`<rect x="${jx}" y="${jy}" width="${jw}" height="${jh}" rx="10" fill="${card}" stroke="${rule}" stroke-width="1.5"/>`);
+  o.push(T(jx + 14, jy + 24, P ? 'J1 · CUI SJ1-3525N' : 'J1 · Adafruit TRRS #5764', { w: 700, size: 14 }));
+  o.push(T(jx + 14, jy + 42, P ? 'switched jack · datasheet pins' : 'labels as printed on it', { size: 11.5, fill: mut }));
+  const pinY = {}; const top0 = jy + 78, step = P ? 52 : 42;
+  rows.forEach(([lab, role], i) => {
+    const y = top0 + i * step; pinY[role === 'nc' ? 'nc' + i : role] = y;
+    o.push(`<rect x="${jx + jw - 8}" y="${y - 7}" width="16" height="14" rx="3" fill="${css('--paper')}" stroke="${css('--accent')}" stroke-width="1.5"/>`);
+    o.push(T(jx + jw - 16, y + 4, lab, { mono: true, size: 12.5, w: 600, anchor: 'end' }));
+    if (role === 'nc') { o.push(`<path d="M${jx + jw + 8} ${y}h16M${jx + jw + 18} ${y - 6}l12 12M${jx + jw + 30} ${y - 6}l-12 12" stroke="${nc}" stroke-width="2" fill="none"/>`); o.push(T(jx + jw + 40, y + 4, 'not connected', { size: 11.5, fill: nc })); }
+  });
+  // the plug, drawn going into the jack from the left
+  const py = pinY.tip - 30;
+  o.push(`<path d="M10 ${py - 10}h40l10 10l-10 10h-40z" fill="${css('--accent-soft')}" stroke="${css('--accent')}" stroke-width="1.5"/>`);
+  o.push(T(12, py - 18, 'SCT-013-030', { size: 11, w: 700 }));
+  o.push(`<path d="M64 ${py}H${jx - 6}" stroke="${mut}" stroke-width="1.5" stroke-dasharray="4 4" marker-end="url(#ctarr)"/>`);
+  o.push(T((64 + jx) / 2, py - 6, 'plugs in', { size: 11, fill: mut, anchor: 'middle' }));
+  note(12, pinY.tip + 2, ['plug tip = clamp signal', 'plug sleeve = clamp return', 'its burden resistor is', 'inside the clamp — add none'], 'start');
+
+  // ── the bias node: the clamp's return sits at half of 3V3
+  const bx = 420, by = pinY.sleeve;
+  W([[jx + jw + 8, by], [bx, by]], bias); dot(bx, by, bias);
+  W([[bx, by], [bx, by - 100]], bias); R(bx, by - 100, bx, by, 'R1', '1 kΩ', 1); v33Sym(bx, by - 100);
+  const busEnd = 760;
+  W([[bx, by], [busEnd, by]], bias);
+  [[520, 'R2', '1 kΩ', 'r'], [620, 'C1', '100 nF', 'c'], [720, 'C2', P ? '10–100 µF ⚠' : '10–100 µF ⚠', 'cp']].forEach(([x, n, v, k]) => {
+    dot(x, by, bias);
+    W([[x, by], [x, by + 90]], k === 'r' ? bias : bias);
+    if (k === 'r') R(x, by + 10, x, by + 80, n, v); else C(x, by + 45, n, v, k === 'cp');
+    gndSym(x, by + 90);
+  });
+  o.push(`<rect x="${bx + 80}" y="${by - 40}" width="210" height="24" rx="5" fill="${bias}"/>`);
+  o.push(T(bx + 90, by - 23, 'CT BIAS NODE ≈ 1.65 V', { mono: true, size: 12, w: 700, fill: '#fff' }));
+  note(bx + 310, by - 64, ['R1/R2 put the clamp\'s zero at mid-rail so the', 'AC never goes below 0 V. C1/C2 hold that point', 'still against the clamp\'s current — they do', 'NOT smoothe the signal. Keep this node short.']);
+
+  // ── plug-detect: the jack's switch, a 10k to 3V3
+  const sy = pinY.sw;
+  W([[jx + jw + 8, sy], [jx + jw + 60, sy]], v33);
+  R(jx + jw + 60, sy, jx + jw + 130, sy, 'R4', '10 kΩ');
+  W([[jx + jw + 130, sy], [jx + jw + 150, sy]], v33); v33Sym(jx + jw + 150, sy, 'right');
+
+  // ── the signal: tip, through R3, to D0, with the clamp diodes at the pad
+  const ty = pinY.tip, dx = 860, xiaoX = 990;
+  W([[jx + jw + 8, ty], [640, ty]], sig);
+  R(640, ty, 720, ty, 'R3', '1 kΩ');
+  W([[720, ty], [xiaoX, ty]], sig); dot(dx, ty, sig);
+  W([[dx, ty], [dx, ty - 96]], sig); D(dx, ty, ty - 96, 'D1', P ? '1N5817-TP' : '1N5817', -1); v33Sym(dx, ty - 96);
+  W([[dx, ty], [dx, ty + 96]], sig); D(dx, ty + 96, ty, 'D2', P ? '1N5817-TP' : '1N5817', -1); gndSym(dx, ty + 96);
+  note(dx - 20, ty + 150, ['D1 + D2 clip a motor start to ~3.6 V / −0.3 V.', P ? 'Or one BAT54S in their place.' : 'New: not yet fitted.'], 'end');
+  note(jx + jw + 170, ty + 34, ['No plug: the switch joins tip to R4,', 'so D0 reads 3.3 V — "railed", and the', 'firmware ignores it instead of seeing', 'an idle tool. A plug in opens the switch.']);
+
+  // ── the XIAO's three pads this circuit uses
+  o.push(`<rect x="${xiaoX}" y="${jy}" width="130" height="${jh}" rx="12" fill="${css('--accent-soft')}" stroke="${css('--accent')}" stroke-width="1.5"/>`);
+  o.push(T(xiaoX + 65, jy + 26, 'XIAO', { size: 15, w: 700, anchor: 'middle' }));
+  o.push(T(xiaoX + 65, jy + 42, 'ESP32C5', { size: 11, fill: mut, anchor: 'middle' }));
+  o.push(`<rect x="${xiaoX - 7}" y="${ty - 7}" width="14" height="14" rx="3" fill="${css('--paper')}" stroke="${css('--accent')}" stroke-width="1.5"/>`);
+  o.push(T(xiaoX + 14, ty + 4, 'D0', { mono: true, size: 13, w: 700 }));
+  o.push(T(xiaoX + 14, ty + 20, 'GPIO1 · ADC', { mono: true, size: 10, fill: mut }));
+  note(xiaoX + 10, jy + 70, ['Every 3V3 and', 'ground symbol in', 'this drawing is the', 'XIAO\'s own pad.']);
+
+  const H = Math.max(jy + jh, ty + 170) + 20;
+  return `<svg viewBox="0 0 1140 ${H}" width="1140" height="${H}" role="img" aria-label="CT clamp circuit schematic"><defs><marker id="ctarr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="${mut}"/></marker></defs>${o.join('')}</svg>`;
+}
+
+// ── The bin sensor, close up: the Banner beam, the 4N35 between 12 V and D6, the ESD parts. ──
+function drawBin(kind) {
+  const P = kind === 'pcb';
+  const { o, T, W, dot, gndSym, rail, v33Sym, R, D, note, ink, mut, sig, card, rule, nc } = sch();
+  const r12 = css('--n12'), brown = '#9a6a3a', blue = '#3a78c9', black = css('--ink');
+
+  // ── the sensor, in the collector
+  const sx = 20, sw = 190, sy0 = 150, sh = 280;
+  const yBrown = 200, yBlack = 300, yBlue = 380;
+  o.push(`<rect x="${sx}" y="${sy0}" width="${sw}" height="${sh}" rx="10" fill="${card}" stroke="${rule}" stroke-width="1.5"/>`);
+  o.push(T(sx + 14, sy0 + 24, 'Banner QS18VN6D', { w: 700, size: 14 }));
+  o.push(T(sx + 14, sy0 + 42, 'the bin beam · 10–30 V · NPN', { size: 11.5, fill: mut }));
+  [[yBrown, 'brown', '+V', brown], [yBlack, 'black', 'output (sinks)', black], [yBlue, 'blue', '0 V', blue]].forEach(([y, c, what, col]) => {
+    o.push(`<rect x="${sx + sw - 8}" y="${y - 7}" width="16" height="14" rx="3" fill="${col}"/>`);
+    o.push(T(sx + sw - 16, y + 4, c, { mono: true, size: 12.5, w: 600, anchor: 'end' }));
+    o.push(T(sx + sw - 16, y + 19, what, { size: 11, fill: mut, anchor: 'end' }));
+  });
+
+  // ── where the leads land
+  const tx = 250;
+  if (P) {
+    o.push(`<rect x="${tx}" y="${yBrown - 30}" width="44" height="${yBlue - yBrown + 100}" rx="6" fill="${card}" stroke="${rule}" stroke-width="1.5"/>`);
+    o.push(T(tx + 22, yBrown - 40, 'TB1', { w: 700, anchor: 'middle' }));
+    [[yBrown, '1'], [yBlack, '2'], [yBlue, '3'], [yBlue + 30, '4'], [yBlue + 52, '5']].forEach(([y, n]) => {
+      o.push(`<circle cx="${tx + 22}" cy="${y}" r="7" fill="${css('--paper')}" stroke="${css('--accent')}" stroke-width="1.5"/>`);
+      o.push(T(tx + 22, y + 4, n, { mono: true, size: 10, w: 700, anchor: 'middle' }));
+    });
+    note(tx + 50, yBlue + 34, ['4, 5: pilot lamp and strobe, wired', 'as they are today (WIRING.md §9)']);
+  } else {
+    note(tx - 20, yBrown - 40, ['flying leads,', 'soldered']);
+  }
+  W([[sx + sw + 8, yBrown], [340, yBrown], [340, 120]], brown);
+  W([[sx + sw + 8, yBlack], [640, yBlack]], black);
+  W([[sx + sw + 8, yBlue], [360, yBlue]], blue); gndSym(360, yBlue);
+
+  // ── 12 V: the TVS where it enters, R5 to the LED
+  W([[340, 120], [520, 120]], r12); dot(340, 120, r12); rail(340, 120, '12 V', r12);
+  dot(430, 120, r12); W([[430, 120], [430, 190]], r12); D(430, 190, 120, 'D4', P ? 'P4KE18A' : 'TVS · rec.', -1); gndSym(430, 190);
+  W([[520, 120], [520, 240], [640, 240]], r12); R(520, 140, 520, 220, 'R5', '1 kΩ');
+  // D3 across the LED, cathode to pin 1
+  dot(590, 240, r12); dot(590, yBlack, black);
+  W([[590, 240], [590, yBlack]], ink); D(590, yBlack, 240, 'D3', P ? '1N4148' : '1N4148 · rec.', -1);
+
+  // ── the 4N35
+  const ux = 640, uw = 150, uy = 200, uh = 210, p5 = 285, p4 = 365, p3 = 360;
+  o.push(`<rect x="${ux}" y="${uy}" width="${uw}" height="${uh}" rx="8" fill="${card}" stroke="${ink}" stroke-width="2"/>`);
+  o.push(T(ux + uw / 2, uy - 10, 'U1 · 4N35 (DIP-6)', { w: 700, anchor: 'middle' }));
+  [[240, '1', 'A'], [yBlack, '2', 'K'], [p3, '3', 'NC']].forEach(([y, n, f]) => { o.push(T(ux + 6, y - 6, n, { mono: true, size: 10, fill: mut })); o.push(T(ux + 6, y + 14, f, { mono: true, size: 10, fill: mut })); });
+  [[240, '6', 'B'], [p5, '5', 'C'], [p4, '4', 'E']].forEach(([y, n, f]) => { o.push(T(ux + uw - 6, y - 6, n, { mono: true, size: 10, fill: mut, anchor: 'end' })); o.push(T(ux + uw - 6, y + 14, f, { mono: true, size: 10, fill: mut, anchor: 'end' })); });
+  // the LED, anode (pin 1) to cathode (pin 2)
+  const lx = ux + 40;
+  W([[ux, 240], [lx, 240], [lx, 256]], ink); W([[lx, 284], [lx, yBlack], [ux, yBlack]], ink);
+  o.push(`<path d="M${lx - 11} 256L${lx + 11} 256L${lx} 282Z" fill="${card}" stroke="${ink}" stroke-width="2"/><path d="M${lx - 11} 283h22" stroke="${ink}" stroke-width="2.5"/>`);
+  // light across the barrier
+  o.push(`<path d="M${lx + 16} 262l26 10M${lx + 16} 278l26 10" stroke="${css('--accent')}" stroke-width="2" marker-end="url(#binarr)"/>`);
+  o.push(`<path d="M${ux + 76} ${uy + 6}V${uy + uh - 6}" stroke="${css('--accent')}" stroke-width="1.5" stroke-dasharray="5 4"/>`);
+  o.push(T(ux + 76, uy + uh + 18, 'light crosses, current does not', { size: 11.5, fill: css('--accent'), anchor: 'middle' }));
+  // the phototransistor, collector pin 5, emitter pin 4
+  const bxr = ux + 104;
+  o.push(`<path d="M${bxr} ${p5 + 8}V${p4 - 8}" stroke="${ink}" stroke-width="3"/>`);
+  W([[bxr, p5 + 18], [bxr + 22, p5], [ux + uw, p5]], ink);
+  W([[bxr, p4 - 18], [bxr + 22, p4], [ux + uw, p4]], ink);
+  o.push(`<path d="M${bxr + 22} ${p4}l-10 -1l5 -8z" fill="${ink}"/>`);
+  // the two pins nobody uses
+  [[ux, p3, -1], [ux + uw, 240, 1]].forEach(([x, y, d]) => o.push(`<path d="M${x} ${y}h${16 * d}M${x + 10 * d - 6} ${y - 6}l12 12M${x + 10 * d + 6} ${y - 6}l-12 12" stroke="${nc}" stroke-width="2" fill="none"/>`));
+
+  // ── the logic side: pin 5 to D6 with R6 up to 3V3, pin 4 to ground
+  const nx = 890, xiaoX = 1000;
+  W([[ux + uw, p5], [xiaoX, p5]], sig); dot(nx, p5, sig);
+  W([[nx, p5], [nx, 170]], sig); R(nx, 190, nx, 265, 'R6', '10 kΩ'); v33Sym(nx, 170);
+  W([[ux + uw, p4], [840, p4]], ink); gndSym(840, p4);
+  o.push(`<rect x="${xiaoX}" y="${uy - 50}" width="130" height="${uh + 100}" rx="12" fill="${css('--accent-soft')}" stroke="${css('--accent')}" stroke-width="1.5"/>`);
+  o.push(T(xiaoX + 65, uy - 24, 'XIAO', { size: 15, w: 700, anchor: 'middle' }));
+  o.push(T(xiaoX + 65, uy - 8, 'ESP32C5', { size: 11, fill: mut, anchor: 'middle' }));
+  o.push(`<rect x="${xiaoX - 7}" y="${p5 - 7}" width="14" height="14" rx="3" fill="${css('--paper')}" stroke="${css('--accent')}" stroke-width="1.5"/>`);
+  o.push(T(xiaoX + 14, p5 + 4, 'D6', { mono: true, size: 13, w: 700 }));
+  o.push(T(xiaoX + 14, p5 + 20, 'GPIO11', { mono: true, size: 10, fill: mut }));
+  note(xiaoX + 10, p5 + 50, ['LOW = beam blocked,', 'bin full', 'HIGH = clear']);
+
+  // ── the notes that explain the parts
+  note(585, 128, ['R5: (12 − 1.2 V) / 1 kΩ ≈ 10.8 mA,', 'the 4N35\'s rated test point']);
+  note(470, yBlack + 34, ['D3: the LED survives only', '~6 V reverse. A hit on the', 'Banner\'s lead goes round it.'], 'end');
+  note(450, 228, ['D4 clamps a hit on the', '12 V lead where it enters'], 'end');
+  note(nx + 18, 120, ['~0 V covered, 3.3 V clear,', 'never above 3.3 V']);
+  note(sx, sy0 + sh + 30, ['ONE GROUND: a plain buck shares its input and output ground, so the 4N35 shifts the level rather than', 'isolating — it still keeps a hit on the Banner\'s leads off D6. Run the Banner\'s blue and the lamp returns', 'straight to the supply\'s ground terminal (the star), not through the XIAO\'s ground.']);
+
+  const H = sy0 + sh + 90;
+  return `<svg viewBox="0 0 1140 ${H}" width="1140" height="${H}" role="img" aria-label="Bin sensor schematic"><defs><marker id="binarr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="${css('--accent')}"/></marker></defs>${o.join('')}</svg>`;
+}
+
+const COPY = {
+  perf: {
+    h: 'Perfboard', status: '<span class="status built">running in the shop</span>',
+    intro: 'What is soldered today, plus the CT network from the sourcing guide drawn in: the switched jack on the Adafruit TRRS breakout (its silkscreen labels are what the drawing uses), a 10 kΩ plug-detect pull-up through its <code>LSw</code> switch, and a 1 kΩ with two Schottkys protecting D0 from a motor start. Those CT parts are new and unbuilt; everything else is what runs.',
+    warn: '<b>The CT additions have not been on a board.</b> Re-measure the noise floor once they are fitted (they add 1 kΩ in front of the ADC and a little leakage), and scope a worst-case motor start: the Schottkys clip D0 at roughly 3.5–3.7 V against a 3.6 V maximum, which is margin, not much of it. The bias node\'s bulk cap is 100 µF in the BOM and 10 µF in WIRING.md §8 — the one on your board settles it.',
+  },
+  pcb: {
+    h: 'PCB', status: '<span class="status plan">next prototype round</span>',
+    intro: 'The same netlist with the sourced parts: a bare 5050 WS2812B, the CUI SJ1-3525N switched jack (pin numbers from its datasheet), both bucks on sockets so the CT floor can be A/B tested, a PTC fuse and TVS on the 12 V input, a screw terminal and ESD parts for the Banner, and a footprint for the second button on D9.',
+    warn: '<b>Nothing here has been on a board.</b> Layout rules from the sourcing guide: keep the CT bias node to millimetres of copper and away from both bucks\' switching loops; cluster the 1 kΩ and the clamp diodes at the D0 socket pin; star the grounds at the supply (12 V load returns and both bucks\' input grounds); give the servo rail its own return; test points on 5 V, the servo rail, 3V3 and the CT bias node. Build one, read the floor, then build nine.',
+  },
+};
+
+function render(kind) {
+  const b = build(kind), c = COPY[kind];
+  document.getElementById('view').innerHTML = `
+    <h2>${c.h} ${c.status}</h2>
+    <p>${c.intro}</p>
+    <div class="legend">${Object.entries(NETS).filter(([k]) => k !== '5VB' && k !== 'BAN').map(([k, n]) => `<span><i style="background:var(${n.c})"></i>${esc(n.label)}</span>`).join('')}<span><i style="background:var(--nsig)"></i>signal wire, pad to pin</span></div>
+    <div class="sheet">${drawSheet(b)}</div>
+    <div class="warn">${c.warn}</div>
+    <h3>Every wire</h3>
+    ${wireTable(b)}
+    <h2>The CT clamp circuit, close up</h2>
+    <p>Everything between the clamp's plug and D0, drawn as a schematic with each part named. The perfboard tab shows the Adafruit breakout's printed labels; the PCB tab, the SJ1-3525N's pin numbers. The 10 kΩ, the 1 kΩ in series and both diodes are new; the bias node is what runs today. C2's value is unclear — 10 µF in WIRING.md, 100 µF in the BOM — read it off the planer-sensor node.</p>
+    <div class="sheet">${drawCT(kind)}</div>
+    <div class="tablewrap" style="margin-top:12px"><table><thead><tr><th>Part</th><th>Value</th><th>From</th><th>To</th><th>Job</th></tr></thead><tbody>
+      <tr><td><b>R1</b></td><td class="mono">1 kΩ</td><td>3V3</td><td>bias node</td><td>top of the divider</td></tr>
+      <tr><td><b>R2</b></td><td class="mono">1 kΩ</td><td>bias node</td><td>GND</td><td>bottom of the divider</td></tr>
+      <tr><td><b>C1</b></td><td class="mono">100 nF</td><td>bias node</td><td>GND</td><td>holds the bias against fast edges</td></tr>
+      <tr><td><b>C2</b></td><td class="mono">10–100 µF ⚠</td><td>bias node (+)</td><td>GND</td><td>holds the bias against the clamp's 60 Hz current</td></tr>
+      <tr><td><b>R3</b></td><td class="mono">1 kΩ</td><td>jack ${kind === 'pcb' ? 'pin 2 (tip)' : '<code>Left</code>'}</td><td>D0</td><td>limits current into the diodes on a spike</td></tr>
+      <tr><td><b>R4</b></td><td class="mono">10 kΩ</td><td>jack ${kind === 'pcb' ? 'pin 10 (tip switch)' : '<code>LSw</code>'}</td><td>3V3</td><td>plug-detect pull-up</td></tr>
+      <tr><td><b>D1</b></td><td class="mono">1N5817</td><td>D0 (anode)</td><td>3V3 (cathode, the bar)</td><td>clips spikes above 3V3</td></tr>
+      <tr><td><b>D2</b></td><td class="mono">1N5817</td><td>GND (anode)</td><td>D0 (cathode, the bar)</td><td>clips spikes below ground</td></tr>
+      <tr><td><b>J1</b></td><td class="mono">${kind === 'pcb' ? 'SJ1-3525N' : 'Adafruit #5764'}</td><td>${kind === 'pcb' ? 'pin 1 (sleeve)' : '<code>Sleeve</code>'}</td><td>bias node</td><td>the clamp's return. ${kind === 'pcb' ? 'Pins 3 and 11' : '<code>Right</code>, <code>RSw</code>, <code>Ring</code>'}: not connected; the cable's shield reaches no contact</td></tr>
+    </tbody></table></div>
+    <h2>The bin sensor, close up</h2>
+    <p>The Banner beam in the collector, the 4N35 between its 12 V side and D6, and the two ESD parts that guard it. Only the collector board fits this. ${kind === 'pcb' ? 'The leads land on a screw terminal.' : 'D3 and D4 are recommended additions, not on the perfboard yet; everything else runs today (since 2026-09-13).'}</p>
+    <div class="sheet">${drawBin(kind)}</div>
+    <div class="tablewrap" style="margin-top:12px"><table><thead><tr><th>Part</th><th>Value</th><th>From</th><th>To</th><th>Job</th></tr></thead><tbody>
+      <tr><td><b>Banner</b> brown</td><td class="mono">+V</td><td>${kind === 'pcb' ? 'TB1-1' : 'the lead'}</td><td>12 V</td><td>powers the sensor</td></tr>
+      <tr><td><b>Banner</b> blue</td><td class="mono">0 V</td><td>${kind === 'pcb' ? 'TB1-3' : 'the lead'}</td><td>GND, at the supply</td><td>its return — to the star point</td></tr>
+      <tr><td><b>Banner</b> black</td><td class="mono">output</td><td>${kind === 'pcb' ? 'TB1-2' : 'the lead'}</td><td>U1 pin 2</td><td>sinks to 0 V when the beam is blocked, lighting the LED</td></tr>
+      <tr><td><b>R5</b></td><td class="mono">1 kΩ</td><td>12 V</td><td>U1 pin 1 (anode)</td><td>sets the LED current, ≈10.8 mA</td></tr>
+      <tr><td><b>U1</b></td><td class="mono">4N35</td><td>pins 1–2: LED</td><td>pins 5–4: transistor</td><td>carries the signal across as light. Pins 3 and 6: not connected</td></tr>
+      <tr><td><b>R6</b></td><td class="mono">10 kΩ</td><td>3V3</td><td>D6 / U1 pin 5</td><td>pull-up — the internal ~45 kΩ is too weak against the transistor's leakage</td></tr>
+      <tr><td>U1 pin 4</td><td class="mono">emitter</td><td>U1 pin 4</td><td>GND</td><td>the logic side's return</td></tr>
+      <tr><td><b>D3</b></td><td class="mono">1N4148</td><td>U1 pin 2 (anode)</td><td>U1 pin 1 (cathode, the bar)</td><td>ESD: keeps reverse voltage off the LED${kind === 'pcb' ? '' : ' — recommended'}</td></tr>
+      <tr><td><b>D4</b></td><td class="mono">P4KE18A</td><td>GND (anode)</td><td>12 V at the terminal (cathode)</td><td>ESD: clamps a hit where it enters${kind === 'pcb' ? '' : ' — recommended'}</td></tr>
+    </tbody></table></div>`;
+  document.querySelectorAll('.tabs button').forEach((t) => t.setAttribute('aria-selected', String(t.dataset.build === kind)));
+  try { localStorage.setItem('dg-wiring-build', kind); } catch (e) {}
+}
+let current = location.hash === '#pcb' ? 'pcb' : (() => { try { return localStorage.getItem('dg-wiring-build') || 'perf'; } catch (e) { return 'perf'; } })();
+document.querySelectorAll('.tabs button').forEach((t) => t.addEventListener('click', () => { current = t.dataset.build; render(current); }));
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => render(current));
+new MutationObserver(() => render(current)).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+if (document.fonts) document.fonts.ready.then(() => render(current));
+render(current);
+</script>

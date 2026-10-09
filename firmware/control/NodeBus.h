@@ -40,6 +40,14 @@ public:
     void setLocal(ActuatorBus* bus, const char* ownControllerId) {
         _local = bus;
         _ownId = ownControllerId ? ownControllerId : "";
+        if (_local && _servoMinUs) _local->setServoPulseRange(_servoMinUs, _servoMaxUs);
+    }
+
+    // The shop's servo pulse range, from the layout (TopologyRuntime::adopt). Kept, so a board paired later gets it too.
+    void setServoPulseRange(int minUs, int maxUs) {
+        _servoMinUs = minUs; _servoMaxUs = maxUs;
+        if (_local) _local->setServoPulseRange(minUs, maxUs);
+        for (auto& kv : _remotes) if (kv.second) kv.second->setServoPulseRange(minUs, maxUs);
     }
 
     // Register (or replace) the bus for a paired node. The KEY IS THE HOST, not a
@@ -48,6 +56,7 @@ public:
     // and can rename tomorrow.
     void registerRemote(const std::string& host, ActuatorBus* bus) {
         _remotes[bareHost(host.c_str())] = bus;
+        if (bus && _servoMinUs) bus->setServoPulseRange(_servoMinUs, _servoMaxUs);
     }
     void clearRemotes() { _remotes.clear(); _aliases.clear(); }
 
@@ -157,6 +166,7 @@ private:
     ActuatorBus*                        _local = nullptr;
     std::string                         _ownId;
     std::map<std::string, ActuatorBus*> _remotes;   // host → link
+    int                                 _servoMinUs = 0, _servoMaxUs = 0;   // the layout's servo pulse range; 0 = not said yet
     std::map<std::string, std::string>  _aliases;   // controllerId → host
 };
 
