@@ -30,9 +30,17 @@ test: all
 	bash test/e2e_push.sh
 	bash test/e2e_state.sh
 OUTLETS := ../firmware/outlets/ShellyGen2Outlet.cpp ../firmware/outlets/TasmotaOutlet.cpp
-$(BIN): src/main.cpp src/PlugHttpNative.cpp src/PlugPoller.h src/Sweep.h src/NodeHub.h src/SessionBus.h $(OUTLETS) $(wildcard ../firmware/control/*.h) $(wildcard ../firmware/outlets/*.h) $(wildcard src/*.h) ../firmware/api/ApiCore.h
+# Everything the brain includes, by directory: a hand-kept list missed utils/JsonAlloc.h and sensing/PowerSensor.h, so a change
+# to either did not rebuild it. COMMIT_STAMP makes a new commit rebuild too, or /api/info would report the old one.
+SRCS := src/main.cpp src/PlugHttpNative.cpp $(OUTLETS)
+DEPS := $(SRCS) $(wildcard src/*.h) $(wildcard ../firmware/control/*.h) $(wildcard ../firmware/outlets/*.h) \
+        $(wildcard ../firmware/sensing/*.h) $(wildcard ../firmware/utils/*.h) $(wildcard ../firmware/api/*.h)
+COMMIT_STAMP := build/commit/$(COMMIT)
+$(COMMIT_STAMP):
+	@rm -rf build/commit && mkdir -p build/commit && touch $@
+$(BIN): $(DEPS) $(COMMIT_STAMP)
 	@mkdir -p build
-	$(CXX) $(CXXFLAGS) -DDUSTGATE_NATIVE -DDG_COMMIT=\"$(COMMIT)\" $(INC) src/main.cpp src/PlugHttpNative.cpp $(OUTLETS) -o $@ -L$(BOOST)/lib -pthread
+	$(CXX) $(CXXFLAGS) -DDUSTGATE_NATIVE -DDG_COMMIT=\"$(COMMIT)\" $(INC) $(SRCS) -o $@ -L$(BOOST)/lib -pthread
 clean:
 	rm -rf build
 # The Raspberry Pi binary, cross-built on a Mac with zig (brew install zig): a Pi Zero's 512 MB cannot compile main.cpp in any
@@ -40,7 +48,7 @@ clean:
 # and later); stripped, since the debug info alone is ~85 MB.
 ARM64 := build/arm64/dustgate-brain
 arm64: $(ARM64)
-$(ARM64): $(BIN:build/dustgate-brain=src/main.cpp) src/PlugHttpNative.cpp src/PlugPoller.h src/Sweep.h src/NodeHub.h src/SessionBus.h $(OUTLETS) $(wildcard ../firmware/control/*.h) $(wildcard ../firmware/outlets/*.h) $(wildcard src/*.h) ../firmware/api/ApiCore.h
+$(ARM64): $(DEPS) $(COMMIT_STAMP)
 	@mkdir -p build/arm64
-	zig c++ -target aarch64-linux-gnu.2.36 -std=c++17 -O2 -s -DDUSTGATE_NATIVE -DDG_COMMIT=\"$(COMMIT)\" $(INC) src/main.cpp src/PlugHttpNative.cpp $(OUTLETS) -o $@ -pthread
+	zig c++ -target aarch64-linux-gnu.2.36 -std=c++17 -O2 -s -DDUSTGATE_NATIVE -DDG_COMMIT=\"$(COMMIT)\" $(INC) $(SRCS) -o $@ -pthread
 .PHONY: all brain clean test arm64
