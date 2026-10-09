@@ -1109,7 +1109,7 @@ Band colours and cap codes: [`passives.md`](passives.md).
 | 1 kΩ — `brown black red gold` | the `3V3` rail | **CT wire 1** |
 | 1 kΩ — `brown black red gold` | **CT wire 1** | the `GND` rail |
 | 100 nF ceramic — `104` | **CT wire 1** | the `GND` rail |
-| 10 µF bulk — `106`, or an electrolytic `+` leg ⚠️ **value unclear** — `docs/BOM.md` says 100 µF; read it off the planer-sensor node | **CT wire 1** | the `GND` rail |
+| 10 µF electrolytic, `+` leg to CT wire 1 — what the planer-sensor node runs (jeff, 2026-10-09) | **CT wire 1** | the `GND` rail |
 | CT wire 2 | the CT | **`D0`** |
 
 ```mermaid
@@ -1117,7 +1117,7 @@ flowchart LR
   V3(("3V3 rail")):::rail -- "1 kΩ" --> ROW
   ROW -- "1 kΩ" --> G(("GND rail")):::rail
   ROW -- "100 nF (104)" --> G
-  ROW -- "10 µF (106)" --> G
+  ROW -- "10 µF" --> G
   ROW["<b>CT wire 1</b><br/>must sit at ~1.65 V"]:::node
   ROW == "CT winding<br/>(a few Ω of copper)" ==> D0["<b>D0</b><br/>CT wire 2,<br/>and nothing else"]:::node
   classDef rail fill:#eee,stroke:#999

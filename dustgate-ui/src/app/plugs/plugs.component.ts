@@ -407,18 +407,18 @@ export class PlugsComponent implements OnInit, OnDestroy {
                          : `Unpaired. ${res.error || res.note || ''}`.trim();
     } catch { this.note = "Unpaired here. The plug didn't answer, so nothing was written to it."; }
     // Off the layout whether or not the plug answered: the pairing is ours to end.
-    if (this.topo) {
+    await this.edit(topo => {
       if (r.machineId) {
-        const m = machinesOf(this.topo).find(x => x.id === r.machineId);
+        const m = machinesOf(topo).find(x => x.id === r.machineId);
         if (m) delete m['sensor'];
       } else if (r.collectorId) {
-        for (const sys of systemsOf(this.topo)) {
+        for (const sys of systemsOf(topo)) {
           const c = collectorOf(sys);
-          if (c && c['id'] === r.collectorId) setOutlet(this.topo, c, null);
+          if (c && c['id'] === r.collectorId) setOutlet(topo, c, null);
         }
       }
-      await this.save();
-    }
+      return true;
+    });
     await this.scan();
   }
 
@@ -434,8 +434,8 @@ export class PlugsComponent implements OnInit, OnDestroy {
 
   async pair(ip: string, machineId: string): Promise<void> {
     this.pairing = null; this.error = ''; this.note = '';
-    const d = this.outlets.find(o => o.ip === ip), m = machinesOf(this.topo).find(x => x.id === machineId);
-    if (!this.topo || !d || !m) return;
+    const d = this.outlets.find(o => o.ip === ip);
+    if (!d) return;
     const tasmota = d.kind === 'tasmota';
     const outlet: RawEl = { gen: tasmota ? 0 : (d.generation || 2), ip: d.ip, thresholdW: DEFAULT_THRESHOLD };
     if (tasmota) outlet['kind'] = 'tasmota';
@@ -443,17 +443,27 @@ export class PlugsComponent implements OnInit, OnDestroy {
     if (d.hostname) outlet['host'] = d.hostname;
     if (d.name) outlet['name'] = d.name;
     if (d.powerW >= 5) outlet['thresholdW'] = Math.max(10, Math.round(d.powerW * 0.9 / 10) * 10);
-    m.sensor = { outlet };
-    await this.save();
-    this.note = `The ${(m.name as string) || machineId} now has a plug. Set its trip point in Tools.`;
+    let name = machineId;
+    const saved = await this.edit(topo => {
+      const m = machinesOf(topo).find(x => x.id === machineId);
+      if (!m) return false;
+      m.sensor = { outlet };
+      name = (m.name as string) || machineId;
+      return true;
+    });
+    if (saved) this.note = `The ${name} now has a plug. Set its trip point in Tools.`;
     await this.scan();
   }
 
-  private async save(): Promise<void> {
-    if (!this.topo) return;
+  // Change the layout: read it AGAIN, apply the change, write it back. This page used to put back the copy it loaded when it
+  // opened, so an edit made elsewhere since (the canvas, Tools, another phone) was silently undone by a pair or a release.
+  private async edit(apply: (topo: ShopDoc) => boolean): Promise<boolean> {
+    await this.loadLayout();
+    if (!this.topo || !apply(this.topo)) { this.rebuild(); return false; }
     try { await this.api.putTopology(this.topo as unknown as Topology); this.error = ''; }
-    catch { this.error = "Couldn't save the layout. Is the controller still answering?"; }
+    catch { this.error = "Couldn't save the layout. Is the controller still answering?"; this.rebuild(); return false; }
     this.rebuild();
+    return true;
   }
 
   back(): void { void this.router.navigate(['/build']); }

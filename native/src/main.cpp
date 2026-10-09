@@ -28,6 +28,7 @@
 #include <csignal>
 #include <unistd.h>
 #include <algorithm>
+#include <cctype>
 #include <deque>
 #include <netdb.h>
 #include <arpa/inet.h>
@@ -84,7 +85,6 @@ static bool g_ipFixed = false, g_bcastFixed = false;
 static unsigned g_port = 80;
 static outletops::Self selfIdentity();
 static uint32_t g_plugSyncAtMs = 0;
-static std::map<std::string, int> g_swAsserted;       // "s:<system>" -> 0/1 last asked of the plug
 static std::map<std::string, uint32_t> g_onSince;     // system -> when it was commanded on
 
 static void syncPlugs() {
@@ -149,9 +149,7 @@ static void feedPlugs(uint32_t now) {
         const bool want = g_rt.collectorOn(sys);
         if (!want) g_onSince[sys] = 0; else if (!g_onSince[sys]) g_onSince[sys] = now;
         if (g_rt.collectorHasOutlet(sys)) {                 // switched by a plug of ours: a plain on/off
-            const std::string key = "s:" + sys;
-            auto it = g_swAsserted.find(key);
-            if (it == g_swAsserted.end() || it->second != (want ? 1 : 0)) { g_poller.setSwitch(key, want); g_swAsserted[key] = want ? 1 : 0; }
+            g_poller.setSwitch("s:" + sys, want);           // every tick: the poller re-sends until the plug takes it
         }
         if (g_rt.collectorHasClamp(sys)) continue;          // the clamp's reading stands (pollSensors writes it)
         const bool haveSensor = !g_rt.collectorSensorOutlet(sys)["ip"].isNull();
@@ -223,9 +221,30 @@ static bool adoptLayout(const std::string& json, int persist = 1) {
     dglog::linef("[TOPO] layout adopted (%zu bytes)\n", json.size());
     return true;
 }
+// Forget the layout: what DELETE /api/topology does, and the first half of resetting everything.
+static void clearLayout() {
+    g_rt.clear(); g_topoJson.clear(); g_collectors.clear(); g_poller.sync({});
+    if (!g_topoPath.empty()) std::remove(g_topoPath.c_str());
+}
+// At most `max` bytes, cut on a character boundary: a plug label cut mid-character (an accent, an emoji) is invalid UTF-8.
+static std::string utf8Prefix(const std::string& s, size_t max) {
+    if (s.size() <= max) return s;
+    size_t n = max;
+    while (n > 0 && ((unsigned char)s[n] & 0xC0) == 0x80) n--;   // back off continuation bytes to the start of a character
+    return s.substr(0, n);
+}
 static unsigned g_nextLinkId = 1;
 struct Knock { std::string ip; uint32_t atMs; };
-static std::map<std::string, Knock> g_knocks;   // unpaired nodes that dialled in lately: GET /api/nodes/discover
+// Unpaired nodes that dialled in lately: GET /api/nodes/discover. Touched ONLY on the network thread — the scan that lists them
+// runs on a worker, so it is handed a copy (bug search 2026-10-06: iterating this while a JOIN inserted could crash the brain).
+static std::map<std::string, Knock> g_knocks;
+static constexpr uint32_t kKnockKeepMs = 120000;
+static constexpr size_t   kMaxKnocks   = 32;      // a LAN client inventing ids must not grow it without bound
+static void noteKnock(const std::string& id, const std::string& ip, uint32_t now) {
+    for (auto it = g_knocks.begin(); it != g_knocks.end();) it = (now - it->second.atMs > kKnockKeepMs) ? g_knocks.erase(it) : std::next(it);
+    if (g_knocks.size() >= kMaxKnocks && !g_knocks.count(id)) return;
+    g_knocks[id] = Knock{ip, now};
+}
 static bool g_trace = false;   // --trace: print every frame a node sends
 
 static std::string refuseFrame(const char* reason) {
@@ -269,12 +288,22 @@ private:
         StaticJsonDocument<192> d;
         if (deserializeJson(d, m) || std::strcmp(d["t"] | "", "JOIN") != 0) return;
         const std::string id = d["nodeId"] | "";
-        if ((d["v"] | 0) != nl::kVersion) { enqueue({false, refuseFrame("busy"), true}); return; }
+        if ((d["v"] | 0) != nl::kVersion) {
+            // There is no "version" refuse reason, so the node hears "busy" and retries forever; say here what it is.
+            static std::map<std::string, uint32_t> lastSaid;
+            const uint32_t now = nowMs();
+            if (!lastSaid.count(id) || now - lastSaid[id] > 60000) {
+                lastSaid[id] = now;
+                dglog::linef("[NODE] JOIN from %s (%s) speaks NodeLink v%d, this brain v%d - refused; reflash it\n",
+                             id.c_str(), _remote.c_str(), (int)(d["v"] | 0), (int)nl::kVersion);
+            }
+            enqueue({false, refuseFrame("busy"), true}); return;
+        }
         std::shared_ptr<Node> n = g_hub->find(id);
         if (g_hub->paused) { enqueue({false, refuseFrame("busy"), true}); return; }
         if (!n) {
-            dglog::linef("[NODE] JOIN from %s (%s) - not paired, refused", id.c_str(), _remote.c_str());
-            g_knocks[id] = Knock{_remote, nowMs()};
+            dglog::linef("[NODE] JOIN from %s (%s) - not paired, refused\n", id.c_str(), _remote.c_str());
+            noteKnock(id, _remote, nowMs());
             enqueue({false, refuseFrame("not-paired"), true}); return;
         }
         if (!n->session.onAttach()) {
@@ -320,8 +349,10 @@ private:
         };
         if (it.ping) _ws.async_ping({}, [done](beast::error_code ec) { done(ec, 0); });
         else if (it.text.empty() && it.closeAfter) { _closing = true; _ws.async_close(ws::close_code::normal, [self](beast::error_code) { self->gone(); }); }
-        else { _ws.text(true); _ws.async_write(net::buffer(it.text), done); }
-        _hold = std::move(it.text);   // keep the buffer alive for the write
+        // Into _hold FIRST, then write from it: the write keeps a pointer to the buffer until it completes. Writing from the
+        // local and moving it afterwards only worked because a long string's move keeps its buffer; a frame short enough for
+        // the small-string optimisation is copied instead, and the socket would send from a dead stack frame.
+        else { _hold = std::move(it.text); _ws.text(true); _ws.async_write(net::buffer(_hold), done); }
     }
 
     void gone() {
@@ -452,6 +483,10 @@ static std::vector<Found> mdnsBoards() {
             auto w = splitWs(line); if (w.size() >= 7) { const std::string n = w.back(); if (std::find(names.begin(), names.end(), n) == names.end()) names.push_back(n); }
         }
         for (const std::string& n : names) {
+            // THE NAME CAME OFF THE NETWORK and goes into a shell command, so anything that is not a plain host label is
+            // skipped (bug search 2026-10-06: a device advertising `x'; cmd; '` would have run cmd as the brain's user). A
+            // DustGate board's name is its hostname, so nothing real is lost. Linux's avahi path interpolates nothing.
+            if (n.empty() || n.size() > 63 || !std::all_of(n.begin(), n.end(), [](char c) { return std::isalnum((unsigned char)c) || c == '-' || c == '_'; })) continue;
             // TXT: "owner=x linear=0 servos=2 board=xiao_c5 role=secondary" — an empty owner prints as a bare word.
             const std::string l = shellOut("sh -c 'dns-sd -L " + n + " _dustgate._tcp local & p=$!; sleep 1.5; kill $p' 2>/dev/null");
             Found f; f.host = n;
@@ -487,7 +522,7 @@ static std::vector<Found> mdnsBoards() {
     return out;
 }
 // The rows the Boards screen reads (DiscoveredNode): boards found by mDNS, then any that only knocked.
-static std::string discoverBoards() {
+static std::string discoverBoards(const std::map<std::string, Knock>& knocks) {
     DynamicJsonDocument d(8192); JsonArray a = d.to<JsonArray>();
     std::set<std::string> seen;
     for (const Found& f : mdnsBoards()) {
@@ -498,8 +533,8 @@ static std::string discoverBoards() {
         if (!f.owner.empty() && f.owner != g_hub->primaryId()) { o["claimedBy"] = f.owner; o["takeable"] = true; }
     }
     const uint32_t now = dgbrain::nowMs();
-    for (auto& kv : g_knocks) {
-        if (now - kv.second.atMs > 120000 || seen.count(kv.first)) continue;
+    for (auto& kv : knocks) {
+        if (now - kv.second.atMs > kKnockKeepMs || seen.count(kv.first)) continue;
         JsonObject o = a.createNestedObject(); o["host"] = kv.first; o["ip"] = kv.second.ip; o["board"] = "unknown"; o["servos"] = 0;
     }
     std::string out; serializeJson(d, out); return out;
@@ -570,8 +605,7 @@ public:
         return true;
     }
     void resetAll() override {
-        g_rt.clear(); g_topoJson.clear(); g_collectors.clear(); g_poller.sync({});
-        if (!g_topoPath.empty()) std::remove(g_topoPath.c_str());
+        clearLayout();
         std::vector<std::string> ids; for (auto& kv : g_hub->nodes()) ids.push_back(kv.first);
         for (auto& id : ids) g_hub->remove(id);
         savePairs();
@@ -586,16 +620,6 @@ public:
         savePairs();
     }
     void pauseLinks(bool p) override { g_hub->paused = p; dglog::line(p ? "[NODE] Links PAUSED \xE2\x80\x94 every link stopped, pairings kept" : "[NODE] Links resumed"); }
-    std::string discoverNodes() override {
-        DynamicJsonDocument d(4096); JsonArray a = d.to<JsonArray>();
-        const uint32_t now = dgbrain::nowMs();
-        for (auto& kv : g_knocks) {
-            if (now - kv.second.atMs > 120000 || g_hub->find(kv.first)) continue;
-            JsonObject o = a.createNestedObject();
-            o["host"] = kv.first; o["ip"] = kv.second.ip; o["board"] = "unknown"; o["servos"] = 0;   // a JOIN carries only the id
-        }
-        std::string out; serializeJson(d, out); return out;
-    }
     bool linearGoto(const std::string& id, float mm, bool home, std::string& why) override { return g_rt.driveLinearTo(id, mm, why, home); }
     bool gateMoving() override { return g_rt.anyGateMoving(); }
     bool updateNode(const std::string& id, std::string& why) override {
@@ -698,15 +722,22 @@ public:
 private:
     struct Out { http::status st = http::status::ok; std::string body, mime = "application/json"; std::vector<std::pair<std::string, std::string>> headers; };
 
+    // The peer's address, or "" if it reset between the upgrade and this call. The throwing overload would end the brain.
+    std::string peerAddress() {
+        beast::error_code ec;
+        const auto ep = beast::get_lowest_layer(_stream).socket().remote_endpoint(ec);
+        return ec ? std::string() : ep.address().to_string();
+    }
+
     void handle() {
         auto& req = _parser.get();
         if (ws::is_upgrade(req) && req.target() == "/nodelink") {
-            std::string remote = beast::get_lowest_layer(_stream).socket().remote_endpoint().address().to_string();
+            const std::string remote = peerAddress();
             std::make_shared<NodeWs>(std::move(_stream), remote)->run(_parser.release());
             return;
         }
         if (ws::is_upgrade(req) && req.target() == "/shelly-rpc") {
-            std::string remote = beast::get_lowest_layer(_stream).socket().remote_endpoint().address().to_string();
+            const std::string remote = peerAddress();
             std::make_shared<PlugWs>(std::move(_stream), remote)->run(_parser.release());
             return;
         }
@@ -738,7 +769,7 @@ private:
             if (k == req.end() || std::string(k->value()) != g_apiKey) { o.st = http::status::unauthorized; o.body = "{\"error\":\"unauthorized\"}"; send(o); return; }
         }
         // A scan takes seconds (it asks the network): off the network thread, so no node link stalls behind it.
-        if (ar.method == "GET" && ar.path == "/api/nodes/discover") { defer([] { Out r; r.body = discoverBoards(); return r; }); return; }
+        if (ar.method == "GET" && ar.path == "/api/nodes/discover") { defer([knocks = g_knocks] { Out r; r.body = discoverBoards(knocks); return r; }); return; }
         api::Response r;
         if (api::handle(ar, g_backend, r)) { o.st = (http::status)r.status; o.body = r.body; o.mime = r.type; send(o); return; }
         route(ar, req, o);
@@ -762,7 +793,7 @@ private:
             const std::string ip = d["ip"] | "", label = d["label"] | "";
             const bool take = d["takeover"] | false;
             if (ip.empty()) { err(http::status::bad_request, "missing 'ip'"); return; }
-            defer([ip, label, take] { Out r; r.body = outletops::rename(ip.c_str(), label.substr(0, 47).c_str(), take, selfIdentity()); return r; });
+            defer([ip, label, take] { Out r; r.body = outletops::rename(ip.c_str(), utf8Prefix(label, 47).c_str(), take, selfIdentity()); return r; });
             return;
         }
         if (t == "/api/outlets/release" && m == "POST") {
@@ -832,7 +863,7 @@ private:
         if (t == "/api/nodes") o.body = nodesJson();
         else if (t == "/api/topology" && m == "GET") { if (g_topoJson.empty()) err(http::status::not_found, "no topology configured"); else o.body = g_topoJson; }
         else if (t == "/api/topology" && m == "PUT") { if (adoptLayout(ar.body)) o.body = "{\"ok\":true}"; else { std::string e; for (char c : g_topoErr) { if (c == '"' || c == '\\') e += '\\'; if ((unsigned char)c >= 32) e += c; } err(http::status::bad_request, e); } }
-        else if (t == "/api/topology" && m == "DELETE") { g_rt.clear(); g_topoJson.clear(); g_collectors.clear(); g_poller.sync({}); if (!g_topoPath.empty()) std::remove(g_topoPath.c_str()); o.body = "{\"ok\":true}"; }
+        else if (t == "/api/topology" && m == "DELETE") { clearLayout(); o.body = "{\"ok\":true}"; }
         else if (t == "/api/status") {
             if (g_topoJson.empty()) err(http::status::not_found, "no topology configured");
             else { DynamicJsonDocument d(32768); g_rt.writeStatus(d.to<JsonObject>()); serializeJson(d, o.body); }
@@ -969,7 +1000,8 @@ static void beaconLoop(net::io_context& io, std::shared_ptr<udp::socket> sock, s
         if (ec) return;
         std::string msg = "DGB1|" + g_hub->primaryId() + "|" + localIp() + "|" + std::to_string(g_port);
         beast::error_code e2;
-        sock->send_to(net::buffer(msg), udp::endpoint(net::ip::make_address(g_bcast), nl::kBeaconPort), 0, e2);
+        const auto to = net::ip::make_address(g_bcast, e2);   // a bad --broadcast skips the beacon; it must not end the brain
+        if (!e2) sock->send_to(net::buffer(msg), udp::endpoint(to, nl::kBeaconPort), 0, e2);
         beaconLoop(io, sock, t);
     });
 }
@@ -1106,7 +1138,12 @@ int main(int argc, char** argv) {
         });
     };
     ipTick();
-    io.run();
+    // ONE EXCEPTION IN ONE HANDLER USED TO END THE BRAIN (bug search 2026-10-06). systemd brought it back in ~3 s and the nodes
+    // relinked, which read as a flap nobody could explain. A handler that throws now costs that one request, and says so.
+    for (;;) {
+        try { io.run(); break; }
+        catch (const std::exception& e) { dglog::linef("[ERROR] a network handler threw: %s - carrying on\n", e.what()); }
+    }
     g_poller.stop();
     return 0;
 }
