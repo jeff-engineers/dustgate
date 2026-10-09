@@ -2563,7 +2563,7 @@ void loop() {
 
         if (shown != cand && settled) {
             shown = cand;
-            DEBUG_PRINT(F("[BIN] D"));
+            DEBUG_PRINT(F("[BIN] GPIO"));
             DEBUG_PRINT(PIN_BIN_SENSOR);
             DEBUG_PRINT(cand ? F(" LOW  (beam broken / covered)")
                              : F(" HIGH (beam clear)"));
