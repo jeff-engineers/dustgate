@@ -1198,6 +1198,12 @@ Drawn for both builds in [`../docs/carrier-wiring.html`](../docs/carrier-wiring.
 The bias node itself (1 kΩ / 1 kΩ, 100 nF, bulk cap) is unchanged from the table
 above — only what the clamp's two wires land on moves.
 
+**The cable's shield is not grounded on a jack build, deliberately (jeff, 2026-10-09).** The
+SCT-013-030's shield does not reach any contact of its 3.5 mm plug (metered), so a jack cannot
+ground it. The perfboard had grounded it through a screw terminal, but the only measurement of
+what that bought was ~7%, taken on the breadboard after it had gone 5x noisy (the 2026-09-13
+table below), and the floor turned out to be electronic rather than pickup. Left off.
+
 **Plug-detect, and what it does today.** With no plug in, the jack's switch joins
 the tip contact to the 10 kΩ, so D0 sits at 3.3 V. `CtSensor::isRailed()` already
 refuses a reading above 3100 mV, so an unplugged clamp is **ignored** rather than
