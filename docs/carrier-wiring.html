@@ -436,6 +436,18 @@ function drawBin(kind) {
   // ── the sensor, in the collector
   const sx = 20, sw = 190, sy0 = 150, sh = 280;
   const yBrown = 200, yBlack = 300, yBlue = 380;
+  // ── the two 12 V lamps, also in the collector (WIRING.md §9). Lit by 12 V and the Banner, never by the board.
+  const ly0 = sy0 + sh + 24, yLampP = ly0 + 46, yGreenN = ly0 + 86, yRedN = ly0 + 126;
+  o.push(`<rect x="${sx}" y="${ly0}" width="${sw}" height="150" rx="10" fill="${card}" stroke="${rule}" stroke-width="1.5"/>`);
+  o.push(T(sx + 14, ly0 + 22, '12 V lamps', { w: 700, size: 14 }));
+  const lamp = (cx, cy, col) => o.push(`<circle cx="${cx}" cy="${cy}" r="11" fill="${col}" fill-opacity=".25" stroke="${col}" stroke-width="2"/><path d="M${cx - 7} ${cy - 7}l14 14M${cx + 7} ${cy - 7}l-14 14" stroke="${col}" stroke-width="2"/>`);
+  lamp(sx + 28, ly0 + 66, '#2f9e44'); lamp(sx + 28, ly0 + 110, css('--n12'));
+  o.push(T(sx + 46, ly0 + 62, 'green pilot', { size: 12, w: 600 })); o.push(T(sx + 46, ly0 + 76, 'always on', { size: 11, fill: mut }));
+  o.push(T(sx + 46, ly0 + 106, 'red', { size: 12, w: 600 })); o.push(T(sx + 46, ly0 + 120, 'on when the bin is full', { size: 11, fill: mut }));
+  [[yLampP, 'both +', r12], [yGreenN, 'green −', css('--ngnd')], [yRedN, 'red −', black]].forEach(([y, c, col]) => {
+    o.push(`<rect x="${sx + sw - 8}" y="${y - 7}" width="16" height="14" rx="3" fill="${col}"/>`);
+    o.push(T(sx + sw - 16, y + 4, c, { mono: true, size: 11.5, w: 600, anchor: 'end' }));
+  });
   o.push(`<rect x="${sx}" y="${sy0}" width="${sw}" height="${sh}" rx="10" fill="${card}" stroke="${rule}" stroke-width="1.5"/>`);
   o.push(T(sx + 14, sy0 + 24, 'Banner QS18VN6D', { w: 700, size: 14 }));
   o.push(T(sx + 14, sy0 + 42, 'the bin beam · 10–30 V · NPN', { size: 11.5, fill: mut }));
@@ -448,19 +460,23 @@ function drawBin(kind) {
   // ── where the leads land
   const tx = 250;
   if (P) {
-    o.push(`<rect x="${tx}" y="${yBrown - 30}" width="44" height="${yBlue - yBrown + 100}" rx="6" fill="${card}" stroke="${rule}" stroke-width="1.5"/>`);
+    o.push(`<rect x="${tx}" y="${yBrown - 30}" width="44" height="${yRedN - yBrown + 60}" rx="6" fill="${card}" stroke="${rule}" stroke-width="1.5"/>`);
     o.push(T(tx + 22, yBrown - 40, 'TB1', { w: 700, anchor: 'middle' }));
-    [[yBrown, '1'], [yBlack, '2'], [yBlue, '3'], [yBlue + 30, '4'], [yBlue + 52, '5']].forEach(([y, n]) => {
+    [[yBrown, '1'], [yBlack, '2'], [yBlue, '3'], [yLampP, '4'], [yGreenN, '5'], [yRedN, '6']].forEach(([y, n]) => {
       o.push(`<circle cx="${tx + 22}" cy="${y}" r="7" fill="${css('--paper')}" stroke="${css('--accent')}" stroke-width="1.5"/>`);
       o.push(T(tx + 22, y + 4, n, { mono: true, size: 10, w: 700, anchor: 'middle' }));
     });
-    note(tx + 50, yBlue + 34, ['4, 5: pilot lamp and strobe, wired', 'as they are today (WIRING.md §9)']);
   } else {
     note(tx - 20, yBrown - 40, ['flying leads,', 'soldered']);
   }
   W([[sx + sw + 8, yBrown], [340, yBrown], [340, 120]], brown);
   W([[sx + sw + 8, yBlack], [640, yBlack]], black);
   W([[sx + sw + 8, yBlue], [360, yBlue]], blue); gndSym(360, yBlue);
+  // the lamps: both + on 12 V, green − to ground (always on), red − on the Banner's output beside U1's LED
+  W([[sx + sw + 8, yLampP], [330, yLampP]], r12); rail(330, yLampP, '12 V', r12, 'right');
+  W([[sx + sw + 8, yGreenN], [360, yGreenN]], css('--ngnd')); gndSym(360, yGreenN);
+  W([[sx + sw + 8, yRedN], [400, yRedN], [400, yBlack]], black); dot(400, yBlack, black);
+  note(420, yRedN - 26, ['Red sits on the Banner\'s output in parallel with U1\'s LED, so it', 'lights exactly when D6 reads LOW. If it lights, D6 moved.', 'Banner output: red ~60 mA peak + ~11 mA for U1 ≈ 71 mA of its 150 mA (metered).']);
 
   // ── 12 V: the TVS where it enters, R5 to the LED
   W([[340, 120], [520, 120]], r12); dot(340, 120, r12); rail(340, 120, '12 V', r12);
@@ -508,12 +524,12 @@ function drawBin(kind) {
 
   // ── the notes that explain the parts
   note(585, 128, ['R5: (12 − 1.2 V) / 1 kΩ ≈ 10.8 mA,', 'the 4N35\'s rated test point']);
-  note(470, yBlack + 34, ['D3: the LED survives only', '~6 V reverse. A hit on the', 'Banner\'s lead goes round it.'], 'end');
+  note(450, yBlack + 34, ['D3: the LED survives only', '~6 V reverse. A hit on the', 'Banner\'s lead goes round it.']);
   note(450, 228, ['D4 clamps a hit on the', '12 V lead where it enters'], 'end');
   note(nx + 18, 120, ['~0 V covered, 3.3 V clear,', 'never above 3.3 V']);
-  note(sx, sy0 + sh + 30, ['ONE GROUND: a plain buck shares its input and output ground, so the 4N35 shifts the level rather than', 'isolating — it still keeps a hit on the Banner\'s leads off D6. Run the Banner\'s blue and the lamp returns', 'straight to the supply\'s ground terminal (the star), not through the XIAO\'s ground.']);
+  note(sx, ly0 + 180, ['ONE GROUND: a plain buck shares its input and output ground, so the 4N35 shifts the level rather than', 'isolating — it still keeps a hit on the Banner\'s leads off D6. Run the Banner\'s blue and the lamp returns', 'straight to the supply\'s ground terminal (the star), not through the XIAO\'s ground.']);
 
-  const H = sy0 + sh + 90;
+  const H = ly0 + 240;
   return `<svg viewBox="0 0 1140 ${H}" width="1140" height="${H}" role="img" aria-label="Bin sensor schematic"><defs><marker id="binarr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="${css('--accent')}"/></marker></defs>${o.join('')}</svg>`;
 }
 
@@ -555,12 +571,14 @@ function render(kind) {
       <tr><td><b>J1</b></td><td class="mono">${kind === 'pcb' ? 'SJ1-3525N' : 'Adafruit #5764'}</td><td>${kind === 'pcb' ? 'pin 1 (sleeve)' : '<code>Sleeve</code>'}</td><td>bias node</td><td>the clamp's return. ${kind === 'pcb' ? 'Pins 3 and 11' : '<code>Right</code>, <code>RSw</code>, <code>Ring</code>'}: not connected; the cable's shield reaches no contact</td></tr>
     </tbody></table></div>
     <h2>The bin sensor, close up</h2>
-    <p>The Banner beam in the collector, the 4N35 between its 12 V side and D6, and the two ESD parts that guard it. Only the collector board fits this. ${kind === 'pcb' ? 'The leads land on a screw terminal.' : 'D3 and D4 are recommended additions, not on the perfboard yet; everything else runs today (since 2026-09-13).'}</p>
+    <p>The Banner beam in the collector, the 4N35 between its 12 V side and D6, the two ESD parts that guard it, and the two 12 V lamps: a green pilot that is on whenever there is 12 V, and a red one the Banner lights when the bin is full. The lamps never touch the board's logic side, so they keep working if the board does not. Only the collector board fits this. ${kind === 'pcb' ? 'The leads land on a screw terminal.' : 'D3 and D4 are recommended additions, not on the perfboard yet; everything else runs today (since 2026-09-13).'}</p>
     <div class="sheet">${drawBin(kind)}</div>
     <div class="tablewrap" style="margin-top:12px"><table><thead><tr><th>Part</th><th>Value</th><th>From</th><th>To</th><th>Job</th></tr></thead><tbody>
       <tr><td><b>Banner</b> brown</td><td class="mono">+V</td><td>${kind === 'pcb' ? 'TB1-1' : 'the lead'}</td><td>12 V</td><td>powers the sensor</td></tr>
       <tr><td><b>Banner</b> blue</td><td class="mono">0 V</td><td>${kind === 'pcb' ? 'TB1-3' : 'the lead'}</td><td>GND, at the supply</td><td>its return — to the star point</td></tr>
       <tr><td><b>Banner</b> black</td><td class="mono">output</td><td>${kind === 'pcb' ? 'TB1-2' : 'the lead'}</td><td>U1 pin 2</td><td>sinks to 0 V when the beam is blocked, lighting the LED</td></tr>
+      <tr><td><b>Green lamp</b></td><td class="mono">12 V</td><td>+ to 12 V${kind === 'pcb' ? ' (TB1-4)' : ''}</td><td>− to GND${kind === 'pcb' ? ' (TB1-5), at the supply' : ', at the supply'}</td><td>power pilot: on whenever the collector board has 12 V</td></tr>
+      <tr><td><b>Red lamp</b></td><td class="mono">12 V</td><td>+ to 12 V${kind === 'pcb' ? ' (TB1-4)' : ''}</td><td>− to the Banner's black output${kind === 'pcb' ? ' (TB1-6)' : ''}</td><td>on when the beam is blocked — the Banner sinks it, in parallel with U1's LED</td></tr>
       <tr><td><b>R5</b></td><td class="mono">1 kΩ</td><td>12 V</td><td>U1 pin 1 (anode)</td><td>sets the LED current, ≈10.8 mA</td></tr>
       <tr><td><b>U1</b></td><td class="mono">4N35</td><td>pins 1–2: LED</td><td>pins 5–4: transistor</td><td>carries the signal across as light. Pins 3 and 6: not connected</td></tr>
       <tr><td><b>R6</b></td><td class="mono">10 kΩ</td><td>3V3</td><td>D6 / U1 pin 5</td><td>pull-up — the internal ~45 kΩ is too weak against the transistor's leakage</td></tr>
