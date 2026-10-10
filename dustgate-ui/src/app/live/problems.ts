@@ -37,6 +37,7 @@ export function headline(p: Problem, name: string): string {
     case 'board-offline':      return 'Board ' + name + ' is offline';
     case 'plug-unreachable':   return 'Plug unreachable: ' + name;
     case 'move-failed':        return "A gate didn't move";
+    case 'bin-full':           return 'Dust bin full: ' + name;
     default:                   return p.code.replace(/-/g, ' ');
   }
 }

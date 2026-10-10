@@ -51,20 +51,15 @@ export interface CollectorForm {
   /** Everything else that was in `control.rf` — `pin` above all, which is a
    *  property of how the board is built and never something a screen asks. */
   rfRest: RawEl;
-  /** Which board keys the transmitter. '' = the primary's own, matching an absent controllerId. */
-  rfControllerId: string;
+  /** THE board at the collector (2026-10-10): its transmitter, clamp and bin beam are all on it. '' = this board,
+   *  matching an absent controllerId. One per collector — none of the three names a board of its own. */
+  boardId: string;
   sense: SenseKind;
   sensePlug: PlugForm;
-  /** Which BOARD carries the clamp. '' means "this board", matching the bin
-   *  sensor, every selector, and NodeBus's own rule. Only meaningful when
-   *  sense === 'ct'. */
-  senseCtControllerId: string;
   /** Anything else already on `sensor.ct`, so a field written by a newer UI
    *  survives a round trip through an older one. */
   senseCtRest: RawEl;
   bin: boolean;
-  /** '' means "this board", matching every selector and NodeBus's own rule. */
-  binControllerId: string;
   /** Anything else already on `bin.sensor`, so a field written by a newer UI
    *  survives a round trip through an older one. */
   binRest: RawEl;
@@ -175,8 +170,9 @@ export function readCollector(el: RawEl): CollectorForm {
   const senseCt = sensor?.['ct'] as RawEl | undefined;
   const binSensor = (el['bin'] as RawEl | undefined)?.['sensor'] as RawEl | undefined;
 
-  const { address, controllerId: rfControllerId, ...rfRest } = rf ?? {};
-  const { kind: _binKind, controllerId, ...binRest } = binSensor ?? {};
+  // A board named on the transmitter, clamp or bin is the old shape (before 2026-10-10): dropped, the collector's own wins.
+  const { address, controllerId: _rfBoard, ...rfRest } = rf ?? {};
+  const { kind: _binKind, controllerId: _binBoard, ...binRest } = binSensor ?? {};
   const ms = control['offDelayMs'];
 
   return {
@@ -185,19 +181,17 @@ export function readCollector(el: RawEl): CollectorForm {
     ctlPlug: readPlug(ctlOutlet),
     rfAddress: typeof address === 'number' ? address : ROCKLER_ADDRESS,
     rfRest: rfRest as RawEl,
-    rfControllerId: (rfControllerId as string) ?? '',
+    boardId: (el['controllerId'] as string) ?? '',
     // A plug wins if a document somehow carries both — validateTopology()
     // refuses that combination, so this only decides what an already-invalid
     // document looks like on screen rather than which one is obeyed.
     sense: senseOutlet ? 'plug' : senseCt ? 'ct' : 'none',
     sensePlug: readPlug(senseOutlet),
-    senseCtControllerId: (senseCt?.['controllerId'] as string) ?? '',
     senseCtRest: (() => {
       const { controllerId: _c, channel: _ch, ...rest } = senseCt ?? {};
       return rest as RawEl;
     })(),
     bin: !!binSensor,
-    binControllerId: (controllerId as string) ?? '',
     binRest: binRest as RawEl,
     // Rounded, not floored: the slider counts whole seconds and nobody sets a
     // coast-down to 4.25 s — the same call settings.component.ts makes.
@@ -220,8 +214,7 @@ export function writeCollector(el: RawEl, form: CollectorForm): RawEl {
     // built, so the firmware supplies it (PIN_RF_TX) and no screen asks. An
     // explicit pin already in the document rides through on `rfRest`, which is
     // how a hand-wired board keeps its own pad.
-    control['rf'] = { ...form.rfRest, address: form.rfAddress,
-                      ...(form.rfControllerId ? { controllerId: form.rfControllerId } : {}) };
+    control['rf'] = { ...form.rfRest, address: form.rfAddress };
   }
   // 'servo' falls through to a bare control: there is no schema to write, and
   // inventing one now is what RFC §4.2c says not to do.
@@ -232,11 +225,8 @@ export function writeCollector(el: RawEl, form: CollectorForm): RawEl {
     out['sensor'] = { outlet: writePlug(form.sensePlug) };
   } else if (!fused(form) && form.sense === 'ct') {
     // `channel` is required by topology.js and means nothing to the firmware
-    // yet — see DEFAULT_CT_CHANNEL. `controllerId` is OMITTED when empty,
-    // because absent already says "this board" and writing '' would be a third
-    // spelling of the same thing for the validator to allow.
+    // yet — see DEFAULT_CT_CHANNEL. The board is the collector's own.
     const ct: RawEl = { ...form.senseCtRest, channel: DEFAULT_CT_CHANNEL };
-    if (form.senseCtControllerId) ct['controllerId'] = form.senseCtControllerId;
     out['sensor'] = { ct };
   } else {
     delete out['sensor'];
@@ -247,12 +237,15 @@ export function writeCollector(el: RawEl, form: CollectorForm): RawEl {
   // "dust at this height, y/n", not a distance, so it carries none of the
   // emptyMm/fullMm/warnPct a rangefinder would.
   if (form.bin) {
-    const sensor: RawEl = { ...form.binRest, kind: 'threshold' };
-    if (form.binControllerId) sensor['controllerId'] = form.binControllerId;
-    out['bin'] = { sensor };
+    out['bin'] = { sensor: { ...form.binRest, kind: 'threshold' } };
   } else {
     delete out['bin'];
   }
+
+  // ── the board at the collector ─────────────────────────────────────────
+  // Written only when something on the collector needs a board; absent is "this board", and '' would be a third spelling.
+  const needsBoard = form.ctl === 'rf' || (!fused(form) && form.sense === 'ct') || form.bin;
+  if (needsBoard && form.boardId) out['controllerId'] = form.boardId; else delete out['controllerId'];
 
   return out;
 }

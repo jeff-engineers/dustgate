@@ -43,7 +43,7 @@
 const NODELINK_VERSION = 1;
 
 /** Frame types, primary → secondary. */
-const P2S = ['HELLO', 'SET', 'CONFIG', 'PING', 'OTA', 'REFUSE', 'WHERE', 'PRESS'];
+const P2S = ['HELLO', 'SET', 'CONFIG', 'PING', 'OTA', 'REFUSE', 'WHERE', 'PRESS', 'ALERT'];
 
 // THE PWM SERVO PULSE RANGE (2026-10-07): what angle 0 and angle 180 map to, shop-wide (the layout's `servo` block, set on
 // the Settings page), carried on every servo SET. The DEFAULT applies when the layout says nothing; the BOUNDS refuse a SET
@@ -564,6 +564,18 @@ function clamp(plugged) {
   return { t: 'CLAMP', in: !!plugged };
 }
 
+/**
+ * ALERT — the primary tells a board what its pixel should say about the SHOP, as opposed to about itself (2026-10-10).
+ * `bin` is true while a dust bin on a system this board serves is full: the board blinks red (StatusLed.h — a fault
+ * pulses red, a full bin blinks it on and off; RFC §"binNearFull", system scope). Which boards is the primary's call
+ * (Shop.h binAlertBoards()): the collector's own board and every board with a gate on that system. Sent on change and
+ * again on every link-up, as a whole state rather than an edge, so a rebooted node or a dropped frame cannot leave a
+ * board blinking for a bin that was emptied. A node that predates it ignores the type; NOT a version bump.
+ */
+function alert(binFull) {
+  return { t: 'ALERT', bin: !!binFull };
+}
+
 function ack(seq, ok, err) {
   const f = { t: 'ACK', seq, ok: !!ok };
   if (err) f.err = err;
@@ -833,6 +845,9 @@ function validateFrame(f, direction) {
     case 'CLAMP':
       if (typeof f.in !== 'boolean') errs.push('CLAMP.in must be a boolean');
       break;
+    case 'ALERT':
+      if (typeof f.bin !== 'boolean') errs.push('ALERT.bin must be a boolean');
+      break;
     case 'SENSE':
       str('sensorId');
       if (typeof f.on !== 'boolean') errs.push('SENSE.on must be a boolean');
@@ -892,6 +907,6 @@ module.exports = {
   MAX_RST_LEN, MAX_OTA_PATH, MIN_OTA_BYTES, MAX_OTA_BYTES, OTA_STATES,
   MAX_WHERE_IP_LEN, BEACON_PORT, REFUSE_REASONS, dialsIn, join, refuse, where,
   MIN_RF_TICK_US, MAX_RF_TICK_US, MAX_RF_REPEATS, pressesRf, watchesBin, press,
-  hello, welcome, withBootInfo, set, config, ack, state, sense, clamp, ping, pong, ota, otaState, welcomeAccepted, clampsOn,
+  hello, welcome, withBootInfo, set, config, ack, state, sense, clamp, alert, ping, pong, ota, otaState, welcomeAccepted, clampsOn,
   validateFrame,
 };

@@ -376,6 +376,14 @@ export function clampOf(doc: ShopDoc | null, el: RawEl | null | undefined): RawE
   return ((m?.sensor as RawEl | undefined)?.['ct'] as RawEl | undefined) ?? null;
 }
 
+/** The board a clamp is on: a COLLECTOR's is the collector's own board (one per collector, 2026-10-10), a tool's names
+ *  its own. '' = this board. Null when the element has no clamp. */
+export function clampBoardOf(doc: ShopDoc | null, el: RawEl | null | undefined): string | null {
+  const ct = clampOf(doc, el);
+  if (!ct || !el) return null;
+  return ((el['type'] === 'collector' ? el['controllerId'] : ct['controllerId']) as string | undefined) ?? '';
+}
+
 // ── A board's clamp: plugged in or not, as the board reports it ─────────────────────
 //
 // A node reports `caps.ct` from its pin map, true of every PWM board whether or not a clamp is there, and until
@@ -402,7 +410,7 @@ export function clampUsers(doc: ShopDoc | null, controllerId: string): string[] 
   for (const sys of systemsOf(doc)) {
     const dc = collectorOf(sys);
     const ct = ((dc?.['sensor'] as RawEl | undefined)?.['ct']) as RawEl | undefined;
-    if (dc && ct && same(ct['controllerId'])) out.push((dc['name'] as string) || 'Collector');
+    if (dc && ct && same(dc['controllerId'])) out.push((dc['name'] as string) || 'Collector');   // the collector's board
   }
   return out;
 }

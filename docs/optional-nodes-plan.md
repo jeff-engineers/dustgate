@@ -11,7 +11,7 @@ optional board, the beacon hurried only by required boards, the Boards screen's 
 > **A board is optional when nothing the shop does depends on it being on.** Losing it costs a reading, never a gate or the blower.
 
 Jeff's wording was "any node without a gate/slider connected should be optional". One addition makes it safe: the collector's
-**transmitter** board (`control.rf.controllerId`) is required too, gate or no gate — without it the blower never starts. So, from the
+**transmitter** board (the collector's `controllerId` since 2026-10-10) is required too, gate or no gate — without it the blower never starts. So, from the
 layout alone:
 
 | The board carries… | Optional? | What losing it costs |

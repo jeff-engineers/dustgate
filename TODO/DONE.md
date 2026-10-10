@@ -14,6 +14,18 @@ of this file is being able to answer "did we already decide this, and why".
 
 Newest first.
 
+### One board per collector; boards are offered only for jobs they report, 2026-10-10 (branch `collector-board`)
+
+- **A collector names ONE board (`controllerId` on the collector) and its transmitter, clamp and bin beam are all on it.**
+  LANDED 2026-10-10, host-tested. Jeff: a bin assigned to one board with the transmitter on another was a bin nobody
+  watched, and none of the three jobs has a reason to live elsewhere. Given up, knowingly: two collectors sharing one
+  transmitter (jeff: "a confusing and unlikely case"). topology.js refuses a `controllerId` on `control.rf`, `bin.sensor`
+  or a collector's `sensor.ct`; Shop.h `collectorBoardOf()`, SensorPlan, BinSensor, both brains' RF and isOptionalBoard
+  (shop.js ↔ Shop.h, same cases) read the collector's.
+- **The collector screen asks for the board once, and lists only boards that REPORT a transmitter, a bin input or a clamp
+  input** (`caps.rf`/`caps.bin` now on /api/nodes). A Pi brain reports none and is never offered; it raises
+  `collector-no-board` when a collector's jobs have no board.
+
 ### A board says whether a clamp is plugged in; the clamp switch is gone, 2026-10-09 (branch `clamp-detect`)
 
 - **The per-board "clamp" switch (D-76, `clamp: true` in the layout) is replaced by plug detection.** LANDED 2026-10-09,

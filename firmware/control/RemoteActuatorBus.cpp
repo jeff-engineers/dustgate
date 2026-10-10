@@ -659,6 +659,12 @@ bool RemoteActuatorBus::pressRf(uint8_t address, uint8_t data, uint32_t tickUs, 
     flushSink();
     return r;
 }
+void RemoteActuatorBus::setBinAlert(bool full) {
+    if (!_mutex) return;
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    _s.setBinAlert(full);
+    xSemaphoreGive(_mutex);
+}
 void RemoteActuatorBus::configureSensors(JsonArrayConst sensors) {
     if (!_mutex) return;
     xSemaphoreTake(_mutex, portMAX_DELAY);
@@ -722,7 +728,7 @@ RemoteActuatorBus::NodeInfo RemoteActuatorBus::info() const {
     NodeInfo n;
     if (!_mutex) {
         n.connected = false; n.lastSeenMs = 0;
-        n.board[0] = '\0'; n.fw[0] = '\0'; n.capServos = 0; n.capLinear = 0; n.capClamps = 0; n.clampIn = -1;
+        n.board[0] = '\0'; n.fw[0] = '\0'; n.capServos = 0; n.capLinear = 0; n.capClamps = 0; n.clampIn = -1; n.capRf = false; n.capBin = false;
         n.ota[0] = '\0'; n.otaPct = -1; n.otaErr[0] = '\0';
         return n;
     }

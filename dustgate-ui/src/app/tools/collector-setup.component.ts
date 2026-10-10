@@ -1,7 +1,7 @@
-import { Component, EventEmitter, Input, OnInit, Output, QueryList, ViewChildren } from '@angular/core';
+import { Component, EventEmitter, Input, OnDestroy, OnInit, Output, QueryList, ViewChildren, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { ClampBoard, DiscoveredOutlet } from '../services/api.service';
+import { ApiService, ClampBoard, CollectorBoard, DiscoveredOutlet, SenseReport } from '../services/api.service';
 import { OutletPickerComponent } from './outlet-picker.component';
 import { PairedOutletRowComponent } from './paired-outlet-row.component';
 import { RfAddressComponent } from './rf-address.component';
@@ -102,6 +102,9 @@ import { CollectorForm, CtlKind, RawEl, SenseKind, fused, readCollector, writeCo
               border-radius: 0 0 12px 12px; padding: 11px 12px 12px; margin: 0 0 7px; }
     .expand .note { font-size: 12.5px; color: var(--muted); line-height: 1.55; margin: 0; }
     .expand .note b { color: var(--text); font-weight: 600; }
+    .expand .note.live { display: flex; gap: 7px; align-items: baseline; margin-top: 6px; font-variant-numeric: tabular-nums; }
+    .expand .note.live .ldot { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--muted); }
+    .expand .note.live.on .ldot { background: var(--ok, #2ea043); }
     .expand app-paired-outlet-row, .expand app-outlet-picker { display: block; }
 
     /* The DIP, small enough for a summary row: the PART, never the number. 94
@@ -171,6 +174,28 @@ import { CollectorForm, CtlKind, RawEl, SenseKind, fused, readCollector, writeCo
         <div class="kind">Dust collector<span *ngIf="systemName"> · {{ systemName }}</span></div>
       </div>
 
+      <!-- ── the board at the collector (2026-10-10) ────────────────────────
+           ONE board does all of the collector's jobs — its transmitter, its clamp and its bin beam are all at the
+           collector, so they are all on one board, asked once. It used to be asked per job, and a bin wired to one board
+           with the transmitter on another was a bin nobody watched. Only boards that REPORT one of those jobs are listed,
+           so a Pi brain, which has no pads, never is. FIRST on the sheet (jeff, 2026-10-10): the board is where the
+           collector's wiring starts, and it is always shown rather than appearing above the answer that summoned it. -->
+      <div class="q">
+        <div class="lbl">Board at the collector</div>
+        <p class="why" *ngIf="needsBoard()">The board its {{ jobsText() }} {{ jobs().length === 1 ? 'is' : 'are' }} wired to.</p>
+        <p class="why" *ngIf="!needsBoard()">The board its transmitter, clamp or bin beam would be wired to. Nothing below
+          needs one yet.</p>
+        <div class="board" *ngIf="boards.length">
+          <label for="dc-board">Board</label>
+          <select id="dc-board" [(ngModel)]="form.boardId">
+            <option *ngFor="let b of boards" [value]="b.id">{{ b.name }}{{ b.online ? '' : ' — not answering' }}</option>
+          </select>
+        </div>
+        <p class="note warn" *ngIf="!boards.length && needsBoard()">No paired board has a transmitter, bin input or clamp input. Pair the
+          board at the collector on the Boards screen first.</p>
+        <p class="note warn" *ngIf="missingOnBoard() as m">{{ m }}</p>
+      </div>
+
       <!-- ── how it is SWITCHED ─────────────────────────────────────────── -->
       <div class="q">
         <div class="lbl" id="ctl-lbl">Switched by</div>
@@ -222,13 +247,6 @@ import { CollectorForm, CtlKind, RawEl, SenseKind, fused, readCollector, writeCo
               Matched to your remote
             </span>
             <button type="button" class="change" (click)="matchingRemote = true">Change ›</button>
-          </div>
-          <div class="board">
-            <label for="rf-board">Transmitter on</label>
-            <select id="rf-board" [(ngModel)]="form.rfControllerId">
-              <option value="">This board</option>
-              <option *ngFor="let c of controllers" [value]="c.id">{{ c.name || c.id }}</option>
-            </select>
           </div>
           <p class="note" style="margin-top:7px">Set once, from the switches inside the fob.</p>
         </div>
@@ -317,20 +335,15 @@ import { CollectorForm, CtlKind, RawEl, SenseKind, fused, readCollector, writeCo
               <span class="name">Current clamp<span class="pill soon"
                     *ngIf="!clampBoards.length">no board has one</span></span>
               <span class="detail">A clamp on the collector's feed, wired to one of your
-                boards — for 240 V, where there is no plug to pair.</span>
+                boards — for 240 V, where there is no plug to pair, and for a blower whose start-up surge
+                trips a smart plug. Nothing switched passes through it.</span>
             </span>
           </button>
           <div class="expand" *ngIf="form.sense === 'ct'">
-            <div class="board">
-              <label for="ct-board">Wired to</label>
-              <select id="ct-board" [(ngModel)]="form.senseCtControllerId">
-                <option *ngFor="let b of clampBoards" [value]="b.id">
-                  {{ b.name }}{{ b.online ? '' : ' — not answering' }}
-                </option>
-              </select>
-            </div>
-            <p class="note">Only boards that have told DustGate they have a clamp appear here.
-              The lead runs from the blower's feed to that board.</p>
+            <p class="note">The lead runs from the blower's feed to the board at the collector, above.</p>
+            <p class="note live" [class.on]="live?.on" aria-live="polite"
+               title="Read off the clamp right now. Watts is amps × 120 V: an estimate that assumes a 120 V circuit and reads a motor high.">
+              <span class="ldot"></span>{{ liveText() }}</p>
           </div>
 
           <button type="button" class="opt" role="radio" aria-labelledby="sense-lbl"
@@ -366,21 +379,10 @@ import { CollectorForm, CtlKind, RawEl, SenseKind, fused, readCollector, writeCo
               {{ form.bin ? 'Warns you before it overflows.' : 'Off' }}
             </span>
           </span>
-          <button type="button" class="sw" [class.on]="form.bin" (click)="form.bin = !form.bin"
+          <button type="button" class="sw" [class.on]="form.bin" (click)="toggleBin()"
                   role="switch" [attr.aria-checked]="form.bin" aria-label="Bin sensor"></button>
         </div>
         <div class="expand" *ngIf="form.bin">
-          <!-- Which board it is wired to is the only real question — the same one a
-               gate asks. Absent means "this board", matching every selector and
-               NodeBus's own rule. "invert" is not asked: it is a fact about how
-               the sensor is wired, settled in the wiring doc, not a preference. -->
-          <div class="board">
-            <label for="bin-board">Wired to</label>
-            <select id="bin-board" [(ngModel)]="form.binControllerId">
-              <option value="">This board</option>
-              <option *ngFor="let c of controllers" [value]="c.id">{{ c.name || c.id }}</option>
-            </select>
-          </div>
           <p class="note">When it trips, the lamp on the collector fires and
             <b>every board on {{ systemName || 'this system' }} flashes red</b> — not the whole
             shop, and not another collector's boards.</p>
@@ -406,12 +408,12 @@ import { CollectorForm, CtlKind, RawEl, SenseKind, fused, readCollector, writeCo
     </ng-template>
   `,
 })
-export class CollectorSetupComponent implements OnInit {
+export class CollectorSetupComponent implements OnInit, OnDestroy {
   /** The collector element from the layout. Edited on a COPY by the caller, which
    *  splices the result back in — same contract the gate and tool sheets use. */
   @Input({ required: true }) element!: RawEl;
-  /** For the bin's "wired to" list, and only that. */
-  @Input() controllers: { id: string; name?: string }[] = [];
+  /** Boards that can be this collector's board: each REPORTS at least one of its jobs (api getCollectorBoards). */
+  @Input() boards: CollectorBoard[] = [];
   /** Boards that DECLARED a clamp (caps.ct in their WELCOME).
    *
    *  Not the same list as `controllers`, and deliberately so: that one is the
@@ -441,8 +443,41 @@ export class CollectorSetupComponent implements OnInit {
   changingCtl = false;
   changingSense = false;
 
+  private api = inject(ApiService);
+  private livePoll: ReturnType<typeof setInterval> | null = null;
+  /** What the collector's clamp reads right now, off its board's SENSE report (/api/nodes). Null: nothing yet. */
+  live: SenseReport | null = null;
+
   ngOnInit(): void {
     this.form = readCollector(this.element);
+    // LIVE, while the sheet is open (jeff, 2026-10-10): the question this option is chosen to answer is "does the clamp
+    // see the blower?", and the answer is a number that moves when you switch it on. Same reading as the Boards screen.
+    void this.refreshLive();
+    this.livePoll = setInterval(() => void this.refreshLive(), 2000);
+  }
+
+  ngOnDestroy(): void { if (this.livePoll) clearInterval(this.livePoll); }
+
+  private async refreshLive(): Promise<void> {
+    if (this.form.sense !== 'ct' || !this.form.boardId) { this.live = null; return; }
+    const norm = (h: string) => h.toLowerCase().replace(/\.$/, '').replace(/\.local$/, '');
+    try {
+      const n = (await this.api.getNodes()).find(x => norm(x.id) === norm(this.form.boardId));
+      this.live = (n?.online && n.sense?.find(x => x.id === this.element['id'] && x.reported)) || null;
+    } catch { /* a missed poll says nothing new */ }
+  }
+
+  /** The live line under the clamp option. Watts is an ESTIMATE at 120 V, and says so (see the Boards screen). */
+  liveText(): string {
+    const s = this.live;
+    if (!s) return 'No reading yet. A board reads a clamp only once the layout gives it one: save, and the number appears here.';
+    const amp = (a: number) => (a < 10 ? a.toFixed(2) : a.toFixed(1)) + ' A';
+    if (s.fault) return 'Clamp fault: no baseline could be measured' + (typeof s.amps === 'number' ? ` (reads ${amp(s.amps)} at rest)` : '') + '.';
+    const bits: string[] = [];
+    if (typeof s.amps === 'number') bits.push(`${s.on ? 'Running' : 'Idle'} at ${amp(s.amps)} (≈ ${Math.round(s.amps * 120)} W at 120 V)`);
+    else bits.push(s.on ? 'Running' : 'Idle');
+    if (typeof s.tripA === 'number') bits.push(`counts as running above ${amp(s.tripA)}`);
+    return bits.join(' · ');
   }
 
   get fused(): boolean { return fused(this.form); }
@@ -512,16 +547,45 @@ export class CollectorSetupComponent implements OnInit {
     return ip ? { ...this.excludeReason, [ip]: 'already switching this collector' } : this.excludeReason;
   }
 
-  setCtl(c: CtlKind): void { this.form.ctl = c; this.changingCtl = false; }
+  setCtl(c: CtlKind): void { this.form.ctl = c; this.changingCtl = false; this.defaultBoard(); }
+  toggleBin(): void { this.form.bin = !this.form.bin; this.defaultBoard(); }
   setSense(s: SenseKind): void {
     this.form.sense = s;
     this.changingSense = false;
     // Default to the first board that has a clamp rather than leaving the
     // select blank: with one clamp in the shop — the normal case — there is
     // nothing to choose, and an empty select reads as an unfinished form.
-    if (s === 'ct' && !this.form.senseCtControllerId && this.clampBoards.length) {
-      this.form.senseCtControllerId = this.clampBoards[0].id;
-    }
+    this.defaultBoard();
+  }
+
+  // ── the board at the collector ─────────────────────────────────────────
+  /** What this collector needs a board for, in the words the sheet uses. */
+  jobs(): string[] {
+    const out: string[] = [];
+    if (this.form.ctl === 'rf') out.push('transmitter');
+    if (this.form.sense === 'ct') out.push('clamp');
+    if (this.form.bin) out.push('bin beam');
+    return out;
+  }
+  jobsText(): string { const j = this.jobs(); return j.length > 1 ? j.slice(0, -1).join(', ') + ' and ' + j[j.length - 1] : j[0] ?? ''; }
+  needsBoard(): boolean { return this.jobs().length > 0; }
+  /** The chosen board, if it is one that reported. */
+  private chosen(): CollectorBoard | undefined { return this.boards.find(b => b.id === this.form.boardId); }
+  /** A job the chosen board does not report, said plainly. */
+  missingOnBoard(): string | null {
+    const b = this.chosen();
+    if (!b) return this.boards.length && this.needsBoard() ? 'Pick the board at the collector.' : null;
+    const miss: string[] = [];
+    if (this.form.ctl === 'rf' && !b.rf) miss.push('a transmitter');
+    if (this.form.sense === 'ct' && !b.ct) miss.push('a clamp input');
+    if (this.form.bin && !b.bin) miss.push('a bin input');
+    if (miss.length) return `${b.name} has no ${miss.join(' or ')}.`;
+    if (this.form.sense === 'ct' && b.clampIn === false) return `No clamp is plugged into ${b.name}'s jack yet.`;
+    return null;
+  }
+  /** With one candidate — the normal case — there is nothing to choose, and an empty select reads as unfinished. */
+  private defaultBoard(): void {
+    if (this.needsBoard() && !this.chosen() && this.boards.length) this.form.boardId = this.boards[0].id;
   }
 
   pickCtl(d: DiscoveredOutlet): void {

@@ -59,6 +59,8 @@ public:
         // Is a clamp plugged into its jack (the CLAMP frame, 2026-10-09)? -1 unknown — never reported, or the link is
         // down — which is NOT "unplugged": a board on older firmware simply never says. 0 empty, 1 plugged in.
         int      clampIn;
+        bool     capRf;         // caps.rf: a transmitter pad for the collector's remote
+        bool     capBin;        // caps.bin: a dust-bin input
         // An update this node was told to run (OTA / OTASTATE): "" when none, else
         // start | progress | done | fail. `otaPct` is -1 until reported.
         char     ota[9];
@@ -216,6 +218,12 @@ public:
         }
         if (_otaPending)   { out = _otaFrame;   _otaPending   = false; say(label("[NODE→] OTA to "));    return true; }
         if (_pressPending) { out = _pressFrame; _pressPending = false; return true; }
+        if (_alertPending) {
+            StaticJsonDocument<96> d; nodelink::buildAlert(d.to<JsonObject>(), _alertBin > 0);
+            out.clear(); serializeJson(d, out); _alertPending = false;
+            say(label(_alertBin > 0 ? "[NODE→] ALERT bin full to " : "[NODE→] ALERT bin clear to "));
+            return true;
+        }
         return false;
     }
     // A move whose STATE report never arrived: give up rather than let the primary's move queue
@@ -319,6 +327,15 @@ public:
         return true;
     }
     const char* pressFault() const { return _pressFault; }
+
+    // What this board's pixel should say about the shop: a dust bin on a system it serves is full (the ALERT frame).
+    // Sent only on a CHANGE — the brain calls this every tick — and again on every link-up.
+    void setBinAlert(bool full) {
+        const int8_t v = full ? 1 : 0;
+        if (v == _alertBin) return;
+        _alertBin = v;
+        _alertPending = true;
+    }
 
     // Built here rather than by the caller so the WIRE SHAPE lives in one place — nodelink.js's
     // CONFIG, mirrored by parseConfigFrame() on the node.
@@ -437,6 +454,8 @@ public:
         n.capLinear = _capLinear;
         n.capClamps = _capClamps;
         n.clampIn   = _clampIn;
+        n.capRf     = _capRf > 0;
+        n.capBin    = _capBin > 0;
         nodelink::strlcpy_(n.ota,    _otaState, sizeof(n.ota));
         n.otaPct = _otaPct;
         nodelink::strlcpy_(n.otaErr, _otaErr,   sizeof(n.otaErr));
@@ -554,6 +573,7 @@ private:
         // Re-arm the CONFIG on every accepted handshake: this node may have just rebooted, and a node
         // that has not been configured reports nothing.
         if (_cfgValid) { _cfgPending = true; _cfgAwaitAck = false; _cfgTries = 0; }
+        if (_alertBin >= 0) _alertPending = true;
         if (_sink) {
             char extra[160];
             std::snprintf(extra, sizeof(extra),
@@ -715,6 +735,10 @@ private:
     // One pending PRESS, sent like a SET. A PRESS is an EDGE against a TOGGLE: never replayed.
     char     _pressFrame[160] = "";
     bool     _pressPending    = false;
+    // The ALERT this board should be showing (a full bin on a system it serves). -1 = never decided, so nothing is sent
+    // until the brain has an opinion; re-armed on every link-up because a rebooted node has forgotten it.
+    int8_t   _alertBin        = -1;
+    bool     _alertPending    = false;
     uint32_t _pressSeq        = 0;
     char     _pressFault[64]  = "";
 

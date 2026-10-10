@@ -1819,14 +1819,14 @@ current, no interaction between the two loads.
 **Confirmed correct as drawn, 2026-09-13** — this grid was wired and the lamps
 behave. The one number still unmeasured is below.
 
-**⚠️ Meter the strobe before trusting the sink budget.** The QS18 sinks
-**150 mA** maximum and is now carrying the strobe *plus* the opto's ~10.8 mA.
-The green lamp is ~20 mA and does not count — it never touches the output. The
-strobe's draw ([B07SC3TNLC](https://www.amazon.com/dp/B07SC3TNLC)) has never
-been measured; it is a flashing beacon with its own circuit inside, so its
-*peak* is what matters, not its average. If it is over ~130 mA, the strobe
-needs its own low-side FET on the 12 V side with the QS18 driving the gate —
-still no ESP32 involvement.
+**The sink budget fits — metered 2026-10-10 (jeff).** The QS18 sinks **150 mA**
+maximum and carries the red strobe *plus* the opto's ~10.8 mA. The strobe
+([B07SC3TNLC](https://www.amazon.com/dp/B07SC3TNLC)) peaks at about **60 mA** at
+12 V (hard to read on a meter because it flashes; that was the highest seen), so
+the output carries ~71 mA: about half its rating. The green pilot draws about
+**10 mA** and does not count — it never touches the output. Only if a brighter
+strobe ever goes over ~130 mA does it need its own low-side FET on the 12 V side,
+with the QS18 driving the gate — still no ESP32 involvement.
 
 **The cost of this choice, stated plainly:** the strobe can only ever mean
 *this sensor tripped*. It can never mean a clog, and it can never carry a

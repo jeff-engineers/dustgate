@@ -100,6 +100,10 @@
 // ─────────────────────────────────────────────────────────────────────────
 const DECISIONS = [
   // ── newest ───────────────────────────────────────────────────────────
+  { id: 'D-80', date: '2026-10-10', area: 'ui', status: 'standing',
+    what: 'A collector has ONE board, asked once in its setup; boards are offered only for jobs they report',
+    why: 'Jeff, 2026-10-10: a bin pointed at one board while the transmitter was on another left the bin unwatched, and the Pi brain was offered as a board for jobs it has no pads for. Everything a collector needs a board for (transmitter, clamp, bin beam) sits at the collector, so one board does it all; the setup asks \u201cBoard at the collector\u201d once, and only when one of those jobs is turned on. Only boards that report a transmitter, bin input or clamp input are listed, so a Pi never is; a board missing a job you turned on is named in a warning. Given up: two collectors sharing one transmitter.',
+    where: 'topology.js (collectorBoard) \u00b7 Shop.h (collectorBoardOf) \u00b7 collector-setup.component.ts \u00b7 api.service getCollectorBoards' },
   { id: 'D-79', date: '2026-10-09', area: 'ui', status: 'standing',
     what: 'A board says whether a clamp is plugged in; the per-board clamp switch of 2026-10-06 is gone',
     why: 'Jeff, 2026-10-09: \u201ccan we use plug detection to avoid needing the \u2018is there a CT on this board\u2019 type option?\u201d The switched 3.5 mm jack ties the tip to 3V3 with no plug in, so the board can tell an empty jack from a clamp; it reports it (a <code>CLAMP</code> frame) once a second whether or not the layout uses it. The Boards screen says <i>No clamp plugged in</i> for an empty jack and nothing else, pickers offer a board\u2019s clamp once one is plugged in (or while the layout already uses it), and a clamp the layout uses that reads empty is a red problem, <code>clamp-unplugged</code>. A board that has not said is not offered and never shown as unplugged. No mockup (jeff).',

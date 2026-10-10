@@ -707,9 +707,9 @@ function isOptionalBoard(shop, controllerId) {
     for (const e of sys.elements || []) {
       if (e.type === 'selector' && same(e.controllerId)) return false;
       if (e.type !== 'collector') continue;
-      if (same(e.control && e.control.rf && e.control.rf.controllerId)) return false;
-      if (same(e.sensor && e.sensor.ct && e.sensor.ct.controllerId)) return false;
-      if (same(e.bin && e.bin.sensor && e.bin.sensor.controllerId)) return false;
+      // The collector's board, when it does one of the collector's jobs (2026-10-10: one board per collector).
+      const hasJob = !!((e.control && e.control.rf) || (e.sensor && e.sensor.ct) || (e.bin && e.bin.sensor));
+      if (hasJob && same(e.controllerId)) return false;
     }
   }
   return true;

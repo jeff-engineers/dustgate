@@ -186,7 +186,7 @@ export interface NodeLinkState {
    *  ABSENT MEANS NONE, which is what every board flashed before 2026-09-15
    *  reports by saying nothing. Read it through `clampsOn()` rather than
    *  directly, so that default lives in one place. */
-  caps: { servos: number; linear: number; ct?: number };
+  caps: { servos: number; linear: number; ct?: number; rf?: number; bin?: number };
   /** Is a clamp plugged into its jack (CLAMP, 2026-10-09)? Absent: not said — old firmware, or not linked. Never read
    *  absent as unplugged. */
   clampIn?: boolean;
@@ -259,6 +259,13 @@ export interface ClampBoard {
   online: boolean;
   /** Is a clamp plugged into its jack (CLAMP, 2026-10-09)? Undefined: the board has not said. */
   clampIn?: boolean;
+}
+
+/** A board that can be a COLLECTOR's board (2026-10-10): it has at least one of the collector's jobs, by its own report. */
+export interface CollectorBoard extends ClampBoard {
+  rf: boolean;     // a transmitter for the collector's remote
+  bin: boolean;    // a dust-bin input
+  ct: boolean;     // a clamp input
 }
 
 export interface DeviceInfo {
@@ -856,6 +863,23 @@ export class ApiService {
       if (!clampsOn(n)) continue;
       out.push({ id: n.id, name: n.name || n.id, online: n.online, clampIn: n.clampIn });
     }
+    return out;
+  }
+
+  /**
+   * Boards that can be a collector's board: those that REPORT a transmitter, a bin input or a clamp input. A native brain
+   * (a Pi) reports none, so it is never offered — it has no pads (jeff, 2026-10-10). '' is an ESP32 primary's own board.
+   */
+  async getCollectorBoards(): Promise<CollectorBoard[]> {
+    const r = await this.get<{ nodes?: NodeLinkState[]; self?: NodeLinkState }>('/api/nodes');
+    const of = (n: NodeLinkState, id: string, name: string, online: boolean): CollectorBoard | null => {
+      const rf = !!n.caps?.rf, bin = !!n.caps?.bin, ct = clampsOn(n) > 0;
+      return rf || bin || ct ? { id, name, online, rf, bin, ct, clampIn: n.clampIn } : null;
+    };
+    const out: CollectorBoard[] = [];
+    const me = r?.self ? of(r.self, '', r.self.name || 'This board', true) : null;
+    if (me) out.push(me);
+    for (const n of r?.nodes ?? []) { const b = of(n, n.id, n.name || n.id, n.online); if (b) out.push(b); }
     return out;
   }
 

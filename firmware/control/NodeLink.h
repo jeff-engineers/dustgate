@@ -391,6 +391,20 @@ inline void buildClamp(JsonObject out, bool plugged) {
     out["in"] = plugged;
 }
 
+// ALERT — what a board's pixel should say about the SHOP: `bin` while a dust bin on a system it serves is full. A whole
+// state, sent on change and on every link-up; alert() in nodelink.js has the reasoning. Refused whole when `bin` is not
+// a boolean, like validateFrame's ALERT case.
+inline void buildAlert(JsonObject out, bool binFull) {
+    out["t"]   = "ALERT";
+    out["bin"] = binFull;
+}
+inline bool parseAlertFrame(JsonObjectConst f, bool& binFull, const char*& err) {
+    if (!_eq(f["t"], "ALERT"))  { err = "not an ALERT frame"; return false; }
+    if (!f["bin"].is<bool>())   { err = "bin must be a boolean"; return false; }
+    binFull = f["bin"].as<bool>();
+    return true;
+}
+
 inline void buildSense(JsonObject out, const char* sensorId, bool on,
                        float level = -1.0f, float amps = -1.0f,
                        float floorA = -1.0f, float tripA = -1.0f,
