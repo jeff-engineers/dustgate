@@ -532,16 +532,26 @@ export class BoardSetupComponent implements OnInit, OnDestroy {
    *                             it proves it whether the tool is on or off. */
   clampLines(r: BoardRow): { text: string; state: 'ok' | 'warn' | 'idle' }[] {
     const link = r.link;
+    if (!link) return [];
+    // The BIN BEAM rides the same sense list (its id is "bin:<system>", SensorPlan.h) but it is not a clamp: it has no
+    // amps and no trip, and "Clamp on bin:system-1" was what this said about it until 2026-10-10. Its own line, first,
+    // and shown whether or not a clamp is plugged in.
+    const all = (link.sense ?? []) as SenseReport[];
+    const bins = all.filter(x => x.id.startsWith('bin:')).map(b => ({
+      state: (b.reported && b.on ? 'warn' : 'idle') as 'warn' | 'idle',
+      text: !b.reported ? 'Bin beam — configured, but this board has never reported.'
+                        : `Bin beam — ${b.on ? 'FULL' : 'clear'}, ${this.ago(b.ageMs)}`,
+    }));
     // An empty jack is jackLine()'s to say; a board that has not said whether one is in claims nothing unless it reports.
-    if (!link || !clampsOn(link) || link.clampIn === false) return [];
-    const sense = link.sense ?? [];
+    if (!clampsOn(link) || link.clampIn === false) return bins;
+    const sense = all.filter(x => !x.id.startsWith('bin:'));
     if (!sense.length) {
-      if (link.clampIn !== true) return [];
-      return [{ state: 'idle',
+      if (link.clampIn !== true) return bins;
+      return [...bins, { state: 'idle',
                 text: 'Current clamp fitted — no tool assigned to it yet.' }];
     }
-    const out: { text: string; state: 'ok' | 'warn' | 'idle' }[] = [];
-    for (const s of sense as SenseReport[]) {
+    const out: { text: string; state: 'ok' | 'warn' | 'idle' }[] = [...bins];
+    for (const s of sense) {
       const name = this.watches(s.id);
       if (!s.reported) {
         out.push({ state: 'warn',

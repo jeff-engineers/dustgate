@@ -349,7 +349,7 @@ interface SysGroup {
                     title="Pair a smart outlet, so DustGate knows when this tool is running">Metering plug</button>
             <button [class.on]="c.sense === 'ct'" [disabled]="!clampBoards.length"
                     (click)="setToolSense(c, 'ct')"
-                    title="A clamp on this tool's feed, wired to one of your boards — for 240 V, where there is no plug to pair">Current clamp</button>
+                    title="A clamp on this tool's feed, wired to one of your boards — for 240 V, where there is no plug to pair, and for a motor whose start-up surge trips a smart plug">Current clamp</button>
             <button [class.on]="c.sense === 'none'" (click)="setToolSense(c, 'none')"
                     title="Nothing watches it — you switch this tool on yourself from the shop list">Nothing</button>
           </div>

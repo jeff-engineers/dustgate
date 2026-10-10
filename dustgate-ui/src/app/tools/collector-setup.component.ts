@@ -1,7 +1,7 @@
-import { Component, EventEmitter, Input, OnInit, Output, QueryList, ViewChildren } from '@angular/core';
+import { Component, EventEmitter, Input, OnDestroy, OnInit, Output, QueryList, ViewChildren, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { ClampBoard, CollectorBoard, DiscoveredOutlet } from '../services/api.service';
+import { ApiService, ClampBoard, CollectorBoard, DiscoveredOutlet, SenseReport } from '../services/api.service';
 import { OutletPickerComponent } from './outlet-picker.component';
 import { PairedOutletRowComponent } from './paired-outlet-row.component';
 import { RfAddressComponent } from './rf-address.component';
@@ -102,6 +102,9 @@ import { CollectorForm, CtlKind, RawEl, SenseKind, fused, readCollector, writeCo
               border-radius: 0 0 12px 12px; padding: 11px 12px 12px; margin: 0 0 7px; }
     .expand .note { font-size: 12.5px; color: var(--muted); line-height: 1.55; margin: 0; }
     .expand .note b { color: var(--text); font-weight: 600; }
+    .expand .note.live { display: flex; gap: 7px; align-items: baseline; margin-top: 6px; font-variant-numeric: tabular-nums; }
+    .expand .note.live .ldot { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--muted); }
+    .expand .note.live.on .ldot { background: var(--ok, #2ea043); }
     .expand app-paired-outlet-row, .expand app-outlet-picker { display: block; }
 
     /* The DIP, small enough for a summary row: the PART, never the number. 94
@@ -332,11 +335,15 @@ import { CollectorForm, CtlKind, RawEl, SenseKind, fused, readCollector, writeCo
               <span class="name">Current clamp<span class="pill soon"
                     *ngIf="!clampBoards.length">no board has one</span></span>
               <span class="detail">A clamp on the collector's feed, wired to one of your
-                boards — for 240 V, where there is no plug to pair.</span>
+                boards — for 240 V, where there is no plug to pair, and for a blower whose start-up surge
+                trips a smart plug. Nothing switched passes through it.</span>
             </span>
           </button>
           <div class="expand" *ngIf="form.sense === 'ct'">
-            <p class="note">The lead runs from the blower's feed to the board at the collector, below.</p>
+            <p class="note">The lead runs from the blower's feed to the board at the collector, above.</p>
+            <p class="note live" [class.on]="live?.on" aria-live="polite"
+               title="Read off the clamp right now. Watts is amps × 120 V: an estimate that assumes a 120 V circuit and reads a motor high.">
+              <span class="ldot"></span>{{ liveText() }}</p>
           </div>
 
           <button type="button" class="opt" role="radio" aria-labelledby="sense-lbl"
@@ -401,7 +408,7 @@ import { CollectorForm, CtlKind, RawEl, SenseKind, fused, readCollector, writeCo
     </ng-template>
   `,
 })
-export class CollectorSetupComponent implements OnInit {
+export class CollectorSetupComponent implements OnInit, OnDestroy {
   /** The collector element from the layout. Edited on a COPY by the caller, which
    *  splices the result back in — same contract the gate and tool sheets use. */
   @Input({ required: true }) element!: RawEl;
@@ -436,8 +443,41 @@ export class CollectorSetupComponent implements OnInit {
   changingCtl = false;
   changingSense = false;
 
+  private api = inject(ApiService);
+  private livePoll: ReturnType<typeof setInterval> | null = null;
+  /** What the collector's clamp reads right now, off its board's SENSE report (/api/nodes). Null: nothing yet. */
+  live: SenseReport | null = null;
+
   ngOnInit(): void {
     this.form = readCollector(this.element);
+    // LIVE, while the sheet is open (jeff, 2026-10-10): the question this option is chosen to answer is "does the clamp
+    // see the blower?", and the answer is a number that moves when you switch it on. Same reading as the Boards screen.
+    void this.refreshLive();
+    this.livePoll = setInterval(() => void this.refreshLive(), 2000);
+  }
+
+  ngOnDestroy(): void { if (this.livePoll) clearInterval(this.livePoll); }
+
+  private async refreshLive(): Promise<void> {
+    if (this.form.sense !== 'ct' || !this.form.boardId) { this.live = null; return; }
+    const norm = (h: string) => h.toLowerCase().replace(/\.$/, '').replace(/\.local$/, '');
+    try {
+      const n = (await this.api.getNodes()).find(x => norm(x.id) === norm(this.form.boardId));
+      this.live = (n?.online && n.sense?.find(x => x.id === this.element['id'] && x.reported)) || null;
+    } catch { /* a missed poll says nothing new */ }
+  }
+
+  /** The live line under the clamp option. Watts is an ESTIMATE at 120 V, and says so (see the Boards screen). */
+  liveText(): string {
+    const s = this.live;
+    if (!s) return 'No reading yet. A board reads a clamp only once the layout gives it one: save, and the number appears here.';
+    const amp = (a: number) => (a < 10 ? a.toFixed(2) : a.toFixed(1)) + ' A';
+    if (s.fault) return 'Clamp fault: no baseline could be measured' + (typeof s.amps === 'number' ? ` (reads ${amp(s.amps)} at rest)` : '') + '.';
+    const bits: string[] = [];
+    if (typeof s.amps === 'number') bits.push(`${s.on ? 'Running' : 'Idle'} at ${amp(s.amps)} (≈ ${Math.round(s.amps * 120)} W at 120 V)`);
+    else bits.push(s.on ? 'Running' : 'Idle');
+    if (typeof s.tripA === 'number') bits.push(`counts as running above ${amp(s.tripA)}`);
+    return bits.join(' · ');
   }
 
   get fused(): boolean { return fused(this.form); }
