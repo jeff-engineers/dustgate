@@ -42,6 +42,8 @@ const SERVO_COUNT = 4;
 // How many current clamps this simulated board claims. One by default: the
 // thing most worth exercising is a shop that HAS one.
 const MOCK_CT = Number(process.env.MOCK_NODE_CT ?? 1);
+// Is a clamp plugged into the mock's jack (CLAMP, 2026-10-09). MOCK_NODE_JACK=0 for an empty jack.
+const MOCK_JACK = (process.env.MOCK_NODE_JACK ?? '1') !== '0';
 
 // How long a simulated sweep takes. Short enough to keep the suite fast, long
 // enough that "moving" is observably a state and not an instant.
@@ -159,6 +161,8 @@ wss.on('connection', (ws) => {
                                           { servos: SERVO_COUNT, linear: 0, ct: MOCK_CT },
                                           owner, accepted),
                                process.uptime(), 'poweron'));
+      // Then whether a clamp is in the jack, as a real node does right after an accepted WELCOME.
+      if (accepted && MOCK_CT) send(ws, NL.clamp(MOCK_JACK));
       return;
     }
 

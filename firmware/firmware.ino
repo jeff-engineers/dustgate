@@ -50,7 +50,9 @@
 // it ships to a collector node. Both are header-only and nothing here
 // instantiates a CtSensor without a pad; the clamp itself is still #ifdef'd.
 #include "sensing/CtSensor.h"     // `ct` — the clamp on this board's own pad
-#include "sensing/CtTrip.h"       // ...and the one shared "is it running?"   // the 254-address knock, one address per loop() pass
+#include "sensing/CtTrip.h"       // ...and the one shared "is it running?"
+#include "sensing/ClampJack.h"    // ...and whether one is plugged in at all
+#include <driver/gpio.h>          // gpio_pullup_en, for D0
 #include "control/FaultPolicy.h"   // which begin() failure costs which capability
 #include "training/CalibrationStore.h"
 
@@ -671,6 +673,9 @@ static CtSensor g_ct(PIN_CT);
 // the primary's own board is the ordinary collector case: the board at the
 // cyclone watches the blower it also commands.
 static sensing::CtTrip g_ctTrip;
+// Is a clamp plugged into THIS board's jack (sensing/ClampJack.h) — the brain's own row on the Boards screen, and the
+// clamp-unplugged problem when the layout uses it. Probed whether or not a clamp is configured, as a node does.
+static sensing::ClampJack g_jack;
 #endif
 static topo::TopologyRuntime  g_topoRuntime;
 static topo::TopologyStore    g_topoStoreSketch;   // read-only view; the API server owns writes
@@ -1038,8 +1043,17 @@ static void raiseDeviceProblems() {
         b.downForMs = h.downForMs; b.moveFault = h.moveFault;
         b.optional = g_topoRuntime.loaded() &&
             topo::isOptionalBoard(g_topoRuntime.topology(), topo::controllerIdForHost(g_topoRuntime.topology(), b.host));
+        b.clampIn = g_remoteBuses[i].info().clampIn;
         boards.push_back(b);
     }
+#ifdef PIN_CT
+    {   // this board's own jack: a clamp at the collector is most often on the brain's board
+        topo::BoardView self;
+        self.host = WiFiProvisioner::getHostname().c_str(); self.linked = true; self.self = true;
+        self.clampIn = g_jack.known() ? (g_jack.plugged() ? 1 : 0) : -1;
+        boards.push_back(self);
+    }
+#endif
     std::vector<topo::PlugView> plugs;
 #ifdef CONTROL_SMART_OUTLET
     for (int i = 0; i < control.outletCount() && i < SMART_OUTLET_COUNT; i++) {
@@ -1729,6 +1743,10 @@ void setup() {
     // anything asks, and the check costs nothing. It only bites on the path it
     // exists for: a fast boot that reaches a reading before the rail is up.
     g_ct.begin();
+    // D0's own pull-up, so a pad with nothing on it reads as no clamp — see the node's setup() for the reasoning and
+    // the one thing a bench must confirm.
+    (void)analogReadMilliVolts(PIN_CT);
+    gpio_pullup_en((gpio_num_t)PIN_CT);
 #endif
 
     // Hand the runtime this board's CT tuning so every node gets the SAME
@@ -2488,6 +2506,15 @@ void loop() {
     // Skipped entirely when the layout put no clamp on this board — the read
     // busy-waits for its whole 60 ms window, and a gate board with no clamp has
     // no business spending that four times a second.
+    if (g_jack.due(millis())) {
+        watchdog::pet();
+        const uint32_t mv = sensing::ClampJack::probeMeanMv([] { return analogReadMilliVolts(PIN_CT); },
+                                                           [](uint32_t us) { delayMicroseconds(us); });
+        if (g_jack.update(mv, millis())) {
+            Serial.print(F("[CT] jack: ")); Serial.print(g_jack.plugged() ? F("clamp plugged in (") : F("EMPTY — no clamp ("));
+            Serial.print(mv); Serial.println(F(" mV)"));
+        }
+    }
     if (g_localBus.sensesAnything()) {
         const sensing::CtTrip::Tick t =
             g_ctTrip.update(g_ct, millis(), g_localBus.busy(),
@@ -4268,6 +4295,7 @@ void loop() {
                     sc["linear"] = HAS_LINEAR ? 1 : 0;
 #ifdef PIN_CT
                     sc["ct"] = 1;
+                    if (g_jack.known()) self["clampIn"] = g_jack.plugged();
 #endif
                     topo::addSenseArray(self, g_localBus);
                 }

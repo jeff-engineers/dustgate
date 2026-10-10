@@ -644,6 +644,17 @@ int main(int argc, char** argv) {
     }
   }
 
+  // ── the clamp jack (2026-10-09) ──────────────────────────────────────────
+  // Same cases as nodelink.test.js "the clamp jack", same order. The refusals are the primary's (NodeSession::onClamp,
+  // test_nodesession.cpp): a node only builds the frame.
+  {
+    StaticJsonDocument<64> a, b;
+    topo::nodelink::buildClamp(a.to<JsonObject>(), true);
+    topo::nodelink::buildClamp(b.to<JsonObject>(), false);
+    ok("a plugged-in clamp", std::string(a["t"] | "") == "CLAMP" && a["in"].is<bool>() && a["in"].as<bool>() && a.size() == 2);
+    ok("an empty jack", std::string(b["t"] | "") == "CLAMP" && b["in"].is<bool>() && !b["in"].as<bool>() && b.size() == 2);
+  }
+
   // ── two systems, two blowers ─────────────────────────────────────────────
   // Everything the runtime used to answer once it now answers per system. The
   // failure this guards against is the obvious one: a busy 4" system dragging

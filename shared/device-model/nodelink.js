@@ -59,7 +59,7 @@ function servoRangeOk(minUs, maxUs) {
          minUs >= MIN_SERVO_US && maxUs <= MAX_SERVO_US && maxUs - minUs >= MIN_SERVO_SPAN_US;
 }
 /** Frame types, secondary → primary. */
-const S2P = ['WELCOME', 'ACK', 'STATE', 'SENSE', 'PONG', 'OTASTATE', 'JOIN'];
+const S2P = ['WELCOME', 'ACK', 'STATE', 'SENSE', 'CLAMP', 'PONG', 'OTASTATE', 'JOIN'];
 
 // CONFIG and SENSE were added 2026-09-14 WITHOUT bumping NODELINK_VERSION, and
 // that is deliberate rather than an oversight. Both ends ignore a frame type
@@ -547,6 +547,23 @@ const dialsIn = (w) => !!(w && w.caps && w.caps.join === 1);
 const pressesRf = (w) => !!(w && w.caps && w.caps.rf === 1);
 /** Does this board have a dust-bin sensor pad? Absent means NO. */
 const watchesBin = (w) => !!(w && w.caps && w.caps.bin === 1);
+/**
+ * CLAMP — "is a clamp plugged into my jack?" (2026-10-09). S→P, on change and every SENSE_REPEAT_MS.
+ *
+ * `caps.ct` says a board HAS a clamp input; it is the pin map, true of every PWM board whether or not
+ * anything is plugged in. This says whether something IS. A switched 3.5 mm jack ties its tip to 3V3
+ * through 10 kΩ with no plug in (WIRING.md §8), and the node also enables D0's own pull-up, so an empty
+ * jack and an empty pad both read railed high; a clamp holds the pin at the bias midpoint. The node
+ * reports it whether or not a CONFIG names a clamp — that is the point: it is how a person sees that a
+ * clamp is there before the layout uses it, and it replaced the per-board "clamp" switch in the layout.
+ *
+ * A board that has never sent one is UNKNOWN (an old firmware), which the primary must not read as
+ * unplugged. NOT a version bump: a new frame type, which an old primary ignores.
+ */
+function clamp(plugged) {
+  return { t: 'CLAMP', in: !!plugged };
+}
+
 function ack(seq, ok, err) {
   const f = { t: 'ACK', seq, ok: !!ok };
   if (err) f.err = err;
@@ -813,6 +830,9 @@ function validateFrame(f, direction) {
         });
       }
       break;
+    case 'CLAMP':
+      if (typeof f.in !== 'boolean') errs.push('CLAMP.in must be a boolean');
+      break;
     case 'SENSE':
       str('sensorId');
       if (typeof f.on !== 'boolean') errs.push('SENSE.on must be a boolean');
@@ -872,6 +892,6 @@ module.exports = {
   MAX_RST_LEN, MAX_OTA_PATH, MIN_OTA_BYTES, MAX_OTA_BYTES, OTA_STATES,
   MAX_WHERE_IP_LEN, BEACON_PORT, REFUSE_REASONS, dialsIn, join, refuse, where,
   MIN_RF_TICK_US, MAX_RF_TICK_US, MAX_RF_REPEATS, pressesRf, watchesBin, press,
-  hello, welcome, withBootInfo, set, config, ack, state, sense, ping, pong, ota, otaState, welcomeAccepted, clampsOn,
+  hello, welcome, withBootInfo, set, config, ack, state, sense, clamp, ping, pong, ota, otaState, welcomeAccepted, clampsOn,
   validateFrame,
 };

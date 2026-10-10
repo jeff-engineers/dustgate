@@ -7,7 +7,7 @@ import { ApiService, DiscoveredNode, NodeLinkState, SenseReport, clampsOn } from
 import type { Topology } from '@topology';
 import { systemsOf } from '@shop';
 import { bareHost } from '@device-model';
-import { clampEnabled, clampUsers, healClampFlags, machineOfPort, setClampEnabled, type ShopDoc } from '../services/shop-doc';
+import { clampUsers, machineOfPort, type ShopDoc } from '../services/shop-doc';
 import { isOptionalBoard } from '@shop';
 import {
   type Drives, DEFAULT_DRIVES, applyDrivesCache, drivesFromCaps, drivesFromHasLinear, resolveDrives,
@@ -75,20 +75,6 @@ interface BoardRow {
     .clamp.on { color: var(--text); }
     .clamp.on .cdot { background: #3fb950; opacity: 1; }
     .clamp.warn { color: var(--warn, #d29922); }
-    /* The board's own clamp switch. A row of its own, shown at rest: "is a clamp fitted here?" is a fact about the board. */
-    .swrow { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 8px; padding: 8px 10px;
-             background: var(--bg); border: 1px solid var(--border); border-radius: 10px; }
-    .swrow .l { font-size: 12.5px; }
-    .swrow .l small { display: block; color: var(--muted); font-size: 11.5px; margin-top: 1px; }
-    .sw { width: 40px; height: 23px; border-radius: 99px; background: var(--border); border: 0; position: relative; cursor: pointer; flex: none; padding: 0; }
-    .sw::after { content: ""; position: absolute; top: 3px; left: 3px; width: 17px; height: 17px; border-radius: 50%; background: var(--text); transition: transform .15s; }
-    .sw[aria-checked="true"] { background: var(--success); }
-    .sw[aria-checked="true"]::after { transform: translateX(17px); }
-    .sw:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-    .confirm { margin-top: 8px; padding: 10px 11px; border: 1px solid var(--accent); border-radius: 10px; font-size: 12.5px; line-height: 1.5; }
-    .confirm .btns { display: flex; gap: 8px; margin-top: 8px; }
-    .confirm .btns button { flex: 1; padding: 9px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface); color: var(--text); font-size: 13px; }
-    .confirm .btns .go { background: var(--danger); border-color: var(--danger); color: #fff; font-weight: 600; }
     .clamp.warn .cdot { background: var(--warn, #d29922); opacity: 1; }
 
     /* The network name. It used to be captioned in the board rail above the
@@ -192,18 +178,11 @@ interface BoardRow {
                  [class.warn]="c.state === 'warn'">
               <span class="cdot"></span>{{ c.text }}
             </div>
-            <!-- The clamp is something you switch ON, per board. It defaults to off: a node reports a clamp pad from its
-                 pin map whether or not one is plugged in, so "has a clamp" cannot be believed from the board alone. -->
-            <div class="swrow" *ngIf="canClamp(r)">
-              <div class="l">Current clamp
-                <small>{{ clampOnFor(r) ? 'A clamp is plugged into this board.' : (clampOffNote === r.id ? 'Off. Anything it sensed now has no sensor.' : 'Off. Nothing is plugged into this board.') }}</small>
-              </div>
-              <button class="sw" role="switch" [attr.aria-checked]="clampOnFor(r)" (click)="toggleClamp(r)"
-                      [attr.aria-label]="'Current clamp on ' + r.name"></button>
-            </div>
-            <div class="confirm" *ngIf="confirmClampOff === r.id">
-              {{ clampUsersText(r) }} Turning it off leaves {{ clampUsersCount(r) === 1 ? 'it' : 'them' }} with no way to tell DustGate {{ clampUsersCount(r) === 1 ? 'it is' : 'they are' }} running.
-              <div class="btns"><button class="go" (click)="clampOff(r)">Turn off</button><button (click)="confirmClampOff = null">Keep on</button></div>
+            <!-- An EMPTY JACK, as the board reports it (CLAMP, 2026-10-09). It replaced the per-board clamp switch: the board
+                 says whether a clamp is plugged in, so nobody has to. Plugged in, the clamp lines above say the rest. -->
+            <div class="clamp" *ngIf="jackLine(r) as j" [class.warn]="j.state === 'warn'"
+                 [attr.title]="j.state === 'warn' ? 'The jack on this board reads empty. Plug the clamp back in; nothing else needs doing.' : 'Plug a current clamp into the jack on this board and it appears here, ready to give to a tool.'">
+              <span class="cdot"></span>{{ j.text }}
             </div>
             <!-- An update is a state of the board, so it is shown at rest like the
                  clamp is, and it names what will happen before anyone taps. -->
@@ -324,9 +303,6 @@ export class BoardSetupComponent implements OnInit, OnDestroy {
     } catch {
       this.topo = null;
     }
-    // A layout saved before the clamp switch existed may already sense a tool with one: switch that board's clamp on, so
-    // nothing that worked stops the day the switch appears.
-    if (this.topo && healClampFlags(this.topo as unknown as ShopDoc)) await this.persist();
     await this.refreshLinks();
     // On LOAD as well as on add/rename: a board paired in an earlier session (or
     // before this layout existed) has no controllers[] entry, and without one the
@@ -489,48 +465,16 @@ export class BoardSetupComponent implements OnInit, OnDestroy {
     this.rebuild();
   }
 
-  // ── the clamp switch ──────────────────────────────────────────────────────
-  confirmClampOff: string | null = null;
-  clampOffNote: string | null = null;
-  /** The board CAN have a clamp (its pin map says so) — otherwise there is nothing to switch. */
-  canClamp(r: BoardRow): boolean { return !!r.link && clampsOn(r.link) > 0 && !!this.topo; }
-  clampOnFor(r: BoardRow): boolean { return clampEnabled(this.topo as unknown as ShopDoc, r.id); }
-  clampUsersCount(r: BoardRow): number { return clampUsers(this.topo as unknown as ShopDoc, r.id).length; }
-  clampUsersText(r: BoardRow): string {
-    const u = clampUsers(this.topo as unknown as ShopDoc, r.id);
-    return u.length === 1 ? `The ${u[0]} is sensed by this clamp.` : `${u.join(', ')} are sensed by this clamp.`;
-  }
-  async toggleClamp(r: BoardRow): Promise<void> {
-    this.confirmClampOff = null;
-    if (!this.clampOnFor(r)) { await this.setClamp(r, true); return; }
-    // Asks only when something is sensed by it; otherwise the switch just flips.
-    if (this.clampUsersCount(r)) this.confirmClampOff = r.id; else await this.setClamp(r, false);
-  }
-  async clampOff(r: BoardRow): Promise<void> { this.confirmClampOff = null; await this.setClamp(r, false); }
-  private async setClamp(r: BoardRow, on: boolean): Promise<void> {
-    if (!this.topo) return;
-    // Switching it off also detaches whatever it sensed, or the layout would go on naming a clamp that is not there.
-    if (!on) this.detachClamp(r.id);
-    setClampEnabled(this.topo as unknown as ShopDoc, r.id, on);
-    this.clampOffNote = on ? null : r.id;
-    await this.persist();
-  }
-  /** Remove sensor.ct from every machine and collector that names this board. */
-  private detachClamp(controllerId: string): void {
-    const doc = this.topo as unknown as ShopDoc;
-    const isThis = (id: unknown) => ((id as string) ?? '') === controllerId || ((id as string) ?? '') === '' && controllerId === (doc.controllers.find(c => c['role'] === 'primary')?.['id']);
-    for (const m of (doc['machines'] as Record<string, unknown>[] | undefined) ?? []) {
-      const sensor = m['sensor'] as Record<string, unknown> | undefined;
-      const ct = sensor?.['ct'] as Record<string, unknown> | undefined;
-      if (ct && isThis(ct['controllerId'])) delete sensor!['ct'];
-    }
-    for (const sys of (doc['systems'] as { elements?: Record<string, unknown>[] }[] | undefined) ?? []) {
-      for (const el of sys.elements ?? []) {
-        const sensor = el['sensor'] as Record<string, unknown> | undefined;
-        const ct = sensor?.['ct'] as Record<string, unknown> | undefined;
-        if (el['type'] === 'collector' && ct && isThis(ct['controllerId'])) delete sensor!['ct'];
-      }
-    }
+  // ── the clamp jack ────────────────────────────────────────────────────────
+  /** The board CAN have a clamp (its pin map says so). */
+  canClamp(r: BoardRow): boolean { return !!r.link && clampsOn(r.link) > 0; }
+  /** Said only for an EMPTY jack: plugged in, clampLines() speaks; not said yet (old firmware), nothing is claimed. */
+  jackLine(r: BoardRow): { text: string; state: 'warn' | 'idle' } | null {
+    if (!this.canClamp(r) || r.link?.clampIn !== false) return null;
+    const users = clampUsers(this.topo as unknown as ShopDoc, r.id);
+    if (!users.length) return { state: 'idle', text: 'No clamp plugged in.' };
+    const who = users.length === 1 ? `The ${users[0]}` : users.join(', ');
+    return { state: 'warn', text: `Clamp unplugged — ${who} can't start collection until it's back in.` };
   }
 
   // ── display ───────────────────────────────────────────────────────────────
@@ -555,9 +499,11 @@ export class BoardSetupComponent implements OnInit, OnDestroy {
    *                             it proves it whether the tool is on or off. */
   clampLines(r: BoardRow): { text: string; state: 'ok' | 'warn' | 'idle' }[] {
     const link = r.link;
-    if (!link || !clampsOn(link) || !this.clampOnFor(r)) return [];
+    // An empty jack is jackLine()'s to say; a board that has not said whether one is in claims nothing unless it reports.
+    if (!link || !clampsOn(link) || link.clampIn === false) return [];
     const sense = link.sense ?? [];
     if (!sense.length) {
+      if (link.clampIn !== true) return [];
       return [{ state: 'idle',
                 text: 'Current clamp fitted — no tool assigned to it yet.' }];
     }
