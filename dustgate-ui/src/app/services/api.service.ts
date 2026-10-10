@@ -187,6 +187,9 @@ export interface NodeLinkState {
    *  reports by saying nothing. Read it through `clampsOn()` rather than
    *  directly, so that default lives in one place. */
   caps: { servos: number; linear: number; ct?: number };
+  /** Is a clamp plugged into its jack (CLAMP, 2026-10-09)? Absent: not said — old firmware, or not linked. Never read
+   *  absent as unplugged. */
+  clampIn?: boolean;
   /** What this board's clamps have actually REPORTED. Absent means the layout
    *  has not put a clamp on this board — which is a different thing from a
    *  clamp that is wired and silent, and the screen has to say which. */
@@ -254,6 +257,8 @@ export interface ClampBoard {
   id: string;
   name: string;
   online: boolean;
+  /** Is a clamp plugged into its jack (CLAMP, 2026-10-09)? Undefined: the board has not said. */
+  clampIn?: boolean;
 }
 
 export interface DeviceInfo {
@@ -845,11 +850,11 @@ export class ApiService {
       // '' rather than its real id: the model's "absent means this board" rule,
       // so a layout written here does not hard-code the primary's name and then
       // break when someone renames it.
-      out.push({ id: '', name: r.self.name || 'This board', online: true });
+      out.push({ id: '', name: r.self.name || 'This board', online: true, clampIn: r.self.clampIn });
     }
     for (const n of r?.nodes ?? []) {
       if (!clampsOn(n)) continue;
-      out.push({ id: n.id, name: n.name || n.id, online: n.online });
+      out.push({ id: n.id, name: n.name || n.id, online: n.online, clampIn: n.clampIn });
     }
     return out;
   }

@@ -56,6 +56,9 @@ public:
         int      capServos;
         int      capLinear;
         int      capClamps;     // caps.ct — 0 for every board flashed before 2026-09-15
+        // Is a clamp plugged into its jack (the CLAMP frame, 2026-10-09)? -1 unknown — never reported, or the link is
+        // down — which is NOT "unplugged": a board on older firmware simply never says. 0 empty, 1 plugged in.
+        int      clampIn;
         // An update this node was told to run (OTA / OTASTATE): "" when none, else
         // start | progress | done | fail. `otaPct` is -1 until reported.
         char     ota[9];
@@ -153,6 +156,7 @@ public:
         // machine nobody can see (RFC §5.6a: absent is OFF). The CONFIG is the opposite — it is
         // ours, not the node's, and the node will have forgotten it across the reboot.
         _senseCount = 0;
+        _clampIn = -1;   // unknown until the node says again: someone may unplug it while the board is off
         _cfgPending = _cfgValid; _cfgAwaitAck = false; _cfgTries = 0;
         char line[96];
         std::snprintf(line, sizeof(line), "[NODE] Link lost: %s", _nodeId);
@@ -191,6 +195,7 @@ public:
         if (std::strcmp(t, "WELCOME") == 0)  return onWelcome(f);
         if (std::strcmp(t, "ACK") == 0)      { onAck(f); return false; }
         if (std::strcmp(t, "SENSE") == 0)    { onSense(f); return false; }
+        if (std::strcmp(t, "CLAMP") == 0)    { onClamp(f); return false; }
         if (std::strcmp(t, "OTASTATE") == 0) { onOtaState(f); return false; }
         if (std::strcmp(t, "STATE") == 0)    { onState(f); return false; }
         return false;   // unknown frame — ignore rather than guess
@@ -431,6 +436,7 @@ public:
         n.capServos = _capServos;
         n.capLinear = _capLinear;
         n.capClamps = _capClamps;
+        n.clampIn   = _clampIn;
         nodelink::strlcpy_(n.ota,    _otaState, sizeof(n.ota));
         n.otaPct = _otaPct;
         nodelink::strlcpy_(n.otaErr, _otaErr,   sizeof(n.otaErr));
@@ -581,6 +587,20 @@ private:
         say(line);
     }
 
+    // CLAMP: is a clamp plugged into the board's jack. A frame without a boolean `in` is ignored, as validateFrame()
+    // refuses it in nodelink.js. Logged on a change only — it repeats every SENSE_REPEAT_MS.
+    void onClamp(JsonObjectConst f) {
+        if (!f["in"].is<bool>()) return;
+        const int v = f["in"].as<bool>() ? 1 : 0;
+        if (v == _clampIn) return;
+        const bool first = _clampIn < 0;
+        _clampIn = v;
+        if (first && v) return;   // the common case at connect: say nothing about a clamp that is simply there
+        char line[96];
+        std::snprintf(line, sizeof(line), "[NODE←] %s: clamp %s", _nodeId, v ? "plugged in" : "UNPLUGGED (empty jack)");
+        say(line);
+    }
+
     void onSense(JsonObjectConst f) {
         const char* sid = f["sensorId"].as<const char*>();
         const bool  on  = f["on"] | false;
@@ -726,6 +746,7 @@ private:
     int      _capServos  = 0;
     int      _capLinear  = 0;
     int      _capClamps  = 0;   // caps.ct
+    int      _clampIn    = -1;  // CLAMP: -1 unknown, 0 empty jack, 1 plugged in
     int      _capPlugs   = 0;   // caps.plug — 1 if it polls plugs for us; absent = 0
     int      _capJoin    = 0;   // caps.join — 1 if it dials us itself
     int      _capRf      = 0;   // caps.rf   — 1 if it has a transmitter for the collector's remote

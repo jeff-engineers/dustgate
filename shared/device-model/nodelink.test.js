@@ -103,6 +103,17 @@ const eq = (name, got, want) =>
   check('a fractional pulse is rejected', NL.validateFrame({ ...withRange, minUs: 400.5 }, 'p2s').length > 0);
 }
 
+// ── the clamp jack (2026-10-09) ─────────────────────────────────────────────
+// Same cases as the "clamp jack" block of test_nodebus.cpp, same order.
+{
+  eq('a plugged-in clamp', NL.clamp(true), { t: 'CLAMP', in: true });
+  eq('an empty jack', NL.clamp(false), { t: 'CLAMP', in: false });
+  eq('it validates node to primary', NL.validateFrame(NL.clamp(false), 's2p'), []);
+  check('without `in` it is refused', NL.validateFrame({ t: 'CLAMP' }, 's2p').length === 1);
+  check('a non-boolean `in` is refused', NL.validateFrame({ t: 'CLAMP', in: 1 }, 's2p').length === 1);
+  check('a primary cannot send one', NL.validateFrame(NL.clamp(true), 'p2s').length > 0);
+}
+
 // ── direction is enforced: a secondary can't send a SET ─────────────────────
 {
   const gate = twoGates.elements.find((e) => e.id === 'gate1');

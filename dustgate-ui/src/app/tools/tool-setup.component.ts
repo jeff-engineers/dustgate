@@ -10,7 +10,7 @@ import { resolveDeepLink } from './deep-link';
 import { elementsOf, ductsOf } from '../gates/selector-types';
 import { type ShopDoc, type RawEl as DocEl, collectorOf, isPortSupplemental, machineOfPort,
          outletExcludes, outletOf, outletTakenByAnotherMachine, renameMachine, systemLabel,
-         systemsInLayoutOrder, systemsOf, toShop, clampEnabled } from '../services/shop-doc';
+         systemsInLayoutOrder, systemsOf, toShop, clampOffered } from '../services/shop-doc';
 import { DEFAULT_THRESHOLD } from './outlet-defaults';
 
 // ── The tools screen ─────────────────────────────────────────────────────────
@@ -546,7 +546,7 @@ export class ToolSetupComponent implements OnInit {
     // cannot answer simply offers no clamp, which is the same as a shop that has
     // none, and the option says so on its own.
     // ...and which of those a person has switched ON (Boards screen): only those may be pointed at.
-    try { this.clampBoards = (await this.api.getClampBoards()).filter(b => clampEnabled(this.topo as unknown as ShopDoc, b.id)); }
+    try { this.clampBoards = (await this.api.getClampBoards()).filter(b => clampOffered(this.topo as unknown as ShopDoc, b)); }
     catch { this.clampBoards = []; }
     // Up front, not on opening a tool: the list itself shows which plug each tool
     // is on, and a scan started here has finished by the time anyone taps a row.

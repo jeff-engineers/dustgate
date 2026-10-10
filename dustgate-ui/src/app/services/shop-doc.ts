@@ -67,7 +67,6 @@ export function toShop(doc: Topology | null | undefined): ShopDoc | null {
   if (!isShopDoc(doc)) return null;
   const shop = doc as unknown as ShopDoc;
   healMachineNames(shop);
-  healClampFlags(shop);
   return shop;
 }
 
@@ -377,28 +376,18 @@ export function clampOf(doc: ShopDoc | null, el: RawEl | null | undefined): RawE
   return ((m?.sensor as RawEl | undefined)?.['ct'] as RawEl | undefined) ?? null;
 }
 
-// ── A board's current clamp is something you switch ON ─────────────────────────
+// ── A board's clamp: plugged in or not, as the board reports it ─────────────────────
 //
-// A node reports `caps.ct` from its pin map, which is true of every C5 whether or not a clamp is plugged in. The layout is
-// where a person says "this board has one", as `clamp: true` on the board's controllers[] entry (absent = off). It lives
-// in the layout, on the brain, so reflashing a node does not lose it.
+// A node reports `caps.ct` from its pin map, true of every PWM board whether or not a clamp is there, and until
+// 2026-10-09 the layout carried `clamp: true` per board for a person to say "this one has a clamp". The switched jack
+// made that a reading: a board reports CLAMP — is a clamp plugged in (nodelink.js) — and the brain serves it as
+// `clampIn` on /api/nodes. The switch is gone; a stray `clamp` key in an older layout is simply ignored.
 
 /** The controllers[] entry for a board id. '' and the primary's own id both mean the primary, the rule everywhere else. */
 function controllerFor(doc: ShopDoc | null, controllerId: string): RawEl | null {
   const list = (doc?.controllers ?? []) as RawEl[];
   if (!controllerId) return list.find(c => c['role'] === 'primary') ?? null;
   return list.find(c => c['id'] === controllerId) ?? null;
-}
-
-/** Is this board's clamp switched on in the layout? */
-export function clampEnabled(doc: ShopDoc | null, controllerId: string): boolean {
-  return controllerFor(doc, controllerId)?.['clamp'] === true;
-}
-
-export function setClampEnabled(doc: ShopDoc | null, controllerId: string, on: boolean): void {
-  const c = controllerFor(doc, controllerId);
-  if (!c) return;
-  if (on) c['clamp'] = true; else delete c['clamp'];
 }
 
 /** Names of what this board's clamp senses: machines (tools) and collectors, by display name. */
@@ -419,20 +408,12 @@ export function clampUsers(doc: ShopDoc | null, controllerId: string): string[] 
 }
 
 /**
- * A layout saved before the switch existed may already sense a tool with a clamp. Switch that board's clamp on, so
- * nothing that worked stops working the day the switch appears. Returns whether anything changed.
+ * Can a clamp on this board be offered for a tool or a collector? When one is PLUGGED IN — and, so a binding never
+ * vanishes from its own picker, when the layout already uses that board's clamp (unplugged is then a problem the brain
+ * raises, not a reason to hide it). `clampIn` undefined is a board that has not said: not offered.
  */
-export function healClampFlags(doc: ShopDoc | null): boolean {
-  if (!doc) return false;
-  let changed = false;
-  const mark = (ct: RawEl | undefined) => {
-    if (!ct) return;
-    const c = controllerFor(doc, (ct['controllerId'] as string) ?? '');
-    if (c && c['clamp'] !== true) { c['clamp'] = true; changed = true; }
-  };
-  for (const m of machinesOf(doc)) mark((m.sensor as RawEl | undefined)?.['ct'] as RawEl | undefined);
-  for (const sys of systemsOf(doc)) mark(((collectorOf(sys)?.['sensor'] as RawEl | undefined)?.['ct']) as RawEl | undefined);
-  return changed;
+export function clampOffered(doc: ShopDoc | null, board: { id: string; clampIn?: boolean }): boolean {
+  return board.clampIn === true || clampUsers(doc, board.id).length > 0;
 }
 
 /** Attach (or with null, detach) the plug for an element. A collector routes by

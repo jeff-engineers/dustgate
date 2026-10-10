@@ -59,6 +59,9 @@ inline void writeNodeEntry(JsonArray arr, const S& s, const char* id, const char
     caps["linear"] = n.capLinear;
     // Omitted when none, matching the wire: absent already means "no clamp".
     if (n.capClamps > 0) caps["ct"] = n.capClamps;
+    // Is a clamp in the jack: present only once the board has said (CLAMP, 2026-10-09). Absent = not known, which the
+    // app must not draw as unplugged.
+    if (n.capClamps > 0 && n.clampIn >= 0) o["clampIn"] = n.clampIn == 1;
     addSenseArray(o, s);
     // OTA: which image this brain would install, whether the node already has it, and how an update
     // in progress is going. `update` is only ever true for a board that is up to be told.
