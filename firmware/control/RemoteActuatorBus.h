@@ -166,6 +166,7 @@ public:
     // Tell the node what the layout says is wired to it, and read back what it
     // has reported. See ActuatorBus.h for the contract.
     void configureSensors(JsonArrayConst sensors) override;
+    void setBinAlert(bool full);   // NodeSession::setBinAlert, under the mutex
     bool senseOf(const char* sensorId, bool& on, uint32_t& atMs) const override;
     bool pollsPlugs() const override;
     bool canPressRf() const override;

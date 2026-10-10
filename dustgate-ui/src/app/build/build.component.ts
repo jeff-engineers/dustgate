@@ -4,7 +4,7 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router as NgRouter, RouterLink } from '@angular/router';
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
-import { ApiService, ClampBoard, DiscoveredOutlet, NodeLinkState, SweepProgress, Topology, TopologyStatus } from '../services/api.service';
+import { ApiService, ClampBoard, CollectorBoard, DiscoveredOutlet, NodeLinkState, SweepProgress, Topology, TopologyStatus } from '../services/api.service';
 import { takeoverWarning } from '@plug-claim';
 import { airflowIssues, redundantSelectors, type AirflowIssue } from '@topology';
 import { COLLECTOR_RUNNING_W } from '@topology-device';
@@ -25,7 +25,7 @@ import {
   removeMachine, removePort,
   renameMachine,
   supplementalCount,
-  systemById, systemsOf, systemViews, toShop, clampOffered,
+  systemById, systemsOf, systemViews, toShop, clampOffered, clampBoardOf,
   planSystemRemoval, removeSystem, planClearShop, clearShop, plugIpsOf, collectorOf, type SystemRemoval,
 } from '../services/shop-doc';
 import { wipSummary } from '../services/wip-message';
@@ -1371,7 +1371,13 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     // `channel` means nothing to the firmware yet — one analog pad per board —
     // but topology.js requires it, so 0 is written rather than omitted.
     const ct: RawEl = { channel: 0 };
-    // OMITTED when empty: absent already says "this board", and writing '' would
+    // A COLLECTOR's clamp is on the collector's board (one per collector, 2026-10-10): the drop names that board.
+    if (el['type'] === 'collector') {
+      if (b.id) el['controllerId'] = b.id; else delete el['controllerId'];
+      el['sensor'] = { ct };
+      return true;
+    }
+    // A tool's names its own. OMITTED when empty: absent already says "this board", and writing '' would
     // be a second spelling of the same thing for the validator to allow.
     if (b.id) ct['controllerId'] = b.id;
     // On the MACHINE, not the port — the routing brain only ever reads machines,
@@ -3666,9 +3672,10 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     // and the primary is not in `nodes` (that array is the REMOTE links). A
     // failure leaves the list empty, which is the same as a shop with no clamps
     // and reads correctly on its own rather than as an error.
-    // Only boards a person has switched a clamp ON for (Boards screen) may be pointed at.
+    // Only boards with a clamp plugged in, or one the layout already uses (clampOffered), may be pointed at.
     try { this.clampBoards = (await this.api.getClampBoards()).filter(b => clampOffered(this.topo as unknown as ShopDoc, b)); }
     catch { this.clampBoards = []; }
+    try { this.collectorBoards = await this.api.getCollectorBoards(); } catch { this.collectorBoards = []; }
     const controllers = this.controllersRaw();
     let added = false;
     for (const l of links) {
@@ -4117,6 +4124,8 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
    * clamp that does not exist.
    */
   clampBoards: ClampBoard[] = [];
+  /** Boards that can be a collector's board (one per collector, 2026-10-10). */
+  collectorBoards: CollectorBoard[] = [];
 
   /** The clamp chips in the tray: one per declared clamp not already paired.
    *  Empty is the CORRECT state for a shop with no clamps, not a failure. */
@@ -4128,8 +4137,8 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     // not the machine. Reading the element directly found nothing for every tool
     // in a v2 shop, so a paired clamp stayed in the tray as if free.
     for (const e of elementsOf(doc as never) as unknown as RawEl[]) {
-      const ct = clampOf(doc, e);
-      if (ct) used.add((ct['controllerId'] as string) ?? '');
+      const board = clampBoardOf(doc, e);
+      if (board !== null) used.add(board);
     }
     return this.clampBoards.filter(b => !used.has(b.id));
   }
@@ -4160,7 +4169,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       const n = this.byId.get(elId);
       if (!n) continue;
       // Absent controllerId means THIS BOARD — the model's rule everywhere.
-      const boardId = (ct['controllerId'] as string) || this.defaultControllerId();
+      const boardId = clampBoardOf(doc, e) || this.defaultControllerId();
       const b = this.boards().find(x => x.id === boardId);
       // A board nobody placed on the canvas has nowhere to draw TO. Skipping is
       // the honest answer: the pairing is real and the sheet still shows it, but

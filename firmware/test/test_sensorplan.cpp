@@ -10,8 +10,8 @@ static void ok(const char* what, bool c) { if (c) { printf("  ok   %s\n", what);
 static const char* kShop = R"({"schemaVersion":2,
   "controllers":[{"id":"primary","role":"primary"},{"id":"nodeA","role":"secondary"},{"id":"nodeC","role":"secondary"}],
   "systems":[{"id":"s1","name":"s","elements":[
-    {"id":"dc","type":"collector","sensor":{"ct":{"controllerId":"nodeC","channel":2}},
-      "bin":{"sensor":{"kind":"threshold","controllerId":"nodeC","invert":false}}},
+    {"id":"dc","type":"collector","controllerId":"nodeC","sensor":{"ct":{"channel":2}},
+      "bin":{"sensor":{"kind":"threshold","invert":false}}},
     {"id":"gA","type":"selector","controllerId":"nodeA","kind":"servoGate"},
     {"id":"gP","type":"selector","controllerId":"primary","kind":"servoGate"},
     {"id":"tA","type":"tool","machineId":"mA"},

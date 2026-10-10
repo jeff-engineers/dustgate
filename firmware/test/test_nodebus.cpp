@@ -655,6 +655,22 @@ int main(int argc, char** argv) {
     ok("an empty jack", std::string(b["t"] | "") == "CLAMP" && b["in"].is<bool>() && !b["in"].as<bool>() && b.size() == 2);
   }
 
+  // ── the bin alert (2026-10-10) ───────────────────────────────────────────
+  // Same cases as nodelink.test.js "the bin alert", same order.
+  {
+    StaticJsonDocument<64> a, b;
+    topo::nodelink::buildAlert(a.to<JsonObject>(), true);
+    topo::nodelink::buildAlert(b.to<JsonObject>(), false);
+    ok("alert: a full bin", std::string(a["t"] | "") == "ALERT" && a["bin"].is<bool>() && a["bin"].as<bool>() && a.size() == 2);
+    ok("alert: an emptied bin", std::string(b["t"] | "") == "ALERT" && b["bin"].is<bool>() && !b["bin"].as<bool>() && b.size() == 2);
+    bool full = false; const char* err = nullptr;
+    ok("alert: it parses on the node", topo::nodelink::parseAlertFrame(a.as<JsonObjectConst>(), full, err) && full);
+    StaticJsonDocument<64> c; deserializeJson(c, R"({"t":"ALERT"})");
+    ok("alert: without `bin` it is refused", !topo::nodelink::parseAlertFrame(c.as<JsonObjectConst>(), full, err));
+    StaticJsonDocument<64> d; deserializeJson(d, R"({"t":"ALERT","bin":1})");
+    ok("alert: a non-boolean `bin` is refused", !topo::nodelink::parseAlertFrame(d.as<JsonObjectConst>(), full, err));
+  }
+
   // ── two systems, two blowers ─────────────────────────────────────────────
   // Everything the runtime used to answer once it now answers per system. The
   // failure this guards against is the obvious one: a busy 4" system dragging
@@ -785,6 +801,20 @@ int main(int argc, char** argv) {
       rt.setCollectorPlug("small", 0.0f, false, 0);
       probs(n);
       ok("problems: a hand-run blower whose plug is silent says nothing (the plug has its own problem)", n == 1);
+
+      // A full bin is a fact the beam reports: red, worded by the device. (The runtime reports a bin only once its
+      // caller feeds one, which is what "something watches it" means on this side.)
+      const size_t before = n;
+      rt.setBinFull("big", true);
+      auto bf = probs(n);
+      std::string binCode, binSev, binText;
+      for (JsonObjectConst o : bf) if (std::string(o["code"] | "") == "bin-full") { binCode = o["code"] | ""; binSev = o["severity"] | ""; binText = o["text"] | ""; }
+      ok("problems: a full bin is one problem", n == before + 1 && binCode == "bin-full" && binSev == "bad");
+      ok("problems: the device words the bin",
+         binText == "The dust bin is full \xE2\x80\x94 empty it before the next cut.", binText);
+      rt.setBinFull("big", false);
+      probs(n);
+      ok("problems: and clears when it is emptied", n == before);
     }
     // Concatenated per system in document order, never interleaved. The jointer
     // valve is still open here (idle-HOLD left it where it was), so the big
@@ -1626,7 +1656,7 @@ int main(int argc, char** argv) {
       const char* binDoc = R"({"schemaVersion":2,
         "controllers":[{"id":"primary","role":"primary"},{"id":"nodeC","role":"secondary"}],
         "systems":[{"id":"s1","name":"s","elements":[
-          {"id":"dc","type":"collector","bin":{"sensor":{"kind":"threshold","controllerId":"nodeC","invert":false}}},
+          {"id":"dc","type":"collector","controllerId":"nodeC","bin":{"sensor":{"kind":"threshold","invert":false}}},
           {"id":"g","type":"selector","controllerId":"primary","kind":"servoGate"},
           {"id":"t","type":"tool","machineId":"m"}],
           "ducts":[{"child":"g","parent":"dc"},{"child":"t","parent":"g","parentBranch":"b1"}]}],

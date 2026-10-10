@@ -83,6 +83,14 @@ interface BoardRow {
     .net { display: flex; align-items: center; gap: 7px; margin: -8px 0 16px 2px;
            font-size: 12.5px; color: var(--muted); }
     .net svg { width: 14px; height: 14px; flex: none; }
+    .binfull { display: flex; gap: 8px; align-items: baseline; margin: 0 0 14px; padding: 10px 12px;
+               border-radius: 10px; font-size: 13px; color: var(--text);
+               background: color-mix(in srgb, var(--danger) 12%, transparent);
+               border: 1px solid color-mix(in srgb, var(--danger) 45%, transparent); }
+    .binfull .cdot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--danger);
+                     animation: binblink 0.5s steps(1) infinite; }
+    @keyframes binblink { 50% { opacity: 0; } }
+    @media (prefers-reduced-motion: reduce) { .binfull .cdot { animation: none; } }
     .net b { color: var(--text); font-weight: 600; }
 
     .card { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 6px 16px; margin-bottom: 14px; }
@@ -153,6 +161,15 @@ interface BoardRow {
         <path d="M8.5 15.5a6 6 0 0 1 7 0"/><circle cx="12" cy="19" r="1" fill="currentColor" stroke="none"/>
       </svg>
       <span>Everything here is on <b>{{ ssid }}</b></span>
+    </div>
+
+    <!-- A FULL BIN (2026-10-10). Every board on that collector's system is blinking red for it, so this is the screen a
+         person opens to ask why — it says so in words, and names the boards. Red, because the beam knows: it is not an
+         inference. -->
+    <div class="binfull" *ngFor="let b of fullBins" role="alert">
+      <span class="cdot"></span>
+      <span><b>Dust bin full — {{ b.name }}.</b> Empty it before the next cut. Boards on this system blink red until
+        it is emptied.</span>
     </div>
 
     <!-- Boards already in the layout -->
@@ -286,6 +303,8 @@ export class BoardSetupComponent implements OnInit, OnDestroy {
   /** The WiFi network the controller is joined to. Empty while it's running its
    *  own setup AP, or on firmware too old to report it. */
   ssid = '';
+  /** Systems whose bin the beam says is full, by name (from /api/status, polled with the links). */
+  fullBins: { id: string; name: string }[] = [];
 
   private topo: Topology | null = null;
   private poll: ReturnType<typeof setInterval> | null = null;
@@ -325,7 +344,8 @@ export class BoardSetupComponent implements OnInit, OnDestroy {
     // call is additive and only writes when something actually changed, so
     // running it repeatedly costs nothing.
     this.poll = setInterval(
-      () => void this.refreshLinks().then(() => { this.syncLayoutControllers(); this.syncDrivesFromHardware(); this.rebuild(); }),
+      () => { void this.refreshLinks().then(() => { this.syncLayoutControllers(); this.syncDrivesFromHardware(); this.rebuild(); });
+               void this.refreshBins(); },
       3000,
     );
 
@@ -333,6 +353,19 @@ export class BoardSetupComponent implements OnInit, OnDestroy {
     // own: it can change under us (the device rejoining a different AP) and this
     // screen is already long-lived.
     this.statusSub = this.api.status$.subscribe(s => { this.ssid = s?.ssid ?? ''; });
+  }
+
+  private async refreshBins(): Promise<void> {
+    try {
+      const st = await this.api.getStatus();
+      const systems = (st.systems ?? {}) as Record<string, { bin?: { full?: boolean } }>;
+      const names = new Map<string, string>();
+      if (this.topo)
+        for (const sys of systemsOf(this.topo as unknown as Parameters<typeof systemsOf>[0]))
+          names.set(sys.id as string, ((sys as { name?: string }).name) || (sys.id as string));
+      this.fullBins = Object.entries(systems).filter(([, v]) => v?.bin?.full)
+        .map(([id]) => ({ id, name: names.get(id) ?? id }));
+    } catch { /* a missed poll says nothing new; the next one will */ }
   }
 
   openLog(): void { void this.router.navigate(['/boards/log']); }
@@ -530,6 +563,10 @@ export class BoardSetupComponent implements OnInit, OnDestroy {
       // Lead with the AMPS, because that is the number a person can act on.
       if (typeof s.amps === 'number') {
         bits.push(s.on ? `drawing ${this.amp(s.amps)}` : `idle at ${this.amp(s.amps)}`);
+        // An ESTIMATE, and it says so: a clamp measures current, not power. Watts here is amps × 120 V, which assumes a
+        // 120 V circuit (a 240 V tool reads half its real power) and a power factor of 1 (a motor's is lower, so a running
+        // motor reads high). Good for "is that the planer or the shop vac", not for a bill.
+        bits.push(`≈ ${Math.round(s.amps * 120)} W at 120 V`);
       } else {
         bits.push(s.on ? 'drawing current' : 'idle');
       }

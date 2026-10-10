@@ -2,7 +2,7 @@ import { Component, OnInit, ViewChild } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router } from '@angular/router';
-import { ApiService, ClampBoard, DiscoveredOutlet, Topology } from '../services/api.service';
+import { ApiService, ClampBoard, CollectorBoard, DiscoveredOutlet, Topology } from '../services/api.service';
 import { ElementOutletConfigComponent } from './element-outlet-config.component';
 import { CollectorSetupComponent } from './collector-setup.component';
 import { PairedOutletRowComponent } from './paired-outlet-row.component';
@@ -305,7 +305,7 @@ interface SysGroup {
          exactly the drift this repo spends its comments on. -->
     <ng-container *ngIf="collectorEl as el">
       <app-collector-setup [element]="el"
-                           [controllers]="controllerList"
+                           [boards]="collectorBoards"
                            [clampBoards]="clampBoards"
                            [systemName]="collectorSysName"
                            [excludeIps]="collectorExcludeIps"
@@ -487,6 +487,8 @@ export class ToolSetupComponent implements OnInit {
   /** Boards that DECLARED a clamp. Not the layout's controllers — a clamp cannot
    *  be discovered, so only a board that has said it has one may be offered. */
   clampBoards: ClampBoard[] = [];
+  /** Boards that can be a collector's board (one per collector, 2026-10-10). */
+  collectorBoards: CollectorBoard[] = [];
   /** Named in the bin alert's copy — "every board on Main system flashes red" —
    *  so the scope of the alert is concrete rather than a word. */
   collectorSysName = '';
@@ -545,9 +547,10 @@ export class ToolSetupComponent implements OnInit {
     // Which boards carry a clamp. Failure is not an error state: a device that
     // cannot answer simply offers no clamp, which is the same as a shop that has
     // none, and the option says so on its own.
-    // ...and which of those a person has switched ON (Boards screen): only those may be pointed at.
+    // ...and of those, ones with a clamp plugged in or already in use (clampOffered).
     try { this.clampBoards = (await this.api.getClampBoards()).filter(b => clampOffered(this.topo as unknown as ShopDoc, b)); }
     catch { this.clampBoards = []; }
+    try { this.collectorBoards = await this.api.getCollectorBoards(); } catch { this.collectorBoards = []; }
     // Up front, not on opening a tool: the list itself shows which plug each tool
     // is on, and a scan started here has finished by the time anyone taps a row.
     if (this.anythingToSetUp) void this.scan();

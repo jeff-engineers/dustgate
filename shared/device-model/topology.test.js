@@ -876,17 +876,27 @@ const idxOf = (plan, sel) => plan.moves.findIndex((m) => m.selectorId === sel);
   check('a negative pin → invalid', !validateTopology(badPin).ok);
 }
 {
-  // WHICH BOARD KEYS THE TRANSMITTER (2026-10-04): absent = this board, a named one must resolve.
+  // ONE BOARD PER COLLECTOR (2026-10-10): the collector names its board; its clamp, bin and transmitter name none.
   const onNode = mut((t) => {
     t.controllers = (t.controllers || []).concat([{ id: 'collNode', role: 'secondary', link: { transport: 'wifi-ws', host: 'dustgate-collector' } }]);
-    elem(t, 'dc').control = { rf: { controllerId: 'collNode', address: 94 } };
+    elem(t, 'dc').controllerId = 'collNode';
+    elem(t, 'dc').control = { rf: { address: 94 } };
+    elem(t, 'dc').bin = { sensor: { kind: 'threshold' } };
   });
-  check('an RF presser on a named board that exists → valid', validateTopology(onNode).ok,
+  check('a collector on a named board that exists → valid', validateTopology(onNode).ok,
         JSON.stringify(validateTopology(onNode).errors));
-  const ghost = mut((t) => { elem(t, 'dc').control = { rf: { controllerId: 'nobody' } }; });
-  check('an RF presser on a board nobody paired → invalid', !validateTopology(ghost).ok);
-  const blank = mut((t) => { elem(t, 'dc').control = { rf: { controllerId: '' } }; });
+  const ghost = mut((t) => { elem(t, 'dc').controllerId = 'nobody'; });
+  check('a collector on a board nobody paired → invalid', !validateTopology(ghost).ok);
+  const blank = mut((t) => { elem(t, 'dc').controllerId = ''; });
   check('an empty controllerId is refused rather than meaning "this board"', !validateTopology(blank).ok);
+  const ownRf = mut((t) => { elem(t, 'dc').control = { rf: { controllerId: 'primary' } }; });
+  check('a transmitter naming its own board → invalid', !validateTopology(ownRf).ok);
+  const ownBin = mut((t) => { elem(t, 'dc').bin = { sensor: { kind: 'threshold', controllerId: 'primary' } }; });
+  check('a bin naming its own board → invalid', !validateTopology(ownBin).ok);
+  const ownCt = mut((t) => { elem(t, 'dc').sensor = { ct: { channel: 0, controllerId: 'primary' } }; });
+  check("a collector's clamp naming its own board → invalid", !validateTopology(ownCt).ok);
+  check('collectorBoard() is the collector\'s controllerId, "" when absent',
+        require('./topology.js').collectorBoard({ controllerId: 'x' }) === 'x' && require('./topology.js').collectorBoard({}) === '');
 }
 {
   // A press is an edge against a toggle, so only a collector has one to press.

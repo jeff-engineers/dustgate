@@ -65,6 +65,18 @@ const plugged = () => {
     p[0].text === "A tool is running and the dust collector isn't — please turn it on.", p[0].text);
   check('a hand-run blower whose plug is silent says nothing (the plug has its own problem)', TD.problemsView(d, watching(false)).length === 0);
 }
+{
+  // A full bin is a fact the beam reports: red, worded by the device, and only for a collector something watches.
+  const shop = clone(twoSystemShop);
+  shop.systems.find((s) => s.id === 'big').elements.find((e) => e.type === 'collector').bin = { sensor: { kind: 'threshold' } };
+  const d = TD.createTopologyDevice(shop);
+  TD.setBinFull(d, 'big', true);
+  const p = probs(d, 0);
+  check('a full bin is one problem', p.length === 1 && p[0].code === 'bin-full' && p[0].severity === 'bad' && p[0].subject.id === 'big');
+  check('the device words the bin', p[0].text === 'The dust bin is full — empty it before the next cut.', p[0].text);
+  TD.setBinFull(d, 'big', false);
+  check('and clears when it is emptied', probs(d, 0).length === 0);
+}
 
 let failed = 0;
 for (const r of results) {

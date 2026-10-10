@@ -533,7 +533,7 @@ const setToolPower = setMachinePower;
 // rf-gave-up, rf-send-failed, plug-unreachable, board-fault.
 //
 // MATCHED PAIR with TopologyRuntime::writeStatus for the two codes DERIVED from
-// the plug reading — collector-no-start and collector-blind — text included,
+// the plug reading — collector-no-start and collector-blind — and bin-full from the beam, text included,
 // asserted in problems.test.js ↔ test_problems.cpp. The rest are RAISED by
 // firmware that has something the model lacks (a link, a transmitter), and the
 // mock/demo stage them with setProblem().
@@ -544,6 +544,9 @@ const PROBLEM_TEXT = {
   // false and "check the breaker and the remote" accuses a machine nobody asked. The person is asked instead, and only
   // when something (a plug or a clamp) is watching the blower — with nothing watching, the woodworker is trusted to know.
   needsStart: "A tool is running and the dust collector isn't — please turn it on.",
+  // A full bin is a fact the beam reports, not an inference, so it is red and an instruction (2026-10-10). Every board on
+  // the system blinks red for it too (the ALERT frame); this is the row that says what the blinking means.
+  binFull: "The dust bin is full — empty it before the next cut.",
 };
 
 function setProblem(d, key, problem) { d.staged[key] = problem; }
@@ -567,6 +570,8 @@ function problemsView(d, systems) {
       : { code: 'collector-needs-start', severity: 'warn', subject: { type: 'system', id: sysId }, text: PROBLEM_TEXT.needsStart });
     // A collector nobody asked to run is allowed to be unreadable; one we did is not. (A hand-run one was not asked.)
     else if (st === 'unknown' && c.on && commandable && collectorOutlet(d.topology, sysId)) out.push({ code: 'collector-blind', severity: 'bad', subject: { type: 'system', id: sysId }, text: PROBLEM_TEXT.blind });
+    const bin = collectorBinView(d, sysId);
+    if (bin && bin.full) out.push({ code: 'bin-full', severity: 'bad', subject: { type: 'system', id: sysId }, text: PROBLEM_TEXT.binFull });
   }
   for (const key of Object.keys(d.staged)) out.push(d.staged[key]);
   return out;

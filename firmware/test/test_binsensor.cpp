@@ -93,13 +93,13 @@ int main() {
     {
         StaticJsonDocument<2048> doc;
         deserializeJson(doc, R"({"systems":[
-          {"id":"sysA","elements":[{"id":"dcA","type":"collector",
-             "bin":{"sensor":{"kind":"threshold","controllerId":"node-dc"}}}]},
+          {"id":"sysA","elements":[{"id":"dcA","type":"collector","controllerId":"node-dc",
+             "bin":{"sensor":{"kind":"threshold"}}}]},
           {"id":"sysB","elements":[{"id":"dcB","type":"collector"}]}
         ]})");
         JsonObjectConst t = doc.as<JsonObjectConst>();
 
-        ok("the board named on the sensor owns it",
+        ok("the collector's board owns it",
            localBinSystemId(t, "node-dc") == "sysA",
            localBinSystemId(t, "node-dc"));
         // The same board in either spelling: this was an EXACT compare until 2026-10-04.

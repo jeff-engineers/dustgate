@@ -1242,6 +1242,19 @@ static void handleNodeFrame(const Conn& conn, const uint8_t* data, size_t len) {
             topo::nodelink::buildAck(reply.to<JsonObject>(), po.seq, false, "no transmitter on this board");
         }
 #endif
+    } else if (strcmp(t, "ALERT") == 0) {
+        // OWNER ONLY: what this board's pixel says about the shop is the brain's call, and a stranger's word on it is
+        // not. No reply — the brain re-sends the whole state on every link-up, so a lost frame heals itself.
+        bool full = false; const char* err = nullptr;
+        if (!g_ownerLinked || conn.id != g_ownerClientId) {
+            Serial.println(F("[ALERT] ignored — not the owner."));
+        } else if (!topo::nodelink::parseAlertFrame(f, full, err)) {
+            Serial.print(F("[ALERT] MALFORMED — ")); Serial.println(err ? err : "?");
+        } else {
+            if (full != statusled::binAlert()) Serial.printf("[ALERT] %s\n", full ? "a dust bin on this board's system is FULL" : "bin clear");
+            statusled::setBinAlert(full);
+        }
+        return;
     } else if (strcmp(t, "REFUSE") == 0) {
         // The primary declined a socket we dialled. Nothing to answer: brainlink goes
         // back to seeking, on its own backoff.
@@ -1728,6 +1741,9 @@ void loop() {
     tickPlugs();
     runPress();
     tickBin();
+    // The alert is the owner's word, held only while the owner is there to change it: a board left blinking by a brain
+    // that went away would say "full" about a bin nobody can see any more.
+    if (!g_ownerLinked && statusled::binAlert()) statusled::setBinAlert(false);
 
     // Status pixel — the node's only UI. Derived fresh each loop rather than
     // set at transitions, so it can never latch a stale colour after a silent
