@@ -434,6 +434,27 @@ function validateShop(shop) {
     }
   }
 
+  // ── one clamp, one owner (2026-10-11) ──
+  // A board has ONE clamp jack, so its clamp can watch one thing: a tool, or a collector. Two claims on one jack are
+  // two answers read off the same wire — the shop's "is the blower running" was once the PLANER's cord, so the brain
+  // believed a running collector was off and never stopped it. Channel is not part of the key: every board has the one
+  // jack, and a layout naming two channels on it would still be one wire.
+  const clampOwner = new Map();
+  const claimClamp = (board, who) => {
+    const key = BID.bareHost(board || '') || '(this board)';
+    if (clampOwner.has(key)) err('clamp', `the clamp on ${board || 'the primary'} is claimed by both "${clampOwner.get(key)}" and "${who}" — a clamp watches one thing`, who);
+    else clampOwner.set(key, who);
+  };
+  for (const m of shop.machines) {
+    const ct = m && m.sensor && m.sensor.ct;
+    if (ct) claimClamp(ct.controllerId, m.name || m.id);
+  }
+  for (const sys of shop.systems) {
+    for (const e of (sys && sys.elements) || []) {
+      if (e && e.type === 'collector' && e.sensor && e.sensor.ct) claimClamp(e.controllerId, e.name || e.id);
+    }
+  }
+
   // ── each system, as a topology ──
   for (const sys of shop.systems) {
     const res = T.validateTopology(systemView(shop, sys));
@@ -707,9 +728,9 @@ function isOptionalBoard(shop, controllerId) {
     for (const e of sys.elements || []) {
       if (e.type === 'selector' && same(e.controllerId)) return false;
       if (e.type !== 'collector') continue;
-      if (same(e.control && e.control.rf && e.control.rf.controllerId)) return false;
-      if (same(e.sensor && e.sensor.ct && e.sensor.ct.controllerId)) return false;
-      if (same(e.bin && e.bin.sensor && e.bin.sensor.controllerId)) return false;
+      // The collector's board, when it does one of the collector's jobs (2026-10-10: one board per collector).
+      const hasJob = !!((e.control && e.control.rf) || (e.sensor && e.sensor.ct) || (e.bin && e.bin.sensor));
+      if (hasJob && same(e.controllerId)) return false;
     }
   }
   return true;

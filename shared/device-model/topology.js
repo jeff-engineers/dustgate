@@ -158,7 +158,9 @@ const MAX_SLIDE_BRANCHES = 8;
  *                                   Independent of `control`, because a collector
  *                                   switched by a stateless press still has to be
  *                                   watched to know whether the press landed.
- * @property {Object} [bin]               (collector) { sensor: { kind, controllerId, invert } }
+ * @property {Object} [bin]               (collector) { sensor: { kind, invert } }
+ * @property {string} [controllerId]      (collector) THE board at the collector (2026-10-10): its clamp, bin beam and
+ *                                   transmitter are all on it. Absent = this board. See collectorBoard().
  *
  * @typedef {Object} Topology
  * @property {number} schemaVersion
@@ -280,6 +282,13 @@ function applyAbsoluteAngles(sel, captured) {
  * @param {Topology} t
  * @returns {{ ok: boolean, errors: {code:string,message:string,ref?:string}[] }}
  */
+// A collector's clamp, bin and transmitter live on the collector's own board; none names one of its own.
+const COLLECTOR_BOARD_RULE = (what) =>
+  `${what} names no board on a collector: its jobs are on the collector's own board — set the collector's controllerId`;
+
+/** The board a collector's clamp, bin and transmitter are on: its controllerId, '' = this board. */
+function collectorBoard(collector) { return (collector && collector.controllerId) || ''; }
+
 function validateTopology(t) {
   /** @type {{code:string,message:string,ref?:string}[]} */
   const errors = [];
@@ -566,9 +575,11 @@ function validateTopology(t) {
       err('element', `"${e.name || e.id}" is sensed by BOTH a plug and a CT — pick one`, e.id);
     if (typeof ct !== 'object')
       err('element', 'sensor.ct must be an object', e.id);
-    // controllerId is OPTIONAL and means "this board" when absent, matching the
-    // bin sensor, every selector, and NodeBus's own rule.
-    if (ct.controllerId !== undefined) {
+    // A COLLECTOR'S clamp is on the collector's board (e.controllerId, 2026-10-10) and names none of its own.
+    // A TOOL's clamp names its board here — optional, and "this board" when absent, as every selector.
+    if (e.type === 'collector' && ct.controllerId !== undefined)
+      err('element', COLLECTOR_BOARD_RULE('sensor.ct'), e.id);
+    else if (ct.controllerId !== undefined) {
       if (typeof ct.controllerId !== 'string' || !ct.controllerId)
         err('element', 'sensor.ct.controllerId must be a non-empty string', e.id);
       else if (!ctrlIds.has(ct.controllerId))
@@ -621,23 +632,30 @@ function validateTopology(t) {
     if (rf.data !== undefined &&
         (!Number.isInteger(rf.data) || rf.data < 0 || rf.data > 15))
       err('element', `control.rf.data must be 0-15 (4 data bits)`, e.id);
-    // WHICH BOARD KEYS THE TRANSMITTER (2026-10-04). Optional, and absent means THIS board —
-    // the rule every selector and the bin sensor already follow. A named board must resolve,
-    // for the same reason: a typo that silently means "this board" is a shop whose collector
-    // never starts while every screen says the press was sent.
-    if (rf.controllerId !== undefined) {
-      if (typeof rf.controllerId !== 'string' || !rf.controllerId)
-        err('element', 'control.rf.controllerId must be a non-empty string', e.id);
-      else if (!ctrlIds.has(rf.controllerId))
-        err('element', `control.rf.controllerId "${rf.controllerId}" does not resolve`, e.id);
-    }
+    // WHICH BOARD KEYS THE TRANSMITTER: the collector's own (e.controllerId, 2026-10-10). It named its own board
+    // from 2026-10-04 until then, as the bin and the clamp did, and the three could disagree.
+    if (rf.controllerId !== undefined) err('element', COLLECTOR_BOARD_RULE('control.rf'), e.id);
     if ((e.control || {}).outlet)
       err('element',
           `collector "${e.name || e.id}" has both a switchable plug and an RF ` +
           `presser — two ways to command one blower will fight each other`, e.id);
   }
 
-  // ── collector bin sensor: kind, and a controller that resolves ──
+  // ── the collector's board (2026-10-10) ──
+  //
+  // ONE BOARD PER COLLECTOR: its clamp, its bin beam and its transmitter are all at the collector, so they are all on
+  // one board, named once on the collector. Each named its own board before, and a bin pointed at one board with a
+  // transmitter on another was a shop whose bin nobody watched (jeff, 2026-10-10). Absent means this board, as for
+  // every selector; a named one must resolve.
+  for (const e of t.elements) {
+    if (e.type !== 'collector' || e.controllerId === undefined) continue;
+    if (typeof e.controllerId !== 'string' || !e.controllerId)
+      err('element', 'a collector\'s controllerId must be a non-empty string', e.id);
+    else if (!ctrlIds.has(e.controllerId))
+      err('element', `collector controllerId "${e.controllerId}" does not resolve`, e.id);
+  }
+
+  // ── collector bin sensor: kind ──
   //
   // `kind` is 'threshold' for the diffuse beam actually in hand — it answers
   // "dust at this height, y/n", NOT a distance, so it does not carry the
@@ -653,8 +671,7 @@ function validateTopology(t) {
     if (!sensor) { err('bin', 'bin requires a sensor', e.id); continue; }
     if (sensor.kind !== 'threshold')
       err('bin', `unknown bin sensor kind "${sensor.kind}"`, e.id);
-    if (sensor.controllerId && !ctrlIds.has(sensor.controllerId))
-      err('bin', `controllerId "${sensor.controllerId}" does not resolve`, e.id);
+    if (sensor.controllerId !== undefined) err('bin', COLLECTOR_BOARD_RULE('bin.sensor'), e.id);
     if (sensor.invert !== undefined && typeof sensor.invert !== 'boolean')
       err('bin', 'invert must be a boolean', e.id);
   }
@@ -954,7 +971,7 @@ module.exports = {
   MAX_SLIDE_BRANCHES,
   CONTROLLER_ROLES, ELEMENT_TYPES, SELECTOR_KINDS, BRANCH_ROLES,
   elementIndex, parentDuctIndex,
-  collectorOf, selectorsOf, toolsOf, closedState, servoCommandAngle,
+  collectorOf, collectorBoard, selectorsOf, toolsOf, closedState, servoCommandAngle,
   absoluteAngles, applyAbsoluteAngles,
   validateTopology, airflowIssues, redundantSelectors,
 };

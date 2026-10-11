@@ -83,6 +83,17 @@ export function portPos(c: Pt, ch: number, linear = false): Pt {
   const first = -((SERVO_PORTS - 1) * PORT_PITCH) / 2;     // centre the port strip
   return { x: c.x + first + ch * PORT_PITCH, y: c.y + PORT_DY };
 }
+/** The CT jack, drawn to the RIGHT of the servo ports on a board that has a clamp (2026-10-11): the clamp lead starts
+ *  here, not at a servo port it has nothing to do with. A gap of half a pitch sets it apart from the channels, because
+ *  it is not one — nothing is ever cabled to it from a gate. Returns the jack's CENTRE, like portPos(). */
+export const CT_PORT_GAP = PORT_PITCH / 2;
+export function ctPortPos(c: Pt): Pt {
+  const first = -((SERVO_PORTS - 1) * PORT_PITCH) / 2;
+  return { x: c.x + first + (SERVO_PORTS - 1) * PORT_PITCH + PORT_PITCH + CT_PORT_GAP, y: c.y + PORT_DY };
+}
+/** Where a clamp lead leaves the CT jack: its bottom edge, as portExit() is for a servo port. */
+export function ctPortExit(c: Pt): Pt { const p = ctPortPos(c); return { x: p.x, y: p.y + PORT_H / 2 }; }
+
 export function portWidth(ch: number): number { return ch >= SERVO_PORTS ? STEPPER_W : PORT_W; }
 /**
  * Where a cable leaves the board: ALWAYS the underside of its port.

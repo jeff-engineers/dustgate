@@ -20,7 +20,7 @@ d=json.load(open('../firmware/test/fixtures/twoGates.json'))
 for e in d['systems'][0]['elements']:
     if e['id']=='gate1': e['controllerId']='fake1'
     if e['id']=='gate2': e['controllerId']='fake2'
-    if e['id']=='dc': e['control']={'rf':{'controllerId':'fake1'}}
+    if e['id']=='dc': e['controllerId']='fake1'; e['control']={'rf':{}}
 json.dump(d,open(sys.argv[1],'w'))
 PY
 online() { curl -s -m 2 -H "X-Api-Key: testkey" localhost:$P/api/nodes | python3 -c "import sys,json;print(sum(1 for n in json.load(sys.stdin)['nodes'] if n['online']))" 2>/dev/null; }

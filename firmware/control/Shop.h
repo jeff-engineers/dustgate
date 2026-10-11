@@ -498,6 +498,10 @@ inline std::string controllerIdForHost(JsonObjectConst doc, const std::string& h
   return host;
 }
 
+// The board a collector's clamp, bin beam and transmitter are on: its own controllerId, "" = this board. ONE board per
+// collector since 2026-10-10 (collectorBoard() in topology.js); none of the three names a board of its own.
+inline std::string collectorBoardOf(JsonObjectConst collector) { return std::string(collector["controllerId"] | ""); }
+
 inline bool isOptionalBoard(JsonObjectConst doc, const std::string& controllerId) {
   if (controllerId.empty()) return false;
   auto same = [&](JsonVariantConst v) {
@@ -510,10 +514,23 @@ inline bool isOptionalBoard(JsonObjectConst doc, const std::string& controllerId
     for (JsonObjectConst e : sys.elements) {
       if (_eq(e["type"], "selector") && same(e["controllerId"])) return false;
       if (!_eq(e["type"], "collector")) continue;
-      if (same(e["control"]["rf"]["controllerId"]) || same(e["sensor"]["ct"]["controllerId"]) ||
-          same(e["bin"]["sensor"]["controllerId"])) return false;
+      // The collector's board, when it does one of the collector's jobs (2026-10-10: one board per collector).
+      const bool hasJob = !e["control"]["rf"].isNull() || !e["sensor"]["ct"].isNull() || !e["bin"]["sensor"].isNull();
+      if (hasJob && same(e["controllerId"])) return false;
     }
   return true;
+}
+
+// Does this board serve this system — the collector's own board, or a board with a gate on it? That is the set that
+// blinks red while the system's dust bin is full (the ALERT frame, 2026-10-10; RFC §"binNearFull", system scope): a full
+// bin is one system's problem, and a board on the OTHER system blinking for it would be an alert that cries wolf. A board
+// serving two systems blinks for either. "" = this brain's own board, as everywhere here. C++ only: no JS model drives
+// a pixel, so there is nothing for it to drift against.
+inline bool boardServesSystem(const SystemView& sys, const std::string& controllerId, const std::string& ownId) {
+  for (JsonObjectConst e : sys.elements)
+    if ((_eq(e["type"], "selector") || _eq(e["type"], "collector")) &&
+        sameBoard(std::string(e["controllerId"] | ""), controllerId, ownId)) return true;
+  return false;
 }
 
 } // namespace topo

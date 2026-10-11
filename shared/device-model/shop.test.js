@@ -379,15 +379,36 @@ check('swapping which port is primary leaves a valid shop', validateShop(mut(swa
 // ── optional boards (2026-10-07, docs/optional-nodes-plan.md) ───────────────
 // Same layout text and cases as the "optional boards" block of test_shop.cpp, same order.
 {
-  const shop = JSON.parse('{"schemaVersion":2,"controllers":[{"id":"primary","role":"primary"},{"id":"dustgate-gate","role":"secondary"},{"id":"dustgate-planer","role":"secondary"},{"id":"dustgate-spare","role":"secondary"},{"id":"dustgate-cyclone","role":"secondary"},{"id":"dustgate-dcamp","role":"secondary"},{"id":"dustgate-bin","role":"secondary"}],"systems":[{"id":"s1","elements":[{"id":"dc","type":"collector","control":{"rf":{"controllerId":"dustgate-cyclone"}},"sensor":{"ct":{"controllerId":"dustgate-dcamp","channel":0}},"bin":{"sensor":{"controllerId":"dustgate-bin"}}},{"id":"g1","type":"selector","kind":"servoGate","controllerId":"dustgate-gate","states":[],"branches":[]}],"ducts":[]}],"machines":[{"id":"planer","sensor":{"ct":{"controllerId":"dustgate-planer","channel":0}}}]}');
-  check('a board with a gate is required', isOptionalBoard(shop, 'dustgate-gate') === false);
-  check('a board that only senses a tool is optional', isOptionalBoard(shop, 'dustgate-planer') === true);
-  check('a board the layout does not use is optional', isOptionalBoard(shop, 'dustgate-spare') === true);
-  check("the collector's transmitter board is required", isOptionalBoard(shop, 'dustgate-cyclone') === false);
-  check("the collector's clamp board is required", isOptionalBoard(shop, 'dustgate-dcamp') === false);
-  check("the collector's bin board is required", isOptionalBoard(shop, 'dustgate-bin') === false);
-  check('the primary is never optional', isOptionalBoard(shop, 'primary') === false);
+  const shop = JSON.parse('{"schemaVersion":2,"controllers":[{"id":"primary","role":"primary"},{"id":"dustgate-gate","role":"secondary"},{"id":"dustgate-planer","role":"secondary"},{"id":"dustgate-spare","role":"secondary"},{"id":"dustgate-cyclone","role":"secondary"},{"id":"dustgate-idle","role":"secondary"}],"systems":[{"id":"s1","elements":[{"id":"dc","type":"collector","controllerId":"dustgate-cyclone","control":{"rf":{"address":94}},"sensor":{"ct":{"channel":0}},"bin":{"sensor":{"kind":"threshold"}}},{"id":"g1","type":"selector","kind":"servoGate","controllerId":"dustgate-gate","states":[],"branches":[]}],"ducts":[]},{"id":"s2","elements":[{"id":"dc2","type":"collector","controllerId":"dustgate-idle"}],"ducts":[]}],"machines":[{"id":"planer","sensor":{"ct":{"controllerId":"dustgate-planer","channel":0}}}]}');
+  check("a board with a gate is required", isOptionalBoard(shop, 'dustgate-gate') === false);
+  check("a board that only senses a tool is optional", isOptionalBoard(shop, 'dustgate-planer') === true);
+  check("a board the layout does not use is optional", isOptionalBoard(shop, 'dustgate-spare') === true);
+  check("the collector's board is required: its clamp, bin and transmitter are on it", isOptionalBoard(shop, 'dustgate-cyclone') === false);
+  check("a collector's board that does none of its jobs is optional", isOptionalBoard(shop, 'dustgate-idle') === true);
+  check("the primary is never optional", isOptionalBoard(shop, 'primary') === false);
   check("any spelling of a board's id is the same board", isOptionalBoard(shop, 'Dustgate-Gate.local') === false);
+}
+
+// ── one clamp, one owner (2026-10-11) ───────────────────────────────────────
+// The planer and the collector once shared planer-sensor's jack, and the collector's "running" was the planer's cord.
+{
+  const { twoSystemShop } = require('./topology.fixtures');
+  const base = () => {
+    const sh = JSON.parse(JSON.stringify(twoSystemShop));
+    sh.controllers.push({ id: 'dustgate-planer-sensor', role: 'secondary', board: 'xiao_c5', link: { transport: 'wifi-ws', host: 'dustgate-planer-sensor.local' } });
+    sh.machines.push({ id: 'planer', name: 'Planer', sensor: { ct: { controllerId: 'dustgate-planer-sensor', channel: 0 } } });
+    return sh;
+  };
+  const clampErrs = (sh) => validateShop(sh).errors.filter((e) => e.code === 'clamp');
+  check('one tool on a board\'s clamp is fine', clampErrs(base()).length === 0, JSON.stringify(validateShop(base()).errors));
+  const shared = base();
+  const dc = shared.systems.find((x) => x.id === 'big').elements.find((e) => e.type === 'collector');
+  dc.controllerId = 'dustgate-planer-sensor'; dc.sensor = { ct: { channel: 0 } };
+  const e1 = clampErrs(shared);
+  check('a collector on the same clamp as a tool is refused', e1.length === 1 && /claimed by both "Planer"/.test(e1[0].message), JSON.stringify(e1));
+  const two = base();
+  two.machines.push({ id: 'jointer', name: 'Jointer', sensor: { ct: { controllerId: 'Dustgate-Planer-Sensor.local', channel: 1 } } });
+  check('two tools on one board\'s clamp are refused, whatever the spelling or channel', clampErrs(two).length === 1);
 }
 
 // ── report ──────────────────────────────────────────────────────────────────

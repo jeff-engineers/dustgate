@@ -59,6 +59,9 @@ inline void writeNodeEntry(JsonArray arr, const S& s, const char* id, const char
     caps["linear"] = n.capLinear;
     // Omitted when none, matching the wire: absent already means "no clamp".
     if (n.capClamps > 0) caps["ct"] = n.capClamps;
+    // The collector's other two jobs, so the app offers a board only for what it can do (as on the wire: absent = no).
+    if (n.capRf)  caps["rf"]  = 1;
+    if (n.capBin) caps["bin"] = 1;
     // Is a clamp in the jack: present only once the board has said (CLAMP, 2026-10-09). Absent = not known, which the
     // app must not draw as unplugged.
     if (n.capClamps > 0 && n.clampIn >= 0) o["clampIn"] = n.clampIn == 1;

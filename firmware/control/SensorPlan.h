@@ -77,9 +77,10 @@ inline std::vector<PlannedSensor> planSensors(JsonObjectConst topology,
             PlannedSensor p;
             p.kind        = PlannedSensor::Kind::Clamp;
             p.id          = sid;
-            p.board       = ct["controllerId"] | "";
-            p.systemId    = sys.id ? sys.id : "";
             p.onCollector = _eq(e["type"], "collector");
+            // A collector's clamp is on the collector's board; a tool's names its own.
+            p.board       = p.onCollector ? collectorBoardOf(e) : std::string(ct["controllerId"] | "");
+            p.systemId    = sys.id ? sys.id : "";
             p.channel     = ct["channel"] | 0;
             out.push_back(p);
         }
@@ -118,7 +119,7 @@ inline std::vector<PlannedSensor> planSensors(JsonObjectConst topology,
             PlannedSensor p;
             p.kind     = PlannedSensor::Kind::Bin;
             p.id       = std::string(kBinSensorPrefix) + sysId;
-            p.board    = bs["controllerId"] | "";
+            p.board    = collectorBoardOf(e);   // the collector's board (one per collector, 2026-10-10)
             p.systemId = sysId;
             p.invert   = bs["invert"] | true;
             out.push_back(p);

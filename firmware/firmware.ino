@@ -1065,6 +1065,22 @@ static void raiseDeviceProblems() {
     }
 #endif
     problems.update(g_topoRuntime, boards, plugs, now);
+
+    // THE BIN ALERT (2026-10-10): every board serving a system whose bin is full blinks red — the nodes by an ALERT frame,
+    // this board on its own pixel. Shop.h boardServesSystem() decides who; NodeSession sends only on a change.
+    if (g_topoRuntime.loaded()) {
+        const auto systems = topo::systemsOf(g_topoRuntime.topology());
+        const std::string own = g_nodeBus.ownControllerId();
+        auto alerted = [&](const std::string& board) {
+            for (const topo::SystemView& sys : systems)
+                if (sys.id && g_topoRuntime.binFull(sys.id) && topo::boardServesSystem(sys, board, own)) return true;
+            return false;
+        };
+        for (int i = 0; i < g_remoteCount; i++)
+            if (remoteLive(i))
+                g_remoteBuses[i].setBinAlert(alerted(topo::controllerIdForHost(g_topoRuntime.topology(), g_remoteBuses[i].host())));
+        statusled::setBinAlert(alerted(""));
+    } else statusled::setBinAlert(false);
 }
 
 // The link log's main-loop half: write what the other tasks queued, and once an
@@ -1283,7 +1299,7 @@ static void syncTopologyOutlets() {
             // means this board's pad as it always was. A paired node's id means ask THAT
             // board to key ITS pad (PRESS) — which is what lets the board at the collector be
             // an ordinary node. The policy stays here either way.
-            const std::string rfBoard = rf["controllerId"] | "";
+            const std::string rfBoard = g_topoRuntime.collectorBoard(sysIds[i]);   // the collector's board
             const std::string tail = "|" + std::to_string((int)rfAddr) + "|" + std::to_string((int)rfData);
             // Said when a layout loads, so it must not read like an event: nothing is pressed here.
             if (!topo::isOwnBoard(rfBoard, g_nodeBus.ownControllerId())) {
@@ -4297,6 +4313,8 @@ void loop() {
                     sc["ct"] = 1;
                     if (g_jack.known()) self["clampIn"] = g_jack.plugged();
 #endif
+                    if (HAS_RF)  sc["rf"]  = 1;   // the collector's other jobs, as a node reports them
+                    if (HAS_BIN) sc["bin"] = 1;
                     topo::addSenseArray(self, g_localBus);
                 }
                 // Persist any address a bus has learned since the last tick.

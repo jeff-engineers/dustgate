@@ -8,13 +8,13 @@ import {
   SweepProgress,
   OutletNameResult,
   OutletReleaseResult,
-  ClampBoard,
+  ClampBoard, CollectorBoard,
   NodeLinkState,
   SenseReport,
   SystemStatus,
 } from './api.service';
 import { SERVO_CHANNELS_PER_BOARD } from '../gates/selector-types';
-import { clampOf } from './shop-doc';
+import { clampBoardOf, clampOf } from './shop-doc';
 import * as model from '@device-model';
 import type { Topology } from '@topology';
 import { portEnabled, portsByMachine, systemsOf, validateShop, type Shop } from '@shop';
@@ -554,6 +554,12 @@ export class DemoApiService extends ApiService {
     return out;
   }
 
+  /** Every PWM board in the demo can be a collector's board: one pin map carries the transmitter, the bin input and the
+   *  clamp input (2026-09-17). The demo primary is an ESP32 board, so it is offered too. */
+  override async getCollectorBoards(): Promise<CollectorBoard[]> {
+    return (await this.getClampBoards()).map(b => ({ ...b, rf: true, bin: true, ct: true, clampIn: b.online ? true : undefined }));
+  }
+
   /** The clamps the LAYOUT has put on one board, with a live reading.
    *
    *  Derived rather than staged, for the reason the caps above are: in the demo
@@ -585,7 +591,7 @@ export class DemoApiService extends ApiService {
         if (!ct) continue;
         // Absent controllerId means THIS BOARD — the primary — exactly as the
         // model reads it. A node only owns a clamp that names it.
-        if (String(ct['controllerId'] ?? '') !== controllerId) continue;
+        if ((clampBoardOf(doc, el as Parameters<typeof clampOf>[1]) ?? '') !== controllerId) continue;
         const id = String(el['id'] ?? '');
         if (!id) continue;
         if (!online) { out.push({ id, reported: false }); continue; }

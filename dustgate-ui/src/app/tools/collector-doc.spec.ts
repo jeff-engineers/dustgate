@@ -88,7 +88,8 @@ const tasmota = (ip: string): RawEl => ({ gen: 0, ip, kind: 'tasmota' });
   const form = readCollector(collector({
     control: { rf: { address: 200, pin: 9, data: 14 } },
     sensor: { outlet: tasmota('10.0.0.11') },
-    bin: { sensor: { kind: 'threshold', controllerId: 'node-dc' } },
+    bin: { sensor: { kind: 'threshold' } },
+    controllerId: 'node-dc',
   }));
   eq('an rf block reads as switched by the remote', form.ctl, 'rf');
   eq('...with its address', form.rfAddress, 200);
@@ -97,7 +98,7 @@ const tasmota = (ip: string): RawEl => ({ gen: 0, ip, kind: 'tasmota' });
   eq('a sensor plug reads as watched by a plug', form.sense, 'plug');
   eq('...and keeps its kind', form.sensePlug.kind, 'tasmota');
   check('a bin reads as on', form.bin === true);
-  eq('...on its board', form.binControllerId, 'node-dc');
+  eq("...and the collector's board is read once, for all its jobs", form.boardId, 'node-dc');
 }
 
 {
@@ -218,9 +219,13 @@ const plug = (ip: string, kind: 'shelly' | 'tasmota' = 'shelly') =>
   const el = writeCollector(collector(), form({ bin: true }));
   eq('a bin with no board named means "this board"',
      el['bin'], { sensor: { kind: 'threshold' } });
-  const named = writeCollector(collector(), form({ bin: true, binControllerId: 'node-dc' }));
-  eq('...and a named board is carried',
-     named['bin'], { sensor: { kind: 'threshold', controllerId: 'node-dc' } });
+  const named = writeCollector(collector(), form({ bin: true, boardId: 'node-dc' }));
+  eq('...and a named board goes on the COLLECTOR, not on the bin',
+     [named['controllerId'], named['bin']], ['node-dc', { sensor: { kind: 'threshold' } }]);
+  const old = readCollector(collector({ bin: { sensor: { kind: 'threshold', controllerId: 'node-dc' } } }));
+  eq('a board named on the bin (the old shape) is dropped on read', [old.boardId, old.binRest], ['', {}]);
+  eq('no job that needs a board: none is written',
+     writeCollector(collector(), form({ ctl: 'plug', boardId: 'node-dc' }))['controllerId'], undefined);
 }
 
 {
@@ -246,7 +251,8 @@ const plug = (ip: string, kind: 'shelly' | 'tasmota' = 'shelly') =>
   const was = collector({
     control: { rf: { address: 94, pin: 9, data: 14 }, offDelayMs: 8000 },
     sensor: { outlet: { gen: 0, ip: '192.168.87.44', kind: 'tasmota' } },
-    bin: { sensor: { kind: 'threshold', controllerId: 'node-dc' } },
+    bin: { sensor: { kind: 'threshold' } },
+    controllerId: 'node-dc',
   });
   const el = writeCollector(was, readCollector(was));
   sameDoc('open and save changes nothing', el, was);
@@ -278,7 +284,7 @@ const plug = (ip: string, kind: 'shelly' | 'tasmota' = 'shelly') =>
      dc({ ctl: 'rf', sense: 'plug', sensePlug: plug('10.0.0.11', 'tasmota') }));
   ok('...and a bin on this board', dc({ ctl: 'rf', bin: true }));
   ok('...and a bin on a named board',
-     dc({ ctl: 'rf', bin: true, binControllerId: 'primary' }));
+     dc({ ctl: 'rf', bin: true, boardId: 'primary' }));
   ok('a plug-switched collector validates',
      dc({ ctl: 'plug', ctlPlug: plug('10.0.0.9') }));
   ok('a collector nothing switches validates', dc({ ctl: 'none' }));
@@ -287,7 +293,7 @@ const plug = (ip: string, kind: 'shelly' | 'tasmota' = 'shelly') =>
   // that silently means "local" is a shop where the wrong board is watching.
   const t = clone(star) as { elements: RawEl[] };
   const i = t.elements.findIndex(e => e['id'] === 'dc');
-  t.elements[i] = { ...t.elements[i], ...dc({ bin: true, binControllerId: 'nope' }) };
+  t.elements[i] = { ...t.elements[i], ...dc({ bin: true, boardId: 'nope' }) };
   check('a bin on a board that does not exist is refused', !validateTopology(t as never).ok);
 }
 
@@ -300,12 +306,10 @@ const plug = (ip: string, kind: 'shelly' | 'tasmota' = 'shelly') =>
 {
   const bare = readCollector(collector({ sensor: { ct: { channel: 0 } } }));
   eq('a clamped collector reads as watched by a clamp', bare.sense, 'ct');
-  eq('...on THIS board when no controllerId is written', bare.senseCtControllerId, '');
+  eq('...on THIS board when the collector names none', bare.boardId, '');
 
-  const named = readCollector(collector({
-    sensor: { ct: { controllerId: 'planer-node', channel: 0 } },
-  }));
-  eq('...or on the board it names', named.senseCtControllerId, 'planer-node');
+  const named = readCollector(collector({ controllerId: 'planer-node', sensor: { ct: { channel: 0 } } }));
+  eq("...or on the collector's board", named.boardId, 'planer-node');
 
   // WRITING
   sameDoc('a clamp on this board writes no controllerId',
@@ -313,10 +317,11 @@ const plug = (ip: string, kind: 'shelly' | 'tasmota' = 'shelly') =>
                    form({ ctl: 'rf', sense: 'ct' }))['sensor'],
     { ct: { channel: DEFAULT_CT_CHANNEL } });
 
-  sameDoc('...and names the board when one is chosen',
-    writeCollector({ id: 'dc', type: 'collector' },
-                   form({ ctl: 'rf', sense: 'ct', senseCtControllerId: 'planer-node' }))['sensor'],
-    { ct: { channel: DEFAULT_CT_CHANNEL, controllerId: 'planer-node' } });
+  {
+    const w = writeCollector({ id: 'dc', type: 'collector' }, form({ ctl: 'rf', sense: 'ct', boardId: 'planer-node' }));
+    sameDoc("...and a chosen board goes on the collector, the clamp names none",
+      [w['controllerId'], w['sensor']], ['planer-node', { ct: { channel: DEFAULT_CT_CHANNEL } }]);
+  }
 
   // A clamp and a plug are ONE question — validateTopology() refuses both — so
   // choosing the clamp must REMOVE the plug rather than leave it behind.
@@ -361,7 +366,7 @@ const plug = (ip: string, kind: 'shelly' | 'tasmota' = 'shelly') =>
   const j = bad.elements.findIndex(e => e['id'] === 'dc');
   bad.elements[j] = { ...bad.elements[j],
                       ...writeCollector({ id: 'dc', type: 'collector' },
-                        form({ ctl: 'rf', sense: 'ct', senseCtControllerId: 'nope' })) };
+                        form({ ctl: 'rf', sense: 'ct', boardId: 'nope' })) };
   check('a clamp on a board that does not exist is refused',
         !validateTopology(bad as never).ok);
 }

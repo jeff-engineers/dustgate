@@ -330,6 +330,27 @@ int main() {
     ok("a dropped link forgets it: unknown again", f.s.info().clampIn == -1);
   }
 
+  printf("\nS13 the bin alert (ALERT, 2026-10-10)\n");
+  {
+    Fx f; f.up();
+    auto alerts = [&]() { std::vector<std::string> v; std::string out; while (f.drain(out)) if (out.find("\"ALERT\"") != std::string::npos) v.push_back(out); return v; };
+    ok("nothing is sent before the brain has an opinion", alerts().empty());
+    f.s.setBinAlert(false);
+    auto a = alerts();
+    ok("the first decision is sent, even a clear one", a.size() == 1 && a[0].find("\"bin\":false") != std::string::npos);
+    f.s.setBinAlert(false);
+    ok("the same answer again sends nothing (it is called every tick)", alerts().empty());
+    f.s.setBinAlert(true);
+    a = alerts();
+    ok("a full bin is sent", a.size() == 1 && a[0].find("\"bin\":true") != std::string::npos);
+    f.s.onDown();
+    f.s.setBinAlert(true);
+    ok("nothing goes out while the link is down", alerts().empty());
+    f.up();
+    a = alerts();
+    ok("it is said again on the next link-up: a rebooted node has forgotten it", a.size() == 1 && a[0].find("\"bin\":true") != std::string::npos);
+  }
+
   printf("\n%d/%d passed%s\n", passed, passed + failed, failed ? " — FAILED" : "");
   return failed ? 1 : 0;
 }

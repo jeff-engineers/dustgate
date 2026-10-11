@@ -129,6 +129,33 @@ static void raiseDeviceProblems(uint32_t now) {
         plugs.push_back(v);
     }
     problems.update(g_rt, boards, plugs, now);
+    // A COLLECTOR WITH JOBS AND NO BOARD (2026-10-10). This brain has no pads, so a transmitter, clamp or bin on "this
+    // board" is one nothing can do — and it used to be silent: a bin assigned to the Pi was a bin nobody watched.
+    if (g_rt.loaded())
+        for (const topo::SystemView& sys : topo::systemsOf(g_rt.topology())) {
+            JsonObjectConst dc = topo::collectorOf(sys);
+            const std::string key = std::string("dcboard:") + (sys.id ? sys.id : "");
+            const bool jobs = !dc["control"]["rf"].isNull() || !dc["sensor"]["ct"].isNull() || !dc["bin"]["sensor"].isNull();
+            const std::string board = topo::collectorBoardOf(dc);
+            if (jobs && (board.empty() || topo::isOwnBoard(board, g_hub->primaryId())))
+                g_rt.raiseProblem(key, "collector-no-board", "bad", "system", sys.id ? sys.id : "",
+                                  "No board is set for this collector, so its transmitter, clamp or bin beam is not watched. "
+                                  "Pick the board at the collector in its setup.", now);
+            else g_rt.clearProblem(key);
+        }
+    // THE BIN ALERT (2026-10-10): every board serving a system whose bin is full blinks red, by an ALERT frame. Shop.h
+    // boardServesSystem() decides who (the same rule as the ESP32 primary); NodeSession sends only on a change. This brain
+    // has no pixel of its own.
+    if (g_rt.loaded()) {
+        const auto systems = topo::systemsOf(g_rt.topology());
+        for (auto& kv : g_hub->nodes()) {
+            const std::string board = topo::controllerIdForHost(g_rt.topology(), kv.first);
+            bool full = false;
+            for (const topo::SystemView& sys : systems)
+                if (sys.id && g_rt.binFull(sys.id) && topo::boardServesSystem(sys, board, g_hub->primaryId())) full = true;
+            kv.second->session.setBinAlert(full);
+        }
+    }
     std::set<std::string> old; { std::lock_guard<std::mutex> g(g_tooOldMu); old = g_tooOld; }
     for (auto& kv : g_hub->nodes()) {
         const std::string key = "old:" + kv.first;
@@ -174,9 +201,9 @@ static void rebuildPressers() {
     for (const std::string& sys : g_rt.systemIds()) {
         JsonObjectConst rf = g_rt.collectorRf(sys);
         if (rf.isNull()) continue;
-        // There is no pad on this machine: the transmitter is always a paired node's, named by controllerId.
-        const std::string board = rf["controllerId"] | "";
-        if (board.empty() || topo::isOwnBoard(board, "")) { dglog::linef("[RF] collector %s: the layout names no board for its transmitter\n", sys.c_str()); continue; }
+        // There is no pad on this machine: the transmitter is always on the collector's board, a paired node.
+        const std::string board = g_rt.collectorBoard(sys);
+        if (board.empty() || topo::isOwnBoard(board, g_hub->primaryId())) { dglog::linef("[RF] collector %s: no board is set for this collector - its transmitter cannot be keyed\n", sys.c_str()); continue; }
         const uint8_t addr = (uint8_t)(rf["address"] | (int)topo::rf::kRocklerAddress), data = (uint8_t)(rf["data"] | (int)topo::rf::kRocklerData);
         CollectorSlot c; c.sys = sys;
         c.key = sys + "|" + board + "|" + std::to_string(addr) + "|" + std::to_string(data);

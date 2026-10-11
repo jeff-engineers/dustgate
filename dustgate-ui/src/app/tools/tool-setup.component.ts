@@ -2,7 +2,7 @@ import { Component, OnInit, ViewChild } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router } from '@angular/router';
-import { ApiService, ClampBoard, DiscoveredOutlet, Topology } from '../services/api.service';
+import { ApiService, ClampBoard, CollectorBoard, DiscoveredOutlet, Topology } from '../services/api.service';
 import { ElementOutletConfigComponent } from './element-outlet-config.component';
 import { CollectorSetupComponent } from './collector-setup.component';
 import { PairedOutletRowComponent } from './paired-outlet-row.component';
@@ -10,7 +10,7 @@ import { resolveDeepLink } from './deep-link';
 import { elementsOf, ductsOf } from '../gates/selector-types';
 import { type ShopDoc, type RawEl as DocEl, collectorOf, isPortSupplemental, machineOfPort,
          outletExcludes, outletOf, outletTakenByAnotherMachine, renameMachine, systemLabel,
-         systemsInLayoutOrder, systemsOf, toShop, clampOffered } from '../services/shop-doc';
+         systemsInLayoutOrder, systemsOf, toShop, clampOffered, clampTakenBy } from '../services/shop-doc';
 import { DEFAULT_THRESHOLD } from './outlet-defaults';
 
 // ── The tools screen ─────────────────────────────────────────────────────────
@@ -305,7 +305,8 @@ interface SysGroup {
          exactly the drift this repo spends its comments on. -->
     <ng-container *ngIf="collectorEl as el">
       <app-collector-setup [element]="el"
-                           [controllers]="controllerList"
+                           [boards]="collectorBoards"
+                           [clampTaken]="clampTakenFn"
                            [clampBoards]="clampBoards"
                            [systemName]="collectorSysName"
                            [excludeIps]="collectorExcludeIps"
@@ -349,7 +350,7 @@ interface SysGroup {
                     title="Pair a smart outlet, so DustGate knows when this tool is running">Metering plug</button>
             <button [class.on]="c.sense === 'ct'" [disabled]="!clampBoards.length"
                     (click)="setToolSense(c, 'ct')"
-                    title="A clamp on this tool's feed, wired to one of your boards — for 240 V, where there is no plug to pair">Current clamp</button>
+                    title="A clamp on this tool's feed, wired to one of your boards — for 240 V, where there is no plug to pair, and for a motor whose start-up surge trips a smart plug">Current clamp</button>
             <button [class.on]="c.sense === 'none'" (click)="setToolSense(c, 'none')"
                     title="Nothing watches it — you switch this tool on yourself from the shop list">Nothing</button>
           </div>
@@ -358,8 +359,8 @@ interface SysGroup {
             <span>Wired to
               <select [(ngModel)]="c.ctControllerId" (ngModelChange)="touched = true"
                       aria-label="Which board the clamp is wired to">
-                <option *ngFor="let b of clampBoards" [value]="b.id">
-                  {{ b.name }}{{ b.online ? '' : ' — not answering' }}
+                <option *ngFor="let b of clampBoards" [value]="b.id" [disabled]="clampTaken(b.id, c)">
+                  {{ b.name }}{{ clampTaken(b.id, c) ? ' — its clamp watches ' + clampTaken(b.id, c) : (b.online ? '' : ' — not answering') }}
                 </option>
               </select>
             </span>
@@ -487,6 +488,8 @@ export class ToolSetupComponent implements OnInit {
   /** Boards that DECLARED a clamp. Not the layout's controllers — a clamp cannot
    *  be discovered, so only a board that has said it has one may be offered. */
   clampBoards: ClampBoard[] = [];
+  /** Boards that can be a collector's board (one per collector, 2026-10-10). */
+  collectorBoards: CollectorBoard[] = [];
   /** Named in the bin alert's copy — "every board on Main system flashes red" —
    *  so the scope of the alert is concrete rather than a word. */
   collectorSysName = '';
@@ -545,9 +548,10 @@ export class ToolSetupComponent implements OnInit {
     // Which boards carry a clamp. Failure is not an error state: a device that
     // cannot answer simply offers no clamp, which is the same as a shop that has
     // none, and the option says so on its own.
-    // ...and which of those a person has switched ON (Boards screen): only those may be pointed at.
+    // ...and of those, ones with a clamp plugged in or already in use (clampOffered).
     try { this.clampBoards = (await this.api.getClampBoards()).filter(b => clampOffered(this.topo as unknown as ShopDoc, b)); }
     catch { this.clampBoards = []; }
+    try { this.collectorBoards = await this.api.getCollectorBoards(); } catch { this.collectorBoards = []; }
     // Up front, not on opening a tool: the list itself shows which plug each tool
     // is on, and a scan started here has finished by the time anyone taps a row.
     if (this.anythingToSetUp) void this.scan();
@@ -999,9 +1003,19 @@ export class ToolSetupComponent implements OnInit {
     this.touched = true;
     // Default to the only clamp in the shop rather than leaving the select
     // blank, which reads as an unfinished form.
-    if (s === 'ct' && !c.ctControllerId && this.clampBoards.length) {
-      c.ctControllerId = this.clampBoards[0].id;
+    if (s === 'ct' && !c.ctControllerId) {
+      const free = this.clampBoards.find(b => !this.clampTaken(b.id, c));
+      if (free) c.ctControllerId = free.id;
     }
+  }
+
+  /** For the collector's sheet, which has no layout of its own to ask. */
+  clampTakenFn = (boardId: string, selfId: string): string | null =>
+    clampTakenBy(this.topo as unknown as ShopDoc, boardId, selfId);
+
+  /** Whose clamp this board's is already, if not this tool's — one clamp watches one thing (shop-doc clampTakenBy). */
+  clampTaken(boardId: string, c: ToolCfg): string | null {
+    return clampTakenBy(this.topo as unknown as ShopDoc, boardId, c.machineId);
   }
 
   private gateLabel(toolId: string): string {

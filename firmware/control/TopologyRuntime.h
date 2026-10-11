@@ -168,6 +168,7 @@ static const char* const kProblemBlind   = "Commanded on, but its plug isn't ans
 // A collector DustGate cannot switch (no control.outlet, no control.rf) is run by hand, so "commanded on" is false and
 // "check the breaker and the remote" accuses a machine nobody asked. The person is asked instead, and only when something
 // watches the blower: with nothing watching, the woodworker is trusted to know. PROBLEM_TEXT.needsStart in topology-device.js.
+static const char* const kProblemBinFull = "The dust bin is full \xE2\x80\x94 empty it before the next cut.";
 static const char* const kProblemNeedsStart = "A tool is running and the dust collector isn't \xE2\x80\x94 please turn it on.";
 
 struct FailedMove {
@@ -987,6 +988,15 @@ public:
         return JsonObjectConst();
     }
 
+    // The board at this system's collector — where its clamp, bin and transmitter are. "" = this board.
+    std::string collectorBoard(const std::string& systemId) const {
+        for (const SystemView& sys : systemsOf(topology())) {
+            if (std::string(sys.id ? sys.id : "") != systemId) continue;
+            return collectorBoardOf(collectorOf(sys));
+        }
+        return std::string();
+    }
+
     uint32_t collectorOffDelayMs(const std::string& systemId) const {
         for (const SystemView& sys : systemsOf(topology())) {
             if (std::string(sys.id ? sys.id : "") != systemId) continue;
@@ -1177,6 +1187,9 @@ public:
             else if (st == topo::PlugState::Unknown && kv.second.running && commandable &&
                      (kv.second.plugKnown || collectorHasOutlet(kv.first) || collectorHasClamp(kv.first)))
                 add("collector-blind", "bad", "system", kv.first, kProblemBlind, false, 0);
+            // A full bin is a fact the beam reports (2026-10-10). PROBLEM_TEXT.binFull in topology-device.js.
+            if (kv.second.binKnown && kv.second.binFull)
+                add("bin-full", "bad", "system", kv.first, kProblemBinFull, false, 0);
         }
         for (auto& kv : _stuck) {
             const FailedMove& f = kv.second;
@@ -1192,6 +1205,12 @@ public:
     // and the question of which system this is — see localBinSystemId() in
     // utils/BinSensor.h. Calling it at all is what makes `bin` appear in the
     // status; a system nobody calls this for stays silent.
+    // Is this system's bin known to be full? False for a bin nobody watches.
+    bool binFull(const std::string& systemId) const {
+        auto it = _collectors.find(systemId);
+        return it != _collectors.end() && it->second.binKnown && it->second.binFull;
+    }
+
     void setBinFull(const std::string& systemId, bool full) {
         auto it = _collectors.find(systemId);
         if (it == _collectors.end()) return;   // no such system: say nothing

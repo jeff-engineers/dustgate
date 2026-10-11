@@ -14,6 +14,11 @@ int main() {
   ok("the bias midpoint is a clamp", ClampJack::looksPlugged(1650));
   ok("railed LOW is no clamp either", !ClampJack::looksPlugged(50));
   ok("the thresholds are CtSensor::isRailed()'s", ClampJack::kLowRailMv == 200 && ClampJack::kHighRailMv == 3100);
+  ok("a clamp is a mean near the midpoint: 950..2350 mV", ClampJack::kMinClampMv == 950 && ClampJack::kMaxClampMv == 2350 &&
+     ClampJack::looksPlugged(950) && ClampJack::looksPlugged(2350) && !ClampJack::looksPlugged(949) && !ClampJack::looksPlugged(2351));
+  ok("2971 mV — the new collector board, a bias network wired wrong — is no clamp", !ClampJack::looksPlugged(2971));
+  ok("...and the window sits inside isRailed()'s, so the trip logic agrees with it",
+     ClampJack::kMinClampMv > ClampJack::kLowRailMv && ClampJack::kMaxClampMv < ClampJack::kHighRailMv);
 
   {
     int i = 0, delays = 0;

@@ -87,6 +87,14 @@ inline Status& _state()      { static Status s = BOOTING; return s; }
 inline Motion& _motion()     { static Motion m = STILL;   return m; }
 inline unsigned long& _flashUntil() { static unsigned long t = 0; return t; }
 
+// A dust bin on a system this board serves is full (the ALERT frame from the primary, or the primary's own bin; 2026-10-10).
+// Not a Status: it is about the SHOP, and this board's own state still stands underneath it. Shown as red blinking fully
+// OFF and on, against FAULT's bright/dim pulse — the RFC's split ("binNearFull"): both are red because both need a human,
+// and the two are told apart without timing anything, because one goes dark and the other never does.
+inline bool& _binAlert()     { static bool b = false; return b; }
+inline void setBinAlert(bool full) { _binAlert() = full; }
+inline bool binAlert()       { return _binAlert(); }
+
 inline void set(Status s)      { _state()  = s; }
 inline void setMotion(Motion m) { _motion() = m; }
 
@@ -194,6 +202,13 @@ inline void update() {
         case STILL:       break;
     }
 
+    // A full bin outranks this board's own state, except the ones where the board is not yet on the shop's network
+    // (booting, the setup portal, no WiFi) — there it cannot have heard the alert, so a stale one must not show.
+    if (_binAlert() && _state() != BOOTING && _state() != PORTAL && _state() != NO_WIFI) {
+        _raw((now / 250) % 2 ? kBright : 0, 0, 0);
+        return;
+    }
+
     switch (_state()) {
         case FAULT:
             // Slow pulse rather than solid: a steady red can read as "power LED"
@@ -245,6 +260,7 @@ inline void update() {
         case HOMING:      on = (now / 250) % 2;         break;
         case CALIBRATING: on = (now / 120) % 2;         break;
         default:
+            if (_binAlert()) { on = (now / 250) % 2; break; }   // a full bin: a steady blink, slower than a fault
             switch (_state()) {
                 case FAULT:   on = (now / 100) % 2;     break;  // rapid = bad
                 case PORTAL:  on = (now / 400) % 2;     break;

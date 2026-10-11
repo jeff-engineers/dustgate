@@ -114,6 +114,17 @@ const eq = (name, got, want) =>
   check('a primary cannot send one', NL.validateFrame(NL.clamp(true), 'p2s').length > 0);
 }
 
+// ── the bin alert (2026-10-10) ──────────────────────────────────────────────
+// Same cases as the "bin alert" block of test_nodebus.cpp, same order.
+{
+  eq('a full bin', NL.alert(true), { t: 'ALERT', bin: true });
+  eq('an emptied bin', NL.alert(false), { t: 'ALERT', bin: false });
+  eq('it validates primary to node', NL.validateFrame(NL.alert(true), 'p2s'), []);
+  check('without `bin` it is refused', NL.validateFrame({ t: 'ALERT' }, 'p2s').length === 1);
+  check('a non-boolean `bin` is refused', NL.validateFrame({ t: 'ALERT', bin: 1 }, 'p2s').length === 1);
+  check('a node cannot send one', NL.validateFrame(NL.alert(true), 's2p').length > 0);
+}
+
 // ── direction is enforced: a secondary can't send a SET ─────────────────────
 {
   const gate = twoGates.elements.find((e) => e.id === 'gate1');

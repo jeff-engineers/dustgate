@@ -75,6 +75,55 @@ the app, the Pi's plug picker shows live draw (and not itself), and a board too 
 
 ### Earlier
 
+- **"Update all" on the Boards page (jeff, 2026-10-10).** One button that updates every board whose firmware differs
+  from the staged image, ONE AT A TIME (each waits for the previous board to come back on the new build, ~25 s), and
+  stops on the first failure. `POST /api/nodes/update` already does one board; the loop is what
+  a one-off script did by hand on 2026-10-08 and 2026-10-10. The brain refuses while a tool runs, so the
+  button should say "with the shop quiet" and show which board it is on.
+
+- **A smart contactor for the collector (jeff, 2026-10-10, planned hardware).** One box, one cord in, one outlet out: a
+  contactor carries the motor current, so no plug or relay of ours ever does (the 1HP blower tripped a Shelly Plus Plug
+  on 2026-09-03). Switching the collector is the one thing DustGate is allowed to do, so it does not touch "never switch a
+  tool". The contactor is level-driven (coil on = blower on), which retires the RF toggle's inverted-belief problem, and
+  it drops out on a power cut, so it behaves like a magnetic starter (no-volt release). Check the contactor's **AC-3
+  (motor)** rating, not its resistive one.
+
+  **v1 — a Shelly 1 Gen4 switches the coil. No firmware.** Mains in → Shelly 1 (on L/N; dry contacts) → the contactor's
+  110 V coil; the contactor switches the outlet. The collector's board sits in the same box on a 120 V → 12 V supply
+  (e.g. Mean Well IRM-10-12), doing the bin beam, the lamps and a CT around ONE motor conductor. Layout: the collector's
+  `control.outlet` is the Shelly and its `sensor.ct` is the board's clamp — **checked 2026-10-10: that pair validates**
+  (topology.js only refuses `sensor.outlet` + `sensor.ct`), and both brains switch the outlet while the clamp's reading
+  stands as the feedback (native `feedPlugs()`), so a start the clamp never sees is `collector-no-start`. A plain Shelly 1
+  reports no `apower` (reads 0 W); that is fine, because the clamp wins. Set on the Shelly: **power-on default OFF** (it
+  stays off after a power cut) and optionally an **auto-off** backstop, because a Shelly holds its last state if the
+  brain dies (the board-driven relay below would drop out instead). The cost is one more WiFi device in the control path.
+
+  **v2 — the collector's board drives the coil directly (notes, not built).** Reuse the radio header: **5 V, GND and
+  D10** (`PIN_RF_TX`); a contactor box has no remote to transmit to, so the pad is free and the pin map does not change.
+  **Not D3**: it is GPIO7, a C5 strap, and a relay input on it can change how the chip boots.
+  - **Driver:** Jeff has a HiLetgo 5 V relay module (hiletgo.com/ProductDetail/1958599.html). It does not switch
+    reliably from 3.3 V, because its opto LED is fed from 5 V, so a 3.3 V high leaves ~1.7 V across it and the relay may
+    never fully release. Put an NPN in front of it: D10 → 1 kΩ → base of a **2N3904** (or PN2222A/2N2222), emitter to GND,
+    collector to IN, the module jumpered to **low-level trigger**, and **10 kΩ base → GND** so it stays off through reset
+    and while flashing. A **2N7000** works the same way (100 Ω to the gate, 10 kΩ pull-down). The pin then never sees
+    5 V. Do NOT drive IN open-drain straight from the pin: floating, it sits near 4 V, above the C5's limit.
+  - **Not an SSR:** a triac SSR leaks a few mA when off, which can make a small contactor coil hum or hold in, and the
+    cheap "Fotek" ones are often counterfeit.
+  - **Relay contact rating:** at least 3 A at 120 VAC. The coil pulls ~0.5–1 A for a moment at pull-in, and ~0.1 A holding.
+  - **An RC snubber across the coil** (0.1 µF X2 + 100 Ω "Quencharc", or the contactor's own plug-in suppressor), or
+    the coil's kickback arcs the relay contacts every time it opens.
+  - **A 1 A slow-blow fuse** on the branch that feeds the supply and the coil.
+  - **An alternative:** a contactor with a 12 VDC coil keeps mains off the low-voltage side entirely (logic-level MOSFET
+    plus a flyback diode, and no relay or snubber).
+  - **Firmware:** a `control.contactor` kind on the collector (topology.js ↔ Shop.h), a cap in the WELCOME (from the pin
+    map), and a level frame rather than PRESS: held while the brain wants the blower on, and dropped when the link or the
+    brain goes away. That makes a reboot or an OTA mid-cut stop the blower, which is the intended failure. Firmware drives
+    the pin LOW first thing at boot. The CT stays the feedback; an aux contact on a GPIO would be a stronger one if the
+    contactor has one.
+  - **Mains build:** a grounded enclosure, strain reliefs, and low voltage physically separated from mains. For anyone
+    but Jeff this ships as a finished box, under the "an install step the owner cannot perform" rule.
+
+
 - **Clamp detection on hardware (built 2026-10-09, branch `clamp-detect`, host-tested only).** A board now reports whether a
   clamp is plugged into its jack (`CLAMP`), the per-board clamp switch is gone, and a used clamp that reads empty raises
   `clamp-unplugged`. Bench, after an OTA: (1) unplug the planer-sensor's clamp — Boards says so, and the planer's problem

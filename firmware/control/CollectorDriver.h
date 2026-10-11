@@ -49,6 +49,11 @@ inline bool driveCollectorPress(TopologyRuntime& rt, const std::string& sys, Col
         case PressAction::GiveUp:
             rt.raiseProblem("rf-gave-up:" + sys, "rf-gave-up", "bad", "system", sys,
                 "Pressed the remote 3 times and the blower never agreed \xE2\x80\x94 check the breaker, the cord and the fob's battery.", now);
+            if (!ps.gaveUp && ps.wanted && (ps.attempts % 2) == 1) {
+                ps.mayBeOn = true;
+                h.say(std::string("[RF] Collector ") + sys + ": " + std::to_string((int)ps.attempts) +
+                      " presses of a toggle and the reading never saw it run \xE2\x80\x94 it is probably ON, unseen.");
+            }
             if (!ps.gaveUp) {
                 noteGaveUp(ps);
                 // Said ONCE: the state latches, so this is not a line per loop for the rest of the day.
@@ -69,11 +74,27 @@ inline bool driveCollectorPress(TopologyRuntime& rt, const std::string& sys, Col
                 rt.clearProblem("rf-wont-stop:" + sys);
             }
             // Settled: clear the budget so the next disagreement gets a full one, not the tail of this one.
+            // NOT the give-up while the blower may be on: an "off" reading is exactly what failed (see mayBeOn), so it
+            // must not quietly retire the only problem that says so — the app went silent that way on 2026-10-10.
             if (seen == (want ? PlugState::Running : PlugState::Off)) {
                 noteSettled(ps);
-                rt.clearProblem("rf-gave-up:" + sys);
+                if (!ps.mayBeOn) rt.clearProblem("rf-gave-up:" + sys);
             }
             break;
+    }
+    // MAY BE ON, UNSEEN. Raised while the latch holds, whatever routing wants now; cleared only by a reading that sees
+    // the blower run, which proves the feedback can see it at all.
+    if (ps.mayBeOn && seen == PlugState::Running) {
+        ps.mayBeOn = false;
+        rt.clearProblem("rf-gave-up:" + sys);
+    }
+    if (ps.mayBeOn) {
+        rt.clearProblem("rf-gave-up:" + sys);
+        rt.raiseProblem("rf-may-be-on:" + sys, "collector-may-be-on", "bad", "system", sys,
+            "Pressed the remote and never saw the blower run \xE2\x80\x94 but each press toggles it, so it is probably RUNNING. "
+            "Check it, and check what watches it: its clamp or plug is not seeing it.", now);
+    } else {
+        rt.clearProblem("rf-may-be-on:" + sys);
     }
     return pressed;
 }

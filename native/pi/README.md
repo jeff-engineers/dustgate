@@ -23,6 +23,13 @@ after a change. The ESP32 brain has always done the same. What you do need is a 
 hostname over mDNS, so `http://dustgate.local` works on a network that allows multicast. mDNS is a fast path, not a requirement: if your
 network blocks it, read the Pi's address from the router's client list (nodes never need it, they use the beacon).
 
+**If `dustgate.local` stops answering after a reboot, look for `dustgate-2.local`** (seen 2026-10-11). Avahi renames itself
+when it believes another host holds its name, and on a Pi that is usually its own announcement heard back over IPv6 or a second
+interface. The app looks frozen; the brain is fine and the boards keep linking (they redial its last IP). `dns-sd -B
+_workstation._tcp local.` on the Mac shows what it is calling itself. Fix now: `sudo systemctl restart avahi-daemon`. For good:
+`setup.sh` sets `use-ipv6=no` and `allow-interfaces=<the default-route interface>` in `/etc/avahi/avahi-daemon.conf` — on a Pi set
+up before 2026-10-11, make those two edits by hand (under `[server]`) and restart avahi.
+
 Boot it, wait a minute, and from your Mac: `ssh <user>@dustgate.local`.
 
 ## One-time: set it up

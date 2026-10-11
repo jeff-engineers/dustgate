@@ -56,9 +56,30 @@ int main() {
     ok("and a third time", driveCollectorPress(*rt, sys, p, ps, true, t, h) && p.presses == 3);
     t += kPressCooldownMs + 10;
     ok("then it stops pressing", !driveCollectorPress(*rt, sys, p, ps, true, t, h) && p.presses == 3);
-    ok("...and raises the problem a person has to see", rt->hasProblem("rf-gave-up:" + sys));
+    // Three presses is an ODD count, so the problem is the stronger may-be-on (D1b), which replaces rf-gave-up.
+    ok("...and raises the problem a person has to see", rt->hasProblem("rf-may-be-on:" + sys) && !rt->hasProblem("rf-gave-up:" + sys));
     ok("...saying it on the console exactly once", [&] { driveCollectorPress(*rt, sys, p, ps, true, t + 1000, h);
         int n = 0; for (auto& l : h.lines) if (l.find("did not respond") != std::string::npos) n++; return n == 1; }());
+    delete rt;
+  }
+
+  printf("\nD1b three presses nobody saw: the blower is probably ON, and saying so outlives the next OFF (2026-10-10)\n");
+  {
+    // The miter-saw evening: a clamp that could not see the blower, three ON presses (on, off, on), a give-up, the saw
+    // stops — and the "off" reading then agreed with the OFF, retiring the only problem that said anything.
+    NodeBus nb; TopologyRuntime* rt = load(nb); FakePresser p; Hooks h; PressState ps;
+    rt->setCollectorPlug(sys, 0.0f, true, 0);
+    uint32_t t = 100000;
+    for (int i = 0; i < 3; i++) { driveCollectorPress(*rt, sys, p, ps, true, t, h); t += kPressCooldownMs + 10; }
+    driveCollectorPress(*rt, sys, p, ps, true, t, h);
+    ok("three unseen presses latch may-be-on", ps.mayBeOn && rt->hasProblem("rf-may-be-on:" + sys));
+    ok("...said on the console", h.saw("probably ON"));
+    t += 5000;
+    ok("the saw stops: no OFF is pressed blind", !driveCollectorPress(*rt, sys, p, ps, false, t, h) && p.presses == 3);
+    ok("...and the problem is still there, though the reading says off", rt->hasProblem("rf-may-be-on:" + sys));
+    rt->setCollectorPlug(sys, 600.0f, true, 6000);
+    driveCollectorPress(*rt, sys, p, ps, false, t + 1000, h);
+    ok("a reading that sees it run clears it: the feedback works after all", !ps.mayBeOn && !rt->hasProblem("rf-may-be-on:" + sys));
     delete rt;
   }
 

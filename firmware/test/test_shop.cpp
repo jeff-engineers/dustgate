@@ -285,16 +285,28 @@ int main(int argc, char** argv) {
   // Same layout text and cases as the "optional boards" block of shop.test.js, same order.
   {
     DynamicJsonDocument d(4096);
-    deserializeJson(d, R"({"schemaVersion":2,"controllers":[{"id":"primary","role":"primary"},{"id":"dustgate-gate","role":"secondary"},{"id":"dustgate-planer","role":"secondary"},{"id":"dustgate-spare","role":"secondary"},{"id":"dustgate-cyclone","role":"secondary"},{"id":"dustgate-dcamp","role":"secondary"},{"id":"dustgate-bin","role":"secondary"}],"systems":[{"id":"s1","elements":[{"id":"dc","type":"collector","control":{"rf":{"controllerId":"dustgate-cyclone"}},"sensor":{"ct":{"controllerId":"dustgate-dcamp","channel":0}},"bin":{"sensor":{"controllerId":"dustgate-bin"}}},{"id":"g1","type":"selector","kind":"servoGate","controllerId":"dustgate-gate","states":[],"branches":[]}],"ducts":[]}],"machines":[{"id":"planer","sensor":{"ct":{"controllerId":"dustgate-planer","channel":0}}}]})");
+    deserializeJson(d, R"({"schemaVersion":2,"controllers":[{"id":"primary","role":"primary"},{"id":"dustgate-gate","role":"secondary"},{"id":"dustgate-planer","role":"secondary"},{"id":"dustgate-spare","role":"secondary"},{"id":"dustgate-cyclone","role":"secondary"},{"id":"dustgate-idle","role":"secondary"}],"systems":[{"id":"s1","elements":[{"id":"dc","type":"collector","controllerId":"dustgate-cyclone","control":{"rf":{"address":94}},"sensor":{"ct":{"channel":0}},"bin":{"sensor":{"kind":"threshold"}}},{"id":"g1","type":"selector","kind":"servoGate","controllerId":"dustgate-gate","states":[],"branches":[]}],"ducts":[]},{"id":"s2","elements":[{"id":"dc2","type":"collector","controllerId":"dustgate-idle"}],"ducts":[]}],"machines":[{"id":"planer","sensor":{"ct":{"controllerId":"dustgate-planer","channel":0}}}]})");
     JsonObjectConst shop = d.as<JsonObjectConst>();
     ok("a board with a gate is required", topo::isOptionalBoard(shop, "dustgate-gate") == false);
     ok("a board that only senses a tool is optional", topo::isOptionalBoard(shop, "dustgate-planer") == true);
     ok("a board the layout does not use is optional", topo::isOptionalBoard(shop, "dustgate-spare") == true);
-    ok("the collector's transmitter board is required", topo::isOptionalBoard(shop, "dustgate-cyclone") == false);
-    ok("the collector's clamp board is required", topo::isOptionalBoard(shop, "dustgate-dcamp") == false);
-    ok("the collector's bin board is required", topo::isOptionalBoard(shop, "dustgate-bin") == false);
+    ok("the collector's board is required: its clamp, bin and transmitter are on it", topo::isOptionalBoard(shop, "dustgate-cyclone") == false);
+    ok("a collector's board that does none of its jobs is optional", topo::isOptionalBoard(shop, "dustgate-idle") == true);
     ok("the primary is never optional", topo::isOptionalBoard(shop, "primary") == false);
     ok("any spelling of a board's id is the same board", topo::isOptionalBoard(shop, "Dustgate-Gate.local") == false);
+  }
+  {
+    // Which boards blink for a full bin (the ALERT frame, 2026-10-10): the collector's board and every board with a gate
+    // on THAT system. C++ only. The same layout as above.
+    DynamicJsonDocument d(4096);
+    deserializeJson(d, R"({"schemaVersion":2,"controllers":[{"id":"primary","role":"primary"},{"id":"dustgate-gate","role":"secondary"},{"id":"dustgate-planer","role":"secondary"},{"id":"dustgate-cyclone","role":"secondary"},{"id":"dustgate-idle","role":"secondary"}],"systems":[{"id":"s1","elements":[{"id":"dc","type":"collector","controllerId":"dustgate-cyclone","bin":{"sensor":{"kind":"threshold"}}},{"id":"g1","type":"selector","kind":"servoGate","controllerId":"dustgate-gate","states":[],"branches":[]},{"id":"g0","type":"selector","kind":"servoGate","states":[],"branches":[]}],"ducts":[]},{"id":"s2","elements":[{"id":"dc2","type":"collector","controllerId":"dustgate-idle"}],"ducts":[]}],"machines":[{"id":"planer","sensor":{"ct":{"controllerId":"dustgate-planer","channel":0}}}]})");
+    const auto sys = topo::systemsOf(d.as<JsonObjectConst>());
+    ok("bin alert: the collector's board serves its system", topo::boardServesSystem(sys[0], "dustgate-cyclone", "primary"));
+    ok("bin alert: a board with a gate on it does", topo::boardServesSystem(sys[0], "Dustgate-Gate.local", "primary"));
+    ok("bin alert: a gate on the brain's own board counts for the brain", topo::boardServesSystem(sys[0], "", "primary"));
+    ok("bin alert: a board that only senses a tool does not", !topo::boardServesSystem(sys[0], "dustgate-planer", "primary"));
+    ok("bin alert: the other system's collector board does not", !topo::boardServesSystem(sys[0], "dustgate-idle", "primary"));
+    ok("bin alert: ...and serves its own", topo::boardServesSystem(sys[1], "dustgate-idle", "primary"));
   }
   {
     // A board the layout names differently and points at by link.host: its gates still count (C++ only — only a brain

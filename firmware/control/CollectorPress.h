@@ -101,6 +101,11 @@ struct PressState {
     // We turned it on (an ON press went out and no OFF press has since). Only a blower WE started is ours to stop:
     // one that is running and was never started by us was started by a person, and stays on (jeff, 2026-10-06).
     bool     weStarted   = false;
+    // We gave up wanting ON after an ODD number of presses (2026-10-11). Every press is a toggle, so if any of them
+    // reached the blower it is probably RUNNING while the reading that made us give up says off — and that same reading
+    // then "agrees" with the OFF that follows the last tool, so nothing would ever be pressed or said again. Held until a
+    // reading sees the blower run (proof the feedback works) — never cleared by an "off" reading, which is the suspect.
+    bool     mayBeOn     = false;
 };
 
 /**

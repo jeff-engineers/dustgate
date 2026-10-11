@@ -4,7 +4,7 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router as NgRouter, RouterLink } from '@angular/router';
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
-import { ApiService, ClampBoard, DiscoveredOutlet, NodeLinkState, SweepProgress, Topology, TopologyStatus } from '../services/api.service';
+import { ApiService, ClampBoard, CollectorBoard, DiscoveredOutlet, NodeLinkState, SweepProgress, Topology, TopologyStatus } from '../services/api.service';
 import { takeoverWarning } from '@plug-claim';
 import { airflowIssues, redundantSelectors, type AirflowIssue } from '@topology';
 import { COLLECTOR_RUNNING_W } from '@topology-device';
@@ -25,7 +25,7 @@ import {
   removeMachine, removePort,
   renameMachine,
   supplementalCount,
-  systemById, systemsOf, systemViews, toShop, clampOffered,
+  systemById, systemsOf, systemViews, toShop, clampOffered, clampBoardOf, clampTakenBy,
   planSystemRemoval, removeSystem, planClearShop, clearShop, plugIpsOf, collectorOf, type SystemRemoval,
 } from '../services/shop-doc';
 import { wipSummary } from '../services/wip-message';
@@ -44,9 +44,9 @@ import {
   unpairPrompt,
 } from '../boards/board-drives';
 import {
-  PORT_H, SERVO_PORTS, TAB_H, TAB_W,
+  PORT_H, PORT_W, SERVO_PORTS, TAB_H, TAB_W,
   cablePath, cableRun, crossingCost,
-  portPos, portWidth, portExit, rankByTravel, segmentsOf,
+  portPos, portWidth, portExit, ctPortPos, ctPortExit, rankByTravel, segmentsOf,
   type Seg,
 } from './wiring/wire-geometry';
 
@@ -244,6 +244,8 @@ interface BoardVM {
    *  'servo' is four PWM channels; 'linear' is ONE sliding gate and nothing else.
    *  Never both: the two builds contend for the same pads. */
   drives: 'servo' | 'linear';
+  /** Does this board have a clamp to show — one plugged into its jack, or one the layout uses? Draws the CT jack. */
+  ct: boolean;
   dragX?: number; dragY?: number;
 }
 /** One cable run, port → the gate's servo tab. */
@@ -419,7 +421,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   readonly PRIMARY_PORT_W = PRIMARY_PORT_W;
   readonly PRIMARY_PORT_H = PRIMARY_PORT_H;
   readonly BOARD_W = BOARD_W; readonly BOARD_H = BOARD_H;
-  readonly PORT_H = PORT_H; readonly TAB_W = TAB_W; readonly TAB_H = TAB_H;
+  readonly PORT_H = PORT_H; readonly PORT_W = PORT_W; readonly TAB_W = TAB_W; readonly TAB_H = TAB_H;
   readonly DOCK_W = DOCK_W; readonly DOCK_H = DOCK_H;
   readonly DOCK_ICON_X = DOCK_ICON_X; readonly DOCK_TEXT_X = DOCK_TEXT_X;
   readonly TOOL_HALF_W = TOOL_HALF_W;
@@ -1371,7 +1373,13 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     // `channel` means nothing to the firmware yet — one analog pad per board —
     // but topology.js requires it, so 0 is written rather than omitted.
     const ct: RawEl = { channel: 0 };
-    // OMITTED when empty: absent already says "this board", and writing '' would
+    // A COLLECTOR's clamp is on the collector's board (one per collector, 2026-10-10): the drop names that board.
+    if (el['type'] === 'collector') {
+      if (b.id) el['controllerId'] = b.id; else delete el['controllerId'];
+      el['sensor'] = { ct };
+      return true;
+    }
+    // A tool's names its own. OMITTED when empty: absent already says "this board", and writing '' would
     // be a second spelling of the same thing for the validator to allow.
     if (b.id) ct['controllerId'] = b.id;
     // On the MACHINE, not the port — the routing brain only ever reads machines,
@@ -3666,9 +3674,10 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     // and the primary is not in `nodes` (that array is the REMOTE links). A
     // failure leaves the list empty, which is the same as a shop with no clamps
     // and reads correctly on its own rather than as an error.
-    // Only boards a person has switched a clamp ON for (Boards screen) may be pointed at.
+    // Only boards with a clamp plugged in, or one the layout already uses (clampOffered), may be pointed at.
     try { this.clampBoards = (await this.api.getClampBoards()).filter(b => clampOffered(this.topo as unknown as ShopDoc, b)); }
     catch { this.clampBoards = []; }
+    try { this.collectorBoards = await this.api.getCollectorBoards(); } catch { this.collectorBoards = []; }
     const controllers = this.controllersRaw();
     let added = false;
     for (const l of links) {
@@ -3814,10 +3823,15 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
         const ch = ((e['servo'] as RawEl | undefined)?.['channel'] as number) ?? 0;
         used.set(ch, e['id'] as string); servoCount++;
       }
+      // A PI BRAIN IS NOT A BOARD ON THE CANVAS (2026-10-11): it has no pads, so it drives no gate and holds no clamp,
+      // and drawing it showed two empty ports nothing could ever be cabled to. Still drawn if a gate somehow names it,
+      // so a gate that points at nothing physical stays visible as the mistake it is.
+      if (c['role'] === 'primary' && this.api.deviceInfo?.role === 'native' && used.size === 0) continue;
       const drag = this.bodrag?.id === id ? this.bodrag : null;
       out.push({
         id, name: (c['name'] as string) || id, primary: c['role'] === 'primary',
         drives: this.drivesOf(c),
+        ct: this.drivesOf(c) !== 'linear' && this.boardHasClamp(id, c['role'] === 'primary'),
         col: cell.col, row: cell.row, x: cellX(cell.col), y: cellY(cell.row), used, servoCount,
         dragX: drag ? this.boardDragPt?.x : undefined,
         dragY: drag ? this.boardDragPt?.y : undefined,
@@ -3997,7 +4011,24 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   portTaken(b: BoardVM, ch: number): boolean { return b.used.has(ch); }
   /** 'SL' for the slider, not 'ST' — the stepper it was named for went to the
    *  attic in 2026-08-23 and the port drives a serial bus servo now. */
-  portLabel(ch: number): string { return ch >= SERVO_PORTS ? 'SL' : String(ch); }
+  // Counted from ONE on the canvas (jeff, 2026-10-11: "normal people don't count from zero"). Only the LABEL: the layout,
+  // the wire and the firmware keep channel 0 and 1, and nothing but this and the gate tab ever shows a person the number.
+  portLabel(ch: number): string { return ch >= SERVO_PORTS ? 'SL' : String(ch + 1); }
+  ctX(b: BoardVM): number { return ctPortPos({ x: this.bx(b), y: this.by(b) }).x - PORT_W / 2; }
+  ctY(b: BoardVM): number { return ctPortPos({ x: this.bx(b), y: this.by(b) }).y - PORT_H / 2; }
+  /** Is this board's clamp watching something in the layout? Fills the CT jack, as a cabled servo port is filled. */
+  ctTaken(b: BoardVM): boolean { return this.clampLeads().some(l => l.boardId === b.id); }
+  /** A clamp plugged into this board's jack (clampBoards — the device's report), or one the layout already uses. */
+  private boardHasClamp(id: string, primary: boolean): boolean {
+    const doc = this.topo as unknown as ShopDoc | null;
+    if (this.clampBoards.some(cb => cb.id === id || (primary && cb.id === ''))) return true;
+    for (const e of elementsOf(this.topo as never) as unknown as RawEl[]) {
+      const board = clampBoardOf(doc, e);
+      if (board === null) continue;
+      if ((board || this.defaultControllerId()) === id) return true;
+    }
+    return false;
+  }
   /** Amber, not red: a full board isn't broken, it's out of room. A slider board
    *  is full at one gate, because one rack IS its whole capacity. */
   boardFull(b: BoardVM): boolean {
@@ -4043,7 +4074,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       const board = this.boardOf(n.id);
       return {
         id: n.id, x: this.tabX(n), y: this.tabY(n),
-        channel: linear ? 'SL' : String(ch),
+        channel: linear ? 'SL' : String(ch + 1),   // counted from one, as the board's ports are (portLabel)
         wired: this.boardCells.has(board),
         shade: this.boardShade(board),
       };
@@ -4117,6 +4148,12 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
    * clamp that does not exist.
    */
   clampBoards: ClampBoard[] = [];
+  /** Boards that can be a collector's board (one per collector, 2026-10-10). */
+  collectorBoards: CollectorBoard[] = [];
+
+  /** For the collector's sheet: who else's clamp a board's already is (one clamp, one owner — shop-doc clampTakenBy). */
+  clampTakenFn = (boardId: string, selfId: string): string | null =>
+    clampTakenBy(this.topo as unknown as ShopDoc | null, boardId, selfId);
 
   /** The clamp chips in the tray: one per declared clamp not already paired.
    *  Empty is the CORRECT state for a shop with no clamps, not a failure. */
@@ -4128,8 +4165,8 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     // not the machine. Reading the element directly found nothing for every tool
     // in a v2 shop, so a paired clamp stayed in the tray as if free.
     for (const e of elementsOf(doc as never) as unknown as RawEl[]) {
-      const ct = clampOf(doc, e);
-      if (ct) used.add((ct['controllerId'] as string) ?? '');
+      const board = clampBoardOf(doc, e);
+      if (board !== null) used.add(board);
     }
     return this.clampBoards.filter(b => !used.has(b.id));
   }
@@ -4160,15 +4197,25 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       const n = this.byId.get(elId);
       if (!n) continue;
       // Absent controllerId means THIS BOARD — the model's rule everywhere.
-      const boardId = (ct['controllerId'] as string) || this.defaultControllerId();
+      const boardId = clampBoardOf(doc, e) || this.defaultControllerId();
       const b = this.boards().find(x => x.id === boardId);
       // A board nobody placed on the canvas has nowhere to draw TO. Skipping is
       // the honest answer: the pairing is real and the sheet still shows it, but
       // an invented endpoint would be a line to a board that is not there.
       if (!b) continue;
-      const from = portExit({ x: this.bx(b), y: this.by(b) }, 0);
+      // From the board's CT jack, not a servo port (2026-10-11): it used to leave channel 0, a port it has nothing to do with.
+      const from = ctPortExit({ x: this.bx(b), y: this.by(b) });
       const to = { x: this.tabX(n), y: this.tabY(n) };
-      out.push({ id: 'ct:' + elId, elId, boardId, d: cablePath(cableRun(from, to, 0)) });
+      let pts = cableRun(from, to, 0);
+      // A TOOL ABOVE ITS CLAMP'S BOARD, more or less in line with it (planer-sensor sits under the planer): cableRun
+      // drops off the jack, runs across to the tool's column and climbs — straight back up through the board it left.
+      // Go round the board's right-hand side instead, then come in under the tool.
+      const cx = this.bx(b);
+      if (to.y < from.y && Math.abs(to.x - cx) < BOARD_W / 2 + 8 && pts.length >= 2) {
+        const lane = pts[1].y, side = cx + BOARD_W / 2 + 10, under = to.y + 12;
+        pts = [from, { x: from.x, y: lane }, { x: side, y: lane }, { x: side, y: under }, { x: to.x, y: under }, to];
+      }
+      out.push({ id: 'ct:' + elId, elId, boardId, d: cablePath(pts) });
     }
     return out;
   }

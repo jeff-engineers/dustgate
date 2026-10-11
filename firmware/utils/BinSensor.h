@@ -99,7 +99,7 @@ inline std::string localBinSystemId(JsonObjectConst topology, const char* ownId)
             if (!type || strcmp(type, "collector") != 0) continue;
             JsonObjectConst sensor = e["bin"]["sensor"];
             if (sensor.isNull()) continue;
-            const char* cid = sensor["controllerId"];
+            const char* cid = e["controllerId"];   // the collector's board: one per collector (2026-10-10)
             // ABSENT, OR THIS BOARD'S OWN ID (in either spelling). Nothing else: a sensor that
             // names a board is owned by that board and by nobody else, and a board that does
             // not yet know its own id claims no named sensor at all.

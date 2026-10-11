@@ -1,0 +1,154 @@
+{
+  "schemaVersion": 2,
+  "name": "My Shop",
+  "controllers": [
+    {
+      "id": "primary",
+      "role": "primary",
+      "name": "Shop Brain",
+      "board": "devkitc"
+    },
+    {
+      "id": "dustgate-planer-sensor",
+      "role": "secondary",
+      "name": "dustgate-planer-sensor",
+      "board": "xiao_c5",
+      "link": {
+        "transport": "wifi-ws",
+        "host": "dustgate-planer-sensor"
+      }
+    },
+    {
+      "id": "dustgate-planer",
+      "role": "secondary",
+      "name": "dustgate-planer",
+      "board": "xiao_c5",
+      "link": {
+        "transport": "wifi-ws",
+        "host": "dustgate-planer"
+      }
+    }
+  ],
+  "systems": [
+    {
+      "id": "system-1",
+      "name": "Dust collection",
+      "elements": [
+        {
+          "id": "dc",
+          "type": "collector",
+          "name": "Dust collector",
+          "control": {
+            "offDelayMs": 8000,
+            "rf": {
+              "address": 94
+            }
+          },
+          "sensor": {
+            "ct": {
+              "channel": 0
+            }
+          },
+          "bin": {
+            "sensor": {
+              "kind": "threshold"
+            }
+          }
+        },
+        {
+          "id": "sel1",
+          "type": "selector",
+          "name": "Ball valve",
+          "controllerId": "dustgate-planer",
+          "kind": "servoGate",
+          "states": [
+            {
+              "id": "open",
+              "isClosed": false,
+              "offsetDeg": 0
+            },
+            {
+              "id": "closed",
+              "isClosed": true,
+              "offsetDeg": 78
+            }
+          ],
+          "branches": [
+            {
+              "id": "b1",
+              "opensState": "open",
+              "role": "tool"
+            }
+          ],
+          "servo": {
+            "channel": 0,
+            "detented": true,
+            "referenceAngle": 12
+          }
+        },
+        {
+          "id": "tool3",
+          "type": "tool",
+          "name": "Planer",
+          "machineId": "tool3"
+        }
+      ],
+      "ducts": [
+        {
+          "child": "sel1",
+          "parent": "dc"
+        },
+        {
+          "child": "tool3",
+          "parent": "sel1",
+          "parentBranch": "b1"
+        }
+      ]
+    }
+  ],
+  "machines": [
+    {
+      "id": "tool3",
+      "name": "Planer",
+      "sensor": {
+        "ct": {
+          "channel": 0,
+          "controllerId": "dustgate-planer-sensor"
+        }
+      }
+    }
+  ],
+  "devices": [],
+  "ui": {
+    "layout": {
+      "dc": {
+        "col": 0,
+        "row": 0
+      },
+      "sel1": {
+        "col": 1,
+        "row": 1
+      },
+      "tool3": {
+        "col": 1,
+        "row": 2
+      }
+    },
+    "wiring": {
+      "boards": {
+        "primary": {
+          "col": 0,
+          "row": 1
+        },
+        "dustgate-planer-sensor": {
+          "col": 2,
+          "row": 2
+        },
+        "dustgate-planer": {
+          "col": 2,
+          "row": 1
+        }
+      }
+    }
+  }
+}

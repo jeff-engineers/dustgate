@@ -85,9 +85,11 @@ public:
             const std::string key = "clamp:" + b.host;
             const std::string users = (b.clampIn == 0 && (b.linked || b.self)) ? clampUsers(rt, b) : std::string();
             if (users.empty()) { rt.clearProblem(key); continue; }
-            char t[200];
-            std::snprintf(t, sizeof(t), "The clamp is unplugged from this board's jack. %s cannot start collection until it is "
-                          "plugged back in.", users.c_str());
+            char t[320];
+            // "or reads wrong" since 2026-10-11: a jack whose bias is off (ClampJack kMinClampMv/kMaxClampMv) reads as no
+            // clamp too, because a clamp on it cannot be read either way.
+            std::snprintf(t, sizeof(t), "No clamp reads on this board's jack: it is unplugged, or the jack's wiring is off "
+                          "(it should read about 1.65 V with a clamp in). %s cannot start collection until it reads.", users.c_str());
             rt.raiseProblem(key, "clamp-unplugged", "bad", "board", b.host, t, now);
         }
         // A paired plug that stops answering is usually a new address (DHCP), not a dead plug. The tool it senses is

@@ -403,9 +403,10 @@ These are decided; don't relitigate them in code review or suggestions.
   collector's jobs: the clamp (proven), the dust-bin beam (a `bin` sensor in CONFIG, reported
   as a SENSE bit) and the RF transmitter (a `PRESS` frame). The retry policy stays on the
   primary (`control/CollectorPress.h`), because only the primary can read the plug that says
-  whether the blower agreed; a node only keys the pad. A layout points the collector at a
-  board with `control.rf.controllerId` and `bin.sensor.controllerId`; absent means the
-  primary's own, exactly as before. Everything here compiles and passes the paired host
+  whether the blower agreed; a node only keys the pad. A layout points the collector at ONE
+  board with the collector's own `controllerId` — its transmitter, clamp and bin are all on it
+  (one board per collector since 2026-10-10; none of the three names a board of its own).
+  Absent means the primary's own; a native brain has no pads and raises `collector-no-board`. Everything here compiles and passes the paired host
   tests (`nodelink.test.js` ↔ `test_nodebus.cpp`), and **a PRESS has never keyed a real
   receiver from a node**. The UI's collector configurator does not offer a board for the
   transmitter yet. **Bench 2026-10-05 (nodes on a desk with USB only: no servos, no receiver, no collector, no beam): PRESS and the bin pad now HAVE run on a real node.** A brain commanded a collector through `dustgate-mitersaw`; the node answered every PRESS `ok` (it keyed its transmitter pin), and the press policy retried at its 5 s cooldown and gave up after 3 against a plug that never drew, exactly as designed. A `bin` sensor in CONFIG came back as `SENSE bin:<system> on:false` and showed in `systems[].bin`. **Bench 2026-10-06 (the shop: six PWM boards with servos on some, Shelly and Tasmota plugs, a desk fan on the Rockler receiver): a PRESS from a node DID key a real receiver** — the cyclone board's transmitter switched the fan on and off through the Rockler switch. Whole-shop routing through the native brain also ran: gate moves across five boards, tool switch-on opening the right gate and starting the collector, the press policy correcting an inverted belief in two presses, and a board browning out mid-move (fixed: it froze every gate). Still not proven: the beam seeing FULL, a press never replaying across a link drop (unit-tested only), the collector sensed by a CT clamp, the slider node through the native brain, and anything on a Raspberry Pi. Do not describe those as verified until a bench says so.

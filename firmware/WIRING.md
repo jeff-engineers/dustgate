@@ -1225,6 +1225,20 @@ internal pull-up enabled — without it a bare pad floats and may read as a clam
    wired tip-ring: move the bias node to the ring contact (`Ring` / pin 3).
 3. A 3-pole plug in the 4-pole Adafruit jack shorts its two inner contacts to
    the sleeve, which is harmless here — only `Sleeve` is wired.
+4. **The two clamp diodes face the right way — check before a XIAO goes in
+   (2026-10-11).** A backwards one cost a XIAO: the collector board's ran hot, its
+   3V3 sagged to 2.3–2.8 V even off the carrier, the jack read 2971 mV with or
+   without a clamp, and the clamp never saw the blower; a second CT board built as
+   a copy had its lower diode reversed too. The markings on small Schottkys are
+   faint, so meter each one before fitting it (diode test: ~0.15–0.35 V with the
+   black probe on the cathode, OL the other way), then again in place, power off,
+   XIAO out:
+   - upper: red on **D0**, black on **3V3** → ~0.15–0.35 V
+   - lower: red on **GND**, black on **D0** → ~0.15–0.35 V
+
+   Then power the carrier with the XIAO **out**: every socket pin except `5V`
+   should read about 0 V. A pin that does not is a supply reaching a pad the XIAO
+   only expects to drive.
 
 **The clamp diodes are thin margin.** A Schottky drops ~0.2–0.4 V at small
 currents, so D0 clips at roughly 3.5–3.7 V against a 3.6 V absolute maximum. They
@@ -1819,14 +1833,14 @@ current, no interaction between the two loads.
 **Confirmed correct as drawn, 2026-09-13** — this grid was wired and the lamps
 behave. The one number still unmeasured is below.
 
-**⚠️ Meter the strobe before trusting the sink budget.** The QS18 sinks
-**150 mA** maximum and is now carrying the strobe *plus* the opto's ~10.8 mA.
-The green lamp is ~20 mA and does not count — it never touches the output. The
-strobe's draw ([B07SC3TNLC](https://www.amazon.com/dp/B07SC3TNLC)) has never
-been measured; it is a flashing beacon with its own circuit inside, so its
-*peak* is what matters, not its average. If it is over ~130 mA, the strobe
-needs its own low-side FET on the 12 V side with the QS18 driving the gate —
-still no ESP32 involvement.
+**The sink budget fits — metered 2026-10-10 (jeff).** The QS18 sinks **150 mA**
+maximum and carries the red strobe *plus* the opto's ~10.8 mA. The strobe
+([B07SC3TNLC](https://www.amazon.com/dp/B07SC3TNLC)) peaks at about **60 mA** at
+12 V (hard to read on a meter because it flashes; that was the highest seen), so
+the output carries ~71 mA: about half its rating. The green pilot draws about
+**10 mA** and does not count — it never touches the output. Only if a brighter
+strobe ever goes over ~130 mA does it need its own low-side FET on the 12 V side,
+with the QS18 driving the gate — still no ESP32 involvement.
 
 **The cost of this choice, stated plainly:** the strobe can only ever mean
 *this sensor tripped*. It can never mean a clog, and it can never carry a
