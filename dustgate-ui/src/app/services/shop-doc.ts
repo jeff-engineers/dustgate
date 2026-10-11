@@ -416,6 +416,27 @@ export function clampUsers(doc: ShopDoc | null, controllerId: string): string[] 
 }
 
 /**
+ * Who ELSE uses this board's clamp: the name of a machine or collector other than `selfId` (a machine id, or a collector
+ * element id), or null. A board has one jack, so its clamp watches ONE thing (2026-10-11; validateShop refuses two) —
+ * the planer and the collector once shared one, and the brain read the planer's cord as the blower.
+ */
+export function clampTakenBy(doc: ShopDoc | null, controllerId: string, selfId: string): string | null {
+  if (!doc) return null;
+  const key = (id: unknown) => ((controllerFor(doc, (id as string) ?? '')?.['id'] as string) ?? (id as string) ?? '').toLowerCase();
+  const want = key(controllerId);
+  for (const m of machinesOf(doc)) {
+    const ct = (m.sensor as RawEl | undefined)?.['ct'] as RawEl | undefined;
+    if (ct && m.id !== selfId && key(ct['controllerId']) === want) return (m.name as string) || (m.id as string);
+  }
+  for (const sys of systemsOf(doc)) {
+    const dc = collectorOf(sys);
+    if (dc && dc['id'] !== selfId && (dc['sensor'] as RawEl | undefined)?.['ct'] && key(dc['controllerId']) === want)
+      return (dc['name'] as string) || 'the dust collector';
+  }
+  return null;
+}
+
+/**
  * Can a clamp on this board be offered for a tool or a collector? When one is PLUGGED IN — and, so a binding never
  * vanishes from its own picker, when the layout already uses that board's clamp (unplugged is then a problem the brain
  * raises, not a reason to hide it). `clampIn` undefined is a board that has not said: not offered.

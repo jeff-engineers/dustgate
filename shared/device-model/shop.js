@@ -434,6 +434,27 @@ function validateShop(shop) {
     }
   }
 
+  // ── one clamp, one owner (2026-10-11) ──
+  // A board has ONE clamp jack, so its clamp can watch one thing: a tool, or a collector. Two claims on one jack are
+  // two answers read off the same wire — the shop's "is the blower running" was once the PLANER's cord, so the brain
+  // believed a running collector was off and never stopped it. Channel is not part of the key: every board has the one
+  // jack, and a layout naming two channels on it would still be one wire.
+  const clampOwner = new Map();
+  const claimClamp = (board, who) => {
+    const key = BID.bareHost(board || '') || '(this board)';
+    if (clampOwner.has(key)) err('clamp', `the clamp on ${board || 'the primary'} is claimed by both "${clampOwner.get(key)}" and "${who}" — a clamp watches one thing`, who);
+    else clampOwner.set(key, who);
+  };
+  for (const m of shop.machines) {
+    const ct = m && m.sensor && m.sensor.ct;
+    if (ct) claimClamp(ct.controllerId, m.name || m.id);
+  }
+  for (const sys of shop.systems) {
+    for (const e of (sys && sys.elements) || []) {
+      if (e && e.type === 'collector' && e.sensor && e.sensor.ct) claimClamp(e.controllerId, e.name || e.id);
+    }
+  }
+
   // ── each system, as a topology ──
   for (const sys of shop.systems) {
     const res = T.validateTopology(systemView(shop, sys));

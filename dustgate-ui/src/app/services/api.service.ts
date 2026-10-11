@@ -270,6 +270,8 @@ export interface CollectorBoard extends ClampBoard {
 
 export interface DeviceInfo {
   apiKey: string;
+  /** 'native' for the brain as a program (a Pi): it has no pads, so it drives no gates and has no clamp. */
+  role?: string;
   numStops: number;
   version: string;
   /** Compile stamp — `__DATE__ " " __TIME__` from the firmware, e.g. "Sep  2 2026

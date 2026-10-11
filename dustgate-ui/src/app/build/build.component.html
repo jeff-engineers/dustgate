@@ -350,6 +350,17 @@
           <text class="port-label" [attr.x]="portX(b, ch) - bx(b) + portW(ch)/2"
                 [attr.y]="portY(b, ch) - by(b) + 16">{{ portLabel(ch) }}</text>
         </g>
+        <!-- The CT JACK (2026-10-11), to the right of the servo ports, on a board with a clamp plugged in or in use. The
+             clamp lead leaves from here. Round, and in the lead's blue when used, because nothing is ever cabled to it
+             from a gate: it is not a channel. -->
+        <g *ngIf="b.ct" class="ct-port">
+          <title>{{ ctTaken(b) ? 'The clamp on this board — the dotted lead shows what it watches' : 'A clamp is plugged in here, watching nothing yet' }}</title>
+          <rect class="port ct" [class.taken]="ctTaken(b)" [attr.stroke]="clampLeadShade"
+                [attr.fill]="ctTaken(b) ? clampLeadShade : 'none'"
+                [attr.x]="ctX(b) - bx(b)" [attr.y]="ctY(b) - by(b)"
+                [attr.width]="PORT_W" [attr.height]="PORT_H" rx="3.5"/>
+          <text class="port-label" [attr.x]="ctX(b) - bx(b) + PORT_W/2" [attr.y]="ctY(b) - by(b) + 16">CT</text>
+        </g>
       </g>
 
       </g>
@@ -698,6 +709,7 @@
   <app-collector-setup *ngIf="outletMode === 'switch'; else toolOutlet"
                        [element]="ot"
                        [boards]="collectorBoards"
+                       [clampTaken]="clampTakenFn"
                        [clampBoards]="clampBoards"
                        [systemName]="outletSysName"
                        [excludeIps]="outletExcludeIps"

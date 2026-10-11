@@ -422,6 +422,8 @@ export class CollectorSetupComponent implements OnInit, OnDestroy {
    *  it on — so only a board that has actually said it has one can be offered,
    *  or the sheet would happily write a layout that senses nothing. */
   @Input() clampBoards: ClampBoard[] = [];
+  /** Whose clamp a board's already is, other than this collector's (shop-doc clampTakenBy): one clamp watches ONE thing. */
+  @Input() clampTaken: (boardId: string, selfId: string) => string | null = () => null;
   /** Named in the bin alert's copy, so the scope is concrete rather than abstract. */
   @Input() systemName = '';
   /** Plugs already spoken for elsewhere in the shop, and why. */
@@ -580,6 +582,8 @@ export class CollectorSetupComponent implements OnInit, OnDestroy {
     if (this.form.sense === 'ct' && !b.ct) miss.push('a clamp input');
     if (this.form.bin && !b.bin) miss.push('a bin input');
     if (miss.length) return `${b.name} has no ${miss.join(' or ')}.`;
+    const taken = this.form.sense === 'ct' ? this.clampTaken(b.id, this.element['id'] as string) : null;
+    if (taken) return `${b.name}'s clamp already watches ${taken}. A clamp watches one thing: put this collector's clamp on its own board's jack, or move ${taken} off it.`;
     if (this.form.sense === 'ct' && b.clampIn === false) return `No clamp is plugged into ${b.name}'s jack yet.`;
     return null;
   }

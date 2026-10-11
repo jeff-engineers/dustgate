@@ -44,12 +44,32 @@ install -d /etc/systemd/system.conf.d /etc/systemd/journald.conf.d
 printf '[Manager]\nRuntimeWatchdogSec=15\nRebootWatchdogSec=2min\n' > /etc/systemd/system.conf.d/99-dustgate-watchdog.conf
 printf '[Journal]\nStorage=persistent\nSystemMaxUse=200M\n' > /etc/systemd/journald.conf.d/99-dustgate.conf
 
+echo "== mDNS keeps the name it was given (no silent rename to dustgate-2)"
+# Seen 2026-10-11: after a plain reboot the Pi came back as dustgate-2.local and dustgate.local answered nothing, so the
+# app looked frozen while the brain ran fine (the boards were unaffected: they redial the brain's last IP). Avahi renames
+# itself when it believes another host holds its name, and on a Pi that "other host" is usually its OWN announcement
+# heard back over IPv6 or a second interface. Announcing on the one interface that carries the default route, over IPv4
+# only, removes the echo. Nothing in DustGate uses IPv6 mDNS.
+IFACE="$(ip route show default 2>/dev/null | awk '{print $5; exit}')"
+AV=/etc/avahi/avahi-daemon.conf
+if [ -f "$AV" ]; then
+  sed -i -E 's/^#?[[:space:]]*use-ipv6=.*/use-ipv6=no/' "$AV"
+  if [ -n "$IFACE" ]; then
+    if grep -qE '^#?[[:space:]]*allow-interfaces=' "$AV"; then
+      sed -i -E "s/^#?[[:space:]]*allow-interfaces=.*/allow-interfaces=$IFACE/" "$AV"
+    else
+      sed -i -E "/^\[server\]/a allow-interfaces=$IFACE" "$AV"
+    fi
+  fi
+fi
+
 echo "== the service"
 install -m 644 "$HERE/dustgate-brain.service" /etc/systemd/system/dustgate-brain.service
 install -m 755 "$HERE/update.sh" /opt/dustgate/update.sh
 systemctl daemon-reload
 systemctl enable dustgate-brain.service
-systemctl enable --now avahi-daemon.service
+systemctl enable avahi-daemon.service
+systemctl restart avahi-daemon.service   # picks up the settings above
 
 echo
 echo "Done. Hostname: $(hostname).local — the brain does not NEED mDNS, but it is how you reach this Pi by name."

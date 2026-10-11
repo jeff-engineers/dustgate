@@ -45,8 +45,8 @@
 #     One pin map serves every PWM board — CT on D0, bin on D6, servo channels
 #     0/1/2 on D7/D8/D9, transmitter on D10 — so what makes a board a collector
 #     is the LAYOUT pointing it at a bin, a clamp and a remote.
-#     ⚠️ A NODE still has neither the bin sensor nor the RF transmitter: both
-#     live in firmware.ino and were never moved. Clamps DO work on a node.
+#     A NODE can do all three (clamp, bin beam, transmitter) since 2026-10-04,
+#     so a collector's board may be a node.
 #     firmware/WIRING.md#9-bin-sensor has the table of what works where.
 #
 #   THE SLIDER BOARD — add --slider to either flash command:
@@ -950,8 +950,8 @@ run_flash_node() {
   echo "  and this one owns a 60 Hz RMS loop, because neither can round-trip per"
   echo "  sample. What it never owns is what the reading MEANS."
   echo ""
-  echo "  ⚠️  A node still has NO bin sensor and NO RF transmitter — both live in"
-  echo "     firmware.ino and were never moved. The clamp does work here."
+  echo "  A node can also be a collector's board: the clamp, the dust-bin beam (D6)"
+  echo "  and the RF transmitter (D10) all work on a node since 2026-10-04."
   echo ""
   echo "  + SSD1306 status screen and its wake button, compiled in and probed for"
   echo "    at boot — no panel, one line on serial, carry on. A node's screen"

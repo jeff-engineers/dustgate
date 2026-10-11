@@ -38,6 +38,8 @@ export function headline(p: Problem, name: string): string {
     case 'plug-unreachable':   return 'Plug unreachable: ' + name;
     case 'move-failed':        return "A gate didn't move";
     case 'bin-full':           return 'Dust bin full: ' + name;
+    case 'collector-may-be-on': return name + ' is probably running, unseen';
+    case 'clamp-unplugged':    return 'No clamp reads on ' + name;
     default:                   return p.code.replace(/-/g, ' ');
   }
 }

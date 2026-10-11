@@ -593,7 +593,14 @@ export class BoardSetupComponent implements OnInit, OnDestroy {
       const cal: string[] = [];
       if (typeof s.floorA === 'number') cal.push(`baseline ${this.amp(s.floorA)}`);
       if (typeof s.tripA  === 'number') cal.push(`trips above ${this.amp(s.tripA)}`);
-      if (cal.length) out.push({ state: 'idle', text: cal.join(' · ') });
+      // A BASELINE FAR ABOVE THE RESTING READING (2026-10-11): the board learnt it while something was drawing (or its
+      // jack was misreading), so the trip sits several times too high and a small motor never reads as running — the
+      // collector's clamp learnt 0.51 A, read 0.09 A at rest, and never saw the blower. Relearnt at the board's boot.
+      const badFloor = !s.on && typeof s.floorA === 'number' && typeof s.amps === 'number' &&
+                       s.floorA >= 0.2 && s.amps < s.floorA / 3;
+      if (badFloor) out.push({ state: 'warn', text: `The baseline (${this.amp(s.floorA!)}) is far above what it reads at rest ` +
+        `(${this.amp(s.amps!)}), so it trips too late to see a small motor. Restart this board with everything off to relearn it.` });
+      else if (cal.length) out.push({ state: 'idle', text: cal.join(' · ') });
     }
     return out;
   }

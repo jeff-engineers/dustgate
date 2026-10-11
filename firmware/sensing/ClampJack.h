@@ -5,7 +5,8 @@
 // not — so the layout used to carry `clamp: true` for a person to say "this one has a clamp". The switched 3.5 mm jack
 // makes that a reading instead: with no plug in, the jack's switch ties the tip to 3V3 through 10 kΩ (WIRING.md §8), and
 // the board enables D0's own pull-up so a pad with nothing wired to it reads the same. A clamp holds the pin at the
-// bias midpoint (~1.65 V). So: railed high = nothing plugged in; mid-rail = a clamp.
+// bias midpoint (~1.65 V). So: railed high = nothing plugged in; mid-rail = a clamp; anything between = a bias network
+// wired wrong, which is no clamp anyone can read (kMinClampMv / kMaxClampMv).
 //
 // RAILED LOW (under 200 mV) also reads as no clamp: it is a pad shorted to ground or a broken bias divider, and in
 // neither case is there a clamp anyone can read. The thresholds are CtSensor::isRailed()'s, so a reading this calls
@@ -28,6 +29,13 @@ public:
     static constexpr uint32_t kProbeEveryMs = 1000;   // a jack is a slow fact; once a second costs ~16 ms of loop
     static constexpr uint32_t kLowRailMv    = 200;    // CtSensor::isRailed()'s two thresholds
     static constexpr uint32_t kHighRailMv   = 3100;
+    // A CLAMP is a mean NEAR THE BIAS MIDPOINT, not merely "not railed" (2026-10-11). The new collector board read
+    // 2971 mV — under kHighRailMv, so it reported a clamp, and the clamp it reported never once saw the blower run. A
+    // healthy jack reads ~1650 mV with a clamp in and ~3300 mV without; anything else is a bias network wired wrong, and
+    // a clamp on it cannot be read, so it must not pass as one. ±700 mV is well past a 10/10 kΩ divider's resistor
+    // tolerance (±170 mV at 5 %) and the ADC's error. A subset of isRailed()'s window, so the trip logic still agrees.
+    static constexpr uint32_t kMinClampMv   = 950;
+    static constexpr uint32_t kMaxClampMv   = 2350;
     static constexpr int      kSamples      = 16;     // ~1 ms apart: one 60 Hz cycle, so a running tool averages out
     static constexpr uint32_t kSampleGapUs  = 1000;
 
@@ -39,7 +47,7 @@ public:
         return sum / kSamples;
     }
 
-    static bool looksPlugged(uint32_t meanMv) { return meanMv >= kLowRailMv && meanMv <= kHighRailMv; }
+    static bool looksPlugged(uint32_t meanMv) { return meanMv >= kMinClampMv && meanMv <= kMaxClampMv; }
 
     bool due(uint32_t nowMs) const { return !_probed || (uint32_t)(nowMs - _lastProbeMs) >= kProbeEveryMs; }
 

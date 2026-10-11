@@ -10,7 +10,7 @@ import { resolveDeepLink } from './deep-link';
 import { elementsOf, ductsOf } from '../gates/selector-types';
 import { type ShopDoc, type RawEl as DocEl, collectorOf, isPortSupplemental, machineOfPort,
          outletExcludes, outletOf, outletTakenByAnotherMachine, renameMachine, systemLabel,
-         systemsInLayoutOrder, systemsOf, toShop, clampOffered } from '../services/shop-doc';
+         systemsInLayoutOrder, systemsOf, toShop, clampOffered, clampTakenBy } from '../services/shop-doc';
 import { DEFAULT_THRESHOLD } from './outlet-defaults';
 
 // ── The tools screen ─────────────────────────────────────────────────────────
@@ -306,6 +306,7 @@ interface SysGroup {
     <ng-container *ngIf="collectorEl as el">
       <app-collector-setup [element]="el"
                            [boards]="collectorBoards"
+                           [clampTaken]="clampTakenFn"
                            [clampBoards]="clampBoards"
                            [systemName]="collectorSysName"
                            [excludeIps]="collectorExcludeIps"
@@ -358,8 +359,8 @@ interface SysGroup {
             <span>Wired to
               <select [(ngModel)]="c.ctControllerId" (ngModelChange)="touched = true"
                       aria-label="Which board the clamp is wired to">
-                <option *ngFor="let b of clampBoards" [value]="b.id">
-                  {{ b.name }}{{ b.online ? '' : ' — not answering' }}
+                <option *ngFor="let b of clampBoards" [value]="b.id" [disabled]="clampTaken(b.id, c)">
+                  {{ b.name }}{{ clampTaken(b.id, c) ? ' — its clamp watches ' + clampTaken(b.id, c) : (b.online ? '' : ' — not answering') }}
                 </option>
               </select>
             </span>
@@ -1002,9 +1003,19 @@ export class ToolSetupComponent implements OnInit {
     this.touched = true;
     // Default to the only clamp in the shop rather than leaving the select
     // blank, which reads as an unfinished form.
-    if (s === 'ct' && !c.ctControllerId && this.clampBoards.length) {
-      c.ctControllerId = this.clampBoards[0].id;
+    if (s === 'ct' && !c.ctControllerId) {
+      const free = this.clampBoards.find(b => !this.clampTaken(b.id, c));
+      if (free) c.ctControllerId = free.id;
     }
+  }
+
+  /** For the collector's sheet, which has no layout of its own to ask. */
+  clampTakenFn = (boardId: string, selfId: string): string | null =>
+    clampTakenBy(this.topo as unknown as ShopDoc, boardId, selfId);
+
+  /** Whose clamp this board's is already, if not this tool's — one clamp watches one thing (shop-doc clampTakenBy). */
+  clampTaken(boardId: string, c: ToolCfg): string | null {
+    return clampTakenBy(this.topo as unknown as ShopDoc, boardId, c.machineId);
   }
 
   private gateLabel(toolId: string): string {
