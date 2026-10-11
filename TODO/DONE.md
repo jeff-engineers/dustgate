@@ -14,6 +14,17 @@ of this file is being able to answer "did we already decide this, and why".
 
 Newest first.
 
+### A board says whether a clamp is plugged in; the clamp switch is gone, 2026-10-09 (branch `clamp-detect`)
+
+- **The per-board "clamp" switch (D-76, `clamp: true` in the layout) is replaced by plug detection.** LANDED 2026-10-09,
+  host-tested, not on a board. Jeff's call: the switched jack already tells an empty jack from a clamp (WIRING.md §8), so a
+  person should not have to. A node probes D0 once a second (`sensing/ClampJack.h`, shared with the ESP32 primary) and
+  sends `CLAMP {in}` on a change, on a new link and every SENSE_REPEAT_MS, whether or not the layout uses the clamp. The brain
+  keeps it per board (`NodeSession`, -1 = not said, never read as unplugged), serves `clampIn` on /api/nodes, and raises
+  `clamp-unplugged` for a clamp the layout uses that reads empty (`DeviceProblems.h`). The pickers offer a board's clamp once
+  one is plugged in, or while the layout already uses it (`clampOffered`, shop-doc.ts). D0's internal pull-up is enabled so
+  a board with nothing on D0 reads as no clamp — the one part a bench must confirm. No mockup (jeff).
+
 ### The rest of the 2026-10-06 bug search, 2026-10-09 (branch `bug-search-fixes`)
 
 All found by reading, none seen to fail on hardware; host-tested (native suites, the Pi cross-build, the UI suites), not yet

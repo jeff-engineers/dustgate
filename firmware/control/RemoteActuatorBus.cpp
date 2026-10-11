@@ -722,7 +722,7 @@ RemoteActuatorBus::NodeInfo RemoteActuatorBus::info() const {
     NodeInfo n;
     if (!_mutex) {
         n.connected = false; n.lastSeenMs = 0;
-        n.board[0] = '\0'; n.fw[0] = '\0'; n.capServos = 0; n.capLinear = 0; n.capClamps = 0;
+        n.board[0] = '\0'; n.fw[0] = '\0'; n.capServos = 0; n.capLinear = 0; n.capClamps = 0; n.clampIn = -1;
         n.ota[0] = '\0'; n.otaPct = -1; n.otaErr[0] = '\0';
         return n;
     }

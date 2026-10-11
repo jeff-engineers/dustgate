@@ -311,6 +311,25 @@ int main() {
     ok("a range out of bounds is ignored", f.s.jog(0, 50, false) && f.drain(out) && out.find("\"minUs\":400") != std::string::npos);
   }
 
+  printf("\nS12 the clamp jack (CLAMP, 2026-10-09)\n");
+  {
+    Fx f; f.up();
+    ok("unknown until the node says", f.s.info().clampIn == -1);
+    auto entry = [&]() { DynamicJsonDocument d(2048); topo::NodeImageView iv;
+                         topo::writeNodeEntry(d.createNestedArray("nodes"), f.s, "n1", "n1", "n1", iv);
+                         std::string out; serializeJson(d, out); return out; };
+    ok("...and /api/nodes says nothing, rather than \"unplugged\"", entry().find("clampIn") == std::string::npos);
+    f.feed(R"({"t":"CLAMP","in":false})");
+    ok("an empty jack is recorded", f.s.info().clampIn == 0 && entry().find("\"clampIn\":false") != std::string::npos);
+    f.feed(R"({"t":"CLAMP","in":true})");
+    ok("a clamp plugged in is recorded", f.s.info().clampIn == 1 && entry().find("\"clampIn\":true") != std::string::npos);
+    f.feed(R"({"t":"CLAMP","in":1})");
+    f.feed(R"({"t":"CLAMP"})");
+    ok("a frame without a boolean `in` changes nothing", f.s.info().clampIn == 1);
+    f.s.onDown();
+    ok("a dropped link forgets it: unknown again", f.s.info().clampIn == -1);
+  }
+
   printf("\n%d/%d passed%s\n", passed, passed + failed, failed ? " — FAILED" : "");
   return failed ? 1 : 0;
 }

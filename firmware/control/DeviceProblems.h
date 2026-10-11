@@ -11,7 +11,10 @@
 // PURE. test_deviceproblems.cpp.
 // =============================================================================
 #pragma once
+#include <algorithm>
+#include <cctype>
 #include <cstdint>
+#include <cstdio>
 #include <map>
 #include <set>
 #include <string>
@@ -32,6 +35,9 @@ struct BoardView {
     // Nothing the shop does depends on it being on (isOptionalBoard() in Shop.h): its being off is normal, so no
     // board-offline. A refusal is still raised — that is a board that answered and belongs to someone else.
     bool        optional  = false;
+    // Is a clamp plugged into its jack (CLAMP, 2026-10-09): -1 not known (old firmware, or not said yet), 0 empty, 1 in.
+    int         clampIn   = -1;
+    bool        self      = false;     // this view is the brain's OWN board (an ESP32 primary with a clamp pad)
 };
 
 struct PlugView {
@@ -72,6 +78,18 @@ public:
                 _faulted.erase(b.host);
             }
         }
+        // A CLAMP THE LAYOUT USES, unplugged from its jack (2026-10-09). Only on a board that SAID so: -1 is old firmware
+        // or a board not heard from yet, and must never read as unplugged. A board that is off has its own problem (or
+        // none, if optional) — the jack cannot be read, so nothing is said about it here.
+        for (const BoardView& b : boards) {
+            const std::string key = "clamp:" + b.host;
+            const std::string users = (b.clampIn == 0 && (b.linked || b.self)) ? clampUsers(rt, b) : std::string();
+            if (users.empty()) { rt.clearProblem(key); continue; }
+            char t[200];
+            std::snprintf(t, sizeof(t), "The clamp is unplugged from this board's jack. %s cannot start collection until it is "
+                          "plugged back in.", users.c_str());
+            rt.raiseProblem(key, "clamp-unplugged", "bad", "board", b.host, t, now);
+        }
         // A paired plug that stops answering is usually a new address (DHCP), not a dead plug. The tool it senses is
         // silently never "on" meanwhile.
         std::map<std::string, uint32_t> still;
@@ -92,6 +110,29 @@ public:
     void forget(TopologyRuntime& rt, const std::string& key) { rt.clearProblem(key); _since.erase(key); }
 
 private:
+    // What the layout's clamps on this board sense, as a person would say it ("The Planer", "The Planer and the
+    // collector"), or "" when the layout puts no clamp there.
+    static std::string clampUsers(TopologyRuntime& rt, const BoardView& b) {
+        if (!rt.loaded()) return std::string();
+        JsonObjectConst doc = rt.topology();
+        std::string own;   // the layout's id for the brain's own board
+        for (JsonObjectConst c : doc["controllers"].as<JsonArrayConst>()) if (_eq(c["role"], "primary")) own = c["id"] | "";
+        const std::string cid = b.self ? own : controllerIdForHost(doc, b.host);
+        std::vector<std::string> names;
+        for (const PlannedSensor& p : rt.sensorPlan()) {
+            if (p.kind != PlannedSensor::Kind::Clamp) continue;
+            if (!(b.self ? isOwnBoard(p.board, own) : (!p.board.empty() && sameBoard(p.board, cid, own)))) continue;
+            std::string n;
+            if (p.onCollector) n = "the collector";
+            else { const char* nm = machineDoc(doc, p.id)["name"] | ""; n = std::string("the ") + (*nm ? nm : p.id.c_str()); }
+            if (std::find(names.begin(), names.end(), n) == names.end()) names.push_back(n);
+        }
+        std::string out;
+        for (size_t i = 0; i < names.size(); i++) out += (i == 0 ? "" : (i + 1 == names.size() ? " and " : ", ")) + names[i];
+        if (!out.empty()) out[0] = (char)std::toupper((unsigned char)out[0]);
+        return out;
+    }
+
     std::map<std::string, uint32_t> _since;
     std::set<std::string> _faulted;   // boards whose current moveFault has already been acted on
 };

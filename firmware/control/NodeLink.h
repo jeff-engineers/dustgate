@@ -384,6 +384,13 @@ inline void buildOtaState(JsonObject out, const char* state, int pct = -1, const
 //
 // All three are OPTIONAL and omitted rather than zeroed. Zero amps is a real
 // reading; "this board has no floor yet" is not, and the two must not look alike.
+// CLAMP — is a clamp plugged into this board's jack? On change and every kSenseRepeatMs, whether or not a CONFIG
+// names a clamp. clamp() in nodelink.js has the reasoning; never sent = unknown, never "unplugged".
+inline void buildClamp(JsonObject out, bool plugged) {
+    out["t"]  = "CLAMP";
+    out["in"] = plugged;
+}
+
 inline void buildSense(JsonObject out, const char* sensorId, bool on,
                        float level = -1.0f, float amps = -1.0f,
                        float floorA = -1.0f, float tripA = -1.0f,

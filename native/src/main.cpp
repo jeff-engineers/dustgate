@@ -115,6 +115,7 @@ static void raiseDeviceProblems(uint32_t now) {
         const auto h = kv.second->session.health();
         topo::BoardView b; b.host = kv.first; b.linked = h.linked; b.refused = h.refused; b.downForMs = h.downForMs; b.moveFault = h.moveFault;
         b.optional = g_rt.loaded() && topo::isOptionalBoard(g_rt.topology(), topo::controllerIdForHost(g_rt.topology(), kv.first));
+        b.clampIn = kv.second->session.info().clampIn;
         boards.push_back(b);
     }
     std::vector<topo::PlugView> plugs;

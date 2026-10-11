@@ -25,7 +25,7 @@ import {
   removeMachine, removePort,
   renameMachine,
   supplementalCount,
-  systemById, systemsOf, systemViews, toShop, clampEnabled,
+  systemById, systemsOf, systemViews, toShop, clampOffered,
   planSystemRemoval, removeSystem, planClearShop, clearShop, plugIpsOf, collectorOf, type SystemRemoval,
 } from '../services/shop-doc';
 import { wipSummary } from '../services/wip-message';
@@ -3667,7 +3667,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     // failure leaves the list empty, which is the same as a shop with no clamps
     // and reads correctly on its own rather than as an error.
     // Only boards a person has switched a clamp ON for (Boards screen) may be pointed at.
-    try { this.clampBoards = (await this.api.getClampBoards()).filter(b => clampEnabled(this.topo as unknown as ShopDoc, b.id)); }
+    try { this.clampBoards = (await this.api.getClampBoards()).filter(b => clampOffered(this.topo as unknown as ShopDoc, b)); }
     catch { this.clampBoards = []; }
     const controllers = this.controllersRaw();
     let added = false;

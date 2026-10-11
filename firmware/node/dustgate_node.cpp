@@ -122,6 +122,8 @@
 #ifdef PIN_CT
 #include "../sensing/CtSensor.h"      // a clamp, on a board that watches a tool
 #include "../sensing/CtTrip.h"        // ...and the one shared answer to "is it running?"
+#include "../sensing/ClampJack.h"     // ...and whether one is plugged in at all
+#include <driver/gpio.h>              // gpio_pullup_en: D0's pull-up, so an empty pad reads as no clamp
 #endif
 
 #if HAS_LINEAR
@@ -400,6 +402,11 @@ static uint32_t g_lastSenseMs = 0;
 // changing any of it; the two provisional numbers are in there with their
 // reasoning.
 static sensing::CtTrip g_ctTrip;
+
+// Is a clamp plugged into the jack — reported as CLAMP whether or not a CONFIG names one (sensing/ClampJack.h).
+static sensing::ClampJack g_jack;
+static uint32_t g_lastClampMs = 0;
+static bool     g_clampResend = false;   // a new link: say it now rather than at the next repeat
 #endif
 
 static void loadClaim() {
@@ -1028,6 +1035,9 @@ static void handleNodeFrame(const Conn& conn, const uint8_t* data, size_t len) {
         // ("panic"/"task_wdt"). See withBootInfo() in nodelink.js.
         topo::nodelink::addBootInfo(reply.as<JsonObject>(), millis() / 1000UL,
                                     resetreason::now());
+#ifdef PIN_CT
+        if (accepted) g_clampResend = true;
+#endif
     } else if (strcmp(t, "PING") == 0) {
         topo::nodelink::buildPong(reply.to<JsonObject>());
     } else if (strcmp(t, "CONFIG") == 0) {
@@ -1367,6 +1377,33 @@ static void tickSensors() {
 }
 #endif
 
+#ifdef PIN_CT
+// ── the clamp jack ──────────────────────────────────────────────────────────
+// Once a second: the mean of D0 over one mains cycle (sensing/ClampJack.h). Sent on a change, on a new link, and every
+// kSenseRepeatMs, so one lost frame cannot leave the brain wrong about it.
+static void tickClampJack() {
+    const uint32_t now = millis();
+    bool changed = false;
+    if (g_jack.due(now)) {
+        watchdog::pet();
+        const uint32_t mv = sensing::ClampJack::probeMeanMv([] { return analogReadMilliVolts(PIN_CT); },
+                                                           [](uint32_t us) { delayMicroseconds(us); });
+        changed = g_jack.update(mv, now);
+        if (changed) {
+            Serial.print(F("[CT] jack: ")); Serial.print(g_jack.plugged() ? F("clamp plugged in (") : F("EMPTY — no clamp ("));
+            Serial.print(mv); Serial.println(F(" mV)"));
+        }
+    }
+    if (!g_jack.known()) return;
+    if (!changed && !g_clampResend && (uint32_t)(now - g_lastClampMs) < topo::nodelink::kSenseRepeatMs) return;
+    StaticJsonDocument<64> doc;
+    topo::nodelink::buildClamp(doc.to<JsonObject>(), g_jack.plugged());
+    String out; serializeJson(doc, out);
+    sendToOwner(out);
+    g_lastClampMs = now; g_clampResend = false;
+}
+#endif
+
 static void reportState(const char* selectorId, const char* stateId, bool moving) {
     StaticJsonDocument<192> doc;
     topo::nodelink::buildState(doc.to<JsonObject>(), selectorId, stateId, moving);
@@ -1582,6 +1619,11 @@ void setup() {
     // anything asks — it bites only on the path it exists for, a fast boot that
     // reaches a reading before the rail is up.
     g_ct.begin();
+    // D0's own pull-up, so a pad with NOTHING wired to it reads railed high — "no clamp" — rather than floating. Set
+    // after a first read, so the ADC's own pin setup cannot undo it. Against the bias divider's 500 Ω it moves the
+    // midpoint ~18 mV, which the RMS subtracts. ⚠ unverified on a C5: that the ADC leaves the pull-up enabled.
+    (void)analogReadMilliVolts(PIN_CT);
+    gpio_pullup_en((gpio_num_t)PIN_CT);
 #endif
 #if HAS_BIN
     pinMode(PIN_BIN_SENSOR, INPUT_PULLUP);   // the optocoupler's output; LOW = the bin is full
@@ -1700,6 +1742,7 @@ void loop() {
 
 #ifdef PIN_CT
     tickSensors();
+    tickClampJack();
 #endif
     statusled::update();
     wakebutton::update();   // before the screen decides whether to be lit

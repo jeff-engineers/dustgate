@@ -630,6 +630,7 @@ export class DemoApiService extends ApiService {
       board: primary?.board ?? 'xiao_c5',
       fw: '1.0.0-demo',
       caps: { servos: SERVO_CHANNELS_PER_BOARD, linear: 0, ct: 1 },
+      clampIn: true,
       // '' is how the model spells "this board", and it is what a layout writes.
       sense: this.senseFor('', true),
     };
@@ -692,6 +693,8 @@ export class DemoApiService extends ApiService {
           : { servos: known?.servos ?? 0, linear: 0,
               ...(known?.ct ? { ct: known.ct } : {}) },
         ...(known?.ct ? { sense: this.senseFor(host, online) } : {}),
+        // Its clamp is plugged in (CLAMP, 2026-10-09) — said only while it is online, as a real brain forgets it on a drop.
+        ...(known?.ct && online ? { clampIn: true } : {}),
         ...this.demoOta(host, firstUp),
       };
     });

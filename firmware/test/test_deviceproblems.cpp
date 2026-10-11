@@ -1,3 +1,4 @@
+#include <cstring>
 // test_deviceproblems.cpp — host tests for control/DeviceProblems.h: when a dead board or a silent plug becomes a problem
 // a person sees, and when it stops being one. Run from the repo root.
 #include "../control/DeviceProblems.h"
@@ -100,6 +101,39 @@ int main() {
     dp.update(*rt, {}, {p}, 400000 + kPlugDownAfterMs - 1);
     ok("a plug that dropped out again gets a FRESH window, not the old clock", !rt->hasProblem("plug:saw"));
     delete rt; }
+  printf("\nP3 a clamp the layout uses, unplugged from its jack (2026-10-09)\n");
+  { static const char* kShop = R"({"schemaVersion":2,
+      "controllers":[{"id":"primary","role":"primary"},{"id":"n2","role":"secondary"},{"id":"n3","role":"secondary"}],
+      "systems":[{"id":"s1","elements":[
+        {"id":"dc","type":"collector","sensor":{"ct":{"controllerId":"primary","channel":0}}},
+        {"id":"gate1","type":"selector","controllerId":"n3","kind":"servoGate",
+         "states":[{"id":"open","isClosed":false,"offsetDeg":0},{"id":"closed","isClosed":true,"offsetDeg":90}],
+         "branches":[{"id":"g1","opensState":"open","role":"tool"}],"servo":{"channel":0,"referenceAngle":10}},
+        {"id":"p1","type":"tool","machineId":"planer"}],
+       "ducts":[{"child":"gate1","parent":"dc"},{"child":"p1","parent":"gate1","parentBranch":"g1"}]}],
+      "machines":[{"id":"planer","name":"Planer","sensor":{"ct":{"controllerId":"n2","channel":0}}}]})";
+    NodeBus nb; static NullBus nul; nb.setLocal(&nul, "primary");
+    TopologyRuntime rt; rt.begin(&nb);
+    std::string err; if (!rt.adopt(kShop, strlen(kShop), err)) { printf("fixture: %s\n", err.c_str()); return 2; }
+    DeviceProblems dp;
+    BoardView n2; n2.host = "n2"; n2.linked = true;
+    dp.update(rt, {n2}, {}, 1000);
+    ok("a board that never said (old firmware) raises nothing", !rt.hasProblem("clamp:n2"));
+    n2.clampIn = 1; dp.update(rt, {n2}, {}, 2000);
+    ok("a clamp plugged in raises nothing", !rt.hasProblem("clamp:n2"));
+    n2.clampIn = 0; dp.update(rt, {n2}, {}, 3000);
+    ok("the planer's clamp unplugged is clamp-unplugged", rt.hasProblem("clamp:n2"));
+    n2.linked = false; dp.update(rt, {n2}, {}, 4000);
+    ok("a board that is off says nothing about its jack", !rt.hasProblem("clamp:n2"));
+    n2.linked = true; n2.clampIn = 1; dp.update(rt, {n2}, {}, 5000);
+    ok("plugged back in, it clears", !rt.hasProblem("clamp:n2"));
+    BoardView n3; n3.host = "n3"; n3.linked = true; n3.clampIn = 0;
+    dp.update(rt, {n3}, {}, 6000);
+    ok("an empty jack on a board the layout uses no clamp on is nobody's problem", !rt.hasProblem("clamp:n3"));
+    BoardView me; me.host = "dustgate"; me.self = true; me.linked = true; me.clampIn = 0;
+    dp.update(rt, {me}, {}, 7000);
+    ok("the brain's OWN jack: the collector's clamp unplugged", rt.hasProblem("clamp:dustgate"));
+  }
   printf("\n%d passed, %d failed\n", passed, failed);
   return failed ? 1 : 0;
 }

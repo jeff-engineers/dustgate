@@ -75,12 +75,13 @@ the app, the Pi's plug picker shows live draw (and not itself), and a board too 
 
 ### Earlier
 
-- **Clamp switch: the node still reports `caps.ct` from its pin map, and the jack idea is open (2026-10-06).** The per-board switch
-  landed (D-76), kept in the layout as `clamp: true`, so a layout cannot name a clamp the person has not switched on. What it
-  does not do is stop a node CLAIMING one. If the clamp moves to a headphone-style jack, its switch contact could report
-  `caps.ct` only while a plug is inserted, and the switch would then be a confirmation rather than the source. Also open: the
-  model validators do not reject a `sensor.ct` naming a board with no `clamp: true` (the UI pickers and the heal-on-read cover it;
-  a validator rule would churn the CT fixtures).
+- **Clamp detection on hardware (built 2026-10-09, branch `clamp-detect`, host-tested only).** A board now reports whether a
+  clamp is plugged into its jack (`CLAMP`), the per-board clamp switch is gone, and a used clamp that reads empty raises
+  `clamp-unplugged`. Bench, after an OTA: (1) unplug the planer-sensor's clamp — Boards says so, and the planer's problem
+  appears; (2) a PWM board with NOTHING on D0 reads "No clamp plugged in", not a clamp: that is the internal pull-up
+  surviving the ADC setup, the one unknown (`gpio_pullup_en` after the first read); (3) the CT floor with the pull-up on
+  (~6.7 counts), since it shifts the bias by ~18 mV. The model validators still do not reject a `sensor.ct` on a board
+  with no clamp — the pickers cover it.
 
 - **Move the ESP32's plug provisioning loop onto `outlets/Provision.h` (2026-10-06).** `SmartOutletControl::provisionPushOutlets()` and
   `outletops::provisionPlug()` are the same rule written twice (probe, read the claim, refuse a plug someone else owns unless a

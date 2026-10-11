@@ -1204,11 +1204,17 @@ ground it. The perfboard had grounded it through a screw terminal, but the only 
 what that bought was ~7%, taken on the breadboard after it had gone 5x noisy (the 2026-09-13
 table below), and the floor turned out to be electronic rather than pickup. Left off.
 
-**Plug-detect, and what it does today.** With no plug in, the jack's switch joins
-the tip contact to the 10 kΩ, so D0 sits at 3.3 V. `CtSensor::isRailed()` already
-refuses a reading above 3100 mV, so an unplugged clamp is **ignored** rather than
-read as a quiet tool. Nothing yet SAYS so — the board does not report "clamp
-unplugged" anywhere a person would see it. That is firmware work, not wiring.
+**Plug-detect, and what it does (2026-10-09).** With no plug in, the jack's switch
+joins the tip contact to the 10 kΩ, so D0 sits at 3.3 V; the board also enables
+D0's own pull-up, so a pad with NOTHING wired to it reads the same. Once a second
+the board averages D0 over a mains cycle (`sensing/ClampJack.h`): railed means no
+clamp, the bias midpoint means one. It reports that as a `CLAMP` frame whether or
+not the layout uses the clamp, and that replaced the per-board "clamp" switch: the
+Boards screen shows an empty jack, the pickers offer a clamp only once one is
+plugged in, and a clamp the layout uses that reads empty raises `clamp-unplugged`.
+`CtSensor::isRailed()` still refuses the reading itself, so an unplugged clamp is
+never read as a quiet tool. **Unverified on a C5:** that the ADC leaves the
+internal pull-up enabled — without it a bare pad floats and may read as a clamp.
 
 **Meter before soldering, both builds:**
 
