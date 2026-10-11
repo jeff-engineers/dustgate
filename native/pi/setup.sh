@@ -23,7 +23,9 @@ if [ ! -f /opt/dustgate/vendor/ArduinoJson.h ]; then
   curl -fsSL "https://github.com/bblanchon/ArduinoJson/releases/download/v${ARDUINOJSON_VERSION}/ArduinoJson-v${ARDUINOJSON_VERSION}.h" -o /opt/dustgate/vendor/ArduinoJson.h
 fi
 
-echo "== swap, so the first build does not run out of memory on a 512 MB board"
+# Only for `deploy.sh --on-pi`: the brain is normally cross-built on the Mac, and Trixie has no dphys-swapfile, so on a
+# current Pi this block does nothing. (A Zero 2 W thrashed its SD-card swap until the watchdog rebooted it — 2026-10-06.)
+echo "== swap, for an on-Pi build (skipped where dphys-swapfile does not exist)"
 MEM_KB=$(awk '/MemTotal/ {print $2}' /proc/meminfo)
 if [ "$MEM_KB" -lt 1500000 ] && [ -f /etc/dphys-swapfile ]; then
   sed -i 's/^#\?CONF_SWAPSIZE=.*/CONF_SWAPSIZE=2048/' /etc/dphys-swapfile
@@ -51,4 +53,4 @@ systemctl enable --now avahi-daemon.service
 
 echo
 echo "Done. Hostname: $(hostname).local — the brain does not NEED mDNS, but it is how you reach this Pi by name."
-echo "Next, from your Mac:  native/pi/deploy.sh $(whoami 2>/dev/null)@$(hostname).local"
+echo "Next, from your Mac:  native/pi/deploy.sh ${SUDO_USER:-$(whoami)}@$(hostname).local"   # under sudo, whoami is root

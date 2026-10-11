@@ -28,14 +28,19 @@ rsync -az /tmp/dustgate-COMMIT "$HOST:/opt/dustgate/src/COMMIT"
 if [ -n "$STATE" ]; then
   echo "== copying state from $STATE (stop the other brain first: two brains with one id fight over the nodes)"
   rsync -az --exclude 'brain.log' "$STATE/" "$HOST:/tmp/dustgate-state/"
-  ssh "$HOST" 'sudo systemctl stop dustgate-brain; sudo cp -a /tmp/dustgate-state/. /var/lib/dustgate/ && sudo chown -R dustgate:dustgate /var/lib/dustgate && rm -rf /tmp/dustgate-state'
+  ssh -t "$HOST" 'sudo systemctl stop dustgate-brain; sudo cp -a /tmp/dustgate-state/. /var/lib/dustgate/ && sudo chown -R dustgate:dustgate /var/lib/dustgate && rm -rf /tmp/dustgate-state'
 fi
 # update.sh is installed once by setup.sh, so ship the current one first: a fix to it must not wait for a re-run of setup.
 scp -q native/pi/update.sh "$HOST:/tmp/dustgate-update.sh"
 if [ "$ONPI" = 0 ] && command -v zig >/dev/null; then
   echo "== cross-building for the Pi (zig)"
-  make -C native arm64 COMMIT="$COMMIT" 2>&1 | grep -E "error|undefined" || true
-  [ -f native/build/arm64/dustgate-brain ] || { echo "!! cross-build failed (rerun: make -C native arm64)" >&2; exit 1; }
+  # Delete the old binary first and check make's own status: a failed build used to leave the previous binary in place,
+  # which passed the "does it exist" check and was installed as the new commit.
+  rm -f native/build/arm64/dustgate-brain
+  if ! make -C native arm64 COMMIT="$COMMIT" >/tmp/dustgate-arm64.log 2>&1; then
+    grep -E "error|undefined" /tmp/dustgate-arm64.log | head -20 >&2
+    echo "!! cross-build failed - nothing installed (full log: /tmp/dustgate-arm64.log)" >&2; exit 1
+  fi
   scp -q native/build/arm64/dustgate-brain "$HOST:/tmp/dustgate-brain"
   ssh -t "$HOST" 'sudo install -m 755 /tmp/dustgate-update.sh /opt/dustgate/update.sh && sudo /opt/dustgate/update.sh --binary /tmp/dustgate-brain'
 else

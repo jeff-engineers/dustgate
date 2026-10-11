@@ -64,7 +64,7 @@ Qty is per board; "coll." = the collector board only.
 | 11 | BAT54S dual Schottky, SOT-23 (alternative to two of row 10) | 0–1 | [Digi-Key (search)](https://www.digikey.com/en/products/result?keywords=BAT54S) | ~$0.15 | `Diode:BAT54S` | `Package_TO_SOT_SMD:SOT-23` | Reserve either footprint at D0 |
 | 12 | Panasonic EEU-FR1V221, 220 µF 35 V | 1 | [Digi-Key (search)](https://www.digikey.com/en/products/result?keywords=EEU-FR1V221) | ~$0.40 | `Device:C_Polarized` | `Capacitor_THT:CP_Radial_D8.0mm_P3.50mm` | XIAO 5 V pad. **Check the can diameter** in the datasheet and pick the matching `CP_Radial_*` |
 | 13 | Panasonic EEU-FR1V471 / EEU-FR1V102, 470–1000 µF 35 V | 1 | [471 (search)](https://www.digikey.com/en/products/result?keywords=EEU-FR1V471) · [102 (search)](https://www.digikey.com/en/products/result?keywords=EEU-FR1V102) | ~$0.50 | `Device:C_Polarized` | `Capacitor_THT:CP_Radial_D10.0mm_P5.00mm` | At the gate servo connector. Same diameter check |
-| 14 | Panasonic EEU-FR1V101, 100 µF 35 V | 1 | [Digi-Key (search)](https://www.digikey.com/en/products/result?keywords=EEU-FR1V101) | ~$0.30 | `Device:C_Polarized` | `Capacitor_THT:CP_Radial_D6.3mm_P2.50mm` | The CT bias bulk — **value UNCLEAR, 10 or 100 µF** (Open, below) |
+| 14 | Panasonic EEU-FR1V100, 10 µF 35 V | 1 | [Digi-Key (search)](https://www.digikey.com/en/products/result?keywords=EEU-FR1V100) | ~$0.25 | `Device:C_Polarized` | `Capacitor_THT:CP_Radial_D5.0mm_P2.00mm` | The CT bias bulk: 10 µF, what the planer-sensor node runs (jeff, 2026-10-09). Part number not looked up |
 | 15 | KEMET C320C104K5R5TA, 0.1 µF X7R radial | 5 | [Digi-Key (search)](https://www.digikey.com/en/products/result?keywords=C320C104K5R5TA) | $0.13 | `Device:C` | `Capacitor_THT:C_Rect_L7.2mm_W2.5mm_P5.00mm` | Beside every electrolytic, the CT bias node, the pixel |
 | 16 | 10 µF radial X7R, ≥25 V | 1 | [Digi-Key (search)](https://www.digikey.com/en/products/result?keywords=10uF%2025V%20X7R%20radial) | ~$0.30 | `Device:C` | `Capacitor_THT:C_Rect_L7.2mm_W2.5mm_P5.00mm` | XIAO 3V3. Check its body against the footprint |
 | 17 | Yageo CFR-25JB-52-1K, 1 kΩ ¼ W | 4 + 1 coll. | [Digi-Key](https://www.digikey.com/en/products/detail/yageo/CFR-25JB-52-1K/96) | pennies | `Device:R` | `Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal` | Verified. CT divider ×2, CT series ×1, spare; the 4N35 LED on a collector board |
@@ -160,7 +160,7 @@ D7/D8/D9" until 2026-10-08, from before the 2026-09-17 pin budget.
 | **SCT-013-030** current clamp | 1 | same | Amazon/eBay (~$8–10); no Digi-Key or Mouser listing | 30 A : 1 V. **Voltage output — the burden resistor is INSIDE the plug. Do not add one.** 3.5 mm plug |
 | **3.5 mm switched jack** | 1 | **Adafruit TRRS Jack Breakout #5764** | **CUI SJ1-3525N** (CP1-3525N-ND, $1.00) | **Buy a switched one.** The switch pulls an unplugged jack to 3V3, so it reads as railed (ignored) instead of the bias midpoint — which is indistinguishable from an idle tool. Wiring and metering: WIRING.md §8 |
 | 1 kΩ resistor | 2 | same | Yageo CFR-25JB-52-1K | The bias divider, 1k/1k off 3V3. **Not 10k/10k** |
-| Bulk cap on the bias node | 1 | as built (see Open) | Panasonic EEU-FR1V101 (100 µF) | Bias node to GND |
+| Bulk cap on the bias node, 10 µF electrolytic | 1 | same | Panasonic EEU-FR1V100 (10 µF) | Bias node to GND. What the planer-sensor node runs (jeff, 2026-10-09) |
 | 0.1 µF ceramic | 1 | same | C320C104K5R5TA | Bias node to GND |
 | 10 kΩ resistor | 1 | **new** | Yageo CFR-25JB-52-10K | Plug-detect: jack switch → 3V3 |
 | 1 kΩ resistor | 1 | **new** | CFR-25JB-52-1K | Inrush: series, jack tip → D0 |
@@ -267,10 +267,6 @@ Recorded so nobody re-buys something that was reasoned away.
 
 ## Open
 
-- **The CT bias node's bulk cap: 10 µF or 100 µF? UNCLEAR.** This list says
-  100 µF; WIRING.md §8's table says 10 µF. Either works as bulk. The board to read
-  it off is the **planer-sensor node** — the one CT board known to work — then make
-  both files and `carrier-wiring.html` say the same thing.
 - **Inrush protection for the CT** is now a proposed circuit (§3, WIRING.md §8),
   not yet fitted or scoped. 45–50 A through a 30 A clamp puts ~4 V on a 3.6 V-max
   pin, and `isRailed()` cannot see it.

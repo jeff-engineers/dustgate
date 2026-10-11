@@ -14,6 +14,26 @@ of this file is being able to answer "did we already decide this, and why".
 
 Newest first.
 
+### The rest of the 2026-10-06 bug search, 2026-10-09 (branch `bug-search-fixes`)
+
+All found by reading, none seen to fail on hardware; host-tested (native suites, the Pi cross-build, the UI suites), not yet
+on the Pi. Left open in TODO.md: DNS rebinding (needs a decision on which local names to accept) and the /24 beacon.
+
+- **A throw in a network handler no longer restarts the brain** — `io.run()` is retried with the error logged; the
+  `remote_endpoint()` and `make_address()` calls use their non-throwing overloads.
+- **The knock list is network-thread only**; the Boards scan gets a copy. Expires at 2 min, capped at 32.
+- **A collector's control plug is re-sent its state until it takes it**, as the ESP32 does (it was sent once and forgotten).
+- **`NodeWs::write()` writes from `_hold`**, not from a local it then moved — a short frame would have been sent from a dead
+  stack frame.
+- **macOS mDNS names that are not plain host labels never reach the shell.** Chosen over `posix_spawn`: a DustGate board's
+  name is its hostname, so a whitelist closes it with nothing lost and no change to the timeout-and-kill shape.
+- **`deploy.sh` cannot install an old binary as the new one** (deletes it first, checks make's status); the Makefile depends
+  on every header directory and on the commit, so `/api/info` is never stale; `--state` uses `ssh -t`; `setup.sh` names
+  `$SUDO_USER`.
+- **The Plugs page re-reads the layout before pairing or releasing** — it wrote back the copy it loaded.
+- Smaller: a wrong-NodeLink-version JOIN says "reflash it"; plug labels are cut on a UTF-8 boundary; the link log rotates at
+  256 KB; reset and DELETE /api/topology share `clearLayout()`; the dead `discoverNodes()` override is gone.
+
 ### Servo range, optional boards and faster collector starts, 2026-10-08 (branch `servo-range`)
 
 - **One gate move per BOARD, not per shop.** LANDED 2026-10-08, host-tested, not yet in the shop. The shop-wide mutex

@@ -6,7 +6,7 @@
 // directory, fsync it, rename it over the target (atomic), then fsync the directory so the rename itself survives.
 //
 // KEEP A PREVIOUS COPY when asked (`keep`): the target is hard-linked to `<path>.bak` just before the rename, so there is always
-// one older whole file next to the new one, and `readWithBackup()` falls back to it if the current one is unreadable.
+// one older whole file next to the new one; main() falls back to it when the current one is unreadable (the layout and pairing loads).
 #pragma once
 #include <cerrno>
 #include <cstdio>

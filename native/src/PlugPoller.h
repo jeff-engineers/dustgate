@@ -117,7 +117,9 @@ public:
         if (_prevUrl.erase(ip)) saveLocked();
         _approved.erase(ip);
     }
-    // Switch a plug (a collector's own control plug). Queued; the worker does the blocking call.
+    // What a plug should be switched to (a collector's own control plug). Called on every feed, not only on a change: the
+    // worker re-sends until the plug TAKES it, as the ESP32 does (SmartOutletControl). It used to send once and forget, so a
+    // plug unreachable at that moment, or a slot recreated by sync(), stayed wrong until the wanted state flipped.
     void setSwitch(const std::string& key, bool on) {
         std::lock_guard<std::mutex> g(_m);
         auto it = _slots.find(key);
@@ -133,7 +135,8 @@ private:
         bool provisioned = false, pollOnly = false;
         uint32_t heardMs = 0;            // last frame or good poll — a "connected" socket gone quiet is polled anyway
         uint32_t provisionAtMs = 0;      // next time to try claiming it
-        int switchWanted = -1;     // -1 nothing queued
+        int switchWanted = -1;     // -1 nothing asked yet
+        int switchTaken = -1;      // the last state the plug accepted; re-sent while it differs
     };
     void loop() {
         while (_run) {
@@ -143,8 +146,8 @@ private:
             for (auto& kv : work) {
                 if (!_run) return;
                 Slot& s = *kv.second;
-                int sw; { std::lock_guard<std::mutex> g(_m); sw = s.switchWanted; s.switchWanted = -1; }
-                if (sw >= 0) s.outlet->setSwitch(sw == 1);
+                int sw, taken; { std::lock_guard<std::mutex> g(_m); sw = s.switchWanted; taken = s.switchTaken; }
+                if (sw >= 0 && sw != taken && s.outlet->setSwitch(sw == 1)) { std::lock_guard<std::mutex> g(_m); s.switchTaken = sw; }
                 provision(s);
                 bool quiet;
                 { std::lock_guard<std::mutex> g(_m); quiet = !s.pushed || nowMs() - s.heardMs > kPushQuietMs; }

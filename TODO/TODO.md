@@ -59,7 +59,8 @@ system removal, the clamp switch). Most serious first. None of it has been seen 
 and each says why it is believed. Line numbers are as of `13e7cff`. **Fixed since, on `pi-brain-bringup` (see DONE.md):** a layout
 save resetting the collector, the ESP32's CORS header, the Plugs page asking every plug at once (and leaking its poll), the
 dead-Shelly stall, and the RF log line that read like a press. **Since, 2026-10-07:** a slider on a node can be set up from
-the app, the Pi's plug picker shows live draw (and not itself), and a board too old to dial in says so.
+the app, the Pi's plug picker shows live draw (and not itself), and a board too old to dial in says so. **2026-10-09 (branch
+`bug-search-fixes`):** everything else below except DNS rebinding and the /24 beacon — see DONE.md.
 
 - **SECURITY: DNS rebinding reaches both brains.** `GET /api/info` hands out the API key unauthenticated, by design (the app
   bootstraps from it). The CORS header that let ANY page read it is gone (fixed 2026-10-06), but a hostile page can still
@@ -68,63 +69,7 @@ the app, the Pi's plug picker shows live draw (and not itself), and a board too 
   decision on which local names a router may hand out (Google Wifi gives `.lan`), so not done blind. Matters little in
   Jeff's shop today; it is a must before anyone else runs one.
 
-- **Native: a collector on a CONTROL plug that misses its one switch command stays wrong.** `feedPlugs()` records the state
-  as asserted when it queues it (`g_swAsserted`, `main.cpp:140`), and `PlugPoller` sends it once and discards it whether or
-  not the plug answered (`switchWanted = -1`, result of `setSwitch()` ignored). A plug that was unreachable for that moment,
-  or a slot recreated by `sync()` (a layout save that changes its address), never gets it again until the wanted state flips.
-  The ESP32 keeps the wanted state and retries every poll until the plug takes it (`SmartOutletControl.cpp:437-459`). Jeff's
-  shop presses by RF, so this path has not run there. Fix: keep `switchWanted` until a `setSwitch()` succeeds, as the ESP32 does.
-
-- **Native: one exception in a network handler restarts the brain.** `io.run()` (`main.cpp:1029`) is not guarded, and several
-  calls inside handlers throw: `socket().remote_endpoint()` (`:663`, `:668`) throws when the peer reset between the upgrade
-  and the call, `make_address(g_bcast)` throws on a bad `--broadcast`. An uncaught throw ends the process; systemd brings it
-  back in about 3 s and the nodes relink, which reads as a flap nobody can explain. Fix: the `remote_endpoint(ec)` overloads,
-  and a `try { io.run(); } catch` loop that logs and carries on.
-
-- **Native: a data race on the knock list.** `GET /api/nodes/discover` runs `discoverBoards()` on a worker thread (`defer`,
-  `main.cpp:700`), and it iterates `g_knocks` while the network thread inserts into it on every unpaired JOIN (`:251`). A
-  scan from the Boards screen while an unpaired board keeps knocking can crash the brain. Fix: copy the knocks on the network
-  thread before deferring (the mDNS half is the only slow part). `g_knocks` is also never pruned (old entries are only
-  skipped), so a LAN client sending JOINs with made-up ids grows it without bound.
-
-- **`deploy.sh` can install an OLD binary and call it the new one.** The cross-build's failure is swallowed
-  (`make ... | grep ... || true`) and the check after it is only "does `native/build/arm64/dustgate-brain` exist", which a
-  previous build satisfies; the Pi then logs "installing the prebuilt <new commit>". The Makefile makes it likelier:
-  `DG_COMMIT` is not a prerequisite (a new commit with no source change keeps the old id in `/api/info`), and the
-  prerequisite lists miss headers the brain includes (`utils/JsonAlloc.h`, `sensing/PowerSensor.h`). Fix: check make's own
-  status, delete the old binary first, and generate dependencies (`-MMD -MP`) instead of listing them. Also tidy the
-  `$(BIN:build/dustgate-brain=src/main.cpp)` substitution in the `arm64` rule, which is just `src/main.cpp` written obscurely.
-
-- **The Plugs page writes back the layout it loaded, not the current one.** It reads the layout ONCE and puts the whole
-  document back on pair or release (`plugs.component.ts:403`, `:430`), so an edit made elsewhere since it loaded is
-  silently undone. Read the layout again just before changing it. (Its leaked poll is fixed, 2026-10-06.)
-
-- **Native: a latent use-after-free in `NodeWs::write()`.** The write is started on `net::buffer(it.text)` (`main.cpp:297`),
-  where `it` is a local, and only THEN is the text moved into `_hold` to keep it alive. That works only because moving a long
-  string keeps its buffer; a frame short enough for the small-string optimisation (≤15 bytes on libstdc++, ≤22 on libc++) is
-  copied instead, and the socket sends from a dead stack frame. No frame is that short today. Fix: move into `_hold` first
-  and write from `_hold`.
-
-- **macOS native brain: a board's mDNS name is pasted into a shell command.** `mdnsBoards()` runs
-  `sh -c 'dns-sd -L <name> ...'` with `<name>` taken from whatever answers `_dustgate._tcp` (`main.cpp:427`), so a device on
-  the network advertising a name with a quote and a command in it runs that command as the brain's user. The Linux path
-  (avahi-browse) does not interpolate. Fix: run `dns-sd` with `posix_spawn`/`execvp` and an argument list, no shell.
-
-- **Smaller ones, one line each:**
-  - A node on another NodeLink version is refused as `busy` with nothing in the log (`main.cpp:246`). There is no
-    `version` refuse reason (`kRefuseReasons`), so it retries forever and looks like a dead board. At least log
-    "reflash it".
-  - `NativeBackend::discoverNodes()` (`main.cpp:550`) is dead: the shell answers `GET /api/nodes/discover` itself before
-    `api::handle()` sees it. `DELETE /api/topology` (`:767`) repeats the first half of `resetAll()`. Fold both.
-  - Renaming a plug cuts the label at 47 bytes (`main.cpp:724`), which can split a multi-byte character (an accent, an
-    emoji) and send the plug an invalid name. Cut on a character boundary, or cap the field in the app.
-  - `deploy.sh --state` runs `sudo` over `ssh` WITHOUT `-t`, so it fails with "a terminal is required" whenever the Pi's sudo
-    credential is not cached; it worked on 2026-10-06 only because the previous deploy had just asked.
-  - `setup.sh` ends by suggesting `deploy.sh root@<host>.local`: `whoami` under sudo is root. Use `$SUDO_USER`. (Its
-    `dphys-swapfile` block also does nothing on Trixie, and the compiler it installs is only for `--on-pi` now.)
-  - The native link log (`linklog.txt`) is appended to forever: nothing rotates it, though `/api/linklog?old=1` reads a `.1`
-    that only the ESP32 writes. Small per event, but it is a Pi's SD card.
-  - `AtomicFile.h`'s header names a `readWithBackup()` that does not exist (the fallback is inline in `main()`).
+- **Smaller ones still open:**
   - The native beacon goes to `x.y.z.255` (it assumes a /24, as the sweep does), and `guessIp()` needs a default route (it
     "connects" to 8.8.8.8): a shop network with no gateway leaves the brain announcing 127.0.0.1.
 

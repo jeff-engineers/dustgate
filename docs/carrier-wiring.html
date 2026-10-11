@@ -388,7 +388,7 @@ function drawCT(kind) {
   W([[bx, by], [bx, by - 100]], bias); R(bx, by - 100, bx, by, 'R1', '1 kΩ', 1); v33Sym(bx, by - 100);
   const busEnd = 760;
   W([[bx, by], [busEnd, by]], bias);
-  [[520, 'R2', '1 kΩ', 'r'], [620, 'C1', '100 nF', 'c'], [720, 'C2', P ? '10–100 µF ⚠' : '10–100 µF ⚠', 'cp']].forEach(([x, n, v, k]) => {
+  [[520, 'R2', '1 kΩ', 'r'], [620, 'C1', '100 nF', 'c'], [720, 'C2', '10 µF', 'cp']].forEach(([x, n, v, k]) => {
     dot(x, by, bias);
     W([[x, by], [x, by + 90]], k === 'r' ? bias : bias);
     if (k === 'r') R(x, by + 10, x, by + 80, n, v); else C(x, by + 45, n, v, k === 'cp');
@@ -521,7 +521,7 @@ const COPY = {
   perf: {
     h: 'Perfboard', status: '<span class="status built">running in the shop</span>',
     intro: 'What is soldered today, plus the CT network from the sourcing guide drawn in: the switched jack on the Adafruit TRRS breakout (its silkscreen labels are what the drawing uses), a 10 kΩ plug-detect pull-up through its <code>LSw</code> switch, and a 1 kΩ with two Schottkys protecting D0 from a motor start. Those CT parts are new and unbuilt; everything else is what runs.',
-    warn: '<b>The CT additions have not been on a board.</b> Re-measure the noise floor once they are fitted (they add 1 kΩ in front of the ADC and a little leakage), and scope a worst-case motor start: the Schottkys clip D0 at roughly 3.5–3.7 V against a 3.6 V maximum, which is margin, not much of it. The bias node\'s bulk cap is 100 µF in the BOM and 10 µF in WIRING.md §8 — the one on your board settles it.',
+    warn: '<b>The CT additions have not been on a board.</b> Re-measure the noise floor once they are fitted (they add 1 kΩ in front of the ADC and a little leakage), and scope a worst-case motor start: the Schottkys clip D0 at roughly 3.5–3.7 V against a 3.6 V maximum, which is margin, not much of it.',
   },
   pcb: {
     h: 'PCB', status: '<span class="status plan">next prototype round</span>',
@@ -541,13 +541,13 @@ function render(kind) {
     <h3>Every wire</h3>
     ${wireTable(b)}
     <h2>The CT clamp circuit, close up</h2>
-    <p>Everything between the clamp's plug and D0, drawn as a schematic with each part named. The perfboard tab shows the Adafruit breakout's printed labels; the PCB tab, the SJ1-3525N's pin numbers. The 10 kΩ, the 1 kΩ in series and both diodes are new; the bias node is what runs today. C2's value is unclear — 10 µF in WIRING.md, 100 µF in the BOM — read it off the planer-sensor node.</p>
+    <p>Everything between the clamp's plug and D0, drawn as a schematic with each part named. The perfboard tab shows the Adafruit breakout's printed labels; the PCB tab, the SJ1-3525N's pin numbers. The 10 kΩ, the 1 kΩ in series and both diodes are new; the bias node is what runs today. C2 is a 10 µF electrolytic, as on the planer-sensor node.</p>
     <div class="sheet">${drawCT(kind)}</div>
     <div class="tablewrap" style="margin-top:12px"><table><thead><tr><th>Part</th><th>Value</th><th>From</th><th>To</th><th>Job</th></tr></thead><tbody>
       <tr><td><b>R1</b></td><td class="mono">1 kΩ</td><td>3V3</td><td>bias node</td><td>top of the divider</td></tr>
       <tr><td><b>R2</b></td><td class="mono">1 kΩ</td><td>bias node</td><td>GND</td><td>bottom of the divider</td></tr>
       <tr><td><b>C1</b></td><td class="mono">100 nF</td><td>bias node</td><td>GND</td><td>holds the bias against fast edges</td></tr>
-      <tr><td><b>C2</b></td><td class="mono">10–100 µF ⚠</td><td>bias node (+)</td><td>GND</td><td>holds the bias against the clamp's 60 Hz current</td></tr>
+      <tr><td><b>C2</b></td><td class="mono">10 µF</td><td>bias node (+)</td><td>GND</td><td>holds the bias against the clamp's 60 Hz current</td></tr>
       <tr><td><b>R3</b></td><td class="mono">1 kΩ</td><td>jack ${kind === 'pcb' ? 'pin 2 (tip)' : '<code>Left</code>'}</td><td>D0</td><td>limits current into the diodes on a spike</td></tr>
       <tr><td><b>R4</b></td><td class="mono">10 kΩ</td><td>jack ${kind === 'pcb' ? 'pin 10 (tip switch)' : '<code>LSw</code>'}</td><td>3V3</td><td>plug-detect pull-up</td></tr>
       <tr><td><b>D1</b></td><td class="mono">1N5817</td><td>D0 (anode)</td><td>3V3 (cathode, the bar)</td><td>clips spikes above 3V3</td></tr>

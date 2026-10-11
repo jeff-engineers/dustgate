@@ -64,6 +64,7 @@ inline std::string readFrom(size_t from, size_t& start, size_t& next, size_t max
     return r.text.substr(start - r.base, n);
 }
 
+static constexpr size_t kLinkLogRotateBytes = 256 * 1024;
 // One link-log event: {"ts":..,"up":..,"boot":..,"ev":"..","node":"..", <extra>}\n — the ESP32's format.
 inline void linkEvent(const char* ev, const char* node, const char* extra) {
     std::string l = "{\"ts\":" + std::to_string((unsigned long)std::time(nullptr)) + ",\"up\":" + std::to_string(upMs()) +
@@ -73,7 +74,11 @@ inline void linkEvent(const char* ev, const char* node, const char* extra) {
     l += "}";
     line("[LINKLOG] " + l);
     Ring& r = R(); std::lock_guard<std::mutex> g(r.m);
-    if (!r.linkLogPath.empty()) { std::ofstream f(r.linkLogPath, std::ios::app); f << l << "\n"; }
+    if (r.linkLogPath.empty()) return;
+    // Rotated to `<path>.1` like the ESP32 (utils/LinkLog.h, 48 KB there; a Pi has room for more), which is what /api/linklog?old=1 reads. It was
+    // appended to forever — small per event, but on a Pi it is an SD card.
+    { std::ifstream in(r.linkLogPath, std::ios::ate | std::ios::binary); if (in && in.tellg() >= (std::streamoff)kLinkLogRotateBytes) { in.close(); std::rename(r.linkLogPath.c_str(), (r.linkLogPath + ".1").c_str()); } }
+    std::ofstream f(r.linkLogPath, std::ios::app); f << l << "\n";
 }
 
 }  // namespace dglog
