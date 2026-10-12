@@ -470,7 +470,7 @@ the split is legible without timing anything. Write it down rather than
 rediscover it: an implementation that reached for solid red would be wrong for a
 reason neither file states on its own.
 
-**Built 2026-10-10, hardware-UNTESTED:** both brains send an `ALERT {bin}` frame to every board that `boardServesSystem()` (control/Shop.h) puts on a system whose bin is full — the collector's board and every board with a gate on it — and the ESP32 primary blinks its own pixel; a full bin is also a `bin-full` problem (Live view, and a banner on the Boards screen). A board on two systems blinks for either, which settles the open question below. What follows is the history. **Neither half was built.** The primary reads its own bin pin and sets
+**Built 2026-10-10; seen working on the shop 2026-10-11 through the Pi brain** (a real beam on a node, five boards blinking, cleared on emptying): both brains send an `ALERT {bin}` frame to every board that `boardServesSystem()` (control/Shop.h) puts on a system whose bin is full — the collector's board and every board with a gate on it — and the ESP32 primary blinks its own pixel; a full bin is also a `bin-full` problem (Live view, and a banner on the Boards screen). A board on two systems blinks for either, which settles the open question below. What follows is the history. **Neither half was built.** The primary reads its own bin pin and sets
 `systems[].bin` (2026-09-04), and nothing colours a pixel from it — not even its
 own, which needs no protocol at all. The fan-out to the other boards needs a
 NodeLink frame that does not exist; it is at least in the direction NodeLink
