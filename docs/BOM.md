@@ -41,50 +41,49 @@ reference: it works, so where the PCB differs, the PCB is the thing being tested
 
 ### PCB order list — one table (2026-10-08)
 
-Everything a **PCB carrier** needs, with where to buy it and the KiCad symbol and footprint to draw it
-with. Links and prices are the sourcing guide's (2026-10-07) unless the Status says otherwise; a
-"search" link opens a Digi-Key search because no product page was confirmed. **Check stock and price
-in the cart before ordering.** Footprints: names without a prefix-path are in **KiCad 10's own
-library**; `Seeed:` is `~/code/Kicad Repositories/SeeedStudio/Seeed_Studio_XIAO_Series.pretty`; `DustGate:` is
-`~/code/Kicad Repositories/DustGate` (the three modules, with their pin names on the silkscreen and matching symbols).
+Everything a **PCB carrier** needs, with where to buy it. Links and prices are the sourcing guide's
+(2026-10-07) unless the Status says otherwise; a "search" link opens a Digi-Key search because no product
+page was confirmed. **Check stock and price in the cart before ordering.** The KiCad symbols and
+footprints are chosen with the board design, which is kept outside this repo; the row numbers here are
+what it keys on, so **renumbering a row breaks that check** — append rather than reorder.
 Qty is per board; "coll." = the collector board only.
 
-| # | Part | Qty | Buy | Price | KiCad symbol | KiCad footprint | Status / note |
-|---|---|---|---|---|---|---|---|
-| 1 | Seeed XIAO ESP32C5 | 1 | [Digi-Key (search)](https://www.digikey.com/en/products/result?keywords=XIAO%20ESP32-C5) · Seeed direct | ~$7–10 | `Seeed_Studio_XIAO_Series:XIAO-ESP32-C5-SMD` (the only C5 symbol in Seeed's OPL library; pair it with the DIP footprint) | `Seeed:XIAO-ESP32-C5-DIP` | Stock not confirmed at Digi-Key. The DIP footprint has 28 pads, not 14 — check which ones the symbol's pins map to, and that the rows match two 7-pin sockets, before routing |
-| 2 | Sullins PPTC071LFBN-RC, 7-pin female, 8.5 mm | 2 | [Digi-Key S7005-ND](https://www.digikey.com/en/products/detail/sullins-connector-solutions/PPTC071LFBN-RC/810146) | $0.37 | — (part of the XIAO footprint) | — | Verified. The XIAO's socket |
-| 3 | Sullins PPTC041LFBN-RC, 4-pin female | 2 | [Digi-Key S7002-ND](https://www.digikey.com/en/products/detail/PPTC041LFBN-RC/S7002-ND/810144) | $0.26 | `Connector_Generic:Conn_01x04` | `Connector_PinSocket_2.54mm:PinSocket_1x04_P2.54mm_Vertical` | Verified. The OLED, and the MPM3610 breakout (row 5) |
-| 4 | Sullins 5-pin female (PPTC051LFBN-RC) | 1 | [Digi-Key (search)](https://www.digikey.com/en/products/result?keywords=PPTC051LFBN-RC) | ~$0.30 | `Connector_Generic:Conn_01x05` | `Connector_PinSocket_2.54mm:PinSocket_1x05_P2.54mm_Vertical` | Not in the guide. The Pololu buck's socket (row 6) |
-| 5 | Adafruit MPM3610 5 V buck breakout #4739 | 1 | [Adafruit](https://www.adafruit.com/product/4739) | ~$6 | `DustGate:MPM3610_Breakout` | `DustGate:Module_Adafruit_MPM3610_Breakout_Socket` (row 3's socket) | What the CT floor was measured with. Header, from Adafruit's board file: 1 EN, 2 VIN, 3 VOUT, 4 GND, 2.54 mm — **go by the silkscreen**, the header is rotated on the board |
-| 6 | Pololu D24V22F6, 6 V 2.5 A buck | 1 | [Pololu #2859](https://www.pololu.com/product/2859) | $12.95–19.95 | `DustGate:D24V22Fx` | `DustGate:Module_Pololu_D24V22Fx_Socket` (row 4's socket) | The servo rail. Five pins at 0.1″: PG, EN, VIN, GND, VOUT — order from Pololu's [dimension diagram](https://www.pololu.com/file/0J1031/d24v22fx-step-down-voltage-regulator-dimension-diagram.pdf). Not a Digi-Key part |
-| 7 | CUI PJ-063AH barrel jack, 2.1 × 5.5 mm | 1 | [Digi-Key CP-063AH-ND (search)](https://www.digikey.com/en/products/result?keywords=PJ-063AH) | ~$1 | `Connector:Barrel_Jack` | `Connector_BarrelJack:BarrelJack_CUI_PJ-063AH_Horizontal` | 20-week lead time reported. NOT PJ-002AH/102AH (2.0 mm) |
-| 8 | Bourns MF-RHT200 PTC fuse (2 A hold, 16 V) | 1 | [Digi-Key (search)](https://www.digikey.com/en/products/result?keywords=MF-RHT200) | ~$0.50 | `Device:Polyfuse` | `Fuse:Fuse_Bourns_MF-RHT200` | Not in the guide; not looked up. The PWM board's 2 A adapter. **Slider: MF-RHT300** (`Fuse:Fuse_Bourns_MF-RHT300`) for its 2.7 A stall |
-| 9 | P6KE18A TVS, 15.3 V standoff, unidirectional | 1 | [Digi-Key (search)](https://www.digikey.com/en/products/result?keywords=P6KE18A) | ~$0.40 | `Device:D_TVS` | `Diode_THT:D_DO-15_P10.16mm_Horizontal` | Approved (jeff, 2026-10-08); stock not looked up. 12 V input, after the fuse |
-| 10 | MCC 1N5817-TP Schottky, DO-41 | 3 | [Digi-Key 1N5817-TPCT-ND](https://www.digikey.com/en/products/detail/mcc-micro-commercial-components/1N5817-TP/950394) | $0.21 | `Device:D_Schottky` | `Diode_THT:D_DO-41_SOD81_P10.16mm_Horizontal` | Verified. One on the XIAO's 5 V pad, two clamping D0 |
-| 11 | BAT54S dual Schottky, SOT-23 (alternative to two of row 10) | 0–1 | [Digi-Key (search)](https://www.digikey.com/en/products/result?keywords=BAT54S) | ~$0.15 | `Diode:BAT54S` | `Package_TO_SOT_SMD:SOT-23` | Reserve either footprint at D0 |
-| 12 | Panasonic EEU-FR1V221, 220 µF 35 V | 1 | [Digi-Key (search)](https://www.digikey.com/en/products/result?keywords=EEU-FR1V221) | ~$0.40 | `Device:C_Polarized` | `Capacitor_THT:CP_Radial_D8.0mm_P3.50mm` | XIAO 5 V pad. **Check the can diameter** in the datasheet and pick the matching `CP_Radial_*` |
-| 13 | Panasonic EEU-FR1V471 / EEU-FR1V102, 470–1000 µF 35 V | 1 | [471 (search)](https://www.digikey.com/en/products/result?keywords=EEU-FR1V471) · [102 (search)](https://www.digikey.com/en/products/result?keywords=EEU-FR1V102) | ~$0.50 | `Device:C_Polarized` | `Capacitor_THT:CP_Radial_D10.0mm_P5.00mm` | At the gate servo connector. Same diameter check |
-| 14 | Panasonic EEU-FR1V100, 10 µF 35 V | 1 | [Digi-Key (search)](https://www.digikey.com/en/products/result?keywords=EEU-FR1V100) | ~$0.25 | `Device:C_Polarized` | `Capacitor_THT:CP_Radial_D5.0mm_P2.00mm` | The CT bias bulk: 10 µF, what the planer-sensor node runs (jeff, 2026-10-09). Part number not looked up |
-| 15 | KEMET C320C104K5R5TA, 0.1 µF X7R radial | 5 | [Digi-Key (search)](https://www.digikey.com/en/products/result?keywords=C320C104K5R5TA) | $0.13 | `Device:C` | `Capacitor_THT:C_Rect_L7.2mm_W2.5mm_P5.00mm` | Beside every electrolytic, the CT bias node, the pixel |
-| 16 | 10 µF radial X7R, ≥25 V | 1 | [Digi-Key (search)](https://www.digikey.com/en/products/result?keywords=10uF%2025V%20X7R%20radial) | ~$0.30 | `Device:C` | `Capacitor_THT:C_Rect_L7.2mm_W2.5mm_P5.00mm` | XIAO 3V3. Check its body against the footprint |
-| 17 | Yageo CFR-25JB-52-1K, 1 kΩ ¼ W | 4 + 1 coll. | [Digi-Key](https://www.digikey.com/en/products/detail/yageo/CFR-25JB-52-1K/96) | pennies | `Device:R` | `Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal` | Verified. CT divider ×2, CT series ×1, spare; the 4N35 LED on a collector board |
-| 18 | Yageo CFR-25JB-52-330R, 330 Ω | 1 | [Digi-Key (search)](https://www.digikey.com/en/products/result?keywords=CFR-25JB-52-330R) | pennies | `Device:R` | as row 17 | Pixel DIN |
-| 19 | Yageo CFR-25JB-52-10K, 10 kΩ | 1 + 1 coll. | [Digi-Key (search)](https://www.digikey.com/en/products/result?keywords=CFR-25JB-52-10K) | pennies | `Device:R` | as row 17 | CT plug-detect; the bin pull-up on D6 |
-| 20 | SparkFun COM-16347, WS2812B 5050 | 1 | [Digi-Key 1568-16347CT-ND](https://www.digikey.com/en/products/detail/sparkfun-electronics/COM-16347/12149781) | $0.68 | `LED:WS2812B` | `LED_SMD:LED_WS2812B_PLCC4_5.0x5.0mm_P3.2mm` | Verified. GRB, the firmware's order |
-| 21 | SSD1306 0.96″ OLED, 4-pin I²C | 1 | none confirmed at Digi-Key | ~$4–8 | `Connector_Generic:Conn_01x04` (or the SSD1306 library you have) | row 3's socket | **Pin order varies** (VCC/GND swapped on some): fix the footprint to the module you buy |
-| 22 | Omron B3F-1000, 6 mm tactile | 1 (+1 for D9) | [Digi-Key SW400-ND](https://www.digikey.com/en/products/detail/omron-electronics-inc-emc-div/B3F-1000/33150) | $0.24 | `Switch:SW_Push` | `Button_Switch_THT:SW_PUSH_6mm` | Verified. Wake (D1); a second footprint on D9 |
-| 23 | CUI SJ1-3525N, 3.5 mm switched jack | 1 | [Digi-Key CP1-3525N-ND](https://www.digikey.com/en/products/detail/same-sky-formerly-cui-devices-/SJ1-3525N/738687) | $1.00 | `Connector_Audio:AudioJack3_SwitchTR` | `Connector_Audio:Jack_3.5mm_CUI_SJ1-3525N_Horizontal` | Verified. NOT the SJ1-3523N (no switch). Meter the NC side first (WIRING.md §8) |
-| 24 | SCT-013-030 clamp, 30 A : 1 V | 1 per CT | Amazon / eBay | ~$8–10 | — | — | Plugs into row 23 |
-| 25 | 4N35 optocoupler, DIP-6 | 1 coll. | [Digi-Key (search)](https://www.digikey.com/en/products/result?keywords=4N35) | <$1 | `Isolator:4N35` | `Package_DIP:DIP-6_W7.62mm` | Not a PC817 breakout |
-| 26 | 1N4148 signal diode, DO-35 | 1 coll. | [Digi-Key (search)](https://www.digikey.com/en/products/result?keywords=1N4148) | pennies | `Diode:1N4148` | `Diode_THT:D_DO-35_SOD27_P7.62mm_Horizontal` | ESD: across the 4N35's LED |
-| 27 | P4KE18A TVS, DO-41 | 1 coll. | [Digi-Key (search)](https://www.digikey.com/en/products/result?keywords=P4KE18A) | ~$0.30 | `Device:D_TVS` | `Diode_THT:D_DO-41_SOD81_P10.16mm_Horizontal` | ESD: 12 V → GND at the Banner's terminal. Approved (jeff, 2026-10-08); stock not looked up |
-| 28 | Screw terminal, 6-way, 5 mm (Phoenix MKDS 1,5/6) | 1 coll. | [Digi-Key (search)](https://www.digikey.com/en/products/result?keywords=MKDS%201%2C5%2F%206) | ~$2 | `Connector:Screw_Terminal_01x06` | `TerminalBlock_Phoenix:TerminalBlock_Phoenix_MKDS-1,5-6_1x06_P5.00mm_Horizontal` | 1 Banner brown (12 V) · 2 Banner black · 3 Banner blue (GND) · 4 both lamps + (12 V) · 5 green − (GND) · 6 red − (the Banner's output). As drawn on the wiring page |
-| 29 | SparkFun 10535, 315 MHz TX | 1 coll. | [Digi-Key 1568-10535-ND](https://www.digikey.com/en/products/detail/sparkfun-electronics/10535/5673762) | $5.75 | `DustGate:RF_TX_315MHz` | `DustGate:Module_SparkFun_RF_TX_315MHz_Socket` | Verified, 12-week lead. Pins GND, DATA, VCC, ANT — check against the module. VCC jumper 5 V / 12 V: `Connector_PinHeader_2.54mm:PinHeader_1x03_P2.54mm_Vertical` + a shunt |
-| 30 | Banner QS18VN6D beam sensor | 1 coll. | [Powermatic Associates](https://www.powermatic.net/part/banner/qs18vn6d/1090386) | ~$90 (eBay $27–34) | — | row 28 | Digi-Key lists only the QS18VN6D**B** |
-| 31 | Servo header — breakaway 0.1″ male, 3 pins | 1 (+1 fob) | [Digi-Key (search)](https://www.digikey.com/en/products/result?keywords=PREC003SAAN-RC) | pennies | `Connector_Generic:Conn_01x03` | `Connector_PinHeader_2.54mm:PinHeader_1x03_P2.54mm_Vertical` | What the perfboard uses (jeff, 2026-10-08). Signal, V+, GND. A standard servo plug has no latch, so no header locks it — a printed retainer in the housing is the fix if vibration ever walks one off |
-| 32 | Test points | 4 | — | — | `Connector:TestPoint` | `TestPoint:TestPoint_Pad_D1.5mm` | 5 V, servo rail, 3V3, CT bias node |
-| 33 | Mounting holes, M2.5 | 4 | — | — | `Mechanical:MountingHole_Pad` | `MountingHole:MountingHole_2.7mm_M2.5_Pad` | Pad version, so a dissipative housing can be grounded through a standoff |
-| 34 | 12 V wall adapter, 2.1 mm | 1 | any | — | — | — | 2 A for a PWM board, 3 A for a slider |
+| # | Part | Qty | Buy | Price | Status / note |
+|---|---|---|---|---|---|
+| 1 | Seeed XIAO ESP32C5 | 1 | [Digi-Key (search)](https://www.digikey.com/en/products/result?keywords=XIAO%20ESP32-C5) · Seeed direct | ~$7–10 | Stock not confirmed at Digi-Key. Socketed (row 2), never soldered down |
+| 2 | Sullins PPTC071LFBN-RC, 7-pin female, 8.5 mm | 2 | [Digi-Key S7005-ND](https://www.digikey.com/en/products/detail/sullins-connector-solutions/PPTC071LFBN-RC/810146) | $0.37 | Verified. The XIAO's socket |
+| 3 | Sullins PPTC041LFBN-RC, 4-pin female | 2 + 1 coll. | [Digi-Key S7002-ND](https://www.digikey.com/en/products/detail/PPTC041LFBN-RC/S7002-ND/810144) | $0.26 | Verified. The OLED, the MPM3610 breakout (row 5), and on a collector board the 315 MHz transmitter (row 29) |
+| 4 | Sullins 5-pin female (PPTC051LFBN-RC) | 1 | [Digi-Key (search)](https://www.digikey.com/en/products/result?keywords=PPTC051LFBN-RC) | ~$0.30 | Not in the guide. The Pololu buck's socket (row 6) |
+| 5 | Adafruit MPM3610 5 V buck breakout #4739 | 1 | [Adafruit](https://www.adafruit.com/product/4739) | ~$6 | What the CT floor was measured with. Header, from Adafruit's board file: GND, VOUT, VIN, EN, 2.54 mm (the LM1117 TO-220 order plus EN) — **go by the silkscreen**, the header is rotated on the board |
+| 6 | Pololu D24V22F6, 6 V 2.5 A buck | 1 | [Pololu #2859](https://www.pololu.com/product/2859) | $12.95–19.95 | The servo rail. Five pins at 0.1″: PG, EN, VIN, GND, VOUT — order from Pololu's [dimension diagram](https://www.pololu.com/file/0J1031/d24v22fx-step-down-voltage-regulator-dimension-diagram.pdf). Not a Digi-Key part |
+| 7 | CUI PJ-063AH barrel jack, 2.1 × 5.5 mm | 1 | [Digi-Key CP-063AH-ND (search)](https://www.digikey.com/en/products/result?keywords=PJ-063AH) | ~$1 | 20-week lead time reported. NOT PJ-002AH/102AH (2.0 mm) |
+| 8 | Bourns MF-RHT200 PTC fuse (2 A hold, 16 V) | 1 | [Digi-Key (search)](https://www.digikey.com/en/products/result?keywords=MF-RHT200) | ~$0.50 | Not in the guide; not looked up. The PWM board's 2 A adapter. **Slider: MF-RHT300** for its 2.7 A stall |
+| 9 | P6KE18A TVS, 15.3 V standoff, unidirectional | 1 | [Digi-Key (search)](https://www.digikey.com/en/products/result?keywords=P6KE18A) | ~$0.40 | Approved (jeff, 2026-10-08); stock not looked up. 12 V input, after the fuse |
+| 10 | MCC 1N5817-TP Schottky, DO-41 | 3 | [Digi-Key 1N5817-TPCT-ND](https://www.digikey.com/en/products/detail/mcc-micro-commercial-components/1N5817-TP/950394) | $0.21 | Verified. One on the XIAO's 5 V pad, two clamping D0 |
+| 11 | BAT54S dual Schottky, SOT-23 (alternative to two of row 10) | 0–1 | [Digi-Key (search)](https://www.digikey.com/en/products/result?keywords=BAT54S) | ~$0.15 | Reserve either footprint at D0 |
+| 12 | Panasonic EEU-FR1V221, 220 µF 35 V | 1 | [Digi-Key (search)](https://www.digikey.com/en/products/result?keywords=EEU-FR1V221) | ~$0.40 | XIAO 5 V pad. **Check the can diameter** in the datasheet and pick the matching `CP_Radial_*` |
+| 13 | Panasonic EEU-FR1V471 / EEU-FR1V102, 470–1000 µF 35 V | 1 | [471 (search)](https://www.digikey.com/en/products/result?keywords=EEU-FR1V471) · [102 (search)](https://www.digikey.com/en/products/result?keywords=EEU-FR1V102) | ~$0.50 | At the gate servo connector. Same diameter check |
+| 14 | Panasonic EEU-FR1V100, 10 µF 35 V | 1 | [Digi-Key (search)](https://www.digikey.com/en/products/result?keywords=EEU-FR1V100) | ~$0.25 | The CT bias bulk: 10 µF, what the planer-sensor node runs (jeff, 2026-10-09). Part number not looked up |
+| 15 | KEMET C320C104K5R5TA, 0.1 µF X7R radial | 5 | [Digi-Key (search)](https://www.digikey.com/en/products/result?keywords=C320C104K5R5TA) | $0.13 | Beside every electrolytic, the CT bias node, the pixel |
+| 16 | 10 µF radial X7R, ≥25 V | 1 | [Digi-Key (search)](https://www.digikey.com/en/products/result?keywords=10uF%2025V%20X7R%20radial) | ~$0.30 | XIAO 3V3. Check its body against the footprint |
+| 17 | Yageo CFR-25JB-52-1K, 1 kΩ ¼ W | 4 + 1 coll. | [Digi-Key](https://www.digikey.com/en/products/detail/yageo/CFR-25JB-52-1K/96) | pennies | Verified. CT divider ×2, CT series ×1, spare; the 4N35 LED on a collector board |
+| 18 | Yageo CFR-25JB-52-330R, 330 Ω | 1 | [Digi-Key (search)](https://www.digikey.com/en/products/result?keywords=CFR-25JB-52-330R) | pennies | Pixel DIN |
+| 19 | Yageo CFR-25JB-52-10K, 10 kΩ | 1 + 1 coll. | [Digi-Key (search)](https://www.digikey.com/en/products/result?keywords=CFR-25JB-52-10K) | pennies | CT plug-detect; the bin pull-up on D6 |
+| 20 | SparkFun COM-16347, WS2812B 5050 | 1 | [Digi-Key 1568-16347CT-ND](https://www.digikey.com/en/products/detail/sparkfun-electronics/COM-16347/12149781) | $0.68 | Verified. GRB, the firmware's order |
+| 21 | SSD1306 0.96″ OLED, 4-pin I²C | 1 | none confirmed at Digi-Key | ~$4–8 | **Pin order varies** (VCC/GND swapped on some): fix the footprint to the module you buy |
+| 22 | Omron B3F-1000, 6 mm tactile | 1 (+1 for D9) | [Digi-Key SW400-ND](https://www.digikey.com/en/products/detail/omron-electronics-inc-emc-div/B3F-1000/33150) | $0.24 | Verified. Wake (D1); a second footprint on D9 |
+| 23 | CUI SJ1-3525N, 3.5 mm switched jack | 1 | [Digi-Key CP1-3525N-ND](https://www.digikey.com/en/products/detail/same-sky-formerly-cui-devices-/SJ1-3525N/738687) | $1.00 | Verified. NOT the SJ1-3523N (no switch). Meter the NC side first (WIRING.md §8) |
+| 24 | SCT-013-030 clamp, 30 A : 1 V | 1 per CT | Amazon / eBay | ~$8–10 | Plugs into row 23 |
+| 25 | 4N35 optocoupler, DIP-6 | 1 coll. | [Digi-Key (search)](https://www.digikey.com/en/products/result?keywords=4N35) | <$1 | Not a PC817 breakout |
+| 26 | 1N4148 signal diode, DO-35 | 1 coll. | [Digi-Key (search)](https://www.digikey.com/en/products/result?keywords=1N4148) | pennies | ESD: across the 4N35's LED |
+| 27 | P4KE18A TVS, DO-41 | 1 coll. | [Digi-Key (search)](https://www.digikey.com/en/products/result?keywords=P4KE18A) | ~$0.30 | ESD: 12 V → GND at the Banner's terminal. Approved (jeff, 2026-10-08); stock not looked up |
+| 28 | Screw terminal, 6-way, 5 mm (Phoenix MKDS 1,5/6) | 1 coll. | [Digi-Key (search)](https://www.digikey.com/en/products/result?keywords=MKDS%201%2C5%2F%206) | ~$2 | 1 Banner brown (12 V) · 2 Banner black · 3 Banner blue (GND) · 4 both lamps + (12 V) · 5 green − (GND) · 6 red − (the Banner's output). As drawn on the wiring page |
+| 29 | SparkFun 10535, 315 MHz TX | 1 coll. | [Digi-Key 1568-10535-ND](https://www.digikey.com/en/products/detail/sparkfun-electronics/10535/5673762) | $5.75 | Verified, 12-week lead. Pins GND, DATA, VCC, ANT — check against the module. VCC jumper 5 V / 12 V: a 1x03 0.1″ male header + a shunt |
+| 30 | Banner QS18VN6D beam sensor | 1 coll. | [Powermatic Associates](https://www.powermatic.net/part/banner/qs18vn6d/1090386) | ~$90 (eBay $27–34) | Digi-Key lists only the QS18VN6D**B** |
+| 31 | Servo header — breakaway 0.1″ male, 3 pins | 1 (+1 fob) | [Digi-Key (search)](https://www.digikey.com/en/products/result?keywords=PREC003SAAN-RC) | pennies | What the perfboard uses (jeff, 2026-10-08). Signal, V+, GND. A standard servo plug has no latch, so no header locks it — a printed retainer in the housing is the fix if vibration ever walks one off |
+| 32 | Test points | 4 | — | — | 5 V, servo rail, 3V3, CT bias node |
+| 33 | Mounting holes, M2.5 | 4 | — | — | Pad version, so a dissipative housing can be grounded through a standoff |
+| 34 | 12 V wall adapter, 2.1 mm | 1 | any | — | 2 A for a PWM board, 3 A for a slider |
 
 Not on a board: gate servos (MG995 class, or the ST3215 for a slider — Waveshare SKU 22414, $21.99), and
 Shelly plugs. The JLCPCB board itself is under "Ordering the PCB" below.
@@ -109,7 +108,7 @@ Shelly plugs. The JLCPCB board itself is under "Ordering the PCB" below.
 | Second button (manual control) | 0–1 | — | B3F-1000 | **Reserve the footprint on D9**, the one spare pad. No firmware yet |
 | Female header, 7-pin | 2 | as used | **Sullins PPTC071LFBN-RC** (S7005-ND, ~$0.37) | The XIAO's socket. 8.5 mm tall. Gold PPPC071LFBN-RC was backordered |
 | Female header, 4-pin | 1 + per socketed module | as used | **Sullins PPTC041LFBN-RC** (S7002-ND, ~$0.26) | The OLED; also the buck modules if socketed |
-| **PTC resettable fuse**, ~2.5 A hold | 1 | — | e.g. Bourns MF-R250 (radial) — not looked up; size the slider's for its 2.7 A stall | **Fitted on the PCB.** In series with the 12 V input. See "Input protection" below |
+| **PTC resettable fuse**, ~2.5 A hold | 1 | — | **Bourns MF-RHT200** (PCB order list row 8); the slider's MF-RHT300, for its 2.7 A stall | **Fitted on the PCB.** In series with the 12 V input. See "Input protection" below |
 | **TVS diode**, 15 V standoff, unidirectional | 1 | — | e.g. P6KE18A (through-hole) or SMBJ15A — not looked up | **Fitted on the PCB.** 12 V to GND, after the fuse |
 
 #### Input protection (the reserved fuse and TVS)
