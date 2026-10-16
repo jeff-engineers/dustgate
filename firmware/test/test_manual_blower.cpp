@@ -114,9 +114,9 @@ int main(int argc, char** argv) {
     rt.begin(&nb);
     std::string err; rt.adopt(shopJson.c_str(), shopJson.size(), err);
 
-    rt.setToolPower("jointer", 800);
+    rt.setMachinePower("jointer", 800);
     drain(rt, local, 1000);
-    rt.setToolPower("jointer", 0);
+    rt.setMachinePower("jointer", 0);
     drain(rt, local, 2000);
     size_t movesBefore = local.log.size();
 
@@ -141,12 +141,12 @@ int main(int argc, char** argv) {
     rt.update(61000);
     ok("and it does not time out", rt.collectorOn("big"), "off a minute later");
 
-    rt.setToolPower("jointer", 800);
+    rt.setMachinePower("jointer", 800);
     drain(rt, local, 70000);
     ok("a machine can start while it runs", rt.collectorOn("big"));
     ok("...and the hand switch is still set", rt.collectorIsManual("big"));
 
-    rt.setToolPower("jointer", 0);
+    rt.setMachinePower("jointer", 0);
     drain(rt, local, 80000);
     rt.update(86000);
     // Without the flag this is exactly where the coast-down would begin.
@@ -181,7 +181,7 @@ int main(int argc, char** argv) {
 
     rt.setCollectorManual("big", true);
     drain(rt, local, 1000);
-    rt.setToolPower("jointer", 800);
+    rt.setMachinePower("jointer", 800);
     drain(rt, local, 2000);
     rt.setCollectorManual("big", false);
     drain(rt, local, 3000);
@@ -189,7 +189,7 @@ int main(int argc, char** argv) {
     ok("but the hand run is over", !rt.collectorIsManual("big"));
 
     // ...and the ordinary coast-down applies again.
-    rt.setToolPower("jointer", 0);
+    rt.setMachinePower("jointer", 0);
     rt.update(4000);
     ok("so the next idle coasts as usual", rt.collectorCoasting("big"));
   }

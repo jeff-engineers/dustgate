@@ -18,9 +18,7 @@
 // the 2.5" manifold. Lifting the container above them leaves all three correct
 // exactly as written.
 //
-// SCHEMAVERSION 1 IS NOT READ (2026-10-06). It used to be a shop with one anonymous system whose machines were its tool
-// elements; nothing can produce one now and TopologyRuntime refuses it with a sentence, so a document without a systems[]
-// array reads as having no systems rather than as a guess.
+// ONLY A SHOP IS READ: a document without a systems[] array reads as having no systems, and TopologyRuntime refuses it.
 //
 // PURE — ArduinoJson + STL only, NO Arduino.h, so it host-compiles for the
 // conformance test alongside the router and sequencer.
@@ -54,15 +52,13 @@ inline std::vector<SystemView> systemsOf(JsonObjectConst doc) {
 }
 
 /**
- * Which machine a port belongs to.
- *
- * A port says so explicitly (`machineId`); one that does not is its own machine and answers with its own id.
+ * Which machine a port belongs to: its `machineId`, which validateShop requires on every tool port. Empty when it has
+ * none — such a port belongs to no machine and routes nothing. (A port without one used to count as its own machine,
+ * the old single-system rule; gone 2026-10-16.)
  */
 inline std::string machineIdOf(JsonObjectConst port) {
   const char* m = port["machineId"].as<const char*>();
-  if (m && *m) return std::string(m);
-  const char* id = port["id"].as<const char*>();
-  return id ? std::string(id) : std::string();
+  return (m && *m) ? std::string(m) : std::string();
 }
 
 /**

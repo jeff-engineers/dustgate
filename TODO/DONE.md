@@ -14,6 +14,27 @@ of this file is being able to answer "did we already decide this, and why".
 
 Newest first.
 
+### The v1 layout is gone, everywhere, 2026-10-16 (branch `remove-v1-layout`)
+
+- **Every remnant of the single-system (schemaVersion 1) layout removed.** LANDED 2026-10-16, host-tested. Jeff: "I keep
+  thinking it is all gone and it keeps showing up." The 2026-10-06 cleanup took v1 out of the product path; this took
+  out the vocabulary and the scaffolding that kept it resurfacing:
+  - the tool-for-machine aliases (`setToolPower`, `setToolManual`, `toolForOutlet`, `toolThreshold`) are renamed to the
+    machine names at every caller, the app's `setMachineManual()` included. The HTTP route stays `/api/tool`: "tool" is
+    the woodworker's word, and the route is the app's contract.
+  - `systemView()` no longer stamps `schemaVersion: 1`, and `validateTopology()` no longer asks for one: a system view
+    is not a document. `validateShop()` requires `schemaVersion` 2.
+  - a tool ELEMENT carrying a `sensor` is refused (topology.js): a tool's plug or clamp is on its machine. The tool-clamp
+    and plug-kind checks that lived on elements are now on machines (shop.js), which also refuses a machine sharing a
+    collector's plug. adoptOutlets() reads only machines and collectors.
+  - the special refusal sentence ("layout is from an older version (v1)") is gone from both brains and shop.js: a
+    document without `systems[]` gets the plain shape error ("systems not an array"). The app's import refuses one too.
+  - the fixtures are shops: `star`, `feedChain`, `twoGates` in topology.fixtures.js (with `viewOf()` for one system),
+    `shopFromV1()` deleted; `star.json` / `feedChain.json` deleted in favour of the existing `*Shop.json`. The
+    plain-document `viewOf()` / `computeRouting()` / `planTransition()` overloads went with them.
+  - `machineIdOf()` (Shop.h) no longer treats a port with no `machineId` as its own machine — validateShop requires one.
+    A machine reusing its first port's id is NOT a v1 rule (the app does it today) and stays legal.
+
 ### One board per collector; boards are offered only for jobs they report, 2026-10-10 (branch `collector-board`)
 
 - **A collector names ONE board (`controllerId` on the collector) and its transmitter, clamp and bin beam are all on it.**

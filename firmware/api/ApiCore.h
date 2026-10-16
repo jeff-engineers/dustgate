@@ -61,7 +61,7 @@ inline Response json(const std::string& body, int status = 200) { Response r; r.
 class Backend {
 public:
     virtual ~Backend() {}
-    virtual bool setToolManual(const std::string& /*machineId*/, bool /*on*/) { return false; }       // false = no such tool
+    virtual bool setMachineManual(const std::string& /*machineId*/, bool /*on*/) { return false; }       // false = no such tool
     virtual bool setCollectorManual(const std::string& /*systemId*/, bool /*on*/) { return false; }   // "" = the first system
     // A setup-time jog of one channel on a paired board. `why` is set on a refusal.
     virtual bool jog(const std::string& /*controllerId*/, int /*channel*/, int /*angle*/, bool /*detach*/, std::string& why) {
@@ -94,7 +94,7 @@ inline bool handle(const Request& req, Backend& be, Response& out) {
         const char* id = d["toolId"].as<const char*>();
         if (!id || !*id) { out = error(400, "missing 'toolId'"); return true; }
         if (!d.containsKey("on")) { out = error(400, "missing 'on'"); return true; }
-        out = be.setToolManual(id, d["on"].as<bool>()) ? ok() : error(404, "unknown tool");
+        out = be.setMachineManual(id, d["on"].as<bool>()) ? ok() : error(404, "unknown tool");
         return true;
     }
     if (post && p == "/api/collector") {

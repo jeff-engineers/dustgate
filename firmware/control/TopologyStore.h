@@ -109,9 +109,8 @@ public:
     // truncation so the device never persists something the controller can't
     // parse. The UI's validateShop()/validateTopology() remains authoritative.
     //
-    // A SHOP only (systems[], each with its own elements). A schemaVersion-1 topology (elements/ducts at the top level) is
-    // refused here, at the door, with the same sentence TopologyRuntime gives it, so a PUT of one answers 400 instead of
-    // being stored and then rejected on load.
+    // A SHOP only (systems[], each with its own elements), refused at the door with the same words TopologyRuntime gives,
+    // so a PUT of anything else answers 400 instead of being stored and then rejected on load.
     static bool validateMinimal(JsonVariantConst t, String& err) {
         if (!t.is<JsonObjectConst>())               { err = "not an object"; return false; }
         if (!t["controllers"].is<JsonArrayConst>()) { err = "controllers not an array"; return false; }
@@ -125,8 +124,7 @@ public:
         if (primaries != 1) { err = "exactly one primary controller required"; return false; }
 
         if (!t["systems"].is<JsonArrayConst>()) {
-            err = t["elements"].is<JsonArrayConst>() ? "layout is from an older version (v1) — re-save it"
-                                                     : "systems not an array";
+            err = "systems not an array";
             return false;
         }
         {

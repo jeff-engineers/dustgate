@@ -75,27 +75,12 @@ static bool risk(const std::vector<topo::SystemPlan>& plans, const std::string& 
 int main(int argc, char** argv) {
   std::string dir = argc > 1 ? argv[1] : "firmware/test/fixtures/";
 
-  DynamicJsonDocument shopDoc(32768), starDoc(16384);
+  DynamicJsonDocument shopDoc(32768);
   if (deserializeJson(shopDoc, slurp(dir + "twoSystemShop.json"))) { printf("bad twoSystemShop.json\n"); return 2; }
-  if (deserializeJson(starDoc, slurp(dir + "star.json")))          { printf("bad star.json\n");          return 2; }
   JsonObjectConst shop = shopDoc.as<JsonObjectConst>();
-  JsonObjectConst star = starDoc.as<JsonObjectConst>();
 
-  // ── shape detection ───────────────────────────────────────────────────────
-  // The v1 LENS is no longer asserted here (2026-09-28). A v1 layout is refused
-  // at adopt() (TopologyRuntime.h, a9bab46), so systemsOf()/machineDoc() on a v1
-  // document is reachable only from tests that bypass adopt(), and is flagged in
-  // TODO to go with the last v1 fixture. These checks had also stopped testing
-  // anything: they read twoGates.json, which a9bab46 made a v2 shop, and two of
-  // the four passed by coincidence — its one system happens to be named
-  // "system-1" and its machines reuse the tool ids. The refusal itself is
-  // asserted where adopt() is driven, in test_nodebus.cpp.
-  //
-  // star.json is a genuine v1 document, so the negative below still means
-  // something — and it is the same pair shop.test.js checks.
+  // ── systems ───────────────────────────────────────────────────────────────
   {
-    ok("a schemaVersion-1 document has no systems: it is not read", topo::systemsOf(shop).size() == 2 && topo::systemsOf(star).empty());
-
     auto sysShop = topo::systemsOf(shop);
     ok("shop has two systems", sysShop.size() == 2);
     ok("systems in document order", sysShop.size() == 2 &&

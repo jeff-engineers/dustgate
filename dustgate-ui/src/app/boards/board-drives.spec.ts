@@ -87,7 +87,7 @@ group('B4 a paired slider node survives a save');
   };
 
   const docWith = (controller: Record<string, unknown>) => ({
-    schemaVersion: 1, name: 'paired slider',
+    name: 'paired slider',   // one system's body, as validateTopology takes it
     controllers: [{ id: 'primary', role: 'primary' }, controller],
     elements: [
       { id: 'dc', type: 'collector' },

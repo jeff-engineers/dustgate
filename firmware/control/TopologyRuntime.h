@@ -4,8 +4,7 @@
 // TopologyController.h calls this "a thin device layer (the main sketch)". This
 // is it, factored out of the sketch so it stays host-testable. It owns:
 //
-//   • the parsed document (adopted at boot and on PUT /api/topology): a shop,
-//     since a schemaVersion-1 topology is refused
+//   • the parsed document (adopted at boot and on PUT /api/topology): a shop
 //   • a topo::Controller (the brain: machine power in, routed states + per-system
 //     plans out)
 //   • a MOVE QUEUE, drained one move at a time through NodeBus
@@ -98,7 +97,7 @@ namespace topo {
 // Three times the trip point makes the same activation decision and reads like a
 // machine. The floor keeps it strictly positive when a threshold is set to 0, so
 // "manually on" can never be indistinguishable from "drawing nothing". Mirrors
-// setToolManual() in dustgate-ui/.../demo-api.service.ts — see the twin-pair
+// setMachineManual() in dustgate-ui/.../demo-api.service.ts — see the twin-pair
 // table in CLAUDE.md.
 static inline float manualWattsFor(float threshold) {
     return threshold > 0.0f ? threshold * 3.0f : 15.0f;
@@ -253,33 +252,16 @@ public:
         if (e) { err = e.c_str(); return false; }
         if (!doc->is<JsonObject>()) { err = "topology must be an object"; return false; }
 
-        // ── schemaVersion 1 IS REFUSED, and says so (2026-09-17, jeff) ───────
+        // ── ONLY A SHOP IS A LAYOUT ──────────────────────────────────────────
         //
-        // Nothing has been able to PRODUCE a v1 document for a long time: the
-        // configurator writes v2 shops with systems[] and machines[]. What kept
-        // v1 alive was the test fixtures, and they did active harm — in v1 a tool
-        // element IS its own machine, so `element.sensor.ct` reads correctly
-        // there and is null for every real document. That is precisely how the
-        // suite stayed green on 2026-09-15 while no clamp paired in the app ever
-        // reached its node.
-        //
-        // REFUSED WITH A SENTENCE, not ignored, because the alternative is the
-        // failure that cost an evening on 2026-09-17: a board with a rejected
-        // layout is indistinguishable from a board with no layout, and both are
-        // one blue LED. The message rides g_topoRejectReason to the BAD LAYOUT
-        // light, the screen, and /api/status.
-        //
-        // Detected by SHAPE as well as by the version field, since an export
-        // that lost its schemaVersion is still a v1 document and still cannot be
-        // read correctly. systems[] is what a v2 shop always has.
-        {
-            JsonObjectConst o = doc->as<JsonObjectConst>();
-            const int ver = o["schemaVersion"] | 0;
-            const bool hasSystems = o["systems"].is<JsonArrayConst>();
-            if (ver == 1 || (!hasSystems && o["elements"].is<JsonArrayConst>())) {
-                err = "layout is from an older version (v1) — re-save it";
-                return false;
-            }
+        // REFUSED WITH A SENTENCE, not ignored: a board with a rejected layout is otherwise indistinguishable from a
+        // board with no layout, and both are one blue LED (an evening lost to that on 2026-09-17). The message rides
+        // g_topoRejectReason to the BAD LAYOUT light, the screen, and /api/status. A document without systems[] gets
+        // the same plain shape error as any other malformed one (the old single-system format got a sentence of its own
+        // until 2026-10-16; nothing has written one in months).
+        if (!doc->as<JsonObjectConst>()["systems"].is<JsonArrayConst>()) {
+            err = "systems not an array";
+            return false;
         }
 
         // ── A SAVE IS NOT A REBOOT (2026-10-06) ──────────────────────────────
@@ -688,14 +670,6 @@ public:
         return _loaded ? _ctrl.machineForOutlet(host, ip) : std::string();
     }
 
-    // ---- v1 spellings, kept for call sites that predate ports ----
-    // Only the three that still have callers. hasTool/toolIsManual/activeTools
-    // were kept for the same reason and turned out to have none — a comment
-    // promising compatibility with nothing.
-    void setToolPower(const std::string& id, float w) { setMachinePower(id, w); }
-    bool setToolManual(const std::string& id, bool on) { return setMachineManual(id, on); }
-    std::string toolForOutlet(const char* h, const char* i) const { return machineForOutlet(h, i); }
-
     // Pump the move queue. Issues at most one move per call and never while the
     // bus is busy — that IS the current mutex.
     // `nowMs` is millis() on the device and a fake clock in the host tests — the
@@ -905,8 +879,7 @@ public:
         auto it = _collectors.find(systemId);
         return it != _collectors.end() && it->second.running;
     }
-    // Is ANY blower running. The single-collector shorthand the sketch and the
-    // v1 status field still use.
+    // Is ANY blower running: the shop-wide `collectorOn` in /api/status, and the sketch's own lamps.
     bool collectorOn() const {
         for (auto& kv : _collectors) if (kv.second.running) return true;
         return false;

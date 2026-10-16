@@ -90,9 +90,6 @@ private:
 inline std::string localBinSystemId(JsonObjectConst topology, const char* ownId) {
     const std::string own = ownId ? ownId : "";
     JsonArrayConst systems = topology["systems"];
-    // v1 documents have no `systems` array — the whole document IS one system,
-    // and its id is the one viewOf() gives it. Handled by the caller, which has
-    // the SystemView; this function only walks a v2 document.
     for (JsonObjectConst sys : systems) {
         for (JsonObjectConst e : sys["elements"].as<JsonArrayConst>()) {
             const char* type = e["type"];

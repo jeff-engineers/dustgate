@@ -539,10 +539,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     // off it. A shop with none is unusable (empty canvas), so seed a blank one on
     // a fresh system. Left un-dirty: it's the default starting point, not an edit,
     // so Save stays disabled until the user actually adds a gate.
-    // Migrate on read, once, at the boundary. The device still serves whichever
-    // shape it was last given (its own reader handles both), so this is the only
-    // place a v1 layout becomes a shop — a lazier conversion would write back a
-    // half-migrated document the first time someone hit Save.
+    // Only a shop is read (toShop() answers null for anything else), so anything else starts a blank shop.
     const shop = toShop(loaded);
     this.topo = shop && elementsOf(shop as unknown as Topology).some(e => e.type === 'collector')
       ? (shop as unknown as Topology)
@@ -5536,18 +5533,16 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
    *  shop makes sense. Anything past this loads as a draft. */
   private importBlocker(doc: unknown): string {
     if (!doc || typeof doc !== 'object' || Array.isArray(doc)) return 'it isn’t a layout object.';
-    const d = doc as { elements?: unknown; ducts?: unknown; controllers?: unknown; systems?: unknown };
+    const d = doc as { controllers?: unknown; systems?: unknown };
     if (d.controllers !== undefined && !Array.isArray(d.controllers)) return 'its controller list is malformed.';
 
-    // Both shapes land here: a schemaVersion-2 shop keeps its elements and ducts
-    // inside `systems[]`, a v1 file at the root. Checked FLATTENED, because the
-    // questions this asks — are ids unique, do ducts point at something real —
-    // are shop-wide either way, and element ids are unique shop-wide by contract.
+    // A shop keeps its elements and ducts inside `systems[]`. Checked FLATTENED, because the questions this asks — are
+    // ids unique, do ducts point at something real — are shop-wide, and element ids are unique shop-wide by contract.
     // (Which system a duct is in is validateShop's business, not this gate's.)
     let elements: unknown[] = [];
     let ductList: unknown[] = [];
-    if (d.systems !== undefined) {
-      if (!Array.isArray(d.systems)) return 'its system list is malformed.';
+    {
+      if (!Array.isArray(d.systems)) return 'it has no systems, so it isn’t a DustGate shop layout.';
       for (const raw of d.systems) {
         if (!raw || typeof raw !== 'object') return 'one of its systems isn’t readable.';
         const s = raw as { elements?: unknown; ducts?: unknown };
@@ -5556,11 +5551,6 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
         elements = elements.concat((s.elements ?? []) as unknown[]);
         ductList = ductList.concat((s.ducts ?? []) as unknown[]);
       }
-    } else {
-      if (d.elements !== undefined && !Array.isArray(d.elements)) return 'its element list is malformed.';
-      if (d.ducts !== undefined && !Array.isArray(d.ducts)) return 'its duct list is malformed.';
-      elements = (d.elements ?? []) as unknown[];
-      ductList = (d.ducts ?? []) as unknown[];
     }
 
     const ids = new Set<string>();

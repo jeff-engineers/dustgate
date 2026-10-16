@@ -907,7 +907,7 @@ export class LiveViewComponent implements OnInit, OnDestroy {
     this.busy = true;
     this.error = '';
     try {
-      await this.api.setToolManual(t.id, !t.on);
+      await this.api.setMachineManual(t.id, !t.on);
       // Optimistic, then confirmed: the device answers the POST before its main
       // loop has routed, so the authoritative state comes from the refresh.
       t.on = !t.on;
@@ -957,7 +957,7 @@ export class LiveViewComponent implements OnInit, OnDestroy {
       } else {
         // No verdict for this machine: it wasn't in the routing pass at all,
         // which for an active tool means it got nothing. Fall back to the port
-        // map for the one shape where the ids DO line up (a v1 topology).
+        // map, which answers when the machine's id is its port's (the app's default).
         t.collecting = reach[t.id] === true;
         t.partial = false;
       }

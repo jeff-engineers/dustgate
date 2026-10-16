@@ -32,7 +32,8 @@ const WebSocket = globalThis.WebSocket || (() => {
 })();
 
 const NL = require('./nodelink.js');
-const { twoGates } = require('./topology.fixtures.js');
+const fx = require('./topology.fixtures.js');
+const twoGates = fx.viewOf(fx.twoGates);   // its one system
 const { servoCommandAngle } = require('./topology.js');
 
 const WS_URL   = (process.argv[2] || 'ws://localhost:3001/nodelink');

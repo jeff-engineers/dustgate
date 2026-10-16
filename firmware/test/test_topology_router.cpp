@@ -11,7 +11,7 @@
 
 #include <ArduinoJson.h>
 #include "../control/TopologyRouter.h"
-#include "../control/Shop.h"   // systemsOf() — twoGates.json is a v2 shop now
+#include "../control/Shop.h"   // systemsOf(): every fixture is a shop
 #include <cstdio>
 #include <fstream>
 #include <sstream>
@@ -42,53 +42,46 @@ int main(int argc, char** argv) {
   std::string dir = argc > 1 ? argv[1] : "firmware/test/fixtures/";
 
   DynamicJsonDocument star(16384), twoGates(16384), feedChain(16384);
-  if (deserializeJson(star,      slurp(dir + "star.json"))      != DeserializationError::Ok) { printf("bad star.json\n"); return 2; }
+  if (deserializeJson(star,      slurp(dir + "starShop.json"))  != DeserializationError::Ok) { printf("bad starShop.json\n"); return 2; }
   if (deserializeJson(twoGates,  slurp(dir + "twoGates.json"))  != DeserializationError::Ok) { printf("bad twoGates.json\n"); return 2; }
-  if (deserializeJson(feedChain, slurp(dir + "feedChain.json")) != DeserializationError::Ok) { printf("bad feedChain.json\n"); return 2; }
+  if (deserializeJson(feedChain, slurp(dir + "feedChainShop.json")) != DeserializationError::Ok) { printf("bad feedChainShop.json\n"); return 2; }
+  // Every fixture is a shop; the router takes one system of it, as Shop.h hands it one.
+  auto sysOf = [](DynamicJsonDocument& d) { return topo::systemsOf(d.as<JsonObjectConst>())[0]; };
 
   // ── star [toolB] → sel:s2, toolB reachable ────────────────────────────────
   {
-    auto r = topo::computeRouting(star.as<JsonObjectConst>(), {"toolB"});
+    auto r = topo::computeRouting(sysOf(star), {"toolB"});
     ok("star [toolB]: sel=s2",       state(r, "sel") == "s2");
     ok("star [toolB]: toolB reaches", reach(r, "toolB"));
   }
   // ── star [toolA,toolB] contend on shared linear → A wins (s1), B loses ─────
   {
-    auto r = topo::computeRouting(star.as<JsonObjectConst>(), {"toolA", "toolB"});
+    auto r = topo::computeRouting(sysOf(star), {"toolA", "toolB"});
     ok("star contend: sel=s1 (A wins)", state(r, "sel") == "s1", "got " + state(r, "sel"));
     ok("star contend: toolA reaches",   reach(r, "toolA"));
     ok("star contend: toolB blocked",   !reach(r, "toolB"));
   }
   // ── twoGates [toolX,toolY] independent → both open, both reach ────────────
   {
-    // THROUGH systemsOf(), because twoGates.json is a v2 shop since 2026-09-17.
-    // The JsonObjectConst overload of computeRouting() is the V1 one — viewOf()
-    // reads top-level elements/ducts, which a v2 document does not have. star
-    // and feedChain below are still v1 and still use it; both go when the v1
-    // fixtures do (see TODO), and viewOf(JsonObjectConst) goes with them.
-    auto r = topo::computeRouting(topo::systemsOf(twoGates.as<JsonObjectConst>())[0],
-                                  {"toolX", "toolY"});
+    auto r = topo::computeRouting(sysOf(twoGates), {"toolX", "toolY"});
     ok("twoGates: gate1=open", state(r, "gate1") == "open");
     ok("twoGates: gate2=open", state(r, "gate2") == "open");
     ok("twoGates: both reach", reach(r, "toolX") && reach(r, "toolY"));
   }
   // ── feedChain [toolL] multi-hop linear→feed→manifold → lin:s2, man:left ────
   {
-    auto r = topo::computeRouting(feedChain.as<JsonObjectConst>(), {"toolL"});
+    auto r = topo::computeRouting(sysOf(feedChain), {"toolL"});
     ok("feedChain: lin=s2",   state(r, "lin") == "s2", "got " + state(r, "lin"));
     ok("feedChain: man=left", state(r, "man") == "left", "got " + state(r, "man"));
     ok("feedChain: toolL reaches", reach(r, "toolL"));
     // idle selectors default closed
-    auto idle = topo::computeRouting(feedChain.as<JsonObjectConst>(), {});
+    auto idle = topo::computeRouting(sysOf(feedChain), {});
     ok("feedChain idle: lin=home (closed)", state(idle, "lin") == "home", "got " + state(idle, "lin"));
     ok("feedChain idle: man=closed",        state(idle, "man") == "closed", "got " + state(idle, "man"));
   }
   // ── servoCommandAngle: twoGates gate1 open=ref+0, closed=ref+90 ───────────
   {
     JsonObjectConst g1;
-    // twoGates.json became a v2 shop on 2026-09-17, so elements live under a
-    // system rather than at the top level. computeRouting() reads it through
-    // Shop.h and never noticed; only this direct index did.
     for (JsonObjectConst e : twoGates["systems"][0]["elements"].as<JsonArrayConst>())
       if (topo::_eq(e["id"], "gate1")) g1 = e;
     ok("servo angle: gate1 open = 10",   topo::servoCommandAngle(g1, "open") == 10, std::to_string(topo::servoCommandAngle(g1, "open")));
@@ -109,12 +102,12 @@ int main(int argc, char** argv) {
   {
     DynamicJsonDocument capped(16384);
     capped.set(feedChain.as<JsonObjectConst>());
-    JsonObject cap = capped["elements"].createNestedObject();
+    JsonObject cap = capped["systems"][0]["elements"].createNestedObject();
     cap["id"] = "toolCap"; cap["type"] = "tool"; cap["name"] = "Capped Port";
-    JsonObject cd = capped["ducts"].createNestedObject();
+    JsonObject cd = capped["systems"][0]["ducts"].createNestedObject();
     cd["child"] = "toolCap"; cd["parent"] = "lin"; cd["parentBranch"] = "b3";
 
-    auto r = topo::computeRouting(capped.as<JsonObjectConst>(), {"toolCap"});
+    auto r = topo::computeRouting(sysOf(capped), {"toolCap"});
     ok("blocked branch: tool on it is unreachable", !reach(r, "toolCap"));
     // The half that matters: the selector is NOT moved to the state that branch
     // would have opened. A gate left closed while the tool reads reachable is a
@@ -126,12 +119,12 @@ int main(int argc, char** argv) {
   {
     DynamicJsonDocument dangling(16384);
     dangling.set(feedChain.as<JsonObjectConst>());
-    JsonObject t2 = dangling["elements"].createNestedObject();
+    JsonObject t2 = dangling["systems"][0]["elements"].createNestedObject();
     t2["id"] = "toolNo"; t2["type"] = "tool"; t2["name"] = "Dangling";
-    JsonObject dd = dangling["ducts"].createNestedObject();
+    JsonObject dd = dangling["systems"][0]["ducts"].createNestedObject();
     dd["child"] = "toolNo"; dd["parent"] = "lin"; dd["parentBranch"] = "nosuchbranch";
 
-    auto r = topo::computeRouting(dangling.as<JsonObjectConst>(), {"toolNo"});
+    auto r = topo::computeRouting(sysOf(dangling), {"toolNo"});
     ok("unknown branch: tool is unreachable", !reach(r, "toolNo"));
     ok("unknown branch: selector stays closed", state(r, "lin") == "home",
        "got " + state(r, "lin"));
@@ -152,19 +145,21 @@ int main(int argc, char** argv) {
   {
     DynamicJsonDocument bad(4096);
     auto err = deserializeJson(bad, R"({
-      "schemaVersion": 1,
+      "schemaVersion": 2,
       "controllers": [{"id":"primary","role":"primary"}],
-      "elements": [
-        {"type":"collector","name":"nameless collector"},
-        {"id":"gate","type":"selector","kind":"servoGate",
-         "states":[{"id":"open","isClosed":false},{"id":"shut","isClosed":true}],
-         "branches":[{"id":"b1","role":"tool"}]},
-        {"id":"toolZ","type":"tool"}
-      ],
-      "ducts": [{"child":"toolZ","parentBranch":"b1"}, {"parent":"dc"}]
+      "systems": [{"id":"s1",
+        "elements": [
+          {"type":"collector","name":"nameless collector"},
+          {"id":"gate","type":"selector","kind":"servoGate",
+           "states":[{"id":"open","isClosed":false},{"id":"shut","isClosed":true}],
+           "branches":[{"id":"b1","role":"tool"}]},
+          {"id":"toolZ","type":"tool","machineId":"toolZ"}
+        ],
+        "ducts": [{"child":"toolZ","parentBranch":"b1"}, {"parent":"dc"}]}],
+      "machines": [{"id":"toolZ"}]
     })");
     ok("malformed: fixture parses", err == DeserializationError::Ok);
-    auto r = topo::computeRouting(bad.as<JsonObjectConst>(), {"toolZ"});
+    auto r = topo::computeRouting(sysOf(bad), {"toolZ"});
     // The duct names no parent, so the walk is an orphan chain and stops.
     ok("malformed: unreachable, not a crash", !reach(r, "toolZ"));
     // The branch names no opensState, so the selector falls back to closed.
@@ -176,9 +171,9 @@ int main(int argc, char** argv) {
     // on "" — otherwise it and the parentless duct above both land on "" and
     // connect to each other.
     ok("malformed: nameless collector is not indexed under \"\"",
-       topo::computeRouting(bad.as<JsonObjectConst>(), {}).states.count("") == 0);
+       topo::computeRouting(sysOf(bad), {}).states.count("") == 0);
     ok("malformed: idle pass survives too",
-       topo::computeRouting(bad.as<JsonObjectConst>(), {}).states.count("gate") == 1);
+       topo::computeRouting(sysOf(bad), {}).states.count("gate") == 1);
   }
 
   printf("\n%d/%d passed%s\n", passed, passed + failed, failed ? (", " + std::to_string(failed) + " FAILED").c_str() : "");

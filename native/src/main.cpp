@@ -619,7 +619,7 @@ static void claimNode(const std::string& hostIn, bool takeover) {
 
 class NativeBackend : public api::Backend {
 public:
-    bool setToolManual(const std::string& id, bool on) override { return g_rt.setMachineManual(id, on); }
+    bool setMachineManual(const std::string& id, bool on) override { return g_rt.setMachineManual(id, on); }
     bool setCollectorManual(const std::string& sys, bool on) override {
         std::string s = sys;
         if (s.empty()) { auto ids = g_rt.systemIds(); if (ids.empty()) return false; s = ids[0]; }

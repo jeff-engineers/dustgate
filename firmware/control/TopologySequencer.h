@@ -96,13 +96,4 @@ inline TransitionPlan planTransition(const SystemView& topology,
   return out;
 }
 
-// Convenience for a plain single-system document.
-inline TransitionPlan planTransition(JsonObjectConst topology,
-                                     const std::map<std::string, std::string>& currentStates,
-                                     const std::map<std::string, std::string>& desiredStates,
-                                     bool collectorRunning,
-                                     const std::set<std::string>* reassert = nullptr) {
-  return planTransition(viewOf(topology), currentStates, desiredStates, collectorRunning, reassert);
-}
-
 } // namespace topo

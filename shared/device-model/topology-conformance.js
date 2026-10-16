@@ -12,9 +12,9 @@
 
 const baseUrl  = (process.argv[2] || 'http://localhost:3000').replace(/\/$/, '');
 const fixtures = require('./topology.fixtures.js');
-// The device takes SHOPS; a schemaVersion-1 document is refused (checked in 1). These are the single-system fixtures lifted.
-const twoGatesShop = fixtures.shopFromV1(fixtures.twoGates);
-const starShop = fixtures.shopFromV1(fixtures.star);
+// The device takes SHOPS; a document without systems[] is refused as malformed (checked in 1).
+const twoGatesShop = fixtures.twoGates;
+const starShop = fixtures.star;
 
 const results = [];
 const check = (name, cond, detail = '') => results.push({ name, ok: !!cond, detail });
@@ -56,12 +56,12 @@ async function run() {
 
   // 1. Validation is enforced at the API boundary.
   {
-    const bad = { schemaVersion: 1, controllers: [], elements: [], ducts: [] }; // no collector, no primary
+    const bad = { schemaVersion: 2, controllers: [], systems: [], machines: [] }; // no system
     const r = await req('PUT', '/api/topology', bad);
     check('invalid topology → 400 + errors', r.status === 400 && Array.isArray(r.json?.errors));
-    // A VALID schemaVersion-1 document is refused too, not migrated: nothing writes one any more.
-    const v1 = await req('PUT', '/api/topology', fixtures.twoGates);
-    check('a schemaVersion-1 document → 400', v1.status === 400, `status=${v1.status}`);
+    // One system's elements and ducts at the top level, with no systems[], is malformed like any other.
+    const flat = await req('PUT', '/api/topology', fixtures.viewOf(fixtures.twoGates));
+    check('a document without systems[] → 400', flat.status === 400, `status=${flat.status}`);
   }
 
   // 1b. Two servo gates on one board can't share a PWM channel — they'd move together.

@@ -11,7 +11,8 @@
 'use strict';
 
 const NL = require('./nodelink');
-const { twoGates, star } = require('./topology.fixtures');
+const fx = require('./topology.fixtures');
+const twoGates = fx.viewOf(fx.twoGates), star = fx.viewOf(fx.star);
 const { servoCommandAngle } = require('./topology');
 
 const results = [];

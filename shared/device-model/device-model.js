@@ -580,9 +580,8 @@ function discoverOutlets(d) {
  * on the network is left exactly as it is — including the deliberately foreign
  * last entry, which is the only way the refusal paths stay reachable.
  *
- * Takes the document, so callers don't each re-derive where a plug hides. Both
- * shapes: a v1 topology (tool.sensor.outlet / collector.control.outlet) and a
- * shop (machines[].sensor.outlet), since either can be PUT.
+ * Takes the shop, so callers don't each re-derive where a plug hides: a machine's
+ * sensor.outlet, and a collector's control.outlet and sensor.outlet.
  */
 function adoptOutlets(d, doc) {
   const list = ensureDiscovered(d);
@@ -605,16 +604,15 @@ function adoptOutlets(d, doc) {
   return list;
 }
 
-/** Every smart outlet a document mentions, whichever shape it is in. */
+/** Every smart outlet a shop mentions. */
 function _docOutlets(doc) {
   if (!doc || typeof doc !== 'object') return [];
   const out = [];
   const take = (o) => { if (o && o.ip) out.push(o); };
   for (const m of doc.machines || []) take(m && m.sensor && m.sensor.outlet);
-  const systems = doc.systems || [doc];
-  for (const sys of systems) {
+  for (const sys of doc.systems || []) {
     for (const e of (sys && sys.elements) || []) {
-      if (!e) continue;
+      if (!e || e.type !== 'collector') continue;
       take(e.sensor && e.sensor.outlet);
       take(e.control && e.control.outlet);
     }

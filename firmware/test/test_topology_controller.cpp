@@ -84,7 +84,7 @@ int main(int argc, char** argv) {
     topo::Controller c;
     c.setTopology(twoGates.as<JsonObjectConst>());
 
-    auto r1 = c.setToolPower("toolX", 200);
+    auto r1 = c.setMachinePower("toolX", 200);
     ok("twoGates x=200: move gate1 open (make)", movesStr(r1.planFor(kSys)) == "gate1->open(make)", movesStr(r1.planFor(kSys)));
     ok("twoGates x=200: gate1 state open", stateOf(c, "gate1") == "open");
     ok("twoGates x=200: gate2 state closed", stateOf(c, "gate2") == "closed");
@@ -99,21 +99,21 @@ int main(int argc, char** argv) {
     // And the switchover is make-before-break without being asked: gate2 opens
     // BEFORE gate1 closes, so the blower is never pulling against a sealed
     // system. ↔ topology.test.js "dev X+Y on: only the NEWER tool gets a gate".
-    auto r2 = c.setToolPower("toolY", 200);   // toolY newest
+    auto r2 = c.setMachinePower("toolY", 200);   // toolY newest
     ok("twoGates y=200: gate2 opens before gate1 closes",
        movesStr(r2.planFor(kSys)) == "gate2->open(make)|gate1->closed(break)", movesStr(r2.planFor(kSys)));
     ok("twoGates y=200: only the newer tool has a gate",
        stateOf(c, "gate1") == "closed" && stateOf(c, "gate2") == "open");
     ok("twoGates y=200: no dead-head", !r2.planFor(kSys).deadHeadRisk);
 
-    auto r3 = c.setToolPower("toolX", 0);     // toolX off, toolY still on
+    auto r3 = c.setMachinePower("toolX", 0);     // toolX off, toolY still on
     // Nothing to do: toolX already lost its gate when toolY won, so it stopping
     // changes no state at all.
     ok("twoGates x=0: nothing left to move", movesStr(r3.planFor(kSys)).empty(), movesStr(r3.planFor(kSys)));
     ok("twoGates x=0: gate1 closed, gate2 open", stateOf(c, "gate1") == "closed" && stateOf(c, "gate2") == "open");
     ok("twoGates x=0: collector still on", c.collectorOn(kSys));
 
-    auto r4 = c.setToolPower("toolY", 0);     // all off
+    auto r4 = c.setMachinePower("toolY", 0);     // all off
     ok("twoGates all-off: dead-head risk flagged", r4.planFor(kSys).deadHeadRisk);
     ok("twoGates all-off: collector off", !c.collectorOn(kSys));
     // Idle-HOLD: states are NOT driven closed — gate2 stays where it was.
@@ -125,17 +125,17 @@ int main(int argc, char** argv) {
     topo::Controller c;
     c.setTopology(star.as<JsonObjectConst>());
 
-    auto rA = c.setToolPower("toolA", 200);
+    auto rA = c.setMachinePower("toolA", 200);
     ok("star A=200: move sel->s1 (make)", movesStr(rA.planFor(kSys)) == "sel->s1(make)", movesStr(rA.planFor(kSys)));
     ok("star A=200: toolA reachable", rA.routing.reachable.count("toolA") && rA.routing.reachable.at("toolA"));
 
-    auto rB = c.setToolPower("toolB", 200);   // toolB newest → wins the shared linear
+    auto rB = c.setMachinePower("toolB", 200);   // toolB newest → wins the shared linear
     ok("star B=200: move sel->s2 (make, linear never breaks)", movesStr(rB.planFor(kSys)) == "sel->s2(make)", movesStr(rB.planFor(kSys)));
     ok("star B=200: sel now s2", stateOf(c, "sel") == "s2");
     ok("star B=200: toolB reaches, toolA blocked",
        rB.routing.reachable.at("toolB") && !rB.routing.reachable.at("toolA"));
 
-    auto rB0 = c.setToolPower("toolB", 0);    // toolB off → toolA regains the selector
+    auto rB0 = c.setMachinePower("toolB", 0);    // toolB off → toolA regains the selector
     ok("star B=0: move sel->s1 (make)", movesStr(rB0.planFor(kSys)) == "sel->s1(make)", movesStr(rB0.planFor(kSys)));
     ok("star B=0: sel back to s1", stateOf(c, "sel") == "s1");
   }
@@ -150,9 +150,9 @@ int main(int argc, char** argv) {
       "ducts":[{"child":"saw","parent":"dc"}]}],
       "machines":[{"id":"saw","name":"Saw","sensor":{"outlet":{"host":"shelly-saw","ip":"10.0.0.5"}}}]})");
     topo::Controller c; c.setTopology(d.as<JsonObjectConst>());
-    ok("outlet map: host match", c.toolForOutlet("shelly-saw", "0.0.0.0") == "saw");
-    ok("outlet map: ip fallback", c.toolForOutlet("", "10.0.0.5") == "saw");
-    ok("outlet map: no match → empty", c.toolForOutlet("nope", "1.2.3.4").empty());
+    ok("outlet map: host match", c.machineForOutlet("shelly-saw", "0.0.0.0") == "saw");
+    ok("outlet map: ip fallback", c.machineForOutlet("", "10.0.0.5") == "saw");
+    ok("outlet map: no match → empty", c.machineForOutlet("nope", "1.2.3.4").empty());
   }
 
   // ── sequencer: RE-ASSERT on a machine switching on (2026-09-28) ─────────

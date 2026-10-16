@@ -18,7 +18,7 @@ import { clampBoardOf, clampOf } from './shop-doc';
 import * as model from '@device-model';
 import type { Topology } from '@topology';
 import { portEnabled, portsByMachine, systemsOf, validateShop, type Shop } from '@shop';
-import { createTopologyDevice, settleAtBoot, setCollectorManual, setToolPower, statusView as topoStatus, toolThreshold, type TopologyDevice, type TopologyStatus } from '@topology-device';
+import { createTopologyDevice, settleAtBoot, setCollectorManual, setMachinePower, statusView as topoStatus, machineThreshold, type TopologyDevice, type TopologyStatus } from '@topology-device';
 import { DEMO_TOPOLOGY } from './demo-topology';
 import type { SerialChunk } from '../boards/serial-log';
 
@@ -202,7 +202,7 @@ export class DemoApiService extends ApiService {
   }
 
   override async putTopology(topology: Topology): Promise<{ ok: boolean }> {
-    // A shop only, like the mock and the firmware: validateShop refuses a schemaVersion-1 document.
+    // A shop only, like the mock and the firmware.
     const v = validateShop(topology);
     if (!v.ok) throw new Error('invalid topology: ' + JSON.stringify(v.errors));
     // A save is not a reboot: the running tools, the blowers and the gates the save left alone carry over, as on the brains.
@@ -223,7 +223,7 @@ export class DemoApiService extends ApiService {
 
   override async simTool(toolId: string, watts: number): Promise<TopologyStatus> {
     if (!this.td) throw new Error('no topology configured');
-    setToolPower(this.td, toolId, watts);
+    setMachinePower(this.td, toolId, watts);
     return topoStatus(this.td);
   }
 
@@ -237,11 +237,10 @@ export class DemoApiService extends ApiService {
    *  Three times the trip point clears every threshold test the same way and
    *  reads like a machine. Mirrors manualWattsFor() in
    *  firmware/control/TopologyRuntime.h — see the twin-pair table in CLAUDE.md. */
-  override async setToolManual(toolId: string, on: boolean): Promise<unknown> {
+  override async setMachineManual(toolId: string, on: boolean): Promise<unknown> {
     if (!this.td) throw new Error('no topology configured');
-    // toolThreshold() is machineThreshold under its v1 name, and already falls
-    // back to the default for a machine that has no plug configured.
-    const trip = toolThreshold(this.td.topology, toolId);
+    // machineThreshold() falls back to the default for a machine that has no plug configured.
+    const trip = machineThreshold(this.td.topology, toolId);
     // The FLOOR is not decoration — it is what keeps "switched on by hand" from
     // being indistinguishable from "drawing nothing". A machine whose thresholdW
     // is explicitly 0 makes `trip * 3` zero, so the demo showed a hand-switched
@@ -256,10 +255,10 @@ export class DemoApiService extends ApiService {
       const watts = (this.td['toolWatts'] as Record<string, number> | undefined) ?? {};
       for (const other of Object.keys(watts)) {
         if (other === toolId || !(watts[other] > 0)) continue;
-        if ((ports.get(other) ?? []).some(p => portEnabled(p.port) && mine.has(p.systemId))) setToolPower(this.td, other, 0);
+        if ((ports.get(other) ?? []).some(p => portEnabled(p.port) && mine.has(p.systemId))) setMachinePower(this.td, other, 0);
       }
     }
-    setToolPower(this.td, toolId, on ? Math.round(trip > 0 ? trip * 3 : 15) : 0);
+    setMachinePower(this.td, toolId, on ? Math.round(trip > 0 ? trip * 3 : 15) : 0);
     return { ok: true };
   }
 
@@ -598,7 +597,7 @@ export class DemoApiService extends ApiService {
         // A COLLECTOR IS NOT A MACHINE, and reading it like one is the same
         // mistake pollSensors() has a long comment about in TopologyRuntime.h.
         // A tool's clamp answers "should the collector run", so it reads the
-        // machine's live wattage — the same number setToolManual() writes, which
+        // machine's live wattage — the same number setMachineManual() writes, which
         // is what makes switching a tool on in the demo drive its clamp green.
         // A blower has no `machines[]` entry at all, so `toolWatts` is
         // permanently 0 for it: its clamp answers the OTHER question, "did the

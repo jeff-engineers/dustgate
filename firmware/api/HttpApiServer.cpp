@@ -1078,7 +1078,7 @@ void HttpApiServer::registerRoutes() {
     //
     // Manual is modelled as a synthetic power reading, so there is one definition
     // of "active" and a hand-thrown tool competes in most-recent-wins exactly like
-    // a sensed one. See TopologyRuntime::setToolManual.
+    // a sensed one. See TopologyRuntime::setMachineManual.
     // ------------------------------------------------------------------
     _server.on("/api/tool", HTTP_POST,
         [](AsyncWebServerRequest* req) {},

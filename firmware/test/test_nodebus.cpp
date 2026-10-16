@@ -170,7 +170,7 @@ int main(int argc, char** argv) {
     std::string err;
     ok("adopt twoGates", rt.adopt(twoGatesJson.c_str(), twoGatesJson.size(), err), err);
 
-    rt.setToolPower("toolX", 200);
+    rt.setMachinePower("toolX", 200);
     ok("queued but nothing issued yet", local.log.empty() && rt.transitioning());
 
     rt.update();
@@ -200,13 +200,13 @@ int main(int argc, char** argv) {
     std::string err;
     rt.adopt(twoGatesJson.c_str(), twoGatesJson.size(), err);
 
-    rt.setToolPower("toolX", 200); drain(rt, {&local});
+    rt.setMachinePower("toolX", 200); drain(rt, {&local});
     local.log.clear();
 
     // toolY on and toolX off in one decision: gate2 must OPEN before gate1 CLOSES,
     // or the system seals momentarily with the blower running.
-    rt.setToolPower("toolY", 200);
-    rt.setToolPower("toolX", 0);
+    rt.setMachinePower("toolY", 200);
+    rt.setMachinePower("toolX", 0);
     drain(rt, {&local});
     ok("make (gate2->open) precedes break (gate1->closed)",
        joined(local.log) == "gate2->open|gate1->closed", joined(local.log));
@@ -221,14 +221,14 @@ int main(int argc, char** argv) {
     std::string err;
     rt.adopt(twoGatesJson.c_str(), twoGatesJson.size(), err);
 
-    rt.setToolPower("toolX", 200);
+    rt.setMachinePower("toolX", 200);
     ok("collector still off while the gate is mid-move", !rt.collectorOn());
     drain(rt, {&local});
     ok("collector on once the path is open", rt.collectorOn());
 
     // Idle coasts rather than cutting (the dedicated coast-down block below owns
     // the timing); what matters here is that the brain has decided "no tools".
-    rt.setToolPower("toolX", 0);
+    rt.setMachinePower("toolX", 0);
     ok("idle → collector coasting, not cut", rt.collectorCoasting());
     // Idle HOLDS the gates where they are, so the blower coasts against an OPEN
     // path. This asserted the opposite until 2026-10-03 — it read the plan's
@@ -252,7 +252,7 @@ int main(int argc, char** argv) {
     std::string err;
     rt.adopt(js.c_str(), js.size(), err);
 
-    rt.setToolPower("toolY", 200);
+    rt.setMachinePower("toolY", 200);
     drain(rt, {&local, &node2});
     ok("gate2 dispatched to node2", joined(node2.log) == "gate2->open", joined(node2.log));
     // Only the RE-ASSERTED close of gate1 (2026-09-28) — never gate2's open,
@@ -264,7 +264,7 @@ int main(int argc, char** argv) {
     // switchover spans two controllers and is still make-before-break.
     node2.log.clear();
     local.log.clear();
-    rt.setToolPower("toolX", 200);
+    rt.setMachinePower("toolX", 200);
     drain(rt, {&local, &node2});
     ok("gate1 dispatched to the local bus", joined(local.log) == "gate1->open", joined(local.log));
     ok("and the loser's gate is shut on the OTHER board",
@@ -274,11 +274,11 @@ int main(int argc, char** argv) {
     // longer stalls a move on another board — but make-before-break still binds ACROSS boards: the local close waits
     // until the remote open has landed. Switching back to toolY is what needs the remote gate opened again — and it has
     // to be a rising EDGE to count as newest, so it stops first (see activationSeq).
-    rt.setToolPower("toolY", 0);
+    rt.setMachinePower("toolY", 0);
     drain(rt, {&local, &node2});
     local.log.clear(); node2.log.clear();
     local.moving = true;
-    rt.setToolPower("toolY", 200);        // newest again → wants gate2->open, then gate1->closed
+    rt.setMachinePower("toolY", 200);        // newest again → wants gate2->open, then gate1->closed
     rt.update(); rt.update();
     ok("a busy board does not hold up a move on another board", joined(node2.log) == "gate2->open", joined(node2.log));
     local.settle();                       // the local board is free; node2's open is still moving
@@ -303,7 +303,7 @@ int main(int argc, char** argv) {
       rt.begin(&nb);
       std::string err;
       rt.adopt(js.c_str(), js.size(), err);
-      rt.setToolPower("toolX", 200);
+      rt.setMachinePower("toolX", 200);
       drain(rt, {&local});
       ok("unregistered controller → move fails, not silently dropped",
          rt.failedMoves().size() == 1 && rt.failedMoves()[0].selectorId == "gate1");
@@ -320,7 +320,7 @@ int main(int argc, char** argv) {
       rt.begin(&nb);
       std::string err;
       rt.adopt(js.c_str(), js.size(), err);
-      rt.setToolPower("toolX", 200);
+      rt.setMachinePower("toolX", 200);
       drain(rt, {&local, &ghost});
       ok("offline node → move recorded as failed",
          rt.failedMoves().size() == 1 && rt.failedMoves()[0].reason == "controller offline",
@@ -342,7 +342,7 @@ int main(int argc, char** argv) {
       for (int i = 0; i < 20; i++) { rt.update(0); ghost.settle(); }
       ok("and is still one after many re-decisions", stuckProblems() == 1);
       ghost.up = true;
-      rt.setToolPower("toolX", 200);   // the sketch feeds watts every pass; that re-decides
+      rt.setMachinePower("toolX", 200);   // the sketch feeds watts every pass; that re-decides
       drain(rt, {&local, &ghost});
       ok("until the gate next moves", stuckProblems() == 0);
     }
@@ -359,7 +359,7 @@ int main(int argc, char** argv) {
     rt.begin(&nb);
     std::string err;
     rt.adopt(js.c_str(), js.size(), err);
-    rt.setToolPower("toolX", 200);
+    rt.setMachinePower("toolX", 200);
     drain(rt, {&local});
     ok("no controllerId → driven locally", joined(local.log) == "gate1->open", joined(local.log));
   }
@@ -376,11 +376,11 @@ int main(int argc, char** argv) {
     ok("adopt for coast test", rt.adopt(twoGatesJson.c_str(), twoGatesJson.size(), err), err);
 
     const uint32_t t0 = 1000000;
-    rt.setToolPower("toolX", 200);
+    rt.setMachinePower("toolX", 200);
     for (int i = 0; i < 10; i++) { rt.update(t0); local.settle(); }
     ok("blower running with a tool on", rt.collectorOn());
 
-    rt.setToolPower("toolX", 0);
+    rt.setMachinePower("toolX", 0);
     rt.update(t0);
     ok("idle → coasting, still energized", rt.collectorOn() && rt.collectorCoasting());
 
@@ -392,12 +392,12 @@ int main(int argc, char** argv) {
 
     // A tool restarting mid-coast cancels it — otherwise the blower would cut out
     // partway into the next cut.
-    rt.setToolPower("toolX", 200);
+    rt.setMachinePower("toolX", 200);
     for (int i = 0; i < 10; i++) { rt.update(t0 + 100); local.settle(); }
-    rt.setToolPower("toolX", 0);
+    rt.setMachinePower("toolX", 0);
     rt.update(t0 + 100);
     ok("coasting again after the tool stops", rt.collectorCoasting());
-    rt.setToolPower("toolX", 200);
+    rt.setMachinePower("toolX", 200);
     rt.update(t0 + 200);
     ok("restart cancels the coast", rt.collectorOn() && !rt.collectorCoasting());
     for (int i = 0; i < 10; i++) { rt.update(t0 + 99999); local.settle(); }
@@ -412,41 +412,22 @@ int main(int argc, char** argv) {
     std::string err;
     const char* junk = "{not json";
     ok("bad JSON rejected", !rt.adopt(junk, strlen(junk), err) && !rt.loaded());
-    rt.setToolPower("toolX", 200);
+    rt.setMachinePower("toolX", 200);
     rt.update();
     ok("no topology → no moves", local.log.empty());
   }
 
-  // ── a schemaVersion-1 layout is refused, with a sentence ─────────────────
-  // a9bab46 made adopt() refuse v1 and nothing asserted it. The sentence is the
-  // point: it is what tells BAD LAYOUT apart from NO LAYOUT, which otherwise
-  // both read as one blue LED. Detected by SHAPE too, because an export that
-  // lost its schemaVersion is still unreadable — so the second case strips it.
+  // ── a layout without systems[] is refused, with a sentence ───────────────
+  // The sentence is the point: it is what tells BAD LAYOUT apart from NO LAYOUT, which otherwise both read as one blue
+  // LED. One system's elements and ducts at the top level is just malformed — no special words for an older format.
   {
-    const std::string wantErr = "layout is from an older version (v1) — re-save it";
-    std::string v1 = slurp(dir + "star.json");
-    {
-      StubBus local; topo::NodeBus nb; topo::TopologyRuntime rt;
-      nb.setLocal(&local, "primary");
-      rt.begin(&nb);
-      std::string err;
-      ok("v1 layout refused", !rt.adopt(v1.c_str(), v1.size(), err) && !rt.loaded());
-      ok("v1 refusal says why", err == wantErr, err);
-    }
-    {
-      std::string bare = v1;
-      const std::string tag = "\"schemaVersion\":1,";
-      size_t at = bare.find(tag);
-      ok("fixture carries schemaVersion 1", at != std::string::npos);
-      if (at != std::string::npos) bare.erase(at, tag.size());
-      StubBus local; topo::NodeBus nb; topo::TopologyRuntime rt;
-      nb.setLocal(&local, "primary");
-      rt.begin(&nb);
-      std::string err;
-      ok("v1 shape refused without its version",
-         !rt.adopt(bare.c_str(), bare.size(), err) && !rt.loaded());
-      ok("unversioned v1 refusal says why", err == wantErr, err);
-    }
+    const std::string flat = R"({"controllers":[{"id":"primary","role":"primary"}],"elements":[{"id":"dc","type":"collector"}],"ducts":[]})";
+    StubBus local; topo::NodeBus nb; topo::TopologyRuntime rt;
+    nb.setLocal(&local, "primary");
+    rt.begin(&nb);
+    std::string err;
+    ok("a layout without systems[] is refused", !rt.adopt(flat.c_str(), flat.size(), err) && !rt.loaded());
+    ok("...and says why", err == "systems not an array", err);
   }
 
   // ── the CLAIM frames (nodelink.js hello/welcome) ─────────────────────────
@@ -847,12 +828,9 @@ int main(int argc, char** argv) {
   {
     // twoGates with toolX watched by a clamp on channel 2 of this board.
     //
-    // ON THE MACHINE, NOT THE ELEMENT, and that is the whole point of the fixture
-    // being v2 now. A tool's clamp lives where its plug does; writing it on the
-    // port element is what the shipping code did until 2026-09-15, and the v1
-    // fixture that used to be here AGREED with the bug — in v1 a tool element is
-    // its own machine, so the wrong read returned the right answer and the suite
-    // stayed green while no clamp in the app ever reached a node.
+    // ON THE MACHINE, NOT THE ELEMENT. A tool's clamp lives where its plug does; reading it off the port element is
+    // what the shipping code did until 2026-09-15, and the old single-system fixture that used to be here AGREED with
+    // the bug (its tool elements were their own machines), so the suite stayed green while no clamp ever reached a node.
     DynamicJsonDocument tg(16384);
     deserializeJson(tg, twoGatesJson);
     for (JsonObject m : tg["machines"].as<JsonArray>()) {
@@ -1002,17 +980,16 @@ int main(int argc, char** argv) {
   //
   // THE SHAPE THE CONFIGURATOR ACTUALLY WRITES, and it went untested until
   // 2026-09-16 — which is exactly how the shipping path stayed broken while
-  // every assertion above passed. The CT block before this one uses twoGates,
-  // a **v1** document, where a tool element IS its own machine (Shop.h
-  // machineDoc) — so reading `element.sensor.ct` worked there and nowhere else.
+  // every assertion above passed: the fixture then was a single-system document whose tool elements were their own
+  // machines, so reading `element.sensor.ct` worked there and nowhere else.
   //
-  // In a v2 shop the clamp is on `machines[]`, exactly like `sensor.outlet`,
+  // In a shop the clamp is on `machines[]`, exactly like `sensor.outlet`,
   // because a machine is ONE box however many ports it has. TopologyRuntime read
   // the element, found null for every tool the UI writes, and pushed an empty
   // CONFIG. The node then never sampled and nothing reported a fault anywhere:
   // a clamp paired in the app was silently inert.
   //
-  // Two assertions, and the second is the one a v1 fixture can never make:
+  // Two assertions, and the second is the one that old fixture could never make:
   //   • the spec is named for the MACHINE, because that id comes back in SENSE
   //     and goes straight into setMachinePower(), which is keyed by machine
   //   • a two-port machine yields ONE spec, not one per port
@@ -1078,7 +1055,7 @@ int main(int argc, char** argv) {
     rt.update(1000);
     DynamicJsonDocument a(8192);
     rt.writeStatus(a.to<JsonObject>());
-    // "system-1" is what the shop layer names a v1 document's single system.
+    // twoGates' one system is "system-1".
     ok("an unreported clamp leaves the blower plug unreachable",
        a["systems"]["system-1"]["plug"]["reachable"] == false);
 

@@ -74,7 +74,6 @@ const MAX_SUPPLEMENTAL_PORTS = 2;
  */
 function systemView(shop, system) {
   return {
-    schemaVersion: 1,
     name:          system.name,
     controllers:   shop.controllers || [],
     elements:      system.elements  || [],
@@ -158,8 +157,8 @@ function plugOwners(shop) {
  * A port counts for routing unless it is explicitly disabled.
  *
  * `enabled` is absent on the overwhelming majority of ports and means true —
- * making the field opt-OUT rather than opt-in keeps a migrated v1 doc, where no
- * port carries the field at all, routing exactly as it did before.
+ * making the field opt-OUT rather than opt-in means a port nobody has switched
+ * off needs no field at all.
  */
 const portEnabled = (port) => port.enabled !== false;
 
@@ -187,13 +186,7 @@ function validateShop(shop) {
     err('shape', 'shop must be an object');
     return { ok: false, errors };
   }
-  if (typeof shop.schemaVersion !== 'number') err('shape', 'schemaVersion must be a number');
-  // Same refusal, same sentence, as the firmware (TopologyRuntime.h): a v1 document is detected by its version OR by its
-  // shape, since an export that lost its schemaVersion is still a v1 document.
-  if (shop.schemaVersion === 1 || (!Array.isArray(shop.systems) && Array.isArray(shop.elements))) {
-    err('shape', 'layout is from an older version (v1) — re-save it');
-    return { ok: false, errors };
-  }
+  if (shop.schemaVersion !== SHOP_SCHEMA_VERSION) err('shape', `schemaVersion must be ${SHOP_SCHEMA_VERSION}`);
   for (const k of ['controllers', 'systems', 'machines']) {
     if (!Array.isArray(shop[k])) err('shape', `${k} must be an array`);
   }
@@ -263,16 +256,16 @@ function validateShop(shop) {
       // ── a CLAMP on a machine, which is where the UI actually writes one ────
       //
       // UNVALIDATED UNTIL 2026-09-16, and the gap was invisible because
-      // topology.js checks `sensor.ct` on ELEMENTS, which is the v1 shape and
-      // the one every fixture uses. In a v2 shop a tool's clamp lives here —
+      // topology.js checked `sensor.ct` on tool ELEMENTS, the old single-system
+      // shape (refused there since 2026-10-16). A tool's clamp lives here —
       // same rule as its plug, a machine is one box however many ports it has —
       // so a configurator-written clamp went through with no checks at all: a
       // controllerId naming a board nobody paired, a channel off the end of the
       // pin map, or a plug and a clamp on one machine all validated clean and
       // then did nothing on the device.
       //
-      // Same rules as the element pass in topology.js, deliberately — see the
-      // long note there for why there is no thresholdW in this shape.
+      // Same rules as the collector's clamp in topology.js, deliberately — see
+      // the long note there for why there is no thresholdW in this shape.
       const ct = m.sensor && m.sensor.ct;
       if (ct !== undefined) {
         if (typeof ct !== 'object' || ct === null) {
@@ -332,9 +325,9 @@ function validateShop(shop) {
   }
 
   // Machine ids share a namespace with element ids: both address things by bare
-  // id in logs, in ui.layout and over the wire, and migrateToShop deliberately
-  // reuses a v1 tool's id for its machine — so a COLLISION with a different
-  // element is what has to be caught, not the reuse itself.
+  // id in logs, in ui.layout and over the wire, and the app gives a machine its
+  // first port's id — so a COLLISION with a different element is what has to be
+  // caught, not the reuse itself.
   for (const m of shop.machines) {
     if (!m || !m.id) continue;
     const owner = elemOwner.get(m.id);
@@ -419,16 +412,23 @@ function validateShop(shop) {
     }
   }
 
-  // Plug uniqueness moves up here with the outlet itself. topology.js still
-  // enforces it per system (collector switches, and any v1 tool element), but a
-  // machine's sensor now lives at shop level, so two machines sharing a plug is
-  // only visible from here.
+  // Plug uniqueness lives here with the outlet itself: a machine's plug is at shop level, so two machines sharing one —
+  // or a machine sharing a collector's — is only visible from here. (topology.js checks a collector's own two plugs.)
   const plugOwner = new Map();
+  for (const sys of shop.systems) {
+    for (const e of sys.elements) {
+      if (!e || e.type !== 'collector') continue;
+      for (const o of [(e.control || {}).outlet, (e.sensor || {}).outlet]) if (o && o.ip && !plugOwner.has(o.ip)) plugOwner.set(o.ip, e.id);
+    }
+  }
   for (const m of shop.machines) {
-    const ip = m && m.sensor && m.sensor.outlet && m.sensor.outlet.ip;
+    const o = m && m.sensor && m.sensor.outlet;
+    if (o && o.kind !== undefined && o.kind !== 'shelly' && o.kind !== 'tasmota')
+      err('machine', `unknown outlet kind "${o.kind}" on "${m.name || m.id}"`, m.id);
+    const ip = o && o.ip;
     if (!ip) continue;
     if (plugOwner.has(ip)) {
-      err('machine', `two machines share smart outlet ${ip}: "${plugOwner.get(ip)}" and "${m.id}"`, m.id);
+      err('machine', `smart outlet ${ip} is on both "${plugOwner.get(ip)}" and "${m.id}"`, m.id);
     } else {
       plugOwner.set(ip, m.id);
     }

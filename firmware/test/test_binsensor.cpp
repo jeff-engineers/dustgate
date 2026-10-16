@@ -136,7 +136,7 @@ int main() {
     {
         StaticJsonDocument<512> doc;
         deserializeJson(doc, R"({"elements":[{"id":"dc","type":"collector"}]})");
-        ok("a v1 document has no systems array and no bin",
+        ok("a document with no systems array has no bin",
            localBinSystemId(doc.as<JsonObjectConst>(), "primary").empty());
     }
 

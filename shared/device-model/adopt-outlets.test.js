@@ -54,19 +54,6 @@ const find = (d, ip) => M.ensureDiscovered(d).find(x => x.ip === ip);
   eq('a plug saved without a name has none', find(d, '10.0.0.31').name, '');
 }
 
-// ── a v1 topology, where the plug hangs off the element ─────────────────────
-{
-  const d = M.createDevice();
-  M.adoptOutlets(d, {
-    schemaVersion: 1,
-    elements: [
-      { id: 'dc',  type: 'collector', control: { outlet: { gen: 2, ip: '10.0.0.50' } } },
-      { id: 'saw', type: 'tool',      sensor:  { outlet: { gen: 2, ip: '10.0.0.51' } } },
-    ],
-  });
-  check("the collector's switch counts too", !!find(d, '10.0.0.50'));
-  check('as does a tool sensor', !!find(d, '10.0.0.51'));
-}
 
 // ── what it must NOT touch ──────────────────────────────────────────────────
 {

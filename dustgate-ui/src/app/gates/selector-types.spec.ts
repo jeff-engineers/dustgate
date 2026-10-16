@@ -23,8 +23,9 @@ const gate = (id: string, ch: number) => ({
   servo: { channel: ch, referenceAngle: 90 },
 });
 
-const v1 = {
-  schemaVersion: 1,
+// One system's elements and ducts at the root, with no systems[]: not a shop.
+const flat = {
+  schemaVersion: 2,
   controllers: [{ id: 'primary', role: 'primary' }],
   elements: [{ id: 'dc', type: 'collector' }, gate('g1', 0), { id: 't1', type: 'tool' }],
   ducts: [{ child: 'g1', parent: 'dc' }, { child: 't1', parent: 'g1', parentBranch: 'b1' }],
@@ -48,13 +49,12 @@ const shop = {
   machines: [{ id: 'saw' }, { id: 'drill' }],
 } as unknown as Topology;
 
-// ── a schemaVersion-1 document reads as empty ───────────────────────────────
-// The device refuses one and the app does not read one, so root-level elements are NOT seen: better empty (and the shop
-// reported not ready) than half-read.
+// ── a document without systems[] reads as empty ─────────────────────────────
+// Root-level elements are NOT seen: better empty (and the shop reported not ready) than half-read.
 {
-  eq('v1 elements are not read from the root', elementsOf(v1).length, 0);
-  eq('v1 ducts are not read from the root', ductsOf(v1).length, 0);
-  eq('controllers are shop-level either way', controllersOf(v1).map(c => c.id), ['primary']);
+  eq('root elements are not read', elementsOf(flat).length, 0);
+  eq('root ducts are not read', ductsOf(flat).length, 0);
+  eq('controllers are shop-level either way', controllersOf(flat).map(c => c.id), ['primary']);
 }
 
 // ── a shop flattens ─────────────────────────────────────────────────────────
@@ -78,7 +78,7 @@ const shop = {
 
 // ── degenerate input ────────────────────────────────────────────────────────
 {
-  eq('no elements → []', elementsOf({ schemaVersion: 1 } as unknown as Topology), []);
+  eq('no elements → []', elementsOf({} as unknown as Topology), []);
   eq('empty systems → []', elementsOf({ systems: [] } as unknown as Topology), []);
   eq('a system with no elements → []',
     elementsOf({ systems: [{ id: 'a' }] } as unknown as Topology), []);
