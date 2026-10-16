@@ -180,10 +180,7 @@ export class GateListComponent implements OnInit {
   async ngOnInit(): Promise<void> {
     try {
       await this.api.whenReady();
-      // Migrated on read, like every other entry point — see shop-doc.ts. This
-      // screen read the raw document until 2026-08-25, which was harmless while it
-      // only flattened elements and is not once it groups them: a v1 layout has no
-      // `systems[]` to group BY.
+      // Read as a shop, like every other entry point — see shop-doc.ts: this screen groups gates BY system.
       this.topo = toShop(await this.api.getTopology()) as unknown as Topology;
       try { this.links = await this.api.getNodes(); } catch { this.links = []; }
     } catch {

@@ -163,7 +163,6 @@ const MAX_SLIDE_BRANCHES = 8;
  *                                   transmitter are all on it. Absent = this board. See collectorBoard().
  *
  * @typedef {Object} Topology
- * @property {number} schemaVersion
  * @property {string} [name]
  * @property {Controller[]} controllers
  * @property {Element[]} elements
@@ -296,7 +295,6 @@ function validateTopology(t) {
 
   // ── top-level shape ──
   if (!t || typeof t !== 'object') { err('shape', 'topology must be an object'); return { ok: false, errors }; }
-  if (typeof t.schemaVersion !== 'number') err('shape', 'schemaVersion must be a number');
   for (const k of ['controllers', 'elements', 'ducts']) {
     if (!Array.isArray(t[k])) err('shape', `${k} must be an array`);
   }
@@ -357,7 +355,7 @@ function validateTopology(t) {
   // collector's is a SWITCH (control.outlet — we command it), but both name the
   // same scarce thing: a Shelly on the network. Sharing one makes the router
   // believe two machines started at once, and sharing the collector's would have
-  // the blower's own draw hold itself on. Firmware's toolForOutlet() maps by
+  // the blower's own draw hold itself on. Firmware's machineForOutlet() maps by
   // ip/host and can only answer with one id, so this has to be unique here.
   //
   // A COLLECTOR MAY HAVE BOTH, and that is the interesting case (2026-09-10).
@@ -371,11 +369,16 @@ function validateTopology(t) {
   // The two must still be different plugs. A collector sensing itself through
   // the plug that switches it is fine and needs no second device; naming the
   // same ip twice is a layout that thinks it has two.
+  //
+  // A TOOL carries no sensor of its own: a tool element is a PORT, and its plug or clamp belongs to its MACHINE
+  // (shop.js), because a machine is one box however many ports it has. Refused rather than ignored — a sensor written
+  // here would read as configured and sense nothing.
   const plugOwner = new Map();     // ip → element id
   for (const e of t.elements) {
-    const outlets = e.type === 'collector'
-      ? [(e.control || {}).outlet, (e.sensor || {}).outlet]
-      : [(e.sensor || {}).outlet];
+    if (e.type === 'tool' && e.sensor !== undefined)
+      err('element', `tool "${e.name || e.id}" carries a sensor — a tool's plug or clamp belongs to its machine`, e.id);
+    if (e.type !== 'collector') continue;
+    const outlets = [(e.control || {}).outlet, (e.sensor || {}).outlet];
     for (const outlet of outlets) {
       const ip = outlet && outlet.ip;
       if (!ip) continue;
@@ -536,7 +539,8 @@ function validateTopology(t) {
     }
   }
 
-  // ── a tool sensed by a CT instead of a plug (RFC §5.6) ──────────────────
+  // ── a collector sensed by a CT instead of a plug (RFC §5.6) ─────────────
+  // (A tool's clamp is on its machine and is checked in shop.js, by the same rules.)
   //
   // `sensor.outlet` is a plug the primary POLLS over HTTP, addressed by IP.
   // `sensor.ct` is a clamp on a board, addressed by controllerId — a different
@@ -564,7 +568,8 @@ function validateTopology(t) {
     // fob, an RF frame — so what we sent proves nothing, and `sensor.*` is the
     // only thing that can say whether it actually started (CollectorPlugState).
     // A clamp does that for a blower with no plug to meter.
-    if (e.type !== 'tool' && e.type !== 'collector') {
+    if (e.type === 'tool') continue;   // refused above: a tool's clamp is on its machine
+    if (e.type !== 'collector') {
       err('element', `only a tool or the collector can be sensed by a CT (${e.type})`, e.id);
       continue;
     }
@@ -576,15 +581,8 @@ function validateTopology(t) {
     if (typeof ct !== 'object')
       err('element', 'sensor.ct must be an object', e.id);
     // A COLLECTOR'S clamp is on the collector's board (e.controllerId, 2026-10-10) and names none of its own.
-    // A TOOL's clamp names its board here — optional, and "this board" when absent, as every selector.
-    if (e.type === 'collector' && ct.controllerId !== undefined)
+    if (ct.controllerId !== undefined)
       err('element', COLLECTOR_BOARD_RULE('sensor.ct'), e.id);
-    else if (ct.controllerId !== undefined) {
-      if (typeof ct.controllerId !== 'string' || !ct.controllerId)
-        err('element', 'sensor.ct.controllerId must be a non-empty string', e.id);
-      else if (!ctrlIds.has(ct.controllerId))
-        err('element', `sensor.ct.controllerId "${ct.controllerId}" does not resolve`, e.id);
-    }
     // The pad the clamp is wired to. A board fact, like a servo channel — but
     // unlike a servo channel there is nothing to derive it from, so it must be
     // present rather than defaulted: channel 0 is a real pad on every board, and

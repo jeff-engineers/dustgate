@@ -19,8 +19,7 @@
 //   plug behind two gates (RFC §6.3), which is exactly why the plug can't live on
 //   the port any more.
 //
-// A schemaVersion-1 document is NOT read any more (2026-10-06): the device refuses one, so nothing can have saved
-// one, and toShop() hands back null for it rather than guessing a shape.
+// Only a shop is read: toShop() hands back null for anything without systems[] rather than guessing a shape.
 
 import type { Topology } from '@topology';
 import type { Shop } from '@shop';
@@ -61,7 +60,7 @@ export interface ShopDoc extends Record<string, unknown> {
 
 /**
  * Read what the device or a file gave us as a shop, with machine names healed.
- * Null for nothing, and for anything that is not a shop (a schemaVersion-1 layout has no systems[]).
+ * Null for nothing, and for anything that is not a shop (no systems[]).
  */
 export function toShop(doc: Topology | null | undefined): ShopDoc | null {
   if (!isShopDoc(doc)) return null;
@@ -204,8 +203,7 @@ export const isPortEnabled = (port: RawEl): boolean => portEnabled(port);
  * A port is primary unless it says otherwise (RFC §6.3).
  *
  * Absent means primary because a port nobody has thought about is a port whose
- * air you actually need — and because a migrated v1 doc carries the flag
- * nowhere. Exactly one port of a machine is primary; the other 0–2 are
+ * air you actually need. Exactly one port of a machine is primary; the other 0–2 are
  * supplemental, and the GUI draws them lighter than the primary.
  */
 export const isPortSupplemental = (port: RawEl): boolean => port['supplemental'] === true;

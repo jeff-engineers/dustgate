@@ -13,7 +13,7 @@ const {
   SHOP_SCHEMA_VERSION, isOptionalBoard,
 } = require('./shop');
 const { validateTopology } = require('./topology');
-const { shopFromV1, clone, star, twoGates, twoSystemShop } = require('./topology.fixtures');
+const { clone, twoGates, twoSystemShop } = require('./topology.fixtures');
 
 // ── tiny harness ────────────────────────────────────────────────────────────
 const results = [];
@@ -89,13 +89,13 @@ check('two machines sharing one plug rejected',
 
 // ── a CLAMP on a machine, which is where the configurator writes one ────────
 //
-// UNCHECKED UNTIL 2026-09-16. topology.js validates `sensor.ct` on ELEMENTS,
-// which is the v1 shape and the one every fixture used — so a v2 shop, the only
-// thing the UI produces, carried a clamp through validation with no checks at
-// all. A controllerId naming a board nobody paired validated clean and then did
+// UNCHECKED UNTIL 2026-09-16. topology.js validated `sensor.ct` on tool
+// ELEMENTS, the old single-system shape every fixture then used — so a shop, the
+// only thing the UI produces, carried a clamp through validation with no checks
+// at all. A controllerId naming a board nobody paired validated clean and then did
 // nothing on the device, which is the worst of both.
 //
-// Same rules as the element pass, asserted here against the MACHINE.
+// Same rules as the collector's clamp in topology.js, asserted here against the MACHINE.
 const clamped = (s, ct) => {
   delete s.machines[0].sensor.outlet;
   s.machines[0].sensor = { ct };
@@ -180,15 +180,15 @@ check('a duct spanning two systems is rejected',
     sys(s, 'small').ducts.push({ child: 'ts-cabinet', parent: 'man', parentBranch: 'p1' });
   })), 'duct'));
 
-// shopFromV1 reuses a v1 tool's id for its machine ON PURPOSE, so the reuse
-// itself must stay legal — only a collision with a DIFFERENT element is wrong.
+// The app gives a machine its first port's id ON PURPOSE, so the reuse itself
+// must stay legal — only a collision with a DIFFERENT element is wrong.
 check('a machine id colliding with an unrelated element is rejected',
   hasCode(validateShop(mut((s) => { s.machines[0].id = 'bv-cab';
     for (const x of sys(s, 'big').elements) if (x.machineId === 'table-saw') x.machineId = 'bv-cab';
     for (const x of sys(s, 'small').elements) if (x.machineId === 'table-saw') x.machineId = 'bv-cab';
   })), 'machine'));
-check('a lifted shop, where machine ids ARE their port ids, stays valid',
-  validateShop(shopFromV1(twoGates)).ok);
+check('a shop whose machine ids ARE their port ids stays valid',
+  validateShop(twoGates).ok);
 
 // ── port helpers ────────────────────────────────────────────────────────────
 {
@@ -361,18 +361,20 @@ check('swapping which port is primary leaves a valid shop', validateShop(mut(swa
     plans.length === 2 && plans.every((p) => p.deadHeadRisk === true), JSON.stringify(plans));
 }
 
-// ── schemaVersion 1 is refused ──────────────────────────────────────────────
+// ── only a shop is a layout ─────────────────────────────────────────────────
 {
-  const r = validateShop(star);
-  check('a v1 document is refused with the firmware\'s sentence',
-    !r.ok && r.errors[0].message === 'layout is from an older version (v1) — re-save it', JSON.stringify(r.errors));
-  const { schemaVersion, ...lost } = star;
-  check('...even when an export lost its schemaVersion', !validateShop(lost).ok);
-  const shop = shopFromV1(star);
-  check('a shop lifted from the v1 fixtures validates', validateShop(shop).ok, JSON.stringify(validateShop(shop).errors));
-  eq('one machine per v1 tool', shop.machines.map((m) => m.id), ['toolA', 'toolB']);
-  const port = shop.systems[0].elements.find((e) => e.id === 'toolA');
-  eq('the plug moved onto the machine', [shop.machines[0].sensor.outlet.ip, port.sensor], ['192.168.87.27', undefined]);
+  // A document without systems[] is malformed like any other: one shape error, no special case for an older format.
+  const flat = { schemaVersion: 2, name: 'flat', controllers: [], elements: [], ducts: [] };
+  check('a document without systems[] is refused as a shape error', hasCode(validateShop(flat), 'shape'));
+  check('a schemaVersion other than the shop\'s is refused', hasCode(validateShop({ ...twoGates, schemaVersion: 1 }), 'shape'));
+  // A tool that kept its own plug on the port, where it is read by nothing.
+  const onPort = clone(twoGates);
+  onPort.systems[0].elements.find((e) => e.id === 'toolX').sensor = { outlet: { gen: 2, ip: '192.168.87.99' } };
+  check('a plug on a tool PORT is refused', !validateShop(onPort).ok);
+  // A machine and a collector naming the same plug.
+  const shared = clone(twoGates);
+  shared.systems[0].elements.find((e) => e.type === 'collector').control = { outlet: { gen: 2, ip: '192.168.87.40' } };
+  check('a machine sharing the collector\'s plug is refused', hasCode(validateShop(shared), 'machine'));
 }
 
 

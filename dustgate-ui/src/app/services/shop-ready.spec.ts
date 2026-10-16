@@ -17,29 +17,28 @@ import { shopReadiness } from './shop-ready';
 
 const { check, eq, report } = suite();
 
-// Single-system fixture lifted into a shop (the device refuses schemaVersion 1; this is test-only).
-const { shopFromV1 } = require('@topology-fixtures') as { shopFromV1: (t: unknown) => unknown };
-
-/** A complete, calibrated, one-system layout in the single-system fixture shape. */
-const readyV1 = () => JSON.parse(JSON.stringify({
-  schemaVersion: 1,
+/** The "ready" baseline: a complete, calibrated, one-system shop. */
+const ready = () => JSON.parse(JSON.stringify({
+  schemaVersion: 2,
   name: 'Shop',
   controllers: [{ id: 'primary', role: 'primary', name: 'Brain', board: 'devkitc' }],
-  elements: [
-    { id: 'dc', type: 'collector', name: 'Cyclone' },
-    {
-      id: 'gate', type: 'selector', name: 'Gate', controllerId: 'primary', kind: 'servoGate',
-      states: [{ id: 'open', isClosed: false, offsetDeg: 0 }, { id: 'closed', isClosed: true, offsetDeg: 90 }],
-      branches: [{ id: 'b1', opensState: 'open', role: 'tool' }],
-      servo: { channel: 0, referenceAngle: 90 },
-    },
-    { id: 'saw', type: 'tool', name: 'Table saw' },
-  ],
-  ducts: [{ child: 'gate', parent: 'dc' }, { child: 'saw', parent: 'gate', parentBranch: 'b1' }],
+  systems: [{
+    id: 'system-1', name: 'Shop',
+    elements: [
+      { id: 'dc', type: 'collector', name: 'Cyclone' },
+      {
+        id: 'gate', type: 'selector', name: 'Gate', controllerId: 'primary', kind: 'servoGate',
+        states: [{ id: 'open', isClosed: false, offsetDeg: 0 }, { id: 'closed', isClosed: true, offsetDeg: 90 }],
+        branches: [{ id: 'b1', opensState: 'open', role: 'tool' }],
+        servo: { channel: 0, referenceAngle: 90 },
+      },
+      { id: 'saw', type: 'tool', name: 'Table saw', machineId: 'saw' },
+    ],
+    ducts: [{ child: 'gate', parent: 'dc' }, { child: 'saw', parent: 'gate', parentBranch: 'b1' }],
+  }],
+  machines: [{ id: 'saw', name: 'Table saw' }],
+  devices: [],
 })) as Topology;
-
-/** The "ready" baseline: that layout as a shop. */
-const ready = () => shopFromV1(readyV1()) as Topology;
 // The one system's body: mutations below edit it in place.
 const sys0 = (t: Topology) => (t as unknown as { systems: { elements: Record<string, unknown>[]; ducts: Record<string, unknown>[] }[] }).systems[0];
 const mut = (fn: (t: Topology) => void): Topology => {
@@ -103,13 +102,13 @@ const els = (t: Topology) => sys0(t).elements;
     r.reason.startsWith('The layout has a problem'), r.reason);
 }
 
-// ── a schemaVersion-1 layout ────────────────────────────────────────────────
+// ── a document that is not a shop ───────────────────────────────────────────
 //
-// The device refuses one and the app no longer reads one, so a v1 document is NOT ready; it must not throw on the way to
-// saying so (this runs on the entry redirect, on whatever a board hands back).
+// No systems[], so NOT ready; it must not throw on the way to saying so (this runs on the entry redirect, on whatever a
+// board hands back).
 {
-  const r = shopReadiness(readyV1());
-  check('a v1 layout is not ready', !r.ready);
+  const r = shopReadiness({ schemaVersion: 2, controllers: [], elements: [], ducts: [] } as unknown as Topology);
+  check('a document without systems[] is not ready', !r.ready);
 }
 
 report();

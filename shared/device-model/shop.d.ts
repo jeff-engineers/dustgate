@@ -91,11 +91,6 @@ export function planShopTransition(
   opts?: { collectorRunning?: boolean | Record<string, boolean> },
 ): SystemPlan[];
 
-/** Lift a schemaVersion-1 topology into a shop. One machine per existing tool. */
-export function migrateToShop(topology: Topology, opts?: { systemId?: string; systemName?: string }): Shop;
-export function isShop(doc: unknown): boolean;
-/** Accept either shape, return a shop. */
-export function asShop(doc: unknown, opts?: { systemId?: string; systemName?: string }): Shop;
 
 /** The shop's PWM servo pulse range (the layout's `servo` block, or the default). */
 export function servoPulseRange(shop: unknown): { minUs: number; maxUs: number };

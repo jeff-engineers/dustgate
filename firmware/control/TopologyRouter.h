@@ -98,15 +98,6 @@ struct SystemView {
   const char*    id;
 };
 
-// One system's body (controllers, elements, ducts) viewed as a SystemView. The shop layer (Shop.h) produces these for a
-// shop; this overload is for the router and sequencer tests, which write a single system out as a plain document.
-inline SystemView viewOf(JsonObjectConst t) {
-  return SystemView{ t["controllers"].as<JsonArrayConst>(),
-                     t["elements"].as<JsonArrayConst>(),
-                     t["ducts"].as<JsonArrayConst>(),
-                     t["id"] | "" };
-}
-
 inline std::map<std::string, JsonObjectConst> _byId(const SystemView& t) {
   std::map<std::string, JsonObjectConst> m;
   for (JsonObjectConst e : t.elements) {
@@ -234,11 +225,6 @@ inline Routing computeRouting(const SystemView& topology, const std::vector<std:
   }
   for (auto& kv : committed) out.states[kv.first] = kv.second;
   return out;
-}
-
-// Convenience for a plain single-system document.
-inline Routing computeRouting(JsonObjectConst topology, const std::vector<std::string>& active) {
-  return computeRouting(viewOf(topology), active);
 }
 
 // Has this servo selector actually been calibrated?

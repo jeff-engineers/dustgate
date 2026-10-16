@@ -1,9 +1,9 @@
-// topology.fixtures.js — hand-built topologies for testing the topology model.
+// topology.fixtures.js — hand-built SHOPS for testing the model.
 //
-// Reused by topology.test.js now and (later) by the device-model migrate +
-// conformance. Kept minimal but exercising every shape: linear N-branch,
-// servo gate, servo manifold, the `feed` role (multi-hop), blocked branches,
-// and multi-selector fan-in.
+// Kept minimal but exercising every shape: linear N-branch, servo gate, servo
+// manifold, the `feed` role (multi-hop), blocked branches, and multi-selector
+// fan-in. Every fixture is a whole shop; `viewOf()` gives its one system as the
+// per-system topology that topology.js routes and validates.
 
 'use strict';
 
@@ -39,121 +39,144 @@ const sliderNode = {
 
 // ── star: one linear actuator, two tools on two branches ────────────────────
 const star = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   name: 'star',
   controllers: [sliderPrimary],
-  elements: [
-    { id: 'dc', type: 'collector', name: 'Dust Collector' },
-    {
-      id: 'sel', type: 'selector', name: 'Main', controllerId: 'primary', kind: 'linear',
-      states: [
-        { id: 'home', isClosed: true, positionMm: 0 },
-        { id: 's1', isClosed: false, positionMm: 12.5 },
-        { id: 's2', isClosed: false, positionMm: 95.4 },
-      ],
-      branches: [
-        { id: 'b1', opensState: 's1', role: 'tool' },
-        { id: 'b2', opensState: 's2', role: 'tool' },
-      ],
-      linear: { calibration: { stepsPerMm: 51.47, measuredSpanSteps: 4387, homeIsMaxEndstop: false, manifoldModel: 'rockler-2.5' } },
-    },
-    { id: 'toolA', type: 'tool', name: 'Bandsaw',   sensor: { outlet: { gen: 2, ip: '192.168.87.27', thresholdW: 6 } } },
-    { id: 'toolB', type: 'tool', name: 'Table Saw', sensor: { outlet: { gen: 2, ip: '192.168.87.30', thresholdW: 5 } } },
+  systems: [{
+    id: 'system-1', name: 'star',
+    elements: [
+      { id: 'dc', type: 'collector', name: 'Dust Collector' },
+      {
+        id: 'sel', type: 'selector', name: 'Main', controllerId: 'primary', kind: 'linear',
+        states: [
+          { id: 'home', isClosed: true, positionMm: 0 },
+          { id: 's1', isClosed: false, positionMm: 12.5 },
+          { id: 's2', isClosed: false, positionMm: 95.4 },
+        ],
+        branches: [
+          { id: 'b1', opensState: 's1', role: 'tool' },
+          { id: 'b2', opensState: 's2', role: 'tool' },
+        ],
+        linear: { calibration: { stepsPerMm: 51.47, measuredSpanSteps: 4387, homeIsMaxEndstop: false, manifoldModel: 'rockler-2.5' } },
+      },
+      { id: 'toolA', type: 'tool', name: 'Bandsaw', machineId: 'toolA' },
+      { id: 'toolB', type: 'tool', name: 'Table Saw', machineId: 'toolB' },
+    ],
+    ducts: [
+      { child: 'sel', parent: 'dc' },
+      { child: 'toolA', parent: 'sel', parentBranch: 'b1' },
+      { child: 'toolB', parent: 'sel', parentBranch: 'b2' },
+    ],
+  }],
+  machines: [
+    { id: 'toolA', name: 'Bandsaw', sensor: { outlet: { gen: 2, ip: '192.168.87.27', thresholdW: 6 } } },
+    { id: 'toolB', name: 'Table Saw', sensor: { outlet: { gen: 2, ip: '192.168.87.30', thresholdW: 5 } } },
   ],
-  ducts: [
-    { child: 'sel', parent: 'dc' },
-    { child: 'toolA', parent: 'sel', parentBranch: 'b1' },
-    { child: 'toolB', parent: 'sel', parentBranch: 'b2' },
-  ],
+  devices: [],
 };
 
 // ── feedChain: linear → (feed) → servo manifold; plus a blocked branch ──────
 const feedChain = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   name: 'feedChain',
   controllers: [sliderPrimary, servoNode],
-  elements: [
-    { id: 'dc', type: 'collector', name: 'Dust Collector' },
-    {
-      id: 'lin', type: 'selector', name: 'Main', controllerId: 'primary', kind: 'linear',
-      states: [
-        { id: 'home', isClosed: true, positionMm: 0 },
-        { id: 's1', isClosed: false, positionMm: 12.5 },
-        { id: 's2', isClosed: false, positionMm: 95.4 },
-        { id: 's3', isClosed: false, positionMm: 178.3 },
-      ],
-      branches: [
-        { id: 'b1', opensState: 's1', role: 'tool' },
-        { id: 'b2', opensState: 's2', role: 'feed' },     // → manifold
-        { id: 'b3', opensState: 's3', role: 'blocked' },  // capped, no child
-      ],
-      linear: { calibration: { stepsPerMm: 51.47, measuredSpanSteps: 4387, homeIsMaxEndstop: false, manifoldModel: 'rockler-2.5' } },
-    },
-    {
-      // On the NODE, not the primary: the primary here is the slider board.
-      id: 'man', type: 'selector', name: 'Manifold A', controllerId: 'node1', kind: 'servoManifold',
-      // LEFT is the reference (offset 0); closed/right are the ball's port offsets.
-      states: [
-        { id: 'left', isClosed: false, offsetDeg: 0 },
-        { id: 'closed', isClosed: true, offsetDeg: 80 },
-        { id: 'right', isClosed: false, offsetDeg: 161 },
-      ],
-      branches: [
-        { id: 'mL', opensState: 'left', role: 'tool' },
-        { id: 'mR', opensState: 'right', role: 'tool' },
-      ],
-      servo: { channel: 0, referenceAngle: 5, moveMs: 600, holdAtRest: false, detented: true },
-    },
-    { id: 'toolA', type: 'tool', name: 'Bandsaw',      sensor: { outlet: { gen: 2, ip: '192.168.87.27', thresholdW: 6 } } },
-    { id: 'toolL', type: 'tool', name: 'Router Table', sensor: { outlet: { gen: 2, ip: '192.168.87.31', thresholdW: 8 } } },
-    { id: 'toolR', type: 'tool', name: 'Drum Sander',  sensor: { outlet: { gen: 2, ip: '192.168.87.32', thresholdW: 7 } } },
+  systems: [{
+    id: 'system-1', name: 'feedChain',
+    elements: [
+      { id: 'dc', type: 'collector', name: 'Dust Collector' },
+      {
+        id: 'lin', type: 'selector', name: 'Main', controllerId: 'primary', kind: 'linear',
+        states: [
+          { id: 'home', isClosed: true, positionMm: 0 },
+          { id: 's1', isClosed: false, positionMm: 12.5 },
+          { id: 's2', isClosed: false, positionMm: 95.4 },
+          { id: 's3', isClosed: false, positionMm: 178.3 },
+        ],
+        branches: [
+          { id: 'b1', opensState: 's1', role: 'tool' },
+          { id: 'b2', opensState: 's2', role: 'feed' },     // → manifold
+          { id: 'b3', opensState: 's3', role: 'blocked' },  // capped, no child
+        ],
+        linear: { calibration: { stepsPerMm: 51.47, measuredSpanSteps: 4387, homeIsMaxEndstop: false, manifoldModel: 'rockler-2.5' } },
+      },
+      {
+        // On the NODE, not the primary: the primary here is the slider board.
+        id: 'man', type: 'selector', name: 'Manifold A', controllerId: 'node1', kind: 'servoManifold',
+        // LEFT is the reference (offset 0); closed/right are the ball's port offsets.
+        states: [
+          { id: 'left', isClosed: false, offsetDeg: 0 },
+          { id: 'closed', isClosed: true, offsetDeg: 80 },
+          { id: 'right', isClosed: false, offsetDeg: 161 },
+        ],
+        branches: [
+          { id: 'mL', opensState: 'left', role: 'tool' },
+          { id: 'mR', opensState: 'right', role: 'tool' },
+        ],
+        servo: { channel: 0, referenceAngle: 5, moveMs: 600, holdAtRest: false, detented: true },
+      },
+      { id: 'toolA', type: 'tool', name: 'Bandsaw', machineId: 'toolA' },
+      { id: 'toolL', type: 'tool', name: 'Router Table', machineId: 'toolL' },
+      { id: 'toolR', type: 'tool', name: 'Drum Sander', machineId: 'toolR' },
+    ],
+    ducts: [
+      { child: 'lin', parent: 'dc' },
+      { child: 'toolA', parent: 'lin', parentBranch: 'b1' },
+      { child: 'man', parent: 'lin', parentBranch: 'b2' },     // feed
+      { child: 'toolL', parent: 'man', parentBranch: 'mL' },
+      { child: 'toolR', parent: 'man', parentBranch: 'mR' },
+    ],
+  }],
+  machines: [
+    { id: 'toolA', name: 'Bandsaw', sensor: { outlet: { gen: 2, ip: '192.168.87.27', thresholdW: 6 } } },
+    { id: 'toolL', name: 'Router Table', sensor: { outlet: { gen: 2, ip: '192.168.87.31', thresholdW: 8 } } },
+    { id: 'toolR', name: 'Drum Sander', sensor: { outlet: { gen: 2, ip: '192.168.87.32', thresholdW: 7 } } },
   ],
-  ducts: [
-    { child: 'lin', parent: 'dc' },
-    { child: 'toolA', parent: 'lin', parentBranch: 'b1' },
-    { child: 'man', parent: 'lin', parentBranch: 'b2' },     // feed
-    { child: 'toolL', parent: 'man', parentBranch: 'mL' },
-    { child: 'toolR', parent: 'man', parentBranch: 'mR' },
-  ],
+  devices: [],
 };
 
 // ── twoGates: two independent binary servo gates → collector ────────────────
 // The "two tools running at once is fine" case (no shared selector).
 const twoGates = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   name: 'twoGates',
   controllers: [primary],
-  elements: [
-    { id: 'dc', type: 'collector', name: 'Dust Collector' },
-    {
-      id: 'gate1', type: 'selector', name: 'Gate 1', controllerId: 'primary', kind: 'servoGate',
-      // OPEN is the reference (offset 0); closed is the quarter-turn +90.
-      states: [{ id: 'open', isClosed: false, offsetDeg: 0 }, { id: 'closed', isClosed: true, offsetDeg: 90 }],
-      branches: [{ id: 'g1', opensState: 'open', role: 'tool' }],
-      servo: { channel: 0, referenceAngle: 10, moveMs: 600, holdAtRest: false, detented: true },
-    },
-    {
-      id: 'gate2', type: 'selector', name: 'Gate 2', controllerId: 'primary', kind: 'servoGate',
-      states: [{ id: 'open', isClosed: false, offsetDeg: 0 }, { id: 'closed', isClosed: true, offsetDeg: 90 }],
-      branches: [{ id: 'g2', opensState: 'open', role: 'tool' }],
-      servo: { channel: 1, referenceAngle: 10, moveMs: 600, holdAtRest: false, detented: true },
-    },
-    { id: 'toolX', type: 'tool', name: 'Jointer', sensor: { outlet: { gen: 2, ip: '192.168.87.40', thresholdW: 5 } } },
-    { id: 'toolY', type: 'tool', name: 'Planer',  sensor: { outlet: { gen: 2, ip: '192.168.87.41', thresholdW: 9 } } },
+  systems: [{
+    id: 'system-1', name: 'twoGates',
+    elements: [
+      { id: 'dc', type: 'collector', name: 'Dust Collector' },
+      {
+        id: 'gate1', type: 'selector', name: 'Gate 1', controllerId: 'primary', kind: 'servoGate',
+        // OPEN is the reference (offset 0); closed is the quarter-turn +90.
+        states: [{ id: 'open', isClosed: false, offsetDeg: 0 }, { id: 'closed', isClosed: true, offsetDeg: 90 }],
+        branches: [{ id: 'g1', opensState: 'open', role: 'tool' }],
+        servo: { channel: 0, referenceAngle: 10, moveMs: 600, holdAtRest: false, detented: true },
+      },
+      {
+        id: 'gate2', type: 'selector', name: 'Gate 2', controllerId: 'primary', kind: 'servoGate',
+        states: [{ id: 'open', isClosed: false, offsetDeg: 0 }, { id: 'closed', isClosed: true, offsetDeg: 90 }],
+        branches: [{ id: 'g2', opensState: 'open', role: 'tool' }],
+        servo: { channel: 1, referenceAngle: 10, moveMs: 600, holdAtRest: false, detented: true },
+      },
+      { id: 'toolX', type: 'tool', name: 'Jointer', machineId: 'toolX' },
+      { id: 'toolY', type: 'tool', name: 'Planer', machineId: 'toolY' },
+    ],
+    ducts: [
+      { child: 'gate1', parent: 'dc' },
+      { child: 'gate2', parent: 'dc' },
+      { child: 'toolX', parent: 'gate1', parentBranch: 'g1' },
+      { child: 'toolY', parent: 'gate2', parentBranch: 'g2' },
+    ],
+  }],
+  machines: [
+    { id: 'toolX', name: 'Jointer', sensor: { outlet: { gen: 2, ip: '192.168.87.40', thresholdW: 5 } } },
+    { id: 'toolY', name: 'Planer', sensor: { outlet: { gen: 2, ip: '192.168.87.41', thresholdW: 9 } } },
   ],
-  ducts: [
-    { child: 'gate1', parent: 'dc' },
-    { child: 'gate2', parent: 'dc' },
-    { child: 'toolX', parent: 'gate1', parentBranch: 'g1' },
-    { child: 'toolY', parent: 'gate2', parentBranch: 'g2' },
-  ],
+  devices: [],
 };
 
 // ── twoSystemShop: the shape the shop RFC was written for ───────────────────
 // A 4" system on ball valves and a 2.5" system on a Rockler manifold, sharing a
-// room, a network and ONE brain — but no duct. Built by migrating the two
-// single-system fixtures above and merging them, which is also a live check that
-// shopFromV1 produces something the shop validator accepts.
+// room, a network and ONE brain — but no duct.
 //
 // The table saw is the case the RFC exists for: ONE machine with a cabinet port
 // on the 4" system and an overarm port on the 2.5" one. Its overarm is marked
@@ -233,43 +256,11 @@ const twoSystemShop = {
   devices: [],
 };
 
-// ── shopFromV1: build a shop from one of the single-system fixtures above ─────
-// TEST-ONLY since 2026-10-06. Nothing in the product reads or writes a schemaVersion-1 document any more (the device and
-// validateShop refuse it); the single-system fixtures survive because they are a compact way to write one system, and this
-// lifts one into a shop. A v1 tool carried its own name and plug, so one machine is made per tool, keeping the tool's id as
-// the machine id.
-const { SHOP_SCHEMA_VERSION } = require('./shop');
-function shopFromV1(topology, opts = {}) {
-  const t = topology || {};
-  const systemId   = opts.systemId   || 'system-1';
-  const systemName = opts.systemName || t.name || 'Dust collection';
+// ── viewOf: a shop's one system, as the per-system topology topology.js takes ──
+// What validateShop and routeShop hand topology.js for each system (shop.js systemView()). For the tests that drive the
+// router, the sequencer or the validator directly on one system.
+const { systemView } = require('./shop');
+const viewOf = (shop, systemId) =>
+  systemView(shop, systemId ? shop.systems.find((s) => s.id === systemId) : shop.systems[0]);
 
-  const machines = [];
-  const elements = (t.elements || []).map((el) => {
-    if (el.type !== 'tool') return { ...el };
-    const machine = { id: el.id, name: el.name || el.id };
-    if (el.sensor) machine.sensor = el.sensor;
-    machines.push(machine);
-    // sensor moves to the machine; everything else about the port stays put.
-    const { sensor, ...port } = el;
-    return { ...port, machineId: el.id };
-  });
-
-  const shop = {
-    schemaVersion: SHOP_SCHEMA_VERSION,
-    name:          t.name || 'My Shop',
-    controllers:   (t.controllers || []).map((c) => ({ ...c })),
-    systems: [{
-      id:       systemId,
-      name:     systemName,
-      elements,
-      ducts:    (t.ducts || []).map((d) => ({ ...d })),
-    }],
-    machines,
-    devices: [],
-  };
-  if (t.ui) shop.ui = t.ui;
-  return shop;
-}
-
-module.exports = { shopFromV1, clone, star, primary, sliderPrimary, servoNode, sliderNode, feedChain, twoGates, twoSystemShop };
+module.exports = { viewOf, clone, star, primary, sliderPrimary, servoNode, sliderNode, feedChain, twoGates, twoSystemShop };

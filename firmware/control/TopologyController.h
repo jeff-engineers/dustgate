@@ -21,8 +21,7 @@
 // verdict. Actuator states stay a single flat map because selector ids are
 // unique shop-wide, which is exactly why validateShop enforces that.
 //
-// A machine is what you switch on; a `tool` element is now a PORT. For a
-// port with no `machineId` the two coincide (Shop.h::machineIdOf), which is how the conformance vectors read.
+// A machine is what you switch on; a `tool` element is a PORT of one (its `machineId`, Shop.h::machineIdOf).
 //
 // PURE — ArduinoJson + STL, NO Arduino.h.
 // =============================================================================
@@ -240,14 +239,6 @@ public:
     auto it = _collectorOn.find(systemId);
     return it != _collectorOn.end() && it->second;
   }
-
-  // ---- v1 spellings -------------------------------------------------------
-  // A tool WAS the machine before ports existed, and these read better at the
-  // call sites that genuinely mean "the thing that's switched on". Kept so the
-  // existing conformance vectors keep cross-checking against topology-device.js
-  // without being rewritten into a vocabulary the JS sim doesn't use yet.
-  ReconcileResult setToolPower(const std::string& id, float w) { return setMachinePower(id, w); }
-  std::string toolForOutlet(const char* h, const char* i) const { return machineForOutlet(h, i); }
 
 private:
   long seqOf(const std::string& id) const {

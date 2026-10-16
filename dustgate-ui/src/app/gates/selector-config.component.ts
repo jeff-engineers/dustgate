@@ -325,8 +325,7 @@ export class SelectorConfigComponent implements OnInit {
    *
    *  Goes through the shop's systems[] rather than the flattening readers in
    *  selector-types: this is the one question here that is about WHICH system, which
-   *  is exactly the seam that file says to leave alone. A v1 document has no
-   *  systems[] and answers with an empty set, which just leaves the order as it was. */
+   *  is exactly the seam that file says to leave alone. */
   private boardsInThisSystem(): Set<string> {
     const shop = this.topo as unknown as Shop;
     const mine = systemsOf(shop).find(

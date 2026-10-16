@@ -18,10 +18,14 @@ import { validateTopology } from '@topology';
 // declaration file, and the two things this spec wants from it are easier to
 // type here than to declare for the whole repo. spec-runner.js maps the name.
 // eslint-disable-next-line @typescript-eslint/no-var-requires
-const { clone, star } = require('@topology-fixtures') as {
+const fx = require('@topology-fixtures') as {
   clone: <T>(o: T) => T;
-  star: { elements: RawEl[] };
+  viewOf: (shop: unknown) => { elements: RawEl[] };
+  star: unknown;
 };
+const { clone } = fx;
+// The star shop's one system, as topology.js validates it.
+const star = fx.viewOf(fx.star);
 
 let pass = 0, fail = 0;
 function check(what: string, ok: boolean, extra = ''): void {

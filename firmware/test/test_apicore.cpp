@@ -8,7 +8,7 @@ static void ok_(const char* what, bool c) { if (c) { printf("  ok   %s\n", what)
 
 struct Fake : Backend {
   std::vector<std::string> calls; bool known = true; bool jogOk = true; std::string jogWhy;
-  bool setToolManual(const std::string& id, bool on) override { calls.push_back("tool:" + id + (on ? ":1" : ":0")); return known; }
+  bool setMachineManual(const std::string& id, bool on) override { calls.push_back("tool:" + id + (on ? ":1" : ":0")); return known; }
   bool setCollectorManual(const std::string& s, bool on) override { calls.push_back("coll:" + s + (on ? ":1" : ":0")); return known; }
   bool jog(const std::string& c, int ch, int a, bool d, std::string& why) override {
     calls.push_back("jog:" + c + ":" + std::to_string(ch) + ":" + std::to_string(a) + (d ? ":detach" : "")); why = jogWhy; return jogOk; }

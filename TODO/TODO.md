@@ -553,35 +553,6 @@ the app, the Pi's plug picker shows live draw (and not itself), and a board too 
 
 ## Carried debt
 
-- **Get rid of every remnant of the v1 layout (jeff, 2026-10-16). "I keep thinking it is all gone and it keeps
-  showing up."** The 2026-10-06 cleanup took v1 out of the product path (the device, `validateShop` and the mock all
-  refuse it), but the vocabulary and the test scaffolding survived, which is why it keeps resurfacing. What is left,
-  surveyed 2026-10-16:
-  - **"v1 spellings" — tool-for-machine aliases**, ~75 call sites: `setToolPower`, `setToolManual`, `toolForOutlet`
-    (TopologyController.h, TopologyRuntime.h, topology.js), `toolThreshold` / `setToolPower` (topology-device.js + .d.ts).
-    Callers span firmware.ino, api/ApiCore.h, api/HttpApiServer.cpp, native/src/main.cpp, mock-api.js, demo-api.service.ts,
-    api.service.ts, live.component.ts and the host tests. Rename callers to the machine names and delete the aliases.
-    `setToolManual` is also an HTTP route name (`/api/tool`) — decide whether the route renames too.
-  - **`systemView()` (shop.js) still stamps `schemaVersion: 1`** on the per-system view it hands `validateTopology()`,
-    and topology.js requires the field. Drop it from both; the shop carries the version.
-  - **v1-shaped fixtures**: `star`, `feedChain`, `twoGates` in topology.fixtures.js plus `shopFromV1()` to lift them —
-    used by shop.test.js, topology.test.js, topology-conformance.js, shop-doc.spec.ts, shop-ready.spec.ts. Write them as
-    shops and delete the helper. `schemaVersion: 1` literals in topology.test.js and adopt-outlets.test.js (its whole
-    "v1 topology" case) go with them.
-  - **C++ fixtures** `firmware/test/fixtures/star.json` and `feedChain.json` (starShop.json / feedChainShop.json already
-    exist): used by test_topology_router.cpp, test_shop.cpp, test_nodebus.cpp. Also the plain-document overloads only
-    those tests use — `viewOf(JsonObjectConst)` (TopologyRouter.h) and the `computeRouting` / `planTransition`
-    convenience wrappers (TopologyRouter.h, TopologySequencer.h).
-  - **The special refusal sentence** "layout is from an older version (v1) — re-save it" in TopologyRuntime.h,
-    TopologyStore.h and shop.js, with its tests (test_nodebus.cpp "a schemaVersion-1 layout is refused", shop.test.js,
-    topology-conformance.js). A document with no `systems[]` is just malformed; one generic shape error is enough.
-  - **`machineIdOf()` (Shop.h)** treats a port with no `machineId` as its own machine — the v1 rule. Check whether
-    validation already requires `machineId` on a tool port before removing the fallback.
-  - **Comments**: BinSensor.h (~l.93), TopologyRuntime.h "v1 status field" on `collectorOn()`, device-model.js ~l.584,
-    topology-device.js header, mock-api.js ~l.296. Leave dated history in docs/ and DONE.md alone.
-
-  Do it in its own worktree — on 2026-10-16 other sessions were live in the main checkout.
-
 - **Take NodeLink off the customer's network entirely (jeff, 2026-09-18). "Do we
   need to look at bluetooth or something else that we control, isolated from the
   user's network? this is getting absurd."**

@@ -20,8 +20,8 @@
 // everything that used to be one answer is now one answer PER SYSTEM — the
 // collector, the idle-hold decision, the coast timer. Actuator states stay one
 // flat map because selector ids are unique shop-wide. What you switch on is a
-// MACHINE; a `tool` element is a port. This takes a SHOP: a v1 document is refused
-// at the door (validateShop) and never reaches here. Mirrors TopologyController.h / TopologyRuntime.h field-for-field.
+// MACHINE; a `tool` element is a port. This takes a SHOP, which validateShop has
+// checked at the door. Mirrors TopologyController.h / TopologyRuntime.h field-for-field.
 //
 // PURE + synchronous: reconcile() jumps selectors to their target state. The
 // ORDERED make-before-break moves (for a real actuator's timing) are returned via
@@ -102,7 +102,6 @@ function machineThreshold(shop, machineId) {
   const w = m && m.sensor && m.sensor.outlet && m.sensor.outlet.thresholdW;
   return typeof w === 'number' ? w : DEFAULT_THRESHOLD_W;
 }
-const toolThreshold = (shop, id) => machineThreshold(shop, id);
 
 /** Equal JSON with every object's keys in a fixed order, so key order never counts as a change. */
 function canonical(v) {
@@ -517,7 +516,6 @@ function reassertFor(d, machineId) {
   }
   return out;
 }
-const setToolPower = setMachinePower;
 
 // ── Problems: anything that was asked for and is not happening ────────────────
 //
@@ -630,6 +628,4 @@ module.exports = {
   tickCollector, anyCollectorOn, anyCollectorCoasting,
   setCollectorManual, collectorIsManual, setCollectorPlugFault,
   PROBLEM_TEXT, setProblem, clearProblem, problemsView,
-  // v1 spellings — a tool WAS the machine before ports existed.
-  toolThreshold, setToolPower,
 };

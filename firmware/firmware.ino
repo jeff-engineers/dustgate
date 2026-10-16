@@ -3489,7 +3489,7 @@ void loop() {
     {
         String toolId; bool toolOn = false;
         if (apiServer.consumeToolManualRequest(toolId, toolOn)) {
-            bool known = g_topoRuntime.setToolManual(std::string(toolId.c_str()), toolOn);
+            bool known = g_topoRuntime.setMachineManual(std::string(toolId.c_str()), toolOn);
             DEBUG_PRINT(F("[UI] Manual tool ")); DEBUG_PRINT(toolId);
             if (!known) DEBUG_PRINTLN(F(" — NO SUCH TOOL in the layout (ignored)"));
             else        DEBUG_PRINTLN(toolOn ? F(" ON") : F(" off"));

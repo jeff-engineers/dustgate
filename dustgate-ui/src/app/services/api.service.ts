@@ -772,7 +772,7 @@ export class ApiService {
    * hardware every tap 404'd and the daily-driver screen drove nothing. Sensed
    * tools still routed themselves off their Shelly plugs, which is what hid it.
    */
-  setToolManual(toolId: string, on: boolean): Promise<unknown> {
+  setMachineManual(toolId: string, on: boolean): Promise<unknown> {
     return this.post('/api/tool', { toolId, on });
   }
 

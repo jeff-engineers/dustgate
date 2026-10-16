@@ -11,9 +11,12 @@ const { validateTopology, servoCommandAngle, airflowIssues, redundantSelectors,
         absoluteAngles, applyAbsoluteAngles } = require('./topology');
 const { computeRouting } = require('./routing');
 const { planTransition } = require('./sequencer');
-const { createTopologyDevice, setToolPower, statusView,
+const { createTopologyDevice, setMachinePower, statusView,
         DEFAULT_COLLECTOR_OFF_DELAY_MS: COAST_MS } = require('./topology-device');
-const { shopFromV1, clone, star, feedChain, twoGates } = require('./topology.fixtures');
+const fx = require('./topology.fixtures');
+const { clone, viewOf } = fx;
+// topology.js takes ONE system; these are each fixture shop's system as it hands it one (shop.js systemView()).
+const star = viewOf(fx.star), feedChain = viewOf(fx.feedChain), twoGates = viewOf(fx.twoGates);
 
 // ── tiny harness (same style as conformance.js) ─────────────────────────────
 const results = [];
@@ -86,7 +89,7 @@ check('validate twoGates ok', validateTopology(twoGates).ok, JSON.stringify(vali
   // selector is a slider board; the mixed cases below are deliberately left as
   // a slider board so the error they trip is the mixing one.
   const buildHost = (servos, linears) => {
-    const t = { schemaVersion: 1, name: 'budget',
+    const t = { name: 'budget',
       controllers: [{ id: 'h', role: 'primary', drives: linears > 0 ? 'linear' : 'servo' }],
       elements: [{ id: 'dc', type: 'collector' }], ducts: [] };
     let n = 0;
@@ -151,7 +154,7 @@ check('validate twoGates ok', validateTopology(twoGates).ok, JSON.stringify(vali
   // ── a sliding gate tops out at MAX_SLIDE_BRANCHES outlets ──
   {
     const wide = (n) => {
-      const t = { schemaVersion: 1, name: 'wide',
+      const t = { name: 'wide',
         controllers: [{ id: 'h', role: 'primary', drives: 'linear' }],
         elements: [{ id: 'dc', type: 'collector' }], ducts: [] };
       const states = [{ id: 'home', isClosed: true, positionMm: 0 }];
@@ -187,11 +190,10 @@ check('validate twoGates ok', validateTopology(twoGates).ok, JSON.stringify(vali
     // no field to say so, so silence must stay valid forever.
     check('no kind on a sensor outlet → still valid', validateTopology(clone(feedChain)).ok);
 
-    const tSense = mut((t) => {
-      t.elements.find((e) => e.id === 'toolA').sensor.outlet.kind = 'tasmota';
-    });
-    check('tasmota on a TOOL sensor → valid', validateTopology(tSense).ok,
-          JSON.stringify(validateTopology(tSense).errors));
+    // A tool's plug is on its MACHINE, so its kind is checked by validateShop.
+    const { validateShop } = require('./shop');
+    const machinePlug = (kind) => { const sh = clone(fx.feedChain); sh.machines.find((m) => m.id === 'toolA').sensor.outlet.kind = kind; return validateShop(sh); };
+    check('tasmota on a TOOL\'s plug → valid', machinePlug('tasmota').ok, JSON.stringify(machinePlug('tasmota').errors));
 
     // The one that matters. A no-relay plug has no contacts — that is the whole
     // point of it — so naming one as a collector's switch describes a collector
@@ -213,12 +215,13 @@ check('validate twoGates ok', validateTopology(twoGates).ok, JSON.stringify(vali
     });
     check('shelly switching a collector → valid', validateTopology(tShellyDc).ok);
 
-    const tBad = mut((t) => {
-      t.elements.find((e) => e.id === 'toolA').sensor.outlet.kind = 'kasa';
-    });
-    const rBad = validateTopology(tBad);
+    const rBad = machinePlug('kasa');
     check('unknown outlet kind → invalid',
-          !rBad.ok && hasCode(rBad, 'element') && hasMsg(rBad, 'unknown outlet kind'));
+          !rBad.ok && hasCode(rBad, 'machine') && hasMsg(rBad, 'unknown outlet kind'));
+
+    // A tool ELEMENT is a port and carries no sensor: one written there would read as configured and sense nothing.
+    const onPort = mut((t) => { elem(t, 'toolA').sensor = { outlet: { gen: 2, ip: '192.168.87.99' } }; });
+    check('a sensor on a tool element → invalid', !validateTopology(onPort).ok && hasMsg(validateTopology(onPort), 'belongs to its machine'));
   }
 
   check('drives defaults to servo when absent',
@@ -402,10 +405,10 @@ const idxOf = (plan, sel) => plan.moves.findIndex((m) => m.selectorId === sel);
 // opens gate2 by hand, X starts again. The routing decision is identical to last
 // time, so only the rising edge can catch the hand-opened gate.
 {
-  const d = createTopologyDevice(shopFromV1(clone(twoGates)));
-  setToolPower(d, 'toolX', 10);
-  setToolPower(d, 'toolX', 0);                 // idle: gates held where they are
-  const again = setToolPower(d, 'toolX', 10);  // X on again — gate2 "believed" closed
+  const d = createTopologyDevice(clone(fx.twoGates));
+  setMachinePower(d, 'toolX', 10);
+  setMachinePower(d, 'toolX', 0);                 // idle: gates held where they are
+  const again = setMachinePower(d, 'toolX', 10);  // X on again — gate2 "believed" closed
   const moves = again.plans.flatMap((p) => p.moves);
   check('dev reassert: X switching on re-sends gate2 closed',
     moves.some((m) => m.selectorId === 'gate2' && m.toState === 'closed' && m.phase === 'break'));
@@ -413,18 +416,18 @@ const idxOf = (plan, sel) => plan.moves.findIndex((m) => m.selectorId === sel);
     moves.findIndex((m) => m.selectorId === 'gate1') < moves.findIndex((m) => m.selectorId === 'gate2'));
 
   // An ordinary reading while X keeps running is NOT an edge: nothing moves.
-  const tick = setToolPower(d, 'toolX', 11);
+  const tick = setMachinePower(d, 'toolX', 11);
   eq('dev reassert: a repeat reading moves nothing', tick.plans.flatMap((p) => p.moves), []);
 }
 
 // ── device sim: tool power → routing → actuators + collector ────────────────
 {
-  const d = createTopologyDevice(shopFromV1(clone(twoGates)));
+  const d = createTopologyDevice(clone(fx.twoGates));
   let s = statusView(d);
   check('dev init: both gates closed, collector off',
     s.actuators.gate1 === 'closed' && s.actuators.gate2 === 'closed' && s.collectorOn === false);
 
-  setToolPower(d, 'toolX', 10);   // > threshold 5
+  setMachinePower(d, 'toolX', 10);   // > threshold 5
   s = statusView(d);
   check('dev X on: gate1 open, gate2 closed, collector on',
     s.actuators.gate1 === 'open' && s.actuators.gate2 === 'closed' && s.collectorOn === true);
@@ -433,14 +436,14 @@ const idxOf = (plan, sel) => plan.moves.findIndex((m) => m.selectorId === sel);
   // to open — which is co-open: half the velocity at each, and the exact thing
   // automated gates exist to prevent. Y is newer, so Y takes the air and X is
   // left waiting, even though X's gate had nothing competing for it.
-  setToolPower(d, 'toolY', 10);   // > threshold 9 — newer, so it wins the blower
+  setMachinePower(d, 'toolY', 10);   // > threshold 9 — newer, so it wins the blower
   s = statusView(d);
   check('dev X+Y on: only the NEWER tool gets a gate',
     s.actuators.gate1 === 'closed' && s.actuators.gate2 === 'open');
   check('dev X+Y on: X is still drawing, and reported as not reachable',
     s.tools.toolX.active === true && s.reachable.toolX === false);
 
-  setToolPower(d, 'toolX', 0);    // X off, Y still on → focus suction on Y
+  setMachinePower(d, 'toolX', 0);    // X off, Y still on → focus suction on Y
   s = statusView(d);
   check('dev X off (Y on): gate1 closes, gate2 open, collector on',
     s.actuators.gate1 === 'closed' && s.actuators.gate2 === 'open' && s.collectorOn === true);
@@ -448,7 +451,7 @@ const idxOf = (plan, sel) => plan.moves.findIndex((m) => m.selectorId === sel);
   // Idle → HOLD positions, and the blower COASTS rather than cutting. Driving the
   // clock explicitly (rather than sleeping) is the whole reason nowMs is a param.
   const t0 = 1000000;
-  setToolPower(d, 'toolY', 0, t0);
+  setMachinePower(d, 'toolY', 0, t0);
   s = statusView(d, t0);
   check('dev idle: gates HELD (gate2 still open), collector coasting (still on)',
     s.actuators.gate1 === 'closed' && s.actuators.gate2 === 'open' &&
@@ -466,34 +469,34 @@ const idxOf = (plan, sel) => plan.moves.findIndex((m) => m.selectorId === sel);
 
   // A tool starting mid-coast keeps the blower on and cancels the countdown —
   // the case that would otherwise switch it off two seconds into the next cut.
-  const d2 = createTopologyDevice(shopFromV1(clone(twoGates)));
-  setToolPower(d2, 'toolX', 10, t0);
-  setToolPower(d2, 'toolX', 0,  t0);
-  setToolPower(d2, 'toolX', 10, t0 + 1000);
+  const d2 = createTopologyDevice(clone(fx.twoGates));
+  setMachinePower(d2, 'toolX', 10, t0);
+  setMachinePower(d2, 'toolX', 0,  t0);
+  setMachinePower(d2, 'toolX', 10, t0 + 1000);
   s = statusView(d2, t0 + 9000);
   check('dev coast cancelled by a tool restarting',
     s.collectorOn === true && s.collectorCoasting === undefined);
 
   // An explicit 0 disables it — the escape hatch for anyone who wants the old cut.
-  const noCoast = clone(twoGates);
-  noCoast.elements.find((e) => e.type === 'collector').control = { offDelayMs: 0 };
-  const d3 = createTopologyDevice(shopFromV1(noCoast));
-  setToolPower(d3, 'toolX', 10, t0);
-  setToolPower(d3, 'toolX', 0,  t0);
+  const noCoast = clone(fx.twoGates);
+  noCoast.systems[0].elements.find((e) => e.type === 'collector').control = { offDelayMs: 0 };
+  const d3 = createTopologyDevice(noCoast);
+  setMachinePower(d3, 'toolX', 10, t0);
+  setMachinePower(d3, 'toolX', 0,  t0);
   check('dev offDelayMs:0 cuts immediately', statusView(d3, t0).collectorOn === false);
 }
 {
   // Single linear actuator: most-recently-powered-on tool wins the shared selector.
-  const d = createTopologyDevice(shopFromV1(clone(star)));
-  setToolPower(d, 'toolA', 10);
+  const d = createTopologyDevice(clone(fx.star));
+  setMachinePower(d, 'toolA', 10);
   check('dev star A on: selector → s1', statusView(d).actuators.sel === 's1');
 
-  setToolPower(d, 'toolB', 10);   // B activates second → newest → wins
+  setMachinePower(d, 'toolB', 10);   // B activates second → newest → wins
   let s = statusView(d);
   check('dev star B on (newer): selector → s2 (B wins)', s.actuators.sel === 's2');
   check('dev star B on: B reachable, A not', s.reachable.toolB === true && s.reachable.toolA === false);
 
-  setToolPower(d, 'toolB', 0);    // B off → only A active → selector back to A
+  setMachinePower(d, 'toolB', 0);    // B off → only A active → selector back to A
   check('dev star B off: selector → s1 (A alone)', statusView(d).actuators.sel === 's1');
 }
 
@@ -623,7 +626,6 @@ const idxOf = (plan, sel) => plan.moves.findIndex((m) => m.selectorId === sel);
   // There is nowhere else for the air to go, so "always open" describes the
   // intent rather than a fault.
   const lone = {
-    schemaVersion: 1,
     elements: [
       { id: 'dc', type: 'collector', name: 'Shopvac' },
       { id: 'sander', type: 'tool', name: 'Sander' },
@@ -730,7 +732,7 @@ const idxOf = (plan, sel) => plan.moves.findIndex((m) => m.selectorId === sel);
 
   // cyclone → bv1 → bv2 → drill: inline, nothing branches between them.
   const series = {
-    schemaVersion: 1, name: 'Series', controllers: [brain],
+    name: 'Series', controllers: [brain],
     elements: [{ id: 'dc', type: 'collector', name: 'Cyclone' },
                valve('bv1', 'Ball valve', 'feed'), valve('bv2', 'Ball valve', 'tool'),
                { id: 'drill', type: 'tool', name: 'Drill press' }],
@@ -756,7 +758,7 @@ const idxOf = (plan, sel) => plan.moves.findIndex((m) => m.selectorId === sel);
   // A gate with nothing but an unfinished run below it is NOT redundant — it just
   // isn't doing anything YET, and saying otherwise is noise while you're building.
   const unfinished = {
-    schemaVersion: 1, name: 'Unfinished', controllers: [brain],
+    name: 'Unfinished', controllers: [brain],
     elements: [{ id: 'dc', type: 'collector', name: 'Cyclone' },
                valve('bv', 'Ball valve', 'tool'),
                { id: 'end', type: 'junction', name: 'Open end' }],
@@ -766,7 +768,7 @@ const idxOf = (plan, sel) => plan.moves.findIndex((m) => m.selectorId === sel);
 
   // Gates on separate legs of a fork are each doing their own job.
   const parallel = {
-    schemaVersion: 1, name: 'Parallel', controllers: [brain],
+    name: 'Parallel', controllers: [brain],
     elements: [{ id: 'dc', type: 'collector', name: 'Cyclone' },
                { id: 'wye', type: 'junction', name: 'Wye' },
                valve('bvA', 'Ball valve A', 'tool'), valve('bvB', 'Ball valve B', 'tool'),
@@ -906,44 +908,38 @@ const idxOf = (plan, sel) => plan.moves.findIndex((m) => m.selectorId === sel);
 }
 
 // ── sensor.ct: a tool sensed by a clamp instead of a plug (RFC §5.6) ────────
+// A tool's clamp is on its MACHINE (shop.js validates it); the collector's is on the element (topology.js).
 {
+  const { validateShop } = require('./shop');
+  // toolA's machine, sensed the given way instead of by its plug.
+  const sensed = (sensor, fn) => {
+    const sh = clone(fx.feedChain);
+    sh.machines.find((m) => m.id === 'toolA').sensor = sensor;
+    if (fn) fn(sh);
+    return validateShop(sh);
+  };
   // A 240V tool has no plug to meter — a NEMA 6-20 has no neutral and consumer
   // metering plugs for it barely exist — so the clamp goes on a board instead.
-  const onNode = mut((t) => {
-    elem(t, 'toolA').sensor = { ct: { controllerId: 'node1', channel: 0 } };
-  });
-  check('a tool sensed by a CT on a node → valid', validateTopology(onNode).ok,
-        JSON.stringify(validateTopology(onNode).errors));
+  const onNode = sensed({ ct: { controllerId: 'node1', channel: 0 } });
+  check('a tool sensed by a CT on a node → valid', onNode.ok, JSON.stringify(onNode.errors));
 
   // controllerId absent means "this board", matching the bin sensor, every
   // selector, and NodeBus's own rule.
-  const here = mut((t) => { elem(t, 'toolA').sensor = { ct: { channel: 2 } }; });
-  check('an absent controllerId means this board', validateTopology(here).ok,
-        JSON.stringify(validateTopology(here).errors));
+  const here = sensed({ ct: { channel: 2 } });
+  check('an absent controllerId means this board', here.ok, JSON.stringify(here.errors));
 
-  const unknown = mut((t) => {
-    elem(t, 'toolA').sensor = { ct: { controllerId: 'no-such-board', channel: 0 } };
-  });
-  check('a CT on a board that does not exist → invalid', !validateTopology(unknown).ok);
+  check('a CT on a board that does not exist → invalid', !sensed({ ct: { controllerId: 'no-such-board', channel: 0 } }).ok);
 
   // Two answers to one question: which wins would be an implementation detail,
   // and a tool on by one reading and off by the other is a gate that opens or
   // doesn't depending which was read last.
-  const both = mut((t) => {
-    elem(t, 'toolA').sensor = { outlet: { gen: 2, ip: '192.168.87.27' },
-                                ct: { controllerId: 'node1', channel: 0 } };
-  });
-  check('a plug AND a clamp on one tool → invalid', !validateTopology(both).ok);
+  check('a plug AND a clamp on one tool → invalid',
+        !sensed({ outlet: { gen: 2, ip: '192.168.87.27' }, ct: { controllerId: 'node1', channel: 0 } }).ok);
 
   // The pad must be stated. Channel 0 is a real pad on every board, so a
   // defaulted one reads as a tool that simply never runs.
-  const noCh = mut((t) => { elem(t, 'toolA').sensor = { ct: { controllerId: 'node1' } }; });
-  check('a CT with no channel → invalid', !validateTopology(noCh).ok);
-
-  const offBoard = mut((t) => {
-    elem(t, 'toolA').sensor = { ct: { controllerId: 'node1', channel: 99 } };
-  });
-  check('a channel off the end of the board → invalid', !validateTopology(offBoard).ok);
+  check('a CT with no channel → invalid', !sensed({ ct: { controllerId: 'node1' } }).ok);
+  check('a channel off the end of the board → invalid', !sensed({ ct: { controllerId: 'node1', channel: 99 } }).ok);
 
   // A COLLECTOR may be clamped too (2026-09-15). Same question — is this motor
   // drawing current — and the same wall at 240 V, so splitting them would be
@@ -964,29 +960,13 @@ const idxOf = (plan, sel) => plan.moves.findIndex((m) => m.selectorId === sel);
   });
   check('a collector with both a plug and a clamp → invalid', !validateTopology(dcBoth).ok);
 
-  // RFC §5.4b, enforced by SHAPE rather than by a rule anyone has to remember:
-  // thresholdW lives on sensor.outlet, so a CT-sensed tool has nowhere to put
-  // one. This asserts the shape has not quietly grown a home for it.
-  const ctTool = elem(onNode, 'toolA');
-  check('a CT-sensed tool carries no threshold anywhere',
-        ctTool.sensor.outlet === undefined && ctTool.sensor.ct.thresholdW === undefined);
-}
-
-// ── a controller with no selectors at all (RFC §5.6b) ───────────────────────
-{
-  // The CT tool node drives nothing. Controllers are only referenced BY
-  // selectors and the per-host limits are counts, so this already worked — but
-  // "already worked" is a thing that stops being true silently, and the whole
-  // sensing-node design rests on it.
-  const idle = mut((t) => {
-    t.controllers.push({
-      id: 'planer-node', role: 'secondary', name: 'Planer',
-      link: { transport: 'wifi-ws', host: 'planer.local' },
-    });
-    elem(t, 'toolA').sensor = { ct: { controllerId: 'planer-node', channel: 0 } };
-  });
-  check('a board that drives nothing and only senses → valid',
-        validateTopology(idle).ok, JSON.stringify(validateTopology(idle).errors));
+  // A board that drives nothing and only senses (RFC §5.6b). Controllers are only referenced BY selectors and the
+  // per-host limits are counts, so this already worked — but "already worked" is a thing that stops being true
+  // silently, and the whole sensing-node design rests on it.
+  const idle = sensed({ ct: { controllerId: 'planer-node', channel: 0 } }, (sh) => sh.controllers.push({
+    id: 'planer-node', role: 'secondary', name: 'Planer', link: { transport: 'wifi-ws', host: 'planer.local' },
+  }));
+  check('a board that drives nothing and only senses → valid', idle.ok, JSON.stringify(idle.errors));
 }
 
 // ── report ──────────────────────────────────────────────────────────────────

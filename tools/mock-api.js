@@ -293,7 +293,7 @@ function handler(req, res) {
   // it wouldn't implement /sim/tool — the demo/mock use it to drive routing).
   if (pathname === '/api/topology' && req.method === 'PUT') {
     return body(req, data => {
-      // A shop only: validateShop refuses a schemaVersion-1 document, as the firmware does.
+      // A shop only, as the firmware takes.
       const v = SHOP.validateShop(data);
       if (!v.ok) return json(res, { error: 'invalid topology', errors: v.errors }, 400);
       // A save is not a reboot: the running tools, the blowers and the gates the save left alone carry over, as on the brains.
@@ -406,17 +406,17 @@ function handler(req, res) {
       // 3x the trip point, not a 100000 sentinel — the canvas draws this number
       // on the tool, and 100 kW is 833 A at 120 V. Matches the firmware's
       // manualWattsFor() and the demo service.
-      const trip = TD.toolThreshold(td.topology, data.toolId) || 0;
+      const trip = TD.machineThreshold(td.topology, data.toolId) || 0;
       // Using another tool ends a hand-switched one in the same system (releaseManualsFor() in TopologyRuntime.h).
       if (data.on) {
         const ports = SHOP.portsByMachine(td.topology);
         const mine = new Set((ports.get(data.toolId) || []).filter(p => SHOP.portEnabled(p.port)).map(p => p.systemId));
         for (const other of Object.keys(td.toolWatts || {})) {
           if (other === data.toolId || !(td.toolWatts[other] > 0)) continue;
-          if ((ports.get(other) || []).some(p => SHOP.portEnabled(p.port) && mine.has(p.systemId))) TD.setToolPower(td, other, 0);
+          if ((ports.get(other) || []).some(p => SHOP.portEnabled(p.port) && mine.has(p.systemId))) TD.setMachinePower(td, other, 0);
         }
       }
-      TD.setToolPower(td, data.toolId, data.on ? Math.round((trip > 0 ? trip * 3 : 15)) : 0);
+      TD.setMachinePower(td, data.toolId, data.on ? Math.round((trip > 0 ? trip * 3 : 15)) : 0);
       json(res, { ok: true });
     });
   }
@@ -442,7 +442,7 @@ function handler(req, res) {
   if (pathname === '/api/sim/tool' && req.method === 'POST') {
     return body(req, data => {
       if (!td) return json(res, { error: 'no topology configured' }, 404);
-      TD.setToolPower(td, data.toolId, Number(data.watts) || 0);
+      TD.setMachinePower(td, data.toolId, Number(data.watts) || 0);
       json(res, TD.statusView(td));
     });
   }
