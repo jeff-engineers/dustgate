@@ -426,25 +426,32 @@ export class ApiService {
     return new HttpHeaders({ 'X-Api-Key': this.apiKey });
   }
 
-  private post<T = { ok: boolean }>(path: string, body: unknown = {}): Promise<T> {
+  // Every helper below waits for the API key (whenReady()) before it sends: a page opened cold fetched out of ngOnInit
+  // ahead of /api/info, got a 401, and showed its fallback — Settings put the 400–2600 µs defaults on screen over a
+  // shop running 300–2800 (2026-10-16). Fixing it here rather than in each page means a new page cannot reintroduce it.
+  private async post<T = { ok: boolean }>(path: string, body: unknown = {}): Promise<T> {
+    await this.whenReady();
     return firstValueFrom(
       this.http.post<T>(`${this.baseUrl}${path}`, body, { headers: this.headers() })
     );
   }
 
-  private get<T>(path: string): Promise<T> {
+  private async get<T>(path: string): Promise<T> {
+    await this.whenReady();
     return firstValueFrom(
       this.http.get<T>(`${this.baseUrl}${path}`, { headers: this.headers() })
     );
   }
 
-  private put<T = { ok: boolean }>(path: string, body: unknown): Promise<T> {
+  private async put<T = { ok: boolean }>(path: string, body: unknown): Promise<T> {
+    await this.whenReady();
     return firstValueFrom(
       this.http.put<T>(`${this.baseUrl}${path}`, body, { headers: this.headers() })
     );
   }
 
-  private delete<T = { ok: boolean }>(path: string): Promise<T> {
+  private async delete<T = { ok: boolean }>(path: string): Promise<T> {
+    await this.whenReady();
     return firstValueFrom(
       this.http.delete<T>(`${this.baseUrl}${path}`, { headers: this.headers() })
     );
@@ -732,6 +739,7 @@ export class ApiService {
   }
 
   async readSerial(from: number): Promise<SerialChunk> {
+    await this.whenReady();
     const res = await firstValueFrom(this.http.get(`${this.baseUrl}/api/serial?from=${from}`,
       { headers: this.headers(), observe: 'response', responseType: 'text' }));
     const h = res.headers;

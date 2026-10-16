@@ -351,6 +351,32 @@ int main() {
     ok("it is said again on the next link-up: a rebooted node has forgotten it", a.size() == 1 && a[0].find("\"bin\":true") != std::string::npos);
   }
 
+  printf("\nS14 a jog is tracked until it lands, and never blocks routing (2026-10-16)\n");
+  {
+    Fx f; f.up(); std::string out;
+    while (f.drain(out)) {}
+    ok("nothing jogging at first", !f.s.jogging());
+    f.s.jog(0, 45, false); f.drain(out);
+    ok("a jog sent is a jog in flight", f.s.jogging());
+    ok("...which is NOT the shop's move mutex", !f.s.busy());
+    f.feed(R"({"t":"STATE","selectorId":"__jog","stateId":"__jog","moving":true})");
+    ok("still in flight while it sweeps", f.s.jogging());
+    f.feed(R"({"t":"STATE","selectorId":"__jog","stateId":"__jog","moving":false})");
+    ok("landed when the node says arrived", !f.s.jogging());
+    DynamicJsonDocument d(1024);
+    f.s.setState("g1", sel(d), "open"); f.drain(out);
+    f.s.jog(0, 50, false); f.drain(out);
+    f.feed(R"({"t":"STATE","selectorId":"__jog","stateId":"__jog","moving":false})");
+    ok("a jog landing does not end a routed move", f.s.busy() && !f.s.jogging());
+    f.feed(R"({"t":"STATE","selectorId":"g1","stateId":"open","moving":false})");
+    f.s.jog(0, 60, false); f.drain(out);
+    g_now += 7000; f.s.tick();
+    ok("a jog whose STATE was lost times out", !f.s.jogging());
+    f.s.jog(0, 70, false); f.drain(out);
+    f.s.onDown();
+    ok("a dropped link ends it", !f.s.jogging());
+  }
+
   printf("\n%d/%d passed%s\n", passed, passed + failed, failed ? " — FAILED" : "");
   return failed ? 1 : 0;
 }
