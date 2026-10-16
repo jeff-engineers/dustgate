@@ -226,6 +226,19 @@
    ]
   },
   {
+   "name": "STATE err length",
+   "refs": [
+    [
+     "shared/device-model/nodelink.js",
+     "MAX_STATE_ERR_LEN"
+    ],
+    [
+     "firmware/control/NodeLink.h",
+     "kMaxStateErrLen"
+    ]
+   ]
+  },
+  {
    "name": "sensors per node",
    "refs": [
     [

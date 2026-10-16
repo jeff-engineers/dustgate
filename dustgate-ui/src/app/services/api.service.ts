@@ -470,6 +470,11 @@ export class ApiService {
     return this.post('/api/linear/goto', { selectorId, mm, ...(home ? { home: true } : {}) });
   }
   async gateMoving(): Promise<boolean> { return (await this.get<{ moving: boolean }>('/api/linear/state')).moving; }
+  /** gateMoving(), plus why this gate's last move did not get there when it did not — the node's own words, e.g. a slider
+   *  whose home failed (2026-10-16). */
+  gateState(selectorId: string): Promise<{ moving: boolean; fault?: string }> {
+    return this.get<{ moving: boolean; fault?: string }>(`/api/linear/state?selectorId=${encodeURIComponent(selectorId)}`);
+  }
 
   // ── Outlet commands ───────────────────────────────────────────────────────────
 

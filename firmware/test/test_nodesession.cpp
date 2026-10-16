@@ -377,6 +377,27 @@ int main() {
     ok("a dropped link ends it", !f.s.jogging());
   }
 
+  printf("\nS15 a move that ended without arriving says why (STATE.err, 2026-10-16)\n");
+  {
+    Fx f; f.up(); std::string out;
+    while (f.drain(out)) {}
+    DynamicJsonDocument d(1024);
+    f.s.setState("g1", sel(d), "open"); f.drain(out);
+    ok("a move is outstanding", f.s.busy());
+    f.feed(R"({"t":"STATE","selectorId":"g1","stateId":"open","moving":false,"err":"the slider could not find home"})");
+    const char* mf = f.s.health().moveFault;
+    ok("it ends the move, like an arrival", !f.s.busy());
+    ok("...and becomes the board's move fault, in the node's words",
+       mf && std::string(mf) == "The gate did not get there: the slider could not find home.");
+    ok("...and the log says FAILED, with the reason", f.sink.saw("FAILED: the slider could not find home"));
+    f.s.setState("g1", sel(d), "closed"); f.drain(out);
+    f.feed(R"({"t":"STATE","selectorId":"g1","stateId":"closed","moving":false})");
+    ok("the next move that arrives clears it", f.s.health().moveFault == nullptr);
+    f.s.setState("g1", sel(d), "open"); f.drain(out);
+    f.feed(R"({"t":"STATE","selectorId":"g1","stateId":"open","moving":true,"err":"ignored"})");
+    ok("an err on a MOVING state is not a fault", f.s.busy() && f.s.health().moveFault == nullptr);
+  }
+
   printf("\n%d/%d passed%s\n", passed, passed + failed, failed ? " — FAILED" : "");
   return failed ? 1 : 0;
 }

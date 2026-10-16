@@ -649,6 +649,17 @@ public:
     }
     void pauseLinks(bool p) override { g_hub->paused = p; dglog::line(p ? "[NODE] Links PAUSED \xE2\x80\x94 every link stopped, pairings kept" : "[NODE] Links resumed"); }
     bool linearGoto(const std::string& id, float mm, bool home, std::string& why) override { return g_rt.driveLinearTo(id, mm, why, home); }
+    std::string gateFault(const std::string& selectorId) override {
+        if (!g_rt.loaded()) return std::string();
+        const char* cid = g_rt.selectorById(selectorId)["controllerId"] | "";
+        if (!*cid) return std::string();
+        for (auto& kv : g_hub->nodes()) {
+            if (!topo::sameBoard(kv.first, cid, "")) continue;
+            const char* f = kv.second->session.health().moveFault;
+            return f ? std::string(f) : std::string();
+        }
+        return std::string();
+    }
     // A routed move, or a calibration jog still sweeping on any board (NodeSession::jogging()).
     bool gateMoving() override {
         if (g_rt.anyGateMoving()) return true;

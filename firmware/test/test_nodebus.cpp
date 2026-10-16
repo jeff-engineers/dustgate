@@ -1134,6 +1134,22 @@ int main(int argc, char** argv) {
     // bump would force a flash of every board in the shop to buy nothing.
     ok("protocol version unchanged by CONFIG/SENSE", kVersion == 1);
 
+    // STATE err — the PAIR of nodelink.test.js's "a move that ended without arriving" block, same order.
+    // (Its last two cases, the refusals, are validateFrame's; the brain reads STATE without a validator — NodeSession.)
+    {
+      StaticJsonDocument<384> f;
+      buildState(f.to<JsonObject>(), "man", "p2", false, "the slider could not find home");
+      ok("a STATE may carry why the move failed", std::string(f["err"] | "") == "the slider could not find home");
+      StaticJsonDocument<256> a;
+      buildState(a.to<JsonObject>(), "man", "p2", false);
+      ok("an arrival carries none", !a.containsKey("err"));
+      StaticJsonDocument<256> m;
+      buildState(m.to<JsonObject>(), "man", "p2", true, "nope");
+      ok("a moving STATE never carries one", !m.containsKey("err"));
+      StaticJsonDocument<512> l;
+      buildState(l.to<JsonObject>(), "man", "p2", false, std::string(200, 'x').c_str());
+      ok("err is capped at kMaxStateErrLen", kMaxStateErrLen == 120 && std::string(l["err"] | "").size() == 120);
+    }
     // boot info — the PAIR of nodelink.test.js's "boot info" block, same order.
     {
       // 512, matching dustgate_node.cpp's reply document. At 384 — the size

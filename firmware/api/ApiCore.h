@@ -78,6 +78,9 @@ public:
         why = "this brain cannot drive a slider on a node"; return false;
     }
     virtual bool gateMoving() { return false; }
+    // Why the last move of this selector's board did not get there — the board's move fault, in the node's own words
+    // when it gave some (STATE.err) — or "" (2026-10-16). The slider page shows it instead of waiting on in silence.
+    virtual std::string gateFault(const std::string& /*selectorId*/) { return std::string(); }
     // POST /api/node-image: the shell hands over the raw body and the headers it parsed. Not part of handle().
 };
 
@@ -163,7 +166,16 @@ inline bool handle(const Request& req, Backend& be, Response& out) {
         return true;
     }
     if (req.method == "GET" && p == "/api/linear/state") {
-        out = json(be.gateMoving() ? "{\"moving\":true}" : "{\"moving\":false}");
+        // ?selectorId= adds `fault`: why that gate's last move did not get there, when it did not.
+        StaticJsonDocument<384> d;
+        d["moving"] = be.gateMoving();
+        const std::string sel = req.param("selectorId");
+        if (!sel.empty()) {
+            const std::string f = be.gateFault(sel);
+            if (!f.empty()) d["fault"] = f;
+        }
+        std::string s; serializeJson(d, s);
+        out = json(s);
         return true;
     }
 

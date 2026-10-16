@@ -308,6 +308,7 @@ export class DemoApiService extends ApiService {
   // The demo has no node: a setup move lands at once.
   override async linearGoto(_selectorId: string, _mm: number, _home = false): Promise<{ ok: boolean }> { return { ok: true }; }
   override async gateMoving(): Promise<boolean> { return false; }
+  override async gateState(): Promise<{ moving: boolean; fault?: string }> { return { moving: false }; }
 
   override async moveToStop(stop: number): Promise<{ ok: boolean }> {
     const durMs = model.beginMove(this.d, stop);

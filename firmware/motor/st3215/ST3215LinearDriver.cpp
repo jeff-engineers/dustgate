@@ -52,6 +52,10 @@ static const uint8_t kStallPolls = 5;
 // an endless chase after a residual too small to overcome static friction.
 static const long kArrivalSlack = 3;
 
+// How far short of its target a MOVE may settle and still count as arrived when the leftover will not budge — see the
+// zero-travel guard in update(). 2 mm.
+static const long kSettledCounts = (long)(2.0f * ST3215_COUNTS_PER_MM);
+
 // HOW FAR ONE HOMING COMMAND TRAVELS, and the reason the sweep is chunked at all.
 //
 // The sweep used to be a single command long enough to cross the whole rail,
@@ -336,6 +340,7 @@ void ST3215LinearDriver::moveTo(long targetSteps) {
     // another is in flight would otherwise compute its delta from where the
     // previous command started.
     _position = livePosition();
+    _fault = nullptr;
     if (targetSteps == _position) { _target = targetSteps; return; }
 
     // A full 8-gate 4" span is ~22000 counts, comfortably inside the 32767 a
@@ -366,6 +371,7 @@ void ST3215LinearDriver::startHoming() {
     // sweep reports failure rather than pushing the carriage into the rail end.
     long sweep = (long)(HOMING_MAX_TRAVEL_MM * ST3215_COUNTS_PER_MM);
     _homing = true;
+    _fault  = nullptr;
     _target = _position + sweep * HOME_DIRECTION;   // +HOME_DIRECTION is toward the datum
     _zeroTravelRetires = 0;                         // see moveTo() — per move, not per lifetime
 
@@ -441,6 +447,7 @@ void ST3215LinearDriver::stop() {
         // The servo did not answer, so how far it got is genuinely unknown.
         // Leaving _position stale would be a lie the next move would act on.
         Serial.println(F("[ST3215] stopped without a readable step count — position is unknown, rehome."));
+        _fault = "the slider stopped without reporting where it is - its position is unknown until it finds home again";
     }
 
     _moving = false;
@@ -499,9 +506,23 @@ void ST3215LinearDriver::update() {
         // here. Two in a row is a fault, and saying so beats grinding.
         if (travelled == 0) {
             if (++_zeroTravelRetires >= 2) {
-                Serial.println(F("[ST3215] two commands retired without moving the carriage."));
+                const long shortBy = labs(_target - _position);
+                // A FEW MM SHORT AT THE END OF A MOVE IS ARRIVAL, NOT A JAM (2026-10-16). A long move retires a little
+                // short, and a follow-up command for the leftover can be too small to overcome static friction — two of
+                // those in a row looked like a jam, and the shop saw this fire at 165.8 and 248.7 mm, inside the rail, on
+                // moves that had got there. kSettledCounts is far inside a Rockler port, so a gate this close is open.
+                if (!_homing && shortBy <= kSettledCounts) {
+                    Serial.print(F("[ST3215] settled ")); Serial.print(shortBy);
+                    Serial.println(F(" counts short of the target — close enough, arrived."));
+                    _moving = false;
+                    _target = _position;
+                    return;
+                }
+                Serial.print(F("[ST3215] two commands retired without moving the carriage, "));
+                Serial.print(shortBy); Serial.println(F(" counts short."));
                 Serial.println(F("         Jammed, unpowered, or not in stepping mode — stopping"));
                 Serial.println(F("         rather than re-issuing. `status` prints the mode."));
+                _fault  = "the slider stopped moving short of its target - jammed, unpowered, or its servo is not in stepping mode";
                 _moving = false;
                 _homing = false;
                 _target = _position;
@@ -537,6 +558,7 @@ void ST3215LinearDriver::update() {
         Serial.print(remaining);
         Serial.println(F(" counts still outstanding. Treating as a FAULT, not as arrival."));
         stop();
+        _fault = "the slider's move did not finish in time - it may be jammed or slipping";
     }
 }
 

@@ -201,6 +201,20 @@ const eq = (name, got, want) =>
   eq('and still validates', NL.validateFrame(legacy, 's2p'), []);
 }
 
+// ── a move that ended without arriving says why (STATE.err, 2026-10-16) ─────
+// PAIR: test_nodebus.cpp's "STATE err" block — same cases, same order.
+{
+  const failed = NL.state('man', 'p2', false, 'the slider could not find home');
+  check('a STATE may carry why the move failed', failed.err === 'the slider could not find home');
+  eq('...and it validates', NL.validateFrame(failed, 's2p'), []);
+  check('an arrival carries none', NL.state('man', 'p2', false).err === undefined);
+  check('a moving STATE never carries one', NL.state('man', 'p2', true, 'nope').err === undefined);
+  check('err is capped at MAX_STATE_ERR_LEN', NL.MAX_STATE_ERR_LEN === 120 &&
+        NL.state('man', 'p2', false, 'x'.repeat(200)).err.length === 120);
+  check('a longer err is refused', NL.validateFrame({ ...failed, err: 'x'.repeat(121) }, 's2p').length > 0);
+  check('an err with moving:true is refused', NL.validateFrame({ ...failed, moving: true }, 's2p').length > 0);
+}
+
 // ── boot info: a node says why it last reset (withBootInfo) ──────────────────
 // PAIR: test_nodebus.cpp's "boot info" block — same cases, same order.
 {

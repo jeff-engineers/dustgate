@@ -96,6 +96,11 @@ public:
 
     bool isMoving() override { return _moving; }
 
+    // Why the last move or sweep ended without arriving, in a sentence for a person — or null when it arrived (or has
+    // not ended). Cleared by the next moveTo()/startHoming(). The node puts it in its STATE frame (`err`), so the brain
+    // and the slider page say what used to be on the serial console only (2026-10-16).
+    const char* fault() const { return _fault; }
+
     // LIVE position, interpolated from the servo's outstanding step count.
     //
     // IT MUST BE LIVE, and that is not a nicety. The sketch reads it DURING a
@@ -178,6 +183,7 @@ private:
     long      _chunkStart = 0;      // where the command CURRENTLY IN FLIGHT began
     long      _chunkEnd = 0;        // ...and where it ends
     const char* _lastStopMethod = "";
+    const char* _fault = nullptr;   // see fault(); always a string literal
     uint16_t  _speed    = (uint16_t)MAX_SPEED_STEPS_PER_SEC;
     uint32_t  _moveStartedMs = 0;
     long      _moveSteps = 0;       // magnitude of the command in flight, for the fault backstop
