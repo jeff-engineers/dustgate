@@ -44,13 +44,10 @@ first-boot WiFi setup for a customer, a read-only root, and the `--git` update p
   in the layout's `servo` block; the brain sends it on every servo SET and jog. Needs every PWM board reflashed (`dev.sh flash-node`
   each) and every gate recalibrated — the same angle now lands somewhere new.
 
-- **A slider node fails silently: a failed home, both endstops triggered, or a jam never reach the brain (jeff, 2026-10-07).**
-  In the shop the slider page sat on "finding home" while the node's serial said `[HOME] FAILED — reached the FAR endstop`
-  (both switches read TRIGGERED after a jam, cleared only by power-cycling the whole slider — a latched supply on the driver
-  side is the guess, unconfirmed), and earlier `two commands retired without moving the carriage. Jammed…`. The brain sees an
-  ACK and then nothing until the move timeout. Report it: a STATE with an error, or a SENSE-like fault frame, so the page says
-  what the slider says. Protocol change (nodelink.js ↔ NodeLink.h) plus a slider reflash. Also check the jam detector: it fired
-  at 165.8 and 248.7 mm, inside the rail, on long moves that may have completed.
+- **A slider's endstops both read triggered after a jam, until the whole slider is power-cycled (jeff, 2026-10-07).** A latched
+  supply on the driver side is the guess, unconfirmed. Seen once in the shop; the failure itself now reaches the brain
+  (DONE.md, 2026-10-16), so the next time it happens the slider page will say "finding home, the datum endstop reads
+  TRIGGERED and will not clear". Meter the endstop supply when it does.
 
 ### From the bug search of 2026-10-06 (after the Pi bring-up)
 
@@ -178,7 +175,8 @@ the app, the Pi's plug picker shows live draw (and not itself), and a board too 
   boot, join, home (on the first SET or the one-second button hold), take a SET, move to each stop, and do it through the Mac
   brain (the native brain has only run PWM nodes). Needs a 12 V supply for the ST3215.
 
-- **PUT THE COLLECTOR "RUNNING" THRESHOLD BACK TO 50 W (jeff, 2026-10-06 — TEMPORARY).** The bench collector is a desk fan
+- **PUT THE COLLECTOR "RUNNING" THRESHOLD BACK TO 50 W (jeff, 2026-10-06 — TEMPORARY).** **HELD 2026-10-16 (jeff): leaning towards making it
+  user-configurable again (per collector) rather than restoring a fixed 50 W.** The bench collector is a desk fan
   that draws ~38 W, so `kCollectorRunningW` (control/CollectorPlugState.h) and `COLLECTOR_RUNNING_W`
   (topology-device.js) are 25 for now. Restore both to 50, and the literal in `test_collector_plug.cpp` ("kCollectorRunningW is
   ..."), and REBUILD THE APP (`npm run build` in dustgate-ui) — the Live screen judges the draw itself from the same constant, compiled in, so a brain-only change leaves it saying "Not starting" (found 2026-10-06) — the moment a real blower is on that plug — at 25 W a blower that is merely plugged in and idling could read as running.

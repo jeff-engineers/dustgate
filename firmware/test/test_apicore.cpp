@@ -19,9 +19,15 @@ struct Fake : Backend {
   bool linearGoto(const std::string& id, float mm, bool home, std::string& why) override {
     calls.push_back("lin:" + id + ":" + std::to_string((int)(mm * 10)) + (home ? ":home" : "")); why = "a tool is running"; return linOk; }
   bool gateMoving() override { return moving; }
+  std::string fault;
+  std::string gateFault(const std::string& id) override { return id == "man" ? fault : std::string(); }
 };
 static Response run(Fake& f, const char* m, const char* path, const char* body = "", bool* mine = nullptr) {
-  Request r; r.method = m; r.path = path; r.body = body; Response out; const bool h = handle(r, f, out); if (mine) *mine = h; return out;
+  Request r; r.method = m; r.path = path; r.body = body; Response out;
+  // A path with a query is split the way the shells split it: path, then everything after '?'.
+  const std::string full = path; const size_t q = full.find('?');
+  if (q != std::string::npos) { r.path = full.substr(0, q); r.query = full.substr(q + 1); }
+  const bool h = handle(r, f, out); if (mine) *mine = h; return out;
 }
 
 int main() {
@@ -78,6 +84,13 @@ int main() {
       ok_("a refusal is a 409 that says why", r.status == 409 && r.body.find("a tool is running") != std::string::npos); }
     ok_("still moving reads true", (f.moving = true, run(f, "GET", "/api/linear/state").body == R"({"moving":true})"));
     ok_("...and done reads false", (f.moving = false, run(f, "GET", "/api/linear/state").body == R"({"moving":false})"));
+    // A gate whose last move did not get there says why, when the page names it (2026-10-16).
+    f.fault = "The gate did not get there: the slider could not find home.";
+    ok_("a named gate's fault is reported", run(f, "GET", "/api/linear/state?selectorId=man").body ==
+        R"({"moving":false,"fault":"The gate did not get there: the slider could not find home."})");
+    ok_("...another gate's is not", run(f, "GET", "/api/linear/state?selectorId=other").body == R"({"moving":false})");
+    ok_("...nor is it without a name", run(f, "GET", "/api/linear/state").body == R"({"moving":false})");
+    f.fault.clear();
     Backend plain; Request r; r.method = "POST"; r.path = "/api/linear/goto"; r.body = R"({"selectorId":"man","mm":10})"; Response out;
     ok_("a brain that cannot drive one refuses rather than pretends", handle(r, plain, out) && out.status == 409);
   }

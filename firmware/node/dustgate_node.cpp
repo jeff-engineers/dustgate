@@ -215,6 +215,11 @@ enum HomingPhase : uint8_t {
 };
 static HomingPhase g_homing = HOME_NEEDED;
 static uint32_t    g_homingStartedMs = 0;
+// Why the last sweep failed, for a person: what the move it was holding reports to the brain (STATE.err, 2026-10-16),
+// so a failed home reaches the slider page instead of the serial console only. A string literal, or the feedback
+// object's own reason.
+static const char* g_homeFailReason = "";
+static char        g_homeFailText[96] = "";   // when the reason is built from the feedback object's
 
 // Has anything ASKED for a datum yet? HOME_NEEDED alone is not enough to start a
 // sweep — that is the whole of the on-demand rule (see the note at the top of
@@ -509,6 +514,8 @@ static void updateSweep() {
     // datum that was never found.
     if (feedback.failed()) {
         g_homing = HOME_FAILED;
+        snprintf(g_homeFailText, sizeof(g_homeFailText), "finding home, the %s", feedback.failure());
+        g_homeFailReason = g_homeFailText;
         Serial.print(F("[HOME] FAILED — "));
         Serial.println(feedback.failure());
         return;
@@ -531,6 +538,7 @@ static void updateSweep() {
     if (farHit) {
         motor.stop();
         g_homing = HOME_FAILED;
+        g_homeFailReason = "finding home, the slider reached the FAR endstop - the home end is set wrong, or a switch is unplugged";
         Serial.println(F("[HOME] FAILED — reached the FAR endstop while seeking the datum."));
         Serial.println(F("       The carriage drove away from home, not toward it. This node"));
         Serial.println(F("       has no direction to flip: a serial bus servo cannot be wired"));
@@ -554,6 +562,8 @@ static void updateSweep() {
         g_homeLastMoveMs = millis();
     } else if (millis() - g_homeLastMoveMs > kHomeStallMs) {
         g_homing = HOME_FAILED;
+        g_homeFailReason = motor.fault() ? motor.fault()
+                         : "finding home, the slider stopped moving before it reached a switch - jammed, or its servo is not turning";
         Serial.println(F("[HOME] FAILED — the carriage has not moved for 10s and no switch"));
         Serial.println(F("       has been reached. Endstops, a jam, or a servo that is not"));
         Serial.println(F("       actually turning. `status` on a primary prints the mode."));
@@ -567,6 +577,7 @@ static void updateSweep() {
     if (millis() - g_homingStartedMs > HOMING_TIMEOUT_MS) {
         motor.stop();
         g_homing = HOME_FAILED;
+        g_homeFailReason = "the slider ran the length of the rail and never reached its home switch";
         Serial.print(F("[HOME] FAILED — no datum after "));
         Serial.print(HOMING_TIMEOUT_MS / 1000);
         Serial.println(F("s. The carriage kept MOVING the whole time, so this is"));
@@ -1417,9 +1428,11 @@ static void tickClampJack() {
 }
 #endif
 
-static void reportState(const char* selectorId, const char* stateId, bool moving) {
-    StaticJsonDocument<192> doc;
-    topo::nodelink::buildState(doc.to<JsonObject>(), selectorId, stateId, moving);
+static void reportState(const char* selectorId, const char* stateId, bool moving, const char* err) {
+    // 384: a 120-char reason (kMaxStateErrLen) plus the ids. At 192 ArduinoJson would drop `err`, the last member,
+    // without a word — and the brain would read a failed move as an arrival.
+    StaticJsonDocument<384> doc;
+    topo::nodelink::buildState(doc.to<JsonObject>(), selectorId, stateId, moving, err);
     String s; serializeJson(doc, s);
     sendToOwner(s);
 }
@@ -1809,7 +1822,14 @@ void loop() {
         }
 #endif
 #if HAS_LINEAR
-        if (!cmd.isServo) {
+        if (!cmd.isServo && !motor.online()) {
+            // NO SERVO ON THE BUS: nothing below can move the gate, and nothing would ever say so — the move would sit
+            // deferred until the brain timed it out. Said at once instead (2026-10-16); the drive retry still runs, and
+            // the brain's one re-send for a fault, or the next SET, tries again once the servo answers.
+            Serial.println(F("[MOVE] refused — the slider's servo is not answering on the bus."));
+            reportState(cmd.selectorId, cmd.stateId, false,
+                        "the slider's servo is not answering on its bus - check its 12 V supply and its cable");
+        } else if (!cmd.isServo) {
             // ASKED TO FIND HOME AGAIN (SET.home, 2026-10-07): setting the slider up from the app starts here, because a
             // datum left over from before a jam or a slipped pinion is a count nobody should calibrate against. Drop it
             // and take the ordinary home-then-move path below. A sweep already running is left alone: it IS a fresh home.
@@ -1870,7 +1890,7 @@ void loop() {
             statusled::flashActivity();   // visible confirmation at the gate itself
             g_lastCmdMs = millis();
             statusscreen::note();
-            reportState(pendingSel, pendingState, true);
+            reportState(pendingSel, pendingState, true, nullptr);
         }
     }
 
@@ -1887,12 +1907,29 @@ void loop() {
         statusled::flashActivity();
         g_lastCmdMs = millis();
         statusscreen::note();
-        reportState(pendingSel, pendingState, true);
+        reportState(pendingSel, pendingState, true, nullptr);
+    }
+#endif
+
+#if HAS_LINEAR
+    // THE SWEEP FAILED WITH A MOVE WAITING ON IT: say so now, in the sweep's own words (2026-10-16). The move used to sit
+    // deferred and silent, and the brain waited kMoveTimeoutMs (210 s) with the slider page on "finding home". Dropped,
+    // not kept: the brain sends the gate again once for a fault (DeviceProblems), and a SET retries the sweep.
+    if (g_deferredMove && g_homing == HOME_FAILED) {
+        g_deferredMove = false;
+        reportState(g_deferredSel, g_deferredState, false,
+                    *g_homeFailReason ? g_homeFailReason : "the slider could not find home");
     }
 #endif
 
     if (awaitingSettle && !actuatorMoving()) {
         awaitingSettle = false;
-        reportState(pendingSel, pendingState, false);
+        // A move the driver ENDED rather than finished (a jam, a timeout) says so: an arrival STATE here would have the
+        // brain believe a gate is open that is not.
+        const char* why = nullptr;
+#if HAS_LINEAR
+        why = motor.fault();
+#endif
+        reportState(pendingSel, pendingState, false, why);
     }
 }

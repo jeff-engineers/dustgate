@@ -251,6 +251,8 @@ const RECONNECT_MAX_MS = 15000;
  * @property {string}  selectorId
  * @property {string}  stateId
  * @property {boolean} moving
+ * @property {string} [err]         moving:false only: the move ENDED WITHOUT ARRIVING, and why, in a sentence for a
+ *                                  person (a failed home, a jam, a servo not answering). At most MAX_STATE_ERR_LEN.
  *
  * @typedef {Object} SensorSpec     one entry in CONFIG.sensors.
  * @property {string}  sensorId     OPAQUE TO THE NODE — echoed back in SENSE and
@@ -581,9 +583,14 @@ function ack(seq, ok, err) {
   if (err) f.err = err;
   return f;
 }
-function state(selectorId, stateId, moving) {
-  return { t: 'STATE', selectorId, stateId, moving: !!moving };
+function state(selectorId, stateId, moving, err) {
+  const f = { t: 'STATE', selectorId, stateId, moving: !!moving };
+  if (!moving && typeof err === 'string' && err) f.err = err.slice(0, MAX_STATE_ERR_LEN);
+  return f;
 }
+// The longest reason a STATE may carry (2026-10-16). A PAIR with kMaxStateErrLen (NodeLink.h): a node truncates to it,
+// and this validator refuses a longer one — the whole STATE, which would read as a move that never ended.
+const MAX_STATE_ERR_LEN = 120;
 
 /**
  * SENSE — "this sensor says on, or off".
@@ -874,6 +881,10 @@ function validateFrame(f, direction) {
     case 'STATE':
       str('selectorId'); str('stateId');
       if (typeof f.moving !== 'boolean') errs.push('STATE.moving must be a boolean');
+      if (f.err !== undefined) {
+        if (typeof f.err !== 'string' || !f.err || f.err.length > MAX_STATE_ERR_LEN) errs.push(`STATE.err must be a string of 1-${MAX_STATE_ERR_LEN} chars`);
+        if (f.moving !== false) errs.push('STATE.err comes only with moving:false');
+      }
       break;
     case 'OTA':
       num('seq', 0, Number.MAX_SAFE_INTEGER);
@@ -904,7 +915,7 @@ module.exports = {
   PING_INTERVAL_MS, PONG_TIMEOUT_MS, RECONNECT_MIN_MS, RECONNECT_MAX_MS,
   SENSE_REPEAT_MS, SENSE_STALE_MS, MAX_SENSORS_PER_NODE,
   MAX_PLUG_THRESHOLD_W, MAX_PLUG_WATTS, MAX_PLUG_IP_LEN, PLUG_KINDS, pollsPlugs,
-  MAX_RST_LEN, MAX_OTA_PATH, MIN_OTA_BYTES, MAX_OTA_BYTES, OTA_STATES,
+  MAX_RST_LEN, MAX_STATE_ERR_LEN, MAX_OTA_PATH, MIN_OTA_BYTES, MAX_OTA_BYTES, OTA_STATES,
   MAX_WHERE_IP_LEN, BEACON_PORT, REFUSE_REASONS, dialsIn, join, refuse, where,
   MIN_RF_TICK_US, MAX_RF_TICK_US, MAX_RF_REPEATS, pressesRf, watchesBin, press,
   hello, welcome, withBootInfo, set, config, ack, state, sense, clamp, alert, ping, pong, ota, otaState, welcomeAccepted, clampsOn,

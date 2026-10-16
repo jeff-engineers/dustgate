@@ -381,10 +381,20 @@ export class LinearCalibrationComponent implements OnInit, OnDestroy {
       return false;
     }
     this.liveMm = target; this.moving = true;
+    let fault = '';
     try {
-      for (let i = 0; i < 1500 && await this.api.gateMoving(); i++) await new Promise((r) => setTimeout(r, 200));
+      for (let i = 0; i < 1500; i++) {
+        const st = await this.api.gateState(this.sel.id);
+        if (!st.moving) { fault = st.fault ?? ''; break; }
+        await new Promise((r) => setTimeout(r, 200));
+      }
     } catch { /* the move was sent; a missed poll only means we stop waiting */ }
-    this.moving = false; this.firstMove = false;
+    this.moving = false;
+    // THE SLIDER SAYS WHY IT DID NOT GET THERE (2026-10-16): a failed home, a jam, a servo not answering. This page used
+    // to sit on "finding home" until the brain timed the move out, while the reason was on the node's serial console.
+    // The first move stays a homing one, so the next try finds home again.
+    if (fault) { this.error = fault; return false; }
+    this.firstMove = false;
     return true;
   }
 

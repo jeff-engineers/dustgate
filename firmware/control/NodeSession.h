@@ -689,13 +689,28 @@ private:
 
     void onState(JsonObjectConst f) {
         const bool moving = f["moving"] | false;
+        // A move that ENDED WITHOUT ARRIVING says why (STATE.err, 2026-10-16): a slider whose home failed, a jam, a servo
+        // not answering. It ends the move like an arrival, and becomes the board's move fault in the node's own words —
+        // the move-failed problem, and what the slider page shows — instead of a wait for kMoveTimeoutMs.
+        const char* err = moving ? "" : (f["err"] | "");
         if (!moving) {
             if (std::strcmp(f["selectorId"] | "", "__jog") == 0) _jogOutstanding = false;
-            else { _moveOutstanding = false; _moveFault = nullptr; }
+            else {
+                _moveOutstanding = false;
+                if (*err) {
+                    // One byte short of the buffer, always: the last byte is never written, so a reader on another task
+                    // (RemoteActuatorBus::health() hands out this pointer) can never run off the end mid-update.
+                    std::snprintf(_moveFaultText, sizeof(_moveFaultText) - 1, "The gate did not get there: %s.", err);
+                    _moveFault = _moveFaultText;
+                } else {
+                    _moveFault = nullptr;
+                }
+            }
         }
-        char line[128];
-        std::snprintf(line, sizeof(line), "[NODE←] STATE %s -> %s (%s)", (const char*)(f["selectorId"] | "?"),
-                      (const char*)(f["stateId"] | "?"), moving ? "moving" : "arrived");
+        char line[200];
+        std::snprintf(line, sizeof(line), "[NODE←] STATE %s -> %s (%s%s%s)", (const char*)(f["selectorId"] | "?"),
+                      (const char*)(f["stateId"] | "?"), moving ? "moving" : (*err ? "FAILED" : "arrived"),
+                      *err ? ": " : "", err);
         say(line);
     }
 
@@ -721,7 +736,8 @@ private:
     uint32_t _seq          = 0;
     int      _servoMinUs   = 0, _servoMaxUs = 0;   // the shop's servo pulse range; 0 = not set (SETs go without one)
     bool     _moveOutstanding = false;
-    const char* _moveFault    = nullptr;   // static string; see Health::moveFault
+    const char* _moveFault    = nullptr;   // a static string, or _moveFaultText; see Health::moveFault
+    char        _moveFaultText[nodelink::kMaxStateErrLen + 40] = "";   // a node's own reason (STATE.err), see onState()
     uint32_t _moveStartedMs   = 0;
     bool     _jogOutstanding  = false;   // see jogging()
     uint32_t _jogStartedMs    = 0;

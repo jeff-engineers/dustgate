@@ -14,6 +14,21 @@ of this file is being able to answer "did we already decide this, and why".
 
 Newest first.
 
+### A slider says why it did not get there, 2026-10-16 (branch `slider-faults`)
+
+- **A slider node's failures reach the brain and the slider page.** LANDED 2026-10-16, host-tested, compiled; NOT yet run
+  on the slider. Found in the shop 2026-10-07: the page sat on "finding home" while the node's serial said
+  `[HOME] FAILED — reached the FAR endstop`, and the brain waited out kMoveTimeoutMs (210 s). STATE gains an optional
+  `err` (moving:false only, `MAX_STATE_ERR_LEN` ↔ `kMaxStateErrLen`, a new pair): the move ENDED WITHOUT ARRIVING, and
+  why. The node sends it for a failed home with a move waiting on it (each of the four ways a sweep fails, in words), for a
+  SET with no servo answering on the bus, and for a move its driver ended rather than finished (a jam, a timeout, a stop
+  with no readable count) — `ST3215LinearDriver::fault()`. The brain makes it the board's move fault (the `move-failed`
+  problem, and its one re-send), and `/api/linear/state?selectorId=` returns it as `fault` for the slider page.
+- **The jam detector no longer fires on a move that got there.** It fired at 165.8 and 248.7 mm, inside the rail, on long
+  moves that had probably completed: a long move settles a little short, the follow-up for the leftover is too small to
+  overcome static friction, and two zero-travel retires in a row read as a jam. Within 2 mm of the target
+  (`kSettledCounts`) that is now arrival, logged with how far short; further out it is still a jam, now with the shortfall.
+
 ### The v1 layout is gone, everywhere, 2026-10-16 (branch `remove-v1-layout`)
 
 - **Every remnant of the single-system (schemaVersion 1) layout removed.** LANDED 2026-10-16, host-tested. Jeff: "I keep

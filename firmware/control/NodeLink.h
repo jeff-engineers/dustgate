@@ -328,11 +328,16 @@ inline void buildAck(JsonObject out, uint32_t seq, bool ok, const char* err = nu
     if (err && *err) out["err"] = err;
 }
 
-inline void buildState(JsonObject out, const char* selectorId, const char* stateId, bool moving) {
+// `err` (moving false only): the move ENDED WITHOUT ARRIVING, and why — a failed home, a jam, a servo not answering
+// (2026-10-16). kMaxStateErrLen is MAX_STATE_ERR_LEN in nodelink.js, a PAIR: the JS validator refuses a longer one, and
+// the whole STATE with it.
+static const size_t kMaxStateErrLen = 120;
+inline void buildState(JsonObject out, const char* selectorId, const char* stateId, bool moving, const char* err = nullptr) {
     out["t"]          = "STATE";
     out["selectorId"] = selectorId;
     out["stateId"]    = stateId;
     out["moving"]     = moving;
+    if (!moving && err && *err) out["err"] = std::string(err).substr(0, kMaxStateErrLen);
 }
 
 inline void buildPong(JsonObject out) { out["t"] = "PONG"; }
