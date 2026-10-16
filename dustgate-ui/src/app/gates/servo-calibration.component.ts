@@ -1,5 +1,7 @@
 import { Component, EventEmitter, Input, OnInit, Output } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { FormsModule } from '@angular/forms';
+import { servoPulseRange } from '@shop';
 import { ApiService, JogRefusedError } from '../services/api.service';
 import type { Topology } from '@topology';
 import {
@@ -18,8 +20,10 @@ import {
 //
 // Two things make that work for someone standing at the gate with a phone:
 //
-//   1. No degrees anywhere. The angles are an implementation detail of the schema;
-//      what the user has is a handle and their eyes. Steps are coarse/fine arrows.
+//   1. The arrows lead, and the handle drawing follows them; what the user has is a handle and their eyes. Degrees
+//      are SHOWN, though, with the pulse they come out as, and one can be typed and gone to (2026-10-16, jeff: "the
+//      jog buttons are incredibly annoying to work with"). This page used to keep degrees out entirely, which left a
+//      bench test of a manifold with no way to say "go to 160°" short of the serial console.
 //   2. A fixed handedness. The servo can be mounted behind the gate, which
 //      mirrors every arrow — but that is a property of how the BUILD mounts its
 //      servos, not of each individual gate, and in this build it is not mirrored.
@@ -60,7 +64,7 @@ type Phase = 'capture' | 'review';
 @Component({
   selector: 'app-servo-calibration',
   standalone: true,
-  imports: [CommonModule],
+  imports: [CommonModule, FormsModule],
   styles: [`
     :host { display: block; }
     .card { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 18px 16px; }
@@ -72,7 +76,17 @@ type Phase = 'capture' | 'review';
     .dots i.done { background: var(--success); } .dots i.cur { background: var(--accent); }
     .dots .n { font-size: 12px; color: var(--muted); margin-left: 6px; }
 
-    .dial { display: flex; justify-content: center; margin: 4px 0 16px; }
+    .dial { display: flex; justify-content: center; margin: 4px 0 8px; }
+    .readout { text-align: center; font-variant-numeric: tabular-nums; margin: 0 0 12px; }
+    .readout b { font-size: 22px; font-weight: 600; }
+    .readout span { font-size: 12.5px; color: var(--muted); margin-left: 8px; }
+    .goto { display: flex; gap: 8px; align-items: center; margin-bottom: 15px; }
+    .goto label { font-size: 13px; color: var(--muted); }
+    .goto input { width: 80px; background: var(--bg); border: 1px solid var(--border); color: var(--text);
+                  border-radius: 10px; padding: 9px 10px; font-size: 15px; font-variant-numeric: tabular-nums; }
+    .goto button { background: var(--bg); border: 1px solid var(--border); color: var(--text);
+                   border-radius: 10px; padding: 9px 16px; font-size: 14px; }
+    .goto button:disabled { opacity: 0.35; }
 
     .pad { display: grid; grid-template-columns: repeat(4, 1fr); gap: 9px; margin-bottom: 15px; }
     .pad button { background: var(--bg); border: 1px solid var(--border); color: var(--text);
@@ -124,6 +138,18 @@ type Phase = 'capture' | 'review';
             <text x="75" y="128" text-anchor="middle" font-size="11" fill="var(--muted)">handle, as you see it</text>
           </svg>
         </div>
+        <p class="readout" title="The angle sent to the servo, and the pulse it becomes with the shop's range on Settings">
+          <b>{{ angleNow() }}°</b><span>{{ pulseUs(angleNow()) }} µs</span>
+        </p>
+
+        <form class="goto" (ngSubmit)="goTo()">
+          <label for="goto-deg">Go to</label>
+          <input id="goto-deg" name="gotoDeg" type="number" inputmode="numeric" [min]="lo" [max]="hi" step="1"
+                 [(ngModel)]="gotoDeg" [placeholder]="'' + angleNow()">
+          <span>°</span>
+          <button type="submit" [disabled]="!gotoOk()"
+                  [title]="'Sends the valve straight to this angle (' + lo + '–' + hi + '°). It sweeps there at the usual pace.'">Go</button>
+        </form>
 
         <div class="pad">
           <button (click)="jog(-1, true)"  [disabled]="!canJog(-1)" aria-label="turn left, coarse">≪</button>
@@ -150,7 +176,7 @@ type Phase = 'capture' | 'review';
         <div class="row" *ngFor="let s of sel.states">
           <span class="tick">✓</span>
           <span class="pn">{{ label(s) }}</span>
-          <span class="pd">{{ detail(s) }}</span>
+          <span class="pd">{{ detail(s) }} · {{ angleOf(s) }}°</span>
           <button (click)="test(s)" [disabled]="busy">Test</button>
         </div>
         <p class="err" *ngIf="saveError">{{ saveError }}</p>
@@ -183,10 +209,34 @@ export class ServoCalibrationComponent implements OnInit {
   private reversed = false;
   /** The servo's own limits for this gate — the same bounds the save checks, so a
    *  jog can never capture an angle that Save would then refuse. */
-  private lo = 0;
-  private hi = 180;
+  lo = 0;
+  hi = 180;
+
+  /** What's typed in the Go-to box; null when empty. */
+  gotoDeg: number | null = null;
 
   constructor(private api: ApiService) {}
+
+  // ── the readout and Go to ────────────────────────────────────────────────
+  angleNow(): number { return Math.round(this.angle()); }
+  angleOf(s: ServoState): string { const a = this.angles.get(s.id); return typeof a === 'number' ? String(Math.round(a)) : '–'; }
+  /** The pulse this angle is driven as: the same arithmetic as ServoActuator::_write(), over the shop's range. */
+  pulseUs(angle: number): number {
+    const { minUs, maxUs } = servoPulseRange(this.topo);
+    return Math.round(minUs + (maxUs - minUs) * angle / 180);
+  }
+  gotoOk(): boolean {
+    const v = this.gotoDeg;
+    return typeof v === 'number' && Number.isFinite(v) && v >= this.lo && v <= this.hi;
+  }
+  /** Straight to a typed angle. Through drive() like an arrow, so it waits behind a move under way. */
+  async goTo(): Promise<void> {
+    if (!this.gotoOk()) return;
+    const a = Math.round(this.gotoDeg as number);
+    this.gotoDeg = null;
+    this.setAngle(a);
+    await this.drive(a);
+  }
 
   ngOnInit(): void {
     this.labels = positionLabels(this.topo, this.sel);

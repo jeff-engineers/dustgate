@@ -649,7 +649,12 @@ public:
     }
     void pauseLinks(bool p) override { g_hub->paused = p; dglog::line(p ? "[NODE] Links PAUSED \xE2\x80\x94 every link stopped, pairings kept" : "[NODE] Links resumed"); }
     bool linearGoto(const std::string& id, float mm, bool home, std::string& why) override { return g_rt.driveLinearTo(id, mm, why, home); }
-    bool gateMoving() override { return g_rt.anyGateMoving(); }
+    // A routed move, or a calibration jog still sweeping on any board (NodeSession::jogging()).
+    bool gateMoving() override {
+        if (g_rt.anyGateMoving()) return true;
+        for (auto& kv : g_hub->nodes()) if (kv.second->session.jogging()) return true;
+        return false;
+    }
     bool updateNode(const std::string& id, std::string& why) override {
         auto n = g_hub->find(id);
         if (!n) { why = "that board is not paired"; return false; }

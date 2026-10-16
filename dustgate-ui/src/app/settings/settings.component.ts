@@ -236,7 +236,7 @@ import { SERVO_PULSE_BOUNDS, servoPulseRange } from '@shop';
         </div>
         <div class="row">
           <div class="row-hint">{{ servoNote() }}</div>
-          <button class="save-btn" (click)="saveServo()" [disabled]="busy || !servoValid() || !servoChanged()">Save</button>
+          <button class="save-btn" (click)="saveServo()" [disabled]="busy || !servoLoaded || !servoValid() || !servoChanged()">Save</button>
         </div>
       </div>
 
@@ -315,6 +315,8 @@ export class SettingsComponent implements OnInit {
   // ── servo pulse range ──────────────────────────────────────────────────
   readonly bounds = SERVO_PULSE_BOUNDS;
   servoMin = 400; servoMax = 2600;
+  /** The layout's range has been read. Until then the inputs hold defaults, and saving them would overwrite the shop's. */
+  servoLoaded = false;
   private savedServo = { minUs: 400, maxUs: 2600 };
   servoValid(): boolean {
     const a = Number(this.servoMin), b = Number(this.servoMax);
@@ -322,6 +324,7 @@ export class SettingsComponent implements OnInit {
   }
   servoChanged(): boolean { return Number(this.servoMin) !== this.savedServo.minUs || Number(this.servoMax) !== this.savedServo.maxUs; }
   servoNote(): string {
+    if (!this.servoLoaded) return 'Reading the shop\'s range…';
     return this.servoValid()
       ? `${this.savedServo.minUs}–${this.savedServo.maxUs} µs now`
       : `Whole µs, ${this.bounds.min}–${this.bounds.max}, at least ${this.bounds.span} apart`;
@@ -339,16 +342,16 @@ export class SettingsComponent implements OnInit {
   }
 
   ngOnInit() {
-    void this.api.getTopology().then((t) => {
+    // WAIT FOR THE API KEY FIRST (2026-10-16). Opened cold (a reload, or a bookmark straight to Settings) the layout
+    // was asked for before /api/info had answered, came back 401, and the catch below left the 400–2600 defaults on
+    // screen over a shop running 300–2800 — one tap of Save from writing them back. whenReady(), not a subscribe():
+    // this component has no ngOnDestroy, and a bare subscribe on an app-lifetime BehaviorSubject leaks one per visit.
+    void this.api.whenReady().then(() => this.api.getTopology()).then((t) => {
       this.savedServo = servoPulseRange(t);
       this.servoMin = this.savedServo.minUs; this.servoMax = this.savedServo.maxUs;
+      this.servoLoaded = true;
       this.cd.markForCheck();
-    }).catch(() => { /* no layout yet: the defaults stand, and Save says why it cannot */ });
-    // Nothing here waits on deviceInfo any more: the only reader was the gate
-    // count, and the wait went with it. (It was a whenReady() rather than a
-    // subscribe() on purpose — this component has no ngOnDestroy, so a bare
-    // subscribe on an app-lifetime BehaviorSubject leaked one destroyed
-    // component per visit. Worth knowing before adding another.)
+    }).catch(() => { /* no layout yet: nothing to save the range into, and Save stays off */ });
   }
 
   /** A missing layout is normal, not an error — someone can open Settings on a

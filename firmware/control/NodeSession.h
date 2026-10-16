@@ -132,6 +132,7 @@ public:
         // whole shop's gates froze behind it.
         if (_moveOutstanding) _moveFault = "The board restarted mid-move \xE2\x80\x94 the gate may not have finished moving.";
         _moveOutstanding = false;
+        _jogOutstanding  = false;
         _lastRxMs     = now();    // the node just spoke; do not call it overdue before the WELCOME
         _connected    = false;
         _txPending    = false;
@@ -149,6 +150,7 @@ public:
         // would stall every other gate.
         if (_moveOutstanding) _moveFault = "The link dropped mid-move \xE2\x80\x94 the gate may not have finished moving.";
         _moveOutstanding = false;
+        _jogOutstanding  = false;
         _txPending = false;
         // A PRESS is an EDGE against a TOGGLE: one queued during an outage and sent on reconnect
         // would switch the blower the wrong way. Never replayed.
@@ -243,11 +245,15 @@ public:
             _moveFault = "The board never reported its move finished (timed out).";
             say(label("[NODE] Move timed out on "));
         }
+        if (_jogOutstanding && (now() - _jogStartedMs) > kJogTimeoutMs) _jogOutstanding = false;
     }
 
     // ── ActuatorBus, as the session answers it ──────────────────────────────
     bool online() const { return _connected && (now() - _lastRxMs) < nodelink::kPongTimeoutMs; }
     bool busy()   const { return _moveOutstanding || _txPending; }
+    // A jog sent and not yet reported arrived. Kept apart from busy() on purpose (see jog()), and read only by the
+    // calibration widget, through GET /api/linear/state, to send its next nudge after the servo has landed.
+    bool jogging() const { return _jogOutstanding; }
     // The raw "accepted WELCOME, and the transport has not dropped" flag — NOT freshness (that is
     // online()). The shell's redial logic asks whether a link exists at all, not whether it is
     // chatty.
@@ -308,6 +314,13 @@ public:
         _txPending = true;
         // Deliberately NOT setting _moveOutstanding: a jog is a setup-time nudge, not a routed move.
         // Marking the bus busy() would stall the move queue behind a gate someone is calibrating.
+        // It IS tracked, as jogging(): without it /api/linear/state said "not moving" through every jog, the widget's
+        // one-move-at-a-time pump sent each tap at once, and a loaded servo was reversed mid-sweep five times a second —
+        // the router-table node reset ("poweron") three times in two minutes on 2026-10-16.
+        _jogOutstanding = true;
+        _jogStartedMs   = now();
+        // Logged like a routed SET (above): a reset during calibration is otherwise a "moving" line with no angle on it.
+        say((std::string("[NODE→] ") + _nodeId + " " + s).c_str());
         return true;
     }
 
@@ -600,6 +613,7 @@ private:
         if (!ok) {
             if (_moveOutstanding) _moveFault = "The board refused the move.";
             _moveOutstanding = false;                       // refused → stop waiting
+            _jogOutstanding  = false;
         }
         char line[160];
         std::snprintf(line, sizeof(line), "[NODE←] ACK seq=%lu%s%s", (unsigned long)(f["seq"] | 0u),
@@ -675,7 +689,10 @@ private:
 
     void onState(JsonObjectConst f) {
         const bool moving = f["moving"] | false;
-        if (!moving) { _moveOutstanding = false; _moveFault = nullptr; }
+        if (!moving) {
+            if (std::strcmp(f["selectorId"] | "", "__jog") == 0) _jogOutstanding = false;
+            else { _moveOutstanding = false; _moveFault = nullptr; }
+        }
         char line[128];
         std::snprintf(line, sizeof(line), "[NODE←] STATE %s -> %s (%s)", (const char*)(f["selectorId"] | "?"),
                       (const char*)(f["stateId"] | "?"), moving ? "moving" : "arrived");
@@ -706,6 +723,10 @@ private:
     bool     _moveOutstanding = false;
     const char* _moveFault    = nullptr;   // static string; see Health::moveFault
     uint32_t _moveStartedMs   = 0;
+    bool     _jogOutstanding  = false;   // see jogging()
+    uint32_t _jogStartedMs    = 0;
+    // A jog's sweep is at most SERVO_SWEEP_MS (2 s) plus the 1 s hold; past this its STATE was lost.
+    static constexpr uint32_t kJogTimeoutMs = 6000;
     char     _txFrame[320]    = "";   // one pending SET
     bool     _txPending       = false;
     char     _refusedBy[40]   = "";   // set from a WELCOME carrying accepted:false
