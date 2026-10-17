@@ -98,6 +98,8 @@ type Phase = 'manifold' | 'home' | 'side' | 'sweep' | 'positions' | 'review';
 
     .warn { font-size: 12px; color: var(--accent); margin: 9px 0 0; line-height: 1.5; }
     .err  { font-size: 12.5px; color: var(--danger); margin: 10px 0 0; line-height: 1.5; }
+    .retry { display: block; width: 100%; margin-top: 10px; background: var(--surface); border: 1px solid var(--danger);
+             color: var(--text); border-radius: var(--radius); padding: 11px; font-size: 14px; }
     .busy { text-align: center; font-size: 13px; color: var(--muted); padding: 10px 0; }
 
     .nav { display: flex; gap: 10px; margin-top: 18px; }
@@ -195,14 +197,18 @@ type Phase = 'manifold' | 'home' | 'side' | 'sweep' | 'positions' | 'review';
         </div>
 
         <div class="pad">
-          <button (click)="jog(-COARSE_MM)" [disabled]="busy" aria-label="back 10 mm">≪</button>
-          <button (click)="jog(-FINE_MM)"   [disabled]="busy" aria-label="back 1 mm">‹</button>
-          <button (click)="jog(FINE_MM)"    [disabled]="busy" aria-label="forward 1 mm">›</button>
-          <button (click)="jog(COARSE_MM)"  [disabled]="busy" aria-label="forward 10 mm">≫</button>
+          <button (click)="jog(-COARSE_MM)" [disabled]="busy || unhomed()" aria-label="back 10 mm">≪</button>
+          <button (click)="jog(-FINE_MM)"   [disabled]="busy || unhomed()" aria-label="back 1 mm">‹</button>
+          <button (click)="jog(FINE_MM)"    [disabled]="busy || unhomed()" aria-label="forward 1 mm">›</button>
+          <button (click)="jog(COARSE_MM)"  [disabled]="busy || unhomed()" aria-label="forward 10 mm">≫</button>
         </div>
 
-        <button class="go" (click)="capture()" [disabled]="busy">Capture this outlet</button>
-        <p class="err" *ngIf="error">{{ error }}</p>
+        <button class="go" (click)="capture()" [disabled]="busy || unhomed()">Capture this outlet</button>
+        <p class="err" *ngIf="error">{{ error }}<span *ngIf="nodeMode"> The arrows stay locked until it finds home.</span></p>
+        <button class="retry" *ngIf="error && nodeMode && !busy" (click)="retry()"
+                title="Sends the gate to this outlet again, finding home first. Fix what the message names before you tap it.">
+          Try again
+        </button>
         <div class="nav"><button class="back" (click)="stepBack()">← Back</button></div>
       </ng-container>
 
@@ -400,7 +406,7 @@ export class LinearCalibrationComponent implements OnInit, OnDestroy {
 
   // ── phase 5: place each outlet ────────────────────────────────────────────
   async jog(mm: number): Promise<void> {
-    if (this.busy) return;
+    if (this.busy || this.unhomed()) return;
     if (this.nodeMode) { this.busy = true; this.error = ''; await this.goOnNode(this.liveMm + mm); this.busy = false; return; }
     this.busy = true; this.error = '';
     try { await this.api.jog(mm); }
@@ -412,7 +418,7 @@ export class LinearCalibrationComponent implements OnInit, OnDestroy {
    *  well as ours, so Test and the motion status view agree with the topology. */
   async capture(): Promise<void> {
     const st = this.current();
-    if (!st || this.busy) return;
+    if (!st || this.busy || this.unhomed()) return;
     if (this.nodeMode) {
       // Nothing to save on the node: its positions live in the layout, and the next SET carries them.
       this.positions.set(st.id, this.liveMm);
@@ -458,6 +464,16 @@ export class LinearCalibrationComponent implements OnInit, OnDestroy {
   async test(i: number): Promise<void> { await this.driveTo(i); }
 
   redo(): void { this.index = 0; this.error = ''; this.phase = 'positions'; void this.driveTo(0); }
+
+  /** After a move the slider said it could not finish (a failed home, a jam): the same outlet again, finding home first —
+   *  a datum from before the fault is not one to trust. A move that gets there is also what clears the slider's
+   *  move-failed problem; nothing else can, since the board cannot tell that a switch was plugged back in. */
+  retry(): void { this.error = ''; this.firstMove = true; void this.driveTo(this.index); }
+
+  /** On a node, until a move has found home and got there this session — or after one that did not — the slider's
+   *  position means nothing, so the arrows and Capture are locked and Try again is the way on (jeff, 2026-10-17). A jog
+   *  would otherwise set off a home of its own, and a capture would save a number measured from no datum. */
+  unhomed(): boolean { return this.nodeMode && (this.firstMove || !!this.error); }
 
   finish(): void {
     if (this.nodeMode) {

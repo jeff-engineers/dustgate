@@ -16,8 +16,12 @@ Newest first.
 
 ### A slider says why it did not get there, 2026-10-16 (branch `slider-faults`)
 
-- **A slider node's failures reach the brain and the slider page.** LANDED 2026-10-16, host-tested, compiled; NOT yet run
-  on the slider. Found in the shop 2026-10-07: the page sat on "finding home" while the node's serial said
+- **A slider node's failures reach the brain and the slider page.** LANDED 2026-10-16. **Seen on the slider 2026-10-17**:
+  setup with both endstops unplugged came back in 150 ms as "The gate did not get there: finding home, the slider reached
+  the FAR endstop - the home end is set wrong, or a switch is unplugged." on the page and as `move-failed` (an unplugged
+  NC switch reads pressed, and the far one is checked first). The jam reason and the 2 mm rule are not yet seen. The page
+  then got **Try again** (same outlet, finding home first — the only thing that clears the problem, since a board cannot
+  tell a switch was plugged back in) and its arrows and Capture are **locked until a move has found home** (jeff). Found in the shop 2026-10-07: the page sat on "finding home" while the node's serial said
   `[HOME] FAILED — reached the FAR endstop`, and the brain waited out kMoveTimeoutMs (210 s). STATE gains an optional
   `err` (moving:false only, `MAX_STATE_ERR_LEN` ↔ `kMaxStateErrLen`, a new pair): the move ENDED WITHOUT ARRIVING, and
   why. The node sends it for a failed home with a move waiting on it (each of the four ways a sweep fails, in words), for a
