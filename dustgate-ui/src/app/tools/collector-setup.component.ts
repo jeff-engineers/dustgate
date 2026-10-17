@@ -277,20 +277,54 @@ import { CollectorForm, CtlKind, RawEl, SenseKind, fused, readCollector, writeCo
         <div class="lbl" id="sense-lbl">Watched by</div>
         <p class="why">{{ watchWhy }}</p>
 
-        <ng-container *ngIf="fused; else askWatch">
-          <!-- One answer, not a third state to configure. Offering a picker here
-               would invite pairing two plugs to one blower. -->
-          <div class="opt on open">
+        <ng-container *ngIf="plugSwitched; else askWatch">
+          <!-- The same plug by default: a switchable plug in the blower's cord reports its own power. A CLAMP instead
+               when the plug switches a contactor's coil (jeff, 2026-10-17): its own power is then the coil's, a few
+               watts whether or not the blower started. Never a second plug picker here, which would invite two plugs
+               on one blower. -->
+          <button type="button" class="opt" role="radio" aria-labelledby="sense-lbl"
+                  [attr.aria-checked]="form.sense !== 'ct'" [class.on]="form.sense !== 'ct'" [class.open]="form.sense !== 'ct'"
+                  (click)="setSense('none')">
             <span class="radio"></span>
             <span class="body">
-              <span class="name">{{ switchPlugName }}<span class="pill ok">in use</span></span>
-              <span class="detail">The same plug, reporting power back.</span>
+              <span class="name">{{ switchPlugName }}<span class="pill ok">same plug</span></span>
+              <span class="detail">The plug that switches it, reporting power back. Right when the blower's cord is plugged into it.</span>
             </span>
+          </button>
+          <div class="expand" *ngIf="form.sense !== 'ct'">
+            <p class="note">If this plug switches a contactor rather than the blower itself, its power is the contactor's
+              coil — pick a clamp on the blower's feed instead.</p>
           </div>
-          <div class="expand">
-            <p class="note">A switchable plug reports its own power, so there is nothing else to set.</p>
-          </div>
+          <ng-container *ngTemplateOutlet="clampOpt"></ng-container>
         </ng-container>
+
+        <ng-template #clampOpt>
+          <!-- A clamp, for a blower with no plug to pair. Disabled only when
+               NO BOARD HAS ONE — a clamp cannot be discovered the way a plug
+               can, so the board has to declare it (caps.ct), and offering the
+               option with nothing behind it would be a dead end. -->
+          <button type="button" class="opt" role="radio" aria-labelledby="sense-lbl"
+                  [attr.aria-checked]="form.sense === 'ct'"
+                  [class.on]="form.sense === 'ct'"
+                  [class.open]="form.sense === 'ct'"
+                  [disabled]="!clampBoards.length"
+                  (click)="setSense('ct')">
+            <span class="radio"></span>
+            <span class="body">
+              <span class="name">Current clamp<span class="pill soon"
+                    *ngIf="!clampBoards.length">no board has one</span></span>
+              <span class="detail">A clamp on the collector's feed, wired to one of your
+                boards — for 240 V, where there is no plug to pair, and for a blower whose start-up surge
+                trips a smart plug. Nothing switched passes through it.</span>
+            </span>
+          </button>
+          <div class="expand" *ngIf="form.sense === 'ct'">
+            <p class="note">The lead runs from the blower's feed to the board at the collector, above.</p>
+            <p class="note live" [class.on]="live?.on" aria-live="polite"
+               title="Read off the clamp right now. Watts is amps × 120 V: an estimate that assumes a 120 V circuit and reads a motor high.">
+              <span class="ldot"></span>{{ liveText() }}</p>
+          </div>
+        </ng-template>
 
         <ng-template #askWatch>
           <button type="button" class="opt" role="radio" aria-labelledby="sense-lbl"
@@ -320,31 +354,7 @@ import { CollectorForm, CtlKind, RawEl, SenseKind, fused, readCollector, writeCo
             </app-outlet-picker>
           </div>
 
-          <!-- A clamp, for a blower with no plug to pair. Disabled only when
-               NO BOARD HAS ONE — a clamp cannot be discovered the way a plug
-               can, so the board has to declare it (caps.ct), and offering the
-               option with nothing behind it would be a dead end. -->
-          <button type="button" class="opt" role="radio" aria-labelledby="sense-lbl"
-                  [attr.aria-checked]="form.sense === 'ct'"
-                  [class.on]="form.sense === 'ct'"
-                  [class.open]="form.sense === 'ct'"
-                  [disabled]="!clampBoards.length"
-                  (click)="setSense('ct')">
-            <span class="radio"></span>
-            <span class="body">
-              <span class="name">Current clamp<span class="pill soon"
-                    *ngIf="!clampBoards.length">no board has one</span></span>
-              <span class="detail">A clamp on the collector's feed, wired to one of your
-                boards — for 240 V, where there is no plug to pair, and for a blower whose start-up surge
-                trips a smart plug. Nothing switched passes through it.</span>
-            </span>
-          </button>
-          <div class="expand" *ngIf="form.sense === 'ct'">
-            <p class="note">The lead runs from the blower's feed to the board at the collector, above.</p>
-            <p class="note live" [class.on]="live?.on" aria-live="polite"
-               title="Read off the clamp right now. Watts is amps × 120 V: an estimate that assumes a 120 V circuit and reads a motor high.">
-              <span class="ldot"></span>{{ liveText() }}</p>
-          </div>
+          <ng-container *ngTemplateOutlet="clampOpt"></ng-container>
 
           <button type="button" class="opt" role="radio" aria-labelledby="sense-lbl"
                   [attr.aria-checked]="form.sense === 'none'"
@@ -483,6 +493,8 @@ export class CollectorSetupComponent implements OnInit, OnDestroy {
   }
 
   get fused(): boolean { return fused(this.form); }
+  /** A smart plug switches it: "watched by" is that plug, or a clamp (a plug that switches a contactor). */
+  get plugSwitched(): boolean { return this.form.ctl === 'plug' && !!this.form.ctlPlug.ip; }
 
   /** Commanded somehow, watched by nothing: a lost press stays lost. */
   get openLoop(): boolean { return this.form.ctl !== 'none'; }

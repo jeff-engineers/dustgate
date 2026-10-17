@@ -157,7 +157,9 @@ function writePlug(p: PlugForm, extra?: RawEl): RawEl {
  *  (TopologyRuntime::collectorSensorOutlet). Writing the same plug into both
  *  would be two places to change one fact. */
 export function fused(form: CollectorForm): boolean {
-  return form.ctl === 'plug' && !!form.ctlPlug.ip;
+  // NOT when a clamp watches it (2026-10-17): a plug that switches a CONTACTOR reports the coil's power, not the
+  // blower's, so the clamp on the blower's feed is the feedback and the switching plug only switches.
+  return form.ctl === 'plug' && !!form.ctlPlug.ip && form.sense !== 'ct';
 }
 
 /** Read a collector element into the form the sheet edits. */

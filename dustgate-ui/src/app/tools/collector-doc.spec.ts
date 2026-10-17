@@ -202,6 +202,16 @@ const plug = (ip: string, kind: 'shelly' | 'tasmota' = 'shelly') =>
 }
 
 {
+  // A plug that switches a CONTACTOR reports the coil's power, not the blower's (2026-10-17): a clamp watches instead.
+  const f = form({ ctl: 'plug', ctlPlug: plug('10.0.0.10'), sense: 'ct', boardId: 'dustgate-cyclone' });
+  check('a plug-switched collector watched by a clamp is not fused', !fused(f));
+  const el = writeCollector(collector(), f);
+  check('...so it keeps its switch AND writes the clamp',
+     !!(el['control'] as Record<string, unknown>)?.['outlet'] && !!(el['sensor'] as Record<string, unknown>)?.['ct']);
+  check('...and reads back the same way', readCollector(el).sense === 'ct' && readCollector(el).ctl === 'plug');
+}
+
+{
   const el = writeCollector(collector(), form({
     ctl: 'rf', sense: 'plug', sensePlug: plug('10.0.0.11', 'tasmota'),
   }));
@@ -342,10 +352,10 @@ const plug = (ip: string, kind: 'shelly' | 'tasmota' = 'shelly') =>
   check('switching a clamp back to a plug drops the clamp',
     (backToPlug['sensor'] as RawEl)['ct'] === undefined);
 
-  // A SWITCHABLE plug already reports its own power, so the sheet collapses the
-  // watch question entirely — and a clamp must not survive that collapse.
-  const fusedDoc = writeCollector({ id: 'dc', type: 'collector' },
-    form({ ctl: 'plug', ctlPlug: plug('10.0.0.9', 'shelly'), sense: 'ct' }));
+  // A SWITCHABLE plug watching itself (anything but a clamp chosen) writes no sensor: a clamp left in the document from
+  // before must not survive that. A clamp CHOSEN with a switching plug is kept — see the contactor case above.
+  const fusedDoc = writeCollector(collector({ sensor: { ct: { channel: 0 } } }),
+    form({ ctl: 'plug', ctlPlug: plug('10.0.0.9', 'shelly'), sense: 'none' }));
   check('a fused collector writes no sensor at all', fusedDoc['sensor'] === undefined);
 
   // A field written by a newer UI survives a round trip through this one.
