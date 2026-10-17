@@ -274,7 +274,7 @@ export class ServoCalibrationComponent implements OnInit {
     if (s.isClosed) {
       return this.sel.kind === 'servoGate'
         ? `Turn until the valve is fully shut. ${ServoCalibrationComponent.SEAT}`
-        : `Turn until the valve seals both outlets. ${ServoCalibrationComponent.SEAT}`;
+        : `Turn until the valve seals both ports. ${ServoCalibrationComponent.SEAT}`;
     }
     // Name the destination when there is one; an outlet with nothing on it yet still
     // needs its angle, so fall back to the position rather than a blank.

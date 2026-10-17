@@ -250,7 +250,7 @@ import { SERVO_PULSE_BOUNDS, servoPulseRange } from '@shop';
         <div class="row">
           <div>
             <div class="row-label">Reset gate calibration</div>
-            <div class="row-hint">Clears trained positions and outlet mappings. Re-run setup afterward.</div>
+            <div class="row-hint">Clears the gates’ trained positions. Re-run setup afterward.</div>
           </div>
           <button class="danger-btn" [class.confirming]="confirmingReset" (click)="confirmReset()">
             {{ confirmingReset ? 'Tap again to confirm' : 'Start over' }}

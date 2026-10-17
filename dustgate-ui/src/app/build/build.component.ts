@@ -2646,7 +2646,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       // nowhere to come from — only a manifold or a sliding gate can stand there.
       // A duct is exempt: it hangs another leg off the tee rather than replacing it.
       else if (tee && f.kind !== 'duct' && outletsFor(f.kind) < legsHere) {
-        enabled = false; note = `a tee needs ${legsHere} outlets`;
+        enabled = false; note = `a tee needs ${legsHere} ports`;
       }
       // Filling an end turns bare pipe into a PIECE, and a piece obeys the band rule
       // even though the end it replaces did not (bandBlockedBy / isRunEnd). This is
@@ -2689,7 +2689,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       opts.push({ kind: 'delete', label: 'Delete', enabled: !tee,
                   note: tee ? 'remove its legs first' : undefined });
     } else {
-      opts.push({ kind: 'cap', label: 'Cap this outlet', enabled: true });
+      opts.push({ kind: 'cap', label: 'Cap this port', enabled: true });
     }
     return opts;
   }
@@ -3114,7 +3114,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     this.idrag.at = this.toSvg(evt);
     if (this.idrag.moved) {
       const t = this.secondaryPortTargetAt(this.idrag.at);
-      this.wireNote = t ? '' : 'Drop it on a gate, a free outlet or a loose end.';
+      this.wireNote = t ? '' : 'Drop it on a gate, a free port or a loose end.';
     }
   }
   private onInletUp(evt: PointerEvent): void {
@@ -4790,7 +4790,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   /** Why the + is greyed, for the tooltip. Empty when it isn't. */
   addOutletsWhyNot(n: NodeVM): string {
     return this.canAddOutlets(n) ? ''
-      : `A sliding gate tops out at ${SLIDE_MAX_OUTLETS} outlets — every one is its own `
+      : `A sliding gate tops out at ${SLIDE_MAX_OUTLETS} ports — every one is its own `
       + 'flexible duct run radiating from the rack, and past this a trunk with ball '
       + 'valves is cheaper and tidier than a longer rack.';
   }
@@ -4840,7 +4840,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       if (kind === cur) return { kind, label, current: true, enabled: false };
       const cap = this.capacityOf(kind, legs);
       if (legs > cap)
-        return { kind, label, current: false, enabled: false, note: `only ${cap} outlet${cap === 1 ? '' : 's'}` };
+        return { kind, label, current: false, enabled: false, note: `only ${cap} port${cap === 1 ? '' : 's'}` };
       const span = isUnitKind(kind) ? cap : 1;
       for (let i = 0; i < span; i++)
         if (occ.has((at.col + i) + ',' + at.row))
@@ -5138,8 +5138,8 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       return {
         kind: 'warn', cap: true,
         text: one
-          ? `${names} can’t be selected on its own — ${partners} share${(shared[0].with ?? []).length === 1 ? 's' : ''} its outlet with no gate in between, so running it pulls air through ${partners} too. The shop stays off until that’s fixed: put a gate on that leg, move it to a free outlet, or`
-          : `${names} can’t be selected on their own — they share an outlet, so opening one opens the others and suction leaks. The shop stays off until that’s fixed: put a gate on each leg, move them to free outlets, or`,
+          ? `${names} can’t be selected on its own — ${partners} share${(shared[0].with ?? []).length === 1 ? 's' : ''} its port with no gate in between, so running it pulls air through ${partners} too. The shop stays off until that’s fixed: put a gate on that leg, move it to a free port, or`
+          : `${names} can’t be selected on their own — they share a port, so opening one opens the others and suction leaks. The shop stays off until that’s fixed: put a gate on each leg, move them to free ports, or`,
       };
     }
 

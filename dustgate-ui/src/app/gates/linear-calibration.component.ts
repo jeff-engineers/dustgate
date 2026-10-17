@@ -98,6 +98,8 @@ type Phase = 'manifold' | 'home' | 'side' | 'sweep' | 'positions' | 'review';
 
     .warn { font-size: 12px; color: var(--accent); margin: 9px 0 0; line-height: 1.5; }
     .err  { font-size: 12.5px; color: var(--danger); margin: 10px 0 0; line-height: 1.5; }
+    .retry { display: block; width: 100%; margin-top: 10px; background: var(--surface); border: 1px solid var(--danger);
+             color: var(--text); border-radius: var(--radius); padding: 11px; font-size: 14px; }
     .busy { text-align: center; font-size: 13px; color: var(--muted); padding: 10px 0; }
 
     .nav { display: flex; gap: 10px; margin-top: 18px; }
@@ -111,12 +113,12 @@ type Phase = 'manifold' | 'home' | 'side' | 'sweep' | 'positions' | 'review';
       <!-- ── 1. which manifold ────────────────────────────────────────────── -->
       <ng-container *ngIf="phase === 'manifold'">
         <h3>What's the gate built on?</h3>
-        <p class="sub" *ngIf="!nodeMode">This sets the spacing the sweep uses to place your {{ outletCount }} outlets.</p>
-        <p class="sub" *ngIf="nodeMode">This sets where your {{ outletCount }} outlets start. You'll line each one up next.</p>
+        <p class="sub" *ngIf="!nodeMode">This sets the spacing the sweep uses to place your {{ outletCount }} ports.</p>
+        <p class="sub" *ngIf="nodeMode">This sets where your {{ outletCount }} ports start. You'll line each one up next.</p>
         <button class="opt" *ngFor="let m of manifolds" [class.sel]="m.id === model" (click)="model = m.id">
           <div style="flex:1">
             {{ m.label }}
-            <span class="os">{{ m.pitchMm ? (m.pitchMm + ' mm between outlets') : 'place every outlet by hand' }}</span>
+            <span class="os">{{ m.pitchMm ? (m.pitchMm + ' mm between ports') : 'place every port by hand' }}</span>
           </div>
           <span *ngIf="m.id === model">✓</span>
         </button>
@@ -156,7 +158,7 @@ type Phase = 'manifold' | 'home' | 'side' | 'sweep' | 'positions' | 'review';
       <ng-container *ngIf="phase === 'sweep'">
         <h3>Measure the rail</h3>
         <p class="sub">
-          The gate runs end to end once to measure its travel, then spaces your outlets
+          The gate runs end to end once to measure its travel, then spaces your ports
           along it. Takes about half a minute.
         </p>
         <button class="go" (click)="sweep()" [disabled]="busy || sweeping">
@@ -172,7 +174,7 @@ type Phase = 'manifold' | 'home' | 'side' | 'sweep' | 'positions' | 'review';
           <span class="n">{{ index + 1 }} of {{ movable.length }}</span>
         </div>
 
-        <h3>Outlet {{ index + 1 }}<span *ngIf="detail(st)" style="font-weight:400"> — {{ detail(st) }}</span></h3>
+        <h3>Port {{ index + 1 }}<span *ngIf="detail(st)" style="font-weight:400"> — {{ detail(st) }}</span></h3>
         <p class="sub" *ngIf="!nodeMode">
           The sweep already put it about here. Nudge until the opening lines up with the
           port, then capture it.
@@ -182,7 +184,7 @@ type Phase = 'manifold' | 'home' | 'side' | 'sweep' | 'positions' | 'review';
           port, then capture it.
         </p>
         <p class="warn" *ngIf="nodeMode && moving">
-          Moving{{ firstMove ? ' — finding home first: it runs to the end of the rail, then out to the outlet. Keep clear.' : '…' }}
+          Moving{{ firstMove ? ' — finding home first: it runs to the end of the rail, then out to the port. Keep clear.' : '…' }}
         </p>
 
         <div class="readout">{{ liveMm.toFixed(1) }} mm</div>
@@ -195,24 +197,28 @@ type Phase = 'manifold' | 'home' | 'side' | 'sweep' | 'positions' | 'review';
         </div>
 
         <div class="pad">
-          <button (click)="jog(-COARSE_MM)" [disabled]="busy" aria-label="back 10 mm">≪</button>
-          <button (click)="jog(-FINE_MM)"   [disabled]="busy" aria-label="back 1 mm">‹</button>
-          <button (click)="jog(FINE_MM)"    [disabled]="busy" aria-label="forward 1 mm">›</button>
-          <button (click)="jog(COARSE_MM)"  [disabled]="busy" aria-label="forward 10 mm">≫</button>
+          <button (click)="jog(-COARSE_MM)" [disabled]="busy || unhomed()" aria-label="back 10 mm">≪</button>
+          <button (click)="jog(-FINE_MM)"   [disabled]="busy || unhomed()" aria-label="back 1 mm">‹</button>
+          <button (click)="jog(FINE_MM)"    [disabled]="busy || unhomed()" aria-label="forward 1 mm">›</button>
+          <button (click)="jog(COARSE_MM)"  [disabled]="busy || unhomed()" aria-label="forward 10 mm">≫</button>
         </div>
 
-        <button class="go" (click)="capture()" [disabled]="busy">Capture this outlet</button>
-        <p class="err" *ngIf="error">{{ error }}</p>
+        <button class="go" (click)="capture()" [disabled]="busy || unhomed()">Capture this port</button>
+        <p class="err" *ngIf="error">{{ error }}<span *ngIf="nodeMode"> The arrows stay locked until it finds home.</span></p>
+        <button class="retry" *ngIf="error && nodeMode && !busy" (click)="retry()"
+                title="Sends the gate to this port again, finding home first. Fix what the message names before you tap it.">
+          Try again
+        </button>
         <div class="nav"><button class="back" (click)="stepBack()">← Back</button></div>
       </ng-container>
 
       <!-- ── 6. review ────────────────────────────────────────────────────── -->
       <ng-container *ngIf="phase === 'review'">
         <h3>{{ sel.name || 'This gate' }}</h3>
-        <p class="sub">Tap Test to drive back to an outlet and check it before saving.</p>
+        <p class="sub">Tap Test to drive back to a port and check it before saving.</p>
         <div class="row" *ngFor="let s of movable; let i = index">
           <span class="tick">✓</span>
-          <span class="pn">Outlet {{ i + 1 }}</span>
+          <span class="pn">Port {{ i + 1 }}</span>
           <span class="pd">{{ detail(s) }}</span>
           <span class="mm">{{ (positions.get(s.id) ?? 0).toFixed(1) }} mm</span>
           <button (click)="test(i)" [disabled]="busy">Test</button>
@@ -286,7 +292,7 @@ export class LinearCalibrationComponent implements OnInit, OnDestroy {
   get oddWarning(): string {
     const m = MANIFOLDS.find((x) => x.id === this.model);
     if (!m?.evenOnly || this.outletCount % 2 === 0) return '';
-    return `A Rockler manifold comes in pairs, so ${this.outletCount} outlets won't line up. `
+    return `A Rockler manifold comes in pairs, so ${this.outletCount} ports won't line up. `
       + 'Go back to the layout and add or remove one before setting this up.';
   }
 
@@ -400,7 +406,7 @@ export class LinearCalibrationComponent implements OnInit, OnDestroy {
 
   // ── phase 5: place each outlet ────────────────────────────────────────────
   async jog(mm: number): Promise<void> {
-    if (this.busy) return;
+    if (this.busy || this.unhomed()) return;
     if (this.nodeMode) { this.busy = true; this.error = ''; await this.goOnNode(this.liveMm + mm); this.busy = false; return; }
     this.busy = true; this.error = '';
     try { await this.api.jog(mm); }
@@ -412,7 +418,7 @@ export class LinearCalibrationComponent implements OnInit, OnDestroy {
    *  well as ours, so Test and the motion status view agree with the topology. */
   async capture(): Promise<void> {
     const st = this.current();
-    if (!st || this.busy) return;
+    if (!st || this.busy || this.unhomed()) return;
     if (this.nodeMode) {
       // Nothing to save on the node: its positions live in the layout, and the next SET carries them.
       this.positions.set(st.id, this.liveMm);
@@ -439,7 +445,7 @@ export class LinearCalibrationComponent implements OnInit, OnDestroy {
       // anyone.
       this.error = (e as { error?: { error?: string } })?.error?.error
         ?? (e instanceof Error ? e.message : null)
-        ?? 'Couldn\'t save that position — it may be too close to another outlet.';
+        ?? 'Couldn\'t save that position — it may be too close to another port.';
       this.busy = false;
       return;
     }
@@ -458,6 +464,16 @@ export class LinearCalibrationComponent implements OnInit, OnDestroy {
   async test(i: number): Promise<void> { await this.driveTo(i); }
 
   redo(): void { this.index = 0; this.error = ''; this.phase = 'positions'; void this.driveTo(0); }
+
+  /** After a move the slider said it could not finish (a failed home, a jam): the same outlet again, finding home first —
+   *  a datum from before the fault is not one to trust. A move that gets there is also what clears the slider's
+   *  move-failed problem; nothing else can, since the board cannot tell that a switch was plugged back in. */
+  retry(): void { this.error = ''; this.firstMove = true; void this.driveTo(this.index); }
+
+  /** On a node, until a move has found home and got there this session — or after one that did not — the slider's
+   *  position means nothing, so the arrows and Capture are locked and Try again is the way on (jeff, 2026-10-17). A jog
+   *  would otherwise set off a home of its own, and a capture would save a number measured from no datum. */
+  unhomed(): boolean { return this.nodeMode && (this.firstMove || !!this.error); }
 
   finish(): void {
     if (this.nodeMode) {
