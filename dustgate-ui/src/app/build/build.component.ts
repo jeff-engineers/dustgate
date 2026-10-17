@@ -5267,11 +5267,11 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     this.airflowErrors = [];
     await this.save();
     if (!this.saveError && !this.airflowErrors.length) {
-      this.saveNote = `Put a closed gate on ${n} leaking outlet${n === 1 ? '' : 's'} — wire a servo to each, or delete the tool.`;
+      this.saveNote = `Put a closed gate on ${n} leaking port${n === 1 ? '' : 's'} — wire a servo to each, or delete the tool.`;
     }
   }
   /**
-   * Put a gate on every leaking outlet — asking again after each one.
+   * Put a gate on every leaking port — asking again after each one.
    *
    * It used to plan the whole set against the UNTOUCHED document: collect every
    * issue, expand each co-open pair to all its partners, then fit a gate to each.

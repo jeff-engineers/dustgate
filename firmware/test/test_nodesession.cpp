@@ -74,6 +74,20 @@ int main() {
     ok("an unparseable stamp falls back to differs", topo::updateDue("nogit", "8772c43 1004-2108"));
     ok("no OTA fields while nothing is updating", out.find("\"ota\"") == std::string::npos);
   }
+  {
+    // A board not heard from since the brain started has NO caps in its entry, not zeros: `linear: 0` would tell the app
+    // a switched-off slider is a servo board (2026-10-17).
+    Fx f;
+    DynamicJsonDocument d(2048); topo::NodeImageView iv;
+    topo::writeNodeEntry(d.createNestedArray("nodes"), f.s, "n1", "n1.local", "Slider", iv);
+    std::string out; serializeJson(d, out);
+    ok("a board never heard from reports no caps at all", out.find("\"caps\"") == std::string::npos);
+    f.up();
+    DynamicJsonDocument d2(2048);
+    topo::writeNodeEntry(d2.createNestedArray("nodes"), f.s, "n1", "n1.local", "Slider", iv);
+    std::string out2; serializeJson(d2, out2);
+    ok("...and its WELCOME brings them", out2.find("\"caps\":{\"servos\":2,\"linear\":0") != std::string::npos);
+  }
 
   printf("\nS2 capabilities absent mean NO\n");
   {
