@@ -100,6 +100,10 @@
 // ─────────────────────────────────────────────────────────────────────────
 const DECISIONS = [
   // ── newest ───────────────────────────────────────────────────────────
+  { id: 'D-83', date: '2026-10-17', area: 'ui', status: 'standing',
+    what: 'Where air leaves a gate or a junction it is a PORT, never an \u201coutlet\u201d; \u201coutlet\u201d means only the smart plug',
+    why: 'Jeff, 2026-10-17: \u201coutlet\u201d was used for both, and on a slider page that also talks about plugs it is confusing. A sliding gate has ports 1\u2013N, a manifold seals both ports, a tee needs N ports, two tools can share a port; the plug screens keep \u201coutlet\u201d. Code identifiers (outletCount, SLIDE_MAX_OUTLETS, outletXs) keep their names: only the words a person reads changed.',
+    where: 'linear-calibration \u00b7 servo-calibration \u00b7 build.component (+.html) \u00b7 live.component \u00b7 tool-setup \u00b7 settings' },
   { id: 'D-82', date: '2026-10-11', area: 'ui', status: 'standing',
     what: 'On the canvas, board ports are numbered from 1, a board with a clamp shows a CT jack the clamp lead leaves from, and a Pi brain is not drawn',
     why: 'Jeff, 2026-10-11: \u201cnormal people don\u2019t count from zero\u201d \u2014 the port strip and the gate tabs read 1 and 2 (the layout, the wire and the firmware keep channels 0 and 1). The dotted clamp lead used to leave servo port 0, a port it has nothing to do with; it now leaves a round CT jack to the right of the servo ports, filled in the lead\u2019s blue while it watches something, and goes round its own board when the tool is above it. A board shows the jack when a clamp is plugged in or the layout uses one. A Pi brain has no pads, so the empty \u201cShop Brain\u201d with two ports is no longer drawn (unless a gate names it, which is then the mistake to see).',

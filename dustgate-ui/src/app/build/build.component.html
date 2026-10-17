@@ -431,11 +431,11 @@
 <div class="inspector" *ngIf="inspectedPiece() as ins" [style.left]="inspectorPos().left" [style.top]="inspectorPos().top">
   <span class="meta" *ngIf="ins.glyph === 'slidingGate'">
     <button class="step" (click)="changeOutlets(ins.id, -2)" [disabled]="!canRemoveOutlets(ins)">−</button>
-    {{ ins.branchCount }} outlets
+    {{ ins.branchCount }} ports
     <button class="step" (click)="changeOutlets(ins.id, 2)"
             [disabled]="!canAddOutlets(ins)" [title]="addOutletsWhyNot(ins)">+</button>
   </span>
-  <span class="meta" *ngIf="ins.glyph === 'manifold'">2 outlets</span>
+  <span class="meta" *ngIf="ins.glyph === 'manifold'">2 ports</span>
 </div>
 
 <!-- ── the plug tray ──────────────────────────────────────────────────────

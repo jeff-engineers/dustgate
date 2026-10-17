@@ -1139,6 +1139,9 @@ would reach first — and no gate has ever moved for it.
 Things that cannot be settled at a desk: they need the actual machines, the actual plugs on the shop's network, or the whole shop
 running at once. Added 2026-10-06 from the cleanup and the features built after the bench session. Delete an item once it has run.
 
+- **The slider page's Try again and lock (2026-10-17, PR #33 — deployed, NOT tested: the slider broke a limit-switch wire
+  first).** Endstops unplugged → setup fails with the reason, the arrows and Capture are greyed, Try again appears; plug
+  them back, Try again → it homes, reaches port 1, the controls unlock and the slider's `move-failed` problem clears.
 - **Set up the slider on its node from the app (2026-10-07).** `/gates` → the slider → pick the manifold → each outlet: the
   first move homes the gate (it runs to the end and back), then jog, capture, Test from the review and from the Gates list.
   Then switch on a tool on that slider and confirm the gate goes to its captured outlet. Host-tested only (`test_slider_setup.cpp`).
