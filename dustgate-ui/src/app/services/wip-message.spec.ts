@@ -112,9 +112,9 @@ const says = (message: string) => humaniseIssue(shop(), { message });
      says('system "s1": exactly one collector required (found 2)'),
      'Main line: This system has 2 dust collectors. Each system has exactly one.');
 
-  eq('an outlet with nothing on it',
+  eq('a port with nothing on it',
      says('system "s1": branch "b1" role tool but nothing wired to it'),
-     'Main line: A gate has an outlet with nothing on it. Put a tool there, or cap it.');
+     'Main line: A gate has a port with nothing on it. Put a tool there, or cap it.');
 
   // Channels are 0-based in the document and 1-based everywhere a person sees
   // them — the picker says "Servo 1". Off by one here would be worse than the id.

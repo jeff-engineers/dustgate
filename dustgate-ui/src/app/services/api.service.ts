@@ -1,4 +1,5 @@
 import { Injectable } from '@angular/core';
+import { failureReason, reportFailure } from './failure';
 import { HttpClient, HttpErrorResponse, HttpHeaders } from '@angular/common/http';
 import type { SerialChunk } from '../boards/serial-log';
 import { BehaviorSubject, Observable, Subject, filter, firstValueFrom, take } from 'rxjs';
@@ -297,6 +298,9 @@ export class JogRefusedError extends Error {
   constructor(reason: string) { super(reason); this.name = 'JogRefusedError'; }
 }
 
+/** How long a request waits for the API key before saying the brain didn't answer. */
+const API_KEY_WAIT_MS = 8000;
+
 @Injectable({ providedIn: 'root' })
 export class ApiService {
 
@@ -367,6 +371,21 @@ export class ApiService {
    * that fetches straight out of ngOnInit would otherwise race it and get a 401 —
    * which reads as "no shop configured" rather than "not ready yet". Await this first.
    */
+  /**
+   * whenReady(), but not forever (2026-10-17). The request helpers wait for the key so a page opened cold cannot 401
+   * itself — but a brain that is down at that moment never sends one, and an unbounded wait left screens hanging with
+   * nothing said. After API_KEY_WAIT_MS it fails the way a dropped connection does (status 0), which every screen
+   * already says as "the shop brain didn't answer".
+   */
+  private async keyOrNoAnswer(): Promise<void> {
+    if (this.ready$.value) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const late = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(Object.assign(new Error('the shop brain did not answer'), { status: 0 })), API_KEY_WAIT_MS);
+    });
+    try { await Promise.race([this.whenReady(), late]); } finally { clearTimeout(timer); }
+  }
+
   whenReady(): Promise<void> {
     if (this.ready$.value) return Promise.resolve();
     return firstValueFrom(this.ready$.pipe(filter(Boolean), take(1))).then(() => undefined);
@@ -430,28 +449,28 @@ export class ApiService {
   // ahead of /api/info, got a 401, and showed its fallback — Settings put the 400–2600 µs defaults on screen over a
   // shop running 300–2800 (2026-10-16). Fixing it here rather than in each page means a new page cannot reintroduce it.
   private async post<T = { ok: boolean }>(path: string, body: unknown = {}): Promise<T> {
-    await this.whenReady();
+    await this.keyOrNoAnswer();
     return firstValueFrom(
       this.http.post<T>(`${this.baseUrl}${path}`, body, { headers: this.headers() })
     );
   }
 
   private async get<T>(path: string): Promise<T> {
-    await this.whenReady();
+    await this.keyOrNoAnswer();
     return firstValueFrom(
       this.http.get<T>(`${this.baseUrl}${path}`, { headers: this.headers() })
     );
   }
 
   private async put<T = { ok: boolean }>(path: string, body: unknown): Promise<T> {
-    await this.whenReady();
+    await this.keyOrNoAnswer();
     return firstValueFrom(
       this.http.put<T>(`${this.baseUrl}${path}`, body, { headers: this.headers() })
     );
   }
 
   private async delete<T = { ok: boolean }>(path: string): Promise<T> {
-    await this.whenReady();
+    await this.keyOrNoAnswer();
     return firstValueFrom(
       this.http.delete<T>(`${this.baseUrl}${path}`, { headers: this.headers() })
     );
@@ -611,7 +630,7 @@ export class ApiService {
     try {
       return await this.post<OutletNameResult>('/api/outlets/name',
         { ip, label, ...(takeover ? { takeover: true } : {}) });
-    } catch { return { ok: false, error: 'the device could not be reached' }; }
+    } catch (e) { return { ok: false, error: reportFailure('Plugs · rename', e, failureReason(e)) }; }
   }
 
   /**
@@ -632,7 +651,7 @@ export class ApiService {
    */
   async takeoverOutlet(ip: string): Promise<{ ok: boolean; error?: string }> {
     try { return await this.post<{ ok: boolean; error?: string }>('/api/outlets/takeover', { ip }); }
-    catch { return { ok: false, error: 'the device could not be reached' }; }
+    catch (e) { return { ok: false, error: reportFailure('Plugs · take over', e, failureReason(e)) }; }
   }
 
   /**
@@ -645,7 +664,7 @@ export class ApiService {
    */
   async releaseOutlet(ip: string): Promise<OutletReleaseResult> {
     try { return await this.post<OutletReleaseResult>('/api/outlets/release', { ip }); }
-    catch { return { ok: false, released: false, error: 'the device could not be reached' }; }
+    catch (e) { return { ok: false, released: false, error: reportFailure('Plugs · release', e, failureReason(e)) }; }
   }
 
   /**
@@ -744,7 +763,7 @@ export class ApiService {
   }
 
   async readSerial(from: number): Promise<SerialChunk> {
-    await this.whenReady();
+    await this.keyOrNoAnswer();
     const res = await firstValueFrom(this.http.get(`${this.baseUrl}/api/serial?from=${from}`,
       { headers: this.headers(), observe: 'response', responseType: 'text' }));
     const h = res.headers;

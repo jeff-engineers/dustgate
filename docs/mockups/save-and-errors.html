@@ -1,0 +1,348 @@
+<meta charset="utf-8">
+<title>Save and Error Messages</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+
+<style>
+  /* Single dark theme on purpose: this is the app's own look (dustgate-ui/src/styles.css), and a mockup of a
+     screen should look like the screen. Layout: a phone frame on the left with a state switcher, the reasoning
+     on the right; below, the audit as one table per pattern. */
+  :root {
+    --bg: #111; --surface: #1e1e1e; --raised: #262626; --border: #2e2e2e;
+    --text: #e8e8e8; --muted: #8a8a86; --accent: #f0a500; --success: #3cbe6e;
+    --danger: #d94444; --warn: #e0a030; --radius: 14px;
+    --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+    color-scheme: dark;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); margin: 0;
+         padding-block: 22px 72px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+         font-family: system-ui, -apple-system, sans-serif; font-size: 15px; line-height: 1.5; }
+  .wrap { max-width: 1080px; margin: 0 auto; display: flex; flex-direction: column; gap: 30px; }
+  h1 { font-size: 22px; font-weight: 600; margin: 6px 0 0; letter-spacing: -0.01em; text-wrap: balance; }
+  h2 { font-size: 16px; font-weight: 600; margin: 0; text-wrap: balance; }
+  h3 { font-size: 14px; font-weight: 600; margin: 0; }
+  p { margin: 0; }
+  .lede { color: var(--muted); font-size: 14px; max-width: 70ch; margin-top: 6px; }
+  .eyebrow { font-size: 11px; letter-spacing: .09em; text-transform: uppercase; color: var(--muted); }
+  code { font-family: var(--mono); font-size: .9em; }
+  section { display: flex; flex-direction: column; gap: 14px; }
+
+  .pair { display: grid; grid-template-columns: 360px 1fr; gap: 26px; align-items: start; }
+  @media (max-width: 820px) { .pair { grid-template-columns: 1fr; } }
+  .pair > * { min-width: 0; }
+
+  /* the phone */
+  .phone { background: #0b0b0b; border: 1px solid var(--border); border-radius: 28px; padding: 14px; }
+  .canvas { position: relative; height: 330px; border-radius: 16px; background:
+            radial-gradient(circle at 1px 1px, #232323 1px, transparent 0) 0 0 / 22px 22px, #151515; overflow: hidden; }
+  .glyph { position: absolute; border: 2px solid #3a3a3a; border-radius: 10px; background: #1b1b1b; font-size: 11px;
+           color: var(--muted); padding: 6px 8px; }
+  .glyph.hot { border-color: var(--danger); box-shadow: 0 0 0 4px rgba(217,68,68,.18); color: var(--text); }
+  .duct { position: absolute; background: #333; }
+  .bar { margin-top: 12px; border-radius: 12px; padding: 11px 12px; display: flex; flex-direction: column; gap: 8px;
+         background: var(--surface); border: 1px solid var(--border); font-size: 13.5px; }
+  .bar.warn { border-color: rgba(224,160,48,.55); background: rgba(224,160,48,.08); }
+  .bar.bad  { border-color: rgba(217,68,68,.55);  background: rgba(217,68,68,.08); }
+  .bar.ok   { border-color: rgba(60,190,110,.45); background: rgba(60,190,110,.07); }
+  .bar .head { font-weight: 600; }
+  .bar .sub { color: var(--muted); font-size: 12.5px; }
+  .acts { display: flex; gap: 8px; flex-wrap: wrap; }
+  .btn { border-radius: 10px; padding: 8px 12px; font: inherit; font-size: 13px; cursor: pointer;
+         background: var(--raised); color: var(--text); border: 1px solid var(--border); }
+  .btn.primary { background: var(--accent); color: #1a1200; border-color: var(--accent); font-weight: 600; }
+  .btn:focus-visible, .tab:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .savebtn { position: absolute; right: 10px; top: 10px; }
+
+  .tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+  .tab { border-radius: 999px; padding: 5px 11px; font: inherit; font-size: 12.5px; cursor: pointer;
+         background: transparent; color: var(--muted); border: 1px solid var(--border); }
+  .tab[aria-pressed="true"] { color: var(--text); border-color: var(--accent); background: rgba(240,165,0,.1); }
+
+  .notes { display: flex; flex-direction: column; gap: 10px; font-size: 14px; max-width: 64ch; }
+  .notes .was { font-size: 13px; color: var(--muted); border-left: 3px solid var(--danger); padding-left: 10px; }
+  .notes .was b { color: var(--text); font-weight: 500; }
+  .notes ul { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; }
+
+  .sheet { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px;
+           display: flex; flex-direction: column; gap: 10px; max-width: 360px; }
+  .sheet h3 { font-size: 15px; }
+  .sheet .sub { color: var(--muted); font-size: 13px; }
+
+  /* audit */
+  .tablewrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 12px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; min-width: 760px; }
+  th { text-align: left; font-weight: 600; font-size: 11px; letter-spacing: .07em; text-transform: uppercase;
+       color: var(--muted); padding: 9px 12px; border-bottom: 1px solid var(--border); background: #161616; }
+  td { padding: 9px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  td.where { font-family: var(--mono); font-size: 11.5px; color: var(--muted); white-space: nowrap; }
+  td.now { color: #e6a3a3; }
+  td.to { color: #b9e6c8; }
+  .sev { display: inline-block; font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase; padding: 1px 7px;
+         border-radius: 999px; border: 1px solid var(--border); color: var(--muted); margin-left: 6px; }
+  .sev.hi { color: var(--danger); border-color: rgba(217,68,68,.6); }
+  .pattern { display: flex; flex-direction: column; gap: 8px; }
+  .pattern > p { color: var(--muted); font-size: 13.5px; max-width: 76ch; }
+
+  pre { margin: 0; font-family: var(--mono); font-size: 12px; line-height: 1.55; background: #0b0b0b;
+        border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; overflow-x: auto; color: #cfcfcf; }
+  pre .w { color: var(--warn); } pre .d { color: var(--muted); }
+  .qs { display: grid; gap: 10px; font-size: 14px; max-width: 76ch; }
+  .qs div { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; }
+  .qs b { display: block; margin-bottom: 3px; }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="wrap">
+  <header>
+    <span class="eyebrow">DustGate · mockup · 2026-10-17 · for review before building</span>
+    <h1>Save and Error Messages</h1>
+    <p class="lede">The canvas's "Saved here, but the controller won't take it yet" said three wrong things at once: it wasn't saved, the
+      shop brain hadn't refused anything, and the reason was written for a developer. A search of the app turned up the same
+      faults in about twenty other places. This page proposes one way to say each of them, and one place for the technical
+      detail to go instead: the browser console.</p>
+  </header>
+
+  <!-- ── 1. the save banner ─────────────────────────────────────────────── -->
+  <section>
+    <h2>1 · The canvas's save banner</h2>
+    <div class="pair">
+      <div>
+        <div class="tabs" role="group" aria-label="Banner state">
+          <button class="tab" data-s="incomplete" aria-pressed="true">Can't save yet</button>
+          <button class="tab" data-s="refused" aria-pressed="false">Brain said no</button>
+          <button class="tab" data-s="offline" aria-pressed="false">Brain didn't answer</button>
+          <button class="tab" data-s="saved" aria-pressed="false">Saved</button>
+        </div>
+        <div class="phone">
+          <div class="canvas" aria-hidden="true">
+            <div class="duct" style="left:58px;top:60px;width:3px;height:150px"></div>
+            <div class="duct" style="left:58px;top:208px;width:150px;height:3px"></div>
+            <div class="glyph" style="left:20px;top:28px">Cyclone</div>
+            <div class="glyph" id="g-slider" style="left:150px;top:190px">Sliding gate</div>
+            <div class="glyph" style="left:205px;top:262px">Drill press</div>
+            <button class="btn primary savebtn" tabindex="-1">Save</button>
+          </div>
+          <div class="bar" id="bar" aria-live="polite"></div>
+        </div>
+      </div>
+      <div class="notes" id="notes"></div>
+    </div>
+  </section>
+
+  <!-- ── 2. leaving with changes ────────────────────────────────────────── -->
+  <section>
+    <h2>2 · Leaving with changes that aren't saved</h2>
+    <div class="pair">
+      <div class="sheet" role="dialog" aria-label="Leave without saving">
+        <h3>Leave without saving?</h3>
+        <p class="sub">Your changes to the layout haven't reached the shop brain. If you leave, they're gone.</p>
+        <div class="acts"><button class="btn">Stay</button><button class="btn">Leave and lose them</button></div>
+      </div>
+      <div class="notes">
+        <p class="was">Today: <b>nothing.</b> Leaving the canvas or reloading drops an unsaved draft without a word, which is exactly
+          what "Saved here" let you believe wouldn't happen.</p>
+        <p>An in-app sheet when you tap away to another screen; the browser's own "Leave site?" for a reload or a closed tab. Shown
+          only when the canvas really has unsaved changes.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── 3. the canvas can't load ───────────────────────────────────────── -->
+  <section>
+    <h2>3 · The canvas can't read your layout <span class="sev hi">can lose a shop</span></h2>
+    <div class="pair">
+      <div class="phone">
+        <div class="canvas" aria-hidden="true" style="height:150px"></div>
+        <div class="bar bad">
+          <span class="head">Couldn't load your layout from the shop brain.</span>
+          <span class="sub">It didn't answer. Nothing has been changed, and editing is off until it loads, so nothing can be saved over it.</span>
+          <div class="acts"><button class="btn primary">Try again</button></div>
+        </div>
+      </div>
+      <div class="notes">
+        <p class="was">Today: <b>a blank shop.</b> Any failure to read the layout (the brain rebooting, a WiFi blip) is treated like a
+          brand-new brain with nothing saved, and the canvas offers an empty collector to build on. Add one gate and press Save, and the
+          real layout is replaced.</p>
+        <p>Only a brain that answers <em>"no layout yet"</em> (HTTP 404) gets the blank starting shop. Anything else gets this, and the
+          canvas stays read-only until a retry works. The Live screen has the same confusion in a milder form: it says "No shop
+          configured yet" when the brain just didn't answer.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── 4. the audit ───────────────────────────────────────────────────── -->
+  <section>
+    <h2>4 · Every other message that says the wrong thing</h2>
+    <p class="lede" style="margin-top:0">From a read of every error handler in the app (91 of them). Grouped by the mistake, because the
+      fix is one shared helper per mistake, not twenty one-off rewrites.</p>
+
+    <div class="pattern">
+      <h3>A. "Couldn't reach" when the brain did answer, and said why</h3>
+      <p>The commonest. The handler can't tell "no answer" from "answered with a refusal", so every refusal reads as a network problem
+        and sends you checking WiFi. The brain's own reason is thrown away. Fix: one helper that says "didn't answer" only when it
+        didn't, and otherwise passes the brain's reason on.</p>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Where</th><th>Says now</th><th>Would say</th></tr></thead>
+        <tbody>
+          <tr><td class="where">canvas · Save</td><td class="now">Couldn't reach the controller — your layout is kept here.</td><td class="to">Not saved — the shop brain refused it: <i>its reason</i>. / Not saved — the shop brain didn't answer.</td></tr>
+          <tr><td class="where">canvas · Import</td><td class="now">Imported here, but couldn't reach the controller to store it.</td><td class="to">Same two as Save.</td></tr>
+          <tr><td class="where">canvas · unpair a plug</td><td class="now">Couldn't reach the controller — X is still paired.</td><td class="to">X is still paired — <i>the reason</i>.</td></tr>
+          <tr><td class="where">Tools · save a tool</td><td class="now">Couldn't save that tool — is the controller still answering?</td><td class="to">Couldn't save that tool — <i>the reason</i>. Your changes are still here; Save again.</td></tr>
+          <tr><td class="where">Tools · save the collector</td><td class="now">Couldn't save that collector — is the controller still answering?</td><td class="to">Same pattern.</td></tr>
+          <tr><td class="where">Gates · save setup</td><td class="now">Couldn't save the setup — is the brain still answering?</td><td class="to">Same pattern.</td></tr>
+          <tr><td class="where">Plugs · save</td><td class="now">Couldn't save the layout. Is the controller still answering?</td><td class="to">Same pattern.</td></tr>
+          <tr><td class="where">Settings · any save</td><td class="now">Could not save. Check connection and try again.</td><td class="to">Same pattern.</td></tr>
+          <tr><td class="where">Slider page · home, measure, jog</td><td class="now">(the "can't reach" line, for every failure)</td><td class="to">The brain's reason ("a tool is running — wait until the shop is quiet"), or "didn't answer".</td></tr>
+          <tr><td class="where">Boards · pair, rename, update…</td><td class="now">Couldn't save — check the controller is reachable. (the fallback, for actions that aren't saves)</td><td class="to">Couldn't <i>pair/rename/update</i> X — <i>the reason</i>.</td></tr>
+          <tr><td class="where">Boards · scan</td><td class="now">Scan failed — check the controller is connected.</td><td class="to">Same helper.</td></tr>
+          <tr><td class="where">Plugs · ping, rename, release</td><td class="now">the device could not be reached</td><td class="to">The plug's or the brain's reason, naming which of the two failed.</td></tr>
+        </tbody>
+      </table></div>
+    </div>
+
+    <div class="pattern">
+      <h3>B. A failed request shown as a fact about the shop</h3>
+      <p>A list fails to load, the handler leaves it empty, and the screen then reports the empty list as the truth. Fix: keep "didn't
+        load" apart from "loaded, and empty", and say the first.</p>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Where</th><th>Says now</th><th>Would say</th></tr></thead>
+        <tbody>
+          <tr><td class="where">collector sheet · clamp</td><td class="now">Current clamp — <i>no board has one</i></td><td class="to">Couldn't ask the boards — try again.</td></tr>
+          <tr><td class="where">collector sheet · board</td><td class="now">No paired board has a transmitter, bin input or clamp input.</td><td class="to">Same.</td></tr>
+          <tr><td class="where">Live · first load</td><td class="now">No shop configured yet. Set up your shop →</td><td class="to">Can't reach the shop brain — retrying.</td></tr>
+          <tr><td class="where">Gates · board links</td><td class="now">(every board drawn as not linked)</td><td class="to">Board status unknown — the brain didn't say.</td></tr>
+          <tr><td class="where">canvas · load <span class="sev hi">hazard</span></td><td class="now">(a blank shop — see 3)</td><td class="to">Couldn't load your layout… (see 3)</td></tr>
+        </tbody>
+      </table></div>
+    </div>
+
+    <div class="pattern">
+      <h3>C. A state described as more done than it is</h3>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Where</th><th>Says now</th><th>Would say</th></tr></thead>
+        <tbody>
+          <tr><td class="where">canvas · banner</td><td class="now">Saved here, but the controller won't take it yet — …</td><td class="to">Not saved — … (see 1)</td></tr>
+        </tbody>
+      </table></div>
+    </div>
+
+    <div class="pattern">
+      <h3>D. Words for the code, not for the shop</h3>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Where</th><th>Says now</th><th>Would say</th></tr></thead>
+        <tbody>
+          <tr><td class="where">canvas · a board's type</td><td class="now">X is a servo board — it drives the PWM bank, not a rack. A sliding gate needs a board flashed for the slider.</td><td class="to">X is set up for ball valves, not a sliding gate. If it really is the slider's board, power it on so it can say so.</td></tr>
+          <tr><td class="where">canvas · the other way</td><td class="now">X is a sliding-gate board — it drives one rack over a serial bus, not servos.</td><td class="to">X drives a sliding gate, not ball valves. Move its valves to another board.</td></tr>
+          <tr><td class="where">canvas · gate ports</td><td class="now">A gate has an outlet with nothing on it…</td><td class="to">A gate has a port with nothing on it… (D-83: outlet means the plug)</td></tr>
+        </tbody>
+      </table></div>
+    </div>
+
+    <div class="pattern">
+      <h3>E. Silent, with nothing in the console</h3>
+      <p>About thirty handlers swallow the error completely: background polls (right to stay quiet on screen) but also one-off loads.
+        None leaves anything to debug with. Fix: section 5.</p>
+    </div>
+  </section>
+
+  <!-- ── 5. the console ─────────────────────────────────────────────────── -->
+  <section>
+    <h2>5 · The detail goes to the console</h2>
+    <div class="pair">
+      <pre aria-label="Example console output"><span class="w">[DustGate] canvas · save: refused (HTTP 400)</span>
+  shown:   Not saved — the shop brain refused it: systems not an array.
+  request: PUT /api/topology
+  answer:  {"error":"invalid topology","errors":[...]}
+<span class="w">[DustGate] canvas · save: not saved (validation, 1 issue)</span>
+  shown:   Not saved — the sliding gate's board is set up for ball valves…
+  issues:  [{code:"controller", ref:"dustgate-slider",
+             message:"board \"dustgate-slider\" is set up as a servo board but has a sliding gate on it"}]
+<span class="d">[DustGate] Live · poll: no answer (3rd in a row) — said once, then quiet until it recovers</span></pre>
+      <div class="notes">
+        <p>One helper, used by every handler above: it writes the context, the friendly text it showed, and the raw request and answer
+          (or the validator's own issues) as a <code>console.warn</code>, then hands back the friendly text for the screen.</p>
+        <ul>
+          <li>Background polls log the first failure and the recovery, not every tick, so the console stays readable.</li>
+          <li>Every line starts <code>[DustGate]</code>, so one filter shows them all.</li>
+          <li>Nothing secret goes in: the API key is a request header, and headers aren't logged.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── 6. questions ───────────────────────────────────────────────────── -->
+  <section>
+    <h2>6 · Decide before building</h2>
+    <div class="qs">
+      <div><b>Should an unsaved canvas survive a reload?</b>Keeping the draft in the browser would make "your changes stay" true even
+        across a refresh. Proposed: not yet. Warn on leave (2) instead; a stored draft can quietly go stale against the real layout.</div>
+      <div><b>Should a board's last-known type live in the layout?</b>It already does (<code>drives</code>); today's fix stopped a
+        switched-off board from wiping it. Proposed: nothing more.</div>
+      <div><b>One banner for all screens, or each its own?</b>Proposed: the canvas gets the banner above; the other screens keep their
+        inline error lines, rewritten through the shared helper (A, B).</div>
+    </div>
+  </section>
+</div>
+
+<script>
+  const STATES = {
+    incomplete: {
+      cls: 'warn', hot: true,
+      head: 'Not saved — the sliding gate’s board is set up for ball valves.',
+      sub: 'If dustgate-slider really is the slider’s board, power it on so it can say so, then save. Your changes stay on this screen until you fix this or leave it.',
+      acts: [['Show me', 'primary'], ['Discard my changes', '']],
+      was: 'Saved here, but the controller won’t take it yet — Dust collector 2: dustgate-slider is a servo board — it drives the PWM bank, not a rack. A sliding gate needs a board flashed for the slider.',
+      notes: ['<b>"Not saved"</b> first, because that is the fact that matters. The validator’s own sentence goes to the console (5).',
+              '<b>Show me</b> pans to and outlines the pieces the problem names. The canvas already collects them (<code>wipRefs</code>), but only a hint draws them today.',
+              '<b>Discard my changes</b> reloads the layout from the brain: the honest version of what a refresh does now.',
+              'The system name is added only when a shop has more than one, as now.'],
+    },
+    refused: {
+      cls: 'bad', hot: false,
+      head: 'Not saved — the shop brain refused it: a tool is running.',
+      sub: 'Wait until the shop is quiet, then Save again. Your changes are kept on this screen.',
+      acts: [['Save again', 'primary'], ['Discard my changes', '']],
+      was: 'Couldn’t reach the controller — your layout is kept here.',
+      notes: ['The brain <b>did</b> answer. Today any failure reads as "couldn’t reach", which sends you to check WiFi for a refusal that came with a reason.',
+              'The brain’s own reason, as it gave it. Where it gives a list (a layout it refuses), the first item, translated like the validator’s.'],
+    },
+    offline: {
+      cls: 'bad', hot: false,
+      head: 'Not saved — the shop brain didn’t answer.',
+      sub: 'It may be restarting. Your changes are kept on this screen; Save again in a moment.',
+      acts: [['Save again', 'primary'], ['Discard my changes', '']],
+      was: 'Couldn’t reach the controller — your layout is kept here.',
+      notes: ['Only when there really was no answer (no HTTP status at all).',
+              '"Kept on this screen" rather than "kept here": it is true only until you leave, and section 2 covers leaving.'],
+    },
+    saved: {
+      cls: 'ok', hot: false,
+      head: 'Saved.',
+      sub: 'The shop brain has the new layout.',
+      acts: [],
+      was: 'Saved.',
+      notes: ['Unchanged, apart from saying who has it. Fades after a few seconds, as now.'],
+    },
+  };
+  const bar = document.getElementById('bar');
+  const notes = document.getElementById('notes');
+  const hot = document.getElementById('g-slider');
+  function show(k) {
+    const s = STATES[k];
+    bar.className = 'bar ' + s.cls;
+    bar.innerHTML = '<span class="head"></span><span class="sub"></span>' + (s.acts.length ? '<div class="acts"></div>' : '');
+    bar.querySelector('.head').textContent = s.head;
+    bar.querySelector('.sub').textContent = s.sub;
+    const acts = bar.querySelector('.acts');
+    for (const [label, kind] of s.acts) {
+      const b = document.createElement('button'); b.className = 'btn ' + kind; b.textContent = label; acts.appendChild(b);
+    }
+    hot.classList.toggle('hot', s.hot);
+    notes.innerHTML = '<p class="was">Today: <b></b></p>' + s.notes.map(n => '<p>' + n + '</p>').join('');
+    notes.querySelector('.was b').textContent = s.was;
+    document.querySelectorAll('.tab').forEach(t => t.setAttribute('aria-pressed', String(t.dataset.s === k)));
+  }
+  document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => show(t.dataset.s)));
+  show('incomplete');
+</script>

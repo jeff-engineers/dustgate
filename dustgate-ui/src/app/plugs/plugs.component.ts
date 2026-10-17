@@ -1,4 +1,6 @@
 import { Component, OnDestroy, OnInit } from '@angular/core';
+import { QuietPoll } from '../services/failure';
+import { failureReason, noAnswer, reportFailure } from '../services/failure';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
@@ -215,7 +217,7 @@ export class PlugsComponent implements OnInit, OnDestroy {
   constructor(private api: ApiService, private router: Router) {}
 
   async ngOnInit(): Promise<void> {
-    await this.api.whenReady();
+    // No whenReady() here: every request waits for the API key itself, and gives up as "didn't answer" (api.service).
     await this.loadLayout();
     // Every await is a chance to have been left: starting the poll after that leaked it for the life of the app, one more
     // each time, polling the status and probing every plug with nobody looking.
@@ -240,13 +242,18 @@ export class PlugsComponent implements OnInit, OnDestroy {
   // ── data ──────────────────────────────────────────────────────────────────
   private async loadLayout(): Promise<void> {
     try { this.topo = toShop(JSON.parse(JSON.stringify(await this.api.getTopology())) as Topology); }
-    catch { this.topo = null; }   // no layout yet is normal: plugs exist before anyone has drawn anything
+    catch (e) {
+      this.topo = null;   // no layout yet is normal: plugs exist before anyone has drawn anything
+      if ((e as { status?: number })?.status !== 404) reportFailure('Plugs · load the layout', e, '(plugs listed without their tools)');
+    }
     this.rebuild();
   }
 
+  private readonly wattsPoll = new QuietPoll('Plugs · live draw');
   private async refreshWatts(): Promise<void> {
     try { this.tools = ((await this.api.getStatus()) as unknown as { tools?: Record<string, { watts?: number }> }).tools ?? {}; }
-    catch { /* keep the last reading */ }
+    catch (e) { this.wattsPoll.fail(e); return; }   // keep the last reading
+    this.wattsPoll.ok();
   }
 
   private rebuild(): void {
@@ -307,7 +314,7 @@ export class PlugsComponent implements OnInit, OnDestroy {
   async scan(): Promise<void> {
     this.scanning = true; this.error = '';
     try { this.outlets = await this.api.discoverOutlets(); }
-    catch { this.outlets = []; this.error = "Couldn't reach the controller to look for plugs."; }
+    catch (e) { this.outlets = []; this.error = reportFailure('Plugs · look for plugs', e, `Couldn't look for plugs — ${failureReason(e)}.`); }
     finally { this.scanning = false; this.rebuild(); }
     // Not awaited: asked one at a time, a shop's worth of plugs takes a while on an ESP32, and the page should not wait on
     // the slowest plug to appear. Each row fills in as its own answer arrives.
@@ -342,7 +349,8 @@ export class PlugsComponent implements OnInit, OnDestroy {
   async sweep(): Promise<void> {
     if (this.sweeping) return;
     this.sweeping = true; this.error = '';
-    try { await this.api.startOutletSweep(); } catch { this.sweeping = false; this.error = "Couldn't start the sweep."; return; }
+    try { await this.api.startOutletSweep(); }
+    catch (e) { this.sweeping = false; this.error = reportFailure('Plugs · sweep', e, `Couldn't start the sweep — ${failureReason(e)}.`); return; }
     this.sweepTimer = setInterval(() => void this.pollSweep(), 1000);
   }
   private async pollSweep(): Promise<void> {
@@ -351,7 +359,7 @@ export class PlugsComponent implements OnInit, OnDestroy {
       this.progress = p;
       this.merge(p.found);
       if (!p.running && p.everRan && p.scanned > 0) this.endSweep();
-    } catch { this.endSweep(); }
+    } catch (e) { reportFailure('Plugs · sweep progress', e, '(the sweep display stopped; plugs already found stay listed)'); this.endSweep(); }
   }
   private endSweep(): void {
     if (this.sweepTimer) clearInterval(this.sweepTimer);
@@ -377,7 +385,12 @@ export class PlugsComponent implements OnInit, OnDestroy {
     if (!/^[a-zA-Z0-9.\-:]+$/.test(ip)) { this.addError = "That doesn't look like an address. Try something like 192.168.1.42."; return; }
     this.adding = true;
     try { this.merge([await this.api.pingOutlet(ip)]); this.manualIp = ''; }
-    catch { this.addError = `Couldn't reach ${ip}. Check the address and that it's on this WiFi.`; }
+    catch (e) {
+      // The brain asks the address; "didn't answer" here is the BRAIN, and its own words say when the plug was the one.
+      this.addError = reportFailure('Plugs · add by address', e, noAnswer(e)
+        ? `Couldn't ask about ${ip} — the shop brain didn't answer.`
+        : `Nothing usable at ${ip} — ${failureReason(e)}. Check the address and that it's on this WiFi.`);
+    }
     finally { this.adding = false; }
   }
 
@@ -394,7 +407,7 @@ export class PlugsComponent implements OnInit, OnDestroy {
       if (r.seen) r.seen.name = res.name || label;
       r.plugName = res.name || label;
       this.note = 'Renamed on the plug itself.';
-    } catch { this.error = "Couldn't reach the plug to rename it."; }
+    } catch (e) { this.error = reportFailure('Plugs · rename', e, `Couldn't rename it — ${failureReason(e)}.`); }
   }
 
   async release(r: PlugRow): Promise<void> {
@@ -405,7 +418,7 @@ export class PlugsComponent implements OnInit, OnDestroy {
       // the pairing is ours to end, so it is said and the release carries on.
       this.note = res.ok ? (res.note || (res.released ? 'Released.' : 'Unpaired. Nothing was written to the plug.'))
                          : `Unpaired. ${res.error || res.note || ''}`.trim();
-    } catch { this.note = "Unpaired here. The plug didn't answer, so nothing was written to it."; }
+    } catch (e) { this.note = reportFailure('Plugs · release', e, `Unpaired here. Nothing was written to the plug — ${failureReason(e)}.`); }
     // Off the layout whether or not the plug answered: the pairing is ours to end.
     await this.edit(topo => {
       if (r.machineId) {
@@ -428,7 +441,7 @@ export class PlugsComponent implements OnInit, OnDestroy {
       const res = await this.api.takeoverOutlet(r.ip);
       if (!res.ok) { this.error = res.error || "The takeover didn't go through."; return; }
       this.note = 'Taken over. The plug now pushes to this brain.';
-    } catch { this.error = "Couldn't reach the plug."; return; }
+    } catch (e) { this.error = reportFailure('Plugs · take over', e, `Couldn't take it over — ${failureReason(e)}.`); return; }
     await this.scan();
   }
 
@@ -461,7 +474,7 @@ export class PlugsComponent implements OnInit, OnDestroy {
     await this.loadLayout();
     if (!this.topo || !apply(this.topo)) { this.rebuild(); return false; }
     try { await this.api.putTopology(this.topo as unknown as Topology); this.error = ''; }
-    catch { this.error = "Couldn't save the layout. Is the controller still answering?"; this.rebuild(); return false; }
+    catch (e) { this.error = reportFailure('Plugs · save the layout', e, `Couldn't save the layout — ${failureReason(e)}.`); this.rebuild(); return false; }
     this.rebuild();
     return true;
   }

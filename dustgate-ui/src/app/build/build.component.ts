@@ -29,6 +29,7 @@ import {
   planSystemRemoval, removeSystem, planClearShop, clearShop, plugIpsOf, collectorOf, type SystemRemoval,
 } from '../services/shop-doc';
 import { wipSummary } from '../services/wip-message';
+import { failureReason, noAnswer, reportFailure, reportNote, QuietPoll } from '../services/failure';
 import {
   type Glyph, type Pt, type SceneNode,
   BOARD_H, BOARD_W, CAP_H, CAP_W, CELL, COLLECTOR_HALF, GATE_PAD, PAD, TOOL_HALF, TOOL_HALF_W, UNIT_H,
@@ -350,6 +351,11 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   dirty = false;
   saving = false;
   saveError = '';
+  private readonly livePollLog = new QuietPoll('Canvas · live status');
+  /** The second line under a save problem: where the changes are, and what to do. */
+  saveSub = '';
+  /** The layout could not be read (anything but "none yet"): why, and saving is off until a reload reads it. */
+  loadFailed = '';
   saveNote = '';
   /** What happened to a plug on the last unpair, when it's worth saying. Consumed
    *  by the next save() — see there for why it isn't written to saveNote directly. */
@@ -532,9 +538,16 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     let loaded: Topology | null = null;
     // Wait for the API key first — a 401 here is indistinguishable from "fresh device"
     // below, and would quietly replace a saved shop with a blank canvas.
-    try { await this.api.whenReady(); } catch { /* device unreachable; fall through */ }
     try { loaded = JSON.parse(JSON.stringify(await this.api.getTopology())) as Topology; }
-    catch { loaded = null; }   // 404 (fresh device) / no device reachable → start fresh
+    catch (e) {
+      loaded = null;
+      // ONLY "no layout yet" (404) is a fresh shop (2026-10-17). Anything else — the brain restarting, a WiFi blip —
+      // used to land here too and seed a BLANK shop, one gate and a Save away from replacing the real layout. Now the
+      // blank one is drawn, but saving is off and the bar says why, until a reload reads the real one.
+      if ((e as { status?: number })?.status !== 404) {
+        this.loadFailed = reportFailure('Canvas · load the layout', e, failureReason(e));
+      }
+    }
     // The canvas needs a collector to build outward from — everything else hangs
     // off it. A shop with none is unusable (empty canvas), so seed a blank one on
     // a fresh system. Left un-dirty: it's the default starting point, not an edit,
@@ -565,7 +578,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     // sweep; see scanOutlets().
     if (this.unpairedTargets().length) void this.scanOutlets();
     this.livePoll = setInterval(() => {
-      void this.api.getStatus().then(st => this.applyLive(st)).catch(() => { /* offline */ });
+      void this.api.getStatus().then(st => { this.applyLive(st); this.livePollLog.ok(); }).catch((e) => this.livePollLog.fail(e));
     }, 2000);
     // The load is async, so it can settle either side of ngAfterViewInit. Both paths
     // ask to fit and maybeFit() runs whichever gets there second, once with a real
@@ -1085,7 +1098,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     if (this.scanning) return;
     this.scanning = true;
     try { this.outlets = await this.api.discoverOutlets(); }
-    catch { /* leave the last known list rather than blanking the tray */ }
+    catch (e) { reportFailure('Canvas · look for plugs', e, '(the tray keeps its last list)'); }
     finally { this.scanning = false; this.scanned = true; }
     if (sweep) void this.startSweep();
   }
@@ -3665,16 +3678,19 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   private async mergePairedBoards(): Promise<void> {
     if (!this.topo) return;
     let links: NodeLinkState[] = [];
-    try { links = await this.api.getNodes(); } catch { return; }   // older/offline device
+    try { links = await this.api.getNodes(); }
+    catch (e) { reportFailure('Canvas · paired boards', e, '(boards drawn from the layout only)'); return; }
     this.nodeLinks = links;
     // Which boards carry a clamp — a separate read because it needs `self` too,
     // and the primary is not in `nodes` (that array is the REMOTE links). A
     // failure leaves the list empty, which is the same as a shop with no clamps
     // and reads correctly on its own rather than as an error.
     // Only boards with a clamp plugged in, or one the layout already uses (clampOffered), may be pointed at.
+    this.boardsFailed = false;
     try { this.clampBoards = (await this.api.getClampBoards()).filter(b => clampOffered(this.topo as unknown as ShopDoc, b)); }
-    catch { this.clampBoards = []; }
-    try { this.collectorBoards = await this.api.getCollectorBoards(); } catch { this.collectorBoards = []; }
+    catch (e) { this.clampBoards = []; this.boardsFailed = true; reportFailure('Canvas · clamp boards', e, '(clamp options shown as unknown)'); }
+    try { this.collectorBoards = await this.api.getCollectorBoards(); }
+    catch (e) { this.collectorBoards = []; this.boardsFailed = true; reportFailure('Canvas · collector boards', e, '(board choice shown as unknown)'); }
     const controllers = this.controllersRaw();
     let added = false;
     for (const l of links) {
@@ -3886,7 +3902,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     if (!window.confirm(unpairPrompt(name))) return;
     this.saveError = ''; this.saveNote = '';
     try { await this.api.unpairNode(host); }
-    catch { this.saveError = `Couldn't reach the controller — ${name} is still paired.`; return; }
+    catch (e) { this.saveError = reportFailure('Canvas · unpair a board', e, `${name} is still paired — ${failureReason(e)}.`); return; }
     const controllers = this.controllersRaw();
     const i = controllers.findIndex(x => x['id'] === id);
     if (i >= 0) controllers.splice(i, 1);
@@ -4147,6 +4163,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   clampBoards: ClampBoard[] = [];
   /** Boards that can be a collector's board (one per collector, 2026-10-10). */
   collectorBoards: CollectorBoard[] = [];
+  boardsFailed = false;
 
   /** For the collector's sheet: who else's clamp a board's already is (one clamp, one owner — shop-doc clampTakenBy). */
   clampTakenFn = (boardId: string, selfId: string): string | null =>
@@ -5088,7 +5105,8 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
    * live airflow problems (with a fix + Cap action), then a save confirmation,
    * then onboarding (empty shop) → progress nudge.
    */
-  get guide(): { text: string; kind: 'info' | 'warn' | 'ok'; cap?: boolean } {
+  get guide(): { text: string; kind: 'info' | 'warn' | 'ok'; cap?: boolean; sub?: string;
+                 acts?: ('show' | 'discard' | 'save' | 'reload')[] } {
     // Mid-drag, the reason a drop won't work outranks everything: it's about the
     // gesture in progress, and saying it before the finger lifts is the whole point.
     if (this.dropBlocked) return { text: this.dropBlocked, kind: 'warn' };
@@ -5096,10 +5114,20 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     // 'info', not 'warn': the amber of a refusal on a move that is about to succeed
     // reads as "stop", which is the confusion this whole split exists to undo.
     if (this.dropWarn) return { text: this.dropWarn, kind: 'info' };
-    if (this.saveError) return { text: this.saveError, kind: 'warn' };
-    // No trailing period: wip is a whole sentence of its own now (wip-message.ts),
-    // and the lead-in is what says why it's only saved here.
-    if (this.wip) return { text: `Saved here, but the controller won’t take it yet — ${this.wip}`, kind: 'warn' };
+    // ── SAVE PROBLEMS SAY "NOT SAVED" (2026-10-17, docs/mockups/save-and-errors.html) ──
+    // This used to read "Saved here, but the controller won't take it yet": nothing was saved (the draft lives only in
+    // this page, and a reload dropped it without a word), the brain had refused nothing (the app's own check had), and
+    // the reason was the validator's. Now each state says what is true, where the changes are, and what to press.
+    if (this.loadFailed) return {
+      text: 'Couldn’t load your layout from the shop brain.', kind: 'warn', acts: ['reload'],
+      sub: `${this.loadFailed[0].toUpperCase()}${this.loadFailed.slice(1)}. Nothing has been changed, and saving is off until it loads, so nothing can be saved over it.`,
+    };
+    if (this.saveError) return { text: this.saveError, kind: 'warn', sub: this.saveSub || undefined,
+                                 acts: this.saveSub ? ['save', 'discard'] : undefined };
+    if (this.wip) return {
+      text: `Not saved — ${this.wip}`, kind: 'warn', acts: [...(this.wipRefs.length ? ['show' as const] : []), 'discard'],
+      sub: 'Your changes stay on this screen until you fix this or leave it. Reloading throws them away.',
+    };
 
     // Below the real problems, above the general nudges: a redundant gate is a
     // working shop with a part in it that isn't doing anything. Worth saying once,
@@ -5222,9 +5250,10 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
    */
   async save(): Promise<void> {
     if (!this.topo || this.saving) return;
+    if (this.loadFailed) return;                         // never save a blank stand-in over a layout we could not read
     const doc = this.docWithLayout();
     const v = validateShop(doc);
-    this.saving = true; this.saveError = ''; this.saveNote = ''; this.wip = ''; this.wipRefs = [];
+    this.saving = true; this.saveError = ''; this.saveSub = ''; this.saveNote = ''; this.wip = ''; this.wipRefs = [];
     try {
       this.topo = doc as Topology;                     // keep the draft either way
       if (!v.ok) {
@@ -5233,6 +5262,8 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
         // to the guide bar — see services/wip-message.ts.
         this.wip = wipSummary(doc as unknown as ShopDoc, v.errors);
         this.wipRefs = (v.errors as { ref?: string }[]).map(e => e.ref).filter((r): r is string => !!r);
+        // The validator's own words, for whoever is debugging: the bar shows the translation.
+        reportNote('Canvas · save: not saved (the layout check refused it)', `Not saved — ${this.wip}`, { issues: v.errors });
         return;                                        // still dirty — retry once it's whole
       }
       await this.api.putTopology(doc as Topology);
@@ -5253,10 +5284,51 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       // — the layout did save; the plug is the part worth mentioning.
       this.saveNote = this.airflowErrors.length ? '' : (this.unpairNote || 'Saved.');
       this.unpairNote = '';
-    } catch {
-      this.saveError = 'Couldn’t reach the controller — your layout is kept here.';
+    } catch (e) {
+      this.setSaveFailure('Canvas · save', e);
     } finally { this.saving = false; }
   }
+
+  /** A save the brain refused or never answered: which of the two, in its own words, and where the changes are. */
+  private setSaveFailure(context: string, e: unknown): void {
+    const shown = noAnswer(e) ? 'Not saved — the shop brain didn’t answer.'
+                              : `Not saved — the shop brain refused it: ${failureReason(e)}.`;
+    this.saveError = reportFailure(context, e, shown);
+    this.saveSub = noAnswer(e) ? 'It may be restarting. Your changes are kept on this screen; Save again in a moment.'
+                               : 'Your changes are kept on this screen.';
+  }
+
+  /** The bar's buttons. */
+  guideAct(a: 'show' | 'discard' | 'save' | 'reload'): void {
+    if (a === 'save') { void this.save(); return; }
+    if (a === 'show') { this.showProblem(); return; }
+    // Discard and reload are the same act: read the layout again from the brain. A page reload is the one way that
+    // cannot leave half of the old draft behind, and clearing `dirty` first keeps the leave warning out of its way.
+    this.dirty = false;
+    window.location.reload();
+  }
+
+  /** Scroll to the pieces the save problem names (they already wear the red halo). */
+  private showProblem(): void {
+    const ids = new Set(this.wipRefs);
+    let y0 = Infinity, y1 = -Infinity, x0 = Infinity, x1 = -Infinity;
+    for (const n of this.nodes) if (ids.has(n.id)) {
+      x0 = Math.min(x0, cellX(n.col)); x1 = Math.max(x1, cellX(n.col)); y0 = Math.min(y0, cellY(n.row)); y1 = Math.max(y1, cellY(n.row));
+    }
+    for (const b of this.boards()) if (ids.has(b.id)) {
+      x0 = Math.min(x0, b.x); x1 = Math.max(x1, b.x); y0 = Math.min(y0, b.y); y1 = Math.max(y1, b.y);
+    }
+    if (y0 === Infinity) return;
+    this.vp.reveal(x0 - CELL, y0 - CELL, x1 + CELL, y1 + CELL);
+  }
+
+  /** Leaving with changes that are not saved asks first (the route guard and the browser's own "Leave site?"). */
+  canLeave(): boolean {
+    return !this.dirty || this.loadFailed !== '' ||
+      window.confirm('Leave without saving?\n\nYour changes to the layout haven’t reached the shop brain. If you leave, they’re gone.');
+  }
+  @HostListener('window:beforeunload', ['$event'])
+  onBeforeUnload(e: BeforeUnloadEvent): void { if (this.dirty && !this.loadFailed) e.preventDefault(); }
 
   /** Bypass: put a closed gate above each always-open tool, then save. */
   async capAndSave(): Promise<void> {
@@ -5514,15 +5586,17 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       if (!v.ok) {
         this.dirty = true;
         this.wip = wipSummary(this.docWithLayout() as unknown as ShopDoc, v.errors);
+        this.wipRefs = (v.errors as { ref?: string }[]).map(e => e.ref).filter((r): r is string => !!r);
+        reportNote('Canvas · import: not saved (the layout check refused it)', `Not saved — ${this.wip}`, { issues: v.errors });
         return;
       }
       await this.api.putTopology(this.docWithLayout() as Topology);
       this.dirty = false;
       this.airflowErrors = this.liveLeaks();
       try { this.applyLive(await this.api.getStatus()); } catch { /* not running */ }
-    } catch {
+    } catch (e) {
       this.dirty = true;
-      this.saveError = 'Imported here, but couldn’t reach the controller to store it.';
+      this.setSaveFailure('Canvas · import', e);
     } finally { this.saving = false; }
   }
 

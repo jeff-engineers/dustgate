@@ -1,4 +1,5 @@
 import { Component, EventEmitter, Input, OnInit, Output, inject } from '@angular/core';
+import { failureReason, noAnswer, reportFailure } from '../services/failure';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ApiService, DiscoveredOutlet } from '../services/api.service';
@@ -184,8 +185,10 @@ export class OutletPickerComponent implements OnInit {
       if (at >= 0) this.outlets[at] = d;
       else this.outlets = [...this.outlets, d];
       this.manualIp = '';
-    } catch {
-      this.addError = `Couldn't reach ${ip}. Check the address and that it's on this WiFi.`;
+    } catch (e) {
+      this.addError = reportFailure('Plug picker · add by address', e, noAnswer(e)
+        ? `Couldn't ask about ${ip} — the shop brain didn't answer.`
+        : `Nothing usable at ${ip} — ${failureReason(e)}. Check the address and that it's on this WiFi.`);
     } finally {
       this.adding = false;
     }
@@ -195,7 +198,7 @@ export class OutletPickerComponent implements OnInit {
     if (this.scanning) return;
     this.scanning = true;
     try { this.outlets = await this.api.discoverOutlets(); }
-    catch { this.outlets = []; }
+    catch (e) { this.outlets = []; reportFailure('Plug picker · look for plugs', e, '(the plug list is empty)'); }
     finally { this.scanning = false; }
   }
 }

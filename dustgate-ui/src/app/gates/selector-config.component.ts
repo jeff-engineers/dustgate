@@ -1,4 +1,5 @@
 import { Component, EventEmitter, Input, OnInit, Output, inject } from '@angular/core';
+import { reportFailure } from '../services/failure';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import type { Topology } from '@topology';
@@ -198,7 +199,7 @@ export class SelectorConfigComponent implements OnInit {
     // the layout already names, and simply can't warn about reachability.
     void this.api.getNodes()
       .then((n) => { this.links = n; this.mergePairedBoards(); })
-      .catch(() => { /* no link info */ });
+      .catch((e) => { reportFailure('Gate setup · board links', e, '(no reachability warning shown)'); });
   }
 
   get calibrated(): boolean { return isCalibrated(this.sel); }

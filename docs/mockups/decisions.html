@@ -100,6 +100,10 @@
 // ─────────────────────────────────────────────────────────────────────────
 const DECISIONS = [
   // ── newest ───────────────────────────────────────────────────────────
+  { id: 'D-84', date: '2026-10-17', area: 'ui', status: 'standing',
+    what: 'A failure says what is true: \u201cNot saved\u201d when it was not, \u201cdidn\u2019t answer\u201d only when nothing answered, the brain\u2019s own reason otherwise \u2014 and the detail goes to the console',
+    why: 'Jeff, 2026-10-17: the canvas said \u201cSaved here, but the controller won\u2019t take it yet\u201d for a draft held only in the page, refused by the app\u2019s own check. An audit of all 91 error handlers found the same faults across the app: \u201cCouldn\u2019t reach the controller\u201d for refusals that came with a reason, a failed list shown as \u201cno board has one\u201d, the canvas seeding a BLANK shop (saveable over the real one) on any load failure, and about thirty silent catches. services/failure.ts says which, logs every failure to the console as \u201c[DustGate] context: \u2026\u201d (polls once per outage), and hands back the friendly line. The canvas bar gained Show me / Discard my changes / Save again, and leaving with unsaved changes asks. Not done: keeping a draft across a reload.',
+    where: 'services/failure.ts \u00b7 build.component (guide, save, load, canLeave) \u00b7 every screen\u2019s catch blocks \u00b7 docs/mockups/save-and-errors.html' },
   { id: 'D-83', date: '2026-10-17', area: 'ui', status: 'standing',
     what: 'Where air leaves a gate or a junction it is a PORT, never an \u201coutlet\u201d; \u201coutlet\u201d means only the smart plug',
     why: 'Jeff, 2026-10-17: \u201coutlet\u201d was used for both, and on a slider page that also talks about plugs it is confusing. A sliding gate has ports 1\u2013N, a manifold seals both ports, a tee needs N ports, two tools can share a port; the plug screens keep \u201coutlet\u201d. Code identifiers (outletCount, SLIDE_MAX_OUTLETS, outletXs) keep their names: only the words a person reads changed.',

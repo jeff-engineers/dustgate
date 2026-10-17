@@ -15,6 +15,9 @@
  * "0/1 SL" on one screen and "0 of 4 gates" on the other. One rule, one place.
  */
 
+// The budget, not a literal: this said "four" for a month after boards dropped to two channels (2026-10-17).
+import { SERVO_CHANNELS_PER_BOARD } from '../gates/selector-types';
+
 export type Drives = 'servo' | 'linear';
 
 /** What a board with nothing reported and nothing cached is assumed to drive.
@@ -118,7 +121,7 @@ export function shortfallText(s: PortShortfall): string {
          + `${s.ports === 0 ? 'none' : String(s.ports)} — a slider board drives one rack, so each rack needs its own.`;
   }
   return `${s.gates} ${one ? 'gate needs' : 'gates need'} a servo channel and this shop has `
-       + `${s.ports === 0 ? 'none' : `only ${s.ports}`} — each servo board drives four.`;
+       + `${s.ports === 0 ? 'none' : `only ${s.ports}`} — each servo board drives ${SERVO_CHANNELS_PER_BOARD}.`;
 }
 
 /**

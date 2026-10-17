@@ -1,4 +1,5 @@
 import { Component, OnInit, ViewChild } from '@angular/core';
+import { failureReason, noAnswer, reportFailure } from '../services/failure';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router } from '@angular/router';
@@ -307,7 +308,7 @@ interface SysGroup {
       <app-collector-setup [element]="el"
                            [boards]="collectorBoards"
                            [clampTaken]="clampTakenFn"
-                           [clampBoards]="clampBoards"
+                           [clampBoards]="clampBoards" [boardsFailed]="boardsFailed"
                            [systemName]="collectorSysName"
                            [excludeIps]="collectorExcludeIps"
                            [excludeReason]="collectorExcludeReason"
@@ -370,8 +371,9 @@ interface SysGroup {
             <span>Only boards that have told DustGate they have a clamp appear here.</span>
           </div>
           <div class="hint" *ngIf="!clampBoards.length" style="margin-top:8px">
-            <span>💡</span><span><b>Current clamp</b> needs a board with a clamp wired to it.
+            <span>💡</span><span *ngIf="!boardsFailed"><b>Current clamp</b> needs a board with a clamp wired to it.
               None of your boards has reported one.</span>
+            <span *ngIf="boardsFailed">Couldn’t ask the shop brain which boards have a clamp. Open this again in a moment.</span>
           </div>
         </div>
 
@@ -490,6 +492,7 @@ export class ToolSetupComponent implements OnInit {
   clampBoards: ClampBoard[] = [];
   /** Boards that can be a collector's board (one per collector, 2026-10-10). */
   collectorBoards: CollectorBoard[] = [];
+  boardsFailed = false;
   /** Named in the bin alert's copy — "every board on Main system flashes red" —
    *  so the scope of the alert is concrete rather than a word. */
   collectorSysName = '';
@@ -531,7 +534,6 @@ export class ToolSetupComponent implements OnInit {
 
   async ngOnInit(): Promise<void> {
     try {
-      await this.api.whenReady();          // else the first fetch 401s and reads as "no tools"
       // Migrated on read, like every other entry point — see shop-doc.ts.
       this.topo = toShop(JSON.parse(JSON.stringify(await this.api.getTopology())) as Topology) as unknown as Topology;
       // whenReady() has already fetched /api/info; deviceInfo is the cached copy.
@@ -541,7 +543,7 @@ export class ToolSetupComponent implements OnInit {
       // empty shop, not a dead controller, and the empty state below already says
       // the right thing — claiming "couldn't reach" there sends someone hunting a
       // network fault that isn't real.
-      if ((e as { status?: number })?.status !== 404) this.error = "Couldn't reach the controller.";
+      if ((e as { status?: number })?.status !== 404) this.error = reportFailure('Tools · load', e, `Couldn't load your tools — ${failureReason(e)}.`);
       return;
     }
     this.rebuild();
@@ -549,9 +551,12 @@ export class ToolSetupComponent implements OnInit {
     // cannot answer simply offers no clamp, which is the same as a shop that has
     // none, and the option says so on its own.
     // ...and of those, ones with a clamp plugged in or already in use (clampOffered).
+    // A list that could not be read is NOT a shop with no such boards (2026-10-17): boardsFailed says which.
+    this.boardsFailed = false;
     try { this.clampBoards = (await this.api.getClampBoards()).filter(b => clampOffered(this.topo as unknown as ShopDoc, b)); }
-    catch { this.clampBoards = []; }
-    try { this.collectorBoards = await this.api.getCollectorBoards(); } catch { this.collectorBoards = []; }
+    catch (e) { this.clampBoards = []; this.boardsFailed = true; reportFailure('Tools · clamp boards', e, '(clamp options shown as unknown)'); }
+    try { this.collectorBoards = await this.api.getCollectorBoards(); }
+    catch (e) { this.collectorBoards = []; this.boardsFailed = true; reportFailure('Tools · collector boards', e, '(board choice shown as unknown)'); }
     // Up front, not on opening a tool: the list itself shows which plug each tool
     // is on, and a scan started here has finished by the time anyone taps a row.
     if (this.anythingToSetUp) void this.scan();
@@ -671,10 +676,10 @@ export class ToolSetupComponent implements OnInit {
       await this.api.putTopology(this.topo);
       this.collectorEl = null;
       this.rebuild();
-    } catch {
+    } catch (e) {
       // Same as save(): the doc in memory now disagrees with the device, and
       // re-reading it would throw away the edit. Say so; Save again is the retry.
-      this.error = "Couldn't save that collector — is the controller still answering?";
+      this.error = reportFailure('Tools · save the collector', e, `Couldn't save that collector — ${failureReason(e)}. Your changes are still here; Save again.`);
     } finally {
       this.saving = false;
     }
@@ -806,8 +811,10 @@ export class ToolSetupComponent implements OnInit {
       if (at >= 0) this.outlets[at] = d;
       else this.outlets = [...this.outlets, d];
       this.manualIp = '';
-    } catch {
-      this.addError = `Couldn't reach ${ip}. Check the address and that it's on this WiFi.`;
+    } catch (e) {
+      this.addError = reportFailure('Tools · add a plug by address', e, noAnswer(e)
+        ? `Couldn't ask about ${ip} — the shop brain didn't answer.`
+        : `Nothing usable at ${ip} — ${failureReason(e)}. Check the address and that it's on this WiFi.`);
     } finally {
       this.adding = false;
     }
@@ -816,7 +823,7 @@ export class ToolSetupComponent implements OnInit {
   async scan(): Promise<void> {
     this.scanning = true;
     try { this.outlets = await this.api.discoverOutlets(); }
-    catch { this.outlets = []; }
+    catch (e) { this.outlets = []; reportFailure('Tools · look for plugs', e, '(the plug list is empty)'); }
     finally { this.scanning = false; }
   }
 
@@ -943,11 +950,11 @@ export class ToolSetupComponent implements OnInit {
       this.touched = false;
       this.plugRenamed = false;
       this.rebuild();
-    } catch {
+    } catch (e) {
       // The doc in memory now disagrees with the device. Re-reading it here would
       // throw away the edit the user just made, so say so and leave the screen as
       // it is — Save again is the retry.
-      this.error = "Couldn't save that tool — is the controller still answering?";
+      this.error = reportFailure('Tools · save a tool', e, `Couldn't save that tool — ${failureReason(e)}. Your changes are still here; Save again.`);
     } finally {
       this.saving = false;
     }

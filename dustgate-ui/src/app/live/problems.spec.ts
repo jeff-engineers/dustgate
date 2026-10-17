@@ -29,7 +29,7 @@ console.log('\nL1 rows');
 
 console.log('\nL2 why a request failed');
 {
-  ok('no answer', whyFailed({ status: 0 }) === "the controller didn't answer");
+  ok('no answer', whyFailed({ status: 0 }) === "the shop brain didn't answer");
   ok('the device says why', whyFailed({ status: 409, error: { error: 'unknown selector' } }) === 'unknown selector');
   ok('a bare refusal still says something', whyFailed({ status: 500, error: null }).includes('HTTP 500'));
   ok('a string body', whyFailed({ status: 400, error: 'bad tool' }) === 'bad tool');

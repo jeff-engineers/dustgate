@@ -440,6 +440,19 @@ export class CanvasViewport {
    *  you just made is on screen instead of somewhere below the fold. Scrolls the
    *  minimum distance that gets there, and only downward-or-up as needed, so it never
    *  yanks the view when the target is already visible. */
+  /** Bring a box (drawing units) into view on both axes, scrolling the least that gets there — the save banner's
+   *  "Show me". Deferred for the same reason as revealBoard(). */
+  reveal(x0: number, y0: number, x1: number, y1: number): void {
+    const wrap = this.host.wrapEl(); if (!wrap) return;
+    setTimeout(() => {
+      const m = 24, z = this.zoom;
+      if (y1 * z > wrap.scrollTop + wrap.clientHeight) wrap.scrollTop = Math.max(0, y1 * z - wrap.clientHeight + m);
+      if (y0 * z < wrap.scrollTop) wrap.scrollTop = Math.max(0, y0 * z - m);
+      if (x1 * z > wrap.scrollLeft + wrap.clientWidth) wrap.scrollLeft = Math.max(0, x1 * z - wrap.clientWidth + m);
+      if (x0 * z < wrap.scrollLeft) wrap.scrollLeft = Math.max(0, x0 * z - m);
+    });
+  }
+
   revealBoard(y0: number, y1: number): void {
     const wrap = this.host.wrapEl(); if (!wrap) return;
     // Deferred, because the caller has just made the drawing taller and this has to

@@ -164,18 +164,18 @@ const PHRASINGS: Array<{
       : `This system has ${m[1]} dust collectors. Each system has exactly one.`,
   },
 
-  // ── outlets on a gate ──
+  // ── ports on a gate (D-83: "outlet" means the plug) ──
   {
     re: /^branch "[^"]+" role tool but nothing wired to it$/,
-    say: () => `A gate has an outlet with nothing on it. Put a tool there, or cap it.`,
+    say: () => `A gate has a port with nothing on it. Put a tool there, or cap it.`,
   },
   {
     re: /^branch "[^"]+" role feed but nothing wired to it$/,
-    say: () => `A gate has an outlet meant to feed more ductwork, with nothing on it. Run a duct from it, or cap it.`,
+    say: () => `A gate has a port meant to feed more ductwork, with nothing on it. Run a duct from it, or cap it.`,
   },
   {
     re: /^duct to selector "([^"]+)" needs parentBranch$/,
-    say: (d, m) => `A duct leaves ${label(d, m[1])} without saying which outlet it comes off.`,
+    say: (d, m) => `A duct leaves ${label(d, m[1])} without saying which port it comes off.`,
   },
 
   // ── boards ──
@@ -197,13 +197,16 @@ const PHRASINGS: Array<{
   // can't run the gate — an older layout, or a board re-flashed the other way.
   {
     re: /^board "([^"]+)" is set up as a sliding-gate board but has (\d+) servo gate\(s\) on it$/,
-    say: (d, m) => `${label(d, m[1])} is a sliding-gate board — it drives one rack over a serial bus, `
-                 + `not servos. Move its ${m[2] === '1' ? 'gate' : `${m[2]} gates`} to a servo board.`,
+    // In the shop's words, not the pin map's (2026-10-17): "PWM bank" and "serial bus" told nobody what to do.
+    say: (d, m) => `${label(d, m[1])} drives a sliding gate, not ball valves. `
+                 + `Move its ${m[2] === '1' ? 'valve' : `${m[2]} valves`} to another board.`,
   },
   {
     re: /^board "([^"]+)" is set up as a servo board but has a sliding gate on it$/,
-    say: (d, m) => `${label(d, m[1])} is a servo board — it drives the PWM bank, not a rack. `
-                 + `A sliding gate needs a board flashed for the slider.`,
+    // Usually a slider's board that has not reported since the brain started, so the layout's memory of it is all there
+    // is (fixed 2026-10-17 for a switched-off board; an older layout can still say this).
+    say: (d, m) => `${label(d, m[1])} is set up for ball valves, not a sliding gate. `
+                 + `If it really is the slider's board, power it on so it can say so, then save again.`,
   },
   {
     re: /^selector missing controllerId$/,

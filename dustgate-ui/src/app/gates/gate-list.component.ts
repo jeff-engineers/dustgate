@@ -1,4 +1,5 @@
 import { Component, OnInit } from '@angular/core';
+import { failureReason, reportFailure } from '../services/failure';
 import { CommonModule } from '@angular/common';
 import { Router } from '@angular/router';
 import { ApiService, JogRefusedError, type NodeLinkState } from '../services/api.service';
@@ -179,12 +180,14 @@ export class GateListComponent implements OnInit {
 
   async ngOnInit(): Promise<void> {
     try {
-      await this.api.whenReady();
       // Read as a shop, like every other entry point — see shop-doc.ts: this screen groups gates BY system.
       this.topo = toShop(await this.api.getTopology()) as unknown as Topology;
-      try { this.links = await this.api.getNodes(); } catch { this.links = []; }
-    } catch {
-      this.error = "Couldn't reach the controller.";
+      // A failed board list is "unknown", said in the console; the gates still list, without link dots.
+      try { this.links = await this.api.getNodes(); } catch (e) { reportFailure('Gates · board links', e, '(gates listed without board status)'); this.links = []; }
+    } catch (e) {
+      this.error = reportFailure('Gates · load', e, (e as { status?: number })?.status === 404
+        ? 'There is no shop layout yet — draw one on the canvas first.'
+        : `Couldn't load the gates — ${failureReason(e)}.`);
       this.loaded = true;
       return;
     }
@@ -327,7 +330,7 @@ export class GateListComponent implements OnInit {
     try { await this.api.putTopology(this.topo); }
     // A gate's setup lives in the layout, so a failed write is a setup that did not save — said plainly, rather than
     // claiming it was "saved on the gate", which only ever held for the brain's own rack.
-    catch { this.error = "Couldn't save the setup — is the brain still answering? Try Save again."; }
+    catch (e) { this.error = reportFailure('Gates · save setup', e, `Couldn't save the setup — ${failureReason(e)}. Your changes are still here; Save again.`); }
     this.rebuild();
   }
 

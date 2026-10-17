@@ -24,7 +24,8 @@ export const routes: Routes = [
   { path: '',             component: LandingComponent },
 
   { path: 'shop',         component: LiveViewComponent },
-  { path: 'build',        component: BuildComponent },
+  // Unsaved canvas changes ask before leaving (2026-10-17): they live only in the page.
+  { path: 'build',        component: BuildComponent, canDeactivate: [(c: BuildComponent) => c.canLeave()] },
   { path: 'tools',        component: ToolSetupComponent },
   { path: 'boards',       component: BoardSetupComponent },
   // The twin of /boards for plugs: find, pair, rename, release, take over. docs/mockups/plugs-clamp-delete.html.
