@@ -47,19 +47,17 @@
 // and washes out colour discrimination — which is the whole point here.
 //
 // That reasoning is about a pixel ON the board, a hand's width from your face at
-// the bench. A pixel screwed to a joist and read from across a shop is the
-// opposite problem, so brightness is a per-pin multiplier:
+// the bench. A board header can raise PIXEL_GAIN (default 1) for a pixel read
+// from further off.
 //
-//   PIN_PIXEL      × PIXEL_GAIN      (default 1 — the board's own indicator)
-//   PIN_PIXEL_EXT  × PIXEL_EXT_GAIN  (default 4 — an added, remote one)
+// There used to be a second pin here, PIN_PIXEL_EXT at 4x gain, for a remote
+// pixel read from across the shop. No board ever defined it, and on the XIAO it
+// would cost a pad there is none of to spare, so it came out (2026-10-17). The
+// across-the-shop job it was for — a bin-level flag at the collector, replacing
+// the red strobe — is planned as pixels CHAINED off this one's DOUT, which costs
+// no pad but needs a multi-pixel write in place of _write() below. Not built yet.
 //
-// Both pins are optional and independent. A board with only PIN_PIXEL behaves
-// exactly as before; a board that defines both drives them in parallel with the
-// same colour, so the onboard pixel stays useful at the bench while the external
-// one carries across the room. Boards whose ONLY pixel is already external
-// (DevKitC, XIAO C5) raise PIXEL_GAIN instead of adding a second pin.
-//
-// Gains multiply and saturate at 255, so a colour's RATIO survives — orange
+// The gain multiplies and saturate at 255, so a colour's RATIO survives — orange
 // stays (v, v/3, 0) and doesn't drift toward yellow as it gets brighter.
 //
 // Boards without a pixel fall back to PIN_LED, where each colour degrades to a
@@ -120,7 +118,7 @@ inline void setMoving(bool m) { _motion() = m ? MOVING : STILL; }
 // than a stutter, which is also the honest picture.
 inline void flashActivity() { _flashUntil() = millis() + 400; }
 
-#if defined(PIN_PIXEL) || defined(PIN_PIXEL_EXT)
+#if defined(PIN_PIXEL)
 
 // Low on purpose — see the brightness note in the header comment. These are
 // the raw 0-255 channel values, not a percentage, and they are what a gain of 1
@@ -128,15 +126,10 @@ inline void flashActivity() { _flashUntil() = millis() + 400; }
 static const uint8_t kDim    = 12;
 static const uint8_t kBright = 48;
 
-// Per-pin brightness multipliers. A board header overrides either one; the
-// defaults encode "onboard is read at arm's length, external is read across a
-// shop". 4 × kBright is 192, still short of the full-scale glare the header
-// comment warns about.
+// Brightness multiplier; a board header overrides it. 1 encodes "read at arm's
+// length".
 #ifndef PIXEL_GAIN
 #define PIXEL_GAIN      1
-#endif
-#ifndef PIXEL_EXT_GAIN
-#define PIXEL_EXT_GAIN  4
 #endif
 
 // Saturating, so a gain can't wrap a channel back around to dark — the failure
@@ -161,18 +154,11 @@ inline void _write(uint8_t pin, uint8_t r, uint8_t g, uint8_t b) {
 #endif
 }
 
-// Drives every pixel this board has, each at its own gain. Writing to a pad with
-// nothing soldered to it is harmless — it clocks a few bytes into open air — so
-// a header can reserve PIN_PIXEL_EXT before anyone wires one up.
+// Drives the pixel at its gain. Writing to a pad with nothing soldered to it is
+// harmless — it clocks a few bytes into open air.
 inline void _raw(uint8_t r, uint8_t g, uint8_t b) {
-#ifdef PIN_PIXEL
     _write(PIN_PIXEL, _scale(r, PIXEL_GAIN), _scale(g, PIXEL_GAIN),
            _scale(b, PIXEL_GAIN));
-#endif
-#ifdef PIN_PIXEL_EXT
-    _write(PIN_PIXEL_EXT, _scale(r, PIXEL_EXT_GAIN), _scale(g, PIXEL_EXT_GAIN),
-           _scale(b, PIXEL_EXT_GAIN));
-#endif
 }
 
 inline void begin() {
