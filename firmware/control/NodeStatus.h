@@ -54,14 +54,20 @@ inline void writeNodeEntry(JsonArray arr, const S& s, const char* id, const char
     o["lastSeen"] = n.lastSeenMs;
     o["board"]    = n.board;
     o["fw"]       = n.fw;
-    JsonObject caps = o.createNestedObject("caps");
-    caps["servos"] = n.capServos;
-    caps["linear"] = n.capLinear;
-    // Omitted when none, matching the wire: absent already means "no clamp".
-    if (n.capClamps > 0) caps["ct"] = n.capClamps;
-    // The collector's other two jobs, so the app offers a board only for what it can do (as on the wire: absent = no).
-    if (n.capRf)  caps["rf"]  = 1;
-    if (n.capBin) caps["bin"] = 1;
+    // ONLY ONCE THE BOARD HAS SAID (2026-10-17): before its first WELCOME since this brain started, every cap reads 0,
+    // and `linear: 0` is a claim — the app read it as "a servo board" and stripped `drives: linear` off a slider that
+    // was merely switched off, then refused its own save ("dustgate-slider is a servo board"). Absent caps are unknown,
+    // and the app keeps what the layout already says. `board` is what the WELCOME fills in.
+    if (n.board[0]) {
+        JsonObject caps = o.createNestedObject("caps");
+        caps["servos"] = n.capServos;
+        caps["linear"] = n.capLinear;
+        // Omitted when none, matching the wire: absent already means "no clamp".
+        if (n.capClamps > 0) caps["ct"] = n.capClamps;
+        // The collector's other two jobs, so the app offers a board only for what it can do (as on the wire: absent = no).
+        if (n.capRf)  caps["rf"]  = 1;
+        if (n.capBin) caps["bin"] = 1;
+    }
     // Is a clamp in the jack: present only once the board has said (CLAMP, 2026-10-09). Absent = not known, which the
     // app must not draw as unplugged.
     if (n.capClamps > 0 && n.clampIn >= 0) o["clampIn"] = n.clampIn == 1;
