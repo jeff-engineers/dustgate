@@ -25,7 +25,7 @@ unfitted footprint costs nothing.
 
 | | **Perfboard** — what is built and running (2026-10-08) | **PCB** — the next prototype round |
 |---|---|---|
-| Status pixel | Adafruit NeoPixel breakout, 5 V side of the Schottky, 330 Ω on DIN | **SparkFun COM-16347** — a bare WS2812B 5050 (GRB, the firmware's order). Same rail, same 330 Ω |
+| Status pixel | Treedix WS2812B board, 5 V side of the Schottky, 330 Ω on DIN | **the same board** — decided 2026-10-17 over a bare 5050 (SparkFun COM-16347): it is what has run since 2026-08-23, and a panel of 48 is on hand |
 | CT jack | **Adafruit TRRS Jack Breakout #5764** (switched, labels `Sleeve Right RSw LSw Left Ring`) | **CUI SJ1-3525N** (tip and ring switches). NOT the SJ1-3523N, which has no switch |
 | 12 V → 5 V | Adafruit MPM3610 5 V buck breakout | the same breakout, **on a female header socket** — it is the only converter the CT floor has been measured with |
 | Servo rail | **DROK mini adjustable buck** (3 A peak, 2 A long-term), trimmed to ~6 V | **Pololu D24V22F6** (6 V fixed, 2.5 A), on a socket. Product path later: a discrete LM2596 |
@@ -64,12 +64,12 @@ Qty is per board; "coll." = the collector board only.
 | 12 | Panasonic EEU-FR1V221, 220 µF 35 V | 1 | [Digi-Key (search)](https://www.digikey.com/en/products/result?keywords=EEU-FR1V221) | ~$0.40 | XIAO 5 V pad. **Check the can diameter** in the datasheet and pick the matching `CP_Radial_*` |
 | 13 | Panasonic EEU-FR1V471 / EEU-FR1V102, 470–1000 µF 35 V | 1 | [471 (search)](https://www.digikey.com/en/products/result?keywords=EEU-FR1V471) · [102 (search)](https://www.digikey.com/en/products/result?keywords=EEU-FR1V102) | ~$0.50 | At the gate servo connector. Same diameter check |
 | 14 | Panasonic EEU-FR1V100, 10 µF 35 V | 1 | [Digi-Key (search)](https://www.digikey.com/en/products/result?keywords=EEU-FR1V100) | ~$0.25 | The CT bias bulk: 10 µF, what the planer-sensor node runs (jeff, 2026-10-09). Part number not looked up |
-| 15 | KEMET C320C104K5R5TA, 0.1 µF X7R radial | 5 | [Digi-Key (search)](https://www.digikey.com/en/products/result?keywords=C320C104K5R5TA) | $0.13 | Beside every electrolytic, the CT bias node, the pixel |
+| 15 | KEMET C320C104K5R5TA, 0.1 µF X7R radial | 4 | [Digi-Key (search)](https://www.digikey.com/en/products/result?keywords=C320C104K5R5TA) | $0.13 | Beside the 5 V and servo-rail electrolytics and the 3V3 10 µF, and on the CT bias node. Was 5 until 2026-10-17: the pixel board carries its own |
 | 16 | 10 µF radial X7R, ≥25 V | 1 | [Digi-Key (search)](https://www.digikey.com/en/products/result?keywords=10uF%2025V%20X7R%20radial) | ~$0.30 | XIAO 3V3. Check its body against the footprint |
 | 17 | Yageo CFR-25JB-52-1K, 1 kΩ ¼ W | 4 + 1 coll. | [Digi-Key](https://www.digikey.com/en/products/detail/yageo/CFR-25JB-52-1K/96) | pennies | Verified. CT divider ×2, CT series ×1, spare; the 4N35 LED on a collector board |
 | 18 | Yageo CFR-25JB-52-330R, 330 Ω | 1 | [Digi-Key (search)](https://www.digikey.com/en/products/result?keywords=CFR-25JB-52-330R) | pennies | Pixel DIN |
 | 19 | Yageo CFR-25JB-52-10K, 10 kΩ | 1 + 1 coll. | [Digi-Key (search)](https://www.digikey.com/en/products/result?keywords=CFR-25JB-52-10K) | pennies | CT plug-detect; the bin pull-up on D6 |
-| 20 | SparkFun COM-16347, WS2812B 5050 | 1 | [Digi-Key 1568-16347CT-ND](https://www.digikey.com/en/products/detail/sparkfun-electronics/COM-16347/12149781) | $0.68 | Verified. GRB, the firmware's order |
+| 20 | Treedix WS2812B 5050 board, snapped off a 48-board panel | 1 | [Amazon B09FSTT43H](https://www.amazon.com/dp/B09FSTT43H) | ~$0.27 ($12.99 / 48) | On hand. Two rows of three 0.1″ pins, 10.16 mm apart: 5V, DIN, GND on one edge, 5V, DOUT, GND on the other (Jeff, 2026-10-17). Carries its own decoupling. GRB, the firmware's order. Was the SparkFun COM-16347 bare 5050 until 2026-10-17 |
 | 21 | SSD1306 0.96″ OLED, 4-pin I²C | 1 | none confirmed at Digi-Key | ~$4–8 | **Pin order varies** (VCC/GND swapped on some): fix the footprint to the module you buy |
 | 22 | Omron B3F-1000, 6 mm tactile | 1 (+1 for D9) | [Digi-Key SW400-ND](https://www.digikey.com/en/products/detail/omron-electronics-inc-emc-div/B3F-1000/33150) | $0.24 | Verified. Wake (D1); a second footprint on D9 |
 | 23 | CUI SJ1-3525N, 3.5 mm switched jack | 1 | [Digi-Key CP1-3525N-ND](https://www.digikey.com/en/products/detail/same-sky-formerly-cui-devices-/SJ1-3525N/738687) | $1.00 | Verified. NOT the SJ1-3523N (no switch). Meter the NC side first (WIRING.md §8) |
@@ -101,7 +101,7 @@ Shelly plugs. The JLCPCB board itself is under "Ordering the PCB" below.
 | 100–220 µF electrolytic | 1 | same | Panasonic EEU-FR1V221 (220 µF 35 V) | XIAO `5V` ↔ GND. Rate ≥2× the rail |
 | 10 µF + 0.1 µF ceramic (X5R/X7R) | 1 ea | same | KEMET C320C104K5R5TA (0.1 µF, radial 5.08 mm); any radial X7R ≥25 V for 10 µF | XIAO 3V3 ↔ GND |
 | 0.1 µF ceramic | 1 per electrolytic | same | C320C104K5R5TA | In parallel with each bulk cap |
-| **WS2812B pixel** | 1 | Adafruit NeoPixel breakout | **SparkFun COM-16347** (1568-16347CT-ND, $0.68) | On D2. 5 V from the XIAO side of the Schottky — so it works on USB alone. The ~4.7 V after the diode is what makes 3.3 V data close to in spec (WIRING.md §4). Not the 5 mm through-hole NeoPixel: that one is RGB order |
+| **WS2812B pixel** | 1 | Treedix WS2812B board | the same board (PCB order list row 20) | On D2. 5 V from the XIAO side of the Schottky — so it works on USB alone. The ~4.7 V after the diode is what makes 3.3 V data close to in spec (WIRING.md §4). Not the 5 mm through-hole NeoPixel: that one is RGB order |
 | 330 Ω resistor | 1 | same | Yageo CFR-25JB-52-330R | Series on the pixel's DIN |
 | **SSD1306 OLED**, I²C, 0x3C, 4-pin | 1 | same | no Digi-Key listing confirmed (~$4–8 anywhere) | D4/D5. **3V3, never 5V** (WIRING.md §5) — the perfboard runs it from 3V3 (jeff, 2026-10-08; the sourcing guide said 5 V and was wrong) — check which way round the module's VCC/GND pins are before fixing the footprint; modules differ. Optional in software |
 | Momentary push button | 1 | same | **Omron B3F-1000** (SW400-ND, $0.24) | D1, wake. On a slider node a 1 s hold triggers homing |

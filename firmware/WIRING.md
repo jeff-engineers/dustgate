@@ -674,15 +674,19 @@ as an intermittent wrong colour, not a clean failure. Two reliable fixes:
   This is the recommended option here.
 - Or keep 5V and add a level shifter on DIN.
 
-**What the builds actually do (2026-10-08):** the perfboard runs a NeoPixel
-breakout from the `5V` pad side of the Schottky, with the 330 Ω on DIN, and it has
-shown the right colours since 2026-08-23. The diode is what makes that close to
+**What the builds actually do (2026-10-17):** the perfboard runs a Treedix
+WS2812B board (one pixel snapped off a 48-board panel, Amazon B09FSTT43H — the docs
+called it an Adafruit NeoPixel breakout until 2026-10-17, which it never was) from
+the `5V` pad side of the Schottky, with the 330 Ω on DIN, and it has shown the
+right colours since 2026-08-23. The diode is what makes that close to
 in spec: ~4.7 V after a Schottky puts 0.7×VDD at ~3.3 V, right where the ESP32
-drives. The PCB keeps the same arrangement with a 5050 WS2812B (GRB, the firmware's
-default order) — so the screen and pixel still work on USB alone, with no 12 V.
+drives. The PCB uses the same board in the same place (decided 2026-10-17, over a
+bare 5050 WS2812B): it is the one that has run, it carries its own decoupling, and
+there are dozens on hand. GRB, the firmware's default order. Either way the screen
+and pixel still work on USB alone, with no 12 V.
 
-Use a **WS2812B-family** pixel (Adafruit NeoPixel breakouts, or a single pixel cut
-from a strip). The firmware drives it with the Arduino core's own RMT-based
+Use a **WS2812B-family** pixel (the Treedix board, an Adafruit NeoPixel breakout,
+or a single pixel cut from a strip). The firmware drives it with the Arduino core's own RMT-based
 routine, so there is no library to add.
 
 **On a servo build, mind the shared 5V rail.** If you power the pixel from the
