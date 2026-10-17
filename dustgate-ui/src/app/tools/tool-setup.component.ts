@@ -1025,7 +1025,7 @@ export class ToolSetupComponent implements OnInit {
     if (!parent || parent['type'] === 'collector') return 'Direct to collector';
     const branches = (parent['branches'] as Branch[] | undefined) ?? [];
     const idx = branches.findIndex(b => b.id === duct['parentBranch']);
-    const outlet = idx >= 0 ? ` · outlet ${idx + 1}` : '';
+    const outlet = idx >= 0 ? ` · port ${idx + 1}` : '';
     return `${(parent['name'] as string) || 'Gate'}${outlet}`;
   }
 }

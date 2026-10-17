@@ -1014,8 +1014,8 @@ export class LiveViewComponent implements OnInit, OnDestroy {
         } else if (shared.length) {
           const names = shared.map(l => l.name).join(', ');
           reason = shared.length === 1
-            ? `${names} shares an outlet with ${(shared[0].with ?? []).map(w => w.name).join(', ')} with no gate in between, so running it would pull air through them too.`
-            : `${names} share an outlet with no gate between them, so running one would pull air through the others.`;
+            ? `${names} shares a port with ${(shared[0].with ?? []).map(w => w.name).join(', ')} with no gate in between, so running it would pull air through them too.`
+            : `${names} share a port with no gate between them, so running one would pull air through the others.`;
         } else if (unset.length) {
           const names = unset.map(s => s.name || s.id).join(', ');
           reason = `${names} ${unset.length === 1 ? "hasn't" : "haven't"} been set up yet — no one has shown ${unset.length === 1 ? 'it' : 'them'} where the valve positions are.`;
