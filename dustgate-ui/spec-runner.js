@@ -52,6 +52,7 @@ const SUITES = [
   ['services/shop-doc.spec.js', 'shop-doc'],
   ['services/shop-ready.spec.js', 'shop-ready'],
   ['services/wip-message.spec.js', 'wip-message'],
+  ['services/failure.spec.js', 'failure'],
   ['gates/selector-types.spec.js', 'selector-types'],
   ['tools/outlet-match.spec.js', 'outlet-match'],
   ['tools/deep-link.spec.js', 'deep-link'],

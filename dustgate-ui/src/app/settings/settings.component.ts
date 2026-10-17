@@ -1,4 +1,5 @@
 import { Component, OnInit, ChangeDetectionStrategy, ChangeDetectorRef } from '@angular/core';
+import { failureReason, reportFailure } from '../services/failure';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
@@ -342,11 +343,10 @@ export class SettingsComponent implements OnInit {
   }
 
   ngOnInit() {
-    // WAIT FOR THE API KEY FIRST (2026-10-16). Opened cold (a reload, or a bookmark straight to Settings) the layout
-    // was asked for before /api/info had answered, came back 401, and the catch below left the 400–2600 defaults on
-    // screen over a shop running 300–2800 — one tap of Save from writing them back. whenReady(), not a subscribe():
-    // this component has no ngOnDestroy, and a bare subscribe on an app-lifetime BehaviorSubject leaks one per visit.
-    void this.api.whenReady().then(() => this.api.getTopology()).then((t) => {
+    // Opened cold (a reload, or a bookmark straight to Settings) this used to ask before /api/info had answered, get a
+    // 401, and leave the 400–2600 defaults on screen over a shop running 300–2800 — one tap of Save from writing them
+    // back (2026-10-16). The request now waits for the API key itself (api.service), and Save stays off until it reads.
+    void this.api.getTopology().then((t) => {
       this.savedServo = servoPulseRange(t);
       this.servoMin = this.savedServo.minUs; this.servoMax = this.savedServo.maxUs;
       this.servoLoaded = true;
@@ -370,8 +370,9 @@ export class SettingsComponent implements OnInit {
     try {
       await action();
       this.statusMsg = successMsg;
-    } catch {
-      this.errorMsg = 'Could not save. Check connection and try again.';
+    } catch (e) {
+      // Not "Could not save. Check connection": most of what runs here is not a save, and the brain usually answered.
+      this.errorMsg = reportFailure('Settings', e, `That didn't go through — ${failureReason(e)}.`);
     } finally {
       this[busyFlag] = false;
       this.cd.markForCheck();

@@ -1,3 +1,4 @@
+import { failureReason } from '../services/failure';
 /** Live view "Needs attention": turn the device's `problems` into rows.
  *  Pure — no Angular — so spec-runner can drive it. The DEVICE words the reason
  *  (`text`); this only adds a headline from the code and the name of the thing. */
@@ -62,15 +63,6 @@ export function problemRows(problems: Problem[] | undefined, nameOf: NameOf): Pr
   return rows.map(r => r.row);
 }
 
-/** Why a request failed, in words. The device's own reason when it sent one
- *  (`{error: "..."}`), else what happened to the connection. Never empty. */
-export function whyFailed(e: unknown): string {
-  const err = e as { status?: number; error?: unknown; message?: string } | null;
-  if (!err) return 'unknown error';
-  if (err.status === 0 || err.status === undefined) return "the controller didn't answer";
-  const body = err.error as { error?: unknown; message?: unknown } | string | null | undefined;
-  const text = typeof body === 'string' ? body
-    : typeof body?.error === 'string' ? body.error
-    : typeof body?.message === 'string' ? body.message : '';
-  return text ? text : 'the controller refused it (HTTP ' + err.status + ')';
-}
+/** Why a request failed, in words: the brain's own reason when it sent one, "didn't answer" only when it did not.
+ *  Never empty. The shared rule lives in services/failure.ts (2026-10-17); this name is kept for the Live screen. */
+export function whyFailed(e: unknown): string { return failureReason(e); }

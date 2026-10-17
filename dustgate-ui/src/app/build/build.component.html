@@ -17,7 +17,7 @@
   <button class="ico" (click)="redo()" [disabled]="!canRedo" title="Redo (Ctrl/Cmd-Shift-Z)" aria-label="Redo">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M20 8H10a5 5 0 0 0 0 10h6"/><path d="M16 4l4 4-4 4"/></svg>
   </button>
-  <button class="primary" (click)="save()" [disabled]="!dirty || saving">{{ saving ? 'Saving…' : 'Save' }}</button>
+  <button class="primary" (click)="save()" [disabled]="!dirty || saving || !!loadFailed">{{ saving ? 'Saving…' : 'Save' }}</button>
   <!-- Leaving the canvas is a top-level intent, not an "other action" — burying
        it in the overflow made the way out the hardest thing on the bar. Import
        and Export stay there: both are rare, and neither is how you finish. -->
@@ -48,9 +48,21 @@
 
 <!-- Contextual guidance / status — fixed under the toolbar. Always present; its
      message follows what you're doing: onboarding → progress → problems + fixes. -->
-<div class="guide" [class.warn]="guide.kind === 'warn' || !!wireBlocked" [class.ok]="guide.kind === 'ok'">
-  <span>{{ wireBlocked || wireNote || guide.text }}</span>
+<div class="guide" [class.warn]="guide.kind === 'warn' || !!wireBlocked" [class.ok]="guide.kind === 'ok'"
+     [class.tall]="!wireBlocked && !wireNote && !!guide.sub" role="status">
+  <span class="gtext">
+    <span>{{ wireBlocked || wireNote || guide.text }}</span>
+    <span class="gsub" *ngIf="!wireBlocked && !wireNote && guide.sub">{{ guide.sub }}</span>
+  </span>
   <button class="cap" *ngIf="guide.cap" (click)="capAndSave()">Cap them</button>
+  <ng-container *ngIf="!wireBlocked && !wireNote">
+    <button class="gact primary" *ngIf="guide.acts?.includes('show')" (click)="guideAct('show')"
+            title="Scrolls to the pieces this is about — they wear the red outline">Show me</button>
+    <button class="gact primary" *ngIf="guide.acts?.includes('save')" (click)="guideAct('save')" [disabled]="saving">Save again</button>
+    <button class="gact primary" *ngIf="guide.acts?.includes('reload')" (click)="guideAct('reload')">Try again</button>
+    <button class="gact" *ngIf="guide.acts?.includes('discard')" (click)="guideAct('discard')"
+            title="Reads the layout again from the shop brain, dropping every change on this screen">Discard my changes</button>
+  </ng-container>
 </div>
 
 <div class="stage">
@@ -710,7 +722,7 @@
                        [element]="ot"
                        [boards]="collectorBoards"
                        [clampTaken]="clampTakenFn"
-                       [clampBoards]="clampBoards"
+                       [clampBoards]="clampBoards" [boardsFailed]="boardsFailed"
                        [systemName]="outletSysName"
                        [excludeIps]="outletExcludeIps"
                        [excludeReason]="outletExcludeReason"

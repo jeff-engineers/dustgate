@@ -1,4 +1,6 @@
 import { Component, OnInit, OnDestroy } from '@angular/core';
+import { failureReason, reportFailure, reportNote, QuietPoll } from '../services/failure';
+import { wipSummary } from '../services/wip-message';
 import { CommonModule } from '@angular/common';
 import { RouterLink } from '@angular/router';
 import { ApiService, Topology, TopologyStatus } from '../services/api.service';
@@ -561,8 +563,13 @@ const POLL_MS = 2000;
 
     <ng-template #noShop>
       <div class="empty">
-        <p>No shop configured yet.</p>
-        <p><a routerLink="/build">Set up your shop →</a></p>
+        <ng-container *ngIf="loadFailed; else noLayout">
+          <p>Can't read your shop's layout — {{ loadFailed }}. Trying again…</p>
+        </ng-container>
+        <ng-template #noLayout>
+          <p>No shop configured yet.</p>
+          <p><a routerLink="/build">Set up your shop →</a></p>
+        </ng-template>
         <!-- The nav above is inside the has-tools branch, so without this a device
              with no layout — the one most likely to need Forget WiFi — has no way
              to reach Settings at all. -->
@@ -598,6 +605,9 @@ export class LiveViewComponent implements OnInit, OnDestroy {
   hasBad = false;
   /** Two polls in a row failed — the brain isn't answering. */
   unreachable = false;
+  private readonly statusPoll = new QuietPoll('Live · status refresh');
+  /** The layout could not be read, and why — distinct from "no shop yet" (a 404). */
+  loadFailed = '';
   lastSeenAgo = '';
   private failedPolls = 0;
   private lastOkMs = 0;
@@ -611,7 +621,7 @@ export class LiveViewComponent implements OnInit, OnDestroy {
   constructor(private api: ApiService) {}
 
   async ngOnInit(): Promise<void> {
-    await this.api.whenReady();            // else the first fetch 401s and reads as "no shop"
+    // No whenReady() here: every request waits for the API key itself, and gives up as "didn't answer" (api.service).
     await this.loadTopology();
     await this.refresh();
     // STARTED UNCONDITIONALLY, and that is the fix rather than a detail.
@@ -630,8 +640,16 @@ export class LiveViewComponent implements OnInit, OnDestroy {
     let doc: Topology | null = null;
     try {
       doc = await this.api.getTopology();
-    } catch {
+      this.loadFailed = '';
+    } catch (e) {
       this.tools = [];      // not configured yet, or not answering yet
+      // Only a 404 is "no shop yet". Anything else used to show "No shop configured yet — Set up your shop" over a shop
+      // that exists and a brain that just didn't answer (2026-10-17). Retried by tick() either way.
+      const st = (e as { status?: number })?.status;
+      if (st !== 404) {
+        if (!this.loadFailed) reportFailure('Live · load the layout', e, failureReason(e));
+        this.loadFailed = failureReason(e);
+      } else this.loadFailed = '';
       return;
     }
     // Deliberately OUTSIDE the try. A parse failure here is a bug in our own
@@ -923,10 +941,12 @@ export class LiveViewComponent implements OnInit, OnDestroy {
     if (this.busy && !force) return;
     try {
       this.applyStatus(await this.api.getStatus());
+      this.statusPoll.ok();
       this.failedPolls = 0;
       this.unreachable = false;
       this.lastOkMs = Date.now();
-    } catch {
+    } catch (e) {
+      this.statusPoll.fail(e);
       // Keep the last known state on screen, but SAY it is the last known state
       // once it isn't a blip: a quiet board and a dead one look the same otherwise.
       if (++this.failedPolls >= 2) {
@@ -999,7 +1019,12 @@ export class LiveViewComponent implements OnInit, OnDestroy {
     this.fixLink = '/build';
     try {
       const v = validateShop(topo);
-      if (!v.ok) reason = v.errors[0]?.message ?? 'the layout is incomplete.';
+      // In the shop's words, as the canvas says it (wip-message.ts); the validator's own text goes to the console.
+      // Logged once per new reason, not on every read: this runs each time the layout is read.
+      if (!v.ok) {
+        reason = wipSummary(topo as unknown as ShopDoc, v.errors);
+        if (reason !== this.notReadyReason) reportNote('Live · not ready: the layout check refused it', reason, { issues: v.errors });
+      }
       else {
         // Per system — a leak is a statement about one blower's ducts, and
         // airflowIssues handed a whole shop would find no elements at the root
@@ -1024,7 +1049,7 @@ export class LiveViewComponent implements OnInit, OnDestroy {
           this.fixLink = '/build';
         }
       }
-    } catch { reason = 'the layout could not be read.'; }
+    } catch (e) { reason = reportFailure('Live · readiness', e, `the layout could not be read — ${failureReason(e)}.`); }
     this.ready = !reason;
     this.notReadyReason = reason;
   }

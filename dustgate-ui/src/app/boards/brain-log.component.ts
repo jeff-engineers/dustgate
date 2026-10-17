@@ -183,8 +183,9 @@ export class BrainLogComponent implements OnInit, OnDestroy, AfterViewChecked {
   constructor(private api: ApiService, private router: Router) {}
 
   async ngOnInit(): Promise<void> {
-    await this.api.whenReady();
-    this.host = this.api.deviceInfo?.owner || 'dustgate';
+    // Not awaited: a brain that is down never sends its info, and the log should still poll (and say it lost contact).
+    this.host = 'dustgate';
+    void this.api.whenReady().then(() => { this.host = this.api.deviceInfo?.owner || 'dustgate'; });
     void this.pollOnce();
   }
 

@@ -1,4 +1,6 @@
 import { Component, OnDestroy, OnInit } from '@angular/core';
+import { QuietPoll } from '../services/failure';
+import { failureReason, reportFailure } from '../services/failure';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
@@ -313,7 +315,7 @@ export class BoardSetupComponent implements OnInit, OnDestroy {
   constructor(private api: ApiService, private router: Router) {}
 
   async ngOnInit(): Promise<void> {
-    await this.api.whenReady();
+    // No whenReady() here: every request waits for the API key itself, and gives up as "didn't answer" (api.service).
     // A missing layout is NORMAL here, not an error. This is often the first
     // screen someone opens: boards exist as soon as they're on the WiFi, long
     // before anyone has decided what the ductwork looks like.
@@ -365,7 +367,8 @@ export class BoardSetupComponent implements OnInit, OnDestroy {
           names.set(sys.id as string, ((sys as { name?: string }).name) || (sys.id as string));
       this.fullBins = Object.entries(systems).filter(([, v]) => v?.bin?.full)
         .map(([id]) => ({ id, name: names.get(id) ?? id }));
-    } catch { /* a missed poll says nothing new; the next one will */ }
+    } catch (e) { this.statusPoll.fail(e); return; }   // a missed poll says nothing new; the next one will
+    this.statusPoll.ok();
   }
 
   openLog(): void { void this.router.navigate(['/boards/log']); }
@@ -382,9 +385,9 @@ export class BoardSetupComponent implements OnInit, OnDestroy {
     this.error = '';
     try {
       this.found = await this.api.discoverNodes();
-    } catch {
+    } catch (e) {
       this.found = [];
-      this.error = 'Scan failed — check the controller is connected.';
+      this.error = reportFailure('Boards · scan', e, `Couldn't look for boards — ${failureReason(e)}.`);
     } finally {
       this.scanning = false;
       this.scanned = true;
@@ -701,12 +704,14 @@ export class BoardSetupComponent implements OnInit, OnDestroy {
   backToWiring(): void { void this.router.navigate(['/build'], { queryParams: { layer: 'wiring' } }); }
 
   // ── internals ─────────────────────────────────────────────────────────────
+  private readonly statusPoll = new QuietPoll('Boards · status refresh');
+  private readonly linksPoll = new QuietPoll('Boards · board list refresh');
   private async refreshLinks(): Promise<void> {
-    try { this.links = await this.api.getNodes(); } catch { /* leave the last known state */ }
+    try { this.links = await this.api.getNodes(); this.linksPoll.ok(); } catch (e) { this.linksPoll.fail(e); }   // leave the last known state
     // The primary is a board too, and it is NOT in `nodes` — a clamp at the
     // collector is the likeliest first one in a shop, and without this it is the
     // only one this screen could not show.
-    try { this.self = await this.api.getSelfNode(); } catch { /* keep the last */ }
+    try { this.self = await this.api.getSelfNode(); } catch (e) { this.linksPoll.fail(e); }   // keep the last
   }
 
   /** Rows come from the device's pairing list, plus the primary (which is always
@@ -828,11 +833,10 @@ export class BoardSetupComponent implements OnInit, OnDestroy {
     this.rebuild();
   }
 
+  /** Why a Boards action failed — pair, rename, remove, update, save — in the brain's own words, or "didn't answer"
+   *  only when it did not. The fallback used to be "Couldn't save — check the controller is reachable" for every one of
+   *  them, saves or not (2026-10-17). */
   private message(e: unknown): string {
-    const err = e as { error?: { error?: string; errors?: { message?: string }[] }; message?: string };
-    return err?.error?.errors?.[0]?.message
-        || err?.error?.error
-        || err?.message
-        || 'Couldn\'t save — check the controller is reachable.';
+    return reportFailure('Boards', e, `That didn't go through — ${failureReason(e)}.`);
   }
 }

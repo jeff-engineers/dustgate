@@ -14,7 +14,12 @@
 /* Contextual guidance bar — pinned under the toolbar. */
 .guide { display: flex; align-items: center; gap: 10px; padding: 8px 16px; border-bottom: 1px solid var(--border);
   flex-shrink: 0; font-size: 13px; line-height: 1.4; color: var(--muted); background: var(--surface); }
-.guide span { flex: 1; }
+.guide .gtext { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.guide.tall { flex-wrap: wrap; align-items: flex-start; }
+.guide .gsub { color: var(--muted); font-size: 12.5px; }
+.guide .gact { background: var(--surface); border: 1px solid var(--border); color: var(--text); border-radius: 7px;
+               padding: 5px 10px; font-size: 12px; flex-shrink: 0; }
+.guide .gact.primary { background: var(--accent); border-color: var(--accent); color: #1a1200; font-weight: 600; }
 .guide.warn { color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, var(--surface)); }
 .guide.ok   { color: var(--success); }
 .guide .cap { background: var(--danger); border: none; color: #fff; border-radius: 7px; padding: 5px 10px; font-size: 12px; flex-shrink: 0; }

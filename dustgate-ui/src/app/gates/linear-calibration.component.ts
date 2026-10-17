@@ -1,4 +1,5 @@
 import { Component, EventEmitter, Input, OnDestroy, OnInit, Output } from '@angular/core';
+import { failureReason, reportFailure, reportNote } from '../services/failure';
 import { CommonModule } from '@angular/common';
 import { Subscription } from 'rxjs';
 import { ApiService, SystemStatus } from '../services/api.service';
@@ -304,21 +305,21 @@ export class LinearCalibrationComponent implements OnInit, OnDestroy {
   // ── phases 2–4: the physical run ──────────────────────────────────────────
   async goHome(): Promise<void> {
     this.error = ''; this.homing = true;
-    try { await this.api.home(); } catch { this.error = this.reach; this.homing = false; }
+    try { await this.api.home(); } catch (e) { this.error = this.fail('find home', e); this.homing = false; }
   }
 
   async confirmSide(): Promise<void> {
     if (this.homedLeft === null) return;
     this.busy = true; this.error = '';
     try { await this.api.setHomedLeft(this.homedLeft); this.phase = 'sweep'; }
-    catch { this.error = this.reach; }
+    catch (e) { this.error = this.fail('set the home side', e); }
     finally { this.busy = false; }
   }
 
   async sweep(): Promise<void> {
     this.error = ''; this.sweeping = true;
     try { await this.api.calibrate(this.model, this.outletCount); }
-    catch { this.error = this.reach; this.sweeping = false; }
+    catch (e) { this.error = this.fail('measure the rail', e); this.sweeping = false; }
   }
 
   /** The device is the source of truth for where things are, so the whole widget reads
@@ -383,7 +384,7 @@ export class LinearCalibrationComponent implements OnInit, OnDestroy {
     const target = Math.max(0, Math.round(mm * 10) / 10);
     try { await this.api.linearGoto(this.sel.id, target, this.firstMove); }
     catch (e: unknown) {
-      this.error = (e as { error?: { error?: string } })?.error?.error ?? this.reach;
+      this.error = this.fail('move the gate', e);
       return false;
     }
     this.liveMm = target; this.moving = true;
@@ -399,7 +400,7 @@ export class LinearCalibrationComponent implements OnInit, OnDestroy {
     // THE SLIDER SAYS WHY IT DID NOT GET THERE (2026-10-16): a failed home, a jam, a servo not answering. This page used
     // to sit on "finding home" until the brain timed the move out, while the reason was on the node's serial console.
     // The first move stays a homing one, so the next try finds home again.
-    if (fault) { this.error = fault; return false; }
+    if (fault) { this.error = reportNote(`Slider page · move: the slider said it did not get there`, fault, { selectorId: this.sel.id, targetMm: target }); return false; }
     this.firstMove = false;
     return true;
   }
@@ -410,7 +411,7 @@ export class LinearCalibrationComponent implements OnInit, OnDestroy {
     if (this.nodeMode) { this.busy = true; this.error = ''; await this.goOnNode(this.liveMm + mm); this.busy = false; return; }
     this.busy = true; this.error = '';
     try { await this.api.jog(mm); }
-    catch { this.error = this.reach; }
+    catch (e) { this.error = this.fail('jog', e); }
     finally { this.busy = false; }
   }
 
@@ -531,5 +532,9 @@ export class LinearCalibrationComponent implements OnInit, OnDestroy {
     return furthest > 0 ? furthest * 1.1 : 400;
   }
 
-  private readonly reach = 'Couldn\'t reach the gate. Check it\'s powered and on the network.';
+  /** "Couldn't <what> — <why>": the brain's own reason ("a tool is running"), or "didn't answer" only when it did not.
+   *  This used to say "Couldn't reach the gate" for every failure (2026-10-17). */
+  private fail(what: string, e: unknown): string {
+    return reportFailure(`Slider page · ${what}`, e, `Couldn't ${what} — ${failureReason(e)}.`);
+  }
 }

@@ -1,4 +1,5 @@
 import { Component, EventEmitter, Input, OnDestroy, OnInit, Output, QueryList, ViewChildren, inject } from '@angular/core';
+import { QuietPoll } from '../services/failure';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ApiService, ClampBoard, CollectorBoard, DiscoveredOutlet, SenseReport } from '../services/api.service';
@@ -191,7 +192,9 @@ import { CollectorForm, CtlKind, RawEl, SenseKind, fused, readCollector, writeCo
             <option *ngFor="let b of boards" [value]="b.id">{{ b.name }}{{ b.online ? '' : ' — not answering' }}</option>
           </select>
         </div>
-        <p class="note warn" *ngIf="!boards.length && needsBoard()">No paired board has a transmitter, bin input or clamp input. Pair the
+        <p class="note warn" *ngIf="boardsFailed && needsBoard()">Couldn’t ask the shop brain which boards it has. Close this and open it
+          again in a moment.</p>
+        <p class="note warn" *ngIf="!boardsFailed && !boards.length && needsBoard()">No paired board has a transmitter, bin input or clamp input. Pair the
           board at the collector on the Boards screen first.</p>
         <p class="note warn" *ngIf="missingOnBoard() as m">{{ m }}</p>
       </div>
@@ -312,7 +315,7 @@ import { CollectorForm, CtlKind, RawEl, SenseKind, fused, readCollector, writeCo
             <span class="radio"></span>
             <span class="body">
               <span class="name">Current clamp<span class="pill soon"
-                    *ngIf="!clampBoards.length">no board has one</span></span>
+                    *ngIf="!clampBoards.length">{{ boardsFailed ? 'couldn’t ask the boards' : 'no board has one' }}</span></span>
               <span class="detail">A clamp on the collector's feed, wired to one of your
                 boards — for 240 V, where there is no plug to pair, and for a blower whose start-up surge
                 trips a smart plug. Nothing switched passes through it.</span>
@@ -432,6 +435,8 @@ export class CollectorSetupComponent implements OnInit, OnDestroy {
    *  it on — so only a board that has actually said it has one can be offered,
    *  or the sheet would happily write a layout that senses nothing. */
   @Input() clampBoards: ClampBoard[] = [];
+  /** The board lists could not be read (2026-10-17): say that, not "no board has one", which reads as a fact. */
+  @Input() boardsFailed = false;
   /** Whose clamp a board's already is, other than this collector's (shop-doc clampTakenBy): one clamp watches ONE thing. */
   @Input() clampTaken: (boardId: string, selfId: string) => string | null = () => null;
   /** Named in the bin alert's copy, so the scope is concrete rather than abstract. */
@@ -469,6 +474,7 @@ export class CollectorSetupComponent implements OnInit, OnDestroy {
   }
 
   ngOnDestroy(): void { if (this.livePoll) clearInterval(this.livePoll); }
+  private readonly livePollLog = new QuietPoll('Collector sheet · clamp reading');
 
   private async refreshLive(): Promise<void> {
     if (this.form.sense !== 'ct' || !this.form.boardId) { this.live = null; return; }
@@ -476,7 +482,8 @@ export class CollectorSetupComponent implements OnInit, OnDestroy {
     try {
       const n = (await this.api.getNodes()).find(x => norm(x.id) === norm(this.form.boardId));
       this.live = (n?.online && n.sense?.find(x => x.id === this.element['id'] && x.reported)) || null;
-    } catch { /* a missed poll says nothing new */ }
+      this.livePollLog.ok();
+    } catch (e) { this.livePollLog.fail(e); return; }
   }
 
   /** The live line under the clamp option. Watts is an ESTIMATE at 120 V, and says so (see the Boards screen). */

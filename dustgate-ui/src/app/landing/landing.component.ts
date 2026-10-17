@@ -70,8 +70,7 @@ export class LandingComponent implements OnInit {
       // comes back 401 — which reads exactly like "fresh device" and would send
       // someone to the layout tool with a shop they already have. Every other
       // page waits for this; the front door has to as well.
-      await this.api.whenReady();
-      const topo = await this.api.getTopology();
+      const topo = await this.api.getTopology();   // waits for the API key itself (api.service)
       const { ready } = shopReadiness(topo);
       await this.router.navigate([ready ? '/shop' : '/build']);
     } catch (e: unknown) {
