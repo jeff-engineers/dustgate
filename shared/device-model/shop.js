@@ -1,7 +1,7 @@
 // shop.js — DustGate SHOP contract: N airflow systems under one brain.
 //
 // This is the thin layer above topology.js / routing.js / sequencer.js that
-// docs/shop-schema-rfc.md §4.3 calls for. Everything below it still operates on
+// docs/archive/shop-schema-rfc.md §4.3 calls for. Everything below it still operates on
 // ONE airflow graph and keeps its current signature; this file owns the
 // container, the machine indirection, and the merge.
 //
@@ -641,7 +641,7 @@ function routeShop(shop, activeMachineIds) {
  * Plans are computed per system — make-before-break is a statement about one
  * blower's air — but they are returned as ONE ordered list, deliberately.
  * Execution is shop-wide and serial: the one-servo-at-a-time current budget
- * (architecture-rfc.md §7) is a property of the power supply, not of a duct run,
+ * (docs/archive/architecture-rfc.md §7) is a property of the power supply, not of a duct run,
  * so two systems transitioning at once would break it even though their air
  * never mixes (RFC §10.2).
  *
@@ -709,7 +709,7 @@ const SERVO_PULSE_BOUNDS = { min: NL.MIN_SERVO_US, max: NL.MAX_SERVO_US, span: N
 
 /**
  * IS THIS BOARD OPTIONAL — can the shop lose it without losing anything but a reading (2026-10-07, jeff;
- * docs/optional-nodes-plan.md)? A board is REQUIRED when the layout gives it any gate (a selector on it), or any of a
+ * docs/archive/optional-nodes-plan.md)? A board is REQUIRED when the layout gives it any gate (a selector on it), or any of a
  * collector's jobs: its transmitter (control.rf), its clamp (sensor.ct) or its bin beam (bin.sensor) — without those a
  * blower does not start, is not watched, or its bin goes unwatched, and each of those is worth a warning. Everything else
  * (a board that only senses tools, or one the layout does not use at all) is OPTIONAL: when it is off, nobody is told,

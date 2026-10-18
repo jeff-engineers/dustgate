@@ -12,7 +12,7 @@ reasoning was contested, or that a still-open item above leans on.
 here until 2026-09-17 and had grown to 144 lines — longer than most of the
 active sections above them, which is how a parked item stops being read.
 
-## Pi bring-up (branch `pi-brain-bringup`, started 2026-10-06)
+## Pi bring-up (started 2026-10-06; the Pi runs the shop since 2026-10-11)
 
 Goal for now: **run the shop without the Mac**, with no fixed address anywhere. **Steps 1-4 done 2026-10-06** (Pi Zero 2 W, Trixie, `dustgate.local`): the brain runs on the Pi with the shop's layout and plugs, and all six nodes found it by beacon with nobody touching them. Steps 5-7 need someone in the shop. Steps, in order; each says
 what to report back. Full commands are in [`native/pi/README.md`](../native/pi/README.md).
@@ -35,29 +35,14 @@ first-boot WiFi setup for a customer, a read-only root, and the `--git` update p
 
 ## Bugs
 
-- **Optional boards (jeff, 2026-10-07 — BUILT 2026-10-08 on `servo-range`, host-tested, not seen in the shop).** A board with no
-  gate and none of a collector's jobs is optional: when it is off, no problem is raised, the beacon is not hurried, and Boards shows
-  it grey ("Off · optional"). Shop check: unplug the planer with the shop running. [`docs/optional-nodes-plan.md`](../docs/optional-nodes-plan.md).
-
-- **The servo pulse range is a Setting (2026-10-07, branch `servo-range` — built, host-tested, NOT run on a servo).** Settings →
-  Servos sets the pulse at 0° and 180° for every PWM servo (default 400–2600 µs, was a fixed 500–2500 the library clamped to). Kept
-  in the layout's `servo` block; the brain sends it on every servo SET and jog. Needs every PWM board reflashed (`dev.sh flash-node`
-  each) and every gate recalibrated — the same angle now lands somewhere new.
-
 - **A slider's endstops both read triggered after a jam, until the whole slider is power-cycled (jeff, 2026-10-07).** A latched
   supply on the driver side is the guess, unconfirmed. Seen once in the shop; the failure itself now reaches the brain
   (DONE.md, 2026-10-16), so the next time it happens the slider page will say "finding home, the datum endstop reads
   TRIGGERED and will not clear". Meter the endstop supply when it does.
 
-### From the bug search of 2026-10-06 (after the Pi bring-up)
+### Left from the bug search of 2026-10-06
 
-Read-only pass over the native brain, the Pi scripts, the shared control/outlet code and this week's app work (the Plugs page,
-system removal, the clamp switch). Most serious first. None of it has been seen to fail on hardware: each was found by reading,
-and each says why it is believed. Line numbers are as of `13e7cff`. **Fixed since, on `pi-brain-bringup` (see DONE.md):** a layout
-save resetting the collector, the ESP32's CORS header, the Plugs page asking every plug at once (and leaking its poll), the
-dead-Shelly stall, and the RF log line that read like a press. **Since, 2026-10-07:** a slider on a node can be set up from
-the app, the Pi's plug picker shows live draw (and not itself), and a board too old to dial in says so. **2026-10-09 (branch
-`bug-search-fixes`):** everything else below except DNS rebinding and the /24 beacon — see DONE.md.
+Everything else that search found is fixed (DONE.md). These two remain, found by reading, not seen to fail:
 
 - **SECURITY: DNS rebinding reaches both brains.** `GET /api/info` hands out the API key unauthenticated, by design (the app
   bootstraps from it). The CORS header that let ANY page read it is gone (fixed 2026-10-06), but a hostile page can still
@@ -121,14 +106,6 @@ the app, the Pi's plug picker shows live draw (and not itself), and a board too 
     but Jeff this ships as a finished box, under the "an install step the owner cannot perform" rule.
 
 
-- **Clamp detection on hardware (built 2026-10-09, branch `clamp-detect`, host-tested only).** A board now reports whether a
-  clamp is plugged into its jack (`CLAMP`), the per-board clamp switch is gone, and a used clamp that reads empty raises
-  `clamp-unplugged`. Bench, after an OTA: (1) unplug the planer-sensor's clamp — Boards says so, and the planer's problem
-  appears; (2) a PWM board with NOTHING on D0 reads "No clamp plugged in", not a clamp: that is the internal pull-up
-  surviving the ADC setup, the one unknown (`gpio_pullup_en` after the first read); (3) the CT floor with the pull-up on
-  (~6.7 counts), since it shifts the bias by ~18 mV. The model validators still do not reject a `sensor.ct` on a board
-  with no clamp — the pickers cover it.
-
 - **Move the ESP32's plug provisioning loop onto `outlets/Provision.h` (2026-10-06).** `SmartOutletControl::provisionPushOutlets()` and
   `outletops::provisionPlug()` are the same rule written twice (probe, read the claim, refuse a plug someone else owns unless a
   takeover was approved, name first, then the push target). The native brain uses the shared one; the ESP still has its own. Move it
@@ -190,7 +167,7 @@ the app, the Pi's plug picker shows live draw (and not itself), and a board too 
   settings asked of anyone. Headroom estimate: ~9 nodes with the app on the brain, ~14–15 with
   it hosted off-board; `SMART_OUTLET_COUNT` (7) must rise to ~16 before the shop can pair.
   Full plan, memory table and open questions:
-  [`docs/nodes-dial-the-brain-plan.md`](../docs/nodes-dial-the-brain-plan.md).
+  [`docs/archive/nodes-dial-the-brain-plan.md`](../docs/archive/nodes-dial-the-brain-plan.md).
 
 - **Native brain: what is left before a Pi is a product (2026-10-05).** Built and tested against fakes (`make -C native test`): node links, layout routing, the collector press loop, plug polling with the ESP32's own drivers, the app, and — since the API step — manual tool/collector switches, servo jog, pairing/pausing/discovery (a board nobody paired announces itself with a JOIN), node image staging and `/api/nodes/update` (images live on disk, so the full-filesystem problem does not exist here), the console and link log, the plug screens (ping, rename, release, sweep) and the board/plug problems. The app loads against it and its Boards and Shop screens render a real layout. **Not done:** (1) DONE 2026-10-05 against the five real nodes (no servos attached): gate moves (SET → ACK → STATE moving/arrived), the RF press and a bin sensor all work from the Mac brain; a firmware update pulled from the Mac brain's own disk installed on a real node (needs the brain on port 80); 10 restarts of the Mac brain brought all five nodes back in 1–20 s with no flaps; (2) DONE 2026-10-06: Shelly push (`/shelly-rpc`), claim/provisioning and takeover (`outlets/Provision.h`, `e2e_push.sh`) — against a fake Shelly only; not yet against a real plug, and the ESP32 still has its own copy of the provisioning loop; (3) the brain must listen on port 80 for node OTA (the node builds `http://<ip><path>`, no port) — done and verified; the Mac brain also holds idle sleep off with `caffeinate`; (4) mDNS advertising — on a Pi, set the hostname to `dustgate` and avahi does it; on a Mac use `dns-sd -P`; (5) packaging — image, first-boot WiFi, read-only root, watchdog; (6) the ESP32 still has its own copies of the routes in `api/ApiCore.h` (manual switches, jog, pairing, pause, discover, update), to move over one at a time with a bench run each — plug ping/rename/release and the board/plug problems already are shared.
 
@@ -202,7 +179,7 @@ the app, the Pi's plug picker shows live draw (and not itself), and a board too 
   `test_nodebus.cpp` and the CLAUDE.md pair-table row move together, and it needs a node flash.
   Deferred 2026-10-04 so it does not ride along with the native build.
 
-- **Bench the collector's jobs on a node (built 2026-10-04; PRESS and the bin pad first run on a real node 2026-10-05 — see CLAUDE.md for what that did and did not prove; (2) a real receiver keyed from a node was PROVEN 2026-10-06; (3) cover the beam and (4) the no-replay drop remain).** A
+- **Bench the collector's jobs on a node — only (4), no replay, is left (2026-10-17).** (1)–(3) ran: PRESS from a node 2026-10-05, a real receiver keyed from a node 2026-10-06, the beam seen FULL from a node with the shop-wide alert 2026-10-11 (CLAUDE.md has each). The original list follows.
   node can now key the RF transmitter (a `PRESS` frame) and watch the dust-bin beam (a
   `bin` sensor in CONFIG, reported as a SENSE bit); the retry policy stays on the primary.
   Host-tested only. To do on a bench with a collector board flashed as a NODE: (1) pair it,
@@ -394,7 +371,7 @@ the app, the Pi's plug picker shows live draw (and not itself), and a board too 
 - **Can the collector node run on ONE brick? (2026-09-11, decides a purchase.)**
 
   The collector node is being built as power topology **A** first —
-  `firmware/WIRING.md#9-bin-sensor` §6 — two supplies, grounds genuinely
+  `docs/archive/WIRING.md#9-bin-sensor` §6 — two supplies, grounds genuinely
   separate. Not because A is better (it is two bricks at one machine, the worse
   install) but because it is the **baseline**: that board already carries three
   unvalidated changes in its CT section, and a shared ground underneath them
@@ -457,7 +434,7 @@ the app, the Pi's plug picker shows live draw (and not itself), and a board too 
 
   What is left is the actual feature: `sensor.outlet.channel` (absent = scalar),
   a UI to choose it, and the model/firmware pair to carry it. §6.0 of
-  `docs/tool-sensing-rfc.md` lists what else it drags in.
+  `docs/archive/tool-sensing-rfc.md` lists what else it drags in.
 
   Still true, and the reason this is not a nice-to-have: **it bites on the FIRST
   EM2, not on the first ganged pair.** The device has two channels in hardware
@@ -532,24 +509,60 @@ the app, the Pi's plug picker shows live draw (and not itself), and a board too 
 - **Finish the collector barrel (2026-08-25).** The glyph itself LANDED — the
   canvas draws a 76x76 violet barrel carrying its own name and its own plug row,
   the impeller is gone, and the router's footprint grew with it
-  (`COLLECTOR_HALF`, geometry.ts). Three loose ends:
+  (`COLLECTOR_HALF`, geometry.ts). Two loose ends:
   - `docs/mockups/canvas.html` was never updated, so the canonical mockup still
-    describes the circle. Update it IN PLACE and add a decision-log row, then
-    move `docs/mockups/collector-glyph.html` (the exploration) into
-    `archived/` with the banner that page's neighbours all wear.
+    describes the circle. Update it IN PLACE and add a decision-log row. (The
+    exploration, `collector-glyph.html`, was archived 2026-10-18.)
   - The collector's live plug row is UNVERIFIED. `systemWatts`/`systemIdOf()` in
     build.component.ts feed it from `status.systems[].plug`, and nothing has ever
     had a plug paired to a collector while the blower drew current — so the green
     "412 W" state has been reasoned about, not seen.
-  - The Live view's collector card still draws the old impeller spiral as its
-    icon (live.component.ts, `.cyc`). The canvas and that card no longer agree,
-    and the card is the other place a collector is drawn. -- I'm actually OK with this -Jeffs
 
 - **Hover tooltips on the canvas glyphs.** Primary vs secondary port, the 1–4
   numbered outlet icons, probably others. Low priority — and hover can't be the
   only way in (see the mockup rules), so whatever this becomes needs a tap path too.
 
 ## Carried debt
+
+- **Draw the slider board and the RF transmitter on `docs/carrier-wiring.html` (2026-10-18).** `firmware/WIRING.md` was
+  archived as history (`docs/archive/WIRING.md`); the wiring page now covers the PWM carrier only. Two wirings still live
+  only in the archive: the slider board (ST3215 half-duplex bus and its logic level, the two NC endstops — archive §7)
+  and the 315 MHz HT12E transmitter (archive §10). Draw them with the `wiring-diagram` skill, then nothing current
+  points into the archive for a wiring fact.
+
+### Small fixes carried from the 2026-09-08 code review
+
+Moved here 2026-10-18 when the review was archived (`docs/archive/review-2026-09-08.md`, which has the full write-ups
+by these numbers). Each was re-checked against the code that day; 1.5, 2.3 and 5.1/7.1 had gone (the link code it named
+is gone, the sweep now waits for the release, and the topology backup runs again). Severity as the review gave it.
+
+- **[M] 1.4 — A jog can throw away a routed move.** `NodeSession::jog()` overwrites the single `_txFrame` slot that a
+  routed `setState()` may still be holding, so the SET is lost while `_moveOutstanding` stays set and the shop's move
+  queue waits out `kMoveTimeoutMs` (210 s). Reachable: jogging a gate in setup while a tool starts elsewhere. Refuse a
+  jog while a routed frame is pending, or clear `_moveOutstanding` when its frame is overwritten.
+- **[M] 3.2 — Two unpaired constants in the mock.** `tools/mock-api.js` refuses a fourth board with a bare
+  `pairedNodes.length >= 3` (the device's is `kMaxPairedNodes`, NodeRegistry.h) and range-checks `/api/servo/jog` with
+  `ch >= 4` (the budget is `MAX_SERVOS_PER_HOST` / `SERVO_COUNT`, **2** now). Read both from the model.
+- **[M] 5.3 — `spec-runner.js` keeps a hand-maintained suite list.** A new `*.spec.ts` never runs until someone adds it
+  (and to `tsconfig.spec.json`). Glob `.spec-test/**/*.spec.js` instead.
+- **[L] 2.6 — `LimitSwitchDistance::updateHoming()` has a `delay(20)`** inside a state machine that must never block.
+- **[L] 2.7 — Two `kMoveTimeoutMs`.** The driver's (120 s, one bus command) shares a name with NodeLink's (210 s, the
+  primary giving up on a node). Rename the driver's to `kCommandTimeoutMs`.
+- **[L] 7.4 — `LimitSwitchDistance`'s vestigial state.** `_releaseStart` is a "have we started" flag with a dodge for its
+  own zero (make it a bool), and `Phase::BACKING_OFF` is never assigned (the parallel `_backingOff` bool is the state).
+- **[L] 3.3 — `mock-api.js` wraps some routes in `runModel()` and not others** (`/api/config/*`,
+  `/api/dustcollector/switch`): a model throw there is a dead socket, not a 400.
+- **[L] 3.4 — Mock tidiness:** `outletPut`/`outletDel` compile the same regex twice; `mock-node.js`'s `holdAtRest` is a
+  `let` never reassigned.
+- **[L] 4.6 — `separateLanes()` (build/routing/router.ts) judges later lane groups against geometry an earlier group
+  already moved.** Order-dependent; no repro was built.
+- **[L] 4.8 — Repeated work in hot paths:** `outletTakenByAnotherMachine()` calls `machineIdOfPort()` per row
+  (O(rows² × elements) per keystroke), `healMachineNames()` rebuilds `portsByMachine` per machine, Live calls
+  `collectorChip(g)` twice in a row, and Live's `refresh()` has no in-flight guard, so two slow status replies can land
+  out of order.
+- **[L] 5.4 — The conformance CI scripts clean up three ways:** two use a bare `kill $MOCK_PID`, one
+  `kill $NODE_PID 2>/dev/null`.
+- **[L] 5.5 — `.gitignore` still lists `.pio/`**; builds live in `.pio.nosync/`.
 
 - **Take NodeLink off the customer's network entirely (jeff, 2026-09-18). "Do we
   need to look at bluetooth or something else that we control, isolated from the
@@ -666,118 +679,6 @@ the app, the Pi's plug picker shows live draw (and not itself), and a board too 
   around the two-role ceiling for now.
 
 
-- **What would still force a node reflash — the audit, 2026-09-17. LANDED, see
-  DONE.md.** The sweep found exactly one gap and it is closed: the CT trip
-  numbers now ride the CONFIG frame. What remains on a node is honest —
-  protocol changes move both sides together, and pin maps / rack geometry change
-  when a board is rewired. Left open deliberately:
-
-  - **~~The trip numbers are provisional~~ SETTLED 2026-09-17.** Each of the
-    three reasons for doubting `kTripRatio` 4.0 / `kMinTripCounts` 8.0 was
-    checked and none survived. Recorded so it is not re-derived a fourth time:
-
-    | doubt | outcome |
-    |---|---|
-    | the rebuilt divider was never re-measured | done 2026-09-16, scale held +1.50%, §5.5 closed |
-    | the floor swings 10x with location | it does not — the ~2.2 A was a BREADBOARD fault (drifting DC bias, a spring contact on the analog node), diagnosed in `WIRING.md` in the same session |
-    | a 0.78 A trip is too sensitive | nothing else is on the conductor: the clamp goes inside the tool's own switch/motor enclosure (jeff) |
-    | lead length untested | the SCT-013 lead is fixed ~1 m and every measurement used full length — the worst case IS the measured case (jeff) |
-
-    Floor ~0.195 A (6.68 counts) at the collector, unchanged with the CT shorted
-    out, so it is the C5's own ADC noise. Trip lands ~0.78 A; SawStop running
-    6.4x, planer no-load 9x, collector 13.6x, SawStop standby invisible. And the
-    numbers now ride CONFIG, so if they ever DO need moving it is an edit to
-    `sensing/CtTrip.h` plus a primary reflash — a bench session, not a ladder.
-  - **~~Isolated 12→5 DC-DC, or a plain MPM3610?~~ ANSWERED 2026-09-17: PLAIN
-    BUCK.** Measured, three conditions, same board and clamp:
-
-    | | floor, counts | floor, A |
-    |---|---|---|
-    | A — separate supplies, the reference | 6.50 | 0.194 |
-    | B — one 12 V brick through the buck, lamps off | 6.24 | 0.186 |
-    | **B — same, lamps running** | **6.79** | **0.202** |
-
-    +4% end to end; the lamps' own contribution backs out in quadrature to ~2.7
-    counts, a tenth of the trip point. Bias flat at 1621–1623 mV throughout. **The
-    Traco TMR 6-1211 is not being bought**, and `WIRING.md` keeps its part table
-    only for the reasoning inside it.
-
-    Not tested, and closed on physics instead: the buck's own ripple. USB was
-    attached for serial and the Schottky sits buck-side, so VBUS sourced the board.
-    The MPM3610 switches at ~2 MHz against a 29 kSPS / 60 ms / 60 Hz measurement —
-    it cannot survive the integration. The in-band load, the lamps on the shared
-    ground, is the one that was measured.
-
-  - **12 V barrel jack, USB-PD dropped (jeff, 2026-09-17).** `WIRING.md`'s
-    "USB-PD instead of a DC brick" section is superseded in place with the full
-    reasoning. Short version: PD chose 15 V *because* 12 V is optional in the PD
-    spec, an objection that dies with PD — and 12 V is what the hardware wants
-    anyway (QS18, pilot, strobe, and an ST3215 that 15 V over-drives), so PD
-    needed a second regulator on exactly the boards that matter. Minus the
-    HUSB238. Cost is the "a charger is a part people already own" argument, which
-    was made about a 15 V 3 A brick and is much weaker for 12 V.
-
-    **The consequence that is not free is mains earth in the CT's chain** — see
-    the two-step test above, and do not let it get conflated with the shared-
-    ground question.
-
-  - **CT connects via a 3.5 mm JACK on the PCB (jeff, 2026-09-17) — and it wants
-    the SWITCHED contact wired to a GPIO.** The SCT-013 already terminates in a
-    3.5 mm plug, so a jack makes the install "plug it in", which is the
-    owner-installable rule satisfied with no wiring step.
-
-    It also retires lead length as a worry permanently, and for a better reason
-    than "nobody will shorten it": a shorter lead picks up LESS, so it moves the
-    floor down, and since the floor is learned at boot and the trip is a ratio
-    against it, the whole thing tracks. It varies in the safe direction.
-
-    **The one thing that is free now and impossible later:** pick a jack with the
-    normally-closed switched contact and run it to a GPIO. Without it an
-    unplugged CT reads the bias midpoint, which is indistinguishable from a clamp
-    on an idle tool — so a forgotten or knocked-out plug looks exactly like "the
-    tool is off", and that gate silently never opens. With it the board knows
-    whether a clamp is present and can report it, the same way a board reports
-    `caps.ct` today.
-
-    Hot-plugging after boot is NOT a problem, and that is measured rather than
-    assumed: shorting the CT out left the floor unchanged, so a floor learned
-    with nothing attached is the same floor.
-
-  - **A floor that learns too HIGH is now refused, not applied.** `kMaxFloorCounts`
-    34 (~1 A). `kMinTripCounts` only ever guarded the other direction, and the
-    unguarded one is the failure that actually happened: the breadboard's 76-count
-    floor computes a trip of ~8.8 A, which leaves a board that notices the dust
-    collector and is blind to the SawStop, the planer and the jointer — silently,
-    with a plausible number in the log.
-
-    A ceiling on the TRIP point would have been the obvious fix and is wrong: it
-    leaves a bad board reading permanently ON, trading a silent deaf board for a
-    stuck-on one. Refusing the floor keeps it honest both ways, and it RETRIES
-    rather than latching — which in passing fixes a second bug, a tool that
-    happens to be running at boot poisoning the floor for the whole session.
-
-    Untested on hardware, like everything else here, but no longer untested at
-    all: `firmware/test/test_cttrip.cpp`, 34 assertions.
-
-  - **`kClearRatio` 0.75 has no bench evidence at all.** It is new and it was
-    picked to be obviously safe against a ~80x quiet-to-running gap, not
-    measured. The case it exists for is the marginal load — the back massager
-    that would not trip on 2026-09-16 — which is exactly the case where 0.75
-    might be wrong in either direction.
-  - **Hysteresis is untested on hardware.** The host tests cover the frame, not
-    the loop. What to watch for on the bench: a tool that used to chatter near
-    its trip point should now latch, and a tool genuinely switched off should
-    still read off within one sample (~250 ms), because off is a fall to the
-    floor rather than a fall to 74%.
-  - **Tuning is per BOARD, not per sensor**, taken from the first spec in the
-    CONFIG — the same "one clamp, one pad" assumption `tickSensors()` already
-    makes. When a board gets a second clamp this moves into `g_sensors[]`
-    alongside the channel. Nothing else about the shape changes.
-  - **No GUI for it, and that is deliberate for now.** The primary sends its own
-    compiled-in values. Making them per-machine document fields is the next step
-    if the numbers ever need to differ between a dust collector and a planer —
-    but that is a schema change plus UI, and nothing yet says they do.
-
 - **Should a node stream RAW clamp readings and let the primary decide?
   (jeff asked 2026-09-17 — answered NO for now, with the reasoning, because it
   will be asked again.)** *"Can we have the nodes send raw data back to the
@@ -852,7 +753,8 @@ the app, the Pi's plug picker shows live draw (and not itself), and a board too 
   or a shop drifts into two firmwares that disagree about NodeLink. Whatever
   ships the image should stamp it with the git sha the UI already reports.
 
-  **BUILT 2026-10-03, NOT RUN ON ANY BOARD.** What exists: both partition tables
+  **BUILT 2026-10-03. NODE UPDATES ARE PROVEN** (from the Mac brain 2026-10-05, and from the Pi brain for the whole shop
+  since 2026-10-11, the slider included on 2026-10-17). The ESP32 primary's own OTA and the rollback paths are not. What exists: both partition tables
   with a second slot (primary 2×2.25 MiB + 3.44 MiB ffat on the 8 MB the chip has;
   node 2×1.9 MiB inside 4 MB); `POST /api/ota` + `dev.sh ota` for the primary,
   with probation/rollback (`utils/OtaGuard`: valid after 30 s healthy, rolled back
@@ -881,7 +783,7 @@ the app, the Pi's plug picker shows live draw (and not itself), and a board too 
 
   So the remaining argument for keeping them is narrow but real: `ct_bench` runs
   with **no WiFi**, which is how the noise floor was measured on 2026-09-15
-  (5.80 counts against 6.03 with the radio up — see WIRING.md §8). A bench build
+  (5.80 counts against 6.03 with the radio up — see docs/archive/WIRING.md §8). A bench build
   that removes a known noise source is a measuring instrument, not a duplicate.
   `st3215_bench` sets servo IDs on a new ST3215, which is a real setup task with
   no other home.
@@ -1050,7 +952,7 @@ the app, the Pi's plug picker shows live draw (and not itself), and a board too 
   - **Rollback is not free.** `Update.h` does not validate-and-revert by
     default, and without it a bad image on a node is a board that must come down
     and go on USB. That recovery cost is exactly what argued *against* writing
-    custom Tasmota firmware (`docs/tool-sensing-rfc.md` §12.4), so it would be
+    custom Tasmota firmware (`docs/archive/tool-sensing-rfc.md` §12.4), so it would be
     dishonest to accept it here without the rollback flag on from the start.
   - **The primary must refuse an update while anything is moving** or the
     collector is running.
@@ -1058,7 +960,7 @@ the app, the Pi's plug picker shows live draw (and not itself), and a board too 
 - **The C5 has an 802.15.4 radio (2026-09-09).** `esptool` reports `Wi-Fi 6
   (dual-band), BT 5 (LE), IEEE802.15.4` on the board we already ship. Noted
   because the Zigbee/Thread half of the "other smarthome protocols" question in
-  `docs/tool-sensing-rfc.md` §11 is not a hardware question — the radio is
+  `docs/archive/tool-sensing-rfc.md` §11 is not a hardware question — the radio is
   present. Still parked; the near-term job is one shop on one guest network.
 
 - **No right-click menu on a duct.** Every other thing on the canvas has one now.
@@ -1358,7 +1260,8 @@ the real device) and confirm the tool list, manual override, and gate state trac
 what the hardware is doing.
     
 
-- **Node-owned plug polling: BUILT 2026-10-03, NOT RUN ON ANY BOARD.** The board
+- **Node-owned plug polling: BUILT 2026-10-03, run on a bench node 2026-10-04 with no load** (see "Prove node-owned plug
+  polling under a real load" above). Not in use in the shop as of 2026-10-17: no node polls a plug. The board
   that controls a tool polls that tool's plug (rule: `plugOwners`, jeff: "the brain
   polls boards until they're assigned to a tool"). CONFIG sensors gain kind `plug`
   (ip, shelly|tasmota, thresholdW); SENSE gains `watts` and `plug`; WELCOME gains

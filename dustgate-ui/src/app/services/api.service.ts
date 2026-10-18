@@ -503,7 +503,7 @@ export class ApiService {
    *
    * The escape hatch for a plug discovery cannot see. A Tasmota does not
    * advertise over mDNS in a stock build, so scanning will never find one and
-   * typing its address is the only way in — see docs/tool-sensing-rfc.md §12.
+   * typing its address is the only way in — see docs/archive/tool-sensing-rfc.md §12.
    * (The firmware's empty-scan message has said "add it by IP" since long before
    * there was anywhere to type one.)
    *

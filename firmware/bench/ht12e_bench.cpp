@@ -19,14 +19,14 @@
 // NOTHING TRANSMITS AT BOOT. Same rule as the servo bench: a board that resets
 // must not key a dust collector. Every burst is a command you typed.
 //
-// WHAT IS ALREADY KNOWN (docs/tool-sensing-rfc.md §4.2, read off the hardware):
+// WHAT IS ALREADY KNOWN (docs/archive/tool-sensing-rfc.md §4.2, read off the hardware):
 //     band      315 MHz          FCC ID VFWPD5T, Part 15.231
 //     encoder   HT12E            12 bits: 8 address + 4 data
 //     address   DIP 1, 6, 8 on   → A0=0 A1=1 A2=1 A3=1 A4=1 A5=0 A6=1 A7=0
 //     buttons   one              → exactly one of AD8..AD11 is asserted; which
 //                                  one is the ONLY unknown, and `scan` finds it
 //
-// ⚠️ Read firmware/WIRING.md#10-315-mhz-transmitter before wiring anything.
+// ⚠️ Read docs/archive/WIRING.md#10-315-mhz-transmitter before wiring anything.
 //
 // Build and flash:
 //     PLATFORMIO_CORE_DIR=~/.platformio-pioarduino pio run -e xiao_c5_ht12e_bench -t upload
@@ -205,7 +205,7 @@ static void measureOsc(bool assertTe) {
 // what lets one board work with any receiver without jumpers.
 //
 // WHY RMT AND NOT delayMicroseconds(). This is option B from
-// docs/tool-sensing-rfc.md §4.2, which was rejected for timing: the primary runs
+// docs/archive/tool-sensing-rfc.md §4.2, which was rejected for timing: the primary runs
 // WiFi, and FreeRTOS will preempt a bit-banging loop and stretch a pulse. RMT
 // clocks the pulse train out in HARDWARE from a list of (duration, level) pairs,
 // so nothing the CPU does afterwards can disturb it. That single difference is

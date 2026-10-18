@@ -65,7 +65,7 @@ export interface Cell { col: number; row: number; }
  * that with the other end of every cable sitting somewhere you can't see the moment
  * you scroll. Boards are ordinary pieces on the grid now and the fix for the
  * original problem is a better DEFAULT placement — top-right of the system you're
- * working in. See docs/boards-on-canvas-plan.md. */
+ * working in. See docs/archive/boards-on-canvas-plan.md. */
 
 /** Where port `ch` sits on a board centred at `c`. Channel 0..3 are servo; passing
  *  SERVO_PORTS gives the slider port. Returns the port's CENTRE, and its bottom

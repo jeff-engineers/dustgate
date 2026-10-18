@@ -2,7 +2,7 @@
 // =============================================================================
 // PlugClaim.h — who owns a smart plug, and what we're allowed to do to it.
 //
-// The C++ twin of shared/device-model/plug-claim.js (docs/shop-schema-rfc.md
+// The C++ twin of shared/device-model/plug-claim.js (docs/archive/shop-schema-rfc.md
 // §8). Same four states, same rule, case for case — the paired tests
 // (plug-claim.test.js / test_plugclaim.cpp) are the anti-drift mechanism, since
 // the firmware can't import the JS.

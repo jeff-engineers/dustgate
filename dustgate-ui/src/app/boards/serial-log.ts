@@ -1,5 +1,5 @@
 /** The Brain log screen's bookkeeping, kept out of the component so it can be
- *  tested under plain node (spec-runner.js). See docs/mockups/brain-log.html.
+ *  tested under plain node (spec-runner.js). See docs/mockups/archived/brain-log.html.
  *
  *  The board serves raw bytes by a running cursor (GET /api/serial,
  *  firmware/utils/SerialLog.h); this turns those into lines, says out loud when

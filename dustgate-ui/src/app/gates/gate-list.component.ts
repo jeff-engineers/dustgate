@@ -13,7 +13,7 @@ import { type ShopDoc, systemLabel, systemsInLayoutOrder, toShop } from '../serv
 
 // ── The gates screen ─────────────────────────────────────────────────────────
 // Every configured gate in one list, each tappable into the calibration it
-// already has. Design and reasoning: docs/mockups/gates-list.html.
+// already has. Design and reasoning: docs/mockups/archived/gates-list.html.
 //
 // /gates existed once and was RETIRED — it was a "set up every gate" pass, and
 // the canvas made it redundant by showing which gates are unset and letting you

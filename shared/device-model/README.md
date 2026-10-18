@@ -8,22 +8,27 @@ the three drifted constantly.
 
 ```
 shared/device-model/
-  device-model.js         ← the canonical state machine (pure JS, no I/O, no timers)
-  device-model.d.ts       ← TypeScript contract for the model's API
-  conformance.js          ← executable HTTP contract that certifies any target
-  nodelink.js             ← primary↔secondary node protocol (frames + validator)
-  nodelink-conformance.js ← executable WS contract for a NodeLink secondary
-  README.md               ← you are here
+  topology.js / shop.js   ← the LAYOUT: validateTopology (one system) and validateShop (the document) ARE the schema
+  routing.js, sequencer.js← which gate goes where, and in what order (make-before-break)
+  topology-device.js      ← the brain as a simulation: readings in, gates and blowers out, problems
+  nodelink.js             ← primary↔node protocol (frames + validator); its header is the node/brain boundary
+  board-id.js, plug-claim.js ← one rule each, mirrored in firmware/control/
+  device-model.js         ← the older single-device state machine (the slider's API, plug discovery)
+  constant-pairs.json     ← numbers that JS, firmware and the UI must agree on (checked: tools/check-constant-pairs.js)
+  conformance.js, topology-conformance.js, nodelink-conformance.js ← executable contracts any target can be run against
+  topology.fixtures.js    ← shared test shops (viewOf() gives one system)
+  *.test.js               ← the JS half of each matched JS↔C++ pair (CLAUDE.md lists them)
 ```
 
 ## The node protocol (v2 star topology)
 
 `nodelink.js` is the contract between the **primary** (owns the GUI, topology,
-Shelly polling and routing) and each **secondary** (a dumb actuator bank). Its
+Shelly polling and routing) and each **secondary** (a node: it may own any loop faster than a WiFi round trip —
+a homing sweep, a clamp's RMS — and interprets none of the document; see the header of `nodelink.js`). Its
 load-bearing rule: the primary RESOLVES every state into a concrete realization
 before it goes on the wire — a `SET` carries `angle` or `positionMm`, never "put
 gate3 in the open state". A secondary therefore needs no topology, no router and
-no schema version, which is what lets a $5 servo-only board be a node and keeps
+no schema version, which is what lets a cheap servo-only board be a node and keeps
 a schema change from having to be flashed to every board in the shop.
 
 Kept honest at three levels, because each catches something the others can't:
@@ -77,7 +82,7 @@ code (see below).
 ## Conformance — how firmware stays in sync
 
 The firmware is C++ and can't share this code, so `conformance.js` is the sync
-mechanism: **34 behavioural scenarios run over HTTP against any target that
+mechanism: **35 behavioural scenarios run over HTTP against any target that
 claims to be a DustGate device.** The same suite certifies the mock in CI and a
 real ESP32 on demand.
 

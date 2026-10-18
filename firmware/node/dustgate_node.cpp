@@ -1647,7 +1647,7 @@ void setup() {
     g_ct.begin();
     // D0's own pull-up, so a pad with NOTHING wired to it reads railed high — "no clamp" — rather than floating. Set
     // after a first read, so the ADC's own pin setup cannot undo it. Against the bias divider's 500 Ω it moves the
-    // midpoint ~18 mV, which the RMS subtracts. ⚠ unverified on a C5: that the ADC leaves the pull-up enabled.
+    // midpoint ~18 mV, which the RMS subtracts. The ADC does leave it enabled: four bare-D0 shop boards read "no clamp" (2026-10-17).
     (void)analogReadMilliVolts(PIN_CT);
     gpio_pullup_en((gpio_num_t)PIN_CT);
 #endif

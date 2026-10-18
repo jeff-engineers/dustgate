@@ -4,7 +4,7 @@
 // The first CollectorPresser (control/CollectorPress.h). It does not touch the
 // fob at all: it keys a 315 MHz transmitter with the same 12-bit HT12E frame the
 // fob sends, so the receiver cannot tell the difference. Chosen ahead of the
-// servo path (docs/tool-sensing-rfc.md §4.2a) because it needs no printed
+// servo path (docs/archive/tool-sensing-rfc.md §4.2a) because it needs no printed
 // fixture and no mechanical alignment — it can be tested tonight.
 //
 // EVERY NUMBER BELOW WAS MEASURED, on `collector-rf-bench`, against the real

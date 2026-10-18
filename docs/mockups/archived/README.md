@@ -31,7 +31,7 @@ Hence one page, updated in place.
 
 | Page | Archived | Why |
 |---|---|---|
-| `board-rail-pinning.html` | 2026-08-16 | The board rail itself was deleted — boards became ordinary pieces on the grid, so there is nothing to pin and no band to fade. Replaced by `docs/boards-on-canvas-plan.md`. Moved out of `secondary-ports.html`, whose other panels were still current at the time. |
+| `board-rail-pinning.html` | 2026-08-16 | The board rail itself was deleted — boards became ordinary pieces on the grid, so there is nothing to pin and no band to fade. Replaced by `docs/archive/boards-on-canvas-plan.md`. Moved out of `secondary-ports.html`, whose other panels were still current at the time. |
 | `secondary-ports.html` | 2026-08-20 | Option A (one machine, two spigots) is now `canvas.html` §2. Its "when the pickup is on the other collector" section was partly wrong; the cross-seam rule in §2 supersedes it. |
 | `outlet-docks-multi-system.html` | 2026-08-20 | The interactive plug/dock prototype. Its cross-seam secondary-run treatment is now `canvas.html` §1. |
 | `outlet-dock.html` | 2026-08-20 | Superseded by `outlet-docks-multi-system.html` at the time, and now by `canvas.html`. |
@@ -44,3 +44,19 @@ Hence one page, updated in place.
 | `problem-marking.html` | 2026-09-07 | Exploration: how the canvas points at a validation problem. The halo won (D-66) over a corner badge and dim-the-rest, and it is orange rather than a new hue. Its proposal to mark overlapping DUCTS lost to preventing them instead. |
 | `seam-insert.html` | 2026-09-08 | Exploration: what a drop in the gap between two systems should do. Accepted and built (D-71) — the drop opens a row rather than spending one. Two things changed on the way in: the push is not always one row (two when the bands already touch), and it is downward only, because a piece dragged UP is itself what closes the gap. Its demo runs the real rule, so it is still worth clicking. |
 | `path-highlight.html` | 2026-09-07 | Exploration: tracing the selected piece's run back to its collector. The halo in the line's own colour won (D-68), which also beat this page's own opening argument for brightening. Continuing downstream was cut and is still switched on in the page, because the reason it lost is easier to see than to describe. |
+
+## Built, moved here 2026-10-18
+
+Mockups for screens that have shipped. The app is the record of what was built and the
+[decision register](../decisions.html) holds the decisions, so a design page beside them could only drift:
+- [`brain-log.html`](brain-log.html) — the Brain log screen (Boards → log)
+- [`collector-glyph.html`](collector-glyph.html) — the collector glyph on the canvas
+- [`collector-setup.html`](collector-setup.html) — the collector sheet (Tools)
+- [`ct-on-a-board.html`](ct-on-a-board.html) — the clamp on the Boards screen and the tool and collector sheets
+- [`gates-list.html`](gates-list.html) — the Gates screen (its own decision log is history now; the register is current)
+- [`oled-status.html`](oled-status.html) — the status screen firmware (StatusScreen) — its decision log is history now
+- [`plugs-clamp-delete.html`](plugs-clamp-delete.html) — the Plugs page and Delete system
+- [`problems.html`](problems.html) — the Live view problems list
+- [`rf-address.html`](rf-address.html) — the remote-matching step in the collector sheet
+- [`save-and-errors.html`](save-and-errors.html) — the canvas save bar and services/failure.ts (D-84)
+- [`shop-status-chips.html`](shop-status-chips.html) — the Live view status chips — its decision log is history now

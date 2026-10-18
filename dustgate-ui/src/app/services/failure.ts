@@ -1,6 +1,6 @@
 // failure.ts — what to tell a person when a request fails, and what to tell the console.
 //
-// Written 2026-10-17 after an audit of every error handler in the app (docs/mockups/save-and-errors.html). The same
+// Written 2026-10-17 after an audit of every error handler in the app (docs/mockups/archived/save-and-errors.html). The same
 // two mistakes ran through most of them:
 //
 //   • "Couldn't reach the controller" for EVERY failure. The brain usually did answer — refusing, with a reason — and

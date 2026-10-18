@@ -12,12 +12,12 @@
 // ⚠️ A CT MUST GO AROUND ONE CONDUCTOR. Clamped around a whole appliance cord,
 // hot and neutral cancel and it reads ~zero. Use a line splitter's 1X loop, or
 // clamp inside the tool's own wiring compartment. (Whether an intact cord leaks
-// enough field to detect on/off anyway is an open question — shop-schema-rfc.md
+// enough field to detect on/off anyway is an open question — docs/archive/shop-schema-rfc.md
 // §5.4 — and this meter is how you would answer it: read the splitter's 1X loop,
 // then the intact cord, back to back.)
 //
 // SENSOR: SCT-013-030, 30 A → 1 V RMS, burden resistor built in. Cut the 3.5 mm
-// plug off and use the bare leads. Wiring: firmware/WIRING.md#8-ct-clamp.
+// plug off and use the bare leads. Wiring: docs/archive/WIRING.md#8-ct-clamp.
 //
 // Build and flash:
 //     PLATFORMIO_CORE_DIR=~/.platformio-pioarduino pio run -e xiao_c5_ct_bench -t upload
@@ -65,7 +65,7 @@ static bool  g_screenOn = true;
 // THIS IS A PRODUCT PROBLEM, not a bench one. Every DustGate env assumes a
 // screen, and a CT input on a real board sits on D0 beside that same panel. The
 // fix is a lower-impedance divider (1k/1k) and a 100 nF ceramic at the pin, and
-// it has to be validated with the screen ON — see docs/shop-schema-rfc.md §7.5.
+// it has to be validated with the screen ON — see docs/archive/shop-schema-rfc.md §7.5.
 // Track the REQUESTED state whether or not a panel answered. The first version
 // returned early with no panel, leaving g_screenOn stuck at its `true` default —
 // so `screen 0` reported "on", and worse, `zero` kept warning that the screen was
@@ -346,7 +346,7 @@ static void suite(uint32_t secs) {
     // debugging ones, so they go last.
     //
     // E is the whole-cord case, and it is not a warm-up — it is the open question
-    // from shop-schema-rfc.md §5.4. Hot and neutral cancel in an intact cord, so
+    // from docs/archive/shop-schema-rfc.md §5.4. Hot and neutral cancel in an intact cord, so
     // in theory it reads nothing; iVAC ship a product that says otherwise, and
     // if they are right then every 240V and hardwired install stops needing
     // anything opened up. It does not have to be accurate. It has to be
@@ -402,7 +402,7 @@ static void suite(uint32_t secs) {
     } else {
         Serial.println(F("\n  * the intact cord reads at or near the floor — the"));
         Serial.println(F("    fields cancel as theory says, and every install needs"));
-        Serial.println(F("    one conductor separated. shop-schema-rfc.md §5.4."));
+        Serial.println(F("    one conductor separated. docs/archive/shop-schema-rfc.md §5.4."));
     }
     if (fSig > 0 && eSig > 0)
         Serial.printf("  * whole cord is %.0f%% of one conductor (noise removed)\n",

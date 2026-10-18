@@ -1,6 +1,6 @@
 // plug-claim.js — who owns a smart plug, and what we're allowed to do to it.
 //
-// docs/shop-schema-rfc.md §8. The LAN is not ours alone: Home Assistant, the
+// docs/archive/shop-schema-rfc.md §8. The LAN is not ours alone: Home Assistant, the
 // Shelly app, a bench brain and a shop brain all see every plug on it. Pairing
 // repoints a plug's push target via `Ws.SetConfig`, which SILENTLY steals it —
 // the previous owner simply stops hearing that the tool started, with no error
@@ -16,7 +16,7 @@
 //   is legible in the Shelly app, where no DustGate UI is present to explain
 //   anything. It is a hint and never the decision: names are user-editable, and
 //   renaming one in the Shelly app is already a documented breakage
-//   (docs/outlet-discovery-provisioning.md).
+//   (docs/archive/outlet-discovery-provisioning.md).
 //
 // THE RULE THAT FALLS OUT: a plug already pointed at another controller is
 // pairable READ-ONLY, by polling. We never rewrite its `Ws` config. Push is an

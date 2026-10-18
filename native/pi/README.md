@@ -45,7 +45,7 @@ ssh -t <user>@dustgate.local 'sudo bash /tmp/dustgate-pi/setup.sh'
 ## Deploy (every time)
 
 ```bash
-native/pi/deploy.sh <user>@dustgate.local                       # build the app here, ship the source, build there, restart
+native/pi/deploy.sh <user>@dustgate.local                       # build the app and cross-build the brain here, install, restart
 native/pi/deploy.sh <user>@dustgate.local --state /tmp/dgbench  # the FIRST time: also bring over the layout, pairings and API key
 ```
 
@@ -67,6 +67,7 @@ sudo /opt/dustgate/update.sh --git       # later: pull from git on the Pi instea
 
 ## What this has NOT been through
 
-Run on a Pi Zero 2 W (Raspberry Pi OS Trixie) on 2026-10-06: the cross-built brain started, took the shop's layout and state, re-pointed three plugs
-at itself, and all six nodes dialled in by themselves. Not yet run: an address change under load, a power pull, a full shop day.
+First run on a Pi Zero 2 W (Raspberry Pi OS Trixie) on 2026-10-06: the cross-built brain took the shop's layout and state,
+re-pointed three plugs at itself, and all six nodes dialled in by themselves. It has run the shop since 2026-10-11 (the bin
+alert, the slider and node updates have all gone through it). Not yet run: an address change under load, a power pull, a full shop day.
 Not built: a git deploy key on the Pi (the `--git` path), mDNS advertising of the brain, a read-only root, first-boot WiFi setup.

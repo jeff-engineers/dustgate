@@ -26,7 +26,7 @@ git status --porcelain && git diff --stat HEAD
 | HTTP/WS contract on either side | the conformance suites below |
 | `platformio.ini`, `boards/*.h` | the compiles below |
 | `dev.sh`, `deploy.sh`, `tools/*.sh` | `bash -n <file>` (syntax only — flashing needs hardware) |
-| docs, mockups, README only | nothing |
+| docs, mockups, README, any `CLAUDE.md` | `cd tools && npm run docs:check` (links, archive banners, CLAUDE.md size) |
 
 **`shared/device-model/` is why the row above is three commands.** Its JS tests
 and the C++ host tests in `firmware/test/` are a matched pair asserting the same

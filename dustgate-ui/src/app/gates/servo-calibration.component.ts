@@ -15,7 +15,7 @@ import {
 //
 // The sliding gate gets this from a reference sweep between two endstops. A servo
 // valve has no endstops to sweep — just hard stops we must NOT drive into (a
-// clutchless servo stalls; see the mechanical notes in docs/topology-schema.md).
+// clutchless servo stalls; see the mechanical notes in docs/archive/topology-schema.md).
 // So it's done by eye: nudge the valve, watch the handle, capture where it lands.
 //
 // Two things make that work for someone standing at the gate with a phone:

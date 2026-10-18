@@ -20,7 +20,7 @@
 // the driver. That is now a property of the BOARD HEADER alone.
 //
 // DECLARED BY THE BOARD, PROBED AT BOOT — and that is a reversal, so it is worth
-// saying why. The original answer (docs/mockups/oled-status.html) was to declare
+// saying why. The original answer (docs/mockups/archived/oled-status.html) was to declare
 // a screen in the build, matching how every other fitted-or-not part on these
 // boards is decided: an env set -DHAS_STATUS_SCREEN and there were two envs per
 // board. That went on 2026-08-22, when the carrier design became one that always

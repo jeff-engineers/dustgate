@@ -34,7 +34,7 @@ public:
     bool        releasePush(const char* restoreUrl) override;
 
     // Ws.GetConfig — read who this plug currently pushes to. THE AUTHORITY on
-    // ownership (docs/shop-schema-rfc.md §8): names are user-editable, this is
+    // ownership (docs/archive/shop-schema-rfc.md §8): names are user-editable, this is
     // not. Blocking HTTP, so discovery/provisioning paths only.
     //
     // Returns false if the plug didn't answer or the response didn't parse —

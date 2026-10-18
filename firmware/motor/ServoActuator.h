@@ -9,7 +9,7 @@
 // HOLDS the servo energized for SERVO_HOLD_MS so an analog servo has time to
 // catch up to the commanded angle, and finally auto-DETACHES so the coil
 // de-energizes — the ball valve holds position by hard-stop friction / optional
-// detent (see docs/topology-schema.md). Detaching is essential for ANALOG
+// detent (see docs/archive/topology-schema.md). Detaching is essential for ANALOG
 // servos (e.g. Power HD 3001HB), which hunt/groan continuously while holding.
 // Set holdAtRest(true) only for a build that would back-drive when de-energized.
 //
@@ -127,7 +127,7 @@ public:
     // OR the post-move hold is still energizing the coil so an analog servo can
     // catch up. LocalActuatorBus gates on this to guarantee only one servo is
     // ever driven at a time — the 5V rail can't take two (see
-    // docs/architecture-rfc.md §7). A holdAtRest servo reports false once the
+    // docs/archive/architecture-rfc.md §7). A holdAtRest servo reports false once the
     // sweep ends: it draws holding current indefinitely, so blocking on it would
     // deadlock the move queue.
     bool isMoving() const {

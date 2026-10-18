@@ -36,6 +36,9 @@ jobs:
       - name: Pure model tests (topology, routing, NodeLink frames)
         run: npm run model:test
         working-directory: tools
+      - name: Documentation checks (links, archive banners, CLAUDE.md size)
+        run: npm run docs:check
+        working-directory: tools
       - name: Topology conformance against the mock
         run: npm run topology:conformance:ci
         working-directory: tools

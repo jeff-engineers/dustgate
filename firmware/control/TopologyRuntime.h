@@ -923,7 +923,7 @@ public:
     // `sensor.outlet` is how we WATCH one. A collector commanded by a servo
     // pressing its remote, or by RF, has no control.outlet at all — and every
     // way we press that button is STATELESS, so watching it is the only way to
-    // know whether the press landed. See docs/tool-sensing-rfc.md §4.2a/§4.2b.
+    // know whether the press landed. See docs/archive/tool-sensing-rfc.md §4.2a/§4.2b.
     //
     // A collector switched by a metering Shelly needs no second device: it
     // senses itself through the plug that switches it, and the sketch falls back

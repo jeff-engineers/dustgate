@@ -36,7 +36,7 @@ export const TOOL_HALF_W = 38;
 /** Half-extent of a collector body, which is SQUARE — 76 x 76.
  *
  *  30 until 2026-08-25, when the circle-and-impeller became a barrel that carries
- *  its own name and its own plug row (docs/mockups/collector-glyph.html). The two
+ *  its own name and its own plug row (docs/mockups/archived/collector-glyph.html). The two
  *  rows are a machine's two rows, so the width is a machine's width; the extra 8
  *  of height is the room the lid seam takes.
  *

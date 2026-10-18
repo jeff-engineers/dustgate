@@ -189,7 +189,7 @@ long homingBackoffSteps();
 
 // Finish the reference sweep: given the measured far-endstop trigger position (in
 // steps, from home datum 0), place all gates and persist. See the placement
-// derivation in docs/dual-endstop-calibration.md. Span-based: absorbs per-build
+// derivation in docs/archive/dual-endstop-calibration.md. Span-based: absorbs per-build
 // steps/mm + endstop-location variance; pitch is the fixed manifold property.
 static void finishCalibrationSweep(long farTriggerSteps) {
     long farSpanSteps     = farTriggerSteps < 0 ? -farTriggerSteps : farTriggerSteps; // home→far
@@ -812,7 +812,7 @@ static void syncPairedNodes() {
 // A node that has lost us dials this primary's /nodelink listener, says JOIN, and
 // is bound to the bus that pairs it. No task and no per-node address on this side:
 // it is one socket on the async_tcp task. See RemoteActuatorBus::attachInbound and
-// docs/nodes-dial-the-brain-plan.md.
+// docs/archive/nodes-dial-the-brain-plan.md.
 // Below this much free INTERNAL RAM a JOIN is answered 'busy'. The app floor is 28 KB (the page guard);
 // a node costs ~3.5 KB, so leave room for that plus the page.
 static const size_t kJoinMinFreeBytes = 24000;
@@ -901,7 +901,7 @@ static void tickBeacon() {
         if (!remoteLive(i)) continue;
         any = true;
         // Only a REQUIRED board hurries the beacon: an optional one (a planer's sensor board, powered with the planer) is
-        // off for days at a time, and would otherwise keep it at 5 s forever (docs/optional-nodes-plan.md).
+        // off for days at a time, and would otherwise keep it at 5 s forever (docs/archive/optional-nodes-plan.md).
         if (!g_remoteBuses[i].health().linked &&
             !(g_topoRuntime.loaded() &&
               topo::isOptionalBoard(g_topoRuntime.topology(), topo::controllerIdForHost(g_topoRuntime.topology(), g_remoteBuses[i].host()))))
@@ -1160,7 +1160,7 @@ static void syncControllerAliases() {
 // ── Pressing the collector's own remote ──────────────────────────────────────
 //
 // A collector with `control.rf` has no switchable plug: we transmit its
-// remote's frame instead (docs/tool-sensing-rfc.md §4.2). That is an EDGE
+// remote's frame instead (docs/archive/tool-sensing-rfc.md §4.2). That is an EDGE
 // against a TOGGLE, so it cannot be commanded, only nudged — and whether the
 // nudge landed is answered by the collector's sensor plug, not by us.
 // control/CollectorPress.h holds the policy; this holds the hardware and the
@@ -1509,7 +1509,7 @@ void setup() {
     // INPUT_PULLUP so an unwired board reads HIGH, which with the optocoupler's
     // inversion means "bin OK". A board with nothing connected must not scream —
     // and topology gates it anyway, since nothing reports unless a collector
-    // names this board (boards/xiao_c5.h, docs/shop-schema-rfc.md §7.5).
+    // names this board (boards/xiao_c5.h, docs/archive/shop-schema-rfc.md §7.5).
     pinMode(PIN_BIN_SENSOR, INPUT_PULLUP);
 #endif
 
@@ -1886,13 +1886,12 @@ static bool allNodesLinked() {
 // The optional status screen. Everything it knows comes from here, and it knows
 // nothing the pixel doesn't — the state word IS statusled::state(), spelled.
 //
-// UNVERIFIED, like everything else about the screen: no panel has been wired to
-// a board. Compiles to nothing on a build without one, so this function costs an
-// unfitted board a call to an empty inline.
+// A panel has run on a C5 (D4/D5, CLAUDE.md); what it shows of a full shop on a primary is less exercised. Compiles to
+// nothing on a build without one, so this function costs an unfitted board a call to an empty inline.
 //
 // The gaps, stated rather than faked: the runtime publishes THAT the shop is
 // transitioning, not WHICH selector is in flight, so the make-before-break
-// screen in docs/mockups/oled-status.html can name the tool but not yet its two
+// screen in docs/mockups/archived/oled-status.html can name the tool but not yet its two
 // gates. Naming a plausible gate would be worse than leaving the line out.
 // -----------------------------------------------------------------------------
 static void updateStatusScreen() {
@@ -2620,7 +2619,7 @@ void loop() {
     // -- routing runtime ------------------------------------------------
     // Feed live tool power in, pump the move queue out. Issues at most one move
     // per pass and never while one is in flight — that serialization IS the
-    // one-servo-at-a-time current budget (docs/architecture-rfc.md §7).
+    // one-servo-at-a-time current budget (docs/archive/architecture-rfc.md §7).
 #ifdef ENABLE_HTTP_API
     if (apiServer.consumeTopologyChanged()) adoptStoredTopology();
     {
@@ -2938,7 +2937,7 @@ void loop() {
     // SERIAL AND ONLY SERIAL, on purpose. The screen is a NOISE SOURCE for this
     // very measurement — SSD1306_SWITCHCAPVCC runs a charge pump on the rail the
     // ADC's bias divider shares, and it put ~0.4 A of apparent current on a DEAD
-    // wire (WIRING.md#8-ct-clamp §5.5). A reading you can only see by lighting the
+    // wire (docs/archive/WIRING.md#8-ct-clamp §5.5). A reading you can only see by lighting the
     // thing that corrupts it is not much of a reading, so this one does not care
     // whether a panel is fitted.
     {
@@ -3264,7 +3263,7 @@ void loop() {
             currentState != STATE_HOMING) {
             if (moveStop >= 1 && moveStop <= NUM_STOPS && g_stopRoles[moveStop] == ROLE_BLOCKED) {
                 // Blocked ports (capped, or reserved as a feed) are never move
-                // targets — see docs/dual-endstop-calibration.md.
+                // targets — see docs/archive/dual-endstop-calibration.md.
                 DEBUG_PRINT(F("[API] Move: gate blocked, ignoring: "));
                 DEBUG_PRINTLN(moveStop);
             } else if (moveStop >= 0 && moveStop <= g_numActiveStops) {
@@ -3386,7 +3385,7 @@ void loop() {
 
     // Reference-sweep calibration (dual endstop). Kicks off a home → sweep flow:
     // this just records the request + re-homes; the sweep motion runs in
-    // STATE_HOMING → STATE_CALIBRATING. See docs/dual-endstop-calibration.md.
+    // STATE_HOMING → STATE_CALIBRATING. See docs/archive/dual-endstop-calibration.md.
     {
         char model[16]; int gateCount = 0;
         if (apiServer.consumeCalibrateRequest(model, sizeof(model), gateCount)) {

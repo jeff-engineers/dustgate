@@ -94,7 +94,7 @@ static const uint32_t kMoveTimeoutMs = 120000;
 // Positive step counts in SKETCH coordinates mean "toward the datum" when
 // HOME_DIRECTION is +1 — the same convention SketchLinearDrive encodes as
 // `mm * stepsPerMM() * -HOME_DIRECTION`, which is what puts the far endstop at a
-// negative position (the bench-measured -4380 in docs/dual-endstop-calibration.md).
+// negative position (the bench-measured -4380 in docs/archive/dual-endstop-calibration.md).
 static inline bool isAwayFromDatum(long delta) {
     return (delta * -HOME_DIRECTION) > 0;
 }
@@ -133,7 +133,7 @@ bool ST3215LinearDriver::begin() {
         Serial.println(F("           nothing else, with every setting already correct."));
         Serial.println(F("         → Then: signal wiring, common ground, baud. Run the bench"));
         Serial.println(F("           console (pio run -e xiao_c5_bus_bench) and work §5.1 of"));
-        Serial.println(F("           firmware/WIRING.md#7-the-slider--st3215-bus-and-endstops — `selftest` splits a"));
+        Serial.println(F("           docs/archive/WIRING.md#7-the-slider--st3215-bus-and-endstops — `selftest` splits a"));
         Serial.println(F("           broken UART from a bus with nothing on it."));
         return false;
     }

@@ -122,7 +122,7 @@ bool SmartOutletControl::begin() {
         // base class's `return false`). Building one here would give a collector
         // that silently never starts. If a Tasmota ever appears on a collector
         // it is the SENSE half of a two-device collector, which is an open
-        // question in docs/tool-sensing-rfc.md §11, not this.
+        // question in docs/archive/tool-sensing-rfc.md §11, not this.
         _collectors[0] = new ShellyGen2Outlet(dc.ip, "Dust Collector");
         _collectors[0]->setHost(dc.host);
         _dcSynced[0] = false; // force initial off/on sync on first poll

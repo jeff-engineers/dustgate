@@ -5,7 +5,7 @@
 // real question a 128×64 panel asks is what fits, and that is answerable on a
 // laptop. (A panel has since been driven for real — 2026-08-21, DevKitC — and
 // none of these assertions had to change.) Every case below is one of the screens drawn in
-// docs/mockups/oled-status.html — the mockup and this test are the same design
+// docs/mockups/archived/oled-status.html — the mockup and this test are the same design
 // stated twice, so when they disagree one of them is wrong.
 //
 // The invariant that matters, checked on EVERY case rather than case by case:

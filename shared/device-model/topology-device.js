@@ -48,7 +48,7 @@ const DEFAULT_COLLECTOR_OFF_DELAY_MS = 5000;  // ↔ kDefaultCollectorOffDelayMs
 // used to say the opposite, and named the condition that would change it: "if
 // the OLED ever needs to say not starting too". The real trigger was bigger.
 // Every way DustGate now commands a collector is STATELESS — a servo pressing
-// its remote, an RF frame (docs/tool-sensing-rfc.md §4.2a/§4.2b) — so what the
+// its remote, an RF frame (docs/archive/tool-sensing-rfc.md §4.2a/§4.2b) — so what the
 // device SENT proves nothing about what the blower did, and only the draw does.
 // A browser that may not be open cannot be the only thing that notices a failed
 // start, so the device holds the verdict too.
@@ -65,7 +65,7 @@ const COLLECTOR_RUNNING_W = 25;
 // one draws very little before it does; judging it the instant the relay closes
 // would raise a false alarm on every single start. This is a debounce on the
 // ALARM, not a state anyone is shown — see the "no transients" decision in
-// docs/mockups/shop-status-chips.html.
+// docs/mockups/archived/shop-status-chips.html.
 const COLLECTOR_SPINUP_GRACE_MS = 4000;
 
 /**
@@ -521,7 +521,7 @@ function reassertFor(d, machineId) {
 //
 // One list in the status, because the Live view used to read `failed` nowhere
 // and had no way to say that an RF press gave up, that a collector could not be
-// seen, or that a plug had stopped answering (docs/mockups/problems.html,
+// seen, or that a plug had stopped answering (docs/mockups/archived/problems.html,
 // 2026-10-03: "if an action fails, we need to know it — regardless of the
 // cause"). The DEVICE words the reason; the UI draws it and invents nothing.
 //

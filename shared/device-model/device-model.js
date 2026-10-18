@@ -41,7 +41,7 @@ const TOOL_NAMES = ['Table Saw', 'Drill Press', 'Router Table'];
 
 // Manifold geometry profiles: (model, gateCount) → mm positions referenced to the
 // near endstop trigger. Used for reference-sweep auto-placement (see
-// docs/dual-endstop-calibration.md). NUMBERS ARE PLACEHOLDERS — measure the real
+// docs/archive/dual-endstop-calibration.md). NUMBERS ARE PLACEHOLDERS — measure the real
 // Rockler manifolds on the reference build and replace. 'custom' has no profile
 // (→ manual jog, but still gets span + steps/mm calibration).
 const MANIFOLD_PROFILES = {
@@ -125,7 +125,7 @@ function createDevice() {
     manualOverride: false,
     numActiveStops: 0,        // runtime-active gate count (0 = unconfigured)
     idleTimeoutSec: IDLE_TIMEOUT_SEC_DEFAULT,
-    // ── dual-endstop calibration (see docs/dual-endstop-calibration.md) ──
+    // ── dual-endstop calibration (see docs/archive/dual-endstop-calibration.md) ──
     farEndstop:        false, // far-end limit switch triggered
     manifoldModel:     'custom',
     measuredSpanSteps: null,  // null until a reference sweep runs
@@ -641,7 +641,7 @@ function _runningWatts(d, ip) {
 //
 // It matters most for the device that CANNOT be discovered. A Tasmota does not
 // advertise over mDNS in a stock build, so typing its address is the only way in
-// (docs/tool-sensing-rfc.md §12) — which is why this returns `kind` rather than
+// (docs/archive/tool-sensing-rfc.md §12) — which is why this returns `kind` rather than
 // assuming Shelly the way it did until 2026-09-09.
 function pingOutlet(d, ip) {
   if (!ip) throw badRequest("missing 'ip'");

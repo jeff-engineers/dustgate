@@ -58,7 +58,7 @@
 #pragma once
 
 // Build-target identity, reported in the NodeLink WELCOME frame and matching
-// the topology schema's controllers[].board values (docs/topology-schema.md).
+// the topology schema's controllers[].board values (docs/archive/topology-schema.md).
 #define BOARD_NAME "xiao_c5"
 
 // -- What this board drives: THREE PWM SERVOS *OR* ONE SERIAL BUS --
@@ -100,7 +100,7 @@
 // ⚠️ The bus LOGIC LEVEL is still unconfirmed (3.3V vs 5V) and the C5 is NOT 5V
 // tolerant. That is moot through the adapter, which buffers, and it matters the
 // moment a servo lead meets one of these pads directly.
-// See firmware/WIRING.md#7-the-slider--st3215-bus-and-endstops.
+// See docs/archive/WIRING.md#7-the-slider--st3215-bus-and-endstops.
 #define PIN_SERVO_BUS_TX   11   // D6, the pad the XIAO silkscreen calls TX
 #define PIN_SERVO_BUS_RX   12   // D7, ditto RX
 
@@ -108,9 +108,9 @@
 //
 // NOT OPTIONAL, and not a leftover from the stepper. The ST3215 in step mode
 // reports how much of the last command is still outstanding, never where the
-// shaft is (WIRING.md#7-the-slider--st3215-bus-and-endstops §5.0.2), so absolute position is something
+// shaft is (docs/archive/WIRING.md#7-the-slider--st3215-bus-and-endstops §5.0.2), so absolute position is something
 // the driver counts — and counting does not survive a power cycle. The homing
-// sweep of docs/dual-endstop-calibration.md is therefore still the calibration
+// sweep of docs/archive/dual-endstop-calibration.md is therefore still the calibration
 // path, and it needs both switches: one is the datum, the other measures the
 // span and catches over-travel.
 //
@@ -191,8 +191,8 @@
 // app is safe.
 //
 // Wire: 5V -> pixel VDD, GND -> GND, GPIO25 -> 330R -> pixel DIN.
-// See WIRING.md §1 for the level-shift and decoupling notes, and
-// firmware/WIRING.md#1-the-board-and-its-one-pin-map for this board's full wiring.
+// See docs/archive/WIRING.md §1 for the level-shift and decoupling notes, and
+// docs/archive/WIRING.md#1-the-board-and-its-one-pin-map for this board's full wiring.
 #define PIN_PIXEL          25   // D2
 
 // Like the DevKitC, this board's pixel is already external, so the brighter
@@ -207,8 +207,8 @@
 // stay free whether this board is driving four PWM gates or an ST3215 slider.
 // D1 is GPIO0, which is an ordinary pad on the C5 (the boot straps are 26/27/28),
 // so a momentary-to-GND button there is safe even at reset.
-// See firmware/WIRING.md#1-the-board-and-its-one-pin-map §4 and the layouts in
-// docs/mockups/oled-status.html.
+// See docs/archive/WIRING.md#1-the-board-and-its-one-pin-map §4 and the layouts in
+// docs/mockups/archived/oled-status.html.
 // Fitted by naming the pins here, and no longer by a build flag: one env per
 // board as of 2026-08-22, every one of them assuming a screen (see the note at
 // the top of platformio.ini). The button on D1 was pressed on a real C5 and lit
@@ -229,7 +229,7 @@
 // One input pin, and that is the whole feature — which is why bin sensing is a
 // CAPABILITY rather than a board role: it collides with nothing, so it needs no
 // env of its own and works on a primary and a node alike. See
-// docs/shop-schema-rfc.md §7.5, which supersedes §7.4's "new node type".
+// docs/archive/shop-schema-rfc.md §7.5, which supersedes §7.4's "new node type".
 //
 // Banner QS18VN6D diffuse photoelectric through a PC817 optocoupler. The `VN` is
 // load-bearing: NPN, sinking, open-collector. The `VP` variant SOURCES +12 V and
@@ -279,7 +279,7 @@
 // The 1 kOhm gives ~10.8 mA, the 4N35's rated test point — a partly-on
 // phototransistor is what produced an unusable 2 V reading first time round.
 // The 10 kOhm is not optional either: INPUT_PULLUP's internal ~45 kOhm is
-// feeble against leakage. firmware/WIRING.md#9-bin-sensor §2.
+// feeble against leakage. docs/archive/WIRING.md#9-bin-sensor §2.
 //
 // ⚠️ DO NOT TIE THE 12 V GROUND TO THE ESP32 GROUND. This comment said to, for
 // weeks, and it was wrong (corrected 2026-09-11 — Jeff asked whether BOTH sides
@@ -293,7 +293,7 @@
 //
 // Why it matters here specifically. The 12 V supply sits next to a dust
 // collector — a large induction motor, feet away from a CT clamp whose noise
-// floor is already unresolved (WIRING.md#8-ct-clamp §5.5). A deliberate ground
+// floor is already unresolved (docs/archive/WIRING.md#8-ct-clamp §5.5). A deliberate ground
 // loop between that supply and the ADC's reference is the last thing this board
 // needs. And a fault on the 12 V side would have a path straight through the
 // ESP32's ground rather than staying on its own side of the barrier.
@@ -303,7 +303,7 @@
 // regulator ties the two grounds upstream and there is no barrier left to
 // short. On that build the opto is a LEVEL SHIFTER, not an isolator — still
 // earning its place, because the QS18 swings to 12 V and 12 V on a 3.3 V pin
-// destroys it. WIRING.md#9-bin-sensor §6 has the three power topologies and
+// destroys it. docs/archive/WIRING.md#9-bin-sensor §6 has the three power topologies and
 // which one to pick; one brick at the collector is the better install, so
 // expect the common-ground case to be the normal one.
 //
@@ -320,7 +320,7 @@
 //
 // The DATA line of a 315 MHz OOK transmitter module, keyed with the HT12E frame
 // the dust collector's own fob sends (control/RfCollectorPresser.h,
-// docs/tool-sensing-rfc.md §4.2). One pin, output only — the module needs no
+// docs/archive/tool-sensing-rfc.md §4.2). One pin, output only — the module needs no
 // enable and we never receive.
 //
 // D9, NOT D6 — corrected 2026-09-10, hours after being written wrong.
@@ -387,7 +387,7 @@
 // of collapsing the pin maps early, and is why nothing may trust a clamp reading
 // that has not been calibrated against the tool it watches.
 //
-// See firmware/WIRING.md#9-bin-sensor §3 for the divider — and its warnings,
+// See docs/archive/WIRING.md#9-bin-sensor §3 for the divider — and its warnings,
 // because the noise floor is unresolved and the screen is part of it.
 #if !defined(DUSTGATE_SERVO_BUS)
 #define PIN_CT              1   // D0, the only ADC pad on this edge
@@ -401,7 +401,7 @@
 // A fob with SEPARATE ON AND OFF buttons is momentary to press but IDEMPOTENT in
 // meaning: pressing ON twice leaves it on, so a missed press self-corrects and
 // no belief can invert. That is a strictly better control, and it costs exactly
-// one more pad (docs/tool-sensing-rfc.md §4.2b).
+// one more pad (docs/archive/tool-sensing-rfc.md §4.2b).
 //
 // So: two pads reserved. A single-button fob uses the first and leaves the
 // second unwired; a two-button fob uses both and stops needing the feedback loop

@@ -6,9 +6,9 @@
 #   bash deploy.sh --fw     # firmware only (skip UI build + filesystem)
 #   bash deploy.sh --no-provision  # skip auto-provision step
 #   bash deploy.sh --provision-only  # skip build/flash, just (re)send credentials
-#   bash deploy.sh --no-topology-backup  # (no-op since 2026-08-22 — the save/
-#                                        #  restore step is commented out; see
-#                                        #  "0. Save the shop layout" below)
+#   bash deploy.sh --no-topology-backup  # skip saving the shop layout before a
+#                                        #  filesystem flash (see "0. Save the shop
+#                                        #  layout" below)
 #   bash deploy.sh --node                # SECONDARY servo-only node
 #
 # Anything that flashes the filesystem WIPES the saved shop, so the deploy pulls

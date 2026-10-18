@@ -9,7 +9,7 @@ import { SerialLog, clock, copyText, matches, type LogEntry, type LogFilter } fr
 // The brain's serial output, read over WiFi: the same text a USB monitor shows,
 // for a board in the shop with no laptop on it. A bench and support tool, so it
 // opens from the brain's row in Your boards and nowhere else.
-// Design: docs/mockups/brain-log.html (approved 2026-10-03).
+// Design: docs/mockups/archived/brain-log.html (approved 2026-10-03).
 //
 // Polls GET /api/serial once a second with the cursor the last reply handed
 // back (firmware/utils/SerialLog.h). All the bookkeeping — lines from bytes,

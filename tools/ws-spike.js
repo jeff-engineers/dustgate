@@ -2,7 +2,7 @@
 // =============================================================================
 // ws-spike.js — what does ONE more WebSocket client cost the brain's internal RAM?
 //
-// Step 0 of docs/nodes-dial-the-brain-plan.md. The plan saves memory by replacing a
+// Step 0 of docs/archive/nodes-dial-the-brain-plan.md. The plan saves memory by replacing a
 // task-per-node link (~10 KB each) with an inbound WebSocket (event-driven, on the
 // existing async_tcp task). Whether that saves ~7 KB per node or ~2 is a fact about
 // AsyncWebSocketClient on this board, and it can be measured before any firmware is

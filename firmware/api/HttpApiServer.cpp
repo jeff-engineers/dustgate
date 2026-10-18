@@ -1306,7 +1306,7 @@ void HttpApiServer::registerRoutes() {
     //
     // SETUP ONLY — the gate configurator's jog control. A ball valve is calibrated
     // empirically: the user nudges the servo while watching the handle, then captures
-    // the angle where the ball actually lines up (see docs/topology-schema.md). That
+    // the angle where the ball actually lines up (see docs/archive/topology-schema.md). That
     // needs a way to drive one servo directly, outside any routing decision.
     //
     // `controllerId` addresses the board that actually drives the gate. Omitted (or

@@ -1,7 +1,7 @@
 // topology.js — DustGate topology contract: types, helpers, and validation.
 //
 // This is the single source of truth for the SHAPE of an install (the schema
-// in docs/topology-schema.md, as code). Firmware, mock, demo, and the
+// in docs/archive/topology-schema.md, as code). Firmware, mock, demo, and the
 // configurator all consume it. PURE — no HTTP/timers/state; just data + checks.
 //
 // Vocabulary (resolve the "node" overload):
@@ -72,7 +72,7 @@ const MAX_SLIDE_BRANCHES = 8;
  *                                  before 2026-09-09 has one and no field to say
  *                                  so. A 'tasmota' plug is SENSE-ONLY: it has no
  *                                  relay, which is the whole reason it exists
- *                                  (docs/tool-sensing-rfc.md §2), so it may only
+ *                                  (docs/archive/tool-sensing-rfc.md §2), so it may only
  *                                  ever appear under a tool's `sensor`, never a
  *                                  collector's `control`.
  * @property {2} [gen]               Shelly generation (always 2; Gen1 dropped).
@@ -235,7 +235,7 @@ function absoluteAngles(sel) {
  *
  * Rejects a set that lands outside the servo's travel: that means the horn is
  * clocked wrong on its spline, and no amount of arithmetic fixes it (see the
- * mechanical notes in docs/topology-schema.md).
+ * mechanical notes in docs/archive/topology-schema.md).
  *
  * @param {Object} sel                       servo selector
  * @param {Object<string, number>} captured  stateId → absolute angle
@@ -596,7 +596,7 @@ function validateTopology(t) {
   // ── collector RF press: the transmitter that replaces a switchable plug ──
   //
   // A collector commanded by transmitting its remote's frame (docs/
-  // tool-sensing-rfc.md §4.2) has no `control.outlet` — there is no plug to
+  // docs/archive/tool-sensing-rfc.md §4.2) has no `control.outlet` — there is no plug to
   // switch. `control.rf` says which board keys the transmitter, on which pin,
   // and with which address. The ADDRESS is per-fob: a different remote has a
   // different DIP setting, which is the whole reason it lives in the document
@@ -657,7 +657,7 @@ function validateTopology(t) {
   //
   // `kind` is 'threshold' for the diffuse beam actually in hand — it answers
   // "dust at this height, y/n", NOT a distance, so it does not carry the
-  // emptyMm/fullMm/warnPct a rangefinder would (shop-schema-rfc.md §7.5).
+  // emptyMm/fullMm/warnPct a rangefinder would (docs/archive/shop-schema-rfc.md §7.5).
   //
   // controllerId is OPTIONAL and means "this board" when absent, matching every
   // selector and NodeBus's own rule. A named one must resolve, for the same
