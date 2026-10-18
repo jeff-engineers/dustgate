@@ -15,8 +15,9 @@ Update it in the same session as the bench that proves something.
 
 - **Primary and node roles** with PWM servos and NodeLink between them; a real tool opening its gate.
 - **The ST3215 slider**: as a primary (2026-08-28: homing, the reference sweep, gate moves on a 4-gate rockler-2.5 rack);
-  as a NODE (2026-09-03); through the Pi brain (2026-10-17: homed on its first SET, then moved). A failed home reaches the
-  slider page in the node's own words (STATE.err, 2026-10-17). Not run: the wake-button homing trigger.
+  as a NODE (2026-09-03); through the Pi brain (2026-10-17: homed on its first SET, then moved; 2026-10-18: homed and swept
+  again after an endstop rewire). A failed home reaches the slider page in the node's own words (STATE.err, 2026-10-17), and
+  its Try again re-homes it (2026-10-18). Not run: the wake-button homing trigger (the prototype slider board has no button).
 - **The bin sensor** (QS18VN6D through a discrete 4N35 — not a PC817 breakout, which put 4 V on a GPIO): on a primary
   2026-09-13; **from a node, end to end, 2026-10-11** — `bin-full`, and every board on that system blinking red.
 - **A CT clamp starts the collector and moves a gate**, end to end (2026-09-18). ⚠️ It takes TWO gates to see it:

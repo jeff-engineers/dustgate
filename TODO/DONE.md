@@ -14,6 +14,10 @@ of this file is being able to answer "did we already decide this, and why".
 
 Newest first.
 
+- **The slider page's Try again and lock — LANDED 2026-10-17 (PR #33), run on the bench 2026-10-18.** A failed home leaves
+  the arrows and Capture greyed with the node's own reason and a Try again button; after an endstop rewire, Try again homed
+  and swept the slider through the Pi brain.
+
 ### Moved from TODO.md 2026-10-18: the node-reflash audit and the decisions it settled (2026-09-17)
 
 - **What would still force a node reflash — the audit, 2026-09-17. LANDED, see
