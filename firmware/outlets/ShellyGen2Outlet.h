@@ -42,6 +42,8 @@ public:
     // caller must not turn that into permission to steal.
     bool        readClaim(const char* ourHost, const char* deviceName, const char* ourName,
                           plugclaim::Claim& out, std::string* pushUrl = nullptr) override;
+    // Shelly.GetDeviceInfo's "mac" (12 hex digits, no colons) — Gen2 and Gen3 alike.
+    bool        readMac(std::string& out, uint32_t timeoutMs = OUTLET_RPC_WRITE_TIMEOUT_MS) override;
     bool        readPushConfig(std::string& outServer, bool& outEnabled,
                                uint32_t timeoutMs = OUTLET_RPC_WRITE_TIMEOUT_MS) override;
 

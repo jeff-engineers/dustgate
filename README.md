@@ -54,17 +54,17 @@ Update it in the same session as the bench that proves something.
 
 | | Status | Notes |
 |---|---|---|
-| **On an ESP32-C5** | The shipping design. Compiles, host-tested, and run on the bench. | One cheap board does everything, but RAM is the ceiling (see [how big a shop](#how-big-a-shop-can-a-c5-run)). |
+| **On an ESP32-C5** | **Frozen** (2026-10-18). Compiles and gets shared-core fixes; no new features, no bench time. | One cheap board doing everything, with RAM as the ceiling (see [how big a shop](#how-big-a-shop-can-a-c5-run)). Kept revivable, not maintained. |
 | **On a Mac or Linux box** (`native/`) | Run on the bench for a whole shop, 2026-10-06. | The same brain core with a Boost.Beast shell: links nodes, routes gates, presses the collector, polls and claims plugs, serves the app. `make -C native test`. See [`native/README.md`](native/README.md). |
 | **On a Raspberry Pi** (`native/pi/`) | **Runs the shop** (since 2026-10-11). | The same native brain, deployed from the Mac with `native/pi/deploy.sh` (setup, update with rollback, a systemd unit). See [`native/pi/README.md`](native/pi/README.md). |
 
-The plan is that a shop can **optionally move its brain from the C5 to a Raspberry Pi** when it outgrows the C5, without changing anything else: the nodes, the plugs, the layout and the app stay as they are, because the Pi runs the same brain code. The C5 stays a complete brain for a small shop, and the reasoning for the split is in [`docs/archive/brain-options.md`](docs/archive/brain-options.md). A Pi brain has no pins of its own, so the collector's remote and the dust-bin sensor sit on a node (which is already how a node can be set up). What a Pi would need before anyone but the author could install it (first-boot WiFi, a read-only root, a hardware watchdog) is not built.
+**The brain is the Pi** (decided 2026-10-18). A $15 Pi runs the same brain core with room to spare, and keeping a second brain on the C5 in step kept costing time. Every board in the shop is a C5 **node**; the Pi has no pins of its own, so the collector's remote and the dust-bin sensor sit on a node. The C5 brain is frozen rather than deleted: it still builds, and the shared core is kept so it could be revived as a thin shell. What a Pi would need before anyone but the author could install it (first-boot WiFi, a read-only root) is not built, and the reasoning for the original split is in [`docs/archive/brain-options.md`](docs/archive/brain-options.md).
 
 ---
 
 ## How big a shop can a C5 run?
 
-These are approximations from the code's hard caps and from bench measurements, so treat them as planning numbers rather than guarantees. They describe **one C5 as the brain**; a Pi brain removes most of them.
+These are approximations from the code's hard caps and from bench measurements, so treat them as planning numbers rather than guarantees. They describe **one C5 as the brain**, which is frozen (above); the Pi brain removes most of them.
 
 | Limit | Number | Where it comes from |
 |---|---|---|

@@ -45,6 +45,7 @@ struct PlugView {
     std::string name;    // what the person calls it
     std::string ip;
     bool        reachable = false;
+    std::string replacedBy;   // PlugRelocator::replacedBy(): a DIFFERENT plug answers at this address ("" = not seen)
 };
 
 class DeviceProblems {
@@ -96,6 +97,15 @@ public:
         // silently never "on" meanwhile.
         std::map<std::string, uint32_t> still;
         for (const PlugView& p : plugs) {
+            // A different plug at this one's address: said at once, and in its own words. "No answer, it may have a new
+            // address" was true and useless — something DID answer, and the app showed that plug as this tool's.
+            if (!p.replacedBy.empty()) {
+                char t[256];
+                std::snprintf(t, sizeof(t), "A different plug now has %s (%s), so this one has moved or gone. "
+                              "It is not being sensed; DustGate is looking for it by its MAC.", p.ip.c_str(), p.replacedBy.c_str());
+                rt.raiseProblem(p.key, "plug-replaced", "warn", "plug", p.name, t, now);
+                continue;
+            }
             if (p.reachable) { rt.clearProblem(p.key); continue; }
             auto it = _since.find(p.key);
             const uint32_t since = it == _since.end() ? (now ? now : 1) : it->second;

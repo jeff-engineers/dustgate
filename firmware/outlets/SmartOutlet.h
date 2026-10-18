@@ -131,6 +131,9 @@ public:
         if (!c) { _reachable = false; _lastPowerW = 0.0f; } // dropped → treat as offline until re-polled/re-pushed
     }
     bool isPushConnected() const { return _pushConnected; }
+    // When the plug last told us anything (a push frame or a good poll), by the caller's clock — outletPollDue() reads it.
+    void     noteHeard(uint32_t nowMs) { _heardAtMs = nowMs; }
+    uint32_t heardAtMs() const { return _heardAtMs; }
 
     // True once we've successfully pushed Ws/name config to this plug. Lets the
     // poll task provision each plug ONCE rather than re-POSTing every retry tick
@@ -155,6 +158,10 @@ public:
     // suffix); callers that already fetched it pass it, so it is not fetched twice.
     virtual bool readClaim(const char* /*ourHost*/, const char* /*deviceName*/, const char* /*ourName*/,
                            plugclaim::Claim& /*out*/, std::string* /*pushUrl*/ = nullptr) { return false; }
+
+    // The plug's MAC address — what identifies it when its lease changes (control/OutletRelocate.h). A Tasmota reports
+    // it in Status 5, a Shelly in Shelly.GetDeviceInfo. False = it would not say, never "it has none".
+    virtual bool readMac(std::string& /*out*/, uint32_t /*timeoutMs*/) { return false; }
 
     virtual bool configureOutboundWs(const char* /*wsUrl*/) { return false; }
     virtual bool setName(const char* /*name*/)              { return false; }
@@ -214,6 +221,7 @@ protected:
     int   _stopIndex    = 0;
     bool  _reachable    = false;
     bool  _pushConnected = false;
+    uint32_t _heardAtMs = 0;
     bool  _wsProvisioned = false;
     bool  _pollOnly      = false;
     bool  _takeoverApproved = false;

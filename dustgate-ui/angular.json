@@ -24,7 +24,9 @@
               "@device-model",
               "@topology",
               "@topology-device",
-              "@shop"
+              "@shop",
+              "@plug-claim",
+              "@plug-identity"
             ],
             "assets": [],
             "styles": [

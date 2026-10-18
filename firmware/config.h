@@ -620,15 +620,9 @@ inline int homeDirection() {
 // costs one pointer, so a third system doesn't silently lose its blower.
 #define COLLECTOR_COUNT               3
 
-// How often the poll task queries each outlet (ms)
-#define OUTLET_POLL_INTERVAL_MS     500
-
-#include "outlets/OutletTimeouts.h"   // OUTLET_HTTP_TIMEOUT_MS, OUTLET_RPC_WRITE_TIMEOUT_MS, OUTLET_PROVISION_PROBE_TIMEOUT_MS
-
-// How often to retry push-provisioning plugs that aren't yet configured (e.g. a
-// plug that was briefly unreachable at boot). Each retry only fast-probes the
-// unprovisioned plugs; already-pushing plugs are skipped, so this is cheap.
-#define OUTLET_PROVISION_RETRY_MS   15000
+// The plug timings (poll interval, claim retry, push-quiet fallback, HTTP timeouts) live in outlets/OutletTimeouts.h,
+// shared with the native brain.
+#include "outlets/OutletTimeouts.h"
 
 // mDNS discovery (setup wizard's "Scan for outlets" / serial 'discover').
 //

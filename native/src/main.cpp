@@ -48,6 +48,8 @@
 #include "PlugPoller.h"
 #include "AtomicFile.h"
 #include "Sweep.h"
+#include "Relocator.h"
+#include "BrainCadence.h"
 #include "RemoteRfPresser.h"
 #include "TopologyRuntime.h"
 
@@ -84,24 +86,96 @@ static std::string g_bcast, g_ipFile;          // the beacon's address; a file t
 static bool g_ipFixed = false, g_bcastFixed = false;
 static unsigned g_port = 80;
 static outletops::Self selfIdentity();
+static std::string sweepSelf();
+// Is the plug at each saved address still the layout's plug, and where did a lost one go: control/OutletRelocate.h, the
+// same policy the ESP32 runs. This shell feeds it (relocatorTick) and applies its rewrites; it decides nothing.
+static dgbrain::Relocator g_reloc(g_sweep, [] { return selfIdentity(); },
+                                  [] { g_sweep.start(sweepSelf(), g_plugPort, selfIdentity()); return true; });
 static uint32_t g_plugSyncAtMs = 0;
 static std::map<std::string, uint32_t> g_onSince;     // system -> when it was commanded on
 
-static void syncPlugs() {
-    std::vector<dgbrain::PlugPoller::Target> t;
+// Every plug the layout names, keyed as PlugRelocator keys them: "m:<machine>", "c:<system>" (a collector's sense plug),
+// "s:<system>" (its switch). `byNode` = a node polls it for us.
+struct LayoutPlug { std::string key, ip, kind, mac; bool byNode = false; };
+static std::vector<LayoutPlug> layoutPlugs() {
+    std::vector<LayoutPlug> out;
     for (const topo::PlannedSensor& p : g_rt.sensorPlan()) {
         if (p.kind != topo::PlannedSensor::Kind::Plug) continue;
+        JsonObjectConst o = topo::machineDoc(g_rt.topology(), p.id)["sensor"]["outlet"];
         topo::TopologyRuntime::NodePlugReading np;
-        if (g_rt.nodePlug(p.id, np)) continue;             // a node polls this one
-        t.push_back({"m:" + p.id, p.ip, p.tasmota});
+        out.push_back({"m:" + p.id, p.ip, p.tasmota ? "tasmota" : "shelly", o["mac"] | "", g_rt.nodePlug(p.id, np)});
     }
     for (const std::string& sys : g_rt.systemIds()) {
         JsonObjectConst so = g_rt.collectorSensorOutlet(sys), co = g_rt.collectorOutlet(sys);
-        if (const char* ip = so["ip"].as<const char*>()) if (*ip) t.push_back({"c:" + sys, ip, std::string(so["kind"] | "") == "tasmota"});
-        if (const char* ip = co["ip"].as<const char*>()) if (*ip) t.push_back({"s:" + sys, ip, false});
+        if (const char* ip = so["ip"].as<const char*>()) if (*ip) out.push_back({"c:" + sys, ip, so["kind"] | "", so["mac"] | ""});
+        if (const char* ip = co["ip"].as<const char*>()) if (*ip) out.push_back({"s:" + sys, ip, co["kind"] | "", co["mac"] | ""});
+    }
+    return out;
+}
+
+static uint32_t g_relocGen = 0;
+static void syncPlugs() {
+    std::vector<dgbrain::PlugPoller::Target> t;
+    std::set<std::string> known;
+    for (const LayoutPlug& p : layoutPlugs()) {
+        known.insert(p.ip);
+        if (p.byNode) continue;                            // a node polls this one
+        // NOT POLLED, AND SO NOT CLAIMED, until the relocator says the plug at this address is this one: a different plug
+        // given the address (or two plugs that swapped leases) would otherwise read as this tool and be written to.
+        if (!g_reloc.trusted(p.key, p.mac)) continue;
+        t.push_back({p.key, p.ip, p.kind == "tasmota"});
     }
     g_poller.sync(t);
+    g_sweep.setKnown(known);
+    g_relocGen = g_reloc.generation();
     g_plugSyncAtMs = dgbrain::nowMs();
+}
+
+// Feed the relocator what the plugs are doing, and apply the layout changes it asks for (control/OutletRelocate.h).
+static bool adoptLayout(const std::string& json, int persist = 1);
+// The link log's "still here" line, once an hour, every paired board and whether it is linked — the ESP32's linkLogTick(),
+// so a quiet stretch reads as a quiet shop rather than a brain that stopped writing (control/BrainCadence.h).
+static void hourlyLogTick(uint32_t now) {
+    static uint32_t lastMs = 0;
+    if (!lastMs) { lastMs = now ? now : 1; return; }   // the first an hour after start, as on the ESP32
+    if (now - lastMs < topo::kHourlyLogMs) return;
+    lastMs = now;
+    std::vector<std::pair<std::string, bool>> boards;
+    for (auto& kv : g_hub->nodes()) boards.push_back({kv.first, kv.second->session.health().linked});
+    const std::string extra = "\"nodes\":\"" + topo::hourlyNodesField(boards) + "\"";
+    dglog::linkEvent("hourly", nullptr, extra.c_str());
+}
+
+static void relocatorTick(uint32_t now) {
+    static uint32_t lastMs = 0;
+    if (g_reloc.generation() != g_relocGen) syncPlugs();   // a plug became trusted, or was found replaced
+    if (now - lastMs < 1000 || !g_rt.loaded()) return;
+    lastMs = now;
+    std::vector<relocate::Plug> plugs;
+    for (const LayoutPlug& p : layoutPlugs()) {
+        bool reachable = false;
+        if (p.byNode) {
+            topo::TopologyRuntime::NodePlugReading np;
+            if (g_rt.nodePlug(p.key.substr(2), np)) reachable = np.reachable;
+        } else {
+            const auto r = g_poller.read(p.key);
+            reachable = r.have && r.reachable;
+        }
+        plugs.push_back({p.key, p.ip, p.kind, p.mac, reachable});
+    }
+    g_reloc.publish(plugs);
+    std::vector<relocate::Rewrite> rw = g_reloc.take();
+    if (rw.empty() || g_topoJson.empty()) return;
+    DynamicJsonDocument doc(g_topoJson.size() * 2 + 4096);
+    if (deserializeJson(doc, g_topoJson)) return;
+    int applied = 0;
+    for (const relocate::Rewrite& r : rw) {
+        if (relocate::applyRewrite(doc.as<JsonObject>(), r)) { applied++; dglog::linef("[RELOCATE] %s -> %s (%s, %s)\n", r.key.c_str(), r.ip.c_str(), r.kind.c_str(), r.why.c_str()); }
+        else dglog::linef("[RELOCATE] %s is no longer in the layout - rewrite dropped\n", r.key.c_str());
+    }
+    if (!applied) return;
+    std::string out; serializeJson(doc, out);
+    if (!adoptLayout(out, 1)) dglog::linef("[RELOCATE] the rewritten layout was refused: %s\n", g_topoErr.c_str());
 }
 
 // The problems a person must see about boards and plugs: the rules are control/DeviceProblems.h, shared with the ESP32.
@@ -126,6 +200,7 @@ static void raiseDeviceProblems(uint32_t now) {
         v.name = (nm && *nm) ? nm : p.id;
         topo::TopologyRuntime::NodePlugReading np;
         v.reachable = g_rt.nodePlug(p.id, np) ? np.reachable : g_poller.read("m:" + p.id).reachable;
+        v.replacedBy = g_reloc.replacedBy("m:" + p.id);
         plugs.push_back(v);
     }
     problems.update(g_rt, boards, plugs, now);
@@ -170,6 +245,12 @@ static void feedPlugs(uint32_t now) {
     if (now - g_plugSyncAtMs > 5000) syncPlugs();          // a node joining or leaving changes who polls what
     for (const topo::PlannedSensor& p : g_rt.sensorPlan()) {
         if (p.kind != topo::PlannedSensor::Kind::Plug) continue;
+        topo::TopologyRuntime::NodePlugReading np;
+        if (g_rt.nodePlug(p.id, np)) continue;
+        // A plug held off the poller (not yet checked, or a different plug at its address) senses nothing — said as 0 W,
+        // not left at whatever it last read.
+        const char* mac = topo::machineDoc(g_rt.topology(), p.id)["sensor"]["outlet"]["mac"] | "";
+        if (!g_reloc.trusted("m:" + p.id, mac)) { g_rt.setMachinePower(p.id, 0.0f); continue; }
         const auto r = g_poller.read("m:" + p.id);
         if (r.have) g_rt.setMachinePower(p.id, r.reachable ? r.watts : 0.0f);
     }
@@ -181,8 +262,12 @@ static void feedPlugs(uint32_t now) {
         }
         if (g_rt.collectorHasClamp(sys)) continue;          // the clamp's reading stands (pollSensors writes it)
         const bool haveSensor = !g_rt.collectorSensorOutlet(sys)["ip"].isNull();
-        const auto r = g_poller.read((haveSensor ? "c:" : "s:") + sys);
-        if (r.have) g_rt.setCollectorPlug(sys, r.watts, r.reachable, g_onSince[sys] ? now - g_onSince[sys] : 0);
+        const std::string key = (haveSensor ? "c:" : "s:") + sys;
+        const char* mac = (haveSensor ? g_rt.collectorSensorOutlet(sys) : g_rt.collectorOutlet(sys))["mac"] | "";
+        const bool trusted = g_reloc.trusted(key, mac);   // held off the poller: the blower is unseen, not "off"
+        const auto r = g_poller.read(key);
+        if (!trusted) g_rt.setCollectorPlug(sys, 0.0f, false, g_onSince[sys] ? now - g_onSince[sys] : 0);
+        else if (r.have) g_rt.setCollectorPlug(sys, r.watts, r.reachable, g_onSince[sys] ? now - g_onSince[sys] : 0);
     }
 }
 
@@ -235,7 +320,7 @@ static void savePairs() {
 
 // persist: 0 = do not touch the file (a layout read FROM the file), 1 = save it and keep the previous copy as .bak (a person saved),
 // 2 = save it WITHOUT rotating .bak (restoring from .bak: the copy beside it is the good one and must not be replaced by the damaged file).
-static bool adoptLayout(const std::string& json, int persist = 1) {
+static bool adoptLayout(const std::string& json, int persist) {
     std::string err;
     const bool fromNothing = !g_rt.loaded();   // boot, or a first layout: settle it (TopologyRuntime::settleAtBoot)
     if (!g_rt.adopt(json.data(), json.size(), err)) { g_topoErr = err; return false; }
@@ -274,6 +359,7 @@ static void noteKnock(const std::string& id, const std::string& ip, uint32_t now
     g_knocks[id] = Knock{ip, now};
 }
 static bool g_trace = false;   // --trace: print every frame a node sends
+static bool g_sim = false;     // --sim: a test brain, which takes injected tool power (/api/sim/tool)
 
 static std::string refuseFrame(const char* reason) {
     StaticJsonDocument<96> d; nl::buildRefuse(d.to<JsonObject>(), reason);
@@ -906,7 +992,14 @@ private:
         if (t.rfind("/api/outlets", 0) == 0 && (m == "PUT" || m == "DELETE")) { o.body = "{\"ok\":true}"; return; }
         if (t == "/api/nodes") o.body = nodesJson();
         else if (t == "/api/topology" && m == "GET") { if (g_topoJson.empty()) err(http::status::not_found, "no topology configured"); else o.body = g_topoJson; }
-        else if (t == "/api/topology" && m == "PUT") { if (adoptLayout(ar.body)) o.body = "{\"ok\":true}"; else { std::string e; for (char c : g_topoErr) { if (c == '"' || c == '\\') e += '\\'; if ((unsigned char)c >= 32) e += c; } err(http::status::bad_request, e); } }
+        // A refused layout answers as the spec does (topology-conformance.js): 400 with `errors`, each with a message.
+        else if (t == "/api/topology" && m == "PUT") {
+            if (adoptLayout(ar.body)) o.body = "{\"ok\":true}";
+            else {
+                DynamicJsonDocument d(1024); d["error"] = g_topoErr; d["errors"][0]["message"] = g_topoErr;
+                o.st = http::status::bad_request; serializeJson(d, o.body);
+            }
+        }
         else if (t == "/api/topology" && m == "DELETE") { clearLayout(); o.body = "{\"ok\":true}"; }
         else if (t == "/api/status") {
             if (g_topoJson.empty()) err(http::status::not_found, "no topology configured");
@@ -965,10 +1058,18 @@ private:
             }
         }
         // DEV ONLY: stand in for a plug reporting watts, so routing can be driven with no tool running.
-        else if (t == "/api/dev/power" && m == "POST") {
+        // A machine's draw, injected: the mock's /api/sim/tool, same body and same answer (the status), so the topology
+        // contract suite certifies this brain's routing too (test/e2e_conformance.sh). TEST BRAINS ONLY (--sim): on a
+        // shop's brain it would let any request start the collector.
+        else if (t == "/api/sim/tool" && m == "POST" && g_sim) {
             StaticJsonDocument<192> d;
-            if (deserializeJson(d, ar.body) || !d["machineId"].is<const char*>()) err(http::status::bad_request, "machineId, watts");
-            else { g_rt.setMachinePower(d["machineId"].as<std::string>(), d["watts"] | 0.0f); o.body = "{\"ok\":true}"; }
+            if (deserializeJson(d, ar.body) || !d["toolId"].is<const char*>()) err(http::status::bad_request, "toolId, watts");
+            else if (g_topoJson.empty()) err(http::status::not_found, "no topology configured");
+            else {
+                g_rt.setMachinePower(d["toolId"].as<std::string>(), d["watts"] | 0.0f);
+                g_rt.update(nowMs());   // routed before answering, as the mock does: the answer IS the new status
+                DynamicJsonDocument st(32768); g_rt.writeStatus(st.to<JsonObject>()); serializeJson(st, o.body);
+            }
         }
         else if (t == "/api/info") o.body = "{\"role\":\"native\",\"id\":\"" + g_hub->primaryId() + "\",\"apiKey\":\"" + g_apiKey + "\",\"build\":\"native " + std::string(DG_COMMIT) + "\",\"uptimeSec\":" + std::to_string(dglog::upMs() / 1000) + "}";
         else err(http::status::not_found, "not found");
@@ -1038,7 +1139,7 @@ static bool requiredBoardDown() {
 }
 
 static void beaconLoop(net::io_context& io, std::shared_ptr<udp::socket> sock, std::shared_ptr<net::steady_timer> t) {
-    const uint32_t every = requiredBoardDown() ? 5000 : 60000;
+    const uint32_t every = topo::beaconEveryMs(requiredBoardDown());   // control/BrainCadence.h, shared with the ESP32
     t->expires_after(std::chrono::milliseconds(every));
     t->async_wait([&io, sock, t](beast::error_code ec) {
         if (ec) return;
@@ -1063,8 +1164,8 @@ int main(int argc, char** argv) {
         std::string a = argv[i];
         auto val = [&]() { return i + 1 < argc ? std::string(argv[++i]) : std::string(); };
         if (a == "--id") id = val(); else if (a == "--pair") pair = val(); else if (a == "--port") port = (unsigned)std::stoi(val());
-        else if (a == "--ip") ip = val(); else if (a == "--ip-from-file") g_ipFile = val(); else if (a == "--state") stateDir = val(); else if (a == "--also-port") alsoPort = (unsigned)std::stoi(val()); else if (a == "--trace") g_trace = true; else if (a == "--www") g_www = val(); else if (a == "--plug-port") { g_plugPort = val(); plughttp::setPort(g_plugPort); } else if (a == "--key") g_apiKey = val(); else if (a == "--broadcast") { bcast = val(); g_bcastFixed = true; }
-        else { dglog::linef("usage: dustgate-brain [--id dustgate] [--pair nodeId,nodeId,...] [--port 80] [--also-port 80] [--state dir] [--www dir] [--plug-port 80] [--key k] [--ip a.b.c.d] [--broadcast a.b.c.255]\n"); return a == "--help" ? 0 : 2; }
+        else if (a == "--ip") ip = val(); else if (a == "--ip-from-file") g_ipFile = val(); else if (a == "--state") stateDir = val(); else if (a == "--also-port") alsoPort = (unsigned)std::stoi(val()); else if (a == "--trace") g_trace = true; else if (a == "--sim") g_sim = true; else if (a == "--www") g_www = val(); else if (a == "--plug-port") { g_plugPort = val(); plughttp::setPort(g_plugPort); } else if (a == "--key") g_apiKey = val(); else if (a == "--broadcast") { bcast = val(); g_bcastFixed = true; }
+        else { dglog::linef("usage: dustgate-brain [--id dustgate] [--pair nodeId,nodeId,...] [--port 80] [--also-port 80] [--state dir] [--www dir] [--plug-port 80] [--key k] [--ip a.b.c.d] [--broadcast a.b.c.255] [--trace] [--sim]\n"); return a == "--help" ? 0 : 2; }
     }
     std::vector<std::string> ids; std::stringstream ss(pair); std::string x;
     while (std::getline(ss, x, ',')) if (!x.empty()) ids.push_back(x);
@@ -1150,7 +1251,7 @@ int main(int argc, char** argv) {
     net::steady_timer rtTimer(io);
     std::function<void()> rtTick = [&]() {
         rtTimer.expires_after(std::chrono::milliseconds(100));
-        rtTimer.async_wait([&](beast::error_code ec) { if (ec) return; g_rt.update(nowMs()); feedPlugs(nowMs()); if (g_rt.loaded()) raiseDeviceProblems(nowMs()); driveCollectors(nowMs()); rtTick(); });
+        rtTimer.async_wait([&](beast::error_code ec) { if (ec) return; g_rt.update(nowMs()); feedPlugs(nowMs()); relocatorTick(nowMs()); hourlyLogTick(nowMs()); if (g_rt.loaded()) raiseDeviceProblems(nowMs()); driveCollectors(nowMs()); rtTick(); });
     };
     rtTick();
     net::signal_set sig(io, SIGINT, SIGTERM); sig.async_wait([&](beast::error_code, int) { io.stop(); });
@@ -1158,6 +1259,7 @@ int main(int argc, char** argv) {
     // Plugs are pointed at the port the app is served on (port 80 needs no number in the URL).
     g_poller.setPushTarget(selfIdentity(), pushUrl(), stateDir.empty() ? "" : stateDir + "/plugs.json");
     g_poller.start();
+    g_reloc.start();
     // FOLLOW THIS BRAIN'S OWN ADDRESS. A Pi is given an address by the router and the router may give it another (a lease
     // renewal, a reboot, a new access point). The brain is told nothing, so it looks: when the address moves it beacons the
     // new one (a node redials by the beacon), points every plug it owns at the new address (a plug keeps pushing to the old

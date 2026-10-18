@@ -528,7 +528,7 @@ function reassertFor(d, machineId) {
 //   { code, severity: 'bad'|'warn', subject: {type, id}, text, forMs? }
 //
 // Codes: move-failed, board-offline, collector-no-start, collector-needs-start, collector-blind,
-// rf-gave-up, rf-send-failed, plug-unreachable, board-fault.
+// rf-gave-up, rf-send-failed, plug-unreachable, plug-replaced, board-fault.
 //
 // MATCHED PAIR with TopologyRuntime::writeStatus for the two codes DERIVED from
 // the plug reading — collector-no-start and collector-blind — and bin-full from the beam, text included,

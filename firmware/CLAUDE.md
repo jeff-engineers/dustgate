@@ -11,9 +11,9 @@ C5). `dev.sh` sets it for you. Before committing firmware: `cd tools && npm run 
 
 | Env | Role |
 |---|---|
-| `xiao_c5_primary` | an ESP32 brain: routing, 2 PWM channels, CT, bin, RF |
+| `xiao_c5_primary` | an ESP32 brain — FROZEN, compiles only (see below) |
 | `xiao_c5` | a node: 2 PWM channels, CT, bin, RF — which of them it uses is a LAYOUT fact |
-| `xiao_c5_linear_primary` / `xiao_c5_linear` | the slider board (ST3215 rack) as a brain / as a node |
+| `xiao_c5_linear_primary` / `xiao_c5_linear` | the slider board (ST3215 rack) as a brain (FROZEN) / as a node |
 | `xiao_c5_bus_bench`, `xiao_c5_ht12e_bench`, `xiao_c5_ct_bench` | not roles: the bus-servo console, the 315 MHz console, a walk-around CT meter |
 
 ## Boards
@@ -30,6 +30,15 @@ C5). `dev.sh` sets it for you. Before committing firmware: `cd tools && npm run 
 - **Decision-making headers are pure** (STL + ArduinoJson, no Arduino.h) so host tests can drive them.
   `test/shim/Arduino.h` fakes just enough clock and ADC for `sensing/CtTrip.h`; it must not grow — split a header
   instead. CtTrip is one file shared by node and primary: never copy it.
+
+## Two brains — the ESP32 one is FROZEN
+
+- **The Pi's native brain is the brain** (root `CLAUDE.md`, 2026-10-18). `xiao_c5_primary` and `xiao_c5_linear_primary`
+  still build and get shared-core fixes; their shells (`firmware.ino`'s brain half, `api/HttpApiServer.cpp`) get no new
+  features and no bench time. Don't spend effort keeping them in step: a new feature lands in the shared code and the
+  native shell, and the parity check lists what the ESP32 lacks.
+- Anything that decides — a timing, a retry, a rule about a plug or a board — still goes in `control/` or `outlets/`, not
+  in `native/src/`, so the ESP32 brain stays revivable as a thin shell (around `api/ApiCore.h` for its routes).
 
 ## At the bench
 

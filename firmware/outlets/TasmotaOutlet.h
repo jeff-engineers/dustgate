@@ -111,7 +111,7 @@ public:
     // The plug's MAC ("AA:BB:CC:DD:EE:FF", from Status 5). What identifies it when
     // its address changes — see control/OutletRelocate.h. False if it did not
     // answer or did not say.
-    bool readMac(std::string& out, uint32_t timeoutMs = OUTLET_RPC_WRITE_TIMEOUT_MS);
+    bool readMac(std::string& out, uint32_t timeoutMs = OUTLET_RPC_WRITE_TIMEOUT_MS) override;
 
     // Claim the plug AND make it behave like the pass-through it is meant to be.
     //

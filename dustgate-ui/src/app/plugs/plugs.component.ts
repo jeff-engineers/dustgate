@@ -1,5 +1,6 @@
 import { Component, OnDestroy, OnInit } from '@angular/core';
 import { QuietPoll } from '../services/failure';
+import { samePlug } from '@plug-identity';
 import { failureReason, noAnswer, reportFailure } from '../services/failure';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
@@ -36,6 +37,9 @@ interface PlugRow {
   /** The plug's own name, as the plug reports it (fallback: what the layout cached). */
   plugName: string;
   seen: DiscoveredOutlet | null;
+  /** A DIFFERENT plug answers at this address (samePlug: 'no') — the layout's plug has moved or gone. It is listed
+   *  under Found, free to pair, and nothing is written to it on this row's behalf. */
+  replacedBy: DiscoveredOutlet | null;
 }
 
 @Component({
@@ -108,7 +112,8 @@ interface PlugRow {
             <div class="sub">{{ r.kind === 'tasmota' ? 'Tasmota' : 'Shelly' }} · {{ r.ip }} · {{ how(r) }}</div>
             <div class="sub" *ngIf="r.forKind === 'tool'">Paired to the <b>{{ r.forName }}</b><ng-container *ngIf="r.thresholdW"> · starts collection above {{ r.thresholdW }} W</ng-container></div>
             <div class="sub" *ngIf="r.forKind === 'collector'">Paired to the collector <b>{{ r.forName }}</b></div>
-            <div class="sub" *ngIf="state(r) === 'off'">It may have a new address. Sweep to find it.</div>
+            <div class="sub" *ngIf="state(r) === 'off' && !r.replacedBy">It may have a new address. Sweep to find it.</div>
+            <div class="sub" *ngIf="r.replacedBy">A different plug ({{ r.replacedBy.kind === 'tasmota' ? 'a Tasmota' : 'a Shelly' }}{{ r.replacedBy.name ? ', ' + r.replacedBy.name : '' }}) now has this address, so this plug has moved or gone. The brain looks for it by its MAC; that other plug is listed below, free to pair.</div>
             <div class="sub" *ngIf="readOnly(r)">Belongs to {{ r.seen?.holder || 'another brain' }}. Polled, never written. Taking it over repoints its push address to this brain.</div>
           </ng-container>
           <ng-template #renameBox>
@@ -171,7 +176,7 @@ interface PlugRow {
     <div class="btnrow">
       <button class="btn" [disabled]="scanning" (click)="scan()">↻ {{ scanning ? 'Scanning…' : 'Scan again' }}</button>
       <button class="btn" [disabled]="sweeping" (click)="sweep()"
-              title="Knock on every address on the network. About a minute.">{{ sweeping ? 'Sweeping…' : 'Sweep network' }}</button>
+              title="Check every address on the network for a plug. A few seconds on the Pi, about a minute on an ESP32 brain.">{{ sweeping ? 'Sweeping…' : 'Sweep network' }}</button>
     </div>
     <div *ngIf="sweeping || (progress && progress.running)" style="margin-top:10px">
       <div class="hint" style="margin:0">Knocking on every address… {{ pct() }}%</div>
@@ -258,31 +263,35 @@ export class PlugsComponent implements OnInit, OnDestroy {
 
   private rebuild(): void {
     const doc = this.topo, rows: PlugRow[] = [];
-    const seen = (ip: string) => this.outlets.find(o => o.ip === ip) ?? null;
+    // What answers at a saved address counts as THAT plug only if plug-identity agrees: by IP alone, a new Tasmota leased
+    // the address a Shelly left read as the Shelly, under the tool's name (2026-10-18).
+    const at = (ip: string) => this.outlets.find(o => o.ip === ip) ?? null;
+    const seen = (ip: string, saved: RawEl) => { const d = at(ip); return d && samePlug(saved as { kind?: string; mac?: string }, d) !== 'no' ? d : null; };
+    const other = (ip: string, saved: RawEl) => { const d = at(ip); return d && samePlug(saved as { kind?: string; mac?: string }, d) === 'no' ? d : null; };
     for (const m of machinesOf(doc)) {
       const o = ((m.sensor as RawEl | undefined)?.['outlet'] as RawEl | undefined);
       if (!o?.['ip']) continue;
-      const ip = o['ip'] as string, s = seen(ip);
+      const ip = o['ip'] as string, s = seen(ip, o);
       rows.push({
         key: 'm:' + m.id, ip, forName: (m.name as string) || (m.id as string), forKind: 'tool', machineId: m.id as string,
-        kind: (o['kind'] === 'tasmota' || s?.kind === 'tasmota') ? 'tasmota' : 'shelly',
-        thresholdW: o['thresholdW'] as number | undefined, plugName: s?.name || (o['name'] as string) || '', seen: s,
+        kind: o['kind'] === 'tasmota' ? 'tasmota' : 'shelly',
+        thresholdW: o['thresholdW'] as number | undefined, plugName: s?.name || (o['name'] as string) || '', seen: s, replacedBy: other(ip, o),
       });
     }
     for (const sys of systemsOf(doc)) {
       const c = collectorOf(sys), o = outletOf(doc, c);
       if (!c || !o?.['ip']) continue;
-      const ip = o['ip'] as string, s = seen(ip);
+      const ip = o['ip'] as string, s = seen(ip, o);
       rows.push({
         key: 'c:' + c['id'], ip, forName: (c['name'] as string) || 'Dust collector', forKind: 'collector', collectorId: c['id'] as string,
-        kind: (o['kind'] === 'tasmota' || s?.kind === 'tasmota') ? 'tasmota' : 'shelly', plugName: s?.name || (o['name'] as string) || '', seen: s,
+        kind: o['kind'] === 'tasmota' ? 'tasmota' : 'shelly', plugName: s?.name || (o['name'] as string) || '', seen: s, replacedBy: other(ip, o),
       });
     }
     this.rows = rows;
   }
 
   found(): DiscoveredOutlet[] {
-    const paired = new Set(this.rows.map(r => r.ip));
+    const paired = new Set(this.rows.filter(r => !r.replacedBy).map(r => r.ip));
     return this.outlets.filter(o => !paired.has(o.ip));
   }
   /** Tools that can take a plug: no plug and no clamp yet. */
@@ -412,7 +421,9 @@ export class PlugsComponent implements OnInit, OnDestroy {
 
   async release(r: PlugRow): Promise<void> {
     this.confirmRelease = null; this.error = ''; this.note = '';
-    try {
+    // A different plug at this address is not ours to hand back: nothing is written to it.
+    if (r.replacedBy) this.note = 'Unpaired. Nothing was written: a different plug has this address now.';
+    else try {
       const res = await this.api.releaseOutlet(r.ip);
       // Not ok is usually an explanation, not a failure ("polled only — nothing was written to this plug"), and either way
       // the pairing is ours to end, so it is said and the release carries on.

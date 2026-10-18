@@ -6,15 +6,25 @@
 // firmware gets tool power from Shelly plugs), so the routing-behaviour checks
 // here are meaningful against the mock; a real target would drive tools physically.
 //
-//   node topology-conformance.js [baseUrl]
+//   node topology-conformance.js [baseUrl] [--gates-on <board>]
 
 'use strict';
 
 const baseUrl  = (process.argv[2] || 'http://localhost:3000').replace(/\/$/, '');
 const fixtures = require('./topology.fixtures.js');
+// --gates-on <board>: every gate lives on that board instead of the brain's own pads. A brain with no pads of its own
+// (the native brain) is certified this way, against a fake node holding the gates (native/test/e2e_conformance.sh).
+const gatesOnAt = process.argv.indexOf('--gates-on');
+const gatesOn = gatesOnAt > 0 ? process.argv[gatesOnAt + 1] : '';
+function onBoard(shop) {
+  if (!gatesOn) return shop;
+  const s = fixtures.clone(shop);
+  for (const sys of s.systems) for (const e of sys.elements) if (e.type === 'selector') e.controllerId = gatesOn;
+  return s;
+}
 // The device takes SHOPS; a document without systems[] is refused as malformed (checked in 1).
-const twoGatesShop = fixtures.twoGates;
-const starShop = fixtures.star;
+const twoGatesShop = onBoard(fixtures.twoGates);
+const starShop = onBoard(fixtures.star);
 
 const results = [];
 const check = (name, cond, detail = '') => results.push({ name, ok: !!cond, detail });
@@ -49,6 +59,16 @@ async function waitFor(fn, { timeoutMs = 10000, intervalMs = 250 } = {}) {
     await new Promise((r) => setTimeout(r, intervalMs));
   }
   return false;
+}
+
+/** Inject a tool's draw, then wait (up to `timeoutMs`) for the status to satisfy `want`, and return the last status.
+ *  The mock routes inside the request and answers with the new status; a real brain routes on its next loop pass, a
+ *  moment later (and a gate on a node answers when it arrives), so the contract is the state the brain SETTLES in. */
+async function power(toolId, watts, want, timeoutMs = 3000) {
+  await req('POST', '/api/sim/tool', { toolId, watts });
+  let last = null;
+  await waitFor(async () => { last = await req('GET', '/api/status'); return want(last.json || {}); }, { timeoutMs, intervalMs: 150 });
+  return last;
 }
 
 async function run() {
@@ -106,7 +126,8 @@ async function run() {
       `status=${badCh.status}`);
 
     const badAngle = await req('POST', '/api/servo/jog', { channel: 0, angle: 400 });
-    check('servo jog bad angle → 400', noServos ? badAngle.status === 501 : badAngle.status === 400,
+    // Without servos, the bad value may be refused before the missing hardware is (400) — both are an honest no.
+    check('servo jog bad angle → 400', noServos ? (badAngle.status === 501 || badAngle.status === 400) : badAngle.status === 400,
       `status=${badAngle.status}`);
 
     const det = await req('POST', '/api/servo/jog', { channel: 0, detach: true });
@@ -116,27 +137,28 @@ async function run() {
 
   // 3. Tool power drives routing, and ONE MACHINE PER SYSTEM gets the air.
   {
-    let r = await req('POST', '/api/sim/tool', { toolId: 'toolX', watts: 10 });
-    check('X on → gate1 open, collector on', r.json?.actuators?.gate1 === 'open' && r.json?.collectorOn === true);
+    const xOn = (j) => j.actuators?.gate1 === 'open' && j.collectorOn === true;
+    let r = await power('toolX', 10, xOn);
+    check('X on → gate1 open, collector on', xOn(r.json || {}), JSON.stringify({ a: r.json?.actuators, on: r.json?.collectorOn }));
     // These gates contest no selector, so both used to open — co-open, half the
     // velocity at each. Y is newer, so Y takes the air and X's gate shuts even
     // though nothing was competing for it. ↔ topology.test.js and
     // test_topology_controller.cpp assert the same switchover.
-    r = await req('POST', '/api/sim/tool', { toolId: 'toolY', watts: 10 });
-    check('X+Y on → only the NEWER tool gets a gate',
-      r.json?.actuators?.gate1 === 'closed' && r.json?.actuators?.gate2 === 'open');
+    const yWins = (j) => j.actuators?.gate1 === 'closed' && j.actuators?.gate2 === 'open';
+    r = await power('toolY', 10, yWins);
+    check('X+Y on → only the NEWER tool gets a gate', yWins(r.json || {}), JSON.stringify(r.json?.actuators));
     check('X+Y on → X is drawing but not reachable',
       r.json?.tools?.toolX?.active === true && r.json?.reachable?.toolX === false);
-    r = await req('POST', '/api/sim/tool', { toolId: 'toolX', watts: 0 });
-    check('X off (Y on) → gate1 closed, gate2 open',
-      r.json?.actuators?.gate1 === 'closed' && r.json?.actuators?.gate2 === 'open' && r.json?.collectorOn === true);
-    r = await req('POST', '/api/sim/tool', { toolId: 'toolY', watts: 0 });
+    const xOff = (j) => j.actuators?.gate1 === 'closed' && j.actuators?.gate2 === 'open' && j.collectorOn === true;
+    r = await power('toolX', 0, xOff);
+    check('X off (Y on) → gate1 closed, gate2 open', xOff(r.json || {}), JSON.stringify({ a: r.json?.actuators, on: r.json?.collectorOn }));
     // Idle HOLDS the gates, and the blower COASTS rather than cutting — a bandsaw
     // spinning down still throws dust. Polled rather than clock-injected because
     // this suite also certifies real firmware, where the only clock is the wall.
-    check('idle → gate2 HELD open (idle-hold), collector still coasting',
-      r.json?.actuators?.gate2 === 'open' &&
-      r.json?.collectorOn === true && r.json?.collectorCoasting === true);
+    const coasting = (j) => j.actuators?.gate2 === 'open' && j.collectorOn === true && j.collectorCoasting === true;
+    r = await power('toolY', 0, coasting);
+    check('idle → gate2 HELD open (idle-hold), collector still coasting', coasting(r.json || {}),
+      JSON.stringify({ a: r.json?.actuators, on: r.json?.collectorOn, coasting: r.json?.collectorCoasting }));
 
     const off = await waitFor(async () => {
       const s = await req('GET', '/api/status');
@@ -196,11 +218,11 @@ async function run() {
   // 4. Most-recent-wins on a single shared selector.
   {
     await req('PUT', '/api/topology', starShop);
-    let r = await req('POST', '/api/sim/tool', { toolId: 'toolA', watts: 10 });
+    let r = await power('toolA', 10, (j) => j.actuators?.sel === 's1');
     check('star: A on → selector s1', r.json?.actuators?.sel === 's1');
-    r = await req('POST', '/api/sim/tool', { toolId: 'toolB', watts: 10 });
+    r = await power('toolB', 10, (j) => j.actuators?.sel === 's2');
     check('star: B on (newer) wins → selector s2', r.json?.actuators?.sel === 's2' && r.json?.reachable?.toolB === true);
-    r = await req('POST', '/api/sim/tool', { toolId: 'toolB', watts: 0 });
+    r = await power('toolB', 0, (j) => j.actuators?.sel === 's1');
     check('star: B off → selector back to s1 (A alone)', r.json?.actuators?.sel === 's1');
   }
 }

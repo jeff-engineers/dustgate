@@ -16,6 +16,7 @@
 #include "OutletFactory.h"
 #include "ShellyDeviceName.h"
 #include "PlugClaim.h"
+#include "../control/OutletRelocate.h"   // normMac
 
 namespace outletops {
 
@@ -66,10 +67,13 @@ inline void describe(JsonObject o, const char* ip, const char* mdnsHost, bool ki
     const bool claimKnown = ok && (isTasmota ? tasProbe.readClaim(self.host.c_str(), devName.c_str(), self.name.c_str(), claim)
                                              : shellyProbe.readClaim(self.host.c_str(), devName.c_str(), self.name.c_str(), claim));
 
-    // A Tasmota's MAC, so a layout can find the plug again when its address changes (control/OutletRelocate.h).
-    if (isTasmota && ok) {
+    // The plug's MAC, either kind, so a layout can find the plug again when its address changes and tell it from a
+    // different plug given the same address (control/OutletRelocate.h). Normalised, so both brains and the app compare alike.
+    if (ok) {
         std::string mac;
-        if (tasProbe.readMac(mac, 1200) && !mac.empty()) o["mac"] = mac;
+        const bool got = isTasmota ? tasProbe.readMac(mac, 1200) : shellyProbe.readMac(mac, 1200);
+        const std::string n = got ? relocate::normMac(mac) : std::string();
+        if (!n.empty()) o["mac"] = n;
     }
 
     o["ip"]        = std::string(ip);

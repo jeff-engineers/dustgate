@@ -21,7 +21,8 @@ git status --porcelain && git diff --stat HEAD
 |---|---|
 | `dustgate-ui/**` | `cd dustgate-ui && npm test` |
 | `shared/device-model/**` | **all three**: `cd tools && npm run model:test`, `npm run firmware:test`, and `cd dustgate-ui && npm test` |
-| `firmware/**` (`.h`/`.cpp` control logic) | `cd tools && npm run firmware:test`, then the compiles below |
+| `firmware/**` (`.h`/`.cpp` control logic) | `cd tools && npm run firmware:test` (it opens with the two-brain parity check), then the compiles below, **and** `make -C native test` — `firmware/control` and `firmware/outlets` are the native brain's core too |
+| `native/**` | `make -C native test` (end to end, including the topology contract suite against this brain) and `cd tools && npm run brain:parity` |
 | `firmware/**` (pins, boards, `.ino`, `config.h`) | the compiles below |
 | HTTP/WS contract on either side | the conformance suites below |
 | `platformio.ini`, `boards/*.h` | the compiles below |

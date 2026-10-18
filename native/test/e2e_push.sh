@@ -40,6 +40,12 @@ check "...and its name says who is using it" 'wait_for "[ \"\$(cat $T/power.name
 check "...and it dials in" 'wait_for "grep -q \"connected its push socket\" $T/brain.log" 20'
 echo 300 > "$T/power"
 check "a pushed reading reaches the status" 'wait_for "[ \"\$(watts)\" -ge 250 ]" 10'
+# The relocator reads a newly paired plug's MAC once (control/OutletRelocate.h) — a describe, which counts as a poll here.
+# Wait for it, so what is counted below is the poller alone.
+wait_for "grep -q 'recording the MAC of m:toolX' $T/brain.log" 30
+# The relocator reads a newly paired plug's MAC once (control/OutletRelocate.h) — a describe, which counts as a poll here.
+# Wait for it, so what is counted below is the poller alone.
+wait_for "grep -q 'recording the MAC of m:toolX' $T/brain.log" 30
 sleep 1.5; N=$(polls); echo 0 > "$T/power"; sleep 0.6; echo 400 > "$T/power"; sleep 2
 check "...without the plug being polled" '[ "$(polls)" = "$N" ]'
 check "...and a change shows at once" '[ "$(watts)" -ge 350 ]'

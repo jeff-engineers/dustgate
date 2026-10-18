@@ -22,6 +22,7 @@ console.log('\nL1 rows');
   ok('no duration, no claim', rows[1].duration === '');
   ok('absent list is empty', problemRows(undefined, nameOf).length === 0);
   ok('a hand-run blower is asked for', headline(P('collector-needs-start', 'warn', 'big'), 'Cyclone') === 'Turn on Cyclone');
+  ok('a replaced plug says what happened', headline(P('plug-replaced', 'warn', 'plug:m:saw'), 'Sawstop') === "A different plug has Sawstop's address");
   ok('an unknown code still reads', headline(P('board-fault', 'bad', 'x'), 'x') === 'board fault');
   ok('seconds', duration(30000) === 'for 30s');
   ok('hours', duration(3 * 3600000) === 'for 3h');

@@ -10,6 +10,7 @@
 #include <boost/asio.hpp>
 #include <boost/beast.hpp>
 #include <mutex>
+#include <set>
 #include <string>
 #include <thread>
 #include <vector>
@@ -22,6 +23,12 @@ public:
     ~Sweep() { cancel(); join(); }
     bool running() const { return _running; }
     bool everRan() const { return _everRan; }
+    // Finished passes, whoever started them: control/OutletRelocate.h reads every sweep's rows, not only its own.
+    uint32_t finished() const { return _finished; }
+    // The addresses the layout already names. A plug the brain polls twice a second can miss a 250 ms knock (a Tasmota
+    // answers one request at a time), and dropping out of a sweep hides it from the picker and from relocation alike
+    // (seen 2026-10-18: the Miter Saw's Tasmota in one sweep and not the next). Those get a longer knock and a second try.
+    void setKnown(const std::set<std::string>& ips) { std::lock_guard<std::mutex> g(_m); _known = ips; }
     void start(const std::string& localIp, const std::string& port, outletops::Self self) {
         if (_running) return;
         join();
@@ -32,7 +39,8 @@ public:
         const std::string addr = localIp.substr(0, localIp.find('|'));
         const size_t dot = addr.rfind('.');
         const std::string prefix = dot == std::string::npos ? "192.168.1." : addr.substr(0, dot + 1);
-        _th = std::thread([this, prefix, port, self, ownIp] { run(prefix, port, self, ownIp); });
+        std::set<std::string> known; { std::lock_guard<std::mutex> g(_m); known = _known; }
+        _th = std::thread([this, prefix, port, self, ownIp, known] { run(prefix, port, self, ownIp, known); });
     }
     void cancel() { _cancel = true; }
     std::string progressJson() {
@@ -52,19 +60,20 @@ private:
         return (uint32_t)std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
     }
     void join() { if (_th.joinable()) _th.join(); }
-    static bool knock(const std::string& ip, const std::string& port) {
+    static bool knock(const std::string& ip, const std::string& port, int timeoutMs = 250) {
         // An async connect with a deadline: a blocking one waits out the OS timeout on every empty address.
         namespace net = boost::asio; namespace beast = boost::beast;
         try {
             net::io_context io; beast::tcp_stream s(io);
             beast::error_code ec = boost::asio::error::would_block;
-            s.expires_after(std::chrono::milliseconds(250));
+            s.expires_after(std::chrono::milliseconds(timeoutMs));
             s.async_connect(net::ip::tcp::endpoint(net::ip::make_address(ip), (unsigned short)std::stoi(port)), [&](beast::error_code e) { ec = e; });
             io.run();
             return !ec;
         } catch (...) { return false; }
     }
-    void run(const std::string& prefix, const std::string& port, outletops::Self self, const std::string& ownIp) {
+    void run(const std::string& prefix, const std::string& port, outletops::Self self, const std::string& ownIp,
+             const std::set<std::string> known) {
         std::atomic<int> next{1};
         auto worker = [&] {
             for (;;) {
@@ -73,21 +82,31 @@ private:
                 const std::string ip = prefix + std::to_string(n);
                 // Not ourselves: this brain answers every path with the app's page, which a probe took for a plug and the
                 // picker listed as "unclaimed" (found 2026-10-07).
-                if (ip != ownIp && knock(ip, port)) {
+                const bool ours = known.count(ip) > 0;
+                const int tries = ours ? 2 : 1;
+                bool home = false;
+                for (int t = 0; t < tries && !home && ip != ownIp; t++) home = knock(ip, port, ours ? 1000 : 250);
+                if (home) {
                     // Phase 2, now that someone is home: the real probe, with its own generous timeouts.
                     DynamicJsonDocument d(1024);
-                    outletops::describe(d.to<JsonObject>(), ip.c_str(), nullptr, false, OUTLET_SHELLY, 0, self);
+                    for (int t = 0; t < tries; t++) {
+                        outletops::describe(d.to<JsonObject>(), ip.c_str(), nullptr, false, OUTLET_SHELLY, 0, self);
+                        if (d["reachable"] | false) break;
+                        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+                    }
                     if (d["reachable"] | false) { std::string row; serializeJson(d, row); std::lock_guard<std::mutex> g(_m); _rows.push_back(row); plughttp::log("[SWEEP] found " + ip); }
-                }
+                    else if (ours) plughttp::log("[SWEEP] " + ip + " (a plug the layout names) answered a knock but not as a plug");
+                } else if (ours) plughttp::log("[SWEEP] " + ip + " (a plug the layout names) did not answer");
                 _scanned++;
             }
         };
         std::vector<std::thread> pool;
         for (int i = 0; i < 32; i++) pool.emplace_back(worker);
         for (auto& t : pool) t.join();
-        _cancelled = _cancel.load(); _finishedAt = nowMs(); _running = false;
+        _cancelled = _cancel.load(); _finishedAt = nowMs(); _finished++; _running = false;
     }
-    std::mutex _m; std::vector<std::string> _rows;
+    std::mutex _m; std::vector<std::string> _rows; std::set<std::string> _known;
+    std::atomic<uint32_t> _finished{0};
     std::atomic<bool> _running{false}, _cancel{false}, _everRan{false}, _cancelled{false};
     std::atomic<int> _scanned{0}; uint32_t _finishedAt = 0;
     std::thread _th;

@@ -38,6 +38,7 @@
 #include "control/ControlInput.h"
 #include "control/OutletSweep.h"
 #include "control/OutletRelocate.h"
+#include "control/BrainCadence.h"     // the beacon's pace and the hourly link-log line, shared with the native brain
 #include "control/NodeLinkPlan.h"
 #include "control/CollectorPress.h"        // the retry policy for a stateless press
 #include "control/RfCollectorPresser.h"    // ...the presser that keys THIS board's pad
@@ -909,7 +910,7 @@ static void tickBeacon() {
     }
     if (!any) return;
     const uint32_t now = millis();
-    if (now - g_beaconAtMs < (anyDown ? 5000UL : 60000UL)) return;
+    if (now - g_beaconAtMs < topo::beaconEveryMs(anyDown)) return;   // control/BrainCadence.h, shared with the native brain
     g_beaconAtMs = now;
     char buf[96];
     const IPAddress ip = WiFi.localIP();
@@ -1027,6 +1028,15 @@ static void watchHeap() {
     }
 }
 
+#ifdef CONTROL_SMART_OUTLET
+// Is the plug at each saved address still the layout's plug, and where did a lost one go: control/OutletRelocate.h, the
+// same policy the native brain runs (tools/check-brain-parity.js holds the two to it). A plug it does not trust is not
+// given a slot — not polled, so not claimed and not read as its tool. relocatePlugs() ticks it.
+static relocate::PlugRelocator g_relocator(1);           // on the main loop: one address asked per tick
+static std::string g_slotMachine[SMART_OUTLET_COUNT];    // slot i -> its machine id
+static bool plugTrusted(const std::string& key, JsonObjectConst outlet) { return g_relocator.trusted(key, outlet["mac"] | ""); }
+#endif
+
 static void raiseDeviceProblems() {
     static uint32_t lastMs = 0;
     static topo::DeviceProblems problems;     // control/DeviceProblems.h: the rules, shared with the native brain
@@ -1056,13 +1066,23 @@ static void raiseDeviceProblems() {
 #endif
     std::vector<topo::PlugView> plugs;
 #ifdef CONTROL_SMART_OUTLET
-    for (int i = 0; i < control.outletCount() && i < SMART_OUTLET_COUNT; i++) {
-        SmartOutlet* o = control.outlet(i);
-        if (!o) continue;
-        topo::PlugView p;
-        p.key = "plug:" + std::to_string(i); p.name = o->name() ? o->name() : ""; p.ip = o->ip(); p.reachable = o->isReachable();
-        plugs.push_back(p);
-    }
+    // From the LAYOUT, keyed by machine as the native brain keys them: a plug held off the poller has no slot, and is
+    // exactly the plug whose problem must be seen.
+    if (g_topoRuntime.loaded())
+        for (const std::string& mid : topo::machineIds(g_topoRuntime.topology())) {
+            JsonObjectConst m = topo::machineDoc(g_topoRuntime.topology(), mid);
+            JsonObjectConst po = m["sensor"]["outlet"];
+            const char* ip = po["ip"].as<const char*>();
+            if (!ip || !*ip) continue;
+            topo::PlugView p;
+            p.key = "plug:" + mid; p.ip = ip;
+            const char* nm = po["name"].as<const char*>();
+            p.name = (nm && *nm) ? nm : (m["name"] | mid.c_str());
+            for (int i = 0; i < control.outletCount() && i < SMART_OUTLET_COUNT; i++)
+                if (g_slotMachine[i] == mid && control.outlet(i)) p.reachable = control.outlet(i)->isReachable();
+            p.replacedBy = g_relocator.replacedBy("m:" + mid);
+            plugs.push_back(p);
+        }
 #endif
     problems.update(g_topoRuntime, boards, plugs, now);
 
@@ -1090,20 +1110,16 @@ static void linkLogTick() {
     linklog::flush();
     static uint32_t lastHourlyMs = 0;          // first one an hour after boot
     const uint32_t now = millis();
-    if (now - lastHourlyMs < 3600000UL) return;
+    if (now - lastHourlyMs < topo::kHourlyLogMs) return;   // control/BrainCadence.h, shared with the native brain
     lastHourlyMs = now;
-    char nodes[120] = "";
-    size_t n = 0;
-    for (int i = 0; i < g_remoteCount && n < sizeof(nodes) - 24; i++) {
-        if (!remoteLive(i)) continue;
-        const topo::RemoteActuatorBus::LinkHealth h = g_remoteBuses[i].health();
-        n += snprintf(nodes + n, sizeof(nodes) - n, "%s%s:%s", n ? " " : "",
-                      g_remoteBuses[i].host(), h.linked ? "up" : "down");
-    }
-    char extra[200];
-    snprintf(extra, sizeof(extra), "\"rssi\":%d,\"bssid\":\"%s\",\"heap\":%u,\"nodes\":\"%s\"",
+    std::vector<std::pair<std::string, bool>> boards;
+    for (int i = 0; i < g_remoteCount; i++)
+        if (remoteLive(i)) boards.push_back({g_remoteBuses[i].host(), g_remoteBuses[i].health().linked});
+    const std::string nodes = topo::hourlyNodesField(boards);
+    char extra[320];
+    snprintf(extra, sizeof(extra), "\"rssi\":%d,\"bssid\":\"%s\",\"heap\":%u,\"nodes\":\"%.200s\"",
              (int)WiFi.RSSI(), WiFi.BSSIDstr().c_str(),
-             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL), nodes);
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL), nodes.c_str());
     linklog::event("hourly", nullptr, extra);
 }
 
@@ -1216,6 +1232,11 @@ static void syncTopologyOutlets() {
         JsonObjectConst o = m["sensor"]["outlet"];
         const char* ip = o["ip"].as<const char*>();
         if (!ip || !*ip) continue;                       // manual machine — nothing to poll
+        if (!plugTrusted("m:" + mid, o)) {
+            DEBUG_PRINT(F("[RELOCATE] holding ")); DEBUG_PRINT(mid.c_str());
+            DEBUG_PRINTLN(F("'s plug off the poller until the plug at its address is shown to be its own."));
+            continue;
+        }
         if (slot >= SMART_OUTLET_COUNT) {
             DEBUG_PRINTLN(F("[Outlets] More paired machines than outlet slots — extras ignored."));
             break;
@@ -1225,6 +1246,7 @@ static void syncTopologyOutlets() {
         // maps an unknown string the same way — a document from a newer UI
         // naming a kind this build has never heard of gets the old behaviour
         // rather than a plug that silently reads nothing.
+        g_slotMachine[slot] = mid;
         control.configureOutlet(slot++,
                                 outletKindFromName(o["kind"] | "shelly"),
                                 o["gen"] | 2, ip,
@@ -1235,7 +1257,7 @@ static void syncTopologyOutlets() {
     }
     // Drop any slot the layout no longer names, so an unpaired machine stops
     // being polled without waiting for a reboot.
-    for (int i = slot; i < SMART_OUTLET_COUNT; i++) control.removeOutlet(i);
+    for (int i = slot; i < SMART_OUTLET_COUNT; i++) { control.removeOutlet(i); g_slotMachine[i].clear(); }
     DEBUG_PRINT(F("[Outlets] Layout plugs registered: ")); DEBUG_PRINTLN(slot);
 
     // One blower switch per system, in the same order systemIds() reports, so
@@ -1261,7 +1283,7 @@ static void syncTopologyOutlets() {
         }
         JsonObjectConst o = g_topoRuntime.collectorOutlet(sysIds[i]);
         const char* ip = o["ip"].as<const char*>();
-        if (ip && *ip) {
+        if (ip && *ip && plugTrusted("s:" + sysIds[i], o)) {
             if (!control.collectorIs((int)i, ip))
                 control.configureCollector((int)i, o["gen"] | 2, ip, o["host"] | "");
         } else {
@@ -1325,7 +1347,7 @@ static void syncTopologyOutlets() {
         // — so this is the only thing that can say whether it landed.
         JsonObjectConst so = g_topoRuntime.collectorSensorOutlet(sysIds[i]);
         const char* sip = so["ip"].as<const char*>();
-        if (sip && *sip) {
+        if (sip && *sip && plugTrusted("c:" + sysIds[i], so)) {
             if (!control.collectorSensorIs((int)i, sip))
                 control.configureCollectorSensor((int)i,
                                                  outletKindFromName(so["kind"] | "shelly"),
@@ -2146,138 +2168,78 @@ static void describeOutletInto(JsonObject o, const char* ip, const char* mdnsHos
 #endif  // CONTROL_SMART_OUTLET
 
 // -----------------------------------------------------------------------------
-// relocateTasmotas — find a tool's plug again after its address changed.
-// The reasoning, and the matching rules, are in control/OutletRelocate.h.
-//
-// Runs on the main loop, like the sweep it borrows (blocking HTTP, one address
-// per pass). Three jobs, in order, one per call at most:
-//   1. BACKFILL a plug's MAC into the layout while it is still answering, so a
-//      layout paired before MACs were stored can still be found later.
-//   2. START a sweep when a plug has been silent long enough and none has run
-//      lately. Rate-limited: a sweep is a minute of probing on a network that
-//      once seemed to object to it (TODO, ESP-NOW).
-//   3. APPLY a finished sweep: rewrite the layout for every plug it located.
+// relocatePlugs — the ESP32 shell around control/OutletRelocate.h's PlugRelocator.
+// The policy (when to ask an address, when a different plug is there, when to sweep, what to rewrite) is the shared one;
+// this only says what the plugs are doing, lends it this board's probe and sweep, and applies its rewrites. Blocking
+// HTTP on the main loop, as the sweep it borrows is: one address asked per tick, a tick every 5 s.
 // -----------------------------------------------------------------------------
 #ifdef CONTROL_SMART_OUTLET
-static const uint32_t kRelocateAfterMs    = 300000;    // silent this long before we go looking
-static const uint32_t kRelocateMinGapMs   = 900000;    // and never sweep more often than this
-static const uint32_t kBackfillGapMs      = 30000;
+struct EspPlugProbe : relocate::Probe {
+    relocate::Seen describe(const std::string& ip) override {
+        relocate::Seen s;
+        DynamicJsonDocument d(1024);
+        outletops::Self self{control.ourHost() ? control.ourHost() : "", control.ourName() ? control.ourName() : ""};
+        outletops::describe(d.to<JsonObject>(), ip.c_str(), nullptr, false, OUTLET_SHELLY, 0, self);
+        s.reachable = d["reachable"] | false; s.kind = d["kind"] | ""; s.mac = d["mac"] | "";
+        return s;
+    }
+    bool sweepRunning() override { return g_sweep.running(); }
+    bool startSweep() override { return g_sweep.begin(WiFi.localIP()); }
+    uint32_t sweepsFinished() override { return g_sweep.finishedCount(); }
+    std::vector<relocate::Found> sweepRows() override {
+        std::vector<relocate::Found> out;
+        for (const String& row : g_sweep.rows()) {
+            StaticJsonDocument<768> d;
+            if (deserializeJson(d, row)) continue;
+            out.push_back({d["ip"] | "", relocate::normMac(d["mac"] | ""), d["pickable"] | false, d["kind"] | ""});
+        }
+        return out;
+    }
+};
 
-static void relocateTasmotas() {
-    static uint32_t lastTick = 0, lastSweepMs = 0, lastBackfillMs = 0;
-    static bool     ownSweep = false;
-    static uint32_t downSince[SMART_OUTLET_COUNT] = {0};
+static void relocatePlugs() {
+    static uint32_t lastTick = 0;
+    static std::string lastTrust;
+    static EspPlugProbe probe;
     const uint32_t now = millis();
     if (now - lastTick < 5000) return;
     lastTick = now;
     if (WiFi.status() != WL_CONNECTED || !g_topoRuntime.loaded()) return;
+    JsonObjectConst doc = g_topoRuntime.topology();
 
-    // The plugs the layout names, in the same order syncTopologyOutlets() gave
-    // them slots — slot i is the i-th machine with an address.
-    struct Slot { std::string id; relocate::Outlet o; bool tasmotaOrUnsaid; bool kindUnsaid; };   // 'worth a sweep'
-    std::vector<Slot> slots;
-    for (const std::string& mid : topo::machineIds(g_topoRuntime.topology())) {
-        JsonObjectConst o = topo::machineDoc(g_topoRuntime.topology(), mid)["sensor"]["outlet"];
+    // Every plug the layout names, keyed as the native brain keys them.
+    std::vector<relocate::Plug> plugs;
+    for (const std::string& mid : topo::machineIds(doc)) {
+        JsonObjectConst o = topo::machineDoc(doc, mid)["sensor"]["outlet"];
         const char* ip = o["ip"].as<const char*>();
         if (!ip || !*ip) continue;
-        const char* kind = o["kind"] | "";
-        slots.push_back({mid, {mid, ip, relocate::normMac(o["mac"] | "")},
-                         // Only a plug KNOWN to be a Tasmota is worth a sweep: an unsaid
-                         // kind is a Shelly that may simply be switched off, and
-                         // sweeping a network every 15 minutes for it is not free.
-                         strcmp(kind, "tasmota") == 0 || !relocate::normMac(o["mac"] | "").empty(),
-                         !*kind});
+        bool reachable = false;
+        topo::TopologyRuntime::NodePlugReading np;
+        if (g_topoRuntime.nodePlug(mid, np)) reachable = np.reachable;
+        else for (int i = 0; i < SMART_OUTLET_COUNT; i++)
+            if (g_slotMachine[i] == mid && control.outlet(i)) reachable = control.outlet(i)->isReachable();
+        plugs.push_back({"m:" + mid, ip, o["kind"] | "", o["mac"] | "", reachable});
     }
-    for (size_t i = 0; i < slots.size() && i < (size_t)SMART_OUTLET_COUNT; i++) {
-        SmartOutlet* so = control.outlet((int)i);
-        if (!so || so->isReachable()) { downSince[i] = 0; continue; }
-        if (!downSince[i]) downSince[i] = now ? now : 1;
-    }
-
-    // 3. a finished sweep of ours
-    if (ownSweep && !g_sweep.running()) {
-        ownSweep = false;
-        std::vector<relocate::Outlet> lost, all;
-        for (size_t i = 0; i < slots.size(); i++) {
-            all.push_back(slots[i].o);
-            if (i < (size_t)SMART_OUTLET_COUNT && downSince[i] && now - downSince[i] >= kRelocateAfterMs &&
-                slots[i].tasmotaOrUnsaid)
-                lost.push_back(slots[i].o);
-        }
-        std::vector<relocate::Found> found;
-        for (const String& row : g_sweep.rows()) {
-            StaticJsonDocument<768> d;
-            if (deserializeJson(d, row)) continue;
-            found.push_back({d["ip"] | "", relocate::normMac(d["mac"] | ""), d["pickable"] | false});
-        }
-        const std::vector<relocate::Result> res = relocate::match(lost, all, found);
-        for (const relocate::Result& r : res) {
-            DEBUG_PRINT(F("[RELOCATE] ")); DEBUG_PRINT(r.id.c_str());
-            DEBUG_PRINT(F(" found at ")); DEBUG_PRINT(r.ip.c_str());
-            DEBUG_PRINT(F(" (MAC ")); DEBUG_PRINT(r.mac.c_str());
-            DEBUG_PRINTLN(r.byElimination ? F(") — the only unclaimed plug, so it must be this one; layout updated.")
-                                          : F(") — matched by MAC; layout updated."));
-            linklog::event("relocate", r.id.c_str(), "");
-            apiServer.setMachineOutlet(r.id.c_str(), r.ip.c_str(), "tasmota", r.mac.c_str());
-        }
-        if (res.empty() && !lost.empty()) {
-            DEBUG_PRINT(F("[RELOCATE] swept the subnet, found ")); DEBUG_PRINT((int)found.size());
-            DEBUG_PRINTLN(F(" plug(s) and could not tell which is the lost one — leaving the layout alone."));
-        }
-        return;
-    }
-    if (g_sweep.running()) return;
-
-    // 0. A plug the layout calls a Shelly (no `kind`) that has not answered for a
-    //    minute may be a Tasmota the layout was saved wrong about — three screens
-    //    used to drop `kind` (2026-10-03), and a Shelly poll of a Tasmota never
-    //    answers. Ask the same address as a Tasmota; if it does, correct the layout.
-    if (now - lastBackfillMs >= kBackfillGapMs) {
-        for (size_t i = 0; i < slots.size() && i < (size_t)SMART_OUTLET_COUNT; i++) {
-            if (!slots[i].kindUnsaid || !downSince[i] || now - downSince[i] < 60000) continue;
-            lastBackfillMs = now;
-            TasmotaOutlet t(slots[i].o.ip.c_str(), "kind");
-            if (!t.probe(1200)) break;
-            std::string mac; t.readMac(mac, 1200);
-            const std::string n = relocate::normMac(mac.c_str());
-            DEBUG_PRINT(F("[RELOCATE] ")); DEBUG_PRINT(slots[i].id.c_str());
-            DEBUG_PRINT(F(" at ")); DEBUG_PRINT(slots[i].o.ip.c_str());
-            DEBUG_PRINTLN(F(" answers as a Tasmota — the layout had it as a Shelly; correcting it."));
-            apiServer.setMachineOutlet(slots[i].id.c_str(), slots[i].o.ip.c_str(), "tasmota", n.c_str());
-            return;
-        }
+    std::vector<std::string> sysIds = g_topoRuntime.systemIds();
+    for (size_t i = 0; i < sysIds.size() && i < COLLECTOR_COUNT; i++) {
+        JsonObjectConst so = g_topoRuntime.collectorSensorOutlet(sysIds[i]), co = g_topoRuntime.collectorOutlet(sysIds[i]);
+        if (const char* ip = so["ip"].as<const char*>())
+            if (*ip) plugs.push_back({"c:" + sysIds[i], ip, so["kind"] | "", so["mac"] | "", control.collectorSensorReachable((int)i)});
+        if (const char* ip = co["ip"].as<const char*>())
+            if (*ip) plugs.push_back({"s:" + sysIds[i], ip, co["kind"] | "", co["mac"] | "", control.collectorReachable((int)i)});
     }
 
-    // 1. backfill one MAC
-    if (now - lastBackfillMs >= kBackfillGapMs) {
-        lastBackfillMs = now;
-        for (size_t i = 0; i < slots.size() && i < (size_t)SMART_OUTLET_COUNT; i++) {
-            SmartOutlet* so = control.outlet((int)i);
-            if (!so || !so->isReachable() || !slots[i].o.mac.empty() || so->kind() != OUTLET_TASMOTA) continue;
-            TasmotaOutlet t(so->ip(), "mac");
-            std::string mac;
-            if (!t.readMac(mac, 1200)) continue;
-            const std::string n = relocate::normMac(mac.c_str());
-            if (n.empty()) continue;
-            DEBUG_PRINT(F("[RELOCATE] recording the MAC of ")); DEBUG_PRINT(slots[i].id.c_str());
-            DEBUG_PRINT(F(" (")); DEBUG_PRINT(n.c_str()); DEBUG_PRINTLN(F(") so it can be found if its address changes."));
-            apiServer.setMachineOutlet(slots[i].id.c_str(), so->ip(), "", n.c_str());
-            return;
-        }
+    std::vector<std::string> log;
+    const std::vector<relocate::Rewrite> rw = g_relocator.tick(plugs, probe, now, &log);
+    for (const std::string& l : log) DEBUG_PRINTLN(l.c_str());
+    for (const relocate::Rewrite& r : rw) {
+        linklog::event("relocate", r.key.c_str(), "");
+        if (!apiServer.applyPlugRewrite(r)) { DEBUG_PRINT(F("[RELOCATE] rewrite not saved for ")); DEBUG_PRINTLN(r.key.c_str()); }
     }
-
-    // 2. start a sweep
-    if (lastSweepMs && now - lastSweepMs < kRelocateMinGapMs) return;
-    for (size_t i = 0; i < slots.size() && i < (size_t)SMART_OUTLET_COUNT; i++) {
-        if (!slots[i].tasmotaOrUnsaid || !downSince[i] || now - downSince[i] < kRelocateAfterMs) continue;
-        if (g_sweep.begin(WiFi.localIP())) {
-            ownSweep = true; lastSweepMs = now;
-            DEBUG_PRINT(F("[RELOCATE] ")); DEBUG_PRINT(slots[i].id.c_str());
-            DEBUG_PRINT(F(" at ")); DEBUG_PRINT(slots[i].o.ip.c_str());
-            DEBUG_PRINTLN(F(" has not answered for 5 min — sweeping the subnet for it."));
-        }
-        return;
-    }
+    // A plug became trusted, or was found replaced: give it (or take away) its slot now.
+    std::string trust;
+    for (const relocate::Plug& p : plugs) trust += p.key + (g_relocator.trusted(p.key, p.mac) ? "+" : "-");
+    if (trust != lastTrust) { lastTrust = trust; syncTopologyOutlets(); }
 }
 #endif
 
@@ -2659,6 +2621,14 @@ void loop() {
             o->setExternallyPolled(false);
             if (!machineId.empty()) g_topoRuntime.setMachinePower(machineId, o->getPowerW());
         }
+        // A plug held off the poller (not yet checked, or a different plug at its address) senses nothing — said as 0 W,
+        // not left at whatever it last read. Same rule as the native brain's feedPlugs().
+        for (const std::string& mid : topo::machineIds(g_topoRuntime.topology())) {
+            JsonObjectConst po = topo::machineDoc(g_topoRuntime.topology(), mid)["sensor"]["outlet"];
+            topo::TopologyRuntime::NodePlugReading np;
+            if (po["ip"].isNull() || g_topoRuntime.nodePlug(mid, np)) continue;
+            if (!plugTrusted("m:" + mid, po)) g_topoRuntime.setMachinePower(mid, 0.0f);
+        }
 #endif
 #if HAS_BIN
         // -- dust bin level ------------------------------------------------
@@ -2710,7 +2680,7 @@ void loop() {
         raiseDeviceProblems();
         watchHeap();
 #ifdef CONTROL_SMART_OUTLET
-        relocateTasmotas();
+        relocatePlugs();
 #endif
 
 #ifdef CONTROL_SMART_OUTLET

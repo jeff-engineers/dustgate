@@ -65,7 +65,7 @@ public:
         if (!_running) return;
         _running    = false;
         _cancelled  = true;
-        _finishedMs = millis();
+        _finishedMs = millis(); _finishedCount++;
     }
 
     // Next address to probe, or false when the pass is done. Advances the
@@ -75,7 +75,7 @@ public:
         while (_cursor <= kLastHost && _cursor == _self) _cursor++;  // that is us
         if (_cursor > kLastHost) {
             _running    = false;
-            _finishedMs = millis();
+            _finishedMs = millis(); _finishedCount++;
             return false;
         }
         snprintf(out, len, "%d.%d.%d.%d", _a, _b, _c, _cursor);
@@ -105,6 +105,8 @@ public:
     int      foundCount() const { return (int)_rows.size(); }
     uint32_t startedMs()  const { return _startedMs; }
     uint32_t finishedMs() const { return _finishedMs; }
+    // Finished passes, whoever started them: control/OutletRelocate.h reads every sweep's rows, not only its own.
+    uint32_t finishedCount() const { return _finishedCount; }
     // Has a pass ever completed? Distinguishes "never looked" from "looked and
     // found nothing", which the bar renders differently and which is exactly
     // the difference the empty state has to carry.
@@ -125,4 +127,5 @@ private:
     uint32_t _startedMs  = 0;
     uint32_t _finishedMs = 0;
     std::vector<String> _rows;
+    uint32_t _finishedCount = 0;
 };

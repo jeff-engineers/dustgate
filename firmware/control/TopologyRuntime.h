@@ -67,6 +67,7 @@
 // =============================================================================
 
 #pragma once
+#include "LayoutGate.h"
 #include "../utils/JsonAlloc.h"
 #include "CollectorPlugState.h"
 #include <ArduinoJson.h>
@@ -259,10 +260,8 @@ public:
         // g_topoRejectReason to the BAD LAYOUT light, the screen, and /api/status. A document without systems[] gets
         // the same plain shape error as any other malformed one (the old single-system format got a sentence of its own
         // until 2026-10-16; nothing has written one in months).
-        if (!doc->as<JsonObjectConst>()["systems"].is<JsonArrayConst>()) {
-            err = "systems not an array";
-            return false;
-        }
+        // The structural gate both brains apply (LayoutGate.h): one primary, at least one system, one collector each.
+        if (!layoutGate(doc->as<JsonObjectConst>(), err)) return false;
 
         // ── A SAVE IS NOT A REBOOT (2026-10-06) ──────────────────────────────
         //

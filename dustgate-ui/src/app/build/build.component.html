@@ -544,7 +544,7 @@
   </ng-container>
   <ng-template #sweepDone>
     <span class="lbl">{{ sweepAge() }}</span>
-    <button class="act" (click)="startSweep()" title="Knock on every address on the network — about a minute">
+    <button class="act" (click)="startSweep()" title="Check every address on the network for a plug — a few seconds on the Pi, about a minute on an ESP32 brain">
       {{ sweepEverRan ? 'Look for new' : 'Look for Tasmota plugs' }}
     </button>
   </ng-template>
