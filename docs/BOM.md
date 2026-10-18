@@ -30,7 +30,7 @@ unfitted footprint costs nothing.
 | 12 V → 5 V | Adafruit MPM3610 5 V buck breakout | the same breakout, **on a female header socket** — it is the only converter the CT floor has been measured with |
 | Servo rail | **DROK mini adjustable buck** (3 A peak, 2 A long-term), trimmed to ~6 V | **Pololu D24V22F6** (6 V fixed, 2.5 A), on a socket. Product path later: a discrete LM2596 |
 | Passives | through-hole, from the drawer | through-hole (leaded) for this round; 1206 is a later spin |
-| Barrel jack | whatever is on hand | **CUI PJ-063AH** (2.1 mm pin). NOT PJ-002AH / PJ-102AH — those are 2.0 mm |
+| Barrel jack | whatever is on hand | **CUI PJ-063AH**: a 2.0 mm pin, which is what a 2.1 mm plug mates with, rated 8 A |
 | CT inrush clamp | 1 kΩ + 2 × 1N5817, fitted on the cyclone and miter saw boards | 1 kΩ + 2 × 1N5817 fitted on the first article, BAT54S footprint as the alternative |
 | Input protection | none | **PTC fuse + TVS, fitted** (§1). Decided 2026-10-08: the boards live beside dust ducts, a large ESD source |
 | Bin sensor / lamps | flying leads, **ferrules crimped** — never soldered or tinned: solder creeps under a screw and the joint cracks with vibration | a **screw terminal** (ferrules on the leads too) |
@@ -56,7 +56,7 @@ Qty is per board; "coll." = the collector board only.
 | 4 | Sullins 5-pin female (PPTC051LFBN-RC) | 1 | [Digi-Key (search)](https://www.digikey.com/en/products/result?keywords=PPTC051LFBN-RC) | ~$0.30 | Not in the guide. The Pololu buck's socket (row 6) |
 | 5 | Adafruit MPM3610 5 V buck breakout #4739 | 1 | [Adafruit](https://www.adafruit.com/product/4739) | ~$6 | What the CT floor was measured with. Header, from Adafruit's board file: GND, VOUT, VIN, EN, 2.54 mm (the LM1117 TO-220 order plus EN) — **go by the silkscreen**, the header is rotated on the board |
 | 6 | Pololu D24V22F6, 6 V 2.5 A buck | 1 | [Pololu #2859](https://www.pololu.com/product/2859) | $12.95–19.95 | The servo rail. Five pins at 0.1″: PG, EN, VIN, GND, VOUT — order from Pololu's [dimension diagram](https://www.pololu.com/file/0J1031/d24v22fx-step-down-voltage-regulator-dimension-diagram.pdf). Not a Digi-Key part |
-| 7 | CUI PJ-063AH barrel jack, 2.1 × 5.5 mm | 1 | [Digi-Key CP-063AH-ND (search)](https://www.digikey.com/en/products/result?keywords=PJ-063AH) | ~$1 | 20-week lead time reported. NOT PJ-002AH/102AH (2.0 mm) |
+| 7 | CUI PJ-063AH barrel jack, 2.1 × 5.5 mm | 1 | [Digi-Key CP-063AH-ND (search)](https://www.digikey.com/en/products/result?keywords=PJ-063AH) | ~$1 | 20-week lead time reported. 2.0 mm centre pin, 8 A (Same Sky datasheet, 2025-09-30) — the pin a 2.1 mm plug takes. Pin 1 centre (+12 V), pin 2 sleeve; the MS legs are mechanical |
 | 8 | Bourns MF-RHT200 PTC fuse (2 A hold, 16 V) | 1 | [Digi-Key (search)](https://www.digikey.com/en/products/result?keywords=MF-RHT200) | ~$0.50 | Not in the guide; not looked up. The PWM board's 2 A adapter. **Slider: MF-RHT300** for its 2.7 A stall |
 | 9 | P6KE18A TVS, 15.3 V standoff, unidirectional | 1 | [Digi-Key (search)](https://www.digikey.com/en/products/result?keywords=P6KE18A) | ~$0.40 | Approved (jeff, 2026-10-08); stock not looked up. 12 V input, after the fuse |
 | 10 | MCC 1N5817-TP Schottky, DO-41 | 3 | [Digi-Key 1N5817-TPCT-ND](https://www.digikey.com/en/products/detail/mcc-micro-commercial-components/1N5817-TP/950394) | $0.21 | Verified. One on the XIAO's 5 V pad, two clamping D0 |
@@ -64,7 +64,7 @@ Qty is per board; "coll." = the collector board only.
 | 12 | Panasonic EEU-FR1V221, 220 µF 35 V | 1 | [Digi-Key (search)](https://www.digikey.com/en/products/result?keywords=EEU-FR1V221) | ~$0.40 | XIAO 5 V pad. **Check the can diameter** in the datasheet and pick the matching `CP_Radial_*` |
 | 13 | Panasonic EEU-FR1V471 / EEU-FR1V102, 470–1000 µF 35 V | 1 | [471 (search)](https://www.digikey.com/en/products/result?keywords=EEU-FR1V471) · [102 (search)](https://www.digikey.com/en/products/result?keywords=EEU-FR1V102) | ~$0.50 | At the gate servo connector. Same diameter check |
 | 14 | Panasonic EEU-FR1V100, 10 µF 35 V | 1 | [Digi-Key (search)](https://www.digikey.com/en/products/result?keywords=EEU-FR1V100) | ~$0.25 | The CT bias bulk: 10 µF, what the planer-sensor node runs (jeff, 2026-10-09). Part number not looked up |
-| 15 | KEMET C320C104K5R5TA, 0.1 µF X7R radial | 4 | [Digi-Key (search)](https://www.digikey.com/en/products/result?keywords=C320C104K5R5TA) | $0.13 | Beside the 5 V and servo-rail electrolytics and the 3V3 10 µF, and on the CT bias node. Was 5 until 2026-10-17: the pixel board carries its own |
+| 15 | KEMET C320C104K5R5TA, 0.1 µF X7R radial | 4 | [Digi-Key (search)](https://www.digikey.com/en/products/result?keywords=C320C104K5R5TA) | $0.13 | Beside the 5 V and servo-rail electrolytics and the 3V3 10 µF, and on the CT bias node. Was 5 until 2026-10-17: the pixel board carries its own. **2.54 mm lead spacing**, body 5.08 × 3.18 mm max (KEMET datasheet, 2026-10-18) — not 5.08 mm, which is the C322. A footprint with both spacings takes either |
 | 16 | 10 µF radial X7R, ≥25 V | 1 | [Digi-Key (search)](https://www.digikey.com/en/products/result?keywords=10uF%2025V%20X7R%20radial) | ~$0.30 | XIAO 3V3. Check its body against the footprint |
 | 17 | Yageo CFR-25JB-52-1K, 1 kΩ ¼ W | 4 + 1 coll. | [Digi-Key](https://www.digikey.com/en/products/detail/yageo/CFR-25JB-52-1K/96) | pennies | Verified. CT divider ×2, CT series ×1, spare; the 4N35 LED on a collector board |
 | 18 | Yageo CFR-25JB-52-330R, 330 Ω | 1 | [Digi-Key (search)](https://www.digikey.com/en/products/result?keywords=CFR-25JB-52-330R) | pennies | Pixel DIN |
@@ -99,7 +99,7 @@ Shelly plugs. The JLCPCB board itself is under "Ordering the PCB" below.
 | **12 V wall adapter** | 1 | on hand | any | **2 A for a PWM board, 3 A for a slider** (an ST3215 stalls near 2.7 A). Not optional, just not a board part |
 | **Schottky**, 1N5817 | 1 | same | **MCC 1N5817-TP** (1N5817-TPCT-ND, $0.21). Not ST's 1N5817 (last-time-buy) | Between the 5 V buck and the XIAO's `5V` pad, and **only that** — the pad is raw bidirectional VBUS, so without it the buck backfeeds a laptop's USB. The screen-side loads (pixel) sit on the XIAO side of it. 1 A is enough because servos are NOT behind it |
 | 100–220 µF electrolytic | 1 | same | Panasonic EEU-FR1V221 (220 µF 35 V) | XIAO `5V` ↔ GND. Rate ≥2× the rail |
-| 10 µF + 0.1 µF ceramic (X5R/X7R) | 1 ea | same | KEMET C320C104K5R5TA (0.1 µF, radial 5.08 mm); any radial X7R ≥25 V for 10 µF | XIAO 3V3 ↔ GND |
+| 10 µF + 0.1 µF ceramic (X5R/X7R) | 1 ea | same | KEMET C320C104K5R5TA (0.1 µF, radial, **2.54 mm** lead spacing); any radial X7R ≥25 V for 10 µF | XIAO 3V3 ↔ GND |
 | 0.1 µF ceramic | 1 per electrolytic | same | C320C104K5R5TA | In parallel with each bulk cap |
 | **WS2812B pixel** | 1 | Treedix WS2812B board | the same board (PCB order list row 20) | On D2. 5 V from the XIAO side of the Schottky — so it works on USB alone. The ~4.7 V after the diode is what makes 3.3 V data close to in spec (archive/WIRING.md §4). Not the 5 mm through-hole NeoPixel: that one is RGB order |
 | 330 Ω resistor | 1 | same | Yageo CFR-25JB-52-330R | Series on the pixel's DIN |
@@ -235,7 +235,7 @@ silkscreen revision.
 ## Traps found while sourcing
 
 - **SJ1-3523N has no switch.** 3524N switches the tip only, **3525N** tip and ring.
-- **PJ-002AH and PJ-102AH are 2.0 mm** barrel jacks. The adapter is 2.1 mm: **PJ-063AH**.
+- **A "2.1 mm" barrel jack has a 2.0 mm pin.** The 2.1 mm is the plug's hole, and the jack's pin has to be slightly smaller to fit it. Datasheets give the pin, so a jack for 2.1 mm plugs reads "2.0 mm": the PJ-063AH, the PJ-002AH and the PJ-102AH all take our adapters, and they differ in current — 8 A, 5 A, and less for the PJ-102AH, Adafruit's breadboard jack. The mismatch to avoid is a **2.5 mm pin** jack (CUI's B-suffix parts, such as the PJ-079BH), which a 2.1 mm plug will not go onto, or a 2.5 mm plug on a 2.0 mm pin, which goes in loose. This line said the opposite until 2026-10-18.
 - **ST's 1N5817 at Digi-Key is last-time-buy**; MCC's 1N5817-TP is stocked.
 - **QS18VN6D vs QS18VN6DB** — Digi-Key has only the second; check Banner's sheet.
 - **The 5 mm through-hole NeoPixel is RGB order**; WS2812B 5050 parts are GRB, which is what the firmware drives.
