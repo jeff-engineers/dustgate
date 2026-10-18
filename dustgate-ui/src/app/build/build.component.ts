@@ -619,7 +619,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
     // A board off to the right of the shop is part of the drawing and has to be on
     // screen when the canvas fits itself — it holds the far end of every cable.
-    for (const c of this.boardCells.values()) {
+    for (const [, c] of this.placedBoardCells()) {
       x0 = Math.min(x0, cellX(c.col) - BOARD_W / 2); x1 = Math.max(x1, cellX(c.col) + BOARD_W / 2);
       y0 = Math.min(y0, cellY(c.row) - BOARD_H / 2); y1 = Math.max(y1, cellY(c.row) + BOARD_H / 2);
     }
@@ -723,7 +723,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     // They carry no ducts, so they only ever appear here as boxes to steer around.
     // Their DRAG position is deliberately not used: a board mid-drag would re-solve
     // every run in the shop on the way past, and it isn't standing anywhere yet.
-    for (const [id, c] of this.boardCells) {
+    for (const [id, c] of this.placedBoardCells()) {
       nodes.push({ id, glyph: 'board', isUnit: false, span: 1, x: cellX(c.col), y: cellY(c.row) });
     }
     const ducts = this.ducts.map(d => ({
@@ -3647,7 +3647,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     // A board owns its cell EXCLUSIVELY (decided 2026-08-15). It is a real module on
     // a real wall, so it behaves like one: nothing else may stand on it, and being an
     // obstacle here is what stops a duct being drawn through the hardware.
-    for (const [id, c] of this.boardCells) {
+    for (const [id, c] of this.placedBoardCells()) {
       if (id === except) continue;
       occ.add(c.col + ',' + c.row);
     }
@@ -3715,6 +3715,22 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       added = true;
     }
     if (added) this.ensureBoardCells();
+  }
+
+  /** Board cells that are really on the canvas: every one except a Pi brain's, which is not drawn (see boards()). It
+   *  kept its old cell after it stopped being drawn (2026-10-11), and that invisible square still blocked placement,
+   *  routed ducts around itself and stretched the extent (found 2026-10-17: "acting like the primary is still in A-3").
+   *  Everything that treats a board as standing somewhere reads THIS, not boardCells. */
+  private placedBoardCells(): [string, Cell][] {
+    return [...this.boardCells].filter(([id]) => !this.isHiddenBoard(id));
+  }
+  /** A Pi brain drives nothing and is not drawn — unless a gate somehow names it, so the mistake stays visible. */
+  private isHiddenBoard(id: string): boolean {
+    if (this.api.deviceInfo?.role !== 'native') return false;
+    const c = this.controllersRaw().find(x => x['id'] === id);
+    if (!c || c['role'] !== 'primary') return false;
+    const fallback = this.defaultControllerId();
+    return !this.allElems().some(e => e['type'] === 'selector' && ((e['controllerId'] as string) ?? fallback) === id);
   }
 
   /** Every paired board stands somewhere, keeping whatever cell was saved. Stale
@@ -3804,7 +3820,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       const span = n.isUnit ? n.span : 1;
       if (n.row === row && col >= n.col && col < n.col + span) return n.name;
     }
-    for (const [id, c] of this.boardCells) {
+    for (const [id, c] of this.placedBoardCells()) {
       if (id === selfId || c.col !== col || c.row !== row) continue;
       const board = this.controllersRaw().find(b => b['id'] === id);
       return (board?.['name'] as string) || id;
@@ -3839,7 +3855,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       // A PI BRAIN IS NOT A BOARD ON THE CANVAS (2026-10-11): it has no pads, so it drives no gate and holds no clamp,
       // and drawing it showed two empty ports nothing could ever be cabled to. Still drawn if a gate somehow names it,
       // so a gate that points at nothing physical stays visible as the mistake it is.
-      if (c['role'] === 'primary' && this.api.deviceInfo?.role === 'native' && used.size === 0) continue;
+      if (this.isHiddenBoard(id)) continue;
       const drag = this.bodrag?.id === id ? this.bodrag : null;
       out.push({
         id, name: (c['name'] as string) || id, primary: c['role'] === 'primary',
@@ -6096,7 +6112,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       if (n.isUnit) for (let i = 0; i < n.span; i++) occ.add((n.col + i) + ',' + n.row);
       else occ.add(n.col + ',' + n.row);
     }
-    for (const [id, c] of this.boardCells) if (!exclude.has(id)) occ.add(c.col + ',' + c.row);
+    for (const [id, c] of this.placedBoardCells()) if (!exclude.has(id)) occ.add(c.col + ',' + c.row);
     return occ;
   }
   /** The board is at least the whole visible area and grows past it as the layout
@@ -6105,8 +6121,8 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   private recomputeExtent(): void {
     // Boards count toward the extent too, or one parked past the last tool would
     // sit outside the scrollable area with no way to reach it.
-    const cols = [...this.nodes.map(n => n.col + n.span - 1), ...[...this.boardCells.values()].map(c => c.col)];
-    const rows = [...this.nodes.map(n => n.row), ...[...this.boardCells.values()].map(c => c.row)];
+    const cols = [...this.nodes.map(n => n.col + n.span - 1), ...this.placedBoardCells().map(([, c]) => c.col)];
+    const rows = [...this.nodes.map(n => n.row), ...this.placedBoardCells().map(([, c]) => c.row)];
     const maxCol = Math.max(1, ...cols);
     const maxRow = Math.max(1, ...rows);
     const wrap = this.wrapRef?.nativeElement;
