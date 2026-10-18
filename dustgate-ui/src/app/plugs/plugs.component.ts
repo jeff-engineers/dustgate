@@ -1,7 +1,7 @@
 import { Component, OnDestroy, OnInit } from '@angular/core';
 import { QuietPoll } from '../services/failure';
 import { samePlug } from '@plug-identity';
-import { failureReason, noAnswer, reportFailure } from '../services/failure';
+import { failureReason, noAnswer, reportFailure, reportNote } from '../services/failure';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
@@ -40,6 +40,8 @@ interface PlugRow {
   /** A DIFFERENT plug answers at this address (samePlug: 'no') — the layout's plug has moved or gone. It is listed
    *  under Found, free to pair, and nothing is written to it on this row's behalf. */
   replacedBy: DiscoveredOutlet | null;
+  /** The MAC the layout saved for it, for the console. */
+  savedMac?: string;
 }
 
 @Component({
@@ -113,7 +115,7 @@ interface PlugRow {
             <div class="sub" *ngIf="r.forKind === 'tool'">Paired to the <b>{{ r.forName }}</b><ng-container *ngIf="r.thresholdW"> · starts collection above {{ r.thresholdW }} W</ng-container></div>
             <div class="sub" *ngIf="r.forKind === 'collector'">Paired to the collector <b>{{ r.forName }}</b></div>
             <div class="sub" *ngIf="state(r) === 'off' && !r.replacedBy">It may have a new address. Sweep to find it.</div>
-            <div class="sub" *ngIf="r.replacedBy">A different plug ({{ r.replacedBy.kind === 'tasmota' ? 'a Tasmota' : 'a Shelly' }}{{ r.replacedBy.name ? ', ' + r.replacedBy.name : '' }}) now has this address, so this plug has moved or gone. The brain looks for it by its MAC; that other plug is listed below, free to pair.</div>
+            <div class="sub" *ngIf="r.replacedBy">A different plug is answering where this one used to be, so it has probably moved or been unplugged. DustGate is looking for it: make sure it is plugged in and switched on. The other plug is listed below if you want to pair it.</div>
             <div class="sub" *ngIf="readOnly(r)">Belongs to {{ r.seen?.holder || 'another brain' }}. Polled, never written. Taking it over repoints its push address to this brain.</div>
           </ng-container>
           <ng-template #renameBox>
@@ -275,7 +277,7 @@ export class PlugsComponent implements OnInit, OnDestroy {
       rows.push({
         key: 'm:' + m.id, ip, forName: (m.name as string) || (m.id as string), forKind: 'tool', machineId: m.id as string,
         kind: o['kind'] === 'tasmota' ? 'tasmota' : 'shelly',
-        thresholdW: o['thresholdW'] as number | undefined, plugName: s?.name || (o['name'] as string) || '', seen: s, replacedBy: other(ip, o),
+        thresholdW: o['thresholdW'] as number | undefined, plugName: s?.name || (o['name'] as string) || '', seen: s, replacedBy: other(ip, o), savedMac: o['mac'] as string | undefined,
       });
     }
     for (const sys of systemsOf(doc)) {
@@ -284,11 +286,21 @@ export class PlugsComponent implements OnInit, OnDestroy {
       const ip = o['ip'] as string, s = seen(ip, o);
       rows.push({
         key: 'c:' + c['id'], ip, forName: (c['name'] as string) || 'Dust collector', forKind: 'collector', collectorId: c['id'] as string,
-        kind: o['kind'] === 'tasmota' ? 'tasmota' : 'shelly', plugName: s?.name || (o['name'] as string) || '', seen: s, replacedBy: other(ip, o),
+        kind: o['kind'] === 'tasmota' ? 'tasmota' : 'shelly', plugName: s?.name || (o['name'] as string) || '', seen: s, replacedBy: other(ip, o), savedMac: o['mac'] as string | undefined,
       });
     }
     this.rows = rows;
+    // The details a person debugging needs and a woodworker does not — on the console, once per plug.
+    for (const r of rows) {
+      if (!r.replacedBy || this.replacedLogged.has(r.key)) continue;
+      this.replacedLogged.add(r.key);
+      reportNote(`Plugs · a different plug answers at ${r.forName}'s saved address`, '(shown as "a different plug is answering where this one used to be")', {
+        address: r.ip, saved: { kind: r.kind, mac: r.savedMac || '(none on file)' },
+        answering: { kind: r.replacedBy.kind, mac: r.replacedBy.mac || '(would not say)', name: r.replacedBy.name || r.replacedBy.hostname },
+      });
+    }
   }
+  private readonly replacedLogged = new Set<string>();
 
   found(): DiscoveredOutlet[] {
     const paired = new Set(this.rows.filter(r => !r.replacedBy).map(r => r.ip));
@@ -422,7 +434,7 @@ export class PlugsComponent implements OnInit, OnDestroy {
   async release(r: PlugRow): Promise<void> {
     this.confirmRelease = null; this.error = ''; this.note = '';
     // A different plug at this address is not ours to hand back: nothing is written to it.
-    if (r.replacedBy) this.note = 'Unpaired. Nothing was written: a different plug has this address now.';
+    if (r.replacedBy) this.note = 'Unpaired. The other plug was left as it is.';
     else try {
       const res = await this.api.releaseOutlet(r.ip);
       // Not ok is usually an explanation, not a failure ("polled only — nothing was written to this plug"), and either way

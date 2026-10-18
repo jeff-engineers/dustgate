@@ -37,7 +37,7 @@ export function headline(p: Problem, name: string): string {
     case 'rf-send-failed':     return "Couldn't send " + name + "'s remote press";
     case 'board-offline':      return 'Board ' + name + ' is offline';
     case 'plug-unreachable':   return 'Plug unreachable: ' + name;
-    case 'plug-replaced':      return 'A different plug has ' + name + "'s address";
+    case 'plug-replaced':      return "Can't find " + name;
     case 'move-failed':        return "A gate didn't move";
     case 'bin-full':           return 'Dust bin full: ' + name;
     case 'collector-may-be-on': return name + ' is probably running, unseen';

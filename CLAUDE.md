@@ -30,6 +30,9 @@ passes host tests; that is not the same thing. When a bench verifies something, 
 - **No backwards compatibility.** One shop, one owner, cheap reflashes over WiFi: change the protocol or schema and
   update the boards, rather than adding fallbacks for old firmware or old layouts.
 - **When it's unclear where something fails, add logging** before reasoning toward a guess.
+- **What a person reads is a woodworker's sentence; the details go to the log.** Problem texts the brain raises and every
+  message in the app say what happened and what to do, with no IPs, MACs, protocols or codes. The specifics go to the
+  brain log and the browser console (`[DustGate] …`, `services/failure.ts`).
 - Procedures live in skills, not here: `verify` (which checks for what changed), `flash`, `burndown` (a review file),
   `wiring-diagram` (`docs/carrier-wiring.html`).
 

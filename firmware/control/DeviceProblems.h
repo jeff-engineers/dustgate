@@ -97,13 +97,13 @@ public:
         // silently never "on" meanwhile.
         std::map<std::string, uint32_t> still;
         for (const PlugView& p : plugs) {
-            // A different plug at this one's address: said at once, and in its own words. "No answer, it may have a new
-            // address" was true and useless — something DID answer, and the app showed that plug as this tool's.
+            // A different plug at this one's address: said at once. In a woodworker's words — no address, no MAC, no
+            // protocol; those are in the brain log ([RELOCATE], from OutletRelocate.h) and the app's console.
             if (!p.replacedBy.empty()) {
-                char t[256];
-                std::snprintf(t, sizeof(t), "A different plug now has %s (%s), so this one has moved or gone. "
-                              "It is not being sensed; DustGate is looking for it by its MAC.", p.ip.c_str(), p.replacedBy.c_str());
-                rt.raiseProblem(p.key, "plug-replaced", "warn", "plug", p.name, t, now);
+                rt.raiseProblem(p.key, "plug-replaced", "warn", "plug", p.name,
+                                "A different plug is answering where this one used to be, so it has probably moved or been "
+                                "unplugged. Until it is found, the tool on it won't start the collector. DustGate is looking "
+                                "for it: make sure it is plugged in and switched on.", now);
                 continue;
             }
             if (p.reachable) { rt.clearProblem(p.key); continue; }
