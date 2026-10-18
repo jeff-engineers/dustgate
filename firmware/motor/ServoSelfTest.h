@@ -25,7 +25,7 @@
 //
 // SEQUENTIAL, one channel at a time, and not for tidiness: LocalActuatorBus's
 // mutex exists because the 5V rail cannot drive two servos at once
-// (docs/architecture-rfc.md §7). A self-test that swept all four together would
+// (docs/archive/architecture-rfc.md §7). A self-test that swept all four together would
 // brown out the board it is meant to be testing.
 //
 // NON-BLOCKING for the same reason everything else here is: loop() has a

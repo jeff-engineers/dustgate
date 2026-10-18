@@ -40,7 +40,7 @@ TasmotaOutlet::TasmotaOutlet(const char* ip, const char* name) {
 // goes missing can be found again by sweeping and reading Mem1 for the one that
 // says it is ours. That is a ~60s blocking pass over 254 addresses — categorically
 // not something to run from the poll task on a failed read — so it is a
-// deliberate, user-visible action. See docs/tool-sensing-rfc.md §12.
+// deliberate, user-visible action. See docs/archive/tool-sensing-rfc.md §12.
 bool TasmotaOutlet::poll() {
     if (_ip[0] == '\0') {
         _reachable  = false;
@@ -125,7 +125,7 @@ bool TasmotaOutlet::doPoll(uint32_t timeoutMs) {
     // has two channels in hardware whether or not both have a clamp on them, so
     // it answers with an array either way. There is no single-tool wiring that
     // avoids it — a lone tool on an EM2 reads 0 W just as thoroughly as two.
-    // And §6.0 of docs/tool-sensing-rfc.md now RECOMMENDS the EM2 over building
+    // And §6.0 of docs/archive/tool-sensing-rfc.md now RECOMMENDS the EM2 over building
     // our own sensor, so this is the normal case rather than the edge one.
     //
     // Refusing is deliberately the whole fix for now. Picking a channel here

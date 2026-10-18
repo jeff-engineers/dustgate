@@ -9,7 +9,7 @@
 // whole reason this fits behind the existing seam rather than beside it.
 //
 // THREE FACTS ABOUT THIS SERVO SHAPE EVERYTHING BELOW. All three were learned
-// the hard way at the bench; WIRING.md#7-the-slider--st3215-bus-and-endstops §5.0.2 is the long version.
+// the hard way at the bench; docs/archive/WIRING.md#7-the-slider--st3215-bus-and-endstops §5.0.2 is the long version.
 //
 //   1. MODE 3 IS A STEP COUNTER, NOT A POSITION SERVO. Mode 0 clamps at one
 //      turn by design, and the slider needs five. So register 42 is written
@@ -40,8 +40,8 @@
 // the geometry, because counts/mm is DERIVED from the rack spec rather than
 // fitted to anything.
 //
-// Still unproven: this driver behind a NodeLink socket (the xiao_c5_linear node
-// has never run), anything about behaviour under load, and 9V vs 12V.
+// Behind a NodeLink socket it runs too: the xiao_c5_linear node homed and moved a gate in 2026-09, and through the Pi
+// brain on 2026-10-17. Still unproven: behaviour under load, and 9V vs 12V.
 //
 // Note that HOME_DIRECTION came out -1 on that mount — bit 15 moves the carriage
 // TOWARD the datum there, the opposite of the bare-shaft prediction below. Which
@@ -194,7 +194,7 @@ private:
     // ARRIVAL IS "THE COUNT STOPPED FALLING", NOT "THE COUNT IS ZERO".
     // The step counter settles a few counts short — 3 and 4 across the two bench
     // runs — so a driver waiting for 0 waits forever. It is written in bold in
-    // WIRING.md#7-the-slider--st3215-bus-and-endstops §5.0.2 and this driver was written against `== 0`
+    // docs/archive/WIRING.md#7-the-slider--st3215-bus-and-endstops §5.0.2 and this driver was written against `== 0`
     // anyway (2026-08-28), which is why homing moved exactly one 2mm chunk and
     // then sat there: the chunk never "finished", so the next one never went out.
     long      _lastRemaining = -1;   // previous poll's reading, -1 = none yet

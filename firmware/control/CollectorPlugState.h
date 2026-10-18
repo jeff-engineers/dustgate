@@ -13,7 +13,7 @@
 //
 // EVERY WAY WE COMMAND THE COLLECTOR IS STATELESS. A servo pressing a fob
 // button, or an HT12E frame, sends an edge and learns nothing (see
-// docs/tool-sensing-rfc.md §4.2a/§4.2b). The firmware cannot know from what it
+// docs/archive/tool-sensing-rfc.md §4.2a/§4.2b). The firmware cannot know from what it
 // SENT whether the blower is running; only the draw says. So the device has to
 // hold the verdict itself — a browser that may not be open cannot be the only
 // thing that notices a blower failed to start.

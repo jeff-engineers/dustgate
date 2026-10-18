@@ -8,7 +8,7 @@
 // first means that definition is settled before this one replaces it, and the
 // include guards stop it coming back.
 //
-// A node does not get this: nothing serves its log yet (docs/mockups/brain-log.html,
+// A node does not get this: nothing serves its log yet (docs/mockups/archived/brain-log.html,
 // question 2), and a node build that doesn't compile SerialLog.cpp would fail to link.
 // =============================================================================
 #pragma once

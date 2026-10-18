@@ -21,7 +21,7 @@
 // suits it. A plug compares watts to a user-set `thresholdW`. A CT would
 // compare against a baseline learned at pairing time, because a ratio against a
 // tool's own quiet state does not care what the absolute numbers mean, or where
-// the board's noise floor sits (docs/tool-sensing-rfc.md §5.4a).
+// the board's noise floor sits (docs/archive/tool-sensing-rfc.md §5.4a).
 //
 // THIS DOES NOT WEAKEN "a sensor reports, it never judges." What moves into the
 // sensor is THRESHOLD judgement, which is per-sensor by nature — it is a

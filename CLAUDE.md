@@ -1,484 +1,154 @@
 # DustGate
 
-Automated dust collection for a woodworking shop. Tools plug into Shelly smart
-outlets; when one draws power, the controller opens that tool's blast gate and
-starts the collector. The shop is laid out once on a canvas in a phone browser,
-and the firmware routes from that topology.
+Automated dust collection for a woodworking shop. When a tool draws power (sensed by a smart plug or a current clamp),
+the brain opens that tool's blast gate and starts the collector. The shop is laid out once on a canvas in a phone
+browser, and the brain routes from that layout.
 
-**Status: mostly hardware-UNTESTED, with real exceptions.** Everything compiles
-and passes host tests. What has actually run on hardware: primary and node roles
-with PWM servos and NodeLink between them; since 2026-08-28, the **ST3215 slider
-as a primary** — homing, the reference sweep, and gate moves on a 4-gate
-rockler-2.5 rack; and since 2026-09-02, the **slider NODE (`xiao_c5_linear`)
-booting, joining NodeLink, and reporting itself correctly to the UI**.
+This file holds **rules and current facts**; the dated stories behind them are in `TODO/DONE.md` and git history.
+See "Keeping it current" at the end before adding to it.
 
-**The bin sensor works on hardware, confirmed 2026-09-13** — a Banner QS18VN6D
-through a **discrete 4N35** (not the PC817 breakout the docs specified for weeks:
-it measured 4 V on its output, above a C5 GPIO's absolute maximum), with the
-existing 12 V green pilot and red strobe left wired to the sensor. That is the
-first collector-board capability proven on real hardware — **on a PRIMARY**: the
-bin read lives in `firmware.ino`, and a node has no bin sensor yet. `firmware/WIRING.md#9-bin-sensor` §2.
+## Hardware status
 
-**A CT starts the collector and moves a gate, confirmed 2026-09-18 — the whole
-sensing chain, end to end, on real hardware.** A clamp on a node reads a running
-tool, the node decides the bit from its own 60 Hz RMS loop, SENSE reaches the
-primary, the routing brain treats it as a machine drawing power, and the gate
-moves. This is what the CT work since 2026-09-13 was for, and it is the first
-time any part of the shop has been driven by something other than a smart plug.
+**Never call anything verified on hardware unless the "What has run on hardware" section of
+[`README.md`](README.md#what-has-run-on-hardware) says so** — read it before making that claim. Everything compiles and
+passes host tests; that is not the same thing. When a bench verifies something, add it there, dated, in the same session
+(see "Keeping it current").
 
-⚠️ **IT TAKES TWO GATES TO SEE IT, and that is not a bug** (jeff, 2026-09-18 —
-"otherwise the system would never try to toggle gates with only 1 connected").
-With a single gate there is nothing to route *away from*: most-recent-tool-wins
-has one candidate, and "idle leaves the gate where it is — the system rests open"
-means the correct behaviour is to do nothing at all. A one-gate bench therefore
-looks identical to a broken one. Add a second gate before concluding the CT path
-does not work.
+## Working here
 
-**The slider node moves a gate, confirmed 2026-09-03** — it homes, finds its
-datum, takes a SET and drives the rack. That was the last unknown on the node
-path.
+- **Flashing and bench tests are Jeff's call.** Confirm before anything that writes to a board (`dev.sh flash`,
+  `flash-node`, `ota`, `erase`, `provision`), and run flashes in his terminal where he can answer the prompts — never
+  non-interactively (a flash that hit EOF on a prompt once left the primary with no layout). The Pi deploy needs his sudo
+  password, so he runs it. The `flash` skill has the traps.
+- **Commit only when Jeff asks for that commit**; branch off `main` first. No "Generated with Claude Code" line in
+  commits or PR descriptions — the commit log is where he reviews. Turn on Auto-fix for every PR you open; merge only
+  when he asks.
+- **Never read `.env`** (`tools/.env`: the WiFi password and the API key) — not even one line. Ask, or read the
+  equivalent off the device (`/api/info`, the boot banner).
+- **A test brain gets an empty scratch state** (`mktemp -d`) and fixture layouts with no real IPs. A brain started on a
+  copy of the real layout claims and repoints the real plugs.
+- **No backwards compatibility.** One shop, one owner, cheap reflashes over WiFi: change the protocol or schema and
+  update the boards, rather than adding fallbacks for old firmware or old layouts.
+- **When it's unclear where something fails, add logging** before reasoning toward a guess.
+- Procedures live in skills, not here: `verify` (which checks for what changed), `flash`, `burndown` (a review file),
+  `wiring-diagram` (`docs/carrier-wiring.html`).
 
-What is NOT yet exercised is how homing is now TRIGGERED. The node used to sweep
-at boot; as of 2026-09-03 it sweeps **on demand** — on the first SET that needs a
-datum, or on a one-second hold of the wake button — because an unasked movement
-at power-up is the wrong default near a rack. The sweep itself is the same proven
-code; only its trigger is new, and neither trigger has run on hardware. Anything
-under load, 9V vs 12V, and the 4" manifold remain unverified too. Do not describe
-behaviour as verified unless it is on that list.
+## Glossary — one meaning each
+
+| Word | Means |
+|---|---|
+| **brain** / primary | the one decider: layout, routing, plug polling. Today the native brain on the Pi; an ESP32 primary also exists |
+| **node** | any other board; owns fast local loops (a homing sweep, a clamp's RMS), interprets no layout |
+| **board** | a XIAO C5 on its carrier, brain or node; named by `controllerId` in the layout |
+| **system** | one collector and the ducts it pulls through; a shop has one or more |
+| **machine** | the thing you switch on (a table saw); it has one or more **ports** |
+| **port** | where air leaves a gate or enters a machine. Never "outlet" |
+| **outlet** / plug | a smart plug (Shelly, Tasmota) only |
+| **gate** / selector | a ball valve, manifold or sliding gate the brain moves |
+| **clamp** | a CT current clamp on a board's jack |
 
 ## Layout
 
 | Path | What |
 |---|---|
-| `shared/device-model/` | **Canonical device model** — pure JS, single source of truth |
-| `firmware/` | ESP32 C++ (Arduino/PlatformIO). The primary owns the schema; nodes own local loops and no interpretation |
-| `native/` | **The brain as a Linux/macOS program** (Boost.Beast shell around the same `firmware/control` + `firmware/outlets` code the ESP32 runs). Started 2026-10-04; links nodes, routes, drives the collector and polls plugs, serves the app. `make -C native test`. See `native/README.md` and `docs/brain-options.md`. **`native/pi/`** is the Raspberry Pi path (setup, deploy-from-the-Mac, update-with-rollback, systemd unit); written 2026-10-06, **never run on a Pi** |
-| `dustgate-ui/` | Angular app, served off the device's LittleFS |
-| `tools/` | `mock-api.js` (simulated device), `mock-node.js` (simulated secondary), conformance runners |
-| `docs/BOM.md` | **Bill of materials** — boards, modules, sensors and the passives whose value matters, plus what was deliberately not bought |
-| `dev.sh` | Thin bash wrapper over PlatformIO/esptool for every bench workflow |
+| `shared/device-model/` | **The spec** — pure JS. `topology.js`/`shop.js` validate the layout and ARE its schema; routing, sequencing, the NodeLink protocol and the brain-as-simulation live here. Read its README before touching it |
+| `firmware/` | ESP32 C++ (PlatformIO). `control/` is the brain core, shared with `native/`; `boards/` holds the pin maps (the truth for which pad does what) |
+| `native/` | **The brain as a Linux/macOS program** around the same `firmware/control` + `firmware/outlets` code. `make -C native test`. `native/pi/` deploys it to the Raspberry Pi that runs the shop |
+| `dustgate-ui/` | Angular app, served by the brain |
+| `tools/` | `mock-api.js` (simulated brain), `mock-node.js` (simulated node), conformance runners, checks |
+| `docs/` | `BOM.md` (parts), `carrier-wiring.html` (the PWM board's wiring), `mockups/` (two canonical pages). `docs/archive/` is history only |
+| `TODO/` | `TODO.md` (open work) and `DONE.md` (finished work worth keeping, newest first) |
+| `dev.sh` | Thin bash wrapper over PlatformIO/esptool for every bench workflow; its header is the reference |
 
-## The anti-drift rule
+## Anti-drift
 
-Device behaviour used to be implemented three times (firmware, mock, demo) and
-drifted constantly. Now `shared/device-model/` is the spec:
-
-- `tools/mock-api.js` and `dustgate-ui/.../demo-api.service.ts` both `require`
-  the same model, so they cannot drift from each other.
-- Firmware **can't** import JS, so it's certified against the same contract by
-  the executable conformance suites instead.
-- Where a JS unit test asserts a specific number, the matching C++ test asserts
-  the same number — `nodelink.test.js` ↔ `firmware/test/test_nodebus.cpp` is the
-  reference pair. **Change one, change both.**
-- Below that, individual constants have the same problem on a smaller scale: a
-  bare number in `shared/device-model/` that firmware also hardcodes, with
-  nothing but a comment holding the two together. The known pairs, so a change
-  doesn't have to be re-discovered by grep every time:
-
-  | JS (`shared/device-model/`) | C++ (`firmware/`) | What it is |
-  |---|---|---|
-  | `DEFAULT_COLLECTOR_OFF_DELAY_MS` (topology-device.js) | `kDefaultCollectorOffDelayMs` (control/TopologyRuntime.h) | collector coast-down default |
-  | `DEFAULT_THRESHOLD_W` (topology-device.js) | `kDefaultThresholdW` (control/TopologyController.h) | machine-on wattage default |
-  | the `* 3` in `setMachineManual()` (dustgate-ui demo-api.service.ts) | the `* 3.0f` in `manualWattsFor()` (control/TopologyRuntime.h) | synthetic wattage for a manual switch-on; since 2026-10-06 also the rule that switching a tool on (by hand or on its own) releases other hand-switched tools in the same system (`releaseManualsFor()` ↔ the demo's `setMachineManual()` and mock-api.js `/api/tool`) |
-  | `MAX_SERVOS_PER_HOST` / `MAX_LINEAR_PER_HOST` (topology.js) | `SERVO_COUNT` (config.h) | servo bank size a controller can actually drive. **2 since 2026-09-17**, and it has moved three times: 4 → 3 when the 315 MHz transmitter went to D10 so ONE pin map could serve every PWM board, then 3 → 2 when the third channel — the fob servo's OFF arm, never built — was given up so D9 could be a second BUTTON for manual control at the machine. Channel 0 is the board's gate, channel 1 presses a fob. A two-button fob now wants one arm that travels, or the RF path. The UI mirrors it in THREE further places (`SERVO_PORTS` in build/wiring/wire-geometry.ts, `SERVO_CHANNELS_PER_BOARD` in gates/selector-types.ts, and the `servoPortsPerBoard` passed into boards/board-drives.ts), so this is really a five-sided constant: the port strip drawn on the canvas IS the budget, and a one-sided edit puts a port there that no board has. **A sixth place bites every time and is not a constant at all** — the wiring FIXTURES in wire-geometry.spec.ts encoded the budget as channel indices (`portExit(c, 3)`), so each drop silently turned a PWM channel into the slider port and failed a rule that had not changed. Broken that way on 2026-08-28 and again on 2026-09-17; the fixtures no longer name channels they do not need |
-  | `NUM_STOPS` (device-model.js) | `NUM_STOPS` (config.h) | max stops on one sliding gate. **8 since 2026-09-05**, lowered from 16 so it matches `MAX_SLIDE_BRANCHES` (topology.js) and `SLIDE_MAX_OUTLETS` (dustgate-ui) — three numbers that all claim to be the same limit, and were not. Must stay EVEN (`static_assert` in config.h): Rockler ships gates in pairs, so an odd request rounds up. Changing it changes the persisted `CalibrationData` layout — bump `CALIB_VERSION` with it |
-  | `MIN_STOP_SEPARATION_MM` (device-model.js) | `MIN_STOP_SEPARATION_MM` (config.h) | overlap backstop between stops |
-  | `IDLE_TIMEOUT_SEC_DEFAULT` (device-model.js) | `IDLE_TIMEOUT_SEC_DEFAULT` (config.h) | idle power-off default |
-  | `MANIFOLD_PROFILES` — `gatePitchMm` / `firstGateOffsetMm` / `endMarginMm` (device-model.js) | `MANIFOLD_2_5_GATE_PITCH_MM`, `MANIFOLD_4_GATE_PITCH_MM` and friends (config.h) | Rockler manifold geometry. **Found unregistered on 2026-08-28** — it had been a pair since the profiles were written, with nothing pointing either way, which is exactly the situation this table exists to prevent. `gatePitchMm` is the number the reference sweep trusts and centres the gate array on, so a change on one side alone mis-places every gate on real hardware while every test still passes. |
-  | the **default** for an absent `kind` on `sensor.outlet` / `control.outlet` (topology.js) | the default in `outletKindFromName()` and `OutletConfig`'s `o<N>_kind` (outlets/OutletFactory.h, OutletConfig.h) | which protocol a plug speaks — `shelly` or `tasmota`. The VALUE rides the document and so isn't a pair; the **default when the document is silent** is, and it must be Shelly on both sides or every layout written before 2026-09-09 starts polling the wrong endpoint. An unknown string defaults the same way, so a document from a newer UI degrades to the old behaviour rather than to a plug that reads nothing |
-  | `COLLECTOR_RUNNING_W` / `COLLECTOR_SPINUP_GRACE_MS` (topology-device.js) | `kCollectorRunningW` / `kCollectorSpinupGraceMs` (control/CollectorPlugState.h) | is the blower ACTUALLY running, vs what we commanded. **Became a pair 2026-09-10** — topology-device.js had carried a note saying it deliberately was not one, and naming the exact condition that would change that. This is it, and for a stronger reason than the OLED it predicted: every way we now command a collector is STATELESS (a servo pressing a fob, an RF frame), so what we sent proves nothing and a browser nobody has open cannot be the only thing that notices a failed start. `test_collector_plug.cpp` ↔ `collector-plug.test.js`, same cases, same order, and both numbers asserted literally so a one-sided edit fails at the test rather than on a bench |
-  | ~~`DEFAULT_RF_PIN`~~ (dustgate-ui/.../tools/collector-doc.ts) | ~~`PIN_RF_TX`~~ (boards/xiao_c5.h) | **DELETED 2026-09-16 — this row is kept only to say so, and to record that the note which replaced it called its own shot.** It was a pair for two days: topology.js required `control.rf.pin`, so the UI had to write a GPIO into every document, and the entry here already named the better fix — make `pin` optional and let the firmware fall back to its own `PIN_RF_TX` — while declining to take it because it changed a decided validation rule. Moving the pad from D9 to D10 forced it: every layout ever saved carried `pin: 9`, and each one would have gone on keying a servo channel while the collector silently never started. `pin` is now optional, the UI writes none, and an explicit one still wins for a hand-wired board |
-  | `NODELINK_VERSION`, `PING_INTERVAL_MS`, `PONG_TIMEOUT_MS`, `RECONNECT_MIN_MS`, `RECONNECT_MAX_MS` (nodelink.js) | `kVersion`, `kPingIntervalMs`, `kPongTimeoutMs`, `kReconnectMinMs`, `kReconnectMaxMs` (control/NodeLink.h) | NodeLink protocol timing |
-  | `SENSE_REPEAT_MS` / `SENSE_STALE_MS` (nodelink.js) | `kSenseRepeatMs` / `kSenseStaleMs` (control/NodeLink.h) | how often a node repeats a sensor reading, and when the primary calls it stale. **New 2026-09-14** with the SENSE frame. SENSE is sent on CHANGE — the repeat only stops one dropped frame leaving the primary permanently wrong. Stale is 3× the repeat, the same ratio as PING/PONG and asserted as a ratio on both sides, so moving one without the other fails at the test. Stale is NOT the same as off: a node still answering PINGs but no longer reporting is a fault, where a node that has gone away entirely is the planer switched off at the wall (`intermittent`, RFC §5.6a) |
-  | `caps.ct` in WELCOME — the DEFAULT when absent (nodelink.js `clampsOn`) | the default in `buildWelcome`'s `clamps` parameter, and `_capClamps` (control/RemoteActuatorBus) | how many current clamps a board says it has. **New 2026-09-15.** The VALUE rides the wire and so isn't a pair; the **default when the frame is silent** is, and it must be 0 on both sides or every board flashed before clamps existed reads as having one. Reported from the pin map (`PIN_CT`), never chosen — a clamp is DECLARED by its board because, unlike a plug, nothing on the network can discover one |
-  | the RANGES on `tripRatio` / `minCounts` / `clearRatio` in `validateFrame` (nodelink.js) | the same ranges in `parseConfigFrame` (control/NodeLink.h) | how hard a CT node squeezes. **New 2026-09-17**, and it is the BOUNDS that pair rather than the values: the numbers themselves ride the wire from the primary (`sensing::TripParams`), which is the whole point — retuning the shop is a primary reflash and nobody climbs to a node. The bounds must agree exactly or a primary sends a frame its own boards refuse, whole, taking the sensor list with it. Both sides validate on PRESENCE, not on being non-zero: zero is the sentinel for "not sent", so a value-based check waves an explicit `0` through as silence — the JS half had this right and the C++ half did not, and the pair is what caught it |
-  | `MAX_SENSORS_PER_NODE` (nodelink.js) | `kMaxSensorsPerNode` (control/NodeLink.h) | sensors one node accepts in a CONFIG. **New 2026-09-14.** A pair because the firmware parses into a FIXED array: without the same cap in `validateFrame()` a primary could send eight specs to a board that keeps four and says nothing, leaving it silently deaf to half the tools. Both sides refuse the whole frame rather than truncating — a half-applied config is a state nobody should have to reason about |
-  | `MAX_RST_LEN` (nodelink.js) | `kMaxRstLen` (control/NodeLink.h) | longest reset-reason word a node may put in its WELCOME (`rst`, see `withBootInfo`). **New 2026-09-27** with boot info in the WELCOME, which feeds the primary's link log (utils/LinkLog.h). A pair because the JS validator REFUSES a longer `rst` — and it refuses the whole WELCOME, so a node writing one past the JS cap would read as a node that never identified itself. `test_nodebus.cpp` ↔ `nodelink.test.js` "boot info" blocks, same cases, same order |
-  | `MAX_STATE_ERR_LEN` (nodelink.js) | `kMaxStateErrLen` (control/NodeLink.h) | the longest reason a STATE may carry (`err`, moving:false only): a move that ENDED WITHOUT ARRIVING says why — a slider whose home failed, a jam, a servo not answering. **New 2026-10-16.** A pair because the JS validator refuses a longer one, and the whole STATE with it, which would read as a move that never ended. The brain turns it into the board's move fault (`move-failed`) and `/api/linear/state?selectorId=` hands it to the slider page. `nodelink.test.js` ↔ `test_nodebus.cpp` "STATE err" blocks, same order (the two refusals are the JS validator's alone) |
-
-  | `MAX_PLUG_THRESHOLD_W` / `MAX_PLUG_WATTS` / `MAX_PLUG_IP_LEN` (nodelink.js) | `kMaxPlugThresholdW` / `kMaxPlugWatts` / `kMaxPlugIpLen` (control/NodeLink.h) | the bounds on a `plug` sensor in CONFIG and on `watts` in SENSE — a board that polls a smart plug on the primary's behalf. **New 2026-10-03.** A node refuses an out-of-range CONFIG WHOLE, its clamp with it, so the bounds must agree exactly. `nodelink.test.js` "plugs" ↔ the "plug" block of `test_nodebus.cpp`, same cases, same order |
-  | `caps.plug` in WELCOME — the DEFAULT when absent (nodelink.js `pollsPlugs`) | the default in `buildWelcome`'s `pollsPlugs` parameter, and `_capPlugs` (control/RemoteActuatorBus) | whether a board can poll plugs for the primary. **New 2026-10-03.** Must be NO on both sides: a node that predates it is otherwise handed a CONFIG it refuses whole. Who polls which plug is decided by `plugOwners()` (shop.js) ↔ `plugOwnerOf()` (control/Shop.h), already a pair |
-  | `MAX_OTA_PATH` / `MIN_OTA_BYTES` / `MAX_OTA_BYTES` (nodelink.js) | `kMaxOtaPath` / `kMinOtaBytes` / `kMaxOtaBytes` (control/NodeLink.h) | the bounds on the OTA frame that tells a node to pull a firmware image. **New 2026-10-03.** A node refuses an out-of-bounds frame whole, and "refused" looks identical to "never started", so both sides must agree on the path length and on the image-size window (100 KB .. the node's 0x1E0000 app slot — `partitions-xiao-c5-node.csv` is the third place that number lives). `nodelink.test.js` ↔ the "ota" block of `test_nodebus.cpp`, same cases, same order, literals asserted |
-
-  | `MAX_WHERE_IP_LEN` / `REFUSE_REASONS` / `BEACON_PORT` (nodelink.js) | `kMaxWhereIpLen` / `kRefuseReasons` / `kBeaconPort` (control/NodeLink.h) | node-initiated links: a node that has lost its primary dials it (JOIN), the primary declines with a REFUSE reason, tells a down node where it is with a WHERE, and broadcasts "DGB1\|<id>\|<ip>\|<port>" on `BEACON_PORT`. **New 2026-10-04.** A node drops a WHERE it cannot parse WHOLE, which reads as a node that never comes looking, so the bounds must agree. `nodelink.test.js` "node-initiated links" ↔ the "join" block of `test_nodebus.cpp`, same cases, same order |
-  | `caps.join` in WELCOME — the DEFAULT when absent (nodelink.js `dialsIn`) | the default in `buildWelcome`'s `dialsIn` parameter, and `_capJoin` (control/RemoteActuatorBus) | whether a board dials its primary itself. **New 2026-10-04.** Must be NO on both sides: a node that predates it is dialled by the primary, which is the link that already worked. NOT a version bump — every frame here is new, and an old end ignores a type it does not know |
-
-  | `MIN_RF_TICK_US` / `MAX_RF_TICK_US` / `MAX_RF_REPEATS` (nodelink.js) | `kMinRfTickUs` / `kMaxRfTickUs` / `kMaxRfRepeats` (control/NodeLink.h) | the bounds on a PRESS frame, which tells a node to key its transmitter once. **New 2026-10-04**, with the collector's jobs on a node. A node refuses an out-of-range PRESS WHOLE, and a refused press reads as a collector that never starts, so the bounds must agree exactly (address 0-255 and data 0-15 are the HT12E's own widths). The measured Rockler numbers behind the defaults live once, in `control/RfDefaults.h`. `nodelink.test.js` "the collector's jobs on a node" ↔ the "collector node" block of `test_nodebus.cpp`, same cases, same order, literals asserted |
-  | `caps.rf` / `caps.bin` in WELCOME — the DEFAULT when absent (nodelink.js `pressesRf`, `watchesBin`) | the defaults in `buildWelcome`'s `hasRf` / `hasBin` parameters, and `_capRf` / `_capBin` (control/RemoteActuatorBus) | whether a board has a transmitter for the collector's remote / a dust-bin pad. **New 2026-10-04.** Must be NO on both sides: a node that predates them would be sent a `bin` sensor in a CONFIG it refuses whole (clamp and all), or a PRESS it ignores. Reported from the pin map (`PIN_RF_TX`, `PIN_BIN_SENSOR`), never chosen |
-
-  | `DEFAULT_SERVO_MIN_US` / `DEFAULT_SERVO_MAX_US`, and the bounds `MIN_SERVO_US` / `MAX_SERVO_US` / `MIN_SERVO_SPAN_US` (nodelink.js) | `kDefaultServoMinUs` / `kDefaultServoMaxUs`, `kMinServoUs` / `kMaxServoUs` / `kMinServoSpanUs` (control/NodeLink.h) | the PWM servo pulse range: what angle 0 and 180 are driven as on every PWM servo in the shop. **New 2026-10-07.** Shop-wide (a shop buys one multipack), set on Settings and kept in the layout's `servo` block; the brain sends it on every servo SET (`minUs`/`maxUs`, optional, both-or-neither). The DEFAULT applies when the layout is silent and must match, or the two brains drive the same angle to different places; the BOUNDS refuse a SET whole. 400–2600 replaced a fixed 500–2500 (ESP32Servo clamps to that, so the pulse is now written to the PWM channel directly — motor/ServoActuator.h). `nodelink.test.js` ↔ the "servo pulse range" block of `test_nodebus.cpp`, literals asserted |
-  | `isOptionalBoard` (shop.js) | `isOptionalBoard` (control/Shop.h) | can the shop lose this board without losing anything but a reading? **New 2026-10-08.** Required when the layout gives it a gate or any of a collector's jobs (transmitter, clamp, bin beam); optional otherwise. An optional board that is off raises no `board-offline` and does not hurry the beacon. Derived from the layout, never chosen (it replaced the unread `intermittent` flag). `shop.test.js` ↔ `test_shop.cpp` "optional boards", same layout text, same cases, same order. A brain resolves its paired host to a layout id first (`controllerIdForHost`, C++ only) |
-  | `bareHost` / `isOwnBoard` / `sameBoard` (board-id.js) | the same names in control/BoardId.h | the ONE rule for "which board is this id": case-folded, trailing dot and `.local` removed; absent means this board. **New 2026-10-04** — five C++ sites and three JS ones each had their own, and they disagreed (two compared exactly, three normalised). The C++ is the reference. `board-id.test.js` ↔ `test_boardid.cpp`, same cases, same order |
-  | `PROBLEM_TEXT` (topology-device.js) | `kProblemNoStart` / `kProblemBlind` (control/TopologyRuntime.h) | the device's own words for the `problems` entries DERIVED from the plug reading (`collector-no-start`, `collector-blind`, and since 2026-10-05 `collector-needs-start` — a blower DustGate cannot switch, run by hand, is ASKED to be turned on rather than accused of failing to start; silent when nothing watches it). **New 2026-10-03.** Asserted literally in `problems.test.js` ↔ the "problems —" block of `test_nodebus.cpp`. The other codes (rf-gave-up, board-offline, plug-unreachable, ...) are raised by firmware.ino and only the shape is shared |
-
-  The reference pair has company now: `manual-blower.test.js` ↔
-  `firmware/test/test_manual_blower.cpp` covers running a blower by hand, and the
-  two assert the same cases in the same order for the same reason. So does
-  `layout-save.test.js` ↔ `test_layout_save.cpp` (2026-10-07): a layout save is not
-  a reboot — what the new layout leaves standing (readings, blowers, and a gate's
-  position when `sameHardware()` says it is the same gate) carries over. The reference
-  pair itself grew on 2026-09-14 to cover the CONFIG and SENSE frames — same
-  rules, same order, same literal numbers on both sides.
-
-  **Not everything shared is a pair, and saying so is part of the job** — but a
-  non-pair can BECOME one, and this table's job includes noticing when.
-  `collector-plug.test.js` was the standing example of a deliberate non-pair:
-  the firmware reported what a collector's plug said and never judged it, so the
-  two constants lived once in `topology-device.js` with nothing to drift
-  against. The note there named the condition that would change it — "if the
-  OLED ever needs to say *not starting* too" — and **it changed on 2026-09-10**,
-  for a bigger reason than the OLED. It now has a row above and a C++ partner.
-  Cite it as the example of a non-pair that earned promotion, not as a non-pair.
-
-  `sensing/CtTrip.h` is the shape this table exists to prevent, caught before it
-  landed. The sampling cadence and the learned floor are firmware-only — no JS
-  models a clamp — so they are not a pair. **The trip numbers stopped being
-  firmware-only on 2026-09-17** and now have a row above: they ride the CONFIG
-  frame so retuning a shop is a primary reflash rather than a ladder at every
-  node, which is what lets a node's firmware be called finished. What they were about to become
-  is a second COPY, which is worse: the logic was written inside the node, and
-  then the primary needed the identical decision because a clamp at the collector
-  is wired to the board that IS the brain. It lives in one file that both
-  include. `ct_bench.cpp` had already made exactly this mistake against
-  `CtSensor` — a divergent copy missing the one-sample scale fix and the settle
-  gate, reading plausibly wrong for weeks. **Not every duplication crosses a
-  language boundary, and the ones that don't are the easier ones to miss.**
-
-  `sensing/CtTrip.h`'s own numbers are a third, and it is the one that needed a
-  SHIM to get tested at all. Every other decision-making header here is pure —
-  STL + ArduinoJson, no Arduino.h — precisely so the host tests can drive it, and
-  BinSensor.h says so at the top. CtTrip cannot be: it reads an ADC through
-  CtSensor, which busy-waits on `millis()`. So `firmware/test/shim/Arduino.h`
-  fakes a clock and an ADC, and `test_cttrip.cpp` covers the floor learn, the
-  floor REFUSAL, hysteresis and the primary-supplied params. **The shim must not
-  grow**: a header needing more Arduino than that wants splitting the way
-  BinSensor was, not accommodating. (Its clock advances on a 25-calls-per-ms
-  divider, because `read()` discards a window with under 100 samples — a
-  one-ms-per-call clock silently returns nothing and every test fails for a
-  reason unrelated to the code.)
-
-  `kBinDebounceMs` (utils/BinSensor.h) is another: how long the dust-bin beam
-  must hold a reading before the firmware believes it. No JS model simulates a
-  flickering beam — the mock and demo STAGE bin state directly, the way they
-  stage a plug fault — so it exists once and has nothing to drift against. What
-  *is* shared is the reported shape, and `bin-sensor.test.js` ↔
-  `firmware/test/test_binsensor.cpp` are a collector-plug-style pair rather than
-  a nodelink-style one: same rule (`systems[].bin` is omitted when nothing
-  watches that bin), two engines, deliberately NOT the same numbers twice.
-
-  `kMoveTimeoutMs` (control/NodeLink.h) is the same shape and catches people out
-  harder, because it sits in the one file that otherwise mirrors `nodelink.js`
-  frame for frame. It is the primary's own bookkeeping — how long to wait for a
-  STATE before calling a move lost — and it never goes on the wire, so there is
-  no `MOVE_TIMEOUT_MS` on the JS side to keep it in step with. Change it alone.
-  (12s → 90s on 2026-08-28: it had been sized for the stepper, and both a slider
-  traverse and a node's homing sweep outrun 12s. **90s → 210s on 2026-09-05**,
-  because homing is now triggered BY a move, so the primary's clock runs for the
-  whole sweep — and a sweep sized for an 8-gate 4" rack is ~162s. It must exceed
-  `HOMING_TIMEOUT_MS`, which `firmware/node/dustgate_node.cpp` static_asserts.)
-
-  `HOMING_TIMEOUT_MS` (config.h) is firmware-only too, and **derived** — from
-  `HOMING_MAX_TRAVEL_MM`, `HOMING_SPEED_STEPS_PER_SEC` and a bench tracking
-  factor — so it moves when the rail or the speed does. There is a real
-  cross-language invariant near it that is NOT in the table above because it is a
-  relationship rather than a shared value: `HOMING_MAX_TRAVEL_MM` must exceed
-  `manifoldProfile('rockler-4', gates).spanMm` from device-model.js for the
-  largest rack anyone builds. It did not, until 2026-09-05 — 700mm against an
-  891mm 8-gate 4" rack — and the symptom would have been a healthy home failing
-  on the biggest rack in the shop.
-
-  **The checked half of this table is `shared/device-model/constant-pairs.json`** (2026-10-06): every pair below that is a plain number
-  (and the servo-bank and sliding-stop budgets across the JS model, `config.h` and the UI) is listed there as a group that must be
-  equal, and `tools/check-constant-pairs.js` (run by `npm run model:test`) reads each number out of its source and fails when a
-  group disagrees, or when a listed constant can no longer be found. **A new pair goes in BOTH places** — a row here for why, a group
-  there for the check. A number that cannot be paired (compiled into the UI bundle, held by a node) still needs a test that fails
-  when the copies differ: the UI bundle has `tools/check-ui-fresh.js` (the model's hash is baked into the app at build time).
-
-  **This table is a cache, not the source of truth — keep it honest or delete
-  rows rather than let them go stale.** Touching either side of a pair: update
-  the other side's value AND this table's "What it is" cell if the meaning
-  moved. Landing a NEW pair (a JS default with a C++ mirror, or vice versa,
-  that didn't exist before): add a row here in the same change — that's what
-  keeps the next person (or model) from re-deriving it from scratch the way
-  the coast-down default (row 1) had to be on 2026-08-19, with no comment
-  pointing either way until then. A constant that's read straight out of the
-  saved document at runtime (like `offDelayMs` itself) isn't a pair — only the
-  **default applied when the document doesn't say** is, since that's the value
-  that can silently disagree.
-
-Read `shared/device-model/README.md` before touching anything in that directory.
+`shared/device-model/` is the spec. The mock and the app's demo `require` it, so they cannot drift; the firmware can't
+import JS, so it is held to the same contract by the conformance suites and by **matched tests** (a number asserted in
+a JS test is asserted in its C++ twin, same cases, same order). **Change one, change both.** The matched pairs and the
+constants shared across the boundary, and why each is a pair: `shared/device-model/CLAUDE.md`. Firmware specifics:
+`firmware/CLAUDE.md`. UI specifics: `dustgate-ui/CLAUDE.md`.
 
 ## Commands
 
-Tests live in two package.json files. UI suites run under plain node (no browser).
-
 ```
-cd dustgate-ui && npm test        # spec-runner + routing + wiring geometry
-cd dustgate-ui && npm run bench:routing   # sample layouts, for tuning the routing costs
-cd dustgate-ui && ./routing-sweep.sh TURN 48 64   # ...the same, sweeping one constant
-cd tools && npm run model:test    # topology, shop, nodelink, plug-claim, adopt-outlets, manual-blower, collector-plug, bin-sensor (JS)
-cd tools && npm run firmware:test # the C++ host tests (router, controller, nodebus, shop, faults, plugclaim, screen, blower, binsensor, cttrip)
-cd tools && npm run conformance:ci topology:conformance:ci nodelink:conformance:ci  # run separately
+cd dustgate-ui && npm test           # UI specs (plain node), routing, wiring geometry
+cd tools && npm run model:test       # every JS model suite + the constant-pairs check
+cd tools && npm run firmware:test    # every C++ host test
+cd tools && npm run docs:check       # links in current docs, archive banners, CLAUDE.md size
+make -C native test                  # the native brain, end to end against fakes
+cd tools && npm run conformance:ci   # also topology:conformance:ci, nodelink:conformance:ci — run separately
 ```
 
-Firmware compiles — `pio run -e <env>`:
-
-| Env | Board | Role |
-|---|---|---|
-| `xiao_c5_primary` | XIAO ESP32C5 | **primary** — the routing brain, 3 PWM valves, CT, bin, RF |
-| `xiao_c5` | XIAO ESP32C5 | secondary node, 3 PWM valves, CT |
-| `xiao_c5_linear_primary` | XIAO ESP32C5 | **primary** on the slider board (ST3215 rack) |
-| `xiao_c5_linear` | XIAO ESP32C5 | secondary node on the slider board |
-| `xiao_c5_bus_bench` | XIAO ESP32C5 | not a role — the bus-servo console |
-| `xiao_c5_ht12e_bench` | XIAO ESP32C5 | not a role — the HT12E/315MHz console, for keying the Rockler DC remote ([`WIRING.md#10-315-mhz-transmitter`](firmware/WIRING.md#10-315-mhz-transmitter)) |
-| `xiao_c5_ct_bench` | XIAO ESP32C5 | not a role — a walk-around CT current meter, for judging whether a 30A clamp can tell a running tool from an idle one ([`WIRING.md#8-ct-clamp`](firmware/WIRING.md#8-ct-clamp)) |
-
-**The collector envs are gone (2026-09-16), and nothing replaced them.** There
-used to be `xiao_c5_collector` and `xiao_c5_collector_node`: a third pin
-personality that existed only because a CT, a 315 MHz transmitter and two fob
-servos would not fit beside four servo channels. Dropping to THREE channels
-moves the transmitter to D10, gives every pad exactly one owner, and lets one
-pin map serve every PWM board — so a board at the collector is an ordinary
-primary or an ordinary node that a LAYOUT points at a bin, a clamp and a remote —
-**now a node can carry the bin sensor, the RF remote (PRESS) and the clamp (2026-10-04, hardware-UNTESTED)** — which is what "a board is not a collector node, it is a board that
-happens to be near a bin" said before the pin budget overruled it. `dev.sh --collector` still
-parses and now only prints. The cost is the fourth gate channel, and the model
-that replaced it wants ONE SELECTOR PER BOARD anyway.
-
-**One board, two roles.** Same board, same carrier, same pin map; the difference
-is `build_src_filter` and `-DDUSTGATE_SECONDARY`. Both roles are proven on
-hardware, including NodeLink between them and a real tool opening its gate.
-The roles are no longer asymmetrical in what they can carry: since 2026-10-04 a node
-can also watch the bin and key the RF transmitter (PRESS), but **neither has run on
-hardware** (see "The collector gets its own board" below).
-
-**PWM servos and a serial bus never share a board.** The slider gets dedicated
-hardware that rides along with it. `config.h` `#error`s if a pin map claims both,
-and `HAS_LINEAR` derives from the bus pins — 1 on the two `_linear` envs and the
-bench, 0 on the PWM pair. `-DDUSTGATE_SERVO_BUS` is what flips a board between
-the two personalities: the header then presents the bus pins (D6/D7) and the
-endstops (D8/D9) instead of the four PWM pads.
-
-**The slider is BOTH a primary and a node, and the node is the interesting one.**
-A one-slider shop is a whole shop, so `xiao_c5_linear_primary` is a complete
-brain that happens to drive a rack. `xiao_c5_linear` is the same actuator at the
-far end of a NodeLink socket — and it was **the first node in this design with a
-brain**, because a homing sweep is a closed loop between an endstop and a servo
-that cannot round-trip per step over WiFi. First, not only: the CT tool-sensing
-node is the second, for the same reason at a different time constant. It owns a sweep state machine, ticked
-from `loop()` (a blocking sweep outruns the 10s watchdog), homes itself at boot,
-and holds any move it is sent until the datum lands. Moves are still
-already-resolved numbers off the wire — only *calibration* is local. Read the
-CALIBRATION note at the top of `firmware/node/dustgate_node.cpp` before changing
-any of it.
-
-The **stepper is gone entirely** as of 2026-08-28 — driver, TMC2209 params,
-DevKitC pin map and all. It spent a week in `firmware/attic/linear/` waiting to
-be repurposed and the ST3215 driver ended up owing it nothing but the
-`MotorDriver` contract. `LimitSwitchDistance` is the one part that came back:
-the endstops outlived the stepper, because a step-counting bus servo has no
-datum either. `git log` has the rest.
-
-**Every env assumes a screen.** A board header that names `PIN_OLED_*` gets the
-driver, and an I²C ACK at 0x3C at boot decides whether a panel is really there.
-Verified on a C5 (D4/D5), wake button on D1.
-
-Both envs ride the pioarduino platform (official `espressif32` has no ESP32-C5)
-and build against `~/.platformio-pioarduino`, which `dev.sh`/`deploy.sh` set for
-you. By hand, and they can share one `pio run`:
-
-```bash
-PLATFORMIO_CORE_DIR=~/.platformio-pioarduino pio run -e xiao_c5_primary -e xiao_c5
-```
-
-Bench work goes through `dev.sh` (`demo`, `mock`, `live`, `flash`, `flash-node`,
-`monitor [node]`, `ports [--pin primary|node]`, `provision`, `erase`) — its header
-comment is the reference. Prefer it over raw `pio`/`esptool`. See the `flash`
-skill for the gotchas. **Pin the boards**: primary and node are the same part with
-the same USB VID, so nothing but a pinned serial can tell them apart.
+Firmware builds and environments: `firmware/CLAUDE.md`. Deploying the Pi: `bash native/pi/deploy.sh <user>@dustgate.local`.
 
 ## Design constraints
 
-These are decided; don't relitigate them in code review or suggestions.
+Decided; don't relitigate them in review or suggestions.
 
-- **Never dead-head the collector.** Transitions are make-before-break: open the
-  new gate before closing the old one. Most-recent-tool-wins. Idle leaves the
-  gate where it is (the system rests open).
-- **Gate count must be even.** Rockler manifolds ship in pairs; odd counts
-  misplace gates.
-- **No duct size anywhere in the UI.** Sizing is the woodworker's job, out of
-  scope.
-- **The plug belongs to the tool**, and draws under the tool's name — never on a
-  port.
-- **Sensing is not switching, and for a TOOL that is a safety rule.** A tool is
-  only ever *sensed*; the collector is the one thing DustGate commands.
+- **Never dead-head the collector.** Make-before-break: open the new gate before closing the old. Most-recent-tool-wins.
+  Idle leaves the gate where it is (the system rests open).
+- **Gate count must be even.** Rockler manifolds ship in pairs.
+- **Sensing is not switching; for a TOOL that is a safety rule.** A tool switched off at the outlet with its own switch
+  left on is ARMED, so energising that outlet can start a saw with nobody at it. **Never add tool switching**; prefer a
+  plug that structurally cannot switch (a no-relay metering plug, or our CT). The collector is the one thing DustGate
+  commands, and nothing in its control path carries motor current: the RF remote, or a smart relay switching a
+  contactor's coil. Every way of commanding it is a stateless toggle or blind, so **feedback (a clamp or a metering
+  plug) is mandatory**.
+- **An install step the owner cannot perform is a different product**, ranked above cost and elegance. Woodworkers are
+  not likely to solder or call an electrician: the shipping answer to pressing the remote is a servo arm on a printed
+  fixture. RF injection (HT12E) stays an option — proven on the bench, and a factory-modified fob satisfies the rule.
+- **Never require anything a network is allowed to block.** mDNS may be a fast path, never a requirement; every
+  discovery path degrades to a typed IP. A Tasmota has no mDNS (a set SetOption bit is not a feature): it is found by
+  the subnet sweep. An unreachable name is not evidence the network blocks anything — check the board is powered.
+- **The collector gets its own board** — its transmitter, clamp and bin beam all on ONE board, named by the collector's
+  `controllerId` (absent = the primary's own; a Pi brain has no pads and raises `collector-no-board`). The press retry
+  policy stays on the brain (`control/CollectorPress.h`): only the brain can read whether the blower agreed.
+- **A node may own any control loop faster than a WiFi round trip, and no interpretation of the document.** It takes
+  resolved angles and positions, never state names. The full statement is the header of `shared/device-model/nodelink.js`.
+- **One brain** owns the layout, routing and plug polling. An arbitration rule: sticky enabled, never-steal-a-plug, the
+  shop-wide servo mutex and most-recent-tool-wins all assume a single decider.
+- **Canvas rules** (a board owns its cell, a machine is one box, ports vs outlets, no duct size): `dustgate-ui/CLAUDE.md`.
 
-  This was recorded as a convenience — *a tool has its own switch, so we never
-  needed to* — until 2026-09-09. The real reason is worse than that, and a rule
-  with a weak reason gets relitigated the first time someone wants remote tool
-  control: **a tool switched off at the OUTLET with its own switch left ON is
-  armed.** Energise that outlet — remotely, on a schedule, by tapping the wrong
-  row in an app — and a table saw spins up with nobody's hand on it, possibly
-  mid blade-change. That is the exact hazard no-volt-release switches and
-  magnetic starters exist to prevent, and a switchable smart outlet reintroduces
-  it.
+When a constraint changes, the decision register (`docs/mockups/decisions.html`) gets the dated reason; this list only
+changes its line.
 
-  So: **never add tool switching**, and prefer a plug that structurally cannot
-  do it. A no-relay sense-only plug is not "will not" — it *cannot*.
+## Definition of done
 
-  The 1HP collector tripping a Shelly Plus Plug US on 2026-09-03 is what first
-  broke the sensing/switching fusion, but it is the smaller reason. Large tools get a no-relay metering plug (or our own
-  CT); the collector is switched by the RF dust-collector remote already in the
-  shop, so **nothing in the control path carries motor current**.
-  `sensor.outlet` vs `control.outlet` in the model already said this. See
-  [`docs/tool-sensing-rfc.md`](docs/tool-sensing-rfc.md) — decided, nothing
-  bench-tested.
-- **An install step the owner cannot perform is not a cheaper option, it is a
-  different product.** Ranked ABOVE cost and elegance, not against them. Two
-  subsystems hit this independently before it was written down: panel-side CTs
-  are the cheapest way to sense every tool and need an electrician (and void
-  insurance), and every ELECTRONIC way to press the collector's remote — our own
-  HT12E injection, or a $12 dry-contact relay sold for exactly this job — ends at
-  "open the fob and solder across the button". **Woodworkers are not likely to
-  know how to solder.** So the SHIPPING answer is a servo arm on a printed
-  fixture: no new device, the fob untouched and still certified, and an install
-  that is "clip it in, plug it into the labelled port".
+1. The right checks ran and pass (the `verify` skill); firmware changes also build.
+2. Docs and comments the change touches are current ("Keeping it current" below), and `npm run docs:check` passes.
+3. The TODO entry, if any, moved to `TODO/DONE.md`.
+4. The PR description says what is NOT tested on hardware.
+5. Nothing is called verified on hardware unless README's list says so.
 
-  The rule binds what a CUSTOMER must do, not what may exist. RF injection
-  (HT12E) stays a live option — it is already proven on the bench, it is the only
-  route for a collector with no fob to press, and a pre-modified fob shipped from
-  a factory satisfies the rule completely. `docs/tool-sensing-rfc.md` §4.2a.
-  Whichever sends it, it is still a TOGGLE, so feedback stays mandatory.
+## Keeping it current
 
-- **Never require anything a network is allowed to block.** Multicast is the
-  specific hazard: mDNS is off on plenty of guest networks, most IoT VLANs and a
-  fair number of mesh routers, and the woodworker whose shop stopped working has
-  no way to know that is why. A feature may *use* mDNS as a fast path; nothing
-  may *require* it. Today every DISCOVERY path degrades to a hand-typed IP;
-  both RECOVERY paths (`ShellyGen2Outlet::reresolve()`, and the node re-resolve
-  in `RemoteActuatorBus::resolveAndDial()` when a node was paired by hostname
-  rather than IP) degrade to nothing, which is the failure that shows up months
-  later on a router reboot. `docs/tool-sensing-rfc.md` §12 has the dependency
-  map and the Tasmota replacement — re-sweep and identify by the `Mem1` claim,
-  which is durable in the way an IP is not.
+Spending a few tokens during the work is cheaper than an audit afterwards. These are part of finishing any change.
 
-  **Tested 2026-09-09:** multicast is NOT blocked on the shop's `GenericGuest`
-  network — `dns-sd -B _http._tcp local.` shows `dustgate` at once. And Tasmota's
-  mDNS is genuinely absent rather than switched off: `SetOption55 1` answers
-  `{"SetOption55":"ON"}` but nothing advertises after a confirmed restart,
-  because Tasmota echoes any SetOption in range whether or not compiled code
-  reads it. **A set SetOption bit is not a feature.** So a Tasmota is found only
-  by the subnet sweep (`POST /api/outlets/sweep`), and `TasmotaOutlet` has no
-  `reresolve()` because there is no name to resolve.
-
-  A corollary, learned the hard way twice in one session: **an unreachable name
-  is not evidence the network blocks anything.** `dustgate.local` failing to
-  resolve was a powered-off board, not blocked multicast, and a whole conclusion
-  was built on it. Test with `mdnsprobe` on a running board, which asks the
-  querier that actually matters.
-
-- **New pieces default into the system you're working in.** Adding a gate places
-  it inside the active system's row band (`activeSystemId`, which follows whatever
-  you last touched), not at some shop-wide origin. Systems own contiguous,
-  non-interleaving row bands — that is what makes the grey ground drawable and what
-  `bandBlockedBy()` enforces on a drag — so a default that ignores the band can put
-  a piece somewhere a drag would refuse to move it. A **board** follows the same
-  rule by a different route: it belongs to no system, so it is placed at the top-
-  right of the active system's extent (`defaultBoardCell()`) but never band-checked.
-- **A board stands on the canvas and owns its cell**, exclusively — nothing else
-  may stand there and ducts route around it. It lived on a pinned rail above the
-  grid until 2026-08-16; `docs/boards-on-canvas-plan.md` records why that came out
-  and which alternatives were rejected. Nothing stops you dragging a board low,
-  where its cables route badly: the fix is the default, not a rule.
-- **The collector gets its own board.** Bin level, a CT clamp, the RF
-  transmitter that presses its remote, lamps — all on one board at the
-  collector, none of them hung off a board that also drives gates. Not a new
-  firmware target: same node build, same NodeLink, and which jobs it does is
-  still a TOPOLOGY fact. What forced it is the pin budget — a four-gate primary
-  with a screen has exactly ONE ordinary pad left (D3 is a strap, D0 is the
-  analog pad a CT wants), so bin-level and RF-transmit could not coexist while
-  both wanting to sit three feet from each other. A board driving no gates has
-  the whole PWM block free. `docs/tool-sensing-rfc.md` §6.2.
-
-  ⚠️ **BUILT 2026-10-04, NOT YET RUN ON A BOARD.** A node can now carry all three of the
-  collector's jobs: the clamp (proven), the dust-bin beam (a `bin` sensor in CONFIG, reported
-  as a SENSE bit) and the RF transmitter (a `PRESS` frame). The retry policy stays on the
-  primary (`control/CollectorPress.h`), because only the primary can read the plug that says
-  whether the blower agreed; a node only keys the pad. A layout points the collector at ONE
-  board with the collector's own `controllerId` — its transmitter, clamp and bin are all on it
-  (one board per collector since 2026-10-10; none of the three names a board of its own).
-  Absent means the primary's own; a native brain has no pads and raises `collector-no-board`. Everything here compiles and passes the paired host
-  tests (`nodelink.test.js` ↔ `test_nodebus.cpp`), and **a PRESS has never keyed a real
-  receiver from a node**. The UI's collector configurator does not offer a board for the
-  transmitter yet. **Bench 2026-10-05 (nodes on a desk with USB only: no servos, no receiver, no collector, no beam): PRESS and the bin pad now HAVE run on a real node.** A brain commanded a collector through `dustgate-mitersaw`; the node answered every PRESS `ok` (it keyed its transmitter pin), and the press policy retried at its 5 s cooldown and gave up after 3 against a plug that never drew, exactly as designed. A `bin` sensor in CONFIG came back as `SENSE bin:<system> on:false` and showed in `systems[].bin`. **Bench 2026-10-06 (the shop: six PWM boards with servos on some, Shelly and Tasmota plugs, a desk fan on the Rockler receiver): a PRESS from a node DID key a real receiver** — the cyclone board's transmitter switched the fan on and off through the Rockler switch. Whole-shop routing through the native brain also ran: gate moves across five boards, tool switch-on opening the right gate and starting the collector, the press policy correcting an inverted belief in two presses, and a board browning out mid-move (fixed: it froze every gate). **Bench 2026-10-11: the beam seeing FULL from a node, end to end** — a real QS18 on the collector board's 4N35 (a node), `SENSE bin:system-1 ON` at the native brain on the Pi, the `bin-full` problem, and `ALERT bin full` to every system-1 board, each blinking red fully off and on; clearing the beam cleared all of it. Still not proven: a press never replaying across a link drop (unit-tested only), the collector sensed by a CT clamp, the slider node through the native brain, and anything on a Raspberry Pi. Do not describe those as verified until a bench says so.
-
-- **A machine is ONE box, however many ports it has.** A second pickup — an
-  overarm guard, a hood — is a differently-shaped inlet on that same box (square =
-  the primary port, tapered = the secondary port), not a second body. It owns
-  no cell; it rides its machine's box, and each duct lands on its own glyph.
-- **A tool lives in ONE system; a SECONDARY port's run may cross the seam.** That
-  run is the only thing allowed to, and it is drawn grey, dashed and thinner so a
-  shared machine reads as shared. It can be disconnected and re-routed to a primary
-  on the second system. (Grey dashed is free: an unfinished run's stub is *accent
-  orange*, `.open-stub`. Getting that backwards cost a round trip on 2026-08-20.)
-- **A node may own any control loop faster than a WiFi round trip, and no
-  interpretation of the document.** This is the node/primary boundary, and it is
-  about SCHEMA OWNERSHIP rather than intelligence — a distinction that matters
-  because "nodes are dumb actuator banks", the way it used to be written, has
-  been wrong twice now. The slider node owns a homing sweep and the CT
-  tool-sensing node owns a 60 Hz RMS loop; neither can round-trip per sample, and
-  neither reads the document. Both still take already-resolved angles/positions
-  off the wire, never state names — which is the part that lets a $5 board be a
-  node and keeps a schema change from needing a flash to every board in the shop.
-  Say it this way and the next sensor that needs a local loop is predicted rather
-  than argued about. The full statement is the header of
-  `shared/device-model/nodelink.js`.
-- One brain: the primary owns topology, routing, and Shelly polling. Not a
-  capability claim — an ARBITRATION one. Sticky enabled, never-steal-a-plug, the
-  shop-wide servo mutex and most-recent-tool-wins all assume a single decider,
-  and none of them get easier with two.
-
-## UI work
-
-**Two canonical pages, and they are not interchangeable.** This used to say
-canvas.html was "the only place decisions are recorded", which stopped being
-true and sent people to add rows to a page that has no decision log.
-
-- **[`docs/mockups/canvas.html`](docs/mockups/canvas.html) is the canonical
-  canvas DESIGN.** The line and glyph vocabulary, the port and system rules, the
-  drag rules, and dated `Built` pills on the sections that have shipped. Read it
-  before changing anything on the build canvas.
-- **[`docs/mockups/decisions.html`](docs/mockups/decisions.html) is the
-  canonical DECISION REGISTER** — the dated list of what was decided and why,
-  rendered from one array at the top of the file. Read it before re-deriving a
-  UI decision from scratch, and append to it when one is settled.
-
-**Update them IN PLACE.** A settled question does not get a new page: change the
-canvas section it affects, and append an entry to the register. Seven mockups
-that disagreed with each other is what made cross-system runs and the meaning of
-a dashed line each get re-litigated three times (2026-08-20).
-
-Three screen-specific pages — `gates-list.html`, `oled-status.html`,
-`shop-status-chips.html` — carry their own decision logs as well. That is
-allowed and useful: a log next to the drawing it explains beats a cross-
-reference. The rule that keeps it from becoming the 2026-08-20 problem again is
-that **a decision affecting more than one screen belongs in the register**, and
-the per-page log links to it rather than restating it.
-
-Still build a throwaway mockup when *exploring* something genuinely new, and
-publish it for review before writing non-trivial UI code — then fold the outcome
-into `canvas.html` and archive the exploration. Hover is never the only trigger for
-anything. Focus dims rather than hides.
-
-`docs/mockups/archived/` holds everything superseded, decided against, or built and
-later removed. Nothing in there is current; each page opens with a banner saying
-what replaced it. Add that banner when you move something in — a stale mockup that
-still looks current is worse than no mockup at all.
-
-`dustgate-ui/src/app/build/build.component.ts` is ~5.7k lines — grep it, don't
-read it whole.
+1. **One home per fact.** Values live in code; rules here; work in `TODO/`; parts and wiring in `docs/BOM.md` and
+   `docs/carrier-wiring.html`; UI in the two canonical mockups. Prose never restates a value that lives in code — it
+   names the symbol. If you find the same fact in two places, delete one.
+2. **A bench result updates everything in the same session:** README's hardware list (dated), the TODO entry (moved to
+   `DONE.md`), and every comment or doc that still calls it unverified —
+   `git grep -n -i -E "unverified|not yet run|never run|untested|host-tested only|not seen in the shop"` for the
+   feature's name.
+3. **Finishing a feature tidies its paperwork in the same commit:** its TODO entry moves to `DONE.md`, its plan to
+   `docs/archive/` and its mockup to `docs/mockups/archived/` (each with a banner), and a register entry if a decision
+   was made.
+4. **No plan documents in `docs/`.** A plan lives in its TODO entry or the PR description. A design doc that must exist
+   opens with a dated Status line and is archived when built.
+5. **Renaming or deleting anything includes `git grep` for the old name** — code, comments, this file's tables, the
+   READMEs, `TODO/` — in the same change.
+6. **This file holds rules and current facts, not history.** "Found on <date> when…" belongs in the commit message or
+   `DONE.md`; here it is the rule plus one line of why. New code comments say why the code is this way, not what was
+   tried first.
+7. **Hardware results go in the repo** (README's hardware list), not only in an assistant's memory, so every session and
+   every person sees the same truth.
+8. **Size budgets:** this file stays under 200 lines and each directory's `CLAUDE.md` under 100 (`docs:check` enforces
+   it). Detail that only matters in one directory goes in that directory's file.
+9. **`docs/archive/` and `docs/mockups/archived/` are history.** Never update them, never cite them as a spec; a fact
+   found only there must be re-checked before it is relied on.
 
 ## Voice
 
-Comments and docs explain *why*, at the altitude of the surrounding code, and
-say plainly when something is unverified or a known compromise. Match that.
+Comments and docs explain *why*, at the altitude of the surrounding code, and say plainly when something is unverified
+or a known compromise. Keep replies and docs short: the result first, then what the reader needs to act.

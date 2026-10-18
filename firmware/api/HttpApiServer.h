@@ -168,7 +168,7 @@ public:
     // here); that second copy of the node program's handler is gone — the PWM bank and the
     // slider are nodes now, and a primary is a brain. What is left is the JOIN: the sketch
     // owns what it means (which pairing's bus the socket binds to), so the listener offers it
-    // every event. See control/NodeLink.h and docs/nodes-dial-the-brain-plan.md.
+    // every event. See control/NodeLink.h and docs/archive/nodes-dial-the-brain-plan.md.
     //
     // The hook's return value is not used: it handles what it recognises and the rest is ignored.
     // ------------------------------------------------------------------

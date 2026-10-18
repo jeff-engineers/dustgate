@@ -15,7 +15,7 @@ import {
 // ── Your plugs ───────────────────────────────────────────────────────────────
 // The twin of /boards: one row per plug, with its live draw and who owns it, and the places a plug is found, paired,
 // renamed, released and taken over. It is the one home for picking a plug, so the picker inside a tool's sheet is not a
-// second place to learn how (docs/mockups/plugs-clamp-delete.html).
+// second place to learn how (docs/mockups/archived/plugs-clamp-delete.html).
 //
 // What it does NOT do: choose a plug for the COLLECTOR (that is the collector's own sheet, because a collector's plug can
 // also switch it), or set a tool's trip point (tool setup). It pairs a plug to a TOOL and takes it away again.

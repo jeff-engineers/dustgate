@@ -1,7 +1,7 @@
 // =============================================================================
 // utils/BinSensor.h — dust-bin level: debounce, and whose bin it is.
 //
-// One input pin behind an optocoupler (docs/shop-schema-rfc.md §7.5). This
+// One input pin behind an optocoupler (docs/archive/shop-schema-rfc.md §7.5). This
 // header holds the two parts of that which are worth testing, and neither of
 // them touches Arduino.h: the debouncer, and the rule for deciding whether a
 // given collector's bin sensor is wired to THIS board.

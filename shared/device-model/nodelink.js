@@ -93,7 +93,7 @@ const PONG_TIMEOUT_MS = 6000;
  * Stale is NOT the same as off, and the primary must not conflate them. A node
  * that has stopped reporting while still answering PINGs is a fault; a node that
  * has gone away entirely is the planer being switched off at the wall, which is
- * normal: such a board is OPTIONAL (shop.js isOptionalBoard, docs/optional-nodes-plan.md). See RFC §5.6a.
+ * normal: such a board is OPTIONAL (shop.js isOptionalBoard, docs/archive/optional-nodes-plan.md). See RFC §5.6a.
  */
 const SENSE_REPEAT_MS = 5000;
 const SENSE_STALE_MS = 15000;
@@ -554,7 +554,7 @@ const watchesBin = (w) => !!(w && w.caps && w.caps.bin === 1);
  *
  * `caps.ct` says a board HAS a clamp input; it is the pin map, true of every PWM board whether or not
  * anything is plugged in. This says whether something IS. A switched 3.5 mm jack ties its tip to 3V3
- * through 10 kΩ with no plug in (WIRING.md §8), and the node also enables D0's own pull-up, so an empty
+ * through 10 kΩ with no plug in (docs/archive/WIRING.md §8), and the node also enables D0's own pull-up, so an empty
  * jack and an empty pad both read railed high; a clamp holds the pin at the bias midpoint. The node
  * reports it whether or not a CONFIG names a clamp — that is the point: it is how a person sees that a
  * clamp is there before the layout uses it, and it replaced the per-board "clamp" switch in the layout.

@@ -1,5 +1,5 @@
 // Types for plug-claim.js — who owns a smart plug, and what we may do to it.
-// See docs/shop-schema-rfc.md §8. Mirrored in firmware/outlets/PlugClaim.h.
+// See docs/archive/shop-schema-rfc.md §8. Mirrored in firmware/outlets/PlugClaim.h.
 
 /** ours | unclaimed | dustgate | foreign. "unknown" is a WIRE-only state the
  *  device reports when it could not read the plug's push config — callers must

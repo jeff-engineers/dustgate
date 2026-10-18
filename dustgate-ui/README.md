@@ -83,7 +83,8 @@ proxied through `proxy.conf.json` to `localhost:3000`).
 
 ### 3. Against a real device
 
-Point `proxy.conf.json`'s `target` values at the ESP32's IP address, then:
+`bash dev.sh live [host]` from the repo root (default `dustgate.local`) serves the app with hot reload, proxied to the
+brain. By hand: point `proxy.conf.json`'s `target` values at the brain's address, then:
 
 ```bash
 npm start
@@ -98,8 +99,9 @@ npm run build          # production build → dist/dustgate-ui/browser
 npm run deploy          # build + gzip + copy into ../firmware/data (for flashing)
 ```
 
-After `npm run deploy`, upload the filesystem image from the repo root with
-`pio run --target uploadfs`.
+Don't flash it by hand: the app shares the ESP32's filesystem with the saved layout, and a raw `uploadfs` erases the
+shop. Use `bash dev.sh flash --ui` for an ESP32 brain (it saves and restores the layout), or
+`bash native/pi/deploy.sh <user>@dustgate.local` for the Pi, which builds the app itself.
 
 ## Project structure
 
@@ -110,12 +112,12 @@ src/app/
   live/                   Live tool list — which tool is collecting; manual override
   build/                  Shop layout canvas: place the collector, run duct, attach
                           gates and tools. routing/ + wiring/ hold its geometry
-  gates/                  Gate calibration — sliding gate (stepper sweep) and ball
+  gates/                  Gate calibration — sliding gate (ST3215 slider, homing sweep) and ball
                           valve (servo angle capture), plus the shared selector types
-  tools/                  Tool tagging — identify-by-power outlet picker
-  boards/                 Discover and pair secondary boards, assign gates to them
-  settings/               Device settings hub — idle timeout, orientation, motor direction,
-                          gate count, port size, forget-WiFi, reset-calibration
+  tools/                  Tools and the collector: plugs, clamps, the collector's switch and board
+  plugs/                  Every smart plug on the network: pair, rename, release, take over
+  boards/                 Pair boards, update their firmware over WiFi, the brain's log
+  settings/               The servo pulse range, forget-WiFi, resets
   services/
     api.service.ts            Talks to the real device (HTTP + WebSocket)
     demo-api.service.ts       In-memory drop-in replacement used in demo mode —
@@ -124,8 +126,8 @@ src/app/
                               the same model that drives tools/mock-api.js
     demo-topology.ts          Pre-built layout that seeds demo mode
     shop-ready.ts             Is this layout finished enough to run?
-    unit-preference.service.ts     mm/inches display preference
-    hardware-profile.service.ts    Port size (2.5"/4") — seeds expected gate spacing
+    shop-doc.ts               The typed seam onto the shop document the screens edit
+    failure.ts                What to say when a request fails, and the [DustGate] console log
 ```
 
 `ApiService` is swapped for `DemoApiService` via a DI override in `app.config.ts`
@@ -134,4 +136,9 @@ it's actually talking to.
 
 ## Tests
 
-No test suite yet.
+```bash
+npm test     # the Angular-free specs (spec-runner.js), the router and the wiring geometry, under plain node
+```
+
+Specs are listed by hand in `tsconfig.spec.json` and `spec-runner.js` (a known gap, in `TODO/TODO.md`): a new
+`*.spec.ts` runs only once it is added to both.

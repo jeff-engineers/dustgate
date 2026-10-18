@@ -72,7 +72,7 @@ static_assert(NUM_STOPS % 2 == 0,
 
 // -----------------------------------------------------------------------------
 // Manifold profiles + reference-sweep calibration (dual endstop)
-// See docs/dual-endstop-calibration.md. A profile gives the mm geometry of a
+// See docs/archive/dual-endstop-calibration.md. A profile gives the mm geometry of a
 // known manifold, referenced to the near (home) endstop trigger. The reference
 // sweep measures the endstop-to-endstop step span, derives steps/mm, and places
 // every gate by PROPORTION of the measured span (immune to steps/mm error).
@@ -166,7 +166,7 @@ static_assert(NUM_STOPS % 2 == 0,
 // was wanted. It implied module 1.3193, which is not a standard module and not a
 // rack anyone can buy: the tell that it had never been measured. The rack that
 // replaced it, and the derivation that keeps this from happening again, is
-// §5.0.3 of firmware/WIRING.md#7-the-slider--st3215-bus-and-endstops.
+// §5.0.3 of docs/archive/WIRING.md#7-the-slider--st3215-bus-and-endstops.
 //
 // Speeds and the homing backoff still live here, and the ST3215 block overrides
 // them on a board that has a rack.
@@ -386,7 +386,7 @@ inline int homeDirection() {
 //
 // Bin sensing is ONE INPUT PIN, so it collides with nothing and needs no env of
 // its own — a primary and a node get it on the same terms, which is the whole
-// argument in docs/shop-schema-rfc.md §7.5 (superseding §7.4's "new node type").
+// argument in docs/archive/shop-schema-rfc.md §7.5 (superseding §7.4's "new node type").
 // A board is not a "collector node"; it is a board that happens to be near a
 // bin.
 //
@@ -467,7 +467,7 @@ inline int homeDirection() {
 // rather than one per driver.
 //
 // The rack itself: 15 teeth per 82.9mm Rockler gate pitch, module 1.7592, 30T
-// pinion. §5.0.3 of WIRING.md#7-the-slider--st3215-bus-and-endstops carries the derivation, the seam
+// pinion. §5.0.3 of docs/archive/WIRING.md#7-the-slider--st3215-bus-and-endstops carries the derivation, the seam
 // rules for printing it in chainable segments, and the warning about the
 // artifact pitch the stepper block still holds. DO NOT re-derive it from
 // RACK_PITCH_MM up there.
@@ -611,7 +611,7 @@ inline int homeDirection() {
 #define SMART_OUTLET_COUNT            7
 
 // Maximum number of switchable COLLECTOR plugs — one per airflow system.
-// A shop owns N systems (docs/shop-schema-rfc.md), each with its own blower:
+// A shop owns N systems (docs/archive/shop-schema-rfc.md), each with its own blower:
 // a 4" cyclone for the big machines and a 2.5" wall unit for the bench is the
 // case that motivated this. Slot 0 is the one persisted in NVS and the one the
 // pre-topology stop-index automation drives; the rest are RAM-only and rebuilt

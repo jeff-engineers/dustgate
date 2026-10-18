@@ -21,7 +21,7 @@ import { DEFAULT_THRESHOLD } from './outlet-defaults';
 //   switch — the COLLECTOR's plug. We COMMAND it, and never read it, so there's
 //            no threshold to set. Written to `control.outlet`.
 //
-// See docs/topology-schema.md. Firmware picks both up on topology adopt
+// See docs/archive/topology-schema.md. Firmware picks both up on topology adopt
 // (syncTopologyOutlets in firmware.ino) — the layout is what the poller
 // and the blower switch are configured from.
 

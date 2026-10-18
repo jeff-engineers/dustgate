@@ -27,7 +27,7 @@ import { CollectorForm, CtlKind, RawEl, SenseKind, fused, readCollector, writeCo
 //
 // The model has said this since `control` and `sensor` were split (topology.js,
 // and TopologyRuntime::collectorSensorOutlet() on the firmware side); only the
-// UI never caught up. Design + decisions: docs/mockups/collector-setup.html.
+// UI never caught up. Design + decisions: docs/mockups/archived/collector-setup.html.
 //
 // THE ONE CASE WHERE THE TWO HAVE ONE ANSWER is a switchable Shelly, which
 // reports its own power. The sheet collapses the watch question to a locked row

@@ -11,7 +11,7 @@
 // PAIRING IS UNCHANGED. A node never dials a primary it is not owned by: no owner,
 // no dialling. The primary still pairs by dialling the node once (HELLO claims it);
 // this file only takes over the steady-state link after that. See
-// docs/nodes-dial-the-brain-plan.md.
+// docs/archive/nodes-dial-the-brain-plan.md.
 //
 // HOW IT FINDS THE PRIMARY — every step is a fast path, none is required, and the last
 // asks nothing of the network at all:

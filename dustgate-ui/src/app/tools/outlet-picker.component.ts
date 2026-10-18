@@ -13,7 +13,7 @@ import { ApiService, DiscoveredOutlet } from '../services/api.service';
 // ADDING ONE BY ADDRESS is the other half, and it is not a power-user
 // convenience. Scanning uses mDNS, and a Tasmota plug does not advertise over
 // mDNS in a stock build — so for the sense-only plug this project now prefers,
-// typing the address is the ONLY way in (docs/tool-sensing-rfc.md §12). The
+// typing the address is the ONLY way in (docs/archive/tool-sensing-rfc.md §12). The
 // device probes both protocols and answers with the same row a scan produces,
 // so a plug added by hand is indistinguishable from a found one from here down.
 //

@@ -7,7 +7,7 @@
 // existed never went away. A bus servo in stepping mode reports how much of the
 // last command is outstanding, never where the shaft is, so its zero does not
 // survive a power cycle — and the homing sweep of
-// docs/dual-endstop-calibration.md is still the only thing that can put a datum
+// docs/archive/dual-endstop-calibration.md is still the only thing that can put a datum
 // on the rail.
 //
 // WHAT CHANGED IN THE PORT: nothing structural. The arithmetic here counts

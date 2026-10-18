@@ -167,7 +167,7 @@ public:
     // Separate from the switchable plug above, because a blower we command by
     // pressing its remote — a servo, or RF — has no switchable plug at all, and
     // every one of those presses is STATELESS. Watching it is the only way to
-    // learn whether the press landed (docs/tool-sensing-rfc.md §4.2b).
+    // learn whether the press landed (docs/archive/tool-sensing-rfc.md §4.2b).
     //
     // Polled, never switched: this is a PowerSensor and nothing more. It is
     // usually a no-relay Tasmota, which structurally cannot switch anyway.

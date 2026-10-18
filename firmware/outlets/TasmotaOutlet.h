@@ -4,7 +4,7 @@
 // Compatible devices: the Athom "No Relay Power Monitoring US Plug" (Tasmota
 // build), and anything else running Tasmota with an energy monitor. Also — by
 // design — our own CT sensor board, which serves the same endpoint rather than
-// inventing a second protocol (docs/tool-sensing-rfc.md §6).
+// inventing a second protocol (docs/archive/tool-sensing-rfc.md §6).
 //
 // API endpoint: GET http://<ip>/cm?cmnd=Status%208
 // Power field:  response["StatusSNS"]["ENERGY"]["Power"]  (float, watts)
@@ -24,14 +24,14 @@
 // We take Power alone because that is what thresholdW is in. The rest is not
 // waste: `Voltage` is MEASURED (115 V on that plug, not the 120 V nominal the CT
 // bench assumes) and `Current` and `Factor` are exactly what a CT cannot give —
-// see the note in firmware/WIRING.md#8-ct-clamp about a CT measuring current
+// see the note in docs/archive/WIRING.md#8-ct-clamp about a CT measuring current
 // rather than power.
 //
 // WHY THIS EXISTS. A 1HP dust collector trips the overpower protection on a
 // Shelly Plus Plug US, and that protection is there to guard the RELAY
 // CONTACTS — so the fix is not a bigger plug, it is removing the relay from the
 // sense path. A pass-through metering plug has no contacts to arc, weld, or
-// trip. See docs/tool-sensing-rfc.md §2.
+// trip. See docs/archive/tool-sensing-rfc.md §2.
 //
 // IT CANNOT SWITCH, AND THAT IS THE POINT. setSwitch() is left at
 // SmartOutlet's default (returns false). A tool is only ever SENSED; the
@@ -143,5 +143,5 @@ private:
     // NO reresolve(). Tasmota does not advertise over mDNS in a stock build, so
     // there is no hostname to re-resolve and a stale IP is simply unreachable
     // until a sweep finds it again by its Mem1 claim. The .cpp says why at
-    // length, and docs/tool-sensing-rfc.md §12 has the recovery design.
+    // length, and docs/archive/tool-sensing-rfc.md §12 has the recovery design.
 };

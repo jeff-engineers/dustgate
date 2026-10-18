@@ -5,7 +5,7 @@ import { CommonModule } from '@angular/common';
 //
 // DustGate presses the dust collector's remote by transmitting its frame, which
 // needs the remote's ADDRESS — eight bits set by a DIP switch inside the fob.
-// There is no receiver in the product (see docs/mockups/rf-address.html for why
+// There is no receiver in the product (see docs/mockups/archived/rf-address.html for why
 // "learn mode" was rejected), so the user reads the switch and copies it.
 //
 // THE WHOLE SCREEN IS ONE IDEA: don't ask a woodworker what an address is. Draw
@@ -24,7 +24,7 @@ import { CommonModule } from '@angular/common';
 // the blower doesn't.
 //
 // NO TEST BUTTON, and it is a gap rather than a decision. docs/mockups/
-// rf-address.html specifies one ("test before Save, and test with a lamp") and
+// docs/mockups/archived/rf-address.html specifies one ("test before Save, and test with a lamp") and
 // it is the right design. It needs a device endpoint that transmits an address
 // it has NOT been given in a layout — POST /api/collector only presses whatever
 // the stored document says — so a Test here could do nothing but save first and

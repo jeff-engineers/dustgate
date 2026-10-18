@@ -10,10 +10,10 @@ its part numbers, prices and traps are here now, so this file is the one list.
 PCB they are footprints you have to choose, not consumables.
 **What's not:** wire, hookup, heatshrink, standoffs, perfboard itself.
 
-**Every part traces to a section of [`../firmware/WIRING.md`](../firmware/WIRING.md)**,
-which carries the reasoning and the pin-level detail. This file is the shopping
-list, not the design — when the two disagree, WIRING.md is right and this needs
-fixing. **Both builds are drawn in [`carrier-wiring.html`](carrier-wiring.html).**
+**This file is the shopping list. The wiring is drawn in [`carrier-wiring.html`](carrier-wiring.html)**
+(both builds), and the pins are the board headers in `firmware/boards/`. When they disagree with this list, they
+win and this needs fixing. The reasoning behind most parts is in the archived wiring notes,
+[`archive/WIRING.md`](archive/WIRING.md): history, not a current reference.
 
 ⚠️ **Quantities are PER BOARD unless a row says otherwise.** One board is one
 gate (one gate = one board), so a shop is this list times the number of gates,
@@ -31,9 +31,9 @@ unfitted footprint costs nothing.
 | Servo rail | **DROK mini adjustable buck** (3 A peak, 2 A long-term), trimmed to ~6 V | **Pololu D24V22F6** (6 V fixed, 2.5 A), on a socket. Product path later: a discrete LM2596 |
 | Passives | through-hole, from the drawer | through-hole (leaded) for this round; 1206 is a later spin |
 | Barrel jack | whatever is on hand | **CUI PJ-063AH** (2.1 mm pin). NOT PJ-002AH / PJ-102AH — those are 2.0 mm |
-| CT inrush clamp | not fitted | 1 kΩ + 2 × 1N5817 fitted on the first article, BAT54S footprint as the alternative |
+| CT inrush clamp | 1 kΩ + 2 × 1N5817, fitted on the cyclone and miter saw boards | 1 kΩ + 2 × 1N5817 fitted on the first article, BAT54S footprint as the alternative |
 | Input protection | none | **PTC fuse + TVS, fitted** (§1). Decided 2026-10-08: the boards live beside dust ducts, a large ESD source |
-| Bin sensor / lamps | flying leads | a **screw terminal** |
+| Bin sensor / lamps | flying leads, **ferrules crimped** — never soldered or tinned: solder creeps under a screw and the joint cracks with vibration | a **screw terminal** (ferrules on the leads too) |
 
 None of the PCB column has been on a board. The perfboard column is the
 reference: it works, so where the PCB differs, the PCB is the thing being tested.
@@ -72,7 +72,7 @@ Qty is per board; "coll." = the collector board only.
 | 20 | Treedix WS2812B 5050 board, snapped off a 48-board panel | 1 | [Amazon B09FSTT43H](https://www.amazon.com/dp/B09FSTT43H) | ~$0.27 ($12.99 / 48) | On hand. Two rows of three 0.1″ pins, 10.16 mm apart: 5V, DIN, GND on one edge, 5V, DOUT, GND on the other (Jeff, 2026-10-17). Carries its own decoupling. GRB, the firmware's order. Was the SparkFun COM-16347 bare 5050 until 2026-10-17 |
 | 21 | SSD1306 0.96″ OLED, 4-pin I²C | 1 | none confirmed at Digi-Key | ~$4–8 | **Pin order varies** (VCC/GND swapped on some): fix the footprint to the module you buy |
 | 22 | Omron B3F-1000, 6 mm tactile | 1 (+1 for D9) | [Digi-Key SW400-ND](https://www.digikey.com/en/products/detail/omron-electronics-inc-emc-div/B3F-1000/33150) | $0.24 | Verified. Wake (D1); a second footprint on D9 |
-| 23 | CUI SJ1-3525N, 3.5 mm switched jack | 1 | [Digi-Key CP1-3525N-ND](https://www.digikey.com/en/products/detail/same-sky-formerly-cui-devices-/SJ1-3525N/738687) | $1.00 | Verified. NOT the SJ1-3523N (no switch). Meter the NC side first (WIRING.md §8) |
+| 23 | CUI SJ1-3525N, 3.5 mm switched jack | 1 | [Digi-Key CP1-3525N-ND](https://www.digikey.com/en/products/detail/same-sky-formerly-cui-devices-/SJ1-3525N/738687) | $1.00 | Verified. NOT the SJ1-3523N (no switch). Meter the NC side first (archive/WIRING.md §8) |
 | 24 | SCT-013-030 clamp, 30 A : 1 V | 1 per CT | Amazon / eBay | ~$8–10 | Plugs into row 23 |
 | 25 | 4N35 optocoupler, DIP-6 | 1 coll. | [Digi-Key (search)](https://www.digikey.com/en/products/result?keywords=4N35) | <$1 | Not a PC817 breakout |
 | 26 | 1N4148 signal diode, DO-35 | 1 coll. | [Digi-Key (search)](https://www.digikey.com/en/products/result?keywords=1N4148) | pennies | ESD: across the 4N35's LED |
@@ -101,9 +101,9 @@ Shelly plugs. The JLCPCB board itself is under "Ordering the PCB" below.
 | 100–220 µF electrolytic | 1 | same | Panasonic EEU-FR1V221 (220 µF 35 V) | XIAO `5V` ↔ GND. Rate ≥2× the rail |
 | 10 µF + 0.1 µF ceramic (X5R/X7R) | 1 ea | same | KEMET C320C104K5R5TA (0.1 µF, radial 5.08 mm); any radial X7R ≥25 V for 10 µF | XIAO 3V3 ↔ GND |
 | 0.1 µF ceramic | 1 per electrolytic | same | C320C104K5R5TA | In parallel with each bulk cap |
-| **WS2812B pixel** | 1 | Treedix WS2812B board | the same board (PCB order list row 20) | On D2. 5 V from the XIAO side of the Schottky — so it works on USB alone. The ~4.7 V after the diode is what makes 3.3 V data close to in spec (WIRING.md §4). Not the 5 mm through-hole NeoPixel: that one is RGB order |
+| **WS2812B pixel** | 1 | Treedix WS2812B board | the same board (PCB order list row 20) | On D2. 5 V from the XIAO side of the Schottky — so it works on USB alone. The ~4.7 V after the diode is what makes 3.3 V data close to in spec (archive/WIRING.md §4). Not the 5 mm through-hole NeoPixel: that one is RGB order |
 | 330 Ω resistor | 1 | same | Yageo CFR-25JB-52-330R | Series on the pixel's DIN |
-| **SSD1306 OLED**, I²C, 0x3C, 4-pin | 1 | same | no Digi-Key listing confirmed (~$4–8 anywhere) | D4/D5. **3V3, never 5V** (WIRING.md §5) — the perfboard runs it from 3V3 (jeff, 2026-10-08; the sourcing guide said 5 V and was wrong) — check which way round the module's VCC/GND pins are before fixing the footprint; modules differ. Optional in software |
+| **SSD1306 OLED**, I²C, 0x3C, 4-pin | 1 | same | no Digi-Key listing confirmed (~$4–8 anywhere) | D4/D5. **3V3, never 5V** (archive/WIRING.md §5) — the perfboard runs it from 3V3 (jeff, 2026-10-08; the sourcing guide said 5 V and was wrong) — check which way round the module's VCC/GND pins are before fixing the footprint; modules differ. Optional in software |
 | Momentary push button | 1 | same | **Omron B3F-1000** (SW400-ND, $0.24) | D1, wake. On a slider node a 1 s hold triggers homing |
 | Second button (manual control) | 0–1 | — | B3F-1000 | **Reserve the footprint on D9**, the one spare pad. No firmware yet |
 | Female header, 7-pin | 2 | as used | **Sullins PPTC071LFBN-RC** (S7005-ND, ~$0.37) | The XIAO's socket. 8.5 mm tall. Gold PPPC071LFBN-RC was backordered |
@@ -157,18 +157,16 @@ D7/D8/D9" until 2026-10-08, from before the 2026-09-17 pin budget.
 | Part | Qty | Perfboard | PCB | Notes |
 |---|---|---|---|---|
 | **SCT-013-030** current clamp | 1 | same | Amazon/eBay (~$8–10); no Digi-Key or Mouser listing | 30 A : 1 V. **Voltage output — the burden resistor is INSIDE the plug. Do not add one.** 3.5 mm plug |
-| **3.5 mm switched jack** | 1 | **Adafruit TRRS Jack Breakout #5764** | **CUI SJ1-3525N** (CP1-3525N-ND, $1.00) | **Buy a switched one.** The switch pulls an unplugged jack to 3V3, so it reads as railed (ignored) instead of the bias midpoint — which is indistinguishable from an idle tool. Wiring and metering: WIRING.md §8 |
+| **3.5 mm switched jack** | 1 | **Adafruit TRRS Jack Breakout #5764** | **CUI SJ1-3525N** (CP1-3525N-ND, $1.00) | **Buy a switched one.** The switch pulls an unplugged jack to 3V3, so it reads as railed (ignored) instead of the bias midpoint — which is indistinguishable from an idle tool. Wiring and metering: archive/WIRING.md §8 |
 | 1 kΩ resistor | 2 | same | Yageo CFR-25JB-52-1K | The bias divider, 1k/1k off 3V3. **Not 10k/10k** |
 | Bulk cap on the bias node, 10 µF electrolytic | 1 | same | Panasonic EEU-FR1V100 (10 µF) | Bias node to GND. What the planer-sensor node runs (jeff, 2026-10-09) |
 | 0.1 µF ceramic | 1 | same | C320C104K5R5TA | Bias node to GND |
-| 10 kΩ resistor | 1 | **new** | Yageo CFR-25JB-52-10K | Plug-detect: jack switch → 3V3 |
-| 1 kΩ resistor | 1 | **new** | CFR-25JB-52-1K | Inrush: series, jack tip → D0 |
-| Schottky, 1N5817 | 2 | **new** | 1N5817-TP; or one **BAT54S** (SOT-23) instead | Inrush: D0 → 3V3 and GND → D0. **Margin is thin** — see WIRING.md §8 |
+| 10 kΩ resistor | 1 | same | Yageo CFR-25JB-52-10K | Plug-detect: jack switch → 3V3 |
+| 1 kΩ resistor | 1 | same | CFR-25JB-52-1K | Inrush: series, jack tip → D0 |
+| Schottky, 1N5817 | 2 | same | 1N5817-TP; or one **BAT54S** (SOT-23) instead | Inrush: D0 → 3V3 and GND → D0. **Meter their direction before power-up** — a reversed one holds D0 low and drags 3V3 down (two boards, 2026-10-11). Margin is thin |
 
-Measured floor without the new parts: **~0.195 A** (6.2–7.0 ADC counts), stable
-across four sessions and two supply topologies. Trip lands at ~0.8 A. **Re-measure
-it with the three new parts fitted** — they add source impedance and leakage on
-the bias node.
+Fitted on the cyclone and miter saw boards (2026-10). With them, the cyclone reads a floor of **0.04 A** and trips at
+0.23 A. (Before them, on the bench: ~0.195 A, trip ~0.8 A.)
 
 ## 4. The collector board — extras beyond the core
 
@@ -211,7 +209,7 @@ the servo rather than through a buck. **Never shares a board with PWM servos** �
 |---|---|---|
 | **ST3215** serial bus servo, 12 V | 1 | 30 kg·cm. Waveshare SKU 22414 ($21.99) or RobotShop ($28.24 incl. tariffs). **Not the 7.4 V variant** |
 | Endstop switch, NC | 2 | D8/D9. Normally-CLOSED so a snapped lead reads as triggered and stops the carriage |
-| Bus interface | 1 | The **Seeed XIAO Bus Servo Adapter** (what the bench slider uses), or hand-built: a 74LVC1G125 buffer per WIRING.md §7 — not just a 1 kΩ on TX |
+| Bus interface | 1 | The **Seeed XIAO Bus Servo Adapter** (what the bench slider uses), or hand-built: a 74LVC1G125 buffer per archive/WIRING.md §7 — not just a 1 kΩ on TX |
 
 ---
 
@@ -266,11 +264,8 @@ Recorded so nobody re-buys something that was reasoned away.
 
 ## Open
 
-- **Inrush protection for the CT** is now a proposed circuit (§3, WIRING.md §8),
-  not yet fitted or scoped. 45–50 A through a 30 A clamp puts ~4 V on a 3.6 V-max
-  pin, and `isRailed()` cannot see it.
-- **"Clamp unplugged" is not reported.** The switched jack makes it detectable
-  (D0 railed high); the firmware ignores a railed reading but says nothing.
+- **Inrush protection for the CT** is fitted but not scoped: 45–50 A through a 30 A clamp puts ~4 V on a 3.6 V-max pin
+  before the Schottkys, and nobody has watched a worst-case motor start on a scope.
 - **The 315 MHz module's supply** — 5 V or 12 V on the PCB. Bench it before routing.
 - **A smaller clamp for small tools.** An SCT-013-005 is six times the resolution.
   Nothing needs it yet.

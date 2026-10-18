@@ -1,7 +1,7 @@
 // bin-sensor.test.js — the reported SHAPE of a dust bin: present, or absent.
 //
 // This is the JS half of a pair, and the halves assert DIFFERENT things on
-// purpose (docs/shop-schema-rfc.md §7.5):
+// purpose (docs/archive/shop-schema-rfc.md §7.5):
 //
 //   here                 the omission rule — `systems[].bin` appears only when a
 //                        sensor watches that collector, and an unwatched bin is

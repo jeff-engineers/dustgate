@@ -10,7 +10,7 @@
 // in JS: the firmware reported the plug's facts and a browser decided what they
 // meant. That stopped being sufficient when the way we COMMAND a blower became
 // stateless — a servo pressing a fob, or an RF frame, sends an edge and learns
-// nothing (docs/tool-sensing-rfc.md §4.2a/§4.2b) — because a browser nobody has
+// nothing (docs/archive/tool-sensing-rfc.md §4.2a/§4.2b) — because a browser nobody has
 // open cannot be the only thing that notices a blower failed to start.
 //
 // So kCollectorRunningW and kCollectorSpinupGraceMs must equal

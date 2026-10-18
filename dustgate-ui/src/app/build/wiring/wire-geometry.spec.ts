@@ -27,7 +27,7 @@ group('W1 the port strip is the hardware budget');
 {
   // A board stands on an ordinary grid cell. It sat in a rail above the whole grid
   // until 2026-08-16, in negative y with its own slot pitch — see
-  // docs/boards-on-canvas-plan.md for why that came out.
+  // docs/archive/boards-on-canvas-plan.md for why that came out.
   const c = { x: cellX(3), y: cellY(0) };
   // THREE since 2026-09-16, and never a sum. The strip used to carry the PWM
   // bank plus a stepper port, reading MAX_SERVOS_PER_HOST and MAX_LINEAR_PER_HOST

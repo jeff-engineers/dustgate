@@ -57,7 +57,7 @@ static constexpr uint32_t kSampleWindowMs   = 60;   // ~3.5 cycles at 60 Hz
 //       reading that suggested it came off the BREADBOARD and was a platform
 //       fault, not a location: dcCounts drifted 1671 -> 1744 -> 1778 and stayed,
 //       which ambient field cannot do, since magnetic pickup is AC with a zero
-//       mean. A spring contact on a high-impedance analog node. WIRING.md had
+//       mean. A spring contact on a high-impedance analog node. docs/archive/WIRING.md had
 //       already written the tell down in the same session.
 //   "a 0.78 A trip is too sensitive" — nothing else is on the conductor. A clamp
 //       goes INSIDE the tool's own switch or motor enclosure, around that tool's
@@ -143,7 +143,7 @@ static constexpr float kClearRatio    = 0.75f;
 // limit should mean.
 //
 // The healthy floor is 6.2-7.0 counts, measured across four sessions on two
-// supply topologies (RFC §5.5b and WIRING.md §2), so a real board sits about 5x
+// supply topologies (RFC §5.5b and docs/archive/WIRING.md §2), so a real board sits about 5x
 // under the limit. The breadboard fault that motivated this was 76 — 11x the
 // healthy floor, and comfortably caught.
 //

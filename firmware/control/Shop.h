@@ -478,7 +478,7 @@ inline std::vector<SystemPlan> planShopTransition(
 }
 
 // IS THIS BOARD OPTIONAL — can the shop lose it without losing anything but a reading (2026-10-07, jeff;
-// docs/optional-nodes-plan.md)? REQUIRED when the layout gives it any gate, or any of a collector's jobs (transmitter,
+// docs/archive/optional-nodes-plan.md)? REQUIRED when the layout gives it any gate, or any of a collector's jobs (transmitter,
 // clamp, bin beam); OPTIONAL otherwise, which is a board that only senses tools or one the layout does not use. An optional
 // board that is off raises no problem: "off" is its normal state (the planer's board is powered with the planer), and its
 // tools read as off meanwhile, the safe way round (RFC §5.6a). Derived, never chosen. The primary is never optional.

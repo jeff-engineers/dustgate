@@ -279,7 +279,7 @@ group('R4  obstacle in the span — one detour, no lasso');
 
 // ── R4b · a board is an obstacle like any other ──────────────────────────────
 
-// Boards came back onto the canvas on 2026-08-16 (docs/boards-on-canvas-plan.md).
+// Boards came back onto the canvas on 2026-08-16 (docs/archive/boards-on-canvas-plan.md).
 // A board owns its cell exclusively, and this is what that has to mean for the
 // router: a duct steers around the hardware rather than being drawn through it.
 group('R4b a duct routes around a board');

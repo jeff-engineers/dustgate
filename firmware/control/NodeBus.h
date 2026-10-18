@@ -2,7 +2,7 @@
 // NodeBus.h — routes each selector to the ActuatorBus that actually drives it.
 //
 // This is the ONLY place in the firmware that knows a gate might live on another
-// board. Every selector carries a `controllerId` (docs/topology-schema.md);
+// board. Every selector carries a `controllerId` (docs/archive/topology-schema.md);
 // NodeBus maps that id to a bus:
 //
 //   controllerId absent, or == this board's own id  → the local bus

@@ -9,7 +9,7 @@
 // means on, and asking twice is harmless. The collector is not, any more. It is
 // operated by pressing the button on its own remote — with a servo, or by
 // injecting an RF frame — and that button on the Rockler fob is a TOGGLE
-// (docs/tool-sensing-rfc.md §4.2b). A press is an EDGE. It says "change", never
+// (docs/archive/tool-sensing-rfc.md §4.2b). A press is an EDGE. It says "change", never
 // "be on", so the firmware cannot know the blower's state from what it sent.
 // Only the draw says, which is why CollectorPlugState.h had to become a pair.
 //

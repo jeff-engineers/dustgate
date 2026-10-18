@@ -47,7 +47,7 @@
 #     is the LAYOUT pointing it at a bin, a clamp and a remote.
 #     A NODE can do all three (clamp, bin beam, transmitter) since 2026-10-04,
 #     so a collector's board may be a node.
-#     firmware/WIRING.md#9-bin-sensor has the table of what works where.
+#     docs/archive/WIRING.md#9-bin-sensor has the table of what works where.
 #
 #   THE SLIDER BOARD — add --slider to either flash command:
 #
@@ -830,7 +830,7 @@ run_flash() {
     echo "        RF TX         yes on a PRIMARY; NOT on a node (still in .ino)"
     echo "        bin sensor    yes on a PRIMARY; NOT on a node (still in .ino)"
     echo "        CT clamp      code is in on both, NEVER RUN on either"
-    echo "      firmware/WIRING.md#9-bin-sensor has the table."
+    echo "      docs/archive/WIRING.md#9-bin-sensor has the table."
     echo ""
     echo "  ⚠️  THIS IS A COMPLETE PRIMARY — web UI, topology, plug polling."
     echo "      A one-collector shop is a whole shop, so that is right. In a shop"

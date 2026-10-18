@@ -44,7 +44,7 @@ int main() {
     dp.update(*rt, {m}, {}, 108000);
     ok("...cleared by the next move", !rt->hasProblem("move:n3"));
     delete rt; }
-  printf("\nP1a an OPTIONAL board that is off is not a problem (docs/optional-nodes-plan.md)\n");
+  printf("\nP1a an OPTIONAL board that is off is not a problem (docs/archive/optional-nodes-plan.md)\n");
   { NodeBus nb; TopologyRuntime* rt = load(nb); DeviceProblems dp;
     BoardView b; b.host = "planer"; b.linked = false; b.downForMs = 10 * kBoardOfflineAfterMs; b.optional = true;
     dp.update(*rt, {b}, {}, 100000);

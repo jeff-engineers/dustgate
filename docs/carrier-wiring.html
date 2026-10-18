@@ -58,7 +58,7 @@ td.mono { white-space: nowrap; }
 
 <div class="wrap">
   <h1>DustGate carrier wiring</h1>
-  <p class="lede">The one PWM board — gate, CT-sensing node or collector by what's fitted — drawn twice: the <b>perfboard</b> as it runs in the shop today with the new CT network added, and the <b>PCB</b> for the next prototype round with the sourced parts. Pad numbers come from <code>firmware/boards/xiao_c5.h</code>; the reasoning lives in <code>firmware/WIRING.md</code>, the part numbers in <code>docs/BOM.md</code>.</p>
+  <p class="lede">The one PWM board — gate, CT-sensing node or collector by what's fitted — drawn twice: the <b>perfboard</b> as it runs in the shop today, CT network included, and the <b>PCB</b> for the next prototype round with the sourced parts. Pad numbers come from <code>firmware/boards/xiao_c5.h</code>; the old reasoning (history) in <code>docs/archive/WIRING.md</code>, the part numbers in <code>docs/BOM.md</code>.</p>
 
   <div class="tabs" role="tablist" aria-label="Build">
     <button role="tab" id="tab-perf" aria-selected="true" data-build="perf">Perfboard</button>
@@ -72,6 +72,7 @@ td.mono { white-space: nowrap; }
     <div><h4>The jack and the clamp</h4><ul>
       <li>Nothing inserted: tip contact (<code>Left</code> / pin 2) to the switch (<code>LSw</code> / pin 10) beeps; insert a plug and it opens.</li>
       <li>SCT-013-030 plug: tip to sleeve reads tens of ohms. If tip to <i>ring</i> reads it instead, move the bias wire to <code>Ring</code> / pin 3.</li>
+      <li>Diode mode, XIAO out: red on D0, black on 3V3 reads ~0.2–0.4 V (D1 forward); red on GND, black on D0 the same (D2). The other way round both read open. A backwards one holds D0 near ground and drags 3V3 down (two boards, 2026-10-11).</li>
     </ul></div>
     <div><h4>The rails</h4><ul>
       <li>Trim the servo buck to ~6 V <b>before</b> a servo is plugged in. Check each servo's maximum before going higher.</li>
@@ -83,12 +84,12 @@ td.mono { white-space: nowrap; }
       <li>The MPM3610 breakout's pins follow the LM1117 TO-220 order plus EN — go by the silkscreen.</li>
     </ul></div>
     <div><h4>After it's built</h4><ul>
-      <li>Read the CT floor with servos idle and moving: ~6.7 counts (0.195 A) is the number to beat with the new parts fitted.</li>
-      <li>Unplug the clamp: the node should stop reading it (D0 railed high), not read zero.</li>
+      <li>Read the CT floor on the Boards page with servos idle and moving: the cyclone board reads 0.04 A with the network fitted.</li>
+      <li>Unplug the clamp: the board should report "No clamp plugged in" (the jack switch pulls D0 to 3V3), not read zero.</li>
     </ul></div>
   </div>
 
-  <p class="foot">Drawn 2026-10-08. Not to scale: the XIAO's pads are spaced to fit what hangs off them. The perfboard column is the reference — it works — and nothing in the PCB column or the new CT parts has been on a board yet.</p>
+  <p class="foot">Drawn 2026-10-08. Not to scale: the XIAO's pads are spaced to fit what hangs off them. The perfboard column is the reference — it works, CT network included — and nothing in the PCB column has been on a board yet.</p>
 </div>
 
 <script>
@@ -124,8 +125,8 @@ function build(kind) {
       ],
       notes: [
         'Bias node: 1 kΩ to 3V3 · 1 kΩ to GND · 100 nF + bulk to GND',
-        'At D0: 1N5817 D0→3V3 and GND→D0' + (P ? ' (or one BAT54S)' : ' — new'),
-        P ? 'Keep the bias node millimetres long, away from both bucks' : '10 kΩ, 1 kΩ series and the diodes are new',
+        'At D0: 1N5817 D0→3V3 and GND→D0' + (P ? ' (or one BAT54S)' : ''),
+        P ? 'Keep the bias node millimetres long, away from both bucks' : 'Fitted on the latest perfboards (2026-10). Meter both diodes before power-up: reversed, they hold D0 low',
       ] },
     { pads: ['D1'], title: 'Wake button', part: P ? 'Omron B3F-1000' : 'momentary, NO',
       pins: [['A', sig('D1', ''), 'INPUT_PULLUP'], ['B', 'GND', '']] },
@@ -411,7 +412,7 @@ function drawCT(kind) {
   W([[720, ty], [xiaoX, ty]], sig); dot(dx, ty, sig);
   W([[dx, ty], [dx, ty - 96]], sig); D(dx, ty, ty - 96, 'D1', P ? '1N5817-TP' : '1N5817', -1); v33Sym(dx, ty - 96);
   W([[dx, ty], [dx, ty + 96]], sig); D(dx, ty + 96, ty, 'D2', P ? '1N5817-TP' : '1N5817', -1); gndSym(dx, ty + 96);
-  note(dx - 20, ty + 150, ['D1 + D2 clip a motor start to ~3.6 V / −0.3 V.', P ? 'Or one BAT54S in their place.' : 'New: not yet fitted.'], 'end');
+  note(dx - 20, ty + 150, ['D1 + D2 clip a motor start to ~3.6 V / −0.3 V.', P ? 'Or one BAT54S in their place.' : 'Fitted. Meter their direction first.'], 'end');
   note(jx + jw + 170, ty + 34, ['No plug: the switch joins tip to R4,', 'so D0 reads 3.3 V — "railed", and the', 'firmware ignores it instead of seeing', 'an idle tool. A plug in opens the switch.']);
 
   // ── the XIAO's three pads this circuit uses
@@ -436,7 +437,7 @@ function drawBin(kind) {
   // ── the sensor, in the collector
   const sx = 20, sw = 190, sy0 = 150, sh = 280;
   const yBrown = 200, yBlack = 300, yBlue = 380;
-  // ── the two 12 V lamps, also in the collector (WIRING.md §9). Lit by 12 V and the Banner, never by the board.
+  // ── the two 12 V lamps, also in the collector (archive/WIRING.md §9). Lit by 12 V and the Banner, never by the board.
   const ly0 = sy0 + sh + 24, yLampP = ly0 + 46, yGreenN = ly0 + 86, yRedN = ly0 + 126;
   o.push(`<rect x="${sx}" y="${ly0}" width="${sw}" height="150" rx="10" fill="${card}" stroke="${rule}" stroke-width="1.5"/>`);
   o.push(T(sx + 14, ly0 + 22, '12 V lamps', { w: 700, size: 14 }));
@@ -467,7 +468,7 @@ function drawBin(kind) {
       o.push(T(tx + 22, y + 4, n, { mono: true, size: 10, w: 700, anchor: 'middle' }));
     });
   } else {
-    note(tx - 20, yBrown - 40, ['flying leads,', 'soldered']);
+    note(tx - 20, yBrown - 40, ['flying leads,', 'ferrules crimped']);
   }
   W([[sx + sw + 8, yBrown], [340, yBrown], [340, 120]], brown);
   W([[sx + sw + 8, yBlack], [640, yBlack]], black);
@@ -536,8 +537,8 @@ function drawBin(kind) {
 const COPY = {
   perf: {
     h: 'Perfboard', status: '<span class="status built">running in the shop</span>',
-    intro: 'What is soldered today, plus the CT network from the sourcing guide drawn in: the switched jack on the Adafruit TRRS breakout (its silkscreen labels are what the drawing uses), a 10 kΩ plug-detect pull-up through its <code>LSw</code> switch, and a 1 kΩ with two Schottkys protecting D0 from a motor start. Those CT parts are new and unbuilt; everything else is what runs.',
-    warn: '<b>The CT additions have not been on a board.</b> Re-measure the noise floor once they are fitted (they add 1 kΩ in front of the ADC and a little leakage), and scope a worst-case motor start: the Schottkys clip D0 at roughly 3.5–3.7 V against a 3.6 V maximum, which is margin, not much of it.',
+    intro: 'What is soldered today, plus the CT network from the sourcing guide drawn in: the switched jack on the Adafruit TRRS breakout (its silkscreen labels are what the drawing uses), a 10 kΩ plug-detect pull-up through its <code>LSw</code> switch, and a 1 kΩ with two Schottkys protecting D0 from a motor start. The latest perfboards have all of it fitted (2026-10).',
+    warn: '<b>Meter the two Schottkys before powering a board.</b> On 2026-10-11 two boards had one fitted backwards, which held D0 near ground and dragged the XIAO\'s 3V3 down; reversed on the planer-sensor copy as well. With them right, the cyclone board read a floor of 0.04 A and tripped at 0.23 A. Still not done: scoping a worst-case motor start — the Schottkys clip D0 at roughly 3.5–3.7 V against a 3.6 V maximum, which is margin, not much of it.',
   },
   pcb: {
     h: 'PCB', status: '<span class="status plan">next prototype round</span>',
@@ -557,7 +558,7 @@ function render(kind) {
     <h3>Every wire</h3>
     ${wireTable(b)}
     <h2>The CT clamp circuit, close up</h2>
-    <p>Everything between the clamp's plug and D0, drawn as a schematic with each part named. The perfboard tab shows the Adafruit breakout's printed labels; the PCB tab, the SJ1-3525N's pin numbers. The 10 kΩ, the 1 kΩ in series and both diodes are new; the bias node is what runs today. C2 is a 10 µF electrolytic, as on the planer-sensor node.</p>
+    <p>Everything between the clamp's plug and D0, drawn as a schematic with each part named. The perfboard tab shows the Adafruit breakout's printed labels; the PCB tab, the SJ1-3525N's pin numbers. All of it is fitted on the latest perfboards; meter the diodes' direction before power-up. C2 is a 10 µF electrolytic, as on the planer-sensor node.</p>
     <div class="sheet">${drawCT(kind)}</div>
     <div class="tablewrap" style="margin-top:12px"><table><thead><tr><th>Part</th><th>Value</th><th>From</th><th>To</th><th>Job</th></tr></thead><tbody>
       <tr><td><b>R1</b></td><td class="mono">1 kΩ</td><td>3V3</td><td>bias node</td><td>top of the divider</td></tr>

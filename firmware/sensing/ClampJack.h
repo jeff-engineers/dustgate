@@ -3,7 +3,7 @@
 //
 // It replaced the per-board "clamp" switch in the layout. caps.ct is the pin map — true of every PWM board, plugged or
 // not — so the layout used to carry `clamp: true` for a person to say "this one has a clamp". The switched 3.5 mm jack
-// makes that a reading instead: with no plug in, the jack's switch ties the tip to 3V3 through 10 kΩ (WIRING.md §8), and
+// makes that a reading instead: with no plug in, the jack's switch ties the tip to 3V3 through 10 kΩ (docs/archive/WIRING.md §8), and
 // the board enables D0's own pull-up so a pad with nothing wired to it reads the same. A clamp holds the pin at the
 // bias midpoint (~1.65 V). So: railed high = nothing plugged in; mid-rail = a clamp; anything between = a bias network
 // wired wrong, which is no clamp anyone can read (kMinClampMv / kMaxClampMv).
@@ -16,8 +16,8 @@
 // average stays there, so a saw starting cannot read as an unplugged clamp.
 //
 // PURE — no Arduino.h. The board passes its own ADC read and delay to probeMeanMv(). test_clampjack.cpp.
-// ⚠ HARDWARE-UNVERIFIED: that the C5's ADC keeps D0's internal pull-up enabled (gpio_pullup_en after the ADC is set
-// up). Without it, a board with NOTHING on D0 floats and may read as plugged in; a jack build is unaffected (its 10 kΩ).
+// Verified 2026-10-17: the C5's ADC keeps D0's internal pull-up enabled (gpio_pullup_en after the ADC is set up) — four
+// shop boards with NOTHING on D0 all report "no clamp" rather than floating. A jack build has its own 10 kΩ anyway.
 // =============================================================================
 #pragma once
 #include <cstdint>

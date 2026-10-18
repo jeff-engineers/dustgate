@@ -520,7 +520,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       // A CURRENT CLAMP: the body, the seam where the jaw opens, the hole the
       // conductor passes through, and the lead. The literal drawing rather than
       // an abstracted ring-on-a-wire — at 24px beside a wall-socket square, the
-      // thing a woodworker actually recognises (D-72, ct-on-a-board.html).
+      // thing a woodworker actually recognises (D-72, docs/mockups/archived/ct-on-a-board.html).
       clamp:         svg('<rect x="6" y="3.5" width="12" height="14" rx="3"/><path d="M6 10.5h3.4M14.6 10.5h3.4"/><circle cx="12" cy="10.5" r="2.4"/><path d="M12 17.5v3"/>'),
       // A controller: the module and its port strip, the same shape the canvas draws.
       boardSetup:    svg('<rect x="4" y="6" width="16" height="10" rx="2"/><path d="M8 16v2M12 16v2M16 16v2"/>'),
@@ -4293,7 +4293,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   // thing for a brain as it does for a gate.
   //
   // Nothing stops you dragging a board low, where its cables route badly — decided,
-  // see docs/boards-on-canvas-plan.md. The cables redraw live during the drag, so a
+  // see docs/archive/boards-on-canvas-plan.md. The cables redraw live during the drag, so a
   // bad drop shows as ugly wire inside the same gesture, and that is the feedback.
   onBoardDown(evt: PointerEvent, b: BoardVM): void {
     evt.preventDefault(); evt.stopPropagation();
@@ -5130,7 +5130,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     // 'info', not 'warn': the amber of a refusal on a move that is about to succeed
     // reads as "stop", which is the confusion this whole split exists to undo.
     if (this.dropWarn) return { text: this.dropWarn, kind: 'info' };
-    // ── SAVE PROBLEMS SAY "NOT SAVED" (2026-10-17, docs/mockups/save-and-errors.html) ──
+    // ── SAVE PROBLEMS SAY "NOT SAVED" (2026-10-17, docs/mockups/archived/save-and-errors.html) ──
     // This used to read "Saved here, but the controller won't take it yet": nothing was saved (the draft lives only in
     // this page, and a reload dropped it without a word), the brain had refused nothing (the app's own check had), and
     // the reason was the validator's. Now each state says what is true, where the changes are, and what to press.

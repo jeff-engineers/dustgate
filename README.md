@@ -4,7 +4,34 @@ This project is a work in progress and is not ready for use by anyone but its au
 
 Automated dust collection for a woodworking shop. When a tool starts drawing power, DustGate opens that tool's blast gate, closes the others, and starts the dust collector. When the last tool stops it leaves the gate where it is and lets the collector coast down. You lay the shop out once on a canvas in a phone browser (collector, ducts, gates, tools) and the brain routes from that picture.
 
-**What has run on real hardware, and what has not.** The honest list lives at the top of [`CLAUDE.md`](CLAUDE.md) and is updated after each bench session. In short: a brain and PWM gate boards linked over WiFi and moved real gates; plugs (Shelly and Tasmota) sensed tools; a current clamp on a board started the collector and moved a gate; a board keyed the collector's RF remote and switched a real receiver; and the brain ran on a Mac for a whole bench shop on 2026-10-06. **Not yet run:** the brain on a Raspberry Pi, the 4" manifold, anything under production load, and several bench checks listed in [`TODO/TODO.md`](TODO/TODO.md). Treat everything else as compiled and host-tested only.
+See [what has run on hardware](#what-has-run-on-hardware) before trusting any feature: most of the code compiles and passes host tests well ahead of what has run on real boards.
+
+---
+
+## What has run on hardware
+
+The one list (dated) of what has actually run on real boards. Anything not here is compiled and host-tested only.
+Update it in the same session as the bench that proves something.
+
+- **Primary and node roles** with PWM servos and NodeLink between them; a real tool opening its gate.
+- **The ST3215 slider**: as a primary (2026-08-28: homing, the reference sweep, gate moves on a 4-gate rockler-2.5 rack);
+  as a NODE (2026-09-03); through the Pi brain (2026-10-17: homed on its first SET, then moved). A failed home reaches the
+  slider page in the node's own words (STATE.err, 2026-10-17). Not run: the wake-button homing trigger.
+- **The bin sensor** (QS18VN6D through a discrete 4N35 — not a PC817 breakout, which put 4 V on a GPIO): on a primary
+  2026-09-13; **from a node, end to end, 2026-10-11** — `bin-full`, and every board on that system blinking red.
+- **A CT clamp starts the collector and moves a gate**, end to end (2026-09-18). ⚠️ It takes TWO gates to see it:
+  with one there is nothing to route away from, and "idle leaves the gate where it is" means doing nothing is correct.
+- **Clamp-jack detection** (2026-10-17): a switched jack (cyclone, miter saw) and a bare D0 (the C5's internal
+  pull-up survives the ADC setup) both read "no clamp" when empty.
+- **The collector's jobs on a node**: PRESS (2026-10-05), keying a real Rockler receiver (2026-10-06), the bin beam
+  (2026-10-11).
+- **The native brain**: a whole bench shop on a Mac (2026-10-06: gate moves on five boards, tool → gate → collector, the
+  press policy correcting an inverted belief); **the shop on a Raspberry Pi since 2026-10-11**, including node OTA
+  updates, optional boards (a board with no gate switched off raises nothing), and the servo pulse range from Settings.
+- **The status screen** on a C5 (D4/D5), wake button on D1.
+
+**Not yet proven:** a PRESS never replaying across a link drop (unit-tested only); the collector sensed by a CT clamp
+(the Shelly + contactor build); node plug polling under a load; anything under load; 9 V vs 12 V; the 4" manifold.
 
 ---
 
@@ -19,7 +46,7 @@ Automated dust collection for a woodworking shop. When a tool starts drawing pow
 
 - **Boards.** One part, the [Seeed XIAO ESP32C5](https://www.seeedstudio.com), does every job; what it does is chosen by which program it is flashed with and by the layout. A **primary** is the brain. A **node** is any other board: it drives gates, and can also read a current clamp, a dust-bin sensor, poll plugs for the brain, or key the collector's remote. Nodes dial the brain themselves and find it again by a UDP beacon if it moves, so no node needs a fixed address.
 - **The layout** is one document the brain stores: collectors (one per airflow system), ducts, gates, machines and their ports, and which board drives what. The app edits it; every other part reads it. Nothing on a node interprets it: a node is only ever sent resolved angles or positions.
-- **Sensing is not switching.** A tool is only ever *sensed*. The collector is the one thing DustGate commands, and it does it by pressing the RF remote already in the shop, never by carrying motor current. The reasoning is in [`CLAUDE.md`](CLAUDE.md) and [`docs/tool-sensing-rfc.md`](docs/tool-sensing-rfc.md).
+- **Sensing is not switching.** A tool is only ever *sensed*. The collector is the one thing DustGate commands, and it does it by pressing the RF remote already in the shop, never by carrying motor current. The reasoning is in [`CLAUDE.md`](CLAUDE.md) and [`docs/archive/tool-sensing-rfc.md`](docs/archive/tool-sensing-rfc.md).
 - **One rule set, one codebase for decisions.** Routing, sequencing and the node protocol are plain C++ (`firmware/control/`), host-tested, and the same files run in the ESP32 and in the native brain below. The behaviour is specified once in JavaScript ([`shared/device-model/`](shared/device-model/README.md)) and both the simulators and the firmware are held to it by paired tests.
 
 ### Where the brain runs
@@ -28,9 +55,9 @@ Automated dust collection for a woodworking shop. When a tool starts drawing pow
 |---|---|---|
 | **On an ESP32-C5** | The shipping design. Compiles, host-tested, and run on the bench. | One cheap board does everything, but RAM is the ceiling (see [how big a shop](#how-big-a-shop-can-a-c5-run)). |
 | **On a Mac or Linux box** (`native/`) | Run on the bench for a whole shop, 2026-10-06. | The same brain core with a Boost.Beast shell: links nodes, routes gates, presses the collector, polls and claims plugs, serves the app. `make -C native test`. See [`native/README.md`](native/README.md). |
-| **On a Raspberry Pi** (`native/pi/`) | **Planned as an option, never run on a Pi.** | The scripts (setup, deploy from the Mac, update with rollback, a systemd unit) are written, and CI builds the brain with GCC on Linux. The first goal is only "run the shop without the Mac". See [`native/pi/README.md`](native/pi/README.md). |
+| **On a Raspberry Pi** (`native/pi/`) | **Runs the shop** (since 2026-10-11). | The same native brain, deployed from the Mac with `native/pi/deploy.sh` (setup, update with rollback, a systemd unit). See [`native/pi/README.md`](native/pi/README.md). |
 
-The plan is that a shop can **optionally move its brain from the C5 to a Raspberry Pi** when it outgrows the C5, without changing anything else: the nodes, the plugs, the layout and the app stay as they are, because the Pi runs the same brain code. The C5 stays a complete brain for a small shop, and the reasoning for the split is in [`docs/brain-options.md`](docs/brain-options.md). A Pi brain has no pins of its own, so the collector's remote and the dust-bin sensor sit on a node (which is already how a node can be set up). What a Pi would need before anyone but the author could install it (first-boot WiFi, a read-only root, a hardware watchdog) is not built.
+The plan is that a shop can **optionally move its brain from the C5 to a Raspberry Pi** when it outgrows the C5, without changing anything else: the nodes, the plugs, the layout and the app stay as they are, because the Pi runs the same brain code. The C5 stays a complete brain for a small shop, and the reasoning for the split is in [`docs/archive/brain-options.md`](docs/archive/brain-options.md). A Pi brain has no pins of its own, so the collector's remote and the dust-bin sensor sit on a node (which is already how a node can be set up). What a Pi would need before anyone but the author could install it (first-boot WiFi, a read-only root, a hardware watchdog) is not built.
 
 ---
 
@@ -58,17 +85,17 @@ A realistic **small shop** on a C5 brain: 8 to 12 tools, 6 to 8 gate boards, 1 o
 
 | Part | Notes |
 |------|-------|
-| Seeed XIAO ESP32C5 | The one board: primary or node, flashed per role. Pin map in [`firmware/WIRING.md`](firmware/WIRING.md#1-the-board-and-its-one-pin-map) |
+| Seeed XIAO ESP32C5 | The one board: primary or node, flashed per role. Pin map in [`firmware/boards/xiao_c5.h`](firmware/boards/xiao_c5.h) |
 | Servo on each ball valve (or a printed gate) | A PWM board drives one gate |
 | ST3215 bus servo on a rack and pinion with two endstops | The sliding-gate option, up to 8 gates over a Rockler manifold. A **slider board** drives only this; PWM servos and the serial bus never share a board |
 | Shelly Plug (US) per tool | Senses a tool, ~$21. A Gen 2 device (the `/rpc/` API) |
 | Tasmota plug with power metering | Sense-only, with no relay, so it can never switch a tool on. Found by address or a network sweep, because stock Tasmota does not announce itself |
-| 30 A current clamp on a board | The other way to sense a tool, and the right one for 240 V tools, which a plug-in outlet cannot meter. Switched on per board in the app |
+| 30 A current clamp on a board | The other way to sense a tool, and the right one for 240 V tools, which a plug-in outlet cannot meter. A board reports whether a clamp is plugged into its jack |
 | Dust-bin beam sensor | Optional; reports a full bin |
-| 315 MHz transmitter, or a servo that presses the fob | Presses the collector's existing RF remote |
+| A switch for the collector | A 315 MHz transmitter that presses the collector's existing RF remote, or a smart relay switching a contactor. Either way a clamp or a metering plug confirms the blower really started |
 | 12 to 24 V supply | For the slider's servo; ball-valve boards run from USB or their own supply |
 
-Bill of materials, with the passives whose values matter: [`docs/BOM.md`](docs/BOM.md). Wiring: [`firmware/WIRING.md`](firmware/WIRING.md). The 2.5" Rockler manifold is measured (gates about 82.9 mm apart; see [`docs/dual-endstop-calibration.md`](docs/dual-endstop-calibration.md)). The 4" variant is not, and is disabled in the UI until it is.
+Bill of materials, with the passives whose values matter: [`docs/BOM.md`](docs/BOM.md). Wiring: [`docs/carrier-wiring.html`](docs/carrier-wiring.html). The 2.5" Rockler manifold is measured (gates about 82.9 mm apart, `MANIFOLD_PROFILES` in the device model). The 4" variant is not, and is disabled in the UI until it is.
 
 ---
 
@@ -195,15 +222,15 @@ firmware/                ESP32 C++ (Arduino / PlatformIO)
   outlets/               Shelly and Tasmota drivers, plug claiming and provisioning (shared with native/)
   api/                   the HTTP and WebSocket server; api/ApiCore.h holds the routes both brains share
   sensing/               the current-clamp trip logic
-  boards/                pin maps
+  boards/                pin maps — the source of truth for which pad does what
   test/                  host (g++) tests and fixtures
-  WIRING.md              wiring reference
 
 native/                  the brain as a Linux / macOS program, and native/pi/ for the Raspberry Pi
 dustgate-ui/             the Angular app, served from the brain (see its README)
 shared/device-model/     the canonical device model, constants manifest and conformance suites
 tools/                   mock-api.js, mock-node.js and the checks run in CI
-docs/                    design notes, RFCs, mockups and the bill of materials
+docs/                    the bill of materials, the wiring page, and mockups (canvas.html and decisions.html are canonical)
+docs/archive/            superseded design notes, RFCs and plans: history, never a current reference
 TODO/                    TODO.md (open items) and DONE.md (decisions worth keeping)
 .github/workflows/       CI
 ```
@@ -237,7 +264,7 @@ node shared/device-model/nodelink-conformance.js ws://<node>.local/nodelink
 ## Limitations and known issues
 
 - Validation on hardware is partial (see the top of this file). The open bench checks are in [`TODO/TODO.md`](TODO/TODO.md).
-- The Raspberry Pi path is untested and is not a product: it needs first-boot WiFi, a read-only root and a watchdog before anyone else could install it.
+- The Raspberry Pi brain runs the author's shop, but it is not a product: it needs first-boot WiFi, a read-only root and a watchdog before anyone else could install it.
 - One servo moves at a time across the whole shop, and an interrupted move is re-sent once per fault, not retried indefinitely.
 - A collector started for a few seconds of tool use can be slow to arrive; where the time goes is still to be measured on a bench.
 - 240 V tools need a current clamp; plug-in outlets are 120 V only.

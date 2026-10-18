@@ -3,7 +3,7 @@
 // STATUS (2026-10-04): step 1 of the native build. This runs the node half of the core — the SAME
 // NodeSession the ESP32 runs — against real nodes: it accepts a node's JOIN on /nodelink, does the
 // HELLO/WELCOME handshake, pings, and answers GET /api/nodes. There is no layout, routing or UI yet;
-// those come as the API handlers move behind the platform interface (docs/brain-options.md).
+// those come as the API handlers move behind the platform interface (docs/archive/brain-options.md).
 //
 // ONE THREAD. Everything runs on the io_context's thread, which is what makes NodeSession's "the shell
 // serialises access" a non-issue here.
@@ -1027,7 +1027,7 @@ static std::string guessIp() {
 
 // The address and the broadcast are read at each send, not captured: the beacon is how a node finds a brain that MOVED.
 // Is a board the shop NEEDS down? Only those hurry the beacon: an optional board (a planer's sensor board, powered with the
-// planer) is off for days at a time and would otherwise keep it at 5 s forever (docs/optional-nodes-plan.md).
+// planer) is off for days at a time and would otherwise keep it at 5 s forever (docs/archive/optional-nodes-plan.md).
 static bool requiredBoardDown() {
     for (auto& kv : g_hub->nodes()) {
         if (kv.second->session.online()) continue;

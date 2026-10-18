@@ -25,7 +25,7 @@
 //     rows 4-7   four detail lines at size 1, 21 characters each
 //
 // Those layouts, and the reasoning behind each screen, are in
-// docs/mockups/oled-status.html. This file is that page made executable; when
+// docs/mockups/archived/oled-status.html. This file is that page made executable; when
 // they disagree, one of them is wrong and it is worth finding out which.
 //
 // IT DOES NOT INVENT A STATE VOCABULARY. The state word is statusled::Status
@@ -50,7 +50,7 @@ namespace statusscreen {
 
 // ---------------------------------------------------------------------------
 // The geometry. These are the panel's, not a preference — see the header note.
-// docs/mockups/oled-status.html draws its screens on exactly this grid.
+// docs/mockups/archived/oled-status.html draws its screens on exactly this grid.
 // ---------------------------------------------------------------------------
 static const int kCols     = 21;   // characters per row at size 1
 static const int kRows     = 8;    // rows at size 1

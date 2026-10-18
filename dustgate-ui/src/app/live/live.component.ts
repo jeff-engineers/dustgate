@@ -264,7 +264,7 @@ const POLL_MS = 2000;
        on a chip — which is safe only because this page renders no transients, so
        the two can never describe the same moment. Every chip carries text and a
        dot as well as colour: a dim shop and a colour-blind woodworker both break
-       a colour-only encoding. See docs/mockups/shop-status-chips.html. */
+       a colour-only encoding. See docs/mockups/archived/shop-status-chips.html. */
     .chip {
       font-size: 12px; font-weight: 600; padding: 5px 12px; border-radius: 999px;
       flex-shrink: 0; white-space: nowrap;
@@ -385,7 +385,7 @@ const POLL_MS = 2000;
       </div>
 
       <!-- Anything asked for that is not happening, worded by the device. Never
-           dismissible: it leaves when its cause does (docs/mockups/problems.html). -->
+           dismissible: it leaves when its cause does (docs/mockups/archived/problems.html). -->
       <div class="attn" *ngIf="problems.length" [class.warnonly]="!hasBad" role="alert">
         <div class="attn-h"><span>Needs attention</span><span>{{ problems.length }}</span></div>
         <div class="prob" *ngFor="let p of problems" [class.warn]="p.severity === 'warn'">

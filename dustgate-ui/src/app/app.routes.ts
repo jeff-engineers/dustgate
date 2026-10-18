@@ -28,10 +28,10 @@ export const routes: Routes = [
   { path: 'build',        component: BuildComponent, canDeactivate: [(c: BuildComponent) => c.canLeave()] },
   { path: 'tools',        component: ToolSetupComponent },
   { path: 'boards',       component: BoardSetupComponent },
-  // The twin of /boards for plugs: find, pair, rename, release, take over. docs/mockups/plugs-clamp-delete.html.
+  // The twin of /boards for plugs: find, pair, rename, release, take over. docs/mockups/archived/plugs-clamp-delete.html.
   { path: 'plugs',        component: PlugsComponent },
   // The brain's serial output over WiFi — a bench and support screen, reached
-  // only from the brain's row in Your boards. docs/mockups/brain-log.html.
+  // only from the brain's row in Your boards. docs/mockups/archived/brain-log.html.
   { path: 'boards/log',   component: BrainLogComponent },
   { path: 'settings',     component: SettingsComponent },
 
@@ -39,7 +39,7 @@ export const routes: Routes = [
   // every gate" pass the canvas made redundant — the canvas shows which gates are
   // unset and configuring one is a tap on its badge. This is the other errand:
   // recalibrating a valve that got knocked, from the shop floor, without opening a
-  // layout tool. Same calibration underneath. See docs/mockups/gates-list.html.
+  // layout tool. Same calibration underneath. See docs/mockups/archived/gates-list.html.
   { path: 'gates',        component: GateListComponent },
 
   // Retired paths. /setup was the old guided wizard; building the layout IS the

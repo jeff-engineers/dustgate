@@ -185,7 +185,7 @@ interface BoardRow {
               <!-- Inside the name line, not a flex sibling: as a sibling it stole
                    width and wrapped the subtitle one word per line at 375px. -->
               <span class="badge warn" *ngIf="isOffline(r) && !isOptional(r)">Not answering</span>
-              <!-- An OPTIONAL board that is off is not a fault (docs/optional-nodes-plan.md): it only senses, so the shop
+              <!-- An OPTIONAL board that is off is not a fault (docs/archive/optional-nodes-plan.md): it only senses, so the shop
                    loses a reading, never a gate or the blower. Grey, and says so, rather than red. -->
               <span class="badge idle" *ngIf="isOffline(r) && isOptional(r)"
                     title="Nothing in the shop depends on this board: it only senses. While it is off, its tools read as off.">Off · optional</span>

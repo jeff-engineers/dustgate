@@ -19,7 +19,7 @@
 //                   press is an EDGE against a TOGGLE and proves nothing.
 //   bin.sensor      the beam across the bin.
 //
-// See docs/mockups/collector-setup.html for the decisions and topology.js for
+// See docs/mockups/archived/collector-setup.html for the decisions and topology.js for
 // the rules that reject the combinations this deliberately cannot express.
 
 export type RawEl = Record<string, unknown>;

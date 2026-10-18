@@ -266,7 +266,7 @@ int main(int argc, char** argv) {
   }
 
 
-  // ── optional boards (2026-10-07, docs/optional-nodes-plan.md) ──────────────
+  // ── optional boards (2026-10-07, docs/archive/optional-nodes-plan.md) ──────────────
   // Same layout text and cases as the "optional boards" block of shop.test.js, same order.
   {
     DynamicJsonDocument d(4096);

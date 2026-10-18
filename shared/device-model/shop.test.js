@@ -378,7 +378,7 @@ check('swapping which port is primary leaves a valid shop', validateShop(mut(swa
 }
 
 
-// ── optional boards (2026-10-07, docs/optional-nodes-plan.md) ───────────────
+// ── optional boards (2026-10-07, docs/archive/optional-nodes-plan.md) ───────────────
 // Same layout text and cases as the "optional boards" block of test_shop.cpp, same order.
 {
   const shop = JSON.parse('{"schemaVersion":2,"controllers":[{"id":"primary","role":"primary"},{"id":"dustgate-gate","role":"secondary"},{"id":"dustgate-planer","role":"secondary"},{"id":"dustgate-spare","role":"secondary"},{"id":"dustgate-cyclone","role":"secondary"},{"id":"dustgate-idle","role":"secondary"}],"systems":[{"id":"s1","elements":[{"id":"dc","type":"collector","controllerId":"dustgate-cyclone","control":{"rf":{"address":94}},"sensor":{"ct":{"channel":0}},"bin":{"sensor":{"kind":"threshold"}}},{"id":"g1","type":"selector","kind":"servoGate","controllerId":"dustgate-gate","states":[],"branches":[]}],"ducts":[]},{"id":"s2","elements":[{"id":"dc2","type":"collector","controllerId":"dustgate-idle"}],"ducts":[]}],"machines":[{"id":"planer","sensor":{"ct":{"controllerId":"dustgate-planer","channel":0}}}]}');

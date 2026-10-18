@@ -53,7 +53,7 @@ public:
         for (const BoardView& b : boards) {
             const std::string key = "board:" + b.host;
             if (!b.linked && !b.refused && b.optional) {
-                rt.clearProblem(key);                   // off is its normal state (docs/optional-nodes-plan.md)
+                rt.clearProblem(key);                   // off is its normal state (docs/archive/optional-nodes-plan.md)
             } else if (!b.linked && !b.refused && b.downForMs >= kBoardOfflineAfterMs) {
                 char t[160];
                 std::snprintf(t, sizeof(t), "Not linked for %lus. Its gates stay where they were; tools on it cannot open a gate.",

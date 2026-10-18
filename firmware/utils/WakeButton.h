@@ -24,7 +24,7 @@
 // build with no button has states it can never show you again.
 //
 // TWO gestures as of 2026-08-22, and that is a reversal — see the decision log in
-// docs/mockups/oled-status.html. A short press works the screen; a ONE-SECOND
+// docs/mockups/archived/oled-status.html. A short press works the screen; a ONE-SECOND
 // HOLD runs the servo self-test (motor/ServoSelfTest.h). The rejected version of
 // this was "paging", a second gesture that changed what the SCREEN said; this is
 // a second gesture that moves GATES, which is further over the line the original
