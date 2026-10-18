@@ -149,8 +149,9 @@ Everything else that search found is fixed (DONE.md). These two remain, found by
   (its clamp, or a plug the board polls) with no gates, optional in the layout. Check it pairs, reports SENSE, drives the planer's
   gate on another board, and that the layout needs no gate on it. The extra unpaired `dustgate-sensor` (192.168.86.60) may be this.
 - **Bench: the slider node (jeff, 2026-10-06).** Out of 12 V supplies tonight, so it was not tested with the shop. Run it:
-  boot, join, home (on the first SET or the one-second button hold), take a SET, move to each stop, and do it through the Mac
-  brain (the native brain has only run PWM nodes). Needs a 12 V supply for the ST3215.
+  boot, join, home (on the first SET or the one-second button hold), take a SET, move to each stop. Through the Pi brain it has
+  now homed, swept and moved (2026-10-17/18); left: the one-second button hold, DEFERRED until a
+  slider board has a button (the prototype has none).
 
 - **PUT THE COLLECTOR "RUNNING" THRESHOLD BACK TO 50 W (jeff, 2026-10-06 — TEMPORARY).** **HELD 2026-10-16 (jeff): leaning towards making it
   user-configurable again (per collector) rather than restoring a fixed 50 W.** The bench collector is a desk fan
@@ -1041,9 +1042,6 @@ would reach first — and no gate has ever moved for it.
 Things that cannot be settled at a desk: they need the actual machines, the actual plugs on the shop's network, or the whole shop
 running at once. Added 2026-10-06 from the cleanup and the features built after the bench session. Delete an item once it has run.
 
-- **The slider page's Try again and lock (2026-10-17, PR #33 — deployed, NOT tested: the slider broke a limit-switch wire
-  first).** Endstops unplugged → setup fails with the reason, the arrows and Capture are greyed, Try again appears; plug
-  them back, Try again → it homes, reaches port 1, the controls unlock and the slider's `move-failed` problem clears.
 - **Set up the slider on its node from the app (2026-10-07).** `/gates` → the slider → pick the manifold → each outlet: the
   first move homes the gate (it runs to the end and back), then jog, capture, Test from the review and from the Gates list.
   Then switch on a tool on that slider and confirm the gate goes to its captured outlet. Host-tested only (`test_slider_setup.cpp`).
@@ -1065,8 +1063,7 @@ running at once. Added 2026-10-06 from the cleanup and the features built after 
   a layout saves and reads back, a **v1 document is refused with a 400**, tool switch-on still opens the gate and starts the
   collector, and the legacy routes are gone without anything the app uses going with them. Only the compile and the host tests have
   seen the firmware changes.
-- **The slider node through the native brain**, and **the collector sensed by a CT clamp**, and **the beam seeing FULL** — all still
-  unproven (see `CLAUDE.md`).
+- **The collector sensed by a CT clamp** — still unproven (README's hardware list).
 - **Find plugs on a real /24 takes how long, and does a request time out?** The sweep is about a minute; nothing has timed a whole
   run in the app against real hardware.
 
