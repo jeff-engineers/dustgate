@@ -8,7 +8,8 @@
       "@topology": ["../shared/device-model/topology"],
       "@shop": ["../shared/device-model/shop"],
       "@topology-device": ["../shared/device-model/topology-device"],
-      "@plug-claim": ["../shared/device-model/plug-claim"]
+      "@plug-claim": ["../shared/device-model/plug-claim"],
+      "@plug-identity": ["../shared/device-model/plug-identity"]
     },
     "strict": true,
     "noImplicitOverride": true,

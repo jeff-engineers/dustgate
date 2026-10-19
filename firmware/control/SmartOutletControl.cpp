@@ -299,12 +299,13 @@ void SmartOutletControl::doPoll() {
         if (!o) continue;
         if (strlen(o->ip()) == 0) continue;  // name-only gate — no plug to poll
 
-        // Push-connected plugs stream their power over the WebSocket, so skip
-        // the HTTP poll entirely (this is what removes the polling storm).
-        // Only fall back to an HTTP poll for a plug whose push isn't up.
-        // A plug a NODE polls is not ours to read: the main loop feeds it the node's
+        // Push-connected plugs stream their power over the WebSocket, so the HTTP poll is skipped (this is what removes
+        // the polling storm) — unless the socket has been quiet past OUTLET_PUSH_QUIET_MS: outletPollDue(), the rule the
+        // native brain's poller runs too. A plug a NODE polls is not ours to read: the main loop feeds it the node's
         // report (setReported), and an HTTP poll here would only fight that.
-        if (!o->isPushConnected() && !o->isExternallyPolled()) o->poll();
+        if (!o->isExternallyPolled() && outletPollDue(o->isPushConnected(), millis() - o->heardAtMs())) {
+            if (o->poll()) o->noteHeard(millis());
+        }
 
         bool active = o->isActive();
         if (active && !_prevActive[i]) risingEdge = true;
@@ -631,6 +632,7 @@ void SmartOutletControl::onPushedPower(const char* ip, float apower) {
     SmartOutlet* o = outletByIp(ip);
     if (!o) return;
     o->setPushConnected(true);   // a push implies the connection is live
+    o->noteHeard(millis());
 
     // Timestamp the moment the PLUG spoke, separately from the moment we act on
     // it. Jeff saw 5-10s between flipping a tool and the collector noticing

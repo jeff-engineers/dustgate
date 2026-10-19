@@ -6,6 +6,7 @@ import { ActivatedRoute, Router as NgRouter, RouterLink } from '@angular/router'
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
 import { ApiService, ClampBoard, CollectorBoard, DiscoveredOutlet, NodeLinkState, SweepProgress, Topology, TopologyStatus } from '../services/api.service';
 import { takeoverWarning } from '@plug-claim';
+import { samePlug } from '@plug-identity';
 import { airflowIssues, redundantSelectors, type AirflowIssue } from '@topology';
 import { COLLECTOR_RUNNING_W } from '@topology-device';
 import { validateShop, SHOP_SCHEMA_VERSION } from '@shop';
@@ -1064,7 +1065,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   // mDNS answers "which Shelly plugs exist" in about three seconds. It will
   // never answer it for a Tasmota — stock builds do not advertise — so the only
   // way to find the sense-only plug this project now prefers is to knock on all
-  // 254 addresses, which takes about a minute.
+  // 254 addresses, which takes about a minute on an ESP32 brain and a few seconds on the Pi (32 at once).
   //
   // So they run in sequence and are reported differently: the fast scan fills
   // the tray immediately, then the sweep runs in the BACKGROUND with a progress
@@ -1210,16 +1211,16 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
    * telling us whether the blower actually started. `outletOf()` in shop-doc
    * has always read both slots; this did not.
    */
-  private claimedBy(): Map<string, string> {
-    const out = new Map<string, string>();
+  private claimedBy(): Map<string, { name: string; saved: RawEl }> {
+    const out = new Map<string, { name: string; saved: RawEl }>();
     if (!this.topo) return out;
     const doc = this.topo as unknown as ShopDoc;
-    const put = (ip: unknown, name: string): void => {
-      if (typeof ip === 'string' && ip) out.set(ip, name);
+    const put = (outlet: RawEl | undefined, name: string): void => {
+      const ip = outlet?.['ip'];
+      if (typeof ip === 'string' && ip) out.set(ip, { name, saved: outlet as RawEl });
     };
     for (const m of machinesOf(doc)) {
-      put(((m.sensor as RawEl | undefined)?.['outlet'] as RawEl | undefined)?.['ip'],
-          (m.name as string) || (m.id as string));
+      put((m.sensor as RawEl | undefined)?.['outlet'] as RawEl | undefined, (m.name as string) || (m.id as string));
     }
     for (const e of this.allElems()) {
       const el = e as RawEl;
@@ -1227,15 +1228,24 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       const name = (el['name'] as string) || 'the collector';
       // BOTH SLOTS. control is the plug we switch; sensor is the plug that
       // tells us it worked. Either one claims the address.
-      put(((el['control'] as RawEl | undefined)?.['outlet'] as RawEl | undefined)?.['ip'], name);
-      put(((el['sensor']  as RawEl | undefined)?.['outlet'] as RawEl | undefined)?.['ip'], name);
+      put((el['control'] as RawEl | undefined)?.['outlet'] as RawEl | undefined, name);
+      put((el['sensor']  as RawEl | undefined)?.['outlet'] as RawEl | undefined, name);
     }
     return out;
   }
 
+  /** Is this found plug the one the layout saved at its address? By IP alone, a new Tasmota leased the address the
+   *  Table Saw's Shelly had left read as the Table Saw's and was hidden (2026-10-18). plug-identity.js is the rule,
+   *  shared with the brain, which stops polling the address for that tool too. */
+  private holderOf(o: DiscoveredOutlet, claimed: Map<string, { name: string; saved: RawEl }>): string | null {
+    const c = claimed.get(o.ip);
+    if (!c) return null;
+    return samePlug(c.saved as { kind?: string; mac?: string }, o) === 'no' ? null : c.name;
+  }
+
   freeOutlets(): DiscoveredOutlet[] {
     const claimed = this.claimedBy();
-    return this.outlets.filter(o => !claimed.has(o.ip));
+    return this.outlets.filter(o => this.holderOf(o, claimed) === null);
   }
 
   /** Plugs the sweep found that are already on something, with the name of what
@@ -1245,8 +1255,8 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   claimedOutlets(): Array<DiscoveredOutlet & { owner: string }> {
     const claimed = this.claimedBy();
     return this.outlets
-      .filter(o => claimed.has(o.ip))
-      .map(o => ({ ...o, owner: claimed.get(o.ip) as string }));
+      .filter(o => this.holderOf(o, claimed) !== null)
+      .map(o => ({ ...o, owner: this.holderOf(o, claimed) as string }));
   }
 
   chipLevel(o: DiscoveredOutlet): 'idle' | 'standby' | 'live' {

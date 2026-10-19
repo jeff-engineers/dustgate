@@ -69,7 +69,7 @@ public:
     }
     // This brain's address moved. Every plug it owns is still pushing to the old one, so each is claimed again with the new URL:
     // the ownership rule reads a plug pointed at a stale DustGate address that carries OUR name as ours, and repairs it. Until
-    // the repair lands a plug's reading goes quiet and the poller falls back to asking it (kPushQuietMs).
+    // the repair lands a plug's reading goes quiet and the poller falls back to asking it (OUTLET_PUSH_QUIET_MS).
     void retarget(const outletops::Self& self, const std::string& wsUrl) {
         std::lock_guard<std::mutex> g(_m);
         _self = self; _wsUrl = wsUrl;
@@ -150,9 +150,9 @@ private:
                 if (sw >= 0 && sw != taken && s.outlet->setSwitch(sw == 1)) { std::lock_guard<std::mutex> g(_m); s.switchTaken = sw; }
                 provision(s);
                 bool quiet;
-                { std::lock_guard<std::mutex> g(_m); quiet = !s.pushed || nowMs() - s.heardMs > kPushQuietMs; }
+                { std::lock_guard<std::mutex> g(_m); quiet = outletPollDue(s.pushed, nowMs() - s.heardMs); }   // OutletTimeouts.h, shared with the ESP32
                 // A plug that pushes is not polled: that is the whole saving. But a socket that is "up" and silent for
-                // half a minute is polled once anyway — Shelly only speaks on a CHANGE, so a quiet socket is normal and a
+                // OUTLET_PUSH_QUIET_MS is polled once anyway — Shelly only speaks on a CHANGE, so a quiet socket is normal and a
                 // hung plug looks exactly the same.
                 if (!quiet) continue;
                 const bool ok = s.outlet->poll();
@@ -160,12 +160,13 @@ private:
                 s.last.have = true; s.last.reachable = ok && s.outlet->isReachable(); s.last.watts = s.last.reachable ? s.outlet->getPowerW() : 0.0f;
                 if (ok) s.heardMs = nowMs();
             }
-            // 500 ms between passes (OUTLET_POLL_INTERVAL_MS), counted from the start of one.
+            // OUTLET_POLL_INTERVAL_MS between passes, counted from the start of one.
             const auto spent = std::chrono::steady_clock::now() - t0;
-            if (spent < std::chrono::milliseconds(500)) std::this_thread::sleep_for(std::chrono::milliseconds(500) - spent);
+            const auto every = std::chrono::milliseconds(OUTLET_POLL_INTERVAL_MS);
+            if (spent < every) std::this_thread::sleep_for(every - spent);
         }
     }
-    static constexpr uint32_t kPushQuietMs = 30000, kProvisionRetryMs = 15000;
+    static constexpr uint32_t kProvisionRetryMs = OUTLET_PROVISION_RETRY_MS;
     static uint32_t nowMs() { return (uint32_t)std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
 
     // Claim a plug for this brain, if we have somewhere for it to push. Off the network thread: it is blocking HTTP.

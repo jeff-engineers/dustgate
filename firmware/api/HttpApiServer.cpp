@@ -470,8 +470,7 @@ bool HttpApiServer::consumeTakeoverRequest(char* outIp, size_t ipLen) {
     return v;
 }
 
-bool HttpApiServer::setMachineOutlet(const char* machineId, const char* ip, const char* kind, const char* mac) {
-    if (!machineId || !*machineId || !ip || !*ip) return false;
+bool HttpApiServer::applyPlugRewrite(const relocate::Rewrite& r) {
     xSemaphoreTake(_mutex, portMAX_DELAY);
     bool ok = false;
     do {
@@ -479,20 +478,7 @@ bool HttpApiServer::setMachineOutlet(const char* machineId, const char* ip, cons
         String raw = g_topoStore.load();
         BigJsonDocument doc(raw.length() * 2 + 2048);
         if (deserializeJson(doc, raw)) break;
-        JsonObject outlet;
-        for (JsonObject m : doc["machines"].as<JsonArray>()) {
-            if (strcmp(m["id"] | "", machineId) != 0) continue;
-            outlet = m["sensor"]["outlet"];
-            break;
-        }
-        if (outlet.isNull()) break;
-        outlet["ip"] = ip;
-        if (kind && *kind) outlet["kind"] = kind;
-        if (mac  && *mac)  outlet["mac"]  = mac;
-        // `gen` is a Shelly generation. A Tasmota has none, and the entry that
-        // started this carried gen 2 beside host "Tasmota" — a Shelly's shape
-        // describing a plug that has never heard of one.
-        if (kind && strcmp(kind, "tasmota") == 0) outlet["gen"] = 0;
+        if (!relocate::applyRewrite(doc.as<JsonObject>(), r)) break;   // the key names nothing in this layout any more
         String out; serializeJson(doc, out);
         String err;
         if (!g_topoStore.save(reinterpret_cast<const uint8_t*>(out.c_str()), out.length(), err)) {
@@ -974,8 +960,14 @@ void HttpApiServer::registerRoutes() {
                 xSemaphoreGive(_mutex);
                 sendOk(req);
             }
-            else    { DEBUG_PRINT(F("[API] topology rejected: ")); DEBUG_PRINTLN(err);
-                      sendError(req, 400, err.c_str()); }
+            else {
+                DEBUG_PRINT(F("[API] topology rejected: ")); DEBUG_PRINTLN(err);
+                // As the spec answers (topology-conformance.js), and as the native brain does: 400 with `errors`.
+                StaticJsonDocument<512> d;
+                d["error"] = err.c_str(); d["errors"][0]["message"] = err.c_str();
+                String out; serializeJson(d, out);
+                req->send(400, "application/json", out);
+            }
         }
     );
 

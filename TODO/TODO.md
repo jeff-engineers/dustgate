@@ -106,11 +106,6 @@ Everything else that search found is fixed (DONE.md). These two remain, found by
     but Jeff this ships as a finished box, under the "an install step the owner cannot perform" rule.
 
 
-- **Move the ESP32's plug provisioning loop onto `outlets/Provision.h` (2026-10-06).** `SmartOutletControl::provisionPushOutlets()` and
-  `outletops::provisionPlug()` are the same rule written twice (probe, read the claim, refuse a plug someone else owns unless a
-  takeover was approved, name first, then the push target). The native brain uses the shared one; the ESP still has its own. Move it
-  with a bench run (a Shelly paired, a foreign plug left alone, a takeover) because it writes to real plugs.
-
 - **The Live screen has no way to switch the collector by hand (found 2026-10-06, bench test 16).** `POST /api/collector` works
   (both brains, `ApiService.setCollectorManual()`), but nothing in the app calls it: the collector card shows state and has no
   button, so the only way to start a blower from the app is to switch a tool on. My test list said "tap the collector" and
@@ -170,7 +165,7 @@ Everything else that search found is fixed (DONE.md). These two remain, found by
   Full plan, memory table and open questions:
   [`docs/archive/nodes-dial-the-brain-plan.md`](../docs/archive/nodes-dial-the-brain-plan.md).
 
-- **Native brain: what is left before a Pi is a product (2026-10-05).** Built and tested against fakes (`make -C native test`): node links, layout routing, the collector press loop, plug polling with the ESP32's own drivers, the app, and — since the API step — manual tool/collector switches, servo jog, pairing/pausing/discovery (a board nobody paired announces itself with a JOIN), node image staging and `/api/nodes/update` (images live on disk, so the full-filesystem problem does not exist here), the console and link log, the plug screens (ping, rename, release, sweep) and the board/plug problems. The app loads against it and its Boards and Shop screens render a real layout. **Not done:** (1) DONE 2026-10-05 against the five real nodes (no servos attached): gate moves (SET → ACK → STATE moving/arrived), the RF press and a bin sensor all work from the Mac brain; a firmware update pulled from the Mac brain's own disk installed on a real node (needs the brain on port 80); 10 restarts of the Mac brain brought all five nodes back in 1–20 s with no flaps; (2) DONE 2026-10-06: Shelly push (`/shelly-rpc`), claim/provisioning and takeover (`outlets/Provision.h`, `e2e_push.sh`) — against a fake Shelly only; not yet against a real plug, and the ESP32 still has its own copy of the provisioning loop; (3) the brain must listen on port 80 for node OTA (the node builds `http://<ip><path>`, no port) — done and verified; the Mac brain also holds idle sleep off with `caffeinate`; (4) mDNS advertising — on a Pi, set the hostname to `dustgate` and avahi does it; on a Mac use `dns-sd -P`; (5) packaging — image, first-boot WiFi, read-only root, watchdog; (6) the ESP32 still has its own copies of the routes in `api/ApiCore.h` (manual switches, jog, pairing, pause, discover, update), to move over one at a time with a bench run each — plug ping/rename/release and the board/plug problems already are shared.
+- **Native brain: what is left before a Pi is a product (2026-10-05).** Built and tested against fakes (`make -C native test`): node links, layout routing, the collector press loop, plug polling with the ESP32's own drivers, the app, and — since the API step — manual tool/collector switches, servo jog, pairing/pausing/discovery (a board nobody paired announces itself with a JOIN), node image staging and `/api/nodes/update` (images live on disk, so the full-filesystem problem does not exist here), the console and link log, the plug screens (ping, rename, release, sweep) and the board/plug problems. The app loads against it and its Boards and Shop screens render a real layout. **Not done:** (1) DONE 2026-10-05 against the five real nodes (no servos attached): gate moves (SET → ACK → STATE moving/arrived), the RF press and a bin sensor all work from the Mac brain; a firmware update pulled from the Mac brain's own disk installed on a real node (needs the brain on port 80); 10 restarts of the Mac brain brought all five nodes back in 1–20 s with no flaps; (2) DONE 2026-10-06: Shelly push (`/shelly-rpc`), claim/provisioning and takeover (`outlets/Provision.h`, `e2e_push.sh`) — against a fake Shelly only; not yet against a real plug, and the ESP32 still has its own copy of the provisioning loop; (3) the brain must listen on port 80 for node OTA (the node builds `http://<ip><path>`, no port) — done and verified; the Mac brain also holds idle sleep off with `caffeinate`; (4) mDNS advertising — on a Pi, set the hostname to `dustgate` and avahi does it; on a Mac use `dns-sd -P`; (5) packaging — image, first-boot WiFi, read-only root, watchdog; (6) the ESP32 still has its own copies of the routes in `api/ApiCore.h` — parked with the frozen ESP32 brain (below).
 
 - **A node-owned plug's on/off threshold is compared twice.** The node polls the plug, compares
   watts to the `thresholdW` it was sent and sets SENSE `on`; the brain ignores that bit and
@@ -523,7 +518,35 @@ Everything else that search found is fixed (DONE.md). These two remain, found by
   numbered outlet icons, probably others. Low priority — and hover can't be the
   only way in (see the mockup rules), so whatever this becomes needs a tap path too.
 
+## Parked: the frozen ESP32 brain
+
+**Frozen 2026-10-18 (jeff): the Pi is the brain** — root `CLAUDE.md`. Nothing here is to be worked on unless the ESP32 brain is
+revived; if it is, its routes should be rebuilt as a thin shell around `api/ApiCore.h` rather than these copies moved one by
+one. `tools/check-brain-parity.js` lists what the frozen brain lacks.
+
+- **Move the ESP32's plug provisioning loop onto `outlets/Provision.h` (2026-10-06).** `SmartOutletControl::provisionPushOutlets()` and
+  `outletops::provisionPlug()` are the same rule written twice (probe, read the claim, refuse a plug someone else owns unless a
+  takeover was approved, name first, then the push target). The native brain uses the shared one; the ESP still has its own. Move it
+  with a bench run (a Shelly paired, a foreign plug left alone, a takeover) because it writes to real plugs.
+- **ESP32 routes onto `api/ApiCore.h` (2026-10-18, from the two-brain drift sweep).** The native brain serves ~20 routes through
+  `ApiCore.h` (manual switches, jog, pairing, pause, discover, update, the slider-on-a-node routes), tested by
+  `test_apicore.cpp`. The ESP32's `HttpApiServer.cpp` still has its own copy of every one, so they can drift with nothing
+  failing. `tools/check-brain-parity.js` lists it as KNOWN_DRIFT. Move them a route at a time, each with a bench run on an
+  ESP32 brain; or, if the ESP32 brain is retired in favour of the Pi, delete its copies instead. Also from the sweep, ESP32-only
+  and fine as long as it is: its subnet sweep has no longer knock or second try for the layout's own plugs (native `Sweep.h` has).
+- **The ESP32 primary with the cleanup branch.** Flash it (`./dev.sh flash --fw`, layout backup first) and confirm: the app loads,
+  a layout saves and reads back, a **v1 document is refused with a 400**, tool switch-on still opens the gate and starts the
+  collector, and the legacy routes are gone without anything the app uses going with them. Only the compile and the host tests have
+  seen the firmware changes.
+- **Conformance against a real ESP32 primary.** `node shared/device-model/conformance.js http://<primary> <key> --force` and
+  `topology-conformance.js http://<primary>`: the cases that drove the deleted legacy routes are gone, and a schemaVersion-1 PUT
+  must answer 400.
+
 ## Carried debt
+
+- **Two native API e2e checks are timing-sensitive (2026-10-18).** "an unpaired board that dials in is listed by discovery" and
+  "telling a node to update sends it the OTA order" (`native/test/e2e_api.sh`) failed once in a full `make -C native test` and
+  passed on every rerun. Widen their waits or find what they race.
 
 - **Draw the slider board and the RF transmitter on `docs/carrier-wiring.html` (2026-10-18).** `firmware/WIRING.md` was
   archived as history (`docs/archive/WIRING.md`); the wiring page now covers the PWM carrier only. Two wirings still live
@@ -1042,6 +1065,17 @@ would reach first — and no gate has ever moved for it.
 Things that cannot be settled at a desk: they need the actual machines, the actual plugs on the shop's network, or the whole shop
 running at once. Added 2026-10-06 from the cleanup and the features built after the bench session. Delete an item once it has run.
 
+- **Plug identity and relocation on the Pi (2026-10-18).** Deploy the Pi brain, then: (1) the Table Saw's entry still points at
+  .64, where the new Tasmota now is — the problems list should say "A different plug has Sawstop's address", the Plugs page show
+  the Table Saw row with that note and the Tasmota free under Found, the canvas tray offer it, and the brain log say it is not
+  polling or claiming it; (2) every plug paired without a MAC gets one written into the layout within a minute (`[RELOCATE]
+  recording the MAC`), Shellys included; (3) switch the Sawstop Shelly on wherever it now is: a sweep finds it and the Table Saw
+  is pointed at it by elimination (no MAC on file), and the problem clears; (4) with every plug's MAC recorded, swap two Tasmotas'
+  DHCP reservations and reboot them: both are found again by MAC and neither reads the other's tool in between; (5) a sweep from
+  the Plugs page lists the Miter Saw's Tasmota every time (the layout's own plugs get a longer knock and a second try).
+  Host-tested (`test_relocate.cpp`) and end-to-end against a fake Shelly (`native/test/e2e_identity.sh`) only. The ESP32 brain
+  runs the same policy and only compiles (frozen).
+
 - **Set up the slider on its node from the app (2026-10-07).** `/gates` → the slider → pick the manifold → each outlet: the
   first move homes the gate (it runs to the end and back), then jog, capture, Test from the review and from the Gates list.
   Then switch on a tool on that slider and confirm the gate goes to its captured outlet. Host-tested only (`test_slider_setup.cpp`).
@@ -1059,10 +1093,6 @@ running at once. Added 2026-10-06 from the cleanup and the features built after 
   off with the tool paired (the confirm appears) and confirm the tool stops being sensed and the layout no longer names the clamp.
 - **An interrupted gate move is sent again.** Brown out or reset a node mid-move (pull its power while the servo travels), let it
   relink, and confirm the gate is commanded again and ends where the layout says. Host-tested only (`test_deviceproblems.cpp`).
-- **The ESP32 primary with the cleanup branch.** Flash it (`./dev.sh flash --fw`, layout backup first) and confirm: the app loads,
-  a layout saves and reads back, a **v1 document is refused with a 400**, tool switch-on still opens the gate and starts the
-  collector, and the legacy routes are gone without anything the app uses going with them. Only the compile and the host tests have
-  seen the firmware changes.
 - **The collector sensed by a CT clamp** — still unproven (README's hardware list).
 - **Find plugs on a real /24 takes how long, and does a request time out?** The sweep is about a minute; nothing has timed a whole
   run in the app against real hardware.
@@ -1070,9 +1100,6 @@ running at once. Added 2026-10-06 from the cleanup and the features built after 
 ### Bench Testing (at a desk, USB and a few boards)
 
 **Bench items from the 2026-10-06 cleanup** (before the older list below):
-- **Conformance against a real ESP32 primary.** `node shared/device-model/conformance.js http://<primary> <key> --force` and
-  `topology-conformance.js http://<primary>`: the cases that drove the deleted legacy routes are gone, and a schemaVersion-1 PUT
-  must answer 400.
 - **A node's move fault edge.** On a node with a servo, reset it mid-move and watch the brain log: one `move-failed` problem, one
   re-send, then it clears. A second reset after it cleared should re-send again.
 - **A clamp board with the switch off.** Flash a node with a CT lead, leave the switch off, and confirm no clamp line shows and the

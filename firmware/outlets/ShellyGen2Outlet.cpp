@@ -47,6 +47,21 @@ bool ShellyGen2Outlet::poll() {
 // Same shape as poll() but with a caller-chosen timeout — the provisioning path
 // passes a generous window so a marginal plug that can't answer the tight 400ms
 // poll probe still gets provisioned on the first pass instead of flapping.
+bool ShellyGen2Outlet::readMac(std::string& out, uint32_t timeoutMs) {
+    if (_ip[0] == '\0') return false;
+    char url[64];
+    snprintf(url, sizeof(url), "http://%s/rpc/Shelly.GetDeviceInfo", _ip);
+    const plughttp::Reply r = plughttp::get(url, timeoutMs, timeoutMs);
+    if (r.code != 200) return false;
+    StaticJsonDocument<32> filter;
+    filter["mac"] = true;
+    StaticJsonDocument<96> doc;
+    if (deserializeJson(doc, r.body, DeserializationOption::Filter(filter))) return false;
+    const char* mac = doc["mac"] | "";
+    out = mac;
+    return !out.empty();
+}
+
 bool ShellyGen2Outlet::probe(uint32_t timeoutMs) {
     if (_ip[0] == '\0' && !reresolve()) return false;
     if (doPoll(timeoutMs)) return true;

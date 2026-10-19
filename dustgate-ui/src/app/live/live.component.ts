@@ -396,7 +396,7 @@ const POLL_MS = 2000;
             <div class="p-meta">
               <span *ngIf="p.duration">{{ p.duration }}</span>
               <a routerLink="/boards/log">Brain log →</a>
-              <a *ngIf="p.code === 'plug-unreachable'" routerLink="/tools">Find the plug →</a>
+              <a *ngIf="p.code === 'plug-unreachable' || p.code === 'plug-replaced'" routerLink="/plugs">Plugs →</a>
               <a *ngIf="p.code === 'board-offline'" routerLink="/boards">Boards →</a>
             </div>
           </div>

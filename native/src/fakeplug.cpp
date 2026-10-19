@@ -7,6 +7,8 @@
 // Push: whenever the stored Ws server is enabled it dials it and streams NotifyFullStatus / NotifyStatus (switch:0.apower)
 // whenever the number in the file changes — what a real plug's Outbound WebSocket does. <powerfile>.polls counts GetStatus
 // requests, so a test can see that a pushing plug is not being polled.
+// Identity: Shelly.GetDeviceInfo answers the MAC in <powerfile>.mac (default AABBCCDDEE01), so a test swaps the plug at an
+// address by rewriting one file.
 // Bound to 127.0.0.1 alone: Linux answers on all of 127/8, so a plug listening on every address made each "no plug here"
 // address in the sweep test a plug (macOS only answers on .1, which hid it).
 // Spelled out, not left to whatever Boost happens to pull in: GCC (the Pi) is stricter than the Mac's clang.
@@ -81,7 +83,10 @@ int main(int argc, char** argv) {
         try {
             beast::flat_buffer b; http::request<http::string_body> req; http::read(s, b, req);
             std::string body; const std::string t = std::string(req.target());
-            if (t.rfind("/rpc/Switch.GetStatus", 0) == 0) {
+            if (t.rfind("/rpc/Shelly.GetDeviceInfo", 0) == 0) {
+                std::string mac = readLine(g_file + ".mac"); if (mac.empty()) mac = "AABBCCDDEE01";
+                body = "{\"id\":\"shellyplugus-test\",\"mac\":\"" + mac + "\",\"gen\":2}";
+            } else if (t.rfind("/rpc/Switch.GetStatus", 0) == 0) {
                 { std::lock_guard<std::mutex> g(g_m); std::ofstream(g_file + ".polls", std::ios::app) << "x"; }
                 body = "{\"id\":0,\"source\":\"test\",\"output\":true,\"apower\":" + std::to_string(readPower()) + ",\"voltage\":120.0}";
             } else if (t.rfind("/rpc/Switch.Set", 0) == 0 && t.rfind("/rpc/Switch.SetConfig", 0) != 0) {

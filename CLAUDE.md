@@ -30,6 +30,9 @@ passes host tests; that is not the same thing. When a bench verifies something, 
 - **No backwards compatibility.** One shop, one owner, cheap reflashes over WiFi: change the protocol or schema and
   update the boards, rather than adding fallbacks for old firmware or old layouts.
 - **When it's unclear where something fails, add logging** before reasoning toward a guess.
+- **What a person reads is a woodworker's sentence; the details go to the log.** Problem texts the brain raises and every
+  message in the app say what happened and what to do, with no IPs, MACs, protocols or codes. The specifics go to the
+  brain log and the browser console (`[DustGate] …`, `services/failure.ts`).
 - Procedures live in skills, not here: `verify` (which checks for what changed), `flash`, `burndown` (a review file),
   `wiring-diagram` (`docs/carrier-wiring.html`).
 
@@ -37,7 +40,7 @@ passes host tests; that is not the same thing. When a bench verifies something, 
 
 | Word | Means |
 |---|---|
-| **brain** / primary | the one decider: layout, routing, plug polling. Today the native brain on the Pi; an ESP32 primary also exists |
+| **brain** / primary | the one decider: layout, routing, plug polling. The native brain on a Pi. The ESP32 primary is FROZEN (below) |
 | **node** | any other board; owns fast local loops (a homing sweep, a clamp's RMS), interprets no layout |
 | **board** | a XIAO C5 on its carrier, brain or node; named by `controllerId` in the layout |
 | **system** | one collector and the ducts it pulls through; a shop has one or more |
@@ -65,7 +68,17 @@ passes host tests; that is not the same thing. When a bench verifies something, 
 `shared/device-model/` is the spec. The mock and the app's demo `require` it, so they cannot drift; the firmware can't
 import JS, so it is held to the same contract by the conformance suites and by **matched tests** (a number asserted in
 a JS test is asserted in its C++ twin, same cases, same order). **Change one, change both.** The matched pairs and the
-constants shared across the boundary, and why each is a pair: `shared/device-model/CLAUDE.md`. Firmware specifics:
+constants shared across the boundary, and why each is a pair: `shared/device-model/CLAUDE.md`.
+
+**The ESP32 brain is FROZEN (jeff, 2026-10-18): the Pi is the brain.** A $15 Pi does the job, DustGate is past the point
+of being a product for anyone without reasonable tech skills, and keeping two brains in step kept costing shop time. The
+ESP32 primary envs still compile (CI) and pick up fixes to the shared core for free; nothing new is built into its shell
+(`firmware.ino`'s brain half, `HttpApiServer.cpp`), and nothing is bench-tested on it. Nodes are unaffected — every board
+in the shop is still a XIAO C5 node. A rule that decides anything still goes in the shared code (`firmware/control/`,
+`firmware/outlets/`), never in `native/src/`, so the frozen brain can be revived as a thin shell rather than a rewrite.
+`tools/check-brain-parity.js` (`npm run brain:parity`, run by `firmware:test`) still fails if the native brain stops using
+something the ESP32 does (that is the Pi missing a feature); what the Pi has and the ESP32 lacks is listed, not failed. The
+topology contract suite runs against the mock and the native brain alike (`native/test/e2e_conformance.sh`). Firmware specifics:
 `firmware/CLAUDE.md`. UI specifics: `dustgate-ui/CLAUDE.md`.
 
 ## Commands

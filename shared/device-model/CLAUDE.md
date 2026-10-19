@@ -7,7 +7,8 @@ anything: its design rules (pure, caller owns timing, faithful to firmware, `.d.
 same cases, same order. Pairs: `nodelink.test.js` ↔ `test_nodebus.cpp` (the reference), `manual-blower` ↔
 `test_manual_blower`, `layout-save` ↔ `test_layout_save`, `collector-plug` ↔ `test_collector_plug`, `bin-sensor` ↔
 `test_binsensor` (same rule, deliberately not the same numbers), `board-id` ↔ `test_boardid`, `shop` ↔ `test_shop`,
-`problems` ↔ the "problems —" block of `test_nodebus`. **Change one, change both.**
+`problems` ↔ the "problems —" block of `test_nodebus`, `plug-identity` ↔ the "S" block of `test_relocate` (is the plug at a
+saved address still that plug — the app and the brain must agree). **Change one, change both.**
 
 **Constants shared across the boundary.** `shared/device-model/constant-pairs.json` is the CHECKED list
 (`tools/check-constant-pairs.js`, run by `npm run model:test`): it fails when a group disagrees or a listed constant

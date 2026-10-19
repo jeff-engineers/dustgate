@@ -45,6 +45,7 @@ struct PlugView {
     std::string name;    // what the person calls it
     std::string ip;
     bool        reachable = false;
+    std::string replacedBy;   // PlugRelocator::replacedBy(): a DIFFERENT plug answers at this address ("" = not seen)
 };
 
 class DeviceProblems {
@@ -96,6 +97,15 @@ public:
         // silently never "on" meanwhile.
         std::map<std::string, uint32_t> still;
         for (const PlugView& p : plugs) {
+            // A different plug at this one's address: said at once. In a woodworker's words — no address, no MAC, no
+            // protocol; those are in the brain log ([RELOCATE], from OutletRelocate.h) and the app's console.
+            if (!p.replacedBy.empty()) {
+                rt.raiseProblem(p.key, "plug-replaced", "warn", "plug", p.name,
+                                "A different plug is answering where this one used to be, so it has probably moved or been "
+                                "unplugged. Until it is found, the tool on it won't start the collector. DustGate is looking "
+                                "for it: make sure it is plugged in and switched on.", now);
+                continue;
+            }
             if (p.reachable) { rt.clearProblem(p.key); continue; }
             auto it = _since.find(p.key);
             const uint32_t since = it == _since.end() ? (now ? now : 1) : it->second;

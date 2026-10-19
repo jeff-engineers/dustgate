@@ -100,6 +100,12 @@ int main() {
     dp.update(*rt, {}, {p}, 400000);
     dp.update(*rt, {}, {p}, 400000 + kPlugDownAfterMs - 1);
     ok("a plug that dropped out again gets a FRESH window, not the old clock", !rt->hasProblem("plug:saw"));
+    p.replacedBy = "a tasmota (MAC B8:F0:09:10:BD:28)";
+    dp.update(*rt, {}, {p}, 400000 + kPlugDownAfterMs);
+    ok("a different plug at its address is a problem at once", rt->hasProblem("plug:saw"));
+    p.replacedBy.clear(); p.reachable = true;
+    dp.update(*rt, {}, {p}, 400000 + kPlugDownAfterMs + 500);
+    ok("...and clears when its own plug is found", !rt->hasProblem("plug:saw"));
     delete rt; }
   printf("\nP3 a clamp the layout uses, unplugged from its jack (2026-10-09)\n");
   { static const char* kShop = R"({"schemaVersion":2,
