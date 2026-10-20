@@ -466,7 +466,13 @@ function drawBin(kind) {
   W([[sx + sw + 8, yBlue], [360, yBlue]], blue); gndSym(360, yBlue);
 
   // ── 12 V: the TVS where it enters, R5 to the LED
-  W([[340, 120], [520, 120]], r12); dot(340, 120, r12); rail(340, 120, '12 V', r12);
+  W([[340, 120], [520, 120]], r12); dot(340, 120, r12);
+  // F2: the Banner's own fuse, between F1's output and everything that leaves for the collector. A pinched Banner
+  // lead trips F2 alone, so the board stays up and can say so; on F1 it would take the whole board down.
+  W([[340, 120], [340, 40]], r12); R(340, 50, 340, 110, 'F2', P ? 'MF-RHT050' : 'PTC · rec.');
+  o.push(`<path d="M340 58V102" stroke="${ink}" stroke-width="1.5"/>`);
+  rail(340, 40, '12 V after F1', r12);
+  note(450, 50, ['F2 is the Banner\'s own fuse: a short on its lead', 'trips F2, not F1, so the board stays up.']);
   dot(430, 120, r12); W([[430, 120], [430, 190]], r12); D(430, 190, 120, 'D4', P ? 'P4KE18A' : 'TVS · rec.', -1); gndSym(430, 190);
   W([[520, 120], [520, 240], [640, 240]], r12); R(520, 140, 520, 220, 'R5', '1 kΩ');
   // D3 across the LED, cathode to pin 1
@@ -558,12 +564,13 @@ function render(kind) {
       <tr><td><b>J1</b></td><td class="mono">${kind === 'pcb' ? 'SJ1-3525N' : 'Adafruit #5764'}</td><td>${kind === 'pcb' ? 'pin 1 (sleeve)' : '<code>Sleeve</code>'}</td><td>bias node</td><td>the clamp's return. ${kind === 'pcb' ? 'Pins 3 and 11' : '<code>Right</code>, <code>RSw</code>, <code>Ring</code>'}: not connected; the cable's shield reaches no contact</td></tr>
     </tbody></table></div>
     <h2>The bin sensor, close up</h2>
-    <p>The Banner beam in the collector, the 4N35 between its 12 V side and D6, and the two ESD parts that guard it. Only the collector board fits this. The 12 V pilot lamp and red strobe that used to hang off the Banner are gone (2026-10-20): the shop light chained off the board pixel shows a full bin and running suction instead. ${kind === 'pcb' ? 'The leads land on a screw terminal.' : 'D3 and D4 are recommended additions, not on the perfboard yet; everything else runs today (since 2026-09-13).'}</p>
+    <p>The Banner beam in the collector, the 4N35 between its 12 V side and D6, the two ESD parts that guard it, and F2, the Banner's own fuse. Only the collector board fits this. The 12 V pilot lamp and red strobe that used to hang off the Banner are gone (2026-10-20): the shop light chained off the board pixel shows a full bin and running suction instead. ${kind === 'pcb' ? 'The leads land on a screw terminal.' : 'D3, D4 and F2 are recommended additions, not on the perfboard yet; everything else runs today (since 2026-09-13).'}</p>
     <div class="sheet">${drawBin(kind)}</div>
     <div class="tablewrap" style="margin-top:12px"><table><thead><tr><th>Part</th><th>Value</th><th>From</th><th>To</th><th>Job</th></tr></thead><tbody>
       <tr><td><b>Banner</b> brown</td><td class="mono">+V</td><td>${kind === 'pcb' ? 'TB1-1' : 'the lead'}</td><td>12 V</td><td>powers the sensor</td></tr>
       <tr><td><b>Banner</b> blue</td><td class="mono">0 V</td><td>${kind === 'pcb' ? 'TB1-3' : 'the lead'}</td><td>GND, at the supply</td><td>its return — to the star point</td></tr>
       <tr><td><b>Banner</b> black</td><td class="mono">output</td><td>${kind === 'pcb' ? 'TB1-2' : 'the lead'}</td><td>U1 pin 2</td><td>sinks to 0 V when the beam is blocked, lighting the LED</td></tr>
+      <tr><td><b>F2</b></td><td class="mono">${kind === 'pcb' ? 'MF-RHT050' : 'PTC, ~0.5 A'}</td><td>12 V after F1</td><td>the Banner's 12 V: TB1-1, R5, D4</td><td>a short on the Banner's lead trips F2 alone, not the whole board${kind === 'pcb' ? '' : ' — recommended'}</td></tr>
       <tr><td><b>R5</b></td><td class="mono">1 kΩ</td><td>12 V</td><td>U1 pin 1 (anode)</td><td>sets the LED current, ≈10.8 mA</td></tr>
       <tr><td><b>U1</b></td><td class="mono">4N35</td><td>pins 1–2: LED</td><td>pins 5–4: transistor</td><td>carries the signal across as light. Pins 3 and 6: not connected</td></tr>
       <tr><td><b>R6</b></td><td class="mono">10 kΩ</td><td>3V3</td><td>D6 / U1 pin 5</td><td>pull-up — the internal ~45 kΩ is too weak against the transistor's leakage</td></tr>

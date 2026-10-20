@@ -84,6 +84,7 @@ Qty is per board; "coll." = the collector board only.
 | 32 | Test points | 4 | — | — | 5 V, servo rail, 3V3, CT bias node |
 | 33 | Mounting holes, M2.5 | 4 | — | — | Pad version, so a dissipative housing can be grounded through a standoff |
 | 34 | 12 V wall adapter, 2.1 mm | 1 | any | — | 2 A for a PWM board, 3 A for a slider |
+| 35 | Bourns MF-RHT050 PTC fuse (0.5 A hold) | 1 coll. | [Digi-Key (search)](https://www.digikey.com/en/products/result?keywords=MF-RHT050) | ~$0.40 | Not looked up. The Banner's own fuse, F2: F1's output → F2 → the Banner's brown lead, the 4N35's LED resistor and the TVS at the terminal. A pinched Banner lead trips F2 alone, so the board stays up. The Banner and the LED draw ~35 mA |
 
 Not on a board: gate servos (MG995 class, or the ST3215 for a slider — Waveshare SKU 22414, $21.99), and
 Shelly plugs. The JLCPCB board itself is under "Ordering the PCB" below.
@@ -180,6 +181,7 @@ a clamp and a remote. No separate firmware, no separate pin map.
 | 1 kΩ resistor | 1 | same | CFR-25JB-52-1K | 4N35 LED series, off 12 V. ≈10.8 mA |
 | 1N4148 signal diode | 1 | recommended | 1N4148 (DO-35) | **ESD, added 2026-10-08.** Anti-parallel across the 4N35's LED (anode to pin 2, cathode to pin 1). The LED survives only ~6 V reverse, and the Banner's output lead runs into a collector full of charged dust |
 | TVS diode, 15 V standoff | 1 | recommended | e.g. P4KE18A — not looked up | **ESD, added 2026-10-08.** At the screw terminal, 12 V to GND, so a hit on the Banner's leads is clamped where it enters rather than after crossing the board |
+| **PTC fuse for the Banner** (F2) | 1 | — | Bourns MF-RHT050 (PCB order list row 35) | Between F1's output and the Banner's 12 V, so a short on its lead trips F2 rather than the whole board. Added 2026-10-20 |
 | **Screw terminal** | 1 | — (flying leads) | 5 mm, 3-way: Banner brown, black, blue (PCB order list row 28) | Not on the list before 2026-10-08 |
 | **315 MHz TX module** | 1 | same | **SparkFun 10535** (1568-10535-ND, $5.75; 12-week lead) | **D10.** Keys the collector's own remote; the only part the RF path needs. 3.3 V data; 5 V on the bench, 12 V for real range — unverified, so the PCB should let either rail reach it (a jumper) |
 | 9 g servo (SG90 class) | 0–1 | — | — | ALTERNATIVE to the RF path: an arm pressing the fob's own buttons. D8, the servo rail |
