@@ -39,8 +39,9 @@
 // THE DEAD-MAN on a collector's switching plug (D-85, piece 4): the brain switches it ON with "and off again after
 // OUTLET_DEADMAN_SEC", and renews that every OUTLET_DEADMAN_RENEW_MS while it wants the blower on. A brain that dies
 // stops renewing, and the plug switches the blower off by itself — so a dead brain cannot leave a blower running against
-// gates its nodes have closed. Shelly's Switch.Set toggle_after. ASSUMES a renewal restarts the countdown: NOT YET TRIED on
-// a real plug (TODO.md). A Tasmota never switches (it is locked sense-only), so it has none.
+// gates its nodes have closed. Shelly's Switch.Set toggle_after. A renewal RESTARTS the countdown: tried 2026-10-20 on a
+// Shelly Plug US Gen4 (toggle_after=30 sent twice 20 s apart switched off ~50 s in, 30 s after the second). A Tasmota never
+// switches (it is locked sense-only), so it has none.
 #define OUTLET_DEADMAN_SEC          60
 #define OUTLET_DEADMAN_RENEW_MS     20000
 

@@ -61,11 +61,9 @@ first-boot WiFi setup for a customer, a read-only root, and the `--git` update p
      polls (the board cannot judge its own press) — it gets no stop; and the frozen ESP32 brain sends no dead-man.
   5. **BUILT 2026-10-20 — the problem says what happens.** board-offline now reads "its gates close on their own after
      N s … the rest of the shop keeps collecting".
-- ⚠️ **BEFORE MERGING `failsafe-and-lights`: test the Shelly dead-man on a real plug (jeff, 2026-10-20).** On a Shelly with
-  a lamp or nothing on it (not the Cyclone Contactor, not a tool): `curl "http://<ip>/rpc/Switch.Set?id=0&on=true&toggle_after=30"`,
-  the same again ~20 s later, and note whether it switches off ~30 s after the SECOND (the renewal restarts the countdown:
-  what the brain assumes) or after the FIRST (it does not: rebuild the dead-man before merging, or a running blower switches
-  off every 60 s). Then flash the nodes and bench: unplug a node mid-cut, kill the brain with the collector running.
+- **The Shelly dead-man renews: tried 2026-10-20 (jeff).** On a Shelly Plug US Gen4, `toggle_after=30` sent twice ~20 s
+  apart switched off ~50 s in, 30 s after the second call — a renewal restarts the countdown, as the brain assumes. Still to
+  bench after flashing the nodes: unplug a node mid-cut, and stop the brain with the collector running.
 
 - **Status lights (D-86) — BUILT 2026-10-20 except the Boards-page control and the screen's words.** ALERT carries `bin`,
   `suction` and an optional `shop` light (resolved colour + blink, `kMaxShopPixels` = 16, matched tests);
