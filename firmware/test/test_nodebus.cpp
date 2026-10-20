@@ -104,6 +104,9 @@ struct StubBus : public topo::ActuatorBus {
                        (topo::_eq(c["drive"], "servo") ? std::to_string((int)(c["angle"] | -1)) : std::string("mm"));
         first = false;
       }
+      JsonObjectConst sc = failsafe["stopCollector"];
+      if (!sc.isNull()) failsafeCfg += std::string("|stop:") + (sc["sensorId"] | "?") + "@" + std::to_string((int)(sc["address"] | -1)) +
+                                       "/" + std::to_string((int)(sc["data"] | -1));
     }
     sensorCfg.clear();
     for (JsonObjectConst sen : sensors) {
@@ -1160,6 +1163,20 @@ int main(int argc, char** argv) {
     ok("F11 a negative slider position is refused", !parse(with(R"({"closeAfterMs":30000,"close":[{"drive":"linear","channel":0,"positionMm":-1}]})").c_str(), x));
     ok("F12 an unknown drive is refused", !parse(with(R"({"closeAfterMs":30000,"close":[{"drive":"stepper","channel":0,"angle":90}]})").c_str(), x));
     ok("F13 half a pulse range is refused", !parse(with(R"({"closeAfterMs":30000,"minUs":400,"close":[]})").c_str(), x));
+    const std::string stop = R"({"closeAfterMs":30000,"close":[],"stopCollector":{"sensorId":"dc","address":94,"data":14,"tickUs":270,"repeats":24}})";
+    FailsafePlan sp;
+    ok("F14 the collector board may carry a stop, with no gates", parse(with(stop).c_str(), sp) && sp.n == 0 && sp.armed());
+    ok("F15 ...and the press rides it, resolved", sp.stop && std::string(sp.stopSensor) == "dc" && sp.stopAddress == 94 && sp.stopRepeats == 24);
+    auto stopWith = [&](const char* field, const char* value) {
+      std::string j = stop; const std::string key = std::string("\"") + field + "\":";
+      size_t at = j.find(key) + key.size(); size_t end = j.find_first_of(",}", at);
+      return j.substr(0, at) + value + j.substr(end);
+    };
+    ok("F16 a stop with no sensor is refused", !parse(with(stopWith("sensorId", "\"\"")).c_str(), x));
+    ok("F17 an address past 255 is refused", !parse(with(stopWith("address", "256")).c_str(), x));
+    ok("F18 data past 15 is refused", !parse(with(stopWith("data", "16")).c_str(), x));
+    ok("F19 a tick outside the PRESS bounds is refused", !parse(with(stopWith("tickUs", "49")).c_str(), x));
+    ok("F20 repeats outside the PRESS bounds are refused", !parse(with(stopWith("repeats", "61")).c_str(), x));
 
     // The timer — firmware-only (no JS node keeps one), so not a pair.
     FailsafeTimer t;
@@ -1802,6 +1819,28 @@ int main(int argc, char** argv) {
       std::string silly; serializeJson(d, silly);
       ok("FS5 an out-of-bounds delay falls back to the default",
          rt.adopt(silly.c_str(), silly.size(), err) && node.failsafeCfg.rfind("30000|", 0) == 0, node.failsafeCfg);
+    }
+
+    // ── fail closed, piece 4: the collector's board is told to stop the blower with the brain gone ──
+    {
+      const char* dcDoc = R"({"schemaVersion":2,
+        "controllers":[{"id":"primary","role":"primary"},{"id":"nodeC","role":"secondary"},{"id":"nodeG","role":"secondary"}],
+        "systems":[{"id":"s1","name":"s","elements":[
+          {"id":"dc","type":"collector","controllerId":"nodeC","control":{"rf":{"address":94,"data":14}},"sensor":{"ct":{"channel":0}}},
+          {"id":"g","type":"selector","controllerId":"nodeG","kind":"servoGate",
+           "states":[{"id":"open","isClosed":false,"offsetDeg":0},{"id":"closed","isClosed":true,"offsetDeg":90}],
+           "branches":[{"id":"b1","opensState":"open","role":"tool"}],"servo":{"channel":0,"referenceAngle":10}},
+          {"id":"t","type":"tool","machineId":"m"}],
+          "ducts":[{"child":"g","parent":"dc"},{"child":"t","parent":"g","parentBranch":"b1"}]}],
+        "machines":[{"id":"m"}]})";
+      StubBus local, C, G; topo::NodeBus nb; topo::TopologyRuntime rt;
+      nb.setLocal(&local, "primary"); nb.registerRemote("nodeC", &C); nb.registerRemote("nodeG", &G);
+      rt.begin(&nb);
+      std::string err;
+      ok("FS6 adopt a collector whose remote and clamp are on its own board", rt.adopt(dcDoc, strlen(dcDoc), err), err);
+      ok("FS7 that board is told to stop the blower, judged by its clamp, with the remote's numbers",
+         C.failsafeCfg == "30000||stop:dc@94/14", C.failsafeCfg);
+      ok("FS8 the gate board is told only to close its gate", G.failsafeCfg == "30000|0@100", G.failsafeCfg);
     }
 
     // ── fail closed, the brain's half (D-85): a board that loses its link ──────────────────────

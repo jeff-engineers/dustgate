@@ -36,6 +36,14 @@
 // is polled anyway: a Shelly only speaks on a CHANGE, so a quiet socket is normal, and a hung plug looks exactly the same.
 #define OUTLET_PUSH_QUIET_MS        30000
 
+// THE DEAD-MAN on a collector's switching plug (D-85, piece 4): the brain switches it ON with "and off again after
+// OUTLET_DEADMAN_SEC", and renews that every OUTLET_DEADMAN_RENEW_MS while it wants the blower on. A brain that dies
+// stops renewing, and the plug switches the blower off by itself — so a dead brain cannot leave a blower running against
+// gates its nodes have closed. Shelly's Switch.Set toggle_after. ASSUMES a renewal restarts the countdown: NOT YET TRIED on
+// a real plug (TODO.md). A Tasmota never switches (it is locked sense-only), so it has none.
+#define OUTLET_DEADMAN_SEC          60
+#define OUTLET_DEADMAN_RENEW_MS     20000
+
 // THE rule for "ask this plug now?", in one place for both brains. The ESP32 skipped a push-connected plug for ever, so a
 // plug that hung with its socket up read its last value until a reboot; the native brain had the quiet fallback alone
 // (found 2026-10-18, sweeping the two brains for drift). A plug a node polls is never asked here — the caller skips it.

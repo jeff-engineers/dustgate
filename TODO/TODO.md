@@ -51,11 +51,22 @@ first-boot WiFi setup for a customer, a read-only root, and the `--git` update p
      the status shows where such gates really are. Host-tested (test_nodebus.cpp FC0–FC15) and end to end on the native
      brain with fake nodes (`native/test/e2e_failclosed.sh`). Not mirrored in topology-device.js: the JS simulation has
      no board links to lose.
-  4. **The collector stops with the brain gone.** The collector's board: no brain for `closeAfterMs` and its clamp says the
-     blower runs → press it off (RF or the servo fob), once. A plug-switched collector: a dead-man timer — the brain sends
-     "on, off again in 60 s" every 20 s (Shelly `Switch.Set` `toggle_after`; Tasmota `PulseTime`). Try both on a real plug
-     first: whether a renewal restarts the timer, and that a plug left alone really turns off.
-  5. **A problem a person can act on** when a board's gates were closed because it lost the brain.
+  4. **BUILT 2026-10-20 — the collector stops with the brain gone.** The collector's board (its transmitter and the
+     blower's clamp both on it) is sent `failsafe.stopCollector` in CONFIG; when its timer fires it presses the remote
+     OFF if the clamp says the blower runs, re-checks after `kPressCooldownOffMs` and tries up to `kMaxPressAttempts`
+     (CollectorPress.h, the brain's own numbers), and never presses without a clamp reading (control/FailsafeStop.h,
+     test_failsafestop.cpp; F14–F20 matched). A plug-switched collector: every ON carries a dead-man
+     (`OUTLET_DEADMAN_SEC` = 60 s, Shelly `toggle_after`), renewed every `OUTLET_DEADMAN_RENEW_MS` = 20 s by the native
+     poller (`native/test/e2e_deadman.sh`). Not covered: an RF collector whose running reading comes from a plug the brain
+     polls (the board cannot judge its own press) — it gets no stop; and the frozen ESP32 brain sends no dead-man.
+  5. **BUILT 2026-10-20 — the problem says what happens.** board-offline now reads "its gates close on their own after
+     N s … the rest of the shop keeps collecting".
+- ⚠️ **BEFORE MERGING `failsafe-and-lights`: test the Shelly dead-man on a real plug (jeff, 2026-10-20).** On a Shelly with
+  a lamp or nothing on it (not the Cyclone Contactor, not a tool): `curl "http://<ip>/rpc/Switch.Set?id=0&on=true&toggle_after=30"`,
+  the same again ~20 s later, and note whether it switches off ~30 s after the SECOND (the renewal restarts the countdown:
+  what the brain assumes) or after the FIRST (it does not: rebuild the dead-man before merging, or a running blower switches
+  off every 60 s). Then flash the nodes and bench: unplug a node mid-cut, kill the brain with the collector running.
+
 - **Status lights (D-86).** The board pixel's new order (fault, bin full blinking on every board, orange, blue = no brain,
   green = "I've got the suction", dim = idle) with "suction" and "bin full" sent by the brain as a generalised ALERT; the
   optional shop light chained off DOUT (a board setting: has one, how many pixels), first on the collector board — red

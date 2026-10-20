@@ -747,6 +747,12 @@ struct FailsafePlan {
     int          minUs = 0, maxUs = 0;  // the shop's servo pulse range; 0 = keep the board's own
     FailsafeGate close[kMaxFailsafeGates];
     size_t       n = 0;
+    // The collector's board only (piece 4): press the remote OFF when the clamp `stopSensor` says the blower runs.
+    bool     stop = false;
+    char     stopSensor[kMaxSensorIdLen] = {0};
+    uint8_t  stopAddress = 0, stopData = 0;
+    uint32_t stopTickUs = 0, stopRepeats = 0;
+    bool armed() const { return closeAfterMs && (n || stop); }
 };
 
 // Parse + VALIDATE CONFIG.failsafe. Ranges mirror validateFrame's CONFIG case in nodelink.js, value for value. An absent
@@ -786,6 +792,22 @@ inline bool parseFailsafe(JsonObjectConst f, FailsafePlan& out, const char*& err
         out.close[n++] = g;
     }
     out.n = n;
+    JsonVariantConst scv = fs["stopCollector"];
+    if (!scv.isNull()) {
+        if (!scv.is<JsonObjectConst>()) { err = "failsafe stopCollector must be an object"; return false; }
+        JsonObjectConst sc = scv.as<JsonObjectConst>();
+        const char* sid = sc["sensorId"].as<const char*>();
+        if (!sid || !*sid || strlen(sid) >= kMaxSensorIdLen) { err = "failsafe stopCollector needs a sensorId"; return false; }
+        // The PRESS frame's own bounds (parsePressFrame), so a stop cannot carry a press the board would refuse.
+        if (!sc["address"].is<int>() || sc["address"].as<int>() < 0 || sc["address"].as<int>() > 255) { err = "failsafe stop address out of range"; return false; }
+        if (!sc["data"].is<int>() || sc["data"].as<int>() < 0 || sc["data"].as<int>() > 15) { err = "failsafe stop data out of range"; return false; }
+        if (!sc["tickUs"].is<uint32_t>() || sc["tickUs"].as<uint32_t>() < kMinRfTickUs || sc["tickUs"].as<uint32_t>() > kMaxRfTickUs) { err = "failsafe stop tickUs out of range"; return false; }
+        if (!sc["repeats"].is<uint32_t>() || sc["repeats"].as<uint32_t>() < 1 || sc["repeats"].as<uint32_t>() > kMaxRfRepeats) { err = "failsafe stop repeats out of range"; return false; }
+        out.stop = true;
+        strlcpy_(out.stopSensor, sid, sizeof(out.stopSensor));
+        out.stopAddress = (uint8_t)sc["address"].as<int>(); out.stopData = (uint8_t)sc["data"].as<int>();
+        out.stopTickUs = sc["tickUs"].as<uint32_t>(); out.stopRepeats = sc["repeats"].as<uint32_t>();
+    }
     out.closeAfterMs = (uint32_t)ms;
     return true;
 }
@@ -811,7 +833,7 @@ public:
     const FailsafePlan& plan() const { return _plan; }
     void heard(uint32_t nowMs) { _heardMs = nowMs ? nowMs : 1; _fired = false; }
     bool due(uint32_t nowMs) {
-        if (_fired || !_heardMs || !_plan.n || !_plan.closeAfterMs) return false;
+        if (_fired || !_heardMs || !_plan.armed()) return false;
         if (nowMs - _heardMs < _plan.closeAfterMs) return false;
         _fired = true;
         return true;

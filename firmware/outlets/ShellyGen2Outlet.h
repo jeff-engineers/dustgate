@@ -21,6 +21,7 @@ public:
     bool        poll()       override;
     bool        probe(uint32_t timeoutMs) override;
     bool        setSwitch(bool on) override;
+    bool        setSwitchDeadman(bool on, uint32_t offAfterSec) override;   // Switch.Set toggle_after
     const char* name()       const override { return _name; }
     const char* ip()         const override { return _ip; }
     int         generation() const override { return 2; }

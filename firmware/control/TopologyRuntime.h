@@ -71,6 +71,7 @@
 
 #pragma once
 #include "LayoutGate.h"
+#include "RfDefaults.h"    // rf::kRocklerAddress — the collector stop in a board's fail-closed plan
 #include "../utils/JsonAlloc.h"
 #include "CollectorPlugState.h"
 #include <ArduinoJson.h>
@@ -1767,6 +1768,28 @@ private:
                         if (_eq(set["drive"], "servo")) { c["angle"] = set["angle"]; c["holdAtRest"] = set["holdAtRest"]; }
                         else c["positionMm"] = set["positionMm"];
                     }
+                }
+            }
+            // The collector's board (piece 4): its transmitter and the blower's clamp are both on it, so with the brain gone
+            // it can press the blower off and see that it went. Only then — a press with no clamp to judge it is a toggle
+            // in the dark. RF numbers resolved here as rebuildPressers() resolves them for a PRESS.
+            if (!thisBoard) {
+                for (const PlannedSensor& p : plan) {
+                    if (p.kind != PlannedSensor::Kind::Clamp || !p.onCollector || !sameBoard(cid, p.board)) continue;
+                    JsonObjectConst rf = collectorRf(p.systemId);
+                    if (rf.isNull() || !sameBoard(cid, collectorBoard(p.systemId))) continue;
+                    if (fs.isNull()) {
+                        fs = fsDoc.to<JsonObject>();
+                        fs["closeAfterMs"] = failsafeCloseMs();
+                        fs.createNestedArray("close");
+                    }
+                    JsonObject sc = fs.createNestedObject("stopCollector");
+                    sc["sensorId"] = p.id;
+                    sc["address"]  = rf["address"] | (int)rf::kRocklerAddress;
+                    sc["data"]     = rf["data"]    | (int)rf::kRocklerData;
+                    sc["tickUs"]   = rf["tickUs"]  | (int)rf::kDefaultTickUs;
+                    sc["repeats"]  = rf["repeats"] | (int)rf::kDefaultRepeats;
+                    break;   // one collector per board
                 }
             }
             _bus->configureSensors(cid.c_str(), JsonArrayConst(arr), JsonObjectConst(fs));

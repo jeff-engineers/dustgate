@@ -114,6 +114,7 @@
 #include "../control/RfCollectorPresser.h"     // the collector's remote, keyed on this board's pad (PRESS)
 #include "../motor/ServoActuator.h"
 #include "../control/NodeLink.h"
+#include "../control/FailsafeStop.h"   // the collector's board stopping its blower with the brain gone (D-85)
 #include "../utils/BinSensor.h"           // the dust-bin beam's debounce (pure)
 #include "BrainLink.h"           // this node dialling its own primary
 #include "../utils/StatusLed.h"
@@ -309,6 +310,7 @@ static topo::nodelink::SetCommand cmdSlot;
 // so this board still interprets nothing — and the timing is FailsafeTimer's, host-tested in test_nodebus.cpp. Both are
 // written on the AsyncTCP task and acted on in loop(), which is the only place a servo moves.
 static topo::nodelink::FailsafeTimer g_failsafe;
+static topo::CollectorStopper        g_stopper;      // the collector's board: press the blower off (piece 4)
 static topo::nodelink::FailsafePlan  g_failsafeIncoming;
 static volatile bool                 g_failsafeIncomingPending = false;
 static volatile uint32_t             g_brainHeardMs = 0;    // the last frame from the owner, any frame
@@ -1748,6 +1750,39 @@ static void updateStatusScreen() {
     startPlugTask();
 }
 
+// FAIL CLOSED, piece 4: the collector's board presses the blower off with the brain gone, judged by its own clamp
+// (control/FailsafeStop.h). The press is the same one a PRESS frame makes; there is no brain to ACK it to.
+static void tickCollectorStop() {
+    if (!g_stopper.armed()) return;
+    const topo::nodelink::FailsafePlan& p = g_failsafe.plan();
+    bool known = false, running = false;
+#ifdef PIN_CT
+    for (size_t i = 0; i < g_sensorCount; i++)
+        if (strcmp(g_sensors[i].sensorId, p.stopSensor) == 0) { known = g_senseKnown; running = g_senseOn[i]; }
+#endif
+    switch (g_stopper.tick(millis(), known, running)) {
+    case topo::StopAction::Press: {
+#if HAS_RF
+        if (!g_rfPresser) g_rfPresser = new RfCollectorPresser(PIN_RF_TX);
+        g_rfPresser->configure(p.stopAddress, p.stopData, p.stopTickUs, (uint16_t)p.stopRepeats);
+        watchdog::pet();
+        const bool ok = g_rfPresser->press();
+        watchdog::pet();
+        Serial.printf("[FAILSAFE] the collector runs with no brain - pressed its remote (%u of %u)%s\n",
+                      (unsigned)g_stopper.presses(), (unsigned)topo::kMaxPressAttempts, ok ? "" : " - TRANSMIT FAILED");
+#else
+        Serial.println(F("[FAILSAFE] asked to stop the collector, but this board has no transmitter"));
+        g_stopper.disarm();
+#endif
+        break;
+    }
+    case topo::StopAction::Stopped: Serial.println(F("[FAILSAFE] the collector is off")); break;
+    case topo::StopAction::GaveUp:
+        Serial.println(F("[FAILSAFE] the collector still runs after every press - it needs a person")); break;
+    default: break;
+    }
+}
+
 // FAIL CLOSED (D-85): take a new plan, note the brain, and close once it has been quiet for closeAfterMs. Logged loudly:
 // a gate that moved with nobody asking is exactly what someone at the bench will want explained.
 static void tickFailsafe() {
@@ -1763,9 +1798,16 @@ static void tickFailsafe() {
         if (g_failsafe.closed()) Serial.println(F("[FAILSAFE] the brain is back - it sends each gate where it belongs"));
         seenHeard = heard;
         g_failsafe.heard(heard);
+        g_stopper.disarm();                                    // the brain's own press policy has the blower again
     }
+    tickCollectorStop();
     if (!g_failsafe.due(millis())) return;
     const topo::nodelink::FailsafePlan& p = g_failsafe.plan();
+    if (p.stop) {
+        g_stopper.arm();
+        Serial.printf("[FAILSAFE] nothing from the brain for %lu s - stopping the collector if %s says it runs\n",
+                      (unsigned long)(p.closeAfterMs / 1000), p.stopSensor);
+    }
     Serial.printf("[FAILSAFE] nothing from the brain for %lu s - closing this board's gates\n", (unsigned long)(p.closeAfterMs / 1000));
     for (size_t i = 0; i < p.n; i++) {
         const topo::nodelink::FailsafeGate& g = p.close[i];

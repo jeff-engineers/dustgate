@@ -490,6 +490,12 @@ function config(seq, sensors, failsafe) {
       ? { drive: 'linear', channel: c.channel, positionMm: c.positionMm }
       : { drive: 'servo', channel: c.channel, angle: c.angle, holdAtRest: !!c.holdAtRest })) };
     if (typeof failsafe.minUs === 'number' && typeof failsafe.maxUs === 'number') { fs.minUs = failsafe.minUs; fs.maxUs = failsafe.maxUs; }
+    // The collector's board only: press the remote OFF when the clamp says the blower runs (D-85 piece 4). The press is
+    // resolved like a PRESS frame; `sensorId` is the clamp it judges by, opaque like every sensorId.
+    if (failsafe.stopCollector) {
+      const sc = failsafe.stopCollector;
+      fs.stopCollector = { sensorId: sc.sensorId, address: sc.address, data: sc.data, tickUs: sc.tickUs, repeats: sc.repeats };
+    }
     f.failsafe = fs;
   }
   return f;
@@ -828,6 +834,18 @@ function validateFrame(f, direction) {
               if (typeof c.positionMm !== 'number' || Number.isNaN(c.positionMm) || c.positionMm < 0) errs.push(`${at}.positionMm must be a number, 0 or more`);
             } else errs.push(`${at}.drive must be servo or linear`);
           });
+          // The board's whole failsafe may also be ONLY a collector stop (a collector board drives no gate).
+          if (fs.stopCollector !== undefined) {
+            const sc = fs.stopCollector, at = 'CONFIG.failsafe.stopCollector';
+            if (!sc || typeof sc !== 'object') errs.push(`${at} must be an object`);
+            else {
+              if (typeof sc.sensorId !== 'string' || !sc.sensorId) errs.push(`${at}.sensorId must be a non-empty string`);
+              if (!Number.isInteger(sc.address) || sc.address < 0 || sc.address > 255) errs.push(`${at}.address out of range (0..255)`);
+              if (!Number.isInteger(sc.data) || sc.data < 0 || sc.data > 15) errs.push(`${at}.data out of range (0..15)`);
+              if (!Number.isInteger(sc.tickUs) || sc.tickUs < MIN_RF_TICK_US || sc.tickUs > MAX_RF_TICK_US) errs.push(`${at}.tickUs out of range`);
+              if (!Number.isInteger(sc.repeats) || sc.repeats < 1 || sc.repeats > MAX_RF_REPEATS) errs.push(`${at}.repeats out of range`);
+            }
+          }
         }
       }
       if (!Array.isArray(f.sensors)) {

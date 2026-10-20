@@ -584,6 +584,16 @@ const eq = (name, got, want) =>
   check('F11 a negative slider position is refused', bad({ close: [{ drive: 'linear', channel: 0, positionMm: -1 }] }));
   check('F12 an unknown drive is refused', bad({ close: [{ drive: 'stepper', channel: 0, angle: 90 }] }));
   check('F13 half a pulse range is refused', bad({ maxUs: undefined }));
+  const sc = { sensorId: 'dc', address: 94, data: 14, tickUs: 270, repeats: 24 };
+  const withStop = NL.config(6, [], { closeAfterMs: 30000, close: [], stopCollector: sc });
+  eq('F14 the collector board may carry a stop, with no gates', NL.validateFrame(withStop, 'p2s'), []);
+  check('F15 ...and the press rides it, resolved', withStop.failsafe.stopCollector.address === 94 && withStop.failsafe.stopCollector.repeats === 24);
+  const badStop = (patch) => NL.validateFrame({ ...withStop, failsafe: { ...withStop.failsafe, stopCollector: { ...sc, ...patch } } }, 'p2s').length > 0;
+  check('F16 a stop with no sensor is refused', badStop({ sensorId: '' }));
+  check('F17 an address past 255 is refused', badStop({ address: 256 }));
+  check('F18 data past 15 is refused', badStop({ data: 16 }));
+  check('F19 a tick outside the PRESS bounds is refused', badStop({ tickUs: 49 }));
+  check('F20 repeats outside the PRESS bounds are refused', badStop({ repeats: 61 }));
 }
 
 // ── timing constants match the firmware (control/NodeLink.h) ────────────────

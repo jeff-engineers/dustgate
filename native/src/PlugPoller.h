@@ -137,6 +137,7 @@ private:
         uint32_t provisionAtMs = 0;      // next time to try claiming it
         int switchWanted = -1;     // -1 nothing asked yet
         int switchTaken = -1;      // the last state the plug accepted; re-sent while it differs
+        uint32_t switchSentMs = 0; // when it last took one: an ON is renewed from here (the dead-man)
     };
     void loop() {
         while (_run) {
@@ -147,7 +148,13 @@ private:
                 if (!_run) return;
                 Slot& s = *kv.second;
                 int sw, taken; { std::lock_guard<std::mutex> g(_m); sw = s.switchWanted; taken = s.switchTaken; }
-                if (sw >= 0 && sw != taken && s.outlet->setSwitch(sw == 1)) { std::lock_guard<std::mutex> g(_m); s.switchTaken = sw; }
+                // ON goes with a dead-man (OutletTimeouts.h OUTLET_DEADMAN_SEC), RENEWED every OUTLET_DEADMAN_RENEW_MS while
+                // it stays wanted: if this brain dies the plug switches the blower off by itself (D-85, piece 4).
+                const bool renew = sw == 1 && taken == 1 && nowMs() - s.switchSentMs >= OUTLET_DEADMAN_RENEW_MS;
+                if (sw >= 0 && (sw != taken || renew) &&
+                    (sw == 1 ? s.outlet->setSwitchDeadman(true, OUTLET_DEADMAN_SEC) : s.outlet->setSwitch(false))) {
+                    std::lock_guard<std::mutex> g(_m); s.switchTaken = sw; s.switchSentMs = nowMs();
+                }
                 provision(s);
                 bool quiet;
                 { std::lock_guard<std::mutex> g(_m); quiet = outletPollDue(s.pushed, nowMs() - s.heardMs); }   // OutletTimeouts.h, shared with the ESP32
