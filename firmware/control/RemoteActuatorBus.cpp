@@ -665,10 +665,10 @@ void RemoteActuatorBus::setBinAlert(bool full) {
     _s.setBinAlert(full);
     xSemaphoreGive(_mutex);
 }
-void RemoteActuatorBus::configureSensors(JsonArrayConst sensors) {
+void RemoteActuatorBus::configureSensors(JsonArrayConst sensors, JsonObjectConst failsafe) {
     if (!_mutex) return;
     xSemaphoreTake(_mutex, portMAX_DELAY);
-    _s.configureSensors(sensors);
+    _s.configureSensors(sensors, failsafe);
     xSemaphoreGive(_mutex);
     flushSink();
 }

@@ -345,10 +345,24 @@ public:
     // (kDefaultServoMinUs in NodeLink.h) — a range that cannot be right must not reach a servo.
     void pushServoPulseRange() {
         if (!_bus || !_doc) return;
-        JsonObjectConst sv = topology()["servo"];
-        int lo = sv["minUs"] | nodelink::kDefaultServoMinUs, hi = sv["maxUs"] | nodelink::kDefaultServoMaxUs;
-        if (!nodelink::servoRangeOk(lo, hi)) { lo = nodelink::kDefaultServoMinUs; hi = nodelink::kDefaultServoMaxUs; }
+        int lo, hi; servoPulseRange(lo, hi);
         _bus->setServoPulseRange(lo, hi);
+    }
+    void servoPulseRange(int& lo, int& hi) const {
+        JsonObjectConst sv = topology()["servo"];
+        lo = sv["minUs"] | nodelink::kDefaultServoMinUs; hi = sv["maxUs"] | nodelink::kDefaultServoMaxUs;
+        if (!nodelink::servoRangeOk(lo, hi)) { lo = nodelink::kDefaultServoMinUs; hi = nodelink::kDefaultServoMaxUs; }
+    }
+
+    // How long a board waits without hearing the brain before it closes its gates (D-85, Settings): the layout's `failsafe`
+    // block, or the default when it is absent or out of bounds. Mirrors shop.js failsafeCloseMs().
+    uint32_t failsafeCloseMs() const {
+        if (!_doc) return nodelink::kDefaultFailsafeCloseMs;
+        JsonVariantConst v = topology()["failsafe"]["closeAfterMs"];
+        if (!v.is<long>()) return nodelink::kDefaultFailsafeCloseMs;
+        const long ms = v.as<long>();
+        return (ms >= (long)nodelink::kMinFailsafeCloseMs && ms <= (long)nodelink::kMaxFailsafeCloseMs) ? (uint32_t)ms
+                                                                                                       : nodelink::kDefaultFailsafeCloseMs;
     }
 
     // Selectors present in both layouts as the same physical gate (sameHardware()). Ids are unique across the shop.
@@ -1560,7 +1574,36 @@ private:
                     _nodePlugs[p.id]  = cid;
                 }
             }
-            _bus->configureSensors(cid.c_str(), JsonArrayConst(arr));
+            // FAIL CLOSED (D-85): what this board closes if it stops hearing us. Not for this board — a brain does not lose
+            // itself — and only gates the layout has calibrated, resolved exactly as a SET would be.
+            DynamicJsonDocument fsDoc(1024);
+            JsonObject fs;
+            if (!thisBoard) {
+                JsonArray close;
+                for (const SystemView& sys : systemsOf(topology())) {
+                    for (JsonObjectConst e : sys.elements) {
+                        if (!_eq(e["type"], "selector") || !sameBoard(cid, _str(e["controllerId"]))) continue;
+                        const char* closed = _closedState(e);
+                        if (!closed) continue;                  // a slider with no closed position has nothing to close to
+                        StaticJsonDocument<384> set;
+                        if (!nodelink::buildSetFrame(set.to<JsonObject>(), 0, _str(e["id"]).c_str(), e, closed)) continue;
+                        if (close.isNull()) {
+                            fs = fsDoc.to<JsonObject>();
+                            fs["closeAfterMs"] = failsafeCloseMs();
+                            int lo, hi; servoPulseRange(lo, hi);
+                            fs["minUs"] = lo; fs["maxUs"] = hi;
+                            close = fs.createNestedArray("close");
+                        }
+                        if (close.size() >= nodelink::kMaxFailsafeGates) break;
+                        JsonObject c = close.createNestedObject();
+                        c["drive"]   = set["drive"];
+                        c["channel"] = set["channel"];
+                        if (_eq(set["drive"], "servo")) { c["angle"] = set["angle"]; c["holdAtRest"] = set["holdAtRest"]; }
+                        else c["positionMm"] = set["positionMm"];
+                    }
+                }
+            }
+            _bus->configureSensors(cid.c_str(), JsonArrayConst(arr), JsonObjectConst(fs));
         }
         _plugSig = plugCapSignature();
     }

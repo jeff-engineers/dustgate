@@ -562,6 +562,30 @@ const eq = (name, got, want) =>
   eq('PRESS did not bump the version', NL.NODELINK_VERSION, 1);
 }
 
+// ── fail closed (D-85, 2026-10-19) ─────────────────────────────────────────
+// Same cases as the "fail closed" block of test_nodebus.cpp, same order, literals asserted.
+{
+  eq('F1 the default delay is 30 s', NL.DEFAULT_FAILSAFE_CLOSE_MS, 30000);
+  eq('F2 the bounds are 10 s to 10 min, four gates', [NL.MIN_FAILSAFE_CLOSE_MS, NL.MAX_FAILSAFE_CLOSE_MS, NL.MAX_FAILSAFE_GATES], [10000, 600000, 4]);
+  const fs = { closeAfterMs: 30000, minUs: 400, maxUs: 2600,
+               close: [{ drive: 'servo', channel: 0, angle: 100 }, { drive: 'linear', channel: 0, positionMm: 12.5 }] };
+  const f = NL.config(5, [], fs);
+  eq('F3 a CONFIG may carry a failsafe', NL.validateFrame(f, 'p2s'), []);
+  check('F4 ...the delay and the resolved close commands ride it',
+    f.failsafe.closeAfterMs === 30000 && f.failsafe.close[0].angle === 100 && f.failsafe.close[1].positionMm === 12.5 &&
+    f.failsafe.minUs === 400 && f.failsafe.maxUs === 2600);
+  eq('F5 a CONFIG without one is still valid', NL.validateFrame(NL.config(5, []), 'p2s'), []);
+  const bad = (patch) => NL.validateFrame({ ...f, failsafe: { ...f.failsafe, ...patch } }, 'p2s').length > 0;
+  check('F6 a delay under 10 s is refused', bad({ closeAfterMs: 9999 }));
+  check('F7 a delay over 10 min is refused', bad({ closeAfterMs: 600001 }));
+  check('F8 a delay that is not whole ms is refused', bad({ closeAfterMs: 30000.5 }));
+  check('F9 five gates are refused', bad({ close: [0, 1, 2, 3, 4].map((ch) => ({ drive: 'servo', channel: ch, angle: 90 })) }));
+  check('F10 an angle past 180 is refused', bad({ close: [{ drive: 'servo', channel: 0, angle: 181 }] }));
+  check('F11 a negative slider position is refused', bad({ close: [{ drive: 'linear', channel: 0, positionMm: -1 }] }));
+  check('F12 an unknown drive is refused', bad({ close: [{ drive: 'stepper', channel: 0, angle: 90 }] }));
+  check('F13 half a pulse range is refused', bad({ maxUs: undefined }));
+}
+
 // ── timing constants match the firmware (control/NodeLink.h) ────────────────
 {
   eq('PING_INTERVAL_MS', NL.PING_INTERVAL_MS, 2000);

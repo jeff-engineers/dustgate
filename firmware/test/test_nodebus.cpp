@@ -91,8 +91,20 @@ struct StubBus : public topo::ActuatorBus {
     return true;
   }
 
-  void configureSensors(JsonArrayConst sensors) override {
+  // The fail-closed plan (D-85) it was last handed, flattened: "<ms>|ch@angle,..." ("" = none).
+  std::string failsafeCfg;
+  void configureSensors(JsonArrayConst sensors, JsonObjectConst failsafe = JsonObjectConst()) override {
     cfgCalls++;
+    failsafeCfg.clear();
+    if (!failsafe.isNull()) {
+      failsafeCfg = std::to_string((long)(failsafe["closeAfterMs"] | 0L)) + "|";
+      bool first = true;
+      for (JsonObjectConst c : failsafe["close"].as<JsonArrayConst>()) {
+        failsafeCfg += (first ? "" : ",") + std::to_string((int)(c["channel"] | -1)) + "@" +
+                       (topo::_eq(c["drive"], "servo") ? std::to_string((int)(c["angle"] | -1)) : std::string("mm"));
+        first = false;
+      }
+    }
     sensorCfg.clear();
     for (JsonObjectConst sen : sensors) {
       if (topo::_eq(sen["kind"], "bin")) {
@@ -1118,6 +1130,52 @@ int main(int argc, char** argv) {
        node.sensorCfg.empty(), joined(node.sensorCfg));
   }
 
+  // ── fail closed (D-85) — the PAIR of nodelink.test.js's "fail closed" block, same cases, same order ──
+  {
+    using namespace topo::nodelink;
+    ok("F1 the default delay is 30 s", kDefaultFailsafeCloseMs == 30000);
+    ok("F2 the bounds are 10 s to 10 min, four gates", kMinFailsafeCloseMs == 10000 && kMaxFailsafeCloseMs == 600000 && kMaxFailsafeGates == 4);
+    auto parse = [](const char* json, FailsafePlan& plan) {
+      DynamicJsonDocument d(2048); deserializeJson(d, json);
+      SensorSpec specs[kMaxSensorsPerNode]; size_t n = 0; const char* err = nullptr;
+      return parseConfigFrame(d.as<JsonObjectConst>(), specs, kMaxSensorsPerNode, n, plan, err);
+    };
+    auto with = [](const std::string& fs) {
+      return std::string(R"({"t":"CONFIG","seq":5,"sensors":[],"failsafe":)") + fs + "}";
+    };
+    const std::string good = R"({"closeAfterMs":30000,"minUs":400,"maxUs":2600,"close":[{"drive":"servo","channel":0,"angle":100},{"drive":"linear","channel":0,"positionMm":12.5}]})";
+    FailsafePlan plan;
+    ok("F3 a CONFIG may carry a failsafe", parse(with(good).c_str(), plan));
+    ok("F4 ...the delay and the resolved close commands ride it",
+       plan.closeAfterMs == 30000 && plan.n == 2 && plan.close[0].isServo && plan.close[0].angle == 100 &&
+       !plan.close[1].isServo && plan.close[1].positionMm == 12.5f && plan.minUs == 400 && plan.maxUs == 2600);
+    FailsafePlan none;
+    ok("F5 a CONFIG without one is still valid", parse(R"({"t":"CONFIG","seq":5,"sensors":[]})", none) && none.n == 0);
+    FailsafePlan x;
+    ok("F6 a delay under 10 s is refused", !parse(with(R"({"closeAfterMs":9999,"close":[]})").c_str(), x));
+    ok("F7 a delay over 10 min is refused", !parse(with(R"({"closeAfterMs":600001,"close":[]})").c_str(), x));
+    ok("F8 a delay that is not whole ms is refused", !parse(with(R"({"closeAfterMs":30000.5,"close":[]})").c_str(), x));
+    ok("F9 five gates are refused", !parse(with(R"({"closeAfterMs":30000,"close":[{"drive":"servo","channel":0,"angle":90},{"drive":"servo","channel":1,"angle":90},{"drive":"servo","channel":2,"angle":90},{"drive":"servo","channel":3,"angle":90},{"drive":"servo","channel":4,"angle":90}]})").c_str(), x));
+    ok("F10 an angle past 180 is refused", !parse(with(R"({"closeAfterMs":30000,"close":[{"drive":"servo","channel":0,"angle":181}]})").c_str(), x));
+    ok("F11 a negative slider position is refused", !parse(with(R"({"closeAfterMs":30000,"close":[{"drive":"linear","channel":0,"positionMm":-1}]})").c_str(), x));
+    ok("F12 an unknown drive is refused", !parse(with(R"({"closeAfterMs":30000,"close":[{"drive":"stepper","channel":0,"angle":90}]})").c_str(), x));
+    ok("F13 half a pulse range is refused", !parse(with(R"({"closeAfterMs":30000,"minUs":400,"close":[]})").c_str(), x));
+
+    // The timer — firmware-only (no JS node keeps one), so not a pair.
+    FailsafeTimer t;
+    t.setPlan(plan);
+    ok("T1 never heard the brain: never due", !t.due(10000000));
+    t.heard(1000);
+    ok("T2 heard, quiet for 29.9 s: not due", !t.due(1000 + 29999));
+    ok("T3 quiet for 30 s: due", t.due(1000 + 30000));
+    ok("T4 ...once per silence", !t.due(1000 + 90000) && t.closed());
+    t.heard(200000);
+    ok("T5 heard again: re-armed, not closed", !t.closed() && !t.due(200000 + 1000));
+    ok("T6 and due again after another 30 s of quiet", t.due(200000 + 30000));
+    FailsafeTimer empty; empty.setPlan(none); empty.heard(1000);
+    ok("T7 a board with no gates never fires", !empty.due(1000 + 600000));
+  }
+
   // ── CONFIG / SENSE — the PAIR of nodelink.test.js's cases ────────────────
   //
   // Same rules, same order, same literal numbers as the JS side. The firmware
@@ -1717,6 +1775,33 @@ int main(int argc, char** argv) {
            node.presses.size() == 2 && node.presses[1].address == 0b01011110 && node.presses[1].data == 0b1110 &&
            node.presses[1].tickUs == 270 && node.presses[1].repeats == 24);
       }
+    }
+
+    // ── fail closed (D-85): the runtime gives each node the plan to close its own gates ──────────
+    {
+      std::string doc = twoGatesJson;
+      DynamicJsonDocument d(8192); deserializeJson(d, doc);
+      for (JsonObject e : d["systems"][0]["elements"].as<JsonArray>())
+        if (std::string(e["type"] | "") == "selector") e["controllerId"] = "nodeF";
+      JsonObject nf = d["controllers"].as<JsonArray>().createNestedObject(); nf["id"] = "nodeF"; nf["role"] = "secondary";
+      std::string onNode; serializeJson(d, onNode);
+      StubBus local, node;
+      topo::NodeBus nb; topo::TopologyRuntime rt;
+      nb.setLocal(&local, "primary"); nb.registerRemote("nodeF", &node);
+      rt.begin(&nb);
+      std::string err;
+      ok("FS1 adopt twoGates with both gates on a node", rt.adopt(onNode.c_str(), onNode.size(), err), err);
+      ok("FS2 the node is sent the 30 s default and both gates' closed angles",
+         node.failsafeCfg == "30000|0@100,1@100", node.failsafeCfg);
+      ok("FS3 the brain's own board is sent no plan", local.failsafeCfg.empty(), local.failsafeCfg);
+      d["failsafe"]["closeAfterMs"] = 45000;
+      std::string tuned; serializeJson(d, tuned);
+      ok("FS4 a layout's own delay is what the node is sent",
+         rt.adopt(tuned.c_str(), tuned.size(), err) && node.failsafeCfg.rfind("45000|", 0) == 0, node.failsafeCfg);
+      d["failsafe"]["closeAfterMs"] = 5;
+      std::string silly; serializeJson(d, silly);
+      ok("FS5 an out-of-bounds delay falls back to the default",
+         rt.adopt(silly.c_str(), silly.size(), err) && node.failsafeCfg.rfind("30000|", 0) == 0, node.failsafeCfg);
     }
 
   printf("\n%d/%d passed%s\n", passed, passed + failed,

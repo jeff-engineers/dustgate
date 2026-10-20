@@ -41,6 +41,16 @@ static const int kDefaultServoMaxUs = 2600;
 static const int kMinServoUs        = 300;    // the shortest pulse either end may ask for
 static const int kMaxServoUs        = 2800;   // ...and the longest
 static const int kMinServoSpanUs    = 500;    // maxUs - minUs at least this: a narrower range is a typo, not a servo
+// FAIL CLOSED (D-85, 2026-10-19): a node that hears nothing from its brain for closeAfterMs closes its gates, so the brain
+// may count a lost board's gates as closed and keep collecting with the rest. The delay and each gate's RESOLVED close
+// command ride CONFIG.failsafe (parseFailsafe below). The DEFAULT applies when the layout says nothing; the BOUNDS refuse a
+// CONFIG whole — the low end outlasts kPongTimeoutMs and a WiFi reconnect, so a blip never closes a gate. PAIR:
+// DEFAULT_FAILSAFE_CLOSE_MS / MIN_FAILSAFE_CLOSE_MS / MAX_FAILSAFE_CLOSE_MS / MAX_FAILSAFE_GATES in nodelink.js.
+static const uint32_t kDefaultFailsafeCloseMs = 30000;
+static const uint32_t kMinFailsafeCloseMs     = 10000;
+static const uint32_t kMaxFailsafeCloseMs     = 600000;
+static const size_t   kMaxFailsafeGates       = 4;
+
 inline bool servoRangeOk(int minUs, int maxUs) {
     return minUs >= kMinServoUs && maxUs <= kMaxServoUs && maxUs - minUs >= kMinServoSpanUs;
 }
@@ -721,6 +731,98 @@ inline bool parseConfigFrame(JsonObjectConst f, SensorSpec* out, size_t maxOut,
     countOut = n;
     return true;
 }
+
+// ── FAIL CLOSED: CONFIG.failsafe (D-85) ────────────────────────────────────
+// What a node does with no brain: after closeAfterMs of silence, drive each gate it carries to the position given here.
+// Resolved numbers, exactly as on a SET, so the node still interprets nothing. Absent = nothing to close (n == 0).
+struct FailsafeGate {
+    bool  isServo = true;
+    int   channel = 0;
+    int   angle = 0;            // servo
+    bool  holdAtRest = false;   // servo
+    float positionMm = 0.0f;    // linear
+};
+struct FailsafePlan {
+    uint32_t     closeAfterMs = 0;      // 0 = no plan
+    int          minUs = 0, maxUs = 0;  // the shop's servo pulse range; 0 = keep the board's own
+    FailsafeGate close[kMaxFailsafeGates];
+    size_t       n = 0;
+};
+
+// Parse + VALIDATE CONFIG.failsafe. Ranges mirror validateFrame's CONFIG case in nodelink.js, value for value. An absent
+// block is valid and leaves `out` empty. A present but bad one is an error, and the caller refuses the WHOLE frame.
+inline bool parseFailsafe(JsonObjectConst f, FailsafePlan& out, const char*& err) {
+    out = FailsafePlan();
+    JsonVariantConst fsv = f["failsafe"];
+    if (fsv.isNull()) return true;
+    if (!fsv.is<JsonObjectConst>()) { err = "failsafe must be an object"; return false; }
+    JsonObjectConst fs = fsv.as<JsonObjectConst>();
+    // TYPE FIRST, as everywhere here: as<long>() on a string is 0, and on 30000.5 is 30000. is<long>() is false for both.
+    if (!fs["closeAfterMs"].is<long>()) { err = "failsafe closeAfterMs must be whole ms"; return false; }
+    const long ms = fs["closeAfterMs"].as<long>();
+    if (ms < (long)kMinFailsafeCloseMs || ms > (long)kMaxFailsafeCloseMs) { err = "failsafe closeAfterMs out of range"; return false; }
+    if (fs.containsKey("minUs") || fs.containsKey("maxUs")) {
+        if (!fs["minUs"].is<int>() || !fs["maxUs"].is<int>() || !servoRangeOk(fs["minUs"].as<int>(), fs["maxUs"].as<int>())) {
+            err = "failsafe servo pulse range out of bounds"; return false;
+        }
+        out.minUs = fs["minUs"].as<int>(); out.maxUs = fs["maxUs"].as<int>();
+    }
+    JsonArrayConst arr = fs["close"];
+    if (arr.isNull())                    { err = "failsafe close must be an array"; return false; }
+    if (arr.size() > kMaxFailsafeGates)  { err = "failsafe has too many gates"; return false; }
+    size_t n = 0;
+    for (JsonObjectConst c : arr) {
+        FailsafeGate g;
+        if (!c["channel"].is<int>() || c["channel"].as<int>() < 0 || c["channel"].as<int>() > 15) { err = "failsafe channel out of range"; return false; }
+        g.channel = c["channel"].as<int>();
+        if (_eq(c["drive"], "servo")) {
+            if (!c["angle"].is<int>() || c["angle"].as<int>() < 0 || c["angle"].as<int>() > 180) { err = "failsafe angle out of range"; return false; }
+            if (c.containsKey("holdAtRest") && !c["holdAtRest"].is<bool>()) { err = "failsafe holdAtRest must be a boolean"; return false; }
+            g.isServo = true; g.angle = c["angle"].as<int>(); g.holdAtRest = c["holdAtRest"] | false;
+        } else if (_eq(c["drive"], "linear")) {
+            if (!c["positionMm"].is<float>() || c["positionMm"].as<float>() < 0.0f) { err = "failsafe positionMm must be 0 or more"; return false; }
+            g.isServo = false; g.positionMm = c["positionMm"].as<float>();
+        } else { err = "failsafe drive must be servo or linear"; return false; }
+        out.close[n++] = g;
+    }
+    out.n = n;
+    out.closeAfterMs = (uint32_t)ms;
+    return true;
+}
+
+// ALL OR NOTHING across both halves: a CONFIG whose failsafe is bad is refused with its sensors, so a node never runs with
+// a sensor list from one frame and a close plan from another.
+inline bool parseConfigFrame(JsonObjectConst f, SensorSpec* out, size_t maxOut, size_t& countOut,
+                             FailsafePlan& plan, const char*& err) {
+    FailsafePlan p;
+    if (!parseFailsafe(f, p, err)) return false;
+    if (!parseConfigFrame(f, out, maxOut, countOut, err)) return false;
+    plan = p;
+    return true;
+}
+
+// When to close. Pure, so the host tests drive it with an injected clock. ARMED only by a plan with gates AND a brain heard
+// at least once since — a board that boots with no brain has nothing in its plan and no idea where its gates are meant to
+// be. Fires ONCE per silence: due() is true the first time the brain has been quiet for closeAfterMs, and again only after
+// the brain has been heard and gone quiet again — so a long outage closes the gates once rather than every loop.
+class FailsafeTimer {
+public:
+    void setPlan(const FailsafePlan& p) { _plan = p; }
+    const FailsafePlan& plan() const { return _plan; }
+    void heard(uint32_t nowMs) { _heardMs = nowMs ? nowMs : 1; _fired = false; }
+    bool due(uint32_t nowMs) {
+        if (_fired || !_heardMs || !_plan.n || !_plan.closeAfterMs) return false;
+        if (nowMs - _heardMs < _plan.closeAfterMs) return false;
+        _fired = true;
+        return true;
+    }
+    bool closed() const { return _fired; }
+private:
+    FailsafePlan _plan;
+    uint32_t     _heardMs = 0;
+    bool         _fired = false;
+};
+
 
 // An OTA order, decoded. Fixed buffers — a node has no business allocating to
 // receive an instruction to replace itself.

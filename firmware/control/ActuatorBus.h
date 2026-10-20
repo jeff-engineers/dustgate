@@ -111,7 +111,9 @@ public:
     // nothing", which is the same state as never having been configured.
     //
     // JsonArrayConst rather than a struct so this header keeps its one include.
-    virtual void configureSensors(JsonArrayConst sensors) { (void)sensors; }
+    // `failsafe` (D-85): what this board closes when it stops hearing the brain — CONFIG.failsafe, already resolved
+    // (NodeLink.h parseFailsafe). Null for a board with nothing to close.
+    virtual void configureSensors(JsonArrayConst sensors, JsonObjectConst failsafe = JsonObjectConst()) { (void)sensors; (void)failsafe; }
 
     // The latest reading for a sensor on this bus.
     //

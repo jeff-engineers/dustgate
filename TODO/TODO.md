@@ -36,11 +36,13 @@ first-boot WiFi setup for a customer, a read-only root, and the `--git` update p
 ## Next: failure states and status lights (decided 2026-10-19, D-85 and D-86)
 
 - **Fail closed (D-85).** The plan, one piece at a time, each with its matched JS/C++ test where the model has a twin:
-  1. **The delay, a shop setting.** A `failsafe.closeAfterMs` in the layout (default 30000, a JS/C++ default pair, and a
-     bounds pair because it rides CONFIG to every node); a field in Settings, easy to hide later.
-  2. **The node closes.** No PING from its brain for `closeAfterMs` → close every gate it drives (the layout's closed
-     angle/position, which the brain sends in CONFIG so the node interprets nothing). A link back sooner cancels it. Logged.
-     The slider node: close only if homed; an unhomed rack does not move on its own.
+  1. **BUILT 2026-10-20 — the delay, a shop setting.** `failsafe.closeAfterMs` in the layout (shop.js `failsafeCloseMs`,
+     `TopologyRuntime::failsafeCloseMs`), bounds 10 s–10 min, a field in Settings ("If a board loses the brain").
+  2. **BUILT 2026-10-20 — the node closes.** CONFIG carries `failsafe` (the delay and each gate's resolved close command,
+     `parseFailsafe`/`FailsafeTimer` in NodeLink.h, matched tests F1–F13); the node closes once after `closeAfterMs` with no
+     frame from its brain, a link back sooner cancels it, an unhomed slider is left where it is. Host-tested and compiled
+     only. **Do not flash nodes with it until piece 3 lands:** today's brain does not resend a board's gates when it
+     relinks, so after a close it would still believe the gate open.
   3. **The brain stops trusting a lost board's gates at once** (not open for dead-head or for routing), and if a running
      collector's open path was on it, opens another gate on a live board inside the delay. Replaces "a failed make holds the
      blower off" (TopologyRuntime.h's collector policy comment): the blower runs on the gates the brain can see; with none

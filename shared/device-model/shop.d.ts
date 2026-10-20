@@ -96,5 +96,8 @@ export function planShopTransition(
 export function servoPulseRange(shop: unknown): { minUs: number; maxUs: number };
 /** What a servo pulse range may be: each end within min..max µs, at least `span` apart. */
 export const SERVO_PULSE_BOUNDS: { min: number; max: number; span: number };
+/** How long a board waits without the brain before closing its gates (D-85): the layout's, or the default. */
+export function failsafeCloseMs(shop: unknown): number;
+export const FAILSAFE_BOUNDS: { min: number; max: number; dflt: number };
 /** Can the shop lose this board without losing anything but a reading? See shop.js. */
 export function isOptionalBoard(shop: unknown, controllerId: string): boolean;

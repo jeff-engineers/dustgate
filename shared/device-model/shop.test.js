@@ -413,6 +413,18 @@ check('swapping which port is primary leaves a valid shop', validateShop(mut(swa
   check('two tools on one board\'s clamp are refused, whatever the spelling or channel', clampErrs(two).length === 1);
 }
 
+// ── the fail-closed delay (D-85): a shop setting, bounded like the wire ──────
+{
+  const { failsafeCloseMs } = require('./shop');
+  check('no failsafe block is valid', validateShop(clone(twoSystemShop)).ok);
+  check('...and means the 30 s default', failsafeCloseMs(clone(twoSystemShop)) === 30000);
+  check('a 45 s delay is valid and read back', validateShop(mut((s) => { s.failsafe = { closeAfterMs: 45000 }; })).ok &&
+    failsafeCloseMs(mut((s) => { s.failsafe = { closeAfterMs: 45000 }; })) === 45000);
+  check('5 s is refused (a blip would close a gate)', !validateShop(mut((s) => { s.failsafe = { closeAfterMs: 5000 }; })).ok);
+  check('an hour is refused', !validateShop(mut((s) => { s.failsafe = { closeAfterMs: 3600000 }; })).ok);
+  check('an out-of-bounds value reads as the default', failsafeCloseMs({ failsafe: { closeAfterMs: 5 } }) === 30000);
+}
+
 // ── report ──────────────────────────────────────────────────────────────────
 let failed = 0;
 for (const r of results) {

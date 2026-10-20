@@ -354,8 +354,9 @@ public:
     // CONFIG, mirrored by parseConfigFrame() on the node.
     // 1024 since plug sensors (2026-10-03): four of them are four objects of five members, and
     // overflow DROPS members silently.
-    void configureSensors(JsonArrayConst sensors) {
-        StaticJsonDocument<1024> doc;
+    void configureSensors(JsonArrayConst sensors, JsonObjectConst failsafe = JsonObjectConst()) {
+        // 1536 since the fail-closed plan (D-85) rides along: up to kMaxFailsafeGates resolved close commands.
+        StaticJsonDocument<1536> doc;
         JsonObject f = doc.to<JsonObject>();
         f["t"] = "CONFIG";
         JsonArray arr = f.createNestedArray("sensors");
@@ -379,7 +380,10 @@ public:
                     if (sen.containsKey(k)) o[k] = sen[k].as<float>();
             }
         }
+        // FAIL CLOSED (D-85): copied as the runtime resolved it; nodelink.js config() is the wire shape.
+        if (!failsafe.isNull()) f["failsafe"] = failsafe;
         f["seq"] = _cfgSeq = ++_seq;
+        if (doc.overflowed()) { say(label("[NODE] CONFIG overflowed its document for ")); return; }
         std::string s; serializeJson(doc, s);
         if (s.size() >= sizeof(_cfgFrame)) {
             say(label("[NODE] CONFIG too large for "));
@@ -752,7 +756,7 @@ private:
     // for is powered from the tool it watches (RFC §5.6a), so it reboots every time someone switches
     // the planer off at the wall. A configuration sent once at adopt would be forgotten on the first
     // power cut. Re-sent on every accepted WELCOME instead, which costs one small frame per reconnect.
-    char     _cfgFrame[768]   = "";
+    char     _cfgFrame[1280]  = "";   // a full sensor list plus the fail-closed plan (D-85)
     bool     _cfgPending      = false;
     bool     _cfgAwaitAck     = false;   // sent, no ACK yet
     uint8_t  _cfgTries        = 0;       // resends so far

@@ -75,9 +75,10 @@
 // the right place to spend it — it is a move someone asked for, at a moment they
 // are watching, instead of a move nobody asked for at a moment nobody is.
 //
-// FAIL-SAFE: if the primary disappears, every actuator HOLDS. There is no
-// timeout that closes gates, no re-homing on reconnect, no autonomous behaviour
-// of any kind. Losing the link mid-cut must never slam a gate on a running tool.
+// FAIL CLOSED (D-85, 2026-10-19; it used to HOLD): if the brain disappears, every actuator holds for the plan's
+// closeAfterMs (30 s by default) and then CLOSES — tickFailsafe(). A blip shorter than that moves nothing. The brain counts
+// a lost board's gates as closed and keeps collecting with the rest; a gate it can no longer see staying open would be
+// suction it is not accounting for. No re-homing on reconnect: the brain sends each gate where it belongs.
 //
 // Build:  pio run -e xiao_c5           (PWM servo bank)
 //         pio run -e xiao_c5_linear    (ST3215 slider)
@@ -301,6 +302,17 @@ static portMUX_TYPE      cmdMux = portMUX_INITIALIZER_UNLOCKED;
 static volatile bool     cmdPending = false;
 static topo::nodelink::SetCommand cmdSlot;
 
+// ── FAIL CLOSED (D-85, 2026-10-19) ─────────────────────────────────────────
+// A node that hears nothing from its brain for the plan's closeAfterMs closes the gates it drives, so the brain can count
+// a lost board's gates as closed and keep collecting with the rest. A dropped link and a dead brain look the same from
+// here, and are treated the same. The plan arrives in CONFIG (NodeLink.h parseFailsafe) — resolved angles and positions,
+// so this board still interprets nothing — and the timing is FailsafeTimer's, host-tested in test_nodebus.cpp. Both are
+// written on the AsyncTCP task and acted on in loop(), which is the only place a servo moves.
+static topo::nodelink::FailsafeTimer g_failsafe;
+static topo::nodelink::FailsafePlan  g_failsafeIncoming;
+static volatile bool                 g_failsafeIncomingPending = false;
+static volatile uint32_t             g_brainHeardMs = 0;    // the last frame from the owner, any frame
+
 // The move currently being reported on, so arrival can be announced when the
 // servo settles rather than at a guessed interval.
 static char pendingSel[48]   = "";
@@ -328,8 +340,8 @@ static volatile uint32_t g_linkedClientId = 0;
 // evaporated on a power cut would just be re-raced at every brownout, and on a
 // bench that is several times a day.
 //
-// NOT RELEASED ON DISCONNECT, deliberately. A node holds its gates when the
-// link drops (the fail-safe at the top of this file), so a primary rebooting is
+// NOT RELEASED ON DISCONNECT, deliberately. A node holds its gates for a while when the
+// link drops (fail closed, at the top of this file), so a primary rebooting is
 // an ordinary event — releasing the claim then would let a neighbouring brain
 // quietly adopt shop hardware during a reboot. Only an explicit, user-confirmed
 // takeover moves ownership.
@@ -827,8 +839,8 @@ static void runPress() {
 // The frame handler only RECORDS the order (it runs on the AsyncTCP task, which
 // must stay free to answer PINGs and which has a small stack); loop() does the
 // download. loop() therefore blocks for the ~15 s a 1.3 MB image takes — safe
-// here because a node holds every gate while it is away (the same fail-safe as a
-// dropped link), and because the order is REFUSED while anything is moving. The
+// here because nothing moves while it runs (the fail-closed timer is ticked from loop() too, and an image takes far less
+// than its shortest delay), and because the order is REFUSED while anything is moving. The
 // watchdog is petted from the progress callback so the wait is not mistaken for
 // a hang.
 //
@@ -941,6 +953,8 @@ static void handleNodeFrame(const Conn& conn, const uint8_t* data, size_t len) {
     JsonObjectConst f = doc.as<JsonObjectConst>();
     const char* t = f["t"].as<const char*>();
     if (!t) return;
+    // Any frame from the owner says the brain is there — a PING every kPingIntervalMs when nothing else is said.
+    if (g_ownerLinked && conn.id == g_ownerClientId) g_brainHeardMs = millis() ? millis() : 1;
 
     // 512, not 256, and the extra is not slack. A WELCOME carrying nodeId,
     // board, fw, a claimedBy and a three-member `caps` lands right on 256 — and
@@ -1063,7 +1077,8 @@ static void handleNodeFrame(const Conn& conn, const uint8_t* data, size_t len) {
             const char* err = nullptr;
             size_t n = 0;
             topo::nodelink::SensorSpec parsed[topo::nodelink::kMaxSensorsPerNode];
-            if (!topo::nodelink::parseConfigFrame(f, parsed, topo::nodelink::kMaxSensorsPerNode, n, err)) {
+            topo::nodelink::FailsafePlan plan;
+            if (!topo::nodelink::parseConfigFrame(f, parsed, topo::nodelink::kMaxSensorsPerNode, n, plan, err)) {
                 Serial.print(F("[CONFIG] MALFORMED — ")); Serial.println(err ? err : "?");
                 topo::nodelink::buildAck(reply.to<JsonObject>(), f["seq"] | 0, false, err);
             } else {
@@ -1139,6 +1154,13 @@ static void handleNodeFrame(const Conn& conn, const uint8_t* data, size_t len) {
 #endif
                     plugApplyConfig(plugs, plugN);
                     binApplyConfig(bins, binN);
+                    portENTER_CRITICAL(&cmdMux);
+                    g_failsafeIncoming = plan;
+                    g_failsafeIncomingPending = true;
+                    portEXIT_CRITICAL(&cmdMux);
+                    if (plan.n) Serial.printf("[FAILSAFE] %u gate(s) close after %lu s without the brain\n",
+                                              (unsigned)plan.n, (unsigned long)(plan.closeAfterMs / 1000));
+                    else Serial.println(F("[FAILSAFE] no gates to close on this board"));
                     topo::nodelink::buildAck(reply.to<JsonObject>(), f["seq"] | 0, true);
                 }
             }
@@ -1316,10 +1338,10 @@ static void onNodeWsEvent(AsyncWebSocket*, AsyncWebSocketClient* client,
         return;
     }
     if (type == WS_EVT_DISCONNECT || type == WS_EVT_ERROR) {
-        // HOLD. No servo command here, by design — see the fail-safe note above.
+        // HOLD for now. No servo command here: tickFailsafe() closes the gates if the brain stays away (top of file).
         Serial.print(F("[NODE] Primary disconnected — client #"));
         Serial.print(client->id());
-        Serial.println(F(" — holding all gates."));
+        Serial.println(F(" — holding the gates; they close if the brain stays away."));
         // Track the ONE linked client by id rather than inferring from count().
         // count() includes the client currently being torn down, which is why this
         // used to read `> 1`; that guess also went wrong the other way, reporting
@@ -1472,7 +1494,7 @@ static void onBrainState(bool up) {
     if (up) return;                      // the HELLO that follows decides "linked"
     if (g_ownerOutbound) g_ownerLinked = false;
     if (g_linkedClientId == kOutboundId) g_primaryLinked = false;
-    Serial.println(F("[NODE] Primary disconnected (our socket) — holding all gates."));
+    Serial.println(F("[NODE] Primary disconnected (our socket) — holding the gates; they close if the brain stays away."));
 }
 
 void setup() {
@@ -1726,6 +1748,51 @@ static void updateStatusScreen() {
     startPlugTask();
 }
 
+// FAIL CLOSED (D-85): take a new plan, note the brain, and close once it has been quiet for closeAfterMs. Logged loudly:
+// a gate that moved with nobody asking is exactly what someone at the bench will want explained.
+static void tickFailsafe() {
+    bool fresh = false;
+    topo::nodelink::FailsafePlan plan;
+    portENTER_CRITICAL(&cmdMux);
+    if (g_failsafeIncomingPending) { plan = g_failsafeIncoming; g_failsafeIncomingPending = false; fresh = true; }
+    portEXIT_CRITICAL(&cmdMux);
+    if (fresh) g_failsafe.setPlan(plan);
+    static uint32_t seenHeard = 0;
+    const uint32_t heard = g_brainHeardMs;
+    if (heard != seenHeard) {
+        if (g_failsafe.closed()) Serial.println(F("[FAILSAFE] the brain is back - it sends each gate where it belongs"));
+        seenHeard = heard;
+        g_failsafe.heard(heard);
+    }
+    if (!g_failsafe.due(millis())) return;
+    const topo::nodelink::FailsafePlan& p = g_failsafe.plan();
+    Serial.printf("[FAILSAFE] nothing from the brain for %lu s - closing this board's gates\n", (unsigned long)(p.closeAfterMs / 1000));
+    for (size_t i = 0; i < p.n; i++) {
+        const topo::nodelink::FailsafeGate& g = p.close[i];
+#if HAS_SERVO
+        if (g.isServo && g.channel >= 0 && g.channel < SERVO_COUNT) {
+            if (p.minUs) ServoActuator::setPulseRange(p.minUs, p.maxUs);
+            servos[g.channel].setHoldAtRest(g.holdAtRest);
+            servos[g.channel].moveTo(g.angle);
+            Serial.printf("[FAILSAFE] Servo%d -> %ddeg (closed)\n", g.channel + 1, g.angle);
+        }
+#endif
+#if HAS_LINEAR
+        if (!g.isServo) {
+            // Only from a datum: a rack that does not know where it is must not drive itself anywhere, least of all
+            // with nobody watching. Left where it is, and said.
+            g_deferredMove = false;
+            if (g_homing == HOME_DONE && motor.online()) {
+                motor.moveTo((long)(g.positionMm * ST3215_COUNTS_PER_MM * -HOME_DIRECTION));
+                Serial.printf("[FAILSAFE] Slider -> %.1fmm (closed)\n", g.positionMm);
+            } else {
+                Serial.println(F("[FAILSAFE] Slider not homed - left where it is"));
+            }
+        }
+#endif
+    }
+}
+
 void loop() {
     watchdog::pet();
     { static uint32_t lastTry = 0; if (!g_plugTask && millis() - lastTry > 5000) { lastTry = millis(); startPlugTask(); } }
@@ -1795,6 +1862,8 @@ void loop() {
     if (g_homeAsked && g_homing == HOME_NEEDED && motor.online()) startSweep();
     updateSweep();
 #endif
+
+    tickFailsafe();
 
     // Drain a pending SET. Servos are only ever touched from here.
     bool have = false;

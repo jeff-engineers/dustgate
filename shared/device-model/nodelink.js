@@ -58,6 +58,20 @@ function servoRangeOk(minUs, maxUs) {
   return Number.isInteger(minUs) && Number.isInteger(maxUs) &&
          minUs >= MIN_SERVO_US && maxUs <= MAX_SERVO_US && maxUs - minUs >= MIN_SERVO_SPAN_US;
 }
+// FAIL CLOSED (D-85, 2026-10-19): a node that hears nothing from its brain for `closeAfterMs` closes its gates, so a brain
+// may assume a lost board's gates are closed and keep collecting with the rest. The brain sends the delay and each gate's
+// RESOLVED close command (angles and positions, as on a SET) in CONFIG.failsafe, so the node still interprets nothing.
+// The DEFAULT applies when the layout says nothing (Settings, the layout's `failsafe` block); the BOUNDS refuse a CONFIG
+// whole on both sides — the low end must outlast PONG_TIMEOUT_MS and a WiFi reconnect, or a blip would close a gate.
+// PAIR: kDefaultFailsafeCloseMs / kMinFailsafeCloseMs / kMaxFailsafeCloseMs / kMaxFailsafeGates in NodeLink.h.
+const DEFAULT_FAILSAFE_CLOSE_MS = 30000;
+const MIN_FAILSAFE_CLOSE_MS = 10000;
+const MAX_FAILSAFE_CLOSE_MS = 600000;
+const MAX_FAILSAFE_GATES = 4;
+/** Is this a close delay a node may be given? Whole milliseconds, within the bounds. */
+function failsafeDelayOk(ms) {
+  return Number.isInteger(ms) && ms >= MIN_FAILSAFE_CLOSE_MS && ms <= MAX_FAILSAFE_CLOSE_MS;
+}
 /** Frame types, secondary → primary. */
 const S2P = ['WELCOME', 'ACK', 'STATE', 'SENSE', 'CLAMP', 'PONG', 'OTASTATE', 'JOIN'];
 
@@ -449,8 +463,8 @@ function set(seq, sel, stateId, realization, opts = {}) {
  * @param {SensorSpec[]} sensors
  * @returns {ConfigFrame}
  */
-function config(seq, sensors) {
-  return { t: 'CONFIG', seq, sensors: (sensors || []).map((s) => {
+function config(seq, sensors, failsafe) {
+  const f = { t: 'CONFIG', seq, sensors: (sensors || []).map((s) => {
     if (s.kind === 'plug') {
       return { sensorId: s.sensorId, kind: 'plug', ip: s.ip, plug: s.plug, thresholdW: s.thresholdW };
     }
@@ -469,6 +483,16 @@ function config(seq, sensors) {
     }
     return out;
   }) };
+  // FAIL CLOSED (D-85): the delay and each gate's resolved close command. Omitted when the brain has none to give (a board
+  // that drives no gate), which a node reads as "nothing to close".
+  if (failsafe) {
+    const fs = { closeAfterMs: failsafe.closeAfterMs, close: (failsafe.close || []).map((c) => (c.drive === 'linear'
+      ? { drive: 'linear', channel: c.channel, positionMm: c.positionMm }
+      : { drive: 'servo', channel: c.channel, angle: c.angle, holdAtRest: !!c.holdAtRest })) };
+    if (typeof failsafe.minUs === 'number' && typeof failsafe.maxUs === 'number') { fs.minUs = failsafe.minUs; fs.maxUs = failsafe.maxUs; }
+    f.failsafe = fs;
+  }
+  return f;
 }
 
 /**
@@ -782,6 +806,30 @@ function validateFrame(f, direction) {
       break;
     case 'CONFIG':
       num('seq', 0, Number.MAX_SAFE_INTEGER);
+      // FAIL CLOSED (D-85). Optional; when present it is checked whole, like the sensors, and a bad one refuses the frame.
+      // Ranges mirror parseFailsafe() in control/NodeLink.h.
+      if (f.failsafe !== undefined) {
+        const fs = f.failsafe;
+        if (!fs || typeof fs !== 'object') errs.push('CONFIG.failsafe must be an object');
+        else {
+          if (!failsafeDelayOk(fs.closeAfterMs)) errs.push(`CONFIG.failsafe.closeAfterMs must be whole ms, ${MIN_FAILSAFE_CLOSE_MS}..${MAX_FAILSAFE_CLOSE_MS}`);
+          if ((fs.minUs !== undefined || fs.maxUs !== undefined) && !servoRangeOk(fs.minUs, fs.maxUs))
+            errs.push('CONFIG.failsafe.minUs/maxUs must be a servo pulse range within bounds');
+          if (!Array.isArray(fs.close)) errs.push('CONFIG.failsafe.close must be an array');
+          else if (fs.close.length > MAX_FAILSAFE_GATES) errs.push(`CONFIG.failsafe.close has ${fs.close.length}, max ${MAX_FAILSAFE_GATES}`);
+          else fs.close.forEach((c, i) => {
+            const at = `CONFIG.failsafe.close[${i}]`;
+            if (!c || typeof c !== 'object') { errs.push(`${at} must be an object`); return; }
+            if (!Number.isInteger(c.channel) || c.channel < 0 || c.channel > 15) errs.push(`${at}.channel out of range (0..15)`);
+            if (c.drive === 'servo') {
+              if (!Number.isInteger(c.angle) || c.angle < 0 || c.angle > 180) errs.push(`${at}.angle out of range (0..180)`);
+              if (c.holdAtRest !== undefined && typeof c.holdAtRest !== 'boolean') errs.push(`${at}.holdAtRest must be a boolean`);
+            } else if (c.drive === 'linear') {
+              if (typeof c.positionMm !== 'number' || Number.isNaN(c.positionMm) || c.positionMm < 0) errs.push(`${at}.positionMm must be a number, 0 or more`);
+            } else errs.push(`${at}.drive must be servo or linear`);
+          });
+        }
+      }
       if (!Array.isArray(f.sensors)) {
         errs.push('CONFIG.sensors must be an array');
       } else if (f.sensors.length > MAX_SENSORS_PER_NODE) {
@@ -912,6 +960,7 @@ function validateFrame(f, direction) {
 module.exports = {
   NODELINK_VERSION, P2S, S2P,
   DEFAULT_SERVO_MIN_US, DEFAULT_SERVO_MAX_US, MIN_SERVO_US, MAX_SERVO_US, MIN_SERVO_SPAN_US, servoRangeOk,
+  DEFAULT_FAILSAFE_CLOSE_MS, MIN_FAILSAFE_CLOSE_MS, MAX_FAILSAFE_CLOSE_MS, MAX_FAILSAFE_GATES, failsafeDelayOk,
   PING_INTERVAL_MS, PONG_TIMEOUT_MS, RECONNECT_MIN_MS, RECONNECT_MAX_MS,
   SENSE_REPEAT_MS, SENSE_STALE_MS, MAX_SENSORS_PER_NODE,
   MAX_PLUG_THRESHOLD_W, MAX_PLUG_WATTS, MAX_PLUG_IP_LEN, PLUG_KINDS, pollsPlugs,
