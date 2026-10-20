@@ -94,14 +94,15 @@ inline bool& _suction()      { static bool b = false; return b; }
 inline void setSuction(bool s) { _suction() = s; }
 inline bool suction()        { return _suction(); }
 
-// THE SHOP LIGHT (D-86): extra pixels chained off this board's pixel (its DOUT), driven as one colour the brain resolved.
-// 0 pixels = none (the normal case, and then nothing about the pixel's write changes). Max = kMaxShopPixels in NodeLink.h.
-static const uint8_t kMaxShopPixels = 16;
-struct ShopLook { uint8_t pixels = 0, r = 0, g = 0, b = 0; bool blink = false; };
+// THE SHOP LIGHT (D-86): a strip chained off this board's pixel (its DOUT), driven as one colour the brain resolved. Every
+// board drives kShopPixels of it, always (jeff, 2026-10-20): on a board with no strip the data clocks into nothing, and a
+// shorter strip passes the rest off its end. Off (0,0,0) until the brain says otherwise.
+static const uint8_t kShopPixels = 16;
+struct ShopLook { uint8_t r = 0, g = 0, b = 0; bool blink = false; };
 inline ShopLook& _shop()     { static ShopLook l; return l; }
-inline void setShopLight(uint8_t pixels, uint8_t r, uint8_t g, uint8_t b, bool blink) {
+inline void setShopLight(uint8_t r, uint8_t g, uint8_t b, bool blink) {
     ShopLook& l = _shop();
-    l.pixels = pixels > kMaxShopPixels ? kMaxShopPixels : pixels; l.r = r; l.g = g; l.b = b; l.blink = blink;
+    l.r = r; l.g = g; l.b = b; l.blink = blink;
 }
 inline const ShopLook& shopLight() { return _shop(); }
 
@@ -169,12 +170,18 @@ inline void _write(uint8_t pin, uint8_t r, uint8_t g, uint8_t b) {
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
 // The board pixel AND the shop light, in one RMT transaction (D-86): a chain must be clocked as one stream, and
 // rgbLedWrite() only ever sends one pixel. WS2812 timing at the 10 MHz RMT clock rgbLedWrite itself uses: a 1 is 0.8 us
-// high then 0.4 us low, a 0 the reverse; colours go out green, red, blue. Only used when a shop light is configured, so a
-// board without one keeps the single-pixel write that has run on every board. NOT YET RUN ON HARDWARE.
-inline void _writeChain(uint8_t pin, uint8_t r, uint8_t g, uint8_t b, const ShopLook& shop, uint8_t sr, uint8_t sg, uint8_t sb) {
+// high then 0.4 us low, a 0 the reverse; colours go out green, red, blue. 17 pixels take about half a millisecond, so the
+// chain is written only when a colour CHANGES (a blink is a change), plus once a second in case a write was lost — not on
+// every pass of loop(). NOT YET RUN ON HARDWARE: every board now writes through it.
+inline void _writeChain(uint8_t pin, uint8_t r, uint8_t g, uint8_t b, uint8_t sr, uint8_t sg, uint8_t sb) {
     static bool ready = false;
+    static uint8_t last[6] = {1, 1, 1, 1, 1, 1};   // never a real first value, so the first call writes
+    static unsigned long lastMs = 0;
+    const uint8_t now6[6] = {r, g, b, sr, sg, sb};
+    const unsigned long now = millis();
+    if (memcmp(now6, last, 6) == 0 && now - lastMs < 1000) return;
     if (!ready) { ready = rmtInit(pin, RMT_TX_MODE, RMT_MEM_NUM_BLOCKS_1, 10000000); if (!ready) return; }
-    static rmt_data_t buf[24 * (1 + kMaxShopPixels)];
+    static rmt_data_t buf[24 * (1 + kShopPixels)];
     size_t i = 0;
     auto put = [&](uint8_t v) {
         for (int bit = 7; bit >= 0; bit--) {
@@ -185,25 +192,24 @@ inline void _writeChain(uint8_t pin, uint8_t r, uint8_t g, uint8_t b, const Shop
         }
     };
     put(g); put(r); put(b);
-    for (uint8_t k = 0; k < shop.pixels; k++) { put(sg); put(sr); put(sb); }
+    for (uint8_t k = 0; k < kShopPixels; k++) { put(sg); put(sr); put(sb); }
     rmtWrite(pin, buf, i, RMT_WAIT_FOR_EVER);
+    memcpy(last, now6, 6); lastMs = now;
 }
 #endif
 
-// Drives the pixel at its gain — and the shop light behind it, when there is one. Writing to a pad with nothing soldered to
-// it is harmless — it clocks a few bytes into open air.
+// Drives the pixel at its gain, and the shop light behind it. Writing to a pad with nothing soldered to it is harmless —
+// it clocks a few bytes into open air.
 inline void _raw(uint8_t r, uint8_t g, uint8_t b) {
-    const ShopLook& shop = _shop();
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
-    if (shop.pixels) {
-        const bool lit = !shop.blink || (millis() / 500) % 2;
-        _writeChain(PIN_PIXEL, _scale(r, PIXEL_GAIN), _scale(g, PIXEL_GAIN), _scale(b, PIXEL_GAIN), shop,
-                    lit ? shop.r : 0, lit ? shop.g : 0, lit ? shop.b : 0);
-        return;
-    }
-#endif
+    const ShopLook& shop = _shop();
+    const bool lit = !shop.blink || (millis() / 500) % 2;
+    _writeChain(PIN_PIXEL, _scale(r, PIXEL_GAIN), _scale(g, PIXEL_GAIN), _scale(b, PIXEL_GAIN),
+                lit ? shop.r : 0, lit ? shop.g : 0, lit ? shop.b : 0);
+#else
     _write(PIN_PIXEL, _scale(r, PIXEL_GAIN), _scale(g, PIXEL_GAIN),
            _scale(b, PIXEL_GAIN));
+#endif
 }
 
 inline void begin() {

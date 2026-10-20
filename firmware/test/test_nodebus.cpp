@@ -660,29 +660,30 @@ int main(int argc, char** argv) {
     AlertLight lb; lb.suction = true;
     topo::nodelink::buildAlert(a.to<JsonObject>(), la);
     topo::nodelink::buildAlert(b.to<JsonObject>(), lb);
-    ok("alert: a full bin", std::string(a["t"] | "") == "ALERT" && a["bin"].as<bool>() && !a["suction"].as<bool>() && a.size() == 3);
-    ok("alert: an emptied bin, with the suction", !b["bin"].as<bool>() && b["suction"].as<bool>() && b.size() == 3);
+    ok("alert: a full bin", std::string(a["t"] | "") == "ALERT" && a["bin"].as<bool>() && !a["suction"].as<bool>() && a["shop"]["rgb"][0] == 0);
+    ok("alert: an emptied bin, with the suction", !b["bin"].as<bool>() && b["suction"].as<bool>());
     AlertLight got; const char* err = nullptr;
     ok("alert: it parses on the node", topo::nodelink::parseAlertFrame(a.as<JsonObjectConst>(), got, err) && got.bin);
-    StaticJsonDocument<96> c; deserializeJson(c, R"({"t":"ALERT","suction":false})");
+    const char* off = R"("shop":{"rgb":[0,0,0],"blink":false})";
+    StaticJsonDocument<384> c; deserializeJson(c, std::string(R"({"t":"ALERT","suction":false,)") + off + "}");
     ok("alert: without `bin` it is refused", !topo::nodelink::parseAlertFrame(c.as<JsonObjectConst>(), got, err));
-    StaticJsonDocument<96> d; deserializeJson(d, R"({"t":"ALERT","bin":1,"suction":false})");
+    StaticJsonDocument<384> d; deserializeJson(d, std::string(R"({"t":"ALERT","bin":1,"suction":false,)") + off + "}");
     ok("alert: a non-boolean `bin` is refused", !topo::nodelink::parseAlertFrame(d.as<JsonObjectConst>(), got, err));
     // the status lights (D-86) — same cases as nodelink.test.js, same order
-    StaticJsonDocument<384> e; AlertLight le; le.suction = true; le.shopPixels = 7; le.g = 64;
+    StaticJsonDocument<384> e; AlertLight le; le.suction = true; le.g = 64;
     topo::nodelink::buildAlert(e.to<JsonObject>(), le);
-    ok("lights: the shop light rides it, resolved", e["shop"]["pixels"] == 7 && e["shop"]["rgb"][1] == 64 && e["shop"]["blink"] == false);
+    ok("lights: the shop light rides it, resolved", e["shop"]["rgb"][1] == 64 && e["shop"]["blink"] == false);
     AlertLight back;
     ok("lights: ...and parses back the same", topo::nodelink::parseAlertFrame(e.as<JsonObjectConst>(), back, err) && back == le);
-    ok("lights: the bound is 16 pixels", topo::nodelink::kMaxShopPixels == 16);
+    StaticJsonDocument<192> n; deserializeJson(n, R"({"t":"ALERT","bin":false,"suction":false})");
+    ok("lights: without a shop light it is refused", !topo::nodelink::parseAlertFrame(n.as<JsonObjectConst>(), got, err));
     auto shop = [&](const char* sh) {
       StaticJsonDocument<384> x; deserializeJson(x, std::string(R"({"t":"ALERT","bin":false,"suction":false,"shop":)") + sh + "}");
       AlertLight o; const char* er = nullptr; return topo::nodelink::parseAlertFrame(x.as<JsonObjectConst>(), o, er);
     };
-    ok("lights: 17 pixels are refused", !shop(R"({"pixels":17,"rgb":[0,64,0],"blink":false})"));
-    ok("lights: a channel past 255 is refused", !shop(R"({"pixels":7,"rgb":[0,256,0],"blink":false})"));
-    ok("lights: two channels are refused", !shop(R"({"pixels":7,"rgb":[0,64],"blink":false})"));
-    StaticJsonDocument<96> f; deserializeJson(f, R"({"t":"ALERT","bin":false})");
+    ok("lights: a channel past 255 is refused", !shop(R"({"rgb":[0,256,0],"blink":false})"));
+    ok("lights: two channels are refused", !shop(R"({"rgb":[0,64],"blink":false})"));
+    StaticJsonDocument<384> f; deserializeJson(f, std::string(R"({"t":"ALERT","bin":false,)") + off + "}");
     ok("lights: without `suction` it is refused", !topo::nodelink::parseAlertFrame(f.as<JsonObjectConst>(), got, err));
   }
 
@@ -1851,18 +1852,17 @@ int main(int argc, char** argv) {
       }
       for (const char* id : {"nodeA", "nodeB", "nodeC"}) {
         JsonObject c = d["controllers"].as<JsonArray>().createNestedObject(); c["id"] = id; c["role"] = "secondary";
-        if (std::string(id) == "nodeC") c["shopLight"]["pixels"] = 7;
       }
       std::string shop; serializeJson(d, shop);
       StubBus local, A, B, C; topo::NodeBus nb; topo::TopologyRuntime rt;
       nb.setLocal(&local, "primary"); nb.registerRemote("nodeA", &A); nb.registerRemote("nodeB", &B); nb.registerRemote("nodeC", &C);
       rt.begin(&nb);
       std::string err;
-      ok("L0 adopt twoGates with its collector on nodeC, which has a 7-pixel shop light", rt.adopt(shop.c_str(), shop.size(), err), err);
+      ok("L0 adopt twoGates with its collector on nodeC", rt.adopt(shop.c_str(), shop.size(), err), err);
       auto la = rt.boardLight("nodeA", false), lc = rt.boardLight("nodeC", false);
-      ok("L1 idle: no suction anywhere, and the shop light is there but off",
-         !la.suction && !lc.suction && lc.shopPixels == 7 && lc.r == 0 && lc.g == 0 && lc.b == 0 && !lc.blink);
-      ok("L2 a board with no shop light is sent none", la.shopPixels == 0);
+      ok("L1 idle: no suction anywhere, and the shop light is off",
+         !la.suction && !lc.suction && lc.r == 0 && lc.g == 0 && lc.b == 0 && !lc.blink);
+      ok("L2 every board is sent the shop light, not only the collector's", la.r == 0 && la.g == 0 && !la.blink);
       rt.setMachinePower("toolX", 200);
       for (uint32_t t = 1000; t <= 5000; t += 500) { rt.update(t); A.settle(); B.settle(); C.settle(); }
       la = rt.boardLight("nodeA", false); auto lb = rt.boardLight("nodeB", false); lc = rt.boardLight("nodeC", false);

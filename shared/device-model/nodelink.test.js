@@ -118,22 +118,22 @@ const eq = (name, got, want) =>
 // ── the bin alert (2026-10-10) ──────────────────────────────────────────────
 // Same cases as the "bin alert" block of test_nodebus.cpp, same order.
 {
-  eq('a full bin', NL.alert(true), { t: 'ALERT', bin: true, suction: false });
-  eq('an emptied bin, with the suction', NL.alert(false, true), { t: 'ALERT', bin: false, suction: true });
+  const off = { rgb: [0, 0, 0], blink: false };
+  eq('a full bin', NL.alert(true), { t: 'ALERT', bin: true, suction: false, shop: off });
+  eq('an emptied bin, with the suction', NL.alert(false, true), { t: 'ALERT', bin: false, suction: true, shop: off });
   eq('it validates primary to node', NL.validateFrame(NL.alert(true), 'p2s'), []);
-  check('without `bin` it is refused', NL.validateFrame({ t: 'ALERT', suction: false }, 'p2s').length === 1);
-  check('a non-boolean `bin` is refused', NL.validateFrame({ t: 'ALERT', bin: 1, suction: false }, 'p2s').length === 1);
+  check('without `bin` it is refused', NL.validateFrame({ t: 'ALERT', suction: false, shop: off }, 'p2s').length === 1);
+  check('a non-boolean `bin` is refused', NL.validateFrame({ t: 'ALERT', bin: 1, suction: false, shop: off }, 'p2s').length === 1);
   check('a node cannot send one', NL.validateFrame(NL.alert(true), 's2p').length > 0);
-  // the status lights (D-86) — same cases as the "status lights" block of test_nodebus.cpp, same order
-  eq('the shop light rides it, resolved', NL.alert(false, true, { pixels: 7, rgb: [0, 64, 0], blink: false }),
-     { t: 'ALERT', bin: false, suction: true, shop: { pixels: 7, rgb: [0, 64, 0], blink: false } });
-  eq('...and validates', NL.validateFrame(NL.alert(false, true, { pixels: 7, rgb: [0, 64, 0], blink: false }), 'p2s'), []);
-  eq('the bound is 16 pixels', NL.MAX_SHOP_PIXELS, 16);
-  const sh = (patch) => NL.validateFrame({ t: 'ALERT', bin: false, suction: false, shop: { pixels: 7, rgb: [0, 64, 0], blink: false, ...patch } }, 'p2s').length > 0;
-  check('17 pixels are refused', sh({ pixels: 17 }));
+  // the status lights (D-86) — same cases as the "lights:" block of test_nodebus.cpp, same order
+  eq('the shop light rides it, resolved', NL.alert(false, true, { rgb: [0, 64, 0], blink: false }),
+     { t: 'ALERT', bin: false, suction: true, shop: { rgb: [0, 64, 0], blink: false } });
+  eq('...and validates', NL.validateFrame(NL.alert(false, true, { rgb: [0, 64, 0], blink: false }), 'p2s'), []);
+  const sh = (patch) => NL.validateFrame({ t: 'ALERT', bin: false, suction: false, shop: { rgb: [0, 64, 0], blink: false, ...patch } }, 'p2s').length > 0;
+  check('without a shop light it is refused', NL.validateFrame({ t: 'ALERT', bin: false, suction: false }, 'p2s').length === 1);
   check('a channel past 255 is refused', sh({ rgb: [0, 256, 0] }));
   check('two channels are refused', sh({ rgb: [0, 64] }));
-  check('without `suction` it is refused', NL.validateFrame({ t: 'ALERT', bin: false }, 'p2s').length === 1);
+  check('without `suction` it is refused', NL.validateFrame({ t: 'ALERT', bin: false, shop: off }, 'p2s').length === 1);
 }
 
 // ── direction is enforced: a secondary can't send a SET ─────────────────────

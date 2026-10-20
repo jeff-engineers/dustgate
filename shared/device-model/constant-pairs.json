@@ -588,23 +588,6 @@
      "kMaxFailsafeGates"
     ]
    ]
-  },
-  {
-   "name": "shop light pixels per board",
-   "refs": [
-    [
-     "shared/device-model/nodelink.js",
-     "MAX_SHOP_PIXELS"
-    ],
-    [
-     "firmware/control/NodeLink.h",
-     "kMaxShopPixels"
-    ],
-    [
-     "shared/device-model/topology.js",
-     "MAX_SHOP_PIXELS"
-    ]
-   ]
   }
  ]
 }

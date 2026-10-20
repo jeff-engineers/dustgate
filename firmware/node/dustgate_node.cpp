@@ -115,7 +115,7 @@
 #include "../motor/ServoActuator.h"
 #include "../control/NodeLink.h"
 #include "../control/FailsafeStop.h"
-static_assert(topo::nodelink::kMaxShopPixels == 16, "statusled::kMaxShopPixels mirrors it");   // the collector's board stopping its blower with the brain gone (D-85)
+   // the collector's board stopping its blower with the brain gone (D-85)
 #include "../utils/BinSensor.h"           // the dust-bin beam's debounce (pure)
 #include "BrainLink.h"           // this node dialling its own primary
 #include "../utils/StatusLed.h"
@@ -1292,7 +1292,7 @@ static void handleNodeFrame(const Conn& conn, const uint8_t* data, size_t len) {
             if (l.suction != statusled::suction()) Serial.printf("[ALERT] %s\n", l.suction ? "this board has the suction" : "no suction here");
             statusled::setBinAlert(l.bin);
             statusled::setSuction(l.suction);
-            statusled::setShopLight(l.shopPixels, l.r, l.g, l.b, l.blink);
+            statusled::setShopLight(l.r, l.g, l.b, l.blink);
         }
         return;
     } else if (strcmp(t, "REFUSE") == 0) {
@@ -1882,13 +1882,12 @@ void loop() {
     tickBin();
     // The alert is the owner's word, held only while the owner is there to change it: a board left blinking by a brain
     // that went away would say "full" about a bin nobody can see any more.
-    if (!g_ownerLinked && (statusled::binAlert() || statusled::suction() || statusled::shopLight().pixels)) {
+    if (!g_ownerLinked) {
         statusled::setBinAlert(false);
         statusled::setSuction(false);
         // The shop light is about the SHOP, so with no brain to say what the shop is doing it goes dark rather than keep
         // showing a collector that may long since have stopped.
-        const statusled::ShopLook keep = statusled::shopLight();
-        statusled::setShopLight(keep.pixels, 0, 0, 0, false);
+        statusled::setShopLight(0, 0, 0, false);
     }
 
     // Status pixel — the node's only UI. Derived fresh each loop rather than

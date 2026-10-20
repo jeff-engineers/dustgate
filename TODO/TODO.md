@@ -65,21 +65,15 @@ first-boot WiFi setup for a customer, a read-only root, and the `--git` update p
   apart switched off ~50 s in, 30 s after the second call — a renewal restarts the countdown, as the brain assumes. Still to
   bench after flashing the nodes: unplug a node mid-cut, and stop the brain with the collector running.
 
-- **Status lights (D-86) — BUILT 2026-10-20 except the Boards-page control.** The screen's words (jeff, 2026-10-20):
-  BIN FULL "Empty the dust bin"; NO BRAIN "WiFi ok, brain silent" with "gates close in Ns" then "gates closed" (and the
-  collector's board: "collector pressed off" / "collector is off" / "collector won't stop"); SUCTION "gate open",
-  "collector running"; READY "waiting for a tool". No WiFi is blue blinking. Fault, then a full bin, outrank motion on
-  both the pixel and the screen. ALERT carries `bin`,
-  `suction` and an optional `shop` light (resolved colour + blink, `kMaxShopPixels` = 16, matched tests);
-  `TopologyRuntime::boardLight()` decides (L0–L8), the native brain sends it, the node shows it: READY is green with the
-  suction and dim white without, and a shop light is clocked with the board pixel as one RMT chain (StatusLed.h
-  `_writeChain`, used only when a board has one — NOT YET RUN ON HARDWARE). The layout's `controllers[].shopLight.pixels`
-  is validated; nothing in the app sets it yet. The frozen ESP32 brain's own pixel now reads dim white when ready.
-  Originally: the board pixel's new order (fault, bin full blinking on every board, orange, blue = no brain,
-  green = "I've got the suction", dim = idle) with "suction" and "bin full" sent by the brain as a generalised ALERT; the
-  optional shop light chained off DOUT (a board setting: has one, how many pixels), first on the collector board — red
-  blinking bin full, amber blinking needs a person, green collector running, off idle. Wired 2026-10-19 on the collector
-  node: off the 5 V supply, data through the board's own pixel.
+- **Status lights (D-86) — BUILT 2026-10-20, NOT YET RUN ON HARDWARE.** ALERT carries `bin`, `suction` and the shop
+  light's resolved colour + blink (matched tests); `TopologyRuntime::boardLight()` decides (L0–L8), the native brain sends
+  it on change, the node shows it. Every board drives a 16-pixel shop light behind its own pixel, always (jeff: on a board
+  with no strip the data clocks into nothing), as one RMT chain written only on a change (StatusLed.h `_writeChain`).
+  **Every board now writes its pixel through that new code: flash ONE board first and check its pixel still looks right.**
+  The screen (jeff, 2026-10-20): BIN FULL "Empty the dust bin"; NO BRAIN "WiFi ok, brain silent", "gates close in Ns" then
+  "gates closed" (and on the collector's board what it did about the blower); SUCTION "gate open", "collector running";
+  READY "waiting for a tool". No WiFi is blue blinking. Fault, then a full bin, outrank motion on pixel and screen. The
+  frozen ESP32 brain's own pixel now reads dim white when ready.
 
 ## Bugs
 

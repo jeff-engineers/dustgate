@@ -25,9 +25,7 @@ const BRANCH_ROLES     = ['tool', 'unassigned', 'blocked', 'feed'];
 // What a board is flashed to drive. Absent = 'servo', because every board that
 // existed before this field was a PWM board.
 const CONTROLLER_DRIVES = ['servo', 'linear'];
-// Pixels a board's shop light may have (D-86). The same bound as nodelink.js MAX_SHOP_PIXELS and NodeLink.h kMaxShopPixels,
-// held equal by constant-pairs.json: this file imports nothing.
-const MAX_SHOP_PIXELS = 16;
+
 const LINK_TRANSPORTS  = ['wifi-ws', 'esp-now'];
 
 // Per-host (per-controller) actuator budget, and these are ALTERNATIVES rather
@@ -313,12 +311,7 @@ function validateTopology(t) {
     if (!CONTROLLER_ROLES.includes(c.role)) err('controller', `bad role "${c.role}"`, c.id);
     if (c.drives !== undefined && !CONTROLLER_DRIVES.includes(c.drives))
       err('controller', `bad drives "${c.drives}" (servo|linear)`, c.id);
-    // The SHOP LIGHT chained off this board's pixel (D-86): how many pixels. A NeoPixel cannot be detected, so it is said.
-    if (c.shopLight !== undefined) {
-      const px = c.shopLight && c.shopLight.pixels;
-      if (!Number.isInteger(px) || px < 1 || px > MAX_SHOP_PIXELS)
-        err('controller', `shop light must have 1–${MAX_SHOP_PIXELS} pixels`, c.id);
-    }
+
     if (c.role === 'primary') primaries++;
     if (c.link !== undefined) {
       if (typeof c.link !== 'object' || c.link === null) err('controller', 'link must be an object', c.id);

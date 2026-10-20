@@ -72,9 +72,6 @@ const MAX_FAILSAFE_GATES = 4;
 function failsafeDelayOk(ms) {
   return Number.isInteger(ms) && ms >= MIN_FAILSAFE_CLOSE_MS && ms <= MAX_FAILSAFE_CLOSE_MS;
 }
-// The SHOP LIGHT (D-86): extra pixels chained off a board's own (DOUT), driven as one colour. A board setting (the layout's
-// controllers[].shopLight.pixels); the BOUND refuses an ALERT whole on both sides. PAIR: kMaxShopPixels in NodeLink.h.
-const MAX_SHOP_PIXELS = 16;
 /** Frame types, secondary → primary. */
 const S2P = ['WELCOME', 'ACK', 'STATE', 'SENSE', 'CLAMP', 'PONG', 'OTASTATE', 'JOIN'];
 
@@ -609,13 +606,13 @@ function clamp(plugged) {
  *
  * THE STATUS LIGHTS (D-86, 2026-10-20). Two more things only the brain knows ride the same frame: `suction` — one of this
  * board's gates is open and its collector is running ("I've got the suction": the board pixel goes green) — and `shop`,
- * the optional SHOP LIGHT chained off the board's pixel: how many pixels, and the colour and blink to show, RESOLVED by
- * the brain so a new meaning is a brain change rather than a reflash of every node. Absent `shop` = no shop light.
+ * the SHOP LIGHT chained off the board's pixel: the colour and blink to show, RESOLVED by the brain so a new meaning is a
+ * brain change rather than a reflash of every node. Every board drives one (jeff, 2026-10-20: assume a 16-pixel strip on
+ * every board and drive it always — on a board with none the data clocks into nothing), so it is always sent.
  */
 function alert(binFull, suction, shop) {
-  const f = { t: 'ALERT', bin: !!binFull, suction: !!suction };
-  if (shop && shop.pixels) f.shop = { pixels: shop.pixels, rgb: [shop.rgb[0], shop.rgb[1], shop.rgb[2]], blink: !!shop.blink };
-  return f;
+  const sh = shop || { rgb: [0, 0, 0], blink: false };
+  return { t: 'ALERT', bin: !!binFull, suction: !!suction, shop: { rgb: [sh.rgb[0], sh.rgb[1], sh.rgb[2]], blink: !!sh.blink } };
 }
 
 function ack(seq, ok, err) {
@@ -931,11 +928,10 @@ function validateFrame(f, direction) {
     case 'ALERT':
       if (typeof f.bin !== 'boolean') errs.push('ALERT.bin must be a boolean');
       if (typeof f.suction !== 'boolean') errs.push('ALERT.suction must be a boolean');
-      if (f.shop !== undefined) {
+      {
         const sh = f.shop;
         if (!sh || typeof sh !== 'object') errs.push('ALERT.shop must be an object');
         else {
-          if (!Number.isInteger(sh.pixels) || sh.pixels < 1 || sh.pixels > MAX_SHOP_PIXELS) errs.push(`ALERT.shop.pixels must be 1..${MAX_SHOP_PIXELS}`);
           if (!Array.isArray(sh.rgb) || sh.rgb.length !== 3 || !sh.rgb.every((v) => Number.isInteger(v) && v >= 0 && v <= 255))
             errs.push('ALERT.shop.rgb must be three whole numbers 0..255');
           if (typeof sh.blink !== 'boolean') errs.push('ALERT.shop.blink must be a boolean');
@@ -1000,7 +996,6 @@ module.exports = {
   NODELINK_VERSION, P2S, S2P,
   DEFAULT_SERVO_MIN_US, DEFAULT_SERVO_MAX_US, MIN_SERVO_US, MAX_SERVO_US, MIN_SERVO_SPAN_US, servoRangeOk,
   DEFAULT_FAILSAFE_CLOSE_MS, MIN_FAILSAFE_CLOSE_MS, MAX_FAILSAFE_CLOSE_MS, MAX_FAILSAFE_GATES, failsafeDelayOk,
-  MAX_SHOP_PIXELS,
   PING_INTERVAL_MS, PONG_TIMEOUT_MS, RECONNECT_MIN_MS, RECONNECT_MAX_MS,
   SENSE_REPEAT_MS, SENSE_STALE_MS, MAX_SENSORS_PER_NODE,
   MAX_PLUG_THRESHOLD_W, MAX_PLUG_WATTS, MAX_PLUG_IP_LEN, PLUG_KINDS, pollsPlugs,

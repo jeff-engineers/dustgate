@@ -969,14 +969,6 @@ const idxOf = (plan, sel) => plan.moves.findIndex((m) => m.selectorId === sel);
   check('a board that drives nothing and only senses → valid', idle.ok, JSON.stringify(idle.errors));
 }
 
-// ── a board's shop light (D-86) ─────────────────────────────────────────────
-{
-  const withLight = (px) => { const t = JSON.parse(JSON.stringify(fx.twoGates)); t.controllers[0].shopLight = { pixels: px }; return validateTopology(fx.viewOf(t)); };
-  check('a 7-pixel shop light is valid', withLight(7).ok, JSON.stringify(withLight(7).errors));
-  check('no pixels is refused', !withLight(0).ok);
-  check('17 pixels are refused', !withLight(17).ok);
-}
-
 // ── report ──────────────────────────────────────────────────────────────────
 let passed = 0;
 for (const r of results) {
