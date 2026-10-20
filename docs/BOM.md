@@ -33,7 +33,7 @@ unfitted footprint costs nothing.
 | Barrel jack | whatever is on hand | **CUI PJ-063AH**: a 2.0 mm pin, which is what a 2.1 mm plug mates with, rated 8 A |
 | CT inrush clamp | 1 kΩ + 2 × 1N5817, fitted on the cyclone and miter saw boards | 1 kΩ + 2 × 1N5817 fitted on the first article, BAT54S footprint as the alternative |
 | Input protection | none | **PTC fuse + TVS, fitted** (§1). Decided 2026-10-08: the boards live beside dust ducts, a large ESD source |
-| Bin sensor / lamps | flying leads, **ferrules crimped** — never soldered or tinned: solder creeps under a screw and the joint cracks with vibration | a **screw terminal** (ferrules on the leads too) |
+| Bin sensor | flying leads, **ferrules crimped** — never soldered or tinned: solder creeps under a screw and the joint cracks with vibration | a **screw terminal** (ferrules on the leads too) |
 
 None of the PCB column has been on a board. The perfboard column is the
 reference: it works, so where the PCB differs, the PCB is the thing being tested.
@@ -77,13 +77,14 @@ Qty is per board; "coll." = the collector board only.
 | 25 | 4N35 optocoupler, DIP-6 | 1 coll. | [Digi-Key (search)](https://www.digikey.com/en/products/result?keywords=4N35) | <$1 | Not a PC817 breakout |
 | 26 | 1N4148 signal diode, DO-35 | 1 coll. | [Digi-Key (search)](https://www.digikey.com/en/products/result?keywords=1N4148) | pennies | ESD: across the 4N35's LED |
 | 27 | P4KE18A TVS, DO-41 | 1 coll. | [Digi-Key (search)](https://www.digikey.com/en/products/result?keywords=P4KE18A) | ~$0.30 | ESD: 12 V → GND at the Banner's terminal. Approved (jeff, 2026-10-08); stock not looked up |
-| 28 | Screw terminal, 6-way, 5 mm (Phoenix MKDS 1,5/6) | 1 coll. | [Digi-Key (search)](https://www.digikey.com/en/products/result?keywords=MKDS%201%2C5%2F%206) | ~$2 | 1 Banner brown (12 V) · 2 Banner black · 3 Banner blue (GND) · 4 both lamps + (12 V) · 5 green − (GND) · 6 red − (the Banner's output). As drawn on the wiring page |
+| 28 | Screw terminal, 3-way, 5 mm (Phoenix MKDS 1,5/3) | 1 coll. | [Digi-Key (search)](https://www.digikey.com/en/products/result?keywords=MKDS%201%2C5%2F%203) | ~$1 | 1 Banner brown (12 V) · 2 Banner black · 3 Banner blue (GND). As drawn on the wiring page. Was 6-way, with the 12 V lamps, until 2026-10-20 |
 | 29 | SparkFun 10535, 315 MHz TX | 1 coll. | [Digi-Key 1568-10535-ND](https://www.digikey.com/en/products/detail/sparkfun-electronics/10535/5673762) | $5.75 | Verified, 12-week lead. Pins GND, DATA, VCC, ANT — check against the module. VCC jumper 5 V / 12 V: a 1x03 0.1″ male header + a shunt |
 | 30 | Banner QS18VN6D beam sensor | 1 coll. | [Powermatic Associates](https://www.powermatic.net/part/banner/qs18vn6d/1090386) | ~$90 (eBay $27–34) | Digi-Key lists only the QS18VN6D**B** |
 | 31 | Servo header — breakaway 0.1″ male, 3 pins | 1 (+1 fob) | [Digi-Key (search)](https://www.digikey.com/en/products/result?keywords=PREC003SAAN-RC) | pennies | What the perfboard uses (jeff, 2026-10-08). Signal, V+, GND. A standard servo plug has no latch, so no header locks it — a printed retainer in the housing is the fix if vibration ever walks one off |
 | 32 | Test points | 4 | — | — | 5 V, servo rail, 3V3, CT bias node |
 | 33 | Mounting holes, M2.5 | 4 | — | — | Pad version, so a dissipative housing can be grounded through a standoff |
 | 34 | 12 V wall adapter, 2.1 mm | 1 | any | — | 2 A for a PWM board, 3 A for a slider |
+| 35 | Bourns MF-RHT050 PTC fuse (0.5 A hold) | 1 coll. | [Digi-Key (search)](https://www.digikey.com/en/products/result?keywords=MF-RHT050) | ~$0.40 | Not looked up. The Banner's own fuse, F2: F1's output → F2 → the Banner's brown lead, the 4N35's LED resistor and the TVS at the terminal. A pinched Banner lead trips F2 alone, so the board stays up. The Banner and the LED draw ~35 mA |
 
 Not on a board: gate servos (MG995 class, or the ST3215 for a slider — Waveshare SKU 22414, $21.99), and
 Shelly plugs. The JLCPCB board itself is under "Ordering the PCB" below.
@@ -117,11 +118,11 @@ Neither is on the perfboard, and nothing has failed for want of them. Both guard
 against a mistake rather than a fault the design makes:
 
 - **The fuse** limits current if something on the 12 V side shorts — a pinched
-  lead to the Banner sensor or the lamps, a solder bridge, a reversed buck. Without
+  lead to the Banner sensor, a solder bridge, a reversed buck. Without
   it, a 3 A adapter feeds the short until a trace or a wire burns; with it, the
   fuse goes high-resistance and resets once the fault is gone.
 - **The TVS** clamps fast spikes on the 12 V input — hot-plugging the barrel jack,
-  and the inductive kick from long lamp and strobe runs. **With the fuse in front
+  and spikes picked up on the Banner's lead. **With the fuse in front
   of it, it is also the reverse-polarity protection:** a wrong-polarity adapter
   forward-biases the TVS, which conducts hard, and the fuse trips. That costs
   nothing at the logic rail, unlike a series diode — which would have to carry the
@@ -179,10 +180,9 @@ a clamp and a remote. No separate firmware, no separate pin map.
 | **4N35 optocoupler**, DISCRETE DIP-6 | 1 | same | Vishay 4N35 (search) | D6. **Not a PC817 breakout module** — measured 4 V on its output, above a C5 GPIO's absolute maximum |
 | 1 kΩ resistor | 1 | same | CFR-25JB-52-1K | 4N35 LED series, off 12 V. ≈10.8 mA |
 | 1N4148 signal diode | 1 | recommended | 1N4148 (DO-35) | **ESD, added 2026-10-08.** Anti-parallel across the 4N35's LED (anode to pin 2, cathode to pin 1). The LED survives only ~6 V reverse, and the Banner's output lead runs into a collector full of charged dust |
-| TVS diode, 15 V standoff | 1 | recommended | e.g. P4KE18A — not looked up | **ESD, added 2026-10-08.** At the screw terminal, 12 V to GND, so a hit on the Banner's or the lamps' leads is clamped where it enters rather than after crossing the board |
-| **Screw terminal** | 1 | — (flying leads) | 5 mm, 6-way: Banner brown, black, blue; lamps +, green −, red − (PCB order list row 28) | Not on the list before 2026-10-08 |
-| 12 V green pilot lamp | 1 | existing | existing | Stays on 12 V. ~10 mA (metered 2026-10-10) |
-| 12 V red strobe | 1 | existing | existing | ~60 mA peak (metered 2026-10-10), on the Banner's output with the opto: ~71 mA of its 150 mA. ~2.7 counts on the CT floor |
+| TVS diode, 15 V standoff | 1 | recommended | e.g. P4KE18A — not looked up | **ESD, added 2026-10-08.** At the screw terminal, 12 V to GND, so a hit on the Banner's leads is clamped where it enters rather than after crossing the board |
+| **PTC fuse for the Banner** (F2) | 1 | — | Bourns MF-RHT050 (PCB order list row 35) | Between F1's output and the Banner's 12 V, so a short on its lead trips F2 rather than the whole board. Added 2026-10-20 |
+| **Screw terminal** | 1 | — (flying leads) | 5 mm, 3-way: Banner brown, black, blue (PCB order list row 28) | Not on the list before 2026-10-08 |
 | **315 MHz TX module** | 1 | same | **SparkFun 10535** (1568-10535-ND, $5.75; 12-week lead) | **D10.** Keys the collector's own remote; the only part the RF path needs. 3.3 V data; 5 V on the bench, 12 V for real range — unverified, so the PCB should let either rail reach it (a jumper) |
 | 9 g servo (SG90 class) | 0–1 | — | — | ALTERNATIVE to the RF path: an arm pressing the fob's own buttons. D8, the servo rail |
 
@@ -248,6 +248,7 @@ Recorded so nobody re-buys something that was reasoned away.
 
 | Part | Why not |
 |---|---|
+| **12 V pilot lamp and red strobe** at the collector | Out 2026-10-20 (D-86): the shop light chained off the collector board's pixel shows a full bin, running suction and "needs a person", which two lamps on the Banner's 12 V could not |
 | **A diode on the 12 V input** | It would carry the servo rail's current (a 1N5817 cannot; SS34/1N5822 class) and drop 0.3–0.5 V for nothing. Reverse polarity is the fuse + TVS's job (§1) |
 | **HUSB238 / any USB-PD trigger** | USB-PD dropped 2026-09-17 for a 12 V barrel jack. The XIAO's USB-C is a device port and will not negotiate anyway |
 | **Traco TMR 6-1211** (isolated 12→5 DC-DC) | Measured unnecessary 2026-09-17: a plain buck costs 4% of the CT's noise floor with the lamps running |
