@@ -120,6 +120,9 @@ public:
     // What a plug should be switched to (a collector's own control plug). Called on every feed, not only on a change: the
     // worker re-sends until the plug TAKES it, as the ESP32 does (SmartOutletControl). It used to send once and forget, so a
     // plug unreachable at that moment, or a slot recreated by sync(), stayed wrong until the wanted state flipped.
+    // How long the collector's plug may stay on without hearing from us (OutletTimeouts.h outletDeadmanSec, from the
+    // layout's gate delay). The shell sets it on every layout.
+    void setDeadman(uint32_t sec) { _deadmanSec = sec; }
     void setSwitch(const std::string& key, bool on) {
         std::lock_guard<std::mutex> g(_m);
         auto it = _slots.find(key);
@@ -148,11 +151,12 @@ private:
                 if (!_run) return;
                 Slot& s = *kv.second;
                 int sw, taken; { std::lock_guard<std::mutex> g(_m); sw = s.switchWanted; taken = s.switchTaken; }
-                // ON goes with a dead-man (OutletTimeouts.h OUTLET_DEADMAN_SEC), RENEWED every OUTLET_DEADMAN_RENEW_MS while
-                // it stays wanted: if this brain dies the plug switches the blower off by itself (D-85, piece 4).
-                const bool renew = sw == 1 && taken == 1 && nowMs() - s.switchSentMs >= OUTLET_DEADMAN_RENEW_MS;
+                // ON goes with a dead-man (OutletTimeouts.h outletDeadmanSec), RENEWED three times a period while it stays
+                // wanted: if this brain dies the plug switches the blower off by itself, before any gate closes (D-85).
+                const uint32_t deadman = _deadmanSec;
+                const bool renew = sw == 1 && taken == 1 && nowMs() - s.switchSentMs >= outletDeadmanRenewMs(deadman);
                 if (sw >= 0 && (sw != taken || renew) &&
-                    (sw == 1 ? s.outlet->setSwitchDeadman(true, OUTLET_DEADMAN_SEC) : s.outlet->setSwitch(false))) {
+                    (sw == 1 ? s.outlet->setSwitchDeadman(true, deadman) : s.outlet->setSwitch(false))) {
                     std::lock_guard<std::mutex> g(_m); s.switchTaken = sw; s.switchSentMs = nowMs();
                 }
                 provision(s);
@@ -206,6 +210,7 @@ private:
     std::mutex _m;
     std::map<std::string, std::shared_ptr<Slot>> _slots;
     std::atomic<bool> _run{false};
+    std::atomic<uint32_t> _deadmanSec{outletDeadmanSec(30000)};
     std::thread _th;
 };
 

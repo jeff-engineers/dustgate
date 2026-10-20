@@ -94,10 +94,12 @@ inline bool& _suction()      { static bool b = false; return b; }
 inline void setSuction(bool s) { _suction() = s; }
 inline bool suction()        { return _suction(); }
 
-// THE SHOP LIGHT (D-86): a strip chained off this board's pixel (its DOUT), driven as one colour the brain resolved. Every
-// board drives kShopPixels of it, always (jeff, 2026-10-20): on a board with no strip the data clocks into nothing, and a
-// shorter strip passes the rest off its end. Off (0,0,0) until the brain says otherwise.
-static const uint8_t kShopPixels = 16;
+// THE SHOP LIGHT (D-86): a ring chained off this board's pixel (its DOUT), driven as one colour the brain resolved. Every
+// board drives it, always (jeff, 2026-10-20): on a board with no ring the data clocks into nothing. The ring is Adafruit
+// 2851 — 12 RGBW pixels, so FOUR bytes each (G, R, B, W) after the board pixel's three. Sending it RGB data shifted every
+// pixel's bytes into the next, and the bench saw a ring of steady random colours. White is left off. Off (0,0,0) until the
+// brain says otherwise.
+static const uint8_t kShopPixels = 12;
 struct ShopLook { uint8_t r = 0, g = 0, b = 0; bool blink = false; };
 inline ShopLook& _shop()     { static ShopLook l; return l; }
 inline void setShopLight(uint8_t r, uint8_t g, uint8_t b, bool blink) {
@@ -170,7 +172,7 @@ inline void _write(uint8_t pin, uint8_t r, uint8_t g, uint8_t b) {
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
 // The board pixel AND the shop light, in one RMT transaction (D-86): a chain must be clocked as one stream, and
 // rgbLedWrite() only ever sends one pixel. WS2812 timing at the 10 MHz RMT clock rgbLedWrite itself uses: a 1 is 0.8 us
-// high then 0.4 us low, a 0 the reverse; colours go out green, red, blue. 17 pixels take about half a millisecond, so the
+// high then 0.4 us low, a 0 the reverse; colours go out green, red, blue (and white on the ring). ~0.5 ms a write, so the
 // chain is written only when a colour CHANGES (a blink is a change), plus once a second in case a write was lost — not on
 // every pass of loop(). NOT YET RUN ON HARDWARE: every board now writes through it.
 // What the chain writer has done, for a board's /api/light: did the RMT channel start, did the last write go out, how many.
@@ -185,7 +187,7 @@ inline void _writeChain(uint8_t pin, uint8_t r, uint8_t g, uint8_t b, uint8_t sr
     const unsigned long now = millis();
     if (memcmp(now6, last, 6) == 0 && now - lastMs < 1000) return;
     if (!ready) { ready = rmtInit(pin, RMT_TX_MODE, RMT_MEM_NUM_BLOCKS_1, 10000000); chainStats().ready = ready; if (!ready) return; }
-    static rmt_data_t buf[24 * (1 + kShopPixels)];
+    static rmt_data_t buf[24 + 32 * kShopPixels];   // the board pixel's 24 bits, then 32 per RGBW ring pixel
     size_t i = 0;
     auto put = [&](uint8_t v) {
         for (int bit = 7; bit >= 0; bit--) {
@@ -196,7 +198,7 @@ inline void _writeChain(uint8_t pin, uint8_t r, uint8_t g, uint8_t b, uint8_t sr
         }
     };
     put(g); put(r); put(b);
-    for (uint8_t k = 0; k < kShopPixels; k++) { put(sg); put(sr); put(sb); }
+    for (uint8_t k = 0; k < kShopPixels; k++) { put(sg); put(sr); put(sb); put(0); }   // G, R, B, W (white off)
     const bool ok = rmtWrite(pin, buf, i, RMT_WAIT_FOR_EVER);
     ChainStats& st = chainStats();
     st.lastOk = ok; st.symbols = i; st.writes++; if (!ok) st.failures++;

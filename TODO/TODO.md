@@ -56,8 +56,9 @@ first-boot WiFi setup for a customer, a read-only root, and the `--git` update p
      OFF if the clamp says the blower runs, re-checks after `kPressCooldownOffMs` and tries up to `kMaxPressAttempts`
      (CollectorPress.h, the brain's own numbers), and never presses without a clamp reading (control/FailsafeStop.h,
      test_failsafestop.cpp; F14–F20 matched). A plug-switched collector: every ON carries a dead-man
-     (`OUTLET_DEADMAN_SEC` = 60 s, Shelly `toggle_after`), renewed every `OUTLET_DEADMAN_RENEW_MS` = 20 s by the native
-     poller (`native/test/e2e_deadman.sh`). Not covered: an RF collector whose running reading comes from a plug the brain
+     (`outletDeadmanSec()`: the gates' delay less 10 s, never under 5 s — 20 s for the 30 s default, so the blower stops
+     before any gate closes; it was a fixed 60 s, up to 30 s of a blower against closed gates), renewed three times a period
+     by the native poller (`native/test/e2e_deadman.sh`). Not covered: an RF collector whose running reading comes from a plug the brain
      polls (the board cannot judge its own press) — it gets no stop; and the frozen ESP32 brain sends no dead-man.
   5. **BUILT 2026-10-20 — the problem says what happens.** board-offline now reads "its gates close on their own after
      N s … the rest of the shop keeps collecting".
@@ -67,7 +68,7 @@ first-boot WiFi setup for a customer, a read-only root, and the `--git` update p
 
 - **Status lights (D-86) — BUILT 2026-10-20, NOT YET RUN ON HARDWARE.** ALERT carries `bin`, `suction` and the shop
   light's resolved colour + blink (matched tests); `TopologyRuntime::boardLight()` decides (L0–L8), the native brain sends
-  it on change, the node shows it. Every board drives a 16-pixel shop light behind its own pixel, always (jeff: on a board
+  it on change, the node shows it. Every board drives a 12-pixel RGBW ring (Adafruit 2851) behind its own pixel, always (jeff: on a board
   with no strip the data clocks into nothing), as one RMT chain written only on a change (StatusLed.h `_writeChain`).
   **Every board now writes its pixel through that new code: flash ONE board first and check its pixel still looks right.**
   The screen (jeff, 2026-10-20): BIN FULL "Empty the dust bin"; NO BRAIN "WiFi ok, brain silent", "gates close in Ns" then

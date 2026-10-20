@@ -37,13 +37,26 @@
 #define OUTLET_PUSH_QUIET_MS        30000
 
 // THE DEAD-MAN on a collector's switching plug (D-85, piece 4): the brain switches it ON with "and off again after
-// OUTLET_DEADMAN_SEC", and renews that every OUTLET_DEADMAN_RENEW_MS while it wants the blower on. A brain that dies
-// stops renewing, and the plug switches the blower off by itself — so a dead brain cannot leave a blower running against
-// gates its nodes have closed. Shelly's Switch.Set toggle_after. A renewal RESTARTS the countdown: tried 2026-10-20 on a
-// Shelly Plug US Gen4 (toggle_after=30 sent twice 20 s apart switched off ~50 s in, 30 s after the second). A Tasmota never
+// outletDeadmanSec()", and renews that every outletDeadmanRenewMs() while it wants the blower on. A brain that dies stops
+// renewing, and the plug switches the blower off by itself — so a dead brain cannot leave a blower running against gates
+// its nodes have closed. Shelly's Switch.Set toggle_after. A renewal RESTARTS the countdown: tried 2026-10-20 on a Shelly
+// Plug US Gen4 (toggle_after=30 sent twice 20 s apart switched off ~50 s in, 30 s after the second). A Tasmota never
 // switches (it is locked sense-only), so it has none.
-#define OUTLET_DEADMAN_SEC          60
-#define OUTLET_DEADMAN_RENEW_MS     20000
+//
+// THE BLOWER MUST STOP BEFORE THE GATES CLOSE (jeff, 2026-10-20). It was a fixed 60 s against the gates' 30 s default —
+// up to 30 s of a blower against closed gates, the dead-head this exists to prevent. So the timer FOLLOWS the gates'
+// delay (the layout's failsafe.closeAfterMs): 10 s shorter, never under 5 s. With the brain gone at T, the blower is off by
+// T + deadman (its last renewal was at or before T), and no gate closes before T - kPingIntervalMs + closeAfterMs (the
+// node last heard it at most a ping earlier) — so even at the shortest delay (10 s) the blower stops 3 s ahead of a gate.
+// test_failsafestop.cpp asserts that across the whole allowed range.
+#define OUTLET_DEADMAN_MARGIN_SEC   10
+#define OUTLET_DEADMAN_MIN_SEC      5
+inline uint32_t outletDeadmanSec(uint32_t closeAfterMs) {
+    const uint32_t s = closeAfterMs / 1000;
+    return s > OUTLET_DEADMAN_MARGIN_SEC + OUTLET_DEADMAN_MIN_SEC ? s - OUTLET_DEADMAN_MARGIN_SEC : OUTLET_DEADMAN_MIN_SEC;
+}
+// Renewed three times per period, so a lost renewal or two still leaves the plug on.
+inline uint32_t outletDeadmanRenewMs(uint32_t deadmanSec) { return deadmanSec * 1000 / 3; }
 
 // THE rule for "ask this plug now?", in one place for both brains. The ESP32 skipped a push-connected plug for ever, so a
 // plug that hung with its socket up read its last value until a reboot; the native brain had the quiet fallback alone

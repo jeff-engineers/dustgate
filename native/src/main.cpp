@@ -322,6 +322,7 @@ static bool adoptLayout(const std::string& json, int persist) {
     if (fromNothing) g_rt.settleAtBoot();
     g_topoErr.clear(); g_topoJson = json;
     rebuildPressers();
+    g_poller.setDeadman(outletDeadmanSec(g_rt.failsafeCloseMs()));   // the blower stops before the gates close (D-85)
     syncPlugs();
     // Atomically, keeping the last good copy beside it: a power cut mid-save must not cost the shop its layout.
     if (persist && !g_topoPath.empty() && !dgbrain::writeFileAtomic(g_topoPath, json, persist == 1))
