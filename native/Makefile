@@ -30,6 +30,7 @@ test: all
 	bash test/e2e_push.sh
 	bash test/e2e_identity.sh
 	bash test/e2e_conformance.sh
+	bash test/e2e_failclosed.sh
 	bash test/e2e_state.sh
 OUTLETS := ../firmware/outlets/ShellyGen2Outlet.cpp ../firmware/outlets/TasmotaOutlet.cpp
 # Everything the brain includes, by directory: a hand-kept list missed utils/JsonAlloc.h and sensing/PowerSensor.h, so a change

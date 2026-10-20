@@ -41,12 +41,16 @@ first-boot WiFi setup for a customer, a read-only root, and the `--git` update p
   2. **BUILT 2026-10-20 — the node closes.** CONFIG carries `failsafe` (the delay and each gate's resolved close command,
      `parseFailsafe`/`FailsafeTimer` in NodeLink.h, matched tests F1–F13); the node closes once after `closeAfterMs` with no
      frame from its brain, a link back sooner cancels it, an unhomed slider is left where it is. Host-tested and compiled
-     only. **Do not flash nodes with it until piece 3 lands:** today's brain does not resend a board's gates when it
-     relinks, so after a close it would still believe the gate open.
-  3. **The brain stops trusting a lost board's gates at once** (not open for dead-head or for routing), and if a running
-     collector's open path was on it, opens another gate on a live board inside the delay. Replaces "a failed make holds the
-     blower off" (TopologyRuntime.h's collector policy comment): the blower runs on the gates the brain can see; with none
-     open it stops. topology-device.js mirrors it.
+     only. **Do not flash nodes with it until piece 4 lands:** with the brain itself gone, every node closes its gates
+     and nothing yet stops the collector — a dead-head. (Before this, a dead brain left the gates open.)
+  3. **BUILT 2026-10-20 — the brain's half.** `TopologyRuntime::trackLostBoards` / `keepAVisiblePath`: a lost board's
+     gates stop counting as visible at once and are believed closed `kPongTimeoutMs` before the node closes them; a
+     running or wanted blower with no visible gate gets one opened on a live board; the last visible gate of a running
+     system is never closed; a failed make no longer holds the blower off when a visible gate is open; nothing starts
+     into a sealed system and a running blower with no open gate stops; a board that comes back has its gates re-sent;
+     the status shows where such gates really are. Host-tested (test_nodebus.cpp FC0–FC15) and end to end on the native
+     brain with fake nodes (`native/test/e2e_failclosed.sh`). Not mirrored in topology-device.js: the JS simulation has
+     no board links to lose.
   4. **The collector stops with the brain gone.** The collector's board: no brain for `closeAfterMs` and its clamp says the
      blower runs → press it off (RF or the servo fob), once. A plug-switched collector: a dead-man timer — the brain sends
      "on, off again in 60 s" every 20 s (Shelly `Switch.Set` `toggle_after`; Tasmota `PulseTime`). Try both on a real plug

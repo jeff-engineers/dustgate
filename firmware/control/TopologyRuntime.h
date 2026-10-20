@@ -48,11 +48,14 @@
 //   only ever starts against an already-open path. (Until 2026-09-28 it waited
 //   for every queued move; a switch-on now re-closes every gate — see
 //   markReassert — and the closes cannot seal a path that is already open.) A tool starting mid-coast just keeps it
-//   on. A failed MAKE in that system also holds it off: if the gate that was
-//   supposed to open didn't (dead node, uncalibrated servo), running the blower
-//   would pull against a closed system. A failed break only leaks suction, so it
-//   doesn't block — one dead secondary shouldn't make the whole shop unusable.
-//   deadHeadRisk forces OFF regardless.
+//   on. A failed MAKE in that system holds it off only when no gate the brain
+//   can SEE is open (D-85, 2026-10-20; it used to hold it off outright): a lost
+//   board's gate cannot open, but another on a live board can (keepAVisiblePath),
+//   and some suction beats none. A failed break only leaks suction, so it doesn't
+//   block. Nothing starts into a sealed system, a running blower with no open gate
+//   at all stops, and the last gate the brain can see open is never closed under a
+//   running blower. deadHeadRisk forces OFF regardless. A lost board's gates: see
+//   trackLostBoards().
 //   A MANUAL RUN (setCollectorManual) is a blower running because a person said
 //   so, with no machine asking for it. It holds — there is no automation to hand
 //   back to — and it never coasts, because a coast catches the dust still in the
@@ -718,6 +721,8 @@ public:
             ActuatorBus* b = _bus->busForController(it->second.controllerId.c_str());
             if (!b || !b->busy()) it = _inFlight.erase(it); else ++it;
         }
+        trackLostBoards(nowMs);
+        keepAVisiblePath();
         runSettle();
         std::set<std::string> taken;   // boards that start nothing this pass
         for (auto& kv : _inFlight) taken.insert(bareHost(kv.second.controllerId.c_str()));
@@ -732,12 +737,17 @@ public:
         // every gate believed closed, or after a dead-head stop) waits for its make. Never dead-head is unchanged.
         for (auto& kv : _collectors) {
             CollectorState& c = kv.second;
-            if (!c.desired || c.deadHeadRisk || anyMakeFailed(kv.first)) continue;
+            // A failed MAKE (its board is offline) holds the blower off only when no gate the brain can see is open
+            // (D-85): some suction is better than none, and never dead-head still holds.
+            if (!c.desired || c.deadHeadRisk || (anyMakeFailed(kv.first) && !visibleOpenPath(kv.first))) continue;
             if (makePending(kv.first) && !openPathNow(kv.first)) continue;
             // A blower started BY HAND has no routing plan behind it to guarantee
             // an open path, so the guarantee is checked here instead, at the
             // moment of starting and after its opening moves have drained.
             if (c.manualRun && !systemHasOpenPath(kv.first)) continue;
+            // Never into a sealed system, whatever started it (D-85): with every board that held an open gate gone, the
+            // controller still wants the blower, and nothing else here would refuse.
+            if (!systemHasOpenPath(kv.first)) continue;
             c.running = true;
         }
     }
@@ -753,6 +763,13 @@ public:
             ActuatorBus* b = sel.isNull() ? nullptr : _bus->busFor(sel);
             if (b && b->busy()) { taken.insert(key); ++it; continue; }            // still moving something of its own
             if (m.isBreak && makeOwed(it->systemId)) { taken.insert(key); ++it; continue; }
+            // NEVER CLOSE THE LAST GATE THE BRAIN CAN SEE OPEN on a running system (D-85). Make-before-break already
+            // orders this when every make lands; this is for the make that cannot, because its board is gone — without
+            // it, routing would shut the fallback path the blower is running on. Held, not dropped: it goes once
+            // another visible path is open.
+            if (m.isBreak && runningOrWanted(it->systemId) && lastVisibleOpen(it->systemId, m.selectorId)) {
+                taken.insert(key); ++it; continue;
+            }
             taken.insert(key);
             // Issued (or failed) — either way it is no longer owed. A failed
             // re-assert is recorded like any failed move, not retried forever.
@@ -1053,6 +1070,10 @@ public:
             if (kv.second.empty()) actuators[kv.first] = (const char*)nullptr;
             else                   actuators[kv.first] = kv.second;
         }
+        // Where routing's intent and the gate part ways because of a lost board (D-85), say where the GATE is: one its
+        // board will have closed reads closed, and a fallback held open for a running blower reads open.
+        for (const std::string& id : _presumedClosed) { auto h = _hwStates.find(id); if (h != _hwStates.end()) actuators[id] = h->second; }
+        for (const std::string& id : _fallback) { auto h = _hwStates.find(id); if (h != _hwStates.end() && !h->second.empty()) actuators[id] = h->second; }
 
         // `tools` is keyed by MACHINE, not by port: it answers "what is running",
         // and what runs is a machine. A two-port saw appears once, as it should.
@@ -1326,6 +1347,151 @@ private:
             // held, which is what makes coasting safe.
             if (plan)
                 for (const Move& m : plan->moves) _queue.push_back(QueuedMove{sysId, m});
+        }
+    }
+
+    // ── FAIL CLOSED: the brain's half (D-85, 2026-10-20) ─────────────────────
+    // A board that loses its link holds its gates for the layout's closeAfterMs and then closes them (the node's half:
+    // NodeLink.h FailsafeTimer). So, from the moment a link drops, that board's gates are not gates the brain can SEE
+    // open — routing plans around them — and once the node will have closed them they are believed closed. Believed a
+    // little EARLY: the brain notices a lost link up to kPongTimeoutMs after the node last heard it, and a gate believed
+    // open after it has shut is the one belief that could start a blower into a sealed system. When the board comes back,
+    // its gates are sent again, since only the brain knows where they belong.
+    void trackLostBoards(uint32_t nowMs) {
+        const uint32_t closeAfter = failsafeCloseMs();
+        const uint32_t presumeAfter = closeAfter > nodelink::kPongTimeoutMs ? closeAfter - nodelink::kPongTimeoutMs : 0;
+        bool replan = false;
+        std::set<std::string> lostNow;
+        for (const SystemView& sys : systemsOf(topology())) {
+            for (JsonObjectConst e : sys.elements) {
+                if (!_eq(e["type"], "selector")) continue;
+                const std::string cid = _str(e["controllerId"]);
+                if (sameBoard(cid, std::string())) continue;              // the brain's own pads do not lose the brain
+                const std::string board = bareHost(cid.c_str());
+                const std::string id = _str(e["id"]);
+                if (_bus->onlineFor(e)) {
+                    if (_lostSince.count(board)) {                        // back: send its gates where they belong
+                        _reassert.insert(id);
+                        _presumedClosed.erase(id);
+                        replan = true;
+                    }
+                    continue;
+                }
+                lostNow.insert(board);
+                if (!_lostSince.count(board)) _lostSince[board] = nowMs ? nowMs : 1;
+                if (!nowMs || _presumedClosed.count(id) || nowMs - _lostSince[board] < presumeAfter) continue;
+                const char* closed = _closedState(e);
+                if (!closed) continue;                                    // a slider with nowhere to close stays as believed
+                _hwStates[id] = closed;
+                _ctrl.noteState(id, closed);                              // what the status shows
+                _presumedClosed.insert(id);
+            }
+        }
+        for (auto it = _lostSince.begin(); it != _lostSince.end();)
+            if (!lostNow.count(it->first)) it = _lostSince.erase(it); else ++it;
+        // A fallback that has since been closed (or never opened) is routing's again.
+        for (auto it = _fallback.begin(); it != _fallback.end();) {
+            JsonObjectConst sel = selectorById(*it);
+            auto h = _hwStates.find(*it);
+            const char* closed = sel.isNull() ? nullptr : _closedState(sel);
+            const bool open = h != _hwStates.end() && !h->second.empty() && (!closed || h->second != std::string(closed));
+            if (!open && !_inFlight.count(*it) && !queued(*it)) it = _fallback.erase(it); else ++it;
+        }
+        if (replan) ingest(_ctrl.reconcile());
+    }
+
+    // Is a gate of this system open that the brain can SEE: on a linked board, not moving, believed open?
+    bool visibleOpenPath(const std::string& systemId, const std::string& except = std::string()) const {
+        for (const SystemView& sys : systemsOf(topology())) {
+            if (std::string(sys.id ? sys.id : "") != systemId) continue;
+            for (JsonObjectConst e : sys.elements) {
+                if (!_eq(e["type"], "selector")) continue;
+                const std::string id = _str(e["id"]);
+                if (id == except || _inFlight.count(id) || !_bus->onlineFor(e)) continue;
+                auto it = _hwStates.find(id);
+                const char* closed = _closedState(e);
+                if (it == _hwStates.end() || it->second.empty()) continue;
+                if (!closed || it->second != std::string(closed)) return true;
+            }
+        }
+        return false;
+    }
+    bool queued(const std::string& selectorId) const {
+        for (const QueuedMove& q : _queue) if (q.move.selectorId == selectorId) return true;
+        return false;
+    }
+    bool lastVisibleOpen(const std::string& systemId, const std::string& selectorId) const {
+        return visibleOpenPath(systemId) && !visibleOpenPath(systemId, selectorId);
+    }
+    bool runningOrWanted(const std::string& systemId) const {
+        auto it = _collectors.find(systemId);
+        return it != _collectors.end() && (it->second.running || it->second.desired);
+    }
+
+    // Every pass: a system whose blower runs or is wanted, with no gate the brain can see open, gets one — toward the
+    // first of its machines whose whole path is on linked boards. And a RUNNING blower with no open path at all (its last
+    // one was on a board now believed closed) stops: with no gate open, the rule is no suction rather than a dead-head.
+    void keepAVisiblePath() {
+        for (auto& kv : _collectors) {
+            const std::string& sysId = kv.first;
+            CollectorState& c = kv.second;
+            if (c.running && !systemHasOpenPath(sysId) && !makePending(sysId)) { c.running = false; c.coasting = false; }
+            if (!(c.running || c.desired || c.manualRun) || visibleOpenPath(sysId) || liveMakePending(sysId)) continue;
+            queueVisiblePath(sysId);
+        }
+    }
+    bool liveMakePending(const std::string& systemId) const {
+        for (auto& kv : _inFlight) if (kv.second.isMake && kv.second.systemId == systemId) return true;
+        for (const QueuedMove& q : _queue) {
+            if (q.systemId != systemId || q.move.isBreak) continue;
+            JsonObjectConst sel = selectorById(q.move.selectorId);
+            if (!sel.isNull() && _bus->onlineFor(sel)) return true;
+        }
+        return false;
+    }
+    void queueVisiblePath(const std::string& systemId) {
+        auto ports = portsByMachine(topology());
+        for (const std::string& mid : machineIds(topology())) {
+            auto pit = ports.find(mid);
+            if (pit == ports.end()) continue;
+            bool here = false;
+            for (const PortRef& pr : pit->second) if (pr.systemId == systemId && portEnabled(pr.port)) here = true;
+            if (!here) continue;
+            const ShopRouting r = routeShop(topology(), std::vector<std::string>{mid});
+            // The path must be wholly on linked boards, and must OPEN something there.
+            std::map<std::string, std::string> want = _hwStates;
+            bool reachable = true, opens = false;
+            for (const SystemView& sys : systemsOf(topology())) {
+                if (std::string(sys.id ? sys.id : "") != systemId) continue;
+                for (JsonObjectConst e : sys.elements) {
+                    if (!_eq(e["type"], "selector")) continue;
+                    const std::string id = _str(e["id"]);
+                    auto st = r.states.find(id);
+                    if (st == r.states.end()) continue;
+                    const char* closed = _closedState(e);
+                    if (closed && st->second == std::string(closed)) continue;   // only the gates this path OPENS
+                    if (!_bus->onlineFor(e)) { reachable = false; break; }
+                    want[id] = st->second;
+                    opens = true;
+                }
+            }
+            if (!reachable || !opens) continue;
+            std::map<std::string, bool> running;
+            for (auto& kv : _collectors) running[kv.first] = kv.second.running;
+            for (const SystemPlan& p : planShopTransition(topology(), _hwStates, want, running)) {
+                if (p.systemId != systemId) continue;
+                for (const Move& m : p.moves) {
+                    if (m.isBreak) continue;
+                    // Ahead of everything, and replacing any queued move of the same gate: routing's close of this very
+                    // gate would otherwise wait on this open (make-before-break) while this open waits behind it on the
+                    // same board, for ever.
+                    for (auto q = _queue.begin(); q != _queue.end();)
+                        if (q->move.selectorId == m.selectorId) q = _queue.erase(q); else ++q;
+                    _queue.push_front(QueuedMove{systemId, m});
+                    _fallback.insert(m.selectorId);
+                }
+            }
+            return;
         }
     }
 
@@ -1770,6 +1936,9 @@ private:
     // ingest() rebuilds the queue on every poll tick: a re-assert living only in
     // the plan that made it would be dropped by the next tick before it ran.
     std::set<std::string>                _reassert;
+    std::map<std::string, uint32_t>      _lostSince;        // bareHost(board) -> when its link was first seen down (D-85)
+    std::set<std::string>                _presumedClosed;   // selectors believed closed because their board closed them
+    std::set<std::string>                _fallback;         // selectors opened so a blower has a gate it can see (D-85)
     std::map<std::string, std::string>   _lastMoveOnBoard;   // controllerId -> the selector last COMMANDED there (see reassertBoard)
     bool     _loaded = false;
     uint32_t _nowMs  = 0;

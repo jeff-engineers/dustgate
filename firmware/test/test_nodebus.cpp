@@ -1804,6 +1804,92 @@ int main(int argc, char** argv) {
          rt.adopt(silly.c_str(), silly.size(), err) && node.failsafeCfg.rfind("30000|", 0) == 0, node.failsafeCfg);
     }
 
+    // ── fail closed, the brain's half (D-85): a board that loses its link ──────────────────────
+    // twoGates with gate1 (toolX) on nodeA and gate2 (toolY) on nodeB. The clock is driven: the default 30 s delay, which
+    // the brain believes 6 s early (kPongTimeoutMs) so it never trusts a gate the node has already shut.
+    {
+      DynamicJsonDocument d(8192); deserializeJson(d, twoGatesJson);
+      for (JsonObject e : d["systems"][0]["elements"].as<JsonArray>()) {
+        if (std::string(e["id"] | "") == "gate1") e["controllerId"] = "nodeA";
+        if (std::string(e["id"] | "") == "gate2") e["controllerId"] = "nodeB";
+      }
+      for (const char* id : {"nodeA", "nodeB"}) {
+        JsonObject c = d["controllers"].as<JsonArray>().createNestedObject(); c["id"] = id; c["role"] = "secondary";
+      }
+      std::string shop; serializeJson(d, shop);
+      auto gateState = [](topo::TopologyRuntime& rt, const char* id) {
+        DynamicJsonDocument st(8192); rt.writeStatus(st.to<JsonObject>());
+        return std::string(st["actuators"][id] | "?");
+      };
+      auto run = [](topo::TopologyRuntime& rt, std::vector<StubBus*> buses, uint32_t from, uint32_t to) {
+        for (uint32_t t = from; t <= to; t += 500) { rt.update(t); for (StubBus* b : buses) b->settle(); }
+      };
+      const uint32_t presume = topo::nodelink::kDefaultFailsafeCloseMs - topo::nodelink::kPongTimeoutMs;
+
+      {
+        StubBus local, A, B; topo::NodeBus nb; topo::TopologyRuntime rt;
+        nb.setLocal(&local, "primary"); nb.registerRemote("nodeA", &A); nb.registerRemote("nodeB", &B);
+        rt.begin(&nb);
+        std::string err;
+        ok("FC0 adopt twoGates across two nodes", rt.adopt(shop.c_str(), shop.size(), err), err);
+        rt.setMachinePower("toolX", 200);
+        run(rt, {&A, &B}, 1000, 5000);
+        ok("FC1 toolX on: gate1 open on nodeA, collector running", gateState(rt, "gate1") == "open" && rt.collectorOn());
+        A.up = false; B.log.clear();
+        run(rt, {&A, &B}, 5500, 8000);
+        ok("FC2 nodeA lost: the collector keeps running in the grace (its gate is still open)", rt.collectorOn());
+        ok("FC3 ...and a gate the brain can see is opened on nodeB at once", joined(B.log) == "gate2->open", joined(B.log));
+        run(rt, {&A, &B}, 8500, 5500 + presume - 1000);
+        ok("FC4 gate1 is still believed open before the node will have closed it", gateState(rt, "gate1") == "open");
+        run(rt, {&A, &B}, 5500 + presume, 5500 + presume + 2000);
+        ok("FC5 then believed closed", gateState(rt, "gate1") == "closed");
+        ok("FC6 ...and the collector runs on nodeB's gate", rt.collectorOn() && gateState(rt, "gate2") == "open");
+        A.up = true; A.log.clear(); B.log.clear();
+        run(rt, {&A, &B}, 40000, 45000);
+        ok("FC7 nodeA back: its gate is sent where it belongs", A.log.size() >= 1 && A.log.back() == "gate1->open", joined(A.log));
+        ok("FC8 ...and the fallback closes once it has landed", B.log.size() == 1 && B.log[0] == "gate2->closed", joined(B.log));
+        ok("FC9 the collector never stopped", rt.collectorOn());
+      }
+      {
+        StubBus local, A, B; topo::NodeBus nb; topo::TopologyRuntime rt;
+        nb.setLocal(&local, "primary"); nb.registerRemote("nodeA", &A); nb.registerRemote("nodeB", &B);
+        rt.begin(&nb);
+        std::string err; rt.adopt(shop.c_str(), shop.size(), err);
+        rt.setMachinePower("toolX", 200);
+        run(rt, {&A, &B}, 1000, 5000);
+        A.up = false; B.up = false;
+        run(rt, {&A, &B}, 5500, 5500 + presume - 1000);
+        ok("FC10 every board lost: the collector runs while the gate is still open", rt.collectorOn());
+        run(rt, {&A, &B}, 5500 + presume, 5500 + presume + 2000);
+        ok("FC11 ...and stops once no gate can be open — no suction rather than a dead-head", !rt.collectorOn());
+      }
+      {
+        StubBus local, A, B; topo::NodeBus nb; topo::TopologyRuntime rt;
+        nb.setLocal(&local, "primary"); nb.registerRemote("nodeA", &A); nb.registerRemote("nodeB", &B);
+        rt.begin(&nb);
+        std::string err; rt.adopt(shop.c_str(), shop.size(), err);
+        B.up = false;
+        rt.setMachinePower("toolY", 200);
+        run(rt, {&A, &B}, 1000, 6000);
+        ok("FC12 a tool whose board is lost: its gate cannot open", B.log.empty());
+        ok("FC13 ...but a gate on a live board opens instead", joined(A.log).find("gate1->open") != std::string::npos, joined(A.log));
+        ok("FC14 ...and the collector runs on it rather than not at all", rt.collectorOn());
+      }
+      {
+        StubBus local, A, B; topo::NodeBus nb; topo::TopologyRuntime rt;
+        nb.setLocal(&local, "primary"); nb.registerRemote("nodeA", &A); nb.registerRemote("nodeB", &B);
+        rt.begin(&nb);
+        std::string err; rt.adopt(shop.c_str(), shop.size(), err);
+        rt.setMachinePower("toolX", 200);
+        run(rt, {&A, &B}, 1000, 5000);
+        A.up = false;
+        run(rt, {&A, &B}, 5500, 10000);
+        A.up = true;
+        run(rt, {&A, &B}, 10500, 60000);
+        ok("FC15 a blip shorter than the delay never believes the gate closed", gateState(rt, "gate1") == "open" && rt.collectorOn());
+      }
+    }
+
   printf("\n%d/%d passed%s\n", passed, passed + failed,
          failed ? (", " + std::to_string(failed) + " FAILED").c_str() : "");
   return failed ? 1 : 0;
