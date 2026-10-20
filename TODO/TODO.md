@@ -33,6 +33,29 @@ what to report back. Full commands are in [`native/pi/README.md`](../native/pi/R
 Open design work behind this, in the order it will be needed: mDNS advertising from the brain itself (the Pi relies on avahi today),
 first-boot WiFi setup for a customer, a read-only root, and the `--git` update path. None of it blocks the steps above.
 
+## Next: failure states and status lights (decided 2026-10-19, D-85 and D-86)
+
+- **Fail closed (D-85).** The plan, one piece at a time, each with its matched JS/C++ test where the model has a twin:
+  1. **The delay, a shop setting.** A `failsafe.closeAfterMs` in the layout (default 30000, a JS/C++ default pair, and a
+     bounds pair because it rides CONFIG to every node); a field in Settings, easy to hide later.
+  2. **The node closes.** No PING from its brain for `closeAfterMs` → close every gate it drives (the layout's closed
+     angle/position, which the brain sends in CONFIG so the node interprets nothing). A link back sooner cancels it. Logged.
+     The slider node: close only if homed; an unhomed rack does not move on its own.
+  3. **The brain stops trusting a lost board's gates at once** (not open for dead-head or for routing), and if a running
+     collector's open path was on it, opens another gate on a live board inside the delay. Replaces "a failed make holds the
+     blower off" (TopologyRuntime.h's collector policy comment): the blower runs on the gates the brain can see; with none
+     open it stops. topology-device.js mirrors it.
+  4. **The collector stops with the brain gone.** The collector's board: no brain for `closeAfterMs` and its clamp says the
+     blower runs → press it off (RF or the servo fob), once. A plug-switched collector: a dead-man timer — the brain sends
+     "on, off again in 60 s" every 20 s (Shelly `Switch.Set` `toggle_after`; Tasmota `PulseTime`). Try both on a real plug
+     first: whether a renewal restarts the timer, and that a plug left alone really turns off.
+  5. **A problem a person can act on** when a board's gates were closed because it lost the brain.
+- **Status lights (D-86).** The board pixel's new order (fault, bin full blinking on every board, orange, blue = no brain,
+  green = "I've got the suction", dim = idle) with "suction" and "bin full" sent by the brain as a generalised ALERT; the
+  optional shop light chained off DOUT (a board setting: has one, how many pixels), first on the collector board — red
+  blinking bin full, amber blinking needs a person, green collector running, off idle. Wired 2026-10-19 on the collector
+  node: off the 5 V supply, data through the board's own pixel.
+
 ## Bugs
 
 - **A slider's endstops both read triggered after a jam, until the whole slider is power-cycled (jeff, 2026-10-07).** A latched
