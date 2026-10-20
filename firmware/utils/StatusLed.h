@@ -173,6 +173,10 @@ inline void _write(uint8_t pin, uint8_t r, uint8_t g, uint8_t b) {
 // high then 0.4 us low, a 0 the reverse; colours go out green, red, blue. 17 pixels take about half a millisecond, so the
 // chain is written only when a colour CHANGES (a blink is a change), plus once a second in case a write was lost — not on
 // every pass of loop(). NOT YET RUN ON HARDWARE: every board now writes through it.
+// What the chain writer has done, for a board's /api/light: did the RMT channel start, did the last write go out, how many.
+struct ChainStats { bool ready = false, lastOk = false; uint32_t writes = 0, failures = 0; size_t symbols = 0; };
+inline ChainStats& chainStats() { static ChainStats c; return c; }
+
 inline void _writeChain(uint8_t pin, uint8_t r, uint8_t g, uint8_t b, uint8_t sr, uint8_t sg, uint8_t sb) {
     static bool ready = false;
     static uint8_t last[6] = {1, 1, 1, 1, 1, 1};   // never a real first value, so the first call writes
@@ -180,7 +184,7 @@ inline void _writeChain(uint8_t pin, uint8_t r, uint8_t g, uint8_t b, uint8_t sr
     const uint8_t now6[6] = {r, g, b, sr, sg, sb};
     const unsigned long now = millis();
     if (memcmp(now6, last, 6) == 0 && now - lastMs < 1000) return;
-    if (!ready) { ready = rmtInit(pin, RMT_TX_MODE, RMT_MEM_NUM_BLOCKS_1, 10000000); if (!ready) return; }
+    if (!ready) { ready = rmtInit(pin, RMT_TX_MODE, RMT_MEM_NUM_BLOCKS_1, 10000000); chainStats().ready = ready; if (!ready) return; }
     static rmt_data_t buf[24 * (1 + kShopPixels)];
     size_t i = 0;
     auto put = [&](uint8_t v) {
@@ -193,7 +197,9 @@ inline void _writeChain(uint8_t pin, uint8_t r, uint8_t g, uint8_t b, uint8_t sr
     };
     put(g); put(r); put(b);
     for (uint8_t k = 0; k < kShopPixels; k++) { put(sg); put(sr); put(sb); }
-    rmtWrite(pin, buf, i, RMT_WAIT_FOR_EVER);
+    const bool ok = rmtWrite(pin, buf, i, RMT_WAIT_FOR_EVER);
+    ChainStats& st = chainStats();
+    st.lastOk = ok; st.symbols = i; st.writes++; if (!ok) st.failures++;
     memcpy(last, now6, 6); lastMs = now;
 }
 #endif

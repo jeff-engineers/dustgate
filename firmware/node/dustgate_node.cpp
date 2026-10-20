@@ -949,11 +949,14 @@ static void runOta() {
 // NodeLink frame handling (AsyncTCP task — never touches a servo directly)
 // -----------------------------------------------------------------------------
 static void handleNodeFrame(const Conn& conn, const uint8_t* data, size_t len) {
-    // 1024: a CONFIG with four sensors is ~35 members, and this document is the
-    // WHOLE frame. ArduinoJson fails a deserialize that does not fit (NoMemory),
-    // so a 384 here would have made a full CONFIG read as "no frame" — silence.
-    StaticJsonDocument<1024> doc;
-    if (deserializeJson(doc, data, len)) return;
+    // The WHOLE frame, sized by kNodeFrameDoc (NodeLink.h), which a host test holds above the largest CONFIG and ALERT.
+    // On the heap: it is several KB and this runs on the AsyncTCP task's small stack. A frame that does not fit is SAID —
+    // it used to return silently, and the brain saw only a missing ACK (2026-10-20).
+    DynamicJsonDocument doc(topo::nodelink::kNodeFrameDoc);
+    if (const DeserializationError e = deserializeJson(doc, data, len)) {
+        Serial.printf("[NODE] a %u-byte frame could not be read (%s) - dropped\n", (unsigned)len, e.c_str());
+        return;
+    }
     JsonObjectConst f = doc.as<JsonObjectConst>();
     const char* t = f["t"].as<const char*>();
     if (!t) return;
@@ -1292,6 +1295,9 @@ static void handleNodeFrame(const Conn& conn, const uint8_t* data, size_t len) {
             if (l.suction != statusled::suction()) Serial.printf("[ALERT] %s\n", l.suction ? "this board has the suction" : "no suction here");
             statusled::setBinAlert(l.bin);
             statusled::setSuction(l.suction);
+            const statusled::ShopLook was = statusled::shopLight();
+            if (was.r != l.r || was.g != l.g || was.b != l.b || was.blink != l.blink)
+                Serial.printf("[ALERT] shop light %u,%u,%u%s\n", l.r, l.g, l.b, l.blink ? " blinking" : "");
             statusled::setShopLight(l.r, l.g, l.b, l.blink);
         }
         return;
@@ -1654,6 +1660,23 @@ void setup() {
     });
     server.on("/api/brainlink", HTTP_GET, [](AsyncWebServerRequest* req) {
         req->send(200, "application/json", brainlink::statusJson());
+    });
+    // What the lights were told and what the pixel writer did (D-86) — for a bench that cannot see why a light is dark.
+    server.on("/api/light", HTTP_GET, [](AsyncWebServerRequest* req) {
+        const statusled::ShopLook& sh = statusled::shopLight();
+        char out[320];
+#if defined(PIN_PIXEL) && ESP_ARDUINO_VERSION_MAJOR >= 3
+        const statusled::ChainStats& c = statusled::chainStats();
+        snprintf(out, sizeof(out), "{\"status\":%d,\"bin\":%s,\"suction\":%s,\"shop\":{\"rgb\":[%u,%u,%u],\"blink\":%s},"
+                 "\"pixels\":%u,\"chain\":{\"ready\":%s,\"lastOk\":%s,\"writes\":%lu,\"failures\":%lu,\"symbols\":%u}}",
+                 (int)statusled::state(), statusled::binAlert() ? "true" : "false", statusled::suction() ? "true" : "false",
+                 sh.r, sh.g, sh.b, sh.blink ? "true" : "false", (unsigned)(1 + statusled::kShopPixels),
+                 c.ready ? "true" : "false", c.lastOk ? "true" : "false", (unsigned long)c.writes, (unsigned long)c.failures,
+                 (unsigned)c.symbols);
+#else
+        snprintf(out, sizeof(out), "{\"status\":%d,\"shop\":{\"rgb\":[%u,%u,%u]},\"chain\":null}", (int)statusled::state(), sh.r, sh.g, sh.b);
+#endif
+        req->send(200, "application/json", out);
     });
     // After the listener: a node that is owned dials its primary from here on.
     brainlink::begin(WiFiProvisioner::getHostname().c_str(), onBrainFrame, onBrainState,

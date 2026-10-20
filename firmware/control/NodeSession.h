@@ -223,7 +223,10 @@ public:
         if (_alertPending) {
             StaticJsonDocument<384> d; nodelink::buildAlert(d.to<JsonObject>(), _light);
             out.clear(); serializeJson(d, out); _alertPending = false;
-            say(label(_light.bin ? "[NODE→] ALERT bin full to " : _light.suction ? "[NODE→] ALERT suction to " : "[NODE→] ALERT clear to "));
+            char what[64];
+            std::snprintf(what, sizeof(what), "[NODE→] ALERT %s, shop %u,%u,%u%s to ", _light.bin ? "bin full" : _light.suction ? "suction" : "clear",
+                          (unsigned)_light.r, (unsigned)_light.g, (unsigned)_light.b, _light.blink ? " blinking" : "");
+            say(label(what));
             return true;
         }
         return false;

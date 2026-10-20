@@ -765,6 +765,12 @@ inline bool parseConfigFrame(JsonObjectConst f, SensorSpec* out, size_t maxOut,
 // ── FAIL CLOSED: CONFIG.failsafe (D-85) ────────────────────────────────────
 // What a node does with no brain: after closeAfterMs of silence, drive each gate it carries to the position given here.
 // Resolved numbers, exactly as on a SET, so the node still interprets nothing. Absent = nothing to close (n == 0).
+// The document a node parses one whole frame into. A frame that does not fit fails to parse (NoMemory) and used to vanish
+// with no ACK and nothing logged — which is what the fail-closed plan did to the collector board's CONFIG on 2026-10-20,
+// leaving it without its sensors. test_nodebus.cpp builds the LARGEST CONFIG and ALERT and asserts they fit, on the host,
+// whose 64-bit nodes are bigger than the ESP32's, so a frame that fits there fits on a board.
+static const size_t kNodeFrameDoc = 3072;
+
 struct FailsafeGate {
     bool  isServo = true;
     int   channel = 0;

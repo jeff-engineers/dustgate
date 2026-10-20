@@ -1841,6 +1841,37 @@ int main(int argc, char** argv) {
          rt.adopt(silly.c_str(), silly.size(), err) && node.failsafeCfg.rfind("30000|", 0) == 0, node.failsafeCfg);
     }
 
+    // ── the largest frames a node is sent fit the node's parse document (kNodeFrameDoc) ───────────
+    {
+      using namespace topo::nodelink;
+      DynamicJsonDocument d(8192);
+      JsonObject f = d.to<JsonObject>();
+      f["t"] = "CONFIG"; f["seq"] = 4294967295u;
+      JsonArray sens = f.createNestedArray("sensors");
+      const std::string longId(kMaxSensorIdLen - 1, 'x');
+      for (size_t i = 0; i < kMaxSensorsPerNode; i++) {
+        JsonObject o = sens.createNestedObject();
+        o["sensorId"] = longId + std::to_string(i).substr(0, 0); o["kind"] = "plug"; o["ip"] = "192.168.100.200";
+        o["plug"] = "tasmota"; o["thresholdW"] = 12345.5f;
+      }
+      JsonObject fs = f.createNestedObject("failsafe");
+      fs["closeAfterMs"] = 600000; fs["minUs"] = 2800; fs["maxUs"] = 2800;
+      JsonArray cl = fs.createNestedArray("close");
+      for (size_t i = 0; i < kMaxFailsafeGates; i++) {
+        JsonObject c = cl.createNestedObject(); c["drive"] = "servo"; c["channel"] = 15; c["angle"] = 180; c["holdAtRest"] = true;
+      }
+      JsonObject sc = fs.createNestedObject("stopCollector");
+      sc["sensorId"] = longId; sc["address"] = 255; sc["data"] = 15; sc["tickUs"] = 1000; sc["repeats"] = 60;
+      std::string wire; serializeJson(d, wire);
+      DynamicJsonDocument node(kNodeFrameDoc);
+      ok("the largest CONFIG fits the node's parse document", !deserializeJson(node, wire), std::to_string(wire.size()) + " bytes");
+      DynamicJsonDocument a(512); AlertLight l; l.bin = true; l.suction = true; l.r = 255; l.g = 255; l.b = 255; l.blink = true;
+      buildAlert(a.to<JsonObject>(), l);
+      std::string aw; serializeJson(a, aw);
+      DynamicJsonDocument node2(kNodeFrameDoc);
+      ok("...and so does the largest ALERT", !deserializeJson(node2, aw));
+    }
+
     // ── the status lights (D-86): what each board's lights say ─────────────────────────────────
     {
       DynamicJsonDocument d(8192); deserializeJson(d, twoGatesJson);
