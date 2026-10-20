@@ -7,27 +7,21 @@
 // question from across the shop without walking to a phone — is it moving, is it
 // stuck, is it waiting for WiFi.
 //
-// The colour vocabulary, chosen so the common failure is unmistakable:
+// The colour vocabulary (D-86, 2026-10-20): ONE CATEGORY PER COLOUR, so a glance across the shop answers "do I need to do
+// anything, and about what" — first match wins:
 //
-//   RED     — fault. Something is wrong that the board can't fix itself.
-//   ORANGE  — motion or activity. The loudest signal here, deliberately: it is
-//             the answer to "is anything actually happening?", which is the
-//             first question every time a gate doesn't move.
-//   WHITE   — captive portal is up, waiting to be told which WiFi to join.
-//             Blinking, and the only white in the set, because it is the one
-//             state that cannot resolve without a human walking over.
-//   BLUE    — on WiFi, but not ready to work. On a node: no primary has linked.
-//             On a primary: no topology stored yet, so there is nothing to
-//             route — or a board it is paired with is dark, so part of the shop
-//             cannot be driven. Green means the WHOLE shop is answering, not
-//             just this board.
-//   GREEN   — ready. This is the "everything works" colour.
+//   RED       — needs a person. PULSING bright/dim: this board has a fault. BLINKING fully off and on: a dust bin on a
+//               system this board serves is full — every such board blinks, so the whole shop asks.
+//   ORANGE    — busy, and it will pass on its own: starting up, a gate moving (steady), homing (slow), calibrating (fast).
+//   BLUE      — cut off from the shop. SOLID: on WiFi but no brain. BLINKING: no WiFi. Either way the network, not this
+//               board, wants looking at — and after the fail-closed delay its gates close (D-85).
+//   WHITE     — BLINKING: the setup portal is up, waiting to be told which WiFi to join (needs a person at the board).
+//               DIM, steady: fine and idle.
+//   GREEN     — "I've got the suction": one of this board's gates is open and its collector runs (the brain's word, in
+//               ALERT). Not a promise the tool in use has it — a manifold or a slider shares the board.
 //
-// Green is reserved for fully-working ON PURPOSE. An earlier cut used dim green
-// for "on WiFi" and bright green for "linked", which asks you to judge an
-// absolute brightness with nothing to compare against — from across a shop, dim
-// green and green are the same colour. Blue→green is a change anyone can read at
-// a glance, and it keeps "green = good to go" honest.
+// It used to be green for "linked to the brain", which earned its place while the network was being debugged and says
+// little once it works. Brightness is still never the signal: dim white idle and green suction differ by COLOUR.
 //
 // Why colour rather than blink codes: counting flashes is miserable at a
 // distance and worse through sawdust. A woodworker glancing up should get the
@@ -253,7 +247,13 @@ inline void update() {
             _raw((now / 500) % 2 ? kBright : kDim, 0, 0);
             break;
         case BOOTING:  _raw(kDim,    kDim / 3, 0); break;              // dim orange
-        case NO_WIFI:  _raw(kBright, kBright / 3, 0); break;           // orange
+        case NO_WIFI: {
+            // Blue, BLINKING (D-86, 2026-10-20; it was orange): cut off from the shop, like ONLINE's solid blue (no brain),
+            // and both mean the network rather than this board needs looking at. Orange is now only "busy, will pass".
+            const uint8_t b = (now / 400) % 2 ? kBright : 0;
+            _raw(0, 0, b);
+            break;
+        }
         case PORTAL: {
             // Blinking, because this state needs a human to act — an unattended
             // board should never sit here quietly.
