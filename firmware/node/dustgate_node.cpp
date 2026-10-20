@@ -312,6 +312,7 @@ static topo::nodelink::SetCommand cmdSlot;
 // written on the AsyncTCP task and acted on in loop(), which is the only place a servo moves.
 static topo::nodelink::FailsafeTimer g_failsafe;
 static topo::CollectorStopper        g_stopper;      // the collector's board: press the blower off (piece 4)
+static const char*                   g_stopNote = nullptr;   // what it did about it, for the screen
 static topo::nodelink::FailsafePlan  g_failsafeIncoming;
 static volatile bool                 g_failsafeIncomingPending = false;
 static volatile uint32_t             g_brainHeardMs = 0;    // the last frame from the owner, any frame
@@ -1708,6 +1709,14 @@ static void updateStatusScreen() {
 #endif
     f.status = statusled::state();
     f.motion = statusled::motion();
+    // The shop, as the brain last said it, and what this board does without one (D-85, D-86).
+    f.binFull = statusled::binAlert();
+    f.suction = statusled::suction();
+    if (!g_ownerLinked) {
+        f.failsafeInSec = g_failsafe.secondsLeft(millis());
+        f.gatesClosed   = g_failsafe.closed() && g_failsafe.plan().n > 0;
+        f.collectorStop = g_stopNote;
+    }
 
     static String host;
     if (!host.length()) host = WiFiProvisioner::getHostname();
@@ -1764,8 +1773,10 @@ static void tickCollectorStop() {
     for (size_t i = 0; i < g_sensorCount; i++)
         if (strcmp(g_sensors[i].sensorId, p.stopSensor) == 0) { known = g_senseKnown; running = g_senseOn[i]; }
 #endif
+    if (!known && !g_stopNote) g_stopNote = "collector: no reading";
     switch (g_stopper.tick(millis(), known, running)) {
     case topo::StopAction::Press: {
+        g_stopNote = "collector pressed off";
 #if HAS_RF
         if (!g_rfPresser) g_rfPresser = new RfCollectorPresser(PIN_RF_TX);
         g_rfPresser->configure(p.stopAddress, p.stopData, p.stopTickUs, (uint16_t)p.stopRepeats);
@@ -1780,8 +1791,9 @@ static void tickCollectorStop() {
 #endif
         break;
     }
-    case topo::StopAction::Stopped: Serial.println(F("[FAILSAFE] the collector is off")); break;
+    case topo::StopAction::Stopped: g_stopNote = "collector is off"; Serial.println(F("[FAILSAFE] the collector is off")); break;
     case topo::StopAction::GaveUp:
+        g_stopNote = "collector won't stop";
         Serial.println(F("[FAILSAFE] the collector still runs after every press - it needs a person")); break;
     default: break;
     }
@@ -1803,6 +1815,7 @@ static void tickFailsafe() {
         seenHeard = heard;
         g_failsafe.heard(heard);
         g_stopper.disarm();                                    // the brain's own press policy has the blower again
+        g_stopNote = nullptr;
     }
     tickCollectorStop();
     if (!g_failsafe.due(millis())) return;

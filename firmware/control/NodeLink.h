@@ -876,6 +876,12 @@ public:
         return true;
     }
     bool closed() const { return _fired; }
+    // For the screen: whole seconds until due() fires, or -1 when nothing is counting down (no plan, never heard, fired).
+    int secondsLeft(uint32_t nowMs) const {
+        if (_fired || !_heardMs || !_plan.armed()) return -1;
+        const uint32_t gone = nowMs - _heardMs;
+        return gone >= _plan.closeAfterMs ? 0 : (int)((_plan.closeAfterMs - gone + 999) / 1000);
+    }
 private:
     FailsafePlan _plan;
     uint32_t     _heardMs = 0;

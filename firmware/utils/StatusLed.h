@@ -222,7 +222,17 @@ inline void begin() {
 inline void update() {
     const unsigned long now = millis();
 
-    // Motion and activity outrank everything — see the Motion enum note.
+    // THE ORDER (D-86): a fault, then a full bin, then motion — the two reds need a person, and a gate moving does not.
+    // A fault: slow pulse rather than solid, since a steady red can read as "power LED" at a glance.
+    if (_state() == FAULT) { _raw((now / 500) % 2 ? kBright : kDim, 0, 0); return; }
+    // A full bin, except where the board is not yet on the shop's network (booting, the setup portal, no WiFi) — there it
+    // cannot have heard the alert, so a stale one must not show.
+    if (_binAlert() && _state() != BOOTING && _state() != PORTAL && _state() != NO_WIFI) {
+        _raw((now / 250) % 2 ? kBright : 0, 0, 0);
+        return;
+    }
+
+    // Motion and activity next — see the Motion enum note.
     if (now < _flashUntil()) { _raw(kBright, kBright / 3, 0); return; }
     switch (_motion()) {
         case MOVING:      _raw(kBright, kBright / 3, 0); return;
@@ -231,13 +241,6 @@ inline void update() {
         case CALIBRATING: { const uint8_t v = (now / 120) % 2 ? kBright : 0;
                             _raw(v, v / 3, 0); return; }
         case STILL:       break;
-    }
-
-    // A full bin outranks this board's own state, except the ones where the board is not yet on the shop's network
-    // (booting, the setup portal, no WiFi) — there it cannot have heard the alert, so a stale one must not show.
-    if (_binAlert() && _state() != BOOTING && _state() != PORTAL && _state() != NO_WIFI) {
-        _raw((now / 250) % 2 ? kBright : 0, 0, 0);
-        return;
     }
 
     switch (_state()) {
