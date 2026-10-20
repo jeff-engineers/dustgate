@@ -21,7 +21,7 @@ for e in d['systems'][0]['elements']:
     if e['id']=='gate1': e['controllerId']='fake1'
     if e['id']=='gate2': e['controllerId']='fake2'
 d['failsafe']={'closeAfterMs':10000}
-d['controllers'] += [{'id':'fake1','role':'secondary'},{'id':'fake2','role':'secondary'}]
+d['controllers'] += [{'id':'fake1','role':'secondary'},{'id':'fake2','role':'secondary','shopLight':{'pixels':3}}]
 for m in d['machines']: m.pop('sensor', None)   # tool power comes from --sim, not from plugs that do not exist
 json.dump(d,open(sys.argv[1],'w'))
 PY
@@ -35,6 +35,8 @@ echo "native fail closed"
 check "each node is sent its close plan, with the layout's 10 s" 'wait_for "grep -q \"\\\"failsafe\\\":{\\\"closeAfterMs\\\":10000\" $T/f1.log && grep -q \"\\\"closeAfterMs\\\":10000\" $T/f2.log" 20'
 api -X POST -d '{"toolId":"toolX","watts":100}' localhost:$P/api/sim/tool >/dev/null
 check "toolX on: gate1 opens and the collector runs" 'wait_for "[ \"\$(st gate1)\" = \"open True\" ]" 20'
+check "the status lights (D-86): fake1, with the open gate, is told it has the suction" 'wait_for "grep -q \"\\\"t\\\":\\\"ALERT\\\".*\\\"suction\\\":true\" $T/f1.log" 20'
+check "...and fake2's 3-pixel shop light shows the collector running, green" 'wait_for "grep -q \"\\\"shop\\\":{\\\"pixels\\\":3,\\\"rgb\\\":\[0,64,0\]\" $T/f2.log" 20'
 kill $F1; wait $F1 2>/dev/null
 check "fake1 lost: fake2 is told to open gate2" 'wait_for "grep -q \"\\\"selectorId\\\":\\\"gate2\\\".*\\\"stateId\\\":\\\"open\\\"\" $T/f2.log" 30'
 check "...and the collector keeps running" '[ "$(st gate2 | cut -d" " -f2)" = True ]'

@@ -67,7 +67,13 @@ first-boot WiFi setup for a customer, a read-only root, and the `--git` update p
   what the brain assumes) or after the FIRST (it does not: rebuild the dead-man before merging, or a running blower switches
   off every 60 s). Then flash the nodes and bench: unplug a node mid-cut, kill the brain with the collector running.
 
-- **Status lights (D-86).** The board pixel's new order (fault, bin full blinking on every board, orange, blue = no brain,
+- **Status lights (D-86) — BUILT 2026-10-20 except the Boards-page control and the screen's words.** ALERT carries `bin`,
+  `suction` and an optional `shop` light (resolved colour + blink, `kMaxShopPixels` = 16, matched tests);
+  `TopologyRuntime::boardLight()` decides (L0–L8), the native brain sends it, the node shows it: READY is green with the
+  suction and dim white without, and a shop light is clocked with the board pixel as one RMT chain (StatusLed.h
+  `_writeChain`, used only when a board has one — NOT YET RUN ON HARDWARE). The layout's `controllers[].shopLight.pixels`
+  is validated; nothing in the app sets it yet. The frozen ESP32 brain's own pixel now reads dim white when ready.
+  Originally: the board pixel's new order (fault, bin full blinking on every board, orange, blue = no brain,
   green = "I've got the suction", dim = idle) with "suction" and "bin full" sent by the brain as a generalised ALERT; the
   optional shop light chained off DOUT (a board setting: has one, how many pixels), first on the collector board — red
   blinking bin full, amber blinking needs a person, green collector running, off idle. Wired 2026-10-19 on the collector

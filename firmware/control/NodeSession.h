@@ -221,9 +221,9 @@ public:
         if (_otaPending)   { out = _otaFrame;   _otaPending   = false; say(label("[NODE→] OTA to "));    return true; }
         if (_pressPending) { out = _pressFrame; _pressPending = false; return true; }
         if (_alertPending) {
-            StaticJsonDocument<96> d; nodelink::buildAlert(d.to<JsonObject>(), _alertBin > 0);
+            StaticJsonDocument<384> d; nodelink::buildAlert(d.to<JsonObject>(), _light);
             out.clear(); serializeJson(d, out); _alertPending = false;
-            say(label(_alertBin > 0 ? "[NODE→] ALERT bin full to " : "[NODE→] ALERT bin clear to "));
+            say(label(_light.bin ? "[NODE→] ALERT bin full to " : _light.suction ? "[NODE→] ALERT suction to " : "[NODE→] ALERT clear to "));
             return true;
         }
         return false;
@@ -341,14 +341,15 @@ public:
     }
     const char* pressFault() const { return _pressFault; }
 
-    // What this board's pixel should say about the shop: a dust bin on a system it serves is full (the ALERT frame).
-    // Sent only on a CHANGE — the brain calls this every tick — and again on every link-up.
-    void setBinAlert(bool full) {
-        const int8_t v = full ? 1 : 0;
-        if (v == _alertBin) return;
-        _alertBin = v;
+    // What this board's lights should say about the shop (the ALERT frame, D-86): a full bin, "I've got the suction", and
+    // its shop light. Sent only on a CHANGE — the brain calls this every tick — and again on every link-up.
+    void setLight(const nodelink::AlertLight& l) {
+        if (_lightKnown && l == _light) return;
+        _light = l; _lightKnown = true;
         _alertPending = true;
     }
+    // The bin alone, for a shell that decides nothing else (the frozen ESP32 brain).
+    void setBinAlert(bool full) { nodelink::AlertLight l = _light; l.bin = full; setLight(l); }
 
     // Built here rather than by the caller so the WIRE SHAPE lives in one place — nodelink.js's
     // CONFIG, mirrored by parseConfigFrame() on the node.
@@ -590,7 +591,7 @@ private:
         // Re-arm the CONFIG on every accepted handshake: this node may have just rebooted, and a node
         // that has not been configured reports nothing.
         if (_cfgValid) { _cfgPending = true; _cfgAwaitAck = false; _cfgTries = 0; }
-        if (_alertBin >= 0) _alertPending = true;
+        if (_lightKnown) _alertPending = true;
         if (_sink) {
             char extra[160];
             std::snprintf(extra, sizeof(extra),
@@ -776,9 +777,9 @@ private:
     // One pending PRESS, sent like a SET. A PRESS is an EDGE against a TOGGLE: never replayed.
     char     _pressFrame[160] = "";
     bool     _pressPending    = false;
-    // The ALERT this board should be showing (a full bin on a system it serves). -1 = never decided, so nothing is sent
-    // until the brain has an opinion; re-armed on every link-up because a rebooted node has forgotten it.
-    int8_t   _alertBin        = -1;
+    // The ALERT this board should be showing (D-86). Not known until the brain first decides, so nothing is sent before.
+    nodelink::AlertLight _light;
+    bool     _lightKnown      = false;
     bool     _alertPending    = false;
     uint32_t _pressSeq        = 0;
     char     _pressFault[64]  = "";

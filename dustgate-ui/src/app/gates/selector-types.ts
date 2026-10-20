@@ -112,6 +112,8 @@ export interface Controller {
    *  firmware/config.h #errors on a pin map claiming both. Absent means 'servo',
    *  because every board that existed before this field was one. */
   drives?: 'servo' | 'linear';
+  /** The SHOP LIGHT chained off this board's pixel (D-86): how many pixels. Absent = none. MAX_SHOP_PIXELS in topology.js. */
+  shopLight?: { pixels: number };
   link?: ControllerLink;
 }
 

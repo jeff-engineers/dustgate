@@ -93,6 +93,24 @@ inline bool& _binAlert()     { static bool b = false; return b; }
 inline void setBinAlert(bool full) { _binAlert() = full; }
 inline bool binAlert()       { return _binAlert(); }
 
+// "I'VE GOT THE SUCTION" (D-86): one of this board's gates is open and its collector runs — the brain's word, in the ALERT
+// frame. It is what a READY board shows: green with it, a dim white without (fine, idle). Green used to mean only "I can
+// talk to the brain", which earned its place while the network was being debugged and says little across a shop.
+inline bool& _suction()      { static bool b = false; return b; }
+inline void setSuction(bool s) { _suction() = s; }
+inline bool suction()        { return _suction(); }
+
+// THE SHOP LIGHT (D-86): extra pixels chained off this board's pixel (its DOUT), driven as one colour the brain resolved.
+// 0 pixels = none (the normal case, and then nothing about the pixel's write changes). Max = kMaxShopPixels in NodeLink.h.
+static const uint8_t kMaxShopPixels = 16;
+struct ShopLook { uint8_t pixels = 0, r = 0, g = 0, b = 0; bool blink = false; };
+inline ShopLook& _shop()     { static ShopLook l; return l; }
+inline void setShopLight(uint8_t pixels, uint8_t r, uint8_t g, uint8_t b, bool blink) {
+    ShopLook& l = _shop();
+    l.pixels = pixels > kMaxShopPixels ? kMaxShopPixels : pixels; l.r = r; l.g = g; l.b = b; l.blink = blink;
+}
+inline const ShopLook& shopLight() { return _shop(); }
+
 inline void set(Status s)      { _state()  = s; }
 inline void setMotion(Motion m) { _motion() = m; }
 
@@ -154,9 +172,42 @@ inline void _write(uint8_t pin, uint8_t r, uint8_t g, uint8_t b) {
 #endif
 }
 
-// Drives the pixel at its gain. Writing to a pad with nothing soldered to it is
-// harmless — it clocks a few bytes into open air.
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+// The board pixel AND the shop light, in one RMT transaction (D-86): a chain must be clocked as one stream, and
+// rgbLedWrite() only ever sends one pixel. WS2812 timing at the 10 MHz RMT clock rgbLedWrite itself uses: a 1 is 0.8 us
+// high then 0.4 us low, a 0 the reverse; colours go out green, red, blue. Only used when a shop light is configured, so a
+// board without one keeps the single-pixel write that has run on every board. NOT YET RUN ON HARDWARE.
+inline void _writeChain(uint8_t pin, uint8_t r, uint8_t g, uint8_t b, const ShopLook& shop, uint8_t sr, uint8_t sg, uint8_t sb) {
+    static bool ready = false;
+    if (!ready) { ready = rmtInit(pin, RMT_TX_MODE, RMT_MEM_NUM_BLOCKS_1, 10000000); if (!ready) return; }
+    static rmt_data_t buf[24 * (1 + kMaxShopPixels)];
+    size_t i = 0;
+    auto put = [&](uint8_t v) {
+        for (int bit = 7; bit >= 0; bit--) {
+            const bool one = (v >> bit) & 1;
+            buf[i].level0 = 1; buf[i].duration0 = one ? 8 : 4;
+            buf[i].level1 = 0; buf[i].duration1 = one ? 4 : 8;
+            i++;
+        }
+    };
+    put(g); put(r); put(b);
+    for (uint8_t k = 0; k < shop.pixels; k++) { put(sg); put(sr); put(sb); }
+    rmtWrite(pin, buf, i, RMT_WAIT_FOR_EVER);
+}
+#endif
+
+// Drives the pixel at its gain — and the shop light behind it, when there is one. Writing to a pad with nothing soldered to
+// it is harmless — it clocks a few bytes into open air.
 inline void _raw(uint8_t r, uint8_t g, uint8_t b) {
+    const ShopLook& shop = _shop();
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+    if (shop.pixels) {
+        const bool lit = !shop.blink || (millis() / 500) % 2;
+        _writeChain(PIN_PIXEL, _scale(r, PIXEL_GAIN), _scale(g, PIXEL_GAIN), _scale(b, PIXEL_GAIN), shop,
+                    lit ? shop.r : 0, lit ? shop.g : 0, lit ? shop.b : 0);
+        return;
+    }
+#endif
     _write(PIN_PIXEL, _scale(r, PIXEL_GAIN), _scale(g, PIXEL_GAIN),
            _scale(b, PIXEL_GAIN));
 }
@@ -219,7 +270,10 @@ inline void update() {
             break;
         }
         case ONLINE:   _raw(0, 0, kBright); break;                     // blue
-        case READY:    _raw(0, kBright, 0); break;                     // green
+        case READY:                                                    // green with the suction, dim white without (D-86)
+            if (_suction()) _raw(0, kBright, 0);
+            else            _raw(kDim / 3, kDim / 3, kDim / 3);
+            break;
     }
 }
 

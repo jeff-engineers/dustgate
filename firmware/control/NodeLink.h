@@ -409,14 +409,51 @@ inline void buildClamp(JsonObject out, bool plugged) {
 // ALERT — what a board's pixel should say about the SHOP: `bin` while a dust bin on a system it serves is full. A whole
 // state, sent on change and on every link-up; alert() in nodelink.js has the reasoning. Refused whole when `bin` is not
 // a boolean, like validateFrame's ALERT case.
-inline void buildAlert(JsonObject out, bool binFull) {
-    out["t"]   = "ALERT";
-    out["bin"] = binFull;
+// THE STATUS LIGHTS (D-86): what a board's lights say about the shop, all decided by the brain (nodelink.js alert()).
+// `shopPixels` 0 = no shop light. PAIR: MAX_SHOP_PIXELS in nodelink.js.
+static const uint8_t kMaxShopPixels = 16;
+struct AlertLight {
+    bool    bin = false;        // a bin on a system this board serves is full: the board pixel blinks red
+    bool    suction = false;    // one of this board's gates is open and its collector runs: the board pixel is green
+    uint8_t shopPixels = 0;     // the shop light chained off this board's pixel, 0 = none
+    uint8_t r = 0, g = 0, b = 0;
+    bool    blink = false;
+    bool operator==(const AlertLight& o) const {
+        return bin == o.bin && suction == o.suction && shopPixels == o.shopPixels && r == o.r && g == o.g && b == o.b && blink == o.blink;
+    }
+    bool operator!=(const AlertLight& o) const { return !(*this == o); }
+};
+inline void buildAlert(JsonObject out, const AlertLight& l) {
+    out["t"]       = "ALERT";
+    out["bin"]     = l.bin;
+    out["suction"] = l.suction;
+    if (l.shopPixels) {
+        JsonObject sh = out.createNestedObject("shop");
+        sh["pixels"] = l.shopPixels;
+        JsonArray rgb = sh.createNestedArray("rgb"); rgb.add(l.r); rgb.add(l.g); rgb.add(l.b);
+        sh["blink"] = l.blink;
+    }
 }
-inline bool parseAlertFrame(JsonObjectConst f, bool& binFull, const char*& err) {
-    if (!_eq(f["t"], "ALERT"))  { err = "not an ALERT frame"; return false; }
-    if (!f["bin"].is<bool>())   { err = "bin must be a boolean"; return false; }
-    binFull = f["bin"].as<bool>();
+inline bool parseAlertFrame(JsonObjectConst f, AlertLight& out, const char*& err) {
+    if (!_eq(f["t"], "ALERT"))    { err = "not an ALERT frame"; return false; }
+    if (!f["bin"].is<bool>())     { err = "bin must be a boolean"; return false; }
+    if (!f["suction"].is<bool>()) { err = "suction must be a boolean"; return false; }
+    AlertLight l;
+    l.bin = f["bin"].as<bool>(); l.suction = f["suction"].as<bool>();
+    JsonVariantConst shv = f["shop"];
+    if (!shv.isNull()) {
+        if (!shv.is<JsonObjectConst>()) { err = "shop must be an object"; return false; }
+        JsonObjectConst sh = shv.as<JsonObjectConst>();
+        if (!sh["pixels"].is<int>() || sh["pixels"].as<int>() < 1 || sh["pixels"].as<int>() > kMaxShopPixels) { err = "shop pixels out of range"; return false; }
+        JsonArrayConst rgb = sh["rgb"];
+        if (rgb.isNull() || rgb.size() != 3) { err = "shop rgb must be three channels"; return false; }
+        for (JsonVariantConst v : rgb) if (!v.is<int>() || v.as<int>() < 0 || v.as<int>() > 255) { err = "shop rgb out of range"; return false; }
+        if (!sh["blink"].is<bool>()) { err = "shop blink must be a boolean"; return false; }
+        l.shopPixels = (uint8_t)sh["pixels"].as<int>();
+        l.r = (uint8_t)rgb[0].as<int>(); l.g = (uint8_t)rgb[1].as<int>(); l.b = (uint8_t)rgb[2].as<int>();
+        l.blink = sh["blink"].as<bool>();
+    }
+    out = l;
     return true;
 }
 

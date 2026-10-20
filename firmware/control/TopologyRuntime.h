@@ -1173,6 +1173,58 @@ public:
 
     // `problems`: derived collector verdicts, failed moves, then whatever
     // firmware raised. Mirrors problemsView() in topology-device.js.
+    // ── THE STATUS LIGHTS (D-86, 2026-10-20) ─────────────────────────────────
+    // What a board's lights say about the shop, decided here and sent as a resolved ALERT (nodelink::AlertLight), so the
+    // node shows it and interprets nothing. The board pixel: a full bin on a system it serves (every such board blinks
+    // red, so the whole shop asks for attention), and "I've got the suction" — one of its gates is open and its system's
+    // collector runs (the collector's own board: its blower runs). It does not promise the tool in use has suction (a
+    // manifold or a slider shares a board), but it is better than nothing. The shop light, on a board the layout gives one
+    // (controllers[].shopLight.pixels): red blinking for a full bin, amber blinking when the shop needs a person (any
+    // problem), green while a collector it serves runs, off otherwise.
+    static constexpr uint8_t kShopLevel = 64;   // the shop light is meant to be read across a shop, so brighter than a board pixel
+
+    // Does the shop need a person: any problem other than a full bin, which has its own colour. Asked once per pass by
+    // the shell and handed to boardLight(), since building the problem list for every board would be the same work N times.
+    bool needsAPerson() const {
+        DynamicJsonDocument d(8192);
+        writeProblems(d.to<JsonObject>());
+        for (JsonObjectConst p : d["problems"].as<JsonArrayConst>())
+            if (!_eq(p["code"], "bin-full")) return true;
+        return false;
+    }
+
+    nodelink::AlertLight boardLight(const std::string& controllerId, bool needsPerson) const {
+        nodelink::AlertLight l;
+        if (!_loaded || !_bus) return l;
+        const std::string own = _bus->ownControllerId();
+        bool running = false;
+        for (const SystemView& sys : systemsOf(topology())) {
+            if (!boardServesSystem(sys, controllerId, own)) continue;
+            const std::string sid = sys.id ? sys.id : "";
+            if (binFull(sid)) l.bin = true;
+            if (!collectorOn(sid)) continue;
+            running = true;
+            if (sameBoard(collectorBoardOf(collectorOf(sys)), controllerId)) { l.suction = true; continue; }
+            for (JsonObjectConst e : sys.elements) {
+                if (!_eq(e["type"], "selector") || !sameBoard(_str(e["controllerId"]), controllerId)) continue;
+                auto h = _hwStates.find(_str(e["id"]));
+                const char* closed = _closedState(e);
+                if (h != _hwStates.end() && !h->second.empty() && (!closed || h->second != std::string(closed))) l.suction = true;
+            }
+        }
+        for (JsonObjectConst c : topology()["controllers"].as<JsonArrayConst>()) {
+            if (!sameBoard(_str(c["id"]), controllerId)) continue;
+            const int px = c["shopLight"]["pixels"] | 0;
+            if (px < 1 || px > nodelink::kMaxShopPixels) break;
+            l.shopPixels = (uint8_t)px;
+            if (l.bin)            { l.r = kShopLevel; l.blink = true; }                          // red, blinking
+            else if (needsPerson) { l.r = kShopLevel; l.g = kShopLevel / 3; l.blink = true; }    // amber, blinking
+            else if (running)     { l.g = kShopLevel; }                                          // green
+            break;
+        }
+        return l;
+    }
+
     void writeProblems(JsonObject out) const {
         JsonArray arr = out.createNestedArray("problems");
         auto add = [&](const char* code, const char* sev, const char* st, const std::string& id,
