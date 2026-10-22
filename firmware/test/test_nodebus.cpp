@@ -1901,11 +1901,18 @@ int main(int argc, char** argv) {
       ok("L4 ...the collector's own board has it too", lc.suction);
       ok("L5 ...and the shop light is green", lc.g == topo::TopologyRuntime::kShopLevel && lc.r == 0 && !lc.blink);
       lc = rt.boardLight("nodeC", true);
-      ok("L6 the shop needs a person: amber, blinking", lc.r == topo::TopologyRuntime::kShopLevel && lc.g == lc.r / 3 && lc.blink);
+      ok("L6 the shop needs a person, collector running: amber, blinking", lc.r == topo::TopologyRuntime::kShopLevel && lc.g == lc.r / 3 && lc.blink);
       rt.setBinFull("system-1", true);
       la = rt.boardLight("nodeA", true); lb = rt.boardLight("nodeB", false); lc = rt.boardLight("nodeC", true);
       ok("L7 a full bin: every board on the system blinks red", la.bin && lb.bin && lc.bin);
-      ok("L8 ...and the shop light is red, blinking, whatever else", lc.r == topo::TopologyRuntime::kShopLevel && lc.g == 0 && lc.blink);
+      ok("L8 ...and the shop light is red, blinking while the collector runs", lc.r == topo::TopologyRuntime::kShopLevel && lc.g == 0 && lc.blink);
+      rt.setMachinePower("toolX", 0);
+      for (uint32_t t = 6000; t <= 6000 + topo::kDefaultCollectorOffDelayMs + 2000; t += 500) { rt.update(t); A.settle(); B.settle(); C.settle(); }
+      lc = rt.boardLight("nodeC", true);
+      ok("L9 the collector idle, the bin still full: red, SOLID", !rt.collectorOn() && lc.bin && lc.r == topo::TopologyRuntime::kShopLevel && !lc.blink);
+      rt.setBinFull("system-1", false);
+      lc = rt.boardLight("nodeC", true);
+      ok("L10 idle, the shop needs a person: amber, SOLID", lc.r == topo::TopologyRuntime::kShopLevel && lc.g == lc.r / 3 && !lc.blink);
     }
 
     // ── fail closed, piece 4: the collector's board is told to stop the blower with the brain gone ──

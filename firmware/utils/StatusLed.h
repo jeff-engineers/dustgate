@@ -10,8 +10,9 @@
 // The colour vocabulary (D-86, 2026-10-20): ONE CATEGORY PER COLOUR, so a glance across the shop answers "do I need to do
 // anything, and about what" — first match wins:
 //
-//   RED       — needs a person. PULSING bright/dim: this board has a fault. BLINKING fully off and on: a dust bin on a
-//               system this board serves is full — every such board blinks, so the whole shop asks.
+//   RED       — needs a person. PULSING bright/dim: this board has a fault. A dust bin on a system this board serves is
+//               full: every such board shows it, BLINKING fully off and on while the collector runs and SOLID while it is
+//               idle (so a shop left with a full bin does not blink at nobody all night).
 //   ORANGE    — busy, and it will pass on its own: starting up, a gate moving (steady), homing (slow), calibrating (fast).
 //   BLUE      — cut off from the shop. SOLID: on WiFi but no brain. BLINKING: no WiFi. Either way the network, not this
 //               board, wants looking at — and after the fail-closed delay its gates close (D-85).
@@ -241,8 +242,10 @@ inline void update() {
     if (_state() == FAULT) { _raw((now / 500) % 2 ? kBright : kDim, 0, 0); return; }
     // A full bin, except where the board is not yet on the shop's network (booting, the setup portal, no WiFi) — there it
     // cannot have heard the alert, so a stale one must not show.
+    // Blinking while the collector runs, SOLID while it is idle (jeff, 2026-10-22) — the brain's `blink`, the same one the
+    // ring follows, so the whole shop blinks together and only while someone is working.
     if (_binAlert() && _state() != BOOTING && _state() != PORTAL && _state() != NO_WIFI) {
-        _raw((now / 250) % 2 ? kBright : 0, 0, 0);
+        _raw(!_shop().blink || (now / 250) % 2 ? kBright : 0, 0, 0);
         return;
     }
 

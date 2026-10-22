@@ -1178,9 +1178,9 @@ public:
     // node shows it and interprets nothing. The board pixel: a full bin on a system it serves (every such board blinks
     // red, so the whole shop asks for attention), and "I've got the suction" — one of its gates is open and its system's
     // collector runs (the collector's own board: its blower runs). It does not promise the tool in use has suction (a
-    // manifold or a slider shares a board), but it is better than nothing. The shop light (every board drives one): red
-    // blinking for a full bin, amber blinking when the shop needs a person (any problem), green while a collector it serves
-    // runs, off otherwise.
+    // manifold or a slider shares a board), but it is better than nothing. The shop light (every board drives one): red for a
+    // full bin, amber when the shop needs a person (any problem), green while a collector it serves runs, off otherwise —
+    // the red and amber blinking only while that collector runs.
     static constexpr uint8_t kShopLevel = 64;   // the shop light is meant to be read across a shop, so brighter than a board pixel
 
     // Does the shop need a person: any problem other than a full bin, which has its own colour. Asked once per pass by
@@ -1212,9 +1212,12 @@ public:
                 if (h != _hwStates.end() && !h->second.empty() && (!closed || h->second != std::string(closed))) l.suction = true;
             }
         }
-        if (l.bin)            { l.r = kShopLevel; l.blink = true; }                          // red, blinking
-        else if (needsPerson) { l.r = kShopLevel; l.g = kShopLevel / 3; l.blink = true; }    // amber, blinking
-        else if (running)     { l.g = kShopLevel; }                                          // green
+        // BLINKING ONLY WHILE A COLLECTOR IT SERVES RUNS (jeff, 2026-10-22): that is when someone is working and a warning
+        // needs to catch an eye. Idle, the same colour holds SOLID — a shop left with a plug unplugged would otherwise blink
+        // at nobody all night. The board pixel's full-bin red follows the same `blink` (StatusLed.h).
+        if (l.bin)            { l.r = kShopLevel; l.blink = running; }                          // red
+        else if (needsPerson) { l.r = kShopLevel; l.g = kShopLevel / 3; l.blink = running; }    // amber
+        else if (running)     { l.g = kShopLevel; }                                             // green
         return l;
     }
 
