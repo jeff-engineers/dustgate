@@ -91,8 +91,23 @@ struct StubBus : public topo::ActuatorBus {
     return true;
   }
 
-  void configureSensors(JsonArrayConst sensors) override {
+  // The fail-closed plan (D-85) it was last handed, flattened: "<ms>|ch@angle,..." ("" = none).
+  std::string failsafeCfg;
+  void configureSensors(JsonArrayConst sensors, JsonObjectConst failsafe = JsonObjectConst()) override {
     cfgCalls++;
+    failsafeCfg.clear();
+    if (!failsafe.isNull()) {
+      failsafeCfg = std::to_string((long)(failsafe["closeAfterMs"] | 0L)) + "|";
+      bool first = true;
+      for (JsonObjectConst c : failsafe["close"].as<JsonArrayConst>()) {
+        failsafeCfg += (first ? "" : ",") + std::to_string((int)(c["channel"] | -1)) + "@" +
+                       (topo::_eq(c["drive"], "servo") ? std::to_string((int)(c["angle"] | -1)) : std::string("mm"));
+        first = false;
+      }
+      JsonObjectConst sc = failsafe["stopCollector"];
+      if (!sc.isNull()) failsafeCfg += std::string("|stop:") + (sc["sensorId"] | "?") + "@" + std::to_string((int)(sc["address"] | -1)) +
+                                       "/" + std::to_string((int)(sc["data"] | -1));
+    }
     sensorCfg.clear();
     for (JsonObjectConst sen : sensors) {
       if (topo::_eq(sen["kind"], "bin")) {
@@ -639,17 +654,37 @@ int main(int argc, char** argv) {
   // ── the bin alert (2026-10-10) ───────────────────────────────────────────
   // Same cases as nodelink.test.js "the bin alert", same order.
   {
-    StaticJsonDocument<64> a, b;
-    topo::nodelink::buildAlert(a.to<JsonObject>(), true);
-    topo::nodelink::buildAlert(b.to<JsonObject>(), false);
-    ok("alert: a full bin", std::string(a["t"] | "") == "ALERT" && a["bin"].is<bool>() && a["bin"].as<bool>() && a.size() == 2);
-    ok("alert: an emptied bin", std::string(b["t"] | "") == "ALERT" && b["bin"].is<bool>() && !b["bin"].as<bool>() && b.size() == 2);
-    bool full = false; const char* err = nullptr;
-    ok("alert: it parses on the node", topo::nodelink::parseAlertFrame(a.as<JsonObjectConst>(), full, err) && full);
-    StaticJsonDocument<64> c; deserializeJson(c, R"({"t":"ALERT"})");
-    ok("alert: without `bin` it is refused", !topo::nodelink::parseAlertFrame(c.as<JsonObjectConst>(), full, err));
-    StaticJsonDocument<64> d; deserializeJson(d, R"({"t":"ALERT","bin":1})");
-    ok("alert: a non-boolean `bin` is refused", !topo::nodelink::parseAlertFrame(d.as<JsonObjectConst>(), full, err));
+    using topo::nodelink::AlertLight;
+    StaticJsonDocument<384> a, b;
+    AlertLight la; la.bin = true;
+    AlertLight lb; lb.suction = true;
+    topo::nodelink::buildAlert(a.to<JsonObject>(), la);
+    topo::nodelink::buildAlert(b.to<JsonObject>(), lb);
+    ok("alert: a full bin", std::string(a["t"] | "") == "ALERT" && a["bin"].as<bool>() && !a["suction"].as<bool>() && a["shop"]["rgb"][0] == 0);
+    ok("alert: an emptied bin, with the suction", !b["bin"].as<bool>() && b["suction"].as<bool>());
+    AlertLight got; const char* err = nullptr;
+    ok("alert: it parses on the node", topo::nodelink::parseAlertFrame(a.as<JsonObjectConst>(), got, err) && got.bin);
+    const char* off = R"("shop":{"rgb":[0,0,0],"blink":false})";
+    StaticJsonDocument<384> c; deserializeJson(c, std::string(R"({"t":"ALERT","suction":false,)") + off + "}");
+    ok("alert: without `bin` it is refused", !topo::nodelink::parseAlertFrame(c.as<JsonObjectConst>(), got, err));
+    StaticJsonDocument<384> d; deserializeJson(d, std::string(R"({"t":"ALERT","bin":1,"suction":false,)") + off + "}");
+    ok("alert: a non-boolean `bin` is refused", !topo::nodelink::parseAlertFrame(d.as<JsonObjectConst>(), got, err));
+    // the status lights (D-86) — same cases as nodelink.test.js, same order
+    StaticJsonDocument<384> e; AlertLight le; le.suction = true; le.g = 64;
+    topo::nodelink::buildAlert(e.to<JsonObject>(), le);
+    ok("lights: the shop light rides it, resolved", e["shop"]["rgb"][1] == 64 && e["shop"]["blink"] == false);
+    AlertLight back;
+    ok("lights: ...and parses back the same", topo::nodelink::parseAlertFrame(e.as<JsonObjectConst>(), back, err) && back == le);
+    StaticJsonDocument<192> n; deserializeJson(n, R"({"t":"ALERT","bin":false,"suction":false})");
+    ok("lights: without a shop light it is refused", !topo::nodelink::parseAlertFrame(n.as<JsonObjectConst>(), got, err));
+    auto shop = [&](const char* sh) {
+      StaticJsonDocument<384> x; deserializeJson(x, std::string(R"({"t":"ALERT","bin":false,"suction":false,"shop":)") + sh + "}");
+      AlertLight o; const char* er = nullptr; return topo::nodelink::parseAlertFrame(x.as<JsonObjectConst>(), o, er);
+    };
+    ok("lights: a channel past 255 is refused", !shop(R"({"rgb":[0,256,0],"blink":false})"));
+    ok("lights: two channels are refused", !shop(R"({"rgb":[0,64],"blink":false})"));
+    StaticJsonDocument<384> f; deserializeJson(f, std::string(R"({"t":"ALERT","bin":false,)") + off + "}");
+    ok("lights: without `suction` it is refused", !topo::nodelink::parseAlertFrame(f.as<JsonObjectConst>(), got, err));
   }
 
   // ── two systems, two blowers ─────────────────────────────────────────────
@@ -1116,6 +1151,66 @@ int main(int argc, char** argv) {
     rt.adopt(j2.c_str(), j2.size(), err);
     ok("re-adopting without the CT clears the board",
        node.sensorCfg.empty(), joined(node.sensorCfg));
+  }
+
+  // ── fail closed (D-85) — the PAIR of nodelink.test.js's "fail closed" block, same cases, same order ──
+  {
+    using namespace topo::nodelink;
+    ok("F1 the default delay is 30 s", kDefaultFailsafeCloseMs == 30000);
+    ok("F2 the bounds are 10 s to 10 min, four gates", kMinFailsafeCloseMs == 10000 && kMaxFailsafeCloseMs == 600000 && kMaxFailsafeGates == 4);
+    auto parse = [](const char* json, FailsafePlan& plan) {
+      DynamicJsonDocument d(2048); deserializeJson(d, json);
+      SensorSpec specs[kMaxSensorsPerNode]; size_t n = 0; const char* err = nullptr;
+      return parseConfigFrame(d.as<JsonObjectConst>(), specs, kMaxSensorsPerNode, n, plan, err);
+    };
+    auto with = [](const std::string& fs) {
+      return std::string(R"({"t":"CONFIG","seq":5,"sensors":[],"failsafe":)") + fs + "}";
+    };
+    const std::string good = R"({"closeAfterMs":30000,"minUs":400,"maxUs":2600,"close":[{"drive":"servo","channel":0,"angle":100},{"drive":"linear","channel":0,"positionMm":12.5}]})";
+    FailsafePlan plan;
+    ok("F3 a CONFIG may carry a failsafe", parse(with(good).c_str(), plan));
+    ok("F4 ...the delay and the resolved close commands ride it",
+       plan.closeAfterMs == 30000 && plan.n == 2 && plan.close[0].isServo && plan.close[0].angle == 100 &&
+       !plan.close[1].isServo && plan.close[1].positionMm == 12.5f && plan.minUs == 400 && plan.maxUs == 2600);
+    FailsafePlan none;
+    ok("F5 a CONFIG without one is still valid", parse(R"({"t":"CONFIG","seq":5,"sensors":[]})", none) && none.n == 0);
+    FailsafePlan x;
+    ok("F6 a delay under 10 s is refused", !parse(with(R"({"closeAfterMs":9999,"close":[]})").c_str(), x));
+    ok("F7 a delay over 10 min is refused", !parse(with(R"({"closeAfterMs":600001,"close":[]})").c_str(), x));
+    ok("F8 a delay that is not whole ms is refused", !parse(with(R"({"closeAfterMs":30000.5,"close":[]})").c_str(), x));
+    ok("F9 five gates are refused", !parse(with(R"({"closeAfterMs":30000,"close":[{"drive":"servo","channel":0,"angle":90},{"drive":"servo","channel":1,"angle":90},{"drive":"servo","channel":2,"angle":90},{"drive":"servo","channel":3,"angle":90},{"drive":"servo","channel":4,"angle":90}]})").c_str(), x));
+    ok("F10 an angle past 180 is refused", !parse(with(R"({"closeAfterMs":30000,"close":[{"drive":"servo","channel":0,"angle":181}]})").c_str(), x));
+    ok("F11 a negative slider position is refused", !parse(with(R"({"closeAfterMs":30000,"close":[{"drive":"linear","channel":0,"positionMm":-1}]})").c_str(), x));
+    ok("F12 an unknown drive is refused", !parse(with(R"({"closeAfterMs":30000,"close":[{"drive":"stepper","channel":0,"angle":90}]})").c_str(), x));
+    ok("F13 half a pulse range is refused", !parse(with(R"({"closeAfterMs":30000,"minUs":400,"close":[]})").c_str(), x));
+    const std::string stop = R"({"closeAfterMs":30000,"close":[],"stopCollector":{"sensorId":"dc","address":94,"data":14,"tickUs":270,"repeats":24}})";
+    FailsafePlan sp;
+    ok("F14 the collector board may carry a stop, with no gates", parse(with(stop).c_str(), sp) && sp.n == 0 && sp.armed());
+    ok("F15 ...and the press rides it, resolved", sp.stop && std::string(sp.stopSensor) == "dc" && sp.stopAddress == 94 && sp.stopRepeats == 24);
+    auto stopWith = [&](const char* field, const char* value) {
+      std::string j = stop; const std::string key = std::string("\"") + field + "\":";
+      size_t at = j.find(key) + key.size(); size_t end = j.find_first_of(",}", at);
+      return j.substr(0, at) + value + j.substr(end);
+    };
+    ok("F16 a stop with no sensor is refused", !parse(with(stopWith("sensorId", "\"\"")).c_str(), x));
+    ok("F17 an address past 255 is refused", !parse(with(stopWith("address", "256")).c_str(), x));
+    ok("F18 data past 15 is refused", !parse(with(stopWith("data", "16")).c_str(), x));
+    ok("F19 a tick outside the PRESS bounds is refused", !parse(with(stopWith("tickUs", "49")).c_str(), x));
+    ok("F20 repeats outside the PRESS bounds are refused", !parse(with(stopWith("repeats", "61")).c_str(), x));
+
+    // The timer — firmware-only (no JS node keeps one), so not a pair.
+    FailsafeTimer t;
+    t.setPlan(plan);
+    ok("T1 never heard the brain: never due", !t.due(10000000));
+    t.heard(1000);
+    ok("T2 heard, quiet for 29.9 s: not due", !t.due(1000 + 29999));
+    ok("T3 quiet for 30 s: due", t.due(1000 + 30000));
+    ok("T4 ...once per silence", !t.due(1000 + 90000) && t.closed());
+    t.heard(200000);
+    ok("T5 heard again: re-armed, not closed", !t.closed() && !t.due(200000 + 1000));
+    ok("T6 and due again after another 30 s of quiet", t.due(200000 + 30000));
+    FailsafeTimer empty; empty.setPlan(none); empty.heard(1000);
+    ok("T7 a board with no gates never fires", !empty.due(1000 + 600000));
   }
 
   // ── CONFIG / SENSE — the PAIR of nodelink.test.js's cases ────────────────
@@ -1716,6 +1811,215 @@ int main(int argc, char** argv) {
         ok("the defaults are the measured Rockler numbers",
            node.presses.size() == 2 && node.presses[1].address == 0b01011110 && node.presses[1].data == 0b1110 &&
            node.presses[1].tickUs == 270 && node.presses[1].repeats == 24);
+      }
+    }
+
+    // ── fail closed (D-85): the runtime gives each node the plan to close its own gates ──────────
+    {
+      std::string doc = twoGatesJson;
+      DynamicJsonDocument d(8192); deserializeJson(d, doc);
+      for (JsonObject e : d["systems"][0]["elements"].as<JsonArray>())
+        if (std::string(e["type"] | "") == "selector") e["controllerId"] = "nodeF";
+      JsonObject nf = d["controllers"].as<JsonArray>().createNestedObject(); nf["id"] = "nodeF"; nf["role"] = "secondary";
+      std::string onNode; serializeJson(d, onNode);
+      StubBus local, node;
+      topo::NodeBus nb; topo::TopologyRuntime rt;
+      nb.setLocal(&local, "primary"); nb.registerRemote("nodeF", &node);
+      rt.begin(&nb);
+      std::string err;
+      ok("FS1 adopt twoGates with both gates on a node", rt.adopt(onNode.c_str(), onNode.size(), err), err);
+      ok("FS2 the node is sent the 30 s default and both gates' closed angles",
+         node.failsafeCfg == "30000|0@100,1@100", node.failsafeCfg);
+      ok("FS3 the brain's own board is sent no plan", local.failsafeCfg.empty(), local.failsafeCfg);
+      d["failsafe"]["closeAfterMs"] = 45000;
+      std::string tuned; serializeJson(d, tuned);
+      ok("FS4 a layout's own delay is what the node is sent",
+         rt.adopt(tuned.c_str(), tuned.size(), err) && node.failsafeCfg.rfind("45000|", 0) == 0, node.failsafeCfg);
+      d["failsafe"]["closeAfterMs"] = 5;
+      std::string silly; serializeJson(d, silly);
+      ok("FS5 an out-of-bounds delay falls back to the default",
+         rt.adopt(silly.c_str(), silly.size(), err) && node.failsafeCfg.rfind("30000|", 0) == 0, node.failsafeCfg);
+    }
+
+    // ── the largest frames a node is sent fit the node's parse document (kNodeFrameDoc) ───────────
+    {
+      using namespace topo::nodelink;
+      DynamicJsonDocument d(8192);
+      JsonObject f = d.to<JsonObject>();
+      f["t"] = "CONFIG"; f["seq"] = 4294967295u;
+      JsonArray sens = f.createNestedArray("sensors");
+      const std::string longId(kMaxSensorIdLen - 1, 'x');
+      for (size_t i = 0; i < kMaxSensorsPerNode; i++) {
+        JsonObject o = sens.createNestedObject();
+        o["sensorId"] = longId + std::to_string(i).substr(0, 0); o["kind"] = "plug"; o["ip"] = "192.168.100.200";
+        o["plug"] = "tasmota"; o["thresholdW"] = 12345.5f;
+      }
+      JsonObject fs = f.createNestedObject("failsafe");
+      fs["closeAfterMs"] = 600000; fs["minUs"] = 2800; fs["maxUs"] = 2800;
+      JsonArray cl = fs.createNestedArray("close");
+      for (size_t i = 0; i < kMaxFailsafeGates; i++) {
+        JsonObject c = cl.createNestedObject(); c["drive"] = "servo"; c["channel"] = 15; c["angle"] = 180; c["holdAtRest"] = true;
+      }
+      JsonObject sc = fs.createNestedObject("stopCollector");
+      sc["sensorId"] = longId; sc["address"] = 255; sc["data"] = 15; sc["tickUs"] = 1000; sc["repeats"] = 60;
+      std::string wire; serializeJson(d, wire);
+      DynamicJsonDocument node(kNodeFrameDoc);
+      ok("the largest CONFIG fits the node's parse document", !deserializeJson(node, wire), std::to_string(wire.size()) + " bytes");
+      DynamicJsonDocument a(512); AlertLight l; l.bin = true; l.suction = true; l.r = 255; l.g = 255; l.b = 255; l.blink = true;
+      buildAlert(a.to<JsonObject>(), l);
+      std::string aw; serializeJson(a, aw);
+      DynamicJsonDocument node2(kNodeFrameDoc);
+      ok("...and so does the largest ALERT", !deserializeJson(node2, aw));
+    }
+
+    // ── the status lights (D-86): what each board's lights say ─────────────────────────────────
+    {
+      DynamicJsonDocument d(8192); deserializeJson(d, twoGatesJson);
+      for (JsonObject e : d["systems"][0]["elements"].as<JsonArray>()) {
+        const std::string id = e["id"] | "";
+        if (id == "gate1") e["controllerId"] = "nodeA";
+        if (id == "gate2") e["controllerId"] = "nodeB";
+        if (id == "dc")    e["controllerId"] = "nodeC";
+      }
+      for (const char* id : {"nodeA", "nodeB", "nodeC"}) {
+        JsonObject c = d["controllers"].as<JsonArray>().createNestedObject(); c["id"] = id; c["role"] = "secondary";
+      }
+      std::string shop; serializeJson(d, shop);
+      StubBus local, A, B, C; topo::NodeBus nb; topo::TopologyRuntime rt;
+      nb.setLocal(&local, "primary"); nb.registerRemote("nodeA", &A); nb.registerRemote("nodeB", &B); nb.registerRemote("nodeC", &C);
+      rt.begin(&nb);
+      std::string err;
+      ok("L0 adopt twoGates with its collector on nodeC", rt.adopt(shop.c_str(), shop.size(), err), err);
+      auto la = rt.boardLight("nodeA", false), lc = rt.boardLight("nodeC", false);
+      ok("L1 idle: no suction anywhere, and the shop light is off",
+         !la.suction && !lc.suction && lc.r == 0 && lc.g == 0 && lc.b == 0 && !lc.blink);
+      ok("L2 every board is sent the shop light, not only the collector's", la.r == 0 && la.g == 0 && !la.blink);
+      rt.setMachinePower("toolX", 200);
+      for (uint32_t t = 1000; t <= 5000; t += 500) { rt.update(t); A.settle(); B.settle(); C.settle(); }
+      la = rt.boardLight("nodeA", false); auto lb = rt.boardLight("nodeB", false); lc = rt.boardLight("nodeC", false);
+      ok("L3 toolX runs: nodeA has the suction (its gate is open), nodeB does not", la.suction && !lb.suction);
+      ok("L4 ...the collector's own board has it too", lc.suction);
+      ok("L5 ...and the shop light is green", lc.g == topo::TopologyRuntime::kShopLevel && lc.r == 0 && !lc.blink);
+      lc = rt.boardLight("nodeC", true);
+      ok("L6 the shop needs a person, collector running: amber, blinking", lc.r == topo::TopologyRuntime::kShopLevel && lc.g == lc.r / 3 && lc.blink);
+      rt.setBinFull("system-1", true);
+      la = rt.boardLight("nodeA", true); lb = rt.boardLight("nodeB", false); lc = rt.boardLight("nodeC", true);
+      ok("L7 a full bin: every board on the system blinks red", la.bin && lb.bin && lc.bin);
+      ok("L8 ...and the shop light is red, blinking while the collector runs", lc.r == topo::TopologyRuntime::kShopLevel && lc.g == 0 && lc.blink);
+      rt.setMachinePower("toolX", 0);
+      for (uint32_t t = 6000; t <= 6000 + topo::kDefaultCollectorOffDelayMs + 2000; t += 500) { rt.update(t); A.settle(); B.settle(); C.settle(); }
+      lc = rt.boardLight("nodeC", true);
+      ok("L9 the collector idle, the bin still full: red, SOLID", !rt.collectorOn() && lc.bin && lc.r == topo::TopologyRuntime::kShopLevel && !lc.blink);
+      rt.setBinFull("system-1", false);
+      lc = rt.boardLight("nodeC", true);
+      ok("L10 idle, the shop needs a person: amber, SOLID", lc.r == topo::TopologyRuntime::kShopLevel && lc.g == lc.r / 3 && !lc.blink);
+    }
+
+    // ── fail closed, piece 4: the collector's board is told to stop the blower with the brain gone ──
+    {
+      const char* dcDoc = R"({"schemaVersion":2,
+        "controllers":[{"id":"primary","role":"primary"},{"id":"nodeC","role":"secondary"},{"id":"nodeG","role":"secondary"}],
+        "systems":[{"id":"s1","name":"s","elements":[
+          {"id":"dc","type":"collector","controllerId":"nodeC","control":{"rf":{"address":94,"data":14}},"sensor":{"ct":{"channel":0}}},
+          {"id":"g","type":"selector","controllerId":"nodeG","kind":"servoGate",
+           "states":[{"id":"open","isClosed":false,"offsetDeg":0},{"id":"closed","isClosed":true,"offsetDeg":90}],
+           "branches":[{"id":"b1","opensState":"open","role":"tool"}],"servo":{"channel":0,"referenceAngle":10}},
+          {"id":"t","type":"tool","machineId":"m"}],
+          "ducts":[{"child":"g","parent":"dc"},{"child":"t","parent":"g","parentBranch":"b1"}]}],
+        "machines":[{"id":"m"}]})";
+      StubBus local, C, G; topo::NodeBus nb; topo::TopologyRuntime rt;
+      nb.setLocal(&local, "primary"); nb.registerRemote("nodeC", &C); nb.registerRemote("nodeG", &G);
+      rt.begin(&nb);
+      std::string err;
+      ok("FS6 adopt a collector whose remote and clamp are on its own board", rt.adopt(dcDoc, strlen(dcDoc), err), err);
+      ok("FS7 that board is told to stop the blower, judged by its clamp, with the remote's numbers",
+         C.failsafeCfg == "30000||stop:dc@94/14", C.failsafeCfg);
+      ok("FS8 the gate board is told only to close its gate", G.failsafeCfg == "30000|0@100", G.failsafeCfg);
+    }
+
+    // ── fail closed, the brain's half (D-85): a board that loses its link ──────────────────────
+    // twoGates with gate1 (toolX) on nodeA and gate2 (toolY) on nodeB. The clock is driven: the default 30 s delay, which
+    // the brain believes 6 s early (kPongTimeoutMs) so it never trusts a gate the node has already shut.
+    {
+      DynamicJsonDocument d(8192); deserializeJson(d, twoGatesJson);
+      for (JsonObject e : d["systems"][0]["elements"].as<JsonArray>()) {
+        if (std::string(e["id"] | "") == "gate1") e["controllerId"] = "nodeA";
+        if (std::string(e["id"] | "") == "gate2") e["controllerId"] = "nodeB";
+      }
+      for (const char* id : {"nodeA", "nodeB"}) {
+        JsonObject c = d["controllers"].as<JsonArray>().createNestedObject(); c["id"] = id; c["role"] = "secondary";
+      }
+      std::string shop; serializeJson(d, shop);
+      auto gateState = [](topo::TopologyRuntime& rt, const char* id) {
+        DynamicJsonDocument st(8192); rt.writeStatus(st.to<JsonObject>());
+        return std::string(st["actuators"][id] | "?");
+      };
+      auto run = [](topo::TopologyRuntime& rt, std::vector<StubBus*> buses, uint32_t from, uint32_t to) {
+        for (uint32_t t = from; t <= to; t += 500) { rt.update(t); for (StubBus* b : buses) b->settle(); }
+      };
+      const uint32_t presume = topo::nodelink::kDefaultFailsafeCloseMs - topo::nodelink::kPongTimeoutMs;
+
+      {
+        StubBus local, A, B; topo::NodeBus nb; topo::TopologyRuntime rt;
+        nb.setLocal(&local, "primary"); nb.registerRemote("nodeA", &A); nb.registerRemote("nodeB", &B);
+        rt.begin(&nb);
+        std::string err;
+        ok("FC0 adopt twoGates across two nodes", rt.adopt(shop.c_str(), shop.size(), err), err);
+        rt.setMachinePower("toolX", 200);
+        run(rt, {&A, &B}, 1000, 5000);
+        ok("FC1 toolX on: gate1 open on nodeA, collector running", gateState(rt, "gate1") == "open" && rt.collectorOn());
+        A.up = false; B.log.clear();
+        run(rt, {&A, &B}, 5500, 8000);
+        ok("FC2 nodeA lost: the collector keeps running in the grace (its gate is still open)", rt.collectorOn());
+        ok("FC3 ...and a gate the brain can see is opened on nodeB at once", joined(B.log) == "gate2->open", joined(B.log));
+        run(rt, {&A, &B}, 8500, 5500 + presume - 1000);
+        ok("FC4 gate1 is still believed open before the node will have closed it", gateState(rt, "gate1") == "open");
+        run(rt, {&A, &B}, 5500 + presume, 5500 + presume + 2000);
+        ok("FC5 then believed closed", gateState(rt, "gate1") == "closed");
+        ok("FC6 ...and the collector runs on nodeB's gate", rt.collectorOn() && gateState(rt, "gate2") == "open");
+        A.up = true; A.log.clear(); B.log.clear();
+        run(rt, {&A, &B}, 40000, 45000);
+        ok("FC7 nodeA back: its gate is sent where it belongs", A.log.size() >= 1 && A.log.back() == "gate1->open", joined(A.log));
+        ok("FC8 ...and the fallback closes once it has landed", B.log.size() == 1 && B.log[0] == "gate2->closed", joined(B.log));
+        ok("FC9 the collector never stopped", rt.collectorOn());
+      }
+      {
+        StubBus local, A, B; topo::NodeBus nb; topo::TopologyRuntime rt;
+        nb.setLocal(&local, "primary"); nb.registerRemote("nodeA", &A); nb.registerRemote("nodeB", &B);
+        rt.begin(&nb);
+        std::string err; rt.adopt(shop.c_str(), shop.size(), err);
+        rt.setMachinePower("toolX", 200);
+        run(rt, {&A, &B}, 1000, 5000);
+        A.up = false; B.up = false;
+        run(rt, {&A, &B}, 5500, 5500 + presume - 1000);
+        ok("FC10 every board lost: the collector runs while the gate is still open", rt.collectorOn());
+        run(rt, {&A, &B}, 5500 + presume, 5500 + presume + 2000);
+        ok("FC11 ...and stops once no gate can be open — no suction rather than a dead-head", !rt.collectorOn());
+      }
+      {
+        StubBus local, A, B; topo::NodeBus nb; topo::TopologyRuntime rt;
+        nb.setLocal(&local, "primary"); nb.registerRemote("nodeA", &A); nb.registerRemote("nodeB", &B);
+        rt.begin(&nb);
+        std::string err; rt.adopt(shop.c_str(), shop.size(), err);
+        B.up = false;
+        rt.setMachinePower("toolY", 200);
+        run(rt, {&A, &B}, 1000, 6000);
+        ok("FC12 a tool whose board is lost: its gate cannot open", B.log.empty());
+        ok("FC13 ...but a gate on a live board opens instead", joined(A.log).find("gate1->open") != std::string::npos, joined(A.log));
+        ok("FC14 ...and the collector runs on it rather than not at all", rt.collectorOn());
+      }
+      {
+        StubBus local, A, B; topo::NodeBus nb; topo::TopologyRuntime rt;
+        nb.setLocal(&local, "primary"); nb.registerRemote("nodeA", &A); nb.registerRemote("nodeB", &B);
+        rt.begin(&nb);
+        std::string err; rt.adopt(shop.c_str(), shop.size(), err);
+        rt.setMachinePower("toolX", 200);
+        run(rt, {&A, &B}, 1000, 5000);
+        A.up = false;
+        run(rt, {&A, &B}, 5500, 10000);
+        A.up = true;
+        run(rt, {&A, &B}, 10500, 60000);
+        ok("FC15 a blip shorter than the delay never believes the gate closed", gateState(rt, "gate1") == "open" && rt.collectorOn());
       }
     }
 

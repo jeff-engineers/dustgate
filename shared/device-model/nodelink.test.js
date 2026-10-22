@@ -118,12 +118,22 @@ const eq = (name, got, want) =>
 // ── the bin alert (2026-10-10) ──────────────────────────────────────────────
 // Same cases as the "bin alert" block of test_nodebus.cpp, same order.
 {
-  eq('a full bin', NL.alert(true), { t: 'ALERT', bin: true });
-  eq('an emptied bin', NL.alert(false), { t: 'ALERT', bin: false });
+  const off = { rgb: [0, 0, 0], blink: false };
+  eq('a full bin', NL.alert(true), { t: 'ALERT', bin: true, suction: false, shop: off });
+  eq('an emptied bin, with the suction', NL.alert(false, true), { t: 'ALERT', bin: false, suction: true, shop: off });
   eq('it validates primary to node', NL.validateFrame(NL.alert(true), 'p2s'), []);
-  check('without `bin` it is refused', NL.validateFrame({ t: 'ALERT' }, 'p2s').length === 1);
-  check('a non-boolean `bin` is refused', NL.validateFrame({ t: 'ALERT', bin: 1 }, 'p2s').length === 1);
+  check('without `bin` it is refused', NL.validateFrame({ t: 'ALERT', suction: false, shop: off }, 'p2s').length === 1);
+  check('a non-boolean `bin` is refused', NL.validateFrame({ t: 'ALERT', bin: 1, suction: false, shop: off }, 'p2s').length === 1);
   check('a node cannot send one', NL.validateFrame(NL.alert(true), 's2p').length > 0);
+  // the status lights (D-86) — same cases as the "lights:" block of test_nodebus.cpp, same order
+  eq('the shop light rides it, resolved', NL.alert(false, true, { rgb: [0, 64, 0], blink: false }),
+     { t: 'ALERT', bin: false, suction: true, shop: { rgb: [0, 64, 0], blink: false } });
+  eq('...and validates', NL.validateFrame(NL.alert(false, true, { rgb: [0, 64, 0], blink: false }), 'p2s'), []);
+  const sh = (patch) => NL.validateFrame({ t: 'ALERT', bin: false, suction: false, shop: { rgb: [0, 64, 0], blink: false, ...patch } }, 'p2s').length > 0;
+  check('without a shop light it is refused', NL.validateFrame({ t: 'ALERT', bin: false, suction: false }, 'p2s').length === 1);
+  check('a channel past 255 is refused', sh({ rgb: [0, 256, 0] }));
+  check('two channels are refused', sh({ rgb: [0, 64] }));
+  check('without `suction` it is refused', NL.validateFrame({ t: 'ALERT', bin: false, shop: off }, 'p2s').length === 1);
 }
 
 // ── direction is enforced: a secondary can't send a SET ─────────────────────
@@ -560,6 +570,40 @@ const eq = (name, got, want) =>
   eq('both caps validate', NL.validateFrame(w1, 's2p'), []);
   check('caps.rf 2 is refused', NL.validateFrame(NL.welcome('n', 'b', 'f', { servos: 2, linear: 0, rf: 2 }), 's2p').length === 1);
   eq('PRESS did not bump the version', NL.NODELINK_VERSION, 1);
+}
+
+// ── fail closed (D-85, 2026-10-19) ─────────────────────────────────────────
+// Same cases as the "fail closed" block of test_nodebus.cpp, same order, literals asserted.
+{
+  eq('F1 the default delay is 30 s', NL.DEFAULT_FAILSAFE_CLOSE_MS, 30000);
+  eq('F2 the bounds are 10 s to 10 min, four gates', [NL.MIN_FAILSAFE_CLOSE_MS, NL.MAX_FAILSAFE_CLOSE_MS, NL.MAX_FAILSAFE_GATES], [10000, 600000, 4]);
+  const fs = { closeAfterMs: 30000, minUs: 400, maxUs: 2600,
+               close: [{ drive: 'servo', channel: 0, angle: 100 }, { drive: 'linear', channel: 0, positionMm: 12.5 }] };
+  const f = NL.config(5, [], fs);
+  eq('F3 a CONFIG may carry a failsafe', NL.validateFrame(f, 'p2s'), []);
+  check('F4 ...the delay and the resolved close commands ride it',
+    f.failsafe.closeAfterMs === 30000 && f.failsafe.close[0].angle === 100 && f.failsafe.close[1].positionMm === 12.5 &&
+    f.failsafe.minUs === 400 && f.failsafe.maxUs === 2600);
+  eq('F5 a CONFIG without one is still valid', NL.validateFrame(NL.config(5, []), 'p2s'), []);
+  const bad = (patch) => NL.validateFrame({ ...f, failsafe: { ...f.failsafe, ...patch } }, 'p2s').length > 0;
+  check('F6 a delay under 10 s is refused', bad({ closeAfterMs: 9999 }));
+  check('F7 a delay over 10 min is refused', bad({ closeAfterMs: 600001 }));
+  check('F8 a delay that is not whole ms is refused', bad({ closeAfterMs: 30000.5 }));
+  check('F9 five gates are refused', bad({ close: [0, 1, 2, 3, 4].map((ch) => ({ drive: 'servo', channel: ch, angle: 90 })) }));
+  check('F10 an angle past 180 is refused', bad({ close: [{ drive: 'servo', channel: 0, angle: 181 }] }));
+  check('F11 a negative slider position is refused', bad({ close: [{ drive: 'linear', channel: 0, positionMm: -1 }] }));
+  check('F12 an unknown drive is refused', bad({ close: [{ drive: 'stepper', channel: 0, angle: 90 }] }));
+  check('F13 half a pulse range is refused', bad({ maxUs: undefined }));
+  const sc = { sensorId: 'dc', address: 94, data: 14, tickUs: 270, repeats: 24 };
+  const withStop = NL.config(6, [], { closeAfterMs: 30000, close: [], stopCollector: sc });
+  eq('F14 the collector board may carry a stop, with no gates', NL.validateFrame(withStop, 'p2s'), []);
+  check('F15 ...and the press rides it, resolved', withStop.failsafe.stopCollector.address === 94 && withStop.failsafe.stopCollector.repeats === 24);
+  const badStop = (patch) => NL.validateFrame({ ...withStop, failsafe: { ...withStop.failsafe, stopCollector: { ...sc, ...patch } } }, 'p2s').length > 0;
+  check('F16 a stop with no sensor is refused', badStop({ sensorId: '' }));
+  check('F17 an address past 255 is refused', badStop({ address: 256 }));
+  check('F18 data past 15 is refused', badStop({ data: 16 }));
+  check('F19 a tick outside the PRESS bounds is refused', badStop({ tickUs: 49 }));
+  check('F20 repeats outside the PRESS bounds are refused', badStop({ repeats: 61 }));
 }
 
 // ── timing constants match the firmware (control/NodeLink.h) ────────────────

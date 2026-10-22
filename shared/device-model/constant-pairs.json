@@ -536,6 +536,58 @@
      "kMinServoSpanUs"
     ]
    ]
+  },
+  {
+   "name": "fail-closed delay default",
+   "refs": [
+    [
+     "shared/device-model/nodelink.js",
+     "DEFAULT_FAILSAFE_CLOSE_MS"
+    ],
+    [
+     "firmware/control/NodeLink.h",
+     "kDefaultFailsafeCloseMs"
+    ]
+   ]
+  },
+  {
+   "name": "fail-closed delay, shortest",
+   "refs": [
+    [
+     "shared/device-model/nodelink.js",
+     "MIN_FAILSAFE_CLOSE_MS"
+    ],
+    [
+     "firmware/control/NodeLink.h",
+     "kMinFailsafeCloseMs"
+    ]
+   ]
+  },
+  {
+   "name": "fail-closed delay, longest",
+   "refs": [
+    [
+     "shared/device-model/nodelink.js",
+     "MAX_FAILSAFE_CLOSE_MS"
+    ],
+    [
+     "firmware/control/NodeLink.h",
+     "kMaxFailsafeCloseMs"
+    ]
+   ]
+  },
+  {
+   "name": "fail-closed gates per board",
+   "refs": [
+    [
+     "shared/device-model/nodelink.js",
+     "MAX_FAILSAFE_GATES"
+    ],
+    [
+     "firmware/control/NodeLink.h",
+     "kMaxFailsafeGates"
+    ]
+   ]
   }
  ]
 }

@@ -25,6 +25,7 @@ const BRANCH_ROLES     = ['tool', 'unassigned', 'blocked', 'feed'];
 // What a board is flashed to drive. Absent = 'servo', because every board that
 // existed before this field was a PWM board.
 const CONTROLLER_DRIVES = ['servo', 'linear'];
+
 const LINK_TRANSPORTS  = ['wifi-ws', 'esp-now'];
 
 // Per-host (per-controller) actuator budget, and these are ALTERNATIVES rather
@@ -310,6 +311,7 @@ function validateTopology(t) {
     if (!CONTROLLER_ROLES.includes(c.role)) err('controller', `bad role "${c.role}"`, c.id);
     if (c.drives !== undefined && !CONTROLLER_DRIVES.includes(c.drives))
       err('controller', `bad drives "${c.drives}" (servo|linear)`, c.id);
+
     if (c.role === 'primary') primaries++;
     if (c.link !== undefined) {
       if (typeof c.link !== 'object' || c.link === null) err('controller', 'link must be an object', c.id);

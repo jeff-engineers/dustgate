@@ -96,9 +96,9 @@ public:
     // Silently does nothing for a controller that is not reachable — the same
     // treatment an un-driveable gate gets, and for the same reason: a layout may
     // legitimately name a board that is switched off at the wall (RFC §5.6a).
-    void configureSensors(const char* controllerId, JsonArrayConst sensors) {
+    void configureSensors(const char* controllerId, JsonArrayConst sensors, JsonObjectConst failsafe = JsonObjectConst()) {
         ActuatorBus* b = busForController(controllerId);
-        if (b) b->configureSensors(sensors);
+        if (b) b->configureSensors(sensors, failsafe);
     }
 
     // Latest reading for one sensor. False = nothing has ever reported, which

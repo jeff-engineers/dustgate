@@ -283,4 +283,11 @@ bool ShellyGen2Outlet::setSwitch(bool on) {
     return plughttp::get(url, OUTLET_HTTP_TIMEOUT_MS, OUTLET_HTTP_TIMEOUT_MS).code == 200;   // connect too: see doPoll()
 }
 
+bool ShellyGen2Outlet::setSwitchDeadman(bool on, uint32_t offAfterSec) {
+    if (!on || !offAfterSec) return setSwitch(on);
+    char url[112];
+    snprintf(url, sizeof(url), "http://%s/rpc/Switch.Set?id=0&on=true&toggle_after=%lu", _ip, (unsigned long)offAfterSec);
+    return plughttp::get(url, OUTLET_HTTP_TIMEOUT_MS, OUTLET_HTTP_TIMEOUT_MS).code == 200;
+}
+
 #endif // CONTROL_SMART_OUTLET || DUSTGATE_NODE_PLUG_POLL || DUSTGATE_NATIVE

@@ -4,7 +4,7 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
 import { ApiService, Topology } from '../services/api.service';
-import { SERVO_PULSE_BOUNDS, servoPulseRange } from '@shop';
+import { FAILSAFE_BOUNDS, SERVO_PULSE_BOUNDS, failsafeCloseMs, servoPulseRange } from '@shop';
 
 /**
  * SettingsComponent — device configuration hub, reached via the gear icon.
@@ -241,6 +241,24 @@ import { SERVO_PULSE_BOUNDS, servoPulseRange } from '@shop';
         </div>
       </div>
 
+      <!-- FAIL CLOSED (D-85, 2026-10-19): how long a board waits without hearing the brain before it closes its gates.
+           One number for the shop, kept in the layout and sent to every board. -->
+      <div class="section">
+        <span class="section-title">If a board loses the brain</span>
+        <div class="row-hint">
+          A board that can't reach the brain closes its gates after this long, so the rest of the shop keeps its suction.
+          Shorter closes sooner; too short and a WiFi hiccup closes a gate in the middle of a cut.
+        </div>
+        <div class="row">
+          <label class="row-label" for="failsafe-s">Close its gates after</label>
+          <span><input id="failsafe-s" type="number" [min]="fsBounds.min / 1000" [max]="fsBounds.max / 1000" step="5" [(ngModel)]="failsafeSec"> seconds</span>
+        </div>
+        <div class="row">
+          <div class="row-hint">{{ failsafeNote() }}</div>
+          <button class="save-btn" (click)="saveFailsafe()" [disabled]="busy || !servoLoaded || !failsafeValid() || !failsafeChanged()">Save</button>
+        </div>
+      </div>
+
       <div class="status-msg" *ngIf="statusMsg">{{ statusMsg }}</div>
       <div class="error-msg" *ngIf="errorMsg">⚠ {{ errorMsg }}</div>
 
@@ -342,6 +360,33 @@ export class SettingsComponent implements OnInit {
     }, 'busy', `Servos now run ${minUs}–${maxUs} µs. Recalibrate your gates.`);
   }
 
+  // ── fail closed (D-85) ─────────────────────────────────────────────────
+  readonly fsBounds = FAILSAFE_BOUNDS;
+  failsafeSec = 30;
+  private savedFailsafeMs = 30000;
+  failsafeValid(): boolean {
+    const ms = Math.round(Number(this.failsafeSec) * 1000);
+    return Number.isFinite(ms) && ms >= this.fsBounds.min && ms <= this.fsBounds.max;
+  }
+  failsafeChanged(): boolean { return Math.round(Number(this.failsafeSec) * 1000) !== this.savedFailsafeMs; }
+  failsafeNote(): string {
+    if (!this.servoLoaded) return 'Reading the shop\'s setting…';
+    return this.failsafeValid()
+      ? `${this.savedFailsafeMs / 1000} s now${this.savedFailsafeMs === this.fsBounds.dflt ? ' (the default)' : ''}`
+      : `${this.fsBounds.min / 1000} to ${this.fsBounds.max / 1000} seconds`;
+  }
+  async saveFailsafe(): Promise<void> {
+    if (!this.failsafeValid()) return;
+    const closeAfterMs = Math.round(Number(this.failsafeSec) * 1000);
+    await this.run(async () => {
+      // Read the layout NOW rather than when the page opened: whatever else changed since is kept.
+      const doc = JSON.parse(JSON.stringify(await this.api.getTopology())) as Topology & { failsafe?: unknown };
+      doc.failsafe = { closeAfterMs };
+      await this.api.putTopology(doc as Topology);
+      this.savedFailsafeMs = closeAfterMs;
+    }, 'busy', `A board that loses the brain now closes its gates after ${closeAfterMs / 1000} seconds.`);
+  }
+
   ngOnInit() {
     // Opened cold (a reload, or a bookmark straight to Settings) this used to ask before /api/info had answered, get a
     // 401, and leave the 400–2600 defaults on screen over a shop running 300–2800 — one tap of Save from writing them
@@ -349,6 +394,8 @@ export class SettingsComponent implements OnInit {
     void this.api.getTopology().then((t) => {
       this.savedServo = servoPulseRange(t);
       this.servoMin = this.savedServo.minUs; this.servoMax = this.savedServo.maxUs;
+      this.savedFailsafeMs = failsafeCloseMs(t);
+      this.failsafeSec = this.savedFailsafeMs / 1000;
       this.servoLoaded = true;
       this.cd.markForCheck();
     }).catch(() => { /* no layout yet: nothing to save the range into, and Save stays off */ });

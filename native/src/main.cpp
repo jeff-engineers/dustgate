@@ -218,18 +218,13 @@ static void raiseDeviceProblems(uint32_t now) {
                                   "Pick the board at the collector in its setup.", now);
             else g_rt.clearProblem(key);
         }
-    // THE BIN ALERT (2026-10-10): every board serving a system whose bin is full blinks red, by an ALERT frame. Shop.h
-    // boardServesSystem() decides who (the same rule as the ESP32 primary); NodeSession sends only on a change. This brain
-    // has no pixel of its own.
+    // THE STATUS LIGHTS (D-86): each board is told what its lights say about the shop — a full bin (every board serving
+    // that system blinks red), "I've got the suction", and its shop light. TopologyRuntime::boardLight() decides; the
+    // session sends only on a change. This brain has no pixel of its own.
     if (g_rt.loaded()) {
-        const auto systems = topo::systemsOf(g_rt.topology());
-        for (auto& kv : g_hub->nodes()) {
-            const std::string board = topo::controllerIdForHost(g_rt.topology(), kv.first);
-            bool full = false;
-            for (const topo::SystemView& sys : systems)
-                if (sys.id && g_rt.binFull(sys.id) && topo::boardServesSystem(sys, board, g_hub->primaryId())) full = true;
-            kv.second->session.setBinAlert(full);
-        }
+        const bool needsPerson = g_rt.needsAPerson();
+        for (auto& kv : g_hub->nodes())
+            kv.second->session.setLight(g_rt.boardLight(topo::controllerIdForHost(g_rt.topology(), kv.first), needsPerson));
     }
     std::set<std::string> old; { std::lock_guard<std::mutex> g(g_tooOldMu); old = g_tooOld; }
     for (auto& kv : g_hub->nodes()) {
@@ -327,6 +322,7 @@ static bool adoptLayout(const std::string& json, int persist) {
     if (fromNothing) g_rt.settleAtBoot();
     g_topoErr.clear(); g_topoJson = json;
     rebuildPressers();
+    g_poller.setDeadman(outletDeadmanSec(g_rt.failsafeCloseMs()));   // the blower stops before the gates close (D-85)
     syncPlugs();
     // Atomically, keeping the last good copy beside it: a power cut mid-save must not cost the shop its layout.
     if (persist && !g_topoPath.empty() && !dgbrain::writeFileAtomic(g_topoPath, json, persist == 1))

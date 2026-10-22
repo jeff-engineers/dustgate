@@ -89,6 +89,7 @@ const ENTRY_POINTS = [
   ['beaconEveryMs', 'the beacon\'s pace'],
   ['hourlyNodesField', 'the link log\'s hourly line'],
   ['outletPollDue', 'whether a plug is asked for its power now (the push-quiet fallback)'],
+  ['boardLight', 'what each board\'s lights say about the shop (D-86)', false],
 ];
 
 const ESP32_ROOTS = ['firmware.ino', 'api/HttpApiServer.cpp'].map((f) => path.join(FW, f));
@@ -179,4 +180,4 @@ if (problems.length) {
   console.error(`\n${problems.length} brain-parity problem(s). See the header of tools/check-brain-parity.js.`);
   process.exit(1);
 }
-console.log(`brains ok — ${natShared.size - frozenLacks.length} shared headers in both, ${frozenLacks.length} the frozen ESP32 brain lacks, ${Object.keys(ESP32_ONLY).length} ESP32-only, ${ENTRY_POINTS.length} policies called by both`);
+console.log(`brains ok — ${[...natShared].filter((h) => espShared.has(h)).length} shared headers in both, ${frozenLacks.length} thing(s) the frozen ESP32 brain lacks, ${Object.keys(ESP32_ONLY).length} ESP32-only, ${ENTRY_POINTS.length} policies checked`);

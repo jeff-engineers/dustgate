@@ -136,7 +136,7 @@ public:
     // the layout put on this board and what the last answer was. It deliberately
     // does NOT touch CtSensor: this header is included by host tests that have no
     // Arduino ADC, and the seam is the same one RemoteActuatorBus sits behind.
-    void configureSensors(JsonArrayConst sensors) override {
+    void configureSensors(JsonArrayConst sensors, JsonObjectConst /*failsafe: the brain's own pads never lose it*/ = JsonObjectConst()) override {
         _senseCount = 0;
         for (JsonObjectConst sen : sensors) {
             if (_senseCount >= nodelink::kMaxSensorsPerNode) break;

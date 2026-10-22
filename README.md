@@ -20,6 +20,9 @@ Update it in the same session as the bench that proves something.
   its Try again re-homes it (2026-10-18). Not run: the wake-button homing trigger (the prototype slider board has no button).
 - **The bin sensor** (QS18VN6D through a discrete 4N35 — not a PC817 breakout, which put 4 V on a GPIO): on a primary
   2026-09-13; **from a node, end to end, 2026-10-11** — `bin-full`, and every board on that system blinking red.
+- **The status lights (D-86)**, 2026-10-22: a board's pixel and its shop light (a 12-LED RGBW ring, Adafruit 2851, chained
+  off the cyclone node's pixel) driven as one chain from the node; the ring showed the brain's solid amber ("the shop
+  needs a person", collector idle). Not yet seen: green suction, the blinking forms, a full bin on the ring.
 - **A CT clamp starts the collector and moves a gate**, end to end (2026-09-18). ⚠️ It takes TWO gates to see it:
   with one there is nothing to route away from, and "idle leaves the gate where it is" means doing nothing is correct.
 - **Clamp-jack detection** (2026-10-17): a switched jack (cyclone, miter saw) and a bare D0 (the C5's internal

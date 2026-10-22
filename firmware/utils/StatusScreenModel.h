@@ -150,6 +150,13 @@ struct Facts {
                                       // the screen says which one out loud.
     int  retrySec   = -1;
 
+    // -- the shop, as the brain last said it (ALERT, D-86) and fail closed (D-85) --
+    bool binFull = false;              // a bin on a system this board serves is full: the screen says BIN FULL
+    bool suction = false;              // one of this board's gates is open and its collector runs
+    int  failsafeInSec = -1;           // no brain: seconds until this board closes its gates; -1 = no countdown
+    bool gatesClosed = false;          // ...and it has closed them
+    const char* collectorStop = nullptr;  // the collector's board with the brain gone: what it did about the blower
+
     // -- portal ---------------------------------------------------------------
     const char* apName    = nullptr;  // the AP a stranger has to join
     const char* portalIp  = nullptr;
@@ -293,6 +300,10 @@ inline const char* stateWord(const Facts& f) {
     // this word to see whether the board agreed. 9 characters.
     if (f.selfTestCh >= 0) return "SERVOTEST";
     if (f.selfTestRefused)  return "REFUSED";
+    // The pixel's order (D-86): a fault, then a full bin, outrank motion — both need a person, and a gate moving does not.
+    if (f.status == statusled::FAULT) return f.darkNode ? "NODE DARK" : "FAULT";
+    if (f.binFull && f.status != statusled::BOOTING && f.status != statusled::PORTAL && f.status != statusled::NO_WIFI)
+        return "BIN FULL";
     switch (f.motion) {
         case statusled::MOVING:      return "MOVING";
         case statusled::HOMING:      return "HOMING";
@@ -311,11 +322,11 @@ inline const char* stateWord(const Facts& f) {
             // stored at all, or a paired board gone dark. Saying "NO SHOP" about
             // a shop that is laid out and running would send someone to the
             // wrong problem.
-            if (f.role == Role::NODE) return "UNLINKED";
+            if (f.role == Role::NODE) return "NO BRAIN";
             return f.darkNode ? "NODE DARK" : "NO SHOP";
         case statusled::READY:
             // A running tool is the thing worth reading from the doorway.
-            if (f.role == Role::NODE) return "LINKED";
+            if (f.role == Role::NODE) return f.suction ? "SUCTION" : "READY";
             return f.toolName ? "RUNNING" : "READY";
     }
     return "";
@@ -335,6 +346,7 @@ inline const char* stateWord(const Facts& f) {
  */
 inline bool isAlarm(const Facts& f) {
     return f.status == statusled::FAULT ||
+           f.binFull ||                                  // a full bin needs a person too (D-86)
            f.status == statusled::NO_WIFI ||
            f.darkNode != nullptr ||
            (f.status == statusled::ONLINE && f.role == Role::NODE);
@@ -432,13 +444,21 @@ inline Screen _renderBody(const Facts& f) {
     }
 
     if (f.role == Role::NODE) {
-        if (f.primaryHost) { _pair(buf, "to", f.primaryHost); _add(s, buf); }
-        else if (f.status == statusled::ONLINE) _add(s, "wifi ok, no brain");
-        if (f.retrySec >= 0)  { _pairNum(buf, "retrying in", f.retrySec, "s"); _add(s, buf); }
-        if (f.servoCount >= 0) {
-            if (f.status == statusled::ONLINE) _add(s, "servos held");
-            else { _pairNum(buf, "servos", f.servoCount); _add(s, buf); }
+        // What the shop needs from a person first, then what this board is doing about it (D-85, D-86). Lines past
+        // the budget are dropped, so the order is the priority.
+        if (f.binFull) _add(s, "Empty the dust bin");
+        if (f.status == statusled::ONLINE) {
+            _add(s, "WiFi ok, brain silent");
+            if (f.gatesClosed) _add(s, "gates closed");
+            else if (f.failsafeInSec >= 0) { snprintf(buf, sizeof(buf), "gates close in %ds", f.failsafeInSec); _add(s, buf); }
+            if (f.collectorStop) _add(s, f.collectorStop);
+        } else if (f.status == statusled::READY && !f.binFull) {
+            if (f.suction) { _add(s, "gate open"); _add(s, "collector running"); }
+            else _add(s, "waiting for a tool");
         }
+        if (f.primaryHost) { _pair(buf, "to", f.primaryHost); _add(s, buf); }
+        if (f.retrySec >= 0)  { _pairNum(buf, "retrying in", f.retrySec, "s"); _add(s, buf); }
+        if (f.servoCount >= 0 && f.status != statusled::ONLINE) { _pairNum(buf, "servos", f.servoCount); _add(s, buf); }
         if (f.sliderFitted) {
             // Position without a datum is a number that looks like knowledge and
             // isn't, so an unhomed slider says so instead of showing millimetres.

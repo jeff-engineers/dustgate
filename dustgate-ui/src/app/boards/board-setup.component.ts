@@ -143,6 +143,10 @@ interface BoardRow {
     .err   { font-size: 12.5px; color: var(--danger); margin-top: 12px; }
     .note  { font-size: 12px; color: var(--muted); margin-top: 10px; line-height: 1.55; }
 
+    .update-all { display: flex; align-items: center; gap: 10px; margin: 0 0 10px; padding: 10px 12px;
+                  border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); font-size: 13px; }
+    .update-all .ua-text { flex: 1; min-width: 0; }
+
     .nav { display: flex; gap: 10px; margin-top: 18px; }
     .nav button { border-radius: var(--radius); padding: 12px 16px; font-size: 14px; }
     .nav .back { flex: 0 0 auto; background: var(--surface); border: 1px solid var(--border); color: var(--text); }
@@ -173,6 +177,18 @@ interface BoardRow {
       <span><b>Dust bin full — {{ b.name }}.</b> Empty it before the next cut. Boards on this system blink red until
         it is emptied.</span>
     </div>
+
+    <!-- UPDATE ALL (2026-10-22): every board running older firmware than the brain has staged, one at a time — the same
+         update as each row's button, waiting for each board to come back on the new firmware before the next starts, so
+         the shop never has more than one board away. Hidden when nothing is out of date. -->
+    <div class="update-all" *ngIf="bulk || outdated().length">
+      <span class="ua-text">{{ bulkText() }}</span>
+      <button class="act" *ngIf="!bulk" (click)="updateAll()"
+              title="Each out-of-date board pulls the new firmware from the brain and restarts, one after another. Do it with the shop quiet.">Update all</button>
+      <button class="act" *ngIf="bulk && !bulk.stopping" (click)="bulk.stopping = true"
+              title="Finish the board that is updating now, then stop">Stop after this one</button>
+    </div>
+    <p class="note" *ngIf="bulkNote">{{ bulkNote }}</p>
 
     <!-- Boards already in the layout -->
     <div class="card" *ngIf="rows.length">
@@ -228,7 +244,8 @@ interface BoardRow {
                  list. Same word as the canvas board menu. -->
             <button class="act" *ngIf="!r.primary && r.link?.update && !updating(r)"
                     (click)="update(r)"
-                    title="The board pulls the new firmware from this primary, restarts, and holds its gates for about half a minute">Update</button>
+                    [disabled]="!!bulk"
+                    title="The board pulls the new firmware from the brain and restarts. It is away for a few seconds; its gates close if that runs past the fail-closed delay">Update</button>
             <button class="act" *ngIf="!r.primary"
                     [disabled]="r.gates > 0" (click)="remove(r)">Unpair</button>
           </ng-container>
@@ -662,15 +679,84 @@ export class BoardSetupComponent implements OnInit, OnDestroy {
     const l = r.link;
     if (!l || r.primary) return null;
     if (l.ota === 'start') return { text: 'Updating — asking the board to fetch it…', state: '' };
-    if (l.ota === 'progress') return { text: `Updating — ${l.otaPct ?? 0}%. Gates on this board hold until it is back.`, state: '' };
+    if (l.ota === 'progress') return { text: `Updating — ${l.otaPct ?? 0}%. Its gates hold unless it is away longer than the fail-closed delay.`, state: '' };
     if (l.ota === 'done') return { text: 'Updated — restarting…', state: 'ok' };
     if (l.ota === 'fail') return { text: `Update did not run: ${l.otaErr || 'the board gave no reason'}`, state: 'warn' };
     if (l.update) return { text: `Update available (${l.fw || 'unknown'} → ${l.image})`, state: '' };
     return null;
   }
 
+  // ── update all (2026-10-22) ────────────────────────────────────────────────
+  /** Boards that are linked and running older firmware than the brain has staged. An offline one is left out: it cannot
+   *  fetch anything, and "Not answering" already says so on its row. */
+  outdated(): BoardRow[] {
+    return this.rows.filter((r) => !r.primary && r.link?.online && r.link?.update && !this.updating(r));
+  }
+  bulk: { total: number; done: number; current: string; stopping: boolean; failed: string[] } | null = null;
+  bulkNote = '';
+  bulkText(): string {
+    if (!this.bulk) {
+      const n = this.outdated().length;
+      return `${n} ${n === 1 ? 'board is' : 'boards are'} running older firmware.`;
+    }
+    const b = this.bulk;
+    const row = this.rows.find((r) => r.name === b.current);
+    const pct = row?.link?.ota === 'progress' ? ` — ${row.link.otaPct ?? 0}%` : '';
+    return `Updating ${b.done + 1} of ${b.total}: ${b.current}${pct}${b.stopping ? ' (stopping after this one)' : ''}`;
+  }
+  async updateAll(): Promise<void> {
+    const list = this.outdated();
+    if (!list.length) return;
+    if (!window.confirm(`Update ${list.length} ${list.length === 1 ? 'board' : 'boards'}, one at a time? Each restarts and ` +
+                        `is away for a few seconds. Do it with the shop quiet.`)) return;
+    this.error = ''; this.bulkNote = '';
+    this.bulk = { total: list.length, done: 0, current: '', stopping: false, failed: [] };
+    for (const r of list) {
+      if (this.bulk.stopping) break;
+      this.bulk.current = r.name;
+      try {
+        await this.api.updateNode(r.id);
+      } catch (e: unknown) {
+        this.bulk.failed.push(`${r.name} (${failureReason(e)})`);
+        reportFailure('Boards · update all', e, `Couldn't start ${r.name}'s update`, { board: r.id });
+        this.bulk.done++;
+        continue;
+      }
+      const why = await this.waitForUpdate(r.id);
+      if (why) { this.bulk.failed.push(`${r.name} (${why})`); reportFailure('Boards · update all', null, why, { board: r.id }); }
+      this.bulk.done++;
+    }
+    const b = this.bulk;
+    const ok = b.done - b.failed.length;
+    this.bulkNote = b.failed.length
+      ? `Updated ${ok} of ${b.total}. Not updated: ${b.failed.join('; ')}.`
+      : b.done < b.total ? `Updated ${ok} of ${b.total}, then stopped as asked.`
+      : b.total === 1 ? `${list[0].name} is updated.` : `All ${b.total} boards are updated.`;
+    this.bulk = null;
+    await this.refreshLinks();
+    this.rebuild();
+  }
+  /** Wait for one board to come back on the new firmware: "" when it has, or why not. */
+  private async waitForUpdate(id: string, timeoutMs = 240000): Promise<string> {
+    const start = Date.now();
+    let started = false;
+    while (Date.now() - start < timeoutMs) {
+      await new Promise((res) => setTimeout(res, 2000));
+      await this.refreshLinks();
+      this.rebuild();
+      const l = this.links.find((x) => x.id === id);
+      if (!l) continue;
+      if (l.ota === 'fail') return l.otaErr || 'the board gave no reason';
+      if (l.ota === 'start' || l.ota === 'progress' || l.ota === 'done') started = true;
+      // Back, linked, and no longer offered an update: it is on the new firmware.
+      if (l.online && !l.update && l.ota !== 'start' && l.ota !== 'progress') return '';
+      if (!l.online) started = true;
+    }
+    return started ? 'it did not come back on the new firmware within 4 minutes' : 'it never started';
+  }
+
   async update(r: BoardRow): Promise<void> {
-    if (!window.confirm(`Update ${r.name}? It restarts and holds its gates for about half a minute. ` +
+    if (!window.confirm(`Update ${r.name}? It restarts and is away for a few seconds. ` +
                         `Do it with the shop quiet.`)) return;
     try {
       await this.api.updateNode(r.id);

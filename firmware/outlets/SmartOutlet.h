@@ -63,6 +63,9 @@ public:
     // call only from the poll task. Returns true on success. Power-monitoring
     // usage can ignore this; the base implementation is a no-op.
     virtual bool setSwitch(bool on) { (void)on; return false; }
+    // ON with a dead-man: the plug switches itself OFF after `offAfterSec` unless told again (OUTLET_DEADMAN_SEC). A plug
+    // that cannot do that falls back to a plain switch.
+    virtual bool setSwitchDeadman(bool on, uint32_t offAfterSec) { (void)offAfterSec; return setSwitch(on); }
 
     // Human-readable label for this outlet (e.g. "Table Saw")
     virtual const char* name() const = 0;
