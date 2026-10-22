@@ -70,7 +70,8 @@ first-boot WiFi setup for a customer, a read-only root, and the `--git` update p
   light's resolved colour + blink (matched tests); `TopologyRuntime::boardLight()` decides (L0–L8), the native brain sends
   it on change, the node shows it. Every board drives a 12-pixel RGBW ring (Adafruit 2851) behind its own pixel, always (jeff: on a board
   with no strip the data clocks into nothing), as one RMT chain written only on a change (StatusLed.h `_writeChain`).
-  **Every board now writes its pixel through that new code: flash ONE board first and check its pixel still looks right.**
+  **Ran 2026-10-22:** the board pixel (dim white idle) and the cyclone's ring (solid amber) through it — the ring is 12
+  RGBW (Adafruit 2851), and RGB data for 16 had scrambled it. Still to see: green suction, the blinking forms, bin red.
   The screen (jeff, 2026-10-20): BIN FULL "Empty the dust bin"; NO BRAIN "WiFi ok, brain silent", "gates close in Ns" then
   "gates closed" (and on the collector's board what it did about the blower); SUCTION "gate open", "collector running";
   READY "waiting for a tool". No WiFi is blue blinking. Fault, then a full bin, outrank motion on pixel and screen. The
