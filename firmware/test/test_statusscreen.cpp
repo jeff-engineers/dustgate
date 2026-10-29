@@ -197,10 +197,23 @@ int main() {
         f.primaryHost = "dustgate-a1"; f.servoCount = 4; f.lastCmdSec = 3;
         Screen s = render(f);
         fits("linked node fits", s);
-        ok("...says LINKED",           strcmp(headline(s), "LINKED") == 0);
+        ok("...says READY, idle",      strcmp(headline(s), "READY") == 0);
+        ok("...waiting for a tool",    hasLine(s, "waiting for a tool"));
         ok("...names its brain",       hasLine(s, "to        dustgate-a1"));
         ok("...counts servos",         hasLine(s, "servos              4"));
-        ok("...ages the last command", hasLine(s, "last cmd       3s ago"));
+        f.suction = true;
+        Screen su = render(f);
+        fits("node with the suction fits", su);
+        ok("...says SUCTION",          strcmp(headline(su), "SUCTION") == 0);
+        ok("...gate open, collector running", hasLine(su, "gate open") && hasLine(su, "collector running"));
+        f.binFull = true;
+        Screen bf = render(f);
+        fits("node with a full bin fits", bf);
+        ok("...says BIN FULL, over the suction", strcmp(headline(bf), "BIN FULL") == 0);
+        ok("...and what to do",        hasLine(bf, "Empty the dust bin"));
+        ok("...and the band blinks for it", bf.barBlink);
+        f.binFull = false; f.suction = false; f.motion = statusled::MOVING; f.status = statusled::FAULT; f.bootFault = "no servo";
+        ok("a fault outranks a moving gate", strcmp(headline(render(f)), "FAULT") == 0);
     }
 
     // ── node: on wifi, no primary ────────────────────────────────────────
@@ -214,11 +227,18 @@ int main() {
         f.servoCount = 4; f.retrySec = 4;
         Screen s = render(f);
         fits("unlinked node fits", s);
-        ok("...says UNLINKED",         strcmp(headline(s), "UNLINKED") == 0);
-        ok("...says why",              hasLine(s, "wifi ok, no brain"));
+        ok("...says NO BRAIN",         strcmp(headline(s), "NO BRAIN") == 0);
+        ok("...says why",              hasLine(s, "WiFi ok, brain silent"));
         ok("...counts down the retry", hasLine(s, "retrying in        4s"));
-        ok("...says the servos held",  hasLine(s, "servos held"));
         ok("...and blinks about it",   s.barBlink);
+        f.failsafeInSec = 23;
+        ok("...counts down to closing its gates", hasLine(render(f), "gates close in 23s"));
+        f.failsafeInSec = -1; f.gatesClosed = true;
+        ok("...then says they closed", hasLine(render(f), "gates closed"));
+        f.collectorStop = "collector pressed off";
+        Screen cs = render(f);
+        fits("the collector's board with no brain fits", cs);
+        ok("...says what it did about the blower", hasLine(cs, "collector pressed off"));
     }
 
     // ── node: the SLIDER variant ─────────────────────────────────────────

@@ -56,9 +56,11 @@ public:
             if (!b.linked && !b.refused && b.optional) {
                 rt.clearProblem(key);                   // off is its normal state (docs/archive/optional-nodes-plan.md)
             } else if (!b.linked && !b.refused && b.downForMs >= kBoardOfflineAfterMs) {
-                char t[160];
-                std::snprintf(t, sizeof(t), "Not linked for %lus. Its gates stay where they were; tools on it cannot open a gate.",
-                              (unsigned long)(b.downForMs / 1000));
+                // What fail-closed does (D-85), in a woodworker's words: its gates close on their own, the rest keeps going.
+                char t[240];
+                std::snprintf(t, sizeof(t), "Not answering for %lus. Its gates close on their own after %lus without the brain, "
+                              "and the rest of the shop keeps collecting; tools on it get no suction until it is back.",
+                              (unsigned long)(b.downForMs / 1000), (unsigned long)(rt.failsafeCloseMs() / 1000));
                 rt.raiseProblem(key, "board-offline", "bad", "board", b.host, t, now - b.downForMs);
             } else if (b.refused) {
                 rt.raiseProblem(key, "board-offline", "bad", "board", b.host,

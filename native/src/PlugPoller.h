@@ -120,6 +120,9 @@ public:
     // What a plug should be switched to (a collector's own control plug). Called on every feed, not only on a change: the
     // worker re-sends until the plug TAKES it, as the ESP32 does (SmartOutletControl). It used to send once and forget, so a
     // plug unreachable at that moment, or a slot recreated by sync(), stayed wrong until the wanted state flipped.
+    // How long the collector's plug may stay on without hearing from us (OutletTimeouts.h outletDeadmanSec, from the
+    // layout's gate delay). The shell sets it on every layout.
+    void setDeadman(uint32_t sec) { _deadmanSec = sec; }
     void setSwitch(const std::string& key, bool on) {
         std::lock_guard<std::mutex> g(_m);
         auto it = _slots.find(key);
@@ -137,6 +140,7 @@ private:
         uint32_t provisionAtMs = 0;      // next time to try claiming it
         int switchWanted = -1;     // -1 nothing asked yet
         int switchTaken = -1;      // the last state the plug accepted; re-sent while it differs
+        uint32_t switchSentMs = 0; // when it last took one: an ON is renewed from here (the dead-man)
     };
     void loop() {
         while (_run) {
@@ -147,7 +151,14 @@ private:
                 if (!_run) return;
                 Slot& s = *kv.second;
                 int sw, taken; { std::lock_guard<std::mutex> g(_m); sw = s.switchWanted; taken = s.switchTaken; }
-                if (sw >= 0 && sw != taken && s.outlet->setSwitch(sw == 1)) { std::lock_guard<std::mutex> g(_m); s.switchTaken = sw; }
+                // ON goes with a dead-man (OutletTimeouts.h outletDeadmanSec), RENEWED three times a period while it stays
+                // wanted: if this brain dies the plug switches the blower off by itself, before any gate closes (D-85).
+                const uint32_t deadman = _deadmanSec;
+                const bool renew = sw == 1 && taken == 1 && nowMs() - s.switchSentMs >= outletDeadmanRenewMs(deadman);
+                if (sw >= 0 && (sw != taken || renew) &&
+                    (sw == 1 ? s.outlet->setSwitchDeadman(true, deadman) : s.outlet->setSwitch(false))) {
+                    std::lock_guard<std::mutex> g(_m); s.switchTaken = sw; s.switchSentMs = nowMs();
+                }
                 provision(s);
                 bool quiet;
                 { std::lock_guard<std::mutex> g(_m); quiet = outletPollDue(s.pushed, nowMs() - s.heardMs); }   // OutletTimeouts.h, shared with the ESP32
@@ -199,6 +210,7 @@ private:
     std::mutex _m;
     std::map<std::string, std::shared_ptr<Slot>> _slots;
     std::atomic<bool> _run{false};
+    std::atomic<uint32_t> _deadmanSec{outletDeadmanSec(30000)};
     std::thread _th;
 };
 

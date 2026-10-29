@@ -33,6 +33,50 @@ what to report back. Full commands are in [`native/pi/README.md`](../native/pi/R
 Open design work behind this, in the order it will be needed: mDNS advertising from the brain itself (the Pi relies on avahi today),
 first-boot WiFi setup for a customer, a read-only root, and the `--git` update path. None of it blocks the steps above.
 
+## Next: failure states and status lights (decided 2026-10-19, D-85 and D-86)
+
+- **Fail closed (D-85).** The plan, one piece at a time, each with its matched JS/C++ test where the model has a twin:
+  1. **BUILT 2026-10-20 — the delay, a shop setting.** `failsafe.closeAfterMs` in the layout (shop.js `failsafeCloseMs`,
+     `TopologyRuntime::failsafeCloseMs`), bounds 10 s–10 min, a field in Settings ("If a board loses the brain").
+  2. **BUILT 2026-10-20 — the node closes.** CONFIG carries `failsafe` (the delay and each gate's resolved close command,
+     `parseFailsafe`/`FailsafeTimer` in NodeLink.h, matched tests F1–F13); the node closes once after `closeAfterMs` with no
+     frame from its brain, a link back sooner cancels it, an unhomed slider is left where it is. Host-tested and compiled
+     only. **Do not flash nodes with it until piece 4 lands:** with the brain itself gone, every node closes its gates
+     and nothing yet stops the collector — a dead-head. (Before this, a dead brain left the gates open.)
+  3. **BUILT 2026-10-20 — the brain's half.** `TopologyRuntime::trackLostBoards` / `keepAVisiblePath`: a lost board's
+     gates stop counting as visible at once and are believed closed `kPongTimeoutMs` before the node closes them; a
+     running or wanted blower with no visible gate gets one opened on a live board; the last visible gate of a running
+     system is never closed; a failed make no longer holds the blower off when a visible gate is open; nothing starts
+     into a sealed system and a running blower with no open gate stops; a board that comes back has its gates re-sent;
+     the status shows where such gates really are. Host-tested (test_nodebus.cpp FC0–FC15) and end to end on the native
+     brain with fake nodes (`native/test/e2e_failclosed.sh`). Not mirrored in topology-device.js: the JS simulation has
+     no board links to lose.
+  4. **BUILT 2026-10-20 — the collector stops with the brain gone.** The collector's board (its transmitter and the
+     blower's clamp both on it) is sent `failsafe.stopCollector` in CONFIG; when its timer fires it presses the remote
+     OFF if the clamp says the blower runs, re-checks after `kPressCooldownOffMs` and tries up to `kMaxPressAttempts`
+     (CollectorPress.h, the brain's own numbers), and never presses without a clamp reading (control/FailsafeStop.h,
+     test_failsafestop.cpp; F14–F20 matched). A plug-switched collector: every ON carries a dead-man
+     (`outletDeadmanSec()`: the gates' delay less 10 s, never under 5 s — 20 s for the 30 s default, so the blower stops
+     before any gate closes; it was a fixed 60 s, up to 30 s of a blower against closed gates), renewed three times a period
+     by the native poller (`native/test/e2e_deadman.sh`). Not covered: an RF collector whose running reading comes from a plug the brain
+     polls (the board cannot judge its own press) — it gets no stop; and the frozen ESP32 brain sends no dead-man.
+  5. **BUILT 2026-10-20 — the problem says what happens.** board-offline now reads "its gates close on their own after
+     N s … the rest of the shop keeps collecting".
+- **The Shelly dead-man renews: tried 2026-10-20 (jeff).** On a Shelly Plug US Gen4, `toggle_after=30` sent twice ~20 s
+  apart switched off ~50 s in, 30 s after the second call — a renewal restarts the countdown, as the brain assumes. Still to
+  bench after flashing the nodes: unplug a node mid-cut, and stop the brain with the collector running.
+
+- **Status lights (D-86) — BUILT 2026-10-20, NOT YET RUN ON HARDWARE.** ALERT carries `bin`, `suction` and the shop
+  light's resolved colour + blink (matched tests); `TopologyRuntime::boardLight()` decides (L0–L8), the native brain sends
+  it on change, the node shows it. Every board drives a 12-pixel RGBW ring (Adafruit 2851) behind its own pixel, always (jeff: on a board
+  with no strip the data clocks into nothing), as one RMT chain written only on a change (StatusLed.h `_writeChain`).
+  **Ran 2026-10-22:** the board pixel (dim white idle) and the cyclone's ring (solid amber) through it — the ring is 12
+  RGBW (Adafruit 2851), and RGB data for 16 had scrambled it. Still to see: green suction, the blinking forms, bin red.
+  The screen (jeff, 2026-10-20): BIN FULL "Empty the dust bin"; NO BRAIN "WiFi ok, brain silent", "gates close in Ns" then
+  "gates closed" (and on the collector's board what it did about the blower); SUCTION "gate open", "collector running";
+  READY "waiting for a tool". No WiFi is blue blinking. Fault, then a full bin, outrank motion on pixel and screen. The
+  frozen ESP32 brain's own pixel now reads dim white when ready.
+
 ## Bugs
 
 - **A slider's endstops both read triggered after a jam, until the whole slider is power-cycled (jeff, 2026-10-07).** A latched

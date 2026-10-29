@@ -91,6 +91,7 @@ int main(int argc, char** argv) {
                 body = "{\"id\":0,\"source\":\"test\",\"output\":true,\"apower\":" + std::to_string(readPower()) + ",\"voltage\":120.0}";
             } else if (t.rfind("/rpc/Switch.Set", 0) == 0 && t.rfind("/rpc/Switch.SetConfig", 0) != 0) {
                 std::ofstream(g_file + ".sw") << t; body = "{\"was_on\":true}";
+                std::ofstream(g_file + ".swlog", std::ios::app) << t << "\n";   // every switch, for counting renewals
             } else if (t.rfind("/rpc/Switch.GetConfig", 0) == 0) {
                 const std::string n = readLine(g_file + ".name");
                 body = "{\"id\":0,\"name\":" + (n.empty() ? std::string("null") : "\"" + n + "\"") + "}";

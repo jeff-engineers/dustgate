@@ -25,7 +25,8 @@ enum Status {
     FAULT,        // red — pulsing
     BOOTING,      // orange — pre-WiFi
     PORTAL,       // white — blinking; captive portal waiting for credentials
-    NO_WIFI,      // orange — was connected, isn't now (or never joined)
+    NO_WIFI,      // blue, BLINKING — was connected, isn't now (or never joined). Blue like ONLINE: cut off from the shop
+                  //        (D-86). On the frozen ESP32 brain it shares the blink with LAYOUT_BAD.
     LAYOUT_BAD,   // blue, BLINKING — a stored layout was refused at adopt.
                   //        Its own state since 2026-09-17, because solid blue
                   //        already meant "no layout drawn yet" and the two send

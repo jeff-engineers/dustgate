@@ -200,6 +200,14 @@ function validateShop(shop) {
       err('shape', `servo pulse range must be whole microseconds, ${NL.MIN_SERVO_US}–${NL.MAX_SERVO_US}, at least ${NL.MIN_SERVO_SPAN_US} apart`);
     }
   }
+  // How long a board waits without the brain before it closes its gates (Settings, D-85): optional; absent is the default
+  // in nodelink.js. Same bounds the wire uses.
+  if (shop.failsafe !== undefined) {
+    const fs = shop.failsafe;
+    if (!fs || typeof fs !== 'object' || !NL.failsafeDelayOk(fs.closeAfterMs)) {
+      err('shape', `failsafe closeAfterMs must be whole milliseconds, ${NL.MIN_FAILSAFE_CLOSE_MS}–${NL.MAX_FAILSAFE_CLOSE_MS}`);
+    }
+  }
   if (errors.length) return { ok: false, errors };
 
   if (shop.systems.length === 0) err('system', 'a shop needs at least one system');
@@ -708,6 +716,17 @@ function servoPulseRange(shop) {
 const SERVO_PULSE_BOUNDS = { min: NL.MIN_SERVO_US, max: NL.MAX_SERVO_US, span: NL.MIN_SERVO_SPAN_US };
 
 /**
+ * How long a board waits without hearing the brain before it closes its gates (D-85; Settings). The layout's `failsafe`
+ * block, or the default (nodelink.js DEFAULT_FAILSAFE_CLOSE_MS) when it is absent or out of bounds — what
+ * TopologyRuntime::failsafeCloseMs() does with it too.
+ */
+function failsafeCloseMs(shop) {
+  const fs = shop && shop.failsafe;
+  return fs && NL.failsafeDelayOk(fs.closeAfterMs) ? fs.closeAfterMs : NL.DEFAULT_FAILSAFE_CLOSE_MS;
+}
+const FAILSAFE_BOUNDS = { min: NL.MIN_FAILSAFE_CLOSE_MS, max: NL.MAX_FAILSAFE_CLOSE_MS, dflt: NL.DEFAULT_FAILSAFE_CLOSE_MS };
+
+/**
  * IS THIS BOARD OPTIONAL — can the shop lose it without losing anything but a reading (2026-10-07, jeff;
  * docs/archive/optional-nodes-plan.md)? A board is REQUIRED when the layout gives it any gate (a selector on it), or any of a
  * collector's jobs: its transmitter (control.rf), its clamp (sensor.ct) or its bin beam (bin.sensor) — without those a
@@ -737,7 +756,7 @@ function isOptionalBoard(shop, controllerId) {
 }
 
 module.exports = {
-  SHOP_SCHEMA_VERSION, MAX_SUPPLEMENTAL_PORTS, servoPulseRange, SERVO_PULSE_BOUNDS, isOptionalBoard,
+  SHOP_SCHEMA_VERSION, MAX_SUPPLEMENTAL_PORTS, servoPulseRange, SERVO_PULSE_BOUNDS, failsafeCloseMs, FAILSAFE_BOUNDS, isOptionalBoard,
   systemView, systemsOf, machinesOf, machineIndex, portsByMachine, plugOwners, portEnabled,
   validateShop, routeShop, planShopTransition,
 };

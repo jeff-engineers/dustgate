@@ -221,9 +221,12 @@ public:
         if (_otaPending)   { out = _otaFrame;   _otaPending   = false; say(label("[NODE→] OTA to "));    return true; }
         if (_pressPending) { out = _pressFrame; _pressPending = false; return true; }
         if (_alertPending) {
-            StaticJsonDocument<96> d; nodelink::buildAlert(d.to<JsonObject>(), _alertBin > 0);
+            StaticJsonDocument<384> d; nodelink::buildAlert(d.to<JsonObject>(), _light);
             out.clear(); serializeJson(d, out); _alertPending = false;
-            say(label(_alertBin > 0 ? "[NODE→] ALERT bin full to " : "[NODE→] ALERT bin clear to "));
+            char what[64];
+            std::snprintf(what, sizeof(what), "[NODE→] ALERT %s, shop %u,%u,%u%s to ", _light.bin ? "bin full" : _light.suction ? "suction" : "clear",
+                          (unsigned)_light.r, (unsigned)_light.g, (unsigned)_light.b, _light.blink ? " blinking" : "");
+            say(label(what));
             return true;
         }
         return false;
@@ -341,21 +344,23 @@ public:
     }
     const char* pressFault() const { return _pressFault; }
 
-    // What this board's pixel should say about the shop: a dust bin on a system it serves is full (the ALERT frame).
-    // Sent only on a CHANGE — the brain calls this every tick — and again on every link-up.
-    void setBinAlert(bool full) {
-        const int8_t v = full ? 1 : 0;
-        if (v == _alertBin) return;
-        _alertBin = v;
+    // What this board's lights should say about the shop (the ALERT frame, D-86): a full bin, "I've got the suction", and
+    // its shop light. Sent only on a CHANGE — the brain calls this every tick — and again on every link-up.
+    void setLight(const nodelink::AlertLight& l) {
+        if (_lightKnown && l == _light) return;
+        _light = l; _lightKnown = true;
         _alertPending = true;
     }
+    // The bin alone, for a shell that decides nothing else (the frozen ESP32 brain).
+    void setBinAlert(bool full) { nodelink::AlertLight l = _light; l.bin = full; setLight(l); }
 
     // Built here rather than by the caller so the WIRE SHAPE lives in one place — nodelink.js's
     // CONFIG, mirrored by parseConfigFrame() on the node.
     // 1024 since plug sensors (2026-10-03): four of them are four objects of five members, and
     // overflow DROPS members silently.
-    void configureSensors(JsonArrayConst sensors) {
-        StaticJsonDocument<1024> doc;
+    void configureSensors(JsonArrayConst sensors, JsonObjectConst failsafe = JsonObjectConst()) {
+        // 1536 since the fail-closed plan (D-85) rides along: up to kMaxFailsafeGates resolved close commands.
+        StaticJsonDocument<1536> doc;
         JsonObject f = doc.to<JsonObject>();
         f["t"] = "CONFIG";
         JsonArray arr = f.createNestedArray("sensors");
@@ -379,7 +384,10 @@ public:
                     if (sen.containsKey(k)) o[k] = sen[k].as<float>();
             }
         }
+        // FAIL CLOSED (D-85): copied as the runtime resolved it; nodelink.js config() is the wire shape.
+        if (!failsafe.isNull()) f["failsafe"] = failsafe;
         f["seq"] = _cfgSeq = ++_seq;
+        if (doc.overflowed()) { say(label("[NODE] CONFIG overflowed its document for ")); return; }
         std::string s; serializeJson(doc, s);
         if (s.size() >= sizeof(_cfgFrame)) {
             say(label("[NODE] CONFIG too large for "));
@@ -586,7 +594,7 @@ private:
         // Re-arm the CONFIG on every accepted handshake: this node may have just rebooted, and a node
         // that has not been configured reports nothing.
         if (_cfgValid) { _cfgPending = true; _cfgAwaitAck = false; _cfgTries = 0; }
-        if (_alertBin >= 0) _alertPending = true;
+        if (_lightKnown) _alertPending = true;
         if (_sink) {
             char extra[160];
             std::snprintf(extra, sizeof(extra),
@@ -752,7 +760,7 @@ private:
     // for is powered from the tool it watches (RFC §5.6a), so it reboots every time someone switches
     // the planer off at the wall. A configuration sent once at adopt would be forgotten on the first
     // power cut. Re-sent on every accepted WELCOME instead, which costs one small frame per reconnect.
-    char     _cfgFrame[768]   = "";
+    char     _cfgFrame[1280]  = "";   // a full sensor list plus the fail-closed plan (D-85)
     bool     _cfgPending      = false;
     bool     _cfgAwaitAck     = false;   // sent, no ACK yet
     uint8_t  _cfgTries        = 0;       // resends so far
@@ -772,9 +780,9 @@ private:
     // One pending PRESS, sent like a SET. A PRESS is an EDGE against a TOGGLE: never replayed.
     char     _pressFrame[160] = "";
     bool     _pressPending    = false;
-    // The ALERT this board should be showing (a full bin on a system it serves). -1 = never decided, so nothing is sent
-    // until the brain has an opinion; re-armed on every link-up because a rebooted node has forgotten it.
-    int8_t   _alertBin        = -1;
+    // The ALERT this board should be showing (D-86). Not known until the brain first decides, so nothing is sent before.
+    nodelink::AlertLight _light;
+    bool     _lightKnown      = false;
     bool     _alertPending    = false;
     uint32_t _pressSeq        = 0;
     char     _pressFault[64]  = "";
