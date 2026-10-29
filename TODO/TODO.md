@@ -901,8 +901,9 @@ is gone, the sweep now waits for the release, and the topology backup runs again
   **If a physical tag does happen: DS2431 in TO-92, parasite-powered** — 2 holes
   and a 4.7 kΩ pullup, one GPIO (D10 on the collector map, D0 on a node with no
   CT). The 24C02 recommended above is right on pin budget and wrong on SIZE: the
-  DIP-8 does not fit the perfboards as they are built. Revisit at PCB layout,
-  where a SOIC-8 on the existing I²C bus costs nothing and the pin stays free.
+  DIP-8 does not fit the perfboards as they are built. The V1 PCB has no tag, but
+  it has J5, a Qwiic socket on that I²C bus: a Qwiic EEPROM board plugs in, and the
+  pin stays free.
 
   **Do it AFTER the CT path works end to end**, so there is a running system to
   regression-test the refactor against.
@@ -1104,7 +1105,7 @@ running at once. Added 2026-10-06 from the cleanup and the features built after 
   re-send, then it clears. A second reset after it cleared should re-send again.
 - **A clamp board with the switch off.** Flash a node with a CT lead, leave the switch off, and confirm no clamp line shows and the
   clamp is not offered to a tool.
-- **Pad D3 / D9.** If either is ever wired (a status LED on D3, the second button on D9), check boot with the line held both ways.
+- **Pad D3 / D9.** The V1 PCB wires both: J6 puts D3 on a header, and SW2 (with J8 beside it) sits on D9. On the first V1 board, check boot with each line held both ways.
 
 **2. NodeLink — the happy path passes, THE FAIL-SAFE HAS NEVER BEEN TRIED.**
 
