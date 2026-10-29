@@ -893,26 +893,16 @@ is gone, the sweep now waits for the release, and the topology backup runs again
   resistor below — which would take six envs to three and let a board change
   role without a reflash.
 
-- **Auto-detect the carrier with an ID resistor (jeff, 2026-09-11).** A resistor
-  of known value to ground on an otherwise-unused pin, read by the ADC at boot,
-  tells the firmware which carrier it is sitting on. One firmware, no
-  `-D` flags, no picking the wrong env and chasing a dead servo.
+- **Carrier capabilities at runtime — sensed, not tagged (jeff, 2026-09-11; settled 2026-10-29).**
+  One firmware, no `-D` flags, no picking the wrong env and chasing a dead servo.
+  **No ID resistor, EEPROM or other tag on the board** (jeff, 2026-10-29): a board
+  senses what it has or assumes it. The CT by its jack's plug-detect (no plug reads
+  railed), the OLED by answering on I²C, and the shop light ring is driven whether
+  or not one is plugged in. The one optional part nothing detects is the Banner bin
+  sensor, and that stays a setting in the app. (Dropped with it: an ADC ID resistor,
+  which D0's CT bias swamps, and a 24C02 or DS2431 tag.)
 
-  It is how plenty of hardware does exactly this, and it composes with the item
-  above: carrier from the resistor, role from NVS, and the six envs collapse.
-
-  **The wrinkle, which is specific to us:** D0 is the only analog pad on the
-  edge, and on a collector build it is spoken for by the CT. Reading an ID
-  there at boot does not work either — the CT's divider holds that pin at
-  ~1.65 V, which swamps any ID value. So either the collector carrier is the one
-  that has no ID resistor (detected by exclusion, which is fragile), or the ID
-  moves to something that is not an ADC read — a pin strapped high/low, a
-  one-wire EEPROM, an I²C part on the screen's bus. **The I²C option is probably
-  the right one**: the bus already exists on D4/D5, a 24C02 costs cents, and it
-  can carry more than an identity — a serial number, a calibration constant, the
-  carrier revision.
-
-  **DECIDED 2026-09-15 (jeff): buy nothing yet, and do this in two stages.**
+  **DECIDED 2026-09-15 (jeff): buy nothing, and do this in two stages.**
 
   The framing that settled it is his: separate **what a board HAS** (servo count,
   bus servo, CT, RF, bin) from **what it IS** (primary or node). Those are
@@ -924,7 +914,8 @@ is gone, the sweep now waits for the release, and the topology backup runs again
     consumer stops asking the preprocessor. This is the stage that does the
     collapsing, it is pure software, and **it does not care where the data comes
     from** — which is precisely why no part needs buying to start it.
-  - **Stage 2 — change the SOURCE**: NVS first, a chip later. One function.
+  - **Stage 2 — change the SOURCE**: from the board header to what the board senses,
+    plus the app's bin setting. One function.
 
   **What collapses and what does not.** `ENABLE_SERVO`, `DUSTGATE_SERVO_BUS` and
   `DUSTGATE_COLLECTOR` are pins and drivers, so they all go runtime.
@@ -934,19 +925,6 @@ is gone, the sweep now waits for the release, and the topology backup runs again
   second brain. One-brain is an ARBITRATION constraint (CLAUDE.md), not a size
   one. Endgame is **2 shipping builds plus the bench consoles**, from 6 — not the
   1 the "one firmware" phrasing above implies.
-
-  **NVS over a chip while this is perfboard.** Its one real weakness is that it
-  follows the MCU rather than the carrier, so a dead XIAO or a wipe means
-  re-tagging — a thirty-second serial command, on a bench holding one of each
-  board. The EEPROM's genuine advantage is that a carrier-mounted tag survives a
-  reflash AND an MCU swap, and what varies IS the carrier; that advantage is
-  worth paying for on a PCB and not on a crowded perfboard.
-
-  **If a physical tag does happen: DS2431 in TO-92, parasite-powered** — 2 holes
-  and a 4.7 kΩ pullup, one GPIO (D10 on the collector map, D0 on a node with no
-  CT). The 24C02 recommended above is right on pin budget and wrong on SIZE: the
-  DIP-8 does not fit the perfboards as they are built. Revisit at PCB layout,
-  where a SOIC-8 on the existing I²C bus costs nothing and the pin stays free.
 
   **Do it AFTER the CT path works end to end**, so there is a running system to
   regression-test the refactor against.
@@ -1148,7 +1126,7 @@ running at once. Added 2026-10-06 from the cleanup and the features built after 
   re-send, then it clears. A second reset after it cleared should re-send again.
 - **A clamp board with the switch off.** Flash a node with a CT lead, leave the switch off, and confirm no clamp line shows and the
   clamp is not offered to a tool.
-- **Pad D3 / D9.** If either is ever wired (a status LED on D3, the second button on D9), check boot with the line held both ways.
+- **Pad D3 / D9.** The V1 PCB wires both: J6 puts D3 on a header, and SW2 (with J8 beside it) sits on D9. On the first V1 board, check boot with each line held both ways.
 
 **2. NodeLink — the happy path passes, THE FAIL-SAFE HAS NEVER BEEN TRIED.**
 
