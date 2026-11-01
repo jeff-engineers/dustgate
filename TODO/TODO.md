@@ -134,12 +134,11 @@ node — its servos share one brick, and the wire-length limit assumes only the 
   only a node's SET carries.
   4 done (2026-11-01): the brain keeps each board's BUS report and a 20-move peak history, logs each move's peak, sends a
   link check every 10 s (PONG rssi/drops; unanswered = lost), and serves `POST /api/servo/op`, `GET /api/servo/reply`
-  and bus jogs; `nextBusId` (shop.js) and `devMode` are in the model. 5 IN PROGRESS: done — developer mode in Settings
-  (PWM range moved under it), the Boards page's servo list with load bars and link stats, a servo's page
-  (`/boards/servo/:board/:gate`), bus jogs in Set positions. LEFT: the Add/Replace a servo wizard
-  (`/boards/add-servo/:board`, linked from Boards and the servo page but not built — the link falls through to the
-  landing page today), chains on the shop layout, the Live page's dev-mode meters, mock-api.js support, verifying it all
-  in the browser, and the decisions register entry.
+  and bus jogs; `nextBusId` (shop.js) and `devMode` are in the model. 5 done (2026-11-01, walked in the browser pane
+  against tools/mock-api.js's simulated bus board, not against a real board): developer mode in Settings (PWM range
+  under it), Boards' servo list and link stats, a servo's page, Add/Replace a servo, chains on the shop layout, the Live
+  page's developer meters, D-87 and canvas.html 5b. LEFT: rename the `xiao_c5_linear` env and `HAS_LINEAR` to bus
+  (dev.sh `--slider`, CI, the node-image names); the bench run below; then archive docs/mockups/bus-chain.html.
   **Bench, when the bus board is flashed:** add a servo (find/assign), move a valve from the app, watch BUS in the brain
   log; a valve and the slider asked together move one after the other; unplug a valve mid-move (it should say it stopped
   answering); `setid` on the bench console again (it was fixed 2026-11-01: it reported a failure for a renumber that
