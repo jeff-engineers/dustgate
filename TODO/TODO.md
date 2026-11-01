@@ -77,6 +77,71 @@ first-boot WiFi setup for a customer, a read-only root, and the `--git` update p
   READY "waiting for a tool". No WiFi is blue blinking. Fault, then a full bin, outrank motion on pixel and screen. The
   frozen ESP32 brain's own pixel now reads dim white when ready.
 
+## Next: bus-servo chains (started 2026-10-29)
+
+Ball valves, manifolds and sliders all on ST3215-style bus servos, several per board, as a third option beside PWM servos.
+Mockup for review: `docs/mockups/bus-chain.html` (published; reworked 2026-11-01). **Decided: option B — a XIAO
+cluster board per group of gates**, with a 12 V jack, endstop inputs and a chain of **up to 6 servos**, on WiFi like every
+node (the RS-485 trunk with drop boards was dropped: no trunk, no second protocol). **Beside PWM, not instead of it
+(jeff, 2026-11-01):** the existing board stays stock for PWM gates and collectors; the bus board is a second board and no
+board does both. CT clamp inputs on the bus board are a maybe for later, not a priority.
+**The bus board, for now, is Seeed's Bus Servo Driver Board for XIAO (jeff, 2026-11-01; $5.99,
+https://www.seeedstudio.com/Bus-Servo-Driver-Board-for-XIAO-p-6413.html):** a 5–12 V DC jack, one servo port, bus on the
+XIAO's D6/D7, the same pins `-DDUSTGATE_SERVO_BUS` uses. Seeed's wiki doesn't say how the XIAO is powered or what current
+the port takes; check both on the bench, and which pads stay free for endstops. A custom carrier comes later and takes the
+Seeed board in a socket, adding endstops, a screen and the PWM board's other headers.
+What the mockup asks for, beyond the board:
+- **Load always in view:** each servo's last-move peak against its learned usual, and a 20-move history. **Logged,
+  not raised, for now (jeff, 2026-11-01):** every move's peak load goes to the brain log; a "working harder than usual"
+  warning waits until real shop numbers pick the threshold.
+- **Servo numbers hidden, tied to a gate (jeff, 2026-11-01):** "Add a servo" picks the gate first, then finds the one
+  factory-fresh servo and gives it the next free number in the shop; "Replace this servo" does the same for a gate
+  that already has one. Numbers only in developer mode.
+  **Numbers are shop-wide and 1 means "not yet assigned" (jeff, 2026-11-01):** the brain hands out 2–253, once each,
+  tied to the gate in the layout, so a servo moved between boards is recognised rather than clashing; one with a number
+  the layout does not know is offered a reset to 1.
+- **Developer mode** (a shop setting saved on the brain, jeff 2026-11-01): numbers, raw readings, relax/set-centre/registers, the PWM pulse-range
+  override (moved out of everyday settings), and **communication losses** for every board — brain link drops and their
+  length, messages lost, WiFi signal, and per-servo missed reads on a bus board.
+One slider per bus board, so two endstop inputs (jeff, 2026-11-01).
+**On the shop layout, the cable is drawn as wired (jeff, 2026-11-01):** board chain port → gate → next gate, up to two
+chains per board; a gate joins a chain by dragging its tab onto a port or onto the chain's last gate.
+**One move at a time per board still holds (jeff, 2026-11-01):** a bus board moves one servo at a time, like every
+node — its servos share one brick, and the wire-length limit assumes only the moving servo draws heavy current.
+
+- **Bench, when the new ball-valve prints and the Feetech servos jeff ordered arrive** (`xiao_c5_bus_bench`, commands
+  added 2026-10-29 — `help` lists them):
+  0. **Measured 2026-11-01 (jeff): the new low-friction ball valve needs about 0.7 kg·cm.** Early prototype (ball heavier
+     and less balanced than the final, two bearings, nothing rubbing), ST3215 at 12.1 V, `cycle 1500 2600 3 300`: 15.6 %
+     peak load with the valve, 13.2 % with the servo uncoupled, so the valve is ~2.4 % of 30 kg·cm; the rest is the
+     servo's own gearbox. At full speed (`speed 0`) the servo reads ~72 % just spinning, so load % only measures the gate
+     at a slow speed, against an uncoupled baseline at the SAME speed. 0 missed reads in ~11,000; moves land within 4
+     counts. Still to measure: the same valve on a duct with the collector running (suction on the seat), and the
+     smaller servos ordered. A ~5 kg·cm bus servo looks ample.
+     **The Feetech STS3032 is a good fit for later (jeff, 2026-11-01)** — 4.5 kg·cm stall / 1.5 kg·cm rated at 6 V, the
+     same 12-bit magnetic encoder and STS protocol as the ST3215, metal gears, 1.2 A stall (vs 2.7 A, so roughly twice the
+     wire run), ~$12 on AliExpress (dear in the US). Needs a 6 V supply for the servos (a 12→6 V buck on the board). The
+     Waveshare SC09 is too tight (0.7 kg·cm rated = exactly the valve; potentiometer; SCS protocol). **For now: ST3215.**
+  1. **How much servo a printed gate needs.** On each gate (ball valve, manifold, slider): `mode 0`, `torque on`, then
+     `cycle <open> <closed> 10`. Note the WORST peak load. Well under ~30% of an ST3215's torque means a servo a third the
+     size will do — and less current is what lets the wire run longer. Repeat with each servo ordered.
+  2. **How far the wire goes.** One servo on 1 m, 3 m, 5 m, 10 m of the cable we would ship: `linktest 2000`, then
+     `linktest 2000 work` (the servo swinging, so its current shares the data's ground). Repeat after `servobaud 250000`
+     and `servobaud 115200` (saved IN the servo: `servobaud 1000000` puts it back). Record failures per length, gauge and
+     baud. Then the same total as **two branches** off one board (a Y-splitter; jeff, 2026-11-01: the bus is
+     parallel, so a board can chain both ways): each moving servo is then nearer the board, but the data wire is as long. Then the same with 12 V and ground on separate 18 AWG.
+  3. **Numbering** (what the wizard will do): `scan`, `setid 2`, plug in the next factory-fresh servo, `setid 3`.
+  4. **Home** (a valve's encoder is absolute within a turn; no sweep): turn the valve by hand to closed with `torque off`,
+     `sethome`, power-cycle the servo, `read` — it should say 2048. `sethome` is Feetech's documented "write 128 to the
+     torque register", not yet confirmed on our ST3215; the command reads back and says whether it took.
+
+## Later
+
+- **A "lock the system" button (jeff, 2026-11-01).** One control in the app that stops every gate, servo and collector
+  from moving or starting until it is unlocked — for blade changes, cleaning, or leaving the shop. Not needed yet. Think
+  about: where it lives (always reachable, e.g. the Live header), what a locked shop does when a tool starts (nothing, and
+  it says so), whether boards hold their gates where they are, and that unlocking is deliberate.
+
 ## Bugs
 
 - **A slider's endstops both read triggered after a jam, until the whole slider is power-cycled (jeff, 2026-10-07).** A latched
