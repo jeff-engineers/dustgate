@@ -527,8 +527,8 @@ inline int homeDirection() {
     ((uint32_t)((HOMING_MAX_TRAVEL_MM / (HOMING_SPEED_MM_PER_SEC * HOMING_TRACKING_FACTOR)) \
                 * 1000.0f * 1.5f))
 
-// Which servo on the bus. One slider, one servo, and a virgin part answers at 1.
-#define ST3215_SERVO_ID              1
+// No servo number here: bus servos are numbered shop-wide by the brain, and the slider's arrives on its SET
+// (nodelink.js, MIN_BUS_ID). 1 is a NEW servo, never the slider.
 
 // A real baud, not register 6's index. The factory rate, and Seeed's own
 // example — see ST3215Bus::begin().

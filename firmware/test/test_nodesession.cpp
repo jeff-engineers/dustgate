@@ -20,7 +20,7 @@ struct RecSink : SessionSink {
   bool event(const char* ev) const { for (auto& e : events) if (e.rfind(ev, 0) == 0) return true; return false; }
 };
 
-static const char* kWelcome = R"({"t":"WELCOME","v":1,"nodeId":"n1","board":"xiao_c5","fw":"abc 1004-1200","caps":{"servos":2,"linear":0,"ct":1,"plug":1,"join":1,"rf":1,"bin":1},"upS":42,"rst":"poweron"})";
+static const char* kWelcome = R"({"t":"WELCOME","v":2,"nodeId":"n1","board":"xiao_c5","fw":"abc 1004-1200","caps":{"servos":2,"bus":0,"ct":1,"plug":1,"join":1,"rf":1,"bin":1},"upS":42,"rst":"poweron"})";
 
 static JsonObjectConst sel(DynamicJsonDocument& d) {
   deserializeJson(d, R"({"id":"g1","kind":"servoGate","controllerId":"n1","servo":{"channel":0,"referenceAngle":90,"minAngle":0,"maxAngle":180},
@@ -75,7 +75,7 @@ int main() {
     ok("no OTA fields while nothing is updating", out.find("\"ota\"") == std::string::npos);
   }
   {
-    // A board not heard from since the brain started has NO caps in its entry, not zeros: `linear: 0` would tell the app
+    // A board not heard from since the brain started has NO caps in its entry, not zeros: `bus: 0` would tell the app
     // a switched-off slider is a servo board (2026-10-17).
     Fx f;
     DynamicJsonDocument d(2048); topo::NodeImageView iv;
@@ -86,13 +86,13 @@ int main() {
     DynamicJsonDocument d2(2048);
     topo::writeNodeEntry(d2.createNestedArray("nodes"), f.s, "n1", "n1.local", "Slider", iv);
     std::string out2; serializeJson(d2, out2);
-    ok("...and its WELCOME brings them", out2.find("\"caps\":{\"servos\":2,\"linear\":0") != std::string::npos);
+    ok("...and its WELCOME brings them", out2.find("\"caps\":{\"servos\":2,\"bus\":0") != std::string::npos);
   }
 
   printf("\nS2 capabilities absent mean NO\n");
   {
     Fx f;
-    f.feed(R"({"t":"WELCOME","v":1,"nodeId":"n1","board":"b","fw":"f","caps":{"servos":2,"linear":0}})");
+    f.feed(R"({"t":"WELCOME","v":2,"nodeId":"n1","board":"b","fw":"f","caps":{"servos":2,"bus":0}})");
     ok("an old board has none of the newer jobs", !f.s.pollsPlugs() && !f.s.dialsIn() && !f.s.canPressRf() && !f.s.watchesBin());
     ok("and a PRESS to it is refused", !f.s.pressRf(94, 14, 270, 24));
   }
@@ -100,12 +100,12 @@ int main() {
   printf("\nS3 a refusal and a version mismatch\n");
   {
     Fx f;
-    f.feed(R"({"t":"WELCOME","v":1,"nodeId":"n1","board":"b","fw":"f","caps":{"servos":2,"linear":0},"accepted":false,"claimedBy":"garage"})");
+    f.feed(R"({"t":"WELCOME","v":2,"nodeId":"n1","board":"b","fw":"f","caps":{"servos":2,"bus":0},"accepted":false,"claimedBy":"garage"})");
     ok("a refused claim leaves the link offline and names the owner", !f.s.online() && f.s.wasRefused() && std::string(f.s.refusedBy()) == "garage");
     ok("...and logs it", f.sink.event("refused"));
     ok("health says refused", f.s.health().refused);
     Fx g;
-    g.feed(R"({"t":"WELCOME","v":9,"nodeId":"n1","board":"b","fw":"f","caps":{"servos":2,"linear":0}})");
+    g.feed(R"({"t":"WELCOME","v":9,"nodeId":"n1","board":"b","fw":"f","caps":{"servos":2,"bus":0}})");
     ok("a different protocol version is never half-understood", !g.s.online() && g.sink.saw("Version mismatch"));
   }
 
@@ -205,9 +205,11 @@ int main() {
     int seq = 0; { DynamicJsonDocument q(512); deserializeJson(q, frame); seq = q["seq"] | 0; }
     char ack[64]; std::snprintf(ack, sizeof(ack), R"({"t":"ACK","seq":%d,"ok":true})", seq); f.feed(ack);
     g_now += 10000; f.s.onPong();
-    ok("once acknowledged it is never sent again", !f.drain(frame));
+    // Only CONFIG is counted: the link check (a PING every 10 s, 2026-11-01) also goes out over this stretch.
+    auto config = [&](Fx& x) { while (x.drain(frame)) if (frame.find("\"t\":\"CONFIG\"") != std::string::npos) return true; return false; };
+    ok("once acknowledged it is never sent again", !config(f));
     Fx h; h.up(); h.s.configureSensors(d.as<JsonArrayConst>()); h.drain(frame);
-    int sent = 1; for (int i = 0; i < 8; i++) { g_now += 3100; h.s.onPong(); if (h.drain(frame)) sent++; }
+    int sent = 1; for (int i = 0; i < 8; i++) { g_now += 3100; h.s.onPong(); if (config(h)) sent++; }
     ok("it gives up after a few tries rather than shouting forever", sent == 5 && h.sink.saw("never acknowledged"));
   }
 
@@ -410,6 +412,32 @@ int main() {
     f.s.setState("g1", sel(d), "open"); f.drain(out);
     f.feed(R"({"t":"STATE","selectorId":"g1","stateId":"open","moving":true,"err":"ignored"})");
     ok("an err on a MOVING state is not a fault", f.s.busy() && f.s.health().moveFault == nullptr);
+  }
+
+    printf("\nS20 bus servos, the link check and SERVO orders (2026-11-01)\n");
+  {
+    Fx f; f.up();
+    std::string frame;
+    while (f.drain(frame)) {}
+    g_now += 10000;
+    ok("a link check goes out every 10 s", f.drain(frame) && frame == "{\"t\":\"PING\"}");
+    f.feed(R"({"t":"PONG","rssi":-61,"drops":2})");
+    ok("...and its answer carries the board's signal and its drops", f.s.link().rssi == -61 && f.s.link().nodeDrops == 2 && f.s.link().pingsLost == 0);
+    g_now += 10000; f.s.onPong(); f.drain(frame);
+    g_now += 10000; f.s.onPong(); f.drain(frame);
+    ok("one never answered is a lost message", f.s.link().pingsLost == 1);
+    f.feed(R"({"t":"BUS","servos":[{"id":4,"ok":true,"deg":90,"load":2,"peak":16,"v":12.1,"temp":30,"missed":0,"reads":10,"moves":1}]})");
+    ok("a BUS report is kept", f.s.busCount() == 1 && f.s.busServo(0).r.peak == 16 && f.s.busServo(0).nHistory == 1);
+    ok("...and the move is logged, not judged", f.sink.saw("servo 4 moved: peak load 16%"));
+    f.feed(R"({"t":"BUS","servos":[{"id":4,"ok":true,"deg":90,"load":2,"peak":16,"v":12.1,"temp":30,"missed":0,"reads":20,"moves":1}]})");
+    ok("the same report again adds nothing to the history", f.s.busServo(0).nHistory == 1);
+    f.feed(R"({"t":"BUS","servos":[{"id":4,"ok":true,"deg":0,"load":2,"peak":21,"v":12.1,"temp":30,"missed":0,"reads":30,"moves":2}]})");
+    ok("a new move adds its peak", f.s.busServo(0).nHistory == 2 && f.s.busServo(0).history[1] == 21);
+    const uint32_t seq = f.s.servo("assign", 0, 12, -1);
+    ok("a SERVO order goes out", seq && f.drain(frame) && frame.find("\"op\":\"assign\"") != std::string::npos && frame.find("\"to\":12") != std::string::npos);
+    ok("no reply yet", f.s.servoReply(seq).empty());
+    char rep[96]; std::snprintf(rep, sizeof(rep), R"({"t":"SERVOREPLY","seq":%u,"ok":true})", (unsigned)seq); f.feed(rep);
+    ok("the reply is kept for its seq", f.s.servoReply(seq).find("\"ok\":true") != std::string::npos && f.s.servoReply(seq + 1).empty());
   }
 
   printf("\n%d/%d passed%s\n", passed, passed + failed, failed ? " — FAILED" : "");

@@ -91,7 +91,7 @@ function nodeLinkState(entry) {
     lastSeen: online ? Date.now() : 0,
     board:    known ? known.board : '',
     fw:       online ? '1.0.0-mock' : '',
-    caps:     { servos: known ? known.servos : 0, linear: 0 },
+    caps:     { servos: known ? known.servos : 0, bus: 0 },
   };
 }
 

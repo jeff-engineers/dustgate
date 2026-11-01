@@ -486,8 +486,8 @@ int main(int argc, char** argv) {
       // The safe reading is the DEFAULT one: a node built before claims answers
       // with neither field, and its silence must mean "yes", not "maybe".
       DynamicJsonDocument f(512);
-      deserializeJson(f, R"({"t":"WELCOME","v":1,"nodeId":"n","board":"b","fw":"1",
-                             "caps":{"servos":4,"linear":0}})");
+      deserializeJson(f, R"({"t":"WELCOME","v":2,"nodeId":"n","board":"b","fw":"1",
+                             "caps":{"servos":4,"bus":0}})");
       ok("a legacy WELCOME is accepted",
          topo::nodelink::welcomeAccepted(f.as<JsonObjectConst>()));
     }
@@ -1157,7 +1157,7 @@ int main(int argc, char** argv) {
   {
     using namespace topo::nodelink;
     ok("F1 the default delay is 30 s", kDefaultFailsafeCloseMs == 30000);
-    ok("F2 the bounds are 10 s to 10 min, four gates", kMinFailsafeCloseMs == 10000 && kMaxFailsafeCloseMs == 600000 && kMaxFailsafeGates == 4);
+    ok("F2 the bounds are 10 s to 10 min, six gates", kMinFailsafeCloseMs == 10000 && kMaxFailsafeCloseMs == 600000 && kMaxFailsafeGates == 6);
     auto parse = [](const char* json, FailsafePlan& plan) {
       DynamicJsonDocument d(2048); deserializeJson(d, json);
       SensorSpec specs[kMaxSensorsPerNode]; size_t n = 0; const char* err = nullptr;
@@ -1178,7 +1178,7 @@ int main(int argc, char** argv) {
     ok("F6 a delay under 10 s is refused", !parse(with(R"({"closeAfterMs":9999,"close":[]})").c_str(), x));
     ok("F7 a delay over 10 min is refused", !parse(with(R"({"closeAfterMs":600001,"close":[]})").c_str(), x));
     ok("F8 a delay that is not whole ms is refused", !parse(with(R"({"closeAfterMs":30000.5,"close":[]})").c_str(), x));
-    ok("F9 five gates are refused", !parse(with(R"({"closeAfterMs":30000,"close":[{"drive":"servo","channel":0,"angle":90},{"drive":"servo","channel":1,"angle":90},{"drive":"servo","channel":2,"angle":90},{"drive":"servo","channel":3,"angle":90},{"drive":"servo","channel":4,"angle":90}]})").c_str(), x));
+    ok("F9 seven gates are refused", !parse(with(R"({"closeAfterMs":30000,"close":[{"drive":"servo","channel":0,"angle":90},{"drive":"servo","channel":1,"angle":90},{"drive":"servo","channel":2,"angle":90},{"drive":"servo","channel":3,"angle":90},{"drive":"servo","channel":4,"angle":90},{"drive":"servo","channel":5,"angle":90},{"drive":"servo","channel":6,"angle":90}]})").c_str(), x));
     ok("F10 an angle past 180 is refused", !parse(with(R"({"closeAfterMs":30000,"close":[{"drive":"servo","channel":0,"angle":181}]})").c_str(), x));
     ok("F11 a negative slider position is refused", !parse(with(R"({"closeAfterMs":30000,"close":[{"drive":"linear","channel":0,"positionMm":-1}]})").c_str(), x));
     ok("F12 an unknown drive is refused", !parse(with(R"({"closeAfterMs":30000,"close":[{"drive":"stepper","channel":0,"angle":90}]})").c_str(), x));
@@ -1227,7 +1227,7 @@ int main(int argc, char** argv) {
     // Adding CONFIG/SENSE did NOT bump the version: both ends ignore a frame
     // type they don't know, so every old/new combination degrades safely and a
     // bump would force a flash of every board in the shop to buy nothing.
-    ok("protocol version unchanged by CONFIG/SENSE", kVersion == 1);
+    ok("protocol version unchanged by CONFIG/SENSE", kVersion == 2);
 
     // STATE err — the PAIR of nodelink.test.js's "a move that ended without arriving" block, same order.
     // (Its last two cases, the refusals, are validateFrame's; the brain reads STATE without a validator — NodeSession.)
@@ -1646,7 +1646,7 @@ int main(int argc, char** argv) {
       StaticJsonDocument<128> j;
       buildJoin(j.to<JsonObject>(), "dustgate-planer");
       ok("a JOIN carries the node and the version",
-         std::string(j["t"] | "") == "JOIN" && std::string(j["nodeId"] | "") == "dustgate-planer" && (j["v"] | 0) == 1);
+         std::string(j["t"] | "") == "JOIN" && std::string(j["nodeId"] | "") == "dustgate-planer" && (j["v"] | 0) == 2);
       ok("the address bound", kMaxWhereIpLen == 15);
       ok("the beacon port", kBeaconPort == 41234);
       ok("REFUSE not-paired is a reason",  isRefuseReason("not-paired"));
@@ -1672,7 +1672,7 @@ int main(int argc, char** argv) {
       StaticJsonDocument<512> w1;
       buildWelcome(w1.to<JsonObject>(), "n", "b", "f", 2, 0, nullptr, true, 0, false, true);
       ok("caps.join 1 means it dials in", (w1["caps"]["join"] | 0) == 1);
-      ok("JOIN did not bump the version", kVersion == 1);
+      ok("JOIN did not bump the version", kVersion == 2);
     }
 
     // ── collector node: PRESS, a bin sensor, caps.rf, caps.bin ────────────────
@@ -1735,7 +1735,7 @@ int main(int argc, char** argv) {
       buildWelcome(w1.to<JsonObject>(), "n", "b", "f", 2, 0, nullptr, true, 0, false, false, true, true);
       ok("caps.rf 1 means a transmitter", (w1["caps"]["rf"] | 0) == 1);
       ok("caps.bin 1 means a bin pad",    (w1["caps"]["bin"] | 0) == 1);
-      ok("PRESS did not bump the version", kVersion == 1);
+      ok("PRESS did not bump the version", kVersion == 2);
     }
 
     // ── collector node: the runtime sends a bin sensor to a board that has the pad,
@@ -2022,6 +2022,75 @@ int main(int argc, char** argv) {
         ok("FC15 a blip shorter than the delay never believes the gate closed", gateState(rt, "gate1") == "open" && rt.collectorOn());
       }
     }
+
+  // ── bus — bus servos (2026-11-01). Same cases as the "bus —" block of nodelink.test.js, same order; the JS-only ones
+  // (WELCOME validation, which only a brain written in JS does) are skipped, not renumbered. ──
+  {
+    using namespace topo::nodelink;
+    ok("bus — B1 six servos a board, numbers 2..253, 1 is unassigned, max angle 359, report every 10 s",
+       kMaxBusServos == 6 && kMinBusId == 2 && kMaxBusId == 253 && kBusIdUnassigned == 1 && kMaxBusAngle == 359 && kBusReportMs == 10000);
+    DynamicJsonDocument sel(1024);
+    deserializeJson(sel, R"({"id":"v1","kind":"servoGate","servo":{"bus":7,"referenceAngle":270,"maxAngle":359},
+                             "states":[{"id":"open","isClosed":false,"offsetDeg":0},{"id":"closed","isClosed":true,"offsetDeg":-90}]})");
+    DynamicJsonDocument f(512);
+    const bool built = buildSetFrame(f.to<JsonObject>(), 3, "v1", sel.as<JsonObjectConst>(), "open");
+    ok("bus — B2 a bus valve SET names its servo, not a channel", built && f["bus"] == 7 && !f.containsKey("channel"));
+    ok("bus — B3 and carries no PWM pulse range", !f.containsKey("minUs") && !f.containsKey("maxUs"));
+    auto parseSet = [](const std::string& j, SetCommand& c) {
+      DynamicJsonDocument d(512); deserializeJson(d, j); const char* err = nullptr;
+      return parseSetFrame(d.as<JsonObjectConst>(), c, err);
+    };
+    std::string wire; serializeJson(f, wire);
+    SetCommand c{};
+    ok("bus — B4 an angle past 180 is fine on a bus servo", parseSet(wire, c) && c.bus == 7 && c.channel == -1 && c.angle == 270);
+    ok("bus — B5 360 is not", !parseSet(R"({"t":"SET","seq":1,"selectorId":"v","stateId":"o","drive":"servo","bus":7,"angle":360})", c));
+    ok("bus — B6 channel and bus together are refused", !parseSet(R"({"t":"SET","seq":1,"selectorId":"v","stateId":"o","drive":"servo","bus":7,"channel":0,"angle":90})", c));
+    ok("bus — B7 servo number 1 is refused on a SET", !parseSet(R"({"t":"SET","seq":1,"selectorId":"v","stateId":"o","drive":"servo","bus":1,"angle":90})", c));
+    ok("bus — B8 a slider on a bus board names its servo",
+       parseSet(R"({"t":"SET","seq":4,"selectorId":"s","stateId":"p1","drive":"linear","bus":9,"positionMm":120})", c) && c.bus == 9 && !c.isServo);
+    DynamicJsonDocument w(512);
+    buildWelcome(w.to<JsonObject>(), "dustgate-wall", "xiao_c5", "x", 0, 6);
+    ok("bus — B9 a bus board says how many it can drive", w["caps"]["bus"] == 6);
+    buildWelcome(w.to<JsonObject>(), "n", "xiao_c5", "x", 2, 0);
+    ok("bus — B10 a PWM board says 0", w["caps"]["bus"] == 0);
+    auto parseServo = [](const char* j, ServoOrder& o) {
+      DynamicJsonDocument d(256); deserializeJson(d, j); const char* err = nullptr;
+      return parseServoFrame(d.as<JsonObjectConst>(), o, err);
+    };
+    ServoOrder o;
+    ok("bus — B13 find validates", parseServo(R"({"t":"SERVO","seq":5,"op":"find"})", o) && o.op == 0);
+    ok("bus — B14 assign to 12 validates", parseServo(R"({"t":"SERVO","seq":6,"op":"assign","to":12})", o) && o.to == 12);
+    ok("bus — B15 assign to 1 is refused", !parseServo(R"({"t":"SERVO","seq":6,"op":"assign","to":1})", o));
+    ok("bus — B16 wiggle needs a number", !parseServo(R"({"t":"SERVO","seq":7,"op":"wiggle"})", o));
+    ok("bus — B17 torque needs on", !parseServo(R"({"t":"SERVO","seq":8,"op":"torque","bus":4})", o));
+    ok("bus — B18 torque off validates", parseServo(R"({"t":"SERVO","seq":8,"op":"torque","bus":4,"on":false})", o) && o.bus == 4 && !o.on);
+    ok("bus — B19 an unknown op is refused", !parseServo(R"({"t":"SERVO","seq":9,"op":"spin"})", o));
+    ok("bus — B20 the ops, in order", kServoOpCount == 6 && std::string(kServoOps[0]) == "find" && std::string(kServoOps[1]) == "assign" &&
+       std::string(kServoOps[2]) == "wiggle" && std::string(kServoOps[3]) == "torque" && std::string(kServoOps[4]) == "reset" && std::string(kServoOps[5]) == "scan");
+    DynamicJsonDocument r(256);
+    buildServoReply(r.to<JsonObject>(), 5, true, nullptr, "garbled");
+    ok("bus — B21 a garbled find reply", r["found"] == "garbled" && r["ok"] == true);
+    JsonArray ids = buildServoReply(r.to<JsonObject>(), 10, true, nullptr, nullptr, true);
+    ids.add(1); ids.add(4); ids.add(7);
+    ok("bus — B22 a scan reply lists the numbers", r["ids"].size() == 3 && r["ids"][2] == 7);
+    buildServoReply(r.to<JsonObject>(), 5, true, "x");
+    ok("bus — B24 an ok reply carries no err", !r.containsKey("err"));
+    BusServoReport rep[2];
+    rep[0].id = 4; rep[0].ok = true; rep[0].deg = 271.5f; rep[0].load = -12; rep[0].peak = 16; rep[0].v = 12.1f; rep[0].temp = 31; rep[0].reads = 120; rep[0].moves = 3;
+    rep[1].id = 7; rep[1].ok = false; rep[1].missed = 3; rep[1].reads = 120;
+    DynamicJsonDocument b(1024);
+    buildBus(b.to<JsonObject>(), rep, 2);
+    ok("bus — B25 a report with one silent servo", b["servos"].size() == 2 && b["servos"][0]["peak"] == 16 && b["servos"][0]["moves"] == 3 &&
+       !b["servos"][1].containsKey("deg") && b["servos"][1]["missed"] == 3);
+    DynamicJsonDocument pg(128);
+    buildPong(pg.to<JsonObject>(), -61, 2);
+    ok("bus — B28 a PONG may carry the link", pg["rssi"] == -61 && pg["drops"] == 2);
+    FailsafePlan plan; SensorSpec specs[kMaxSensorsPerNode]; size_t n = 0; const char* err = nullptr;
+    DynamicJsonDocument cfg(512);
+    deserializeJson(cfg, R"({"t":"CONFIG","seq":11,"sensors":[],"failsafe":{"closeAfterMs":30000,"close":[{"drive":"servo","bus":4,"angle":300}]}})");
+    ok("bus — B31 a failsafe may close a bus gate",
+       parseConfigFrame(cfg.as<JsonObjectConst>(), specs, kMaxSensorsPerNode, n, plan, err) && plan.n == 1 && plan.close[0].bus == 4 && plan.close[0].angle == 300);
+  }
 
   printf("\n%d/%d passed%s\n", passed, passed + failed,
          failed ? (", " + std::to_string(failed) + " FAILED").c_str() : "");

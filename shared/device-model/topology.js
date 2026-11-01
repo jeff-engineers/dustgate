@@ -310,7 +310,7 @@ const COLLECTOR_BOARD_RULE = (what) =>
 /** The board a collector's clamp, bin and transmitter are on: its controllerId, '' = this board. */
 function collectorBoard(collector) { return (collector && collector.controllerId) || ''; }
 
-function validateTopology(t) {
+function validateTopology(t, opts = {}) {
   /** @type {{code:string,message:string,ref?:string}[]} */
   const errors = [];
   const err = (code, message, ref) => errors.push(ref ? { code, message, ref } : { code, message });
@@ -561,7 +561,8 @@ function validateTopology(t) {
     const onChain = new Set();
     for (const ch of chains) for (const id of ch) {
       const sel = selIndex.get(id);
-      if (!sel) err('controller', `board "${name}" chain names "${id}", which is not a gate`, c.id);
+      // Validated as one system of a shop, a chain may name a gate in another system: the shop checks those (shop.js).
+      if (!sel) { if (!opts.partOfShop) err('controller', `board "${name}" chain names "${id}", which is not a gate`, c.id); continue; }
       else if (sel.controllerId !== c.id) err('controller', `board "${name}" chain names "${id}", which is on another board`, c.id);
       else if (onChain.has(id)) err('controller', `board "${name}" has "${id}" on its chains twice`, c.id);
       onChain.add(id);

@@ -28,7 +28,7 @@
 namespace topo {
 namespace nodelink {
 
-static const int kVersion = 1;   // NODELINK_VERSION in nodelink.js
+static const int kVersion = 2;   // NODELINK_VERSION in nodelink.js
 
 // THE PWM SERVO PULSE RANGE (2026-10-07): the pulse widths that angle 0 and angle 180 map to, for every PWM servo in the
 // shop. Shop-wide because a shop buys its servos as one multipack (jeff), set on the Settings page and kept in the layout
@@ -49,7 +49,21 @@ static const int kMinServoSpanUs    = 500;    // maxUs - minUs at least this: a 
 static const uint32_t kDefaultFailsafeCloseMs = 30000;
 static const uint32_t kMinFailsafeCloseMs     = 10000;
 static const uint32_t kMaxFailsafeCloseMs     = 600000;
-static const size_t   kMaxFailsafeGates       = 4;
+static const size_t   kMaxFailsafeGates       = 6;   // a bus board's whole chain
+
+// BUS SERVOS (2026-11-01): a bus board drives up to kMaxBusServos serial-bus servos, each named by its number. Numbers are
+// shop-wide and handed out by the brain; 1 is every servo's factory number, so "not yet assigned". A bus servo's angle is
+// its encoder's, a whole turn. PAIR: MAX_BUS_SERVOS_PER_NODE / BUS_ID_UNASSIGNED / MIN_BUS_ID / MAX_BUS_ID / MAX_BUS_ANGLE /
+// BUS_REPORT_MS / SERVO_OPS in nodelink.js.
+static const int kMaxBusServos    = 6;
+static const int kBusIdUnassigned = 1;
+static const int kMinBusId        = 2;
+static const int kMaxBusId        = 253;
+static const int kMaxBusAngle     = 359;
+static const unsigned long kBusReportMs = 10000;
+static const char* const kServoOps[] = { "find", "assign", "wiggle", "torque", "reset", "scan" };
+static const size_t kServoOpCount = 6;
+inline bool busIdOk(long n) { return n >= kMinBusId && n <= kMaxBusId; }
 
 inline bool servoRangeOk(int minUs, int maxUs) {
     return minUs >= kMinServoUs && maxUs <= kMaxServoUs && maxUs - minUs >= kMinServoSpanUs;
@@ -217,7 +231,9 @@ inline bool buildSetFrame(JsonObject out, uint32_t seq, const char* selectorId,
         if (angle == INT32_MIN) return false;          // no such state / no offsetDeg
         out["drive"]      = "servo";
         out["angle"]      = angle;
-        out["channel"]    = sel["servo"]["channel"] | 0;
+        // A PWM channel, or a bus servo's number. A bus gate with no servo yet has nothing to move.
+        if (sel["servo"].containsKey("bus")) out["bus"] = sel["servo"]["bus"].as<int>();
+        else out["channel"] = sel["servo"]["channel"] | 0;
         out["holdAtRest"] = sel["servo"]["holdAtRest"] | false;
     } else {
         bool found = false;
@@ -230,7 +246,8 @@ inline bool buildSetFrame(JsonObject out, uint32_t seq, const char* selectorId,
         }
         if (!found) return false;
         out["drive"]   = "linear";
-        out["channel"] = sel["linear"]["channel"] | 0;
+        if (sel["linear"].containsKey("bus")) out["bus"] = sel["linear"]["bus"].as<int>();
+        else out["channel"] = sel["linear"]["channel"] | 0;
         // Set only by a setup move (TopologyRuntime::driveLinearTo), never by routing: find the datum again first.
         if (sel["homeFirst"] | false) out["home"] = true;
     }
@@ -272,7 +289,7 @@ inline bool buildSetFrame(JsonObject out, uint32_t seq, const char* selectorId,
 // every board flashed before 2026-10-03 is handed a CONFIG it refuses whole,
 // clamp and all. Omitted when false, like `ct`.
 inline void buildWelcome(JsonObject out, const char* nodeId, const char* board,
-                         const char* fw, int servos, int linear,
+                         const char* fw, int servos, int busServos,
                          const char* claimedBy = nullptr, bool accepted = true,
                          int clamps = 0, bool pollsPlugs = false, bool dialsIn = false,
                          bool hasRf = false, bool hasBin = false) {
@@ -283,7 +300,7 @@ inline void buildWelcome(JsonObject out, const char* nodeId, const char* board,
     out["fw"]     = fw;
     JsonObject caps = out.createNestedObject("caps");
     caps["servos"] = servos;
-    caps["linear"] = linear;
+    caps["bus"]    = busServos;   // how many bus servos it can drive; 0 = a PWM board
     // OMITTED WHEN ZERO, on purpose: absent already means none, so writing it
     // would add a field to every board's answer to repeat what silence said.
     if (clamps > 0) caps["ct"] = clamps;
@@ -351,6 +368,13 @@ inline void buildState(JsonObject out, const char* selectorId, const char* state
 }
 
 inline void buildPong(JsonObject out) { out["t"] = "PONG"; }
+// A PONG with the board's own account of its link (pongWithLink in nodelink.js): its signal now and how many times it has
+// lost the brain since it started. Diagnostic only, for developer mode.
+inline void buildPong(JsonObject out, int rssi, uint32_t drops) {
+    out["t"] = "PONG";
+    if (rssi < 0 && rssi >= -127) out["rssi"] = rssi;
+    out["drops"] = drops;
+}
 
 // OTA — "pull this image and install it". See ota() in nodelink.js for why it is
 // a pull rather than a push. `md5` is 32 LOWERCASE hex chars; one spelling on the
@@ -489,7 +513,8 @@ struct SetCommand {
     char     selectorId[48];
     char     stateId[32];
     bool     isServo;
-    int      channel;
+    int      channel;      // a PWM servo's channel; -1 when the SET names a bus servo
+    int      bus;          // a bus servo's number; 0 when the SET names a PWM channel
     int      angle;        // isServo
     float    positionMm;   // !isServo
     bool     holdAtRest;
@@ -507,26 +532,35 @@ inline bool parseSetFrame(JsonObjectConst f, SetCommand& out, const char*& err) 
     if (!sid || !*sid)                        { err = "missing selectorId"; return false; }
     if (!st  || !*st)                         { err = "missing stateId";    return false; }
     if (!f.containsKey("seq"))                { err = "missing seq";        return false; }
-    if (!f.containsKey("channel"))            { err = "missing channel";    return false; }
+    // A PWM channel or a bus servo's number: exactly one.
+    if (f.containsKey("channel") == f.containsKey("bus")) { err = "needs exactly one of channel and bus"; return false; }
 
     const char* drive = f["drive"].as<const char*>();
     if (!drive)                               { err = "missing drive";      return false; }
 
-    out.seq     = f["seq"].as<uint32_t>();
-    out.channel = f["channel"].as<int>();
-    if (out.channel < 0 || out.channel > 15)  { err = "channel out of range"; return false; }
+    out.seq = f["seq"].as<uint32_t>();
+    out.channel = -1; out.bus = 0;
+    if (f.containsKey("channel")) {
+        if (!f["channel"].is<int>())          { err = "channel must be a whole number"; return false; }
+        out.channel = f["channel"].as<int>();
+        if (out.channel < 0 || out.channel > 15) { err = "channel out of range"; return false; }
+    } else {
+        if (!f["bus"].is<int>() || !busIdOk(f["bus"].as<long>())) { err = "bus servo number out of range"; return false; }
+        out.bus = f["bus"].as<int>();
+    }
     strlcpy_(out.selectorId, sid, sizeof(out.selectorId));
     strlcpy_(out.stateId,    st,  sizeof(out.stateId));
 
     if (strcmp(drive, "servo") == 0) {
         if (!f.containsKey("angle"))          { err = "missing angle";      return false; }
         out.angle = f["angle"].as<int>();
-        if (out.angle < 0 || out.angle > 180) { err = "angle out of range"; return false; }
+        if (out.angle < 0 || out.angle > (out.bus ? kMaxBusAngle : 180)) { err = "angle out of range"; return false; }
         if (f.containsKey("home") && (f["home"] | false)) { err = "home is for a linear drive"; return false; }
         // The pulse range, optional and both-or-neither (a brain from before 2026-10-07 sends neither). Typed and bounded
         // like every other number here: a garbled range would drive every servo on the board somewhere unasked.
         out.minUs = out.maxUs = 0;
         if (f.containsKey("minUs") || f.containsKey("maxUs")) {
+            if (out.bus)                      { err = "a pulse range is for a PWM servo"; return false; }
             if (!f["minUs"].is<int>() || !f["maxUs"].is<int>()) { err = "minUs and maxUs must both be whole numbers"; return false; }
             out.minUs = f["minUs"].as<int>(); out.maxUs = f["maxUs"].as<int>();
             if (!servoRangeOk(out.minUs, out.maxUs))       { err = "servo pulse range out of bounds"; return false; }
@@ -773,7 +807,8 @@ static const size_t kNodeFrameDoc = 3072;
 
 struct FailsafeGate {
     bool  isServo = true;
-    int   channel = 0;
+    int   channel = -1;         // PWM; -1 for a bus servo
+    int   bus = 0;              // bus; 0 for a PWM channel
     int   angle = 0;            // servo
     bool  holdAtRest = false;   // servo
     float positionMm = 0.0f;    // linear
@@ -815,10 +850,17 @@ inline bool parseFailsafe(JsonObjectConst f, FailsafePlan& out, const char*& err
     size_t n = 0;
     for (JsonObjectConst c : arr) {
         FailsafeGate g;
-        if (!c["channel"].is<int>() || c["channel"].as<int>() < 0 || c["channel"].as<int>() > 15) { err = "failsafe channel out of range"; return false; }
-        g.channel = c["channel"].as<int>();
+        if (c.containsKey("channel") == c.containsKey("bus")) { err = "failsafe gate needs exactly one of channel and bus"; return false; }
+        if (c.containsKey("channel")) {
+            if (!c["channel"].is<int>() || c["channel"].as<int>() < 0 || c["channel"].as<int>() > 15) { err = "failsafe channel out of range"; return false; }
+            g.channel = c["channel"].as<int>();
+        } else {
+            if (!c["bus"].is<int>() || !busIdOk(c["bus"].as<long>())) { err = "failsafe bus servo number out of range"; return false; }
+            g.bus = c["bus"].as<int>();
+        }
+        const int maxAngle = g.bus ? kMaxBusAngle : 180;
         if (_eq(c["drive"], "servo")) {
-            if (!c["angle"].is<int>() || c["angle"].as<int>() < 0 || c["angle"].as<int>() > 180) { err = "failsafe angle out of range"; return false; }
+            if (!c["angle"].is<int>() || c["angle"].as<int>() < 0 || c["angle"].as<int>() > maxAngle) { err = "failsafe angle out of range"; return false; }
             if (c.containsKey("holdAtRest") && !c["holdAtRest"].is<bool>()) { err = "failsafe holdAtRest must be a boolean"; return false; }
             g.isServo = true; g.angle = c["angle"].as<int>(); g.holdAtRest = c["holdAtRest"] | false;
         } else if (_eq(c["drive"], "linear")) {
@@ -987,6 +1029,73 @@ inline bool parsePressFrame(JsonObjectConst f, PressOrder& out, const char*& err
     out.tickUs  = f["tickUs"].as<uint32_t>();
     out.repeats = f["repeats"].as<uint32_t>();
     return true;
+}
+
+// ── SERVO / SERVOREPLY / BUS (2026-11-01) ───────────────────────────────────
+//
+// SERVO asks a bus board to find, number, wiggle, relax/hold, reset or list its servos (servo() in nodelink.js has the
+// whole account). Parsed and bounded like a SET: a garbled number could renumber the wrong servo, and a renumbered servo
+// is a gate that stops answering.
+struct ServoOrder {
+    uint32_t seq = 0;
+    int      op = -1;      // index into kServoOps
+    int      bus = 0;      // wiggle, torque, reset
+    int      to = 0;       // assign
+    bool     on = false;   // torque
+};
+inline bool parseServoFrame(JsonObjectConst f, ServoOrder& out, const char*& err) {
+    out = ServoOrder();
+    if (!_eq(f["t"], "SERVO"))            { err = "not a SERVO frame"; return false; }
+    if (!f["seq"].is<uint32_t>())         { err = "missing seq"; return false; }
+    out.seq = f["seq"].as<uint32_t>();
+    const char* op = f["op"].as<const char*>();
+    for (size_t i = 0; op && i < kServoOpCount; i++) if (strcmp(op, kServoOps[i]) == 0) out.op = (int)i;
+    if (out.op < 0)                       { err = "unknown servo op"; return false; }
+    const bool needsBus = out.op == 2 || out.op == 3 || out.op == 4;   // wiggle, torque, reset
+    if (needsBus) {
+        if (!f["bus"].is<int>() || !busIdOk(f["bus"].as<long>())) { err = "bus servo number out of range"; return false; }
+        out.bus = f["bus"].as<int>();
+    }
+    if (out.op == 1) {                                                  // assign
+        if (!f["to"].is<int>() || !busIdOk(f["to"].as<long>())) { err = "new servo number out of range"; return false; }
+        out.to = f["to"].as<int>();
+    }
+    if (out.op == 3) {                                                  // torque
+        if (!f["on"].is<bool>())          { err = "torque needs on"; return false; }
+        out.on = f["on"].as<bool>();
+    }
+    return true;
+}
+// SERVOREPLY. `found` (find): "none", "one" or "garbled"; `ids` (scan) is written by the caller into the returned array.
+inline JsonArray buildServoReply(JsonObject out, uint32_t seq, bool ok, const char* err = nullptr,
+                                 const char* found = nullptr, bool withIds = false) {
+    out["t"] = "SERVOREPLY"; out["seq"] = seq; out["ok"] = ok;
+    if (!ok && err && *err) out["err"] = err;
+    if (found) out["found"] = found;
+    return withIds ? out.createNestedArray("ids") : JsonArray();
+}
+// One servo in a BUS report: its own readings, as read. `ok` false = it did not answer, and only the counts are sent.
+struct BusServoReport {
+    int      id = 0;
+    bool     ok = false;
+    float    deg = 0.0f;
+    int      load = 0;       // percent of full drive, signed
+    int      peak = 0;       // the highest |load| of its last move, percent
+    float    v = 0.0f;
+    int      temp = 0;
+    uint32_t missed = 0, reads = 0;
+    uint32_t moves = 0;      // moves finished since the board started; the brain adds `peak` to history when it rises
+};
+inline void buildBus(JsonObject out, const BusServoReport* servos, size_t n) {
+    out["t"] = "BUS";
+    JsonArray a = out.createNestedArray("servos");
+    for (size_t i = 0; i < n && i < (size_t)kMaxBusServos; i++) {
+        const BusServoReport& r = servos[i];
+        JsonObject o = a.createNestedObject();
+        o["id"] = r.id; o["ok"] = r.ok;
+        if (r.ok) { o["deg"] = r.deg; o["load"] = r.load; o["peak"] = r.peak; o["v"] = r.v; o["temp"] = r.temp; }
+        o["missed"] = r.missed; o["reads"] = r.reads; o["moves"] = r.moves;
+    }
 }
 
 inline bool isRefuseReason(const char* r) {

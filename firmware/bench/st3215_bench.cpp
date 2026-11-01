@@ -833,11 +833,15 @@ static void doSetId(long v) {
     if (v < 1 || v > 253) { Serial.println(F("  setid 1..253")); return; }
     uint8_t err = 0;
     if (bus.ping((uint8_t)v, &err)) { Serial.printf("  id %ld already answers: two servos with one number garble each other\n", v); return; }
-    if (!bus.writeEeprom8(target, ST_REG_ID, (uint8_t)v)) { fail("write the id"); return; }
+    // By hand, not writeEeprom8(): that re-locks and reads back at the OLD id, which stops answering the moment the
+    // write lands, so it reports a failure for a renumber that worked. Unlock at the old id, write, lock at the new one.
+    if (!bus.eepromUnlocked(target, true)) { fail("unlock the EEPROM"); return; }
+    delay(5);
+    if (!bus.write8(target, ST_REG_ID, (uint8_t)v)) { bus.eepromUnlocked(target, false); fail("write the id"); return; }
     delay(30);
-    if (!bus.ping((uint8_t)v, &err)) { Serial.printf("  wrote it, but nothing answers as %ld — `scan` to see where it went\n", v); return; }
-    // writeEeprom8 re-locked at the OLD id, which no longer answers: lock it again under the new one.
     bus.write8((uint8_t)v, ST_REG_LOCK, 1);
+    delay(5);
+    if (!bus.ping((uint8_t)v, &err)) { Serial.printf("  wrote it, but nothing answers as %ld — `scan` to see where it went\n", v); return; }
     Serial.printf("  id %u is now id %ld (saved in the servo); talking to %ld\n", target, v, v);
     target = (uint8_t)v;
 }
