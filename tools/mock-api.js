@@ -73,6 +73,9 @@ const NETWORK_BOARDS = [
   // exists so there is always one board that is present, free, and NOT already
   // in the seed shop's controllers[].
   { host: 'dustgate-node-4', ip: '192.168.87.64', board: 'xiao_c5', servos: 4 },
+  // A bus board (2026-11-01): serial-bus servos, numbered shop-wide. Its servos are simulated below — enough to walk
+  // Add a servo, a servo's page and the load bars against the mock.
+  { host: 'dustgate-wall', ip: '192.168.87.65', board: 'xiao_c5', servos: 0, bus: 6 },
 ];
 const OFFLINE_HOSTS = ['dustgate-node-2'];
 
@@ -91,8 +94,31 @@ function nodeLinkState(entry) {
     lastSeen: online ? Date.now() : 0,
     board:    known ? known.board : '',
     fw:       online ? '1.0.0-mock' : '',
-    caps:     { servos: known ? known.servos : 0, bus: 0 },
+    caps:     { servos: known ? known.servos : 0, bus: known && known.bus ? known.bus : 0 },
+    ...(known && known.bus && online ? mockBusOf(bareHost(entry.host)) : {}),
   };
+}
+
+// ── A bus board's servos, simulated (2026-11-01) ───────────────────────────
+// Each number the layout gives a gate on the board (or that Add a servo assigned) answers, with a made-up history of
+// peaks so the bars and the line have something to show; a "new servo" is always plugged in, so find finds one.
+const busServos = {};            // host → Map(number → { deg, history })
+const servoReplies = {};         // host → Map(seq → reply)
+let servoSeq = 0;
+function busOf(host) { return busServos[host] || (busServos[host] = new Map()); }
+function mockBusOf(host) {
+  const b = busOf(host);
+  // Numbers the layout holds on this board answer too, as if they had been added on a real board.
+  for (const sys of ((td && td.topology && td.topology.systems) || [])) for (const e of sys.elements || []) {
+    if (e.type !== 'selector' || bareHost(e.controllerId || '') !== host) continue;
+    const n = ((e.kind === 'linear' ? e.linear : e.servo) || {}).bus;
+    if (n !== undefined && !b.has(n)) b.set(n, { deg: 90, history: Array.from({ length: 12 }, (_, i) => 12 + ((i * 7 + n) % 5)) });
+  }
+  const bus = [...b.entries()].slice(0, 6).map(([id, s]) => ({
+    id, ok: true, deg: s.deg, load: 2, v: 12.1, temp: 29, peak: s.history[s.history.length - 1] || 0,
+    missed: 0, reads: 400, moves: s.history.length, history: s.history.slice(-20),
+  }));
+  return { bus, link: { rssi: -58, drops: 1, lost: 0 } };
 }
 
 function statusJson() { return JSON.stringify(M.statusView(d)); }
@@ -324,8 +350,42 @@ function handler(req, res) {
   // Setup-only servo jog. Nothing to move here, so just range-check like the firmware
   // does and remember the angle — enough for the gate configurator to be walked end to
   // end against the mock.
+  // SERVO orders to a bus board (2026-11-01): answered at once and kept for /api/servo/reply, as the brain keeps a node's.
+  if (pathname === '/api/servo/op' && req.method === 'POST') {
+    return body(req, data => {
+      const host = bareHost(String(data.controllerId || ''));
+      const known = NETWORK_BOARDS.find(b => bareHost(b.host) === host);
+      if (!findPaired(host) || !known || !known.bus) return json(res, { error: 'that board has no servo bus' }, 409);
+      const seq = ++servoSeq, b = busOf(host);
+      let reply = { t: 'SERVOREPLY', seq, ok: true };
+      if (data.op === 'find') reply.found = 'one';
+      else if (data.op === 'assign') {
+        if (b.has(data.to)) reply = { t: 'SERVOREPLY', seq, ok: false, err: 'a servo already answers to that number on this board' };
+        else b.set(data.to, { deg: 0, history: [] });
+      } else if (data.op === 'reset') b.delete(data.bus);
+      else if (data.op === 'scan') reply.ids = [1, ...b.keys()];
+      else if (data.op !== 'wiggle' && data.op !== 'torque') return json(res, { error: 'unknown servo op' }, 400);
+      console.log(`[SERVO] ${host} ${data.op}${data.to ? ' -> ' + data.to : ''}${data.bus ? ' servo ' + data.bus : ''}`);
+      (servoReplies[host] || (servoReplies[host] = new Map())).set(seq, reply);
+      json(res, { seq });
+    });
+  }
+  if (pathname === '/api/servo/reply' && req.method === 'GET') {
+    const q = new URL(req.url, 'http://x').searchParams;
+    const r = (servoReplies[bareHost(q.get('controllerId') || '')] || new Map()).get(Number(q.get('seq')));
+    return json(res, r ? { done: true, reply: r } : { done: false });
+  }
   if (pathname === '/api/servo/jog' && req.method === 'POST') {
     return body(req, data => {
+      // A bus servo, by number: it moves there, and the move's peak joins its history.
+      if (data.bus !== undefined) {
+        const s = busOf(bareHost(String(data.controllerId || ''))).get(Number(data.bus));
+        if (!s) return json(res, { error: 'that servo is not answering' }, 502);
+        const angle = Number(data.angle);
+        if (!Number.isInteger(angle) || angle < 0 || angle > 359) return json(res, { error: 'angle out of range (0-359)' }, 400);
+        s.history.push(12 + Math.round(Math.abs(angle - s.deg) / 30)); s.deg = angle;
+        return json(res, { ok: true });
+      }
       const ch = Number(data.channel);
       if (!Number.isInteger(ch) || ch < 0 || ch >= 4) return json(res, { error: 'channel out of range' }, 400);
       // controllerId says WHICH board. Absent (or the primary) means this one; a

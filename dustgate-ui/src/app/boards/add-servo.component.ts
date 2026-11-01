@@ -21,9 +21,10 @@ import { busNumberOf } from './bus-servos';
 
 type Step = 'pick' | 'plug' | 'looking' | 'none' | 'garbled' | 'saving' | 'done' | 'failed';
 
-/** Tie servo `n` to a gate in a layout document (mutated). A replacement sits on its shaft differently, so its positions
- *  are cleared and must be set again; a bus valve turns a whole circle, so its range is opened to 359°. */
-export function tieServo(gate: ConfigurableSelector, n: number, replacing: boolean): void {
+/** Tie servo `n` to a gate in a layout document (mutated). Its positions are cleared and must be set again: a new servo
+ *  sits on the shaft its own way, and a gate that had a PWM servo had angles on a different scale. A bus valve turns a
+ *  whole circle, so its range is opened to 359°. */
+export function tieServo(gate: ConfigurableSelector, n: number): void {
   if (gate.kind === 'linear') {
     gate.linear = { ...(gate.linear ?? {}), bus: n };
     delete gate.linear.channel;
@@ -32,7 +33,7 @@ export function tieServo(gate: ConfigurableSelector, n: number, replacing: boole
   gate.servo = { ...gate.servo, bus: n };
   delete gate.servo.channel;
   if (gate.servo.maxAngle === undefined || gate.servo.maxAngle < 359) gate.servo.maxAngle = 359;
-  if (replacing) delete gate.servo.referenceAngle;
+  delete gate.servo.referenceAngle;
 }
 
 @Component({
@@ -110,8 +111,7 @@ export function tieServo(gate: ConfigurableSelector, n: number, replacing: boole
     <div class="card" *ngIf="step === 'done'">
       <div class="callout ok"><b>Found it</b> — it turned a little so you could see which one. It now drives the
         <b>{{ gate?.name || gate?.id }}</b>, and remembers that if it is unplugged.</div>
-      <p class="sub">{{ replacing ? 'A new servo sits on its shaft a little differently, so set the gate\\'s positions again.'
-                                  : 'Next, set its open and closed positions.' }}</p>
+      <p class="sub">Next, set its open and closed positions{{ replacing ? ' again: a new servo sits on its shaft a little differently' : '' }}.</p>
       <div class="dev-box" *ngIf="dev"><span class="dev-tag">Developer</span>
         <span class="sub">Found as number 1 (not yet assigned), given number {{ given }}{{ replacing ? ', the old servo\\'s' : ', the next free in the shop' }}.</span></div>
       <div class="btns">
@@ -174,12 +174,16 @@ export class AddServoComponent implements OnInit, OnDestroy {
       const n = this.replacing && old !== undefined ? old : nextBusId(this.topo as unknown as Parameters<typeof nextBusId>[0]);
       if (n === null) throw new Error('This shop has used every servo number.');
       const r = await this.api.servoOp(this.board, 'assign', { to: n });
-      if (!r.ok) throw new Error(r.err || 'The servo did not take its number.');
+      if (!r.ok) {
+        // Replacing, the number still answering is the old servo: say what to do about it, in those words.
+        const stillThere = this.replacing && /already answers/.test(r.err || '');
+        throw new Error(stillThere ? 'The old servo is still plugged in. Unplug it, then look again.' : r.err || 'The servo did not take its number.');
+      }
       // Write it into the layout as read NOW, so whatever else changed since is kept.
       const doc = JSON.parse(JSON.stringify(await this.api.getTopology())) as Topology;
       const g = selectorsOnController(doc, this.board).find((s) => s.id === this.gate!.id);
       if (!g) throw new Error('That gate is no longer on this board.');
-      tieServo(g, n, this.replacing);
+      tieServo(g, n);
       await this.api.putTopology(doc);
       this.topo = doc;
       this.gate = g;

@@ -11,6 +11,7 @@ import { systemsOf } from '@shop';
 import { bareHost } from '@device-model';
 import { clampUsers, machineOfPort, type ShopDoc } from '../services/shop-doc';
 import { isOptionalBoard } from '@shop';
+import { MAX_BUS_SERVOS_PER_HOST } from '@topology';
 import { DevModeService } from '../services/dev-mode';
 import { busServoLines, type BusServoLine } from './bus-servos';
 import {
@@ -211,7 +212,7 @@ interface BoardRow {
 
     <!-- Boards already in the layout -->
     <div class="card" *ngIf="rows.length">
-      <div class="row" *ngFor="let r of rows">
+      <div class="row" *ngFor="let r of rows; trackBy: rowKey">
         <div class="info">
           <ng-container *ngIf="renaming !== r.id; else renameBox">
             <div class="nm">
@@ -277,8 +278,8 @@ interface BoardRow {
         <!-- A BUS BOARD'S SERVOS (2026-11-01), by the gate each drives. The bar is the peak load of its last move; the
              white tick is what it usually needs. Logged, not judged: nothing turns amber until real numbers say where the
              line is (jeff). Numbers only in developer mode. -->
-        <div class="bus" *ngIf="r.drives === 'bus'">
-          <button type="button" class="svo" *ngFor="let l of busLines(r)" (click)="openServo(r, l)"
+        <div class="bus" *ngIf="r.drives === 'bus' && !r.primary">
+          <button type="button" class="svo" *ngFor="let l of busLines(r); trackBy: lineKey" (click)="openServo(r, l)"
                   [title]="l.last === null ? 'No move reported yet' : 'Peak load of its last move: ' + l.last + '%' + (l.usual !== null ? ', usually ' + l.usual + '%' : '')">
             <span class="sid" *ngIf="dev">{{ l.bus !== undefined ? '#' + l.bus : '—' }}</span>
             <span class="sdot" *ngIf="!dev" [class.on]="l.state?.ok" [class.warn]="l.state && !l.state.ok"></span>
@@ -290,7 +291,6 @@ interface BoardRow {
             </span>
           </button>
           <button type="button" class="act add-servo" (click)="addServo(r)"
-                  [disabled]="busLines(r).length >= 6"
                   title="Plug in one new servo and give it to a gate">Add a servo</button>
         </div>
 
@@ -392,6 +392,9 @@ export class BoardSetupComponent implements OnInit, OnDestroy {
     const c = this.topo ? controllersOf(this.topo).find((x) => x.id === r.id) : undefined;
     return busServoLines(gates, r.link?.bus ?? [], c?.chains ?? []);
   }
+  /** Rows keep their DOM across the 3 s refresh (busLines builds new objects each time), so a tap is never lost. */
+  lineKey = (_: number, l: BusServoLine) => l.gateId ?? `bus-${l.bus}`;
+  rowKey = (_: number, r: BoardRow) => r.id;
   servoSub(l: BusServoLine): string {
     if (l.bus === undefined) return `${l.kind} · no servo yet`;
     if (!l.state) return `${l.kind} · waiting for the board to report it`;
@@ -855,12 +858,12 @@ export class BoardSetupComponent implements OnInit, OnDestroy {
     const bits: string[] = [];
     // What it drives, in the words the canvas uses for its ports. Read-only: the
     // board reported this, nobody chose it.
-    bits.push(r.drives === 'bus' ? 'sliding gate' : 'servo valves');
+    bits.push(r.drives === 'bus' ? 'bus servos' : 'servo valves');
     bits.push(r.primary ? 'primary — runs the app' : (r.host || 'no address'));
     // The build target is a developer's word ("xiao_c5"); the shop sees what it drives.
-    // A slider board's whole capacity is one rack, so "of 4" would be a lie on it.
+    // A bus board drives up to six servos, at most one of them a slider (topology.js MAX_BUS_SERVOS_PER_HOST).
     bits.push(r.drives === 'bus'
-      ? `${r.gates} of 1 sliding gate`
+      ? `${r.gates} of ${MAX_BUS_SERVOS_PER_HOST} servos`
       : `${r.gates} of ${SERVO_CHANNELS_PER_BOARD} gates`);   // plural follows the ceiling, not the count
     if (r.link?.fw) bits.push(`fw ${r.link.fw}`);
     return bits.join(' · ');

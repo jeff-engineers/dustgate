@@ -1,7 +1,7 @@
 import { Component, OnInit } from '@angular/core';
 import { failureReason, reportFailure } from '../services/failure';
 import { CommonModule } from '@angular/common';
-import { Router } from '@angular/router';
+import { Router, ActivatedRoute } from '@angular/router';
 import { ApiService, JogRefusedError, type NodeLinkState } from '../services/api.service';
 import { SelectorConfigComponent } from './selector-config.component';
 import type { Topology } from '@topology';
@@ -176,7 +176,7 @@ export class GateListComponent implements OnInit {
 
   private links: NodeLinkState[] = [];
 
-  constructor(private api: ApiService, private router: Router) {}
+  constructor(private api: ApiService, private router: Router, private route: ActivatedRoute) {}
 
   async ngOnInit(): Promise<void> {
     try {
@@ -194,7 +194,7 @@ export class GateListComponent implements OnInit {
     this.rebuild();
     this.loaded = true;
     // ?gate=<id> opens that gate's setup at once — "Set positions" on a bus servo's page (2026-11-01).
-    const want = new URLSearchParams(location.search).get('gate');
+    const want = this.route.snapshot.queryParamMap.get('gate');
     const row = want ? this.rows.find((r) => r.sel.id === want) : undefined;
     if (row) this.configure(row);
   }
