@@ -40,7 +40,7 @@
 // the geometry, because counts/mm is DERIVED from the rack spec rather than
 // fitted to anything.
 //
-// Behind a NodeLink socket it runs too: the xiao_c5_linear node homed and moved a gate in 2026-09, and through the Pi
+// Behind a NodeLink socket it runs too: the xiao_c5_bus node homed and moved a gate in 2026-09, and through the Pi
 // brain on 2026-10-17. Still unproven: behaviour under load, and 9V vs 12V.
 //
 // Note that HOME_DIRECTION came out -1 on that mount — bit 15 moves the carriage

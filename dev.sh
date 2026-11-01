@@ -49,10 +49,10 @@
 #     so a collector's board may be a node.
 #     docs/archive/WIRING.md#9-bin-sensor has the table of what works where.
 #
-#   THE SLIDER BOARD — add --slider to either flash command:
+#   THE BUS BOARD — add --bus (or --slider) to either flash command:
 #
-#   bash dev.sh flash --slider        # a PRIMARY that drives the rack
-#   bash dev.sh flash-node --slider   # a NODE that drives the rack
+#   bash dev.sh flash --bus           # a PRIMARY that drives the bus (FROZEN)
+#   bash dev.sh flash-node --bus      # a NODE that drives bus servos and a slider
 #     Same XIAO C5, same two roles. What changes is that the three PWM channels
 #     become one ST3215 serial bus servo on D6/D7 plus two endstops on D8/D9 —
 #     PWM and serial never share a board, so this is a different program, not a
@@ -169,8 +169,8 @@ NODE_ENV="xiao_c5"
 # three PWM channels are traded for one ST3215 on a serial bus, because PWM and
 # serial never share a board. A slider board is therefore a THIRD thing to flash
 # in each role, not a flag on the servo build, and `--slider` picks it.
-LINEAR_PRIMARY_ENV="xiao_c5_linear_primary"
-LINEAR_NODE_ENV="xiao_c5_linear"
+LINEAR_PRIMARY_ENV="xiao_c5_bus_primary"
+LINEAR_NODE_ENV="xiao_c5_bus"
 
 # THE COLLECTOR ENVS ARE GONE (2026-09-16). There used to be a pair here, a
 # fourth thing to flash in each role, because a CT and a transmitter would not
@@ -635,7 +635,7 @@ parse_provision_overrides() {
       # The rack board: one ST3215 on a serial bus and two endstops, instead of
       # three PWM channels. Consumed here rather than passed through, because the
       # env it selects is handed to deploy.sh as --env= below.
-      --slider|--linear|--rack) FLASH_ENV="$LINEAR_PRIMARY_ENV"; shift ;;
+      --bus|--slider|--linear|--rack) FLASH_ENV="$LINEAR_PRIMARY_ENV"; shift ;;
       # No longer selects anything — kept so an old command line still works.
       # The ordinary primary IS the collector build now; the banner says so.
       --collector|--dc) FLASH_COLLECTOR=1; shift ;;
@@ -910,7 +910,7 @@ run_flash_node() {
   local node_env="$NODE_ENV" args=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --slider|--linear|--rack) node_env="$LINEAR_NODE_ENV"; shift ;;
+      --bus|--slider|--linear|--rack) node_env="$LINEAR_NODE_ENV"; shift ;;
       # Accepted and ignored: the ordinary node IS the collector node now.
       --collector|--dc) shift ;;
       *) args+=("$1"); shift ;;
@@ -1270,7 +1270,7 @@ run_ota() {
     case "$a" in
       --bad)        bad=1 ;;
       --extmem)     want_extmem=1 ;;
-      --slider|--linear|--rack) env="$LINEAR_PRIMARY_ENV" ;;
+      --bus|--slider|--linear|--rack) env="$LINEAR_PRIMARY_ENV" ;;
       --no-nodes)   do_nodes=0 ;;
       --nodes-only) do_primary=0 ;;
       *) host="$a" ;;
@@ -1796,7 +1796,7 @@ case "${1:-}" in
       # failure the flag exists to work around.
       node|n)     shift; run_monitor "$NODE_ENV" "$@" ;;
       both|b)     shift; run_monitor_both "$@" ;;
-      slider|linear) shift; run_monitor "$LINEAR_NODE_ENV" "$@" ;;
+      bus|slider|linear) shift; run_monitor "$LINEAR_NODE_ENV" "$@" ;;
       *)          run_monitor "$@" ;;
     esac
     ;;

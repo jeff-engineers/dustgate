@@ -81,7 +81,7 @@
 // suction it is not accounting for. No re-homing on reconnect: the brain sends each gate where it belongs.
 //
 // Build:  pio run -e xiao_c5           (PWM servo bank)
-//         pio run -e xiao_c5_linear    (ST3215 slider)
+//         pio run -e xiao_c5_bus    (ST3215 slider)
 // =============================================================================
 
 #include <Arduino.h>

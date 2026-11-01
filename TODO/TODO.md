@@ -119,7 +119,7 @@ node — its servos share one brick, and the wire-length limit assumes only the 
      servo; new frames to find a not-yet-assigned servo, give it a number, wiggle it, relax/hold it, and a node-to-brain
      report of each servo's position, last-move peak load, voltage, temperature and missed reads. Link stats (drops,
      lost frames, RSSI) ride the node's status.
-  3. **The bus board's firmware** (`xiao_c5_bus`, replacing `xiao_c5_linear`): up to 6 servos, one move at a time, the
+  3. **The bus board's firmware** (`xiao_c5_bus`, renamed from `xiao_c5_linear`): up to 6 servos, one move at a time, the
      slider's homing as today, numbering, the report. First bench point.
   4. **The brain:** hands out numbers, logs every move's peak load, keeps the comm stats, serves them to the app.
   5. **The app:** Boards (load bars), a servo's page, Add/Replace a servo, Set positions, chains on the shop layout,
@@ -129,16 +129,15 @@ node — its servos share one brick, and the wire-length limit assumes only the 
   **Done so far (2026-11-01, host-tested and compiled only — nothing has run on a board):** 1 (5a24d87); 2 (NodeLink v2:
   caps.bus, SET.bus, SERVO/SERVOREPLY/BUS, PONG rssi/drops, six failsafe gates); 3 (`motor/st3215/BusBank.h` + the node:
   one move at a time across valves and slider, peak load per move, numbering, the BUS report; the slider takes its number
-  from its SET instead of a fixed 1). Left from 3: rename the `xiao_c5_linear` env and `HAS_LINEAR` to bus (dev.sh,
-  CI, the node-image names); the FROZEN `xiao_c5_linear_primary` no longer drives its slider, which now waits for a number
+  from its SET instead of a fixed 1). The envs are `xiao_c5_bus` / `xiao_c5_bus_primary` (`dev.sh … --bus`); the macro
+  inside is still `HAS_LINEAR`. The FROZEN `xiao_c5_bus_primary` no longer drives its slider, which now waits for a number
   only a node's SET carries.
   4 done (2026-11-01): the brain keeps each board's BUS report and a 20-move peak history, logs each move's peak, sends a
   link check every 10 s (PONG rssi/drops; unanswered = lost), and serves `POST /api/servo/op`, `GET /api/servo/reply`
   and bus jogs; `nextBusId` (shop.js) and `devMode` are in the model. 5 done (2026-11-01, walked in the browser pane
   against tools/mock-api.js's simulated bus board, not against a real board): developer mode in Settings (PWM range
   under it), Boards' servo list and link stats, a servo's page, Add/Replace a servo, chains on the shop layout, the Live
-  page's developer meters, D-87 and canvas.html 5b. LEFT: rename the `xiao_c5_linear` env and `HAS_LINEAR` to bus
-  (dev.sh `--slider`, CI, the node-image names); the bench run below; then archive docs/mockups/bus-chain.html.
+  page's developer meters, D-87 and canvas.html 5b. LEFT: the bench run below; then archive docs/mockups/bus-chain.html.
   **Bench, when the bus board is flashed:** add a servo (find/assign), move a valve from the app, watch BUS in the brain
   log; a valve and the slider asked together move one after the other; unplug a valve mid-move (it should say it stopped
   answering); `setid` on the bench console again (it was fixed 2026-11-01: it reported a failure for a renumber that

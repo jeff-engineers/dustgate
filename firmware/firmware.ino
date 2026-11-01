@@ -6,7 +6,7 @@
 // either way:
 //
 //   xiao_c5_primary         four PWM ball valves, HAS_LINEAR 0
-//   xiao_c5_linear_primary  one ST3215 on a serial bus + two endstops,
+//   xiao_c5_bus_primary  one ST3215 on a serial bus + two endstops,
 //                           HAS_LINEAR 1
 //
 // Configuration is entirely in config.h; the pin map is boards/xiao_c5.h.

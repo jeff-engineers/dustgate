@@ -34,7 +34,7 @@ const LINK_TRANSPORTS  = ['wifi-ws', 'esp-now'];
 // than a sum. One ESP32 drives EITHER the four-channel PWM servo bank OR a single
 // serial-bus slider — never both, because the two personalities contend for the
 // same pads and firmware/config.h #errors on a pin map that claims both. A board
-// is flashed as one or the other (xiao_c5 vs xiao_c5_linear).
+// is flashed as one or the other (xiao_c5 vs xiao_c5_bus).
 //
 // Reading these as 4+1 is what put a fifth port on every board in the
 // configurator (corrected 2026-08-28). More than the budget on one host is a
