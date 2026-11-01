@@ -29,12 +29,12 @@ function group(name: string): void { console.log(`\n${name}`); }
 // ── B1 · reading a board's own report ────────────────────────────────────────
 group('B1 a board reports what it drives; silence is not a report');
 {
-  ok('hasLinear true → linear', drivesFromHasLinear(true) === 'linear');
+  ok('hasLinear true → linear', drivesFromHasLinear(true) === 'bus');
   ok('hasLinear false → servo', drivesFromHasLinear(false) === 'servo');
   // Undefined is a board that has NOT SAID — distinct from one saying "no slider".
   // Collapsing the two is what makes a cache overwrite itself with a guess.
   ok('hasLinear absent → no report', drivesFromHasLinear(undefined) === null);
-  ok('caps.linear 1 → linear', drivesFromCaps({ linear: 1 }) === 'linear');
+  ok('caps.linear 1 → linear', drivesFromCaps({ linear: 1 }) === 'bus');
   ok('caps.linear 0 → servo', drivesFromCaps({ linear: 0 }) === 'servo');
   ok('no caps at all → no report', drivesFromCaps(null) === null);
   ok('caps without linear → no report', drivesFromCaps({}) === null);
@@ -46,9 +46,9 @@ group('B2 the live report beats the cache, always');
   // The bug this encodes: the cache is only written when someone opens the Boards
   // screen, and nothing makes them. A freshly flashed slider therefore has a
   // 'servo' cache and a 'linear' report, and the report is the true one.
-  ok('report wins over a stale cache', resolveDrives('linear', 'servo') === 'linear');
-  ok('...and in the other direction too', resolveDrives('servo', 'linear') === 'servo');
-  ok('cache carries a board that has not reported', resolveDrives(null, 'linear') === 'linear');
+  ok('report wins over a stale cache', resolveDrives('bus', 'servo') === 'bus');
+  ok('...and in the other direction too', resolveDrives('servo', 'bus') === 'servo');
+  ok('cache carries a board that has not reported', resolveDrives(null, 'bus') === 'bus');
   ok('nothing anywhere → servo', resolveDrives(null, undefined) === DEFAULT_DRIVES);
   ok('the default is servo', DEFAULT_DRIVES === 'servo');
 }
@@ -56,20 +56,20 @@ group('B2 the live report beats the cache, always');
 // ── B3 · what a board may host ───────────────────────────────────────────────
 group('B3 a board hosts one kind of gate, never both');
 {
-  ok('a slider board takes a sliding gate', canHost('linear', 'linear'));
-  ok('...and nothing else', !canHost('linear', 'servoGate') && !canHost('linear', 'servoManifold'));
+  ok('a slider board takes a sliding gate', canHost('bus', 'linear'));
+  ok('...and nothing else', !canHost('bus', 'servoGate') && !canHost('bus', 'servoManifold'));
   ok('a servo board takes valves', canHost('servo', 'servoGate') && canHost('servo', 'servoManifold'));
   ok('...and refuses a sliding gate', !canHost('servo', 'linear'));
 
   // The cache is written as an ABSENCE for the default, so a document round-trips
   // byte-identical to one saved before the field existed.
-  const c: Record<string, unknown> = { id: 'n1', drives: 'linear' };
+  const c: Record<string, unknown> = { id: 'n1', drives: 'bus' };
   applyDrivesCache(c, 'servo');
   ok('caching servo deletes the field', !('drives' in c));
-  applyDrivesCache(c, 'linear');
-  ok('caching linear writes it', c['drives'] === 'linear');
+  applyDrivesCache(c, 'bus');
+  ok('caching linear writes it', c['drives'] === 'bus');
   applyDrivesCache(c, null);
-  ok('no report leaves the cache alone', c['drives'] === 'linear');
+  ok('no report leaves the cache alone', c['drives'] === 'bus');
 }
 
 // ── B4 · the round trip that broke ───────────────────────────────────────────
@@ -104,7 +104,7 @@ group('B4 a paired slider node survives a save');
   });
 
   const slider = merge('dustgate-slider', { linear: 1 });
-  ok('a slider node is merged in as a slider board', slider['drives'] === 'linear');
+  ok('a slider node is merged in as a slider board', slider['drives'] === 'bus');
 
   const good = validateTopology(docWith(slider));
   ok('...and the layout it hosts validates', good.ok,
@@ -144,13 +144,13 @@ group('B5 a shop can run out of ports, and of one kind at a time');
   const spare = portShortfalls(['servo'], ['servoGate', 'linear'], S);
   ok('a servo board with three channels free still cannot take a rack', spare.length === 1);
   ok('...and the shortfall names the slider, not the servos',
-     spare[0].kind === 'linear' && spare[0].ports === 0);
+     spare[0].kind === 'bus' && spare[0].ports === 0);
 
   ok('a slider board takes exactly one rack',
-     portShortfalls(['linear'], ['linear'], S).length === 0);
-  ok('...and refuses the second', portShortfalls(['linear'], ['linear', 'linear'], S).length === 1);
+     portShortfalls(['bus'], ['linear'], S).length === 0);
+  ok('...and refuses the second', portShortfalls(['bus'], ['linear', 'linear'], S).length === 1);
   // A slider board contributes NO servo channels: the pads are the serial bus.
-  const sliderOnly = portShortfalls(['linear'], ['servoGate'], S);
+  const sliderOnly = portShortfalls(['bus'], ['servoGate'], S);
   ok('a slider board offers no servo channel at all',
      sliderOnly.length === 1 && sliderOnly[0].kind === 'servo' && sliderOnly[0].ports === 0);
 
@@ -164,11 +164,11 @@ group('B5 a shop can run out of ports, and of one kind at a time');
   // Wording: the sentence has to survive the zero case, which is the one a shop
   // hits first — a rack drawn before any slider board is paired.
   ok('zero ports reads as "none", never "only 0"',
-     /has none —/.test(shortfallText({ kind: 'linear', gates: 1, ports: 0 })));
+     /has none —/.test(shortfallText({ kind: 'bus', gates: 1, ports: 0 })));
   ok('one gate is singular',
-     /1 sliding gate needs/.test(shortfallText({ kind: 'linear', gates: 1, ports: 0 })));
+     /1 sliding gate needs/.test(shortfallText({ kind: 'bus', gates: 1, ports: 0 })));
   ok('two gates are plural',
-     /2 sliding gates need/.test(shortfallText({ kind: 'linear', gates: 2, ports: 1 })));
+     /2 sliding gates need/.test(shortfallText({ kind: 'bus', gates: 2, ports: 1 })));
   ok('a servo shortfall says how many channels there are',
      /only 4 —/.test(shortfallText({ kind: 'servo', gates: 5, ports: 4 })));
 }

@@ -109,6 +109,23 @@ chains per board; a gate joins a chain by dragging its tab onto a port or onto t
 **One move at a time per board still holds (jeff, 2026-11-01):** a bus board moves one servo at a time, like every
 node — its servos share one brick, and the wire-length limit assumes only the moving servo draws heavy current.
 
+- **Build plan (started 2026-11-01), in order; each stage lands with its tests:**
+  1. **Layout model.** `Controller.drives` becomes `servo | bus` (the slider board was always a bus board, so `linear`
+     is renamed, not kept). A bus board lists its `chains` (up to 2, selector ids in wire order). A gate on a bus board
+     names its servo by `bus` (2–253, unique shop-wide; 1 = not yet assigned) in place of a PWM `channel`; absent = no
+     servo yet. Budget: 6 servos a bus board (a constant pair with the firmware), at most 1 of them a slider. The shop
+     setting `devMode`.
+  2. **NodeLink.** WELCOME `caps.bus` (servos the board can drive) replaces `caps.linear`; SET carries `bus` for a bus
+     servo; new frames to find a not-yet-assigned servo, give it a number, wiggle it, relax/hold it, and a node-to-brain
+     report of each servo's position, last-move peak load, voltage, temperature and missed reads. Link stats (drops,
+     lost frames, RSSI) ride the node's status.
+  3. **The bus board's firmware** (`xiao_c5_bus`, replacing `xiao_c5_linear`): up to 6 servos, one move at a time, the
+     slider's homing as today, numbering, the report. First bench point.
+  4. **The brain:** hands out numbers, logs every move's peak load, keeps the comm stats, serves them to the app.
+  5. **The app:** Boards (load bars), a servo's page, Add/Replace a servo, Set positions, chains on the shop layout,
+     developer mode in Settings with the PWM range moved under it.
+  Positions keep today's servo model (a calibrated reference angle plus the valve design's offsets), so routing does
+  not change; "Set positions" sets the reference.
 - **Bench, when the new ball-valve prints and the Feetech servos jeff ordered arrive** (`xiao_c5_bus_bench`, commands
   added 2026-10-29 — `help` lists them):
   0. **Measured 2026-11-01 (jeff): the new low-friction ball valve needs about 0.7 kg·cm.** Early prototype (ball heavier

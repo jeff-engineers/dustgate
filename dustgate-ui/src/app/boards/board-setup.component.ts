@@ -772,11 +772,11 @@ export class BoardSetupComponent implements OnInit, OnDestroy {
     const bits: string[] = [];
     // What it drives, in the words the canvas uses for its ports. Read-only: the
     // board reported this, nobody chose it.
-    bits.push(r.drives === 'linear' ? 'sliding gate' : 'servo valves');
+    bits.push(r.drives === 'bus' ? 'sliding gate' : 'servo valves');
     bits.push(r.primary ? 'primary — runs the app' : (r.host || 'no address'));
     // The build target is a developer's word ("xiao_c5"); the shop sees what it drives.
     // A slider board's whole capacity is one rack, so "of 4" would be a lie on it.
-    bits.push(r.drives === 'linear'
+    bits.push(r.drives === 'bus'
       ? `${r.gates} of 1 sliding gate`
       : `${r.gates} of ${SERVO_CHANNELS_PER_BOARD} gates`);   // plural follows the ceiling, not the count
     if (r.link?.fw) bits.push(`fw ${r.link.fw}`);

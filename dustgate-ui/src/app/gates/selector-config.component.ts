@@ -260,9 +260,9 @@ export class SelectorConfigComponent implements OnInit {
   boardLabel(c: Controller): string {
     const name = `${c.name || c.id}${c.role === 'primary' ? ' (primary)' : ''}`;
     if (!this.canDrive(c)) {
-      return `${name} — ${this.drivesOf(c) === 'linear' ? 'sliding gates only' : 'servo gates only'}`;
+      return `${name} — ${this.drivesOf(c) === 'bus' ? 'sliding gates only' : 'servo gates only'}`;
     }
-    if (this.drivesOf(c) === 'linear') {
+    if (this.drivesOf(c) === 'bus') {
       return `${name} — ${this.sliderTaken(c) ? 'its one gate is taken' : 'its one gate is free'}`;
     }
     const free = this.freeChannels(c);

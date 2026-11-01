@@ -111,7 +111,7 @@ export interface Controller {
    *  Never both, and not a runtime setting: the two builds use the same pads and
    *  firmware/config.h #errors on a pin map claiming both. Absent means 'servo',
    *  because every board that existed before this field was one. */
-  drives?: 'servo' | 'linear';
+  drives?: 'servo' | 'bus';
   link?: ControllerLink;
 }
 

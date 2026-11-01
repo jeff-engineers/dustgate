@@ -18,7 +18,7 @@
 // The budget, not a literal: this said "four" for a month after boards dropped to two channels (2026-10-17).
 import { SERVO_CHANNELS_PER_BOARD } from '../gates/selector-types';
 
-export type Drives = 'servo' | 'linear';
+export type Drives = 'servo' | 'bus';
 
 /** What a board with nothing reported and nothing cached is assumed to drive.
  *  Matches `c.drives || 'servo'` in the validator — and so matches every layout
@@ -27,12 +27,12 @@ export const DEFAULT_DRIVES: Drives = 'servo';
 
 /** The primary's own report, from its status. Null when it has not said. */
 export function drivesFromHasLinear(hasLinear: unknown): Drives | null {
-  return typeof hasLinear === 'boolean' ? (hasLinear ? 'linear' : 'servo') : null;
+  return typeof hasLinear === 'boolean' ? (hasLinear ? 'bus' : 'servo') : null;
 }
 
 /** A node's report, from its WELCOME caps. Null when it has not said. */
 export function drivesFromCaps(caps: { linear?: number } | null | undefined): Drives | null {
-  return caps && typeof caps.linear === 'number' ? (caps.linear > 0 ? 'linear' : 'servo') : null;
+  return caps && typeof caps.linear === 'number' ? (caps.linear > 0 ? 'bus' : 'servo') : null;
 }
 
 /**
@@ -53,7 +53,7 @@ export function resolveDrives(reported: Drives | null, cached: Drives | null | u
  *  claiming both). So this is an equality test, not a capacity one — capacity is a
  *  separate question asked only of a board that passes this. */
 export function canHost(drives: Drives, kind: string): boolean {
-  return drives === (kind === 'linear' ? 'linear' : 'servo');
+  return drives === (kind === 'linear' ? 'bus' : 'servo');
 }
 
 /**
@@ -66,7 +66,7 @@ export function canHost(drives: Drives, kind: string): boolean {
 export function applyDrivesCache(controller: Record<string, unknown>, drives: Drives | null): void {
   if (drives === null) return;                     // never heard from it — leave the cache alone
   if (drives === 'servo') delete controller['drives'];
-  else controller['drives'] = 'linear';
+  else controller['drives'] = 'bus';
 }
 
 /** A shop with more gates of one kind than ports to plug them into. */
@@ -100,7 +100,7 @@ export function portShortfalls(
 ): PortShortfall[] {
   let servoPorts = 0, sliderPorts = 0;
   for (const d of boardDrives) {
-    if (d === 'linear') sliderPorts += 1; else servoPorts += servoPortsPerBoard;
+    if (d === 'bus') sliderPorts += 1; else servoPorts += servoPortsPerBoard;
   }
   let servoGates = 0, sliderGates = 0;
   for (const k of gateKinds) {
@@ -108,7 +108,7 @@ export function portShortfalls(
   }
   const out: PortShortfall[] = [];
   if (servoGates > servoPorts) out.push({ kind: 'servo', gates: servoGates, ports: servoPorts });
-  if (sliderGates > sliderPorts) out.push({ kind: 'linear', gates: sliderGates, ports: sliderPorts });
+  if (sliderGates > sliderPorts) out.push({ kind: 'bus', gates: sliderGates, ports: sliderPorts });
   return out;
 }
 
@@ -116,7 +116,7 @@ export function portShortfalls(
  *  caller adds what to DO about it once, however many shortfalls it is reporting. */
 export function shortfallText(s: PortShortfall): string {
   const one = s.gates === 1;
-  if (s.kind === 'linear') {
+  if (s.kind === 'bus') {
     return `${s.gates} sliding ${one ? 'gate needs' : 'gates need'} a slider board and this shop has `
          + `${s.ports === 0 ? 'none' : String(s.ports)} — a slider board drives one rack, so each rack needs its own.`;
   }

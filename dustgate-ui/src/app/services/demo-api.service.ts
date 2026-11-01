@@ -679,7 +679,7 @@ export class DemoApiService extends ApiService {
       // On real hardware caps come from the node's WELCOME and the layout is the
       // copy; here there is nothing else to ask, so the simulated board is made
       // to agree with the shop it is standing in rather than contradict it.
-      const linear = this.drivesOfController(host) === 'linear';
+      const linear = this.drivesOfController(host) === 'bus';
       return {
         id: host,                          // the node's host IS its controllerId
         host,
@@ -707,9 +707,9 @@ export class DemoApiService extends ApiService {
   }
 
   /** What the demo layout says a board is flashed to drive. */
-  private drivesOfController(id: string): 'servo' | 'linear' {
+  private drivesOfController(id: string): 'servo' | 'bus' {
     const cs = (this.td?.topology as { controllers?: Array<{ id: string; drives?: string }> })?.controllers ?? [];
-    return cs.find(c => c.id === id)?.drives === 'linear' ? 'linear' : 'servo';
+    return cs.find(c => c.id === id)?.drives === 'bus' ? 'bus' : 'servo';
   }
 
   /** The PRIMARY's own capability, reported in status as hasLinear.
@@ -721,7 +721,7 @@ export class DemoApiService extends ApiService {
   private syncHasLinear(): void {
     const cs = (this.td?.topology as { controllers?: Array<{ id: string; role: string; drives?: string }> })?.controllers ?? [];
     const primary = cs.find(c => c.role === 'primary');
-    this.d.hasLinear = primary ? primary.drives === 'linear' : true;
+    this.d.hasLinear = primary ? primary.drives === 'bus' : true;
   }
 
   // ── Config ────────────────────────────────────────────────────────────────────

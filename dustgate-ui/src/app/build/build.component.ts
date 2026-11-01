@@ -245,7 +245,7 @@ interface BoardVM {
   /** What this board is FLASHED to drive — Controller.drives in topology.js.
    *  'servo' is four PWM channels; 'linear' is ONE sliding gate and nothing else.
    *  Never both: the two builds contend for the same pads. */
-  drives: 'servo' | 'linear';
+  drives: 'servo' | 'bus';
   /** Does this board have a clamp to show — one plugged into its jack, or one the layout uses? Draws the CT jack. */
   ct: boolean;
   dragX?: number; dragY?: number;
@@ -3719,7 +3719,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       }
       controllers.push({
         id: l.id, role: 'secondary', name: l.name || l.host || l.id, board: l.board,
-        ...(drives === 'linear' ? { drives } : {}),
+        ...(drives === 'bus' ? { drives } : {}),
         link: { transport: 'wifi-ws', host: l.host },
       } as unknown as RawEl);
       added = true;
@@ -3870,7 +3870,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       out.push({
         id, name: (c['name'] as string) || id, primary: c['role'] === 'primary',
         drives: this.drivesOf(c),
-        ct: this.drivesOf(c) !== 'linear' && this.boardHasClamp(id, c['role'] === 'primary'),
+        ct: this.drivesOf(c) !== 'bus' && this.boardHasClamp(id, c['role'] === 'primary'),
         col: cell.col, row: cell.row, x: cellX(cell.col), y: cellY(cell.row), used, servoCount,
         dragX: drag ? this.boardDragPt?.x : undefined,
         dragY: drag ? this.boardDragPt?.y : undefined,
@@ -4041,11 +4041,11 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
    *  #errors on a pin map claiming both. A board is flashed as one or the other
    *  (dev.sh flash --slider), which is what `drives` records. */
   portsOf(b: BoardVM): number[] {
-    return b.drives === 'linear' ? [SERVO_PORTS]
+    return b.drives === 'bus' ? [SERVO_PORTS]
                                  : Array.from({ length: SERVO_PORTS }, (_, i) => i);
   }
-  portX(b: BoardVM, ch: number): number { return portPos({ x: this.bx(b), y: this.by(b) }, ch, b.drives === 'linear').x - portWidth(ch) / 2; }
-  portY(b: BoardVM, ch: number): number { return portPos({ x: this.bx(b), y: this.by(b) }, ch, b.drives === 'linear').y - PORT_H / 2; }
+  portX(b: BoardVM, ch: number): number { return portPos({ x: this.bx(b), y: this.by(b) }, ch, b.drives === 'bus').x - portWidth(ch) / 2; }
+  portY(b: BoardVM, ch: number): number { return portPos({ x: this.bx(b), y: this.by(b) }, ch, b.drives === 'bus').y - PORT_H / 2; }
   portW(ch: number): number { return portWidth(ch); }
   portTaken(b: BoardVM, ch: number): boolean { return b.used.has(ch); }
   /** 'SL' for the slider, not 'ST' — the stepper it was named for went to the
@@ -4071,14 +4071,14 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   /** Amber, not red: a full board isn't broken, it's out of room. A slider board
    *  is full at one gate, because one rack IS its whole capacity. */
   boardFull(b: BoardVM): boolean {
-    return b.drives === 'linear' ? b.used.has(SERVO_PORTS)
+    return b.drives === 'bus' ? b.used.has(SERVO_PORTS)
                                  : b.servoCount >= SERVO_PORTS;
   }
   /** How many gates this board can carry, for the "n/N" badge. */
-  portCapacity(b: BoardVM): number { return b.drives === 'linear' ? 1 : SERVO_PORTS; }
+  portCapacity(b: BoardVM): number { return b.drives === 'bus' ? 1 : SERVO_PORTS; }
   /** ...and how many it is carrying. */
   portUsedCount(b: BoardVM): number {
-    return b.drives === 'linear' ? (b.used.has(SERVO_PORTS) ? 1 : 0) : b.servoCount;
+    return b.drives === 'bus' ? (b.used.has(SERVO_PORTS) ? 1 : 0) : b.servoCount;
   }
   portLit(b: BoardVM, ch: number): boolean {
     const d = this.wireDrag; if (!d) return false;
@@ -4486,7 +4486,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   private portUnder(p: Pt): { boardId: string; channel: number } | null {
     for (const b of this.boards()) {
       for (const ch of this.portsOf(b)) {
-        const c = portPos({ x: this.bx(b), y: this.by(b) }, ch, b.drives === 'linear');
+        const c = portPos({ x: this.bx(b), y: this.by(b) }, ch, b.drives === 'bus');
         if (Math.abs(p.x - c.x) <= 11 && Math.abs(p.y - c.y) <= 12) return { boardId: b.id, channel: ch };
       }
     }
@@ -4522,7 +4522,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     // refusal the topology validator gives.
     const board = this.boards().find((b) => b.id === boardId);
     const drives = board?.drives ?? 'servo';
-    if (drives === 'linear' && !linear)
+    if (drives === 'bus' && !linear)
       return { blocked: 'That board drives a sliding gate, so it has no servo channels. A valve needs its own board.', note: '' };
     if (drives === 'servo' && linear)
       return { blocked: 'That board is running the servo-valve firmware, so it has no slider port. Use a board flashed for a sliding gate.', note: '' };
