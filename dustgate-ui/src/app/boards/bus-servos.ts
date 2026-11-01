@@ -71,3 +71,24 @@ export function busServoLines(gates: ConfigurableSelector[], reported: BusServoS
   }
   return out;
 }
+
+/** The bus gates a machine's ports hang from — each port's IMMEDIATE parent, when that is a selector with a servo number
+ *  (the plug-owner rule in shop.js). The Live page shows their load in developer mode. Pure: takes the shop document. */
+export function busGatesOfMachine(
+  shop: { systems?: { elements?: Record<string, unknown>[]; ducts?: { child: string; parent: string }[] }[] },
+  machineId: string,
+): { controllerId: string; bus: number; name: string }[] {
+  const out: { controllerId: string; bus: number; name: string }[] = [];
+  for (const sys of shop.systems ?? []) {
+    const els = new Map((sys.elements ?? []).map((e) => [e['id'] as string, e]));
+    for (const e of sys.elements ?? []) {
+      if (e['type'] !== 'tool' || e['machineId'] !== machineId) continue;
+      const parent = els.get((sys.ducts ?? []).find((d) => d.child === e['id'])?.parent ?? '');
+      if (!parent || parent['type'] !== 'selector') continue;
+      const block = (parent['kind'] === 'linear' ? parent['linear'] : parent['servo']) as { bus?: number } | undefined;
+      if (block?.bus !== undefined)
+        out.push({ controllerId: parent['controllerId'] as string, bus: block.bus, name: (parent['name'] as string) || (parent['id'] as string) });
+    }
+  }
+  return out;
+}

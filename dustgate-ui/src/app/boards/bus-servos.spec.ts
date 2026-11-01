@@ -1,5 +1,5 @@
 /** Bus servos on the Boards page, cases BS1–BS3. Plain TypeScript — run with `npm test`. */
-import { busServoLines, usualLoad } from './bus-servos';
+import { busGatesOfMachine, busServoLines, usualLoad } from './bus-servos';
 import type { ConfigurableSelector } from '../gates/selector-types';
 import type { BusServoState } from '../services/bus-types';
 
@@ -45,6 +45,21 @@ group('BS3 the layout and the board disagree, and the list says how');
   ok('a servo no gate holds is listed, and says so', lines[2].name === 'A servo not tied to a gate' && lines[2].bus === 9);
   const wired = busServoLines([valve('a', 2), valve('b', 3), valve('c', 4)], [], [['c'], ['a']]);
   ok('chain order comes first, as wired', wired.map((l) => l.name).join('') === 'cab');
+}
+
+group('BS4 the bus gate a machine hangs from');
+{
+  const shop = { systems: [{
+    elements: [
+      { id: 'v', type: 'selector', kind: 'servoGate', controllerId: 'wall', name: 'Saw valve', servo: { bus: 7 } },
+      { id: 'p', type: 'selector', kind: 'servoGate', controllerId: 'n1', name: 'PWM gate', servo: { channel: 0 } },
+      { id: 't1', type: 'tool', machineId: 'saw' }, { id: 't2', type: 'tool', machineId: 'planer' },
+    ],
+    ducts: [{ child: 't1', parent: 'v' }, { child: 't2', parent: 'p' }],
+  }] };
+  const g = busGatesOfMachine(shop, 'saw');
+  ok('a port under a bus gate names its board and number', g.length === 1 && g[0].bus === 7 && g[0].controllerId === 'wall');
+  ok('a port under a PWM gate names none', busGatesOfMachine(shop, 'planer').length === 0);
 }
 
 console.log(`\n${checks - failures}/${checks} checks passed`);
