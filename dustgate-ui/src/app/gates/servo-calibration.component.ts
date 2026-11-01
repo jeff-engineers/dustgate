@@ -433,7 +433,7 @@ export class ServoCalibrationComponent implements OnInit {
       // controllerId comes from the selector being edited, which the board picker
       // above mutates live — so re-assigning a gate to a node re-points the jog
       // arrows at that node immediately, without a save/reload in between.
-      await this.api.jogServo(this.sel.servo?.channel ?? 0, Math.round(angle), this.sel.controllerId);
+      await this.api.jogGate(this.sel, Math.round(angle));
       this.jogError = '';
       return true;
     } catch (e: unknown) {

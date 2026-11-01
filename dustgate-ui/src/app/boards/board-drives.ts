@@ -2,7 +2,7 @@
  * What a board is FLASHED to drive, and who gets to say so.
  *
  * `Controller.drives` in shared/device-model/topology.js is a CACHE of a hardware
- * fact, not a setting. The board already knows: a node reports it as `caps.linear`
+ * fact, not a setting. The board already knows: a node reports it as `caps.bus`
  * in its WELCOME and the primary as `hasLinear` in its status, both straight from
  * HAS_LINEAR in the firmware, which is derived from the pin map and so cannot
  * disagree with the hardware. The cache exists only so the canvas can draw the
@@ -31,8 +31,8 @@ export function drivesFromHasLinear(hasLinear: unknown): Drives | null {
 }
 
 /** A node's report, from its WELCOME caps. Null when it has not said. */
-export function drivesFromCaps(caps: { linear?: number } | null | undefined): Drives | null {
-  return caps && typeof caps.linear === 'number' ? (caps.linear > 0 ? 'bus' : 'servo') : null;
+export function drivesFromCaps(caps: { bus?: number } | null | undefined): Drives | null {
+  return caps && typeof caps.bus === 'number' ? (caps.bus > 0 ? 'bus' : 'servo') : null;
 }
 
 /**

@@ -34,8 +34,8 @@ group('B1 a board reports what it drives; silence is not a report');
   // Undefined is a board that has NOT SAID — distinct from one saying "no slider".
   // Collapsing the two is what makes a cache overwrite itself with a guess.
   ok('hasLinear absent → no report', drivesFromHasLinear(undefined) === null);
-  ok('caps.linear 1 → linear', drivesFromCaps({ linear: 1 }) === 'bus');
-  ok('caps.linear 0 → servo', drivesFromCaps({ linear: 0 }) === 'servo');
+  ok('caps.bus 1 → bus', drivesFromCaps({ bus: 1 }) === 'bus');
+  ok('caps.bus 0 → servo', drivesFromCaps({ bus: 0 }) === 'servo');
   ok('no caps at all → no report', drivesFromCaps(null) === null);
   ok('caps without linear → no report', drivesFromCaps({}) === null);
 }
@@ -77,7 +77,7 @@ group('B4 a paired slider node survives a save');
 {
   /** The shape mergePairedBoards() builds for a newly paired node, and the shape
    *  the canvas then saves. */
-  const merge = (id: string, caps: { linear?: number }) => {
+  const merge = (id: string, caps: { bus?: number }) => {
     const drives = drivesFromCaps(caps);
     const c: Record<string, unknown> = {
       id, role: 'secondary', name: id, link: { transport: 'wifi-ws', host: `${id}.local` },
@@ -103,7 +103,7 @@ group('B4 a paired slider node survives a save');
             { child: 'saw', parent: 'slide', parentBranch: 'b' }],
   });
 
-  const slider = merge('dustgate-slider', { linear: 1 });
+  const slider = merge('dustgate-slider', { bus: 1 });
   ok('a slider node is merged in as a slider board', slider['drives'] === 'bus');
 
   const good = validateTopology(docWith(slider));

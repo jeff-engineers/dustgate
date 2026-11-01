@@ -14,6 +14,9 @@
   --accent:    #f0a500;
   --danger:    #d94444;
   --success:   #3cbe6e;
+  /* Developer mode (2026-11-01): what only it shows is drawn in this violet, dashed, so it never passes for the everyday screen. */
+  --dev:       #8f7ad9;
+  --dev-bg:    #1d1830;
   --btn-h:     68px;
   --radius:    14px;
   --gap:       12px;
@@ -39,3 +42,11 @@ button:active {
   opacity: 0.75;
   transform: scale(0.97);
 }
+
+/* Developer mode's boxes (2026-11-01): the numbers and controls only it shows. One look everywhere it appears. */
+.dev-box { border: 1px dashed var(--dev); background: var(--dev-bg); border-radius: 12px; padding: 9px 10px;
+           display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; }
+.dev-box .dev-tag { font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--dev); }
+.dev-kv { display: grid; grid-template-columns: 1fr auto; gap: 3px 10px; }
+.dev-kv span:nth-child(odd) { color: var(--muted); }
+.dev-kv span:nth-child(even) { font-variant-numeric: tabular-nums; text-align: right; }

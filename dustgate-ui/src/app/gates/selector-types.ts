@@ -17,7 +17,10 @@ export type BranchRole = 'tool' | 'unassigned' | 'blocked' | 'feed';
 export type ServoKind = 'servoGate' | 'servoManifold';
 
 export interface ServoBlock {
-  channel: number;
+  /** A PWM gate's channel. Absent on a bus gate, which names its servo by `bus` instead. */
+  channel?: number;
+  /** A bus gate's servo number (2-253, shop-wide; topology.js MIN_BUS_ID). Absent until a servo is added for it. */
+  bus?: number;
   /** Absolute servo angle at which the reference state is exact. Absent = uncalibrated. */
   referenceAngle?: number;
   /** UI hint: the servo sits behind this gate, so a "right" nudge turns the handle left.
@@ -79,7 +82,7 @@ export interface LinearSelector {
   kind: 'linear';
   states: LinearState[];
   branches: Branch[];
-  linear?: { channel?: number; calibration?: LinearCalibration };
+  linear?: { channel?: number; bus?: number; calibration?: LinearCalibration };
 }
 
 /** Either kind of selector the configurator can set up. */
@@ -106,13 +109,15 @@ export interface Controller {
    *  shared/device-model/topology.js.
    *
    *  'servo'  the four-channel PWM bank
-   *  'linear' ONE serial-bus sliding gate, and nothing else
+   *  'bus'    a chain of serial-bus servos: valves, manifolds and at most one slider
    *
    *  Never both, and not a runtime setting: the two builds use the same pads and
    *  firmware/config.h #errors on a pin map claiming both. Absent means 'servo',
    *  because every board that existed before this field was one. */
   drives?: 'servo' | 'bus';
   link?: ControllerLink;
+  /** A bus board's chains: its gates in the order the wire reaches them (topology.js Controller.chains). */
+  chains?: string[][];
 }
 
 /** Servo channels one board can drive — SERVO_COUNT in config.h,

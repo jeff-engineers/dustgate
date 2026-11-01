@@ -59,6 +59,7 @@ const SUITES = [
   ['tools/collector-doc.spec.js', 'collector-doc'],
   ['build/plug-label.spec.js', 'plug-label'],
   ['boards/board-drives.spec.js', 'board-drives'],
+  ['boards/bus-servos.spec.js', 'bus-servos'],
   ['boards/serial-log.spec.js', 'serial-log'],
   ['live/problems.spec.js', 'live-problems'],
   ['build-stamp.spec.js', 'build-stamp'],

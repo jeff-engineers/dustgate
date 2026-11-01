@@ -193,6 +193,10 @@ export class GateListComponent implements OnInit {
     }
     this.rebuild();
     this.loaded = true;
+    // ?gate=<id> opens that gate's setup at once — "Set positions" on a bus servo's page (2026-11-01).
+    const want = new URLSearchParams(location.search).get('gate');
+    const row = want ? this.rows.find((r) => r.sel.id === want) : undefined;
+    if (row) this.configure(row);
   }
 
   private rebuild(): void {
@@ -299,7 +303,7 @@ export class GateListComponent implements OnInit {
       // not cover this state, and picking a plausible one is how a valve gets
       // driven into its stop.
       if (angle === null) throw new Error('no saved angle');
-      await this.api.jogServo(sel.servo?.channel ?? 0, Math.round(angle), sel.controllerId);
+      await this.api.jogGate(sel, Math.round(angle));
       return;
     }
     // A slider's stops are numbered by their order in states[], home first — the
