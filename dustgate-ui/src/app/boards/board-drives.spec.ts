@@ -54,10 +54,10 @@ group('B2 the live report beats the cache, always');
 }
 
 // ── B3 · what a board may host ───────────────────────────────────────────────
-group('B3 a board hosts one kind of gate, never both');
+group('B3 a bus board hosts any gate; a PWM board no slider');
 {
-  ok('a slider board takes a sliding gate', canHost('bus', 'linear'));
-  ok('...and nothing else', !canHost('bus', 'servoGate') && !canHost('bus', 'servoManifold'));
+  ok('a bus board takes a sliding gate', canHost('bus', 'linear'));
+  ok('...and valves and manifolds too (2026-11-01)', canHost('bus', 'servoGate') && canHost('bus', 'servoManifold'));
   ok('a servo board takes valves', canHost('servo', 'servoGate') && canHost('servo', 'servoManifold'));
   ok('...and refuses a sliding gate', !canHost('servo', 'linear'));
 
@@ -149,10 +149,11 @@ group('B5 a shop can run out of ports, and of one kind at a time');
   ok('a slider board takes exactly one rack',
      portShortfalls(['bus'], ['linear'], S).length === 0);
   ok('...and refuses the second', portShortfalls(['bus'], ['linear', 'linear'], S).length === 1);
-  // A slider board contributes NO servo channels: the pads are the serial bus.
-  const sliderOnly = portShortfalls(['bus'], ['servoGate'], S);
-  ok('a slider board offers no servo channel at all',
-     sliderOnly.length === 1 && sliderOnly[0].kind === 'servo' && sliderOnly[0].ports === 0);
+  // A bus board takes six servos, one of them at most a slider.
+  ok('a bus board takes a valve', portShortfalls(['bus'], ['servoGate'], S).length === 0);
+  ok('...and five valves beside its slider', portShortfalls(['bus'], Array(5).fill('servoGate').concat(['linear']), S).length === 0);
+  const seven = portShortfalls(['bus'], Array(6).fill('servoGate').concat(['linear']), S);
+  ok('...but not a sixth', seven.length === 1 && seven[0].kind === 'servo' && seven[0].ports === 5);
 
   ok('both kinds short is reported as both',
      portShortfalls(['servo'], Array(5).fill('servoGate').concat(['linear']), S).length === 2);

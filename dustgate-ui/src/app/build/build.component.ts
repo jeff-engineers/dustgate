@@ -7,7 +7,7 @@ import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
 import { ApiService, ClampBoard, CollectorBoard, DiscoveredOutlet, NodeLinkState, SweepProgress, Topology, TopologyStatus } from '../services/api.service';
 import { takeoverWarning } from '@plug-claim';
 import { samePlug } from '@plug-identity';
-import { airflowIssues, redundantSelectors, type AirflowIssue } from '@topology';
+import { MAX_BUS_SERVOS_PER_HOST, airflowIssues, redundantSelectors, type AirflowIssue } from '@topology';
 import { COLLECTOR_RUNNING_W } from '@topology-device';
 import { validateShop, SHOP_SCHEMA_VERSION } from '@shop';
 import { SelectorConfigComponent } from '../gates/selector-config.component';
@@ -46,7 +46,7 @@ import {
   unpairPrompt,
 } from '../boards/board-drives';
 import {
-  PORT_H, PORT_W, SERVO_PORTS, TAB_H, TAB_W,
+  PORT_H, PORT_W, SERVO_PORTS, TAB_H, TAB_W, BUS_CHAIN_PORT, isChainPort,
   cablePath, cableRun, crossingCost,
   portPos, portWidth, portExit, ctPortPos, ctPortExit, rankByTravel, segmentsOf,
   type Seg,
@@ -3850,7 +3850,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     for (const c of this.controllersRaw()) {
       const id = c['id'] as string;
       const cell = this.boardCells.get(id); if (!cell) continue;
-      const used = new Map<number, string>();
+      const used = this.rosterFor(id);
       let servoCount = 0;
       // A board is shop-level and may drive selectors in any system, so its port
       // budget is counted across all of them — scoping this to the drawn-on system
@@ -3858,9 +3858,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       for (const e of this.allElems()) {
         if (e['type'] !== 'selector') continue;
         if (((e['controllerId'] as string) ?? fallback) !== id) continue;
-        if (e['kind'] === 'linear') { used.set(SERVO_PORTS, e['id'] as string); continue; }
-        const ch = ((e['servo'] as RawEl | undefined)?.['channel'] as number) ?? 0;
-        used.set(ch, e['id'] as string); servoCount++;
+        if (this.drivesOf(c) === 'bus' || e['kind'] !== 'linear') servoCount++;
       }
       // A PI BRAIN IS NOT A BOARD ON THE CANVAS (2026-10-11): it has no pads, so it drives no gate and holds no clamp,
       // and drawing it showed two empty ports nothing could ever be cabled to. Still drawn if a gate somehow names it,
@@ -3997,9 +3995,24 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     this.renamingBoard = null;
   }
 
+  /** A bus board's chains, as wired (Controller.chains): gate ids, nearest the board first. */
+  private chainsOf(boardId: string): string[][] {
+    const c = this.controllersRaw().find((x) => x['id'] === boardId);
+    const ch = c?.['chains'];
+    return Array.isArray(ch) ? (ch as string[][]) : [];
+  }
+  private isBusBoard(boardId: string): boolean {
+    const c = this.controllersRaw().find((x) => x['id'] === boardId);
+    return !!c && this.drivesOf(c) === 'bus';
+  }
+  /** Port → gate. On a bus board each chain port holds the chain's FIRST gate: the one its cable reaches. */
   private rosterFor(boardId: string): Map<number, string> {
     const used = new Map<number, string>();
     if (!this.topo) return used;
+    if (this.isBusBoard(boardId)) {
+      this.chainsOf(boardId).forEach((chain, k) => { if (chain.length) used.set(BUS_CHAIN_PORT + k, chain[0]); });
+      return used;
+    }
     const fallback = this.defaultControllerId();
     for (const e of this.allElems()) {
       if (e['type'] !== 'selector') continue;
@@ -4041,7 +4054,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
    *  #errors on a pin map claiming both. A board is flashed as one or the other
    *  (dev.sh flash --slider), which is what `drives` records. */
   portsOf(b: BoardVM): number[] {
-    return b.drives === 'bus' ? [SERVO_PORTS]
+    return b.drives === 'bus' ? [BUS_CHAIN_PORT, BUS_CHAIN_PORT + 1]
                                  : Array.from({ length: SERVO_PORTS }, (_, i) => i);
   }
   portX(b: BoardVM, ch: number): number { return portPos({ x: this.bx(b), y: this.by(b) }, ch, b.drives === 'bus').x - portWidth(ch) / 2; }
@@ -4052,7 +4065,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
    *  attic in 2026-08-23 and the port drives a serial bus servo now. */
   // Counted from ONE on the canvas (jeff, 2026-10-11: "normal people don't count from zero"). Only the LABEL: the layout,
   // the wire and the firmware keep channel 0 and 1, and nothing but this and the gate tab ever shows a person the number.
-  portLabel(ch: number): string { return ch >= SERVO_PORTS ? 'SL' : String(ch + 1); }
+  portLabel(ch: number): string { return isChainPort(ch) ? String(ch - BUS_CHAIN_PORT + 1) : ch >= SERVO_PORTS ? 'SL' : String(ch + 1); }
   ctX(b: BoardVM): number { return ctPortPos({ x: this.bx(b), y: this.by(b) }).x - PORT_W / 2; }
   ctY(b: BoardVM): number { return ctPortPos({ x: this.bx(b), y: this.by(b) }).y - PORT_H / 2; }
   /** Is this board's clamp watching something in the layout? Fills the CT jack, as a cabled servo port is filled. */
@@ -4071,14 +4084,14 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   /** Amber, not red: a full board isn't broken, it's out of room. A slider board
    *  is full at one gate, because one rack IS its whole capacity. */
   boardFull(b: BoardVM): boolean {
-    return b.drives === 'bus' ? b.used.has(SERVO_PORTS)
+    return b.drives === 'bus' ? b.servoCount >= MAX_BUS_SERVOS_PER_HOST
                                  : b.servoCount >= SERVO_PORTS;
   }
   /** How many gates this board can carry, for the "n/N" badge. */
-  portCapacity(b: BoardVM): number { return b.drives === 'bus' ? 1 : SERVO_PORTS; }
+  portCapacity(b: BoardVM): number { return b.drives === 'bus' ? MAX_BUS_SERVOS_PER_HOST : SERVO_PORTS; }
   /** ...and how many it is carrying. */
   portUsedCount(b: BoardVM): number {
-    return b.drives === 'bus' ? (b.used.has(SERVO_PORTS) ? 1 : 0) : b.servoCount;
+    return b.servoCount;
   }
   portLit(b: BoardVM, ch: number): boolean {
     const d = this.wireDrag; if (!d) return false;
@@ -4108,13 +4121,14 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   gateTabs(): Array<{ id: string; x: number; y: number; channel: string; wired: boolean; shade: string }> {
     return this.nodes.filter(n => this.isGate(n)).map(n => {
       const el = this.elem(n.id);
-      const linear = el?.['kind'] === 'linear';
-      const ch = linear ? SERVO_PORTS : (((el?.['servo'] as RawEl | undefined)?.['channel'] as number) ?? 0);
       const board = this.boardOf(n.id);
+      const ch = this.channelOf(n.id);
       return {
         id: n.id, x: this.tabX(n), y: this.tabY(n),
-        channel: linear ? 'SL' : String(ch + 1),   // counted from one, as the board's ports are (portLabel)
-        wired: this.boardCells.has(board),
+        // Counted from one, as the board's ports are (portLabel). A bus gate's tab names its chain, never its servo
+        // number (developer mode's business); a bus gate on no chain has its cable still to draw.
+        channel: ch < 0 ? '' : this.portLabel(ch),
+        wired: this.boardCells.has(board) && ch >= 0,
         shade: this.boardShade(board),
       };
     });
@@ -4128,6 +4142,11 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     return ((this.elem(gateId)?.['controllerId'] as string) ?? this.defaultControllerId());
   }
   private channelOf(gateId: string): number {
+    const board = this.boardOf(gateId);
+    if (this.isBusBoard(board)) {
+      const k = this.chainsOf(board).findIndex((c) => c.includes(gateId));
+      return k < 0 ? -1 : BUS_CHAIN_PORT + k;
+    }
     const el = this.elem(gateId);
     if (el?.['kind'] === 'linear') return SERVO_PORTS;
     return ((el?.['servo'] as RawEl | undefined)?.['channel'] as number) ?? 0;
@@ -4270,7 +4289,18 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     const all = this.boards();
     all.forEach((b, bi) => {
       const legs: Array<{ gateId: string; channel: number; from: Pt; to: Pt }> = [];
-      for (const [ch, gateId] of b.used) {
+      if (b.drives === 'bus') {
+        // DRAWN AS WIRED (jeff, 2026-11-01): port → first gate → next gate, as the servos' own sockets chain them.
+        this.chainsOf(b.id).forEach((chain, k) => {
+          let from = portExit({ x: this.bx(b), y: this.by(b) }, BUS_CHAIN_PORT + k);
+          for (const gateId of chain) {
+            const n = this.byId.get(gateId); if (!n) continue;   // a gate in another system is not on this canvas
+            const to = { x: this.tabX(n), y: this.tabY(n) };
+            legs.push({ gateId, channel: BUS_CHAIN_PORT + k, from, to });
+            from = to;
+          }
+        });
+      } else for (const [ch, gateId] of b.used) {
         const n = this.byId.get(gateId); if (!n) continue;
         const to = { x: this.tabX(n), y: this.tabY(n) };
         legs.push({
@@ -4288,7 +4318,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
         // when the cable landed underneath and had to get past the gate to reach it.
         const pts = cableRun(l.from, l.to, rank.get(l) ?? 0, bias, 0,
                              this.cableCost(l.gateId, drawn), legs.length);
-        out.push({ id: b.id + ':' + l.channel, gateId: l.gateId, boardId: b.id, channel: l.channel,
+        out.push({ id: b.id + ':' + l.channel + ':' + l.gateId, gateId: l.gateId, boardId: b.id, channel: l.channel,
                    d: cablePath(pts, drawn), shade: this.boardShade(b.id) });
         drawn.push(...segmentsOf(pts));
       }
@@ -4522,8 +4552,19 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     // refusal the topology validator gives.
     const board = this.boards().find((b) => b.id === boardId);
     const drives = board?.drives ?? 'servo';
-    if (drives === 'bus' && !linear)
-      return { blocked: 'That board drives a sliding gate, so it has no servo channels. A valve needs its own board.', note: '' };
+    // A BUS BOARD (2026-11-01): any gate joins the end of a chain, up to six servos and one slider (its two endstop
+    // inputs). No swap — a chain has room until the board is full.
+    if (drives === 'bus') {
+      if (!isChainPort(ch)) return { blocked: 'Wire it to one of the board\'s chain ports.', note: '' };
+      const mine = this.allElems().filter((e) => e['type'] === 'selector' && this.boardOf(e['id'] as string) === boardId && e['id'] !== gateId);
+      if (mine.length >= MAX_BUS_SERVOS_PER_HOST)
+        return { blocked: `This board drives ${MAX_BUS_SERVOS_PER_HOST} servos already. Put this gate on another bus board.`, note: '' };
+      const slider = linear ? mine.find((e) => e['kind'] === 'linear') : undefined;
+      if (slider) return { blocked: `This board's endstops are used by the ${(slider['name'] as string) || 'other'} slider.`, note: '' };
+      return { blocked: '', note: '' };
+    }
+    if (isChainPort(this.channelOf(gateId)) && this.rosterFor(boardId).get(ch))
+      return { blocked: 'That port is taken. Unwire its gate first.', note: '' };
     if (drives === 'servo' && linear)
       return { blocked: 'That board is running the servo-valve firmware, so it has no slider port. Use a board flashed for a sliding gate.', note: '' };
 
@@ -4541,7 +4582,8 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   /** Put a gate on a board+channel, trading with whatever held it. */
   private bindGate(gateId: string, boardId: string, ch: number): void {
     const el = this.elem(gateId); if (!el) return;
-    const holder = this.rosterFor(boardId).get(ch);
+    // A chain port appends; only a PWM channel swaps (a chain has room until its board is full — bindCheck).
+    const holder = isChainPort(ch) ? undefined : this.rosterFor(boardId).get(ch);
     if (holder && holder !== gateId) {
       const was = { board: this.boardOf(gateId), ch: this.channelOf(gateId) };
       this.writeBinding(holder, was.board, was.ch);
@@ -4552,6 +4594,37 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   }
   private writeBinding(gateId: string, boardId: string, ch: number): void {
     const el = this.elem(gateId); if (!el) return;
+    // Off every chain first: a gate is on one chain of one board at most.
+    for (const c of this.controllersRaw()) {
+      const chains = c['chains'] as string[][] | undefined;
+      if (!Array.isArray(chains)) continue;
+      const kept = chains.map((x) => x.filter((id) => id !== gateId));
+      while (kept.length && !kept[kept.length - 1].length) kept.pop();
+      if (kept.length) c['chains'] = kept; else delete c['chains'];
+    }
+    if (isChainPort(ch)) {
+      // To the END of the chain on that port: the next socket along. Its servo number travels with it (numbers are
+      // shop-wide), so a valve recabled to another bus board keeps its servo.
+      el['controllerId'] = boardId;
+      const c = this.controllersRaw().find((x) => x['id'] === boardId);
+      if (c) {
+        const chains = Array.isArray(c['chains']) ? (c['chains'] as string[][]) : [];
+        const k = ch - BUS_CHAIN_PORT;
+        while (chains.length <= k) chains.push([]);
+        chains[k].push(gateId);
+        c['chains'] = chains;
+      }
+      const block = (el['kind'] === 'linear' ? 'linear' : 'servo');
+      const b = { ...(el[block] as RawEl ?? {}) };
+      delete b['channel'];
+      el[block] = b;
+      return;
+    }
+    // To a PWM channel: a bus servo's number means nothing there.
+    for (const block of ['servo', 'linear']) {
+      const b = el[block] as RawEl | undefined;
+      if (b && 'bus' in b) { const nb = { ...b }; delete nb['bus']; el[block] = nb; }
+    }
     el['controllerId'] = boardId;
     // One stepper driver per board, so a sliding gate's channel is always 0 — the
     // port index it was dropped on is the strip position, not the driver number.
