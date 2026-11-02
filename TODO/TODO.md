@@ -138,6 +138,9 @@ node — its servos share one brick, and the wire-length limit assumes only the 
   against tools/mock-api.js's simulated bus board, not against a real board): developer mode in Settings (PWM range
   under it), Boards' servo list and link stats, a servo's page, Add/Replace a servo, chains on the shop layout, the Live
   page's developer meters, D-87 and canvas.html 5b. LEFT: the bench run below; then archive docs/mockups/bus-chain.html.
+  **First bench, 2026-11-01** (README's hardware list has what ran): numbering, set-up moves, load reports and the
+  fail-closed plan worked on one ST3215. Picking up: the cyclone node was unplugged, so routing a tool through the bus
+  manifold is still to do; the servo may need re-adding (jeff switched it to the slider mid-test).
   **Bench, when the bus board is flashed:** add a servo (find/assign), move a valve from the app, watch BUS in the brain
   log; a valve and the slider asked together move one after the other; unplug a valve mid-move (it should say it stopped
   answering); `setid` on the bench console again (it was fixed 2026-11-01: it reported a failure for a renumber that
