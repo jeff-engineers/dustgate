@@ -698,11 +698,9 @@ one. `tools/check-brain-parity.js` lists what the frozen brain lacks.
   "telling a node to update sends it the OTA order" (`native/test/e2e_api.sh`) failed once in a full `make -C native test` and
   passed on every rerun. Widen their waits or find what they race.
 
-- **Draw the slider board and the RF transmitter on `docs/carrier-wiring.html` (2026-10-18).** `firmware/WIRING.md` was
-  archived as history (`docs/archive/WIRING.md`); the wiring page now covers the PWM carrier only. Two wirings still live
-  only in the archive: the slider board (ST3215 half-duplex bus and its logic level, the two NC endstops — archive §7)
-  and the 315 MHz HT12E transmitter (archive §10). Draw them with the `wiring-diagram` skill, then nothing current
-  points into the archive for a wiring fact.
+- **Draw the RF transmitter on `docs/carrier-wiring.html` (2026-10-18).** Its wiring (the 315 MHz HT12E transmitter)
+  still lives only in the archive (`docs/archive/WIRING.md` §10). Draw it with the `wiring-diagram` skill, then nothing
+  current points into the archive for a wiring fact. The bus board is drawn (the "Bus board" tab, 2026-11-01).
 
 ### Small fixes carried from the 2026-09-08 code review
 

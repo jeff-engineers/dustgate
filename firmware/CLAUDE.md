@@ -49,5 +49,5 @@ C5). `dev.sh` sets it for you. Before committing firmware: `cd tools && npm run 
   broken hardware.
 - **When it's unclear where something fails, add logging** — both sides of a boundary, and every refusal — rather
   than reasoning toward a guess. Several failures here were silent, not wrong.
-- Wiring is drawn in `docs/carrier-wiring.html` (the PWM board; the slider board and the RF transmitter are still to be
-  drawn — TODO). `docs/archive/WIRING.md` is history.
+- Wiring is drawn in `docs/carrier-wiring.html` (the PWM board, and the bus board on its own tab; the RF transmitter is
+  still to be drawn — TODO). `docs/archive/WIRING.md` is history.
